@@ -123,7 +123,20 @@ type Asset struct {
 	// from a presented certificate — cloud resolves an mTLS device identity by
 	// looking this up, so a device that could set it could claim another's row
 	// (WDY-2902).
-	PkiDeviceName *string                `protobuf:"bytes,35,opt,name=pki_device_name,json=pkiDeviceName,proto3,oneof" json:"pki_device_name,omitempty"`
+	PkiDeviceName *string `protobuf:"bytes,35,opt,name=pki_device_name,json=pkiDeviceName,proto3,oneof" json:"pki_device_name,omitempty"`
+	// Hardware facts the device reports about itself (WDY-3544), beside the
+	// older columns above (device_type = board model, architecture, cpu_cores,
+	// ram_mb, storage_gb, os_type, os_version). Absent means the device never
+	// reported it. Descriptive only: they authorize nothing.
+	// First /proc/device-tree/compatible entry naming the SoC, e.g. "nvidia,tegra264".
+	SocCompatible *string `protobuf:"bytes,36,opt,name=soc_compatible,json=socCompatible,proto3,oneof" json:"soc_compatible,omitempty"`
+	SerialNumber  *string `protobuf:"bytes,37,opt,name=serial_number,json=serialNumber,proto3,oneof" json:"serial_number,omitempty"`
+	// uname -r.
+	KernelVersion *string `protobuf:"bytes,38,opt,name=kernel_version,json=kernelVersion,proto3,oneof" json:"kernel_version,omitempty"`
+	// NVIDIA L4T release, e.g. "38.2.0". Absent on non-NVIDIA boards.
+	L4TVersion *string `protobuf:"bytes,39,opt,name=l4t_version,json=l4tVersion,proto3,oneof" json:"l4t_version,omitempty"`
+	// Vendor-specific GPU architecture, e.g. "sm_110".
+	GpuArch       *string                `protobuf:"bytes,40,opt,name=gpu_arch,json=gpuArch,proto3,oneof" json:"gpu_arch,omitempty"`
 	CreatedAt     *timestamppb.Timestamp `protobuf:"bytes,21,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
 	UpdatedAt     *timestamppb.Timestamp `protobuf:"bytes,22,opt,name=updated_at,json=updatedAt,proto3" json:"updated_at,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -387,6 +400,41 @@ func (x *Asset) GetConnectionLongitude() float64 {
 func (x *Asset) GetPkiDeviceName() string {
 	if x != nil && x.PkiDeviceName != nil {
 		return *x.PkiDeviceName
+	}
+	return ""
+}
+
+func (x *Asset) GetSocCompatible() string {
+	if x != nil && x.SocCompatible != nil {
+		return *x.SocCompatible
+	}
+	return ""
+}
+
+func (x *Asset) GetSerialNumber() string {
+	if x != nil && x.SerialNumber != nil {
+		return *x.SerialNumber
+	}
+	return ""
+}
+
+func (x *Asset) GetKernelVersion() string {
+	if x != nil && x.KernelVersion != nil {
+		return *x.KernelVersion
+	}
+	return ""
+}
+
+func (x *Asset) GetL4TVersion() string {
+	if x != nil && x.L4TVersion != nil {
+		return *x.L4TVersion
+	}
+	return ""
+}
+
+func (x *Asset) GetGpuArch() string {
+	if x != nil && x.GpuArch != nil {
+		return *x.GpuArch
 	}
 	return ""
 }
@@ -1730,7 +1778,7 @@ var File_wendycloud_v2_assets_proto protoreflect.FileDescriptor
 
 const file_wendycloud_v2_assets_proto_rawDesc = "" +
 	"\n" +
-	"\x1awendycloud/v2/assets.proto\x12\rwendycloud.v2\x1a\x1cgoogle/protobuf/struct.proto\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x13wendy/options.proto\x1a\"wendycloud/v2/signed_request.proto\"\xcf\x0e\n" +
+	"\x1awendycloud/v2/assets.proto\x12\rwendycloud.v2\x1a\x1cgoogle/protobuf/struct.proto\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x13wendy/options.proto\x1a\"wendycloud/v2/signed_request.proto\"\xec\x10\n" +
 	"\x05Asset\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12'\n" +
 	"\x0forganization_id\x18\x02 \x01(\tR\x0eorganizationId\x12+\n" +
@@ -1772,7 +1820,13 @@ const file_wendycloud_v2_assets_proto_rawDesc = "" +
 	"\x12connection_country\x18  \x01(\tH\x15R\x11connectionCountry\x88\x01\x01\x124\n" +
 	"\x13connection_latitude\x18! \x01(\x01H\x16R\x12connectionLatitude\x88\x01\x01\x126\n" +
 	"\x14connection_longitude\x18\" \x01(\x01H\x17R\x13connectionLongitude\x88\x01\x01\x12+\n" +
-	"\x0fpki_device_name\x18# \x01(\tH\x18R\rpkiDeviceName\x88\x01\x01\x129\n" +
+	"\x0fpki_device_name\x18# \x01(\tH\x18R\rpkiDeviceName\x88\x01\x01\x12*\n" +
+	"\x0esoc_compatible\x18$ \x01(\tH\x19R\rsocCompatible\x88\x01\x01\x12(\n" +
+	"\rserial_number\x18% \x01(\tH\x1aR\fserialNumber\x88\x01\x01\x12*\n" +
+	"\x0ekernel_version\x18& \x01(\tH\x1bR\rkernelVersion\x88\x01\x01\x12$\n" +
+	"\vl4t_version\x18' \x01(\tH\x1cR\n" +
+	"l4tVersion\x88\x01\x01\x12\x1e\n" +
+	"\bgpu_arch\x18( \x01(\tH\x1dR\agpuArch\x88\x01\x01\x129\n" +
 	"\n" +
 	"created_at\x18\x15 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x129\n" +
 	"\n" +
@@ -1805,7 +1859,12 @@ const file_wendycloud_v2_assets_proto_rawDesc = "" +
 	"\x13_connection_countryB\x16\n" +
 	"\x14_connection_latitudeB\x17\n" +
 	"\x15_connection_longitudeB\x12\n" +
-	"\x10_pki_device_name\"\xe5\t\n" +
+	"\x10_pki_device_nameB\x11\n" +
+	"\x0f_soc_compatibleB\x10\n" +
+	"\x0e_serial_numberB\x11\n" +
+	"\x0f_kernel_versionB\x0e\n" +
+	"\f_l4t_versionB\v\n" +
+	"\t_gpu_arch\"\xe5\t\n" +
 	"\x12CreateAssetRequest\x12'\n" +
 	"\x0forganization_id\x18\x01 \x01(\tR\x0eorganizationId\x12+\n" +
 	"\x0fparent_asset_id\x18\x02 \x01(\tH\x00R\rparentAssetId\x88\x01\x01\x12\x12\n" +

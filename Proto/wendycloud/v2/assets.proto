@@ -92,6 +92,20 @@ message Asset {
   // (WDY-2902).
   optional string pki_device_name = 35;
 
+  // Hardware facts the device reports about itself (WDY-3544), beside the
+  // older columns above (device_type = board model, architecture, cpu_cores,
+  // ram_mb, storage_gb, os_type, os_version). Absent means the device never
+  // reported it. Descriptive only: they authorize nothing.
+  // First /proc/device-tree/compatible entry naming the SoC, e.g. "nvidia,tegra264".
+  optional string soc_compatible = 36;
+  optional string serial_number = 37;
+  // uname -r.
+  optional string kernel_version = 38;
+  // NVIDIA L4T release, e.g. "38.2.0". Absent on non-NVIDIA boards.
+  optional string l4t_version = 39;
+  // Vendor-specific GPU architecture, e.g. "sm_110".
+  optional string gpu_arch = 40;
+
   google.protobuf.Timestamp created_at = 21;
   google.protobuf.Timestamp updated_at = 22;
 }
