@@ -4,9 +4,19 @@ on:
   pull_request:
     types: [opened, synchronize, reopened]
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "Same-repository PR to validate without publishing"
+        required: true
+        type: string
+      expected_head_sha:
+        description: "Exact PR head SHA approved for this validation"
+        required: true
+        type: string
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || inputs.pr_number }}
   cancel-in-progress: true
 
 jobs:
@@ -15,6 +25,7 @@ jobs:
     # Repository secrets are unavailable to forks and Dependabot. Never execute
     # their PR code or give them a credentialed model-review fallback.
     if: >-
+      github.event_name == 'pull_request' &&
       github.event.pull_request.head.repo.full_name == github.repository &&
       github.actor != 'dependabot[bot]' &&
       github.event.pull_request.user.login != 'dependabot[bot]'
@@ -132,6 +143,20 @@ jobs:
       - name: Install Anthropic SDK
         run: pip install --quiet anthropic==0.97.0
 
+      - name: Test complete API review runs with pinned SDK
+        run: |
+          set -euo pipefail
+          run_test="review-automation/.github/scripts/api_review_run_test.py"
+          if [[ -f "$run_test" ]]; then
+            # SECURITY: This file comes only from the immutable base-SHA
+            # checkout above, never the PR-head bootstrap file list. Forks are
+            # rejected at job entry; this step receives no GH_TOKEN/model key.
+            # Offline SDK transport and GitHub fixtures; no keys or model calls.
+            python3 "$run_test"
+          else
+            echo "::notice::Full-run regression tests activate when trusted automation reaches the base branch."
+          fi
+
       # Review the complete diff semantically. Snapshot or protobuf-file hashes
       # confuse comments/formatting with API decisions, and cannot find durable
       # contracts such as network constants, storage paths, or config formats.
@@ -185,3 +210,126 @@ jobs:
             --pr-number "$PR_NUMBER" \
             --expected-head-sha "$EXPECTED_HEAD_SHA" \
             --expected-base-sha "$EXPECTED_BASE_SHA"
+
+  validate-candidate-tests:
+    name: Test candidate API review without credentials
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: runs-on,runner=2cpu-linux-x64
+    permissions:
+      contents: read
+    steps:
+      # SECURITY: Only dispatch reviewed commits. Candidate tests execute in a
+      # separate job with no provider key, before credentialed validation.
+      - name: Check out dispatched candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - name: Install pinned SDK and run all offline regressions
+        run: |
+          set -euo pipefail
+          pip install --quiet anthropic==0.97.0
+          python3 .github/scripts/api_review_test.py
+          python3 .github/scripts/api_review_comment_test.py
+          python3 .github/scripts/review_diff_test.py
+          python3 .github/scripts/api_review_run_test.py
+
+  validate-candidate:
+    name: Validate candidate API review without publication
+    if: github.event_name == 'workflow_dispatch'
+    needs: validate-candidate-tests
+    runs-on: runs-on,runner=2cpu-linux-x64
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+    env:
+      REPO: ${{ github.repository }}
+      PR_NUMBER: ${{ inputs.pr_number }}
+      EXPECTED_HEAD_SHA: ${{ inputs.expected_head_sha }}
+      CLAUDE_MODEL: claude-opus-4-8
+    steps:
+      # SECURITY: Manual dispatch is an explicit writer-authorized candidate
+      # validation. Pin execution to the dispatched immutable commit; automatic
+      # PR reviews above continue to execute only their trusted base revision.
+      - name: Check out dispatched candidate
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Install pinned SDK
+        run: pip install --quiet anthropic==0.97.0
+
+      - name: Read immutable PR evidence and prior state
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          [[ "$PR_NUMBER" =~ ^[1-9][0-9]*$ ]]
+          [[ "$EXPECTED_HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]
+          metadata="$RUNNER_TEMP/api-review-pr-meta.json"
+          gh api "repos/$REPO/pulls/$PR_NUMBER" > "$metadata"
+          jq -e --arg repo "$REPO" --arg head "$EXPECTED_HEAD_SHA" \
+            '.head.repo.full_name == $repo and .head.sha == $head and .state == "open"' "$metadata" > /dev/null
+          base_sha=$(jq -r '.base.sha' "$metadata")
+          [[ "$base_sha" =~ ^[0-9a-f]{40}$ ]]
+          diff_base_sha=$(git merge-base "$base_sha" "$EXPECTED_HEAD_SHA")
+          [[ "$diff_base_sha" =~ ^[0-9a-f]{40}$ ]]
+          git diff --no-ext-diff --no-textconv --find-renames \
+            "$diff_base_sha" "$EXPECTED_HEAD_SHA" -- > "$RUNNER_TEMP/api-review-pr.diff"
+          jq --arg diff_base_sha "$diff_base_sha" '. + {diff_base_sha: $diff_base_sha}' \
+            "$metadata" > "$metadata.tmp"
+          mv "$metadata.tmp" "$metadata"
+          echo "EXPECTED_BASE_SHA=$base_sha" >> "$GITHUB_ENV"
+          python3 .github/scripts/api_review_comment.py fetch-state \
+            --repo "$REPO" --pr-number "$PR_NUMBER" \
+            --output "$RUNNER_TEMP/previous-api-review.json"
+
+      - name: Run candidate evidence review and reconciliation
+        id: candidate
+        env:
+          # SECURITY: Model input is untrusted data; no GitHub token is exposed.
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          python3 .github/scripts/api_review.py review \
+            --metadata "$RUNNER_TEMP/api-review-pr-meta.json" \
+            --diff "$RUNNER_TEMP/api-review-pr.diff" \
+            --previous "$RUNNER_TEMP/previous-api-review.json" \
+            --repo "$REPO" --pr-number "$PR_NUMBER" \
+            --expected-head-sha "$EXPECTED_HEAD_SHA" --expected-base-sha "$EXPECTED_BASE_SHA" \
+            --output "$RUNNER_TEMP/api-review-result.json" --model "$CLAUDE_MODEL"
+
+      - name: Validate publication without mutations
+        if: always() && (steps.candidate.outcome == 'success' || steps.candidate.outcome == 'failure')
+        env:
+          # SECURITY: Read-only token plus dry-run interception: no comments,
+          # labels, reviewer requests, acceptance, or feature source are changed.
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python3 .github/scripts/api_review_comment.py publish --dry-run \
+            --result "$RUNNER_TEMP/api-review-result.json" \
+            --repo "$REPO" --pr-number "$PR_NUMBER" \
+            --expected-head-sha "$EXPECTED_HEAD_SHA" --expected-base-sha "$EXPECTED_BASE_SHA" \
+            | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Preserve candidate result
+        if: always() && (steps.candidate.outcome == 'success' || steps.candidate.outcome == 'failure')
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: api-review-validation-${{ github.run_id }}
+          path: ${{ runner.temp }}/api-review-result.json
+          if-no-files-found: error
+          retention-days: 14

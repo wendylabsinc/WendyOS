@@ -63,6 +63,12 @@ func TestDeviceInfoService_GetDeviceInfo(t *testing.T) {
 		if resp.CpuCount == 0 {
 			t.Errorf("cpuCount = 0, want > 0 on linux")
 		}
+		if resp.GetKernelVersion() == "" {
+			t.Errorf("kernelVersion is empty on linux")
+		}
+		if resp.UptimeSeconds == nil {
+			t.Errorf("uptimeSeconds unset on linux")
+		}
 	}
 }
 

@@ -248,6 +248,32 @@ class RenderingTests(unittest.TestCase):
                 review.validate_result(data, HEAD, BASE)
 
 
+class DryRunPublicationTests(unittest.TestCase):
+    def test_dry_run_intercepts_all_publication_mutations(self):
+        source = FakeGitHub()
+        github = review.DryRunGitHub(source)
+        self.assertTrue(review.publish(result(), REPO, 1911, HEAD, BASE, REVIEW_DIFF, github))
+        self.assertEqual(source.mutations(), [])
+        self.assertGreater(github.mutations, 0)
+        self.assertIn('"pending": 1', github.summary())
+        self.assertNotIn("Native", github.summary())
+        for method in ("POST", "PATCH", "DELETE"):
+            self.assertIsInstance(github.request(method, "/unreachable", {"secret": "not-forwarded"})["id"], int)
+        self.assertEqual(source.mutations(), [])
+        with self.assertRaisesRegex(ValueError, "Unsupported"):
+            github.request("PUT", "/unreachable")
+
+    def test_dry_run_incomplete_is_still_failure_and_preserves_acceptance(self):
+        body = review.render_comment(result(), REPO).replace("- [ ] Accept", "- [x] Accept", 1)
+        source = FakeGitHub([bot_comment(body)])
+        github = review.DryRunGitHub(source)
+        failed = {**result(), "status": "incomplete", "error": "Safe failure"}
+        self.assertFalse(review.publish(failed, REPO, 1911, HEAD, BASE, REVIEW_DIFF, github))
+        self.assertEqual(source.mutations(), [])
+        self.assertIn('"accepted": 1', github.summary())
+        self.assertIn(review.WARNING_START, github.bodies[0])
+
+
 class StatefulRenderingTests(unittest.TestCase):
     def accepted_records(self):
         body = review.render_comment(result(), REPO).replace("- [ ] Accept", "- [x] Accept", 1)
@@ -266,9 +292,47 @@ class StatefulRenderingTests(unittest.TestCase):
         item.update(prior_ids=[prior[0]["id"]], relationship="unchanged", reason="")
         body = review.render_comment(data, REPO, prior)
         current = review.parse_comment_state([body])
-        self.assertIn("- [x] Accepted", body)
+        self.assertIn("- [x] Accepted (carried forward)", body)
         self.assertEqual(current[0]["id"], prior[0]["id"])
         self.assertEqual(current[0]["accepted_version"], prior[0]["version"])
+
+    def test_competing_ambiguous_claims_never_inherit_human_acceptance(self):
+        prior = self.accepted_records()
+        data = result()
+        data["decisions"] = [dict(copy.deepcopy(data["decisions"][0]), title=title,
+                                  prior_ids=[prior[0]["id"]], relationship="ambiguous",
+                                  reason="Competing predecessor claims require re-review.")
+                             for title in ("Split A", "Split B")]
+        review.validate_result(data, HEAD, BASE)
+        body = review.render_comment(data, REPO, prior)
+        records = review.parse_comment_state([body])
+        current = [record for record in records if record["state"] != "withdrawn"]
+        self.assertEqual(len(current), 2)
+        self.assertTrue(all(record["state"] == "needs_re_review" for record in current))
+        self.assertTrue(all(record["accepted_version"] is None for record in current))
+        self.assertEqual(len({record["id"] for record in records}), 3)
+        self.assertNotIn("- [x]", body)
+        historical = next(record for record in records if record["state"] == "withdrawn")
+        self.assertEqual(historical["id"], prior[0]["id"])
+        self.assertEqual(historical["accepted_version"], prior[0]["accepted_version"])
+        for relationships in (("unchanged", "unchanged"), ("unchanged", "ambiguous"), ("ambiguous", "unchanged")):
+            bad = copy.deepcopy(data)
+            for item, relationship in zip(bad["decisions"], relationships):
+                item.update(relationship=relationship, reason="Uncertain" if relationship == "ambiguous" else "")
+            with self.subTest(relationships=relationships), self.assertRaisesRegex(ValueError, "invalid reconciliation"):
+                review.validate_result(bad, HEAD, BASE)
+
+    def test_impact_change_reopens_even_if_model_says_unchanged(self):
+        prior = self.accepted_records()
+        data = result()
+        data["decisions"][0].update(impact="breaking", prior_ids=[prior[0]["id"]],
+                                    relationship="unchanged", reason="")
+        body = review.render_comment(data, REPO, prior)
+        current = review.parse_comment_state([body])
+        self.assertIn("Compatibility impact changed", body)
+        self.assertIn("- [ ] Re-review", body)
+        self.assertEqual(current[0]["state"], "needs_re_review")
+        self.assertIsNone(current[0]["accepted_version"])
 
     def test_material_change_reopens_and_human_can_accept_new_version(self):
         prior = self.accepted_records()
@@ -342,6 +406,12 @@ class StatefulRenderingTests(unittest.TestCase):
         self.assertEqual(records[0]["state"], "accepted")
         self.assertEqual(records[0]["decision"]["category"], "config")
         self.assertEqual(review.model_prior_state(records)["decisions"][0]["state"], "pending")
+        self.assertEqual(records[0]["version"], review.decision_id(records[0]["decision"]))
+        withdrawn_body = review.render_comment({**result(), "decisions": []}, REPO, records)
+        withdrawn = review.parse_comment_state([withdrawn_body])
+        self.assertEqual(withdrawn[0]["id"], identifier)
+        self.assertEqual(withdrawn[0]["state"], "withdrawn")
+        self.assertEqual(withdrawn[0]["accepted_version"], records[0]["version"])
 
 
 class PublicationTests(unittest.TestCase):

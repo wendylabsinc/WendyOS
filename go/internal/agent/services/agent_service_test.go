@@ -975,6 +975,16 @@ func TestJetPackVersionFromTegraRelease(t *testing.T) {
 	}
 }
 
+func TestL4TVersionFromTegraRelease(t *testing.T) {
+	thor := "# R38 (release), REVISION: 2.1, GCID: 42205042, BOARD: generic, EABI: aarch64"
+	if got := l4tVersionFromTegraRelease([]byte(thor)); got != "38.2.1" {
+		t.Errorf("l4tVersionFromTegraRelease() = %q, want 38.2.1", got)
+	}
+	if got := l4tVersionFromTegraRelease([]byte("not an L4T release")); got != "" {
+		t.Errorf("malformed release gave %q, want empty", got)
+	}
+}
+
 // ---------- detectCUDAVersionIn ----------
 
 const nvccVersionOutput = `nvcc: NVIDIA (R) Cuda compiler driver

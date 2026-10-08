@@ -95,7 +95,7 @@ def validate_result(result: dict, head_sha: str, base_sha: str) -> None:
             raise ValueError(f"API review result has invalid {field}")
     if result.get("risk") not in RISK_LABELS or not isinstance(result.get("decisions"), list):
         raise ValueError("API review result has invalid decisions or testing risk")
-    matched_prior_ids: set[str] = set()
+    matched_prior_ids: dict[str, bool] = {}
     for decision in result["decisions"]:
         if not isinstance(decision, dict) or set(decision) != {
             *DECISION_FIELDS, "prior_ids", "relationship", "reason",
@@ -108,10 +108,14 @@ def validate_result(result: dict, head_sha: str, base_sha: str) -> None:
                 or not isinstance(candidates, list) or len(candidates) > 8
                 or len(set(candidates)) != len(candidates)
                 or any(not isinstance(item, str) or not re.fullmatch(r"[0-9a-f]{64}", item) for item in candidates)
-                or any(item in matched_prior_ids for item in candidates)
+                or any(item in matched_prior_ids and (
+                    relationship != "ambiguous" or not matched_prior_ids[item]
+                ) for item in candidates)
                 or not isinstance(reason, str) or len(reason) > 500):
             raise ValueError("API decision has invalid reconciliation state")
-        matched_prior_ids.update(candidates)
+        # Competing claims are permitted only when EVERY claimant is ambiguous:
+        # the renderer gives each a fresh ID and carries no human acceptance.
+        matched_prior_ids.update({item: relationship == "ambiguous" for item in candidates})
         valid_reconciliation = (
             (relationship == "new" and not candidates and not reason)
             or (relationship == "unchanged" and len(candidates) == 1 and not reason)
@@ -272,11 +276,16 @@ def parse_comment_state(bodies: list[str]) -> list[dict]:
                              or [{"path": "legacy-state", "side": "head", "line": 0, "end_line": 0}],
             }
             identifier = legacy.group(1)
+            # Legacy hashes seed stable identity, not the canonical v2 version:
+            # legacy parsing reconstructs locations and prose differently. Use
+            # the reconstructed decision's fingerprint so withdrawn history
+            # also round-trips through strict v2 marker validation.
+            version = decision_id(decision)
             seen.add(identifier)
             records.append({
-                "id": identifier, "version": identifier,
+                "id": identifier, "version": version,
                 "state": "accepted" if checkbox.group(1).lower() == "x" else "pending",
-                "accepted_version": identifier if checkbox.group(1).lower() == "x" else None,
+                "accepted_version": version if checkbox.group(1).lower() == "x" else None,
                 "decision": decision,
             })
     return records
@@ -326,6 +335,11 @@ def reconcile_records(result: dict, previous: list[dict] | str) -> tuple[list[di
             if len(exact) == 1:
                 candidates, relationship = exact, "unchanged"
         prior = by_id.get(candidates[0]) if len(candidates) == 1 and relationship != "ambiguous" else None
+        reason = decision["reason"]
+        if (prior is not None and relationship == "unchanged"
+                and prior["decision"]["impact"] != semantic["impact"]):
+            relationship = "changed"
+            reason = "Compatibility impact changed; fresh human review is required."
         if prior is None:
             identifier = _fresh_id(semantic, used)
             used.add(identifier)
@@ -347,7 +361,7 @@ def reconcile_records(result: dict, previous: list[dict] | str) -> tuple[list[di
         current.append({
             "id": identifier, "version": version, "state": state,
             "accepted_version": accepted_version, "decision": semantic,
-            "reason": decision["reason"],
+            "reason": reason,
         })
     withdrawn = []
     for record in previous:
@@ -382,6 +396,8 @@ def decision_lines(record: dict, result: dict, repo: str, diff: str = "") -> lis
     decision = record["decision"]
     checked = record["state"] == "accepted"
     verb = "Accepted" if checked else "Re-review" if record["state"] == "needs_re_review" else "Accept"
+    if checked and record["accepted_version"] != record["version"]:
+        verb += " (carried forward)"
     impact_symbol, impact_title = IMPACTS[decision["impact"]]
     marker = state_marker({
         "id": record["id"], "version": record["version"],
@@ -581,6 +597,32 @@ class GitHub:
             time.sleep(2**attempt)
 
 
+class DryRunGitHub:
+    """Read live state, but intercept every mutation before reaching GitHub."""
+
+    def __init__(self, github):
+        self.github = github
+        self.mutations = 0
+        self.bodies: list[str] = []
+
+    def request(self, method: str, path: str, payload=None):
+        if method == "GET":
+            return self.github.request(method, path, payload)
+        if method not in {"POST", "PATCH", "DELETE"}:
+            raise ValueError("Unsupported dry-run GitHub method")
+        self.mutations += 1
+        if payload and "body" in payload:
+            self.bodies.append(payload["body"])
+        # Synthetic bounded IDs allow multipart rendering without real POSTs.
+        return {"id": 10**19 + self.mutations}
+
+    def summary(self) -> str:
+        records = parse_comment_state(self.bodies)
+        counts = {state: sum(record["state"] == state for record in records)
+                  for state in ("accepted", "pending", "needs_re_review", "withdrawn")}
+        return "Dry-run publication: " + json.dumps({"intercepted_mutations": self.mutations, **counts}, sort_keys=True)
+
+
 def authoritative_records(comments: list[dict]) -> list[dict]:
     comments = sorted(comments, key=lambda comment: comment["id"])
     primary = next((comment for comment in comments if part_index(comment["body"]) == 0), None)
@@ -774,6 +816,7 @@ def main() -> int:
     for option in ("result", "repo", "expected-head-sha", "expected-base-sha"):
         publish_parser.add_argument("--" + option, required=True)
     publish_parser.add_argument("--pr-number", required=True, type=int)
+    publish_parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
     token = os.environ.get("GH_TOKEN")
     if not token:
@@ -789,8 +832,13 @@ def main() -> int:
     # unchanged during rollout, then verify the immutable diff fingerprint
     # before rendering any PR-controlled source text.
     diff_bytes = result_path.with_name("api-review-pr.diff").read_bytes()
-    return 0 if publish(result, args.repo, args.pr_number, args.expected_head_sha,
-                        args.expected_base_sha, diff_bytes, github) else 1
+    if args.dry_run:
+        github = DryRunGitHub(github)
+    complete = publish(result, args.repo, args.pr_number, args.expected_head_sha,
+                       args.expected_base_sha, diff_bytes, github)
+    if args.dry_run:
+        print(github.summary())
+    return 0 if complete else 1
 
 
 if __name__ == "__main__":
