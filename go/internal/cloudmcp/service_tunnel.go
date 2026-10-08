@@ -17,12 +17,8 @@ type ServiceConnector interface {
 	OpenService(context.Context, Access, string, string) (net.Conn, error)
 }
 
-func (b *CloudBackend) OpenService(ctx context.Context, a Access, device, service string) (net.Conn, error) {
-	session := b.sessions[a.OrganizationID]
-	if session == nil || !a.permits(a.OrganizationID) || !allowedService(service) {
-		return nil, io.ErrClosedPipe
-	}
-	return session.OpenService(ctx, a.TenantID, a.ServiceSubject, device, service)
+func (b *CloudBackend) OpenService(context.Context, Access, string, string) (net.Conn, error) {
+	return nil, errUserAuthorityRequired
 }
 func allowedService(service string) bool {
 	return service == "ssh" || service == "wendy-registry" || service == "wendy-registry-darwin"

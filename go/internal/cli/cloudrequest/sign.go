@@ -363,3 +363,16 @@ func canonicalJSON(value any) ([]byte, error) {
 	}
 	return []byte(strings.TrimSuffix(b.String(), "\n")), nil
 }
+
+// HostedMCPSettings signs the exact HTTP body using the caller's operator key.
+func HostedMCPSettings(auth *config.AuthConfig, organization string, body []byte, correlationID string) (string, error) {
+	s, err := newSigner(auth)
+	if err != nil {
+		return "", err
+	}
+	if s == nil || s.tenantUUID != organization {
+		return "", fmt.Errorf("MCP settings require this organization's operator certificate")
+	}
+	digest := sha256.Sum256(body)
+	return s.sign("POST /v1/hosted-mcp/orgs/"+organization+"/settings", organization, base64.RawURLEncoding.EncodeToString(digest[:]), false, correlationID)
+}

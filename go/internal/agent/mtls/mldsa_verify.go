@@ -11,19 +11,14 @@ import (
 	circlSign "github.com/cloudflare/circl/sign"
 	"github.com/cloudflare/circl/sign/mldsa/mldsa65"
 	"github.com/cloudflare/circl/sign/mldsa/mldsa87"
+	"github.com/wendylabsinc/wendy/go/internal/agent/interceptor"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/timefmt"
 	"go.uber.org/zap"
 )
 
-// maxCertLifetime is the maximum accepted certificate validity window.
-// Certificates valid for longer than this are rejected because they cannot be
-// promptly revoked: Go's crypto/tls does not fetch CRL distribution points
-// during the TLS handshake, and doing so from server code introduces SSRF
-// vectors, cache-poisoning risk, and availability dependencies.
-//
-// The value is 732 days (2 × 365 + 2) to cover any real-world "2-year"
-// certificate whose validity window includes a leap-year Feb 29 (max 731 days).
+// maxCertLifetime independently limits accepted certificate lifetimes.
+// Revocation is enforced by signed CRL checks in revocation.go.
 const maxCertLifetime = (2*365 + 2) * 24 * time.Hour
 
 // maxClockSkewTolerance is the maximum amount by which the NotBefore floor may
@@ -33,9 +28,8 @@ const maxCertLifetime = (2*365 + 2) * 24 * time.Hour
 // future (e.g. years ahead) cannot be accepted by a device with a stuck clock.
 const maxClockSkewTolerance = 24 * time.Hour
 
-// checkRevocation enforces that leaf was issued with a validity window short
-// enough that a compromised credential expires within maxCertLifetime even
-// without an explicit CRL/OCSP revocation check.
+// checkRevocation is the legacy name for the certificate lifetime ceiling.
+// It is independent of the actual CRL revocation check.
 func checkRevocation(leaf *x509.Certificate) error {
 	lifetime := leaf.NotAfter.Sub(leaf.NotBefore)
 	if lifetime > maxCertLifetime {
@@ -189,6 +183,10 @@ func effectiveVerificationTime(realNow, notBeforeFloor, certNotBefore time.Time)
 // so that certs issued at provisioning time are still accepted. Pass a zero
 // time.Time to disable the floor.
 func buildVerifyPeerCertificate(caPool *x509.CertPool, caCerts []*x509.Certificate, logger *zap.Logger, notBeforeFloor time.Time) func([][]byte, [][]*x509.Certificate) error {
+	return buildVerifyPeerCertificateWithDelegation(caPool, caCerts, logger, notBeforeFloor, false)
+}
+
+func buildVerifyPeerCertificateWithDelegation(caPool *x509.CertPool, caCerts []*x509.Certificate, logger *zap.Logger, notBeforeFloor time.Time, allowDelegation bool) func([][]byte, [][]*x509.Certificate) error {
 	return func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
 		if len(rawCerts) == 0 {
 			return fmt.Errorf("no client certificate presented")
@@ -197,6 +195,13 @@ func buildVerifyPeerCertificate(caPool *x509.CertPool, caCerts []*x509.Certifica
 		leaf, err := x509.ParseCertificate(rawCerts[0])
 		if err != nil {
 			return fmt.Errorf("parsing client certificate: %w", err)
+		}
+
+		if allowDelegation {
+			leaf, err = interceptor.DelegatedCertificateForVerification(leaf)
+			if err != nil {
+				return err
+			}
 		}
 
 		realNow := time.Now()

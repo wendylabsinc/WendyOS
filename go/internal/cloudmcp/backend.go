@@ -16,17 +16,23 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/cli/cloudrequest"
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
+	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 )
 
 var ErrUnauthenticated = errors.New("MCP token rejected")
 var errDenied = errors.New("MCP operation denied")
+var errUserAuthorityRequired = errors.New("device access requires a delegated user credential")
 
 // CloudBackend delegates live policy to Cloud over TLS with the organization's
 // DPoP-bound machine credential. Sessions are configured by the service operator;
 // no client request can introduce a key, issuer, or destination.
+type machineCredentials interface {
+	CloudCredentials(context.Context) (*config.AuthConfig, error)
+}
+
 type CloudBackend struct {
 	origin   string
-	sessions map[string]*browserauth.MachineSession
+	sessions map[string]machineCredentials
 	client   *http.Client
 }
 
@@ -35,7 +41,7 @@ func NewCloudBackend(origin string, sessions map[string]*browserauth.MachineSess
 	if err != nil || u.Scheme != "https" || u.Host == "" || u.Path != "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
 		return nil, fmt.Errorf("authorization backend must be an HTTPS origin")
 	}
-	copy := make(map[string]*browserauth.MachineSession, len(sessions))
+	copy := make(map[string]machineCredentials, len(sessions))
 	for org, session := range sessions {
 		if !canonicalUUID(org) || session == nil {
 			return nil, fmt.Errorf("invalid configured machine session")
@@ -64,25 +70,25 @@ func (b *CloudBackend) request(ctx context.Context, org, operation string, body 
 	if err != nil {
 		return nil, err
 	}
+	machine := b.sessions[org]
+	if machine == nil {
+		return nil, fmt.Errorf("organization machine is not provisioned")
+	}
+	auth, err := machine.CloudCredentials(ctx)
+	if err != nil {
+		return nil, err
+	}
+	key, err := certs.ParseSigningPrivateKeyPEM([]byte(auth.DPoPPrivateKey))
+	if err != nil {
+		return nil, err
+	}
+	proof, err := cloudrequest.NewDPoPAccessProof(key, method, endpoint, auth.APIKey)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "DPoP "+auth.APIKey)
+	req.Header.Set("DPoP", proof)
 	if body != nil {
-		machine := b.sessions[org]
-		if machine == nil {
-			return nil, fmt.Errorf("organization machine is not provisioned")
-		}
-		auth, err := machine.Credentials(ctx)
-		if err != nil {
-			return nil, err
-		}
-		key, err := certs.ParseSigningPrivateKeyPEM([]byte(auth.DPoPPrivateKey))
-		if err != nil {
-			return nil, err
-		}
-		proof, err := cloudrequest.NewDPoPAccessProof(key, method, endpoint, auth.APIKey)
-		if err != nil {
-			return nil, err
-		}
-		req.Header.Set("Authorization", "DPoP "+auth.APIKey)
-		req.Header.Set("DPoP", proof)
 		req.Header.Set("Content-Type", "application/json")
 	}
 	propagation.TraceContext{}.Inject(ctx, propagation.HeaderCarrier(req.Header))
@@ -143,10 +149,9 @@ func (b *CloudBackend) Devices(ctx context.Context, access Access) (json.RawMess
 	}
 	return b.request(ctx, access.OrganizationID, "devices", map[string]string{"user_token": access.bearer})
 }
-func (b *CloudBackend) Connect(ctx context.Context, access Access, device string) (*grpcclient.AgentConnection, error) {
-	session := b.sessions[access.OrganizationID]
-	if session == nil || !access.permits(access.OrganizationID) {
-		return nil, fmt.Errorf("device access denied")
-	}
-	return session.ConnectDevice(ctx, access.TenantID, access.ServiceSubject, device)
+
+// Connect must not fall back to the machine's unrestricted certificate while
+// delegated issuance and the tunnel principal contract are being integrated.
+func (b *CloudBackend) Connect(context.Context, Access, string) (*grpcclient.AgentConnection, error) {
+	return nil, errUserAuthorityRequired
 }

@@ -82,7 +82,17 @@ func NewMachineSession(settings Settings, issuer, tenant, subject, privatePEM st
 // Credentials returns a copy of the current DPoP-bound Cloud token and PKI
 // service certificate. Refresh errors fail the request rather than reusing an
 // expired credential. Callers must not log or return this value to MCP clients.
+// CloudCredentials obtains only a DPoP Cloud token; hosted discovery does not
+// need, and must not bootstrap, an unrestricted service certificate.
+func (m *MachineSession) CloudCredentials(ctx context.Context) (*config.AuthConfig, error) {
+	return m.credentials(ctx, false)
+}
+
 func (m *MachineSession) Credentials(ctx context.Context) (*config.AuthConfig, error) {
+	return m.credentials(ctx, true)
+}
+
+func (m *MachineSession) credentials(ctx context.Context, certificate bool) (*config.AuthConfig, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	s := &m.session
@@ -94,7 +104,7 @@ func (m *MachineSession) Credentials(ctx context.Context) (*config.AuthConfig, e
 		}
 		s.meta = meta
 	}
-	if !now.Add(time.Minute).Before(m.certificateExpires) {
+	if certificate && !now.Add(time.Minute).Before(m.certificateExpires) {
 		identity, _, err := m.exchange(ctx, s.settings().IdentityResource)
 		if err != nil {
 			return nil, err
@@ -120,12 +130,16 @@ func (m *MachineSession) Credentials(ctx context.Context) (*config.AuthConfig, e
 		}
 		s.tokens, m.expires = token, expiry
 	}
+	var certificates []config.CertificateInfo
+	if certificate {
+		certificates = []config.CertificateInfo{s.certificate}
+	}
 	return &config.AuthConfig{
 		CloudGRPC: s.settings().CloudGRPC, APIKey: s.tokens.Access,
 		OAuthIssuer: s.meta.Issuer, OAuthResource: s.settings().CloudResource,
 		PKIResource: s.settings().IdentityResource, PKIEndpoint: s.settings().IdentityEndpoint,
 		OAuthExpiresAt: m.expires.UTC().Format(time.RFC3339), DPoPPrivateKey: s.privatePEM,
-		Certificates: []config.CertificateInfo{s.certificate},
+		Certificates: certificates,
 	}, nil
 }
 

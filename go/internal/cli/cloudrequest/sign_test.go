@@ -543,3 +543,41 @@ func TestSignerNormalizesCertificateChain(t *testing.T) {
 		}
 	}
 }
+
+func TestHostedMCPSettingsSignature(t *testing.T) {
+	auth, key, _ := testAuth(t)
+	body := []byte(`{"enabled":true,"service_subject":"machine"}`)
+	correlation := uuid.NewString()
+	signature, err := HostedMCPSettings(auth, testTenant, body, correlation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parts := strings.Split(signature, ".")
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var descriptor map[string]any
+	if err := json.Unmarshal(payload, &descriptor); err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(body)
+	if descriptor["body_sha256"] != base64.RawURLEncoding.EncodeToString(digest[:]) || descriptor["operation"] != "POST /v1/hosted-mcp/orgs/"+testTenant+"/settings" || descriptor["correlation_id"] != correlation {
+		t.Fatal("incorrect settings binding")
+	}
+	signed, err := base64.RawURLEncoding.DecodeString(parts[2])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mldsa.Verify(key.PublicKey(), []byte(parts[0]+"."+parts[1]), signed, nil); err != nil {
+		t.Fatal(err)
+	}
+	for _, candidate := range []*config.AuthConfig{nil, {}} {
+		if _, err := HostedMCPSettings(candidate, testTenant, body, correlation); err == nil {
+			t.Fatal("accepted missing operator")
+		}
+	}
+	if _, err := HostedMCPSettings(auth, uuid.NewString(), body, correlation); err == nil {
+		t.Fatal("accepted other tenant")
+	}
+}
