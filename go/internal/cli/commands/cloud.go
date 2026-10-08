@@ -171,7 +171,9 @@ func newCloudEnrollDeviceCmd() *cobra.Command {
 			}
 			defer conn.Close()
 
-			promptWifiIfNeeded(ctx, conn)
+			if err := promptWifiIfNeeded(ctx, conn); err != nil {
+				return err
+			}
 
 			return runEnrollDevice(ctx, conn, auth, name, orgID, acmeDirectoryURL)
 		},
