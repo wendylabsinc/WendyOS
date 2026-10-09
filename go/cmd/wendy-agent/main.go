@@ -1006,6 +1006,13 @@ func main() {
 		meshMetrics.Collect(ctx)
 	}()
 	meshDialer = services.NewMeshDialer(logger, brokerURL, orgID, assetID, certPEM, keyPEM, chainPEM, meshMetrics)
+	meshDialer.SetSelfDialer(func(dialCtx context.Context, port uint16) (net.Conn, error) {
+		bounded, cancel := context.WithTimeout(dialCtx, 5*time.Second)
+		defer cancel()
+		return meshIngress.DialAuthorized(port, func() (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(bounded, "tcp4", net.JoinHostPort("127.0.0.1", strconv.Itoa(int(port))))
+		})
+	})
 	meshDialer.SetLocalMeshDialer(func(dialCtx context.Context, peer int32, port uint16) (net.Conn, error) {
 		localMeshMu.RLock()
 		snapshot := localMeshSnapshot
@@ -1046,6 +1053,9 @@ func main() {
 		logger.Warn("mesh proxy failed to start; mesh egress disabled", zap.Error(err))
 	}
 	udpProxy, udpErr := mesh.NewUDPProxy(mesh.UDPDialFunc(func(dialCtx context.Context, peer int32, port uint16) (mesh.UDPFlow, error) {
+		if meshDialer.IsSelf(peer) {
+			return meshsession.DialLocalUDP(dialCtx, meshIngress, port)
+		}
 		localMeshMu.RLock()
 		snapshot := localMeshSnapshot
 		credentials := localMeshCredentials

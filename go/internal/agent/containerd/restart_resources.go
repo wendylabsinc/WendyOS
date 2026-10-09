@@ -17,6 +17,7 @@ import (
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 	"golang.org/x/sys/unix"
 
+	"github.com/wendylabsinc/wendy/go/internal/agent/avahibridge"
 	"github.com/wendylabsinc/wendy/go/internal/agent/dbusproxy"
 	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 )
@@ -47,6 +48,13 @@ func (c *Client) ensureDBusProxyForStart(ctx context.Context, containerName stri
 		if mount.Destination != "/var/run/dbus" {
 			continue
 		}
+		// An avahi-sourced bus mount belongs to ensureAvahiForStart, not
+		// the Bluetooth proxy: both share destination /var/run/dbus (one
+		// bus per container, enforced at create). Claiming it here wedges
+		// every avahi container at start (B2 device proof 2026-09-29).
+		if filepath.Clean(mount.Source) == avahibridge.ProxySocketDir(containerName) {
+			return false, nil
+		}
 		expected := dbusproxy.SocketDir(containerName)
 		if filepath.Clean(mount.Source) != expected {
 			return false, fmt.Errorf("Bluetooth D-Bus mount source %q does not match scoped proxy %q", mount.Source, expected)
@@ -61,6 +69,34 @@ func (c *Client) ensureDBusProxyForStart(ctx context.Context, containerName stri
 		if filepath.Clean(dir) != expected {
 			_ = c.proxyManager.Stop(containerName)
 			return false, fmt.Errorf("D-Bus proxy for %q returned %q, want %q", containerName, dir, expected)
+		}
+		return true, nil
+	}
+	return false, nil
+}
+
+// ensureAvahiForStart recreates the avahi bus+proxy for a rebooted container
+// whose persisted spec already mounts the avahi proxy directory. The daemon
+// itself starts after CNI and before the application entrypoint is released.
+func (c *Client) ensureAvahiForStart(ctx context.Context, containerName string, mounts []specs.Mount) (bool, error) {
+	for _, mount := range mounts {
+		if mount.Destination != "/var/run/dbus" {
+			continue
+		}
+		expected := avahibridge.ProxySocketDir(containerName)
+		if filepath.Clean(mount.Source) != expected {
+			continue
+		}
+		if c.avahiManager == nil {
+			return false, fmt.Errorf("avahi bridge unavailable for %q", containerName)
+		}
+		dir, err := c.avahiManager.PrepareForTask(ctx, containerName)
+		if err != nil {
+			return false, fmt.Errorf("recreating avahi bridge for %q: %w", containerName, err)
+		}
+		if filepath.Clean(dir) != expected {
+			_ = c.avahiManager.Stop(containerName)
+			return false, fmt.Errorf("avahi bridge for %q returned %q, want %q", containerName, dir, expected)
 		}
 		return true, nil
 	}

@@ -23,7 +23,10 @@ const (
 // disconnectLEPeer asks the Linux Bluetooth management layer to abort only
 // the specified LE peer on the selected adapter. Unlike raw HCI LE Create
 // Connection Cancel, the management command first resolves the peer's
-// hci_conn and also clears a queued create command. The caller must use this
+// hci_conn and requests cancellation of a queued create command. A successful
+// return acknowledges the management request; it does not verify that the
+// peer disappeared from the kernel connection list or that redial recovered.
+// The caller must use this
 // only after its own timed-out CoC socket has closed: the management command
 // will also terminate a late-established ACL to this same peer.
 func disconnectLEPeer(ctx context.Context, hciIndex int, address, addressType string) error {
@@ -77,18 +80,17 @@ func disconnectLEPeer(ctx context.Context, hciIndex int, address, addressType st
 		if !matched {
 			continue
 		}
-		// On Linux 6.8, DISCONNECTED can mean socket close has already
-		// removed the pending hci_conn before this command runs. It is a
-		// settled peer state, not proof this command performed the abort.
-		// NOT_CONNECTED covers the same race on other kernel versions.
-		if mgmtDisconnectSettled(status) {
+		// The peer may already be gone when the queued request is processed.
+		// Accept that race, but none of these replies proves recovery: even
+		// SUCCESS can precede another pending connection to the same peer.
+		if mgmtDisconnectReplyAccepted(status) {
 			return nil
 		}
 		return fmt.Errorf("Bluetooth management disconnect status 0x%02x", status)
 	}
 }
 
-func mgmtDisconnectSettled(status byte) bool {
+func mgmtDisconnectReplyAccepted(status byte) bool {
 	return status == mgmtStatusSuccess || status == mgmtStatusNotConnected || status == mgmtStatusDisconnected
 }
 

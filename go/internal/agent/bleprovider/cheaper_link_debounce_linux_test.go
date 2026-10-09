@@ -154,13 +154,34 @@ func (n *countSnapshotNode) AttachStream(context.Context, int32, net.Conn, uint1
 	return nil
 }
 
-func TestBlePeerCountUnionsClaimsAndSnapshot(t *testing.T) {
+func TestBlePeerCountExcludesPendingClaims(t *testing.T) {
 	r := &runtime{cfg: Config{Logger: zap.NewNop()}, active: map[int32]struct{}{10: {}, 11: {}}}
-	if got := r.blePeerCount(); got != 2 {
-		t.Fatalf("claims only: %d", got)
+	if got := r.blePeerCount(); got != 0 {
+		t.Fatalf("pending claims counted as established links: %d", got)
 	}
 	r.cfg.Node = &countSnapshotNode{links: []localmesh.PeerLink{{Asset: 11, Cost: LinkCost}, {Asset: 12, Cost: LinkCost}, {Asset: 13, Cost: 512}}}
-	if got := r.blePeerCount(); got != 3 {
-		t.Fatalf("union with dedupe + cost filter: %d", got)
+	if got := r.blePeerCount(); got != 2 {
+		t.Fatalf("established BLE links only: %d", got)
+	}
+}
+
+func TestBlePeerCountKeepsScanningForPendingThirdPeer(t *testing.T) {
+	node := &countSnapshotNode{links: []localmesh.PeerLink{
+		{Asset: 358, Cost: LinkCost}, {Asset: 536, Cost: LinkCost},
+		{Asset: 577, Cost: 512}, // A different carrier cannot fill the BLE target.
+	}}
+	r := &runtime{cfg: Config{Node: node, TargetPeers: 3, Logger: zap.NewNop()},
+		active: map[int32]struct{}{358: {}, 536: {}, 577: {}}}
+	if r.blePeerCount() >= r.cfg.TargetPeers {
+		t.Fatal("governor would pause discovery with the third BLE dial still pending")
+	}
+	// Capacity admission remains bounded while discovery continues.
+	if r.claim(460) {
+		t.Fatal("excluding claims from the scan count allowed an extra dial")
+	}
+	node.links = append(node.links, localmesh.PeerLink{Asset: 577, Cost: LinkCost},
+		localmesh.PeerLink{Asset: 536, Cost: LinkCost})
+	if got := r.blePeerCount(); got != r.cfg.TargetPeers {
+		t.Fatalf("full BLE complement, counting each asset once: %d", got)
 	}
 }

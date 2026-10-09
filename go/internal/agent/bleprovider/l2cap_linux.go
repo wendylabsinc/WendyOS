@@ -387,11 +387,11 @@ func (c *packetConn) receiveMTU() int {
 	return int(opts[2]) | int(opts[3])<<8
 }
 
-// SockQueue reports the kernel socket queue depths: unread received bytes
-// (SIOCINQ) and unsent bytes (SIOCOUTQ). During a stall, high SIOCINQ means
-// this host stopped reading (app wedge); zero SIOCINQ with no arrivals means
-// the peer stopped granting/sending (peer wedge or radio). Best effort:
-// returns an error instead of depths when the descriptor is gone.
+// SockQueue reports raw Linux Bluetooth socket ioctl readings. SIOCINQ is
+// the next queued skb's length (zero when none is queued), not total unread
+// bytes. SIOCOUTQ is available send-buffer budget, clamped at zero, not an
+// unsent-byte count. These samples alone cannot attribute a stalled stream.
+// Returns an error when either ioctl fails or the descriptor is closed.
 func (c *packetConn) SockQueue() (inQ, outQ int, err error) {
 	c.fdMu.RLock()
 	defer c.fdMu.RUnlock()

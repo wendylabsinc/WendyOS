@@ -36,10 +36,9 @@ type runtime struct {
 	// enforces the toggle dwell.
 	scanPaused     bool
 	lastScanToggle time.Time
-	// dialTimeouts counts consecutive dial-context timeouts per asset. Three
-	// in a row with no HCI progress means initiation itself is wedged (stale
-	// kernel hci_conn or a deaf peer), not merely a busy peer: only an
-	// explicit disconnect clears that state, redialing never does.
+	// dialTimeouts counts consecutive dial-context timeouts per asset.
+	// Repeated timeouts alone do not establish a kernel connection leak
+	// or whether a peer needs an explicit disconnect.
 	dialTimeouts         map[int32]int
 	links                sync.WaitGroup
 	dialSlot             chan struct{}
@@ -62,10 +61,8 @@ func (r *runtime) hasCheaperLink(asset int32) bool {
 	return ok && checker.HasCheaperLink(asset, LinkCost)
 }
 
-// noteDialTimeout tracks consecutive dial-context timeouts per peer. Three in
-// a row escalates to a warning: initiation is wedged below the agent (stale
-// kernel hci_conn or a peer that never answers), and only an explicit
-// disconnect clears it — further redials just re-attach to the stuck state.
+// noteDialTimeout warns after three consecutive dial-context timeouts.
+// It reports the observed failures; retry and cancellation policy is unchanged.
 func (r *runtime) noteDialTimeout(asset int32, timedOut bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -78,7 +75,7 @@ func (r *runtime) noteDialTimeout(asset int32, timedOut bool) {
 	}
 	r.dialTimeouts[asset]++
 	if r.dialTimeouts[asset] == 3 {
-		r.cfg.Logger.Warn("BLE initiation wedged: three consecutive dial timeouts; explicit disconnect required, redial will not clear it", zap.Int32("peer", asset))
+		r.cfg.Logger.Warn("BLE peer has repeated dial timeouts", zap.Int32("peer", asset), zap.Int("consecutive_timeouts", r.dialTimeouts[asset]))
 	}
 }
 
@@ -458,16 +455,12 @@ func (r *runtime) governDiscovery(ctx context.Context, bus *dbus.Conn, adapter d
 	return !paused
 }
 
-// blePeerCount counts distinct BLE peers with an in-progress dial/accept or
-// an authenticated link, by asset. Snapshot links at the BLE cost plus live
-// claims cover both without double counting.
+// blePeerCount counts distinct established BLE links. Admission claims also
+// cover queued dials, kernel scan-phase connections and TLS handshakes; they
+// reserve capacity but must not stop discovery before those links exist.
+// In particular, two links plus a pending third dial still need scanning.
 func (r *runtime) blePeerCount() int {
 	seen := make(map[int32]struct{})
-	r.mu.Lock()
-	for asset := range r.active {
-		seen[asset] = struct{}{}
-	}
-	r.mu.Unlock()
 	if node, ok := r.cfg.Node.(interface{ Snapshot() localmesh.NodeSnapshot }); ok {
 		for _, link := range node.Snapshot().Links {
 			if link.Cost == LinkCost {
@@ -608,7 +601,7 @@ func (r *runtime) dialLink(ctx context.Context, peer candidate) {
 	if err != nil {
 		// A timed-out socket connect can leave a controller attempt pending.
 		// The management command resolves the LE address on this adapter and
-		// aborts that peer's pending kernel hci_conn. Device1.Disconnect does
+		// requests that peer's pending kernel hci_conn abort. Device1.Disconnect does
 		// not reliably cancel raw L2CAP socket connects in BT_CONNECT state.
 		if shouldCancelPendingACL(err, ctx.Err(), r.hciIndex) {
 			abortCtx, stopAbort := context.WithTimeout(ctx, 3*time.Second)
@@ -617,7 +610,7 @@ func (r *runtime) dialLink(ctx context.Context, peer candidate) {
 			if abortErr != nil {
 				r.cfg.Logger.Warn("BLE timed-out peer ACL cancel failed", zap.Int32("peer", peer.asset), zap.Error(abortErr))
 			} else {
-				r.cfg.Logger.Info("BLE timed-out peer ACL cancel completed", zap.Int32("peer", peer.asset))
+				r.cfg.Logger.Info("BLE timed-out peer ACL cancel acknowledged", zap.Int32("peer", peer.asset), zap.Bool("recovery_verified", false))
 			}
 		} else {
 			r.disconnectOwnedPeer(peer)

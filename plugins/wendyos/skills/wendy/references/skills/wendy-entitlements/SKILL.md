@@ -25,6 +25,7 @@ Ask what the app actually touches, then choose the smallest entitlement set:
 - V4L2 cameras or USB webcams: `camera`.
 - Model cache, database, user uploads, generated files, or persistent app state: `persist`.
 - BlueZ Bluetooth access: `bluetooth`.
+- Direct Wi-Fi Aware control: `nan`, plus `network: host` for the NDP data path.
 - Raw USB devices: `usb`.
 - I2C bus devices: `i2c`.
 - GPIO chips: `gpio`.
@@ -52,6 +53,7 @@ capabilities and installed CLI validation:
 | `video` | none | `mode`, `allowlist` | Deprecated compatibility alias for `camera`; prefer `camera` in new configs. |
 | `persist` | `name`, `path` | none | Creates/binds `/var/lib/wendy/volumes/<name>` to the container `path`; volume names are shared across apps. Linux/WendyOS mounts are `noexec`. |
 | `bluetooth` | none | `mode` | Uses a filtered `xdg-dbus-proxy` socket for BlueZ. Do not assume unrestricted host D-Bus access. |
+| `nan` | none | none | Prepares an app-specific NDI and exposes only the `nan0` wpa_supplicant socket as `WENDY_NAN_SOCKET`; bind the client's local Unix datagram socket in `WENDY_NAN_CLIENT_DIR` for replies. Does not grant host networking. App owns its own NAN service/NDP handles, but shares radio-wide cluster state. |
 | `usb` | none | none | Mounts `/dev/bus/usb` and allows USB character devices. |
 | `i2c` | `device` | none | Binds `/dev/<device>` such as `/dev/i2c-1` and allows I2C devices. |
 | `gpio` | none | `pins` | Mounts existing `/dev/gpiochip0` through `/dev/gpiochip7`; `pins` are documentation/validation, access is chip-level. |

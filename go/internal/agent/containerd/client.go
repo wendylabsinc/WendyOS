@@ -43,6 +43,7 @@ import (
 	"go.uber.org/zap"
 	"google.golang.org/protobuf/types/known/anypb"
 
+	"github.com/wendylabsinc/wendy/go/internal/agent/avahibridge"
 	"github.com/wendylabsinc/wendy/go/internal/agent/board"
 	"github.com/wendylabsinc/wendy/go/internal/agent/cdi"
 	"github.com/wendylabsinc/wendy/go/internal/agent/dbusproxy"
@@ -115,6 +116,11 @@ type Client struct {
 	namespace               string
 	mu                      sync.Mutex
 	proxyManager            dbusProxyManager // nil if xdg-dbus-proxy is not available
+	avahiManager            *avahibridge.Manager
+	outputMu                sync.Mutex
+	outputPIDs              map[string]uint32
+	recoveredOutput         map[string]*recoveredTaskOutput
+	outputClosed            bool
 	systemAPISocketProvider AppSystemAPISocketProvider
 	dataSocketProvider      AppDataSocketProvider
 
@@ -433,6 +439,7 @@ func NewClient(logger *zap.Logger, address string, proxyMgr *dbusproxy.Manager) 
 		logger:            logger,
 		namespace:         "default",
 		proxyManager:      optionalDBusProxyManager(proxyMgr),
+		avahiManager:      avahibridge.NewManager(logger),
 		appServices:       make(map[string]map[string]*appconfig.ServiceConfig),
 		primaryPIDs:       make(map[string]uint32),
 		appIsolation:      make(map[string]string),
@@ -462,6 +469,7 @@ func NewClient(logger *zap.Logger, address string, proxyMgr *dbusproxy.Manager) 
 // Close releases the underlying containerd client connection and stops all
 // D-Bus proxy processes.
 func (c *Client) Close() error {
+	c.closeRecoveredTaskOutput()
 	c.meshIngressStopOnce.Do(func() {
 		if c.meshIngressStop != nil {
 			close(c.meshIngressStop)
@@ -474,6 +482,9 @@ func (c *Client) Close() error {
 	// them. Explicit stop/delete paths remain the lifecycle boundary.
 	if c.proxyManager != nil {
 		c.proxyManager.StopAll()
+	}
+	if c.avahiManager != nil {
+		c.avahiManager.Close()
 	}
 	if c.chunkIndex != nil {
 		if err := c.chunkIndex.Close(); err != nil {
@@ -1340,6 +1351,7 @@ func (c *Client) CreateContainerWithProgress(ctx context.Context, req *agentpb.C
 		if c.proxyManager != nil {
 			_ = c.proxyManager.Stop(containerName)
 		}
+		_ = c.avahiManager.Stop(containerName)
 		replaceDuration = time.Since(phaseStarted)
 	}
 
@@ -1382,8 +1394,13 @@ func (c *Client) CreateContainerWithProgress(ctx context.Context, req *agentpb.C
 		return err
 	}
 
+	if err := requireAvahi(appCfg, containerName); err != nil {
+		return err
+	}
+
 	var dbusProxyStarted bool
 	var dbusProxySocketDir string
+	var avahiProxySocketDir string
 	if c.proxyManager != nil && hasBluetooth(appCfg) {
 		dir, err := c.proxyManager.Start(ctx, containerName)
 		if err != nil {
@@ -1394,6 +1411,20 @@ func (c *Client) CreateContainerWithProgress(ctx context.Context, req *agentpb.C
 		defer func() {
 			if dbusProxyStarted {
 				_ = c.proxyManager.Stop(containerName)
+			}
+		}()
+	}
+	var avahiPrepared bool
+	if hasAvahi(appCfg) {
+		dir, err := c.avahiManager.Prepare(ctx, containerName)
+		if err != nil {
+			return fmt.Errorf("preparing avahi bridge for %q: %w", containerName, err)
+		}
+		avahiProxySocketDir = dir
+		avahiPrepared = true
+		defer func() {
+			if avahiPrepared {
+				_ = c.avahiManager.Stop(containerName)
 			}
 		}()
 	}
@@ -1566,10 +1597,11 @@ func (c *Client) CreateContainerWithProgress(ctx context.Context, req *agentpb.C
 	}
 
 	opts := localoci.ApplyOptions{
-		DBusProxySocketDir: dbusProxySocketDir,
-		SystemAPISocketDir: systemAPISocketDir,
-		DataSocketDir:      dataSocketDir,
-		HostResolvConfPath: hostResolvConfPath,
+		DBusProxySocketDir:  dbusProxySocketDir,
+		AvahiProxySocketDir: avahiProxySocketDir,
+		SystemAPISocketDir:  systemAPISocketDir,
+		DataSocketDir:       dataSocketDir,
+		HostResolvConfPath:  hostResolvConfPath,
 	}
 	// Pass a shallow copy of appCfg with AppID and ServiceName set to the
 	// derived (validated) values. This ensures ApplyEntitlements always receives
@@ -1871,6 +1903,7 @@ func (c *Client) CreateContainerWithProgress(ctx context.Context, req *agentpb.C
 
 	// Container created successfully; keep its external socket resources running.
 	dbusProxyStarted = false
+	avahiPrepared = false
 	systemAPIRefOwned = false
 	dataRefOwned = false
 
@@ -2191,10 +2224,14 @@ func (c *Client) startContainer(ctx context.Context, appName string, stdin io.Re
 	// after recreating a proxy, release it again unless the complete start
 	// lifecycle (including network setup) succeeds below.
 	dbusProxyStartedForTask := false
+	avahiStartedForTask := false
 	dbusProxyContainerName := container.ID()
 	defer func() {
 		if dbusProxyStartedForTask && c.proxyManager != nil {
 			_ = c.proxyManager.Stop(dbusProxyContainerName)
+		}
+		if avahiStartedForTask && c.avahiManager != nil {
+			_ = c.avahiManager.Stop(dbusProxyContainerName)
 		}
 	}()
 
@@ -2245,6 +2282,11 @@ func (c *Client) startContainer(ctx context.Context, appName string, stdin io.Re
 			return nil, proxyErr
 		}
 		dbusProxyStartedForTask = started
+		avahiRestored, avahiErr := c.ensureAvahiForStart(ctx, dbusProxyContainerName, storedSpec.Mounts)
+		if avahiErr != nil {
+			return nil, avahiErr
+		}
+		avahiStartedForTask = avahiRestored
 
 		identities, identityErr := decodeSerialIdentities(containerLabels[labelKeySerialIdentities])
 		if identityErr != nil {
@@ -2433,51 +2475,22 @@ func (c *Client) startContainer(ctx context.Context, appName string, stdin io.Re
 	phaseStarted = time.Now()
 	exitStatusCh, err := task.Wait(taskCtx)
 	if err != nil {
-		_, _ = task.Delete(taskCtx)
-		stdoutR.Close()
-		stdoutW.Close()
-		stderrR.Close()
-		stderrW.Close()
-		c.recordStartFailure(ctx, appName, err)
-		return nil, fmt.Errorf("waiting on task for %q: %w", appName, err)
+		muHeld = false
+		c.mu.Unlock()
+		return nil, c.failTaskStart(taskCtx, task, appName, fmt.Errorf("waiting on task for %q: %w", appName, err), stdoutR, stderrR, stdoutW, stderrW)
 	}
 	waitDuration = time.Since(phaseStarted)
 
-	// Start the task.
-	phaseStarted = time.Now()
-	if err := task.Start(taskCtx); err != nil {
-		_, _ = task.Delete(taskCtx)
-		stdoutR.Close()
-		stdoutW.Close()
-		stderrR.Close()
-		stderrW.Close()
-		c.recordStartFailure(ctx, appName, err)
-		return nil, fmt.Errorf("starting task for %q: %w", appName, err)
-	}
-	runtimeStartDuration = time.Since(phaseStarted)
-
-	// From this point through network setup, every failure must kill the task,
-	// close its unconsumed pipes, and record a did-not-start diagnostic. The
-	// post-start hook is intentionally delayed until network setup commits.
-	failStartedTask := func(cause error) error {
-		_, _ = task.Delete(taskCtx, containerd.WithProcessKill)
-		stdoutR.Close()
-		stdoutW.Close()
-		stderrR.Close()
-		stderrW.Close()
-		c.recordStartFailure(ctx, appName, cause)
-		return cause
-	}
-
-	// Track the primary PID for shared-namespace app groups.
-	// getIsolation requires c.mu (held here via muHeld).
-	if appconfig.IsSharedNamespaceIsolation(isolation) {
-		// Presence alone is not enough: a per-service stop leaves the group
-		// entry behind, so a dead PID must be replaced rather than kept.
-		primaryPID, hasPrimary := c.getPrimaryPID(appID)
-		if !hasPrimary || !c.primaryTaskAlive(ctx, appID, primaryPID) {
-			c.setPrimaryPID(appID, task.Pid())
+	// NewTask creates the init process and its namespaces, but the runtime holds
+	// the entrypoint until Start. Configure all networking while it is held:
+	// applications must see their address, routes, DNS and private Avahi on entry.
+	taskStarted := false
+	failPreparedTask := func(cause error) error {
+		if muHeld {
+			c.mu.Unlock()
+			muHeld = false
 		}
+		return c.failTaskStart(taskCtx, task, appName, cause, stdoutR, stderrR, stdoutW, stderrW)
 	}
 
 	// Entitlements are read back from the container's own labels (written at
@@ -2497,7 +2510,7 @@ func (c *Client) startContainer(ctx context.Context, appName string, stdin io.Re
 		nsPath := fmt.Sprintf("/proc/%d/ns/net", task.Pid())
 		netnsRef, err = os.Open(nsPath)
 		if err != nil {
-			return nil, failStartedTask(fmt.Errorf("anchoring network namespace for app %q: %w", appID, err))
+			return nil, failPreparedTask(fmt.Errorf("anchoring network namespace for app %q: %w", appID, err))
 		}
 	}
 	netnsAnchored := netnsRef != nil
@@ -2521,21 +2534,21 @@ func (c *Client) startContainer(ctx context.Context, appName string, stdin io.Re
 	// On Linux the bind-mount is used; on other platforms the fd path is the fallback.
 	if reusedNetworkSandbox != nil {
 		// Mandatory for both in-memory reuse and restart recovery: neither path
-		// may skip this post-start task<->namespace binding check.
+		// may skip this pre-start task<->namespace binding check.
 		if !taskUsesNetworkSandbox(reusedNetworkSandbox.path, task.Pid()) {
 			c.destroyNetworkSandbox(ctx, appName)
-			return nil, failStartedTask(fmt.Errorf("reusable network sandbox validation failed for app %q after task start", appID))
+			return nil, failPreparedTask(fmt.Errorf("reusable network sandbox validation failed for app %q before task start", appID))
 		}
 		if isolation == "isolated" {
 			if ent, ok := findMeshEntitlement(entitlements); ok {
 				if err := c.applyMeshIngressPorts(appName, appID, reusedNetworkSandbox.path, reusedNetworkSandbox.ip, ent.Ports); err != nil {
-					return nil, failStartedTask(fmt.Errorf("mesh ingress setup failed for reused sandbox %q: %w", appName, err))
+					return nil, failPreparedTask(fmt.Errorf("mesh ingress setup failed for reused sandbox %q: %w", appName, err))
 				}
 				if err := hostnetwork.AddMeshUDPIntercept(reusedNetworkSandbox.ip, ent.ServiceCIDR, bridgeName(appID), mesh.UDPProxyPort); err != nil {
-					return nil, failStartedTask(fmt.Errorf("mesh UDP redirect setup failed for reused sandbox %q: %w", appName, err))
+					return nil, failPreparedTask(fmt.Errorf("mesh UDP redirect setup failed for reused sandbox %q: %w", appName, err))
 				}
 				if err := c.claimMeshSource(appName, appID, reusedNetworkSandbox.ip, ent.ServiceCIDR); err != nil {
-					return nil, failStartedTask(fmt.Errorf("mesh source attribution failed for reused sandbox %q: %w", appName, err))
+					return nil, failPreparedTask(fmt.Errorf("mesh source attribution failed for reused sandbox %q: %w", appName, err))
 				}
 			}
 		}
@@ -2569,7 +2582,7 @@ func (c *Client) startContainer(ctx context.Context, appName string, stdin io.Re
 		}
 		cniDeleteDuration = time.Since(phaseStarted)
 		phaseStarted = time.Now()
-		ip, cniResult, cniErr := c.CNIAdd(ctx, appID, appName, netnsPath)
+		ip, cniResult, cniErr := c.CNIAdd(ctx, appID, appName, netnsPath, needsInternetDefaultRoute(entitlements))
 		cniAddDuration = time.Since(phaseStarted)
 		if cniErr != nil {
 			// Roll back any partial state the failed ADD left behind (e.g. a
@@ -2587,40 +2600,46 @@ func (c *Client) startContainer(ctx context.Context, appName string, stdin io.Re
 			}
 			cleanupNetns()
 			c.logger.Error("CNI ADD failed", zap.String(logfields.AppID, appID), zap.Error(cniErr))
-			return nil, failStartedTask(fmt.Errorf("CNI ADD failed for app %q: %w", appID, cniErr))
+			return nil, failPreparedTask(fmt.Errorf("CNI ADD failed for app %q: %w", appID, cniErr))
 		} else {
 			phaseStarted = time.Now()
 			// netnsPath (the bind-mount) must stay mounted through mesh egress
 			// setup below, which needs a live netns to install the service-CIDR
 			// route via nsenter (SetMeshRoute). Until every subsequent setup step
 			// succeeds, a deferred rollback releases both IPAM and the bind mount.
-			networkReady := false
 			keepNetns := false
 			defer func() {
-				if !networkReady {
-					_ = c.CNIDel(context.WithoutCancel(ctx), appID, appName, netnsPath)
-					if needsGatewayDNS(isolation, entitlements) {
-						c.releaseMeshDNS(appName, appID)
+				if !taskStarted {
+					// A registered sandbox is still provisional until the runtime
+					// releases the entrypoint. Retire its persisted join path too.
+					if keepNetns {
+						c.destroyNetworkSandbox(context.WithoutCancel(ctx), appName)
+						_ = c.persistNetworkNamespace(context.WithoutCancel(ctx), container, "", identity, "")
+					} else {
+						_ = c.CNIDel(context.WithoutCancel(ctx), appID, appName, netnsPath)
+						if needsGatewayDNS(isolation, entitlements) {
+							c.releaseMeshDNS(appName, appID)
+						}
+						c.teardownMeshEgress(entitlements, appName, appID, ip)
+						cleanupNetns()
 					}
-					c.teardownMeshEgress(entitlements, appName, appID, ip)
-					cleanupNetns()
+					c.mu.Lock()
+					delete(c.serviceIPs[appID], serviceName)
+					if serviceName != "" {
+						if path, err := safeJoin("/run/wendy/hosts", appID); err == nil {
+							_ = writeHostsFile(path, c.serviceIPs[appID])
+						}
+					}
+					c.mu.Unlock()
 				} else if !keepNetns {
 					cleanupNetns()
 				}
 			}()
 
-			// /etc/hosts bookkeeping is specific to multi-service isolated app
-			// groups (sibling services resolve each other by name); a
-			// single-service bridge-mode app has no siblings, so serviceName is
-			// empty and this whole block — including the concurrent-stop
-			// discard guard below, which is keyed on the isolated-group cache
-			// c.appIsolation and would misfire for a bridge app that never sets
-			// it — is skipped entirely for bridge mode. This is an accepted
-			// gap, not an oversight: a concurrent StopContainer racing a
-			// bridge-mode app's CNI ADD is left to self-heal via the CNI DEL
-			// issued at stop time (stopOne/deleteOne, gated by
-			// needsCNIBridgeWiring), instead of duplicating this guard for
-			// serviceName == "".
+			// Sibling service names resolve through the shared hosts file.
+			// The keyed lifecycle lock serializes per-container stop/delete;
+			// whole-app stop also publishes appStopping, checked before Start.
+
 			if serviceName != "" {
 				c.mu.Lock()
 				// Guard against a concurrent StopContainer that may have deleted
@@ -2631,7 +2650,7 @@ func (c *Client) startContainer(ctx context.Context, appName string, stdin io.Re
 					c.mu.Unlock()
 					c.logger.Warn("CNI ADD: app already stopped before IP could be recorded, discarding IP",
 						zap.String(logfields.AppID, appID), zap.String("ip", ip))
-					return nil, failStartedTask(fmt.Errorf("app %q stopped during CNI ADD; container not started", appID))
+					return nil, failPreparedTask(fmt.Errorf("app %q stopped during CNI ADD; container not started", appID))
 				}
 				c.recordServiceIP(appID, serviceName, ip)
 				hostsPath, pathErr := safeJoin("/run/wendy/hosts", appID)
@@ -2645,7 +2664,7 @@ func (c *Client) startContainer(ctx context.Context, appName string, stdin io.Re
 					c.logger.Error("security: appID produces unsafe hosts path",
 						zap.String(logfields.AppID, appID), zap.Error(pathErr))
 					c.mu.Unlock()
-					return nil, failStartedTask(fmt.Errorf("security: appID %q produces unsafe hosts path: %w", appID, pathErr))
+					return nil, failPreparedTask(fmt.Errorf("security: appID %q produces unsafe hosts path: %w", appID, pathErr))
 				}
 				_ = writeHostsFile(hostsPath, c.serviceIPs[appID])
 				c.mu.Unlock()
@@ -2675,15 +2694,15 @@ func (c *Client) startContainer(ctx context.Context, appName string, stdin io.Re
 			// egress's fallible steps, as applyMeshEgress's own comment
 			// requires.
 			//
-			// Best-effort — without it, DNS lookups fail inside the namespace
-			// but the container still starts (NAT egress by IP literal still
-			// works), mirroring the rest of this block's error handling.
+			// DNS is a startup prerequisite, just like the assigned address.
 			if _, ok := findBridgeEntitlement(entitlements); ok {
 				if gw, gwErr := meshGateway(appID); gwErr == nil {
 					bridgeDNSHealthy = c.ensureMeshDNS(appName, gw)
 				} else {
-					c.logger.Warn("bridge: could not derive gateway for DNS listener",
-						zap.String(logfields.AppID, appID), zap.Error(gwErr))
+					return nil, failPreparedTask(fmt.Errorf("bridge gateway for app %q: %w", appID, gwErr))
+				}
+				if !bridgeDNSHealthy {
+					return nil, failPreparedTask(fmt.Errorf("bridge DNS setup failed for app %q", appID))
 				}
 			}
 
@@ -2696,13 +2715,13 @@ func (c *Client) startContainer(ctx context.Context, appName string, stdin io.Re
 					fmt.Sprintf("/proc/%d/ns/net", task.Pid()), ip); meshErr != nil {
 					c.logger.Error("mesh egress setup failed; failing container start",
 						zap.String("app_id", appID), zap.Error(meshErr))
-					return nil, failStartedTask(fmt.Errorf("mesh egress setup failed for app %q: %w", appID, meshErr))
+					return nil, failPreparedTask(fmt.Errorf("mesh egress setup failed for app %q: %w", appID, meshErr))
 				}
 				if _, meshApp := findMeshEntitlement(entitlements); meshApp {
 					// Agent restarts leave the task and CNI namespace alive. Persist
 					// the ADD result so CHECK can prove it before ingress recovery.
 					if err := writeNetworkSandboxResult(appName, cniResult); err != nil {
-						return nil, failStartedTask(fmt.Errorf("persisting mesh CNI proof for %q: %w", appName, err))
+						return nil, failPreparedTask(fmt.Errorf("persisting mesh CNI proof for %q: %w", appName, err))
 					}
 				}
 			}
@@ -2713,7 +2732,7 @@ func (c *Client) startContainer(ctx context.Context, appName string, stdin io.Re
 			c.mu.Lock()
 			if c.appStopping[appID] {
 				c.mu.Unlock()
-				return nil, failStartedTask(fmt.Errorf("app %q stopped during network sandbox setup; container not started", appID))
+				return nil, failPreparedTask(fmt.Errorf("app %q stopped during network sandbox setup; container not started", appID))
 			}
 			if retainsBridge && bridgeDNSHealthy && persistentNetns && identity != "" {
 				if err := writeNetworkSandboxResult(appName, cniResult); err == nil {
@@ -2732,15 +2751,49 @@ func (c *Client) startContainer(ctx context.Context, appName string, stdin io.Re
 					c.logger.Warn("Could not persist reusable CNI result", zap.String("container_id", appName), zap.Error(err))
 				}
 			}
-			networkReady = true
 			c.mu.Unlock()
 			networkFinalizeDuration = time.Since(phaseStarted)
 		}
 	}
 
-	// The fully configured Bluetooth task now owns the proxy until stop/delete.
-	// Do not let the failure-only defer above tear it down on the successful path.
+	if hasAvahiEntitlement(entitlements) {
+		avahiStartedForTask = true
+		if isolation != "isolated" {
+			return nil, failPreparedTask(fmt.Errorf("app %q declares the avahi entitlement without an isolated network namespace", appID))
+		}
+		if err := c.startAvahiForTask(ctx, appName, task.Pid()); err != nil {
+			return nil, failPreparedTask(fmt.Errorf("starting avahi bridge for app %q: %w", appID, err))
+		}
+	}
+	// Order the release of the entrypoint against whole-app StopContainer's
+	// appStopping marker. Per-container stop/delete also holds our keyed lock.
+	// The IO context survives RPC disconnect, but a request canceled during
+	// preparation must not release a new application process.
+	c.mu.Lock()
+	muHeld = true
+	if c.appStopping[appID] {
+		return nil, failPreparedTask(fmt.Errorf("%w: %q", errAppStopping, appID))
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, failPreparedTask(fmt.Errorf("container %q start canceled before execution: %w", appName, err))
+	}
+	phaseStarted = time.Now()
+	if err := task.Start(ctx); err != nil {
+		return nil, failPreparedTask(fmt.Errorf("starting task for %q: %w", appName, err))
+	}
+	runtimeStartDuration = time.Since(phaseStarted)
+	taskStarted = true
+	if appconfig.IsSharedNamespaceIsolation(isolation) {
+		primaryPID, hasPrimary := c.getPrimaryPID(appID)
+		if !hasPrimary || !c.primaryTaskAlive(ctx, appID, primaryPID) {
+			c.setPrimaryPID(appID, task.Pid())
+		}
+	}
+	muHeld = false
+	c.mu.Unlock()
+	// The successfully started task now owns its proxies until stop/delete.
 	dbusProxyStartedForTask = false
+	avahiStartedForTask = false
 	c.logger.Info("Container started", zap.String("app_name", appName))
 	c.startPostStartAgentHook(postStartAgentCommand, appName)
 
@@ -2763,6 +2816,7 @@ func (c *Client) startContainer(ctx context.Context, appName string, stdin io.Re
 
 	// Stream output from the pipes.
 	outputCh := make(chan services.ContainerOutput, 64)
+	c.trackTaskOutput(appName, task.Pid())
 	meshIngressStarted = true
 	nanStartLease.committed = true
 	go c.streamOutput(taskCtx, task, exitStatusCh, outputCh, appName, nanTaskAppID, meshIngressRun, stdoutR, stderrR, stdoutW, stderrW)
@@ -3845,6 +3899,7 @@ func (c *Client) streamOutput(
 	stdoutW, stderrW *io.PipeWriter,
 ) {
 	defer close(outputCh)
+	defer c.forgetTaskOutput(appName, task.Pid())
 
 	// Read stdout and stderr concurrently.
 	var wg sync.WaitGroup
@@ -4199,6 +4254,7 @@ func (c *Client) stopOne(ctx context.Context, containerID string) error {
 	if c.proxyManager != nil {
 		_ = c.proxyManager.Stop(containerID)
 	}
+	_ = c.avahiManager.Stop(containerID)
 
 	c.logger.Info("Container stopped", zap.String("container_id", containerID))
 
@@ -4522,6 +4578,11 @@ func (c *Client) deleteOne(ctx context.Context, ctr containerd.Container, wantIm
 				zap.Error(proxyErr))
 		}
 	}
+	if avahiErr := c.avahiManager.Stop(ctr.ID()); avahiErr != nil {
+		c.logger.Warn("Failed to stop avahi bridge",
+			zap.String("container_id", ctr.ID()),
+			zap.Error(avahiErr))
+	}
 	c.reconcileLANReplyGuards(ctx)
 	c.logger.Info("Container deleted", zap.String("container_id", ctr.ID()))
 	return imgName, nil
@@ -4702,9 +4763,19 @@ func (c *Client) ListBootContainers(ctx context.Context) ([]services.BootContain
 			if spec, specErr := ctr.Spec(ctx); specErr != nil {
 				c.logger.Warn("Could not inspect running container start resources",
 					zap.String("id", ctr.ID()), zap.Error(specErr))
-			} else if _, proxyErr := c.restoreDBusProxyForRunningTask(ctx, ctr.ID(), running, spec.Mounts); proxyErr != nil {
-				c.logger.Error("Could not restore running container D-Bus proxy",
-					zap.String("id", ctr.ID()), zap.Error(proxyErr))
+			} else {
+				if _, proxyErr := c.restoreDBusProxyForRunningTask(ctx, ctr.ID(), running, spec.Mounts); proxyErr != nil {
+					c.logger.Error("Could not restore running container D-Bus proxy", zap.String("id", ctr.ID()), zap.Error(proxyErr))
+				}
+				if prepared, avahiErr := c.ensureAvahiForStart(ctx, ctr.ID(), spec.Mounts); avahiErr != nil {
+					c.logger.Error("Could not restore running container Avahi bridge", zap.String("id", ctr.ID()), zap.Error(avahiErr))
+				} else if prepared {
+					if task, taskErr := ctr.Task(ctx, nil); taskErr == nil {
+						if err := c.startAvahiForTask(ctx, ctr.ID(), task.Pid()); err != nil {
+							c.logger.Error("Could not restore running container Avahi daemon", zap.String("id", ctr.ID()), zap.Error(err))
+						}
+					}
+				}
 			}
 		}
 
@@ -4721,6 +4792,11 @@ func (c *Client) ListBootContainers(ctx context.Context) ([]services.BootContain
 			c.logger.Warn("ListBootContainers: missing/invalid app id label, skipping isolation hydration",
 				zap.String("id", ctr.ID()))
 		}
+		// Restart intent does not remove resources from an already-running task.
+		// Recover its verified mesh grants and gateway DNS even for --no-restart.
+		if running {
+			c.rehydrateRunningMeshIngress(ctx, ctr, info.Labels)
+		}
 
 		if info.Labels[labelKeyStoppedByUser] == "true" {
 			continue // user stopped it on purpose — stay down across reboot
@@ -4728,9 +4804,6 @@ func (c *Client) ListBootContainers(ctx context.Context) ([]services.BootContain
 		policy, maxRetries := parseRestartPolicyLabel(info.Labels[labelKeyRestartPolicy])
 		if policy == "no" {
 			continue // opted out of auto-restart (e.g. wendy run --no-restart)
-		}
-		if running {
-			c.rehydrateRunningMeshIngress(ctx, ctr, info.Labels)
 		}
 		result = append(result, services.BootContainer{
 			Name:          ctr.ID(),
@@ -4742,8 +4815,9 @@ func (c *Client) ListBootContainers(ctx context.Context) ([]services.BootContain
 }
 
 // rehydrateRunningMeshIngress covers an agent-only restart, which leaves
-// containerd tasks and their bridge namespaces running. A persisted label is
-// not enough to authorize a host port: the task must still be running and
+// containerd tasks and their bridge namespaces running. This also restores
+// gateway DNS for bridge tasks. A persisted label is not enough to authorize
+// a host port or DNS listener: the task must still be running and
 // CNI CHECK must prove its live network namespace.
 // Without those proofs the registry stays empty until an ordinary task start.
 func (c *Client) rehydrateRunningMeshIngress(ctx context.Context, ctr containerd.Container, labels map[string]string) {
@@ -4775,18 +4849,21 @@ func (c *Client) rehydrateRunningMeshIngressAttempt(ctx context.Context, ctr con
 			}
 		}()
 	}
-	if c.meshIngress == nil || labels[labelKeyIsolation] != "isolated" {
+	entitlements := parseEntitlementsFromAnnotations(labels)
+	if !needsGatewayDNS(labels[labelKeyIsolation], entitlements) {
 		return
 	}
-	c.meshIngressMu.Lock()
-	_, alreadyTracked := c.meshIngressRuns[ctr.ID()]
-	c.meshIngressMu.Unlock()
-	if alreadyTracked {
-		return // a normal start or earlier recovery already owns this task
-	}
-	ent, ok := findMeshEntitlement(parseEntitlementsFromAnnotations(labels))
-	if !ok {
-		return
+	ent, meshTask := findMeshEntitlement(entitlements)
+	if meshTask {
+		if c.meshIngress == nil {
+			return
+		}
+		c.meshIngressMu.Lock()
+		_, alreadyTracked := c.meshIngressRuns[ctr.ID()]
+		c.meshIngressMu.Unlock()
+		if alreadyTracked {
+			return // a normal start or earlier recovery already owns this task
+		}
 	}
 	appID := labels[labelKeyAppID]
 	if appconfig.ValidateAppID(appID) != nil {
@@ -4833,7 +4910,7 @@ func (c *Client) rehydrateRunningMeshIngressAttempt(ctx context.Context, ctr con
 			zap.String("container_id", ctr.ID()), zap.Error(err))
 		return
 	}
-	if err := c.CNICheck(ctx, appID, ctr.ID(), path, checkResult); err != nil {
+	if err := c.CNICheck(ctx, appID, ctr.ID(), path, checkResult, false); err != nil {
 		c.logger.Warn("mesh ingress: inherited task failed CNI CHECK; ports remain denied",
 			zap.String("container_id", ctr.ID()), zap.Error(err))
 		return
@@ -4844,6 +4921,14 @@ func (c *Client) rehydrateRunningMeshIngressAttempt(ctx context.Context, ctr con
 	}
 	status, err = task.Status(ctx)
 	if err != nil || status.Status != containerd.Running || task.Pid() != pid {
+		return
+	}
+	gateway, err := meshGateway(appID)
+	if err != nil {
+		return
+	}
+	if !meshTask {
+		c.ensureMeshDNS(ctr.ID(), gateway)
 		return
 	}
 	// The wait channel is required before publishing: without an exit watcher
@@ -4904,6 +4989,9 @@ func (c *Client) rehydrateRunningMeshIngressAttempt(ctx context.Context, ctr con
 		c.releaseMeshIngressRun(ctr.ID(), run)
 		return
 	}
+	// The previous process owned the listener, so surviving routes and port
+	// rules alone do not restore device-name or upstream DNS for this task.
+	c.ensureMeshDNS(ctr.ID(), gateway)
 	go func() {
 		defer cancelWait()
 		<-exitCh
@@ -5398,6 +5486,34 @@ func streamReader(r io.Reader, ch chan<- services.ContainerOutput, buildOutput f
 }
 
 // hasBluetooth returns true if the app config includes a bluetooth entitlement.
+func hasAvahiEntitlement(entitlements []appconfig.Entitlement) bool {
+	for _, ent := range entitlements {
+		if ent.Type == appconfig.EntitlementAvahi {
+			return true
+		}
+	}
+	return false
+}
+
+func hasAvahi(cfg *appconfig.AppConfig) bool {
+	for _, ent := range cfg.Entitlements {
+		if ent.Type == appconfig.EntitlementAvahi {
+			return true
+		}
+	}
+	return false
+}
+
+// requireAvahi enforces fail-closed startup for the avahi entitlement: a
+// container that declares it may only start when the avahi bridge binaries
+// are present, mirroring the bluetooth/proxy invariant (WDY-1093).
+func requireAvahi(cfg *appconfig.AppConfig, containerName string) error {
+	if hasAvahi(cfg) && !avahibridge.IsAvailable() {
+		return fmt.Errorf("cannot start container %q: the avahi entitlement requires avahi-daemon, dbus-daemon, xdg-dbus-proxy and nsenter, which are not all available on this device", containerName)
+	}
+	return nil
+}
+
 func hasBluetooth(cfg *appconfig.AppConfig) bool {
 	for _, ent := range cfg.Entitlements {
 		if ent.Type == appconfig.EntitlementBluetooth {
@@ -5405,6 +5521,31 @@ func hasBluetooth(cfg *appconfig.AppConfig) bool {
 		}
 	}
 	return false
+}
+
+// startAvahiForTask launches the per-container avahi-daemon inside the task
+// network namespace before the entrypoint is released. The address check
+// asserts the completed CNI setup so the daemon never starts address-less.
+func (c *Client) startAvahiForTask(ctx context.Context, containerName string, pid uint32) error {
+	if pid == 0 {
+		return fmt.Errorf("no task PID for avahi netns")
+	}
+	nsPath := fmt.Sprintf("/proc/%d/ns/net", pid)
+	addrOK := func(ctx context.Context) (bool, error) {
+		out, err := exec.CommandContext(ctx, "nsenter", "--net="+nsPath,
+			"ip", "-o", "-4", "addr", "show", "up").CombinedOutput()
+		if err != nil {
+			return false, fmt.Errorf("checking task network namespace: %w: %s", err, strings.TrimSpace(string(out)))
+		}
+		for _, line := range strings.Split(string(out), "\n") {
+			f := strings.Fields(line)
+			if len(f) >= 4 && f[2] == "inet" && !strings.HasPrefix(f[3], "127.") {
+				return true, nil
+			}
+		}
+		return false, nil
+	}
+	return c.avahiManager.StartDaemon(ctx, containerName, nsPath, addrOK)
 }
 
 // requireDBusProxy enforces the D-Bus sandboxing invariant for WDY-1093: a
