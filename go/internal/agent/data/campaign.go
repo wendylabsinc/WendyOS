@@ -24,6 +24,13 @@ import (
 
 const CampaignVersion = 1
 
+// A leased campaign's lease is a duration from MinCampaignLease through
+// MaxCampaignLease.
+const (
+	MinCampaignLease = 15 * time.Second
+	MaxCampaignLease = 10 * time.Minute
+)
+
 // ErrInvalidCampaignName marks a syntactically invalid campaign name so RPC
 // handlers can return InvalidArgument rather than NotFound.
 var ErrInvalidCampaignName = errors.New("invalid campaign name")
@@ -240,23 +247,26 @@ func (n *CampaignNotify) UnmarshalYAML(node *yaml.Node) error {
 // triggers; it does not require the configured sensors or network destination
 // to be online at deployment time.
 type Campaign struct {
-	Inference         *CampaignInference `json:"inference,omitempty" yaml:"inference,omitempty"`
-	InferenceStatus   *InferenceStatus   `json:"inference_status,omitempty" yaml:"-"`
-	Version           int                `json:"version" yaml:"version"`
-	Name              string             `json:"name" yaml:"name"`
-	Fleet             string             `json:"fleet,omitempty" yaml:"fleet,omitempty"`
-	Sources           []CampaignSource   `json:"sources" yaml:"sources"`
-	Capture           CampaignCapture    `json:"capture" yaml:"capture"`
-	Upload            CampaignUpload     `json:"upload" yaml:"upload"`
-	Retention         CampaignRetention  `json:"retention,omitempty" yaml:"retention,omitempty"`
-	Export            CampaignExport     `json:"export" yaml:"export"`
-	Models            map[string]string  `json:"models" yaml:"models,omitempty"`
-	Privacy           []CampaignPrivacy  `json:"privacy" yaml:"privacy,omitempty"`
-	Notify            *CampaignNotify    `json:"notify,omitempty" yaml:"notify,omitempty"`
-	State             string             `json:"state" yaml:"-"`
-	Revision          string             `json:"revision" yaml:"-"`
-	DeployedUnixNanos int64              `json:"deployed_unix_nanos" yaml:"-"`
-	Warnings          []string           `json:"warnings" yaml:"-"`
+	Inference       *CampaignInference `json:"inference,omitempty" yaml:"inference,omitempty"`
+	InferenceStatus *InferenceStatus   `json:"inference_status,omitempty" yaml:"-"`
+	Version         int                `json:"version" yaml:"version"`
+	Name            string             `json:"name" yaml:"name"`
+	Fleet           string             `json:"fleet,omitempty" yaml:"fleet,omitempty"`
+	// Lease makes this a leased campaign: a notify-only detector that a client
+	// keeps alive by renewing it. The agent removes it once the lease lapses.
+	Lease             string            `json:"lease,omitempty" yaml:"lease,omitempty"`
+	Sources           []CampaignSource  `json:"sources" yaml:"sources"`
+	Capture           CampaignCapture   `json:"capture" yaml:"capture"`
+	Upload            CampaignUpload    `json:"upload" yaml:"upload"`
+	Retention         CampaignRetention `json:"retention,omitempty" yaml:"retention,omitempty"`
+	Export            CampaignExport    `json:"export" yaml:"export"`
+	Models            map[string]string `json:"models" yaml:"models,omitempty"`
+	Privacy           []CampaignPrivacy `json:"privacy" yaml:"privacy,omitempty"`
+	Notify            *CampaignNotify   `json:"notify,omitempty" yaml:"notify,omitempty"`
+	State             string            `json:"state" yaml:"-"`
+	Revision          string            `json:"revision" yaml:"-"`
+	DeployedUnixNanos int64             `json:"deployed_unix_nanos" yaml:"-"`
+	Warnings          []string          `json:"warnings" yaml:"-"`
 }
 
 func ParseCampaign(contents []byte) (Campaign, error) {
@@ -282,7 +292,12 @@ func ParseCampaign(contents []byte) (Campaign, error) {
 	if err := campaign.validate(); err != nil {
 		return Campaign{}, err
 	}
+	// Agents that predate leases act only on "armed" plans (reconcile, pre-roll
+	// arming, app-event triggers), so a leased plan left on disk is inert on them.
 	campaign.State = "armed"
+	if campaign.Leased() {
+		campaign.State = "leased"
+	}
 	if campaign.Models == nil {
 		campaign.Models = map[string]string{}
 	}
@@ -296,6 +311,15 @@ func ParseCampaign(contents []byte) (Campaign, error) {
 	digest := sha256.Sum256(canonical)
 	campaign.Revision = hex.EncodeToString(digest[:])
 	return campaign, nil
+}
+
+// Leased reports whether the campaign has a lease.
+func (c Campaign) Leased() bool { return c.Lease != "" }
+
+// LeaseDuration is the campaign's lease, or zero for a campaign without one.
+func (c Campaign) LeaseDuration() time.Duration {
+	d, _ := time.ParseDuration(c.Lease)
+	return d
 }
 
 // revisionSchema versions the field list below. A campaign's revision is the
@@ -388,6 +412,11 @@ func (c Campaign) planDigestInput() map[string]any {
 		// it is excluded from the stored plan.
 		plan["notify"] = map[string]any{"on": c.Notify.On, "webhook": c.Notify.Webhook, "event": c.Notify.Event}
 	}
+	// The lease is plan content. Adding it only when set keeps the revisions of
+	// campaigns without one, as backend and model_file do below.
+	if c.Lease != "" {
+		plan["lease"] = c.Lease
+	}
 	if i := c.Inference; i != nil {
 		plan["inference"] = map[string]any{
 			"model": i.Model, "revision": i.Revision, "labels": i.Labels,
@@ -453,6 +482,9 @@ func (c Campaign) validate() error {
 		if err := validateSourceCapture(source); err != nil {
 			return fmt.Errorf("sources[%d].capture: %w", i, err)
 		}
+	}
+	if c.Leased() {
+		return c.validateLeased()
 	}
 	buffer, err := time.ParseDuration(c.Capture.Buffer)
 	if err != nil || buffer < 0 || buffer > preRollWindow {
@@ -520,6 +552,12 @@ func (c Campaign) validate() error {
 			return errors.New("inference requires a camera source and a capture trigger matching inference.event")
 		}
 	}
+	return c.validateNotify()
+}
+
+// validateNotify checks the notify block, which ordinary and leased campaigns
+// share.
+func (c Campaign) validateNotify() error {
 	if c.Notify != nil && (c.Notify.On == NotifyOnDetection || c.Notify.On == NotifyOnEvent) {
 		if len(c.Notify.UnknownKeys) > 0 {
 			return fmt.Errorf("unknown immediate notification fields: %s", strings.Join(c.Notify.UnknownKeys, ", "))
@@ -551,6 +589,53 @@ func (c Campaign) validate() error {
 		return fmt.Errorf("notify.on %q is not supported: %w", c.Notify.On, ErrUnsupportedNotifyOn)
 	}
 	return nil
+}
+
+// validateLeased checks a leased campaign. It is notify-only: it runs
+// inference and writes notifications but records nothing, so everything that
+// configures recording, upload or export must be absent (spec §5.1).
+func (c Campaign) validateLeased() error {
+	lease, err := time.ParseDuration(c.Lease)
+	if err != nil || lease < MinCampaignLease || lease > MaxCampaignLease {
+		return fmt.Errorf("lease must be a duration from %s through %s", MinCampaignLease, MaxCampaignLease)
+	}
+	for i, source := range c.Sources {
+		if source.Camera == "" {
+			return fmt.Errorf("sources[%d]: a leased campaign selects cameras only", i)
+		}
+		if source.Capture != nil || source.Calibration != "" {
+			return fmt.Errorf("sources[%d]: a leased campaign records nothing, so it takes no capture or calibration_revision", i)
+		}
+	}
+	recording := []struct {
+		field string
+		set   bool
+	}{
+		{"capture", c.Capture.Buffer != "" || c.Capture.Drain != "" || c.Capture.AfterTrigger != "" || len(c.Capture.Triggers) > 0},
+		{"upload", c.Upload != (CampaignUpload{})},
+		{"retention", c.Retention != (CampaignRetention{})},
+		{"export", c.Export != (CampaignExport{})},
+		{"models", len(c.Models) > 0},
+		{"privacy", len(c.Privacy) > 0},
+	}
+	for _, block := range recording {
+		if block.set {
+			return fmt.Errorf("a leased campaign records nothing, so it takes no %s", block.field)
+		}
+	}
+	if !c.Inference.IsEnabled() {
+		return errors.New("a leased campaign needs an enabled inference block")
+	}
+	if c.Notify == nil || c.Notify.On != NotifyOnDetection {
+		return errors.New("a leased campaign needs notify.on: detection")
+	}
+	if c.Notify.Webhook != "" {
+		return errors.New("a leased campaign notifies through the device's notification journal only; remove notify.webhook")
+	}
+	if err := c.Inference.validate(); err != nil {
+		return err
+	}
+	return c.validateNotify()
 }
 
 func (c Campaign) BufferDuration() time.Duration {
@@ -720,6 +805,17 @@ func (m *Manager) Campaigns() ([]Campaign, error) {
 	}
 	sort.Slice(campaigns, func(i, j int) bool { return campaigns[i].Name < campaigns[j].Name })
 	return campaigns, nil
+}
+
+// RemoveCampaign deletes a campaign's plan. Only leased campaigns are removed
+// today, by expiry, by CampaignRemove and at boot; callers check that.
+func (m *Manager) RemoveCampaign(name string) error {
+	if name == "" || safeName(name) != name {
+		return ErrInvalidCampaignName
+	}
+	m.campaignMu.Lock()
+	defer m.campaignMu.Unlock()
+	return os.Remove(filepath.Join(m.campaignDir(), name+".json"))
 }
 
 // ResolveCampaignSources maps semantic campaign selectors onto the current

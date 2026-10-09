@@ -13,11 +13,13 @@ option go_package = "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2;agent
 // app-facing wendy.agent.apps.v1 package and nothing else; no entitlement makes
 // any method below callable by an application.
 //
-// The four Campaign methods in particular are command-line-facing: they are
-// what `wendy data campaign deploy`, `wendy data campaign list`, `wendy data
-// campaign inspect` and `wendy data campaign trigger` call over that mutually
-// authenticated channel. They are operator commands for managing capture
-// campaigns on a device, not an application programming interface for apps.
+// The Campaign methods in particular are command-line-facing. Deploy, list,
+// inspect and trigger are what `wendy data campaign deploy`, `wendy data
+// campaign list`, `wendy data campaign inspect` and `wendy data campaign
+// trigger` call over that mutually authenticated channel. Renew and remove keep
+// a leased campaign alive and end it; chat watches in `wendy mcp serve` use
+// them. They are operator commands for managing campaigns on a device, not an
+// application programming interface for apps.
 service DataService {
   // Bounded, durable event inbox. An empty cursor starts at the current tail;
   // replay=true reads retained history. Expired cursors report a gap explicitly.
@@ -38,6 +40,14 @@ service DataService {
   rpc Campaigns(DataCampaignsRequest) returns (DataCampaignsResponse);
   rpc CampaignInspect(DataCampaignInspectRequest) returns (DataCampaign);
   rpc CampaignTrigger(DataCampaignTriggerRequest) returns (DataEpisode);
+  // Pushes a leased campaign's deadline to now + lease. NOT_FOUND once it was
+  // removed or its lease lapsed; FAILED_PRECONDITION for a campaign without a
+  // lease.
+  rpc CampaignRenew(DataCampaignRenewRequest) returns (DataCampaignRenewResponse);
+  // Stops a leased campaign and deletes it, returning after its inference has
+  // stopped. NOT_FOUND if already gone; FAILED_PRECONDITION for a campaign
+  // without a lease.
+  rpc CampaignRemove(DataCampaignRemoveRequest) returns (DataCampaignRemoveResponse);
 }
 
 message DataEventsRequest {
@@ -148,6 +158,11 @@ message DataCampaign {
   repeated string warnings = 7;
 }
 message DataCampaignsResponse { repeated DataCampaign campaigns = 1; }
+message DataCampaignRenewRequest { string name = 1; }
+// The new deadline, in Unix nanoseconds on the device's clock.
+message DataCampaignRenewResponse { int64 expires_unix_nanos = 1; }
+message DataCampaignRemoveRequest { string name = 1; }
+message DataCampaignRemoveResponse {}
 
 message DataRecordingExportRequest {
   string app_id = 1;

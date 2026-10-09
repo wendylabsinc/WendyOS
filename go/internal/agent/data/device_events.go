@@ -104,6 +104,18 @@ func (m *Manager) appendDeviceEvent(appID string, r ApplicationRecord, bootID st
 	return dir.Sync()
 }
 
+// RecordDeviceEvent appends an event to the device-event journal and nowhere
+// else. Leased campaigns use it: they are notify-only, so their records reach
+// no open episode and no pre-roll ring, where another campaign's next episode
+// would pick them up.
+func (m *Manager) RecordDeviceEvent(appID string, record ApplicationRecord) error {
+	receipt, err := readBootTime()
+	if err != nil {
+		return err
+	}
+	return m.appendDeviceEvent(appID, record, bootID(), receipt)
+}
+
 // DeviceEvents advances across nonmatching records as well, preventing replay
 // storms. The cursor identifies this journal generation and never uses UTC order.
 func (m *Manager) DeviceEvents(appID, event, cursor string, replay bool) ([]DeviceEvent, string, bool, error) {

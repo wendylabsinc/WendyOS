@@ -1,10 +1,12 @@
 package services
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -24,12 +26,20 @@ type inferenceVideo interface {
 const campaignAppPrefix = "sh.wendy.campaign."
 
 type campaignInferenceManager struct {
-	service *DataService
-	factory inference.Factory
-	sender  CampaignNotificationSender
-	wake    chan struct{}
-	mu      sync.Mutex
-	jobs    map[string]*campaignInferenceJob
+	// ctx is the loop's context. reconcileNow passes it on, so a job started
+	// during an RPC outlives that RPC.
+	ctx context.Context
+	// reconcileMu serializes reconcile passes. Without it, a pass that read the
+	// plans before CampaignRemove deleted one could restart the job that
+	// CampaignRemove had just stopped. Lock order: reconcileMu, then
+	// deploymentMu.
+	reconcileMu sync.Mutex
+	service     *DataService
+	factory     inference.Factory
+	sender      CampaignNotificationSender
+	wake        chan struct{}
+	mu          sync.Mutex
+	jobs        map[string]*campaignInferenceJob
 }
 
 type campaignInferenceJob struct {
@@ -49,8 +59,11 @@ type campaignInferenceJob struct {
 // camera subscriptions to exit before the video service is shut down.
 func (s *DataService) StartCampaignInference(ctx context.Context, factory inference.Factory, sender CampaignNotificationSender) func() {
 	ctx, cancel := context.WithCancel(ctx)
-	manager := &campaignInferenceManager{service: s, factory: factory, sender: sender, wake: make(chan struct{}, 1), jobs: map[string]*campaignInferenceJob{}}
+	manager := &campaignInferenceManager{ctx: ctx, service: s, factory: factory, sender: sender, wake: make(chan struct{}, 1), jobs: map[string]*campaignInferenceJob{}}
 	s.inference = manager // Configured once, before registering the RPC server.
+	// Deadlines live in memory, so every leased plan from before a restart has
+	// none and is deleted here, before any job can start for it (spec §5.3).
+	s.expireLeases()
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -67,7 +80,16 @@ func (s *DataService) StartCampaignInference(ctx context.Context, factory infere
 			}
 		}
 	}()
-	return func() { cancel(); <-done }
+	return func() {
+		cancel()
+		<-done // stopAll has stopped every job.
+		// Delete the leased plans: a leased plan left on disk is inert on an
+		// agent that predates leases only by its state, and a rollback through
+		// a normal stop should leave nothing behind. With the deadlines
+		// cleared, expireLeases removes every leased plan.
+		s.leases.forgetAll()
+		s.expireLeases()
+	}
 }
 
 func (m *campaignInferenceManager) stopAll() {
@@ -91,6 +113,9 @@ func (m *campaignInferenceManager) stopAll() {
 }
 
 func (m *campaignInferenceManager) reconcile(ctx context.Context) {
+	m.reconcileMu.Lock()
+	defer m.reconcileMu.Unlock()
+	m.service.expireLeases()
 	campaigns, err := m.service.manager.Campaigns()
 	if err != nil {
 		m.service.manager.Warnf("reading inference campaigns: %v", err)
@@ -98,7 +123,7 @@ func (m *campaignInferenceManager) reconcile(ctx context.Context) {
 	}
 	wanted := map[string]data.Campaign{}
 	for _, campaign := range campaigns {
-		if campaign.State == "armed" && (campaign.Inference.IsEnabled() || campaign.Notify != nil && campaign.Notify.On == data.NotifyOnEvent) {
+		if (campaign.State == "armed" || campaign.Leased()) && (campaign.Inference.IsEnabled() || campaign.Notify != nil && campaign.Notify.On == data.NotifyOnEvent) {
 			wanted[campaign.Name] = campaign
 		}
 	}
@@ -133,6 +158,10 @@ func (m *campaignInferenceManager) reconcile(ctx context.Context) {
 		go job.supervise(child)
 	}
 }
+
+// reconcileNow runs one reconcile pass outside the loop's schedule. It returns
+// after the pass has stopped every job whose plan is gone.
+func (m *campaignInferenceManager) reconcileNow() { m.reconcile(m.ctx) }
 
 // Keep retired jobs visible until their process and camera subscriptions exit.
 // Persisting enabled:false only requests shutdown; it does not complete it.
@@ -326,6 +355,10 @@ func (j *campaignInferenceJob) run(ctx context.Context) error {
 				return err
 			}
 			j.sourceState(result.SourceID, "detecting")
+			if j.campaign.Leased() {
+				j.observeLeased(ctx, presence[result.SourceID], result.SourceID, detections)
+				continue
+			}
 			attributes := map[string]any{"campaign": j.campaign.Name, "source_id": result.SourceID, "model_version": j.campaign.Inference.Revision, "detections": detections,
 				"input_reference_status": "encoded_stream_decode_does_not_preserve_sample_ids", "runtime_results_dropped": result.DroppedResults}
 			record := data.ApplicationRecord{Version: 1, Type: "prediction", Model: j.campaign.Inference.Model, Attributes: attributes}
@@ -345,11 +378,29 @@ func (j *campaignInferenceJob) run(ctx context.Context) error {
 				j.owner.service.manager.Warnf("campaign %q detection could not start an episode: %v", j.campaign.Name, triggerErr)
 			}
 			if j.campaign.Notify != nil && (j.campaign.Notify.On == data.NotifyOnDetection || j.campaign.Notify.On == data.NotifyOnEvent && j.campaign.Notify.Event == record.Name) {
-				request := detectionNotification(j.campaign, result.SourceID, len(detections))
+				request := detectionNotification(j.campaign, result.SourceID, detections)
 				j.enqueueNotification(request)
 			}
 		}
 	}
+}
+
+// observeLeased handles a leased campaign's prediction. It writes no
+// application record, so nothing reaches any episode; an arrival writes a
+// device event and a journal-only notification (spec §5.4).
+func (j *campaignInferenceJob) observeLeased(ctx context.Context, state *inferencePresence, sourceID string, detections []inference.Detection) {
+	if state == nil || !state.observe(len(detections) > 0, time.Now(), j.campaign.Inference) {
+		return
+	}
+	if !j.owner.service.detectionAccepted(ctx, j.campaign) {
+		return
+	}
+	record := data.ApplicationRecord{Version: 1, Type: "event", Name: j.campaign.Inference.Event, Model: j.campaign.Inference.Model,
+		Attributes: map[string]any{"campaign": j.campaign.Name, "source_id": sourceID, "model_version": j.campaign.Inference.Revision, "detections": detections}}
+	if err := j.owner.service.manager.RecordDeviceEvent(campaignAppPrefix+j.campaign.Name, record); err != nil {
+		j.owner.service.manager.Warnf("recording campaign %q event: %v", j.campaign.Name, err)
+	}
+	j.enqueueNotification(detectionNotification(j.campaign, sourceID, detections))
 }
 
 func (j *campaignInferenceJob) stream(ctx context.Context, session inference.Session, sourceID string) {
@@ -377,6 +428,11 @@ func (j *campaignInferenceJob) stream(ctx context.Context, session inference.Ses
 				err = session.Send(inference.Input{SourceID: sourceID, Generation: generation, Encoding: sample.Encoding, Payload: sample.Payload, Initialization: sample.DecoderInit, DroppedBefore: sample.DroppedBefore})
 				if err != nil {
 					break
+				}
+				// A leased campaign records nothing, so its frames enter no
+				// episode's model-input ledger.
+				if j.campaign.Leased() {
+					continue
 				}
 				if err := j.owner.service.manager.RecordModelInput(data.ModelInput{AppID: campaignAppPrefix + j.campaign.Name, Model: j.campaign.Inference.Model, SourceID: sourceID, SampleID: sample.SampleID, BootNanos: sample.BootNanos, UncertaintyNanos: sample.UncertaintyNanos, PayloadBytes: len(sample.Payload), Encoding: sample.Encoding, SelfContained: sample.SelfContained, DroppedBefore: sample.DroppedBefore}); err != nil {
 					j.owner.service.manager.Warnf("recording campaign model input: %v", err)
@@ -454,13 +510,31 @@ func (p *inferencePresence) observe(detected bool, now time.Time, config *data.C
 	return true
 }
 
-func detectionNotification(campaign data.Campaign, source string, count int) DetectionNotification {
-	return DetectionNotification{ID: uuid.NewString(), Event: campaign.Inference.Event, Campaign: campaign.Name, SourceID: source, Model: campaign.Inference.Model, Revision: campaign.Inference.Revision, Count: count, OccurredAt: time.Now().UTC().Format(time.RFC3339Nano)}
+func detectionNotification(campaign data.Campaign, source string, detections []inference.Detection) DetectionNotification {
+	return DetectionNotification{ID: uuid.NewString(), Event: campaign.Inference.Event, Campaign: campaign.Name, SourceID: source, Model: campaign.Inference.Model, Revision: campaign.Inference.Revision, Count: len(detections), Detections: notificationDetections(detections), OccurredAt: time.Now().UTC().Format(time.RFC3339Nano)}
+}
+
+// notificationDetections keeps the five highest-scored detections, which keeps
+// a journal entry well under its 4096-byte limit (spec §5.5).
+func notificationDetections(detections []inference.Detection) []data.NotificationDetection {
+	sorted := slices.Clone(detections)
+	slices.SortStableFunc(sorted, func(a, b inference.Detection) int { return cmp.Compare(b.Score, a.Score) })
+	sorted = sorted[:min(len(sorted), 5)]
+	out := make([]data.NotificationDetection, 0, len(sorted))
+	for _, detection := range sorted {
+		out = append(out, data.NotificationDetection{Label: detection.Label, Score: detection.Score})
+	}
+	return out
 }
 
 func (j *campaignInferenceJob) enqueueNotification(request DetectionNotification) {
 	if err := j.owner.service.manager.RecordNotification(request); err != nil {
 		j.notificationError(fmt.Errorf("persist notification: %w", err))
+		return
+	}
+	// A leased campaign's notifications stay on the device: its client reads
+	// the journal, and nothing goes to Cloud or a webhook.
+	if j.campaign.Leased() {
 		return
 	}
 	select {
@@ -547,8 +621,7 @@ func (s *DataService) campaignMessage(campaign data.Campaign) (*agentpbv2.DataCa
 func (s *DataService) triggerInference(ctx context.Context, campaign data.Campaign, record data.ApplicationRecord) (bool, error) {
 	s.deploymentMu.Lock()
 	defer s.deploymentMu.Unlock()
-	current, err := s.manager.Campaign(campaign.Name)
-	if err != nil || current.Revision != campaign.Revision || !current.Inference.IsEnabled() || ctx.Err() != nil {
+	if current, err := s.inferenceCurrent(ctx, campaign); !current {
 		return false, err
 	}
 	if _, err := s.manager.RecordCampaignApplication(campaignAppPrefix+campaign.Name, record); err != nil {
@@ -557,8 +630,31 @@ func (s *DataService) triggerInference(ctx context.Context, campaign data.Campai
 	if _, active := s.manager.ActiveSession(campaign.Name); active {
 		return true, nil
 	}
-	_, err = s.triggerCampaign(ctx, campaign, "event:"+campaign.Inference.Event, "event:"+campaign.Inference.Event)
+	_, err := s.triggerCampaign(ctx, campaign, "event:"+campaign.Inference.Event, "event:"+campaign.Inference.Event)
 	return true, err
+}
+
+// inferenceCurrent reports whether campaign is still the deployed, enabled
+// revision. It only reads the plan file. triggerInference calls it under
+// deploymentMu because it acts on the answer under that lock; a leased
+// detection does not need to.
+func (s *DataService) inferenceCurrent(ctx context.Context, campaign data.Campaign) (bool, error) {
+	current, err := s.manager.Campaign(campaign.Name)
+	if err != nil || current.Revision != campaign.Revision || !current.Inference.IsEnabled() || ctx.Err() != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// detectionAccepted is triggerInference's check without the episode: a leased
+// campaign's detection notifies only while its plan is current (spec §5.4).
+// It does not take deploymentMu, as CampaignRenew does not: triggerInference
+// holds that lock across an ordinary campaign's capture startup, which would
+// delay an alert, and the notification writes that follow are not under the
+// lock anyway. Plan files are written atomically.
+func (s *DataService) detectionAccepted(ctx context.Context, campaign data.Campaign) bool {
+	current, _ := s.inferenceCurrent(ctx, campaign)
+	return current
 }
 
 // notifyEvent routes application events independently of episode capture triggers.
