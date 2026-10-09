@@ -834,7 +834,7 @@ func newDeviceEnrollCmd() *cobra.Command {
 		Use:         "enroll",
 		Annotations: map[string]string{"wendy.local-enrollment": "true"},
 		Short:       "Enroll this device with Wendy Cloud or a local pki-core",
-		Long:        "Enrolls the selected device using your stored auth session. WendyOS uses agent gRPC provisioning; Wendy Lite uses Class C enrollment over physical USB and reboots to obtain its certificate from pki-core. Run 'wendy auth login' first.",
+		Long:        "Enrolls the selected device using your stored auth session. WendyOS uses agent gRPC provisioning; Wendy Lite uses Class C enrollment over the selected connection and reboots to obtain its certificate from pki-core. Run 'wendy auth login' first.",
 		Hidden:      true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
@@ -867,9 +867,9 @@ func newDeviceEnrollCmd() *cobra.Command {
 	cmd.Flags().StringVar(&liteOptions.csrURL, "csr-url", "", "CSR enrollment base URL override for Wendy Lite on self-hosted PKI")
 	cmd.Flags().StringVar(&liteOptions.timeURL, "time-url", "", "Signed-time endpoint override for Wendy Lite on self-hosted PKI")
 	cmd.Flags().StringVar(&liteOptions.caCertsURL, "ca-certs-url", "", "HTTPS CA-discovery URL for Wendy Lite (defaults to the selected PKI instance's EST endpoint)")
-	cmd.Flags().StringVar(&liteOptions.deviceRoots, "device-roots", "", "Provision this device identity PEM CA bundle over USB (also requires --https-roots)")
-	cmd.Flags().StringVar(&liteOptions.tsaRoots, "tsa-roots", "", "Provision this signed-time PEM CA bundle over USB")
-	cmd.Flags().StringVar(&liteOptions.httpsRoots, "https-roots", "", "Provision this HTTPS/broker PEM CA bundle over USB")
+	cmd.Flags().StringVar(&liteOptions.deviceRoots, "device-roots", "", "Provision this device identity PEM CA bundle over the selected connection (also requires --https-roots)")
+	cmd.Flags().StringVar(&liteOptions.tsaRoots, "tsa-roots", "", "Provision this signed-time PEM CA bundle over the selected connection")
+	cmd.Flags().StringVar(&liteOptions.httpsRoots, "https-roots", "", "Provision this HTTPS/broker PEM CA bundle over the selected connection")
 	return cmd
 }
 

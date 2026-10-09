@@ -8,7 +8,9 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/wendylabsinc/wendy/go/internal/cli/liteclient"
 	"github.com/wendylabsinc/wendy/go/internal/cli/liteenroll"
+	"github.com/wendylabsinc/wendy/go/internal/cli/providers"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
+	"github.com/wendylabsinc/wendy/go/internal/shared/models"
 	litepb "github.com/wendylabsinc/wendy/go/proto/gen/litepb"
 	"google.golang.org/protobuf/proto"
 )
@@ -21,23 +23,16 @@ type liteEnrollmentOptions struct {
 }
 
 // Enrollment uses the selected device's protocol, sharing auth and selection
-// with the existing enroll command. Bootstrap credentials only travel over USB.
+// with the existing enroll command and the provider's connection handling.
 func runSelectedDeviceEnrollment(cmd *cobra.Command, target *SelectedDevice, auth *config.AuthConfig, name string, orgID int32, acmeDirectoryURL string, opts liteEnrollmentOptions) error {
 	if target.External != nil && target.External.ProviderKey == "wendy-lite" {
-		if target.External.ConnectionType() != "USB" {
-			return fmt.Errorf("Wendy Lite enrollment requires physical USB; select the board's USB connection")
-		}
-		serialPort := target.External.ConnectionInfo["serialPort"]
-		if serialPort == "" {
-			return fmt.Errorf("selected Wendy Lite device has no USB serial port")
-		}
 		if orgID != 0 || acmeDirectoryURL != "" {
 			return fmt.Errorf("Wendy Lite uses the selected session's tenant and CSR enrollment; --org and --acme-directory-url do not apply")
 		}
-		return runLiteEnrollmentFn(cmd, serialPort, auth, name, opts)
+		return runLiteEnrollmentFn(cmd, *target.External, auth, name, opts)
 	}
 	if opts.deviceRoots != "" || opts.tsaRoots != "" || opts.httpsRoots != "" || opts.caCertsURL != "" {
-		return fmt.Errorf("USB trust bundle flags apply only to Wendy Lite devices")
+		return fmt.Errorf("trust bundle flags apply only to Wendy Lite devices")
 	}
 	conn, err := connectFromSelectedDevice(target, resolveConfig{suppressProvisioningHint: true})
 	if err != nil {
@@ -50,15 +45,16 @@ func runSelectedDeviceEnrollment(cmd *cobra.Command, target *SelectedDevice, aut
 }
 
 var (
-	runLiteEnrollmentFn    = runEnrollLiteDevice
-	runAgentEnrollmentFn   = runEnrollDevice
-	promptEnrollmentWifiFn = promptWifiIfNeeded
+	connectLiteEnrollmentFn = (&providers.MicroWendyProvider{}).ConnectEnrollment
+	runLiteEnrollmentFn     = runEnrollLiteDevice
+	runAgentEnrollmentFn    = runEnrollDevice
+	promptEnrollmentWifiFn  = promptWifiIfNeeded
 )
 
-func runEnrollLiteDevice(cmd *cobra.Command, serialPort string, auth *config.AuthConfig, name string, opts liteEnrollmentOptions) error {
+func runEnrollLiteDevice(cmd *cobra.Command, target models.ExternalDevice, auth *config.AuthConfig, name string, opts liteEnrollmentOptions) error {
 	ctx := cmd.Context()
-	device := liteclient.NewWendyLiteClient()
-	if err := device.ConnectToSerial(serialPort); err != nil {
+	device, err := connectLiteEnrollmentFn(target)
+	if err != nil {
 		return err
 	}
 	defer device.Close()
@@ -138,23 +134,23 @@ func runEnrollLiteDevice(cmd *cobra.Command, serialPort string, auth *config.Aut
 		return err
 	}
 	defer func() { cfg.Token = "" }()
-	fmt.Fprintf(cmd.OutOrStdout(), "Cloud reserved asset %s for %s. Delivering its enrollment credential over USB.\n", asset, cfg.DeviceId)
+	fmt.Fprintf(cmd.OutOrStdout(), "Cloud reserved asset %s for %s. Delivering its enrollment credential over %s.\n", asset, cfg.DeviceId, target.ConnectionType())
 	if err = device.PushConf(&litepb.WendyConf{DeviceName: proto.String(name), Enrollment: cfg}, liteclient.ConfPushModeUpdate, nil); err != nil {
-		return fmt.Errorf("asset %s was reserved but USB setup failed: %w", asset, err)
+		return fmt.Errorf("asset %s was reserved but device setup failed: %w", asset, err)
 	}
 	if err = device.ResetTargetDevice(true, 0); err != nil {
 		return fmt.Errorf("configuration stored; reboot the board to enroll: %w", err)
 	}
 	device.Close()
 	fmt.Fprintln(cmd.OutOrStdout(), "Waiting for the board to obtain and verify its certificate from pki-core...")
-	if err = waitLiteEnrollment(ctx, serialPort); err != nil {
+	if err = waitLiteEnrollment(ctx, target); err != nil {
 		return fmt.Errorf("asset %s is reserved, but enrollment is not confirmed: %w", asset, err)
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "Enrolled %s as asset %s. Broker presence is reported after the board establishes mTLS; check 'wendy cloud discover'.\n", name, asset)
 	return nil
 }
 
-func waitLiteEnrollment(ctx context.Context, serialPort string) error {
+func waitLiteEnrollment(ctx context.Context, target models.ExternalDevice) error {
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 	ticker := time.NewTicker(3 * time.Second)
@@ -164,12 +160,12 @@ func waitLiteEnrollment(ctx context.Context, serialPort string) error {
 		select {
 		case <-ctx.Done():
 			if last != nil {
-				return fmt.Errorf("%w; last USB error: %v", ctx.Err(), last)
+				return fmt.Errorf("%w; last connection error: %v", ctx.Err(), last)
 			}
 			return fmt.Errorf("%w; check the board's Wi-Fi and PKI logs", ctx.Err())
 		case <-ticker.C:
-			client := liteclient.NewWendyLiteClient()
-			if err := client.ConnectToSerial(serialPort); err != nil {
+			client, err := connectLiteEnrollmentFn(target)
+			if err != nil {
 				last = err
 				continue
 			}

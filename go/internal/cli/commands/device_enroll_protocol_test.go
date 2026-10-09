@@ -8,8 +8,10 @@ import (
 
 	"github.com/spf13/cobra"
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
+	"github.com/wendylabsinc/wendy/go/internal/cli/liteclient"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/internal/shared/models"
+	"reflect"
 )
 
 func TestEnrollmentUsesExistingCommands(t *testing.T) {
@@ -50,10 +52,10 @@ func TestEnrollmentDispatchesSelectedProtocol(t *testing.T) {
 	opts := liteEnrollmentOptions{brokerHost: "broker.example", brokerPort: 5055, csrURL: "https://csr.example/v1/tenant", timeURL: "https://time.example/v1/time"}
 	wantErr := errors.New("enrollment result")
 	var calls []string
-	runLiteEnrollmentFn = func(gotCmd *cobra.Command, port string, gotAuth *config.AuthConfig, name string, gotOpts liteEnrollmentOptions) error {
+	runLiteEnrollmentFn = func(gotCmd *cobra.Command, target models.ExternalDevice, gotAuth *config.AuthConfig, name string, gotOpts liteEnrollmentOptions) error {
 		calls = append(calls, "lite")
-		if gotCmd != cmd || port != "/dev/cu.usbmodem123" || gotAuth != auth || name != "desk" || gotOpts != opts {
-			t.Fatal("Lite did not receive the selected USB connection, auth, name, and PKI configuration")
+		if gotCmd != cmd || target.ProviderKey != "wendy-lite" || gotAuth != auth || name != "desk" || gotOpts != opts {
+			t.Fatal("Lite did not receive the selected connection, auth, name, and PKI configuration")
 		}
 		return wantErr
 	}
@@ -86,9 +88,6 @@ func TestEnrollmentDispatchesSelectedProtocol(t *testing.T) {
 		name, provider, transport, port, broker, acme, want string
 		org                                                 int32
 	}{
-		{name: "LAN", provider: "wendy-lite", transport: "LAN", want: "physical USB"},
-		{name: "BLE", provider: "wendy-lite", transport: "BLE", want: "physical USB"},
-		{name: "missing port", provider: "wendy-lite", transport: "USB", want: "no USB serial port"},
 		{name: "legacy org", provider: "wendy-lite", transport: "USB", port: "/dev/ttyUSB0", broker: "broker.example", org: 27, want: "--org and --acme-directory-url do not apply"},
 		{name: "ACME", provider: "wendy-lite", transport: "USB", port: "/dev/ttyUSB0", broker: "broker.example", acme: "https://acme.example/directory", want: "--org and --acme-directory-url do not apply"},
 		{name: "other provider", provider: "android-adb", transport: "USB", port: "/dev/ttyUSB0", want: "does not support this command"},
@@ -104,6 +103,13 @@ func TestEnrollmentDispatchesSelectedProtocol(t *testing.T) {
 			}
 		})
 	}
+	for _, transport := range []string{"LAN", "BLE"} {
+		target := &SelectedDevice{External: &models.ExternalDevice{ProviderKey: "wendy-lite", ConnectionInfo: map[string]string{"type": transport}}}
+		if err := runSelectedDeviceEnrollment(cmd, target, auth, "desk", 0, "", opts); !errors.Is(err, wantErr) {
+			t.Fatalf("%s enrollment: %v", transport, err)
+		}
+	}
+
 	opts.brokerHost = ""
 	if err := runSelectedDeviceEnrollment(cmd, usb, auth, "desk", 0, "", opts); !errors.Is(err, wantErr) {
 		t.Fatalf("Lite enrollment without a broker override: %v", err)
@@ -152,5 +158,30 @@ func TestEnrollmentStopsWhenWifiIsCancelled(t *testing.T) {
 	err := runSelectedDeviceEnrollment(cmd, &SelectedDevice{Agent: &grpcclient.AgentConnection{}}, &config.AuthConfig{}, "test", 0, "", liteEnrollmentOptions{})
 	if !errors.Is(err, ErrUserCancelled) {
 		t.Fatalf("got %v", err)
+	}
+}
+
+func TestLiteEnrollmentConnectsSelectedTransport(t *testing.T) {
+	old := connectLiteEnrollmentFn
+	t.Cleanup(func() { connectLiteEnrollmentFn = old })
+	for _, transport := range []string{"USB", "LAN", "BLE"} {
+		t.Run(transport, func(t *testing.T) {
+			target := models.ExternalDevice{ProviderKey: "wendy-lite", ConnectionInfo: map[string]string{"type": transport, "ip": "192.0.2.1", "port": "5055", "serialPort": "/dev/ttyUSB0", "address": "board-address"}}
+			wantErr := errors.New("connection failed")
+			called := false
+			connectLiteEnrollmentFn = func(got models.ExternalDevice) (*liteclient.WendyLiteClient, error) {
+				called = true
+				if !reflect.DeepEqual(got, target) {
+					t.Fatalf("connected to %v, want %v", got, target)
+				}
+				return nil, wantErr
+			}
+			cmd := newDeviceEnrollCmd()
+			cmd.SetContext(context.Background())
+			err := runEnrollLiteDevice(cmd, target, &config.AuthConfig{}, "desk", liteEnrollmentOptions{})
+			if !called || !errors.Is(err, wantErr) {
+				t.Fatalf("connection was not attempted or error lost: %v", err)
+			}
+		})
 	}
 }

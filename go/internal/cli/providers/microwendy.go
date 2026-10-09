@@ -907,6 +907,13 @@ func (p *MicroWendyProvider) ConnectSensorLink(device models.ExternalDevice) (*l
 	return p.connectClient(device)
 }
 
+// ConnectEnrollment opens the selected connection for enrollment and status
+// checks. Firmware controls whether enrollment is allowed on this transport.
+// The caller must close the client.
+func (p *MicroWendyProvider) ConnectEnrollment(device models.ExternalDevice) (*liteclient.WendyLiteClient, error) {
+	return p.connectClient(device)
+}
+
 // CloudRelayDialer opens the Wendy Cloud connection that a "Cloud" device's
 // relay runs over, already set up with the user's Cloud credentials, and the
 // context whose call metadata carries them. The commands package owns Cloud

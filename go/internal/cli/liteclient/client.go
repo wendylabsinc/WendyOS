@@ -1052,7 +1052,8 @@ func (c *WendyLiteClient) handshake() error {
 	return nil
 }
 
-// EnrollmentChallenge is supported only on the physical serial connection.
+// EnrollmentChallenge requests enrollment state over the active connection.
+// Firmware controls which transports support bootstrap challenges.
 // statusOnly observes completion without replacing the bootstrap nonce.
 func (c *WendyLiteClient) EnrollmentChallenge(statusOnly bool) (*wendypb.WendyComEnrollmentChallenge, error) {
 	resp, err := c.sendCommand(&wendypb.WendyComCommand{
@@ -1065,7 +1066,7 @@ func (c *WendyLiteClient) EnrollmentChallenge(statusOnly bool) (*wendypb.WendyCo
 		return nil, err
 	}
 	if err := resultToError(resp.Result); err != nil {
-		return nil, fmt.Errorf("firmware PKI support unavailable: %w", err)
+		return nil, fmt.Errorf("firmware rejected the PKI enrollment challenge (%s): %w; the device needs PKI-enabled Wendy Lite firmware with enrollment support on the selected transport; for a simulator, use a PKI-enabled ESP32-C6 image", resp.Result.String(), err)
 	}
 	challenge := resp.GetEnrollmentChallenge()
 	if challenge == nil {

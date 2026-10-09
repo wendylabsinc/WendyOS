@@ -14,19 +14,22 @@ go build -o ./wendy ./cmd/wendy
 ```
 
 This is the same `cloud enroll-device` command used for WendyOS. The selected
-device determines the protocol: agent gRPC for WendyOS, or WendyCom over USB for
-Lite. Omit `--device` to use the normal picker, or use the USB device ID shown by
+device determines the protocol: agent gRPC for WendyOS, or WendyCom over the selected USB, LAN, or Bluetooth connection for
+Lite. Omit `--device` to use the normal picker, or use a device ID shown by
 `wendy discover`. The hidden `wendy device enroll` alias uses the same dispatch.
 
 The board needs Wi-Fi and the PKI-enabled firmware from
 [wendy-lite#49](https://github.com/wendylabsinc/wendy-lite/pull/49) and its dedicated
-identity partition. Trust bundles can be provisioned during USB enrollment, so
+identity partition. Trust bundles can be provisioned during enrollment, so
 the firmware does not need deployment-specific roots. The CLI checks firmware
-support before minting a token.
+support before minting a token. Firmware must support enrollment on the selected
+transport; older firmware may accept bootstrap commands only over USB. After
+reboot, completion checks reuse the selected transport and its authentication.
+Cloud enrollment does not replace the firmware's LAN or Bluetooth credentials.
 
 By default, the CLI downloads the selected instance's CA certificates from its
 EST endpoint over HTTPS verified by the computer's trust store. It provisions
-self-issued device CA roots and verified HTTPS trust anchors over USB. Custom
+self-issued device CA roots and verified HTTPS trust anchors over the selected connection. Custom
 endpoint layouts can supply `--ca-certs-url https://.../cacerts`; private HTTPS
 CAs must be trusted by the computer. No deployment CA roots need embedding in
 firmware. Discovery rejects unverified TLS, redirects and malformed bundles
@@ -50,7 +53,7 @@ verifies signatures and requires two agreeing pinned servers. The CLI then asks
 Cloud's `DeviceEnrollmentService.EnrollDevice` for a Class C credential. Both the Cloud
 RPC and PKI enrollment artifact are signed with the operator's existing identity.
 Cloud reserves the tenant/device asset in PostgreSQL. The single-use token and
-public setup data go to the board over physical USB; its private key is generated
+public setup data go to the board over the selected connection; its private key is generated
 on-device. The CLI reboots the board and waits for certificate installation.
 
 The CSR URL derives from the selected session's `PKIEndpoint`. Roughtime is the
