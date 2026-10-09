@@ -399,6 +399,9 @@ func main() {
 		videoROSRuntime = append(videoROSRuntime, ctrdClient)
 	}
 	videoSvc := services.NewVideoService(ctx, logger, discoveryPool, videoROSRuntime...)
+	if err := videoSvc.LoadCameraDHCPAllowlist(filepath.Join(configPath, "camera-dhcp-interfaces")); err != nil {
+		logger.Warn("camera DHCP disabled: invalid allowlist", zap.Error(err))
+	}
 	dataSvc.SetVideoService(videoSvc)
 	// Arm pre-roll for campaigns deployed in a previous agent lifetime so their
 	// next trigger opens BEFORE the trigger instant, not only campaigns deployed
