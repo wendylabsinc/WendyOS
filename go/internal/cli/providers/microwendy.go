@@ -997,9 +997,36 @@ func (p *MicroWendyProvider) connectClient(device models.ExternalDevice) (*litec
 		if err != nil {
 			return nil, fmt.Errorf("connect to device via Wendy Cloud: %w", err)
 		}
-		if err := client.ConnectViaRelay(ctx, cc, assetID); err != nil {
+		if device.ConnectionInfo["tenantId"] == "" || device.ConnectionInfo["deviceId"] == "" {
+			cc.Close()
+			return nil, fmt.Errorf("wendy-lite provider: missing Cloud tenant or device identity")
+		}
+		used := false
+		err = connectWithCLIIdentities(func(cert tls.Certificate, rootCAs x509.CertPool, chain string) error {
+			leaf, err := x509.ParseCertificate(cert.Certificate[0])
+			if err != nil {
+				return err
+			}
+			identity, ok, err := certs.IdentityFromCert(leaf)
+			if err != nil {
+				return err
+			}
+			if !ok || identity.TenantUUID != device.ConnectionInfo["tenantId"] {
+				return fmt.Errorf("operator identity does not match selected device tenant")
+			}
+			// One dialled connection belongs to one stream. Do not retry another
+			// identity on a connection consumed by a failed handshake.
+			if used {
+				return fmt.Errorf("device relay authentication failed")
+			}
+			used = true
+			return client.ConnectViaRelay(ctx, cc, assetID, cert, chain, device.ConnectionInfo["deviceId"])
+		})
+		if err != nil {
+			cc.Close()
 			return nil, fmt.Errorf("connect to device via Wendy Cloud: %w", err)
 		}
+
 	default:
 		return nil, fmt.Errorf("wendy-lite provider: unsupported connection type: %s", device.ConnectionInfo["type"])
 	}

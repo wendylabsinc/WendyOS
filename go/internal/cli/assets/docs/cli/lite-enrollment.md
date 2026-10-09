@@ -61,7 +61,7 @@ default time source.
 Self-hosted deployments can pass `--csr-url https://csr.example/v1/TENANT_UUID`
 and `--time-url https://time.example/v1/time`. The broker hostname defaults
 to the same devices hostname used by wendy-agent for the selected Cloud session.
-WendyCom uses its own port, defaulting to 5055; that listener must be exposed on
+The Lite control connection uses port 5055 by default; that listener must be exposed on
 the devices hostname. Override it with `--broker-host` for a separate broker.
 Use `--cloud-grpc` to select a particular Cloud endpoint/session.
 
@@ -70,10 +70,22 @@ Failures report the reserved asset ID; rerunning does not silently recover an
 expired or existing identity. After enrollment, `wendy cloud discover` shows
 presence once the board completes mTLS and the broker's presence checks.
 
-This command does not add a CLI tunnel to Lite through Cloud. That connection
-still needs broker-authorized forwarding and end-to-end CLI/device mTLS. The
-existing insecure tinycloud client is not used here. See
-[cloud#638](https://github.com/wendylabsinc/cloud/pull/638) for broker presence.
+After enrollment, select the online Lite asset through `wendy cloud discover`.
+The CLI opens a broker-authorized relay using the selected Cloud session, then
+uses its same-tenant operator certificate to authenticate directly to the device.
+It verifies the device certificate against the enrolled PKI device name and tenant
+before sending WendyCom. Operator credentials must already be installed locally.
+
+The broker authenticates the device's initial mTLS control connection, requests an
+upgrade, and closes that TLS session without closing TCP. It then forwards opaque
+bytes between the CLI and the same device socket. The device becomes the TLS
+server and requires an operator certificate. The firmware reconnects its control
+connection after each handoff so another session can connect while the current
+one remains active. Relay payloads contain TLS bytes, with WendyCom framing inside
+the encrypted session. Older bare-protobuf relay clients are incompatible.
+
+This requires the coordinated firmware and broker update in
+[cloud#753](https://github.com/wendylabsinc/cloud/pull/753), tracked by WDY-3512.
 
 Read the firmware console with:
 

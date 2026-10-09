@@ -19,38 +19,9 @@ import (
 func TestPKILANTrustAndDeviceIdentity(t *testing.T) {
 	const tenant = "11111111-1111-4111-8111-111111111111"
 	issue := func(serial int64, name, uri string, ca bool, parent *x509.Certificate, signer *ecdsa.PrivateKey) (*x509.Certificate, *ecdsa.PrivateKey) {
-		t.Helper()
-		key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-		if err != nil {
-			t.Fatal(err)
-		}
-		template := &x509.Certificate{SerialNumber: big.NewInt(serial), Subject: pkix.Name{CommonName: name}, NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour), BasicConstraintsValid: true, IsCA: ca, KeyUsage: x509.KeyUsageDigitalSignature}
-		if ca {
-			template.KeyUsage |= x509.KeyUsageCertSign
-		} else {
-			template.ExtKeyUsage = []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth}
-		}
-		if uri != "" {
-			u, err := url.Parse(uri)
-			if err != nil {
-				t.Fatal(err)
-			}
-			template.URIs = []*url.URL{u}
-		}
-		if parent == nil {
-			parent = template
-			signer = key
-		}
-		der, err := x509.CreateCertificate(rand.Reader, template, parent, &key.PublicKey, signer)
-		if err != nil {
-			t.Fatal(err)
-		}
-		cert, err := x509.ParseCertificate(der)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return cert, key
+		return issueRelayCertificate(t, serial, name, uri, ca, parent, signer)
 	}
+
 	root, rootKey := issue(1, "root", "", true, nil, nil)
 	intermediate, intermediateKey := issue(2, "operator authority", "", true, root, rootKey)
 	operator, operatorKey := issue(3, "operator", "spiffe://wendy.sh/tenant/"+tenant+"/operator/22222222-2222-4222-8222-222222222222", false, intermediate, intermediateKey)
@@ -114,4 +85,38 @@ func TestPKILANTrustAndDeviceIdentity(t *testing.T) {
 			}
 		})
 	}
+}
+
+func issueRelayCertificate(t *testing.T, serial int64, name, uri string, ca bool, parent *x509.Certificate, signer *ecdsa.PrivateKey) (*x509.Certificate, *ecdsa.PrivateKey) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := &x509.Certificate{SerialNumber: big.NewInt(serial), Subject: pkix.Name{CommonName: name}, NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour), BasicConstraintsValid: true, IsCA: ca, KeyUsage: x509.KeyUsageDigitalSignature}
+	if ca {
+		template.KeyUsage |= x509.KeyUsageCertSign
+	} else {
+		template.ExtKeyUsage = []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth}
+	}
+	if uri != "" {
+		u, err := url.Parse(uri)
+		if err != nil {
+			t.Fatal(err)
+		}
+		template.URIs = []*url.URL{u}
+	}
+	if parent == nil {
+		parent = template
+		signer = key
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, parent, &key.PublicKey, signer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cert, key
 }

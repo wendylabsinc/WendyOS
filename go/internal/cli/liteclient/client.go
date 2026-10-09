@@ -149,9 +149,8 @@ func (c *WendyLiteClient) Done() <-chan struct{} {
 }
 
 // PeerCertificate returns the device's leaf certificate, or nil when the
-// connection did not verify it. Only ConnectWithMutualAuthentication and
-// ConnectViaBLEWithMutualAuthentication verify it; insecure, serial and
-// cloud-tunnel connections return nil.
+// connection did not verify it. Authenticated LAN, BLE, and Cloud relay
+// connections set it; serial and unverified connections return nil.
 func (c *WendyLiteClient) PeerCertificate() *x509.Certificate {
 	return c.peerCert
 }
@@ -256,49 +255,46 @@ func (c *WendyLiteClient) ConnectToSerial(device string) error {
 	return nil
 }
 
-// ConnectViaCloudInsecure reaches a device through a cloud tunnel-broker
-// server (dev server: self-signed cert, verification skipped). The WendyCom
-// handshake runs end-to-end through the broker to the device identified by
-// assetID, the asset UUID.
-// SECURITY: This should be used in development tools only. Warn if it's not
-// the case.
-func (c *WendyLiteClient) ConnectViaCloudInsecure(serverAddr string, assetID string) error {
-	link, err := dialTunnelLinkInsecure(serverAddr, assetID)
+// ConnectViaRelay authenticates directly to the device over an opaque broker
+// stream. The supplied Cloud connection and metadata retain their normal auth.
+// This method owns cc on every path, including invalid local credentials.
+func (c *WendyLiteClient) ConnectViaRelay(ctx context.Context, cc *grpc.ClientConn, assetID string,
+	cert tls.Certificate, chain, deviceID string) error {
+	cfg, err := deviceTLSConfig(cert, chain, deviceID)
+	if err != nil {
+		cc.Close()
+		return err
+	}
+	raw, err := openRelayConn(ctx, cc, assetID)
 	if err != nil {
 		return err
 	}
-	c.link = link
+	conn := tls.Client(raw, cfg)
+	handshakeCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	if err := conn.HandshakeContext(handshakeCtx); err != nil {
+		raw.Close()
+		return fmt.Errorf("device mTLS over relay: %w", err)
+	}
+	// Close the raw pipe first so TLS shutdown cannot block behind a stalled
+	// broker write. No application message is sent until mTLS succeeds.
+	c.link = newDirectLink(&relayTLSConn{Conn: conn, raw: raw})
 	if err := c.handshake(); err != nil {
-		link.close()
+		c.link.close()
 		c.link = nil
 		return fmt.Errorf("handshake: %w", err)
 	}
+	c.peerCert = conn.ConnectionState().PeerCertificates[0]
 	c.startReadLoop()
 	return nil
 }
 
-// ConnectViaRelay reaches a device through the Wendy Cloud relay over cc, a
-// connection the caller has already dialed with its Cloud credentials. ctx
-// carries the caller's call metadata and bounds the tunnel's lifetime. The
-// client owns cc from here on: Close closes it, and so does a failed connect.
-// The WendyCom handshake runs end-to-end through the relay to the device
-// identified by assetID, the asset UUID.
-// The relay, not this client, verifies the device's certificate: there is no
-// end-to-end TLS, so PeerCertificate stays nil.
-func (c *WendyLiteClient) ConnectViaRelay(ctx context.Context, cc *grpc.ClientConn, assetID string) error {
-	link, err := openTunnelLink(ctx, cc, assetID)
-	if err != nil {
-		return err
-	}
-	c.link = link
-	if err := c.handshake(); err != nil {
-		link.close()
-		c.link = nil
-		return fmt.Errorf("handshake: %w", err)
-	}
-	c.startReadLoop()
-	return nil
+type relayTLSConn struct {
+	*tls.Conn
+	raw *relayConn
 }
+
+func (c *relayTLSConn) Close() error { return c.raw.Close() }
 
 func (c *WendyLiteClient) Close() error {
 	if c.link == nil {
@@ -1075,26 +1071,26 @@ func (c *WendyLiteClient) EnrollmentChallenge(statusOnly bool) (*wendypb.WendyCo
 	return challenge, nil
 }
 
-// ConnectWithPKIAuthentication verifies ML-DSA certificate chains and sends
+// deviceTLSConfig verifies ML-DSA certificate chains and sends
 // the operator intermediates needed by a device trusting only tenant roots.
-func (c *WendyLiteClient) ConnectWithPKIAuthentication(address string, cert tls.Certificate, chain, deviceID string) error {
+func deviceTLSConfig(cert tls.Certificate, chain, deviceID string) (*tls.Config, error) {
 	if len(cert.Certificate) == 0 {
-		return fmt.Errorf("missing client certificate")
+		return nil, fmt.Errorf("missing client certificate")
 	}
 	leaf, err := x509.ParseCertificate(cert.Certificate[0])
 	if err != nil {
-		return err
+		return nil, err
 	}
 	opts := certs.ServerVerifyOpts{ChainPEM: chain}
 	identity, hasIdentity, err := certs.IdentityFromCert(leaf)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if !hasIdentity || identity.TenantUUID == "" || !strings.HasPrefix(identity.Principal, "spiffe://wendy.sh/tenant/"+identity.TenantUUID+"/operator/") {
-		return fmt.Errorf("Wendy Lite PKI requires a tenant-scoped operator identity")
+		return nil, fmt.Errorf("Wendy Lite PKI requires a tenant-scoped operator identity")
 	}
 	if deviceID == "" {
-		return fmt.Errorf("missing Wendy Lite device identity")
+		return nil, fmt.Errorf("missing Wendy Lite device identity")
 	}
 	deviceID = "lite-" + strings.TrimPrefix(deviceID, "lite-")
 	opts.ExpectedIdentity = &certs.WendyIdentity{
@@ -1104,19 +1100,26 @@ func (c *WendyLiteClient) ConnectWithPKIAuthentication(address string, cert tls.
 
 	verify, err := certs.BuildServerVerifyConnection(opts)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	caCerts, err := certs.ParseCertsFromPEM([]byte(chain))
 	if err != nil {
-		return err
+		return nil, err
 	}
 	cert.Certificate = [][]byte{cert.Certificate[0]}
 	for _, ca := range caCerts {
 		cert.Certificate = append(cert.Certificate, ca.Raw)
 	}
-	cfg := &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{cert},
+	return &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{cert},
 		InsecureSkipVerify: true, // Verification and device identity checks are performed below.
 		VerifyConnection:   verify,
+	}, nil
+}
+
+func (c *WendyLiteClient) ConnectWithPKIAuthentication(address string, cert tls.Certificate, chain, deviceID string) error {
+	cfg, err := deviceTLSConfig(cert, chain, deviceID)
+	if err != nil {
+		return err
 	}
 	conn, err := tls.DialWithDialer(&net.Dialer{Timeout: 15 * time.Second}, "tcp", address, cfg)
 	if err != nil {
