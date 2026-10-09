@@ -56,14 +56,17 @@ func (l quicNodeLink) WriteControl(m ControlMessage) error  { return WriteContro
 func (l quicNodeLink) ReadControl() (ControlMessage, error) { return ReadControl(l.stream) }
 
 type nodeEvent struct {
-	add     *nodePeer
-	id      babel.LinkID
-	remove  bool
-	packet  []byte
-	control *ControlMessage
-	uplink  *string
-	roam    *bool
-	result  chan error
+	add            *nodePeer
+	id             babel.LinkID
+	remove         bool
+	packet         []byte
+	control        *ControlMessage
+	uplink         *string
+	roam           *bool
+	offerSource    func() []int32
+	setOfferSource bool
+	reauthorize    bool
+	result         chan error
 }
 
 // Node serializes all Babel/directory mutations. Radio providers only establish
@@ -89,7 +92,9 @@ type Node struct {
 	gate            sync.RWMutex
 	paused, stopped bool
 	forwardRoutes   []babel.Route
+	origins         map[babel.RouterID]bool
 	gateways        map[babel.RouterID]bool
+	offerSource     func() []int32
 	exit            string
 	roam            bool
 }
@@ -120,7 +125,7 @@ func NewNode(parent context.Context, dir string, credentials *Credentials, name 
 	}
 	ctx, cancel := context.WithCancel(parent)
 	n := &Node{Credentials: credentials, kernel: kernel, cache: cache, directory: directory, bundleHints: newBundleHintCache(), store: store, state: state, peers: map[babel.LinkID]*nodePeer{}, events: make(chan nodeEvent, 256), ctx: ctx, cancel: cancel, started: now,
-		advertisement: Manifest{Version: 1, Org: credentials.Org, Asset: credentials.Asset, Name: name, AgentPort: agentPort}, gateways: map[babel.RouterID]bool{}}
+		advertisement: Manifest{Version: 1, Org: credentials.Org, Asset: credentials.Asset, Name: name, AgentPort: agentPort}, origins: map[babel.RouterID]bool{}, gateways: map[babel.RouterID]bool{}}
 	ok := false
 	defer func() {
 		if !ok {
@@ -141,10 +146,7 @@ func NewNode(parent context.Context, dir string, credentials *Credentials, name 
 	}
 	id, _ := RouterID(credentials.Org, credentials.Asset)
 	config := babel.Config{RouterID: id, IPv4ViaIPv6: true, HelloInterval: time.Second, UpdateInterval: 4 * time.Second, AcceptRoute: func(origin babel.RouterID, prefix netip.Prefix) bool {
-		// Address-allocation validation is independent of a neighbour's claims.
-		// Default gateway admission is added by the host policy, not arbitrary
-		// remote prefixes. This initial event loop only originates host routes.
-		return prefix.Addr().Is4() && (OwnedPrefix(credentials.Org, origin, prefix) || (prefix.Bits() == 0 && n.gateways[origin]))
+		return routeAuthorized(credentials.Org, n.origins, n.gateways, origin, prefix)
 	}}
 	n.routing, err = NewRouting(config, state.Babel, n)
 	if err != nil {
@@ -185,13 +187,11 @@ func (n *Node) HasCheaperLink(asset int32, cost uint16) bool {
 }
 
 func (n *Node) refresh() {
-	devices := n.directory.Snapshot(time.Now())
-	n.gateways = map[babel.RouterID]bool{}
-	for _, m := range devices {
-		if m.Internet {
-			id, _ := RouterID(m.Org, m.Asset)
-			n.gateways[id] = true
-		}
+	now := time.Now()
+	devices := n.directory.Snapshot(now)
+	var offers []int32
+	if n.offerSource != nil {
+		offers = n.offerSource()
 	}
 	links := make([]PeerLink, 0, len(n.peers))
 	for _, p := range n.peers {
@@ -207,6 +207,7 @@ func (n *Node) refresh() {
 		}
 		return links[i].Asset < links[j].Asset
 	})
+	n.origins, n.gateways = routeAuthorities(n.Credentials.Org, devices, offers, now)
 	n.view.Store(&NodeSnapshot{Peers: len(n.peers), Links: links, Devices: devices, Routes: n.routing.Snapshot().Routes})
 }
 
@@ -303,6 +304,15 @@ func (n *Node) step(event babel.Event) error {
 }
 
 func (n *Node) handle(e nodeEvent) error {
+	if e.setOfferSource {
+		n.offerSource = e.offerSource
+		n.refresh()
+		return n.step(babel.Tick{})
+	}
+	if e.reauthorize {
+		n.refresh()
+		return n.step(babel.Tick{})
+	}
 	if e.roam != nil {
 		n.gate.Lock()
 		n.roam = *e.roam
@@ -383,8 +393,26 @@ func (n *Node) handle(e nodeEvent) error {
 			}
 		}
 		n.refresh()
+		return n.step(babel.Tick{})
 	}
 	return nil
+}
+
+// SetGatewayOffers installs a read-only source of verified, active gateway
+// offer asset IDs. It is serialized through the node loop because Babel route
+// policy must never read a partially updated authorization set.
+func (n *Node) SetGatewayOffers(ctx context.Context, source func() []int32) error {
+	return n.request(ctx, nodeEvent{offerSource: source, setOfferSource: true})
+}
+
+// ReauthorizeRoutes schedules immediate route reevaluation after a signed
+// catalog change. Expiry and a full event queue are covered by the one-second
+// maintenance Tick, which also refreshes the live authorization sets.
+func (n *Node) ReauthorizeRoutes() {
+	select {
+	case n.events <- nodeEvent{reauthorize: true}:
+	default:
+	}
 }
 
 func (n *Node) queue(p *nodePeer, messages []ControlMessage) {

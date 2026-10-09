@@ -3,6 +3,7 @@ package meshcatalog
 import (
 	"context"
 	"crypto/tls"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -25,14 +26,15 @@ const (
 // only dependency on the mesh node is a read-only snapshot callback, avoiding
 // a localmesh -> meshcatalog import cycle. Run until the context is cancelled.
 type Runtime struct {
-	catalog     *Catalog
-	snapshot    func() localmesh.NodeSnapshot
-	mu          sync.Mutex
-	peers       map[int32]*catalogPeer
-	bundleHints map[int32]map[string]time.Time
-	tickets     *localmesh.TicketStore
-	dialing     map[int32]bool
-	closed      bool
+	catalog         *Catalog
+	snapshot        func() localmesh.NodeSnapshot
+	mu              sync.Mutex
+	peers           map[int32]*catalogPeer
+	bundleHints     map[int32]map[string]time.Time
+	tickets         *localmesh.TicketStore
+	dialing         map[int32]bool
+	closed          bool
+	onGatewayChange func()
 }
 
 type catalogPeer struct {
@@ -102,6 +104,10 @@ func (r *Runtime) bundleWritten(asset int32, bundle [][]byte, now time.Time) {
 	}
 	hints[fp] = now
 }
+
+// SetGatewayChangeNotifier must be called before Run. The callback may only
+// enqueue work; it must not wait for the node while a catalog session runs.
+func (r *Runtime) SetGatewayChangeNotifier(notify func()) { r.onGatewayChange = notify }
 
 // Broadcast schedules an admitted local or relayed record for all live peers.
 // Periodic full reconciliation repairs a full queue and any partition.
@@ -441,6 +447,12 @@ func (r *Runtime) session(ctx context.Context, asset int32, conn net.Conn) {
 			}
 			for _, w := range changed {
 				r.Broadcast(w)
+				if r.onGatewayChange != nil {
+					var record Record
+					if json.Unmarshal(w.Body, &record) == nil && IsGatewayOffer(record) {
+						r.onGatewayChange()
+					}
+				}
 			}
 		}
 	}
