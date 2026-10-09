@@ -22,6 +22,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/wendylabsinc/wendy/go/internal/cli/ble"
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
+	"github.com/wendylabsinc/wendy/go/internal/cli/linklocal"
 	"github.com/wendylabsinc/wendy/go/internal/cli/providers"
 	"github.com/wendylabsinc/wendy/go/internal/cli/sessionbroker"
 	clitimesync "github.com/wendylabsinc/wendy/go/internal/cli/timesync"
@@ -1966,8 +1967,16 @@ func cachedDeviceHostEntry(host string) (discoverycache.Entry, bool) {
 // full ladder would burn its mtlsProbeTimeout budgets against a black hole.
 const lkgTCPConnectTimeout = 1 * time.Second
 
-// tcpDialTimeoutFn is a seam over net.DialTimeout for LKG fast-path tests.
-var tcpDialTimeoutFn = net.DialTimeout
+// deviceLinkDialFn dials a device over the USB link it is on when several
+// links share 169.254/16 (see linklocal.Dial); a seam for tests.
+var deviceLinkDialFn = linklocal.Dial
+
+// tcpDialTimeoutFn is a seam for LKG fast-path tests; network is always "tcp".
+var tcpDialTimeoutFn = func(_, addr string, timeout time.Duration) (net.Conn, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	return deviceLinkDialFn(ctx, addr)
+}
 
 // lkgTCPAlive reports whether addr answers a bounded TCP connect within
 // lkgTCPConnectTimeout. It's the shared dead-IP bound: dialAgentLKG uses it

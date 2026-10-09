@@ -32,8 +32,7 @@ func dialCandidateRoutePreference(rawIP string) routePreference {
 
 // routeInterfaceForIP asks the kernel which source address it would use for a
 // UDP route to rawIP, then maps that source back to an interface. DialUDP does
-// not send a packet; this avoids interface-name assumptions and follows the
-// same routing table the later TCP connection will use.
+// not send a packet; this avoids interface-name assumptions.
 func routeInterfaceForIP(rawIP string) string {
 	addr, err := netip.ParseAddr(strings.TrimSpace(rawIP))
 	if err != nil {

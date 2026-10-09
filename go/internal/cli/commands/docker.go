@@ -3152,6 +3152,9 @@ func startMTLSRegistryHTTPProxy(target, certPEM, keyPEM, caPEM string) (*mtlsReg
 			req.Host = target
 		},
 		Transport: &http.Transport{
+			DialContext: func(ctx context.Context, _, addr string) (net.Conn, error) {
+				return deviceLinkDialFn(ctx, addr)
+			},
 			TLSClientConfig: &tls.Config{
 				Certificates: []tls.Certificate{cert},
 				// Skip hostname verification: device registry certs are signed by
@@ -3264,7 +3267,7 @@ type registryProxy struct {
 
 func startRegistryProxy(ctx context.Context, listenAddr string, target string) (*registryProxy, error) {
 	return startRegistryProxyWithDialer(ctx, listenAddr, func(ctx context.Context) (net.Conn, error) {
-		return (&net.Dialer{}).DialContext(ctx, "tcp", target)
+		return deviceLinkDialFn(ctx, target)
 	}, target)
 }
 

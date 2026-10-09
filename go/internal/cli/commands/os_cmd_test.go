@@ -2,15 +2,20 @@ package commands
 
 import (
 	"context"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 
+	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 )
 
@@ -622,6 +627,24 @@ func TestEvaluateOSUpdateOutcome(t *testing.T) {
 	fresh := now.Add(-2 * time.Minute).Unix()
 	stale := now.Add(-2 * time.Hour).Unix()
 
+	// An offline device stamps records with a clock days behind ours.
+	committedByUnsyncedClock := &agentpb.GetOSUpdateStatusResponse{
+		HasResult:     true,
+		Outcome:       agentpb.GetOSUpdateStatusResponse_OUTCOME_COMMITTED,
+		OldOsVersion:  "WendyOS-0.19.5",
+		NewOsVersion:  "WendyOS-0.19.5",
+		CreatedAtUnix: now.Add(-96 * time.Hour).Unix(),
+	}
+
+	// A record an earlier update left behind: it starts from another version.
+	leftoverByUnsyncedClock := &agentpb.GetOSUpdateStatusResponse{
+		HasResult:     true,
+		Outcome:       agentpb.GetOSUpdateStatusResponse_OUTCOME_COMMITTED,
+		OldOsVersion:  "WendyOS-0.19.3",
+		NewOsVersion:  "WendyOS-0.19.4",
+		CreatedAtUnix: now.Add(-96 * time.Hour).Unix(),
+	}
+
 	committed := &agentpb.GetOSUpdateStatusResponse{
 		HasResult:     true,
 		Outcome:       agentpb.GetOSUpdateStatusResponse_OUTCOME_COMMITTED,
@@ -693,6 +716,7 @@ func TestEvaluateOSUpdateOutcome(t *testing.T) {
 		rpcErr          error
 		preVer          string
 		postVer         string
+		recordCleared   bool
 		wantErr         bool
 		wantContains    []string
 		wantNotContains []string
@@ -854,6 +878,24 @@ func TestEvaluateOSUpdateOutcome(t *testing.T) {
 			wantErr: true,
 		},
 		{
+			name:          "leftover record is not trusted although the agent clears records",
+			resp:          leftoverByUnsyncedClock,
+			preVer:        "WendyOS-0.19.4",
+			postVer:       "WendyOS-0.19.4",
+			recordCleared: true,
+			wantErr:       true,
+			wantContains:  []string{"likely rolled back"},
+		},
+		{
+			name:          "cleared record trusted despite unsynced device clock",
+			resp:          committedByUnsyncedClock,
+			preVer:        "WendyOS-0.19.5",
+			postVer:       "WendyOS-0.19.5",
+			recordCleared: true,
+			wantErr:       false,
+			wantContains:  []string{"verified", "WendyOS-0.19.5"},
+		},
+		{
 			name:         "unknown post version cannot verify but does not fail",
 			resp:         &agentpb.GetOSUpdateStatusResponse{HasResult: false},
 			preVer:       "WendyOS-0.10.4",
@@ -865,7 +907,7 @@ func TestEvaluateOSUpdateOutcome(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			msg, err := evaluateOSUpdateOutcome(tc.resp, tc.rpcErr, tc.preVer, tc.postVer, now)
+			msg, err := evaluateOSUpdateOutcome(tc.resp, tc.rpcErr, tc.preVer, tc.postVer, tc.recordCleared, now)
 			if tc.wantErr && err == nil {
 				t.Fatalf("error = nil, want non-nil; msg = %q", msg)
 			}
@@ -915,5 +957,72 @@ func TestIsLoopbackHostIdentifiesAPortForwardedDevice(t *testing.T) {
 		if got := isLoopbackHost(tc.host); got != tc.want {
 			t.Errorf("isLoopbackHost(%q) = %v, want %v", tc.host, got, tc.want)
 		}
+	}
+}
+
+// fakeOSUpdateAgent records the order of the RPCs an OS update makes.
+type fakeOSUpdateAgent struct {
+	agentpb.UnimplementedWendyAgentServiceServer
+	statusErr error
+	mu        sync.Mutex
+	calls     []string
+}
+
+func (s *fakeOSUpdateAgent) record(call string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.calls = append(s.calls, call)
+}
+
+func (s *fakeOSUpdateAgent) GetOSUpdateStatus(context.Context, *agentpb.GetOSUpdateStatusRequest) (*agentpb.GetOSUpdateStatusResponse, error) {
+	s.record("status")
+	return &agentpb.GetOSUpdateStatusResponse{}, s.statusErr
+}
+
+func (s *fakeOSUpdateAgent) UpdateOS(*agentpb.UpdateOSRequest, grpc.ServerStreamingServer[agentpb.UpdateOSResponse]) error {
+	s.record("update")
+	return nil
+}
+
+// The probe must run before the update starts: afterwards the device is
+// rebooting. Only an agent without the status RPC keeps stale records.
+func TestApplyOSUpdateAsksAboutRecordsBeforeStreaming(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		statusErr error
+		want      bool
+	}{
+		{"current agent", nil, true},
+		{"transient probe failure", status.Error(codes.Unavailable, "reset"), true},
+		{"agent without the status RPC", status.Error(codes.Unimplemented, "unknown method"), false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			agent := &fakeOSUpdateAgent{statusErr: tc.statusErr}
+			ln, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			srv := grpc.NewServer()
+			agentpb.RegisterWendyAgentServiceServer(srv, agent)
+			go func() { _ = srv.Serve(ln) }()
+			t.Cleanup(srv.Stop)
+			cc, err := grpc.NewClient(ln.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = cc.Close() })
+
+			recordCleared, err := applyOSUpdate(context.Background(),
+				&grpcclient.AgentConnection{AgentService: agentpb.NewWendyAgentServiceClient(cc)}, "http://host/a.wendy")
+			if err != nil {
+				t.Fatalf("applyOSUpdate: %v", err)
+			}
+			if recordCleared != tc.want {
+				t.Errorf("recordCleared = %v, want %v", recordCleared, tc.want)
+			}
+			if got := strings.Join(agent.calls, ","); got != "status,update" {
+				t.Errorf("calls = %s, want status,update", got)
+			}
+		})
 	}
 }

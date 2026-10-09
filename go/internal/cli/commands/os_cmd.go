@@ -23,6 +23,7 @@ import (
 	"google.golang.org/protobuf/encoding/protojson"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
+	"github.com/wendylabsinc/wendy/go/internal/cli/linklocal"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/go/internal/shared/version"
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
@@ -386,7 +387,7 @@ The device uses its in-house wendyos-update engine to apply the update.`,
 				}
 
 				// Determine the local IP reachable by the device.
-				localIP, err := localIPForHost(conn.Host)
+				localIP, err := localIPForHost(ctx, conn.Host)
 				if err != nil {
 					return fmt.Errorf("determining local IP for device %s: %w", conn.Host, err)
 				}
@@ -411,7 +412,7 @@ The device uses its in-house wendyos-update engine to apply the update.`,
 					return fmt.Errorf("downloading artifact: %w", err)
 				}
 
-				localIP, err := localIPForHost(conn.Host)
+				localIP, err := localIPForHost(ctx, conn.Host)
 				if err != nil {
 					return fmt.Errorf("determining local IP for device %s: %w", conn.Host, err)
 				}
@@ -452,7 +453,8 @@ The device uses its in-house wendyos-update engine to apply the update.`,
 				}
 			}
 
-			if err := streamOSUpdate(ctx, conn, artifactURL, ""); err != nil {
+			recordCleared, err := applyOSUpdate(ctx, conn, artifactURL)
+			if err != nil {
 				return err
 			}
 
@@ -462,7 +464,7 @@ The device uses its in-house wendyos-update engine to apply the update.`,
 				return err
 			}
 			fmt.Println("Device is back online.")
-			return reportOSUpdateOutcome(ctx, deviceHost, preUpdateOSVersion)
+			return reportOSUpdateOutcome(ctx, deviceHost, preUpdateOSVersion, recordCleared)
 		},
 	}
 
@@ -706,11 +708,22 @@ func waitForDeviceOnline(ctx context.Context, host string) error {
 // previous update attempt for the one that just completed.
 const osUpdateResultMaxAge = 30 * time.Minute
 
+// applyOSUpdate streams the update to conn's agent. recordCleared reports
+// whether that agent drops its old status record once the update installs,
+// which every agent with the status RPC does; it is asked before the reboot.
+func applyOSUpdate(ctx context.Context, conn *grpcclient.AgentConnection, artifactURL string) (recordCleared bool, err error) {
+	probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	_, probeErr := conn.AgentService.GetOSUpdateStatus(probeCtx, &agentpb.GetOSUpdateStatusRequest{})
+	cancel()
+	recordCleared = status.Code(probeErr) != codes.Unimplemented
+	return recordCleared, streamOSUpdate(ctx, conn, artifactURL, "")
+}
+
 // reportOSUpdateOutcome queries the freshly booted device for the outcome of
 // the update (healthcheck verdict, rollback details) and prints it. It
 // returns a non-nil error when the update did not stick, so the command exits
-// non-zero.
-func reportOSUpdateOutcome(ctx context.Context, host, preUpdateOSVersion string) error {
+// non-zero. recordCleared comes from applyOSUpdate.
+func reportOSUpdateOutcome(ctx context.Context, host, preUpdateOSVersion string, recordCleared bool) error {
 	addr := hostPort(host, defaultAgentPort)
 
 	var resp *agentpb.GetOSUpdateStatusResponse
@@ -746,7 +759,7 @@ func reportOSUpdateOutcome(ctx context.Context, host, preUpdateOSVersion string)
 		}
 	}
 
-	msg, outcomeErr := evaluateOSUpdateOutcome(resp, rpcErr, preUpdateOSVersion, postUpdateOSVersion, time.Now())
+	msg, outcomeErr := evaluateOSUpdateOutcome(resp, rpcErr, preUpdateOSVersion, postUpdateOSVersion, recordCleared, time.Now())
 	fmt.Println(msg)
 	reportDriverAddonsAfterUpdate(ctx, host)
 	return outcomeErr
@@ -759,11 +772,16 @@ func evaluateOSUpdateOutcome(
 	resp *agentpb.GetOSUpdateStatusResponse,
 	rpcErr error,
 	preUpdateOSVersion, postUpdateOSVersion string,
+	recordCleared bool,
 	now time.Time,
 ) (string, error) {
+	// Record age uses the device clock, which an offline device cannot sync, so
+	// a cleared record is trusted instead when it starts from this update's
+	// version; one an earlier update left behind starts elsewhere.
+	thisUpdate := recordCleared && preUpdateOSVersion != "" && resp.GetOldOsVersion() == preUpdateOSVersion
 	usable := rpcErr == nil && resp.GetHasResult() &&
 		resp.GetOutcome() != agentpb.GetOSUpdateStatusResponse_OUTCOME_UNSPECIFIED &&
-		now.Sub(time.Unix(resp.GetCreatedAtUnix(), 0)) <= osUpdateResultMaxAge
+		(thisUpdate || now.Sub(time.Unix(resp.GetCreatedAtUnix(), 0)) <= osUpdateResultMaxAge)
 
 	if !usable {
 		// The device cannot report healthcheck results for this update — the
@@ -1157,7 +1175,7 @@ func writeFailedServices(b *strings.Builder, services []*agentpb.GetOSUpdateStat
 	}
 }
 
-func localIPForHost(host string) (string, error) {
+func localIPForHost(ctx context.Context, host string) (string, error) {
 	// Strip port if present.
 	if h, _, err := net.SplitHostPort(host); err == nil {
 		host = h
@@ -1181,7 +1199,7 @@ func localIPForHost(host string) (string, error) {
 		// for ".local" names. The shipped CGO_ENABLED=0 binary can't resolve
 		// ".local" via the OS resolver, so without this fallback `wendy os`
 		// commands targeting a ".local" host fail on Linux/Windows (issue #1155).
-		ip := resolveHostMDNSFallback(context.Background(), host)
+		ip := resolveHostMDNSFallback(ctx, host)
 		if ip == "" {
 			return "", fmt.Errorf("resolving %s: no addresses found%s", host, mdnsLocalHint(host))
 		}
@@ -1196,6 +1214,15 @@ func localIPForHost(host string) (string, error) {
 		if parsedIP == nil {
 			return "", fmt.Errorf("resolving %s: invalid address %q", host, ip)
 		}
+	}
+
+	// The routing table may send a link-local address out another device's
+	// link; an enrolled agent serves only its mTLS port.
+	probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	ip, ok := linkLocalSourceIPFn(probeCtx, dialHost, defaultAgentPort, defaultAgentPort+agentMTLSPortOffset)
+	cancel()
+	if ok {
+		return ip, nil
 	}
 
 	network := "udp4"
@@ -1336,11 +1363,17 @@ func ensureAgentUpToDate(ctx context.Context, conn *grpcclient.AgentConnection, 
 	return newConn, nil
 }
 
+// Seams over linklocal for tests.
+var (
+	artifactListenFn    = linklocal.Listen
+	linkLocalSourceIPFn = linklocal.SourceIP
+)
+
 // serveLocalArtifact starts a temporary HTTP server bound to localIP that
 // serves the file at localPath. It returns the URL at which the file is
 // accessible and a cleanup function that shuts down the server.
 func serveLocalArtifact(localPath, localIP string) (string, func(), error) {
-	listener, err := net.Listen("tcp", net.JoinHostPort(localIP, "0"))
+	listener, err := artifactListenFn(context.Background(), net.JoinHostPort(localIP, "0"))
 	if err != nil {
 		return "", nil, fmt.Errorf("starting file server: %w", err)
 	}

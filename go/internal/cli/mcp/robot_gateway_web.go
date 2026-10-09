@@ -14,6 +14,7 @@ import (
 
 	"github.com/google/uuid"
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
+	"github.com/wendylabsinc/wendy/go/internal/cli/linklocal"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 )
 
@@ -126,7 +127,9 @@ func (g *RobotGateway) openRobotAppView(ctx context.Context, req mcpgo.CallToolR
 				return conn.RegistryDialer(dialCtx, int(port))
 			})
 		}
-		return (&net.Dialer{Timeout: 10 * time.Second}).DialContext(ctx, "tcp", target)
+		dialCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		defer cancel()
+		return linklocal.Dial(dialCtx, target)
 	}, ResponseHeaderTimeout: 15 * time.Second, IdleConnTimeout: 30 * time.Second}
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

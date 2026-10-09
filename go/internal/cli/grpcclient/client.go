@@ -15,6 +15,7 @@ import (
 
 	"time"
 
+	"github.com/wendylabsinc/wendy/go/internal/cli/linklocal"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tlscache"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
@@ -215,8 +216,7 @@ func identityMismatchSink(dst *atomic.Pointer[certs.IdentityMismatchError]) func
 }
 
 func Connect(ctx context.Context, address string) (*AgentConnection, error) {
-	conn, err := grpc.NewClient(
-		grpcTarget(address),
+	opts := []grpc.DialOption{
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithInitialWindowSize(grpcInitialStreamWindow),
 		grpc.WithInitialConnWindowSize(grpcInitialConnWindow),
@@ -227,7 +227,9 @@ func Connect(ctx context.Context, address string) (*AgentConnection, error) {
 			Timeout:             grpcKeepaliveTimeout,
 			PermitWithoutStream: false,
 		}),
-	)
+	}
+	opts = append(opts, linkLocalDialOpts(address)...)
+	conn, err := grpc.NewClient(grpcTarget(address), opts...)
 	if err != nil {
 		return nil, fmt.Errorf("connecting to agent at %s: %w", address, err)
 	}
@@ -436,6 +438,7 @@ func ConnectWithTLSExpecting(ctx context.Context, address string, certInfo *conf
 			PermitWithoutStream: false,
 		}),
 	}
+	opts = append(opts, linkLocalDialOpts(address)...)
 	conn, err := grpc.NewClient(grpcTarget(address), append(opts, extraOpts...)...)
 	if err != nil {
 		return nil, fmt.Errorf("connecting to agent at %s with TLS: %w", address, err)
@@ -600,4 +603,18 @@ func newAgentConnection(conn *grpc.ClientConn) *AgentConnection {
 
 func NewFromConn(conn *grpc.ClientConn) *AgentConnection {
 	return newAgentConnection(conn)
+}
+
+// linkLocalDialFn is a seam over linklocal.Dial for tests.
+var linkLocalDialFn = linklocal.Dial
+
+// linkLocalDialOpts sends IPv4 link-local targets through linklocal.Dial; other
+// targets keep gRPC's default dialer and its proxy support.
+func linkLocalDialOpts(address string) []grpc.DialOption {
+	if host, _, err := net.SplitHostPort(address); err != nil || !linklocal.IsIPv4LinkLocal(host) {
+		return nil
+	}
+	return []grpc.DialOption{grpc.WithContextDialer(func(ctx context.Context, addr string) (net.Conn, error) {
+		return linkLocalDialFn(ctx, addr)
+	})}
 }
