@@ -213,14 +213,20 @@ func TestUploadRespectsProcessWideStreamCap(t *testing.T) {
 	f.sendDelay = 200 * time.Microsecond
 	var wg sync.WaitGroup
 	errs := make(chan error, 3)
+	// Construct the immutable payload before starting uploads. Under race-test
+	// load, hashing each later fixture could let an earlier upload finish,
+	// turning this concurrency test into three sequential uploads.
+	src, refs := layerFixture(t, 400, 300)
+	start := make(chan struct{})
 	for range 3 {
-		src, refs := layerFixture(t, 400, 300)
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			<-start
 			errs <- Upload(context.Background(), f, src, refs, Options{BatchChunks: 16, Streams: DefaultStreams})
 		}()
 	}
+	close(start)
 	wg.Wait()
 	close(errs)
 	for err := range errs {
