@@ -20,7 +20,7 @@ TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
 # CGO_ENABLED=1 against libusb. libusb dev headers must be on PATH (the
 # sbom.yml workflow installs libusb-1.0-0-dev + pkg-config on Linux; macOS
 # runners have libusb via Homebrew).
-( cd "$ROOT/go" && CGO_ENABLED=1 go build -o "$TMP/wendy" ./cmd/wendy )
+( cd "$ROOT/go" && make mcp-app && CGO_ENABLED=1 go build -o "$TMP/wendy" ./cmd/wendy )
 
 bash "$SCRIPT" binary "$TMP/wendy" "$TMP/wendy.spdx.json"
 jq -e '.spdxVersion and (.packages | length > 0)' "$TMP/wendy.spdx.json" >/dev/null \

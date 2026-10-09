@@ -116,6 +116,10 @@ jobs:
           go-version-file: go.mod
           cache-dependency-path: go.sum
 
+      - name: Build embedded MCP app
+        if: matrix.cmd == 'wendy'
+        uses: ./.github/actions/build-mcp-app
+
       - name: Build
         working-directory: go
         env:
@@ -193,6 +197,9 @@ jobs:
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
+
+      - name: Build embedded MCP app
+        uses: ./.github/actions/build-mcp-app
 
       - name: Install musl toolchain
         run: sudo apt-get update && sudo apt-get install -y musl-tools
@@ -296,6 +303,9 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
+
+      - name: Build embedded MCP app
+        uses: ./.github/actions/build-mcp-app
 
       - name: Install libusb
         run: |

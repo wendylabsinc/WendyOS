@@ -7,6 +7,3 @@ swift/Sources/*/Proto/**/*.grpc.swift  linguist-generated=true
 go/proto/gen/**                        linguist-generated=true
 *.pb.go                                linguist-generated=true
 *_grpc.pb.go                           linguist-generated=true
-
-# Embedded UI bundle includes upstream shader strings with significant formatting.
-go/internal/cli/mcp/desktop_app.html    linguist-generated=true -whitespace

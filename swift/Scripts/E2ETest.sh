@@ -651,6 +651,7 @@ if [[ "\$(uname -s)" == "Linux" ]] && ! pkg-config --exists libusb-1.0 2>/dev/nu
   echo "  (apt install libusb-1.0-0-dev / dnf install libusb1-devel)" >&2
   exit 1
 fi
+make mcp-app
 go build -o "\$wendy_path" ./cmd/wendy
 
 resolved="\$(PATH="\$cli_bin_dir:\$PATH" command -v wendy || true)"

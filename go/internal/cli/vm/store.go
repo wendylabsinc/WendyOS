@@ -166,19 +166,20 @@ func (s *Store) CreateFromWithRobotProfile(name string, image io.Reader, imageSi
 		return fmt.Errorf("sizing disk: %w", err)
 	}
 
-	vars, err := os.OpenFile(s.VarsPath(name), os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
-	if err != nil {
-		return fmt.Errorf("creating UEFI variable store: %w", err)
-	}
-	defer func() {
-		if cerr := vars.Close(); cerr != nil && retErr == nil {
-			retErr = fmt.Errorf("closing UEFI variable store: %w", cerr)
+	if !IsLiteProfile(meta.Profile) {
+		vars, err := os.OpenFile(s.VarsPath(name), os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
+		if err != nil {
+			return fmt.Errorf("creating UEFI variable store: %w", err)
 		}
-	}()
-	if err := vars.Truncate(pflashBytes); err != nil {
-		return fmt.Errorf("sizing UEFI variable store: %w", err)
+		defer func() {
+			if cerr := vars.Close(); cerr != nil && retErr == nil {
+				retErr = fmt.Errorf("closing UEFI variable store: %w", cerr)
+			}
+		}()
+		if err := vars.Truncate(pflashBytes); err != nil {
+			return fmt.Errorf("sizing UEFI variable store: %w", err)
+		}
 	}
-
 	meta.Name = name
 	meta.DiskBytes = diskBytes
 	if meta.CreatedAt.IsZero() {

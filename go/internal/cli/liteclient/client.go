@@ -1,6 +1,7 @@
 package liteclient
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
@@ -10,16 +11,20 @@ import (
 	"io"
 	"log"
 	"math"
+	"net"
 	"os"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/seriallock"
 	wendypb "github.com/wendylabsinc/wendy/go/proto/gen/litepb"
 	"github.com/wendylabsinc/wendy/go/proto/gen/sensorlinkpb"
 	"go.bug.st/serial"
+	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -152,10 +157,18 @@ func (c *WendyLiteClient) PeerCertificate() *x509.Certificate {
 }
 
 func (c *WendyLiteClient) ConnectInsecure(address string) error {
-	conn, err := tls.Dial("tcp", address, &tls.Config{InsecureSkipVerify: true}) //nolint:gosec — device uses self-signed certs
+	return c.ConnectInsecureContext(context.Background(), address)
+}
+
+// ConnectInsecureContext bounds both TLS and WendyCom handshakes.
+func (c *WendyLiteClient) ConnectInsecureContext(ctx context.Context, address string) error {
+	dialer := tls.Dialer{Config: &tls.Config{InsecureSkipVerify: true}} //nolint:gosec -- unprovisioned devices use self-signed certificates
+	conn, err := dialer.DialContext(ctx, "tcp", address)
 	if err != nil {
 		return fmt.Errorf("connect: %w", err)
 	}
+	stopCancel := context.AfterFunc(ctx, func() { conn.Close() })
+	defer stopCancel()
 	c.link = newDirectLink(conn)
 	err = c.handshake()
 	if err != nil {
@@ -246,11 +259,34 @@ func (c *WendyLiteClient) ConnectToSerial(device string) error {
 // ConnectViaCloudInsecure reaches a device through a cloud tunnel-broker
 // server (dev server: self-signed cert, verification skipped). The WendyCom
 // handshake runs end-to-end through the broker to the device identified by
-// assetID.
+// assetID, the asset UUID.
 // SECURITY: This should be used in development tools only. Warn if it's not
 // the case.
-func (c *WendyLiteClient) ConnectViaCloudInsecure(serverAddr string, assetID uint32) error {
+func (c *WendyLiteClient) ConnectViaCloudInsecure(serverAddr string, assetID string) error {
 	link, err := dialTunnelLinkInsecure(serverAddr, assetID)
+	if err != nil {
+		return err
+	}
+	c.link = link
+	if err := c.handshake(); err != nil {
+		link.close()
+		c.link = nil
+		return fmt.Errorf("handshake: %w", err)
+	}
+	c.startReadLoop()
+	return nil
+}
+
+// ConnectViaRelay reaches a device through the Wendy Cloud relay over cc, a
+// connection the caller has already dialed with its Cloud credentials. ctx
+// carries the caller's call metadata and bounds the tunnel's lifetime. The
+// client owns cc from here on: Close closes it, and so does a failed connect.
+// The WendyCom handshake runs end-to-end through the relay to the device
+// identified by assetID, the asset UUID.
+// The relay, not this client, verifies the device's certificate: there is no
+// end-to-end TLS, so PeerCertificate stays nil.
+func (c *WendyLiteClient) ConnectViaRelay(ctx context.Context, cc *grpc.ClientConn, assetID string) error {
+	link, err := openTunnelLink(ctx, cc, assetID)
 	if err != nil {
 		return err
 	}
@@ -1013,5 +1049,86 @@ func (c *WendyLiteClient) handshake() error {
 	}
 	ver := hs.GetVersion()
 	c.peerProtocolVersion = protocolVersion{Major: ver.GetMajor(), Minor: ver.GetMinor()}
+	return nil
+}
+
+// EnrollmentChallenge requests enrollment state over the active connection.
+// Firmware controls which transports support bootstrap challenges.
+// statusOnly observes completion without replacing the bootstrap nonce.
+func (c *WendyLiteClient) EnrollmentChallenge(statusOnly bool) (*wendypb.WendyComEnrollmentChallenge, error) {
+	resp, err := c.sendCommand(&wendypb.WendyComCommand{
+		RequestId: c.requestIdGen.Add(1),
+		Params: &wendypb.WendyComCommand_EnrollmentChallenge{
+			EnrollmentChallenge: &wendypb.WendyComEnrollmentChallengeParams{StatusOnly: statusOnly},
+		},
+	}, 5*time.Second)
+	if err != nil {
+		return nil, err
+	}
+	if err := resultToError(resp.Result); err != nil {
+		return nil, fmt.Errorf("firmware rejected the PKI enrollment challenge (%s): %w; the device needs PKI-enabled Wendy Lite firmware with enrollment support on the selected transport; for a simulator, use a PKI-enabled ESP32-C6 image", resp.Result.String(), err)
+	}
+	challenge := resp.GetEnrollmentChallenge()
+	if challenge == nil {
+		return nil, fmt.Errorf("device returned no enrollment challenge")
+	}
+	return challenge, nil
+}
+
+// ConnectWithPKIAuthentication verifies ML-DSA certificate chains and sends
+// the operator intermediates needed by a device trusting only tenant roots.
+func (c *WendyLiteClient) ConnectWithPKIAuthentication(address string, cert tls.Certificate, chain, deviceID string) error {
+	if len(cert.Certificate) == 0 {
+		return fmt.Errorf("missing client certificate")
+	}
+	leaf, err := x509.ParseCertificate(cert.Certificate[0])
+	if err != nil {
+		return err
+	}
+	opts := certs.ServerVerifyOpts{ChainPEM: chain}
+	identity, hasIdentity, err := certs.IdentityFromCert(leaf)
+	if err != nil {
+		return err
+	}
+	if !hasIdentity || identity.TenantUUID == "" || !strings.HasPrefix(identity.Principal, "spiffe://wendy.sh/tenant/"+identity.TenantUUID+"/operator/") {
+		return fmt.Errorf("Wendy Lite PKI requires a tenant-scoped operator identity")
+	}
+	if deviceID == "" {
+		return fmt.Errorf("missing Wendy Lite device identity")
+	}
+	deviceID = "lite-" + strings.TrimPrefix(deviceID, "lite-")
+	opts.ExpectedIdentity = &certs.WendyIdentity{
+		EntityType: certs.EntityAsset, EntityID: deviceID, TenantUUID: identity.TenantUUID,
+		Principal: "spiffe://wendy.sh/tenant/" + identity.TenantUUID + "/device/" + deviceID,
+	}
+
+	verify, err := certs.BuildServerVerifyConnection(opts)
+	if err != nil {
+		return err
+	}
+	caCerts, err := certs.ParseCertsFromPEM([]byte(chain))
+	if err != nil {
+		return err
+	}
+	cert.Certificate = [][]byte{cert.Certificate[0]}
+	for _, ca := range caCerts {
+		cert.Certificate = append(cert.Certificate, ca.Raw)
+	}
+	cfg := &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{cert},
+		InsecureSkipVerify: true, // Verification and device identity checks are performed below.
+		VerifyConnection:   verify,
+	}
+	conn, err := tls.DialWithDialer(&net.Dialer{Timeout: 15 * time.Second}, "tcp", address, cfg)
+	if err != nil {
+		return fmt.Errorf("connect (mTLS): %w", err)
+	}
+	c.link = newDirectLink(conn)
+	if err := c.handshake(); err != nil {
+		c.link.close()
+		c.link = nil
+		return fmt.Errorf("handshake: %w", err)
+	}
+	c.peerCert = conn.ConnectionState().PeerCertificates[0]
+	c.startReadLoop()
 	return nil
 }

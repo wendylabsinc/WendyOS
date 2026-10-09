@@ -17,7 +17,11 @@ struct `'wendy device logs'` {
         try await self.scenario.run(authenticated: false) { cli, _ in
             try await cli.sh("wendy device logs --help") { result in
                 #expect(result.status.isSuccess)
-                #expect(result.stdout.contains("Stream logs from containers on the device"))
+                #expect(
+                    result.stdout.contains(
+                        "Stream logs from containers on WendyOS or the firmware console on Wendy Lite"
+                    )
+                )
                 #expect(result.stdout.contains("wendy device logs [app] [flags]"))
                 #expect(result.stdout.contains("--app"))
                 #expect(result.stdout.contains("--service"))

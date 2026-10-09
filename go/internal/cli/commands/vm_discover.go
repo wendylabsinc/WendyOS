@@ -69,7 +69,7 @@ func probeLocalVMDevices(ctx context.Context) []models.LANDevice {
 	}
 	var candidates []candidate
 	for _, st := range statuses {
-		if st.Running && st.State.NetMode == vm.NetUser && st.State.AgentPort != 0 {
+		if !vm.IsLiteProfile(st.Meta.Profile) && st.Running && st.State.NetMode == vm.NetUser && st.State.AgentPort != 0 {
 			candidates = append(candidates, candidate{st.Name, st.State.AgentPort})
 		}
 	}
@@ -228,7 +228,7 @@ func newSimulatorFilter(ctx context.Context) *simulatorFilter {
 			f.hostnames[vmHostKey(st.Meta.Hostname)] = true
 			continue
 		}
-		if st.Running && st.State.NetMode == vm.NetUser && st.State.AgentPort != 0 {
+		if !vm.IsLiteProfile(st.Meta.Profile) && st.Running && st.State.NetMode == vm.NetUser && st.State.AgentPort != 0 {
 			learners = append(learners, st)
 		}
 	}

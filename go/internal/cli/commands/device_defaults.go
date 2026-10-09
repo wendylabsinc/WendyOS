@@ -133,6 +133,9 @@ func connectCloudDeviceSelector(ctx context.Context, selector cloudDeviceSelecto
 			if asset.GetId() != selector.AssetUUID {
 				continue
 			}
+			if isLiteCloudAsset(asset) {
+				return cloudLiteSelectedDevice(auth, asset, selector.String())
+			}
 			conn, err := connectDefaultCloudAssetV2Fn(ctx, auth, asset, os.Getenv("WENDY_BROKER_URL"))
 			if err != nil {
 				return nil, err
@@ -236,7 +239,7 @@ func connectMCPDevice(ctx context.Context, device string) (*grpcclient.AgentConn
 			return nil, err
 		}
 		if matched {
-			return selected.Agent, nil
+			return selectedAgent(selected)
 		}
 		if err := rejectNumericDeviceName(device); err != nil {
 			return nil, err

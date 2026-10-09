@@ -37,8 +37,14 @@ endif
 # Build both CLI and agent (native)
 build: build-cli build-agent
 
+# Generate the embedded MCP UI from locked frontend dependencies.
+.PHONY: mcp-app test-race
+mcp-app:
+	npm --prefix ../web-client/mcp-app ci --no-audit --no-fund
+	npm --prefix ../web-client/mcp-app run build
+
 # Build the wendy CLI
-build-cli:
+build-cli: mcp-app
 ifeq ($(HOST_ENV),windows)
 	powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "New-Item -ItemType Directory -Force -Path bin | Out-Null; go build -o bin/wendy.exe ./cmd/wendy; if ($$LASTEXITCODE -ne 0) { exit $$LASTEXITCODE }"
 else
@@ -78,22 +84,22 @@ define build-cli-linux-native
 	fi
 endef
 
-build-cli-linux-amd64:
+build-cli-linux-amd64: mcp-app
 	$(call build-cli-linux-native,amd64)
 
-build-cli-linux-arm64:
+build-cli-linux-arm64: mcp-app
 	$(call build-cli-linux-native,arm64)
 
-build-cli-darwin-amd64:
+build-cli-darwin-amd64: mcp-app
 	CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -ldflags "$(LDFLAGS)" -o bin/wendy-darwin-amd64 ./cmd/wendy
 
-build-cli-darwin-arm64:
+build-cli-darwin-arm64: mcp-app
 	CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -ldflags "$(LDFLAGS)" -o bin/wendy-darwin-arm64 ./cmd/wendy
 
-build-cli-windows-amd64:
+build-cli-windows-amd64: mcp-app
 	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags "$(LDFLAGS)" -o bin/wendy-windows-amd64.exe ./cmd/wendy
 
-build-cli-windows-arm64:
+build-cli-windows-arm64: mcp-app
 	CGO_ENABLED=0 GOOS=windows GOARCH=arm64 go build -ldflags "$(LDFLAGS)" -o bin/wendy-windows-arm64.exe ./cmd/wendy
 
 # Build Windows MSI installers (requires WiX v4+: dotnet tool install --global wix)
@@ -108,15 +114,15 @@ msi-windows-arm64: build-cli-windows-arm64
 	     -arch arm64 -o bin/wendy-windows-arm64.msi $(WXS)
 
 # Run all tests
-test:
+test: mcp-app
 	go test ./... -v -count=1 -timeout 120s
 
 # Run tests with race detector
-test-race:
+test-race: mcp-app
 	go test ./... -v -count=1 -race -timeout 120s
 
 # Run go vet
-vet:
+vet: mcp-app
 	go vet ./...
 
 # Generate protobuf code
@@ -128,7 +134,7 @@ clean:
 	rm -rf bin/
 
 # Install both binaries
-install:
+install: mcp-app
 	go install ./cmd/wendy
 	go install ./cmd/wendy-agent
 
@@ -137,15 +143,15 @@ fmt:
 	gofmt -w -s .
 
 # Lint (requires golangci-lint)
-lint:
+lint: mcp-app
 	golangci-lint run ./...
 
 # Check that dependency licenses match the committed baseline (licenses.csv)
-licenses:
+licenses: mcp-app
 	bash scripts/check-licenses.sh
 
 # Regenerate licenses.csv from current dependencies
-licenses-update:
+licenses-update: mcp-app
 	bash scripts/check-licenses.sh --update
 
 # Sync embedded docs and skills from sibling repos (requires them checked out at ../../docs and ../claude-skills)

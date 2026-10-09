@@ -107,6 +107,10 @@ jobs:
           go-version-file: go.mod
           cache: false
 
+      - name: Build embedded MCP app
+        if: inputs.hostname == '' || inputs.jobs == 'all' || inputs.jobs == 'discover'
+        uses: ./.github/actions/build-mcp-app
+
       - name: Prepare macOS build dependencies
         if: inputs.hostname == '' || inputs.jobs == 'all' || inputs.jobs == 'discover'
         run: |
@@ -186,6 +190,9 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
+
+      - name: Build embedded MCP app
+        uses: ./.github/actions/build-mcp-app
 
       - name: Prepare macOS build dependencies
         run: |
@@ -345,6 +352,9 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
+
+      - name: Build embedded MCP app
+        uses: ./.github/actions/build-mcp-app
 
       # The Linux CLI links libusb via cgo (Thor flashing), so the self-hosted
       # runner needs the dev headers before `make build-cli`.

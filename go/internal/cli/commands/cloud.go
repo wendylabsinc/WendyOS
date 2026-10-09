@@ -119,6 +119,10 @@ func effectiveDeviceName(local string) string {
 }
 
 func wrapCloudDeviceCommands(cmd *cobra.Command, cfg func(*cobra.Command) cloudDeviceConfig) {
+	// Enrollment provisions a local target before it can be reached through Cloud.
+	if cmd.Annotations["wendy.local-enrollment"] == "true" {
+		return
+	}
 	if cmd.RunE != nil {
 		runE := cmd.RunE
 		cmd.RunE = func(cmd *cobra.Command, args []string) error {
@@ -144,44 +148,10 @@ func cloudDeviceConfigFromContext(ctx context.Context) (cloudDeviceConfig, bool)
 }
 
 func newCloudEnrollDeviceCmd() *cobra.Command {
-	var name string
-	var cloudGRPC string
-	var orgID int32
-	var acmeDirectoryURL string
-
-	cmd := &cobra.Command{
-		Use:   "enroll-device",
-		Short: "Enroll the connected device with Wendy Cloud or a local pki-core",
-		Long:  "Alias for 'wendy device enroll'. OIDC accounts use direct PKI enrollment through Cloud's enrollment relay; legacy accounts use Cloud enrollment.",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx := cmd.Context()
-
-			auth, err := resolveEnrollmentAuthEntry(cloudGRPC, orgID)
-			if err != nil {
-				return err
-			}
-			auth, err = prepareEnrollmentAuth(ctx, auth)
-			if err != nil {
-				return err
-			}
-
-			conn, err := connectToAgent(ctx, SuppressProvisioningHint(), SuppressPickerEnroll())
-			if err != nil {
-				return err
-			}
-			defer conn.Close()
-
-			if err := promptWifiIfNeeded(ctx, conn); err != nil {
-				return err
-			}
-
-			return runEnrollDevice(ctx, conn, auth, name, orgID, acmeDirectoryURL)
-		},
-	}
-
-	cmd.Flags().StringVar(&name, "name", "", "Device name")
-	cmd.Flags().StringVar(&acmeDirectoryURL, "acme-directory-url", "", "ACME directory URL override for custom PKI deployments (OIDC accounts only)")
-	cmd.Flags().StringVar(&cloudGRPC, "cloud-grpc", "", "Cloud/pki-core gRPC endpoint to use; limits the organization picker to this endpoint")
-	cmd.Flags().Int32Var(&orgID, "org", 0, "Organization ID override for legacy enrollment; OIDC enrollment uses the session's tenant")
+	cmd := newDeviceEnrollCmd()
+	cmd.Use = "enroll-device"
+	cmd.Hidden = false
+	cmd.Short = "Enroll the selected device with Wendy Cloud or a local pki-core"
+	cmd.Long = "Alias for 'wendy device enroll'. " + cmd.Long
 	return cmd
 }

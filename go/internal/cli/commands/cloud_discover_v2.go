@@ -134,6 +134,11 @@ func (d cloudDiscoveryDevice) info(ver *agentpb.GetAgentVersionResponse) any {
 		deviceType = humanReadableOSType(d.GetOsType(), d.GetArchitecture())
 	}
 	info := cloudDiscoverV2Info{ID: d.key, Name: d.GetName(), Type: deviceType, Address: d.GetIpAddress()}
+	if d.isLite() {
+		info.Type = liteDeviceType(info.Type)
+		info.Version = d.v2.GetOsVersion()
+		return info
+	}
 	if ver != nil {
 		if info.Type == "" {
 			info.Type = humanReadableDeviceType(ver.GetDeviceType())
@@ -146,9 +151,18 @@ func (d cloudDiscoveryDevice) info(ver *agentpb.GetAgentVersionResponse) any {
 	return info
 }
 
+// isLite reports whether the device is a Wendy Lite board. It has no WendyOS
+// agent, and its version is its firmware's, as Cloud records it.
+func (d cloudDiscoveryDevice) isLite() bool {
+	return d.v2 != nil && isLiteCloudAsset(d.v2)
+}
+
 func (d cloudDiscoveryDevice) connect(ctx context.Context, auth *config.AuthConfig, brokerURL string) (*grpcclient.AgentConnection, error) {
 	if d.legacy != nil {
 		return connectCloudAsset(ctx, auth, d.legacy, brokerURL)
+	}
+	if d.isLite() {
+		return nil, fmt.Errorf("%s is a Wendy Lite device; it has no WendyOS agent to reach through a cloud tunnel", d.GetName())
 	}
 	return connectCloudAssetV2(ctx, auth, d.v2, brokerURL)
 }

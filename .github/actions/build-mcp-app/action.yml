@@ -1,0 +1,14 @@
+name: Build embedded MCP app
+description: Generate the CLI UI from the committed frontend sources and lockfile.
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+      with:
+        node-version: '22'
+        cache: npm
+        cache-dependency-path: web-client/mcp-app/package-lock.json
+    - name: Generate embedded HTML
+      shell: bash
+      working-directory: ${{ github.workspace }}
+      run: make -C go mcp-app

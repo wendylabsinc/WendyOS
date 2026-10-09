@@ -19,6 +19,7 @@ var ErrAlreadyRunning = errors.New("VM is already running")
 // Meta is a VM's durable record, written once when it is created. Kept apart
 // from State so a stopped VM can still report where its image came from.
 type Meta struct {
+	Profile      string    `json:"profile,omitempty"`
 	Name         string    `json:"name"`
 	CreatedAt    time.Time `json:"createdAt"`
 	ImageVersion string    `json:"imageVersion,omitempty"`

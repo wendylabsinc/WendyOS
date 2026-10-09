@@ -84,6 +84,30 @@ message WendyComDeviceIdentity {
 
 message WendyComGetDeviceInfoParams {}
 
+// USB-only bootstrap challenge. The nonce is generated and retained on-device.
+message WendyComEnrollmentChallengeParams {
+    bool status_only = 1;
+}
+message WendyComEnrollmentChallenge {
+    string nonce_hex = 1;
+    bool enrolled = 2;
+    bool usb_trust_supported = 3; // accepts explicitly provisioned CA bundles
+    bool roughtime_supported = 4; // sync_time verifies device-nonce-bound replies
+    bool builtin_roots_ready = 5; // device and HTTPS CA bundles configured
+    bool builtin_tsa_roots_ready = 6;
+}
+
+
+// USB relay of one pinned server's reply to the current device challenge.
+message WendyComSyncTimeParams {
+    string server = 1; // pinned server that produced the reply, as "hostname:port"
+    bytes response = 2;
+}
+message WendyComSyncTimeResult {
+    bool synchronized = 1;
+    int64 unix_seconds = 2;
+}
+
 // Params for WENDY_COM_CMD_CONSOLE_ATTACH — start streaming console output as
 // WendyComConsoleData events carrying the given event_id. A repeated attach
 // with the same event_id refreshes the auto-detach deadline.
@@ -154,6 +178,8 @@ message WendyComCommand {
         wendy.lite.sensorlink.GetSensorManifest sensor_link_get_manifest = 16;
         wendy.lite.sensorlink.Subscribe         sensor_link_subscribe    = 17;
         wendy.lite.sensorlink.Unsubscribe       sensor_link_unsubscribe  = 18;
+        WendyComEnrollmentChallengeParams enrollment_challenge = 19;
+        WendyComSyncTimeParams sync_time = 20;
     }
 }
 
@@ -176,6 +202,8 @@ message WendyComResponse {
         WendyComDeviceIdentity   device_identity   = 3;
         WendyComDeviceInfo       device_info       = 4;
         wendy.lite.sensorlink.SensorManifest sensor_link_manifest = 5;
+        WendyComEnrollmentChallenge enrollment_challenge = 6;
+        WendyComSyncTimeResult sync_time = 7;
     }
 }
 

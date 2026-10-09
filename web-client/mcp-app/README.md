@@ -10,8 +10,21 @@ npm run build
 
 `build.mjs` bundles the official MCP Apps bridge, OpenAI Extensions, React,
 static device illustrations, styles, fonts and logos into
-`go/internal/cli/mcp/desktop_app.html`. Commit the generated HTML with source
-changes, then rebuild the CLI. Runtime scripts do not load from a CDN.
+`go/internal/cli/mcp/desktop_app.html`. This generated file is ignored by Git.
+Commit source and lockfile changes only. `make -C go build-cli`, the CLI build
+script, and CI generate the bundle before compiling it into the CLI. Node.js 22
+and npm are required when building from source; runtime scripts do not load from
+a CDN.
+
+For direct Go commands, generate the UI first from the repository root:
+
+```sh
+go generate ./go/internal/cli/mcp
+go build ./go/cmd/wendy
+```
+
+Run generation again after changing frontend sources or dependencies. Tests and
+vet through the Go Makefile also generate the UI.
 
 `node scripts/chatgpt-panel-preview.mjs` from the repository root serves a local
 host fixture. It is a development preview, not proof of ChatGPT host behavior.

@@ -75,6 +75,17 @@ func (g *RobotGateway) registerGatewaySimulators() {
 			if req.Params.Name == "simulator_start" {
 				ctx, cancel := context.WithTimeout(ctx, 30*time.Minute)
 				defer cancel()
+				if g.lifecycle.simulators.Start != nil {
+					info, err := g.lifecycle.simulators.Start(ctx, name)
+					if err != nil {
+						return simulatorFailure(err), nil
+					}
+					next := "simulator_viewer"
+					if vm.IsLiteProfile(info.Profile) {
+						next = "wendy run --device vm:" + name
+					}
+					return okResult(map[string]any{"name": name, "device": info.Device, "profile": info.Profile, "readiness": "verified", "next_step": next}), nil
+				}
 				conn, err := g.connect(ctx, "vm:"+name)
 				if err != nil {
 					return mcpgo.NewToolResultError("Simulator start was not confirmed: " + err.Error() + ". Refresh its status before retrying."), nil
