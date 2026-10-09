@@ -16,7 +16,7 @@ import (
 
 const maxTrustBundle = 16384
 
-// ProvisionTrust explicitly installs operator-supplied CA bundles in the USB
+// ProvisionTrust explicitly installs operator-supplied CA bundles in the device
 // configuration. No certificates received from an endpoint become trust roots.
 // Omitting all paths preserves compatibility with build-pinned firmware.
 func ProvisionTrust(cfg *litepb.WendyConfEnrollment, devicePath, tsaPath, httpsPath string) (*http.Client, error) {
@@ -24,7 +24,7 @@ func ProvisionTrust(cfg *litepb.WendyConfEnrollment, devicePath, tsaPath, httpsP
 		return http.DefaultClient, nil
 	}
 	if devicePath == "" || httpsPath == "" || (cfg.TimeUrl != "roughtime" && tsaPath == "") {
-		return nil, fmt.Errorf("USB trust provisioning requires --device-roots and --https-roots; RFC 3161 also requires --tsa-roots")
+		return nil, fmt.Errorf("trust bundle provisioning requires --device-roots and --https-roots; RFC 3161 also requires --tsa-roots")
 	}
 	bundles := make([][]byte, 3)
 	for i, path := range []string{devicePath, tsaPath, httpsPath} {
@@ -103,7 +103,7 @@ func CheckTrustSupport(cfg *litepb.WendyConfEnrollment, challenge *litepb.WendyC
 		return fmt.Errorf("firmware has no confirmed built-in CA bundles; supply --device-roots and --https-roots (also --tsa-roots for RFC 3161), or install firmware with pinned roots; no cloud asset was reserved")
 	}
 	if cfg.ProvisionTrust && !challenge.GetUsbTrustSupported() {
-		return fmt.Errorf("firmware does not support USB trust provisioning; update the board first")
+		return fmt.Errorf("firmware does not support trust bundle provisioning; update the board first")
 	}
 	return nil
 }
