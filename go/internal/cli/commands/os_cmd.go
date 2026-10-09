@@ -453,7 +453,8 @@ The device uses its in-house wendyos-update engine to apply the update.`,
 				}
 			}
 
-			if err := streamOSUpdate(ctx, conn, artifactURL, ""); err != nil {
+			recordCleared, err := applyOSUpdate(ctx, conn, artifactURL)
+			if err != nil {
 				return err
 			}
 
@@ -463,7 +464,7 @@ The device uses its in-house wendyos-update engine to apply the update.`,
 				return err
 			}
 			fmt.Println("Device is back online.")
-			return reportOSUpdateOutcome(ctx, deviceHost, preUpdateOSVersion)
+			return reportOSUpdateOutcome(ctx, deviceHost, preUpdateOSVersion, recordCleared)
 		},
 	}
 
@@ -707,11 +708,22 @@ func waitForDeviceOnline(ctx context.Context, host string) error {
 // previous update attempt for the one that just completed.
 const osUpdateResultMaxAge = 30 * time.Minute
 
+// applyOSUpdate streams the update to conn's agent. recordCleared reports
+// whether that agent drops its old status record once the update installs,
+// which every agent with the status RPC does; it is asked before the reboot.
+func applyOSUpdate(ctx context.Context, conn *grpcclient.AgentConnection, artifactURL string) (recordCleared bool, err error) {
+	probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	_, probeErr := conn.AgentService.GetOSUpdateStatus(probeCtx, &agentpb.GetOSUpdateStatusRequest{})
+	cancel()
+	recordCleared = status.Code(probeErr) != codes.Unimplemented
+	return recordCleared, streamOSUpdate(ctx, conn, artifactURL, "")
+}
+
 // reportOSUpdateOutcome queries the freshly booted device for the outcome of
 // the update (healthcheck verdict, rollback details) and prints it. It
 // returns a non-nil error when the update did not stick, so the command exits
-// non-zero.
-func reportOSUpdateOutcome(ctx context.Context, host, preUpdateOSVersion string) error {
+// non-zero. recordCleared comes from applyOSUpdate.
+func reportOSUpdateOutcome(ctx context.Context, host, preUpdateOSVersion string, recordCleared bool) error {
 	addr := hostPort(host, defaultAgentPort)
 
 	var resp *agentpb.GetOSUpdateStatusResponse
@@ -747,7 +759,7 @@ func reportOSUpdateOutcome(ctx context.Context, host, preUpdateOSVersion string)
 		}
 	}
 
-	msg, outcomeErr := evaluateOSUpdateOutcome(resp, rpcErr, preUpdateOSVersion, postUpdateOSVersion, time.Now())
+	msg, outcomeErr := evaluateOSUpdateOutcome(resp, rpcErr, preUpdateOSVersion, postUpdateOSVersion, recordCleared, time.Now())
 	fmt.Println(msg)
 	reportDriverAddonsAfterUpdate(ctx, host)
 	return outcomeErr
@@ -760,11 +772,16 @@ func evaluateOSUpdateOutcome(
 	resp *agentpb.GetOSUpdateStatusResponse,
 	rpcErr error,
 	preUpdateOSVersion, postUpdateOSVersion string,
+	recordCleared bool,
 	now time.Time,
 ) (string, error) {
+	// Record age uses the device clock, which an offline device cannot sync, so
+	// a cleared record is trusted instead when it starts from this update's
+	// version; one an earlier update left behind starts elsewhere.
+	thisUpdate := recordCleared && preUpdateOSVersion != "" && resp.GetOldOsVersion() == preUpdateOSVersion
 	usable := rpcErr == nil && resp.GetHasResult() &&
 		resp.GetOutcome() != agentpb.GetOSUpdateStatusResponse_OUTCOME_UNSPECIFIED &&
-		now.Sub(time.Unix(resp.GetCreatedAtUnix(), 0)) <= osUpdateResultMaxAge
+		(thisUpdate || now.Sub(time.Unix(resp.GetCreatedAtUnix(), 0)) <= osUpdateResultMaxAge)
 
 	if !usable {
 		// The device cannot report healthcheck results for this update — the
