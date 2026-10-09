@@ -288,9 +288,9 @@ func runV2DeviceUnenroll(ctx context.Context, conn *grpcclient.AgentConnection, 
 		}
 		return nil
 	}
-	// TODO(WDY-3585): Temporary intent confirmation while destructive CLI
-	// step-up interactions are discussed. This is NOT fresh-factor approval
-	// and cannot satisfy AAA or authorize normal-flow rollout.
+	// WORKAROUND(WDY-3585): Konstantin explicitly approved temporarily using
+	// intent confirmation without fresh-factor approval, including merge,
+	// while destructive CLI step-up interactions are discussed. This is NOT FIDO2.
 	// https://linear.app/wendylabsinc/issue/WDY-3585/clarify-approval-interactions-for-destructive-cli-actions
 	if !yes {
 		if !isInteractiveTerminal() {
