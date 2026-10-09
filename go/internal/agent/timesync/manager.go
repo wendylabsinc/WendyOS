@@ -2,6 +2,8 @@ package timesync
 
 import (
 	"context"
+	"fmt"
+	"math"
 	"net"
 	"sync"
 	"time"
@@ -17,6 +19,7 @@ type Manager struct {
 	configPath string
 	mu         sync.RWMutex
 	latest     *Consensus
+	floorMu    sync.Mutex
 
 	// Injection points for tests of time-sync loops. Nil means use the real
 	// network, clock write and retry timer, so a zero-value Manager still behaves.
@@ -49,6 +52,21 @@ func (m *Manager) after(d time.Duration) <-chan time.Time {
 		return m.sleep(d)
 	}
 	return time.After(d)
+}
+
+// persistConsensusFloor uses the lower end of the authenticated interval, not
+// its midpoint or the current wall clock. A serialized read/replace preserves
+// the maximum floor even when time sources complete concurrently.
+func (m *Manager) persistConsensusFloor(c Consensus, boot int64) error {
+	if !disciplinesClock(c) || c.Quorum < 2 || c.UpperOffsetNanos < c.LowerOffsetNanos || boot < 0 {
+		return fmt.Errorf("timesync: insufficient consensus for a durable floor")
+	}
+	if c.LowerOffsetNanos > math.MaxInt64-boot {
+		return fmt.Errorf("timesync: verified floor overflow")
+	}
+	m.floorMu.Lock()
+	defer m.floorMu.Unlock()
+	return advanceVerifiedFloor(m.configPath, time.Unix(0, boot+c.LowerOffsetNanos))
 }
 
 func (m *Manager) RecordConsensus(c Consensus) {
