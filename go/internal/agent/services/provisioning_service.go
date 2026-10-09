@@ -31,16 +31,30 @@ import (
 // new writes never populate it — the private key lives exclusively in
 // device-key.pem (mode 0o400) and is never written to provisioning.json.
 type provisioningState struct {
-	Enrolled         bool   `json:"enrolled"`
-	CloudHost        string `json:"cloudHost,omitempty"`
-	OrgID            int32  `json:"orgId,omitempty"`
-	AssetID          int32  `json:"assetId,omitempty"`
-	KeyPEM           string `json:"keyPem,omitempty"` // read-only: migration only; never written
-	CertPEM          string `json:"certPem,omitempty"`
-	ChainPEM         string `json:"chainPem,omitempty"`
-	PrincipalURI     string `json:"principalURI,omitempty"`
-	ACMEDirectoryURL string `json:"acmeDirectoryURL,omitempty"`
+	Enrolled         bool               `json:"enrolled"`
+	CloudHost        string             `json:"cloudHost,omitempty"`
+	OrgID            int32              `json:"orgId,omitempty"`
+	AssetID          int32              `json:"assetId,omitempty"`
+	KeyPEM           string             `json:"keyPem,omitempty"` // read-only: migration only; never written
+	CertPEM          string             `json:"certPem,omitempty"`
+	ChainPEM         string             `json:"chainPem,omitempty"`
+	PrincipalURI     string             `json:"principalURI,omitempty"`
+	ACMEDirectoryURL string             `json:"acmeDirectoryURL,omitempty"`
+	Unenrollment     *unenrollmentState `json:"unenrollment,omitempty"`
 }
+
+// Public recovery evidence lives in the existing provisioning state, never
+// alongside it in additional persistent files. Pending survives key cleanup;
+// completed is written only after all credential removals are durable.
+type unenrollmentState struct {
+	Status  string `json:"status"`
+	Receipt []byte `json:"receipt"`
+}
+
+const (
+	unenrollmentPending   = "pending"
+	unenrollmentCompleted = "completed"
+)
 
 type CloudDialer func(ctx context.Context, addr string) (*grpc.ClientConn, error)
 
@@ -426,8 +440,16 @@ func (s *ProvisioningService) unprovision(expectedPrincipal, expectedFingerprint
 // the device private key, the mounted PEM files, and the .provisioned marker.
 // A missing file is not treated as an error.
 func (s *ProvisioningService) clearStateFiles() error {
+	if err := os.Remove(s.statePath()); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("removing provisioning state: %w", err)
+	}
+	return s.clearCredentialFiles()
+}
+
+// PKI reset keeps provisioning.json as its durable recovery record while
+// removing the same credentials and markers as the numeric legacy path.
+func (s *ProvisioningService) clearCredentialFiles() error {
 	files := []string{
-		s.statePath(),
 		filepath.Join(s.configPath, "device-key.pem"),
 		filepath.Join(s.configPath, "device.pem"),
 		filepath.Join(s.configPath, "ca.pem"),

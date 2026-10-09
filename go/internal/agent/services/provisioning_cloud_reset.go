@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"time"
 
 	"github.com/google/uuid"
@@ -40,23 +39,61 @@ func validateResetBinding(record *unenrollproof.Completion) error {
 	}
 	return nil
 }
-func (s *ProvisioningService) resetPath(pending bool) string {
-	name := "unenrollment-completion.json"
-	if pending {
-		name = "unenrollment-pending.json"
+func (s *ProvisioningService) readProvisioningState() (*provisioningState, error) {
+	raw, err := os.ReadFile(s.statePath())
+	if err != nil {
+		return nil, err
 	}
-	return filepath.Join(s.configPath, name)
+	var state provisioningState
+	if err := json.Unmarshal(raw, &state); err != nil {
+		return nil, err
+	}
+	return &state, nil
 }
+
+func validateUnenrollmentState(state *provisioningState) (*unenrollproof.Completion, error) {
+	if state.Unenrollment == nil {
+		return nil, fmt.Errorf("reset authorization absent")
+	}
+	record, _, err := unenrollproof.ReadCompletion(state.Unenrollment.Receipt)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateResetBinding(record); err != nil {
+		return nil, err
+	}
+	switch state.Unenrollment.Status {
+	case unenrollmentPending:
+		if !state.Enrolled || state.PrincipalURI != record.Principal || state.CloudHost != record.Cloud || state.KeyPEM != "" {
+			return nil, fmt.Errorf("reset authorization disagrees with enrollment state")
+		}
+		leaves, _ := certs.ParseCertsFromPEM([]byte(state.CertPEM))
+		if len(leaves) == 0 || unenrollproof.Fingerprint(leaves[0]) != record.Fingerprint {
+			return nil, fmt.Errorf("reset authorization certificate changed")
+		}
+	case unenrollmentCompleted:
+		if state.Enrolled || state.CloudHost != "" || state.OrgID != 0 || state.AssetID != 0 || state.PrincipalURI != "" || state.KeyPEM != "" || state.CertPEM != "" || state.ChainPEM != "" || state.ACMEDirectoryURL != "" {
+			return nil, fmt.Errorf("completed reset retains enrollment state")
+		}
+	default:
+		return nil, fmt.Errorf("unknown reset recovery status")
+	}
+	return record, nil
+}
+
 func (s *ProvisioningService) pendingCloudReset() (*unenrollproof.Completion, error) {
-	raw, err := os.ReadFile(s.resetPath(true))
+	state, err := s.readProvisioningState()
 	if err != nil {
 		return nil, err
 	}
-	record, _, err := unenrollproof.ReadCompletion(raw)
+	record, err := validateUnenrollmentState(state)
 	if err != nil {
 		return nil, err
 	}
-	return record, validateResetBinding(record)
+	if state.Unenrollment.Status != unenrollmentPending {
+		return nil, fmt.Errorf("reset authorization is not pending")
+	}
+	return record, nil
 }
 func syncResetDirectory(path string) error {
 	dir, err := os.Open(path)
@@ -67,62 +104,69 @@ func syncResetDirectory(path string) error {
 	return dir.Sync()
 }
 func (s *ProvisioningService) finishCloudReset() error {
-	// A durable signed authorization precedes ALL key erasure. On a crash this
-	// same bounded cleanup is resumed at startup, before any enrollment is served.
-	if _, err := s.pendingCloudReset(); err != nil {
+	// provisioning.json must survive every partial credential removal. Only
+	// after cleanup and directory sync do we replace it with minimal public
+	// completed state; a crash earlier leaves the signed pending authorization.
+	state, err := s.readProvisioningState()
+	if err != nil {
 		return err
 	}
-	if err := s.clearStateFiles(); err != nil {
+	if _, err := validateUnenrollmentState(state); err != nil {
+		return err
+	}
+	if state.Unenrollment.Status != unenrollmentPending {
+		return fmt.Errorf("reset authorization is not pending")
+	}
+	if err := syncResetDirectory(s.configPath); err != nil {
+		return err
+	}
+	if err := s.clearCredentialFiles(); err != nil {
 		return err
 	}
 	if err := syncResetDirectory(s.configPath); err != nil {
 		return err
 	}
-	if err := os.Rename(s.resetPath(true), s.resetPath(false)); err != nil {
-		return err
-	}
-	return syncResetDirectory(s.configPath)
+	return s.saveState(&provisioningState{Unenrollment: &unenrollmentState{
+		Status: unenrollmentCompleted, Receipt: state.Unenrollment.Receipt,
+	}})
 }
 func (s *ProvisioningService) recoverCloudReset() error {
-	if _, err := os.Stat(s.resetPath(true)); os.IsNotExist(err) {
+	state, err := s.readProvisioningState()
+	if os.IsNotExist(err) {
 		return nil
-	} else if err != nil {
-		return err
 	}
-	record, err := s.pendingCloudReset()
 	if err != nil {
 		return err
 	}
-	if raw, err := os.ReadFile(s.statePath()); err == nil {
-		var state provisioningState
-		if json.Unmarshal(raw, &state) != nil || state.PrincipalURI != record.Principal || state.CloudHost != record.Cloud {
-			return fmt.Errorf("reset authorization disagrees with enrollment state")
-		}
-		leaves, _ := certs.ParseCertsFromPEM([]byte(state.CertPEM))
-		if len(leaves) == 0 || unenrollproof.Fingerprint(leaves[0]) != record.Fingerprint {
-			return fmt.Errorf("reset authorization certificate changed")
-		}
-	} else if !os.IsNotExist(err) {
+	if state.Unenrollment == nil {
+		return nil
+	}
+	if _, err := validateUnenrollmentState(state); err != nil {
 		return err
 	}
-	return s.finishCloudReset()
+	if state.Unenrollment.Status == unenrollmentPending {
+		return s.finishCloudReset()
+	}
+	return syncResetDirectory(s.configPath)
 }
 func (s *ProvisioningService) cloudCompletion() ([]byte, error) {
-	raw, err := os.ReadFile(s.resetPath(false))
+	state, err := s.readProvisioningState()
 	if os.IsNotExist(err) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	record, _, err := unenrollproof.ReadCompletion(raw)
-	if err != nil {
+	if state.Unenrollment == nil {
+		return nil, nil
+	}
+	if _, err := validateUnenrollmentState(state); err != nil {
 		return nil, err
 	}
-	if err := validateResetBinding(record); err != nil {
-		return nil, err
+	if state.Unenrollment.Status != unenrollmentCompleted {
+		return nil, fmt.Errorf("reset recovery is still pending")
 	}
-	return raw, nil
+	return state.Unenrollment.Receipt, nil
 }
 func (s *ProvisioningServiceV2) cloudUnprovision(ctx context.Context, req *agentpbv2.UnprovisionRequest) (*agentpbv2.UnprovisionResponse, error) {
 	svc := s.v1
@@ -173,7 +217,15 @@ func (s *ProvisioningServiceV2) cloudUnprovision(ctx context.Context, req *agent
 	}
 	receipt, err := unenrollproof.SignCompletion(record, signer)
 	if err == nil {
-		err = writeProvisioningState(svc.resetPath(true), receipt)
+		var state *provisioningState
+		state, err = svc.readProvisioningState()
+		if err == nil {
+			state.KeyPEM = ""
+			state.Unenrollment = &unenrollmentState{Status: unenrollmentPending, Receipt: receipt}
+			if _, err = validateUnenrollmentState(state); err == nil {
+				err = svc.saveState(state)
+			}
+		}
 	}
 	svc.mu.Unlock()
 	if err != nil {

@@ -150,7 +150,11 @@ func TestCloudResetDurableCompletionAndCrashResume(t *testing.T) {
 				if e == nil {
 					t.Fatal("expected interrupted cleanup")
 				}
-				if _, e := os.Stat(svc.resetPath(false)); !os.IsNotExist(e) {
+				persisted, err := svc.readProvisioningState()
+				if err != nil || persisted.Unenrollment == nil || persisted.Unenrollment.Status != unenrollmentPending {
+					t.Fatal("pending authorization lost during partial erasure", err)
+				}
+				if _, err := svc.cloudCompletion(); err == nil {
 					t.Fatal("completion published before erasure")
 				}
 				os.RemoveAll(filepath.Join(svc.configPath, ".provisioned"))
@@ -166,9 +170,29 @@ func TestCloudResetDurableCompletionAndCrashResume(t *testing.T) {
 			if e != nil || receipt.Principal != req.ExpectedPrincipalUri {
 				t.Fatal("missing authenticated completion", e)
 			}
-			for _, name := range []string{"provisioning.json", "device-key.pem", "acme-account-key.pem"} {
+			for _, name := range []string{"device-key.pem", "device.pem", "ca.pem", ".provisioned", "acme-account-key.pem"} {
 				if _, e := os.Stat(filepath.Join(svc.configPath, name)); !os.IsNotExist(e) {
 					t.Fatal("key survived", name, e)
+				}
+			}
+			persisted, err := recovered.readProvisioningState()
+			if err != nil || persisted.Unenrollment == nil || persisted.Unenrollment.Status != unenrollmentCompleted {
+				t.Fatal("completion not retained in existing provisioning state", err)
+			}
+			if _, err := validateUnenrollmentState(persisted); err != nil {
+				t.Fatal(err)
+			}
+			info, err := os.Stat(recovered.statePath())
+			if err != nil || info.Mode().Perm() != 0600 {
+				t.Fatal("unsafe state permissions", err)
+			}
+			entries, err := os.ReadDir(svc.configPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, entry := range entries {
+				if entry.Name() != "provisioning.json" && entry.Name() != "acme-revocation.json" {
+					t.Fatalf("additional persistent file: %s", entry.Name())
 				}
 			}
 			if data, e := os.ReadFile(historical); e != nil || string(data) != "historical evidence" {

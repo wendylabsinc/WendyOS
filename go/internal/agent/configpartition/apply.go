@@ -706,6 +706,24 @@ func applyPreProvisioning(logger *zap.Logger, cfgDir, configPath string) {
 		return
 	}
 
+	// Apply runs before Agent reset recovery. First-boot media must not
+	// overwrite its pending/completed authorization or recreate erased keys.
+	existing, readErr := os.ReadFile(filepath.Join(configPath, "provisioning.json"))
+	if readErr == nil {
+		var fields map[string]json.RawMessage
+		if json.Unmarshal(existing, &fields) != nil {
+			logger.Warn("Existing provisioning state is invalid; retaining first-boot provisioning for manual recovery")
+			return
+		}
+		if _, hasRecovery := fields["unenrollment"]; hasRecovery {
+			logger.Warn("Existing reset recovery state prevents applying first-boot provisioning")
+			return
+		}
+	} else if !os.IsNotExist(readErr) {
+		logger.Warn("Existing provisioning state is unreadable; refusing to overwrite it")
+		return
+	}
+
 	if err := services.WritePEMFiles(configPath, state.KeyPEM, state.CertPEM, state.ChainPEM); err != nil {
 		logger.Error("Failed to write PEM files from config partition",
 			zap.String("configPath", configPath), zap.Error(err))
