@@ -78,7 +78,12 @@ func serveMCPProxyConn(ctx context.Context, conn *grpcclient.AgentConnection, ap
 			n, readErr := tcpConn.Read(buf)
 			if n > 0 {
 				if sendErr := stream.Send(&agentpb.MCPChunk{Data: buf[:n]}); sendErr != nil {
-					errc <- sendErr
+					// Send's EOF means the server closed the RPC. The existing
+					// receive pump supplies its status; canceling it here can
+					// replace Unimplemented with a local HTTP EOF.
+					if sendErr != io.EOF {
+						errc <- sendErr
+					}
 					return
 				}
 			}

@@ -92,6 +92,20 @@ message Asset {
   // (WDY-2902).
   optional string pki_device_name = 35;
 
+  // Hardware facts the device reports about itself (WDY-3544), beside the
+  // older columns above (device_type = board model, architecture, cpu_cores,
+  // ram_mb, storage_gb, os_type, os_version). Absent means the device never
+  // reported it. Descriptive only: they authorize nothing.
+  // First /proc/device-tree/compatible entry naming the SoC, e.g. "nvidia,tegra264".
+  optional string soc_compatible = 36;
+  optional string serial_number = 37;
+  // uname -r.
+  optional string kernel_version = 38;
+  // NVIDIA L4T release, e.g. "38.2.0". Absent on non-NVIDIA boards.
+  optional string l4t_version = 39;
+  // Vendor-specific GPU architecture, e.g. "sm_110".
+  optional string gpu_arch = 40;
+
   google.protobuf.Timestamp created_at = 21;
   google.protobuf.Timestamp updated_at = 22;
 }
@@ -131,6 +145,11 @@ message CreateAssetRequest {
 
 message GetAssetRequest {
   string id = 1;
+  // Optional exact tenant/PKI selector; both required when id is empty.
+  // Authorized tombstones return NOT_FOUND with a typed DeletedAsset detail.
+  // Plain NOT_FOUND is never deletion proof.
+  optional string organization_id = 2;
+  optional string device_id = 3;
 }
 
 message UpdateAssetRequest {
@@ -164,6 +183,15 @@ message UpdateAssetRequest {
 
 message DeleteAssetRequest {
   string id = 1;
+  // Optional compare-and-delete guard for device unenrollment.
+  optional string expected_device_id = 2;
+}
+
+message DeletedAsset {
+  string id = 1;
+  string organization_id = 2;
+  string device_id = 3;
+  google.protobuf.Timestamp deleted_at = 4;
 }
 
 message DeleteAssetResponse {

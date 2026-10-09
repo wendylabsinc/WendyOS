@@ -706,6 +706,8 @@ func applyPreProvisioning(logger *zap.Logger, cfgDir, configPath string) {
 		return
 	}
 
+	// Flashing is an explicit local reset. Valid first-boot provisioning may
+	// replace prior recovery state; it does not perform Cloud cleanup.
 	if err := services.WritePEMFiles(configPath, state.KeyPEM, state.CertPEM, state.ChainPEM); err != nil {
 		logger.Error("Failed to write PEM files from config partition",
 			zap.String("configPath", configPath), zap.Error(err))

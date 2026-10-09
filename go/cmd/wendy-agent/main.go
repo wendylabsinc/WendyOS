@@ -288,7 +288,7 @@ func main() {
 	shellSvc := services.NewShellService(logger, hostexec.New())
 	audioSvc := services.NewAudioService(logger)
 
-	provisioningSvc := services.NewProvisioningService(logger, configPath)
+	provisioningSvc := services.NewProvisioningService(logger, configPath, timesyncMgr)
 	telemetrySvc := services.NewTelemetryService(logger, broadcaster, telemetryBuf)
 
 	deviceInfoSvc := services.NewDeviceInfoService(logger, hwDiscoverer)

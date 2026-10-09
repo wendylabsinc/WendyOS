@@ -31,6 +31,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/internal/shared/version"
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
+	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	"github.com/wendylabsinc/wendy/go/proto/gen/cloudpb"
 	commonpb "go.opentelemetry.io/proto/otlp/common/v1"
 	logspb "go.opentelemetry.io/proto/otlp/logs/v1"
@@ -41,6 +42,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
+	grpcpeer "google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 )
 
@@ -1145,19 +1147,26 @@ func capitalizeFirst(s string) string {
 func newDeviceUnenrollCmd() *cobra.Command {
 	var assumeYes bool
 	var cloudGRPC string
+	var uuidAssetID string
+	var checkOnly bool
 
 	cmd := &cobra.Command{
 		Use:   "unenroll",
 		Short: "Unenroll a device and remove it from Wendy Cloud",
-		Long: "Reverses 'wendy device enroll': deletes the device's enrollment certificates and " +
-			"provisioning state (the agent restarts into unprovisioned mode), then revokes the " +
-			"device's certificates and deletes its asset record in Wendy Cloud.",
+		Long: "Reverses 'wendy device enroll'. For direct PKI enrollment, verifies the exact Cloud " +
+			"binding, invokes Cloud-owned revocation/deletion, then verifies PKI proof and " +
+			"resets local state. Requires an updated Agent and directly verified mTLS connection. " +
+			"Numeric legacy enrollment retains its separate cleanup path.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 
-			conn, err := connectToAgent(ctx, SuppressProvisioningHint())
+			conn, err := connectToAgent(ctx, SuppressProvisioningHint(), SuppressUpdateCheck())
 			if err != nil {
-				return err
+				if completionErr := recoverCompletedV2Unenroll(ctx, cloudGRPC, uuidAssetID); completionErr == nil {
+					return nil
+				} else {
+					return fmt.Errorf("%w; prior-reset reconciliation: %v", err, completionErr)
+				}
 			}
 			defer conn.Close()
 
@@ -1169,11 +1178,31 @@ func newDeviceUnenrollCmd() *cobra.Command {
 			}
 			prov := provResp.GetProvisioned()
 			if prov == nil {
-				return fmt.Errorf("device is not provisioned")
+				v2State, readErr := agentpbv2.NewWendyProvisioningServiceClient(conn.Conn).IsProvisioned(ctx, &agentpbv2.IsProvisionedRequest{})
+				if readErr == nil && len(v2State.GetNotProvisioned().GetUnenrollmentCompletion()) != 0 {
+					return reconcileCompletedV2Unenroll(ctx, v2State.GetNotProvisioned().GetUnenrollmentCompletion(), cloudGRPC, uuidAssetID)
+				}
+				return fmt.Errorf("device is not provisioned; no authenticated unenrollment completion evidence")
 			}
 			cloudHost := prov.GetCloudHost()
 			orgID := prov.GetOrganizationId()
 			assetID := prov.GetAssetId()
+
+			// Numeric Cloud v1 keeps its original RPC path and caller context;
+			// it must not depend on a v2 Agent endpoint or the new timeout.
+			if !isLegacyCloudEnrollment(orgID, assetID) {
+				v2Ctx, cancel := context.WithTimeout(ctx, 3*time.Minute)
+				defer cancel()
+				var verifiedPeer grpcpeer.Peer
+				v2State, v2Err := agentpbv2.NewWendyProvisioningServiceClient(conn.Conn).IsProvisioned(v2Ctx, &agentpbv2.IsProvisionedRequest{}, grpc.Peer(&verifiedPeer))
+				if v2Err == nil && v2State.GetProvisioned().GetPrincipalUri() != "" {
+					return runV2DeviceUnenroll(v2Ctx, conn, v2State.GetProvisioned(), &verifiedPeer, cloudGRPC, uuidAssetID, assumeYes, checkOnly)
+				}
+				return fmt.Errorf("cannot safely identify this enrollment; refusing numeric legacy cleanup; update the Agent for v2 unenrollment")
+			}
+			if uuidAssetID != "" || checkOnly {
+				return fmt.Errorf("--asset-id and --check are for v2 UUID enrollments only")
+			}
 
 			if !assumeYes {
 				if !isInteractiveTerminal() {
@@ -1234,6 +1263,8 @@ func newDeviceUnenrollCmd() *cobra.Command {
 
 	cmd.Flags().BoolVar(&assumeYes, "yes", false, "Skip the confirmation prompt")
 	cmd.Flags().StringVar(&cloudGRPC, "cloud-grpc", "", "Cloud gRPC endpoint to use for cleanup (defaults to the device's enrolled cloud host)")
+	cmd.Flags().StringVar(&uuidAssetID, "asset-id", "", "Exact Cloud asset UUID for v2 cleanup (otherwise resolved from its authenticated PKI binding)")
+	cmd.Flags().BoolVar(&checkOnly, "check", false, "Check binding and existing ACME account lookup only; never revoke, delete, or reset")
 	return cmd
 }
 

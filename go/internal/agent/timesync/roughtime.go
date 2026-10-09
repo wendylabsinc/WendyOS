@@ -89,6 +89,22 @@ func (m *Manager) RunDirect(ctx context.Context) {
 			continue
 		}
 
+		boot, err := bootTimeNanos()
+		if err == nil && m.configPath != "" {
+			// Only fresh direct consensus advances the persistent floor. A
+			// multicast midpoint alone has no independent-quorum lower bound.
+			err = m.persistConsensusFloor(result, boot)
+		}
+		if err != nil {
+			if m.logger != nil {
+				m.logger.Warn("timesync: verified clock floor update failed; retrying", zap.Error(err))
+			}
+			if !m.waitBackoff(ctx, attempt) {
+				return
+			}
+			attempt++
+			continue
+		}
 		attempt = 0
 		if m.logger != nil {
 			m.logger.Info("timesync: synced via Roughtime",
@@ -96,7 +112,6 @@ func (m *Manager) RunDirect(ctx context.Context) {
 				zap.String("confidence", result.Confidence),
 				zap.Duration("uncertainty", time.Duration((result.UpperOffsetNanos-result.LowerOffsetNanos)/2)))
 		}
-		boot, _ := bootTimeNanos()
 		mid := result.LowerOffsetNanos + (result.UpperOffsetNanos-result.LowerOffsetNanos)/2
 		m.applyTime(time.Unix(0, boot+mid))
 

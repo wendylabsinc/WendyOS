@@ -33,6 +33,9 @@ func (s *ProvisioningServiceV2) StartACMEProvisioning(ctx context.Context, req *
 			svc.mu.Unlock()
 		}
 	}()
+	if svc.resetRecoveryErr != nil {
+		return nil, status.Error(codes.FailedPrecondition, "authorized reset recovery must finish before enrollment")
+	}
 	if svc.enrolled {
 		return nil, status.Error(codes.FailedPrecondition, "agent is already provisioned")
 	}

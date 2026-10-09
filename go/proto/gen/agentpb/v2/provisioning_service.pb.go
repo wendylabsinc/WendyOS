@@ -145,8 +145,10 @@ type NotProvisionedResponse struct {
 	// Absent on older agents; clients must not assume those agents can enroll.
 	// This is not a guarantee of network availability or successful issuance.
 	AcmeEnrollmentSupported *bool `protobuf:"varint,1,opt,name=acme_enrollment_supported,json=acmeEnrollmentSupported,proto3,oneof" json:"acme_enrollment_supported,omitempty"`
-	unknownFields           protoimpl.UnknownFields
-	sizeCache               protoimpl.SizeCache
+	// Public device-signed completion evidence, only after durable local erasure.
+	UnenrollmentCompletion []byte `protobuf:"bytes,2,opt,name=unenrollment_completion,json=unenrollmentCompletion,proto3" json:"unenrollment_completion,omitempty"`
+	unknownFields          protoimpl.UnknownFields
+	sizeCache              protoimpl.SizeCache
 }
 
 func (x *NotProvisionedResponse) Reset() {
@@ -186,15 +188,24 @@ func (x *NotProvisionedResponse) GetAcmeEnrollmentSupported() bool {
 	return false
 }
 
+func (x *NotProvisionedResponse) GetUnenrollmentCompletion() []byte {
+	if x != nil {
+		return x.UnenrollmentCompletion
+	}
+	return nil
+}
+
 type ProvisionedResponse struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
 	CloudHost      string                 `protobuf:"bytes,1,opt,name=cloud_host,json=cloudHost,proto3" json:"cloud_host,omitempty"`
 	OrganizationId int32                  `protobuf:"varint,2,opt,name=organization_id,json=organizationId,proto3" json:"organization_id,omitempty"`
 	AssetId        int32                  `protobuf:"varint,3,opt,name=asset_id,json=assetId,proto3" json:"asset_id,omitempty"`
 	// Set for direct PKI enrollment; legacy numeric IDs remain unset.
-	PrincipalUri  string `protobuf:"bytes,4,opt,name=principal_uri,json=principalUri,proto3" json:"principal_uri,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	PrincipalUri string `protobuf:"bytes,4,opt,name=principal_uri,json=principalUri,proto3" json:"principal_uri,omitempty"`
+	// Absent/false on agents without Cloud-owned guarded reset and recovery.
+	CloudUnenrollmentSupported bool `protobuf:"varint,5,opt,name=cloud_unenrollment_supported,json=cloudUnenrollmentSupported,proto3" json:"cloud_unenrollment_supported,omitempty"`
+	unknownFields              protoimpl.UnknownFields
+	sizeCache                  protoimpl.SizeCache
 }
 
 func (x *ProvisionedResponse) Reset() {
@@ -253,6 +264,13 @@ func (x *ProvisionedResponse) GetPrincipalUri() string {
 		return x.PrincipalUri
 	}
 	return ""
+}
+
+func (x *ProvisionedResponse) GetCloudUnenrollmentSupported() bool {
+	if x != nil {
+		return x.CloudUnenrollmentSupported
+	}
+	return false
 }
 
 type StartProvisioningRequest struct {
@@ -360,7 +378,14 @@ func (*StartProvisioningResponse) Descriptor() ([]byte, []int) {
 }
 
 type UnprovisionRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Required for direct PKI identities; checked atomically before reset.
+	ExpectedPrincipalUri      string `protobuf:"bytes,1,opt,name=expected_principal_uri,json=expectedPrincipalUri,proto3" json:"expected_principal_uri,omitempty"`
+	ExpectedCertificateSha256 string `protobuf:"bytes,2,opt,name=expected_certificate_sha256,json=expectedCertificateSha256,proto3" json:"expected_certificate_sha256,omitempty"`
+	// Issuer-signed OCSP revocation evidence for the exact installed leaf.
+	RevocationProof []byte `protobuf:"bytes,3,opt,name=revocation_proof,json=revocationProof,proto3" json:"revocation_proof,omitempty"`
+	// Serialized wendycloud.v2.DeletedAsset; exact tenant/device binding required.
+	CloudDeletion []byte `protobuf:"bytes,4,opt,name=cloud_deletion,json=cloudDeletion,proto3" json:"cloud_deletion,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -395,10 +420,39 @@ func (*UnprovisionRequest) Descriptor() ([]byte, []int) {
 	return file_wendy_agent_services_v2_provisioning_service_proto_rawDescGZIP(), []int{6}
 }
 
+func (x *UnprovisionRequest) GetExpectedPrincipalUri() string {
+	if x != nil {
+		return x.ExpectedPrincipalUri
+	}
+	return ""
+}
+
+func (x *UnprovisionRequest) GetExpectedCertificateSha256() string {
+	if x != nil {
+		return x.ExpectedCertificateSha256
+	}
+	return ""
+}
+
+func (x *UnprovisionRequest) GetRevocationProof() []byte {
+	if x != nil {
+		return x.RevocationProof
+	}
+	return nil
+}
+
+func (x *UnprovisionRequest) GetCloudDeletion() []byte {
+	if x != nil {
+		return x.CloudDeletion
+	}
+	return nil
+}
+
 type UnprovisionResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state                  protoimpl.MessageState `protogen:"open.v1"`
+	UnenrollmentCompletion []byte                 `protobuf:"bytes,1,opt,name=unenrollment_completion,json=unenrollmentCompletion,proto3" json:"unenrollment_completion,omitempty"`
+	unknownFields          protoimpl.UnknownFields
+	sizeCache              protoimpl.SizeCache
 }
 
 func (x *UnprovisionResponse) Reset() {
@@ -431,6 +485,125 @@ func (*UnprovisionResponse) Descriptor() ([]byte, []int) {
 	return file_wendy_agent_services_v2_provisioning_service_proto_rawDescGZIP(), []int{7}
 }
 
+func (x *UnprovisionResponse) GetUnenrollmentCompletion() []byte {
+	if x != nil {
+		return x.UnenrollmentCompletion
+	}
+	return nil
+}
+
+type RevokeACMECertificateRequest struct {
+	state                     protoimpl.MessageState `protogen:"open.v1"`
+	ExpectedPrincipalUri      string                 `protobuf:"bytes,1,opt,name=expected_principal_uri,json=expectedPrincipalUri,proto3" json:"expected_principal_uri,omitempty"`
+	ExpectedCertificateSha256 string                 `protobuf:"bytes,2,opt,name=expected_certificate_sha256,json=expectedCertificateSha256,proto3" json:"expected_certificate_sha256,omitempty"`
+	unknownFields             protoimpl.UnknownFields
+	sizeCache                 protoimpl.SizeCache
+}
+
+func (x *RevokeACMECertificateRequest) Reset() {
+	*x = RevokeACMECertificateRequest{}
+	mi := &file_wendy_agent_services_v2_provisioning_service_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RevokeACMECertificateRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RevokeACMECertificateRequest) ProtoMessage() {}
+
+func (x *RevokeACMECertificateRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_wendy_agent_services_v2_provisioning_service_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RevokeACMECertificateRequest.ProtoReflect.Descriptor instead.
+func (*RevokeACMECertificateRequest) Descriptor() ([]byte, []int) {
+	return file_wendy_agent_services_v2_provisioning_service_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *RevokeACMECertificateRequest) GetExpectedPrincipalUri() string {
+	if x != nil {
+		return x.ExpectedPrincipalUri
+	}
+	return ""
+}
+
+func (x *RevokeACMECertificateRequest) GetExpectedCertificateSha256() string {
+	if x != nil {
+		return x.ExpectedCertificateSha256
+	}
+	return ""
+}
+
+type RevokeACMECertificateResponse struct {
+	state             protoimpl.MessageState `protogen:"open.v1"`
+	PrincipalUri      string                 `protobuf:"bytes,1,opt,name=principal_uri,json=principalUri,proto3" json:"principal_uri,omitempty"`
+	CertificateSha256 string                 `protobuf:"bytes,2,opt,name=certificate_sha256,json=certificateSha256,proto3" json:"certificate_sha256,omitempty"`
+	CertificateSerial string                 `protobuf:"bytes,3,opt,name=certificate_serial,json=certificateSerial,proto3" json:"certificate_serial,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
+}
+
+func (x *RevokeACMECertificateResponse) Reset() {
+	*x = RevokeACMECertificateResponse{}
+	mi := &file_wendy_agent_services_v2_provisioning_service_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RevokeACMECertificateResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RevokeACMECertificateResponse) ProtoMessage() {}
+
+func (x *RevokeACMECertificateResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_wendy_agent_services_v2_provisioning_service_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RevokeACMECertificateResponse.ProtoReflect.Descriptor instead.
+func (*RevokeACMECertificateResponse) Descriptor() ([]byte, []int) {
+	return file_wendy_agent_services_v2_provisioning_service_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *RevokeACMECertificateResponse) GetPrincipalUri() string {
+	if x != nil {
+		return x.PrincipalUri
+	}
+	return ""
+}
+
+func (x *RevokeACMECertificateResponse) GetCertificateSha256() string {
+	if x != nil {
+		return x.CertificateSha256
+	}
+	return ""
+}
+
+func (x *RevokeACMECertificateResponse) GetCertificateSerial() string {
+	if x != nil {
+		return x.CertificateSerial
+	}
+	return ""
+}
+
 // EAB credentials are delivered once and must never be logged or returned.
 type StartACMEProvisioningRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -445,7 +618,7 @@ type StartACMEProvisioningRequest struct {
 
 func (x *StartACMEProvisioningRequest) Reset() {
 	*x = StartACMEProvisioningRequest{}
-	mi := &file_wendy_agent_services_v2_provisioning_service_proto_msgTypes[8]
+	mi := &file_wendy_agent_services_v2_provisioning_service_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -457,7 +630,7 @@ func (x *StartACMEProvisioningRequest) String() string {
 func (*StartACMEProvisioningRequest) ProtoMessage() {}
 
 func (x *StartACMEProvisioningRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_wendy_agent_services_v2_provisioning_service_proto_msgTypes[8]
+	mi := &file_wendy_agent_services_v2_provisioning_service_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -470,7 +643,7 @@ func (x *StartACMEProvisioningRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StartACMEProvisioningRequest.ProtoReflect.Descriptor instead.
 func (*StartACMEProvisioningRequest) Descriptor() ([]byte, []int) {
-	return file_wendy_agent_services_v2_provisioning_service_proto_rawDescGZIP(), []int{8}
+	return file_wendy_agent_services_v2_provisioning_service_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *StartACMEProvisioningRequest) GetCloudHost() string {
@@ -517,7 +690,7 @@ type StartACMEProvisioningResponse struct {
 
 func (x *StartACMEProvisioningResponse) Reset() {
 	*x = StartACMEProvisioningResponse{}
-	mi := &file_wendy_agent_services_v2_provisioning_service_proto_msgTypes[9]
+	mi := &file_wendy_agent_services_v2_provisioning_service_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -529,7 +702,7 @@ func (x *StartACMEProvisioningResponse) String() string {
 func (*StartACMEProvisioningResponse) ProtoMessage() {}
 
 func (x *StartACMEProvisioningResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_wendy_agent_services_v2_provisioning_service_proto_msgTypes[9]
+	mi := &file_wendy_agent_services_v2_provisioning_service_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -542,7 +715,7 @@ func (x *StartACMEProvisioningResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StartACMEProvisioningResponse.ProtoReflect.Descriptor instead.
 func (*StartACMEProvisioningResponse) Descriptor() ([]byte, []int) {
-	return file_wendy_agent_services_v2_provisioning_service_proto_rawDescGZIP(), []int{9}
+	return file_wendy_agent_services_v2_provisioning_service_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *StartACMEProvisioningResponse) GetPrincipalUri() string {
@@ -561,25 +734,39 @@ const file_wendy_agent_services_v2_provisioning_service_proto_rawDesc = "" +
 	"\x15IsProvisionedResponse\x12Z\n" +
 	"\x0fnot_provisioned\x18\x01 \x01(\v2/.wendy.agent.services.v2.NotProvisionedResponseH\x00R\x0enotProvisioned\x12P\n" +
 	"\vprovisioned\x18\x02 \x01(\v2,.wendy.agent.services.v2.ProvisionedResponseH\x00R\vprovisionedB\x0f\n" +
-	"\rresponse_type\"w\n" +
+	"\rresponse_type\"\xb0\x01\n" +
 	"\x16NotProvisionedResponse\x12?\n" +
-	"\x19acme_enrollment_supported\x18\x01 \x01(\bH\x00R\x17acmeEnrollmentSupported\x88\x01\x01B\x1c\n" +
-	"\x1a_acme_enrollment_supported\"\x9d\x01\n" +
+	"\x19acme_enrollment_supported\x18\x01 \x01(\bH\x00R\x17acmeEnrollmentSupported\x88\x01\x01\x127\n" +
+	"\x17unenrollment_completion\x18\x02 \x01(\fR\x16unenrollmentCompletionB\x1c\n" +
+	"\x1a_acme_enrollment_supported\"\xdf\x01\n" +
 	"\x13ProvisionedResponse\x12\x1d\n" +
 	"\n" +
 	"cloud_host\x18\x01 \x01(\tR\tcloudHost\x12'\n" +
 	"\x0forganization_id\x18\x02 \x01(\x05R\x0eorganizationId\x12\x19\n" +
 	"\basset_id\x18\x03 \x01(\x05R\aassetId\x12#\n" +
-	"\rprincipal_uri\x18\x04 \x01(\tR\fprincipalUri\"\xa8\x01\n" +
+	"\rprincipal_uri\x18\x04 \x01(\tR\fprincipalUri\x12@\n" +
+	"\x1ccloud_unenrollment_supported\x18\x05 \x01(\bR\x1acloudUnenrollmentSupported\"\xa8\x01\n" +
 	"\x18StartProvisioningRequest\x12'\n" +
 	"\x0forganization_id\x18\x01 \x01(\x05R\x0eorganizationId\x12)\n" +
 	"\x10enrollment_token\x18\x02 \x01(\tR\x0fenrollmentToken\x12\x1d\n" +
 	"\n" +
 	"cloud_host\x18\x03 \x01(\tR\tcloudHost\x12\x19\n" +
 	"\basset_id\x18\x04 \x01(\x05R\aassetId\"\x1b\n" +
-	"\x19StartProvisioningResponse\"\x14\n" +
-	"\x12UnprovisionRequest\"\x15\n" +
-	"\x13UnprovisionResponse\"\xbf\x01\n" +
+	"\x19StartProvisioningResponse\"\xdc\x01\n" +
+	"\x12UnprovisionRequest\x124\n" +
+	"\x16expected_principal_uri\x18\x01 \x01(\tR\x14expectedPrincipalUri\x12>\n" +
+	"\x1bexpected_certificate_sha256\x18\x02 \x01(\tR\x19expectedCertificateSha256\x12)\n" +
+	"\x10revocation_proof\x18\x03 \x01(\fR\x0frevocationProof\x12%\n" +
+	"\x0ecloud_deletion\x18\x04 \x01(\fR\rcloudDeletion\"N\n" +
+	"\x13UnprovisionResponse\x127\n" +
+	"\x17unenrollment_completion\x18\x01 \x01(\fR\x16unenrollmentCompletion\"\x94\x01\n" +
+	"\x1cRevokeACMECertificateRequest\x124\n" +
+	"\x16expected_principal_uri\x18\x01 \x01(\tR\x14expectedPrincipalUri\x12>\n" +
+	"\x1bexpected_certificate_sha256\x18\x02 \x01(\tR\x19expectedCertificateSha256\"\xa2\x01\n" +
+	"\x1dRevokeACMECertificateResponse\x12#\n" +
+	"\rprincipal_uri\x18\x01 \x01(\tR\fprincipalUri\x12-\n" +
+	"\x12certificate_sha256\x18\x02 \x01(\tR\x11certificateSha256\x12-\n" +
+	"\x12certificate_serial\x18\x03 \x01(\tR\x11certificateSerial\"\xbf\x01\n" +
 	"\x1cStartACMEProvisioningRequest\x12\x1d\n" +
 	"\n" +
 	"cloud_host\x18\x01 \x01(\tR\tcloudHost\x12#\n" +
@@ -590,12 +777,14 @@ const file_wendy_agent_services_v2_provisioning_service_proto_rawDesc = "" +
 	"\feab_hmac_key\x18\x05 \x01(\tR\n" +
 	"eabHmacKey\"D\n" +
 	"\x1dStartACMEProvisioningResponse\x12#\n" +
-	"\rprincipal_uri\x18\x01 \x01(\tR\fprincipalUri2\xf9\x03\n" +
+	"\rprincipal_uri\x18\x01 \x01(\tR\fprincipalUri2\x93\x06\n" +
 	"\x18WendyProvisioningService\x12z\n" +
 	"\x11StartProvisioning\x121.wendy.agent.services.v2.StartProvisioningRequest\x1a2.wendy.agent.services.v2.StartProvisioningResponse\x12\x86\x01\n" +
 	"\x15StartACMEProvisioning\x125.wendy.agent.services.v2.StartACMEProvisioningRequest\x1a6.wendy.agent.services.v2.StartACMEProvisioningResponse\x12n\n" +
 	"\rIsProvisioned\x12-.wendy.agent.services.v2.IsProvisionedRequest\x1a..wendy.agent.services.v2.IsProvisionedResponse\x12h\n" +
-	"\vUnprovision\x12+.wendy.agent.services.v2.UnprovisionRequest\x1a,.wendy.agent.services.v2.UnprovisionResponseB>Z<github.com/wendylabsinc/wendy/proto/gen/agentpb/v2;agentpbv2b\x06proto3"
+	"\vUnprovision\x12+.wendy.agent.services.v2.UnprovisionRequest\x1a,.wendy.agent.services.v2.UnprovisionResponse\x12\x8b\x01\n" +
+	"\x15RevokeACMECertificate\x125.wendy.agent.services.v2.RevokeACMECertificateRequest\x1a6.wendy.agent.services.v2.RevokeACMECertificateResponse\"\x03\x88\x02\x01\x12\x89\x01\n" +
+	"\x13CheckACMERevocation\x125.wendy.agent.services.v2.RevokeACMECertificateRequest\x1a6.wendy.agent.services.v2.RevokeACMECertificateResponse\"\x03\x88\x02\x01B>Z<github.com/wendylabsinc/wendy/proto/gen/agentpb/v2;agentpbv2b\x06proto3"
 
 var (
 	file_wendy_agent_services_v2_provisioning_service_proto_rawDescOnce sync.Once
@@ -609,7 +798,7 @@ func file_wendy_agent_services_v2_provisioning_service_proto_rawDescGZIP() []byt
 	return file_wendy_agent_services_v2_provisioning_service_proto_rawDescData
 }
 
-var file_wendy_agent_services_v2_provisioning_service_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
+var file_wendy_agent_services_v2_provisioning_service_proto_msgTypes = make([]protoimpl.MessageInfo, 12)
 var file_wendy_agent_services_v2_provisioning_service_proto_goTypes = []any{
 	(*IsProvisionedRequest)(nil),          // 0: wendy.agent.services.v2.IsProvisionedRequest
 	(*IsProvisionedResponse)(nil),         // 1: wendy.agent.services.v2.IsProvisionedResponse
@@ -619,25 +808,31 @@ var file_wendy_agent_services_v2_provisioning_service_proto_goTypes = []any{
 	(*StartProvisioningResponse)(nil),     // 5: wendy.agent.services.v2.StartProvisioningResponse
 	(*UnprovisionRequest)(nil),            // 6: wendy.agent.services.v2.UnprovisionRequest
 	(*UnprovisionResponse)(nil),           // 7: wendy.agent.services.v2.UnprovisionResponse
-	(*StartACMEProvisioningRequest)(nil),  // 8: wendy.agent.services.v2.StartACMEProvisioningRequest
-	(*StartACMEProvisioningResponse)(nil), // 9: wendy.agent.services.v2.StartACMEProvisioningResponse
+	(*RevokeACMECertificateRequest)(nil),  // 8: wendy.agent.services.v2.RevokeACMECertificateRequest
+	(*RevokeACMECertificateResponse)(nil), // 9: wendy.agent.services.v2.RevokeACMECertificateResponse
+	(*StartACMEProvisioningRequest)(nil),  // 10: wendy.agent.services.v2.StartACMEProvisioningRequest
+	(*StartACMEProvisioningResponse)(nil), // 11: wendy.agent.services.v2.StartACMEProvisioningResponse
 }
 var file_wendy_agent_services_v2_provisioning_service_proto_depIdxs = []int32{
-	2, // 0: wendy.agent.services.v2.IsProvisionedResponse.not_provisioned:type_name -> wendy.agent.services.v2.NotProvisionedResponse
-	3, // 1: wendy.agent.services.v2.IsProvisionedResponse.provisioned:type_name -> wendy.agent.services.v2.ProvisionedResponse
-	4, // 2: wendy.agent.services.v2.WendyProvisioningService.StartProvisioning:input_type -> wendy.agent.services.v2.StartProvisioningRequest
-	8, // 3: wendy.agent.services.v2.WendyProvisioningService.StartACMEProvisioning:input_type -> wendy.agent.services.v2.StartACMEProvisioningRequest
-	0, // 4: wendy.agent.services.v2.WendyProvisioningService.IsProvisioned:input_type -> wendy.agent.services.v2.IsProvisionedRequest
-	6, // 5: wendy.agent.services.v2.WendyProvisioningService.Unprovision:input_type -> wendy.agent.services.v2.UnprovisionRequest
-	5, // 6: wendy.agent.services.v2.WendyProvisioningService.StartProvisioning:output_type -> wendy.agent.services.v2.StartProvisioningResponse
-	9, // 7: wendy.agent.services.v2.WendyProvisioningService.StartACMEProvisioning:output_type -> wendy.agent.services.v2.StartACMEProvisioningResponse
-	1, // 8: wendy.agent.services.v2.WendyProvisioningService.IsProvisioned:output_type -> wendy.agent.services.v2.IsProvisionedResponse
-	7, // 9: wendy.agent.services.v2.WendyProvisioningService.Unprovision:output_type -> wendy.agent.services.v2.UnprovisionResponse
-	6, // [6:10] is the sub-list for method output_type
-	2, // [2:6] is the sub-list for method input_type
-	2, // [2:2] is the sub-list for extension type_name
-	2, // [2:2] is the sub-list for extension extendee
-	0, // [0:2] is the sub-list for field type_name
+	2,  // 0: wendy.agent.services.v2.IsProvisionedResponse.not_provisioned:type_name -> wendy.agent.services.v2.NotProvisionedResponse
+	3,  // 1: wendy.agent.services.v2.IsProvisionedResponse.provisioned:type_name -> wendy.agent.services.v2.ProvisionedResponse
+	4,  // 2: wendy.agent.services.v2.WendyProvisioningService.StartProvisioning:input_type -> wendy.agent.services.v2.StartProvisioningRequest
+	10, // 3: wendy.agent.services.v2.WendyProvisioningService.StartACMEProvisioning:input_type -> wendy.agent.services.v2.StartACMEProvisioningRequest
+	0,  // 4: wendy.agent.services.v2.WendyProvisioningService.IsProvisioned:input_type -> wendy.agent.services.v2.IsProvisionedRequest
+	6,  // 5: wendy.agent.services.v2.WendyProvisioningService.Unprovision:input_type -> wendy.agent.services.v2.UnprovisionRequest
+	8,  // 6: wendy.agent.services.v2.WendyProvisioningService.RevokeACMECertificate:input_type -> wendy.agent.services.v2.RevokeACMECertificateRequest
+	8,  // 7: wendy.agent.services.v2.WendyProvisioningService.CheckACMERevocation:input_type -> wendy.agent.services.v2.RevokeACMECertificateRequest
+	5,  // 8: wendy.agent.services.v2.WendyProvisioningService.StartProvisioning:output_type -> wendy.agent.services.v2.StartProvisioningResponse
+	11, // 9: wendy.agent.services.v2.WendyProvisioningService.StartACMEProvisioning:output_type -> wendy.agent.services.v2.StartACMEProvisioningResponse
+	1,  // 10: wendy.agent.services.v2.WendyProvisioningService.IsProvisioned:output_type -> wendy.agent.services.v2.IsProvisionedResponse
+	7,  // 11: wendy.agent.services.v2.WendyProvisioningService.Unprovision:output_type -> wendy.agent.services.v2.UnprovisionResponse
+	9,  // 12: wendy.agent.services.v2.WendyProvisioningService.RevokeACMECertificate:output_type -> wendy.agent.services.v2.RevokeACMECertificateResponse
+	9,  // 13: wendy.agent.services.v2.WendyProvisioningService.CheckACMERevocation:output_type -> wendy.agent.services.v2.RevokeACMECertificateResponse
+	8,  // [8:14] is the sub-list for method output_type
+	2,  // [2:8] is the sub-list for method input_type
+	2,  // [2:2] is the sub-list for extension type_name
+	2,  // [2:2] is the sub-list for extension extendee
+	0,  // [0:2] is the sub-list for field type_name
 }
 
 func init() { file_wendy_agent_services_v2_provisioning_service_proto_init() }
@@ -656,7 +851,7 @@ func file_wendy_agent_services_v2_provisioning_service_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_wendy_agent_services_v2_provisioning_service_proto_rawDesc), len(file_wendy_agent_services_v2_provisioning_service_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   10,
+			NumMessages:   12,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

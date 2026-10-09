@@ -11,6 +11,11 @@ service WendyProvisioningService {
     // stored enrollment certificates and provisioning state, then restarts the
     // agent so it comes back up serving plaintext on the unprovisioned port.
     rpc Unprovision(UnprovisionRequest) returns (UnprovisionResponse);
+    // Deprecated prerelease path: Cloud now owns revocation.
+    // Always returns UNIMPLEMENTED; not an alternate unenrollment workflow.
+    rpc RevokeACMECertificate(RevokeACMECertificateRequest) returns (RevokeACMECertificateResponse) { option deprecated = true; }
+    // Deprecated prerelease account probe. Always returns UNIMPLEMENTED.
+    rpc CheckACMERevocation(RevokeACMECertificateRequest) returns (RevokeACMECertificateResponse) { option deprecated = true; }
 }
 
 message IsProvisionedRequest {}
@@ -27,6 +32,8 @@ message NotProvisionedResponse {
     // Absent on older agents; clients must not assume those agents can enroll.
     // This is not a guarantee of network availability or successful issuance.
     optional bool acme_enrollment_supported = 1;
+    // Public device-signed completion evidence, only after durable local erasure.
+    bytes unenrollment_completion = 2;
 }
 
 message ProvisionedResponse {
@@ -35,6 +42,8 @@ message ProvisionedResponse {
     int32 asset_id = 3;
     // Set for direct PKI enrollment; legacy numeric IDs remain unset.
     string principal_uri = 4;
+    // Absent/false on agents without Cloud-owned guarded reset and recovery.
+    bool cloud_unenrollment_supported = 5;
 }
 
 message StartProvisioningRequest {
@@ -46,9 +55,30 @@ message StartProvisioningRequest {
 
 message StartProvisioningResponse {}
 
-message UnprovisionRequest {}
+message UnprovisionRequest {
+    // Required for direct PKI identities; checked atomically before reset.
+    string expected_principal_uri = 1;
+    string expected_certificate_sha256 = 2;
+    // Issuer-signed OCSP revocation evidence for the exact installed leaf.
+    bytes revocation_proof = 3;
+    // Serialized wendycloud.v2.DeletedAsset; exact tenant/device binding required.
+    bytes cloud_deletion = 4;
+}
 
-message UnprovisionResponse {}
+message UnprovisionResponse {
+    bytes unenrollment_completion = 1;
+}
+
+message RevokeACMECertificateRequest {
+    string expected_principal_uri = 1;
+    string expected_certificate_sha256 = 2;
+}
+
+message RevokeACMECertificateResponse {
+    string principal_uri = 1;
+    string certificate_sha256 = 2;
+    string certificate_serial = 3;
+}
 
 // EAB credentials are delivered once and must never be logged or returned.
 message StartACMEProvisioningRequest {

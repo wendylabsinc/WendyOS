@@ -378,6 +378,40 @@ func TestApplyPreProvisioning_Success(t *testing.T) {
 	}
 }
 
+func TestApplyPreProvisioningFlashReplacesResetRecovery(t *testing.T) {
+	for _, existing := range []string{
+		`{"enrolled":true,"unenrollment":{"status":"pending","receipt":"public-evidence"}}`,
+		`{"enrolled":false,"unenrollment":{"status":"completed","receipt":"public-evidence"}}`,
+		`{"unenrollment":null}`,
+		`invalid existing state`,
+	} {
+		t.Run(existing, func(t *testing.T) {
+			cfgDir, configPath := t.TempDir(), t.TempDir()
+			media := []byte(`{"enrolled":true,"cloudHost":"cloud.example","keyPem":"fixture-key","certPem":"fixture-cert","chainPem":"fixture-chain"}`)
+			if err := os.WriteFile(filepath.Join(cfgDir, "provisioning.json"), media, 0600); err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(configPath, "provisioning.json")
+			if err := os.WriteFile(path, []byte(existing), 0600); err != nil {
+				t.Fatal(err)
+			}
+			applyPreProvisioning(zap.NewNop(), cfgDir, configPath)
+			got, err := os.ReadFile(path)
+			if err != nil || string(got) != string(media) {
+				t.Fatal("flash provisioning did not replace old local state", err)
+			}
+			for _, name := range []string{"device-key.pem", "device.pem", "ca.pem", ".provisioned"} {
+				if _, err := os.Stat(filepath.Join(configPath, name)); err != nil {
+					t.Fatalf("first-boot credential missing: %s: %v", name, err)
+				}
+			}
+			if _, err := os.Stat(filepath.Join(cfgDir, "provisioning.json")); !os.IsNotExist(err) {
+				t.Fatal("first-boot source not consumed", err)
+			}
+		})
+	}
+}
+
 func TestApplyPreProvisioning_NoFile(t *testing.T) {
 	logger, _ := zap.NewDevelopment()
 	applyPreProvisioning(logger, t.TempDir(), t.TempDir()) // must not panic
