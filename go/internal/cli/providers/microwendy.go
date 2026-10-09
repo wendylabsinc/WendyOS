@@ -23,6 +23,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/discovery"
 	"github.com/wendylabsinc/wendy/go/internal/shared/models"
 	"github.com/wendylabsinc/wendy/go/proto/gen/litepb"
+	"google.golang.org/grpc"
 )
 
 const (
@@ -168,6 +169,7 @@ func (p *MicroWendyProvider) mdnsExternalDevice(svc discovery.MDNSService) model
 			"ip":       svc.IPAddress,
 			"port":     fmt.Sprintf("%d", svc.Port),
 			"mtls":     fmt.Sprintf("%t", svc.TXTRecords["mtls"] == "true"),
+			"tenantId": svc.TXTRecords["tenant"],
 		},
 		IsWendyDevice: true,
 	}
@@ -574,7 +576,15 @@ type AppRequirementsUnsupportedError struct {
 }
 
 func (e *AppRequirementsUnsupportedError) Error() string {
-	return fmt.Sprintf("device %s does not support %s", e.Device.DisplayName, e.Missing)
+	message := fmt.Sprintf("device %s does not support %s", e.Device.DisplayName, e.Missing)
+	if strings.HasPrefix(e.Device.ID, "vm:") {
+		profile := "wendy-lite"
+		if e.Missing == "native apps" {
+			profile = "wendy-lite-native"
+		}
+		message += fmt.Sprintf("; create a compatible simulator with 'wendy vm create <name> --profile %s', then run with 'wendy run --device vm:<name>'", profile)
+	}
+	return message
 }
 
 // MissingWendyCoreError lets the CLI offer to configure an ESP-IDF project.
@@ -897,9 +907,22 @@ func (p *MicroWendyProvider) ConnectSensorLink(device models.ExternalDevice) (*l
 	return p.connectClient(device)
 }
 
+// ConnectEnrollment opens the selected connection for enrollment and status
+// checks. Firmware controls whether enrollment is allowed on this transport.
+// The caller must close the client.
+func (p *MicroWendyProvider) ConnectEnrollment(device models.ExternalDevice) (*liteclient.WendyLiteClient, error) {
+	return p.connectClient(device)
+}
+
+// CloudRelayDialer opens the Wendy Cloud connection that a "Cloud" device's
+// relay runs over, already set up with the user's Cloud credentials, and the
+// context whose call metadata carries them. The commands package owns Cloud
+// sessions and sets it; this package cannot import commands.
+var CloudRelayDialer func(ctx context.Context, device models.ExternalDevice) (*grpc.ClientConn, context.Context, error)
+
 // connectClient opens a WendyLiteClient connection to the device over serial,
-// LAN or BLE (with mTLS when the device advertises it). The caller must Close
-// the client.
+// LAN or BLE (with mTLS when the device advertises it), or through the Wendy
+// Cloud relay. The caller must Close the client.
 func (p *MicroWendyProvider) connectClient(device models.ExternalDevice) (*liteclient.WendyLiteClient, error) {
 	client := liteclient.NewWendyLiteClient()
 	switch device.ConnectionInfo["type"] {
@@ -919,8 +942,21 @@ func (p *MicroWendyProvider) connectClient(device models.ExternalDevice) (*litec
 		}
 		addr := net.JoinHostPort(ip, port)
 		if device.ConnectionInfo["mtls"] == "true" {
-			if err := connectWithCLIIdentities(func(cert tls.Certificate, rootCAs x509.CertPool) error {
-				return client.ConnectWithMutualAuthentication(addr, cert, rootCAs)
+			if err := connectWithCLIIdentities(func(cert tls.Certificate, rootCAs x509.CertPool, chain string) error {
+				if tenant := device.ConnectionInfo["tenantId"]; tenant != "" {
+					leaf, err := x509.ParseCertificate(cert.Certificate[0])
+					if err != nil {
+						return err
+					}
+					identity, ok, err := certs.IdentityFromCert(leaf)
+					if err != nil {
+						return err
+					}
+					if !ok || identity.TenantUUID != tenant {
+						return fmt.Errorf("client identity does not match advertised PKI tenant; sign in to the board's organization with wendy auth login --email <email>")
+					}
+				}
+				return client.ConnectWithPKIAuthentication(addr, cert, chain, device.ConnectionInfo["deviceId"])
 			}); err != nil {
 				return nil, err
 			}
@@ -939,7 +975,7 @@ func (p *MicroWendyProvider) connectClient(device models.ExternalDevice) (*litec
 		psm64, _ := strconv.ParseUint(device.ConnectionInfo["psm"], 10, 16)
 		psm := uint16(psm64)
 		if device.ConnectionInfo["mtls"] == "true" {
-			if err := connectWithCLIIdentities(func(cert tls.Certificate, rootCAs x509.CertPool) error {
+			if err := connectWithCLIIdentities(func(cert tls.Certificate, rootCAs x509.CertPool, chain string) error {
 				return client.ConnectViaBLEWithMutualAuthentication(address, psm, cert, rootCAs)
 			}); err != nil {
 				return nil, err
@@ -948,6 +984,21 @@ func (p *MicroWendyProvider) connectClient(device models.ExternalDevice) (*litec
 			if err := client.ConnectViaBLEInsecure(address, psm); err != nil {
 				return nil, fmt.Errorf("connect to device over BLE: %w", err)
 			}
+		}
+	case "Cloud":
+		assetID := device.ConnectionInfo["assetId"]
+		if assetID == "" {
+			return nil, fmt.Errorf("wendy-lite provider: missing Cloud asset ID in connection info")
+		}
+		if CloudRelayDialer == nil {
+			return nil, fmt.Errorf("wendy-lite provider: Wendy Cloud connections are not available")
+		}
+		cc, ctx, err := CloudRelayDialer(context.Background(), device)
+		if err != nil {
+			return nil, fmt.Errorf("connect to device via Wendy Cloud: %w", err)
+		}
+		if err := client.ConnectViaRelay(ctx, cc, assetID); err != nil {
+			return nil, fmt.Errorf("connect to device via Wendy Cloud: %w", err)
 		}
 	default:
 		return nil, fmt.Errorf("wendy-lite provider: unsupported connection type: %s", device.ConnectionInfo["type"])
@@ -960,7 +1011,7 @@ func (p *MicroWendyProvider) connectClient(device models.ExternalDevice) (*litec
 // the device's issuer. It reports the failures of every identity it tried:
 // with one certificate per organization, "which one was this device enrolled
 // with" is exactly what the reader needs to see.
-func connectWithCLIIdentities(connect func(cert tls.Certificate, rootCAs x509.CertPool) error) error {
+func connectWithCLIIdentities(connect func(cert tls.Certificate, rootCAs x509.CertPool, chain string) error) error {
 	certInfos, err := loadAllCLICerts()
 	if err != nil {
 		return fmt.Errorf("wendy-lite provider: loading mTLS certs: %w", err)
@@ -971,13 +1022,13 @@ func connectWithCLIIdentities(connect func(cert tls.Certificate, rootCAs x509.Ce
 		if err != nil {
 			return fmt.Errorf("wendy-lite provider: loading client key: %w", err)
 		}
-		cert, err := tls.X509KeyPair([]byte(certInfo.PemCertificate), []byte(keyPEM))
+		cert, err := certs.TLSKeyPair(certInfo.PemCertificate, certInfo.PemCertificateChain, keyPEM)
 		if err != nil {
 			return fmt.Errorf("wendy-lite provider: parsing mTLS cert: %w", err)
 		}
 		rootCAs := x509.NewCertPool()
 		certs.AppendChainToPool(rootCAs, certInfo.PemCertificateChain)
-		if err := connect(cert, *rootCAs); err != nil {
+		if err := connect(cert, *rootCAs, certInfo.PemCertificateChain); err != nil {
 			connectErrs = append(connectErrs, err)
 			continue
 		}

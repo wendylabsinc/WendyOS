@@ -119,6 +119,10 @@ func effectiveDeviceName(local string) string {
 }
 
 func wrapCloudDeviceCommands(cmd *cobra.Command, cfg func(*cobra.Command) cloudDeviceConfig) {
+	// Enrollment provisions a local target before it can be reached through Cloud.
+	if cmd.Annotations["wendy.local-enrollment"] == "true" {
+		return
+	}
 	if cmd.RunE != nil {
 		runE := cmd.RunE
 		cmd.RunE = func(cmd *cobra.Command, args []string) error {

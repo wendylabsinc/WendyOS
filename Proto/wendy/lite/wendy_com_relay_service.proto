@@ -1,0 +1,9 @@
+syntax = "proto3";
+
+import "wendy_com_relay_msg.proto";
+
+service WendyComRelayService {
+    // The client's first message must be open; everything after, in both
+    // directions, is payload. Stream lifetime == channel lifetime.
+    rpc WendyComRelay(stream WendyComRelayMessage) returns (stream WendyComRelayMessage);
+}

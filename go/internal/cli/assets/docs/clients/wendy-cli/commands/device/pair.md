@@ -21,8 +21,10 @@ by default; `h` shows or hides them. `Enter` connects and pairs, and `d`
 disconnects the selected peripheral.
 
 SensorLink discovers sources on the CLI's local network. Devices must belong to
-an organization you are logged into. Saved pairings remain available to forget
-when their sources are offline.
+the same organization as the target device, and you must be logged into that
+organization. Discovered sensors without an asset ID appear under "Found sensors
+that need enrollment". Enroll those sources before pairing, then press `r` to
+rescan. Saved pairings remain available to forget when their sources are offline.
 
 IP cameras are discovered on the connected device's network. `Enter` opens a
 username and password form that saves the camera's login on the device. Passwords

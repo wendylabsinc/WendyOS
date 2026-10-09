@@ -12,6 +12,31 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 )
 
+func TestSimulatorLiteCreateAndStart(t *testing.T) {
+	s := New(&config.Config{}, nil)
+	started := false
+	s.SetSimulatorBackend(SimulatorBackend{
+		Create: func(_ context.Context, o SimulatorCreateOptions) (*SimulatorInfo, error) {
+			if o.Profile != "wendy-lite" { t.Fatalf("profile: %q", o.Profile) }
+			return &SimulatorInfo{Name:o.Name, Device:"vm:"+o.Name, Profile:o.Profile, State:"stopped"}, nil
+		},
+		Start: func(_ context.Context, name string) (*SimulatorInfo, error) {
+			started = true
+			return &SimulatorInfo{Name:name, Device:"vm:"+name, Profile:"wendy-lite", State:"running"}, nil
+		},
+	})
+	r, err := s.handleSimulatorCreate(context.Background(), callToolReq("simulator_create", map[string]any{"name":"esp", "profile":"wendy-lite"}))
+	if err != nil || r.IsError { t.Fatalf("create: %v %v",r,err) }
+	if m := structuredMap(t,r); m["next_step"] != "simulator_start" || m["readiness"] != "not_checked" { t.Fatalf("create response: %v",m) }
+	r, _ = s.handleSimulatorStart(context.Background(), callToolReq("simulator_start", map[string]any{"name":"../esp"}))
+	if !r.IsError || started { t.Fatal("invalid start reached backend") }
+	r, err = s.handleSimulatorStart(context.Background(), callToolReq("simulator_start", map[string]any{"name":"esp"}))
+	if err != nil || r.IsError || !started || structuredMap(t,r)["readiness"] != "verified" { t.Fatalf("start: %v %v",r,err) }
+	s.SetSimulatorBackend(SimulatorBackend{Start:func(context.Context,string)(*SimulatorInfo,error){return nil,fmt.Errorf("handshake failed")}})
+	r, _ = s.handleSimulatorStart(context.Background(), callToolReq("simulator_start",map[string]any{"name":"esp"}))
+	if !r.IsError { t.Fatal("failed firmware handshake reported ready") }
+}
+
 func TestSimulatorCreateRejectsInvalidInputsBeforeBackend(t *testing.T) {
 	s := New(&config.Config{}, nil)
 	s.SetSimulatorBackend(SimulatorBackend{Create: func(context.Context, SimulatorCreateOptions) (*SimulatorInfo, error) {

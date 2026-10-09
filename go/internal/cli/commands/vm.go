@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	wendymcp "github.com/wendylabsinc/wendy/go/internal/cli/mcp"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/go/internal/cli/vm"
 )
@@ -21,7 +22,7 @@ import (
 func newVMCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "vm",
-		Short: "Run WendyOS in a local ARM64 virtual machine",
+		Short: "Run local WendyOS and Wendy Lite simulators",
 		// Hidden because the simulator is meant to be reached through
 		// `wendy run`'s Simulator tab or --device sim, not administered by
 		// hand. The subcommands stay for debugging a VM that misbehaves.
@@ -57,18 +58,32 @@ func newVMCreateCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if vm.IsLiteProfile(selectedProfile) {
+				if nightly || prNumber != 0 || cmd.Flags().Changed("disk") {
+					return fmt.Errorf("wendy-lite does not use --nightly, --pr or --disk; supply a merged ESP32-C6 --image or use the stable firmware")
+				}
+				store, err := vm.NewStore()
+				if err != nil {
+					return err
+				}
+				info, err := createLiteSimulator(cmd.Context(), store, wendymcp.SimulatorCreateOptions{Name: name, Profile: selectedProfile, Image: image, Version: version})
+				if err == nil {
+					fmt.Fprintf(cmd.OutOrStdout(), "Created Wendy Lite simulator %q. Connect with --device %s.\n", name, info.Device)
+				}
+				return err
+			}
 			if err := runVMCreate(cmd, name, image, version, diskGiB, nightly, prNumber); err != nil {
 				return err
 			}
 			return attachSimulatorProfile(name, selectedProfile)
 		},
 	}
-	cmd.Flags().StringVar(&image, "image", "", "Path to a local .wic disk image (default: download the published one)")
+	cmd.Flags().StringVar(&image, "image", "", "Local WendyOS disk image or merged ESP32-C6 firmware for wendy-lite or wendy-lite-native")
 	cmd.Flags().StringVar(&version, "version", "", "WendyOS version to download (default: latest)")
 	cmd.Flags().BoolVar(&nightly, "nightly", false, "Use nightly/prerelease builds")
 	cmd.Flags().IntVar(&prNumber, "pr", 0, "Create from a pull request's build, so a change can be tried before it merges")
 	cmd.Flags().IntVar(&diskGiB, "disk", 16, "Disk size in GiB (the image is grown to this size)")
-	cmd.Flags().StringVar(&profile, "profile", "generic", "Simulator profile: generic, go2, g1 or rosmaster-r2 (provisioned on first connection)")
+	cmd.Flags().StringVar(&profile, "profile", "generic", "Simulator profile: generic, go2, g1, rosmaster-r2, wendy-lite or wendy-lite-native (provisioned on first connection)")
 	return cmd
 }
 
@@ -232,6 +247,20 @@ func resolveVMSpec(name string, o vmStartOptions) (vm.Spec, *vm.Store, error) {
 	if _, err := os.Stat(store.DiskPath(name)); err != nil {
 		return vm.Spec{}, nil, fmt.Errorf("no VM named %q; create one with 'wendy vm create %s'", name, name)
 	}
+	if meta, ok := store.ReadMeta(name); ok && vm.IsLiteProfile(meta.Profile) {
+		emulator, err := ensureESPEmulator(context.Background())
+		if err != nil {
+			return vm.Spec{}, nil, err
+		}
+		spec := vm.Spec{ESPEmulatorPath: emulator, Name: name, DiskPath: store.DiskPath(name), Profile: meta.Profile, Net: vm.NetConfig{Mode: netMode, AgentPort: o.hostPort}}
+		if _, err := spec.Args(); err != nil {
+			return vm.Spec{}, nil, err
+		}
+		if err := vm.CheckHostPort(o.hostPort); err != nil {
+			return vm.Spec{}, nil, err
+		}
+		return spec, store, nil
+	}
 	if err := ensureQEMUFn(context.Background()); err != nil {
 		return vm.Spec{}, nil, err
 	}
@@ -315,7 +344,11 @@ func runVMStart(cmd *cobra.Command, name string, o vmStartOptions) error {
 			return err
 		}
 		fmt.Fprintf(out, "Started %s in the background (pid %d).\n", name, st.PID)
-		vmPrintReachability(out, name, spec.Net, o.hostPort)
+		if vm.IsLiteProfile(spec.Profile) {
+			fmt.Fprintf(out, "Reach it with 'wendy --device vm:%s device info'. Firmware uses a private virtual Wi-Fi network.\n", name)
+		} else {
+			vmPrintReachability(out, name, spec.Net, o.hostPort)
+		}
 		fmt.Fprintf(out, "Console: 'wendy vm logs %s'. Stop it with 'wendy vm stop %s'.\n", name, name)
 		return nil
 	}

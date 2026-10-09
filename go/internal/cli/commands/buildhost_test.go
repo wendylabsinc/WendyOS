@@ -2,18 +2,91 @@ package commands
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"io"
 	"os/exec"
 	"strings"
 	"testing"
 
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 )
+
+type enablingBuildHostClient struct {
+	agentpbv2.WendyBuildServiceClient
+	enabled       bool
+	sets, queries int
+	setErr        error
+	noBuildkit    bool
+}
+
+func (c *enablingBuildHostClient) GetBuildCapabilities(context.Context, *agentpbv2.GetBuildCapabilitiesRequest, ...grpc.CallOption) (*agentpbv2.GetBuildCapabilitiesResponse, error) {
+	c.queries++
+	return &agentpbv2.GetBuildCapabilitiesResponse{BuilderEnabled: c.enabled, BuildkitAvailable: !c.noBuildkit, NativePlatforms: []string{"linux/arm64"}}, nil
+}
+
+func (c *enablingBuildHostClient) SetBuildHostEnabled(_ context.Context, req *agentpbv2.SetBuildHostEnabledRequest, _ ...grpc.CallOption) (*agentpbv2.SetBuildHostEnabledResponse, error) {
+	c.sets++
+	if c.setErr != nil {
+		return nil, c.setErr
+	}
+	c.enabled = req.GetEnabled()
+	return &agentpbv2.SetBuildHostEnabledResponse{Enabled: c.enabled}, nil
+}
+
+func TestPrepareBuildHost(t *testing.T) {
+	for _, tc := range []struct {
+		name                                                            string
+		enabled, accept, nonInteractive, cancel, failEnable, noBuildkit bool
+		wantPrompts, wantSets, wantQueries                              int
+		wantError                                                       string
+	}{
+		{name: "accept", accept: true, wantPrompts: 1, wantSets: 1, wantQueries: 2},
+		{name: "already enabled", enabled: true, wantQueries: 1},
+		{name: "decline", wantPrompts: 1, wantQueries: 1, wantError: "not configured"},
+		{name: "noninteractive", nonInteractive: true, wantQueries: 1, wantError: "wendy device build-host enable"},
+		{name: "cancel", cancel: true, wantPrompts: 1, wantQueries: 1, wantError: "canceled"},
+		{name: "enable failure", accept: true, failEnable: true, wantPrompts: 1, wantSets: 1, wantQueries: 1, wantError: "permission denied"},
+		{name: "validate after enabling", accept: true, noBuildkit: true, wantPrompts: 1, wantSets: 1, wantQueries: 2, wantError: "no BuildKit"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client := &enablingBuildHostClient{enabled: tc.enabled, noBuildkit: tc.noBuildkit}
+			if tc.failEnable {
+				client.setErr = errors.New("permission denied")
+			}
+			prompts := 0
+			var confirm func(string) (bool, error)
+			if !tc.nonInteractive {
+				confirm = func(question string) (bool, error) {
+					prompts++
+					if !strings.Contains(question, "spark-office") {
+						t.Fatalf("prompt lacks host: %s", question)
+					}
+					if tc.cancel {
+						return false, context.Canceled
+					}
+					return tc.accept, nil
+				}
+			}
+			caps, err := prepareBuildHost(context.Background(), client, "spark-office", "linux/arm64", confirm)
+			if tc.wantError != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantError) {
+					t.Fatalf("got %v, want %q", err, tc.wantError)
+				}
+			} else if err != nil || !caps.GetBuilderEnabled() {
+				t.Fatalf("caps=%v, err=%v", caps, err)
+			}
+			if prompts != tc.wantPrompts || client.sets != tc.wantSets || client.queries != tc.wantQueries {
+				t.Fatalf("prompts/sets/queries = %d/%d/%d, want %d/%d/%d", prompts, client.sets, client.queries, tc.wantPrompts, tc.wantSets, tc.wantQueries)
+			}
+		})
+	}
+}
 
 // `wendy build` never reaches runRemoteBuild, so accepting --build-host there
 // would build locally while the developer believed the Spark was doing it.

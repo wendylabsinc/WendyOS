@@ -235,7 +235,7 @@ protoc \
     ${SYSTEM_PROTOS[@]}
 
 # wendy_com_msg.proto imports sensorlink.proto by bare filename, for the same
-# reason the tunnel protos do: in the wendy-lite project the two sit side by
+# reason the relay protos do: in the wendy-lite project the two sit side by
 # side in one directory, and the file is shared with that project verbatim. So
 # proto_path points inside wendy/lite here too. sensorlink.proto is an input
 # only -- its Go code comes from the sensorlinkpb generation further down,
@@ -256,23 +256,23 @@ protoc \
     wendy_com_msg.proto \
     wendy_conf.proto
 
-# The tunnel protos import each other by bare filename so they can be moved
+# The relay protos import each other by bare filename so they can be moved
 # to another project as-is; proto_path points inside wendy/lite accordingly.
-echo "Generating Wendy Lite tunnel protos..."
-TUNNEL_PKG="$MODULE/go/proto/gen/tunnelpb"
-mkdir -p "$GEN_DIR/tunnelpb"
+echo "Generating Wendy Lite relay protos..."
+WCOMRELAY_PKG="$MODULE/go/proto/gen/wcomrelaypb"
+mkdir -p "$GEN_DIR/wcomrelaypb"
 protoc \
     --proto_path="$PROTO_DIR/wendy/lite" \
-    --go_out="$GEN_DIR/tunnelpb" \
-    --go_opt=module="$TUNNEL_PKG" \
-    --go_opt=Mwendy_com_tunnel_msg.proto="$TUNNEL_PKG" \
-    --go_opt=Mwendy_com_tunnel_service.proto="$TUNNEL_PKG" \
-    --go-grpc_out="$GEN_DIR/tunnelpb" \
-    --go-grpc_opt=module="$TUNNEL_PKG" \
-    --go-grpc_opt=Mwendy_com_tunnel_msg.proto="$TUNNEL_PKG" \
-    --go-grpc_opt=Mwendy_com_tunnel_service.proto="$TUNNEL_PKG" \
-    wendy_com_tunnel_msg.proto \
-    wendy_com_tunnel_service.proto
+    --go_out="$GEN_DIR/wcomrelaypb" \
+    --go_opt=module="$WCOMRELAY_PKG" \
+    --go_opt=Mwendy_com_relay_msg.proto="$WCOMRELAY_PKG" \
+    --go_opt=Mwendy_com_relay_service.proto="$WCOMRELAY_PKG" \
+    --go-grpc_out="$GEN_DIR/wcomrelaypb" \
+    --go-grpc_opt=module="$WCOMRELAY_PKG" \
+    --go-grpc_opt=Mwendy_com_relay_msg.proto="$WCOMRELAY_PKG" \
+    --go-grpc_opt=Mwendy_com_relay_service.proto="$WCOMRELAY_PKG" \
+    wendy_com_relay_msg.proto \
+    wendy_com_relay_service.proto
 
 echo "Generating Wendy Lite sensorlink protos..."
 SENSORLINK_PKG="$MODULE/go/proto/gen/sensorlinkpb"

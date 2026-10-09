@@ -407,7 +407,13 @@ func cloudDiscoveryTableRows(assets []cloudDiscoveryDevice, versions map[string]
 			devType = humanReadableOSType(a.GetOsType(), a.GetArchitecture())
 		}
 		ver := "—"
-		if v := versions[a.key]; v != nil {
+		if a.isLite() {
+			// No agent to probe, and the firmware's version is not the CLI's.
+			devType = liteDeviceType(devType)
+			if v := a.v2.GetOsVersion(); v != "" {
+				ver = v
+			}
+		} else if v := versions[a.key]; v != nil {
 			ver = v.GetVersion()
 			if agentBehindCLI(version.Version, ver) {
 				ver += " " + tui.GlyphOutdated

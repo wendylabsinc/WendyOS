@@ -48,7 +48,7 @@ function viewerURL(value: unknown) {
 }
 
 function profileLabel(profile?: string) {
-  return profile === "go2"
+  return profile === "wendy-lite-native" ? "Wendy Lite native ESP-IDF (ESP32-C6)" : profile === "wendy-lite" ? "Wendy Lite (ESP32-C6)" : profile === "go2"
     ? "Unitree Go2"
     : profile === "g1"
       ? "Unitree G1"
@@ -69,7 +69,7 @@ export function SimulatorsPanel({ enabled, onChanged }: SimulatorsPanelProps) {
   const profileId = useId();
   const [simulators, setSimulators] = useState<Simulator[]>([]);
   const [name, setName] = useState("go2-sim");
-  const [profile, setProfile] = useState<"go2" | "g1" | "rosmaster-r2" | "generic">("go2");
+  const [profile, setProfile] = useState<"go2" | "g1" | "rosmaster-r2" | "wendy-lite" | "wendy-lite-native" | "generic">("go2");
   const [busy, setBusy] = useState("");
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
@@ -428,6 +428,8 @@ export function SimulatorsPanel({ enabled, onChanged }: SimulatorsPanelProps) {
               <option value="go2">Unitree Go2 · MuJoCo</option>
               <option value="g1">Unitree G1 · MuJoCo</option>
               <option value="rosmaster-r2">ROSMaster R2 · Ackermann</option>
+              <option value="wendy-lite">Wendy Lite WASM (ESP32-C6)</option>
+ <option value="wendy-lite-native">Wendy Lite native ESP-IDF (ESP32-C6)</option>
               <option value="generic">WendyOS VM</option>
             </select>
           </label>
@@ -591,7 +593,7 @@ export function SimulatorsPanel({ enabled, onChanged }: SimulatorsPanelProps) {
                       "Sending simulator context to ChatGPT...",
                       async () => {
                         await share(
-                          `Help me develop an application for local Wendy simulator ${simulator.name}, device selector ${simulator.device}, profile ${simulator.profile || "generic"}. Use list_robots to resolve this simulator's robot_id and inspect its current state. Use list_workspaces to select an approved project for that robot_id, then the workspace file tools to write or edit code. Validate and deploy through start_device_deployment to this exact simulator, poll the job, and check the app state and logs.`,
+                          (simulator.profile === "wendy-lite" || simulator.profile === "wendy-lite-native") ? `Help me develop a Wendy Lite ESP32-C6 ${simulator.profile === "wendy-lite-native" ? "native ESP-IDF" : "WASM"} application and run it on ${simulator.device} using the local Wendy CLI. Inspect its simulator status and verify deployment and app output. This simulator uses the Wendy Lite protocol.` : `Help me develop an application for local Wendy simulator ${simulator.name}, device selector ${simulator.device}, profile ${simulator.profile || "generic"}. Use list_robots to resolve this simulator's robot_id and inspect its current state. Use list_workspaces to select an approved project for that robot_id, then the workspace file tools to write or edit code. Validate and deploy through start_device_deployment to this exact simulator, poll the job, and check the app state and logs.`,
                         );
                         setStatus("Simulator context sent to ChatGPT.");
                       },

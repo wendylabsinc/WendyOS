@@ -16,6 +16,7 @@ import (
 
 // SimulatorBackend keeps host image downloads and VM provisioning in the CLI.
 type SimulatorBackend struct {
+	Start       func(context.Context, string) (*SimulatorInfo, error)
 	List        func(context.Context) ([]SimulatorInfo, error)
 	Create      func(context.Context, SimulatorCreateOptions) (*SimulatorInfo, error)
 	Stop        func(context.Context, string, bool, time.Duration) (*SimulatorInfo, error)
@@ -64,8 +65,8 @@ func (o SimulatorCreateOptions) Validate() error {
 	if err := vm.ValidName(o.Name); err != nil {
 		return err
 	}
-	if o.Profile != "generic" && o.Profile != "go2" && o.Profile != "g1" && o.Profile != "rosmaster-r2" {
-		return fmt.Errorf("profile must be generic, go2, g1 or rosmaster-r2")
+	if !vm.IsLiteProfile(o.Profile) && o.Profile != "generic" && o.Profile != "go2" && o.Profile != "g1" && o.Profile != "rosmaster-r2" {
+		return fmt.Errorf("profile must be generic, go2, g1, rosmaster-r2, wendy-lite or wendy-lite-native")
 	}
 	if o.DiskGiB < 1 || o.DiskGiB > 1024 {
 		return fmt.Errorf("disk_gib must be an integer in 1..1024")
@@ -95,9 +96,9 @@ func (s *mcpServer) registerSimulatorTools(srv *server.MCPServer) {
 	list = append(list, localOnly()...)
 	srv.AddTool(mcpgo.NewTool("simulator_list", list...), s.handleSimulatorList)
 	create := []mcpgo.ToolOption{
-		mcpgo.WithDescription("Create a stopped local simulator from a published or local image. Downloads may take several minutes. Connect to its vm:name selector to boot it and provision its robot profile."),
+		mcpgo.WithDescription("Create a stopped local simulator from a published or local image. Downloads may take several minutes. Use simulator_start to boot and verify it. wendy-lite runs WASM firmware; wendy-lite-native runs native ESP-IDF firmware with OTA slots. Both use ESP32-C6 with esp-emu; image must be a merged flash binary."),
 		mcpgo.WithString("name", mcpgo.Required(), mcpgo.Description("1–32 lowercase letters, digits or dashes; starts and ends with a letter or digit")),
-		mcpgo.WithString("profile", mcpgo.Enum("generic", "go2", "g1", "rosmaster-r2"), mcpgo.DefaultString("generic")),
+		mcpgo.WithString("profile", mcpgo.Enum("generic", "go2", "g1", "rosmaster-r2", "wendy-lite", "wendy-lite-native"), mcpgo.DefaultString("generic")),
 		mcpgo.WithString("image", mcpgo.Description("Local raw, ZIP, gzip or zstd image path; mutually exclusive with version")),
 		mcpgo.WithString("version", mcpgo.Description("Published version; omitted downloads latest stable")),
 		mcpgo.WithInteger("disk_gib", mcpgo.Min(1), mcpgo.Max(1024), mcpgo.DefaultNumber(16)),
@@ -105,6 +106,10 @@ func (s *mcpServer) registerSimulatorTools(srv *server.MCPServer) {
 	create = append(create, mutating()...)
 	create = append(create, openWorld()...)
 	srv.AddTool(mcpgo.NewTool("simulator_create", create...), s.handleSimulatorCreate)
+	start := []mcpgo.ToolOption{mcpgo.WithDescription("Start a local simulator and verify its device protocol. Wendy Lite uses real ESP32-C6 firmware and requires esp-emu on PATH or installed by the interactive Wendy CLI."), mcpgo.WithString("name", mcpgo.Required())}
+	start = append(start, mutating()...)
+	start = append(start, localOnly()...)
+	srv.AddTool(mcpgo.NewTool("simulator_start", start...), s.handleSimulatorStart)
 	stop := []mcpgo.ToolOption{
 		mcpgo.WithDescription("Shut down a local simulator. Timeout leaves it running; force explicitly cuts power and can lose guest data."),
 		mcpgo.WithString("name", mcpgo.Required()),
@@ -204,7 +209,11 @@ func (s *mcpServer) handleSimulatorCreate(ctx context.Context, req mcpgo.CallToo
 	if err != nil {
 		return simulatorFailure(err), nil
 	}
-	return okResult(map[string]any{"simulator": info, "readiness": "not_checked", "next_step": "device_connect", "device": "vm:" + opts.Name}), nil
+	next := "device_connect"
+	if vm.IsLiteProfile(opts.Profile) {
+		next = "simulator_start"
+	}
+	return okResult(map[string]any{"simulator": info, "readiness": "not_checked", "next_step": next, "device": "vm:" + opts.Name}), nil
 }
 
 func (s *mcpServer) handleSimulatorStop(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
@@ -264,4 +273,19 @@ func (s *mcpServer) clearSimulatorConnection(name string, expected *grpcclient.A
 	}
 	s.setConnectionLocked(nil, "", commandTarget{})
 	return true
+}
+
+func (s *mcpServer) handleSimulatorStart(ctx context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+	if s.simulators.Start == nil || os.Getenv("WENDY_AGENT_SOCKET") != "" {
+		return simulatorUnavailable(), nil
+	}
+	name, err := simulatorNameParam(req)
+	if err != nil {
+		return errResult(errCodeInvalidArgument, err.Error()), nil
+	}
+	info, err := s.simulators.Start(ctx, name)
+	if err != nil {
+		return simulatorFailure(err), nil
+	}
+	return okResult(map[string]any{"simulator": info, "device": info.Device, "readiness": "verified"}), nil
 }

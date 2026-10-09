@@ -52,7 +52,7 @@ func (s *Store) StartDetached(spec Spec) (State, error) {
 	// spec, and rotating the log first would discard the previous boot's
 	// output over a launch that never happens.
 	spec.ConsoleLog = s.LogPath(spec.Name)
-	if DetachSupported() {
+	if DetachSupported() && !IsLiteProfile(spec.Profile) {
 		spec.QMPPath, err = s.prepareQMP(spec.Name)
 		if err != nil {
 			return State{}, err
@@ -209,6 +209,10 @@ func (s *Store) StopContext(ctx context.Context, name string, force bool, grace 
 			return fmt.Errorf("signalling VM %q: %w", name, err)
 		}
 		grace = time.Second
+	} else if IsLiteProfile(st.Meta.Profile) {
+		if err := killProcess(st.State.PID, false); err != nil {
+			return err
+		}
 	} else if err := s.requestPowerdown(ctx, name); err != nil {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -256,7 +260,7 @@ func (s *Store) RunForeground(ctx context.Context, spec Spec, stdin io.Reader, s
 
 	// No ConsoleLog: the console is this terminal, which is the whole point of
 	// a foreground start.
-	if DetachSupported() {
+	if DetachSupported() && !IsLiteProfile(spec.Profile) {
 		spec.QMPPath, err = s.prepareQMP(spec.Name)
 		if err != nil {
 			return err

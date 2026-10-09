@@ -229,7 +229,7 @@ func simulatorRowsWithRobots(statuses []vm.Status, robots map[string]simulatorRo
 			Type:       vmStateLabel(st),
 			Address:    choice.Address,
 			OSVersion:  st.Meta.ImageVersion,
-			Size:       firstNonEmpty(robot.Kind, "Generic"),
+			Size:       firstNonEmpty(st.Meta.Profile, robot.Kind, "Generic"),
 			Parameters: robot.State,
 			Hint:       robot.Hint,
 			Value:      choice,

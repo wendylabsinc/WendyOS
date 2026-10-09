@@ -95,6 +95,8 @@ var robotSandboxPort = (*vm.Store).EnsureRobotSandboxPort
 
 var pickSimulatorProfileFn = func() (string, error) {
 	return pickFromItems("Choose a simulator", []tui.PickerItem{
+		{Name: "Wendy Lite native ESP-IDF (ESP32-C6)", Description: "Native apps with OTA firmware slots", Value: vm.ProfileWendyLiteNative},
+		{Name: "Wendy Lite WASM (ESP32-C6)", Description: "Real firmware with emulated Wi-Fi; offers emulator installation", Value: vm.ProfileWendyLite},
 		{Name: "Generic WendyOS", Description: "An ordinary VM for application development", Value: "generic"},
 		{Name: "Unitree Go2", Description: "A walking virtual robot with ROS 2 and a MuJoCo sandbox", Value: "go2"},
 		{Name: "Unitree G1", Description: "A humanoid virtual robot with ROS 2 and a MuJoCo sandbox", Value: "g1"},
@@ -103,8 +105,8 @@ var pickSimulatorProfileFn = func() (string, error) {
 }
 
 func validateSimulatorProfile(kind string) error {
-	if kind != "generic" && kind != vm.RobotKindGo2 && kind != vm.RobotKindG1 && kind != vm.RobotKindRosmasterR2 {
-		return fmt.Errorf("unsupported simulator profile %q; choose generic, go2, g1 or rosmaster-r2", kind)
+	if !vm.IsLiteProfile(kind) && kind != "generic" && kind != vm.RobotKindGo2 && kind != vm.RobotKindG1 && kind != vm.RobotKindRosmasterR2 {
+		return fmt.Errorf("unsupported simulator profile %q; choose generic, go2, g1, rosmaster-r2, wendy-lite or wendy-lite-native", kind)
 	}
 	return nil
 }
