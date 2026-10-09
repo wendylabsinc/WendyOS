@@ -288,6 +288,10 @@ func runV2DeviceUnenroll(ctx context.Context, conn *grpcclient.AgentConnection, 
 		}
 		return nil
 	}
+	// TODO(WDY-3585): Temporary intent confirmation while destructive CLI
+	// step-up interactions are discussed. This is NOT fresh-factor approval
+	// and cannot satisfy AAA or authorize normal-flow rollout.
+	// https://linear.app/wendylabsinc/issue/WDY-3585/clarify-approval-interactions-for-destructive-cli-actions
 	if !yes {
 		if !isInteractiveTerminal() {
 			return fmt.Errorf("unenroll is destructive; pass --yes to confirm")
