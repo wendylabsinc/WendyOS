@@ -4,11 +4,18 @@ package localmesh
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
+	"log"
+	"net"
 	"net/netip"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -21,11 +28,33 @@ type nodePeer struct {
 	id      babel.LinkID
 	asset   int32
 	cost    uint16
-	conn    *quic.Conn
+	link    nodeLink
 	tun     *os.File
 	control chan ControlMessage
 	sync    *Synchronizer
 }
+
+type nodeLink interface {
+	io.Closer
+	SendDatagram([]byte) error
+	ReceiveDatagram(context.Context) ([]byte, error)
+	WriteControl(ControlMessage) error
+	ReadControl() (ControlMessage, error)
+}
+
+type quicNodeLink struct {
+	conn   *quic.Conn
+	stream *quic.Stream
+}
+
+func (l quicNodeLink) Close() error                   { return l.conn.CloseWithError(0, "local-mesh link ended") }
+func (l quicNodeLink) SendDatagram(data []byte) error { return l.conn.SendDatagram(data) }
+func (l quicNodeLink) ReceiveDatagram(ctx context.Context) ([]byte, error) {
+	return l.conn.ReceiveDatagram(ctx)
+}
+func (l quicNodeLink) WriteControl(m ControlMessage) error  { return WriteControl(l.stream, m) }
+func (l quicNodeLink) ReadControl() (ControlMessage, error) { return ReadControl(l.stream) }
+
 type nodeEvent struct {
 	add     *nodePeer
 	id      babel.LinkID
@@ -135,9 +164,24 @@ func (n *Node) Snapshot() NodeSnapshot {
 		return NodeSnapshot{}
 	}
 	out := *v
+	out.Links = append([]PeerLink(nil), v.Links...)
+	for i := range out.Links {
+		if q := out.Links[i].queue; q != nil {
+			stats := q.snapshot()
+			out.Links[i].SendQueue = &stats
+		}
+	}
 	out.Routes = append([]babel.Route(nil), v.Routes...)
 	out.Devices = append([]Manifest(nil), v.Devices...)
 	return out
+}
+
+// HasCheaperLink lets an expensive carrier avoid duplicating a verified
+// direct neighbor already present over TCP or NAN. It reads the immutable
+// event-loop snapshot and does not block route processing.
+func (n *Node) HasCheaperLink(asset int32, cost uint16) bool {
+	v := n.view.Load()
+	return v != nil && v.HasCheaperLink(asset, cost)
 }
 
 func (n *Node) refresh() {
@@ -149,7 +193,21 @@ func (n *Node) refresh() {
 			n.gateways[id] = true
 		}
 	}
-	n.view.Store(&NodeSnapshot{Peers: len(n.peers), Devices: devices, Routes: n.routing.Snapshot().Routes})
+	links := make([]PeerLink, 0, len(n.peers))
+	for _, p := range n.peers {
+		link := PeerLink{Asset: p.asset, Cost: p.cost}
+		if stream, ok := p.link.(*streamNodeLink); ok {
+			link.queue = stream.ipPackets
+		}
+		links = append(links, link)
+	}
+	sort.Slice(links, func(i, j int) bool {
+		if links[i].Asset == links[j].Asset {
+			return links[i].Cost < links[j].Cost
+		}
+		return links[i].Asset < links[j].Asset
+	})
+	n.view.Store(&NodeSnapshot{Peers: len(n.peers), Links: links, Devices: devices, Routes: n.routing.Snapshot().Routes})
 }
 
 func (n *Node) Run() error {
@@ -157,7 +215,7 @@ func (n *Node) Run() error {
 	defer func() {
 		_ = n.Stop()
 		for _, p := range n.peers {
-			_ = p.conn.CloseWithError(0, "local-mesh stopping")
+			_ = p.link.Close()
 		}
 		_ = n.kernel.Close()
 		_ = n.cache.Flush(time.Now())
@@ -313,7 +371,7 @@ func (n *Node) handle(e nodeEvent) error {
 	if e.control != nil {
 		replies, changed, err := p.sync.Receive(*e.control, time.Now())
 		if err != nil {
-			_ = p.conn.CloseWithError(1, "invalid directory message")
+			_ = p.link.Close()
 			return nil
 		}
 		n.queue(p, replies)
@@ -416,16 +474,58 @@ func (n *Node) Attach(ctx context.Context, asset int32, conn *quic.Conn) error {
 // AttachWithCost adds an authenticated carrier link with its Babel metric.
 // TCP uses 256, NAN 512, and slower carriers may supply a higher cost.
 func (n *Node) AttachWithCost(ctx context.Context, asset int32, conn *quic.Conn, cost uint16) error {
-	if cost == 0 || cost == ^uint16(0) {
-		return errors.New("invalid local-mesh link cost")
-	}
 	defer conn.CloseWithError(0, "local-mesh link ended")
+	if err := n.verifyPeerCertificates(asset, conn.ConnectionState().TLS.PeerCertificates); err != nil {
+		return err
+	}
 	stream, err := OpenControl(ctx, conn, n.Credentials.Org, n.Credentials.Asset, asset)
 	if err != nil {
 		return err
 	}
-	p := &nodePeer{asset: asset, cost: cost, conn: conn, control: make(chan ControlMessage, 128)}
-	if err = n.request(ctx, nodeEvent{add: p}); err != nil {
+	return n.attachLink(ctx, asset, cost, quicNodeLink{conn, stream})
+}
+
+// AttachStream admits a mutually authenticated TLS 1.3 byte stream. The
+// carrier must verify the enrolled peer certificate before calling this method.
+func (n *Node) AttachStream(ctx context.Context, asset int32, conn net.Conn, cost uint16) error {
+	defer conn.Close()
+	tlsConn, ok := conn.(*tls.Conn)
+	if !ok {
+		return errors.New("mesh stream requires TLS")
+	}
+	if err := n.verifyPeerCertificates(asset, tlsConn.ConnectionState().PeerCertificates); err != nil {
+		return err
+	}
+	if err := OpenStreamHello(ctx, conn, n.Credentials.Org, n.Credentials.Asset, asset); err != nil {
+		return err
+	}
+	return n.attachLink(ctx, asset, cost, newStreamNodeLink(conn))
+}
+
+func (n *Node) verifyPeerCertificates(asset int32, certs []*x509.Certificate) error {
+	if len(certs) == 0 || len(certs) > 16 {
+		return errors.New("mesh peer certificate missing")
+	}
+	chain := make([][]byte, len(certs))
+	for i, cert := range certs {
+		chain[i] = cert.Raw
+	}
+	id, err := n.Credentials.Verify(chain, time.Now())
+	if err != nil {
+		return err
+	}
+	if id.Org != n.Credentials.Org || id.Asset != asset {
+		return errors.New("mesh peer certificate does not match expected asset")
+	}
+	return nil
+}
+
+func (n *Node) attachLink(ctx context.Context, asset int32, cost uint16, link nodeLink) error {
+	if cost == 0 || cost == ^uint16(0) {
+		return errors.New("invalid local-mesh link cost")
+	}
+	p := &nodePeer{asset: asset, cost: cost, link: link, control: make(chan ControlMessage, 128)}
+	if err := n.request(ctx, nodeEvent{add: p}); err != nil {
 		return err
 	}
 	ctx, cancel := context.WithCancel(ctx)
@@ -436,7 +536,7 @@ func (n *Node) AttachWithCost(ctx context.Context, asset int32, conn *quic.Conn,
 			cancel()
 		case <-ctx.Done():
 		}
-		_ = conn.CloseWithError(0, "link stopped")
+		_ = link.Close()
 	}()
 	var wg sync.WaitGroup
 	done := make(chan error, 4)
@@ -447,7 +547,7 @@ func (n *Node) AttachWithCost(ctx context.Context, asset int32, conn *quic.Conn,
 			case <-ctx.Done():
 				return ctx.Err()
 			case m := <-p.control:
-				if err := WriteControl(stream, m); err != nil {
+				if err := link.WriteControl(m); err != nil {
 					return err
 				}
 				if m.Kind == "bundle" {
@@ -458,7 +558,7 @@ func (n *Node) AttachWithCost(ctx context.Context, asset int32, conn *quic.Conn,
 	})
 	worker(func() error {
 		for {
-			m, err := ReadControl(stream)
+			m, err := link.ReadControl()
 			if err != nil {
 				return err
 			}
@@ -470,8 +570,8 @@ func (n *Node) AttachWithCost(ctx context.Context, asset int32, conn *quic.Conn,
 		}
 	})
 	worker(func() error { return n.readTUN(ctx, p) })
-	worker(func() error { return n.readQUIC(ctx, p) })
-	err = <-done
+	worker(func() error { return n.readLink(ctx, p) })
+	err := <-done
 	// Keep the TUN alive while Babel withdraws its routes. Closing its last
 	// file descriptor first destroys the kernel link, making route deletion
 	// fail with ENODEV and stopping the shared routing engine.
@@ -496,24 +596,34 @@ func (n *Node) readTUN(ctx context.Context, p *nodePeer) error {
 		}
 		n.gate.RLock()
 		allowed := !n.stopped && forwardLink(n.forwardRoutes, netip.AddrFrom4([4]byte(packet[16:20]))) == p.id
+		n.gate.RUnlock()
 		if allowed {
 			sequence++
-			fragments, _ := EncodeIP(sequence, packet)
-			for _, d := range fragments {
-				_ = p.conn.SendDatagram(d)
+			if stream, ok := p.link.(interface{ SendIP(uint32, []byte) error }); ok {
+				if err := stream.SendIP(sequence, packet); err != nil {
+					_ = p.link.Close()
+					return err
+				}
+			} else {
+				fragments, _ := EncodeIP(sequence, packet)
+				for _, d := range fragments {
+					if err := p.link.SendDatagram(d); err != nil {
+						_ = p.link.Close()
+						return err
+					}
+				}
 			}
 		}
-		n.gate.RUnlock()
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
 	}
 }
 
-func (n *Node) readQUIC(ctx context.Context, p *nodePeer) error {
+func (n *Node) readLink(ctx context.Context, p *nodePeer) error {
 	var assembler IPAssembler
 	for {
-		d, err := p.conn.ReceiveDatagram(ctx)
+		d, err := p.link.ReceiveDatagram(ctx)
 		if err != nil {
 			return err
 		}
@@ -537,6 +647,12 @@ func (n *Node) readQUIC(ctx context.Context, p *nodePeer) error {
 			}
 			if packet[0]>>4 != 4 {
 				continue
+			}
+			if stream, ok := p.link.(*streamNodeLink); ok && stream.diagIP && len(packet) >= 256 {
+				id := binary.BigEndian.Uint32(d[1:5])
+				if id%16 == 0 {
+					log.Printf("localmesh BLE IP event=receive peer_asset=%d packet_id=%d source=%s bytes=%d ts_unix_ns=%d", p.asset, id, net.IP(packet[12:16]), len(packet), time.Now().UnixNano())
+				}
 			}
 			n.gate.RLock()
 			if !n.stopped {
@@ -599,5 +715,10 @@ func (n *Node) Send(d babel.Datagram) error {
 	if p == nil {
 		return fmt.Errorf("missing link %d", d.Link)
 	}
-	return p.conn.SendDatagram(append([]byte{PacketBabel}, d.Payload...))
+	if err := p.link.SendDatagram(append([]byte{PacketBabel}, d.Payload...)); err != nil {
+		_ = p.link.Close()
+		// A failed carrier must withdraw its link, not stop the shared node.
+		return nil
+	}
+	return nil
 }
