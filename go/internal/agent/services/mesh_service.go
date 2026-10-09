@@ -16,6 +16,7 @@ import (
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 
+	"github.com/wendylabsinc/wendy/go/internal/agent/meshingress"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 )
@@ -41,6 +42,17 @@ type MeshService struct {
 	// assetIdentityFromContext.
 	expectedScope certs.Scope
 	dialLocal     func(addr string, timeout time.Duration) (net.Conn, error) // swapped in tests
+	ingress       interface {
+		DialAuthorized(uint16, func() (net.Conn, error)) (net.Conn, error)
+	}
+}
+
+// SetIngressAuthorizer restricts the legacy LAN MeshDial path to ports owned
+// by live mesh-mode apps. A missing authorizer denies every port.
+func (s *MeshService) SetIngressAuthorizer(authorizer interface {
+	DialAuthorized(uint16, func() (net.Conn, error)) (net.Conn, error)
+}) {
+	s.ingress = authorizer
 }
 
 // NewMeshService builds the serving side of the LAN-direct mesh path.
@@ -78,10 +90,18 @@ func (s *MeshService) MeshDial(stream agentpbv2.WendyMeshService_MeshDialServer)
 	if open.Port == 0 || open.Port > 65535 {
 		return status.Errorf(codes.InvalidArgument, "invalid port %d", open.Port)
 	}
+	if s.ingress == nil {
+		return status.Error(codes.PermissionDenied, "mesh ingress port is not published by a running app")
+	}
 	// Same SSRF stance as the broker path (tunnel_broker_client.go:207-213):
 	// only local services are reachable.
-	conn, err := s.dialLocal(net.JoinHostPort("127.0.0.1", strconv.Itoa(int(open.Port))), 10*time.Second)
+	conn, err := s.ingress.DialAuthorized(uint16(open.Port), func() (net.Conn, error) {
+		return s.dialLocal(net.JoinHostPort("127.0.0.1", strconv.Itoa(int(open.Port))), 10*time.Second)
+	})
 	if err != nil {
+		if errors.Is(err, meshingress.ErrPortDenied) {
+			return status.Error(codes.PermissionDenied, "mesh ingress port is not published by a running app")
+		}
 		return status.Errorf(codes.Unavailable, "dialing local port %d: %v", open.Port, err)
 	}
 	defer conn.Close()
@@ -168,7 +188,7 @@ func (s *MeshService) relay(stream agentpbv2.WendyMeshService_MeshDialServer, co
 				// below, so the local conn → stream goroutine can still
 				// forward any in-flight response before the caller's
 				// deferred conn.Close() runs once both directions finish.
-				if tc, ok := conn.(*net.TCPConn); ok {
+				if tc, ok := conn.(interface{ CloseWrite() error }); ok {
 					_ = tc.CloseWrite()
 				}
 				done <- !errors.Is(err, io.EOF)
@@ -186,7 +206,7 @@ func (s *MeshService) relay(stream agentpbv2.WendyMeshService_MeshDialServer, co
 				}
 			}
 			if d.HalfClose {
-				if tc, ok := conn.(*net.TCPConn); ok {
+				if tc, ok := conn.(interface{ CloseWrite() error }); ok {
 					_ = tc.CloseWrite()
 				}
 			}

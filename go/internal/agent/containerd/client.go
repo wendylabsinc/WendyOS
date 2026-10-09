@@ -47,6 +47,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/agent/dbusproxy"
 	"github.com/wendylabsinc/wendy/go/internal/agent/logfields"
 	"github.com/wendylabsinc/wendy/go/internal/agent/mesh"
+	"github.com/wendylabsinc/wendy/go/internal/agent/meshingress"
 	localoci "github.com/wendylabsinc/wendy/go/internal/agent/oci"
 	"github.com/wendylabsinc/wendy/go/internal/agent/services"
 	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
@@ -95,6 +96,15 @@ type dbusProxyManager interface {
 	Start(context.Context, string) (string, error)
 	Stop(string) error
 	StopAll()
+}
+
+// A typed nil *dbusproxy.Manager stored directly in an interface is non-nil;
+// Close would then call StopAll on that nil receiver during agent shutdown.
+func optionalDBusProxyManager(manager *dbusproxy.Manager) dbusProxyManager {
+	if manager == nil {
+		return nil
+	}
+	return manager
 }
 
 type Client struct {
@@ -194,6 +204,20 @@ type Client struct {
 	meshMu      sync.Mutex
 	meshDNSHeld map[string]bool
 
+	// meshIngress is shared with the local mesh session server. Only ports
+	// successfully forwarded for running isolated mesh containers are claimed.
+	// meshIngressMu serializes the check, iptables update, and claim so two
+	// concurrent starts cannot publish the same host port.
+	meshIngress   *meshingress.Registry
+	meshIngressMu sync.Mutex
+	// A task-exit callback may arrive after a restart has published the same
+	// container ID again. Run generations keep that late callback from
+	// revoking the new task's ingress.
+	meshIngressNext     uint64
+	meshIngressRuns     map[string]uint64
+	meshIngressStop     chan struct{}
+	meshIngressStopOnce sync.Once
+
 	// restartMonitor lets replace/stop pause the restart monitor's tick for
 	// the container they are tearing down (see suppressRestarts). nil when
 	// containerd came up without a monitor being wired in (e.g. many unit
@@ -243,6 +267,12 @@ func (c *Client) SetMeshDNS(d *mesh.DNSServer) {
 		return
 	}
 	c.meshDNS = d
+}
+
+// SetMeshIngressRegistry shares the fail-closed host-port authorization table
+// with the local mesh session server. Wire it before starting containers.
+func (c *Client) SetMeshIngressRegistry(r *meshingress.Registry) {
+	c.meshIngress = r
 }
 
 // SetAppSystemAPISocketProvider injects the manager for private app System API sockets.
@@ -393,7 +423,7 @@ func NewClient(logger *zap.Logger, address string, proxyMgr *dbusproxy.Manager) 
 		client:            c,
 		logger:            logger,
 		namespace:         "default",
-		proxyManager:      proxyMgr,
+		proxyManager:      optionalDBusProxyManager(proxyMgr),
 		appServices:       make(map[string]map[string]*appconfig.ServiceConfig),
 		primaryPIDs:       make(map[string]uint32),
 		appIsolation:      make(map[string]string),
@@ -404,6 +434,7 @@ func NewClient(logger *zap.Logger, address string, proxyMgr *dbusproxy.Manager) 
 		networkOps:        make(map[string]*networkOperation),
 		appStopping:       make(map[string]bool),
 		ros2ExecRefs:      make(map[string]int),
+		meshIngressStop:   make(chan struct{}),
 		chunkIndex:        idx,
 		staging:           newStaging(defaultChunkStagingDir),
 		snapshotter:       snapshotter,
@@ -422,6 +453,11 @@ func NewClient(logger *zap.Logger, address string, proxyMgr *dbusproxy.Manager) 
 // Close releases the underlying containerd client connection and stops all
 // D-Bus proxy processes.
 func (c *Client) Close() error {
+	c.meshIngressStopOnce.Do(func() {
+		if c.meshIngressStop != nil {
+			close(c.meshIngressStop)
+		}
+	})
 	c.discardAllPreparedSnapshots()
 	// Do not tear down retained network sandboxes here. Closing an agent client
 	// does not stop its containerd tasks; their nsfs bind mounts and CNI state
@@ -2242,7 +2278,23 @@ func (c *Client) startContainer(ctx context.Context, appName string, stdin io.Re
 
 	// Clean up any stale task from a previous run.
 	phaseStarted = time.Now()
-	c.deleteStaleTask(ctx, container, appName)
+	// A crashed task may have left a published host port behind while the
+	// restart monitor prepares its replacement. Revoke it before deleting the
+	// stale task; the new task claims ports only after network setup succeeds.
+	meshIngressRun := c.beginMeshIngressRun(appName)
+	meshIngressStarted := false
+	defer func() {
+		if !meshIngressStarted {
+			c.releaseMeshIngressRun(appName, meshIngressRun)
+		}
+	}()
+	if err := c.deleteStaleTask(ctx, container, appName); err != nil {
+		// A STOPPED task can leave a live shim. Do not race NewTask against an
+		// incomplete delete; report a recoverable start error so the monitor
+		// retries once containerd or its shim responds again.
+		c.recordStartFailure(ctx, appName, err)
+		return nil, fmt.Errorf("cleaning stale task for %q: %w", appName, err)
+	}
 	staleTaskDuration = time.Since(phaseStarted)
 
 	// The task's IO pipeline must live as long as the task, not the RPC that
@@ -2384,6 +2436,13 @@ func (c *Client) startContainer(ctx context.Context, appName string, stdin io.Re
 		if !taskUsesNetworkSandbox(reusedNetworkSandbox.path, task.Pid()) {
 			c.destroyNetworkSandbox(ctx, appName)
 			return nil, failStartedTask(fmt.Errorf("reusable network sandbox validation failed for app %q after task start", appID))
+		}
+		if isolation == "isolated" {
+			if ent, ok := findMeshEntitlement(entitlements); ok {
+				if err := c.applyMeshIngressPorts(appName, appID, reusedNetworkSandbox.ip, ent.Ports); err != nil {
+					return nil, failStartedTask(fmt.Errorf("mesh ingress setup failed for reused sandbox %q: %w", appName, err))
+				}
+			}
 		}
 		c.logger.Info("Reused CNI network sandbox",
 			zap.String(logfields.AppID, appID),
@@ -2537,10 +2596,19 @@ func (c *Client) startContainer(ctx context.Context, appName string, stdin io.Re
 			// entitlement must never start believing it has mesh egress it
 			// does not actually have. applyMeshEgress is a complete no-op for
 			// apps without that entitlement (including bridge-mode apps).
-			if meshErr := c.applyMeshEgress(entitlements, appName, appID, netnsPath, ip); meshErr != nil {
-				c.logger.Error("mesh egress setup failed; failing container start",
-					zap.String("app_id", appID), zap.Error(meshErr))
-				return nil, failStartedTask(fmt.Errorf("mesh egress setup failed for app %q: %w", appID, meshErr))
+			if isolation == "isolated" {
+				if meshErr := c.applyMeshEgress(entitlements, appName, appID, netnsPath, ip); meshErr != nil {
+					c.logger.Error("mesh egress setup failed; failing container start",
+						zap.String("app_id", appID), zap.Error(meshErr))
+					return nil, failStartedTask(fmt.Errorf("mesh egress setup failed for app %q: %w", appID, meshErr))
+				}
+				if _, meshApp := findMeshEntitlement(entitlements); meshApp {
+					// Agent restarts leave the task and CNI namespace alive. Persist
+					// the ADD result so CHECK can prove it before ingress recovery.
+					if err := writeNetworkSandboxResult(appName, cniResult); err != nil {
+						return nil, failStartedTask(fmt.Errorf("persisting mesh CNI proof for %q: %w", appName, err))
+					}
+				}
 			}
 
 			// All network configuration is now complete. Transfer ownership to the
@@ -2599,7 +2667,8 @@ func (c *Client) startContainer(ctx context.Context, appName string, stdin io.Re
 
 	// Stream output from the pipes.
 	outputCh := make(chan services.ContainerOutput, 64)
-	go c.streamOutput(taskCtx, task, exitStatusCh, outputCh, appName, stdoutR, stderrR, stdoutW, stderrW)
+	meshIngressStarted = true
+	go c.streamOutput(taskCtx, task, exitStatusCh, outputCh, appName, meshIngressRun, stdoutR, stderrR, stdoutW, stderrW)
 
 	// Recompute camera-loopback nodes/consumers from truth now that this
 	// container is running: it may have just become an entitled consumer.
@@ -3186,19 +3255,39 @@ func (c *Client) startPostStartAgentHook(command, appName string) bool {
 	return true
 }
 
-// deleteStaleTask attempts to load and force-delete any existing task for the
-// container. It handles both the normal case (task loadable) and the edge case
-// where the task exists in containerd but container.Task() can't load it.
-func (c *Client) deleteStaleTask(ctx context.Context, container containerd.Container, appName string) {
-	existingTask, taskErr := container.Task(ctx, nil)
+// A stale STOPPED task may leave a live shim whose Kill/Delete RPC never
+// completes. The exit wait alone is not enough; bound the whole lookup and
+// teardown so a manual start returns and an automatic restart can retry.
+const staleTaskCleanupTimeout = 30 * time.Second
+
+func (c *Client) deleteStaleTask(ctx context.Context, container containerd.Container, appName string) error {
+	return c.deleteStaleTaskWithTimeout(ctx, container, appName, staleTaskCleanupTimeout)
+}
+
+func (c *Client) deleteStaleTaskWithTimeout(ctx context.Context, container containerd.Container, appName string, timeout time.Duration) error {
+	cleanupCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	existingTask, taskErr := container.Task(cleanupCtx, nil)
+	if errdefs.IsNotFound(taskErr) {
+		return nil // No task to clean up.
+	}
 	if taskErr != nil {
-		return // No task to clean up.
+		if cleanupCtx.Err() != nil {
+			return fmt.Errorf("loading stale task: %w", cleanupCtx.Err())
+		}
+		if errors.Is(taskErr, context.Canceled) || errors.Is(taskErr, context.DeadlineExceeded) {
+			return fmt.Errorf("loading stale task: %w", taskErr)
+		}
+		// An orphan can exist in the runtime while container.Task cannot load
+		// it. Preserve the NewTask/AlreadyExists repair path for that case.
+		c.logger.Warn("Could not load stale task; NewTask will check for an orphan",
+			zap.String("app_name", appName), zap.Error(taskErr))
+		return nil
 	}
-	if err := c.terminateTask(ctx, existingTask, appName, syscall.SIGKILL, killWaitTimeout, killWaitTimeout); err != nil {
-		c.logger.Warn("Failed to delete stale task",
-			zap.String("app_name", appName),
-			zap.Error(err))
+	if err := c.terminateTask(cleanupCtx, existingTask, appName, syscall.SIGKILL, killWaitTimeout, killWaitTimeout); err != nil {
+		return fmt.Errorf("deleting stale task: %w", err)
 	}
+	return nil
 }
 
 // isMissingRuncStateDir reports whether err is runc's own "cannot open
@@ -3653,6 +3742,7 @@ func (c *Client) streamOutput(
 	exitStatusCh <-chan containerd.ExitStatus,
 	outputCh chan<- services.ContainerOutput,
 	appName string,
+	meshIngressRun uint64,
 	stdoutR, stderrR *io.PipeReader,
 	stdoutW, stderrW *io.PipeWriter,
 ) {
@@ -3686,6 +3776,9 @@ func (c *Client) streamOutput(
 	// close — calling it while the container is genuinely still running
 	// would hang this goroutine forever.
 	taskExited := err == nil
+	if taskExited {
+		c.releaseMeshIngressRun(appName, meshIngressRun)
+	}
 	if err != nil {
 		if errors.Is(err, context.Canceled) {
 			// The wait was canceled because the RPC that started this monitor
@@ -3898,6 +3991,9 @@ func (c *Client) ResolveAppContainerIDs(ctx context.Context, name string) ([]str
 // stopOne stops the task for a single container.
 // ctx must already have the containerd namespace set.
 func (c *Client) stopOne(ctx context.Context, containerID string) error {
+	// Deny remote sessions as soon as stop begins, including when the task
+	// already exited and the network teardown below has no task to inspect.
+	c.releaseMeshIngress(containerID)
 	container, err := c.client.LoadContainer(ctx, containerID)
 	if err != nil {
 		return fmt.Errorf("loading container %q: %w", containerID, err)
@@ -4231,6 +4327,7 @@ func ensureSharedSHM(appID string) (string, error) {
 // can batch image deletions across services. ctx must have the namespace set
 // and the caller must hold c.mu.
 func (c *Client) deleteOne(ctx context.Context, ctr containerd.Container, wantImg bool) (imgName string, err error) {
+	c.releaseMeshIngress(ctr.ID())
 	// Delete may be called without StopContainer first. Release an owned
 	// reusable sandbox even when there is no live task left to provide a procfs
 	// namespace path.
@@ -4508,6 +4605,9 @@ func (c *Client) ListBootContainers(ctx context.Context) ([]services.BootContain
 		if policy == "no" {
 			continue // opted out of auto-restart (e.g. wendy run --no-restart)
 		}
+		if running {
+			c.rehydrateRunningMeshIngress(ctx, ctr, info.Labels)
+		}
 		result = append(result, services.BootContainer{
 			Name:          ctr.ID(),
 			RestartPolicy: policy,
@@ -4515,6 +4615,151 @@ func (c *Client) ListBootContainers(ctx context.Context) ([]services.BootContain
 		})
 	}
 	return result, nil
+}
+
+// rehydrateRunningMeshIngress covers an agent-only restart, which leaves
+// containerd tasks and their bridge namespaces running. A persisted label is
+// not enough to authorize a host port: the task must still be running and
+// CNI CHECK must prove its live network namespace.
+// Without those proofs the registry stays empty until an ordinary task start.
+func (c *Client) rehydrateRunningMeshIngress(ctx context.Context, ctr containerd.Container, labels map[string]string) {
+	c.rehydrateRunningMeshIngressAttempt(ctx, ctr, labels, 3)
+}
+
+func (c *Client) rehydrateRunningMeshIngressAttempt(ctx context.Context, ctr containerd.Container, labels map[string]string, retries int) {
+	unlockNetwork := c.lockNetworkOperation(ctr.ID())
+	defer unlockNetwork()
+	if c.meshIngress == nil || labels[labelKeyIsolation] != "isolated" {
+		return
+	}
+	c.meshIngressMu.Lock()
+	_, alreadyTracked := c.meshIngressRuns[ctr.ID()]
+	c.meshIngressMu.Unlock()
+	if alreadyTracked {
+		return // a normal start or earlier recovery already owns this task
+	}
+	ent, ok := findMeshEntitlement(parseEntitlementsFromAnnotations(labels))
+	if !ok {
+		return
+	}
+	appID := labels[labelKeyAppID]
+	if appconfig.ValidateAppID(appID) != nil {
+		return
+	}
+	task, err := ctr.Task(ctx, nil)
+	if err != nil {
+		return
+	}
+	status, err := task.Status(ctx)
+	if err != nil || status.Status != containerd.Running || task.Pid() == 0 {
+		return
+	}
+	pid := task.Pid()
+	path := fmt.Sprintf("/proc/%d/ns/net", pid)
+	before, err := os.Stat(path)
+	if err != nil {
+		return
+	}
+	result, err := readNetworkSandboxResult(ctr.ID())
+	if err != nil {
+		c.logger.Warn("mesh ingress: no CNI proof for inherited task; ports remain denied",
+			zap.String("container_id", ctr.ID()), zap.Error(err))
+		return
+	}
+	subnet, err := allocateSubnet(appID)
+	if err != nil {
+		return
+	}
+	ip, err := verifiedMeshResultIP(result, subnet)
+	if err != nil {
+		c.logger.Warn("mesh ingress: inherited task failed network verification; ports remain denied",
+			zap.String("container_id", ctr.ID()), zap.Error(err))
+		return
+	}
+	if !networkNamespaceHasIP(path, ip) {
+		c.logger.Warn("mesh ingress: inherited task has no matching live network address; ports remain denied",
+			zap.String("container_id", ctr.ID()), zap.String("ip", ip))
+		return
+	}
+	checkResult, err := meshCheckResultForTask(result, networkSandboxPath(ctr.ID()), path)
+	if err != nil {
+		c.logger.Warn("mesh ingress: inherited task has invalid CNI sandbox proof; ports remain denied",
+			zap.String("container_id", ctr.ID()), zap.Error(err))
+		return
+	}
+	if err := c.CNICheck(ctx, appID, ctr.ID(), path, checkResult); err != nil {
+		c.logger.Warn("mesh ingress: inherited task failed CNI CHECK; ports remain denied",
+			zap.String("container_id", ctr.ID()), zap.Error(err))
+		return
+	}
+	after, err := os.Stat(path)
+	if err != nil || !os.SameFile(before, after) {
+		return
+	}
+	status, err = task.Status(ctx)
+	if err != nil || status.Status != containerd.Running || task.Pid() != pid {
+		return
+	}
+	// The wait channel is required before publishing: without an exit watcher
+	// a crash would leave the in-memory authorization alive indefinitely.
+	waitCtx, cancelWait := context.WithCancel(c.withNamespace(context.Background()))
+	exitCh, err := task.Wait(waitCtx)
+	if err != nil {
+		cancelWait()
+		c.logger.Warn("mesh ingress: cannot watch inherited task exit; ports remain denied",
+			zap.String("container_id", ctr.ID()), zap.Error(err))
+		return
+	}
+	run := c.beginMeshIngressRun(ctr.ID())
+	if err := c.applyMeshIngressPorts(ctr.ID(), appID, ip, ent.Ports); err != nil {
+		cancelWait()
+		c.releaseMeshIngressRun(ctr.ID(), run)
+		c.logger.Warn("mesh ingress: could not rehydrate inherited task ports",
+			zap.String("container_id", ctr.ID()), zap.Error(err))
+		return
+	}
+	for _, pm := range ent.Ports {
+		if c.meshIngress.OwnedBy(ctr.ID(), pm.Host) {
+			continue
+		}
+		// An iptables update may have lost xtables.lock to containerd or
+		// another startup service. Keep the task denied and retry after the
+		// contention subsides. Each retry rechecks the live task and CNI.
+		cancelWait()
+		c.releaseMeshIngressRun(ctr.ID(), run)
+		if retries > 0 {
+			c.logger.Warn("mesh ingress: port forward unavailable; scheduling task recheck",
+				zap.String("container_id", ctr.ID()), zap.Uint16("port", pm.Host), zap.Int("retries_left", retries))
+			go func() {
+				timer := time.NewTimer(5 * time.Second)
+				defer timer.Stop()
+				select {
+				case <-timer.C:
+				case <-c.meshIngressStop:
+					return
+				}
+				fresh, err := ctr.Labels(c.withNamespace(context.Background()))
+				if err == nil {
+					c.rehydrateRunningMeshIngressAttempt(context.Background(), ctr, fresh, retries-1)
+				}
+			}()
+		} else {
+			c.logger.Error("mesh ingress: exhausted inherited task port recovery attempts",
+				zap.String("container_id", ctr.ID()), zap.Uint16("port", pm.Host))
+		}
+		return
+	}
+	status, err = task.Status(ctx)
+	if err != nil || status.Status != containerd.Running || task.Pid() != pid {
+		cancelWait()
+		c.releaseMeshIngressRun(ctr.ID(), run)
+		return
+	}
+	go func() {
+		defer cancelWait()
+		<-exitCh
+		c.releaseMeshIngressRun(ctr.ID(), run)
+	}()
 }
 
 // SetStoppedByUser sets or clears the persisted stopped-by-user label on a
