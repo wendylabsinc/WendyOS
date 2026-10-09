@@ -22,6 +22,7 @@ import (
 	cloudpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 )
@@ -67,8 +68,28 @@ func Invoke(ctx context.Context, conn grpc.ClientConnInterface, auth *config.Aut
 	if s == nil {
 		return fmt.Errorf("%s requires an operator certificate; run 'wendy auth login'", method)
 	}
-	// One flow, one correlation_id, across registration and any retry.
-	correlationID := uuid.NewString()
+	// AAA §11.2: adopt an existing flow id unchanged. Registration and retries
+	// remain messages in that flow, not new origins. Match Cloud's existing
+	// CorrelationContext alphabet/64-byte bound; reject unsafe supplied values
+	// rather than sending a header that disagrees with the signed descriptor.
+	correlationID := ""
+	if md, ok := metadata.FromOutgoingContext(ctx); ok {
+		for _, value := range md.Get("x-correlation-id") {
+			if value != "" {
+				correlationID = value
+				break
+			}
+		}
+	}
+	if correlationID != "" {
+		if len(correlationID) > 64 || strings.IndexFunc(correlationID, func(r rune) bool {
+			return !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '.' || r == '_' || r == '-')
+		}) >= 0 {
+			return fmt.Errorf("invalid supplied Cloud correlation id")
+		}
+	} else {
+		correlationID = uuid.NewString()
+	}
 	call := func(byKID bool) error {
 		signed, err := s.signRequest(method, req, byKID, correlationID)
 		if err != nil {
