@@ -1,7 +1,16 @@
-`wendy project entitlements add` can be run with an entitlement as input, or without.
+`wendy project entitlements add [type]` adds a capability to `wendy.json`.
+The shorter `wendy project add [type]` also accepts integrations such as `ros2`.
 
-`wendy project entitlements add <entitlement>` will immediately update `wendy.json` to add the entitlement.
+Omit the type to open a searchable picker. Interactive forms collect missing
+values and show a change preview before saving. For scripts, supply required
+values explicitly:
 
-Omitting the entitlement from the invocation shows a list of available entitlements and an interactive menu to add them.
+```sh
+wendy project add http --port 8080
+wendy project add persist --name recordings --path /data
+wendy project add i2c --bus i2c-1
+```
 
-See [wendy.json — Entitlements](../../../../../apps/wendy.json.md#entitlements-1) for all supported entitlement types and their options.
+Use `--dry-run` to preview without saving, or `--service <name>` for a service's
+settings. See the [project editor](../index.md) and
+[entitlement reference](../../../../../apps/wendy.json.md#entitlements-1).

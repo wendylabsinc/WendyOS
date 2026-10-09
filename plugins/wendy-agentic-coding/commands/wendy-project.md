@@ -7,4 +7,4 @@ Use the `wendy-project-setup` skill. For new app creation, prefer the `wendy-tem
 
 `$ARGUMENTS`
 
-Prefer explicit `wendy init` flags with `--assistant skip`, validate with `wendy json validate`, and edit `wendy.json` directly for entitlements that need required fields before validating again.
+Prefer explicit `wendy init` flags with `--assistant skip`, validate with `wendy project validate`, and use `wendy project add` / `edit` with explicit field flags for manifest changes. Use `--dry-run --json` to inspect changes without writing.
