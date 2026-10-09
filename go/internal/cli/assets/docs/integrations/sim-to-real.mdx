@@ -193,6 +193,15 @@ flash and NVS, including deployed apps; `--force` can lose those changes.
 Use `wendy vm logs esp32` to inspect firmware boot output and `wendy vm rm esp32`
 to delete a stopped simulator.
 
+The emulator normally forwards DNS to the host's configured resolver. If its
+user-network backend cannot reach that resolver, set `WENDY_LITE_DNS` to a
+reachable DNS server IP when starting the simulator. For example, if logs report
+IPv6 DNS connection failures:
+
+```sh
+WENDY_LITE_DNS=1.1.1.1 wendy vm start esp32 --detach
+```
+
 The Simulator picker and desktop simulator panel include this profile. MCP
 clients can use `simulator_create` with `profile: "wendy-lite"`, followed by
 `simulator_start`, `simulator_list`, `simulator_stop`, and `simulator_delete`.
