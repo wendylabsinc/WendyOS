@@ -23,6 +23,7 @@ import (
 	"google.golang.org/protobuf/encoding/protojson"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
+	"github.com/wendylabsinc/wendy/go/internal/cli/linklocal"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/go/internal/shared/version"
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
@@ -386,7 +387,7 @@ The device uses its in-house wendyos-update engine to apply the update.`,
 				}
 
 				// Determine the local IP reachable by the device.
-				localIP, err := localIPForHost(conn.Host)
+				localIP, err := localIPForHost(ctx, conn.Host)
 				if err != nil {
 					return fmt.Errorf("determining local IP for device %s: %w", conn.Host, err)
 				}
@@ -411,7 +412,7 @@ The device uses its in-house wendyos-update engine to apply the update.`,
 					return fmt.Errorf("downloading artifact: %w", err)
 				}
 
-				localIP, err := localIPForHost(conn.Host)
+				localIP, err := localIPForHost(ctx, conn.Host)
 				if err != nil {
 					return fmt.Errorf("determining local IP for device %s: %w", conn.Host, err)
 				}
@@ -1157,7 +1158,7 @@ func writeFailedServices(b *strings.Builder, services []*agentpb.GetOSUpdateStat
 	}
 }
 
-func localIPForHost(host string) (string, error) {
+func localIPForHost(ctx context.Context, host string) (string, error) {
 	// Strip port if present.
 	if h, _, err := net.SplitHostPort(host); err == nil {
 		host = h
@@ -1181,7 +1182,7 @@ func localIPForHost(host string) (string, error) {
 		// for ".local" names. The shipped CGO_ENABLED=0 binary can't resolve
 		// ".local" via the OS resolver, so without this fallback `wendy os`
 		// commands targeting a ".local" host fail on Linux/Windows (issue #1155).
-		ip := resolveHostMDNSFallback(context.Background(), host)
+		ip := resolveHostMDNSFallback(ctx, host)
 		if ip == "" {
 			return "", fmt.Errorf("resolving %s: no addresses found%s", host, mdnsLocalHint(host))
 		}
@@ -1196,6 +1197,15 @@ func localIPForHost(host string) (string, error) {
 		if parsedIP == nil {
 			return "", fmt.Errorf("resolving %s: invalid address %q", host, ip)
 		}
+	}
+
+	// The routing table may send a link-local address out another device's
+	// link; an enrolled agent serves only its mTLS port.
+	probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	ip, ok := linkLocalSourceIPFn(probeCtx, dialHost, defaultAgentPort, defaultAgentPort+agentMTLSPortOffset)
+	cancel()
+	if ok {
+		return ip, nil
 	}
 
 	network := "udp4"
@@ -1336,11 +1346,17 @@ func ensureAgentUpToDate(ctx context.Context, conn *grpcclient.AgentConnection, 
 	return newConn, nil
 }
 
+// Seams over linklocal for tests.
+var (
+	artifactListenFn    = linklocal.Listen
+	linkLocalSourceIPFn = linklocal.SourceIP
+)
+
 // serveLocalArtifact starts a temporary HTTP server bound to localIP that
 // serves the file at localPath. It returns the URL at which the file is
 // accessible and a cleanup function that shuts down the server.
 func serveLocalArtifact(localPath, localIP string) (string, func(), error) {
-	listener, err := net.Listen("tcp", net.JoinHostPort(localIP, "0"))
+	listener, err := artifactListenFn(context.Background(), net.JoinHostPort(localIP, "0"))
 	if err != nil {
 		return "", nil, fmt.Errorf("starting file server: %w", err)
 	}

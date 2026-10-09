@@ -89,8 +89,7 @@ func registryPushTransport(registryAddr string, useMTLS bool) (transport http.Ro
 	}
 
 	rawDial := func(dialCtx context.Context) (net.Conn, error) {
-		var d net.Dialer
-		return d.DialContext(dialCtx, "tcp", registryAddr)
+		return deviceLinkDialFn(dialCtx, registryAddr)
 	}
 	tlsDial, err := tlsClientDialer(certInfo.PemCertificate, keyPEM, certInfo.PemCertificateChain, rawDial)
 	if err != nil {

@@ -17,6 +17,7 @@ import (
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
+	"github.com/wendylabsinc/wendy/go/internal/cli/linklocal"
 	"github.com/wendylabsinc/wendy/go/internal/cli/vm"
 	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
@@ -428,8 +429,9 @@ func appInspectReadiness(ctx context.Context, conn *grpcclient.AgentConnection, 
 				check["reason"] = "verified simulator forward; a local TCP accept does not prove the guest application is ready"
 				return
 			}
-			dialer := net.Dialer{Timeout: 2 * time.Second}
-			connection, err := dialer.DialContext(ctx, "tcp", addr)
+			dialCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+			connection, err := linklocal.Dial(dialCtx, addr)
+			cancel()
 			if err != nil {
 				check["status"], check["reason"] = "failed", "TCP connection could not be established: "+err.Error()
 				return

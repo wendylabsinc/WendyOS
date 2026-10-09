@@ -2791,10 +2791,14 @@ func startExistingContainer(ctx context.Context, conn *grpcclient.AgentConnectio
 // front of the browser request that follows.
 func makeReadinessProbe(hostname string, port int, useHTTP bool) (string, func(context.Context) error, func()) {
 	addr := net.JoinHostPort(hostname, fmt.Sprintf("%d", port))
-	dialer := net.Dialer{Timeout: 2 * time.Second}
+	dial := func(ctx context.Context, _, target string) (net.Conn, error) {
+		ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		defer cancel()
+		return deviceLinkDialFn(ctx, target)
+	}
 	if !useHTTP {
 		return addr, func(ctx context.Context) error {
-			conn, err := dialer.DialContext(ctx, "tcp", addr)
+			conn, err := dial(ctx, "tcp", addr)
 			if err != nil {
 				return err
 			}
@@ -2804,7 +2808,7 @@ func makeReadinessProbe(hostname string, port int, useHTTP bool) (string, func(c
 
 	transport := &http.Transport{
 		Proxy:             nil,
-		DialContext:       dialer.DialContext,
+		DialContext:       dial,
 		DisableKeepAlives: true,
 	}
 	client := &http.Client{Transport: transport, Timeout: 2 * time.Second}
