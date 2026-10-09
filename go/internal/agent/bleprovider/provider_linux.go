@@ -38,6 +38,9 @@ type cheaperLinkChecker interface {
 }
 
 func (r *runtime) hasCheaperLink(asset int32) bool {
+	if r.cfg.Selection != nil {
+		return !r.cfg.Selection.AllowRadio(asset, localmesh.RadioBLE)
+	}
 	checker, ok := r.cfg.Node.(cheaperLinkChecker)
 	return ok && checker.HasCheaperLink(asset, LinkCost)
 }
@@ -217,7 +220,7 @@ func (r *runtime) makeServerTLS() *tls.Config {
 			return nil
 		},
 	}
-	localmesh.NewTicketStore().Configure(config)
+	r.cfg.Credentials.ServerTicketStore(ALPN, "ble-tls").Configure(config)
 	return config
 }
 
@@ -248,6 +251,9 @@ func (r *runtime) acceptLink(ctx context.Context, raw net.Conn) {
 		r.cfg.Logger.Debug("BLE inbound TLS rejected", zap.Error(err))
 		_ = secure.Close()
 		return
+	}
+	if r.cfg.Selection != nil {
+		r.cfg.Selection.Connected(peer, localmesh.RadioBLE)
 	}
 	if r.hasCheaperLink(peer) {
 		_ = secure.Close()
@@ -336,7 +342,12 @@ func (r *runtime) discoveredCandidates(objects managedObjects, at time.Time) []c
 	// Device1.ServiceData is retained by BlueZ after an advertiser stops.
 	// Only live ServiceData discovery signals may refresh radio selection or
 	// initiate a new CoC dial.
-	peers, _ := r.freshness.candidates(objects, at)
+	peers, newlySeen := r.freshness.candidates(objects, at)
+	if r.cfg.Selection != nil {
+		for _, asset := range newlySeen {
+			r.cfg.Selection.Seen(asset, localmesh.RadioBLE)
+		}
+	}
 	return peers
 }
 
@@ -371,6 +382,9 @@ func (r *runtime) dialLink(ctx context.Context, peer candidate) {
 		// Clear only this Wendy peer before another outgoing dial starts.
 		r.disconnectOwnedPeer(peer)
 		r.cfg.Logger.Debug("BLE CoC dial failed", zap.Int32("peer", peer.asset), zap.Error(err))
+		if r.cfg.Selection != nil {
+			r.cfg.Selection.Failed(peer.asset, localmesh.RadioBLE)
+		}
 		return
 	}
 	<-r.dialSlot
@@ -433,7 +447,13 @@ func (r *runtime) dialLink(ctx context.Context, peer candidate) {
 	measurement.log(r.cfg.Logger, "outbound", peer.asset, secure.ConnectionState(), err == nil && secure.ConnectionState().NegotiatedProtocol == ALPN)
 	if err != nil || secure.ConnectionState().NegotiatedProtocol != ALPN {
 		r.cfg.Logger.Debug("BLE outbound TLS rejected", zap.Int32("peer", peer.asset), zap.Error(err))
+		if r.cfg.Selection != nil {
+			r.cfg.Selection.Failed(peer.asset, localmesh.RadioBLE)
+		}
 		return
+	}
+	if r.cfg.Selection != nil {
+		r.cfg.Selection.Connected(peer.asset, localmesh.RadioBLE)
 	}
 	if r.hasCheaperLink(peer.asset) {
 		return
