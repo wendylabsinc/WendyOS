@@ -325,7 +325,7 @@ func Run(ctx context.Context, encoded string, idleTTL time.Duration, parentLease
 	if err != nil {
 		return err
 	}
-	return serve(ctx, dir, spec, upstream.Conn, idleTTL, parentLeaseSignal(parentLease, spec.ParentPID))
+	return serve(ctx, dir, spec, upstream.Conn, idleTTL, parentLeaseSignal(parentLease, spec.ParentPID), true)
 }
 
 // parentLeaseSignal reports whether the invocation that prepared this broker
@@ -698,11 +698,15 @@ func proxyHandler(upstream *grpc.ClientConn, activity *activity) grpc.StreamHand
 // a re-dial simply never happens under this broker's identity lock: the next
 // invocation direct-dials with fresh pin state and prepares a fresh broker.
 //
-// The transport may legitimately still be establishing when serve() starts
-// (tests hand serve() an un-dialed conn; Run() hands it a probed, Ready one),
-// so departure only counts after Ready has been observed once.
-func watchUpstreamState(ctx context.Context, upstream *grpc.ClientConn, activity *activity) {
+// An unprobed connection may still be establishing. A probed connection has
+// ALREADY reached Ready even if this goroutine starts after it has departed:
+// never mistake that loss for a permissible initial connection attempt.
+func watchUpstreamState(ctx context.Context, upstream *grpc.ClientConn, activity *activity, alreadyVerified bool) {
 	state := upstream.GetState()
+	if alreadyVerified && state != connectivity.Ready {
+		activity.markBad()
+		return
+	}
 	for state != connectivity.Ready {
 		if state == connectivity.Shutdown {
 			activity.markBad()
@@ -759,7 +763,15 @@ func (h connectionActivity) HandleConn(_ context.Context, event stats.ConnStats)
 // caller must hold the identity flock (see acquireIdentityLock in Run) for the
 // whole call: holding it is what entitles serve to clobber and later remove
 // the socket and state files.
-func serve(ctx context.Context, dir string, spec Spec, upstream *grpc.ClientConn, idleTTL time.Duration, parentAlive func() bool) (err error) {
+func serve(ctx context.Context, dir string, spec Spec, upstream *grpc.ClientConn, idleTTL time.Duration, parentAlive func() bool, verified ...bool) (err error) {
+	// Capture before publishing the state file. Run supplies its successful
+	// probe explicitly, covering loss even before serve begins; unprobed test
+	// connections retain the initial-establishment behavior.
+	initialState := upstream.GetState()
+	alreadyVerified := initialState == connectivity.Ready || (len(verified) > 0 && verified[0])
+	if alreadyVerified && initialState != connectivity.Ready {
+		return nil // retire before publishing a transport that already lost trust
+	}
 	if idleTTL <= 0 {
 		idleTTL = DefaultIdleTTL
 	}
@@ -796,7 +808,7 @@ func serve(ctx context.Context, dir string, spec Spec, upstream *grpc.ClientConn
 	)
 	serveCtx, cancelServe := context.WithCancel(ctx)
 	defer cancelServe()
-	go watchUpstreamState(serveCtx, upstream, activity)
+	go watchUpstreamState(serveCtx, upstream, activity, alreadyVerified)
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
