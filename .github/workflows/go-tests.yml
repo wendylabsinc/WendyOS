@@ -6,6 +6,8 @@ on:
     branches: [main]
     paths:
       - 'go/**'
+      - 'web-client/mcp-app/**'
+      - 'go/simulator/go2/go2_sim/**'
       - 'Proto/**'
       - 'go.mod'
       - 'go.sum'
@@ -17,6 +19,8 @@ on:
   pull_request:
     paths:
       - 'go/**'
+      - 'web-client/mcp-app/**'
+      - 'go/simulator/go2/go2_sim/**'
       - 'Proto/**'
       - 'go.mod'
       - 'go.sum'

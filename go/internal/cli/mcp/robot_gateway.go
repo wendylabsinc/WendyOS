@@ -20,6 +20,10 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/version"
 )
 
+// Generate before direct go build/test commands; Make and CI do this automatically.
+//
+//go:generate npm --prefix ../../../../web-client/mcp-app ci --no-audit --no-fund
+//go:generate npm --prefix ../../../../web-client/mcp-app run build
 //go:embed desktop_app.html
 var robotPanelHTML string
 

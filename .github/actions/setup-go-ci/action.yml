@@ -37,3 +37,6 @@ runs:
         restore-keys: |
           go-ci-v1-${{ runner.os }}-${{ runner.arch }}-${{ inputs.cache-name }}-${{ steps.go.outputs.go-version }}-${{ hashFiles('go.mod', 'go.sum') }}-
           go-ci-v1-${{ runner.os }}-${{ runner.arch }}-${{ inputs.cache-name }}-${{ steps.go.outputs.go-version }}-
+
+    - name: Build embedded MCP app
+      uses: ./.github/actions/build-mcp-app
