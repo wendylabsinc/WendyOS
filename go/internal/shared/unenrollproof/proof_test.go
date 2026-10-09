@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"golang.org/x/crypto/ocsp"
 )
 
@@ -177,6 +178,30 @@ func TestRevocationFetchDoesNotFollowRedirects(t *testing.T) {
 	}
 	if redirected.Load() != 0 {
 		t.Fatal("redirect followed")
+	}
+}
+
+func TestCompletionSignatureCannotReplaceConfiguredTrustAnchoring(t *testing.T) {
+	leaf, issuer, key, caKey := fixture(t, false)
+	_, foreignRoot, _, _ := fixture(t, false)
+	record := Completion{Principal: leaf.URIs[0].String(), Cloud: "api.example:443", AssetID: "33333333-3333-4333-8333-333333333333", Fingerprint: Fingerprint(leaf), AuthorizedAt: time.Now().Unix(), Certificate: leaf.Raw, Chain: string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: issuer.Raw})), Revocation: answer(t, leaf, issuer, caKey, ocsp.Revoked)}
+	raw, err := SignCompletion(record, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, historical, err := ReadCompletion(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	at := time.Unix(parsed.AuthorizedAt, 0)
+	// This is the explicit anchoring used by CLI reconciliation after parsing
+	// remote public evidence. A valid self-contained signature cannot supply
+	// the caller's configured roots or authenticate a current plaintext peer.
+	if err := certs.VerifyPeerCertificateChain(historical, []*x509.Certificate{issuer}, []*x509.Certificate{foreignRoot}, x509.ExtKeyUsageServerAuth, at, at); err == nil {
+		t.Fatal("receipt replaced configured roots")
+	}
+	if err := certs.VerifyPeerCertificateChain(historical, []*x509.Certificate{issuer}, []*x509.Certificate{issuer}, x509.ExtKeyUsageServerAuth, at, at); err != nil {
+		t.Fatal(err)
 	}
 }
 
