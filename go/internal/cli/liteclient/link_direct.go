@@ -52,8 +52,7 @@ var (
 )
 
 // WendyCom frame header: magic, version, four reserved bytes, then a 16-bit
-// big-endian body length. directLink owns this framing — the cloud tunnel does
-// not use it, because there the broker frames instead.
+// big-endian body length. directLink owns framing for direct and relayed TLS.
 const (
 	headerMagic   = 0xA5
 	headerVersion = 0x02

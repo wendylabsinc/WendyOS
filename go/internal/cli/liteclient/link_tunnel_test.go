@@ -2,11 +2,15 @@ package liteclient
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/pem"
+	"io"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
-	wendypb "github.com/wendylabsinc/wendy/go/proto/gen/litepb"
 	"github.com/wendylabsinc/wendy/go/proto/gen/wcomrelaypb"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -15,7 +19,6 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
-	"google.golang.org/protobuf/proto"
 )
 
 // relayOpen is what a fakeRelay saw when a stream opened.
@@ -24,23 +27,18 @@ type relayOpen struct {
 	authorization []string
 }
 
-// fakeRelay stands in for the Cloud relay and the device behind it: it
-// records each stream's open message and caller metadata, then answers every
-// WendyCom handshake by echoing it, as a protocol 2 device does. With refuse
-// set, it ends the stream with that error once the handshake arrives: over a
-// network, the client has sent its handshake by the time a refusal of the
-// open message reaches it.
+// fakeRelay transports opaque bytes to a device TLS server.
 type fakeRelay struct {
 	wcomrelaypb.UnimplementedWendyComRelayServiceServer
 	refuse error
 	opens  chan relayOpen
 	ended  chan struct{}
+	device func(net.Conn)
 }
 
 func newFakeRelay() *fakeRelay {
 	return &fakeRelay{opens: make(chan relayOpen, 1), ended: make(chan struct{}, 1)}
 }
-
 func (r *fakeRelay) WendyComRelay(stream wcomrelaypb.WendyComRelayService_WendyComRelayServer) error {
 	defer func() { r.ended <- struct{}{} }()
 	first, err := stream.Recv()
@@ -49,23 +47,47 @@ func (r *fakeRelay) WendyComRelay(stream wcomrelaypb.WendyComRelayService_WendyC
 	}
 	md, _ := metadata.FromIncomingContext(stream.Context())
 	r.opens <- relayOpen{assetID: first.GetOpen().GetAssetId(), authorization: md.Get("authorization")}
-	for {
-		msg, err := stream.Recv()
-		if err != nil {
-			return err
-		}
-		if r.refuse != nil {
-			return r.refuse
-		}
-		req := &wendypb.WendyComMessage{}
-		if err := proto.Unmarshal(msg.GetPayload().GetBytes(), req); err != nil {
-			return err
-		}
-		if req.GetHandshake() != nil {
-			if err := stream.Send(msg); err != nil {
-				return err
+	if r.refuse != nil {
+		return r.refuse
+	}
+	proxy, device := net.Pipe()
+	defer proxy.Close()
+	defer device.Close()
+	go r.device(device)
+	done := make(chan error, 2)
+	go func() {
+		for {
+			msg, err := stream.Recv()
+			if err != nil {
+				done <- err
+				return
+			}
+			if _, err = proxy.Write(msg.GetPayload().GetBytes()); err != nil {
+				done <- err
+				return
 			}
 		}
+	}()
+	go func() {
+		buffer := make([]byte, 137) // Deliberately split TLS records across relay payloads.
+		for {
+			n, err := proxy.Read(buffer)
+			if err != nil {
+				done <- err
+				return
+			}
+			err = stream.Send(&wcomrelaypb.WendyComRelayMessage{Msg: &wcomrelaypb.WendyComRelayMessage_Payload{Payload: &wcomrelaypb.WendyComRelayPayload{Bytes: buffer[:n]}}})
+			if err != nil {
+				done <- err
+				return
+			}
+		}
+	}()
+	select {
+	case err := <-done:
+		return err
+	case <-stream.Context().Done():
+		return stream.Context().Err()
 	}
 }
 
@@ -88,99 +110,144 @@ func dialFakeRelay(t *testing.T, relay *fakeRelay) *grpc.ClientConn {
 
 const relayTestAssetID = "0b6f7a52-5d1e-4c3b-9a8e-2f4d6c8b1a3e"
 
-func TestConnectViaRelaySendsCallerCredentialsAndOwnsConn(t *testing.T) {
-	relay := newFakeRelay()
-	cc := dialFakeRelay(t, relay)
-	ctx := metadata.AppendToOutgoingContext(context.Background(), "authorization", "Bearer session")
+func relayPKI(t *testing.T, principal string, trusted bool) (tls.Certificate, string, *tls.Config) {
+	t.Helper()
+	root, key := issueRelayCertificate(t, 1, "root", "", true, nil, nil)
+	intermediate, ik := issueRelayCertificate(t, 2, "operator CA", "", true, root, key)
+	operator, ok := issueRelayCertificate(t, 3, "operator", "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/operator/alice", false, intermediate, ik)
+	pool := x509.NewCertPool()
+	pool.AddCert(root)
+	chain := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: intermediate.Raw})) + string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: root.Raw}))
+	if !trusted {
+		root, key = issueRelayCertificate(t, 4, "untrusted", "", true, nil, nil)
+	}
+	device, dk := issueRelayCertificate(t, 5, "device", principal, false, root, key)
+	return tls.Certificate{Certificate: [][]byte{operator.Raw}, PrivateKey: ok}, chain, &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{{Certificate: [][]byte{device.Raw}, PrivateKey: dk}}, ClientCAs: pool, ClientAuth: tls.RequireAndVerifyClientCert}
+}
 
-	c := NewWendyLiteClient()
-	if err := c.ConnectViaRelay(ctx, cc, relayTestAssetID); err != nil {
-		t.Fatalf("ConnectViaRelay: %v", err)
-	}
-	open := <-relay.opens
-	if open.assetID != relayTestAssetID {
-		t.Errorf("open names asset %q, want %q", open.assetID, relayTestAssetID)
-	}
-	if len(open.authorization) != 1 || open.authorization[0] != "Bearer session" {
-		t.Errorf("relay saw authorization %q, want the caller's", open.authorization)
-	}
+const devicePrincipal = "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/lite-441bf6804ff8"
 
-	if err := c.Close(); err != nil {
-		t.Fatalf("Close: %v", err)
-	}
-	select {
-	case <-relay.ended:
-	case <-time.After(5 * time.Second):
-		t.Fatal("relay stream still open after Close")
-	}
-	if state := cc.GetState(); state != connectivity.Shutdown {
-		t.Errorf("connection is %v after Close, want it closed with the client", state)
+func TestConnectViaRelayMTLS(t *testing.T) {
+	for _, tc := range []struct {
+		name, principal string
+		trusted, accept bool
+	}{
+		{"matching device", devicePrincipal, true, true},
+		{"wrong device", strings.Replace(devicePrincipal, "441bf6804ff8", "000000000000", 1), true, false},
+		{"wrong tenant", strings.Replace(devicePrincipal, "11111111-1111-4111-8111-111111111111", "33333333-3333-4333-8333-333333333333", 1), true, false},
+		{"untrusted issuer", devicePrincipal, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cert, chain, cfg := relayPKI(t, tc.principal, tc.trusted)
+			relay := newFakeRelay()
+			verified := make(chan error, 1)
+			relay.device = func(raw net.Conn) {
+				defer raw.Close()
+				raw.SetDeadline(time.Now().Add(5 * time.Second))
+				conn := tls.Server(raw, cfg)
+				err := conn.Handshake()
+				verified <- err
+				if err != nil {
+					return
+				}
+				link := newDirectLink(conn)
+				msg, err := link.recv(5 * time.Second)
+				if err != nil {
+					return
+				}
+				if msg.GetHandshake() == nil {
+					return
+				}
+				if err = link.send(msg); err != nil {
+					return
+				}
+				io.Copy(io.Discard, conn)
+			}
+			cc := dialFakeRelay(t, relay)
+			ctx, cancel := context.WithTimeout(metadata.AppendToOutgoingContext(context.Background(), "authorization", "Bearer session"), 10*time.Second)
+			defer cancel()
+			c := NewWendyLiteClient()
+			err := c.ConnectViaRelay(ctx, cc, relayTestAssetID, cert, chain, "441bf6804ff8")
+			if tc.accept {
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err = <-verified; err != nil {
+					t.Fatalf("operator mTLS: %v", err)
+				}
+				if c.PeerCertificate() == nil {
+					t.Fatal("missing authenticated device certificate")
+				}
+				if err = c.Close(); err != nil {
+					t.Fatal(err)
+				}
+			} else if err == nil || !strings.Contains(err.Error(), "device mTLS") {
+				t.Fatalf("untrusted device accepted: %v", err)
+			}
+			open := <-relay.opens
+			if open.assetID != relayTestAssetID || len(open.authorization) != 1 || open.authorization[0] != "Bearer session" {
+				t.Fatalf("lost caller context: %+v", open)
+			}
+			select {
+			case <-relay.ended:
+			case <-time.After(time.Second):
+				t.Fatal("stream leaked")
+			}
+			if cc.GetState() != connectivity.Shutdown {
+				t.Fatal("connection leaked")
+			}
+		})
 	}
 }
 
-// A relay that refuses the caller ends the stream with a status. The client
-// must report that status, not a handshake timeout, and release the
-// connection it was given.
 func TestConnectViaRelayReportsRefusalAndClosesConn(t *testing.T) {
+	cert, chain, _ := relayPKI(t, devicePrincipal, true)
 	relay := newFakeRelay()
 	relay.refuse = status.Error(codes.PermissionDenied, "permission denied")
 	cc := dialFakeRelay(t, relay)
-
-	err := NewWendyLiteClient().ConnectViaRelay(context.Background(), cc, relayTestAssetID)
-	if status.Code(err) != codes.PermissionDenied {
-		t.Fatalf("ConnectViaRelay error = %v, want the relay's PermissionDenied", err)
+	err := NewWendyLiteClient().ConnectViaRelay(context.Background(), cc, relayTestAssetID, cert, chain, "441bf6804ff8")
+	if err == nil || !strings.Contains(err.Error(), "PermissionDenied") {
+		t.Fatalf("lost broker refusal: %v", err)
 	}
-	if state := cc.GetState(); state != connectivity.Shutdown {
-		t.Errorf("connection is %v after a refused connect, want it closed", state)
+	if cc.GetState() != connectivity.Shutdown {
+		t.Fatal("connection leaked")
 	}
 }
 
-// floodStream is a tunnel stream whose Recv always has another payload ready,
-// as a chatty device would. Only Recv is used by recvLoop.
-type floodStream struct {
-	wcomrelaypb.WendyComRelayService_WendyComRelayClient
-	payload []byte
-}
-
-func (s *floodStream) Recv() (*wcomrelaypb.WendyComRelayMessage, error) {
-	return &wcomrelaypb.WendyComRelayMessage{
-		Msg: &wcomrelaypb.WendyComRelayMessage_Payload{
-			Payload: &wcomrelaypb.WendyComRelayPayload{Bytes: s.payload},
-		},
-	}, nil
-}
-
-func TestTunnelRecvLoopExitsWhenCancelledWithNoReader(t *testing.T) {
-	body, err := proto.Marshal(&wendypb.WendyComMessage{})
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
+func TestRelayCancelWhileUnread(t *testing.T) {
+	relay := newFakeRelay()
+	relay.device = func(conn net.Conn) { defer conn.Close(); conn.Write(make([]byte, 65536)) }
+	cc := dialFakeRelay(t, relay)
 	ctx, cancel := context.WithCancel(context.Background())
-	l := &tunnelLink{
-		stream: &floodStream{payload: body},
-		ctx:    ctx,
-		cancel: cancel,
-		msgs:   make(chan *wendypb.WendyComMessage, 16),
+	conn, err := openRelayConn(ctx, cc, relayTestAssetID)
+	if err != nil {
+		t.Fatal(err)
 	}
-	exited := make(chan struct{})
-	go func() {
-		l.recvLoop()
-		close(exited)
-	}()
-
-	// Let the channel fill with nobody reading, as after a failed handshake.
-	deadline := time.Now().Add(time.Second)
-	for len(l.msgs) < cap(l.msgs) && time.Now().Before(deadline) {
-		time.Sleep(time.Millisecond)
-	}
-	if len(l.msgs) < cap(l.msgs) {
-		t.Fatalf("msgs holds %d of %d, want it full", len(l.msgs), cap(l.msgs))
-	}
-
+	<-relay.opens
 	cancel()
 	select {
-	case <-exited:
+	case <-relay.ended:
 	case <-time.After(time.Second):
-		t.Fatal("recvLoop still blocked on a full channel after cancel")
+		t.Fatal("cancel did not release blocked relay")
+	}
+	conn.Close()
+	if cc.GetState() != connectivity.Shutdown {
+		t.Fatal("connection leaked")
+	}
+}
+
+func TestRelayReadDeadline(t *testing.T) {
+	relay := newFakeRelay()
+	relay.device = func(conn net.Conn) { defer conn.Close(); io.Copy(io.Discard, conn) }
+	cc := dialFakeRelay(t, relay)
+	conn, err := openRelayConn(context.Background(), cc, relayTestAssetID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	conn.SetReadDeadline(time.Now().Add(20 * time.Millisecond))
+	_, err = conn.Read(make([]byte, 1))
+	if e, ok := err.(net.Error); !ok || !e.Timeout() {
+		t.Fatalf("deadline ignored: %v", err)
 	}
 }
