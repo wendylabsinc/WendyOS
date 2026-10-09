@@ -178,3 +178,11 @@ func TestTLS13MutualAuthOverPacketConn(t *testing.T) {
 		t.Fatal("TLS payload changed")
 	}
 }
+
+func TestSockQueueClosedReturnsError(t *testing.T) {
+	c := newPacketConn(-1, l2addr{}, l2addr{})
+	_ = c.Close()
+	if _, _, err := c.SockQueue(); err == nil {
+		t.Fatal("SockQueue on closed conn must fail")
+	}
+}

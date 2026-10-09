@@ -129,7 +129,111 @@ type streamNodeLink struct {
 	activeIPStart atomic.Int64
 	activeIPBytes atomic.Int64
 	lastIPWriteMS atomic.Int64
+	rxBytes       atomic.Int64
+	lastRxUnixNS  atomic.Int64
+	talkMu        sync.Mutex
+	talkersOut    map[talkerKey]*talkerStat
+	talkersIn     map[talkerKey]*talkerStat
 	diagIP        bool
+}
+
+// sockQueueProber is implemented by CoC connections that can report kernel
+// socket queue depths (see bleprovider packetConn.SockQueue). Absent on
+// non-BLE links; the diagnostic reports -1s there.
+type sockQueueProber interface {
+	SockQueue() (inQ, outQ int, err error)
+}
+
+// talkerKey identifies one endpoint-payload destination for top-talker
+// attribution: who is actually filling a BLE link.
+type talkerKey struct {
+	dst  string
+	port int
+}
+
+type talkerStat struct {
+	bytes   uint64
+	packets uint64
+}
+
+// noteTalker records an IPv4 packet toward its endpoint: outbound packets
+// attribute to destination, inbound to source. Only first fragments carry
+// ports. Cheap enough to run always; reported by the opt-in queue
+// diagnostic. Outbound covers forwarded payload; inbound covers payload
+// terminated at this node (e.g. catalog sync replies), which never crosses
+// the forward path.
+func (l *streamNodeLink) noteTalker(packet []byte, outbound bool) {
+	if len(packet) < 20 || packet[0]>>4 != 4 {
+		return
+	}
+	ihl := int(packet[0]&0x0f) * 4
+	if len(packet) < ihl {
+		return
+	}
+	addr := packet[16:20]
+	if !outbound {
+		addr = packet[12:16]
+	}
+	key := talkerKey{dst: net.IP(addr).String(), port: -1}
+	if binary.BigEndian.Uint16(packet[6:8])&0x1fff == 0 {
+		switch packet[9] {
+		case 6, 17:
+			if len(packet) >= ihl+4 {
+				if outbound {
+					key.port = int(binary.BigEndian.Uint16(packet[ihl+2 : ihl+4]))
+				} else {
+					key.port = int(binary.BigEndian.Uint16(packet[ihl : ihl+2]))
+				}
+			}
+		default:
+			key.port = int(packet[9])
+		}
+	}
+	l.talkMu.Lock()
+	m := l.talkersOut
+	if !outbound {
+		m = l.talkersIn
+	}
+	if m == nil {
+		m = make(map[talkerKey]*talkerStat)
+		if outbound {
+			l.talkersOut = m
+		} else {
+			l.talkersIn = m
+		}
+	}
+	st, ok := m[key]
+	if !ok {
+		if len(m) >= 16 {
+			l.talkMu.Unlock()
+			return
+		}
+		st = &talkerStat{}
+		m[key] = st
+	}
+	st.bytes += uint64(len(packet))
+	st.packets++
+	l.talkMu.Unlock()
+}
+
+// topTalker returns the heaviest outbound destination and inbound source
+// since the last call and resets both.
+func (l *streamNodeLink) topTalker() (outKey talkerKey, outStat talkerStat, inKey talkerKey, inStat talkerStat) {
+	l.talkMu.Lock()
+	defer l.talkMu.Unlock()
+	for k, st := range l.talkersOut {
+		if st.bytes > outStat.bytes {
+			outKey, outStat = k, *st
+		}
+	}
+	for k, st := range l.talkersIn {
+		if st.bytes > inStat.bytes {
+			inKey, inStat = k, *st
+		}
+	}
+	l.talkersOut = nil
+	l.talkersIn = nil
+	return outKey, outStat, inKey, inStat
 }
 
 func newStreamNodeLink(conn net.Conn) *streamNodeLink {
@@ -164,7 +268,9 @@ func (l *streamNodeLink) queueDiagnosticLoop() {
 			if started := l.activeIPStart.Load(); started > 0 {
 				activeMS = time.Since(time.Unix(0, started)).Milliseconds()
 			}
-			log.Printf("localmesh BLE queue peer=%s queued_bytes=%d byte_limit=%d queued_packets=%d enqueued=%d dequeued=%d dropped_capacity=%d dropped_expired=%d last_wait_ms=%d max_wait_ms=%d age_limit_ms=%d write_rate_bytes_s=%d active_bytes=%d active_ms=%d last_write_ms=%d", l.conn.RemoteAddr(), stats.Bytes, stats.ByteLimit, stats.Packets, stats.Enqueued, stats.Dequeued, stats.DroppedCapacity, stats.DroppedExpired, stats.LastDequeuedWaitMS, stats.MaxDequeuedWaitMS, stats.AgeLimitMS, stats.WriteRateBytesPerSec, activeBytes, activeMS, l.lastIPWriteMS.Load())
+			inQ, outQ := l.sockQueueDepths()
+			topOutKey, topOutStat, topInKey, topInStat := l.topTalker()
+			log.Printf("localmesh BLE queue peer=%s queued_bytes=%d byte_limit=%d queued_packets=%d enqueued=%d dequeued=%d dropped_capacity=%d dropped_expired=%d last_wait_ms=%d max_wait_ms=%d age_limit_ms=%d write_rate_bytes_s=%d active_bytes=%d active_ms=%d last_write_ms=%d rx_bytes=%d rx_last_ms_ago=%d sock_inq=%d sock_outq=%d out_talker=%s:%d out_bytes=%d in_talker=%s:%d in_bytes=%d", l.conn.RemoteAddr(), stats.Bytes, stats.ByteLimit, stats.Packets, stats.Enqueued, stats.Dequeued, stats.DroppedCapacity, stats.DroppedExpired, stats.LastDequeuedWaitMS, stats.MaxDequeuedWaitMS, stats.AgeLimitMS, stats.WriteRateBytesPerSec, activeBytes, activeMS, l.lastIPWriteMS.Load(), l.rxBytes.Load(), l.rxLastMSAgo(), inQ, outQ, topOutKey.dst, topOutKey.port, topOutStat.bytes, topInKey.dst, topInKey.port, topInStat.bytes)
 			last = stats
 		}
 	}
@@ -403,6 +509,8 @@ func (l *streamNodeLink) readLoop() {
 			l.recordTerminalError(err)
 			return
 		}
+		l.rxBytes.Add(int64(len(header) + len(buf)))
+		l.lastRxUnixNS.Store(time.Now().UnixNano())
 		switch header[0] {
 		case streamControl:
 			m, err := ReadControl(bytes.NewReader(buf))
@@ -446,6 +554,38 @@ func (l *streamNodeLink) ReceiveDatagram(ctx context.Context) ([]byte, error) {
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	}
+}
+
+// rxLastMSAgo reports milliseconds since the last received stream byte,
+// or -1 when nothing has been received yet.
+func (l *streamNodeLink) rxLastMSAgo() int64 {
+	last := l.lastRxUnixNS.Load()
+	if last == 0 {
+		return -1
+	}
+	return time.Since(time.Unix(0, last)).Milliseconds()
+}
+
+// sockQueueDepths returns kernel socket queue depths (unread RX, unsent TX)
+// for instrumented connections, or -1, -1 when unavailable. Wrapper layers
+// (TLS, handshake metering) are unwrapped until the CoC socket is reached.
+func (l *streamNodeLink) sockQueueDepths() (int, int) {
+	conn := l.conn
+	for i := 0; i < 4; i++ {
+		if prober, ok := conn.(sockQueueProber); ok {
+			inQ, outQ, err := prober.SockQueue()
+			if err != nil {
+				return -1, -1
+			}
+			return inQ, outQ
+		}
+		unwrapper, ok := conn.(interface{ NetConn() net.Conn })
+		if !ok || unwrapper.NetConn() == nil {
+			return -1, -1
+		}
+		conn = unwrapper.NetConn()
+	}
+	return -1, -1
 }
 
 // Keep the first locally observed terminal cause. In particular, a writer

@@ -50,6 +50,15 @@ func (m *handshakeMeter) start() {
 		m.started = time.Now()
 	}
 }
+
+// NetConn exposes the wrapped connection so diagnostics (socket queue
+// depths) can reach through the metering layer to the CoC socket.
+func (m *handshakeMeter) NetConn() net.Conn {
+	if m == nil {
+		return nil
+	}
+	return m.Conn
+}
 func (m *handshakeMeter) finish() *handshakeMeasurement {
 	if m == nil {
 		return nil
