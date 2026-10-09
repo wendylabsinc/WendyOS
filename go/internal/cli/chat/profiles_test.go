@@ -197,3 +197,11 @@ func TestAgentModelFileRejectsNoncanonicalProfileKeys(t *testing.T) {
 		}
 	}
 }
+
+func TestWatchToolsAreSensorTools(t *testing.T) {
+	for _, name := range []string{"watch_sources", "watch_start", "watch_list", "watch_stop", "watch_events"} {
+		if got := toolGroup(name); got != "sensors" {
+			t.Fatalf("%s is in group %q", name, got)
+		}
+	}
+}

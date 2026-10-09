@@ -252,6 +252,8 @@ and workflows that still require the CLI.
 | `/memory search <words>` | Find notes about a task or named device |
 | `/memory on` or `/memory off` | Enable or pause remembering and recall |
 | `/forget <id>` | Delete a note using its short or full ID |
+| `/watches` | List this session's camera watches |
+| `/watches stop all` | Stop every watch without asking Wendy |
 | `/clear` | Start a fresh conversation, keeping remembered notes |
 | `/quit` | Exit |
 
@@ -274,6 +276,34 @@ environment variables are not copied into that file.
 
 The chat screen requires interactive stdin and stdout. Scripts use `--prompt`
 instead, described next.
+
+## Camera watches
+
+Ask Wendy to watch a camera, for example "tell me when someone comes to the
+door". Wendy starts a watch on the connected device (you approve it like any
+device change), and the device runs a detector on that camera. Nothing is
+recorded or uploaded.
+
+Each report shows in the transcript as one line, such as
+`· 14:02:11  front door  person 0.91 entered`. Arrivals, a watch ending
+unexpectedly, a first error, and a watch becoming ready after it was still
+preparing start a reply from Wendy by themselves, at most one every 10 seconds;
+other reports join the next one. The status bar shows `watching: N` while
+watches run. With voice on, these replies are shown, not spoken.
+
+A reply that a report started cannot run tools that need approval, even with
+`--yes`: Wendy says what it would do, and you can ask it to. Each report Wendy
+replies to is added to the conversation, so a long watch adds up; use `/clear`
+if it grows large.
+
+Use `/watches` to list them and `/watches stop all` to stop them without
+asking Wendy. At most two run at once. Watches end when chat exits, when setup
+restarts the connection, or when you switch devices.
+
+In `wendy chat --prompt` there are no live reports: the command exits after one
+turn and its watches end with it. Wendy starts a watch only when you ask it to
+wait for something, waits with `watch_events`, and reports what it saw.
+Starting a watch needs `--yes`.
 
 ## Run one turn from a script
 

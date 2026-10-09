@@ -9,6 +9,7 @@ import (
 	"io"
 	"strings"
 	"sync"
+	"time"
 	"unicode"
 
 	"github.com/charmbracelet/bubbles/key"
@@ -34,8 +35,10 @@ type UIOptions struct {
 	AutoApprove   bool
 	Voice         bool
 	VoiceFactory  func(context.Context) (VoiceSession, error)
-	Input         io.Reader
-	Output        io.Writer
+	// Watches is the session's camera watches; nil when it has none.
+	Watches WatchControl
+	Input   io.Reader
+	Output  io.Writer
 }
 
 // UIState keeps the visible transcript in memory when connection setup is
@@ -44,6 +47,32 @@ type UIState struct {
 	transcript []chatEntry
 	composer   string
 	Voice      bool
+	notices    []chatEntry
+
+	// The TUI's watch state, kept while the same session's watches keep running.
+	watches       map[string]*watchDisplay
+	watchQueue    []WatchNotice
+	watchOmitted  int
+	lastWatchTurn time.Time
+	// turnID keeps the transcript's turn numbers apart from the next Run's.
+	turnID uint64
+}
+
+// AddNotice shows a notice when the next chat UI opens with this state.
+func (s *UIState) AddNotice(title, text string) {
+	s.notices = append(s.notices, chatEntry{kind: "notice", title: title, text: text})
+}
+
+// saveState hands the model's transcript and watch state to the next Run.
+func (m *chatModel) saveState(state *UIState) {
+	state.transcript = append([]chatEntry(nil), m.transcript...)
+	state.composer = m.composer.Value()
+	state.Voice = m.voiceEnabled
+	state.watches = m.watches
+	state.watchQueue = m.watchQueue
+	state.watchOmitted = m.watchOmitted
+	state.lastWatchTurn = m.lastWatchTurn
+	state.turnID = m.turnID
 }
 
 // ErrReconfigure asks the command to reopen private connection setup.
@@ -64,9 +93,7 @@ func Run(ctx context.Context, opts UIOptions) error {
 		cancel()
 		m.workers.Wait()
 		if opts.State != nil {
-			opts.State.transcript = append([]chatEntry(nil), m.transcript...)
-			opts.State.composer = m.composer.Value()
-			opts.State.Voice = m.voiceEnabled
+			m.saveState(opts.State)
 		}
 	}()
 	options := []tea.ProgramOption{tea.WithContext(ctx), tea.WithAltScreen(), tea.WithMouseCellMotion()}
@@ -94,6 +121,7 @@ type chatEntry struct {
 	title  string
 	text   string
 	memory *memoryDisplay
+	turn   uint64 // the turn the entry was added in, or the last one
 }
 
 type approvalRequest struct {
@@ -138,6 +166,15 @@ type chatModel struct {
 	spinner         spinner.Model
 	status          string
 	queuedPrompts   []string
+
+	watchNotices  <-chan WatchNotice
+	watches       map[string]*watchDisplay
+	watchQueue    []WatchNotice // shown, not yet given to the model
+	lastWatchTurn time.Time
+	watchOmitted  int  // notices dropped from the queue since the last event turn
+	watchPacing   bool // a pacing tick is scheduled
+	turnAssistant int  // transcript index of this turn's streaming reply, or -1
+	now           func() time.Time
 
 	turnID            uint64
 	events            <-chan turnMessage
@@ -204,7 +241,8 @@ func newChatModel(ctx context.Context, opts UIOptions) *chatModel {
 	m := &chatModel{
 		ctx: ctx, opts: opts, composer: input, spinner: s,
 		viewport: viewport.New(0, 0), preview: viewport.New(0, 0),
-		status:            "Ready",
+		status:        "Ready",
+		turnAssistant: -1, now: time.Now, watches: map[string]*watchDisplay{},
 		voiceInputCaption: -1, voiceInputPending: -1, voiceOutputCaption: -1,
 	}
 	m.viewport.KeyMap = viewport.KeyMap{} // Composer owns ordinary cursor keys.
@@ -218,6 +256,20 @@ func newChatModel(ctx context.Context, opts UIOptions) *chatModel {
 	if opts.State != nil && len(opts.State.transcript) > 0 {
 		m.transcript = append([]chatEntry(nil), opts.State.transcript...)
 		m.composer.SetValue(opts.State.composer)
+	}
+	if opts.State != nil {
+		m.transcript = append(m.transcript, opts.State.notices...)
+		opts.State.notices = nil
+		if opts.State.watches != nil {
+			m.watches = opts.State.watches
+		}
+		m.watchQueue = opts.State.watchQueue
+		m.watchOmitted = opts.State.watchOmitted
+		m.lastWatchTurn = opts.State.lastWatchTurn
+		m.turnID = opts.State.turnID
+	}
+	if opts.Watches != nil {
+		m.watchNotices = opts.Watches.WatchNotices()
 	}
 	m.resize(80, 24)
 	if m.removeStandaloneCredential(m.opts.InitialPrompt) {
@@ -233,6 +285,13 @@ func (m *chatModel) Init() tea.Cmd {
 	}
 	if strings.TrimSpace(m.opts.InitialPrompt) != "" {
 		cmds = append(cmds, func() tea.Msg { return initialPromptMessage{} })
+	}
+	if cmd := m.waitForWatchNotice(); cmd != nil {
+		cmds = append(cmds, cmd)
+	}
+	if len(m.watchQueue) > 0 {
+		// A queue restored from an earlier Run lost that Run's pacing tick.
+		cmds = append(cmds, m.maybeStartWatchTurn())
 	}
 	return tea.Batch(cmds...)
 }
@@ -273,6 +332,17 @@ func (m *chatModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case voiceMessage:
 		return m, m.handleVoiceMessage(msg)
+	case watchNoticeMessage:
+		return m, tea.Batch(m.handleWatchNotice(msg.notice), m.waitForWatchNotice())
+	case watchListMessage:
+		m.showWatchList(msg)
+		return m, nil
+	case watchStopMessage:
+		m.showWatchStop(msg)
+		return m, nil
+	case watchPaceMessage:
+		m.watchPacing = false
+		return m, m.maybeStartWatchTurn()
 	case turnMessage:
 		if msg.id != m.turnID || !m.active {
 			return m, nil
@@ -280,6 +350,7 @@ func (m *chatModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.done {
 			canceled := m.canceling || errors.Is(msg.err, context.Canceled)
 			m.active = false
+			m.turnAssistant = -1
 			m.approval = nil
 			m.cancelTurn()
 			m.cancelTurn = nil
@@ -296,7 +367,8 @@ func (m *chatModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			if m.clearAfterTurn {
 				m.clearConversation()
-				return m, m.composer.Focus()
+				// /clear emptied the queue; a report since then still counts.
+				return m, tea.Batch(m.composer.Focus(), m.maybeStartWatchTurn())
 			}
 			if next := m.pendingDelegation; next != nil {
 				m.pendingDelegation = nil
@@ -327,7 +399,7 @@ func (m *chatModel) update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 				return m, tea.Batch(cmd, m.composer.Focus())
 			}
-			return m, m.composer.Focus()
+			return m, tea.Batch(m.composer.Focus(), m.maybeStartWatchTurn())
 		}
 		if !m.canceling {
 			if msg.event != nil {
@@ -445,6 +517,7 @@ func (m *chatModel) submit(prompt string) tea.Cmd {
 		m.quitting = true
 		return tea.Quit
 	case "/clear":
+		m.watchQueue, m.watchOmitted = nil, 0
 		m.discardQueuedPrompts()
 		m.clearStoppedVoice = m.clearStoppedVoice || m.voiceEnabled
 		m.stopVoice()
@@ -477,8 +550,12 @@ func (m *chatModel) submit(prompt string) tea.Cmd {
 		}
 		return nil
 	case "/help":
-		m.appendEntry("notice", "Chat commands", "/help   Show this help\n/tools  Expand or collapse tool and agent activity (Ctrl+T)\n/setup  Change your AI or enter an API key privately\n/voice  Toggle voice; /voice setup changes voice credentials privately\n/memory Browse recent notes\n/memory <id>  Read a note and its evidence\n/memory search <words>  Find notes\n/memory on|off  Enable or pause remembering and recall\n/forget <id>  Delete a note using its short ID\n/clear  Clear the conversation and queued messages; keep remembered notes\n/quit   Exit chat\n\nEnter sends a message, or queues it while Wendy is working. Queued messages run in order after the current turn.\nAlt+Enter or Ctrl+J adds a new line.\nPgUp/PgDn scroll the transcript; Ctrl+Home/End jump to its start/end.\nEsc or Ctrl+C cancels active work, discards queued messages, and stops voice playback. Ctrl+C exits when idle.\nVoice corrections interrupt current work and run before queued typed messages.\nFor tool approvals, review the arguments and press y to allow once or n to deny. Spoken approval is never accepted.\nScroll the approval with ↑/↓, PgUp/PgDn, or the mouse wheel.")
+		m.appendEntry("notice", "Chat commands", "/help   Show this help\n/tools  Expand or collapse tool and agent activity (Ctrl+T)\n/setup  Change your AI or enter an API key privately\n/voice  Toggle voice; /voice setup changes voice credentials privately\n/memory Browse recent notes\n/memory <id>  Read a note and its evidence\n/memory search <words>  Find notes\n/memory on|off  Enable or pause remembering and recall\n/watches  List this session's camera watches\n/watches stop all  Stop every watch without asking Wendy\n/forget <id>  Delete a note using its short ID\n/clear  Clear the conversation and queued messages; keep remembered notes\n/quit   Exit chat\n\nEnter sends a message, or queues it while Wendy is working. Queued messages run in order after the current turn.\nAlt+Enter or Ctrl+J adds a new line.\nPgUp/PgDn scroll the transcript; Ctrl+Home/End jump to its start/end.\nEsc or Ctrl+C cancels active work, discards queued messages, and stops voice playback. Ctrl+C exits when idle.\nVoice corrections interrupt current work and run before queued typed messages.\nFor tool approvals, review the arguments and press y to allow once or n to deny. Spoken approval is never accepted.\nScroll the approval with ↑/↓, PgUp/PgDn, or the mouse wheel.")
 		return nil
+	case "/watches":
+		return m.listWatches()
+	case "/watches stop all":
+		return m.stopAllWatches()
 	case "/memory":
 		m.showMemoryNotes("")
 		return nil
@@ -518,6 +595,11 @@ func (m *chatModel) submit(prompt string) tea.Cmd {
 		} else {
 			m.appendEntry("notice", "Note forgotten", "Removed the selected note from memory.")
 		}
+		return nil
+	}
+	if strings.HasPrefix(prompt, "/watches ") {
+		m.composer.SetValue(prompt)
+		m.appendEntry("notice", "Unknown command", "Use /watches to list this session's camera watches, or /watches stop all to stop them.")
 		return nil
 	}
 	if strings.HasPrefix(prompt, "/voice ") || (strings.HasPrefix(prompt, "/") && !strings.ContainsAny(prompt, " \n\t")) {
@@ -592,19 +674,13 @@ func (m *chatModel) startTurnWithDisplay(prompt, display string) tea.Cmd {
 }
 
 func (m *chatModel) startTurnAtEntry(prompt, display string, captionIndex int) tea.Cmd {
+	// A request from the user ends the previous reply's speech. An event turn
+	// does not, so this stays out of beginTurn.
 	if m.turnSpeechCancel != nil {
 		m.turnSpeechCancel()
 	}
 	m.turnSpeechCtx, m.turnSpeechCancel = context.WithCancel(m.ctx)
-	m.delegation = nil
-	m.turnReply = ""
-	m.turnID++
-	id := m.turnID
-	ctx, cancel := context.WithCancel(m.ctx)
-	m.cancelTurn = cancel
-	m.active = true
-	m.canceling = false
-	m.status = "Thinking"
+	cmd := m.beginTurn(prompt, false)
 	if captionIndex >= 0 && captionIndex < len(m.transcript) && m.transcript[captionIndex].kind == "voice_input" {
 		// This is the same utterance already shown by live transcription, now
 		// accepted as an agent request. Promote it instead of echoing it again.
@@ -614,6 +690,23 @@ func (m *chatModel) startTurnAtEntry(prompt, display string, captionIndex int) t
 		m.appendEntry("user", "You", display)
 	}
 	m.viewport.GotoBottom()
+	return cmd
+}
+
+// beginTurn runs prompt through the engine. The caller shows what started it.
+// A turn a watch report started (fromEvent) skips memory and runs no tool that
+// needs approval, so it never opens a prompt over what the user is typing.
+func (m *chatModel) beginTurn(prompt string, fromEvent bool) tea.Cmd {
+	m.delegation = nil
+	m.turnReply = ""
+	m.turnAssistant = -1
+	m.turnID++
+	id := m.turnID
+	ctx, cancel := context.WithCancel(m.ctx)
+	m.cancelTurn = cancel
+	m.active = true
+	m.canceling = false
+	m.status = "Thinking"
 	events := make(chan turnMessage, 64)
 	m.events = events
 	engine, autoApprove, sessionCtx := m.opts.Engine, m.opts.AutoApprove, m.ctx
@@ -635,6 +728,9 @@ func (m *chatModel) startTurnAtEntry(prompt, display string, captionIndex int) t
 			if err := ctx.Err(); err != nil {
 				return false, err
 			}
+			if fromEvent {
+				return false, &ToolRefusal{Reason: watchTurnRefusal}
+			}
 			if autoApprove {
 				return true, nil
 			}
@@ -651,7 +747,7 @@ func (m *chatModel) startTurnAtEntry(prompt, display string, captionIndex int) t
 				return false, ctx.Err()
 			}
 		}
-		err := engine.Turn(ctx, prompt, emit, approve)
+		err := engine.TurnWithOptions(ctx, prompt, emit, approve, TurnOptions{SkipMemory: fromEvent})
 		// Completion uses the session context: canceling a turn must still notify
 		// the UI that it can accept another prompt after the worker has stopped.
 		select {
@@ -1000,16 +1096,19 @@ func (m *chatModel) handleEvent(event Event) {
 			return
 		}
 		m.turnReply += event.Text
-		last := len(m.transcript) - 1
-		if last >= 0 && m.transcript[last].kind == "assistant" {
-			m.transcript[last].text += event.Text
+		// Only this turn's reply is extended: an event turn has no "You" entry
+		// to separate it from the previous turn's reply.
+		if i := m.turnAssistant; i >= 0 && i < len(m.transcript) && m.transcript[i].kind == "assistant" {
+			m.transcript[i].text += event.Text
 		} else {
 			m.transcript = append(m.transcript, chatEntry{kind: "assistant", title: "Wendy", text: event.Text})
+			m.turnAssistant = len(m.transcript) - 1
 		}
 		m.status = "Responding"
 		m.refreshTranscript()
 	case "tool_start":
 		m.turnReply = ""
+		m.turnAssistant = -1
 		name, arguments := "tool", ""
 		if event.Call != nil {
 			name, arguments = event.Call.Name, prettyArguments(event.Call.Arguments)
@@ -1022,6 +1121,9 @@ func (m *chatModel) handleEvent(event Event) {
 			name = event.Call.Name
 		}
 		m.appendEntry("result", "Result · "+name, event.Text)
+		if name == "watch_start" {
+			m.noteWatchStart(event.Text)
+		}
 		m.status = "Thinking"
 	case "status":
 		m.status = event.Text
@@ -1031,7 +1133,7 @@ func (m *chatModel) handleEvent(event Event) {
 }
 
 func (m *chatModel) appendEntry(kind, title, text string) {
-	m.transcript = append(m.transcript, chatEntry{kind: kind, title: title, text: text})
+	m.transcript = append(m.transcript, chatEntry{kind: kind, title: title, text: text, turn: m.turnID})
 	m.refreshTranscript()
 }
 
@@ -1064,18 +1166,25 @@ func (m *chatModel) transcriptContent(width int) (string, []int) {
 	plain := lipgloss.NewStyle()
 	for i := 0; i < len(m.transcript); i++ {
 		entry := m.transcript[i]
-		if i > 0 {
+		if i > 0 && !(entry.kind == "event" && m.transcript[i-1].kind == "event") {
 			appendBlock("", plain, false)
 		}
+		if entry.kind == "event" {
+			appendBlock(eventLine(entry), chatDim, true)
+			continue
+		}
 		if !m.showToolDetails && isActivityEntry(entry) {
-			end := i + 1
-			for end < len(m.transcript) && isActivityEntry(m.transcript[end]) {
-				end++
-			}
-			summary, warnings := compactActivity(m.transcript[i:end], m.active && end == len(m.transcript))
+			group, events, end := activityGroup(m.transcript, i)
+			summary, warnings := compactActivity(group, m.active && onlyEventsFrom(m.transcript, end))
 			appendBlock(chatSingleLine(summary), chatDim, true)
 			for _, warning := range warnings {
 				appendBlock(chatSingleLine(warning), chatWarn, true)
+			}
+			for j, event := range events {
+				if j == 0 {
+					appendBlock("", plain, false)
+				}
+				appendBlock(eventLine(event), chatDim, true)
 			}
 			i = end - 1
 			continue
@@ -1296,6 +1405,9 @@ func (m *chatModel) View() string {
 			status = fmt.Sprintf("%d queued · %s", len(m.queuedPrompts), status)
 		}
 		status += " · " + m.voiceStatus()
+		if n := m.activeWatchCount(); n > 0 {
+			status += fmt.Sprintf(" · watching: %d", n)
+		}
 		if m.active {
 			status = m.spinner.View() + " " + status
 		}
@@ -1397,4 +1509,47 @@ func chatSanitize(s string) string {
 
 func chatSingleLine(s string) string {
 	return strings.Join(strings.Fields(chatSanitize(s)), " ")
+}
+
+// eventLine renders a watch event line. Its fields were single-lined when it
+// was built, so only escapes are stripped: the double spaces between fields
+// stay.
+func eventLine(entry chatEntry) string {
+	return strings.ReplaceAll(chatSanitize(entry.text), "\n", " ")
+}
+
+// activityGroup collects the tool and agent activity that starts at index i
+// for one compact row. Event lines that land inside the activity, followed by
+// more activity of the same turn, do not split it: they are returned to show
+// after the row. end is the index after the group.
+func activityGroup(entries []chatEntry, i int) (group, events []chatEntry, end int) {
+	end = i
+	for end < len(entries) {
+		if isActivityEntry(entries[end]) {
+			group = append(group, entries[end])
+			end++
+			continue
+		}
+		next := end
+		for next < len(entries) && entries[next].kind == "event" {
+			next++
+		}
+		if next == end || next == len(entries) || !isActivityEntry(entries[next]) || entries[next].turn != group[len(group)-1].turn {
+			break
+		}
+		events = append(events, entries[end:next]...)
+		end = next
+	}
+	return group, events, end
+}
+
+// onlyEventsFrom reports whether every entry from index i on is a watch event
+// line, so such lines do not make a running tool group look finished.
+func onlyEventsFrom(entries []chatEntry, i int) bool {
+	for ; i < len(entries); i++ {
+		if entries[i].kind != "event" {
+			return false
+		}
+	}
+	return true
 }

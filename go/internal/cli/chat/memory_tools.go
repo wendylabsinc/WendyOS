@@ -63,7 +63,20 @@ func (m *MemoryTools) ListTools(ctx context.Context) ([]Tool, error) {
 	if err != nil || !m.isEnabled() {
 		return list, err
 	}
-	return append(append([]Tool(nil), list...), memoryTools...), nil
+	list = append([]Tool(nil), list...)
+	for _, tool := range memoryTools {
+		if !memoryWriteBlocked(ctx, tool.Name) {
+			list = append(list, tool)
+		}
+	}
+	return list, nil
+}
+
+// memoryWriteBlocked reports whether ctx is a turn that must not change notes,
+// because its text is not a statement from the user, and name changes them.
+func memoryWriteBlocked(ctx context.Context, name string) bool {
+	runtime, _ := ctx.Value(turnRuntimeKey{}).(*turnRuntime)
+	return runtime != nil && runtime.skipMemory && (name == "memory_save" || name == "memory_forget")
 }
 
 func (m *MemoryTools) Execute(ctx context.Context, call ToolCall) (string, error) {
@@ -81,6 +94,9 @@ func (m *MemoryTools) ExecuteResult(ctx context.Context, call ToolCall) (ToolRes
 		}
 		if !m.isEnabled() {
 			return ToolResult{}, errors.New("memory is off; use /memory on to enable it")
+		}
+		if memoryWriteBlocked(ctx, call.Name) {
+			return ToolResult{}, fmt.Errorf("%s is not available in this turn: the user did not start it", call.Name)
 		}
 		if err := validateArguments(tool, call.Arguments); err != nil {
 			return ToolResult{}, err

@@ -53,6 +53,26 @@ func TestMain(m *testing.M) {
 			}
 			return mcpgo.NewToolResultError("operation canceled"), nil
 		})
+		srv.AddTool(mcpgo.NewTool("test_watch_notify", mcpgo.WithReadOnlyHintAnnotation(true)), func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+			_ = srv.SendNotificationToSpecificClient("stdio", "notifications/wendy/watch_status", map[string]any{"watch_id": "w1", "label": "front door", "state": "READY", "reason": "", "camera": "Brio 101", "watching": []string{"person"}})
+			_ = srv.SendNotificationToSpecificClient("stdio", "notifications/wendy/watch_event", map[string]any{"watch_id": "w1", "label": "front door", "sequence": 1, "kind": "entered", "classes": []map[string]any{{"label": "person", "score": 0.91}}, "occurred_at": "2026-10-07T20:20:03Z"})
+			_ = srv.SendNotificationToSpecificClient("stdio", "notifications/other/thing", map[string]any{"watch_id": "w1"})
+			return mcpgo.NewToolResultText("sent"), nil
+		})
+		srv.AddTool(mcpgo.NewTool("watch_list", mcpgo.WithReadOnlyHintAnnotation(true)), func(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+			listing := map[string]any{"free_slots": 1, "watches": []map[string]any{
+				{"watch_id": "w1", "label": "front door", "camera_name": "Brio 101", "classes": []string{"person"}, "state": "READY"},
+				{"watch_id": "w2", "label": "garage", "camera_name": "Brio 101", "classes": []string{"car"}, "state": "ENDED", "reason": "stopped"},
+			}}
+			return mcpgo.NewToolResultStructured(listing, "watches"), nil
+		})
+		srv.AddTool(mcpgo.NewTool("watch_stop"), func(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+			id := req.GetString("watch_id", "")
+			if err := os.WriteFile("stopped-"+id, nil, 0600); err != nil {
+				return nil, err
+			}
+			return mcpgo.NewToolResultStructured(map[string]any{"watch_id": id, "state": "ENDED", "removed": true}, "stopped"), nil
+		})
 		fmt.Fprintln(os.Stderr, "fake MCP diagnostics, hidden from chat")
 		if err := server.ServeStdio(srv); err != nil {
 			fmt.Fprintln(os.Stderr, err)

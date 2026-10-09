@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/wendylabsinc/wendy/go/internal/cli/chat"
 )
 
 func TestChatVisibleWithLocalModelHelp(t *testing.T) {
@@ -144,5 +146,16 @@ func TestChatPromptRefusesInteractiveOnlyFlags(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), "--prompt") {
 			t.Fatalf("%v: expected an error naming --prompt, got %v", args, err)
 		}
+	}
+}
+
+func TestChatPromptSessionIsToldItIsHeadless(t *testing.T) {
+	opts := chatHeadlessOptions{Workspace: "/workspace", Device: "pi", NoMemory: true}
+	session := opts.sessionOptions(chat.Config{Provider: "local", Model: "m"}, "/bin/wendy")
+	if session.SystemInstructions != chat.HeadlessInstructions {
+		t.Fatalf("headless instructions %q", session.SystemInstructions)
+	}
+	if session.Workspace != "/workspace" || session.Device != "pi" || !session.NoMemory || session.Executable != "/bin/wendy" || session.Config.Model != "m" {
+		t.Fatalf("session options %+v", session)
 	}
 }

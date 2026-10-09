@@ -214,3 +214,86 @@ func TestEngineBoundedRoundsAndPartialProviderFailure(t *testing.T) {
 		t.Fatalf("partial model response = %+v", last)
 	}
 }
+
+func TestTurnWithSkipMemoryNeitherRecallsNorLearns(t *testing.T) {
+	base := &engineTestExecutor{tools: []Tool{{Name: "device_info", Parameters: json.RawMessage(`{"type":"object"}`)}}}
+	tools, store := memoryTestTools(t, base)
+	if _, err := store.Save(context.Background(), MemoryInput{Scope: "workspace", Kind: "fact", Title: "Front door camera", Content: "The Brio faces the front door", Evidence: "User said so"}); err != nil {
+		t.Fatal(err)
+	}
+	var recalled, learned bool
+	provider := engineTestProvider(func(_ context.Context, messages []Message, _ []Tool, _ func(string)) (Message, error) {
+		for _, m := range messages {
+			learned = learned || strings.Contains(m.Content, "Review the completed Wendy task")
+		}
+		recalled = recalled || strings.Contains(messages[0].Content, "Front door camera")
+		if messages[len(messages)-1].Role == "tool" || learned {
+			return Message{Content: "Done."}, nil
+		}
+		return Message{ToolCalls: []ToolCall{{ID: "c1", Name: "device_info", Arguments: json.RawMessage(`{}`)}}}, nil
+	})
+	engine := NewEngine(provider, tools, "Wendy")
+	if err := engine.TurnWithOptions(context.Background(), "front door camera event", nil, nil, TurnOptions{SkipMemory: true}); err != nil {
+		t.Fatal(err)
+	}
+	if recalled || learned {
+		t.Fatalf("an event turn used memory: recalled=%v learned=%v", recalled, learned)
+	}
+	if err := engine.Turn(context.Background(), "front door camera", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if !recalled {
+		t.Fatal("an ordinary turn must still recall notes")
+	}
+}
+
+// An approver can refuse a call without asking anyone. The model reads the
+// refusal as the call's result and the turn goes on, in delegated children too.
+func TestApprovalRefusalIsTheToolResultInChildrenToo(t *testing.T) {
+	const reason = "Not run: nobody asked for this turn."
+	refuse := func(context.Context, ToolCall) (bool, error) { return false, &ToolRefusal{Reason: reason} }
+	toolResults := func(messages []Message) map[string]string {
+		results := map[string]string{}
+		for _, m := range messages {
+			if m.Role == "tool" {
+				results[m.ToolCallID] = m.Content
+			}
+		}
+		return results
+	}
+	profile, _ := ResolveProfile("general")
+	child := &engineTestExecutor{tools: []Tool{{Name: "write", RequiresApproval: true}}}
+	var childResults map[string]string
+	supervisor := &agentSupervisor{options: SessionOptions{Profile: profile}, gate: make(chan struct{}, 1), factory: func(context.Context, SessionOptions, *Profile) (*Engine, func(), error) {
+		provider := engineTestProvider(func(_ context.Context, messages []Message, _ []Tool, _ func(string)) (Message, error) {
+			if messages[len(messages)-1].Role == "tool" {
+				childResults = toolResults(messages)
+				return Message{Content: "child done"}, nil
+			}
+			return Message{ToolCalls: []ToolCall{{ID: "child-write", Name: "write", Arguments: json.RawMessage(`{}`)}}}, nil
+		})
+		return NewEngine(provider, child, "child"), func() {}, nil
+	}}
+	parent := &engineTestExecutor{tools: []Tool{{Name: "write", RequiresApproval: true}}}
+	var results map[string]string
+	provider := engineTestProvider(func(_ context.Context, messages []Message, _ []Tool, _ func(string)) (Message, error) {
+		if messages[len(messages)-1].Role == "tool" {
+			results = toolResults(messages)
+			return Message{Content: "Done."}, nil
+		}
+		return Message{ToolCalls: []ToolCall{
+			{ID: "write", Name: "write", Arguments: json.RawMessage(`{}`)},
+			{ID: "delegate", Name: delegateTool.Name, Arguments: json.RawMessage(`{"tasks":[{"profile":"debugger","prompt":"write it"}]}`)},
+		}}, nil
+	})
+	engine := NewEngine(provider, &agentExecutor{base: parent, supervisor: supervisor}, "Wendy")
+	if err := engine.Turn(context.Background(), "go", nil, refuse); err != nil {
+		t.Fatal(err)
+	}
+	if results["write"] != reason || childResults["child-write"] != reason || !strings.Contains(results["delegate"], `"state":"completed"`) {
+		t.Fatalf("parent %q child %q", results, childResults)
+	}
+	if len(parent.calls) != 0 || len(child.calls) != 0 {
+		t.Fatalf("a refused tool ran: parent %d child %d", len(parent.calls), len(child.calls))
+	}
+}
