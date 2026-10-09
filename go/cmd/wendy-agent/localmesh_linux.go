@@ -20,17 +20,51 @@ import (
 
 // runConfiguredMeshCarriers runs one Babel node for every enabled carrier.
 // Its observer is cleared only after the radio provider has drained its links.
-func runConfiguredMeshCarriers(ctx context.Context, configDir string, id localmesh.TCPIdentity, logger *zap.Logger, catalog *meshCatalogManager, sharing *meshSharingManager, observe func(func() localmesh.NodeSnapshot)) error {
+func runConfiguredMeshCarriers(ctx context.Context, configDir string, id localmesh.TCPIdentity, logger *zap.Logger, catalog *meshCatalogManager, sharing *meshSharingManager, observe func(func() localmesh.NodeSnapshot)) (runErr error) {
 	path := filepath.Join(configDir, "local-mesh.json")
 	initial, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
+		sharing.carriers.begin("", nil)
 		return nil
 	}
 	if err != nil {
+		epoch := sharing.carriers.begin("unreadable configuration", []string{"Mesh"})
+		sharing.carriers.fail(epoch, err)
+		return err
+	}
+	cfg, err := localmesh.LoadTCPConfig(path, id.Asset)
+	var names []string
+	if cfg != nil {
+		if cfg.Listen != "" || len(cfg.Peers) != 0 {
+			names = append(names, "TCP")
+		}
+		if cfg.NAN {
+			names = append(names, "NAN")
+		}
+		if cfg.BLE {
+			names = append(names, "BLE")
+		}
+		if cfg.Ethernet || cfg.InfrastructureWiFi {
+			names = append(names, "LAN")
+		}
+	}
+	if err != nil {
+		names = []string{"Mesh"}
+	}
+	epoch := sharing.carriers.begin(string(initial), names)
+	if err != nil {
+		sharing.carriers.fail(epoch, err)
 		return err
 	}
 	runCtx, cancelRun := context.WithCancel(ctx)
 	defer cancelRun()
+	defer func() {
+		if ctx.Err() != nil || errors.Is(runErr, context.Canceled) || runErr == nil {
+			sharing.carriers.end(epoch)
+		} else {
+			sharing.carriers.fail(epoch, runErr)
+		}
+	}()
 	watchDone := make(chan struct{})
 	go func() {
 		defer close(watchDone)
@@ -64,6 +98,9 @@ func runConfiguredMeshCarriers(ctx context.Context, configDir string, id localme
 			return
 		}
 		observe(node.Snapshot)
+		if cfg.Listen != "" || len(cfg.Peers) != 0 {
+			sharing.carriers.report(epoch, "TCP", localmesh.CarrierStatus{Ready: true})
+		}
 		if err := node.SetGatewayOffers(runCtx, func() []int32 {
 			offers := catalog.GatewayOffers()
 			assets := make([]int32, 0, len(offers))
@@ -73,6 +110,7 @@ func runConfiguredMeshCarriers(ctx context.Context, configDir string, id localme
 			return assets
 		}); err != nil {
 			logger.Error("mesh route authorizer unavailable", zap.Error(err))
+			sharing.carriers.fail(epoch, fmt.Errorf("mesh route authorizer: %w", err))
 			return
 		}
 		if err := catalog.Activate(runCtx, node.Credentials, node.Snapshot, node.ReauthorizeRoutes, cfg.Ethernet, cfg.InfrastructureWiFi); err != nil {
@@ -85,33 +123,38 @@ func runConfiguredMeshCarriers(ctx context.Context, configDir string, id localme
 		providerCtx, cancel := context.WithCancel(runCtx)
 		stopProviders = cancel
 		selection := localmesh.NewPeerSelection(node.Snapshot)
-		start := func(name string, run func(context.Context) error) {
+		start := func(name string, run func(context.Context, func(localmesh.CarrierStatus)) error) {
 			providersDone.Add(1)
 			go func() {
 				defer providersDone.Done()
-				for providerCtx.Err() == nil {
-					if err := run(providerCtx); err != nil && !errors.Is(err, context.Canceled) && providerCtx.Err() == nil {
-						logger.Warn(name+" carrier stopped", zap.Error(err))
+				runMeshCarrier(providerCtx, 5*time.Second, func(status localmesh.CarrierStatus) {
+					sharing.carriers.report(epoch, name, status)
+					if status.Err != nil {
+						logger.Warn(name+" carrier unavailable", zap.Error(status.Err))
 					}
-					select {
-					case <-providerCtx.Done():
-						return
-					case <-time.After(5 * time.Second):
-					}
-				}
+				}, run)
 			}()
 		}
 		if cfg.NAN {
 			provider := nanprovider.Provider{Credentials: node.Credentials, Node: node, Selection: selection, Logger: logger}
-			start("NAN", provider.Run)
+			start("NAN", func(ctx context.Context, status func(localmesh.CarrierStatus)) error {
+				provider.Status = status
+				return provider.Run(ctx)
+			})
 		}
 		if cfg.BLE {
 			ble := bleprovider.Config{Credentials: node.Credentials, Node: node, Selection: selection, MeshName: fmt.Sprintf("org:%d:default", id.Org), Logger: logger}
-			start("BLE", func(ctx context.Context) error { return bleprovider.Run(ctx, ble) })
+			start("BLE", func(ctx context.Context, status func(localmesh.CarrierStatus)) error {
+				ble.Status = status
+				return bleprovider.Run(ctx, ble)
+			})
 		}
 		if cfg.Ethernet || cfg.InfrastructureWiFi {
 			lan := localmesh.LANConfig{Credentials: node.Credentials, Node: node, Ethernet: cfg.Ethernet, InfrastructureWiFi: cfg.InfrastructureWiFi, Selection: selection, Logger: logger}
-			start("LAN", func(ctx context.Context) error { return localmesh.RunLAN(ctx, lan) })
+			start("LAN", func(ctx context.Context, status func(localmesh.CarrierStatus)) error {
+				lan.Status = status
+				return localmesh.RunLAN(ctx, lan)
+			})
 		}
 	})
 }
