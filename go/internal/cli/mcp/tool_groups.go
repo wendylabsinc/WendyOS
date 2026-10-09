@@ -21,7 +21,7 @@ var toolGroups = map[string][]string{
 	"hardware":      {"bluetooth_scan", "bluetooth_connect", "bluetooth_disconnect", "camera_list", "camera_controls", "camera_set_control", "camera_snapshot"},
 	"robotics":      {"ros2_topics", "ros2_topic_info", "ros2_topic_sample", "ros2_topic_hz", "ros2_lidar_summary"},
 	"observability": {"telemetry_metrics", "telemetry_traces", "app_inspect", "device_os_logs"},
-	"simulator":     {"simulator_list", "simulator_create", "simulator_stop", "simulator_delete"},
+	"simulator":     {"simulator_list", "simulator_create", "simulator_start", "simulator_stop", "simulator_delete"},
 	"cloud":         {"cloud_discover", "cloud_connect", "cloud_tunnel", "cloud_tunnel_list", "cloud_tunnel_close", "cloud_ping"},
 }
 

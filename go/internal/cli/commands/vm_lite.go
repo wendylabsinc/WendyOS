@@ -58,15 +58,23 @@ func createLiteSimulator(ctx context.Context, store *vm.Store, opts wendymcp.Sim
 	if err := store.CheckCreatable(opts.Name); err != nil {
 		return nil, err
 	}
+	profile := opts.Profile
+	if profile == "" {
+		profile = vm.ProfileWendyLite
+	}
+	firmwareID := "esp32c6"
+	if profile == vm.ProfileWendyLiteNative {
+		firmwareID = "esp32c6_native"
+	}
 	path, version, source := opts.Image, "", "local"
 	if path == "" {
 		manifest, err := fetchMainManifestContext(ctx)
 		if err != nil {
 			return nil, err
 		}
-		firmware, ok := manifest.Firmware["esp32c6"]
+		firmware, ok := manifest.Firmware[firmwareID]
 		if !ok {
-			return nil, fmt.Errorf("no published ESP32-C6 firmware; supply a merged --image")
+			return nil, fmt.Errorf("no published %s firmware; supply a merged --image", firmwareID)
 		}
 		version = opts.Version
 		if version == "" {
@@ -76,8 +84,8 @@ func createLiteSimulator(ctx context.Context, store *vm.Store, opts wendymcp.Sim
 		if err != nil {
 			return nil, err
 		}
-		if fm.FirmwareID != "" && fm.FirmwareID != "esp32c6" {
-			return nil, fmt.Errorf("firmware manifest does not describe ESP32-C6")
+		if fm.FirmwareID != "" && fm.FirmwareID != firmwareID {
+			return nil, fmt.Errorf("firmware manifest does not describe %s", firmwareID)
 		}
 		info, err := getFirmwareInfo(fm, version)
 		if err != nil {
@@ -118,9 +126,17 @@ func createLiteSimulator(ctx context.Context, store *vm.Store, opts wendymcp.Sim
 	if err != nil {
 		return nil, err
 	}
+	if profile == vm.ProfileWendyLiteNative {
+		img := NewEspFlashImage(data)
+		for _, part := range []string{"ota_0", "ota_1", "otadata"} {
+			if _, err := img.findPartition(part); err != nil {
+				return nil, fmt.Errorf("native ESP-IDF simulation requires native firmware with OTA slots: %w", err)
+			}
+		}
+	}
 	size := int64(len(data))
 	if err := store.CreateFrom(opts.Name, bytes.NewReader(data), size, size, vm.Meta{
-		Profile: vm.ProfileWendyLite, ImageVersion: version, ImageSource: source,
+		Profile: profile, ImageVersion: version, ImageSource: source,
 	}); err != nil {
 		return nil, err
 	}
@@ -133,7 +149,7 @@ func isLiteSimulator(name string) bool {
 		return false
 	}
 	meta, ok := store.ReadMeta(name)
-	return ok && meta.Profile == vm.ProfileWendyLite
+	return ok && vm.IsLiteProfile(meta.Profile)
 }
 
 func connectLiteSimulator(ctx context.Context, name, addr string) (*SelectedDevice, error) {

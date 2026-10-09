@@ -3,6 +3,11 @@ package vm
 import "fmt"
 
 const ProfileWendyLite = "wendy-lite"
+const ProfileWendyLiteNative = "wendy-lite-native"
+
+func IsLiteProfile(profile string) bool {
+	return profile == ProfileWendyLite || profile == ProfileWendyLiteNative
+}
 
 // The initial Lite simulator runs the published ESP32-C6 firmware. These
 // credentials belong only to the emulator's virtual access point.

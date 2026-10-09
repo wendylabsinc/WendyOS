@@ -854,10 +854,6 @@ func newDeviceEnrollCmd() *cobra.Command {
 			}
 			defer target.Close()
 
-			if err := promptWifiIfNeeded(ctx, conn); err != nil {
-				return err
-			}
-
 			return runSelectedDeviceEnrollment(cmd, target, auth, name, orgID, acmeDirectoryURL, liteOptions)
 		},
 	}

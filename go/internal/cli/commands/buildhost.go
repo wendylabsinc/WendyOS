@@ -196,7 +196,7 @@ func buildChunkingMode(mode string) agentpbv2.ChunkingMode {
 // than an error.
 func checkBuildHostCapabilities(host string, resp *agentpbv2.GetBuildCapabilitiesResponse, platform string) error {
 	if !resp.GetBuilderEnabled() {
-		return fmt.Errorf("%s is not configured as a build host; enable the builder role on that device, or omit --build-host to build locally", host)
+		return fmt.Errorf("%s is not configured as a build host; run `wendy device build-host enable --device <build-host>` to enable it, or omit --build-host to build locally", host)
 	}
 	if !resp.GetBuildkitAvailable() {
 		// On darwin this is a design fact, not a misconfiguration: the Mac agent
@@ -221,6 +221,38 @@ func checkBuildHostCapabilities(host string, resp *agentpbv2.GetBuildCapabilitie
 		host, platform,
 		formatPlatformList(resp.GetNativePlatforms()),
 		formatPlatformList(resp.GetEmulatedPlatforms()))
+}
+
+// prepareBuildHost offers to enable remote builds before validating the host.
+// A nil confirmation function leaves a disabled host unchanged.
+func prepareBuildHost(ctx context.Context, service agentpbv2.WendyBuildServiceClient, host, platform string, confirm func(string) (bool, error)) (*agentpbv2.GetBuildCapabilitiesResponse, error) {
+	caps, err := service.GetBuildCapabilities(ctx, &agentpbv2.GetBuildCapabilitiesRequest{})
+	if err != nil {
+		return nil, fmt.Errorf("querying build host %s: %w", host, err)
+	}
+	if !caps.GetBuilderEnabled() && confirm != nil {
+		accepted, err := confirm(fmt.Sprintf("%s is not configured as a build host. Enable it to accept remote builds?", host))
+		if err != nil {
+			return nil, err
+		}
+		if accepted {
+			resp, err := service.SetBuildHostEnabled(ctx, &agentpbv2.SetBuildHostEnabledRequest{Enabled: true})
+			if err != nil {
+				return nil, fmt.Errorf("enabling build host %s: %w", host, err)
+			}
+			if !resp.GetEnabled() {
+				return nil, fmt.Errorf("%s did not enable the builder role", host)
+			}
+			caps, err = service.GetBuildCapabilities(ctx, &agentpbv2.GetBuildCapabilitiesRequest{})
+			if err != nil {
+				return nil, fmt.Errorf("querying build host %s after enabling it: %w", host, err)
+			}
+		}
+	}
+	if err := checkBuildHostCapabilities(host, caps, platform); err != nil {
+		return nil, err
+	}
+	return caps, nil
 }
 
 func formatPlatformList(platforms []string) string {
@@ -291,11 +323,14 @@ func runRemoteBuild(
 	defer builder.Close()
 	host = buildHostDisplayName(host, builder)
 
-	caps, err := builder.BuildService.GetBuildCapabilities(ctx, &agentpbv2.GetBuildCapabilitiesRequest{})
-	if err != nil {
-		return fmt.Errorf("querying build host %s: %w", host, err)
+	var confirm func(string) (bool, error)
+	if opts.yes {
+		confirm = func(string) (bool, error) { return true, nil }
+	} else if !jsonOutput && isInteractiveTerminal() {
+		confirm = func(question string) (bool, error) { return tui.Confirm(question) }
 	}
-	if err := checkBuildHostCapabilities(host, caps, platform); err != nil {
+	caps, err := prepareBuildHost(ctx, builder.BuildService, host, platform, confirm)
+	if err != nil {
 		return err
 	}
 	if err := checkChunkDeliverySupported(host, caps, opts.chunking); err != nil {

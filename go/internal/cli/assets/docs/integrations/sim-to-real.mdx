@@ -155,3 +155,80 @@ These are hardware application templates, distinct from the `go2` and `g1` VM pr
 - **The browser does not connect:** use the URL printed by Wendy. Default user-mode VMs forward declared HTTP/readiness ports to loopback; physical targets use their reachable address.
 
 See [Unitree simulator setup](/docs/installation/unitree-simulators) for agent upgrades, runtime source-pin updates, and lifecycle commands, or [Wendy for ROS 2](/docs/integrations/ros2) for graph inspection and recording.
+
+
+## Wendy Lite on ESP32-C6
+
+The `wendy-lite` simulator profile runs real ESP32-C6 firmware with
+[Espressif's esp-emu](https://github.com/espressif/esp-emulator). On first start,
+Wendy offers `Do you want to install the ESP32 Emulator? [Y/n]`. Accept to
+install it for your user and continue immediately, without changing PATH.
+Automatic installation supports Apple Silicon macOS and x86_64/ARM64 Linux.
+Windows users must run Wendy inside WSL2; Intel macOS has no prebuilt emulator.
+An existing `esp-emu` on PATH takes precedence. Noninteractive sessions print
+manual installation instructions; `wendy vm --yes` accepts installation.
+This profile uses the firmware's WendyCom protocol
+and WAMR runtime to deploy and run Wendy Lite WASM apps.
+
+```sh
+wendy vm create esp32 --profile wendy-lite
+wendy --device vm:esp32 device info
+wendy run --device vm:esp32
+wendy vm stop esp32
+```
+
+Run `wendy run` from a Wendy Lite project. The device selector boots the
+simulator automatically. Creation downloads the stable `esp32c6` firmware;
+`--version` selects a published version. For a local build, provide the merged
+flash binary, including the bootloader and partition table:
+
+```sh
+wendy vm create esp32-dev --profile wendy-lite --image build/merged-binary.bin
+```
+
+Each simulator gets its own flash copy. Creation replaces the copy's
+`wendy_conf` partition with its simulator name and virtual Wi-Fi credentials,
+without cloud enrollment. The source image stays unchanged. A normal stop saves
+flash and NVS, including deployed apps; `--force` can lose those changes.
+Use `wendy vm logs esp32` to inspect firmware boot output and `wendy vm rm esp32`
+to delete a stopped simulator.
+
+The Simulator picker and desktop simulator panel include this profile. MCP
+clients can use `simulator_create` with `profile: "wendy-lite"`, followed by
+`simulator_start`, `simulator_list`, `simulator_stop`, and `simulator_delete`.
+Start verifies a WendyCom handshake and ping. Deploy apps through the local CLI;
+WendyOS gRPC tools and robot scene viewers do not apply to this profile.
+
+The initial target is ESP32-C6, with user networking and a loopback-only forward
+to the firmware's port 5054. It requires a firmware build that accepts
+unenrolled WendyCom clients. Other ESP32 chips, physical radio behavior, and
+hardware timing are not validated. The real-firmware integration test was run
+with `esp-emu` v0.48.0 on Apple Silicon. To repeat it with your own firmware:
+
+```sh
+WENDY_TEST_LITE_FIRMWARE=/absolute/path/merged-binary.bin \
+  go test ./go/internal/cli/commands -run '^TestLiteSimulatorFirmware$' -count=1 -v
+```
+
+
+### Native ESP-IDF apps
+
+Native apps need the `wendy-lite-native` profile. It uses published
+`esp32c6_native` firmware with two OTA app slots. Select **Wendy Lite native
+ESP-IDF (ESP32-C6)** in the simulator picker, or create one explicitly:
+
+```sh
+wendy vm create esp32-native --profile wendy-lite-native
+wendy run --device vm:esp32-native
+```
+
+Run the second command from your native ESP-IDF project. The existing Wendy
+Lite provider builds the app, uploads it to the inactive OTA slot, and reboots
+the emulated ESP32. Native projects must include `wendy_core` so the CLI can
+reconnect after deployment. A local `--image` for this profile must be merged
+native firmware with `ota_0`, `ota_1`, and `otadata` partitions.
+
+An existing `wendy-lite` simulator has the WASM partition layout and cannot
+accept native apps. Create a native simulator under a new name to preserve its
+flash and deployed WASM app. The two profiles share emulator installation and
+start/stop controls.

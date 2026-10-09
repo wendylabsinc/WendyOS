@@ -246,6 +246,9 @@ func runningVMOnLoopbackPort(port int) (string, bool) {
 	}
 	match := ""
 	for _, st := range statuses {
+		if vm.IsLiteProfile(st.Meta.Profile) {
+			continue
+		}
 		if !st.Running || st.State.NetMode != vm.NetUser || st.State.AgentPort == 0 {
 			continue
 		}
@@ -272,6 +275,9 @@ func runningVMAgentPort(name string) (int, bool) {
 		return 0, false
 	}
 	for _, st := range statuses {
+		if vm.IsLiteProfile(st.Meta.Profile) {
+			continue
+		}
 		if st.Name == name && st.Running && st.State.NetMode == vm.NetUser && st.State.AgentPort != 0 {
 			return st.State.AgentPort, true
 		}

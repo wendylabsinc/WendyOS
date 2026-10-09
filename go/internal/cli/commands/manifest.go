@@ -755,9 +755,17 @@ type firmwareVersionInfo struct {
 }
 
 func fetchFirmwareManifest(path string) (*firmwareManifest, error) {
+	return fetchFirmwareManifestContext(context.Background(), path)
+}
+
+func fetchFirmwareManifestContext(ctx context.Context, path string) (*firmwareManifest, error) {
 	client := &http.Client{Timeout: 30 * time.Second}
 	url := gcsBaseURL + "/" + path
-	resp, err := client.Get(url)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("fetching firmware manifest: %w", err)
 	}
@@ -783,6 +791,7 @@ func getFirmwareInfo(fm *firmwareManifest, ver string) (*imageInfo, error) {
 	return &imageInfo{
 		DownloadURL: gcsBaseURL + "/" + v.Path,
 		ImageSize:   v.SizeBytes,
+		Checksum:    v.Checksum,
 		Version:     ver,
 	}, nil
 }

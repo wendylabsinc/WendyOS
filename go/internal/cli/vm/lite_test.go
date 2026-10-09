@@ -28,3 +28,17 @@ func TestLiteSpecUsesFirmwareAndPrivateNetwork(t *testing.T) {
 		t.Fatal("missing port accepted")
 	}
 }
+
+func TestNativeLiteUsesESPEmulator(t *testing.T) {
+	s := Spec{Name: "native", Profile: ProfileWendyLiteNative, ESPEmulatorPath: "/tmp/esp-emu", DiskPath: "/tmp/native.bin", Net: NetConfig{Mode: NetUser, AgentPort: 55540}}
+	if s.Binary() != "/tmp/esp-emu" {
+		t.Fatal("native simulator did not select its emulator")
+	}
+	args, err := s.Args()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(args, "esp32c6") || !slices.Contains(args, "--save-state") {
+		t.Fatalf("args: %v", args)
+	}
+}

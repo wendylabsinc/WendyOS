@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
+	wendymcp "github.com/wendylabsinc/wendy/go/internal/cli/mcp"
 	"github.com/wendylabsinc/wendy/go/internal/cli/vm"
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	"google.golang.org/grpc/codes"
@@ -245,9 +246,6 @@ func connectSimulatorChoice(ctx context.Context, choice *simulatorChoice, suppre
 	if choice == nil {
 		return nil, fmt.Errorf("no simulator selected")
 	}
-	if err := ensureQEMUFn(ctx); err != nil {
-		return nil, fmt.Errorf("%w: %w", errSimulatorUnavailable, err)
-	}
 
 	if choice.Create {
 		if err := createSimulator(choice.Name); err != nil {
@@ -261,6 +259,9 @@ func connectSimulatorChoice(ctx context.Context, choice *simulatorChoice, suppre
 		// doing it twice printed "simulator unavailable: simulator
 		// unavailable: ...".
 		return nil, markSimulatorUnavailable(err)
+	}
+	if isLiteSimulator(choice.Name) {
+		return connectLiteSimulator(ctx, choice.Name, addr)
 	}
 	conn, err := awaitSimulator(ctx, choice.Name, addr, started)
 	if err != nil {
@@ -303,6 +304,14 @@ var createSimulator = func(name string) error {
 		if err != nil {
 			return err
 		}
+	}
+	if vm.IsLiteProfile(profile) {
+		store, err := vm.NewStore()
+		if err != nil {
+			return err
+		}
+		_, err = createLiteSimulator(context.Background(), store, wendymcp.SimulatorCreateOptions{Name: name, Profile: profile})
+		return err
 	}
 	if !vmAssumeYes && !confirmFn("Download the WendyOS simulator image and create a VM? This is a one-time download of a few hundred MB.") {
 		return ErrUserCancelled

@@ -576,7 +576,15 @@ type AppRequirementsUnsupportedError struct {
 }
 
 func (e *AppRequirementsUnsupportedError) Error() string {
-	return fmt.Sprintf("device %s does not support %s", e.Device.DisplayName, e.Missing)
+	message := fmt.Sprintf("device %s does not support %s", e.Device.DisplayName, e.Missing)
+	if strings.HasPrefix(e.Device.ID, "vm:") {
+		profile := "wendy-lite"
+		if e.Missing == "native apps" {
+			profile = "wendy-lite-native"
+		}
+		message += fmt.Sprintf("; create a compatible simulator with 'wendy vm create <name> --profile %s', then run with 'wendy run --device vm:<name>'", profile)
+	}
+	return message
 }
 
 // MissingWendyCoreError lets the CLI offer to configure an ESP-IDF project.

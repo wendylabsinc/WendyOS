@@ -58,11 +58,12 @@ func TestEnrollmentDispatchesSelectedProtocol(t *testing.T) {
 		return wantErr
 	}
 	conn := &grpcclient.AgentConnection{Host: "desk.local"}
-	promptEnrollmentWifiFn = func(gotCtx context.Context, gotConn *grpcclient.AgentConnection) {
+	promptEnrollmentWifiFn = func(gotCtx context.Context, gotConn *grpcclient.AgentConnection) error {
 		calls = append(calls, "wifi")
 		if gotCtx != ctx || gotConn != conn {
 			t.Fatal("Wi-Fi prompt received a different target")
 		}
+		return nil
 	}
 	runAgentEnrollmentFn = func(gotCtx context.Context, gotConn *grpcclient.AgentConnection, gotAuth *config.AuthConfig, name string, org int32, acme ...string) error {
 		calls = append(calls, "agent")
@@ -135,5 +136,21 @@ func TestEnrollmentDoesNotDialMissingLiteAsAgent(t *testing.T) {
 	got, err := resolveTarget(context.Background(), SelectDevice("wendy-lite:/dev/cu.usbmodem123"), SuppressPickerEnroll())
 	if got != nil || err == nil || !strings.Contains(err.Error(), "was not found") {
 		t.Fatalf("missing Lite device fell through to agent dialing: %v, %v", got, err)
+	}
+}
+
+func TestEnrollmentStopsWhenWifiIsCancelled(t *testing.T) {
+	wifi, agent := promptEnrollmentWifiFn, runAgentEnrollmentFn
+	t.Cleanup(func() { promptEnrollmentWifiFn, runAgentEnrollmentFn = wifi, agent })
+	promptEnrollmentWifiFn = func(context.Context, *grpcclient.AgentConnection) error { return ErrUserCancelled }
+	runAgentEnrollmentFn = func(context.Context, *grpcclient.AgentConnection, *config.AuthConfig, string, int32, ...string) error {
+		t.Fatal("enrolled after cancellation")
+		return nil
+	}
+	cmd := newCloudEnrollDeviceCmd()
+	cmd.SetContext(context.Background())
+	err := runSelectedDeviceEnrollment(cmd, &SelectedDevice{Agent: &grpcclient.AgentConnection{}}, &config.AuthConfig{}, "test", 0, "", liteEnrollmentOptions{})
+	if !errors.Is(err, ErrUserCancelled) {
+		t.Fatalf("got %v", err)
 	}
 }

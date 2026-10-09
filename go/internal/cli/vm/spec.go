@@ -16,14 +16,16 @@ const (
 
 // Spec is everything needed to launch one VM.
 type Spec struct {
-	Name         string
-	DiskPath     string
-	FirmwareCode string
-	FirmwareVars string
-	MemoryMiB    int
-	CPUs         int
-	Accel        Accel
-	Net          NetConfig
+	ESPEmulatorPath string
+	Profile         string
+	Name            string
+	DiskPath        string
+	FirmwareCode    string
+	FirmwareVars    string
+	MemoryMiB       int
+	CPUs            int
+	Accel           Accel
+	Net             NetConfig
 
 	// ConsoleLog, when set, sends the guest console and QEMU's own diagnostics
 	// to this file instead of the terminal. A detached VM has no terminal to
@@ -35,10 +37,24 @@ type Spec struct {
 
 // Binary names the emulator. Always the aarch64 system emulator: the guest is
 // ARM64 whatever the host is, because real WendyOS devices are ARM64.
-func (s Spec) Binary() string { return "qemu-system-aarch64" }
+func (s Spec) Binary() string {
+	if IsLiteProfile(s.Profile) {
+		if s.ESPEmulatorPath != "" {
+			return s.ESPEmulatorPath
+		}
+		return "esp-emu"
+	}
+	return "qemu-system-aarch64"
+}
 
 // Args returns the full argument list for Binary().
 func (s Spec) Args() ([]string, error) {
+	if IsLiteProfile(s.Profile) {
+		return s.liteArgs()
+	}
+	if s.Profile != "" && s.Profile != "generic" {
+		return nil, fmt.Errorf("unsupported emulator profile %q", s.Profile)
+	}
 	if s.Name == "" {
 		return nil, errors.New("no VM name")
 	}

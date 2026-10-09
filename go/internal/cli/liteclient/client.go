@@ -157,10 +157,18 @@ func (c *WendyLiteClient) PeerCertificate() *x509.Certificate {
 }
 
 func (c *WendyLiteClient) ConnectInsecure(address string) error {
-	conn, err := tls.Dial("tcp", address, &tls.Config{InsecureSkipVerify: true}) //nolint:gosec — device uses self-signed certs
+	return c.ConnectInsecureContext(context.Background(), address)
+}
+
+// ConnectInsecureContext bounds both TLS and WendyCom handshakes.
+func (c *WendyLiteClient) ConnectInsecureContext(ctx context.Context, address string) error {
+	dialer := tls.Dialer{Config: &tls.Config{InsecureSkipVerify: true}} //nolint:gosec -- unprovisioned devices use self-signed certificates
+	conn, err := dialer.DialContext(ctx, "tcp", address)
 	if err != nil {
 		return fmt.Errorf("connect: %w", err)
 	}
+	stopCancel := context.AfterFunc(ctx, func() { conn.Close() })
+	defer stopCancel()
 	c.link = newDirectLink(conn)
 	err = c.handshake()
 	if err != nil {

@@ -43,7 +43,9 @@ func runSelectedDeviceEnrollment(cmd *cobra.Command, target *SelectedDevice, aut
 	if err != nil {
 		return err
 	}
-	promptEnrollmentWifiFn(cmd.Context(), conn)
+	if err := promptEnrollmentWifiFn(cmd.Context(), conn); err != nil {
+		return err
+	}
 	return runAgentEnrollmentFn(cmd.Context(), conn, auth, name, orgID, acmeDirectoryURL)
 }
 

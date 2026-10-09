@@ -16,6 +16,18 @@ import (
 
 func simulatorBackend() wendymcp.SimulatorBackend {
 	b := newSimulatorBackend(vm.NewStore, fetchMCPSimulatorImage)
+	b.Start = func(ctx context.Context, name string) (*wendymcp.SimulatorInfo, error) {
+		picked, err := connectSimulatorChoice(ctx, &simulatorChoice{Name: name}, true)
+		if err != nil {
+			return nil, err
+		}
+		defer picked.Close()
+		store, err := vm.NewStore()
+		if err != nil {
+			return nil, err
+		}
+		return readMCPSimulator(store, name)
+	}
 	b.UpdateAgent = updateMCPSimulatorAgent
 	b.Viewer = func(ctx context.Context, name string) (*wendymcp.SimulatorViewer, error) {
 		if err := vm.ValidName(name); err != nil {
@@ -130,6 +142,10 @@ func readMCPSimulator(store *vm.Store, name string) (*wendymcp.SimulatorInfo, er
 		info.State = "unknown"
 		return info, nil
 	}
+	if vm.IsLiteProfile(st.Meta.Profile) {
+		info.Profile = st.Meta.Profile
+		return info, nil
+	}
 	profile, exists, err := store.ReadRobotProfile(name)
 	if err != nil {
 		info.Error = err.Error()
@@ -147,6 +163,9 @@ func createMCPSimulator(ctx context.Context, store *vm.Store, opts wendymcp.Simu
 	}
 	if err := store.CheckCreatable(opts.Name); err != nil {
 		return nil, err
+	}
+	if vm.IsLiteProfile(opts.Profile) {
+		return createLiteSimulator(ctx, store, opts)
 	}
 	var profile *vm.RobotProfile
 	if opts.Profile != "generic" {

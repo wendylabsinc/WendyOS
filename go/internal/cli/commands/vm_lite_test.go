@@ -90,6 +90,108 @@ func TestLiteSimulatorCreation(t *testing.T) {
 	}
 }
 
+func TestLiteNativeSimulatorRejectsWasmImage(t *testing.T) {
+	store := &vm.Store{Root: t.TempDir()}
+	path := t.TempDir() + "/wasm.bin"
+	if err := os.WriteFile(path, liteTestImage(), 0600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := createLiteSimulator(context.Background(), store, wendymcp.SimulatorCreateOptions{Name: "native", Profile: vm.ProfileWendyLiteNative, Image: path})
+	if err == nil || !strings.Contains(err.Error(), "OTA slots") {
+		t.Fatalf("got %v", err)
+	}
+	if _, err := os.Stat(store.Dir("native")); !os.IsNotExist(err) {
+		t.Fatal("incompatible image created a simulator")
+	}
+}
+
+func TestLiteNativeSimulatorFirmware(t *testing.T) {
+	image := os.Getenv("WENDY_TEST_LITE_NATIVE_FIRMWARE")
+	if image == "" {
+		t.Skip("set WENDY_TEST_LITE_NATIVE_FIRMWARE to a merged native firmware image")
+	}
+	t.Setenv("WENDY_CONFIG_DIR", t.TempDir())
+	store, err := vm.NewStore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	info, err := createLiteSimulator(ctx, store, wendymcp.SimulatorCreateOptions{Name: "native", Profile: vm.ProfileWendyLiteNative, Image: image})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Profile != vm.ProfileWendyLiteNative {
+		t.Fatalf("profile: %s", info.Profile)
+	}
+	t.Cleanup(func() { _ = store.Stop("native", true, time.Second) })
+	target, err := connectSimulatorChoice(ctx, &simulatorChoice{Name: "native"}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer target.Close()
+	di, err := target.Provider.GetDeviceInfo(ctx, *target.External)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !di.NativeAppSupport {
+		t.Fatal("native firmware did not advertise native app support")
+	}
+
+	// Re-upload the native firmware's app image through WendyCom OTA, then
+	// verify the bootloader selected the other slot after a reboot.
+	flash, err := LoadEspFlashImage(image)
+	if err != nil {
+		t.Fatal(err)
+	}
+	slot, err := flash.findPartition("ota_0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if uint64(slot.Offset)+uint64(slot.Size) > uint64(len(flash.Bytes())) {
+		t.Fatal("truncated native app partition")
+	}
+	appPath := t.TempDir() + "/native.bin"
+	if err := os.WriteFile(appPath, flash.Bytes()[slot.Offset:slot.Offset+slot.Size], 0600); err != nil {
+		t.Fatal(err)
+	}
+	st, err := store.Status("native")
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := liteclient.NewWendyLiteClient()
+	if err := client.ConnectInsecureContext(ctx, fmt.Sprintf("127.0.0.1:%d", st.State.AgentPort)); err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	if err := client.PushApp(appPath, liteclient.AppTypeNative, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.ResetTargetDevice(true, 0); err != nil {
+		t.Fatal(err)
+	}
+	client.Close()
+	for {
+		log, _ := os.ReadFile(store.LogPath("native"))
+		if strings.Contains(string(log), "Loaded app from partition at offset 0x1f0000") {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("native OTA did not boot: %s", log)
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+	reconnected, err := connectSimulatorChoice(ctx, &simulatorChoice{Name: "native"}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reconnected.Close()
+	if err := store.StopContext(ctx, "native", false, 10*time.Second); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // Opt-in hardware-free integration test using a real merged Wendy Lite build.
 func TestLiteSimulatorFirmware(t *testing.T) {
 	image := os.Getenv("WENDY_TEST_LITE_FIRMWARE")
