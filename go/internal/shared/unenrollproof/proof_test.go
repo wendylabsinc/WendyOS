@@ -127,16 +127,56 @@ func TestFetchRefreshesEvidenceWithoutSavedWorkflowState(t *testing.T) {
 	}))
 	defer server.Close()
 	leaf.OCSPServer = []string{server.URL}
-	if _, err := FetchRevocation(context.Background(), leaf, issuer); err == nil {
+	if _, err := fetchRevocation(context.Background(), leaf, issuer, server.Client()); err == nil {
 		t.Fatal("good status supplied reset authority")
 	}
 	statusValue.Store(int32(ocsp.Revoked))
-	proof, err := FetchRevocation(context.Background(), leaf, issuer)
+	proof, err := fetchRevocation(context.Background(), leaf, issuer, server.Client())
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := VerifyRevocation(proof, leaf, issuer, time.Now()); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestFetchRevocationDoesNotContactPrivateResponder(t *testing.T) {
+	leaf, issuer, _, _ := fixture(t, false)
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { calls.Add(1) }))
+	defer server.Close()
+	leaf.OCSPServer = []string{server.URL}
+	if _, err := FetchRevocation(context.Background(), leaf, issuer); err == nil {
+		t.Fatal("private responder accepted")
+	}
+	if calls.Load() != 0 {
+		t.Fatal("private responder contacted")
+	}
+	for _, address := range []string{"127.0.0.1:80", "169.254.169.254:80", "10.1.2.3:80", "192.168.1.1:80", "172.16.0.1:80", "100.64.0.1:80", "[::1]:80", "[fd00::1]:80", "[fe80::1]:80", "[::ffff:127.0.0.1]:80"} {
+		if conn, err := dialOCSP(context.Background(), "tcp", address); err == nil {
+			conn.Close()
+			t.Fatalf("private address accepted: %s", address)
+		}
+	}
+}
+
+func TestRevocationFetchDoesNotFollowRedirects(t *testing.T) {
+	leaf, issuer, _, _ := fixture(t, false)
+	var redirected atomic.Int32
+	target := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { redirected.Add(1) }))
+	defer target.Close()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL, http.StatusTemporaryRedirect)
+	}))
+	defer server.Close()
+	leaf.OCSPServer = []string{server.URL}
+	client := server.Client()
+	client.CheckRedirect = rejectOCSPRedirect
+	if _, err := fetchRevocation(context.Background(), leaf, issuer, client); err == nil {
+		t.Fatal("redirect accepted as revocation proof")
+	}
+	if redirected.Load() != 0 {
+		t.Fatal("redirect followed")
 	}
 }
 

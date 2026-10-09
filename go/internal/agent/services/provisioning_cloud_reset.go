@@ -51,6 +51,11 @@ func (s *ProvisioningService) readProvisioningState() (*provisioningState, error
 	return &state, nil
 }
 
+// SECURITY: This validates only the Agent's root-owned 0600 provisioning state,
+// written after operator mTLS and exact installed-leaf checks. Pending evidence
+// is re-bound to that installed identity below. It is not a verifier of remote
+// device identity: CLI receipt recovery separately anchors the historical leaf
+// to its configured roots before trusting a public status response.
 func validateUnenrollmentState(state *provisioningState) (*unenrollproof.Completion, error) {
 	if state.Unenrollment == nil {
 		return nil, fmt.Errorf("reset authorization absent")

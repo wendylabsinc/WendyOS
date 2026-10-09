@@ -20,7 +20,9 @@ import (
 	"fmt"
 	"io"
 	"math/big"
+	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"time"
 
@@ -151,12 +153,54 @@ func VerifyRevocation(raw []byte, leaf, issuer *x509.Certificate, now time.Time)
 	return nil
 }
 
+// Dial only resolved public addresses, using the checked IP for the actual
+// connection so DNS rebinding cannot redirect an AIA request into a local
+// network. Standard HTTP OCSP is retained; issuer signatures supply authority.
+func dialOCSP(ctx context.Context, network, address string) (net.Conn, error) {
+	host, port, err := net.SplitHostPort(address)
+	if err != nil {
+		return nil, err
+	}
+	ips, err := net.DefaultResolver.LookupNetIP(ctx, "ip", host)
+	if err != nil {
+		return nil, err
+	}
+	if len(ips) == 0 {
+		return nil, fmt.Errorf("OCSP host has no public address")
+	}
+	for _, ip := range ips {
+		ip = ip.Unmap()
+		if !ip.IsGlobalUnicast() || ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() || netip.MustParsePrefix("100.64.0.0/10").Contains(ip) {
+			return nil, fmt.Errorf("OCSP responder is not a public address")
+		}
+	}
+	dialer := net.Dialer{Timeout: 10 * time.Second}
+	for _, ip := range ips {
+		conn, dialErr := dialer.DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
+		if dialErr == nil {
+			return conn, nil
+		}
+		err = dialErr
+	}
+	return nil, err
+}
+
+func rejectOCSPRedirect(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+
 func FetchRevocation(ctx context.Context, leaf, issuer *x509.Certificate) ([]byte, error) {
+	transport := &http.Transport{DialContext: dialOCSP, TLSHandshakeTimeout: 10 * time.Second}
+	defer transport.CloseIdleConnections()
+	client := &http.Client{Timeout: 15 * time.Second, Transport: transport,
+		CheckRedirect: rejectOCSPRedirect,
+	}
+	return fetchRevocation(ctx, leaf, issuer, client)
+}
+
+func fetchRevocation(ctx context.Context, leaf, issuer *x509.Certificate, client *http.Client) ([]byte, error) {
 	request, err := ocsp.CreateRequest(leaf, issuer, nil)
 	if err != nil {
 		return nil, err
 	}
-	client := &http.Client{Timeout: 15 * time.Second}
 	for _, endpoint := range leaf.OCSPServer {
 		parsed, err := url.Parse(endpoint)
 		if err != nil || (parsed.Scheme != "https" && parsed.Scheme != "http") || parsed.Host == "" || parsed.User != nil {
