@@ -267,8 +267,14 @@ func signingInput(body []byte, key crypto.PublicKey) ([]byte, crypto.SignerOpts)
 	return digest[:], crypto.SHA256
 }
 
-// ReadCompletion authenticates the receipt and its PKI evidence. Trust-chain
-// anchoring is additionally required by the caller against its existing roots.
+// ReadCompletion verifies receipt signatures and internal PKI evidence; it does
+// not establish caller trust or authenticate the current transport peer.
+// SECURITY: Remote evidence is anchored to configured roots by CLI reconciliation
+// before any Cloud confirmation. Agent recovery consumes only its protected local
+// state, written after operator/installed-leaf verification, with pending evidence
+// re-bound to that identity. Neither caller accepts embedded roots as authority;
+// TestCompletionSignatureCannotReplaceConfiguredTrustAnchoring covers this policy.
+// Keep trust at those existing caller boundaries, not a new receipt-policy API.
 func ReadCompletion(raw []byte) (*Completion, *x509.Certificate, error) {
 	if len(raw) == 0 || len(raw) > 4*MaxProofBytes {
 		return nil, nil, fmt.Errorf("missing or oversized completion receipt")

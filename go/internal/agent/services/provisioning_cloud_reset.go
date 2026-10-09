@@ -34,6 +34,8 @@ func validateResetBinding(record *unenrollproof.Completion) error {
 	if err := proto.Unmarshal(record.CloudDeletion, &deleted); err != nil {
 		return err
 	}
+	// SECURITY: Agent wall-clock skew intentionally fails closed here. Correct
+	// the clock before retrying; do not relax the exact binding or proof checks.
 	if deleted.GetId() == "" || deleted.GetId() != record.AssetID || deleted.GetOrganizationId() != identity.TenantUUID || deleted.GetDeviceId() != identity.EntityID || deleted.GetDeletedAt() == nil || deleted.GetDeletedAt().CheckValid() != nil || deleted.GetDeletedAt().AsTime().After(time.Unix(record.AuthorizedAt, 0).Add(time.Second)) {
 		return fmt.Errorf("invalid exact Cloud deletion binding")
 	}
