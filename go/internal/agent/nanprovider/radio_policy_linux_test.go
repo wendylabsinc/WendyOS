@@ -62,7 +62,7 @@ func TestCapturedNDPEventsStayOnOwnedNDI(t *testing.T) {
 	const peerNMI = "e4:4a:e0:e7:6f:cc"
 	const peerNDI = "e4:4a:e0:e7:6f:cd"
 	_, connected := parseEvent("<3>NAN-NDP-CONNECTED peer=" + peerNMI + " ndp_id=2 local_ndi=" + local + " peer_ndi=" + peerNDI + " interface_id=")
-	active := map[string]*radioLink{peerNMI: &radioLink{peer: radioPeer{Asset: 460, NMI: peerNMI}}}
+	active := map[string]*radioLink{peerNMI: {peer: radioPeer{Asset: 460, NMI: peerNMI}}}
 	known := map[string]int32{peerNMI: 460}
 	p, ok := connectedPeer(connected, local, known, active)
 	if !ok || p.Asset != 460 || p.NDI != peerNDI || p.ID != "2" {

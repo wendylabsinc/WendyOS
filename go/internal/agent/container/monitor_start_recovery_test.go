@@ -14,7 +14,7 @@ type interruptedStartClient struct {
 	*survivingOutputClient
 	recoveredStart bool
 	recoveryError  error
-	listedAfter   bool
+	listedAfter    bool
 }
 
 func (f *interruptedStartClient) RecoverInterruptedTaskStarts(context.Context) error {
@@ -31,7 +31,7 @@ func TestBootRecoversInterruptedStartsBeforeFilteringRestartIntent(t *testing.T)
 	for _, recoveryErr := range []error{nil, errors.New("one container could not be recovered")} {
 		f := &interruptedStartClient{
 			survivingOutputClient: &survivingOutputClient{fakeContainerd: &fakeContainerd{}},
-			recoveryError: recoveryErr,
+			recoveryError:         recoveryErr,
 		}
 		m := NewContainerMonitor(zap.NewNop(), f, nil, time.Second)
 		m.ReconcileBootContainers(context.Background())

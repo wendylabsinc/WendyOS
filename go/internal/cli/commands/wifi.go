@@ -42,6 +42,7 @@ func newWifiCmd() *cobra.Command {
 		newWifiDisconnectCmd(),
 		newWifiRankCmd(),
 		newWifiForgetCmd(),
+		newWifiRegulatoryCmd(),
 	)
 
 	return cmd
