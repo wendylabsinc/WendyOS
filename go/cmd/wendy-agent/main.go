@@ -204,6 +204,7 @@ func main() {
 	// provisioning identity needed to build the roster becomes available.
 	var meshDNS *mesh.DNSServer
 	meshIngress := meshingress.NewRegistry()
+	meshCatalog := newMeshCatalogManager(configPath, meshIngress, logger)
 	containerdAddr := os.Getenv("WENDY_CONTAINERD_ADDR")
 	if containerdAddr == "" {
 		containerdAddr = agentcontainerd.DefaultAddress
@@ -223,6 +224,7 @@ func main() {
 		containerdClient = ctrdClient
 		defer ctrdClient.Close()
 		ctrdClient.SetMeshIngressRegistry(meshIngress)
+		ctrdClient.SetMeshMDNSManager(meshCatalog)
 
 		// Inject the shared mesh DNS server so applyMeshEgress/teardownMeshEgress
 		// can resolve peer-device names for containers on the mesh network mode.
@@ -862,12 +864,6 @@ func main() {
 		if runtime.GOOS != "linux" {
 			return
 		}
-		if _, err := os.Stat(filepath.Join(configPath, "local-mesh.json")); err != nil {
-			if !errors.Is(err, os.ErrNotExist) {
-				logger.Error("local mesh configuration is inaccessible", zap.Error(err))
-			}
-			return
-		}
 		credentials, err := localmesh.NewCredentials(orgID, assetID, certPEM, chainPEM, keyPEM)
 		if err != nil {
 			logger.Error("local mesh identity unavailable", zap.Error(err))
@@ -925,7 +921,7 @@ func main() {
 					err := runConfiguredMeshCarriers(ctx, configPath, localmesh.TCPIdentity{
 						Org: orgID, Asset: assetID, Name: name, AgentPort: uint16(mtlsPortNum),
 						Certificate: certPEM, Chain: chainPEM, Key: keyPEM,
-					}, logger, func(snapshot func() localmesh.NodeSnapshot) {
+					}, logger, meshCatalog, func(snapshot func() localmesh.NodeSnapshot) {
 						localMeshMu.Lock()
 						localMeshSnapshot = snapshot
 						localMeshMu.Unlock()
@@ -998,10 +994,10 @@ func main() {
 			return nil
 		})
 	})
-	var appDialer mesh.PeerDialer = meshDialer
-	if _, err := os.Stat(filepath.Join(configPath, "local-mesh.json")); err == nil {
-		appDialer = services.NewMeshAppDialer(meshDialer)
-	}
+	var appDialer mesh.PeerDialer = &services.SwitchingMeshDialer{Legacy: meshDialer, Local: services.NewMeshAppDialer(meshDialer), LocalEnabled: func() bool {
+		_, err := os.Stat(filepath.Join(configPath, "local-mesh.json"))
+		return err == nil
+	}}
 	meshProxy := mesh.NewProxy(logger, appDialer, meshMetrics)
 	if err := meshProxy.Start(fmt.Sprintf(":%d", mesh.ProxyPort)); err != nil {
 		logger.Warn("mesh proxy failed to start; mesh egress disabled", zap.Error(err))

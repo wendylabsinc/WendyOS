@@ -209,6 +209,7 @@ type Client struct {
 	// meshIngressMu serializes the check, iptables update, and claim so two
 	// concurrent starts cannot publish the same host port.
 	meshIngress   *meshingress.Registry
+	meshMDNS      meshMDNSService
 	meshIngressMu sync.Mutex
 	// A task-exit callback may arrive after a restart has published the same
 	// container ID again. Run generations keep that late callback from
@@ -231,6 +232,12 @@ type Client struct {
 	// tests that construct a bare *Client and call PruneCache must set both.
 	freeBytes func(path string) (uint64, bool)
 	forceGC   func(ctx context.Context) error
+}
+
+// SetMeshMDNSManager wires per-app mDNS only after the app's isolated CNI
+// network and authorized host ingress are ready.
+func (c *Client) SetMeshMDNSManager(manager meshMDNSService) {
+	c.meshMDNS = manager
 }
 
 // SetRestartSuppressor injects the container-restart monitor's suppression
