@@ -41,16 +41,16 @@ func relayRoughtime(ctx context.Context, nonceHex string,
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	type answer struct {
-		index  int
-		result roughtime.Result
-		err    error
+		address string
+		result  roughtime.Result
+		err     error
 	}
 	replies := make(chan answer, len(roughtime.Servers))
-	for i, server := range roughtime.Servers {
-		go func(i int, server roughtime.Server) {
+	for _, server := range roughtime.Servers {
+		go func(server roughtime.Server) {
 			result, err := query(ctx, server, nonce)
-			replies <- answer{i, result, err}
-		}(i, server)
+			replies <- answer{server.Address, result, err}
+		}(server)
 	}
 	var failures []string
 	for range roughtime.Servers {
@@ -63,7 +63,7 @@ func relayRoughtime(ctx context.Context, nonceHex string,
 				continue
 			}
 			reply, err := send(&pb.WendyComCommand{
-				Params: &pb.WendyComCommand_SyncTime{SyncTime: &pb.WendyComSyncTimeParams{ServerIndex: uint32(a.index), Response: a.result.RawResponse}},
+				Params: &pb.WendyComCommand_SyncTime{SyncTime: &pb.WendyComSyncTimeParams{Server: a.address, Response: a.result.RawResponse}},
 			})
 			if err != nil {
 				return time.Time{}, err

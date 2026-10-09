@@ -100,7 +100,7 @@ message WendyComEnrollmentChallenge {
 
 // USB relay of one pinned server's reply to the current device challenge.
 message WendyComSyncTimeParams {
-    uint32 server_index = 1;
+    string server = 1; // pinned server that produced the reply, as "hostname:port"
     bytes response = 2;
 }
 message WendyComSyncTimeResult {
