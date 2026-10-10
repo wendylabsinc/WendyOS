@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"os/exec"
@@ -71,13 +72,45 @@ func TestAdvertisementRefreshCoalescesAndStops(t *testing.T) {
 	default:
 	}
 }
-func TestAdvertisementRefreshErrorIsVisibleAndNotRetried(t *testing.T) {
+func TestAdvertisementRefreshTransientErrorRetries(t *testing.T) {
+	// A failed refresh must not kill the provider loop (previously one
+	// controller-busy took down every established link); only a changed
+	// BlueZ owner is fatal.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	requests := make(chan struct{}, 1)
+	calls := 0
+	done := make(chan error, 1)
+	go func() {
+		done <- runAdvertisementRefresh(ctx, requests, 40*time.Millisecond, func(context.Context) error {
+			calls++
+			if calls == 1 {
+				return errors.New("bus send failed")
+			}
+			return nil
+		})
+	}()
+	requests <- struct{}{}
+	time.Sleep(100 * time.Millisecond)
+	requests <- struct{}{}
+	time.Sleep(100 * time.Millisecond)
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil || calls != 2 {
+			t.Fatal(err, calls)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("not joined")
+	}
+}
+func TestAdvertisementRefreshOwnerChangeStillFatal(t *testing.T) {
 	requests := make(chan struct{}, 1)
 	requests <- struct{}{}
 	calls := 0
-	expected := errors.New("bus send failed")
+	expected := fmt.Errorf("wrap: %w", errBlueZOwnerChanged)
 	err := runAdvertisementRefresh(context.Background(), requests, time.Second, func(context.Context) error { calls++; return expected })
-	if !errors.Is(err, expected) || calls != 1 {
+	if !errors.Is(err, errBlueZOwnerChanged) || calls != 1 {
 		t.Fatal(err, calls)
 	}
 }

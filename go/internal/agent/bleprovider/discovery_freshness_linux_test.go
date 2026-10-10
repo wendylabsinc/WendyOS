@@ -128,6 +128,9 @@ func TestStaleBlueZCacheCannotRefreshRadioSelection(t *testing.T) {
 	if got := r.discoveredCandidates(objects, base); len(got) != 0 {
 		t.Fatalf("cached peer before live advertisement: %+v", got)
 	}
+	if !r.discovery.lastMeshSignal.IsZero() {
+		t.Fatal("cached service data refreshed discovery liveness")
+	}
 	if !selection.AllowRadio(15, localmesh.RadioBLE) {
 		t.Fatal("stale cached BLE peer suppressed an otherwise useful second radio")
 	}
@@ -135,11 +138,17 @@ func TestStaleBlueZCacheCannotRefreshRadioSelection(t *testing.T) {
 	if got := r.discoveredCandidates(objects, base); len(got) != 1 {
 		t.Fatalf("fresh BLE peer rejected: %+v", got)
 	}
+	if !r.discovery.lastMeshSignal.Equal(base) {
+		t.Fatal("live service data did not refresh discovery liveness")
+	}
 	if selection.AllowRadio(15, localmesh.RadioBLE) {
 		t.Fatal("live diverse BLE peer did not influence radio selection")
 	}
 	if got := r.discoveredCandidates(objects, base.Add(advertisementFreshnessTTL)); len(got) != 0 {
 		t.Fatalf("expired BLE peer retained: %+v", got)
+	}
+	if !r.discovery.lastMeshSignal.Equal(base) {
+		t.Fatal("polling expired BlueZ cache refreshed discovery liveness")
 	}
 }
 

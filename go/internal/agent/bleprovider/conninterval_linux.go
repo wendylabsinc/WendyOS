@@ -21,15 +21,27 @@ import (
 const (
 	// HCI LE Connection Update uses 1.25 ms interval, 10 ms timeout, and
 	// 0.625 ms connection-event length units. A zero minimum lets the
-	// controller shorten an event under contention; the 10 ms maximum lets
-	// a healthy Wendy mesh CoC use more than one data packet per event.
+	// controller shorten an event under contention; the 5 ms maximum keeps
+	// two bulk links plus scanning inside a 45 ms interval while still
+	// fitting several data packets per event.
 	meshIntervalUnits = 12 // 15 ms
+	// Steady-state bulk interval: the 15 ms handshake tune triples anchor
+	// demand versus the negotiated ~45 ms. Under two-link bulk plus active
+	// scan, controllers stop servicing most anchors for seconds (measured
+	// gap histograms), collapsing drain to ~1% on all nodes at once. Once
+	// TLS is established, relax to 45 ms: fewer anchors, longer events for
+	// the same bulk, supervision unchanged.
+	meshSteadyIntervalUnits = 36 // 45 ms
 	// A multi-peer adapter can miss several connection events while it scans,
 	// advertises, and services another CoC. The former 2 s timeout caused
 	// authenticated Wendy links to drop with HCI reason 0x08 under contention.
-	meshTimeoutUnits        = 800 // 8 s supervision timeout
+	meshTimeoutUnits        = 400 // 4 s supervision timeout
 	meshMinEventLengthUnits = 0
-	meshMaxEventLengthUnits = 16 // 10 ms
+	// Cap steady connection events well under the interval: two bulk links
+	// at 10 ms events plus ~50%-duty scanning exceed a 45 ms interval and
+	// the controller sheds whole ACLs for seconds (measured). 5 ms events
+	// leave headroom (5+5+scan fits 45 ms) while keeping bulk throughput.
+	meshMaxEventLengthUnits = 8 // 5 ms
 	leUpdateOpcode          = 0x2013
 	leUpdateSubevent        = 0x03
 	hciEventPacket          = 0x04
@@ -82,11 +94,11 @@ func decodeACLHandle(info []byte) (uint16, error) {
 	return handle, nil
 }
 
-func leConnectionUpdateCommand(handle uint16) []byte {
+func leConnectionUpdateCommand(handle uint16, intervalUnits uint16) []byte {
 	command := []byte{hciCommandPacket, 0x13, 0x20, 14, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0}
 	binary.LittleEndian.PutUint16(command[4:6], handle)
-	binary.LittleEndian.PutUint16(command[6:8], meshIntervalUnits)
-	binary.LittleEndian.PutUint16(command[8:10], meshIntervalUnits)
+	binary.LittleEndian.PutUint16(command[6:8], intervalUnits)
+	binary.LittleEndian.PutUint16(command[8:10], intervalUnits)
 	binary.LittleEndian.PutUint16(command[10:12], 0) // peripheral latency
 	binary.LittleEndian.PutUint16(command[12:14], meshTimeoutUnits)
 	binary.LittleEndian.PutUint16(command[14:16], meshMinEventLengthUnits)
@@ -129,7 +141,7 @@ func parseLEUpdateEvent(packet []byte, handle uint16) updateEvent {
 	return updateEvent{}
 }
 
-func waitForLEUpdate(ctx context.Context, handle uint16, read func(context.Context) ([]byte, error)) (time.Duration, error) {
+func waitForLEUpdate(ctx context.Context, handle uint16, expectedUnits uint16, read func(context.Context) ([]byte, error)) (time.Duration, error) {
 	accepted := false
 	// Command Status carries an opcode but no ACL handle. HCI commands and
 	// statuses are ordered on one controller, so pair each observed monitor
@@ -149,7 +161,7 @@ func waitForLEUpdate(ctx context.Context, handle uint16, read func(context.Conte
 			if len(pending) >= 32 {
 				return 0, errors.New("too many concurrent LE connection updates")
 			}
-			pending = append(pending, pendingCommand{commandHandle, bytes.Equal(packet, leConnectionUpdateCommand(handle))})
+			pending = append(pending, pendingCommand{commandHandle, bytes.Equal(packet, leConnectionUpdateCommand(handle, expectedUnits))})
 			continue
 		}
 		event := parseLEUpdateEvent(packet, handle)
@@ -173,7 +185,7 @@ func waitForLEUpdate(ctx context.Context, handle uint16, read func(context.Conte
 		if event.status != 0 {
 			return 0, fmt.Errorf("LE connection update completed with status %#x", event.status)
 		}
-		if event.interval != meshIntervalUnits || event.latency != 0 || event.timeout != meshTimeoutUnits {
+		if event.interval != expectedUnits || event.latency != 0 || event.timeout != meshTimeoutUnits {
 			return 0, fmt.Errorf("LE connection update differs from request: interval=%d latency=%d timeout=%d", event.interval, event.latency, event.timeout)
 		}
 		return time.Duration(event.interval) * 1250 * time.Microsecond, nil
@@ -209,57 +221,119 @@ func meshACLHandle(conn net.Conn) (uint16, error) {
 	return l2capACLHandle(packet.fd)
 }
 
+// Only errors proved to precede submission may use the existing connection
+// parameters. Even a rejected submitted command can mean another procedure
+// remains active, so all submitted failures abort this connection attempt.
+type leUpdateUnavailableError struct{ err error }
+
+func (e *leUpdateUnavailableError) Error() string {
+	return "LE update unavailable before submission: " + e.err.Error()
+}
+func (e *leUpdateUnavailableError) Unwrap() error { return e.err }
+
+type leUpdateIO struct {
+	send  func([]byte) (int, error)
+	read  func(context.Context) ([]byte, error)
+	close func()
+}
+
 func requestMeshConnectionInterval(ctx context.Context, hciIndex int, handle uint16) (time.Duration, error) {
 	if hciIndex < 0 || hciIndex > 0xffff || handle > 0x0eff {
-		return 0, errors.New("BLE link has no controller/ACL identity")
+		return 0, &leUpdateUnavailableError{err: errors.New("BLE link has no controller/ACL identity")}
 	}
+	return submitMeshIntervalUpdate(ctx, handle, meshIntervalUnits, func(ctx context.Context) (*leUpdateIO, error) {
+		return prepareMeshIntervalIO(ctx, hciIndex)
+	})
+}
+
+// requestSteadyConnectionInterval relaxes an established link to the
+// steady-state bulk interval. Failures are best-effort (the link works at
+// the handshake interval); only submission-boundary errors are distinguished
+// so callers can log accurately.
+func requestSteadyConnectionInterval(ctx context.Context, hciIndex int, handle uint16) (time.Duration, error) {
+	if hciIndex < 0 || hciIndex > 0xffff || handle > 0x0eff {
+		return 0, &leUpdateUnavailableError{err: errors.New("BLE link has no controller/ACL identity")}
+	}
+	return submitMeshIntervalUpdate(ctx, handle, meshSteadyIntervalUnits, func(ctx context.Context) (*leUpdateIO, error) {
+		return prepareMeshIntervalIO(ctx, hciIndex)
+	})
+}
+
+func submitMeshIntervalUpdate(ctx context.Context, handle uint16, intervalUnits uint16, prepare func(context.Context) (*leUpdateIO, error)) (time.Duration, error) {
 	if err := ctx.Err(); err != nil {
-		return 0, err
+		return 0, &leUpdateUnavailableError{err: err}
 	}
-	// hcitool can time out while a controller successfully applies this
-	// command. The monitor channel sees the actual HCI completion, including
-	// events consumed by the kernel/BlueZ, and identifies its adapter.
-	monitorFD, err := unix.Socket(unix.AF_BLUETOOTH, unix.SOCK_RAW|unix.SOCK_NONBLOCK|unix.SOCK_CLOEXEC, unix.BTPROTO_HCI)
+	io, err := prepare(ctx)
 	if err != nil {
-		return 0, fmt.Errorf("HCI monitor socket: %w", err)
+		return 0, &leUpdateUnavailableError{err: err}
 	}
-	defer unix.Close(monitorFD)
-	if err := unix.Bind(monitorFD, &unix.SockaddrHCI{Dev: 0xffff, Channel: unix.HCI_CHANNEL_MONITOR}); err != nil {
-		return 0, fmt.Errorf("binding HCI monitor: %w", err)
+	defer io.close()
+	if err := ctx.Err(); err != nil {
+		return 0, &leUpdateUnavailableError{err: err}
 	}
-	fd, err := unix.Socket(unix.AF_BLUETOOTH, unix.SOCK_RAW|unix.SOCK_NONBLOCK|unix.SOCK_CLOEXEC, unix.BTPROTO_HCI)
-	if err != nil {
-		return 0, fmt.Errorf("HCI raw socket: %w", err)
-	}
-	defer unix.Close(fd)
-	if err := unix.Bind(fd, &unix.SockaddrHCI{Dev: uint16(hciIndex), Channel: unix.HCI_CHANNEL_RAW}); err != nil {
-		return 0, fmt.Errorf("binding HCI adapter %d: %w", hciIndex, err)
-	}
-	command := leConnectionUpdateCommand(handle)
-	if err := pollFD(ctx, fd, unix.POLLOUT, 0); err != nil {
-		return 0, err
-	}
-	if n, err := unix.Write(fd, command); err != nil {
+	command := leConnectionUpdateCommand(handle, intervalUnits)
+	// Once send is attempted, even a write error is conservatively uncertain.
+	// Never convert this or a monitor error into an untuned TLS fallback.
+	if n, err := io.send(command); err != nil {
 		return 0, fmt.Errorf("sending LE connection update: %w", err)
 	} else if n != len(command) {
 		return 0, fmt.Errorf("short LE connection update command: %d/%d", n, len(command))
 	}
-	return waitForLEUpdate(ctx, handle, func(ctx context.Context) ([]byte, error) {
-		for {
-			if err := pollFD(ctx, monitorFD, unix.POLLIN, 0); err != nil {
-				return nil, err
-			}
-			var buffer [512]byte
-			n, err := unix.Read(monitorFD, buffer[:])
-			if err == unix.EAGAIN || err == unix.EINTR {
-				continue
-			}
-			if err != nil {
-				return nil, err
-			}
-			if event := monitorPacket(buffer[:n], hciIndex); event != nil {
-				return event, nil
-			}
+	return waitForLEUpdate(ctx, handle, intervalUnits, io.read)
+}
+
+func prepareMeshIntervalIO(ctx context.Context, hciIndex int) (*leUpdateIO, error) {
+	monitorFD, err := unix.Socket(unix.AF_BLUETOOTH, unix.SOCK_RAW|unix.SOCK_NONBLOCK|unix.SOCK_CLOEXEC, unix.BTPROTO_HCI)
+	if err != nil {
+		return nil, fmt.Errorf("HCI monitor socket: %w", err)
+	}
+	fd := -1
+	ready := false
+	closeIO := func() {
+		if fd >= 0 {
+			_ = unix.Close(fd)
 		}
-	})
+		_ = unix.Close(monitorFD)
+	}
+	defer func() {
+		if !ready {
+			closeIO()
+		}
+	}()
+	if err := unix.Bind(monitorFD, &unix.SockaddrHCI{Dev: 0xffff, Channel: unix.HCI_CHANNEL_MONITOR}); err != nil {
+		return nil, fmt.Errorf("binding HCI monitor: %w", err)
+	}
+	fd, err = unix.Socket(unix.AF_BLUETOOTH, unix.SOCK_RAW|unix.SOCK_NONBLOCK|unix.SOCK_CLOEXEC, unix.BTPROTO_HCI)
+	if err != nil {
+		return nil, fmt.Errorf("HCI raw socket: %w", err)
+	}
+	if err := unix.Bind(fd, &unix.SockaddrHCI{Dev: uint16(hciIndex), Channel: unix.HCI_CHANNEL_RAW}); err != nil {
+		return nil, fmt.Errorf("binding HCI adapter %d: %w", hciIndex, err)
+	}
+	if err := pollFD(ctx, fd, unix.POLLOUT, 0); err != nil {
+		return nil, err
+	}
+	ready = true
+	return &leUpdateIO{
+		close: closeIO,
+		send:  func(command []byte) (int, error) { return unix.Write(fd, command) },
+		read: func(ctx context.Context) ([]byte, error) {
+			for {
+				if err := pollFD(ctx, monitorFD, unix.POLLIN, 0); err != nil {
+					return nil, err
+				}
+				var buffer [512]byte
+				n, err := unix.Read(monitorFD, buffer[:])
+				if err == unix.EAGAIN || err == unix.EINTR {
+					continue
+				}
+				if err != nil {
+					return nil, err
+				}
+				if event := monitorPacket(buffer[:n], hciIndex); event != nil {
+					return event, nil
+				}
+			}
+		},
+	}, nil
 }
