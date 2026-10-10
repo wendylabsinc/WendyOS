@@ -167,7 +167,7 @@ func disconnectedPeer(v map[string]string, local string, active map[string]*radi
 
 // runRadio runs all NDP responses on a persistent local control socket so it
 // meets the firmware deadline. Discovery claims remain untrusted until QUIC TLS.
-func runRadio(ctx context.Context, ident Identity, connected chan<- radioPeer, health <-chan radioHealth, selection *localmesh.PeerSelection, allowSoftReset bool, logger *zap.Logger) error {
+func runRadio(ctx context.Context, ident Identity, connected chan<- radioPeer, health <-chan radioHealth, selection *localmesh.PeerSelection, allowSoftReset bool, logger *zap.Logger, status func(localmesh.CarrierStatus)) error {
 	control, err := openRadio()
 	if err != nil {
 		return err
@@ -223,6 +223,9 @@ func runRadio(ctx context.Context, ident Identity, connected chan<- radioPeer, h
 		return fmt.Errorf("invalid NAN subscribe handle %q", sub)
 	}
 	defer control.command("NAN_CANCEL_SUBSCRIBE subscribe_id=" + sub)
+	if status != nil {
+		status(localmesh.CarrierStatus{Ready: true})
+	}
 	known := map[string]int32{}
 	attempts := map[string]time.Time{}
 	active := map[string]*radioLink{}
