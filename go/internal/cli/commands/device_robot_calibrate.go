@@ -12,6 +12,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
+	"github.com/wendylabsinc/wendy/go/internal/cli/robotcalclient"
 	"github.com/wendylabsinc/wendy/go/internal/cli/robotwizard"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/go/internal/shared/robotcal"
@@ -165,7 +166,7 @@ func openRobotSession(ctx context.Context, opts *calibrateOptions) (*robotSessio
 	if err != nil {
 		return nil, err
 	}
-	store, err := resolveCalibrationStore()
+	store, err := resolveCalibrationStore(ctx, conn)
 	if err != nil {
 		conn.Close()
 		return nil, err
@@ -194,29 +195,34 @@ func openRobotSession(ctx context.Context, opts *calibrateOptions) (*robotSessio
 	return &robotSession{conn: conn, store: store, profile: profile, unit: unit}, nil
 }
 
-// errNoCalibrationTransport is the refusal when the calibration store cannot be
-// reached from here.
-var errNoCalibrationTransport = errors.New(
-	"this build can only reach a robot's calibration store from the device itself.\n\n" +
-		"A calibration is a fact about the machine, so it belongs on the machine — under " +
-		robotcal.DefaultRoot + ", beside the camera registries the agent already owns, not in " +
-		"this laptop's home directory where the robot would stop knowing its own calibration the " +
-		"moment someone else connected to it.\n\n" +
-		"Reaching it from off-device needs a RobotService RPC in Proto/wendy/agent/services/v2, " +
-		"which this change does not add. Until then, run this from an admin-entitled container on " +
-		"the device (see Examples/ClaudeOnDevice), where WENDY_AGENT_SOCKET is set")
-
 // resolveCalibrationStore returns the store for the connected device.
 //
-// Only the on-device path is wired: the CLI is running inside an admin-entitled
-// container on the robot, so the store is a file it can open directly. From a
-// laptop this refuses rather than writing the record somewhere the robot cannot
-// read it.
-func resolveCalibrationStore() (robotcal.Store, error) {
-	if os.Getenv("WENDY_AGENT_SOCKET") == "" {
-		return nil, errNoCalibrationTransport
+// Either way the record lands on the robot, which is the only property that
+// matters here: a calibration is a fact about the machine, and one written into
+// this laptop's home directory would be lost to the next person who connected,
+// silently.
+//
+// On-device — the CLI running inside an admin-entitled container on the robot,
+// with WENDY_AGENT_SOCKET set — the store is a file it can open directly, and
+// that path is left exactly as it was. There is no reason to make a local write
+// take a network hop, and it keeps the wizard working on a device whose agent
+// predates RobotService.
+//
+// Otherwise the store is reached over the agent's RobotService, through the
+// connection connectToAgent already resolved — so it inherits the cloud tunnel
+// and the device pin for free, and `wendy cloud device robot calibrate` works
+// without a second code path. The agent serves that RPC from the same
+// robotcal.FileStore the on-device branch opens, so the two branches cannot
+// disagree about what a record means.
+func resolveCalibrationStore(ctx context.Context, conn *grpcclient.AgentConnection) (robotcal.Store, error) {
+	if os.Getenv("WENDY_AGENT_SOCKET") != "" {
+		return robotcal.NewFileStore(robotcal.DefaultRoot), nil
 	}
-	return robotcal.NewFileStore(robotcal.DefaultRoot), nil
+	if conn == nil || conn.Conn == nil {
+		return nil, errors.New("no connection to the device, so there is nowhere to put a calibration: " +
+			"a calibration is a fact about the robot and does not belong on this laptop")
+	}
+	return robotcalclient.Open(ctx, conn.Conn, conn.Host)
 }
 
 func calibrateDeps(cmd *cobra.Command, s *robotSession, opts *calibrateOptions) robotwizard.Deps {
