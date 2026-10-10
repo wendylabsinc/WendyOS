@@ -105,8 +105,11 @@ type meshMDNSService interface {
 // Narrow network seams let ingress authorization tests exercise the real
 // lifecycle without requiring root privileges or mutating host iptables.
 var (
-	addMeshIngressPortForward    = hostnetwork.AddIngressPortForward
-	removeMeshIngressPortForward = hostnetwork.RemoveIngressPortForward
+	addMeshIngressPortForward       = hostnetwork.AddIngressPortForward
+	removeMeshIngressPortForward    = hostnetwork.RemoveIngressPortForward
+	addMeshUDPIngressPortForward    = hostnetwork.AddIngressUDPPortForward
+	removeMeshUDPIngressPortForward = hostnetwork.RemoveIngressUDPPortForward
+	flushOrphanMeshPort             = hostnetwork.FlushOrphanMeshPort
 )
 
 // Compile-time check that the real DNS server satisfies the seam.
@@ -452,6 +455,11 @@ func (c *Client) applyMeshEgress(entitlements []appconfig.Entitlement, container
 		}
 		return fmt.Errorf("mesh egress: adding REDIRECT rule for app %q: %w", appID, err)
 	}
+	if err := hostnetwork.AddMeshUDPIntercept(ip, params.cidr, bridgeName(appID), mesh.UDPProxyPort); err != nil {
+		_ = hostnetwork.RemoveMeshRedirect(ip, params.cidr, mesh.ProxyPort)
+		_ = hostnetwork.RemoveMeshRule(ip, params.cidr)
+		return fmt.Errorf("mesh egress: adding UDP TPROXY rule for app %q: %w", appID, err)
+	}
 
 	// DNS is best-effort: without it, device-N.cloud.wendy.dev hostnames fail
 	// to resolve but VIP literals still work over the REDIRECT/route wired
@@ -466,10 +474,21 @@ func (c *Client) applyMeshEgress(entitlements []appconfig.Entitlement, container
 	if err := c.applyMeshIngressPorts(containerName, appID, ip, params.ports); err != nil {
 		return err
 	}
+	if err := c.claimMeshSource(containerName, appID, ip, params.cidr); err != nil {
+		return fmt.Errorf("mesh egress: claiming app source: %w", err)
+	}
 
 	c.logger.Info("mesh egress applied",
 		zap.String("app_id", appID), zap.String("ip", ip), zap.String("service_cidr", params.cidr))
 	return nil
+}
+
+func (c *Client) claimMeshSource(containerName, appID, ip, cidr string) error {
+	bridge, err := net.InterfaceByName(bridgeName(appID))
+	if err != nil {
+		return fmt.Errorf("locating app bridge: %w", err)
+	}
+	return c.meshIngress.ClaimSource(containerName, appID, ip, cidr, bridge.Index)
 }
 
 // applyMeshIngressPorts publishes only declared host ports for an isolated
@@ -491,16 +510,30 @@ func (c *Client) applyMeshIngressPorts(containerName, appID, ip string, ports []
 		return c.startMeshMDNS(containerName, appID, ip, nil)
 	}
 
-	seen := make(map[uint16]struct{}, len(ports))
+	seen := make(map[string]struct{}, len(ports))
 	for _, pm := range ports {
 		if pm.Host == 0 || pm.Container == 0 {
 			return fmt.Errorf("mesh ingress: container %q declares a zero port", containerName)
 		}
-		if _, duplicate := seen[pm.Host]; duplicate {
+		protocol := pm.Protocol
+		if protocol == "" {
+			protocol = "tcp"
+		}
+		if protocol != "tcp" && protocol != "udp" {
+			return fmt.Errorf("mesh ingress: invalid protocol %q", protocol)
+		}
+		key := fmt.Sprintf("%s/%d", protocol, pm.Host)
+		if _, duplicate := seen[key]; duplicate {
 			return fmt.Errorf("mesh ingress: container %q declares host port %d more than once", containerName, pm.Host)
 		}
-		seen[pm.Host] = struct{}{}
-		if err := c.meshIngress.CheckAvailable(containerName, pm.Host); err != nil {
+		seen[key] = struct{}{}
+		var err error
+		if protocol == "udp" {
+			err = c.meshIngress.CheckUDPAvailable(containerName, pm.Host)
+		} else {
+			err = c.meshIngress.CheckAvailable(containerName, pm.Host)
+		}
+		if err != nil {
 			return err
 		}
 	}
@@ -510,14 +543,33 @@ func (c *Client) applyMeshIngressPorts(containerName, appID, ip string, ports []
 	}
 	forwarded := make([]appconfig.PortMapping, 0, len(ports))
 	for _, pm := range ports {
-		if err := addMeshIngressPortForward(pm.Host, ip, pm.Container); err != nil {
+		add, remove := addMeshIngressPortForward, removeMeshIngressPortForward
+		if pm.Protocol == "udp" {
+			add, remove = addMeshUDPIngressPortForward, removeMeshUDPIngressPortForward
+			if !c.meshIngress.Allowed(pm.Host) {
+				if err := flushOrphanMeshPort(pm.Host, "tcp"); err != nil {
+					return err
+				}
+			}
+		} else if !c.meshIngress.AllowedUDP(pm.Host) {
+			if err := flushOrphanMeshPort(pm.Host, "udp"); err != nil {
+				return err
+			}
+		}
+		if err := add(pm.Host, ip, pm.Container); err != nil {
 			c.logger.Warn("mesh ingress: could not install port forward; remote peers cannot open this port",
 				zap.String("app_id", appID), zap.String("ip", ip),
 				zap.Uint16("host_port", pm.Host), zap.Uint16("container_port", pm.Container), zap.Error(err))
 			continue
 		}
-		if err := c.meshIngress.ClaimForApp(containerName, appID, pm.Host); err != nil {
-			_ = removeMeshIngressPortForward(pm.Host, ip, pm.Container)
+		var err error
+		if pm.Protocol == "udp" {
+			err = c.meshIngress.ClaimUDPForApp(containerName, appID, pm.Host)
+		} else {
+			err = c.meshIngress.ClaimForApp(containerName, appID, pm.Host)
+		}
+		if err != nil {
+			_ = remove(pm.Host, ip, pm.Container)
 			return fmt.Errorf("mesh ingress: claiming host port %d: %w", pm.Host, err)
 		}
 		forwarded = append(forwarded, pm)
@@ -622,9 +674,16 @@ func (c *Client) teardownMeshEgress(entitlements []appconfig.Entitlement, contai
 				c.logger.Warn("mesh egress teardown: RemoveMeshRedirect failed (non-fatal)",
 					zap.String("app_id", appID), zap.String("ip", ip), zap.Error(err))
 			}
+			if err := hostnetwork.RemoveMeshUDPIntercept(ip, cidr, bridgeName(appID), mesh.UDPProxyPort); err != nil {
+				c.logger.Warn("mesh egress teardown: RemoveMeshUDPIntercept failed (non-fatal)", zap.String("app_id", appID), zap.String("ip", ip), zap.Error(err))
+			}
 		}
 		for _, pm := range ent.Ports {
-			if err := hostnetwork.RemoveIngressPortForward(pm.Host, ip, pm.Container); err != nil {
+			remove := hostnetwork.RemoveIngressPortForward
+			if pm.Protocol == "udp" {
+				remove = hostnetwork.RemoveIngressUDPPortForward
+			}
+			if err := remove(pm.Host, ip, pm.Container); err != nil {
 				c.logger.Warn("mesh egress teardown: RemoveIngressPortForward failed (non-fatal)",
 					zap.String("app_id", appID), zap.String("ip", ip),
 					zap.Uint16("host_port", pm.Host), zap.Uint16("container_port", pm.Container), zap.Error(err))
