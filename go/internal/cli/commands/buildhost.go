@@ -156,25 +156,26 @@ func checkFleetDeliverySupported(host string, resp *agentpbv2.GetBuildCapabiliti
 	return fmt.Errorf("build host %s cannot deliver one build to several devices; update its agent, or deploy to one device at a time", host)
 }
 
-// checkChunkDeliverySupported refuses --chunking=force against a build host
-// whose agent predates chunked delivery: it would discard the mode and push
-// through the registry, which is the silent fallback force exists to forbid.
-// auto and off need nothing new from the host — an older one pushes through
-// the registry, which is what off asks for and what auto accepts, though auto
-// is told.
+// checkChunkDeliverySupported refuses force and auto against a build host
+// whose agent predates chunked delivery.
+//
+// force would be silently discarded there — the host would push through the
+// registry, the exact fallback force exists to forbid. auto used to accept
+// that fallback with a notice, but the registry route rarely completes from a
+// build host: the mesh cannot reach the device's registry port, so the build
+// succeeded and every delivery failed with an error naming the device
+// (WDY-3093). Refusing up front replaces that dead end with the command that
+// fixes it. off stays allowed: it is an explicit request for the registry
+// route, which can work when the host reaches the device directly rather
+// than over the mesh.
 func checkChunkDeliverySupported(host string, resp *agentpbv2.GetBuildCapabilitiesResponse, mode string) error {
-	if resp.GetChunkDelivery() {
+	if resp.GetChunkDelivery() || mode == chunkingOff {
 		return nil
 	}
-	switch mode {
-	case chunkingForce:
-		return fmt.Errorf("build host %s predates chunked delivery, so --chunking=force cannot be honoured there; update its agent, or use --chunking=auto or off", host)
-	case chunkingOff:
-		return nil
-	default:
-		cliNotice("build host %s predates chunked delivery; the image will be pushed through the device's registry", host)
-		return nil
+	if mode == chunkingForce {
+		return fmt.Errorf("build host %s predates chunked delivery, so --chunking=force cannot be honoured there; update its agent (wendy device update --device %s)", host, host)
 	}
+	return fmt.Errorf("build host %s predates chunked delivery, which remote builds need: its registry fallback cannot reach the device over the mesh, so the build would succeed and the delivery fail; update its agent (wendy device update --device %s), or pass --chunking=off to attempt the registry route anyway", host, host)
 }
 
 // buildChunkingMode carries --chunking to the build host, so the flag means the
