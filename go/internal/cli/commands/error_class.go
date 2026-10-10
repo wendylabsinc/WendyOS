@@ -66,6 +66,12 @@ func ErrorClass(err error) string {
 	case errors.Is(err, errTLSHandshakeRejected):
 		return "device_tls_rejected"
 	case errors.Is(err, errProvisionedAgentUnauthorized):
+		if isTLSCertificateError(err) {
+			return "device_tls_rejected"
+		}
+		if isReachabilityTimeoutError(err) {
+			return "device_unreachable"
+		}
 		return "device_auth_required"
 	case errors.Is(err, errNoAuthenticatedEndpoint), errors.Is(err, errDeviceUnreachable), errors.As(err, &agentDown):
 		return "device_unreachable"

@@ -1549,6 +1549,12 @@ func TestDialAgentLKGSkipsOnTCPPrecheckFailure(t *testing.T) {
 }
 
 func TestDialAgentLKGRotatesCertsAndDialsMTLSPort(t *testing.T) {
+	// The cached route must pass expired credentials through to the ladder's
+	// diagnosis too; transport filtering happens inside the ladder.
+	setTempConfig(t, &config.Config{Auth: []config.AuthConfig{
+		{Certificates: []config.CertificateInfo{selfSignedCLICert(t, 1)}},
+		{Certificates: []config.CertificateInfo{selfSignedCLICertUntil(t, 2, time.Now().Add(-time.Hour))}},
+	}})
 	origTCP := tcpDialTimeoutFn
 	tcpDialTimeoutFn = func(network, addr string, timeout time.Duration) (net.Conn, error) {
 		c1, c2 := net.Pipe()
@@ -1566,14 +1572,9 @@ func TestDialAgentLKGRotatesCertsAndDialsMTLSPort(t *testing.T) {
 		}
 		return &grpcclient.AgentConnection{IsMTLS: true}, nil, nil
 	}
-	origCerts := loadAllCLICertsFn
-	loadAllCLICertsFn = func() []config.CertificateInfo {
-		return []config.CertificateInfo{{OrganizationID: 1}, {OrganizationID: 2}}
-	}
 	t.Cleanup(func() {
 		tcpDialTimeoutFn = origTCP
 		dialAgentLadderWithCertsFn = origLadder
-		loadAllCLICertsFn = origCerts
 	})
 
 	conn, _, outcome := dialAgentLKG(context.Background(), discoverycache.Entry{IP: "10.0.0.9", Port: 50052, MTLS: true, OrgID: 2}, "orin.local")
@@ -1602,12 +1603,12 @@ func TestDialAgentLKGFallsThroughOnPlaintextDowngrade(t *testing.T) {
 	dialAgentLadderWithCertsFn = func(ctx context.Context, target dialTarget, certs []config.CertificateInfo) (*grpcclient.AgentConnection, error, error) {
 		return grpcclient.NewFromConn(nil), nil, nil // IsMTLS=false: ladder fell to plaintext
 	}
-	origCerts := loadAllCLICertsFn
-	loadAllCLICertsFn = func() []config.CertificateInfo { return []config.CertificateInfo{{OrganizationID: 1}} }
+	origCerts := loadStoredCLICertsFn
+	loadStoredCLICertsFn = func() []config.CertificateInfo { return []config.CertificateInfo{{OrganizationID: 1}} }
 	t.Cleanup(func() {
 		tcpDialTimeoutFn = origTCP
 		dialAgentLadderWithCertsFn = origLadder
-		loadAllCLICertsFn = origCerts
+		loadStoredCLICertsFn = origCerts
 	})
 
 	_, _, outcome := dialAgentLKG(context.Background(), discoverycache.Entry{IP: "10.0.0.9", Port: 50052, MTLS: true}, "orin.local")
@@ -1790,13 +1791,15 @@ func TestCacheConnectSuccessStoresActualEndpoint(t *testing.T) {
 	}
 }
 
-func TestProvisionedAgentUnauthorizedMentionsCLIUpgrade(t *testing.T) {
-	// A reachability timeout against an mTLS-advertised device should hint at
-	// both stale certs and a too-old CLI.
+func TestProvisionedAgentTimeoutDoesNotBlameCredentials(t *testing.T) {
 	err := newProvisionedAgentUnauthorizedError(errors.New("dial tcp 192.168.1.50:50051: i/o timeout"))
-	msg := err.Error()
-	if !strings.Contains(strings.ToLower(msg), "upgrade") || !strings.Contains(msg, "wendy auth refresh-certs") {
-		t.Fatalf("message should mention upgrading the CLI and refresh-certs, got: %q", msg)
+	for _, advice := range []string{"upgrade", "refresh-certs", "auth login", "Unauthorized"} {
+		if strings.Contains(err.Error(), advice) {
+			t.Fatalf("timeout gives speculative advice: %s", err)
+		}
+	}
+	if !strings.Contains(err.Error(), "deadline") {
+		t.Fatalf("timeout lost: %s", err)
 	}
 }
 

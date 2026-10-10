@@ -241,7 +241,7 @@ func TestAwaitSimulatorKeepsRecoveryErrorWithoutBootLog(t *testing.T) {
 				t.Fatalf("error = %v, want console output %v", err, tc.wantConsole)
 			}
 			if errors.Is(err, errTLSHandshakeRejected) {
-				if !strings.Contains(err.Error(), "wendy auth refresh-certs") || !strings.Contains(err.Error(), "retry this command") {
+				if !strings.Contains(err.Error(), "wendy device sync-time") || strings.Contains(err.Error(), "wendy auth refresh-certs") {
 					t.Fatalf("TLS rejection missing recovery instructions: %v", err)
 				}
 			}

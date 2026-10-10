@@ -39,6 +39,8 @@ func TestCommandErrorClass(t *testing.T) {
 		{"device identity", refuseIdentity("secret.local changed identity"), "device_identity_mismatch"},
 		{"device org", orgMismatchWithCause{mismatch: orgMismatchDeviceError{deviceOrg: 99}, cause: privateCause}, "device_org_mismatch"},
 		{"device TLS", newTLSHandshakeRejectedError(status.Error(codes.Unavailable, "secret.local")), "device_tls_rejected"},
+		{"device timeout", newProvisionedAgentUnauthorizedError(context.DeadlineExceeded), "device_unreachable"},
+		{"device rejected certificate", newProvisionedAgentUnauthorizedError(errors.New("remote error: tls: bad certificate")), "device_tls_rejected"},
 		{"device auth", newProvisionedAgentUnauthorizedError(privateCause), "device_auth_required"},
 		{"agent down", agentNotListeningError{addr: "secret.local", cause: privateCause}, "device_unreachable"},
 		{"simulator", fmt.Errorf("private VM: %w", errSimulatorUnavailable), "simulator_unavailable"},

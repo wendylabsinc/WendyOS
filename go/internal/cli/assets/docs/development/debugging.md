@@ -196,7 +196,7 @@ The CLI itself performs an mDNS browse on Linux hosts (shipped binaries are CGO_
 
 ### mTLS handshake fails after re-provisioning
 
-Old mTLS state may be cached. Refresh certificates on the CLI side:
+If the CLI reports expired client certificates, check this computer's clock, then refresh them:
 
 ```sh
 wendy auth refresh-certs
@@ -212,28 +212,17 @@ sudo systemctl restart wendy-agent
 
 If the device's real-time clock (RTC) is not synchronized (common on first boot or after power loss), the device clock may predate the provisioning certificate's `NotBefore` time. This causes all client certificates to appear "not yet valid" from the device's perspective.
 
-Check the device clock:
+From a computer on the same LAN, send a signed time proof and retry the connection:
 
 ```sh
-ssh wendy@<device-ip> 'timedatectl status'
+wendy device sync-time
 ```
 
-If NTP is not synchronized, you can:
-
-1. **Wait for NTP sync** or force it:
-   ```sh
-   sudo systemctl restart systemd-timesyncd
-   ```
-
-2. **Use Roughtime** — The CLI automatically detects clock skew when connecting to a device and relays a verified Roughtime proof to correct it. If the connection succeeds, you'll see a message like:
-   ```
-   Device clock was 56y behind — synchronized via Roughtime.
-   ```
-   If the device is completely unreachable (connection cannot be established), you can broadcast manually:
-   ```sh
-   wendy device sync-time
-   ```
-   This queries public Roughtime servers and multicasts the verified timestamp. Devices on the same network receive it and advance their clocks.
+The CLI also attempts this broadcast automatically after a possible clock-related
+TLS failure. It reports whether sending failed and whether the connection retry
+succeeded. A successful broadcast does not confirm that the device received the
+proof or changed its clock. Giving the device internet access also allows its
+own time synchronization to recover.
 
 The agent logs a warning at startup if it detects clock skew. For TLS handshake details, run the CLI with:
 
