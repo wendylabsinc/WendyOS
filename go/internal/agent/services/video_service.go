@@ -47,6 +47,7 @@ const (
 	v4l2PixFmtY16           = 0x20363159 // 'Y16 ' -- note the trailing space
 	v4l2PixFmtGrey          = 0x59455247 // 'GREY'
 	v4l2PixFmtZ16           = 0x2036315A // 'Z16 ' -- depth; named only so a refusal can say so (see rawPixelFormats)
+	v4l2PixFmtBGR24         = 0x33524742 // 'BGR3' -- what the RealSense bridge node carries (colourFourcc in wendy-realsense-source)
 	v4l2FieldNone           = 1
 
 	v4l2CapVideoCapture = 0x00000001

@@ -146,8 +146,9 @@ type rawPixelFormat struct {
 	bytesPerLine func(width uint32) uint32
 }
 
-func twoBytesPerPixel(w uint32) uint32 { return w * 2 }
-func oneBytePerPixel(w uint32) uint32  { return w }
+func twoBytesPerPixel(w uint32) uint32   { return w * 2 }
+func oneBytePerPixel(w uint32) uint32    { return w }
+func threeBytesPerPixel(w uint32) uint32 { return w * 3 }
 
 // rawPixelFormats is tried in order, so the first entry is preferred when a
 // camera advertises several. YUYV stays first: it is what every UVC webcam
@@ -164,6 +165,11 @@ var rawPixelFormats = []rawPixelFormat{
 	// per-pixel data directly rather than stacking it onto a picture.
 	{fourcc: "Y16 ", v4l2: v4l2PixFmtY16, gstFormat: "GRAY16_LE", bytesPerLine: twoBytesPerPixel},
 	{fourcc: "GREY", v4l2: v4l2PixFmtGrey, gstFormat: "GRAY8", bytesPerLine: oneBytePerPixel},
+	// BGR3 is what the RealSense bridge node carries: the calibrated capture
+	// helper streams colour as packed 24-bit BGR, and the loopback node that
+	// re-exposes it to StreamVideo advertises the same format (see
+	// specs/2026-10-10-realsense-single-owner-design.md).
+	{fourcc: "BGR3", v4l2: v4l2PixFmtBGR24, gstFormat: "BGR", bytesPerLine: threeBytesPerPixel},
 }
 
 // Z16 -- 16-bit depth, what a RealSense reports on its depth node -- is

@@ -25,12 +25,15 @@ const (
 
 var ErrUnsupportedEncoding = errors.New("unsupported ROS 2 image encoding")
 
-// Codec is the compressed format written to the V4L2 loopback device.
+// Codec is the frame format written to the V4L2 loopback device. MJPEG and
+// H.264 carry compressed frames; BGR24 carries raw packed pixels, for feeds
+// whose producer hands over uncompressed planes (the RealSense bridge node).
 type Codec uint8
 
 const (
 	CodecMJPEG Codec = iota + 1
 	CodecH264
+	CodecBGR24
 )
 
 // Frame is one encoded camera frame and the format the loopback writer must
