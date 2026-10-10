@@ -53,8 +53,9 @@ When a capture hub starts on a RealSense:
 
 - allocate an aux loopback node (`AllocateAuxNodeNumber` / `EnsureAuxNode`,
   labelled `wendy-realsense-bridge-<serial>`);
-- subscribe to the hub as an internal consumer (no requirements — colour is
-  always present) and pump each frame's colour plane into the node.
+- tap the hub (not subscribe: a subscriber would keep the hub alive after the
+  last real consumer left, and the bridge must drain with them) and pump each
+  frame's colour plane into the node, latest-wins so publish never blocks.
 
 The pump reuses `ros2camera.CameraWriter` with one addition: a raw codec
 entry. The helper's colour is `BGR3` (24-bit packed BGR,

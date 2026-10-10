@@ -513,10 +513,14 @@ type deviceHub struct {
 	// capture may restart. Protected by h.mu.
 	subExplicit map[int]string
 	// restarted marks that this hub's producer was torn down by an episode
-	// capture takeover (takeOverDefaultedHub) rather than by a fault or a
-	// normal last-unsubscribe. Parameter-less subscribers use it to reattach
-	// to the replacement hub after their channel closes. Protected by h.mu.
-	restarted bool
+	// capture takeover (takeOverDefaultedHub) or an ownership handoff
+	// (vacateForOwnershipChange) rather than by a fault or a normal
+	// last-unsubscribe. Parameter-less subscribers use it to reattach after
+	// their channel closes. restartedMsg, when set, names which of the two
+	// happened for the terminal error; empty means the episode-capture
+	// default. Protected by h.mu.
+	restarted    bool
+	restartedMsg string
 	// sampleSeq is the per-device sample counter, shared with every hub that
 	// has served the same device key. It outlives the hub so sample identities
 	// stay monotonic across producer restarts within one episode.
@@ -641,6 +645,17 @@ func (h *deviceHub) wasRestarted() bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return h.restarted
+}
+
+// restartMessage is the terminal-error text for a restarted hub: what tore the
+// producer down, and that reconnecting joins the replacement stream.
+func (h *deviceHub) restartMessage() string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.restartedMsg != "" {
+		return h.restartedMsg
+	}
+	return "video stream ended: episode capture restarted the camera producer at the campaign's requested parameters; reconnect to join the new stream"
 }
 
 // drops reports how many frames the hub has dropped for one subscriber so far.
@@ -1409,7 +1424,47 @@ func (s *VideoService) resolveSource(devID uint32) (videoSource, error) {
 // plane on a loopback node this service serves StreamVideo from, instead of
 // the two locking each other out. Call once at startup, before either serves.
 func (s *VideoService) BridgeCalibratedCaptures(c *CalibratedFrameService) {
-	c.bridge = newRealSenseBridge(s.logger, s.loopback)
+	bridge := newRealSenseBridge(s.logger, s.loopback)
+	bridge.vacate = s.vacateForOwnershipChange
+	c.bridge = bridge
+}
+
+// vacateTimeout bounds how long an ownership handoff waits for a vacated
+// producer to release its device fd. librealsense opens the device right
+// after, so leaving early risks one EBUSY -- bounded is better than hung.
+const vacateTimeout = 3 * time.Second
+
+// vacateForOwnershipChange ends every producer this service runs on the given
+// nodes, so the calibrated capture helper can open them
+// (specs/2026-10-10-realsense-single-owner-design.md §4). Each ended stream
+// reports CAMERA_PRODUCER_RESTARTED -- the same recoverable signal an episode
+// takeover sends -- and a reconnecting subscriber resolves through the
+// redirect the new owner has already installed, landing on the bridge node.
+// Waits, bounded, for each producer to actually release its fd.
+func (s *VideoService) vacateForOwnershipChange(paths []string) {
+	var ended []*deviceHub
+	s.mu.Lock()
+	for _, p := range paths {
+		hub, ok := s.hubs[p]
+		if !ok || hub.ctx.Err() != nil {
+			continue
+		}
+		hub.mu.Lock()
+		hub.restarted = true
+		hub.restartedMsg = "video stream ended: a calibrated frame capture took ownership of this camera; reconnect to join the stream served from it"
+		hub.mu.Unlock()
+		hub.cancel()
+		delete(s.hubs, p)
+		ended = append(ended, hub)
+	}
+	s.mu.Unlock()
+	for _, hub := range ended {
+		select {
+		case <-hub.done:
+		case <-time.After(vacateTimeout):
+			s.logger.Warn("ownership handoff: a vacated producer did not release its device in time; the calibrated capture's open may see EBUSY")
+		}
+	}
 }
 
 // SetCameraCredentials stores the login for a network camera. The secret is
@@ -2447,7 +2502,7 @@ func (s *VideoService) pumpFrames(stream grpc.ServerStreamingServer[agentpb.Vide
 					// every other Unavailable and rejoin by itself; the CLI's
 					// `camera view` does exactly that.
 					return streamreason.New(codes.Unavailable,
-						"video stream ended: episode capture restarted the camera producer at the campaign's requested parameters; reconnect to join the new stream",
+						h.restartMessage(),
 						streamreason.CameraProducerRestarted, nil)
 				}
 				// If the hub context was cancelled (e.g. service shutdown), propagate that.

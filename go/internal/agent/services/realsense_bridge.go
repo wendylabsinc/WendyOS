@@ -35,6 +35,10 @@ type realSenseBridge struct {
 	// colourNodeFor picks the colour node out of a capture's claimed nodes --
 	// the one StreamVideo callers actually name, and so the one to redirect.
 	colourNodeFor func(nodes []string) string
+	// vacate asks the video service to end its own producers on the claimed
+	// nodes before the helper opens them (the handoff, design §4). Nil-safe:
+	// without it, a held node fails the helper's open exactly as before.
+	vacate func(nodes []string)
 }
 
 func newRealSenseBridge(logger *zap.Logger, loop cameraLoopback) *realSenseBridge {
@@ -111,7 +115,13 @@ func (b *realSenseBridge) start(ctx context.Context, hub *frameHub, source strin
 	}
 	hub.setTap(bc.offer)
 	go bc.pump()
+	// The redirect stands BEFORE the video service is asked to vacate, so a
+	// subscriber reconnecting from the vacate lands on the bridge node, never
+	// back on the device the helper is about to open.
 	cameraOwners.setBridge(source, colour, nodePath)
+	if b.vacate != nil {
+		b.vacate(claimedNodes)
+	}
 	b.logger.Info("realsense bridge up: StreamVideo served from the calibrated capture",
 		zap.String("source", source), zap.String("colour_node", colour), zap.String("bridge_node", nodePath))
 	return bc
