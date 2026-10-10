@@ -89,7 +89,7 @@ jobs:
   test:
     name: Test
     if: ${{ always() }}
-    needs: [unit-tests, windows, vet]
+    needs: [unit-tests, windows, vet, agent-startup]
     runs-on: ubuntu-latest
     steps:
       - name: Check test results
@@ -97,10 +97,27 @@ jobs:
           RACE_RESULT: ${{ needs.unit-tests.result }}
           WINDOWS_RESULT: ${{ needs.windows.result }}
           VET_RESULT: ${{ needs.vet.result }}
+          STARTUP_RESULT: ${{ needs.agent-startup.result }}
         run: |
           test "$RACE_RESULT" = success
           test "$WINDOWS_RESULT" = success
           test "$VET_RESULT" = success
+          test "$STARTUP_RESULT" = success
+
+  agent-startup:
+    name: Agent setup startup
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Set up Go
+        uses: ./.github/actions/setup-go-ci
+        with:
+          cache-name: agent-startup
+      - name: Build Linux agent
+        run: CGO_ENABLED=0 go build -o /tmp/wendy-agent ./go/cmd/wendy-agent
+      - name: Check setup startup and Avahi failures
+        run: python3 .github/scripts/integration-agent-startup.py --agent /tmp/wendy-agent
 
   vet:
     name: Vet

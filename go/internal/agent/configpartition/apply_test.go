@@ -544,10 +544,14 @@ func TestUpdateAvahiService_ProvisioningWritesAssetIDTXTRecord(t *testing.T) {
 	}
 }
 
-func TestUpdateAvahiService_UnprovisioningRemovesAssetID(t *testing.T) {
+func TestUpdateAvahiService_UnprovisioningClearsEnrollment(t *testing.T) {
 	dir := t.TempDir()
 	serviceFile := filepath.Join(dir, "wendyos-mdns.service")
-	provisioned := updateWendyOSServicePort(avahiServiceTemplate, 50052, true, 215, 0)
+	provisioned := strings.Replace(avahiServiceTemplate, "<port>50051</port>", `<port>50052</port>
+    <txt-record>tls=true</txt-record>
+    <txt-record>assetid=215</txt-record>
+    <txt-record>orgid=42</txt-record>
+    <txt-record>id=device-uuid</txt-record>`, 1)
 	if err := os.WriteFile(serviceFile, []byte(provisioned), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -563,8 +567,15 @@ func TestUpdateAvahiService_UnprovisioningRemovesAssetID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(got), "assetid=") {
-		t.Errorf("expected assetid TXT record removed from service file:\n%s", got)
+	for _, stale := range []string{"assetid=", "orgid=", "tls=true", "<port>50052</port>"} {
+		if strings.Contains(string(got), stale) {
+			t.Errorf("stale enrollment field %q remains:\n%s", stale, got)
+		}
+	}
+	for _, want := range []string{"<port>50051</port>", "<txt-record>tls=false</txt-record>", "<txt-record>id=device-uuid</txt-record>", "<type>_ssh._tcp</type>", "<port>22</port>"} {
+		if !strings.Contains(string(got), want) {
+			t.Errorf("missing setup or unrelated field %q:\n%s", want, got)
+		}
 	}
 }
 
