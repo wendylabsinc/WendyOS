@@ -2,6 +2,7 @@ package containerd
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -98,7 +99,7 @@ type meshDNSService interface {
 // meshMDNSService owns a per-app multicast bridge. It is injected by the
 // local-mesh runtime; containerd supplies trusted CNI and port-map state.
 type meshMDNSService interface {
-	StartMeshApp(containerName, appID, ip, bridge string, ports []appconfig.PortMapping) error
+	StartMeshApp(containerName, appID, ip, bridge, netnsPath, gateway string, ports []appconfig.PortMapping) error
 	StopMeshApp(containerName string)
 }
 
@@ -414,7 +415,7 @@ func resolveMeshEgress(entitlements []appconfig.Entitlement, appID string) (para
 // containerName is the containerd container ID ({appID}_{serviceName}); it
 // keys the DNS-listener held map so teardown releases exactly the refcounts
 // this container took (see ensureMeshDNS/releaseMeshDNS).
-func (c *Client) applyMeshEgress(entitlements []appconfig.Entitlement, containerName, appID, netnsPath, ip string) error {
+func (c *Client) applyMeshEgress(entitlements []appconfig.Entitlement, containerName, appID, netnsPath, projectionNetnsPath, ip string) error {
 	params, ok, err := resolveMeshEgress(entitlements, appID)
 	if err != nil {
 		return fmt.Errorf("mesh egress: %w", err)
@@ -471,7 +472,10 @@ func (c *Client) applyMeshEgress(entitlements []appconfig.Entitlement, container
 	// for containers whose acquisition actually succeeded (held map).
 	c.ensureMeshDNS(containerName, params.gateway)
 
-	if err := c.applyMeshIngressPorts(containerName, appID, ip, params.ports); err != nil {
+	// CNI's bind mount is released after app startup. The mDNS bridge remains
+	// alive for the task and must use that task's live namespace path when it
+	// later installs a newly discovered physical-LAN service route.
+	if err := c.applyMeshIngressPorts(containerName, appID, projectionNetnsPath, ip, params.ports); err != nil {
 		return err
 	}
 	if err := c.claimMeshSource(containerName, appID, ip, params.cidr); err != nil {
@@ -497,7 +501,7 @@ func (c *Client) claimMeshSource(containerName, appID, ip, cidr string) error {
 // A failed individual iptables forward remains unavailable to remote peers;
 // a conflicting host port fails the second task's start before iptables can
 // replace the first task's rule.
-func (c *Client) applyMeshIngressPorts(containerName, appID, ip string, ports []appconfig.PortMapping) error {
+func (c *Client) applyMeshIngressPorts(containerName, appID, netnsPath, ip string, ports []appconfig.PortMapping) error {
 	if ip == "" {
 		return fmt.Errorf("mesh ingress: container %q has no CNI IP", containerName)
 	}
@@ -507,7 +511,7 @@ func (c *Client) applyMeshIngressPorts(containerName, appID, ip string, ports []
 	c.meshIngressMu.Lock()
 	defer c.meshIngressMu.Unlock()
 	if len(ports) == 0 {
-		return c.startMeshMDNS(containerName, appID, ip, nil)
+		return c.startMeshMDNS(containerName, appID, netnsPath, ip, nil)
 	}
 
 	seen := make(map[string]struct{}, len(ports))
@@ -580,14 +584,21 @@ func (c *Client) applyMeshIngressPorts(containerName, appID, ip string, ports []
 	// The collector must see only live forwards. Otherwise an app announcing
 	// an unforwarded declared port causes authorization to fail and tears down
 	// the bridge, including unrelated services that did forward successfully.
-	return c.startMeshMDNS(containerName, appID, ip, forwarded)
+	return c.startMeshMDNS(containerName, appID, netnsPath, ip, forwarded)
 }
 
-func (c *Client) startMeshMDNS(containerName, appID, ip string, ports []appconfig.PortMapping) error {
+func (c *Client) startMeshMDNS(containerName, appID, netnsPath, ip string, ports []appconfig.PortMapping) error {
 	if c.meshMDNS == nil {
 		return nil
 	}
-	if err := c.meshMDNS.StartMeshApp(containerName, appID, ip, bridgeName(appID), ports); err != nil {
+	address := net.ParseIP(ip).To4()
+	if address == nil {
+		return errors.New("mesh app has no IPv4 address")
+	}
+	gatewayIP := append(net.IP(nil), address...)
+	gatewayIP[3] = gatewayIP[3]&0xf0 | 1 // CNI bridge uses a /28 and its first address.
+	gateway := gatewayIP.String()
+	if err := c.meshMDNS.StartMeshApp(containerName, appID, ip, bridgeName(appID), netnsPath, gateway, ports); err != nil {
 		// Direct VIP traffic remains usable if an app multicast bridge cannot
 		// start. The catalog never publishes this app without its bridge.
 		c.logger.Warn("mesh app mDNS bridge unavailable", zap.String("app_id", appID), zap.Error(err))

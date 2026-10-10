@@ -355,6 +355,7 @@ func (c *Client) CNIAdd(ctx context.Context, appID, containerID, netnsPath strin
 	if err != nil {
 		return "", "", err
 	}
+	c.reconcileLANReplyGuards(ctx)
 	warnSubnetCollision(c.logger, appID, subnet)
 	cfgJSON := buildBridgeCNIConfig(appID, subnet)
 

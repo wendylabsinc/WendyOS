@@ -38,6 +38,10 @@ func (m Message) validate() error {
 		if m.Record != nil || len(m.Bundle) != 0 || len(m.Fingerprint) != 64 {
 			return errors.New("invalid service identity request")
 		}
+	case "snapshot-done":
+		if m.Record != nil || len(m.Bundle) != 0 || m.Fingerprint != "" {
+			return errors.New("invalid service snapshot completion")
+		}
 	default:
 		return errors.New("unknown service message")
 	}
@@ -201,6 +205,11 @@ func (s *Synchronizer) Reconcile(now time.Time) []Message {
 	return out
 }
 
+// PendingIdentity reports whether a record from this peer still awaits its
+// signed origin's certificate bundle. A snapshot is not safe to project until
+// all records sent before its completion marker have been verified.
+func (s *Synchronizer) PendingIdentity() bool { return len(s.pending) != 0 }
+
 // Receive returns replies for this peer and newly admitted records to relay.
 // Invalid signatures and identities fail the link; ordinary stale/expired
 // records are ignored. Relaying never changes the signed absolute expiry.
@@ -209,6 +218,9 @@ func (s *Synchronizer) Receive(m Message, now time.Time) (replies []Message, cha
 		return nil, nil, err
 	}
 	switch m.Kind {
+	case "snapshot-done":
+		// Runtime consumes this marker after all preceding records on the
+		// ordered stream have been admitted or queued for identity repair.
 	case "identity-request":
 		if chain, _, ok := s.cache.Get(m.Fingerprint, now); ok {
 			return []Message{{Kind: "bundle", Bundle: chain}}, nil, nil
