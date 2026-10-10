@@ -65,10 +65,10 @@ func TestEmulatedBuildNotice(t *testing.T) {
 		})
 	}
 
-	// Multi-service and Compose projects cannot use --build-host yet, so the
-	// notice must not tell them to.
+	// Compose projects cannot use --build-host, so the notice must not tell
+	// them to.
 	got := emulatedBuildNotice("linux", "amd64", "linux/arm64", false)
-	if strings.Contains(got, "--build-host=DEVICE") || !strings.Contains(got, "single-service projects only") {
+	if strings.Contains(got, "--build-host=DEVICE") || !strings.Contains(got, "does not support this project type") {
 		t.Fatalf("group notice %q", got)
 	}
 }
