@@ -176,7 +176,10 @@ func TestRTSPPathOf(t *testing.T) {
 }
 
 func TestUsernameTokenCarriesDigestNonceAndCreated(t *testing.T) {
-	tok := usernameToken(Credential{Username: "admin", Password: "hunter2"}, testTime())
+	tok, err := usernameToken(Credential{Username: "admin", Password: "hunter2"}, testTime())
+	if err != nil {
+		t.Fatalf("usernameToken: %v", err)
+	}
 	for _, want := range []string{"<Username>admin</Username>", "PasswordDigest", "<Nonce", "<Created", "UsernameToken"} {
 		if !strings.Contains(tok, want) {
 			t.Errorf("token lacks %q:\n%s", want, tok)

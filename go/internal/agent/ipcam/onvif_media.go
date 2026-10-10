@@ -237,7 +237,11 @@ func onvifCall(ctx context.Context, endpoint string, cred Credential, body strin
 		if cred.Username == "" {
 			return nil, fmt.Errorf("camera requires a login for ONVIF (HTTP %d)", status)
 		}
-		status, env, err = onvifPost(ctx, endpoint, usernameToken(cred, time.Now()), body)
+		token, err := usernameToken(cred, time.Now())
+		if err != nil {
+			return nil, err
+		}
+		status, env, err = onvifPost(ctx, endpoint, token, body)
 		if err != nil {
 			return nil, err
 		}
@@ -300,13 +304,13 @@ func onvifPost(ctx context.Context, endpoint, header, body string) (int, *onvifE
 //	digest = Base64( SHA1( nonce + created + password ) )
 //
 // where nonce is the raw bytes and created is the UTC timestamp, both of which
-// also travel in the header.
-func usernameToken(cred Credential, now time.Time) string {
+// also travel in the header. A nonce the host cannot randomise is a hard
+// failure: a fixed nonce makes the token replayable, and no login goes out at
+// a security level the caller did not agree to.
+func usernameToken(cred Credential, now time.Time) (string, error) {
 	nonce := make([]byte, 16)
 	if _, err := rand.Read(nonce); err != nil {
-		// crypto/rand failing is a broken host; a fixed nonce still yields a
-		// valid, if replayable, token, and the call is over a private cable.
-		copy(nonce, []byte("wendy-agent-nonce"))
+		return "", fmt.Errorf("cannot build a replay-safe ONVIF login token: %w", err)
 	}
 	created := now.UTC().Format("2006-01-02T15:04:05.000Z")
 	h := sha1.New() //nolint:gosec // mandated by the UsernameToken profile
@@ -320,7 +324,7 @@ func usernameToken(cred Credential, now time.Time) string {
 		`<Nonce EncodingType="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-soap-message-security-1.0#Base64Binary">` +
 		base64.StdEncoding.EncodeToString(nonce) + `</Nonce>` +
 		`<Created xmlns="http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-utility-1.0.xsd">` + created + `</Created>` +
-		`</UsernameToken></Security>`
+		`</UsernameToken></Security>`, nil
 }
 
 func xmlEscape(s string) string {
