@@ -28,6 +28,7 @@ WendyCLI.app/
 .wendy
 *.resolved
 go/wendy-agent
+go/wendy-realsense-source
 go/wendy
 go/bin/
 go/local-pki-test
