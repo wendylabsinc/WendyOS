@@ -279,7 +279,8 @@ func (s *mcpServer) handleCloudEnrollDevice(ctx context.Context, req mcpgo.CallT
 	if err != nil {
 		return cloudErrResult(err), nil
 	}
-	cfg, assetID, err := cloudenroll.MintEAB(tokenCtx, cloudConn, auth, cfg, name)
+	hw, hwErr := cloudenroll.ReadHardware(ctx, conn.Conn)
+	cfg, assetID, err := cloudenroll.MintEAB(tokenCtx, cloudConn, auth, cfg, name, hw)
 	if err != nil {
 		return errResult(codeFromGRPC(err), grpcErrString(err)), nil
 	}
@@ -296,6 +297,9 @@ func (s *mcpServer) handleCloudEnrollDevice(ctx context.Context, req mcpgo.CallT
 		"device_id":     cfg.DeviceID,
 		"principal_uri": resp.GetPrincipalUri(),
 		"cloud_host":    auth.CloudGRPC,
+	}
+	if hwErr != nil {
+		out["hardware_warning"] = hwErr.Error()
 	}
 	return okResult(out), nil
 }

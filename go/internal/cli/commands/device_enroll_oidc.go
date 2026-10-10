@@ -3,6 +3,7 @@ package commands
 import (
 	"context"
 	"fmt"
+	"os"
 
 	"github.com/google/uuid"
 	"github.com/wendylabsinc/wendy/go/internal/cli/cloudenroll"
@@ -42,6 +43,10 @@ func runOIDCEnrollDevice(ctx context.Context, conn *grpcclient.AgentConnection, 
 		return err
 	}
 	agent := agentpbv2.NewWendyProvisioningServiceClient(conn.Conn)
+	hw, err := cloudenroll.ReadHardware(ctx, conn.Conn)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: %v; enrolling without hardware details.\n", err)
+	}
 
 	tokenCtx, err := cloudContext(ctx, auth)
 	if err != nil {
@@ -54,7 +59,7 @@ func runOIDCEnrollDevice(ctx context.Context, conn *grpcclient.AgentConnection, 
 	defer cloudConn.Close()
 
 	fmt.Printf("Enrolling %s as %s with PKI...\n", name, deviceID)
-	cfg, assetID, err := cloudenroll.MintEAB(tokenCtx, cloudConn, auth, cfg, name)
+	cfg, assetID, err := cloudenroll.MintEAB(tokenCtx, cloudConn, auth, cfg, name, hw)
 	if err != nil {
 		return err
 	}

@@ -54,6 +54,8 @@ func oidcEnrollmentAuth(t *testing.T) *config.AuthConfig {
 
 type acmeProvisioningServer struct {
 	agentpbv2.UnimplementedWendyProvisioningServiceServer
+	agentpbv2.UnimplementedWendyDeviceInfoServiceServer
+	info             *agentpbv2.GetDeviceInfoResponse // nil: GetDeviceInfo is Unimplemented
 	req              *agentpbv2.StartACMEProvisioningRequest
 	enrolled         bool
 	preflightErr     error
@@ -77,6 +79,13 @@ func (s *acmeProvisioningServer) IsProvisioned(context.Context, *agentpbv2.IsPro
 	}
 	return &agentpbv2.IsProvisionedResponse{ResponseType: &agentpbv2.IsProvisionedResponse_NotProvisioned{NotProvisioned: state}}, nil
 }
+func (s *acmeProvisioningServer) GetDeviceInfo(context.Context, *agentpbv2.GetDeviceInfoRequest) (*agentpbv2.GetDeviceInfoResponse, error) {
+	if s.info == nil {
+		return nil, status.Error(codes.Unimplemented, "no device info")
+	}
+	return s.info, nil
+}
+
 func (s *acmeProvisioningServer) StartACMEProvisioning(_ context.Context, req *agentpbv2.StartACMEProvisioningRequest) (*agentpbv2.StartACMEProvisioningResponse, error) {
 	s.req = req
 	if s.startErr != nil {
@@ -147,6 +156,7 @@ func enrollmentServers(t *testing.T, cloud *oidcEnrollmentServer, agent *acmePro
 	cloudpbv2.RegisterDeviceEnrollmentServiceServer(srv, cloud)
 	cloudpbv2.RegisterOperatorSessionServiceServer(srv, cloud)
 	agentpbv2.RegisterWendyProvisioningServiceServer(srv, agent)
+	agentpbv2.RegisterWendyDeviceInfoServiceServer(srv, agent)
 	go srv.Serve(lis) //nolint:errcheck
 	t.Cleanup(srv.Stop)
 	client, err := grpc.NewClient(lis.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
@@ -464,6 +474,35 @@ func TestOIDCEnrollmentPreflightFailureDoesNotMint(t *testing.T) {
 			}
 			if code == codes.Unimplemented && !strings.Contains(err.Error(), "update the agent") {
 				t.Fatalf("missing update hint: %v", err)
+			}
+		})
+	}
+}
+
+// The agent's own hardware report rides on EnrollDevice (WDY-3544); an agent
+// that cannot answer still enrolls, with no hardware sent.
+func TestOIDCEnrollmentSendsDeviceHardware(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		info *agentpbv2.GetDeviceInfoResponse
+		want *cloudpbv2.DeviceHardware
+	}{
+		{"reported", &agentpbv2.GetDeviceInfoResponse{Os: "linux", CpuArchitecture: "arm64", BoardModel: proto.String("NVIDIA Jetson AGX Thor Developer Kit")},
+			&cloudpbv2.DeviceHardware{Os: proto.String("linux"), Architecture: proto.String("arm64"), BoardModel: proto.String("NVIDIA Jetson AGX Thor Developer Kit")}},
+		{"unavailable", nil, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cloud := &oidcEnrollmentServer{response: &cloudpbv2.EnrollDeviceResponse{AssetId: "asset-uuid", CredentialKind: "eab", EabKeyId: "eab-id", EabHmacKey: strings.Repeat("ab", 32)}}
+			conn, host := enrollmentServers(t, cloud, &acmeProvisioningServer{info: tc.info})
+			auth := oidcEnrollmentAuth(t)
+			auth.CloudGRPC = host
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := runEnrollDevice(ctx, conn, auth, "sim", 0); err != nil {
+				t.Fatal(err)
+			}
+			if got := cloud.req.GetHardware(); !proto.Equal(got, tc.want) {
+				t.Fatalf("hardware = %v, want %v", got, tc.want)
 			}
 		})
 	}
