@@ -43,7 +43,8 @@ func TestVacateForOwnershipChange_EndsOnlyTheClaimedNodes(t *testing.T) {
 		},
 	}
 
-	s.vacateForOwnershipChange([]string{"/dev/video4", "/dev/video5"})
+	s.vacateForOwnershipChange([]string{"/dev/video4", "/dev/video5"},
+		"video stream ended: a calibrated frame capture took ownership of this camera; reconnect to join the stream served from it")
 
 	select {
 	case <-claimed.done:
@@ -92,7 +93,7 @@ func TestRealSenseBridge_VacateSeesRedirect(t *testing.T) {
 	bridge.colourNodeFor = func([]string) string { return "/dev/video4" }
 
 	redirectAtVacate := ""
-	bridge.vacate = func(nodes []string) {
+	bridge.vacate = func(nodes []string, _ string) {
 		redirectAtVacate, _ = cameraOwners.redirect("/dev/video4")
 	}
 
@@ -106,5 +107,53 @@ func TestRealSenseBridge_VacateSeesRedirect(t *testing.T) {
 
 	if redirectAtVacate != "/dev/video250" {
 		t.Fatalf("at vacate time the redirect was %q; want the bridge node already installed", redirectAtVacate)
+	}
+}
+
+// Teardown bounces the bridge node's own subscribers with the recoverable
+// restart signal -- redirect already cleared, so their reconnect resolves the
+// real device -- before the node is removed from under them.
+func TestRealSenseBridge_TeardownBouncesBridgeSubscribers(t *testing.T) {
+	t.Cleanup(func() { cameraOwners.release("fake:1") })
+	loop := newFakeLoopback()
+	loop.auxNext = 250
+	writer := &fakeBridgeWriter{}
+	bridge := newRealSenseBridge(zap.NewNop(), loop)
+	bridge.writerFor = func(string) ros2camera.CameraWriter { return writer }
+	bridge.colourNodeFor = func([]string) string { return "/dev/video4" }
+
+	type vacateCall struct {
+		nodes       []string
+		msg         string
+		redirectSet bool
+	}
+	var calls []vacateCall
+	bridge.vacate = func(nodes []string, msg string) {
+		_, ok := cameraOwners.redirect("/dev/video4")
+		calls = append(calls, vacateCall{nodes: nodes, msg: msg, redirectSet: ok})
+	}
+
+	hub := &frameHub{subs: map[int]*frameSub{}, source: "fake:1"}
+	bc := bridge.start(context.Background(), hub, "fake:1", []string{"/dev/video4"})
+	if bc == nil {
+		t.Fatal("bridge did not start")
+	}
+	bc.teardown()
+
+	if len(calls) != 2 {
+		t.Fatalf("vacate called %d times, want start + teardown", len(calls))
+	}
+	td := calls[1]
+	if len(td.nodes) != 1 || td.nodes[0] != "/dev/video250" {
+		t.Fatalf("teardown vacated %v, want the bridge node", td.nodes)
+	}
+	if !strings.Contains(td.msg, "capture serving this camera ended") {
+		t.Fatalf("teardown bounce message = %q; want it to say the capture ended", td.msg)
+	}
+	if td.redirectSet {
+		t.Fatal("teardown bounced subscribers while the redirect still stood; a reconnect would chase a vanishing node")
+	}
+	if len(loop.auxRemoved) == 0 || loop.auxRemoved[0] != 250 {
+		t.Fatalf("auxRemoved = %v, want the bridge node removed after the bounce", loop.auxRemoved)
 	}
 }

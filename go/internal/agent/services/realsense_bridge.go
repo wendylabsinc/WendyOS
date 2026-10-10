@@ -35,10 +35,12 @@ type realSenseBridge struct {
 	// colourNodeFor picks the colour node out of a capture's claimed nodes --
 	// the one StreamVideo callers actually name, and so the one to redirect.
 	colourNodeFor func(nodes []string) string
-	// vacate asks the video service to end its own producers on the claimed
-	// nodes before the helper opens them (the handoff, design §4). Nil-safe:
-	// without it, a held node fails the helper's open exactly as before.
-	vacate func(nodes []string)
+	// vacate asks the video service to end its own producers on the given
+	// nodes because ownership is changing (the handoff, design §4): before the
+	// helper opens the claimed device, and again when the bridge node is about
+	// to vanish. Nil-safe: without it, a held node fails the helper's open
+	// exactly as before.
+	vacate func(nodes []string, msg string)
 }
 
 func newRealSenseBridge(logger *zap.Logger, loop cameraLoopback) *realSenseBridge {
@@ -120,7 +122,8 @@ func (b *realSenseBridge) start(ctx context.Context, hub *frameHub, source strin
 	// back on the device the helper is about to open.
 	cameraOwners.setBridge(source, colour, nodePath)
 	if b.vacate != nil {
-		b.vacate(claimedNodes)
+		b.vacate(claimedNodes,
+			"video stream ended: a calibrated frame capture took ownership of this camera; reconnect to join the stream served from it")
 	}
 	b.logger.Info("realsense bridge up: StreamVideo served from the calibrated capture",
 		zap.String("source", source), zap.String("colour_node", colour), zap.String("bridge_node", nodePath))
@@ -179,13 +182,22 @@ func (bc *bridgedCapture) pump() {
 	}
 }
 
-// teardown ends the pump, clears the redirect, and removes the node -- in that
-// order, so no new StreamVideo subscriber is routed to a node about to vanish.
+// teardown clears the redirect, bounces the bridge node's own subscribers,
+// ends the pump, and removes the node -- in that order. The redirect goes
+// first so a reconnecting subscriber resolves the real device (free again: the
+// helper has already exited by the time this deferred teardown runs), and the
+// bounce carries the same recoverable restart signal as the takeover, so a
+// viewer rides the ownership change in both directions without an error.
 func (bc *bridgedCapture) teardown() {
 	if bc == nil {
 		return
 	}
 	cameraOwners.clearBridge(bc.source)
+	nodePath := fmt.Sprintf("/dev/video%d", bc.nodeNr)
+	if bc.bridge.vacate != nil {
+		bc.bridge.vacate([]string{nodePath},
+			"video stream ended: the calibrated frame capture serving this camera ended; reconnect to join the camera directly")
+	}
 	close(bc.stop)
 	<-bc.done
 	if err := bc.writer.Close(); err != nil {

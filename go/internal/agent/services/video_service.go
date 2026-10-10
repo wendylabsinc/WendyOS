@@ -1435,13 +1435,15 @@ func (s *VideoService) BridgeCalibratedCaptures(c *CalibratedFrameService) {
 const vacateTimeout = 3 * time.Second
 
 // vacateForOwnershipChange ends every producer this service runs on the given
-// nodes, so the calibrated capture helper can open them
-// (specs/2026-10-10-realsense-single-owner-design.md §4). Each ended stream
-// reports CAMERA_PRODUCER_RESTARTED -- the same recoverable signal an episode
-// takeover sends -- and a reconnecting subscriber resolves through the
-// redirect the new owner has already installed, landing on the bridge node.
-// Waits, bounded, for each producer to actually release its fd.
-func (s *VideoService) vacateForOwnershipChange(paths []string) {
+// nodes, because camera ownership is changing hands
+// (specs/2026-10-10-realsense-single-owner-design.md §4): the calibrated
+// helper is about to open the device, or -- on teardown -- the bridge node is
+// about to vanish. Each ended stream reports CAMERA_PRODUCER_RESTARTED with
+// msg -- the same recoverable signal an episode takeover sends -- and a
+// reconnecting subscriber re-resolves its camera, landing wherever the
+// ownership table now points. Waits, bounded, for each producer to actually
+// release its fd: the next owner opens the device immediately after.
+func (s *VideoService) vacateForOwnershipChange(paths []string, msg string) {
 	var ended []*deviceHub
 	s.mu.Lock()
 	for _, p := range paths {
@@ -1451,7 +1453,7 @@ func (s *VideoService) vacateForOwnershipChange(paths []string) {
 		}
 		hub.mu.Lock()
 		hub.restarted = true
-		hub.restartedMsg = "video stream ended: a calibrated frame capture took ownership of this camera; reconnect to join the stream served from it"
+		hub.restartedMsg = msg
 		hub.mu.Unlock()
 		hub.cancel()
 		delete(s.hubs, p)
@@ -1462,7 +1464,7 @@ func (s *VideoService) vacateForOwnershipChange(paths []string) {
 		select {
 		case <-hub.done:
 		case <-time.After(vacateTimeout):
-			s.logger.Warn("ownership handoff: a vacated producer did not release its device in time; the calibrated capture's open may see EBUSY")
+			s.logger.Warn("ownership handoff: a vacated producer did not release its device in time; the next open may see EBUSY")
 		}
 	}
 }

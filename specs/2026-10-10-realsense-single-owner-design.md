@@ -92,12 +92,16 @@ directly:
 3. reconnecting viewers resolve through §3 onto the bridge node.
 
 One visible blink, bounded by helper start time. The reverse transition (last
-calibrated subscriber leaves) does **not** tear the helper down while bridged
-video subscribers remain: the helper keeps streaming and the registry entry
-stays until *nobody* is consuming either stream. Only then does the hub drain,
-the bridge node is removed, and the next `StreamVideo` opens the device
-directly as today. This avoids a second blink and keeps the rule simple: the
-helper runs while it has any consumer, direct capture resumes only from idle.
+calibrated subscriber leaves, the hub drains, the helper exits) is the mirror
+image: the redirect is cleared, the bridge node's own subscribers are bounced
+with the same recoverable signal — worded "the capture ended; reconnect to
+join the camera directly" — and their reconnect opens the now-free device.
+One blink per ownership flip, in either direction, and one simple rule: the
+helper runs exactly while calibrated subscribers exist. (Keeping the helper
+warm for bridged video subscribers was considered and rejected: it needs a
+demand-feedback loop from the video side into the hub's lifetime, for the
+price of avoiding a blink on an event — "the depth consumer stopped" — that is
+rare and already recoverable.)
 
 ### 5. Failure honesty
 
