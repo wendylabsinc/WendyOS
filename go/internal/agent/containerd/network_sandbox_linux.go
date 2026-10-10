@@ -19,6 +19,12 @@ func networkSandboxHealthy(path, expectedIP string) bool {
 	if filepath.Dir(path) != cniNetnsBindDir || expectedIP == "" {
 		return false
 	}
+	return networkNamespaceHasIP(path, expectedIP)
+}
+
+// networkNamespaceHasIP checks a live namespace without trusting its path as
+// an ownership proof. Callers must separately bind it to a verified task.
+func networkNamespaceHasIP(path, expectedIP string) bool {
 	f, err := os.Open(path)
 	if err != nil {
 		return false
@@ -33,7 +39,9 @@ func networkSandboxHealthy(path, expectedIP string) bool {
 		return false
 	}
 	defer ns.Close()
-	h, err := netlink.NewHandleAt(ns)
+	// LinkByName and AddrList need only NETLINK_ROUTE. The default handle
+	// opens every supported family and fails on Jetson kernels that omit one.
+	h, err := netlink.NewHandleAt(ns, unix.NETLINK_ROUTE)
 	if err != nil {
 		return false
 	}

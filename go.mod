@@ -45,12 +45,14 @@ require (
 	github.com/opencontainers/go-digest v1.0.0
 	github.com/opencontainers/image-spec v1.1.1
 	github.com/opencontainers/runtime-spec v1.3.0
+	github.com/quic-go/quic-go v0.62.0
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.0.10
 	github.com/tonistiigi/fsutil v0.0.0-20260717003753-6d9dc2ebad62
 	github.com/vishvananda/netlink v1.3.1
 	github.com/vishvananda/netns v0.0.5
+	github.com/wendylabsinc/WendyOS/babel v0.0.0
 	go.bug.st/serial v1.6.4
 	go.etcd.io/bbolt v1.5.0
 	go.opentelemetry.io/proto/otlp v1.11.0
@@ -157,3 +159,5 @@ require (
 	gotest.tools/v3 v3.5.2 // indirect
 	sigs.k8s.io/knftables v0.0.18 // indirect
 )
+
+replace github.com/wendylabsinc/WendyOS/babel => ./babel

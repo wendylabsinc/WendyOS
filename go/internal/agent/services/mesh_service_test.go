@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wendylabsinc/wendy/go/internal/agent/meshingress"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
@@ -127,10 +128,31 @@ func (f *ctxAwareMeshDialStream) Send(d *agentpbv2.MeshDialData) error {
 // same-tenant check.
 var testScope = certs.Scope{OrgID: 7}
 
+type testIngress func(uint16) bool
+
+func (f testIngress) DialAuthorized(port uint16, dial func() (net.Conn, error)) (net.Conn, error) {
+	if !f(port) {
+		return nil, meshingress.ErrPortDenied
+	}
+	return dial()
+}
+
 func newMeshServiceForTest(t *testing.T) (*MeshService, string) {
 	t.Helper()
 	dir := t.TempDir()
-	return NewMeshService(zap.NewNop(), dir, testScope), dir
+	svc := NewMeshService(zap.NewNop(), dir, testScope)
+	svc.SetIngressAuthorizer(testIngress(func(port uint16) bool { return port == 8080 }))
+	return svc, dir
+}
+
+func TestMeshDialRejectsUnpublishedPort(t *testing.T) {
+	svc, _ := newMeshServiceForTest(t)
+	in := make(chan *agentpbv2.MeshDialMessage, 1)
+	in <- &agentpbv2.MeshDialMessage{Content: &agentpbv2.MeshDialMessage_Open{Open: &agentpbv2.MeshDialOpen{Port: 9999}}}
+	stream := &fakeMeshDialStream{ctx: ctxWithPeerCert(certWithURN(t, "urn:wendy:org:7:asset:215")), in: in}
+	if status.Code(svc.MeshDial(stream)) != codes.PermissionDenied {
+		t.Fatal("unpublished host port must be denied")
+	}
 }
 
 func TestMeshDialRejectsUserCert(t *testing.T) {

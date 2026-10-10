@@ -143,3 +143,19 @@ func TestDirectMLDSAChainsEnforcePolicy(t *testing.T) {
 		})
 	}
 }
+
+func TestTLSKeyPairRetainsUnsupportedMLDSARoot(t *testing.T) {
+	root, _ := buildMLDSACACert(t, pkix.Name{CommonName: "unsupported root"}, true)
+	if root.CheckSignatureFrom(root) == nil {
+		t.Skip("native verifier now proves this root self-signed")
+	}
+	leafPEM, keyPEM := testLeafCertificate(t, "leaf")
+	chainPEM := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: root.Raw}))
+	pair, err := certs.TLSKeyPair(leafPEM, chainPEM, keyPEM)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pair.Certificate) != 2 {
+		t.Fatal("unsupported ML-DSA root was omitted")
+	}
+}
