@@ -391,6 +391,10 @@ func main() {
 	calibratedFrameSvc := services.NewCalibratedFrameService(ctx, logger,
 		framesource.NewRegistry(framesource.NewRealSenseProvider(logger)))
 	defer calibratedFrameSvc.Shutdown()
+	// While a calibrated capture owns a RealSense, StreamVideo is served from
+	// its colour plane over a loopback bridge node rather than refused
+	// (specs/2026-10-10-realsense-single-owner-design.md).
+	videoSvc.BridgeCalibratedCaptures(calibratedFrameSvc)
 	// Network cameras have to be found before they can be listed, so probe
 	// periodically rather than only when a client asks.
 	videoSvc.StartDiscovery()

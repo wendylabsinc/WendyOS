@@ -37,6 +37,21 @@ type cameraOwnerTable struct {
 	// nodesBySource remembers what each source claimed, so release removes
 	// exactly those nodes -- and only where the source still owns them.
 	nodesBySource map[string][]string
+	// redirects maps a claimed COLOUR node to the v4l2loopback bridge node
+	// re-exposing the owning capture's colour plane, which is where
+	// resolveSource serves StreamVideo from while the claim stands. Only the
+	// colour node redirects: a depth or IR node has no bridge to point at and
+	// keeps the named refusal instead. The writing source is kept so a clear
+	// removes only its own entry, same as owners above.
+	redirects map[string]bridgeRedirect
+	// redirectBySource mirrors redirects per source, so release and a replaced
+	// bridge clear exactly their own entry.
+	redirectBySource map[string]string
+}
+
+type bridgeRedirect struct {
+	Source string
+	Bridge string
 }
 
 // cameraOwners is the one table in the agent process.
@@ -44,8 +59,10 @@ var cameraOwners = newCameraOwnerTable()
 
 func newCameraOwnerTable() *cameraOwnerTable {
 	return &cameraOwnerTable{
-		owners:        map[string]cameraOwner{},
-		nodesBySource: map[string][]string{},
+		owners:           map[string]cameraOwner{},
+		nodesBySource:    map[string][]string{},
+		redirects:        map[string]bridgeRedirect{},
+		redirectBySource: map[string]string{},
 	}
 }
 
@@ -77,6 +94,42 @@ func (t *cameraOwnerTable) releaseLocked(source string) {
 		}
 	}
 	delete(t.nodesBySource, source)
+	t.clearBridgeLocked(source)
+}
+
+// setBridge records that source's colour node is served from bridgePath while
+// the claim stands. Replaces the source's previous bridge, if any.
+func (t *cameraOwnerTable) setBridge(source, colourNode, bridgePath string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.clearBridgeLocked(source)
+	t.redirects[colourNode] = bridgeRedirect{Source: source, Bridge: bridgePath}
+	t.redirectBySource[source] = colourNode
+}
+
+// clearBridge removes source's redirect, leaving a redirect another source has
+// since written over the same node untouched.
+func (t *cameraOwnerTable) clearBridge(source string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.clearBridgeLocked(source)
+}
+
+func (t *cameraOwnerTable) clearBridgeLocked(source string) {
+	if colour, ok := t.redirectBySource[source]; ok {
+		if t.redirects[colour].Source == source {
+			delete(t.redirects, colour)
+		}
+		delete(t.redirectBySource, source)
+	}
+}
+
+// redirect reports the bridge node serving nodePath, when one stands.
+func (t *cameraOwnerTable) redirect(nodePath string) (string, bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	r, ok := t.redirects[nodePath]
+	return r.Bridge, ok
 }
 
 // holder reports which capture owns nodePath, if any.

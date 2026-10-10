@@ -1392,7 +1392,24 @@ func (s *VideoService) resolveSource(devID uint32) (videoSource, error) {
 		}, nil
 	}
 	path := fmt.Sprintf("/dev/video%d", devID)
+	// A node the calibrated capture owns is served from its bridge -- the
+	// v4l2loopback node carrying that capture's colour plane -- so StreamVideo
+	// keeps working while the helper holds the device
+	// (specs/2026-10-10-realsense-single-owner-design.md §3). The key is the
+	// bridge path too: every caller of the camera shares the one producer on
+	// the node that is actually open.
+	if bridged, ok := cameraOwners.redirect(path); ok {
+		return videoSource{kind: sourceV4L2, key: bridged, path: bridged}, nil
+	}
 	return videoSource{kind: sourceV4L2, key: path, path: path}, nil
+}
+
+// BridgeCalibratedCaptures wires the RealSense bridge between this service and
+// the calibrated-frame service: a RealSense capture then re-exposes its colour
+// plane on a loopback node this service serves StreamVideo from, instead of
+// the two locking each other out. Call once at startup, before either serves.
+func (s *VideoService) BridgeCalibratedCaptures(c *CalibratedFrameService) {
+	c.bridge = newRealSenseBridge(s.logger, s.loopback)
 }
 
 // SetCameraCredentials stores the login for a network camera. The secret is
