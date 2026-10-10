@@ -27,7 +27,7 @@ func newDeviceRobotCmd() *cobra.Command {
 		Short:  "Inspect what a robot is, without commanding it",
 		Hidden: true,
 	}
-	cmd.AddCommand(newDeviceRobotInspectCmd())
+	cmd.AddCommand(newDeviceRobotInspectCmd(), newDeviceRobotCalibrateCmd())
 	return cmd
 }
 

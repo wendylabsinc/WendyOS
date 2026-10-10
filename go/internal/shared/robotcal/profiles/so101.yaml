@@ -1,0 +1,74 @@
+# The SO-101, a 6-DOF serial-bus arm — the second robot family, and the reason
+# almost nothing in this schema is fixed.
+#
+# Against the G1 this differs in every content field and in none of the
+# structural ones: the unit is encoder ticks rather than radians, "not powered"
+# is torque disabled rather than a vendor state-machine state, and the joint
+# limits are a MEASURED per-arm fact rather than a datasheet one — so this
+# profile declares none, and its procedure carries a minimum-travel parameter
+# instead.
+#
+# Two arms usually hang off one device (leader on /dev/ttyACM0, follower on
+# /dev/ttyACM1). They share this profile, because a profile describes a model;
+# their calibrations are separate records under separate unit ids.
+kind: so101
+display_name: SO-101 (6-DOF arm)
+
+control:
+  transport: feetech-serial
+  unpowered:
+    name: torque disabled
+    instruction: >-
+      Leave the arm unpowered, or with torque disabled, so every joint is
+      back-drivable by hand. Do not run the teleoperation app while calibrating.
+    hazard: >-
+      A powered joint can drive against your hand. Nothing is energised during
+      this procedure.
+
+joints:
+  # Raw servo ticks, 0–4095 over a full turn (STS3215). Not an angle: the
+  # platform never converts, it only requires that a budget is quoted in the
+  # same unit.
+  unit: tick
+  # `feetech-serial` is not implemented in this build; `note` is what the wizard
+  # prints when it refuses.
+  source:
+    backend: feetech-serial
+    params:
+      # The platform's stable-id scheme, not a raw device node: /dev/ttyACM0 and
+      # /dev/ttyACM1 swap between boots exactly as /dev/videoN does.
+      stable_id: ""
+      baud: "1000000"
+    note: >-
+      Reading a Feetech servo bus needs a device-side backend bound to the bus by
+      stable id, which is not in this change. Examples/SO101calibration reads the
+      same bus from inside an app today, with the Feetech SDK.
+  order:
+    - shoulder_pan
+    - shoulder_lift
+    - elbow_flex
+    - wrist_flex
+    - wrist_roll
+    - gripper
+  # No `declared`: an SO-101's travel is a property of the arm in front of you,
+  # not of the model. That is the whole point of leaving this optional.
+
+requires_calibration:
+  - id: joint-range
+    title: Joint range and direction
+    method: joint-range-sweep
+    # Nothing is energised, so this stays `nothing-powered` and runs on day one
+    # — the class is resolved per (profile, method), not inherited from another
+    # robot's gates.
+    class: nothing-powered
+    # With no declared limits, the budget is how far short of the required
+    # travel the worst joint may fall. Zero shortfall allowed: every joint must
+    # reach its floor.
+    budget: {value: 1, unit: tick}
+    params:
+      # The floor a joint must sweep past to count as swept. From
+      # Examples/SO101calibration: SO101_MIN_RANGE_TICKS.
+      min_travel: "1000"
+      # The gripper travels much less than the other five, so it has its own
+      # floor — a per-target parameter, not a per-target procedure.
+      min_travel_per_joint: "gripper=300"
