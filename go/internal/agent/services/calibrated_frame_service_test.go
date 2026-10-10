@@ -89,7 +89,7 @@ func run(svc *CalibratedFrameService, req *agentpbv2.StreamCalibratedFramesReque
 	return errCh
 }
 
-func waitFor(t *testing.T, what string, cond func() bool) {
+func waitForCond(t *testing.T, what string, cond func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
@@ -106,7 +106,7 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 // joined is one that joiner never sees.
 func waitForSubscribers(t *testing.T, svc *CalibratedFrameService, name string, n int) {
 	t.Helper()
-	waitFor(t, "subscribers to join", func() bool {
+	waitForCond(t, "subscribers to join", func() bool {
 		svc.mu.Lock()
 		defer svc.mu.Unlock()
 		hub := svc.hubs[name]
@@ -211,7 +211,7 @@ func TestCalibratedFrames_ASourceThatProvidesWhatWasRequiredStreams(t *testing.T
 	}, stream)
 
 	fake.Push(framesourcetest.Frame(1, 64, 48))
-	waitFor(t, "the first frame", func() bool { return stream.count() == 1 })
+	waitForCond(t, "the first frame", func() bool { return stream.count() == 1 })
 
 	got := stream.frames()[0]
 	// Rule 4: both planes are one capture instant. Not a convention the
@@ -252,7 +252,7 @@ func TestCalibratedFrames_LosingDepthMidStreamEndsTheStream(t *testing.T) {
 	}, stream)
 
 	fake.Push(framesourcetest.Frame(1, 64, 48))
-	waitFor(t, "the first good frame", func() bool { return stream.count() == 1 })
+	waitForCond(t, "the first good frame", func() bool { return stream.count() == 1 })
 	// The depth sensor drops out. The source keeps producing colour.
 	fake.Push(framesourcetest.ColourOnly(2, 64, 48))
 
@@ -286,9 +286,9 @@ func TestCalibratedFrames_ASubscriberThatRequiredNothingKeepsItsColour(t *testin
 	// One at a time: fan-out is latest-wins, so two frames pushed back to back
 	// legitimately coalesce into one delivery.
 	fake.Push(framesourcetest.Frame(1, 64, 48))
-	waitFor(t, "the first frame", func() bool { return stream.count() == 1 })
+	waitForCond(t, "the first frame", func() bool { return stream.count() == 1 })
 	fake.Push(framesourcetest.ColourOnly(2, 64, 48))
-	waitFor(t, "the depth-less second frame", func() bool { return stream.count() == 2 })
+	waitForCond(t, "the depth-less second frame", func() bool { return stream.count() == 2 })
 	if stream.frames()[1].GetDepth() != nil {
 		t.Error("the second frame should have arrived without depth, as it was captured")
 	}
@@ -378,9 +378,9 @@ func TestCalibratedFrames_SlowSubscriberNeitherStallsAnotherNorReceivesABacklog(
 	slow.gate = make(chan struct{})
 
 	fastErr := run(svc, &agentpbv2.StreamCalibratedFramesRequest{Source: "fake:1"}, fast)
-	waitFor(t, "the capture to start", func() bool { return fake.Opens() == 1 })
+	waitForCond(t, "the capture to start", func() bool { return fake.Opens() == 1 })
 	slowErr := run(svc, &agentpbv2.StreamCalibratedFramesRequest{Source: "fake:1"}, slow)
-	waitFor(t, "the second subscriber to join", func() bool {
+	waitForCond(t, "the second subscriber to join", func() bool {
 		svc.mu.Lock()
 		defer svc.mu.Unlock()
 		hub := svc.hubs["fake:1"]
@@ -404,7 +404,7 @@ func TestCalibratedFrames_SlowSubscriberNeitherStallsAnotherNorReceivesABacklog(
 	for i := 1; i <= frames; i++ {
 		fake.Push(framesourcetest.Frame(uint64(i), 64, 48))
 		want := i
-		waitFor(t, "the fast subscriber to keep up", func() bool { return fast.count() == want })
+		waitForCond(t, "the fast subscriber to keep up", func() bool { return fast.count() == want })
 	}
 	if slow.count() != 0 {
 		t.Fatalf("the slow subscriber is gated and should have delivered nothing yet")
@@ -415,7 +415,7 @@ func TestCalibratedFrames_SlowSubscriberNeitherStallsAnotherNorReceivesABacklog(
 	// value is that it describes now.
 	slow.gate <- struct{}{}
 	slow.gate <- struct{}{}
-	waitFor(t, "the slow subscriber to catch up", func() bool { return slow.count() == 2 })
+	waitForCond(t, "the slow subscriber to catch up", func() bool { return slow.count() == 2 })
 
 	got := slow.frames()
 	if got[0].GetFrameId() != 1 {
@@ -430,7 +430,7 @@ func TestCalibratedFrames_SlowSubscriberNeitherStallsAnotherNorReceivesABacklog(
 	close(slow.gate)
 	<-fastErr
 	<-slowErr
-	waitFor(t, "the shared capture to be released", func() bool { return fake.Closes() == 1 })
+	waitForCond(t, "the shared capture to be released", func() bool { return fake.Closes() == 1 })
 }
 
 func TestCalibratedFrames_ConflictingGeometryIsRefusedWithWhatIsRunning(t *testing.T) {
@@ -443,7 +443,7 @@ func TestCalibratedFrames_ConflictingGeometryIsRefusedWithWhatIsRunning(t *testi
 	firstErr := run(svc, &agentpbv2.StreamCalibratedFramesRequest{
 		Source: "fake:1", Width: 64, Height: 48, Framerate: 30,
 	}, first)
-	waitFor(t, "the capture to start", func() bool { return fake.Opens() == 1 })
+	waitForCond(t, "the capture to start", func() bool { return fake.Opens() == 1 })
 
 	err := svc.StreamCalibratedFrames(&agentpbv2.StreamCalibratedFramesRequest{
 		Source: "fake:1", Width: 32, Height: 24, Framerate: 30,
@@ -552,7 +552,7 @@ func TestCalibratedFrames_FrameLargerThanTheClientLimitIsRefusedWithBothNumbers(
 	errCh := run(svc, &agentpbv2.StreamCalibratedFramesRequest{
 		Source: "fake:1", MaxFrameBytes: 16 << 20,
 	}, stream)
-	waitFor(t, "the capture to start", func() bool { return fake.Opens() == 1 })
+	waitForCond(t, "the capture to start", func() bool { return fake.Opens() == 1 })
 	cancel()
 	<-errCh
 }
@@ -566,7 +566,7 @@ func TestCalibratedFrames_RequestedGeometryScalesTheSizeRefusal(t *testing.T) {
 	defer cancel()
 	stream := newStreamStub(ctx)
 	errCh := run(svc, &agentpbv2.StreamCalibratedFramesRequest{Source: "fake:1"}, stream)
-	waitFor(t, "the default request to be accepted", func() bool { return fake.Opens() == 1 })
+	waitForCond(t, "the default request to be accepted", func() bool { return fake.Opens() == 1 })
 	cancel()
 	<-errCh
 
@@ -589,7 +589,7 @@ func TestCalibratedFrames_CaptureEndingClosesEverySubscriber(t *testing.T) {
 
 	stream := newStreamStub(context.Background())
 	errCh := run(svc, &agentpbv2.StreamCalibratedFramesRequest{Source: "fake:1"}, stream)
-	waitFor(t, "the capture to start", func() bool { return fake.Opens() == 1 })
+	waitForCond(t, "the capture to start", func() bool { return fake.Opens() == 1 })
 
 	fake.End(errors.New("camera detached"))
 
@@ -626,7 +626,7 @@ func TestCalibratedFrames_ShutdownEndsEveryCaptureAndReleasesTheCamera(t *testin
 	// A subscriber whose context never ends: the client is still connected.
 	stream := newStreamStub(context.Background())
 	errCh := run(svc, &agentpbv2.StreamCalibratedFramesRequest{Source: "fake:1"}, stream)
-	waitFor(t, "the capture to start", func() bool { return fake.Opens() == 1 })
+	waitForCond(t, "the capture to start", func() bool { return fake.Opens() == 1 })
 
 	done := make(chan struct{})
 	go func() { svc.Shutdown(); close(done) }()
@@ -683,7 +683,7 @@ func TestCalibratedFrames_ReconnectingImmediatelyGetsAFreshCaptureNotAnEmptyStre
 	firstCtx, cancelFirst := context.WithCancel(context.Background())
 	first := newStreamStub(firstCtx)
 	firstErr := run(svc, &agentpbv2.StreamCalibratedFramesRequest{Source: "fake:1"}, first)
-	waitFor(t, "the first capture to start", func() bool { return fake.Opens() == 1 })
+	waitForCond(t, "the first capture to start", func() bool { return fake.Opens() == 1 })
 	cancelFirst()
 	<-firstErr
 	// The old hub's producer may still be tearing down here; the subscriber
@@ -693,9 +693,9 @@ func TestCalibratedFrames_ReconnectingImmediatelyGetsAFreshCaptureNotAnEmptyStre
 	defer cancel()
 	second := newStreamStub(ctx)
 	secondErr := run(svc, &agentpbv2.StreamCalibratedFramesRequest{Source: "fake:1"}, second)
-	waitFor(t, "a fresh capture to start", func() bool { return fake.Opens() == 2 })
+	waitForCond(t, "a fresh capture to start", func() bool { return fake.Opens() == 2 })
 	fake.Push(framesourcetest.Frame(7, 64, 48))
-	waitFor(t, "the reconnected subscriber to receive a frame", func() bool { return second.count() == 1 })
+	waitForCond(t, "the reconnected subscriber to receive a frame", func() bool { return second.count() == 1 })
 
 	cancel()
 	<-secondErr
@@ -752,7 +752,7 @@ func TestCalibratedFrames_JoinerIsComparedAgainstTheNegotiatedGeometry(t *testin
 	defer cancel()
 	first := newStreamStub(ctx)
 	firstErr := run(svc, &agentpbv2.StreamCalibratedFramesRequest{Source: "fake:1"}, first)
-	waitFor(t, "the capture to report its geometry", func() bool {
+	waitForCond(t, "the capture to report its geometry", func() bool {
 		svc.mu.Lock()
 		defer svc.mu.Unlock()
 		hub := svc.hubs["fake:1"]
@@ -765,7 +765,7 @@ func TestCalibratedFrames_JoinerIsComparedAgainstTheNegotiatedGeometry(t *testin
 	}, joiner)
 	waitForSubscribers(t, svc, "fake:1", 2)
 	fake.Push(framesourcetest.Frame(1, 64, 48))
-	waitFor(t, "the joiner naming the running size to receive a frame", func() bool { return joiner.count() == 1 })
+	waitForCond(t, "the joiner naming the running size to receive a frame", func() bool { return joiner.count() == 1 })
 	if fake.Opens() != 1 {
 		t.Errorf("the joiner restarted the capture (%d opens)", fake.Opens())
 	}
@@ -808,7 +808,7 @@ func TestCalibratedFrames_JoinerIsSizedAgainstTheRunningCaptureNotTheListing(t *
 		firstErr := run(svc, &agentpbv2.StreamCalibratedFramesRequest{
 			Source: "fake:1", Width: 1920, Height: 1080, MaxFrameBytes: 16 << 20,
 		}, first)
-		waitFor(t, "the 1080p capture to start", func() bool { return fake.Opens() == 1 })
+		waitForCond(t, "the 1080p capture to start", func() bool { return fake.Opens() == 1 })
 
 		err := svc.StreamCalibratedFrames(&agentpbv2.StreamCalibratedFramesRequest{Source: "fake:1"},
 			newStreamStub(context.Background()))
@@ -836,7 +836,7 @@ func TestCalibratedFrames_JoinerIsSizedAgainstTheRunningCaptureNotTheListing(t *
 		defer cancel()
 		first := newStreamStub(ctx)
 		firstErr := run(svc, &agentpbv2.StreamCalibratedFramesRequest{Source: "fake:1", MaxFrameBytes: 16 << 20}, first)
-		waitFor(t, "the capture to report its geometry", func() bool {
+		waitForCond(t, "the capture to report its geometry", func() bool {
 			svc.mu.Lock()
 			defer svc.mu.Unlock()
 			hub := svc.hubs["fake:1"]
@@ -879,14 +879,14 @@ func TestCalibratedFrames_JoiningARunningSourceDoesNotEnumerateAgain(t *testing.
 	defer cancel()
 	first := newStreamStub(ctx)
 	firstErr := run(svc, &agentpbv2.StreamCalibratedFramesRequest{Source: "fake:1"}, first)
-	waitFor(t, "the capture to start", func() bool { return fake.Opens() == 1 })
+	waitForCond(t, "the capture to start", func() bool { return fake.Opens() == 1 })
 	before := countEnumerations()
 
 	joiner := newStreamStub(ctx)
 	joinerErr := run(svc, &agentpbv2.StreamCalibratedFramesRequest{Source: "fake:1"}, joiner)
 	waitForSubscribers(t, svc, "fake:1", 2)
 	fake.Push(framesourcetest.Frame(1, 64, 48))
-	waitFor(t, "the joiner to receive a frame", func() bool { return joiner.count() == 1 })
+	waitForCond(t, "the joiner to receive a frame", func() bool { return joiner.count() == 1 })
 	if got := countEnumerations(); got != before {
 		t.Errorf("joining a running source enumerated %d more time(s); the helper must not be forked against a camera it is streaming from", got-before)
 	}
@@ -917,7 +917,7 @@ func TestCalibratedFrames_AColourPlaneThatDoesNotMatchItsGeometryEndsTheCapture(
 	if stream.count() != 0 {
 		t.Errorf("a colour plane a consumer would read past the end of was delivered (%d frames)", stream.count())
 	}
-	waitFor(t, "the capture to be released", func() bool { return fake.Closes() == 1 })
+	waitForCond(t, "the capture to be released", func() bool { return fake.Closes() == 1 })
 }
 
 // The helper's pipeline claims the RealSense colour node, and StreamVideo

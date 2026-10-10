@@ -74,7 +74,7 @@ func newCameraFramesCmd() *cobra.Command {
 			if nonInteractive {
 				opts = append(opts, NonInteractive(), SuppressUpdateCheck(), SuppressProvisioningHint())
 			}
-			conn, err := connectCameraStreamFn(ctx, opts...)
+			conn, err := connectToAgent(ctx, opts...)
 			if err != nil {
 				return err
 			}
