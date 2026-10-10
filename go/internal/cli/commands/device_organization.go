@@ -37,21 +37,8 @@ func deviceOrganization(ctx context.Context, conn *grpcclient.AgentConnection) *
 	ctx, cancel := context.WithTimeout(ctx, orgNameResolveTimeout)
 	defer cancel()
 
-	resp, err := agentpbv2.NewWendyProvisioningServiceClient(conn.Conn).IsProvisioned(ctx, &agentpbv2.IsProvisionedRequest{})
-	if status.Code(err) == codes.Unimplemented {
-		legacy, legacyErr := conn.ProvisioningService.IsProvisioned(ctx, &agentpb.IsProvisionedRequest{})
-		if legacyErr != nil {
-			return nil
-		}
-		if legacy.GetNotProvisioned() != nil {
-			return &deviceOrganizationInfo{}
-		}
-		if prov := legacy.GetProvisioned(); prov != nil {
-			resp = &agentpbv2.IsProvisionedResponse{ResponseType: &agentpbv2.IsProvisionedResponse_Provisioned{
-				Provisioned: &agentpbv2.ProvisionedResponse{CloudHost: prov.GetCloudHost(), OrganizationId: prov.GetOrganizationId()},
-			}}
-		}
-	} else if err != nil {
+	resp, err := deviceProvisioning(ctx, conn)
+	if err != nil {
 		return nil
 	}
 	if resp.GetNotProvisioned() != nil {
@@ -77,6 +64,31 @@ func deviceOrganization(ctx context.Context, conn *grpcclient.AgentConnection) *
 	}
 	org.Name = deviceOrganizationName(ctx, prov.GetCloudHost(), org.ID)
 	return org
+}
+
+// deviceProvisioning asks the agent for its enrollment over the v2 service,
+// which carries principal_uri, and falls back to v1 on an agent that predates
+// it. A v1 answer is returned in the v2 shape with principal_uri unset.
+func deviceProvisioning(ctx context.Context, conn *grpcclient.AgentConnection) (*agentpbv2.IsProvisionedResponse, error) {
+	resp, err := agentpbv2.NewWendyProvisioningServiceClient(conn.Conn).IsProvisioned(ctx, &agentpbv2.IsProvisionedRequest{})
+	if status.Code(err) != codes.Unimplemented {
+		return resp, err
+	}
+	legacy, err := conn.ProvisioningService.IsProvisioned(ctx, &agentpb.IsProvisionedRequest{})
+	if err != nil {
+		return nil, err
+	}
+	if legacy.GetNotProvisioned() != nil {
+		return &agentpbv2.IsProvisionedResponse{ResponseType: &agentpbv2.IsProvisionedResponse_NotProvisioned{
+			NotProvisioned: &agentpbv2.NotProvisionedResponse{},
+		}}, nil
+	}
+	if prov := legacy.GetProvisioned(); prov != nil {
+		return &agentpbv2.IsProvisionedResponse{ResponseType: &agentpbv2.IsProvisionedResponse_Provisioned{
+			Provisioned: &agentpbv2.ProvisionedResponse{CloudHost: prov.GetCloudHost(), OrganizationId: prov.GetOrganizationId(), AssetId: prov.GetAssetId()},
+		}}, nil
+	}
+	return &agentpbv2.IsProvisionedResponse{}, nil
 }
 
 func deviceOrganizationName(ctx context.Context, endpoint, organization string) string {
