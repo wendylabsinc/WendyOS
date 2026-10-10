@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
@@ -36,21 +37,25 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 
 	cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb"
+	cloudpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
 	systempb "github.com/wendylabsinc/wendy/go/proto/gen/systempb"
 )
 
 type recordingNotificationSender struct {
-	mu       sync.Mutex
-	requests []*cloudpb.CreateNotificationV2Request
+	mu        sync.Mutex
+	requests  []*cloudpb.CreateNotificationV2Request
+	teamUUIDs [][]string
 }
 
 func (s *recordingNotificationSender) CreateNotificationV2(
 	_ context.Context,
 	request *cloudpb.CreateNotificationV2Request,
+	teamUUIDs []string,
 ) (*cloudpb.CreateNotificationV2Response, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.requests = append(s.requests, request)
+	s.teamUUIDs = append(s.teamUUIDs, slices.Clone(teamUUIDs))
 	return &cloudpb.CreateNotificationV2Response{
 		NotificationId: request.GetNotificationId(),
 	}, nil
@@ -64,6 +69,7 @@ type strictDuplicateNotificationSender struct {
 func (s *strictDuplicateNotificationSender) CreateNotificationV2(
 	_ context.Context,
 	request *cloudpb.CreateNotificationV2Request,
+	_ []string,
 ) (*cloudpb.CreateNotificationV2Response, error) {
 	s.requests = append(s.requests, proto.Clone(request).(*cloudpb.CreateNotificationV2Request))
 	if s.seen == nil {
@@ -88,6 +94,7 @@ type mismatchedNotificationSender struct{}
 func (mismatchedNotificationSender) CreateNotificationV2(
 	context.Context,
 	*cloudpb.CreateNotificationV2Request,
+	[]string,
 ) (*cloudpb.CreateNotificationV2Response, error) {
 	return &cloudpb.CreateNotificationV2Response{
 		NotificationId: "c8a78877-4048-4829-8986-43528248a86e",
@@ -97,6 +104,7 @@ func (mismatchedNotificationSender) CreateNotificationV2(
 func (s *deadlineNotificationSender) CreateNotificationV2(
 	ctx context.Context,
 	request *cloudpb.CreateNotificationV2Request,
+	_ []string,
 ) (*cloudpb.CreateNotificationV2Response, error) {
 	s.deadline, s.has = ctx.Deadline()
 	return &cloudpb.CreateNotificationV2Response{NotificationId: request.GetNotificationId()}, nil
@@ -239,6 +247,26 @@ func TestSystemNotificationServiceBindsTrustedAppIdentityAndMapsTransport(t *tes
 	}
 }
 
+func TestSystemNotificationServiceMapsCloudV2TeamUUIDs(t *testing.T) {
+	sender := &recordingNotificationSender{}
+	request := validSystemNotificationRequest()
+	request.Audience = &systempb.NotificationAudience{TeamUuids: []string{
+		"123e4567-e89b-12d3-a456-426614174000",
+		"123e4567-e89b-12d3-a456-426614174000",
+		"223e4567-e89b-12d3-a456-426614174000",
+	}}
+
+	if _, err := NewSystemNotificationService("com.example.firewatch", sender).Send(context.Background(), request); err != nil {
+		t.Fatalf("Send() error = %v", err)
+	}
+	if got := sender.teamUUIDs[0]; !slices.Equal(got, []string{
+		"123e4567-e89b-12d3-a456-426614174000",
+		"223e4567-e89b-12d3-a456-426614174000",
+	}) {
+		t.Fatalf("team UUIDs = %v", got)
+	}
+}
+
 func TestSystemNotificationServiceCanonicalizesUppercaseNotificationID(t *testing.T) {
 	sender := &recordingNotificationSender{}
 	request := validSystemNotificationRequest()
@@ -354,6 +382,62 @@ const deviceProofTestCertificateSerial = "01a2b3c4d5e6f708"
 // here rather than in the package because this agent does not invoke it: the
 // generated client calls wendycloud.v1, so v1 is what a device signs. It exists
 // so the fixture can pin the bytes Cloud will verify once wendyos migrates.
+func TestCloudNotificationRequestV2MapsTrustedAppAndAudience(t *testing.T) {
+	request := proofCloudNotificationRequest()
+	request.Audience.UserIds = []string{"user-1"}
+	request.Audience.Roles = []cloudpb.OrganizationRole{cloudpb.OrganizationRole_ORGANIZATION_ROLE_OWNER}
+	appID := "dev.wendy.firewatch"
+	request.AppId = &appID
+
+	mapped, err := cloudNotificationRequestV2(request, []string{"123e4567-e89b-12d3-a456-426614174000"})
+	if err != nil {
+		t.Fatalf("cloudNotificationRequestV2: %v", err)
+	}
+	if mapped.GetAppId() != appID || mapped.GetNotificationId() != request.GetNotificationId() {
+		t.Fatalf("mapped identity = (%q, %q)", mapped.GetAppId(), mapped.GetNotificationId())
+	}
+	if !slices.Equal(mapped.GetAudience().GetUserIds(), []string{"user-1"}) {
+		t.Fatalf("mapped users = %v", mapped.GetAudience().GetUserIds())
+	}
+	if got := mapped.GetAudience().GetRoles(); len(got) != 1 || int32(got[0]) != int32(request.GetAudience().GetRoles()[0]) {
+		t.Fatalf("mapped roles = %v", got)
+	}
+	if !slices.Equal(mapped.GetAudience().GetTeamIds(), []string{"123e4567-e89b-12d3-a456-426614174000"}) {
+		t.Fatalf("mapped team UUIDs = %v", mapped.GetAudience().GetTeamIds())
+	}
+}
+
+func TestCloudNotificationRequestV2RejectsLegacyTeamIDs(t *testing.T) {
+	request := proofCloudNotificationRequest()
+	request.Audience.TeamIds = []int32{7}
+
+	_, err := cloudNotificationRequestV2(request, nil)
+	if status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("status = %v, want FailedPrecondition", status.Code(err))
+	}
+}
+
+func TestValidateNotificationDevicePrincipal(t *testing.T) {
+	const tenant = "13a72725-dfe3-4425-bd04-b253d2036089"
+	tests := []struct {
+		name      string
+		principal string
+		wantCode  codes.Code
+	}{
+		{name: "device", principal: "spiffe://wendy.sh/tenant/" + tenant + "/device/box-01", wantCode: codes.OK},
+		{name: "operator", principal: "spiffe://wendy.sh/tenant/" + tenant + "/operator/alice", wantCode: codes.FailedPrecondition},
+		{name: "signer", principal: "spiffe://wendy.sh/tenant/" + tenant + "/signer/release", wantCode: codes.FailedPrecondition},
+		{name: "malformed", principal: "spiffe://wendy.sh/tenant/not-a-uuid/device/box-01", wantCode: codes.FailedPrecondition},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := status.Code(validateNotificationDevicePrincipal(test.principal)); got != test.wantCode {
+				t.Fatalf("status = %v, want %v", got, test.wantCode)
+			}
+		})
+	}
+}
+
 const deviceProofV2FullMethod = "wendycloud.v2.NotificationService/CreateNotificationV2"
 
 const (
@@ -664,6 +748,12 @@ func TestSystemNotificationServiceValidation(t *testing.T) {
 		{name: "invalid team", mutate: func(r *systempb.SendRequest) {
 			r.Audience = &systempb.NotificationAudience{TeamIds: []int32{0}}
 		}},
+		{name: "invalid team UUID", mutate: func(r *systempb.SendRequest) {
+			r.Audience = &systempb.NotificationAudience{TeamUuids: []string{"not-a-uuid"}}
+		}},
+		{name: "mixed team identity versions", mutate: func(r *systempb.SendRequest) {
+			r.Audience = &systempb.NotificationAudience{TeamIds: []int32{7}, TeamUuids: []string{"123e4567-e89b-12d3-a456-426614174000"}}
+		}},
 		{name: "invalid role", mutate: func(r *systempb.SendRequest) {
 			r.Audience = &systempb.NotificationAudience{Roles: []systempb.OrganizationRole{systempb.OrganizationRole_ORGANIZATION_ROLE_UNSPECIFIED}}
 		}},
@@ -910,15 +1000,28 @@ func TestNotificationRequestContextHeaderProofOnlyForLegacy(t *testing.T) {
 
 type recordingNotificationCloud struct {
 	cloudpb.UnimplementedNotificationServiceServer
-	mu sync.Mutex
-	md metadata.MD
+	mu  sync.Mutex
+	md  metadata.MD
+	err error
 }
 
 func (c *recordingNotificationCloud) CreateNotificationV2(ctx context.Context, _ *cloudpb.CreateNotificationV2Request) (*cloudpb.CreateNotificationV2Response, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.md, _ = metadata.FromIncomingContext(ctx)
-	return &cloudpb.CreateNotificationV2Response{}, nil
+	return &cloudpb.CreateNotificationV2Response{}, c.err
+}
+
+type recordingNotificationCloudV2 struct {
+	cloudpbv2.UnimplementedNotificationServiceServer
+	legacy *recordingNotificationCloud
+}
+
+func (c *recordingNotificationCloudV2) CreateNotificationV2(ctx context.Context, req *cloudpbv2.CreateNotificationV2Request) (*cloudpbv2.CreateNotificationV2Response, error) {
+	c.legacy.mu.Lock()
+	defer c.legacy.mu.Unlock()
+	c.legacy.md, _ = metadata.FromIncomingContext(ctx)
+	return &cloudpbv2.CreateNotificationV2Response{NotificationId: req.GetNotificationId()}, c.legacy.err
 }
 
 // Drives CloudNotificationSender end to end over TLS, so the sender's own
@@ -940,6 +1043,7 @@ func TestCloudNotificationSenderHeaderProofOnlyForLegacy(t *testing.T) {
 	cloud := &recordingNotificationCloud{}
 	srv := grpc.NewServer(grpc.Creds(credentials.NewServerTLSFromCert(&tls.Certificate{Certificate: [][]byte{serverDER}, PrivateKey: serverKey})))
 	cloudpb.RegisterNotificationServiceServer(srv, cloud)
+	cloudpbv2.RegisterNotificationServiceServer(srv, &recordingNotificationCloudV2{legacy: cloud})
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -958,19 +1062,43 @@ func TestCloudNotificationSenderHeaderProofOnlyForLegacy(t *testing.T) {
 		principal     string
 		orgID, asset  int32
 		wantHeaderSet bool
+		fail          bool
 	}{
 		{name: "PKI-enrolled", principal: "spiffe://wendy.sh/tenant/2558fd76-afc7-466e-9613-6b715296a526/device/dev-1"},
 		{name: "legacy", orgID: 7, asset: 9, wantHeaderSet: true},
+		{name: "PKI-failure-log", principal: "spiffe://wendy.sh/tenant/2558fd76-afc7-466e-9613-6b715296a526/device/dev-1", fail: true},
+		{name: "legacy-failure-log", orgID: 7, asset: 9, wantHeaderSet: true, fail: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			provisioning := &ProvisioningService{
 				enrolled: true, cloudHost: lis.Addr().String(), orgID: tc.orgID, assetID: tc.asset,
 				certPEM: certPEM, chainPEM: serverPEM, keyPEM: keyPEM, principalURI: tc.principal,
 			}
-			sender := NewCloudNotificationSender(zap.NewNop(), provisioning)
+			const privateContent = "private notification body and audience user@example.invalid"
+			cloud.mu.Lock()
+			cloud.err = nil
+			if tc.fail {
+				cloud.err = status.Error(codes.PermissionDenied, privateContent)
+			}
+			cloud.mu.Unlock()
+			core, logs := observer.New(zap.WarnLevel)
+			sender := NewCloudNotificationSender(zap.New(core), provisioning)
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			if _, err := sender.CreateNotificationV2(ctx, &cloudpb.CreateNotificationV2Request{NotificationId: "00000000-0000-4000-8000-000000000001"}); err != nil {
+			_, err := sender.CreateNotificationV2(ctx, &cloudpb.CreateNotificationV2Request{NotificationId: "00000000-0000-4000-8000-000000000001"}, nil)
+			if tc.fail {
+				if status.Code(err) != codes.PermissionDenied {
+					t.Fatalf("delivery error changed: %v", err)
+				}
+				entries := logs.All()
+				if len(entries) != 1 {
+					t.Fatalf("failure logs: %d", len(entries))
+				}
+				fields := entries[0].ContextMap()
+				if len(fields) != 3 || fields["status_code"] != "PermissionDenied" || strings.Contains(fmt.Sprint(fields), privateContent) {
+					t.Fatalf("unsafe failure fields: %v", fields)
+				}
+			} else if err != nil {
 				t.Fatal(err)
 			}
 			cloud.mu.Lock()

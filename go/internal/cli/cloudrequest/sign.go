@@ -260,6 +260,10 @@ var signedResources = map[string]func(tenant string, req proto.Message) (string,
 		in, ok := req.(*cloudpbv2.RegisterOperatorLeafRequest)
 		return "org/" + in.GetOrganizationId() + "/operator-leaf", ok
 	},
+	cloudpbv2.AppService_UpsertApp_FullMethodName: func(tenant string, req proto.Message) (string, bool) {
+		in, ok := req.(*cloudpbv2.UpsertAppRequest)
+		return "org/" + in.GetOrganizationId() + "/app/" + in.GetId(), ok && in.GetOrganizationId() == tenant && in.GetId() != ""
+	},
 	cloudpbv2.DeviceEnrollmentService_EnrollDevice_FullMethodName: func(tenant string, req proto.Message) (string, bool) {
 		in, ok := req.(*cloudpbv2.EnrollDeviceRequest)
 		return "org/" + tenant + "/device/" + in.GetDeviceId(), ok

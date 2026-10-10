@@ -39,8 +39,11 @@ message NotificationAudience {
   // Selectors have union semantics. The agent normalizes and deduplicates them
   // and accepts at most 100 selectors total before forwarding to Cloud.
   repeated string user_ids = 1;
+  // Legacy Cloud v1 numeric team IDs.
   repeated int32 team_ids = 2;
   repeated OrganizationRole roles = 3;
+  // Canonical Cloud v2 team UUIDs. Do not set both team_ids and team_uuids.
+  repeated string team_uuids = 4;
 }
 
 message SendRequest {

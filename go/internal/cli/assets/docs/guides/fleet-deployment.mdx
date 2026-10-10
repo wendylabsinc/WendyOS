@@ -20,6 +20,14 @@ Your development machine does not need Docker for this workflow. The build host 
 
 The commands use `build-host`, `device-a`, and `device-b` as device names. Replace them with the enrolled names of your devices.
 
+<Callout type="info">
+Before delivery, Wendy registers the app ID in the organization's Cloud Apps
+catalog using an operator credential for the target organization and Cloud host.
+For an intentionally offline or air-gapped deployment, pass
+`--skip-cloud-registration`; the app cannot receive a Cloud Notification grant
+until it is registered later.
+</Callout>
+
 ## Check the devices and build host
 
 Sign in and list your devices:

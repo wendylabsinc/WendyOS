@@ -101,7 +101,7 @@ func TestCampaignWebhookRefusesRedirectsAndHidesEndpointSecrets(t *testing.T) {
 // deniedCampaignCloud records attempts while retaining the real campaign router.
 type deniedCampaignCloud struct{ calls atomic.Int32 }
 
-func (s *deniedCampaignCloud) CreateNotificationV2(context.Context, *cloudpb.CreateNotificationV2Request) (*cloudpb.CreateNotificationV2Response, error) {
+func (s *deniedCampaignCloud) CreateNotificationV2(context.Context, *cloudpb.CreateNotificationV2Request, []string) (*cloudpb.CreateNotificationV2Response, error) {
 	s.calls.Add(1)
 	return nil, status.Error(codes.PermissionDenied, "campaign grant is disabled")
 }

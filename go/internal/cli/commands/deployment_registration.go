@@ -28,6 +28,12 @@ func registerCloudApps(ctx context.Context, conn *grpcclient.AgentConnection, ap
 	}
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
+	if handled, err := tryRegisterV2Apps(ctx, conn, appIDs); handled {
+		if err != nil {
+			return fmt.Errorf("registering deployment with Cloud: %w", err)
+		}
+		return nil
+	}
 	if err := registerDeviceApps(ctx, conn.ProvisioningService, appIDs, config.Load, registerAppsWithCloud); err != nil {
 		return fmt.Errorf("registering deployment with Cloud: %w; use --skip-cloud-registration for an offline deployment", err)
 	}
