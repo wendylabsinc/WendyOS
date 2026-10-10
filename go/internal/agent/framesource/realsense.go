@@ -76,6 +76,42 @@ var DetectRealSense = func() []string {
 	return names
 }
 
+// RealSenseNodePaths lists the /dev/videoN nodes belonging to attached
+// RealSense cameras -- every node, not just colour, because librealsense
+// claims the whole module while it streams. Like DetectRealSense it reads
+// sysfs only and never opens a node, so it is safe to call while a capture is
+// running. A var so the ownership claim can be pointed at a fixture.
+//
+// With several RealSense modules attached this cannot tell their nodes apart
+// (that takes a USB-parent walk nothing needs yet), so a claim covers them
+// all. The fleet mounts at most one RealSense per device today; revisit here
+// when that stops being true.
+var RealSenseNodePaths = func() []string {
+	entries, err := os.ReadDir(v4l2NameDir)
+	if err != nil {
+		return nil
+	}
+	var paths []string
+	for _, e := range entries {
+		if !strings.HasPrefix(e.Name(), "video") {
+			continue
+		}
+		raw, err := os.ReadFile(filepath.Join(v4l2NameDir, e.Name(), "name"))
+		if err != nil {
+			continue
+		}
+		lower := strings.ToLower(strings.TrimSpace(string(raw)))
+		for _, marker := range realSenseNameMarkers {
+			if strings.Contains(lower, marker) {
+				paths = append(paths, "/dev/"+e.Name())
+				break
+			}
+		}
+	}
+	sort.Strings(paths)
+	return paths
+}
+
 // RealSenseProvider enumerates RealSense cameras through the capture helper,
 // and reports them as present-but-unavailable when there is no helper to reach
 // them with.

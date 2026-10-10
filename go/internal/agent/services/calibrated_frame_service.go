@@ -287,6 +287,15 @@ func (s *CalibratedFrameService) runProducer(hub *frameHub, src framesource.Sour
 	// before the hub was dropped is closed here rather than hung forever.
 	defer hub.finish(nil)
 
+	// Claimed before Open, because the helper takes the camera during Open and
+	// a StreamVideo refused in that window deserves the real holder's name too.
+	// Released (deferred here, so after the stream-close defers below) only
+	// once the helper has actually let go of the device.
+	if kind := hub.listing.GetKind(); kind == framesource.KindRealSense {
+		cameraOwners.claim(name, kind, framesource.RealSenseNodePaths())
+		defer cameraOwners.release(name)
+	}
+
 	stream, err := src.Open(hub.ctx, opts)
 	if err != nil {
 		hub.finish(openFailure(name, err))
