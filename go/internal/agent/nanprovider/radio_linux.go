@@ -58,6 +58,31 @@ func (c *radioControl) command(cmd string) (string, error) {
 	}
 	return reply, nil
 }
+
+// A freshly started NAN interface can reject the first publish while joining
+// its cluster. Retry only the supplicant's plain FAIL response; transport and
+// permanent command errors still fail immediately. Keeping the same radio
+// epoch avoids tearing down an otherwise healthy infrastructure Wi-Fi link.
+func publishWithRetry(ctx context.Context, control radioCommander, cmd string, interval time.Duration) (string, error) {
+	const attempts = 6
+	for attempt := 0; attempt < attempts; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		reply, err := control.command(cmd)
+		if err == nil || reply != "FAIL" || attempt == attempts-1 {
+			return reply, err
+		}
+		timer := time.NewTimer(interval)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return "", ctx.Err()
+		case <-timer.C:
+		}
+	}
+	panic("unreachable")
+}
 func runHelper(ctx context.Context, args ...string) error {
 	_, err := helperOutput(ctx, args...)
 	return err
@@ -142,7 +167,7 @@ func disconnectedPeer(v map[string]string, local string, active map[string]*radi
 
 // runRadio runs all NDP responses on a persistent local control socket so it
 // meets the firmware deadline. Discovery claims remain untrusted until QUIC TLS.
-func runRadio(ctx context.Context, ident Identity, connected chan<- radioPeer, health <-chan radioHealth, selection *localmesh.PeerSelection, logger *zap.Logger) error {
+func runRadio(ctx context.Context, ident Identity, connected chan<- radioPeer, health <-chan radioHealth, selection *localmesh.PeerSelection, allowSoftReset bool, logger *zap.Logger) error {
 	control, err := openRadio()
 	if err != nil {
 		return err
@@ -182,7 +207,7 @@ func runRadio(ctx context.Context, ident Identity, connected chan<- radioPeer, h
 	local := iface.HardwareAddr.String()
 	defer drainRadio(control, rawEvents, local, "", logger)
 	ssi := hex.EncodeToString([]byte(fmt.Sprintf("wendy-nan:1:%d:%d", ident.Org, ident.Asset)))
-	pub, err := control.command("NAN_PUBLISH service_name=wendy.mesh.v1 sync=1 data_path=1 ttl=0 ssi=" + ssi)
+	pub, err := publishWithRetry(ctx, control, "NAN_PUBLISH service_name=wendy.mesh.v1 sync=1 data_path=1 ttl=0 ssi="+ssi, time.Second)
 	if err != nil {
 		return err
 	}
@@ -203,6 +228,8 @@ func runRadio(ctx context.Context, ident Identity, connected chan<- radioPeer, h
 	active := map[string]*radioLink{}
 	lastProbe := time.Now()
 	recovery := radioRecovery{}
+	coldRecovery := coldNDPRecovery{}
+	warnedWarmRecovery := false
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 	emit := func(p radioPeer) {
@@ -261,9 +288,28 @@ func runRadio(ctx context.Context, ident Identity, connected chan<- radioPeer, h
 			for _, link := range active {
 				anyHealthy = anyHealthy || link.healthy
 			}
-			recovery.observe(time.Now(), anyHealthy)
-			if recovery.expired(time.Now()) {
-				return fmt.Errorf("NAN data recovery: repeated replacement NDPs without authenticated traffic; cycling owned NAN session after staggered deadline")
+			now := time.Now()
+			recovery.observe(now, anyHealthy)
+			if recovery.expired(now) {
+				if allowSoftReset {
+					return fmt.Errorf("NAN data recovery: repeated replacement NDPs without authenticated traffic: %w", errSoftNANRecovery)
+				}
+				if !warnedWarmRecovery {
+					logger.Warn("NAN remains degraded after bounded soft recovery; preserving supplicant and Wi-Fi")
+					warnedWarmRecovery = true
+				}
+			}
+			if traffic, err := ndiTrafficSnapshot(); err == nil {
+				coldRecovery.observe(now, traffic)
+			}
+			if coldRecovery.ready(now, anyHealthy) {
+				logger.Warn("NAN connected repeatedly without an authenticated data path", zap.Int("paths_since_last_receive", coldRecovery.paths), zap.Bool("received_traffic", coldRecovery.hadRX), zap.Bool("soft_reset_allowed", allowSoftReset))
+				if allowSoftReset {
+					if !coldRecovery.hadRX {
+						return fmt.Errorf("%w: %w", errSoftNANRecovery, errNoRXNANRecovery)
+					}
+					return errSoftNANRecovery
+				}
 			}
 			if time.Since(lastProbe) >= 5*time.Second {
 				if pong, err := control.command("PING"); err != nil || pong != "PONG" {
@@ -406,6 +452,11 @@ func runRadio(ctx context.Context, ident Identity, connected chan<- radioPeer, h
 			}
 			active[p.NMI] = &radioLink{peer: p, since: time.Now()}
 			recovery.connected()
+			if traffic, err := ndiTrafficSnapshot(); err == nil {
+				coldRecovery.connected(time.Now(), traffic)
+			} else {
+				logger.Debug("NAN NDI counters unavailable for cold recovery", zap.Error(err))
+			}
 			emit(p)
 		case "NAN-NDP-DISCONNECTED":
 			if p, ok := disconnectedPeer(v, local, active); ok {
