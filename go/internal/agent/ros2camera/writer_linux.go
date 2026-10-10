@@ -15,6 +15,7 @@ const (
 	v4l2BufTypeVideoOutput = 2
 	v4l2PixFmtMJPEG        = 0x47504a4d // MJPG
 	v4l2PixFmtH264         = 0x34363248 // H264
+	v4l2PixFmtBGR24        = 0x33524742 // BGR3 -- raw packed 24-bit BGR
 	v4l2FieldNone          = 1
 	vidiocSFmt             = 0xc0d05605
 )
@@ -114,6 +115,8 @@ func v4l2PixelFormat(codec Codec) (uint32, error) {
 		return v4l2PixFmtMJPEG, nil
 	case CodecH264:
 		return v4l2PixFmtH264, nil
+	case CodecBGR24:
+		return v4l2PixFmtBGR24, nil
 	default:
 		return 0, fmt.Errorf("unsupported ROS 2 loopback codec %d", codec)
 	}

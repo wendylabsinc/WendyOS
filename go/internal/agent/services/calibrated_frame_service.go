@@ -75,6 +75,11 @@ type CalibratedFrameService struct {
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
 
+	// bridge re-exposes a RealSense capture's colour plane to StreamVideo
+	// (realsense_bridge.go). Nil-safe: without one, captures run with the
+	// documented lockout. Set once at wiring time, before any capture runs.
+	bridge *realSenseBridge
+
 	mu   sync.Mutex
 	hubs map[string]*frameHub
 }
@@ -287,6 +292,20 @@ func (s *CalibratedFrameService) runProducer(hub *frameHub, src framesource.Sour
 	// before the hub was dropped is closed here rather than hung forever.
 	defer hub.finish(nil)
 
+	// Claimed before Open, because the helper takes the camera during Open and
+	// a StreamVideo refused in that window deserves the real holder's name too.
+	// Released (deferred here, so after the stream-close defers below) only
+	// once the helper has actually let go of the device.
+	if kind := hub.listing.GetKind(); kind == framesource.KindRealSense {
+		nodes := framesource.RealSenseNodePaths()
+		cameraOwners.claim(name, kind, nodes)
+		defer cameraOwners.release(name)
+		// The bridge serves StreamVideo from this capture's colour plane for
+		// as long as the claim stands; without one (no loopback module, no
+		// colour node) the capture still runs and the refusal names the owner.
+		defer s.bridge.start(hub.ctx, hub, name, nodes).teardown()
+	}
+
 	stream, err := src.Open(hub.ctx, opts)
 	if err != nil {
 		hub.finish(openFailure(name, err))
@@ -427,6 +446,18 @@ type frameHub struct {
 	// stricter of the two, and the one the frames will actually match.
 	listing    *agentpbv2.CalibratedSource
 	negotiated *agentpbv2.CalibratedSource
+	// tap, when set, sees every published frame but is not a subscriber: it
+	// must never block (publish runs under mu), and it never keeps the hub
+	// alive -- the RealSense bridge drains the moment real subscribers do.
+	tap func(*agentpbv2.CalibratedFrame)
+}
+
+// setTap installs the bridge's tap. Called before the producer publishes
+// anything, and under mu so a concurrent publish never half-sees it.
+func (h *frameHub) setTap(tap func(*agentpbv2.CalibratedFrame)) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.tap = tap
 }
 
 // frameSub is one subscriber's depth-1 slot. latest is overwritten on arrival —
@@ -544,6 +575,9 @@ func (h *frameHub) unsubscribe(id int) {
 func (h *frameHub) publish(frame *agentpbv2.CalibratedFrame) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	if h.tap != nil {
+		h.tap(frame)
+	}
 	live := 0
 	for _, sub := range h.subs {
 		if sub.closed {

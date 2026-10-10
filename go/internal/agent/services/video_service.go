@@ -47,6 +47,7 @@ const (
 	v4l2PixFmtY16           = 0x20363159 // 'Y16 ' -- note the trailing space
 	v4l2PixFmtGrey          = 0x59455247 // 'GREY'
 	v4l2PixFmtZ16           = 0x2036315A // 'Z16 ' -- depth; named only so a refusal can say so (see rawPixelFormats)
+	v4l2PixFmtBGR24         = 0x33524742 // 'BGR3' -- what the RealSense bridge node carries (colourFourcc in wendy-realsense-source)
 	v4l2FieldNone           = 1
 
 	v4l2CapVideoCapture = 0x00000001
@@ -512,10 +513,14 @@ type deviceHub struct {
 	// capture may restart. Protected by h.mu.
 	subExplicit map[int]string
 	// restarted marks that this hub's producer was torn down by an episode
-	// capture takeover (takeOverDefaultedHub) rather than by a fault or a
-	// normal last-unsubscribe. Parameter-less subscribers use it to reattach
-	// to the replacement hub after their channel closes. Protected by h.mu.
-	restarted bool
+	// capture takeover (takeOverDefaultedHub) or an ownership handoff
+	// (vacateForOwnershipChange) rather than by a fault or a normal
+	// last-unsubscribe. Parameter-less subscribers use it to reattach after
+	// their channel closes. restartedMsg, when set, names which of the two
+	// happened for the terminal error; empty means the episode-capture
+	// default. Protected by h.mu.
+	restarted    bool
+	restartedMsg string
 	// sampleSeq is the per-device sample counter, shared with every hub that
 	// has served the same device key. It outlives the hub so sample identities
 	// stay monotonic across producer restarts within one episode.
@@ -640,6 +645,17 @@ func (h *deviceHub) wasRestarted() bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return h.restarted
+}
+
+// restartMessage is the terminal-error text for a restarted hub: what tore the
+// producer down, and that reconnecting joins the replacement stream.
+func (h *deviceHub) restartMessage() string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.restartedMsg != "" {
+		return h.restartedMsg
+	}
+	return "video stream ended: episode capture restarted the camera producer at the campaign's requested parameters; reconnect to join the new stream"
 }
 
 // drops reports how many frames the hub has dropped for one subscriber so far.
@@ -1391,7 +1407,66 @@ func (s *VideoService) resolveSource(devID uint32) (videoSource, error) {
 		}, nil
 	}
 	path := fmt.Sprintf("/dev/video%d", devID)
+	// A node the calibrated capture owns is served from its bridge -- the
+	// v4l2loopback node carrying that capture's colour plane -- so StreamVideo
+	// keeps working while the helper holds the device
+	// (specs/2026-10-10-realsense-single-owner-design.md §3). The key is the
+	// bridge path too: every caller of the camera shares the one producer on
+	// the node that is actually open.
+	if bridged, ok := cameraOwners.redirect(path); ok {
+		return videoSource{kind: sourceV4L2, key: bridged, path: bridged}, nil
+	}
 	return videoSource{kind: sourceV4L2, key: path, path: path}, nil
+}
+
+// BridgeCalibratedCaptures wires the RealSense bridge between this service and
+// the calibrated-frame service: a RealSense capture then re-exposes its colour
+// plane on a loopback node this service serves StreamVideo from, instead of
+// the two locking each other out. Call once at startup, before either serves.
+func (s *VideoService) BridgeCalibratedCaptures(c *CalibratedFrameService) {
+	bridge := newRealSenseBridge(s.logger, s.loopback)
+	bridge.vacate = s.vacateForOwnershipChange
+	c.bridge = bridge
+}
+
+// vacateTimeout bounds how long an ownership handoff waits for a vacated
+// producer to release its device fd. librealsense opens the device right
+// after, so leaving early risks one EBUSY -- bounded is better than hung.
+const vacateTimeout = 3 * time.Second
+
+// vacateForOwnershipChange ends every producer this service runs on the given
+// nodes, because camera ownership is changing hands
+// (specs/2026-10-10-realsense-single-owner-design.md §4): the calibrated
+// helper is about to open the device, or -- on teardown -- the bridge node is
+// about to vanish. Each ended stream reports CAMERA_PRODUCER_RESTARTED with
+// msg -- the same recoverable signal an episode takeover sends -- and a
+// reconnecting subscriber re-resolves its camera, landing wherever the
+// ownership table now points. Waits, bounded, for each producer to actually
+// release its fd: the next owner opens the device immediately after.
+func (s *VideoService) vacateForOwnershipChange(paths []string, msg string) {
+	var ended []*deviceHub
+	s.mu.Lock()
+	for _, p := range paths {
+		hub, ok := s.hubs[p]
+		if !ok || hub.ctx.Err() != nil {
+			continue
+		}
+		hub.mu.Lock()
+		hub.restarted = true
+		hub.restartedMsg = msg
+		hub.mu.Unlock()
+		hub.cancel()
+		delete(s.hubs, p)
+		ended = append(ended, hub)
+	}
+	s.mu.Unlock()
+	for _, hub := range ended {
+		select {
+		case <-hub.done:
+		case <-time.After(vacateTimeout):
+			s.logger.Warn("ownership handoff: a vacated producer did not release its device in time; the next open may see EBUSY")
+		}
+	}
 }
 
 // SetCameraCredentials stores the login for a network camera. The secret is
@@ -2429,7 +2504,7 @@ func (s *VideoService) pumpFrames(stream grpc.ServerStreamingServer[agentpb.Vide
 					// every other Unavailable and rejoin by itself; the CLI's
 					// `camera view` does exactly that.
 					return streamreason.New(codes.Unavailable,
-						"video stream ended: episode capture restarted the camera producer at the campaign's requested parameters; reconnect to join the new stream",
+						h.restartMessage(),
 						streamreason.CameraProducerRestarted, nil)
 				}
 				// If the hub context was cancelled (e.g. service shutdown), propagate that.

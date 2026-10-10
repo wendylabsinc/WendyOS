@@ -91,6 +91,14 @@ func errCameraInUse(devicePath string) error {
 // agent's own, so the refusal names it. A seam so it can be answered without
 // a sysfs.
 var cameraHolderHint = func(devicePath string) string {
+	// The ownership table answers authoritatively when the holder is the
+	// agent's own calibrated capture; the sysfs guess below remains for the
+	// window where a RealSense is held by something else entirely.
+	if owner, ok := cameraOwners.holder(devicePath); ok {
+		return "The agent's own calibrated frame capture of source \"" + owner.Source +
+			"\" (StreamCalibratedFrames, `wendy device camera frames`) holds this node for as long as it runs, " +
+			"and a RealSense cannot yet be shared between that stream and StreamVideo"
+	}
 	name, err := os.ReadFile(filepath.Join("/sys/class/video4linux", filepath.Base(devicePath), "name"))
 	if err != nil {
 		return ""
