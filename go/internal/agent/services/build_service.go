@@ -596,10 +596,13 @@ func (s *BuildService) BuildImage(stream agentpbv2.WendyBuildService_BuildImageS
 // registry push the feature shipped with, as a second buildctl pass that
 // BuildKit's cache turns into a re-export.
 //
-// The fallback is taken ONLY on errChunkDeliveryUnsupported, and only when the
-// CLI's --chunking allows it. A genuine failure is reported as one: retrying it
-// over the slower path would blame the wrong leg, and on a link that just
-// dropped a whole-image push is the transfer least likely to survive.
+// The fallback is taken ONLY on errChunkDeliveryUnsupported and
+// errChunkInventoryTooLarge — the two failures that say chunked delivery
+// cannot work against this device at all, whatever the link does — and only
+// when the CLI's --chunking allows it. A genuine failure is reported as one:
+// retrying it over the slower path would blame the wrong leg, and on a link
+// that just dropped a whole-image push is the transfer least likely to
+// survive.
 func (s *BuildService) deliver(
 	ctx context.Context,
 	prog *buildProgress,
@@ -613,17 +616,26 @@ func (s *BuildService) deliver(
 	target *agentpbv2.PushTarget,
 ) error {
 	err := s.deliverByChunks(ctx, prog, index, img, target, resolved)
-	if !errors.Is(err, errChunkDeliveryUnsupported) {
+	if !errors.Is(err, errChunkDeliveryUnsupported) && !errors.Is(err, errChunkInventoryTooLarge) {
 		return err
 	}
 	if spec.GetChunking() == agentpbv2.ChunkingMode_CHUNKING_MODE_FORCE {
 		// force exists so a chunk-delivery problem is surfaced rather than
-		// masked by a slower path. An agent that cannot take chunks is one.
+		// masked by a slower path. An agent that cannot take chunks is one,
+		// and so is an inventory its message limit cannot carry.
+		if errors.Is(err, errChunkInventoryTooLarge) {
+			return fmt.Errorf("%v, and --chunking=force forbids the registry push that would deliver it; use --chunking=auto or off", err)
+		}
 		return fmt.Errorf("device %d predates chunked delivery, and --chunking=force forbids the registry push it would otherwise get; update its agent, or use --chunking=auto",
 			target.GetAssetId())
 	}
-	prog.logf("#%d 0.000 device %d predates chunked delivery; pushing through its registry instead",
-		deliveryVertexBase+index, target.GetAssetId())
+	if errors.Is(err, errChunkInventoryTooLarge) {
+		prog.logf("#%d 0.000 %v; pushing through device %d's registry instead",
+			deliveryVertexBase+index, err, target.GetAssetId())
+	} else {
+		prog.logf("#%d 0.000 device %d predates chunked delivery; pushing through its registry instead",
+			deliveryVertexBase+index, target.GetAssetId())
+	}
 	buildErr, deliveryErr := s.buildAndDeliver(ctx, stream, spec, df, dir, target)
 	if deliveryErr != nil {
 		return deliveryErr
