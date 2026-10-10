@@ -49,7 +49,8 @@ type LANEvent struct {
 
 // LANProber verifies a device by talking to its agent. On success the
 // returned device carries refreshed AgentVersion/DeviceType/OS/OSVersion/
-// CPUArchitecture and IsMTLS reflecting the actual connection.
+// CPUArchitecture and IsMTLS reflecting the actual connection. On failure it
+// may carry a safe ProbeFailure diagnostic; all other returned fields are ignored.
 // It must bound its connection attempts and return when ctx is cancelled.
 // The stream supplies the session context without an additional timeout:
 // the budget needed for each address and credential belongs to the prober.
@@ -587,6 +588,8 @@ func (s *lanStream) handleSighting(svc MDNSService) {
 		// Nothing has verified this address yet, so the row must stop claiming
 		// probe-confirmed data until the retargeted probe below answers.
 		st.probeConfirmed = false
+		st.dev.ProbeFailure = nil
+		updated.ProbeFailure = nil
 	}
 
 	switch {
@@ -699,6 +702,14 @@ func (s *lanStream) handleProbeResult(res lanProbeResult) {
 
 	if res.err != nil {
 		st.probeFailed = true
+		previousFailure := st.dev.ProbeFailure
+		failureChanged := (previousFailure == nil) != (res.dev.ProbeFailure == nil)
+		if previousFailure != nil && res.dev.ProbeFailure != nil {
+			failureChanged = previousFailure.Code != res.dev.ProbeFailure.Code ||
+				previousFailure.Message != res.dev.ProbeFailure.Message ||
+				!slices.Equal(previousFailure.NextSteps, res.dev.ProbeFailure.NextSteps)
+		}
+		st.dev.ProbeFailure = res.dev.ProbeFailure
 		st.probeConfirmed = false
 		switch {
 		case st.fromCache && !st.confirmed:
@@ -706,11 +717,11 @@ func (s *lanStream) handleProbeResult(res lanProbeResult) {
 			if s.graceElapsed {
 				s.markOffline(res.key, st)
 			}
-		case st.confirmed && !st.reportedFailure:
+		case st.confirmed && (!st.reportedFailure || failureChanged):
 			// The device is on the network but its agent did not answer: say
 			// so once, so a surface stops spinning on "verifying" and can show
-			// the no-access hint. Repeat failures stay silent until something
-			// else re-confirms the row.
+			// the probe-failure hint. Identical failures stay silent until
+			// something else re-confirms the row.
 			st.reportedFailure = true
 			s.emit(LANEvent{Kind: LANUpdated, Device: st.dev, ProbeFailed: true})
 		}
@@ -900,6 +911,7 @@ func (s *lanStream) flush() {
 // probed agent version until the next probe replaces it.
 func applySighting(stored, sighted models.LANDevice) models.LANDevice {
 	dev := sighted
+	dev.ProbeFailure = stored.ProbeFailure
 	dev.AgentVersion = stored.AgentVersion
 	// The advertisement's device type fills in only what nothing better has
 	// supplied: a probe-verified (or earlier-cached) type is never downgraded
@@ -919,6 +931,7 @@ func applySighting(stored, sighted models.LANDevice) models.LANDevice {
 // record); the address and mDNS metadata stay as the last sighting left them.
 func applyProbe(stored, probed models.LANDevice) models.LANDevice {
 	dev := stored
+	dev.ProbeFailure = nil
 	dev.IsMTLS = probed.IsMTLS
 	dev.AgentVersion = probed.AgentVersion
 	dev.DeviceType = probed.DeviceType

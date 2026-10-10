@@ -400,6 +400,12 @@ func isCertRefreshableError(err error) bool {
 	return false
 }
 
+// isExplicitTLSRejection distinguishes certificate errors and peer TLS alerts
+// from inferred handshake failures such as a timeout.
+func isExplicitTLSRejection(err error) bool {
+	return err != nil && (strings.Contains(strings.ToLower(err.Error()), "remote error: tls:") || isCertRefreshableError(err))
+}
+
 // confirmFn asks a yes/no question defaulting to Yes (empty input / Enter
 // counts as yes), using the shared styled tui.Confirm prompt. It is a package
 // var so tests can stub it. The question must not carry a "[Y/n]" suffix — the
@@ -589,14 +595,17 @@ func (e provisionedAgentUnauthorizedError) Unwrap() error {
 }
 
 var getAgentVersionAtAddress = func(ctx context.Context, address string) (bool, *agentpb.GetAgentVersionResponse, error) {
-	conn, err := connectWithAutoTLS(ctx, address)
+	conn, mtlsErr, err := connectWithAutoTLSDiagnostics(ctx, address)
 	if err != nil {
-		return false, nil, err
+		return false, nil, errors.Join(err, mtlsErr)
 	}
 	defer conn.Close()
 
 	resp, err := conn.AgentService.GetAgentVersion(ctx, &agentpb.GetAgentVersionRequest{})
-	return conn.IsMTLS, resp, err
+	if err != nil {
+		return conn.IsMTLS, resp, errors.Join(mtlsErr, err)
+	}
+	return conn.IsMTLS, resp, nil
 }
 
 var discoverLANDevices = func(ctx context.Context, timeout time.Duration) ([]models.LANDevice, error) {
@@ -789,7 +798,7 @@ func resolveLANAgentVersion(ctx context.Context, dev models.LANDevice) (string, 
 	// isn't the user's first cert is cancelled before its cert is reached, even
 	// though `wendy device info` (uncapped context) connects to it fine.
 	budget := lanAddressProbeBudget(len(loadAllCLICerts()))
-	var lastErr error
+	var probeErrors []error
 	for _, address := range lanAgentAddresses(dev) {
 		attemptCtx, cancel := context.WithTimeout(ctx, budget)
 		isMTLS, resp, err := getAgentVersionAtAddress(attemptCtx, address)
@@ -797,13 +806,19 @@ func resolveLANAgentVersion(ctx context.Context, dev models.LANDevice) (string, 
 		if err == nil {
 			return address, isMTLS, resp, nil
 		}
-		lastErr = err
+		// A proved identity mismatch must not be bypassed by another address.
+		if isLANIdentityFailure(err) {
+			return "", false, nil, err
+		}
+		probeErrors = append(probeErrors, err)
+		if ctx.Err() != nil {
+			break
+		}
 	}
-
-	if lastErr == nil {
-		lastErr = fmt.Errorf("no LAN address available for %q", dev.DisplayName)
+	if len(probeErrors) == 0 {
+		probeErrors = append(probeErrors, fmt.Errorf("no LAN address available for %q", dev.DisplayName))
 	}
-	return "", false, nil, lastErr
+	return "", false, nil, errors.Join(probeErrors...)
 }
 
 // resolveLANVersion queries a single LAN device's gRPC endpoint to populate
@@ -827,8 +842,10 @@ func resolveLANVersion(ctx context.Context, dev models.LANDevice) (models.LANDev
 func lanProber(ctx context.Context, dev models.LANDevice) (models.LANDevice, error) {
 	resolved, isMTLS, err := resolveLANVersion(ctx, dev)
 	if err != nil {
+		dev.ProbeFailure = lanProbeFailure(dev, err, loadAllCLICerts())
 		return dev, err
 	}
+	resolved.ProbeFailure = nil
 	resolved.IsMTLS = isMTLS
 	return resolved, nil
 }
@@ -843,7 +860,7 @@ var lanStreamFn = discovery.StreamLAN
 //
 //   - a live sighting no probe has answered for yet is "verifying" (spinner);
 //   - a probe that failed on a device mDNS can see stops the spinner: the row
-//     shows the failure glyph and may show the no-access hint;
+//     shows the failure glyph and may show the probe-failure hint;
 //   - only a successful probe can speak for the connection's mTLS status,
 //     so nothing else ever marks a row insecure.
 //
@@ -2502,6 +2519,10 @@ type mtlsWalk struct {
 	// which a later candidate would have overwritten.
 	primaryObservedOrg int32
 	primaryLastErr     error
+	// A later port/cert can fail at the transport layer after this endpoint
+	// explicitly rejected TLS. Keep that evidence for the rejection diagnostic;
+	// it does not affect the buckets that decide whether plaintext is allowed.
+	primaryTLSRejection error
 	// anyCertRejection records whether ANY candidate rejected our certificate. It
 	// decides nothing; it only keeps the unreachable message from claiming that
 	// no certificate was ever compared when one was.
@@ -2538,6 +2559,9 @@ func (w *mtlsWalk) recordMTLSErr(addr string, err error, isPrimary bool) {
 	w.lastMTLSErr = attempt
 	if isPrimary {
 		w.primaryLastErr = attempt
+		if isExplicitTLSRejection(err) {
+			w.primaryTLSRejection = attempt
+		}
 	}
 	w.attempts = append(w.attempts, attempt)
 }
@@ -2724,7 +2748,11 @@ func dialAgentLadderWithCerts(ctx context.Context, target dialTarget, allCerts [
 			// falls through to the generic handshake-rejected error, which
 			// connectToAgent already post-processes with clock-skew and
 			// refresh-certs remedies.
-			return nil, walk.primaryLastErr, chooseRejectionError(ctx, walk.primaryObservedOrg, walk.allCerts, walk.primaryLastErr)
+			cause := walk.primaryLastErr
+			if walk.primaryTLSRejection != nil {
+				cause = walk.primaryTLSRejection
+			}
+			return nil, cause, chooseRejectionError(ctx, walk.primaryObservedOrg, walk.allCerts, cause)
 		}
 	}
 	if target.pinned() {
@@ -3861,7 +3889,7 @@ func mergePickerItem(existing *tui.PickerItem, incoming tui.PickerItem) {
 
 	// Propagate security status: LAN probes determine mTLS, BLE doesn't. Once
 	// we know a device is insecure (or secure), update the existing item.
-	// The same goes for the provisioned state and the no-access hint, which
+	// The same goes for the provisioned state and the probe-failure hint, which
 	// clears once a probe succeeds.
 	if nd.LAN != nil {
 		existing.Insecure = incoming.Insecure
@@ -3875,13 +3903,6 @@ func mergePickerItem(existing *tui.PickerItem, incoming tui.PickerItem) {
 	// whichever order the transports were discovered in.
 	if md.LAN == nil && len(md.Externals) > 0 {
 		existing.Insecure = liteExternalInsecure(md.Externals[0])
-	}
-	// The no-access hint must stay consistent with the version cell no matter
-	// which transport supplied the version: AgentVersion is carried over from
-	// earlier LAN probes or backfilled from BLE above, and a hint claiming
-	// agent details are unreadable must not accompany a displayed version.
-	if existing.AgentVersion != "" && existing.Hint == discoverNoAccessHint {
-		existing.Hint = ""
 	}
 
 	existing.Probe = nextProbeState(existing.Probe, incoming.Probe)
@@ -4324,11 +4345,11 @@ func lanPickerEventMsg(ev discovery.LANEvent) tea.Msg {
 func lanPickerItem(dev models.LANDevice, insecure bool, probe tui.ProbeState) tui.PickerItem {
 	devCopy := dev
 	// While the probe is still in flight the Agent/OS columns show a
-	// spinner, so suppress the no-access hint until we actually know the
+	// spinner, so suppress the probe-failure hint until we actually know the
 	// probe failed.
 	hint := ""
 	if probe != tui.ProbePending {
-		hint = lanNoAccessHint(&devCopy, dev.AgentVersion)
+		hint = lanProbeHint(&devCopy)
 	}
 	return tui.PickerItem{
 		Name:          dev.DisplayName,

@@ -225,6 +225,11 @@ func (t BubbleTable) Height() int {
 
 func (t *BubbleTable) SetHeight(height int) {
 	t.model.SetHeight(height)
+	// bubbles recalculates the rendered rows on resize, but leaves the old
+	// scroll offset in place. Reconcile it without moving the selected row.
+	if t.model.Cursor() >= 0 {
+		t.model.MoveDown(0)
+	}
 }
 
 func (t BubbleTable) SelectedRow() bubbleTable.Row {
@@ -243,4 +248,32 @@ func CropANSIView(view string, offset, width int) string {
 		lines[i] = ansi.Cut(line, offset, offset+width)
 	}
 	return strings.Join(lines, "\n")
+}
+
+// WrapHint preserves recovery instructions that would otherwise be cropped at
+// the terminal edge. A zero width means the terminal size is not known yet.
+func WrapHint(text string, width int) string {
+	if width <= 0 {
+		return text
+	}
+	// Break only at whitespace: splitting at hyphens makes commands such as
+	// sync-time and hostname arguments ambiguous when copied from the view.
+	var lines []string
+	for _, paragraph := range strings.Split(text, "\n") {
+		line, rest := "", paragraph
+		for _, word := range strings.Fields(paragraph) {
+			index := strings.Index(rest, word)
+			separator := rest[:index]
+			rest = rest[index+len(word):]
+			if line != "" && ansi.StringWidth(line+separator+word) > width {
+				lines = append(lines, line)
+				line = word
+			} else {
+				line += separator + word
+			}
+		}
+		lines = append(lines, line)
+	}
+	// Unusually long tokens still have to fit inside the terminal viewport.
+	return ansi.Hardwrap(strings.Join(lines, "\n"), width, true)
 }
