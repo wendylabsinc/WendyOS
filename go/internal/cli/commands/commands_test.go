@@ -323,7 +323,7 @@ func TestNewDeviceCmd(t *testing.T) {
 		subNames[c.Name()] = true
 	}
 
-	expectedSubs := []string{"info", "version", "set-default", "get-default", "unset-default", "setup", "update"}
+	expectedSubs := []string{"info", "version", "set-default", "get-default", "unset-default", "setup", "update", "model"}
 	for _, name := range expectedSubs {
 		if !subNames[name] {
 			t.Errorf("device command missing subcommand %q", name)

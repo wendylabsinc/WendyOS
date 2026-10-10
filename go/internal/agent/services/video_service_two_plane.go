@@ -63,8 +63,34 @@ type twoPlaneNode struct {
 	pump   *hubLoopbackPump
 	cancel context.CancelFunc
 	done   chan struct{}
+	err    error // why the pump stopped; read only after done has closed
 	nodeNr int
 	path   string
+}
+
+// awaitFirstFrame waits, holding no lock, for the pump's verdict on its
+// source: nil once a frame has reached the node, or an error once the pump
+// has stopped (for a refusal, errSourceNotBindable says why) or ctx ends.
+func (n *twoPlaneNode) awaitFirstFrame(ctx context.Context, sourceID string) error {
+	select {
+	case <-n.pump.firstFrameWritten():
+	case <-n.done:
+	case <-ctx.Done():
+		return fmt.Errorf("no frame from %s reached its two-plane node: %w", sourceID, ctx.Err())
+	}
+	select {
+	case <-n.done: // stopped before its first frame, or just after it
+	default:
+		return nil
+	}
+	switch {
+	case errors.Is(n.err, errSourceNotBindable):
+		return n.err
+	case n.err != nil:
+		return fmt.Errorf("the two-plane path for %s stopped: %w", sourceID, n.err)
+	default:
+		return fmt.Errorf("the two-plane path for %s stopped: the camera stopped producing frames", sourceID)
+	}
 }
 
 // SetTwoPlaneContainerConsumers replaces, wholesale, the set of running
@@ -78,7 +104,8 @@ type twoPlaneNode struct {
 func (s *VideoService) SetTwoPlaneContainerConsumers(ctx context.Context, containerIDs []string) {
 	fingerprint := consumerFingerprint(containerIDs)
 	s.twoPlaneMu.Lock()
-	s.twoPlaneDemand = len(containerIDs) > 0
+	s.twoPlaneContainerDemand = len(containerIDs) > 0
+	s.twoPlaneDemand = s.twoPlaneContainerDemand || len(s.twoPlanePinned) > 0
 	demand := s.twoPlaneDemand
 	if s.twoPlaneConsumers != fingerprint {
 		// A different set of entitled containers is a different question, so
@@ -91,7 +118,7 @@ func (s *VideoService) SetTwoPlaneContainerConsumers(ctx context.Context, contai
 	s.twoPlaneMu.Unlock()
 
 	if !demand {
-		s.stopAllTwoPlane()
+		s.stopTwoPlaneIfUnneeded()
 		return
 	}
 	s.ensureTwoPlaneForLocalCameras(ctx)
@@ -252,6 +279,7 @@ func (s *VideoService) ensureTwoPlaneNode(ctx context.Context, sourceID string, 
 	go func() {
 		defer close(node.done)
 		err := pump.Run(pumpCtx, s, src, devID)
+		node.err = err
 		if err != nil && !errors.Is(err, context.Canceled) {
 			// A pump that stops on its own is not retried here. The usual reason
 			// is frameBindableToLoopback refusing the source, which will refuse
@@ -273,6 +301,22 @@ func (s *VideoService) ensureTwoPlaneNode(ctx context.Context, sourceID string, 
 		s.loopback.RemoveAuxNode(nodeNr)
 	}()
 	return nil
+}
+
+// stopTwoPlaneIfUnneeded stops every pump when nothing demands the data
+// path. Callers decide to stop outside twoPlaneMu, so a pin or an entitled
+// container can arrive in between: the decision is re-checked here, and
+// holding twoPlaneStartMu keeps a concurrent acquire from reusing a node
+// this is tearing down (it creates a fresh one once this returns).
+func (s *VideoService) stopTwoPlaneIfUnneeded() {
+	s.twoPlaneStartMu.Lock()
+	defer s.twoPlaneStartMu.Unlock()
+	s.twoPlaneMu.Lock()
+	demand := s.twoPlaneDemand
+	s.twoPlaneMu.Unlock()
+	if !demand {
+		s.stopAllTwoPlane()
+	}
 }
 
 // stopAllTwoPlane cancels every running pump and waits for each to release its
@@ -365,6 +409,13 @@ type twoPlaneState struct {
 	twoPlaneMu     sync.Mutex
 	twoPlane       map[string]*twoPlaneNode
 	twoPlaneDemand bool
+	// twoPlaneContainerDemand is the container sync's view: some running app
+	// container is entitled to the two-plane path.
+	twoPlaneContainerDemand bool
+	// twoPlanePinned holds agent-managed owners (model hosts) that need the
+	// path whatever the container sync says. twoPlaneDemand is
+	// twoPlaneContainerDemand || len(twoPlanePinned) > 0.
+	twoPlanePinned map[string]bool
 	// twoPlaneRefused names sources whose pump refused their frames as
 	// unbindable. Guarded by twoPlaneMu. Cleared when the entitled consumer set
 	// changes or when a source leaves the device list, the two events that can
