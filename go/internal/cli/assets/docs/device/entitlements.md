@@ -128,6 +128,19 @@ Ordinary detached agent deployments include HTTP URLs in their
 checking application health. See the [full `http` reference](../apps/wendy.json.md#http)
 for discovery and attached-run behavior.
 
+## Wi-Fi Aware (NAN)
+
+`{ "type": "nan" }` grants direct access to the host `nan0` wpa_supplicant
+control socket. The agent prepares an app-specific NAN data interface and
+exports `WENDY_NAN_SOCKET`, `WENDY_NAN_NDI`, and `WENDY_NAN_CLIENT_DIR`;
+bind the app's local Unix datagram control socket in that shared directory so
+supplicant replies can cross the mount namespace. The app owns its own
+publish/subscribe and NDP handles. Add `{ "type": "network", "mode": "host" }`
+separately when the app sends IP packets over its NDP. This grant does not
+expose the global or station Wi-Fi control sockets. NAN shares one radio-wide
+cluster, so apps must avoid radio-wide start/stop/reset commands. A supplicant
+restart replaces the mounted socket; redeploy the app to refresh it.
+
 ## Input
 
 The input entitlement allows the container to access Linux input devices such as game controllers, barcode scanners, keyboards, and other devices that appear under `/dev/input/`. This is separate from the USB entitlement — USB covers `/dev/bus/usb` (raw USB access), while input covers the higher-level Linux input subsystem.

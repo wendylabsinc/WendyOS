@@ -21,6 +21,10 @@ const (
 	killWaitTimeout = 5 * time.Second
 )
 
+// Tests shorten this interval to exercise the SIGKILL fallback without a
+// ten-second sleep; production uses the same grace as an explicit stop.
+var nanReplacementGracePeriod = stopGracePeriod
+
 // teardownTask is the subset of containerd.Task the teardown helpers use,
 // factored out so the SIGTERM→SIGKILL escalation and group-kill fallback can
 // be unit-tested without a containerd daemon.
@@ -28,6 +32,18 @@ type teardownTask interface {
 	Kill(ctx context.Context, signal syscall.Signal, opts ...containerd.KillOpts) error
 	Wait(ctx context.Context) (<-chan containerd.ExitStatus, error)
 	Delete(ctx context.Context, opts ...containerd.ProcessDeleteOpts) (*containerd.ExitStatus, error)
+}
+
+// terminateReplacedTask gives a NAN app time to cancel its publish and NDP
+// handles before replacing its container. Those handles live in the host
+// supplicant and survive an abrupt app SIGKILL. Other apps retain the existing
+// immediate whole-process-group kill behavior. terminateTask still escalates
+// a NAN app to SIGKILL after the bounded stop grace period.
+func (c *Client) terminateReplacedTask(ctx context.Context, task teardownTask, containerID string, oldHadNAN bool) error {
+	if oldHadNAN {
+		return c.terminateTask(ctx, task, containerID, syscall.SIGTERM, nanReplacementGracePeriod, killWaitTimeout)
+	}
+	return c.terminateTask(ctx, task, containerID, syscall.SIGKILL, killWaitTimeout, killWaitTimeout)
 }
 
 // Compile-time check that containerd.Task satisfies teardownTask.
