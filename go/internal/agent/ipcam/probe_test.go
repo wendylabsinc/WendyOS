@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -513,5 +514,53 @@ func TestProbeCredentials_404OnFirstRequestIsOKWithPathNote(t *testing.T) {
 	}
 	if strings.Contains(detail, "accepted the credentials") {
 		t.Fatalf("detail = %q, overclaims credentials were evaluated when no challenge occurred", detail)
+	}
+}
+
+// A camera that enforces the Accept header, which RFC 2326 makes optional,
+// answers a bare DESCRIBE with 551 Option not supported. Measured on an ONVIF
+// IPC-XD400-N on 2026-09-13: without Accept the probe reported "unexpected RTSP
+// status 551" and refused credentials that were fine; with
+// "Accept: application/sdp" the same camera answered 200. The fake here does
+// exactly what that camera did, on the first request and on the
+// authenticated resend, so the header cannot be dropped from either.
+func TestProbeCredentials_DescribeCarriesAcceptForStrictCameras(t *testing.T) {
+	var seen []string
+	withScriptedServer(t, func(t *testing.T, conn net.Conn) {
+		r := bufio.NewReader(conn)
+		for cseq := 1; cseq <= 2; cseq++ {
+			req := readRequest(t, r)
+			seen = append(seen, req)
+			if !strings.Contains(strings.ToLower(req), "accept: application/sdp") {
+				_, _ = conn.Write([]byte("RTSP/1.0 551 Option not supported\r\nCSeq: " +
+					strconv.Itoa(cseq) + "\r\n\r\n"))
+				return
+			}
+			if cseq == 1 {
+				if _, err := conn.Write([]byte("RTSP/1.0 401 Unauthorized\r\nCSeq: 1\r\n" +
+					"WWW-Authenticate: Basic realm=\"cam\"\r\n\r\n")); err != nil {
+					t.Fatalf("server: writing 401: %v", err)
+				}
+				continue
+			}
+			if _, err := conn.Write([]byte("RTSP/1.0 200 OK\r\nCSeq: 2\r\nContent-Length: 0\r\n\r\n")); err != nil {
+				t.Fatalf("server: writing 200: %v", err)
+			}
+		}
+	})
+
+	result, detail := ProbeCredentials(context.Background(), probeTestCamera(),
+		Credential{Username: "admin", Password: "hunter2"})
+
+	if result != ProbeOK {
+		t.Fatalf("result = %v, want ProbeOK; detail=%q", result, detail)
+	}
+	if len(seen) != 2 {
+		t.Fatalf("server saw %d requests, want 2 (first DESCRIBE, then the authenticated resend)", len(seen))
+	}
+	for i, req := range seen {
+		if !strings.Contains(strings.ToLower(req), "accept: application/sdp") {
+			t.Fatalf("request %d lacks Accept: application/sdp:\n%s", i+1, req)
+		}
 	}
 }
