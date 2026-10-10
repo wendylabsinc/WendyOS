@@ -19,6 +19,7 @@ import (
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/wendylabsinc/wendy/go/internal/shared/chunk"
 	"github.com/wendylabsinc/wendy/go/internal/shared/chunkupload"
@@ -51,11 +52,27 @@ const DefaultTargetAgentPort uint16 = 50052
 
 // errChunkDeliveryUnsupported reports that the target's agent predates the RPCs
 // chunked delivery needs (QueryChunks, or PrepareImage to register the
-// assembled image under a name). It is the ONE delivery failure that falls back
-// to a registry push; every other failure is reported, because a fallback that
-// also caught genuine errors would retry an unrecoverable delivery over a
-// slower path and then report the wrong reason.
+// assembled image under a name). With errChunkInventoryTooLarge it is one of
+// the TWO delivery failures that fall back to a registry push; every other
+// failure is reported, because a fallback that also caught genuine errors
+// would retry an unrecoverable delivery over a slower path and then report
+// the wrong reason.
 var errChunkDeliveryUnsupported = errors.New("the device's agent predates chunked delivery")
+
+// errChunkInventoryTooLarge reports that this image's chunk inventory cannot
+// be put to the target agent: the PrepareImage request carries every layer's
+// chunk hashes and a layer's QueryChunks carries that layer's, neither is
+// paged yet, and the receiving agent refuses any message over the default
+// 4 MiB gRPC limit (WDY-3121). Like an unsupported agent this is settled by
+// the image and the target, not the link — no retry changes it, and the
+// registry push can deliver what these messages cannot carry.
+var errChunkInventoryTooLarge = errors.New("the image's chunk inventory exceeds the device's 4 MiB message limit")
+
+// maxChunkMessageBytes is the largest hash-bearing request risked against a
+// target agent: grpc-go's default 4 MiB receive limit, less a margin so
+// framing never lands exactly on it. A variable so tests can force the
+// too-large path without a multi-gigabyte fixture layer.
+var maxChunkMessageBytes = 4<<20 - 64<<10
 
 const (
 	// deliveryAttempts bounds how many times one delivery is resumed after a
@@ -469,18 +486,24 @@ func (s *BuildService) deliverByChunksOnce(ctx context.Context, rep *deliveryRep
 	// under its name. It is strict here, as for Compose: the CLI will create the
 	// container by NAME, so an image that was never registered is a failed
 	// delivery, not something RunContainer can finish later.
-	imageName := targetImageName(target)
+	prepareReq := &agentpb.RunContainerLayersRequest{
+		ImageName:   targetImageName(target),
+		Layers:      headers,
+		ImageConfig: img.config,
+	}
+	// Sized before anything is sent: the device would reject an oversized
+	// PrepareImage or QueryChunks only after layers were in flight, wasting the
+	// transfer and blaming the device for what is this image's size (WDY-3121).
+	if err := checkChunkInventoryFits(assetID, prepareReq, toPush); err != nil {
+		return err
+	}
 	prepareCtx, cancelPrepare := context.WithCancel(ctx)
 	defer cancelPrepare()
 	uploadCtx, cancelUpload := context.WithCancel(ctx)
 	defer cancelUpload()
 	prepareDone := make(chan error, 1)
 	go func() {
-		_, err := cs.PrepareImage(prepareCtx, &agentpb.RunContainerLayersRequest{
-			ImageName:   imageName,
-			Layers:      headers,
-			ImageConfig: img.config,
-		})
+		_, err := cs.PrepareImage(prepareCtx, prepareReq)
 		prepareDone <- err
 		if err != nil {
 			// Stop sending as soon as the device says it cannot assemble; without
@@ -577,6 +600,24 @@ func uploadLayerChunks(ctx context.Context, cs agentpb.WendyContainerServiceClie
 	})
 }
 
+// checkChunkInventoryFits refuses a delivery whose hash-bearing requests would
+// exceed maxChunkMessageBytes, before any of them is sent. The wrap names the
+// oversized message; errors.Is(err, errChunkInventoryTooLarge) is the
+// fallback decision's key.
+func checkChunkInventoryFits(assetID int32, prepare *agentpb.RunContainerLayersRequest, toPush []*deliveryLayer) error {
+	if n := proto.Size(prepare); n > maxChunkMessageBytes {
+		return fmt.Errorf("device %d would refuse the %s inventory of this image's %d layers: %w",
+			assetID, formatBuildBytes(int64(n)), len(prepare.GetLayers()), errChunkInventoryTooLarge)
+	}
+	for _, dl := range toPush {
+		if n := proto.Size(&agentpb.QueryChunksRequest{ChunkHashes: dl.header.GetChunkHashes()}); n > maxChunkMessageBytes {
+			return fmt.Errorf("device %d would refuse layer %s's %s chunk list: %w",
+				assetID, dl.header.GetDiffId(), formatBuildBytes(int64(n)), errChunkInventoryTooLarge)
+		}
+	}
+	return nil
+}
+
 // classifyPrepareError maps the device's answer to PrepareImage. Unimplemented
 // means the agent cannot register an image by name from chunks, which is the
 // fallback case; anything else is that device's failure, and its gRPC code is
@@ -606,12 +647,12 @@ func (e *transientDeliveryError) Unwrap() error { return e.err }
 // stream surfaces when the drop outruns the tunnel's own status framing.
 //
 // Not resumed: cancellation — the CLI hung up or a deadline passed, and
-// retrying would fight that rather than honour it; an unsupported agent, which
-// no retry changes; and every other status, which is the device saying
-// something specific about this image (too large, malformed, refused) that
-// re-sending cannot fix.
+// retrying would fight that rather than honour it; an unsupported agent or an
+// oversized inventory, which no retry changes; and every other status, which
+// is the device saying something specific about this image (too large,
+// malformed, refused) that re-sending cannot fix.
 func retryableDeliveryError(err error) bool {
-	if err == nil || errors.Is(err, errChunkDeliveryUnsupported) {
+	if err == nil || errors.Is(err, errChunkDeliveryUnsupported) || errors.Is(err, errChunkInventoryTooLarge) {
 		return false
 	}
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
