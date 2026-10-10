@@ -7,12 +7,15 @@ import (
 )
 
 const (
-	LinkALPN            = "wendy-local-mesh/1"
-	TunnelMTU           = 1280 // IPv6 minimum; QUIC fragments below are link-local only.
-	DatagramLimit       = 1100
-	PacketIP       byte = 1
-	PacketBabel    byte = 2
-	fragmentHeader      = 9 // kind, packet ID, total size, offset
+	LinkALPN           = "wendy-local-mesh/1"
+	TunnelMTU          = 1280 // IPv6 minimum; QUIC fragments below are link-local only.
+	DatagramLimit      = 1100
+	PacketIP      byte = 1
+	PacketBabel   byte = 2
+	// Routed app sessions use this UDP port on the mesh host VIP. Keep the
+	// carrier's bounded admission priority and the app listener in sync.
+	AppSessionPort = 43021
+	fragmentHeader = 9 // kind, packet ID, total size, offset
 )
 
 // EncodeIP fragments one complete IP packet into bounded QUIC datagrams. IDs
@@ -92,7 +95,9 @@ func (a *IPAssembler) Receive(d []byte, now time.Time) ([]byte, error) {
 		if len(a.pending) >= 32 {
 			return nil, nil
 		} // bounded congestion loss
-		p = partialIP{data: make([]byte, total), expires: now.Add(time.Second)}
+		// A BLE peer can take several seconds to deliver the second half of
+		// an IP packet under contention. The 32-packet cap bounds memory.
+		p = partialIP{data: make([]byte, total), expires: now.Add(10 * time.Second)}
 	}
 	if len(p.data) != total {
 		delete(a.pending, id)
