@@ -922,10 +922,10 @@ func main() {
 			go func() {
 				defer wg.Done()
 				for ctx.Err() == nil {
-					err := localmesh.RunConfiguredTCPObserved(ctx, configPath, localmesh.TCPIdentity{
+					err := runConfiguredMeshCarriers(ctx, configPath, localmesh.TCPIdentity{
 						Org: orgID, Asset: assetID, Name: name, AgentPort: uint16(mtlsPortNum),
 						Certificate: certPEM, Chain: chainPEM, Key: keyPEM,
-					}, func(snapshot func() localmesh.NodeSnapshot) {
+					}, logger, func(snapshot func() localmesh.NodeSnapshot) {
 						localMeshMu.Lock()
 						localMeshSnapshot = snapshot
 						localMeshMu.Unlock()
