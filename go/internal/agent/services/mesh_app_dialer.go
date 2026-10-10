@@ -25,6 +25,9 @@ func (a *MeshAppDialer) DialDevice(ctx context.Context, deviceID int32, port uin
 	if a == nil || a.mesh == nil {
 		return nil, "", meshsession.ErrNoRoute
 	}
+	if conn, mode, err, own := a.mesh.dialSelf(ctx, deviceID, port); own {
+		return conn, mode, err
+	}
 	a.mesh.mu.Lock()
 	dial := a.mesh.localDial
 	a.mesh.mu.Unlock()

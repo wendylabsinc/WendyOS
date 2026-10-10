@@ -165,11 +165,9 @@ func (c *TunnelBrokerClient) buildDialOpts() ([]grpc.DialOption, brokerRequestMe
 	return brokerDialOpts(c.logger, c.orgID, c.assetID, c.certPEM, c.keyPEM, c.chainPEM)
 }
 
-// brokerDialOpts returns gRPC dial options and identity metadata for any
-// brokerTLSConfig builds the TLS config for a broker connection: it validates
-// the broker's chain against the Wendy CA (hostname verification is skipped —
-// the broker cert CN is localhost, not the cloud host) and presents the
-// device's ECDSA leaf for mTLS.
+// brokerTLSConfig validates the broker certificate chain against system and
+// provisioned Wendy roots. gRPC supplies the endpoint name for DNS/IP SAN
+// verification. The device leaf is presented for direct endpoint mTLS.
 //
 // Loading the TLS client cert remains non-fatal because Cloud Run terminates
 // TLS before the broker. Request authentication separately proves possession
@@ -183,29 +181,12 @@ func brokerTLSConfig(logger *zap.Logger, certPEM, keyPEM, chainPEM string) (*tls
 	if chainPEM != "" && certs.AppendChainToPool(caPool, chainPEM) == 0 {
 		return nil, fmt.Errorf("no valid CA certificates in chainPEM")
 	}
+	// gRPC sets ServerName from the configured endpoint (including IP
+	// literals). Standard verification checks both the trusted chain and its
+	// DNS/IP SAN; trusting a public or Wendy CA alone is not broker identity.
 	tlsCfg := &tls.Config{
-		InsecureSkipVerify: true, //nolint:gosec
-		VerifyConnection: func(cs tls.ConnectionState) error {
-			if len(cs.PeerCertificates) == 0 {
-				return fmt.Errorf("broker presented no TLS certificate")
-			}
-			intermediates := x509.NewCertPool()
-			for _, cert := range cs.PeerCertificates[1:] {
-				intermediates.AddCert(cert)
-			}
-			_, err := cs.PeerCertificates[0].Verify(x509.VerifyOptions{
-				Roots:         caPool,
-				Intermediates: intermediates,
-				KeyUsages:     []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-			})
-			if err != nil {
-				logger.Warn("broker TLS chain verification failed",
-					zap.String("subject", cs.PeerCertificates[0].Subject.String()),
-					zap.Error(err),
-				)
-			}
-			return err
-		},
+		MinVersion: tls.VersionTLS12,
+		RootCAs:    caPool,
 	}
 
 	// Present the device's ECDSA leaf certificate so the broker can authenticate
@@ -226,18 +207,19 @@ func brokerTLSConfig(logger *zap.Logger, certPEM, keyPEM, chainPEM string) (*tls
 	return tlsCfg, nil
 }
 
-// agent-originated connection to the tunnel broker. Shared by the presence
-// client (serving side) and the mesh dialer (dialing side).
+// brokerRequestMetadata signs identity metadata for an agent-originated RPC.
 type brokerRequestMetadata func(fullMethod string) (metadata.MD, error)
 
+// brokerDialOpts returns gRPC options and identity metadata shared by the
+// presence client (serving side) and the mesh dialer (dialing side).
 func brokerDialOpts(logger *zap.Logger, orgID, assetID int32, certPEM, keyPEM, chainPEM string) ([]grpc.DialOption, brokerRequestMetadata, error) {
 	// Cloud Run cannot forward the TLS client certificate to the broker, so each
 	// RPC carries a fresh method-bound signature from the enrolled certificate
 	// key. Legacy XFCC headers remain during the additive rollout only. Direct
 	// broker endpoints also receive the certificate at the TLS layer.
 	//
-	// Broker cert CN is localhost and won't match the cloud host — skip hostname
-	// verification but still validate the chain against the Wendy CA.
+	// Standard TLS binds the broker certificate to the configured endpoint.
+	// Local development broker certificates carry localhost/LAN-IP SANs.
 	tlsCfg, err := brokerTLSConfig(logger, certPEM, keyPEM, chainPEM)
 	if err != nil {
 		return nil, nil, err

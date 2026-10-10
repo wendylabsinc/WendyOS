@@ -898,8 +898,12 @@ func evaluateOSUpdateOutcome(
 				"Images can share an OS version; check `wendy os update-status` for the committed slot or rollback details.",
 				postUpdateOSVersion), errors.New("OS update outcome unverified; unchanged version cannot distinguish commit from rollback")
 		default:
+			healthDetail := "A fresh post-update health result was not available; check `wendy os update-status` for the committed slot and health details."
+			if status.Code(rpcErr) == codes.Unimplemented {
+				healthDetail = "Post-update health verification is not supported by this device's agent."
+			}
 			return fmt.Sprintf("Update applied; device is now running %s. "+
-				"(Post-update health verification is not supported by this device's agent.)", postUpdateOSVersion), nil
+				"(%s)", postUpdateOSVersion, healthDetail), nil
 		}
 	}
 

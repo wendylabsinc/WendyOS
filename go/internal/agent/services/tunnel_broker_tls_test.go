@@ -140,8 +140,8 @@ func TestBrokerTLSConfig_TrailingBytesChainAccepted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("brokerTLSConfig rejected a pki-core chain: %v", err)
 	}
-	if cfg.VerifyConnection == nil {
-		t.Fatal("expected a VerifyConnection callback pinning the chain")
+	if cfg.InsecureSkipVerify || cfg.RootCAs == nil {
+		t.Fatal("expected standard endpoint verification with normalized provisioned roots")
 	}
 }
 

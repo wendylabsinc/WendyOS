@@ -137,6 +137,14 @@ func NewHostPolicy(ctx context.Context, asset int32) (p *HostPolicy, err error) 
 	if err = add("-i", "wlmp+", "-o", "wlmp+", "-d", "10.88.0.0/16", "-j", "ACCEPT"); err != nil {
 		return p, err
 	}
+	if err = hostnetwork.InitBridgeInternetChain(); err != nil {
+		return p, err
+	}
+	for _, direction := range []string{"-i", "-o"} {
+		if err = add(direction, "wlmp+", "-j", hostnetwork.BridgeInternetChain); err != nil {
+			return p, err
+		}
+	}
 	for _, subnet := range []string{"0.0.0.0/8", "127.0.0.0/8", "169.254.0.0/16", "224.0.0.0/4", "240.0.0.0/4"} {
 		if err = add("-i", "wlmp+", "-d", subnet, "-j", "REJECT"); err != nil {
 			return p, err
