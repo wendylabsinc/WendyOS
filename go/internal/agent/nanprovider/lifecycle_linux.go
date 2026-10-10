@@ -19,9 +19,11 @@ type radioHealth struct {
 }
 
 type radioLink struct {
-	peer    radioPeer
-	healthy bool
-	since   time.Time
+	peer        radioPeer
+	healthy     bool
+	since       time.Time
+	draining    bool
+	stopAttempt time.Time
 }
 
 func (l *radioLink) health(up bool, now time.Time) {

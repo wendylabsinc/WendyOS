@@ -27,19 +27,24 @@ func TestTicketStoreUsesOpaqueBoundedShortLivedTokens(t *testing.T) {
 	if state.EarlyData {
 		t.Fatal("mesh ticket retained early data")
 	}
-	if len(store.entries) != meshTicketLimit {
-		t.Fatalf("ticket count=%d", len(store.entries))
+	if len(store.cache.entries) != meshTicketLimit {
+		t.Fatalf("ticket count=%d", len(store.cache.entries))
 	}
 	if resumed, err := config.UnwrapSession(first, tls.ConnectionState{}); err != nil || resumed != nil {
 		t.Fatalf("evicted ticket resumed: %v %v", resumed, err)
 	}
-	var key [32]byte
-	copy(key[:], first)
-	store.entries[key] = ticketEntry{state: []byte{1}, created: time.Now().Add(-meshTicketLifetime)}
-	if resumed, err := config.UnwrapSession(first, tls.ConnectionState{}); err != nil || resumed != nil {
+
+	now := time.Now()
+	store.cache.now = func() time.Time { return now }
+	token, err := config.WrapSession(tls.ConnectionState{}, state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(meshTicketLifetime)
+	if resumed, err := config.UnwrapSession(token, tls.ConnectionState{}); err != nil || resumed != nil {
 		t.Fatalf("expired ticket resumed: %v %v", resumed, err)
 	}
-	if _, exists := store.entries[key]; exists {
+	if _, exists := store.cache.entries[store.key(token, "")]; exists {
 		t.Fatal("expired secret retained")
 	}
 }

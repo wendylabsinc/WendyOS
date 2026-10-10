@@ -17,6 +17,8 @@ func newDeviceLocalMeshCmd() *cobra.Command {
 	configure.Flags().Bool("share-uplink", false, "Offer an independent uplink to the mesh")
 	configure.Flags().Bool("nan", false, "Enable Wi-Fi Aware NAN as a mesh carrier")
 	configure.Flags().Bool("ble", false, "Enable BLE L2CAP as a mesh carrier")
+	configure.Flags().Bool("ethernet", false, "Discover local mesh peers over Ethernet")
+	configure.Flags().Bool("infrastructure-wifi", false, "Discover local mesh peers over infrastructure Wi-Fi")
 	configure.RunE = func(cmd *cobra.Command, _ []string) error {
 		req, err := localMeshRequest(cmd)
 		if err != nil {
@@ -62,7 +64,7 @@ func localMeshRequest(cmd *cobra.Command) (*pb.ConfigureLocalMeshRequest, error)
 	for _, field := range []struct {
 		name string
 		dest **bool
-	}{{"participate", &req.Participate}, {"roam", &req.Roam}, {"share-uplink", &req.ShareUplink}, {"nan", &req.Nan}, {"ble", &req.Ble}} {
+	}{{"participate", &req.Participate}, {"roam", &req.Roam}, {"share-uplink", &req.ShareUplink}, {"nan", &req.Nan}, {"ble", &req.Ble}, {"ethernet", &req.Ethernet}, {"infrastructure-wifi", &req.InfrastructureWifi}} {
 		if cmd.Flags().Changed(field.name) {
 			value, err := cmd.Flags().GetBool(field.name)
 			if err != nil {
@@ -71,8 +73,8 @@ func localMeshRequest(cmd *cobra.Command) (*pb.ConfigureLocalMeshRequest, error)
 			*field.dest = &value
 		}
 	}
-	if req.Participate == nil && req.Roam == nil && req.ShareUplink == nil && req.Nan == nil && req.Ble == nil {
-		return nil, fmt.Errorf("specify --participate, --roam, --share-uplink, --nan or --ble; omitted flags preserve saved settings")
+	if req.Participate == nil && req.Roam == nil && req.ShareUplink == nil && req.Nan == nil && req.Ble == nil && req.Ethernet == nil && req.InfrastructureWifi == nil {
+		return nil, fmt.Errorf("specify --participate, --roam, --share-uplink, --nan, --ble, --ethernet or --infrastructure-wifi; omitted flags preserve saved settings")
 	}
 	return req, nil
 }
@@ -87,8 +89,8 @@ func printLocalMeshStatus(cmd *cobra.Command, status *pb.LocalMeshStatus) error 
 		return err
 	}
 	configured := status.GetConfigured()
-	cmd.Printf("Participate: %t\nRoam: %t\nShare uplink: %t\nNAN: %t\nBLE: %t\nTCP listen: %s\nConfigured TCP peers: %d\nAuthenticated peers: %d\nGateway asset: %d\nState: %s\n%s\n",
-		configured.GetParticipate(), configured.GetRoam(), configured.GetShareUplink(), configured.GetNan(), configured.GetBle(), configured.GetTcpListen(), configured.GetConfiguredTcpPeers(),
+	cmd.Printf("Participate: %t\nRoam: %t\nShare uplink: %t\nNAN: %t\nBLE: %t\nEthernet: %t\nInfrastructure Wi-Fi: %t\nTCP listen: %s\nConfigured TCP peers: %d\nAuthenticated peers: %d\nGateway asset: %d\nState: %s\n%s\n",
+		configured.GetParticipate(), configured.GetRoam(), configured.GetShareUplink(), configured.GetNan(), configured.GetBle(), configured.GetEthernet(), configured.GetInfrastructureWifi(), configured.GetTcpListen(), configured.GetConfiguredTcpPeers(),
 		status.GetAuthenticatedPeers(), status.GetGatewayAssetId(), status.GetState(), status.GetDetail())
 	return nil
 }
