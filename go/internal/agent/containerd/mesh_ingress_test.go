@@ -10,6 +10,25 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 )
 
+type recordingMDNS struct {
+	starts []string
+	stops  []string
+	ports  [][]appconfig.PortMapping
+	onStop func()
+}
+
+func (m *recordingMDNS) StartMeshApp(containerName, appID, ip, bridge string, ports []appconfig.PortMapping) error {
+	m.starts = append(m.starts, containerName+":"+appID+":"+ip+":"+bridge)
+	m.ports = append(m.ports, append([]appconfig.PortMapping(nil), ports...))
+	return nil
+}
+func (m *recordingMDNS) StopMeshApp(containerName string) {
+	m.stops = append(m.stops, containerName)
+	if m.onStop != nil {
+		m.onStop()
+	}
+}
+
 func TestMeshIngressPublishesOnlySuccessfullyForwardedPorts(t *testing.T) {
 	original := addMeshIngressPortForward
 	t.Cleanup(func() { addMeshIngressPortForward = original })
@@ -20,13 +39,17 @@ func TestMeshIngressPublishesOnlySuccessfullyForwardedPorts(t *testing.T) {
 		return nil
 	}
 	r := meshingress.NewRegistry()
-	c := &Client{logger: zap.NewNop(), meshIngress: r}
+	mdns := &recordingMDNS{}
+	c := &Client{logger: zap.NewNop(), meshIngress: r, meshMDNS: mdns}
 	ports := []appconfig.PortMapping{{Host: 8080, Container: 80}, {Host: 8081, Container: 81}}
 	if err := c.applyMeshIngressPorts("app_a", "app", "10.3.0.2", ports); err != nil {
 		t.Fatal(err)
 	}
 	if !r.Allowed(8080) || r.Allowed(8081) {
 		t.Fatal("a port without a successful forward was authorized")
+	}
+	if len(mdns.ports) != 1 || len(mdns.ports[0]) != 1 || mdns.ports[0][0] != ports[0] {
+		t.Fatalf("collector received unforwarded ports: %+v", mdns.ports)
 	}
 	c.teardownMeshEgress(nil, "app_a", "app", "")
 	if r.Allowed(8080) {
@@ -128,5 +151,29 @@ func TestMeshIngressOldTaskExitCannotRevokeRestart(t *testing.T) {
 	c.releaseMeshIngressRun("app", second)
 	if r.Allowed(8080) {
 		t.Fatal("replacement task exit left ingress authorized")
+	}
+}
+
+func TestMeshMDNSLifecycleUsesIsolatedAppAndWithdrawsBeforePortRelease(t *testing.T) {
+	r := meshingress.NewRegistry()
+	mdns := &recordingMDNS{}
+	c := &Client{logger: zap.NewNop(), meshIngress: r, meshMDNS: mdns}
+	if err := c.applyMeshIngressPorts("browse", "app", "10.3.0.2", nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(mdns.starts) != 1 || mdns.starts[0] != "browse:app:10.3.0.2:"+bridgeName("app") {
+		t.Fatalf("browse-only app had no scoped mDNS bridge: %+v", mdns.starts)
+	}
+	if err := r.ClaimForApp("browse", "app", 18080); err != nil {
+		t.Fatal(err)
+	}
+	mdns.onStop = func() {
+		if !r.AllowedApp("app", 18080) {
+			t.Fatal("mDNS bridge stopped after ingress was revoked")
+		}
+	}
+	c.releaseMeshIngress("browse")
+	if len(mdns.stops) != 1 || r.AllowedApp("app", 18080) {
+		t.Fatalf("stop did not withdraw bridge and port: stops=%v", mdns.stops)
 	}
 }

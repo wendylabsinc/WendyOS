@@ -20,6 +20,7 @@ type Registry struct {
 	tcpByOwner map[string]map[*authorizedConn]struct{}
 	mu         sync.RWMutex
 	byPort     map[uint16]string
+	appByPort  map[uint16]string
 	byOwner    map[string]map[uint16]struct{}
 }
 
@@ -46,6 +47,17 @@ func (r *Registry) OwnedBy(containerID string, port uint16) bool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return r.byPort[port] == containerID
+}
+
+// AllowedApp binds a catalog publication to the app whose running container
+// owns the forwarded host port. A service cannot claim another app's ingress.
+func (r *Registry) AllowedApp(appID string, port uint16) bool {
+	if r == nil || appID == "" || port == 0 {
+		return false
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.byPort[port] != "" && r.appByPort[port] == appID
 }
 
 // DialAuthorized holds the authorization read lock until the local TCP dial
@@ -132,6 +144,11 @@ func (r *Registry) CheckAvailable(containerID string, port uint16) error {
 // Claim grants access only after the caller has successfully installed the
 // matching host port forward. Repeating a claim by the same owner is safe.
 func (r *Registry) Claim(containerID string, port uint16) error {
+	return r.ClaimForApp(containerID, "", port)
+}
+
+// ClaimForApp records trusted app ownership after its host forward is ready.
+func (r *Registry) ClaimForApp(containerID, appID string, port uint16) error {
 	if r == nil {
 		return fmt.Errorf("mesh ingress registry is unavailable")
 	}
@@ -143,14 +160,19 @@ func (r *Registry) Claim(containerID string, port uint16) error {
 	if err := checkOwner(r.byPort[port], containerID, port); err != nil {
 		return err
 	}
+	if r.byPort[port] != "" && r.appByPort[port] != appID {
+		return fmt.Errorf("mesh ingress host port %d cannot change app owner", port)
+	}
 	if r.byPort == nil {
 		r.byPort = make(map[uint16]string)
+		r.appByPort = make(map[uint16]string)
 		r.byOwner = make(map[string]map[uint16]struct{})
 	}
 	if r.byOwner[containerID] == nil {
 		r.byOwner[containerID] = make(map[uint16]struct{})
 	}
 	r.byPort[port] = containerID
+	r.appByPort[port] = appID
 	r.byOwner[containerID][port] = struct{}{}
 	return nil
 }
@@ -172,6 +194,7 @@ func (r *Registry) Release(containerID string) {
 	for port := range r.byOwner[containerID] {
 		if r.byPort[port] == containerID {
 			delete(r.byPort, port)
+			delete(r.appByPort, port)
 		}
 	}
 	delete(r.byOwner, containerID)
