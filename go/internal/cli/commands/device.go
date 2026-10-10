@@ -93,6 +93,7 @@ func newDeviceCmd() *cobra.Command {
 		newDeviceUnenrollCmd(),
 		newDeviceRenameCmd(),
 		newDeviceUpdateCmd(),
+		newDeviceLocalMeshCmd(),
 		newDeviceSyncTimeCmd(),
 	)
 	addToGroup("hardware",
