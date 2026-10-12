@@ -47,6 +47,13 @@ func (s *Store) StartDetached(spec Spec) (State, error) {
 	// nothing is written through a lock handle, and a close error here would
 	// otherwise report a failure for a VM that started perfectly well.
 	defer func() { _ = lock.Close() }()
+	serial, err := s.ReadSerial(spec.Name)
+	if err != nil {
+		return State{}, err
+	}
+	if serial != nil {
+		return State{}, fmt.Errorf("managed serial passthrough requires Windows foreground mode; use 'wendy vm start %s' without --detach", spec.Name)
+	}
 
 	// Args before openConsoleLog: it is the last thing that can reject the
 	// spec, and rotating the log first would discard the previous boot's
@@ -253,6 +260,22 @@ func (s *Store) RunForeground(ctx context.Context, spec Spec, stdin io.Reader, s
 		return err
 	}
 	defer func() { _ = lock.Close() }()
+	serial, err := s.ReadSerial(spec.Name)
+	if err != nil {
+		return err
+	}
+	var bridge *serialBridge
+	if serial != nil {
+		bridge, err = startSerialBridge(*serial)
+		if err != nil {
+			return err
+		}
+		defer bridge.Close()
+		spec.SerialPort = bridge.Port()
+		if stderr != nil {
+			fmt.Fprintf(stderr, "Serial: %s at exact %d baud (8N1, no handshake, DTR/RTS disabled).\n", serial.Port, serial.Baud)
+		}
+	}
 
 	// No ConsoleLog: the console is this terminal, which is the whole point of
 	// a foreground start.
@@ -296,6 +319,18 @@ func (s *Store) RunForeground(ctx context.Context, spec Spec, stdin io.Reader, s
 		return fmt.Errorf("starting %s: %w", spec.Binary(), err)
 	}
 
+	// Assign the job immediately after launch, before further filesystem work.
+	// Go's os/exec has no atomic Windows job-list creation attribute, so there
+	// remains a small process-start/assignment window on abrupt CLI death.
+	if bridge != nil {
+		job, err := guardSerialProcess(qemu.Process)
+		if err != nil {
+			_ = qemu.Process.Kill()
+			_ = qemu.Wait()
+			return err
+		}
+		defer job.Close()
+	}
 	st.PID = qemu.Process.Pid
 	startedPID = st.PID
 	if err := s.WriteState(st); err != nil {
@@ -306,5 +341,29 @@ func (s *Store) RunForeground(ctx context.Context, spec Spec, stdin io.Reader, s
 		_ = qemu.Wait()
 		return err
 	}
-	return qemu.Wait()
+	if bridge == nil {
+		return qemu.Wait()
+	}
+	waited := make(chan error, 1)
+	go func() { waited <- qemu.Wait() }()
+	select {
+	case err := <-waited:
+		return err
+	case err := <-bridge.done:
+		var disconnected qemuSerialDisconnect
+		if errors.As(err, &disconnected) {
+			// QEMU closes its socket before Wait observes a clean exit. Give
+			// that exit time to complete; never mask a physical COM failure.
+			timer := time.NewTimer(time.Second)
+			defer timer.Stop()
+			select {
+			case result := <-waited:
+				return result
+			case <-timer.C:
+			}
+		}
+		_ = qemu.Process.Kill()
+		<-waited
+		return err
+	}
 }

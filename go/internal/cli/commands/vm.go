@@ -34,7 +34,7 @@ func newVMCmd() *cobra.Command {
 	cmd.PersistentFlags().BoolVarP(&vmAssumeYes, "yes", "y", false,
 		"Accept prompts, including installing QEMU when it is missing")
 	cmd.AddCommand(newVMCreateCmd(), newVMStartCmd(), newVMStopCmd(),
-		newVMLogsCmd(), newVMListCmd(), newVMRemoveCmd(), newVMRobotCmd())
+		newVMLogsCmd(), newVMListCmd(), newVMRemoveCmd(), newVMRobotCmd(), newVMSerialCmd())
 	return cmd
 }
 

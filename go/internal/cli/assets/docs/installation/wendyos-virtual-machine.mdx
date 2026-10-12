@@ -18,9 +18,10 @@ natively, with none of the emulation an x86 machine pays when it cross-builds
 for a device.
 
 <Callout type="info">
-The VM exposes no physical camera, microphone, speaker, Bluetooth adapter, GPU, GPIO or USB
-devices. Unitree profiles publish simulated sensors over ROS 2. Physical peripheral access under **Hardware Access**
-needs a real device. The VM is for the software half of your project.
+The VM exposes no physical camera, microphone, speaker, Bluetooth adapter, GPU or GPIO.
+On Windows, you can opt in to one physical COM port through [managed serial passthrough](#windows-serial-passthrough).
+This is serial byte forwarding, not general USB passthrough. Unitree profiles publish simulated sensors over ROS 2.
+Other physical peripheral access under **Hardware Access** needs a real device.
 </Callout>
 
 ## What you'll need
@@ -425,3 +426,88 @@ need to recreate its disk.
 is emulated rather than accelerated, because the guest is ARM64 and the host is
 not. It still works; it is just slower. `wendy vm start` prints which mode it
 chose.
+
+
+## Windows serial passthrough
+
+A Windows host can forward one COM port to a WendyOS ARM64 VM as a QEMU USB serial
+adapter. Install the adapter's native Windows serial driver and QEMU for Windows
+with ARM64 UEFI firmware. Select the COM number from Device Manager and the exact
+baud required by your device. For example (replace the name, port and baud):
+
+```powershell
+wendy vm serial my-vm --port COM12 --baud 1000000
+wendy vm serial my-vm
+wendy vm start my-vm
+```
+
+The first command saves `serial.json` inside this VM's directory under the Wendy
+configuration directory. The second prints the mapping as JSON (`null` if none).
+Each foreground start loads the same mapping. Stop the VM before changing it.
+To disable passthrough, run `wendy vm serial my-vm --clear` while it is stopped.
+Configuration does not open the port; availability and driver support are checked
+at the next start.
+
+The host line is fixed at the requested baud, **8 data bits, no parity, one stop
+bit, no handshake, DTR and RTS disabled**. Wendy submits the exact baud to Windows
+and checks the driver's reported settings; it never selects a nearby baud. A
+successful readback cannot prove the adapter's actual electrical baud. Guest
+termios baud changes and modem-control commands do not change the host line.
+The bridge forwards binary bytes in both directions without line processing.
+
+The guest's existing `ftdi_sio` driver normally exposes `/dev/ttyUSB0`. Check the
+actual guest path, then grant your app its serial entitlement, for example:
+
+```json
+{"type":"serial","device":"ttyUSB0"}
+```
+
+No native Windows Wendy agent or guest image modification is required. Keep
+`wendy vm start` open in its terminal and use a second terminal for ordinary app
+commands targeting `--device vm:my-vm`. Windows background VM starts, including
+automatic starts through workflows that require detaching, remain unsupported;
+start the VM explicitly first. Windows does not yet have the managed QMP monitor:
+shut down inside the guest, use Ctrl-A then X, or explicitly cut power with
+`wendy vm stop my-vm --force`.
+
+Each VM gets a dynamically allocated listener bound only to `127.0.0.1`; the
+listener closes after QEMU connects. There is no LAN listener or fixed bridge
+port. Local processes are trusted: this TCP connection has no authentication.
+Windows opens the COM port exclusively, so two VMs cannot share the same port.
+Different VMs may use different COM ports (and must also have distinct forwarded
+agent ports, using `vm start --port` where necessary).
+
+Normal stop, QEMU exit and startup failures release the port and listener. A
+serial I/O error or cable disconnect that the Windows driver reports stops QEMU
+and prints an actionable error; reconnect the device and restart the VM. There
+is no silent reconnect. The launcher attaches serial-enabled QEMU to a Windows
+kill-on-job-close job, so abrupt launcher termination also terminates QEMU after
+job assignment. There is a small launch-to-assignment window because Go's process
+launcher cannot atomically assign that job. If the launcher is forcibly killed
+at that instant, check Task Manager for an orphaned QEMU before restarting.
+
+### Windows hardware verification
+
+Automated tests cover configuration, QEMU arguments, binary forwarding and
+lifecycle cleanup with fake serial endpoints. Cross-compilation does not validate
+Windows driver behavior. Verify the new CLI on the intended Windows machine:
+
+1. Record CLI, QEMU, Windows driver and guest versions. Configure the actual COM
+   port and required baud; confirm `vm serial` reports them after a fresh CLI invocation.
+2. Start the VM and verify the guest serial node. Use a loopback plug or the device's
+   documented read-only protocol to compare binary requests and replies, including
+   zero bytes and bytes above `0x7f`. Do not enable actuators for this check.
+3. Stop and start again without configuring serial. Confirm the same mapping and
+   successful traffic. Confirm another program can open the COM port after stopping.
+4. Try an unavailable port, a port held by another program, and a driver-rejected
+   baud. Expect explicit startup errors and no leftover QEMU, listener or COM handle.
+5. Unplug the adapter during traffic and while idle; confirm a reported driver
+   failure stops QEMU and frees resources. Reconnect and restart successfully.
+6. Test Ctrl-C, QEMU console exit, `vm stop --force`, and terminating the launcher
+   in Task Manager. Verify QEMU exits and the port can be reopened each time.
+7. If two adapters are available, run two VMs with different COM and agent ports;
+   verify isolation. A second VM using the first COM port must fail clearly.
+
+This scope is one serial device per Windows VM. Cameras, general USB capture,
+multiple serial mappings within one VM, and physical motor control validation
+are outside this feature.
