@@ -19,7 +19,7 @@ func TestSerialLaunchCleanup(t *testing.T) {
 		t.Run(scenario, func(t *testing.T) {
 			s := newTestStore(t)
 			spec := detachableSpec(t, s, "serial")
-			if err := s.ConfigureSerial("serial", &SerialConfig{"COM12", 1000000}); err != nil {
+			if err := s.ConfigureSerial("serial", &SerialConfig{testSerialPort(12), 1000000}); err != nil {
 				t.Fatal(err)
 			}
 			peer := fakeSerial(t)
@@ -94,7 +94,7 @@ func TestSerialLaunchCleanup(t *testing.T) {
 func TestSerialDetachedRejected(t *testing.T) {
 	s := newTestStore(t)
 	spec := detachableSpec(t, s, "serial")
-	if err := s.ConfigureSerial("serial", &SerialConfig{"COM12", 1000000}); err != nil {
+	if err := s.ConfigureSerial("serial", &SerialConfig{testSerialPort(12), 1000000}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.StartDetached(spec); err == nil || !strings.Contains(err.Error(), "foreground") {

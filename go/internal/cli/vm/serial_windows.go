@@ -4,12 +4,26 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"regexp"
 	"runtime"
+	"strings"
 	"sync"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
+
+var serialPortName = regexp.MustCompile(`^COM[1-9][0-9]*$`)
+
+func validateHostSerialPort(port string) error {
+	if !serialPortName.MatchString(port) {
+		return fmt.Errorf("invalid Windows serial port %q: use COM followed by its number", port)
+	}
+	return nil
+}
+
+// NormalizeSerialPort accepts the casing Device Manager users type.
+func NormalizeSerialPort(port string) string { return strings.ToUpper(strings.TrimSpace(port)) }
 
 // Use explicit overlapped I/O rather than os.NewFile: Windows COM handles are
 // not ordinary seekable files. Keep the handle immutable until all cancelled
