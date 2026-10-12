@@ -9,6 +9,7 @@ import (
 	"os"
 	"path"
 	"runtime"
+	"strconv"
 	"strings"
 
 	"go.bug.st/serial"
@@ -36,15 +37,13 @@ func exampleSerialPort() string {
 // NormalizeSerialPort leaves device paths alone: they are case-sensitive.
 func NormalizeSerialPort(port string) string { return strings.TrimSpace(port) }
 
-// serialModemBits drops DTR and RTS once the port is open. A variable only so
-// pseudo-terminal tests can skip it: ptys have no modem lines.
-var serialModemBits = &serial.ModemOutputBits{}
-
 // openHostSerial takes the advisory lock pyserial-based tools also take, then
 // opens the device raw at the exact baud. go.bug.st/serial sets TIOCEXCL and
 // clears RTS/CTS and XON/XOFF; a rate outside the standard table goes through
 // IOSSIOSPEED on macOS and BOTHER on Linux, and a driver that refuses it fails
-// the open rather than falling back to a nearby rate.
+// the open rather than falling back to a nearby rate. DTR and RTS are dropped
+// afterwards rather than through the library's initial bits, which fail the
+// whole open on devices without modem lines.
 func openHostSerial(c SerialConfig) (io.ReadWriteCloser, error) {
 	lock, err := seriallock.Acquire(c.Port)
 	if err != nil {
@@ -61,11 +60,10 @@ func openHostSerial(c SerialConfig) (io.ReadWriteCloser, error) {
 		return nil, fmt.Errorf("opening %s: %w", c.Port, err)
 	}
 	p, err := serial.Open(c.Port, &serial.Mode{
-		BaudRate:          int(c.Baud),
-		DataBits:          8,
-		Parity:            serial.NoParity,
-		StopBits:          serial.OneStopBit,
-		InitialStatusBits: serialModemBits,
+		BaudRate: int(c.Baud),
+		DataBits: 8,
+		Parity:   serial.NoParity,
+		StopBits: serial.OneStopBit,
 	})
 	if err != nil {
 		lock.Release()
@@ -80,7 +78,56 @@ func openHostSerial(c SerialConfig) (io.ReadWriteCloser, error) {
 		}
 		return nil, fmt.Errorf("configuring %s at exact %d baud, 8N1: %w; choose a baud the driver supports (no nearest-baud fallback)", c.Port, c.Baud, err)
 	}
+	if err := dropModemLines(p); err != nil {
+		_ = p.Close()
+		lock.Release()
+		return nil, fmt.Errorf("dropping DTR and RTS on %s: %w", c.Port, err)
+	}
+	if err := keepFromChildren(c.Port); err != nil {
+		_ = p.Close()
+		lock.Release()
+		return nil, fmt.Errorf("opening %s: %w", c.Port, err)
+	}
 	return &unixSerial{port: p, lock: lock}, nil
+}
+
+// keepFromChildren marks this process's descriptors on device close-on-exec.
+// go.bug.st/serial opens without O_CLOEXEC and does not expose its descriptor,
+// so the QEMU started next would inherit the port and keep it busy after the
+// launcher is gone. Only character devices with the same device number match.
+func keepFromChildren(device string) error {
+	var target unix.Stat_t
+	if err := unix.Stat(device, &target); err != nil {
+		return err
+	}
+	entries, err := os.ReadDir("/dev/fd")
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		fd, err := strconv.Atoi(e.Name())
+		if err != nil || fd <= 2 {
+			continue
+		}
+		var st unix.Stat_t
+		if unix.Fstat(fd, &st) != nil || st.Mode&unix.S_IFMT != unix.S_IFCHR || st.Rdev != target.Rdev {
+			continue
+		}
+		unix.CloseOnExec(fd)
+	}
+	return nil
+}
+
+// dropModemLines lowers DTR and RTS. Devices with no modem control at all
+// (pseudo-terminals, some virtual ports) reject the ioctl as unsupported;
+// there is nothing to lower there, so that alone is not a failure.
+func dropModemLines(p serial.Port) error {
+	for _, set := range []func(bool) error{p.SetDTR, p.SetRTS} {
+		if err := set(false); err != nil && !errors.Is(err, unix.ENOTTY) && !errors.Is(err, unix.EINVAL) {
+			return err
+		}
+	}
+	return nil
 }
 
 func serialPermissionHint() string {

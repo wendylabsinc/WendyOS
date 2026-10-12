@@ -195,7 +195,7 @@ func (b *serialBridge) report(c SerialConfig, err error) {
 	if err == nil {
 		err = io.EOF
 	}
-	b.done <- fmt.Errorf("VM serial %s at %d baud disconnected or forwarding failed: %w; check the cable and Windows driver, then restart the VM", c.Port, c.Baud, err)
+	b.done <- fmt.Errorf("VM serial %s at %d baud disconnected or forwarding failed: %w; check the cable and the host driver, then restart the VM", c.Port, c.Baud, err)
 }
 func (b *serialBridge) shutdown() {
 	b.once.Do(func() {

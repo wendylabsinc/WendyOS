@@ -8,16 +8,19 @@ import (
 	"io"
 	"net"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/creack/pty"
+	"golang.org/x/sys/unix"
 )
 
 // openTestTTY gives the real opener a terminal device to work on. The test
 // side holds the pty master: bytes written there arrive as device input, and
-// device output can be read back from it.
+// device output can be read back from it. A pty has no modem lines, so it
+// also covers opening devices like virtual ports that cannot drop DTR/RTS.
 func openTestTTY(t *testing.T) (master *os.File, device string) {
 	t.Helper()
 	m, s, err := pty.Open()
@@ -25,10 +28,6 @@ func openTestTTY(t *testing.T) (master *os.File, device string) {
 		t.Skipf("no pseudo-terminal: %v", err)
 	}
 	t.Cleanup(func() { _ = s.Close(); _ = m.Close() })
-	// Ptys have no modem lines to drop.
-	saved := serialModemBits
-	serialModemBits = nil
-	t.Cleanup(func() { serialModemBits = saved })
 	return m, s.Name()
 }
 
@@ -110,6 +109,47 @@ func TestHostSerialExclusiveUntilClosed(t *testing.T) {
 		t.Fatalf("device not released on close: %v", err)
 	}
 	again.Close()
+}
+
+// QEMU is started after the port opens; it must not inherit the device, or
+// the port stays busy for as long as QEMU runs after the launcher is gone.
+func TestHostSerialNotInheritedByChildren(t *testing.T) {
+	_, device := openTestTTY(t)
+	p, err := openHostSerial(SerialConfig{Port: device, Baud: 115200})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Close()
+	var target unix.Stat_t
+	if err := unix.Stat(device, &target); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := os.ReadDir("/dev/fd")
+	if err != nil {
+		t.Fatal(err)
+	}
+	checked := 0
+	for _, e := range entries {
+		fd, err := strconv.Atoi(e.Name())
+		if err != nil || fd <= 2 {
+			continue
+		}
+		var st unix.Stat_t
+		if unix.Fstat(fd, &st) != nil || st.Mode&unix.S_IFMT != unix.S_IFCHR || st.Rdev != target.Rdev {
+			continue
+		}
+		checked++
+		flags, err := unix.FcntlInt(uintptr(fd), unix.F_GETFD, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if flags&unix.FD_CLOEXEC == 0 {
+			t.Fatalf("descriptor %d on %s would be inherited by QEMU", fd, device)
+		}
+	}
+	if checked == 0 {
+		t.Fatal("found no descriptor on the device to check")
+	}
 }
 
 func TestHostSerialMissingDevice(t *testing.T) {
