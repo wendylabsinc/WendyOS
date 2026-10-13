@@ -1,6 +1,7 @@
 package localmesh
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -106,5 +107,64 @@ func TestPeerSelectionLANReplacesRadioAndSlowerLAN(t *testing.T) {
 	}
 	if p.AllowLAN(10, 256) {
 		t.Fatal("higher-cost LAN duplicate should be rejected")
+	}
+}
+
+func TestAllowRadioReasonNamesVetoBranch(t *testing.T) {
+	now := time.Now()
+	snapshot := NodeSnapshot{}
+	p := NewPeerSelection(func() NodeSnapshot { return snapshot })
+	p.now = func() time.Time { return now }
+
+	if allow, reason := p.AllowRadioReason(10, RadioBLE); !allow || reason != "first-radio" {
+		t.Fatalf("empty snapshot: allow=%v reason=%q", allow, reason)
+	}
+	if allow, _ := p.AllowRadioReason(0, RadioBLE); allow {
+		t.Fatal("invalid asset must be vetoed")
+	}
+
+	// LAN supersedes: same asset over cheap link.
+	snapshot.Links = []PeerLink{{Asset: 10, Cost: 64}}
+	if allow, reason := p.AllowRadioReason(10, RadioBLE); allow || reason != "lan-supersedes(cost=64)" {
+		t.Fatalf("LAN veto: allow=%v reason=%q", allow, reason)
+	}
+
+	// Peer cap: three distinct peers, asset absent.
+	snapshot.Links = []PeerLink{{Asset: 1, Cost: 512}, {Asset: 2, Cost: 512}, {Asset: 3, Cost: 512}}
+	if allow, reason := p.AllowRadioReason(10, RadioBLE); allow || reason != "peer-cap-no-slot(connected=3)" {
+		t.Fatalf("cap veto: allow=%v reason=%q", allow, reason)
+	}
+
+	// Second radio with full slots: asset present via NAN (cost 512), BLE queried.
+	snapshot.Links = []PeerLink{{Asset: 10, Cost: 512}, {Asset: 1, Cost: 512}, {Asset: 2, Cost: 512}}
+	if allow, reason := p.AllowRadioReason(10, RadioBLE); allow || reason != "second-radio-slots-full(connected=3)" {
+		t.Fatalf("second-radio veto: allow=%v reason=%q", allow, reason)
+	}
+
+	// Second radio displaced by a fresh different candidate.
+	snapshot.Links = []PeerLink{{Asset: 10, Cost: 512}, {Asset: 1, Cost: 512}}
+	p.Seen(2, RadioBLE)
+	if allow, reason := p.AllowRadioReason(10, RadioBLE); allow || reason != "second-radio-fresh-candidate(hint=2)" {
+		t.Fatalf("hint veto: allow=%v reason=%q", allow, reason)
+	}
+
+	// Failover kept once the hint expires.
+	now = now.Add(61 * time.Second)
+	if allow, reason := p.AllowRadioReason(10, RadioBLE); !allow || reason != "second-radio-failover-kept" {
+		t.Fatalf("failover: allow=%v reason=%q", allow, reason)
+	}
+
+	// Convergence: four concurrent assets, lowest-numbered radio loses.
+	snapshot.Links = []PeerLink{{Asset: 1, Cost: 512}, {Asset: 2, Cost: 512}, {Asset: 3, Cost: 512}, {Asset: 4, Cost: 512}}
+	if allow, reason := p.AllowRadioReason(4, RadioBLE); allow || !strings.HasPrefix(reason, "convergence-not-selected") {
+		t.Fatalf("convergence veto: allow=%v reason=%q", allow, reason)
+	}
+
+	// AllowRadio stays consistent with the reasoned decision everywhere above.
+	for _, tc := range [][2]int32{{10, 1}, {10, 2}, {1, 2}, {4, 2}} {
+		allow, _ := p.AllowRadioReason(tc[0], RadioMedium(tc[1]))
+		if allow != p.AllowRadio(tc[0], RadioMedium(tc[1])) {
+			t.Fatalf("AllowRadio disagrees with AllowRadioReason for asset=%d medium=%d", tc[0], tc[1])
+		}
 	}
 }

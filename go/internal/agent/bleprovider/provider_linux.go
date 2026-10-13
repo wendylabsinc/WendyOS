@@ -17,16 +17,21 @@ import (
 )
 
 type runtime struct {
-	cfg                  Config
-	uuid                 string
-	owner                string
-	hciIndex             int
-	ownerLookup          func(context.Context, *dbus.Conn) (string, error)
-	bus                  *dbus.Conn
-	freshness            *advertisementFreshness
-	mu                   sync.Mutex
-	active               map[int32]struct{}
-	nextAttempt          map[int32]time.Time
+	cfg         Config
+	uuid        string
+	owner       string
+	hciIndex    int
+	ownerLookup func(context.Context, *dbus.Conn) (string, error)
+	bus         *dbus.Conn
+	freshness   *advertisementFreshness
+	mu          sync.Mutex
+	active      map[int32]struct{}
+	nextAttempt map[int32]time.Time
+	// dialTimeouts counts consecutive dial-context timeouts per asset. Three
+	// in a row with no HCI progress means initiation itself is wedged (stale
+	// kernel hci_conn or a deaf peer), not merely a busy peer: only an
+	// explicit disconnect clears that state, redialing never does.
+	dialTimeouts         map[int32]int
 	links                sync.WaitGroup
 	dialSlot             chan struct{}
 	serverTLS            *tls.Config
@@ -48,6 +53,72 @@ func (r *runtime) hasCheaperLink(asset int32) bool {
 	return ok && checker.HasCheaperLink(asset, LinkCost)
 }
 
+// noteDialTimeout tracks consecutive dial-context timeouts per peer. Three in
+// a row escalates to a warning: initiation is wedged below the agent (stale
+// kernel hci_conn or a peer that never answers), and only an explicit
+// disconnect clears it — further redials just re-attach to the stuck state.
+func (r *runtime) noteDialTimeout(asset int32, timedOut bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.dialTimeouts == nil {
+		r.dialTimeouts = make(map[int32]int)
+	}
+	if !timedOut {
+		delete(r.dialTimeouts, asset)
+		return
+	}
+	r.dialTimeouts[asset]++
+	if r.dialTimeouts[asset] == 3 {
+		r.cfg.Logger.Warn("BLE initiation wedged: three consecutive dial timeouts; explicit disconnect required, redial will not clear it", zap.Int32("peer", asset))
+	}
+}
+
+func (r *runtime) clearDialTimeouts(asset int32) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.dialTimeouts, asset)
+}
+
+// cheaperLinkReason reports the veto branch behind a cheaper-link decision so
+// a torn-down link names the exact clause that fired.
+func (r *runtime) cheaperLinkReason(asset int32) string {
+	if r.cfg.Selection != nil {
+		_, reason := r.cfg.Selection.AllowRadioReason(asset, localmesh.RadioBLE)
+		return reason
+	}
+	return "legacy-checker"
+}
+
+// cheaperLinkReverify is the delay between a veto sample and its
+// confirmation. A single transient false evaluation (duplicate sighting,
+// fresh-hint churn, mid-formation snapshot skew) must not kill a new or
+// established link; a genuinely superseded link is still shed ~4s after the
+// tick that first noticed it.
+const cheaperLinkReverify = 3 * time.Second
+
+// confirmCheaperLink re-verifies a veto after a short delay and reports
+// whether it persisted for the full delay. Any abort (context done, stop
+// channel) reports false, and the caller must tear down without attaching:
+// an aborted wait is not a cleared veto. stop may be nil (dial/accept paths
+// have no stop channel); a nil channel simply never fires in the select.
+func (r *runtime) confirmCheaperLink(ctx context.Context, stop <-chan struct{}, asset int32) bool {
+	r.cfg.Logger.Debug("BLE cheaper-link decision pending re-verify", zap.Int32("peer", asset), zap.String("reason", r.cheaperLinkReason(asset)))
+	timer := time.NewTimer(cheaperLinkReverify)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-stop:
+		return false
+	case <-timer.C:
+	}
+	if !r.hasCheaperLink(asset) {
+		return false
+	}
+	r.cfg.Logger.Debug("BLE closing CoC on cheaper-link decision", zap.Int32("peer", asset), zap.String("reason", r.cheaperLinkReason(asset)))
+	return true
+}
+
 func (r *runtime) watchCheaperLink(ctx context.Context, asset int32, conn net.Conn) func() {
 	stop := make(chan struct{})
 	go func() {
@@ -60,8 +131,7 @@ func (r *runtime) watchCheaperLink(ctx context.Context, asset int32, conn net.Co
 			case <-stop:
 				return
 			case <-ticker.C:
-				if r.hasCheaperLink(asset) {
-					r.cfg.Logger.Debug("BLE closing CoC on cheaper-link decision", zap.Int32("peer", asset))
+				if r.hasCheaperLink(asset) && r.confirmCheaperLink(ctx, stop, asset) {
 					_ = conn.Close()
 					return
 				}
@@ -154,7 +224,7 @@ func Run(ctx context.Context, cfg Config) error {
 	if parseErr != nil {
 		cfg.Logger.Debug("BLE connection interval tuning unavailable", zap.Error(parseErr))
 	}
-	r := &runtime{cfg: cfg, uuid: uuid, owner: owner, hciIndex: hciIndex, ownerLookup: bluezOwner, bus: bus, freshness: freshness, active: make(map[int32]struct{}), nextAttempt: make(map[int32]time.Time), dialSlot: make(chan struct{}, 1), tlsGate: newTLSHandshakeAdmission()}
+	r := &runtime{cfg: cfg, uuid: uuid, owner: owner, hciIndex: hciIndex, ownerLookup: bluezOwner, bus: bus, freshness: freshness, active: make(map[int32]struct{}), nextAttempt: make(map[int32]time.Time), dialTimeouts: make(map[int32]int), dialSlot: make(chan struct{}, 1), tlsGate: newTLSHandshakeAdmission()}
 	r.serverTLS = r.makeServerTLS()
 	r.advertisementRefresh = make(chan struct{}, 1)
 	var loops sync.WaitGroup
@@ -264,7 +334,9 @@ func (r *runtime) acceptLink(ctx context.Context, raw net.Conn) {
 		r.cfg.Selection.Connected(peer, localmesh.RadioBLE)
 	}
 	if r.hasCheaperLink(peer) {
-		r.cfg.Logger.Debug("BLE closing inbound CoC on cheaper-link decision", zap.Int32("peer", peer))
+		if r.confirmCheaperLink(ctx, nil, peer) {
+			r.cfg.Logger.Debug("BLE closing inbound CoC on confirmed cheaper-link decision", zap.Int32("peer", peer))
+		}
 		_ = secure.Close()
 		return
 	}
@@ -404,7 +476,7 @@ func (r *runtime) maybeRestartDiscovery(ctx context.Context, bus *dbus.Conn, ada
 
 func (r *runtime) dialLink(ctx context.Context, peer candidate) {
 	if r.hasCheaperLink(peer.asset) {
-		r.cfg.Logger.Debug("BLE closing outbound CoC on cheaper-link decision", zap.Int32("peer", peer.asset))
+		r.cfg.Logger.Debug("BLE skipping dial on cheaper-link decision", zap.Int32("peer", peer.asset), zap.String("reason", r.cheaperLinkReason(peer.asset)))
 		return
 	}
 	// Serializing outgoing LE creation avoids accumulating simultaneous pending
@@ -450,8 +522,10 @@ func (r *runtime) dialLink(ctx context.Context, peer candidate) {
 		if r.cfg.Selection != nil {
 			r.cfg.Selection.Failed(peer.asset, localmesh.RadioBLE)
 		}
+		r.noteDialTimeout(peer.asset, errors.Is(err, context.DeadlineExceeded) && ctx.Err() != nil)
 		return
 	}
+	r.clearDialTimeouts(peer.asset)
 	<-r.dialSlot
 	slotHeld = false
 	// Closing the CoC socket alone can leave its LE ACL held by BlueZ. The
@@ -515,7 +589,10 @@ func (r *runtime) dialLink(ctx context.Context, peer candidate) {
 		r.cfg.Selection.Connected(peer.asset, localmesh.RadioBLE)
 	}
 	if r.hasCheaperLink(peer.asset) {
-		r.cfg.Logger.Debug("BLE closing outbound CoC on cheaper-link decision", zap.Int32("peer", peer.asset))
+		if r.confirmCheaperLink(ctx, nil, peer.asset) {
+			r.cfg.Logger.Debug("BLE closing outbound CoC on confirmed cheaper-link decision", zap.Int32("peer", peer.asset))
+		}
+		_ = secure.Close()
 		return
 	}
 	stopCheaperWatch := r.watchCheaperLink(ctx, peer.asset, secure)
