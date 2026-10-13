@@ -20,6 +20,7 @@ import (
 type nodePeer struct {
 	id      babel.LinkID
 	asset   int32
+	cost    uint16
 	conn    *quic.Conn
 	tun     *os.File
 	control chan ControlMessage
@@ -287,7 +288,7 @@ func (n *Node) handle(e nodeEvent) error {
 		e.add.sync.SeedKnownBundles(n.bundleHints.Known(e.add.asset, time.Now()))
 		n.peers[e.add.id] = e.add
 		local, peer, _ := LinkAddresses(n.Credentials.Asset, e.add.asset)
-		if err = n.step(babel.AddLink{Link: babel.Link{ID: e.add.id, Local: local, Peer: peer, Cost: 256, MaxPacket: DatagramLimit - 1}}); err != nil {
+		if err = n.step(babel.AddLink{Link: babel.Link{ID: e.add.id, Local: local, Peer: peer, Cost: e.add.cost, MaxPacket: DatagramLimit - 1}}); err != nil {
 			return err
 		}
 		n.queue(e.add, e.add.sync.Reconcile(time.Now()))
@@ -409,12 +410,21 @@ func (n *Node) request(ctx context.Context, e nodeEvent) error {
 // Attach owns the authenticated connection until return. No kernel interface is
 // created until protocol negotiation succeeds. Caller must use Credentials.PeerTLS.
 func (n *Node) Attach(ctx context.Context, asset int32, conn *quic.Conn) error {
+	return n.AttachWithCost(ctx, asset, conn, 256)
+}
+
+// AttachWithCost adds an authenticated carrier link with its Babel metric.
+// TCP uses 256, NAN 512, and slower carriers may supply a higher cost.
+func (n *Node) AttachWithCost(ctx context.Context, asset int32, conn *quic.Conn, cost uint16) error {
+	if cost == 0 || cost == ^uint16(0) {
+		return errors.New("invalid local-mesh link cost")
+	}
 	defer conn.CloseWithError(0, "local-mesh link ended")
 	stream, err := OpenControl(ctx, conn, n.Credentials.Org, n.Credentials.Asset, asset)
 	if err != nil {
 		return err
 	}
-	p := &nodePeer{asset: asset, conn: conn, control: make(chan ControlMessage, 128)}
+	p := &nodePeer{asset: asset, cost: cost, conn: conn, control: make(chan ControlMessage, 128)}
 	if err = n.request(ctx, nodeEvent{add: p}); err != nil {
 		return err
 	}
