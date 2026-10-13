@@ -17,7 +17,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/atomicfile"
 )
 
-var gatewayModels = map[string]bool{"thor": true, "go2": true, "orin": true, "dragonwing": true, "dgx": true, "macbook": true, "generic": true}
+var gatewayModels = map[string]bool{"thor": true, "go2": true, "so101": true, "orin": true, "dragonwing": true, "dgx": true, "macbook": true, "generic": true}
 var gatewaySettingsMu sync.Mutex
 var desktopToolNames = []string{"identify_device", "open_devices", "search_devices", "read_device_settings", "update_device_settings", "read_device_metrics", "read_device_logs", "list_device_triggers", "configure_device_trigger", "list_device_events", "wait_for_device_event", "read_device_notifications", "deploy_yolo_detector", "inspect_yolo_detector", "stop_yolo_detector"}
 
@@ -26,7 +26,7 @@ func gatewayModel(r GatewayRobot, deviceType string) string {
 		return r.Model
 	}
 	t := strings.NewReplacer("-", " ", "_", " ").Replace(strings.ToLower(deviceType))
-	for _, pair := range [][2]string{{"unitree g1", "g1"}, {"dgxspark", "dgx"}, {"dgx spark", "dgx"}, {"raspberry pi", "rpi"}, {"linux desktop", "desktop"}, {"agx thor", "thor"}, {"go2", "go2"}, {"orin nano", "orin"}, {"dragonwing", "dragonwing"}, {"macbook", "macbook"}} {
+	for _, pair := range [][2]string{{"so 101", "so101"}, {"so101", "so101"}, {"unitree g1", "g1"}, {"dgxspark", "dgx"}, {"dgx spark", "dgx"}, {"raspberry pi", "rpi"}, {"linux desktop", "desktop"}, {"agx thor", "thor"}, {"go2", "go2"}, {"orin nano", "orin"}, {"dragonwing", "dragonwing"}, {"macbook", "macbook"}} {
 		if strings.Contains(t, pair[0]) {
 			return pair[1]
 		}

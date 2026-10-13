@@ -18,7 +18,8 @@
     "desktop:build": "node scripts/desktop.mjs build",
     "desktop:start": "electron .",
     "desktop:package": "node scripts/desktop.mjs package",
-    "desktop:test": "node --test tests/desktop-*.test.mjs"
+    "desktop:test": "node --test tests/desktop-*.test.mjs",
+    "desktop:check": "tsc --project tsconfig.desktop.json"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",

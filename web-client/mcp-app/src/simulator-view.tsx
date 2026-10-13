@@ -56,7 +56,7 @@ export function SimulatorView({
         frameInterval: session.resource_uri ? 250 : 1000 / 20,
         pollAfterResponse: !!session.resource_uri,
         replayHistory: !!session.resource_uri,
-        viewOffset: profile === "g1" ? [2.4, -2.7, 1.5] : profile === "rosmaster-r2" ? [.85, -1.1, .72] : [1.35, -1.6, 0.95],
+        viewOffset: profile === "g1" ? [2.4, -2.7, 1.5] : profile === "so101" ? [.5, -.65, .4] : profile === "rosmaster-r2" ? [.85, -1.1, .72] : [1.35, -1.6, 0.95],
         request: async (path) => {
           const signal = lifetime.signal;
           try {

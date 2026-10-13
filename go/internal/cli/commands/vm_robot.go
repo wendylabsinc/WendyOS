@@ -25,15 +25,18 @@ import (
 	g1bundle "github.com/wendylabsinc/wendy/go/simulator/g1"
 	go2bundle "github.com/wendylabsinc/wendy/go/simulator/go2"
 	r2bundle "github.com/wendylabsinc/wendy/go/simulator/rosmaster_r2"
+	so101bundle "github.com/wendylabsinc/wendy/go/simulator/so101"
 )
 
 const (
-	go2RuntimeAppID = "sh.wendy.simulator.go2"
-	g1RuntimeAppID  = "sh.wendy.simulator.g1"
-	r2RuntimeAppID  = "sh.wendy.simulator.rosmaster-r2"
-	r2ModelBundle   = "r2-ackermann-kinematic-v1"
-	go2PolicyBundle = "go2-moe-cts-164k-0.6715-v1"
-	g1PolicyBundle  = "g1-29dof-velocity-v0-4960b847-v1"
+	go2RuntimeAppID   = "sh.wendy.simulator.go2"
+	g1RuntimeAppID    = "sh.wendy.simulator.g1"
+	so101RuntimeAppID = "sh.wendy.simulator.so101"
+	so101ModelBundle  = "so101-follower-a758567-v1"
+	r2RuntimeAppID    = "sh.wendy.simulator.rosmaster-r2"
+	r2ModelBundle     = "r2-ackermann-kinematic-v1"
+	go2PolicyBundle   = "go2-moe-cts-164k-0.6715-v1"
+	g1PolicyBundle    = "g1-29dof-velocity-v0-4960b847-v1"
 )
 
 type robotRuntime struct {
@@ -55,6 +58,12 @@ func robotRuntimeForKind(kind string) (robotRuntime, error) {
 			name: "Unitree G1", appID: g1RuntimeAppID, agentFeature: "g1-virtual-robot",
 			policyBundle: g1PolicyBundle, envPrefix: "G1_",
 			sourceDigest: g1bundle.SourceDigest, materialize: g1bundle.Materialize,
+		}, nil
+	case vm.RobotKindSO101:
+		return robotRuntime{
+			name: "LeRobot SO-101 follower", appID: so101RuntimeAppID, agentFeature: "so101-virtual-robot",
+			policyBundle: so101ModelBundle, envPrefix: "SO101_",
+			sourceDigest: so101bundle.SourceDigest, materialize: so101bundle.Materialize,
 		}, nil
 	case vm.RobotKindRosmasterR2:
 		return robotRuntime{
@@ -97,14 +106,15 @@ var pickSimulatorProfileFn = func() (string, error) {
 	return pickFromItems("Choose a simulator", []tui.PickerItem{
 		{Name: "Generic WendyOS", Description: "An ordinary VM for application development", Value: "generic"},
 		{Name: "Unitree Go2", Description: "A walking virtual robot with ROS 2 and a MuJoCo sandbox", Value: "go2"},
+		{Name: "LeRobot SO-101 follower", Description: "A virtual six-joint arm with a MuJoCo sandbox", Value: vm.RobotKindSO101},
 		{Name: "Unitree G1", Description: "A humanoid virtual robot with ROS 2 and a MuJoCo sandbox", Value: "g1"},
 		{Name: "Yahboom ROSMASTER R2", Description: "An Ackermann car with ROS 2 and a 3D driving sandbox", Value: vm.RobotKindRosmasterR2},
 	})
 }
 
 func validateSimulatorProfile(kind string) error {
-	if kind != "generic" && kind != vm.RobotKindGo2 && kind != vm.RobotKindG1 && kind != vm.RobotKindRosmasterR2 {
-		return fmt.Errorf("unsupported simulator profile %q; choose generic, go2, g1 or rosmaster-r2", kind)
+	if kind != "generic" && kind != vm.RobotKindGo2 && kind != vm.RobotKindG1 && kind != vm.RobotKindRosmasterR2 && kind != vm.RobotKindSO101 {
+		return fmt.Errorf("unsupported simulator profile %q; choose generic, go2, g1, so101 or rosmaster-r2", kind)
 	}
 	return nil
 }
@@ -203,11 +213,18 @@ type robotRuntimeStatus struct {
 	Epoch          uint64 `json:"epoch"`
 }
 
+func robotDDSIsolation(kind string) string {
+	if kind == vm.RobotKindSO101 {
+		return "disabled"
+	}
+	return "udp-rtps-loopback"
+}
+
 func (s robotRuntimeStatus) matches(name string, p vm.RobotProfile) error {
 	if s.VMName != name || !s.Simulation || s.ProfileVersion != p.Version || s.RobotKind != p.Kind ||
 		s.SourceDigest != p.SourceDigest || s.PolicyBundle != p.PolicyBundle || s.World != p.World ||
 		s.ClockMode != p.ClockMode || s.Seed != p.Seed || s.VisualDetail != p.VisualDetail ||
-		s.DDSIsolation != "udp-rtps-loopback" {
+		s.DDSIsolation != robotDDSIsolation(p.Kind) {
 		return fmt.Errorf("sandbox identity does not match this VM's robot profile")
 	}
 	return nil
@@ -544,7 +561,7 @@ func reconcileRobotLocked(ctx context.Context, conn *grpcclient.AgentConnection,
 	if _, err := userVMForConnection(conn); err != nil {
 		return err
 	}
-	cliLogln("Building and provisioning %s in %s (the first build downloads pinned assets and ROS dependencies)...", runtime.name, name)
+	cliLogln("Building and provisioning %s in %s (the first build downloads pinned assets and runtime dependencies)...", runtime.name, name)
 	err = runWithAgent(ctx, conn, source, cfg, runOptions{
 		managedRobot: true, buildType: "docker", builder: "docker", dockerfile: "Dockerfile",
 		detach: true, yes: true, restartUnlessStopped: true,
@@ -694,14 +711,14 @@ func newVMRobotCmd() *cobra.Command {
 	configure := &cobra.Command{
 		Use:   "configure <name>",
 		Short: "Attach a robot profile to an existing VM",
-		Long: "Attach a Go2, G1 or ROSMASTER R2 profile to an existing VM, pinning this CLI's robot runtime. " +
+		Long: "Attach a Go2, G1, SO-101 or ROSMASTER R2 profile to an existing VM, pinning this CLI's robot runtime. " +
 			"Existing robot profiles are never replaced.\n\n" +
 			"This records the profile without booting or restarting the VM. " +
 			"Run 'wendy vm robot start <name>' to build and start the robot runtime.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(c *cobra.Command, args []string) error { return runVMRobot(c, "configure", args[0]) },
 	}
-	configure.Flags().String("profile", vm.RobotKindGo2, "Robot profile: go2, g1 or rosmaster-r2")
+	configure.Flags().String("profile", vm.RobotKindGo2, "Robot profile: go2, g1, so101 or rosmaster-r2")
 	cmd.AddCommand(configure)
 	for _, action := range []string{"status", "open", "reset", "start", "restart", "update"} {
 		cmd.AddCommand(&cobra.Command{
@@ -845,7 +862,7 @@ func prepareRobotAppConfig(conn *grpcclient.AgentConnection, cfg *appconfig.AppC
 	if !exists {
 		return cfg, nil
 	}
-	if cfg.AppID == go2RuntimeAppID || cfg.AppID == g1RuntimeAppID || cfg.AppID == r2RuntimeAppID {
+	if cfg.AppID == go2RuntimeAppID || cfg.AppID == g1RuntimeAppID || cfg.AppID == r2RuntimeAppID || cfg.AppID == so101RuntimeAppID {
 		return nil, fmt.Errorf("%s is reserved for the managed robot; use 'wendy vm robot update %s'", cfg.AppID, conn.SimulatorName)
 	}
 	configured, err := applyRobotSimulationConfig(cfg, profile.Kind)

@@ -1,0 +1,59 @@
+name: SO-101 simulator
+on:
+  pull_request:
+    paths:
+      - 'go/simulator/so101/**'
+      - 'go/internal/cli/vm/**'
+      - 'go/internal/agent/services/go2_feature*'
+      - 'go/internal/cli/commands/vm*'
+      - 'go/internal/cli/mcp/**'
+      - 'web-client/desktop/**'
+      - 'web-client/tsconfig.desktop.json'
+      - 'web-client/electron/**'
+      - 'web-client/mcp-app/**'
+      - '.github/workflows/so101-simulator.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  linux:
+    name: Linux ${{ matrix.arch }} host contracts and OSMesa
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: amd64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - name: Install CLI system dependencies
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libusb-1.0-0-dev pkg-config
+      - name: Linux host profile, VM backend, gateway and source-cache contracts
+        run: go test ./go/internal/cli/vm ./go/internal/cli/commands ./go/internal/cli/mcp ./go/internal/shared/appconfig ./go/simulator/... -count=1 -timeout=180s
+      - name: Build the shipped runtime on the native CPU architecture
+        run: docker build -t so101-ci go/simulator/so101
+      - name: Real physics, API and CPU rendering tests in the shipped image
+        run: |
+          docker run --rm --cpus 2 --memory 2g \
+            -e SO101_RENDER_TEST=1 -e PYTHONPATH=/opt/wendy-so101 \
+            -v "$PWD/go/simulator/so101/tests:/tests:ro" \
+            so101-ci sh -c 'pip install --no-cache-dir pytest==8.4.2 httpx==0.28.1 && pytest -q -p no:cacheprovider /tests'
+  viewer:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+      - run: npm ci && npm run check && npm test && npm run build
+        working-directory: web-client/mcp-app
+      - run: npm ci --ignore-scripts --omit=optional && npm run desktop:check && npm run desktop:test
+        working-directory: web-client

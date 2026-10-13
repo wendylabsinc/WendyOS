@@ -1,0 +1,42 @@
+---
+title: SO-101 follower simulator
+description: Run a virtual six-joint LeRobot SO-101 arm on macOS or Linux.
+---
+
+The built-in `so101` profile runs the official SO-101 follower model in MuJoCo.
+It is virtual only and needs no physical arm, USB device, camera or GPU.
+
+```bash
+wendy vm create arm-sim --profile so101
+wendy vm robot start arm-sim
+wendy vm robot status arm-sim
+wendy vm robot open arm-sim
+wendy vm robot reset arm-sim
+```
+
+Creation leaves the VM stopped. Starting or connecting to `vm:arm-sim` builds
+and starts its managed runtime. The first start downloads pinned model assets
+and runtime dependencies. The viewer has six joint sliders, pause, reset and
+a wave demo. The MCP App provides an observer view; open the browser viewer
+for joint commands.
+
+You can also choose SO-101 under `wendy discover` → Simulator → Create.
+`wendy vm robot restart arm-sim` recovers runtime failures, while
+`wendy vm robot update arm-sim` applies the current CLI's runtime source.
+Stop only this VM with `wendy vm stop arm-sim`.
+
+The guest agent must advertise `so101-virtual-robot`. If it does not, the CLI
+provides an update command. For a development build, target the VM explicitly:
+
+```bash
+wendy --device vm:arm-sim device update --binary /absolute/path/to/linux-arm64/wendy-agent
+```
+
+Use the existing QEMU VM setup on macOS or Linux. Apple Silicon uses HVF;
+ARM64 Linux uses KVM when available. Linux hosts using software ARM64
+emulation are slower. The default profile requests 4 CPUs and 4096 MiB.
+
+The model comes from TheRobotStudio/SO-ARM100 revision
+`a758567c3978dfeefe282ede0500085a48fe8f78`; its Apache-2.0 license, attribution
+and SHA-256 manifest ship with the runtime. No physical-arm control or
+real/sim switching is included.

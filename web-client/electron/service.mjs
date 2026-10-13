@@ -61,7 +61,7 @@ export class DesktopService {
 
   async initialize() {
     this.sources = {};
-    for (const kind of ["go2", "g1"]) {
+    for (const kind of ["go2", "g1", "so101"]) {
       const digest = (
         await readFile(join(this.resources, `${kind}-digest.txt`), "utf8")
       ).trim();
@@ -560,7 +560,7 @@ export class DesktopService {
       "/api/scene/lidar",
       "/camera.jpg",
     ];
-    const writes = [
+    const writes = sim.kind === "so101" ? ["pose", "pause", "reset", "demo"].map((action) => `/api/${action}`) : [
       "arm",
       "release",
       "stop",
@@ -682,7 +682,7 @@ export class DesktopService {
             args: [
               "build",
               "--platform",
-              "linux/arm64",
+              kind === "so101" && process.arch === "x64" ? "linux/amd64" : "linux/arm64",
               "--tag",
               source.image,
               ".",
@@ -734,7 +734,7 @@ export class DesktopService {
               args: [
                 "build",
                 "--platform",
-                "linux/arm64",
+                kind === "so101" && process.arch === "x64" ? "linux/amd64" : "linux/arm64",
                 "--tag",
                 source.image,
                 ".",

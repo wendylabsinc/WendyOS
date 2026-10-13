@@ -1,7 +1,7 @@
 import type { DeviceLogsAPI } from "./log-types";
 
 export type Runtime = "docker" | "apple-container";
-export type SimulatorKind = "go2" | "g1" | "raspberry-pi";
+export type SimulatorKind = "go2" | "g1" | "so101" | "raspberry-pi";
 export type VirtualMachine = {
   name: string;
   state: string;

@@ -203,8 +203,8 @@ func (sim *SimulationConfig) validate(prefix string) error {
 	if sim == nil {
 		return nil
 	}
-	if sim.Profile != "rosmaster-r2" && sim.Profile != "go2" && sim.Profile != "g1" {
-		return fmt.Errorf("%s.profile: expected rosmaster-r2, go2 or g1", prefix)
+	if sim.Profile != "rosmaster-r2" && sim.Profile != "go2" && sim.Profile != "g1" && sim.Profile != "so101" {
+		return fmt.Errorf("%s.profile: expected rosmaster-r2, go2, g1 or so101", prefix)
 	}
 	if len(sim.Entitlements) == 0 {
 		return fmt.Errorf("%s.entitlements: explicitly declare the simulator grants", prefix)

@@ -54,6 +54,7 @@ function profileLabel(profile?: string) {
       ? "Unitree G1"
       : profile === "rosmaster-r2"
         ? "ROSMaster R2"
+        : profile === "so101" ? "LeRobot SO-101 follower"
         : "WendyOS";
 }
 
@@ -69,7 +70,7 @@ export function SimulatorsPanel({ enabled, onChanged }: SimulatorsPanelProps) {
   const profileId = useId();
   const [simulators, setSimulators] = useState<Simulator[]>([]);
   const [name, setName] = useState("go2-sim");
-  const [profile, setProfile] = useState<"go2" | "g1" | "rosmaster-r2" | "generic">("go2");
+  const [profile, setProfile] = useState<"go2" | "g1" | "so101" | "rosmaster-r2" | "generic">("go2");
   const [busy, setBusy] = useState("");
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
@@ -224,7 +225,7 @@ export function SimulatorsPanel({ enabled, onChanged }: SimulatorsPanelProps) {
     setStatus(
       `${simulatorName} start finished. Check the reported state below.`,
     );
-    if (simulatorProfile === "go2" || simulatorProfile === "g1" || simulatorProfile === "rosmaster-r2") {
+    if (simulatorProfile === "go2" || simulatorProfile === "g1" || simulatorProfile === "so101" || simulatorProfile === "rosmaster-r2") {
       // Failure to open a viewer must not make an already completed start look failed.
       try {
         const next = await inspectViewer(simulatorName, current, true);
@@ -346,7 +347,7 @@ export function SimulatorsPanel({ enabled, onChanged }: SimulatorsPanelProps) {
           </ol>
           <p>
             Once connected, you can create a WendyOS VM and launch a Unitree Go2
-            G1, or ROSMaster R2 simulation on your laptop.
+            G1, SO-101, or ROSMaster R2 simulation on your laptop.
           </p>
         </div>
       </section>
@@ -427,6 +428,7 @@ export function SimulatorsPanel({ enabled, onChanged }: SimulatorsPanelProps) {
             >
               <option value="go2">Unitree Go2 · MuJoCo</option>
               <option value="g1">Unitree G1 · MuJoCo</option>
+              <option value="so101">LeRobot SO-101 follower · MuJoCo</option>
               <option value="rosmaster-r2">ROSMaster R2 · Ackermann</option>
               <option value="generic">WendyOS VM</option>
             </select>
@@ -464,7 +466,7 @@ export function SimulatorsPanel({ enabled, onChanged }: SimulatorsPanelProps) {
           const running = state === "running";
           const stopped = state === "stopped";
           const robot =
-            simulator.profile === "go2" || simulator.profile === "g1" || simulator.profile === "rosmaster-r2";
+            simulator.profile === "go2" || simulator.profile === "g1" || simulator.profile === "so101" || simulator.profile === "rosmaster-r2";
           return (
             <li className="simulator-card" key={simulator.name}>
               <div className="simulator-card-heading">

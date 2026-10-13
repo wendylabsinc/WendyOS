@@ -64,8 +64,8 @@ func (o SimulatorCreateOptions) Validate() error {
 	if err := vm.ValidName(o.Name); err != nil {
 		return err
 	}
-	if o.Profile != "generic" && o.Profile != "go2" && o.Profile != "g1" && o.Profile != "rosmaster-r2" {
-		return fmt.Errorf("profile must be generic, go2, g1 or rosmaster-r2")
+	if o.Profile != "generic" && o.Profile != "go2" && o.Profile != "g1" && o.Profile != "rosmaster-r2" && o.Profile != "so101" {
+		return fmt.Errorf("profile must be generic, go2, g1, so101 or rosmaster-r2")
 	}
 	if o.DiskGiB < 1 || o.DiskGiB > 1024 {
 		return fmt.Errorf("disk_gib must be an integer in 1..1024")
@@ -97,7 +97,7 @@ func (s *mcpServer) registerSimulatorTools(srv *server.MCPServer) {
 	create := []mcpgo.ToolOption{
 		mcpgo.WithDescription("Create a stopped local simulator from a published or local image. Downloads may take several minutes. Connect to its vm:name selector to boot it and provision its robot profile."),
 		mcpgo.WithString("name", mcpgo.Required(), mcpgo.Description("1–32 lowercase letters, digits or dashes; starts and ends with a letter or digit")),
-		mcpgo.WithString("profile", mcpgo.Enum("generic", "go2", "g1", "rosmaster-r2"), mcpgo.DefaultString("generic")),
+		mcpgo.WithString("profile", mcpgo.Enum("generic", "go2", "g1", "so101", "rosmaster-r2"), mcpgo.DefaultString("generic")),
 		mcpgo.WithString("image", mcpgo.Description("Local raw, ZIP, gzip or zstd image path; mutually exclusive with version")),
 		mcpgo.WithString("version", mcpgo.Description("Published version; omitted downloads latest stable")),
 		mcpgo.WithInteger("disk_gib", mcpgo.Min(1), mcpgo.Max(1024), mcpgo.DefaultNumber(16)),

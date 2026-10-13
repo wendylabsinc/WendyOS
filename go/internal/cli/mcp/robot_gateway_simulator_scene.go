@@ -195,7 +195,7 @@ func (g *RobotGateway) openSimulatorScene(ctx context.Context, viewer *Simulator
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	if !g.localSimulatorAllowed(ctx) || !viewer.Ready || !viewer.Healthy || (viewer.Profile != "go2" && viewer.Profile != "g1" && viewer.Profile != "rosmaster-r2") {
+	if !g.localSimulatorAllowed(ctx) || !viewer.Ready || !viewer.Healthy || (viewer.Profile != "go2" && viewer.Profile != "g1" && viewer.Profile != "rosmaster-r2" && viewer.Profile != "so101") {
 		return nil, fmt.Errorf("a healthy local robot simulation is required")
 	}
 	target, err := simulatorSceneTarget(viewer.URL)

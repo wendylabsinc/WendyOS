@@ -27,8 +27,8 @@ export function simulatorName(value) {
 }
 
 export function simulatorKind(value = "go2") {
-  if (!["go2", "g1", "raspberry-pi"].includes(value))
-    throw new Error("Choose Go2, G1, or Raspberry Pi app simulation.");
+  if (!["go2", "g1", "so101", "raspberry-pi"].includes(value))
+    throw new Error("Choose Go2, G1, SO-101, or Raspberry Pi app simulation.");
   return value;
 }
 

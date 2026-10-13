@@ -53,7 +53,7 @@ const simulatorName = (kind: SimulatorKind) =>
     ? "Raspberry Pi app simulation"
     : kind === "g1"
       ? "G1"
-      : "Go2";
+      : kind === "so101" ? "SO-101" : "Go2";
 const errorMessage = (error: unknown) =>
   error instanceof Error ? error.message : String(error);
 type View = "workspace" | "devices" | "containers" | "flash";
@@ -479,6 +479,7 @@ function Workspace({ api }: { api: DesktopAPI }) {
                       >
                         <option value="go2">Unitree Go2</option>
                         <option value="g1">Unitree G1</option>
+                        <option value="so101">LeRobot SO-101 follower</option>
                         <option value="raspberry-pi">
                           Raspberry Pi apps · WendyOS VM
                         </option>
@@ -540,7 +541,7 @@ function Workspace({ api }: { api: DesktopAPI }) {
                         ? "Build and run Raspberry Pi ARM64 apps, follow device logs, and open Dashboard to inspect CPU, memory, and containers. Hardware peripherals are not emulated."
                         : simulator
                           ? "The live viewer opens when the robot reports healthy and ready. Follow startup in the session below."
-                          : "Launch a Go2 or G1 with a live 3D viewer, or a WendyOS virtual machine for Raspberry Pi app development."}
+                          : "Launch a Go2, G1 or SO-101 with a live 3D viewer, or a WendyOS virtual machine for Raspberry Pi app development."}
                     </p>
                     {simulator?.error && (
                       <details>

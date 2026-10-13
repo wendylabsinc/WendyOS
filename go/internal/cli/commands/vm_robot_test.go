@@ -63,7 +63,7 @@ func robotTestStatus(name string, p vm.RobotProfile) robotRuntimeStatus {
 	return robotRuntimeStatus{VMName: name, Simulation: true, ProfileVersion: p.Version,
 		RobotKind: p.Kind, SourceDigest: p.SourceDigest, PolicyBundle: p.PolicyBundle,
 		World: p.World, ClockMode: p.ClockMode, Seed: p.Seed, VisualDetail: p.VisualDetail,
-		DDSIsolation: "udp-rtps-loopback", Healthy: true, Ready: true, Mode: "standing"}
+		DDSIsolation: robotDDSIsolation(p.Kind), Healthy: true, Ready: true, Mode: "standing"}
 }
 
 func TestRobotStatusRejectsForeignRuntimeAndUnconfinedDDS(t *testing.T) {
@@ -452,7 +452,7 @@ func TestRobotConfigureG1SelectsItsOwnBundleAndPreservesOtherVMs(t *testing.T) {
 }
 
 func TestRobotBundleEnvironmentRetainsGo2AndSeparatesG1(t *testing.T) {
-	for _, kind := range []string{vm.RobotKindGo2, vm.RobotKindG1, vm.RobotKindRosmasterR2} {
+	for _, kind := range []string{vm.RobotKindGo2, vm.RobotKindG1, vm.RobotKindRosmasterR2, vm.RobotKindSO101} {
 		t.Run(kind, func(t *testing.T) {
 			runtime, err := robotRuntimeForKind(kind)
 			if err != nil {
@@ -463,7 +463,7 @@ func TestRobotBundleEnvironmentRetainsGo2AndSeparatesG1(t *testing.T) {
 				t.Fatal(err)
 			}
 			profile.Seed, profile.VisualDetail = 42, "full"
-			prefix := map[string]string{"go2": "GO2_", "g1": "G1_", "rosmaster-r2": "R2_"}[kind]
+			prefix := map[string]string{"go2": "GO2_", "g1": "G1_", "rosmaster-r2": "R2_", "so101": "SO101_"}[kind]
 			want := []string{prefix + "VM_NAME=robot", prefix + "SOURCE_DIGEST=" + profile.SourceDigest,
 				prefix + "WORLD=indoor", prefix + "SEED=42", prefix + "VISUAL_DETAIL=full"}
 			if got := runtime.environment("robot", profile); !reflect.DeepEqual(got, want) {
@@ -473,7 +473,7 @@ func TestRobotBundleEnvironmentRetainsGo2AndSeparatesG1(t *testing.T) {
 			if err := state.matches("robot", profile); err != nil {
 				t.Fatal(err)
 			}
-			state.RobotKind = map[string]string{"go2": "g1", "g1": "go2", "rosmaster-r2": "go2"}[kind]
+			state.RobotKind = map[string]string{"go2": "g1", "g1": "go2", "rosmaster-r2": "go2", "so101": "go2"}[kind]
 			if err := state.matches("robot", profile); err == nil {
 				t.Fatal("accepted another robot kind with copied profile identity")
 			}
@@ -482,7 +482,7 @@ func TestRobotBundleEnvironmentRetainsGo2AndSeparatesG1(t *testing.T) {
 }
 
 func TestRobotUpdateSelectsOnlyThePersistedKindsSource(t *testing.T) {
-	for _, kind := range []string{vm.RobotKindGo2, vm.RobotKindG1, vm.RobotKindRosmasterR2} {
+	for _, kind := range []string{vm.RobotKindGo2, vm.RobotKindG1, vm.RobotKindRosmasterR2, vm.RobotKindSO101} {
 		t.Run(kind, func(t *testing.T) {
 			store := robotTestStore(t)
 			profile := robotTestProfileForKind(t, store, "robot", kind)
@@ -508,7 +508,7 @@ func TestRobotUpdateSelectsOnlyThePersistedKindsSource(t *testing.T) {
 }
 
 func TestRobotKindsReserveBothRuntimeIDsAndSelectOnlyTheirOwnContainer(t *testing.T) {
-	for _, kind := range []string{vm.RobotKindGo2, vm.RobotKindG1, vm.RobotKindRosmasterR2} {
+	for _, kind := range []string{vm.RobotKindGo2, vm.RobotKindG1, vm.RobotKindRosmasterR2, vm.RobotKindSO101} {
 		t.Run(kind, func(t *testing.T) {
 			store := robotTestStore(t)
 			robotTestProfileForKind(t, store, "robot", kind)
@@ -516,7 +516,7 @@ func TestRobotKindsReserveBothRuntimeIDsAndSelectOnlyTheirOwnContainer(t *testin
 			if err != nil {
 				t.Fatal(err)
 			}
-			for _, appID := range []string{go2RuntimeAppID, g1RuntimeAppID, r2RuntimeAppID} {
+			for _, appID := range []string{go2RuntimeAppID, g1RuntimeAppID, r2RuntimeAppID, so101RuntimeAppID} {
 				conn := &grpcclient.AgentConnection{SimulatorName: "robot"}
 				cfg := &appconfig.AppConfig{AppID: appID}
 				if _, err := prepareRobotAppConfig(conn, cfg, nil); err == nil || !strings.Contains(err.Error(), "reserved") {
@@ -686,7 +686,7 @@ func (*robotStartedStream) Recv() (*agentpb.RunContainerLayersResponse, error) {
 }
 
 func TestRobotRestartRecoversUnhealthyRuntimeAndSerializesProvisioning(t *testing.T) {
-	for _, kind := range []string{vm.RobotKindGo2, vm.RobotKindG1, vm.RobotKindRosmasterR2} {
+	for _, kind := range []string{vm.RobotKindGo2, vm.RobotKindG1, vm.RobotKindRosmasterR2, vm.RobotKindSO101} {
 		t.Run(kind, func(t *testing.T) {
 			store := robotTestStore(t)
 			profile := robotTestProfileForKind(t, store, "robot", kind)
