@@ -53,6 +53,45 @@ func TestRuntimePinnedTLS13PeerOrder(t *testing.T) {
 	}
 }
 
+func TestRuntimeCatalogALPNRollingUpgrade(t *testing.T) {
+	f := newFixture(t)
+	serverCatalog, _ := f.newCatalog(t, 534, "default", nil, nil)
+	server, _ := NewRuntime(serverCatalog, func() localmesh.NodeSnapshot { return localmesh.NodeSnapshot{} })
+	for _, tc := range []struct {
+		name, want string
+		serverALPN []string
+	}{
+		{name: "new-to-new", want: syncALPNv2, serverALPN: []string{syncALPNv2, syncALPN}},
+		{name: "new-to-old", want: syncALPN, serverALPN: []string{syncALPN}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			left, right := net.Pipe()
+			defer left.Close()
+			defer right.Close()
+			_ = left.SetDeadline(time.Now().Add(5 * time.Second))
+			_ = right.SetDeadline(time.Now().Add(5 * time.Second))
+			serverConfig := server.serverTLS()
+			serverConfig.NextProtos = tc.serverALPN
+			serverResult := make(chan error, 1)
+			go func() { serverResult <- tls.Server(right, serverConfig).Handshake() }()
+			clientConfig, err := f.creds[533].PeerTLS(534)
+			if err != nil {
+				t.Fatal(err)
+			}
+			clientConfig.NextProtos = []string{syncALPNv2, syncALPN}
+			client := tls.Client(left, clientConfig)
+			clientErr := client.Handshake()
+			serverErr := <-serverResult
+			if clientErr != nil || serverErr != nil {
+				t.Fatalf("catalog mTLS: client=%v server=%v", clientErr, serverErr)
+			}
+			if got := client.ConnectionState().NegotiatedProtocol; got != tc.want {
+				t.Fatalf("negotiated %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func waitCatalog(t *testing.T, c *Catalog, count int) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
@@ -140,6 +179,50 @@ func TestRuntimeThreeHopPartitionAndReconcile(t *testing.T) {
 	defer bc3.Close()
 	defer bc4.Close()
 	waitCatalog(t, c, 0)
+}
+
+func TestProjectionReadyWaitsForOriginTombstoneSnapshot(t *testing.T) {
+	f := newFixture(t)
+	viewer, cache := f.newCatalog(t, 533, "default", nil, nil)
+	origin, _ := f.newCatalog(t, 535, "default", nil, nil)
+	if _, err := cache.Put(f.creds[535].Certificate.Certificate, f.now); err != nil {
+		t.Fatal(err)
+	}
+	wire, err := origin.Publish(testSpec(), f.now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := viewer.Accept(wire, f.now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := origin.Remove(testSpec().AppID, testSpec().ServiceID, f.now.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	view := bridgeRouteView(t, f.now, 535)
+	ra, _ := NewRuntime(viewer, func() localmesh.NodeSnapshot { return view })
+	rc, _ := NewRuntime(origin, func() localmesh.NodeSnapshot { return localmesh.NodeSnapshot{} })
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	left, right := net.Pipe()
+	defer left.Close()
+	defer right.Close()
+	go ra.session(ctx, 535, left)
+	go rc.session(ctx, 533, right)
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if ra.ProjectionReady(535) {
+			if len(viewer.Snapshot(time.Now())) != 0 {
+				t.Fatal("origin snapshot marked ready before its tombstone was admitted")
+			}
+			ra.InvalidateProjection(535)
+			if ra.ProjectionReady(535) {
+				t.Fatal("invalidated route retained catalog projection readiness")
+			}
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("catalog origin snapshot never completed")
 }
 
 // Force a write failure while the reader is blocked handing off decoded

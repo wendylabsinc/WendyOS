@@ -13,6 +13,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/wendylabsinc/wendy/go/internal/agent/hostnetwork"
 )
 
 type policyRule struct {
@@ -25,8 +27,7 @@ type policyRule struct {
 type HostPolicy struct {
 	asset                                      int32
 	base, share                                []policyRule
-	previousForward                            string
-	forwardChanged                             bool
+	forwardingKey                              string
 	dns                                        *exec.Cmd
 	dnsDone                                    chan error
 	sharing                                    string
@@ -119,17 +120,11 @@ func NewHostPolicy(ctx context.Context, asset int32) (p *HostPolicy, err error) 
 	if err = cleanupOwnedPolicyRules(ctx); err != nil {
 		return nil, err
 	}
-	previous, err := os.ReadFile("/proc/sys/net/ipv4/ip_forward")
-	if err != nil {
-		return nil, err
+	p.forwardingKey = fmt.Sprintf("mesh:%p", p)
+	if err = hostnetwork.AcquireForwarding(p.forwardingKey); err != nil {
+		return p, err
 	}
-	p.previousForward = string(previous)
 	add := func(args ...string) error { return p.add(ctx, false, "filter", "FORWARD", args...) }
-	if strings.TrimSpace(p.previousForward) != "1" {
-		if err = add("-j", "DROP"); err != nil {
-			return p, err
-		}
-	}
 	if err = add("-i", "wlmp+", "-j", "DROP"); err != nil {
 		return p, err
 	}
@@ -146,12 +141,6 @@ func NewHostPolicy(ctx context.Context, asset int32) (p *HostPolicy, err error) 
 		if err = add("-i", "wlmp+", "-d", subnet, "-j", "REJECT"); err != nil {
 			return p, err
 		}
-	}
-	if strings.TrimSpace(p.previousForward) != "1" {
-		if err = os.WriteFile("/proc/sys/net/ipv4/ip_forward", []byte("1\n"), 0600); err != nil {
-			return p, err
-		}
-		p.forwardChanged = true
 	}
 	return p, nil
 }
@@ -283,13 +272,12 @@ func (p *HostPolicy) Close() error {
 	defer cancel()
 	var errs []error
 	errs = append(errs, p.SetDNS(ctx, "", ""), p.stopSharing(ctx))
-	if p.forwardChanged {
-		current, err := os.ReadFile("/proc/sys/net/ipv4/ip_forward")
-		if err == nil && strings.TrimSpace(string(current)) == "1" {
-			err = os.WriteFile("/proc/sys/net/ipv4/ip_forward", []byte(p.previousForward), 0600)
+	if p.forwardingKey != "" {
+		if err := hostnetwork.ReleaseForwarding(p.forwardingKey); err != nil {
+			errs = append(errs, err)
+		} else {
+			p.forwardingKey = ""
 		}
-		errs = append(errs, err)
-		p.forwardChanged = false
 	}
 	var removeErr error
 	p.base, removeErr = p.remove(ctx, p.base)
