@@ -1584,18 +1584,25 @@ func (m tourWizardModel) viewAIMCPSetup(w int) string {
 	if len(m.mcpSetupResult) == 0 {
 		sb.WriteString(wizSubStyle.Render("Configuring…") + "\n")
 	} else {
+		restart := false
 		for _, r := range m.mcpSetupResult {
-			if r.err != nil {
+			switch {
+			case r.err != nil:
 				sb.WriteString(wizErrorStyle.Render(fmt.Sprintf("✗ %s: %v", r.tool, r.err)) + "\n")
-			} else {
+			case r.note != "":
+				sb.WriteString(wizSuccessStyle.Render(mcpSetupResultLine(r)) + "\n")
+			default:
+				restart = true
 				sb.WriteString(wizSuccessStyle.Render(fmt.Sprintf("✓ %s configured", r.tool)) + "\n")
 			}
 		}
 		sb.WriteString("\n")
-		sb.WriteString(wizBodyStyle.Width(w).Render(
-			"Restart your AI assistant to activate the Wendy MCP server.\n"+
-				"It will then have tools to list devices, manage containers,\n"+
-				"read telemetry, and more.") + "\n\n")
+		if restart {
+			sb.WriteString(wizBodyStyle.Width(w).Render(
+				"Restart your AI assistant to activate the Wendy MCP server.\n"+
+					"It will then have tools to list devices, manage containers,\n"+
+					"read telemetry, and more.") + "\n\n")
+		}
 		sb.WriteString(wizHintStyle.Render("Enter to continue"))
 	}
 	return sb.String()

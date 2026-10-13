@@ -9,6 +9,7 @@ import (
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
+	"github.com/wendylabsinc/wendy/go/internal/cli/pluginmode"
 	"github.com/wendylabsinc/wendy/go/internal/shared/cliupdate"
 	"github.com/wendylabsinc/wendy/go/internal/shared/version"
 )
@@ -24,6 +25,10 @@ type cliUpdateInfo struct {
 	Message         string `json:"message,omitempty"`
 }
 
+// pluginManagedCLI is pluginmode.ManagedCLI; a variable so tests can pose as
+// a CLI the Wendy plugin's launcher installed.
+var pluginManagedCLI = pluginmode.ManagedCLI
+
 func (s *mcpServer) cliUpdateStatus() cliUpdateInfo {
 	info := cliUpdateInfo{}
 	cfg := s.currentConfig()
@@ -38,7 +43,11 @@ func (s *mcpServer) cliUpdateStatus() cliUpdateInfo {
 	info.LatestVersion = cfg.AvailableCLIUpdate
 	info.UpdateCommand = cliupdate.Command(runtime.GOOS)
 	info.RestartRequired = true
-	info.Message = fmt.Sprintf("A new Wendy CLI version is available: %s (running %s). Update with: %s. Then restart the Wendy MCP server to load the new version and tools.", info.LatestVersion, version.Version, info.UpdateCommand)
+	advice := "Update with: " + info.UpdateCommand
+	if pluginManagedCLI() {
+		advice = cliupdate.PluginAdvice(runtime.GOOS)
+	}
+	info.Message = fmt.Sprintf("A new Wendy CLI version is available: %s (running %s). %s. Then restart the Wendy MCP server to load the new version and tools.", info.LatestVersion, version.Version, advice)
 	if runtime.GOOS == "darwin" {
 		info.Message += " If the tap is untrusted, run: brew trust wendylabsinc/tap."
 	}

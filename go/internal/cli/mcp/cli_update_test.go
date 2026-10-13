@@ -13,6 +13,7 @@ import (
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
+	"github.com/wendylabsinc/wendy/go/internal/shared/cliupdate"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/internal/shared/version"
 )
@@ -67,6 +68,28 @@ func TestWendyStatusCLIUpdateReloadsCache(t *testing.T) {
 		}
 		if s.cliUpdateStatus().Available {
 			t.Fatal("still using cached startup/update config")
+		}
+	}
+}
+
+// A CLI the Wendy plugin's launcher installed gets the plugin advice in the
+// notice the assistant sees, matching the terminal notice; any other install
+// keeps "Update with: <installer>".
+func TestCLIUpdatePluginManagedAdvice(t *testing.T) {
+	releasedCLI(t)
+	for _, managed := range []bool{true, false} {
+		old := pluginManagedCLI
+		pluginManagedCLI = func() bool { return managed }
+		info := New(&config.Config{AvailableCLIUpdate: "2026.09.30-120000"}, nil).cliUpdateStatus()
+		pluginManagedCLI = old
+
+		advice := "Update with: " + cliupdate.Command(runtime.GOOS)
+		if managed {
+			advice = cliupdate.PluginAdvice(runtime.GOOS)
+		}
+		if !info.Available || info.UpdateCommand != cliupdate.Command(runtime.GOOS) ||
+			!strings.Contains(info.Message, advice) || !strings.Contains(info.Message, "restart the Wendy MCP server") {
+			t.Errorf("managed=%v: update guidance %+v, want message with %q", managed, info, advice)
 		}
 	}
 }

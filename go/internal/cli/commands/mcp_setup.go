@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	"github.com/wendylabsinc/wendy/go/internal/cli/pluginmode"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/internal/shared/version"
 )
@@ -23,11 +24,7 @@ func newMCPSetupCmd() *cobra.Command {
 			mcpResults := setupMCPForAllTools()
 			results := append(append([]mcpSetupResult(nil), mcpResults...), installSkillsForAllTools()...)
 			for _, r := range results {
-				if r.err != nil {
-					fmt.Fprintf(cmd.OutOrStdout(), "✗ %s: %v\n", r.tool, r.err)
-				} else {
-					fmt.Fprintf(cmd.OutOrStdout(), "✓ %s: configured at %s\n", r.tool, r.path)
-				}
+				fmt.Fprintln(cmd.OutOrStdout(), mcpSetupResultLine(r))
 			}
 			if len(results) == 0 {
 				fmt.Fprintln(cmd.OutOrStdout(), "No supported AI tools detected.")
@@ -108,12 +105,17 @@ func runsAsForeignUser() bool {
 // underlying setup helpers no-op for tools they don't detect. It never runs as
 // a user other than HOME's owner: sudo keeps $HOME on macOS, so a `sudo wendy …`
 // right after an upgrade would otherwise leave the user root-owned AI tool
-// configs. The next run as HOME's owner refreshes instead.
+// configs. The next run as HOME's owner refreshes instead. Nor does it run when
+// the Wendy plugin's launcher started this CLI for Claude or Codex: that
+// process must not rewrite AI tool configs behind the user's back, and the
+// next command the user runs in a terminal refreshes instead. The silent
+// refresh never removes a user-level entry for a client whose Wendy plugin is
+// active; explicit `wendy mcp setup` does, and reports it.
 func maybeRefreshMCPSetup(cfg *config.Config) {
-	if runsAsForeignUser() || !shouldRefreshMCPSetup(cfg.LastMCPSetupVersion, version.Version) {
+	if pluginmode.Client() != "" || runsAsForeignUser() || !shouldRefreshMCPSetup(cfg.LastMCPSetupVersion, version.Version) {
 		return
 	}
-	setupMCPForAllTools()
+	configureMCPClients(false)
 	installSkillsForAllTools()
 	cfg.LastMCPSetupVersion = version.Version
 	_ = config.Save(cfg)
@@ -137,7 +139,7 @@ func mcpRestartNotice(results []mcpSetupResult) string {
 	var b strings.Builder
 	for _, r := range results {
 		hint, ok := mcpRestartHints[r.tool]
-		if !ok || r.err != nil {
+		if !ok || r.err != nil || r.note != "" {
 			continue
 		}
 		fmt.Fprintf(&b, "  • %s: %s\n", r.tool, hint)
@@ -152,9 +154,26 @@ type mcpSetupResult struct {
 	tool string
 	path string
 	err  error
+	// note is mcpNoteSkippedForPlugin or mcpNoteRemovedForPlugin for a client
+	// whose Wendy plugin provides the MCP server, free-form text that
+	// mcpSetupResultLine shows verbatim, or "" for a plain configure.
+	note string
 }
 
+// setupMCPForAllTools is `wendy mcp setup` (and the tour): it configures every
+// detected MCP client. Where the Wendy plugin is active it writes nothing; it
+// removes the user-level entry only for Claude Code, never for Codex.
 func setupMCPForAllTools() []mcpSetupResult {
+	return configureMCPClients(true)
+}
+
+// configureMCPClients configures every detected MCP client. For a client whose
+// Wendy plugin is active it writes nothing. When removePluginDuplicates is set,
+// Claude Code also loses the user-level entry an earlier setup wrote; Codex
+// keeps its entry either way.
+func configureMCPClients(removePluginDuplicates bool) []mcpSetupResult {
+	// keepEntry is the remove func for a plugin client when nothing may be removed.
+	keepEntry := func() (bool, error) { return false, nil }
 	wendyBin := wendyBinaryPath()
 	entry := map[string]any{
 		"type":    "stdio",
@@ -163,10 +182,21 @@ func setupMCPForAllTools() []mcpSetupResult {
 	}
 
 	var results []mcpSetupResult
+	home, _ := os.UserHomeDir()
 
-	// Claude Code (~/.claude.json)
+	// Claude Code (~/.claude.json). With the Wendy plugin active, the plugin
+	// runs the server: write none, and (when removePluginDuplicates is set)
+	// remove the one an earlier setup wrote.
 	if claudeCodePath := claudeCodeConfigPath(); claudeCodePath != "" {
-		if err := addMCPToJSONConfig(claudeCodePath, "mcpServers", "wendy", entry); err != nil {
+		if home != "" && pluginmode.ClaudePluginActive(home) {
+			remove := keepEntry
+			if removePluginDuplicates {
+				remove = func() (bool, error) {
+					return removeMCPFromJSONConfig(claudeCodePath, "mcpServers", "wendy")
+				}
+			}
+			results = append(results, pluginProvidedResult("Claude Code", claudeCodePath, remove))
+		} else if err := addMCPToJSONConfig(claudeCodePath, "mcpServers", "wendy", entry); err != nil {
 			results = append(results, mcpSetupResult{tool: "Claude Code", path: claudeCodePath, err: err})
 		} else {
 			results = append(results, mcpSetupResult{tool: "Claude Code", path: claudeCodePath})
@@ -200,9 +230,15 @@ func setupMCPForAllTools() []mcpSetupResult {
 		}
 	}
 
-	// Codex (~/.codex/config.toml)
+	// Codex (~/.codex/config.toml). With the Wendy plugin active, setup writes
+	// nothing and keeps any existing entry: in Codex a user-level "wendy"
+	// server takes the place of the plugin's same-name server, so removing it
+	// cleans up nothing, and the Codex IDE extension, which loads no plugins,
+	// still uses it.
 	if codexPath := codexConfigPath(); codexPath != "" {
-		if err := addMCPToTOMLConfig(codexPath, "mcp_servers", "wendy", wendyBin, []string{"mcp", "serve"}); err != nil {
+		if home != "" && pluginmode.CodexPluginActive(home) {
+			results = append(results, mcpSetupResult{tool: "Codex", path: codexPath, note: mcpNoteSkippedForPlugin})
+		} else if err := addMCPToTOMLConfig(codexPath, "mcp_servers", "wendy", wendyBin, []string{"mcp", "serve"}); err != nil {
 			results = append(results, mcpSetupResult{tool: "Codex", path: codexPath, err: err})
 		} else {
 			results = append(results, mcpSetupResult{tool: "Codex", path: codexPath})
@@ -260,7 +296,17 @@ func claudeDesktopConfigPath() string {
 }
 
 func wendyBinaryPath() string {
-	if p, err := os.Executable(); err == nil {
+	if p, err := cliExecutable(); err == nil {
+		// On Linux os.Executable resolves ~/.wendy/bin/wendy to a versioned
+		// copy the launcher later prunes; register the stable pointer.
+		if pluginManagedCLI() {
+			if dir, err := config.ConfigDir(); err == nil {
+				pointer := filepath.Join(dir, "bin", filepath.Base(p))
+				if _, err := os.Stat(pointer); err == nil {
+					return pointer
+				}
+			}
+		}
 		return p
 	}
 	if p, err := exec.LookPath("wendy"); err == nil {
