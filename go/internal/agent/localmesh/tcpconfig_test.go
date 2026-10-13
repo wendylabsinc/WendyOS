@@ -19,6 +19,8 @@ func TestTCPConfigRequiresReciprocalConcretePeers(t *testing.T) {
 		{`{"listen":"127.0.0.1:7001","peers":[],"unknown":true}`, false},
 		{`{"listen":"127.0.0.1:7001","peers":[]} {}`, false},
 		{`{"nan":true}`, true},
+		{`{"ble":true}`, true},
+		{`{"nan":true,"ble":true}`, true},
 		{`{"nan":true,"peers":[{"asset":2,"address":"127.0.0.1:7002"}]}`, false},
 		{`{"peers":[]}`, false},
 	} {
