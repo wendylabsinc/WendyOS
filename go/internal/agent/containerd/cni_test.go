@@ -16,7 +16,7 @@ func TestBuildCNIConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("allocateSubnet: %v", err)
 	}
-	cfg := buildBridgeCNIConfig("com.example.myapp", subnet)
+	cfg := buildBridgeCNIConfig("com.example.myapp", subnet, false)
 	var m map[string]interface{}
 	if err := json.Unmarshal([]byte(cfg), &m); err != nil {
 		t.Fatalf("invalid JSON: %v", err)
@@ -46,7 +46,7 @@ func TestBuildCNIConfig(t *testing.T) {
 
 func TestBuildBridgeCNICheckConfigCarriesPreviousResult(t *testing.T) {
 	result := `{"cniVersion":"0.4.0","ips":[{"version":"4","address":"10.1.2.3/28","gateway":"10.1.2.1"}]}`
-	cfgJSON, err := buildBridgeCNICheckConfig("com.example.myapp", "10.1.2.0/28", result)
+	cfgJSON, err := buildBridgeCNICheckConfig("com.example.myapp", "10.1.2.0/28", result, false)
 	if err != nil {
 		t.Fatalf("build check config: %v", err)
 	}
@@ -58,7 +58,7 @@ func TestBuildBridgeCNICheckConfigCarriesPreviousResult(t *testing.T) {
 	if !ok || prev["cniVersion"] != "0.4.0" {
 		t.Fatalf("prevResult not preserved: %#v", cfg["prevResult"])
 	}
-	if _, err := buildBridgeCNICheckConfig("com.example.myapp", "10.1.2.0/28", `{broken`); err == nil {
+	if _, err := buildBridgeCNICheckConfig("com.example.myapp", "10.1.2.0/28", `{broken`, false); err == nil {
 		t.Fatal("malformed previous result was accepted")
 	}
 }
@@ -205,5 +205,25 @@ func TestCNIExecPATHIncludesSystemDirs(t *testing.T) {
 		if !found {
 			t.Errorf("PATH %q missing %q (needed to locate iptables)", path, want)
 		}
+	}
+}
+
+func TestBridgeCheckRequiresDefaultRouteProof(t *testing.T) {
+	for _, tc := range []struct {
+		name, routes      string
+		internet, wantErr bool
+	}{
+		{"bridge missing", `[]`, true, true},
+		{"bridge wrong gateway", `[{"dst":"0.0.0.0/0","gw":"10.1.2.2"}]`, true, true},
+		{"bridge verified", `[{"dst":"0.0.0.0/0","gw":"10.1.2.1"}]`, true, false},
+		{"mesh scoped", `[]`, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			result := `{"cniVersion":"0.4.0","routes":` + tc.routes + `}`
+			_, err := buildBridgeCNICheckConfig("com.example.myapp", "10.1.2.0/28", result, tc.internet)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("CHECK route proof error=%v", err)
+			}
+		})
 	}
 }
