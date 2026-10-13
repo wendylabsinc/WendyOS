@@ -95,6 +95,13 @@ type meshDNSService interface {
 	ReleaseListener(gatewayIP string)
 }
 
+// meshMDNSService owns a per-app multicast bridge. It is injected by the
+// local-mesh runtime; containerd supplies trusted CNI and port-map state.
+type meshMDNSService interface {
+	StartMeshApp(containerName, appID, ip, bridge string, ports []appconfig.PortMapping) error
+	StopMeshApp(containerName string)
+}
+
 // Narrow network seams let ingress authorization tests exercise the real
 // lifecycle without requiring root privileges or mutating host iptables.
 var (
@@ -416,6 +423,9 @@ func (c *Client) applyMeshEgress(entitlements []appconfig.Entitlement, container
 	if err := hostnetwork.SetMeshRoute(netnsPath, params.cidr, params.gateway); err != nil {
 		return fmt.Errorf("mesh egress: setting route for app %q: %w", appID, err)
 	}
+	if err := hostnetwork.SetMeshMDNSRoute(netnsPath, "eth0"); err != nil {
+		return fmt.Errorf("mesh egress: setting mDNS route for app %q: %w", appID, err)
+	}
 
 	if err := hostnetwork.AddMeshRule(ip, params.cidr); err != nil {
 		// The route lives in the container's netns and needs no explicit
@@ -469,9 +479,6 @@ func (c *Client) applyMeshEgress(entitlements []appconfig.Entitlement, container
 // a conflicting host port fails the second task's start before iptables can
 // replace the first task's rule.
 func (c *Client) applyMeshIngressPorts(containerName, appID, ip string, ports []appconfig.PortMapping) error {
-	if len(ports) == 0 {
-		return nil
-	}
 	if ip == "" {
 		return fmt.Errorf("mesh ingress: container %q has no CNI IP", containerName)
 	}
@@ -480,6 +487,9 @@ func (c *Client) applyMeshIngressPorts(containerName, appID, ip string, ports []
 	}
 	c.meshIngressMu.Lock()
 	defer c.meshIngressMu.Unlock()
+	if len(ports) == 0 {
+		return c.startMeshMDNS(containerName, appID, ip, nil)
+	}
 
 	seen := make(map[uint16]struct{}, len(ports))
 	for _, pm := range ports {
@@ -498,6 +508,7 @@ func (c *Client) applyMeshIngressPorts(containerName, appID, ip string, ports []
 		c.logger.Warn("mesh ingress: could not enable route_localnet on bridge; ingress replies may fail",
 			zap.String("app_id", appID), zap.Error(err))
 	}
+	forwarded := make([]appconfig.PortMapping, 0, len(ports))
 	for _, pm := range ports {
 		if err := addMeshIngressPortForward(pm.Host, ip, pm.Container); err != nil {
 			c.logger.Warn("mesh ingress: could not install port forward; remote peers cannot open this port",
@@ -505,13 +516,29 @@ func (c *Client) applyMeshIngressPorts(containerName, appID, ip string, ports []
 				zap.Uint16("host_port", pm.Host), zap.Uint16("container_port", pm.Container), zap.Error(err))
 			continue
 		}
-		if err := c.meshIngress.Claim(containerName, pm.Host); err != nil {
+		if err := c.meshIngress.ClaimForApp(containerName, appID, pm.Host); err != nil {
 			_ = removeMeshIngressPortForward(pm.Host, ip, pm.Container)
 			return fmt.Errorf("mesh ingress: claiming host port %d: %w", pm.Host, err)
 		}
+		forwarded = append(forwarded, pm)
 		c.logger.Info("mesh ingress: port forward authorized",
 			zap.String("app_id", appID), zap.String("ip", ip),
 			zap.Uint16("host_port", pm.Host), zap.Uint16("container_port", pm.Container))
+	}
+	// The collector must see only live forwards. Otherwise an app announcing
+	// an unforwarded declared port causes authorization to fail and tears down
+	// the bridge, including unrelated services that did forward successfully.
+	return c.startMeshMDNS(containerName, appID, ip, forwarded)
+}
+
+func (c *Client) startMeshMDNS(containerName, appID, ip string, ports []appconfig.PortMapping) error {
+	if c.meshMDNS == nil {
+		return nil
+	}
+	if err := c.meshMDNS.StartMeshApp(containerName, appID, ip, bridgeName(appID), ports); err != nil {
+		// Direct VIP traffic remains usable if an app multicast bridge cannot
+		// start. The catalog never publishes this app without its bridge.
+		c.logger.Warn("mesh app mDNS bridge unavailable", zap.String("app_id", appID), zap.Error(err))
 	}
 	return nil
 }
@@ -522,6 +549,9 @@ func (c *Client) applyMeshIngressPorts(containerName, appID, ip string, ports []
 func (c *Client) beginMeshIngressRun(containerName string) uint64 {
 	c.meshIngressMu.Lock()
 	defer c.meshIngressMu.Unlock()
+	if c.meshMDNS != nil {
+		c.meshMDNS.StopMeshApp(containerName)
+	}
 	c.meshIngress.Release(containerName)
 	c.meshIngressNext++
 	if c.meshIngressRuns == nil {
@@ -537,6 +567,9 @@ func (c *Client) releaseMeshIngressRun(containerName string, generation uint64) 
 	if generation == 0 || c.meshIngressRuns[containerName] != generation {
 		return
 	}
+	if c.meshMDNS != nil {
+		c.meshMDNS.StopMeshApp(containerName)
+	}
 	c.meshIngress.Release(containerName)
 	delete(c.meshIngressRuns, containerName)
 }
@@ -544,6 +577,9 @@ func (c *Client) releaseMeshIngressRun(containerName string, generation uint64) 
 func (c *Client) releaseMeshIngress(containerName string) {
 	c.meshIngressMu.Lock()
 	defer c.meshIngressMu.Unlock()
+	if c.meshMDNS != nil {
+		c.meshMDNS.StopMeshApp(containerName)
+	}
 	c.meshIngress.Release(containerName)
 	delete(c.meshIngressRuns, containerName)
 }
