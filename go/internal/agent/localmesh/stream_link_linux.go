@@ -137,8 +137,8 @@ type streamNodeLink struct {
 	diagIP        bool
 }
 
-// sockQueueProber is implemented by CoC connections that can report kernel
-// socket queue depths (see bleprovider packetConn.SockQueue). Absent on
+// sockQueueProber is implemented by CoC connections that report raw Bluetooth
+// socket ioctl readings (see bleprovider packetConn.SockQueue). Absent on
 // non-BLE links; the diagnostic reports -1s there.
 type sockQueueProber interface {
 	SockQueue() (inQ, outQ int, err error)
@@ -566,9 +566,10 @@ func (l *streamNodeLink) rxLastMSAgo() int64 {
 	return time.Since(time.Unix(0, last)).Milliseconds()
 }
 
-// sockQueueDepths returns kernel socket queue depths (unread RX, unsent TX)
-// for instrumented connections, or -1, -1 when unavailable. Wrapper layers
-// (TLS, handshake metering) are unwrapped until the CoC socket is reached.
+// sockQueueDepths returns raw Bluetooth socket ioctl readings: next queued
+// skb length and available send-buffer budget, or -1, -1 when unavailable.
+// Neither value is a total byte backlog. Wrapper layers (TLS, handshake
+// metering) are unwrapped until the CoC socket is reached.
 func (l *streamNodeLink) sockQueueDepths() (int, int) {
 	conn := l.conn
 	for i := 0; i < 4; i++ {
