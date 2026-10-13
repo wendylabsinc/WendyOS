@@ -43,6 +43,9 @@ type LANConfig struct {
 	InfrastructureWiFi bool
 	Selection          *PeerSelection
 	Logger             *zap.Logger
+	// Status receives local setup readiness/failure, not peer reachability.
+	// The optional callback must return promptly.
+	Status func(CarrierStatus)
 }
 
 func (c LANConfig) allow(asset int32, cost uint16) bool {
@@ -104,6 +107,7 @@ func runLANWithScan(ctx context.Context, cfg LANConfig, scan func() ([]lanInterf
 		cfg.Selection = NewPeerSelection(cfg.Node.Snapshot)
 	}
 	claims := &lanClaims{active: make(map[lanClaim]bool)}
+	health := &lanCarrierHealth{report: cfg.Status}
 	type worker struct {
 		cancel context.CancelFunc
 		done   chan struct{}
@@ -124,6 +128,7 @@ func runLANWithScan(ctx context.Context, cfg LANConfig, scan func() ([]lanInterf
 		if err != nil {
 			return err
 		}
+		health.wanted(interfaces)
 		wanted := make(map[string]lanInterface, len(interfaces))
 		for _, iface := range interfaces {
 			wanted[iface.key()] = iface
@@ -149,11 +154,20 @@ func runLANWithScan(ctx context.Context, cfg LANConfig, scan func() ([]lanInterf
 			workerCtx, cancel := context.WithCancel(ctx)
 			done := make(chan struct{})
 			workers[key] = worker{cancel, done}
+			workerConfig := cfg
+			workerConfig.Status = health.begin(key)
 			go func() {
 				defer close(done)
 				// A failed bind or mDNS join can recover on the next scan.
-				if err := runLANInterface(workerCtx, cfg, iface, claims); err != nil && workerCtx.Err() == nil && cfg.Logger != nil {
-					cfg.Logger.Warn("LAN mesh interface stopped", zap.String("interface", iface.iface.Name), zap.Error(err))
+				err := runLANInterface(workerCtx, workerConfig, iface, claims)
+				if workerCtx.Err() == nil {
+					if err == nil {
+						err = errors.New("LAN interface worker exited unexpectedly")
+					}
+					workerConfig.Status(CarrierStatus{Err: err})
+					if cfg.Logger != nil {
+						cfg.Logger.Warn("LAN mesh interface stopped", zap.String("interface", iface.iface.Name), zap.Error(err))
+					}
 				}
 			}()
 		}
@@ -273,6 +287,9 @@ func runLANInterface(ctx context.Context, cfg LANConfig, selected lanInterface, 
 	defer mdnsConn.Close()
 	mdnsDone := make(chan error, 1)
 	go func() { mdnsDone <- serveLANMDNS(ctx, selected, mdnsConn, service) }()
+	if cfg.Status != nil {
+		cfg.Status(CarrierStatus{Ready: true})
+	}
 	if cfg.Logger != nil {
 		cfg.Logger.Info("LAN mesh interface ready", zap.String("interface", selected.iface.Name), zap.String("address", address), zap.Uint16("cost", selected.cost))
 	}
