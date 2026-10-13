@@ -27,6 +27,11 @@ type runtime struct {
 	mu          sync.Mutex
 	active      map[int32]struct{}
 	nextAttempt map[int32]time.Time
+	// nextDial is the earliest time this device may attempt its next
+	// outbound BLE dial, across all peers. Formation and redial bursts
+	// otherwise collide on the controller at once; serializing attempts
+	// lets each new link's birth burst drain before the next begins.
+	nextDial time.Time
 	// dialTimeouts counts consecutive dial-context timeouts per asset. Three
 	// in a row with no HCI progress means initiation itself is wedged (stale
 	// kernel hci_conn or a deaf peer), not merely a busy peer: only an
@@ -87,6 +92,25 @@ func (r *runtime) cheaperLinkReason(asset int32) string {
 		return reason
 	}
 	return "legacy-checker"
+}
+
+// globalDialPace is the minimum spacing between outbound BLE dial attempts
+// on one device, across all peers. Per-peer backoff already exists; this
+// serializes formation and redial bursts that would otherwise start all of
+// a device's links (and their catalog sync bursts) in the same seconds.
+// Inbound accepts are never paced.
+const globalDialPace = 5 * time.Second
+
+// admitDial reports whether an outbound dial may start now, and if so moves
+// the device-wide pacing marker forward. Now is a parameter for tests.
+func (r *runtime) admitDial(now time.Time) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if now.Before(r.nextDial) {
+		return false
+	}
+	r.nextDial = now.Add(globalDialPace)
+	return true
 }
 
 // cheaperLinkReverify is the delay between a veto sample and its
@@ -172,6 +196,13 @@ func Run(ctx context.Context, cfg Config) error {
 	defer cancelRun()
 	if err := cfg.defaults(); err != nil {
 		return err
+	}
+	settleLog = func(mtu int, err error) {
+		if err != nil {
+			cfg.Logger.Warn("BLE CoC receive MTU unsettled", zap.Error(err))
+		} else {
+			cfg.Logger.Info("BLE CoC receive MTU settled", zap.Int("mtu", mtu))
+		}
 	}
 	uuid, err := ServiceUUID(cfg.Credentials.Org)
 	if err != nil {
@@ -329,7 +360,7 @@ func (r *runtime) acceptLink(ctx context.Context, raw net.Conn) {
 		_ = secure.Close()
 		return
 	}
-	r.cfg.Logger.Info("BLE inbound TLS established", zap.Int32("peer", peer), zap.Duration("admission_wait", wait), zap.Duration("handshake_time", elapsed), zap.Bool("resumed", state.DidResume))
+	r.cfg.Logger.Info("BLE inbound TLS established", zap.Int32("peer", peer), zap.Duration("admission_wait", wait), zap.Duration("handshake_time", elapsed), zap.Bool("resumed", state.DidResume), zap.Int("rx_mtu", CoCReceiveMTU(secure)))
 	if r.cfg.Selection != nil {
 		r.cfg.Selection.Connected(peer, localmesh.RadioBLE)
 	}
@@ -410,6 +441,10 @@ func (r *runtime) scanOnce(ctx context.Context, bus *dbus.Conn, adapter dbus.Obj
 			continue
 		}
 		if !r.shouldDial(peer.asset) {
+			continue
+		}
+		if !r.admitDial(now) {
+			r.cfg.Logger.Debug("BLE deferring dial on device-wide pace", zap.Int32("peer", peer.asset))
 			continue
 		}
 		if !r.claim(peer.asset) {
@@ -522,7 +557,10 @@ func (r *runtime) dialLink(ctx context.Context, peer candidate) {
 		if r.cfg.Selection != nil {
 			r.cfg.Selection.Failed(peer.asset, localmesh.RadioBLE)
 		}
-		r.noteDialTimeout(peer.asset, errors.Is(err, context.DeadlineExceeded) && ctx.Err() != nil)
+		// A dial-context timeout means the 30s socket budget expired. A
+		// parent cancellation surfaces as context.Canceled instead and must
+		// not count toward the wedge signal.
+		r.noteDialTimeout(peer.asset, errors.Is(err, context.DeadlineExceeded))
 		return
 	}
 	r.clearDialTimeouts(peer.asset)
@@ -584,7 +622,7 @@ func (r *runtime) dialLink(ctx context.Context, peer candidate) {
 		}
 		return
 	}
-	r.cfg.Logger.Info("BLE outbound TLS established", zap.Int32("peer", peer.asset), zap.Duration("admission_wait", wait), zap.Duration("handshake_time", elapsed), zap.Bool("resumed", secure.ConnectionState().DidResume))
+	r.cfg.Logger.Info("BLE outbound TLS established", zap.Int32("peer", peer.asset), zap.Duration("admission_wait", wait), zap.Duration("handshake_time", elapsed), zap.Bool("resumed", secure.ConnectionState().DidResume), zap.Int("rx_mtu", CoCReceiveMTU(secure)))
 	if r.cfg.Selection != nil {
 		r.cfg.Selection.Connected(peer.asset, localmesh.RadioBLE)
 	}
@@ -597,6 +635,21 @@ func (r *runtime) dialLink(ctx context.Context, peer candidate) {
 	}
 	stopCheaperWatch := r.watchCheaperLink(ctx, peer.asset, secure)
 	defer stopCheaperWatch()
+	// Handshake ran at the 15 ms tune; bulk must not. Relax to the
+	// steady-state interval now that TLS is established: one update per
+	// link from its dialer, best-effort, never fatal to the link.
+	if handleErr == nil {
+		relaxCtx, relaxCancel := context.WithTimeout(ctx, meshInitialTuneBudget)
+		relaxed, _, relaxErr := tuneMeshBeforeTLS(relaxCtx, func(updateCtx context.Context) (time.Duration, error) {
+			return requestSteadyConnectionInterval(updateCtx, r.hciIndex, aclHandle)
+		})
+		relaxCancel()
+		if relaxErr != nil {
+			r.cfg.Logger.Debug("BLE steady-state interval relax unavailable", zap.Int32("peer", peer.asset), zap.Error(relaxErr))
+		} else {
+			r.cfg.Logger.Info("BLE steady-state interval relaxed", zap.Int32("peer", peer.asset), zap.Duration("interval", relaxed))
+		}
+	}
 	err = r.cfg.Node.AttachStream(ctx, peer.asset, secure, LinkCost)
 	if err != nil && ctx.Err() == nil {
 		r.cfg.Logger.Debug("BLE link ended", zap.Int32("peer", peer.asset), zap.Error(err))
