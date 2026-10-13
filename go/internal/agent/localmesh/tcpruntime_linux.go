@@ -23,6 +23,13 @@ const tcpConfigName = "local-mesh.json"
 // initiates each edge, so a symmetric peer list creates one connection. A
 // missing config leaves the local mesh disabled.
 func RunConfiguredTCP(parent context.Context, configDir string, id TCPIdentity) error {
+	return RunConfiguredTCPObserved(parent, configDir, id, nil)
+}
+
+// RunConfiguredTCPObserved publishes the running node to an observer. The
+// observer receives nil when the runtime exits; consumers also check the
+// current route snapshot before using it.
+func RunConfiguredTCPObserved(parent context.Context, configDir string, id TCPIdentity, observe func(func() NodeSnapshot)) error {
 	cfg, err := LoadTCPConfig(filepath.Join(configDir, tcpConfigName), id.Asset)
 	if err != nil || cfg == nil {
 		return err
@@ -45,6 +52,10 @@ func RunConfiguredTCP(parent context.Context, configDir string, id TCPIdentity) 
 	node, err := NewNode(ctx, stateDir, credentials, id.Name, id.AgentPort)
 	if err != nil {
 		return err
+	}
+	if observe != nil {
+		observe(node.Snapshot)
+		defer observe(nil)
 	}
 	go func() { <-ctx.Done(); listener.Close() }()
 	nodeDone := make(chan error, 1)
@@ -80,7 +91,13 @@ func RunConfiguredTCP(parent context.Context, configDir string, id TCPIdentity) 
 					if err == nil {
 						err = writeTCPPreface(conn, id.Org, id.Asset)
 						if err == nil {
+							joined := time.Now()
 							err = attachTCP(ctx, node, credentials, peer.Asset, conn, false)
+							if time.Since(joined) >= 10*time.Second {
+								// A stable session should reconnect promptly after a
+								// later link loss. Keep exponential delay for flapping.
+								backoff = time.Second
+							}
 						}
 						conn.Close()
 					}
@@ -91,9 +108,7 @@ func RunConfiguredTCP(parent context.Context, configDir string, id TCPIdentity) 
 				case <-ctx.Done():
 					return
 				}
-				if backoff < 30*time.Second {
-					backoff *= 2
-				}
+				backoff = min(backoff*2, 30*time.Second)
 			}
 		}(peer)
 	}
@@ -188,7 +203,7 @@ func attachTCP(ctx context.Context, node *Node, credentials *Credentials, peer i
 		case <-done:
 		}
 	}()
-	tlsConfig, err := credentials.PeerTLS(peer)
+	tlsConfig, err := credentials.PeerTLSWithTickets(peer, LinkALPN, "configured-quic")
 	if err != nil {
 		return err
 	}

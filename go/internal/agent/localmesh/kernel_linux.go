@@ -30,6 +30,7 @@ type kernelPeer struct {
 // operations and must quiesce transport around Apply. IPv4 internet sharing is
 // the initial host policy; IPv6 Babel next hops work without IPv6 policy routing.
 type Kernel struct {
+	lock    net.Listener
 	link    *netlink.Dummy
 	peers   map[babel.LinkID]kernelPeer
 	routes  []netlink.Route
@@ -40,36 +41,208 @@ type Kernel struct {
 	roam    *netlink.Route
 }
 
+// ReconcileBase restores only this kernel's invariant host address, policy
+// rule and fall-through guard. NetworkManager may remove these after link
+// creation even when it is subsequently told to leave wlmesh0 unmanaged.
+// Never adopt a replacement interface or replace an unfamiliar rule/route.
+func (k *Kernel) ReconcileBase() error {
+	state, err := k.inspectBase()
+	if err != nil {
+		return err
+	}
+	// Restore the guard first so a surviving policy rule cannot fall through
+	// to the ordinary uplink while the other base state is being repaired.
+	if !state.guard {
+		guard := k.routes[0]
+		if err := netlink.RouteAdd(&guard); err != nil && !errors.Is(err, unix.EEXIST) {
+			return fmt.Errorf("restore local-mesh guard route: %w", err)
+		}
+	}
+	if !state.address {
+		addr := &netlink.Addr{IPNet: &net.IPNet{IP: k.address, Mask: net.CIDRMask(32, 32)}}
+		if err := netlink.AddrAdd(state.link, addr); err != nil && !errors.Is(err, unix.EEXIST) {
+			return fmt.Errorf("restore local-mesh address: %w", err)
+		}
+	}
+	if !state.up {
+		if err := netlink.LinkSetUp(state.link); err != nil {
+			return fmt.Errorf("restore local-mesh link state: %w", err)
+		}
+	}
+	if !state.rule {
+		if err := netlink.RuleAdd(k.rule); err != nil && !errors.Is(err, unix.EEXIST) {
+			return fmt.Errorf("restore local-mesh policy rule: %w", err)
+		}
+	}
+	// EEXIST can mean a competing writer installed different state. Confirm
+	// all invariants after repair rather than treating that error as success.
+	state, err = k.inspectBase()
+	if err != nil {
+		return err
+	}
+	if !state.address || !state.up || !state.guard || !state.rule {
+		return errors.New("local-mesh base state changed during reconciliation")
+	}
+	return nil
+}
+
+type baseState struct {
+	link    netlink.Link
+	address bool
+	up      bool
+	rule    bool
+	guard   bool
+}
+
+func (k *Kernel) inspectBase() (baseState, error) {
+	var state baseState
+	if k.link == nil || k.rule == nil || len(k.routes) == 0 {
+		return state, errors.New("local-mesh kernel is not initialized")
+	}
+	live, err := netlink.LinkByName(InterfaceName)
+	if err != nil {
+		return state, fmt.Errorf("local-mesh interface missing: %w", err)
+	}
+	if live.Attrs().Index != k.link.Index || live.Attrs().Alias != interfaceOwner || live.Type() != "dummy" {
+		return state, errors.New("local-mesh interface ownership changed")
+	}
+	state.link = live
+	state.up = live.Attrs().Flags&net.FlagUp != 0
+	addresses, err := netlink.AddrList(live, netlink.FAMILY_V4)
+	if err != nil {
+		return state, fmt.Errorf("inspect local-mesh address: %w", err)
+	}
+	for _, address := range addresses {
+		if !address.IP.Equal(k.address) {
+			continue
+		}
+		if address.IPNet == nil || address.IPNet.String() != (&net.IPNet{IP: k.address, Mask: net.CIDRMask(32, 32)}).String() {
+			return state, errors.New("local-mesh address has conflicting prefix")
+		}
+		state.address = true
+	}
+	rules, err := netlink.RuleList(netlink.FAMILY_V4)
+	if err != nil {
+		return state, fmt.Errorf("inspect local-mesh policy rule: %w", err)
+	}
+	for _, rule := range rules {
+		if rule.Priority == RouteTable {
+			if !baseRuleMatches(rule) {
+				return state, errors.New("local-mesh policy rule ownership conflict")
+			}
+			state.rule = true
+		} else if rule.Table == RouteTable {
+			ownedPeer := false
+			for _, peer := range k.peers {
+				if peerRuleMatches(rule, peer.rule) {
+					ownedPeer = true
+					break
+				}
+			}
+			if !ownedPeer {
+				return state, errors.New("local-mesh route table rule ownership conflict")
+			}
+		}
+	}
+	routes, err := netlink.RouteListFiltered(netlink.FAMILY_V4, &netlink.Route{Table: RouteTable}, netlink.RT_FILTER_TABLE)
+	if err != nil {
+		return state, fmt.Errorf("inspect local-mesh guard route: %w", err)
+	}
+	for _, route := range routes {
+		if !defaultIPv4Route(route.Dst) {
+			continue
+		}
+		// A signed peer's Babel default is also installed in this table. It is
+		// an owned route, tracked by Apply, even when this host is not roaming.
+		if k.ownsLearnedDefault(route) {
+			continue
+		}
+		// Sharing an independent uplink installs our own lower-metric default
+		// in this table. It must coexist with the unreachable fall-through guard.
+		if k.exit != nil && route.Priority == k.exit.Priority &&
+			route.Protocol == routeProtocol && route.Type == unix.RTN_UNICAST &&
+			route.LinkIndex == k.exit.LinkIndex && route.Gw.Equal(k.exit.Gw) {
+			continue
+		}
+		if route.Priority != 32767 || route.Protocol != routeProtocol || route.Type != unix.RTN_UNREACHABLE || route.LinkIndex != 0 || route.Gw != nil {
+			return state, errors.New("local-mesh guard route ownership conflict")
+		}
+		state.guard = true
+	}
+	return state, nil
+}
+
+func (k *Kernel) ownsLearnedDefault(route netlink.Route) bool {
+	for _, expected := range k.routes {
+		if expected.Priority != 100 || !defaultIPv4Route(expected.Dst) ||
+			route.Priority != expected.Priority || route.Protocol != expected.Protocol ||
+			route.Type != expected.Type || route.LinkIndex != expected.LinkIndex ||
+			!route.Src.Equal(expected.Src) || !route.Gw.Equal(expected.Gw) {
+			continue
+		}
+		if route.Via == nil || expected.Via == nil {
+			return route.Via == nil && expected.Via == nil
+		}
+		actual, ok := route.Via.(*netlink.Via)
+		want, expectedOK := expected.Via.(*netlink.Via)
+		if ok && expectedOK && actual.AddrFamily == want.AddrFamily && actual.Addr.Equal(want.Addr) {
+			return true
+		}
+	}
+	return false
+}
+
+func baseRuleMatches(rule netlink.Rule) bool {
+	return rule.Table == RouteTable && rule.Dst != nil && rule.Dst.String() == "10.88.0.0/16" &&
+		rule.Src == nil && rule.IifName == "" && rule.OifName == "" &&
+		rule.Mark == 0 && rule.Mask == nil && rule.Tos == 0 && !rule.Invert &&
+		rule.Dport == nil && rule.Sport == nil && rule.UIDRange == nil && rule.IPProto == 0
+}
+
+func peerRuleMatches(rule netlink.Rule, peer *netlink.Rule) bool {
+	return rule.Priority == peer.Priority && rule.IifName == peer.IifName &&
+		rule.OifName == "" && rule.Src == nil && rule.Dst == nil &&
+		rule.Mark == 0 && rule.Mask == nil && rule.Tos == 0 && !rule.Invert &&
+		rule.Dport == nil && rule.Sport == nil && rule.UIDRange == nil && rule.IPProto == 0
+}
+
+func defaultIPv4Route(dst *net.IPNet) bool {
+	if dst == nil {
+		return true
+	}
+	return dst.String() == "0.0.0.0/0"
+}
+
 func NewKernel(org, asset int32) (*Kernel, error) {
 	v4, _, err := Addresses(org, asset)
 	if err != nil {
 		return nil, err
 	}
-	// Reserved route table must be empty; never adopt foreign or stale state.
-	existing, err := netlink.RouteListFiltered(netlink.FAMILY_V4, &netlink.Route{Table: RouteTable}, netlink.RT_FILTER_TABLE)
+	// Abstract Unix socket names are scoped to the network namespace and are
+	// released by the kernel on process death. An active agent must never have
+	// its links reclaimed by a second agent in the same namespace.
+	lock, err := net.Listen("unix", "@wendy-localmesh-kernel")
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("local-mesh kernel already owned: %w", err)
 	}
-	if len(existing) != 0 {
-		return nil, errors.New("local-mesh route table already occupied")
-	}
-	rules, err := netlink.RuleList(netlink.FAMILY_V4)
-	if err != nil {
-		return nil, err
-	}
-	for _, r := range rules {
-		if r.Table == RouteTable || r.Priority == RouteTable {
-			return nil, errors.New("local-mesh rule ownership conflict")
+	owned := false
+	defer func() {
+		if !owned {
+			_ = lock.Close()
 		}
+	}()
+	if err := recoverStaleKernel(); err != nil {
+		return nil, err
 	}
 	attrs := netlink.NewLinkAttrs()
 	attrs.Name = InterfaceName
 	attrs.Alias = interfaceOwner
 	attrs.MTU = TunnelMTU
-	k := &Kernel{link: &netlink.Dummy{LinkAttrs: attrs}, peers: map[babel.LinkID]kernelPeer{}, self: asset, address: net.IP(v4.AsSlice())}
+	k := &Kernel{lock: lock, link: &netlink.Dummy{LinkAttrs: attrs}, peers: map[babel.LinkID]kernelPeer{}, self: asset, address: net.IP(v4.AsSlice())}
 	if err = netlink.LinkAdd(k.link); err != nil {
 		return nil, err
 	}
+	owned = true
 	ok := false
 	defer func() {
 		if !ok {
@@ -346,6 +519,9 @@ func (k *Kernel) Stop() error {
 
 func (k *Kernel) Close() error {
 	var errs []error
+	if k.lock != nil {
+		defer func() { _ = k.lock.Close(); k.lock = nil }()
+	}
 	errs = append(errs, k.SetExit(""))
 	errs = append(errs, k.SetRoam(nil))
 	for id := range k.peers {
