@@ -235,6 +235,14 @@
           "additionalProperties": false
         },
         {
+          "properties": {
+            "type": { "const": "nan" }
+          },
+          "required": ["type"],
+          "additionalProperties": false,
+          "description": "Direct access to the host's nan0 wpa_supplicant control socket. The agent provisions an app-specific NAN data interface, but the app controls its own publish, subscribe and NDP sessions. Add network mode host separately for NDP traffic."
+        },
+        {
           "deprecated": true,
           "description": "Deprecated: use the camera entitlement instead.",
           "properties": {
