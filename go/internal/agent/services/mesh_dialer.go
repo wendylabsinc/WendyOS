@@ -101,6 +101,12 @@ func (d *MeshDialer) SetSelfDialer(dial func(context.Context, uint16) (net.Conn,
 	d.mu.Unlock()
 }
 
+// IsSelf identifies a current provisioned device before choosing local ingress.
+func (d *MeshDialer) IsSelf(deviceID int32) bool {
+	ident := d.identity()
+	return ident.orgID > 0 && ident.assetID > 0 && deviceID == ident.assetID
+}
+
 func (d *MeshDialer) dialSelf(ctx context.Context, deviceID int32, port uint16) (net.Conn, string, error, bool) {
 	d.mu.Lock()
 	ident, dial := d.ident, d.selfDial

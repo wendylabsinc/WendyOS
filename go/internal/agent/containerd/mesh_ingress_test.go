@@ -31,7 +31,9 @@ func (m *recordingMDNS) StopMeshApp(containerName string) {
 
 func TestMeshIngressPublishesOnlySuccessfullyForwardedPorts(t *testing.T) {
 	original := addMeshIngressPortForward
-	t.Cleanup(func() { addMeshIngressPortForward = original })
+	originalFlush := flushOrphanMeshPort
+	t.Cleanup(func() { addMeshIngressPortForward = original; flushOrphanMeshPort = originalFlush })
+	flushOrphanMeshPort = func(uint16, string) error { return nil }
 	addMeshIngressPortForward = func(host uint16, _ string, _ uint16) error {
 		if host == 8081 {
 			return errors.New("iptables unavailable")
