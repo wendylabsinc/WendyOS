@@ -200,6 +200,18 @@ func (m cloudDiscoverModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			key, err := cloudDiscoveryDeviceDefault(m.auth, m.devices[cursor])
+			if err == nil && key == m.defaultDevice {
+				// A toggle, as on the other tabs: 'd' on the default clears it.
+				message, err := unsetPickerDefault()
+				m.flashIsError = err != nil
+				if err != nil {
+					m.flashMessage = err.Error()
+				} else {
+					m.defaultDevice, m.flashMessage = "", message
+					m.refreshTable()
+				}
+				return m, clearFlashAfter(3 * time.Second)
+			}
 			if err == nil {
 				err = saveDefaultDevice(key)
 			}
@@ -209,16 +221,6 @@ func (m cloudDiscoverModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else {
 				m.defaultDevice = key
 				m.flashMessage = fmt.Sprintf("Default device set to %s.", m.devices[cursor].GetName())
-				m.refreshTable()
-			}
-			return m, clearFlashAfter(3 * time.Second)
-		case "x":
-			message, err := unsetPickerDefault()
-			m.flashIsError = err != nil
-			if err != nil {
-				m.flashMessage = err.Error()
-			} else {
-				m.defaultDevice, m.flashMessage = "", message
 				m.refreshTable()
 			}
 			return m, clearFlashAfter(3 * time.Second)
@@ -310,9 +312,9 @@ func (m cloudDiscoverModel) View() string {
 	if m.pickerMode {
 		sb.WriteString(m.purpose.header(m.windowWidth))
 		sb.WriteString(m.viewLine(scanStyle.Render("⟳ Fetching cloud devices...")) + "\n")
-		hint := "  ↑/↓ navigate, enter select, d default, x clear default, u update, q quit"
+		hint := "  ↑/↓ navigate, enter select, d toggle default, u update, q quit"
 		if m.table.CanScroll() {
-			hint = "  ↑/↓ navigate, ←/→ scroll, enter select, d default, x clear default, u update, q quit"
+			hint = "  ↑/↓ navigate, ←/→ scroll, enter select, d toggle default, u update, q quit"
 		}
 		sb.WriteString(m.viewLine(dimStyle.Render(hint)) + "\n")
 	} else {
@@ -320,9 +322,9 @@ func (m cloudDiscoverModel) View() string {
 		if m.updatingName != "" {
 			sb.WriteString(m.viewLine(dimStyle.Render("  working on "+m.updatingName+"... (q quit)")) + "\n")
 		} else {
-			hint := "  ↑/↓ navigate, enter copy, a copy all, d default, x clear default, u update, q quit"
+			hint := "  ↑/↓ navigate, enter copy, a copy all, d toggle default, u update, q quit"
 			if m.table.CanScroll() {
-				hint = "  ↑/↓ navigate, ←/→ scroll, enter copy, a copy all, d default, x clear default, u update, q quit"
+				hint = "  ↑/↓ navigate, ←/→ scroll, enter copy, a copy all, d toggle default, u update, q quit"
 			}
 			sb.WriteString(m.viewLine(dimStyle.Render(hint)) + "\n")
 		}

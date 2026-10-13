@@ -70,7 +70,11 @@ func pushLayersWithProgress(ctx context.Context, cs agentpb.WendyContainerServic
 	pushCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	tp := tui.NewProgressProgram(tui.NewProgress("Sending changed layers to device...").WithoutErrorView())
+	bar := tui.NewProgress("Sending changed layers to device...").WithoutErrorView()
+	if progressHintsOff(ctx) {
+		bar = bar.WithoutHints()
+	}
+	tp := tui.NewProgressProgram(bar)
 
 	var (
 		headers []*agentpb.RunContainerLayerHeader

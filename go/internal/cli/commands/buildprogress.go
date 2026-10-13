@@ -28,6 +28,20 @@ var (
 	buildProgressProgram               = func(model tea.Model) *tea.Program { return tui.NewProgressProgram(model) }
 )
 
+// progressHintsOffKey marks work whose progress views leave out the rotating
+// "Tip:" line: the simulator's own setup, where tips about 'wendy init' or
+// entitlements in wendy.json describe a job the user is not doing.
+type progressHintsOffKey struct{}
+
+func withoutProgressHints(ctx context.Context) context.Context {
+	return context.WithValue(ctx, progressHintsOffKey{}, true)
+}
+
+func progressHintsOff(ctx context.Context) bool {
+	off, _ := ctx.Value(progressHintsOffKey{}).(bool)
+	return off
+}
+
 func forceBuildProgressInteractive(v bool) func() {
 	prev := buildProgressInteractive
 	buildProgressInteractive = func() bool { return v }
@@ -326,6 +340,9 @@ func runBuildWithProgress(ctx context.Context, title string, dumpRawOnFailure fu
 
 	// Interactive: run the steps model while the build streams events to it.
 	m := tui.NewBuildStepsModel(title)
+	if progressHintsOff(ctx) {
+		m = m.WithoutHints()
+	}
 	prog := buildProgressProgram(m)
 	emit := func(e tui.BuildStepEvent) { prog.Send(tui.BuildStepMsg(e)) }
 	parser := tui.NewBuildParser(emit)

@@ -2,6 +2,7 @@ package tui
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -13,16 +14,17 @@ import (
 )
 
 func TestPickerFailedDefaultSavePreservesMarker(t *testing.T) {
-	m := NewPicker()
-	m.DefaultKey = "previous"
-	m.OnSetDefault = func(PickerItem) (string, error) { return "", errors.New("cannot save config") }
-	m.OnUnsetDefault = func() (string, error) { return "", errors.New("cannot save config") }
-	updated, _ := m.Update(PickerAddMsg{Items: []PickerItem{{Name: "new", DedupKey: "new"}}})
-	m = updated.(PickerModel)
-	for _, key := range []rune{'d', 'x'} {
-		updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{key}})
+	for _, defaultKey := range []string{"previous", "new"} {
+		// "previous" exercises a failed set, "new" a failed clear.
+		m := NewPicker()
+		m.DefaultKey = defaultKey
+		m.OnSetDefault = func(PickerItem) (string, error) { return "", errors.New("cannot save config") }
+		m.OnUnsetDefault = func() (string, error) { return "", errors.New("cannot save config") }
+		updated, _ := m.Update(PickerAddMsg{Items: []PickerItem{{Name: "new", DedupKey: "new"}}})
 		m = updated.(PickerModel)
-		if m.DefaultKey != "previous" || !m.flashIsError || m.flashMessage != "cannot save config" {
+		updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+		m = updated.(PickerModel)
+		if m.DefaultKey != defaultKey || !m.flashIsError || m.flashMessage != "cannot save config" {
 			t.Fatalf("failed save changed UI state: key=%q error=%t message=%q", m.DefaultKey, m.flashIsError, m.flashMessage)
 		}
 	}
@@ -77,7 +79,7 @@ func TestPickerStopRunsOutsideUpdateAndRemainsResponsive(t *testing.T) {
 	}
 	u, _ := m.Update(PickerAddMsg{Items: []PickerItem{{Name: "alpha"}, {Name: "beta"}}})
 	m = u.(PickerModel)
-	u, stop := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("s")})
+	u, stop := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
 	m = u.(PickerModel)
 	if called || stop == nil {
 		t.Fatal("stop ran synchronously or was not scheduled")
@@ -85,7 +87,7 @@ func TestPickerStopRunsOutsideUpdateAndRemainsResponsive(t *testing.T) {
 	if !strings.Contains(m.View(), "Stopping alpha") {
 		t.Fatal("no shutdown progress")
 	}
-	u, duplicate := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("s")})
+	u, duplicate := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("x")})
 	if duplicate != nil {
 		t.Fatal("scheduled duplicate shutdown")
 	}
@@ -103,6 +105,170 @@ func TestPickerStopRunsOutsideUpdateAndRemainsResponsive(t *testing.T) {
 	m = u.(PickerModel)
 	if !called || m.stoppingName != "" || !strings.Contains(m.View(), "Stopped alpha.") {
 		t.Fatal("stop result not applied")
+	}
+}
+
+func TestPickerStartQuitsOnlyWhenTheCallbackAsks(t *testing.T) {
+	m := NewPickerWithTitle("Simulators")
+	var started []string
+	m.OnStartItem = func(item PickerItem) (string, bool) {
+		started = append(started, item.Name)
+		if item.Name == "alpha" {
+			return "alpha is already running.", false
+		}
+		return "Starting beta...", true
+	}
+	u, _ := m.Update(PickerAddMsg{Items: []PickerItem{{Name: "alpha"}, {Name: "beta"}}})
+	m = u.(PickerModel)
+
+	u, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("s")})
+	m = u.(PickerModel)
+	if cmd != nil || !strings.Contains(m.View(), "alpha is already running.") {
+		t.Fatalf("a refused start quit or hid its reason: %q", m.View())
+	}
+	u, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m = u.(PickerModel)
+	u, cmd = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("s")})
+	m = u.(PickerModel)
+	if cmd == nil {
+		t.Fatal("an accepted start did not quit the picker")
+	}
+	if strings.Join(started, ",") != "alpha,beta" || m.Selected() != nil || m.Cancelled() {
+		t.Fatalf("started %v, selected=%v cancelled=%v", started, m.Selected(), m.Cancelled())
+	}
+}
+
+func TestPickerRemoveAsksFirstAndDefaultsToNo(t *testing.T) {
+	newModel := func() (PickerModel, *[]string) {
+		m := NewPickerWithTitle("Simulators")
+		removed := new([]string)
+		m.OnRemoveItem = func(item PickerItem) (string, bool, *PickerItem) {
+			*removed = append(*removed, item.Name)
+			return "Removed " + item.Name + ".", false, nil
+		}
+		m.RemoveConfirmation = func(item PickerItem) string {
+			if item.Name == "nothing-to-lose" {
+				return ""
+			}
+			return "Remove " + item.Name + " and its disk? [y/N]"
+		}
+		u, _ := m.Update(PickerAddMsg{Items: []PickerItem{{Name: "alpha"}, {Name: "nothing-to-lose"}}})
+		return u.(PickerModel), removed
+	}
+	press := func(m PickerModel, key tea.KeyMsg) PickerModel {
+		u, _ := m.Update(key)
+		return u.(PickerModel)
+	}
+	r := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("r")}
+
+	for _, answer := range []tea.KeyMsg{
+		{Type: tea.KeyRunes, Runes: []rune("n")},
+		{Type: tea.KeyEnter},
+		{Type: tea.KeyEsc},
+		{Type: tea.KeyDown},
+	} {
+		m, removed := newModel()
+		m = press(m, r)
+		if !strings.Contains(m.View(), "Remove alpha and its disk? [y/N]") {
+			t.Fatalf("no confirmation shown: %q", m.View())
+		}
+		m = press(m, answer)
+		if len(*removed) != 0 || len(m.items) != 2 || m.Cancelled() {
+			t.Fatalf("%q removed %v or quit; only y may remove", answer.String(), *removed)
+		}
+		if strings.Contains(m.View(), "[y/N]") {
+			t.Fatalf("%q left the question up: %q", answer.String(), m.View())
+		}
+	}
+
+	m, removed := newModel()
+	m = press(press(m, r), tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+	if strings.Join(*removed, ",") != "alpha" || len(m.items) != 1 || !strings.Contains(m.View(), "Removed alpha.") {
+		t.Fatalf("y did not remove the row: removed=%v view=%q", *removed, m.View())
+	}
+
+	// A row with nothing to lose is removed (or refused) without asking.
+	m, removed = newModel()
+	m = press(press(m, tea.KeyMsg{Type: tea.KeyDown}), r)
+	if strings.Join(*removed, ",") != "nothing-to-lose" {
+		t.Fatalf("an empty question still asked: removed=%v", *removed)
+	}
+}
+
+func TestPickerKeyHintsWrapUnderTheTitleWithoutLosingAKey(t *testing.T) {
+	// The hints shared the title's line and were cropped to the window, so a
+	// picker with every action showed "... c create, s" at 100 columns.
+	newFull := func(width int) PickerModel {
+		m := NewPickerWithTitle("Select a simulator")
+		m.RemoveHint = "remove"
+		m.OnCopyItem = func(PickerItem) string { return "" }
+		m.OnSetDefault = func(PickerItem) (string, error) { return "", nil }
+		m.OnUnsetDefault = func() (string, error) { return "", nil }
+		m.OnCreateItem = func() (string, bool) { return "", false }
+		m.OnStartItem = func(PickerItem) (string, bool) { return "", false }
+		m.OnStopItem = func(PickerItem) (string, bool) { return "", false }
+		m.OnRemoveItem = func(PickerItem) (string, bool, *PickerItem) { return "", false, nil }
+		u, _ := m.Update(tea.WindowSizeMsg{Width: width, Height: 30})
+		u, _ = u.(PickerModel).Update(PickerAddMsg{Items: []PickerItem{{Name: "sim", Type: "stopped"}}})
+		return u.(PickerModel)
+	}
+	keys := []string{"↑/↓ navigate", "enter copy", "d toggle default", "c create", "s start", "x stop", "r remove", "q quit"}
+
+	for _, width := range []int{100, 80, 40} {
+		view := ansi.Strip(newFull(width).View())
+		lines := strings.Split(view, "\n")
+		if lines[0] != "Select a simulator" {
+			t.Errorf("width %d: title line = %q, want the title alone", width, lines[0])
+		}
+		for _, line := range lines {
+			if w := ansi.StringWidth(line); w > width {
+				t.Errorf("width %d: line is %d wide: %q", width, w, line)
+			}
+		}
+		for _, key := range keys {
+			if !strings.Contains(view, key) {
+				t.Errorf("width %d: key %q is missing from %q", width, key, view)
+			}
+		}
+	}
+
+	// At 100 columns the whole set fits on one line under the title.
+	if lines := strings.Split(ansi.Strip(newFull(100).View()), "\n"); !strings.HasPrefix(lines[1], "  ↑/↓ navigate") || !strings.HasSuffix(lines[1], "q quit") {
+		t.Errorf("hint line at 100 columns = %q, want every key on it", lines[1])
+	}
+}
+
+func TestPickerKeyHintLinesBreakOnlyBetweenEntries(t *testing.T) {
+	keys := []string{"↑/↓ navigate", "enter copy", "d toggle default", "q quit"}
+	if got := pickerKeyHintLines(keys, 0); len(got) != 1 || got[0] != "  ↑/↓ navigate, enter copy, d toggle default, q quit" {
+		t.Errorf("unbounded = %q", got)
+	}
+	got := pickerKeyHintLines(keys, 30)
+	want := []string{"  ↑/↓ navigate, enter copy,", "  d toggle default, q quit"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Errorf("wrapped = %q, want %q", got, want)
+	}
+}
+
+func TestPickerKeyHintsGiveUpTableRows(t *testing.T) {
+	// Every hint line is a line the table cannot use; without counting them a
+	// full table pushed the title off the top of an alt-screen view.
+	m := NewPickerWithTitle("Select")
+	m.OnSetDefault = func(PickerItem) (string, error) { return "", nil }
+	m.OnUnsetDefault = func() (string, error) { return "", nil }
+	m.OnStartItem = func(PickerItem) (string, bool) { return "", false }
+	m.OnStopItem = func(PickerItem) (string, bool) { return "", false }
+	items := make([]PickerItem, 40)
+	for i := range items {
+		items[i] = PickerItem{Name: fmt.Sprintf("vm-%02d", i)}
+	}
+	for _, width := range []int{120, 30} {
+		u, _ := m.Update(tea.WindowSizeMsg{Width: width, Height: 20})
+		u, _ = u.(PickerModel).Update(PickerAddMsg{Items: items})
+		pm := u.(PickerModel)
+		if got := strings.Count(pm.View(), "\n"); got > 20 {
+			t.Errorf("width %d: view is %d lines in a 20-line window", width, got)
+		}
 	}
 }
 
@@ -627,11 +793,17 @@ func TestPickerModel_DefaultKeyShowsStar(t *testing.T) {
 	if !strings.Contains(view, "✦") {
 		t.Error("expected ✦ indicator for default item")
 	}
-	if !strings.Contains(view, "d set default") {
-		t.Error("expected hint text to contain 'd set default'")
+	if !strings.Contains(view, "d toggle default") {
+		t.Error("expected hint text to contain 'd toggle default'")
 	}
-	if !strings.Contains(view, "x clear default") {
-		t.Error("expected hint text to contain 'x clear default'")
+	if strings.Contains(view, "x clear default") {
+		t.Error("hint still advertises 'x clear default'; d toggles now")
+	}
+
+	// Without a way to clear, 'd' only sets, and the hint says so.
+	m.OnUnsetDefault = nil
+	if view := m.View(); !strings.Contains(view, "d set default") {
+		t.Errorf("set-only picker hint = %q, want 'd set default'", view)
 	}
 }
 
@@ -717,26 +889,46 @@ func TestPickerModel_DKeySetsDefault(t *testing.T) {
 	}
 }
 
-func TestPickerModel_XKeyClearsDefault(t *testing.T) {
+func TestPickerModel_DKeyOnTheDefaultClearsIt(t *testing.T) {
 	m := NewPickerWithTitle("Select a device")
 	m.DefaultKey = "alpha"
-	var unsetCalled bool
-	m.OnSetDefault = func(item PickerItem) (string, error) { return "", nil }
-	m.OnUnsetDefault = func() (string, error) { unsetCalled = true; return "", nil }
+	var setCalls, unsetCalls int
+	m.OnSetDefault = func(item PickerItem) (string, error) { setCalls++; return "", nil }
+	m.OnUnsetDefault = func() (string, error) { unsetCalls++; return "", nil }
 
 	updated, _ := m.Update(PickerAddMsg{Items: []PickerItem{
 		{Name: "alpha", Type: "LAN", Value: "alpha"},
+		{Name: "beta", Type: "LAN", Value: "beta"},
 	}})
 	pm := updated.(PickerModel)
 
+	// 'x' no longer clears: it is the stop key now.
 	updated, _ = pm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
 	pm = updated.(PickerModel)
-
-	if !unsetCalled {
-		t.Error("OnUnsetDefault was not called")
+	if unsetCalls != 0 || pm.DefaultKey != "alpha" {
+		t.Fatalf("x cleared the default: unset=%d key=%q", unsetCalls, pm.DefaultKey)
 	}
-	if pm.DefaultKey != "" {
-		t.Errorf("DefaultKey = %q, want empty", pm.DefaultKey)
+
+	updated, _ = pm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	pm = updated.(PickerModel)
+	if unsetCalls != 1 || setCalls != 0 || pm.DefaultKey != "" {
+		t.Fatalf("d on the default: set=%d unset=%d key=%q, want it cleared", setCalls, unsetCalls, pm.DefaultKey)
+	}
+
+	// Pressed again, it sets the same row back.
+	updated, _ = pm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	pm = updated.(PickerModel)
+	if setCalls != 1 || pm.DefaultKey != "alpha" {
+		t.Fatalf("second d: set=%d key=%q, want alpha set again", setCalls, pm.DefaultKey)
+	}
+
+	// On another row 'd' moves the default rather than clearing it.
+	updated, _ = pm.Update(tea.KeyMsg{Type: tea.KeyDown})
+	pm = updated.(PickerModel)
+	updated, _ = pm.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	pm = updated.(PickerModel)
+	if setCalls != 2 || unsetCalls != 1 || pm.DefaultKey != "beta" {
+		t.Fatalf("d on another row: set=%d unset=%d key=%q, want beta", setCalls, unsetCalls, pm.DefaultKey)
 	}
 }
 

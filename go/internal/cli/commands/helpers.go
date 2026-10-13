@@ -574,7 +574,11 @@ var runAgentConnectionSpinner = func(ctx context.Context, label string, fn func(
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	prog := tui.NewProgressProgram(tui.NewSpinner(label))
+	spin := tui.NewSpinner(label)
+	if progressHintsOff(ctx) {
+		spin = spin.WithoutHints()
+	}
+	prog := tui.NewProgressProgram(spin)
 
 	var (
 		conn   *grpcclient.AgentConnection
@@ -4132,7 +4136,8 @@ func pickDeviceWithCloudAuth(ctx context.Context, excludeProviders map[string]bo
 		}
 	}
 
-	// Allow 'd' to set default and 'x' to unset default from the picker.
+	// 'd' sets the highlighted device as the default, or clears it when it
+	// already is.
 	picker.OnSetDefault = setPickerDefault
 	picker.OnUnsetDefault = unsetPickerDefault
 

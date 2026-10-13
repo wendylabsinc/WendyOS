@@ -2,6 +2,8 @@ package commands
 
 import (
 	"errors"
+	"fmt"
+	"net"
 	"strings"
 	"testing"
 
@@ -318,5 +320,89 @@ func TestConsoleTailStripsEightBitControlIntroducers(t *testing.T) {
 	// Multi-byte text must survive: the guest prints UTF-8 and box drawing.
 	if got := sanitizeConsoleLine("na\u00efve \u2713 caf\u00e9"); got != "na\u00efve \u2713 caf\u00e9" {
 		t.Errorf("sanitizeConsoleLine() = %q, want multi-byte text kept intact", got)
+	}
+}
+
+// freeVMPortSpan finds a base port whose whole agent span is free right now.
+func freeVMPortSpan(t *testing.T) int {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := ln.Addr().(*net.TCPAddr).Port
+	if err := ln.Close(); err != nil {
+		t.Fatal(err)
+	}
+	port, err := vm.PickHostPort(min(base, 65000), 8)
+	if err != nil {
+		t.Skipf("no free port span near %d: %v", base, err)
+	}
+	return port
+}
+
+func TestVMStartWithoutPortPrefersTheSavedPortThenTheNextFreeOne(t *testing.T) {
+	// `wendy vm start sim` failed outright when something else held 50051, and
+	// ignored the port --device vm:sim had already moved the VM to.
+	store := &vm.Store{Root: t.TempDir()}
+	if err := store.CreateFrom("sim", strings.NewReader("disk"), 4, 1024, vm.Meta{}); err != nil {
+		t.Fatal(err)
+	}
+
+	if preferred, _, _ := vmStartHostPort(store, "sim", string(vm.NetUser)); preferred != vm.DefaultAgentPort {
+		t.Errorf("no saved port: search began at %d, want the default", preferred)
+	}
+
+	saved := freeVMPortSpan(t)
+	if err := store.RecordAgentPort("sim", saved); err != nil {
+		t.Fatal(err)
+	}
+	preferred, port, err := vmStartHostPort(store, "sim", string(vm.NetUser))
+	if err != nil || preferred != saved || port != saved {
+		t.Fatalf("free saved port: preferred=%d port=%d err=%v, want %d", preferred, port, err, saved)
+	}
+
+	// Someone else takes it: the start moves on instead of failing.
+	ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", saved))
+	if err != nil {
+		t.Skipf("could not occupy %d: %v", saved, err)
+	}
+	defer ln.Close()
+	preferred, port, err = vmStartHostPort(store, "sim", string(vm.NetUser))
+	if err != nil || preferred != saved || port <= saved || (port-saved)%vm.AgentPortSpan != 0 {
+		t.Fatalf("busy saved port: preferred=%d port=%d err=%v, want the next free span after %d", preferred, port, err, saved)
+	}
+
+	// Shared networking forwards no port, so there is nothing to pick.
+	if preferred, port, err := vmStartHostPort(store, "sim", string(vm.NetShared)); preferred != 0 || port != 0 || err != nil {
+		t.Errorf("shared networking picked %d/%d (%v)", preferred, port, err)
+	}
+}
+
+func TestVMStartRecordsOnlyAPortItPicked(t *testing.T) {
+	store := &vm.Store{Root: t.TempDir()}
+	if err := store.CreateFrom("sim", strings.NewReader("disk"), 4, 1024, vm.Meta{}); err != nil {
+		t.Fatal(err)
+	}
+	spec := vm.Spec{Net: vm.NetConfig{Mode: vm.NetUser, AgentPort: 50155}}
+
+	recordVMStartPort(store, "sim", spec, vmStartOptions{autoPort: false})
+	if meta, _ := store.ReadMeta("sim"); meta.AgentPort != 0 {
+		t.Fatalf("an explicit --port became sticky: %d", meta.AgentPort)
+	}
+	recordVMStartPort(store, "sim", spec, vmStartOptions{autoPort: true})
+	if meta, _ := store.ReadMeta("sim"); meta.AgentPort != 50155 {
+		t.Fatalf("picked port not recorded: %d", meta.AgentPort)
+	}
+
+	var out strings.Builder
+	vmPrintPortMove(&out, spec, vmStartOptions{autoPort: true}, vm.DefaultAgentPort)
+	if !strings.Contains(out.String(), "Port 50051 is in use") || !strings.Contains(out.String(), "127.0.0.1:50155") {
+		t.Errorf("move note = %q", out.String())
+	}
+	out.Reset()
+	vmPrintPortMove(&out, spec, vmStartOptions{autoPort: true}, 50155)
+	if out.Len() != 0 {
+		t.Errorf("note printed without a move: %q", out.String())
 	}
 }

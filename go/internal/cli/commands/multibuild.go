@@ -717,6 +717,9 @@ func buildServicesParallelCore(
 	if !quietBuild && isInteractiveTerminal() && !detachedJSONRun(ctx) {
 		title := fmt.Sprintf("Building %d service(s)...", len(names))
 		m := tui.NewMultiSpinner(title, names)
+		if progressHintsOff(ctx) {
+			m = m.WithoutHints()
+		}
 		prog = tui.NewProgressProgram(m)
 	}
 

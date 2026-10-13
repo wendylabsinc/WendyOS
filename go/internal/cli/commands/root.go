@@ -8,6 +8,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/wendylabsinc/wendy/go/internal/cli/analytics"
 	"github.com/wendylabsinc/wendy/go/internal/cli/sessionbroker"
+	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/go/internal/shared/ble/permission"
 	"github.com/wendylabsinc/wendy/go/internal/shared/ble/scan"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
@@ -38,6 +39,8 @@ func NewRootCmd() *cobra.Command {
 			// answer to "which device": --device, else WENDY_DEVICE, else the
 			// saved default.
 			applyDeviceEnv()
+			// Progress tips never recommend the command already running.
+			tui.SetRunningCommand(cmd.CommandPath())
 
 			// Skip heavy init for commands that don't need device/cloud setup.
 			// __usb-setup and __t234-write run as root under sudo; skipping init

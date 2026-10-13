@@ -545,7 +545,9 @@ func reconcileRobotLocked(ctx context.Context, conn *grpcclient.AgentConnection,
 		return err
 	}
 	cliLogln("Building and provisioning %s in %s (the first build downloads pinned assets and ROS dependencies)...", runtime.name, name)
-	err = runWithAgent(ctx, conn, source, cfg, runOptions{
+	// The deploy's progress views would otherwise rotate tips about scaffolding
+	// a project or editing wendy.json, which is not what the user is doing.
+	err = runWithAgent(withoutProgressHints(ctx), conn, source, cfg, runOptions{
 		managedRobot: true, buildType: "docker", builder: "docker", dockerfile: "Dockerfile",
 		detach: true, yes: true, restartUnlessStopped: true,
 		env: runtime.environment(name, profile),
@@ -982,7 +984,7 @@ func readSimulatorRobots(ctx context.Context, statuses []vm.Status) map[string]s
 			result[status.Name] = simulatorRobotInfo{Kind: "Invalid", State: "profile error", Hint: err.Error()}
 			continue
 		}
-		info := simulatorRobotInfo{Kind: runtime.name, State: "stopped", Hint: "Connect to start the robot and open its sandbox with 'wendy vm robot open " + status.Name + "'."}
+		info := simulatorRobotInfo{Kind: runtime.name, State: "stopped", Hint: "Press s to start " + status.Name + " and its robot; then 'wendy vm robot open " + status.Name + "' opens the sandbox."}
 		if !status.Running {
 			result[status.Name] = info
 			continue

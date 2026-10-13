@@ -274,6 +274,20 @@ func TestDiscoverModel_DKeySetsDefaultAndMarksSelectedDevice(t *testing.T) {
 	if !strings.Contains(um.table.View(), "✦") {
 		t.Fatalf("expected selected default device to show marker, got %q", um.table.View())
 	}
+
+	// 'd' toggles: on the default row it clears the default, as on the
+	// Simulator and Cloud tabs. There is no separate 'x' any more.
+	updated, _ = um.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	um = updated.(discoverModel)
+	if got := defaultKey(t); got != "" {
+		t.Fatalf("second d left default %q, want it cleared", got)
+	}
+	if um.flashMessage != "Default device cleared." || strings.Contains(um.table.View(), "✦") {
+		t.Fatalf("second d: flash=%q table=%q", um.flashMessage, um.table.View())
+	}
+	if view := um.View(); !strings.Contains(view, "d toggle default") || strings.Contains(view, "x unset default") {
+		t.Fatalf("hint does not describe the toggle: %q", view)
+	}
 }
 
 func TestDiscoverTableItemsHidesAddressForDockerAndLocal(t *testing.T) {

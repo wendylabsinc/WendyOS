@@ -260,3 +260,34 @@ func TestTCPPortMappingIgnoresForeignNetInterfacesAndEndpoints(t *testing.T) {
 		}
 	}
 }
+
+func TestTCPPortMappingNamesWhyThereIsNoForward(t *testing.T) {
+	// 'wendy vm robot open' on a stopped VM said it was "not running with user
+	// networking", which sends people after --net when all it needs is a boot.
+	ctx := context.Background()
+	s := newTestStore(t)
+	if _, err := s.TCPPortMapping(ctx, "ghost", 8890); err == nil || !strings.Contains(err.Error(), `no VM named "ghost"`) {
+		t.Errorf("missing VM: %v", err)
+	}
+
+	createTestVM(t, s, "sim", Meta{})
+	_, err := s.TCPPortMapping(ctx, "sim", 8890)
+	if err == nil || !strings.Contains(err.Error(), `VM "sim" is stopped`) ||
+		!strings.Contains(err.Error(), "--device vm:sim") || strings.Contains(err.Error(), "networking") {
+		t.Errorf("stopped VM: %v, want it called stopped with a way to start it", err)
+	}
+
+	// Only a VM that is really up without a user-mode forward gets the
+	// networking explanation.
+	lock, err := s.acquireRunLock("sim")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+	if err := s.WriteState(State{Name: "sim", PID: 4321, NetMode: NetShared, StartedAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.TCPPortMapping(ctx, "sim", 8890); err == nil || !strings.Contains(err.Error(), "not running with user networking") {
+		t.Errorf("shared-network VM: %v", err)
+	}
+}

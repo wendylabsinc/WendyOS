@@ -2,6 +2,8 @@ package tui
 
 import (
 	"math/rand"
+	"strings"
+	"sync/atomic"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -41,17 +43,47 @@ type hintRotator struct {
 	current string
 }
 
+// runningCommand holds the path of the command this process runs, such as
+// "wendy device info"; see SetRunningCommand.
+var runningCommand atomic.Value
+
+// SetRunningCommand records the running command's path, so a progress tip
+// never recommends the very command the user is already running.
+func SetRunningCommand(path string) { runningCommand.Store(path) }
+
 // newHintRotator builds a rotator over ProgressHints with a random first hint.
 func newHintRotator() hintRotator {
-	r := hintRotator{hints: ProgressHints}
+	running, _ := runningCommand.Load().(string)
+	r := hintRotator{hints: hintsBesides(ProgressHints, running)}
 	if len(r.hints) > 0 {
 		r.current = r.hints[rand.Intn(len(r.hints))]
 	}
 	return r
 }
 
-// tick returns a command that fires a hintTickMsg after hintInterval.
+// hintsBesides drops the tips that name running as a whole command, e.g.
+// 'wendy device info' while it runs. A variant is kept: 'wendy run --watch'
+// is worth knowing during a plain 'wendy run'.
+func hintsBesides(hints []string, running string) []string {
+	if running == "" {
+		return hints
+	}
+	quoted := "'" + running + "'"
+	kept := make([]string, 0, len(hints))
+	for _, hint := range hints {
+		if !strings.Contains(hint, quoted) {
+			kept = append(kept, hint)
+		}
+	}
+	return kept
+}
+
+// tick returns a command that fires a hintTickMsg after hintInterval, or nil
+// when there is nothing to rotate through (see the models' WithoutHints).
 func (r hintRotator) tick() tea.Cmd {
+	if len(r.hints) == 0 {
+		return nil
+	}
 	return tea.Tick(hintInterval, func(time.Time) tea.Msg {
 		return hintTickMsg{}
 	})

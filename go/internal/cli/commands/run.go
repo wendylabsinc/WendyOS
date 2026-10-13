@@ -354,8 +354,12 @@ func progressModelUserCancelled(model tea.Model) bool {
 	return ok && pm.Err() == context.Canceled
 }
 
-func createContainerWithProgressTUI(cancel context.CancelFunc, stream agentpb.WendyContainerService_CreateContainerWithProgressClient) error {
-	prog := tui.NewProgressProgram(tui.NewProgress("Pulling image on device...").WithoutErrorView())
+func createContainerWithProgressTUI(cancel context.CancelFunc, stream agentpb.WendyContainerService_CreateContainerWithProgressClient, hints bool) error {
+	bar := tui.NewProgress("Pulling image on device...").WithoutErrorView()
+	if !hints {
+		bar = bar.WithoutHints()
+	}
+	prog := tui.NewProgressProgram(bar)
 
 	var (
 		createErr error
@@ -479,7 +483,7 @@ func createContainerWithProgress(ctx context.Context, svc agentpb.WendyContainer
 		}
 		return fmt.Errorf("creating container: %w", err)
 	}
-	if err := createContainerWithProgressTUI(cancel, stream); err != nil {
+	if err := createContainerWithProgressTUI(cancel, stream, !progressHintsOff(ctx)); err != nil {
 		if isUnimplementedRPCError(err) {
 			return fallbackCreateContainerWithoutProgress(ctx, svc, req)
 		}

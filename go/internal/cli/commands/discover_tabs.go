@@ -27,6 +27,7 @@ type discoverTabsModel struct {
 	active       devicePickerTab
 	action       devicePickerAction
 	createVMName string
+	startVMName  string
 	cancelled    bool
 	windowWidth  int
 }
@@ -49,6 +50,21 @@ func newDiscoverTabsModel(ctx context.Context, local discoverModel, auth *config
 	}
 	if auth != nil {
 		m.cloud = newCloudDiscoverModel(ctx, auth, os.Getenv("WENDY_BROKER_URL"), false, false, nil)
+	}
+	return m
+}
+
+// simulatorFlash is a status line for the Simulator tab, carried across a
+// restart of the view: 's' runs its boot with the TUI gone, so its outcome can
+// only be shown once the view is back.
+type simulatorFlash struct {
+	msg   string
+	isErr bool
+}
+
+func (m discoverTabsModel) withSimulatorFlash(f simulatorFlash) discoverTabsModel {
+	if f.msg != "" {
+		m.sim.picker.SetFlash(f.msg, f.isErr)
 	}
 	return m
 }
@@ -130,8 +146,8 @@ func (m discoverTabsModel) updateLocal(msg tea.Msg) (discoverTabsModel, tea.Cmd)
 
 // updateSimulator forwards to the shared simulator list. A selection is ignored
 // -- discover shows devices, it does not connect to one, and enter copies
-// instead -- but 'c' still has to leave, because the download needs the
-// terminal this view is holding.
+// instead -- but 'c' and 's' still have to leave, because the download, the
+// boot and the robot build need the terminal this view is holding.
 func (m discoverTabsModel) updateSimulator(msg tea.Msg) (discoverTabsModel, tea.Cmd) {
 	updated, cmd := m.sim.Update(msg)
 	m.sim = updated
@@ -140,6 +156,11 @@ func (m discoverTabsModel) updateSimulator(msg tea.Msg) (discoverTabsModel, tea.
 			m.createVMName = choice.Name
 		}
 		m.action = devicePickerCreateVM
+		return m, tea.Quit
+	}
+	if name := m.sim.startRequested(); name != "" {
+		m.startVMName = name
+		m.action = devicePickerStartVM
 		return m, tea.Quit
 	}
 	if m.sim.cancelled() {
@@ -253,7 +274,7 @@ func (m discoverTabsModel) View() string {
 		return header + "\n\n" + m.local.View()
 	case devicePickerSimulatorTab:
 		return header + "\n\n" + m.sim.View() + "\n" + devicePickerOrgStyle.Render(
-			"  enter copy address, tab switch, q quit — start one with 'wendy vm start <name>'")
+			"  enter copies a running simulator's address — press s to start a stopped one")
 	}
 
 	var body strings.Builder
@@ -284,7 +305,7 @@ func copySimulatorAddress(choice *simulatorChoice) string {
 	case choice.Create:
 		return "No simulator yet — press c to create one."
 	case choice.Address == "":
-		return fmt.Sprintf("%s is not running — start it with 'wendy vm start %s'.", choice.Name, choice.Name)
+		return fmt.Sprintf("%s is not running — press s to start it.", choice.Name)
 	}
 	if err := clipboardWriter(choice.Address); err != nil {
 		return fmt.Sprintf("Copy failed: %v", err)

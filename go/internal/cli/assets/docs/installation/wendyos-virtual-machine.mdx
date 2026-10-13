@@ -63,18 +63,19 @@ The tab manages simulators without dropping to `wendy vm`:
 | Key | Does |
 | --- | --- |
 | `c` | Create one at the latest release, naming it `sim`, `sim-2`, … |
-| `s` | Power off the highlighted VM |
-| `r` | Delete it, once it is stopped |
-| `d` | Save the highlighted simulator as the default device |
-| `x` | Clear the saved default device |
+| `s` | Start the highlighted VM and, the first time, build its robot |
+| `x` | Power off the highlighted VM |
+| `r` | Delete it and its disk, once it is stopped (asks first) |
+| `d` | Save the highlighted simulator as the default device; press it again to clear the default |
 
 The default uses the VM's name, so it still works when its forwarded port changes.
 Saving a default does not start the VM. Your next device command starts it when
 needed. The `✦` marker identifies the saved default when you reopen the picker.
 
-`wendy discover` shows the same tab with the same keys; there `enter`
-copies the VM's address instead of selecting it. For a specific name, version
-or disk size, use `wendy vm create`.
+`wendy discover` shows the same tab with the same keys. There `enter` copies
+the VM's address instead of selecting it, and `s` returns to the tab once the
+VM is up, rather than deploying to it. For a specific name, version or disk
+size, use `wendy vm create`.
 
 To skip the picker entirely, name the simulator directly:
 
@@ -280,8 +281,11 @@ before connecting to the replacement. It clears only the VM's own pin, never
 the shared `127.0.0.1` pin that other loopback addresses use. That pin is
 cleared by `wendy device unpin 127.0.0.1`.
 
-The agent's port is often already in use on a development machine. Move the
-host side of the forward:
+The agent's port is often already in use on a development machine. `wendy vm
+start` and `--device vm:<name>` then move the host side of the forward to the
+next free port on their own, and the VM keeps that port for later starts. To
+choose it yourself, pass `--port`; a port given that way that is in use is an
+error rather than a hint to move:
 
 ```sh
 wendy vm start dev --port 50151

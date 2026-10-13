@@ -46,8 +46,10 @@ func TestSimulatorPickerSavesStableDefaultWithoutStartingVM(t *testing.T) {
 	if reopened.picker.DefaultKey != "vm:test-sim" || !strings.Contains(reopened.View(), "✦") {
 		t.Fatal("reopened picker lost default marker")
 	}
-	reopened, _ = reopened.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
-	if defaultKey(t) != "" {
+	// 'd' toggles: pressed on the default row it clears the default. ('x' is
+	// the stop key now, and on this running VM it would power it off.)
+	reopened, _ = reopened.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
+	if defaultKey(t) != "" || strings.Contains(reopened.View(), "✦") {
 		t.Fatal("default not cleared")
 	}
 }
@@ -89,9 +91,17 @@ func TestCloudPickerDefaultPersistsAndSynchronizesTabs(t *testing.T) {
 	if reopened.defaultDevice != want || !strings.Contains(reopened.table.View(), "✦") {
 		t.Fatal("renamed cloud asset lost default marker")
 	}
+	// 'x' no longer clears anything; 'd' on the default does.
 	updatedCloud, _ := reopened.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	if defaultKey(t) != want {
+		t.Fatal("x still clears the cloud default")
+	}
+	updatedCloud, _ = updatedCloud.(cloudDiscoverModel).Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
 	if defaultKey(t) != "" || updatedCloud.(cloudDiscoverModel).defaultDevice != "" {
 		t.Fatal("cloud default not cleared")
+	}
+	if view := updatedCloud.(cloudDiscoverModel).View(); strings.Contains(view, "x clear default") || !strings.Contains(view, "d toggle default") {
+		t.Fatalf("cloud hint does not describe the d toggle: %q", view)
 	}
 }
 
