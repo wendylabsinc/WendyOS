@@ -28,6 +28,11 @@ const (
 	MaxTXTBytes    = 1200
 	MaxTXTEntries  = 32
 	recordDomain   = "wendy-mesh-service/record/1\x00"
+	// GatewayAppID and GatewayServiceID identify the agent-owned capability.
+	// It is never an app service or a DNS-SD endpoint.
+	GatewayAppID      = "wendy.mesh.system"
+	GatewayServiceID  = "internet-gateway"
+	GatewayOfferLease = 600 * time.Second
 )
 
 var (
@@ -67,6 +72,15 @@ type SignedRecord struct {
 	Signature   []byte          `json:"signature"`
 }
 
+// IsGatewayOffer identifies the exact reserved, endpoint-free system record.
+// Callers must obtain records from a Catalog to rely on signature and lease
+// verification; this shape check alone does not authenticate a record.
+func IsGatewayOffer(r Record) bool {
+	return r.Version == 1 && r.Key.AppID == GatewayAppID &&
+		r.Key.ServiceID == GatewayServiceID && r.Type == "" &&
+		r.Instance == "" && r.HostPort == 0 && len(r.TXT) == 0
+}
+
 func (r Record) Validate(now time.Time) error {
 	if r.Version != 1 || !labelPattern.MatchString(r.Key.Mesh) || r.Key.Org <= 0 ||
 		r.Key.Asset <= 0 || r.Key.Asset > 65534 || appconfig.ValidateAppID(r.Key.AppID) != nil ||
@@ -77,8 +91,18 @@ func (r Record) Validate(now time.Time) error {
 	if !expires.After(now) {
 		return ErrExpired
 	}
-	if issued.After(now.Add(5*time.Second)) || !expires.After(issued) || expires.Sub(issued) > MaxLease {
+	leaseLimit := MaxLease
+	if r.Key.AppID == GatewayAppID && r.Key.ServiceID == GatewayServiceID {
+		leaseLimit = GatewayOfferLease
+	}
+	if issued.After(now.Add(5*time.Second)) || !expires.After(issued) || expires.Sub(issued) > leaseLimit {
 		return errors.New("invalid mesh service lease")
+	}
+	if r.Key.AppID == GatewayAppID || r.Key.ServiceID == GatewayServiceID {
+		if !IsGatewayOffer(r) {
+			return errors.New("invalid reserved mesh gateway offer")
+		}
+		return nil
 	}
 	if r.Withdraw {
 		if r.HostPort != 0 || r.Type != "" || r.Instance != "" || len(r.TXT) != 0 {
