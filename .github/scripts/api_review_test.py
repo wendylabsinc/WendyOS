@@ -290,6 +290,14 @@ class EvidenceResolutionTests(unittest.TestCase):
         self.assertEqual(location["properties"]["evidence_id"], {"type": "integer", "enum": [1, 2]})
         self.assertFalse(location["additionalProperties"])
 
+    def test_context_only_fragment_cannot_return_decisions(self):
+        raw = "diff --git a/ui.js b/ui.js\n--- a/ui.js\n+++ b/ui.js\n@@ -5,1 +5,1 @@ review fragment\n unchanged\n"
+        evidence = api_review.evidence_catalog(api_review.parse_diff(raw))
+        self.assertEqual(evidence, {})
+        self.assertIn("must be empty", api_review.model_schema(evidence)["properties"]["decisions"]["description"])
+        with self.assertRaisesRegex(api_review.ReviewError, "context-only"):
+            api_review.validate_payload({"risk": "high", "decisions": [decision()]}, api_review.parse_diff(raw))
+
     def test_resolving_ids_preserves_model_payload_and_public_location_contract(self):
         original = {"risk": "high", "decisions": [model_decision(locations=[{"evidence_id": 1}, {"evidence_id": 2}])]}
         snapshot = json.dumps(original, sort_keys=True)
@@ -685,6 +693,30 @@ class CommandTests(unittest.TestCase):
         self.assertIn("No partial review", result["error"])
         self.assertEqual(result["decisions"], [])
         model.assert_not_called()
+
+    def test_minified_file_fragments_are_reviewed_with_original_source_locations(self):
+        raw = diff(before="x" * 4000, after="y" * 4000 + "!")
+
+        def review(meta, batch, repo, model):
+            self.assertLessEqual(len(batch.encode()), 600)
+            parsed = api_review.parse_diff(batch)
+            for (path, side), lines in parsed["locations"].items():
+                self.assertEqual(path, "go/network.go")
+                if lines:
+                    self.assertEqual(lines, {5})
+            api_review.user_prompt(meta, batch, repo)
+            if "!" in batch:
+                return {"risk": "high", "decisions": [decision()]}
+            return {"risk": "low", "decisions": []}
+
+        with patch.object(api_review, "MAX_DIFF_BYTES", 600):
+            code, result, model = self.run_review(raw=raw, error=review)
+        self.assertEqual(code, 0)
+        self.assertGreater(model.call_count, 2)
+        self.assertEqual(result["review_batches"], model.call_count)
+        self.assertEqual(result["diff_bytes"], len(raw))
+        self.assertEqual(result["risk"], "high")
+        self.assertEqual(result["decisions"][0]["locations"], decision()["locations"])
 
     def test_one_failed_batch_cannot_publish_partial_decisions(self):
         raw = diff() + diff(path="go/another.go")

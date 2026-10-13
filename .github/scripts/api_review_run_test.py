@@ -203,6 +203,38 @@ class FullRunTests(unittest.TestCase):
     def test_complete_run_preserves_eleven_accepted_decisions(self):
         self.run_flow()
 
+    def test_fragmented_source_and_context_use_supported_wire_schemas(self):
+        from anthropic.lib._parse._transform import transform_schema
+
+        raw = diff(before="x" * 4000, after="y" * 4000 + "!").decode()
+        batches = api_review.split_diff(raw, 600)
+        requests = []
+
+        def transport(request):
+            payload = json.loads(request.content)
+            schema = payload["output_config"]["format"]["schema"]
+            self.assertEqual(schema, transform_schema(copy.deepcopy(schema)))
+            prompt = json.loads(payload["messages"][0]["content"])
+            batch = prompt["diff"]
+            self.assertLessEqual(len(batch.encode()), 600)
+            evidence = api_review.evidence_catalog(api_review.parse_diff(batch))
+            requests.append(bool(evidence))
+            decisions = []
+            if "!" in batch:
+                evidence_id = next(key for key, location in evidence.items() if location["side"] == "head")
+                decisions = [model_decision(locations=[{"evidence_id": evidence_id}])]
+            return self.message({"risk": "high" if decisions else "low", "decisions": decisions})
+
+        with httpx.Client(transport=httpx.MockTransport(transport)) as http:
+            client = anthropic.Anthropic(api_key="offline-fixture-key", http_client=http, max_retries=0)
+            with patch.object(anthropic, "Anthropic", return_value=client):
+                reviewed = api_review.review_batches(metadata(), batches, REPO, "test-model")
+        self.assertEqual(len(requests), len(batches))
+        self.assertIn(False, requests)
+        self.assertIn(True, requests)
+        self.assertEqual(reviewed["risk"], "high")
+        self.assertEqual(reviewed["decisions"][0]["locations"], decision()["locations"])
+
     def test_complete_run_dry_publication_makes_no_github_mutations(self):
         self.run_flow(dry_run=True)
 

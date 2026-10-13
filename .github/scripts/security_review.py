@@ -1005,9 +1005,13 @@ def review_batches(client: Any, model: str, metadata: dict[str, Any], diff: str,
         context = ""
         if len(batches) > 1:
             context = (
-                f"\n\nThis is complete file batch {index + 1} of {len(batches)}. "
+                f"\n\nThis is review batch {index + 1} of {len(batches)}. "
                 "Other batches are reviewed separately; do not claim to have reviewed them. "
-                "Only reassess prior findings whose source files are in this batch. "
+                "Oversized files use labeled review fragments with original source line numbers; "
+                "long lines continue across UTF-8 byte ranges at the SAME source line number. "
+                "Repeated headers and small hunks describe excerpts, not complete lines or patches to apply. "
+                "Only reassess prior findings whose relevant source evidence is actually in this batch. "
+                "A file appearing here does not mean all its source is present. "
                 "Do not mark other findings addressed, cancelled, or silenced based on absent code."
             )
         return review_batch(client, model, metadata, batch, previous_review, context)
@@ -1033,7 +1037,7 @@ def review_batches(client: Any, model: str, metadata: dict[str, Any], diff: str,
                 findings.append(finding)
     return {
         "summary": (results[0]["summary"] if len(results) == 1 else
-                    f"Completed security review of all {len(results)} file batches."),
+                    f"Completed security review of all {len(results)} batches."),
         "findings": findings,
         "compliance_summary": "\n\n".join(result["compliance_summary"] for result in results
                                            if result["compliance_summary"]),

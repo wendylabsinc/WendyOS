@@ -472,6 +472,24 @@ class BatchReviewTests(unittest.TestCase):
         _, blocking = security_review.render_review(result, self.raw.decode(), self.manifest)
         self.assertTrue(blocking)
 
+    def test_minified_source_fragments_retain_a_late_blocker(self) -> None:
+        self.raw = diff("go/large.js", "x" * 4000 + "LAST-SECRET")
+        self.meta = metadata(1)
+        self.manifest = security_review.build_input_manifest(self.meta, self.raw, 42, HEAD_SHA, 500)
+
+        def response(_client, _model, _meta, batch, _previous, context):
+            self.assertLessEqual(len(batch.encode()), 500)
+            self.assertIn("original source line numbers", context)
+            return payload(*[finding(severity="high", path="go/large.js")]
+                           if "LAST-SECRET" in batch else [])
+
+        with patch.object(security_review, "review_batch", side_effect=response) as review:
+            result = self.run_review()
+        self.assertEqual(review.call_count, self.manifest["batch_count"])
+        self.assertEqual(self.manifest["prepared_bytes"], len(self.raw))
+        _, blocking = security_review.render_review(result, self.raw.decode(), self.manifest)
+        self.assertTrue(blocking)
+
     def test_later_failure_cannot_become_a_nonblocking_partial_review(self) -> None:
         def response(_client, _model, _meta, batch, _previous, _context):
             if "file1.go" in batch:

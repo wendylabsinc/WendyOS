@@ -15,7 +15,7 @@ from typing import Any
 
 from review_diff import DiffBatchError, split_diff
 
-# Each model call reviews complete file patches within this byte budget.
+# Each model call reviews bounded patches or explicitly labeled source fragments.
 MAX_DIFF_BYTES = 200_000
 MAX_REVIEW_WORKERS = 4
 CATEGORIES = {"network", "protobuf", "storage", "config", "cli", "other"}
@@ -285,8 +285,9 @@ def validate_input(metadata: Any, diff_bytes: bytes, repo: str, pr_number: int, 
 def system_prompt() -> str:
     return """You review durable, externally observable API decisions in WendyOS, its Go CLI, Swift/Go agents, and OS images. Identify contracts that become costly to reverse once users, devices, clients, or saved data rely on them. Examine the ENTIRE provided diff, regardless of filename or whether a public symbol changed.
 
-Large PRs are reviewed in separate complete-file batches. The user message identifies this batch and the total batch count. Review every supplied file, and cite only evidence in this batch. Other files may be present in other batches; do not infer that a migration, caller update, or related implementation is missing merely because it is absent from this batch.
-The numbered_diff field contains the same complete patch with an explicit [evidence:ID head:N] or [evidence:ID base:N] label on every changed line. For each citation, copy the integer ID of the specific changed line supporting the decision into evidence_id. The workflow resolves IDs to paths and exact source lines; never calculate line numbers or ranges yourself. Unlabelled context lines are not citable. Structural file-level references are listed separately in structural_evidence. The diff field is the unchanged original patch for reference.
+Large PRs are reviewed in separate bounded batches. The user message identifies this batch and the total batch count. Oversized files use labeled review fragments: repeated file headers and small hunks preserve original source line numbers, and a very long line may continue across UTF-8 byte ranges with the SAME source line number. These are excerpts for review, not patches to apply or complete source lines. Review all supplied content and cite only evidence in this batch. Other fragments and files are reviewed separately; do not infer that code or a related implementation is missing merely because it is absent from this batch.
+Some fragments contain only unchanged context and therefore have no citable changed-line evidence. For those batches, return an empty decisions array; do not invent changed lines or borrow evidence from another batch.
+The numbered_diff field contains the same supplied batch, including any fragment annotations, with an explicit [evidence:ID head:N] or [evidence:ID base:N] label on every changed line. For each citation, copy the integer ID of the specific changed line supporting the decision into evidence_id. The workflow resolves IDs to paths and exact source lines; never calculate line numbers or ranges yourself. Unlabelled context lines are not citable. Structural file-level references are listed separately in structural_evidence. The diff field contains this batch without evidence labels for reference.
 
 Report actual new, removed, or changed contract decisions, including compatible additions. Classify each impact separately from testing risk:
 - additive: a new compatible contract or option;
@@ -383,9 +384,16 @@ def illustrative_excerpt(diff: str, decision: dict[str, Any]) -> dict[str, str] 
 
 
 def model_schema(evidence: dict[int, dict[str, Any]]) -> dict[str, Any]:
-    if not evidence:
-        raise ReviewError("The batch contains no citable changed-line or structural evidence")
     schema = copy.deepcopy(REVIEW_SCHEMA)
+    if not evidence:
+        # Oversized unchanged context still reaches the reviewer, but cannot
+        # support a decision linked to a changed line from another fragment.
+        # maxItems=0 is unsupported by the provider's structured-output schema.
+        # Enforce the empty result in validate_payload as well as this guidance.
+        schema["properties"]["decisions"]["description"] = (
+            "This context-only batch has no changed-code evidence; decisions must be empty."
+        )
+        return schema
     schema["properties"]["decisions"]["items"]["properties"]["locations"]["minItems"] = 1
     schema["properties"]["decisions"]["items"]["properties"]["locations"]["items"] = {
         "type": "object", "additionalProperties": False, "required": ["evidence_id"],
@@ -452,6 +460,8 @@ def validate_payload(payload: Any, parsed: dict[str, Any]) -> dict[str, Any]:
     decisions = payload["decisions"]
     if not isinstance(decisions, list) or len(decisions) > 100:
         raise ReviewError("Model response has an invalid decisions list")
+    if decisions and not evidence_catalog(parsed):
+        raise ReviewError("A context-only review fragment cannot support API decisions")
     keys = {"category", "title", "change", "compatibility", "impact", "locations"}
     for decision_index, decision in enumerate(decisions):
         if not isinstance(decision, dict) or set(decision) != keys:
