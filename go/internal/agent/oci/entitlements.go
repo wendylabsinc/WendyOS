@@ -56,6 +56,12 @@ type ApplyOptions struct {
 	// DBUS_SYSTEM_BUS_ADDRESS — mounting the raw host D-Bus socket directly
 	// would expose every system service, so it is never done.
 	DBusProxySocketDir string
+	// AvahiProxySocketDir is the host directory holding the filtered Avahi
+	// proxy socket prepared by the avahi bridge for this container. Same
+	// mount convention as DBusProxySocketDir (/var/run/dbus). Bluetooth and
+	// avahi mounts are mutually exclusive (one /var/run/dbus); declaring
+	// both entitlements refuses container start.
+	AvahiProxySocketDir string
 	// SystemAPISocketDir is the app-specific host directory prepared by
 	// AppSystemAPISocketManager. It contains only the narrow System API socket.
 	SystemAPISocketDir string
@@ -109,7 +115,15 @@ func ApplyEntitlements(spec *Spec, cfg *appconfig.AppConfig, opts ApplyOptions) 
 		case appconfig.EntitlementPersist:
 			applyPersist(spec, ent, cfg.AppID)
 		case appconfig.EntitlementBluetooth:
+			if opts.AvahiProxySocketDir != "" {
+				return fmt.Errorf("entitlements bluetooth and avahi both mount /var/run/dbus; declare at most one")
+			}
 			applyBluetooth(spec, opts.DBusProxySocketDir)
+		case appconfig.EntitlementAvahi:
+			if opts.DBusProxySocketDir != "" {
+				return fmt.Errorf("entitlements bluetooth and avahi both mount /var/run/dbus; declare at most one")
+			}
+			applyAvahi(spec, opts.AvahiProxySocketDir)
 		case appconfig.EntitlementNAN:
 			if err := applyNAN(spec, opts.NANDataInterface, opts.NANClientDirectory); err != nil {
 				return err
@@ -1373,6 +1387,25 @@ func applyBluetooth(spec *Spec, proxySocketDir string) {
 // usbDeviceDir is the host USB device tree. Tests redirect it to a temporary
 // directory to cover hosts with and without a USB bus.
 var usbDeviceDir = "/dev/bus/usb"
+
+// applyAvahi mounts a filtered Avahi proxy socket directory (only
+// org.freedesktop.Avahi visible) at /var/run/dbus. The directory is supplied
+// by the caller (the value the avahi bridge returned for this container).
+// When empty, no mount is added and the raw host D-Bus sockets are never
+// mounted as a fallback.
+func applyAvahi(spec *Spec, proxySocketDir string) {
+	if proxySocketDir != "" {
+		spec.Mounts = append(spec.Mounts, Mount{
+			Destination: "/var/run/dbus",
+			Source:      proxySocketDir,
+			Type:        "bind",
+			Options:     []string{"rbind", "nosuid", "noexec"},
+		})
+	}
+	spec.Process.Env = append(spec.Process.Env,
+		"DBUS_SYSTEM_BUS_ADDRESS=unix:path=/var/run/dbus/system_bus_socket",
+	)
+}
 
 // applyUSB adds USB device access.
 func applyUSB(spec *Spec) {
