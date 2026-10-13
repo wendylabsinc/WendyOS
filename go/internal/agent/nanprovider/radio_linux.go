@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/wendylabsinc/wendy/go/internal/agent/localmesh"
 	"go.uber.org/zap"
 )
 
@@ -141,7 +142,7 @@ func disconnectedPeer(v map[string]string, local string, active map[string]*radi
 
 // runRadio runs all NDP responses on a persistent local control socket so it
 // meets the firmware deadline. Discovery claims remain untrusted until QUIC TLS.
-func runRadio(ctx context.Context, ident Identity, connected chan<- radioPeer, health <-chan radioHealth, logger *zap.Logger) error {
+func runRadio(ctx context.Context, ident Identity, connected chan<- radioPeer, health <-chan radioHealth, selection *localmesh.PeerSelection, logger *zap.Logger) error {
 	control, err := openRadio()
 	if err != nil {
 		return err
@@ -218,12 +219,44 @@ func runRadio(ctx context.Context, ident Identity, connected chan<- radioPeer, h
 		case h := <-health:
 			if l := active[h.Peer.NMI]; l != nil && l.peer == h.Peer {
 				l.health(h.Up, time.Now())
+				if h.Up && selection != nil {
+					selection.Connected(h.Peer.Asset, localmesh.RadioNAN)
+				}
 				if h.Up && h.Peer.Asset < ident.Asset {
 					recovery.hasLowerPeer = true
 				}
 			}
 			continue
 		case <-ticker.C:
+			for nmi, link := range active {
+				if !link.draining && (selection == nil || selection.AllowRadio(link.peer.Asset, localmesh.RadioNAN)) {
+					continue
+				}
+				if !link.draining {
+					link.draining = true
+					link.since = time.Now()
+					// Stop the exact authenticated worker before removing the
+					// underlay; do not lose NDP ownership until disconnect.
+					emit(radioPeer{Asset: link.peer.Asset, NMI: nmi, ID: link.peer.ID})
+				}
+				if time.Since(link.since) >= 35*time.Second {
+					return fmt.Errorf("NAN NDP for %s did not disconnect after radio selection changed", nmi)
+				}
+				if time.Since(link.stopAttempt) < 5*time.Second {
+					continue
+				}
+				link.stopAttempt = time.Now()
+				info, err := control.command("NAN_PEER_INFO " + nmi + " ndps")
+				if err != nil {
+					logger.Warn("NAN selected-peer lookup failed", zap.String("peer", nmi), zap.Error(err))
+					continue
+				}
+				for _, ndp := range ownedNDPs(nmi, local, info) {
+					if _, err := control.command(fmt.Sprintf("NAN_NDP_TERMINATE peer_nmi=%s init_ndi=%s ndp_id=%s", ndp.peer, ndp.init, ndp.id)); err != nil {
+						logger.Warn("NAN selected-peer termination failed", zap.String("peer", nmi), zap.Error(err))
+					}
+				}
+			}
 			anyHealthy := false
 			for _, link := range active {
 				anyHealthy = anyHealthy || link.healthy
@@ -239,6 +272,9 @@ func runRadio(ctx context.Context, ident Identity, connected chan<- radioPeer, h
 				lastProbe = time.Now()
 			}
 			for nmi, link := range active {
+				if link.draining {
+					continue
+				}
 				if !link.expired(time.Now()) {
 					continue
 				}
@@ -255,6 +291,9 @@ func runRadio(ctx context.Context, ident Identity, connected chan<- radioPeer, h
 				emit(radioPeer{Asset: link.peer.Asset, NMI: nmi, ID: link.peer.ID})
 				delete(active, nmi)
 				attempts[nmi] = time.Now()
+				if selection != nil {
+					selection.Failed(link.peer.Asset, localmesh.RadioNAN)
+				}
 			}
 			continue
 		case event, ok := <-rawEvents:
@@ -281,12 +320,17 @@ func runRadio(ctx context.Context, ident Identity, connected chan<- radioPeer, h
 				continue
 			}
 			known[nmi] = asset
-			if kind != "NAN-DISCOVERY-RESULT" || !validHandle(v["publish_id"]) || !shouldInitiate(ident.Asset, asset, nmi, active, attempts, time.Now()) {
+			if selection != nil {
+				selection.Seen(asset, localmesh.RadioNAN)
+			}
+			if kind != "NAN-DISCOVERY-RESULT" || !validHandle(v["publish_id"]) || !shouldInitiate(ident.Asset, asset, nmi, active, attempts, time.Now()) || (selection != nil && !selection.AllowRadio(asset, localmesh.RadioNAN)) {
 				continue
 			}
 			attempts[nmi] = time.Now()
 			if _, err = control.command(fmt.Sprintf("NAN_NDP_REQUEST handle=%s ndi=%s peer_nmi=%s peer_id=%s ssi=%s", sub, ndiName, nmi, v["publish_id"], ssi)); err == nil {
 				active[nmi] = &radioLink{peer: radioPeer{Asset: asset, NMI: nmi}, since: time.Now()}
+			} else if selection != nil {
+				selection.Failed(asset, localmesh.RadioNAN)
 			}
 		case "NAN-NDP-REQUEST":
 			nmi := v["peer_nmi"]
@@ -305,6 +349,13 @@ func runRadio(ctx context.Context, ident Identity, connected chan<- radioPeer, h
 			}
 			if !validNDPID(v["ndp_id"]) {
 				continue
+			}
+			if selection != nil {
+				selection.Seen(asset, localmesh.RadioNAN)
+				if !selection.AllowRadio(asset, localmesh.RadioNAN) {
+					_, _ = control.command(fmt.Sprintf("NAN_NDP_RESPONSE reject peer_nmi=%s ndp_id=%s init_ndi=%s", nmi, v["ndp_id"], v["init_ndi"]))
+					continue
+				}
 			}
 			// This provider owns one NDP per peer. A new request while an old
 			// NDP exists usually means that the peer restarted. Do not replace
@@ -341,6 +392,13 @@ func runRadio(ctx context.Context, ident Identity, connected chan<- radioPeer, h
 		case "NAN-NDP-CONNECTED":
 			p, ok := connectedPeer(v, local, known, active)
 			if !ok {
+				continue
+			}
+			if selection != nil && !selection.AllowRadio(p.Asset, localmesh.RadioNAN) {
+				if old := active[p.NMI]; old != nil && old.peer.NDI != "" {
+					emit(radioPeer{Asset: old.peer.Asset, NMI: p.NMI, ID: old.peer.ID})
+				}
+				active[p.NMI] = &radioLink{peer: p, since: time.Now(), draining: true}
 				continue
 			}
 			if existing := active[p.NMI]; existing != nil && existing.peer == p {
