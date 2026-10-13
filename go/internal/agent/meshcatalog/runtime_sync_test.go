@@ -60,9 +60,13 @@ func TestRuntimeCatalogALPNRollingUpgrade(t *testing.T) {
 	for _, tc := range []struct {
 		name, want string
 		serverALPN []string
+		clientALPN []string
 	}{
-		{name: "new-to-new", want: syncALPNv2, serverALPN: []string{syncALPNv2, syncALPN}},
+		{name: "new-to-new", want: syncALPNv3, serverALPN: []string{syncALPNv3, syncALPNv2, syncALPN}},
+		{name: "new-to-v2", want: syncALPNv2, serverALPN: []string{syncALPNv2, syncALPN}},
 		{name: "new-to-old", want: syncALPN, serverALPN: []string{syncALPN}},
+		{name: "old2-to-new", want: syncALPNv2, serverALPN: []string{syncALPNv3, syncALPNv2, syncALPN}, clientALPN: []string{syncALPNv2, syncALPN}},
+		{name: "old1-to-new", want: syncALPN, serverALPN: []string{syncALPNv3, syncALPNv2, syncALPN}, clientALPN: []string{syncALPN}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			left, right := net.Pipe()
@@ -78,7 +82,10 @@ func TestRuntimeCatalogALPNRollingUpgrade(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			clientConfig.NextProtos = []string{syncALPNv2, syncALPN}
+			clientConfig.NextProtos = []string{syncALPNv3, syncALPNv2, syncALPN}
+			if tc.clientALPN != nil {
+				clientConfig.NextProtos = tc.clientALPN
+			}
 			client := tls.Client(left, clientConfig)
 			clientErr := client.Handshake()
 			serverErr := <-serverResult
@@ -287,6 +294,94 @@ func TestRuntimeFailedSessionJoinsBackloggedReader(t *testing.T) {
 	}
 	sent := make(chan struct{})
 	go func() {
+		// One record is in Accept, sixteen are queued and the eighteenth is
+		// decoded by the reader, which cannot enqueue it until Accept returns.
+		for i := 0; ; i++ {
+			if WriteMessage(right, Message{Kind: "record", Record: &record}) != nil {
+				return
+			}
+			if i == 17 {
+				close(sent)
+			}
+		}
+	}()
+	for _, phase := range []struct {
+		name string
+		done <-chan struct{}
+	}{
+		{"writer started", started}, {"accept blocked", entered}, {"reader queue filled", sent},
+	} {
+		select {
+		case <-phase.done:
+		case <-time.After(3 * time.Second):
+			t.Fatal(phase.name)
+		}
+	}
+	failOnce.Do(func() { close(fail) })
+	// Keep Accept blocked while the writer reports its failure.
+	time.Sleep(40 * time.Millisecond)
+	releaseOnce.Do(func() { close(release) })
+	select {
+	case <-sessionDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("failed session retained its reader while runtime stayed alive")
+	}
+	if ctx.Err() != nil {
+		t.Fatal("session cancelled the runtime context")
+	}
+}
+
+func TestInventoryRuntimeFailedSessionJoinsBackloggedReader(t *testing.T) {
+	f := newFixture(t)
+	entered, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	receiver, cache := f.newCatalog(t, 533, "default", nil, nil)
+	// V1 sends records without an initial manifest. Seed a real outbound
+	// record before blocking incoming persistence so both protocol versions
+	// start the failing writer independently of reader progress.
+	if _, err := receiver.Publish(testSpec(), f.now); err != nil {
+		t.Fatal(err)
+	}
+	receiver.persist = func([]Receipt) error {
+		once.Do(func() { close(entered); <-release })
+		return nil
+	}
+	origin, _ := f.newCatalog(t, 535, "default", nil, nil)
+	if _, err := cache.Put(f.creds[535].Certificate.Certificate, f.now); err != nil {
+		t.Fatal(err)
+	}
+	record, err := origin.Publish(testSpec(), f.now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime, _ := NewRuntime(receiver, func() localmesh.NodeSnapshot { return localmesh.NodeSnapshot{} })
+	left, right := net.Pipe()
+	defer left.Close()
+	defer right.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	fail := make(chan struct{})
+	started := make(chan struct{})
+	var releaseOnce, failOnce sync.Once
+	unblock := func() { failOnce.Do(func() { close(fail) }); releaseOnce.Do(func() { close(release) }) }
+	defer unblock()
+	sessionDone := make(chan struct{})
+	go func() {
+		defer close(sessionDone)
+		runtime.sessionInventory(ctx, 535, &failedCatalogWriter{Conn: left, fail: fail, started: started})
+	}()
+	// Do not let a racing incoming Accept block the session select before
+	// it queues that first write; then deliberately fill its read backlog.
+	select {
+	case <-started:
+	case <-time.After(3 * time.Second):
+		t.Fatal("writer started")
+	}
+	sent := make(chan struct{})
+	go func() {
+		if writeInventoryMessage(right, inventoryMessage{Message: Message{Kind: "identity-cache-done"}}) != nil {
+			return
+		}
 		// One record is in Accept, sixteen are queued and the eighteenth is
 		// decoded by the reader, which cannot enqueue it until Accept returns.
 		for i := 0; ; i++ {
