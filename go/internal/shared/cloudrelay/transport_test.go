@@ -81,8 +81,12 @@ func TestDeviceCloudMTLSChainAndHostname(t *testing.T) {
 				}
 				select {
 				case count := <-presented:
-					if count != 2 {
-						t.Fatalf("presented %d certificates, want complete leaf+CA chain", count)
+					// TLSKeyPair omits a proven self-signed root: this server already
+					// trusts it locally. The successful required-mTLS RPC proves the
+					// normalized leaf authenticates; required intermediates have a
+					// separate wire-retention regression in localmesh.
+					if count != 1 {
+						t.Fatalf("presented %d certificates, want normalized leaf without self-signed root", count)
 					}
 				case <-ctx.Done():
 					t.Fatal(ctx.Err())

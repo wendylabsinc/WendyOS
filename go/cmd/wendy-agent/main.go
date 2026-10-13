@@ -7,6 +7,7 @@ import (
 	"crypto/x509"
 	"encoding/asn1"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -39,6 +40,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/agent/hostnetwork"
 	"github.com/wendylabsinc/wendy/go/internal/agent/inference"
 	"github.com/wendylabsinc/wendy/go/internal/agent/interceptor"
+	"github.com/wendylabsinc/wendy/go/internal/agent/localmesh"
 	"github.com/wendylabsinc/wendy/go/internal/agent/localsocket"
 	"github.com/wendylabsinc/wendy/go/internal/agent/mcusource"
 	"github.com/wendylabsinc/wendy/go/internal/agent/mesh"
@@ -852,6 +854,39 @@ func main() {
 		keyData[i] = 0
 	}
 	alreadyProvisioned := certPEM != "" && keyPEM != ""
+	var localMeshStart sync.Once
+	startConfiguredLocalMesh := func(certPEM, chainPEM, keyPEM string, orgID, assetID int32) {
+		if runtime.GOOS != "linux" {
+			return
+		}
+		if _, err := os.Stat(filepath.Join(configPath, "local-mesh.json")); err != nil {
+			if !errors.Is(err, os.ErrNotExist) {
+				logger.Error("local mesh configuration is inaccessible", zap.Error(err))
+			}
+			return
+		}
+		localMeshStart.Do(func() {
+			name, _ := os.Hostname()
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				for ctx.Err() == nil {
+					err := localmesh.RunConfiguredTCP(ctx, configPath, localmesh.TCPIdentity{
+						Org: orgID, Asset: assetID, Name: name, AgentPort: uint16(mtlsPortNum),
+						Certificate: certPEM, Chain: chainPEM, Key: keyPEM,
+					})
+					if err != nil && !errors.Is(err, context.Canceled) {
+						logger.Error("configured local mesh stopped", zap.Error(err))
+					}
+					select {
+					case <-ctx.Done():
+						return
+					case <-time.After(5 * time.Second):
+					}
+				}
+			}()
+		})
+	}
 
 	// Client side of the mesh data plane: dials peers LAN-direct or via the
 	// cloud tunnel broker, fed by whatever REDIRECTed VIP connections the nat
@@ -861,6 +896,9 @@ func main() {
 	// unenrolled device brokerURL/cert fields are empty, so DialDevice simply
 	// fails closed at runtime with a clear error instead of never starting.
 	cloudHost, orgID, assetID, _ := provisioningSvc.ProvisioningInfo()
+	if alreadyProvisioned {
+		startConfiguredLocalMesh(certPEM, chainPEM, keyPEM, orgID, assetID)
+	}
 	brokerURL := os.Getenv("WENDY_BROKER_URL")
 	if brokerURL == "" {
 		brokerURL = brokerURLForCloudHost(cloudHost)
@@ -1016,6 +1054,7 @@ func main() {
 		startMTLSServer(certPEM, chainPEM, keyPEM)
 		startTunnelBroker()
 		cloudHost, orgID, assetID, _ := provisioningSvc.ProvisioningInfo()
+		startConfiguredLocalMesh(certPEM, chainPEM, keyPEM, orgID, assetID)
 		// Refresh the mesh dialer with the fresh identity — like the mTLS
 		// server and tunnel broker above, it consumes cert material, and BLE
 		// first-boot enrollment happens while the agent is running, so the
