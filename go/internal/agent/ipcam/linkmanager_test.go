@@ -97,7 +97,69 @@ func newManagerHarness(t *testing.T, ifaces []Interface) *managerHarness {
 		return nil
 	}
 	h.mgr = m
+	for _, iface := range ifaces {
+		m.allowedDHCP[iface.Name] = true
+	}
 	return h
+}
+
+func TestManagerRequiresExplicitDHCPOptIn(t *testing.T) {
+	h := newManagerHarness(t, []Interface{cabledEth("eth0")})
+	allowed := false
+	h.mgr.readAllowlist = func(string) (map[string]bool, error) {
+		if allowed {
+			return map[string]bool{"eth0": true}, nil
+		}
+		return map[string]bool{}, nil
+	}
+	if err := h.mgr.LoadDHCPAllowlist("camera-dhcp-interfaces"); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	h.mgr.scanOnce(ctx)
+	waitFor(t, "eth0 to be passively watched", func() bool { return len(h.watchedLinks()) == 1 })
+	h.feed("eth0", &Packet{Type: Discover, XID: 1})
+	h.advance(unansweredWindow)
+	h.mgr.scanOnce(ctx)
+	if len(h.servedLinks()) != 0 || len(h.addedAddresses()) != 0 {
+		t.Fatal("addressless uplink DHCP traffic started an unconfigured camera server")
+	}
+
+	allowed = true
+	h.mgr.scanOnce(ctx)
+	waitFor(t, "opted-in camera link to be served", func() bool { return len(h.servedLinks()) == 1 })
+	if !h.mgr.isClaimed("eth0") {
+		t.Fatal("opted-in link was not claimed")
+	}
+
+	allowed = false
+	h.mgr.scanOnce(ctx)
+	if h.mgr.isClaimed("eth0") || len(h.removedAddresses()) != 1 {
+		t.Fatal("removing the opt-in did not withdraw the camera server and address")
+	}
+	allowed = true
+	h.feed("eth0", &Packet{Type: Discover, XID: 2})
+	h.advance(unansweredWindow)
+	h.mgr.scanOnce(ctx)
+	waitFor(t, "re-enabled camera link to be served", func() bool { return len(h.servedLinks()) == 2 })
+}
+
+func TestManagerDoesNotRestoreCameraClaimWithoutOptIn(t *testing.T) {
+	h := newManagerHarness(t, []Interface{cabledEth("eth0")})
+	if _, err := h.reg.Upsert(Camera{MAC: "02:00:00:00:00:01", Link: "eth0", Address: "10.98.0.50"}); err != nil {
+		t.Fatal(err)
+	}
+	h.mgr.allowedDHCP = map[string]bool{}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	h.mgr.scanOnce(ctx)
+	waitFor(t, "eth0 to be passively watched", func() bool { return len(h.watchedLinks()) == 1 })
+	h.advance(unansweredWindow)
+	h.mgr.scanOnce(ctx)
+	if h.mgr.isClaimed("eth0") || len(h.addedAddresses()) != 0 {
+		t.Fatal("restored a camera DHCP claim without an explicit opt-in")
+	}
 }
 
 // setAddressLocked adds or removes an address on the fake interface, mirroring
@@ -131,6 +193,12 @@ func (h *managerHarness) stripAddress(link, cidr string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.setAddressLocked(link, cidr, false)
+}
+
+func (h *managerHarness) addForeignAddress(link, cidr string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.setAddressLocked(link, cidr, true)
 }
 
 // waitFor polls until cond holds, so tests do not depend on goroutine timing.
@@ -467,6 +535,7 @@ func TestManagerReusesReleasedSegmentWithoutCollision(t *testing.T) {
 	h.mu.Lock()
 	h.ifaces = []Interface{eth1, cabledEth("eth2")}
 	h.mu.Unlock()
+	h.mgr.allowedDHCP["eth2"] = true
 	h.mgr.scanOnce(ctx)
 	waitFor(t, "replacement link to be watched", func() bool {
 		h.mu.Lock()
@@ -531,6 +600,38 @@ func TestManagerKeepsClaimedLinkAfterItGetsAnAddress(t *testing.T) {
 	}
 	if got := h.addedAddresses(); len(got) != 1 {
 		t.Fatalf("configured %v, want the address added once", got)
+	}
+}
+
+// A link can acquire an uplink address after the camera server has claimed it.
+// Keep the carrier connected, as on an Ethernet switch, and ensure the camera
+// DHCP server yields to the network manager without waiting for a foreign OFFER.
+func TestManagerStopsCameraDHCPWhenUplinkAddressAppears(t *testing.T) {
+	h := newManagerHarness(t, []Interface{cabledEth("eth0")})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	claimEth0(t, h, ctx)
+
+	h.addForeignAddress("eth0", "192.168.2.3/24")
+	h.mgr.scanOnce(ctx)
+	if got := h.mgr.State("eth0"); got != LinkDisqualified {
+		t.Fatalf("state = %v, want disqualified", got)
+	}
+	if h.mgr.isClaimed("eth0") {
+		t.Fatal("camera DHCP server remains claimed on an uplink")
+	}
+	if got := h.removedAddresses(); len(got) != 1 || got[0] != "eth0 10.98.0.1/24" {
+		t.Fatalf("removed addresses = %v, want only the camera address", got)
+	}
+	h.mu.Lock()
+	foreignStillPresent := h.ifaces[0].HasAddress(net.ParseIP("192.168.2.3"))
+	h.mu.Unlock()
+	if !foreignStillPresent {
+		t.Fatal("withdrawing the camera segment removed the uplink address")
+	}
+	h.mgr.scanOnce(ctx)
+	if got := h.servedLinks(); len(got) != 1 {
+		t.Fatalf("camera DHCP restarted on the uplink: %v", got)
 	}
 }
 

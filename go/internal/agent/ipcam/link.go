@@ -83,6 +83,18 @@ func (i Interface) HasAddress(ip net.IP) bool {
 	return false
 }
 
+// HasOtherIPv4 reports whether another network manager has configured this
+// link. A camera segment must yield when an uplink address appears after the
+// camera DHCP server started; carrier can stay up through that transition.
+func (i Interface) HasOtherIPv4(own net.IP) bool {
+	for _, have := range i.IPv4s {
+		if !have.Equal(own) {
+			return true
+		}
+	}
+	return false
+}
+
 // Eligible reports whether a link could host a camera segment. This is the check
 // that keeps the agent off the uplink and off anything that already works.
 func (i Interface) Eligible() bool {
