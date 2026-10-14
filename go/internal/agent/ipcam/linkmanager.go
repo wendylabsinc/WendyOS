@@ -30,33 +30,38 @@ type LinkManager struct {
 	serve          func(ctx context.Context, link string, seg CameraSegment, pool *LeasePool, onLease func(net.HardwareAddr, net.IP, string)) error
 	now            func() time.Time
 
-	mu            sync.Mutex
-	claimed       map[string]CameraSegment
-	pools         map[string]*LeasePool
-	running       map[string]bool
-	stop          map[string]context.CancelFunc // cancels a claimed link's server
-	downFor       map[string]int                // consecutive scans with no carrier
-	watchingSince map[string]time.Time          // when this process began watching a link
-	allowedDHCP   map[string]bool               // explicit, root-owned camera DHCP opt-ins
-	allowlistPath string
-	readAllowlist func(string) (map[string]bool, error)
+	// Serialize scans with operator configuration so a revoked link cannot be
+	// claimed by a scan that is still using the previous permission.
+	scanMu         sync.Mutex
+	mu             sync.Mutex
+	claimed        map[string]CameraSegment
+	pools          map[string]*LeasePool
+	running        map[string]bool
+	stop           map[string]context.CancelFunc // cancels a claimed link's server
+	downFor        map[string]int                // consecutive scans with no carrier
+	watchingSince  map[string]time.Time          // when this process began watching a link
+	allowedDHCP    map[string]bool               // explicit, root-owned camera DHCP opt-ins
+	allowlistPath  string
+	readAllowlist  func(string) (map[string]bool, error)
+	writeAllowlist func(string, map[string]bool) error
 }
 
 // NewLinkManager returns a manager writing discovered cameras into reg.
 func NewLinkManager(reg *Registry, logger *zap.Logger) *LinkManager {
 	m := &LinkManager{
-		reg:           reg,
-		guard:         NewLinkGuard(),
-		logger:        logger,
-		now:           time.Now,
-		claimed:       make(map[string]CameraSegment),
-		pools:         make(map[string]*LeasePool),
-		running:       make(map[string]bool),
-		stop:          make(map[string]context.CancelFunc),
-		downFor:       make(map[string]int),
-		watchingSince: make(map[string]time.Time),
-		allowedDHCP:   make(map[string]bool),
-		readAllowlist: readDHCPAllowlist,
+		reg:            reg,
+		guard:          NewLinkGuard(),
+		logger:         logger,
+		now:            time.Now,
+		claimed:        make(map[string]CameraSegment),
+		pools:          make(map[string]*LeasePool),
+		running:        make(map[string]bool),
+		stop:           make(map[string]context.CancelFunc),
+		downFor:        make(map[string]int),
+		watchingSince:  make(map[string]time.Time),
+		allowedDHCP:    make(map[string]bool),
+		readAllowlist:  readDHCPAllowlist,
+		writeAllowlist: writeDHCPAllowlist,
 	}
 	m.carrier = sysfsCarrier
 	m.listInterfaces = func() ([]Interface, error) {
@@ -108,6 +113,8 @@ func (m *LinkManager) Run(ctx context.Context) {
 // scanOnce examines every link once: start watching newly eligible ones, claim
 // those whose DISCOVER went unanswered, and forget those that lost carrier.
 func (m *LinkManager) scanOnce(ctx context.Context) {
+	m.scanMu.Lock()
+	defer m.scanMu.Unlock()
 	if err := m.refreshDHCPAllowlist(); err != nil {
 		m.logger.Warn("camera DHCP disabled: invalid allowlist", zap.Error(err))
 	}

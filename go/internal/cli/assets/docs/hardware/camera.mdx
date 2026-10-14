@@ -161,6 +161,33 @@ for up to the agent's 15-second first-frame window.
 
 WendyOS also manages network (RTSP/ONVIF) cameras alongside local USB and CSI ones. A discovered camera is registered by its MAC address — the one identity that survives a DHCP address change — and given a stable device ID from a reserved band, `200`–`255`. That ID never changes for the life of the camera, even if its address does.
 
+For a camera plugged directly into a dedicated Ethernet port, WendyOS can
+assign the camera an address. Camera DHCP is off by default. Find the port and
+enable it through the CLI:
+
+```bash
+wendy device camera dhcp status
+wendy device camera dhcp enable eth1
+```
+
+Use the interface name shown by `status` in place of `eth1`. Enable only a
+dedicated camera port, not a shared LAN or uplink. Status shows whether each
+port is enabled and whether it is waiting, serving, or blocked. Enabling grants
+permission; the agent checks the link every 15 seconds and starts serving only
+after its DHCP guards pass. If another DHCP server or an uplink address appears,
+the camera server stops.
+
+To turn it off:
+
+```bash
+wendy device camera dhcp disable eth1
+```
+
+Disabling stops the server before the command returns. Settings survive agent
+restarts and OS updates. These commands support `--device <device>` and `--json`.
+No device-side file editing is required. Cameras on a network with its own DHCP
+server can be discovered with camera DHCP disabled.
+
 Cameras are picked up automatically as the agent's periodic discovery runs. To force a discovery round immediately and list the results in one step:
 
 ```bash

@@ -1,28 +1,30 @@
 # Direct camera DHCP opt-in
 
-The agent passively observes DHCP requests on addressless wired interfaces and
-discovers/probes IP cameras on ordinary networks. It serves DHCP only on
-interfaces named in `/etc/wendy-agent/camera-dhcp-interfaces` (or the same
-filename beneath `WENDY_CONFIG_PATH` when that override is set). The default is
-an absent file and **no camera DHCP servers**. This prevents an uplink that is
-temporarily addressless from offering a camera subnet to a LAN client.
+Camera DHCP is disabled by default. Operators configure it through the CLI:
 
-For a directly cabled camera on `eth1`, an administrator creates a regular,
-root-owned file (for example, mode `0600`) containing one exact interface name
-per line:
-
-```text
-# Direct camera cable
-eth1
+```sh
+wendy device camera dhcp status
+wendy device camera dhcp enable eth1
+wendy device camera dhcp disable eth1
 ```
 
-The parent directory must also be root-owned and not writable by group or
-others. Symlinks, invalid names, and insecure files fail closed. The agent
-rereads the file on every 15-second link scan. Removing a name withdraws its
-active camera DHCP server and segment address on the next scan. The existing
-unanswered-request and competing-server guards still apply to opted-in ports.
-The allowlist lives on the persistent `/data/etc/wendy-agent` bind mount on
-WendyOS devices, so it survives an OTA.
+Use `--device <device>` to select the WendyOS device and `--json` for structured
+status. Enable only a dedicated wired camera port. The agent rejects an enable
+request for a wireless, loopback, missing, or already addressed uplink interface.
+Enabled means permission to serve: the 15-second link scan and existing
+unanswered-request and competing-server guards still control activation.
+Status reports saved permission separately from serving, waiting, blocked,
+missing, and unknown states. Disabling persists the change and cancels the
+server before returning, even if interface inspection or address cleanup fails.
+
+The agent manages `/etc/wendy-agent/camera-dhcp-interfaces` (or beneath
+`WENDY_CONFIG_PATH`) internally, using atomic writes of a root-owned, mode-0600
+file. Other ports' settings are preserved. The parent directory must be
+root-owned and not writable by group or others; symlinks and insecure files
+fail closed. External edits are reread on each scan. On WendyOS the configuration
+lives on the persistent `/data/etc/wendy-agent` bind mount and survives an OTA.
+Operators do not need to create or edit this file. Passive camera observation
+and ordinary network-camera discovery remain available with DHCP disabled.
 
 An older agent may have left a stale `10.98.x.1/24` address or NetworkManager
 profile on a former uplink. Disabling camera DHCP prevents new leases but does

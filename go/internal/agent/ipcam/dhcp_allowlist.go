@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"syscall"
 )
@@ -16,11 +17,15 @@ import (
 // removing an opt-in withdraws an active camera DHCP server on the next scan.
 // Camera discovery and passive DHCP observation do not depend on this list.
 func (m *LinkManager) LoadDHCPAllowlist(path string) error {
+	m.scanMu.Lock()
+	defer m.scanMu.Unlock()
 	m.mu.Lock()
 	m.allowlistPath = path
 	m.allowedDHCP = make(map[string]bool)
 	m.mu.Unlock()
-	return m.refreshDHCPAllowlist()
+	err := m.refreshDHCPAllowlist()
+	m.withdrawRevokedClaims()
+	return err
 }
 
 func (m *LinkManager) refreshDHCPAllowlist() error {
@@ -44,6 +49,9 @@ func (m *LinkManager) refreshDHCPAllowlist() error {
 func readDHCPAllowlist(path string) (map[string]bool, error) {
 	allowed := make(map[string]bool)
 	parent, err := os.Lstat(filepath.Dir(path))
+	if os.IsNotExist(err) {
+		return allowed, nil
+	}
 	if err != nil {
 		return nil, fmt.Errorf("camera DHCP allowlist parent: %w", err)
 	}
@@ -103,9 +111,7 @@ func parseDHCPAllowlist(contents string) (map[string]bool, error) {
 		if name == "" || strings.HasPrefix(name, "#") {
 			continue
 		}
-		if len(name) > 15 || len(name) == 0 || strings.ContainsFunc(name, func(r rune) bool {
-			return !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '_' || r == '-' || r == '.')
-		}) {
+		if !validDHCPInterfaceName(name) {
 			return nil, fmt.Errorf("invalid camera DHCP interface on line %d", line)
 		}
 		allowed[name] = true
@@ -114,4 +120,62 @@ func parseDHCPAllowlist(contents string) (map[string]bool, error) {
 		return nil, fmt.Errorf("reading camera DHCP interfaces: %w", err)
 	}
 	return allowed, nil
+}
+
+func validDHCPInterfaceName(name string) bool {
+	return len(name) > 0 && len(name) <= 15 && name != "." && name != ".." && !strings.ContainsFunc(name, func(r rune) bool {
+		return !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '_' || r == '-' || r == '.')
+	})
+}
+
+// writeDHCPAllowlist atomically replaces the agent-owned configuration. A
+// failed write leaves the previous permissions intact, including other ports.
+func writeDHCPAllowlist(path string, allowed map[string]bool) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	parent, err := os.Lstat(filepath.Dir(path))
+	if err != nil {
+		return err
+	}
+	if err := rootOwnedUnwritable(parent, true); err != nil {
+		return err
+	}
+	var names []string
+	for name, enabled := range allowed {
+		if !validDHCPInterfaceName(name) {
+			return fmt.Errorf("invalid camera DHCP interface %q", name)
+		}
+		if enabled {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	data := strings.Join(names, "\n") + "\n"
+	if len(data) > 4096 {
+		return fmt.Errorf("camera DHCP allowlist exceeds 4096 bytes")
+	}
+	f, err := os.CreateTemp(filepath.Dir(path), ".camera-dhcp-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(f.Name())
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	if err := rootOwnedUnwritable(info, false); err != nil {
+		return err
+	}
+	if _, err := f.WriteString(data); err != nil {
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	return os.Rename(f.Name(), path)
 }

@@ -15,6 +15,10 @@ service WendyVideoService {
     rpc GetCameraControls(GetCameraControlsRequest) returns (GetCameraControlsResponse);
     rpc SetCameraControls(SetCameraControlsRequest) returns (SetCameraControlsResponse);
     rpc ResetCameraControls(ResetCameraControlsRequest) returns (ResetCameraControlsResponse);
+    // Camera DHCP is off by default. These operator APIs inspect and persist
+    // per-port permission; enabling never bypasses competing-server guards.
+    rpc GetCameraDHCPStatus(GetCameraDHCPStatusRequest) returns (CameraDHCPStatus);
+    rpc SetCameraDHCP(SetCameraDHCPRequest) returns (CameraDHCPStatus);
 }
 
 message VideoDevice {
@@ -255,4 +259,32 @@ message CameraControlResult {
     string name    = 1;
     bool   applied = 2;
     string detail  = 3; // when not applied, why -- e.g. "unknown control" or the errno text
+}
+
+message GetCameraDHCPStatusRequest {}
+
+message SetCameraDHCPRequest {
+    string interface_name = 1;
+    bool enabled = 2;
+}
+
+message CameraDHCPStatus {
+    repeated CameraDHCPInterfaceStatus interfaces = 1;
+    // Configuration errors disable permission. Inspection errors are surfaced
+    // separately so a failed inspection is never reported as "no interfaces".
+    string configuration_error = 2;
+    string interface_error = 3;
+}
+
+message CameraDHCPInterfaceStatus {
+    string interface_name = 1;
+    bool enabled = 2; // saved permission, not proof that a server is running
+    bool serving = 3;
+    bool present = 4;
+    bool carrier = 5;
+    bool up = 6;
+    repeated string ipv4_addresses = 7;
+    // disabled, waiting, serving, blocked, missing, or unknown.
+    string state = 8;
+    string detail = 9;
 }
