@@ -136,8 +136,9 @@ A complete plan is in `Examples/WendyDataCampaign` in the WendyOS repository.
 ### Deployment and Cloud registration
 
 `wendy data campaign deploy [file]` validates the plan before contacting the
-device. With no filename in an interactive terminal, it offers `.yaml` and
-`.yml` files in the current directory. Enter selects a file; Escape or Ctrl-C
+device. With no filename in an interactive terminal, it offers the campaign files
+in the current directory: YAML files with a campaign's `version` and `name`
+(compose files and stagefiles are left out). Enter selects a file; Escape or Ctrl-C
 cancels. Non-interactive and `--json` use requires an explicit filename.
 
 An enrolled device's campaign is registered in Cloud Apps as `campaign:<name>`
