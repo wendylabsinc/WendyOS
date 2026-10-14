@@ -21,10 +21,14 @@ connected target and transport instead of relying on the default device.
 The local MCP server uses `wendy_status`, `device_list`, and `device_connect`;
 the ChatGPT gateway uses `list_robots` and `inspect_robot`. Inspect their actual
 tool lists. General campaign/episode management uses the CLI, and `wendy_tools`
-has no `data` group. The gateway has specialized YOLO deployment and notification
-tools; use [gateway-detection.md](references/gateway-detection.md) for those
-tasks. Do not invent tool names or treat a gateway `robot_id` as a CLI device
-selector. A skill update does not update a running server.
+has no `data` group. For an alert during the current local MCP session, such as
+telling the user when a person appears, the `hardware` group's camera watch
+tools (`watch_sources`, `watch_start`, `watch_events`, `watch_stop`) record
+nothing and end with the session. The gateway has specialized YOLO deployment
+and notification tools; use
+[gateway-detection.md](references/gateway-detection.md) for those tasks. Do not
+invent tool names or treat a gateway `robot_id` as a CLI device selector. A
+skill update does not update a running server.
 
 For operations without a matching gateway tool, use `wendy data` when a local
 terminal is available. Without one, use available approved workspace tools to
