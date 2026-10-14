@@ -162,6 +162,79 @@ func TestManagerDoesNotRestoreCameraClaimWithoutOptIn(t *testing.T) {
 	}
 }
 
+// Revocation must cancel the existing server even when its interface cannot be
+// found or its address cannot be removed. A Linux socket remains bound across
+// interface renames, so forgetting to visit the old name can leave DHCP active.
+func TestManagerRevokesDHCPWithoutInterfaceEnumeration(t *testing.T) {
+	for _, invalid := range []bool{false, true} {
+		allowlist := "removed"
+		if invalid {
+			allowlist = "invalid"
+		}
+		for _, mode := range []string{"normal", "enumeration-error", "renamed", "missing", "cleanup-error"} {
+			t.Run(allowlist+"/"+mode, func(t *testing.T) {
+				h := newManagerHarness(t, []Interface{cabledEth("eth0")})
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				stopped := make(chan struct{})
+				serve := h.mgr.serve
+				h.mgr.serve = func(ctx context.Context, link string, seg CameraSegment, pool *LeasePool, onLease func(net.HardwareAddr, net.IP, string)) error {
+					defer close(stopped)
+					return serve(ctx, link, seg, pool, onLease)
+				}
+				claimEth0(t, h, ctx)
+
+				h.mgr.allowlistPath = "camera-dhcp-interfaces"
+				h.mgr.readAllowlist = func(string) (map[string]bool, error) {
+					if invalid {
+						return nil, errors.New("insecure allowlist")
+					}
+					return map[string]bool{}, nil
+				}
+				switch mode {
+				case "enumeration-error":
+					h.mgr.listInterfaces = func() ([]Interface, error) {
+						return nil, errors.New("interface enumeration failed")
+					}
+				case "renamed":
+					h.mu.Lock()
+					h.ifaces[0].Name = "renamed0"
+					h.mu.Unlock()
+				case "missing":
+					h.mu.Lock()
+					h.ifaces = nil
+					h.mu.Unlock()
+				}
+				cleanupAttempted := false
+				delAddress := h.mgr.delAddress
+				h.mgr.delAddress = func(link, cidr string) error {
+					cleanupAttempted = true
+					if mode == "cleanup-error" {
+						return errors.New("address removal failed")
+					}
+					return delAddress(link, cidr)
+				}
+
+				h.mgr.scanOnce(ctx)
+				if h.mgr.isClaimed("eth0") {
+					t.Fatal("revoked camera DHCP claim remains active")
+				}
+				if !cleanupAttempted {
+					t.Fatal("revocation did not attempt address cleanup")
+				}
+				waitFor(t, "revoked server to stop", func() bool {
+					select {
+					case <-stopped:
+						return true
+					default:
+						return false
+					}
+				})
+			})
+		}
+	}
+}
+
 // setAddressLocked adds or removes an address on the fake interface, mirroring
 // what `ip addr add/del` would do. Callers hold h.mu.
 func (h *managerHarness) setAddressLocked(link, cidr string, present bool) {

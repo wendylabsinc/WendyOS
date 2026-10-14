@@ -111,6 +111,7 @@ func (m *LinkManager) scanOnce(ctx context.Context) {
 	if err := m.refreshDHCPAllowlist(); err != nil {
 		m.logger.Warn("camera DHCP disabled: invalid allowlist", zap.Error(err))
 	}
+	m.withdrawRevokedClaims()
 	ifaces, err := m.listInterfaces()
 	if err != nil {
 		m.logger.Debug("listing interfaces failed", zap.Error(err))
@@ -124,12 +125,6 @@ func (m *LinkManager) scanOnce(ctx context.Context) {
 		// on the very next scan and then re-claim it on the next DISCOVER,
 		// spawning a second server each time round.
 		if seg, claimed := m.claimedSegment(iface.Name); claimed {
-			if !m.dhcpAllowed(iface.Name) {
-				m.logger.Warn("camera DHCP interface is no longer allowed; stopping DHCP",
-					zap.String("link", iface.Name))
-				m.withdrawRevokedClaim(iface.Name)
-				continue
-			}
 			if m.carrierLost(iface) {
 				m.release(iface.Name)
 				continue
@@ -481,6 +476,26 @@ func (m *LinkManager) withdrawDisqualifiedClaim(link string) {
 			zap.String("link", link), zap.String("cidr", seg.CIDR()), zap.Error(err))
 	}
 	m.logger.Warn("stopped serving disqualified camera link", zap.String("link", link))
+}
+
+// withdrawRevokedClaims reconciles the claims we own rather than the current
+// interface list. Revocation must still stop DHCP if enumeration fails or a
+// link has disappeared or been renamed (a bound socket survives a rename).
+func (m *LinkManager) withdrawRevokedClaims() {
+	m.mu.Lock()
+	var revoked []string
+	for link := range m.claimed {
+		if !m.allowedDHCP[link] {
+			revoked = append(revoked, link)
+		}
+	}
+	m.mu.Unlock()
+
+	for _, link := range revoked {
+		m.logger.Warn("camera DHCP interface is no longer allowed; stopping DHCP",
+			zap.String("link", link))
+		m.withdrawRevokedClaim(link)
+	}
 }
 
 // withdrawRevokedClaim stops a server when its administrator removes the
