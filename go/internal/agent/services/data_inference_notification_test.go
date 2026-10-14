@@ -146,3 +146,21 @@ func TestCampaignCloudAuthorizationFailureIsTerminal(t *testing.T) {
 		t.Fatalf("authorization failure retried %d times", cloud.calls.Load())
 	}
 }
+
+func TestCloudSenderUsesTheWatchIdentity(t *testing.T) {
+	cloud := &recordingNotificationSender{}
+	notification := DetectionNotification{ID: uuid.NewString(), Event: "front-door", Watch: "porch", Inference: "front-door", Count: 1, OccurredAt: time.Now().UTC().Format(time.RFC3339Nano)}
+	if err := (&CampaignCloudSender{Cloud: cloud}).Send(context.Background(), "", notification); err != nil {
+		t.Fatal(err)
+	}
+	request := cloud.requests[0]
+	if request.GetAppId() != "watch:porch" || request.GetTitle() != "Watch event" || !strings.Contains(request.GetBody(), "porch") {
+		t.Fatalf("request = %+v", request)
+	}
+	if _, ok := request.GetMetadata().GetFields()["campaign"]; ok {
+		t.Fatal("a watch notification carries campaign metadata")
+	}
+	if request.GetMetadata().GetFields()["watch"].GetStringValue() != "porch" {
+		t.Fatal("metadata lacks the watch")
+	}
+}

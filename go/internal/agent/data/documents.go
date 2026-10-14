@@ -1,6 +1,19 @@
 package data
 
-import "github.com/wendylabsinc/wendy/go/internal/shared/datadoc"
+import (
+	"bytes"
+	"fmt"
+
+	"github.com/wendylabsinc/wendy/go/internal/shared/datadoc"
+	"gopkg.in/yaml.v3"
+)
+
+// The document kinds this agent stores and runs itself. A collection is a
+// campaign and keeps its own storage.
+const (
+	KindInference = "inference"
+	KindWatch     = "watch"
+)
 
 // documentKinds are the data document kinds this build understands. A
 // collection is a campaign: its decoder is ParseCampaign, so collections parse,
@@ -17,6 +30,8 @@ var documentKinds = datadoc.NewRegistry(
 			return campaign, campaign.Revision, nil, nil
 		},
 	},
+	datadoc.Kind{Name: KindInference, Versions: []int{InferenceDocumentVersion}, Ownable: true, Decode: decodeInferenceDocument},
+	datadoc.Kind{Name: KindWatch, Versions: []int{WatchVersion}, Ownable: true, Decode: decodeWatch},
 )
 
 // ParseDocument parses any data document this build knows. A file without
@@ -29,4 +44,15 @@ func ParseDocument(contents []byte) (datadoc.Document, error) {
 // by kind without validating them.
 func DocumentHeader(contents []byte) (datadoc.Header, error) {
 	return documentKinds.ParseHeader(contents)
+}
+
+// decodeDocumentStrict decodes a document with unknown fields rejected. The
+// registry has already checked that the file holds one document.
+func decodeDocumentStrict(contents []byte, into any) error {
+	decoder := yaml.NewDecoder(bytes.NewReader(contents))
+	decoder.KnownFields(true)
+	if err := decoder.Decode(into); err != nil {
+		return fmt.Errorf("parsing document: %w", err)
+	}
+	return nil
 }

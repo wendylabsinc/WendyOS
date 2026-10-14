@@ -38,6 +38,21 @@ service DataService {
   rpc Campaigns(DataCampaignsRequest) returns (DataCampaignsResponse);
   rpc CampaignInspect(DataCampaignInspectRequest) returns (DataCampaign);
   rpc CampaignTrigger(DataCampaignTriggerRequest) returns (DataEpisode);
+  // Data documents (specs/2026-10-12-data-documents-design.md §9.2).
+  // DocumentApply validates and stores a document of any kind and hands it to
+  // its runner. A collection takes the CampaignDeploy path.
+  rpc DocumentApply(DataDocumentApplyRequest) returns (DataDocumentApplyResponse);
+  // DocumentRemove removes an inference or watch document and everything it
+  // owns, owned documents first, and returns once their inference has stopped
+  // (at most 10 s, then DEADLINE_EXCEEDED). NOT_FOUND if absent;
+  // FAILED_PRECONDITION for a collection.
+  rpc DocumentRemove(DataDocumentRemoveRequest) returns (DataDocumentRemoveResponse);
+  // DocumentRenew pushes a leased watch's deadline to now + lease. NOT_FOUND
+  // once removed or expired; FAILED_PRECONDITION for a document without a lease.
+  rpc DocumentRenew(DataDocumentRenewRequest) returns (DataDocumentRenewResponse);
+  // Documents lists documents of every kind with their status; kind and name
+  // narrow it. NOT_FOUND when a named document does not exist.
+  rpc Documents(DataDocumentsRequest) returns (DataDocumentsResponse);
 }
 
 message DataEventsRequest {
@@ -48,6 +63,9 @@ message DataEventsRequest {
   // Select the separate durable immediate Wendy Data notification journal.
   // This includes notify:on detection/event; Cloud episode_committed is separate.
   bool notifications_only = 5;
+  // With notifications_only: only these watches' notifications. A leased
+  // watch's notifications are returned only to a request that names it.
+  repeated string watches = 6;
 }
 message DataEventsResponse {
   bytes events_json = 1;
@@ -148,6 +166,32 @@ message DataCampaign {
   repeated string warnings = 7;
 }
 message DataCampaignsResponse { repeated DataCampaign campaigns = 1; }
+
+message DataDocumentApplyRequest { bytes document_yaml = 1; }
+message DataDocumentApplyResponse { DataDocument document = 1; }
+message DataDocumentRemoveRequest { string kind = 1; string name = 2; }
+message DataDocumentRemoveResponse {
+  repeated string removed = 1;        // "<kind>/<name>", in the order removed
+}
+message DataDocumentRenewRequest { string kind = 1; string name = 2; }
+message DataDocumentRenewResponse { int64 expires_unix_nanos = 1; }
+message DataDocumentsRequest { string kind = 1; string name = 2; }
+message DataDocumentsResponse { repeated DataDocument documents = 1; }
+
+message DataDocument {
+  string kind = 1;
+  uint32 version = 2;
+  string name = 3;
+  string owner = 4;
+  string revision = 5;
+  string state = 6;                   // collection: campaign state; inference: job state; watch: waiting | active | error
+  string state_detail = 7;
+  int64 deployed_unix_nanos = 8;
+  int64 expires_unix_nanos = 9;       // leased watches only
+  bytes document_json = 10;           // the stored document, like DataCampaign.plan_json
+  repeated string warnings = 11;
+  bytes status_json = 12;             // kind-specific status
+}
 
 message DataRecordingExportRequest {
   string app_id = 1;

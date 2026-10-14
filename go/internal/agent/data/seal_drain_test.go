@@ -289,7 +289,7 @@ func TestFlushPreRollAdmitsOnReceiptAndStampIntersection(t *testing.T) {
 		m.preRoll = append(m.preRoll, bufferedRecord{bootNanos: entry.stamp, receiptNanos: entry.receipt, encoded: encoded})
 	}
 
-	count, earliest, err := m.flushPreRoll(dir, origin, time.Minute)
+	count, earliest, err := m.flushPreRoll(dir, "", origin, time.Minute)
 	if err != nil {
 		t.Fatal(err)
 	}

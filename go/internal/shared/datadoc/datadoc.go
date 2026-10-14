@@ -63,12 +63,13 @@ type Registry struct {
 func NewRegistry(kinds ...Kind) *Registry {
 	r := &Registry{kinds: map[string]Kind{}}
 	for _, kind := range kinds {
-		if kind.Name == "" || len(kind.Versions) == 0 || kind.Decode == nil {
-			panic("datadoc: a kind needs a name, versions and a decoder")
+		if kind.Name == "" || !nameRE.MatchString(kind.Name) || len(kind.Versions) == 0 || kind.Decode == nil {
+			panic("datadoc: a kind needs a document-name-shaped name, versions and a decoder")
 		}
 		if _, duplicate := r.kinds[kind.Name]; duplicate {
 			panic("datadoc: kind " + kind.Name + " registered twice")
 		}
+		kind.Versions = slices.Clone(kind.Versions)
 		r.kinds[kind.Name] = kind
 	}
 	return r
@@ -86,6 +87,10 @@ func (r *Registry) Kinds() []string {
 
 var nameRE = regexp.MustCompile(`^[A-Za-z0-9._-]{1,128}$`)
 
+// ValidName reports whether name may name a document: 1 to 128 letters,
+// numbers, '.', '-' or '_'. Kinds use it for names they reference.
+func ValidName(name string) bool { return nameRE.MatchString(name) }
+
 // rawHeader reads only the header fields and ignores the rest of the document.
 // Version is decoded loosely because yaml.v3 reads 1.5 into an int as 1.
 type rawHeader struct {
@@ -98,11 +103,18 @@ type rawHeader struct {
 // ParseHeader checks a document's header without decoding its body.
 func (r *Registry) ParseHeader(contents []byte) (Header, error) {
 	decoder := yaml.NewDecoder(bytes.NewReader(contents))
-	var raw rawHeader
-	if err := decoder.Decode(&raw); err != nil {
+	var root yaml.Node
+	if err := decoder.Decode(&root); err != nil {
 		if errors.Is(err, io.EOF) {
 			return Header{}, errors.New("document is empty")
 		}
+		return Header{}, fmt.Errorf("parsing document header: %w", err)
+	}
+	if err := checkHeaderTypes(&root); err != nil {
+		return Header{}, err
+	}
+	var raw rawHeader
+	if err := root.Decode(&raw); err != nil {
 		return Header{}, fmt.Errorf("parsing document header: %w", err)
 	}
 	var trailing any
@@ -143,6 +155,31 @@ func (r *Registry) ParseHeader(contents []byte) (Header, error) {
 		}
 	}
 	return header, nil
+}
+
+// checkHeaderTypes names the header field that holds a list or mapping where
+// a scalar belongs, instead of yaml's generic type error (spec §5.2).
+func checkHeaderTypes(document *yaml.Node) error {
+	if document.Kind != yaml.DocumentNode || len(document.Content) == 0 {
+		return errors.New("document is empty")
+	}
+	if document.Content[0].Kind != yaml.MappingNode {
+		return errors.New("a data document is a YAML mapping")
+	}
+	fields := document.Content[0].Content
+	for i := 0; i+1 < len(fields); i += 2 {
+		key, value := fields[i].Value, fields[i+1]
+		if value.Kind == yaml.ScalarNode || value.Kind == yaml.AliasNode {
+			continue
+		}
+		switch key {
+		case "kind", "name", "owner":
+			return fmt.Errorf("%s must be a string", key)
+		case "version":
+			return errors.New("version must be a whole number")
+		}
+	}
+	return nil
 }
 
 // Parse checks the header, then decodes the whole document with its kind.
