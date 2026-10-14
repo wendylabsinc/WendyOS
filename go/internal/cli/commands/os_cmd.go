@@ -732,10 +732,18 @@ type osUpdateBaseline struct {
 	bootedSlot    string
 }
 
-func readOSUpdateBaseline(ctx context.Context, conn *grpcclient.AgentConnection) osUpdateBaseline {
-	callCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+// The agent's engine probe can take ten seconds. Leave room for the RPC
+// overhead, and keep this budget separate from connection and version probes.
+const osUpdateStatusTimeout = 15 * time.Second
+
+func readOSUpdateStatus(ctx context.Context, conn *grpcclient.AgentConnection) (*agentpb.GetOSUpdateStatusResponse, error) {
+	callCtx, cancel := context.WithTimeout(ctx, osUpdateStatusTimeout)
 	defer cancel()
-	resp, err := conn.AgentService.GetOSUpdateStatus(callCtx, &agentpb.GetOSUpdateStatusRequest{IncludeEngineStatus: true})
+	return conn.AgentService.GetOSUpdateStatus(callCtx, &agentpb.GetOSUpdateStatusRequest{IncludeEngineStatus: true})
+}
+
+func readOSUpdateBaseline(ctx context.Context, conn *grpcclient.AgentConnection) osUpdateBaseline {
+	resp, err := readOSUpdateStatus(ctx, conn)
 	if err != nil {
 		return osUpdateBaseline{}
 	}
@@ -767,16 +775,19 @@ func reportOSUpdateOutcome(ctx context.Context, host, preUpdateOSVersion string,
 	for {
 		callCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		conn, err := connectWithAutoTLS(callCtx, addr)
+		cancel()
+		postUpdateOSVersion = ""
 		if err == nil {
-			resp, rpcErr = conn.AgentService.GetOSUpdateStatus(callCtx, &agentpb.GetOSUpdateStatusRequest{IncludeEngineStatus: true})
-			if ver, verErr := conn.AgentService.GetAgentVersion(callCtx, &agentpb.GetAgentVersionRequest{}); verErr == nil {
+			resp, rpcErr = readOSUpdateStatus(ctx, conn)
+			versionCtx, versionCancel := context.WithTimeout(ctx, 5*time.Second)
+			if ver, verErr := conn.AgentService.GetAgentVersion(versionCtx, &agentpb.GetAgentVersionRequest{}); verErr == nil {
 				postUpdateOSVersion = ver.GetOsVersion()
 			}
+			versionCancel()
 			conn.Close()
 		} else {
 			rpcErr = err
 		}
-		cancel()
 
 		// Unimplemented is definitive (older agent). A missing or stale result
 		// can become a committed/rolled-back record as the boot gate finishes.
@@ -831,7 +842,8 @@ func usableOSUpdateOutcomeSince(resp *agentpb.GetOSUpdateStatusResponse, now tim
 // updater has committed the new slot. For a same-version image, a changed,
 // booted updater slot with no pending work is sufficient independent evidence
 // that this install succeeded. The U-Boot connector does not report rootfs
-// health; its booted slot and cleared pending update are the available proof.
+// health, so also require its bootloader to have disarmed the trial and pinned
+// the running slot. The updater can clear pending state after MarkGood fails.
 // Require an unambiguous A/B snapshot;
 // a changed version alone follows the existing fallback below.
 func verifiedSameVersionSlotSwitch(resp *agentpb.GetOSUpdateStatusResponse, rpcErr error, preVersion, postVersion string, baseline osUpdateBaseline) bool {
@@ -842,6 +854,9 @@ func verifiedSameVersionSlotSwitch(resp *agentpb.GetOSUpdateStatusResponse, rpcE
 	engine := resp.GetEngineStatus()
 	if engine == nil || engine.GetPending() != nil || engine.GetCurrentSlot() == "" ||
 		engine.GetCurrentSlot() == baseline.bootedSlot {
+		return false
+	}
+	if engine.GetConnector() == "ubootenv" && !verifiedUBootCommit(engine) {
 		return false
 	}
 	want := "A"
@@ -873,6 +888,23 @@ func verifiedSameVersionSlotSwitch(resp *agentpb.GetOSUpdateStatusResponse, rpcE
 		}
 	}
 	return seen["A"] && seen["B"] && bootedCount == 1 && targetHealthy
+}
+
+// U-Boot has no per-slot rootfs health field. Its environment must confirm
+// both that the trial is disarmed and that the next boot selects this slot.
+// Missing or unknown diagnostics cannot establish a committed boot.
+func verifiedUBootCommit(engine *agentpb.OSUpdateEngineStatus) bool {
+	var bootSlot string
+	switch engine.GetCurrentSlot() {
+	case "A":
+		bootSlot = "0"
+	case "B":
+		bootSlot = "1"
+	default:
+		return false
+	}
+	diagnostics := engine.GetDiagnostics()
+	return diagnostics["wendyos_upgrade_available"] == "0" && diagnostics["wendyos_boot_slot"] == bootSlot
 }
 
 func evaluateOSUpdateOutcomeSince(resp *agentpb.GetOSUpdateStatusResponse, rpcErr error,
@@ -922,7 +954,8 @@ func evaluateOSUpdateOutcome(
 		// commits without verification. Fall back to comparing OS versions.
 		switch {
 		case postUpdateOSVersion == "":
-			return "The update outcome could not be verified; check the device with `wendy status`.", nil
+			return "The update outcome could not be verified; check the device with `wendy status`.",
+				errors.New("OS update outcome unverified; no usable result or running OS version is available")
 		case postUpdateOSVersion == preUpdateOSVersion:
 			return fmt.Sprintf("The device is running %s, but the update outcome could not be verified. "+
 				"Images can share an OS version; check `wendy os update-status` for the committed slot or rollback details.",
@@ -947,6 +980,10 @@ func evaluateOSUpdateOutcome(
 			if engine.GetPending() != nil {
 				return "Warning: the health gate recorded a commit but the updater still reports a pending update.",
 					errors.New("OS update status still has a pending update")
+			}
+			if engine.GetConnector() == "ubootenv" && !verifiedUBootCommit(engine) {
+				return "The health gate recorded a commit, but U-Boot confirmation of the running slot could not be verified; check `wendy os update-status`.",
+					errors.New("OS update outcome unverified; U-Boot slot confirmation is missing or contradictory")
 			}
 			for _, slot := range engine.GetSlots() {
 				if slot.GetSlot() == engine.GetCurrentSlot() && engine.GetCurrentSlot() != "" &&

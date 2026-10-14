@@ -933,11 +933,11 @@ func TestEvaluateOSUpdateOutcome(t *testing.T) {
 			wantContains:  []string{"verified", "WendyOS-0.19.5"},
 		},
 		{
-			name:         "unknown post version cannot verify but does not fail",
+			name:         "unknown post version without a result fails verification",
 			resp:         &agentpb.GetOSUpdateStatusResponse{HasResult: false},
 			preVer:       "WendyOS-0.10.4",
 			postVer:      "",
-			wantErr:      false,
+			wantErr:      true,
 			wantContains: []string{"could not be verified"},
 		},
 	}
@@ -1043,7 +1043,7 @@ func TestEvaluateOSUpdateOutcomeSinceSameVersionSlotSwitch(t *testing.T) {
 		{"stale rollback receipt but healthy A-to-B switch", &agentpb.GetOSUpdateStatusResponse{HasResult: true, Outcome: agentpb.GetOSUpdateStatusResponse_OUTCOME_ROLLED_BACK, CreatedAtUnix: oldRecordAt, EngineStatus: engine("B", false, true, "normal", false)}, nil, baseline, true, "slot B"},
 		{"missing receipt but healthy A-to-B switch", &agentpb.GetOSUpdateStatusResponse{EngineStatus: engine("B", false, true, "normal", false)}, nil, baseline, true, "slot B"},
 		{"healthy B-to-A switch", &agentpb.GetOSUpdateStatusResponse{EngineStatus: &agentpb.OSUpdateEngineStatus{CurrentSlot: "A", Slots: []*agentpb.OSUpdateEngineStatus_Slot{{Slot: "A", Booted: true, RootfsHealth: "normal"}, {Slot: "B"}}}}, nil, osUpdateBaseline{bootedSlot: "B"}, true, "slot A"},
-		{"Pi U-Boot B-to-A switch without reported health", &agentpb.GetOSUpdateStatusResponse{EngineStatus: &agentpb.OSUpdateEngineStatus{Connector: "ubootenv", CurrentSlot: "A", Slots: []*agentpb.OSUpdateEngineStatus_Slot{{Slot: "A", Booted: true}, {Slot: "B"}}}}, nil, osUpdateBaseline{resultAtUnix: oldRecordAt, bootedSlot: "B"}, true, "slot A"},
+		{"Pi U-Boot B-to-A switch without reported health", &agentpb.GetOSUpdateStatusResponse{EngineStatus: &agentpb.OSUpdateEngineStatus{Connector: "ubootenv", CurrentSlot: "A", Slots: []*agentpb.OSUpdateEngineStatus_Slot{{Slot: "A", Booted: true}, {Slot: "B"}}, Diagnostics: map[string]string{"wendyos_boot_slot": "0", "wendyos_upgrade_available": "0"}}}, nil, osUpdateBaseline{resultAtUnix: oldRecordAt, bootedSlot: "B"}, true, "slot A"},
 		{"unknown connector B-to-A switch without health", &agentpb.GetOSUpdateStatusResponse{EngineStatus: &agentpb.OSUpdateEngineStatus{Connector: "unknown", CurrentSlot: "A", Slots: []*agentpb.OSUpdateEngineStatus_Slot{{Slot: "A", Booted: true}, {Slot: "B"}}}}, nil, osUpdateBaseline{bootedSlot: "B"}, false, "unchanged version"},
 		{"unchanged boot slot", response(engine("A", true, false, "normal", false)), nil, baseline, false, "unchanged version"},
 		{"still pending", response(engine("B", false, true, "normal", true)), nil, baseline, false, "unchanged version"},
