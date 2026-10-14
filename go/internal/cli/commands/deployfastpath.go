@@ -30,11 +30,11 @@ import (
 // single-container path also uses it to ensure the existing container
 // is running without recreating it.
 //
-// This is intentionally a local-only, best-effort optimization (WDY fast path):
-// the fingerprint is trusted as-is, and the device is only consulted to confirm
-// the app still exists and learn whether it is running. Any mismatch, missing
-// fingerprint, or RPC hiccup falls back to the normal deploy, so a stale cache
-// can never deploy the wrong code — at worst it triggers an unnecessary build.
+// This is a best-effort optimization: a local fingerprint identifies a candidate
+// deployment, and device queries verify its layers, container, and running state.
+// A missing or mismatched fingerprint or failed verification falls back to the
+// normal deploy. Once verified, lifecycle errors are returned to the caller
+// without rebuilding or redeploying.
 type deployFingerprint struct {
 	// InputHash is computed by computeBuildInputHash over everything that can
 	// affect a single built image, or by a service desired-state hash that also
