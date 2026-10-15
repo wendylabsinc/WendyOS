@@ -30,6 +30,13 @@ func TestIPFragmentsReorderingLossAndLimits(t *testing.T) {
 	if err != nil || !bytes.Equal(got, p) {
 		t.Fatal("reassembly failed", err)
 	}
+	var slow IPAssembler
+	if got, err := slow.Receive(frags[0], now); err != nil || got != nil {
+		t.Fatal("first slow fragment", err)
+	}
+	if got, err := slow.Receive(frags[1], now.Add(8*time.Second)); err != nil || !bytes.Equal(got, p) {
+		t.Fatal("delayed BLE fragment was lost", err)
+	}
 	for i := uint32(0); i < 100; i++ {
 		ds, _ := EncodeIP(i, p)
 		if _, err := a.Receive(ds[0], now); err != nil {
@@ -40,7 +47,7 @@ func TestIPFragmentsReorderingLossAndLimits(t *testing.T) {
 		t.Fatal("reassembly not bounded")
 	}
 	ds, _ := EncodeIP(101, p)
-	a.Receive(ds[0], now.Add(2*time.Second))
+	a.Receive(ds[0], now.Add(11*time.Second))
 	if len(a.pending) != 1 {
 		t.Fatal("incomplete packet expiry failed")
 	}
