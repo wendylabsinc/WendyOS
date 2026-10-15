@@ -417,7 +417,7 @@ actor VideoService: RegistrableRPCService {
             return RPCError(code: .permissionDenied, message: error.description)
         case .deviceNotFound, .noDevice:
             return RPCError(code: .notFound, message: error.description)
-        case .cannotAddInput, .cannotAddOutput:
+        case .cannotAddInput, .cannotAddOutput, .noStreamableFormat, .cannotPinFormat:
             return RPCError(code: .failedPrecondition, message: error.description)
         case .vtStatus:
             return RPCError(code: .internalError, message: error.description)

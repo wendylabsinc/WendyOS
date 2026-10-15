@@ -90,6 +90,11 @@ enum CameraError: Error, CustomStringConvertible {
     case deviceNotFound
     case cannotAddInput
     case cannotAddOutput
+    /// Every format the camera advertises is a vendor/control mode, not a
+    /// picture. The associated value lists them (`"4x12305, 16x15505"`).
+    case noStreamableFormat(String)
+    /// The camera could not be locked to pin a streamable format.
+    case cannotPinFormat(String)
     case vtStatus(String, OSStatus)
 
     var description: String {
@@ -101,8 +106,130 @@ enum CameraError: Error, CustomStringConvertible {
             return "The selected camera could not be added to the capture session."
         case .cannotAddOutput:
             return "The camera encoder output could not be added to the capture session."
+        case .noStreamableFormat(let formats):
+            return
+                "The selected camera offers only vendor or control modes (\(formats)), not a video format Wendy Agent can stream."
+        case .cannotPinFormat(let reason):
+            return "The selected camera's video format could not be selected: \(reason)"
         case .vtStatus(let action, let status):
             return "VideoToolbox \(action) failed (OSStatus \(status))."
+        }
+    }
+}
+
+/// One capture format as `CaptureFormatPolicy` sees it: plain numbers, so the
+/// policy is testable without a camera.
+struct CaptureFormatCandidate: Equatable, Sendable {
+    var width: Int32
+    var height: Int32
+    var maxFrameRate: Double
+}
+
+/// What `CameraCaptureSession` does about the camera's format before it starts.
+enum CaptureFormatChoice: Equatable, Sendable {
+    /// Every format is a real picture: leave the choice to the session preset,
+    /// exactly as before this policy existed.
+    case sessionDefault
+    /// Some formats are vendor/control modes the preset could land on: pin the
+    /// format at this index of `AVCaptureDevice.formats`.
+    case pin(index: Int)
+    /// No format is a picture: refuse to start the session at all.
+    case unusable
+}
+
+/// Keeps vendor/control modes away from AVFoundation.
+///
+/// Why: on macOS the default session preset is `.high` and `.inputPriority` is
+/// unavailable, so `startRunning()` picks `activeFormat` itself. On a TOPDON
+/// TC001 (`2bdf:0102`, macOS 26.2) it picked `'yuvs' 16x15505`, a control mode
+/// (also the camera's largest by pixel count). The system video-effects
+/// pipeline then configured itself for 16x15505 and built a Metal texture
+/// that failed validation; Metal asserts on that, so the agent died with
+/// SIGABRT on `com.apple.cmio.portraitblur.pteffect_init`. It did so with
+/// every effect reported inactive, and the SDK documents no macOS opt-out
+/// from that pipeline, so the only lever here is the format it is handed.
+enum CaptureFormatPolicy {
+    /// The bounds wendy-console's mac-fire-detector (`RGBCaptureSafety`) uses
+    /// to keep narrow vendor modes out of Apple's graph: a picture is at least
+    /// 64 px and at most 8192 px on each side, and no more than 4:1.
+    static let sideRange: ClosedRange<Int32> = 64...8192
+    static let maxAspectRatio: Int64 = 4
+
+    /// Picture shapes. Vendor modes that pass the bounds above still tend to
+    /// be off-standard (the TC001's 512x484 is a stacked picture-plus-
+    /// temperature mode), so among usable formats these shapes are preferred.
+    static let standardAspectRatios: [(Int64, Int64)] = [
+        (4, 3), (16, 9), (16, 10), (3, 2), (5, 4), (1, 1),
+    ]
+
+    static func isPicture(width: Int32, height: Int32) -> Bool {
+        guard sideRange.contains(width), sideRange.contains(height) else { return false }
+        let long = Int64(max(width, height))
+        let short = Int64(min(width, height))
+        return long <= short * maxAspectRatio
+    }
+
+    static func hasStandardAspectRatio(width: Int32, height: Int32) -> Bool {
+        let long = Int64(max(width, height))
+        let short = Int64(min(width, height))
+        return standardAspectRatios.contains { long * $0.1 == short * $0.0 }
+    }
+
+    static func choose(from candidates: [CaptureFormatCandidate]) -> CaptureFormatChoice {
+        let usable = candidates.indices.filter {
+            isPicture(width: candidates[$0].width, height: candidates[$0].height)
+        }
+        guard !usable.isEmpty else { return .unusable }
+        if usable.count == candidates.count { return .sessionDefault }
+
+        let standard = usable.filter {
+            hasStandardAspectRatio(width: candidates[$0].width, height: candidates[$0].height)
+        }
+        let pool = standard.isEmpty ? usable : standard
+        // Largest picture, then the fastest; `max(by:)` keeps the first of equals.
+        let best = pool.max { left, right in
+            let l = candidates[left]
+            let r = candidates[right]
+            let lArea = Int64(l.width) * Int64(l.height)
+            let rArea = Int64(r.width) * Int64(r.height)
+            if lArea != rArea { return lArea < rArea }
+            return l.maxFrameRate < r.maxFrameRate
+        }
+        guard let best else { return .unusable }
+        return .pin(index: best)
+    }
+
+    /// `"4x12305, 16x15505"`: the distinct shapes, in advertised order.
+    static func summary(of candidates: [CaptureFormatCandidate]) -> String {
+        var seen = Set<String>()
+        return candidates.map { "\($0.width)x\($0.height)" }
+            .filter { seen.insert($0).inserted }
+            .joined(separator: ", ")
+    }
+}
+
+extension CaptureFormatCandidate {
+    init(_ format: AVCaptureDevice.Format) {
+        let dims = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
+        self.init(
+            width: dims.width,
+            height: dims.height,
+            maxFrameRate: format.videoSupportedFrameRateRanges.map(\.maxFrameRate).max() ?? 0
+        )
+    }
+}
+
+extension AVCaptureDevice {
+    /// The format `CameraCaptureSession` pins before it starts, or `nil` to
+    /// keep the session preset's choice. Throws when nothing is streamable.
+    func streamableFormatToPin() throws -> AVCaptureDevice.Format? {
+        let formats = self.formats
+        let candidates = formats.map(CaptureFormatCandidate.init)
+        switch CaptureFormatPolicy.choose(from: candidates) {
+        case .sessionDefault: return nil
+        case .pin(let index): return formats[index]
+        case .unusable:
+            throw CameraError.noStreamableFormat(CaptureFormatPolicy.summary(of: candidates))
         }
     }
 }
@@ -193,7 +320,15 @@ struct CameraCapture: CameraCapturing {
     func descriptor() -> Wendy_Lite_Sensorlink_SensorDescriptor? {
         guard AVCaptureDevice.authorizationStatus(for: .video) == .authorized else { return nil }
         guard let device = AVCaptureDevice.default(for: .video) else { return nil }
-        let dims = CMVideoFormatDescriptionGetDimensions(device.activeFormat.formatDescription)
+        // Advertise what `frames()` will actually capture, and no camera
+        // channel at all when the default camera has nothing streamable.
+        let format: AVCaptureDevice.Format
+        do {
+            format = try device.streamableFormatToPin() ?? device.activeFormat
+        } catch {
+            return nil
+        }
+        let dims = CMVideoFormatDescriptionGetDimensions(format.formatDescription)
 
         var descriptor = Wendy_Lite_Sensorlink_SensorDescriptor()
         descriptor.channelID = Self.channel
@@ -203,7 +338,7 @@ struct CameraCapture: CameraCapturing {
         video.width = UInt32(max(0, dims.width))
         video.height = UInt32(max(0, dims.height))
         video.fps = UInt32(
-            device.activeFormat.videoSupportedFrameRateRanges.first?.maxFrameRate ?? 30
+            format.videoSupportedFrameRateRanges.first?.maxFrameRate ?? 30
         )
         descriptor.video = video
         return descriptor
@@ -266,6 +401,9 @@ final class CameraCaptureSession: NSObject, AVCaptureVideoDataOutputSampleBuffer
             }
             device = fallback
         }
+        // Decide before anything opens the camera: a camera with nothing
+        // streamable must fail this RPC, never reach the effects pipeline.
+        let pinnedFormat = try device.streamableFormatToPin()
         let input = try AVCaptureDeviceInput(device: device)
 
         // Keep configuration in its own scope so the deferred commit runs
@@ -289,7 +427,25 @@ final class CameraCaptureSession: NSObject, AVCaptureVideoDataOutputSampleBuffer
             captureSession.addOutput(videoOutput)
         }
 
-        let dims = CMVideoFormatDescriptionGetDimensions(device.activeFormat.formatDescription)
+        guard let pinnedFormat else {
+            let dims = CMVideoFormatDescriptionGetDimensions(device.activeFormat.formatDescription)
+            try makeCompressionSession(width: dims.width, height: dims.height)
+            captureSession.startRunning()
+            return
+        }
+
+        // The `.high` preset re-picks `activeFormat` inside startRunning(), and
+        // macOS has no `.inputPriority`. Holding the configuration lock across
+        // startRunning() keeps the pinned format (the pattern wendy-console's
+        // mac-fire-detector uses for its AVFoundation thermal source).
+        do {
+            try device.lockForConfiguration()
+        } catch {
+            throw CameraError.cannotPinFormat(error.localizedDescription)
+        }
+        defer { device.unlockForConfiguration() }
+        device.activeFormat = pinnedFormat
+        let dims = CMVideoFormatDescriptionGetDimensions(pinnedFormat.formatDescription)
         try makeCompressionSession(width: dims.width, height: dims.height)
         captureSession.startRunning()
     }

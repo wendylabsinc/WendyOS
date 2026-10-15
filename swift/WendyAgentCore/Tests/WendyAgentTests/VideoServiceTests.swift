@@ -359,6 +359,40 @@ struct VideoServiceAdapterTests {
             Issue.record("Expected RPCError, got \(error)")
         }
     }
+
+    @Test
+    func `refuses a camera with no streamable format as a precondition failure`() async throws {
+        let camera = CameraDeviceInfo(
+            id: 0,
+            uniqueID: "0x21000002bdf0102",
+            name: "UVC Camera",
+            isExternal: true
+        )
+        let service = VideoService(
+            camera: FakeCameraManager(
+                devices: [camera],
+                streamError: CameraError.noStreamableFormat("4x12305, 16x15505")
+            )
+        )
+        let response = try await service.streamVideo(
+            request: ServerRequest(
+                metadata: [:],
+                message: Wendy_Agent_Services_V1_StreamVideoRequest()
+            ),
+            context: makeVideoContext(method: "StreamVideo")
+        )
+        let writer = VideoCollectingWriter<Wendy_Agent_Services_V1_VideoFrame>()
+
+        do {
+            _ = try await response.accepted.get().producer(RPCWriter(wrapping: writer))
+            Issue.record("Expected the stream to be refused")
+        } catch let error as RPCError {
+            #expect(error.code == .failedPrecondition)
+            #expect(error.message.contains("16x15505"))
+        } catch {
+            Issue.record("Expected RPCError, got \(error)")
+        }
+    }
 }
 
 @Suite("VideoToolbox H264 framing")
