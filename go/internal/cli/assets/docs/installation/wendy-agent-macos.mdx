@@ -53,6 +53,41 @@ open /Applications/WendyAgentMac.app
 
 Wendy Agent appears in the macOS menu bar. Open the menu to confirm the agent is running.
 
+## Network access
+
+On first launch, Wendy Agent asks **Who should be able to connect to Wendy Agent?**
+Choose **Only This Mac** (the default) or **Allow Other Devices**. The agent starts
+locally before asking, so an unattended launch is not blocked. It remembers your
+choice for future launches. Upgrades with existing agent state but no saved choice
+preserve network access without a prompt.
+
+In **Only this Mac** mode, the management API and image
+registry listen only on localhost. The agent does not advertise through Bonjour
+or open a cloud relay in this mode.
+
+For a laptop connected directly to a robot over USB, keep this default. Use
+`--device 127.0.0.1:50051` when building and deploying from the same Mac.
+
+To manage the Mac from another computer, open the Wendy Agent menu and turn on
+**Allow Access from Other Devices**. This enables network listeners and Bonjour
+discovery, plus authenticated cloud relay connections when the agent is enrolled.
+Before enrollment, reachable network peers can deploy apps; enable access only
+on a trusted network. Enrollment enables certificate authentication.
+
+The preference is saved across restarts and updates. Turning it off immediately
+disconnects remote clients, withdraws discovery, and returns listeners to
+localhost without stopping deployed apps. Apps can still expose their own
+network services independently of the agent.
+
+`WENDY_AGENT_HOST=127.0.0.1` (also `localhost` or `::1`) enforces local-only access
+for that launch and disables the menu toggle. `WENDY_AGENT_PORT` still selects
+the management port. For example:
+
+```bash
+open --env WENDY_AGENT_HOST=127.0.0.1 --env WENDY_AGENT_PORT=50061 /Applications/WendyAgentMac.app
+wendy --device 127.0.0.1:50061 device info --json
+```
+
 ## Headless Mac Setup
 
 For any Mac that will run without a monitor, set it up once with a keyboard, mouse, and display attached before putting it on the shelf. Use a virtual display dongle or HDMI dummy plug for the final headless setup.
@@ -73,17 +108,19 @@ For any Mac that will run without a monitor, set it up once with a keyboard, mou
 
 ## Verify the Installation
 
-From your development Mac, check that the CLI can reach the Mac target:
+On the Mac running Wendy Agent, check that the CLI can reach the local target:
 
 ```bash
-wendy --device {hostname}:50051 device info --json
+wendy --device 127.0.0.1:50051 device info --json
 ```
 
 The response should report `"os": "darwin"` and `"cpuArchitecture": "arm64"`.
 
 ## Discovery
 
-Headless Mac advertises over Bonjour/mDNS as `_wendyos._udp`. Use `wendy discover` to find it on the local network.
+After you enable **Allow Access from Other Devices**, Headless Mac advertises
+over Bonjour/mDNS as `_wendyos._udp`. Use `wendy discover` from another computer
+to find it on the local network. Local-only mode does not advertise the Mac.
 
 ## Deploy your first Mac app
 
@@ -92,7 +129,7 @@ Create a native Swift app and run it on the Mac target:
 ```bash
 wendy init hello-mac --target darwin --language swift --no-extra-entitlements --assistant skip --git-init no
 cd hello-mac
-wendy run --device {hostname}:50051
+wendy run --device 127.0.0.1:50051
 ```
 
 <CliShot flow="run" step="deploy" alt="The wendy run command building a native macOS app and deploying it to a Mac target" />
@@ -207,7 +244,7 @@ uses Swift string storage, which cannot be reliably zeroed after use.
 If the CLI cannot connect:
 
 1. Confirm Wendy Agent is open in the menu bar.
-2. Run with an explicit device address: `wendy --device {hostname}:50051 device info --json`
+2. On the same Mac, run with an explicit local address: `wendy --device 127.0.0.1:50051 device info --json`. For access from another computer, enable **Allow Access from Other Devices** first and use `{hostname}:50051`.
 3. If `wendy discover` doesn't show the Mac, check macOS Local Network permission for the CLI process.
 4. Quit and reopen Wendy Agent from the menu bar.
 5. If you installed both stable and nightly builds, quit both and open only the one you want.

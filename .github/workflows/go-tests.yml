@@ -216,6 +216,10 @@ jobs:
         run: shellcheck go/internal/cli/assets/docs/agent.sh go/internal/cli/assets/docs/cli.sh
       - name: resolver + deferral tests
         run: bash .github/scripts/install-scripts_test.sh
+      - name: agent access choice tests
+        run: bash .github/scripts/agent-network-access_test.sh
+      - name: Test package discovery identity
+        run: bash .github/scripts/agent-mdns_test.sh
       - name: manifest merge tests
         run: bash .github/scripts/install-manifest-merge_test.sh
       - name: integration device selection tests

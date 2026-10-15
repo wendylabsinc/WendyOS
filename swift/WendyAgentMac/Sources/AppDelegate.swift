@@ -11,7 +11,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
         subsystem: Bundle.main.bundleIdentifier!,
         category: "AppDelegate"
     )
-    private let wendyAgent = WendyAgent(configuration: .default)
+    private let networkAccessPreferences = NetworkAccessPreferences()
+    private let networkAccessIsManaged = WendyAgentEnvironment.host != nil
+    private var changingNetworkAccess = false
+    private var networkAccessChangeTask: Task<Void, Never>?
+    private lazy var wendyAgent: WendyAgent = {
+        var configuration = WendyAgentConfiguration.default
+        if WendyAgentEnvironment.host == nil,
+            self.networkAccessPreferences.allowsNetworkAccess
+        {
+            configuration.host = "::"
+        }
+        return WendyAgent(configuration: configuration)
+    }()
     private let localBuildService = WendyRuntimeVM()
     // DISABLED: Local Build Service is hidden while the BuildKit experience remains unfinished.
     private let localBuildServiceIsEnabled = false
@@ -33,6 +45,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
     private var isQuitting = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        let shouldAskForNetworkAccess =
+            !self.networkAccessIsManaged
+            && self.networkAccessPreferences.prepareForStartup(
+                existingInstallation: NetworkAccessPreferences.existingInstallation
+            )
         self.welcomeAndPermissions.configureLaunchAtLoginOnStartup()
 
         Task {
@@ -42,6 +59,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
                 localBuildServiceIsAvailable: self.localBuildServiceIsEnabled,
                 meshVPN: self.meshVPN,
                 meshVPNIsAvailable: self.meshVPNIsAvailable,
+                networkAccessIsManaged: self.networkAccessIsManaged,
                 delegate: self
             )
 
@@ -70,6 +88,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
 
             do {
                 try await self.wendyAgent.start()
+                if shouldAskForNetworkAccess {
+                    self.chooseInitialNetworkAccess()
+                }
             } catch {
                 self.logger.error(
                     "Failed to start WendyAgent: \(String(describing: error), privacy: .public)"
@@ -82,6 +103,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
         }
     }
 
+    private func chooseInitialNetworkAccess() {
+        guard !self.networkAccessIsManaged else { return }
+
+        let alert = NSAlert()
+        alert.messageText = "Who should be able to connect to Wendy Agent?"
+        alert.informativeText =
+            "Only this Mac keeps access local to your computer. "
+            + "Allow Other Devices lets other computers discover and connect to this agent. "
+            + "Before enrollment, reachable computers may deploy and run apps. "
+            + "You can change this later in the Wendy Agent menu."
+        alert.addButton(withTitle: "Only This Mac")
+        alert.addButton(withTitle: "Allow Other Devices")
+        alert.buttons.first?.keyEquivalent = "\r"
+        alert.buttons.last?.keyEquivalent = ""
+        NSApplication.shared.activate(ignoringOtherApps: true)
+        if alert.runModal() == .alertSecondButtonReturn,
+            let controller = self.statusMenuController
+        {
+            self.statusMenuController(controller, didSetNetworkAccessAllowed: true)
+        }
+    }
+
     func statusMenuControllerDidSelectAbout(_ controller: StatusMenuController) {
         NSApplication.shared.activate(ignoringOtherApps: true)
         NSApplication.shared.orderFrontStandardAboutPanel(options: [
@@ -91,6 +134,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
 
     func statusMenuControllerDidSelectWelcomeAndPermissions(_ controller: StatusMenuController) {
         self.showWelcomeAndPermissionsWindow()
+    }
+
+    func statusMenuController(
+        _ controller: StatusMenuController,
+        didSetNetworkAccessAllowed allowed: Bool
+    ) {
+        guard !self.networkAccessIsManaged, !self.changingNetworkAccess, !self.isQuitting else {
+            return
+        }
+        self.changingNetworkAccess = true
+        controller.updateNetworkAccess(isChanging: true)
+        // Persist a revocation before doing any asynchronous shutdown work.
+        if !allowed { self.networkAccessPreferences.allowsNetworkAccess = false }
+
+        self.networkAccessChangeTask = Task {
+            defer {
+                self.changingNetworkAccess = false
+                self.networkAccessChangeTask = nil
+                controller.updateNetworkAccess(isChanging: false)
+            }
+            do {
+                try await self.wendyAgent.setNetworkAccess(allowed: allowed)
+                self.networkAccessPreferences.allowsNetworkAccess = allowed
+                controller.updateNetworkAccess(allowed: allowed)
+            } catch {
+                let configuration = await self.wendyAgent.configuration
+                controller.updateNetworkAccess(allowed: configuration.allowsNetworkAccess)
+                self.logger.error(
+                    "Failed to change network access: \(String(describing: error), privacy: .public)"
+                )
+                let alert = NSAlert()
+                alert.messageText = "Could not change network access"
+                alert.informativeText = String(describing: error)
+                NSApplication.shared.activate(ignoringOtherApps: true)
+                alert.runModal()
+            }
+        }
     }
 
     func statusMenuController(
@@ -139,6 +219,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate,
         self.isQuitting = true
 
         Task {
+            await self.networkAccessChangeTask?.value
             await self.statusMenuController?.invalidate()
             await self.wendyAgent.stop()
             await self.localBuildService.stop()

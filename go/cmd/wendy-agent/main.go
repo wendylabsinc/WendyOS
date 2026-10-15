@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"runtime"
@@ -44,6 +45,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/agent/mesh"
 	"github.com/wendylabsinc/wendy/go/internal/agent/mtls"
 	agentnet "github.com/wendylabsinc/wendy/go/internal/agent/network"
+	"github.com/wendylabsinc/wendy/go/internal/agent/networkaccess"
 	"github.com/wendylabsinc/wendy/go/internal/agent/oci"
 	"github.com/wendylabsinc/wendy/go/internal/agent/registry"
 	"github.com/wendylabsinc/wendy/go/internal/agent/ros2camera"
@@ -144,6 +146,18 @@ func main() {
 	configPath := "/etc/wendy-agent"
 	if envPath := os.Getenv("WENDY_CONFIG_PATH"); envPath != "" {
 		configPath = envPath
+	}
+	accessPolicy, err := networkaccess.Load(configPath)
+	if err != nil {
+		logger.Fatal("Invalid network access configuration", zap.Error(err))
+	}
+	logger.Info("Agent network access", zap.Bool("allowed", accessPolicy.AllowsNetwork))
+	if changed, err := accessPolicy.UpdateAdvertisements("/etc/avahi/services"); err != nil {
+		logger.Fatal("Could not apply discovery access choice", zap.Error(err))
+	} else if changed {
+		if err := exec.Command("systemctl", "try-restart", "avahi-daemon").Run(); err != nil {
+			logger.Warn("Could not reload discovery advertisements", zap.Error(err))
+		}
 	}
 
 	configpartition.Apply(logger, configPath)
@@ -376,7 +390,9 @@ func main() {
 	}
 
 	go timesyncMgr.RunDirect(ctx)
-	go timesyncMgr.RunMulticast(ctx)
+	if accessPolicy.AllowsNetwork {
+		go timesyncMgr.RunMulticast(ctx)
+	}
 
 	startROS2BatteryMonitor(ctx, logger, configPath, discoveryPool)
 
@@ -490,9 +506,10 @@ func main() {
 			registrySrv = nil
 		}
 
-		registryAddr := "0.0.0.0:5000"
-		if addr := os.Getenv("WENDY_REGISTRY_ADDR"); addr != "" {
-			registryAddr = addr
+		registryAddr, err := accessPolicy.RegistryAddress(os.Getenv("WENDY_REGISTRY_ADDR"))
+		if err != nil {
+			logger.Error("Invalid registry address", zap.Error(err))
+			return
 		}
 
 		srv, err := registry.Start(ctx, containerdAddr, registryAddr, logger, tlsConfig)
@@ -608,6 +625,9 @@ func main() {
 	// ProvisioningInfo() is called inside the goroutine to avoid re-entering the
 	// provisioning mutex when called from the OnProvisioned callback.
 	startTunnelBroker := func() {
+		if !accessPolicy.AllowsNetwork {
+			return
+		}
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -814,7 +834,7 @@ func main() {
 		}
 		mtlsPort := strconv.Itoa(portNum + 1)
 
-		lis, err := net.Listen("tcp", "[::]:"+mtlsPort)
+		lis, err := net.Listen("tcp", accessPolicy.Address(mtlsPort))
 		if err != nil {
 			logger.Error("Failed to listen on mTLS port", zap.String("port", mtlsPort), zap.Error(err))
 			return
@@ -834,6 +854,9 @@ func main() {
 
 	// Only called after provisioning so the cert is available.
 	startBLEPeripheral := func(certPEM, chainPEM, keyPEM string) {
+		if !accessPolicy.AllowsNetwork {
+			return
+		}
 		tlsConfig, err := mtls.NewTLSConfig(certPEM, chainPEM, keyPEM, logger, certNotBeforeFloor(certPEM))
 		if err != nil {
 			logger.Error("Failed to build BLE TLS config", zap.Error(err))
@@ -870,7 +893,7 @@ func main() {
 	}()
 	meshDialer = services.NewMeshDialer(logger, brokerURL, orgID, assetID, certPEM, keyPEM, chainPEM, meshMetrics)
 	meshProxy := mesh.NewProxy(logger, meshDialer, meshMetrics)
-	if err := meshProxy.Start(fmt.Sprintf(":%d", mesh.ProxyPort)); err != nil {
+	if err := meshProxy.Start(accessPolicy.Address(strconv.Itoa(mesh.ProxyPort))); err != nil {
 		logger.Warn("mesh proxy failed to start; mesh egress disabled", zap.Error(err))
 	}
 
@@ -941,7 +964,7 @@ func main() {
 		)
 		registerAllServices(agentServer)
 
-		agentLis, err := net.Listen("tcp", "[::]:"+agentPort)
+		agentLis, err := net.Listen("tcp", accessPolicy.Address(agentPort))
 		if err != nil {
 			logger.Fatal("Failed to listen on agent port", zap.String("port", agentPort), zap.Error(err))
 		}
@@ -964,7 +987,9 @@ func main() {
 
 	// Keep the USB gadget interface reachable at the well-known link-local
 	// address the CLI dials directly (no mDNS/DHCP needed over USB-C).
-	go usbgadget.EnsureWellKnownAddress(ctx, 30*time.Second, logger)
+	if accessPolicy.AllowsNetwork {
+		go usbgadget.EnsureWellKnownAddress(ctx, 30*time.Second, logger)
+	}
 
 	// Local control socket: the agent's full gRPC over a unix socket with NO
 	// mTLS. Access is gated solely by the admin entitlement (oci.applyAdmin

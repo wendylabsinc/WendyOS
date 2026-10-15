@@ -50,6 +50,9 @@ jobs:
             swiftpm-${{ runner.os }}-xcode-${{ steps.xcode.outputs.version }}-
             swiftpm-${{ runner.os }}-
 
+      - name: Test Mac network-access migration
+        run: bash swift/Scripts/NetworkAccessPreferences_test.sh
+
       - name: Run swift test
         working-directory: swift
         shell: bash

@@ -5,6 +5,17 @@ set -euo pipefail
 
 SERVICE_FILE="/etc/avahi/services/wendy-agent.service"
 
+# Package upgrades can recreate the advertisement. Honor the installer choice
+# before publishing TXT records; the agent also enforces this on startup.
+if [ -f /etc/wendy-agent/network-access ] \
+  && [ "$(cat /etc/wendy-agent/network-access)" = local ]; then
+  if [ -f "$SERVICE_FILE" ]; then
+    mv -f "$SERVICE_FILE" "${SERVICE_FILE}.local-only"
+  fi
+  SERVICE_FILE="${SERVICE_FILE}.local-only"
+fi
+
+# Populate hidden advertisements too, so a later opt-in restores real identity.
 if [ ! -f "$SERVICE_FILE" ]; then
   exit 0
 fi
