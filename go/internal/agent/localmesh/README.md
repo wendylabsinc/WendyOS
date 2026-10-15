@@ -3,12 +3,13 @@
 This is the staged Linux local-mesh router from the NAN prototype, rebased on
 current WendyOS. It uses enrolled Wendy device certificates, mTLS QUIC links,
 signed device/gateway manifests, a Babel route engine, and Wendy-owned TUNs and
-routes. `local-mesh.json` activates an explicitly configured TCP topology. A
-missing file leaves this new router disabled.
+routes. `local-mesh.json` activates explicitly configured TCP links, NAN, or
+both on one Babel node. A missing file leaves this router disabled.
 
 ```json
 {
   "listen": "0.0.0.0:43020",
+  "nan": true,
   "peers": [
     {"asset": 460, "address": "192.0.2.60:43020"}
   ]
@@ -19,6 +20,10 @@ Place the file in the agent config directory (`/etc/wendy-agent` by default)
 on **both endpoints**. The lower asset ID initiates each edge; the higher ID
 listens. An incoming asset must be in the peer list. The TCP carrier preserves
 packet boundaries for QUIC and pins the expected org and asset certificate.
+For a NAN-only device, `{ "nan": true }` is sufficient. NAN uses the BE202
+`wendyos-nan` helper and an unencrypted NDP underlay; enrolled Wendy mTLS QUIC
+protects mesh data and control traffic. The router prefers TCP cost 256 over
+NAN cost 512 when both carry the same route.
 It exists to simulate chosen graph topologies with ordinary TCP listeners and
 clients. TCP's head-of-line blocking makes it inappropriate as the final LAN,
 NAN or Bluetooth carrier. Use it only in isolated Linux test environments.

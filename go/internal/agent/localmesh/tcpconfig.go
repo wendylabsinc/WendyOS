@@ -16,6 +16,7 @@ import (
 type TCPConfig struct {
 	Listen string    `json:"listen"`
 	Peers  []TCPPeer `json:"peers"`
+	NAN    bool      `json:"nan,omitempty"`
 }
 
 type TCPPeer struct {
@@ -51,7 +52,11 @@ func LoadTCPConfig(path string, self int32) (*TCPConfig, error) {
 	if err := dec.Decode(&extra); !errors.Is(err, io.EOF) {
 		return nil, errors.New("local mesh config has trailing data")
 	}
-	if err := validateTCPAddress(cfg.Listen, true); err != nil {
+	if cfg.Listen == "" {
+		if !cfg.NAN || len(cfg.Peers) != 0 {
+			return nil, errors.New("listen is required for configured TCP peers; set nan to enable radio-only mesh")
+		}
+	} else if err := validateTCPAddress(cfg.Listen, true); err != nil {
 		return nil, fmt.Errorf("listen: %w", err)
 	}
 	if len(cfg.Peers) > 64 {
