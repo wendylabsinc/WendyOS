@@ -9,6 +9,7 @@ import (
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 	"go.uber.org/zap"
 
+	"github.com/wendylabsinc/wendy/go/internal/agent/avahibridge"
 	"github.com/wendylabsinc/wendy/go/internal/agent/dbusproxy"
 	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 )
@@ -82,6 +83,28 @@ func TestEnsureDBusProxyForStartIgnoresContainersWithoutBluetoothMount(t *testin
 	}
 	if started || len(proxy.started) != 0 {
 		t.Fatalf("non-Bluetooth start unexpectedly touched proxy: started=%v calls=%v", started, proxy.started)
+	}
+}
+
+func TestEnsureDBusProxyForStartYieldsAvahiMount(t *testing.T) {
+	// B2 device proof 2026-09-29: an avahi-sourced /var/run/dbus mount
+	// reached the Bluetooth mismatch error and wedged container start.
+	// The Bluetooth handler must yield (false, nil); ensureAvahiForStart
+	// owns these mounts.
+	proxy := &recordingProxyManager{}
+	client := &Client{logger: zap.NewNop(), proxyManager: proxy}
+	mounts := []specs.Mount{{
+		Destination: "/var/run/dbus",
+		Source:      avahibridge.ProxySocketDir("com.example.go-time-web"),
+		Type:        "bind",
+	}}
+
+	started, err := client.ensureDBusProxyForStart(context.Background(), "com.example.go-time-web", mounts)
+	if err != nil {
+		t.Fatalf("ensureDBusProxyForStart() error = %v, want nil (avahi mount)", err)
+	}
+	if started || len(proxy.started) != 0 {
+		t.Fatalf("avahi mount unexpectedly touched Bluetooth proxy: started=%v calls=%v", started, proxy.started)
 	}
 }
 

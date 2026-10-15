@@ -236,6 +236,13 @@
         },
         {
           "properties": {
+            "type": { "const": "avahi" }
+          },
+          "required": ["type"],
+          "additionalProperties": false
+        },
+        {
+          "properties": {
             "type": { "const": "nan" }
           },
           "required": ["type"],
