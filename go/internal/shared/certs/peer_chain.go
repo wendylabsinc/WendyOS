@@ -9,9 +9,10 @@ import (
 	"time"
 )
 
-// TLSKeyPair includes the issuer chain, stripping the trailing bytes some PKI
-// certificates carry outside their ASN.1 sequence. Those bytes, not ML-DSA
-// public keys, prevent Go's TLS stack from parsing the presented chain.
+// TLSKeyPair normalizes the trailing bytes some PKI issuer certificates carry
+// outside their ASN.1 sequence, so Go TLS can parse the presented chain.
+// Proven self-signed CA roots are omitted; callers retain the original trust
+// material. Intermediates and issuers with unsupported signatures are retained.
 func TLSKeyPair(leafPEM, chainPEM, keyPEM string) (tls.Certificate, error) {
 	leaf, err := LeafCertificatePEM(leafPEM)
 	if err != nil {
@@ -26,6 +27,9 @@ func TLSKeyPair(leafPEM, chainPEM, keyPEM string) (tls.Certificate, error) {
 		return tls.Certificate{}, fmt.Errorf("no parseable certificates in TLS issuer chain")
 	}
 	for _, ca := range chain {
+		if ca.IsCA && bytes.Equal(ca.RawSubject, ca.RawIssuer) && ca.CheckSignatureFrom(ca) == nil {
+			continue
+		}
 		bundle = append(bundle, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: ca.Raw})...)
 	}
 	return tls.X509KeyPair(bundle, []byte(keyPEM))

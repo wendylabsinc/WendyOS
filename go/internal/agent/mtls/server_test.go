@@ -401,7 +401,15 @@ func TestNewClientTLSConfigExpectingPeerPinsIdentity(t *testing.T) {
 
 func TestNewTLSConfigServesNormalizedIssuerChain(t *testing.T) {
 	leafPEM, keyPEM := testLeafCertificate(t, "leaf")
-	chainPEM, _ := testCACertificate(t, "chain")
+	ca, caKey, _ := testCAKeyPair(t)
+	issuer := *ca
+	issuer.Subject = pkix.Name{CommonName: "intermediate"}
+	issuer.RawSubject = nil
+	issuerDER, err := x509.CreateCertificate(rand.Reader, &issuer, ca, &caKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	chainPEM := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: issuerDER}))
 	block, _ := pem.Decode([]byte(chainPEM))
 	block.Bytes = append(block.Bytes, 0, 0)
 	chainPEM = string(pem.EncodeToMemory(block))
