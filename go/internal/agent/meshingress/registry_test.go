@@ -131,6 +131,23 @@ func TestRegistryRecoveryChecksExactContainer(t *testing.T) {
 	}
 	r.Release("container-a")
 	if r.OwnedBy("container-a", 18080) {
+		t.Fatal("stopped app retained container authorization")
+	}
+}
+
+func TestRegistryCatalogOwnershipFollowsLivePort(t *testing.T) {
+	r := NewRegistry()
+	if err := r.ClaimForApp("container-a", "app-a", 18080); err != nil {
+		t.Fatal(err)
+	}
+	if !r.AllowedApp("app-a", 18080) || r.AllowedApp("app-b", 18080) {
+		t.Fatal("catalog port ownership is not scoped to the running app")
+	}
+	if err := r.ClaimForApp("container-a", "app-b", 18080); err == nil {
+		t.Fatal("live port changed app owner")
+	}
+	r.Release("container-a")
+	if r.AllowedApp("app-a", 18080) {
 		t.Fatal("stopped app retained catalog authorization")
 	}
 }
