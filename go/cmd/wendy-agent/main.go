@@ -46,6 +46,7 @@ import (
 	agentnet "github.com/wendylabsinc/wendy/go/internal/agent/network"
 	"github.com/wendylabsinc/wendy/go/internal/agent/oci"
 	"github.com/wendylabsinc/wendy/go/internal/agent/registry"
+	"github.com/wendylabsinc/wendy/go/internal/agent/robotarm"
 	"github.com/wendylabsinc/wendy/go/internal/agent/ros2camera"
 	"github.com/wendylabsinc/wendy/go/internal/agent/services"
 	"github.com/wendylabsinc/wendy/go/internal/agent/timesync"
@@ -419,6 +420,7 @@ func main() {
 		}
 		return certPEM, chainPEM, keyPEM
 	}
+	robotArmSvc := services.NewRobotArmService(robotarm.NewStore("/var/lib/wendy/robot-arm-bindings.json"), robotarm.Discover)
 	sensorStore := mcusource.NewPairingStore("/var/lib/wendy/sensor-pairings.json")
 	if err := sensorStore.Load(); err != nil {
 		logger.Warn("loading sensor pairing store failed", zap.Error(err))
@@ -723,6 +725,7 @@ func main() {
 		agentpbv2.RegisterWendyMeshServiceServer(srv, meshSvc)
 		agentpbv2.RegisterWendyBuildServiceServer(srv, buildSvc)
 		agentpbv2.RegisterWendySensorPairingServiceServer(srv, sensorSvc)
+		agentpbv2.RegisterWendyRobotArmServiceServer(srv, robotArmSvc)
 		if ros2Svc != nil {
 			agentpbv2.RegisterROS2ServiceServer(srv, ros2Svc)
 		}

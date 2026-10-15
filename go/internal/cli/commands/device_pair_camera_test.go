@@ -107,7 +107,8 @@ func TestDevicePairCameraTabCredentialFormAndBackgroundResults(t *testing.T) {
 		{Id: 42, Name: "Door camera", Transport: agentpb.VideoTransport_VIDEO_TRANSPORT_IP, Online: true},
 	}}
 	m := newDevicePairModel(&pairTestBluetooth{}, pairTestHandler(&pairTestClient{}), &cameraPairHandler{ctx: context.Background(), client: c})
-	// Shift+Tab wraps from Bluetooth to the last tab.
+	// Shift+Tab wraps through USB Arms, then reaches the camera tab.
+	m, _ = pairUpdate(m, tea.KeyMsg{Type: tea.KeyShiftTab})
 	m, scan := pairUpdate(m, tea.KeyMsg{Type: tea.KeyShiftTab})
 	if m.active != pairCameraTab || scan == nil || c.scans != 0 {
 		t.Fatal("camera tab did not start lazy discovery")
@@ -131,14 +132,16 @@ func TestDevicePairCameraTabCredentialFormAndBackgroundResults(t *testing.T) {
 		t.Fatal("submitting credentials did not clear the password or start saving")
 	}
 	m, _ = pairUpdate(m, tea.KeyMsg{Type: tea.KeyTab})
+	m, _ = pairUpdate(m, tea.KeyMsg{Type: tea.KeyTab})
 	if m.active != pairBluetoothTab {
-		t.Fatal("Tab did not wrap from camera to Bluetooth")
+		t.Fatal("Tab did not wrap through USB Arms to Bluetooth")
 	}
 	m, _ = pairUpdate(m, save())
 	if c.saved == nil || c.saved.DeviceId != 42 || c.saved.Username != "admin" || c.saved.Password != secret || !m.camera.devices[0].HasCredentials || m.active != pairBluetoothTab {
 		t.Fatal("camera save result was not routed to its background tab")
 	}
 	// Revisit, edit and cancel without exiting the surrounding picker.
+	m, _ = pairUpdate(m, tea.KeyMsg{Type: tea.KeyShiftTab})
 	m, rescan := pairUpdate(m, tea.KeyMsg{Type: tea.KeyShiftTab})
 	m, _ = pairUpdate(m, rescan())
 	m, _ = pairUpdate(m, tea.KeyMsg{Type: tea.KeyEnter})

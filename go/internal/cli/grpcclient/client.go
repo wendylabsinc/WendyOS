@@ -95,6 +95,7 @@ type AgentConnection struct {
 	TimeSyncService      agentpbv2.WendyTimeSyncServiceClient
 	BuildService         agentpbv2.WendyBuildServiceClient
 	SensorPairingService agentpbv2.WendySensorPairingServiceClient
+	RobotArmService      agentpbv2.WendyRobotArmServiceClient
 	DriverService        agentpbv2.WendyDriverServiceClient
 	DataService          agentpbv2.DataServiceClient
 	// cachedAgentVersion retains a successful liveness probe performed while
@@ -596,6 +597,7 @@ func newAgentConnection(conn *grpc.ClientConn) *AgentConnection {
 		TimeSyncService:      agentpbv2.NewWendyTimeSyncServiceClient(conn),
 		BuildService:         agentpbv2.NewWendyBuildServiceClient(conn),
 		SensorPairingService: agentpbv2.NewWendySensorPairingServiceClient(conn),
+		RobotArmService:      agentpbv2.NewWendyRobotArmServiceClient(conn),
 		DriverService:        agentpbv2.NewWendyDriverServiceClient(conn),
 		DataService:          agentpbv2.NewDataServiceClient(conn),
 	}

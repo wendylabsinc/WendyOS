@@ -174,16 +174,22 @@ func pairingName(name string, source *models.DiscoveredDevice) string {
 
 func newDevicePairCmd() *cobra.Command {
 	var (
-		listOnly bool
-		name     string
-		sensors  []string
+		listOnly                    bool
+		name                        string
+		sensors                     []string
+		usbArms                     bool
+		bindArm, forgetArm, armName string
+		allowLocation               bool
 	)
 	cmd := &cobra.Command{
 		Use:   "pair",
-		Short: "Pair or forget Bluetooth, SensorLink, and IP camera devices",
-		Long:  "Discover, pair, and forget devices in the Bluetooth, SensorLink, and IP Cameras tabs. Bluetooth and IP cameras are discovered on the target device; SensorLink discovers sources on your local network. SensorLink devices must be in an organization you belong to.",
+		Short: "Pair or forget Bluetooth, SensorLink, IP cameras, and USB arms",
+		Long:  "Discover, pair, and forget devices in the Bluetooth, SensorLink, IP Cameras, and USB Arms tabs. USB arm pairing saves an unverified host-local binding on the target Agent; it does not bond Bluetooth or start telemetry/control. Bluetooth and IP cameras are discovered on the target device; SensorLink discovers sources on your local network. SensorLink devices must be in an organization you belong to.",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := validateArmPairFlags(usbArms, listOnly, bindArm, forgetArm, armName, allowLocation, cmd.Flags().Changed("name") || cmd.Flags().Changed("sensors")); err != nil {
+				return err
+			}
 			ctx := cmd.Context()
 			conn, err := connectToAgent(ctx, SuppressProvisioningHint())
 			if err != nil {
@@ -191,6 +197,9 @@ func newDevicePairCmd() *cobra.Command {
 			}
 			defer conn.Close()
 
+			if usbArms && (listOnly || bindArm != "" || forgetArm != "" || jsonOutput) {
+				return runArmPair(ctx, conn.RobotArmService, bindArm, forgetArm, armName, allowLocation, jsonOutput, cmd.OutOrStdout())
+			}
 			if listOnly {
 				resp, err := conn.SensorPairingService.ListSensorPairings(ctx, &agentpbv2.ListSensorPairingsRequest{})
 				if err != nil {
@@ -219,6 +228,10 @@ func newDevicePairCmd() *cobra.Command {
 					return cameraServicePreflight(ctx, conn, cameraNetworkManagement)
 				}},
 			)
+			model.arm = newArmPairModel(&armPairHandler{ctx: pairCtx, client: conn.RobotArmService, name: armName})
+			if usbArms {
+				model.active = pairArmTab
+			}
 			if cmd.Flags().Changed("name") || cmd.Flags().Changed("sensors") {
 				model.active = pairSensorLinkTab
 			}
@@ -228,10 +241,37 @@ func newDevicePairCmd() *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().BoolVar(&listOnly, "list", false, "list current SensorLink pairings")
+	cmd.Flags().BoolVar(&listOnly, "list", false, "list current SensorLink pairings (or USB inventory/bindings with --usb-arms)")
 	cmd.Flags().StringVar(&name, "name", "", "friendly name for a SensorLink pairing")
 	cmd.Flags().StringSliceVar(&sensors, "sensors", nil, "limit a SensorLink pairing to these sensor names (default: all)")
+	cmd.Flags().BoolVar(&usbArms, "usb-arms", false, "select USB arm bindings on the target Agent")
+	cmd.Flags().StringVar(&bindArm, "bind", "", "with --usb-arms, bind this inventory ID as an unverified SO-101")
+	cmd.Flags().StringVar(&forgetArm, "forget", "", "with --usb-arms, forget this saved binding ID")
+	cmd.Flags().StringVar(&armName, "arm-name", "", "friendly name for a USB arm binding")
+	cmd.Flags().BoolVar(&allowLocation, "allow-location-binding", false, "acknowledge a USB binding without serial ID follows its port, including replacements")
 	return cmd
+}
+
+func validateArmPairFlags(usb, list bool, bind, forget, name string, allowLocation, sensorFlags bool) error {
+	if !usb && (bind != "" || forget != "" || name != "" || allowLocation) {
+		return fmt.Errorf("USB arm options require --usb-arms")
+	}
+	if !usb {
+		return nil
+	}
+	if sensorFlags {
+		return fmt.Errorf("--usb-arms cannot be combined with SensorLink --name or --sensors")
+	}
+	if bind != "" && forget != "" || list && (bind != "" || forget != "") {
+		return fmt.Errorf("choose one USB arm operation: --list, --bind or --forget")
+	}
+	if allowLocation && bind == "" {
+		return fmt.Errorf("--allow-location-binding requires --bind")
+	}
+	if name != "" && (list || forget != "") {
+		return fmt.Errorf("--arm-name applies to binding only")
+	}
+	return nil
 }
 
 // newDeviceUnpairCmd removes a sensor pairing. With no argument it shows a

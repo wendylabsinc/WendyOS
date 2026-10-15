@@ -12,6 +12,7 @@ const (
 	pairBluetoothTab pairTab = iota
 	pairSensorLinkTab
 	pairCameraTab
+	pairArmTab
 	pairTabCount
 )
 
@@ -26,6 +27,7 @@ type devicePairModel struct {
 	bluetooth bttable.Model
 	sensor    sensorPairModel
 	camera    cameraPairModel
+	arm       armPairModel
 	active    pairTab
 	started   [pairTabCount]bool
 	width     int
@@ -37,6 +39,7 @@ func newDevicePairModel(bt bttable.Handler, sensor *sensorPairHandler, camera *c
 		bluetooth: bttable.NewModel(nil).WithHandler(bt),
 		sensor:    newSensorPairModel(sensor),
 		camera:    newCameraPairModel(camera),
+		arm:       newArmPairModel(nil),
 	}
 }
 
@@ -61,6 +64,9 @@ func tagPairCmd(cmd tea.Cmd, tab pairTab) tea.Cmd {
 }
 
 func (m devicePairModel) Init() tea.Cmd {
+	if m.active == pairArmTab {
+		return tagPairCmd(m.arm.Init(), pairArmTab)
+	}
 	if m.active == pairCameraTab {
 		return tagPairCmd(m.camera.Init(), pairCameraTab)
 	}
@@ -71,6 +77,11 @@ func (m devicePairModel) Init() tea.Cmd {
 }
 
 func (m devicePairModel) updateTab(tab pairTab, msg tea.Msg) (devicePairModel, tea.Cmd) {
+	if tab == pairArmTab {
+		updated, cmd := m.arm.Update(msg)
+		m.arm = updated.(armPairModel)
+		return m, tagPairCmd(cmd, tab)
+	}
 	if tab == pairCameraTab {
 		updated, cmd := m.camera.Update(msg)
 		m.camera = updated.(cameraPairModel)
@@ -95,12 +106,16 @@ func (m devicePairModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		msg.Height = max(1, msg.Height-2)
-		var btCmd, sensorCmd, cameraCmd tea.Cmd
+		var btCmd, sensorCmd, cameraCmd, armCmd tea.Cmd
 		m, btCmd = m.updateTab(pairBluetoothTab, msg)
 		m, sensorCmd = m.updateTab(pairSensorLinkTab, msg)
 		m, cameraCmd = m.updateTab(pairCameraTab, msg)
-		return m, tea.Batch(btCmd, sensorCmd, cameraCmd)
+		m, armCmd = m.updateTab(pairArmTab, msg)
+		return m, tea.Batch(btCmd, sensorCmd, cameraCmd, armCmd)
 	case tea.KeyMsg:
+		if m.active == pairArmTab && m.arm.confirming && msg.String() != "ctrl+c" {
+			return m.updateTab(pairArmTab, msg)
+		}
 		// Credentials may contain shortcut keys. Escape cancels the form,
 		// and Tab changes its field; Ctrl+C still exits the entire picker.
 		if m.active == pairCameraTab && m.camera.editing && msg.String() != "ctrl+c" {
@@ -133,7 +148,7 @@ func (m devicePairModel) View() string {
 	if m.done {
 		return ""
 	}
-	labels := []string{"Bluetooth", "SensorLink", "IP Cameras"}
+	labels := []string{"Bluetooth", "SensorLink", "IP Cameras", "USB Arms"}
 	header := ""
 	for i, label := range labels {
 		if i > 0 {
@@ -145,7 +160,7 @@ func (m devicePairModel) View() string {
 		}
 		header += style.Render(label)
 	}
-	if !m.camera.editing || m.active != pairCameraTab {
+	if (!m.camera.editing || m.active != pairCameraTab) && (!m.arm.confirming || m.active != pairArmTab) {
 		header += devicePickerTabInactive.Render("  (tab switch)")
 	}
 	if m.width > 0 {
@@ -156,6 +171,8 @@ func (m devicePairModel) View() string {
 		body = m.sensor.View()
 	} else if m.active == pairCameraTab {
 		body = m.camera.View()
+	} else if m.active == pairArmTab {
+		body = m.arm.View()
 	}
 	return header + "\n\n" + body
 }
