@@ -1,13 +1,18 @@
 package commands
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"io"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
+	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 func TestDeviceShellPlaintextExplainsMTLS(t *testing.T) {
@@ -105,3 +110,74 @@ func TestBuildShellStart_CommandAndSize(t *testing.T) {
 		t.Fatalf("term size = %v, want 24x80", req3.GetStart().GetTermSize())
 	}
 }
+
+func TestReceiveHostShellRequiresExitCode(t *testing.T) {
+	output := func(data string) *agentpb.HostShellResponse {
+		return &agentpb.HostShellResponse{ResponseType: &agentpb.HostShellResponse_StdoutData{StdoutData: []byte(data)}}
+	}
+	exit := func(code int32) *agentpb.HostShellResponse {
+		return &agentpb.HostShellResponse{ResponseType: &agentpb.HostShellResponse_ExitCode{ExitCode: code}}
+	}
+	transportErr := status.Error(codes.Unavailable, "connection lost")
+	for _, tc := range []struct {
+		name         string
+		frames       []*agentpb.HostShellResponse
+		terminal     error
+		wantOutput   string
+		wantError    error
+		wantContains string
+	}{
+		{name: "empty EOF", terminal: io.EOF, wantError: io.ErrUnexpectedEOF},
+		{name: "complete-looking output then EOF", frames: []*agentpb.HostShellResponse{output("UPDATE_END\n")}, terminal: io.EOF, wantOutput: "UPDATE_END\n", wantError: io.ErrUnexpectedEOF},
+		{name: "empty response is not zero exit", frames: []*agentpb.HostShellResponse{{}}, terminal: io.EOF, wantError: io.ErrUnexpectedEOF},
+		{name: "explicit zero exit", frames: []*agentpb.HostShellResponse{exit(0)}},
+		{name: "output and zero exit", frames: []*agentpb.HostShellResponse{output("one\r\n"), output("two"), exit(0)}, wantOutput: "one\r\ntwo"},
+		{name: "nonzero exit", frames: []*agentpb.HostShellResponse{output("failed"), exit(69)}, wantOutput: "failed", wantContains: "remote shell exited with code 69"},
+		{name: "transport error", frames: []*agentpb.HostShellResponse{output("partial")}, terminal: transportErr, wantOutput: "partial", wantError: transportErr},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var got bytes.Buffer
+			index := 0
+			recv := func() (*agentpb.HostShellResponse, error) {
+				if index < len(tc.frames) {
+					frame := tc.frames[index]
+					index++
+					return frame, nil
+				}
+				if tc.terminal == nil {
+					t.Fatal("read past final exit code")
+				}
+				return nil, tc.terminal
+			}
+			err := receiveHostShell(recv, &got)
+			if tc.wantError != nil {
+				if !errors.Is(err, tc.wantError) {
+					t.Fatalf("error = %v; want %v", err, tc.wantError)
+				}
+			} else if tc.wantContains != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantContains) {
+					t.Fatalf("error = %v; want %q", err, tc.wantContains)
+				}
+			} else if err != nil {
+				t.Fatal(err)
+			}
+			if got.String() != tc.wantOutput {
+				t.Fatalf("output = %q; want %q", got.String(), tc.wantOutput)
+			}
+		})
+	}
+}
+
+func TestReceiveHostShellOutputFailure(t *testing.T) {
+	writeErr := errors.New("output closed")
+	err := receiveHostShell(func() (*agentpb.HostShellResponse, error) {
+		return &agentpb.HostShellResponse{ResponseType: &agentpb.HostShellResponse_StdoutData{StdoutData: []byte("data")}}, nil
+	}, failingShellWriter{writeErr})
+	if !errors.Is(err, writeErr) {
+		t.Fatalf("error = %v; want output failure", err)
+	}
+}
+
+type failingShellWriter struct{ err error }
+
+func (w failingShellWriter) Write([]byte) (int, error) { return 0, w.err }
