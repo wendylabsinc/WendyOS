@@ -44,6 +44,9 @@ type Provider struct {
 	Node        LinkNode
 	Selection   *localmesh.PeerSelection
 	Logger      *zap.Logger
+	// Status receives local setup readiness/failure, not peer reachability.
+	// The optional callback must return promptly.
+	Status func(localmesh.CarrierStatus)
 }
 
 func (p Provider) Run(parent context.Context) error {
@@ -147,6 +150,9 @@ func (p Provider) Run(parent context.Context) error {
 	recovery := nanRecovery{ownsSession: plan.own}
 	for {
 		err := p.runNDIEpoch(ctx, id, logger, recovery.canReset())
+		if err != nil && ctx.Err() == nil && p.Status != nil {
+			p.Status(localmesh.CarrierStatus{Err: err})
+		}
 		if errors.Is(err, errSoftNANRecovery) {
 			switch recovery.next(errors.Is(err, errNoRXNANRecovery)) {
 			case resetNDI:
@@ -260,7 +266,7 @@ func (p Provider) runNDIEpoch(parent context.Context, id Identity, logger *zap.L
 	peers := make(chan radioPeer, 8)
 	health := make(chan radioHealth, 32)
 	radioDone := make(chan error, 1)
-	go func() { radioDone <- runRadio(ctx, id, peers, health, p.Selection, allowSoftReset, logger) }()
+	go func() { radioDone <- runRadio(ctx, id, peers, health, p.Selection, allowSoftReset, logger, p.Status) }()
 	// runRadio drains NDPs before returning. Do not remove the NDI until then.
 	defer func() { cancel(); <-radioDone }()
 	type worker struct {
