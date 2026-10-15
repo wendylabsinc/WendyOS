@@ -337,6 +337,14 @@ func (m *ContainerMonitor) ReconcileBootContainers(ctx context.Context) {
 	if r, ok := m.containerd.(services.AppStateRebuilder); ok {
 		r.RebuildAppStateCaches(ctx)
 	}
+	// Roll back inherited CREATED tasks before filtering restart intent. An
+	// agent crash during CNI/private-daemon preparation must not leak a held
+	// process and address for a --no-restart app.
+	if r, ok := m.containerd.(services.InterruptedTaskStartRecoverer); ok {
+		if err := r.RecoverInterruptedTaskStarts(ctx); err != nil {
+			m.logger.Warn("Could not recover all interrupted container starts", zap.Error(err))
+		}
+	}
 
 	// One-time upgrade back-fill: apps stopped under an older agent carry no
 	// stopped-by-user mark, so without this the first post-upgrade boot would
@@ -344,6 +352,17 @@ func (m *ContainerMonitor) ReconcileBootContainers(ctx context.Context) {
 	// below so the marks are in place before we decide what to start.
 	if err := m.containerd.MigrateStoppedByUserOnce(ctx); err != nil {
 		m.logger.Warn("Boot reconcile migration failed; proceeding without it", zap.Error(err))
+	}
+	// A surviving task still writes to its original shim FIFOs. Reconnect them
+	// before filtering restart policies so --no-restart apps are drained too.
+	if r, ok := m.containerd.(services.RunningTaskOutputRecoverer); ok {
+		if err := r.RecoverRunningTaskOutput(ctx, func(name string, output services.ContainerOutput) {
+			if m.logManager != nil {
+				m.logManager.Publish(name, output)
+			}
+		}); err != nil {
+			m.logger.Warn("Could not recover all running task output", zap.Error(err))
+		}
 	}
 
 	bcs, err := m.containerd.ListBootContainers(ctx)
