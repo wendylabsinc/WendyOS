@@ -2,6 +2,10 @@ package containerd
 
 import (
 	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"runtime"
 	"testing"
 
 	"go.uber.org/zap"
@@ -14,13 +18,43 @@ type recordingMDNS struct {
 	starts []string
 	stops  []string
 	ports  [][]appconfig.PortMapping
+	netns  []string
 	onStop func()
 }
 
-func (m *recordingMDNS) StartMeshApp(containerName, appID, ip, bridge string, ports []appconfig.PortMapping) error {
+func (m *recordingMDNS) StartMeshApp(containerName, appID, ip, bridge, netnsPath, gateway string, ports []appconfig.PortMapping) error {
 	m.starts = append(m.starts, containerName+":"+appID+":"+ip+":"+bridge)
+	m.netns = append(m.netns, netnsPath)
 	m.ports = append(m.ports, append([]appconfig.PortMapping(nil), ports...))
 	return nil
+}
+
+// Mesh apps release CNI's temporary namespace bind mount after startup. The
+// long-lived mDNS/LAN projector must retain the task's procfs namespace path
+// so a service discovered later can still install its scoped route.
+func TestMeshMDNSUsesLiveTaskNamespaceAfterTemporaryPathRemoval(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("requires Linux procfs network namespace")
+	}
+	temporary := filepath.Join(t.TempDir(), "cni-netns")
+	if err := os.Symlink("/proc/self/ns/net", temporary); err != nil {
+		t.Fatal(err)
+	}
+	live := fmt.Sprintf("/proc/%d/ns/net", os.Getpid())
+	mdns := &recordingMDNS{}
+	c := &Client{logger: zap.NewNop(), meshIngress: meshingress.NewRegistry(), meshMDNS: mdns}
+	if err := c.applyMeshIngressPorts("app", "app", live, "10.79.99.162", nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(temporary); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(temporary); !os.IsNotExist(err) {
+		t.Fatalf("temporary CNI path still exists: %v", err)
+	}
+	if _, err := os.Stat(mdns.netns[0]); err != nil || mdns.netns[0] != live {
+		t.Fatalf("projector lost live task namespace: path=%q err=%v", mdns.netns[0], err)
+	}
 }
 func (m *recordingMDNS) StopMeshApp(containerName string) {
 	m.stops = append(m.stops, containerName)
@@ -44,7 +78,7 @@ func TestMeshIngressPublishesOnlySuccessfullyForwardedPorts(t *testing.T) {
 	mdns := &recordingMDNS{}
 	c := &Client{logger: zap.NewNop(), meshIngress: r, meshMDNS: mdns}
 	ports := []appconfig.PortMapping{{Host: 8080, Container: 80}, {Host: 8081, Container: 81}}
-	if err := c.applyMeshIngressPorts("app_a", "app", "10.3.0.2", ports); err != nil {
+	if err := c.applyMeshIngressPorts("app_a", "app", "/proc/self/ns/net", "10.3.0.2", ports); err != nil {
 		t.Fatal(err)
 	}
 	if !r.Allowed(8080) || r.Allowed(8081) {
@@ -65,7 +99,7 @@ func TestMeshIngressConflictFailsBeforeChangingForward(t *testing.T) {
 		t.Fatal(err)
 	}
 	c := &Client{logger: zap.NewNop(), meshIngress: r}
-	if err := c.applyMeshIngressPorts("second", "app", "10.3.0.3", []appconfig.PortMapping{{Host: 8080, Container: 80}}); err == nil {
+	if err := c.applyMeshIngressPorts("second", "app", "/proc/self/ns/net", "10.3.0.3", []appconfig.PortMapping{{Host: 8080, Container: 80}}); err == nil {
 		t.Fatal("conflicting container was allowed to start ingress")
 	}
 	if !r.Allowed(8080) {
@@ -75,14 +109,14 @@ func TestMeshIngressConflictFailsBeforeChangingForward(t *testing.T) {
 
 func TestMeshIngressRequiresRegistryAndValidPorts(t *testing.T) {
 	c := &Client{logger: zap.NewNop()}
-	if err := c.applyMeshIngressPorts("app", "app", "10.3.0.2", []appconfig.PortMapping{{Host: 8080, Container: 80}}); err == nil {
+	if err := c.applyMeshIngressPorts("app", "app", "/proc/self/ns/net", "10.3.0.2", []appconfig.PortMapping{{Host: 8080, Container: 80}}); err == nil {
 		t.Fatal("missing registry allowed ingress")
 	}
 	c.meshIngress = meshingress.NewRegistry()
-	if err := c.applyMeshIngressPorts("app", "app", "10.3.0.2", []appconfig.PortMapping{{Host: 0, Container: 80}}); err == nil {
+	if err := c.applyMeshIngressPorts("app", "app", "/proc/self/ns/net", "10.3.0.2", []appconfig.PortMapping{{Host: 0, Container: 80}}); err == nil {
 		t.Fatal("port zero allowed ingress")
 	}
-	if err := c.applyMeshIngressPorts("app", "app", "10.3.0.2", []appconfig.PortMapping{{Host: 8080, Container: 80}, {Host: 8080, Container: 81}}); err == nil {
+	if err := c.applyMeshIngressPorts("app", "app", "/proc/self/ns/net", "10.3.0.2", []appconfig.PortMapping{{Host: 8080, Container: 80}, {Host: 8080, Container: 81}}); err == nil {
 		t.Fatal("duplicate host port allowed ingress")
 	}
 }
@@ -160,7 +194,7 @@ func TestMeshMDNSLifecycleUsesIsolatedAppAndWithdrawsBeforePortRelease(t *testin
 	r := meshingress.NewRegistry()
 	mdns := &recordingMDNS{}
 	c := &Client{logger: zap.NewNop(), meshIngress: r, meshMDNS: mdns}
-	if err := c.applyMeshIngressPorts("browse", "app", "10.3.0.2", nil); err != nil {
+	if err := c.applyMeshIngressPorts("browse", "app", "/proc/self/ns/net", "10.3.0.2", nil); err != nil {
 		t.Fatal(err)
 	}
 	if len(mdns.starts) != 1 || mdns.starts[0] != "browse:app:10.3.0.2:"+bridgeName("app") {

@@ -75,7 +75,7 @@ func runConfiguredMeshCarriers(ctx context.Context, configDir string, id localme
 			logger.Error("mesh route authorizer unavailable", zap.Error(err))
 			return
 		}
-		if err := catalog.Activate(runCtx, node.Credentials, node.Snapshot, node.ReauthorizeRoutes); err != nil {
+		if err := catalog.Activate(runCtx, node.Credentials, node.Snapshot, node.ReauthorizeRoutes, cfg.Ethernet, cfg.InfrastructureWiFi); err != nil {
 			logger.Error("mesh service catalog unavailable", zap.Error(err))
 		}
 		sharing.Activate(runCtx, node)
