@@ -37,6 +37,8 @@ const (
 	// appSystemAPIGroupGID is reserved by WendyOS for private app System API
 	// sockets, allowing non-root workloads to connect without world access.
 	appSystemAPIGroupGID uint32 = 2000
+	// NANControlGroupGID is reserved for direct app access to nan0 only.
+	NANControlGroupGID uint32 = 2001
 	// v4l2Major is the standard Video4Linux character device major.
 	v4l2Major int64 = 81
 )
@@ -64,6 +66,12 @@ type ApplyOptions struct {
 	// resolver in the host network namespace. When empty, host networking keeps
 	// the compatibility fallback of bind-mounting the host resolver file.
 	HostResolvConfPath string
+	// NANDataInterface is the app-specific NDI prepared before OCI creation.
+	NANDataInterface string
+	// NANClientDirectory is a host directory mounted at the same absolute
+	// path inside the container, so wpa_supplicant can reply to AF_UNIX
+	// datagram clients bound there from its own mount namespace.
+	NANClientDirectory string
 }
 
 // ApplyEntitlements modifies an OCI spec in-place based on app config entitlements.
@@ -102,6 +110,10 @@ func ApplyEntitlements(spec *Spec, cfg *appconfig.AppConfig, opts ApplyOptions) 
 			applyPersist(spec, ent, cfg.AppID)
 		case appconfig.EntitlementBluetooth:
 			applyBluetooth(spec, opts.DBusProxySocketDir)
+		case appconfig.EntitlementNAN:
+			if err := applyNAN(spec, opts.NANDataInterface, opts.NANClientDirectory); err != nil {
+				return err
+			}
 		case appconfig.EntitlementUSB:
 			applyUSB(spec)
 		case appconfig.EntitlementI2C:
@@ -739,6 +751,54 @@ func applyAdmin(spec *Spec) {
 		Options:     []string{"rbind", "nosuid", "noexec", "ro"},
 	})
 	spec.Process.Env = append(spec.Process.Env, "WENDY_AGENT_SOCKET="+ctrAgentSocketPath)
+}
+
+// NANControlSocketHostPath is the wpa_supplicant control socket for nan0.
+// Bind the socket file rather than its parent directory: the latter also
+// contains the global and station Wi-Fi control sockets. The app must be
+// restarted if wpa_supplicant replaces this socket inode.
+var NANControlSocketHostPath = "/run/wpa_supplicant/nan0"
+
+// NANControlSocketContainerPath is the fixed bind-mount target inspected by
+// the agent's restart monitor when wpa_supplicant replaces its host socket.
+const NANControlSocketContainerPath = "/run/wendy/nan/nan0"
+const ctrNANControlSocketPath = NANControlSocketContainerPath
+
+func applyNAN(spec *Spec, ndi, clientDir string) error {
+	fi, err := os.Lstat(NANControlSocketHostPath)
+	if err != nil {
+		return fmt.Errorf("nan entitlement requires %s: %w", NANControlSocketHostPath, err)
+	}
+	if fi.Mode()&os.ModeSocket == 0 {
+		return fmt.Errorf("nan entitlement: %s is not a Unix socket", NANControlSocketHostPath)
+	}
+	if ndi == "" {
+		return fmt.Errorf("nan entitlement: app NDI was not prepared")
+	}
+	if clientDir == "" {
+		return fmt.Errorf("nan entitlement: client socket directory was not prepared")
+	}
+	if fi, err := os.Lstat(clientDir); err != nil || !fi.IsDir() {
+		return fmt.Errorf("nan entitlement: client socket directory %s is unavailable", clientDir)
+	}
+	spec.Mounts = append(spec.Mounts, Mount{
+		Destination: ctrNANControlSocketPath,
+		Source:      NANControlSocketHostPath,
+		Type:        "bind",
+		Options:     []string{"bind", "nosuid", "noexec", "ro"},
+	})
+	spec.Mounts = append(spec.Mounts, Mount{
+		Destination: clientDir,
+		Source:      clientDir,
+		Type:        "bind",
+		Options:     []string{"rbind", "nosuid", "noexec", "nodev", "rw"},
+	})
+	spec.Process.User.AdditionalGids = appendUnique(spec.Process.User.AdditionalGids, NANControlGroupGID)
+	spec.Process.Env = append(spec.Process.Env,
+		"WENDY_NAN_SOCKET="+ctrNANControlSocketPath,
+		"WENDY_NAN_NDI="+ndi,
+		"WENDY_NAN_CLIENT_DIR="+clientDir)
+	return nil
 }
 
 // applyNetwork configures the network namespace.

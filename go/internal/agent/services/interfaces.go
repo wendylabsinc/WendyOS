@@ -101,6 +101,13 @@ type ContainerdClient interface {
 	GetContainerRestartPolicyLabel(ctx context.Context, appName string) (string, error)
 }
 
+// NANSocketStalenessDetector is an optional monitor capability. A running
+// NAN-entitled app can retain a bind-mounted wpa_supplicant socket inode after
+// the host socket is replaced; the monitor restarts only the affected tasks.
+type NANSocketStalenessDetector interface {
+	StaleNANSocketContainers(ctx context.Context) ([]string, error)
+}
+
 // ImagePreparer is the optional fast-deploy capability that assembles
 // chunk-backed image layers and unpacks their snapshots before RunContainer.
 // It stays separate from ContainerdClient so older test doubles and alternate
