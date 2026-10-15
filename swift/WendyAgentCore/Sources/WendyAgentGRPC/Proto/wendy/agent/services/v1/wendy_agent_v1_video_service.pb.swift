@@ -711,7 +711,7 @@ public nonisolated struct Wendy_Agent_Services_V1_CameraDHCPInterfaceStatus: Sen
 
   public var ipv4Addresses: [String] = []
 
-  /// disabled, waiting, serving, blocked, missing, or unknown.
+  /// disabled, waiting, serving, degraded, blocked, missing, or unknown.
   public var state: String = String()
 
   public var detail: String = String()

@@ -128,10 +128,14 @@ func validDHCPInterfaceName(name string) bool {
 	})
 }
 
-// writeDHCPAllowlist atomically replaces the agent-owned configuration. A
-// failed write leaves the previous permissions intact, including other ports.
+// writeDHCPAllowlist durably replaces the agent-owned configuration. Errors
+// after rename can leave the new file visible but its durability uncertain.
 func writeDHCPAllowlist(path string, allowed map[string]bool) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+	return writeDHCPAllowlistWithSync(path, allowed, syncDHCPDirectory)
+}
+
+func writeDHCPAllowlistWithSync(path string, allowed map[string]bool, syncDir func(string) error) error {
+	if err := makeDHCPDirectory(filepath.Dir(path), syncDir); err != nil {
 		return err
 	}
 	parent, err := os.Lstat(filepath.Dir(path))
@@ -177,5 +181,55 @@ func writeDHCPAllowlist(path string, allowed map[string]bool) error {
 	if err := f.Close(); err != nil {
 		return err
 	}
-	return os.Rename(f.Name(), path)
+	if err := os.Rename(f.Name(), path); err != nil {
+		return err
+	}
+	return syncDir(filepath.Dir(path))
+}
+
+func syncDHCPDirectory(path string) error {
+	dir, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer dir.Close()
+	return dir.Sync()
+}
+
+// A first enable may create the configuration directory. Sync its ancestors
+// within the same filesystem, including on retry after a failed sync: an
+// existing directory entry alone does not prove that it reached disk. Stop at
+// mount boundaries; WendyOS binds an already provisioned persistent directory
+// beneath its read-only root filesystem.
+func makeDHCPDirectory(path string, syncDir func(string) error) error {
+	if err := os.MkdirAll(path, 0o700); err != nil {
+		return err
+	}
+	var parents []string
+	for child := filepath.Clean(path); filepath.Dir(child) != child; child = filepath.Dir(child) {
+		childInfo, err := os.Stat(child)
+		if err != nil {
+			return err
+		}
+		parent := filepath.Dir(child)
+		parentInfo, err := os.Stat(parent)
+		if err != nil {
+			return err
+		}
+		childStat, childOK := childInfo.Sys().(*syscall.Stat_t)
+		parentStat, parentOK := parentInfo.Sys().(*syscall.Stat_t)
+		if !childOK || !parentOK {
+			return fmt.Errorf("cannot inspect configuration filesystem")
+		}
+		if childStat.Dev != parentStat.Dev {
+			break
+		}
+		parents = append(parents, parent)
+	}
+	for i := len(parents) - 1; i >= 0; i-- {
+		if err := syncDir(parents[i]); err != nil {
+			return err
+		}
+	}
+	return nil
 }

@@ -44,18 +44,26 @@ func (m *LinkManager) dhcpStatusLocked() DHCPStatus {
 		result.ConfigurationError = err.Error()
 	}
 	m.withdrawRevokedClaims()
+	ifaces, err := m.listInterfaces()
+	if err != nil {
+		result.InterfaceError = err.Error()
+	} else if m.reconcileInterfaces(ifaces) {
+		// Reconciliation may remove the old segment from a renamed port.
+		ifaces, err = m.listInterfaces()
+		if err != nil {
+			result.InterfaceError = err.Error()
+		}
+	}
 	m.mu.Lock()
 	allowed := maps.Clone(m.allowedDHCP)
 	claimed := maps.Clone(m.claimed)
+	addressErrors := maps.Clone(m.addressErrors)
+	serverErrors := maps.Clone(m.serverErrors)
 	if m.allowlistPath == "" {
 		result.ConfigurationError = "camera DHCP configuration is unavailable on this agent"
 	}
 	m.mu.Unlock()
 
-	ifaces, err := m.listInterfaces()
-	if err != nil {
-		result.InterfaceError = err.Error()
-	}
 	byName := make(map[string]Interface)
 	names := make(map[string]bool)
 	for _, iface := range ifaces {
@@ -73,6 +81,7 @@ func (m *LinkManager) dhcpStatusLocked() DHCPStatus {
 	for name := range names {
 		iface, present := byName[name]
 		seg, serving := claimed[name]
+		_, retained := iface.configuredCameraSegment()
 		s := DHCPInterfaceStatus{Name: name, Enabled: allowed[name], Serving: serving,
 			Present: present, Carrier: iface.Carrier, Up: iface.Up}
 		for _, ip := range iface.IPv4s {
@@ -85,16 +94,32 @@ func (m *LinkManager) dhcpStatusLocked() DHCPStatus {
 			s.State, s.Detail = "disabled", "Camera DHCP is disabled"
 		case !present:
 			s.State, s.Detail = "missing", "Configured interface is not present"
+		case serving && m.guard.State(name) == LinkDisqualified:
+			s.Serving = false
+			s.State, s.Detail = "blocked", "Camera DHCP stopped after disqualification; address cleanup is pending"
+		case serving && (!iface.Up || !iface.Carrier):
+			s.State, s.Detail = "degraded", "Camera link is not active"
+		case serving && iface.conflictsWithCameraSegment(seg):
+			s.State, s.Detail = "degraded", "Conflicting IPv4 configuration detected; camera DHCP will stop on the next scan"
+		case serving && !iface.HasAddress(seg.ServerIP):
+			s.State, s.Detail = "degraded", "Camera address "+seg.CIDR()+" is missing; restoration will be retried"
+			if failure := addressErrors[name]; failure != "" {
+				s.Detail += ": " + failure
+			}
 		case serving:
 			s.State, s.Detail = "serving", "Serving camera addresses on "+seg.CIDR()
 		case !cameraDHCPPort(iface):
 			s.State, s.Detail = "blocked", "Only wired interfaces can serve camera DHCP"
-		case iface.HasIPv4:
-			s.State, s.Detail = "blocked", "Interface already has an IPv4 address"
+		case iface.HasIPv4 && !retained:
+			s.State, s.Detail = "blocked", "Interface has conflicting IPv4 configuration"
 		case !iface.Up || !iface.Carrier:
 			s.State, s.Detail = "waiting", "Waiting for a connected, active Ethernet link"
+		case serverErrors[name] != "":
+			s.State, s.Detail = "blocked", serverErrors[name]
 		case m.guard.State(name) == LinkDisqualified:
 			s.State, s.Detail = "blocked", "Competing DHCP server, uplink, or link configuration failure detected; reconnect the dedicated camera link to retry"
+		case retained:
+			s.State, s.Detail = "waiting", "Checking for competing DHCP servers before resuming the camera segment"
 		default:
 			s.State, s.Detail = "waiting", "Waiting for unanswered camera DHCP requests"
 		}
@@ -135,6 +160,7 @@ func (m *LinkManager) SetDHCPEnabled(link string, enabled bool) (DHCPStatus, err
 		if err != nil {
 			return DHCPStatus{}, fmt.Errorf("checking camera interface: %w", err)
 		}
+		m.reconcileInterfaces(ifaces)
 		found := false
 		for _, iface := range ifaces {
 			if iface.Name != link {
@@ -142,7 +168,8 @@ func (m *LinkManager) SetDHCPEnabled(link string, enabled bool) (DHCPStatus, err
 			}
 			found = true
 			seg, claimed := m.claimedSegment(link)
-			if !cameraDHCPPort(iface) || (!claimed && iface.HasIPv4) || (claimed && iface.HasOtherIPv4(seg.ServerIP)) {
+			_, retained := iface.configuredCameraSegment()
+			if !cameraDHCPPort(iface) || (!claimed && iface.HasIPv4 && !retained) || (claimed && iface.conflictsWithCameraSegment(seg)) {
 				return DHCPStatus{}, fmt.Errorf("%w: %s must be a dedicated wired camera port without an uplink address", ErrDHCPInterfaceBlocked, link)
 			}
 		}
@@ -154,6 +181,11 @@ func (m *LinkManager) SetDHCPEnabled(link string, enabled bool) (DHCPStatus, err
 		delete(allowed, link)
 	}
 	if err := m.writeAllowlist(path, allowed); err != nil {
+		// Rename may have succeeded before directory sync failed. Reconcile
+		// what is visible so an already committed disable stops serving even
+		// though we cannot acknowledge durable success to the operator.
+		_ = m.refreshDHCPAllowlist()
+		m.withdrawRevokedClaims()
 		return DHCPStatus{}, fmt.Errorf("saving camera DHCP configuration: %w", err)
 	}
 	m.mu.Lock()

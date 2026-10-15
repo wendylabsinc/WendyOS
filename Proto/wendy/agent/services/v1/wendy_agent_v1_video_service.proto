@@ -284,7 +284,7 @@ message CameraDHCPInterfaceStatus {
     bool carrier = 5;
     bool up = 6;
     repeated string ipv4_addresses = 7;
-    // disabled, waiting, serving, blocked, missing, or unknown.
+    // disabled, waiting, serving, degraded, blocked, missing, or unknown.
     string state = 8;
     string detail = 9;
 }

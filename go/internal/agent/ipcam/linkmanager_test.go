@@ -48,6 +48,9 @@ func newManagerHarness(t *testing.T, ifaces []Interface) *managerHarness {
 		poolsSeen: make(map[string]*LeasePool),
 	}
 	m := NewLinkManager(reg, zap.NewNop())
+	m.openPool = func(_ string, seg CameraSegment, _ []Camera) (*LeasePool, error) {
+		return NewLeasePool(seg.PoolBase, seg.PoolSize), nil
+	}
 	m.listInterfaces = func() ([]Interface, error) {
 		h.mu.Lock()
 		defer h.mu.Unlock()
@@ -238,7 +241,7 @@ func TestManagerRevokesDHCPWithoutInterfaceEnumeration(t *testing.T) {
 // setAddressLocked adds or removes an address on the fake interface, mirroring
 // what `ip addr add/del` would do. Callers hold h.mu.
 func (h *managerHarness) setAddressLocked(link, cidr string, present bool) {
-	ip, _, err := net.ParseCIDR(cidr)
+	ip, network, err := net.ParseCIDR(cidr)
 	if err != nil {
 		return
 	}
@@ -247,15 +250,27 @@ func (h *managerHarness) setAddressLocked(link, cidr string, present bool) {
 			continue
 		}
 		var kept []net.IP
+		var networks []net.IPNet
+		keepIP := false
+		for _, have := range h.ifaces[i].IPv4Networks {
+			if !have.IP.Equal(ip) || (!present && have.Mask.String() != network.Mask.String()) {
+				networks = append(networks, have)
+				if have.IP.Equal(ip) {
+					keepIP = true
+				}
+			}
+		}
 		for _, have := range h.ifaces[i].IPv4s {
-			if !have.Equal(ip) {
+			if !have.Equal(ip) || keepIP {
 				kept = append(kept, have)
 			}
 		}
 		if present {
 			kept = append(kept, ip.To4())
+			networks = append(networks, net.IPNet{IP: ip.To4(), Mask: network.Mask})
 		}
 		h.ifaces[i].IPv4s = kept
+		h.ifaces[i].IPv4Networks = networks
 		h.ifaces[i].HasIPv4 = len(kept) > 0
 	}
 }
@@ -418,6 +433,7 @@ func TestManagerClaimsAfterUnansweredDiscover(t *testing.T) {
 
 	// The DISCOVER alone should have registered the camera, so it is listable as
 	// known-but-offline before it has an address.
+	waitFor(t, "discovered camera registration", func() bool { return len(h.reg.List()) == 1 })
 	cams := h.reg.List()
 	if len(cams) != 1 {
 		t.Fatalf("registry has %d cameras, want 1", len(cams))
@@ -491,6 +507,9 @@ func TestManagerWithdrawsWhenAnotherServerAnswersAfterClaim(t *testing.T) {
 	if got := h.mgr.State("eth0"); got != LinkDisqualified {
 		t.Fatalf("state = %v, want disqualified", got)
 	}
+	waitFor(t, "disqualified claim cleanup", func() bool {
+		return !h.mgr.isClaimed("eth0") && len(h.removedAddresses()) == 1
+	})
 	if h.mgr.isClaimed("eth0") {
 		t.Fatal("link remained claimed after a foreign offer")
 	}
@@ -603,9 +622,8 @@ func TestManagerReusesReleasedSegmentWithoutCollision(t *testing.T) {
 	waitFor(t, "both initial links to be served", func() bool { return len(h.servedLinks()) == 2 })
 
 	h.mgr.release("eth0")
-	eth1 := cabledEth("eth1")
-	eth1.HasIPv4 = true
 	h.mu.Lock()
+	eth1 := h.ifaces[1] // Keep the active claim's real address and prefix.
 	h.ifaces = []Interface{eth1, cabledEth("eth2")}
 	h.mu.Unlock()
 	h.mgr.allowedDHCP["eth2"] = true
@@ -778,9 +796,7 @@ func TestManagerToleratesBriefCarrierLoss(t *testing.T) {
 	// Carrier returns before the second scan: the counter must reset, so a later
 	// single blip is tolerated again.
 	h.mu.Lock()
-	withAddress := cabledEth("eth0")
-	withAddress.HasIPv4 = true
-	h.ifaces = []Interface{withAddress}
+	h.ifaces[0].Carrier = true // Preserve the address while carrier returns.
 	h.mu.Unlock()
 	h.mgr.scanOnce(ctx)
 	h.carrierDown("eth0")

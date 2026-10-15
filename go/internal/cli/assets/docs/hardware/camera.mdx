@@ -172,10 +172,18 @@ wendy device camera dhcp enable eth1
 
 Use the interface name shown by `status` in place of `eth1`. Enable only a
 dedicated camera port, not a shared LAN or uplink. Status shows whether each
-port is enabled and whether it is waiting, serving, or blocked. Enabling grants
+port is enabled and whether it is waiting, serving, degraded, or blocked. Enabling grants
 permission; the agent checks the link every 15 seconds and starts serving only
 after its DHCP guards pass. If another DHCP server or an uplink address appears,
 the camera server stops.
+
+After an agent restart, an enabled port reuses its existing camera subnet after
+checking for a competing DHCP server. Conflicting IPv4 configuration is reported
+as blocked. Unexpired DHCP leases survive restarts, keeping existing cameras'
+addresses reserved. Lease-storage failures are shown in status. If restoring a
+missing camera address fails, status shows the failure and the agent retries.
+Renaming a port stops its camera DHCP service when the
+change is detected; enable the new interface name explicitly to resume.
 
 To turn it off:
 

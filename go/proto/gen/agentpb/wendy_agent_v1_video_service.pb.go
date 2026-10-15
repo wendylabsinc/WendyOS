@@ -1733,7 +1733,7 @@ type CameraDHCPInterfaceStatus struct {
 	Carrier       bool                   `protobuf:"varint,5,opt,name=carrier,proto3" json:"carrier,omitempty"`
 	Up            bool                   `protobuf:"varint,6,opt,name=up,proto3" json:"up,omitempty"`
 	Ipv4Addresses []string               `protobuf:"bytes,7,rep,name=ipv4_addresses,json=ipv4Addresses,proto3" json:"ipv4_addresses,omitempty"`
-	// disabled, waiting, serving, blocked, missing, or unknown.
+	// disabled, waiting, serving, degraded, blocked, missing, or unknown.
 	State         string `protobuf:"bytes,8,opt,name=state,proto3" json:"state,omitempty"`
 	Detail        string `protobuf:"bytes,9,opt,name=detail,proto3" json:"detail,omitempty"`
 	unknownFields protoimpl.UnknownFields
