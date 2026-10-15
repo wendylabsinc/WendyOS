@@ -254,14 +254,19 @@ func validateCNIInputs(appID, containerID, netnsPath string) error {
 }
 
 // buildBridgeCNIConfig returns the JSON config string for the CNI bridge plugin.
-func buildBridgeCNIConfig(appID, subnet string) string {
+func buildBridgeCNIConfig(appID, subnet string, defaultGateway bool) string {
 	cfg := map[string]interface{}{
 		"cniVersion": "0.4.0",
 		"name":       "wendy-" + appID,
 		"type":       "bridge",
 		"bridge":     bridgeName(appID), // capped at 15 chars (IFNAMSIZ-1)
-		"isGateway":  true,
-		"ipMasq":     true,
+		// Merely assigning the bridge gateway does not install a default
+		// route in the app namespace. The vendored bridge plugin adds and
+		// verifies that route only with isDefaultGateway. Only Internet-enabled
+		// bridge apps receive it; mesh apps retain their scoped service routes.
+		"isGateway":        true,
+		"isDefaultGateway": defaultGateway,
+		"ipMasq":           true,
 		"ipam": map[string]interface{}{
 			"type":    "host-local",
 			"subnet":  subnet,
@@ -272,13 +277,34 @@ func buildBridgeCNIConfig(appID, subnet string) string {
 	return string(b)
 }
 
-func buildBridgeCNICheckConfig(appID, subnet, result string) (string, error) {
+func buildBridgeCNICheckConfig(appID, subnet, result string, defaultGateway bool) (string, error) {
 	var prevResult any
 	if len(result) == 0 || len(result) > cniStdoutLimit || json.Unmarshal([]byte(result), &prevResult) != nil {
 		return "", fmt.Errorf("invalid CNI previous result")
 	}
+	if defaultGateway {
+		var proof struct {
+			Routes []struct{ Dst, GW string }
+		}
+		_, network, err := net.ParseCIDR(subnet)
+		if err != nil || network.IP.To4() == nil {
+			return "", fmt.Errorf("invalid CNI subnet")
+		}
+		gateway := append(net.IP(nil), network.IP.To4()...)
+		gateway[3]++ // allocated /28: first host is the bridge gateway
+		if json.Unmarshal([]byte(result), &proof) != nil {
+			return "", fmt.Errorf("invalid CNI route proof")
+		}
+		found := false
+		for _, route := range proof.Routes {
+			found = found || (route.Dst == "0.0.0.0/0" && route.GW == gateway.String())
+		}
+		if !found {
+			return "", fmt.Errorf("CNI proof lacks the required bridge default route")
+		}
+	}
 	var cfg map[string]any
-	if err := json.Unmarshal([]byte(buildBridgeCNIConfig(appID, subnet)), &cfg); err != nil {
+	if err := json.Unmarshal([]byte(buildBridgeCNIConfig(appID, subnet, defaultGateway)), &cfg); err != nil {
 		return "", err
 	}
 	cfg["prevResult"] = prevResult
@@ -346,7 +372,7 @@ func warnSubnetCollision(logger *zap.Logger, appID, subnet string) {
 // ensureCNIBinDir in cmd/wendy-agent), so the vendored bridge plugin's IPAM
 // delegation (it execs "host-local" via CNI_PATH) also resolves back into
 // this same binary instead of a third-party binary.
-func (c *Client) CNIAdd(ctx context.Context, appID, containerID, netnsPath string) (string, string, error) {
+func (c *Client) CNIAdd(ctx context.Context, appID, containerID, netnsPath string, defaultGateway bool) (string, string, error) {
 	if err := validateCNIInputs(appID, containerID, netnsPath); err != nil {
 		return "", "", err
 	}
@@ -357,7 +383,7 @@ func (c *Client) CNIAdd(ctx context.Context, appID, containerID, netnsPath strin
 	}
 	c.reconcileLANReplyGuards(ctx)
 	warnSubnetCollision(c.logger, appID, subnet)
-	cfgJSON := buildBridgeCNIConfig(appID, subnet)
+	cfgJSON := buildBridgeCNIConfig(appID, subnet, defaultGateway)
 
 	// Defence-in-depth NUL guard: validateCNIInputs uses allowlist regexes
 	// that already exclude NUL, but an explicit check at the exec boundary
@@ -456,7 +482,7 @@ func (c *Client) CNIAdd(ctx context.Context, appID, containerID, netnsPath strin
 
 // CNICheck asks the same vendored bridge and host-local plugins used for ADD
 // to verify the complete persisted setup before it is reused.
-func (c *Client) CNICheck(ctx context.Context, appID, containerID, netnsPath, result string) error {
+func (c *Client) CNICheck(ctx context.Context, appID, containerID, netnsPath, result string, defaultGateway bool) error {
 	if err := validateCNIInputs(appID, containerID, netnsPath); err != nil {
 		return err
 	}
@@ -464,7 +490,7 @@ func (c *Client) CNICheck(ctx context.Context, appID, containerID, netnsPath, re
 	if err != nil {
 		return err
 	}
-	cfgJSON, err := buildBridgeCNICheckConfig(appID, subnet, result)
+	cfgJSON, err := buildBridgeCNICheckConfig(appID, subnet, result, defaultGateway)
 	if err != nil {
 		return err
 	}
@@ -587,7 +613,7 @@ func (c *Client) CNIDel(ctx context.Context, appID, containerID, netnsPath strin
 		c.logger.Warn("CNI DEL skipped: subnet allocation failed", zap.Error(err))
 		return nil
 	}
-	cfgJSON := buildBridgeCNIConfig(appID, subnet)
+	cfgJSON := buildBridgeCNIConfig(appID, subnet, false)
 
 	cmd := exec.CommandContext(ctx, selfExePath)
 	cmd.Args = []string{"bridge"} // argv0 the multiplexer dispatches on; see CNIAdd
