@@ -67,6 +67,8 @@ func (c *Client) terminateTask(ctx context.Context, task teardownTask, container
 		case <-waitCh:
 			exited = true
 		case <-time.After(grace):
+		case <-ctx.Done():
+			return ctx.Err()
 		}
 	}
 
@@ -80,8 +82,13 @@ func (c *Client) terminateTask(ctx context.Context, task teardownTask, container
 			case <-waitCh:
 				exited = true
 			case <-time.After(killWait):
+			case <-ctx.Done():
+				return ctx.Err()
 			}
 		}
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 
 	if exited {

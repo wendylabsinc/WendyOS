@@ -16,7 +16,7 @@ type LinkHello struct {
 }
 
 func QUICConfig() *quic.Config {
-	return &quic.Config{EnableDatagrams: true, HandshakeIdleTimeout: 5 * time.Second, MaxIdleTimeout: 20 * time.Second, KeepAlivePeriod: 5 * time.Second,
+	return &quic.Config{EnableDatagrams: true, Allow0RTT: false, HandshakeIdleTimeout: 5 * time.Second, MaxIdleTimeout: 20 * time.Second, KeepAlivePeriod: 5 * time.Second,
 		MaxIncomingStreams: 1, MaxIncomingUniStreams: -1, InitialStreamReceiveWindow: MaxControlMessage + 4, MaxStreamReceiveWindow: 2 * MaxControlMessage,
 		InitialConnectionReceiveWindow: 2 * MaxControlMessage, MaxConnectionReceiveWindow: 2 * MaxControlMessage}
 }

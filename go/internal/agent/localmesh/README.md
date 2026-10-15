@@ -23,12 +23,14 @@ It exists to simulate chosen graph topologies with ordinary TCP listeners and
 clients. TCP's head-of-line blocking makes it inappropriate as the final LAN,
 NAN or Bluetooth carrier. Use it only in isolated Linux test environments.
 
-The current module routes host `10.88.0.0/16` addresses and can carry IP over
-several Babel hops. It does **not** yet connect the existing app-facing
-`10.99.0.0/16` VIP proxy to this route. It also does not implement app service
-publication, mDNS, or a general end-to-end app QUIC session. The existing
-WendyOS mesh-mode app path still selects direct LAN or cloud relay. These are
-the next local-mesh integration gates, not implied by this branch.
+The router carries host `10.88.0.0/16` addresses over several Babel hops.
+When `local-mesh.json` is present, app-facing `10.99.0.0/16` VIP traffic uses
+an end-to-end QUIC session on UDP 43021 to the peer's routed `10.88` address.
+The peer certificate is pinned to the VIP's asset ID, and the destination
+opens only host ports published by running isolated `mode: "mesh"` apps.
+Each TCP flow uses a reliable QUIC stream. The opt-in proxy does not fall back
+to the legacy cloud byte relay, which has no end-to-end app admission protocol.
+App service publication, mDNS, and cloud app sessions remain separate gates.
 
 Production review is still needed for named-mesh admission, addresses beyond
 16-bit asset IDs, route ownership, transport failure recovery, resource limits
@@ -38,8 +40,8 @@ its origin, but a relayed Babel reachability claim is not itself signed.
 Run from the WendyOS root:
 
 ```sh
-go test -race ./go/internal/agent/localmesh
-go vet ./go/internal/agent/localmesh
+go test -race ./go/internal/agent/localmesh ./go/internal/agent/meshsession ./go/internal/agent/meshingress
+go vet ./go/internal/agent/localmesh ./go/internal/agent/meshsession ./go/internal/agent/meshingress
 GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go test -c ./go/internal/agent/localmesh -o /tmp/wendy-localmesh-arm64.test
 ```
 
