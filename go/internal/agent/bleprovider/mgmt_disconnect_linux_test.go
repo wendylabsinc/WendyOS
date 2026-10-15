@@ -91,14 +91,14 @@ func TestMgmtDisconnectReplyRequiresMatchingCommandAndAdapter(t *testing.T) {
 	}
 }
 
-func TestMgmtDisconnectSettledStatuses(t *testing.T) {
+func TestMgmtDisconnectAcceptedReplyStatuses(t *testing.T) {
 	for _, status := range []byte{mgmtStatusSuccess, mgmtStatusNotConnected, mgmtStatusDisconnected} {
-		if !mgmtDisconnectSettled(status) {
-			t.Fatalf("status %#x should settle a timed-out peer ACL", status)
+		if !mgmtDisconnectReplyAccepted(status) {
+			t.Fatalf("status %#x should acknowledge the management request", status)
 		}
 	}
 	for _, status := range []byte{0x03, 0x0a, 0x0b, 0x0f} {
-		if mgmtDisconnectSettled(status) {
+		if mgmtDisconnectReplyAccepted(status) {
 			t.Fatalf("status %#x must remain an error", status)
 		}
 	}

@@ -1,6 +1,7 @@
 package localmesh
 
 import (
+	"fmt"
 	"sort"
 	"sync"
 	"time"
@@ -146,11 +147,20 @@ func (p *PeerSelection) AllowLAN(asset int32, cost uint16) bool {
 // only while there is no fresh, different candidate to fill an open slot.
 // This permits a two-device NAN+BLE pair to fail over automatically.
 func (p *PeerSelection) AllowRadio(asset int32, medium RadioMedium) bool {
+	allow, _ := p.AllowRadioReason(asset, medium)
+	return allow
+}
+
+// AllowRadioReason reports the same decision as AllowRadio plus a stable
+// machine-readable reason naming the branch that allowed or vetoed the link.
+// Veto reasons exist so a torn-down established link can be attributed to the
+// exact clause that fired instead of hypothesizing after the fact.
+func (p *PeerSelection) AllowRadioReason(asset int32, medium RadioMedium) (bool, string) {
 	if p == nil || p.snapshot == nil {
-		return true
+		return true, "no-policy"
 	}
 	if asset <= 0 || (medium != RadioNAN && medium != RadioBLE) {
-		return false
+		return false, "invalid-asset-or-medium"
 	}
 	s := p.snapshot()
 	connected := make(map[int32]bool, len(s.Links))
@@ -158,14 +168,14 @@ func (p *PeerSelection) AllowRadio(asset int32, medium RadioMedium) bool {
 	for _, link := range s.Links {
 		connected[link.Asset] = true
 		if link.Asset == asset && link.Cost <= MaxLANCost {
-			return false
+			return false, fmt.Sprintf("lan-supersedes(cost=%d)", link.Cost)
 		}
 		if link.Asset == asset && ((medium == RadioNAN && link.Cost > 512) || (medium == RadioBLE && link.Cost == 512)) {
 			otherRadio = true
 		}
 	}
 	if !connected[asset] && len(connected) >= 3 {
-		return false
+		return false, fmt.Sprintf("peer-cap-no-slot(connected=%d)", len(connected))
 	}
 	if len(connected) > 3 {
 		// Concurrent radio handshakes can briefly exceed the target. Keep
@@ -194,14 +204,14 @@ func (p *PeerSelection) AllowRadio(asset int32, medium RadioMedium) bool {
 			selected = selected || candidate == asset
 		}
 		if !selected {
-			return false
+			return false, fmt.Sprintf("convergence-not-selected(connected=%d)", len(connected))
 		}
 	}
 	if !otherRadio {
-		return true
+		return true, "first-radio"
 	}
 	if len(connected) >= 3 {
-		return false
+		return false, fmt.Sprintf("second-radio-slots-full(connected=%d)", len(connected))
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -212,8 +222,8 @@ func (p *PeerSelection) AllowRadio(asset int32, medium RadioMedium) bool {
 			continue
 		}
 		if key.asset != asset && !connected[key.asset] && !now.Before(hint.failedUntil) {
-			return false
+			return false, fmt.Sprintf("second-radio-fresh-candidate(hint=%d)", key.asset)
 		}
 	}
-	return true
+	return true, "second-radio-failover-kept"
 }
