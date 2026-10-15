@@ -57,6 +57,14 @@ func TestNodePeerProcess(t *testing.T) {
 	if config.Asset == 445 {
 		peer = 460
 	}
+	if config.Internet && config.Asset == 445 {
+		// This isolated two-node harness does not run the signed service
+		// catalog. Supply its already-verified donor asset through the node's
+		// catalog authorization seam; production obtains it from the catalog.
+		if err := node.SetGatewayOffers(ctx, func() []int32 { return []int32{460} }); err != nil {
+			t.Fatal(err)
+		}
+	}
 	tlsConfig, err := credentials.PeerTLS(peer)
 	if err != nil {
 		t.Fatal(err)

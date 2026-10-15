@@ -31,7 +31,7 @@ func ProjectDNS(records []Record, requesterAppID string, policy BrowsePolicy, no
 	out := make([]dns.RR, 0, len(records)*4)
 	hostAddresses := make(map[string]*dns.A)
 	for _, r := range records {
-		if r.Withdraw || !policy(requesterAppID, r) {
+		if r.Withdraw || IsGatewayOffer(r) || !policy(requesterAppID, r) {
 			continue
 		}
 		if err := r.Validate(now); err != nil {
