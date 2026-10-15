@@ -240,6 +240,27 @@ func (c *IdentityCache) Get(fp string, now time.Time) ([][]byte, Identity, bool)
 	return cloneChain(e.Chain), id, true
 }
 
+// Fingerprints returns a bounded snapshot of identities available under current
+// trust and retention. It grants no lease: Get revalidates every later lookup.
+func (c *IdentityCache) Fingerprints(now time.Time, limit int) []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if limit <= 0 {
+		return nil
+	}
+	out := make([]string, 0, min(limit, len(c.entries)))
+	for fp, entry := range c.entries {
+		if _, valid := c.valid(entry, now); valid {
+			out = append(out, fp)
+		}
+	}
+	sort.Strings(out)
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out
+}
+
 // Flush persists LRU activity and removes expired entries. Call periodically and
 // on orderly shutdown, not on every signed announcement.
 func (c *IdentityCache) Flush(now time.Time) error {
