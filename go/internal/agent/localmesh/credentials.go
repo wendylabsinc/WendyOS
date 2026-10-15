@@ -1,6 +1,7 @@
 package localmesh
 
 import (
+	"container/list"
 	"crypto"
 	"crypto/tls"
 	"crypto/x509"
@@ -24,7 +25,16 @@ type Credentials struct {
 	Verify         IdentityVerifier
 	peerTLS        func(int32) (*tls.Config, error)
 	peerTLSTickets func(int32, string, string) (*tls.Config, error)
+	ticketOnce     sync.Once
+	ticketMemory   *meshSessionCache
 }
+
+// LinkQUICSessionScope is shared by NAN and configured or discovered LAN
+// links. All use the same QUIC ALPN, enrolled mTLS identity, peer asset pin,
+// and disabled 0-RTT. Keeping the ticket cache across carrier changes avoids
+// another certificate exchange when the same peer remains reachable.
+// BLE's TLS byte stream uses a distinct scope and cannot reuse QUIC tickets.
+const LinkQUICSessionScope = "link-quic"
 
 func NewCredentials(org, asset int32, certPEM, chainPEM, keyPEM string) (*Credentials, error) {
 	if _, _, err := Addresses(org, asset); err != nil {
@@ -103,17 +113,18 @@ func NewCredentials(org, asset int32, certPEM, chainPEM, keyPEM string) (*Creden
 	// change another connection. Provisioning/trust refresh creates a new
 	// Credentials object and therefore a fresh cache.
 	var peerMu sync.Mutex
-	peerConfigs := make(map[int32]*tls.Config)
-	type ticketScope struct {
-		cache tls.ClientSessionCache
-		store *TicketStore
+	type peerConfigEntry struct {
+		peer   int32
+		config *tls.Config
 	}
-	ticketCaches := make(map[string]ticketScope)
+	peerConfigs := make(map[int32]*list.Element)
+	var peerRecency list.List
 	credentials := &Credentials{Org: org, Asset: asset, Certificate: cert, Signer: signer, Verify: verify, peerTLS: func(peer int32) (*tls.Config, error) {
 		peerMu.Lock()
 		defer peerMu.Unlock()
 		if cached := peerConfigs[peer]; cached != nil {
-			return cached.Clone(), nil
+			peerRecency.MoveToFront(cached)
+			return cached.Value.(peerConfigEntry).config.Clone(), nil
 		}
 		c, err := mtls.NewClientTLSConfigExpectingPeer(certPEM, chainPEM, keyPEM, nil, strconv.Itoa(int(peer)))
 		if err != nil {
@@ -125,13 +136,12 @@ func NewCredentials(org, asset int32, certPEM, chainPEM, keyPEM string) (*Creden
 		c.ClientAuth = tls.RequireAnyClientCert
 		c.ClientSessionCache = nil
 		c.SessionTicketsDisabled = true
-		if len(peerConfigs) >= 128 {
-			for old := range peerConfigs {
-				delete(peerConfigs, old)
-				break
-			}
+		if len(peerConfigs) >= 256 {
+			oldest := peerRecency.Back()
+			delete(peerConfigs, oldest.Value.(peerConfigEntry).peer)
+			peerRecency.Remove(oldest)
 		}
-		peerConfigs[peer] = c
+		peerConfigs[peer] = peerRecency.PushFront(peerConfigEntry{peer, c})
 		return c.Clone(), nil
 	}}
 	credentials.peerTLSTickets = func(peer int32, alpn, transport string) (*tls.Config, error) {
@@ -143,26 +153,13 @@ func NewCredentials(org, asset int32, certPEM, chainPEM, keyPEM string) (*Creden
 			return nil, err
 		}
 		key := fmt.Sprintf("%d/%d:%s/%d:%s", peer, len(alpn), alpn, len(transport), transport)
-		peerMu.Lock()
-		scope, found := ticketCaches[key]
-		if !found {
-			if len(ticketCaches) >= 128 {
-				for old := range ticketCaches {
-					delete(ticketCaches, old)
-					break
-				}
-			}
-			scope.cache = tls.NewLRUClientSessionCache(2)
-			scope.store = NewTicketStore()
-			ticketCaches[key] = scope
-		}
-		peerMu.Unlock()
+
 		cfg.NextProtos = []string{alpn}
 		cfg.ServerName = fmt.Sprintf("asset-%d.mesh.wendy.invalid", peer)
-		cfg.ClientSessionCache = scope.cache
+		cfg.ClientSessionCache = scopedClientSessionCache{cache: credentials.ticketCache(), scope: key}
 		// NAN and configured QUIC create a fresh listener per link. The
 		// shared store keeps compact server ticket handles valid across links.
-		scope.store.Configure(cfg)
+		(&TicketStore{cache: credentials.ticketCache(), scope: key}).Configure(cfg)
 		// PeerTLS's VerifyConnection rechecks the current chain, org, peer
 		// asset and expiry even when Go skips Certificate on resumption.
 		return cfg, nil
@@ -188,4 +185,17 @@ func (c *Credentials) PeerTLSWithTickets(peer int32, alpn, transport string) (*t
 		return nil, errors.New("missing mesh credential ticket scope")
 	}
 	return c.peerTLSTickets(peer, alpn, transport)
+}
+
+func (c *Credentials) ticketCache() *meshSessionCache {
+	c.ticketOnce.Do(func() { c.ticketMemory = newMeshSessionCache() })
+	return c.ticketMemory
+}
+
+// ServerTicketStore shares the credentials-wide memory budget for a listener
+// accepting multiple peer assets. The caller still verifies the authenticated
+// peer identity on every resumed connection. Its protocol and transport scope is
+// distinct from pinned outbound/link stores and other protocol listeners.
+func (c *Credentials) ServerTicketStore(protocolScope, transport string) *TicketStore {
+	return &TicketStore{cache: c.ticketCache(), scope: fmt.Sprintf("server/%d:%s/%d:%s", len(protocolScope), protocolScope, len(transport), transport)}
 }

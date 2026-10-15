@@ -41,6 +41,9 @@ type cheaperLinkChecker interface {
 }
 
 func (r *runtime) hasCheaperLink(asset int32) bool {
+	if r.cfg.Selection != nil {
+		return !r.cfg.Selection.AllowRadio(asset, localmesh.RadioBLE)
+	}
 	checker, ok := r.cfg.Node.(cheaperLinkChecker)
 	return ok && checker.HasCheaperLink(asset, LinkCost)
 }
@@ -226,7 +229,7 @@ func (r *runtime) makeServerTLS() *tls.Config {
 			return nil
 		},
 	}
-	localmesh.NewTicketStore().Configure(config)
+	r.cfg.Credentials.ServerTicketStore(ALPN, "ble-tls").Configure(config)
 	return config
 }
 
@@ -257,6 +260,9 @@ func (r *runtime) acceptLink(ctx context.Context, raw net.Conn) {
 		return
 	}
 	r.cfg.Logger.Info("BLE inbound TLS established", zap.Int32("peer", peer), zap.Duration("admission_wait", wait), zap.Duration("handshake_time", elapsed), zap.Bool("resumed", state.DidResume))
+	if r.cfg.Selection != nil {
+		r.cfg.Selection.Connected(peer, localmesh.RadioBLE)
+	}
 	if r.hasCheaperLink(peer) {
 		r.cfg.Logger.Debug("BLE closing inbound CoC on cheaper-link decision", zap.Int32("peer", peer))
 		_ = secure.Close()
@@ -352,6 +358,11 @@ func (r *runtime) discoveredCandidates(objects managedObjects, at time.Time) []c
 	if len(newlySeen) > 0 {
 		r.discovery.observed(at)
 	}
+	if r.cfg.Selection != nil {
+		for _, asset := range newlySeen {
+			r.cfg.Selection.Seen(asset, localmesh.RadioBLE)
+		}
+	}
 	return peers
 }
 
@@ -436,6 +447,9 @@ func (r *runtime) dialLink(ctx context.Context, peer candidate) {
 			r.disconnectOwnedPeer(peer)
 		}
 		r.cfg.Logger.Debug("BLE CoC dial failed", zap.Int32("peer", peer.asset), zap.Error(err))
+		if r.cfg.Selection != nil {
+			r.cfg.Selection.Failed(peer.asset, localmesh.RadioBLE)
+		}
 		return
 	}
 	<-r.dialSlot
@@ -491,9 +505,15 @@ func (r *runtime) dialLink(ctx context.Context, peer candidate) {
 	measurement.log(r.cfg.Logger, "outbound", peer.asset, secure.ConnectionState(), err == nil && secure.ConnectionState().NegotiatedProtocol == ALPN)
 	if err != nil || secure.ConnectionState().NegotiatedProtocol != ALPN {
 		r.cfg.Logger.Warn("BLE outbound TLS rejected", zap.Int32("peer", peer.asset), zap.Duration("admission_wait", wait), zap.Duration("handshake_time", elapsed), zap.Error(err))
+		if r.cfg.Selection != nil {
+			r.cfg.Selection.Failed(peer.asset, localmesh.RadioBLE)
+		}
 		return
 	}
 	r.cfg.Logger.Info("BLE outbound TLS established", zap.Int32("peer", peer.asset), zap.Duration("admission_wait", wait), zap.Duration("handshake_time", elapsed), zap.Bool("resumed", secure.ConnectionState().DidResume))
+	if r.cfg.Selection != nil {
+		r.cfg.Selection.Connected(peer.asset, localmesh.RadioBLE)
+	}
 	if r.hasCheaperLink(peer.asset) {
 		r.cfg.Logger.Debug("BLE closing outbound CoC on cheaper-link decision", zap.Int32("peer", peer.asset))
 		return

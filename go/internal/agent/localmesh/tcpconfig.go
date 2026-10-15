@@ -11,13 +11,15 @@ import (
 	"strconv"
 )
 
-// TCPConfig is an opt-in, explicitly provisioned topology for local agent
-// simulations. Each edge must be configured at both endpoints.
+// TCPConfig retains explicit TCP simulation links and independently enables
+// discovered local mesh carriers. Each explicit edge is configured at both ends.
 type TCPConfig struct {
-	Listen string    `json:"listen"`
-	Peers  []TCPPeer `json:"peers"`
-	NAN    bool      `json:"nan,omitempty"`
-	BLE    bool      `json:"ble,omitempty"`
+	Listen             string    `json:"listen"`
+	Peers              []TCPPeer `json:"peers"`
+	NAN                bool      `json:"nan,omitempty"`
+	BLE                bool      `json:"ble,omitempty"`
+	Ethernet           bool      `json:"ethernet,omitempty"`
+	InfrastructureWiFi bool      `json:"infrastructureWifi,omitempty"`
 }
 
 type TCPPeer struct {
@@ -54,8 +56,8 @@ func LoadTCPConfig(path string, self int32) (*TCPConfig, error) {
 		return nil, errors.New("local mesh config has trailing data")
 	}
 	if cfg.Listen == "" {
-		if (!cfg.NAN && !cfg.BLE) || len(cfg.Peers) != 0 {
-			return nil, errors.New("listen is required for configured TCP peers; set nan or ble to enable radio-only mesh")
+		if (!cfg.NAN && !cfg.BLE && !cfg.Ethernet && !cfg.InfrastructureWiFi) || len(cfg.Peers) != 0 {
+			return nil, errors.New("listen is required for configured TCP peers; enable a carrier for discovery-only mesh")
 		}
 	} else if err := validateTCPAddress(cfg.Listen, true); err != nil {
 		return nil, fmt.Errorf("listen: %w", err)

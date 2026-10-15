@@ -42,6 +42,10 @@ func DialUDP(ctx context.Context, credentials *localmesh.Credentials, peer int32
 	if err != nil {
 		return nil, fmt.Errorf("mesh UDP QUIC dial: %w", err)
 	}
+	if _, err := limitSessionLifetime(credentials, conn); err != nil {
+		_ = conn.CloseWithError(1, "mesh app credentials invalid")
+		return nil, err
+	}
 	stream, err := conn.OpenStreamSync(ctx)
 	if err != nil {
 		_ = conn.CloseWithError(1, "UDP open failed")
