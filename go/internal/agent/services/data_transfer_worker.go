@@ -308,7 +308,7 @@ var errNoIdentity = errors.New("data transfer worker: the agent holds no enrolle
 // chain and key that provisioning persists: StartACMEProvisioning enrols the
 // device against pki-core over Automatic Certificate Management Environment
 // (ACME) with an External Account Binding and hands the result to
-// persistProvisioning, which writes device.pem, ca.pem and device-key.pem and
+// persistProvisioning, which writes provisioning.json and device-key.pem and
 // holds the same triple in memory; ProvisioningCerts is the read side. The
 // legacy Cloud enrolment path fills the same three fields, so a device on
 // either path presents whatever certificate it actually enrolled with and the

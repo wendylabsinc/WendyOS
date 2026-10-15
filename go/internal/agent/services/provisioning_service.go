@@ -30,7 +30,7 @@ import (
 // provisioningState is persisted to disk at configPath/provisioning.json.
 // NOTE: KeyPEM is retained only for one-time migration of existing deployments;
 // new writes never populate it — the private key lives exclusively in
-// device-key.pem (mode 0o400) and is never written to provisioning.json.
+// device-key.pem (mode 0o600) and is never written to provisioning.json.
 type provisioningState struct {
 	Enrolled         bool               `json:"enrolled"`
 	CloudHost        string             `json:"cloudHost,omitempty"`
@@ -322,6 +322,9 @@ func (s *ProvisioningService) StartProvisioning(ctx context.Context, req *agentp
 // persistProvisioning runs with mu held. The returned callback must run after
 // releasing mu, and only after the complete state is durable.
 func (s *ProvisioningService) persistProvisioning(state *provisioningState, keyPEM []byte) (func(), error) {
+	if err := WriteDeviceKey(s.configPath, keyPEM); err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to save device key: %v", err)
+	}
 	if err := s.saveState(state); err != nil {
 		s.logger.Error("Failed to persist provisioning state", zap.Error(err))
 		return nil, status.Errorf(codes.Internal, "failed to save provisioning state: %v", err)
@@ -336,13 +339,6 @@ func (s *ProvisioningService) persistProvisioning(state *provisioningState, keyP
 	s.keyPEM = keyPEM
 	s.certPEM = state.CertPEM
 	s.chainPEM = state.ChainPEM
-
-	// Write individual PEM files so the container registry can mount and use them.
-	// string(keyPEM) creates a temporary copy; filesystem write cannot be avoided.
-	if err := s.writePEMFiles(string(keyPEM), state.CertPEM, state.ChainPEM); err != nil {
-		s.logger.Error("Failed to write PEM files for registry", zap.Error(err))
-		// Non-fatal: provisioning.json is the source of truth.
-	}
 
 	s.logger.Info("Provisioning completed successfully",
 		zap.Int32("org_id", s.orgID),
@@ -434,7 +430,7 @@ func (s *ProvisioningService) unprovision(expectedPrincipal, expectedFingerprint
 }
 
 // clearStateFiles removes all on-disk provisioning artifacts: the state file,
-// the device private key, the mounted PEM files, and the .provisioned marker.
+// the device private key, and legacy certificate copies and enrollment marker.
 // A missing file is not treated as an error.
 func (s *ProvisioningService) clearStateFiles() error {
 	if err := os.Remove(s.statePath()); err != nil && !os.IsNotExist(err) {
@@ -472,7 +468,7 @@ func (s *ProvisioningService) statePath() string {
 }
 
 // loadState loads provisioning state from disk.
-// The private key is always read from device-key.pem (mode 0o400). If that
+// The private key is always read from device-key.pem (mode 0o600). If that
 // file is absent but the legacy provisioning.json contains a KeyPEM entry, the
 // key is migrated to device-key.pem and removed from provisioning.json so that
 // subsequent reads use the dedicated file.
@@ -505,17 +501,6 @@ func (s *ProvisioningService) loadState() {
 			s.keyPEM = keyData
 		} else if state.KeyPEM != "" {
 			s.keyPEM = []byte(state.KeyPEM)
-			if writeErr := os.WriteFile(keyPath, s.keyPEM, 0o400); writeErr == nil {
-				s.logger.Info("Migrated device key from provisioning.json to device-key.pem")
-				// Rewrite provisioning.json without the now-migrated key.
-				toSave := state
-				toSave.KeyPEM = ""
-				if saveData, marshalErr := json.MarshalIndent(toSave, "", "  "); marshalErr == nil {
-					_ = os.WriteFile(s.statePath(), saveData, 0o600)
-				}
-			} else {
-				s.logger.Warn("Failed to migrate device key to device-key.pem", zap.Error(writeErr))
-			}
 		} else {
 			if readErr == nil {
 				readErr = fmt.Errorf("device key file is empty")
@@ -529,11 +514,19 @@ func (s *ProvisioningService) loadState() {
 		}
 	}
 
-	// Ensure PEM files exist on disk (may have been lost during OTA update).
-	if s.enrolled && len(s.keyPEM) > 0 && s.certPEM != "" {
-		if err := s.writePEMFiles(string(s.keyPEM), s.certPEM, s.chainPEM); err != nil {
-			s.logger.Warn("Failed to restore PEM files from provisioning state", zap.Error(err))
-		}
+	if !s.enrolled || len(s.keyPEM) == 0 {
+		return
+	}
+	// Preserve correct files and repair permissions without emitting unused
+	// certificate copies. Persist a legacy key before removing it from JSON.
+	if err := WriteDeviceKey(s.configPath, s.keyPEM); err != nil {
+		s.logger.Warn("Failed to persist device key", zap.Error(err))
+		return
+	}
+	// Keep the original JSON bytes on ordinary startup, including formatting
+	// and fields written by a newer agent, while repairing file permissions.
+	if err := WriteProvisioningState(s.configPath, data); err != nil {
+		s.logger.Warn("Failed to repair provisioning state file", zap.Error(err))
 	}
 }
 
@@ -543,6 +536,9 @@ func (s *ProvisioningService) loadState() {
 func (s *ProvisioningService) loadOrGenerateKey() ([]byte, error) {
 	keyPath := filepath.Join(s.configPath, "device-key.pem")
 	if data, err := os.ReadFile(keyPath); err == nil && len(data) > 0 {
+		if err := WriteDeviceKey(s.configPath, data); err != nil {
+			return nil, err
+		}
 		s.logger.Info("Reusing existing device key", zap.String("path", keyPath))
 		return data, nil
 	}
@@ -553,49 +549,12 @@ func (s *ProvisioningService) loadOrGenerateKey() ([]byte, error) {
 	}
 	keyPEM := []byte(keyStr)
 
-	// Persist the key so it's reused on future provisioning.
-	// 0o400: private key must be read-only after creation.
-	if err := os.MkdirAll(s.configPath, 0o700); err == nil {
-		_ = os.WriteFile(keyPath, keyPEM, 0o400)
+	// Do not begin enrollment unless the key has been persisted successfully.
+	if err := WriteDeviceKey(s.configPath, keyPEM); err != nil {
+		return nil, err
 	}
 
 	return keyPEM, nil
-}
-
-func (s *ProvisioningService) writePEMFiles(keyPEM, certPEM, chainPEM string) error {
-	return WritePEMFiles(s.configPath, keyPEM, certPEM, chainPEM)
-}
-
-// writeProvisioningState atomically replaces and syncs the existing state.
-func writeProvisioningState(path string, data []byte) error {
-	file, err := os.CreateTemp(filepath.Dir(path), ".provisioning-*")
-	if err != nil {
-		return err
-	}
-	tmp := file.Name()
-	defer os.Remove(tmp)
-	if err = file.Chmod(0600); err == nil {
-		_, err = file.Write(data)
-	}
-	if err == nil {
-		err = file.Sync()
-	}
-	closeErr := file.Close()
-	if err != nil {
-		return err
-	}
-	if closeErr != nil {
-		return closeErr
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		return err
-	}
-	dir, err := os.Open(filepath.Dir(path))
-	if err != nil {
-		return err
-	}
-	defer dir.Close()
-	return dir.Sync()
 }
 
 // saveState writes provisioning state to disk.
@@ -616,5 +575,5 @@ func (s *ProvisioningService) saveState(state *provisioningState) error {
 		return fmt.Errorf("marshaling state: %w", err)
 	}
 
-	return writeProvisioningState(s.statePath(), data)
+	return WriteProvisioningState(s.configPath, data)
 }

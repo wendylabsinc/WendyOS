@@ -44,6 +44,21 @@ The install is refused if the target directory sits on a merged systemd-sysext o
 
 `wendy install` writes the latest stable arm64 agent binary to the config partition automatically after flashing. If this write fails, `wendy install` warns rather than aborting (unless WiFi, device-name, or pre-enroll provisioning was explicitly requested — then the install exits non-zero, see [wendy.conf](#wendyconf)) — the device still boots using the agent baked into the image and fetches updates after first boot.
 
+## Pre-provisioning (`provisioning.json`)
+
+Enrollment prepared during installation can be handed to the agent through
+`/config/provisioning.json`. At boot, the agent validates the handoff, then
+persists its private key as `/etc/wendy-agent/device-key.pem` before writing
+`/etc/wendy-agent/provisioning.json` with the enrollment details and certificates.
+Both destination files use mode `0600`; the destination JSON excludes the
+handoff's embedded `keyPem` field.
+
+After both writes succeed, the agent removes the handoff file. A persistence
+failure leaves it available for retry on a later boot, and retrying preserves
+destination files whose contents and permissions already match. Malformed or
+incomplete handoffs are logged and removed. See [Credential persistence](../pki/README.md#credential-persistence)
+for the stored file layout and legacy-file handling.
+
 ## Driver add-ons (`extensions.json`)
 
 A file named `extensions.json` in `/config` seeds kernel driver add-ons at first boot,
