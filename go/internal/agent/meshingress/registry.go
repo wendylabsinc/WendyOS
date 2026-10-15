@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/netip"
 	"sync"
 )
 
@@ -16,12 +17,109 @@ var ErrPortDenied = errors.New("mesh ingress port is not published by a running 
 // one container owner, and an owner can publish several ports. The zero value
 // is usable. It starts empty, so access fails closed across agent restarts.
 type Registry struct {
-	flowMu     sync.Mutex // acquired after mu; connection Close never acquires mu
-	tcpByOwner map[string]map[*authorizedConn]struct{}
-	mu         sync.RWMutex
-	byPort     map[uint16]string
-	appByPort  map[uint16]string
-	byOwner    map[string]map[uint16]struct{}
+	flowMu         sync.Mutex // acquired after mu; connection Close never acquires mu
+	tcpByOwner     map[string]map[*authorizedConn]struct{}
+	mu             sync.RWMutex
+	byPort         map[uint16]string
+	appByPort      map[uint16]string
+	byOwner        map[string]map[uint16]struct{}
+	udpByPort      map[uint16]string
+	udpAppByPort   map[uint16]string
+	udpByOwner     map[string]map[uint16]struct{}
+	udpTokenByPort map[uint16]uint64
+	udpNext        uint64
+	sources        map[netip.Addr]sourceClaim
+	sourceByOwner  map[string]netip.Addr
+	sourceNext     uint64
+}
+
+type sourceClaim struct {
+	owner   string
+	appID   string
+	cidr    netip.Prefix
+	ifindex int
+	token   uint64
+}
+
+// ClaimSource attributes a live isolated mesh app's CNI address and granted
+// service CIDR. The source is installed only after egress wiring succeeds.
+func (r *Registry) ClaimSource(containerID, appID, rawIP, rawCIDR string, ifindex int) error {
+	if r == nil || containerID == "" || appID == "" || ifindex <= 0 {
+		return ErrPortDenied
+	}
+	ip, err := netip.ParseAddr(rawIP)
+	if err != nil || !ip.Is4() {
+		return ErrPortDenied
+	}
+	cidr, err := netip.ParsePrefix(rawCIDR)
+	if err != nil || !cidr.Addr().Is4() {
+		return ErrPortDenied
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if prior := r.sources[ip]; prior.owner != "" && prior.owner != containerID {
+		return ErrPortDenied
+	}
+	if old := r.sourceByOwner[containerID]; old.IsValid() && old != ip {
+		delete(r.sources, old)
+	}
+	if r.sources == nil {
+		r.sources = make(map[netip.Addr]sourceClaim)
+		r.sourceByOwner = make(map[string]netip.Addr)
+	}
+	r.sourceNext++
+	r.sources[ip] = sourceClaim{containerID, appID, cidr.Masked(), ifindex, r.sourceNext}
+	r.sourceByOwner[containerID] = ip
+	return nil
+}
+
+func (r *Registry) SourceAllowed(rawIP, dst netip.Addr, ifindex int) bool {
+	return r.SourceToken(rawIP, dst, ifindex) != 0
+}
+
+// SourceIP returns the currently attributed app address for host-rule cleanup
+// when the container client's IP cache is unavailable after recovery.
+func (r *Registry) SourceIP(containerID string) string {
+	if r == nil || containerID == "" {
+		return ""
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	ip := r.sourceByOwner[containerID]
+	if !ip.IsValid() || r.sources[ip].owner != containerID {
+		return ""
+	}
+	return ip.String()
+}
+
+// SourceToken is a claim incarnation, not merely an IP. A restarted or
+// replacement app cannot inherit an old app's UDP reply mapping.
+func (r *Registry) SourceToken(rawIP, dst netip.Addr, ifindex int) uint64 {
+	if r == nil || !rawIP.IsValid() || !dst.IsValid() || ifindex <= 0 {
+		return 0
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	claim := r.sources[rawIP]
+	if claim.owner == "" || claim.ifindex != ifindex || !claim.cidr.Contains(dst) {
+		return 0
+	}
+	return claim.token
+}
+
+// WithSourceToken holds the same claim across a bounded UDP send. Release
+// waits for an in-flight send, then makes every old token unusable.
+func (r *Registry) WithSourceToken(rawIP, dst netip.Addr, ifindex int, token uint64, send func() error) error {
+	if r == nil || token == 0 || send == nil || ifindex <= 0 {
+		return ErrPortDenied
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	claim := r.sources[rawIP]
+	if claim.token != token || claim.owner == "" || claim.ifindex != ifindex || !claim.cidr.Contains(dst) {
+		return ErrPortDenied
+	}
+	return send()
 }
 
 func NewRegistry() *Registry { return &Registry{} }
@@ -58,6 +156,107 @@ func (r *Registry) AllowedApp(appID string, port uint16) bool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return r.byPort[port] != "" && r.appByPort[port] == appID
+}
+
+// AllowedUDPApp checks the separately entitled UDP endpoint. A TCP claim
+// never authorizes the same numbered UDP port.
+func (r *Registry) AllowedUDPApp(appID string, port uint16) bool {
+	if r == nil || appID == "" || port == 0 {
+		return false
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.udpByPort[port] != "" && r.udpAppByPort[port] == appID
+}
+
+func (r *Registry) AllowedUDP(port uint16) bool {
+	if r == nil || port == 0 {
+		return false
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.udpByPort[port] != ""
+}
+
+// WithAuthorizedUDP holds the admission lock across a single datagram write.
+// A stopped app cannot receive a datagram after its claim is revoked.
+func (r *Registry) WithAuthorizedUDP(port uint16, write func() error) error {
+	if r == nil || port == 0 || write == nil {
+		return ErrPortDenied
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if r.udpByPort[port] == "" {
+		return ErrPortDenied
+	}
+	return write()
+}
+
+func (r *Registry) UDPToken(port uint16) uint64 {
+	if r == nil || port == 0 {
+		return 0
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.udpTokenByPort[port]
+}
+
+func (r *Registry) WithAuthorizedUDPToken(port uint16, token uint64, write func() error) error {
+	if r == nil || port == 0 || token == 0 || write == nil {
+		return ErrPortDenied
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if r.udpByPort[port] == "" || r.udpTokenByPort[port] != token {
+		return ErrPortDenied
+	}
+	return write()
+}
+
+func (r *Registry) CheckUDPAvailable(containerID string, port uint16) error {
+	if r == nil || containerID == "" || port == 0 {
+		return ErrPortDenied
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return checkOwner(r.udpByPort[port], containerID, port)
+}
+
+func (r *Registry) ClaimUDPForApp(containerID, appID string, port uint16) error {
+	if r == nil || containerID == "" || port == 0 {
+		return ErrPortDenied
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if err := checkOwner(r.udpByPort[port], containerID, port); err != nil {
+		return err
+	}
+	if r.udpByPort[port] != "" && r.udpAppByPort[port] != appID {
+		return ErrPortDenied
+	}
+	if r.udpByPort == nil {
+		r.udpByPort = make(map[uint16]string)
+		r.udpAppByPort = make(map[uint16]string)
+		r.udpByOwner = make(map[string]map[uint16]struct{})
+		r.udpTokenByPort = make(map[uint16]uint64)
+	}
+	if r.udpByOwner[containerID] == nil {
+		r.udpByOwner[containerID] = make(map[uint16]struct{})
+	}
+	r.udpByPort[port], r.udpAppByPort[port] = containerID, appID
+	r.udpNext++
+	r.udpTokenByPort[port] = r.udpNext
+	r.udpByOwner[containerID][port] = struct{}{}
+	return nil
+}
+
+func (r *Registry) OwnedUDPBy(containerID string, port uint16) bool {
+	if r == nil || containerID == "" || port == 0 {
+		return false
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.udpByPort[port] == containerID
 }
 
 // DialAuthorized holds the authorization read lock until the local TCP dial
@@ -191,6 +390,12 @@ func (r *Registry) Release(containerID string) {
 		return
 	}
 	r.mu.Lock()
+	if ip := r.sourceByOwner[containerID]; ip.IsValid() {
+		if r.sources[ip].owner == containerID {
+			delete(r.sources, ip)
+		}
+		delete(r.sourceByOwner, containerID)
+	}
 	for port := range r.byOwner[containerID] {
 		if r.byPort[port] == containerID {
 			delete(r.byPort, port)
@@ -198,6 +403,14 @@ func (r *Registry) Release(containerID string) {
 		}
 	}
 	delete(r.byOwner, containerID)
+	for port := range r.udpByOwner[containerID] {
+		if r.udpByPort[port] == containerID {
+			delete(r.udpByPort, port)
+			delete(r.udpAppByPort, port)
+			delete(r.udpTokenByPort, port)
+		}
+	}
+	delete(r.udpByOwner, containerID)
 	r.flowMu.Lock()
 	flows := r.tcpByOwner[containerID]
 	delete(r.tcpByOwner, containerID)

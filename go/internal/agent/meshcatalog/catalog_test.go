@@ -85,7 +85,8 @@ func (f fixture) newCatalog(t *testing.T, asset int32, mesh string, receipts []R
 		persist = func([]Receipt) error { return nil }
 	}
 	authorize := func(appID, serviceType string, port uint16) error {
-		if appID != "com.wendy.test" || serviceType != "_http._tcp" || port != 18080 {
+		if appID != "com.wendy.test" || !(serviceType == "_http._tcp" && port == 18080 ||
+			serviceType == "_wendy-echo._udp" && port == 47777) {
 			return errors.New("port not owned by mesh app")
 		}
 		return nil

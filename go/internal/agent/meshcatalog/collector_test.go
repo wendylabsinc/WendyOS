@@ -105,3 +105,39 @@ func TestCollectorAnyValidTCPTypeAndLifecycleWithdrawal(t *testing.T) {
 		t.Fatal("collector retains stopped app state")
 	}
 }
+
+func TestCollectorPublishesUDPOnlyThroughUDPEntitlement(t *testing.T) {
+	f := newFixture(t)
+	catalog, _ := f.newCatalog(t, 535, "default", nil, nil)
+	udpAnnouncement := func() *dns.Msg {
+		msg := announcement("Echo", 60, 7777, "10.79.99.162")
+		for _, rr := range append(msg.Answer, msg.Extra...) {
+			rr.Header().Name = strings.ReplaceAll(rr.Header().Name, "_http._tcp", "_wendy-echo._udp")
+			if ptr, ok := rr.(*dns.PTR); ok {
+				ptr.Ptr = strings.ReplaceAll(ptr.Ptr, "_http._tcp", "_wendy-echo._udp")
+			}
+		}
+		return msg
+	}
+	appIP := net.ParseIP("10.79.99.162")
+	tcpOnly, err := NewCollector(AppScope{AppID: "com.wendy.test", AppIP: appIP,
+		BridgeIndex: 7, Ports: map[uint16]uint16{7777: 18080}}, catalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed, err := tcpOnly.Observe(udpAnnouncement(), appIP, 7, f.now); err != nil || len(changed) != 0 {
+		t.Fatalf("TCP mapping authorized UDP DNS-SD: %d %v", len(changed), err)
+	}
+	udpAllowed, err := NewCollector(AppScope{AppID: "com.wendy.test", AppIP: appIP,
+		BridgeIndex: 7, UDPPorts: map[uint16]uint16{7777: 47777}}, catalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed, err := udpAllowed.Observe(udpAnnouncement(), appIP, 7, f.now); err != nil || len(changed) != 1 {
+		t.Fatalf("UDP DNS-SD publication = %d %v", len(changed), err)
+	}
+	records := catalog.Snapshot(f.now)
+	if len(records) != 1 || records[0].HostPort != 47777 || records[0].Type != "_wendy-echo._udp" {
+		t.Fatalf("wrong authorized UDP projection: %+v", records)
+	}
+}

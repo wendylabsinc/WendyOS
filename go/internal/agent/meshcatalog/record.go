@@ -40,7 +40,7 @@ var (
 	ErrStale          = errors.New("stale mesh service generation")
 	ErrIdentityNeeded = errors.New("mesh service identity bundle needed")
 	labelPattern      = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,62}$`)
-	typePattern       = regexp.MustCompile(`^_[A-Za-z0-9][A-Za-z0-9-]{0,14}\._tcp$`)
+	typePattern       = regexp.MustCompile(`^_[A-Za-z0-9][A-Za-z0-9-]{0,14}\._(tcp|udp)$`)
 )
 
 // Key is a service's stable owner scope. A display name and TXT UUID are never
