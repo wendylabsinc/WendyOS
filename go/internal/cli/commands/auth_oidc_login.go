@@ -120,35 +120,13 @@ func performOIDCLogin(ctx context.Context, opts oidcLoginOptions) error {
 		return fmt.Errorf("generating nonce: %w", err)
 	}
 
+	authority := opts.Issuer
+	if authority == "" {
+		authority = opts.AuthorizationBase
+	}
 	resultCh := make(chan oidcCallbackResult, 1)
 	mux := http.NewServeMux()
-	mux.HandleFunc("/callback", func(w http.ResponseWriter, r *http.Request) {
-		q := r.URL.Query()
-		if errCode := q.Get("error"); errCode != "" {
-			desc := q.Get("error_description")
-			http.Error(w, "authorization failed: "+errCode, http.StatusBadRequest)
-			resultCh <- oidcCallbackResult{Err: fmt.Errorf("authorization failed: %s %s", errCode, desc)}
-			return
-		}
-		code := q.Get("code")
-		gotState := q.Get("state")
-		if code == "" {
-			http.Error(w, "missing code", http.StatusBadRequest)
-			resultCh <- oidcCallbackResult{Err: fmt.Errorf("callback received without an authorization code")}
-			return
-		}
-		// Constant-time compare: `state` is a CSRF defence, so treat it like a
-		// secret even though a timing leak here is a stretch.
-		if subtle.ConstantTimeCompare([]byte(gotState), []byte(state)) != 1 {
-			http.Error(w, "state mismatch", http.StatusBadRequest)
-			resultCh <- oidcCallbackResult{Err: fmt.Errorf("state mismatch: the callback did not originate from this login attempt")}
-			return
-		}
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_, _ = w.Write([]byte(`<!doctype html><meta charset="utf-8"><title>Wendy CLI</title>` +
-			`<p style="font-family:system-ui;padding:2rem">Signed in. You can close this tab and return to the terminal.</p>`))
-		resultCh <- oidcCallbackResult{Code: code, State: gotState, Iss: q.Get("iss")}
-	})
+	mux.HandleFunc("/callback", oidcCallbackHandler(state, signedInURL(authority), resultCh))
 
 	server := &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 	go func() {
@@ -725,4 +703,50 @@ func printClaims(claims map[string]any, token *oidcTokenResponse) {
 		fmt.Printf("  %-12s (present)\n", "refresh")
 	}
 	fmt.Println()
+}
+
+// signedInURL is wendy-auth's themed "signed in" page on the session's
+// authority. It is built from the validated issuer or authorization base, never
+// from the callback request, so the loopback reply cannot redirect elsewhere.
+func signedInURL(authority string) string {
+	u, err := url.Parse(authority)
+	if err != nil {
+		return ""
+	}
+	return u.Scheme + "://" + u.Host + "/signed-in"
+}
+
+// oidcCallbackHandler receives the authorization response on the loopback
+// redirect URI and sends the browser on to signedIn.
+func oidcCallbackHandler(state, signedIn string, resultCh chan<- oidcCallbackResult) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		if errCode := q.Get("error"); errCode != "" {
+			desc := q.Get("error_description")
+			http.Error(w, "authorization failed: "+errCode, http.StatusBadRequest)
+			resultCh <- oidcCallbackResult{Err: fmt.Errorf("authorization failed: %s %s", errCode, desc)}
+			return
+		}
+		code := q.Get("code")
+		gotState := q.Get("state")
+		if code == "" {
+			http.Error(w, "missing code", http.StatusBadRequest)
+			resultCh <- oidcCallbackResult{Err: fmt.Errorf("callback received without an authorization code")}
+			return
+		}
+		// Constant-time compare: `state` is a CSRF defence, so treat it like a
+		// secret even though a timing leak here is a stretch.
+		if subtle.ConstantTimeCompare([]byte(gotState), []byte(state)) != 1 {
+			http.Error(w, "state mismatch", http.StatusBadRequest)
+			resultCh <- oidcCallbackResult{Err: fmt.Errorf("state mismatch: the callback did not originate from this login attempt")}
+			return
+		}
+		// The themed page lives on wendy-auth; the plain-text body is for
+		// callers that do not follow redirects.
+		w.Header().Set("Location", signedIn)
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.WriteHeader(http.StatusSeeOther)
+		_, _ = io.WriteString(w, "Signed in. You can close this tab and return to the terminal.\n")
+		resultCh <- oidcCallbackResult{Code: code, State: gotState, Iss: q.Get("iss")}
+	}
 }

@@ -300,3 +300,25 @@ func TestRefreshOIDCTokenCarriesResourceAndDPoP(t *testing.T) {
 		t.Fatalf("unexpected token response: %+v", token)
 	}
 }
+
+// The loopback reply sends the browser to wendy-auth's themed page, built from
+// the session's authority — never from the request Host.
+func TestOIDCCallbackRedirectsToSignedInPage(t *testing.T) {
+	for _, authority := range []string{"https://auth.wendy.dev/realms/acme", "https://auth.wendy.dev"} {
+		resultCh := make(chan oidcCallbackResult, 1)
+		h := oidcCallbackHandler("st", signedInURL(authority), resultCh)
+		req := httptest.NewRequest(http.MethodGet, "http://evil.example/callback?code=c&state=st&iss=x", nil)
+		rec := httptest.NewRecorder()
+		h(rec, req)
+
+		if rec.Code != http.StatusSeeOther {
+			t.Fatalf("%s: status = %d, want 303", authority, rec.Code)
+		}
+		if got := rec.Header().Get("Location"); got != "https://auth.wendy.dev/signed-in" {
+			t.Fatalf("%s: Location = %q, want https://auth.wendy.dev/signed-in", authority, got)
+		}
+		if res := <-resultCh; res.Code != "c" || res.Err != nil {
+			t.Fatalf("%s: result = %+v", authority, res)
+		}
+	}
+}
