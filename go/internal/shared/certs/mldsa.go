@@ -103,9 +103,10 @@ type ServerVerifyOpts struct {
 	ChainPEM      string     // required: PEM-encoded CA chain for ML-DSA-aware chain verification
 	ExpectedOrgID int32      // 0 = accept any org (still extracted for pinning key); never compared against a pki-core leaf, which carries no org
 	PinStore      PinChecker // nil = skip pinning
-	// ExpectedIdentity, when non-nil, requires the server leaf to carry an
-	// "asset" Wendy identity whose org and entity id match it exactly. This is
-	// the CLI-side counterpart of agent/mtls.NewClientTLSConfigExpectingPeer:
+	// ExpectedIdentity, when non-nil, requires the server leaf to name this
+	// exact Wendy identity (SameEntity: SPIFFE principals when both sides
+	// carry one, legacy org+asset otherwise). This is the CLI-side counterpart
+	// of agent/mtls.NewClientTLSConfigExpectingIdentity:
 	// chain validity alone only proves the peer holds a cert from a trusted CA,
 	// not that it is the device the caller asked for, so any other same-CA cert
 	// could otherwise answer at an mDNS-advertised address.

@@ -381,18 +381,10 @@ func TestCloudLiteDeviceInfoGoesThroughTheRelayWithTheSession(t *testing.T) {
 			}
 			liteLeaf, _ := pem.Decode([]byte(lite[0].PemCertificate))
 			relay.tlsConfig.VerifyConnection = func(state tls.ConnectionState) error {
-				wantCertificates := 1
-				if tc.includeClientChain {
-					wantCertificates++
-				}
-				if len(state.PeerCertificates) != wantCertificates || !bytes.Equal(state.PeerCertificates[0].Raw, liteLeaf.Bytes) {
-					return fmt.Errorf("mTLS did not preserve the selected Lite certificate chain")
-				}
-				if tc.includeClientChain {
-					liteCA, _ := pem.Decode([]byte(lite[0].PemCertificateChain))
-					if !bytes.Equal(state.PeerCertificates[1].Raw, liteCA.Bytes) {
-						return fmt.Errorf("mTLS sent the device trust chain as the Lite operator chain")
-					}
+				// The input may bundle its self-signed root. It remains a trust
+				// anchor and is intentionally omitted from the presented chain.
+				if len(state.PeerCertificates) != 1 || !bytes.Equal(state.PeerCertificates[0].Raw, liteLeaf.Bytes) {
+					return fmt.Errorf("mTLS did not present the selected Lite leaf without its root")
 				}
 				return nil
 			}

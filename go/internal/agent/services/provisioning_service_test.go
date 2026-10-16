@@ -197,12 +197,21 @@ func TestUnprovision_ClearsStateAndFiles(t *testing.T) {
 		t.Fatalf("StartProvisioning: %v", err)
 	}
 
-	// All on-disk artifacts should exist after provisioning.
-	stateFiles := []string{"provisioning.json", "device-key.pem", "device.pem", "ca.pem", ".provisioned"}
+	// Enrollment emits only the files that the agent reads.
+	assertNoLegacyProvisioningFiles(t, tmpDir)
+	stateFiles := []string{"provisioning.json", "device-key.pem"}
 	for _, f := range stateFiles {
 		if _, err := os.Stat(filepath.Join(tmpDir, f)); err != nil {
 			t.Fatalf("expected %s to exist after provisioning: %v", f, err)
 		}
+	}
+
+	// Older agents emitted these files; unprovision must still remove them.
+	for _, name := range []string{"device.pem", "ca.pem", ".provisioned"} {
+		if err := os.WriteFile(filepath.Join(tmpDir, name), []byte("legacy"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		stateFiles = append(stateFiles, name)
 	}
 
 	// OnUnprovisioned fires asynchronously after the response; capture it.

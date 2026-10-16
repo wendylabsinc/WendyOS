@@ -28,8 +28,9 @@ const (
 //
 // MeshRosterService serves the minimal name directory the WendyOS mesh needs
 // to resolve <devicename>.<org-slug>.cloud.wendy.dev to a cloud asset id. It is
-// deliberately narrower than AssetService: only {name, asset_id} pairs plus the
-// caller's own org slug, scoped by the caller's asset-certificate identity.
+// deliberately narrower than AssetService: only {name, asset_id, device_uuid}
+// triples plus the caller's own org slug, scoped by the caller's asset-certificate
+// identity.
 //
 // The shape originates device-side in WendyOS (Proto/cloud/mesh.proto,
 // e926cb0dc), which is the only client; this is its first upstream home
@@ -62,8 +63,9 @@ func (c *meshRosterServiceClient) GetMeshRoster(ctx context.Context, in *GetMesh
 //
 // MeshRosterService serves the minimal name directory the WendyOS mesh needs
 // to resolve <devicename>.<org-slug>.cloud.wendy.dev to a cloud asset id. It is
-// deliberately narrower than AssetService: only {name, asset_id} pairs plus the
-// caller's own org slug, scoped by the caller's asset-certificate identity.
+// deliberately narrower than AssetService: only {name, asset_id, device_uuid}
+// triples plus the caller's own org slug, scoped by the caller's asset-certificate
+// identity.
 //
 // The shape originates device-side in WendyOS (Proto/cloud/mesh.proto,
 // e926cb0dc), which is the only client; this is its first upstream home

@@ -4,8 +4,9 @@ package wendycloud.v2;
 
 // MeshRosterService serves the minimal name directory the WendyOS mesh needs
 // to resolve <devicename>.<org-slug>.cloud.wendy.dev to a cloud asset id. It is
-// deliberately narrower than AssetService: only {name, asset_id} pairs plus the
-// caller's own org slug, scoped by the caller's asset-certificate identity.
+// deliberately narrower than AssetService: only {name, asset_id, device_uuid}
+// triples plus the caller's own org slug, scoped by the caller's asset-certificate
+// identity.
 //
 // The shape originates device-side in WendyOS (Proto/cloud/mesh.proto,
 // e926cb0dc), which is the only client; this is its first upstream home
@@ -17,8 +18,12 @@ service MeshRosterService {
 message GetMeshRosterRequest {}
 
 message MeshRosterEntry {
-  string name = 1;      // device asset name, server-normalized to a DNS label
+  string name = 1;        // device asset name, server-normalized to a DNS label
   string asset_id = 2;
+  string device_uuid = 3; // canonical lowercase device UUID: the SPIFFE device
+                          // component, and the identity the mesh derives its
+                          // address from; empty only for legacy rows with no
+                          // UUID device binding
 }
 
 message GetMeshRosterResponse {

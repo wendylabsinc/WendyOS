@@ -61,6 +61,7 @@ type MeshRosterEntry struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"` // device asset name, server-normalized to a DNS label
 	AssetId       string                 `protobuf:"bytes,2,opt,name=asset_id,json=assetId,proto3" json:"asset_id,omitempty"`
+	DeviceUuid    string                 `protobuf:"bytes,3,opt,name=device_uuid,json=deviceUuid,proto3" json:"device_uuid,omitempty"` // canonical lowercase device UUID: the SPIFFE device
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -105,6 +106,13 @@ func (x *MeshRosterEntry) GetName() string {
 func (x *MeshRosterEntry) GetAssetId() string {
 	if x != nil {
 		return x.AssetId
+	}
+	return ""
+}
+
+func (x *MeshRosterEntry) GetDeviceUuid() string {
+	if x != nil {
+		return x.DeviceUuid
 	}
 	return ""
 }
@@ -166,10 +174,12 @@ var File_wendycloud_v2_mesh_proto protoreflect.FileDescriptor
 const file_wendycloud_v2_mesh_proto_rawDesc = "" +
 	"\n" +
 	"\x18wendycloud/v2/mesh.proto\x12\rwendycloud.v2\"\x16\n" +
-	"\x14GetMeshRosterRequest\"@\n" +
+	"\x14GetMeshRosterRequest\"a\n" +
 	"\x0fMeshRosterEntry\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x19\n" +
-	"\basset_id\x18\x02 \x01(\tR\aassetId\"l\n" +
+	"\basset_id\x18\x02 \x01(\tR\aassetId\x12\x1f\n" +
+	"\vdevice_uuid\x18\x03 \x01(\tR\n" +
+	"deviceUuid\"l\n" +
 	"\x15GetMeshRosterResponse\x12\x19\n" +
 	"\borg_slug\x18\x01 \x01(\tR\aorgSlug\x128\n" +
 	"\aentries\x18\x02 \x03(\v2\x1e.wendycloud.v2.MeshRosterEntryR\aentries2o\n" +

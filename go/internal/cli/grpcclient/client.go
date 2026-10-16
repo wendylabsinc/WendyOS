@@ -162,15 +162,23 @@ func (c *AgentConnection) CachedAgentVersion() (*agentpb.GetAgentVersionResponse
 
 // verifiedIdentitySink returns the OnVerifiedServerIdentity callback that
 // records the device identity behind a verified server certificate. Identities
-// without an org are dropped: org 0 is not a real Wendy org, so storing one
-// would let ObservedServerIdentity report an identity no certificate asserted.
+// need either a legacy org or a complete, internally consistent tenant SPIFFE
+// identity. PKI-issued identities deliberately have no numeric org ID.
 //
 // dst may be nil (observation not requested), in which case the returned sink is
 // a no-op — the same contract as identityMismatchSink below. This runs inside
 // VerifyConnection, so an unguarded nil would panic mid-handshake.
 func verifiedIdentitySink(dst *atomic.Pointer[certs.WendyIdentity]) func(certs.WendyIdentity) {
 	return func(id certs.WendyIdentity) {
-		if dst == nil || id.OrgID == 0 {
+		if dst == nil || id.OrgID < 0 {
+			return
+		}
+		if id.Principal != "" || id.TenantUUID != "" {
+			parsed, err := certs.ParsePrincipal(id.Principal)
+			if err != nil || parsed.TenantUUID != id.TenantUUID || parsed.EntityType != id.EntityType || parsed.EntityID != id.EntityID {
+				return
+			}
+		} else if id.OrgID == 0 {
 			return
 		}
 		stored := id

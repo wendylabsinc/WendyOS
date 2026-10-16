@@ -7,8 +7,9 @@ import (
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
+	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
-	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
+	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	"github.com/wendylabsinc/wendy/go/proto/gen/cloudpb"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -28,7 +29,7 @@ func registerCloudApps(ctx context.Context, conn *grpcclient.AgentConnection, ap
 	}
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
-	if err := registerDeviceApps(ctx, conn.ProvisioningService, appIDs, config.Load, registerAppsWithCloud); err != nil {
+	if err := registerDeviceApps(ctx, deploymentProvisioningService{conn}, appIDs, config.Load, registerAppsWithCloud); err != nil {
 		return fmt.Errorf("registering deployment with Cloud: %w; use --skip-cloud-registration for an offline deployment", err)
 	}
 	return nil
@@ -74,7 +75,17 @@ func registerDeviceApps(ctx context.Context, provisioning deploymentProvisioning
 // Only dial an endpoint already trusted by a stored operator session. A device's
 // enrollment response must never choose where we send another session's token.
 func deploymentAuth(cfg *config.Config, device *agentpb.ProvisionedResponse) (*config.AuthConfig, error) {
-	if device.GetCloudHost() == "" || device.GetOrganizationId() <= 0 || device.GetAssetId() <= 0 {
+	if device.GetCloudHost() == "" {
+		return nil, fmt.Errorf("device returned incomplete Cloud enrollment")
+	}
+	var tenant string
+	if principal := device.GetPrincipalUri(); principal != "" {
+		identity, err := certs.ParsePrincipal(principal)
+		if err != nil || identity.EntityType != certs.EntityAsset || identity.TenantUUID == "" {
+			return nil, fmt.Errorf("device returned invalid Cloud enrollment principal")
+		}
+		tenant = identity.TenantUUID
+	} else if device.GetOrganizationId() <= 0 || device.GetAssetId() <= 0 {
 		return nil, fmt.Errorf("device returned incomplete Cloud enrollment")
 	}
 	for _, entry := range cfg.Auth {
@@ -82,11 +93,25 @@ func deploymentAuth(cfg *config.Config, device *agentpb.ProvisionedResponse) (*c
 			continue
 		}
 		for _, cert := range entry.Certificates {
-			if cert.OrganizationID == int(device.GetOrganizationId()) && cert.UserID != "" && cert.AssetID == 0 {
-				entry.Certificates = []config.CertificateInfo{cert}
-				return &entry, nil
+			if tenant != "" {
+				principal := cert.PrincipalURI
+				if principal == "" {
+					principal = cert.CertificatePrincipal()
+				}
+				identity, err := certs.ParsePrincipal(principal)
+				if err != nil || identity.EntityType != certs.EntityUser || identity.TenantUUID != tenant {
+					continue
+				}
+				cert.PrincipalURI = principal
+			} else if cert.TenantUUID() != "" || cert.OrganizationID != int(device.GetOrganizationId()) || cert.UserID == "" || cert.AssetID != 0 {
+				continue
 			}
+			entry.Certificates = []config.CertificateInfo{cert}
+			return &entry, nil
 		}
+	}
+	if tenant != "" {
+		return nil, fmt.Errorf("no operator session for device tenant %s at %s; run 'wendy auth login' for that organization", tenant, device.GetCloudHost())
 	}
 	return nil, fmt.Errorf("no operator session for device organization %d at %s; run 'wendy auth login' for that organization", device.GetOrganizationId(), device.GetCloudHost())
 }
@@ -100,6 +125,9 @@ func registerAppsWithCloud(ctx context.Context, auth *config.AuthConfig, device 
 	cloudCtx, err := cloudContext(ctx, auth)
 	if err != nil {
 		return err
+	}
+	if device.GetPrincipalUri() != "" {
+		return registerAppsWithCloudV2(cloudCtx, conn, auth, device, appIDs)
 	}
 	client := cloudpb.NewAppServiceClient(conn)
 	for _, id := range appIDs {

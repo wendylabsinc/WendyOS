@@ -12,7 +12,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
-	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
+	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	"github.com/wendylabsinc/wendy/go/proto/gen/cloudpb"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -20,13 +20,13 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-type deploymentProvisioningStub struct {
+type deploymentProvisioningV2Stub struct {
 	agentpb.WendyProvisioningServiceClient
 	response *agentpb.IsProvisionedResponse
 	err      error
 }
 
-func (s deploymentProvisioningStub) IsProvisioned(context.Context, *agentpb.IsProvisionedRequest, ...grpc.CallOption) (*agentpb.IsProvisionedResponse, error) {
+func (s deploymentProvisioningV2Stub) IsProvisioned(context.Context, *agentpb.IsProvisionedRequest, ...grpc.CallOption) (*agentpb.IsProvisionedResponse, error) {
 	return s.response, s.err
 }
 
@@ -65,8 +65,8 @@ func TestDeploymentAuthUsesOnlyDeviceOrganizationAndTrustedHost(t *testing.T) {
 }
 
 func TestRegistrationSkipsUnenrolledDevicesWithoutLoadingCredentials(t *testing.T) {
-	provisioning := deploymentProvisioningStub{response: &agentpb.IsProvisionedResponse{
-		Response: &agentpb.IsProvisionedResponse_NotProvisioned{NotProvisioned: &agentpb.NotProvisionedResponse{}},
+	provisioning := deploymentProvisioningV2Stub{response: &agentpb.IsProvisionedResponse{
+		ResponseType: &agentpb.IsProvisionedResponse_NotProvisioned{NotProvisioned: &agentpb.NotProvisionedResponse{}},
 	}}
 	err := registerDeviceApps(context.Background(), provisioning, []string{"app"}, func() (*config.Config, error) {
 		t.Fatal("local deployment loaded Cloud credentials")
@@ -82,8 +82,8 @@ func TestRegistrationSkipsUnenrolledDevicesWithoutLoadingCredentials(t *testing.
 
 func TestRegistrationDeduplicatesAppsAndPropagatesCloudFailure(t *testing.T) {
 	device := registrationDevice()
-	provisioning := deploymentProvisioningStub{response: &agentpb.IsProvisionedResponse{
-		Response: &agentpb.IsProvisionedResponse_Provisioned{Provisioned: device},
+	provisioning := deploymentProvisioningV2Stub{response: &agentpb.IsProvisionedResponse{
+		ResponseType: &agentpb.IsProvisionedResponse_Provisioned{Provisioned: device},
 	}}
 	denied := status.Error(codes.PermissionDenied, "viewer cannot register deployments")
 	called := false
@@ -102,7 +102,7 @@ func TestRegistrationDeduplicatesAppsAndPropagatesCloudFailure(t *testing.T) {
 }
 
 func TestRunStopsBeforeBuildingWhenRegistrationFails(t *testing.T) {
-	conn := &grpcclient.AgentConnection{ProvisioningService: deploymentProvisioningStub{err: status.Error(codes.Unavailable, "offline")}}
+	conn := &grpcclient.AgentConnection{ProvisioningService: &deploymentLegacyProvisioningStub{err: status.Error(codes.Unavailable, "offline")}}
 	err := runWithAgent(context.Background(), conn, t.TempDir(), &appconfig.AppConfig{AppID: "app"}, runOptions{})
 	if err == nil || !strings.Contains(err.Error(), "registering deployment with Cloud") || !strings.Contains(err.Error(), "--skip-cloud-registration") {
 		t.Fatalf("registration did not stop deployment: %v", err)

@@ -2,6 +2,7 @@ package configpartition
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -323,7 +324,7 @@ func TestApplyPreProvisioning_Success(t *testing.T) {
 	cfgDir := t.TempDir()
 	configPath := t.TempDir()
 
-	state := `{"enrolled":true,"cloudHost":"cloud.wendy.dev","orgId":1,"assetId":42,"keyPem":"fake-key","certPem":"fake-cert","chainPem":"fake-chain"}`
+	state := `{"enrolled":true,"cloudHost":"cloud.wendy.dev","orgId":1,"assetId":42,"keyPem":"fake-key","certPem":"fake-cert","chainPem":"fake-chain","principalURI":"spiffe://example/device/42"}`
 	if err := os.WriteFile(filepath.Join(cfgDir, "provisioning.json"), []byte(state), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -339,43 +340,57 @@ func TestApplyPreProvisioning_Success(t *testing.T) {
 	if err != nil {
 		t.Fatalf("provisioning.json not written to configPath: %v", err)
 	}
-	if string(got) != state {
-		t.Errorf("provisioning.json content = %q; want %q", got, state)
+	var saved preProvisionedState
+	if err := json.Unmarshal(got, &saved); err != nil {
+		t.Fatal(err)
 	}
-
-	for _, name := range []string{"device-key.pem", "device.pem", "ca.pem"} {
-		if _, err := os.Stat(filepath.Join(configPath, name)); err != nil {
-			t.Errorf("%s not written: %v", name, err)
+	if saved.KeyPEM != "" || saved.CertPEM != "fake-cert" || saved.ChainPEM != "fake-chain" || !saved.Enrolled {
+		t.Fatalf("wrong persisted state: %s", got)
+	}
+	key, err := os.ReadFile(filepath.Join(configPath, "device-key.pem"))
+	if err != nil || string(key) != "fake-key" {
+		t.Fatalf("wrong key: %q %v", key, err)
+	}
+	for _, name := range []string{"device-key.pem", "provisioning.json"} {
+		info, err := os.Stat(filepath.Join(configPath, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if info.Mode().Perm() != 0o600 {
+			t.Errorf("%s mode = %o; want 0600", name, info.Mode().Perm())
+		}
+	}
+	for _, name := range []string{"device.pem", "ca.pem", ".provisioned"} {
+		if _, err := os.Stat(filepath.Join(configPath, name)); !os.IsNotExist(err) {
+			t.Errorf("unused file %s emitted", name)
+		}
+	}
+	if !strings.Contains(string(got), "spiffe://example/device/42") {
+		t.Fatal("import discarded an unknown enrollment field")
+	}
+	// A retried first-boot handoff must preserve both destination files.
+	before := make(map[string]os.FileInfo)
+	for _, name := range []string{"device-key.pem", "provisioning.json"} {
+		info, err := os.Stat(filepath.Join(configPath, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		before[name] = info
+	}
+	if err := os.WriteFile(filepath.Join(cfgDir, "provisioning.json"), []byte(state), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	applyPreProvisioning(logger, cfgDir, configPath)
+	for name, previous := range before {
+		current, err := os.Stat(filepath.Join(configPath, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !os.SameFile(previous, current) || !previous.ModTime().Equal(current.ModTime()) {
+			t.Fatalf("retried import rewrote %s", name)
 		}
 	}
 
-	info, err := os.Stat(filepath.Join(configPath, "device-key.pem"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if info.Mode().Perm() != 0o600 {
-		t.Errorf("device-key.pem mode = %o; want 0600", info.Mode().Perm())
-	}
-
-	info, err = os.Stat(filepath.Join(configPath, "device.pem"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if info.Mode().Perm() != 0o644 {
-		t.Errorf("device.pem mode = %o; want 0644", info.Mode().Perm())
-	}
-
-	info, err = os.Stat(filepath.Join(configPath, "ca.pem"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if info.Mode().Perm() != 0o644 {
-		t.Errorf("ca.pem mode = %o; want 0644", info.Mode().Perm())
-	}
-
-	if _, err := os.Stat(filepath.Join(configPath, ".provisioned")); err != nil {
-		t.Error(".provisioned marker not written")
-	}
 }
 
 func TestApplyPreProvisioningFlashReplacesResetRecovery(t *testing.T) {
@@ -397,12 +412,35 @@ func TestApplyPreProvisioningFlashReplacesResetRecovery(t *testing.T) {
 			}
 			applyPreProvisioning(zap.NewNop(), cfgDir, configPath)
 			got, err := os.ReadFile(path)
-			if err != nil || string(got) != string(media) {
-				t.Fatal("flash provisioning did not replace old local state", err)
+			if err != nil {
+				t.Fatal(err)
 			}
-			for _, name := range []string{"device-key.pem", "device.pem", "ca.pem", ".provisioned"} {
-				if _, err := os.Stat(filepath.Join(configPath, name)); err != nil {
-					t.Fatalf("first-boot credential missing: %s: %v", name, err)
+			var saved, expected map[string]json.RawMessage
+			if err := json.Unmarshal(got, &saved); err != nil {
+				t.Fatal(err)
+			}
+			if err := json.Unmarshal(media, &expected); err != nil {
+				t.Fatal(err)
+			}
+			delete(expected, "keyPem")
+			savedJSON, err := json.Marshal(saved)
+			if err != nil {
+				t.Fatal(err)
+			}
+			expectedJSON, err := json.Marshal(expected)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(savedJSON, expectedJSON) {
+				t.Fatalf("flash provisioning did not replace old recovery state with key-free enrollment: %s", got)
+			}
+			key, err := os.ReadFile(filepath.Join(configPath, "device-key.pem"))
+			if err != nil || string(key) != "fixture-key" {
+				t.Fatalf("first-boot key not persisted separately: %q: %v", key, err)
+			}
+			for _, name := range []string{"device.pem", "ca.pem", ".provisioned"} {
+				if _, err := os.Stat(filepath.Join(configPath, name)); !os.IsNotExist(err) {
+					t.Fatalf("unused first-boot credential emitted: %s: %v", name, err)
 				}
 			}
 			if _, err := os.Stat(filepath.Join(cfgDir, "provisioning.json")); !os.IsNotExist(err) {
@@ -670,5 +708,31 @@ func TestUpdateOrgIDTXTRecord(t *testing.T) {
 	got2 := updateOrgIDTXTRecord(got, 7)
 	if strings.Count(got2, "<txt-record>orgid=") != 1 || !strings.Contains(got2, "orgid=7") {
 		t.Fatalf("orgid record not replaced idempotently: %q", got2)
+	}
+}
+
+func TestApplyPreProvisioningWriteFailurePreservesHandoff(t *testing.T) {
+	for _, blocked := range []string{"device-key.pem", "provisioning.json"} {
+		t.Run(blocked, func(t *testing.T) {
+			cfgDir, configPath := t.TempDir(), t.TempDir()
+			source := filepath.Join(cfgDir, "provisioning.json")
+			data := []byte(`{"enrolled":true,"cloudHost":"cloud","keyPem":"key","certPem":"cert"}`)
+			if err := os.WriteFile(source, data, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Mkdir(filepath.Join(configPath, blocked), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			applyPreProvisioning(zap.NewNop(), cfgDir, configPath)
+			got, err := os.ReadFile(source)
+			if err != nil || string(got) != string(data) {
+				t.Fatalf("lost enrollment handoff: %q %v", got, err)
+			}
+			if blocked == "device-key.pem" {
+				if _, err := os.Stat(filepath.Join(configPath, "provisioning.json")); !os.IsNotExist(err) {
+					t.Fatal("state committed without key")
+				}
+			}
+		})
 	}
 }

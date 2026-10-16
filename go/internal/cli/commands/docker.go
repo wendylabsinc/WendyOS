@@ -7,6 +7,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/hex"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
@@ -1736,20 +1737,23 @@ func ensureMTLSBuilder(ctx context.Context, configDir, registryAddr, containerCe
 	keyPath := filepath.Join(hostCertDir, "client-key.pem")
 	caPath := filepath.Join(hostCertDir, "ca.pem")
 
-	// BuildKit and the agent registry both use Go's TLS stack, which parses
-	// every certificate exchanged during the handshake even when verification
-	// is disabled or custom. Wendy cloud chains can contain ML-DSA certificates
-	// that Go cannot parse, so only present the parseable leaf certificate.
-	leafCertPEM, err := certs.LeafCertificatePEM(certInfo.PemCertificate)
-	if err != nil {
-		return "", fmt.Errorf("extracting client leaf certificate: %w", err)
-	}
-	if err := os.WriteFile(certPath, []byte(leafCertPEM), 0o644); err != nil {
-		return "", fmt.Errorf("writing client cert: %w", err)
-	}
 	keyPEM, err := certInfo.PrivateKeyPEM()
 	if err != nil {
 		return "", fmt.Errorf("loading client key: %w", err)
+	}
+	// Preserve the issuer chain, using the same normalization and root omission
+	// as the CLI's TLS connections. Cloud v2 peers need the intermediate to
+	// verify the operator identity against their trusted root.
+	clientCert, err := certs.TLSKeyPair(certInfo.PemCertificate, certInfo.PemCertificateChain, keyPEM)
+	if err != nil {
+		return "", fmt.Errorf("loading client certificate: %w", err)
+	}
+	var clientCertPEM []byte
+	for _, der := range clientCert.Certificate {
+		clientCertPEM = append(clientCertPEM, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})...)
+	}
+	if err := os.WriteFile(certPath, clientCertPEM, 0o644); err != nil {
+		return "", fmt.Errorf("writing client cert: %w", err)
 	}
 	if err := os.WriteFile(keyPath, []byte(keyPEM), 0o600); err != nil {
 		return "", fmt.Errorf("writing client key: %w", err)
@@ -1764,11 +1768,11 @@ func ensureMTLSBuilder(ctx context.Context, configDir, registryAddr, containerCe
 	fullConfig := buildkitRegistryConfig(registryAddr, false, keypair)
 
 	// appliedState uses the buildkitd config plus a SHA-256 digest of the
-	// public leaf certificate. The certificate is public material; no private
+	// public certificate chain. The certificates are public material; no private
 	// key material or derivative is persisted (SOC2-C1, NIST-SC-28, ISO27001-A.8).
 	// When the cert changes (rotation, new device), the digest changes and the
 	// builder is reconfigured and restarted in place.
-	certDigest := sha256.Sum256([]byte(leafCertPEM))
+	certDigest := sha256.Sum256(clientCertPEM)
 	appliedState := fullConfig +
 		"\n---CERTHASH---\n" + hex.EncodeToString(certDigest[:])
 
@@ -3052,11 +3056,7 @@ func wendyRegistryServerVerifier(caPool *x509.CertPool) func(tls.ConnectionState
 // SAN — but the server chain is fully validated against the Wendy CA via
 // wendyRegistryServerVerifier, matching startMTLSRegistryHTTPProxy.
 func tlsClientDialer(certPEM, keyPEM, caPEM string, dial func(context.Context) (net.Conn, error)) (func(context.Context) (net.Conn, error), error) {
-	leafPEM, err := certs.LeafCertificatePEM(certPEM)
-	if err != nil {
-		return nil, fmt.Errorf("extracting leaf certificate: %w", err)
-	}
-	tlsCert, err := tls.X509KeyPair([]byte(leafPEM), []byte(keyPEM))
+	tlsCert, err := certs.TLSKeyPair(certPEM, caPEM, keyPEM)
 	if err != nil {
 		return nil, fmt.Errorf("loading client certificate: %w", err)
 	}
@@ -3209,11 +3209,7 @@ func (p *mtlsRegistryHTTPProxy) LastDialError() error {
 }
 
 func startMTLSRegistryHTTPProxy(target, certPEM, keyPEM, caPEM string) (*mtlsRegistryHTTPProxy, error) {
-	leafPEM, err := certs.LeafCertificatePEM(certPEM)
-	if err != nil {
-		return nil, fmt.Errorf("extracting leaf cert: %w", err)
-	}
-	cert, err := tls.X509KeyPair([]byte(leafPEM), []byte(keyPEM))
+	cert, err := certs.TLSKeyPair(certPEM, caPEM, keyPEM)
 	if err != nil {
 		return nil, fmt.Errorf("parsing mTLS certificate: %w", err)
 	}
@@ -3279,15 +3275,11 @@ func startMTLSRegistryProxy(ctx context.Context, target string) (*registryProxy,
 	if certInfo == nil {
 		return nil, fmt.Errorf("no CLI certificates available")
 	}
-	leafPEM, err := certs.LeafCertificatePEM(certInfo.PemCertificate)
-	if err != nil {
-		return nil, fmt.Errorf("extracting leaf certificate: %w", err)
-	}
 	keyPEM, err := certInfo.PrivateKeyPEM()
 	if err != nil {
 		return nil, fmt.Errorf("loading client key: %w", err)
 	}
-	tlsCert, err := tls.X509KeyPair([]byte(leafPEM), []byte(keyPEM))
+	tlsCert, err := certs.TLSKeyPair(certInfo.PemCertificate, certInfo.PemCertificateChain, keyPEM)
 	if err != nil {
 		return nil, fmt.Errorf("loading client certificate: %w", err)
 	}

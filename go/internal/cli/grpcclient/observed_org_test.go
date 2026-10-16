@@ -56,13 +56,43 @@ func TestObservedServerIdentity_ReturnsStoredIdentity(t *testing.T) {
 }
 
 // TestVerifiedIdentitySink_IgnoresOrglessIdentity keeps a malformed identity out
-// of the store: org 0 is not a real Wendy org, and letting it land would make
-// ObservedServerIdentity report a device identity that no certificate asserted.
+// of the store: org zero without a tenant principal proves no Wendy scope.
 func TestVerifiedIdentitySink_IgnoresOrglessIdentity(t *testing.T) {
 	c := &AgentConnection{observedServerIdentity: new(atomic.Pointer[certs.WendyIdentity])}
 	verifiedIdentitySink(c.observedServerIdentity)(certs.WendyIdentity{EntityType: "asset", EntityID: "42"})
 
 	if id, ok := c.ObservedServerIdentity(); ok {
 		t.Errorf("ObservedServerIdentity() = (%+v, true), want unset for org 0", id)
+	}
+}
+
+func TestVerifiedIdentitySinkAcceptsCompleteUUIDPrincipalOnly(t *testing.T) {
+	valid, err := certs.ParsePrincipal("spiffe://wendy.sh/tenant/22f35004-d638-4b5c-869f-b815974d6eae/device/03ce308b-4c00-40c2-bc64-5f66a83d4f37")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name string
+		edit func(*certs.WendyIdentity)
+		want bool
+	}{
+		{"UUID identity", func(*certs.WendyIdentity) {}, true},
+		{"missing principal", func(id *certs.WendyIdentity) { id.Principal = "" }, false},
+		{"invalid principal", func(id *certs.WendyIdentity) { id.Principal = "not-a-tenant-principal" }, false},
+		{"wrong tenant field", func(id *certs.WendyIdentity) { id.TenantUUID = "11111111-1111-4111-8111-111111111111" }, false},
+		{"wrong entity type", func(id *certs.WendyIdentity) { id.EntityType = certs.EntityUser }, false},
+		{"wrong entity ID", func(id *certs.WendyIdentity) { id.EntityID = "other-device" }, false},
+		{"missing tenant field", func(id *certs.WendyIdentity) { id.TenantUUID = "" }, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			id := valid
+			tc.edit(&id)
+			conn := &AgentConnection{observedServerIdentity: new(atomic.Pointer[certs.WendyIdentity])}
+			verifiedIdentitySink(conn.observedServerIdentity)(id)
+			got, ok := conn.ObservedServerIdentity()
+			if ok != tc.want || ok && got != valid {
+				t.Fatalf("observed (%+v, %v), want accepted=%v", got, ok, tc.want)
+			}
+		})
 	}
 }

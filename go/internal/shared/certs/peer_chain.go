@@ -9,15 +9,23 @@ import (
 	"time"
 )
 
-// TLSKeyPair includes the issuer chain, stripping the trailing bytes some PKI
-// certificates carry outside their ASN.1 sequence. Those bytes, not ML-DSA
-// public keys, prevent Go's TLS stack from parsing the presented chain.
+// TLSKeyPair normalizes the trailing bytes some PKI issuer certificates carry
+// outside their ASN.1 sequence, so Go TLS can parse the presented chain.
+// Proven self-signed CA roots are omitted; callers retain the original trust
+// material. Intermediates and issuers with unsupported signatures are retained.
+// leafPEM may itself be a chain bundle; issuers from both inputs are retained
+// in presentation order and duplicate certificates are sent only once.
 func TLSKeyPair(leafPEM, chainPEM, keyPEM string) (tls.Certificate, error) {
 	leaf, err := LeafCertificatePEM(leafPEM)
 	if err != nil {
 		return tls.Certificate{}, err
 	}
 	bundle := []byte(leaf)
+	leafBlock, _ := pem.Decode(bundle) // LeafCertificatePEM guarantees a certificate block.
+	embedded, err := ParseCertsFromPEM([]byte(leafPEM))
+	if err != nil {
+		return tls.Certificate{}, err
+	}
 	chain, err := ParseCertsFromPEM([]byte(chainPEM))
 	if err != nil {
 		return tls.Certificate{}, err
@@ -25,7 +33,15 @@ func TLSKeyPair(leafPEM, chainPEM, keyPEM string) (tls.Certificate, error) {
 	if chainPEM != "" && len(chain) == 0 {
 		return tls.Certificate{}, fmt.Errorf("no parseable certificates in TLS issuer chain")
 	}
-	for _, ca := range chain {
+	seen := map[string]bool{string(leafBlock.Bytes): true}
+	for _, ca := range append(embedded, chain...) {
+		if seen[string(ca.Raw)] {
+			continue
+		}
+		seen[string(ca.Raw)] = true
+		if ca.IsCA && bytes.Equal(ca.RawSubject, ca.RawIssuer) && ca.CheckSignatureFrom(ca) == nil {
+			continue
+		}
 		bundle = append(bundle, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: ca.Raw})...)
 	}
 	return tls.X509KeyPair(bundle, []byte(keyPEM))

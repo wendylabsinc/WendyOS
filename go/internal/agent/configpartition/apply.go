@@ -727,13 +727,15 @@ func applyPreProvisioning(logger *zap.Logger, cfgDir, configPath string) {
 
 	// Flashing is an explicit local reset. Valid first-boot provisioning may
 	// replace prior recovery state; it does not perform Cloud cleanup.
-	if err := services.WritePEMFiles(configPath, state.KeyPEM, state.CertPEM, state.ChainPEM); err != nil {
-		logger.Error("Failed to write PEM files from config partition",
+	if err := services.WriteDeviceKey(configPath, []byte(state.KeyPEM)); err != nil {
+		logger.Error("Failed to write device key from config partition",
 			zap.String("configPath", configPath), zap.Error(err))
 		return
 	}
 
-	if err := os.WriteFile(filepath.Join(configPath, "provisioning.json"), data, 0o600); err != nil {
+	// The private key belongs only in device-key.pem. Commit enrollment after
+	// that file is durable, and preserve identical files if an import is retried.
+	if err := services.WriteProvisioningState(configPath, data); err != nil {
 		logger.Error("Failed to write provisioning.json from config partition", zap.Error(err))
 		return
 	}
