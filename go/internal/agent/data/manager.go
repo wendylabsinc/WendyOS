@@ -85,6 +85,8 @@ type Manager struct {
 	// behind (or block) recording, and because DeployCampaign resolves audio
 	// sources through Sources, which takes mu itself.
 	campaignMu sync.Mutex
+	// documentMu serializes inference and watch document writes and removals.
+	documentMu sync.Mutex
 	root       string
 	active     map[string]*activeEpisode
 	// sealing holds episodes that have stopped capturing and are inside their
@@ -242,6 +244,9 @@ type bufferedRecord struct {
 	// that decides ring eviction and pre-roll window membership.
 	receiptNanos int64
 	encoded      []byte
+	// audience names the collections whose episodes may take this record from
+	// the ring. nil means every episode, as for application records.
+	audience map[string]bool
 }
 
 type ApplicationRecord struct {
@@ -603,7 +608,7 @@ func (m *Manager) Start(opts StartOptions) (Manifest, error) {
 	}
 	if capturesApplications {
 		manifest.PreRollLost = m.preRollLostInWindowLocked(origin, opts.PreRollDuration)
-		preRollCount, earliestPreRoll, err := m.flushPreRoll(dir, origin, opts.PreRollDuration)
+		preRollCount, earliestPreRoll, err := m.flushPreRoll(dir, key, origin, opts.PreRollDuration)
 		if err == nil {
 			n, earliest, e := m.flushStreamPreRoll(dir, origin, opts.PreRollDuration)
 			err = e
@@ -1128,17 +1133,33 @@ func (m *Manager) EndDownload(id string) {
 // RecordApplication validates and stamps an entitled application's record.
 // It returns buffered or recorded; protocol-level validation happens before it.
 func (m *Manager) RecordApplication(appID string, record ApplicationRecord) (string, error) {
-	return m.recordApplication(appID, record, true)
+	return m.recordApplication(appID, record, true, nil)
 }
 
 // RecordCampaignApplication uses the same journal and timestamping as app
 // records, but the agent evaluates its campaign trigger synchronously against
 // the current revision rather than broadcasting it to every campaign.
 func (m *Manager) RecordCampaignApplication(appID string, record ApplicationRecord) (string, error) {
-	return m.recordApplication(appID, record, false)
+	return m.recordApplication(appID, record, false, nil)
 }
 
-func (m *Manager) recordApplication(appID string, record ApplicationRecord, observe bool) (string, error) {
+// RecordApplicationFor records an inference document's record into the
+// episodes of the named collections only: open ones now, later ones through
+// the pre-roll ring (spec §7.3). An empty audience keeps a prediction out of
+// the store entirely; an event still reaches the device-event journal and,
+// with observe, the trigger observer. The audience map must not change after
+// the call.
+func (m *Manager) RecordApplicationFor(appID string, record ApplicationRecord, audience map[string]bool, observe bool) (string, error) {
+	if audience == nil {
+		audience = map[string]bool{}
+	}
+	if len(audience) == 0 && record.Type != "event" {
+		return "buffered", nil
+	}
+	return m.recordApplication(appID, record, observe, audience)
+}
+
+func (m *Manager) recordApplication(appID string, record ApplicationRecord, observe bool, audience map[string]bool) (string, error) {
 	// The receipt is sampled BEFORE m.mu is taken. It is the agent's statement
 	// of when this record arrived, so any wait for the lock belongs outside it:
 	// stamped after the wait, a record that queued behind a seal or another
@@ -1184,6 +1205,9 @@ func (m *Manager) recordApplication(appID string, record ApplicationRecord, obse
 		if !a.capturesApplications {
 			continue
 		}
+		if audience != nil && !audience[a.key] {
+			continue
+		}
 		stored.EpisodeNanos = stamp - a.manifest.RequestBootNanos
 		b, _ := json.Marshal(stored)
 		if err := appendJSONL(filepath.Join(a.dir, "events.jsonl"), b); err != nil {
@@ -1201,15 +1225,19 @@ func (m *Manager) recordApplication(appID string, record ApplicationRecord, obse
 	// The pre-roll ring buffer is maintained continuously so an episode that
 	// starts later still receives its full pre-trigger window, even when
 	// another campaign's episode was recording at the time.
-	stored.EpisodeNanos = 0
-	b, err := json.Marshal(stored)
-	if err != nil {
-		m.mu.Unlock()
-		return "rejected", err
+	// A record with an empty audience can reach no later episode, so it does
+	// not take ring space from records that can.
+	if audience == nil || len(audience) > 0 {
+		stored.EpisodeNanos = 0
+		b, err := json.Marshal(stored)
+		if err != nil {
+			m.mu.Unlock()
+			return "rejected", err
+		}
+		m.preRoll = append(m.preRoll, bufferedRecord{bootNanos: stamp, receiptNanos: receipt, encoded: b, audience: audience})
+		m.preRollBytes += len(b)
+		m.evictPreRoll(receipt)
 	}
-	m.preRoll = append(m.preRoll, bufferedRecord{bootNanos: stamp, receiptNanos: receipt, encoded: b})
-	m.preRollBytes += len(b)
-	m.evictPreRoll(receipt)
 	observer := m.appObserver
 	m.mu.Unlock()
 	if observer != nil && observe {
@@ -1290,7 +1318,7 @@ func (m *Manager) preRollLostInWindowLocked(origin int64, requested time.Duratio
 // call, so the intermediate syncs bought no durability that the final one does
 // not: they only forced up to preRollLimit worth of separate disk barriers
 // onto the start path, with m.mu held, before the first frame was captured.
-func (m *Manager) flushPreRoll(dir string, origin int64, requested time.Duration) (uint64, *int64, error) {
+func (m *Manager) flushPreRoll(dir, key string, origin int64, requested time.Duration) (uint64, *int64, error) {
 	window := preRollWindow
 	if requested > 0 && requested < window {
 		window = requested
@@ -1306,6 +1334,9 @@ func (m *Manager) flushPreRoll(dir string, origin int64, requested time.Duration
 	}()
 	for _, r := range m.preRoll {
 		if r.receiptNanos < cutoff || r.receiptNanos > origin || r.bootNanos < cutoff || r.bootNanos > origin {
+			continue
+		}
+		if r.audience != nil && !r.audience[key] {
 			continue
 		}
 		var stored storedApplicationRecord

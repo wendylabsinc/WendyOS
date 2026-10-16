@@ -541,9 +541,8 @@ func (c Campaign) validate() error {
 		}
 
 		if c.Notify.Webhook != "" {
-			endpoint, err := url.Parse(c.Notify.Webhook)
-			if err != nil || (endpoint.Scheme != "https" && endpoint.Scheme != "http") || endpoint.Hostname() == "" || endpoint.User != nil || endpoint.Fragment != "" || len(c.Notify.Webhook) > 2048 {
-				return errors.New("notify.webhook must be an absolute HTTP(S) URL without userinfo or fragment, at most 2048 bytes")
+			if err := validateWebhookURL("notify.webhook", c.Notify.Webhook); err != nil {
+				return err
 			}
 		}
 	} else if c.Notify != nil && c.Notify.Webhook != "" {
@@ -1432,4 +1431,15 @@ func compareThreshold(value float64, operator string, threshold float64) bool {
 	default:
 		return false
 	}
+}
+
+// validateWebhookURL is the rule every notification webhook follows: an
+// absolute http or https URL with a host, no userinfo or fragment, at most
+// 2048 bytes. field names the setting in the error.
+func validateWebhookURL(field, raw string) error {
+	endpoint, err := url.Parse(raw)
+	if err != nil || (endpoint.Scheme != "https" && endpoint.Scheme != "http") || endpoint.Hostname() == "" || endpoint.User != nil || endpoint.Fragment != "" || len(raw) > 2048 {
+		return fmt.Errorf("%s must be an absolute HTTP(S) URL without userinfo or fragment, at most 2048 bytes", field)
+	}
+	return nil
 }

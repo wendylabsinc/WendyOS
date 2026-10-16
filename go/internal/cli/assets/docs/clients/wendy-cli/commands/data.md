@@ -147,6 +147,50 @@ using a matching operator session. Registration failures stop deployment.
 skip registration automatically. Existing app metadata and notification grants
 are preserved. An owner or admin must enable notifications separately.
 
+## Data documents
+
+A data document is one YAML file with one purpose. Every document starts
+with the same header:
+
+```yaml
+kind: watch          # collection, inference or watch; no kind means collection
+version: 1
+name: front-door
+owner: watch/chat-3fa91c0e-1   # optional
+```
+
+- A **collection** is a campaign: everything in the campaign reference below.
+  A campaign file with no `kind` is a collection.
+- An **inference** runs a detector on cameras and emits an event when
+  something it looks for arrives. Its model fields are a campaign's
+  `inference` block; it adds `sources` (cameras only), and its `event`
+  defaults to its name.
+- A **watch** delivers one inference's arrivals as notifications: always to
+  the device's notification journal, and to Wendy Cloud (`- cloud`) or a
+  webhook (`- webhook: <url>`) when listed. A watch with `lease` (15s to 10m)
+  is removed, with what it owns, when its client stops renewing it, and at
+  agent restart.
+
+`owner` names another document as `<kind>/<name>`; removing the owner removes
+what it owns. The owner must exist first, and cannot itself have an owner.
+
+To keep what an inference sees, apply a collection whose
+`capture.triggers` include the inference's event. An inference's records
+reach only collections that trigger on its event. A watch stores nothing.
+
+| Command | Description |
+|---|---|
+| `wendy data apply [file.yaml]` | Validate and apply any data document. Without a path, offers the documents in the current directory. |
+| `wendy data documents [<kind>[/<name>]]` | List documents with state, owner and lease expiry, or inspect one. |
+| `wendy data remove <kind>/<name>` | Remove an inference or watch and what it owns. Collections cannot be removed yet. |
+
+A watch's state is `waiting` (its inference is missing or starting),
+`active` or `error`. Applying a watch with `cloud` registers the Cloud app
+`watch:<name>`; an owner or admin enables its notifications in Cloud.
+Applying inference or watch documents needs an agent with data document
+support; `wendy device update` brings one. Complete examples are in
+`Examples/WendyDataWatch`.
+
 ## Campaign YAML reference
 
 A campaign file contains exactly one YAML document. Unknown fields are
@@ -360,6 +404,9 @@ stays the total. They appear in the device's notification journal and in
 webhook bodies; Wendy Cloud notifications do not carry them yet. A
 `notify.on: event` rule naming the inference's own event carries them too. It
 never carries boxes or images. Readers that predate the field ignore it.
+
+A watch's journal entries carry `watch` and `inference` instead of
+`campaign`. Entries of a leased watch reach only readers that name the watch.
 
 Unknown keys inside `notify` are rejected for `event` and `detection`.
 For `episode_committed`, they warn at deployment and are ignored.

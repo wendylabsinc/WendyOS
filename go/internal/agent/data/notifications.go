@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -24,9 +25,15 @@ type NotificationDetection struct {
 // prediction or a claim that an external notification receiver accepted it.
 // The occurrence UUID and time survive delivery retries and gateway restarts.
 type CampaignNotification struct {
-	ID         string `json:"id"`
-	Event      string `json:"event"`
-	Campaign   string `json:"campaign"`
+	ID       string `json:"id"`
+	Event    string `json:"event"`
+	Campaign string `json:"campaign,omitempty"`
+	// Watch and Inference name the watch that delivered the entry and the
+	// inference document behind it. Leased marks a leased watch's entry, which
+	// only readers naming the watch receive (spec §6.5).
+	Watch      string `json:"watch,omitempty"`
+	Inference  string `json:"inference,omitempty"`
+	Leased     bool   `json:"leased,omitempty"`
 	SourceID   string `json:"source_id"`
 	Model      string `json:"model"`
 	Revision   string `json:"model_revision"`
@@ -64,7 +71,7 @@ func (m *Manager) readNotificationJournal() (notificationJournal, error) {
 // or a direct webhook is contacted. It is independent of the raw event journal,
 // so existing Events readers neither see duplicates nor change their cursors.
 func (m *Manager) RecordNotification(notification CampaignNotification) error {
-	if _, err := uuid.Parse(notification.ID); err != nil || notification.Campaign == "" || notification.Event == "" {
+	if _, err := uuid.Parse(notification.ID); err != nil || notification.Campaign == "" && notification.Watch == "" || notification.Event == "" {
 		return fmt.Errorf("invalid notification identity")
 	}
 	if _, err := time.Parse(time.RFC3339Nano, notification.OccurredAt); err != nil {
@@ -111,8 +118,17 @@ func (m *Manager) RecordNotification(notification CampaignNotification) error {
 }
 
 // Notifications has the same explicit gap/replay semantics as DeviceEvents.
-// appID selects the campaign's managed app identity, sh.wendy.campaign.NAME.
+// appID selects a campaign's or a watch's managed app identity,
+// sh.wendy.campaign.NAME or sh.wendy.watch.NAME. Leased watches' entries are
+// left out; see NotificationsFor.
 func (m *Manager) Notifications(appID, event, cursor string, replay bool) ([]CampaignNotification, string, bool, error) {
+	return m.NotificationsFor(appID, event, cursor, replay, nil)
+}
+
+// NotificationsFor is Notifications for a reader that names watches. With
+// watches set it returns only those watches' entries, leased or not; without,
+// it returns every entry except leased watches'.
+func (m *Manager) NotificationsFor(appID, event, cursor string, replay bool, watches []string) ([]CampaignNotification, string, bool, error) {
 	m.eventMu.Lock()
 	defer m.eventMu.Unlock()
 	journal, err := m.readNotificationJournal()
@@ -145,9 +161,22 @@ func (m *Manager) Notifications(appID, event, cursor string, replay bool) ([]Cam
 		gap = true
 	}
 	for _, notification := range journal.Notifications {
-		if notification.Sequence > after && (appID == "" || appID == "sh.wendy.campaign."+notification.Campaign) && (event == "" || event == notification.Event) {
+		if notification.Sequence > after && notificationMatches(notification, appID, event, watches) {
 			out = append(out, notification)
 		}
 	}
 	return out, tail, gap, nil
+}
+
+func notificationMatches(n CampaignNotification, appID, event string, watches []string) bool {
+	if event != "" && event != n.Event {
+		return false
+	}
+	if appID != "" && !(n.Campaign != "" && appID == "sh.wendy.campaign."+n.Campaign) && !(n.Watch != "" && appID == "sh.wendy.watch."+n.Watch) {
+		return false
+	}
+	if len(watches) > 0 {
+		return n.Watch != "" && slices.Contains(watches, n.Watch)
+	}
+	return !n.Leased
 }
