@@ -1,0 +1,29 @@
+name: SO-101 reader
+on:
+  pull_request:
+    paths:
+      - 'Examples/SO101Reader/**'
+      - '.github/workflows/so101-reader.yml'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  reader:
+    name: Read-only reader on ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+      - name: Install ownership preflight tool
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y lsof
+      - name: Protocol, serial ownership, lifecycle and HTTP tests (PTYs only)
+        working-directory: Examples/SO101Reader
+        run: python3 -m unittest -v test_reader
