@@ -3,18 +3,28 @@ package vm
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"os"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 )
 
+// testSerialPort is a valid port name on the host running the tests.
+func testSerialPort(n int) string {
+	if runtime.GOOS == "windows" {
+		return fmt.Sprintf("COM%d", n)
+	}
+	return fmt.Sprintf("/dev/ttyACM%d", n)
+}
+
 func TestSerialPersistence(t *testing.T) {
 	s := newTestStore(t)
 	createTestVM(t, s, "serial", Meta{})
-	c := SerialConfig{Port: "COM12", Baud: 1000000}
+	c := SerialConfig{Port: testSerialPort(12), Baud: 1000000}
 	if err := s.ConfigureSerial("serial", &c); err != nil {
 		t.Fatal(err)
 	}
@@ -37,7 +47,7 @@ func TestSerialPersistence(t *testing.T) {
 	if got, err := s.ReadSerial("serial"); got != nil || err != nil {
 		t.Fatalf("clear: %v %v", got, err)
 	}
-	if err := os.WriteFile(s.serialPath("serial"), []byte(`{"port":"COM12","baud":0}`), 0600); err != nil {
+	if err := os.WriteFile(s.serialPath("serial"), []byte(fmt.Sprintf(`{"port":%q,"baud":0}`, testSerialPort(12))), 0600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.ReadSerial("serial"); err == nil {
@@ -48,9 +58,24 @@ func TestSerialPersistence(t *testing.T) {
 	}
 }
 func TestSerialValidation(t *testing.T) {
-	for _, c := range []SerialConfig{{"COM0", 1}, {"COM1,server=on", 1}, {"/dev/ttyUSB0", 1}, {"COM1", 0}} {
+	invalid := []SerialConfig{{testSerialPort(1), 0}}
+	valid := []SerialConfig{{testSerialPort(1), 1000000}}
+	if runtime.GOOS == "windows" {
+		invalid = append(invalid, SerialConfig{"COM0", 1}, SerialConfig{"COM1,server=on", 1}, SerialConfig{"/dev/ttyUSB0", 1})
+	} else {
+		invalid = append(invalid, SerialConfig{"COM3", 1}, SerialConfig{"ttyUSB0", 1}, SerialConfig{"", 1},
+			SerialConfig{"/dev/../etc/passwd", 1}, SerialConfig{"/dev/ttyUSB0/", 1}, SerialConfig{"/dev/", 1})
+		valid = append(valid, SerialConfig{"/dev/serial/by-id/usb-1a86_USB_Single_Serial_5C4C127597-if00", 1000000},
+			SerialConfig{"/dev/cu.usbmodem5C4C1275971", 1000000})
+	}
+	for _, c := range invalid {
 		if c.Validate() == nil {
 			t.Fatalf("accepted %v", c)
+		}
+	}
+	for _, c := range valid {
+		if err := c.Validate(); err != nil {
+			t.Fatalf("rejected %v: %v", c, err)
 		}
 	}
 }
@@ -64,7 +89,7 @@ func fakeSerial(t *testing.T) net.Conn {
 }
 func TestSerialBridgeBinaryAndCleanup(t *testing.T) {
 	peer := fakeSerial(t)
-	bridge, err := startSerialBridge(SerialConfig{"COM12", 1000000})
+	bridge, err := startSerialBridge(SerialConfig{testSerialPort(12), 1000000})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,7 +126,7 @@ func TestSerialBridgeBinaryAndCleanup(t *testing.T) {
 	peer.Close()
 	select {
 	case err := <-bridge.done:
-		if !strings.Contains(err.Error(), "COM12") {
+		if !strings.Contains(err.Error(), testSerialPort(12)) {
 			t.Fatal(err)
 		}
 	case <-time.After(3 * time.Second):
@@ -115,7 +140,7 @@ func TestSerialBridgeBinaryAndCleanup(t *testing.T) {
 }
 func TestSerialBridgeCloseBeforeConnection(t *testing.T) {
 	peer := fakeSerial(t)
-	bridge, err := startSerialBridge(SerialConfig{"COM9", 115200})
+	bridge, err := startSerialBridge(SerialConfig{testSerialPort(9), 115200})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,7 +154,7 @@ func TestSerialBridgeOpenFailure(t *testing.T) {
 	defer func() { openVMSerial = saved }()
 	want := errors.New("busy COM port")
 	openVMSerial = func(SerialConfig) (io.ReadWriteCloser, error) { return nil, want }
-	if _, err := startSerialBridge(SerialConfig{"COM9", 1}); !errors.Is(err, want) {
+	if _, err := startSerialBridge(SerialConfig{testSerialPort(9), 1}); !errors.Is(err, want) {
 		t.Fatal(err)
 	}
 }
@@ -141,12 +166,12 @@ func TestSerialBridgeDifferentPorts(t *testing.T) {
 		t.Cleanup(func() { b.Close() })
 		return a, nil
 	}
-	a, err := startSerialBridge(SerialConfig{"COM9", 1})
+	a, err := startSerialBridge(SerialConfig{testSerialPort(9), 1})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer a.Close()
-	b, err := startSerialBridge(SerialConfig{"COM10", 1})
+	b, err := startSerialBridge(SerialConfig{testSerialPort(10), 1})
 	if err != nil {
 		t.Fatal(err)
 	}

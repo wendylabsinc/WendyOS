@@ -8,25 +8,25 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"regexp"
 	"sync"
 )
 
 // SerialConfig fixes the physical host line at this baud, 8N1, no handshake,
 // DTR and RTS disabled. Guest termios changes do not reconfigure the host.
+// Port is a host name for the device: COM12 on Windows, a /dev path on macOS
+// and Linux. The mapping lives with the VM on one host, so only that host's
+// form is valid.
 type SerialConfig struct {
 	Port string `json:"port"`
 	Baud uint32 `json:"baud"`
 }
 
-var serialPortName = regexp.MustCompile(`^COM[1-9][0-9]*$`)
-
 func (c SerialConfig) Validate() error {
-	if !serialPortName.MatchString(c.Port) {
-		return fmt.Errorf("invalid Windows serial port %q: use COM followed by its number", c.Port)
+	if err := validateHostSerialPort(c.Port); err != nil {
+		return err
 	}
 	if c.Baud == 0 {
-		return errors.New("serial baud must be an exact positive integer supported by the Windows driver")
+		return errors.New("serial baud must be an exact positive integer supported by the host driver")
 	}
 	return nil
 }
@@ -195,7 +195,7 @@ func (b *serialBridge) report(c SerialConfig, err error) {
 	if err == nil {
 		err = io.EOF
 	}
-	b.done <- fmt.Errorf("VM serial %s at %d baud disconnected or forwarding failed: %w; check the cable and Windows driver, then restart the VM", c.Port, c.Baud, err)
+	b.done <- fmt.Errorf("VM serial %s at %d baud disconnected or forwarding failed: %w; check the cable and the host driver, then restart the VM", c.Port, c.Baud, err)
 }
 func (b *serialBridge) shutdown() {
 	b.once.Do(func() {
