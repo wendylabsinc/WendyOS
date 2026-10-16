@@ -379,79 +379,18 @@ The device uses its in-house wendyos-update engine to apply the update.`,
 				}
 			}
 
-			// If a local path is provided, resolve and serve it.
+			opts := osUpdateArtifactOptions{
+				url: artifactURL, targetVersion: targetVersion, driversDir: driversDir,
+				pr: prNumber, noDrivers: noDrivers,
+			}
 			if len(args) > 0 {
-				localPath, err := resolveArtifactPath(args[0])
-				if err != nil {
-					return err
-				}
-
-				// Determine the local IP reachable by the device.
-				localIP, err := localIPForHost(ctx, conn.Host)
-				if err != nil {
-					return fmt.Errorf("determining local IP for device %s: %w", conn.Host, err)
-				}
-
-				servedURL, cleanup, err := serveLocalArtifact(localPath, localIP)
-				if err != nil {
-					return err
-				}
-				defer cleanup()
-				artifactURL = servedURL
-				fmt.Printf("Serving artifact at: %s\n", artifactURL)
-				// A device on loopback has a port forward between us and it, so it
-				// has no WiFi to report yet is not offline: it reaches the internet
-				// through the host's NAT and can fetch the artifact itself.
-			} else if artifactURL != "" && !isLoopbackHost(conn.Host) && !deviceHasWiFi(ctx, conn) {
-				// Device has no WiFi connection — it cannot reach GCP directly.
-				// Download the artifact on the Mac and serve it over a local HTTP
-				// server so the device can fetch it from the Mac instead.
-				fmt.Println("Device is not connected to WiFi — downloading artifact to serve locally...")
-				localPath, err := downloadArtifactToTemp(artifactURL)
-				if err != nil {
-					return fmt.Errorf("downloading artifact: %w", err)
-				}
-
-				localIP, err := localIPForHost(ctx, conn.Host)
-				if err != nil {
-					return fmt.Errorf("determining local IP for device %s: %w", conn.Host, err)
-				}
-
-				servedURL, cleanup, err := serveLocalArtifact(localPath, localIP)
-				if err != nil {
-					return err
-				}
-				defer cleanup()
-				artifactURL = servedURL
-				fmt.Printf("Serving artifact at: %s\n", artifactURL)
+				opts.path = args[0]
 			}
-
-			if artifactURL == "" {
-				return fmt.Errorf("provide a local artifact path or --artifact-url")
-			}
-
-			// Refuse a doomed update before anything streams: a .wendy artifact
-			// cannot be installed by a device whose image predates the
-			// wendyos-update stack.
-			if err := osUpdateStackMismatch(versionResp, artifactURL); err != nil {
+			artifactURL, cleanup, err := prepareOSUpdateArtifact(ctx, conn, versionResp, opts)
+			if err != nil {
 				return err
 			}
-
-			if driversDir != "" {
-				if err := checkDriversDir(conn, driversDir); err != nil {
-					return err
-				}
-			}
-
-			// Last point before anything transfers. Staging a rebuild that fails is
-			// the case where the device loses a driver it has today, so the operator
-			// decides rather than finding out after the reboot.
-			pf := warnDriverAddonsBeforeUpdate(ctx, conn, versionResp.GetDeviceType(), targetVersion, driversDir, prNumber, !noDrivers)
-			if !noDrivers && pf.blocking() {
-				if err := confirmDriverPreflight(pf); err != nil {
-					return err
-				}
-			}
+			defer cleanup()
 
 			recordCleared, err := applyOSUpdate(ctx, conn, artifactURL)
 			if err != nil {
