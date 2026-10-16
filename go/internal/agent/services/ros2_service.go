@@ -704,6 +704,11 @@ func (s *ROS2Service) EchoTopic(req *agentpbv2.EchoROS2TopicRequest, stream grpc
 	// no error: silent truncation on exactly the topics echo exists to inspect.
 	scanErr := scanner.Err()
 	execErr := drainAndWait()
+	if ctx.Err() == context.DeadlineExceeded {
+		// A propagated RPC deadline can expire before the client's local timer.
+		// Preserve its reason instead of returning a successful end-of-stream.
+		return status.FromContextError(ctx.Err()).Err()
+	}
 	if ctx.Err() != nil {
 		return nil // client cancelled; not an error
 	}
@@ -779,6 +784,9 @@ func (s *ROS2Service) MonitorHz(req *agentpbv2.MonitorROS2HzRequest, stream grpc
 	}
 	scanErr := scanner.Err()
 	execErr := drainAndWait()
+	if ctx.Err() == context.DeadlineExceeded {
+		return status.FromContextError(ctx.Err()).Err()
+	}
 	if ctx.Err() != nil {
 		return nil
 	}

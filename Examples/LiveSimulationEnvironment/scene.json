@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "profile": "go2",
+  "geoms": [
+    {
+      "name": "crate",
+      "type": "box",
+      "size": [0.4, 0.5, 0.4],
+      "position": [3, -2, 0.4],
+      "rgba": [0.3, 0.6, 0.8, 1]
+    },
+    {
+      "name": "ramp",
+      "type": "mesh",
+      "mesh": "assets/ramp.obj",
+      "size": [1, 1, 1],
+      "position": [-3, 2, 0],
+      "rgba": [0.75, 0.55, 0.3, 1]
+    }
+  ]
+}

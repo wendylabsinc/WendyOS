@@ -1,0 +1,147 @@
+---
+title: Live simulation projects
+description: Edit local environment files and refresh a managed Go2 or G1 sandbox
+---
+
+A live simulation project is a local `scene.json` and its referenced OBJ assets.
+Your folder is the source of truth. Wendy watches stable file snapshots, validates
+them in the VM's pinned MuJoCo runtime, and replaces the scene at the existing
+browser URL. Your editor and an external coding agent use exactly the same files;
+there is no AI service, ZIP upload, or generated code execution.
+
+This first version adds static collision and visual geometry to Wendy's managed
+indoor Go2/G1 world. The robot, walking policy, joints, sensor mounts, ROS/Unitree
+interfaces, floor, room walls, and built-in movable obstacle stay managed. Other
+robots, controllers, dynamic bodies, MJCF imports, materials/textures, and other
+physics engines are unsupported and rejected.
+
+## Connect a folder once
+
+Use a CLI containing live-project support. Existing VMs pin their runtime source;
+upgrading the CLI alone does not upgrade a VM. For an existing disposable simulator,
+explicitly run `wendy vm robot update my-go2` to apply the new runtime (this resets
+its world). Create a separate simulator if an existing world must be preserved.
+
+```sh
+wendy vm create my-go2 --profile go2 --yes
+wendy vm robot start my-go2
+wendy vm robot project init ./my-environment --vm my-go2
+wendy vm robot project watch ./my-environment
+wendy vm robot open my-go2
+```
+
+For G1, create with `--profile g1`. To use your own existing folder, or a copy of
+`Examples/LiveSimulationEnvironment`, use `project link` instead of `project init`:
+
+```sh
+wendy vm robot project link ./my-environment --vm my-go2
+wendy vm robot project sync ./my-environment
+wendy vm robot project watch ./my-environment
+```
+
+`init` requires a new folder; `link` requires an existing scene. Both require
+an explicit, running Go2/G1 VM with the matching runtime. They write local binding
+metadata in `.wendy-simulation.json`. Keep this file local and ignore it in Git;
+share `scene.json` and `assets/` instead. No command falls back to a default device,
+boots a stopped VM, updates its runtime, or deploys to physical hardware.
+
+`link` records the binding; `sync` or `watch` applies it. Watch runs in the foreground.
+Ctrl+C disconnects the watcher without stopping the VM. An update already sent
+may finish; the last accepted scene stays loaded.
+Run watch again to reconnect. A VM accepts one project identity at a time. To switch
+folders, stop the old watcher, explicitly restart the managed runtime with
+`wendy vm robot restart my-go2`, and link/watch the new folder.
+
+## Scene format
+
+```json
+{
+  "version": 1,
+  "profile": "go2",
+  "geoms": [
+    {
+      "name": "crate",
+      "type": "box",
+      "size": [0.4, 0.5, 0.4],
+      "position": [3, -2, 0.4],
+      "quaternion": [1, 0, 0, 0],
+      "rgba": [0.3, 0.6, 0.8, 1]
+    }
+  ]
+}
+```
+
+Coordinates are metres, Z up. Quaternion order is **wxyz**, must be unit length,
+and defaults to `[1,0,0,0]`. RGBA defaults to `[0.6,0.7,0.8,1]`; components are
+between zero and one with positive alpha. Unique names start with a letter and
+contain at most 48 letters, digits, or underscores. All numbers must be finite.
+Only the fields shown above, and `mesh` for mesh geoms, are supported.
+
+| Type | Size |
+| --- | --- |
+| `box` | Three half extents |
+| `sphere` | Radius |
+| `ellipsoid` | Three radii |
+| `cylinder` | Radius, half height |
+| `capsule` | Radius, half cylindrical length |
+| `mesh` | Three positive scale factors; also specify `"mesh": "assets/ramp.obj"` |
+
+Sizes/scales are positive and at most 4. Position components are bounded by 20m.
+Keep surfaces inside the managed room (walls at ±6m). The compiled bounding sphere
+of each added surface must stay outside a 1.2m horizontal spawn clearance around
+the robot. This conservative rule also applies to rotated meshes and ramps.
+Meshes use MuJoCo's convex collision representation; concave structures should be
+assembled from separate convex surfaces. The browser displays compiled mesh geometry.
+
+Only UTF-8 OBJ `v x y z` and triangular `f a b c` records are accepted, plus comments.
+Face indices must be positive and refer to already declared vertices. No `mtllib`,
+texture coordinates, normals, external files, or executable plugins are loaded.
+Each mesh supports at most 4096 vertices and 8192 triangles; vertex coordinates
+are bounded by ±4m before scaling. Use a closed, three-dimensional mesh.
+
+Limits: 64 added surfaces, eight referenced assets, 2 MiB per file, 8 MiB total,
+and a 16 MiB compiled browser scene. Asset paths must be relative `assets/*.obj`
+paths without traversal or symlinks. Nested asset directories are allowed. Wendy
+reads only `scene.json` and referenced assets; unrelated project files are ignored.
+
+## Resets and transient controls
+
+Every accepted **file-content change**, including JSON reformatting, compiles a
+fresh model and resets simulation time, robot pose, policy history, velocities,
+and obstacle state. It revokes browser/ROS control grants and leaves physics
+**paused**. Resume in the browser, then rearm/restart the controlling publisher as
+required by its interface. The browser automatically fetches new geometry and
+poses at the same URL. An unchanged snapshot does not reset or pause the world.
+Ordinary browser Reset keeps the accepted project geometry and uses the runtime's
+normal reset behavior.
+
+The browser's movable-obstacle control changes runtime state only. It never writes
+your local files. A reset or accepted project edit restores that obstacle's default
+position. To save an environment change, edit the project files.
+
+## Errors and recovery
+
+Watch polls every 350ms and requires two identical snapshots before upload. It
+coalesces rapid saves and sends one transaction at a time. A full model rebuild
+can take tens of seconds on an emulated VM; requests allow up to three minutes. Save files atomically
+where possible. Partial JSON, missing assets, malformed meshes, incompatible
+fields, spawn overlaps, or failed compilation leave the previous simulation and
+its control state intact. Errors appear in the CLI and browser's project status;
+fix the files and watch applies the next valid snapshot automatically. An unchanged
+rejected revision is not repeatedly compiled. To retry it after an external problem
+is fixed, restart watch or run sync.
+
+Watch retries lost VM connections at five-second intervals and resolves the live
+port and full VM/runtime identity again. It never redirects requests or repairs
+VM lifecycle/forwarding. The browser marks a watcher as disconnected after 15s
+without a heartbeat. Start/reconnect the intended VM explicitly if needed. Failed
+HTTP acknowledgments are reconciled against the accepted content revision, so
+retries do not reset an already applied snapshot twice. A conflicting revision
+from another active watcher stops this watcher instead of silently replacing it.
+
+The runtime keeps its last accepted compiled scene in memory, not as an independent
+editable project. A runtime restart/update restores the managed default world;
+watch reapplies the local folder after reconnecting. Keep watch running, or run
+sync afterward. Invalid edits never replace the last working scene within a running
+runtime. Runtime physics/renderer/ROS faults remain separate from project errors;
+recover those with the existing reset/restart commands before applying changes.

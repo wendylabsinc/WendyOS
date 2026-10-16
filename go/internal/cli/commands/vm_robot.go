@@ -724,6 +724,7 @@ func newVMRobotCmd() *cobra.Command {
 	}
 	configure.Flags().String("profile", vm.RobotKindGo2, "Robot profile: go2, g1 or rosmaster-r2")
 	cmd.AddCommand(configure)
+	cmd.AddCommand(newVMRobotProjectCmd())
 	for _, action := range []string{"status", "open", "reset", "start", "restart", "update"} {
 		cmd.AddCommand(&cobra.Command{
 			Use: action + " <name>", Short: map[string]string{
