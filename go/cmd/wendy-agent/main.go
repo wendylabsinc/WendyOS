@@ -34,6 +34,7 @@ import (
 	agentcontainerd "github.com/wendylabsinc/wendy/go/internal/agent/containerd"
 	agentdata "github.com/wendylabsinc/wendy/go/internal/agent/data"
 	"github.com/wendylabsinc/wendy/go/internal/agent/dbusproxy"
+	"github.com/wendylabsinc/wendy/go/internal/agent/framesource"
 	"github.com/wendylabsinc/wendy/go/internal/agent/hardware"
 	"github.com/wendylabsinc/wendy/go/internal/agent/hostexec"
 	"github.com/wendylabsinc/wendy/go/internal/agent/hostnetwork"
@@ -381,6 +382,16 @@ func main() {
 
 	startROS2BatteryMonitor(ctx, logger, configPath, discoveryPool)
 
+	// Calibrated frames are the other thing this device can publish from a
+	// camera: colour plus depth aligned to it, with the scale and intrinsics
+	// that make both measurable. It is a separate service, not a mode of
+	// StreamVideo, because a measurement is not a picture. The RealSense
+	// source is native — calibration over UVC controls, Z16 via the agent's
+	// own capture loop, colour borrowed from the shared camera hub — so there
+	// is nothing to install beyond this binary.
+	calibratedFrameSvc := services.NewCalibratedFrameService(ctx, logger,
+		framesource.NewRegistry(services.NewRealSenseProvider(logger, videoSvc, "")))
+	defer calibratedFrameSvc.Shutdown()
 	// Network cameras have to be found before they can be listed, so probe
 	// periodically rather than only when a client asks.
 	videoSvc.StartDiscovery()
@@ -731,6 +742,7 @@ func main() {
 		agentpbv2.RegisterWendyMeshServiceServer(srv, meshSvc)
 		agentpbv2.RegisterWendyBuildServiceServer(srv, buildSvc)
 		agentpbv2.RegisterWendySensorPairingServiceServer(srv, sensorSvc)
+		agentpbv2.RegisterWendyCalibratedFrameServiceServer(srv, calibratedFrameSvc)
 		if ros2Svc != nil {
 			agentpbv2.RegisterROS2ServiceServer(srv, ros2Svc)
 		}
