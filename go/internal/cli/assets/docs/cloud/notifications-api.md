@@ -5,7 +5,8 @@ operator-facing Wendy Notifications in a Wendy Cloud organization.
 
 ## Proto package
 
-`wendycloud.v1` — defined in `Proto/cloud/notifications.proto`.
+`wendycloud.v1` is defined in `Proto/cloud/notifications.proto`; the UUID-native
+Cloud v2 service is defined in `Proto/wendycloud/v2/notifications.proto`.
 
 ## App-facing API (`wendy.system.v1`)
 
@@ -20,6 +21,11 @@ Swift-only. Apps written in other languages call this gRPC service directly.
 See [Send notifications from a device app](/docs/guides/device-notifications)
 for entitlement and Cloud grant setup, Swift and direct gRPC examples, and
 delivery behavior.
+
+On Cloud v2, `wendy run`, Compose, and remote build-host deployments register
+each app ID in the organization's Cloud Apps catalog before deployment. Pass
+`--skip-cloud-registration` only when Cloud is intentionally unavailable. An
+unregistered app cannot receive the Cloud Notification grant.
 
 The private socket binds every call to trusted app identity. The request cannot
 supply an app ID, device ID, or organization ID; the agent adds app identity and
@@ -38,13 +44,15 @@ spelling—returns `ALREADY_EXISTS`; the prior success is never replayed.
 
 Local validation and rate-limit failures happen before forwarding and do not
 claim the UUID. After correcting the request or waiting for the local rate limit,
-the caller may retry with the same `notification_id`.
+the caller may retry with the same `notification_id`. These rate-limit and
+idempotency semantics are the same on the ACME Cloud v2 and legacy Cloud v1
+forwarding paths.
 
 #### `SendRequest`
 
 | Field | Type | Description |
 |---|---|---|
-| `audience` | `NotificationAudience` | Union of the user, organization team, and organization role selectors below. |
+| `audience` | `NotificationAudience` | Union of `user_ids`, numeric `team_ids` (Cloud v1 only), UUID `team_uuids` (Cloud v2 / ACME only), and `roles`. Do not combine the two team-ID namespaces. |
 | `title` | `string` | Notification title. |
 | `body` | `string` | Notification body. |
 | `severity` | `NotificationSeverity` | `INFO`, `WARNING`, `ERROR`, or `CRITICAL`. |
@@ -54,20 +62,23 @@ the caller may retry with the same `notification_id`.
 
 #### `NotificationAudience`
 
-The app-facing and Cloud messages use the same plural selector shape. All three
-fields have union semantics. At most 100 selector entries may be supplied across
-the three lists. Cloud normalizes and deduplicates them, remains authoritative
+The selector fields have union semantics. At most 100 selector entries may be
+supplied across the lists. Cloud normalizes and deduplicates them, remains authoritative
 for recipient resolution, and resolves at most 100 recipients for a device-app
 send.
 
 | Field | Type | Description |
 |---|---|---|
 | `user_ids` | `repeated string` | User IDs to include. |
-| `team_ids` | `repeated int32` | Organization team IDs to include. |
+| `team_ids` | `repeated int32` | Legacy Cloud v1 organization team IDs. |
 | `roles` | `repeated OrganizationRole` | Organization roles to include. |
+| `team_uuids` | `repeated string` | Canonical Cloud v2 organization team UUIDs. |
 
-At least one selector is required. A user selected through more than one field
-receives one Notification.
+Do not set both `team_ids` and `team_uuids`. At least one selector is required.
+A user selected through more than one field
+receives one Notification. `team_uuids` requires an ACME-enrolled Cloud v2
+device; a legacy-enrolled device returns `FAILED_PRECONDITION` and must use
+numeric `team_ids` instead.
 
 #### `SendResponse`
 
@@ -149,7 +160,7 @@ the Wendy agent stamps `app_id` from trusted container state.
 | Field | Type | Description |
 |---|---|---|
 | `organization_id` | `optional int32` | Required for user-authenticated callers; omitted by provisioned devices. |
-| `audience` | `NotificationAudience` | Union of repeated `user_ids`, `team_ids`, and `roles`; see above. |
+| `audience` | `NotificationAudience` | Union of repeated `user_ids`, UUID `team_ids`, and `roles`; see below. |
 | `title` | `string` | Notification title. |
 | `body` | `string` | Notification body. |
 | `severity` | `NotificationSeverity` | `INFO`, `WARNING`, `ERROR`, or `CRITICAL`. |
@@ -157,6 +168,12 @@ the Wendy agent stamps `app_id` from trusted container state.
 | `notification_id` | `string` | Caller-chosen Notification resource UUID v4; Cloud stores and returns canonical lowercase form and rejects every canonical reuse with `ALREADY_EXISTS`. |
 | `metadata` | `optional Struct` | Structured JSON-compatible metadata. |
 | `app_id` | `optional string` | Required for provisioned-device calls and stamped from trusted app identity by the Wendy agent. |
+
+For ACME-enrolled device callers, Cloud v2 `audience.team_ids` is a
+`repeated string` containing the canonical UUIDs supplied to the app-facing
+`team_uuids` field. Legacy numeric `team_ids` are forwarded only through the
+Cloud v1 path. The app-facing Agent API rejects requests that combine numeric
+`team_ids` and UUID `team_uuids`.
 
 #### `CreateNotificationV2Response`
 

@@ -64,7 +64,7 @@ func (s *CampaignCloudSender) Send(ctx context.Context, endpoint string, notific
 		DeepLink:       "wendy://live",
 		NotificationId: notification.ID,
 		Metadata:       metadata,
-	})
+	}, nil)
 	if err != nil {
 		return err
 	}
