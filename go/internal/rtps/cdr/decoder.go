@@ -185,6 +185,29 @@ func (d *Decoder) SkipBytes(align, n int) error {
 	return nil
 }
 
+// Float64 reads an IEEE-754 double. Camera intrinsics are float64, so a decoder
+// that stopped at Float32 could not read a CameraInfo projection matrix.
+func (d *Decoder) Float64() (float64, error) {
+	v, err := d.Uint64()
+	if err != nil {
+		return 0, err
+	}
+	return math.Float64frombits(v), nil
+}
+
+// SkipFloat64Seq skips a length-prefixed sequence of doubles, such as a
+// CameraInfo distortion vector whose length varies by model.
+func (d *Decoder) SkipFloat64Seq() error {
+	n, err := d.Uint32()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return nil
+	}
+	return d.SkipBytes(8, int(n)*8)
+}
+
 // SkipFloat32Seq steps over a sequence<float32>: a uint32 count, then that
 // many 4-byte elements.
 func (d *Decoder) SkipFloat32Seq() error {

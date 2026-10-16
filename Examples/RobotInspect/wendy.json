@@ -1,0 +1,11 @@
+{
+  "appId": "sh.wendy.examples.robotinspect",
+  "platform": "linux",
+  "version": "1.0.0",
+  "entitlements": [
+    { "type": "network", "mode": "host" }
+  ],
+  "services": {
+    "inspect": { "context": "." }
+  }
+}

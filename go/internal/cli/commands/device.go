@@ -112,6 +112,7 @@ func newDeviceCmd() *cobra.Command {
 		newPsCmd(),
 		newDeviceListCmd(),
 		newDevicePushAgentCmd(),
+		newDeviceRobotCmd(),
 	)
 
 	return cmd
