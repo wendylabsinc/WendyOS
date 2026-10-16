@@ -41,10 +41,15 @@ model = helper.make_model(graph, opset_imports=[helper.make_opsetid("", 11)], ir
 
 so = ort.SessionOptions()
 so.log_severity_level = 3
+# A registered CUDA provider does not prove that it executed this graph.
+# Refuse CPU node assignment instead of silently passing a GPU test on CPU.
+so.add_session_config_entry("session.disable_cpu_ep_fallback", "1")
 session = ort.InferenceSession(
     model.SerializeToString(),
     sess_options=so,
-    providers=["CUDAExecutionProvider", "CPUExecutionProvider"],
+    providers=["CUDAExecutionProvider"],
+    # Refuse wrapper retries on CPU during initialization and inference, too.
+    enable_fallback=False,
 )
 
 active = session.get_providers()[0]
