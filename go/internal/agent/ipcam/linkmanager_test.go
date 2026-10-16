@@ -48,6 +48,9 @@ func newManagerHarness(t *testing.T, ifaces []Interface) *managerHarness {
 		poolsSeen: make(map[string]*LeasePool),
 	}
 	m := NewLinkManager(reg, zap.NewNop())
+	m.openPool = func(_ string, seg CameraSegment, _ []Camera) (*LeasePool, error) {
+		return NewLeasePool(seg.PoolBase, seg.PoolSize), nil
+	}
 	m.listInterfaces = func() ([]Interface, error) {
 		h.mu.Lock()
 		defer h.mu.Unlock()
@@ -97,13 +100,148 @@ func newManagerHarness(t *testing.T, ifaces []Interface) *managerHarness {
 		return nil
 	}
 	h.mgr = m
+	for _, iface := range ifaces {
+		m.allowedDHCP[iface.Name] = true
+	}
 	return h
+}
+
+func TestManagerRequiresExplicitDHCPOptIn(t *testing.T) {
+	h := newManagerHarness(t, []Interface{cabledEth("eth0")})
+	allowed := false
+	h.mgr.readAllowlist = func(string) (map[string]bool, error) {
+		if allowed {
+			return map[string]bool{"eth0": true}, nil
+		}
+		return map[string]bool{}, nil
+	}
+	if err := h.mgr.LoadDHCPAllowlist("camera-dhcp-interfaces"); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	h.mgr.scanOnce(ctx)
+	waitFor(t, "eth0 to be passively watched", func() bool { return len(h.watchedLinks()) == 1 })
+	h.feed("eth0", &Packet{Type: Discover, XID: 1})
+	h.advance(unansweredWindow)
+	h.mgr.scanOnce(ctx)
+	if len(h.servedLinks()) != 0 || len(h.addedAddresses()) != 0 {
+		t.Fatal("addressless uplink DHCP traffic started an unconfigured camera server")
+	}
+
+	allowed = true
+	h.mgr.scanOnce(ctx)
+	waitFor(t, "opted-in camera link to be served", func() bool { return len(h.servedLinks()) == 1 })
+	if !h.mgr.isClaimed("eth0") {
+		t.Fatal("opted-in link was not claimed")
+	}
+
+	allowed = false
+	h.mgr.scanOnce(ctx)
+	if h.mgr.isClaimed("eth0") || len(h.removedAddresses()) != 1 {
+		t.Fatal("removing the opt-in did not withdraw the camera server and address")
+	}
+	allowed = true
+	h.feed("eth0", &Packet{Type: Discover, XID: 2})
+	h.advance(unansweredWindow)
+	h.mgr.scanOnce(ctx)
+	waitFor(t, "re-enabled camera link to be served", func() bool { return len(h.servedLinks()) == 2 })
+}
+
+func TestManagerDoesNotRestoreCameraClaimWithoutOptIn(t *testing.T) {
+	h := newManagerHarness(t, []Interface{cabledEth("eth0")})
+	if _, err := h.reg.Upsert(Camera{MAC: "02:00:00:00:00:01", Link: "eth0", Address: "10.98.0.50"}); err != nil {
+		t.Fatal(err)
+	}
+	h.mgr.allowedDHCP = map[string]bool{}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	h.mgr.scanOnce(ctx)
+	waitFor(t, "eth0 to be passively watched", func() bool { return len(h.watchedLinks()) == 1 })
+	h.advance(unansweredWindow)
+	h.mgr.scanOnce(ctx)
+	if h.mgr.isClaimed("eth0") || len(h.addedAddresses()) != 0 {
+		t.Fatal("restored a camera DHCP claim without an explicit opt-in")
+	}
+}
+
+// Revocation must cancel the existing server even when its interface cannot be
+// found or its address cannot be removed. A Linux socket remains bound across
+// interface renames, so forgetting to visit the old name can leave DHCP active.
+func TestManagerRevokesDHCPWithoutInterfaceEnumeration(t *testing.T) {
+	for _, invalid := range []bool{false, true} {
+		allowlist := "removed"
+		if invalid {
+			allowlist = "invalid"
+		}
+		for _, mode := range []string{"normal", "enumeration-error", "renamed", "missing", "cleanup-error"} {
+			t.Run(allowlist+"/"+mode, func(t *testing.T) {
+				h := newManagerHarness(t, []Interface{cabledEth("eth0")})
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				stopped := make(chan struct{})
+				serve := h.mgr.serve
+				h.mgr.serve = func(ctx context.Context, link string, seg CameraSegment, pool *LeasePool, onLease func(net.HardwareAddr, net.IP, string)) error {
+					defer close(stopped)
+					return serve(ctx, link, seg, pool, onLease)
+				}
+				claimEth0(t, h, ctx)
+
+				h.mgr.allowlistPath = "camera-dhcp-interfaces"
+				h.mgr.readAllowlist = func(string) (map[string]bool, error) {
+					if invalid {
+						return nil, errors.New("insecure allowlist")
+					}
+					return map[string]bool{}, nil
+				}
+				switch mode {
+				case "enumeration-error":
+					h.mgr.listInterfaces = func() ([]Interface, error) {
+						return nil, errors.New("interface enumeration failed")
+					}
+				case "renamed":
+					h.mu.Lock()
+					h.ifaces[0].Name = "renamed0"
+					h.mu.Unlock()
+				case "missing":
+					h.mu.Lock()
+					h.ifaces = nil
+					h.mu.Unlock()
+				}
+				cleanupAttempted := false
+				delAddress := h.mgr.delAddress
+				h.mgr.delAddress = func(link, cidr string) error {
+					cleanupAttempted = true
+					if mode == "cleanup-error" {
+						return errors.New("address removal failed")
+					}
+					return delAddress(link, cidr)
+				}
+
+				h.mgr.scanOnce(ctx)
+				if h.mgr.isClaimed("eth0") {
+					t.Fatal("revoked camera DHCP claim remains active")
+				}
+				if !cleanupAttempted {
+					t.Fatal("revocation did not attempt address cleanup")
+				}
+				waitFor(t, "revoked server to stop", func() bool {
+					select {
+					case <-stopped:
+						return true
+					default:
+						return false
+					}
+				})
+			})
+		}
+	}
 }
 
 // setAddressLocked adds or removes an address on the fake interface, mirroring
 // what `ip addr add/del` would do. Callers hold h.mu.
 func (h *managerHarness) setAddressLocked(link, cidr string, present bool) {
-	ip, _, err := net.ParseCIDR(cidr)
+	ip, network, err := net.ParseCIDR(cidr)
 	if err != nil {
 		return
 	}
@@ -112,15 +250,27 @@ func (h *managerHarness) setAddressLocked(link, cidr string, present bool) {
 			continue
 		}
 		var kept []net.IP
+		var networks []net.IPNet
+		keepIP := false
+		for _, have := range h.ifaces[i].IPv4Networks {
+			if !have.IP.Equal(ip) || (!present && have.Mask.String() != network.Mask.String()) {
+				networks = append(networks, have)
+				if have.IP.Equal(ip) {
+					keepIP = true
+				}
+			}
+		}
 		for _, have := range h.ifaces[i].IPv4s {
-			if !have.Equal(ip) {
+			if !have.Equal(ip) || keepIP {
 				kept = append(kept, have)
 			}
 		}
 		if present {
 			kept = append(kept, ip.To4())
+			networks = append(networks, net.IPNet{IP: ip.To4(), Mask: network.Mask})
 		}
 		h.ifaces[i].IPv4s = kept
+		h.ifaces[i].IPv4Networks = networks
 		h.ifaces[i].HasIPv4 = len(kept) > 0
 	}
 }
@@ -131,6 +281,12 @@ func (h *managerHarness) stripAddress(link, cidr string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.setAddressLocked(link, cidr, false)
+}
+
+func (h *managerHarness) addForeignAddress(link, cidr string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.setAddressLocked(link, cidr, true)
 }
 
 // waitFor polls until cond holds, so tests do not depend on goroutine timing.
@@ -277,6 +433,7 @@ func TestManagerClaimsAfterUnansweredDiscover(t *testing.T) {
 
 	// The DISCOVER alone should have registered the camera, so it is listable as
 	// known-but-offline before it has an address.
+	waitFor(t, "discovered camera registration", func() bool { return len(h.reg.List()) == 1 })
 	cams := h.reg.List()
 	if len(cams) != 1 {
 		t.Fatalf("registry has %d cameras, want 1", len(cams))
@@ -350,6 +507,9 @@ func TestManagerWithdrawsWhenAnotherServerAnswersAfterClaim(t *testing.T) {
 	if got := h.mgr.State("eth0"); got != LinkDisqualified {
 		t.Fatalf("state = %v, want disqualified", got)
 	}
+	waitFor(t, "disqualified claim cleanup", func() bool {
+		return !h.mgr.isClaimed("eth0") && len(h.removedAddresses()) == 1
+	})
 	if h.mgr.isClaimed("eth0") {
 		t.Fatal("link remained claimed after a foreign offer")
 	}
@@ -462,11 +622,11 @@ func TestManagerReusesReleasedSegmentWithoutCollision(t *testing.T) {
 	waitFor(t, "both initial links to be served", func() bool { return len(h.servedLinks()) == 2 })
 
 	h.mgr.release("eth0")
-	eth1 := cabledEth("eth1")
-	eth1.HasIPv4 = true
 	h.mu.Lock()
+	eth1 := h.ifaces[1] // Keep the active claim's real address and prefix.
 	h.ifaces = []Interface{eth1, cabledEth("eth2")}
 	h.mu.Unlock()
+	h.mgr.allowedDHCP["eth2"] = true
 	h.mgr.scanOnce(ctx)
 	waitFor(t, "replacement link to be watched", func() bool {
 		h.mu.Lock()
@@ -531,6 +691,38 @@ func TestManagerKeepsClaimedLinkAfterItGetsAnAddress(t *testing.T) {
 	}
 	if got := h.addedAddresses(); len(got) != 1 {
 		t.Fatalf("configured %v, want the address added once", got)
+	}
+}
+
+// A link can acquire an uplink address after the camera server has claimed it.
+// Keep the carrier connected, as on an Ethernet switch, and ensure the camera
+// DHCP server yields to the network manager without waiting for a foreign OFFER.
+func TestManagerStopsCameraDHCPWhenUplinkAddressAppears(t *testing.T) {
+	h := newManagerHarness(t, []Interface{cabledEth("eth0")})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	claimEth0(t, h, ctx)
+
+	h.addForeignAddress("eth0", "192.168.2.3/24")
+	h.mgr.scanOnce(ctx)
+	if got := h.mgr.State("eth0"); got != LinkDisqualified {
+		t.Fatalf("state = %v, want disqualified", got)
+	}
+	if h.mgr.isClaimed("eth0") {
+		t.Fatal("camera DHCP server remains claimed on an uplink")
+	}
+	if got := h.removedAddresses(); len(got) != 1 || got[0] != "eth0 10.98.0.1/24" {
+		t.Fatalf("removed addresses = %v, want only the camera address", got)
+	}
+	h.mu.Lock()
+	foreignStillPresent := h.ifaces[0].HasAddress(net.ParseIP("192.168.2.3"))
+	h.mu.Unlock()
+	if !foreignStillPresent {
+		t.Fatal("withdrawing the camera segment removed the uplink address")
+	}
+	h.mgr.scanOnce(ctx)
+	if got := h.servedLinks(); len(got) != 1 {
+		t.Fatalf("camera DHCP restarted on the uplink: %v", got)
 	}
 }
 
@@ -604,9 +796,7 @@ func TestManagerToleratesBriefCarrierLoss(t *testing.T) {
 	// Carrier returns before the second scan: the counter must reset, so a later
 	// single blip is tolerated again.
 	h.mu.Lock()
-	withAddress := cabledEth("eth0")
-	withAddress.HasIPv4 = true
-	h.ifaces = []Interface{withAddress}
+	h.ifaces[0].Carrier = true // Preserve the address while carrier returns.
 	h.mu.Unlock()
 	h.mgr.scanOnce(ctx)
 	h.carrierDown("eth0")

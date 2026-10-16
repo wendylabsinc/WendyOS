@@ -14,11 +14,14 @@ import (
 // leases on a network that already has a server would be disruptive, so the
 // default is to do nothing.
 //
-// A link becomes eligible only when all of these hold:
+// A new, unconfigured link becomes eligible only when all of these hold:
 //
 //  1. It has carrier and is administratively up.
 //  2. It holds no IPv4 address of its own, which is what excludes the uplink.
 //  3. A DHCP DISCOVER was seen on it that nothing answered within a timeout.
+//
+// LinkManager also restores explicitly enabled links with an exact retained
+// camera server address, after observing for a competing DHCP server.
 //
 // And a link is permanently disqualified the moment an OFFER from any other
 // server is seen on it.
@@ -58,14 +61,32 @@ const LeaseWindow = 12 * time.Hour
 
 // Interface is the subset of a network interface the decision needs.
 type Interface struct {
-	Name      string
-	MAC       net.HardwareAddr
-	Carrier   bool
-	Up        bool
-	HasIPv4   bool
-	IPv4s     []net.IP
-	Loopback  bool
-	PointToPo bool // point-to-point, e.g. a tunnel; never a camera link
+	Name         string
+	Index        int // kernel identity; names can change while sockets remain bound
+	MAC          net.HardwareAddr
+	Carrier      bool
+	Up           bool
+	HasIPv4      bool
+	IPv4s        []net.IP
+	IPv4Networks []net.IPNet
+	Loopback     bool
+	PointToPo    bool // point-to-point, e.g. a tunnel; never a camera link
+}
+
+// configuredCameraSegment recognizes the exact server address and prefix, not
+// an arbitrary address in 10.98/16. Saved operator permission is checked by the
+// caller before this configuration is used to resume DHCP.
+func (i Interface) configuredCameraSegment() (CameraSegment, bool) {
+	if len(i.IPv4s) != 1 || len(i.IPv4Networks) != 1 {
+		return CameraSegment{}, false
+	}
+	index, ok := SegmentIndexFor(i.IPv4s[0])
+	if !ok {
+		return CameraSegment{}, false
+	}
+	seg := SegmentFor(index)
+	ones, bits := i.IPv4Networks[0].Mask.Size()
+	return seg, i.IPv4s[0].Equal(seg.ServerIP) && i.IPv4Networks[0].IP.Equal(seg.ServerIP) && ones == 24 && bits == 32
 }
 
 // HasAddress reports whether ip is currently configured on the link.
@@ -77,6 +98,29 @@ type Interface struct {
 func (i Interface) HasAddress(ip net.IP) bool {
 	for _, have := range i.IPv4s {
 		if have.Equal(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+// conflictsWithCameraSegment accepts an absent address (which can be restored)
+// or the exact camera address and prefix. Another address or a changed prefix
+// belongs to another configuration and must stop camera DHCP.
+func (i Interface) conflictsWithCameraSegment(seg CameraSegment) bool {
+	if !i.HasIPv4 && len(i.IPv4s) == 0 && len(i.IPv4Networks) == 0 {
+		return false
+	}
+	configured, ok := i.configuredCameraSegment()
+	return !ok || !configured.ServerIP.Equal(seg.ServerIP)
+}
+
+// overlapsCameraSegment includes networks on blocked, disabled, and down ports:
+// their configured addresses still reserve space even when we cannot serve them.
+func (i Interface) overlapsCameraSegment(seg CameraSegment) bool {
+	camera := net.IPNet{IP: seg.ServerIP.Mask(seg.Mask), Mask: seg.Mask}
+	for _, network := range i.IPv4Networks {
+		if network.Contains(camera.IP) || camera.Contains(network.IP) {
 			return true
 		}
 	}
@@ -324,24 +368,28 @@ func InterfacesFrom(ifaces []net.Interface, carrier func(name string) bool) []In
 	for _, iface := range ifaces {
 		addrs, err := iface.Addrs()
 		var ipv4s []net.IP
+		var ipv4Networks []net.IPNet
 		if err == nil {
 			for _, addr := range addrs {
 				if ipnet, ok := addr.(*net.IPNet); ok {
 					if v4 := ipnet.IP.To4(); v4 != nil {
 						ipv4s = append(ipv4s, v4)
+						ipv4Networks = append(ipv4Networks, *ipnet)
 					}
 				}
 			}
 		}
 		out = append(out, Interface{
-			Name:      iface.Name,
-			MAC:       iface.HardwareAddr,
-			Carrier:   carrier(iface.Name),
-			Up:        iface.Flags&net.FlagUp != 0,
-			HasIPv4:   len(ipv4s) > 0,
-			IPv4s:     ipv4s,
-			Loopback:  iface.Flags&net.FlagLoopback != 0,
-			PointToPo: iface.Flags&net.FlagPointToPoint != 0,
+			Name:         iface.Name,
+			Index:        iface.Index,
+			MAC:          iface.HardwareAddr,
+			Carrier:      carrier(iface.Name),
+			Up:           iface.Flags&net.FlagUp != 0,
+			HasIPv4:      len(ipv4s) > 0,
+			IPv4s:        ipv4s,
+			IPv4Networks: ipv4Networks,
+			Loopback:     iface.Flags&net.FlagLoopback != 0,
+			PointToPo:    iface.Flags&net.FlagPointToPoint != 0,
 		})
 	}
 	return out

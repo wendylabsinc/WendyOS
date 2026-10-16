@@ -4,6 +4,7 @@ package ipcam
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -167,6 +168,9 @@ func isDHCPPort(p uint16) bool {
 
 // serveDHCP answers DISCOVER and REQUEST on a claimed link.
 func serveDHCP(ctx context.Context, link string, seg CameraSegment, pool *LeasePool, onLease func(net.HardwareAddr, net.IP, string)) error {
+	if ctx.Err() != nil {
+		return nil
+	}
 	conn, err := bindUDPToLink(link)
 	if err != nil {
 		return err
@@ -199,30 +203,47 @@ func serveDHCP(ctx context.Context, link string, seg CameraSegment, pool *LeaseP
 		}
 
 		var kind MessageType
+		var addr net.IP
 		switch req.Type {
 		case Discover:
 			kind = Offer
+			addr, err = pool.Lease(req.CHAddr, req.RequestedIP)
 		case Request:
-			kind = Ack
+			kind, addr, err = requestLease(req, seg.ServerIP, pool)
 		case Release, Decline:
-			pool.Release(req.CHAddr)
+			if err := pool.Release(req.CHAddr); err != nil {
+				return err
+			}
 			continue
 		default:
 			continue
 		}
 
-		addr, err := pool.Lease(req.CHAddr, req.RequestedIP)
+		if errors.Is(err, ErrPoolExhausted) {
+			continue // Keep serving existing leases until a reservation expires.
+		}
 		if err != nil {
-			// A full pool is worth saying out loud rather than silently ignoring
-			// a camera that will never come up.
 			return fmt.Errorf("leasing an address on %s for %s: %w", link, req.CHAddr, err)
+		}
+		if kind == 0 {
+			continue
+		}
+		if ctx.Err() != nil {
+			return nil // A competing server may have appeared during the write.
+		}
+		var remaining time.Duration
+		if kind != Nak {
+			remaining = pool.remaining(req.CHAddr)
+			if remaining <= 0 {
+				continue
+			}
 		}
 		reply := BuildReply(req, kind, ReplyConfig{
 			ServerIP:  seg.ServerIP,
 			ClientIP:  addr,
 			Mask:      seg.Mask,
 			Broadcast: seg.Broadcast,
-			Lease:     LeaseWindow,
+			Lease:     remaining,
 		})
 		if err := conn.SetWriteDeadline(time.Now().Add(2 * time.Second)); err != nil {
 			return fmt.Errorf("setting write deadline: %w", err)
