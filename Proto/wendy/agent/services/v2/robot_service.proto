@@ -1,0 +1,213 @@
+syntax = "proto3";
+package wendy.agent.services.v2;
+option go_package = "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2;agentpbv2";
+
+// WendyRobotService reaches the device's robot calibration store from off the
+// device.
+//
+// A calibration is a fact about the machine, so it lives on the machine — one
+// JSON file per unit under /var/lib/wendy/robot, beside the camera registries
+// the agent already owns. Without this service the calibration wizard can only
+// run from inside an admin-entitled container on the robot itself, because the
+// alternative — writing the record into the operator's home directory — turns a
+// per-robot fact into a per-laptop one and the robot silently stops knowing its
+// own calibration the moment somebody else connects to it.
+//
+// The surface is deliberately a transport for one Go interface,
+// internal/shared/robotcal.Store, and nothing else: one RPC per method, no
+// conveniences. The agent serves it from the same robotcal.FileStore the
+// on-device path opens directly, so the two cannot drift apart — there is one
+// implementation of the store's semantics, reached two ways.
+//
+// What the platform does NOT do here is interpret a calibration. `payload` and
+// a session's per-step results are opaque bytes end to end: a rigid transform
+// for a humanoid's camera, per-joint zeros and travel ranges for a 6-DOF arm,
+// and something neither anticipates for the next robot. Only the universal part
+// — did it pass, by how much, when, and by what method — is modelled.
+service WendyRobotService {
+  // LoadUnit returns everything one physical robot knows about itself. A unit
+  // nobody has ever calibrated is not an error: it comes back zero-valued, with
+  // its name filled in.
+  rpc LoadUnit(LoadUnitRequest) returns (LoadUnitResponse);
+
+  // PutRecord stores one calibration result, whatever its verdict. A failed
+  // calibration is recorded too — "measured and it does not fit" is a fact
+  // worth keeping, and it is not the same as never having run.
+  rpc PutRecord(PutRecordRequest) returns (PutRecordResponse);
+
+  // ClearRecord invalidates a calibration, and any half-finished attempt at it.
+  // After a hand is replaced the old calibration is worse than none, because
+  // everything downstream still trusts it. Clearing an id the unit does not
+  // have is NOT_FOUND, so a typo cannot read as success.
+  rpc ClearRecord(ClearRecordRequest) returns (ClearRecordResponse);
+
+  // PutSession checkpoints an in-progress procedure. A seven-joint sweep on a
+  // limp humanoid needs two people and a gantry; making them start over because
+  // a terminal was closed at joint four is how a procedure stops being run.
+  rpc PutSession(PutSessionRequest) returns (PutSessionResponse);
+
+  // ClearSession drops a checkpoint once its procedure has finished.
+  rpc ClearSession(ClearSessionRequest) returns (ClearSessionResponse);
+
+  // SetProfileKind records what model this unit is.
+  rpc SetProfileKind(SetProfileKindRequest) returns (SetProfileKindResponse);
+
+  // SetStableId binds the unit to the device behind it, in the platform's
+  // existing stable-id scheme (by-id:… survives a port move, by-path:… is
+  // topology). Not a raw serial: a servo bus on /dev/ttyACM1 renumbers across
+  // boots exactly as /dev/videoN does.
+  rpc SetStableId(SetStableIdRequest) returns (SetStableIdResponse);
+
+  // DescribeStore says where on the device the store physically is, for the
+  // operator and for error messages. The client calls it once when it opens the
+  // store, which doubles as the check that this agent serves the store at all:
+  // an older agent answers UNIMPLEMENTED and the CLI can say so by name instead
+  // of failing on the first write.
+  rpc DescribeStore(DescribeStoreRequest) returns (DescribeStoreResponse);
+}
+
+// Quantity is a magnitude with the unit it was measured in.
+//
+// `unit` is a free string on purpose, and must stay one. An SO-101's joint
+// travel is in encoder ticks, a G1's is in radians, a camera's extrinsic error
+// is in metres, and the next robot will bring something none of those
+// anticipate. An enumeration here would have to be edited for every robot
+// family, which is the failure this whole design exists to avoid.
+message Quantity {
+  double value = 1;
+  // A free string: "rad", "tick", "m", whatever the method measured in.
+  string unit = 2;
+  // axis and frame qualify the quantity when the method produced it along a
+  // particular axis or in a particular frame. Empty for a scalar residual. Two
+  // quantities are comparable only when unit, axis and frame all match.
+  string axis = 3;
+  string frame = 4;
+}
+
+// CalibrationRecord is the outcome of one calibration procedure, whatever
+// produced it.
+message CalibrationRecord {
+  string id = 1;
+  bool qualified = 2;
+  // residual is ABSENT, not zero, when the procedure produced no measurement —
+  // a skipped step, or every step skipped. "Did not touch" and "measured as
+  // zero" are different answers and must stay different: a skip that arrived as
+  // a zero would qualify, which is the exact failure a skip exists to make
+  // visible. An absent residual never qualifies.
+  Quantity residual = 3;
+  // The gate the record was judged against. Fitting inside it is what qualifies
+  // a calibration; running the procedure to completion qualifies nothing.
+  Quantity budget = 4;
+  // Unix nanoseconds, or 0 for "not set". 0 is the unset marker rather than the
+  // epoch because the Go zero time is not representable as Unix nanoseconds,
+  // and a calibration measured at exactly 1970-01-01T00:00:00Z is not a case
+  // worth the ambiguity of a separate presence bit.
+  int64 measured_at_unix_nanos = 5;
+  // What produced this, because trust differs: "measured by fiducial" and
+  // "measured by tape" are not the same evidence.
+  string method = 6;
+  // Opaque to the platform, in every direction. Stored and handed back byte for
+  // byte; never parsed here.
+  bytes payload = 7;
+}
+
+// CalibrationSession is a procedure that was interrupted part-way through.
+message CalibrationSession {
+  string procedure_id = 1;
+  string method = 2;
+  // What the robot was when the session started. Resuming a sweep against a
+  // different profile would silently mix measurements taken in two joint
+  // orders, which is worse than starting over.
+  string profile_kind = 3;
+  // Unix nanoseconds, or 0 for "not set" — see CalibrationRecord.
+  int64 started_at_unix_nanos = 4;
+  int64 updated_at_unix_nanos = 5;
+  // Each finished step's result, keyed by the step id the method chose (a joint
+  // name, a sensor pose index). The method owns the encoding; the platform only
+  // keeps it and hands it back, so these values are opaque bytes.
+  map<string, bytes> steps = 6;
+  // Steps the operator chose not to do. Kept apart from `steps` rather than
+  // stored as a zero result, for the reason CalibrationRecord.residual is
+  // absent rather than zero.
+  repeated string skipped = 7;
+}
+
+// UnitRecord is everything one physical robot knows about itself.
+//
+// Keyed per unit rather than per device on purpose: an SO-101 rig is two arms
+// on one Jetson, a leader and a follower, with different measured travel on
+// every joint. Keying by device would give them one shared calibration, which
+// would be wrong for both.
+message UnitRecord {
+  string unit = 1;
+  string profile_kind = 2;
+  string stable_id = 3;
+  // Keyed by calibration id.
+  map<string, CalibrationRecord> calibrations = 4;
+  // Keyed by procedure id.
+  map<string, CalibrationSession> sessions = 5;
+  // Unix nanoseconds, or 0 for "not set" — see CalibrationRecord.
+  int64 updated_at_unix_nanos = 6;
+}
+
+// unit names which robot on the device this is (e.g. "default", "leader",
+// "follower"). It is validated against the store's own name rule before it ever
+// reaches the filesystem; a name that is not a plain lowercase token is
+// INVALID_ARGUMENT, which is also what keeps this service's writes inside
+// /var/lib/wendy/robot/units.
+message LoadUnitRequest {
+  string unit = 1;
+}
+
+message LoadUnitResponse {
+  UnitRecord unit = 1;
+}
+
+message PutRecordRequest {
+  string unit = 1;
+  CalibrationRecord record = 2;
+}
+
+message PutRecordResponse {}
+
+message ClearRecordRequest {
+  string unit = 1;
+  string id = 2;
+}
+
+message ClearRecordResponse {}
+
+message PutSessionRequest {
+  string unit = 1;
+  CalibrationSession session = 2;
+}
+
+message PutSessionResponse {}
+
+message ClearSessionRequest {
+  string unit = 1;
+  string procedure_id = 2;
+}
+
+message ClearSessionResponse {}
+
+message SetProfileKindRequest {
+  string unit = 1;
+  string profile_kind = 2;
+}
+
+message SetProfileKindResponse {}
+
+message SetStableIdRequest {
+  string unit = 1;
+  string stable_id = 2;
+}
+
+message SetStableIdResponse {}
+
+message DescribeStoreRequest {}
+
+message DescribeStoreResponse {
+  // Where the store physically is on the device, e.g. "/var/lib/wendy/robot".
+  string root = 1;
+}
