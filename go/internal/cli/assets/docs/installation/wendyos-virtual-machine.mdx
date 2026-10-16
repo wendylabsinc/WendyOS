@@ -347,9 +347,10 @@ The VM name is optional for `start`, `stop`, `logs`, and `rm` in an interactive
 terminal. Leave it out to choose a VM from a list; scripts should continue to
 pass the name explicitly.
 
-`vm stop` waits up to two minutes for the guest to shut down and flush its
-filesystems. If QMP is unavailable or the guest does not finish, it reports an
-error without killing the VM. Shut down inside an older guest without QMP, or
+`vm stop` waits up to five minutes for the guest to stop its apps, shut down and
+flush its filesystems, which covers any ordinary shutdown. If QMP is unavailable
+or the guest is still shutting down after that, it reports an error without
+killing the VM. Shut down inside an older guest without QMP, or
 use `wendy vm stop dev --force` only when an immediate power cut is intended.
 
 A backgrounded VM outlives the command that started it, so closing the terminal

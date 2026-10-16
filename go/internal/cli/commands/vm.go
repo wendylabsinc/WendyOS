@@ -584,16 +584,28 @@ func newVMStopCmd() *cobra.Command {
 	return cmd
 }
 
-// Allow systemd's normal service-stop timeout and filesystem flushing. Timing
-// out leaves the guest running; power cuts require an explicit --force.
-const vmStopGrace = 120 * time.Second
+// vmStopGrace is how long a stop waits for the guest to power off. It covers
+// systemd's slowest ordinary power-off: up to 90 s for a service that does not
+// stop (DefaultTimeoutStopSec), up to 90 s more for processes still running at
+// the final kill, then unmounting and flushing. A guest whose agent predates
+// the prompt host-shutdown path takes about 3.5 minutes with apps running, and
+// the previous 2-minute wait reported that ordinary shutdown as a failure.
+// Running out never kills the guest: cutting power takes an explicit --force.
+const vmStopGrace = 5 * time.Minute
 
-func runVMStop(cmd *cobra.Command, name string, force bool) error {
+// stopVMFn asks a VM to shut down and waits up to grace for it to power off.
+// A seam, like vmStatusFn: without it the stop paths can only be reached with
+// a real emulator.
+var stopVMFn = func(ctx context.Context, name string, force bool, grace time.Duration) error {
 	store, err := vm.NewStore()
 	if err != nil {
 		return err
 	}
-	st, err := store.Status(name)
+	return store.StopContext(ctx, name, force, grace)
+}
+
+func runVMStop(cmd *cobra.Command, name string, force bool) error {
+	st, err := vmStatusFn(name)
 	if err != nil {
 		return err
 	}
@@ -604,9 +616,16 @@ func runVMStop(cmd *cobra.Command, name string, force bool) error {
 		fmt.Fprintf(cmd.OutOrStdout(), "VM %q is not running.\n", name)
 		return nil
 	}
+	// The guest stops its apps and services before it powers off, which can
+	// take a while. Say what the command is waiting for, on stderr so stdout
+	// keeps only the result. Not for a VM that is still starting: the stop
+	// refuses that at once.
+	if !force && st.State.PID != 0 {
+		fmt.Fprintf(cmd.ErrOrStderr(), "Shutting down VM %q; waiting for it to power off...\n", name)
+	}
 	// Store.Stop makes the "still starting" refusal itself, so that `vm rm
 	// --force` gets it too rather than only this command.
-	if err := store.StopContext(cmd.Context(), name, force, vmStopGrace); err != nil {
+	if err := stopVMFn(cmd.Context(), name, force, vmStopGrace); err != nil {
 		return err
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "Stopped VM %q.\n", name)

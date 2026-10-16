@@ -1217,30 +1217,40 @@ func main() {
 
 	sig := <-sigCh
 	logger.Info("Received signal, shutting down", zap.String("signal", sig.String()))
+	// Never disarmed: returning from main ends the process, and it also covers
+	// the deferred cleanup that runs after shutdown.run.
+	armShutdownWatchdog(logger, shutdownDeadline, os.Exit)
 
-	cancel()
-	_ = meshProxy.Close()
+	shutdown := &agentShutdown{
+		logger: logger,
+		hostShuttingDown: func(ctx context.Context) bool {
+			return hostShuttingDown(ctx, systemctlOutput)
+		},
+		cancel: func() {
+			cancel()
+			_ = meshProxy.Close()
+		},
+		shutdownHTTP: otelHTTPReceiver.Shutdown,
+		background:   &wg,
+	}
+	if ctrdClient != nil {
+		shutdown.stopApps = func(ctx context.Context) (int, error) {
+			return ctrdClient.StopTasksForHostShutdown(ctx, agentcontainerd.HostShutdownGrace)
+		}
+	}
 	if agentServer != nil {
-		agentServer.GracefulStop()
+		shutdown.servers = append(shutdown.servers, namedGRPCServer{"agent", agentServer})
 	}
 	if localSocketServer != nil {
-		localSocketServer.GracefulStop()
+		shutdown.servers = append(shutdown.servers, namedGRPCServer{"local socket", localSocketServer})
 	}
-	otelServer.GracefulStop()
-
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer shutdownCancel()
-	if err := otelHTTPReceiver.Shutdown(shutdownCtx); err != nil {
-		logger.Error("OTEL HTTP server shutdown error", zap.Error(err))
-	}
-
+	shutdown.servers = append(shutdown.servers, namedGRPCServer{"OTEL", otelServer})
 	mtlsMu.Lock()
 	if mtlsServer != nil {
-		mtlsServer.GracefulStop()
+		shutdown.servers = append(shutdown.servers, namedGRPCServer{"mTLS", mtlsServer})
 	}
 	mtlsMu.Unlock()
-
-	wg.Wait()
+	shutdown.run()
 
 	logger.Info("wendy-agent stopped")
 }

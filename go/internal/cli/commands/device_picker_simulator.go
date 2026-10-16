@@ -101,11 +101,9 @@ func stopSimulatorRow(ctx context.Context, item tui.PickerItem) (string, bool) {
 	if !st.Running {
 		return fmt.Sprintf("%s is not running", choice.Name), false
 	}
-	store, err := vm.NewStore()
-	if err != nil {
-		return err.Error(), true
-	}
-	if err := store.StopContext(ctx, choice.Name, false, vmStopGrace); err != nil {
+	// The same wait as `wendy vm stop`: long enough for an ordinary guest
+	// shutdown, so one is never shown as a failure.
+	if err := stopVMFn(ctx, choice.Name, false, vmStopGrace); err != nil {
 		return err.Error(), true
 	}
 	return fmt.Sprintf("Stopped %s.", choice.Name), false
