@@ -30,6 +30,8 @@ struct ProvisioningStore {
         var keyBacking: KeyBacking
         var certPEM: String
         var chainPEM: String
+        /// Set for direct PKI (ACME) enrollment; empty for legacy Cloud identities.
+        var principalURI: String
     }
 
     private struct PersistedState: Codable {
@@ -41,6 +43,7 @@ struct ProvisioningStore {
         var keyBacking: String?
         var certPem: String?
         var chainPem: String?
+        var principalURI: String?
     }
 
     private var statePath: URL { self.configPath.appendingPathComponent("provisioning.json") }
@@ -101,7 +104,8 @@ struct ProvisioningStore {
             assetID: state.assetId ?? 0,
             keyBacking: backing,
             certPEM: certPEM,
-            chainPEM: chainPEM
+            chainPEM: chainPEM,
+            principalURI: state.principalURI ?? ""
         )
     }
 
@@ -111,7 +115,8 @@ struct ProvisioningStore {
         assetID: Int32,
         keyBacking: KeyBacking,
         certPEM: String,
-        chainPEM: String
+        chainPEM: String,
+        principalURI: String = ""
     ) throws {
         try FileManager.default.createDirectory(
             at: self.configPath,
@@ -147,7 +152,8 @@ struct ProvisioningStore {
             keyPem: nil,
             keyBacking: keyBackingValue,
             certPem: certPEM,
-            chainPem: chainPEM
+            chainPem: chainPEM,
+            principalURI: principalURI.isEmpty ? nil : principalURI
         )
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]

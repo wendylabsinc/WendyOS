@@ -37,12 +37,29 @@ let package = Package(
         .package(url: "https://github.com/apple/swift-protobuf.git", from: "1.37.0"),
         .package(url: "https://github.com/swift-server/swift-service-lifecycle.git", from: "2.9.1"),
         .package(url: "https://github.com/apple/swift-crypto.git", from: "4.0.0"),
-        .package(url: "https://github.com/apple/swift-certificates.git", from: "1.0.0"),
-        // Replace this revision with the first release containing
-        // https://github.com/apple/swift-nio-ssl/pull/604.
+        // ML-DSA-65/87 certificate parsing lives on apple/swift-certificates PR #312, not yet
+        // released. We pin its head commit, which GitHub keeps fetchable from apple's own repo
+        // only while that PR stays open and is not force-pushed (wendylabsinc/swift-certificates
+        // keeps it at refs/heads/pin-65ecdea6). Do not rebase/force-push that PR without bumping
+        // this revision in the same change. Swap to `from: "<version>"` once Apple ships a
+        // release carrying it. Same revision as Wendy Cloud and wendy-auth: a cert this parses
+        // has to parse there too. On Darwin it verifies ML-DSA only on macOS 26+ (CryptoKit).
         .package(
-            url: "https://github.com/apple/swift-nio-ssl.git",
-            revision: "76afd00803dd83dfdf2ec6fc56e1e460e60fd4e2"
+            url: "https://github.com/apple/swift-certificates.git",
+            revision: "65ecdea656b6764c77f49d213aa417f1d2838b52"
+        ),
+        // swift-nio-ssl comes from the wendylabsinc fork, branch mldsa-on-upstream: apple main
+        // 15e0b9e (which carries apple/swift-nio-ssl#604, the fix this package pinned for)
+        // revendoring BoringSSL 8eb25be6f with ML-DSA in libssl, plus NIOSSL ML-DSA signature
+        // algorithms in the DEFAULT verify list, so an ML-DSA operator's CertificateVerify
+        // verifies at the mTLS handshake with no per-config opt-in. Bump it in the same change
+        // as any fork update and keep it in step with Wendy Cloud's and wendy-auth's pin. Swap
+        // back to apple upstream `from:` once Apple ships a release with ML-DSA in libssl. This
+        // root-package revision pin overrides grpc-swift-nio-transport's version requirement on
+        // the same package identity.
+        .package(
+            url: "https://github.com/wendylabsinc/swift-nio-ssl.git",
+            revision: "dce9736251c9110b6c249f5ea7fd34199d5dd9bf"
         ),
         .package(url: "https://github.com/hummingbird-project/hummingbird.git", from: "2.0.0"),
     ],

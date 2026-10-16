@@ -378,6 +378,7 @@ public actor WendyAgent {
             AudioService(),
             SensorService(),
             provisioningService,
+            ProvisioningServiceV2(v1: provisioningService),
             TelemetryService(broadcaster: broadcaster),
             FileSyncService(appsBase: appsBase),
             videoService,

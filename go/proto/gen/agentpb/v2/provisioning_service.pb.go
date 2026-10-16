@@ -147,8 +147,12 @@ type NotProvisionedResponse struct {
 	AcmeEnrollmentSupported *bool `protobuf:"varint,1,opt,name=acme_enrollment_supported,json=acmeEnrollmentSupported,proto3,oneof" json:"acme_enrollment_supported,omitempty"`
 	// Public device-signed completion evidence, only after durable local erasure.
 	UnenrollmentCompletion []byte `protobuf:"bytes,2,opt,name=unenrollment_completion,json=unenrollmentCompletion,proto3" json:"unenrollment_completion,omitempty"`
-	unknownFields          protoimpl.UnknownFields
-	sizeCache              protoimpl.SizeCache
+	// Why acme_enrollment_supported is false on this host, for the operator
+	// (e.g. a Mac below the macOS version that can verify ML-DSA chains).
+	// Empty when enrollment is supported or the agent gives no reason.
+	AcmeEnrollmentUnavailableReason string `protobuf:"bytes,3,opt,name=acme_enrollment_unavailable_reason,json=acmeEnrollmentUnavailableReason,proto3" json:"acme_enrollment_unavailable_reason,omitempty"`
+	unknownFields                   protoimpl.UnknownFields
+	sizeCache                       protoimpl.SizeCache
 }
 
 func (x *NotProvisionedResponse) Reset() {
@@ -193,6 +197,13 @@ func (x *NotProvisionedResponse) GetUnenrollmentCompletion() []byte {
 		return x.UnenrollmentCompletion
 	}
 	return nil
+}
+
+func (x *NotProvisionedResponse) GetAcmeEnrollmentUnavailableReason() string {
+	if x != nil {
+		return x.AcmeEnrollmentUnavailableReason
+	}
+	return ""
 }
 
 type ProvisionedResponse struct {
@@ -734,10 +745,11 @@ const file_wendy_agent_services_v2_provisioning_service_proto_rawDesc = "" +
 	"\x15IsProvisionedResponse\x12Z\n" +
 	"\x0fnot_provisioned\x18\x01 \x01(\v2/.wendy.agent.services.v2.NotProvisionedResponseH\x00R\x0enotProvisioned\x12P\n" +
 	"\vprovisioned\x18\x02 \x01(\v2,.wendy.agent.services.v2.ProvisionedResponseH\x00R\vprovisionedB\x0f\n" +
-	"\rresponse_type\"\xb0\x01\n" +
+	"\rresponse_type\"\xfd\x01\n" +
 	"\x16NotProvisionedResponse\x12?\n" +
 	"\x19acme_enrollment_supported\x18\x01 \x01(\bH\x00R\x17acmeEnrollmentSupported\x88\x01\x01\x127\n" +
-	"\x17unenrollment_completion\x18\x02 \x01(\fR\x16unenrollmentCompletionB\x1c\n" +
+	"\x17unenrollment_completion\x18\x02 \x01(\fR\x16unenrollmentCompletion\x12K\n" +
+	"\"acme_enrollment_unavailable_reason\x18\x03 \x01(\tR\x1facmeEnrollmentUnavailableReasonB\x1c\n" +
 	"\x1a_acme_enrollment_supported\"\xdf\x01\n" +
 	"\x13ProvisionedResponse\x12\x1d\n" +
 	"\n" +

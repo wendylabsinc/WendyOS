@@ -32,6 +32,10 @@ func CheckAgentEnrollment(ctx context.Context, conn grpc.ClientConnInterface) er
 		return fmt.Errorf("this agent does not advertise direct PKI enrollment readiness; update the agent before enrolling (no Cloud reservation made)")
 	}
 	if !state.GetAcmeEnrollmentSupported() {
+		// Agent-supplied text: %q keeps it to one escaped line in the terminal.
+		if reason := state.GetAcmeEnrollmentUnavailableReason(); reason != "" {
+			return fmt.Errorf("this device cannot enroll directly with PKI: %q (no Cloud reservation made)", reason)
+		}
 		return fmt.Errorf("this agent does not support direct PKI enrollment; update the agent before enrolling (no Cloud reservation made)")
 	}
 	return nil

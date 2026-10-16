@@ -34,6 +34,10 @@ message NotProvisionedResponse {
     optional bool acme_enrollment_supported = 1;
     // Public device-signed completion evidence, only after durable local erasure.
     bytes unenrollment_completion = 2;
+    // Why acme_enrollment_supported is false on this host, for the operator
+    // (e.g. a Mac below the macOS version that can verify ML-DSA chains).
+    // Empty when enrollment is supported or the agent gives no reason.
+    string acme_enrollment_unavailable_reason = 3;
 }
 
 message ProvisionedResponse {
