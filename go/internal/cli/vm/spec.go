@@ -33,6 +33,9 @@ type Spec struct {
 	ConsoleLog string
 	// QMPPath is a private control socket in the VM's owner-only directory.
 	QMPPath string
+
+	// SerialPort is a launcher-owned ephemeral loopback bridge, never persisted.
+	SerialPort int
 }
 
 // Binary names the emulator. Always the aarch64 system emulator: the guest is
@@ -97,6 +100,14 @@ func (s Spec) Args() ([]string, error) {
 		// is what makes it a single downloadable artifact.
 		"-drive", fmt.Sprintf("file=%s,if=none,format=raw,id=hd0", escapeQEMUValue(s.DiskPath)),
 		"-device", "virtio-blk-pci,drive=hd0",
+	}
+	if s.SerialPort != 0 {
+		if s.SerialPort < 1 || s.SerialPort > 65535 {
+			return nil, errors.New("invalid VM serial bridge port")
+		}
+		args = append(args, "-device", "qemu-xhci,id=wendyserialusb",
+			"-chardev", fmt.Sprintf("socket,id=wendyserial,host=127.0.0.1,port=%d,server=off,nodelay=on", s.SerialPort),
+			"-device", "usb-serial,id=wendyserialdevice,bus=wendyserialusb.0,chardev=wendyserial")
 	}
 	args = append(args, s.consoleArgs()...)
 	if s.QMPPath != "" {

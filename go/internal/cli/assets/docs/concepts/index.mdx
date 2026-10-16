@@ -41,7 +41,7 @@ Linux targets run containers. Mac targets run native macOS apps. ESP32 uses Wend
 
 ## App configuration
 
-[`wendy.json`](/docs/advanced/apps/wendy.json) names your app, chooses its platform, and declares the capabilities it needs. Entitlements grant access to hardware and other resources. A simulator can exercise the software deployment path but does not provide physical hardware access.
+[`wendy.json`](/docs/advanced/apps/wendy.json) names your app, chooses its platform, and declares the capabilities it needs. Entitlements grant access to hardware and other resources. A simulator can exercise the software deployment path. Physical hardware access is limited to opt-in [Windows serial passthrough](/docs/installation/wendyos-virtual-machine#windows-serial-passthrough); other peripherals need a real device.
 
 ## Optional cloud management
 
