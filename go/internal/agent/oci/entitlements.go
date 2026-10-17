@@ -140,6 +140,26 @@ func ApplyEntitlements(spec *Spec, cfg *appconfig.AppConfig, opts ApplyOptions) 
 	return nil
 }
 
+// ApplyHostSockets mounts the host sockets the agent prepares for each
+// container, for the entitlements that grant them: the D-Bus proxy
+// (bluetooth), the System API (notifications) and the data socket
+// (episode-write). It completes a spec that ApplyEntitlements built with those
+// directories left empty, so a replace can build and validate the spec before
+// it removes the old container and prepares the new container's sockets
+// (WDY-3850). Passing the directories to both would mount them twice.
+func ApplyHostSockets(spec *Spec, cfg *appconfig.AppConfig, opts ApplyOptions) {
+	for _, ent := range cfg.Entitlements {
+		switch ent.Type {
+		case appconfig.EntitlementBluetooth:
+			mountDBusProxy(spec, opts.DBusProxySocketDir)
+		case appconfig.EntitlementNotifications:
+			applySystemAPI(spec, opts.SystemAPISocketDir)
+		case appconfig.EntitlementEpisodeWrite:
+			applyDataSocket(spec, opts.DataSocketDir)
+		}
+	}
+}
+
 func applyDataSocket(spec *Spec, hostDirectory string) {
 	if hostDirectory == "" {
 		return
@@ -1290,15 +1310,7 @@ func applyPersist(spec *Spec, ent appconfig.Entitlement, appID string) {
 // matches what the proxy actually created. When empty, it adds no mount and
 // never falls back to the raw host D-Bus sockets.
 func applyBluetooth(spec *Spec, proxySocketDir string) {
-	if proxySocketDir != "" {
-		// Mount the filtered proxy socket directory.
-		spec.Mounts = append(spec.Mounts, Mount{
-			Destination: "/var/run/dbus",
-			Source:      proxySocketDir,
-			Type:        "bind",
-			Options:     []string{"rbind", "nosuid", "noexec"},
-		})
-	}
+	mountDBusProxy(spec, proxySocketDir)
 	// When the proxy is not available, we intentionally skip mounting the
 	// raw host D-Bus sockets. Mounting /var/run/dbus or /run/dbus directly
 	// exposes every D-Bus service (NetworkManager, systemd, polkit, etc.)
@@ -1308,6 +1320,19 @@ func applyBluetooth(spec *Spec, proxySocketDir string) {
 	spec.Process.Env = append(spec.Process.Env,
 		"DBUS_SYSTEM_BUS_ADDRESS=unix:path=/var/run/dbus/system_bus_socket",
 	)
+}
+
+// mountDBusProxy mounts the filtered proxy socket directory, if there is one.
+func mountDBusProxy(spec *Spec, proxySocketDir string) {
+	if proxySocketDir == "" {
+		return
+	}
+	spec.Mounts = append(spec.Mounts, Mount{
+		Destination: "/var/run/dbus",
+		Source:      proxySocketDir,
+		Type:        "bind",
+		Options:     []string{"rbind", "nosuid", "noexec"},
+	})
 }
 
 // usbDeviceDir is the host USB device tree. Tests redirect it to a temporary
