@@ -1,17 +1,37 @@
 name: Swift Tests
 
+# Build caching: every run restores the SwiftPM build directory and Xcode
+# DerivedData archived by the latest scheduled or manual run on main, so it
+# recompiles only first-party code instead of every dependency. Only those
+# trusted runs archive; pull requests, including forks, never do. Archives are
+# run artifacts, not actions/cache entries, because other workflows running in
+# main's context could write main-scoped cache entries (see
+# .github/scripts/restore-trusted-build-cache.sh). Restored outputs are only
+# reusable at the same absolute path, which hosted runners keep.
+#
+# SECURITY: Pull requests reuse dependency outputs compiled by main's own
+# workflow on ephemeral GitHub-hosted runners, the same trust as main's source.
+# The restore verifies GitHub's recorded SHA-256 digest of each archive and
+# rejects entries that could escape the workspace before and after extracting
+# it into a staging directory. First-party code is always rebuilt.
+
 on:
   pull_request:
     paths:
       - 'swift/**'
       - 'Proto/**'
       - '.github/workflows/**'
+      - '.github/scripts/restore-trusted-build-cache.sh'
+  schedule:
+    - cron: '37 3 * * *'
+  workflow_dispatch:
 
 concurrency:
-  group: swift-tests-${{ github.event.pull_request.number }}
+  group: swift-tests-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 permissions:
+  actions: read
   contents: read
   pull-requests: write
 
@@ -37,23 +57,39 @@ jobs:
           set -euo pipefail
           echo "version=$(xcodebuild -version | awk '/Xcode/ { print $2 }')" >> "$GITHUB_OUTPUT"
 
-      - name: Cache SwiftPM package resolution
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
-        with:
-          path: |
-            swift/Build/SwiftPM/checkouts
-            swift/Build/SwiftPM/repositories
-            ~/Library/Caches/org.swift.swiftpm
-            ~/.cache/org.swift.swiftpm
-          key: swiftpm-${{ runner.os }}-xcode-${{ steps.xcode.outputs.version }}-${{ hashFiles('swift/WendyAgentCore/Package.resolved') }}
-          restore-keys: |
-            swiftpm-${{ runner.os }}-xcode-${{ steps.xcode.outputs.version }}-
-            swiftpm-${{ runner.os }}-
+      - name: Restore SwiftPM build cache from main
+        # Best effort: a missing or unusable archive means a cold build.
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUILD_CACHE_WORKFLOW_FILE: swift-tests.yml
+        shell: bash
+        run: .github/scripts/restore-trusted-build-cache.sh swiftpm-build-xcode-${{ steps.xcode.outputs.version }} swift/Build/SwiftPM
 
       - name: Run swift test
         working-directory: swift
         shell: bash
         run: bash ./Scripts/Test.sh
+
+      - name: Archive SwiftPM build cache
+        id: archive_swiftpm
+        if: ${{ github.ref == 'refs/heads/main' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # GNU tar keeps the nanosecond mtimes incremental builds compare.
+          gtar --posix -cf - swift/Build/SwiftPM \
+            | zstd -T0 -3 -q -o "$RUNNER_TEMP/swiftpm-build-xcode-${{ steps.xcode.outputs.version }}.tar.zst"
+
+      - name: Upload SwiftPM build cache
+        if: ${{ !cancelled() && steps.archive_swiftpm.outcome == 'success' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: swiftpm-build-xcode-${{ steps.xcode.outputs.version }}
+          path: ${{ runner.temp }}/swiftpm-build-xcode-${{ steps.xcode.outputs.version }}.tar.zst
+          compression-level: 0
+          retention-days: 2
+          if-no-files-found: error
 
   build:
     name: Build WendyAgentMac app
@@ -73,16 +109,17 @@ jobs:
           set -euo pipefail
           echo "version=$(xcodebuild -version | awk '/Xcode/ { print $2 }')" >> "$GITHUB_OUTPUT"
 
-      - name: Cache Xcode package resolution
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
-        with:
-          path: |
-            swift/Build/CI/PackageCache
-            swift/Build/CI/SourcePackages
-          key: xcode-packages-${{ runner.os }}-xcode-${{ steps.xcode.outputs.version }}-${{ hashFiles('swift/WendyAgentCore/Package.resolved') }}
-          restore-keys: |
-            xcode-packages-${{ runner.os }}-xcode-${{ steps.xcode.outputs.version }}-
-            xcode-packages-${{ runner.os }}-
+      - name: Restore Xcode build cache from main
+        # Best effort: a missing or unusable archive means a cold build.
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUILD_CACHE_WORKFLOW_FILE: swift-tests.yml
+        shell: bash
+        run: |
+          .github/scripts/restore-trusted-build-cache.sh \
+            xcode-build-xcode-${{ steps.xcode.outputs.version }} \
+            swift/Build/CI/PackageCache swift/Build/CI/SourcePackages swift/Build/Xcode
 
       - name: Resolve Swift package dependencies
         working-directory: swift
@@ -111,7 +148,6 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          rm -rf "$DERIVED_DATA_PATH"
 
           xcodebuild build \
             -workspace WendyAgent.xcworkspace \
@@ -124,6 +160,27 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             -skipMacroValidation
+
+      - name: Archive Xcode build cache
+        id: archive_xcode
+        if: ${{ github.ref == 'refs/heads/main' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # GNU tar keeps the nanosecond mtimes incremental builds compare.
+          gtar --posix -cf - --exclude=swift/Build/Xcode/Logs \
+            swift/Build/CI/PackageCache swift/Build/CI/SourcePackages swift/Build/Xcode \
+            | zstd -T0 -3 -q -o "$RUNNER_TEMP/xcode-build-xcode-${{ steps.xcode.outputs.version }}.tar.zst"
+
+      - name: Upload Xcode build cache
+        if: ${{ !cancelled() && steps.archive_xcode.outcome == 'success' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: xcode-build-xcode-${{ steps.xcode.outputs.version }}
+          path: ${{ runner.temp }}/xcode-build-xcode-${{ steps.xcode.outputs.version }}.tar.zst
+          compression-level: 0
+          retention-days: 2
+          if-no-files-found: error
 
       - name: Test macOS provisioning validation
         working-directory: swift
@@ -142,6 +199,8 @@ jobs:
 
   lint:
     name: Lint Swift Sources
+    # Lint reports to the pull request; scheduled cache runs have none.
+    if: ${{ github.event_name == 'pull_request' }}
     runs-on: ubuntu-latest
     container: swift:6.2.3
     steps:
