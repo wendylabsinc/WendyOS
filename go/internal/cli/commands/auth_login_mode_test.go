@@ -183,6 +183,35 @@ func TestAuthLoginCloudTargetDefaults(t *testing.T) {
 	}
 }
 
+// --email with no pinned realm falls through to the realm-less universal flow:
+// no issuer, the email as login_hint, and one line telling the user so.
+func TestAuthLoginEmailWithoutPinnedRealmUsesUniversalFlow(t *testing.T) {
+	t.Setenv(serviceAccountKeyEnv, "")
+	originalDiscover, originalLogin := discoverOIDCIssuerFn, performOIDCLoginFn
+	t.Cleanup(func() { discoverOIDCIssuerFn, performOIDCLoginFn = originalDiscover, originalLogin })
+	discoverOIDCIssuerFn = func(context.Context, string, string) (string, error) { return "", nil }
+	var got oidcLoginOptions
+	performOIDCLoginFn = func(_ context.Context, opts oidcLoginOptions) error {
+		got = opts
+		return nil
+	}
+
+	cmd := newAuthLoginCmd()
+	cmd.SilenceUsage, cmd.SilenceErrors = true, true
+	cmd.SetArgs([]string{"--development", "--email", "person@example.com"})
+	var err error
+	out := captureStdout(t, func() { err = cmd.Execute() })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Issuer != "" || got.AuthorizationBase != developmentCloudLoginTarget.authBase || got.LoginHint != "person@example.com" {
+		t.Fatalf("OIDC options = %+v, want the universal flow with the email as login hint", got)
+	}
+	if !strings.Contains(out, "No organization is pinned for person@example.com; continuing with the universal sign-in.") {
+		t.Fatalf("missing fall-through notice, got:\n%s", out)
+	}
+}
+
 func TestAuthLoginCustomOIDCEndpointsOverrideTargetDefaults(t *testing.T) {
 	t.Setenv(serviceAccountKeyEnv, "")
 	original := performOIDCLoginFn

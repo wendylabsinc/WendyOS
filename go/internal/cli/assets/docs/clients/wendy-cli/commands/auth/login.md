@@ -19,7 +19,7 @@ wendy cloud login --email you@example.com
 
 `--issuer` selects a realm directly. `--service-account` selects headless service-account login, and `--api-key` selects local authentication. Use `--legacy` to select the old dashboard flow at `cloud.wendy.sh`.
 
-The CLI opens `https://auth.wendy.dev/authorize` and completes authorization code + PKCE through a loopback callback. With `--email`, it first asks `auth.wendy.dev` for the email's home realm and opens that realm's authorization page.
+The CLI opens `https://auth.wendy.dev/authorize` and completes authorization code + PKCE through a loopback callback. With `--email`, it first asks `auth.wendy.dev` for the email's home realm and opens that realm's authorization page. When no organization is pinned for the email, the CLI says so and continues with the universal sign-in instead, passing the email as `login_hint`.
 
 It validates the signed ID token, nonce, access token, issuer, audience, and DPoP binding before requesting the `https://pki.wendy.sh/identity` audience. It creates a PKCS#10 CSR with the same key bound to the token and DPoP proof and sends it directly to `https://identity.pki.wendy.dev/v1/identity/certificate`. The certificate's tenant SPIFFE identity is authoritative for the saved context.
 

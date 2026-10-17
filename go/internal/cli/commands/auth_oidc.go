@@ -33,6 +33,9 @@ type oidcLoginOptions struct {
 	// exact realm issuer must arrive in the RFC 9207 callback.
 	Issuer            string
 	AuthorizationBase string
+	// LoginHint prefills the email on the universal page (OIDC login_hint)
+	// when --email discovery found no pinned realm.
+	LoginHint string
 	// ClientID is the public client registered in that realm. Public + PKCE,
 	// token_endpoint_auth_method=none: a CLI cannot keep a secret.
 	ClientID string
@@ -79,6 +82,9 @@ var discoverOIDCIssuerFn = discoverOIDCIssuer
 
 // discoverOIDCIssuer uses wendy-auth's identifier-first API to route an email
 // address to its home realm without exposing or requiring an organization list.
+// It returns "" when no realm is pinned for the email: wendy-auth answers
+// "unknown" (older servers name the system realm), and the caller falls through
+// to the realm-less universal flow. The system realm is never a login target.
 func discoverOIDCIssuer(ctx context.Context, authBase, email string) (string, error) {
 	if strings.TrimSpace(email) == "" {
 		return "", fmt.Errorf("--email is required when --issuer is not set")
@@ -104,19 +110,31 @@ func discoverOIDCIssuer(ctx context.Context, authBase, email string) (string, er
 	}
 	var result struct {
 		LoginURL string `json:"loginURL"`
+		Realm    string `json:"realm"`
+		State    string `json:"state"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return "", fmt.Errorf("decoding organization discovery response: %w", err)
 	}
-	u, err := url.Parse(result.LoginURL)
-	if err != nil {
-		return "", fmt.Errorf("parsing organization login URL: %w", err)
+	if result.State == "unknown" {
+		return "", nil
 	}
-	parts := strings.Split(strings.Trim(u.Path, "/"), "/")
-	if len(parts) < 2 || parts[0] != "realms" || parts[1] == "" {
-		return "", fmt.Errorf("organization discovery returned an invalid login URL")
+	slug := result.Realm
+	if slug == "" && result.LoginURL != "" {
+		u, err := url.Parse(result.LoginURL)
+		if err != nil {
+			return "", fmt.Errorf("parsing organization login URL: %w", err)
+		}
+		parts := strings.Split(strings.Trim(u.Path, "/"), "/")
+		if len(parts) < 2 || parts[0] != "realms" || parts[1] == "" {
+			return "", fmt.Errorf("organization discovery returned an invalid login URL")
+		}
+		slug = parts[1]
 	}
-	return authBase + "/realms/" + url.PathEscape(parts[1]), nil
+	if slug == "" || slug == "system" {
+		return "", nil
+	}
+	return authBase + "/realms/" + url.PathEscape(slug), nil
 }
 
 func issuerRealm(issuer string) string {
@@ -154,18 +172,18 @@ func effectiveLoginIssuer(requested, authorizationBase, callbackIss string) (str
 func validateRealmIssuer(authority, issuer string) (string, error) {
 	issuer = strings.TrimSuffix(issuer, "/")
 	if !sameIssuerOrigin(issuer, authority) {
-		return "", fmt.Errorf("authorization response issuer %q is not on the configured authority %q; refusing to exchange the code", issuer, authority)
+		return "", fmt.Errorf("callback issuer mismatch: %q is not on the configured authority %q; refusing to exchange the code", issuer, authority)
 	}
 	u, err := url.Parse(issuer)
 	if err != nil || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
-		return "", fmt.Errorf("authorization response issuer %q is not a canonical realm issuer", issuer)
+		return "", fmt.Errorf("callback issuer mismatch: %q is not a canonical realm issuer", issuer)
 	}
 	parts := strings.Split(strings.TrimPrefix(u.EscapedPath(), "/"), "/")
 	if len(parts) != 2 || parts[0] != "realms" || parts[1] == "" || parts[1] == "system" {
-		return "", fmt.Errorf("authorization response issuer %q is not a canonical non-system realm issuer", issuer)
+		return "", fmt.Errorf("callback issuer mismatch: %q is not a canonical non-system realm issuer", issuer)
 	}
 	if decoded, err := url.PathUnescape(parts[1]); err != nil || decoded != parts[1] || strings.Contains(decoded, "/") {
-		return "", fmt.Errorf("authorization response issuer %q contains an invalid realm", issuer)
+		return "", fmt.Errorf("callback issuer mismatch: %q contains an invalid realm", issuer)
 	}
 	return issuer, nil
 }

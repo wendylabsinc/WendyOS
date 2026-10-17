@@ -192,11 +192,16 @@ func newAuthLoginCmd() *cobra.Command {
 			if !cmd.Flags().Changed("auth") {
 				authBase = target.authBase
 			}
+			var loginHint string
 			if issuer == "" && email != "" {
 				var err error
 				issuer, err = discoverOIDCIssuerFn(cmd.Context(), authBase, email)
 				if err != nil {
 					return err
+				}
+				if issuer == "" {
+					loginHint = email
+					fmt.Println(tui.InfoMessage(fmt.Sprintf("No organization is pinned for %s; continuing with the universal sign-in.", email)))
 				}
 			}
 			if cloudDashboard == "" {
@@ -217,6 +222,7 @@ func newAuthLoginCmd() *cobra.Command {
 			return performOIDCLoginFn(cmd.Context(), oidcLoginOptions{
 				Issuer:            issuer,
 				AuthorizationBase: authBase,
+				LoginHint:         loginHint,
 				ClientID:          clientID,
 				CloudResource:     resource,
 				IdentityResource:  identityResource,

@@ -40,7 +40,8 @@ type oidcCallbackResult struct {
 
 // performOIDCLogin creates and saves a refreshable Cloud API session.
 //
-// The DPoP key is generated first because wendy-auth binds the access and
+// The DPoP key is generated once the realm (or the universal start) is settled
+// and before the browser opens, because wendy-auth binds the access and
 // refresh-token family to its thumbprint.
 func performOIDCLogin(ctx context.Context, opts oidcLoginOptions) error {
 	if opts.Issuer == "" && opts.AuthorizationBase == "" {
@@ -64,7 +65,30 @@ func performOIDCLogin(ctx context.Context, opts oidcLoginOptions) error {
 	cloudResource := opts.CloudResource
 	identityResource := opts.IdentityResource
 
-	// Step 1: the key, before anything else.
+	// Step 1: explicit realms use discovery immediately. Realm-less login starts
+	// only at the configured authority's fixed global endpoint; discovery waits
+	// until the callback identifies the selected realm.
+	var meta *oidcProviderMetadata
+	var err error
+	if opts.Issuer != "" {
+		issuer, err := validateRealmIssuer(opts.Issuer, opts.Issuer)
+		if err != nil {
+			return fmt.Errorf("realm issuer %q is not a canonical non-system realm issuer", opts.Issuer)
+		}
+		opts.Issuer = issuer
+		meta, err = discoverOIDC(ctx, opts.Issuer)
+		if err != nil {
+			return err
+		}
+	} else {
+		opts.AuthorizationBase, err = canonicalAuthorizationBase(opts.AuthorizationBase)
+		if err != nil {
+			return err
+		}
+		meta = &oidcProviderMetadata{AuthorizationEndpoint: opts.AuthorizationBase + "/authorize"}
+	}
+
+	// Step 2: the key, once the authorization target is settled.
 	privateKeyPEM, err := certs.GenerateMLDSAKeyPair()
 	if err != nil {
 		return fmt.Errorf("generating operator key: %w", err)
@@ -78,27 +102,6 @@ func performOIDCLogin(ctx context.Context, opts oidcLoginOptions) error {
 		return fmt.Errorf("computing key thumbprint: %w", err)
 	}
 	fmt.Println(tui.SuccessMessage(fmt.Sprintf("Generated operator key (jkt %s).", thumbprint)))
-
-	// Step 2: explicit realms use discovery immediately. Realm-less login starts
-	// only at the configured authority's fixed global endpoint; discovery waits
-	// until the callback identifies the selected realm.
-	var meta *oidcProviderMetadata
-	if opts.Issuer != "" {
-		opts.Issuer, err = validateRealmIssuer(opts.Issuer, opts.Issuer)
-		if err != nil {
-			return err
-		}
-		meta, err = discoverOIDC(ctx, opts.Issuer)
-		if err != nil {
-			return err
-		}
-	} else {
-		opts.AuthorizationBase, err = canonicalAuthorizationBase(opts.AuthorizationBase)
-		if err != nil {
-			return err
-		}
-		meta = &oidcProviderMetadata{AuthorizationEndpoint: opts.AuthorizationBase + "/authorize"}
-	}
 
 	// Step 3: loopback listener for the redirect.
 	listener, redirectURI, err := startLoopbackListener()
@@ -163,7 +166,7 @@ func performOIDCLogin(ctx context.Context, opts oidcLoginOptions) error {
 	}()
 
 	// Step 4: send the operator to the realm's authorize endpoint.
-	authURL, err := buildAuthorizeURL(meta, opts.ClientID, redirectURI, challenge, state, nonce, identityResource)
+	authURL, err := buildAuthorizeURL(meta, opts.ClientID, redirectURI, challenge, state, nonce, identityResource, opts.LoginHint)
 	if err != nil {
 		return err
 	}
@@ -644,7 +647,7 @@ func persistOAuthSession(auth *config.AuthConfig) error {
 }
 
 // buildAuthorizeURL assembles the authorization request.
-func buildAuthorizeURL(meta *oidcProviderMetadata, clientID, redirectURI, challenge, state, nonce, resource string) (string, error) {
+func buildAuthorizeURL(meta *oidcProviderMetadata, clientID, redirectURI, challenge, state, nonce, resource, loginHint string) (string, error) {
 	u, err := url.Parse(meta.AuthorizationEndpoint)
 	if err != nil {
 		return "", fmt.Errorf("parsing authorization_endpoint: %w", err)
@@ -664,6 +667,9 @@ func buildAuthorizeURL(meta *oidcProviderMetadata, clientID, redirectURI, challe
 		// unknown resource before the user authenticates.
 		q.Set("resource", resource)
 	}
+	if loginHint != "" {
+		q.Set("login_hint", loginHint)
+	}
 	// url.Values.Encode() renders spaces as "+", which is correct only for an
 	// application/x-www-form-urlencoded BODY. In a query string "+" is a
 	// literal plus, and wendy-auth parses it strictly: `scope=openid+email`
@@ -672,7 +678,8 @@ func buildAuthorizeURL(meta *oidcProviderMetadata, clientID, redirectURI, challe
 	// contexts, so rewrite the separators.
 	//
 	// Safe as a blanket replacement here: every other parameter is base64url
-	// (which uses '-' and '_', never '+') or a loopback URI.
+	// (which uses '-' and '_', never '+'), a loopback URI, or the login_hint
+	// email, whose literal '+' Encode already escapes as %2B.
 	u.RawQuery = strings.ReplaceAll(q.Encode(), "+", "%20")
 	return u.String(), nil
 }
