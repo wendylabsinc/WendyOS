@@ -234,10 +234,14 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - name: shellcheck install scripts
         run: shellcheck go/internal/cli/assets/docs/agent.sh go/internal/cli/assets/docs/cli.sh
+      - name: shellcheck agent package scripts
+        run: shellcheck packaging/linux/fpm/wendy-agent-*.sh .github/scripts/agent-package-scripts_test.sh
       - name: resolver + deferral tests
         run: bash .github/scripts/install-scripts_test.sh
       - name: manifest merge tests
         run: bash .github/scripts/install-manifest-merge_test.sh
+      - name: agent package script tests
+        run: bash .github/scripts/agent-package-scripts_test.sh
       - name: integration device selection tests
         run: python3 .github/scripts/integration-discover_test.py
       - name: release priority tests

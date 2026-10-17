@@ -790,6 +790,7 @@ jobs:
             --config-files /etc/avahi/services/wendy-agent.service \
             --after-install packaging/linux/fpm/wendy-agent-postinstall.sh \
             --before-remove packaging/linux/fpm/wendy-agent-preremove.sh \
+            --rpm-posttrans packaging/linux/fpm/wendy-agent-posttrans.sh \
             -C pkgroot/wendy-agent \
             .
 
@@ -831,6 +832,7 @@ jobs:
           rpm -qpl "$WENDY_AGENT_RPM" | grep "/usr/lib/systemd/system/wendy-agent.service" > /dev/null
           rpm -qpl "$WENDY_AGENT_RPM" | grep "/etc/default/wendy-agent" > /dev/null
           rpm -qpl "$WENDY_AGENT_RPM" | grep "/etc/avahi/services/wendy-agent.service" > /dev/null
+          rpm -qp --scripts "$WENDY_AGENT_RPM" | grep "^posttrans scriptlet" > /dev/null
 
       - name: Upload .deb packages
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7

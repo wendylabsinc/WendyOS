@@ -12,7 +12,9 @@ fi
 systemctl daemon-reload >/dev/null 2>&1 || true
 
 if systemctl is-enabled wendy-agent >/dev/null 2>&1; then
-  systemctl try-restart wendy-agent >/dev/null 2>&1 || true
+  # restart rather than try-restart: an upgrade from a version whose
+  # preremove stopped the agent unconditionally finds it stopped here.
+  systemctl restart wendy-agent >/dev/null 2>&1 || true
 else
   systemctl enable --now wendy-agent >/dev/null 2>&1 || true
 fi
