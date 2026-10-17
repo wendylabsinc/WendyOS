@@ -1440,7 +1440,7 @@ func runComposeWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, 
 		}
 	}
 
-	for _, name := range ordered {
+	composeCreateRequest := func(name string) (*agentpb.CreateContainerRequest, error) {
 		svc := cfg.Services[name]
 		appCfg := svcCfgs[name]
 
@@ -1455,12 +1455,12 @@ func runComposeWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, 
 		} else if svc.Image != "" {
 			imageName = normalizeImageRef(svc.Image)
 		} else {
-			return fmt.Errorf("service %s: no image or build directive", name)
+			return nil, fmt.Errorf("service %s: no image or build directive", name)
 		}
 
 		appConfigData, err := json.Marshal(appCfg)
 		if err != nil {
-			return fmt.Errorf("marshaling config for service %s: %w", name, err)
+			return nil, fmt.Errorf("marshaling config for service %s: %w", name, err)
 		}
 
 		// Split the compose command into argv: the first token becomes Cmd
@@ -1476,12 +1476,7 @@ func runComposeWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, 
 			restartPolicy = composeRestartPolicy(svc.Restart)
 		}
 
-		if warns := unsupportedComposeWarnings(svc); len(warns) > 0 {
-			cliLogln("warning: service %q uses unsupported Compose fields (ignored by Wendy): %s",
-				name, strings.Join(warns, ", "))
-		}
-
-		createReq := &agentpb.CreateContainerRequest{
+		return &agentpb.CreateContainerRequest{
 			ImageName:     imageName,
 			AppName:       appCfg.ContainerName(),
 			AppConfig:     appConfigData,
@@ -1489,6 +1484,25 @@ func runComposeWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, 
 			RestartPolicy: restartPolicy,
 			UserArgs:      extraArgs,
 			Env:           serviceEnvs[name],
+		}, nil
+	}
+
+	if err := validateServicesBeforeReplace(ctx, conn.ContainerService, ordered, composeCreateRequest); err != nil {
+		return err
+	}
+
+	for _, name := range ordered {
+		svc := cfg.Services[name]
+		appCfg := svcCfgs[name]
+
+		if warns := unsupportedComposeWarnings(svc); len(warns) > 0 {
+			cliLogln("warning: service %q uses unsupported Compose fields (ignored by Wendy): %s",
+				name, strings.Join(warns, ", "))
+		}
+
+		createReq, err := composeCreateRequest(name)
+		if err != nil {
+			return err
 		}
 
 		cliLogln("Creating container for service %s (%s)...", name, appCfg.ContainerName())

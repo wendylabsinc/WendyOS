@@ -1080,7 +1080,23 @@ func toCreateContainerProgress(progress UnpackProgress) *agentpb.CreateContainer
 	}
 }
 
-func (c *Client) CreateContainerWithProgress(ctx context.Context, req *agentpb.CreateContainerRequest, appCfg *appconfig.AppConfig, onProgress services.ProgressFunc) (retErr error) {
+func (c *Client) CreateContainerWithProgress(ctx context.Context, req *agentpb.CreateContainerRequest, appCfg *appconfig.AppConfig, onProgress services.ProgressFunc) error {
+	return c.createContainer(ctx, req, appCfg, onProgress, false)
+}
+
+// ValidateContainer makes every check CreateContainerWithProgress makes
+// before it replaces an existing container of the same name, and stops there:
+// it creates and replaces nothing. A multi-service deploy validates each
+// service before replacing any, so a service that would fail leaves the whole
+// app on its previous version (WDY-3850). It may pull and unpack the image,
+// which the create that follows then reuses.
+func (c *Client) ValidateContainer(ctx context.Context, req *agentpb.CreateContainerRequest, appCfg *appconfig.AppConfig) error {
+	return c.createContainer(ctx, req, appCfg, nil, true)
+}
+
+// createContainer is CreateContainerWithProgress, or with validateOnly only
+// its prepare phase (see ValidateContainer).
+func (c *Client) createContainer(ctx context.Context, req *agentpb.CreateContainerRequest, appCfg *appconfig.AppConfig, onProgress services.ProgressFunc, validateOnly bool) (retErr error) {
 	createStarted := time.Now()
 	var replaceDuration, imageResolveDuration, unpackDuration, specDuration, snapshotDuration time.Duration
 	var replacedExisting bool
@@ -1167,7 +1183,11 @@ func (c *Client) CreateContainerWithProgress(ctx context.Context, req *agentpb.C
 	if serviceName != "" {
 		logFields = append(logFields, zap.String("service_name", serviceName))
 	}
-	c.logger.Info("Creating container", logFields...)
+	if validateOnly {
+		c.logger.Info("Validating container", logFields...)
+	} else {
+		c.logger.Info("Creating container", logFields...)
+	}
 
 	// Determine version from the app config or default.
 	version := appCfg.Version
@@ -1195,9 +1215,12 @@ func (c *Client) CreateContainerWithProgress(ctx context.Context, req *agentpb.C
 		// before the swap: a restart the monitor began while this create
 		// pulls and prepares would wait on the container's lock and then
 		// start the new container. A refused redeploy resumes restarts of the
-		// old container when it returns.
-		resumeRestarts := c.suppressRestarts(containerName)
-		defer resumeRestarts()
+		// old container when it returns. A validation creates no container,
+		// so a restart waiting on it restarts the old one, as it should.
+		if !validateOnly {
+			resumeRestarts := c.suppressRestarts(containerName)
+			defer resumeRestarts()
+		}
 	}
 
 	// SECURITY (WDY-1093): refuse to start a bluetooth container when the D-Bus
@@ -1563,6 +1586,9 @@ func (c *Client) CreateContainerWithProgress(ctx context.Context, req *agentpb.C
 		return err
 	}
 	specDuration = time.Since(phaseStarted)
+	if validateOnly {
+		return nil
+	}
 
 	// The swap: remove the old container, then create the new one. Each step
 	// from here on needs the old container gone. containerd has no rename, so
