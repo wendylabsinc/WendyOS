@@ -112,6 +112,10 @@ func connectToCloudAgentExpecting(ctx context.Context, cloudGRPC, deviceName, br
 		return nil, err
 	}
 
+	return connectToCloudAgentWithAuthExpecting(ctx, auth, deviceName, brokerURL, expected)
+}
+
+func connectToCloudAgentWithAuthExpecting(ctx context.Context, auth *config.AuthConfig, deviceName, brokerURL string, expected *certs.WendyIdentity) (*grpcclient.AgentConnection, error) {
 	asset, err := pickCloudDiscoveryDevice(ctx, auth, deviceName, brokerURL)
 	if err != nil {
 		return nil, err

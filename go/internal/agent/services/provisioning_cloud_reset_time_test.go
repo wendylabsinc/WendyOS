@@ -137,11 +137,18 @@ func TestCloudResetCanceledRequestRetainsKeys(t *testing.T) {
 
 func TestCloudResetRecordsAuthenticatedAuthorizationTime(t *testing.T) {
 	svc, req, ctx := cloudResetFixture(t)
-	latest := time.Now().Add(10 * time.Second)
+	// Advancing the authenticated window must work across a whole-second boundary.
+	latest := time.Now().Add(10 * time.Second).Truncate(time.Second).Add(time.Second - time.Nanosecond)
+	window := timesync.TimeWindow{Earliest: latest.Add(-10 * time.Second), Latest: latest}
 	svc.trustedTime = func(context.Context) (timesync.TimeWindow, error) {
-		return anchored(timesync.TimeWindow{Earliest: latest.Add(-10 * time.Second), Latest: latest}), nil
+		window = anchored(window)
+		return window, nil
 	}
 	response, err := NewProvisioningServiceV2(svc).Unprovision(ctx, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bootAfter, err := timesync.BootTime()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,8 +158,11 @@ func TestCloudResetRecordsAuthenticatedAuthorizationTime(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if completion.AuthorizedAt != latest.Unix() {
-		t.Fatalf("authorization time = %d, want authenticated upper bound %d", completion.AuthorizedAt, latest.Unix())
+	// Authorization advances the upper bound by elapsed boot time. Bound that
+	// advancement by the clock sample after the call, keeping nanosecond precision.
+	upper := latest.Add(time.Duration(bootAfter - window.Boot))
+	if at := completion.AuthorizationTime(); at.Before(latest) || at.After(upper) {
+		t.Fatalf("authorization time = %s, want between %s and %s", at, latest, upper)
 	}
 }
 

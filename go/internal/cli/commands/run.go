@@ -867,8 +867,10 @@ func resolveWithCloudFallback(ctx context.Context, cloudName string, opts ...res
 	if cloudCheckedBeforePicker {
 		return nil, err
 	}
-	// An MCP-spawned run deploys to the MCP session's device or fails.
-	if errors.Is(err, ErrUserCancelled) || cloudFallbackDisabled(cloudName) {
+	// An MCP-spawned run deploys to the MCP session's device or fails. An
+	// explicit name already checked in Cloud must keep that session's result.
+	var cloudNameErr *cloudNameResolutionError
+	if stopConnectionRecovery(err) || errors.As(err, &cloudNameErr) || cloudFallbackDisabled(cloudName) {
 		return nil, err
 	}
 	var stopped *defaultDeviceRecoveryStoppedError
