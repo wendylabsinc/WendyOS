@@ -219,6 +219,35 @@ func TestIntegrationFailedRedeployKeepsRunningApp(t *testing.T) {
 	}
 }
 
+// A refused redeploy of a bridge-networked app leaves the old container's
+// network sandbox in place: tearing it down (CNI DEL, IPAM, DNS) would cut the
+// still-running app off the network.
+func TestIntegrationFailedRedeployKeepsNetworkSandbox(t *testing.T) {
+	c, ctx := newIntegrationClient(t)
+	bridge := []appconfig.Entitlement{{Type: appconfig.EntitlementNetwork, Mode: "bridge"}}
+	startOldApp(t, c, ctx, pullReplaceTestImage(t, c, ctx), "replaced-app", bridge)
+	closed := false
+	c.networkSandboxes = map[string]*networkSandbox{}
+	c.registerNetworkSandbox(&networkSandbox{
+		appID:        "replaced-app",
+		containerID:  "replaced-app",
+		identity:     networkIdentity("", bridge),
+		entitlements: bridge,
+		cleanup:      func() { closed = true },
+	})
+
+	req := &agentpb.CreateContainerRequest{AppName: "replaced-app", ImageName: replaceTestImage, Env: []string{"LD_PRELOAD=/x.so"}}
+	cfg := &appconfig.AppConfig{AppID: "replaced-app", Version: "2", Entitlements: bridge}
+	if err := c.CreateContainerWithProgress(ctx, req, cfg, nil); err == nil {
+		t.Fatal("CreateContainerWithProgress succeeded; want the reserved env var refused")
+	}
+
+	if closed || c.takeNetworkSandbox("replaced-app") == nil {
+		t.Fatal("the refused redeploy tore down the old container's network sandbox")
+	}
+	requireOldAppRunning(t, c, ctx, "replaced-app")
+}
+
 // A replace pauses the old container's restarts from its start, not only for
 // the swap: a restart the monitor began during the image pull would otherwise
 // wait on the container's lock and then start the new container behind the
