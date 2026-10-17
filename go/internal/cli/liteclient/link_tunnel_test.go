@@ -152,16 +152,28 @@ const devicePrincipal = "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111
 
 func TestConnectViaRelayMTLS(t *testing.T) {
 	for _, tc := range []struct {
-		name, principal string
-		trusted, accept bool
+		name, principal           string
+		trusted, accept, fallback bool
 	}{
-		{"matching device", devicePrincipal, true, true},
-		{"wrong device", strings.Replace(devicePrincipal, "441bf6804ff8", "000000000000", 1), true, false},
-		{"wrong tenant", strings.Replace(devicePrincipal, "11111111-1111-4111-8111-111111111111", "33333333-3333-4333-8333-333333333333", 1), true, false},
-		{"untrusted issuer", devicePrincipal, false, false},
+		{"matching device", devicePrincipal, true, true, false},
+		{"wrong device", strings.Replace(devicePrincipal, "441bf6804ff8", "000000000000", 1), true, false, false},
+		{"wrong tenant", strings.Replace(devicePrincipal, "11111111-1111-4111-8111-111111111111", "33333333-3333-4333-8333-333333333333", 1), true, false, false},
+		{"untrusted issuer", devicePrincipal, false, false, false},
+		{"classical device authority", devicePrincipal, false, true, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cert, chain, cfg := relayPKI(t, tc.principal, tc.trusted)
+			options := testRelayOptions(t, cert)
+			fallbackCalls := 0
+			if tc.fallback {
+				root, key := issueRelayCertificate(t, 10, "Lite Device Authority", "", true, nil, nil)
+				device, deviceKey := issueRelayCertificate(t, 11, "device", tc.principal, false, root, key)
+				cfg.Certificates = []tls.Certificate{{Certificate: [][]byte{device.Raw}, PrivateKey: deviceKey}}
+				options.DeviceTrustFallback = func(context.Context) (string, error) {
+					fallbackCalls++
+					return string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: root.Raw})), nil
+				}
+			}
 			relay := newFakeRelay()
 			verified := make(chan error, 1)
 			relay.device = func(raw net.Conn) {
@@ -201,7 +213,7 @@ func TestConnectViaRelayMTLS(t *testing.T) {
 			ctx, cancel := context.WithTimeout(metadata.AppendToOutgoingContext(context.Background(), "authorization", "Bearer session"), 10*time.Second)
 			defer cancel()
 			c := NewWendyLiteClient()
-			err := c.ConnectViaRelay(ctx, cc, relayTestAssetID, cert, chain, "441bf6804ff8", testRelayOptions(t, cert))
+			err := c.ConnectViaRelay(ctx, cc, relayTestAssetID, cert, chain, "441bf6804ff8", options)
 			if tc.accept {
 				if err != nil {
 					t.Fatal(err)
@@ -217,6 +229,9 @@ func TestConnectViaRelayMTLS(t *testing.T) {
 				}
 			} else if err == nil || !strings.Contains(err.Error(), "device mTLS") {
 				t.Fatalf("untrusted device accepted: %v", err)
+			}
+			if tc.fallback && fallbackCalls != 1 {
+				t.Fatalf("device authority discovery calls = %d, want 1", fallbackCalls)
 			}
 			open := <-relay.opens
 			if open.assetID != relayTestAssetID || len(open.authorization) != 1 || open.authorization[0] != "Bearer session" {

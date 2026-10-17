@@ -456,8 +456,19 @@ func EnrollmentRequest(auth *config.AuthConfig, deviceID string) ([]byte, error)
 
 // EnrollmentRequestForClass binds the operator authorization to a device tier.
 func EnrollmentRequestForClass(auth *config.AuthConfig, deviceID, deviceClass string) ([]byte, error) {
+	return EnrollmentRequestForChain(auth, deviceID, deviceClass, "")
+}
+
+// EnrollmentChainP256 selects the PKI's P-256 device authority for constrained
+// devices. The operator signature binds this choice alongside the device tier.
+const EnrollmentChainP256 = "ECDSA_P256"
+
+func EnrollmentRequestForChain(auth *config.AuthConfig, deviceID, deviceClass, chainAlgorithm string) ([]byte, error) {
 	if deviceClass != "A" && deviceClass != "B" && deviceClass != "C" {
 		return nil, fmt.Errorf("invalid device class %q", deviceClass)
+	}
+	if chainAlgorithm != "" && (deviceClass != "C" || chainAlgorithm != EnrollmentChainP256) {
+		return nil, fmt.Errorf("P-256 certificate chains are supported only for Class C enrollment")
 	}
 	s, err := newSigner(auth)
 	if err != nil {
@@ -467,10 +478,14 @@ func EnrollmentRequestForClass(auth *config.AuthConfig, deviceID, deviceClass st
 		return nil, fmt.Errorf("device enrollment requires an operator certificate")
 	}
 	now := s.now().Unix()
-	payload, err := canonicalJSON(map[string]any{
+	claims := map[string]any{
 		"tenant": s.tenantUUID, "device_id": deviceID, "device_class": deviceClass,
 		"iat": now, "exp": now + 300, "jti": uuid.NewString(),
-	})
+	}
+	if chainAlgorithm != "" {
+		claims["chain_algorithm"] = chainAlgorithm
+	}
+	payload, err := canonicalJSON(claims)
 	if err != nil {
 		return nil, err
 	}

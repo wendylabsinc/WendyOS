@@ -101,8 +101,20 @@ func discoverTrustForProfile(ctx context.Context, client *http.Client, cfg *lite
 		method := http.MethodHead
 		if fetchDeviceRoots {
 			method = http.MethodGet
+			algorithm := profile.chainAlgorithm()
+			query, err := url.ParseQuery(u.RawQuery)
+			if err != nil {
+				return fmt.Errorf("invalid CA discovery query: %w", err)
+			}
+			if values, ok := query["chain_algorithm"]; ok && (len(values) != 1 || values[0] != algorithm) {
+				return fmt.Errorf("CA discovery chain_algorithm conflicts with the firmware's enrollment profile")
+			}
+			if algorithm != "" {
+				query.Set("chain_algorithm", algorithm)
+				u.RawQuery = query.Encode()
+			}
 		}
-		req, err := http.NewRequestWithContext(ctx, method, target, nil)
+		req, err := http.NewRequestWithContext(ctx, method, u.String(), nil)
 		if err != nil {
 			return err
 		}
@@ -140,8 +152,15 @@ func discoverTrustForProfile(ctx context.Context, client *http.Client, cfg *lite
 			if len(body) > 128*1024 {
 				return fmt.Errorf("CA discovery response too large")
 			}
-			deviceRoots, err = discoveryRootsForProfile(body, resp.Header.Get("Content-Type"), profile)
+			if profile.chainAlgorithm() != "" {
+				deviceRoots, err = p256DiscoveryRoots(body, resp.Header)
+			} else {
+				deviceRoots, err = discoveryRootsForProfile(body, resp.Header.Get("Content-Type"), profile)
+			}
 			if err != nil {
+				if profile.chainAlgorithm() != "" {
+					return fmt.Errorf("PKI did not provide the requested P-256 device chain; no cloud asset was reserved: %w", err)
+				}
 				return err
 			}
 		} else {

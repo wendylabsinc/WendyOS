@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/liteclient"
+	"github.com/wendylabsinc/wendy/go/internal/cli/liteenroll"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/cloudrelay"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
@@ -55,6 +56,13 @@ func liteRelayOptions(ctx context.Context, auth *config.AuthConfig, renew bool) 
 	options.DeviceTrustChainPEM = auth.Certificates[0].PemCertificateChain
 	if options.DeviceTrustChainPEM == "" {
 		return options, fmt.Errorf("selected Cloud session has no device CA chain; run 'wendy auth login'")
+	}
+	// Resolve the separate classical device authority only when the selected
+	// board needs it. Existing ML-DSA sessions keep their current trust path.
+	pkiEndpoint, tenantID := auth.PKIEndpoint, auth.Certificates[0].TenantUUID()
+	options.DeviceTrustFallback = func(ctx context.Context) (string, error) {
+		roots, err := liteenroll.DiscoverP256DeviceRoots(ctx, pkiEndpoint, tenantID)
+		return string(roots), err
 	}
 	key, err := cert.PrivateKeyPEM()
 	if err != nil {

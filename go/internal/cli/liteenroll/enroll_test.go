@@ -207,7 +207,7 @@ func TestMintTierCCredential(t *testing.T) {
 		t.Fatal(err)
 	}
 	f := &fakeEnrollment{reply: &cloudpb.EnrollDeviceResponse{CredentialKind: "enrollment_token", TokenValue: "single-use-test", AssetId: "42", ExpiresAt: time.Now().Add(4 * time.Minute).Format(time.RFC3339)}}
-	asset, err := Mint(context.Background(), f, auth, cfg, "lite-test", nil)
+	asset, err := Mint(context.Background(), f, auth, cfg, "lite-test", nil, TrustProfile{})
 	if err != nil || asset != "42" || cfg.Token != "single-use-test" {
 		t.Fatalf("mint: %s %v", asset, err)
 	}
@@ -220,7 +220,7 @@ func TestMintTierCCredential(t *testing.T) {
 	}, func() { f.reply.ExpiresAt = time.Now().Add(time.Minute).Format(time.RFC3339); f.reply.TokenValue = "" }} {
 		mutate()
 		cfg.Token = ""
-		if asset, err := Mint(context.Background(), f, auth, cfg, "lite-test", nil); err == nil || cfg.Token != "" || asset != "42" {
+		if asset, err := Mint(context.Background(), f, auth, cfg, "lite-test", nil, TrustProfile{}); err == nil || cfg.Token != "" || asset != "42" {
 			t.Fatal("invalid credential accepted")
 		}
 	}
@@ -244,7 +244,7 @@ func TestMintIncludesLiteHardwareInSignedRequest(t *testing.T) {
 			}
 			before := proto.Clone(tc.hardware)
 			f := &fakeEnrollment{reply: &cloudpb.EnrollDeviceResponse{CredentialKind: "enrollment_token", TokenValue: "single-use-test", AssetId: "42", ExpiresAt: time.Now().Add(4 * time.Minute).Format(time.RFC3339)}}
-			if _, err := Mint(context.Background(), f, auth, cfg, "lite-test", tc.hardware); err != nil {
+			if _, err := Mint(context.Background(), f, auth, cfg, "lite-test", tc.hardware, TrustProfile{}); err != nil {
 				t.Fatal(err)
 			}
 			if !proto.Equal(f.request.GetHardware(), tc.want) {

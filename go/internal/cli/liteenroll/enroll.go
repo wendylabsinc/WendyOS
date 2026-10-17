@@ -90,8 +90,13 @@ func Config(auth *config.AuthConfig, deviceID, csrURL, timeURL, brokerHost strin
 }
 
 // Mint obtains the single-use credential after Cloud reserves the device asset.
-func Mint(ctx context.Context, conn grpc.ClientConnInterface, auth *config.AuthConfig, cfg *litepb.WendyConfEnrollment, name string, hardware *cloudpb.DeviceHardware) (string, error) {
-	artifact, err := cloudrequest.EnrollmentRequestForClass(auth, cfg.DeviceId, "C")
+func Mint(ctx context.Context, conn grpc.ClientConnInterface, auth *config.AuthConfig, cfg *litepb.WendyConfEnrollment, name string, hardware *cloudpb.DeviceHardware, profile TrustProfile) (string, error) {
+	if !cfg.ProvisionTrust {
+		// Firmware-pinned roots cannot trust a newly selected authority until
+		// its roots have been provisioned over USB.
+		profile = profile.WithExistingDeviceIssuer()
+	}
+	artifact, err := cloudrequest.EnrollmentRequestForChain(auth, cfg.DeviceId, "C", profile.chainAlgorithm())
 	if err != nil {
 		return "", err
 	}

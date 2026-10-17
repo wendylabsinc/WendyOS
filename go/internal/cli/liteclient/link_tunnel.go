@@ -23,6 +23,9 @@ type RelayOptions struct {
 	// DeviceTrustChainPEM comes from the selected Cloud session. Lite operator
 	// leaves use a separate authority and do not carry the device's CA chain.
 	DeviceTrustChainPEM string
+	// DeviceTrustFallback loads the selected tenant's P-256 device roots over
+	// authenticated HTTPS only if its matching device has an unknown issuer.
+	DeviceTrustFallback func(context.Context) (string, error)
 	SignRequest         func([]byte) ([]byte, error)
 	Redial              func(context.Context, string) (*grpc.ClientConn, context.Context, error)
 }

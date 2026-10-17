@@ -49,11 +49,18 @@ RFC 3161 service, pass `--time-url https://time.example/v1/time` and provide
 bundles from the PKI administrator. Firmware with all three custom bundles pinned
 at build time can omit the file flags.
 
-Firmware uses mbedTLS by default. To enroll against a PKI with ML-DSA CA
-certificates, build the firmware with `CONFIG_WENDY_PKI_WOLFSSL=y`. The flag is
-disabled by default. Updated firmware advertises its ML-DSA support, and the CLI
-checks this before reserving an asset. A P-256 leaf beneath an ML-DSA issuer also
-requires the wolfSSL profile. Both profiles support a TSA signing with
+Firmware uses mbedTLS by default. When the board does not advertise ML-DSA
+verification, the CLI requests the tenant's P-256 device CA chain and signs that
+choice into the Class C enrollment request. PKI binds the token to that authority,
+so the device's own P-256 CSR receives a chain it can verify. This requires PKI and
+broker versions that support the P-256 device authority; an older PKI returning
+ML-DSA roots still stops enrollment before reserving an asset. Explicit device
+root files and firmware-pinned roots retain the deployment's configured issuer.
+Supplied files must pass the board's algorithm compatibility checks.
+
+Firmware built with `CONFIG_WENDY_PKI_WOLFSSL=y` advertises ML-DSA verification and
+retains the normal device CA chain. The flag is disabled by default. A P-256 leaf
+beneath an ML-DSA issuer requires this verifier. Both profiles support a TSA signing with
 ECDSA P-256 or P-384 and SHA-256. The HTTPS bundle must cover the broker too.
 
 The firmware stores bundles with enrollment configuration and uses them after
@@ -98,6 +105,11 @@ certificate from pki-core over the ML-DSA login when it needs one, and stores it
 with the login. `WENDY_LITE_OPERATOR_CERT` (leaf and CA chain, PEM) and
 `WENDY_LITE_OPERATOR_KEY` override it with a pki-core-issued pair; the CLI
 rejects an identity that differs from the selected operator.
+
+The CLI verifies P-256 device chains against the tenant's device authority fetched
+over verified HTTPS from the selected PKI. This lookup is needed only when the
+existing session trust does not cover the device's issuer. It remains separate
+from the Lite operator authority used to authenticate the CLI to the device.
 
 The broker authenticates the device's initial mTLS control connection, requests an
 upgrade, and closes that TLS session without closing TCP. It then forwards opaque

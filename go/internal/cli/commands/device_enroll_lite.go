@@ -87,6 +87,9 @@ func runEnrollLiteDevice(cmd *cobra.Command, target models.ExternalDevice, auth 
 		return errLiteAlreadyEnrolled
 	}
 	trustProfile := liteenroll.TrustProfileFromChallenge(challenge)
+	if opts.deviceRoots != "" {
+		trustProfile = trustProfile.WithExistingDeviceIssuer()
+	}
 	// Older firmware does not report this capability. Reject only firmware that
 	// explicitly reports its certificate-issuance task is unavailable.
 	if challenge.CloudEnrollmentSupported != nil && !challenge.GetCloudEnrollmentSupported() {
@@ -164,7 +167,7 @@ func runEnrollLiteDevice(cmd *cobra.Command, target models.ExternalDevice, auth 
 	if target.CPUArchitecture != "" {
 		hardware.Architecture = proto.String(target.CPUArchitecture)
 	}
-	asset, err := liteenroll.Mint(mintCtx, cloud, auth, cfg, name, hardware)
+	asset, err := liteenroll.Mint(mintCtx, cloud, auth, cfg, name, hardware, trustProfile)
 	cancel()
 	if err != nil {
 		if asset != "" {

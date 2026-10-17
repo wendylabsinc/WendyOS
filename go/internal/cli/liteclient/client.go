@@ -295,9 +295,10 @@ func (c *WendyLiteClient) ConnectViaRelay(ctx context.Context, cc *grpc.ClientCo
 	if err != nil {
 		return err
 	}
-	conn := tls.Client(raw, cfg)
 	handshakeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
+	addRelayDeviceTrustFallback(handshakeCtx, cfg, cert, deviceTrustChain, deviceID, options.DeviceTrustFallback)
+	conn := tls.Client(raw, cfg)
 	if err := conn.HandshakeContext(handshakeCtx); err != nil {
 		raw.Close()
 		return fmt.Errorf("device mTLS over relay: %w", err)

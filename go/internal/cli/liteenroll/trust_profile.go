@@ -8,13 +8,15 @@ import (
 	"encoding/pem"
 	"fmt"
 
+	"github.com/wendylabsinc/wendy/go/internal/cli/cloudrequest"
 	litepb "github.com/wendylabsinc/wendy/go/proto/gen/litepb"
 )
 
 // TrustProfile describes the certificate algorithms advertised by the board.
 // Its zero value preserves the mbedTLS restrictions used by older firmware.
 type TrustProfile struct {
-	mldsa bool
+	mldsa                bool
+	existingDeviceIssuer bool
 }
 
 // TrustProfileFromChallenge permits ML-DSA only when firmware explicitly reports
@@ -22,6 +24,22 @@ type TrustProfile struct {
 // must not infer support from the enrolling computer's crypto implementation.
 func TrustProfileFromChallenge(challenge *litepb.WendyComEnrollmentChallenge) TrustProfile {
 	return TrustProfile{mldsa: challenge.GetMldsaVerificationSupported()}
+}
+
+// WithExistingDeviceIssuer preserves an issuer configured with explicit root
+// files or firmware-pinned roots. Firmware algorithm restrictions still apply.
+func (profile TrustProfile) WithExistingDeviceIssuer() TrustProfile {
+	profile.existingDeviceIssuer = true
+	return profile
+}
+
+// chainAlgorithm selects the same issuer for CA discovery and the signed
+// enrollment request. Legacy firmware gets a P-256 chain by default.
+func (profile TrustProfile) chainAlgorithm() string {
+	if profile.mldsa || profile.existingDeviceIssuer {
+		return ""
+	}
+	return cloudrequest.EnrollmentChainP256
 }
 
 func validateMbedTLSTrustBundle(data []byte) error {

@@ -70,6 +70,7 @@ func TestDiscoveryCMS(t *testing.T) {
 func TestDiscoverTrustUsesVerifiedHTTPS(t *testing.T) {
 	root := testTrustPEM(t, true, time.Now().Add(time.Hour))
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set(chainAlgorithmHeader, "ECDSA_P256")
 		if r.Method == http.MethodHead {
 			w.WriteHeader(404)
 			return
@@ -145,6 +146,7 @@ func TestDiscoverDefaultTrustPinsTSAAndChecksItsHTTPSChain(t *testing.T) {
 	device := testTrustPEM(t, true, time.Now().Add(time.Hour))
 	var requests []string
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set(chainAlgorithmHeader, "ECDSA_P256")
 		requests = append(requests, r.Method+" "+r.URL.Path)
 		if r.Method == http.MethodGet {
 			w.Write(device)
@@ -211,6 +213,7 @@ func TestDiscoverDefaultTrustPreservesExplicitBundles(t *testing.T) {
 func TestDiscoverDefaultTrustFailureIsAtomic(t *testing.T) {
 	device := testTrustPEM(t, true, time.Now().Add(time.Hour))
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set(chainAlgorithmHeader, "ECDSA_P256")
 		w.Write(device)
 	}))
 	defer srv.Close()

@@ -12,6 +12,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"io"
 	"math/big"
 	"net/http"
@@ -81,6 +82,7 @@ func TestLiteRelayOptionsUseTheLiteLeafNotThePrimary(t *testing.T) {
 	t.Setenv("WENDY_LITE_OPERATOR_CERT", "")
 	t.Setenv("WENDY_LITE_OPERATOR_KEY", "")
 	auth := liteTestAuth("cloud.example:443")
+	auth.PKIEndpoint = "https://identity.selected.example/v1/identity/certificate"
 	auth.Certificates, _ = liteRelayTestPKI(t)
 	lite, _ := liteRelayTestPKI(t)
 	auth.LiteCertificate = lite[0].PemCertificate + lite[0].PemCertificateChain
@@ -106,6 +108,22 @@ func TestLiteRelayOptionsUseTheLiteLeafNotThePrimary(t *testing.T) {
 	}
 	if alg := jwsHeader(t, proof)["alg"]; alg != "ES256" {
 		t.Fatalf("Lite request alg = %v, want ES256", alg)
+	}
+	if options.DeviceTrustFallback == nil {
+		t.Fatal("missing lazy P-256 device authority discovery")
+	}
+	// A later session switch must not redirect an in-flight device handshake's
+	// trust lookup. Cancellation proves the original valid target was selected
+	// without making a network request.
+	auth.PKIEndpoint = ""
+	auth.Certificates[0].PrincipalURI = "invalid"
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = options.DeviceTrustFallback(ctx)
+	var lookupErr *url.Error
+	wantEndpoint := "https://est.selected.example/.well-known/est/" + liteTestTenant + "/cacerts?chain_algorithm=ECDSA_P256"
+	if !errors.Is(err, context.Canceled) || !errors.As(err, &lookupErr) || lookupErr.URL != wantEndpoint {
+		t.Fatalf("device trust discovery did not retain its selected PKI and tenant: %v", err)
 	}
 }
 
