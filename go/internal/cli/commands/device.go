@@ -1280,29 +1280,34 @@ func newDeviceUnenrollCmd() *cobra.Command {
 				}
 			}
 
-			// Step 1: reset the device. The agent deletes its state and restarts,
-			// so the connection may drop right after the response — tolerate that.
-			if _, err := conn.ProvisioningService.Unprovision(ctx, &agentpb.UnprovisionRequest{}); err != nil {
-				if status.Code(err) == codes.Unavailable {
-					cliLogln("Device connection closed (agent is restarting).")
-				} else {
-					return fmt.Errorf("unprovisioning device: %w", err)
-				}
+			cloudConn, cloudCtx, cloudAuth, err := dialCloud(ctx, cloudGRPC, cloudHost)
+			if err != nil {
+				return fmt.Errorf("cloud cleanup preflight failed; device was not reset: %w", err)
 			}
+			defer cloudConn.Close()
 
-			// Step 2: clean up the cloud asset. Best-effort — a failure here leaves
-			// a dangling asset that can be removed from the dashboard, but the
-			// device itself is already reset.
-			certsRevoked, assetDeleted, cloudErr := cloudUnenrollCleanup(ctx, cloudGRPC, cloudHost, assetID)
+			result, cloudErr := performLegacyDeviceUnenroll(cloudCtx, cloudConn, orgID, assetID, cloudAuth.Certificates[0].UserID, func() error {
+				_, err := conn.ProvisioningService.Unprovision(ctx, &agentpb.UnprovisionRequest{})
+				return err
+			})
+			if !result.DeviceReset {
+				return cloudErr
+			}
+			retrySelector := (cloudDeviceSelector{Endpoint: cloudConn.Target(), OrgID: orgID, AssetID: assetID}).String()
+			retryCommand := "wendy cloud device unenroll --device " + shellQuoteArg(retrySelector)
 
 			if jsonOutput {
 				out := map[string]any{
-					"deviceReset":  true,
-					"certsRevoked": certsRevoked,
-					"assetDeleted": assetDeleted,
+					"deviceReset":    result.DeviceReset,
+					"certsRevoked":   result.CertificatesRevoked,
+					"assetDeleted":   result.AssetDeleted,
+					"organizationId": orgID,
+					"assetId":        assetID,
+					"cloud":          cloudConn.Target(),
 				}
 				if cloudErr != nil {
 					out["cloudError"] = cloudErr.Error()
+					out["retryCommand"] = retryCommand
 				}
 				data, marshalErr := json.MarshalIndent(out, "", "  ")
 				if marshalErr != nil {
@@ -1312,10 +1317,11 @@ func newDeviceUnenrollCmd() *cobra.Command {
 			} else {
 				fmt.Println("Device reset to unprovisioned state.")
 				if cloudErr != nil {
-					fmt.Printf("Warning: cloud cleanup failed: %v\n", cloudErr)
-					fmt.Printf("Delete asset %d from the Wendy Cloud dashboard to finish.\n", assetID)
+					fmt.Printf("Cloud cleanup is incomplete for org %d, asset %d in %s.\n", orgID, assetID, cloudConn.Target())
+					fmt.Printf("Retry cloud cleanup: %s\n", retryCommand)
+					fmt.Printf("If the legacy Cloud API remains unavailable, remove asset %d from organization %d in that Cloud dashboard.\n", assetID, orgID)
 				} else {
-					fmt.Printf("Revoked %d certificate(s) and deleted asset %d from Wendy Cloud.\n", certsRevoked, assetID)
+					fmt.Printf("Revoked %d certificate(s) and deleted asset %d from Wendy Cloud.\n", result.CertificatesRevoked, assetID)
 				}
 			}
 
@@ -1334,95 +1340,39 @@ func newDeviceUnenrollCmd() *cobra.Command {
 	return cmd
 }
 
-// cloudUnenrollCleanup revokes the asset's active certificates and then
-// deletes the asset record in Wendy Cloud. It authenticates with the user's
-// stored session for the device's cloud host (or cloudGRPC if provided).
 // dialCloud opens an authenticated gRPC connection to Wendy Cloud using the
 // user's stored session for target (or deviceCloudHost when target is empty).
-// It returns the connection and a context carrying the auth token; the caller
-// must Close the connection.
-func dialCloud(ctx context.Context, target, deviceCloudHost string) (*grpc.ClientConn, context.Context, error) {
+// It returns the connection, a context carrying the auth token, and the selected
+// session. The caller must Close the connection.
+func dialCloud(ctx context.Context, target, deviceCloudHost string) (*grpc.ClientConn, context.Context, *config.AuthConfig, error) {
 	if target == "" {
 		target = deviceCloudHost
 	}
 	auth, err := pickAuthEntry(target)
 	if err != nil {
-		return nil, nil, fmt.Errorf("selecting cloud auth session: %w", err)
+		return nil, nil, nil, fmt.Errorf("selecting cloud auth session: %w", err)
 	}
 	if len(auth.Certificates) == 0 {
-		return nil, nil, fmt.Errorf("auth session has no certificates; re-run 'wendy auth login'")
+		return nil, nil, nil, fmt.Errorf("auth session has no certificates; re-run 'wendy auth login'")
 	}
 	cert := auth.Certificates[0]
 
 	creds, credsErr := clouddefaults.CloudTransportCredentials(auth.CloudGRPC, &cert)
 	if credsErr != nil {
-		return nil, nil, credsErr
+		return nil, nil, nil, credsErr
 	}
 
 	dialOptions := append([]grpc.DialOption{grpc.WithTransportCredentials(creds)}, dpopDialOptions(auth)...)
 	cloudConn, dialErr := grpc.NewClient(auth.CloudGRPC, dialOptions...)
 	if dialErr != nil {
-		return nil, nil, fmt.Errorf("connecting to cloud: %w", dialErr)
+		return nil, nil, nil, fmt.Errorf("connecting to cloud: %w", dialErr)
 	}
 	cloudCtx, ctxErr := cloudContext(ctx, auth)
 	if ctxErr != nil {
 		cloudConn.Close()
-		return nil, nil, ctxErr
+		return nil, nil, nil, ctxErr
 	}
-	return cloudConn, cloudCtx, nil
-}
-
-func cloudUnenrollCleanup(ctx context.Context, cloudGRPC, deviceCloudHost string, assetID int32) (certsRevoked int, assetDeleted bool, err error) {
-	cloudConn, tokenCtx, err := dialCloud(ctx, cloudGRPC, deviceCloudHost)
-	if err != nil {
-		return 0, false, err
-	}
-	defer cloudConn.Close()
-	return cloudUnenrollCleanupClient(tokenCtx, cloudConn, assetID)
-}
-
-func cloudUnenrollCleanupClient(tokenCtx context.Context, cloudConn *grpc.ClientConn, assetID int32) (certsRevoked int, assetDeleted bool, err error) {
-	// Revoke the asset's active certificates first so a stale identity cannot be
-	// reused, then delete the asset record.
-	certClient := cloudpb.NewCertificateServiceClient(cloudConn)
-	stream, listErr := certClient.ListCertificates(tokenCtx, &cloudpb.ListCertificatesRequest{AssetId: assetID})
-	if listErr != nil {
-		return 0, false, fmt.Errorf("listing certificates: %w", listErr)
-	}
-	for {
-		resp, recvErr := stream.Recv()
-		if recvErr == io.EOF {
-			break
-		}
-		if recvErr != nil {
-			return certsRevoked, false, fmt.Errorf("listing certificates: %w", recvErr)
-		}
-		c := resp.GetCertificate()
-		if c == nil || c.GetStatus() != cloudpb.CertificateStatus_CERTIFICATE_STATUS_ACTIVE {
-			continue
-		}
-		revoked, revErr := certClient.RevokeCertificate(tokenCtx, &cloudpb.RevokeCertificateRequest{
-			CertificateId: c.GetId(),
-			Reason:        "device unprovisioned",
-		})
-		if revErr != nil {
-			return certsRevoked, false, fmt.Errorf("revoking certificate %d: %w", c.GetId(), revErr)
-		}
-		if !revoked.GetSuccess() {
-			return certsRevoked, false, fmt.Errorf("cloud did not confirm revocation of certificate %d", c.GetId())
-		}
-		certsRevoked++
-	}
-
-	assetClient := cloudpb.NewAssetServiceClient(cloudConn)
-	deleted, delErr := assetClient.DeleteAsset(tokenCtx, &cloudpb.DeleteAssetRequest{Id: assetID})
-	if delErr != nil {
-		return certsRevoked, false, fmt.Errorf("deleting asset %d: %w", assetID, delErr)
-	}
-	if !deleted.GetSuccess() {
-		return certsRevoked, false, fmt.Errorf("cloud did not confirm deletion of asset %d", assetID)
-	}
-	return certsRevoked, true, nil
+	return cloudConn, cloudCtx, auth, nil
 }
 
 // scanWiFiNetworks queries the agent for available WiFi networks.

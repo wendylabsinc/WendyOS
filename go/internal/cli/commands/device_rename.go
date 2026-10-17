@@ -139,7 +139,7 @@ func resolveRenameName(args []string) (string, error) {
 
 // cloudRenameAsset renames the device's asset in Wendy Cloud to name.
 func cloudRenameAsset(ctx context.Context, cloudGRPC, deviceCloudHost string, assetID int32, name string) error {
-	cloudConn, tokenCtx, err := dialCloud(ctx, cloudGRPC, deviceCloudHost)
+	cloudConn, tokenCtx, _, err := dialCloud(ctx, cloudGRPC, deviceCloudHost)
 	if err != nil {
 		return err
 	}
