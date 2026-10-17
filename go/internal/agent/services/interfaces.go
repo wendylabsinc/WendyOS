@@ -57,6 +57,9 @@ type ContainerdClient interface {
 	AssembleLayerFromChunks(ctx context.Context, diffID string, hashes [][32]byte) error
 	CreateContainer(ctx context.Context, req *agentpb.CreateContainerRequest, appCfg *appconfig.AppConfig) error
 	CreateContainerWithProgress(ctx context.Context, req *agentpb.CreateContainerRequest, appCfg *appconfig.AppConfig, onProgress ProgressFunc) error
+	// ValidateContainer makes the checks CreateContainer makes before it
+	// replaces an existing container, without creating or replacing anything.
+	ValidateContainer(ctx context.Context, req *agentpb.CreateContainerRequest, appCfg *appconfig.AppConfig) error
 	StartContainer(ctx context.Context, appName, postStartAgentCommand string, restartPolicy *agentpb.RestartPolicy) (<-chan ContainerOutput, error)
 	StartContainerWithStdin(ctx context.Context, appName string, stdin io.Reader, postStartAgentCommand string, restartPolicy *agentpb.RestartPolicy) (<-chan ContainerOutput, error)
 	StopContainer(ctx context.Context, appName string) error

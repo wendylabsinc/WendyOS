@@ -39,6 +39,14 @@ service WendyContainerService {
     // RunContainer remains the source of truth and repeats these idempotent
     // operations, so callers can fall back safely when this RPC is unavailable.
     rpc PrepareImage(RunContainerLayersRequest) returns (PrepareImageResponse);
+    // ValidateContainer makes the checks CreateContainer makes before it
+    // replaces an existing container of the same name (image availability,
+    // entitlement refusals, env, resource limits, the spec) without creating
+    // or replacing anything. A multi-service deploy validates every service
+    // before it replaces any, so one failing service leaves the whole app on
+    // its previous version. Agents without it return UNIMPLEMENTED, and
+    // callers then create service by service as before.
+    rpc ValidateContainer(CreateContainerRequest) returns (ValidateContainerResponse);
 }
 
 message ListContainersRequest {}
@@ -154,6 +162,8 @@ message CreateContainerRequest {
 }
 
 message CreateContainerResponse {}
+
+message ValidateContainerResponse {}
 
 message CreateContainerProgress {
     enum Phase {

@@ -219,6 +219,40 @@ func TestIntegrationFailedRedeployKeepsRunningApp(t *testing.T) {
 	}
 }
 
+// ValidateContainer reports what CreateContainer would refuse, without
+// replacing the running app either way.
+func TestIntegrationValidateContainerLeavesRunningAppAlone(t *testing.T) {
+	c, ctx := newIntegrationClient(t)
+	startOldApp(t, c, ctx, pullReplaceTestImage(t, c, ctx), "replaced-app", nil)
+	cfg := &appconfig.AppConfig{AppID: "replaced-app", Version: "2"}
+
+	valid := &agentpb.CreateContainerRequest{AppName: "replaced-app", ImageName: replaceTestImage}
+	if err := c.ValidateContainer(ctx, valid, cfg); err != nil {
+		t.Fatalf("ValidateContainer(valid) = %v, want nil", err)
+	}
+	requireOldAppRunning(t, c, ctx, "replaced-app")
+
+	refused := &agentpb.CreateContainerRequest{AppName: "replaced-app", ImageName: replaceTestImage, Env: []string{"LD_PRELOAD=/x.so"}}
+	if err := c.ValidateContainer(ctx, refused, cfg); err == nil || !strings.Contains(err.Error(), "LD_PRELOAD") {
+		t.Fatalf("ValidateContainer(reserved env var) = %v, want it refused", err)
+	}
+	requireOldAppRunning(t, c, ctx, "replaced-app")
+}
+
+// Validating a first deploy creates nothing.
+func TestIntegrationValidateContainerCreatesNothing(t *testing.T) {
+	c, ctx := newIntegrationClient(t)
+	pullReplaceTestImage(t, c, ctx)
+
+	req := &agentpb.CreateContainerRequest{AppName: "new-app", ImageName: replaceTestImage}
+	if err := c.ValidateContainer(ctx, req, &appconfig.AppConfig{AppID: "new-app"}); err != nil {
+		t.Fatalf("ValidateContainer = %v, want nil", err)
+	}
+	if _, err := c.client.LoadContainer(ctx, "new-app"); err == nil {
+		t.Fatal("ValidateContainer created a container")
+	}
+}
+
 // A refused redeploy of a bridge-networked app leaves the old container's
 // network sandbox in place: tearing it down (CNI DEL, IPAM, DNS) would cut the
 // still-running app off the network.
