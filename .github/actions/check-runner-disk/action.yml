@@ -1,0 +1,30 @@
+name: Check runner disk space
+description: Stop a job on a persistent self-hosted runner before it fills the disk.
+
+# The self-hosted Mac keeps its disk between jobs. When it filled up, a
+# half-written Go build cache broke every later job until someone cleaned the
+# runner by hand (WDY-3837). Failing here instead names the cause and leaves
+# the caches intact.
+inputs:
+  min-free-gib:
+    description: Fail when the workspace volume has less free space than this.
+    required: false
+    default: '25'
+
+runs:
+  using: composite
+  steps:
+    - name: Check free disk space
+      shell: bash
+      env:
+        MIN_FREE_GIB: ${{ inputs.min-free-gib }}
+      run: |
+        set -euo pipefail
+        df -h "$GITHUB_WORKSPACE"
+        free_kib=$(df -Pk "$GITHUB_WORKSPACE" | awk 'NR == 2 { print $4 }')
+        free_gib=$((free_kib / 1024 / 1024))
+        echo "Free: ${free_gib} GiB (minimum ${MIN_FREE_GIB} GiB)"
+        if ((free_gib < MIN_FREE_GIB)); then
+          echo "::error title=Runner low on disk space::${RUNNER_NAME} has ${free_gib} GiB free, below the ${MIN_FREE_GIB} GiB minimum. Free space on the runner before rerunning."
+          exit 1
+        fi
