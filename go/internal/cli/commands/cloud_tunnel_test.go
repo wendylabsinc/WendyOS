@@ -534,8 +534,8 @@ func TestCloudReconnectFailureDoesNotClaimDeviceRestart(t *testing.T) {
 		cancel()
 		return nil, cause
 	})
-	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("error = %v, want cancellation preserved", err)
+	if !errors.Is(err, context.Canceled) || !errors.Is(err, cause) {
+		t.Fatalf("error = %v, want cancellation and connection cause preserved", err)
 	}
 	for _, want := range []string{"could not reconnect", "test-jetson", "asset-id", cause.Error()} {
 		if !strings.Contains(err.Error(), want) {

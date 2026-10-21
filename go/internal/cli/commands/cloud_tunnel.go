@@ -252,7 +252,7 @@ func waitForCloudDeviceRestart(ctx context.Context, name, id string, connect fun
 	var lastErr error
 	restartErr := func() error {
 		if lastErr != nil {
-			return fmt.Errorf("could not reconnect to %s (id=%s) over Cloud: %w (last connection error: %v)", name, id, ctx.Err(), lastErr)
+			return fmt.Errorf("could not reconnect to %s (id=%s) over Cloud: %w (last connection error: %w)", name, id, ctx.Err(), lastErr)
 		}
 		return fmt.Errorf("could not reconnect to %s (id=%s) over Cloud: %w", name, id, ctx.Err())
 	}
