@@ -247,14 +247,16 @@ func waitForCloudAgentRestart(ctx context.Context, auth *config.AuthConfig, asse
 const cloudAgentRestartTimeout = 60 * time.Second
 
 func waitForCloudDeviceRestart(ctx context.Context, name, id string, connect func(context.Context) (*grpcclient.AgentConnection, error)) (*grpcclient.AgentConnection, error) {
+	callerCtx := ctx
 	ctx, cancel := context.WithTimeout(ctx, cloudAgentRestartTimeout)
 	defer cancel()
 	var lastErr error
 	restartErr := func() error {
-		if lastErr != nil {
-			return fmt.Errorf("could not reconnect to %s (id=%s) over Cloud: %w (last connection error: %w)", name, id, ctx.Err(), lastErr)
+		var err error = &cloudDeployError{message: fmt.Sprintf("Could not reconnect to %s over Cloud.", name), cause: errors.Join(ctx.Err(), lastErr)}
+		if callerCtx.Err() == nil {
+			err = classifyCommandError(errDeviceUnreachable, err)
 		}
-		return fmt.Errorf("could not reconnect to %s (id=%s) over Cloud: %w", name, id, ctx.Err())
+		return withNextSteps(err, cloudUploadRetryHint)
 	}
 	// Give the agent a moment to begin shutdown.
 	select {

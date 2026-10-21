@@ -537,12 +537,12 @@ func TestCloudReconnectFailureDoesNotClaimDeviceRestart(t *testing.T) {
 	if !errors.Is(err, context.Canceled) || !errors.Is(err, cause) {
 		t.Fatalf("error = %v, want cancellation and connection cause preserved", err)
 	}
-	for _, want := range []string{"could not reconnect", "test-jetson", "asset-id", cause.Error()} {
+	for _, want := range []string{"Could not reconnect", "test-jetson", cloudUploadRetryHint} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error %q is missing %q", err, want)
 		}
 	}
-	if strings.Contains(err.Error(), "restart") {
-		t.Fatalf("error still claims a restart: %v", err)
+	if strings.Contains(err.Error(), "restart") || strings.Contains(err.Error(), cause.Error()) {
+		t.Fatalf("error still claims a restart or exposes raw text: %v", err)
 	}
 }

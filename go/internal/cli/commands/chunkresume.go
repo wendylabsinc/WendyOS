@@ -50,6 +50,10 @@ func retryableTunnelError(err error) bool {
 	if isImageBuildFailure(err) {
 		return false
 	}
+	var preparation *cloudImagePrepareError
+	if errors.As(err, &preparation) {
+		return false
+	}
 	if isUnimplementedRPCError(err) {
 		return false
 	}
@@ -130,7 +134,7 @@ func pushLayersResumingTunnelDrops(ctx context.Context, conn *grpcclient.AgentCo
 		}
 		if attempt == chunkPushResumeAttempts || !(stalled || (cur.Reconnect != nil && retryableTunnelError(err))) {
 			if cur.IsCloudV2 && retryableTunnelError(err) {
-				err = cloudChunkTransferError(cur.Host, attempt, snapshot, err)
+				err = cloudChunkTransferError(cur.Host, snapshot, err, nil)
 			}
 			return cur, nil, err
 		}
@@ -148,8 +152,8 @@ func pushLayersResumingTunnelDrops(ctx context.Context, conn *grpcclient.AgentCo
 			next, rerr = cur.Reconnect(ctx)
 		}
 		if rerr != nil {
-			if cur.IsCloudV2 && !stalled {
-				return cur, nil, fmt.Errorf("%w. Reconnecting failed: %w", cloudChunkTransferError(cur.Host, attempt, snapshot, err), rerr)
+			if cur.IsCloudV2 && !stalled && ctx.Err() == nil {
+				return cur, nil, cloudChunkTransferError(cur.Host, snapshot, err, rerr)
 			}
 			if stalled {
 				// The reconnect failure must not swallow the stall that
@@ -167,12 +171,4 @@ func pushLayersResumingTunnelDrops(ctx context.Context, conn *grpcclient.AgentCo
 	// Unreachable: every iteration above returns before the loop can exit
 	// normally (either on success, or on the final attempt's failure).
 	return cur, nil, fmt.Errorf("chunk push: exhausted %d attempts", chunkPushResumeAttempts)
-}
-
-func cloudChunkTransferError(host string, attempt int, snap chunkPushSnapshot, err error) error {
-	phase := "during the chunk upload"
-	if snap.Uploaded {
-		phase = "after the chunk upload, while preparing the image"
-	}
-	return fmt.Errorf("lost the Cloud connection to %s %s (attempt %d/%d; sent %d of %d planned chunks, %d of %d planned bytes in this attempt). Chunk error: %w", host, phase, attempt, chunkPushResumeAttempts, snap.SentChunks, snap.MissingChunks, snap.SentBytes, snap.PlannedBytes, err)
 }

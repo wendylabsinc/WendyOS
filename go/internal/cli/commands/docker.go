@@ -2505,6 +2505,9 @@ func buildAndPrepareComposeImage(ctx context.Context, conn *grpcclient.AgentConn
 		return err
 	}
 	if normalized != imageBuilderDocker {
+		if conn.IsCloudV2 {
+			return withNextSteps(commandErrorf(errBuilderUnavailable, "Cloud uploads for Compose and multi-service apps require the Docker builder."), "Use '--builder docker', then retry.")
+		}
 		return buildAndPushImageForAgent(ctx, conn, regPort, agentOS, builder, dir, repo, platform, dockerfile, buildArgs, cacheKey, streamOutput, logOutput)
 	}
 
@@ -2570,14 +2573,27 @@ func buildAndPrepareComposeImage(ctx context.Context, conn *grpcclient.AgentConn
 			ImageConfig:    imageConfig,
 			ImageSignature: imageSignature,
 		})
+		if prepareErr != nil && conn.IsCloudV2 {
+			return &cloudImagePrepareError{prepareErr}
+		}
 		return prepareErr
 	}
 	uploadCfg := chunkUploadConfigFor(ctx, conn)
-	if _, chunkErr := pushLayersByChunksWithStrictPrepareOutput(ctx, conn.ContainerService, layers, prepare, streamOutput, uploadCfg); chunkErr == nil {
+	var progress *chunkPushProgress
+	if conn.IsCloudV2 {
+		progress = newChunkPushProgress()
+	}
+	if _, chunkErr := pushLayersByChunksWithPrepareMode(ctx, conn.ContainerService, layers, prepare, streamOutput, true, progress, uploadCfg); chunkErr == nil {
 		fmt.Fprintf(logOutput, "[chunks] prepared %s from missing content\n", imageName)
 		return nil
 	} else if ctx.Err() != nil {
 		return chunkErr
+	} else if conn.IsCloudV2 {
+		fmt.Fprintf(logOutput, "[chunks] image preparation failed: %v\n", chunkErr)
+		if retryableTunnelError(chunkErr) {
+			return cloudChunkTransferError(conn.Host, progress.Snapshot(), chunkErr, nil)
+		}
+		return cloudChunkDeployFailure(chunkErr)
 	} else if blocksChunkPrepareFallback(chunkErr) {
 		return chunkErr
 	} else if !allowRegistryFallback {

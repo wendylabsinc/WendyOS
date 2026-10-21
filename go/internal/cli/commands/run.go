@@ -2530,6 +2530,8 @@ func runWithAgentRecorded(ctx context.Context, conn *grpcclient.AgentConnection,
 			// which is often a BIGGER upload than the one just cancelled — just
 			// surface the cancellation.
 			return err
+		} else if conn.IsCloudV2 {
+			return cloudChunkDeployFailure(err)
 		} else if opts.chunking == chunkingForce {
 			// --chunking=force opts out of the registry-push fallback so the
 			// failure is surfaced instead of silently masked by a slower path.
@@ -2541,8 +2543,6 @@ func runWithAgentRecorded(ctx context.Context, conn *grpcclient.AgentConnection,
 			// real error behind an unrelated builder-setup failure. Surface the
 			// actionable build error directly instead of falling back. (#1166)
 			return err
-		} else if conn.IsCloudV2 {
-			return fmt.Errorf("chunk-diff deploy failed: %w. Registry-push fallback is unavailable over Cloud v2 because its tunnel catalog does not include the registry service (port 5000)", err)
 		} else if shouldUseBuildkitOnDevice() {
 			// On-device (inside the agent container: WENDY_AGENT_SOCKET set, no
 			// Docker), the registry-push fallback below cannot run — it shells out
@@ -4189,6 +4189,9 @@ func deployByChunkDiff(ctx context.Context, conn *grpcclient.AgentConnection, cw
 				ImageConfig:    imageConfig,
 				ImageSignature: imageSignature,
 			})
+			if prepareErr != nil && conn.IsCloudV2 {
+				return &cloudImagePrepareError{prepareErr}
+			}
 			return prepareErr
 		}
 	}

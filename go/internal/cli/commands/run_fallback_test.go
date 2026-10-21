@@ -183,7 +183,7 @@ func TestRunRegistryFallbackRespectsCloudV2Catalog(t *testing.T) {
 			opts := runOptions{builder: imageBuilderAppleContainer, chunking: chunkingAuto, managedRobot: true, yes: true}
 			err := runWithAgentRecorded(t.Context(), conn, dir, cfg, opts, newDeployMetrics(opts))
 			if tc.cloudV2 {
-				if err == nil || !isUnimplementedRPCError(err) || !strings.Contains(err.Error(), "Registry-push fallback is unavailable over Cloud v2") || !strings.Contains(err.Error(), "port 5000") {
+				if err == nil || !isUnimplementedRPCError(err) || !strings.Contains(err.Error(), "Update the Agent, then retry.") || strings.Contains(err.Error(), "registry") {
 					t.Fatalf("error = %v, want chunk error with unsupported-registry explanation", err)
 				}
 				if registry.calls != 0 {
