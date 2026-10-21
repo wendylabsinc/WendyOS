@@ -454,11 +454,11 @@ an app that reads stdin.
 
 ## Deploy path: `--chunking`
 
-`wendy run` normally attempts a fast content-based chunking (CBC) chunk-diff deploy and falls back to a full registry push when it fails (`auto`, the default). Use `--chunking` to override this:
+`wendy run` normally attempts a fast content-based chunking (CBC) chunk-diff deploy and falls back to a full registry push where supported when it fails (`auto`, the default). Use `--chunking` to override this:
 
 | Value | Behaviour |
 |-------|-----------|
-| `auto` (default) | Try chunk-diff; fall back to a registry push on failure. |
+| `auto` (default) | Try chunk-diff; fall back to a registry push on LAN and legacy Cloud connections. Cloud v2 reports the failure without a registry fallback. |
 | `force` | Use chunk-diff only. If chunk-diff fails the error is returned and no registry-push fallback is attempted. Cancellation still exits cleanly. |
 | `off` | Skip chunk-diff entirely; go straight to the registry push. |
 
@@ -476,6 +476,25 @@ an app that reads stdin.
 > paths. The deploy path does not affect hook execution.
 
 Any value other than `auto`, `force`, or `off` is rejected with an error before the build starts.
+
+### Uploads over Cloud v2
+
+The registry fallback is unavailable over Cloud v2. If an upload drops,
+the CLI reports the device and bytes sent. Check that the device is online
+with `wendy cloud discover`, then retry. A single-service upload attempts
+reconnection up to three times and skips chunks already staged on the device.
+A connection loss or failed reconnect is `device_unreachable`: exit status 5,
+with `retryable: true` in JSON mode.
+
+Compose and multi-service uploads over Cloud v2 require `--builder docker`.
+Other builders stop with a Docker hint before attempting a registry upload.
+An Agent that lacks the required upload method gets an update hint; image
+preparation failures are reported separately from connection drops.
+
+`--chunking=off` and single-service `--deploy` still select the registry path,
+which cannot upload through a Cloud v2 connection. Use the default chunk path
+for Cloud v2 uploads. Set `WENDY_TLS_DEBUG=1` to log underlying upload and
+reconnect diagnostics.
 
 ## Environment variables
 
