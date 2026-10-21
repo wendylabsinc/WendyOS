@@ -480,10 +480,12 @@ Any value other than `auto`, `force`, or `off` is rejected with an error before 
 ### Uploads over Cloud v2
 
 The registry fallback is unavailable over Cloud v2. If an upload drops,
-the CLI reports the device and bytes sent. Check that the device is online
+the CLI reports the device (or its Cloud ID if unnamed) and bytes sent across
+resume attempts against the largest upload plan. Check that the device is online
 with `wendy cloud discover`, then retry. A single-service upload gets
 up to three attempts. After reconnecting, it skips chunks already staged on the device.
-A connection loss or failed reconnect is `device_unreachable`: exit status 5,
+A connection loss during the upload, failed upload reconnect, or disconnect
+while waiting for the app's start acknowledgement is `device_unreachable`: exit status 5,
 with `retryable: true` in JSON mode.
 
 Compose and multi-service uploads over Cloud v2 require `--builder docker`.

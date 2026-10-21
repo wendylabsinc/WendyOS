@@ -75,14 +75,15 @@ numeric asset IDs for legacy Cloud, or device names in either environment.
 
 ## Reconnection and app uploads
 
-If the CLI cannot reconnect to a device over Cloud, it reports
-`Could not reconnect to <device> over Cloud.` This means the device could not
-be reached again; it does not imply that the device was restarting. Check that
-the device is online with `wendy cloud discover`, then retry.
-
 For [app uploads over Cloud v2](../clients/wendy-cli/commands/run.md#uploads-over-cloud-v2),
-a lost connection reports upload progress and a retryable `device_unreachable`
-failure (exit 5). There is no registry fallback over Cloud v2.
+a lost connection reports the device and upload progress across resume attempts.
+Devices without a display name are identified by their Cloud ID. A failed upload
+reconnect, or a connection loss while waiting for the app's start acknowledgement,
+reports a retryable `device_unreachable` failure (exit 5). Check that the device
+is online with `wendy cloud discover`, then retry. There is no registry fallback
+over Cloud v2.
+
+Device updates and legacy Cloud resume keep their existing restart-wait messages.
 
 ## Flags
 
