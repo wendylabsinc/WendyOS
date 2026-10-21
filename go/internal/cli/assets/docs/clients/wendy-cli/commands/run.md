@@ -481,8 +481,8 @@ Any value other than `auto`, `force`, or `off` is rejected with an error before 
 
 The registry fallback is unavailable over Cloud v2. If an upload drops,
 the CLI reports the device and bytes sent. Check that the device is online
-with `wendy cloud discover`, then retry. A single-service upload attempts
-reconnection up to three times and skips chunks already staged on the device.
+with `wendy cloud discover`, then retry. A single-service upload gets
+up to three attempts. After reconnecting, it skips chunks already staged on the device.
 A connection loss or failed reconnect is `device_unreachable`: exit status 5,
 with `retryable: true` in JSON mode.
 
