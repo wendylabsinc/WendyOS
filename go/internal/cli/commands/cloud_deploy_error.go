@@ -37,6 +37,14 @@ func cloudChunkTransferError(host string, snap chunkPushSnapshot, uploadErr, rec
 	return withNextSteps(classifyCommandError(errDeviceUnreachable, &cloudDeployError{message: message, cause: cause}), cloudUploadRetryHint)
 }
 
+func cloudRunStartConnectionError(host string, cause error) error {
+	if os.Getenv("WENDY_TLS_DEBUG") != "" {
+		fmt.Fprintf(os.Stderr, "[chunk-deploy] %v\n", cause)
+	}
+	message := fmt.Sprintf("The Cloud connection to %s was lost while starting the app.\nThe registry fallback isn't available over Cloud.", host)
+	return withNextSteps(classifyCommandError(errDeviceUnreachable, &cloudDeployError{message: message, cause: cause}), cloudUploadRetryHint)
+}
+
 func cloudChunkDeployFailure(err error) error {
 	if isImageBuildFailure(err) {
 		return err

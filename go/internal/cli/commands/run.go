@@ -2531,6 +2531,9 @@ func runWithAgentRecorded(ctx context.Context, conn *grpcclient.AgentConnection,
 			// surface the cancellation.
 			return err
 		} else if conn.IsCloudV2 {
+			if stats.pushCompleted && retryableTunnelError(err) {
+				return cloudRunStartConnectionError(conn.Host, err)
+			}
 			return cloudChunkDeployFailure(err)
 		} else if opts.chunking == chunkingForce {
 			// --chunking=force opts out of the registry-push fallback so the
