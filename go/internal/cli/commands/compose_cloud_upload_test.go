@@ -23,12 +23,13 @@ type composePrepareClient struct {
 	*fakeContainerClient
 	prepareErr          error
 	waitForCancellation bool
+	dropPrepareCode     codes.Code
 }
 
 func (c *composePrepareClient) PrepareImage(ctx context.Context, _ *agentpb.RunContainerLayersRequest, _ ...grpc.CallOption) (*agentpb.PrepareImageResponse, error) {
 	if c.waitForCancellation {
 		<-ctx.Done()
-		return nil, status.Error(codes.Canceled, "preparation canceled after upload failed")
+		return nil, status.Error(c.dropPrepareCode, "preparation failed after upload dropped")
 	}
 	return nil, c.prepareErr
 }
@@ -62,21 +63,23 @@ func TestComposeCloudV2DoesNotFallBackToTheRegistry(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, tc := range []struct {
-		name string
-		code codes.Code
-		drop bool
+		name            string
+		code            codes.Code
+		drop            bool
+		dropPrepareCode codes.Code
 	}{
-		{"upload drop cancels preparation", codes.Unavailable, true},
-		{"preparation unavailable", codes.Unavailable, false},
-		{"old Agent", codes.Unimplemented, false},
-		{"preparation refused", codes.PermissionDenied, false},
+		{"upload drop cancels preparation", codes.Unavailable, true, codes.Canceled},
+		{"upload drop makes preparation unavailable", codes.Unavailable, true, codes.Unavailable},
+		{"preparation unavailable", codes.Unavailable, false, codes.OK},
+		{"old Agent", codes.Unimplemented, false, codes.OK},
+		{"preparation refused", codes.PermissionDenied, false, codes.OK},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			repo := "cloud-prepare-test-" + sha256Hex([]byte(t.TempDir()))[:16]
 			layout := chunkLayoutDir(userCache, repo, "linux/arm64")
 			t.Cleanup(func() { os.RemoveAll(layout); os.Remove(layout + ".lock") })
 			cause := status.Error(tc.code, "original chunk or preparation cause")
-			cs := &composePrepareClient{fakeContainerClient: &fakeContainerClient{}, prepareErr: cause, waitForCancellation: tc.drop}
+			cs := &composePrepareClient{fakeContainerClient: &fakeContainerClient{}, prepareErr: cause, waitForCancellation: tc.drop, dropPrepareCode: tc.dropPrepareCode}
 			cs.queryFn = func(req *agentpb.QueryChunksRequest) *agentpb.QueryChunksResponse {
 				if tc.drop {
 					return &agentpb.QueryChunksResponse{MissingHashes: req.GetChunkHashes()}
