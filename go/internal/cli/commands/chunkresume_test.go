@@ -702,3 +702,22 @@ func TestLANAndLegacyCloudResumeKeepTheOriginalUploadError(t *testing.T) {
 		})
 	}
 }
+
+func TestLegacyCloudResumeKeepsReconnectFailure(t *testing.T) {
+	defer forceBuildProgressInteractive(false)()
+	defer setBuildProgressOut(io.Discard)()
+	conn := &grpcclient.AgentConnection{ContainerService: &unavailableContainerClient{}}
+	conn.Reconnect = func(context.Context) (*grpcclient.AgentConnection, error) {
+		ctx, cancel := context.WithCancel(t.Context())
+		cancel()
+		return waitForCloudDeviceRestart(ctx, "jetson", "legacy-id", func(context.Context) (*grpcclient.AgentConnection, error) {
+			t.Fatal("canceled restart must not connect")
+			return nil, nil
+		})
+	}
+	_, _, err := pushLayersResumingTunnelDrops(t.Context(), conn, nil, nil, gzipChunkUploadConfig, nil)
+	const want = "reconnecting to resume the chunk push: timed out waiting for jetson (id=legacy-id) to restart"
+	if err.Error() != want || len(NextSteps(err)) != 0 || errors.Is(err, errDeviceUnreachable) {
+		t.Fatalf("legacy reconnect error=%v, want %q without upload hints/classification", err, want)
+	}
+}

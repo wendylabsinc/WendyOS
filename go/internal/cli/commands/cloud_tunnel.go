@@ -247,16 +247,10 @@ func waitForCloudAgentRestart(ctx context.Context, auth *config.AuthConfig, asse
 const cloudAgentRestartTimeout = 60 * time.Second
 
 func waitForCloudDeviceRestart(ctx context.Context, name, id string, connect func(context.Context) (*grpcclient.AgentConnection, error)) (*grpcclient.AgentConnection, error) {
-	callerCtx := ctx
 	ctx, cancel := context.WithTimeout(ctx, cloudAgentRestartTimeout)
 	defer cancel()
-	var lastErr error
 	restartErr := func() error {
-		var err error = &cloudDeployError{message: fmt.Sprintf("Could not reconnect to %s over Cloud.", name), cause: errors.Join(ctx.Err(), lastErr)}
-		if callerCtx.Err() == nil {
-			err = classifyCommandError(errDeviceUnreachable, err)
-		}
-		return withNextSteps(err, cloudUploadRetryHint)
+		return fmt.Errorf("timed out waiting for %s (id=%s) to restart", name, id)
 	}
 	// Give the agent a moment to begin shutdown.
 	select {
@@ -280,7 +274,6 @@ func waitForCloudDeviceRestart(ctx context.Context, name, id string, connect fun
 		attemptCtx, attemptCancel := context.WithTimeout(ctx, cloudVersionFetchTimeout)
 		conn, err := connect(attemptCtx)
 		if err != nil {
-			lastErr = err
 			attemptCancel()
 			select {
 			case <-time.After(time.Second):
@@ -295,7 +288,6 @@ func waitForCloudDeviceRestart(ctx context.Context, name, id string, connect fun
 			conn.CacheAgentVersion(resp)
 			return conn, nil
 		}
-		lastErr = probeErr
 		conn.Close()
 		select {
 		case <-time.After(time.Second):

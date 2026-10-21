@@ -526,23 +526,19 @@ func TestCloudKeepaliveProfiles(t *testing.T) {
 	}
 }
 
-func TestCloudReconnectFailureDoesNotClaimDeviceRestart(t *testing.T) {
+// This helper is also used by device update and legacy Cloud resume. Upload-
+// specific wording and reachability classification belong to the v2 caller.
+func TestCloudRestartFailureKeepsLegacyMessage(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
-	defer cancel()
-	cause := errors.New("device is offline")
+	cancel()
 	_, err := waitForCloudDeviceRestart(ctx, "test-jetson", "asset-id", func(context.Context) (*grpcclient.AgentConnection, error) {
-		cancel()
-		return nil, cause
+		t.Fatal("canceled wait must not connect")
+		return nil, nil
 	})
-	if !errors.Is(err, context.Canceled) || !errors.Is(err, cause) {
-		t.Fatalf("error = %v, want cancellation and connection cause preserved", err)
+	if got, want := err.Error(), "timed out waiting for test-jetson (id=asset-id) to restart"; got != want {
+		t.Fatalf("message=%q, want %q", got, want)
 	}
-	for _, want := range []string{"Could not reconnect", "test-jetson", cloudUploadRetryHint} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("error %q is missing %q", err, want)
-		}
-	}
-	if strings.Contains(err.Error(), "restart") || strings.Contains(err.Error(), cause.Error()) {
-		t.Fatalf("error still claims a restart or exposes raw text: %v", err)
+	if len(NextSteps(err)) != 0 || errors.Is(err, errDeviceUnreachable) {
+		t.Fatalf("legacy restart acquired upload-specific classification/hints: %v", err)
 	}
 }
