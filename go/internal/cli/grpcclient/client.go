@@ -83,6 +83,9 @@ type AgentConnection struct {
 	IsSessionProxy bool                    // true when Conn reaches a local session broker retaining the mTLS transport
 	CertInfo       *config.CertificateInfo // cert used to establish mTLS; nil for plaintext
 	RegistryDialer func(context.Context, int) (net.Conn, error)
+	// IsCloudV2 identifies the restricted Cloud v2 relay, whose service catalog
+	// has no container registry. LAN and legacy Cloud connections leave it false.
+	IsCloudV2 bool
 	// OperatorMeshTarget retains the selected device independently of the first
 	// hop and Cloud's reconnect marker. AppDialer reuses its authenticated agent
 	// stream and running-app admission, rather than dialing a reported LAN IP.
@@ -93,8 +96,8 @@ type AgentConnection struct {
 	extraMu      sync.Mutex
 	extraClosed  bool
 	// Reconnect re-establishes a connection to the SAME device this connection
-	// targets, after the agent restarts. It is set for transports where the
-	// connection identity can't be re-derived from Host alone (e.g. the cloud
+	// targets, after a disconnect or agent restart. It is set for transports
+	// where the connection identity can't be re-derived from Host alone (e.g. the cloud
 	// tunnel, which is pinned to a specific asset id). nil for plain LAN
 	// connections, where the caller re-dials Host directly.
 	Reconnect            func(context.Context) (*AgentConnection, error)

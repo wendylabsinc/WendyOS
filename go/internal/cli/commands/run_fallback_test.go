@@ -4,8 +4,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
+	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
+	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
+	"google.golang.org/grpc"
 )
 
 // TestRegistryFallbackPlan covers the gate that decides whether a registry-push
@@ -121,4 +129,81 @@ func TestIsChunkDeployCancellation(t *testing.T) {
 			t.Fatal("want false: this must fall through to the registry-push fallback classifiers")
 		}
 	})
+}
+
+// Drive the actual deploy ladder with a local image fixture. A provisioned
+// registry with no local credentials stops the allowed fallback before any
+// network access, letting us assert LAN and v1 still reach it and v2 does not.
+func TestRunRegistryFallbackRespectsCloudV2Catalog(t *testing.T) {
+	defer forceBuildProgressInteractive(false)()
+	oldCommand, oldLookPath := imageBuilderCommandContext, imageBuilderLookPath
+	oldGOOS, oldGOARCH := imageBuilderHostGOOS, imageBuilderHostGOARCH
+	t.Cleanup(func() {
+		imageBuilderCommandContext, imageBuilderLookPath = oldCommand, oldLookPath
+		imageBuilderHostGOOS, imageBuilderHostGOARCH = oldGOOS, oldGOARCH
+	})
+	t.Setenv("WENDY_CONFIG_DIR", t.TempDir())
+	t.Setenv("WENDY_AGENT_SOCKET", "")
+	imageBuilderHostGOOS = func() string { return "darwin" }
+	imageBuilderHostGOARCH = func() string { return "arm64" }
+	imageBuilderLookPath = func(string) (string, error) { return "/fixture/container", nil }
+	fakeCommand := fakeImageBuilderCommandContext(filepath.Join(t.TempDir(), "builder.log"))
+	imageBuilderCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		if len(args) >= 2 && args[0] == "image" && args[1] == "save" {
+			for i := 2; i+1 < len(args); i++ {
+				if args[i] == "-o" {
+					writeMinimalOCILayout(t, args[i+1], []byte("fixture-layer"), "application/vnd.oci.image.layer.v1.tar", []byte("fixture-layer"))
+					return fakeCommand(ctx, "container", "--version")
+				}
+			}
+		}
+		return fakeCommand(ctx, name, args...)
+	}
+	for _, tc := range []struct {
+		name               string
+		cloudV2, reconnect bool
+	}{
+		{name: "LAN"}, {name: "Cloud v1", reconnect: true}, {name: "Cloud v2", cloudV2: true, reconnect: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(dir, "Dockerfile"), []byte("FROM busybox:latest\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			registry := &fallbackProvisioningClient{}
+			conn := &grpcclient.AgentConnection{Host: "fixture", IsCloudV2: tc.cloudV2, ContainerService: &probeUnsupportedClient{}, ProvisioningService: registry}
+			conn.CacheAgentVersion(&agentpb.GetAgentVersionResponse{Os: "linux", CpuArchitecture: "arm64"})
+			if tc.reconnect {
+				conn.Reconnect = func(context.Context) (*grpcclient.AgentConnection, error) {
+					t.Fatal("Unimplemented must not reconnect")
+					return nil, nil
+				}
+			}
+			cfg := &appconfig.AppConfig{AppID: "fallback-fixture"}
+			opts := runOptions{builder: imageBuilderAppleContainer, chunking: chunkingAuto, managedRobot: true, yes: true}
+			err := runWithAgentRecorded(t.Context(), conn, dir, cfg, opts, newDeployMetrics(opts))
+			if tc.cloudV2 {
+				if err == nil || !isUnimplementedRPCError(err) || !strings.Contains(err.Error(), "Registry-push fallback is unavailable over Cloud v2") || !strings.Contains(err.Error(), "port 5000") {
+					t.Fatalf("error = %v, want chunk error with unsupported-registry explanation", err)
+				}
+				if registry.calls != 0 {
+					t.Fatalf("v2 attempted the registry fallback %d times", registry.calls)
+				}
+			} else {
+				if registry.calls != 1 || !errors.Is(err, errRegistryAuth) {
+					t.Fatalf("registry calls=%d err=%v, want the registry auth gate", registry.calls, err)
+				}
+			}
+		})
+	}
+}
+
+type fallbackProvisioningClient struct {
+	agentpb.WendyProvisioningServiceClient
+	calls int
+}
+
+func (c *fallbackProvisioningClient) IsProvisioned(context.Context, *agentpb.IsProvisionedRequest, ...grpc.CallOption) (*agentpb.IsProvisionedResponse, error) {
+	c.calls++
+	return &agentpb.IsProvisionedResponse{Response: &agentpb.IsProvisionedResponse_Provisioned{Provisioned: &agentpb.ProvisionedResponse{}}}, nil
 }

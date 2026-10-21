@@ -215,6 +215,7 @@ func connectCloudDiscoveryDevice(ctx context.Context, auth *config.AuthConfig, a
 		agentConn.MeshHost = meshname.Device(asset.legacy.GetId())
 	}
 	agentConn.IsMTLS = true
+	agentConn.IsCloudV2 = asset.v2 != nil
 	agentConn.CertInfo = &cert
 	agentConn.RegistryDialer = func(ctx context.Context, port int) (net.Conn, error) {
 		return asset.openTunnel(ctx, brokerConn, auth, uint32(port))
@@ -248,8 +249,12 @@ const cloudAgentRestartTimeout = 60 * time.Second
 func waitForCloudDeviceRestart(ctx context.Context, name, id string, connect func(context.Context) (*grpcclient.AgentConnection, error)) (*grpcclient.AgentConnection, error) {
 	ctx, cancel := context.WithTimeout(ctx, cloudAgentRestartTimeout)
 	defer cancel()
+	var lastErr error
 	restartErr := func() error {
-		return fmt.Errorf("timed out waiting for %s (id=%s) to restart", name, id)
+		if lastErr != nil {
+			return fmt.Errorf("could not reconnect to %s (id=%s) over Cloud: %w (last connection error: %v)", name, id, ctx.Err(), lastErr)
+		}
+		return fmt.Errorf("could not reconnect to %s (id=%s) over Cloud: %w", name, id, ctx.Err())
 	}
 	// Give the agent a moment to begin shutdown.
 	select {
@@ -273,6 +278,7 @@ func waitForCloudDeviceRestart(ctx context.Context, name, id string, connect fun
 		attemptCtx, attemptCancel := context.WithTimeout(ctx, cloudVersionFetchTimeout)
 		conn, err := connect(attemptCtx)
 		if err != nil {
+			lastErr = err
 			attemptCancel()
 			select {
 			case <-time.After(time.Second):
@@ -287,6 +293,7 @@ func waitForCloudDeviceRestart(ctx context.Context, name, id string, connect fun
 			conn.CacheAgentVersion(resp)
 			return conn, nil
 		}
+		lastErr = probeErr
 		conn.Close()
 		select {
 		case <-time.After(time.Second):

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/clouddefaults"
+	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/proto/gen/cloudpb"
 	"google.golang.org/grpc/metadata"
@@ -522,5 +523,26 @@ func TestCloudKeepaliveProfiles(t *testing.T) {
 	}
 	if clouddefaults.KeepalivePing < agentMinTime {
 		t.Errorf("clouddefaults.KeepalivePing = %v, want >= agent MinTime %v (mtls/server.go:108) -- this is the broker/cloud-API liveness ping", clouddefaults.KeepalivePing, agentMinTime)
+	}
+}
+
+func TestCloudReconnectFailureDoesNotClaimDeviceRestart(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	cause := errors.New("device is offline")
+	_, err := waitForCloudDeviceRestart(ctx, "test-jetson", "asset-id", func(context.Context) (*grpcclient.AgentConnection, error) {
+		cancel()
+		return nil, cause
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want cancellation preserved", err)
+	}
+	for _, want := range []string{"could not reconnect", "test-jetson", "asset-id", cause.Error()} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q is missing %q", err, want)
+		}
+	}
+	if strings.Contains(err.Error(), "restart") {
+		t.Fatalf("error still claims a restart: %v", err)
 	}
 }

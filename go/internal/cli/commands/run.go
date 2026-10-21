@@ -577,7 +577,7 @@ type runOptions struct {
 	gpuArch string
 	// chunking controls the content-defined chunking (CBC) deploy path:
 	// chunkingAuto (default/empty) tries chunk-diff and falls back to a registry
-	// push on failure, chunkingForce uses chunk-diff with no fallback, and
+	// push on failure where supported, chunkingForce uses chunk-diff with no fallback, and
 	// chunkingOff skips chunk-diff entirely (registry push only).
 	chunking string
 	// waitReady (--wait-ready) makes the run succeed only once the started app
@@ -709,7 +709,7 @@ func newRunCmd() *cobra.Command {
 	cmd.Flags().IntVar(&opts.maxConcurrency, "max-concurrency", 0, "Multi-service/Compose: max service images to build+push at once (0 = default limit of 4)")
 	cmd.Flags().StringSliceVar(&opts.userArgs, "user-args", nil, "Extra arguments to pass to the container")
 	cmd.Flags().StringArrayVar(&opts.env, "env", nil, "Set an environment variable in the container as KEY=VALUE; repeatable, and overrides wendy.json env of the same key")
-	cmd.Flags().StringVar(&opts.chunking, "chunking", chunkingAuto, "Content-defined chunking (CBC) deploy path: auto (try chunk-diff, fall back to registry push), force (chunk-diff only, no fallback), or off (registry push only)")
+	cmd.Flags().StringVar(&opts.chunking, "chunking", chunkingAuto, "Content-defined chunking (CBC) deploy path: auto (try chunk-diff, fall back to registry push where supported), force (chunk-diff only, no fallback), or off (registry push only)")
 	cmd.Flags().BoolVar(&watch, "watch", false, "Watch the project directory and redeploy on every change, streaming logs between deploys (same as 'wendy watch')")
 	cmd.Flags().IntVar(&debounceMS, "debounce", 400, "Watch mode (--watch): quiet period in milliseconds after the last change before redeploying")
 	cmd.Flags().BoolVar(&verbose, "verbose", false, "Watch mode (--watch): always show build output (default: hidden unless the build fails)")
@@ -2541,6 +2541,8 @@ func runWithAgentRecorded(ctx context.Context, conn *grpcclient.AgentConnection,
 			// real error behind an unrelated builder-setup failure. Surface the
 			// actionable build error directly instead of falling back. (#1166)
 			return err
+		} else if conn.IsCloudV2 {
+			return fmt.Errorf("chunk-diff deploy failed: %w. Registry-push fallback is unavailable over Cloud v2 because its tunnel catalog does not include the registry service (port 5000)", err)
 		} else if shouldUseBuildkitOnDevice() {
 			// On-device (inside the agent container: WENDY_AGENT_SOCKET set, no
 			// Docker), the registry-push fallback below cannot run — it shells out
