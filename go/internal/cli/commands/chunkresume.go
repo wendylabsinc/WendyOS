@@ -108,6 +108,7 @@ func retryableTunnelError(err error) bool {
 // call describes the attempt whose result is returned.
 func pushLayersResumingTunnelDrops(ctx context.Context, conn *grpcclient.AgentConnection, layers []localLayer, prepareFor func(agentpb.WendyContainerServiceClient) imagePrepareFunc, cfg chunkUploadConfig, observe func(chunkPushSnapshot)) (*grpcclient.AgentConnection, []*agentpb.RunContainerLayerHeader, error) {
 	cur := conn
+	var transfer chunkPushSnapshot
 	for attempt := 1; attempt <= chunkPushResumeAttempts; attempt++ {
 		var prepare imagePrepareFunc
 		if prepareFor != nil {
@@ -120,6 +121,11 @@ func pushLayersResumingTunnelDrops(ctx context.Context, conn *grpcclient.AgentCo
 				observe(snap)
 			}
 		})
+		// Each retry plans only the chunks still missing. Keep total traffic
+		// and the largest plan so a later capability-query failure cannot
+		// erase earlier upload progress. Observers still receive each attempt.
+		transfer.SentBytes += snapshot.SentBytes
+		transfer.PlannedBytes = max(transfer.PlannedBytes, snapshot.PlannedBytes)
 		if err == nil {
 			return cur, headers, nil
 		}
@@ -134,7 +140,7 @@ func pushLayersResumingTunnelDrops(ctx context.Context, conn *grpcclient.AgentCo
 		}
 		if attempt == chunkPushResumeAttempts || !(stalled || (cur.Reconnect != nil && retryableTunnelError(err))) {
 			if cur.IsCloudV2 && retryableTunnelError(err) {
-				err = cloudChunkTransferError(cur.Host, snapshot, err, nil)
+				err = cloudChunkTransferError(cur.Host, transfer, err, nil)
 			}
 			return cur, nil, err
 		}
@@ -153,7 +159,7 @@ func pushLayersResumingTunnelDrops(ctx context.Context, conn *grpcclient.AgentCo
 		}
 		if rerr != nil {
 			if cur.IsCloudV2 && !stalled && ctx.Err() == nil {
-				return cur, nil, cloudChunkTransferError(cur.Host, snapshot, err, rerr)
+				return cur, nil, cloudChunkTransferError(cur.Host, transfer, err, rerr)
 			}
 			if stalled {
 				// The reconnect failure must not swallow the stall that
