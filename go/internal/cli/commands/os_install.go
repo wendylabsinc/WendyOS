@@ -1151,6 +1151,10 @@ func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevic
 	activationStep(ctx, "provision", nil)
 	hasProvisioningData := provisioningRequired(provCreds, provDeviceName, provisioningJSON)
 	var provisionErr error
+	// The drive can drop off the bus during provisioning and come back under a
+	// new device path; provisionConfigWithRetry reports where it is now, or
+	// that it never came back — then its old path may name another disk.
+	attached := true
 
 	if !configPartitionSupported {
 		// writeConfigPartition is not supported on this platform. Skip the
@@ -1169,11 +1173,13 @@ func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevic
 		// device still boots. It returns an error only when the user asked for
 		// provisioning and it was not applied — reported below, after the eject,
 		// so the drive is still safe to remove.
-		provisionErr = provisionConfigWithRetry(targetDrive, provCreds, provDeviceName, provisioningJSON, hasProvisioningData)
+		targetDrive, attached, provisionErr = provisionConfigWithRetry(ctx, targetDrive, provCreds, provDeviceName, provisioningJSON, hasProvisioningData)
 	}
 
-	markFATVolumes(targetDrive)
-	ejectDisk(targetDrive)
+	if attached {
+		markFATVolumes(targetDrive)
+		ejectDisk(targetDrive)
+	}
 
 	// Requested provisioning that never reached the card is a failed install:
 	// the device would boot with none of the configuration the user asked for,
@@ -2595,13 +2601,38 @@ var confirmProvisioningRetry = func() (bool, error) {
 // card, and the install still reported success — which read as the device
 // ignoring its configuration rather than never receiving it). When provisioning
 // was not requested it stays advisory and returns nil.
-func provisionConfigWithRetry(d drive, creds []wendyconf.WifiCredential, deviceName string, provisioningJSON []byte, requested bool) error {
-	for {
-		err := provisionConfigPartitionFn(d, creds, deviceName, provisioningJSON)
-		if err == nil {
-			return nil
-		}
+//
+// If the drive drops off the bus mid-write (WDY-3974: a USB NVMe enclosure
+// reset and every retry hit the same vanished /dev/disk8), retrying its old
+// device path cannot work, and after a replug that path may name another disk.
+// So the user is told to unplug and replug it, and a retry first waits for the
+// drive to reappear and re-resolves it by the identity recorded before the
+// first attempt — refusing to write when that identity is unknown or matches
+// more than one drive. It returns the drive where it is now attached, and
+// attached=false when it disconnected and was not found again: its old path
+// must not be touched (marked, ejected) then.
+func provisionConfigWithRetry(ctx context.Context, d drive, creds []wendyconf.WifiCredential, deviceName string, provisioningJSON []byte, requested bool) (_ drive, attached bool, _ error) {
+	// Fingerprint the drive while it is certainly the one just imaged. Only an
+	// interactive run retries, so only it needs this.
+	var id driveIdentity
+	var idErr error
+	if isInteractiveTerminal() {
+		id, idErr = readDriveIdentityFn(d)
+	}
+	// relocate is set once d has disconnected and cleared once it is found
+	// again by identity: while set, d's device path is not known to be ours.
+	relocate := false
 
+	err := provisionConfigPartitionFn(d, creds, deviceName, provisioningJSON)
+	// skip ends the loop when the user declines a retry.
+	skip := func() (drive, bool, error) {
+		if requested {
+			fmt.Println("Skipping provisioning. Re-run 'wendy os install' to apply it, or configure the device after it boots.")
+			return d, !relocate, err
+		}
+		return d, !relocate, nil
+	}
+	for err != nil {
 		if requested {
 			fmt.Printf("\nWarning: could not apply provisioning data — --wifi / --device-name / --pre-enroll were requested but not written: %v\n", err)
 		} else {
@@ -2609,23 +2640,61 @@ func provisionConfigWithRetry(d drive, creds []wendyconf.WifiCredential, deviceN
 		}
 		fmt.Println("The OS image itself was written successfully — the device will still boot, run the agent baked into the image, and fetch updates after first boot.")
 
+		relocate = relocate || driveDisconnected(d, err)
+
 		if !isInteractiveTerminal() {
 			if requested {
 				fmt.Println("Re-run 'wendy os install' to apply WiFi / device-name / pre-enrollment, or configure the device after it boots.")
-				return err
+				return d, !relocate, err
 			}
-			return nil
+			return d, !relocate, nil
+		}
+
+		if relocate {
+			if !id.usable() {
+				reason := "no size or GPT GUID was readable"
+				if idErr != nil {
+					reason = idErr.Error()
+				}
+				fmt.Printf("\nThe drive %s disconnected, and wendy could not record its identity before it did (%s), so it cannot confirm that a reconnected drive is the one it just imaged. Not retrying, so provisioning data cannot land on the wrong drive.\n", d.DevicePath, reason)
+				if requested {
+					fmt.Println("Re-run 'wendy os install' to apply WiFi / device-name / pre-enrollment, or configure the device after it boots.")
+					return d, false, err
+				}
+				return d, false, nil
+			}
+			switch {
+			case errors.Is(err, errDriveAmbiguous):
+				// The error already names the matching drives and what to do.
+			case errors.Is(err, errDriveNotReconnected):
+				fmt.Println("\n" + replugGuidance)
+			default:
+				fmt.Printf("\nThe drive %s disconnected — it no longer shows up as a disk, so retrying right away would fail the same way.\n", d.DevicePath)
+				fmt.Println(replugGuidance)
+			}
 		}
 
 		retry, confirmErr := confirmProvisioningRetry()
 		if confirmErr != nil || !retry {
-			if requested {
-				fmt.Println("Skipping provisioning. Re-run 'wendy os install' to apply it, or configure the device after it boots.")
-				return err
-			}
-			return nil
+			return skip()
 		}
+
+		if relocate {
+			found, findErr := awaitReconnectedDrive(ctx, id)
+			if ctx.Err() != nil {
+				// Ctrl-C while waiting counts as declining the retry.
+				return skip()
+			}
+			if findErr != nil {
+				// Back to the prompt without touching any disk.
+				err = findErr
+				continue
+			}
+			d, relocate = found, false
+		}
+		err = provisionConfigPartitionFn(d, creds, deviceName, provisioningJSON)
 	}
+	return d, true, nil
 }
 
 // provisionConfigPartition downloads the latest stable arm64 wendy-agent binary

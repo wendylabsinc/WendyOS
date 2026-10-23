@@ -167,6 +167,74 @@ func findConfigPartitionNumber(diskNum int) (int, error) {
 	return parseConfigPartition(out)
 }
 
+// readDriveIdentity fingerprints d from Get-Disk: its size, GPT disk GUID,
+// serial number and friendly name. writeImageToDisk leaves a fixed disk
+// offline, where volume labels — and with them the config partition — cannot
+// be read, so the config-partition GUID is left out on Windows.
+func readDriveIdentity(d drive) (driveIdentity, error) {
+	diskNum, err := parseDiskNumber(d.DevicePath)
+	if err != nil {
+		return driveIdentity{}, err
+	}
+	ids, err := windowsDiskIdentities(fmt.Sprintf("Get-Disk -Number %d -ErrorAction Stop", diskNum))
+	if err != nil {
+		return driveIdentity{}, err
+	}
+	id, ok := ids[diskNum]
+	if !ok {
+		return driveIdentity{}, fmt.Errorf("Get-Disk did not report disk %d", diskNum)
+	}
+	return id, nil
+}
+
+// listIdentifiedDrives fingerprints every drive the installer would offer as a
+// target, with one Get-Disk query for all of them.
+func listIdentifiedDrives() ([]identifiedDrive, error) {
+	drives, err := listAllDrives()
+	if err != nil {
+		return nil, err
+	}
+	ids, err := windowsDiskIdentities("Get-Disk")
+	if err != nil {
+		return nil, err
+	}
+	var out []identifiedDrive
+	for _, d := range drives {
+		diskNum, err := parseDiskNumber(d.DevicePath)
+		if err != nil {
+			continue
+		}
+		if id, ok := ids[diskNum]; ok {
+			out = append(out, identifiedDrive{drive: d, id: id})
+		}
+	}
+	return out, nil
+}
+
+// windowsDiskIdentities runs the Get-Disk identity query over the disks the
+// selector names.
+func windowsDiskIdentities(selector string) (map[int]driveIdentity, error) {
+	script := selector + " | ForEach-Object { " +
+		"[PSCustomObject]@{ Number=$_.Number; Guid=$_.Guid; Size=$_.Size; " +
+		"SerialNumber=$_.SerialNumber; FriendlyName=$_.FriendlyName } " +
+		"} | ConvertTo-Json -Compress"
+	out, err := exec.Command(env.PowershellExe(), "-NoProfile", "-NonInteractive", "-Command", script).Output()
+	if err != nil {
+		return nil, fmt.Errorf("running Get-Disk: %w", err)
+	}
+	return parseWindowsDiskIdentities(out)
+}
+
+// drivePresent reports whether Windows still lists d's disk number.
+func drivePresent(d drive) bool {
+	diskNum, err := parseDiskNumber(d.DevicePath)
+	if err != nil {
+		return false
+	}
+	script := fmt.Sprintf("Get-Disk -Number %d -ErrorAction Stop | Out-Null", diskNum)
+	return exec.Command(env.PowershellExe(), "-NoProfile", "-NonInteractive", "-Command", script).Run() == nil
+}
+
 func ensureConfigPartitionMounted(diskNum, partNum int) (string, error) {
 	letter, err := readPartitionDriveLetter(diskNum, partNum)
 	if err != nil {

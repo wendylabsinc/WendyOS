@@ -67,5 +67,15 @@ func findConfigPartition(diskDev string) (string, error) {
 	return "", fmt.Errorf("config partition not found on %s", diskDev)
 }
 
+// readDriveIdentity fingerprints d from lsblk: its size, GPT disk GUID,
+// serial and model, and the unique GUID of its config partition.
+func readDriveIdentity(d drive) (driveIdentity, error) {
+	out, err := exec.Command("lsblk", "--json", "--bytes", "-o", "NAME,SIZE,TYPE,PTUUID,PARTUUID,LABEL,SERIAL,MODEL", d.DevicePath).Output()
+	if err != nil {
+		return driveIdentity{}, fmt.Errorf("lsblk %s: %w", d.DevicePath, err)
+	}
+	return parseLsblkIdentity(out)
+}
+
 // ejectDisk is a no-op on Linux; drives are simply unmounted.
 func ejectDisk(_ drive) {}
