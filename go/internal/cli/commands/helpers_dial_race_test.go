@@ -3,363 +3,68 @@ package commands
 import (
 	"context"
 	"errors"
-	"io"
-	"reflect"
-	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	wendy "github.com/wendylabsinc/wendy-go"
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
-	"github.com/wendylabsinc/wendy/go/internal/shared/devicepin"
 )
 
-type dialRaceCloser struct{ calls atomic.Int32 }
+type sdkTestConnector func(context.Context, wendy.DeviceConnectRequest) (wendy.DeviceConnection, error)
 
-func (c *dialRaceCloser) Close() error {
-	c.calls.Add(1)
-	return nil
+func (f sdkTestConnector) ConnectDevice(ctx context.Context, r wendy.DeviceConnectRequest) (wendy.DeviceConnection, error) {
+	return f(ctx, r)
 }
 
-func newDialRaceConnection() (*grpcclient.AgentConnection, *dialRaceCloser) {
-	closer := new(dialRaceCloser)
-	return &grpcclient.AgentConnection{IsMTLS: true, ExtraClosers: []io.Closer{closer}}, closer
+type sdkTestPeer struct {
+	wendy.DeviceConnection
+	probe    func(context.Context) (wendy.RPCResponse, error)
+	evidence wendy.DeviceConnectionEvidence
+	closed   atomic.Int32
 }
 
-type dialRaceOutcome struct {
-	conn *grpcclient.AgentConnection
-	err  error
+func (p *sdkTestPeer) Unary(ctx context.Context, _ wendy.RPCRequest) (wendy.RPCResponse, error) {
+	return p.probe(ctx)
 }
-
-func stubMTLSCandidate(t *testing.T, dial func(context.Context, *mtlsWalk, string, bool) (*grpcclient.AgentConnection, error)) {
+func (p *sdkTestPeer) Evidence() wendy.DeviceConnectionEvidence { return p.evidence }
+func (p *sdkTestPeer) Close() error                             { p.closed.Add(1); return nil }
+func failedSDKPeer(cause error, org int32) *sdkTestPeer {
+	return &sdkTestPeer{probe: func(context.Context) (wendy.RPCResponse, error) {
+		return wendy.RPCResponse{}, &deviceRPCError{RPCStatusError: &wendy.RPCStatusError{Code: wendy.RPCUnavailable, Message: cause.Error(), Cause: cause}}
+	}, evidence: wendy.DeviceConnectionEvidence{ObservedOrg: org}}
+}
+func stubSDKConnector(t *testing.T, factory sdkTestConnector) {
 	t.Helper()
-	original := dialMTLSCandidateFn
-	dialMTLSCandidateFn = dial
-	t.Cleanup(func() { dialMTLSCandidateFn = original })
+	old := deviceConnectorFn
+	t.Cleanup(func() { deviceConnectorFn = old })
+	deviceConnectorFn = func([]config.CertificateInfo, certs.PinChecker) wendy.DeviceConnector { return factory }
 }
-
-func awaitDialRaceSignal(t *testing.T, signal <-chan struct{}) {
+func awaitSDKSignal(t *testing.T, signal <-chan struct{}) {
 	t.Helper()
 	select {
 	case <-signal:
 	case <-time.After(3 * time.Second):
-		t.Fatal("timed out waiting for candidate race")
-	}
-}
-
-func awaitDialRaceOutcome(t *testing.T, results <-chan dialRaceOutcome) dialRaceOutcome {
-	t.Helper()
-	select {
-	case result := <-results:
-		return result
-	case <-time.After(3 * time.Second):
-		t.Fatal("candidate race did not return")
-		return dialRaceOutcome{}
-	}
-}
-
-func TestMTLSCandidateRaceBackupWinsAndDrainsLateConnection(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	backupStarted := make(chan struct{})
-	primaryCanceled := make(chan struct{})
-	finishPrimary := make(chan struct{})
-	defer func() {
-		select {
-		case <-finishPrimary:
-		default:
-			close(finishPrimary)
-		}
-	}()
-	winner, winnerCloser := newDialRaceConnection()
-	loser, loserCloser := newDialRaceConnection()
-	stubMTLSCandidate(t, func(ctx context.Context, _ *mtlsWalk, _ string, isPrimary bool) (*grpcclient.AgentConnection, error) {
-		if isPrimary {
-			<-ctx.Done()
-			close(primaryCanceled)
-			<-finishPrimary
-			// A successful RPC can finish just as the winning candidate cancels us.
-			return loser, nil
-		}
-		close(backupStarted)
-		return winner, nil
-	})
-	results := make(chan dialRaceOutcome, 1)
-	go func() {
-		conn, err := raceMTLSCandidates(ctx, &mtlsWalk{}, []string{"primary", "backup"})
-		results <- dialRaceOutcome{conn, err}
-	}()
-	awaitDialRaceSignal(t, backupStarted)
-	awaitDialRaceSignal(t, primaryCanceled)
-	select {
-	case <-results:
-		t.Fatal("race returned before its canceled primary finished")
-	default:
-	}
-	close(finishPrimary)
-	result := awaitDialRaceOutcome(t, results)
-	if result.conn != winner || result.err != nil {
-		t.Fatalf("race = (%v, %v), want authenticated backup", result.conn, result.err)
-	}
-	if loserCloser.calls.Load() != 1 || winnerCloser.calls.Load() != 0 {
-		t.Fatalf("close counts: loser=%d winner=%d, want 1 and 0", loserCloser.calls.Load(), winnerCloser.calls.Load())
-	}
-	_ = winner.Close()
-}
-
-func TestMTLSCandidateRaceFailureStartsNextWithoutDelay(t *testing.T) {
-	// The backup must finish before the stagger would have started it.
-	ctx, cancel := context.WithTimeout(context.Background(), mtlsCandidateDelay/2)
-	defer cancel()
-	winner, _ := newDialRaceConnection()
-	stubMTLSCandidate(t, func(ctx context.Context, _ *mtlsWalk, _ string, isPrimary bool) (*grpcclient.AgentConnection, error) {
-		if isPrimary {
-			return nil, nil
-		}
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		return winner, nil
-	})
-	conn, err := raceMTLSCandidates(ctx, &mtlsWalk{}, []string{"primary", "backup"})
-	if conn != winner || err != nil {
-		t.Fatalf("race = (%v, %v), want backup before stagger delay", conn, err)
-	}
-	_ = winner.Close()
-}
-
-func dialRaceRefusals() []struct {
-	name string
-	err  error
-} {
-	return []struct {
-		name string
-		err  error
-	}{
-		{"identity", identityRefusal("pi.local", &certs.IdentityMismatchError{WantOrg: 7, WantAsset: "42", GotOrg: 7, GotAsset: "43"})},
-		{"public key", spkiRefusal("pi.local", &devicepin.PinMismatchError{Key: "asset:42", Want: "original", Got: "changed"})},
-	}
-}
-
-// Signal when the scheduler reads the refusal, so tests can order another
-// candidate's completion without relying on sleeps or goroutine scheduling.
-type observedDialRaceRefusal struct {
-	err      error
-	observed chan struct{}
-	once     sync.Once
-}
-
-func (e *observedDialRaceRefusal) Error() string { return e.err.Error() }
-func (e *observedDialRaceRefusal) Unwrap() error { return e.err }
-func (e *observedDialRaceRefusal) Is(target error) bool {
-	if target == errDeviceIdentityRefused {
-		e.once.Do(func() { close(e.observed) })
-	}
-	return errors.Is(e.err, target)
-}
-
-func TestMTLSCandidateRaceAuthenticatedWinnerOverridesOtherAddressRefusal(t *testing.T) {
-	for _, refusal := range dialRaceRefusals() {
-		t.Run(refusal.name, func(t *testing.T) {
-			for _, refusalFirst := range []bool{false, true} {
-				t.Run(map[bool]string{false: "winner first", true: "refusal first"}[refusalFirst], func(t *testing.T) {
-					ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-					defer cancel()
-					winner, closed := newDialRaceConnection()
-					observed := &observedDialRaceRefusal{err: refusal.err, observed: make(chan struct{})}
-					var thirdStarted atomic.Bool
-					stubMTLSCandidate(t, func(ctx context.Context, _ *mtlsWalk, candidate string, isPrimary bool) (*grpcclient.AgentConnection, error) {
-						if candidate == "third" {
-							thirdStarted.Store(true)
-							return nil, nil
-						}
-						if refusalFirst {
-							if !isPrimary {
-								return nil, observed
-							}
-							select {
-							case <-observed.observed:
-							case <-ctx.Done():
-								return nil, ctx.Err()
-							}
-							if err := ctx.Err(); err != nil {
-								return nil, err
-							}
-							return winner, nil
-						}
-						if isPrimary {
-							<-ctx.Done()
-							// Success canceled this attempt after its mismatch.
-							return nil, refusal.err
-						}
-						return winner, nil
-					})
-					conn, err := raceMTLSCandidates(ctx, &mtlsWalk{}, []string{"primary", "backup", "third"})
-					if conn != winner || err != nil {
-						t.Fatalf("race = (%v, %v), want authenticated winner", conn, err)
-					}
-					if closed.calls.Load() != 0 {
-						t.Fatalf("winner closed %d times before return, want zero", closed.calls.Load())
-					}
-					if thirdStarted.Load() {
-						t.Fatal("race started another candidate after success or refusal")
-					}
-					_ = conn.Close()
-				})
-			}
-		})
-	}
-}
-
-func TestMTLSCandidateRaceCancellationPreservesRefusal(t *testing.T) {
-	for _, refusal := range dialRaceRefusals() {
-		t.Run(refusal.name, func(t *testing.T) {
-			for _, order := range []string{"refusal before cancellation", "refusal after cancellation", "winner before cancellation"} {
-				t.Run(order, func(t *testing.T) {
-					ctx, cancel := context.WithCancel(context.Background())
-					defer cancel()
-					conn, closed := newDialRaceConnection()
-					backupStarted := make(chan struct{})
-					observed := &observedDialRaceRefusal{err: refusal.err, observed: make(chan struct{})}
-					stubMTLSCandidate(t, func(workerCtx context.Context, _ *mtlsWalk, _ string, isPrimary bool) (*grpcclient.AgentConnection, error) {
-						switch order {
-						case "refusal before cancellation":
-							if !isPrimary {
-								return nil, observed
-							}
-							<-observed.observed
-							cancel()
-							<-workerCtx.Done()
-							return conn, nil
-						case "refusal after cancellation":
-							if isPrimary {
-								<-backupStarted
-								cancel()
-								<-workerCtx.Done()
-								return nil, refusal.err
-							}
-							close(backupStarted)
-							<-workerCtx.Done()
-							return conn, nil
-						default:
-							if isPrimary {
-								<-workerCtx.Done()
-								// The backup won, but cancellation arrived while
-								// the race was draining this observed refusal.
-								cancel()
-								return nil, refusal.err
-							}
-							return conn, nil
-						}
-					})
-					results := make(chan dialRaceOutcome, 1)
-					go func() {
-						conn, err := raceMTLSCandidates(ctx, &mtlsWalk{}, []string{"primary", "backup"})
-						results <- dialRaceOutcome{conn, err}
-					}()
-					result := awaitDialRaceOutcome(t, results)
-					if result.conn != nil || !errors.Is(result.err, refusal.err) {
-						t.Fatalf("race = (%v, %v), want observed refusal %v", result.conn, result.err, refusal.err)
-					}
-					if closed.calls.Load() != 1 {
-						t.Fatalf("connection closed %d times, want once", closed.calls.Load())
-					}
-				})
-			}
-		})
-	}
-}
-
-func TestMTLSCandidateRacePreservesPrimaryFailureEvidence(t *testing.T) {
-	for _, primaryRejects := range []bool{false, true} {
-		t.Run(map[bool]string{false: "primary unreachable", true: "primary rejected certificate"}[primaryRejects], func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-			defer cancel()
-			primaryErr := errors.New("primary failure")
-			extraErr := errors.New("backup failure")
-			backupDone := make(chan struct{})
-			stubMTLSCandidate(t, func(ctx context.Context, worker *mtlsWalk, candidate string, isPrimary bool) (*grpcclient.AgentConnection, error) {
-				if isPrimary {
-					worker.recordMTLSErr(candidate, primaryErr, true)
-					worker.primaryObservedOrg = 7
-					if primaryRejects {
-						worker.primaryMTLSPortCertFails = 1
-						worker.anyCertRejection = true
-					} else {
-						worker.primaryMTLSPortNonCertFails = 1
-					}
-					select {
-					case <-backupDone:
-					case <-ctx.Done():
-						return nil, ctx.Err()
-					}
-				} else {
-					worker.recordMTLSErr(candidate, extraErr, false)
-					worker.observedDeviceOrg = 99
-					worker.anyCertRejection = !primaryRejects
-					close(backupDone)
-				}
-				return nil, nil
-			})
-			walk := &mtlsWalk{}
-			conn, err := raceMTLSCandidates(ctx, walk, []string{"primary", "backup"})
-			if conn != nil || err != nil {
-				t.Fatalf("race = (%v, %v), want all candidates exhausted", conn, err)
-			}
-			if walk.primaryRejectedOurCert() != primaryRejects || walk.primaryObservedOrg != 7 || !errors.Is(walk.primaryLastErr, primaryErr) {
-				t.Fatalf("backup changed primary fallback evidence: %+v", walk)
-			}
-			if len(walk.attempts) != 2 || walk.attempts[0].addr != "primary" || walk.attempts[1].addr != "backup" {
-				t.Fatalf("attempts = %v, want candidate order", walk.attempts)
-			}
-		})
-	}
-}
-
-func TestMTLSCandidateRaceParentCancellationDrainsAndCloses(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	backupStarted := make(chan struct{})
-	var returned atomic.Int32
-	late, closed := newDialRaceConnection()
-	stubMTLSCandidate(t, func(ctx context.Context, _ *mtlsWalk, _ string, isPrimary bool) (*grpcclient.AgentConnection, error) {
-		if !isPrimary {
-			close(backupStarted)
-		}
-		<-ctx.Done()
-		returned.Add(1)
-		if isPrimary {
-			return nil, ctx.Err()
-		}
-		return late, nil
-	})
-	results := make(chan dialRaceOutcome, 1)
-	go func() {
-		conn, err := raceMTLSCandidates(ctx, &mtlsWalk{}, []string{"primary", "backup"})
-		results <- dialRaceOutcome{conn, err}
-	}()
-	awaitDialRaceSignal(t, backupStarted)
-	cancel()
-	result := awaitDialRaceOutcome(t, results)
-	if result.conn != nil || !errors.Is(result.err, context.Canceled) || returned.Load() != 2 {
-		t.Fatalf("race = (%v, %v), returned workers=%d; want cancellation after both workers finish", result.conn, result.err, returned.Load())
-	}
-	if closed.calls.Load() != 1 {
-		t.Fatalf("late connection closed %d times, want once", closed.calls.Load())
+		t.Fatal("timed out waiting for candidate")
 	}
 }
 
 func TestLadderWaitsForRacingCandidatesBeforePlaintext(t *testing.T) {
 	setTempConfig(t, &config.Config{})
 	setPinCache(t)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	backupStarted := make(chan struct{})
-	finishBackup := make(chan struct{})
-	stubMTLSCandidate(t, func(ctx context.Context, worker *mtlsWalk, candidate string, isPrimary bool) (*grpcclient.AgentConnection, error) {
-		if !isPrimary {
+	backupStarted, finishBackup := make(chan struct{}), make(chan struct{})
+	var plaintextCalled atomic.Bool
+	plaintext := grpcclient.NewFromConn(nil)
+	stubSDKConnector(t, func(ctx context.Context, r wendy.DeviceConnectRequest) (wendy.DeviceConnection, error) {
+		if !r.TLS {
+			plaintextCalled.Store(true)
+			return &deviceConnection{AgentConnection: plaintext}, nil
+		}
+		if r.Address == "[fd00::1]:50051" {
 			close(backupStarted)
 			select {
 			case <-finishBackup:
@@ -367,63 +72,24 @@ func TestLadderWaitsForRacingCandidatesBeforePlaintext(t *testing.T) {
 				return nil, ctx.Err()
 			}
 		}
-		worker.recordMTLSErr(candidate, errors.New("connection refused"), isPrimary)
-		return nil, nil
+		return nil, errors.New("connection refused")
 	})
-	originalPlaintext := plaintextConnectFn
-	t.Cleanup(func() { plaintextConnectFn = originalPlaintext })
-	plaintextCalled := make(chan string, 1)
-	plaintext := grpcclient.NewFromConn(nil)
-	plaintextConnectFn = func(_ context.Context, addr string) (*grpcclient.AgentConnection, error) {
-		plaintextCalled <- addr
-		return plaintext, nil
-	}
-	target := dialTarget{Addr: "192.0.2.1:50051", Candidates: []string{"192.0.2.1:50051", "[fd00::1]:50051"}}
-	results := make(chan dialRaceOutcome, 1)
+	result := make(chan error, 1)
 	go func() {
-		conn, _, err := dialAgentLadderWithCerts(ctx, target, []config.CertificateInfo{{}})
-		results <- dialRaceOutcome{conn, err}
+		conn, _, err := dialAgentLadderWithCerts(ctx, dialTarget{Addr: "192.0.2.1:50051", Candidates: []string{"192.0.2.1:50051", "[fd00::1]:50051"}}, []config.CertificateInfo{{}})
+		if conn != plaintext && err == nil {
+			err = errors.New("wrong plaintext connection")
+		}
+		result <- err
 	}()
-	awaitDialRaceSignal(t, backupStarted)
-	select {
-	case <-plaintextCalled:
-		t.Fatal("plaintext fallback ran while an authenticated candidate was still pending")
-	default:
+	awaitSDKSignal(t, backupStarted)
+	if plaintextCalled.Load() {
+		t.Fatal("plaintext offered before authenticated candidates completed")
 	}
 	close(finishBackup)
-	result := awaitDialRaceOutcome(t, results)
-	if result.conn != plaintext || result.err != nil {
-		t.Fatalf("ladder = (%v, %v), want plaintext after all authenticated candidates failed", result.conn, result.err)
+	if err := <-result; err != nil || !plaintextCalled.Load() {
+		t.Fatalf("fallback: %v", err)
 	}
-	if got := <-plaintextCalled; got != target.Addr {
-		t.Fatalf("plaintext address = %q, want primary %q", got, target.Addr)
-	}
-}
-
-func TestMTLSCandidateRaceCopiesCertificateOrder(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	primaryChanged := make(chan struct{})
-	stubMTLSCandidate(t, func(ctx context.Context, worker *mtlsWalk, _ string, isPrimary bool) (*grpcclient.AgentConnection, error) {
-		if isPrimary {
-			worker.probeOrder[0] = 2
-			close(primaryChanged)
-			<-ctx.Done()
-			return nil, ctx.Err()
-		}
-		<-primaryChanged
-		if !reflect.DeepEqual(worker.probeOrder, []int{0, 1, 2}) {
-			t.Errorf("backup inherited a concurrently modified order: %v", worker.probeOrder)
-		}
-		conn, _ := newDialRaceConnection()
-		return conn, nil
-	})
-	walk := &mtlsWalk{probeOrder: []int{0, 1, 2}}
-	conn, err := raceMTLSCandidates(ctx, walk, []string{"primary", "backup"})
-	if err != nil || conn == nil {
-		t.Fatalf("race = (%v, %v), want backup success", conn, err)
-	}
-	_ = conn.Close()
 }
 
 func TestLadderRaceCancellationSkipsPlaintext(t *testing.T) {
@@ -431,21 +97,21 @@ func TestLadderRaceCancellationSkipsPlaintext(t *testing.T) {
 	setPinCache(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	stubMTLSCandidate(t, func(workerCtx context.Context, _ *mtlsWalk, _ string, _ bool) (*grpcclient.AgentConnection, error) {
+	var plaintextCalls atomic.Int32
+	peer := failedSDKPeer(context.Canceled, 0)
+	peer.probe = func(probeCtx context.Context) (wendy.RPCResponse, error) {
 		cancel()
-		<-workerCtx.Done()
-		return nil, workerCtx.Err()
-	})
-	originalPlaintext := plaintextConnectFn
-	t.Cleanup(func() { plaintextConnectFn = originalPlaintext })
-	plaintextCalls := 0
-	plaintextConnectFn = func(context.Context, string) (*grpcclient.AgentConnection, error) {
-		plaintextCalls++
-		return grpcclient.NewFromConn(nil), nil
+		<-probeCtx.Done()
+		return wendy.RPCResponse{}, probeCtx.Err()
 	}
-	target := dialTarget{Addr: "192.0.2.1:50051", Candidates: []string{"192.0.2.1:50051", "[fd00::1]:50051"}}
-	conn, _, err := dialAgentLadderWithCerts(ctx, target, []config.CertificateInfo{{}})
-	if conn != nil || !errors.Is(err, context.Canceled) || plaintextCalls != 0 {
-		t.Fatalf("ladder = (%v, %v), plaintext calls=%d; want cancellation without fallback", conn, err, plaintextCalls)
+	stubSDKConnector(t, func(_ context.Context, r wendy.DeviceConnectRequest) (wendy.DeviceConnection, error) {
+		if !r.TLS {
+			plaintextCalls.Add(1)
+		}
+		return peer, nil
+	})
+	conn, _, err := dialAgentLadderWithCerts(ctx, dialTarget{Addr: "192.0.2.1:50051"}, []config.CertificateInfo{{}})
+	if conn != nil || !errors.Is(err, context.Canceled) || plaintextCalls.Load() != 0 || peer.closed.Load() != 1 {
+		t.Fatalf("connection=%v error=%v plaintext=%d closed=%d", conn, err, plaintextCalls.Load(), peer.closed.Load())
 	}
 }

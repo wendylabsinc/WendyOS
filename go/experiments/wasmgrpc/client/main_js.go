@@ -167,12 +167,13 @@ func run(ctx context.Context) ([]string, error) {
 	if !roots.AppendCertsFromPEM([]byte(f.Certificate.PemCertificateChain)) {
 		return checks, fmt.Errorf("invalid fixture CA")
 	}
-	noCert, err := connect(f.Certificate, grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{
+	noCertConn, err := grpc.NewClient("passthrough:///wasm-agent.test:443", dial, grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{
 		MinVersion: tls.VersionTLS13, ServerName: "wasm-agent.test", RootCAs: roots,
 	})))
 	if err != nil {
 		return checks, err
 	}
+	noCert := grpcclient.NewFromConn(noCertConn)
 	badCtx, cancel = context.WithTimeout(ctx, 3*time.Second)
 	_, err = noCert.AgentService.GetAgentVersion(badCtx, &agentpb.GetAgentVersionRequest{})
 	cancel()

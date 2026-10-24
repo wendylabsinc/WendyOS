@@ -20,6 +20,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/wendylabsinc/wendy-go/devices"
 	"github.com/wendylabsinc/wendy/go/internal/cli/ble"
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/cli/linklocal"
@@ -37,12 +38,10 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/version"
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	"golang.org/x/term"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
-const defaultAgentPort = 50051
-const agentMTLSPortOffset = 1
+const defaultAgentPort = devices.DefaultAgentPort
+const agentMTLSPortOffset = devices.AgentMTLSPortOffset
 
 const agentPlaintextProbeTimeout = 3 * time.Second
 
@@ -64,7 +63,7 @@ const agentPlaintextProbeTimeout = 3 * time.Second
 // observed on hardware while still failing a truly-unreachable device in a
 // bounded time (see retryOnHandshakeTimeout for the belt-and-braces retry on
 // top of this budget).
-const mtlsProbeTimeout = 7 * time.Second
+const mtlsProbeTimeout = devices.MTLSProbeTimeout
 
 // lanAddressProbeBudget bounds a single candidate address in the discover/
 // picker version probe (resolveLANAgentVersion). It wraps connectWithAutoTLS,
@@ -392,65 +391,11 @@ func provisionedAgentConnectError(mtlsErr error) error {
 
 // isReachabilityTimeoutError follows causes so recovery messages cannot hide
 // a timeout or turn a separate broadcast failure into a connection timeout.
-func isReachabilityTimeoutError(err error) bool {
-	if err == nil {
-		return false
-	}
-	if wrapped, ok := err.(interface{ Unwrap() []error }); ok {
-		for _, cause := range wrapped.Unwrap() {
-			if isReachabilityTimeoutError(cause) {
-				return true
-			}
-		}
-		return false
-	}
-	if cause := errors.Unwrap(err); cause != nil {
-		return isReachabilityTimeoutError(cause)
-	}
-	msg := err.Error()
-	return strings.Contains(msg, "i/o timeout") ||
-		strings.Contains(msg, "connection timed out") ||
-		strings.Contains(msg, "deadline exceeded")
-}
+func isReachabilityTimeoutError(err error) bool { return devices.IsReachabilityTimeoutError(err) }
 
 // isTLSCertificateError identifies certificate failures, including ambiguous
 // peer alerts. It does not establish that refreshing client credentials helps.
-func isTLSCertificateError(err error) bool {
-	if err == nil {
-		return false
-	}
-	if wrapped, ok := err.(interface{ Unwrap() []error }); ok {
-		for _, cause := range wrapped.Unwrap() {
-			if isTLSCertificateError(cause) {
-				return true
-			}
-		}
-		return false
-	} else if wrapped := errors.Unwrap(err); wrapped != nil {
-		return isTLSCertificateError(wrapped)
-	}
-	msg := err.Error()
-	if strings.Contains(msg, "first record does not look like a TLS handshake") {
-		return false
-	}
-	for _, signal := range []string{
-		// Server verification can fail before the peer evaluates our client
-		// certificate, especially when we only tried another org's credential.
-		"x509:",
-		"server certificate belongs to org ",
-		"certificate is not valid for client authentication",
-		"certificate not valid at current time",
-		"certificate has expired",
-		"expired certificate",
-		"remote error: tls: bad certificate",
-		"remote error: tls: certificate required",
-	} {
-		if strings.Contains(msg, signal) {
-			return true
-		}
-	}
-	return false
-}
+func isTLSCertificateError(err error) bool { return devices.IsTLSCertificateError(err) }
 
 // isExplicitTLSRejection distinguishes certificate errors and peer TLS alerts
 // from inferred handshake failures such as a timeout.
@@ -636,12 +581,7 @@ var ErrDefaultCleared = errors.New("default device cleared")
 // wrapping IPv6 addresses in brackets as required by RFC 3986.
 // Uses netip.ParseAddr so IPv6 link-local addresses with zone IDs
 // (e.g. fe80::1%en0) are correctly detected and bracketed.
-func hostPort(host string, port int) string {
-	if addr, err := netip.ParseAddr(host); err == nil && addr.Is6() {
-		return fmt.Sprintf("[%s]:%d", host, port)
-	}
-	return fmt.Sprintf("%s:%d", host, port)
-}
+func hostPort(host string, port int) string { return devices.HostPort(host, port) }
 
 // lanAgentAddresses returns candidate gRPC addresses for a LAN device.
 // Prefer the discovered IP address so commands still work when .local
@@ -655,45 +595,10 @@ func hostPort(host string, port int) string {
 // undoing the mTLS-port offset baked into a provisioned device's advertisement
 // (connectWithAutoTLS adds it back). Shared by lanAgentAddresses and
 // lanDialCandidates so both agree on the port for every address.
-func lanAgentPort(dev models.LANDevice) int {
-	port := dev.Port
-	if port == 0 {
-		port = defaultAgentPort
-	}
-	if dev.IsMTLS && dev.Port != 0 && port > agentMTLSPortOffset {
-		port -= agentMTLSPortOffset // advertised port is mTLS; connectWithAutoTLS will add the offset back
-	}
-	return port
-}
+func lanAgentPort(dev models.LANDevice) int { return devices.LANAgentPort(sdkLANDevice(dev)) }
 
 func lanAgentAddresses(dev models.LANDevice) []string {
-	port := lanAgentPort(dev)
-
-	ip, hostname := strings.TrimSpace(dev.IPAddress), strings.TrimSpace(dev.Hostname)
-	hosts := []string{ip, hostname}
-	// A zoned IPv6 literal (fe80::5741:1%enx0) can only come from the USB
-	// well-known-address probe, which just proved the agent answers there. Such
-	// a device is typically one whose mDNS is broken — that is why the probe
-	// found it — so its .local name costs a full resolver timeout plus a dial
-	// timeout before the address that works is even tried. It stays first.
-	if strings.TrimSpace(dev.USB) != "" && !strings.Contains(ip, "%") {
-		// A USB-NCM path exists. The routed Wi-Fi IP (dev.IPAddress) may be
-		// black-holed by AP isolation on residential routers, so try the
-		// link-local .local hostname (reachable over USB) first.
-		hosts = []string{hostname, ip}
-	}
-
-	var addresses []string
-	seen := make(map[string]bool)
-	for _, host := range hosts {
-		if host == "" || seen[host] {
-			continue
-		}
-		seen[host] = true
-		addresses = append(addresses, hostPort(host, port))
-	}
-
-	return addresses
+	return devices.LANAgentAddresses(sdkLANDevice(dev))
 }
 
 func preferredLANAddress(dev models.LANDevice) string {
@@ -1680,17 +1585,12 @@ func resolveHostMDNSFallback(ctx context.Context, host string) string {
 // Commands such as enroll and info have no overall connection deadline, so this
 // cap matters even though discovery callers supply their own deadlines. The
 // cached path can run the walk twice when fresh resolution finds new addresses.
-const maxDialCandidates = 3
+const maxDialCandidates = devices.MaxDialCandidates
 
 // stripZone removes an IPv6 zone suffix ("fe80::1%en0" → "fe80::1") so
 // net.ParseIP, which rejects zones, can be used on an address that may carry
 // one. USB link-local addresses reach this code routinely.
-func stripZone(host string) string {
-	if i := strings.IndexByte(host, '%'); i >= 0 {
-		return host[:i]
-	}
-	return host
-}
+func stripZone(host string) string { return devices.StripZone(host) }
 
 // orderDialCandidates de-duplicates ips and orders them by how likely a dial to
 // each is to reach a device on an ordinary LAN: IPv4 first, then routable IPv6,
@@ -1702,41 +1602,10 @@ func stripZone(host string) string {
 // THE REST AWAY, which is what let one stale record make a reachable device
 // look unreachable. Anything unparseable is dropped rather than passed through:
 // a non-address in this list can only produce a dial that cannot succeed.
-func orderDialCandidates(ips []string) []string {
-	ordered := orderDialCandidatesUnbounded(ips)
-	if len(ordered) > maxDialCandidates {
-		ordered = ordered[:maxDialCandidates]
-	}
-	return ordered
-}
+func orderDialCandidates(ips []string) []string { return devices.OrderDialCandidates(ips) }
 
 func orderDialCandidatesUnbounded(ips []string) []string {
-	var v4, v6Global, v6Local []string
-	seen := map[string]bool{}
-	for _, raw := range ips {
-		ip := strings.TrimSpace(raw)
-		if ip == "" || seen[ip] {
-			continue
-		}
-		parsed := net.ParseIP(stripZone(ip))
-		if parsed == nil {
-			continue
-		}
-		seen[ip] = true
-		switch {
-		case parsed.To4() != nil:
-			v4 = append(v4, ip)
-		case parsed.IsLinkLocalUnicast() || parsed.IsPrivate():
-			v6Local = append(v6Local, ip)
-		default:
-			v6Global = append(v6Global, ip)
-		}
-	}
-	ordered := make([]string, 0, len(v4)+len(v6Global)+len(v6Local))
-	ordered = append(ordered, v4...)
-	ordered = append(ordered, v6Global...)
-	ordered = append(ordered, v6Local...)
-	return ordered
+	return devices.OrderDialCandidatesUnbounded(ips)
 }
 
 // orderRoutedDialCandidates adds host-interface preference, then the device's
@@ -2446,328 +2315,6 @@ func (e mtlsAttemptError) Unwrap() error { return e.err }
 // mtlsWalk carries a candidate's certificate order, failure evidence, and
 // diagnostics. Address attempts run independently; raceMTLSCandidates merges
 // their evidence after every started attempt has finished.
-type mtlsWalk struct {
-	target     dialTarget
-	allCerts   []config.CertificateInfo
-	pins       certs.PinChecker
-	probeOrder []int
-	jumped     bool
-	tlsDebug   bool
-
-	// The suppression buckets below describe the PRIMARY candidate (target.Addr)
-	// and nothing else. That scoping is load-bearing in both directions.
-	//
-	// target.Addr is the only address the plaintext rung ever dials, so it is the
-	// only address whose TLS posture may decide whether that rung is offered. Let
-	// the buckets accumulate across the whole walk instead and two things break:
-	// a single unreachable extra candidate contributes a non-cert failure, which
-	// un-suppresses the rung and hands out an unauthenticated connection where
-	// one address alone would have refused; and a single black-holed candidate
-	// (whose TLS handshake times out, which isCertRejectionError counts as a
-	// rejection) suppresses the rung for a primary that legitimately earned it.
-	// Neither has anything to do with whether dialing target.Addr in the clear is
-	// safe.
-	//
-	// Non-primary candidates are therefore pure routing attempts: they can only
-	// ever find a working device, never change the verdict about the primary.
-	//
-	// primaryOwnPortCertReject — the primary's OWN port was a TLS endpoint that
-	// rejected our cert (the tunnel/mTLS-only-discovery case where that port IS
-	// already the mTLS port). This includes an explicit clientAuth rejection on
-	// the RPC probe, but not a non-TLS preface from a plaintext port.
-	primaryOwnPortCertReject bool
-	// primaryMTLSPortCertFails / primaryMTLSPortNonCertFails — cert-rejection vs.
-	// other failures at the primary's port+1 (the dedicated mTLS port in the
-	// normal case).
-	primaryMTLSPortCertFails    int
-	primaryMTLSPortNonCertFails int
-	// The primary's org and failure evidence are kept separately from the
-	// walk-wide fields, which a later candidate would have overwritten.
-	primaryObservedOrg int32
-	primaryLastErr     error
-	// Keep explicit certificate failures when a later port is unreachable.
-	// This evidence is diagnostic only; the suppression buckets stay unchanged.
-	primaryCertificateErr error
-	// anyCertRejection records whether ANY candidate rejected our certificate. It
-	// decides nothing; it only keeps the unreachable message from claiming that
-	// no certificate was ever compared when one was.
-	anyCertRejection bool
-	// observedDeviceOrg is the org read from the device's server cert on a failed
-	// mTLS probe (0 = none), walk-wide because promoteOrgNext consumes it.
-	observedDeviceOrg int32
-	lastMTLSErr       error
-	// attempts logs every failed rung in order, so a refusal can name the
-	// addresses actually dialled instead of asserting that "no endpoint
-	// answered" and leaving the user to guess where we looked.
-	attempts []mtlsAttemptError
-}
-
-// primaryRejectedOurCert reports whether the PRIMARY candidate proved itself a
-// TLS endpoint that refused our certificate: either its own port did, or every
-// failure at its port+1 was a cert rejection rather than plain unreachability.
-//
-// It decides both whether the plaintext rung is suppressed and whether the
-// caller gets chooseRejectionError's actionable diagnosis, and it reads ONLY the
-// primary's buckets — the primary being the only address the plaintext rung
-// dials. See the buckets' doc on mtlsWalk for what breaks in each direction when
-// non-primary candidates are allowed a vote.
-func (w *mtlsWalk) primaryRejectedOurCert() bool {
-	return w.primaryOwnPortCertReject ||
-		(w.primaryMTLSPortCertFails > 0 && w.primaryMTLSPortNonCertFails == 0)
-}
-
-func (w *mtlsWalk) recordMTLSErr(addr string, err error, isPrimary bool) {
-	if err == nil {
-		return
-	}
-	attempt := mtlsAttemptError{addr: addr, err: err}
-	w.lastMTLSErr = attempt
-	if isPrimary {
-		w.primaryLastErr = attempt
-		// An explicit client-credential diagnosis remains actionable even if
-		// later sessions fail with generic server-certificate errors.
-		if isTLSCertificateError(err) && !isCertRefreshableError(w.primaryCertificateErr) {
-			w.primaryCertificateErr = attempt
-		}
-	}
-	w.attempts = append(w.attempts, attempt)
-}
-
-// dialAddr runs the two-port × every-cert rungs at ONE candidate address.
-//
-// The three return shapes are the walk's control flow: a live connection (stop,
-// success), a refusal (stop this candidate and prevent new candidates or
-// plaintext fallback), or (nil, nil) meaning "nothing answered here, try the
-// next address". Already-started candidates may still authenticate the target.
-func (w *mtlsWalk) dialAddr(ctx context.Context, cand string, isPrimary bool) (*grpcclient.AgentConnection, error) {
-	host, portStr, err := net.SplitHostPort(cand)
-	if err != nil {
-		return nil, nil
-	}
-	port, err := strconv.Atoi(portStr)
-	if err != nil {
-		return nil, nil
-	}
-	// Try the given port first (covers explicit tunnel ports that already point
-	// at the mTLS port), then fall back to port+1 (the normal case where
-	// discovery returns the plaintext port and mTLS is port+1).
-	mtlsAddrs := []string{cand, hostPort(host, port+1)}
-	for addrIdx, mtlsAddr := range mtlsAddrs {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		for pos := range w.probeOrder {
-			if err := ctx.Err(); err != nil {
-				return nil, err
-			}
-			i := w.probeOrder[pos]
-			conn, tlsErr := grpcclient.ConnectWithTLSExpecting(ctx, mtlsAddr, &w.allCerts[i], w.pins, w.target.Expected)
-			if tlsErr != nil {
-				w.recordMTLSErr(mtlsAddr, tlsErr, isPrimary)
-				if w.tlsDebug {
-					fmt.Fprintf(os.Stderr, "[tls-debug] ConnectWithTLS(%s) error: %v\n", mtlsAddr, tlsErr)
-				}
-				continue
-			}
-			// grpc.NewClient is lazy — verify the connection actually works with
-			// a fast probe before committing to mTLS. Every candidate is already
-			// a literal IP, so this only needs to cover TCP + the TLS handshake;
-			// the old 8s budget (which also covered .local mDNS resolution) made
-			// an unreachable mTLS port cost 8s before the plaintext fallback.
-			probeCtx, cancel := context.WithTimeout(ctx, mtlsProbeTimeout)
-			resp, probeErr := conn.AgentService.GetAgentVersion(probeCtx, &agentpb.GetAgentVersionRequest{})
-			cancel()
-			if probeErr == nil {
-				conn.CacheAgentVersion(resp)
-				rememberCertOrg(host, w.allCerts[i].OrganizationID)
-				return conn, nil
-			}
-			w.recordMTLSErr(mtlsAddr, probeErr, isPrimary)
-			if im, mismatched := identityMismatchFn(conn); mismatched {
-				conn.Close()
-				// The device is wrong, so trying another certificate or port at
-				// this address cannot help. Stop scheduling new candidates and
-				// forbid plaintext, but let already-started candidates finish:
-				// another address may still authenticate the requested device
-				// after this address was reassigned by DHCP.
-				//
-				// refusalKey, not PinKey: the pin that produced this constraint
-				// may be filed under one of the device's other names, and that
-				// is the key `wendy device unpin` has to be handed to clear it.
-				return nil, identityRefusal(w.target.refusalKey(), im)
-			}
-			if pm, mismatched := pinMismatchFn(conn); mismatched {
-				conn.Close()
-				// The SPKI store rejected the peer's public key. Apply the same
-				// candidate and fallback rules as an identity mismatch. Preserve
-				// the typed refusal because gRPC's handshake wrapper otherwise
-				// hides the reason and the recovery steps.
-				return nil, spkiRefusal(w.target.refusalKey(), pm)
-			}
-			if w.tlsDebug {
-				fmt.Fprintf(os.Stderr, "[tls-debug] GetAgentVersion(%s) error: %v\n", mtlsAddr, probeErr)
-			}
-			if conn.TCPDialError() != nil {
-				// The actual dial never reached TCP. Another credential cannot
-				// change that, so try the next port without repeating its wait.
-				conn.Close()
-				if isPrimary && addrIdx == 1 {
-					w.primaryMTLSPortNonCertFails++
-				}
-				break
-			}
-			if org, ok := conn.ObservedServerOrg(); ok {
-				w.observedDeviceOrg = org
-				if isPrimary {
-					w.primaryObservedOrg = org
-				}
-				// The device just named its own org. Try that org's cert next
-				// rather than grinding through the remaining ones in their
-				// original order. Purely a reordering of certs we already hold —
-				// the trust decision stays with BuildServerVerifyConnection
-				// (expected-org, ML-DSA chain, SPKI pin), so an org claimed by a
-				// hostile server only ever gets shown a cert this loop would
-				// have shown it anyway. Each candidate may reorder once, so
-				// repeated org claims cannot reshuffle its ladder indefinitely.
-				if !w.jumped && promoteOrgNext(w.probeOrder, pos, w.allCerts, org) {
-					w.jumped = true
-				}
-			}
-			conn.Close()
-			certRejected := isCertRejectionError(cand, probeErr)
-			if certRejected {
-				w.anyCertRejection = true
-			}
-			if !isPrimary {
-				continue
-			}
-			if addrIdx == 0 {
-				if certRejected {
-					w.primaryOwnPortCertReject = true
-				}
-			} else {
-				if certRejected {
-					w.primaryMTLSPortCertFails++
-				} else {
-					w.primaryMTLSPortNonCertFails++
-				}
-			}
-		}
-	}
-	return nil, nil
-}
-
-// dialAgentLadderWithCerts races candidate addresses with a short stagger. Each
-// tries usable org credentials against its own port and port+1. Plaintext is
-// considered only after every candidate fails to produce an authenticated one.
-//
-// allCerts must include expired credentials: transport filters them when valid
-// alternatives exist, while diagnostics need the complete stored snapshot.
-//
-// Candidates arrive already resolved; this function does no name resolution of
-// its own. They are normally literal IP:port, but resolveAddrCandidates returns
-// the original host:port unchanged when resolution fails, so a candidate may
-// still be a name — deliberately, to leave gRPC's own resolver as the last
-// fallback. connectWithAutoTLSDiagnostics calls this for every connect —
-// resolved-address and device-cache fast path alike, including the fast path's
-// re-resolve retry — so all of them share this exact ladder.
-//
-// Walking the candidates is what makes a name with several addresses usable. The
-// ladder used to be handed one pre-resolved address, so a single unreachable one
-// — a stale AAAA record, a DHCP lease the device no longer holds — ended the
-// whole connect; and when the device was pinned, it ended it with a message
-// about identity for what was really a routing failure.
-//
-// target.PinKey and target.Expected are what the user asked for, and they make
-// this the single point where the identity rules hold: a wrong peer stops new
-// candidates and forbids plaintext, while an already-started candidate can still
-// authenticate the requested device. A host with any pin is never offered the
-// plaintext rung.
-func dialAgentLadderWithCerts(ctx context.Context, target dialTarget, allCerts []config.CertificateInfo) (*grpcclient.AgentConnection, error, error) {
-	candidates := target.dialCandidates()
-	walk := &mtlsWalk{target: target, tlsDebug: os.Getenv("WENDY_TLS_DEBUG") != ""}
-	if len(allCerts) > 0 && len(candidates) > 0 {
-		walk.pins = openPinStore()
-		// Probe the organisation that last authenticated against this host
-		// first. With certs for several orgs loaded, the default order makes
-		// every command pay a doomed handshake per non-matching org (see
-		// certorder.go). Purely a reordering — the remaining certs still follow
-		// in their original order, so a stale hint costs nothing extra.
-		primaryHost, _, _ := net.SplitHostPort(target.Addr)
-		preferredOrg, havePreferredOrg := preferredCertOrgForHost(primaryHost)
-		// Skip expired sessions for transport when valid ones exist, but retain
-		// the full snapshot for diagnosis: another org's valid certificate does
-		// not erase this device's expired credential or org membership.
-		walk.allCerts = orderCertsByOrg(preferValidCerts(allCerts, time.Now()), preferredOrg, havePreferredOrg)
-		// probeOrder indexes walk.allCerts. It starts as the caller's order and
-		// is corrected at most once, in place, the first time the device's own
-		// server certificate names an org we hold an untried cert for (see
-		// promoteOrgNext). That correction is what saves an agent too old to
-		// advertise an mDNS `orgid` TXT record from a full linear scan on a cold
-		// certorder memo: BuildServerVerifyConnection fires OnServerIdentity
-		// before the expected-org and chain checks, so even a rejected probe
-		// tells us which org the device actually belongs to. Each concurrent
-		// address attempt owns its order. The correction lands on whichever rung is
-		// actually an mTLS endpoint: probing a plaintext port with TLS fails
-		// before any server certificate arrives, so it observes no org.
-		walk.probeOrder = make([]int, len(walk.allCerts))
-		for i := range walk.probeOrder {
-			walk.probeOrder[i] = i
-		}
-		conn, refusal := raceMTLSCandidates(ctx, walk, candidates)
-		// A parent timeout must not erase completed primary certificate
-		// rejections. Defer cancellation until after that diagnosis, but keep
-		// identity and SPKI refusals ahead of all certificate diagnostics.
-		if refusal != nil && (errors.Is(refusal, errDeviceIdentityRefused) ||
-			(!errors.Is(refusal, context.Canceled) && !errors.Is(refusal, context.DeadlineExceeded))) {
-			return nil, walk.lastMTLSErr, refusal
-		}
-		if conn != nil {
-			return conn, nil, nil
-		}
-		if walk.primaryRejectedOurCert() {
-			// A genuine cross-org mismatch (device's org is one we hold no cert
-			// for) gets a clear, actionable message. A same-org failure (observed
-			// org is one we have, e.g. clock skew / stale cert) or no observed org
-			// falls through to the generic handshake-rejected error, which
-			// connectToAgent already post-processes with clock-skew and
-			// refresh-certs remedies.
-			cause := walk.primaryLastErr
-			if walk.primaryCertificateErr != nil {
-				cause = walk.primaryCertificateErr
-			}
-			return nil, cause, chooseRejectionError(ctx, walk.primaryObservedOrg, allCerts, cause)
-		}
-	}
-	if err := ctx.Err(); err != nil {
-		return nil, walk.lastMTLSErr, err
-	}
-	if target.pinned() {
-		// A host we have already reached over mTLS must never be reached
-		// unauthenticated. Unlike provisionedAgentAdvertisedMTLS this rests on
-		// local state, not a TXT record the attacker also controls — and on the
-		// SAME resolution of that state that produced target.Expected and
-		// target.refusalKey, so the three can never disagree about which pin
-		// they are talking about (see dialTarget.pinned).
-		//
-		// Nothing answered, so no certificate ever arrived and no identity was
-		// ever compared: this refusal is about reachability and says so, and it
-		// is deliberately NOT an errDeviceIdentityRefused (see
-		// errNoAuthenticatedEndpoint).
-		failure := pinnedHostNoAuthenticatedEndpointError(target.refusalKey(), candidates, walk.attempts, walk.anyCertRejection)
-		failure.pinKey = target.PinKey
-		return nil, walk.lastMTLSErr, failure
-	}
-	// The plaintext rung stays on the primary address rather than walking the
-	// candidates. grpc.NewClient is lazy, so a plaintext "success" against a dead
-	// address is indistinguishable from one against a live address until the
-	// first RPC — walking here would spend dials that cannot report which of them
-	// actually worked. The authenticated walk above is where reachability gets
-	// established; cacheFastPathReachable is what proves a plaintext one.
-	conn, err := plaintextConnectFn(ctx, target.Addr)
-	return conn, walk.lastMTLSErr, err
-}
-
 // dialAgentLadder is dialAgentLadderWithCerts with the CLI's stored certs
 // in config order — the shape every non-fast-path caller wants.
 func dialAgentLadder(ctx context.Context, target dialTarget) (*grpcclient.AgentConnection, error, error) {
@@ -2788,68 +2335,7 @@ var dialAgentLadderFn = dialAgentLadder
 // (a stable partition). orgID 0 (unknown) or no match returns certs
 // unchanged. Never mutates the input.
 func rotateCertsForOrg(certs []config.CertificateInfo, orgID int32) []config.CertificateInfo {
-	if orgID == 0 {
-		return certs
-	}
-	matched := make([]config.CertificateInfo, 0, len(certs))
-	rest := make([]config.CertificateInfo, 0, len(certs))
-	for _, c := range certs {
-		if int32(c.OrganizationID) == orgID {
-			matched = append(matched, c)
-		} else {
-			rest = append(rest, c)
-		}
-	}
-	if len(matched) == 0 {
-		return certs
-	}
-	return append(matched, rest...)
-}
-
-// isCertRejectionError recognizes certificate rejection during the handshake or
-// the agent's subsequent clientAuth check, as distinct from the client failing
-// to complete the handshake because the server isn't a TLS endpoint at all.
-// Matches "remote error: tls:" (server sent an alert) and other cert-specific
-// signals; deliberately excludes "tls: first record does not look like a TLS
-// handshake" (plaintext server probed with TLS) and plain transport errors.
-// addr is the endpoint the probe was aimed at: over loopback the verdict has
-// one extra exclusion, described below.
-func isCertRejectionError(addr string, err error) bool {
-	if err == nil {
-		return false
-	}
-	// A successful TLS handshake can still be followed by the agent rejecting
-	// a certificate without clientAuth on the version RPC. Preserve that
-	// explicit diagnosis instead of falling through to plaintext. An arbitrary
-	// Unauthenticated response does not establish a refreshable cert problem.
-	if status.Code(err) == codes.Unauthenticated && isCertRefreshableError(err) {
-		return true
-	}
-	msg := err.Error()
-	// Explicit TLS rejection signals take precedence over transport details.
-	if strings.Contains(msg, "remote error: tls:") || strings.Contains(msg, "certificate required") {
-		return true
-	}
-	// QEMU's user-mode networking accepts on the host before discovering that
-	// the guest port is closed. That ends the TLS probe in either EOF or a TCP
-	// read reset, without a TLS alert rejecting the certificate. Only exclude
-	// these over loopback: elsewhere the same failure may be an on-path reset,
-	// and reading that as "not a TLS endpoint" would re-offer plaintext.
-	loopbackReadReset := strings.Contains(msg, "handshake failed: read tcp ") &&
-		strings.Contains(msg, ": connection reset by peer")
-	if isLoopbackHost(addr) && (strings.Contains(msg, "handshake failed: EOF") || loopbackReadReset) {
-		return false
-	}
-	// A plaintext (unprovisioned) agent probed with TLS reports "first record
-	// does not look like a TLS handshake", which gRPC wraps inside its
-	// "authentication handshake failed" envelope. That is NOT a cert rejection —
-	// the server simply isn't a TLS endpoint — so it must not suppress the
-	// plaintext fallback. Exclude it explicitly before the broad substring match
-	// below would otherwise catch the "authentication handshake failed" wrapper.
-	if strings.Contains(msg, "first record does not look like a TLS handshake") {
-		return false
-	}
-	return strings.Contains(msg, "authentication handshake failed")
+	return cliCredentials(certs, devices.RotateCertsForOrg(sdkCredentials(certs), orgID))
 }
 
 // provisionedAgentAdvertisedMTLS takes a short pre-connection LAN discovery
@@ -3147,16 +2633,7 @@ func loadStoredCLICerts() []config.CertificateInfo {
 // cert if they're all expired, so the handshake still produces a meaningful
 // "run auth login" error instead of a confusing "no certificate".
 func preferValidCerts(all []config.CertificateInfo, now time.Time) []config.CertificateInfo {
-	var valid []config.CertificateInfo
-	for _, cert := range all {
-		if !certExpired(cert, now) {
-			valid = append(valid, cert)
-		}
-	}
-	if len(valid) > 0 {
-		return valid
-	}
-	return all
+	return cliCredentials(all, devices.PreferValidCerts(sdkCredentials(all), now))
 }
 
 // certExpired reports whether the certificate's leaf has passed its NotAfter.
@@ -3164,11 +2641,7 @@ func preferValidCerts(all []config.CertificateInfo, now time.Time) []config.Cert
 // so ML-DSA/pki-core certs with trailing ASN.1 bytes parse correctly; an
 // unparseable cert is treated as not-expired so it is still attempted.
 func certExpired(c config.CertificateInfo, now time.Time) bool {
-	leaves, _ := certs.ParseCertsFromPEM([]byte(c.PemCertificate))
-	if len(leaves) == 0 {
-		return false
-	}
-	return now.After(leaves[0].NotAfter)
+	return sdkCredentials([]config.CertificateInfo{c})[0].Expired(now)
 }
 
 func loadCLIAuth() *config.AuthConfig {

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/wendylabsinc/wendy-go/devices"
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	clitimesync "github.com/wendylabsinc/wendy/go/internal/cli/timesync"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
@@ -18,20 +19,7 @@ import (
 // mutable configuration while formatting an error. If the device's org is
 // known, unrelated sessions cannot establish or disprove its credential expiry.
 func expiredClientCertificateReason(org int32, credentials []config.CertificateInfo, now time.Time) string {
-	count := 0
-	for _, credential := range credentials {
-		if org != 0 && credential.OrganizationID != int(org) {
-			continue
-		}
-		count++
-		if !certExpired(credential, now) {
-			return ""
-		}
-	}
-	if count == 0 {
-		return ""
-	}
-	return "The available client certificates are expired by this computer's clock. Check this computer's clock before refreshing."
+	return devices.ExpiredClientCertificateReason(org, sdkCredentials(credentials), now)
 }
 
 // A peer's generic TLS alert (including "expired certificate") describes its
@@ -58,10 +46,7 @@ func certificateRefreshReason(err error) string {
 	if cause := errors.Unwrap(err); cause != nil {
 		return certificateRefreshReason(cause)
 	}
-	if strings.Contains(err.Error(), "certificate is not valid for client authentication") {
-		return "The client certificate does not permit client authentication."
-	}
-	return ""
+	return devices.CertificateRefreshReason(err)
 }
 
 func isCertRefreshableError(err error) bool { return certificateRefreshReason(err) != "" }
@@ -104,7 +89,7 @@ func recoverAgentConnection(ctx context.Context, nonInteractive bool, cause erro
 	if stopConnectionRecovery(cause) {
 		return nil, cause
 	}
-	if !isCertRefreshableError(cause) {
+	if devices.DecideRecovery(ctx, cause, devices.RecoveryEvidence{RefreshReason: certificateRefreshReason(cause), ClockSuspect: isClockSkewSuspectError(cause), ClockSyncAttempted: clockSkewSyncAttempted}).SyncClock {
 		conn, err := autoSyncTimeAndRetry(ctx, cause, retry)
 		if err == nil {
 			return conn, nil
@@ -134,7 +119,7 @@ func offerCertRefreshAndRetry(ctx context.Context, nonInteractive bool, cause er
 		fmt.Fprintln(os.Stderr, rejection.switchStep)
 		return nil, cause
 	}
-	if !confirmFn("Refresh certificates and retry?") {
+	if !devices.DecideRecovery(ctx, cause, devices.RecoveryEvidence{RefreshReason: reason, Interactive: true}).OfferRefresh || !confirmFn("Refresh certificates and retry?") {
 		return nil, cause
 	}
 	if ctx.Err() != nil {
@@ -190,7 +175,7 @@ func autoSyncTimeAndRetry(ctx context.Context, cause error, retry func() (*grpcc
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
 	}
-	if stopConnectionRecovery(cause) || !isClockSkewSuspectError(cause) || clockSkewSyncAttempted {
+	if !devices.DecideRecovery(ctx, cause, devices.RecoveryEvidence{Refused: stopConnectionRecovery(cause), ClockSuspect: isClockSkewSuspectError(cause), ClockSyncAttempted: clockSkewSyncAttempted}).SyncClock {
 		return nil, cause
 	}
 	clockSkewSyncAttempted = true

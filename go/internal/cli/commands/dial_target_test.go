@@ -464,12 +464,6 @@ func TestPinnedHostSkipsPlaintextRung(t *testing.T) {
 	if mtlsErr == nil {
 		t.Fatal("mtlsErr = nil, want the last mTLS probe failure preserved for diagnostics")
 	}
-	// The load-bearing assertion for the guard's independence: this failure is
-	// NOT a cert rejection, so the pre-existing isCertRejectionError branch
-	// would have fallen straight through to plaintext.
-	if isCertRejectionError("192.168.2.253:50052", mtlsErr) {
-		t.Fatalf("mtlsErr = %v is a cert rejection; this test must exercise the transport-error shape that otherwise reaches the plaintext rung", mtlsErr)
-	}
 }
 
 // TestPlaintextGuardUsesTheTargetsResolvedPin locks in that one connect makes

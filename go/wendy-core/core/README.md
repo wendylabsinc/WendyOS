@@ -12,6 +12,6 @@ The chosen implementation is Go. The binding contract above and platform/subsyst
 - `applications/`: proposed application-management domain.
 - `events/`: proposed structured-event domain.
 
-Identity now contains working Go APIs. The other directories still contain responsibility notes. Exact dependency edges are not settled; see [modules](../documentation/modules.md). Selected modules must share one composed engine and include only their required dependencies, not a separate Go runtime per module.
+Identity, Cloud and Devices contain working Go APIs. The other directories still contain responsibility notes. Exact dependency edges are not settled; see [modules](../documentation/modules.md). Selected modules must share one composed engine and include only their required dependencies, not a separate Go runtime per module.
 
 Portable domain code uses contracts for native capabilities and substantial infrastructure, not concrete platform/container types. Platform adapters live in `platform/`; reusable infrastructure lives in `subsystems/`. Both are components of the same versioned `wendy-core` release.

@@ -3,9 +3,11 @@ package commands
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
+	wendy "github.com/wendylabsinc/wendy-go"
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
@@ -25,27 +27,29 @@ func TestLadderRaceKeepsPrimaryCertificateRejection(t *testing.T) {
 				ctx, cancel := context.WithTimeout(context.Background(), budget)
 				defer cancel()
 				primaryErr := errors.New("remote error: tls: bad certificate")
-				stubMTLSCandidate(t, func(workerCtx context.Context, worker *mtlsWalk, candidate string, isPrimary bool) (*grpcclient.AgentConnection, error) {
-					if isPrimary {
-						worker.recordMTLSErr(candidate, primaryErr, true)
-						worker.primaryMTLSPortCertFails = 1
-						worker.primaryObservedOrg = 7
-						worker.anyCertRejection = true
-						return nil, nil
+				stubSDKConnector(t, func(workerCtx context.Context, request wendy.DeviceConnectRequest) (wendy.DeviceConnection, error) {
+					if !request.TLS {
+						t.Error("plaintext after certificate failure")
+						return nil, errors.New("unexpected plaintext")
+					}
+					if strings.HasPrefix(request.Address, "192.0.2.1:") {
+						return failedSDKPeer(primaryErr, 7), nil
 					}
 					if backupOutcome == "completed" {
-						worker.recordMTLSErr(candidate, errors.New("connection refused"), false)
-						return nil, nil
+						return nil, errors.New("connection refused")
 					}
-					if backupOutcome != "deadline" {
-						cancel()
+					peer := failedSDKPeer(context.Canceled, 0)
+					peer.probe = func(probeCtx context.Context) (wendy.RPCResponse, error) {
+						if backupOutcome != "deadline" {
+							cancel()
+						}
+						<-probeCtx.Done()
+						if backupOutcome == "identity refusal during cancellation" {
+							peer.evidence.IdentityMismatch = &certs.IdentityMismatchError{WantOrg: 7, WantAsset: "42", GotOrg: 7, GotAsset: "43"}
+						}
+						return wendy.RPCResponse{}, probeCtx.Err()
 					}
-					<-workerCtx.Done()
-					worker.recordMTLSErr(candidate, workerCtx.Err(), false)
-					if backupOutcome == "identity refusal during cancellation" {
-						return nil, identityRefusal("pi.local", &certs.IdentityMismatchError{WantOrg: 7, WantAsset: "42", GotOrg: 7, GotAsset: "43"})
-					}
-					return nil, workerCtx.Err()
+					return peer, nil
 				})
 				originalPlaintext := plaintextConnectFn
 				t.Cleanup(func() { plaintextConnectFn = originalPlaintext })
@@ -86,30 +90,19 @@ func TestLadderRaceKeepsPrimaryCertificateRejection(t *testing.T) {
 func TestDialAddrDoesNotRetryCertificatesAfterTCPFailure(t *testing.T) {
 	setTempConfig(t, &config.Config{})
 	setPinCache(t)
-	addr := deadAgentAddr(t)
-	walk := &mtlsWalk{target: dialTarget{Addr: addr}}
-	for i := 0; i < 7; i++ {
-		walk.allCerts = append(walk.allCerts, selfSignedCLICert(t, i+1))
-		walk.probeOrder = append(walk.probeOrder, i)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	conn, err := walk.dialAddr(ctx, addr, true)
-	if conn != nil {
-		conn.Close()
-		t.Fatal("closed ports returned a connection")
-	}
-	if err != nil {
-		t.Fatalf("transport failure should allow other addresses: %v", err)
-	}
-	if len(walk.attempts) != 2 {
-		t.Fatalf("got %d attempts for seven certificates, want one per port", len(walk.attempts))
-	}
-	if walk.primaryRejectedOurCert() || walk.anyCertRejection {
-		t.Fatal("a TCP failure was reported as a certificate rejection")
-	}
-	if walk.primaryMTLSPortNonCertFails != 1 {
-		t.Fatalf("primary mTLS port failures = %d, want 1", walk.primaryMTLSPortNonCertFails)
+	var calls int
+	stubSDKConnector(t, func(_ context.Context, request wendy.DeviceConnectRequest) (wendy.DeviceConnection, error) {
+		if !request.TLS {
+			t.Fatal("plaintext with governing pin")
+		}
+		calls++
+		peer := failedSDKPeer(errors.New("connection refused"), 0)
+		peer.evidence.TCPDialError = errors.New("connection refused")
+		return peer, nil
+	})
+	all := make([]config.CertificateInfo, 7)
+	_, _, err := dialAgentLadderWithCerts(context.Background(), dialTarget{Addr: "127.0.0.1:50051", PinnedKey: "pi"}, all)
+	if !errors.Is(err, errNoAuthenticatedEndpoint) || calls != 2 {
+		t.Fatalf("error=%v calls=%d", err, calls)
 	}
 }
