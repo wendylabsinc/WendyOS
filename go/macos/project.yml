@@ -1,0 +1,107 @@
+name: WendyDesktop
+options:
+  deploymentTarget:
+    macOS: "26.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "5.10"
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    ENABLE_USER_SCRIPT_SANDBOXING: NO
+    ENABLE_HARDENED_RUNTIME: YES
+    ENABLE_DEBUG_DYLIB: NO
+    CODE_SIGN_STYLE: Automatic
+    CODE_SIGN_IDENTITY: "Apple Development"
+    DEVELOPMENT_TEAM: ""
+    ARCHS: "$(NATIVE_ARCH_ACTUAL)"
+    ONLY_ACTIVE_ARCH: YES
+    LIBRARY_SEARCH_PATHS: "$(SRCROOT)/Build"
+    LD_RUNPATH_SEARCH_PATHS: ["$(inherited)", "@executable_path/../Frameworks"]
+    OTHER_LDFLAGS: ["-lresolv"]
+targets:
+  WendyDesktop:
+    type: application
+    platform: macOS
+    sources:
+      - path: Sources/App
+      - path: Sources/Shared/VPNConfiguration.swift
+      - path: Resources/Notices
+        type: folder
+        buildPhase: resources
+    dependencies:
+      - target: WendyNetwork
+        embed: true
+        codeSign: true
+      - sdk: NetworkExtension.framework
+      - sdk: SystemExtensions.framework
+      - sdk: CoreBluetooth.framework
+      - sdk: IOKit.framework
+      - sdk: DiskArbitration.framework
+      - sdk: Security.framework
+      - sdk: CoreFoundation.framework
+      - sdk: AVFoundation.framework
+      - sdk: CoreMedia.framework
+      - sdk: AudioToolbox.framework
+      - sdk: CoreAudio.framework
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.wendy.desktop
+        PRODUCT_NAME: WendyDesktop
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: Wendy
+        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.developer-tools
+        INFOPLIST_KEY_NSLocalNetworkUsageDescription: Wendy discovers and connects to nearby devices.
+        INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription: Wendy uses Bluetooth to connect to nearby mesh devices.
+        INFOPLIST_KEY_NSSystemExtensionUsageDescription: Wendy routes selected device connections over mesh and cloud.
+        INFOPLIST_KEY_NSBonjourServices: ["_wendy._tcp", "_wendyos._tcp", "_wendy-mesh._udp"]
+        CODE_SIGN_ENTITLEMENTS: Resources/App.entitlements
+        SWIFT_OBJC_BRIDGING_HEADER: Sources/Shared/Bridge.h
+        OTHER_LDFLAGS: ["$(inherited)", "-lwendydesktop", "$(SRCROOT)/Build/libusb-1.0.dylib"]
+    preBuildScripts:
+      - path: Scripts/build-go.sh
+        name: Build Go libraries and bundled CLI
+        basedOnDependencyAnalysis: false
+    postBuildScripts:
+      - path: Scripts/embed-cli.sh
+        name: Embed CLI worker
+        basedOnDependencyAnalysis: false
+  WendyNetwork:
+    type: system-extension
+    platform: macOS
+    productName: dev.wendy.desktop.network
+    sources:
+      - path: Sources/Shared/VPNConfiguration.swift
+      - path: Sources/Extension
+        excludes: [Info.plist]
+    dependencies:
+      - sdk: NetworkExtension.framework
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.wendy.desktop.network
+        PRODUCT_NAME: "$(PRODUCT_BUNDLE_IDENTIFIER)"
+        PRODUCT_MODULE_NAME: WendyNetwork
+        INFOPLIST_FILE: Sources/Extension/Info.plist
+        CODE_SIGN_ENTITLEMENTS: Resources/Network.entitlements
+        SWIFT_OBJC_BRIDGING_HEADER: Sources/Shared/VPNBridge.h
+        OTHER_LDFLAGS: ["$(inherited)", "-lwendyvpn"]
+    preBuildScripts:
+      - path: Scripts/build-go.sh
+        name: Build Go libraries
+        basedOnDependencyAnalysis: false
+  WendyDesktopTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources: [Tests]
+    dependencies:
+      - target: WendyDesktop
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+schemes:
+  WendyDesktop:
+    build:
+      targets:
+        WendyDesktop: all
+    test:
+      targets: [WendyDesktopTests]

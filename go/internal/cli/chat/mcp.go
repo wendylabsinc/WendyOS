@@ -108,6 +108,14 @@ func (t *Tools) ListTools(ctx context.Context) ([]Tool, error) {
 		return nil, err
 	}
 	available := append([]Tool(nil), localTools...)
+	if t.mcpOnly {
+		available = nil
+		for _, tool := range localTools {
+			if tool.Name == "wendy_docs" {
+				available = append(available, tool)
+			}
+		}
+	}
 	known := make(map[string]Tool, len(available))
 	for _, tool := range available {
 		known[tool.Name] = tool
@@ -214,4 +222,29 @@ func mediaToolResult(result *mcpgo.CallToolResult) (ToolResult, error) {
 		value.Text = "Tool completed successfully with no output."
 	}
 	return value, nil
+}
+
+// NewMCPTools exposes the complete bundled Wendy MCP plus its offline docs,
+// without adding the CLI chat's local workspace/shell tools. The caller owns it.
+func NewMCPTools(ctx context.Context, executable, device string) (*Tools, error) {
+	if executable == "" {
+		return nil, errors.New("the bundled Wendy CLI is required")
+	}
+	t := &Tools{mcpOnly: true, known: make(map[string]Tool), stderr: &limitedBuffer{limit: 4096}}
+	if err := t.startMCP(ctx, executable, ""); err != nil {
+		_ = t.Close()
+		return nil, err
+	}
+	if _, err := t.ListTools(ctx); err != nil {
+		_ = t.Close()
+		return nil, err
+	}
+	if device != "" {
+		args, _ := json.Marshal(map[string]string{"device": device})
+		if _, err := t.Execute(ctx, ToolCall{Name: "device_connect", Arguments: args}); err != nil {
+			_ = t.Close()
+			return nil, fmt.Errorf("connecting chat to selected device: %w", err)
+		}
+	}
+	return t, nil
 }

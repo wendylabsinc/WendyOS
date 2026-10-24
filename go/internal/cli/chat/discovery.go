@@ -278,6 +278,13 @@ func chatModelName(id, provider string) bool {
 		}
 	}
 	if provider == "local" || provider == "ollama" {
+		filename := id
+		if index := strings.LastIndex(filename, ":"); index >= 0 {
+			filename = filename[index+1:]
+		}
+		if strings.HasSuffix(filename, ".gguf") && (strings.Contains(filename, "imatrix") || strings.Contains(filename, "mmproj") || strings.HasPrefix(filename, "dflash-") || strings.HasPrefix(filename, "mtp-")) {
+			return false
+		}
 		// Compatible local servers accept arbitrary model names; a name such
 		// as "image-assistant" may still be a conversational vision model.
 		return true
@@ -474,6 +481,11 @@ func PullOllamaModel(ctx context.Context, config Config, model string, progress 
 	ctx, cancel := context.WithTimeout(ctx, time.Hour)
 	defer cancel()
 	p := discoveryProvider(c)
+	return pullOllamaModel(ctx, p, model, progress)
+}
+
+func pullOllamaModel(ctx context.Context, p *httpProvider, model string, progress func(string)) error {
+	c := p.config
 	resp, err := discoveryRequest(ctx, p, http.MethodPost, ollamaURL(c, "/api/pull"), map[string]any{"model": model, "stream": true})
 	if err != nil {
 		return err

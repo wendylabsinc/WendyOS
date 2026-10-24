@@ -44,6 +44,9 @@ const meshPresenceGrace = 15 * time.Second
 
 var meshStartMu sync.Mutex
 
+// Embedders supply the bundled CLI because their executable is not a CLI worker.
+var meshWorkerExecutable = os.Executable
+
 // selectedMeshCertificate is deliberately non-interactive and never enrolls or
 // signs in. Only the selected organization's existing operator session can join.
 func selectedMeshCertificate(cfg *config.Config, endpoint string) (config.CertificateInfo, bool) {
@@ -198,7 +201,7 @@ func ensureMeshSession(ctx context.Context) (string, config.CertificateInfo, err
 	if err = netmesh.PrivateDirectory(dir); err != nil {
 		return "", certificate, err
 	}
-	exe, err := os.Executable()
+	exe, err := meshWorkerExecutable()
 	if err != nil {
 		return "", certificate, err
 	}

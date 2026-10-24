@@ -1,0 +1,406 @@
+import SwiftUI
+
+struct ContentView: View {
+    @EnvironmentObject private var model: AppModel
+    @State private var tab = "apps"
+    @State private var requestedClip: (session: UInt64, id: String)?
+    @State private var showingOrganization = false
+    @State private var showingSites = false
+    @State private var refreshingPane = false
+    @FocusedValue(\.organizationRefresh) private var organizationRefresh
+    @FocusedValue(\.devicePaneRefresh) private var devicePaneRefresh
+    @FocusedValue(\.fleetRefresh) private var fleetRefresh
+    @State private var search = ""
+    @State private var sidebarSelection: String?
+    @State private var deviceSource = "nearby"
+    @State private var manualAddress = ""
+    @State private var showingAddress = false
+    @State private var errorDetails: String?
+    @Environment(\.scenePhase) private var scenePhase
+
+    var body: some View {
+        NavigationSplitView {
+            VStack(spacing: 0) {
+                VStack(spacing: 2) {
+                    sidebarDestination("Organization", icon: "person.2", selected: showingOrganization) {
+                        showingOrganization = true; showingSites = false; sidebarSelection = nil
+                    }
+                    sidebarDestination("Sites", icon: "building.2", selected: showingSites) {
+                        showingSites = true; showingOrganization = false; sidebarSelection = nil
+                    }
+                }
+                .padding(.horizontal, 10).padding(.top, 4).padding(.bottom, 8)
+
+                HStack(spacing: 6) {
+                    HStack(spacing: 5) {
+                        Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                        TextField("Find a device", text: $search).textFieldStyle(.plain)
+                        if !search.isEmpty {
+                            Button { search = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
+                                .buttonStyle(.plain).accessibilityLabel("Clear search")
+                        }
+                    }
+                    .padding(.horizontal, 7).frame(height: 26)
+                    .background(Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 5))
+                    HStack(spacing: 1) {
+                        sourceTab("Nearby", source: "nearby", icon: "network")
+                        sourceTab("Cloud", source: "cloud", icon: "cloud")
+                    }
+                }
+                .font(.system(size: 12))
+                .padding(.horizontal, 10).padding(.bottom, 8)
+                Divider()
+                List(selection: $sidebarSelection) {
+                    deviceRows
+                    if model.discovering { ProgressView().controlSize(.small) }
+                    if deviceSource == "nearby" {
+                        if let message = model.nearbyError { FailureNote(message: message) }
+                        if model.nearby.isEmpty && !model.discovering {
+                            Text("No nearby devices found").foregroundStyle(.secondary)
+                        }
+                    } else {
+                        if let message = model.cloudError { FailureNote(message: message) }
+                        if model.cloud.isEmpty && !model.discovering {
+                            if model.account?.signedIn == true {
+                                Text("No cloud devices found").foregroundStyle(.secondary)
+                            } else {
+                                Button("Sign in to Wendy Cloud") { Task { await model.signIn() } }
+                            }
+                        }
+                    }
+                }
+                .listStyle(.sidebar)
+                .keyboardRowSelection(visibleDevices.map(\.id), selection: $sidebarSelection)
+                .onChange(of: sidebarSelection) { _, id in
+                    guard let device = visibleDevices.first(where: { $0.id == id }) else { return }
+                    showingOrganization = false; showingSites = false
+                    Task { await model.connect(device) }
+                }
+                Divider()
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Image(systemName: model.signingIn ? "person.crop.circle.badge.clock" : model.account?.signedIn == true ? "person.crop.circle.badge.checkmark" : "person.crop.circle")
+                            .foregroundStyle(model.account?.signedIn == true ? .green : .secondary)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(model.signingIn ? "Signing in…" : model.account?.title ?? "Checking account…").font(.callout.weight(.medium))
+                            if let account = model.account, !account.email.isEmpty {
+                                Text(account.email).font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                        Spacer()
+                        Menu {
+                            if let account = model.account {
+                                Text(account.title)
+                                if !account.cloud.isEmpty { Text(account.cloud) }
+                                Divider()
+                            }
+                            Button("Sign in to Wendy Cloud") { Task { await model.signIn() } }
+                            Button("Sign in to development cloud") { Task { await model.signIn(development: true) } }
+                            Button("Refresh account") { Task { await model.refreshAccount(); await model.refreshCloud() } }
+                            if model.signingIn { Button("Cancel sign-in") { Task { await model.cancelLogin() } } }
+                        } label: { Image(systemName: "ellipsis.circle") }
+                        .menuStyle(.borderlessButton).frame(width: 28).accessibilityLabel("Account")
+                    }
+                    if model.signingIn {
+                        Text("Complete sign-in in your browser.").font(.caption).foregroundStyle(.secondary)
+                        if let url = model.loginURL { Link("Continue in browser", destination: url).font(.caption) }
+                    }
+                    if let error = model.accountError { FailureNote(message: error) }
+                }.padding()
+
+            }
+            .navigationSplitViewColumnWidth(min: 230, ideal: 270, max: 380)
+        } detail: {
+            if showingSites {
+                SitesView { device in
+                    showingSites = false; showingOrganization = false
+                    Task { await model.connect(device) }
+                }
+            } else if showingOrganization {
+                CloudManagementView()
+            } else if let device = model.selection {
+                deviceDetail(device)
+            } else {
+                ContentUnavailableView {
+                    Label("Your Wendy devices", systemImage: "desktopcomputer.and.arrow.down")
+                } description: {
+                    Text(model.account?.signedIn == true ? "Choose a nearby or cloud device from the sidebar." : "Choose a nearby device, or sign in to reach devices through Wendy Cloud.")
+                } actions: {
+                    Button("Find nearby devices") { Task { await model.refreshNearby() } }
+                    if model.account?.signedIn == true {
+                        Button("Refresh cloud devices") { Task { await model.refreshCloud() } }
+                    } else {
+                        Button("Sign in to Wendy Cloud") { Task { await model.signIn() } }
+                    }
+                }
+            }
+        }
+        .toolbar {
+            ToolbarItem { VPNToolbarControls(model: model, vpn: model.vpn) }
+            ToolbarItemGroup {
+                Button {
+                    if showingSites { fleetRefresh?.perform() }
+                    else if showingOrganization { organizationRefresh?.perform() }
+                    else if ["campaigns", "pairing", "chat", "data"].contains(tab), let devicePaneRefresh { devicePaneRefresh.perform() }
+                    else {
+                        refreshingPane = true
+                        Task {
+                            defer { refreshingPane = false }
+                            if model.connected != nil { await model.refreshDetails() }
+                            else if deviceSource == "cloud" { await model.refreshCloud() }
+                            else { await model.refreshNearby() }
+                        }
+                    }
+                } label: { Label("Refresh", systemImage: "arrow.clockwise") }
+                    .help(showingSites ? "Refresh fleet" : showingOrganization ? "Refresh organization" : model.connected != nil ? "Refresh device" : "Refresh devices")
+                    .keyboardShortcut("r", modifiers: .command)
+                    .disabled(!showingSites && !showingOrganization && model.selection != nil && !model.selectedDeviceReady)
+                    .disabled(showingSites ? fleetRefresh?.enabled != true : showingOrganization ? organizationRefresh?.enabled != true : ["campaigns", "pairing", "chat", "data"].contains(tab) ? devicePaneRefresh?.enabled != true : refreshingPane || model.discovering || !model.initialized)
+                Menu {
+                    Button("Connect by address") { showingAddress = true }
+                    if model.selectedDeviceReady {
+                        Button("Pair a device") { showingOrganization = false; showingSites = false; tab = "pairing" }
+                        Button("Campaigns") { showingOrganization = false; showingSites = false; tab = "campaigns" }
+                    }
+                } label: { Label("Add", systemImage: "plus") }
+            }
+        }
+        .sheet(isPresented: $showingAddress) {
+            VStack(alignment: .leading, spacing: 16) {
+                Text("Connect to a device").font(.title2)
+                TextField("Hostname or host:port", text: $manualAddress).textFieldStyle(.roundedBorder)
+                HStack {
+                    Spacer()
+                    Button("Cancel") { showingAddress = false }
+                    Button("Connect") {
+                        let address = manualAddress.trimmingCharacters(in: .whitespacesAndNewlines)
+                        showingAddress = false
+                        showingOrganization = false; showingSites = false
+                        Task { await model.connect(Device(id: address, name: address, selector: address, transport: .lan, address: address)) }
+                    }.keyboardShortcut(.defaultAction).disabled(manualAddress.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }.padding(24).frame(width: 420)
+        }
+        .alert("Delete App?", isPresented: Binding(
+            get: { model.appDeletion != nil },
+            set: { if !$0 { model.appDeletion = nil } }
+        ), presenting: model.appDeletion) { target in
+            Button("Cancel", role: .cancel) { model.appDeletion = nil }
+            Button("Delete App", role: .destructive) {
+                model.appDeletion = nil
+                Task { await model.deleteApp(target) }
+            }
+        } message: { target in
+            Text("Delete \"\(target.app)\" from \"\(target.device)\"? This stops and removes the app and its services. Persistent data and container images are kept.")
+        }
+        .alert("Could not complete the action", isPresented: Binding(get: { model.alert != nil }, set: { if !$0 { model.alert = nil } })) {
+            Button("OK") { model.alert = nil }
+            Button("Technical details") { errorDetails = model.alert; model.alert = nil }
+        } message: { Text(PresentedFailure(model.alert ?? "").message) }
+        .alert("Could not connect", isPresented: Binding(get: { model.connectionError != nil }, set: { if !$0 { model.connectionError = nil } })) {
+            Button("OK", role: .cancel) { model.connectionError = nil }
+            if let device = model.failedConnection {
+                Button("Try again") { Task { await model.connect(device) } }
+                if model.canForgetIdentity {
+                    Button("Forget saved identity and retry") { Task { await model.connect(device, forgetIdentity: true) } }
+                }
+            }
+            Button("Technical details") { errorDetails = model.connectionError; model.connectionError = nil }
+        } message: { Text(PresentedFailure(model.connectionError ?? "").message) }
+        .sheet(isPresented: Binding(get: { errorDetails != nil }, set: { if !$0 { errorDetails = nil } })) {
+            VStack(alignment: .leading, spacing: 16) {
+                Text("Technical details").font(.title2)
+                ScrollView { Text(PresentedFailure(errorDetails ?? "").details).font(.system(.callout, design: .monospaced)).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading) }
+                HStack { Spacer(); Button("Done") { errorDetails = nil }.keyboardShortcut(.defaultAction) }
+            }.padding(24).frame(width: 640, height: 360)
+        }
+        .task { await model.start() }
+        .onChange(of: deviceSource) { _, source in
+            if source == "cloud", model.cloud.isEmpty, model.account?.signedIn == true {
+                Task { await model.refreshCloud() }
+            }
+        }
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { Task { await model.refreshAccount() } }
+        }
+    }
+
+    private func sidebarDestination(_ title: String, icon: String, selected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                Image(systemName: icon).foregroundStyle(.secondary).frame(width: 20)
+                Text(title)
+                Spacer(minLength: 0)
+            }
+            .font(.system(size: 13))
+            .padding(.horizontal, 8).frame(height: 28)
+            .background(selected ? Color.primary.opacity(0.08) : .clear, in: RoundedRectangle(cornerRadius: 5))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(selected ? [.isSelected] : [])
+    }
+
+    private func sourceTab(_ title: String, source: String, icon: String) -> some View {
+        Button { deviceSource = source } label: {
+            Image(systemName: icon).font(.system(size: 13, weight: .medium))
+                .frame(width: 26, height: 26)
+                .foregroundStyle(deviceSource == source ? Color.primary : .secondary)
+                .background(deviceSource == source ? Color.primary.opacity(0.09) : .clear, in: RoundedRectangle(cornerRadius: 5))
+                .contentShape(Rectangle())
+        }.buttonStyle(.plain).help(title).accessibilityLabel(title)
+            .accessibilityValue(deviceSource == source ? "Selected" : "")
+            .contextMenu {
+                Button("Find devices again") {
+                    Task { if source == "cloud" { await model.refreshCloud() } else { await model.refreshNearby() } }
+                }.disabled(model.discovering || !model.initialized)
+            }
+    }
+
+    private var visibleDevices: [Device] {
+        (deviceSource == "nearby" ? model.nearby : model.cloud)
+            .filter { search.isEmpty || $0.title.localizedCaseInsensitiveContains(search) }
+            .sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
+    }
+
+    @ViewBuilder private var deviceRows: some View {
+        ForEach(visibleDevices) { device in
+            HStack(spacing: 10) {
+                Image(systemName: device.transport == .cloud ? "cloud" : "network")
+                    .foregroundStyle(.secondary).frame(width: 20)
+                Text(device.title).lineLimit(1)
+                Spacer(minLength: 0)
+                if model.connectingDevice?.id == device.id { ProgressView().controlSize(.small) }
+                else if model.connected?.id == device.id { Image(systemName: "checkmark.circle.fill").foregroundStyle(.green) }
+            }.frame(maxWidth: .infinity, minHeight: 30, alignment: .leading)
+                .contentShape(Rectangle()).help(device.title)
+                .tag(device.id)
+        }
+    }
+
+    @ViewBuilder private func deviceDetail(_ device: Device) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 24) {
+                    deviceIdentity(device)
+                    deviceTabs.fixedSize()
+                    Spacer(minLength: 0)
+                }
+                VStack(alignment: .leading, spacing: 10) {
+                    deviceIdentity(device)
+                    deviceTabs
+                }
+            }.padding(.horizontal, 20).padding(.vertical, 12)
+            Divider().padding(.bottom, 12)
+            if model.connectingDevice?.id == device.id {
+                HStack(spacing: 10) {
+                    ProgressView().controlSize(.small)
+                    Text("Connecting to \(device.title)").foregroundStyle(.secondary)
+                }
+                .padding(.horizontal, 20).padding(.vertical, 12)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            } else if let error = model.detailError {
+                FailureView(title: "Could not connect", error: error,
+                            forgetIdentity: model.canForgetIdentity ? { Task { await model.connect(device, forgetIdentity: true) } } : nil) {
+                    Task { await model.connect(device) }
+                }
+            } else if model.selectedDeviceReady {
+                switch tab {
+                case "cameras": camerasPane
+                case "logs": logsPane
+                case "activity": ActivityView(model: model).id(device.id)
+                case "campaigns": CampaignsView(session: model.deviceSession, deviceName: device.title) { id in
+                    requestedClip = (model.deviceSession, id)
+                    tab = "data"
+                }.id(model.deviceSession)
+                case "pairing": PairingView(session: model.deviceSession, deviceName: device.title).id(model.deviceSession)
+                case "chat": DeviceChatView(session: model.deviceSession, deviceName: device.title).id(model.deviceSession)
+                case "data": DataVisualizerView(session: model.deviceSession, deviceName: device.title,
+                                                initialEpisode: requestedClip?.session == model.deviceSession ? requestedClip?.id : nil).id(model.deviceSession)
+                default: appsPane
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .onChange(of: tab) { old, new in
+            if old == "logs" { Task { try? await model.client.stopLogs() } }
+            if new == "logs", model.selectedDeviceReady { Task { await model.streamLogs() } }
+        }
+        .onChange(of: model.connected?.id) { _, value in
+            if value != nil && tab == "logs" { Task { await model.streamLogs() } }
+        }
+    }
+
+    private func deviceIdentity(_ device: Device) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: device.transport == .cloud ? "cloud" : "network").foregroundStyle(.secondary)
+            Text(device.title).font(.headline).lineLimit(1).help(device.title)
+        }.frame(minWidth: 100, maxWidth: 220, alignment: .leading)
+    }
+
+    private var deviceTabs: some View {
+        Picker("Device view", selection: $tab) {
+            Text("Apps").tag("apps")
+            Text("Cameras").tag("cameras")
+            Text("Logs").tag("logs")
+            Text("Activity").tag("activity")
+            Text("Campaigns").tag("campaigns")
+            Text("Pairing").tag("pairing")
+            Text("Chat").tag("chat")
+            Text("Data").tag("data")
+        }.pickerStyle(.segmented).labelsHidden()
+    }
+
+    private var appsPane: some View {
+        Group {
+            if let error = model.appsError {
+                unavailable("Could not load apps", error: error)
+            } else if model.apps.isEmpty {
+                ContentUnavailableView("No apps installed", systemImage: "square.stack.3d.up")
+            } else {
+                AppsView(model: model, apps: model.apps) { app in model.logApp = app.appName; tab = "logs" }
+            }
+        }.frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var camerasPane: some View {
+        CameraWallView(model: model)
+    }
+
+    private var logsPane: some View { LogsView(model: model) }
+
+    private func unavailable(_ title: String, error: String) -> some View {
+        FailureView(title: title, error: error) { Task { await model.refreshDetails() } }
+    }
+}
+
+
+struct PaneRefreshAction {
+    let enabled: Bool
+    let perform: () -> Void
+}
+private struct OrganizationRefreshKey: FocusedValueKey {
+    typealias Value = PaneRefreshAction
+}
+extension FocusedValues {
+    var organizationRefresh: PaneRefreshAction? {
+        get { self[OrganizationRefreshKey.self] }
+        set { self[OrganizationRefreshKey.self] = newValue }
+    }
+}
+
+private struct DevicePaneRefreshKey: FocusedValueKey { typealias Value = PaneRefreshAction }
+extension FocusedValues {
+    var devicePaneRefresh: PaneRefreshAction? {
+        get { self[DevicePaneRefreshKey.self] }
+        set { self[DevicePaneRefreshKey.self] = newValue }
+    }
+}
+
+private struct FleetRefreshKey: FocusedValueKey { typealias Value = PaneRefreshAction }
+extension FocusedValues {
+    var fleetRefresh: PaneRefreshAction? {
+        get { self[FleetRefreshKey.self] }
+        set { self[FleetRefreshKey.self] = newValue }
+    }
+}

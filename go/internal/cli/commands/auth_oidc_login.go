@@ -148,7 +148,9 @@ func performOIDCLogin(ctx context.Context, opts oidcLoginOptions) error {
 	if err != nil {
 		return err
 	}
-	if !humanPresent() {
+	if openURL, ok := ctx.Value(desktopLoginURLKey{}).(func(string)); ok {
+		openURL(authURL)
+	} else if !humanPresent() {
 		printLoginURLForManualOpen(authURL)
 	} else {
 		fmt.Println(tui.InfoMessage("Opening your browser to sign in..."))

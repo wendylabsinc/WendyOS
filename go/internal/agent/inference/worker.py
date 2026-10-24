@@ -140,21 +140,23 @@ class Decoder:
 class Detector:
     def __init__(self, config):
         import torch
-        from transformers import AutoConfig, AutoImageProcessor, AutoModelForObjectDetection
+        from transformers import AutoConfig, AutoImageProcessor, AutoModelForObjectDetection, AutoModelForImageClassification
 
         self.torch = torch
         self.threshold = config["threshold"]
         self.labels = set(config["labels"])
+        self.classification = config.get("task") == "image-classification"
         options = {"revision": config["revision"], "trust_remote_code": False}
         self.processor = AutoImageProcessor.from_pretrained(config["model"], use_fast=False, **options)
         model_config = AutoConfig.from_pretrained(config["model"], **options)
         if hasattr(model_config, "use_pretrained_backbone"):
             model_config.use_pretrained_backbone = False
-        self.model = AutoModelForObjectDetection.from_pretrained(
+        factory = AutoModelForImageClassification if self.classification else AutoModelForObjectDetection
+        self.model = factory.from_pretrained(
             config["model"], config=model_config, use_safetensors=True, **options).eval()
         if not self.labels.issubset(set(self.model.config.id2label.values())):
             raise ValueError("inference.labels contains labels absent from the model")
-        if not hasattr(self.processor, "post_process_object_detection"):
+        if not self.classification and not hasattr(self.processor, "post_process_object_detection"):
             raise ValueError("model processor does not support object detection")
 
     def __call__(self, frame):
@@ -162,11 +164,23 @@ class Detector:
         inputs = self.processor(images=image, return_tensors="pt")
         with self.torch.inference_mode():
             outputs = self.model(**inputs)
+        if self.classification:
+            logits = outputs.logits[0]
+            scores = logits.sigmoid() if self.model.config.problem_type == "multi_label_classification" else logits.softmax(dim=-1)
+            return classification_predictions(scores.tolist(), self.model.config.id2label, self.labels, self.threshold)
         result = self.processor.post_process_object_detection(
             outputs, target_sizes=[(image.height, image.width)], threshold=self.threshold)[0]
         return [{"label": self.model.config.id2label[int(label)], "score": float(score), "box": box.tolist()}
                 for label, score, box in zip(result["labels"], result["scores"], result["boxes"])
                 if self.model.config.id2label[int(label)] in self.labels][:100]
+
+
+def classification_predictions(scores, id2label, selected, threshold):
+    # Classification describes the whole image. No object box is invented.
+    return sorted([{"label": id2label[index], "score": float(score)}
+                   for index, score in enumerate(scores)
+                   if id2label.get(index) in selected and threshold <= score <= 1],
+                  key=lambda item: -item["score"])[:100]
 
 
 class YOLODetector:

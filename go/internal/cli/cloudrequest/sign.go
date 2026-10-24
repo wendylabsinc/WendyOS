@@ -11,6 +11,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	invite "github.com/wendylabsinc/wendy/go/proto/gen/cloudinvitepb"
 	"io"
 	"os"
 	"strings"
@@ -392,6 +393,48 @@ func (s *Signer) principalRevocationManagementRequest(deviceID string) ([]byte, 
 // target.resource (cloud RequestSigning.md). The type assertion is what keeps
 // payload_type equal to the method's request message.
 var signedResources = map[string]func(tenant string, req proto.Message) (string, bool){
+	cloudpbv2.OrganizationService_AddMembersByEmails_FullMethodName: func(tenant string, req proto.Message) (string, bool) {
+		in, ok := req.(*cloudpbv2.AddMembersByEmailsRequest)
+		if !ok || in.GetOrganizationId() != tenant || tenant == "" || !(len(in.GetMembers()) > 0) {
+			return "", false
+		}
+		return "org/" + tenant + "/members-by-emails", true
+	},
+	cloudpbv2.OrganizationService_UpdateMemberRole_FullMethodName: func(tenant string, req proto.Message) (string, bool) {
+		in, ok := req.(*cloudpbv2.UpdateMemberRoleRequest)
+		if !ok || in.GetOrganizationId() != tenant || tenant == "" || !(in.GetUserId() != "") {
+			return "", false
+		}
+		return "org/" + tenant + "/member/" + in.GetUserId(), true
+	},
+	cloudpbv2.OrganizationService_RemoveMember_FullMethodName: func(tenant string, req proto.Message) (string, bool) {
+		in, ok := req.(*cloudpbv2.RemoveMemberRequest)
+		if !ok || in.GetOrganizationId() != tenant || tenant == "" || !(in.GetUserId() != "") {
+			return "", false
+		}
+		return "org/" + tenant + "/member/" + in.GetUserId(), true
+	},
+	cloudpbv2.DeviceAccessService_CreateAccessEntry_FullMethodName: func(tenant string, req proto.Message) (string, bool) {
+		in, ok := req.(*cloudpbv2.CreateAccessEntryRequest)
+		if !ok || in.GetOrganizationId() != tenant || tenant == "" || !(in.GetPrincipalId() != "") {
+			return "", false
+		}
+		return "org/" + tenant + "/device-access", true
+	},
+	cloudpbv2.DeviceAccessService_DeleteAccessEntry_FullMethodName: func(tenant string, req proto.Message) (string, bool) {
+		in, ok := req.(*cloudpbv2.DeleteAccessEntryRequest)
+		if !ok || in.GetOrganizationId() != tenant || tenant == "" || !(in.GetEntryId() != "") {
+			return "", false
+		}
+		return "org/" + tenant + "/device-access/" + in.GetEntryId(), true
+	},
+	invite.OrganizationInviteService_CreateOrganizationInvite_FullMethodName: func(tenant string, req proto.Message) (string, bool) {
+		in, ok := req.(*invite.CreateOrganizationInviteRequest)
+		if !ok || in.GetOrganizationId() != tenant || tenant == "" || !(true) {
+			return "", false
+		}
+		return "org/" + tenant + "/invite", true
+	},
 	cloudpbv2.OperatorSessionService_RegisterOperatorLeaf_FullMethodName: func(tenant string, req proto.Message) (string, bool) {
 		in, ok := req.(*cloudpbv2.RegisterOperatorLeafRequest)
 		return "org/" + in.GetOrganizationId() + "/operator-leaf", ok

@@ -330,6 +330,15 @@ func (j *campaignInferenceJob) run(ctx context.Context) error {
 			j.sourceState(result.SourceID, "detecting")
 			attributes := map[string]any{"campaign": j.campaign.Name, "source_id": result.SourceID, "model_version": j.campaign.Inference.Revision, "detections": detections,
 				"input_reference_status": "encoded_stream_decode_does_not_preserve_sample_ids", "runtime_results_dropped": result.DroppedResults}
+			if j.campaign.Inference.Task == "image-classification" {
+				j.sourceState(result.SourceID, "classifying")
+				classes := make([]map[string]any, 0, len(detections))
+				for _, d := range detections {
+					classes = append(classes, map[string]any{"label": d.Label, "score": d.Score})
+				}
+				attributes["detections"] = classes
+				attributes["task"] = "image-classification"
+			}
 			record := data.ApplicationRecord{Version: 1, Type: "prediction", Model: j.campaign.Inference.Model, Attributes: attributes}
 			if _, err := j.owner.service.manager.RecordCampaignApplication(campaignAppPrefix+j.campaign.Name, record); err != nil {
 				j.owner.service.manager.Warnf("recording campaign prediction: %v", err)

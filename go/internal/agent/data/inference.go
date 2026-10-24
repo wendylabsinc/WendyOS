@@ -14,6 +14,7 @@ import (
 // CampaignInference is executed by the agent, not by a user application.
 // Empty Backend uses Transformers; yolo_onnx runs a pinned ONNX detection export.
 type CampaignInference struct {
+	Task       string   `json:"task,omitempty" yaml:"task,omitempty"`
 	Backend    string   `json:"backend,omitempty" yaml:"backend,omitempty"`
 	ModelFile  string   `json:"model_file,omitempty" yaml:"model_file,omitempty"`
 	Model      string   `json:"model" yaml:"model"`
@@ -44,6 +45,12 @@ var inferenceEventRE = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,128}$`)
 func (i *CampaignInference) validate() error {
 	if i == nil {
 		return nil
+	}
+	if i.Task != "" && i.Task != "object-detection" && i.Task != "image-classification" {
+		return fmt.Errorf("inference.task must be object-detection or image-classification")
+	}
+	if i.Task == "image-classification" && i.Backend == "yolo_onnx" {
+		return fmt.Errorf("image classification requires the transformers backend")
 	}
 	if strings.HasPrefix(i.Model, "https://huggingface.co/") {
 		u, err := url.Parse(i.Model)
