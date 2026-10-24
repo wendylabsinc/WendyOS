@@ -400,3 +400,25 @@ func TestCloudPickerUsesV2AndPreservesUUID(t *testing.T) {
 		t.Fatal("exact UUID did not resolve")
 	}
 }
+
+func TestCloudDiscoverJSONV2PreservesExpiredSessionMessage(t *testing.T) {
+	certificate := oidcEnrollmentAuth(t).Certificates[0]
+	auth, calls := rotatingOAuthSession(t)
+	auth.CloudGRPC = "127.0.0.1:1"
+	auth.Certificates = []config.CertificateInfo{certificate}
+	seedConfig(t, &config.Config{Auth: []config.AuthConfig{*auth}})
+	const want = `refreshing OAuth session: token endpoint returned 400: {"error":"invalid_grant"}`
+	for _, all := range []bool{true, false} {
+		calls.Store(1) // The local token endpoint refuses this expired token family.
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		var callErr error
+		output := captureStdout(t, func() { callErr = cloudDiscoverJSON(ctx, auth, all) })
+		cancel()
+		if callErr == nil || callErr.Error() != want {
+			t.Fatalf("all=%t: error = %v, want %q", all, callErr, want)
+		}
+		if output != "" {
+			t.Fatalf("printed partial JSON after refresh refusal: %q", output)
+		}
+	}
+}

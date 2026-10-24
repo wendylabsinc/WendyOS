@@ -5,9 +5,9 @@ import (
 	"errors"
 	"fmt"
 	tea "github.com/charmbracelet/bubbletea"
-	"io"
 	"strings"
 
+	"github.com/wendylabsinc/wendy/go/internal/cli/cloudrequest"
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
@@ -36,48 +36,15 @@ func fetchCloudAssetsV2(ctx context.Context, auth *config.AuthConfig, onlineOnly
 		return nil, err
 	}
 	defer conn.Close()
-	client := cloudpbv2.NewAssetServiceClient(conn)
-	assets := make([]*cloudpbv2.Asset, 0)
-	const pageSize = 200
-	for offset := int32(0); ; {
-		req := &cloudpbv2.ListAssetsRequest{
-			OrganizationId:  identity.TenantUUID,
-			IsComputeDevice: boolPtr(true),
-			Offset:          int32Ptr(offset),
-			Limit:           int32Ptr(pageSize),
-		}
-		if onlineOnly {
-			req.OnlineOnly = boolPtr(true)
-		}
-		cloudCtx, err := cloudContext(ctx, auth)
-		if err != nil {
-			return nil, err
-		}
-		stream, err := client.ListAssets(cloudCtx, req)
-		if err != nil {
-			return nil, fmt.Errorf("listing devices: %w", err)
-		}
-		var page, total int32
-		for {
-			resp, err := stream.Recv()
-			if err == io.EOF {
-				break
-			}
-			if err != nil {
-				return nil, fmt.Errorf("listing devices: %w", err)
-			}
-			if len(assets) >= maxCloudAssets {
-				return nil, fmt.Errorf("cloud returned more than %d devices", maxCloudAssets)
-			}
-			assets = append(assets, resp.GetAsset())
-			page++
-			total = resp.GetTotal()
-		}
-		offset += page
-		if page == 0 || offset >= total {
-			return assets, nil
-		}
+	client, err := cloudrequest.Client(conn, func(ctx context.Context) (context.Context, error) { return cloudContext(ctx, auth) })
+	if err != nil {
+		return nil, err
 	}
+	assets, err := client.ListDevices(ctx, identity.TenantUUID, "", onlineOnly)
+	if err != nil {
+		return nil, err
+	}
+	return cloudrequest.Assets(assets)
 }
 
 // cloudDiscoveryDevice preserves each API's identity while sharing the display,

@@ -307,25 +307,6 @@ func TestInvokeRegistersOnceThenSignsByKID(t *testing.T) {
 	}
 }
 
-func TestInvokeSignsDeviceForwardedMethodsWithX5C(t *testing.T) {
-	for _, method := range []string{cloudpbv2.DeploymentService_CreateDeployment_FullMethodName, cloudpbv2.DeploymentService_ControlContainer_FullMethodName} {
-		if !x5cOnly[method] {
-			t.Errorf("%s may be signed by kid", method)
-		}
-	}
-	auth, _, _ := testAuth(t)
-	method := cloudpbv2.DeviceEnrollmentService_EnrollDevice_FullMethodName
-	x5cOnly[method] = true
-	defer delete(x5cOnly, method)
-	conn := &fakeCloud{t: t}
-	if err := Invoke(context.Background(), conn, auth, method, &cloudpbv2.EnrollDeviceRequest{DeviceId: "d"}, &cloudpbv2.EnrollDeviceResponse{}); err != nil {
-		t.Fatal(err)
-	}
-	if strings.Join(conn.calls, ",") != method+" x5c" {
-		t.Fatalf("calls = %v, want one x5c-signed call and no registration", conn.calls)
-	}
-}
-
 func TestKIDIsLeafThumbprint(t *testing.T) {
 	auth, _, leafDER := testAuth(t)
 	signer, err := newSigner(auth)
@@ -535,11 +516,11 @@ func TestCloudSignatureOmitsLargeIssuerChain(t *testing.T) {
 	}
 	// A representative 43-char base64url SHA-256 digest models a real
 	// body_sha256 field.
-	descriptor, err := signer.sign("wendycloud.v2.DeviceEnrollmentService/EnrollDevice", "org/"+testTenant+"/device/sim", "47DEQpj8HBSa-_TImW-5JCeuQeRkm5NMpJWZG3hSuFU", false, uuid.NewString())
+	signed, err := signer.signRequest(cloudpbv2.DeviceEnrollmentService_EnrollDevice_FullMethodName, &cloudpbv2.EnrollDeviceRequest{DeviceId: "sim"}, false, uuid.NewString())
 	if err != nil {
 		t.Fatal(err)
 	}
-	certs := header(descriptor)
+	certs := header(string(signed.Signature))
 	if len(certs) != 1 || certs[0] != base64.StdEncoding.EncodeToString(leafDER) {
 		t.Fatal("Cloud request signature must carry only the operator leaf")
 	}
@@ -569,7 +550,7 @@ func TestSignerNormalizesCertificateChain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, encoded := range signer.x5c {
+	for _, encoded := range testX5C(signer) {
 		der, err := base64.StdEncoding.DecodeString(encoded)
 		if err != nil {
 			t.Fatal(err)

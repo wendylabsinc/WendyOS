@@ -4,9 +4,9 @@ import (
 	"context"
 	"crypto"
 	"fmt"
-	"net/http"
 
 	wendy "github.com/wendylabsinc/wendy-go"
+	"github.com/wendylabsinc/wendy-go/cloud"
 	"github.com/wendylabsinc/wendy-go/identity"
 	"github.com/wendylabsinc/wendy/go/internal/cli/identityhost"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
@@ -102,30 +102,20 @@ func dpopAuthContext(ctx context.Context, auth *config.AuthConfig, provider DPoP
 	if err != nil {
 		return nil, err
 	}
-	if token == "" {
-		return nil, fmt.Errorf("DPoP: session has no access token")
+	var signer wendy.Signer
+	if token != "" && key != nil {
+		wrapped, err := identityhost.OperatorKey(key)
+		if err != nil {
+			return nil, fmt.Errorf("DPoP: building proof: %w", err)
+		}
+		signer = wrapped
 	}
-	if key == nil {
-		return nil, fmt.Errorf("DPoP: session has no bound key")
-	}
-	// htu is the RS URL: the broker authority we dialed plus the gRPC method
-	// path (fullMethod already begins with "/"). No query or fragment, so it is
-	// already RFC 9449-canonical.
-	htu := "https://" + auth.CloudGRPC + fullMethod
-	proof, err := NewDPoPAccessProof(key, http.MethodPost, htu, token)
+	md, _ := metadata.FromOutgoingContext(ctx)
+	signed, err := cloud.AuthenticationMetadata(ctx, wendy.CryptoEntropy{}, auth.CloudGRPC, fullMethod, token, signer, coreMetadata(md))
 	if err != nil {
-		return nil, fmt.Errorf("DPoP: building proof: %w", err)
+		return nil, err
 	}
-
-	md, ok := metadata.FromOutgoingContext(ctx)
-	if ok {
-		md = md.Copy()
-	} else {
-		md = metadata.MD{}
-	}
-	md.Set("authorization", "DPoP "+token)
-	md.Set("dpop", proof)
-	return metadata.NewOutgoingContext(ctx, md), nil
+	return metadata.NewOutgoingContext(ctx, grpcMetadata(signed)), nil
 }
 
 func dpopUnaryInterceptor(auth *config.AuthConfig, provider DPoPTokenProvider) grpc.UnaryClientInterceptor {

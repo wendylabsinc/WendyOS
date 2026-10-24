@@ -114,7 +114,7 @@ func TestV2DeleteCarriesSameOperatorExactPrincipalAuthority(t *testing.T) {
 		if err := json.Unmarshal(headerBytes, &header); err != nil {
 			t.Fatal(err)
 		}
-		if header.Algorithm != "ML-DSA-65" || len(header.X5C) != len(signer.x5c) || strings.Join(header.X5C, ",") != strings.Join(signer.x5c, ",") {
+		if header.Algorithm != "ML-DSA-65" || len(header.X5C) != len(testX5C(signer)) || strings.Join(header.X5C, ",") != strings.Join(testX5C(signer), ",") {
 			t.Fatal("management request must carry the same operator chain")
 		}
 		payload, _ := base64.RawURLEncoding.DecodeString(parts[1])

@@ -4,13 +4,13 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
-	"strings"
 	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/keepalive"
 
+	"github.com/wendylabsinc/wendy-go/cloud"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/internal/shared/legacycertproof"
@@ -18,7 +18,7 @@ import (
 
 // DefaultBrokerPort is the tunnel broker's gRPC port used when brokerURL is
 // derived from auth.CloudGRPC rather than passed explicitly (see BrokerURL).
-const DefaultBrokerPort = "50052"
+const DefaultBrokerPort = cloud.DefaultBrokerPort
 
 const (
 	// KeepalivePing is how often the client sends an HTTP/2 keepalive ping
@@ -39,7 +39,7 @@ const (
 // whether TLS or hostname verification applies: WebPKI roots there; installing
 // the Wendy CA alone instead causes x509 failures (WDY-2434).
 func UsesPublicCA(addr string) bool {
-	return strings.HasSuffix(addr, ":443")
+	return cloud.UsesPublicCA(addr)
 }
 
 // BrokerTLSConfig builds the client mTLS config for dialing the tunnel broker.

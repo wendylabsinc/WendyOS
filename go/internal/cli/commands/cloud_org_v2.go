@@ -10,6 +10,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/wendylabsinc/wendy/go/internal/cli/cloudrequest"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	pb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
@@ -51,11 +52,11 @@ func fetchCloudOrganizationName(ctx context.Context, auth *config.AuthConfig) st
 			return ""
 		}
 		defer conn.Close()
-		cloudCtx, err := cloudContext(ctx, auth)
+		client, err := cloudrequest.Client(conn, func(ctx context.Context) (context.Context, error) { return cloudContext(ctx, auth) })
 		if err != nil {
 			return ""
 		}
-		org, err := pb.NewOrganizationServiceClient(conn).GetOrganization(cloudCtx, &pb.GetOrganizationRequest{Id: tenant})
+		org, err := client.GetOrganization(ctx, tenant)
 		if err != nil || org.GetId() != tenant {
 			return ""
 		}

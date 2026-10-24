@@ -3,7 +3,10 @@ package cloudrequest
 import (
 	"context"
 	"crypto"
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/mldsa"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
@@ -174,5 +177,19 @@ func TestDPoPDialOptionsNilForUnbound(t *testing.T) {
 	}
 	if DPoPDialOptions(bound, nil) != nil {
 		t.Fatal("nil provider must yield nil dial options")
+	}
+}
+
+func TestDPoPInvalidKeyKeepsExistingProofErrorContext(t *testing.T) {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	auth := &config.AuthConfig{CloudGRPC: "cloud.example:443"}
+	provider := func(context.Context) (string, crypto.Signer, error) { return "access-token", key, nil }
+	_, err = dpopAuthContext(context.Background(), auth, provider, testMethod)
+	const want = "DPoP: building proof: this session's operator key is *ecdsa.PublicKey, but Wendy now requires an ML-DSA-65 operator credential; re-run 'wendy auth login'"
+	if err == nil || err.Error() != want {
+		t.Fatalf("proof diagnostic changed: %v", err)
 	}
 }
