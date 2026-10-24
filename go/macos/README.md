@@ -2,6 +2,8 @@
 
 A SwiftUI app linked to this repository's Go CLI packages through a C archive. It lists nearby LAN and authenticated mesh devices, connects to Wendy Cloud, displays running apps and service states, streams logs, and displays a camera wall of simultaneous H.264 feeds using each camera’s native resolution and frame rate.
 
+Connected devices show their Wendy Cloud enrollment status in device Settings. An unenrolled WendyOS device offers **Enroll device**, where you explicitly choose a saved organization account and device name, or sign in to another organization. Enrollment uses that account without changing the global account selection and checks the resulting device organization before reporting success. Failed status reads remain unknown. Wendy Lite shows enrollment status and USB enrollment instructions in its Settings tab.
+
 The app embeds a packet-tunnel Network Extension. Select mesh or cloud devices in the toolbar VPN popover or the macOS menu bar, then enable the VPN to resolve their Wendy DNS names and route TCP connections from other Mac apps.
 
 ## Build and open
@@ -24,6 +26,31 @@ The default build is unsigned. Device discovery, cloud access, cameras, and logs
 The build produces native binaries for the build Mac. It links `libwendydesktop.a` into the app and `libwendyvpn.a` into the extension. It also bundles the repository's `wendy` executable for the CLI's detached mesh worker and includes libusb, with no Homebrew runtime dependency. Generated binaries and DerivedData stay in the ignored `Build/` directory.
 
 `project.yml` is the source for the checked-in Xcode project. Run `xcodegen generate` from this directory after changing it. The Xcode build phases build Go automatically and serialize concurrent archive builds. The initial build can take several minutes.
+
+## Device installation
+
+Choose **Add > Install Wendy on a device**, or use the install button in the empty device view.
+The guide distinguishes SD readers, USB NVMe enclosures, and USB recovery with storage
+left in the board. It includes the docs' bundled videos, an Orin Nano J14 pin diagram,
+and board-specific Dragonwing switch instructions for both entering EDL and returning to normal boot.
+Offline 3D guides reuse the existing Orin Nano, Raspberry Pi 5, and IQ-9075 assets with
+camera presets, connector highlights, a J14 jumper overlay, and the modeled SW2-3 actuator.
+IQ-8275 retains its own S2-8 diagram; the IQ-9075 model is not presented as an IQ-8275.
+The pin diagram follows NVIDIA's Orin Nano carrier specification SP-11324-001 v1.3,
+figure 1-4 and table 3-4. Custom carriers need their vendor's instructions.
+
+Flashing runs inside the app in a SwiftTerm terminal using the bundled CLI. Its release
+and drive pickers, networking setup, elevation, erase confirmations, and live progress
+remain interactive. The app passes explicit storage/rootfs choices and never supplies
+`--force` or chooses a drive automatically. Other devices, Wendy Lite, and existing-host
+agent installs remain available through the full installer picker.
+
+A running installer stays alive if its view is hidden. Closing its sheet or quitting
+Wendy is blocked until it exits; **Stop** sends an interrupt after confirmation.
+A failed or interrupted write never advances automatically to the boot step. After the
+installer exits successfully, follow the physical boot steps and verify an explicit
+address, board and installed version. Cloud enrollment can also be required. A successful
+write alone does not mark first boot or an application as ready.
 
 ## iPhone and iPad
 
@@ -84,8 +111,12 @@ still require a reachable device or a Cloud account.
 - **Sites** is a fleet-wide sidebar destination. Select a saved account and organization to see all enrolled devices grouped by their Cloud site, including offline devices. Online state comes from broker presence; failed presence reads remain unknown. Filter by device, site, or hardware, and connect from a tile. Refresh uses the window toolbar.
 - **Pairing** on a connected device discovers Wendy Lite/SensorLink sources and ONVIF IP cameras on that device's network. Lite pairing reuses CLI tenant checks and stable device identities. Unenrolled sources are shown but cannot be paired. Older Agents may fall back to discovery on this Mac, with an explicit notice. IP camera credentials go to the selected Agent, and the password field clears after submission. Forgetting a pairing requires confirmation.
 - **Campaigns** provides a visual When / On / Then editor. Choose object detection, image classification, or an existing application event, any camera or one actual source, and notification plus recording or recording alone. Review the capture window, confidence, cooldown, and upload policy before deploying. Deployment immediately arms a new campaign and refuses to overwrite an existing name. Clips stay local by default. The default detector is DETR ResNet 50 with the person label; model revisions are pinned and the device downloads the runtime/model on first use. Wildcard cameras apply to the selected device, including cameras added later, not the entire fleet. Cloud notification grants still need to be enabled for the campaign by an owner/admin in Cloud Apps. Deployment does not prove notification delivery or successful capture.
-- **Chat** uses Wendy Chat's model discovery and streaming provider with a transport fixed to the selected device. Choose its OpenAI-compatible server port and an advertised model. Mesh/Cloud uses the authenticated tunnel; LAN uses the selected device's address and requires a reachable server port. Common ports are Ollama 11434, llama.cpp 8080, and LM Studio 1234. Environment API keys and hosted-provider settings are never inherited. Stop cancels the generation; changing devices cancels the request. Assistant replies render Markdown and hide model thinking blocks, including Qwen GGUF templates that omit the opening tag. Conversations are held in memory. Each device session starts the bundled Wendy MCP with all tool groups and bundled skills. Read-only tools run directly; changes require approval of the displayed function and arguments. Ollama uses a per-request 32,768-token context for the tool catalog.
-- **Data** opens recorded Wendy Data episodes with a shared cursor, a custom pannable and zoomable timestamp ruler, channel timeline, numerical plot, events, and sample inspector. Camera playback is available for checksummed sealed MP4 clips whose frame schedule matches the capture index; JPEG/PNG application frames also follow the cursor. Samples align on the episode's CLOCK_BOOTTIME timeline, including negative pre-roll. Unknown clocks, other boot IDs, unsupported payloads, and download limits are reported rather than assigned invented timestamps. This is episode replay, not a live ROS/point-cloud viewer.
+- **Chat** uses Wendy Chat's model discovery and streaming provider with a transport fixed to the selected device. The picker discovers downloaded models across running managed Ollama runtimes and retains the selected model’s port. When Cloud does not yet offer the model TCP port, Chat streams HTTP through non-TTY exec in the selected device’s running managed Ollama container. This fallback uses the authenticated Agent connection, preserves request cancellation, and does not retry access denials. Custom servers still require Cloud port forwarding. If both routes fail, downloaded models remain visible with a warning beside the message box, a Retry connection button, and expandable technical details; chat stays disabled until an endpoint is reachable. Custom OpenAI-compatible server ports remain available in connection settings. Downloads show a progress bar with bytes and percentage for the current file, and an indeterminate bar during preparation and inference checks. Mesh/Cloud uses the authenticated tunnel; LAN uses the selected device's address and requires a reachable server port. Common ports are Ollama 11434, llama.cpp 8080, and LM Studio 1234. Environment API keys and hosted-provider settings are never inherited. Stop cancels the generation; changing devices cancels the request. Assistant replies render Markdown and hide model thinking blocks, including Qwen GGUF templates that omit the opening tag. Conversations are held in memory. Each device session starts the bundled Wendy MCP with all tool groups and bundled skills. Read-only tools run directly; changes require approval of the displayed function and arguments. Ollama uses a per-request 32,768-token context for the tool catalog.
+- **Data** opens recorded Wendy Data episodes with a shared cursor, a custom pannable and zoomable timestamp ruler, channel timeline, numerical plot, events, and sample inspector. Camera playback is available for checksummed sealed MP4 clips whose frame schedule matches the capture index; JPEG/PNG application frames also follow the cursor. Samples align on the episode's CLOCK_BOOTTIME timeline, including negative pre-roll. Unknown clocks, other boot IDs, unsupported payloads, and download limits are reported rather than assigned invented timestamps. The **Record** dialog selects actual camera, microphone, ROS 2 topic/domain, and telemetry sources for an immediate device-local capture; it also stops and seals the active recording. Campaigns offer these additional sources alongside camera selection. Audio and ROS 2 start at the trigger, without pre-roll.
+
+  Recorded PCM WAV segments replay at 0.5–2× on the episode cursor with a peak-amplitude plot. ROS 2 SQLite and MCAP bags use their recorded host clock samples to align bag receipt times; missing mappings, clock jumps, and out-of-range timestamps are reported. LaserScan and PointCloud2 have an orbitable 3D preview in sensor coordinates, without TF transforms. IMU, GPS, vectors, twists, and basic numeric messages expose measurement channels; unsupported messages retain metadata and original export payloads. LiDAR previews retain at most 4,096 points per frame and 1,000,000 points per episode. Sensor downloads are capped at 512 MiB per file and 1 GiB total, with a shared 20,000-sample viewer limit.
+
+  **Export > Full episode** writes a ZIP of every original manifest file, checks each SHA-256 digest, and retains ROS bag directories/metadata, WAV segments, MP4 clips, indexes, and clock evidence. Extract the archive to open its files in other tools or replay a ROS bag. Export does not apply preview limits. CSV exports loaded measurements with integer episode nanoseconds; PLY exports the current LiDAR preview in meters. Both preview exports identify their limited scope. These recording and sensor viewer controls are currently in the macOS Data pane.
 
 All of these operations use concrete C structs/enums and session-bound Go functions. JSON/YAML wire details stay in Go. No CLI subprocess is used for these UI operations.
 
@@ -279,3 +310,101 @@ an updated device agent and a new explicit permission approval: enabling a grant
 registers the canonical app/asset assignment before updating its permission. Old
 grants are not silently copied, and changing the desktop app alone cannot fix a
 running older agent's sender.
+
+### Local simulators on macOS
+
+Choose **Simulators** in the sidebar to manage the same `~/.wendy/vms` registry
+used by the Wendy CLI. Create a WendyOS VM, Unitree Go2/G1, SO-101 arm,
+Rosmaster R2, or ESP32-C6 simulator using WASM or native firmware. Creation
+leaves it stopped. Start runs the CLI's boot, provisioning and device-protocol
+checks. Power state in the list does not establish robot readiness.
+
+Robot scenes render natively with SceneKit using the runtime's compiled MuJoCo
+meshes and live body poses. Drag to orbit, scroll to zoom, follow the robot, or
+recenter the camera. Pause/resume and reset use each robot's control protocol.
+The view stops polling and releases its renderer when closed. Faults and stale
+connections remain visible. ESP32-C6 and generic WendyOS use labeled board
+schematics; these are not live GPIO, peripheral, or physical-board simulations.
+
+An older pinned runtime produces an **Update robot runtime** button beside the
+error. An agent capability mismatch offers **Update agent**. These actions
+apply only to the simulator that failed, even if another row is selected.
+The simulator menu also offers these updates and **Prepare simulation** for a
+running VM whose robot has not been provisioned. Updates use the existing CLI
+implementation. Missing host dependencies and failed downloads remain errors;
+the app does not install QEMU or esp-emu implicitly. Finder launches can find
+Homebrew tools in `/opt/homebrew/bin` and `/usr/local/bin`.
+
+**Open device** connects WendyOS simulators to the existing Apps, Cameras, Data
+and other device panes. For ESP32-C6, use the displayed `wendy run --device vm:NAME`
+command to deploy firmware/apps through the CLI's Lite transport. The native
+Linux device panes do not implement the Lite protocol. Deletion confirms the
+specific simulator and refuses a running VM. This pane is excluded from iOS.
+
+### Wendy Lite devices
+
+Nearby discovery includes Wendy Lite boards over LAN and USB. Cloud Lite devices
+connect through the authenticated WendyCom relay. Selecting a Lite device opens
+Cameras, Device, Wi-Fi, and Logs. SensorLink cameras support MJPEG and H.264;
+the device page shows firmware, board, and architecture. Logs stream the Lite
+console. Wi-Fi configuration replaces the saved network list and restarts the
+board after confirmation. Use Reconnect after the restart.
+
+Lite devices do not expose the WendyOS container, activity, chat, campaign, or
+agent-update pages and cannot be selected for VPN routing. Pair a Lite source
+with a WendyOS device to use its cameras in campaigns and recordings.
+
+### Thermal cameras
+
+The macOS and iOS camera walls recognize PureThermal cameras and request their
+raw Y16 stream. The heatmap, hottest point, and coldest point come from the same
+sensor frame, including in macOS full screen. Markers follow pixel centers and
+account for letterboxing. The display dims and hides measurements after three
+seconds without a new frame; stopping, retrying, or switching devices clears them.
+
+Supported layouts are little-endian Y16 at 160×120 or 80×60 with an explicit row
+stride. Telemetry-row modes and other camera families, including TOPDON's stacked
+YUYV format, need their own decoder. Zero and 65535 samples are excluded and shown
+in gray. A uniform frame uses its first valid pixel for both extrema.
+
+Measurements default to sensor counts. Use the thermal scale control to select
+TLinear 0.01 K or 0.1 K only after confirming the camera's radiometric configuration.
+The conversion is `raw / 100 - 273.15` or `raw / 10 - 273.15` degrees Celsius.
+A Y16 format or PureThermal name does not prove that radiometry is enabled.
+The heatmap automatically scales to each frame's range, so colors are relative.
+See the manufacturer's [radiometry example](https://github.com/groupgets/purethermal1-uvc-capture/blob/master/python/uvc-radiometry.py)
+and [camera capability checks](https://github.com/groupgets/GetThermal/blob/master/src/leptonvariation.cpp).
+
+The decoder lives in `go/internal/agent/data/thermal`. Updated agents use it to
+attach `raw_extrema` to the exact raw `VideoFrame`; the native backend checks the
+summary against the received samples. Older agents that support Y16 streaming use
+the same decoder locally. This adds live measurement support; it does not add
+thermal samples to campaign recordings or infer Celsius from recorded H.264.
+
+Repository evidence identifies enmax01's camera as a 160×120 PureThermal/Lepton.
+Live validation still requires access to that device and confirmation of its
+current radiometric mode. No temperature accuracy claim follows from synthetic
+frame tests.
+
+## Unitree pairing and direct control
+
+The device Pairing pane has a Unitree tab for Go2 discovery, account login,
+pairing, reconnection, and forgetting through the selected Wendy agent. Pairing
+requires an authenticated agent connection. The agent retains the robot key;
+the Mac does not save the Unitree password.
+
+Nearby discovery also scans the Mac's LAN for Go2 robots without a Wendy agent.
+Choose a robot's **Remote control** entry, or **Add > Connect to Unitree Go2** to
+enter a serial number and IPv4 address. Login supports Global and China Unitree
+accounts. Direct connections keep the robot key in memory for that connection.
+G1 control is not supported by the Go2 LAN protocol.
+
+Connecting never sends movement. Put Go2 in its normal standing mode with the
+physical remote, enable movement, then hold a direction button. Releasing,
+pressing Stop or Space, losing window focus, closing the view, and quitting
+attempt Stop. Moves expire after 500 ms without a refresh, enforced in Go even
+if the Swift UI stops responding. Speeds are 0.6 m/s forward/backward, 0.3 m/s
+sideways, and 0.5 rad/s turning. A host crash or network loss can prevent Stop
+from reaching the robot; keep it in sight and keep the physical remote ready.
+No movement is sent during discovery or pairing. Physical robot acceptance
+still requires hardware verification.

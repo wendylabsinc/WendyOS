@@ -132,6 +132,10 @@ func connectWithSignaling(ctx context.Context, exchange func(context.Context, []
 	if err != nil {
 		return nil, fmt.Errorf("create Unitree WebRTC peer: %w", err)
 	}
+	return connectWithPeer(ctx, peer, exchange)
+}
+
+func connectWithPeer(ctx context.Context, peer *webrtc.PeerConnection, exchange func(context.Context, []byte) ([]byte, error)) (*Connection, error) {
 	c := &Connection{peer: peer, done: make(chan struct{})}
 	success := false
 	defer func() {

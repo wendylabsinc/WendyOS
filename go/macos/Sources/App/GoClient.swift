@@ -8,16 +8,14 @@ struct WendyError: LocalizedError {
 
 // C calls stay off the UI thread. Every operation has a concrete signature;
 // returned allocations are copied to Swift values before their typed destructor.
-final class GoClient: @unchecked Sendable {
+final class GoClient: Sendable {
     static let shared = GoClient()
     private let requests = DispatchQueue(label: "dev.wendy.desktop.requests", qos: .userInitiated)
     private let connections = DispatchQueue(label: "dev.wendy.desktop.connections", qos: .userInitiated)
     private let events = DispatchQueue(label: "dev.wendy.desktop.events", qos: .userInitiated)
 
-    func perform<T>(_ work: @escaping () throws -> T) async throws -> T {
-        try await withCheckedThrowingContinuation { continuation in
-            requests.async { continuation.resume(with: Result { try work() }) }
-        }
+    func perform<T: Sendable>(unlessCancelled: Bool = true, _ work: @escaping @Sendable () throws -> T) async throws -> T {
+        try await BlockingWork.run(on: requests, unlessCancelled: unlessCancelled, work)
     }
     static func check(_ status: WDStatus) throws {
         if let message = status.message {
@@ -73,20 +71,17 @@ final class GoClient: @unchecked Sendable {
     func nearby() async throws -> [Device] { try await perform { try Self.readDevices(WDNearby()) } }
     func cloud() async throws -> [Device] { try await perform { try Self.readDevices(WDCloud()) } }
     func login(development: Bool) async throws { try await perform { try Self.finish(WDLogin(development ? 1 : 0)) } }
-    func cancelLogin() async throws { try await perform { try Self.finish(WDCancelLogin()) } }
+    func cancelLogin() async throws { try await perform(unlessCancelled: false) { try Self.finish(WDCancelLogin()) } }
     func beginConnection() -> UInt64 { WDBeginConnection() }
-    func connect(selector: String, request: UInt64, forgetIdentity: Bool = false) async throws -> UInt64 {
-        try await withCheckedThrowingContinuation { continuation in
-            connections.async {
-                continuation.resume(with: Result {
-                    try Self.withCString(selector) {
-                        try Self.readConnection(forgetIdentity ? WDForgetIdentityAndReconnect($0, request) : WDConnect($0, request))
-                    }
-                })
+    func connect(selector: String, request: UInt64, forgetIdentity: Bool = false) async throws -> DeviceConnection {
+        try await BlockingWork.run(on: connections) {
+            try Self.withCString(selector) {
+                try Self.readConnection(forgetIdentity ? WDForgetIdentityAndReconnect($0, request) : WDConnect($0, request))
             }
         }
     }
-    func disconnect() async throws { try await perform { try Self.finish(WDDisconnect()) } }
+
+    func disconnect() async throws { try await perform(unlessCancelled: false) { try Self.finish(WDDisconnect()) } }
     func apps() async throws -> [DeviceApp] { try await perform { try Self.readApps(WDApps()) } }
     func openApp(_ app: String, session: UInt64) async throws -> URL {
         try await perform {
@@ -114,14 +109,14 @@ final class GoClient: @unchecked Sendable {
     func startLogs(app: String, stream: UInt64) async throws {
         try await perform { try Self.withCString(app) { try Self.finish(WDStartLogs($0, stream)) } }
     }
-    func stopLogs() async throws { try await perform { try Self.finish(WDStopLogs()) } }
+    func stopLogs() async throws { try await perform(unlessCancelled: false) { try Self.finish(WDStopLogs()) } }
     func startCamera(id: UInt32, stream: UInt64, session: UInt64) async throws {
         try await perform { try Self.finish(WDStartCamera(id, stream, session)) }
     }
     func stopCamera(id: UInt32, stream: UInt64, session: UInt64) async throws {
-        try await perform { try Self.finish(WDStopCamera(id, stream, session)) }
+        try await perform(unlessCancelled: false) { try Self.finish(WDStopCamera(id, stream, session)) }
     }
-    func stopCameras(session: UInt64) async throws { try await perform { try Self.finish(WDStopCameras(session)) } }
+    func stopCameras(session: UInt64) async throws { try await perform(unlessCancelled: false) { try Self.finish(WDStopCameras(session)) } }
     func startVPN(routes: [VPNRouteSelection]) async throws -> VPNConfiguration {
         try await perform {
             let strings = CStringStorage()
@@ -130,8 +125,8 @@ final class GoClient: @unchecked Sendable {
             return try inputs.withUnsafeMutableBufferPointer { try Self.readVPN(WDStartVPN($0.baseAddress, $0.count)) }
         }
     }
-    func stopVPN() async throws { try await perform { try Self.finish(WDStopVPN()) } }
-    func shutdown() async throws { try await perform { try Self.finish(WDShutdown()) } }
+    func stopVPN() async throws { try await perform(unlessCancelled: false) { try Self.finish(WDStopVPN()) } }
+    func shutdown() async throws { try await perform(unlessCancelled: false) { try Self.finish(WDShutdown()) } }
 
     func resources(session: UInt64) async throws -> ResourceSnapshot {
         try await perform {
@@ -155,16 +150,14 @@ final class GoClient: @unchecked Sendable {
     }
 
     func poll() async throws -> [BridgeEvent] {
-        try await withCheckedThrowingContinuation { continuation in
-            events.async { continuation.resume(with: Result { try Self.readEvents(WDPollEvents()) }) }
-        }
+        try await BlockingWork.run(on: events) { try Self.readEvents(WDPollEvents()) }
     }
 
-    private static func readConnection(_ pointer: UnsafeMutablePointer<WDConnectionResult>?) throws -> UInt64 {
+    private static func readConnection(_ pointer: UnsafeMutablePointer<WDConnectionResult>?) throws -> DeviceConnection {
         guard let pointer else { throw WendyError(message: "Missing connection result.") }
         defer { WDConnectionFree(pointer) }
         try check(pointer.pointee.status)
-        return pointer.pointee.session
+        return DeviceConnection(session: pointer.pointee.session, lite: pointer.pointee.lite != 0)
     }
     static func readDevices(_ pointer: UnsafeMutablePointer<WDDevicesResult>?) throws -> [Device] {
         guard let pointer else { throw WendyError(message: "Missing devices result.") }
@@ -172,7 +165,7 @@ final class GoClient: @unchecked Sendable {
         try check(pointer.pointee.status)
         return UnsafeBufferPointer(start: pointer.pointee.items, count: pointer.pointee.count).map {
             Device(id: string($0.id), name: string($0.name), selector: string($0.selector),
-                   transport: DeviceTransport($0.transport), address: string($0.address))
+                   transport: DeviceTransport($0.transport), address: string($0.address), lite: $0.lite != 0)
         }
     }
     static func readApps(_ pointer: UnsafeMutablePointer<WDAppsResult>?) throws -> [DeviceApp] {
@@ -192,7 +185,7 @@ final class GoClient: @unchecked Sendable {
         defer { WDCamerasFree(pointer) }
         try check(pointer.pointee.status)
         return UnsafeBufferPointer(start: pointer.pointee.items, count: pointer.pointee.count).map {
-            Camera(id: $0.id, name: string($0.name), path: optionalString($0.path))
+            Camera(id: $0.id, name: string($0.name), path: optionalString($0.path), thermal: $0.thermal != 0)
         }
     }
     private static func readVPN(_ pointer: UnsafeMutablePointer<WDVPNResult>?) throws -> VPNConfiguration {
@@ -224,6 +217,11 @@ final class GoClient: @unchecked Sendable {
                 if $0.byte_count == 0 { payload = .video(Data()) }
                 else if let bytes = $0.bytes { payload = .video(Data(bytes: bytes, count: $0.byte_count)) }
                 else { throw WendyError(message: "Video event has no byte buffer.") }
+            case WD_EVENT_THERMAL:
+                payload = .thermal(try ThermalCameraFrame($0.thermal, bytes: $0.bytes, count: $0.byte_count))
+            case WD_EVENT_JPEG:
+                guard let bytes = $0.bytes, $0.byte_count > 0 else { throw WendyError(message: "JPEG event has no byte buffer.") }
+                payload = .jpeg(Data(bytes: bytes, count: $0.byte_count))
             default: throw WendyError(message: "Unrecognized Go event type.")
             }
             return BridgeEvent(session: $0.session, stream: $0.stream, payload: payload)
@@ -234,18 +232,20 @@ final class GoClient: @unchecked Sendable {
 struct BridgeEvent {
     enum Payload {
         case loginURL(String), loginDone, loginError(String)
-        case log(LogEntry), logsError(String), video(Data), cameraError(String)
+        case log(LogEntry), logsError(String), video(Data), jpeg(Data), cameraError(String)
+        case thermal(ThermalCameraFrame)
     }
     let session: UInt64
     let stream: UInt64
     let payload: Payload
 }
 enum DeviceTransport: String {
-    case lan = "LAN", mesh = "Mesh", cloud = "Cloud"
+    case lan = "LAN", mesh = "Mesh", cloud = "Cloud", usb = "USB"
     init(_ value: WDTransport) {
         switch value {
         case WD_TRANSPORT_MESH: self = .mesh
         case WD_TRANSPORT_CLOUD: self = .cloud
+        case WD_TRANSPORT_USB: self = .usb
         default: self = .lan
         }
     }
@@ -261,13 +261,16 @@ enum AppState: String {
         }
     }
 }
+struct DeviceConnection { let session: UInt64; let lite: Bool }
+
 struct Device: Identifiable, Hashable {
     let id: String
     let name: String
     let selector: String
     let transport: DeviceTransport
     let address: String
-    var routable: Bool { transport == .mesh || transport == .cloud }
+    var lite = false
+    var routable: Bool { !lite && (transport == .mesh || transport == .cloud) }
     var title: String { name.isEmpty ? selector : name }
 }
 struct DeviceApp: Identifiable, Equatable {
@@ -290,10 +293,11 @@ struct Camera: Identifiable, Hashable {
     let id: UInt32
     let name: String
     var path: String?
+    var thermal = false
 }
 struct VPNRouteSelection { let selector: String; let name: String }
 
-struct CloudAccount {
+struct CloudAccount: Equatable {
     let state: WDAccountState
     let context: String
     let cloud: String

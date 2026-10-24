@@ -5,6 +5,17 @@ struct AccountsSettingsView: View {
     @State private var accounts: [SavedAccount] = []
     @State private var error: String?
     @State private var loading = true
+    #if os(macOS)
+    @StateObject private var picker = AccountPickerModel()
+    @State private var switchingContext: String?
+    #endif
+    private var busy: Bool {
+        #if os(macOS)
+        return loading || picker.switching || model.signingIn
+        #else
+        return loading || model.signingIn
+        #endif
+    }
 
     var body: some View {
         TabView {
@@ -12,7 +23,7 @@ struct AccountsSettingsView: View {
                 HStack {
                     Text("Accounts").font(.title2.weight(.semibold))
                     Spacer()
-                    Button("Refresh", systemImage: "arrow.clockwise") { Task { await refresh() } }.disabled(loading)
+                    Button("Refresh", systemImage: "arrow.clockwise") { Task { await refresh() } }.disabled(busy)
                 }
                 if loading && accounts.isEmpty { ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity) }
                 else if let error, accounts.isEmpty {
@@ -23,23 +34,28 @@ struct AccountsSettingsView: View {
                 } else {
                     if let error { FailureNote(message: error) }
                     List(accounts) { entry in
-                        HStack(alignment: .top, spacing: 12) {
-                            Image(systemName: "person.crop.circle").font(.title2).foregroundStyle(.secondary)
-                            VStack(alignment: .leading, spacing: 6) {
-                                Text(entry.account.email.isEmpty ? "Email unavailable" : entry.account.email).font(.headline).textSelection(.enabled)
-                                Text(entry.account.cloud).font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
-                                Text(entry.account.title + " · Context: " + entry.account.context).font(.caption).foregroundStyle(.secondary)
+                        Group {
+                            #if os(macOS)
+                            Button { Task { await select(entry) } } label: {
+                                accountRow(entry)
                             }
-                            Spacer()
-                            if entry.active { Label("Active", systemImage: "checkmark.circle.fill").font(.caption).foregroundStyle(.green) }
-                        }.padding(.vertical, 10)
+                            .buttonStyle(.plain)
+                            .disabled(busy || entry.active)
+                            .accessibilityLabel("Use account " + entry.account.context)
+                            .accessibilityAddTraits(entry.active ? [.isSelected] : [])
+                            #else
+                            accountRow(entry)
+                            #endif
+                        }
+                        .alignmentGuide(.listRowSeparatorLeading) { _ in 0 }
+                        .alignmentGuide(.listRowSeparatorTrailing) { dimensions in dimensions.width }
                     }.listStyle(.inset)
                 }
                 HStack {
                     Menu("Add Account") {
                         Button("Wendy Cloud") { Task { await model.signIn() } }
                         Button("Development Cloud") { Task { await model.signIn(development: true) } }
-                    }.disabled(model.signingIn)
+                    }.disabled(busy)
                     if model.signingIn {
                         ProgressView().controlSize(.small)
                         Text("Complete sign-in in your browser.").font(.caption).foregroundStyle(.secondary)
@@ -49,9 +65,49 @@ struct AccountsSettingsView: View {
             }.padding(24)
                 .tabItem { Label("Accounts", systemImage: "person.crop.circle") }
         }.desktopFrame(width: 620, height: 450)
-            .task { await refresh() }
-            .onChange(of: model.signingIn) { _, signingIn in if !signingIn { Task { await refresh() } } }
+            .task(id: "\(model.account?.context ?? ""):\(model.signingIn)") {
+                if !model.signingIn { await refresh() }
+            }
     }
+    private func accountRow(_ entry: SavedAccount) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: "person.crop.circle").font(.title2).foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 6) {
+                Text(entry.account.email.isEmpty ? entry.account.context : entry.account.email).font(.headline)
+                Text(entry.account.cloud).font(.callout).foregroundStyle(.secondary)
+                Text(entry.account.title + " · Context: " + entry.account.context).font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer()
+            if entry.active {
+                Label("Active", systemImage: "checkmark.circle.fill").font(.caption).foregroundStyle(.green)
+            }
+            #if os(macOS)
+            if !entry.active {
+                if switchingContext == entry.id {
+                    ProgressView().controlSize(.small)
+                } else {
+                    Text("Use account").font(.caption).foregroundStyle(Color.accentColor)
+                }
+            }
+            #endif
+        }
+        .padding(.vertical, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .contentShape(Rectangle())
+    }
+    #if os(macOS)
+    private func select(_ entry: SavedAccount) async {
+        guard !busy, !entry.active else { return }
+        switchingContext = entry.id
+        error = nil
+        defer { switchingContext = nil }
+        if await picker.select(context: entry.account.context, app: model) {
+            await refresh()
+        } else {
+            error = picker.error
+        }
+    }
+    #endif
     private func refresh() async {
         loading = true
         defer { loading = false }

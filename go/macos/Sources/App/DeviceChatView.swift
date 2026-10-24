@@ -2,6 +2,8 @@ import SwiftUI
 
 struct ChatModelOption: Identifiable {
     let id, name: String
+    var port: UInt32 = 11434
+    var unavailableReason = ""
     var displayName: String { Self.readableName(name.isEmpty ? id : name) }
     static func readableName(_ identifier: String) -> String {
         let parts = identifier.components(separatedBy: ":")
@@ -115,7 +117,7 @@ extension GoClient {
         try await performModelRequest {
             guard let p = WDChatModels(session, port) else { throw WendyError(message: "Missing model list.") }
             defer { WDChatModelsFree(p) }; try Self.check(p.pointee.status)
-            return UnsafeBufferPointer(start: p.pointee.items, count: p.pointee.count).map { ChatModelOption(id: Self.string($0.id), name: Self.string($0.name)) }
+            return UnsafeBufferPointer(start: p.pointee.items, count: p.pointee.count).map { ChatModelOption(id: Self.string($0.id), name: Self.string($0.name), port: $0.port, unavailableReason: Self.string($0.unavailable_reason)) }
         }
     }
     func startChat(session: UInt64, turn: UInt64, port: UInt32, model: String, messages: [ChatMessage]) async throws {
@@ -138,14 +140,20 @@ extension GoClient {
     func resolveChatApproval(session: UInt64, turn: UInt64, approval: UInt64, allow: Bool) async throws {
         try await perform { try Self.finish(WDResolveChatApproval(session, turn, approval, allow ? 1 : 0)) }
     }
-    func stopChat(session: UInt64, turn: UInt64) async throws { try await perform { try Self.finish(WDStopChat(session, turn)) } }
+    func stopChat(session: UInt64, turn: UInt64) async throws { try await perform(unlessCancelled: false) { try Self.finish(WDStopChat(session, turn)) } }
 }
 
 @MainActor final class DeviceChatModel: ObservableObject {
     let session: UInt64
     @Published var port = "11434"
     @Published var models: [ChatModelOption] = []
-    @Published var model = ""
+    @Published var model = "" {
+        didSet {
+            if let selected = models.first(where: { $0.id == model }) {
+                port = String(selected.port); loadedPort = selected.port
+            }
+        }
+    }
     @Published var messages: [ChatMessage] = []
     @Published var prompt = ""
     @Published var loading = false
@@ -155,12 +163,15 @@ extension GoClient {
     @Published var activity = ""
     @Published var approval: ChatApproval?
     @Published var resolvingApproval = false
-    private var task: Task<Void, Never>?
-    private var turn: UInt64 = 0
+    @Published private(set) var turn: UInt64 = 0
     private var loadedPort: UInt32?
-    init(session: UInt64) { self.session = session }
+    private let discoverModels: (UInt64, UInt32) async throws -> [ChatModelOption]
+    init(session: UInt64, discoverModels: @escaping (UInt64, UInt32) async throws -> [ChatModelOption] = { try await GoClient.shared.chatModels(session: $0, port: $1) }) {
+        self.session = session; self.discoverModels = discoverModels
+    }
     var portNumber: UInt32? { guard let p = UInt32(port), (1...65535).contains(p) else { return nil }; return p }
-    var canSend: Bool { !streaming && !loading && !model.isEmpty && portNumber == loadedPort && !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+    var unavailableReason: String { models.first { $0.id == model }?.unavailableReason ?? "" }
+    var canSend: Bool { unavailableReason.isEmpty && !streaming && !loading && !model.isEmpty && portNumber == loadedPort && !prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
     func discoverIfNeeded() async {
         guard loadedPort == nil, !loading else { return }
         await discover()
@@ -168,48 +179,56 @@ extension GoClient {
     func discover() async {
         guard !streaming, !loading, let port = portNumber else { return }
         let selectedModel = model
-        loading = true; error = nil; models = []; model = ""; loadedPort = nil
+        loading = true; error = nil
         defer { loading = false }
         do {
-            let result = try await GoClient.shared.chatModels(session: session, port: port)
+            let result = try await discoverModels(session, port)
             guard !Task.isCancelled, portNumber == port else { return }
-            models = result; model = result.contains { $0.id == selectedModel } ? selectedModel : (result.first?.id ?? ""); loadedPort = port
-        } catch { if !Task.isCancelled { self.error = error.localizedDescription } }
+            models = result; model = result.contains { $0.id == selectedModel } ? selectedModel : (result.first?.id ?? ""); loadedPort = result.isEmpty ? nil : portNumber
+        } catch { if !Task.isCancelled, portNumber == port { self.error = error.localizedDescription } }
     }
     func send() {
-        guard canSend, let port = portNumber else { return }
+        guard canSend else { return }
         // Each request owns its history and cannot switch models mid-generation.
         let text = prompt.trimmingCharacters(in: .whitespacesAndNewlines)
         prompt = ""; error = nil; streaming = true
         messages.append(ChatMessage(isUser: true, text: text))
-        let history = messages.filter { $0.isUser || !$0.text.isEmpty }
         messages.append(ChatMessage(isUser: false, text: ""))
-        let index = messages.count - 1
-        activeResponseID = messages[index].id
+        activeResponseID = messages.last?.id
         turn = UInt64.random(in: 1...UInt64.max)
+    }
+
+    /// SwiftUI owns this task. Stop, device replacement and view removal cancel it.
+    func respond() async {
+        guard turn != 0, streaming, let port = portNumber,
+              let index = messages.firstIndex(where: { $0.id == activeResponseID }) else { return }
         let request = turn
-        task = Task {
-            defer { if turn == request { streaming = false; activeResponseID = nil; approval = nil; activity = "" } }
-            do {
-                guard !Task.isCancelled, turn == request else { return }
-                try await GoClient.shared.startChat(session: session, turn: request, port: port, model: model, messages: history)
-                // Stop may have been pressed while the start request was queued.
-                guard !Task.isCancelled else { try? await GoClient.shared.stopChat(session: session, turn: request); return }
-                while !Task.isCancelled {
-                    let result = try await GoClient.shared.pollChat(session: session, turn: request)
-                    guard turn == request, !Task.isCancelled else { return }
-                    messages[index].text = result.text
-                    messages[index].trace = result.trace
-                    messages[index].cards = result.cards
-                    activity = result.activity; approval = result.approval
-                    if !result.error.isEmpty { error = result.error }
-                    if result.done { return }
-                    try await Task.sleep(for: .milliseconds(100))
-                }
-            } catch {
-                if !Task.isCancelled && turn == request { self.error = error.localizedDescription }
+        let history = messages.filter { $0.isUser || !$0.text.isEmpty }
+        let selectedModel = model
+        defer {
+            if turn == request {
+                streaming = false; activeResponseID = nil; approval = nil; activity = ""
             }
         }
+        do {
+            try Task.checkCancellation()
+            try await GoClient.shared.startChat(session: session, turn: request, port: port, model: selectedModel, messages: history)
+            while !Task.isCancelled && turn == request {
+                let result = try await GoClient.shared.pollChat(session: session, turn: request)
+                guard turn == request, !Task.isCancelled else { break }
+                messages[index].text = result.text
+                messages[index].trace = result.trace
+                messages[index].cards = result.cards
+                activity = result.activity; approval = result.approval
+                if !result.error.isEmpty { error = result.error }
+                if result.done { break }
+                try await Task.sleep(for: .milliseconds(100))
+            }
+        } catch {
+            if !Task.isCancelled && turn == request { self.error = error.localizedDescription }
+        }
+        // This cleanup remains in the owning task and is allowed after cancellation.
+        try? await GoClient.shared.stopChat(session: session, turn: request)
     }
     func resolve(_ pending: ChatApproval, allow: Bool) async {
         guard approval?.id == pending.id, !resolvingApproval else { return }
@@ -225,19 +244,17 @@ extension GoClient {
         streaming && activeResponseID == message.id && message.text.isEmpty && message.cards.isEmpty && approval == nil
     }
     func stop() {
-        task?.cancel(); task = nil
-        let request = turn
         turn = 0
         if let index = messages.firstIndex(where: { $0.id == activeResponseID }) {
             messages[index].interrupted = true
         }
         streaming = false; activeResponseID = nil; approval = nil; activity = ""
-        if request != 0 { Task { try? await GoClient.shared.stopChat(session: session, turn: request) } }
     }
     func clear() { stop(); messages = []; error = nil }
     func useModel(_ name: String, port: UInt32) {
         clear(); self.port = String(port); loadedPort = port
-        if !models.contains(where: { $0.id == name }) { models.append(ChatModelOption(id: name, name: name)) }
+        models.removeAll { $0.id == name }
+        models.append(ChatModelOption(id: name, name: name, port: port))
         model = name
     }
 }
@@ -246,7 +263,6 @@ struct DeviceChatView: View {
     let deviceName: String
     @ObservedObject var chat: DeviceChatModel
     @State private var showingLibrary = false
-    @State private var showingErrorDetails = false
     @State private var showingConnection = false
     private var modelName: String { chat.models.first { $0.id == chat.model }?.displayName ?? ChatModelOption.readableName(chat.model) }
     var body: some View {
@@ -305,20 +321,6 @@ struct DeviceChatView: View {
                 .font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 28)
             if chat.loading { ProgressView("Finding models").padding() }
             #endif
-            if let error = chat.error {
-                HStack(spacing: 8) {
-                    Image(systemName: "exclamationmark.circle").foregroundStyle(.orange)
-                    Text(chat.messages.isEmpty ? "Could not load models." : "Chat could not complete the request.").font(.caption).foregroundStyle(.secondary)
-                    Button("Details") { showingErrorDetails = true }.buttonStyle(.borderless).font(.caption)
-                        .popover(isPresented: $showingErrorDetails) {
-                            VStack(alignment: .leading, spacing: 12) {
-                                HStack { Text("Chat error").font(.headline); Spacer(); Button("Done") { showingErrorDetails = false } }
-                                ScrollView { Text(error).font(.callout).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading).fixedSize(horizontal: false, vertical: true) }
-                            }.padding(16).desktopFrame(width: 500, height: 220)
-                        }
-                    Spacer()
-                }.padding(.horizontal, 24).padding(.top, 8)
-            }
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 22) {
@@ -353,8 +355,13 @@ struct DeviceChatView: View {
                     if id != nil { withAnimation { proxy.scrollTo("bottom", anchor: .bottom) } }
                 }
             }
+            if chat.error != nil || !chat.unavailableReason.isEmpty {
+                connectionNotice
+                    .frame(maxWidth: 900)
+                    .padding(.horizontal, 20).padding(.vertical, 10)
+            }
             #if os(macOS)
-            if chat.messages.isEmpty && !chat.loading {
+            if chat.messages.isEmpty && !chat.loading && chat.error == nil && chat.unavailableReason.isEmpty {
                 Text(chat.model.isEmpty ? "Choose a model to begin." : "Ask about this device, its apps, or recent logs.")
                     .font(.caption).foregroundStyle(.tertiary).padding(.horizontal, 26)
                     .frame(maxWidth: 900, alignment: .leading).padding(.bottom, 2)
@@ -388,6 +395,8 @@ struct DeviceChatView: View {
             .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(PlatformColors.separator.opacity(0.5)))
             .frame(maxWidth: 900).padding(.horizontal, 20).padding(.bottom, 12).padding(.top, 6)
         }.task { await chat.discoverIfNeeded() }
+        .task(id: chat.turn) { await chat.respond() }
+        .onDisappear { chat.stop() }
             .sheet(isPresented: $showingLibrary) {
                 ModelLibraryView(session: chat.session, deviceName: deviceName, port: chat.port) { model, port in chat.useModel(model, port: port) }
             }
@@ -411,6 +420,41 @@ struct DeviceChatView: View {
             #endif
             .focusedSceneValue(\.devicePaneRefresh, PaneRefreshAction(enabled: !chat.loading && !chat.streaming, perform: { Task { await chat.discover() } }))
     }
+
+    private var connectionNotice: some View {
+        let unavailable = !chat.unavailableReason.isEmpty
+        let details = chat.error ?? chat.unavailableReason
+        let title = unavailable ? "Model server unavailable" : chat.messages.isEmpty ? "Could not load models" : "Chat request failed"
+        return HStack(alignment: .top, spacing: 12) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .font(.title3).foregroundStyle(.orange).accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 8) {
+                Text(title).font(.headline)
+                Text(unavailable
+                     ? "\(modelName) is downloaded on \(deviceName), but Wendy could not reach its server. Check that the model app is running, then retry."
+                     : "The request could not finish. Check the connection to \(deviceName) and try again. Your conversation is still here.")
+                    .font(.callout).fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: 12) {
+                    Button(chat.loading ? "Checking…" : "Retry connection") { Task { await chat.discover() } }
+                        .buttonStyle(.bordered).disabled(chat.loading || chat.streaming)
+                    Button("Connection settings") { showingConnection = true }
+                        .buttonStyle(.borderless).disabled(chat.streaming)
+                }
+                DisclosureGroup("Technical details") {
+                    ScrollView {
+                        Text(details).font(.caption.monospaced()).textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }.frame(maxHeight: 140).padding(.top, 6)
+                }.font(.callout)
+            }.frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(16)
+        .background(Color.orange.opacity(0.10), in: RoundedRectangle(cornerRadius: 12))
+        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color.orange.opacity(0.4)))
+        .accessibilityElement(children: .contain)
+    }
+
 }
 
 // Block layout stays native SwiftUI; Foundation parses inline emphasis, code,

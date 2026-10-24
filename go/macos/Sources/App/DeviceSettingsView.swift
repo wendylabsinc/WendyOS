@@ -162,12 +162,17 @@ struct DeviceSettingsView: View {
     }
     private var settingsMenu: some View {
         Form {
-            settingsLink(.info, symbol: "info.circle")
-            settingsLink(.wifi, symbol: "wifi", value: snapshot.map { $0.wifiConnected ? $0.ssid : $0.wifiError.isEmpty ? "Not connected" : "Unavailable" } ?? "")
-            settingsLink(.bluetooth, symbol: "antenna.radiowaves.left.and.right")
-            settingsLink(.audio, symbol: "speaker.wave.2")
-            settingsLink(.mesh, symbol: "network", value: snapshot?.meshState.capitalized ?? "")
-            settingsLink(.notifications, symbol: "bell.badge")
+            Section("Enrollment") {
+                DeviceEnrollmentSettings(session: session, deviceName: deviceName, lite: false)
+            }
+            Section {
+                settingsLink(.info, symbol: "info.circle")
+                settingsLink(.wifi, symbol: "wifi", value: snapshot.map { $0.wifiConnected ? $0.ssid : $0.wifiError.isEmpty ? "Not connected" : "Unavailable" } ?? "")
+                settingsLink(.bluetooth, symbol: "antenna.radiowaves.left.and.right")
+                settingsLink(.audio, symbol: "speaker.wave.2")
+                settingsLink(.mesh, symbol: "network", value: snapshot?.meshState.capitalized ?? "")
+                settingsLink(.notifications, symbol: "bell.badge")
+            }
             Section {
                 settingsLink(.pairing, symbol: "sensor")
                 settingsLink(.logs, symbol: "doc.text")

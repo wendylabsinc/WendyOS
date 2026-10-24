@@ -51,7 +51,7 @@ const dragonwingDeviceTypePrefix = "dragonwing-"
 
 // Boards kept in their own file append themselves here from an init().
 var dragonwingBoards = []dragonwingBoard{
-	{deviceType: "dragonwing-iq-8275", msmID: 0x002e70e1, storage: qdl.StorageUFS, guide: dipSwitch3Guide,
+	{deviceType: "dragonwing-iq-8275", msmID: 0x002e70e1, storage: qdl.StorageUFS, guide: iq8275SwitchGuide,
 		extractedFactor: dragonwingExtractedFactor},
 	{deviceType: "dragonwing-iq-9075", msmID: 0x002eb0e1, storage: qdl.StorageUFS, guide: dipSwitch3Guide,
 		extractedFactor: dragonwingExtractedFactor},

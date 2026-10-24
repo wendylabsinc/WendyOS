@@ -10,6 +10,7 @@ import (
 	"errors"
 	"unsafe"
 
+	"github.com/wendylabsinc/wendy/go/internal/agent/data/thermal"
 	"github.com/wendylabsinc/wendy/go/internal/cli/commands"
 	"github.com/wendylabsinc/wendy/go/macos/backend"
 	"github.com/wendylabsinc/wendy/go/macos/vpn"
@@ -85,6 +86,7 @@ func connect(selector *C.char, forget bool, request C.uint64_t) *C.WDConnectionR
 	session, err := desktop.ConnectRequest(C.GoString(selector), forget, uint64(request))
 	p := alloc[C.WDConnectionResult](1)
 	p.status, p.session = status(err), C.uint64_t(session)
+	p.lite = boolInt(desktop.IsLite(session))
 	return p
 }
 
@@ -107,12 +109,15 @@ func devices(items []commands.DesktopDevice, err error) *C.WDDevicesResult {
 		if d.Transport == "Mesh" {
 			transport = C.WD_TRANSPORT_MESH
 		}
+		if d.Transport == "USB" {
+			transport = C.WD_TRANSPORT_USB
+		}
 		if d.Transport == "Cloud" {
 			transport = C.WD_TRANSPORT_CLOUD
 		}
 		unsafe.Slice(p.items, len(items))[i] = C.WDDevice{
 			id: C.CString(d.ID), name: C.CString(d.Name), selector: C.CString(d.Selector),
-			address: C.CString(d.Address), transport: transport,
+			address: C.CString(d.Address), transport: transport, lite: boolInt(d.Lite),
 		}
 	}
 	return p
@@ -161,7 +166,7 @@ func cameras(items []*pb.VideoDevice, err error) *C.WDCamerasResult {
 	p.status = status(err)
 	p.items, p.count = alloc[C.WDCamera](len(items)), C.size_t(len(items))
 	for i, camera := range items {
-		unsafe.Slice(p.items, len(items))[i] = C.WDCamera{id: C.uint32_t(camera.GetId()), name: C.CString(camera.GetName()), path: C.CString(camera.GetPath())}
+		unsafe.Slice(p.items, len(items))[i] = C.WDCamera{id: C.uint32_t(camera.GetId()), name: C.CString(camera.GetName()), path: C.CString(camera.GetPath()), thermal: thermalFlag(camera)}
 	}
 	return p
 }
@@ -202,7 +207,12 @@ func events(items []backend.Event) *C.WDEvents {
 		if e.Kind == backend.EventLog && e.Log != nil {
 			out.log = C.WDLogRecord{timestamp_ns: C.uint64_t(e.Log.Timestamp), level: C.WDLogLevel(e.Log.Level),
 				body: C.CString(e.Log.Body), app: C.CString(e.Log.App), service: C.CString(e.Log.Service)}
-		} else if e.Kind == backend.EventVideo {
+		} else if e.Kind == backend.EventVideo || e.Kind == backend.EventJPEG || e.Kind == backend.EventThermal {
+			if f := e.Thermal; f != nil {
+				out.thermal = C.WDThermalFrame{width: C.uint32_t(f.Width), height: C.uint32_t(f.Height),
+					cold_x: C.uint32_t(f.Coldest.X), cold_y: C.uint32_t(f.Coldest.Y), cold_raw: C.uint16_t(f.Coldest.Raw),
+					hot_x: C.uint32_t(f.Hottest.X), hot_y: C.uint32_t(f.Hottest.Y), hot_raw: C.uint16_t(f.Hottest.Raw), timestamp_ns: C.uint64_t(f.TimestampNS)}
+			}
 			if len(e.Bytes) > 0 {
 				out.bytes = (*C.uint8_t)(C.CBytes(e.Bytes))
 				out.byte_count = C.size_t(len(e.Bytes))
@@ -370,4 +380,11 @@ func WDAccountsFree(p *C.WDAccountsResult) {
 	free(p.items)
 	free(p.status.message)
 	free(p)
+}
+
+func thermalFlag(camera *pb.VideoDevice) C.int32_t {
+	if thermal.IsPureThermal(camera.GetName(), camera.GetPixelFormats()) {
+		return 1
+	}
+	return 0
 }

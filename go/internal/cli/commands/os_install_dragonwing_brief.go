@@ -34,8 +34,12 @@ func briefStep(n int, text string) string {
 	return "    " + briefNum.Render(fmt.Sprintf("%d.", n)) + " " + text
 }
 
-// dipSwitch3Guide is the IQ EVKs' wording: EDL is a latching DIP switch.
-func dipSwitch3Guide() edlGuide {
+// Production EVKs use different EDL poles. Qualcomm's board-specific guide:
+// https://github.com/qualcomm-linux/qcom-linux-skills/blob/main/skills/qcom-flash-qdl/references/entering-edl.md
+func dipSwitch3Guide() edlGuide   { return dipSwitchGuide("SW2-3") }
+func iq8275SwitchGuide() edlGuide { return dipSwitchGuide("S2-8") }
+
+func dipSwitchGuide(pole string) edlGuide {
 	return edlGuide{
 		storage:  "UFS",
 		rewrites: "the board's UFS",
@@ -50,32 +54,33 @@ func dipSwitch3Guide() edlGuide {
 			briefSection("Entering EDL mode"),
 			"  EDL is selected by a " + briefKey.Render("DIP switch") + ", not a button, so it stays set until",
 			"  you move it back.",
+			"  These steps are for production EVKs. IQ-8/IQ-9 Beta EVKs use S5-4; check your board revision.",
 			"",
 			briefStep(1, "Power the board "+briefDim.Render("off")+"."),
-			briefStep(2, "Set "+briefKey.Render("DIP switch 3")+" to "+briefKey.Render("ON")+"."),
+			briefStep(2, "Set "+briefKey.Render(pole)+" to "+briefKey.Render("ON")+"."),
 			briefStep(3, "Power the board on. It boots straight into EDL and shows no"),
 			"       display output — that is expected.",
 			"",
-			"  " + briefDim.Render("After flashing, set DIP switch 3 back to OFF and power-cycle,"),
+			"  " + briefDim.Render("After flashing, set "+pole+" back to OFF and power-cycle,"),
 			"  " + briefDim.Render("otherwise the board will keep booting into EDL."),
 		},
-		ready: "DIP switch 3 ON",
+		ready: pole + " ON",
 		hints: recoveryWaitHints{
 			label:       "Dragonwing",
 			family:      "Dragonwing",
 			mode:        "EDL mode",
 			cablingLine: "the USB-C cable is in the " + briefPort.Render("USB0 port"),
-			buttonLine:  briefKey.Render("DIP switch 3") + " is " + briefKey.Render("ON") + ", and the board was power-cycled after setting it",
+			buttonLine:  briefKey.Render(pole) + " is " + briefKey.Render("ON") + ", and the board was power-cycled after setting it",
 		},
 		done: []string{
-			"  Now set " + briefKey.Render("DIP switch 3") + " back to " + briefKey.Render("OFF") +
+			"  Now set " + briefKey.Render(pole) + " back to " + briefKey.Render("OFF") +
 				" and power-cycle the board.",
 			"  " + briefDim.Render("Left ON, it will boot into EDL again instead of WendyOS."),
 		},
-		retry: "  Set " + briefKey.Render("DIP switch 3") + " back to " + briefKey.Render("OFF") +
+		retry: "  Set " + briefKey.Render(pole) + " back to " + briefKey.Render("OFF") +
 			" and power-cycle, or leave it ON to retry.",
 		reenter: []string{
-			"  Leave " + briefKey.Render("DIP switch 3") + " set to ON, power-cycle the board to",
+			"  Leave " + briefKey.Render(pole) + " set to ON, power-cycle the board to",
 			"  re-enter EDL, and run the same command again.",
 		},
 	}

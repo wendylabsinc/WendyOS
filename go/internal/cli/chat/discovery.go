@@ -484,7 +484,26 @@ func PullOllamaModel(ctx context.Context, config Config, model string, progress 
 	return pullOllamaModel(ctx, p, model, progress)
 }
 
+// ModelPullProgress reports the current file transfer. Total is zero during
+// manifest lookup and verification, when no measurable transfer is available.
+type ModelPullProgress struct {
+	Status           string
+	Completed, Total int64
+}
+
 func pullOllamaModel(ctx context.Context, p *httpProvider, model string, progress func(string)) error {
+	return pullOllamaModelProgress(ctx, p, model, func(update ModelPullProgress) {
+		status := update.Status
+		if update.Total > 0 {
+			status += fmt.Sprintf(" %.0f%%", float64(update.Completed)/float64(update.Total)*100)
+		}
+		if progress != nil {
+			progress(status)
+		}
+	})
+}
+
+func pullOllamaModelProgress(ctx context.Context, p *httpProvider, model string, progress func(ModelPullProgress)) error {
 	c := p.config
 	resp, err := discoveryRequest(ctx, p, http.MethodPost, ollamaURL(c, "/api/pull"), map[string]any{"model": model, "stream": true})
 	if err != nil {
@@ -516,13 +535,12 @@ func pullOllamaModel(ctx context.Context, p *httpProvider, model string, progres
 			return fmt.Errorf("Ollama could not download the model: %s", p.safeError(update.Error))
 		}
 		status := p.safeError(update.Status)
-		if update.Total > 0 {
-			percent := min(100, max(0, float64(update.Completed)/float64(update.Total)*100))
-			status += fmt.Sprintf(" %.0f%%", percent)
-		}
-		if progress != nil && status != "" && ((status != previous && updates < 4096 && (lastUpdate.IsZero() || time.Since(lastUpdate) >= 250*time.Millisecond)) || update.Status == "success") {
-			progress(status)
-			lastUpdate, previous = time.Now(), status
+		update.Total = max(0, update.Total)
+		update.Completed = min(update.Total, max(0, update.Completed))
+		key := fmt.Sprintf("%s:%d:%d", status, update.Completed, update.Total)
+		if progress != nil && status != "" && ((key != previous && updates < 4096 && (lastUpdate.IsZero() || time.Since(lastUpdate) >= 250*time.Millisecond)) || update.Status == "success") {
+			progress(ModelPullProgress{Status: status, Completed: update.Completed, Total: update.Total})
+			lastUpdate, previous = time.Now(), key
 			updates++
 		}
 		if update.Status == "success" {

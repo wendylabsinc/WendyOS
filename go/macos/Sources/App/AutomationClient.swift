@@ -2,6 +2,9 @@ import Foundation
 
 enum PairingKind: String, CaseIterable, Identifiable {
     case lite = "Wendy Lite", camera = "IP cameras"
+    #if os(macOS)
+    case unitree = "Unitree"
+    #endif
     var id: Self { self }
     var bridge: WDPairingKind { self == .lite ? WD_PAIR_SENSOR : WD_PAIR_IP_CAMERA }
 }
@@ -12,7 +15,7 @@ struct PairingDevice: Identifiable {
 }
 struct PairingSnapshot { let devices: [PairingDevice]; let warning: String }
 struct CampaignSource: Identifiable {
-    let id, detail: String
+    let id, detail, kind: String
     let healthy: Bool
     var title: String { detail.isEmpty ? id : "\(detail) · \(id)" }
 }
@@ -32,6 +35,9 @@ enum CampaignAction: String, CaseIterable, Identifiable {
 struct CampaignDraft {
     var name = "human-detected"
     var camera = "*"
+    var audio: Set<String> = []
+    var ros2: Set<String> = []
+    var telemetry = false
     var trigger: CampaignTrigger = .detection
     var model = "facebook/detr-resnet-50"
     var modelRevision = ""
@@ -44,7 +50,7 @@ struct CampaignDraft {
     var after = 10
     var upload = false
     var valid: Bool {
-        !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !camera.isEmpty &&
+        !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && (!camera.isEmpty || (trigger == .event && (!audio.isEmpty || !ros2.isEmpty || telemetry))) &&
         !event.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty &&
         (trigger == .event || (!model.isEmpty && modelRevision.count == 40 && !labels.isEmpty && labels.count <= 32))
     }
@@ -77,10 +83,10 @@ extension GoClient {
     func forgetCamera(session: UInt64, id: UInt32) async throws { try await perform { try Self.finish(WDForgetIPCamera(session, id)) } }
     func campaignSources(session: UInt64) async throws -> [CampaignSource] {
         try await perform {
-            guard let p = WDCampaignSources(session) else { throw WendyError(message: "Missing camera sources.") }
+            guard let p = WDCampaignSources(session) else { throw WendyError(message: "Missing recording sources.") }
             defer { WDCampaignSourcesFree(p) }; try Self.check(p.pointee.status)
             return UnsafeBufferPointer(start: p.pointee.items, count: p.pointee.count).map {
-                CampaignSource(id: Self.string($0.id), detail: Self.string($0.detail), healthy: $0.healthy != 0)
+                CampaignSource(id: Self.string($0.id), detail: Self.string($0.detail), kind: Self.string($0.kind), healthy: $0.healthy != 0)
             }.sorted { $0.id.localizedStandardCompare($1.id) == .orderedAscending }
         }
     }
@@ -102,11 +108,19 @@ extension GoClient {
                                         trigger: draft.trigger.bridge,
                                         action: draft.action == .notify ? WD_ACTION_NOTIFY_AND_RECORD : WD_ACTION_RECORD,
                                         threshold: draft.threshold, cooldown_seconds: UInt32(clamping: draft.cooldown),
-                                        before_seconds: UInt32(clamping: draft.before), after_seconds: UInt32(clamping: draft.after), upload: draft.upload ? 1 : 0, model: strings.add(draft.model), model_revision: strings.add(draft.modelRevision), labels: nil, label_count: 0)
+                                        before_seconds: UInt32(clamping: draft.before), after_seconds: UInt32(clamping: draft.after), upload: draft.upload ? 1 : 0, model: strings.add(draft.model), model_revision: strings.add(draft.modelRevision), labels: nil, label_count: 0, audio: nil, ros2: nil, audio_count: 0, ros2_count: 0, telemetry: draft.telemetry ? 1 : 0)
             var labels: [UnsafeMutablePointer<CChar>?] = draft.labels.sorted().map { strings.add($0) }
-            try labels.withUnsafeMutableBufferPointer {
-                input.labels = $0.baseAddress; input.label_count = $0.count
-                try Self.finish(WDDeployCampaign(session, &input))
+            var audio: [UnsafeMutablePointer<CChar>?] = draft.audio.sorted().map { strings.add($0) }
+            var ros2: [UnsafeMutablePointer<CChar>?] = draft.ros2.sorted().map { strings.add($0) }
+            try audio.withUnsafeMutableBufferPointer { a in
+                input.audio = a.baseAddress; input.audio_count = a.count
+                try ros2.withUnsafeMutableBufferPointer { r in
+                    input.ros2 = r.baseAddress; input.ros2_count = r.count
+                    try labels.withUnsafeMutableBufferPointer {
+                        input.labels = $0.baseAddress; input.label_count = $0.count
+                        try Self.finish(WDDeployCampaign(session, &input))
+                    }
+                }
             }
         }
     }

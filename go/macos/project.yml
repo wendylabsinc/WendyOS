@@ -6,7 +6,8 @@ options:
 settings:
   base:
     WENDY_PUSH_ENVIRONMENT: development
-    SWIFT_VERSION: "5.10"
+    SWIFT_VERSION: "6.0"
+    SWIFT_STRICT_CONCURRENCY: complete
     MARKETING_VERSION: "0.1.0"
     CURRENT_PROJECT_VERSION: "1"
     ENABLE_USER_SCRIPT_SANDBOXING: NO
@@ -23,17 +24,28 @@ settings:
   configs:
     Release:
       WENDY_PUSH_ENVIRONMENT: production
+packages:
+  SwiftTerm:
+    url: https://github.com/migueldeicaza/SwiftTerm.git
+    exactVersion: 1.18.0
 targets:
   WendyDesktop:
     type: application
     platform: macOS
     sources:
       - path: Sources/App
+      - path: Resources/Install3D
+        type: folder
+        buildPhase: resources
+      - path: ../internal/cli/assets/docs/videos/installation
+        type: folder
+        buildPhase: resources
       - path: Sources/Shared/VPNConfiguration.swift
       - path: Resources/Notices
         type: folder
         buildPhase: resources
     dependencies:
+      - package: SwiftTerm
       - target: WendyNetwork
         embed: true
         codeSign: true
@@ -45,6 +57,8 @@ targets:
       - sdk: Security.framework
       - sdk: CoreFoundation.framework
       - sdk: UserNotifications.framework
+      - sdk: WebKit.framework
+      - sdk: AVKit.framework
       - sdk: AVFoundation.framework
       - sdk: CoreMedia.framework
       - sdk: AudioToolbox.framework
@@ -59,7 +73,7 @@ targets:
         INFOPLIST_KEY_NSLocalNetworkUsageDescription: Wendy discovers and connects to nearby devices.
         INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription: Wendy uses Bluetooth to connect to nearby mesh devices.
         INFOPLIST_KEY_NSSystemExtensionUsageDescription: Wendy routes selected device connections over mesh and cloud.
-        INFOPLIST_KEY_NSBonjourServices: ["_wendy._tcp", "_wendyos._tcp", "_wendy-mesh._udp"]
+        INFOPLIST_KEY_NSBonjourServices: ["_wendy._tcp", "_wendyos._tcp", "_wendy-mesh._udp", "_wendy-lite._tcp"]
         CODE_SIGN_ENTITLEMENTS: Resources/App.entitlements
         SWIFT_OBJC_BRIDGING_HEADER: Sources/Shared/Bridge.h
         OTHER_LDFLAGS: ["$(inherited)", "-lwendydesktop", "$(SRCROOT)/Build/libusb-1.0.dylib"]
@@ -126,6 +140,10 @@ targets:
           - VPNControls.swift
           - DataVisualizerView.swift
           - DataVisualizerTimeline.swift
+          - AccountPicker.swift
+          - SimulatorClient.swift
+          - SimulatorRenderer.swift
+          - SimulatorsView.swift
       - path: Sources/iOS
       - path: Resources/MobileAssets.xcassets
       - path: Sources/Shared/VPNConfiguration.swift
@@ -169,7 +187,7 @@ targets:
     type: bundle.unit-test
     platform: iOS
     deploymentTarget: "26.0"
-    sources: [Tests-iOS]
+    sources: [Tests-iOS, Tests/ThermalCameraTests.swift, Tests/ConcurrencyTests.swift]
     dependencies:
       - target: WendyMobile
     settings:

@@ -30,6 +30,7 @@ require (
 	github.com/dustin/go-humanize v1.0.1
 	github.com/ebitengine/oto/v3 v3.4.0
 	github.com/ebitengine/purego v0.9.0
+	github.com/foxglove/mcap/go/mcap v1.7.4
 	github.com/fsnotify/fsnotify v1.10.1
 	github.com/gen2brain/malgo v0.11.26
 	github.com/godbus/dbus/v5 v5.2.2
@@ -44,6 +45,7 @@ require (
 	github.com/klauspost/compress v1.19.2
 	github.com/mark3labs/mcp-go v0.54.0
 	github.com/mattn/go-isatty v0.0.21
+	github.com/mattn/go-sqlite3 v1.14.32
 	github.com/miekg/dns v1.1.72
 	github.com/moby/buildkit v0.32.2
 	github.com/moby/patternmatcher v0.6.1
@@ -162,6 +164,7 @@ require (
 	github.com/secure-systems-lab/go-securesystemslib v0.11.0 // indirect
 	github.com/shibumi/go-pathspec v1.3.0 // indirect
 	github.com/spf13/cast v1.7.1 // indirect
+	github.com/stretchr/testify v1.12.1 // indirect
 	github.com/tam7t/hpkp v0.0.0-20160821193359-2b70b4024ed5 // indirect
 	github.com/tonistiigi/go-csvvalue v0.0.0-20240814133006-030d3b2625d0 // indirect
 	github.com/tonistiigi/units v0.0.0-20180711220420-6950e57a87ea // indirect
@@ -181,6 +184,7 @@ require (
 	go.opentelemetry.io/otel/sdk v1.46.0 // indirect
 	go.opentelemetry.io/otel/trace v1.46.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
+	go.yaml.in/yaml/v3 v3.0.5 // indirect
 	golang.org/x/mod v0.41.0 // indirect
 	golang.org/x/text v0.42.0 // indirect
 	golang.org/x/tools v0.50.0 // indirect

@@ -13,7 +13,9 @@ import (
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/chat"
+	"github.com/wendylabsinc/wendy/go/internal/cli/commands"
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
+	"github.com/wendylabsinc/wendy/go/internal/shared/cloudrelay"
 )
 
 type ChatTurn struct {
@@ -42,11 +44,11 @@ type ChatSnapshot struct {
 
 // All HTTP requests are fixed to one selected device and port. A proxy from the
 // Mac's environment cannot intercept these requests; redirects are refused.
-func deviceChatTransport(conn *grpcclient.AgentConnection, port uint32) (*http.Transport, error) {
+func deviceChatTransport(conn *grpcclient.AgentConnection, port uint32) (*chatTransport, error) {
 	if port == 0 || port > 65535 {
 		return nil, errors.New("enter a port from 1 to 65535")
 	}
-	return &http.Transport{ResponseHeaderTimeout: 2 * time.Minute, DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
+	return &chatTransport{conn: conn, port: port, Transport: &http.Transport{ResponseHeaderTimeout: 2 * time.Minute, DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
 		if address != "wendy-device:80" {
 			return nil, errors.New("chat requests must stay on the selected device")
 		}
@@ -58,10 +60,48 @@ func deviceChatTransport(conn *grpcclient.AgentConnection, port uint32) (*http.T
 			return nil, errors.New("device has no model server address")
 		}
 		return (&net.Dialer{Timeout: 10 * time.Second}).DialContext(ctx, "tcp", net.JoinHostPort(host, strconv.Itoa(int(port))))
-	}}, nil
+	}}}, nil
 }
 
-func (b *Backend) ChatModels(session uint64, port uint32) ([]chat.ModelOption, error) {
+type chatTransport struct {
+	*http.Transport
+	conn *grpcclient.AgentConnection
+	port uint32
+}
+
+func (t *chatTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	response, err := t.Transport.RoundTrip(req)
+	var unsupported *cloudrelay.UnsupportedServiceError
+	if !errors.As(err, &unsupported) || req.Context().Err() != nil {
+		return response, err
+	}
+	// Only an unsupported service can take this path, before any HTTP bytes
+	// reach the device. Never retry an authorization failure or a sent request.
+	retry := req.Clone(req.Context())
+	if req.Body != nil && req.Body != http.NoBody {
+		if req.GetBody == nil {
+			return nil, err
+		}
+		retry.Body, err = req.GetBody()
+		if err != nil {
+			return nil, err
+		}
+		defer retry.Body.Close()
+	}
+	response, fallbackErr := commands.DesktopModelRoundTrip(retry, t.conn, t.port, t.ResponseHeaderTimeout)
+	if fallbackErr != nil {
+		return nil, fmt.Errorf("Cloud model connection failed: %w", errors.Join(unsupported, fallbackErr))
+	}
+	return response, nil
+}
+
+type DeviceChatModel struct {
+	chat.ModelOption
+	Port              uint32
+	UnavailableReason string
+}
+
+func (b *Backend) ChatModels(session uint64, port uint32) ([]DeviceChatModel, error) {
 	b.mu.Lock()
 	if session == 0 {
 		b.mu.Unlock()
@@ -72,15 +112,99 @@ func (b *Backend) ChatModels(session uint64, port uint32) ([]chat.ModelOption, e
 		b.mu.Unlock()
 		return nil, err
 	}
-	ctx, cancel := context.WithTimeout(b.life, 12*time.Second)
+	ctx, cancel := context.WithTimeout(b.life, 15*time.Second)
 	b.mu.Unlock()
 	defer cancel()
-	transport, err := deviceChatTransport(conn, port)
-	if err != nil {
-		return nil, err
+	if port == 0 || port > 65535 {
+		return nil, errors.New("enter a port from 1 to 65535")
 	}
-	defer transport.CloseIdleConnections()
-	return chat.DeviceModels(ctx, transport)
+	inventoryCtx, inventoryCancel := context.WithTimeout(ctx, 3*time.Second)
+	ports, _ := commands.DesktopModelPorts(inventoryCtx, conn)
+	inventoryCancel()
+	known := map[uint32]bool{}
+	for _, p := range ports {
+		known[p] = true
+	}
+	return discoverDeviceChatModels(ctx, port, ports, func(ctx context.Context, port uint32) ([]DeviceChatModel, error) {
+		transport, err := deviceChatTransport(conn, port)
+		if err != nil {
+			return nil, err
+		}
+		defer transport.CloseIdleConnections()
+		httpCtx, httpCancel := context.WithTimeout(ctx, 4*time.Second)
+		models, queryErr := chat.DeviceModels(httpCtx, transport)
+		httpCancel()
+		var result []DeviceChatModel
+		for _, model := range models {
+			result = append(result, DeviceChatModel{ModelOption: model})
+		}
+		if queryErr == nil || !known[port] {
+			return result, queryErr
+		}
+		names, inventoryErr := commands.DesktopDownloadedModelNames(ctx, conn, port)
+		if inventoryErr != nil {
+			return nil, queryErr
+		}
+		for _, name := range names {
+			result = append(result, DeviceChatModel{ModelOption: chat.ModelOption{ID: name, Name: name}, UnavailableReason: fmt.Sprintf("The model is downloaded, but its server on port %d could not be reached. Check that the model app is running, then retry.\n\n%v", port, queryErr)})
+		}
+		return result, nil
+	})
+}
+
+// Query known runtimes concurrently so an unavailable default server does not
+// hide downloaded models on another port. Prefer the requested server on duplicates.
+func discoverDeviceChatModels(ctx context.Context, preferred uint32, installed []uint32, query func(context.Context, uint32) ([]DeviceChatModel, error)) ([]DeviceChatModel, error) {
+	ports := []uint32{preferred}
+	seenPorts := map[uint32]bool{preferred: true}
+	for _, port := range installed {
+		if port > 0 && port <= 65535 && !seenPorts[port] {
+			ports = append(ports, port)
+			seenPorts[port] = true
+		}
+	}
+	results := make([][]DeviceChatModel, len(ports))
+	errs := make([]error, len(ports))
+	var wg sync.WaitGroup
+	slots := make(chan struct{}, 8)
+	for i, port := range ports {
+		wg.Go(func() {
+			select {
+			case slots <- struct{}{}:
+				defer func() { <-slots }()
+			case <-ctx.Done():
+				errs[i] = ctx.Err()
+				return
+			}
+			probeCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
+			defer cancel()
+			results[i], errs[i] = query(probeCtx, port)
+		})
+	}
+	wg.Wait()
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	var models []DeviceChatModel
+	seen := map[string]int{}
+	for i, list := range results {
+		for _, model := range list {
+			model.Port = ports[i]
+			if index, exists := seen[model.ID]; !exists {
+				seen[model.ID] = len(models)
+				models = append(models, model)
+			} else if models[index].UnavailableReason != "" && model.UnavailableReason == "" {
+				models[index] = model
+			}
+		}
+	}
+	if len(models) > 0 {
+		return models, nil
+	}
+	if errs[0] != nil {
+		return nil, errs[0]
+	}
+	return nil, chat.ErrNoModels
 }
 
 func (b *Backend) StartChat(session, turn uint64, port uint32, model string, messages []chat.Message) error {

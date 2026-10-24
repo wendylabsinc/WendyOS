@@ -255,11 +255,13 @@ private struct CampaignEditor: View {
                 Section("Camera") {
                     Picker("Camera", selection: $draft.camera) {
                         Text("Any camera").tag("*")
-                        ForEach(sources) { Text($0.title).tag($0.id).disabled(!$0.healthy) }
+                            if draft.trigger == .event { Text("No camera").tag("") }
+                        ForEach(sources.filter { $0.kind == "camera" }) { Text($0.title).tag($0.id).disabled(!$0.healthy) }
                     }
                     if loading { ProgressView() }
                     if let sourceError { FailureNote(message: sourceError) }
                 }
+                Section("Other recording sources") { recordingSources }
                 Section("Action") {
                     Picker("Action", selection: $draft.action) { ForEach(CampaignAction.allCases) { Text($0 == .notify ? "Record & notify" : "Record").tag($0) } }
                     Toggle("Upload to Wendy Cloud", isOn: $draft.upload)
@@ -311,13 +313,15 @@ private struct CampaignEditor: View {
                     ruleCard("On", icon: "web.camera", color: .blue) {
                         Picker("Camera", selection: $draft.camera) {
                             Text("Any camera").tag("*")
-                            ForEach(sources) { Text($0.title + ($0.healthy ? "" : " · Unavailable")).tag($0.id).disabled(!$0.healthy) }
+                            if draft.trigger == .event { Text("No camera").tag("") }
+                            ForEach(sources.filter { $0.kind == "camera" }) { Text($0.title + ($0.healthy ? "" : " · Unavailable")).tag($0.id).disabled(!$0.healthy) }
                         }.labelsHidden()
-                        Text(draft.camera == "*" ? "All healthy cameras on \(deviceName), including cameras paired later." : "Only this camera on \(deviceName).")
+                        Text(draft.camera.isEmpty ? "No camera recording." : draft.camera == "*" ? "All healthy cameras on \(deviceName), including cameras paired later." : "Only this camera on \(deviceName).")
                             .font(.caption).foregroundStyle(.secondary)
                         if loading { ProgressView().controlSize(.small) }
                         if let sourceError { FailureNote(message: sourceError) }
                     }
+                    ruleCard("Record", icon: "waveform.path", color: .green) { recordingSources }
                     ruleCard("Then", icon: "bell.badge", color: .orange) {
                         Picker("Action", selection: $draft.action) { ForEach(CampaignAction.allCases) { Text($0.rawValue).tag($0) } }.labelsHidden()
                         if draft.action == .notify {
@@ -359,6 +363,26 @@ private struct CampaignEditor: View {
                 }.keyboardShortcut(.defaultAction).disabled(!draft.valid || saving)
             }
         }.padding(24).desktopFrame(width: 680, height: 760).interactiveDismissDisabled(saving)
+    }
+
+    private var recordingSources: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            ForEach(["audio", "ros2"], id: \.self) { kind in
+                DisclosureGroup(kind == "audio" ? "Audio inputs" : "ROS 2 topics and domains") {
+                    ForEach(sources.filter { $0.kind == kind }) { source in
+                        Toggle(source.title, isOn: Binding(get: {
+                            kind == "audio" ? draft.audio.contains(source.id) : draft.ros2.contains(source.id)
+                        }, set: { selected in
+                            if kind == "audio" { if selected { draft.audio.insert(source.id) } else { draft.audio.remove(source.id) } }
+                            else { if selected { draft.ros2.insert(source.id) } else { draft.ros2.remove(source.id) } }
+                        })).disabled(!source.healthy).font(.caption)
+                    }
+                    if !sources.contains(where: { $0.kind == kind }) { Text("No sources discovered").foregroundStyle(.secondary).font(.caption) }
+                }
+            }
+            Toggle("Device telemetry", isOn: $draft.telemetry)
+            Text("Audio and ROS 2 recording start at the trigger. Select a ROS 2 domain to record all its topics, or select individual topics. Application records are included automatically.").font(.caption).foregroundStyle(.secondary)
+        }
     }
 
     private func ruleCard<Content: View>(_ title: String, icon: String, color: Color, @ViewBuilder content: () -> Content) -> some View {

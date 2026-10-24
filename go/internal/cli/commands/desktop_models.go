@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 	"time"
 
@@ -18,6 +19,26 @@ import (
 // Multi-platform Linux amd64/arm64 manifest, Ollama 0.40.10. Pinning avoids
 // changing the runtime silently when another model is downloaded.
 const desktopOllamaImage = "docker.io/ollama/ollama@sha256:4c5b27871a3239a717048f9b93057680a51b60c8119a7016aebb57f938e25e35"
+
+// DesktopModelPorts discovers installed, running runtimes without starting or
+// changing any apps. Runtime versions need not match the current installer.
+func DesktopModelPorts(ctx context.Context, conn *grpcclient.AgentConnection) ([]uint32, error) {
+	apps, err := listContainersOnConn(ctx, conn)
+	if err != nil {
+		return nil, err
+	}
+	var ports []uint32
+	seen := map[uint32]bool{}
+	for _, app := range apps {
+		port := app.GetHttpPort()
+		if port > 0 && port <= 65535 && !seen[port] && app.GetRunningState() == pb.AppRunningState_RUNNING && app.GetAppName() == fmt.Sprintf("sh.wendy.models.ollama.%d", port) {
+			seen[port] = true
+			ports = append(ports, port)
+		}
+	}
+	sort.Slice(ports, func(i, j int) bool { return ports[i] < ports[j] })
+	return ports, nil
+}
 
 func DesktopModelHardware(ctx context.Context, conn *grpcclient.AgentConnection) modelhub.Hardware {
 	var h modelhub.Hardware

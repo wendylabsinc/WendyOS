@@ -24,7 +24,9 @@ func ValidMotion(forward, lateral, yaw float64) bool {
 }
 
 // Move accepts only bounded planar velocity, never posture or mode changes.
-// Zero velocity uses StopMove. An acknowledgement is not physical acceptance.
+// Like Unitree's SportClient.Move, velocity updates use policy.noreply. Success
+// means the update was sent, not that the robot accepted or executed it.
+// Zero velocity still uses acknowledged StopMove.
 func (c *Connection) Move(ctx context.Context, forward, lateral, yaw float64) error {
 	if !ValidMotion(forward, lateral, yaw) {
 		return errors.New("Go2 velocity outside limits")
@@ -32,8 +34,24 @@ func (c *Connection) Move(ctx context.Context, forward, lateral, yaw float64) er
 	if forward == 0 && lateral == 0 && yaw == 0 {
 		return c.Stop(ctx)
 	}
+	ctx, cancel := context.WithTimeout(ctx, motionAckTimeout)
+	defer cancel()
 	parameter, _ := json.Marshal(map[string]float64{"x": forward, "y": lateral, "z": yaw})
-	return c.sportRequest(ctx, 1008, string(parameter))
+	for {
+		_, _, err := c.sendSportRequest(ctx, 1008, string(parameter))
+		if !errors.Is(err, errCommandBacklog) {
+			return err
+		}
+		// Let a previous data-channel message drain before sending the newest
+		// velocity. Do not hold motionMu here: Stop must be able to pass us.
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-c.done:
+			return errors.New("Go2 disconnected")
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
 }
 func (c *Connection) Stop(ctx context.Context) error { return c.sportRequest(ctx, 1003, "") }
 
@@ -43,6 +61,8 @@ func (c *Connection) LieDown(ctx context.Context) error { return c.sportRequest(
 func (c *Connection) Hello(ctx context.Context) error   { return c.sportRequest(ctx, 1016, "") }
 
 const motionAckTimeout = 200 * time.Millisecond
+
+var errCommandBacklog = errors.New("Go2 command channel is backlogged")
 
 // PostureAckTimeout allows the robot to finish a stand, lie-down or wave before
 // acknowledging it; Move and StopMove retain the shorter motionAckTimeout.
@@ -90,18 +110,24 @@ func (c *Connection) sendSportRequest(ctx context.Context, api uint64, parameter
 	if err := ctx.Err(); err != nil {
 		return 0, nil, err
 	}
-	if !c.Connected() || c.channel == nil || (api == 1008 && c.channel.BufferedAmount() != 0) {
-		return 0, nil, errors.New("Go2 command channel unavailable or backlogged")
+	if !c.Connected() || c.channel == nil {
+		return 0, nil, errors.New("Go2 command channel unavailable")
+	}
+	if api == 1008 && c.channel.BufferedAmount() != 0 {
+		return 0, nil, errCommandBacklog
 	}
 	// Keep numeric identifiers exactly representable by browser/robot JSON parsers.
 	id := c.requestID.Add(1) % 2147483648
-	response := make(chan int, 1)
-	c.responseMu.Lock()
-	if c.pending == nil {
-		c.pending = make(map[uint64]pendingSportRequest)
+	var response chan int
+	if api != 1008 {
+		response = make(chan int, 1)
+		c.responseMu.Lock()
+		if c.pending == nil {
+			c.pending = make(map[uint64]pendingSportRequest)
+		}
+		c.pending[id] = pendingSportRequest{api: api, response: response}
+		c.responseMu.Unlock()
 	}
-	c.pending[id] = pendingSportRequest{api: api, response: response}
-	c.responseMu.Unlock()
 	payload := struct {
 		Type  string `json:"type"`
 		Topic string `json:"topic"`
@@ -111,11 +137,19 @@ func (c *Connection) sendSportRequest(ctx context.Context, api uint64, parameter
 					ID  uint64 `json:"id"`
 					API uint64 `json:"api_id"`
 				} `json:"identity"`
+				Policy *struct {
+					NoReply bool `json:"noreply"`
+				} `json:"policy,omitempty"`
 			} `json:"header"`
 			Parameter string `json:"parameter"`
 		} `json:"data"`
 	}{Type: "req", Topic: sportTopic}
 	payload.Data.Header.Identity.ID, payload.Data.Header.Identity.API = id, api
+	if api == 1008 {
+		payload.Data.Header.Policy = &struct {
+			NoReply bool `json:"noreply"`
+		}{true}
+	}
 	payload.Data.Parameter = parameter
 	raw, _ := json.Marshal(payload)
 	if err := c.channel.SendText(string(raw)); err != nil {

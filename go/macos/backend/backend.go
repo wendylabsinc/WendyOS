@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/wendylabsinc/wendy/go/internal/agent/data/thermal"
 	"github.com/wendylabsinc/wendy/go/internal/cli/commands"
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/macos/vpn"
@@ -24,6 +25,8 @@ const (
 	EventLogsError
 	EventVideo
 	EventCameraError
+	EventJPEG
+	EventThermal
 )
 
 type Event struct {
@@ -32,8 +35,10 @@ type Event struct {
 	Text            string
 	Bytes           []byte
 	Log             *LogRecord
+	Thermal         *ThermalFrame
 }
 type Backend struct {
+	UnitreeControl          UnitreeController
 	modelRun                *ModelRun
 	chatTurn                *ChatTurn
 	chatEnvironment         *desktopChatEnvironment
@@ -45,6 +50,8 @@ type Backend struct {
 	connectCancel           context.CancelFunc
 	top                     commands.DesktopTopSampler
 	pinSelector, pinTarget  string
+	connectTarget           func(context.Context, string) (*grpcclient.AgentConnection, liteConnection, error)
+	lite                    liteConnection
 	connectDevice           func(context.Context, string) (*grpcclient.AgentConnection, error)
 	unpinDevice             func(string) error
 	cameraFirstFrameTimeout time.Duration
@@ -54,6 +61,8 @@ type Backend struct {
 	life                context.Context
 	stop                context.CancelFunc
 	logsStop, loginStop context.CancelFunc
+	logsDone            <-chan struct{}
+	cameraDevices       map[uint32]*pb.VideoDevice
 	videoStops          map[uint32]cameraSubscription
 	session             uint64
 	events              chan Event
@@ -62,7 +71,7 @@ type Backend struct {
 
 func New() *Backend {
 	return &Backend{events: make(chan Event, 64), cameraFirstFrameTimeout: 15 * time.Second,
-		connectDevice: commands.DesktopConnect, unpinDevice: commands.DesktopUnpin}
+		connectTarget: connectDesktopTarget, unpinDevice: commands.DesktopUnpin}
 }
 
 // IdentityRecoveryError exposes a recovery action without exposing a caller-
@@ -96,15 +105,20 @@ func (b *Backend) Poll() []Event {
 type cameraSubscription struct {
 	stream uint64
 	stop   context.CancelFunc
+	done   <-chan struct{}
 }
 
 func (b *Backend) stopCameras() {
 	for id, subscription := range b.videoStops {
 		subscription.stop()
+		if subscription.done != nil {
+			<-subscription.done
+		}
 		delete(b.videoStops, id)
 	}
 }
 func (b *Backend) disconnect() {
+	b.cameraDevices = nil
 	if b.chatEnvironment != nil {
 		b.chatEnvironment.close()
 		b.chatEnvironment = nil
@@ -123,10 +137,22 @@ func (b *Backend) disconnect() {
 	}
 	b.appForwards = nil
 	b.top = commands.DesktopTopSampler{}
+	if b.logsStop != nil {
+		b.logsStop()
+		b.logsStop = nil
+	}
+	if b.logsDone != nil {
+		<-b.logsDone
+		b.logsDone = nil
+	}
 	b.stopCameras()
 	if b.stop != nil {
 		b.stop()
 		b.stop = nil
+	}
+	if b.lite != nil {
+		b.lite.Close()
+		b.lite = nil
 	}
 	if b.conn != nil {
 		b.conn.Close()
@@ -142,11 +168,11 @@ func (b *Backend) begin() (context.Context, func()) {
 	return ctx, func() { cancel(); b.mu.Unlock() }
 }
 func (b *Backend) connection(session uint64) (*grpcclient.AgentConnection, error) {
-	if b.conn == nil {
-		return nil, errors.New("connect to a device first")
+	if err := b.validSession(session); err != nil {
+		return nil, err
 	}
-	if session != 0 && session != b.session {
-		return nil, errors.New("device session changed")
+	if b.lite != nil {
+		return nil, errors.New("this operation requires a WendyOS agent and is unavailable on Wendy Lite")
 	}
 	return b.conn, nil
 }
@@ -240,11 +266,46 @@ func (b *Backend) ConnectRequest(selector string, forgetIdentity bool, request u
 		}
 	}
 	b.pinSelector, b.pinTarget = "", ""
+	// USB Lite connections own an exclusive serial port. Release it before redialing the same board.
+	if b.lite != nil && b.deviceSelector == selector {
+		b.disconnect()
+	}
 	b.mu.Unlock()
 
+	// A Lite cloud relay retains its dial context for the stream lifetime.
+	// Forward setup cancellation until commit, then keep it until disconnect.
+	targetCtx, targetCancel := context.WithCancel(context.Background())
+	cancelSetup := context.AfterFunc(ctx, targetCancel)
+	committed := false
+	defer func() {
+		cancelSetup()
+		if !committed {
+			targetCancel()
+		}
+	}()
 	// Keep the current connection and its streams alive while dialing.
-	conn, err := b.connectDevice(ctx, selector)
-	if err == nil {
+	var conn *grpcclient.AgentConnection
+	var lite liteConnection
+	var err error
+	if b.connectDevice != nil {
+		conn, err = b.connectDevice(targetCtx, selector)
+	} else {
+		conn, lite, err = b.connectTarget(targetCtx, selector)
+	}
+	if err == nil && lite != nil {
+		client := lite
+		interrupt := context.AfterFunc(ctx, func() { client.Close() })
+		_, err = lite.GetDeviceInfo(3 * time.Second)
+		interrupt()
+		if err != nil {
+			lite.Close()
+			lite = nil
+		}
+	}
+	if err == nil && conn == nil && lite == nil {
+		err = errors.New("device connector returned no connection")
+	}
+	if err == nil && conn != nil {
 		_, err = conn.AgentService.GetAgentVersion(ctx, &pb.GetAgentVersionRequest{})
 		if err != nil {
 			conn.Close()
@@ -252,12 +313,16 @@ func (b *Backend) ConnectRequest(selector string, forgetIdentity bool, request u
 		}
 	}
 
+	cancelSetup()
 	b.mu.Lock()
 	b.connectMu.Lock()
 	if request != b.connectSequence || ctx.Err() != nil {
 		sameRequest := request == b.connectSequence
 		b.connectMu.Unlock()
 		b.mu.Unlock()
+		if lite != nil {
+			lite.Close()
+		}
 		if conn != nil {
 			conn.Close()
 		}
@@ -276,17 +341,22 @@ func (b *Backend) ConnectRequest(selector string, forgetIdentity bool, request u
 		b.mu.Unlock()
 		return 0, err
 	}
-	previousConnection := b.conn
+	previousConnection, previousLite := b.conn, b.lite
+	b.lite = nil
 	b.conn = nil
 	b.disconnect()
-	b.conn = conn
+	b.conn, b.lite = conn, lite
 	b.deviceSelector = selector
-	b.life, b.stop = context.WithCancel(context.Background())
+	b.life, b.stop = targetCtx, targetCancel
+	committed = true
 	session := b.session
 	b.connectMu.Unlock()
 	b.mu.Unlock()
 	// A tunnel's Close may wait for transport shutdown; never hold UI control
 	// or device-operation locks while doing that work.
+	if previousLite != nil {
+		previousLite.Close()
+	}
 	if previousConnection != nil {
 		previousConnection.Close()
 	}
@@ -325,6 +395,7 @@ func (b *Backend) StopVPN() error {
 	return nil
 }
 func (b *Backend) Shutdown() error {
+	b.UnitreeControl.Shutdown()
 	b.ReserveConnection()
 	_, done := b.begin()
 	defer done()
@@ -370,6 +441,9 @@ func listDesktopApps(ctx context.Context, conn *grpcclient.AgentConnection) ([]*
 func (b *Backend) Cameras() ([]*pb.VideoDevice, error) {
 	ctx, done := b.begin()
 	defer done()
+	if b.lite != nil {
+		return b.liteCameras()
+	}
 	conn, err := b.connection(0)
 	if err != nil {
 		return nil, err
@@ -378,12 +452,16 @@ func (b *Backend) Cameras() ([]*pb.VideoDevice, error) {
 	if err != nil {
 		return nil, err
 	}
+	b.cameraDevices = make(map[uint32]*pb.VideoDevice, len(v.Devices))
+	for _, d := range v.Devices {
+		b.cameraDevices[d.GetId()] = d
+	}
 	return v.Devices, nil
 }
 func (b *Backend) StopLogs() error {
 	_, done := b.begin()
 	defer done()
-	_, err := b.connection(0)
+	err := b.validSession(0)
 	if err != nil {
 		return err
 	}
@@ -395,12 +473,15 @@ func (b *Backend) StopLogs() error {
 func (b *Backend) StopCamera(camera uint32, streamID, sessionID uint64) error {
 	_, done := b.begin()
 	defer done()
-	_, err := b.connection(sessionID)
+	err := b.validSession(sessionID)
 	if err != nil {
 		return err
 	}
 	if subscription, ok := b.videoStops[camera]; ok && (streamID == 0 || subscription.stream == streamID) {
 		subscription.stop()
+		if subscription.done != nil {
+			<-subscription.done
+		}
 		delete(b.videoStops, camera)
 	}
 	return nil
@@ -408,7 +489,7 @@ func (b *Backend) StopCamera(camera uint32, streamID, sessionID uint64) error {
 func (b *Backend) StopCameras(sessionID uint64) error {
 	_, done := b.begin()
 	defer done()
-	_, err := b.connection(sessionID)
+	err := b.validSession(sessionID)
 	if err != nil {
 		return err
 	}
@@ -418,6 +499,9 @@ func (b *Backend) StopCameras(sessionID uint64) error {
 func (b *Backend) StartLogs(app string, streamID uint64) error {
 	_, done := b.begin()
 	defer done()
+	if b.lite != nil {
+		return b.startLiteLogs(app, streamID)
+	}
 	conn, err := b.connection(0)
 	if err != nil {
 		return err
@@ -462,6 +546,12 @@ func (b *Backend) StartLogs(app string, streamID uint64) error {
 func (b *Backend) StartCamera(camera uint32, streamID, sessionID uint64) error {
 	_, done := b.begin()
 	defer done()
+	if err := b.validSession(sessionID); err != nil {
+		return err
+	}
+	if b.lite != nil {
+		return b.startLiteCamera(camera, streamID)
+	}
 	conn, err := b.connection(sessionID)
 	if err != nil {
 		return err
@@ -474,7 +564,13 @@ func (b *Backend) StartCamera(camera uint32, streamID, sessionID uint64) error {
 	}
 	streamCtx, stop := context.WithCancel(b.life)
 	b.videoStops[camera] = cameraSubscription{stream: streamID, stop: stop}
-	stream, err := conn.VideoService.StreamVideo(streamCtx, &pb.StreamVideoRequest{DeviceId: camera, Codec: pb.VideoCodec_VIDEO_CODEC_H264})
+	device := b.cameraDevices[camera]
+	isThermal := thermal.IsPureThermal(device.GetName(), device.GetPixelFormats())
+	request := &pb.StreamVideoRequest{DeviceId: camera, StableId: device.GetStableId(), Codec: pb.VideoCodec_VIDEO_CODEC_H264}
+	if isThermal {
+		request.Codec = pb.VideoCodec_VIDEO_CODEC_RAW
+	}
+	stream, err := conn.VideoService.StreamVideo(streamCtx, request)
 	if err != nil {
 		stop()
 		return err
@@ -497,6 +593,16 @@ func (b *Backend) StartCamera(camera uint32, streamID, sessionID uint64) error {
 				return
 			}
 			if len(v.Data) == 0 {
+				continue
+			}
+			if isThermal {
+				measured, err := decodeThermalFrame(v)
+				if err != nil {
+					b.emitText(streamCtx, EventCameraError, session, streamID, err.Error())
+					return
+				}
+				firstFrame.Reset(5 * time.Second)
+				b.emit(streamCtx, Event{Kind: EventThermal, Session: session, Stream: streamID, Bytes: measured.RGBA, Thermal: measured})
 				continue
 			}
 			firstFrame.Stop()

@@ -115,3 +115,26 @@ func TestDesktopModelAutoPortDoesNotTreatFailedProbeAsFree(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestDesktopDiscoversInstalledModelRuntimePorts(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		port  uint32
+		state pb.AppRunningState
+		want  bool
+	}{
+		{"sh.wendy.models.ollama.11435", 11435, pb.AppRunningState_RUNNING, true},
+		{"sh.wendy.models.ollama.11435", 11435, pb.AppRunningState_STOPPED, false},
+		{"unrelated-app", 11435, pb.AppRunningState_RUNNING, false},
+		{"sh.wendy.models.ollama.11435", 11436, pb.AppRunningState_RUNNING, false},
+		{"sh.wendy.models.ollama.65536", 65536, pb.AppRunningState_RUNNING, false},
+	} {
+		t.Run(tt.name+tt.state.String(), func(t *testing.T) {
+			conn := &grpcclient.AgentConnection{ContainerService: runtimeInventory{app: &pb.AppContainer{AppName: tt.name, HttpPort: tt.port, RunningState: tt.state, AppVersion: "older-runtime"}}}
+			ports, err := DesktopModelPorts(context.Background(), conn)
+			if err != nil || (len(ports) == 1) != tt.want {
+				t.Fatalf("ports %v, %v", ports, err)
+			}
+		})
+	}
+}

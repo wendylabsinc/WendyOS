@@ -85,8 +85,8 @@ func WDCampaignSources(session C.uint64_t) *C.WDCampaignSourcesResult {
 	p.status = status(err)
 	var sources []C.WDCampaignSource
 	for _, row := range rows {
-		if row.GetKind() == "camera" {
-			sources = append(sources, C.WDCampaignSource{id: C.CString(row.GetId()), detail: C.CString(row.GetDetail()), healthy: boolInt(row.GetHealthy())})
+		if row.GetKind() == "camera" || row.GetKind() == "audio" || row.GetKind() == "ros2" || row.GetKind() == "telemetry" {
+			sources = append(sources, C.WDCampaignSource{kind: C.CString(row.GetKind()), id: C.CString(row.GetId()), detail: C.CString(row.GetDetail()), healthy: boolInt(row.GetHealthy())})
 		}
 	}
 	p.items, p.count = alloc[C.WDCampaignSource](len(sources)), C.size_t(len(sources))
@@ -102,6 +102,7 @@ func WDCampaignSourcesFree(p *C.WDCampaignSourcesResult) {
 	for _, r := range unsafe.Slice(p.items, int(p.count)) {
 		free(r.id)
 		free(r.detail)
+		free(r.kind)
 	}
 	free(p.items)
 	free(p.status.message)
@@ -147,12 +148,22 @@ func WDDeployCampaign(session C.uint64_t, in *C.WDCampaignInput) *C.WDStatus {
 	if in.label_count > 32 || (in.label_count > 0 && in.labels == nil) {
 		return statusResult(errors.New("choose at most 32 model labels"))
 	}
+	if in.audio_count > 256 || in.ros2_count > 256 || (in.audio_count > 0 && in.audio == nil) || (in.ros2_count > 0 && in.ros2 == nil) {
+		return statusResult(errors.New("invalid recording source selection"))
+	}
+	var audio, ros2 []string
+	for _, id := range unsafe.Slice(in.audio, int(in.audio_count)) {
+		audio = append(audio, C.GoString(id))
+	}
+	for _, id := range unsafe.Slice(in.ros2, int(in.ros2_count)) {
+		ros2 = append(ros2, C.GoString(id))
+	}
 	var labels []string
 	for _, l := range unsafe.Slice(in.labels, int(in.label_count)) {
 		labels = append(labels, C.GoString(l))
 	}
 	return statusResult(desktop.DeployCampaign(uint64(session), commands.DesktopCampaignInput{
-		Name: C.GoString(in.name), Camera: C.GoString(in.camera), Event: C.GoString(in.event), RunInference: in.trigger != C.WD_TRIGGER_APP_EVENT, Classification: in.trigger == C.WD_TRIGGER_CLASSIFICATION, Model: C.GoString(in.model), ModelRevision: C.GoString(in.model_revision), Labels: labels,
+		Audio: audio, ROS2: ros2, Telemetry: in.telemetry != 0, Name: C.GoString(in.name), Camera: C.GoString(in.camera), Event: C.GoString(in.event), RunInference: in.trigger != C.WD_TRIGGER_APP_EVENT, Classification: in.trigger == C.WD_TRIGGER_CLASSIFICATION, Model: C.GoString(in.model), ModelRevision: C.GoString(in.model_revision), Labels: labels,
 		Notify: in.action == C.WD_ACTION_NOTIFY_AND_RECORD, Upload: in.upload != 0, Threshold: float64(in.threshold),
 		Cooldown: uint32(in.cooldown_seconds), Before: uint32(in.before_seconds), After: uint32(in.after_seconds)}))
 }

@@ -9,7 +9,7 @@ struct HubModelFile: Identifiable {
     var estimatedMemory: Int64 { bytes + bytes / 4 + 4 * 1_073_741_824 }
 }
 struct HubModelDetails { let revision, license: String; let files: [HubModelFile] }
-struct ModelRunProgress { let model, progress, error: String; let done: Bool; let port: UInt32 }
+struct ModelRunProgress { let model, progress, error: String; let done: Bool; let port: UInt32; let completed, total: Int64 }
 enum ModelFit: Int { case unknown, comfortable, tight, tooLarge
     var title: String { switch self { case .unknown: "Capacity unknown"; case .comfortable: "Fits estimated budget"; case .tight: "Close to memory limit"; case .tooLarge: "Exceeds available capacity" } }
 }
@@ -49,10 +49,8 @@ struct ModelHardware {
 extension GoClient {
     // Catalog and hardware reads must not queue behind a long-running stream or
     // prevent the user from selecting another device.
-    func performModelRequest<T>(_ work: @escaping () throws -> T) async throws -> T {
-        try await withCheckedThrowingContinuation { continuation in
-            DispatchQueue.global(qos: .userInitiated).async { continuation.resume(with: Result { try work() }) }
-        }
+    func performModelRequest<T: Sendable>(unlessCancelled: Bool = true, _ work: @escaping @Sendable () throws -> T) async throws -> T {
+        try await BlockingWork.run(on: .global(qos: .userInitiated), unlessCancelled: unlessCancelled, work)
     }
     func searchHubModels(_ query: String) async throws -> [HubRepository] {
         try await performModelRequest {
@@ -93,8 +91,8 @@ extension GoClient {
         try await performModelRequest {
             guard let p = WDModelRunStatus(session, job) else { throw WendyError(message: "Missing download status.") }
             defer { WDModelRunFree(p) }; try Self.check(p.pointee.status)
-            return ModelRunProgress(model: Self.string(p.pointee.model), progress: Self.string(p.pointee.progress), error: Self.string(p.pointee.error), done: p.pointee.done != 0, port: p.pointee.port)
+            return ModelRunProgress(model: Self.string(p.pointee.model), progress: Self.string(p.pointee.progress), error: Self.string(p.pointee.error), done: p.pointee.done != 0, port: p.pointee.port, completed: p.pointee.completed, total: p.pointee.total)
         }
     }
-    func cancelModelRun(session: UInt64, job: UInt64) async throws { try await performModelRequest { try Self.finish(WDCancelModelRun(session, job)) } }
+    func cancelModelRun(session: UInt64, job: UInt64) async throws { try await performModelRequest(unlessCancelled: false) { try Self.finish(WDCancelModelRun(session, job)) } }
 }

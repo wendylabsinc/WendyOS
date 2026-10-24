@@ -102,7 +102,7 @@ struct ActivityView: View {
                 do { try await Task.sleep(for: .seconds(1)) } catch { return }
             }
         }
-        .onChange(of: model.apps) { _, _ in Task { await refresh() } }
+        .task(id: model.apps) { await refresh() }
         .task(id: selectedApp) { await refreshPorts() }
     }
 

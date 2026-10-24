@@ -178,8 +178,8 @@ struct NotificationReceivingView: View {
                 }.disabled(model.account?.signedIn != true)
             }
         }.task { await push.useAccount(model.account); await push.refreshAuthorization() }
-        .onChange(of: scenePhase) { _, phase in
-            if phase == .active { Task { await push.refreshAuthorization() } }
+        .task(id: scenePhase) {
+            if scenePhase == .active { await push.refreshAuthorization() }
         }
     }
     private func openSystemSettings() {

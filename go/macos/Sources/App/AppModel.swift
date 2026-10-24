@@ -8,9 +8,14 @@ import SwiftUI
 @MainActor
 final class AppModel: ObservableObject {
     @Published var nearby: [Device] = []
+    #if os(macOS)
+    @Published var nearbyUnitree: [UnitreeRobot] = UnitreeSavedDevices.load()
+    @Published var unitreeDiscoveryError: String?
+    #endif
     @Published var cloud: [Device] = []
     @Published var selection: Device?
     @Published var connected: Device?
+    @Published private(set) var connectedLite = false
     @Published var appActions: Set<String> = []
     @Published var appDeletion: AppDeletion?
     @Published var apps: [DeviceApp] = []
@@ -22,9 +27,9 @@ final class AppModel: ObservableObject {
     @Published var failedConnection: Device?
     @Published var connectionError: String?
     private var connectionAttempt: UInt64 = 0
-    private let connectDevice: (String, UInt64, Bool) async throws -> UInt64
+    private let connectDevice: (String, UInt64, Bool) async throws -> DeviceConnection
 
-    init(connectDevice: @escaping (String, UInt64, Bool) async throws -> UInt64 = { selector, request, forgetIdentity in
+    init(connectDevice: @escaping (String, UInt64, Bool) async throws -> DeviceConnection = { selector, request, forgetIdentity in
         try await GoClient.shared.connect(selector: selector, request: request, forgetIdentity: forgetIdentity)
     }) {
         self.connectDevice = connectDevice
@@ -70,10 +75,14 @@ final class AppModel: ObservableObject {
     private var cameraStream: UInt64 = 0
     private var cameraWallVisible = false
     private var cameraBatch: UInt64 = 0
-    private var polling: Task<Void, Never>?
+    private var starting = false
+    private var shuttingDown = false
+    private var cameraStops: [UUID: Task<Void, Never>] = [:]
 
     func start() async {
-        guard !initialized, ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil else { return }
+        guard !initialized, !starting, ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil else { return }
+        starting = true
+        defer { starting = false }
         do {
             #if os(iOS)
             try await client.initializeMobile()
@@ -84,32 +93,53 @@ final class AppModel: ObservableObject {
             try await client.initialize(cliPath: cli.path)
             #endif
             initialized = true
-            polling = Task { [weak self] in
-                while !Task.isCancelled {
-                    guard let self else { return }
-                    do { for event in try await self.client.poll() { self.receive(event) } }
-                    catch { self.alert = error.localizedDescription; return }
-                    try? await Task.sleep(for: .milliseconds(16))
-                }
-            }
             await refreshAccount()
             await refreshNearby()
             if account?.signedIn == true { await refreshCloud() }
-        } catch { alert = error.localizedDescription }
+        } catch { if !Task.isCancelled { alert = error.localizedDescription } }
+    }
+
+    /// Called by the root view's task, so leaving the scene cancels polling.
+    func observeEvents() async {
+        guard initialized else { return }
+        while !Task.isCancelled && !shuttingDown {
+            do {
+                for event in try await client.poll() {
+                    try Task.checkCancellation()
+                    guard !shuttingDown else { return }
+                    await receive(event)
+                }
+                try await Task.sleep(for: .milliseconds(16))
+            } catch {
+                if !Task.isCancelled && !shuttingDown { alert = error.localizedDescription }
+                return
+            }
+        }
     }
 
     func refreshAccount() async {
         guard initialized else { return }
         do { account = try await client.account(); accountError = nil; await PushNotifications.shared.useAccount(account) }
-        catch { accountError = error.localizedDescription }
+        catch { if !Task.isCancelled { accountError = error.localizedDescription } }
     }
 
     func refreshNearby() async {
         guard initialized, !discovering else { return }
         discovering = true
         defer { discovering = false }
+        #if os(macOS)
+        async let robots = UnitreeClient.shared.robots()
+        #endif
         do { nearby = try await client.nearby(); nearbyError = nil }
-        catch { nearbyError = error.localizedDescription }
+        catch { if !Task.isCancelled { nearbyError = error.localizedDescription } }
+        #if os(macOS)
+        do {
+            let discovered = try await robots.robots
+            nearbyUnitree = UnitreeSavedDevices.merge(saved: UnitreeSavedDevices.load(), discovered: discovered)
+            unitreeDiscoveryError = nil
+        }
+        catch { nearbyUnitree = UnitreeSavedDevices.load(); unitreeDiscoveryError = error.localizedDescription }
+        #endif
     }
 
     func refreshCloud() async {
@@ -117,37 +147,43 @@ final class AppModel: ObservableObject {
         discovering = true
         defer { discovering = false }
         do { cloud = try await client.cloud(); cloudError = nil }
-        catch { cloudError = error.localizedDescription }
+        catch { if !Task.isCancelled { cloudError = error.localizedDescription } }
     }
 
-    func connect(_ device: Device, forgetIdentity: Bool = false) async {
+    func connect(_ device: Device, forgetIdentity: Bool = false, force: Bool = false) async {
         let attempt = client.beginConnection()
         connectionAttempt = attempt
         selection = device
         detailError = nil
         failedConnection = nil; connectionError = nil
         canForgetIdentity = false
-        if connected?.id == device.id && !forgetIdentity {
+        if connected?.id == device.id && !forgetIdentity && !force {
             connectingDevice = nil
             return
         }
         connectingDevice = device
         do {
-            let newSession = try await connectDevice(device.selector, attempt, forgetIdentity)
+            let connection = try await connectDevice(device.selector, attempt, forgetIdentity)
             guard connectionAttempt == attempt else { return }
+            let newSession = connection.session
+            connectedLite = connection.lite
             cameraFeeds.forEach { $0.pause() }
             cameraFeeds = []; cameras = []; apps = []; logs = []
             deviceChat.stop()
             deviceChat = DeviceChatModel(session: newSession)
             session = newSession
-            selection = device; connected = device
+            var resolvedDevice = device
+            resolvedDevice.lite = connection.lite
+            selection = resolvedDevice; connected = resolvedDevice
             detailError = nil; appsError = nil; camerasError = nil; logError = nil
             connectingDevice = nil
             await refreshDetails()
         } catch {
             guard connectionAttempt == attempt else { return }
             connectingDevice = nil
+            guard !Task.isCancelled else { return }
             canForgetIdentity = (error as? WendyError)?.canForgetIdentity ?? false
+            if connected?.id == device.id { connected = nil; connectedLite = false }
             failedConnection = device
             detailError = error.localizedDescription
         }
@@ -158,14 +194,14 @@ final class AppModel: ObservableObject {
         let capturedSession = session
         do {
             let url = try await client.openApp(app.appName, session: capturedSession)
-            guard session == capturedSession else { return }
+            guard session == capturedSession, !Task.isCancelled else { return }
             #if os(macOS)
             if !NSWorkspace.shared.open(url) { alert = "Could not open the app webpage in your browser." }
             #else
             webpageURL = url
             #endif
         } catch {
-            guard session == capturedSession else { return }
+            guard session == capturedSession, !Task.isCancelled else { return }
             alert = error.localizedDescription
         }
     }
@@ -178,12 +214,12 @@ final class AppModel: ObservableObject {
         do {
             if running { try await client.startApp(app, session: capturedSession) }
             else { try await client.stopApp(app, session: capturedSession) }
-            guard session == capturedSession else { return }
+            guard session == capturedSession, !Task.isCancelled else { return }
             let updated = try await client.apps()
-            guard session == capturedSession else { return }
+            guard session == capturedSession, !Task.isCancelled else { return }
             apps = updated
         } catch {
-            guard session == capturedSession else { return }
+            guard session == capturedSession, !Task.isCancelled else { return }
             alert = error.localizedDescription
         }
     }
@@ -239,16 +275,16 @@ final class AppModel: ObservableObject {
         guard connected != nil else { return }
         let capturedSession = session
         do {
-            let result = try await client.apps()
-            guard session == capturedSession else { return }
+            let result = connectedLite ? [] : try await client.apps()
+            guard session == capturedSession, !Task.isCancelled else { return }
             apps = result; appsError = nil
         } catch {
-            guard session == capturedSession else { return }
+            guard session == capturedSession, !Task.isCancelled else { return }
             appsError = error.localizedDescription
         }
         do {
             let result = try await client.cameras()
-            guard session == capturedSession else { return }
+            guard session == capturedSession, !Task.isCancelled else { return }
             cameras = result
             let previous = Dictionary(uniqueKeysWithValues: cameraFeeds.map { ($0.camera.id, $0) })
             for feed in cameraFeeds where !cameras.contains(where: { $0.id == feed.camera.id }) {
@@ -272,9 +308,9 @@ final class AppModel: ObservableObject {
         catch { if logStream == stream { logError = error.localizedDescription } }
     }
 
-    func showCameraWall() {
+    func showCameraWall() async {
         cameraWallVisible = true
-        Task { await playCameras() }
+        await playCameras()
     }
 
     func hideCameraWall() {
@@ -298,10 +334,14 @@ final class AppModel: ObservableObject {
         cameraStream &+= 1
         let stream = cameraStream
         feed.start(stream: stream)
+        let currentSession = session
         do {
-            try await client.startCamera(id: feed.camera.id, stream: stream, session: session)
+            try await client.startCamera(id: feed.camera.id, stream: stream, session: currentSession)
         } catch {
-            feed.fail(error.localizedDescription, stream: stream)
+            if Task.isCancelled {
+                if feed.stream == stream { feed.pause() }
+                try? await client.stopCamera(id: feed.camera.id, stream: stream, session: currentSession)
+            } else { feed.fail(error.localizedDescription, stream: stream) }
         }
     }
 
@@ -310,7 +350,11 @@ final class AppModel: ObservableObject {
         feed.pause()
         guard stream != 0 else { return }
         let currentSession = session
-        Task {
+        // onDisappear is synchronous. Own these cleanup tasks until completion
+        // and join any remaining stops before shutting down the backend.
+        let id = UUID()
+        cameraStops[id] = Task {
+            defer { cameraStops[id] = nil }
             try? await client.stopCamera(id: feed.camera.id, stream: stream, session: currentSession)
         }
     }
@@ -329,7 +373,7 @@ final class AppModel: ObservableObject {
 
     func cancelLogin() async {
         do { try await client.cancelLogin(); signingIn = false; loginURL = nil }
-        catch { alert = error.localizedDescription }
+        catch { if !Task.isCancelled { alert = error.localizedDescription } }
     }
 
     func enableVPN() async {
@@ -359,12 +403,16 @@ final class AppModel: ObservableObject {
     }
 
     func shutdown() async {
+        shuttingDown = true
+        deviceChat.stop()
+        pauseCameras()
+        for task in cameraStops.values { await task.value }
         try? await vpn.stop()
         try? await client.shutdown()
-        polling?.cancel()
+        initialized = false
     }
 
-    private func receive(_ event: BridgeEvent) {
+    private func receive(_ event: BridgeEvent) async {
         switch event.payload {
         case .loginURL(let text):
             if let url = URL(string: text), url.scheme == "https" {
@@ -375,7 +423,7 @@ final class AppModel: ObservableObject {
             }
         case .loginDone:
             signingIn = false; loginURL = nil
-            Task { await refreshAccount(); await refreshCloud(); await refreshNearby() }
+            await refreshAccount(); await refreshCloud(); await refreshNearby()
         case .loginError(let text):
             if signingIn { alert = text }
             signingIn = false; loginURL = nil
@@ -386,7 +434,7 @@ final class AppModel: ObservableObject {
                 guard event.stream == logStream else { return }
                 logs.append(text)
                 if logs.count > 2000 { logs.removeFirst(logs.count - 2000) }
-            case .video:
+            case .video, .jpeg, .thermal:
                 cameraFeeds.first(where: { $0.stream == event.stream })?.receive(event)
             case .logsError(let text): if event.stream == logStream { logError = text }
             case .cameraError: cameraFeeds.first(where: { $0.stream == event.stream })?.receive(event)

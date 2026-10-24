@@ -83,25 +83,29 @@ struct MobileRootView: View {
                 }
             }
         }
-        .task { await model.start(); await model.refreshMobileCloudSelection() }
+        .task { await model.start() }
+        .task(id: model.initialized) { await model.observeEvents() }
+        .task(id: model.account) { await model.refreshMobileCloudSelection() }
         .onChange(of: model.account?.signedIn) { _, signedIn in
-            Task { await model.refreshMobileCloudSelection() }
             if signedIn != true, destination == .organization || destination == .sites {
                 destination = nil
                 preferredColumn = .sidebar
             }
         }
-        .onChange(of: source) { _, _ in Task { await refresh() } }
-        .onChange(of: destination) { _, value in
-            if case .device(let id) = value, let device = (model.nearby + model.cloud + [model.selection].compactMap { $0 }).first(where: { $0.id == id }) {
+        .task(id: source) { await refresh() }
+        .task(id: destination) {
+            if case .device(let id) = destination, let device = (model.nearby + model.cloud + [model.selection].compactMap { $0 }).first(where: { $0.id == id }) {
                 model.selection = device
                 preferredColumn = .detail
-                Task { await model.connect(device) }
+                await model.connect(device)
             }
         }
         .onChange(of: scenePhase) { _, phase in
             if phase == .background { model.hideCameraWall() }
-            if phase == .active { Task { await model.refreshAccount() } }
+
+        }
+        .task(id: scenePhase) {
+            if scenePhase == .active { await model.refreshAccount() }
         }
         .sheet(isPresented: $accounts) {
             MobileAccountsView(model: model) { development in
@@ -155,7 +159,7 @@ private struct MobileDeviceView: View {
     @State private var pane = MobilePane.chat
     var body: some View {
         VStack(spacing: 0) {
-            ScrollView(.horizontal) {
+            if !model.connectedLite { ScrollView(.horizontal) {
                 HStack(spacing: 8) {
                     ForEach(MobilePane.allCases) { item in
                         Button { pane = item } label: {
@@ -165,11 +169,14 @@ private struct MobileDeviceView: View {
                         }.buttonStyle(.plain)
                     }
                 }.padding(.horizontal).padding(.vertical, 8)
-            }.scrollIndicators(.hidden)
+            }.scrollIndicators(.hidden) }
             Divider()
             if model.connectingDevice != nil { ProgressView("Connecting to \(device.title)…").frame(maxWidth: .infinity, maxHeight: .infinity) }
             else if let error = model.detailError { FailureView(title: "Could not connect", error: error) { Task { await model.connect(device) } } }
-            else if model.selectedDeviceReady { content.id(model.deviceSession) }
+            else if model.selectedDeviceReady {
+                if model.connectedLite { LiteDeviceView(model: model).id(model.deviceSession) }
+                else { content.id(model.deviceSession) }
+            }
         }
         .navigationTitle(device.title).navigationBarTitleDisplayMode(.inline)
         .toolbar {
@@ -179,7 +186,7 @@ private struct MobileDeviceView: View {
                         .navigationTitle("Settings").navigationBarTitleDisplayMode(.inline)
                 } label: { Image(systemName: "gearshape") }
                 .accessibilityLabel("Device settings")
-                .disabled(!model.selectedDeviceReady)
+                .disabled(!model.selectedDeviceReady || model.connectedLite)
             }
         }
 
@@ -206,11 +213,11 @@ struct CameraWallView: View {
             }.padding()
         }.refreshable { await model.refreshDetails() }
             .scrollBounceBehavior(.always, axes: .vertical)
-            .onAppear { model.showCameraWall() }.onDisappear { model.hideCameraWall() }
-            .onChange(of: scenePhase) { _, phase in
-                if phase == .active { model.showCameraWall() }
-                else if phase == .background { model.hideCameraWall() }
+            .task(id: scenePhase) {
+                if scenePhase == .active { await model.showCameraWall() }
+                else if scenePhase == .background { model.hideCameraWall() }
             }
+            .onDisappear { model.hideCameraWall() }
     }
 }
 private struct MobileCameraTile: View {
@@ -218,7 +225,7 @@ private struct MobileCameraTile: View {
     @ObservedObject var model: AppModel
     @State private var showingError = false
     var body: some View {
-        CameraDisplayView(decoder: feed.decoder)
+        CameraFeedDisplay(feed: feed)
             .aspectRatio(4 / 3, contentMode: .fit).background(.black)
             .overlay(alignment: .bottom) {
                 HStack(alignment: .bottom, spacing: 12) {

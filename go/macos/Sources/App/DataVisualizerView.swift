@@ -2,6 +2,8 @@ import SwiftUI
 import AppKit
 import ImageIO
 import AVFoundation
+import SceneKit
+import UniformTypeIdentifiers
 
 struct DataVisualizerView: View {
     let session: UInt64
@@ -24,6 +26,10 @@ struct DataVisualizerView: View {
     @State private var numericTrack = ""
     @State private var imageTrack = ""
     @State private var selectedTrack = ""
+    @State private var sensorTrack = ""
+    @State private var exporting = false
+    @State private var recordingSheet = false
+    @State private var exportedURL: URL?
     @State private var viewport: DataTimelineViewport?
 
     private var loading: Bool { loadingList || loadingEpisode }
@@ -35,10 +41,17 @@ struct DataVisualizerView: View {
                     Text("Choose an episode").tag("")
                     ForEach(episodes) { item in Text(episodeLabels[item.id] ?? item.title).tag(item.id) }
                 }.frame(maxWidth: 440).disabled(loadingList)
+                Button { recordingSheet = true } label: { Label("Record", systemImage: "record.circle") }
+                Menu {
+                    Button("Full episode (.zip)") { exportEpisode() }
+                    Button("Visible measurements (.csv)") { exportMeasurements() }.disabled(snapshot == nil)
+                    Button("LiDAR preview at cursor (.ply)") { exportPoints() }.disabled(index.latest(track: sensorTrack, at: cursor)?.points.isEmpty != false)
+                } label: { Label(exporting ? "Exporting…" : "Export", systemImage: "square.and.arrow.up") }.disabled(episode.isEmpty || loading || exporting)
+                if let exportedURL { Button("Show export") { NSWorkspace.shared.activateFileViewerSelecting([exportedURL]) } }
                 Spacer()
-                if loading { ProgressView().controlSize(.small) }
+                if loading || exporting { ProgressView().controlSize(.small) }
                 Text(deviceName).font(.callout).foregroundStyle(.secondary).lineLimit(1)
-            }.padding(.horizontal, 20).padding(.vertical, 12)
+            }.padding(.horizontal, 12).padding(.vertical, 8)
             Divider()
             if let error {
                 FailureNote(message: error).padding(16).frame(maxWidth: .infinity, alignment: .leading)
@@ -48,7 +61,7 @@ struct DataVisualizerView: View {
             } else if loading {
                 Spacer(); ProgressView("Loading recorded data"); Spacer()
             } else {
-                ContentUnavailableView("Explore a recording", systemImage: "waveform.path.ecg", description: Text("Choose a Wendy Data episode to inspect camera tracks, events, and measurements on one timeline."))
+                ContentUnavailableView("Explore a recording", systemImage: "waveform.path.ecg", description: Text("Choose a Wendy Data episode to replay cameras and audio, inspect LiDAR, events, and measurements on one timeline."))
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
@@ -64,6 +77,12 @@ struct DataVisualizerView: View {
                 previous = now
                 if let viewport { self.viewport = viewport.revealing(cursor, within: timelineBounds(snapshot)) }
                 if cursor >= snapshot.end { playing = false }
+            }
+        }
+        .sheet(isPresented: $recordingSheet) {
+            DataVisualRecordingSheet(session: session, deviceName: deviceName) { id in
+                refreshID += 1
+                if let id { episode = id }
             }
         }
         .onDisappear { playing = false }
@@ -97,7 +116,7 @@ struct DataVisualizerView: View {
                     VSplitView {
                         HSplitView {
                             imagePanel(data).frame(minWidth: 220, maxWidth: .infinity, minHeight: 180, maxHeight: .infinity)
-                            numericPanel(data).frame(minWidth: 260, maxWidth: .infinity, minHeight: 180, maxHeight: .infinity)
+                            sensorPanel(data).frame(minWidth: 260, maxWidth: .infinity, minHeight: 180, maxHeight: .infinity)
                         }
                         HSplitView {
                             eventsPanel(data).frame(minWidth: 220, maxWidth: .infinity, minHeight: 130, maxHeight: .infinity)
@@ -116,6 +135,7 @@ struct DataVisualizerView: View {
             }
         }.onChange(of: selectedTrack) { _, id in
             if index.numeric[id] != nil { numericTrack = id }
+            if let track = data.tracks.first(where: { $0.id == id }), track.kind == "lidar" || track.kind == "audio" { sensorTrack = id } else if index.numeric[id] != nil { sensorTrack = "" }
             if index.imageTrackIDs.contains(id) { imageTrack = id }
         }
     }
@@ -150,6 +170,68 @@ struct DataVisualizerView: View {
                 Text("Frame at \(timeLabel(sample.seconds)) · \(timeLabel(cursor - sample.seconds)) before cursor").font(.caption2).foregroundStyle(.secondary).padding(6)
             }
         }
+    }
+
+    private func sensorPanel(_ data: DataVisualSnapshot) -> some View {
+        let track = data.tracks.first { $0.id == sensorTrack }
+        let sample = index.latest(track: sensorTrack, at: cursor)
+        return VStack(spacing: 0) {
+            if data.tracks.contains(where: { $0.kind == "audio" || $0.kind == "lidar" }) {
+                HStack {
+                    Picker("Sensor", selection: $sensorTrack) {
+                        Text("Measurements").tag("")
+                        ForEach(data.tracks.filter { $0.kind == "audio" || $0.kind == "lidar" }) { Text($0.name).tag($0.id) }
+                    }
+                }.padding(8)
+            }
+            if track?.kind == "lidar" {
+                if let sample {
+                    DataVisualPointCloud(sample: sample, recording: index.id)
+                    Text("Sensor frame · meters · drag to orbit, scroll to zoom").font(.caption2).foregroundStyle(.secondary).padding(6)
+                    Text("Frame at \(timeLabel(sample.seconds)) · \(sample.points.count) preview points").font(.caption2).foregroundStyle(.secondary).padding(.bottom, 6)
+                } else { ContentUnavailableView("No LiDAR frame at this time", systemImage: "cube.transparent").frame(maxHeight: .infinity) }
+            } else if track?.kind == "audio" {
+                let segment = data.audio.last { $0.track == sensorTrack && cursor >= $0.start && cursor < $0.end }
+                Label(segment == nil ? "No audio at this time" : playing ? "Playing audio" : "Audio paused", systemImage: "waveform").padding(12)
+                DataVisualPlot(recording: index.id, track: sensorTrack, samples: index.numeric[sensorTrack] ?? [], range: 0...1, start: visibleWindow(data).start, end: visibleWindow(data).end, cursor: cursor)
+                    .overlay { timelineInteraction(data) }.clipped().padding(12)
+                if let segment {
+                    DataVisualAudioPlayer(segment: segment, cursor: cursor, playing: playing, speed: speed, owner: data.mediaFiles).id(segment.id).frame(height: 18)
+                }
+                Text("Peak amplitude · audio follows the playback cursor").font(.caption2).foregroundStyle(.secondary).padding(8)
+            } else { numericPanel(data) }
+        }
+    }
+
+    private func exportEpisode() {
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.zip]
+        panel.nameFieldStringValue = "wendy-episode.zip"
+        panel.message = "Export the complete recording, including original ROS bags, WAV audio, video, and metadata."
+        guard panel.runModal() == .OK, let destination = panel.url else { return }
+        let selectedEpisode = episode
+        exporting = true; error = nil; exportedURL = nil
+        Task {
+            defer { exporting = false }
+            do { try await GoClient.shared.exportVisualEpisode(session: session, episode: selectedEpisode, destination: destination); exportedURL = destination }
+            catch { self.error = error.localizedDescription }
+        }
+    }
+    private func exportMeasurements() {
+        guard let snapshot else { return }
+        let panel = NSSavePanel(); panel.allowedContentTypes = [.commaSeparatedText]; panel.nameFieldStringValue = "measurements.csv"
+        panel.message = "Export the measurements loaded in this viewer. Use Full episode for the complete original data."
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do { try DataVisualExport.csv(snapshot.samples).write(to: url, atomically: true, encoding: .utf8); exportedURL = url }
+        catch { self.error = error.localizedDescription }
+    }
+    private func exportPoints() {
+        guard let sample = index.latest(track: sensorTrack, at: cursor), !sample.points.isEmpty else { return }
+        let panel = NSSavePanel(); panel.allowedContentTypes = [UTType(filenameExtension: "ply") ?? .data]; panel.nameFieldStringValue = "lidar-preview.ply"
+        panel.message = "Export this preview in sensor coordinates. Use Full episode to retain all points and fields."
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do { try DataVisualExport.ply(sample).write(to: url, atomically: true, encoding: .utf8); exportedURL = url }
+        catch { self.error = error.localizedDescription }
     }
 
     private func numericPanel(_ data: DataVisualSnapshot) -> some View {
@@ -239,7 +321,7 @@ struct DataVisualizerView: View {
                     if cursor >= data.end { cursor = data.start }
                     playing.toggle()
                 } label: { Image(systemName: playing ? "pause.fill" : "play.fill") }.help(playing ? "Pause" : "Play")
-                Picker("Speed", selection: $speed) { Text("½×").tag(0.5); Text("1×").tag(1.0); Text("2×").tag(2.0); Text("4×").tag(4.0) }.labelsHidden().frame(width: 65)
+                Picker("Speed", selection: $speed) { Text("½×").tag(0.5); Text("1×").tag(1.0); Text("2×").tag(2.0); if data.audio.isEmpty { Text("4×").tag(4.0) } }.labelsHidden().frame(width: 65)
                 Text(timeLabel(cursor)).font(.system(.callout, design: .monospaced)).monospacedDigit()
                 Spacer()
                 Text("Drag to seek · Scroll sideways to pan").font(.caption2).foregroundStyle(.secondary)
@@ -337,7 +419,9 @@ struct DataVisualizerView: View {
             let value = try await GoClient.shared.visualEpisode(session: session, episode: episode)
             guard !Task.isCancelled else { return }
             snapshot = value
+            if !value.audio.isEmpty { speed = min(speed, 2) }
             index = DataVisualIndex(value)
+            sensorTrack = value.tracks.first(where: { $0.kind == "lidar" || $0.kind == "audio" })?.id ?? ""
             cursor = value.videos.first?.timestamps.first ?? value.start
             viewport = timelineBounds(value)
             numericTrack = value.samples.first(where: { $0.value != nil })?.track ?? ""
@@ -371,7 +455,7 @@ final class DataVisualIndex {
                 numericRanges[sample.track] = min(previous.lowerBound, value)...max(previous.upperBound, value)
             }
             if sample.image != nil { imageTrackIDs.insert(sample.track) }
-            if sample.value == nil && sample.image == nil && !sample.label.hasPrefix("Frame ") { eventSamples.append(sample) }
+            if sample.value == nil && sample.image == nil && sample.points.isEmpty && !sample.label.hasPrefix("Frame ") { eventSamples.append(sample) }
         }
         imageTrackIDs.formUnion(data.videos.map(\.track))
         imageTracks = data.tracks.filter { imageTrackIDs.contains($0.id) }
@@ -397,7 +481,7 @@ final class DataVisualIndex {
 private struct DataVisualEventRow: View, Equatable {
     let event: DataVisualSample
     let recording: UUID
-    static func == (lhs: Self, rhs: Self) -> Bool { lhs.recording == rhs.recording && lhs.event.id == rhs.event.id }
+    nonisolated static func == (lhs: Self, rhs: Self) -> Bool { lhs.recording == rhs.recording && lhs.event.id == rhs.event.id }
     var body: some View {
         HStack(alignment: .top) {
             Text(timeLabel(event.seconds)).font(.caption.monospacedDigit()).foregroundStyle(.secondary).frame(width: 80, alignment: .leading)
@@ -441,12 +525,12 @@ private struct DataVisualVideoPlayer: NSViewRepresentable {
     let playing: Bool
     let speed: Double
     let mediaOwner: DataVisualMediaFiles
-    final class Coordinator {
+    @MainActor final class Coordinator {
         let player: AVPlayer
         let owner: DataVisualMediaFiles
         private var seeks = DataVisualSeekState()
         private var readyObservation: NSKeyValueObservation?
-        private var scheduledSeek: DispatchWorkItem?
+        private var scheduledSeek: Task<Void, Never>?
         private var lastSeekHost = -Double.infinity
         private var active = true
         private var wantsPlayback = false
@@ -464,7 +548,7 @@ private struct DataVisualVideoPlayer: NSViewRepresentable {
             player.automaticallyWaitsToMinimizeStalling = false
             readyObservation = player.currentItem?.observe(\.status, options: [.initial, .new]) { [weak self] item, _ in
                 guard item.status == .readyToPlay else { return }
-                DispatchQueue.main.async {
+                Task { @MainActor in
                     guard let self, self.active else { return }
                     if self.wantsPlayback { self.startPlayback() } else { self.scheduleSeek() }
                 }
@@ -479,7 +563,7 @@ private struct DataVisualVideoPlayer: NSViewRepresentable {
             playbackHost = hostTime
             if playing {
                 if changed { needsPlaybackAnchor = true }
-                scheduledSeek?.cancel(); scheduledSeek = nil
+                if seeks.inFlight == nil { scheduledSeek?.cancel(); scheduledSeek = nil }
                 startPlayback()
             } else {
                 if changed { player.pause() }
@@ -504,24 +588,24 @@ private struct DataVisualVideoPlayer: NSViewRepresentable {
             guard active, !wantsPlayback, seeks.inFlight == nil, scheduledSeek == nil,
                   seeks.desired != seeks.completed, player.currentItem?.status == .readyToPlay else { return }
             let delay = max(0, lastSeekHost + 1.0 / 30.0 - hostTime)
-            let work = DispatchWorkItem { [weak self] in
-                guard let self else { return }
-                self.scheduledSeek = nil
-                guard self.active, !self.wantsPlayback, let target = self.seeks.begin() else { return }
+            scheduledSeek = Task { [weak self] in
+                do { try await Task.sleep(for: .seconds(delay)) }
+                catch { return }
+                guard let self, self.active, !self.wantsPlayback,
+                      let target = self.seeks.begin() else { return }
                 self.lastSeekHost = self.hostTime
                 self.player.pause()
-                self.player.seek(to: CMTime(seconds: target, preferredTimescale: 1_000_000), toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] finished in
-                    DispatchQueue.main.async {
-                        guard let self, self.active else { return }
-                        self.seeks.finish(success: finished)
-                        if self.wantsPlayback { self.startPlayback() }
-                        else if finished { self.scheduleSeek() }
-                    }
-                }
+                let finished = await self.player.seek(
+                    to: CMTime(seconds: target, preferredTimescale: 1_000_000),
+                    toleranceBefore: .zero, toleranceAfter: .zero)
+                guard self.active else { return }
+                self.seeks.finish(success: finished)
+                self.scheduledSeek = nil
+                if self.wantsPlayback { self.startPlayback() }
+                else if finished && !Task.isCancelled { self.scheduleSeek() }
             }
-            scheduledSeek = work
-            DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
         }
+
         func stop() {
             active = false
             scheduledSeek?.cancel(); scheduledSeek = nil
@@ -564,7 +648,7 @@ private struct DataVisualPlotMarks: View, Equatable {
     let samples: [DataVisualSample]
     let range: ClosedRange<Double>
     let start, end: Double
-    static func == (lhs: Self, rhs: Self) -> Bool {
+    nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.recording == rhs.recording && lhs.track == rhs.track && lhs.start == rhs.start && lhs.end == rhs.end
     }
     var body: some View {
@@ -605,7 +689,7 @@ private struct DataVisualTrackMarks: View, Equatable {
     let track: String
     let samples: [DataVisualSample]
     let start, end: Double
-    static func == (lhs: Self, rhs: Self) -> Bool {
+    nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.recording == rhs.recording && lhs.track == rhs.track && lhs.start == rhs.start && lhs.end == rhs.end
     }
     var body: some View {
@@ -625,3 +709,149 @@ private struct DataVisualTrackMarks: View, Equatable {
     }
 }
 
+
+private struct DataVisualPointCloud: NSViewRepresentable {
+    let sample: DataVisualSample
+    let recording: UUID
+    @MainActor final class Coordinator { var sampleID = -1; var recording: UUID?; var framedRecording: UUID? }
+    func makeCoordinator() -> Coordinator { Coordinator() }
+    func makeNSView(context: Context) -> SCNView {
+        let view = SCNView()
+        view.scene = SCNScene(); view.backgroundColor = .black
+        view.allowsCameraControl = true; view.autoenablesDefaultLighting = false
+        let camera = SCNNode(); camera.camera = SCNCamera(); camera.camera?.zFar = 10000
+        camera.position = SCNVector3(0, -10, 7); camera.look(at: SCNVector3Zero, up: SCNVector3(0, 0, 1), localFront: SCNVector3(0, 0, -1))
+        view.scene?.rootNode.addChildNode(camera); view.pointOfView = camera
+        let points = SCNNode(); points.name = "points"; view.scene?.rootNode.addChildNode(points)
+        for (axis, color) in [(SCNVector3(1, 0, 0), NSColor.systemRed), (SCNVector3(0, 1, 0), NSColor.systemGreen), (SCNVector3(0, 0, 1), NSColor.systemBlue)] {
+            let source = SCNGeometrySource(vertices: [SCNVector3Zero, axis])
+            let element = SCNGeometryElement(indices: [Int32(0), 1], primitiveType: .line)
+            let geometry = SCNGeometry(sources: [source], elements: [element])
+            let material = SCNMaterial(); material.diffuse.contents = color; material.lightingModel = .constant; geometry.materials = [material]
+            view.scene?.rootNode.addChildNode(SCNNode(geometry: geometry))
+        }
+        return view
+    }
+    func updateNSView(_ view: SCNView, context: Context) {
+        guard context.coordinator.sampleID != sample.id || context.coordinator.recording != recording else { return }
+        context.coordinator.sampleID = sample.id; context.coordinator.recording = recording
+        let source = SCNGeometrySource(vertices: sample.points.map { SCNVector3($0.x, $0.y, $0.z) })
+        let element = SCNGeometryElement(indices: sample.points.indices.map { Int32($0) }, primitiveType: .point)
+        element.pointSize = 3; element.minimumPointScreenSpaceRadius = 1; element.maximumPointScreenSpaceRadius = 4
+        let geometry = SCNGeometry(sources: [source], elements: [element])
+        let material = SCNMaterial(); material.diffuse.contents = NSColor.systemCyan; material.lightingModel = .constant; geometry.materials = [material]
+        view.scene?.rootNode.childNode(withName: "points", recursively: false)?.geometry = geometry
+        if context.coordinator.framedRecording != recording, !sample.points.isEmpty {
+            let radius = min(1000, max(1, sample.points.reduce(Float(0)) { max($0, simd_length($1)) }))
+            view.pointOfView?.position = SCNVector3(0, -radius * 2, radius * 1.5)
+            view.pointOfView?.look(at: SCNVector3Zero, up: SCNVector3(0, 0, 1), localFront: SCNVector3(0, 0, -1))
+            context.coordinator.framedRecording = recording
+        }
+    }
+}
+
+private struct DataVisualAudioPlayer: NSViewRepresentable {
+    let segment: DataVisualAudio
+    let cursor: Double
+    let playing: Bool
+    let speed: Double
+    let owner: DataVisualMediaFiles
+    @MainActor final class Coordinator {
+        let owner: DataVisualMediaFiles
+        var player: AVAudioPlayer?
+        var error: String?
+        init(segment: DataVisualAudio, owner: DataVisualMediaFiles) {
+            self.owner = owner
+            do { player = try AVAudioPlayer(contentsOf: segment.url) }
+            catch { self.error = error.localizedDescription }
+            player?.enableRate = true; player?.prepareToPlay()
+        }
+        isolated deinit { player?.stop() }
+    }
+    func makeCoordinator() -> Coordinator { Coordinator(segment: segment, owner: owner) }
+    func makeNSView(context: Context) -> NSTextField {
+        let label = NSTextField(labelWithString: ""); label.textColor = .systemRed; label.font = .systemFont(ofSize: 11); return label
+    }
+    func updateNSView(_ view: NSTextField, context: Context) {
+        view.stringValue = context.coordinator.error ?? ""
+        guard let player = context.coordinator.player else { return }
+        let position = max(0, cursor - segment.start)
+        if !playing { player.pause(); player.currentTime = position; return }
+        if !player.isPlaying || abs(player.currentTime - position) > 0.15 { player.currentTime = position }
+        player.rate = Float(speed)
+        if !player.isPlaying && !player.play() { view.stringValue = "Audio playback could not start." }
+    }
+    static func dismantleNSView(_ view: NSTextField, coordinator: Coordinator) { coordinator.player?.stop() }
+}
+
+
+private struct DataVisualRecordingSheet: View {
+    let session: UInt64
+    let deviceName: String
+    let changed: (String?) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var sources: [CampaignSource] = []
+    @State private var selected: Set<String> = []
+    @State private var name = "Sensor recording"
+    @State private var active: DataVisualEpisode?
+    @State private var busy = true
+    @State private var error: String?
+    @State private var ready = false
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("Record on \(deviceName)").font(.title2.bold())
+            if let active {
+                Label("Recording: \(active.title)", systemImage: "record.circle").foregroundStyle(.red)
+                Text("Recording continues on the device when this window closes. Stop and save to inspect or export it.").foregroundStyle(.secondary)
+            } else {
+                TextField("Recording name", text: $name).textFieldStyle(.roundedBorder)
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 12) {
+                        ForEach(["camera", "audio", "ros2", "telemetry"], id: \.self) { kind in
+                            let items = sources.filter { $0.kind == kind }
+                            if !items.isEmpty {
+                                Text(kind == "ros2" ? "ROS 2 topics and domains" : kind.capitalized).font(.headline)
+                                ForEach(items) { source in
+                                    Toggle(source.title, isOn: Binding(get: { selected.contains(source.id) }, set: { on in
+                                        if on { selected.insert(source.id) } else { selected.remove(source.id) }
+                                    })).disabled(!source.healthy).font(.callout)
+                                }
+                            }
+                        }
+                    }.frame(maxWidth: .infinity, alignment: .leading)
+                }
+                Text("Select a ROS 2 domain for all topics, or individual topics. Recording starts immediately and stays on the device until exported or uploaded.").font(.caption).foregroundStyle(.secondary)
+            }
+            if let error { FailureNote(message: error) }
+            HStack {
+                if busy { ProgressView().controlSize(.small) }
+                Spacer()
+                Button("Close") { dismiss() }.disabled(busy)
+                if active != nil {
+                    Button("Stop and save") { Task { await stop() } }.disabled(busy)
+                } else {
+                    Button("Start recording") { Task { await start() } }.disabled(busy || !ready || selected.isEmpty)
+                }
+            }
+        }.padding(24).frame(width: 640, height: 540).interactiveDismissDisabled(busy)
+            .task { await refresh() }
+    }
+    private func refresh() async {
+        busy = true; defer { busy = false }
+        do {
+            active = try await GoClient.shared.visualRecording(session: session, action: WD_RECORDING_STATUS)
+            if active == nil { sources = try await GoClient.shared.campaignSources(session: session) }
+            ready = true
+        } catch { self.error = error.localizedDescription }
+    }
+    private func start() async {
+        busy = true; error = nil; defer { busy = false }
+        do { active = try await GoClient.shared.visualRecording(session: session, action: WD_RECORDING_START, name: name, sources: selected); changed(nil) }
+        catch { self.error = error.localizedDescription }
+    }
+    private func stop() async {
+        busy = true; error = nil; defer { busy = false }
+        do { let sealed = try await GoClient.shared.visualRecording(session: session, action: WD_RECORDING_STOP); changed(sealed?.id); dismiss() }
+        catch { self.error = error.localizedDescription }
+    }
+}

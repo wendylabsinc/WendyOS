@@ -163,3 +163,19 @@ func cloudFixture() *commands.DesktopOrganization {
 		Permissions:  []string{"member:add"},
 	}
 }
+
+func TestLiteDeviceAndJPEGBridgeOwnership(t *testing.T) {
+	devicesResult := devices([]commands.DesktopDevice{{ID: "lite", Lite: true, Transport: "USB"}}, nil)
+	defer WDDevicesFree(devicesResult)
+	if devicesResult.items.lite != 1 || devicesResult.items.transport != 3 {
+		t.Fatal("lost Lite transport metadata")
+	}
+	raw := []byte{0xff, 0xd8, 0xff, 0xd9}
+	batch := events([]backend.Event{{Kind: backend.EventJPEG, Session: 8, Stream: 9, Bytes: raw}})
+	defer WDEventsFree(batch)
+	raw[0] = 0
+	if batch.items.kind != 8 || batch.items.session != 8 || batch.items.stream != 9 ||
+		!bytes.Equal(unsafe.Slice((*byte)(unsafe.Pointer(batch.items.bytes)), int(batch.items.byte_count)), []byte{0xff, 0xd8, 0xff, 0xd9}) {
+		t.Fatal("JPEG event did not own its bytes or preserve routing")
+	}
+}

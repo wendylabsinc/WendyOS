@@ -1,4 +1,5 @@
 import XCTest
+import ImageIO
 @testable import WendyDesktop
 
 final class DesktopTests: XCTestCase {
@@ -83,7 +84,7 @@ final class DesktopTests: XCTestCase {
         let old = Device(id: "old", name: "Old", selector: "old", transport: .lan, address: "old")
         let next = Device(id: "next", name: "Next", selector: "next", transport: .cloud, address: "next")
         let started = expectation(description: "Connection started")
-        var pending: CheckedContinuation<UInt64, Error>?
+        var pending: CheckedContinuation<DeviceConnection, Error>?
         let model = AppModel { _, _, _ in
             try await withCheckedThrowingContinuation { continuation in
                 pending = continuation
@@ -111,7 +112,7 @@ final class DesktopTests: XCTestCase {
         let old = Device(id: "old", name: "Old", selector: "old", transport: .lan, address: "old")
         let next = Device(id: "next", name: "Next", selector: "next", transport: .lan, address: "next")
         let started = expectation(description: "Connection started")
-        var pending: CheckedContinuation<UInt64, Error>?
+        var pending: CheckedContinuation<DeviceConnection, Error>?
         let model = AppModel { _, _, _ in
             try await withCheckedThrowingContinuation { continuation in
                 pending = continuation
@@ -403,4 +404,42 @@ final class DesktopTests: XCTestCase {
         XCTAssertEqual(copy.permissionsError, "Permission lookup unavailable")
     }
 
+}
+
+
+extension DesktopTests {
+    @MainActor
+    func testLiteJPEGFramesRespectStreamAndClearOnPause() throws {
+        let context = try XCTUnwrap(CGContext(data: nil, width: 2, height: 2, bitsPerComponent: 8, bytesPerRow: 8,
+                                             space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.noneSkipLast.rawValue))
+        let image = try XCTUnwrap(context.makeImage())
+        let data = NSMutableData()
+        let destination = try XCTUnwrap(CGImageDestinationCreateWithData(data, "public.jpeg" as CFString, 1, nil))
+        CGImageDestinationAddImage(destination, image, nil)
+        XCTAssertTrue(CGImageDestinationFinalize(destination))
+        let feed = CameraFeed(camera: Camera(id: 0, name: "Lite camera"))
+        feed.start(stream: 2)
+        feed.receive(BridgeEvent(session: 1, stream: 1, payload: .jpeg(data as Data)))
+        XCTAssertNil(feed.jpeg)
+        feed.receive(BridgeEvent(session: 1, stream: 2, payload: .jpeg(data as Data)))
+        XCTAssertEqual(feed.jpeg?.width, 2)
+        XCTAssertTrue(feed.receivedVideo)
+        feed.pause()
+        XCTAssertNil(feed.jpeg)
+        feed.start(stream: 3)
+        feed.receive(BridgeEvent(session: 1, stream: 3, payload: .jpeg(Data([1, 2, 3]))))
+        XCTAssertNotNil(feed.error)
+        XCTAssertFalse(feed.running)
+    }
+
+    @MainActor
+    func testLiteConnectionUsesResolvedDeviceKind() async {
+        let model = AppModel { _, _, _ in DeviceConnection(session: 500, lite: true) }
+        await model.connect(Device(id: "cloud", name: "ESP camera", selector: "cloud", transport: .cloud, address: ""))
+        XCTAssertTrue(model.connectedLite)
+        XCTAssertTrue(model.connected?.lite == true)
+        XCTAssertFalse(model.connected?.routable ?? true)
+        XCTAssertNil(model.appsError)
+        XCTAssertTrue(model.selectedDeviceReady)
+    }
 }

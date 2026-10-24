@@ -5,7 +5,7 @@ typedef struct { WDStatus status; WDModelRepository *items; size_t count; } WDMo
 typedef struct { char *name, *quantization, *unavailable_reason; int64_t bytes; } WDModelFile;
 typedef struct { WDStatus status; char *revision, *license; WDModelFile *items; size_t count; } WDModelFilesResult;
 typedef enum { WD_MODEL_CPU, WD_MODEL_NVIDIA, WD_MODEL_JETPACK5, WD_MODEL_JETPACK6 } WDModelAccelerator;
-typedef struct { WDStatus status; char *model, *progress, *error; int32_t done; uint32_t port; } WDModelRunResult;
+typedef struct { WDStatus status; char *model, *progress, *error; int32_t done; uint32_t port; int64_t completed, total; } WDModelRunResult;
 typedef struct { WDStatus status; char *os, *architecture, *gpu, *jetpack, *warning; int64_t memory_total, memory_available, disk_free, gpu_total, gpu_available; int32_t disk_known, cuda, shared_memory; } WDModelHardwareResult;
 WDModelHardwareResult *WDModelHardware(uint64_t session);
 void WDModelHardwareFree(WDModelHardwareResult *value);

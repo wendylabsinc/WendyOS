@@ -7,6 +7,9 @@ struct ContentView: View {
     @State private var requestedClip: (session: UInt64, id: String)?
     @State private var showingOrganization = false
     @State private var showingSites = false
+    @State private var showingSimulators = false
+    @StateObject private var simulators = SimulatorModel()
+    @FocusedValue(\.simulatorRefresh) private var simulatorRefresh
     @State private var refreshingPane = false
     @FocusedValue(\.organizationRefresh) private var organizationRefresh
     @FocusedValue(\.devicePaneRefresh) private var devicePaneRefresh
@@ -20,6 +23,10 @@ struct ContentView: View {
     @State private var deviceSource = "nearby"
     @State private var manualAddress = ""
     @State private var showingAddress = false
+    @State private var showingUnitree = false
+    @State private var selectedUnitree: UnitreeRobot?
+    @State private var showingInstaller = false
+    @ObservedObject private var installer = InstallSession.shared
     @State private var errorDetails: String?
     @Environment(\.scenePhase) private var scenePhase
 
@@ -28,10 +35,13 @@ struct ContentView: View {
             VStack(spacing: 0) {
                 VStack(spacing: 2) {
                     sidebarDestination("Organization", icon: "person.2", selected: showingOrganization) {
-                        showingOrganization = true; showingSites = false; sidebarSelection = nil
+                        showingOrganization = true; showingSimulators = false; showingSites = false; sidebarSelection = nil
                     }
                     sidebarDestination("Sites", icon: "building.2", selected: showingSites) {
-                        showingSites = true; showingOrganization = false; sidebarSelection = nil
+                        showingSites = true; showingSimulators = false; showingOrganization = false; sidebarSelection = nil
+                    }
+                    sidebarDestination("Simulators", icon: "cube.transparent", selected: showingSimulators) {
+                        showingSimulators = true; showingOrganization = false; showingSites = false; sidebarSelection = nil
                     }
                 }
                 .padding(.horizontal, 10).padding(.top, 4).padding(.bottom, 8)
@@ -64,10 +74,28 @@ struct ContentView: View {
                 Divider()
                 List(selection: $sidebarSelection) {
                     deviceRows
+                    if !model.nearbyUnitree.isEmpty {
+                        ForEach(model.nearbyUnitree.filter { search.isEmpty || "\($0.name) \($0.serial) \($0.address)".localizedCaseInsensitiveContains(search) }) { robot in
+                            Button {
+                                selectedUnitree = robot; showingUnitree = true
+                            } label: {
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Label { Text(robot.name) } icon: { RobotIcon() }
+                                    Text("\(robot.address) · Remote control").font(.caption).foregroundStyle(.secondary)
+                                }
+                            }.buttonStyle(.plain)
+                            .contextMenu {
+                                Button("Forget saved robot", role: .destructive) { model.forgetSavedUnitree(robot) }
+                            }
+                        }
+                    }
+                    if deviceSource == "nearby", let error = model.unitreeDiscoveryError {
+                        Text(error).font(.caption).foregroundStyle(.secondary)
+                    }
                     if model.discovering { ProgressView().controlSize(.small) }
                     if deviceSource == "nearby" {
                         if let message = model.nearbyError { FailureNote(message: message) }
-                        if model.nearby.isEmpty && !model.discovering {
+                        if model.nearby.isEmpty && model.nearbyUnitree.isEmpty && !model.discovering {
                             Text("No nearby devices found").foregroundStyle(.secondary)
                         }
                     } else {
@@ -85,51 +113,27 @@ struct ContentView: View {
                 .keyboardRowSelection(visibleDevices.map(\.id), selection: $sidebarSelection, focusRequest: deviceListFocusRequest)
                 .onChange(of: sidebarSelection) { _, id in
                     guard let device = visibleDevices.first(where: { $0.id == id }) else { return }
-                    showingOrganization = false; showingSites = false
+                    showingOrganization = false; showingSites = false; showingSimulators = false
                     Task { await model.connect(device) }
                 }
                 Divider()
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack {
-                        Image(systemName: model.signingIn ? "person.crop.circle.badge.clock" : model.account?.signedIn == true ? "person.crop.circle.badge.checkmark" : "person.crop.circle")
-                            .foregroundStyle(model.account?.signedIn == true ? .green : .secondary)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(model.signingIn ? "Signing in…" : model.account?.title ?? "Checking account…").font(.callout.weight(.medium))
-                            if let account = model.account, !account.email.isEmpty {
-                                Text(account.email).font(.caption).foregroundStyle(.secondary)
-                            }
-                        }
-                        Spacer()
-                        Menu {
-                            if let account = model.account {
-                                Text(account.title)
-                                if !account.cloud.isEmpty { Text(account.cloud) }
-                                Divider()
-                            }
-                            Button("Sign in to Wendy Cloud") { Task { await model.signIn() } }
-                            Button("Sign in to development cloud") { Task { await model.signIn(development: true) } }
-                            Button("Refresh account") { Task { await model.refreshAccount(); await model.refreshCloud() } }
-                            if model.signingIn { Button("Cancel sign-in") { Task { await model.cancelLogin() } } }
-                        } label: { Image(systemName: "ellipsis.circle") }
-                        .menuStyle(.borderlessButton).frame(width: 28).accessibilityLabel("Account")
-                    }
-                    if model.signingIn {
-                        Text("Complete sign-in in your browser.").font(.caption).foregroundStyle(.secondary)
-                        if let url = model.loginURL { Link("Continue in browser", destination: url).font(.caption) }
-                    }
-                    if let error = model.accountError { FailureNote(message: error) }
-                }.padding()
+                AccountPicker(app: model)
 
             }
             .navigationSplitViewColumnWidth(min: 230, ideal: 270, max: 380)
         } detail: {
-            if showingSites {
+            if showingSimulators {
+                SimulatorsView(model: simulators) { item in
+                    showingSimulators = false
+                    Task { await model.connect(Device(id: "vm:\(item.name)", name: item.name, selector: "vm:\(item.name)", transport: .lan, address: item.address)) }
+                }
+            } else if showingSites {
                 SitesView { device in
                     showingSites = false; showingOrganization = false
                     Task { await model.connect(device) }
-                }
+                }.id(model.account?.context)
             } else if showingOrganization {
-                CloudManagementView()
+                CloudManagementView().id(model.account?.context)
             } else if let device = model.selection {
                 deviceDetail(device)
             } else {
@@ -138,12 +142,13 @@ struct ContentView: View {
                 } description: {
                     Text(model.account?.signedIn == true ? "Choose a nearby or cloud device from the sidebar." : "Choose a nearby device, or sign in to reach devices through Wendy Cloud.")
                 } actions: {
-                    Button("Find nearby devices") { Task { await model.refreshNearby() } }
-                    if model.account?.signedIn == true {
-                        Button("Refresh cloud devices") { Task { await model.refreshCloud() } }
-                    } else {
-                        Button("Sign in to Wendy Cloud") { Task { await model.signIn() } }
+                    Button { showingInstaller = true } label: {
+                        Label("Install Wendy", systemImage: "arrow.down.circle")
+                            .padding(.horizontal, 8)
                     }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.large)
+                    .padding(.top, 8)
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
@@ -152,7 +157,8 @@ struct ContentView: View {
             ToolbarItem { VPNToolbarControls(model: model, vpn: model.vpn) }
             ToolbarItemGroup {
                 Button {
-                    if showingSites { fleetRefresh?.perform() }
+                    if showingSimulators { simulatorRefresh?.perform() }
+                    else if showingSites { fleetRefresh?.perform() }
                     else if showingOrganization { organizationRefresh?.perform() }
                     else if ["campaigns", "pairing", "chat", "data", "settings"].contains(tab), let devicePaneRefresh { devicePaneRefresh.perform() }
                     else {
@@ -165,18 +171,29 @@ struct ContentView: View {
                         }
                     }
                 } label: { Label("Refresh", systemImage: "arrow.clockwise") }
-                    .help(showingSites ? "Refresh fleet" : showingOrganization ? "Refresh organization" : model.connected != nil ? "Refresh device" : "Refresh devices")
+                    .help(showingSimulators ? "Refresh simulators" : showingSites ? "Refresh fleet" : showingOrganization ? "Refresh organization" : model.connected != nil ? "Refresh device" : "Refresh devices")
                     .keyboardShortcut("r", modifiers: .command)
-                    .disabled(!showingSites && !showingOrganization && model.selection != nil && !model.selectedDeviceReady)
-                    .disabled(showingSites ? fleetRefresh?.enabled != true : showingOrganization ? organizationRefresh?.enabled != true : ["campaigns", "pairing", "chat", "data", "settings"].contains(tab) ? devicePaneRefresh?.enabled != true : refreshingPane || model.discovering || !model.initialized)
+                    .disabled(!showingSimulators && !showingSites && !showingOrganization && model.selection != nil && !model.selectedDeviceReady)
+                    .disabled(showingSimulators ? simulatorRefresh?.enabled != true : showingSites ? fleetRefresh?.enabled != true : showingOrganization ? organizationRefresh?.enabled != true : ["campaigns", "pairing", "chat", "data", "settings"].contains(tab) ? devicePaneRefresh?.enabled != true : refreshingPane || model.discovering || !model.initialized)
                 Menu {
+                    Button(installer.running ? "Show running installer" : "Install Wendy on a device") { showingInstaller = true }
                     Button("Connect by address") { showingAddress = true }
+                    Button("Connect to Unitree Go2") { selectedUnitree = nil; showingUnitree = true }
                     if model.selectedDeviceReady {
-                        Button("Pair a device") { showingOrganization = false; showingSites = false; tab = "pairing" }
-                        Button("Campaigns") { showingOrganization = false; showingSites = false; tab = "campaigns" }
+                        Button("Pair a device") { showingOrganization = false; showingSites = false; showingSimulators = false; tab = "pairing" }
+                        Button("Campaigns") { showingOrganization = false; showingSites = false; showingSimulators = false; tab = "campaigns" }
                     }
                 } label: { Label("Add", systemImage: "plus") }
             }
+        }
+        .sheet(isPresented: $showingUnitree) {
+            VStack(spacing: 0) {
+                HStack { Spacer(); Button("Done") { showingUnitree = false } }.padding([.top, .horizontal])
+                UnitreePairingView(session: 0, deviceName: "this Mac", initialRobot: selectedUnitree)
+            }.frame(width: 800, height: 760)
+        }
+        .sheet(isPresented: $showingInstaller) {
+            InstallView(session: installer) { Task { await model.refreshNearby() } }
         }
         .sheet(isPresented: $showingAddress) {
             VStack(alignment: .leading, spacing: 16) {
@@ -188,7 +205,7 @@ struct ContentView: View {
                     Button("Connect") {
                         let address = manualAddress.trimmingCharacters(in: .whitespacesAndNewlines)
                         showingAddress = false
-                        showingOrganization = false; showingSites = false
+                        showingOrganization = false; showingSites = false; showingSimulators = false
                         Task { await model.connect(Device(id: address, name: address, selector: address, transport: .lan, address: address)) }
                     }.keyboardShortcut(.defaultAction).disabled(manualAddress.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
@@ -228,24 +245,26 @@ struct ContentView: View {
             }.padding(24).frame(width: 640, height: 360)
         }
         .focusedSceneValue(\.desktopNavigation, DesktopNavigationActions(
-            deviceAvailable: model.selectedDeviceReady,
+            deviceAvailable: model.selectedDeviceReady && !model.connectedLite,
             findDevice: { columnVisibility = .all; searchFocused = true },
             focusDevices: focusDevices,
-            showOrganization: { showingOrganization = true; showingSites = false; sidebarSelection = nil },
-            showSites: { showingSites = true; showingOrganization = false; sidebarSelection = nil },
+            showOrganization: { showingOrganization = true; showingSimulators = false; showingSites = false; sidebarSelection = nil },
+            showSites: { showingSites = true; showingSimulators = false; showingOrganization = false; sidebarSelection = nil },
             showSource: { source in deviceSource = source; focusDevices() },
             showPage: showPage,
             cyclePage: { forward in showPage(DesktopDevicePage.adjacent(to: tab, forward: forward)) },
             connectByAddress: { showingAddress = true }
         ))
         .task { await model.start() }
-        .onChange(of: deviceSource) { _, source in
-            if source == "cloud", model.cloud.isEmpty, model.account?.signedIn == true {
-                Task { await model.refreshCloud() }
+        .task { await model.vpn.observeStatus() }
+        .task(id: model.initialized) { await model.observeEvents() }
+        .task(id: deviceSource) {
+            if deviceSource == "cloud", model.cloud.isEmpty, model.account?.signedIn == true {
+                await model.refreshCloud()
             }
         }
-        .onChange(of: scenePhase) { _, phase in
-            if phase == .active { Task { await model.refreshAccount() } }
+        .task(id: scenePhase) {
+            if scenePhase == .active { await model.refreshAccount() }
         }
     }
 
@@ -256,9 +275,10 @@ struct ContentView: View {
     }
 
     private func showPage(_ page: DesktopDevicePage) {
-        guard model.selectedDeviceReady else { return }
+        guard model.selectedDeviceReady, !model.connectedLite else { return }
         showingOrganization = false
         showingSites = false
+        showingSimulators = false
         tab = page.rawValue
         deviceTabsFocused = true
     }
@@ -321,15 +341,15 @@ struct ContentView: View {
             ViewThatFits(in: .horizontal) {
                 HStack(spacing: 24) {
                     deviceIdentity(device)
-                    deviceTabs.fixedSize()
+                    if !model.connectedLite { deviceTabs.fixedSize() }
                     Spacer(minLength: 0)
                 }
                 VStack(alignment: .leading, spacing: 10) {
                     deviceIdentity(device)
-                    deviceTabs
+                    if !model.connectedLite { deviceTabs }
                 }
             }.padding(.horizontal, 20).padding(.vertical, 12)
-            Divider().padding(.bottom, ["apps", "activity"].contains(tab) ? 0 : 12)
+            Divider().padding(.bottom, ["apps", "activity", "data"].contains(tab) ? 0 : 12)
             if model.connectingDevice?.id == device.id {
                 HStack(spacing: 10) {
                     ProgressView().controlSize(.small)
@@ -343,6 +363,7 @@ struct ContentView: View {
                     Task { await model.connect(device) }
                 }
             } else if model.selectedDeviceReady {
+                if model.connectedLite { LiteDeviceView(model: model).id(model.deviceSession) } else {
                 switch tab {
                 case "cameras": camerasPane
                 case "activity": ActivityView(model: model).id(device.id)
@@ -355,6 +376,7 @@ struct ContentView: View {
                 case "data": DataVisualizerView(session: model.deviceSession, deviceName: device.title,
                                                 initialEpisode: requestedClip?.session == model.deviceSession ? requestedClip?.id : nil).id(model.deviceSession)
                 default: appsPane
+                }
                 }
             }
         }

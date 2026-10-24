@@ -15,6 +15,20 @@ func (b *Backend) DeviceInfo(session uint64) (*pb.GetDeviceInfoResponse, error) 
 	if session == 0 {
 		return nil, errors.New("select a device first")
 	}
+	if err := b.validSession(session); err != nil {
+		return nil, err
+	}
+	if b.lite != nil {
+		info, err := b.lite.GetDeviceInfo(3 * time.Second)
+		if err != nil {
+			return nil, err
+		}
+		board := info.Board
+		if board == "" {
+			board = info.Target
+		}
+		return &pb.GetDeviceInfoResponse{Os: info.OS, OsVersion: &info.OSVersion, Version: info.OSVersion, CpuArchitecture: info.CPUArchitecture, BoardModel: &board}, nil
+	}
 	conn, err := b.connection(session)
 	if err != nil {
 		return nil, err

@@ -928,6 +928,14 @@ func (p *MicroWendyProvider) ConnectSensorLink(device models.ExternalDevice) (*l
 	return p.connectClient(context.Background(), device)
 }
 
+// ConnectSensorLinkContext opens a cancellable authenticated WendyCom connection.
+func (p *MicroWendyProvider) ConnectSensorLinkContext(ctx context.Context, device models.ExternalDevice) (*liteclient.WendyLiteClient, error) {
+	if device.ConnectionInfo["needsInstall"] == "true" {
+		return nil, &AppRequirementsUnsupportedError{Device: device, Missing: "Wendy Lite firmware (none installed)"}
+	}
+	return p.connectClient(ctx, device)
+}
+
 // ConnectEnrollment opens a physical USB serial connection for enrollment and
 // status checks. Enrollment credentials and trust bundles must stay off network
 // transports, even if a peer claims to support enrollment.

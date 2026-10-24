@@ -12,12 +12,12 @@ struct DataVisualVideoPlayer: UIViewRepresentable {
     let playing: Bool
     let speed: Double
     let mediaOwner: DataVisualMediaFiles
-    final class Coordinator {
+    @MainActor final class Coordinator {
         let player: AVPlayer
         let owner: DataVisualMediaFiles
         private var seeks = DataVisualSeekState()
         private var readyObservation: NSKeyValueObservation?
-        private var scheduledSeek: DispatchWorkItem?
+        private var scheduledSeek: Task<Void, Never>?
         private var lastSeekHost = -Double.infinity
         private var active = true
         private var wantsPlayback = false
@@ -35,7 +35,7 @@ struct DataVisualVideoPlayer: UIViewRepresentable {
             player.automaticallyWaitsToMinimizeStalling = false
             readyObservation = player.currentItem?.observe(\.status, options: [.initial, .new]) { [weak self] item, _ in
                 guard item.status == .readyToPlay else { return }
-                DispatchQueue.main.async {
+                Task { @MainActor in
                     guard let self, self.active else { return }
                     if self.wantsPlayback { self.startPlayback() } else { self.scheduleSeek() }
                 }
@@ -50,7 +50,7 @@ struct DataVisualVideoPlayer: UIViewRepresentable {
             playbackHost = hostTime
             if playing {
                 if changed { needsPlaybackAnchor = true }
-                scheduledSeek?.cancel(); scheduledSeek = nil
+                if seeks.inFlight == nil { scheduledSeek?.cancel(); scheduledSeek = nil }
                 startPlayback()
             } else {
                 if changed { player.pause() }
@@ -75,24 +75,24 @@ struct DataVisualVideoPlayer: UIViewRepresentable {
             guard active, !wantsPlayback, seeks.inFlight == nil, scheduledSeek == nil,
                   seeks.desired != seeks.completed, player.currentItem?.status == .readyToPlay else { return }
             let delay = max(0, lastSeekHost + 1.0 / 30.0 - hostTime)
-            let work = DispatchWorkItem { [weak self] in
-                guard let self else { return }
-                self.scheduledSeek = nil
-                guard self.active, !self.wantsPlayback, let target = self.seeks.begin() else { return }
+            scheduledSeek = Task { [weak self] in
+                do { try await Task.sleep(for: .seconds(delay)) }
+                catch { return }
+                guard let self, self.active, !self.wantsPlayback,
+                      let target = self.seeks.begin() else { return }
                 self.lastSeekHost = self.hostTime
                 self.player.pause()
-                self.player.seek(to: CMTime(seconds: target, preferredTimescale: 1_000_000), toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] finished in
-                    DispatchQueue.main.async {
-                        guard let self, self.active else { return }
-                        self.seeks.finish(success: finished)
-                        if self.wantsPlayback { self.startPlayback() }
-                        else if finished { self.scheduleSeek() }
-                    }
-                }
+                let finished = await self.player.seek(
+                    to: CMTime(seconds: target, preferredTimescale: 1_000_000),
+                    toleranceBefore: .zero, toleranceAfter: .zero)
+                guard self.active else { return }
+                self.seeks.finish(success: finished)
+                self.scheduledSeek = nil
+                if self.wantsPlayback { self.startPlayback() }
+                else if finished && !Task.isCancelled { self.scheduleSeek() }
             }
-            scheduledSeek = work
-            DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
         }
+
         func stop() {
             active = false
             scheduledSeek?.cancel(); scheduledSeek = nil

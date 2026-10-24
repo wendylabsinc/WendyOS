@@ -1,6 +1,10 @@
 #ifndef WENDY_DESKTOP_BRIDGE_H
 #define WENDY_DESKTOP_BRIDGE_H
 #include "BridgeTypes.h"
+#include <TargetConditionals.h>
+#if TARGET_OS_OSX
+#include "UnitreeTypes.h"
+#endif
 
 WDAccountResult *WDAccount(void);
 WDAccountsResult *WDAccounts(void);
@@ -64,4 +68,12 @@ WDStatus *WDDeleteAccess(char *account, char *org, char *id);
 #include "ModelLibraryTypes.h"
 #include "FleetTypes.h"
 #include "SettingsTypes.h"
+#include "EnrollmentTypes.h"
+#ifdef __APPLE__
+#include <TargetConditionals.h>
+#if TARGET_OS_OSX
+#include "SimulatorTypes.h"
+#include "AccountPickerTypes.h"
+#endif
+#endif
 #endif

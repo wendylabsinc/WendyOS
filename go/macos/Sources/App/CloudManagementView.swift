@@ -77,9 +77,8 @@ struct CloudManagementView: View {
                 initialLoadComplete = true
             }
             #else
-            .task { await model.loadAccounts(); initialLoadComplete = true }
-            .onChange(of: app.signingIn) { old, new in
-                if old && !new { Task { await model.loadAccounts() } }
+            .task(id: app.signingIn) {
+                if !app.signingIn { await model.loadAccounts(); initialLoadComplete = true }
             }
             #endif
             .sheet(item: $form) { kind in

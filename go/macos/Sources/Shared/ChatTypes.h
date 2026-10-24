@@ -1,6 +1,6 @@
 #ifndef WENDY_CHAT_TYPES_H
 #define WENDY_CHAT_TYPES_H
-typedef struct { char *id, *name; } WDChatModel;
+typedef struct { char *id, *name, *unavailable_reason; uint32_t port; } WDChatModel;
 typedef struct { WDStatus status; WDChatModel *items; size_t count; } WDChatModelsResult;
 typedef enum { WD_CHAT_USER, WD_CHAT_ASSISTANT } WDChatRole;
 typedef struct { WDChatRole role; char *text; } WDChatMessage;

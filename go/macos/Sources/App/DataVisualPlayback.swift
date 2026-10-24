@@ -31,3 +31,22 @@ struct DataVisualSeekState {
     }
 }
 
+
+// Preview exports deliberately identify their scope. Full episode export keeps
+// all raw files; CSV and PLY contain only data loaded by the bounded viewer.
+enum DataVisualExport {
+    static func csv(_ samples: [DataVisualSample]) -> String {
+        func quote(_ value: String) -> String { "\"" + value.replacingOccurrences(of: "\"", with: "\"\"") + "\"" }
+        var rows = ["episode_nanoseconds,track,value,unit"]
+        for sample in samples {
+            guard let value = sample.value, value.isFinite else { continue }
+            rows.append("\(sample.timestamp),\(quote(sample.track)),\(value),\(quote(sample.unit))")
+        }
+        return rows.joined(separator: "\r\n") + "\r\n"
+    }
+    static func ply(_ sample: DataVisualSample) -> String {
+        var rows = ["ply", "format ascii 1.0", "comment Wendy preview, sensor frame, meters", "comment episode_nanoseconds \(sample.timestamp)", "element vertex \(sample.points.count)", "property float x", "property float y", "property float z", "end_header"]
+        rows += sample.points.map { "\($0.x) \($0.y) \($0.z)" }
+        return rows.joined(separator: "\n") + "\n"
+    }
+}

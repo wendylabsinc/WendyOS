@@ -14,8 +14,8 @@ final class VPNController: NSObject, ObservableObject, OSSystemExtensionRequestD
     @Published var routes: [VPNRoute] = []
     @Published var setupIssue: String?
     private var manager: NETunnelProviderManager?
-    private var observer: NSObjectProtocol?
-    private var activation: CheckedContinuation<Void, Error>?
+    private var activation: AsyncCallback<Void>?
+    private var activationRequest: OSSystemExtensionRequest?
 
     override init() {
         super.init()
@@ -30,17 +30,26 @@ final class VPNController: NSObject, ObservableObject, OSSystemExtensionRequestD
         } else {
             setupIssue = "VPN needs a signed build with Network Extension provisioning. This development build cannot activate the VPN."
         }
-        observer = NotificationCenter.default.addObserver(forName: .NEVPNStatusDidChange, object: nil, queue: .main) { [weak self] _ in
-            Task { @MainActor in self?.refreshStatus() }
+    }
+
+    /// The root view owns observation, including removal of the notification observer.
+    func observeStatus() async {
+        let changes = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        let observer = NotificationCenter.default.addObserver(forName: .NEVPNStatusDidChange, object: nil, queue: .main) { _ in
+            changes.continuation.yield(())
         }
-        Task {
-            do {
-                manager = try await Self.loadManager()
-                refreshStatus()
-                // A previous process's ephemeral relay credential is never reused.
-                if manager?.connection.status == .connected { try await stop() }
-            } catch { status = "VPN requires a signed build" }
+        defer { NotificationCenter.default.removeObserver(observer); changes.continuation.finish() }
+        do {
+            manager = try await Self.loadManager()
+            try Task.checkCancellation()
+            refreshStatus()
+            // A previous process's ephemeral relay credential is never reused.
+            if manager?.connection.status == .connected { try await stop() }
+        } catch {
+            if Task.isCancelled { return }
+            status = "VPN requires a signed build"
         }
+        for await _ in changes.stream { refreshStatus() }
     }
 
     func start(_ configuration: VPNConfiguration) async throws {
@@ -51,12 +60,16 @@ final class VPNController: NSObject, ObservableObject, OSSystemExtensionRequestD
         defer { changing = false }
         status = "Installing network extension"
         do {
-            try await withCheckedThrowingContinuation { continuation in
-                activation = continuation
-                let request = OSSystemExtensionRequest.activationRequest(forExtensionWithIdentifier: Self.extensionID, queue: .main)
-                request.delegate = self
-                OSSystemExtensionManager.shared.submitRequest(request)
-            }
+            try Task.checkCancellation()
+            let completion = AsyncCallback<Void>()
+            let request = OSSystemExtensionRequest.activationRequest(forExtensionWithIdentifier: Self.extensionID, queue: .main)
+            activation = completion
+            activationRequest = request
+            defer { activation = nil; activationRequest = nil }
+            request.delegate = self
+            OSSystemExtensionManager.shared.submitRequest(request)
+            try await completion.value()
+            try Task.checkCancellation()
             let manager = try await Self.loadManager() ?? NETunnelProviderManager()
             let proto = NETunnelProviderProtocol()
             proto.providerBundleIdentifier = Self.extensionID
@@ -73,6 +86,7 @@ final class VPNController: NSObject, ObservableObject, OSSystemExtensionRequestD
             let encoder = PropertyListEncoder()
             encoder.outputFormat = .binary
             let config = try encoder.encode(configuration)
+            try Task.checkCancellation()
             try manager.connection.startVPNTunnel(options: ["configuration": config as NSData])
             routes = configuration.routes
             refreshStatus()
@@ -115,20 +129,26 @@ final class VPNController: NSObject, ObservableObject, OSSystemExtensionRequestD
         }
     }
 
+    // Requests are submitted on DispatchQueue.main, so delegate callbacks are
+    // synchronous main-actor boundaries and cannot race a replacement request.
     nonisolated func requestNeedsUserApproval(_ request: OSSystemExtensionRequest) {
-        Task { @MainActor in
-            self.status = "Waiting for macOS approval"
-            self.setupIssue = "Allow Wendy in System Settings > General > Login Items & Extensions > Network Extensions."
+        MainActor.assumeIsolated {
+            guard activationRequest === request else { return }
+            status = "Waiting for macOS approval"
+            setupIssue = "Allow Wendy in System Settings > General > Login Items & Extensions > Network Extensions."
         }
     }
     nonisolated func request(_ request: OSSystemExtensionRequest, didFailWithError error: Error) {
-        Task { @MainActor in self.activation?.resume(throwing: error); self.activation = nil }
+        MainActor.assumeIsolated {
+            guard activationRequest === request else { return }
+            activation?.finish(.failure(error))
+        }
     }
     nonisolated func request(_ request: OSSystemExtensionRequest, didFinishWithResult result: OSSystemExtensionRequest.Result) {
-        Task { @MainActor in
-            if result == .completed { self.setupIssue = nil; self.activation?.resume() }
-            else { self.activation?.resume(throwing: WendyError(message: "Restart your Mac to finish installing the network extension.")) }
-            self.activation = nil
+        MainActor.assumeIsolated {
+            guard activationRequest === request else { return }
+            if result == .completed { setupIssue = nil; activation?.finish(.success(())) }
+            else { activation?.finish(.failure(WendyError(message: "Restart your Mac to finish installing the network extension."))) }
         }
     }
     nonisolated func request(_ request: OSSystemExtensionRequest, actionForReplacingExtension existing: OSSystemExtensionProperties, withExtension ext: OSSystemExtensionProperties) -> OSSystemExtensionRequest.ReplacementAction { .replace }

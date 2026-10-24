@@ -1,10 +1,15 @@
 import SwiftUI
+import ImageIO
 
 @MainActor
 final class CameraFeed: ObservableObject, Identifiable {
     let id = UUID()
     let camera: Camera
     let decoder = H264AnnexBDecoder()
+    @Published private(set) var jpeg: CGImage?
+    @Published private(set) var thermalFrame: ThermalCameraFrame?
+    @Published var thermalScale: ThermalCameraScale = .counts
+    private(set) var thermalReceivedAt = Date.distantPast
     @Published private(set) var running = false
     @Published private(set) var receivedVideo = false
     @Published private(set) var error: String?
@@ -14,6 +19,8 @@ final class CameraFeed: ObservableObject, Identifiable {
 
     func start(stream: UInt64) {
         decoder.reset()
+        jpeg = nil
+        thermalFrame = nil
         self.stream = stream
         error = nil
         receivedVideo = false
@@ -26,21 +33,53 @@ final class CameraFeed: ObservableObject, Identifiable {
         receivedVideo = false
         error = nil
         decoder.reset()
+        jpeg = nil
+        thermalFrame = nil
     }
 
     func fail(_ message: String, stream: UInt64) {
         guard running, self.stream == stream else { return }
         error = message
         running = false
+        if thermalFrame != nil { jpeg = nil; thermalFrame = nil; receivedVideo = false }
     }
 
     func receive(_ event: BridgeEvent) {
         guard running, stream == event.stream else { return }
         if case .cameraError(let message) = event.payload {
             fail(message, stream: event.stream)
+        } else if case .thermal(let frame) = event.payload {
+            thermalFrame = frame
+            thermalReceivedAt = Date()
+            receivedVideo = true
+        } else if case .jpeg(let bytes) = event.payload {
+            guard let source = CGImageSourceCreateWithData(bytes as CFData, nil),
+                  let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+                  let width = properties[kCGImagePropertyPixelWidth] as? Int,
+                  let height = properties[kCGImagePropertyPixelHeight] as? Int,
+                  width > 0, height > 0, width <= 8192, height <= 8192, width * height <= 32_000_000,
+                  let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
+                fail("The camera sent an invalid JPEG frame.", stream: event.stream); return
+            }
+            jpeg = image
+            receivedVideo = true
         } else if case .video(let bytes) = event.payload {
             decoder.feed(bytes)
             if !receivedVideo { receivedVideo = true }
+        }
+    }
+}
+
+struct CameraFeedDisplay: View {
+    @ObservedObject var feed: CameraFeed
+    var body: some View {
+        if let frame = feed.thermalFrame {
+            ThermalCameraDisplay(feed: feed, frame: frame)
+                .padding(.bottom, 64) // Keep measurements clear of the player controls.
+        } else if let image = feed.jpeg {
+            Image(decorative: image, scale: 1).resizable().scaledToFit()
+        } else {
+            CameraDisplayView(decoder: feed.decoder)
         }
     }
 }
@@ -74,7 +113,7 @@ struct CameraWallView: View {
             }
         }
         .padding(.horizontal, 28).padding(.bottom, 12)
-        .onAppear { model.showCameraWall() }
+        .task { await model.showCameraWall() }
         .onDisappear { model.hideCameraWall() }
     }
 }
@@ -118,7 +157,7 @@ struct CameraPlayer: View {
     var body: some View {
         ZStack {
             Color.black
-            CameraDisplayView(decoder: feed.decoder)
+            CameraFeedDisplay(feed: feed)
             if feed.error != nil {
                 Image(systemName: "video.slash")
                     .font(.system(size: 32, weight: .light)).foregroundStyle(.white.opacity(0.45))

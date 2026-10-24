@@ -16,9 +16,10 @@ import SwiftUI
     @Published var inspecting = false
     @Published var running = false
     @Published var progress = ""
+    @Published var completed: Int64 = 0
+    @Published var total: Int64 = 0
     @Published var error: String?
-    private var job: UInt64 = 0
-    private var runTask: Task<Void, Never>?
+    @Published private(set) var job: UInt64 = 0
     init(session: UInt64, port: String) { self.session = session; self.port = port }
     var selectedDetails: HubModelDetails? { selection.flatMap { details[$0] } }
     var selectedFile: HubModelFile? { selectedDetails?.files.first { $0.name == file } }
@@ -78,33 +79,34 @@ import SwiftUI
             details[id] = value; file = value.files.first?.name ?? ""
         } catch { if !Task.isCancelled { self.error = error.localizedDescription } }
     }
-    func run(ready: @escaping (String, UInt32) -> Void) {
-        guard canRun, let repo = selection, let detail = selectedDetails else { return }
-        let port: UInt32 = install ? 11434 : (portNumber ?? 11434)
-        running = true; error = nil; progress = "Checking device and model"
+    func run() {
+        guard canRun else { return }
+        running = true; error = nil; progress = "Checking device and model"; completed = 0; total = 0
         job = UInt64.random(in: 1...UInt64.max)
-        let request = job
-        runTask = Task {
-            defer { running = false }
-            do {
-                try await GoClient.shared.runModel(session: session, job: request, port: port, accelerator: accelerator, repo: repo, file: file, revision: detail.revision, install: install, acceptWarning: acceptWarning)
-                guard !Task.isCancelled else { try? await GoClient.shared.cancelModelRun(session: session, job: request); return }
-                while !Task.isCancelled {
-                    let result = try await GoClient.shared.modelRunStatus(session: session, job: request)
-                    guard !Task.isCancelled else { return }
-                    progress = result.progress
-                    if result.done {
-                        if result.error.isEmpty { ready(result.model, result.port) }
-                        else { error = result.error; if result.error.contains("capacity") { await refreshHardware(); acceptWarning = false } }
-                        return
-                    }
-                    try await Task.sleep(for: .milliseconds(300))
-                }
-            } catch { if !Task.isCancelled { self.error = error.localizedDescription } }
-        }
     }
-    func cancel() { let request = job; Task { try? await GoClient.shared.cancelModelRun(session: session, job: request) } }
-    func disappear() { if running { cancel() }; runTask?.cancel() }
+    func performRun(ready: (String, UInt32) -> Void) async {
+        guard running, job != 0, let repo = selection, let detail = selectedDetails else { return }
+        let request = job
+        let port: UInt32 = install ? 11434 : (portNumber ?? 11434)
+        defer { if job == request { running = false } }
+        do {
+            try await GoClient.shared.runModel(session: session, job: request, port: port, accelerator: accelerator, repo: repo, file: file, revision: detail.revision, install: install, acceptWarning: acceptWarning)
+            while !Task.isCancelled && job == request {
+                let result = try await GoClient.shared.modelRunStatus(session: session, job: request)
+                guard !Task.isCancelled, job == request else { break }
+                progress = result.progress; completed = result.completed; total = result.total
+                if result.done {
+                    if result.error.isEmpty { ready(result.model, result.port) }
+                    else { error = result.error; if result.error.contains("capacity") { await refreshHardware(); acceptWarning = false } }
+                    break
+                }
+                try await Task.sleep(for: .milliseconds(300))
+            }
+        } catch { if !Task.isCancelled && job == request { self.error = error.localizedDescription } }
+        try? await GoClient.shared.cancelModelRun(session: session, job: request)
+    }
+    func cancel() { job = 0; running = false }
+
 }
 
 struct ModelLibraryView: View {
@@ -228,7 +230,10 @@ struct ModelLibraryView: View {
             }
             Divider()
             HStack(spacing: 12) {
-                if library.running { ProgressView().controlSize(.small); Text(library.progress).lineLimit(2); Spacer(); Button("Cancel download") { library.cancel() } }
+                if library.running {
+                    ModelDownloadProgress(status: library.progress, completed: library.completed, total: library.total)
+                    Button("Cancel download") { library.cancel() }
+                }
                 else {
                     if let file = library.selectedFile, !file.unavailableReason.isEmpty {
                         Label("Split GGUF download is not supported yet", systemImage: "info.circle")
@@ -240,7 +245,7 @@ struct ModelLibraryView: View {
                     } else {
                         Text("Public GGUF weights. Inference runs on your device.").font(.caption).foregroundStyle(.secondary)
                         Spacer()
-                        Button("Download & Run") { library.run { model, port in ready(model, port); dismiss() } }
+                        Button("Download & Run") { library.run() }
                             .buttonStyle(.borderedProminent).disabled(!library.canRun)
                     }
                 }
@@ -258,7 +263,10 @@ struct ModelLibraryView: View {
         .onChange(of: library.file) { _, _ in library.acceptWarning = false }
         .onChange(of: library.accelerator) { _, _ in library.acceptWarning = false }
         .onChange(of: library.install) { _, _ in library.acceptWarning = false }
-        .onDisappear { library.disappear() }
+        .task(id: library.job) {
+            await library.performRun { model, port in ready(model, port); dismiss() }
+        }
+        .onDisappear { library.cancel() }
     }
     #if os(iOS)
     private var mobileLibrary: some View {
@@ -332,7 +340,7 @@ struct ModelLibraryView: View {
                                 ProgressView(library.progress)
                                 Button("Cancel download", role: .cancel) { library.cancel() }
                             } else {
-                                Button("Download & Run") { library.run { model, port in ready(model, port); dismiss() } }
+                                Button("Download & Run") { library.run() }
                                     .disabled(!library.canRun)
                             }
                         }
@@ -365,5 +373,29 @@ struct ModelLibraryView: View {
             }.font(.caption).frame(maxWidth: .infinity, alignment: .leading)
                 .padding(12).background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 10))
         } else { ProgressView("Checking device capacity") }
+    }
+}
+
+
+struct ModelDownloadProgress: View {
+    let status: String
+    let completed, total: Int64
+    var fraction: Double? { total > 0 ? min(1, max(0, Double(completed) / Double(total))) : nil }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack {
+                Text(status).lineLimit(2)
+                Spacer()
+                if let fraction {
+                    Text(fraction, format: .percent.precision(.fractionLength(0))).monospacedDigit()
+                }
+            }.font(.callout)
+            ProgressView(value: fraction).progressViewStyle(.linear)
+                .accessibilityLabel(status)
+            if total > 0 {
+                Text("\(ByteCountFormatter.string(fromByteCount: completed, countStyle: .file)) of \(ByteCountFormatter.string(fromByteCount: total, countStyle: .file))")
+                    .font(.caption).foregroundStyle(.secondary).monospacedDigit()
+            }
+        }.frame(maxWidth: .infinity, alignment: .leading)
     }
 }

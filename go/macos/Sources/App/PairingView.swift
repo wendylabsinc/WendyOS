@@ -16,12 +16,21 @@ struct PairingView: View {
         Group {
             #if os(iOS)
             mobileList
+                .focusedSceneValue(\.devicePaneRefresh, PaneRefreshAction(enabled: !loading && busy == nil, perform: { Task { await refresh() } }))
             #else
-            desktopContent
+            VStack(spacing: 0) {
+                if kind == .unitree {
+                    Picker("Pair", selection: $kind) { ForEach(PairingKind.allCases) { Text($0.rawValue).tag($0) } }
+                        .pickerStyle(.segmented).fixedSize().padding(.top, 16)
+                    UnitreePairingView(session: session, deviceName: deviceName).id(session)
+                } else {
+                    desktopContent
+                        .focusedSceneValue(\.devicePaneRefresh, PaneRefreshAction(enabled: !loading && busy == nil, perform: { Task { await refresh() } }))
+                }
+            }
             #endif
         }
             .task(id: kind) { devices = []; await refresh() }
-            .focusedSceneValue(\.devicePaneRefresh, PaneRefreshAction(enabled: !loading && busy == nil, perform: { Task { await refresh() } }))
             .sheet(item: $login) { item in
                 CameraLoginSheet(item: item, deviceName: deviceName, session: session) { Task { await refresh() } }
             }
@@ -147,6 +156,9 @@ struct PairingView: View {
         }
     }
     private func refresh() async {
+        #if os(macOS)
+        guard kind != .unitree else { return }
+        #endif
         loading = true; error = nil
         defer { loading = false }
         do {

@@ -106,7 +106,7 @@ func thorElevationDecision(goos string, euid int, hasUdevRule, interactive bool)
 // (proxy vars) instead of re-downloading the ~3 GB flashpack under root's env. It
 // also keeps the user's wendy settings: without WENDY_ANALYTICS an opted-out user
 // looks like a first run, and without WENDY_CONFIG_DIR config lands in $HOME/.wendy.
-const thorSudoPreserveEnv = "--preserve-env=HOME,XDG_CACHE_HOME,WENDY_ANALYTICS,WENDY_CONFIG_DIR,WENDY_TELEMETRY_ATTEMPT_ID,WENDY_TELEMETRY_ENTRYPOINT,HTTP_PROXY,HTTPS_PROXY,NO_PROXY,http_proxy,https_proxy,no_proxy"
+const thorSudoPreserveEnv = "--preserve-env=HOME,XDG_CACHE_HOME,WENDY_ANALYTICS,WENDY_CONFIG_DIR,WENDY_TELEMETRY_ATTEMPT_ID,WENDY_TELEMETRY_ENTRYPOINT,WENDY_DESKTOP_INSTALLER,HTTP_PROXY,HTTPS_PROXY,NO_PROXY,http_proxy,https_proxy,no_proxy"
 
 // hasDeviceTypeFlag reports whether args already carries a --device-type flag in
 // either "--device-type X" or "--device-type=X" form.

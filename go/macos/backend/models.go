@@ -15,6 +15,7 @@ import (
 
 type ModelRunSnapshot struct {
 	ID                     uint64
+	Completed, Total       int64
 	Port                   uint32
 	Model, Progress, Error string
 	Done                   bool
@@ -81,7 +82,22 @@ func (b *Backend) StartModelRun(session, job uint64, port, accelerator uint32, r
 	go func() {
 		defer cancel()
 		defer func() { transport.CloseIdleConnections() }()
-		progress := func(s string) { run.mu.Lock(); run.snapshot.Progress = s; run.mu.Unlock() }
+		progress := func(s string) {
+			run.mu.Lock()
+			defer run.mu.Unlock()
+			run.snapshot.Progress = s
+			run.snapshot.Completed = 0
+			run.snapshot.Total = 0
+		}
+		downloadProgress := func(update chat.ModelPullProgress) {
+			run.mu.Lock()
+			defer run.mu.Unlock()
+			run.snapshot.Progress = update.Status
+			if update.Total > 0 {
+				run.snapshot.Progress = "Downloading model file"
+			}
+			run.snapshot.Completed, run.snapshot.Total = update.Completed, update.Total
+		}
 		work := func() error {
 			details, err := modelhub.New().Details(ctx, repo)
 			if err != nil {
@@ -184,7 +200,7 @@ func (b *Backend) StartModelRun(session, job uint64, port, accelerator uint32, r
 					return err
 				}
 			}
-			if err = chat.DevicePullModel(ctx, transport, model, progress); err != nil {
+			if err = chat.DevicePullModelProgress(ctx, transport, model, downloadProgress); err != nil {
 				return err
 			}
 			progress("Loading model and checking inference")

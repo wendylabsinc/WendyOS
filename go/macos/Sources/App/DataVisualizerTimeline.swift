@@ -123,7 +123,7 @@ final class DataTimelineInputView: NSView {
     private var lastPoint = CGPoint.zero
     private var panning = false
     private var pendingSeek: Double?
-    private var scheduledSeek: DispatchWorkItem?
+    private var scheduledSeek: Task<Void, Never>?
     private var cachedRuler: NSImage?
     private var cachedWindow: DataTimelineViewport?
     private var cachedSize = CGSize.zero
@@ -229,12 +229,14 @@ final class DataTimelineInputView: NSView {
         cursor = time
         playhead?.drag(to: time, owner: self)
         guard scheduledSeek == nil else { return }
-        let work = DispatchWorkItem { [weak self] in self?.flushSeek() }
-        scheduledSeek = work
         // Refresh decoded media, events and inspector at 20 Hz while dragging.
         // The native playheads above follow every pointer event; mouseUp flushes
         // the final exact timestamp without waiting for this interval.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0 / 20.0, execute: work)
+        scheduledSeek = Task { [weak self] in
+            do { try await Task.sleep(for: .milliseconds(50)) }
+            catch { return }
+            self?.flushSeek()
+        }
     }
     private func flushSeek() {
         scheduledSeek?.cancel(); scheduledSeek = nil

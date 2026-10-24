@@ -42,6 +42,14 @@ func DevicePullModel(ctx context.Context, transport http.RoundTripper, model str
 	p := &httpProvider{config: Config{Provider: "ollama", BaseURL: "http://wendy-device/v1"}, client: deviceHTTPClient(transport)}
 	return pullOllamaModel(ctx, p, model, progress)
 }
+func DevicePullModelProgress(ctx context.Context, transport http.RoundTripper, model string, progress func(ModelPullProgress)) error {
+	if !validModelID(model) {
+		return fmt.Errorf("invalid model name")
+	}
+	p := &httpProvider{config: Config{Provider: "ollama", BaseURL: "http://wendy-device/v1"}, client: deviceHTTPClient(transport)}
+	return pullOllamaModelProgress(ctx, p, model, progress)
+}
+
 func DeviceOllamaReady(ctx context.Context, transport http.RoundTripper) error {
 	p := &httpProvider{config: Config{Provider: "ollama", BaseURL: "http://wendy-device/v1"}, client: deviceHTTPClient(transport)}
 	r, err := discoveryRequest(ctx, p, http.MethodGet, "http://wendy-device/api/version", nil)

@@ -20,6 +20,8 @@ import (
 type DesktopCampaignInput struct {
 	Model, ModelRevision         string
 	Labels                       []string
+	Audio, ROS2                  []string
+	Telemetry                    bool
 	Classification               bool
 	Name, Camera, Event          string
 	RunInference, Notify, Upload bool
@@ -35,7 +37,7 @@ func DesktopCampaignYAML(in DesktopCampaignInput) ([]byte, error) {
 	if in.Classification && (!in.RunInference || in.Model == "") {
 		return nil, errors.New("choose an image-classification model")
 	}
-	if strings.TrimSpace(in.Camera) == "" {
+	if strings.TrimSpace(in.Camera) == "" && (in.RunInference || (len(in.Audio) == 0 && len(in.ROS2) == 0 && !in.Telemetry)) {
 		return nil, errors.New("choose a camera")
 	}
 	if in.Before > 300 || in.After == 0 || in.After > 86400 {
@@ -49,9 +51,27 @@ func DesktopCampaignYAML(in DesktopCampaignInput) ([]byte, error) {
 		return nil, errors.New("enter the event emitted by your application")
 	}
 	plan := data.Campaign{Version: 1, Name: strings.TrimSpace(in.Name),
-		Sources: []data.CampaignSource{{Camera: in.Camera, Capture: &data.SourceCapture{Mode: "continuous"}}},
+		Sources: nil,
 		Capture: data.CampaignCapture{Buffer: fmt.Sprintf("%ds", in.Before), AfterTrigger: fmt.Sprintf("%ds", in.After), Triggers: []data.CampaignTrigger{{Event: event}}},
 		Upload:  data.CampaignUpload{When: "manual"}, Export: data.CampaignExport{Annotation: "none"}}
+	if in.Camera != "" {
+		plan.Sources = append(plan.Sources, data.CampaignSource{Camera: in.Camera, Capture: &data.SourceCapture{Mode: "continuous"}})
+	}
+	for _, id := range in.Audio {
+		if strings.TrimSpace(id) == "" {
+			return nil, errors.New("choose an audio source")
+		}
+		plan.Sources = append(plan.Sources, data.CampaignSource{Audio: id})
+	}
+	for _, id := range in.ROS2 {
+		if strings.TrimSpace(id) == "" {
+			return nil, errors.New("choose a ROS 2 source")
+		}
+		plan.Sources = append(plan.Sources, data.CampaignSource{ROS2: id})
+	}
+	if in.Telemetry {
+		plan.Sources = append(plan.Sources, data.CampaignSource{Telemetry: true})
+	}
 	if in.Upload {
 		plan.Upload.When = "always"
 	}
@@ -89,6 +109,15 @@ func desktopCampaign(p *pb.DataCampaign) DesktopCampaign {
 	}
 	var sources []string
 	for _, s := range plan.Sources {
+		if s.Audio != "" {
+			sources = append(sources, s.Audio)
+		}
+		if s.ROS2 != "" {
+			sources = append(sources, s.ROS2)
+		}
+		if s.Telemetry {
+			sources = append(sources, "Device telemetry")
+		}
 		if s.Camera != "" {
 			name := s.Camera
 			if name == "*" {

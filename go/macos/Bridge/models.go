@@ -109,6 +109,7 @@ func WDModelRunStatus(session, job C.uint64_t) *C.WDModelRunResult {
 	r, err := desktop.ModelRunStatus(uint64(session), uint64(job))
 	p.status = status(err)
 	p.port = C.uint32_t(r.Port)
+	p.completed, p.total = C.int64_t(r.Completed), C.int64_t(r.Total)
 	p.model, p.progress, p.error, p.done = C.CString(r.Model), C.CString(r.Progress), C.CString(r.Error), boolInt(r.Done)
 	return p
 }

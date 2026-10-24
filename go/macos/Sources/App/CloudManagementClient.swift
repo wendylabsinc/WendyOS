@@ -76,12 +76,10 @@ struct CloudOrganizationSnapshot {
 }
 
 // Separate from device calls so organization reads cannot delay camera or app controls.
-final class CloudManagementClient: @unchecked Sendable {
+final class CloudManagementClient: Sendable {
     private let queue = DispatchQueue(label: "dev.wendy.desktop.organization", qos: .userInitiated)
-    private func perform<T>(_ body: @escaping () throws -> T) async throws -> T {
-        try await withCheckedThrowingContinuation { continuation in
-            queue.async { continuation.resume(with: Result { try body() }) }
-        }
+    private func perform<T: Sendable>(_ body: @escaping @Sendable () throws -> T) async throws -> T {
+        try await BlockingWork.run(on: queue, body)
     }
     private static func text(_ p: UnsafeMutablePointer<CChar>?) -> String {
         p.map { String(cString: $0) } ?? ""

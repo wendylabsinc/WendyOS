@@ -2,6 +2,7 @@ package backend
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -11,7 +12,43 @@ import (
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/chat"
+	"github.com/wendylabsinc/wendy/go/internal/shared/cloudrelay"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
+
+func TestCloudChatFallbackOnlyForUnsupportedService(t *testing.T) {
+	for _, verdict := range []error{status.Error(codes.PermissionDenied, "access denied"), status.Error(codes.Unauthenticated, "sign in again"), context.DeadlineExceeded} {
+		t.Run(verdict.Error(), func(t *testing.T) {
+			b := webBackend(t)
+			// Any attempt to fall back would access this nil service.
+			b.conn.ContainerService = nil
+			b.conn.RegistryDialer = func(context.Context, int) (net.Conn, error) { return nil, verdict }
+			transport, _ := deviceChatTransport(b.conn, 11434)
+			defer transport.CloseIdleConnections()
+			req, _ := http.NewRequest(http.MethodGet, "http://wendy-device/api/tags", nil)
+			_, err := transport.RoundTrip(req)
+			if !errors.Is(err, verdict) {
+				t.Fatalf("lost original refusal: %v", err)
+			}
+		})
+	}
+}
+
+func TestCloudChatFallbackRequiresManagedRuntime(t *testing.T) {
+	b := webBackend(t) // Running web app on 8080, but no managed Ollama runtime.
+	b.conn.RegistryDialer = func(context.Context, int) (net.Conn, error) {
+		return nil, &cloudrelay.UnsupportedServiceError{Service: "tcp-8080"}
+	}
+	transport, _ := deviceChatTransport(b.conn, 8080)
+	defer transport.CloseIdleConnections()
+	req, _ := http.NewRequest(http.MethodGet, "http://wendy-device/api/tags", nil)
+	_, err := transport.RoundTrip(req)
+	var unsupported *cloudrelay.UnsupportedServiceError
+	if !errors.As(err, &unsupported) || !strings.Contains(err.Error(), "no running Wendy-managed Ollama runtime") {
+		t.Fatalf("fallback failed to explain unmanaged port: %v", err)
+	}
+}
 
 func TestDeviceChatUsesSelectedTransportAndNoEnvironmentCredentials(t *testing.T) {
 	t.Setenv("WENDY_CHAT_API_KEY", "must-not-be-sent")
@@ -180,5 +217,39 @@ func TestModelJobRejectsStaleSessions(t *testing.T) {
 		if _, err := b.ModelHardware(session); err == nil {
 			t.Fatal("accepted stale hardware request")
 		}
+	}
+}
+
+func TestDownloadedModelsOnAlternateRuntime(t *testing.T) {
+	models, err := discoverDeviceChatModels(context.Background(), 11434, []uint32{11435, 11436, 11435}, func(_ context.Context, port uint32) ([]DeviceChatModel, error) {
+		if port == 11434 {
+			return nil, fmt.Errorf("default server unavailable")
+		}
+		if port == 11435 {
+			return []DeviceChatModel{{ModelOption: chat.ModelOption{ID: "downloaded-qwen"}}}, nil
+		}
+		return []DeviceChatModel{{ModelOption: chat.ModelOption{ID: "downloaded-qwen"}}, {ModelOption: chat.ModelOption{ID: "downloaded-gemma"}}}, nil
+	})
+	if err != nil || len(models) != 2 || models[0].ID != "downloaded-qwen" || models[0].Port != 11435 || models[1].Port != 11436 {
+		t.Fatalf("downloaded models: %+v, %v", models, err)
+	}
+	models, err = discoverDeviceChatModels(context.Background(), 11436, []uint32{11435}, func(_ context.Context, port uint32) ([]DeviceChatModel, error) {
+		return []DeviceChatModel{{ModelOption: chat.ModelOption{ID: "same-model"}}}, nil
+	})
+	if err != nil || len(models) != 1 || models[0].Port != 11436 {
+		t.Fatalf("preferred runtime lost: %+v, %v", models, err)
+	}
+}
+
+func TestDownloadedModelPrefersReachableRuntime(t *testing.T) {
+	models, err := discoverDeviceChatModels(context.Background(), 11434, []uint32{11437}, func(_ context.Context, port uint32) ([]DeviceChatModel, error) {
+		model := DeviceChatModel{ModelOption: chat.ModelOption{ID: "qwen3:4b"}}
+		if port == 11434 {
+			model.UnavailableReason = "Connect through Nearby"
+		}
+		return []DeviceChatModel{model}, nil
+	})
+	if err != nil || len(models) != 1 || models[0].Port != 11437 || models[0].UnavailableReason != "" {
+		t.Fatalf("model route: %+v, %v", models, err)
 	}
 }

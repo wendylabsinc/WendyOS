@@ -17,7 +17,7 @@ func WDChatModels(session C.uint64_t, port C.uint32_t) *C.WDChatModelsResult {
 	p.status = status(err)
 	p.items, p.count = alloc[C.WDChatModel](len(items)), C.size_t(len(items))
 	for i, m := range items {
-		unsafe.Slice(p.items, len(items))[i] = C.WDChatModel{id: C.CString(m.ID), name: C.CString(m.Name)}
+		unsafe.Slice(p.items, len(items))[i] = C.WDChatModel{id: C.CString(m.ID), name: C.CString(m.Name), port: C.uint32_t(m.Port), unavailable_reason: C.CString(m.UnavailableReason)}
 	}
 	return p
 }
@@ -30,6 +30,7 @@ func WDChatModelsFree(p *C.WDChatModelsResult) {
 	for _, m := range unsafe.Slice(p.items, int(p.count)) {
 		free(m.id)
 		free(m.name)
+		free(m.unavailable_reason)
 	}
 	free(p.items)
 	free(p.status.message)

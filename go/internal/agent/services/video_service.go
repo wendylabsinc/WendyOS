@@ -2490,6 +2490,7 @@ func (s *VideoService) pumpFrames(stream grpc.ServerStreamingServer[agentpb.Vide
 				TimestampNs: frame.tsNs,
 				Codec:       frame.codec,
 				RawFormat:   frame.rawFmt,
+				RawExtrema:  rawFrameExtrema(frame),
 			}); err != nil {
 				return err
 			}

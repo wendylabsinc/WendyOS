@@ -120,6 +120,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        if InstallSession.shared.running {
+            let alert = NSAlert()
+            alert.messageText = "The installer is still running"
+            alert.informativeText = "Return to the installer to finish or stop it before quitting Wendy. Interrupting a write may leave the device unable to boot."
+            alert.addButton(withTitle: "Keep Wendy open")
+            alert.runModal()
+            return .terminateCancel
+        }
         Task { await model?.shutdown(); sender.reply(toApplicationShouldTerminate: true) }
         return .terminateLater
     }

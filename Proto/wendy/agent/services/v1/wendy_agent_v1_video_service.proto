@@ -183,6 +183,11 @@ message VideoFrame {
     uint64     timestamp_ns = 2; // wall-clock timestamp in nanoseconds
     VideoCodec codec        = 3; // codec used; default 0 = H264
     RawFormat  raw_format   = 4; // set on VIDEO_CODEC_RAW frames only
+    // Wendy Data's extrema for a supported picture-only Y16 frame. Values are
+    // sensor counts, NOT temperatures: the camera's radiometric mode and scale
+    // must be known before converting them. Absent on older agents or layouts
+    // the decoder cannot interpret. Computed from this exact raw payload.
+    RawFrameExtrema raw_extrema = 5;
 }
 
 // A tunable V4L2 control on a local camera -- exposure, gain, white balance and
@@ -287,4 +292,15 @@ message CameraDHCPInterfaceStatus {
     // disabled, waiting, serving, degraded, blocked, missing, or unknown.
     string state = 8;
     string detail = 9;
+}
+
+// Coordinates are zero-based sensor pixels, before display scaling or rotation.
+// Zero and 65535 are excluded as invalid Y16 samples; ties use row-major order.
+message RawFrameExtrema {
+    uint32 cold_x = 1;
+    uint32 cold_y = 2;
+    uint32 cold_raw = 3;
+    uint32 hot_x = 4;
+    uint32 hot_y = 5;
+    uint32 hot_raw = 6;
 }

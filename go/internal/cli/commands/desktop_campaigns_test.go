@@ -69,3 +69,22 @@ func TestDesktopCampaignClassifierAndMultipleLiteralLabels(t *testing.T) {
 		t.Fatalf("bad classifier plan: %+v", p)
 	}
 }
+
+func TestDesktopCampaignSensorSelection(t *testing.T) {
+	in := DesktopCampaignInput{Name: "sensors", Event: "capture", After: 10, Audio: []string{"audio:mic"}, ROS2: []string{"ros2:rmw_cyclonedds_cpp:domain-42:/scan"}, Telemetry: true}
+	raw, err := DesktopCampaignYAML(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := data.ParseCampaign(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Sources) != 3 || plan.Sources[0].Audio != "audio:mic" || plan.Sources[1].ROS2 != in.ROS2[0] || !plan.Sources[2].Telemetry {
+		t.Fatalf("lost source selection: %+v", plan.Sources)
+	}
+	in.RunInference = true
+	if _, err := DesktopCampaignYAML(in); err == nil {
+		t.Fatal("allowed vision inference without a camera")
+	}
+}

@@ -134,7 +134,7 @@ struct LogsView: View {
         #else
         .padding(.horizontal, 28).padding(.bottom, 20)
         #endif
-        .onChange(of: model.logApp) { _, _ in Task { await model.streamLogs() } }
+        .task(id: model.logApp) { await model.streamLogs() }
         #endif
     }
     #if os(iOS)
@@ -215,7 +215,7 @@ struct LogsView: View {
             }
             .onChange(of: model.logs.last?.id) { _, _ in if follow { proxy.scrollTo("bottom", anchor: .bottom) } }
             .onChange(of: follow) { _, value in if value { proxy.scrollTo("bottom", anchor: .bottom) } }
-            .onChange(of: model.logApp) { _, _ in Task { await model.streamLogs() } }
+            .task(id: model.logApp) { await model.streamLogs() }
             .sheet(item: $inspectedLog) { entry in
                 NavigationStack {
                     Form {

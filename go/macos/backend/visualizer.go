@@ -37,6 +37,7 @@ type VisualSample struct {
 	Value                      float64
 	HasValue                   bool
 	Image                      []byte
+	Points                     []VisualPoint
 }
 type VisualSnapshot struct {
 	Clock, BootID string
@@ -45,6 +46,7 @@ type VisualSnapshot struct {
 	Samples       []VisualSample
 	Warnings      []string
 	Videos        []VisualVideo
+	Audio         []VisualAudio
 }
 
 type VisualVideo struct {
@@ -116,6 +118,9 @@ func readVisualEpisode(ctx context.Context, client pb.DataServiceClient, episode
 	complete := false
 	defer func() {
 		if !complete {
+			for _, audio := range out.Audio {
+				_ = os.Remove(audio.Path)
+			}
 			for _, video := range out.Videos {
 				_ = os.Remove(video.Path)
 			}
@@ -209,6 +214,11 @@ func readVisualEpisode(ctx context.Context, client pb.DataServiceClient, episode
 		}
 		out.Videos = append(out.Videos, VisualVideo{Track: track, Path: movie, Times: times})
 	}
+	out.readSensors(ctx, client, episode, manifest)
+	if len(out.Samples) >= visualSampleLimit {
+		out.Warnings = append(out.Warnings, "The viewer sample limit was reached. Export the full episode to retain all recorded samples.")
+	}
+	sort.SliceStable(out.Audio, func(i, j int) bool { return out.Audio[i].Start < out.Audio[j].Start })
 	for _, s := range out.Samples {
 		out.Start = min(out.Start, s.Time)
 		out.End = max(out.End, s.Time)

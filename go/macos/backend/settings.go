@@ -99,6 +99,12 @@ func (b *Backend) JoinWiFi(session uint64, ssid, password string, security int32
 	if session == 0 {
 		return errors.New("select a device first")
 	}
+	if err := b.validSession(session); err != nil {
+		return err
+	}
+	if b.lite != nil {
+		return b.joinLiteWiFi(ssid, password)
+	}
 	conn, err := b.connection(session)
 	if err != nil {
 		return err

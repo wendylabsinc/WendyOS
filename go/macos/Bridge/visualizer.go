@@ -6,6 +6,8 @@ package main
 import "C"
 
 import (
+	"errors"
+	pb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	"os"
 	"strings"
 	"unsafe"
@@ -62,6 +64,14 @@ func WDVisualEpisodeLoad(session C.uint64_t, episode *C.char) *C.WDVisualSnapsho
 		}
 		s.image, s.image_count = alloc[C.uint8_t](len(r.Image)), C.size_t(len(r.Image))
 		copy(unsafe.Slice((*byte)(unsafe.Pointer(s.image)), len(r.Image)), r.Image)
+		s.points, s.point_count = alloc[C.WDVisualPoint](len(r.Points)), C.size_t(len(r.Points))
+		for j, point := range r.Points {
+			unsafe.Slice(s.points, len(r.Points))[j] = C.WDVisualPoint{x: C.float(point.X), y: C.float(point.Y), z: C.float(point.Z)}
+		}
+	}
+	p.audio, p.audio_count = alloc[C.WDVisualAudio](len(snapshot.Audio)), C.size_t(len(snapshot.Audio))
+	for i, r := range snapshot.Audio {
+		unsafe.Slice(p.audio, len(snapshot.Audio))[i] = C.WDVisualAudio{track: C.CString(r.Track), local_path: C.CString(r.Path), start_ns: C.int64_t(r.Start), end_ns: C.int64_t(r.End)}
 	}
 	p.videos, p.video_count = alloc[C.WDVisualVideo](len(snapshot.Videos)), C.size_t(len(snapshot.Videos))
 	for i, r := range snapshot.Videos {
@@ -93,6 +103,7 @@ func WDVisualSnapshotFree(p *C.WDVisualSnapshotResult) {
 		free(r.detail)
 		free(r.unit)
 		free(r.image)
+		free(r.points)
 	}
 	for _, v := range unsafe.Slice(p.videos, int(p.video_count)) {
 		free(v.track)
@@ -102,6 +113,14 @@ func WDVisualSnapshotFree(p *C.WDVisualSnapshotResult) {
 		free(v.local_path)
 		free(v.timestamps)
 	}
+	for _, a := range unsafe.Slice(p.audio, int(p.audio_count)) {
+		free(a.track)
+		if a.local_path != nil {
+			_ = os.Remove(C.GoString(a.local_path))
+		}
+		free(a.local_path)
+	}
+	free(p.audio)
 	free(p.videos)
 	free(p.tracks)
 	free(p.samples)
@@ -110,4 +129,58 @@ func WDVisualSnapshotFree(p *C.WDVisualSnapshotResult) {
 	free(p.warnings)
 	free(p.status.message)
 	free(p)
+}
+
+//export WDVisualEpisodeExport
+func WDVisualEpisodeExport(session C.uint64_t, episode *C.char) *C.WDVisualExportResult {
+	p := alloc[C.WDVisualExportResult](1)
+	filename, err := desktop.ExportVisualEpisode(uint64(session), C.GoString(episode))
+	p.status = status(err)
+	p.local_path = C.CString(filename)
+	return p
+}
+
+//export WDVisualExportFree
+func WDVisualExportFree(p *C.WDVisualExportResult) {
+	if p == nil {
+		return
+	}
+	if p.local_path != nil {
+		_ = os.Remove(C.GoString(p.local_path))
+	}
+	free(p.local_path)
+	free(p.status.message)
+	free(p)
+}
+
+//export WDVisualRecording
+func WDVisualRecording(session C.uint64_t, action C.WDVisualRecordingAction, name *C.char, sources **C.char, count C.size_t) *C.WDVisualEpisodesResult {
+	p := alloc[C.WDVisualEpisodesResult](1)
+	var row *pb.DataEpisode
+	var err error
+	switch action {
+	case C.WD_RECORDING_STATUS:
+		row, err = desktop.VisualRecordingStatus(uint64(session))
+	case C.WD_RECORDING_STOP:
+		row, err = desktop.StopVisualRecording(uint64(session))
+	case C.WD_RECORDING_START:
+		if count == 0 || count > 256 || sources == nil {
+			err = errors.New("choose recording sources")
+			break
+		}
+		ids := make([]string, 0, int(count))
+		for _, id := range unsafe.Slice(sources, int(count)) {
+			ids = append(ids, C.GoString(id))
+		}
+		row, err = desktop.StartVisualRecording(uint64(session), C.GoString(name), ids)
+	default:
+		err = errors.New("invalid recording action")
+	}
+	p.status = status(err)
+	if row != nil {
+		p.items = alloc[C.WDVisualEpisode](1)
+		p.count = 1
+		*p.items = C.WDVisualEpisode{id: C.CString(row.GetId()), name: C.CString(row.GetName()), state: C.CString(row.GetState()), started_ns: C.int64_t(row.GetStartedUnixNanos()), size_bytes: C.int64_t(row.GetSizeBytes())}
+	}
+	return p
 }

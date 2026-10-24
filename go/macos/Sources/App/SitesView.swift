@@ -109,7 +109,7 @@ struct SitesView: View {
         .task { await model.load() }
         #endif
         #if os(macOS)
-        .onChange(of: app.account?.signedIn) { _, value in if value == true { Task { await model.load() } } }
+        .task(id: app.account?.signedIn) { if app.account?.signedIn == true { await model.load() } }
         #endif
         .focusedSceneValue(\.fleetRefresh, PaneRefreshAction(enabled: !model.loading, perform: { Task { await model.load() } }))
     }

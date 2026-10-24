@@ -8,7 +8,7 @@ typedef struct {
     int32_t paired, connected, can_pair;
 } WDPairing;
 typedef struct { WDStatus status; WDPairing *items; size_t count; char *warning; } WDPairingsResult;
-typedef struct { char *id, *detail; int32_t healthy; } WDCampaignSource;
+typedef struct { char *id, *detail, *kind; int32_t healthy; } WDCampaignSource;
 typedef struct { WDStatus status; WDCampaignSource *items; size_t count; } WDCampaignSourcesResult;
 typedef enum { WD_TRIGGER_DETECTION, WD_TRIGGER_APP_EVENT, WD_TRIGGER_CLASSIFICATION } WDCampaignTrigger;
 typedef enum { WD_ACTION_NOTIFY_AND_RECORD, WD_ACTION_RECORD } WDCampaignAction;
@@ -22,6 +22,7 @@ typedef struct {
     char *model, *model_revision;
     char **labels;
     size_t label_count;
+    char **audio, **ros2; size_t audio_count, ros2_count; int32_t telemetry;
 } WDCampaignInput;
 typedef struct { WDStatus status; char *revision, *license; char **labels; size_t label_count; int64_t weights_bytes; } WDVisionModelResult;
 WDVisionModelResult *WDVisionModel(char *repository, WDCampaignTrigger trigger);

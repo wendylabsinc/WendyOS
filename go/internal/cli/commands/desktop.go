@@ -11,12 +11,15 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
+	"github.com/wendylabsinc/wendy/go/internal/cli/providers"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/internal/shared/devicepin"
 	"github.com/wendylabsinc/wendy/go/internal/shared/discovery"
+	"github.com/wendylabsinc/wendy/go/internal/shared/models"
 )
 
 // DesktopPinRecovery returns the exact target of the CLI's unpin advice. Never
@@ -52,6 +55,7 @@ type DesktopDevice struct {
 	Selector  string `json:"selector"`
 	Transport string `json:"transport"`
 	Address   string `json:"address"`
+	Lite      bool   `json:"lite"`
 }
 
 // InitializeDesktop must run once, before any other desktop operation.
@@ -68,12 +72,35 @@ func InitializeDesktop(cliPath string) error {
 		return errors.New("bundled Wendy CLI is not executable")
 	}
 	meshWorkerExecutable = func() (string, error) { return cliPath, nil }
+	// Finder launches without the user's shell PATH. Keep explicit entries first,
+	// then allow the macOS app to find Homebrew's QEMU and its firmware tools.
+	if runtime.GOOS == "darwin" {
+		path := os.Getenv("PATH")
+		for _, directory := range []string{"/opt/homebrew/bin", "/usr/local/bin"} {
+			if !strings.Contains(":"+path+":", ":"+directory+":") {
+				path += ":" + directory
+			}
+		}
+		if err := os.Setenv("PATH", path); err != nil {
+			return err
+		}
+	}
 	jsonOutput = true
 	return nil
 }
 
 func DesktopNearby(ctx context.Context) ([]DesktopDevice, error) {
-	devices, err := discovery.CollectLAN(ctx, cliLANStreamOptions(ctx), 5*time.Second)
+	var devices []models.LANDevice
+	var lite []models.ExternalDevice
+	var err, liteErr error
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		devices, err = discovery.CollectLAN(ctx, cliLANStreamOptions(ctx), 5*time.Second)
+	}()
+	go func() { defer wg.Done(); lite, liteErr = (&providers.MicroWendyProvider{}).DiscoverDevices(ctx) }()
+	wg.Wait()
 	result := make([]DesktopDevice, 0, len(devices))
 	for _, d := range devices {
 		host := strings.TrimSuffix(d.Hostname, ".")
@@ -82,6 +109,9 @@ func DesktopNearby(ctx context.Context) ([]DesktopDevice, error) {
 		}
 		selector := net.JoinHostPort(host, strconv.Itoa(d.Port))
 		transport := "LAN"
+		if d.WendyLite {
+			selector = "wendy-lite:" + d.Hostname
+		}
 		if d.Mesh {
 			selector = d.Hostname
 			transport = "Mesh"
@@ -90,9 +120,22 @@ func DesktopNearby(ctx context.Context) ([]DesktopDevice, error) {
 		if name == "" {
 			name = d.Hostname
 		}
-		result = append(result, DesktopDevice{ID: selector, Name: name, Selector: selector, Transport: transport, Address: d.IPAddress})
+		result = append(result, DesktopDevice{ID: selector, Name: name, Selector: selector, Transport: transport, Address: d.IPAddress, Lite: d.WendyLite})
 	}
-	return result, err
+	for _, d := range lite {
+		if d.ConnectionInfo["needsInstall"] == "true" {
+			continue
+		}
+		address := d.ConnectionInfo["ip"]
+		if d.ConnectionType() == "USB" {
+			address = d.ConnectionInfo["serialPort"]
+		}
+		result = append(result, DesktopDevice{ID: d.ID, Name: d.DisplayName, Selector: d.ID, Transport: d.ConnectionType(), Address: address, Lite: true})
+	}
+	if len(result) == 0 {
+		return result, errors.Join(err, liteErr)
+	}
+	return result, nil
 }
 
 func DesktopCloud(ctx context.Context) ([]DesktopDevice, error) {
@@ -114,7 +157,7 @@ func DesktopCloud(ctx context.Context) ([]DesktopDevice, error) {
 		if err != nil {
 			return nil, err
 		}
-		result = append(result, DesktopDevice{ID: selector, Name: d.GetName(), Selector: selector, Transport: "Cloud", Address: d.GetIpAddress()})
+		result = append(result, DesktopDevice{ID: selector, Name: d.GetName(), Selector: selector, Transport: "Cloud", Address: d.GetIpAddress(), Lite: d.isLite()})
 	}
 	return result, nil
 }
