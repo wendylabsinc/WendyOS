@@ -60,6 +60,13 @@ final class GoClient: @unchecked Sendable {
         }
     }
 
+    #if os(iOS)
+    func initializeMobile() async throws {
+        let directory = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true).appendingPathComponent("Wendy", isDirectory: true)
+        try await perform { try Self.withCString(directory.path) { try Self.finish(WDInitializeMobile($0)) } }
+    }
+    #endif
+
     func initialize(cliPath: String) async throws {
         try await perform { try Self.withCString(cliPath) { try Self.finish(WDInitialize($0)) } }
     }

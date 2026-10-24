@@ -6,6 +6,7 @@ WDAccountResult *WDAccount(void);
 WDAccountsResult *WDAccounts(void);
 void WDAccountsFree(WDAccountsResult *value);
 void WDAccountFree(WDAccountResult *value);
+WDStatus *WDInitializeMobile(char *directory);
 WDStatus *WDInitialize(char *cli_path);
 WDDevicesResult *WDNearby(void);
 WDDevicesResult *WDCloud(void);
@@ -62,4 +63,5 @@ WDStatus *WDDeleteAccess(char *account, char *org, char *id);
 #include "ChatTypes.h"
 #include "ModelLibraryTypes.h"
 #include "FleetTypes.h"
+#include "SettingsTypes.h"
 #endif

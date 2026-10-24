@@ -69,6 +69,7 @@ struct ActivityView: View {
     @State private var snapshot: ResourceSnapshot?
     @State private var error: String?
     @State private var live = true
+    @State private var visible = true
     @State private var sortOrder = [KeyPathComparator(\ResourceSnapshot.Row.name, comparator: .localizedStandard)]
     @State private var selection: String?
     @State private var ports: [ResourcePort] = []
@@ -86,8 +87,52 @@ struct ActivityView: View {
             }
     }
     var body: some View {
+        Group {
+            #if os(iOS)
+            mobileContent
+            #else
+            desktopContent
+            #endif
+        }
+        .onAppear { visible = true }.onDisappear { visible = false }
+        .task(id: live && visible) {
+            guard live && visible else { return }
+            while !Task.isCancelled {
+                await refresh()
+                do { try await Task.sleep(for: .seconds(1)) } catch { return }
+            }
+        }
+        .onChange(of: model.apps) { _, _ in Task { await refresh() } }
+        .task(id: selectedApp) { await refreshPorts() }
+    }
+
+    private var desktopContent: some View {
         VStack(spacing: 8) {
             if let snapshot {
+                #if os(iOS)
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 145), spacing: 8)], spacing: 8) {
+                    metrics(snapshot)
+                }
+                if !snapshot.thermals.isEmpty || snapshot.gpus.contains(where: { $0.temperature != nil || $0.power != nil }) {
+                    DisclosureGroup("Temperature & power") {
+                        ScrollView {
+                            VStack(alignment: .leading, spacing: 8) {
+                                ForEach(snapshot.thermals) { zone in
+                                    HStack {
+                                        Text(zone.id).lineLimit(1)
+                                        Spacer()
+                                        Text(String(format: "%.0f°C", zone.temperature)).monospacedDigit()
+                                    }
+                                }
+                                ForEach(snapshot.gpus) { gpu in
+                                    if let temp = gpu.temperature { Text(gpu.name + " · " + String(format: "%.0f°C", temp)) }
+                                    if let power = gpu.power { Text(gpu.name + " · " + String(format: "%.1f W", power)) }
+                                }
+                            }.font(.caption).foregroundStyle(.secondary).padding(.top, 8)
+                        }.frame(maxHeight: 120)
+                    }.font(.caption).padding(.horizontal, 8)
+                }
+                #else
                 HStack(alignment: .center, spacing: 16) {
                 ScrollView(.horizontal) {
                     HStack(spacing: 12) {
@@ -128,8 +173,31 @@ struct ActivityView: View {
                         }.font(.caption).foregroundStyle(.secondary)
                     }.scrollIndicators(.hidden)
                 }
+                #endif
                 if let error { FailureNote(message: error) }
                 if !snapshot.diskError.isEmpty { Text("Storage could not refresh. Other readings are current.").font(.caption).foregroundStyle(.secondary).help(snapshot.diskError) }
+                #if os(iOS)
+                List(rows) { row in
+                    DisclosureGroup(isExpanded: Binding(get: { selection == row.id }, set: { expanded in
+                        ports = []; portsError = nil
+                        selection = expanded ? row.id : nil
+                    })) {
+                        if let portsError { FailureNote(message: portsError) }
+                        ForEach(ports) { port in Text("\(port.protocolName.uppercased()) \(port.address):\(port.port)").font(.caption.monospaced()) }
+                        AppControlMenu(model: model, app: row.app, state: row.state)
+                    } label: {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text(row.name).font(.subheadline.weight(.medium))
+                            HStack {
+                                Text("CPU " + percent(row.cpu))
+                                Text(bytes(row.memory))
+                                Spacer()
+                                Text(row.state.title).foregroundStyle(row.state.color)
+                            }.font(.caption).monospacedDigit()
+                        }.padding(.vertical, 4)
+                    }
+                }.listStyle(.plain).refreshable { await refresh() }
+                #else
                 HStack(alignment: .top, spacing: 16) {
                 Table(rows, selection: $selection, sortOrder: $sortOrder) {
                     TableColumn("App / Service", value: \.name) { row in
@@ -181,6 +249,7 @@ struct ActivityView: View {
                     }
                 }.frame(width: 230, alignment: .leading).padding(.top, 8)
                 }
+                #endif
                 Text("CPU percentages use the whole machine, across all cores.").font(.caption).foregroundStyle(.secondary)
             } else if let error {
                 FailureView(title: "Could not load activity", error: error) { live = false; Task { await refresh() } }
@@ -188,17 +257,78 @@ struct ActivityView: View {
                 ProgressView("Sampling device activity…").frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }.padding(.horizontal, 20).padding(.bottom, 10)
-        .task(id: live) {
-            guard live else { return }
-            while !Task.isCancelled {
-                await refresh()
-                do { try await Task.sleep(for: .seconds(1)) } catch { return }
-            }
-        }
-        .onChange(of: model.apps) { _, _ in Task { await refresh() } }
-        .task(id: selectedApp) { await refreshPorts() }
     }
+    #if os(iOS)
+    private var mobileContent: some View {
+        List {
+            Section("Device") {
+                if let snapshot {
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 140), spacing: 8)], spacing: 12) { metrics(snapshot) }
+                        .listRowInsets(EdgeInsets(top: 8, leading: 8, bottom: 8, trailing: 8))
+                    if !snapshot.thermals.isEmpty || snapshot.gpus.contains(where: { $0.temperature != nil || $0.power != nil }) {
+                        NavigationLink("Temperature & power") {
+                            Form {
+                                Section("Temperature") {
+                                    ForEach(snapshot.thermals) { zone in LabeledContent(zone.id, value: String(format: "%.0f°C", zone.temperature)) }
+                                }
+                                ForEach(snapshot.gpus) { gpu in
+                                    Section(gpu.name) {
+                                        if let temp = gpu.temperature { LabeledContent("Temperature", value: String(format: "%.0f°C", temp)) }
+                                        if let power = gpu.power { LabeledContent("Power", value: String(format: "%.1f W", power)) }
+                                    }
+                                }
+                            }.navigationTitle("Temperature & power").navigationBarTitleDisplayMode(.inline)
+                        }
+                    }
+                } else if error == nil { HStack { ProgressView(); Text("Sampling activity…").foregroundStyle(.secondary) } }
+                if let error { FailureNote(message: error) }
+                if let snapshot, !snapshot.diskError.isEmpty { Text("Storage is unavailable.").font(.caption).foregroundStyle(.secondary) }
+            }
+            Section("Apps") {
+                if let error = model.appsError { FailureNote(message: error) }
+                ForEach(model.apps) { app in
+                    NavigationLink {
+                        AppActivityDetail(model: model, appName: app.appName, initialSnapshot: snapshot)
+                    } label: {
+                        VStack(alignment: .leading, spacing: 7) {
+                            Text(app.appName).font(.subheadline.weight(.semibold)).lineLimit(2)
+                            HStack(spacing: 6) {
+                                Circle().fill(app.runningState.color).frame(width: 6, height: 6)
+                                Text(app.runningState.title)
+                                if let row = snapshot?.rows.first(where: { !$0.isService && $0.app == app.appName }), app.runningState == .running {
+                                    Text("· CPU " + percent(row.cpu))
+                                    Text("· " + bytes(row.memory))
+                                } else if let version = app.appVersion { Text("· " + version) }
+                            }.font(.caption).foregroundStyle(.secondary).monospacedDigit()
+                        }.padding(.vertical, 5)
+                    }
+                }
+                if model.apps.isEmpty && model.appsError == nil { Text("No apps installed").foregroundStyle(.secondary) }
+            }
+        }.listStyle(.insetGrouped)
+            .refreshable { await model.refreshDetails(); await refresh() }
+    }
+    #endif
 
+    @ViewBuilder private func metrics(_ snapshot: ResourceSnapshot) -> some View {
+                        metric("CPU", value: percent(snapshot.cpu), detail: "\(snapshot.cpuCount) logical cores",
+                               fraction: (snapshot.cpu ?? 0) / 100, color: .blue)
+                        metric("Memory", value: snapshot.hasHost ? bytes(snapshot.memoryUsed) : "—",
+                               detail: snapshot.hasHost ? "of " + bytes(snapshot.memoryTotal) : "Unavailable",
+                               fraction: ratio(snapshot.memoryUsed, snapshot.memoryTotal), color: .purple)
+                        metric("Storage", value: snapshot.hasDisk ? bytes(snapshot.diskUsed) : "—",
+                               detail: snapshot.hasDisk ? "of " + bytes(snapshot.diskTotal) + " · " + snapshot.diskMount : "Unavailable",
+                               fraction: ratio(snapshot.diskUsed, snapshot.diskTotal), color: .orange)
+                        ForEach(snapshot.gpus) { gpu in
+                            metric("GPU · " + gpu.name, value: percent(gpu.utilization),
+                                   detail: gpu.memoryTotal > 0 ? bytes(gpu.memoryUsed) + " / " + bytes(gpu.memoryTotal) : "Shared system memory",
+                                   fraction: gpu.utilization / 100, color: .green)
+                        }
+                        if let battery = snapshot.battery {
+                            metric("Battery", value: percent(battery.percent), detail: battery.state,
+                                   fraction: battery.percent / 100, color: .green)
+                        }
+    }
     private func ratio(_ used: Int64, _ total: Int64) -> Double { total > 0 ? min(1, max(0, Double(used) / Double(total))) : 0 }
     private func metric(_ title: String, value: String, detail: String, fraction: Double, color: Color) -> some View {
         VStack(alignment: .leading, spacing: 5) {
@@ -209,8 +339,8 @@ struct ActivityView: View {
             }
             ProgressView(value: min(1, max(0, fraction))).tint(color)
             Text(detail).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
-        }.padding(8).frame(width: 210, alignment: .leading)
-            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 10))
+        }.padding(8).desktopFrame(width: 210)
+            .background(PlatformColors.control, in: RoundedRectangle(cornerRadius: 10))
     }
     private func refresh() async {
         do {
@@ -235,3 +365,95 @@ struct ActivityView: View {
         }
     }
 }
+
+#if os(iOS)
+private struct AppActivityDetail: View {
+    @ObservedObject var model: AppModel
+    let appName: String
+    let initialSnapshot: ResourceSnapshot?
+    @State private var snapshot: ResourceSnapshot?
+    @State private var ports: [ResourcePort] = []
+    @State private var error: String?
+    @State private var portError: String?
+    @State private var loadingPorts = true
+    @State private var visible = true
+    @State private var showingLogs = false
+    private var app: DeviceApp? { model.apps.first { $0.appName == appName } }
+    private var resource: ResourceSnapshot.Row? { (snapshot ?? initialSnapshot)?.rows.first { !$0.isService && $0.app == appName } }
+    var body: some View {
+        Form {
+            Section {
+                Text(appName).font(.headline).textSelection(.enabled)
+                if let app {
+                    LabeledContent("Status") { Text(app.runningState.title).foregroundStyle(app.runningState.color) }
+                    if let version = app.appVersion { LabeledContent("Version", value: version) }
+                    if let reason = app.terminationReason, !reason.isEmpty { Text(reason).font(.callout).foregroundStyle(.secondary) }
+                }
+            }
+            Section("Usage") {
+                if let error { FailureNote(message: error) }
+                LabeledContent("CPU", value: percent(resource?.cpu))
+                LabeledContent("Memory", value: resource.map { bytes($0.memory) } ?? "Unavailable")
+                LabeledContent("App GPU", value: "Not reported")
+            }
+            if let data = snapshot ?? initialSnapshot, !data.gpus.isEmpty {
+                Section("Device GPU") {
+                    ForEach(data.gpus) { gpu in
+                        LabeledContent(gpu.name, value: percent(gpu.utilization))
+                        if gpu.memoryTotal > 0 { LabeledContent("GPU memory", value: bytes(gpu.memoryUsed) + " / " + bytes(gpu.memoryTotal)) }
+                        else { Text("Shared system memory").foregroundStyle(.secondary) }
+                    }
+                }
+            }
+            Section("Ports") {
+                if let portError { FailureNote(message: portError) }
+                else if loadingPorts && ports.isEmpty { ProgressView() }
+                else if ports.isEmpty { Text("No listening ports").foregroundStyle(.secondary) }
+                ForEach(ports) { port in Text(port.label).font(.callout.monospaced()).textSelection(.enabled) }
+            }
+            if let app {
+                Section {
+                    if app.hasWebpage { Button("Open app", systemImage: "arrow.up.right.square") { Task { await model.openApp(app) } }.disabled(app.runningState != .running) }
+                    AppControlMenu(model: model, app: appName, state: app.runningState)
+                }
+            }
+            if let data = snapshot ?? initialSnapshot {
+                let services = data.rows.filter { $0.isService && $0.app == appName }
+                if !services.isEmpty {
+                    Section("Services") {
+                        ForEach(services) { service in
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(service.name)
+                                Text("CPU " + percent(service.cpu) + " · " + bytes(service.memory)).font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                }
+            }
+        }.navigationTitle("App details").navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                Menu {
+                    Button("Logs", systemImage: "doc.text") { model.logApp = appName; showingLogs = true }
+                    AppDeleteMenu(model: model, app: appName)
+                } label: { Image(systemName: "ellipsis") }.accessibilityLabel("App actions")
+            }
+            .navigationDestination(isPresented: $showingLogs) { DeviceLogsPage(model: model) }
+            .onAppear { visible = true }.onDisappear { visible = false }
+            .task(id: visible) {
+                guard visible else { return }
+                while !Task.isCancelled {
+                    await refresh()
+                    do { try await Task.sleep(for: .seconds(2)) } catch { return }
+                }
+            }
+            .refreshable { await model.refreshDetails(); await refresh() }
+    }
+    private func refresh() async {
+        do { let next = try await model.resources(); if !Task.isCancelled { snapshot = next; error = nil } }
+        catch { if !Task.isCancelled { self.error = error.localizedDescription } }
+        do { let next = try await model.ports(app: appName); if !Task.isCancelled { ports = next; portError = nil } }
+        catch { if !Task.isCancelled { portError = error.localizedDescription } }
+        loadingPorts = false
+    }
+}
+#endif

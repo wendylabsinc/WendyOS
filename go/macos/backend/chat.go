@@ -17,6 +17,7 @@ import (
 )
 
 type ChatTurn struct {
+	Cards                       []ChatCard
 	mu                          sync.Mutex
 	cancel                      context.CancelFunc
 	ID                          uint64
@@ -30,6 +31,7 @@ type ChatTurn struct {
 	nextApproval                uint64
 }
 type ChatSnapshot struct {
+	Cards                       []ChatCard
 	Text, Error                 string
 	Done                        bool
 	Activity                    string
@@ -149,7 +151,7 @@ func (b *Backend) StartChat(session, turn uint64, port uint32, model string, mes
 			state.mu.Unlock()
 			return
 		}
-		engine := chat.NewEngine(deviceHistoryProvider{Provider: provider, history: messages[:len(messages)-1]}, executor, deviceChatPrompt())
+		engine := chat.NewEngine(deviceHistoryProvider{Provider: provider, history: messages[:len(messages)-1]}, &deviceCardTools{Executor: &deviceCampaignTools{Executor: executor, conn: conn, approveNotifications: state.approve}, conn: conn, turn: state}, deviceChatPrompt())
 		err = engine.Turn(ctx, messages[len(messages)-1].Content, func(event chat.Event) {
 			state.mu.Lock()
 			defer state.mu.Unlock()
@@ -199,7 +201,7 @@ func (b *Backend) PollChat(session, turn uint64) (ChatSnapshot, error) {
 	}
 	b.chatTurn.mu.Lock()
 	defer b.chatTurn.mu.Unlock()
-	return ChatSnapshot{Text: b.chatTurn.Text, Error: b.chatTurn.Error, Done: b.chatTurn.Done, Activity: b.chatTurn.Activity, Trace: b.chatTurn.Trace, ApprovalID: b.chatTurn.ApprovalID, ApprovalAction: b.chatTurn.ApprovalAction, ApprovalApp: b.chatTurn.ApprovalApp}, nil
+	return ChatSnapshot{Cards: append([]ChatCard(nil), b.chatTurn.Cards...), Text: b.chatTurn.Text, Error: b.chatTurn.Error, Done: b.chatTurn.Done, Activity: b.chatTurn.Activity, Trace: b.chatTurn.Trace, ApprovalID: b.chatTurn.ApprovalID, ApprovalAction: b.chatTurn.ApprovalAction, ApprovalApp: b.chatTurn.ApprovalApp}, nil
 }
 func (b *Backend) StopChat(session, turn uint64) error {
 	b.mu.Lock()

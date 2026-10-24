@@ -1,3 +1,4 @@
+#if os(macOS)
 import Foundation
 import NetworkExtension
 import SystemExtensions
@@ -132,3 +133,5 @@ final class VPNController: NSObject, ObservableObject, OSSystemExtensionRequestD
     }
     nonisolated func request(_ request: OSSystemExtensionRequest, actionForReplacingExtension existing: OSSystemExtensionProperties, withExtension ext: OSSystemExtensionProperties) -> OSSystemExtensionRequest.ReplacementAction { .replace }
 }
+
+#endif

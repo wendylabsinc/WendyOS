@@ -119,6 +119,10 @@ struct ModelLibraryView: View {
     private func size(_ value: Int64) -> String { ByteCountFormatter.string(fromByteCount: value, countStyle: .memory) }
     private func fitColor(_ fit: ModelFit) -> Color { switch fit { case .comfortable: .green; case .tight: .orange; case .tooLarge: .red; case .unknown: .secondary } }
     var body: some View {
+        Group {
+        #if os(iOS)
+        mobileLibrary
+        #else
         VStack(spacing: 0) {
             HStack {
                 VStack(alignment: .leading, spacing: 3) {
@@ -151,7 +155,7 @@ struct ModelLibraryView: View {
                             } else { Text(repo.id.components(separatedBy: "/").first ?? repo.id).font(.caption).foregroundStyle(.secondary) }
                         }.padding(.vertical, 7).tag(repo.id)
                     }.listStyle(.sidebar)
-                }.frame(minWidth: 270, idealWidth: 300, maxWidth: 350).disabled(library.running)
+                }.mobileListHeight(240).desktopWidth(min: 270, ideal: 300, max: 350).disabled(library.running)
                 ScrollView {
                     VStack(alignment: .leading, spacing: 18) {
                         hardwareSummary
@@ -220,7 +224,7 @@ struct ModelLibraryView: View {
                             Label(error, systemImage: "exclamationmark.triangle").font(.callout).foregroundStyle(.orange).textSelection(.enabled)
                         }
                     }.padding(20)
-                }.frame(minWidth: 470, maxWidth: .infinity)
+                }.desktopMinimumWidth(470)
             }
             Divider()
             HStack(spacing: 12) {
@@ -242,16 +246,113 @@ struct ModelLibraryView: View {
                 }
             }.padding(16)
         }
-        .frame(width: 900, height: 680)
+        .desktopFrame(width: 900, height: 680)
+        #endif
+        }
         .interactiveDismissDisabled(library.running)
         .task { await library.refreshHardware() }
         .task(id: library.query) { await library.search() }
+        #if os(macOS)
         .task(id: library.selection) { await library.inspect() }
+        #endif
         .onChange(of: library.file) { _, _ in library.acceptWarning = false }
         .onChange(of: library.accelerator) { _, _ in library.acceptWarning = false }
         .onChange(of: library.install) { _, _ in library.acceptWarning = false }
         .onDisappear { library.disappear() }
     }
+    #if os(iOS)
+    private var mobileLibrary: some View {
+        NavigationStack {
+            List {
+                if library.searching && library.repositories.isEmpty { ProgressView("Finding models…") }
+                if let error = library.error { FailureNote(message: error) }
+                Section(library.query.isEmpty ? "Suggested models" : "Search results") {
+                    ForEach(library.sortedRepositories) { repo in
+                        NavigationLink(value: repo.id) {
+                            VStack(alignment: .leading, spacing: 5) {
+                                Text(ChatModelOption.readableName(repo.name)).font(.body.weight(.medium))
+                                if !repo.detail.isEmpty { Text(repo.detail).font(.caption).foregroundStyle(.secondary).lineLimit(2) }
+                                if let file = library.details[repo.id]?.files.first {
+                                    let fit = library.hardware?.fit(file, accelerator: library.accelerator, install: library.install) ?? .unknown
+                                    Text("\(size(file.bytes)) · \(fit.title)").font(.caption).foregroundStyle(fitColor(fit))
+                                }
+                            }.padding(.vertical, 4)
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Models").navigationBarTitleDisplayMode(.inline)
+            .searchable(text: $library.query, prompt: "Search Hugging Face")
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Close") { dismiss() }.disabled(library.running) } }
+            .navigationDestination(for: String.self) { repo in
+                mobileModelDetails(repo)
+                    .task(id: repo) { library.selection = repo; await library.inspect() }
+            }
+        }.presentationBackground(Color(uiColor: .systemGroupedBackground))
+    }
+    private func mobileModelDetails(_ repo: String) -> some View {
+        Form {
+            if library.selection != repo || library.inspecting { ProgressView("Reading model files…") }
+            else if let detail = library.selectedDetails {
+                Section {
+                    Text(ChatModelOption.readableName(repo)).font(.headline)
+                    Text(repo).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+                    if let url = URL(string: "https://huggingface.co/" + repo) { Link("Model card", destination: url) }
+                }
+                Section("Weights") {
+                    Picker("Quality & size", selection: $library.file) {
+                        ForEach(detail.files) { Text("\($0.quantization) · \(size($0.bytes))").tag($0.name) }
+                    }.disabled(library.running)
+                }
+                if let file = library.selectedFile {
+                    if !file.unavailableReason.isEmpty {
+                        Section("Runtime support") { Text(file.unavailableReason).font(.callout).foregroundStyle(.secondary) }
+                    }
+                    Section {
+                        Label(library.fit.title, systemImage: library.fit == .comfortable ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                            .foregroundStyle(fitColor(library.fit))
+                        LabeledContent("Download", value: size(file.bytes))
+                        LabeledContent("Estimated memory", value: size(file.estimatedMemory))
+                        DisclosureGroup("Estimate details") {
+                            Text("Includes weights, 25% overhead and 4 GiB for the runtime and a 32,768-token context. Actual memory varies by model.").font(.caption).foregroundStyle(.secondary)
+                            if library.install { Text("Allow an additional 12 GiB of storage for the runtime and extraction.").font(.caption).foregroundStyle(.secondary) }
+                        }
+                    } header: { Text("Capacity") }
+                    if file.unavailableReason.isEmpty {
+                        Section {
+                            Toggle("Manage runtime automatically", isOn: $library.install).disabled(library.hardware?.canInstall != true)
+                            if !library.install { TextField("Server port", text: $library.port).keyboardType(.numberPad) }
+                            if let hardware = library.hardware { LabeledContent("Compute", value: hardware.computeName) }
+                            if library.fit != .comfortable { Toggle("Run despite capacity warning", isOn: $library.acceptWarning) }
+                        } header: { Text("Run on device") }
+                        footer: { Text(library.install ? "Wendy selects the GPU and an available port automatically when supported. Models stay on the device." : "Uses an existing Ollama server and its compute settings.") }
+                            .disabled(library.running)
+                        Section {
+                            if library.running {
+                                ProgressView(library.progress)
+                                Button("Cancel download", role: .cancel) { library.cancel() }
+                            } else {
+                                Button("Download & Run") { library.run { model, port in ready(model, port); dismiss() } }
+                                    .disabled(!library.canRun)
+                            }
+                        }
+                    }
+                }
+                Section(deviceName) {
+                    if let h = library.hardware {
+                        LabeledContent("Available memory", value: size(h.memoryAvailable))
+                        if h.diskKnown { LabeledContent("Free storage", value: size(h.diskFree)) }
+                        if !h.warning.isEmpty { Text(h.warning).foregroundStyle(.orange) }
+                    } else { ProgressView("Checking device capacity") }
+                    LabeledContent("License", value: detail.license.isEmpty ? "See model card" : detail.license)
+                }
+            }
+            if let error = library.error { Section { FailureNote(message: error) } }
+        }
+        .navigationTitle("Model details").navigationBarTitleDisplayMode(.inline)
+        .navigationBarBackButtonHidden(library.running)
+    }
+    #endif
     @ViewBuilder private var hardwareSummary: some View {
         if let h = library.hardware {
             VStack(alignment: .leading, spacing: 5) {

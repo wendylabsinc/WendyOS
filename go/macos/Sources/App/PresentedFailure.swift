@@ -6,7 +6,11 @@ struct PresentedFailure {
 
     init(_ raw: String) {
         let lower = raw.lowercased()
-        if lower.contains("select at least one device") {
+        if lower.contains("valid app_id is required") {
+            message = "Cloud rejected this campaign’s notification identity. Update the device agent, then enable campaign notifications again."
+        } else if lower.contains("does not support direct online updates yet") {
+            message = "This agent needs a newer version before it can download updates directly."
+        } else if lower.contains("select at least one device") {
             message = "Select at least one device, then turn on VPN."
         } else if lower.contains("not sending video") {
             message = "This camera is not sending video. Check its source, or choose another camera."

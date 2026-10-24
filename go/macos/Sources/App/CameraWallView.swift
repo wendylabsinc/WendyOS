@@ -45,6 +45,7 @@ final class CameraFeed: ObservableObject, Identifiable {
     }
 }
 
+#if os(macOS)
 struct CameraWallView: View {
     @ObservedObject var model: AppModel
 
@@ -59,6 +60,7 @@ struct CameraWallView: View {
                 FailureView(title: "Could not load cameras", error: error) { Task { await model.refreshDetails() } }
             } else if model.cameraFeeds.isEmpty {
                 ContentUnavailableView("No cameras found", systemImage: "video.slash")
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ScrollView {
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 360), spacing: 16)], spacing: 16) {
@@ -84,21 +86,10 @@ private struct CameraTile: View {
     @StateObject private var fullscreen = CameraFullscreenController()
 
     var body: some View {
-        VStack(spacing: 0) {
-            CameraPlayer(feed: feed, play: play, pause: pause) {
-                fullscreen.open(feed: feed, play: play, pause: pause)
-            }
-            .aspectRatio(4.0 / 3.0, contentMode: .fit)
-            HStack {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(feed.camera.name).font(.headline).lineLimit(1).help(feed.camera.name)
-                    Text(feed.error != nil ? "Unavailable" : feed.running ? (feed.receivedVideo ? "Streaming" : "Connecting") : "Paused")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-                Spacer()
-            }.padding(12)
+        CameraPlayer(feed: feed, play: play, pause: pause) {
+            fullscreen.open(feed: feed, play: play, pause: pause)
         }
-        .background(Color(nsColor: .controlBackgroundColor))
+        .aspectRatio(4.0 / 3.0, contentMode: .fit)
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(.quaternary))
         .onDisappear { fullscreen.close() }
@@ -112,25 +103,25 @@ struct CameraPlayer: View {
     var isFullScreen = false
     let toggleFullScreen: () -> Void
     @State private var hovering = false
+    @State private var showingDetails = false
     @FocusState private var focusedControl: Int?
 
     private var showControls: Bool { hovering || focusedControl != nil || !feed.running }
+
+    private var status: String {
+        if let error = feed.error {
+            return error.localizedCaseInsensitiveContains("not sending video") ? "No video received" : "Camera unavailable"
+        }
+        return feed.running ? (feed.receivedVideo ? "Live" : "Connecting…") : "Paused"
+    }
 
     var body: some View {
         ZStack {
             Color.black
             CameraDisplayView(decoder: feed.decoder)
-            if let error = feed.error {
-                VStack(spacing: 12) {
-                    Image(systemName: "video.slash").font(.title)
-                    Text(PresentedFailure(error).message).multilineTextAlignment(.center)
-                    Button("Retry", action: play)
-                    DisclosureGroup("Technical details") {
-                        ScrollView {
-                            Text(PresentedFailure(error).details).font(.caption.monospaced()).textSelection(.enabled)
-                        }.frame(maxHeight: 65)
-                    }.font(.caption)
-                }.padding(20).frame(maxWidth: 480).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+            if feed.error != nil {
+                Image(systemName: "video.slash")
+                    .font(.system(size: 32, weight: .light)).foregroundStyle(.white.opacity(0.45))
             } else {
                 if feed.running && !feed.receivedVideo {
                     ProgressView("Waiting for video…").colorScheme(.dark)
@@ -150,18 +141,37 @@ struct CameraPlayer: View {
                 .allowsHitTesting(showControls)
             }
         }
-        .overlay(alignment: .bottomTrailing) {
-            Button(action: toggleFullScreen) {
-                Image(systemName: isFullScreen ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")
-                    .font(.system(size: 16, weight: .semibold)).foregroundStyle(.white)
-                    .frame(width: 40, height: 40)
-                    .background(.black.opacity(0.55), in: Circle())
-                    .contentShape(Circle())
+        .overlay(alignment: .bottom) {
+            HStack(alignment: .center, spacing: 12) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(feed.camera.name).font(.headline).lineLimit(2).help(feed.camera.name)
+                    Text(status).font(.caption).foregroundStyle(.white.opacity(0.7))
+                }.frame(maxWidth: .infinity, alignment: .leading)
+                if let error = feed.error {
+                    Button("Retry", action: play).buttonStyle(.bordered)
+                    let failure = PresentedFailure(error)
+                    if failure.details != failure.message {
+                        Button { showingDetails = true } label: { Image(systemName: "info.circle") }
+                            .buttonStyle(.plain).help("Camera error details")
+                            .accessibilityLabel("Camera error details")
+                            .popover(isPresented: $showingDetails) {
+                                ScrollView { Text(failure.details).font(.caption.monospaced()).textSelection(.enabled).padding(16) }
+                                    .frame(width: 360, height: 180)
+                            }
+                    }
+                }
+                Button(action: toggleFullScreen) {
+                    Image(systemName: isFullScreen ? "arrow.down.right.and.arrow.up.left" : "arrow.up.left.and.arrow.down.right")
+                        .font(.system(size: 15, weight: .semibold))
+                        .frame(width: 32, height: 32).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain).focused($focusedControl, equals: 2)
+                .accessibilityLabel((isFullScreen ? "Exit full screen " : "Full screen ") + feed.camera.name)
+                .help(isFullScreen ? "Exit full screen" : "Full screen")
+                .opacity(showControls ? 1 : 0).allowsHitTesting(showControls)
             }
-            .buttonStyle(.plain).focused($focusedControl, equals: 2)
-            .accessibilityLabel((isFullScreen ? "Exit full screen " : "Full screen ") + feed.camera.name)
-            .help(isFullScreen ? "Exit full screen" : "Full screen")
-            .padding(14).opacity(showControls ? 1 : 0).allowsHitTesting(showControls)
+            .foregroundStyle(.white).padding(16).padding(.top, 28)
+            .background(LinearGradient(colors: [.clear, .black.opacity(0.85)], startPoint: .top, endPoint: .bottom))
         }
         .clipped().onHover { hovering = $0 }
         .animation(.easeInOut(duration: 0.15), value: showControls)
@@ -197,3 +207,5 @@ final class CameraFullscreenController: NSObject, ObservableObject, NSWindowDele
         window = nil
     }
 }
+
+#endif

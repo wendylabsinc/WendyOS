@@ -5,6 +5,7 @@ options:
   createIntermediateGroups: true
 settings:
   base:
+    WENDY_PUSH_ENVIRONMENT: development
     SWIFT_VERSION: "5.10"
     MARKETING_VERSION: "0.1.0"
     CURRENT_PROJECT_VERSION: "1"
@@ -19,6 +20,9 @@ settings:
     LIBRARY_SEARCH_PATHS: "$(SRCROOT)/Build"
     LD_RUNPATH_SEARCH_PATHS: ["$(inherited)", "@executable_path/../Frameworks"]
     OTHER_LDFLAGS: ["-lresolv"]
+  configs:
+    Release:
+      WENDY_PUSH_ENVIRONMENT: production
 targets:
   WendyDesktop:
     type: application
@@ -40,6 +44,7 @@ targets:
       - sdk: DiskArbitration.framework
       - sdk: Security.framework
       - sdk: CoreFoundation.framework
+      - sdk: UserNotifications.framework
       - sdk: AVFoundation.framework
       - sdk: CoreMedia.framework
       - sdk: AudioToolbox.framework
@@ -98,6 +103,83 @@ targets:
     settings:
       base:
         GENERATE_INFOPLIST_FILE: YES
+  WendyMobile:
+    type: application
+    platform: iOS
+    deploymentTarget: "26.0"
+    info:
+      path: Resources/Mobile-Info.plist
+      properties:
+        CFBundleDisplayName: Wendy
+        NSBonjourServices: ["_wendyos._udp", "_wendy-lite._tcp"]
+        NSLocalNetworkUsageDescription: Wendy discovers and connects to your nearby devices.
+        NSBluetoothAlwaysUsageDescription: Wendy uses Bluetooth to discover nearby Wendy devices.
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
+        UISupportedInterfaceOrientations~ipad: [UIInterfaceOrientationPortrait, UIInterfaceOrientationPortraitUpsideDown, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
+    sources:
+      - path: Sources/App
+        excludes:
+          - WendyDesktopApp.swift
+          - ContentView.swift
+          - VPNControls.swift
+          - DataVisualizerView.swift
+          - DataVisualizerTimeline.swift
+      - path: Sources/iOS
+      - path: Resources/MobileAssets.xcassets
+      - path: Sources/Shared/VPNConfiguration.swift
+      - path: Resources/Notices
+        type: folder
+        buildPhase: resources
+    dependencies:
+      - sdk: UserNotifications.framework
+      - sdk: AVFoundation.framework
+      - sdk: CoreMedia.framework
+      - sdk: CoreBluetooth.framework
+      - sdk: Security.framework
+      - sdk: CoreFoundation.framework
+      - sdk: NetworkExtension.framework
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.wendy.mobile
+        PRODUCT_NAME: WendyMobile
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: Wendy
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
+        INFOPLIST_KEY_NSLocalNetworkUsageDescription: Wendy discovers and connects to your nearby devices.
+        INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription: Wendy uses Bluetooth to discover nearby Wendy devices.
+        TARGETED_DEVICE_FAMILY: "1,2"
+        SUPPORTS_MACCATALYST: NO
+        ARCHS: arm64
+        ENABLE_HARDENED_RUNTIME: NO
+        CODE_SIGN_ENTITLEMENTS: Resources/Mobile.entitlements
+        INFOPLIST_KEY_WendyPushEnvironment: "$(WENDY_PUSH_ENVIRONMENT)"
+        LIBRARY_SEARCH_PATHS: "$(SRCROOT)/Build/$(PLATFORM_NAME)"
+        LD_RUNPATH_SEARCH_PATHS: ["$(inherited)", "@executable_path/Frameworks"]
+        OTHER_LDFLAGS: ["-lresolv", "-lwendydesktop"]
+        SWIFT_OBJC_BRIDGING_HEADER: Sources/Shared/Bridge.h
+    preBuildScripts:
+      - path: Scripts/build-ios-go.sh
+        name: Build embedded Go backend for iOS
+        basedOnDependencyAnalysis: false
+  WendyMobileTests:
+    type: bundle.unit-test
+    platform: iOS
+    deploymentTarget: "26.0"
+    sources: [Tests-iOS]
+    dependencies:
+      - target: WendyMobile
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: dev.wendy.mobile.tests
+        ARCHS: arm64
+        OTHER_LDFLAGS: []
+        LIBRARY_SEARCH_PATHS: "$(SRCROOT)/Build/$(PLATFORM_NAME)"
+        LD_RUNPATH_SEARCH_PATHS: ["$(inherited)", "@executable_path/Frameworks", "@loader_path/Frameworks"]
 schemes:
   WendyDesktop:
     build:
@@ -105,3 +187,9 @@ schemes:
         WendyDesktop: all
     test:
       targets: [WendyDesktopTests]
+  WendyMobile:
+    build:
+      targets:
+        WendyMobile: all
+    test:
+      targets: [WendyMobileTests]

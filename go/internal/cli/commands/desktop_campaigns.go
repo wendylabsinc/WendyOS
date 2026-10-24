@@ -154,7 +154,7 @@ func DesktopDeployCampaign(ctx context.Context, conn *grpcclient.AgentConnection
 			return errors.New("a campaign with this name already exists; choose a different name")
 		}
 	}
-	if err := registerCloudApps(ctx, conn, []string{"campaign:" + strings.TrimSpace(in.Name)}, false); err != nil {
+	if err := registerCloudApps(ctx, conn, []string{data.CampaignAppID(strings.TrimSpace(in.Name))}, false); err != nil {
 		return err
 	}
 	_, err = conn.DataService.CampaignDeploy(ctx, &pb.DataCampaignDeployRequest{CampaignYaml: raw})

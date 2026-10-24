@@ -15,6 +15,7 @@ import (
 	mcpclient "github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/client/transport"
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
+	"github.com/mark3labs/mcp-go/server"
 )
 
 type mcpToolClient interface {
@@ -244,6 +245,36 @@ func NewMCPTools(ctx context.Context, executable, device string) (*Tools, error)
 		if _, err := t.Execute(ctx, ToolCall{Name: "device_connect", Arguments: args}); err != nil {
 			_ = t.Close()
 			return nil, fmt.Errorf("connecting chat to selected device: %w", err)
+		}
+	}
+	return t, nil
+}
+
+// NewEmbeddedMCPTools connects to a protocol server hosted by the native app.
+// Tool annotations, argument validation and approval handling are unchanged.
+func NewEmbeddedMCPTools(ctx context.Context, protocol *server.MCPServer, device string) (*Tools, error) {
+	client, err := mcpclient.NewInProcessClient(protocol)
+	if err != nil {
+		return nil, err
+	}
+	t := &Tools{mcpOnly: true, mcp: client, known: make(map[string]Tool), stderr: &limitedBuffer{limit: 4096}}
+	fail := func(err error) (*Tools, error) { _ = t.Close(); return nil, err }
+	if err := client.Start(ctx); err != nil {
+		return fail(err)
+	}
+	request := mcpgo.InitializeRequest{}
+	request.Params.ProtocolVersion = mcpgo.LATEST_PROTOCOL_VERSION
+	request.Params.ClientInfo = mcpgo.Implementation{Name: "wendy-ios", Version: "1"}
+	if _, err := client.Initialize(ctx, request); err != nil {
+		return fail(err)
+	}
+	if _, err := t.ListTools(ctx); err != nil {
+		return fail(err)
+	}
+	if device != "" {
+		args, _ := json.Marshal(map[string]string{"device": device})
+		if _, err := t.Execute(ctx, ToolCall{Name: "device_connect", Arguments: args}); err != nil {
+			return fail(err)
 		}
 	}
 	return t, nil

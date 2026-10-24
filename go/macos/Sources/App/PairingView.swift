@@ -13,6 +13,78 @@ struct PairingView: View {
     @State private var forgetting: PairingDevice?
 
     var body: some View {
+        Group {
+            #if os(iOS)
+            mobileList
+            #else
+            desktopContent
+            #endif
+        }
+            .task(id: kind) { devices = []; await refresh() }
+            .focusedSceneValue(\.devicePaneRefresh, PaneRefreshAction(enabled: !loading && busy == nil, perform: { Task { await refresh() } }))
+            .sheet(item: $login) { item in
+                CameraLoginSheet(item: item, deviceName: deviceName, session: session) { Task { await refresh() } }
+            }
+            .alert("Forget pairing?", isPresented: Binding(get: { forgetting != nil }, set: { if !$0 { forgetting = nil } }), presenting: forgetting) { item in
+                Button("Cancel", role: .cancel) {}
+                Button("Forget", role: .destructive) { Task { await forget(item) } }
+            } message: { item in Text("Remove \(item.name) from \(deviceName)? Its sensors will no longer be available to apps on this device.") }
+    }
+    #if os(iOS)
+    private var mobileList: some View {
+        List {
+            if !warning.isEmpty { Section { Label(warning, systemImage: "exclamationmark.triangle").font(.callout).foregroundStyle(.orange) } }
+            if let error { Section { FailureNote(message: error) } }
+            Section {
+                ForEach(devices) { item in
+                    HStack(alignment: .center, spacing: 12) {
+                        Image(systemName: kind == .lite ? "sensor" : "web.camera")
+                            .foregroundStyle(.secondary).frame(width: 24)
+                        VStack(alignment: .leading, spacing: 5) {
+                            Text(item.name).font(.body.weight(.medium)).foregroundStyle(.primary)
+                            Text(item.address).font(.caption).foregroundStyle(.secondary)
+                            if !item.canPair && !item.paired {
+                                Text(item.detail).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                            } else {
+                                Text(item.paired ? (item.connected ? "Connected" : "Paired") : "Not paired")
+                                    .font(.caption).foregroundStyle(item.connected ? Color.green : .secondary)
+                            }
+                        }.frame(maxWidth: .infinity, alignment: .leading)
+                        if busy == item.id { ProgressView() }
+                        else if item.paired {
+                            Menu {
+                                if kind == .camera { Button("Edit login", systemImage: "key") { login = item } }
+                                Button("Forget pairing", systemImage: "trash", role: .destructive) { forgetting = item }
+                            } label: { Image(systemName: "ellipsis").frame(width: 44, height: 44) }
+                                .accessibilityLabel("Options for \(item.name)")
+                                .disabled(busy != nil || loading)
+                        } else if item.canPair {
+                            Button("Pair") {
+                                if kind == .camera { login = item } else { Task { await pair(item) } }
+                            }.buttonStyle(.bordered).fixedSize().disabled(busy != nil || loading)
+                        }
+                    }.padding(.vertical, 6)
+                }
+            } footer: {
+                if !devices.isEmpty { Text("Sources on \(deviceName)’s network.") }
+            }
+        }
+        .safeAreaInset(edge: .top) {
+            Picker("Source type", selection: $kind) {
+                ForEach(PairingKind.allCases) { Text($0.rawValue).tag($0) }
+            }.pickerStyle(.segmented).padding().background(Color(uiColor: .systemGroupedBackground))
+                .disabled(busy != nil || loading)
+        }
+        .overlay {
+            if devices.isEmpty && error == nil && warning.isEmpty {
+                if loading { ProgressView("Finding sources…") }
+                else { ContentUnavailableView("No devices found", systemImage: kind == .lite ? "sensor" : "web.camera", description: Text("Connect a source to the same network, then pull down to scan again.")) }
+            }
+        }
+        .refreshable { if !loading && busy == nil { await refresh() } }
+    }
+    #endif
+    private var desktopContent: some View {
         GeometryReader { geometry in
             VStack(alignment: .leading, spacing: 18) {
                 HStack {
@@ -37,11 +109,12 @@ struct PairingView: View {
                         Button("Scan again") { Task { await refresh() } }.padding(.top, 4)
                     }.frame(maxWidth: 420)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .mobileRefreshablePlaceholder { if !loading && busy == nil { await refresh() } }
                 } else {
                     ScrollView {
                         LazyVStack(spacing: 0) {
                             ForEach(Array(devices.enumerated()), id: \.element.id) { index, item in
-                                HStack(spacing: 14) {
+                                AdaptiveStack(spacing: 10) {
                                     Image(systemName: kind == .lite ? "sensor" : "web.camera").font(.title2).foregroundStyle(.secondary).frame(width: 30)
                                     VStack(alignment: .leading, spacing: 5) {
                                         Text(item.name).fontWeight(.medium)
@@ -60,27 +133,18 @@ struct PairingView: View {
                                         }
                                         if item.paired {
                                             Menu { Button("Forget pairing", role: .destructive) { forgetting = item } } label: { Image(systemName: "ellipsis") }
-                                                .menuStyle(.borderlessButton).fixedSize().disabled(busy != nil || loading)
+                                                .menuStyle(.automatic).fixedSize().disabled(busy != nil || loading)
                                         }
-                                    }.frame(width: 128, alignment: .trailing)
-                                }.padding(.horizontal, 16).frame(height: 76)
+                                    }.desktopActionWidth(128)
+                                }.padding(.horizontal, 16).frame(minHeight: 76)
                                     .background(index.isMultiple(of: 2) ? Color.clear : Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 8))
                             }
                         }
-                    }
+                    }.mobileRefreshable { if !loading && busy == nil { await refresh() } }
                 }
             }.padding(.horizontal, 28).padding(.vertical, 16)
                 .frame(width: geometry.size.width, height: geometry.size.height, alignment: .topLeading)
         }
-            .task(id: kind) { devices = []; await refresh() }
-            .focusedSceneValue(\.devicePaneRefresh, PaneRefreshAction(enabled: !loading && busy == nil, perform: { Task { await refresh() } }))
-            .sheet(item: $login) { item in
-                CameraLoginSheet(item: item, deviceName: deviceName, session: session) { Task { await refresh() } }
-            }
-            .alert("Forget pairing?", isPresented: Binding(get: { forgetting != nil }, set: { if !$0 { forgetting = nil } }), presenting: forgetting) { item in
-                Button("Cancel", role: .cancel) {}
-                Button("Forget", role: .destructive) { Task { await forget(item) } }
-            } message: { item in Text("Remove \(item.name) from \(deviceName)? Its sensors will no longer be available to apps on this device.") }
     }
     private func refresh() async {
         loading = true; error = nil
@@ -117,6 +181,39 @@ private struct CameraLoginSheet: View {
     @State private var saving = false
     @State private var error: String?
     var body: some View {
+        Group {
+            #if os(iOS)
+            NavigationStack {
+                Form {
+                    Section {
+                        TextField("Username", text: $username).textInputAutocapitalization(.never).autocorrectionDisabled()
+                        SecureField("Password", text: $password)
+                    } header: { Text(item.name) } footer: { Text("The camera login is saved on \(deviceName).") }
+                    if let error { Section { FailureNote(message: error) } }
+                }
+                .navigationTitle("Camera login").navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) { Button("Cancel") { password = ""; dismiss() }.disabled(saving) }
+                    ToolbarItem(placement: .confirmationAction) { Button("Save", action: save).disabled(saving || username.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) }
+                }
+                .overlay { if saving { ProgressView() } }
+            }.presentationBackground(Color(uiColor: .systemGroupedBackground))
+            #else
+            desktopForm
+            #endif
+        }.interactiveDismissDisabled(saving).onDisappear { password = "" }
+    }
+    private func save() {
+        saving = true
+        Task {
+            do {
+                try await GoClient.shared.pairCamera(session: session, id: item.cameraID, username: username, password: password)
+                password = ""; saved(); dismiss()
+            } catch { self.error = error.localizedDescription; password = "" }
+            saving = false
+        }
+    }
+    private var desktopForm: some View {
         VStack(alignment: .leading, spacing: 20) {
             Label(item.name, systemImage: "web.camera").font(.title2.bold())
             Text("The camera login is saved on \(deviceName).").foregroundStyle(.secondary)
@@ -140,6 +237,6 @@ private struct CameraLoginSheet: View {
                     }
                 }.keyboardShortcut(.defaultAction).disabled(saving || username.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             }
-        }.padding(24).frame(width: 440).interactiveDismissDisabled(saving).onDisappear { password = "" }
+        }.padding(24).desktopFrame(width: 440).interactiveDismissDisabled(saving).onDisappear { password = "" }
     }
 }

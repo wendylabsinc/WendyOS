@@ -13,7 +13,57 @@ struct CampaignsView: View {
     @State private var clipError: String?
     @State private var loadingClips = true
     @State private var selectedCampaign: DeviceCampaign?
+    @State private var editingCampaign: DeviceCampaign?
     var body: some View {
+        Group {
+            #if os(iOS)
+            mobileContent
+            #else
+            desktopContent
+            #endif
+        }
+        .sheet(item: $editingCampaign) { campaign in CampaignSettingsView(session: session, name: campaign.name) { Task { await refresh() } } }
+        .task { await refresh() }
+        .sheet(isPresented: $creating) { CampaignEditor(session: session, deviceName: deviceName) { Task { await refresh() } } }
+    }
+    #if os(iOS)
+    private var mobileContent: some View {
+        List {
+            Section {
+                ForEach(campaigns) { campaign in
+                    NavigationLink {
+                        CampaignRecordingsView(session: session, deviceName: deviceName, campaign: campaign)
+                    } label: {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text(campaign.name).font(.headline)
+                            Text(campaign.summary).font(.subheadline).foregroundStyle(.secondary).lineLimit(3)
+                            HStack(spacing: 6) {
+                                Circle().fill(campaign.state == "armed" ? Color.green : .secondary).frame(width: 6, height: 6)
+                                Text(campaign.state.capitalized)
+                                if !loadingClips { Text("· " + clipCountLabel(campaign.name)) }
+                            }.font(.caption).foregroundStyle(.secondary)
+                            if !campaign.problem.isEmpty { Text(campaign.problem).font(.caption).foregroundStyle(.orange).lineLimit(2) }
+                        }.padding(.vertical, 4)
+                    }
+                }
+                if campaigns.isEmpty && !loading {
+                    ContentUnavailableView("No campaigns", systemImage: "bolt.horizontal.circle", description: Text("Create a campaign to record when an event happens."))
+                    Button("Create campaign", systemImage: "plus") { creating = true }
+                }
+                if loading && campaigns.isEmpty { ProgressView("Loading campaigns…") }
+                if let error { FailureNote(message: error) }
+            }
+            Section {
+                NavigationLink {
+                    DataVisualizerView(session: session, deviceName: deviceName).navigationTitle("All recordings").navigationBarTitleDisplayMode(.inline)
+                } label: { Label("All recordings", systemImage: "film.stack") }
+            }
+        }.listStyle(.insetGrouped)
+            .refreshable { await refresh() }
+            .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Create campaign", systemImage: "plus") { creating = true } } }
+    }
+    #endif
+    private var desktopContent: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Label("Campaigns", systemImage: "bolt.horizontal.circle").font(.headline)
@@ -26,6 +76,7 @@ struct CampaignsView: View {
                 ContentUnavailableView("When this happens, do that", systemImage: "bolt.horizontal.circle",
                                        description: Text("Detect a human on any camera, send a notification, and keep a clip on \(deviceName)."))
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .mobileRefreshablePlaceholder { await refresh() }
             } else {
                 ScrollView {
                     LazyVStack(spacing: 12) {
@@ -41,6 +92,7 @@ struct CampaignsView: View {
                                         }.buttonStyle(.bordered)
                                             .help("View recordings stored on this device")
                                     }
+                                    Button("Campaign settings", systemImage: "gearshape") { editingCampaign = campaign }.labelStyle(.iconOnly)
                                     Label(campaign.state.capitalized, systemImage: "circle.fill").font(.caption)
                                         .foregroundStyle(campaign.state == "armed" ? Color.green : .secondary)
                                 }
@@ -52,19 +104,17 @@ struct CampaignsView: View {
                                 .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 12))
                         }
                     }
-                }
+                }.mobileRefreshable { await refresh() }
             }
             Text("Rules run on this device. Notification delivery also requires an enabled grant for the campaign in Wendy Cloud Apps.")
                 .font(.caption).foregroundStyle(.secondary)
         }.padding(.horizontal, 20).padding(.bottom, 16)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .task { await refresh() }
             .focusedSceneValue(\.devicePaneRefresh, PaneRefreshAction(enabled: !loading, perform: { Task { await refresh() } }))
-            .sheet(isPresented: $creating) { CampaignEditor(session: session, deviceName: deviceName) { Task { await refresh() } } }
             .sheet(item: $selectedCampaign) { campaign in
                 CampaignClipsView(campaign: campaign.name, deviceName: deviceName,
                                   clips: clips.filter { $0.campaign == campaign.name }, warning: clipWarning,
-                                  error: clipError, loading: loadingClips, refresh: { Task { await refreshClips() } }) { id in
+                                  error: clipError, loading: loadingClips, refresh: { await refreshClips() }) { id in
                     selectedCampaign = nil
                     openClip(id)
                 }
@@ -98,7 +148,7 @@ private struct CampaignClipsView: View {
     let warning: String
     let error: String?
     let loading: Bool
-    let refresh: () -> Void
+    let refresh: () async -> Void
     let open: (String) -> Void
     @Environment(\.dismiss) private var dismiss
     var body: some View {
@@ -111,7 +161,7 @@ private struct CampaignClipsView: View {
                 }
                 Spacer()
                 if loading { ProgressView().controlSize(.small) }
-                Button(action: refresh) { Image(systemName: "arrow.clockwise") }.help("Refresh clips").disabled(loading)
+                Button { Task { await refresh() } } label: { Image(systemName: "arrow.clockwise") }.help("Refresh clips").disabled(loading)
                 Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)
             }
             if let error { Text(error).font(.callout).foregroundStyle(.orange).textSelection(.enabled) }
@@ -120,7 +170,24 @@ private struct CampaignClipsView: View {
                 ContentUnavailableView(error == nil && warning.isEmpty ? "No clips yet" : "Clips unavailable", systemImage: "film.stack",
                                        description: Text("Recordings appear here when this campaign triggers. Clips removed from the device are not included."))
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .mobileRefreshablePlaceholder { await refresh() }
             } else {
+                #if os(iOS)
+                List(clips) { clip in
+                    Button { open(clip.id) } label: {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 5) {
+                                Text(clip.started.formatted(date: .abbreviated, time: .shortened)).font(.headline)
+                                Text(clip.reason).font(.caption).foregroundStyle(.secondary)
+                                Text("\(clip.durationLabel) · \(ByteCountFormatter.string(fromByteCount: clip.bytes, countStyle: .file)) · \(clip.state.capitalized)")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Image(systemName: "play.circle")
+                        }.padding(.vertical, 5)
+                    }.buttonStyle(.plain)
+                }.listStyle(.plain).refreshable { await refresh() }
+                #else
                 Table(clips) {
                     TableColumn("Recorded") { clip in
                         VStack(alignment: .leading, spacing: 3) {
@@ -135,8 +202,9 @@ private struct CampaignClipsView: View {
                         Button { open(clip.id) } label: { Label("Open", systemImage: "play.rectangle") }.buttonStyle(.bordered)
                     }.width(80)
                 }
+                #endif
             }
-        }.padding(20).frame(width: 760, height: 500, alignment: .topLeading)
+        }.padding(20).desktopFrame(width: 760, height: 500)
     }
 }
 
@@ -154,6 +222,69 @@ private struct CampaignEditor: View {
     @State private var reviewing = false
 
     var body: some View {
+        Group {
+            #if os(iOS)
+            mobileEditor
+            #else
+            desktopEditor
+            #endif
+        }.interactiveDismissDisabled(saving)
+            .onChange(of: draft.trigger) { _, trigger in
+                draft.modelRevision = ""
+                if trigger == .classification { draft.model = "google/mobilenet_v2_1.0_224"; draft.labels = [] }
+                else if trigger == .detection { draft.model = "facebook/detr-resnet-50"; draft.labels = ["person"] }
+            }
+            .task {
+                defer { loading = false }
+                do { sources = try await GoClient.shared.campaignSources(session: session) }
+                catch { sourceError = error.localizedDescription }
+            }
+    }
+    #if os(iOS)
+    private var mobileEditor: some View {
+        NavigationStack {
+            Form {
+                Section { TextField("Campaign name", text: $draft.name).textInputAutocapitalization(.never).autocorrectionDisabled() }
+                Section("Trigger") {
+                    Picker("When", selection: $draft.trigger) { ForEach(CampaignTrigger.allCases) { Text($0 == .event ? "App event" : $0 == .classification ? "Image classification" : "Object detection").tag($0) } }
+                    if draft.trigger == .event { TextField("Event name", text: $draft.event).textInputAutocapitalization(.never).autocorrectionDisabled() }
+                    else { CampaignModelPicker(draft: $draft) }
+                }
+                Section("Camera") {
+                    Picker("Camera", selection: $draft.camera) {
+                        Text("Any camera").tag("*")
+                        ForEach(sources) { Text($0.title).tag($0.id).disabled(!$0.healthy) }
+                    }
+                    if loading { ProgressView() }
+                    if let sourceError { FailureNote(message: sourceError) }
+                }
+                Section("Action") {
+                    Picker("Action", selection: $draft.action) { ForEach(CampaignAction.allCases) { Text($0 == .notify ? "Record & notify" : "Record").tag($0) } }
+                    Toggle("Upload to Wendy Cloud", isOn: $draft.upload)
+                }
+                Section("Recording") {
+                    Stepper("Before trigger: \(draft.before)s", value: $draft.before, in: 0...300, step: 5)
+                    Stepper("After trigger: \(draft.after)s", value: $draft.after, in: 5...300, step: 5)
+                }
+                if draft.trigger != .event {
+                    Section("Detection") {
+                        LabeledContent("Confidence", value: draft.threshold.formatted(.percent.precision(.fractionLength(0))))
+                        Slider(value: $draft.threshold, in: 0.5...0.99, step: 0.01)
+                        Stepper("Cooldown: \(draft.cooldown)s", value: $draft.cooldown, in: 5...3600, step: 5)
+                    }
+                }
+                if let error { Section { FailureNote(message: error) } }
+                Section { Text("The campaign starts on \(deviceName) when you create it.").font(.footnote).foregroundStyle(.secondary) }
+            }.disabled(saving)
+                .navigationTitle("New campaign").navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.disabled(saving) }
+                    ToolbarItem(placement: .confirmationAction) { Button(saving ? "Creating…" : "Create") { Task { await deploy() } }.disabled(!draft.valid || saving) }
+                }
+        }
+    }
+    #endif
+    private var desktopEditor: some View {
         VStack(alignment: .leading, spacing: 20) {
             HStack {
                 VStack(alignment: .leading, spacing: 5) {
@@ -225,18 +356,9 @@ private struct CampaignEditor: View {
                     if reviewing { Task { await deploy() } } else { reviewing = true }
                 }.keyboardShortcut(.defaultAction).disabled(!draft.valid || saving)
             }
-        }.padding(24).frame(width: 680, height: 760).interactiveDismissDisabled(saving)
-            .onChange(of: draft.trigger) { _, trigger in
-                draft.modelRevision = ""
-                if trigger == .classification { draft.model = "google/mobilenet_v2_1.0_224"; draft.labels = [] }
-                else if trigger == .detection { draft.model = "facebook/detr-resnet-50"; draft.labels = ["person"] }
-            }
-            .task {
-                defer { loading = false }
-                do { sources = try await GoClient.shared.campaignSources(session: session) }
-                catch { sourceError = error.localizedDescription }
-            }
+        }.padding(24).desktopFrame(width: 680, height: 760).interactiveDismissDisabled(saving)
     }
+
     private func ruleCard<Content: View>(_ title: String, icon: String, color: Color, @ViewBuilder content: () -> Content) -> some View {
         HStack(alignment: .top, spacing: 14) {
             Image(systemName: icon).font(.title2).foregroundStyle(color).frame(width: 30).padding(.top, 2)

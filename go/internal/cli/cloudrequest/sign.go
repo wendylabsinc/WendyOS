@@ -123,6 +123,7 @@ func invoke(ctx context.Context, conn grpc.ClientConnInterface, auth *config.Aut
 		if err != nil {
 			return err
 		}
+		markContextChannel(ctx, signed)
 		if revokeDeviceID != "" {
 			management, err := s.principalRevocationManagementRequest(revokeDeviceID)
 			if err != nil {
@@ -196,6 +197,7 @@ func (s *Signer) register(ctx context.Context, conn grpc.ClientConnInterface, co
 	if err != nil {
 		return false, err
 	}
+	markContextChannel(ctx, signed)
 	var resp cloudpbv2.RegisterOperatorLeafResponse
 	if err := conn.Invoke(ctx, method, signed, &resp); err != nil {
 		if status.Code(err) == codes.Unimplemented {
@@ -443,6 +445,13 @@ var signedResources = map[string]func(tenant string, req proto.Message) (string,
 		in, ok := req.(*cloudpbv2.EnrollDeviceRequest)
 		return "org/" + tenant + "/device/" + in.GetDeviceId(), ok
 	},
+	cloudpbv2.AppService_UpdateApp_FullMethodName: func(tenant string, req proto.Message) (string, bool) {
+		in, ok := req.(*cloudpbv2.UpdateAppRequest)
+		if !ok || tenant == "" || in.GetOrganizationId() != tenant || in.GetId() == "" {
+			return "", false
+		}
+		return "org/" + tenant + "/app/" + in.GetId(), true
+	},
 	cloudpbv2.AppService_UpsertApp_FullMethodName: func(tenant string, req proto.Message) (string, bool) {
 		in, ok := req.(*cloudpbv2.UpsertAppRequest)
 		if !ok || in.GetOrganizationId() != tenant || in.GetId() == "" {
@@ -618,4 +627,20 @@ func canonicalJSON(value any) ([]byte, error) {
 		return nil, err
 	}
 	return []byte(strings.TrimSuffix(b.String(), "\n")), nil
+}
+
+// WithLocalMCP marks requests made by an embedded MCP call without changing
+// the process-wide channel used by unrelated native UI operations.
+func WithLocalMCP(ctx context.Context) context.Context {
+	return context.WithValue(ctx, localMCPContextKey{}, true)
+}
+
+type localMCPContextKey struct{}
+
+func markContextChannel(ctx context.Context, signed *cloudpbv2.SignedRequest) {
+	if local, _ := ctx.Value(localMCPContextKey{}).(bool); local {
+		signed.Channel = cloudpbv2.RequestChannel_REQUEST_CHANNEL_MCP_LOCAL
+		signed.McpClientId = ""
+		signed.RelaySessionId = ""
+	}
 }

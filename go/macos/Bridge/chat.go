@@ -59,6 +59,10 @@ func WDPollChat(session, turn C.uint64_t) *C.WDChatResult {
 	p := alloc[C.WDChatResult](1)
 	r, err := desktop.PollChat(uint64(session), uint64(turn))
 	p.status = status(err)
+	p.cards, p.card_count = alloc[C.WDChatCard](len(r.Cards)), C.size_t(len(r.Cards))
+	for i, card := range r.Cards {
+		unsafe.Slice(p.cards, len(r.Cards))[i] = C.WDChatCard{kind: C.CString(card.Kind), title: C.CString(card.Title), camera: C.uint32_t(card.Camera)}
+	}
 	p.text, p.error, p.done = C.CString(r.Text), C.CString(r.Error), boolInt(r.Done)
 	p.activity, p.trace = C.CString(r.Activity), C.CString(r.Trace)
 	p.approval_id = C.uint64_t(r.ApprovalID)
@@ -71,6 +75,11 @@ func WDChatFree(p *C.WDChatResult) {
 	if p == nil {
 		return
 	}
+	for _, card := range unsafe.Slice(p.cards, int(p.card_count)) {
+		free(card.kind)
+		free(card.title)
+	}
+	free(p.cards)
 	free(p.activity)
 	free(p.trace)
 	free(p.approval_action)

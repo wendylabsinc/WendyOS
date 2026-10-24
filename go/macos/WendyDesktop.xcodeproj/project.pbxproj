@@ -11,55 +11,127 @@
 		062150E93B7F5925AE16DA74 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A49EBADB69E0A1992F50EDC0 /* ContentView.swift */; };
 		08287DD3EFF2E24E9258CFA7 /* ModelHardwareTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9B40B4FDD87C60533F0559A6 /* ModelHardwareTests.swift */; };
 		0E941602585C6FD0784BBC99 /* AccountsSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E8604CC1B34374401BA0586 /* AccountsSettingsView.swift */; };
+		10B131E8F39984EDA6802FF1 /* DeviceSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7648529217A2937BE2590CE6 /* DeviceSettingsView.swift */; };
+		12E87D30FBA90B9E67946EB6 /* MobileTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 72B368A49DE636D3D5AD9E35 /* MobileTests.swift */; };
 		130F80B0C99242FFF2D614DE /* CloudManagementClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7D780434FF5B2190F955252 /* CloudManagementClient.swift */; };
 		189898BACBE793CA0FE09452 /* NetworkExtension.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = D12072D59326B47F07A71F81 /* NetworkExtension.framework */; };
+		1921AF77AED0B2287A8DF215 /* VPNController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F559A36FB62C81768A4EC94 /* VPNController.swift */; };
+		1C7D0AABFC28A6E85775CBC9 /* ModelLibraryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2572A9746D687639FDA728A /* ModelLibraryView.swift */; };
 		1DD72D639F28C7AEAF4A7D64 /* LogsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C9EDEC6A2D47804FCD2A19F /* LogsView.swift */; };
+		21805F5A70B8CD5EF18ABE3B /* DeviceChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3E4CC89666184527D86018FD /* DeviceChatView.swift */; };
 		242167659010421CEAED4A73 /* IOKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 956D04288AC871766E33F388 /* IOKit.framework */; };
+		289830985E949D7D00203DD0 /* DataVisualizerClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF29F18E69E8D50DFC51DA94 /* DataVisualizerClient.swift */; };
 		2AE48E3AFC2A12929B38DCFD /* CampaignsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6206A67A4FAB8807E533A7F1 /* CampaignsView.swift */; };
 		2D56AD29CF7094E56D4C28D4 /* PresentedFailure.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E60D04FF79C72E6F5AC5678 /* PresentedFailure.swift */; };
 		2DD8FB6D5BC5F30F83C8C71C /* CoreAudio.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = D80556F17991D76C5790CE15 /* CoreAudio.framework */; };
+		2FD819F5EEB474D4FF9E0C1F /* PairingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BE9A9C8F45E321960D15CEF8 /* PairingView.swift */; };
 		3141DBA5B6180F2B57181663 /* Security.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 5D8FCECB47D77D65A8AD29C6 /* Security.framework */; };
+		36ABCD2BDD34D7B61468F7C2 /* CampaignRecordingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2CB41B67FAE017DE765E2F8 /* CampaignRecordingsView.swift */; };
 		39ED22314913B8343406C332 /* DataVisualizerClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF29F18E69E8D50DFC51DA94 /* DataVisualizerClient.swift */; };
+		3CBC4BB7DBC20478491ED268 /* CoreBluetooth.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 9E2EF35E68D5CA5FA24980A4 /* CoreBluetooth.framework */; };
 		40453FFA0762B7E46BA8837F /* AppsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3123CE49AF22AD71C953CCE2 /* AppsView.swift */; };
 		40DE8423E05DB0095F8329B0 /* CameraWallView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C165580EAB422936E3B036B0 /* CameraWallView.swift */; };
+		42602FEEC2F6B5CFC136BF33 /* SitesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 56DEDD8877094ACCAD62B7D6 /* SitesView.swift */; };
 		454187A52A88D86692831D21 /* GoClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = B709AF3886D5AA315D17DFD6 /* GoClient.swift */; };
+		480C1EADE95D469CEBB3D5A9 /* ModelLibraryClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = DBDFC9A8D0ACA603DCD08924 /* ModelLibraryClient.swift */; };
+		4C5CF7A1B3ED504E7994B90B /* MobilePlatform.swift in Sources */ = {isa = PBXBuildFile; fileRef = D82158ABFAEE221FC6FDCAC9 /* MobilePlatform.swift */; };
 		54BD54EF3306A476483C5238 /* DataVisualizerTimelineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49A41BF0F5377D89682F1080 /* DataVisualizerTimelineTests.swift */; };
+		580FB390789484D08CE50A13 /* DeviceBluetoothView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EA42D986BDD4C2F250B3C32D /* DeviceBluetoothView.swift */; };
+		5AB57DEAEE38F64FA12A8E29 /* MeshGraphView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 73D7C90E8A6DFBFEBCBDC415 /* MeshGraphView.swift */; };
+		5CDC206FDA8042791A158245 /* DeviceInfoView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 25413B13DA07596067522B8C /* DeviceInfoView.swift */; };
+		5F73CFF7F68EEE13F2D99BC4 /* CampaignSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E1689D6E0F336E711BDEDA8 /* CampaignSettingsView.swift */; };
 		60B5F00D61E666108B8E604C /* VPNControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = 16082719BD2BF75BBBF59D09 /* VPNControls.swift */; };
+		61783CD803B9FF9CE23FBA27 /* MeshGraphView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 73D7C90E8A6DFBFEBCBDC415 /* MeshGraphView.swift */; };
 		61FF0099ACA858AA71168092 /* WendyDesktopApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDFEB9D50B027C252EBE8CDC /* WendyDesktopApp.swift */; };
+		6475BF2FB6CB0A19AF740E66 /* PushNotifications.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4FD4712852B6F400373343C3 /* PushNotifications.swift */; };
 		64F6D8F0370577700BDA8FF8 /* VPNConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA6AB0A619B578B06B3173D9 /* VPNConfiguration.swift */; };
+		690FE17CF9867B47C0F4E8FE /* PaneRefresh.swift in Sources */ = {isa = PBXBuildFile; fileRef = 586213F4C9CD3726515B5EBF /* PaneRefresh.swift */; };
+		6B944D6249927EBACCE40FEF /* Security.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 5D8FCECB47D77D65A8AD29C6 /* Security.framework */; };
 		6BE94F640161A95FE942D71B /* AVFoundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 034293D95F249B1C1F01C7EB /* AVFoundation.framework */; };
+		6FC51A15B6A00B68E69125A4 /* CampaignsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6206A67A4FAB8807E533A7F1 /* CampaignsView.swift */; };
+		6FD3EF6A632B76884FA7319E /* ActivityView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0DDA1A07827F3064598323B /* ActivityView.swift */; };
+		76A42584B2D5A4BCA51FAFA9 /* DeviceAudioView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0038357CF8976FBB01A9221 /* DeviceAudioView.swift */; };
 		76E5D9279EC8FE76BB7AE4BC /* H264VideoDecoder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C93776C64F09D31D72C65AD /* H264VideoDecoder.swift */; };
+		778C4725BF862E3710BE207E /* ChatDeviceCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4263F7B880A586994FB72A3D /* ChatDeviceCardView.swift */; };
+		77E0DC184518400D18F44AEF /* DataTimelineViewport.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1F0FE01F434594987BCB7D5 /* DataTimelineViewport.swift */; };
 		7BA6756557B370948A3FE8A8 /* ModelLibraryClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = DBDFC9A8D0ACA603DCD08924 /* ModelLibraryClient.swift */; };
+		7C589CB13E67C02FA454FD9C /* UserNotifications.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 283DE4ACABB5F31B90C062E0 /* UserNotifications.framework */; };
+		8455994379C39B9DCB041A54 /* LogsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C9EDEC6A2D47804FCD2A19F /* LogsView.swift */; };
 		89AD3C60B440A6C2C1488871 /* CampaignModelPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9DAD4BBD7CAD336DE563C175 /* CampaignModelPicker.swift */; };
+		8AA95FCA489E18A93AA87F7C /* CameraDisplayView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B2BBF5239DC522DEC32DDF6 /* CameraDisplayView.swift */; };
+		8B0F73E8DED98E64DF4540E6 /* GoClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = B709AF3886D5AA315D17DFD6 /* GoClient.swift */; };
 		8CDC3B9605B5AEF67C92382D /* Notices in Resources */ = {isa = PBXBuildFile; fileRef = 3D11C2595A0C1B2775FA2B1A /* Notices */; };
 		8E4B067D54CBFF75C5FEAADB /* SystemExtensions.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 6CA03F0043D1569ECB9D2ECF /* SystemExtensions.framework */; };
+		91056C19DDF1F71E9FE5E969 /* VPNConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA6AB0A619B578B06B3173D9 /* VPNConfiguration.swift */; };
+		91304A73F40E332BA0FA844E /* AccountsSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E8604CC1B34374401BA0586 /* AccountsSettingsView.swift */; };
 		913F1A05C9B4169F66DFAA4E /* CameraDisplayView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0B2BBF5239DC522DEC32DDF6 /* CameraDisplayView.swift */; };
+		93B23A2E3D9EDC9087659488 /* PresentedFailure.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E60D04FF79C72E6F5AC5678 /* PresentedFailure.swift */; };
 		94A09CB6F4FB58950D893160 /* DiskArbitration.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 5443734D5C194413C90351C7 /* DiskArbitration.framework */; };
+		950FD52B3A3B393B03A142F3 /* CampaignModelPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9DAD4BBD7CAD336DE563C175 /* CampaignModelPicker.swift */; };
 		95862B7AD47757080EA77DCB /* dev.wendy.desktop.network.systemextension in Embed System Extensions */ = {isa = PBXBuildFile; fileRef = A9F880F711140BBFBDF6FF89 /* dev.wendy.desktop.network.systemextension */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		98527A2346F2A8FDCB3F3423 /* DataVisualizerTimeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = B51F4E867CC0B70E8A1C6FE0 /* DataVisualizerTimeline.swift */; };
+		A13C1FEA6CDC52F709271853 /* CloudManagementClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7D780434FF5B2190F955252 /* CloudManagementClient.swift */; };
 		A1D1E4CE1B7BA33DCD9B45DB /* VPNConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA6AB0A619B578B06B3173D9 /* VPNConfiguration.swift */; };
 		A34D6AEC822A1CE2B0C29A3A /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D2DEE3E46A9E3BB11B73526 /* main.swift */; };
 		A4C924EB2A9009CF1900F394 /* DeviceChatView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3E4CC89666184527D86018FD /* DeviceChatView.swift */; };
+		A640420891322DEAC7DA2208 /* PaneRefresh.swift in Sources */ = {isa = PBXBuildFile; fileRef = 586213F4C9CD3726515B5EBF /* PaneRefresh.swift */; };
+		AAE1DB54DE5DA0E7D55550DC /* AppsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3123CE49AF22AD71C953CCE2 /* AppsView.swift */; };
 		AB6CF01A4FF1564B74CBB462 /* ModelLibraryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2572A9746D687639FDA728A /* ModelLibraryView.swift */; };
+		ABA5D81B189D6224182726FF /* ChatDeviceCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4263F7B880A586994FB72A3D /* ChatDeviceCardView.swift */; };
 		AC77C91B900101B45CE51169 /* PacketTunnelProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00BC44983830F926484A6FE9 /* PacketTunnelProvider.swift */; };
+		B0AD2CCB920BD05A5F594059 /* CloudManagementView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 972AA28D77CF54F9EBCDDA77 /* CloudManagementView.swift */; };
+		B373491DFCC4AA57F306F882 /* Notices in Resources */ = {isa = PBXBuildFile; fileRef = 3D11C2595A0C1B2775FA2B1A /* Notices */; };
+		B3F370E0B0F697440772A15C /* DataTimelineViewport.swift in Sources */ = {isa = PBXBuildFile; fileRef = D1F0FE01F434594987BCB7D5 /* DataTimelineViewport.swift */; };
+		B47059228CF53913171E4472 /* WendyMobileApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 97B878F9B8525136814A1077 /* WendyMobileApp.swift */; };
+		B54454BF9E02F6A2D6B08E8A /* AutomationClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B3ADE76629CC299C627F755 /* AutomationClient.swift */; };
 		B6814F13047D063DDC783CEE /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC609FC5E6A530F493D66E7D /* AppModel.swift */; };
 		B755A7544C278B994D81687B /* CoreBluetooth.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 9E2EF35E68D5CA5FA24980A4 /* CoreBluetooth.framework */; };
 		B9C57EBD0B7D5276EE374D5B /* AudioToolbox.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = DD1FE3F2E1DB38F68D72019A /* AudioToolbox.framework */; };
 		BAC41772BF0B80F5A5D9E0D4 /* CoreFoundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 2DD8002D524E68CA3DE04823 /* CoreFoundation.framework */; };
+		BB76E8E0B1F4FD1C526BEF69 /* MobileAssets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 7669EC933A46EBA4067A3592 /* MobileAssets.xcassets */; };
+		BC65259C7EEFB434BCA73579 /* CoreMedia.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = E16E0AECED1D3AFC9D949296 /* CoreMedia.framework */; };
 		BDEF450DB9F50B282F0713CD /* PairingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BE9A9C8F45E321960D15CEF8 /* PairingView.swift */; };
+		C22F6C5DB72DEA503FA54640 /* PushNotifications.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4FD4712852B6F400373343C3 /* PushNotifications.swift */; };
 		C338E33307B39FD9944B5890 /* DesktopTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C5BF09CEEE5F40635961B572 /* DesktopTests.swift */; };
+		C3B9202FADD6F7B7462C64ED /* PlatformServices.swift in Sources */ = {isa = PBXBuildFile; fileRef = 40A7543FFAE45034DB228D85 /* PlatformServices.swift */; };
+		C7B60DB501FFCF266A403AC0 /* CoreFoundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 2DD8002D524E68CA3DE04823 /* CoreFoundation.framework */; };
 		CAD5B2B85F11FD7F6FD25A86 /* DataVisualizerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1ACFB977D993156FC29A021C /* DataVisualizerView.swift */; };
+		CB95B7C465AB92F998A08000 /* DeviceSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7648529217A2937BE2590CE6 /* DeviceSettingsView.swift */; };
+		D17A0FC4CFBE9232DA7F6B34 /* CampaignSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2E1689D6E0F336E711BDEDA8 /* CampaignSettingsView.swift */; };
+		D4B58CE3488AD1EDF4E5B3BF /* MobileRootView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 997174D2436A34109AF1823C /* MobileRootView.swift */; };
 		DBF6B64C88771A2105B3D512 /* CloudManagementModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0735D8E8691C826856A65809 /* CloudManagementModel.swift */; };
+		DC428C615A09E45DAEBBC918 /* AVFoundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 034293D95F249B1C1F01C7EB /* AVFoundation.framework */; };
+		E0A29452C11060654C08FD00 /* MobileDataView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FAE176A6BF86D7D0A3E4ADF2 /* MobileDataView.swift */; };
 		E132AE2A0B26D8C6C4878796 /* SitesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 56DEDD8877094ACCAD62B7D6 /* SitesView.swift */; };
 		E3A0BD21E2437238113545E0 /* CoreMedia.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = E16E0AECED1D3AFC9D949296 /* CoreMedia.framework */; };
 		E54F34FCA4D2C425D1D646CE /* NetworkExtension.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = D12072D59326B47F07A71F81 /* NetworkExtension.framework */; };
+		E5567126A684A2624D1EEDDB /* MobileVideoPlayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 830BF31D5054ED12AE4A2499 /* MobileVideoPlayer.swift */; };
 		E5C3F53A4CFF34739C539614 /* DataVisualizerMediaTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E04EE381C6CDD0530830A0B /* DataVisualizerMediaTests.swift */; };
+		E5D917C5F9CB012DDC2D8F42 /* PlatformServices.swift in Sources */ = {isa = PBXBuildFile; fileRef = 40A7543FFAE45034DB228D85 /* PlatformServices.swift */; };
 		E69CD4973C9D92085016270C /* VPNController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F559A36FB62C81768A4EC94 /* VPNController.swift */; };
+		E7C1680AEF29B7F9F799B74D /* H264VideoDecoder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C93776C64F09D31D72C65AD /* H264VideoDecoder.swift */; };
+		E830A2AA85FF36F939777BF2 /* DataVisualPlayback.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9CC8CB61B052F1C86F785BA5 /* DataVisualPlayback.swift */; };
+		EAE7C22DFFF4B0E3A8F9AE2B /* AppModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = CC609FC5E6A530F493D66E7D /* AppModel.swift */; };
+		ED3B5B05170B2F25C3B580F8 /* UserNotifications.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 283DE4ACABB5F31B90C062E0 /* UserNotifications.framework */; };
+		ED5C60D0DC443633C03EAAC6 /* DataVisualPlayback.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9CC8CB61B052F1C86F785BA5 /* DataVisualPlayback.swift */; };
+		EDB5B7F313CEB4E662199D2E /* CameraWallView.swift in Sources */ = {isa = PBXBuildFile; fileRef = C165580EAB422936E3B036B0 /* CameraWallView.swift */; };
+		F28763DEF197CB9BFCFE4DEB /* NetworkExtension.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = D12072D59326B47F07A71F81 /* NetworkExtension.framework */; };
+		F362388A1C4DF544789B3D0B /* DeviceInfoView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 25413B13DA07596067522B8C /* DeviceInfoView.swift */; };
+		F3E322432EA8C96967DBC6AE /* DeviceBluetoothView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EA42D986BDD4C2F250B3C32D /* DeviceBluetoothView.swift */; };
+		F402B164439271518A77BBC4 /* CloudManagementModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0735D8E8691C826856A65809 /* CloudManagementModel.swift */; };
 		FC3D409DB7E464DC4AFA12D2 /* AutomationClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5B3ADE76629CC299C627F755 /* AutomationClient.swift */; };
 		FDDF59EDC953DC535F78FE68 /* CloudManagementView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 972AA28D77CF54F9EBCDDA77 /* CloudManagementView.swift */; };
+		FEE23DD90EB784FD8659CD37 /* DeviceAudioView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0038357CF8976FBB01A9221 /* DeviceAudioView.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
+		21ABBA1CE5A2EC3E1D9C5B98 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = C5243DACF2D4DAE0E7489603 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 4660FE6CC78F07FE7C2A1CD9;
+			remoteInfo = WendyMobile;
+		};
 		72D25EA97182AF311BE60C1E /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = C5243DACF2D4DAE0E7489603 /* Project object */;
@@ -100,27 +172,46 @@
 		1ACFB977D993156FC29A021C /* DataVisualizerView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DataVisualizerView.swift; sourceTree = "<group>"; };
 		1E60D04FF79C72E6F5AC5678 /* PresentedFailure.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PresentedFailure.swift; sourceTree = "<group>"; };
 		1E8604CC1B34374401BA0586 /* AccountsSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AccountsSettingsView.swift; sourceTree = "<group>"; };
+		1E8FB9DB028D1128312D0D2B /* WendyMobile.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = WendyMobile.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		25413B13DA07596067522B8C /* DeviceInfoView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceInfoView.swift; sourceTree = "<group>"; };
+		283DE4ACABB5F31B90C062E0 /* UserNotifications.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UserNotifications.framework; path = System/Library/Frameworks/UserNotifications.framework; sourceTree = SDKROOT; };
 		2C93776C64F09D31D72C65AD /* H264VideoDecoder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = H264VideoDecoder.swift; sourceTree = "<group>"; };
 		2DD8002D524E68CA3DE04823 /* CoreFoundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreFoundation.framework; path = System/Library/Frameworks/CoreFoundation.framework; sourceTree = SDKROOT; };
+		2E1689D6E0F336E711BDEDA8 /* CampaignSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CampaignSettingsView.swift; sourceTree = "<group>"; };
 		3123CE49AF22AD71C953CCE2 /* AppsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppsView.swift; sourceTree = "<group>"; };
 		3D11C2595A0C1B2775FA2B1A /* Notices */ = {isa = PBXFileReference; lastKnownFileType = folder; name = Notices; path = Resources/Notices; sourceTree = SOURCE_ROOT; };
 		3E4CC89666184527D86018FD /* DeviceChatView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceChatView.swift; sourceTree = "<group>"; };
+		40A7543FFAE45034DB228D85 /* PlatformServices.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlatformServices.swift; sourceTree = "<group>"; };
+		4263F7B880A586994FB72A3D /* ChatDeviceCardView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ChatDeviceCardView.swift; sourceTree = "<group>"; };
 		49A41BF0F5377D89682F1080 /* DataVisualizerTimelineTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DataVisualizerTimelineTests.swift; sourceTree = "<group>"; };
+		4FD4712852B6F400373343C3 /* PushNotifications.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PushNotifications.swift; sourceTree = "<group>"; };
 		5443734D5C194413C90351C7 /* DiskArbitration.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = DiskArbitration.framework; path = System/Library/Frameworks/DiskArbitration.framework; sourceTree = SDKROOT; };
 		56DEDD8877094ACCAD62B7D6 /* SitesView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SitesView.swift; sourceTree = "<group>"; };
+		586213F4C9CD3726515B5EBF /* PaneRefresh.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PaneRefresh.swift; sourceTree = "<group>"; };
 		5B3ADE76629CC299C627F755 /* AutomationClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AutomationClient.swift; sourceTree = "<group>"; };
 		5D8FCECB47D77D65A8AD29C6 /* Security.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Security.framework; path = System/Library/Frameworks/Security.framework; sourceTree = SDKROOT; };
 		6206A67A4FAB8807E533A7F1 /* CampaignsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CampaignsView.swift; sourceTree = "<group>"; };
 		6C9EDEC6A2D47804FCD2A19F /* LogsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LogsView.swift; sourceTree = "<group>"; };
 		6CA03F0043D1569ECB9D2ECF /* SystemExtensions.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SystemExtensions.framework; path = System/Library/Frameworks/SystemExtensions.framework; sourceTree = SDKROOT; };
 		6F559A36FB62C81768A4EC94 /* VPNController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VPNController.swift; sourceTree = "<group>"; };
+		70C401F859DE05580E5140F4 /* WendyMobileTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = WendyMobileTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		72B368A49DE636D3D5AD9E35 /* MobileTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileTests.swift; sourceTree = "<group>"; };
+		73D7C90E8A6DFBFEBCBDC415 /* MeshGraphView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeshGraphView.swift; sourceTree = "<group>"; };
+		7648529217A2937BE2590CE6 /* DeviceSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceSettingsView.swift; sourceTree = "<group>"; };
+		7669EC933A46EBA4067A3592 /* MobileAssets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = MobileAssets.xcassets; sourceTree = "<group>"; };
+		830BF31D5054ED12AE4A2499 /* MobileVideoPlayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileVideoPlayer.swift; sourceTree = "<group>"; };
 		956D04288AC871766E33F388 /* IOKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = IOKit.framework; path = System/Library/Frameworks/IOKit.framework; sourceTree = SDKROOT; };
 		972AA28D77CF54F9EBCDDA77 /* CloudManagementView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudManagementView.swift; sourceTree = "<group>"; };
+		97B878F9B8525136814A1077 /* WendyMobileApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WendyMobileApp.swift; sourceTree = "<group>"; };
+		997174D2436A34109AF1823C /* MobileRootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileRootView.swift; sourceTree = "<group>"; };
 		9B2C1C2097478D8363CB556C /* WendyDesktop.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = WendyDesktop.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		9B40B4FDD87C60533F0559A6 /* ModelHardwareTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelHardwareTests.swift; sourceTree = "<group>"; };
+		9CC8CB61B052F1C86F785BA5 /* DataVisualPlayback.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DataVisualPlayback.swift; sourceTree = "<group>"; };
 		9DAD4BBD7CAD336DE563C175 /* CampaignModelPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CampaignModelPicker.swift; sourceTree = "<group>"; };
 		9E04EE381C6CDD0530830A0B /* DataVisualizerMediaTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DataVisualizerMediaTests.swift; sourceTree = "<group>"; };
 		9E2EF35E68D5CA5FA24980A4 /* CoreBluetooth.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreBluetooth.framework; path = System/Library/Frameworks/CoreBluetooth.framework; sourceTree = SDKROOT; };
+		A0038357CF8976FBB01A9221 /* DeviceAudioView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceAudioView.swift; sourceTree = "<group>"; };
+		A2CB41B67FAE017DE765E2F8 /* CampaignRecordingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CampaignRecordingsView.swift; sourceTree = "<group>"; };
 		A49EBADB69E0A1992F50EDC0 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		A9F880F711140BBFBDF6FF89 /* dev.wendy.desktop.network.systemextension */ = {isa = PBXFileReference; explicitFileType = "wrapper.system-extension"; includeInIndex = 0; path = dev.wendy.desktop.network.systemextension; sourceTree = BUILT_PRODUCTS_DIR; };
 		B51F4E867CC0B70E8A1C6FE0 /* DataVisualizerTimeline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DataVisualizerTimeline.swift; sourceTree = "<group>"; };
@@ -133,17 +224,35 @@
 		CDFEB9D50B027C252EBE8CDC /* WendyDesktopApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WendyDesktopApp.swift; sourceTree = "<group>"; };
 		CF29F18E69E8D50DFC51DA94 /* DataVisualizerClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DataVisualizerClient.swift; sourceTree = "<group>"; };
 		D12072D59326B47F07A71F81 /* NetworkExtension.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = NetworkExtension.framework; path = System/Library/Frameworks/NetworkExtension.framework; sourceTree = SDKROOT; };
+		D1F0FE01F434594987BCB7D5 /* DataTimelineViewport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DataTimelineViewport.swift; sourceTree = "<group>"; };
 		D80556F17991D76C5790CE15 /* CoreAudio.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreAudio.framework; path = System/Library/Frameworks/CoreAudio.framework; sourceTree = SDKROOT; };
+		D82158ABFAEE221FC6FDCAC9 /* MobilePlatform.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobilePlatform.swift; sourceTree = "<group>"; };
 		DBDFC9A8D0ACA603DCD08924 /* ModelLibraryClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelLibraryClient.swift; sourceTree = "<group>"; };
 		DD1FE3F2E1DB38F68D72019A /* AudioToolbox.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AudioToolbox.framework; path = System/Library/Frameworks/AudioToolbox.framework; sourceTree = SDKROOT; };
 		E16E0AECED1D3AFC9D949296 /* CoreMedia.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreMedia.framework; path = System/Library/Frameworks/CoreMedia.framework; sourceTree = SDKROOT; };
+		EA42D986BDD4C2F250B3C32D /* DeviceBluetoothView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceBluetoothView.swift; sourceTree = "<group>"; };
 		F0DDA1A07827F3064598323B /* ActivityView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ActivityView.swift; sourceTree = "<group>"; };
 		F2572A9746D687639FDA728A /* ModelLibraryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelLibraryView.swift; sourceTree = "<group>"; };
 		F7D780434FF5B2190F955252 /* CloudManagementClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudManagementClient.swift; sourceTree = "<group>"; };
+		FAE176A6BF86D7D0A3E4ADF2 /* MobileDataView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileDataView.swift; sourceTree = "<group>"; };
 		FCBC82FFE9AAFB77D970A52B /* WendyDesktopTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = WendyDesktopTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
+		0336A322467CA6A7F3A5A69E /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				ED3B5B05170B2F25C3B580F8 /* UserNotifications.framework in Frameworks */,
+				DC428C615A09E45DAEBBC918 /* AVFoundation.framework in Frameworks */,
+				BC65259C7EEFB434BCA73579 /* CoreMedia.framework in Frameworks */,
+				3CBC4BB7DBC20478491ED268 /* CoreBluetooth.framework in Frameworks */,
+				6B944D6249927EBACCE40FEF /* Security.framework in Frameworks */,
+				C7B60DB501FFCF266A403AC0 /* CoreFoundation.framework in Frameworks */,
+				F28763DEF197CB9BFCFE4DEB /* NetworkExtension.framework in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		6D7121C93D71657CC7F87022 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
@@ -155,6 +264,7 @@
 				94A09CB6F4FB58950D893160 /* DiskArbitration.framework in Frameworks */,
 				3141DBA5B6180F2B57181663 /* Security.framework in Frameworks */,
 				BAC41772BF0B80F5A5D9E0D4 /* CoreFoundation.framework in Frameworks */,
+				7C589CB13E67C02FA454FD9C /* UserNotifications.framework in Frameworks */,
 				6BE94F640161A95FE942D71B /* AVFoundation.framework in Frameworks */,
 				E3A0BD21E2437238113545E0 /* CoreMedia.framework in Frameworks */,
 				B9C57EBD0B7D5276EE374D5B /* AudioToolbox.framework in Frameworks */,
@@ -184,22 +294,34 @@
 				0B2BBF5239DC522DEC32DDF6 /* CameraDisplayView.swift */,
 				C165580EAB422936E3B036B0 /* CameraWallView.swift */,
 				9DAD4BBD7CAD336DE563C175 /* CampaignModelPicker.swift */,
+				2E1689D6E0F336E711BDEDA8 /* CampaignSettingsView.swift */,
 				6206A67A4FAB8807E533A7F1 /* CampaignsView.swift */,
+				4263F7B880A586994FB72A3D /* ChatDeviceCardView.swift */,
 				F7D780434FF5B2190F955252 /* CloudManagementClient.swift */,
 				0735D8E8691C826856A65809 /* CloudManagementModel.swift */,
 				972AA28D77CF54F9EBCDDA77 /* CloudManagementView.swift */,
 				A49EBADB69E0A1992F50EDC0 /* ContentView.swift */,
+				D1F0FE01F434594987BCB7D5 /* DataTimelineViewport.swift */,
 				CF29F18E69E8D50DFC51DA94 /* DataVisualizerClient.swift */,
 				B51F4E867CC0B70E8A1C6FE0 /* DataVisualizerTimeline.swift */,
 				1ACFB977D993156FC29A021C /* DataVisualizerView.swift */,
+				9CC8CB61B052F1C86F785BA5 /* DataVisualPlayback.swift */,
+				A0038357CF8976FBB01A9221 /* DeviceAudioView.swift */,
+				EA42D986BDD4C2F250B3C32D /* DeviceBluetoothView.swift */,
 				3E4CC89666184527D86018FD /* DeviceChatView.swift */,
+				25413B13DA07596067522B8C /* DeviceInfoView.swift */,
+				7648529217A2937BE2590CE6 /* DeviceSettingsView.swift */,
 				B709AF3886D5AA315D17DFD6 /* GoClient.swift */,
 				2C93776C64F09D31D72C65AD /* H264VideoDecoder.swift */,
 				6C9EDEC6A2D47804FCD2A19F /* LogsView.swift */,
+				73D7C90E8A6DFBFEBCBDC415 /* MeshGraphView.swift */,
 				DBDFC9A8D0ACA603DCD08924 /* ModelLibraryClient.swift */,
 				F2572A9746D687639FDA728A /* ModelLibraryView.swift */,
 				BE9A9C8F45E321960D15CEF8 /* PairingView.swift */,
+				586213F4C9CD3726515B5EBF /* PaneRefresh.swift */,
+				40A7543FFAE45034DB228D85 /* PlatformServices.swift */,
 				1E60D04FF79C72E6F5AC5678 /* PresentedFailure.swift */,
+				4FD4712852B6F400373343C3 /* PushNotifications.swift */,
 				56DEDD8877094ACCAD62B7D6 /* SitesView.swift */,
 				6F559A36FB62C81768A4EC94 /* VPNController.swift */,
 				16082719BD2BF75BBBF59D09 /* VPNControls.swift */,
@@ -214,6 +336,7 @@
 				BFFA2085CFD68C26188636EF /* Resources */,
 				5EDCD13DC5A01C0586B8D8FA /* Sources */,
 				444F0C4441C02DF2AA6E16F1 /* Tests */,
+				4FE7BDE560CB2771FA9DF7F8 /* Tests-iOS */,
 				EFDF8EDA35420C85F2E30E12 /* Frameworks */,
 				45F39591A87CEA48A518A2D2 /* Products */,
 			);
@@ -236,8 +359,18 @@
 				A9F880F711140BBFBDF6FF89 /* dev.wendy.desktop.network.systemextension */,
 				9B2C1C2097478D8363CB556C /* WendyDesktop.app */,
 				FCBC82FFE9AAFB77D970A52B /* WendyDesktopTests.xctest */,
+				1E8FB9DB028D1128312D0D2B /* WendyMobile.app */,
+				70C401F859DE05580E5140F4 /* WendyMobileTests.xctest */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		4FE7BDE560CB2771FA9DF7F8 /* Tests-iOS */ = {
+			isa = PBXGroup;
+			children = (
+				72B368A49DE636D3D5AD9E35 /* MobileTests.swift */,
+			);
+			path = "Tests-iOS";
 			sourceTree = "<group>";
 		};
 		5EDCD13DC5A01C0586B8D8FA /* Sources */ = {
@@ -245,14 +378,29 @@
 			children = (
 				16F504CCA53B5184A3ED86EE /* App */,
 				D51E31CA50168A01713F29BA /* Extension */,
+				AEC1C37E77175C7A9763B838 /* iOS */,
 				C92CFCD3B50A6DB34EFE8146 /* Shared */,
 			);
 			path = Sources;
 			sourceTree = "<group>";
 		};
+		AEC1C37E77175C7A9763B838 /* iOS */ = {
+			isa = PBXGroup;
+			children = (
+				A2CB41B67FAE017DE765E2F8 /* CampaignRecordingsView.swift */,
+				FAE176A6BF86D7D0A3E4ADF2 /* MobileDataView.swift */,
+				D82158ABFAEE221FC6FDCAC9 /* MobilePlatform.swift */,
+				997174D2436A34109AF1823C /* MobileRootView.swift */,
+				830BF31D5054ED12AE4A2499 /* MobileVideoPlayer.swift */,
+				97B878F9B8525136814A1077 /* WendyMobileApp.swift */,
+			);
+			path = iOS;
+			sourceTree = "<group>";
+		};
 		BFFA2085CFD68C26188636EF /* Resources */ = {
 			isa = PBXGroup;
 			children = (
+				7669EC933A46EBA4067A3592 /* MobileAssets.xcassets */,
 				3D11C2595A0C1B2775FA2B1A /* Notices */,
 			);
 			path = Resources;
@@ -289,6 +437,7 @@
 				D12072D59326B47F07A71F81 /* NetworkExtension.framework */,
 				5D8FCECB47D77D65A8AD29C6 /* Security.framework */,
 				6CA03F0043D1569ECB9D2ECF /* SystemExtensions.framework */,
+				283DE4ACABB5F31B90C062E0 /* UserNotifications.framework */,
 			);
 			name = Frameworks;
 			sourceTree = "<group>";
@@ -319,6 +468,26 @@
 			productReference = 9B2C1C2097478D8363CB556C /* WendyDesktop.app */;
 			productType = "com.apple.product-type.application";
 		};
+		4660FE6CC78F07FE7C2A1CD9 /* WendyMobile */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 38ED3BB86C50AFFDF22058E2 /* Build configuration list for PBXNativeTarget "WendyMobile" */;
+			buildPhases = (
+				40A9AE88B0136BBB8C4191FC /* Build embedded Go backend for iOS */,
+				25DDD3E0CF1EC817DF239D44 /* Sources */,
+				EBBB8D69F4EFBAB44E8201CB /* Resources */,
+				0336A322467CA6A7F3A5A69E /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = WendyMobile;
+			packageProductDependencies = (
+			);
+			productName = WendyMobile;
+			productReference = 1E8FB9DB028D1128312D0D2B /* WendyMobile.app */;
+			productType = "com.apple.product-type.application";
+		};
 		66549B7B32DEF8896208E2C0 /* WendyDesktopTests */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = DF22430FFA26BB0FE437F64E /* Build configuration list for PBXNativeTarget "WendyDesktopTests" */;
@@ -335,6 +504,24 @@
 			);
 			productName = WendyDesktopTests;
 			productReference = FCBC82FFE9AAFB77D970A52B /* WendyDesktopTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		9F296B433343571747FBC234 /* WendyMobileTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 45C342D9591C00FD4408F5CD /* Build configuration list for PBXNativeTarget "WendyMobileTests" */;
+			buildPhases = (
+				4A22D00414B56285EF245F0F /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				79E0F418CB6D926CF25B2C0C /* PBXTargetDependency */,
+			);
+			name = WendyMobileTests;
+			packageProductDependencies = (
+			);
+			productName = WendyMobileTests;
+			productReference = 70C401F859DE05580E5140F4 /* WendyMobileTests.xctest */;
 			productType = "com.apple.product-type.bundle.unit-test";
 		};
 		C6BA34DDD78D5B0FE18B873F /* WendyNetwork */ = {
@@ -369,7 +556,15 @@
 						DevelopmentTeam = "";
 						ProvisioningStyle = Automatic;
 					};
+					4660FE6CC78F07FE7C2A1CD9 = {
+						DevelopmentTeam = "";
+						ProvisioningStyle = Automatic;
+					};
 					66549B7B32DEF8896208E2C0 = {
+						DevelopmentTeam = "";
+						ProvisioningStyle = Automatic;
+					};
+					9F296B433343571747FBC234 = {
 						DevelopmentTeam = "";
 						ProvisioningStyle = Automatic;
 					};
@@ -395,6 +590,8 @@
 			targets = (
 				061A3B38F40254E591224986 /* WendyDesktop */,
 				66549B7B32DEF8896208E2C0 /* WendyDesktopTests */,
+				4660FE6CC78F07FE7C2A1CD9 /* WendyMobile */,
+				9F296B433343571747FBC234 /* WendyMobileTests */,
 				C6BA34DDD78D5B0FE18B873F /* WendyNetwork */,
 			);
 		};
@@ -406,6 +603,15 @@
 			buildActionMask = 2147483647;
 			files = (
 				8CDC3B9605B5AEF67C92382D /* Notices in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		EBBB8D69F4EFBAB44E8201CB /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				BB76E8E0B1F4FD1C526BEF69 /* MobileAssets.xcassets in Resources */,
+				B373491DFCC4AA57F306F882 /* Notices in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -430,6 +636,25 @@
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
 			shellScript = "#!/bin/bash\nset -euo pipefail\nexport PATH=\"/opt/homebrew/bin:/usr/local/bin:$PATH\"\nAPP_ROOT=\"${SRCROOT:-$(cd \"$(dirname \"$0\")/..\" && pwd)}\"\nREPO_ROOT=\"$(cd \"$APP_ROOT/../..\" && pwd)\"\nmkdir -p \"$APP_ROOT/Build\"\n# Xcode can invoke both targets concurrently. Serialize archive replacement.\nexec /usr/bin/perl -MFcntl=:flock -e 'open(my $lock, \">>\", $ARGV[0]) or die $!; flock($lock, LOCK_EX) or die $!; shift @ARGV; system(@ARGV); exit($? >> 8)' \"$APP_ROOT/Build/.lock\" /bin/bash \"$APP_ROOT/Scripts/build-go-locked.sh\" \"$APP_ROOT\" \"$REPO_ROOT\"\n";
+		};
+		40A9AE88B0136BBB8C4191FC /* Build embedded Go backend for iOS */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Build embedded Go backend for iOS";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "#!/bin/bash\nset -euo pipefail\nexport PATH=\"/opt/homebrew/bin:/usr/local/bin:$PATH\"\nAPP_ROOT=\"${SRCROOT:-$(cd \"$(dirname \"$0\")/..\" && pwd)}\"\ncd \"$APP_ROOT/../..\"\ncase \"${PLATFORM_NAME:-iphonesimulator}\" in\n  iphoneos) sdk=iphoneos; target=arm64-apple-ios26.0 ;;\n  iphonesimulator) sdk=iphonesimulator; target=arm64-apple-ios26.0-simulator ;;\n  *) echo \"Unsupported iOS platform: $PLATFORM_NAME\" >&2; exit 1 ;;\nesac\noutput=\"$APP_ROOT/Build/$sdk\"\nmkdir -p \"$output\"\nexport GOOS=ios GOARCH=arm64 CGO_ENABLED=1\nexport SDKROOT=\"$(xcrun --sdk \"$sdk\" --show-sdk-path)\"\nexport CC=\"$(xcrun --sdk \"$sdk\" --find clang) -target $target\"\nexport CGO_CFLAGS=\"-isysroot $SDKROOT -O2\"\nexport CGO_LDFLAGS=\"-isysroot $SDKROOT -lresolv\"\nexport CGO_CXXFLAGS=\"$CGO_CFLAGS\"\ngo build -buildmode=c-archive -o \"$output/libwendydesktop.a\" ./go/macos/Bridge\n";
 		};
 		9B2C5A14DB6CE2AF7B663987 /* Build Go libraries */ = {
 			isa = PBXShellScriptBuildPhase;
@@ -483,6 +708,63 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
+		25DDD3E0CF1EC817DF239D44 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				91304A73F40E332BA0FA844E /* AccountsSettingsView.swift in Sources */,
+				6FD3EF6A632B76884FA7319E /* ActivityView.swift in Sources */,
+				EAE7C22DFFF4B0E3A8F9AE2B /* AppModel.swift in Sources */,
+				AAE1DB54DE5DA0E7D55550DC /* AppsView.swift in Sources */,
+				B54454BF9E02F6A2D6B08E8A /* AutomationClient.swift in Sources */,
+				8AA95FCA489E18A93AA87F7C /* CameraDisplayView.swift in Sources */,
+				EDB5B7F313CEB4E662199D2E /* CameraWallView.swift in Sources */,
+				950FD52B3A3B393B03A142F3 /* CampaignModelPicker.swift in Sources */,
+				36ABCD2BDD34D7B61468F7C2 /* CampaignRecordingsView.swift in Sources */,
+				5F73CFF7F68EEE13F2D99BC4 /* CampaignSettingsView.swift in Sources */,
+				6FC51A15B6A00B68E69125A4 /* CampaignsView.swift in Sources */,
+				778C4725BF862E3710BE207E /* ChatDeviceCardView.swift in Sources */,
+				A13C1FEA6CDC52F709271853 /* CloudManagementClient.swift in Sources */,
+				F402B164439271518A77BBC4 /* CloudManagementModel.swift in Sources */,
+				B0AD2CCB920BD05A5F594059 /* CloudManagementView.swift in Sources */,
+				B3F370E0B0F697440772A15C /* DataTimelineViewport.swift in Sources */,
+				E830A2AA85FF36F939777BF2 /* DataVisualPlayback.swift in Sources */,
+				289830985E949D7D00203DD0 /* DataVisualizerClient.swift in Sources */,
+				FEE23DD90EB784FD8659CD37 /* DeviceAudioView.swift in Sources */,
+				F3E322432EA8C96967DBC6AE /* DeviceBluetoothView.swift in Sources */,
+				21805F5A70B8CD5EF18ABE3B /* DeviceChatView.swift in Sources */,
+				5CDC206FDA8042791A158245 /* DeviceInfoView.swift in Sources */,
+				10B131E8F39984EDA6802FF1 /* DeviceSettingsView.swift in Sources */,
+				8B0F73E8DED98E64DF4540E6 /* GoClient.swift in Sources */,
+				E7C1680AEF29B7F9F799B74D /* H264VideoDecoder.swift in Sources */,
+				8455994379C39B9DCB041A54 /* LogsView.swift in Sources */,
+				5AB57DEAEE38F64FA12A8E29 /* MeshGraphView.swift in Sources */,
+				E0A29452C11060654C08FD00 /* MobileDataView.swift in Sources */,
+				4C5CF7A1B3ED504E7994B90B /* MobilePlatform.swift in Sources */,
+				D4B58CE3488AD1EDF4E5B3BF /* MobileRootView.swift in Sources */,
+				E5567126A684A2624D1EEDDB /* MobileVideoPlayer.swift in Sources */,
+				480C1EADE95D469CEBB3D5A9 /* ModelLibraryClient.swift in Sources */,
+				1C7D0AABFC28A6E85775CBC9 /* ModelLibraryView.swift in Sources */,
+				2FD819F5EEB474D4FF9E0C1F /* PairingView.swift in Sources */,
+				690FE17CF9867B47C0F4E8FE /* PaneRefresh.swift in Sources */,
+				E5D917C5F9CB012DDC2D8F42 /* PlatformServices.swift in Sources */,
+				93B23A2E3D9EDC9087659488 /* PresentedFailure.swift in Sources */,
+				6475BF2FB6CB0A19AF740E66 /* PushNotifications.swift in Sources */,
+				42602FEEC2F6B5CFC136BF33 /* SitesView.swift in Sources */,
+				91056C19DDF1F71E9FE5E969 /* VPNConfiguration.swift in Sources */,
+				1921AF77AED0B2287A8DF215 /* VPNController.swift in Sources */,
+				B47059228CF53913171E4472 /* WendyMobileApp.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		4A22D00414B56285EF245F0F /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				12E87D30FBA90B9E67946EB6 /* MobileTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 		5A070105D8A2B37DAAEDCC91 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
@@ -505,22 +787,34 @@
 				913F1A05C9B4169F66DFAA4E /* CameraDisplayView.swift in Sources */,
 				40DE8423E05DB0095F8329B0 /* CameraWallView.swift in Sources */,
 				89AD3C60B440A6C2C1488871 /* CampaignModelPicker.swift in Sources */,
+				D17A0FC4CFBE9232DA7F6B34 /* CampaignSettingsView.swift in Sources */,
 				2AE48E3AFC2A12929B38DCFD /* CampaignsView.swift in Sources */,
+				ABA5D81B189D6224182726FF /* ChatDeviceCardView.swift in Sources */,
 				130F80B0C99242FFF2D614DE /* CloudManagementClient.swift in Sources */,
 				DBF6B64C88771A2105B3D512 /* CloudManagementModel.swift in Sources */,
 				FDDF59EDC953DC535F78FE68 /* CloudManagementView.swift in Sources */,
 				062150E93B7F5925AE16DA74 /* ContentView.swift in Sources */,
+				77E0DC184518400D18F44AEF /* DataTimelineViewport.swift in Sources */,
+				ED5C60D0DC443633C03EAAC6 /* DataVisualPlayback.swift in Sources */,
 				39ED22314913B8343406C332 /* DataVisualizerClient.swift in Sources */,
 				98527A2346F2A8FDCB3F3423 /* DataVisualizerTimeline.swift in Sources */,
 				CAD5B2B85F11FD7F6FD25A86 /* DataVisualizerView.swift in Sources */,
+				76A42584B2D5A4BCA51FAFA9 /* DeviceAudioView.swift in Sources */,
+				580FB390789484D08CE50A13 /* DeviceBluetoothView.swift in Sources */,
 				A4C924EB2A9009CF1900F394 /* DeviceChatView.swift in Sources */,
+				F362388A1C4DF544789B3D0B /* DeviceInfoView.swift in Sources */,
+				CB95B7C465AB92F998A08000 /* DeviceSettingsView.swift in Sources */,
 				454187A52A88D86692831D21 /* GoClient.swift in Sources */,
 				76E5D9279EC8FE76BB7AE4BC /* H264VideoDecoder.swift in Sources */,
 				1DD72D639F28C7AEAF4A7D64 /* LogsView.swift in Sources */,
+				61783CD803B9FF9CE23FBA27 /* MeshGraphView.swift in Sources */,
 				7BA6756557B370948A3FE8A8 /* ModelLibraryClient.swift in Sources */,
 				AB6CF01A4FF1564B74CBB462 /* ModelLibraryView.swift in Sources */,
 				BDEF450DB9F50B282F0713CD /* PairingView.swift in Sources */,
+				A640420891322DEAC7DA2208 /* PaneRefresh.swift in Sources */,
+				C3B9202FADD6F7B7462C64ED /* PlatformServices.swift in Sources */,
 				2D56AD29CF7094E56D4C28D4 /* PresentedFailure.swift in Sources */,
+				C22F6C5DB72DEA503FA54640 /* PushNotifications.swift in Sources */,
 				E132AE2A0B26D8C6C4878796 /* SitesView.swift in Sources */,
 				64F6D8F0370577700BDA8FF8 /* VPNConfiguration.swift in Sources */,
 				E69CD4973C9D92085016270C /* VPNController.swift in Sources */,
@@ -542,9 +836,49 @@
 			target = 061A3B38F40254E591224986 /* WendyDesktop */;
 			targetProxy = 72D25EA97182AF311BE60C1E /* PBXContainerItemProxy */;
 		};
+		79E0F418CB6D926CF25B2C0C /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 4660FE6CC78F07FE7C2A1CD9 /* WendyMobile */;
+			targetProxy = 21ABBA1CE5A2EC3E1D9C5B98 /* PBXContainerItemProxy */;
+		};
 /* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
+		003650AC0015A495B5CBFC1A /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ARCHS = arm64;
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = Resources/Mobile.entitlements;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				ENABLE_HARDENED_RUNTIME = NO;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "Resources/Mobile-Info.plist";
+				INFOPLIST_KEY_CFBundleDisplayName = Wendy;
+				INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription = "Wendy uses Bluetooth to discover nearby Wendy devices.";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Wendy discovers and connects to your nearby devices.";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_WendyPushEnvironment = "$(WENDY_PUSH_ENVIRONMENT)";
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				LIBRARY_SEARCH_PATHS = "$(SRCROOT)/Build/$(PLATFORM_NAME)";
+				OTHER_LDFLAGS = (
+					"-lresolv",
+					"-lwendydesktop",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = dev.wendy.mobile;
+				PRODUCT_NAME = WendyMobile;
+				SDKROOT = iphoneos;
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_OBJC_BRIDGING_HEADER = Sources/Shared/Bridge.h;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
 		346785D608E1F11FA5C1A0BE /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
@@ -560,6 +894,28 @@
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/WendyDesktop.app/Contents/MacOS/WendyDesktop";
 			};
 			name = Release;
+		};
+		34DE376A91D28A57EA59FCF5 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ARCHS = arm64;
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				LIBRARY_SEARCH_PATHS = "$(SRCROOT)/Build/$(PLATFORM_NAME)";
+				OTHER_LDFLAGS = (
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = dev.wendy.mobile.tests;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/WendyMobile.app/WendyMobile";
+			};
+			name = Debug;
 		};
 		688D789D72BBF118DF21C2EB /* Debug */ = {
 			isa = XCBuildConfiguration;
@@ -650,10 +1006,32 @@
 					"-lresolv",
 				);
 				PRODUCT_NAME = "$(TARGET_NAME)";
-				SDKROOT = macosx;
 				SWIFT_COMPILATION_MODE = wholemodule;
 				SWIFT_OPTIMIZATION_LEVEL = "-O";
 				SWIFT_VERSION = 5.10;
+				WENDY_PUSH_ENVIRONMENT = production;
+			};
+			name = Release;
+		};
+		756B05BC037EB8FE4D7385FE /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ARCHS = arm64;
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				LIBRARY_SEARCH_PATHS = "$(SRCROOT)/Build/$(PLATFORM_NAME)";
+				OTHER_LDFLAGS = (
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = dev.wendy.mobile.tests;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/WendyMobile.app/WendyMobile";
 			};
 			name = Release;
 		};
@@ -752,10 +1130,10 @@
 					"-lresolv",
 				);
 				PRODUCT_NAME = "$(TARGET_NAME)";
-				SDKROOT = macosx;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				SWIFT_VERSION = 5.10;
+				WENDY_PUSH_ENVIRONMENT = development;
 			};
 			name = Debug;
 		};
@@ -772,6 +1150,41 @@
 				);
 				SDKROOT = macosx;
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/WendyDesktop.app/Contents/MacOS/WendyDesktop";
+			};
+			name = Debug;
+		};
+		C797CDC25A3387F02EE34632 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ARCHS = arm64;
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = Resources/Mobile.entitlements;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				ENABLE_HARDENED_RUNTIME = NO;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "Resources/Mobile-Info.plist";
+				INFOPLIST_KEY_CFBundleDisplayName = Wendy;
+				INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription = "Wendy uses Bluetooth to discover nearby Wendy devices.";
+				INFOPLIST_KEY_NSLocalNetworkUsageDescription = "Wendy discovers and connects to your nearby devices.";
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_WendyPushEnvironment = "$(WENDY_PUSH_ENVIRONMENT)";
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				LIBRARY_SEARCH_PATHS = "$(SRCROOT)/Build/$(PLATFORM_NAME)";
+				OTHER_LDFLAGS = (
+					"-lresolv",
+					"-lwendydesktop",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = dev.wendy.mobile;
+				PRODUCT_NAME = WendyMobile;
+				SDKROOT = iphoneos;
+				SUPPORTS_MACCATALYST = NO;
+				SWIFT_OBJC_BRIDGING_HEADER = Sources/Shared/Bridge.h;
+				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Debug;
 		};
@@ -844,6 +1257,24 @@
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
+		38ED3BB86C50AFFDF22058E2 /* Build configuration list for PBXNativeTarget "WendyMobile" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				C797CDC25A3387F02EE34632 /* Debug */,
+				003650AC0015A495B5CBFC1A /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		45C342D9591C00FD4408F5CD /* Build configuration list for PBXNativeTarget "WendyMobileTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				34DE376A91D28A57EA59FCF5 /* Debug */,
+				756B05BC037EB8FE4D7385FE /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
 		751CAF0698EAB20569E885D9 /* Build configuration list for PBXProject "WendyDesktop" */ = {
 			isa = XCConfigurationList;
 			buildConfigurations = (

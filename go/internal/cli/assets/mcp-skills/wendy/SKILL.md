@@ -58,7 +58,10 @@ and the local Docker provider (`docker`).
   below, and `wendy-app-lifecycle` for result fields, variants and the Docker
   provider.
 - New app from a template: `wendy-template-app`. Entitlements: `wendy-entitlements`.
-  Robots and ROS 2: `wendy-robot-deploy`. Sensor recording: `wendy-data`.
+  Robots and ROS 2: `wendy-robot-deploy`. Sensor recording, camera detection,
+  and notifications such as "tell me when someone enters frame": `wendy-data`.
+  Wendy supports agent-managed detection campaigns on ordinary color video;
+  do not infer platform limitations from the camera-control tool list.
 - Device info, WiFi and agent updates: `wendy-device-ops`. A failure the deploy
   result and logs do not explain: `wendy-device-debug`.
 - No CLI yet: `wendy-install`. First-time user: `wendy-onboarding`. New board

@@ -25,6 +25,60 @@ The build produces native binaries for the build Mac. It links `libwendydesktop.
 
 `project.yml` is the source for the checked-in Xcode project. Run `xcodegen generate` from this directory after changing it. The Xcode build phases build Go automatically and serialize concurrent archive builds. The initial build can take several minutes.
 
+## iPhone and iPad
+
+The `WendyMobile` target is the iOS version of this Go-backed app. It does not use
+or depend on the old Companion app. It requires iOS 26 and an Apple Silicon Mac
+for simulator builds. Xcode builds the same Go backend as an iOS C archive and
+links it directly into the SwiftUI app; no CLI executable or subprocess is needed.
+
+Open `WendyDesktop.xcodeproj`, select **WendyMobile**, and choose an iPhone or iPad
+simulator. To build from the repository root:
+
+```sh
+xcodebuild -project go/macos/WendyDesktop.xcodeproj \
+  -scheme WendyMobile -destination 'generic/platform=iOS Simulator' \
+  -derivedDataPath go/macos/Build/iOSDerivedData \
+  CODE_SIGN_IDENTITY=- CODE_SIGNING_ALLOWED=YES build
+```
+
+For a physical device, select your Apple development team for `WendyMobile` in
+Xcode and use an iPhone or iPad run destination. The bundle ID is `dev.wendy.mobile`.
+The device build can also be compile-checked with `-destination 'generic/platform=iOS'
+`CODE_SIGNING_ALLOWED=NO`; that unsigned output cannot be installed on a phone.
+
+The mobile interface includes nearby/Cloud discovery, manual connections, accounts,
+Sites, organization management, apps, activity, logs, live cameras, pairing,
+campaigns and clips, device-local chat, and recorded data. Compact layouts use
+stacked panes and touch controls. Recorded video, images, events and plots share
+the episode cursor; the timeline supports playback, seeking, ruler panning and
+pinch zoom, with a capped scrollable channel list.
+
+Accounts and device identity pins live in the app's Application Support directory,
+separate from the Mac CLI. Browser sign-in stays inside an in-app Safari sheet.
+Chat runs the Wendy MCP server in-process, with bundled skills, tool approvals,
+and context-scoped MCP request attribution. Models still run on the selected edge
+device, not on the phone. The iOS app does not expose host shell execution.
+
+LAN and authenticated Cloud transports are supported. The detached mesh worker,
+system-wide VPN extension, USB flashing, and host simulator management are not
+ported to iOS. Tools requiring those desktop facilities cannot run there. Keep
+the app in the foreground for device operations; camera subscriptions stop when
+it enters the background and resume when the camera screen becomes active.
+
+Run the mobile runtime tests using an installed simulator destination:
+
+```sh
+xcodebuild -project go/macos/WendyDesktop.xcodeproj \
+  -scheme WendyMobile -destination 'platform=iOS Simulator,name=iPhone 17 Pro,OS=26.4' \
+  -derivedDataPath go/macos/Build/iOSDerivedData \
+  CODE_SIGN_IDENTITY=- CODE_SIGNING_ALLOWED=YES test
+```
+
+The tests initialize and call the embedded Go bridge in the iOS sandbox, exercise
+the H.264 parser, and check recorded-frame timestamp lookup. Network operations
+still require a reachable device or a Cloud account.
+
 ## Fleet, pairing, campaigns, chat, and recorded data
 
 - **Sites** is a fleet-wide sidebar destination. Select a saved account and organization to see all enrolled devices grouped by their Cloud site, including offline devices. Online state comes from broker presence; failed presence reads remain unknown. Filter by device, site, or hardware, and connect from a tile. Refresh uses the window toolbar.
@@ -170,3 +224,43 @@ Chat's **Browse models** opens public Hugging Face GGUF search, with Qwen3.8 Fla
 **Download & Run** installs or starts a dedicated Ollama app on a Linux arm64/x86-64 device, or uses an explicitly selected existing Ollama server. The runtime image is pinned to the multi-platform Ollama 0.40.10 manifest. Compute is selected automatically: NVIDIA GPU when CUDA is reported, including JetPack 5/6 runtime profiles, and CPU otherwise. JetPack 7 Thor uses the standard NVIDIA runtime. The app reuses a compatible managed runtime or automatically selects an available port, streams download progress, runs a one-token readiness check, then selects the model in Chat. The managed server listens on the chosen device port; downloads remain in its persistent volume. Cancellation keeps downloaded files and any already-installed runtime. Gated models, split GGUF files and projection-only weights are not supported. GPU/runtime compatibility is ultimately verified by model loading and generation.
 
 Campaigns support DETR ResNet 50/101 and YOLOS Tiny detection, MobileNet V2 and ViT classification, and compatible custom Hugging Face repositories. The picker reads the repository's label vocabulary and pins its revision. Select up to 32 target labels; matching any label triggers the campaign. **Record a clip and send a notification** combines capture and notification; **Record a clip** keeps capture only. Notification delivery still requires the campaign's Cloud grant. Image classification requires an updated Agent advertising `data-inference-classification`; the desktop refuses to deploy classification to older Agents. Its worker uses safetensors and never enables repository Python code.
+
+## Cloud notifications
+
+On macOS and iOS, **Settings > Notifications > Receive notifications** requests
+Apple's notification permission and registers this installation's APNs token with
+Wendy Cloud for the selected signed-in account. Chat's campaign notification review
+also exposes this control. Campaign creation with `notify: true` automatically
+presents a separate Cloud-grant approval in chat after deployment; it does not rely
+on the language model choosing a follow-up tool. Denial leaves the campaign intact
+and does not grant Cloud permission.
+
+The receiver uses `wendycloud.v2.APNSService/RegisterDeviceToken` and
+`UnregisterDeviceToken` through the existing authenticated Cloud connection. It
+passes the app's actual bundle ID (`dev.wendy.desktop` or `dev.wendy.mobile`), token,
+and APNs environment; the server derives the recipient from the authenticated
+user. Tokens stay in memory and are requested again at launch. Opt-in preferences
+are scoped to the saved account, Cloud endpoint, and email. The UI reports success
+only after Cloud confirms registration. Registration is not proof of delivery.
+
+For live push delivery, enable Push Notifications for these app IDs in the Apple
+developer account and sign with matching profiles. `WENDY_PUSH_ENVIRONMENT` defaults
+to `development` for Debug and `production` for Release; the iOS profile and this
+setting must match. macOS reads the actual signed entitlement. Unsigned builds
+cannot register for remote push. Simulator registration depends on APNs support
+in the simulator host; use a provisioned device to verify delivery.
+
+The Cloud backend inspected for this change allows only the existing Companion
+app topics. Its APNS registration allowlist must also accept `dev.wendy.desktop`
+and `dev.wendy.mobile`, and its APNs signing key must cover their app IDs. That
+server change and deployment are not included in this repository. The app reports
+Cloud rejection instead of using a Companion topic or pretending registration
+succeeded. No test token or mock Cloud grant is registered during verification.
+
+Campaign Cloud identities use `sh.wendy.campaign.<name>`, matching their runtime
+recording identity. The old `campaign:<name>` form is rejected by Cloud's
+notification API because `app_id` does not permit colons. Existing campaigns need
+an updated device agent and a new explicit permission approval: enabling a grant
+registers the canonical app/asset assignment before updating its permission. Old
+grants are not silently copied, and changing the desktop app alone cannot fix a
+running older agent's sender.

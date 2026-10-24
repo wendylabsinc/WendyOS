@@ -23,8 +23,6 @@ type inferenceVideo interface {
 	SubscribeSensor(context.Context, string) (sensorSubscription, error)
 }
 
-const campaignAppPrefix = "sh.wendy.campaign."
-
 type campaignInferenceManager struct {
 	service *DataService
 	factory inference.Factory
@@ -340,7 +338,7 @@ func (j *campaignInferenceJob) run(ctx context.Context) error {
 				attributes["task"] = "image-classification"
 			}
 			record := data.ApplicationRecord{Version: 1, Type: "prediction", Model: j.campaign.Inference.Model, Attributes: attributes}
-			if _, err := j.owner.service.manager.RecordCampaignApplication(campaignAppPrefix+j.campaign.Name, record); err != nil {
+			if _, err := j.owner.service.manager.RecordCampaignApplication(data.CampaignAppID(j.campaign.Name), record); err != nil {
 				j.owner.service.manager.Warnf("recording campaign prediction: %v", err)
 			}
 			state := presence[result.SourceID]
@@ -389,7 +387,7 @@ func (j *campaignInferenceJob) stream(ctx context.Context, session inference.Ses
 				if err != nil {
 					break
 				}
-				if err := j.owner.service.manager.RecordModelInput(data.ModelInput{AppID: campaignAppPrefix + j.campaign.Name, Model: j.campaign.Inference.Model, SourceID: sourceID, SampleID: sample.SampleID, BootNanos: sample.BootNanos, UncertaintyNanos: sample.UncertaintyNanos, PayloadBytes: len(sample.Payload), Encoding: sample.Encoding, SelfContained: sample.SelfContained, DroppedBefore: sample.DroppedBefore}); err != nil {
+				if err := j.owner.service.manager.RecordModelInput(data.ModelInput{AppID: data.CampaignAppID(j.campaign.Name), Model: j.campaign.Inference.Model, SourceID: sourceID, SampleID: sample.SampleID, BootNanos: sample.BootNanos, UncertaintyNanos: sample.UncertaintyNanos, PayloadBytes: len(sample.Payload), Encoding: sample.Encoding, SelfContained: sample.SelfContained, DroppedBefore: sample.DroppedBefore}); err != nil {
 					j.owner.service.manager.Warnf("recording campaign model input: %v", err)
 				}
 			}
@@ -575,7 +573,7 @@ func (s *DataService) triggerInference(ctx context.Context, campaign data.Campai
 	if err != nil || current.Revision != campaign.Revision || !current.Inference.IsEnabled() || ctx.Err() != nil {
 		return false, err
 	}
-	if _, err := s.manager.RecordCampaignApplication(campaignAppPrefix+campaign.Name, record); err != nil {
+	if _, err := s.manager.RecordCampaignApplication(data.CampaignAppID(campaign.Name), record); err != nil {
 		return true, err
 	}
 	if _, active := s.manager.ActiveSession(campaign.Name); active {

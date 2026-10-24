@@ -92,7 +92,7 @@ func newDataCampaignDeployCmd() *cobra.Command {
 			return err
 		}
 		defer conn.Close()
-		if err := registerCloudApps(cmd.Context(), conn, []string{"campaign:" + plan.Name}, skipCloudRegistration); err != nil {
+		if err := registerCloudApps(cmd.Context(), conn, []string{data.CampaignAppID(plan.Name)}, skipCloudRegistration); err != nil {
 			return err
 		}
 		campaign, err := conn.DataService.CampaignDeploy(cmd.Context(), &agentpbv2.DataCampaignDeployRequest{CampaignYaml: contents})

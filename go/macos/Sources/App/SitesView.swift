@@ -71,7 +71,11 @@ struct SitesView: View {
     @EnvironmentObject private var app: AppModel
     @StateObject private var model = SitesModel()
     @State private var search = ""
+    #if os(iOS)
+    @AppStorage("sites.onlineOnly") private var onlineOnly = true
+    #else
     @State private var onlineOnly = false
+    #endif
     let connect: (Device) -> Void
     private var devices: [FleetDevice] {
         (model.snapshot?.devices ?? []).filter {
@@ -85,6 +89,83 @@ struct SitesView: View {
     }
     private var presenceKnown: Bool { model.snapshot?.presenceError.isEmpty == true }
     var body: some View {
+        Group {
+            #if os(iOS)
+            mobileContent
+            #else
+            desktopContent
+            #endif
+        }
+        #if os(iOS)
+        .task(id: app.mobileCloudSelectionKey) {
+            model.accounts = app.mobileCloudAccounts
+            if model.account != app.mobileCloudAccount || model.organization != app.mobileCloudOrganization {
+                model.account = app.mobileCloudAccount
+                model.organization = app.mobileCloudOrganization
+                await model.changeOrganization()
+            } else if model.snapshot == nil { await model.refresh() }
+        }
+        #else
+        .task { await model.load() }
+        #endif
+        #if os(macOS)
+        .onChange(of: app.account?.signedIn) { _, value in if value == true { Task { await model.load() } } }
+        #endif
+        .focusedSceneValue(\.fleetRefresh, PaneRefreshAction(enabled: !model.loading, perform: { Task { await model.load() } }))
+    }
+    #if os(iOS)
+    private var mobileContent: some View {
+        List {
+            if let snapshot = model.snapshot {
+                Section {
+                    HStack {
+                        metric("Devices", count: snapshot.devices.count, color: .primary).frame(maxWidth: .infinity, alignment: .leading)
+                        metric("Sites", count: Set(snapshot.devices.filter { !$0.siteKey.isEmpty }.map(\.siteKey)).count, color: .blue).frame(maxWidth: .infinity, alignment: .leading)
+                        if presenceKnown { metric("Online", count: snapshot.devices.filter(\.online).count, color: .green).frame(maxWidth: .infinity, alignment: .leading) }
+                    }.padding(.vertical, 4)
+                    Toggle("Online only", isOn: $onlineOnly).disabled(!presenceKnown)
+                }
+            }
+            if let error = model.error { FailureNote(message: error) }
+            if let snapshot = model.snapshot, !snapshot.presenceError.isEmpty {
+                FailureNote(message: "Device presence is unavailable. " + snapshot.presenceError)
+            }
+            if model.accounts.isEmpty && !model.loading {
+                ContentUnavailableView { Label("Sign in to view your fleet", systemImage: "building.2") }
+                    actions: { Button("Sign in") { Task { await app.signIn() } } }
+            } else if devices.isEmpty && !model.loading && model.error == nil {
+                ContentUnavailableView.search(text: search)
+            }
+            ForEach(groups, id: \.key) { group in
+                Section {
+                    ForEach(group.devices) { device in
+                        Button { connect(device.device) } label: {
+                            HStack(spacing: 12) {
+                                Image(systemName: "desktopcomputer").foregroundStyle(.secondary).frame(width: 24)
+                                VStack(alignment: .leading, spacing: 5) {
+                                    Text(device.name).font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
+                                    Text(device.hardware.isEmpty ? "Wendy device" : device.hardware).font(.caption).foregroundStyle(.secondary)
+                                    Text(presenceKnown ? (device.online ? "Online" : "Offline") : "Status unknown")
+                                        .font(.caption).foregroundStyle(presenceKnown && device.online ? Color.green : .secondary)
+                                }.frame(maxWidth: .infinity, alignment: .leading)
+                                if app.connectingDevice?.id == device.selector { ProgressView() }
+                                else { Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.tertiary) }
+                            }.padding(.vertical, 5).contentShape(Rectangle())
+                        }.buttonStyle(.plain)
+                    }
+                } header: { Text("\(group.name) · \(group.devices.count)") }
+            }
+            if let updated = model.updated {
+                Text("Updated \(updated.formatted(date: .omitted, time: .shortened))").font(.caption).foregroundStyle(.secondary)
+                    .listRowBackground(Color.clear)
+            }
+        }
+        .searchable(text: $search, prompt: "Filter fleet")
+        .refreshable { await model.refresh() }
+        .overlay { if model.loading && model.snapshot == nil { ProgressView() } }
+    }
+    #endif
+    private var desktopContent: some View {
         VStack(alignment: .leading, spacing: 22) {
             HStack {
                 VStack(alignment: .leading, spacing: 6) {
@@ -94,7 +175,7 @@ struct SitesView: View {
                 Spacer()
                 if model.loading { ProgressView().controlSize(.small) }
             }
-            HStack(spacing: 20) {
+            AdaptiveStack(spacing: 12) {
                 Picker("Account", selection: Binding(get: { model.account }, set: { model.account = $0; Task { await model.loadOrganizations() } })) {
                     ForEach(model.accounts) { Text($0.account.email.isEmpty ? $0.id : $0.account.email).tag($0.id) }
                 }
@@ -105,7 +186,7 @@ struct SitesView: View {
             if let error = model.error { FailureNote(message: error) }
             if let snapshot = model.snapshot, !snapshot.presenceError.isEmpty { FailureNote(message: "Device presence is unavailable. " + snapshot.presenceError) }
             if let snapshot = model.snapshot {
-                HStack(spacing: 24) {
+                AdaptiveStack(spacing: 12) {
                     metric("Devices", count: snapshot.devices.count, color: .primary)
                     metric("Sites", count: Set(snapshot.devices.filter { !$0.siteKey.isEmpty }.map(\.siteKey)).count, color: .blue)
                     if presenceKnown { metric("Online", count: snapshot.devices.filter(\.online).count, color: .green) }
@@ -117,8 +198,10 @@ struct SitesView: View {
             if model.accounts.isEmpty && !model.loading {
                 ContentUnavailableView { Label("Sign in to view your fleet", systemImage: "building.2") }
                     actions: { Button("Sign in") { Task { await app.signIn() } } }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if devices.isEmpty && !model.loading && model.error == nil {
                 ContentUnavailableView("No matching devices", systemImage: "desktopcomputer", description: Text("Devices enrolled in this organization appear here, including offline devices."))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 24) {
@@ -134,9 +217,7 @@ struct SitesView: View {
                 }
             }
             if let updated = model.updated { Text("Updated \(updated.formatted(date: .omitted, time: .shortened))").font(.caption).foregroundStyle(.secondary) }
-        }.padding(28).task { await model.load() }
-            .onChange(of: app.account?.signedIn) { _, value in if value == true { Task { await model.load() } } }
-            .focusedSceneValue(\.fleetRefresh, PaneRefreshAction(enabled: !model.loading, perform: { Task { await model.load() } }))
+        }.padding(28)
     }
     private func metric(_ title: String, count: Int, color: Color) -> some View {
         VStack(alignment: .leading, spacing: 4) { Text(count.formatted()).font(.title2.bold()).foregroundStyle(color); Text(title).font(.caption).foregroundStyle(.secondary) }

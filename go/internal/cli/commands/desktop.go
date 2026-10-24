@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -55,6 +56,10 @@ type DesktopDevice struct {
 
 // InitializeDesktop must run once, before any other desktop operation.
 func InitializeDesktop(cliPath string) error {
+	if runtime.GOOS == "ios" {
+		jsonOutput = true
+		return nil
+	}
 	info, err := os.Stat(cliPath)
 	if err != nil {
 		return err

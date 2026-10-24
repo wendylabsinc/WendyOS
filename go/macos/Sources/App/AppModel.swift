@@ -1,4 +1,8 @@
+#if os(macOS)
 import AppKit
+#else
+import UIKit
+#endif
 import SwiftUI
 
 @MainActor
@@ -46,8 +50,20 @@ final class AppModel: ObservableObject {
     @Published var vpnError: String?
     @Published var selectedRoutes: Set<String> = []
     @Published var loginURL: URL?
+    #if os(iOS)
+    @Published var webpageURL: URL?
+    @Published var mobileCloudAccounts: [SavedAccount] = []
+    @Published var mobileCloudOrganizations: [CloudOrganization] = []
+    @Published var mobileCloudAccount = ""
+    @Published var mobileCloudOrganization = ""
+    @Published var mobileCloudSelectionLoading = false
+    @Published var mobileCloudSelectionError: String?
+    var mobileCloudSelectionKey: String { mobileCloudAccount + "|" + mobileCloudOrganization }
+    var mobileCloudSelectionGeneration = 0
+    #endif
     let client = GoClient.shared
     let vpn = VPNController()
+    @Published private(set) var deviceChat = DeviceChatModel(session: 0)
     private var session: UInt64 = 0
     var deviceSession: UInt64 { session }
     private var logStream: UInt64 = 0
@@ -59,10 +75,14 @@ final class AppModel: ObservableObject {
     func start() async {
         guard !initialized, ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil else { return }
         do {
+            #if os(iOS)
+            try await client.initializeMobile()
+            #else
             guard let cli = Bundle.main.url(forAuxiliaryExecutable: "wendy") else {
                 throw WendyError(message: "The bundled Wendy CLI is missing. Rebuild the app with Scripts/build.sh.")
             }
             try await client.initialize(cliPath: cli.path)
+            #endif
             initialized = true
             polling = Task { [weak self] in
                 while !Task.isCancelled {
@@ -80,7 +100,7 @@ final class AppModel: ObservableObject {
 
     func refreshAccount() async {
         guard initialized else { return }
-        do { account = try await client.account(); accountError = nil }
+        do { account = try await client.account(); accountError = nil; await PushNotifications.shared.useAccount(account) }
         catch { accountError = error.localizedDescription }
     }
 
@@ -117,6 +137,8 @@ final class AppModel: ObservableObject {
             guard connectionAttempt == attempt else { return }
             cameraFeeds.forEach { $0.pause() }
             cameraFeeds = []; cameras = []; apps = []; logs = []
+            deviceChat.stop()
+            deviceChat = DeviceChatModel(session: newSession)
             session = newSession
             selection = device; connected = device
             detailError = nil; appsError = nil; camerasError = nil; logError = nil
@@ -137,7 +159,11 @@ final class AppModel: ObservableObject {
         do {
             let url = try await client.openApp(app.appName, session: capturedSession)
             guard session == capturedSession else { return }
+            #if os(macOS)
             if !NSWorkspace.shared.open(url) { alert = "Could not open the app webpage in your browser." }
+            #else
+            webpageURL = url
+            #endif
         } catch {
             guard session == capturedSession else { return }
             alert = error.localizedDescription
@@ -266,8 +292,8 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func playCamera(_ feed: CameraFeed) async {
-        guard connected != nil, cameraWallVisible,
+    func playCamera(_ feed: CameraFeed, inline: Bool = false) async {
+        guard connected != nil, (cameraWallVisible || inline),
               cameraFeeds.contains(where: { $0 === feed }) else { return }
         cameraStream &+= 1
         let stream = cameraStream
@@ -343,7 +369,9 @@ final class AppModel: ObservableObject {
         case .loginURL(let text):
             if let url = URL(string: text), url.scheme == "https" {
                 loginURL = url
+                #if os(macOS)
                 NSWorkspace.shared.open(url)
+                #endif
             }
         case .loginDone:
             signingIn = false; loginURL = nil

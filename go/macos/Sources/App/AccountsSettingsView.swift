@@ -19,6 +19,7 @@ struct AccountsSettingsView: View {
                     FailureView(title: "Could not load accounts", error: error) { Task { await refresh() } }
                 } else if accounts.isEmpty {
                     ContentUnavailableView("No Accounts", systemImage: "person.crop.circle", description: Text("Sign in to add your Wendy Cloud account."))
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else {
                     if let error { FailureNote(message: error) }
                     List(accounts) { entry in
@@ -47,7 +48,7 @@ struct AccountsSettingsView: View {
                 }
             }.padding(24)
                 .tabItem { Label("Accounts", systemImage: "person.crop.circle") }
-        }.frame(width: 620, height: 450)
+        }.desktopFrame(width: 620, height: 450)
             .task { await refresh() }
             .onChange(of: model.signingIn) { _, signingIn in if !signingIn { Task { await refresh() } } }
     }

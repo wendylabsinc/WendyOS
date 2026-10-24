@@ -3,6 +3,7 @@ import SwiftUI
 struct ContentView: View {
     @EnvironmentObject private var model: AppModel
     @State private var tab = "apps"
+    @State private var showingAppLogs = false
     @State private var requestedClip: (session: UInt64, id: String)?
     @State private var showingOrganization = false
     @State private var showingSites = false
@@ -133,6 +134,7 @@ struct ContentView: View {
                         Button("Sign in to Wendy Cloud") { Task { await model.signIn() } }
                     }
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
         .toolbar {
@@ -307,14 +309,13 @@ struct ContentView: View {
             } else if model.selectedDeviceReady {
                 switch tab {
                 case "cameras": camerasPane
-                case "logs": logsPane
                 case "activity": ActivityView(model: model).id(device.id)
                 case "campaigns": CampaignsView(session: model.deviceSession, deviceName: device.title) { id in
                     requestedClip = (model.deviceSession, id)
                     tab = "data"
                 }.id(model.deviceSession)
-                case "pairing": PairingView(session: model.deviceSession, deviceName: device.title).id(model.deviceSession)
-                case "chat": DeviceChatView(session: model.deviceSession, deviceName: device.title).id(model.deviceSession)
+                case "settings": DeviceSettingsView(session: model.deviceSession, deviceName: device.title).id(model.deviceSession)
+                case "chat": DeviceChatView(deviceName: device.title, chat: model.deviceChat).id(model.deviceSession)
                 case "data": DataVisualizerView(session: model.deviceSession, deviceName: device.title,
                                                 initialEpisode: requestedClip?.session == model.deviceSession ? requestedClip?.id : nil).id(model.deviceSession)
                 default: appsPane
@@ -322,13 +323,13 @@ struct ContentView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .onChange(of: tab) { old, new in
-            if old == "logs" { Task { try? await model.client.stopLogs() } }
-            if new == "logs", model.selectedDeviceReady { Task { await model.streamLogs() } }
+        .sheet(isPresented: $showingAppLogs) {
+            NavigationStack {
+                DeviceLogsPage(model: model)
+                    .toolbar { Button { showingAppLogs = false } label: { Image(systemName: "xmark") }.accessibilityLabel("Close logs") }
+            }.frame(minWidth: 640, minHeight: 500)
         }
-        .onChange(of: model.connected?.id) { _, value in
-            if value != nil && tab == "logs" { Task { await model.streamLogs() } }
-        }
+
     }
 
     private func deviceIdentity(_ device: Device) -> some View {
@@ -342,12 +343,11 @@ struct ContentView: View {
         Picker("Device view", selection: $tab) {
             Text("Apps").tag("apps")
             Text("Cameras").tag("cameras")
-            Text("Logs").tag("logs")
             Text("Activity").tag("activity")
             Text("Campaigns").tag("campaigns")
-            Text("Pairing").tag("pairing")
             Text("Chat").tag("chat")
             Text("Data").tag("data")
+            Text("Settings").tag("settings")
         }.pickerStyle(.segmented).labelsHidden()
     }
 
@@ -358,7 +358,7 @@ struct ContentView: View {
             } else if model.apps.isEmpty {
                 ContentUnavailableView("No apps installed", systemImage: "square.stack.3d.up")
             } else {
-                AppsView(model: model, apps: model.apps) { app in model.logApp = app.appName; tab = "logs" }
+                AppsView(model: model, apps: model.apps) { app in model.logApp = app.appName; showingAppLogs = true }
             }
         }.frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -371,36 +371,5 @@ struct ContentView: View {
 
     private func unavailable(_ title: String, error: String) -> some View {
         FailureView(title: title, error: error) { Task { await model.refreshDetails() } }
-    }
-}
-
-
-struct PaneRefreshAction {
-    let enabled: Bool
-    let perform: () -> Void
-}
-private struct OrganizationRefreshKey: FocusedValueKey {
-    typealias Value = PaneRefreshAction
-}
-extension FocusedValues {
-    var organizationRefresh: PaneRefreshAction? {
-        get { self[OrganizationRefreshKey.self] }
-        set { self[OrganizationRefreshKey.self] = newValue }
-    }
-}
-
-private struct DevicePaneRefreshKey: FocusedValueKey { typealias Value = PaneRefreshAction }
-extension FocusedValues {
-    var devicePaneRefresh: PaneRefreshAction? {
-        get { self[DevicePaneRefreshKey.self] }
-        set { self[DevicePaneRefreshKey.self] = newValue }
-    }
-}
-
-private struct FleetRefreshKey: FocusedValueKey { typealias Value = PaneRefreshAction }
-extension FocusedValues {
-    var fleetRefresh: PaneRefreshAction? {
-        get { self[FleetRefreshKey.self] }
-        set { self[FleetRefreshKey.self] = newValue }
     }
 }

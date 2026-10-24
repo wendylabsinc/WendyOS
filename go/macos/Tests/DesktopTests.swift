@@ -2,6 +2,67 @@ import XCTest
 @testable import WendyDesktop
 
 final class DesktopTests: XCTestCase {
+    func testNotificationApprovalUsesReadableConsent() {
+        let approval = ChatApproval(id: 42, action: "enable_campaign_notifications", app: #"{"campaign":"door-people"}"#)
+        XCTAssertTrue(approval.isNotificationPermission)
+        XCTAssertEqual(approval.title, "Allow campaign notifications?")
+        XCTAssertEqual(approval.confirmLabel, "Allow notifications")
+        XCTAssertEqual(approval.campaignName, "door-people")
+        XCTAssertFalse(ChatApproval(id: 43, action: "container_stop", app: "{}").isNotificationPermission)
+    }
+
+    func testCampaignApprovalSummarizesExactScope() {
+        let approval = ChatApproval(id: 1, action: "create_person_detection_campaign", app: #"{"name":"person-detection","camera":"*","before_seconds":10,"after_seconds":15,"notify":true,"upload":false}"#)
+        XCTAssertTrue(approval.isCampaign)
+        XCTAssertEqual(approval.confirmLabel, "Create campaign")
+        XCTAssertEqual(approval.campaignName, "person-detection")
+        XCTAssertEqual(approval.cameraName, "All current and future cameras")
+        XCTAssertEqual(approval.clipSummary, "10s before · 15s after detection")
+    }
+
+    @MainActor
+    func testChatSurvivesPaneRecreationAndRediscovery() async {
+        let app = AppModel()
+        let chat = app.deviceChat
+        chat.useModel("qwen3:4b", port: 11434)
+        chat.messages = [ChatMessage(isUser: true, text: "Remember the front camera"),
+                         ChatMessage(isUser: false, text: "Front camera selected")]
+        chat.prompt = "Show it again"
+        _ = DeviceChatView(deviceName: "Thor", chat: app.deviceChat)
+        // Reopening the tab must not query the server or reset the selected model.
+        await chat.discoverIfNeeded()
+        _ = DeviceChatView(deviceName: "Thor", chat: app.deviceChat)
+        XCTAssertTrue(app.deviceChat === chat)
+        XCTAssertEqual(chat.messages.map(\.text), ["Remember the front camera", "Front camera selected"])
+        XCTAssertEqual(chat.prompt, "Show it again")
+        XCTAssertEqual(chat.model, "qwen3:4b")
+        XCTAssertNil(chat.error)
+        XCTAssertTrue(chat.canSend)
+        chat.clear()
+        XCTAssertTrue(chat.messages.isEmpty)
+    }
+
+    @MainActor
+    func testCancelledChatResponseDoesNotSpinDuringNextTurn() {
+        let chat = DeviceChatModel(session: 0)
+        chat.useModel("qwen3:4b", port: 11434)
+        chat.prompt = "First question"
+        chat.send()
+        let first = chat.messages.last!
+        XCTAssertTrue(chat.isWaiting(for: first))
+        chat.stop()
+        XCTAssertTrue(chat.messages.last!.interrupted)
+        XCTAssertFalse(chat.isWaiting(for: first))
+        XCTAssertNil(chat.activeResponseID)
+        chat.prompt = "Second question"
+        chat.send()
+        XCTAssertFalse(chat.isWaiting(for: first))
+        XCTAssertTrue(chat.isWaiting(for: chat.messages.last!))
+        chat.stop()
+        XCTAssertFalse(chat.streaming)
+        XCTAssertTrue(chat.activity.isEmpty)
+    }
+
     func testChatMarkdownKeepsCodeLiteralAndSeparatesLists() {
         let blocks = ChatMarkdownBlock.parse("## Devices\n\n- **Thor**\n  - `192.168.1.2`\n\n```sh\n# literal comment\necho '**not bold**'\n```")
         XCTAssertEqual(blocks.map(\.kind), [.heading(2), .item("•", 0), .item("•", 1), .code])

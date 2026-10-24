@@ -49,6 +49,7 @@ struct DataVisualizerView: View {
                 Spacer(); ProgressView("Loading recorded data"); Spacer()
             } else {
                 ContentUnavailableView("Explore a recording", systemImage: "waveform.path.ecg", description: Text("Choose a Wendy Data episode to inspect camera tracks, events, and measurements on one timeline."))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
         .task(id: refreshID) { await refreshEpisodes() }
@@ -393,21 +394,6 @@ final class DataVisualIndex {
     }
 }
 
-enum DataVisualSearch {
-    static func upperBound<T>(_ values: [T], at time: Double, time timestamp: (T) -> Double) -> Int {
-        var low = 0, high = values.count
-        while low < high {
-            let mid = low + (high - low) / 2
-            if timestamp(values[mid]) <= time { low = mid + 1 } else { high = mid }
-        }
-        return low
-    }
-    static func latest<T>(_ values: [T], at time: Double, time timestamp: (T) -> Double) -> T? {
-        let end = upperBound(values, at: time, time: timestamp)
-        return end == 0 ? nil : values[end - 1]
-    }
-}
-
 private struct DataVisualEventRow: View, Equatable {
     let event: DataVisualSample
     let recording: UUID
@@ -449,22 +435,6 @@ private final class DataVisualPlayerHost: NSView {
 
 // Backpressure for exact seeks: one decode in flight, one replaceable target.
 // Finishing a scrub always lands on its final recorded frame.
-struct DataVisualSeekState {
-    private(set) var desired: Double?
-    private(set) var inFlight: Double?
-    private(set) var completed: Double?
-    mutating func request(_ time: Double) { if time.isFinite { desired = time } }
-    mutating func begin() -> Double? {
-        guard inFlight == nil, let desired, desired != completed else { return nil }
-        inFlight = desired
-        return desired
-    }
-    mutating func finish(success: Bool) {
-        if success { completed = inFlight }
-        inFlight = nil
-    }
-}
-
 private struct DataVisualVideoPlayer: NSViewRepresentable {
     let video: DataVisualVideo
     let cursor: Double

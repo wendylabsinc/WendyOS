@@ -204,7 +204,9 @@ done
 # SHAs here. wendy/options.proto (the signed_request method option) generates
 # into cloudpbv2 too, so the option and SignedRequest live in one Go package.
 CLOUD_V2_PKG="$MODULE/go/proto/gen/cloudpb/v2"
+# APNS registration is vendored from service-protos 35c965536eeb5c49acfefb9792fa6fba48533c64.
 CLOUD_V2_PROTOS=(
+    "wendycloud/v2/apns.proto"
     "wendy/options.proto"
     "wendycloud/v2/signed_request.proto"
     "wendycloud/v2/relay_mcp.proto"
