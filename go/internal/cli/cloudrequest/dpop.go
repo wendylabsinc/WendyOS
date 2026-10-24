@@ -106,7 +106,7 @@ func dpopAuthContext(ctx context.Context, auth *config.AuthConfig, provider DPoP
 	if token != "" && key != nil {
 		wrapped, err := identityhost.OperatorKey(key)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("DPoP: building proof: %w", err)
 		}
 		signer = wrapped
 	}

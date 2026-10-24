@@ -83,13 +83,33 @@ func grpcMetadata(md wendy.Metadata) metadata.MD {
 
 // Client retains caller-owned connections and per-call credential refresh while
 // WendyGo owns Cloud API calls and pagination. The returned client borrows conn.
-func Client(conn *grpc.ClientConn, authenticate func(context.Context) (context.Context, error)) (*cloud.Client, error) {
+func Client(conn *grpc.ClientConn, authenticate func(context.Context) (context.Context, error)) (*client, error) {
 	transport, err := wendy.NewGRPCTransport(conn)
 	if err != nil {
 		return nil, err
 	}
-	return &cloud.Client{Transport: authenticatedTransport{Transport: transport, authenticate: authenticate}}, nil
+	return &client{Client: &cloud.Client{Transport: authenticatedTransport{Transport: transport, authenticate: authenticate}}}, nil
 }
+
+// client restores host preflight errors after Core's device-list orchestration.
+// The CLI historically returned these before opening an RPC, without the
+// "listing devices" context used for actual RPC/stream failures.
+type client struct{ *cloud.Client }
+
+func (c *client) ListDevices(ctx context.Context, tenant, filter string, onlineOnly bool) ([]*cloud.Asset, error) {
+	assets, err := c.Client.ListDevices(ctx, tenant, filter, onlineOnly)
+	var preflight *authenticationError
+	if errors.As(err, &preflight) {
+		return nil, preflight.error
+	}
+	return assets, err
+}
+
+// authenticationError identifies host failures by origin rather than by text,
+// preserving the original cause through Core's wrapping and concurrent calls.
+type authenticationError struct{ error }
+
+func (e *authenticationError) Unwrap() error { return e.error }
 
 type authenticatedTransport struct {
 	wendy.Transport
@@ -100,7 +120,11 @@ func (t authenticatedTransport) context(ctx context.Context) (context.Context, e
 	if t.authenticate == nil {
 		return ctx, nil
 	}
-	return t.authenticate(ctx)
+	authenticated, err := t.authenticate(ctx)
+	if err != nil {
+		return nil, &authenticationError{err}
+	}
+	return authenticated, nil
 }
 func (t authenticatedTransport) Unary(ctx context.Context, r wendy.RPCRequest) (wendy.RPCResponse, error) {
 	ctx, err := t.context(ctx)
