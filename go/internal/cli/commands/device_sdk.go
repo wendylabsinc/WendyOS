@@ -16,6 +16,8 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/devicepin"
 	"github.com/wendylabsinc/wendy/go/internal/shared/models"
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 )
@@ -115,14 +117,29 @@ func (c *deviceConnection) Unary(ctx context.Context, request wendy.RPCRequest) 
 	if err := proto.Unmarshal(request.Message, message); err != nil {
 		return wendy.RPCResponse{}, err
 	}
-	response, err := c.AgentService.GetAgentVersion(ctx, message)
+	for _, entry := range request.Metadata {
+		ctx = metadata.AppendToOutgoingContext(ctx, entry.Name, string(entry.Value))
+	}
+	var headers, trailers metadata.MD
+	response, err := c.AgentService.GetAgentVersion(ctx, message, grpc.Header(&headers), grpc.Trailer(&trailers))
+	result := wendy.RPCResponse{InitialMetadata: deviceMetadata(headers), TrailingMetadata: deviceMetadata(trailers)}
 	if err != nil {
 		st := status.Convert(err)
-		return wendy.RPCResponse{}, &deviceRPCError{RPCStatusError: &wendy.RPCStatusError{Code: wendy.RPCStatusCode(st.Code()), Message: st.Message(), Cause: err}}
+		return result, &deviceRPCError{RPCStatusError: &wendy.RPCStatusError{Code: wendy.RPCStatusCode(st.Code()), Message: st.Message(), Cause: err, InitialMetadata: result.InitialMetadata, TrailingMetadata: result.TrailingMetadata}}
 	}
 	c.CacheAgentVersion(response)
-	bytes, err := proto.Marshal(response)
-	return wendy.RPCResponse{Message: bytes}, err
+	result.Message, err = proto.Marshal(response)
+	return result, err
+}
+
+func deviceMetadata(md metadata.MD) wendy.Metadata {
+	var result wendy.Metadata
+	for name, values := range md {
+		for _, value := range values {
+			result = append(result, wendy.MetadataEntry{Name: name, Value: []byte(value)})
+		}
+	}
+	return result
 }
 
 func (c *deviceConnection) ServerStream(ctx context.Context, request wendy.RPCRequest) (wendy.ServerStream, error) {
