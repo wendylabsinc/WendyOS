@@ -1,3 +1,5 @@
+#ifndef WENDY_HOST_CALLBACKS_H
+#define WENDY_HOST_CALLBACKS_H
 #include "../../include/WendyCore/WendyPlatform.h"
 #include <stdlib.h>
 
@@ -17,3 +19,4 @@ static inline int host_valid(WendyHostCallbacks *cb) {
     return cb && cb->start && cb->request_next && cb->cancel &&
            cb->algorithm.data && cb->algorithm.size;
 }
+#endif

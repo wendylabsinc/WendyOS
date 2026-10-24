@@ -12,6 +12,34 @@
   "c": {
     "functions": [
       {
+        "name": "WendyCloudListDevicesCreate",
+        "signature": "WendyOperation *(WendyHost, WendyDataView, WendyCompletion, void *)",
+        "parameters": [
+          {
+            "name": "host",
+            "type": "WendyHost"
+          },
+          {
+            "name": "request",
+            "type": "WendyDataView"
+          },
+          {
+            "name": "completion",
+            "type": "WendyCompletion"
+          },
+          {
+            "name": "context",
+            "type": "void *"
+          }
+        ],
+        "pattern": "async-unary",
+        "ownership": "returns one owned operation reference; inputs are borrowed",
+        "threading": "safe for concurrent calls; completion never runs during Create",
+        "cancellation": "WendyOperationCancel; terminal delivery wins races",
+        "availability": "0.1.x experimental",
+        "comment": "Creates a dormant Cloud device-list operation. request is a serialized wendy.core.v1.CloudDeviceListRequest; copied before returning. The host must already provide TLS to that authority, a token bound to its key, a validated ML-DSA-65 public key, and WendyHostRandomBytes (see WendyPlatform.h). Core calls core/cloud.Client.ListDevices, builds DPoP/correlation metadata, and delegates entropy, signing and network I/O to that host. No fallback, token refresh or application retry is added. Host release cancels host calls. Success is wendy.core.v1.CloudDeviceListResponse (complete or error, no public offsets). Errors preserve numeric gRPC status and RPCErrorDetails. Returns NULL for a missing completion, invalid byte view, request \u003e 1 MiB or allocation failure; no ownership transfers or callback occurs in that case. Other input errors complete with INVALID_ARGUMENT after activation. Store the returned handle, then call WendyOperationStart exactly once. This guarantees completion cannot precede this initiating function's return. Binding pattern: async-unary. Ownership: returns one owned operation reference; inputs are borrowed. Threading: safe for concurrent calls; completion never runs during Create. Cancellation: WendyOperationCancel; terminal delivery wins races. Availability: 0.1.x experimental."
+      },
+      {
         "name": "WendyCoreVersion",
         "signature": "char *(void)",
         "pattern": "borrowed-string-unary",
@@ -21,6 +49,102 @@
         "comment": "Returns the effective Wendy Core version without a leading v. Packaged engines report their build identity, including preview/development suffixes. Unreleased source builds use a language-neutral development identity such as 0.1.0-dev+a0e8ddc when a commit is known, or 0.1.0-dev otherwise. Tagged dependencies retain their release/prerelease version. The NUL-terminated UTF-8 string is borrowed and valid for the life of the process. Callers must not modify or free it. No Go pointer crosses the ABI, and there are no error conditions. Binding pattern: borrowed-string-unary. Ownership: returns a borrowed, read-only string; no resources are transferred. Threading: safe for concurrent calls. Availability: 0.1.0-seed.1."
       },
       {
+        "name": "WendyDataGetBytes",
+        "signature": "WendyDataView (const WendyData *)",
+        "parameters": [
+          {
+            "name": "data",
+            "type": "const WendyData *"
+          }
+        ],
+        "pattern": "owned-object",
+        "comment": "Borrows immutable bytes until data's final Release; NULL gives an empty view. Binding pattern: owned-object."
+      },
+      {
+        "name": "WendyDataRelease",
+        "signature": "void (WendyData *)",
+        "parameters": [
+          {
+            "name": "data",
+            "type": "WendyData *"
+          }
+        ],
+        "pattern": "owned-object",
+        "comment": "Drops a reference; accepts NULL. Binding pattern: owned-object."
+      },
+      {
+        "name": "WendyDataRetain",
+        "signature": "WendyData *(WendyData *)",
+        "parameters": [
+          {
+            "name": "data",
+            "type": "WendyData *"
+          }
+        ],
+        "pattern": "owned-object",
+        "comment": "Adds an owned reference; accepts NULL. Binding pattern: owned-object."
+      },
+      {
+        "name": "WendyErrorGetCode",
+        "signature": "uint32_t (const WendyError *)",
+        "parameters": [
+          {
+            "name": "error",
+            "type": "const WendyError *"
+          }
+        ],
+        "pattern": "owned-object",
+        "comment": "Numeric gRPC code, including unknown codes (NULL gives 0). Local cancellation is 1, deadline is 4, invalid input is 3, other local failures are 13 (INTERNAL). Binding pattern: owned-object."
+      },
+      {
+        "name": "WendyErrorGetDetails",
+        "signature": "WendyDataView (const WendyError *)",
+        "parameters": [
+          {
+            "name": "error",
+            "type": "const WendyError *"
+          }
+        ],
+        "pattern": "owned-object",
+        "comment": "Borrows wendy.core.v1.RPCErrorDetails protobuf until final Release; NULL gives an empty view. Metadata keeps order/repetition/binary bytes. Remote messages and metadata are untrusted; hosts must keep credential-bearing data out of logs. Binding pattern: owned-object."
+      },
+      {
+        "name": "WendyErrorGetMessage",
+        "signature": "WendyDataView (const WendyError *)",
+        "parameters": [
+          {
+            "name": "error",
+            "type": "const WendyError *"
+          }
+        ],
+        "pattern": "owned-object",
+        "comment": "Borrows a diagnostic UTF-8 message, without a terminator, until final Release. NULL gives an empty view. Binding pattern: owned-object."
+      },
+      {
+        "name": "WendyErrorRelease",
+        "signature": "void (WendyError *)",
+        "parameters": [
+          {
+            "name": "error",
+            "type": "WendyError *"
+          }
+        ],
+        "pattern": "owned-object",
+        "comment": "Drops a reference; accepts NULL. Binding pattern: owned-object."
+      },
+      {
+        "name": "WendyErrorRetain",
+        "signature": "WendyError *(WendyError *)",
+        "parameters": [
+          {
+            "name": "error",
+            "type": "WendyError *"
+          }
+        ],
+        "pattern": "owned-object",
+        "comment": "Adds an owned reference; accepts NULL. Binding pattern: owned-object."
+      },
+      {
         "name": "WendyHelloWorld",
         "signature": "int32_t (void)",
         "pattern": "scalar-unary",
@@ -28,11 +152,144 @@
         "threading": "safe for concurrent calls",
         "availability": "0.0.1",
         "comment": "Returns 42 from the shared Go engine. This operation is synchronous, thread-safe, and requires no platform capability. It returns a scalar without transferring resources; runtime initialization is separate. There are no input pointers, owned objects, callbacks, or error conditions. Binding pattern: scalar-unary. Ownership: returns a value; no resources are transferred. Threading: safe for concurrent calls. Availability: 0.0.1."
+      },
+      {
+        "name": "WendyOperationCancel",
+        "signature": "void (WendyOperation *)",
+        "parameters": [
+          {
+            "name": "operation",
+            "type": "WendyOperation *"
+          }
+        ],
+        "pattern": "owned-object",
+        "comment": "Requests cancellation without waiting. Idempotent; accepts NULL. Before Start it records cancellation for delivery after Start. The host receives C1 cancellation for pending calls; late host results are ignored safely. Binding pattern: owned-object."
+      },
+      {
+        "name": "WendyOperationRelease",
+        "signature": "void (WendyOperation *)",
+        "parameters": [
+          {
+            "name": "operation",
+            "type": "WendyOperation *"
+          }
+        ],
+        "pattern": "owned-object",
+        "comment": "Drops a reference; accepts NULL. Binding pattern: owned-object."
+      },
+      {
+        "name": "WendyOperationRetain",
+        "signature": "WendyOperation *(WendyOperation *)",
+        "parameters": [
+          {
+            "name": "operation",
+            "type": "WendyOperation *"
+          }
+        ],
+        "pattern": "owned-object",
+        "comment": "Adds an owned reference; accepts NULL. Binding pattern: owned-object."
+      },
+      {
+        "name": "WendyOperationStart",
+        "signature": "void (WendyOperation *)",
+        "parameters": [
+          {
+            "name": "operation",
+            "type": "WendyOperation *"
+          }
+        ],
+        "pattern": "owned-object",
+        "comment": "Activates a created operation once; duplicates/NULL are harmless. Call only after Create has returned and the host has stored its handle. Completion may race this function's return, on another Core thread. Starting never waits for host callbacks. An unstarted operation's last Release discards it without a callback. After Start, releasing the caller's reference does not cancel work. Binding pattern: owned-object."
       }
     ]
   },
   "protobuf": {
-    "messages": null,
+    "messages": [
+      {
+        "name": "wendy.core.v1.CloudDeviceListRequest",
+        "comment": "Inputs for WendyCloudListDevicesCreate. The host validates that its operator key belongs to organization_id and its TLS transport is bound to authority. Tokens/keys are resolved and refreshed by the host before creating the call.",
+        "fields": [
+          {
+            "number": 1,
+            "name": "authority",
+            "type": "string",
+            "comment": "DNS authority (host with optional port), without scheme, path or userinfo."
+          },
+          {
+            "number": 2,
+            "name": "organizationId",
+            "type": "string",
+            "comment": "Immutable tenant UUID, never the reclaimable organization/realm slug."
+          },
+          {
+            "number": 3,
+            "name": "accessToken",
+            "type": "string",
+            "comment": "DPoP access token bound to the registered host's ML-DSA-65 key."
+          },
+          {
+            "number": 4,
+            "name": "filter",
+            "type": "string"
+          },
+          {
+            "number": 5,
+            "name": "onlineOnly",
+            "type": "bool"
+          },
+          {
+            "number": 6,
+            "name": "deadlineUnixMillis",
+            "type": "int64",
+            "comment": "UTC Unix milliseconds; zero means no deadline."
+          }
+        ]
+      },
+      {
+        "name": "wendy.core.v1.CloudDeviceListResponse",
+        "comment": "Complete bounded inventory, or an error with no partial inventory. Cloud's existing offset pagination is internal and does not provide snapshot isolation.",
+        "fields": [
+          {
+            "number": 1,
+            "name": "assets",
+            "type": "bytes",
+            "comment": "Each item is one serialized wendycloud.v2.Asset from Proto/wendycloud/v2/assets.proto (the service-protos Cloud v2 contract). Keeping the original message preserves optional and unknown fields. Consumers decode with that published schema; no Core-specific device model is invented."
+          }
+        ]
+      },
+      {
+        "name": "wendy.core.v1.MetadataEntry",
+        "comment": "Ordered, repeated RPC metadata. Binary values are raw bytes, never base64.",
+        "fields": [
+          {
+            "number": 1,
+            "name": "name",
+            "type": "string"
+          },
+          {
+            "number": 2,
+            "name": "value",
+            "type": "bytes"
+          }
+        ]
+      },
+      {
+        "name": "wendy.core.v1.RPCErrorDetails",
+        "comment": "WendyErrorGetDetails returns this protobuf. Empty on local errors.",
+        "fields": [
+          {
+            "number": 1,
+            "name": "initialMetadata",
+            "type": "wendy.core.v1.MetadataEntry"
+          },
+          {
+            "number": 2,
+            "name": "trailingMetadata",
+            "type": "wendy.core.v1.MetadataEntry"
+          }
+        ]
+      }
+    ],
     "services": null
   }
 }
