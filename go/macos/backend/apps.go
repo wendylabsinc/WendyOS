@@ -5,9 +5,12 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
+	"net/http/httputil"
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	pb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 )
@@ -39,7 +42,8 @@ func (b *Backend) OpenApp(app string, session uint64) (string, error) {
 	if port == 0 || port > 65535 {
 		return "", fmt.Errorf("%s has no valid HTTP entitlement", app)
 	}
-	if conn.RegistryDialer == nil {
+	managedModel := app == fmt.Sprintf("sh.wendy.models.ollama.%d", port)
+	if conn.RegistryDialer == nil && !managedModel {
 		host := strings.Trim(conn.Host, "[]")
 		if host == "" || strings.HasPrefix(host, "unix:") {
 			return "", fmt.Errorf("device has no browser-accessible address")
@@ -61,6 +65,21 @@ func (b *Backend) OpenApp(app string, session uint64) (string, error) {
 		b.appForwards = make(map[uint32]*appForward)
 	}
 	b.appForwards[port] = forward
+	if conn.RegistryDialer == nil {
+		transport, err := deviceChatTransport(conn, port)
+		if err != nil {
+			forward.Close()
+			delete(b.appForwards, port)
+			return "", err
+		}
+		proxy := &httputil.ReverseProxy{Rewrite: func(r *httputil.ProxyRequest) {
+			r.SetURL(&url.URL{Scheme: "http", Host: "wendy-device"})
+		}, Transport: transport, FlushInterval: -1}
+		forward.server = &http.Server{Handler: proxy, ReadHeaderTimeout: 10 * time.Second,
+			BaseContext: func(net.Listener) context.Context { return forwardCtx }}
+		go func() { _ = forward.server.Serve(listener) }()
+		return forward.url, nil
+	}
 	dial := conn.RegistryDialer
 	go forward.serve(forwardCtx, func(ctx context.Context) (net.Conn, error) { return dial(ctx, int(port)) })
 	return forward.url, nil
@@ -70,9 +89,16 @@ type appForward struct {
 	listener net.Listener
 	cancel   context.CancelFunc
 	url      string
+	server   *http.Server
 }
 
-func (f *appForward) Close() { f.cancel(); _ = f.listener.Close() }
+func (f *appForward) Close() {
+	f.cancel()
+	if f.server != nil {
+		_ = f.server.Close()
+	}
+	_ = f.listener.Close()
+}
 func (f *appForward) serve(ctx context.Context, dial func(context.Context) (net.Conn, error)) {
 	for {
 		local, err := f.listener.Accept()

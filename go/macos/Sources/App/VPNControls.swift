@@ -41,6 +41,10 @@ struct VPNPopover: View {
     private var devices: [Device] {
         (model.nearby + model.cloud).filter(\.routable).sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
     }
+    private let selectionHint = "Select at least one device, then turn on VPN."
+    private var deviceListHeight: CGFloat {
+        devices.isEmpty ? 72 : min(320, CGFloat(devices.count) * 64 - 6)
+    }
     var body: some View {
         actionContent.task { await actions.run() }
     }
@@ -67,59 +71,67 @@ struct VPNPopover: View {
             if let error = model.vpnError, error != vpn.setupIssue {
                 FailureNote(message: error)
             }
-            if !vpn.enabled && model.selectedRoutes.isEmpty {
-                Text("Select at least one device, then turn on VPN.")
+            if !vpn.enabled && model.selectedRoutes.isEmpty && model.vpnError != selectionHint && vpn.setupIssue != selectionHint {
+                Text(selectionHint)
                     .font(.callout).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             Divider()
             HStack {
-                Text("Devices").font(.subheadline.weight(.semibold))
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Devices").font(.subheadline.weight(.semibold))
+                    Text("\(model.selectedRoutes.count) selected").font(.caption).foregroundStyle(.secondary)
+                }
                 Spacer()
-                Text("\(model.selectedRoutes.count) selected").font(.caption).foregroundStyle(.secondary)
+                HStack(spacing: 12) {
+                    Button("Select all") { model.selectedRoutes = Set(devices.map(\.id)) }
+                        .disabled(devices.isEmpty || Set(devices.map(\.id)).isSubset(of: model.selectedRoutes))
+                    Button("Select none") { model.selectedRoutes.removeAll() }
+                        .disabled(model.selectedRoutes.isEmpty)
+                }.buttonStyle(.link).font(.callout)
             }
             ScrollView {
-                LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 10) {
+                LazyVStack(spacing: 6) {
                     ForEach(devices) { device in
                         let selected = model.selectedRoutes.contains(device.id)
+                        let route = vpn.routes.first { $0.selector == device.selector }
                         Button {
                             if selected { model.selectedRoutes.remove(device.id) }
                             else { model.selectedRoutes.insert(device.id) }
                         } label: {
-                            VStack(alignment: .leading, spacing: 8) {
-                                HStack {
-                                    Image(systemName: device.transport == .cloud ? "cloud" : "network").foregroundStyle(.secondary)
-                                    Spacer()
-                                    Image(systemName: selected ? "checkmark.circle.fill" : "circle")
-                                        .foregroundStyle(selected ? Color.accentColor : .secondary)
+                            HStack(spacing: 12) {
+                                Image(systemName: device.transport == .cloud ? "cloud" : "network")
+                                    .foregroundStyle(.secondary).frame(width: 20)
+                                VStack(alignment: .leading, spacing: 3) {
+                                    Text(device.title).font(.callout.weight(.medium)).lineLimit(1)
+                                    Text(device.transport.rawValue).font(.caption).foregroundStyle(.secondary)
                                 }
-                                Text(device.title).font(.callout.weight(.medium)).lineLimit(2).frame(height: 34, alignment: .topLeading)
-                                Text(device.transport.rawValue).font(.caption).foregroundStyle(.secondary)
-                            }.padding(12).frame(maxWidth: .infinity, alignment: .leading)
+                                Spacer(minLength: 8)
+                                Image(systemName: selected ? "checkmark.circle.fill" : "circle")
+                                    .foregroundStyle(selected ? Color.accentColor : .secondary)
+                            }.padding(.horizontal, 12).frame(height: 58).frame(maxWidth: .infinity, alignment: .leading)
                                 .background(selected ? Color.accentColor.opacity(0.1) : Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 10))
                                 .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(selected ? Color.accentColor.opacity(0.5) : Color.primary.opacity(0.08)))
                                 .contentShape(RoundedRectangle(cornerRadius: 10))
-                        }.buttonStyle(.plain).accessibilityLabel(device.title).accessibilityValue(selected ? "Selected" : "Not selected")
+                        }.buttonStyle(.plain).help(device.title)
+                            .accessibilityLabel(device.title).accessibilityValue(selected ? "Selected" : "Not selected")
+                            .contextMenu {
+                                Button("Copy address", systemImage: "doc.on.doc") { copy(route?.address) }
+                                    .disabled(route?.address.isEmpty != false)
+                                Button("Copy hostname", systemImage: "doc.on.doc") { copy(route?.host) }
+                                    .disabled(route?.host.isEmpty != false)
+                            }
                     }
                 }
                 if devices.isEmpty { Text("Sign in and refresh your devices to add a route.").foregroundStyle(.secondary).font(.callout).padding(.vertical) }
-            }.frame(maxHeight: 330)
+            }.frame(height: deviceListHeight)
             if vpn.active {
                 Button("Apply Selection") { actions.submit { await model.enableVPN() } }
                     .disabled(model.vpnUpdating || model.selectedRoutes.isEmpty)
             }
             Text("Routes selected devices over mesh or cloud. Other internet traffic uses your normal connection.")
                 .font(.caption).foregroundStyle(.secondary)
-            if !vpn.routes.isEmpty {
-                DisclosureGroup("Device addresses") {
-                    ForEach(vpn.routes) { route in
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(route.name).font(.caption.weight(.medium))
-                            Text(route.host).font(.caption.monospaced()).textSelection(.enabled)
-                            Text(route.address).font(.caption.monospaced()).foregroundStyle(.secondary).textSelection(.enabled)
-                        }.frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 4)
-                    }
-                }
-            }
+                .fixedSize(horizontal: false, vertical: true)
             if showsWindowActions {
                 Divider()
                 HStack {
@@ -129,6 +141,15 @@ struct VPNPopover: View {
                     Button("Quit") { NSApp.terminate(nil) }
                 }
             }
-        }.padding(20).frame(width: 420)
+        }.padding(20).frame(width: 420).fixedSize(horizontal: false, vertical: true)
+            .onChange(of: model.selectedRoutes) { _, selection in
+                if !selection.isEmpty && model.vpnError == selectionHint { model.vpnError = nil }
+            }
+    }
+
+    private func copy(_ value: String?) {
+        guard let value, !value.isEmpty else { return }
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(value, forType: .string)
     }
 }

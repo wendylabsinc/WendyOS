@@ -3,6 +3,7 @@ package commands
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"strings"
 	"testing"
@@ -26,8 +27,8 @@ func TestDesktopModelRuntimeConfig(t *testing.T) {
 		if cfg.AppID != "sh.wendy.models.ollama.11435" || !strings.Contains(req.ImageName, "@sha256:") || cfg.HasEntitlement("gpu") != (profile != 0) {
 			t.Fatalf("bad runtime: %+v", req)
 		}
-		if !strings.Contains(strings.Join(req.Env, "\n"), "OLLAMA_HOST=0.0.0.0:11435") {
-			t.Fatal("port not set")
+		if !strings.Contains(strings.Join(req.Env, "\n"), "OLLAMA_HOST=127.0.0.1:11435") || !strings.HasSuffix(cfg.Version, "-loopback") {
+			t.Fatal("runtime must bind only device loopback and use a distinct configuration version")
 		}
 		if cfg.Validate() != nil {
 			t.Fatal("invalid app config")
@@ -43,6 +44,42 @@ func TestDesktopModelRuntimeConfig(t *testing.T) {
 type runtimeInventory struct {
 	pb.WendyContainerServiceClient
 	app *pb.AppContainer
+}
+
+type runtimeUpgradeClient struct {
+	runtimeInventory
+	request *pb.CreateContainerRequest
+	err     error
+}
+
+func (c *runtimeUpgradeClient) CreateContainerWithProgress(_ context.Context, req *pb.CreateContainerRequest, _ ...grpc.CallOption) (grpc.ServerStreamingClient[pb.CreateContainerProgressResponse], error) {
+	c.request = req
+	return nil, c.err
+}
+
+func TestDesktopModelRuntimeUpgradesLegacyListenerAndPreservesModels(t *testing.T) {
+	failure := errors.New("fixture create failure")
+	c := &runtimeUpgradeClient{runtimeInventory: runtimeInventory{app: &pb.AppContainer{
+		AppName: "sh.wendy.models.ollama.11434", AppVersion: "0.40.10-nvidia", HttpPort: 11434, RunningState: pb.AppRunningState_RUNNING,
+	}}, err: failure}
+	conn := &grpcclient.AgentConnection{ContainerService: c}
+	err := DesktopEnsureModelRuntime(context.Background(), conn, 11434, 1, func() bool { t.Fatal("the old runtime owns this port"); return true }, func(string) {})
+	if !errors.Is(err, failure) || c.request == nil {
+		t.Fatalf("upgrade not attempted: %v", err)
+	}
+	var cfg appconfig.AppConfig
+	if err := json.Unmarshal(c.request.AppConfig, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Version != "0.40.10-nvidia-loopback" || !strings.Contains(strings.Join(c.request.Env, "\n"), "OLLAMA_HOST=127.0.0.1:11434") {
+		t.Fatalf("wrong upgrade: %+v", c.request)
+	}
+	for _, entitlement := range cfg.Entitlements {
+		if entitlement.Type == "persist" && entitlement.Name == "ollama-models" && entitlement.Path == "/root/.ollama" {
+			return
+		}
+	}
+	t.Fatal("upgrade did not preserve the existing model volume")
 }
 
 func (f runtimeInventory) ListContainers(context.Context, *pb.ListContainersRequest, ...grpc.CallOption) (grpc.ServerStreamingClient[pb.ListContainersResponse], error) {

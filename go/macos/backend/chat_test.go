@@ -35,6 +35,39 @@ func TestCloudChatFallbackOnlyForUnsupportedService(t *testing.T) {
 	}
 }
 
+func TestLANChatNeverFallsBackToUnprotectedHTTP(t *testing.T) {
+	for _, authenticated := range []bool{false, true} {
+		t.Run(fmt.Sprint(authenticated), func(t *testing.T) {
+			b := webBackend(t)
+			server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+				t.Error("model request reached the unauthenticated LAN HTTP listener")
+			}))
+			defer server.Close()
+			host, port, _ := net.SplitHostPort(strings.TrimPrefix(server.URL, "http://"))
+			var number uint32
+			fmt.Sscan(port, &number)
+			b.conn.Host, b.conn.IsMTLS = host, authenticated
+			transport, err := deviceChatTransport(b.conn, number)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer transport.CloseIdleConnections()
+			req, _ := http.NewRequest(http.MethodGet, "http://wendy-device/api/tags", nil)
+			_, err = transport.RoundTrip(req)
+			if err == nil {
+				t.Fatal("unmanaged model port accepted")
+			}
+			want := "authenticated device connection"
+			if authenticated {
+				want = "no running Wendy-managed Ollama runtime"
+			}
+			if !strings.Contains(err.Error(), want) {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
 func TestCloudChatFallbackRequiresManagedRuntime(t *testing.T) {
 	b := webBackend(t) // Running web app on 8080, but no managed Ollama runtime.
 	b.conn.RegistryDialer = func(context.Context, int) (net.Conn, error) {

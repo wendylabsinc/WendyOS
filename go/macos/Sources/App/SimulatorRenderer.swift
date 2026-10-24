@@ -108,13 +108,15 @@ struct SimulatorRenderer: NSViewRepresentable {
                 lastRecenter = recenter
                 view.target = .zero
                 if let scene, bodies.indices.contains(scene.robotBody) { view.target = bodies[scene.robotBody].simdWorldPosition }
-                view.radius = schematic == nil ? 3 : 0.15
-                view.azimuth = .pi/4; view.polar = 0.9
+                view.radius = schematic == nil ? 3 : (schematic == "esp32" ? 0.095 : 0.15)
+                view.azimuth = schematic == "esp32" ? 0.12 : .pi/4
+                view.polar = schematic == "esp32" ? 0.42 : 0.9
             }
             view.updateCamera()
             view.needsDisplay = true
         }
         static func board(lite: Bool) -> SCNNode {
+            if lite { return esp32Board() }
             let root = SCNNode()
             func box(_ size: SIMD3<Float>, _ position: SIMD3<Float>, _ color: NSColor) {
                 let node = SCNNode(geometry: SCNBox(width: CGFloat(size.x), height: CGFloat(size.y), length: CGFloat(size.z), chamferRadius: 0.0006))
@@ -128,6 +130,106 @@ struct SimulatorRenderer: NSViewRepresentable {
                 for pin in 0..<10 { box(SIMD3(0.002, 0.002, 0.003), SIMD3(side*0.012, Float(pin)*0.0045-0.02, 0.0025), .systemYellow) }
             }
             if !lite { box(SIMD3(0.010, 0.012, 0.003), SIMD3(0, -0.012, 0.0025), .darkGray) }
+            return root
+        }
+
+        // Representative ESP32-C6 board, not a physical pinout or live GPIO display.
+        private static func esp32Board() -> SCNNode {
+            let root = SCNNode()
+            func material(_ color: NSColor, metal: CGFloat = 0, roughness: CGFloat = 0.65) -> SCNMaterial {
+                let result = SCNMaterial()
+                result.lightingModel = .physicallyBased
+                result.diffuse.contents = color
+                result.metalness.contents = metal
+                result.roughness.contents = roughness
+                return result
+            }
+            let pcb = material(NSColor(red: 0.035, green: 0.09, blue: 0.08, alpha: 1))
+            let plastic = material(NSColor(white: 0.055, alpha: 1), roughness: 0.85)
+            let silver = material(NSColor(white: 0.65, alpha: 1), metal: 0.75, roughness: 0.35)
+            let gold = material(NSColor(red: 0.65, green: 0.48, blue: 0.21, alpha: 1), metal: 0.7)
+            let ceramic = material(NSColor(red: 0.32, green: 0.26, blue: 0.19, alpha: 1))
+            @discardableResult
+            func box(_ size: SIMD3<Float>, _ position: SIMD3<Float>, _ finish: SCNMaterial, bevel: CGFloat = 0.00015) -> SCNNode {
+                let geometry = SCNBox(width: CGFloat(size.x), height: CGFloat(size.y), length: CGFloat(size.z), chamferRadius: bevel)
+                geometry.materials = [finish]
+                let node = SCNNode(geometry: geometry)
+                node.simdPosition = position
+                root.addChildNode(node)
+                return node
+            }
+            func label(_ text: String, width: CGFloat, height: CGFloat, at position: SIMD3<Float>, dark: Bool = false) {
+                let size = NSSize(width: width * 40000, height: height * 40000)
+                let texture = NSImage(size: size, flipped: false) { rect in
+                    let paragraph = NSMutableParagraphStyle()
+                    paragraph.alignment = .center
+                    (text as NSString).draw(in: rect, withAttributes: [
+                        .font: NSFont.monospacedSystemFont(ofSize: size.height * 0.65, weight: .medium),
+                        .foregroundColor: dark ? NSColor(white: 0.18, alpha: 1) : NSColor(white: 0.8, alpha: 1),
+                        .paragraphStyle: paragraph,
+                    ])
+                    return true
+                }
+                let geometry = SCNPlane(width: width, height: height)
+                let finish = SCNMaterial()
+                finish.lightingModel = .constant
+                finish.diffuse.contents = texture
+                finish.isDoubleSided = true
+                geometry.materials = [finish]
+                let node = SCNNode(geometry: geometry)
+                node.simdPosition = position
+                root.addChildNode(node)
+            }
+
+            box(SIMD3(0.0254, 0.054, 0.0016), .zero, pcb, bevel: 0.0005)
+            // Dark header housings, solder collars and square metal pins.
+            for side: Float in [-1, 1] {
+                box(SIMD3(0.0025, 0.041, 0.0025), SIMD3(side * 0.011, -0.001, -0.002), plastic)
+                for index in 0..<16 {
+                    let y = Float(index) * 0.00254 - 0.020
+                    let pad = SCNNode(geometry: SCNTorus(ringRadius: 0.0008, pipeRadius: 0.00015))
+                    pad.geometry?.materials = [silver]
+                    pad.eulerAngles.x = .pi/2
+                    pad.simdPosition = SIMD3(side * 0.011, y, 0.00085)
+                    root.addChildNode(pad)
+                    box(SIMD3(0.0006, 0.0006, 0.008), SIMD3(side * 0.011, y, -0.0024), gold, bevel: 0.00004)
+                }
+            }
+            // Radio module shield and exposed antenna area.
+            box(SIMD3(0.017, 0.023, 0.0008), SIMD3(0, 0.0125, 0.0012), pcb)
+            box(SIMD3(0.016, 0.017, 0.0022), SIMD3(0, 0.0095, 0.0025), silver, bevel: 0.00035)
+            label("ESP32-C6", width: 0.013, height: 0.0022, at: SIMD3(0, 0.012, 0.00362), dark: true)
+            label("WIFI / BLE", width: 0.011, height: 0.0014, at: SIMD3(0, 0.008, 0.00362), dark: true)
+            for index in 0..<6 {
+                let x = Float(index) * 0.0022 - 0.0055
+                box(SIMD3(0.00035, 0.004, 0.0001), SIMD3(x, 0.0215, 0.00165), gold, bevel: 0)
+                if index < 5 {
+                    box(SIMD3(0.0022, 0.00035, 0.0001), SIMD3(x + 0.0011, index.isMultiple(of: 2) ? 0.0233 : 0.0197, 0.00165), gold, bevel: 0)
+                }
+            }
+            // USB-C shell with a recessed dark opening and connector tongue.
+            box(SIMD3(0.009, 0.007, 0.0032), SIMD3(0, -0.024, 0.0024), silver, bevel: 0.0006)
+            box(SIMD3(0.0076, 0.00015, 0.0022), SIMD3(0, -0.02755, 0.0024), plastic, bevel: 0.0005)
+            box(SIMD3(0.0054, 0.00025, 0.0005), SIMD3(0, -0.02765, 0.0024), pcb, bevel: 0.0001)
+            // Controller, regulator and small passives with metal end caps.
+            box(SIMD3(0.004, 0.005, 0.0009), SIMD3(0, -0.008, 0.0013), plastic)
+            for side: Float in [-1, 1] {
+                for index in 0..<6 {
+                    box(SIMD3(0.0008, 0.0003, 0.0002), SIMD3(side * 0.0023, -0.010 + Float(index) * 0.0008, 0.0011), silver, bevel: 0)
+                }
+                for index in 0..<5 {
+                    let y = -0.011 + Float(index) * 0.0025
+                    box(SIMD3(0.0016, 0.0008, 0.0006), SIMD3(side * 0.0065, y, 0.0012), index.isMultiple(of: 2) ? ceramic : plastic, bevel: 0.00005)
+                    for end: Float in [-1, 1] {
+                        box(SIMD3(0.0003, 0.00085, 0.00065), SIMD3(side * 0.0065 + end * 0.0007, y, 0.0012), silver, bevel: 0.00003)
+                    }
+                }
+                box(SIMD3(0.0035, 0.0028, 0.001), SIMD3(side * 0.006, -0.0175, 0.0014), silver)
+                box(SIMD3(0.002, 0.0016, 0.0008), SIMD3(side * 0.006, -0.0175, 0.0022), plastic)
+            }
+            label("WENDY LITE", width: 0.013, height: 0.0018, at: SIMD3(0, -0.003, 0.00085))
+            label("BOOT", width: 0.004, height: 0.0011, at: SIMD3(-0.006, -0.0149, 0.00085))
+            label("RESET", width: 0.004, height: 0.0011, at: SIMD3(0.006, -0.0149, 0.00085))
             return root
         }
     }

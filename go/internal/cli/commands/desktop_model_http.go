@@ -23,7 +23,7 @@ head -c "$2" >&3 || exit
 exec cat <&3`
 
 // DesktopModelRoundTrip reaches a managed Ollama runtime through the selected
-// Agent's authenticated exec stream when Cloud lacks TCP port services.
+// Agent's authenticated exec stream on LAN or when Cloud lacks TCP port services.
 func DesktopModelRoundTrip(req *http.Request, conn *grpcclient.AgentConnection, port uint32, headerTimeout time.Duration) (*http.Response, error) {
 	if port == 0 || port > 65535 || req.URL.Scheme != "http" || req.URL.Host != "wendy-device" {
 		return nil, fmt.Errorf("model requests must stay on the selected device")
@@ -40,6 +40,9 @@ func DesktopModelRoundTrip(req *http.Request, conn *grpcclient.AgentConnection, 
 
 func desktopModelRoundTrip(req *http.Request, conn *grpcclient.AgentConnection, port uint32, headerTimeout time.Duration) (*http.Response, error) {
 	request := req.Clone(req.Context())
+	// Ollama's loopback listener validates Host. The synthetic routing name
+	// belongs to the desktop transport, not the device's HTTP server.
+	request.Host = net.JoinHostPort("127.0.0.1", strconv.Itoa(int(port)))
 	request.Close = true
 	var wire bytes.Buffer
 	if err := request.Write(&wire); err != nil {

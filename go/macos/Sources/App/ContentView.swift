@@ -78,6 +78,7 @@ struct ContentView: View {
                 .padding(.horizontal, 10).padding(.bottom, 8)
                 Divider()
                 List(selection: $sidebarSelection) {
+                    if model.discovering { ProgressView().controlSize(.small) }
                     deviceRows
                     if !model.nearbyUnitree.isEmpty {
                         ForEach(model.nearbyUnitree.filter { search.isEmpty || "\($0.name) \($0.serial) \($0.address)".localizedCaseInsensitiveContains(search) }) { robot in
@@ -97,7 +98,6 @@ struct ContentView: View {
                     if deviceSource == "nearby", let error = model.unitreeDiscoveryError {
                         Text(error).font(.caption).foregroundStyle(.secondary)
                     }
-                    if model.discovering { ProgressView().controlSize(.small) }
                     if deviceSource == "nearby" {
                         if let message = model.nearbyError { FailureNote(message: message) }
                         if model.nearby.isEmpty && model.nearbyUnitree.isEmpty && !model.discovering {

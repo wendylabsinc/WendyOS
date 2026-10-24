@@ -52,7 +52,7 @@ func TestDesktopModelHTTPStreamsAndClosesExec(t *testing.T) {
 			return err
 		}
 		body, err := io.ReadAll(req.Body)
-		if err != nil || string(body) != "{\"prompt\":\"hello 世界\"}" || !req.Close || req.URL.Path != "/api/chat" || req.Header.Get("Content-Type") != "application/json" {
+		if err != nil || string(body) != "{\"prompt\":\"hello 世界\"}" || !req.Close || req.Host != "127.0.0.1:11437" || req.URL.Path != "/api/chat" || req.Header.Get("Content-Type") != "application/json" {
 			return fmt.Errorf("request changed: %+v %q %v", req, body, err)
 		}
 		// Header and body arrive separately; the response must be readable

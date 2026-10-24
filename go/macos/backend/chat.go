@@ -70,6 +70,16 @@ type chatTransport struct {
 }
 
 func (t *chatTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	req = req.Clone(req.Context())
+	req.Host = net.JoinHostPort("127.0.0.1", strconv.Itoa(int(t.port)))
+	if t.conn.RegistryDialer == nil {
+		if !t.conn.IsMTLS && !t.conn.IsSessionProxy {
+			return nil, errors.New("model access requires an authenticated device connection")
+		}
+		// Reuse the model HTTP tunnel over the authenticated Agent exec stream.
+		// LAN connections must not send prompts to an unauthenticated HTTP port.
+		return commands.DesktopModelRoundTrip(req, t.conn, t.port, t.ResponseHeaderTimeout)
+	}
 	response, err := t.Transport.RoundTrip(req)
 	var unsupported *cloudrelay.UnsupportedServiceError
 	if !errors.As(err, &unsupported) || req.Context().Err() != nil {

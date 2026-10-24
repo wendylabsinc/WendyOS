@@ -167,24 +167,97 @@ private struct RobotSimulationView: View {
             }.padding(.horizontal, 16).padding(.bottom, 12)
             ZStack(alignment: preparing || render.error != nil || render.pose == nil ? .center : .topLeading) {
                 SimulatorRenderer(scene: render.scene, pose: render.pose, schematic: nil, follow: follow, recenter: recenter)
-                VStack(alignment: .leading, spacing: 6) {
-                    if preparing {
-                        ProgressView("Loading simulation…").controlSize(.small)
-                        Text("Preparing the robot and its scene. This can take a few minutes.")
-                            .font(.caption).foregroundStyle(.secondary)
-                    } else if let error = render.error {
-                        Label("Scene unavailable. Retrying…", systemImage: "exclamationmark.triangle")
-                        Text(error).font(.caption).textSelection(.enabled)
-                        Button("Prepare simulation") { control(WDSimStart, "Preparing") }.disabled(busy)
+                if preparing || (render.error == nil && render.pose == nil) {
+                    SimulationLoadingView(preparing: preparing)
+                        .padding(24)
+                } else if let error = render.error {
+                    SimulationErrorView(error: error, busy: busy) {
+                        control(WDSimStart, "Preparing")
                     }
-                    else if let pose = render.pose {
+                    .padding(24)
+                } else if let pose = render.pose {
+                    VStack(alignment: .leading, spacing: 6) {
                         Text(pose.valid ? (pose.mode == "paused" ? "Paused" : "Live simulation") : "Physics fault · last valid pose")
                         Text(String(format: "%.2f s", pose.time)).font(.caption.monospacedDigit())
-                    } else { ProgressView("Loading scene…").controlSize(.small) }
-                }.padding(12).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8)).padding(12)
+                    }.padding(12).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8)).padding(12)
+                }
             }.frame(maxWidth: .infinity, maxHeight: .infinity)
             Text("Drag to orbit · Scroll to zoom").font(.caption).foregroundStyle(.secondary).padding(8)
         }.task(id: preparing) { await render.stream(name: item.name) }
+    }
+}
+
+private struct SimulationLoadingView: View {
+    let preparing: Bool
+
+    var body: some View {
+        VStack(spacing: 20) {
+            Image(systemName: "cube.transparent")
+                .font(.system(size: 32, weight: .light))
+                .foregroundStyle(.white.opacity(0.85))
+                .frame(width: 72, height: 72)
+                .background(.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 20))
+                .overlay(RoundedRectangle(cornerRadius: 20).strokeBorder(.white.opacity(0.08)))
+                .accessibilityHidden(true)
+            VStack(spacing: 8) {
+                Text(preparing ? "Preparing simulation" : "Loading scene")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.95))
+                Text(preparing ? "Setting up the robot and its world.\nThis may take a few minutes." : "Connecting to the robot's live scene.")
+                    .font(.callout)
+                    .foregroundStyle(.white.opacity(0.6))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            ProgressView()
+                .controlSize(.small)
+                .accessibilityLabel(preparing ? "Preparing simulation" : "Loading scene")
+        }
+        .multilineTextAlignment(.center)
+        .frame(maxWidth: 320)
+        .environment(\.colorScheme, .dark)
+    }
+}
+
+private struct SimulationErrorView: View {
+    let error: String
+    let busy: Bool
+    let prepare: () -> Void
+
+    var body: some View {
+        VStack(spacing: 20) {
+            Image(systemName: "exclamationmark.triangle")
+                .font(.system(size: 26, weight: .regular))
+                .foregroundStyle(.orange.opacity(0.9))
+                .frame(width: 64, height: 64)
+                .background(.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 18))
+                .accessibilityHidden(true)
+            VStack(spacing: 8) {
+                Text("Scene unavailable")
+                    .font(.system(size: 18, weight: .semibold))
+                    .foregroundStyle(.white.opacity(0.95))
+                Text(error)
+                    .font(.callout)
+                    .foregroundStyle(.white.opacity(0.65))
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            VStack(spacing: 12) {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.mini)
+                    Text("Retrying connection…").font(.caption)
+                }
+                .foregroundStyle(.white.opacity(0.5))
+                Button("Prepare simulation", action: prepare)
+                    .controlSize(.large)
+                    .disabled(busy)
+            }
+        }
+        .multilineTextAlignment(.center)
+        .frame(maxWidth: 280)
+        .padding(28)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 20))
+        .overlay(RoundedRectangle(cornerRadius: 20).strokeBorder(.white.opacity(0.08)))
+        .environment(\.colorScheme, .dark)
     }
 }
 

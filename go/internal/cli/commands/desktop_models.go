@@ -122,10 +122,10 @@ func desktopModelRuntime(port uint32, accelerator uint32) (*pb.CreateContainerRe
 		return nil, errors.New("unsupported accelerator")
 	}
 	profile := profiles[accelerator]
-	cfg := appconfig.AppConfig{AppID: fmt.Sprintf("sh.wendy.models.ollama.%d", port), Version: "0.40.10-" + profile, Platform: "linux", Entitlements: []appconfig.Entitlement{
+	cfg := appconfig.AppConfig{AppID: fmt.Sprintf("sh.wendy.models.ollama.%d", port), Version: "0.40.10-" + profile + "-loopback", Platform: "linux", Entitlements: []appconfig.Entitlement{
 		{Type: "network", Mode: "host"}, {Type: "http", Port: int(port)}, {Type: "persist", Name: "ollama-models", Path: "/root/.ollama"},
 	}}
-	env := []string{fmt.Sprintf("OLLAMA_HOST=0.0.0.0:%d", port), "OLLAMA_CONTEXT_LENGTH=4096", "OLLAMA_MAX_LOADED_MODELS=1", "OLLAMA_NUM_PARALLEL=1"}
+	env := []string{fmt.Sprintf("OLLAMA_HOST=127.0.0.1:%d", port), "OLLAMA_CONTEXT_LENGTH=4096", "OLLAMA_MAX_LOADED_MODELS=1", "OLLAMA_NUM_PARALLEL=1"}
 	if accelerator != 0 {
 		cfg.Entitlements = append(cfg.Entitlements, appconfig.Entitlement{Type: "gpu"})
 	}
@@ -145,8 +145,9 @@ func desktopModelRuntime(port uint32, accelerator uint32) (*pb.CreateContainerRe
 	return &pb.CreateContainerRequest{ImageName: desktopOllamaImage, AppName: cfg.AppID, AppConfig: raw, Env: env, RestartPolicy: &pb.RestartPolicy{Mode: pb.RestartPolicyMode_UNLESS_STOPPED}}, nil
 }
 
-// DesktopEnsureModelRuntime never replaces an existing app. A runtime created
-// by an earlier invocation can be started again only with the same profile.
+// DesktopEnsureModelRuntime reuses the same profile, or upgrades its known
+// wildcard-listening predecessor in place while retaining the model volume.
+// Unrelated apps and profiles are never replaced.
 func DesktopEnsureModelRuntime(ctx context.Context, conn *grpcclient.AgentConnection, port, accelerator uint32, portOccupied func() bool, progress func(string)) error {
 	req, err := desktopModelRuntime(port, accelerator)
 	if err != nil {
@@ -160,10 +161,16 @@ func DesktopEnsureModelRuntime(ctx context.Context, conn *grpcclient.AgentConnec
 	if err = json.Unmarshal(req.AppConfig, &cfg); err != nil {
 		return err
 	}
+	upgrade := false
 	for _, app := range apps {
 		if app.GetAppName() == req.AppName {
-			if app.GetAppVersion() != cfg.Version || app.GetHttpPort() != port || len(app.GetServices()) != 0 {
+			upgrade = app.GetAppVersion() == strings.TrimSuffix(cfg.Version, "-loopback")
+			if (!upgrade && app.GetAppVersion() != cfg.Version) || app.GetHttpPort() != port || len(app.GetServices()) != 0 {
 				return errors.New("an app already uses this runtime name with different settings; choose another port")
+			}
+			if upgrade {
+				progress("Updating Ollama to listen only on device loopback")
+				break
 			}
 			if app.GetRunningState() == pb.AppRunningState_RUNNING {
 				progress("Using the installed Ollama runtime")
@@ -176,11 +183,13 @@ func DesktopEnsureModelRuntime(ctx context.Context, conn *grpcclient.AgentConnec
 			return DesktopStartApp(ctx, conn, req.AppName)
 		}
 	}
-	if portOccupied() {
+	if !upgrade && portOccupied() {
 		return errors.New("this port is already in use; choose another port or use the existing server")
 	}
-	if err = registerCloudApps(ctx, conn, []string{req.AppName}, false); err != nil {
-		return err
+	if !upgrade {
+		if err = registerCloudApps(ctx, conn, []string{req.AppName}, false); err != nil {
+			return err
+		}
 	}
 	progress("Downloading the Ollama runtime on the device")
 	stream, err := conn.ContainerService.CreateContainerWithProgress(ctx, req)
@@ -251,7 +260,7 @@ func DesktopSelectModelPort(ctx context.Context, conn *grpcclient.AgentConnectio
 		if e = json.Unmarshal(req.AppConfig, &cfg); e != nil {
 			return 0, e
 		}
-		if app.GetAppVersion() != cfg.Version || len(app.GetServices()) != 0 {
+		if (app.GetAppVersion() != cfg.Version && app.GetAppVersion() != strings.TrimSuffix(cfg.Version, "-loopback")) || len(app.GetServices()) != 0 {
 			continue
 		}
 		if app.GetRunningState() == pb.AppRunningState_RUNNING {
