@@ -92,3 +92,53 @@ type LANDevice struct {
 }
 
 // LANAgentPort restores the plaintext base port from an mTLS advertisement.
+func LANAgentPort(dev LANDevice) int {
+	port := dev.Port
+	if port == 0 {
+		port = DefaultAgentPort
+	}
+	if dev.IsMTLS && dev.Port != 0 && port > AgentMTLSPortOffset {
+		port -= AgentMTLSPortOffset // advertised port is mTLS; connectWithAutoTLS will add the offset back
+	}
+	return port
+}
+
+// LANAgentAddresses preserves USB hostname and zoned literal preferences.
+func LANAgentAddresses(dev LANDevice) []string {
+	port := LANAgentPort(dev)
+
+	ip, hostname := strings.TrimSpace(dev.IPAddress), strings.TrimSpace(dev.Hostname)
+	hosts := []string{ip, hostname}
+	// A zoned IPv6 literal (fe80::5741:1%enx0) can only come from the USB
+	// well-known-address probe, which just proved the agent answers there. Such
+	// a device is typically one whose mDNS is broken — that is why the probe
+	// found it — so its .local name costs a full resolver timeout plus a dial
+	// timeout before the address that works is even tried. It stays first.
+	if strings.TrimSpace(dev.USB) != "" && !strings.Contains(ip, "%") {
+		// A USB-NCM path exists. The routed Wi-Fi IP (dev.IPAddress) may be
+		// black-holed by AP isolation on residential routers, so try the
+		// link-local .local hostname (reachable over USB) first.
+		hosts = []string{hostname, ip}
+	}
+
+	var addresses []string
+	seen := make(map[string]bool)
+	for _, host := range hosts {
+		if host == "" || seen[host] {
+			continue
+		}
+		seen[host] = true
+		addresses = append(addresses, HostPort(host, port))
+	}
+
+	return addresses
+}
+
+// PreferredLANAddress returns the first discovered endpoint, or empty.
+func PreferredLANAddress(dev LANDevice) string {
+	addresses := LANAgentAddresses(dev)
+	if len(addresses) == 0 {
+		return ""
+	}
+	return addresses[0]
+}
