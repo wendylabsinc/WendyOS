@@ -157,12 +157,15 @@ func invoke(ctx context.Context, conn grpc.ClientConnInterface, auth *config.Aut
 }
 
 // x5cOnly lists the methods always signed with x5c, never kid: the leaf
-// registration itself, and the two whose JWS Cloud forwards verbatim to
-// devices (PostboxEntry.request_jws), which cannot resolve a kid.
+// registration itself, the registry key registration (Cloud serves the stored
+// request back to other clients as the binding), and the two whose JWS Cloud
+// forwards verbatim to devices (PostboxEntry.request_jws), which cannot
+// resolve a kid.
 var x5cOnly = map[string]bool{
-	cloudpbv2.OperatorSessionService_RegisterOperatorLeaf_FullMethodName: true,
-	cloudpbv2.DeploymentService_CreateDeployment_FullMethodName:          true,
-	cloudpbv2.DeploymentService_ControlContainer_FullMethodName:          true,
+	cloudpbv2.OperatorSessionService_RegisterOperatorLeaf_FullMethodName:   true,
+	cloudpbv2.KeyDirectoryService_RegisterUserEncryptionKey_FullMethodName: true,
+	cloudpbv2.DeploymentService_CreateDeployment_FullMethodName:            true,
+	cloudpbv2.DeploymentService_ControlContainer_FullMethodName:            true,
 }
 
 // registeredKIDs holds the leaves this process has registered.
@@ -441,6 +444,11 @@ var signedResources = map[string]func(tenant string, req proto.Message) (string,
 			return "", false
 		}
 		return "asset/" + in.GetId(), true
+	},
+	// Cloud RequestSigning.md: org/<organization_id>/encryption-key.
+	cloudpbv2.KeyDirectoryService_RegisterUserEncryptionKey_FullMethodName: func(tenant string, req proto.Message) (string, bool) {
+		in, ok := req.(*cloudpbv2.RegisterEncryptionKeyRequest)
+		return "org/" + tenant + "/encryption-key", ok && in.GetOrganizationId() == tenant
 	},
 	cloudpbv2.PKIAdminService_RevokePrincipalCertificates_FullMethodName: func(tenant string, req proto.Message) (string, bool) {
 		in, ok := req.(*cloudpbv2.RevokePrincipalCertificatesRequest)

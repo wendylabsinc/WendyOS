@@ -747,7 +747,11 @@ func refreshCertsForAuth(ctx context.Context, auth *config.AuthConfig) error {
 		return fmt.Errorf("no existing certificates")
 	}
 	if auth.OAuthIssuer != "" {
-		return refreshOIDCCertificate(ctx, auth, false)
+		if err := refreshOIDCCertificate(ctx, auth, false); err != nil {
+			return err
+		}
+		registerRegistryKeyAfterMint(ctx, auth)
+		return nil
 	}
 
 	current := auth.Certificates[0]
