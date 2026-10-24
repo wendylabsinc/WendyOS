@@ -93,7 +93,7 @@ func TestDNS(t *testing.T) {
 }
 func TestRelayAuthenticationAndRevocation(t *testing.T) {
 	called := make(chan struct{}, 1)
-	relay, cfg, err := NewRelay(testRoutes(t), func(context.Context, string, uint16) (net.Conn, error) { called <- struct{}{}; return nil, io.EOF })
+	relay, cfg, err := NewRelay(testRoutes(t), func(context.Context, string, uint16) (net.Conn, error) { called <- struct{}{}; return nil, io.EOF }, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +107,11 @@ func TestRelayAuthenticationAndRevocation(t *testing.T) {
 	if Healthy(ctx, bad) {
 		t.Fatal("wrong credential accepted")
 	}
-	for _, request := range []flowRequest{{bad.Token, cfg.Routes[0].Address, 80}, {cfg.Token, "127.0.0.1", 22}, {cfg.Token, cfg.Routes[0].Address, 0}} {
+	for _, request := range []flowRequest{
+		{Token: bad.Token, Address: cfg.Routes[0].Address, Port: 80},
+		{Token: cfg.Token, Address: "127.0.0.1", Port: 22},
+		{Token: cfg.Token, Address: cfg.Routes[0].Address},
+	} {
 		conn, err := net.Dial("tcp", cfg.Endpoint)
 		if err != nil {
 			t.Fatal(err)
@@ -148,7 +152,7 @@ func TestPacketTunnelTCPAndDNS(t *testing.T) {
 			t.Errorf("wrong target %s:%d", selector, port)
 		}
 		return (&net.Dialer{}).DialContext(ctx, "tcp", listener.Addr().String())
-	})
+	}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

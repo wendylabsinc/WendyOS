@@ -442,6 +442,8 @@ final class AppModel: ObservableObject {
         case .loginError(let text):
             if signingIn { alert = text }
             signingIn = false; loginURL = nil
+        case .vpnError(let text):
+            if vpn.enabled && !vpnUpdating { vpnError = text }
         default:
             guard event.session == session, connected != nil else { return }
             switch event.payload {

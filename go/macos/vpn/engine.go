@@ -23,6 +23,7 @@ import (
 
 // Engine terminates TCP from utun and relays the byte stream through the app's
 // authenticated mesh/cloud transport. Only the DNS service accepts UDP.
+// ICMP echo replies require a successful remote agent probe.
 type Engine struct {
 	cfg    Config
 	stack  *stack.Stack
@@ -30,6 +31,8 @@ type Engine struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 	once   sync.Once
+	echoes chan echoRequest
+	echoWG sync.WaitGroup
 }
 
 func NewEngine(cfg Config) (*Engine, error) {
@@ -131,6 +134,7 @@ func NewEngine(cfg Config) (*Engine, error) {
 		}()
 	})
 	e.stack.SetTransportProtocolHandler(udp.ProtocolNumber, udpForward.HandlePacket)
+	e.startEchoWorkers()
 	return e, nil
 }
 func (e *Engine) allowed(ip string) bool {
@@ -170,6 +174,10 @@ func (e *Engine) Write(packet []byte) {
 	if len(packet) < 20 || packet[0]>>4 != 4 || len(packet) > 65535 {
 		return
 	}
+	if packet[9] == uint8(header.ICMPv4ProtocolNumber) {
+		e.queueEcho(packet)
+		return
+	}
 	p := stack.NewPacketBuffer(stack.PacketBufferOptions{Payload: buffer.MakeWithData(packet)})
 	defer p.DecRef()
 	e.link.InjectInbound(ipv4.ProtocolNumber, p)
@@ -187,6 +195,7 @@ func (e *Engine) Read(ctx context.Context) []byte {
 func (e *Engine) Close() {
 	e.once.Do(func() {
 		e.cancel()
+		e.echoWG.Wait()
 		if e.stack != nil {
 			e.stack.Close()
 		}

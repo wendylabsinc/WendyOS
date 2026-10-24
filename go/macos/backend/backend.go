@@ -27,6 +27,7 @@ const (
 	EventCameraError
 	EventJPEG
 	EventThermal
+	EventVPNError
 )
 
 type Event struct {
@@ -378,7 +379,14 @@ func (b *Backend) StartVPN(routes []vpn.Route) (vpn.Config, error) {
 		b.relay.Close()
 		b.relay = nil
 	}
-	relay, config, err := vpn.NewRelay(routes, desktopDial)
+	dial := reportVPNDialFailures(desktopDial, func(message string) {
+		// A full UI event queue must not stall a failed network flow.
+		select {
+		case b.events <- Event{Kind: EventVPNError, Text: message}:
+		default:
+		}
+	})
+	relay, config, err := vpn.NewRelay(routes, dial, desktopProbe)
 	if err != nil {
 		return vpn.Config{}, err
 	}

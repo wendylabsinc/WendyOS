@@ -14,6 +14,8 @@ struct PresentedFailure {
             message = "This agent needs a newer version before it can download updates directly."
         } else if lower.contains("select at least one device") {
             message = "Select at least one device, then turn on VPN."
+        } else if lower.contains("cloud does not offer tunnel service") {
+            message = "This Cloud server needs an update before app ports can be reached through the VPN."
         } else if lower.contains("not sending video") {
             message = "This camera is not sending video. Check its source, or choose another camera."
         } else if lower.contains("no route to host") || lower.contains("deadline exceeded") || lower.contains("connection refused") || lower.contains("offline") {

@@ -16,6 +16,12 @@ import (
 )
 
 type DialFunc func(context.Context, string, uint16) (net.Conn, error)
+
+// ProbeFunc succeeds only after the selected device's agent responds.
+type ProbeFunc func(context.Context, string) error
+
+const echoTimeout = 5 * time.Second
+
 type Relay struct {
 	listener net.Listener
 	cancel   context.CancelFunc
@@ -26,9 +32,10 @@ type flowRequest struct {
 	Token   string `json:"token"`
 	Address string `json:"address"`
 	Port    uint16 `json:"port"`
+	Kind    string `json:"kind,omitempty"`
 }
 
-func NewRelay(routes []Route, dial DialFunc) (*Relay, Config, error) {
+func NewRelay(routes []Route, dial DialFunc, probe ProbeFunc) (*Relay, Config, error) {
 	routes, err := BuildRoutes(routes)
 	if err != nil {
 		return nil, Config{}, err
@@ -52,6 +59,7 @@ func NewRelay(routes []Route, dial DialFunc) (*Relay, Config, error) {
 	go func() {
 		defer close(relay.done)
 		slots := make(chan struct{}, 128)
+		echoSlots := make(chan struct{}, 8)
 		for {
 			conn, err := ln.Accept()
 			if err != nil {
@@ -80,15 +88,37 @@ func NewRelay(routes []Route, dial DialFunc) (*Relay, Config, error) {
 				if json.Unmarshal(line, &req) != nil || subtle.ConstantTimeCompare([]byte(req.Token), []byte(cfg.Token)) != 1 {
 					return
 				}
-				if req.Port == 0 && req.Address == "ping" {
+				if req.Kind == "" && req.Port == 0 && req.Address == "ping" {
 					io.WriteString(conn, "PONG\n")
 					return
 				}
-				if req.Port == 0 {
+				if req.Kind != "" && req.Kind != "echo" {
 					return
 				}
 				route, ok := byIP[req.Address]
 				if !ok {
+					return
+				}
+				if req.Kind == "echo" {
+					if req.Port != 0 || probe == nil {
+						return
+					}
+					select {
+					case echoSlots <- struct{}{}:
+					default:
+						return
+					}
+					defer func() { <-echoSlots }()
+					probeCtx, cancelProbe := context.WithTimeout(ctx, echoTimeout)
+					defer cancelProbe()
+					if err := probe(probeCtx, route.Selector); err != nil || probeCtx.Err() != nil {
+						io.WriteString(conn, "ERR\n")
+						return
+					}
+					io.WriteString(conn, "OK\n")
+					return
+				}
+				if req.Port == 0 {
 					return
 				}
 				conn.SetDeadline(time.Time{})
@@ -135,6 +165,20 @@ func (c *bufferedConn) CloseWrite() error {
 	return nil
 }
 func DialRelay(ctx context.Context, c Config, address string, port uint16) (net.Conn, error) {
+	return requestRelay(ctx, c, flowRequest{Token: c.Token, Address: address, Port: port}, 65*time.Second)
+}
+
+// ProbeRelay checks a device through the authenticated relay. The loopback
+// heartbeat cannot stand in for a device response.
+func ProbeRelay(ctx context.Context, c Config, address string) error {
+	conn, err := requestRelay(ctx, c, flowRequest{Token: c.Token, Address: address, Kind: "echo"}, echoTimeout)
+	if err != nil {
+		return err
+	}
+	return conn.Close()
+}
+
+func requestRelay(ctx context.Context, c Config, req flowRequest, timeout time.Duration) (net.Conn, error) {
 	conn, err := (&net.Dialer{}).DialContext(ctx, "tcp4", c.Endpoint)
 	if err != nil {
 		return nil, err
@@ -145,10 +189,10 @@ func DialRelay(ctx context.Context, c Config, address string, port uint16) (net.
 			conn.Close()
 		}
 	}()
-	conn.SetDeadline(time.Now().Add(65 * time.Second))
+	conn.SetDeadline(time.Now().Add(timeout))
 	stop := context.AfterFunc(ctx, func() { conn.Close() })
 	defer stop()
-	if err = json.NewEncoder(conn).Encode(flowRequest{c.Token, address, port}); err != nil {
+	if err = json.NewEncoder(conn).Encode(req); err != nil {
 		return nil, err
 	}
 	reader := bufio.NewReaderSize(conn, 4096)
@@ -157,7 +201,10 @@ func DialRelay(ctx context.Context, c Config, address string, port uint16) (net.
 		return nil, err
 	}
 	if string(line) != "OK" {
-		return nil, errors.New("device tunnel refused port " + strconv.Itoa(int(port)))
+		if req.Kind == "echo" {
+			return nil, errors.New("device did not answer VPN probe")
+		}
+		return nil, errors.New("device tunnel refused port " + strconv.Itoa(int(req.Port)))
 	}
 	conn.SetDeadline(time.Time{})
 	success = true

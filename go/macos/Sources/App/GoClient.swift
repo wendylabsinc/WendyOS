@@ -207,6 +207,7 @@ final class GoClient: Sendable {
             case WD_EVENT_LOGIN_URL: payload = .loginURL(string($0.text))
             case WD_EVENT_LOGIN_DONE: payload = .loginDone
             case WD_EVENT_LOGIN_ERROR: payload = .loginError(string($0.text))
+            case WD_EVENT_VPN_ERROR: payload = .vpnError(string($0.text))
             case WD_EVENT_LOG:
                 payload = .log(LogEntry(timestampNanoseconds: $0.log.timestamp_ns,
                                        level: LogLevel($0.log.level), body: string($0.log.body),
@@ -234,6 +235,7 @@ struct BridgeEvent {
         case loginURL(String), loginDone, loginError(String)
         case log(LogEntry), logsError(String), video(Data), jpeg(Data), cameraError(String)
         case thermal(ThermalCameraFrame)
+        case vpnError(String)
     }
     let session: UInt64
     let stream: UInt64
