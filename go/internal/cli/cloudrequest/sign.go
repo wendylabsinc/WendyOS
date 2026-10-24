@@ -295,6 +295,9 @@ func (s *Signer) signRequest(method string, req proto.Message, byKID bool, corre
 	if !ok {
 		return nil, requestTypeError(method, req)
 	}
+	if err := stampValidity(req, s.now()); err != nil {
+		return nil, err
+	}
 	payload, err := proto.Marshal(req)
 	if err != nil {
 		return nil, fmt.Errorf("marshaling Cloud request %s: %w", method, err)

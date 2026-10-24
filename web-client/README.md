@@ -285,6 +285,7 @@ release commit reproduces the pin.
 | `auth-restore` | `{tenant?, subject?, refresh?}` | that organization's profile, or `null`; `refresh: true` always rotates the refresh token once and fails the restore if that exchange fails |
 | `credential` | `{tenant?}` | `{profile, algorithm, chainDER, accessToken, publicJWK}`; refreshes a token with under a minute left |
 | `sign` | `{tenant?, bytes: Uint8Array}` | `{signature: Uint8Array}` with the operator key |
+| `valid-until` | `{validForSeconds?}` | `{seconds}`: Unix time to sign as a postbox-relayed payload's `valid_until` (`expires_at` on `DeviceAssignment`) |
 | `auth-signout` | `{tenant?}` | `true`; no tenant signs out of every organization |
 
 Call `init` once, first, before any sign-in, `credential` or `sign` call; a
@@ -294,6 +295,15 @@ HTTPS (the Cloud gRPC authority on port 443). There is no host allowlist, by
 design: the page owns this worker's origin and its saved sign-ins, and a
 self-hosted deployment names its own services. Saved sign-ins from another
 auth host do not restore.
+
+Every payload cloud relays to a device postbox (`CreateDeploymentRequest`,
+`ControlContainerRequest`, `UnassignDeviceRequest`, `DeviceAssignment`) must
+carry its validity under the operator signature: a device refuses one without
+it. Get it from `valid-until` before serializing the payload. Without
+`validForSeconds` it is 60 days from now; more than 365 days (31536000 s) is
+refused, and cloud may refuse less under the organization's own limit. This is
+the time a device may still apply the instruction, not the 30-second expiry of
+the request signature.
 
 `sign` takes the bytes as the request's second argument, a non-empty
 `Uint8Array`; anything else fails with `Nothing to sign`. The bytes are signed

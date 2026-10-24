@@ -118,6 +118,26 @@ func (b *bridge) handle(r request) (any, error) {
 		b.auth = &browserauth.Session{Settings: &settings, Client: &http.Client{}, Store: browserCredentialStore{}}
 		return true, nil
 	}
+	// The console builds postbox-relayed payloads itself; this gives it the
+	// CLI's validity rule (default 60 days, at most 365) for their valid_until.
+	if r.Method == "valid-until" {
+		var p struct {
+			ValidForSeconds int64 `json:"validForSeconds"`
+		}
+		if len(r.Params) > 0 {
+			if err := json.Unmarshal(r.Params, &p); err != nil {
+				return nil, err
+			}
+		}
+		if p.ValidForSeconds > int64(cloudrequest.MaxValidity/time.Second) {
+			return nil, fmt.Errorf("validForSeconds %d is more than 365 days", p.ValidForSeconds)
+		}
+		until, err := cloudrequest.ValidUntil(time.Now(), time.Duration(p.ValidForSeconds)*time.Second)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"seconds": until.Unix()}, nil
+	}
 	// SECURITY: signing raw bytes is the approved console design (sem, 2026-10-19 22:55): the console builds its JWS, DPoP and management-request inputs, which verifiers check byte for byte, so no prefix can be added. Only same-origin script reaches this worker; it can use the key, never export it.
 	if r.Method == "credential" || r.Method == "sign" {
 		var p org

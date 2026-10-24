@@ -1218,12 +1218,22 @@ func main() {
 	// Report every app's state to cloud (apps spec section 2). Like the
 	// roster it starts unconditionally and stays silent until enrolled.
 	var reportedState *services.ReportedState
+	var postbox *services.Postbox
 	if ctrdErr == nil {
 		reportedState = services.NewReportedState(logger, ctrdClient, telemetryBuf, cloudGRPCURLForCloudHost(cloudHost), certPEM, keyPEM, chainPEM)
-		wg.Add(1)
+		// The operator-signed postbox (AAA contract section 5.3): woken by the
+		// reported-state nudge, it applies only what it verifies itself.
+		postbox = services.NewPostbox(logger, telemetryBuf, configPath, services.NewPostboxControl(containerSvc))
+		postbox.UpdateIdentity(cloudGRPCURLForCloudHost(cloudHost), certPEM, keyPEM, chainPEM)
+		reportedState.AttachPostbox(postbox)
+		wg.Add(2)
 		go func() {
 			defer wg.Done()
 			reportedState.Run(ctx)
+		}()
+		go func() {
+			defer wg.Done()
+			postbox.Run(ctx)
 		}()
 	}
 
@@ -1379,6 +1389,7 @@ func main() {
 		meshRoster.UpdateIdentity(cloudGRPCURLForCloudHost(cloudHost), certPEM, keyPEM, chainPEM)
 		if reportedState != nil {
 			reportedState.UpdateIdentity(cloudGRPCURLForCloudHost(cloudHost), certPEM, keyPEM, chainPEM)
+			postbox.UpdateIdentity(cloudGRPCURLForCloudHost(cloudHost), certPEM, keyPEM, chainPEM)
 		}
 		// The freshly issued identity may name a different tenant than the
 		// boot snapshot. Retire every VIP slot outside the new tenant (they
@@ -1429,6 +1440,7 @@ func main() {
 		meshRoster.UpdateIdentity("", "", "", "")
 		if reportedState != nil {
 			reportedState.UpdateIdentity("", "", "", "")
+			postbox.UpdateIdentity("", "", "", "")
 		}
 		_ = meshProxy.Close()
 		if udpProxy != nil {
