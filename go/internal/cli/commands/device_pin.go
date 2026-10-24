@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/wendylabsinc/wendy-go/devices"
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
@@ -340,17 +341,7 @@ func applyDeviceIdentity(cfg *config.Config, hostname, bareKey string, obs obser
 }
 
 func evaluateObservedDevicePin(cfg *config.Config, hostname string, obs observedDeviceIdentity, cloud string) config.PinVerdict {
-	verdict := cfg.EvaluateDevicePin(hostname, obs.orgID, cloud, obs.assetID)
-	if saved, ok := cfg.DevicePinFor(hostname); ok && saved.Principal != "" && obs.principal != "" && saved.Principal != obs.principal {
-		// Old positive-org pins could carry an unpin key before they pinned
-		// the asset itself. Keep that legacy adoption contract; UUID org-zero
-		// pins must always preserve the complete principal, even before an
-		// asset/device name has been backfilled.
-		if obs.orgID == 0 || verdict != config.PinAdoptAsset {
-			return config.PinMismatch
-		}
-	}
-	return verdict
+	return (&devices.HostPins{DevicePins: cfg.DevicePins}).EvaluateObservedDevicePin(hostname, obs.orgID, cloud, obs.assetID, obs.principal)
 }
 
 // recordTypedVMBarePin records an identity just accepted under a running VM's

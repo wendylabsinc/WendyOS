@@ -14,9 +14,9 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-
 	"time"
 
+	wendy "github.com/wendylabsinc/wendy-go"
 	"github.com/wendylabsinc/wendy/go/internal/cli/linklocal"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tlscache"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
@@ -66,6 +66,8 @@ const (
 var tlsDebugWriter io.Writer = os.Stderr
 
 type AgentConnection struct {
+	device *wendy.GRPCDeviceConnection
+
 	Conn *grpc.ClientConn
 	Host string // hostname or IP of the connected agent
 	// MeshHost is the device's stable mesh DNS name
@@ -159,6 +161,9 @@ type agentTCPDialState struct {
 // must not cause callers to discard the remaining operator certificates.
 // A nil result also covers a dial still in progress and gRPC-managed proxies.
 func (c *AgentConnection) TCPDialError() error {
+	if c != nil && c.device != nil {
+		return c.device.Evidence().TCPDialError
+	}
 	if c == nil || c.tcpDial == nil {
 		return nil
 	}
@@ -302,28 +307,7 @@ func identityMismatchSink(dst *atomic.Pointer[certs.IdentityMismatchError]) func
 }
 
 func Connect(ctx context.Context, address string) (*AgentConnection, error) {
-	opts := []grpc.DialOption{
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
-		grpc.WithInitialWindowSize(grpcInitialStreamWindow),
-		grpc.WithInitialConnWindowSize(grpcInitialConnWindow),
-		grpc.WithReadBufferSize(grpcReadBufferSize),
-		grpc.WithWriteBufferSize(grpcWriteBufferSize),
-		grpc.WithKeepaliveParams(keepalive.ClientParameters{
-			Time:                grpcKeepaliveTime,
-			Timeout:             grpcKeepaliveTimeout,
-			PermitWithoutStream: false,
-		}),
-	}
-	opts = append(opts, linkLocalDialOpts(address)...)
-	conn, err := grpc.NewClient(grpcTarget(address), opts...)
-	if err != nil {
-		return nil, fmt.Errorf("connecting to agent at %s: %w", address, err)
-	}
-
-	ac := newAgentConnection(conn)
-	ac.Host = hostFromAddress(address)
-	ac.Addr = address
-	return ac, nil
+	return connectSDKDevice(ctx, address, nil, nil, nil)
 }
 
 // newUnixClient is the one place a local unix-domain gRPC channel is built —
@@ -503,6 +487,14 @@ func ConnectWithTLSAndPins(ctx context.Context, address string, certInfo *config
 // broker, which must pin its retained transport open (grpc.WithIdleTimeout(0))
 // because for it a teardown-and-redial is a trust event, not a transparency.
 func ConnectWithTLSExpecting(ctx context.Context, address string, certInfo *config.CertificateInfo, pins certs.PinChecker, expected *certs.WendyIdentity, extraOpts ...grpc.DialOption) (*AgentConnection, error) {
+	if certInfo == nil {
+		return nil, errors.New("TLS device connection requires an operator certificate and key")
+	}
+	if len(extraOpts) == 0 {
+		return connectSDKDevice(ctx, address, certInfo, pins, expected)
+	}
+	// Alternate host transports retain their explicit grpc-go dial options.
+
 	observedOrg := new(atomic.Int32)
 	observedIdentity := new(atomic.Pointer[certs.WendyIdentity])
 	mismatch := new(atomic.Pointer[certs.IdentityMismatchError])
@@ -615,6 +607,10 @@ func (c *AgentConnection) Close() error {
 // against any trust chain by this accessor; it is for diagnostic display only
 // and must never be used for an authorization or trust decision.
 func (c *AgentConnection) ObservedServerOrg() (int32, bool) {
+	if c.device != nil {
+		v := c.device.Evidence().ObservedOrg
+		return v, v != 0
+	}
 	if c.observedServerOrg == nil {
 		return 0, false
 	}
@@ -632,6 +628,10 @@ func (c *AgentConnection) ObservedServerOrg() (int32, bool) {
 // for diagnostics — this identity is what the peer proved, so it is the value
 // device pinning compares against (see enforceDevicePin).
 func (c *AgentConnection) ObservedServerIdentity() (certs.WendyIdentity, bool) {
+	if c.device != nil {
+		id, ok := c.device.VerifiedIdentity()
+		return certs.WendyIdentity{OrgID: id.OrgID, TenantUUID: id.TenantUUID, EntityType: id.EntityType, EntityID: id.EntityID, Principal: id.Principal}, ok
+	}
 	if c.observedServerIdentity == nil {
 		return certs.WendyIdentity{}, false
 	}
@@ -647,6 +647,13 @@ func (c *AgentConnection) ObservedServerIdentity() (certs.WendyIdentity, bool) {
 // our certificate being wrong — and therefore that retrying with other certs or
 // other ports is pointless.
 func (c *AgentConnection) IdentityMismatch() (*certs.IdentityMismatchError, bool) {
+	if c.device != nil {
+		var mismatch *wendy.DeviceIdentityMismatchError
+		if errors.As(c.device.Evidence().IdentityMismatch, &mismatch) {
+			return &certs.IdentityMismatchError{WantOrg: mismatch.WantOrg, WantAsset: mismatch.WantAsset, WantPrincipal: mismatch.WantPrincipal, GotOrg: mismatch.GotOrg, GotAsset: mismatch.GotAsset, GotPrincipal: mismatch.GotPrincipal}, true
+		}
+		return nil, false
+	}
 	if c.identityMismatch == nil {
 		return nil, false
 	}
@@ -660,6 +667,11 @@ func (c *AgentConnection) IdentityMismatch() (*certs.IdentityMismatchError, bool
 // port can help, and the message the user needs is the one naming
 // `wendy device unpin`, not gRPC's handshake wrapper.
 func (c *AgentConnection) PinMismatch() (*devicepin.PinMismatchError, bool) {
+	if c.device != nil {
+		var mismatch *devicepin.PinMismatchError
+		ok := errors.As(c.device.Evidence().PinMismatch, &mismatch)
+		return mismatch, ok
+	}
 	if c.pinMismatch == nil {
 		return nil, false
 	}

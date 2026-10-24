@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"sync"
 
+	"github.com/wendylabsinc/wendy-go/devices"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 )
 
@@ -191,19 +192,7 @@ func rememberCertOrg(host string, org int) {
 // where reordering changes nothing and the caller's existing rejection
 // diagnostics should stand.
 func promoteOrgNext(order []int, pos int, certs []config.CertificateInfo, org int32) bool {
-	for j := pos + 1; j < len(order); j++ {
-		if int32(certs[order[j]].OrganizationID) != org {
-			continue
-		}
-		target := pos + 1
-		promoted := order[j]
-		// Shift the skipped-over entries right by one rather than swapping, so
-		// the certs this jump defers keep their relative order behind it.
-		copy(order[target+1:j+1], order[target:j])
-		order[target] = promoted
-		return true
-	}
-	return false
+	return devices.PromoteOrgNext(order, pos, sdkCredentials(certs), org)
 }
 
 // orderCertsByOrg returns certs with those belonging to org moved to the
@@ -214,22 +203,5 @@ func promoteOrgNext(order []int, pos int, certs []config.CertificateInfo, org in
 // nothing useful to say. The slice is copied rather than sorted in place: the
 // caller's slice comes from loadAllCLICerts and is indexed elsewhere.
 func orderCertsByOrg(certs []config.CertificateInfo, org int, have bool) []config.CertificateInfo {
-	if !have || len(certs) < 2 {
-		return certs
-	}
-	ordered := make([]config.CertificateInfo, 0, len(certs))
-	for _, c := range certs {
-		if c.OrganizationID == org {
-			ordered = append(ordered, c)
-		}
-	}
-	if len(ordered) == 0 || len(ordered) == len(certs) {
-		return certs
-	}
-	for _, c := range certs {
-		if c.OrganizationID != org {
-			ordered = append(ordered, c)
-		}
-	}
-	return ordered
+	return cliCredentials(certs, devices.OrderCertsByOrg(sdkCredentials(certs), org, have))
 }

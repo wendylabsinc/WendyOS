@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/wendylabsinc/wendy-go/devices"
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/cli/vm"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
@@ -419,15 +420,11 @@ func expectedIdentityFor(pinKey string) *certs.WendyIdentity {
 // would compare an id against a blank org and refuse the very device the pin
 // was written from.
 func expectedIdentityForPin(pin config.DevicePin) *certs.WendyIdentity {
-	if pin.Principal != "" {
-		if id, err := certs.ParsePrincipal(pin.Principal); err == nil {
-			return &id
-		}
-	}
-	if pin.AssetID == "" {
+	id := devices.ExpectedIdentityForPin(pin)
+	if id == nil {
 		return nil
 	}
-	return &certs.WendyIdentity{OrgID: int32(pin.OrgID), EntityType: certs.EntityAsset, EntityID: pin.AssetID}
+	return &certs.WendyIdentity{OrgID: id.OrgID, TenantUUID: id.TenantUUID, EntityType: id.EntityType, EntityID: id.EntityID, Principal: id.Principal}
 }
 
 // pinCandidateKeys returns the keys a pin for pinKey may have been recorded
@@ -506,24 +503,7 @@ func lookupPin(cfg *config.Config, pinKey string) (config.DevicePin, string, boo
 	if cfg == nil {
 		return config.DevicePin{}, "", false
 	}
-	var best config.DevicePin
-	var bestKey string
-	found := false
-	for _, key := range pinCandidateKeys(pinKey) {
-		pin, ok := cfg.DevicePinFor(key)
-		if !ok {
-			continue
-		}
-		if !found {
-			best, bestKey, found = pin, key, true
-			continue
-		}
-		if best.Source != config.PinSourceCloud && pin.Source == config.PinSourceCloud &&
-			(pin.AssetID != "" || best.AssetID == "") {
-			best, bestKey = pin, key
-		}
-	}
-	return best, bestKey, found
+	return (&devices.HostPins{DevicePins: cfg.DevicePins}).LookupPin(pinCandidateKeys(pinKey))
 }
 
 // errDeviceIdentityRefused is what every refusal in this package answers

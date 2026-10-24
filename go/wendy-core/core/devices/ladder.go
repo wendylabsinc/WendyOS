@@ -3,11 +3,12 @@ package devices
 import (
 	"context"
 	"errors"
-	"github.com/wendylabsinc/WendyOS/go/wendy-core/platform"
 	"net"
 	"slices"
 	"strconv"
 	"time"
+
+	"github.com/wendylabsinc/WendyOS/go/wendy-core/platform"
 )
 
 type mtlsAttemptError struct {
@@ -252,6 +253,10 @@ type mtlsCandidateResult struct {
 // remaining attempts, then joins them so no connection or refusal is lost. A
 // refusal stops new attempts but lets an already started attempt authenticate.
 func raceMTLSCandidates(ctx context.Context, walk *mtlsWalk, candidates []string) (platform.DeviceConnection, error) {
+	return raceMTLSCandidatesWithDial(ctx, walk, candidates, (*mtlsWalk).dialAddr)
+}
+
+func raceMTLSCandidatesWithDial(ctx context.Context, walk *mtlsWalk, candidates []string, dial func(*mtlsWalk, context.Context, string, bool) (platform.DeviceConnection, error)) (platform.DeviceConnection, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -261,9 +266,6 @@ func raceMTLSCandidates(ctx context.Context, walk *mtlsWalk, candidates []string
 	raceCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	// Snapshot the hook before starting workers; all workers finish before the
-	// caller returns and a test can restore it.
-	dial := (*mtlsWalk).dialAddr
 	results := make(chan mtlsCandidateResult, len(candidates))
 	completed := make([]*mtlsWalk, len(candidates))
 	next, running := 0, 0

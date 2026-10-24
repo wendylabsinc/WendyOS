@@ -3,15 +3,14 @@
 package devicepin
 
 import (
-	"crypto/sha256"
 	"crypto/x509"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"time"
 
+	"github.com/wendylabsinc/wendy-go/devices"
 	"github.com/wendylabsinc/wendy/go/internal/shared/atomicfile"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/flock"
@@ -25,41 +24,11 @@ const pinFileName = "known_devices.json"
 const storeLockTimeout = 2 * time.Second
 
 // PinnedDevice records the last-seen SPKI fingerprint for a device identity.
-type PinnedDevice struct {
-	SPKIFingerprint string `json:"spkiFingerprint"` // "sha256:<hex>"
-	DisplayName     string `json:"displayName"`
-	LastSeen        string `json:"lastSeen"`           // RFC3339
-	NotAfter        string `json:"notAfter,omitempty"` // RFC3339; pinned leaf's expiry
-}
+type PinnedDevice = devices.PinnedDevice
 
-// PinMismatchError reports that a device identity presented a different public
-// key than the one pinned for it, while the pinned certificate was still valid.
-// A rotation that happens after the pinned cert expires is not an error — it is
-// renewal — so this only fires inside the pinned cert's validity window, where
-// a new key is unexplained.
-type PinMismatchError struct {
-	Key         string
-	DisplayName string
-	Want        string
-	Got         string
-}
+// PinMismatchError retains Core's blocking peer rejection type.
+type PinMismatchError = devices.PinMismatchError
 
-func (e *PinMismatchError) Error() string {
-	return fmt.Sprintf("device %q (%s) presented a different certificate key than pinned (pinned %s, now %s)",
-		e.DisplayName, e.Key, e.Want, e.Got)
-}
-
-// BlockingPinRejection marks this as the one CheckAndUpdate failure the TLS
-// verifier must drop a connection over: it says the PEER is not the one we
-// pinned. Every other way CheckAndUpdate can fail is a write to local
-// bookkeeping, which cannot make a verified device untrustworthy. See
-// certs.BlockingPinError.
-func (e *PinMismatchError) BlockingPinRejection() {}
-
-// Compile-time proof that the marker above really does satisfy the interface
-// the verifier tests for. Without it, dropping or renaming the method would
-// silently downgrade every key-change rejection to best-effort — the verifier
-// would just stop failing, and nothing in this package would notice.
 var _ certs.BlockingPinError = (*PinMismatchError)(nil)
 
 // Store is a file-backed map from device identity key to PinnedDevice.
@@ -157,32 +126,16 @@ func (s *Store) CheckAndUpdate(leaf *x509.Certificate, displayName string) error
 			}
 		}
 	}
-	fingerprint := spkiFingerprint(leaf)
-	notAfter := leaf.NotAfter.UTC().Format(time.RFC3339)
-
-	existing, pinned := s.devices[key]
-	if pinned && existing.SPKIFingerprint != fingerprint {
-		// A key change while the pinned cert is still valid is unexplained: a
-		// renewal replaces an expiring cert, it does not race a live one.
-		if existing.NotAfter != "" {
-			if exp, parseErr := time.Parse(time.RFC3339, existing.NotAfter); parseErr == nil && time.Now().Before(exp) {
-				return &PinMismatchError{Key: key, DisplayName: displayName, Want: existing.SPKIFingerprint, Got: fingerprint}
-			}
-		}
+	var prior *PinnedDevice
+	if existing, ok := s.devices[key]; ok {
+		prior = &existing
 	}
-
-	unchanged := pinned && !renamed &&
-		existing.SPKIFingerprint == fingerprint &&
-		existing.NotAfter == notAfter &&
-		existing.DisplayName == displayName
-
-	s.devices[key] = PinnedDevice{
-		SPKIFingerprint: fingerprint,
-		DisplayName:     displayName,
-		LastSeen:        time.Now().UTC().Format(time.RFC3339),
-		NotAfter:        notAfter,
+	next, persist, err := devices.ComparePin(key, displayName, leaf.RawSubjectPublicKeyInfo, leaf.NotAfter, prior, time.Now())
+	if err != nil {
+		return err
 	}
-	if unchanged {
+	s.devices[key] = next
+	if !persist && !renamed {
 		return nil
 	}
 	s.dirty[key] = true
@@ -280,6 +233,5 @@ func (s *Store) flush() error {
 }
 
 func spkiFingerprint(cert *x509.Certificate) string {
-	sum := sha256.Sum256(cert.RawSubjectPublicKeyInfo)
-	return "sha256:" + hex.EncodeToString(sum[:])
+	return devices.SPKIFingerprint(cert.RawSubjectPublicKeyInfo)
 }
