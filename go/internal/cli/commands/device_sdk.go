@@ -159,7 +159,7 @@ func dialAgentLadderWithCerts(ctx context.Context, target dialTarget, allCerts [
 	}
 	result := devices.Dial(ctx, deviceConnectorFn(allCerts, pins), coreTarget, sdkCredentials(allCerts), options)
 	if result.Connection != nil {
-		return result.Connection.(*deviceConnection).AgentConnection, nil, nil
+		return result.Connection.(*deviceConnection).AgentConnection, result.LastMTLSError, nil
 	}
 	var refusal *devices.IdentityRefusalError
 	if errors.As(result.Err, &refusal) {
