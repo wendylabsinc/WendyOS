@@ -153,6 +153,9 @@ func TestConnectionRecoveryDiagnosesStoredCredentialsBeforeFiltering(t *testing.
 // Use the agent's real interceptor: an unrestricted certificate can complete
 // TLS, then fail the stricter clientAuth check on the version RPC.
 func TestConnectionRecoveryRetainsClientAuthRejection(t *testing.T) {
+	// Recovery does not exercise session persistence. Background ticket writes
+	// must not outlive the fixture's temporary credential directory.
+	t.Setenv("WENDY_TLS_SESSION_STORE", "off")
 	for _, extraCredential := range []bool{false, true} {
 		name := "closed adjacent port"
 		if extraCredential {
