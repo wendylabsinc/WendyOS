@@ -9,6 +9,11 @@ type DeviceIdentity struct {
 	TenantUUID string
 	EntityType string
 	EntityID   string
+	// Principal is the full SPIFFE URI when known. Hosts must compare it
+	// exactly when non-empty, preserving the principal kind and complete path.
+	// Matching TenantUUID/EntityType/EntityID alone is insufficient: device/<id>
+	// and service/asset-<id> can project to the same legacy asset identity.
+	Principal string
 }
 
 // DeviceConnectRequest describes one connection attempt, never a retry policy.
@@ -46,7 +51,8 @@ type DeviceConnection interface {
 // sockets, TLS, certificate verification, pin persistence and session caching.
 // It must be safe for concurrent attempts, honor cancellation, and neither
 // retry nor select another endpoint or credential. TLS connections must verify
-// Expected (when present) and the host's pin policy before accepting any RPC.
+// Expected (including its exact Principal when non-empty) and the host's pin
+// policy before accepting any RPC.
 // A nil error transfers connection ownership to Core, including lazy dialers.
 type DeviceConnector interface {
 	ConnectDevice(context.Context, DeviceConnectRequest) (DeviceConnection, error)
