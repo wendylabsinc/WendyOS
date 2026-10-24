@@ -7,6 +7,7 @@ package main
 import "C"
 
 import "github.com/wendylabsinc/WendyOS/go/wendy-core/core"
+import _ "github.com/wendylabsinc/WendyOS/go/wendy-core/platform/cbridge"
 
 //export WendyHelloWorld
 func WendyHelloWorld() C.int32_t {

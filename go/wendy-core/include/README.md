@@ -7,7 +7,7 @@
 ```
 
 - `WendyCore/WendyCore.h`: implemented upper binding-facing contract, currently only `WendyHelloWorld()`.
-- `WendyCore/WendyPlatform.h`: reserved lower platform-provider SPI header; no capabilities, runtime objects or registration functions are declared yet.
+- `WendyCore/WendyPlatform.h`: implemented lower platform-provider SPI: host registration, signing, serialized RPCs, asynchronous completion, cancellation and demand-driven server streams.
 
 The two boundaries remain separate even though both ship with Wendy Core. Structured contract schemas live in `proto/`; ownership and behavior are documented in `documentation/`. Subsystem/provider headers can be added when real contracts exist, not speculative operations.
 

@@ -124,7 +124,7 @@ JavaScript has one npm package, a shared public ESM interface and TypeScript dec
 
 ### Lower boundary: native capabilities
 
-Public C/C++ headers use the conventional `include/` root. `include/WendyCore/WendyCore.h` declares the upper API. `include/WendyCore/WendyPlatform.h` reserves the lower provider contract but deliberately declares no capabilities or registration API yet. Private headers remain beside implementation code. Both public boundaries are covered by Core compatibility guarantees.
+Public C/C++ headers use the conventional `include/` root. `include/WendyCore/WendyCore.h` declares the upper API. `include/WendyCore/WendyPlatform.h` declares the lower host-provider contract for signing and serialized RPC transport, including registration, cancellation and demand-driven streams. Private headers remain beside implementation code. Both public boundaries are covered by Core compatibility guarantees.
 
 Platform adapters are included components of the `wendy-core` release; living in the same repository does not collapse their boundary. Builds include only the necessary adapters/capabilities. Platform adapters expose narrow capabilities rather than product workflows. Examples include hardware-backed keys, native discovery, lifecycle/background execution and native I/O. An Apple adapter may be Swift while serving Python, Kotlin or JavaScript consumers; adapter implementation language is independent of the binding language.
 

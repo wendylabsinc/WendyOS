@@ -2,7 +2,7 @@
 
 `wendy-core` is the independently versioned release unit in `WendyOS/go/wendy-core` for the portable engine, selected modules, public contracts and included platform/subsystem implementations. Go is the chosen engine implementation. Core ships in language-consumable distributions. The ergonomic language SDKs build on them in their own repositories: [Wendy Swift](https://github.com/wendylabsinc/wendy-swift) and [Wendy Go](https://github.com/wendylabsinc/wendy-go); others are not started.
 
-The runnable contract currently exports `WendyHelloWorld()`, returning the integer **42**, and `WendyCoreVersion()`, returning the effective engine version. Go callers use `core.WendyHelloWorld()` and `core.Version()` directly. Every incarnation reaches the same Go engine. No device, Cloud, authentication, or platform-capability behavior is implemented.
+The runnable contract currently exports `WendyHelloWorld()`, returning the integer **42**, and `WendyCoreVersion()`, returning the effective engine version. Go callers use `core.WendyHelloWorld()` and `core.Version()` directly. Every incarnation reaches the same Go engine. Host signing and RPC contracts are in `platform/`; native hosts register C callbacks through `WendyPlatform.h`. No device or Cloud workflow is implemented.
 
 Core remains a nested Go module, `github.com/wendylabsinc/WendyOS/go/wendy-core`.
 Run Core commands from this directory; root-module `go test ./...` skips it.
@@ -23,7 +23,7 @@ core/                    Public Go incarnation; no C round trip
   events/                Proposed domain placeholder
 cmd/wendy-core-native/   Go engine exported through the C bridge
 cmd/wendy-core-wasm/     The same Go engine compiled for browsers
-include/WendyCore/       Public C headers: binding API + reserved platform SPI
+include/WendyCore/       Public C headers: binding API + host-capability SPI
 proto/                   Reserved structured Core schemas
 internal/bridge/         Private native-loader mechanics
 Package.swift            Local SwiftPM manifest of distributions/swift
