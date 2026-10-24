@@ -148,15 +148,19 @@ def native():
     flags = [] if system == "win32" else [f"-Wl,-rpath,{directory}"]
     run(compiler, "-std=c11", "-Iinclude", "examples/c/hello.c", library, *flags, "-o", executable)
     run(executable)
+    host_test = directory / ("host_registration.exe" if system == "win32" else "host_registration")
+    run(compiler, "-std=c11", "-Iinclude", "tests/c/host_registration.c", library, *flags, "-o", host_test)
+    run(host_test)
     goroot = Path(subprocess.check_output(["go", "env", "GOROOT"], text=True).strip())
     copy(go_license(goroot), directory / "LICENSE-Go.txt")
     stage_native(target, directory)
 
 
 def swift_headers(directory):
-    # The canonical public header, exposed to Swift as the CWendyCore module.
-    copy(ROOT / "include/WendyCore/WendyCore.h", directory / "WendyCore.h")
-    (directory / "module.modulemap").write_text('module CWendyCore {\n    header "WendyCore.h"\n    export *\n}\n')
+    # Both canonical boundaries are available to native Swift hosts.
+    for name in ("WendyCore.h", "WendyPlatform.h"):
+        copy(ROOT / "include/WendyCore" / name, directory / name)
+    (directory / "module.modulemap").write_text('module CWendyCore {\n    header "WendyCore.h"\n    header "WendyPlatform.h"\n    export *\n}\n')
 
 
 def swift_notices(directory, go_license_file):
