@@ -4,9 +4,11 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/proto/gen/cloudpb"
+	cloudpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
 )
 
 // seedPinsFromCloudAssets records the org's asset roster as cloud-sourced pins.
@@ -80,6 +82,45 @@ func seedPinsFromAssetsBestEffort(auth *config.AuthConfig, assets []*cloudpb.Ass
 	if err := seedPinsFromCloudAssets(assets, orgID, auth.CloudGRPC); err != nil {
 		debugPinSeed("seeding cloud pins for org %d failed: %v", orgID, err)
 	}
+}
+
+// The UUID roster has the same authority as the legacy roster. Without this
+// refresh, switching to a new Cloud session leaves numeric hostname pins from
+// the old Cloud in place even after the new roster identifies those devices.
+// Only the authenticated tenant's named assets can update these bindings.
+func seedPinsFromCloudAssetsV2(auth *config.AuthConfig, assets []*cloudpbv2.Asset) error {
+	if auth == nil || auth.CloudGRPC == "" || len(auth.Certificates) == 0 {
+		return nil
+	}
+	tenant := auth.Certificates[0].TenantUUID()
+	if tenant == "" {
+		return nil
+	}
+	pins := make(map[string]config.DevicePin)
+	for _, asset := range assets {
+		if strings.TrimSpace(asset.GetName()) == "" || asset.GetId() == "" || asset.GetOrganizationId() != tenant {
+			continue
+		}
+		identity := cloudDiscoveryIdentity(auth, cloudDiscoveryDevice{v2: asset, key: asset.GetId()})
+		pins[asset.GetName()] = config.DevicePin{
+			OrgID: int(identity.OrgID), CloudGRPC: auth.CloudGRPC, AssetID: identity.EntityID,
+			Principal: identity.Principal, Source: config.PinSourceCloud,
+		}
+	}
+	if len(pins) == 0 {
+		return nil
+	}
+	return config.Update(func(cfg *config.Config) (bool, error) {
+		changed := false
+		for name, pin := range pins {
+			if existing, ok := cfg.DevicePinFor(name); ok && existing == pin {
+				continue
+			}
+			cfg.SetDevicePinFrom(name, pin.OrgID, pin.CloudGRPC, pin.AssetID, pin.Principal, pin.Source)
+			changed = true
+		}
+		return changed, nil
+	})
 }
 
 // debugPinSeed logs only when WENDY_TLS_DEBUG is set, matching the CLI's other

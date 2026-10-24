@@ -23,19 +23,21 @@ import (
 
 type discoveryV2Server struct {
 	cloudpbv2.UnimplementedAssetServiceServer
-	t     *testing.T
-	count int32
-	fail  bool
+	t            *testing.T
+	count        int32
+	fail         bool
+	organization string
 }
 
 func discoveryV2Auth(t *testing.T, count int32, fail bool) *config.AuthConfig {
 	t.Helper()
+	t.Setenv("WENDY_CONFIG_DIR", t.TempDir())
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
 	srv := grpc.NewServer()
-	cloudpbv2.RegisterAssetServiceServer(srv, &discoveryV2Server{t: t, count: count, fail: fail})
+	cloudpbv2.RegisterAssetServiceServer(srv, &discoveryV2Server{t: t, count: count, fail: fail, organization: testOperatorTenant})
 	go srv.Serve(lis)
 	t.Cleanup(srv.Stop)
 	auth := oidcEnrollmentAuth(t)
@@ -246,8 +248,9 @@ func (s *discoveryV2Server) ListAssets(req *cloudpbv2.ListAssetsRequest, stream 
 		}
 		if err := stream.Send(&cloudpbv2.ListAssetsResponse{
 			Asset: &cloudpbv2.Asset{
-				Id:   fmt.Sprintf("00000000-0000-4000-8000-%012d", i+1),
-				Name: name, OsType: &osType, Architecture: &arch,
+				Id:             fmt.Sprintf("00000000-0000-4000-8000-%012d", i+1),
+				OrganizationId: s.organization,
+				Name:           name, OsType: &osType, Architecture: &arch,
 			}, Total: s.count,
 		}); err != nil {
 			return err

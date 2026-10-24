@@ -118,6 +118,9 @@ func fetchCloudDiscoveryDevices(ctx context.Context, auth *config.AuthConfig, on
 	if err != nil {
 		return nil, err
 	}
+	if err := seedPinsFromCloudAssetsV2(auth, assets); err != nil {
+		debugPinSeed("seeding UUID cloud pins failed: %v", err)
+	}
 	devices := make([]cloudDiscoveryDevice, 0, len(assets))
 	for _, a := range assets {
 		devices = append(devices, cloudDiscoveryDevice{cloudAssetMetadata: a, v2: a, key: a.GetId()})
