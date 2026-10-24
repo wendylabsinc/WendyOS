@@ -135,15 +135,13 @@ struct DeviceSettingsView: View {
                 }
             }.frame(maxWidth: .infinity, maxHeight: .infinity)
             .navigationTitle("Wendy")
+            .focusedSceneValue(\.desktopBack, selectedPage == nil ? nil : { selectedPage = nil })
             #else
             settingsMenu
             #endif
         }
         .task(id: session) { await refresh() }
         .focusedSceneValue(\.devicePaneRefresh, PaneRefreshAction(enabled: !loading && !saving, perform: { Task { await refresh() } }))
-        .sheet(isPresented: $showingMeshGraph) {
-            if let snapshot { MeshGraphView(topology: snapshot.topology, deviceName: deviceName) }
-        }
         .sheet(item: $joining) { target in
             WiFiJoinSheet(session: session, deviceName: deviceName, network: target.network) {
                 notice = "Wi-Fi connection requested. Checking the device’s connection…"
@@ -315,6 +313,9 @@ struct DeviceSettingsView: View {
             }
         }.formStyle(.grouped).navigationTitle("Wendy Mesh")
             .mobileRefreshable { await refresh() }
+            .sheet(isPresented: $showingMeshGraph) {
+                MeshGraphView(topology: snapshot.topology, deviceName: deviceName)
+            }
     }
     private func networkLabel(_ network: DeviceWiFiNetwork) -> some View {
         HStack(spacing: 12) {

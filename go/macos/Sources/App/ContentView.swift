@@ -11,6 +11,10 @@ struct ContentView: View {
     @FocusedValue(\.organizationRefresh) private var organizationRefresh
     @FocusedValue(\.devicePaneRefresh) private var devicePaneRefresh
     @FocusedValue(\.fleetRefresh) private var fleetRefresh
+    @State private var columnVisibility: NavigationSplitViewVisibility = .all
+    @FocusState private var searchFocused: Bool
+    @FocusState private var deviceTabsFocused: Bool
+    @State private var deviceListFocusRequest = 0
     @State private var search = ""
     @State private var sidebarSelection: String?
     @State private var deviceSource = "nearby"
@@ -20,7 +24,7 @@ struct ContentView: View {
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
-        NavigationSplitView {
+        NavigationSplitView(columnVisibility: $columnVisibility) {
             VStack(spacing: 0) {
                 VStack(spacing: 2) {
                     sidebarDestination("Organization", icon: "person.2", selected: showingOrganization) {
@@ -36,6 +40,13 @@ struct ContentView: View {
                     HStack(spacing: 5) {
                         Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
                         TextField("Find a device", text: $search).textFieldStyle(.plain)
+                            .focused($searchFocused)
+                            .onSubmit { focusDevices() }
+                            .onKeyPress(.downArrow) { focusDevices(); return .handled }
+                            .onKeyPress(.escape) {
+                                if search.isEmpty { focusDevices() } else { search = "" }
+                                return .handled
+                            }
                         if !search.isEmpty {
                             Button { search = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
                                 .buttonStyle(.plain).accessibilityLabel("Clear search")
@@ -71,7 +82,7 @@ struct ContentView: View {
                     }
                 }
                 .listStyle(.sidebar)
-                .keyboardRowSelection(visibleDevices.map(\.id), selection: $sidebarSelection)
+                .keyboardRowSelection(visibleDevices.map(\.id), selection: $sidebarSelection, focusRequest: deviceListFocusRequest)
                 .onChange(of: sidebarSelection) { _, id in
                     guard let device = visibleDevices.first(where: { $0.id == id }) else { return }
                     showingOrganization = false; showingSites = false
@@ -143,7 +154,7 @@ struct ContentView: View {
                 Button {
                     if showingSites { fleetRefresh?.perform() }
                     else if showingOrganization { organizationRefresh?.perform() }
-                    else if ["campaigns", "pairing", "chat", "data"].contains(tab), let devicePaneRefresh { devicePaneRefresh.perform() }
+                    else if ["campaigns", "pairing", "chat", "data", "settings"].contains(tab), let devicePaneRefresh { devicePaneRefresh.perform() }
                     else {
                         refreshingPane = true
                         Task {
@@ -157,7 +168,7 @@ struct ContentView: View {
                     .help(showingSites ? "Refresh fleet" : showingOrganization ? "Refresh organization" : model.connected != nil ? "Refresh device" : "Refresh devices")
                     .keyboardShortcut("r", modifiers: .command)
                     .disabled(!showingSites && !showingOrganization && model.selection != nil && !model.selectedDeviceReady)
-                    .disabled(showingSites ? fleetRefresh?.enabled != true : showingOrganization ? organizationRefresh?.enabled != true : ["campaigns", "pairing", "chat", "data"].contains(tab) ? devicePaneRefresh?.enabled != true : refreshingPane || model.discovering || !model.initialized)
+                    .disabled(showingSites ? fleetRefresh?.enabled != true : showingOrganization ? organizationRefresh?.enabled != true : ["campaigns", "pairing", "chat", "data", "settings"].contains(tab) ? devicePaneRefresh?.enabled != true : refreshingPane || model.discovering || !model.initialized)
                 Menu {
                     Button("Connect by address") { showingAddress = true }
                     if model.selectedDeviceReady {
@@ -173,7 +184,7 @@ struct ContentView: View {
                 TextField("Hostname or host:port", text: $manualAddress).textFieldStyle(.roundedBorder)
                 HStack {
                     Spacer()
-                    Button("Cancel") { showingAddress = false }
+                    Button("Cancel") { showingAddress = false }.keyboardShortcut(.cancelAction)
                     Button("Connect") {
                         let address = manualAddress.trimmingCharacters(in: .whitespacesAndNewlines)
                         showingAddress = false
@@ -216,6 +227,17 @@ struct ContentView: View {
                 HStack { Spacer(); Button("Done") { errorDetails = nil }.keyboardShortcut(.defaultAction) }
             }.padding(24).frame(width: 640, height: 360)
         }
+        .focusedSceneValue(\.desktopNavigation, DesktopNavigationActions(
+            deviceAvailable: model.selectedDeviceReady,
+            findDevice: { columnVisibility = .all; searchFocused = true },
+            focusDevices: focusDevices,
+            showOrganization: { showingOrganization = true; showingSites = false; sidebarSelection = nil },
+            showSites: { showingSites = true; showingOrganization = false; sidebarSelection = nil },
+            showSource: { source in deviceSource = source; focusDevices() },
+            showPage: showPage,
+            cyclePage: { forward in showPage(DesktopDevicePage.adjacent(to: tab, forward: forward)) },
+            connectByAddress: { showingAddress = true }
+        ))
         .task { await model.start() }
         .onChange(of: deviceSource) { _, source in
             if source == "cloud", model.cloud.isEmpty, model.account?.signedIn == true {
@@ -225,6 +247,20 @@ struct ContentView: View {
         .onChange(of: scenePhase) { _, phase in
             if phase == .active { Task { await model.refreshAccount() } }
         }
+    }
+
+    private func focusDevices() {
+        columnVisibility = .all
+        searchFocused = false
+        deviceListFocusRequest += 1
+    }
+
+    private func showPage(_ page: DesktopDevicePage) {
+        guard model.selectedDeviceReady else { return }
+        showingOrganization = false
+        showingSites = false
+        tab = page.rawValue
+        deviceTabsFocused = true
     }
 
     private func sidebarDestination(_ title: String, icon: String, selected: Bool, action: @escaping () -> Void) -> some View {
@@ -293,7 +329,7 @@ struct ContentView: View {
                     deviceTabs
                 }
             }.padding(.horizontal, 20).padding(.vertical, 12)
-            Divider().padding(.bottom, 12)
+            Divider().padding(.bottom, ["apps", "activity"].contains(tab) ? 0 : 12)
             if model.connectingDevice?.id == device.id {
                 HStack(spacing: 10) {
                     ProgressView().controlSize(.small)
@@ -326,7 +362,7 @@ struct ContentView: View {
         .sheet(isPresented: $showingAppLogs) {
             NavigationStack {
                 DeviceLogsPage(model: model)
-                    .toolbar { Button { showingAppLogs = false } label: { Image(systemName: "xmark") }.accessibilityLabel("Close logs") }
+                    .toolbar { Button { showingAppLogs = false } label: { Image(systemName: "xmark") }.accessibilityLabel("Close logs").keyboardShortcut(.cancelAction) }
             }.frame(minWidth: 640, minHeight: 500)
         }
 
@@ -341,14 +377,11 @@ struct ContentView: View {
 
     private var deviceTabs: some View {
         Picker("Device view", selection: $tab) {
-            Text("Apps").tag("apps")
-            Text("Cameras").tag("cameras")
-            Text("Activity").tag("activity")
-            Text("Campaigns").tag("campaigns")
-            Text("Chat").tag("chat")
-            Text("Data").tag("data")
-            Text("Settings").tag("settings")
+            ForEach(DesktopDevicePage.allCases, id: \.self) { page in
+                Text(page.title).tag(page.rawValue)
+            }
         }.pickerStyle(.segmented).labelsHidden()
+            .focused($deviceTabsFocused)
     }
 
     private var appsPane: some View {

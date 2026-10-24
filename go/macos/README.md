@@ -217,6 +217,21 @@ Organization opens directly to Team. Device access stays in each teammate's
 inspector. The Invitations button opens a sheet for reviewing and revoking links
 or creating a new invitation.
 
+### Keyboard navigation on macOS
+
+The Navigation menu lists the window's keyboard shortcuts. Command-F focuses device
+search. Return or Down Arrow moves from search to the device list; Up and Down Arrow
+select devices. Escape clears search, then returns focus to the list. Command-0
+focuses the list and reveals the sidebar if hidden.
+
+Command-1 through Command-7 open Apps, Cameras, Activity, Campaigns, Chat, Data and
+Settings in that order. Command-Shift-[ and Command-Shift-] cycle device pages.
+Command-[ returns from a settings subpage. Command-Option-1 through Command-Option-4
+reach Nearby, Cloud, Organization and Sites. Command-K opens Connect by Address.
+Escape closes the address dialog, app logs, mesh graph and mesh connection details.
+Navigation commands leave open modal dialogs in place. Command-R refreshes the active
+pane, including device settings.
+
 ### Model library and campaign models
 
 Chat's **Browse models** opens public Hugging Face GGUF search, with Qwen3.8 Flash Next and official Qwen3 0.6B, 1.7B, 4B and NVIDIA Nemotron 3 Nano 4B defaults. File sizes and quantizations come from live repository metadata. The library checks the selected device's available RAM, reported GPU memory and container storage. It ranks starter models with comfortable estimated capacity first, warns about tight/oversized/unknown capacity, and rechecks before a download. Estimates budget weights plus 25% and 4 GiB for a 32,768-token context; they are not measured peak memory. Discrete GPU memory is separate from system RAM; Jetson uses shared memory. Runtime installation reserves an additional 12 GiB of storage in its estimate.

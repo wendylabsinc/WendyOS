@@ -107,75 +107,77 @@ struct ActivityView: View {
     }
 
     private var desktopContent: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: 0) {
             if let snapshot {
-                #if os(iOS)
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 145), spacing: 8)], spacing: 8) {
-                    metrics(snapshot)
-                }
-                if !snapshot.thermals.isEmpty || snapshot.gpus.contains(where: { $0.temperature != nil || $0.power != nil }) {
-                    DisclosureGroup("Temperature & power") {
-                        ScrollView {
-                            VStack(alignment: .leading, spacing: 8) {
-                                ForEach(snapshot.thermals) { zone in
-                                    HStack {
-                                        Text(zone.id).lineLimit(1)
-                                        Spacer()
-                                        Text(String(format: "%.0f°C", zone.temperature)).monospacedDigit()
+                VStack(spacing: 8) {
+                    #if os(iOS)
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 145), spacing: 8)], spacing: 8) {
+                        metrics(snapshot)
+                    }
+                    if !snapshot.thermals.isEmpty || snapshot.gpus.contains(where: { $0.temperature != nil || $0.power != nil }) {
+                        DisclosureGroup("Temperature & power") {
+                            ScrollView {
+                                VStack(alignment: .leading, spacing: 8) {
+                                    ForEach(snapshot.thermals) { zone in
+                                        HStack {
+                                            Text(zone.id).lineLimit(1)
+                                            Spacer()
+                                            Text(String(format: "%.0f°C", zone.temperature)).monospacedDigit()
+                                        }
                                     }
+                                    ForEach(snapshot.gpus) { gpu in
+                                        if let temp = gpu.temperature { Text(gpu.name + " · " + String(format: "%.0f°C", temp)) }
+                                        if let power = gpu.power { Text(gpu.name + " · " + String(format: "%.1f W", power)) }
+                                    }
+                                }.font(.caption).foregroundStyle(.secondary).padding(.top, 8)
+                            }.frame(maxHeight: 120)
+                        }.font(.caption).padding(.horizontal, 8)
+                    }
+                    #else
+                    HStack(alignment: .center, spacing: 16) {
+                    ScrollView(.horizontal) {
+                        HStack(spacing: 12) {
+                            metric("CPU", value: percent(snapshot.cpu), detail: "\(snapshot.cpuCount) logical cores",
+                                   fraction: (snapshot.cpu ?? 0) / 100, color: .blue)
+                            metric("Memory", value: snapshot.hasHost ? bytes(snapshot.memoryUsed) : "—",
+                                   detail: snapshot.hasHost ? "of " + bytes(snapshot.memoryTotal) : "Unavailable",
+                                   fraction: ratio(snapshot.memoryUsed, snapshot.memoryTotal), color: .purple)
+                            metric("Storage", value: snapshot.hasDisk ? bytes(snapshot.diskUsed) : "—",
+                                   detail: snapshot.hasDisk ? "of " + bytes(snapshot.diskTotal) + " · " + snapshot.diskMount : "Unavailable",
+                                   fraction: ratio(snapshot.diskUsed, snapshot.diskTotal), color: .orange)
+                            ForEach(snapshot.gpus) { gpu in
+                                metric("GPU · " + gpu.name, value: percent(gpu.utilization),
+                                       detail: gpu.memoryTotal > 0 ? bytes(gpu.memoryUsed) + " / " + bytes(gpu.memoryTotal) : "Shared system memory",
+                                       fraction: gpu.utilization / 100, color: .green)
+                            }
+                            if let battery = snapshot.battery {
+                                metric("Battery", value: percent(battery.percent), detail: battery.state,
+                                       fraction: battery.percent / 100, color: .green)
+                            }
+                        }
+                    }.scrollIndicators(.hidden)
+                    VStack(alignment: .trailing, spacing: 6) {
+                        Toggle("Live", isOn: $live).toggleStyle(.switch).controlSize(.small).fixedSize()
+                        if let lastUpdated { Text(lastUpdated, style: .time).font(.caption2.monospacedDigit()).foregroundStyle(.secondary) }
+                    }
+                    }
+                    if !snapshot.thermals.isEmpty || snapshot.gpus.contains(where: { $0.temperature != nil || $0.power != nil }) {
+                        ScrollView(.horizontal) {
+                            HStack(spacing: 16) {
+                                ForEach(snapshot.thermals) { zone in
+                                    Label(zone.id + " " + String(format: "%.0f°C", zone.temperature), systemImage: "thermometer.medium")
                                 }
                                 ForEach(snapshot.gpus) { gpu in
-                                    if let temp = gpu.temperature { Text(gpu.name + " · " + String(format: "%.0f°C", temp)) }
-                                    if let power = gpu.power { Text(gpu.name + " · " + String(format: "%.1f W", power)) }
+                                    if let temp = gpu.temperature { Text(gpu.name + " " + String(format: "%.0f°C", temp)) }
+                                    if let power = gpu.power { Text(gpu.name + " " + String(format: "%.1f W", power)) }
                                 }
-                            }.font(.caption).foregroundStyle(.secondary).padding(.top, 8)
-                        }.frame(maxHeight: 120)
-                    }.font(.caption).padding(.horizontal, 8)
-                }
-                #else
-                HStack(alignment: .center, spacing: 16) {
-                ScrollView(.horizontal) {
-                    HStack(spacing: 12) {
-                        metric("CPU", value: percent(snapshot.cpu), detail: "\(snapshot.cpuCount) logical cores",
-                               fraction: (snapshot.cpu ?? 0) / 100, color: .blue)
-                        metric("Memory", value: snapshot.hasHost ? bytes(snapshot.memoryUsed) : "—",
-                               detail: snapshot.hasHost ? "of " + bytes(snapshot.memoryTotal) : "Unavailable",
-                               fraction: ratio(snapshot.memoryUsed, snapshot.memoryTotal), color: .purple)
-                        metric("Storage", value: snapshot.hasDisk ? bytes(snapshot.diskUsed) : "—",
-                               detail: snapshot.hasDisk ? "of " + bytes(snapshot.diskTotal) + " · " + snapshot.diskMount : "Unavailable",
-                               fraction: ratio(snapshot.diskUsed, snapshot.diskTotal), color: .orange)
-                        ForEach(snapshot.gpus) { gpu in
-                            metric("GPU · " + gpu.name, value: percent(gpu.utilization),
-                                   detail: gpu.memoryTotal > 0 ? bytes(gpu.memoryUsed) + " / " + bytes(gpu.memoryTotal) : "Shared system memory",
-                                   fraction: gpu.utilization / 100, color: .green)
-                        }
-                        if let battery = snapshot.battery {
-                            metric("Battery", value: percent(battery.percent), detail: battery.state,
-                                   fraction: battery.percent / 100, color: .green)
-                        }
+                            }.font(.caption).foregroundStyle(.secondary)
+                        }.scrollIndicators(.hidden)
                     }
-                }.scrollIndicators(.hidden)
-                VStack(alignment: .trailing, spacing: 6) {
-                    Toggle("Live", isOn: $live).toggleStyle(.switch).controlSize(.small).fixedSize()
-                    if let lastUpdated { Text(lastUpdated, style: .time).font(.caption2.monospacedDigit()).foregroundStyle(.secondary) }
-                }
-                }
-                if !snapshot.thermals.isEmpty || snapshot.gpus.contains(where: { $0.temperature != nil || $0.power != nil }) {
-                    ScrollView(.horizontal) {
-                        HStack(spacing: 16) {
-                            ForEach(snapshot.thermals) { zone in
-                                Label(zone.id + " " + String(format: "%.0f°C", zone.temperature), systemImage: "thermometer.medium")
-                            }
-                            ForEach(snapshot.gpus) { gpu in
-                                if let temp = gpu.temperature { Text(gpu.name + " " + String(format: "%.0f°C", temp)) }
-                                if let power = gpu.power { Text(gpu.name + " " + String(format: "%.1f W", power)) }
-                            }
-                        }.font(.caption).foregroundStyle(.secondary)
-                    }.scrollIndicators(.hidden)
-                }
-                #endif
-                if let error { FailureNote(message: error) }
-                if !snapshot.diskError.isEmpty { Text("Storage could not refresh. Other readings are current.").font(.caption).foregroundStyle(.secondary).help(snapshot.diskError) }
+                    #endif
+                    if let error { FailureNote(message: error) }
+                    if !snapshot.diskError.isEmpty { Text("Storage could not refresh. Other readings are current.").font(.caption).foregroundStyle(.secondary).help(snapshot.diskError) }
+                }.padding(.horizontal, 20).padding(.vertical, 12)
                 #if os(iOS)
                 List(rows) { row in
                     DisclosureGroup(isExpanded: Binding(get: { selection == row.id }, set: { expanded in
@@ -198,7 +200,7 @@ struct ActivityView: View {
                     }
                 }.listStyle(.plain).refreshable { await refresh() }
                 #else
-                HStack(alignment: .top, spacing: 16) {
+                HStack(alignment: .top, spacing: 0) {
                 Table(rows, selection: $selection, sortOrder: $sortOrder) {
                     TableColumn("App / Service", value: \.name) { row in
                         HStack {
@@ -215,6 +217,7 @@ struct ActivityView: View {
                         }
                     }.width(120)
                 }
+                .tableStyle(.bordered)
                 .keyboardRowSelection(rows.map(\.id), selection: $selection)
                 .contextMenu(forSelectionType: String.self) { ids in
                     if let id = ids.first, let row = snapshot.rows.first(where: { $0.id == id }) {
@@ -247,16 +250,16 @@ struct ActivityView: View {
                             }
                         }
                     }
-                }.frame(width: 230, alignment: .leading).padding(.top, 8)
+                }.frame(width: 230, alignment: .leading).padding(16)
                 }
                 #endif
-                Text("CPU percentages use the whole machine, across all cores.").font(.caption).foregroundStyle(.secondary)
+                Text("CPU percentages use the whole machine, across all cores.").font(.caption).foregroundStyle(.secondary).padding(.vertical, 8)
             } else if let error {
                 FailureView(title: "Could not load activity", error: error) { live = false; Task { await refresh() } }
             } else {
                 ProgressView("Sampling device activity…").frame(maxWidth: .infinity, maxHeight: .infinity)
             }
-        }.padding(.horizontal, 20).padding(.bottom, 10)
+        }
     }
     #if os(iOS)
     private var mobileContent: some View {

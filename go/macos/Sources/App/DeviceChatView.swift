@@ -287,6 +287,17 @@ struct DeviceChatView: View {
                     Button("Refresh models") { Task { await chat.discover() } }
                 } label: { Image(systemName: "ellipsis") }
                     .menuStyle(.borderlessButton).fixedSize().help("Chat options").disabled(chat.streaming)
+                    .accessibilityLabel("Chat options")
+                    .popover(isPresented: $showingConnection, attachmentAnchor: .rect(.bounds), arrowEdge: .top) {
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text("Connection settings").font(.headline)
+                            LabeledContent("Device", value: deviceName)
+                            LabeledContent("Server port") { TextField("11434", text: $chat.port).frame(width: 90) }
+                            Button("Find models") { Task { await chat.discover(); if chat.error == nil { showingConnection = false } } }
+                                .disabled(chat.streaming || chat.loading || chat.portNumber == nil)
+                        }.padding(20).frame(width: 320)
+                            .onExitCommand { showingConnection = false }
+                    }
             }.padding(.horizontal, 20).padding(.bottom, 8)
             #endif
             #if os(macOS)
@@ -396,16 +407,6 @@ struct DeviceChatView: View {
                     .navigationTitle("Connection").navigationBarTitleDisplayMode(.inline)
                     .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Close") { showingConnection = false } } }
                 }.presentationDetents([.medium, .large]).presentationBackground(Color(uiColor: .systemGroupedBackground))
-            }
-            #else
-            .popover(isPresented: $showingConnection) {
-                VStack(alignment: .leading, spacing: 12) {
-                    Text("Connection settings").font(.headline)
-                    LabeledContent("Device", value: deviceName)
-                    LabeledContent("Server port") { TextField("11434", text: $chat.port).frame(width: 90) }
-                    Button("Find models") { Task { await chat.discover(); if chat.error == nil { showingConnection = false } } }
-                        .disabled(chat.streaming || chat.loading || chat.portNumber == nil)
-                }.padding(20).frame(width: 320)
             }
             #endif
             .focusedSceneValue(\.devicePaneRefresh, PaneRefreshAction(enabled: !chat.loading && !chat.streaming, perform: { Task { await chat.discover() } }))

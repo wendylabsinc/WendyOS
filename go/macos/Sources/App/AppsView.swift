@@ -84,7 +84,9 @@ struct AppsView: View {
                 AppDeleteMenu(model: model, app: app.appName)
             }
         }
-        .padding(.horizontal, 16).padding(.bottom, 16)
+        #if os(macOS)
+        .tableStyle(.bordered)
+        #endif
     }
     private func details(_ app: DeviceApp) -> String {
         if !app.services.isEmpty {
@@ -134,12 +136,12 @@ struct AppControlMenu: View {
     }
 }
 
-// Keep row selection and keyboard focus together when an inspector appears.
-// The handler is scoped to the focused list, so text fields and sheets retain
-// their normal arrow-key behavior.
+// Arrow keys belong to the focused list. Selection changes from refreshes or
+// other controls must not pull focus away from text fields and sheets.
 struct KeyboardRowSelection: ViewModifier {
     let ids: [String]
     @Binding var selection: String?
+    var focusRequest: Int = 0
     @FocusState private var focused: Bool
 
     static func next(in ids: [String], selected: String?, down: Bool) -> String? {
@@ -153,7 +155,6 @@ struct KeyboardRowSelection: ViewModifier {
     func body(content: Content) -> some View {
         content
             .focusable()
-            .focusEffectDisabled()
             .focused($focused)
             .simultaneousGesture(TapGesture().onEnded { focused = true })
             .onKeyPress(keys: [.upArrow, .downArrow], phases: [.down, .repeat]) { press in
@@ -161,13 +162,11 @@ struct KeyboardRowSelection: ViewModifier {
                 selection = Self.next(in: ids, selected: selection, down: press.key == .downArrow)
                 return .handled
             }
-            .onChange(of: selection) { _, value in
-                if value != nil { focused = true }
-            }
+            .onChange(of: focusRequest) { _, _ in focused = true }
     }
 }
 extension View {
-    func keyboardRowSelection(_ ids: [String], selection: Binding<String?>) -> some View {
-        modifier(KeyboardRowSelection(ids: ids, selection: selection))
+    func keyboardRowSelection(_ ids: [String], selection: Binding<String?>, focusRequest: Int = 0) -> some View {
+        modifier(KeyboardRowSelection(ids: ids, selection: selection, focusRequest: focusRequest))
     }
 }

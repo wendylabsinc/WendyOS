@@ -152,20 +152,22 @@ private struct CampaignClipsView: View {
     let open: (String) -> Void
     @Environment(\.dismiss) private var dismiss
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(campaign).font(.title2.bold())
-                    Text(error == nil ? "\(clips.count)\(warning.isEmpty ? "" : "+") \(clips.count == 1 && warning.isEmpty ? "clip" : "clips") stored on \(deviceName)" : "Recordings on \(deviceName) are unavailable")
-                        .foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(campaign).font(.title2.bold())
+                        Text(error == nil ? "\(clips.count)\(warning.isEmpty ? "" : "+") \(clips.count == 1 && warning.isEmpty ? "clip" : "clips") stored on \(deviceName)" : "Recordings on \(deviceName) are unavailable")
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    if loading { ProgressView().controlSize(.small) }
+                    Button { Task { await refresh() } } label: { Image(systemName: "arrow.clockwise") }.help("Refresh clips").disabled(loading)
+                    Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)
                 }
-                Spacer()
-                if loading { ProgressView().controlSize(.small) }
-                Button { Task { await refresh() } } label: { Image(systemName: "arrow.clockwise") }.help("Refresh clips").disabled(loading)
-                Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)
-            }
-            if let error { Text(error).font(.callout).foregroundStyle(.orange).textSelection(.enabled) }
-            if !warning.isEmpty { Text(warning).font(.callout).foregroundStyle(.orange) }
+                if let error { Text(error).font(.callout).foregroundStyle(.orange).textSelection(.enabled) }
+                if !warning.isEmpty { Text(warning).font(.callout).foregroundStyle(.orange) }
+            }.padding(20)
             if clips.isEmpty {
                 ContentUnavailableView(error == nil && warning.isEmpty ? "No clips yet" : "Clips unavailable", systemImage: "film.stack",
                                        description: Text("Recordings appear here when this campaign triggers. Clips removed from the device are not included."))
@@ -201,10 +203,10 @@ private struct CampaignClipsView: View {
                     TableColumn("") { clip in
                         Button { open(clip.id) } label: { Label("Open", systemImage: "play.rectangle") }.buttonStyle(.bordered)
                     }.width(80)
-                }
+                }.tableStyle(.bordered)
                 #endif
             }
-        }.padding(20).desktopFrame(width: 760, height: 500)
+        }.desktopFrame(width: 760, height: 500)
     }
 }
 

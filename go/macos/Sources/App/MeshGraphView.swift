@@ -75,7 +75,7 @@ struct MeshGraphView: View {
             #endif
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button { dismiss() } label: { Image(systemName: "xmark") }.accessibilityLabel("Close mesh graph")
+                    Button { dismiss() } label: { Image(systemName: "xmark") }.accessibilityLabel("Close mesh graph").keyboardShortcut(.cancelAction)
                 }
                 ToolbarItem(placement: .primaryAction) {
                     Button { zoom = 1 } label: { Image(systemName: "arrow.up.left.and.arrow.down.right") }.accessibilityLabel("Fit graph")
@@ -88,7 +88,7 @@ struct MeshGraphView: View {
                         #if os(iOS)
                         .navigationBarTitleDisplayMode(.inline)
                         #endif
-                        .toolbar { ToolbarItem(placement: .confirmationAction) { Button { showingDetails = false } label: { Image(systemName: "xmark") }.accessibilityLabel("Close details") } }
+                        .toolbar { ToolbarItem(placement: .confirmationAction) { Button { showingDetails = false } label: { Image(systemName: "xmark") }.accessibilityLabel("Close details").keyboardShortcut(.cancelAction) } }
                 }.desktopFrame(width: 520, height: 500)
                 #if os(iOS)
                 .presentationDetents([.medium, .large])

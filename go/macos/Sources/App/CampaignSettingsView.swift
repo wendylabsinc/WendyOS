@@ -67,9 +67,9 @@ struct CampaignSettingsView: View {
             .navigationBarTitleDisplayMode(.inline)
             #endif
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.disabled(saving) }
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction).disabled(saving) }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") { Task { await save() } }.disabled(draft == nil || draft == original || saving)
+                    Button("Save") { Task { await save() } }.keyboardShortcut(.defaultAction).disabled(draft == nil || draft == original || saving)
                 }
             }
             .disabled(saving)
@@ -82,10 +82,12 @@ struct CampaignSettingsView: View {
     }
     private func durationField(_ title: String, value: Binding<String>) -> some View {
         LabeledContent(title) {
-            TextField("Duration", text: value)
+            TextField(title, text: value, prompt: Text("10s"))
+                .labelsHidden()
+                .lineLimit(1)
                 .multilineTextAlignment(.trailing)
                 .textFieldStyle(.plain)
-                .frame(width: 90)
+                .frame(width: 110)
                 .accessibilityLabel(title)
                 #if os(iOS)
                 .textInputAutocapitalization(.never)

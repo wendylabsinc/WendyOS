@@ -143,7 +143,7 @@ struct CloudManagementView: View {
                 }
                 Spacer()
                 if model.loading || model.saving { ProgressView().controlSize(.small) }
-            }
+            }.padding(.horizontal, 28).padding(.top, 28)
             if model.accounts.isEmpty {
                 ContentUnavailableView {
                     Label("Connect to Wendy Cloud", systemImage: "cloud")
@@ -177,19 +177,19 @@ struct CloudManagementView: View {
                             teammateMenu
                         }
                     }
-                }.disabled(model.saving)
+                }.disabled(model.saving).padding(.horizontal, 28)
                 if let error = model.error {
                     if model.snapshot == nil {
                         FailureView(title: "Could not load organization", error: error) {
                             Task { await model.loadAccounts() }
-                        }
+                        }.padding(.horizontal, 28)
                     } else {
-                        FailureNote(message: error)
+                        FailureNote(message: error).padding(.horizontal, 28)
                     }
                 }
                 if let snapshot = model.snapshot {
                     if !snapshot.permissionsError.isEmpty {
-                        FailureNote(message: snapshot.permissionsError)
+                        FailureNote(message: snapshot.permissionsError).padding(.horizontal, 28)
                     }
                     team(snapshot)
                 } else if model.loading {
@@ -211,7 +211,7 @@ struct CloudManagementView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             }
-        }.padding(28).frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        }.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
     #if os(iOS)
     @ViewBuilder private var mobileContent: some View {
@@ -401,7 +401,11 @@ struct CloudManagementView: View {
                     TableColumn("Role") { m in
                         Text(roleName(m.roleID, s)).foregroundStyle(.secondary)
                     }.width(min: 140, ideal: 180, max: 240)
-                }.mobileListHeight(280).desktopMinimumWidth(330)
+                }
+                    #if os(macOS)
+                    .tableStyle(.bordered)
+                    #endif
+                    .mobileListHeight(280).desktopMinimumWidth(330)
                     .keyboardRowSelection(s.members.map(\.id), selection: $memberID)
                 ScrollView {
                     if let member = s.members.first(where: { $0.id == memberID }) {
@@ -488,17 +492,19 @@ struct CloudManagementView: View {
         }.padding(.vertical, 5)
     }
     private var invitationsSheet: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            HStack {
-                Text("Invitations").font(.title2.bold())
-                Spacer()
-                if model.saving || model.loading { ProgressView().controlSize(.small) }
-                Button("Done") { form = nil }.keyboardShortcut(.cancelAction).disabled(model.saving)
-            }
-            if let error = model.actionError { FailureNote(message: error) }
+        VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 20) {
+                HStack {
+                    Text("Invitations").font(.title2.bold())
+                    Spacer()
+                    if model.saving || model.loading { ProgressView().controlSize(.small) }
+                    Button("Done") { form = nil }.keyboardShortcut(.cancelAction).disabled(model.saving)
+                }
+                if let error = model.actionError { FailureNote(message: error) }
+            }.padding(24)
             if let snapshot = model.snapshot { invitations(snapshot) }
         }
-        .padding(24).desktopFrame(width: 720, height: 460)
+        .desktopFrame(width: 720, height: 460)
         .interactiveDismissDisabled(model.saving)
         .alert(
             "Revoke invitation?",
@@ -532,7 +538,7 @@ struct CloudManagementView: View {
                 invitationLink = ""
                 form = .invitation
             }.disabled(!model.can("invite:create"))
-        }
+        }.padding(.horizontal, 24).padding(.bottom, 20)
         if !s.invitesError.isEmpty {
             FailureView(title: "Could not load invitations", error: s.invitesError) {
                 Task { await model.refresh() }
@@ -556,7 +562,11 @@ struct CloudManagementView: View {
                         !model.can("invite:revoke") || i.state != "Active"
                     )
                 }.width(100)
-            }.keyboardRowSelection(s.invitations.map(\.id), selection: $invitationID)
+            }
+                #if os(macOS)
+                .tableStyle(.bordered)
+                #endif
+                .keyboardRowSelection(s.invitations.map(\.id), selection: $invitationID)
         }
     }
     @ViewBuilder private func formView(_ kind: CloudForm) -> some View {
