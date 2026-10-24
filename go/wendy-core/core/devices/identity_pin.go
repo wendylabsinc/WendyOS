@@ -141,3 +141,43 @@ func (c *HostPins) SetDevicePin(hostname string, orgID int, cloudGRPC, assetID, 
 func (c *HostPins) ClearDevicePin(hostname string) {
 	delete(c.DevicePins, normalizePinHost(hostname))
 }
+
+// EvaluateObservedDevicePin also compares complete verified SPIFFE principals.
+// UUID/org-zero identities must retain their tenant boundary even when an old
+// pin lacks an asset field. Legacy positive-org pins retain their adoption rule.
+func (c *HostPins) EvaluateObservedDevicePin(hostname string, orgID int, cloudGRPC, assetID, principal string) PinVerdict {
+	verdict := c.EvaluateDevicePin(hostname, orgID, cloudGRPC, assetID)
+	if saved, ok := c.DevicePinFor(hostname); ok && saved.Principal != "" && principal != "" && saved.Principal != principal {
+		if orgID == 0 || verdict != PinAdoptAsset {
+			return PinMismatch
+		}
+	}
+	return verdict
+}
+
+// LookupPin chooses the governing pin from host-discovered candidate names,
+// ordered most-specific first. Authenticated Cloud pins outrank LAN pins, but
+// an assetless Cloud pin cannot weaken an incumbent asset constraint. Discovery
+// can find additional pins; it can never discard a pin for the requested name.
+func (c *HostPins) LookupPin(candidateKeys []string) (DevicePin, string, bool) {
+	if c == nil {
+		return DevicePin{}, "", false
+	}
+	var best DevicePin
+	var bestKey string
+	found := false
+	for _, key := range candidateKeys {
+		pin, ok := c.DevicePinFor(key)
+		if !ok {
+			continue
+		}
+		if !found {
+			best, bestKey, found = pin, key, true
+			continue
+		}
+		if best.Source != PinSourceCloud && pin.Source == PinSourceCloud && (pin.AssetID != "" || best.AssetID == "") {
+			best, bestKey = pin, key
+		}
+	}
+	return best, bestKey, found
+}

@@ -4,6 +4,29 @@ import (
 	"testing"
 )
 
+func TestObservedPinRetainsUUIDTenantBoundary(t *testing.T) {
+	for _, asset := range []string{"device", ""} {
+		pins := &HostPins{}
+		pins.SetDevicePin("pi", 0, "api.test:443", asset, "spiffe://wendy.sh/tenant/a/device/pi")
+		if got := pins.EvaluateObservedDevicePin("pi", 0, "api.test:443", "device", "spiffe://wendy.sh/tenant/b/device/pi"); got != PinMismatch {
+			t.Fatalf("different tenant accepted: %v", got)
+		}
+	}
+}
+
+func TestLookupPinSourceDoesNotWeakenAssetConstraint(t *testing.T) {
+	pins := &HostPins{}
+	pins.SetDevicePin("requested", 7, "api.test:443", "42", "")
+	pins.SetDevicePinFrom("alias", 7, "api.test:443", "", "", PinSourceCloud)
+	if pin, key, ok := pins.LookupPin([]string{"requested", "alias"}); !ok || key != "requested" || pin.AssetID != "42" {
+		t.Fatalf("asset constraint lost: %+v %s %v", pin, key, ok)
+	}
+	pins.SetDevicePinFrom("alias", 7, "api.test:443", "43", "", PinSourceCloud)
+	if pin, key, ok := pins.LookupPin([]string{"requested", "alias"}); !ok || key != "alias" || pin.AssetID != "43" {
+		t.Fatalf("Cloud source precedence lost: %+v %s %v", pin, key, ok)
+	}
+}
+
 // TestEvaluateDevicePin covers the WDY-1149 trust anchor: a device hostname is
 // pinned to its (organisation, cloud host, asset). The pin is
 // renewal/re-enrollment tolerant — a routine cert rotation keeps the same
