@@ -21,7 +21,7 @@ import SwiftUI
                 account = accounts.first(where: { $0.active })?.id ?? accounts.first?.id ?? ""
             }
             await loadOrganizations()
-        } catch { self.error = error.localizedDescription }
+        } catch { if !Task.isCancelled { self.error = error.localizedDescription } }
     }
     func loadOrganizations() async {
         generation += 1
@@ -46,7 +46,7 @@ import SwiftUI
             await refresh()
         } catch {
             if request == generation {
-                self.error = error.localizedDescription
+                if !Task.isCancelled { self.error = error.localizedDescription }
                 loading = false
             }
         }
@@ -66,7 +66,7 @@ import SwiftUI
             guard request == generation else { return }
             snapshot = value
             revision += 1
-        } catch { if request == generation { self.error = error.localizedDescription } }
+        } catch { if request == generation { if !Task.isCancelled { self.error = error.localizedDescription } } }
         if request == generation { loading = false }
     }
     func can(_ permission: String) -> Bool {
@@ -85,7 +85,7 @@ import SwiftUI
             await refresh()
             return true
         } catch {
-            actionError = error.localizedDescription
+            if !Task.isCancelled { actionError = error.localizedDescription }
             return false
         }
     }

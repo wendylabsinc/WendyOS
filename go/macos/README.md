@@ -27,6 +27,30 @@ The build produces native binaries for the build Mac. It links `libwendydesktop.
 
 `project.yml` is the source for the checked-in Xcode project. Run `xcodegen generate` from this directory after changing it. The Xcode build phases build Go automatically and serialize concurrent archive builds. The initial build can take several minutes.
 
+## Concurrency
+
+Both apps compile in Swift 6 mode. App and test code must not construct
+unstructured Swift tasks. Every Xcode build runs `Scripts/check-concurrency.py`
+to enforce this rule.
+
+SwiftUI `.task` owns each view's asynchronous work. Synchronous button handlers
+submit actions to `AsyncActions`; its task group cancels and joins those actions
+when the view disappears. State-driven work uses `.task(id:)`. App-level cleanup
+and event polling belong to the persistent menu bar label on macOS and the root
+scene on iOS. Shutdown drains camera cleanup before releasing the Go backend.
+
+Blocking C calls run through `BlockingWork` on dedicated dispatch queues, outside
+Swift's cooperative executor. Cancellation skips queued calls and suppresses
+stale results. A call already executing in C is awaited until it returns, so its
+resources cannot be freed while it still uses them. Explicit stop and close
+operations run even after cancellation. This does not make a blocking Go call
+interruptible unless its Go API provides cancellation.
+
+Delegate and KVO callbacks feed async streams or `AsyncCallback`. Media seeking,
+chat generation, model downloads, and push-registration timeouts run beneath
+structured owners. The concurrency tests cover cancellation, late callbacks,
+action-scope cleanup, and restarting an action scope.
+
 ## Device installation
 
 Choose **Add > Install Wendy on a device**, or use the install button in the empty device view.

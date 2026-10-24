@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct AccountsSettingsView: View {
+    @State private var actions = AsyncActions()
     @ObservedObject var model: AppModel
     @State private var accounts: [SavedAccount] = []
     @State private var error: String?
@@ -18,16 +19,20 @@ struct AccountsSettingsView: View {
     }
 
     var body: some View {
+        actionContent.task { await actions.run() }
+    }
+
+    @ViewBuilder private var actionContent: some View {
         TabView {
             VStack(alignment: .leading, spacing: 16) {
                 HStack {
                     Text("Accounts").font(.title2.weight(.semibold))
                     Spacer()
-                    Button("Refresh", systemImage: "arrow.clockwise") { Task { await refresh() } }.disabled(busy)
+                    Button("Refresh", systemImage: "arrow.clockwise") { actions.submit { await refresh() } }.disabled(busy)
                 }
                 if loading && accounts.isEmpty { ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity) }
                 else if let error, accounts.isEmpty {
-                    FailureView(title: "Could not load accounts", error: error) { Task { await refresh() } }
+                    FailureView(title: "Could not load accounts", error: error) { actions.submit { await refresh() } }
                 } else if accounts.isEmpty {
                     ContentUnavailableView("No Accounts", systemImage: "person.crop.circle", description: Text("Sign in to add your Wendy Cloud account."))
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -36,7 +41,7 @@ struct AccountsSettingsView: View {
                     List(accounts) { entry in
                         Group {
                             #if os(macOS)
-                            Button { Task { await select(entry) } } label: {
+                            Button { actions.submit { await select(entry) } } label: {
                                 accountRow(entry)
                             }
                             .buttonStyle(.plain)
@@ -53,8 +58,8 @@ struct AccountsSettingsView: View {
                 }
                 HStack {
                     Menu("Add Account") {
-                        Button("Wendy Cloud") { Task { await model.signIn() } }
-                        Button("Development Cloud") { Task { await model.signIn(development: true) } }
+                        Button("Wendy Cloud") { actions.submit { await model.signIn() } }
+                        Button("Development Cloud") { actions.submit { await model.signIn(development: true) } }
                     }.disabled(busy)
                     if model.signingIn {
                         ProgressView().controlSize(.small)
@@ -112,6 +117,6 @@ struct AccountsSettingsView: View {
         loading = true
         defer { loading = false }
         do { accounts = try await model.client.accounts(); error = nil }
-        catch { self.error = error.localizedDescription }
+        catch { if !Task.isCancelled { self.error = error.localizedDescription } }
     }
 }

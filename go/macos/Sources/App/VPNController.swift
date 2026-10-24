@@ -132,21 +132,24 @@ final class VPNController: NSObject, ObservableObject, OSSystemExtensionRequestD
     // Requests are submitted on DispatchQueue.main, so delegate callbacks are
     // synchronous main-actor boundaries and cannot race a replacement request.
     nonisolated func requestNeedsUserApproval(_ request: OSSystemExtensionRequest) {
+        let requestID = ObjectIdentifier(request)
         MainActor.assumeIsolated {
-            guard activationRequest === request else { return }
+            guard activationRequest.map(ObjectIdentifier.init) == requestID else { return }
             status = "Waiting for macOS approval"
             setupIssue = "Allow Wendy in System Settings > General > Login Items & Extensions > Network Extensions."
         }
     }
     nonisolated func request(_ request: OSSystemExtensionRequest, didFailWithError error: Error) {
+        let requestID = ObjectIdentifier(request)
         MainActor.assumeIsolated {
-            guard activationRequest === request else { return }
+            guard activationRequest.map(ObjectIdentifier.init) == requestID else { return }
             activation?.finish(.failure(error))
         }
     }
     nonisolated func request(_ request: OSSystemExtensionRequest, didFinishWithResult result: OSSystemExtensionRequest.Result) {
+        let requestID = ObjectIdentifier(request)
         MainActor.assumeIsolated {
-            guard activationRequest === request else { return }
+            guard activationRequest.map(ObjectIdentifier.init) == requestID else { return }
             if result == .completed { setupIssue = nil; activation?.finish(.success(())) }
             else { activation?.finish(.failure(WendyError(message: "Restart your Mac to finish installing the network extension."))) }
         }

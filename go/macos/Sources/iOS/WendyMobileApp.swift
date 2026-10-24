@@ -6,7 +6,12 @@ struct WendyMobileApp: App {
     @UIApplicationDelegateAdaptor(MobileAppDelegate.self) private var delegate
     @StateObject private var model = AppModel()
     var body: some Scene {
-        WindowGroup { MobileRootView().environmentObject(model) }
+        WindowGroup {
+            MobileRootView().environmentObject(model)
+                .task { await model.cleanup.run() }
+                .task(id: model.initialized) { await model.observeEvents() }
+                .task(id: model.account) { await PushNotifications.shared.useAccount(model.account) }
+        }
     }
 }
 

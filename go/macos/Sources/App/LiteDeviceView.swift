@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct LiteDeviceView: View {
+    @State private var actions = AsyncActions()
     @ObservedObject var model: AppModel
     @State private var page = "Cameras"
     @State private var info: DeviceInfoSnapshot?
@@ -12,6 +13,10 @@ struct LiteDeviceView: View {
     @State private var confirmWiFi = false
 
     var body: some View {
+        actionContent.task { await actions.run() }
+    }
+
+    @ViewBuilder private var actionContent: some View {
         VStack(spacing: 16) {
             Picker("Wendy Lite view", selection: $page) {
                 ForEach(["Cameras", "Device", "Wi-Fi", "Logs", "Settings"], id: \.self) { Text($0) }
@@ -31,10 +36,10 @@ struct LiteDeviceView: View {
         }
         .task(id: model.deviceSession) { await refreshInfo() }
         .focusedSceneValue(\.devicePaneRefresh, PaneRefreshAction(enabled: !saving, perform: {
-            Task { await refreshInfo(); await model.refreshDetails() }
+            actions.submit { await refreshInfo(); await model.refreshDetails() }
         }))
         .confirmationDialog("Save Wi-Fi and restart?", isPresented: $confirmWiFi, titleVisibility: .visible) {
-            Button("Save and restart") { Task { await saveWiFi() } }
+            Button("Save and restart") { actions.submit { await saveWiFi() } }
         } message: {
             Text("This replaces the device's saved Wi-Fi networks with \(ssid) and restarts it. Camera and console streams will disconnect.")
         }
@@ -50,7 +55,7 @@ struct LiteDeviceView: View {
                     LabeledContent("Firmware", value: info.osVersion)
                 } else if error == nil { ProgressView("Loading device information…") }
                 if let error { FailureNote(message: error) }
-                Button("Refresh") { Task { await refreshInfo() } }
+                Button("Refresh") { actions.submit { await refreshInfo() } }
                 Button("Reconnect") { reconnect() }
             }
             Section {
@@ -77,11 +82,11 @@ struct LiteDeviceView: View {
 
     private func reconnect() {
         guard let device = model.connected else { return }
-        Task { await model.connect(device, force: true) }
+        actions.submit { await model.connect(device, force: true) }
     }
     private func refreshInfo() async {
         do { info = try await GoClient.shared.deviceInfo(session: model.deviceSession); error = nil }
-        catch { self.error = error.localizedDescription }
+        catch { if !Task.isCancelled { self.error = error.localizedDescription } }
     }
     private func saveWiFi() async {
         saving = true; error = nil; notice = nil
@@ -90,6 +95,6 @@ struct LiteDeviceView: View {
             try await GoClient.shared.joinWiFi(session: model.deviceSession, ssid: ssid, password: password, security: 0, hidden: false)
             password = ""
             notice = "Wi-Fi configuration sent. Reconnect after the device restarts."
-        } catch { self.error = error.localizedDescription }
+        } catch { if !Task.isCancelled { self.error = error.localizedDescription } }
     }
 }

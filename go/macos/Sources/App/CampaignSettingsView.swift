@@ -25,6 +25,7 @@ extension GoClient {
     }
 }
 struct CampaignSettingsView: View {
+    @State private var actions = AsyncActions()
     let session: UInt64
     let name: String
     let saved: () -> Void
@@ -34,6 +35,10 @@ struct CampaignSettingsView: View {
     @State private var error: String?
     @State private var saving = false
     var body: some View {
+        actionContent.task { await actions.run() }
+    }
+
+    @ViewBuilder private var actionContent: some View {
         NavigationStack {
             Form {
                 if draft != nil {
@@ -69,7 +74,7 @@ struct CampaignSettingsView: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction).disabled(saving) }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") { Task { await save() } }.keyboardShortcut(.defaultAction).disabled(draft == nil || draft == original || saving)
+                    Button("Save") { actions.submit { await save() } }.keyboardShortcut(.defaultAction).disabled(draft == nil || draft == original || saving)
                 }
             }
             .disabled(saving)
@@ -77,7 +82,7 @@ struct CampaignSettingsView: View {
         }.desktopFrame(width: 480, height: 540).interactiveDismissDisabled(saving)
             .task {
                 do { let value = try await GoClient.shared.campaignSettings(session: session, name: name); draft = value; original = value }
-                catch { self.error = error.localizedDescription }
+                catch { if !Task.isCancelled { self.error = error.localizedDescription } }
             }
     }
     private func durationField(_ title: String, value: Binding<String>) -> some View {
@@ -103,6 +108,6 @@ struct CampaignSettingsView: View {
         guard let draft else { return }
         saving = true; error = nil; defer { saving = false }
         do { try await GoClient.shared.updateCampaignSettings(session: session, draft: draft); saved(); dismiss() }
-        catch { self.error = error.localizedDescription }
+        catch { if !Task.isCancelled { self.error = error.localizedDescription } }
     }
 }

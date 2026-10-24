@@ -260,12 +260,17 @@ extension GoClient {
 }
 
 struct DeviceChatView: View {
+    @State private var actions = AsyncActions()
     let deviceName: String
     @ObservedObject var chat: DeviceChatModel
     @State private var showingLibrary = false
     @State private var showingConnection = false
     private var modelName: String { chat.models.first { $0.id == chat.model }?.displayName ?? ChatModelOption.readableName(chat.model) }
     var body: some View {
+        actionContent.task { await actions.run() }
+    }
+
+    @ViewBuilder private var actionContent: some View {
         VStack(spacing: 0) {
             #if os(iOS)
             HStack(spacing: 12) {
@@ -277,7 +282,7 @@ struct DeviceChatView: View {
                     Divider()
                     Button("Browse models", systemImage: "square.stack.3d.up") { showingLibrary = true }
                     Button("Connection settings", systemImage: "network") { showingConnection = true }
-                    Button("Refresh models", systemImage: "arrow.clockwise") { Task { await chat.discover() } }
+                    Button("Refresh models", systemImage: "arrow.clockwise") { actions.submit { await chat.discover() } }
                 } label: {
                     HStack(spacing: 6) {
                         Text(chat.model.isEmpty ? "Choose a model" : modelName).font(.subheadline.weight(.semibold)).lineLimit(1).truncationMode(.tail)
@@ -300,7 +305,7 @@ struct DeviceChatView: View {
                 Button { chat.clear() } label: { Label("New chat", systemImage: "square.and.pencil") }.help("New chat")
                 Menu {
                     Button("Connection settings") { showingConnection = true }
-                    Button("Refresh models") { Task { await chat.discover() } }
+                    Button("Refresh models") { actions.submit { await chat.discover() } }
                 } label: { Image(systemName: "ellipsis") }
                     .menuStyle(.borderlessButton).fixedSize().help("Chat options").disabled(chat.streaming)
                     .accessibilityLabel("Chat options")
@@ -309,7 +314,7 @@ struct DeviceChatView: View {
                             Text("Connection settings").font(.headline)
                             LabeledContent("Device", value: deviceName)
                             LabeledContent("Server port") { TextField("11434", text: $chat.port).frame(width: 90) }
-                            Button("Find models") { Task { await chat.discover(); if chat.error == nil { showingConnection = false } } }
+                            Button("Find models") { actions.submit { await chat.discover(); if chat.error == nil { showingConnection = false } } }
                                 .disabled(chat.streaming || chat.loading || chat.portNumber == nil)
                         }.padding(20).frame(width: 320)
                             .onExitCommand { showingConnection = false }
@@ -342,7 +347,7 @@ struct DeviceChatView: View {
                         }
                         if let pending = chat.approval {
                             ChatApprovalView(approval: pending, deviceName: deviceName) { allow in
-                                Task { await chat.resolve(pending, allow: allow) }
+                                actions.submit { await chat.resolve(pending, allow: allow) }
                             }
                             .disabled(chat.resolvingApproval)
                             .padding(.horizontal, 16)
@@ -407,7 +412,7 @@ struct DeviceChatView: View {
                         Section("Inference server") {
                             LabeledContent("Device", value: deviceName)
                             TextField("Port", text: $chat.port).keyboardType(.numberPad)
-                            Button("Find models") { Task { await chat.discover(); if chat.error == nil { showingConnection = false } } }
+                            Button("Find models") { actions.submit { await chat.discover(); if chat.error == nil { showingConnection = false } } }
                                 .disabled(chat.streaming || chat.loading || chat.portNumber == nil)
                         }
                         if !chat.model.isEmpty { Section("Model ID") { Text(chat.model).font(.caption.monospaced()).textSelection(.enabled) } }
@@ -418,7 +423,7 @@ struct DeviceChatView: View {
                 }.presentationDetents([.medium, .large]).presentationBackground(Color(uiColor: .systemGroupedBackground))
             }
             #endif
-            .focusedSceneValue(\.devicePaneRefresh, PaneRefreshAction(enabled: !chat.loading && !chat.streaming, perform: { Task { await chat.discover() } }))
+            .focusedSceneValue(\.devicePaneRefresh, PaneRefreshAction(enabled: !chat.loading && !chat.streaming, perform: { actions.submit { await chat.discover() } }))
     }
 
     private var connectionNotice: some View {
@@ -435,7 +440,7 @@ struct DeviceChatView: View {
                      : "The request could not finish. Check the connection to \(deviceName) and try again. Your conversation is still here.")
                     .font(.callout).fixedSize(horizontal: false, vertical: true)
                 HStack(spacing: 12) {
-                    Button(chat.loading ? "Checking…" : "Retry connection") { Task { await chat.discover() } }
+                    Button(chat.loading ? "Checking…" : "Retry connection") { actions.submit { await chat.discover() } }
                         .buttonStyle(.bordered).disabled(chat.loading || chat.streaming)
                     Button("Connection settings") { showingConnection = true }
                         .buttonStyle(.borderless).disabled(chat.streaming)

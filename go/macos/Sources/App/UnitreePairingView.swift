@@ -4,6 +4,7 @@ import SwiftUI
 struct UnitreeControlSession { let handle: UInt64; let name: String }
 
 struct UnitreePairingView: View {
+    @State private var actions = AsyncActions()
     let session: UInt64
     let deviceName: String
     var initialRobot: UnitreeRobot?
@@ -15,12 +16,16 @@ struct UnitreePairingView: View {
     @State private var forgetting: UnitreeRobot?
     @State private var control: UnitreeControlSession?
     var body: some View {
+        actionContent.task { await actions.run() }
+    }
+
+    @ViewBuilder private var actionContent: some View {
         VStack(alignment: .leading, spacing: 18) {
             if let editing {
                 UnitreeConnectionForm(session: session, deviceName: deviceName, robot: editing, cancel: { self.editing = nil }) { handle, name in
                     self.editing = nil
                     if handle != 0 { control = UnitreeControlSession(handle: handle, name: name) }
-                    else { Task { await refresh() } }
+                    else { actions.submit { await refresh() } }
                 }.id(editing.id)
             } else if let control {
                 UnitreeRemoteControlView(connection: control) { self.control = nil }
@@ -33,7 +38,7 @@ struct UnitreePairingView: View {
                     }
                     HStack {
                         Button("Enter IP address") { editing = .manual }
-                        Button("Scan again") { Task { await refresh() } }.disabled(loading)
+                        Button("Scan again") { actions.submit { await refresh() } }.disabled(loading)
                         if loading { ProgressView().controlSize(.small) }
                     }
                 }
@@ -65,11 +70,11 @@ struct UnitreePairingView: View {
         .padding(24)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .task(id: session) { if let initialRobot { robots = [initialRobot]; editing = initialRobot }; await refresh() }
-        .focusedSceneValue(\.devicePaneRefresh, PaneRefreshAction(enabled: !loading && control == nil && editing == nil, perform: { Task { await refresh() } }))
+        .focusedSceneValue(\.devicePaneRefresh, PaneRefreshAction(enabled: !loading && control == nil && editing == nil, perform: { actions.submit { await refresh() } }))
         .alert("Forget Unitree pairing?", isPresented: Binding(get: { forgetting != nil }, set: { if !$0 { forgetting = nil } }), presenting: forgetting) { robot in
             Button("Cancel", role: .cancel) {}
             Button("Forget", role: .destructive) {
-                Task {
+                actions.submit {
                     do { try await UnitreeClient.shared.forget(session: session, serial: robot.serial); await refresh() }
                     catch { self.error = error.localizedDescription }
                 }
@@ -173,6 +178,7 @@ private struct UnitreeConnectionForm: View {
 }
 
 private struct UnitreeRemoteControlView: View {
+    @State private var actions = AsyncActions()
     let connection: UnitreeControlSession
     let disconnected: () -> Void
     @Environment(\.scenePhase) private var scenePhase
@@ -184,6 +190,10 @@ private struct UnitreeRemoteControlView: View {
         _motion = StateObject(wrappedValue: UnitreeMotionDriver(handle: connection.handle))
     }
     var body: some View {
+        actionContent.task { await actions.run() }
+    }
+
+    @ViewBuilder private var actionContent: some View {
         VStack(spacing: 12) {
             HStack {
                 VStack(alignment: .leading, spacing: 6) {
@@ -226,9 +236,12 @@ private struct UnitreeRemoteControlView: View {
             if motion == UnitreeMotion() { stop() }
             else { startMovement("Keyboard", motion: motion) }
         }, stop: { motion.stop(disable: true) }, suspend: { stop() }).frame(width: 0, height: 0))
-        .task { await motion.run() }
+        .task {
+            await motion.run()
+            try? await UnitreeClient.shared.close(handle: connection.handle)
+        }
         .onChange(of: scenePhase) { _, phase in if phase != .active { stop() } }
-        .onDisappear { motion.stop(); Task { try? await UnitreeClient.shared.close(handle: connection.handle) } }
+        .onDisappear { motion.stop() }
     }
     private func hold(_ title: String, icon: String, forward: Double = 0, lateral: Double = 0, yaw: Double = 0) -> some View {
         Label(title, systemImage: icon).frame(width: 110, height: 34)
@@ -251,7 +264,7 @@ private struct UnitreeRemoteControlView: View {
     private func stop() { motion.stop() }
     private func close() {
         closing = true; motion.stop(disable: true)
-        Task {
+        actions.submit {
             do { try await UnitreeClient.shared.close(handle: connection.handle); disconnected() }
             catch { motion.error = "Disconnected, but Stop could not be confirmed. Use the physical remote."; closing = false }
         }

@@ -32,8 +32,7 @@ final class PushNotifications: NSObject, ObservableObject, UNUserNotificationCen
     private var account: CloudAccount?
     private var token: Data?
     private var generation = 0
-    private var registration: Task<Void, Never>?
-    private var timeout: Task<Void, Never>?
+    private var registration: AsyncCallback<Data>?
     private var preferenceKey: String? {
         guard let account, account.signedIn else { return nil }
         return "pushNotifications." + account.cloud + "." + account.context + "." + account.email
@@ -49,7 +48,7 @@ final class PushNotifications: NSObject, ObservableObject, UNUserNotificationCen
         account = next
         guard previousIdentity != preferenceKey else { return }
         generation += 1
-        registration?.cancel(); timeout?.cancel()
+        registration?.finish(.failure(CancellationError())); registration = nil
         enabled = false; busy = false; failure = nil
         status = "Enable notifications to receive Wendy Cloud alerts here."
         guard let key = preferenceKey else { status = "Sign in to receive Cloud notifications."; return }
@@ -68,9 +67,10 @@ final class PushNotifications: NSObject, ObservableObject, UNUserNotificationCen
     }
 
     func enable(requestPermission: Bool = true) async {
-        guard !busy, let key = preferenceKey else { return }
+        guard !busy, !enabled, let account, let key = preferenceKey else { return }
         busy = true; failure = nil
         let current = generation
+        defer { if current == generation { busy = false; registration = nil } }
         do {
             let center = UNUserNotificationCenter.current()
             var settings = await center.notificationSettings()
@@ -78,6 +78,7 @@ final class PushNotifications: NSObject, ObservableObject, UNUserNotificationCen
                 _ = try await center.requestAuthorization(options: [.alert, .sound, .badge])
                 settings = await center.notificationSettings()
             }
+            try Task.checkCancellation()
             guard current == generation else { return }
             denied = settings.authorizationStatus == .denied
             guard settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional else {
@@ -87,40 +88,41 @@ final class PushNotifications: NSObject, ObservableObject, UNUserNotificationCen
             }
             UserDefaults.standard.set(true, forKey: key)
             status = "Registering with Apple…"
+            let callback = AsyncCallback<Data>()
+            registration = callback
             #if os(macOS)
             NSApplication.shared.registerForRemoteNotifications()
             #else
             UIApplication.shared.registerForRemoteNotifications()
             #endif
-            timeout?.cancel()
-            timeout = Task { [weak self] in
-                try? await Task.sleep(for: .seconds(30))
-                guard !Task.isCancelled, let self, current == self.generation, self.busy else { return }
-                self.didFail("Apple push registration timed out. Try again when connected to the internet.")
+            let token = try await withThrowingTaskGroup(of: Data.self) { group in
+                group.addTask { try await callback.value() }
+                group.addTask {
+                    try await Task.sleep(for: .seconds(30))
+                    throw WendyError(message: "Apple push registration timed out. Try again when connected to the internet.")
+                }
+                defer { group.cancelAll() }
+                return try await group.next()!
             }
-        } catch { if current == generation { didFail(error.localizedDescription) } }
+            try Task.checkCancellation()
+            guard current == generation else { return }
+            status = "Registering with Wendy Cloud…"
+            let environment = try Self.pushEnvironment()
+            guard let topic = Bundle.main.bundleIdentifier else { throw WendyError(message: "Missing application identity.") }
+            try await GoClient.shared.pushRegistration(account: account.context, token: token, topic: topic, environment: environment, enabled: true)
+            guard !Task.isCancelled, current == generation else { return }
+            enabled = true; failure = nil
+            status = "Receiving Cloud notifications for \(account.email.isEmpty ? account.context : account.email)."
+        } catch { if !Task.isCancelled && current == generation { didFail(error.localizedDescription) } }
     }
 
     func didRegister(_ token: Data) {
         self.token = token
-        guard let account, let key = preferenceKey, UserDefaults.standard.bool(forKey: key) else { busy = false; return }
-        registration?.cancel()
-        let current = generation
-        status = "Registering with Wendy Cloud…"
-        registration = Task {
-            do {
-                let environment = try Self.pushEnvironment()
-                guard let topic = Bundle.main.bundleIdentifier else { throw WendyError(message: "Missing application identity.") }
-                try await GoClient.shared.pushRegistration(account: account.context, token: token, topic: topic, environment: environment, enabled: true)
-                guard !Task.isCancelled, current == generation else { return }
-                timeout?.cancel(); busy = false; enabled = true; failure = nil
-                status = "Receiving Cloud notifications for \(account.email.isEmpty ? account.context : account.email)."
-            } catch { if !Task.isCancelled && current == generation { didFail(error.localizedDescription) } }
-        }
+        registration?.finish(.success(token))
     }
 
     func didFail(_ message: String) {
-        timeout?.cancel()
+        registration?.finish(.failure(WendyError(message: message)))
         busy = false; enabled = false
         status = "Cloud notifications are not registered."
         failure = message
@@ -159,10 +161,15 @@ final class PushNotifications: NSObject, ObservableObject, UNUserNotificationCen
 }
 
 struct NotificationReceivingView: View {
+    @State private var actions = AsyncActions()
     @EnvironmentObject private var model: AppModel
     @Environment(\.scenePhase) private var scenePhase
     @ObservedObject private var push = PushNotifications.shared
     var body: some View {
+        actionContent.task { await actions.run() }
+    }
+
+    @ViewBuilder private var actionContent: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text(push.status).font(.callout)
             if let failure = push.failure { Text(failure).font(.caption).foregroundStyle(.secondary).textSelection(.enabled) }
@@ -171,10 +178,10 @@ struct NotificationReceivingView: View {
             } else if push.denied {
                 Button("Open notification settings") { openSystemSettings() }
             } else if push.enabled {
-                Button("Turn off on this device") { Task { await push.disable() } }
+                Button("Turn off on this device") { actions.submit { await push.disable() } }
             } else {
                 Button("Enable notifications on this device") {
-                    Task { await push.useAccount(model.account); await push.enable() }
+                    actions.submit { await push.useAccount(model.account); await push.enable() }
                 }.disabled(model.account?.signedIn != true)
             }
         }.task { await push.useAccount(model.account); await push.refreshAuthorization() }

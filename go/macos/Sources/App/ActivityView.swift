@@ -65,6 +65,7 @@ struct ResourcePort: Identifiable {
 }
 
 struct ActivityView: View {
+    @State private var actions = AsyncActions()
     @ObservedObject var model: AppModel
     @State private var snapshot: ResourceSnapshot?
     @State private var error: String?
@@ -87,6 +88,10 @@ struct ActivityView: View {
             }
     }
     var body: some View {
+        actionContent.task { await actions.run() }
+    }
+
+    @ViewBuilder private var actionContent: some View {
         Group {
             #if os(iOS)
             mobileContent
@@ -186,7 +191,7 @@ struct ActivityView: View {
                     })) {
                         if let portsError { FailureNote(message: portsError) }
                         ForEach(ports) { port in Text("\(port.protocolName.uppercased()) \(port.address):\(port.port)").font(.caption.monospaced()) }
-                        AppControlMenu(model: model, app: row.app, state: row.state)
+                        AppControlMenu(actions: actions, model: model, app: row.app, state: row.state)
                     } label: {
                         VStack(alignment: .leading, spacing: 6) {
                             Text(row.name).font(.subheadline.weight(.medium))
@@ -222,7 +227,7 @@ struct ActivityView: View {
                 .contextMenu(forSelectionType: String.self) { ids in
                     if let id = ids.first, let row = snapshot.rows.first(where: { $0.id == id }) {
                         let state = snapshot.rows.first(where: { $0.id == row.app })?.state ?? row.state
-                        AppControlMenu(model: model, app: row.app, state: state)
+                        AppControlMenu(actions: actions, model: model, app: row.app, state: state)
                         Divider()
                         AppDeleteMenu(model: model, app: row.app)
                     }
@@ -255,7 +260,7 @@ struct ActivityView: View {
                 #endif
                 Text("CPU percentages use the whole machine, across all cores.").font(.caption).foregroundStyle(.secondary).padding(.vertical, 8)
             } else if let error {
-                FailureView(title: "Could not load activity", error: error) { live = false; Task { await refresh() } }
+                FailureView(title: "Could not load activity", error: error) { live = false; actions.submit { await refresh() } }
             } else {
                 ProgressView("Sampling device activity…").frame(maxWidth: .infinity, maxHeight: .infinity)
             }
@@ -371,6 +376,7 @@ struct ActivityView: View {
 
 #if os(iOS)
 private struct AppActivityDetail: View {
+    @State private var actions = AsyncActions()
     @ObservedObject var model: AppModel
     let appName: String
     let initialSnapshot: ResourceSnapshot?
@@ -384,6 +390,10 @@ private struct AppActivityDetail: View {
     private var app: DeviceApp? { model.apps.first { $0.appName == appName } }
     private var resource: ResourceSnapshot.Row? { (snapshot ?? initialSnapshot)?.rows.first { !$0.isService && $0.app == appName } }
     var body: some View {
+        actionContent.task { await actions.run() }
+    }
+
+    @ViewBuilder private var actionContent: some View {
         Form {
             Section {
                 Text(appName).font(.headline).textSelection(.enabled)
@@ -416,8 +426,8 @@ private struct AppActivityDetail: View {
             }
             if let app {
                 Section {
-                    if app.hasWebpage { Button("Open app", systemImage: "arrow.up.right.square") { Task { await model.openApp(app) } }.disabled(app.runningState != .running) }
-                    AppControlMenu(model: model, app: appName, state: app.runningState)
+                    if app.hasWebpage { Button("Open app", systemImage: "arrow.up.right.square") { actions.submit { await model.openApp(app) } }.disabled(app.runningState != .running) }
+                    AppControlMenu(actions: actions, model: model, app: appName, state: app.runningState)
                 }
             }
             if let data = snapshot ?? initialSnapshot {

@@ -83,11 +83,16 @@ struct ChatDeviceCardView: View {
     private func bytes(_ value: Int64) -> String { ByteCountFormatter.string(fromByteCount: value, countStyle: .memory) }
 }
 private struct ChatCameraCard: View {
+    @State private var actions = AsyncActions()
     @ObservedObject var feed: CameraFeed
     @ObservedObject var model: AppModel
     @Environment(\.scenePhase) private var scenePhase
     @State private var manuallyPaused = false
     var body: some View {
+        actionContent.task { await actions.run() }
+    }
+
+    @ViewBuilder private var actionContent: some View {
         Color.black
             .aspectRatio(4.0 / 3.0, contentMode: .fit)
             .overlay { CameraDisplayView(decoder: feed.decoder) }
@@ -100,7 +105,7 @@ private struct ChatCameraCard: View {
                     }.frame(maxWidth: .infinity, alignment: .leading)
                     Button {
                         if feed.running { manuallyPaused = true; model.pauseCamera(feed) }
-                        else { manuallyPaused = false; Task { await model.playCamera(feed, inline: true) } }
+                        else { manuallyPaused = false; actions.submit { await model.playCamera(feed, inline: true) } }
                     } label: {
                         Image(systemName: feed.running ? "pause.fill" : "play.fill").frame(width: 44, height: 44).background(.black.opacity(0.5), in: Circle())
                     }.buttonStyle(.plain).accessibilityLabel(feed.running ? "Pause camera" : "Play camera")
@@ -116,7 +121,7 @@ private struct ChatCameraCard: View {
             .onChange(of: scenePhase) { _, phase in
                 if phase != .active { model.pauseCamera(feed) }
                 else if !manuallyPaused && !feed.running {
-                    Task { await model.playCamera(feed, inline: true) }
+                    actions.submit { await model.playCamera(feed, inline: true) }
                 }
             }
     }

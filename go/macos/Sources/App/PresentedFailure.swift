@@ -1,6 +1,8 @@
 import SwiftUI
 
 struct PresentedFailure {
+    private(set) var title: String? = nil
+    private(set) var symbol = "wifi.exclamationmark"
     let message: String
     let details: String
 
@@ -19,8 +21,12 @@ struct PresentedFailure {
         } else if lower.contains("not logged in") || lower.contains("no login") || lower.contains("sign in") || lower.contains("unauthenticated") {
             message = "Sign in to Wendy Cloud, then try again."
         } else if lower.contains("identity changed") || lower.contains("different certificate key") || lower.contains("has no enrolled identity") {
-            message = "This device’s identity has changed. If you reset or re-enrolled it, forget its saved identity and reconnect."
+            title = "Connection blocked"
+            symbol = "exclamationmark.shield"
+            message = "This device does not match the identity saved on this Mac. Check the selected account and refresh Cloud devices, then try again. If you reset or re-enrolled it, forget its saved identity and reconnect."
         } else if lower.contains("pin mismatch") || lower.contains("identity mismatch") || lower.contains("certificate") {
+            title = "Connection blocked"
+            symbol = "exclamationmark.shield"
             message = "Wendy could not verify this device. Check its identity and your sign-in before reconnecting."
         } else if lower.contains("permissiondenied") || lower.contains("permission denied") {
             message = "Your account does not have access to this device. Check the selected organization and try again."
@@ -52,8 +58,8 @@ struct FailureView: View {
         let failure = PresentedFailure(error)
         VStack(spacing: 16) {
             Spacer()
-            Image(systemName: "wifi.exclamationmark").font(.system(size: 42)).foregroundStyle(.tertiary)
-            Text(title).font(.title2.bold())
+            Image(systemName: failure.symbol).font(.system(size: 42)).foregroundStyle(.tertiary)
+            Text(failure.title ?? title).font(.title2.bold())
             Text(failure.message).foregroundStyle(.secondary).multilineTextAlignment(.center).frame(maxWidth: 420)
             Button("Try again", action: retry)
             if let forgetIdentity {

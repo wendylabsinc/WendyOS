@@ -96,6 +96,7 @@ private struct WiFiJoinTarget: Identifiable {
     var network: DeviceWiFiNetwork?
 }
 struct DeviceSettingsView: View {
+    @State private var actions = AsyncActions()
     @EnvironmentObject private var model: AppModel
     let session: UInt64
     let deviceName: String
@@ -118,6 +119,10 @@ struct DeviceSettingsView: View {
     @State private var selectedPage: Page?
 
     var body: some View {
+        actionContent.task { await actions.run() }
+    }
+
+    @ViewBuilder private var actionContent: some View {
         Group {
             #if os(macOS)
             VStack(alignment: .leading, spacing: 0) {
@@ -141,21 +146,21 @@ struct DeviceSettingsView: View {
             #endif
         }
         .task(id: session) { await refresh() }
-        .focusedSceneValue(\.devicePaneRefresh, PaneRefreshAction(enabled: !loading && !saving, perform: { Task { await refresh() } }))
+        .focusedSceneValue(\.devicePaneRefresh, PaneRefreshAction(enabled: !loading && !saving, perform: { actions.submit { await refresh() } }))
         .sheet(item: $joining) { target in
             WiFiJoinSheet(session: session, deviceName: deviceName, network: target.network) {
                 notice = "Wi-Fi connection requested. Checking the device’s connection…"
-                Task { await refresh() }
+                actions.submit { await refresh() }
             }
         }
         .confirmationDialog("Disconnect from Wi-Fi?", isPresented: $disconnecting, titleVisibility: .visible) {
-            Button("Disconnect", role: .destructive) { Task { await perform { try await GoClient.shared.disconnectWiFi(session: session) } } }
+            Button("Disconnect", role: .destructive) { actions.submit { await perform { try await GoClient.shared.disconnectWiFi(session: session) } } }
         } message: { Text("\(deviceName) may become unreachable until it connects through another network.") }
         .confirmationDialog("Forget \(forgetting?.ssid ?? "network")?", isPresented: Binding(get: { forgetting != nil }, set: { if !$0 { forgetting = nil } }), titleVisibility: .visible) {
             if let network = forgetting {
                 Button("Forget network", role: .destructive) {
                     forgetting = nil
-                    Task { await perform { try await GoClient.shared.forgetWiFi(session: session, ssid: network.ssid) } }
+                    actions.submit { await perform { try await GoClient.shared.forgetWiFi(session: session, ssid: network.ssid) } }
                 }
             }
         } message: { Text("The saved Wi-Fi profile will be removed from \(deviceName).") }
@@ -211,7 +216,7 @@ struct DeviceSettingsView: View {
             #endif
     }
     @ViewBuilder private var settingsLoading: some View {
-        if let error { FailureView(title: "Could not load settings", error: error) { Task { await refresh() } } }
+        if let error { FailureView(title: "Could not load settings", error: error) { actions.submit { await refresh() } } }
         else { ProgressView("Loading settings…").frame(maxWidth: .infinity, maxHeight: .infinity) }
     }
     private func settingsLabel(_ title: String, symbol: String, value: String) -> some View {
@@ -281,7 +286,7 @@ struct DeviceSettingsView: View {
         }.formStyle(.grouped).navigationTitle("Wi-Fi")
             .mobileRefreshable { await refresh() }
             #if os(macOS)
-            .toolbar { ToolbarItem(placement: .primaryAction) { Button { Task { await refresh() } } label: { Image(systemName: "arrow.clockwise") }.disabled(loading || saving).accessibilityLabel("Scan for Wi-Fi networks") } }
+            .toolbar { ToolbarItem(placement: .primaryAction) { Button { actions.submit { await refresh() } } label: { Image(systemName: "arrow.clockwise") }.disabled(loading || saving).accessibilityLabel("Scan for Wi-Fi networks") } }
             #endif
     }
     private func meshPage(_ snapshot: DeviceNetworkSettings) -> some View {
@@ -310,7 +315,7 @@ struct DeviceSettingsView: View {
                 }.disabled(saving || !participates)
                 if dirty || saving {
                     Section {
-                        Button("Save changes") { Task { await saveMesh() } }.disabled(saving || loading)
+                        Button("Save changes") { actions.submit { await saveMesh() } }.disabled(saving || loading)
                         Button("Discard changes", role: .cancel) { draft = snapshot.meshConfig }.disabled(saving)
                         if saving { ProgressView() }
                     }
@@ -353,7 +358,7 @@ struct DeviceSettingsView: View {
         saving = true; error = nil; notice = nil
         defer { saving = false }
         do { try await work(); await refresh() }
-        catch { self.error = error.localizedDescription }
+        catch { if !Task.isCancelled { self.error = error.localizedDescription } }
     }
     private func saveMesh() async {
         guard let snapshot else { return }
@@ -364,6 +369,7 @@ struct DeviceSettingsView: View {
 }
 
 private struct WiFiJoinSheet: View {
+    @State private var actions = AsyncActions()
     let session: UInt64
     let deviceName: String
     let network: DeviceWiFiNetwork?
@@ -376,13 +382,17 @@ private struct WiFiJoinSheet: View {
     @State private var saving = false
     @State private var error: String?
     var body: some View {
+        actionContent.task { await actions.run() }
+    }
+
+    @ViewBuilder private var actionContent: some View {
         VStack(spacing: 0) {
             HStack {
                 Button("Cancel") { password = ""; dismiss() }.keyboardShortcut(.cancelAction)
                 Spacer()
                 Text("Join Wi-Fi").font(.headline)
                 Spacer()
-                Button("Join") { Task { await join() } }.keyboardShortcut(.defaultAction)
+                Button("Join") { actions.submit { await join() } }.keyboardShortcut(.defaultAction)
                     .disabled(ssid.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || security == 6)
             }.padding().disabled(saving)
             Form {
@@ -418,7 +428,7 @@ private struct WiFiJoinSheet: View {
         do {
             try await GoClient.shared.joinWiFi(session: session, ssid: ssid, password: password, security: security, hidden: hidden)
             password = ""; joined(); dismiss()
-        } catch { password = ""; self.error = error.localizedDescription }
+        } catch { password = ""; if !Task.isCancelled { self.error = error.localizedDescription } }
     }
 }
 
@@ -449,6 +459,7 @@ extension GoClient {
     }
 }
 private struct DeviceNotificationsView: View {
+    @State private var actions = AsyncActions()
     let session: UInt64
     @State private var permissions: [CampaignNotificationPermission] = []
     @State private var loading = false
@@ -457,18 +468,22 @@ private struct DeviceNotificationsView: View {
     @State private var error: String?
     @State private var pending: NotificationPermissionChange?
     var body: some View {
+        actionContent.task { await actions.run() }
+    }
+
+    @ViewBuilder private var actionContent: some View {
         permissionForm
         #if os(iOS)
         .navigationTitle("Notifications")
         #endif
         .task(id: session) { await refresh() }
         .mobileRefreshable { await refresh() }
-        .focusedSceneValue(\.devicePaneRefresh, PaneRefreshAction(enabled: !loading && !saving, perform: { Task { await refresh() } }))
+        .focusedSceneValue(\.devicePaneRefresh, PaneRefreshAction(enabled: !loading && !saving, perform: { actions.submit { await refresh() } }))
         .alert(pending?.enabled == true ? "Allow notifications?" : "Turn off notifications?", isPresented: Binding(get: { pending != nil }, set: { if !$0 { pending = nil } }), presenting: pending) { change in
             Button("Cancel", role: .cancel) { pending = nil }
             Button(change.enabled ? "Allow notifications" : "Turn off", role: change.enabled ? nil : .destructive) {
                 pending = nil
-                Task { await save(change) }
+                actions.submit { await save(change) }
             }
         } message: { change in
             Text("This changes the Cloud notification permission for “\(change.campaign.name)” across all devices using that campaign in this organization.")
@@ -489,7 +504,7 @@ private struct DeviceNotificationsView: View {
             if let error {
                 Section {
                     FailureNote(message: error)
-                    Button("Try again") { Task { await refresh() } }.disabled(loading || saving)
+                    Button("Try again") { actions.submit { await refresh() } }.disabled(loading || saving)
                 }
             }
             if !permissions.isEmpty {
@@ -529,7 +544,7 @@ private struct DeviceNotificationsView: View {
         do {
             try await GoClient.shared.setCampaignNotifications(session: session, name: change.campaign.name, enabled: change.enabled)
             if let index = permissions.firstIndex(where: { $0.name == change.campaign.name }) { permissions[index].enabled = change.enabled }
-        } catch { self.error = error.localizedDescription }
+        } catch { if !Task.isCancelled { self.error = error.localizedDescription } }
         saving = false
     }
 }

@@ -68,6 +68,7 @@ extension GoClient {
 }
 
 struct SitesView: View {
+    @State private var actions = AsyncActions()
     @EnvironmentObject private var app: AppModel
     @StateObject private var model = SitesModel()
     @State private var search = ""
@@ -89,6 +90,10 @@ struct SitesView: View {
     }
     private var presenceKnown: Bool { model.snapshot?.presenceError.isEmpty == true }
     var body: some View {
+        actionContent.task { await actions.run() }
+    }
+
+    @ViewBuilder private var actionContent: some View {
         Group {
             #if os(iOS)
             mobileContent
@@ -111,7 +116,7 @@ struct SitesView: View {
         #if os(macOS)
         .task(id: app.account?.signedIn) { if app.account?.signedIn == true { await model.load() } }
         #endif
-        .focusedSceneValue(\.fleetRefresh, PaneRefreshAction(enabled: !model.loading, perform: { Task { await model.load() } }))
+        .focusedSceneValue(\.fleetRefresh, PaneRefreshAction(enabled: !model.loading, perform: { actions.submit { await model.load() } }))
     }
     #if os(iOS)
     private var mobileContent: some View {
@@ -132,7 +137,7 @@ struct SitesView: View {
             }
             if model.accounts.isEmpty && !model.loading {
                 ContentUnavailableView { Label("Sign in to view your fleet", systemImage: "building.2") }
-                    actions: { Button("Sign in") { Task { await app.signIn() } } }
+                    actions: { Button("Sign in") { actions.submit { await app.signIn() } } }
             } else if devices.isEmpty && !model.loading && model.error == nil {
                 ContentUnavailableView.search(text: search)
             }
@@ -176,10 +181,10 @@ struct SitesView: View {
                 if model.loading { ProgressView().controlSize(.small) }
             }
             AdaptiveStack(spacing: 12) {
-                Picker("Account", selection: Binding(get: { model.account }, set: { model.account = $0; Task { await model.loadOrganizations() } })) {
+                Picker("Account", selection: Binding(get: { model.account }, set: { model.account = $0; actions.submit { await model.loadOrganizations() } })) {
                     ForEach(model.accounts) { Text($0.account.email.isEmpty ? $0.id : $0.account.email).tag($0.id) }
                 }
-                Picker("Organization", selection: Binding(get: { model.organization }, set: { model.organization = $0; Task { await model.changeOrganization() } })) {
+                Picker("Organization", selection: Binding(get: { model.organization }, set: { model.organization = $0; actions.submit { await model.changeOrganization() } })) {
                     ForEach(model.organizations) { Text($0.name).tag($0.id) }
                 }
             }.disabled(model.loading)
@@ -197,7 +202,7 @@ struct SitesView: View {
             }
             if model.accounts.isEmpty && !model.loading {
                 ContentUnavailableView { Label("Sign in to view your fleet", systemImage: "building.2") }
-                    actions: { Button("Sign in") { Task { await app.signIn() } } }
+                    actions: { Button("Sign in") { actions.submit { await app.signIn() } } }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if devices.isEmpty && !model.loading && model.error == nil {
                 ContentUnavailableView("No matching devices", systemImage: "desktopcomputer", description: Text("Devices enrolled in this organization appear here, including offline devices."))

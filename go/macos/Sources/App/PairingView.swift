@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct PairingView: View {
+    @State private var actions = AsyncActions()
     let session: UInt64
     let deviceName: String
     @State private var kind: PairingKind = .lite
@@ -13,10 +14,14 @@ struct PairingView: View {
     @State private var forgetting: PairingDevice?
 
     var body: some View {
+        actionContent.task { await actions.run() }
+    }
+
+    @ViewBuilder private var actionContent: some View {
         Group {
             #if os(iOS)
             mobileList
-                .focusedSceneValue(\.devicePaneRefresh, PaneRefreshAction(enabled: !loading && busy == nil, perform: { Task { await refresh() } }))
+                .focusedSceneValue(\.devicePaneRefresh, PaneRefreshAction(enabled: !loading && busy == nil, perform: { actions.submit { await refresh() } }))
             #else
             VStack(spacing: 0) {
                 if kind == .unitree {
@@ -25,18 +30,18 @@ struct PairingView: View {
                     UnitreePairingView(session: session, deviceName: deviceName).id(session)
                 } else {
                     desktopContent
-                        .focusedSceneValue(\.devicePaneRefresh, PaneRefreshAction(enabled: !loading && busy == nil, perform: { Task { await refresh() } }))
+                        .focusedSceneValue(\.devicePaneRefresh, PaneRefreshAction(enabled: !loading && busy == nil, perform: { actions.submit { await refresh() } }))
                 }
             }
             #endif
         }
             .task(id: kind) { devices = []; await refresh() }
             .sheet(item: $login) { item in
-                CameraLoginSheet(item: item, deviceName: deviceName, session: session) { Task { await refresh() } }
+                CameraLoginSheet(item: item, deviceName: deviceName, session: session) { actions.submit { await refresh() } }
             }
             .alert("Forget pairing?", isPresented: Binding(get: { forgetting != nil }, set: { if !$0 { forgetting = nil } }), presenting: forgetting) { item in
                 Button("Cancel", role: .cancel) {}
-                Button("Forget", role: .destructive) { Task { await forget(item) } }
+                Button("Forget", role: .destructive) { actions.submit { await forget(item) } }
             } message: { item in Text("Remove \(item.name) from \(deviceName)? Its sensors will no longer be available to apps on this device.") }
     }
     #if os(iOS)
@@ -69,7 +74,7 @@ struct PairingView: View {
                                 .disabled(busy != nil || loading)
                         } else if item.canPair {
                             Button("Pair") {
-                                if kind == .camera { login = item } else { Task { await pair(item) } }
+                                if kind == .camera { login = item } else { actions.submit { await pair(item) } }
                             }.buttonStyle(.bordered).fixedSize().disabled(busy != nil || loading)
                         }
                     }.padding(.vertical, 6)
@@ -115,7 +120,7 @@ struct PairingView: View {
                              : "Connect an ONVIF IP camera to the same network as \(deviceName), then scan again.")
                             .font(.callout).foregroundStyle(.secondary)
                             .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
-                        Button("Scan again") { Task { await refresh() } }.padding(.top, 4)
+                        Button("Scan again") { actions.submit { await refresh() } }.padding(.top, 4)
                     }.frame(maxWidth: 420)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                         .mobileRefreshablePlaceholder { if !loading && busy == nil { await refresh() } }
@@ -137,7 +142,7 @@ struct PairingView: View {
                                         if item.canPair && (kind == .camera || !item.paired) {
                                             Button(item.paired ? "Edit login" : "Pair") {
                                                 if kind == .camera { login = item }
-                                                else { Task { await pair(item) } }
+                                                else { actions.submit { await pair(item) } }
                                             }.disabled(busy != nil || loading)
                                         }
                                         if item.paired {
@@ -170,7 +175,7 @@ struct PairingView: View {
     private func pair(_ item: PairingDevice) async {
         busy = item.id; error = nil; defer { busy = nil }
         do { try await GoClient.shared.pairSensor(session: session, id: item.id); await refresh() }
-        catch { self.error = error.localizedDescription }
+        catch { if !Task.isCancelled { self.error = error.localizedDescription } }
     }
     private func forget(_ item: PairingDevice) async {
         busy = item.id; error = nil; defer { busy = nil }
@@ -178,11 +183,12 @@ struct PairingView: View {
             if kind == .lite { try await GoClient.shared.pairSensor(session: session, id: item.id, forget: true) }
             else { try await GoClient.shared.forgetCamera(session: session, id: item.cameraID) }
             await refresh()
-        } catch { self.error = error.localizedDescription }
+        } catch { if !Task.isCancelled { self.error = error.localizedDescription } }
     }
 }
 
 private struct CameraLoginSheet: View {
+    @State private var actions = AsyncActions()
     let item: PairingDevice
     let deviceName: String
     let session: UInt64
@@ -193,6 +199,10 @@ private struct CameraLoginSheet: View {
     @State private var saving = false
     @State private var error: String?
     var body: some View {
+        actionContent.task { await actions.run() }
+    }
+
+    @ViewBuilder private var actionContent: some View {
         Group {
             #if os(iOS)
             NavigationStack {
@@ -217,11 +227,11 @@ private struct CameraLoginSheet: View {
     }
     private func save() {
         saving = true
-        Task {
+        actions.submit {
             do {
                 try await GoClient.shared.pairCamera(session: session, id: item.cameraID, username: username, password: password)
                 password = ""; saved(); dismiss()
-            } catch { self.error = error.localizedDescription; password = "" }
+            } catch { if !Task.isCancelled { self.error = error.localizedDescription }; password = "" }
             saving = false
         }
     }
@@ -240,11 +250,11 @@ private struct CameraLoginSheet: View {
                 Button("Cancel") { password = ""; dismiss() }.keyboardShortcut(.cancelAction).disabled(saving)
                 Button("Save login") {
                     saving = true
-                    Task {
+                    actions.submit {
                         do {
                             try await GoClient.shared.pairCamera(session: session, id: item.cameraID, username: username, password: password)
                             password = ""; saved(); dismiss()
-                        } catch { self.error = error.localizedDescription; password = "" }
+                        } catch { if !Task.isCancelled { self.error = error.localizedDescription }; password = "" }
                         saving = false
                     }
                 }.keyboardShortcut(.defaultAction).disabled(saving || username.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)

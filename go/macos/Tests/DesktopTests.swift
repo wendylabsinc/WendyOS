@@ -92,13 +92,13 @@ final class DesktopTests: XCTestCase {
             }
         }
         model.selection = old; model.connected = old
-        let task = Task { await model.connect(next) }
+        async let connection: Void = model.connect(next)
         await fulfillment(of: [started], timeout: 1)
         XCTAssertEqual(model.selection?.id, next.id)
         XCTAssertEqual(model.connectingDevice?.id, next.id)
         XCTAssertFalse(model.selectedDeviceReady)
         pending?.resume(throwing: WendyError(message: "Device offline"))
-        await task.value
+        await connection
         XCTAssertEqual(model.selection?.id, next.id)
         XCTAssertEqual(model.detailError, "Device offline")
         XCTAssertFalse(model.selectedDeviceReady)
@@ -120,11 +120,11 @@ final class DesktopTests: XCTestCase {
             }
         }
         model.selection = old; model.connected = old
-        let task = Task { await model.connect(next) }
+        async let connection: Void = model.connect(next)
         await fulfillment(of: [started], timeout: 1)
         await model.connect(old)
         pending?.resume(throwing: WendyError(message: "Late failure"))
-        await task.value
+        await connection
         XCTAssertEqual(model.selection?.id, old.id)
         XCTAssertTrue(model.selectedDeviceReady)
         XCTAssertNil(model.detailError)

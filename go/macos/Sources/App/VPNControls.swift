@@ -1,16 +1,21 @@
 import SwiftUI
 
 struct VPNToolbarControls: View {
+    @State private var actions = AsyncActions()
     @ObservedObject var model: AppModel
     @ObservedObject var vpn: VPNController
     @State private var showingDevices = false
 
     var body: some View {
+        actionContent.task { await actions.run() }
+    }
+
+    @ViewBuilder private var actionContent: some View {
         HStack(spacing: 10) {
             Text("VPN").font(.callout)
             Toggle("VPN", isOn: Binding(get: { vpn.enabled }, set: { enabled in
                 showingDevices = true
-                Task { if enabled { await model.enableVPN() } else { await model.disableVPN() } }
+                actions.submit { if enabled { await model.enableVPN() } else { await model.disableVPN() } }
             })).labelsHidden().accessibilityLabel("VPN").toggleStyle(.switch).controlSize(.small)
                 .disabled(model.vpnUpdating || vpn.changing)
                 .help(vpn.setupIssue ?? vpn.status)
@@ -27,6 +32,7 @@ struct VPNToolbarControls: View {
 }
 
 struct VPNPopover: View {
+    @State private var actions = AsyncActions()
     @ObservedObject var model: AppModel
     @ObservedObject var vpn: VPNController
     var showsWindowActions = false
@@ -36,6 +42,10 @@ struct VPNPopover: View {
         (model.nearby + model.cloud).filter(\.routable).sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
     }
     var body: some View {
+        actionContent.task { await actions.run() }
+    }
+
+    @ViewBuilder private var actionContent: some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
@@ -44,7 +54,7 @@ struct VPNPopover: View {
                 }
                 Spacer()
                 Toggle("VPN", isOn: Binding(get: { vpn.enabled }, set: { enabled in
-                    Task { if enabled { await model.enableVPN() } else { await model.disableVPN() } }
+                    actions.submit { if enabled { await model.enableVPN() } else { await model.disableVPN() } }
                 })).labelsHidden().accessibilityLabel("VPN").toggleStyle(.switch)
                     .disabled(model.vpnUpdating || vpn.changing)
             }
@@ -94,7 +104,7 @@ struct VPNPopover: View {
                 if devices.isEmpty { Text("Sign in and refresh your devices to add a route.").foregroundStyle(.secondary).font(.callout).padding(.vertical) }
             }.frame(maxHeight: 330)
             if vpn.active {
-                Button("Apply Selection") { Task { await model.enableVPN() } }
+                Button("Apply Selection") { actions.submit { await model.enableVPN() } }
                     .disabled(model.vpnUpdating || model.selectedRoutes.isEmpty)
             }
             Text("Routes selected devices over mesh or cloud. Other internet traffic uses your normal connection.")

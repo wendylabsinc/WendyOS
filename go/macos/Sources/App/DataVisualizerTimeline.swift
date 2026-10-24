@@ -36,7 +36,27 @@ final class DataTimelinePlayhead {
     }
 }
 
-struct DataTimelineInteraction: NSViewRepresentable {
+@MainActor private final class TimelineInputOwner: ObservableObject {
+    let view = DataTimelineInputView(frame: .zero)
+}
+
+struct DataTimelineInteraction: View {
+    let window: DataTimelineViewport
+    let cursor: Double
+    var ruler = false
+    var playhead: DataTimelinePlayhead? = nil
+    let seek: (Double) -> Void
+    let pan: (Double) -> Void
+    let zoom: (Double, Double) -> Void
+    @StateObject private var owner = TimelineInputOwner()
+    var body: some View {
+        DataTimelineNativeInteraction(window: window, cursor: cursor, ruler: ruler, playhead: playhead,
+                                      seek: seek, pan: pan, zoom: zoom, input: owner.view)
+            .task { await owner.view.observeSeeks() }
+    }
+}
+
+private struct DataTimelineNativeInteraction: NSViewRepresentable {
     let window: DataTimelineViewport
     let cursor: Double
     var ruler = false
@@ -45,8 +65,9 @@ struct DataTimelineInteraction: NSViewRepresentable {
     let pan: (Double) -> Void
     let zoom: (Double, Double) -> Void
 
+    let input: DataTimelineInputView
     func makeNSView(context: Context) -> DataTimelineInputView {
-        let view = DataTimelineInputView(frame: .zero)
+        let view = input
         view.setAccessibilityElement(ruler)
         if ruler {
             view.setAccessibilityRole(.slider)
@@ -123,7 +144,7 @@ final class DataTimelineInputView: NSView {
     private var lastPoint = CGPoint.zero
     private var panning = false
     private var pendingSeek: Double?
-    private var scheduledSeek: Task<Void, Never>?
+    private var seekChanges: AsyncStream<Void>.Continuation?
     private var cachedRuler: NSImage?
     private var cachedWindow: DataTimelineViewport?
     private var cachedSize = CGSize.zero
@@ -175,7 +196,7 @@ final class DataTimelineInputView: NSView {
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         if window == nil {
-            scheduledSeek?.cancel(); scheduledSeek = nil; pendingSeek = nil
+            pendingSeek = nil
             playhead?.detach(self)
         } else { playhead?.attach(self) }
     }
@@ -228,18 +249,22 @@ final class DataTimelineInputView: NSView {
         pendingSeek = time
         cursor = time
         playhead?.drag(to: time, owner: self)
-        guard scheduledSeek == nil else { return }
-        // Refresh decoded media, events and inspector at 20 Hz while dragging.
-        // The native playheads above follow every pointer event; mouseUp flushes
-        // the final exact timestamp without waiting for this interval.
-        scheduledSeek = Task { [weak self] in
+        seekChanges?.yield(())
+    }
+    func observeSeeks() async {
+        let changes = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        seekChanges = changes.continuation
+        defer { seekChanges = nil }
+        if pendingSeek != nil { changes.continuation.yield(()) }
+        // Native playheads follow every pointer event; decoded media follows at
+        // 20 Hz. Mouse-up flushes the final timestamp immediately.
+        for await _ in changes.stream {
             do { try await Task.sleep(for: .milliseconds(50)) }
             catch { return }
-            self?.flushSeek()
+            flushSeek()
         }
     }
     private func flushSeek() {
-        scheduledSeek?.cancel(); scheduledSeek = nil
         guard let time = pendingSeek else { return }
         pendingSeek = nil
         cursor = time

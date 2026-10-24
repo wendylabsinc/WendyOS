@@ -99,6 +99,7 @@ extension GoClient {
 }
 
 struct AccountPicker: View {
+    @State private var actions = AsyncActions()
     @ObservedObject var app: AppModel
     @StateObject private var picker = AccountPickerModel()
     @State private var presented = false
@@ -113,6 +114,10 @@ struct AccountPicker: View {
         return app.account?.email.isEmpty == false ? app.account!.email : "Accounts & organizations"
     }
     var body: some View {
+        actionContent.task { await actions.run() }
+    }
+
+    @ViewBuilder private var actionContent: some View {
         VStack(alignment: .leading, spacing: 8) {
             Button { presented.toggle() } label: {
                 HStack(spacing: 10) {
@@ -140,7 +145,7 @@ struct AccountPicker: View {
         }
         .padding(8)
         .task(id: app.account?.context) { await picker.load() }
-        .onChange(of: app.signingIn) { _, value in if !value { Task { await picker.load() } } }
+        .onChange(of: app.signingIn) { _, value in if !value { actions.submit { await picker.load() } } }
     }
     private func avatar(_ name: String, signedIn: Bool) -> some View {
         ZStack {
@@ -156,7 +161,7 @@ struct AccountPicker: View {
                 Text("Accounts & organizations").font(.system(size: 12, weight: .semibold)).foregroundStyle(.secondary)
                 Spacer()
                 if picker.switching { ProgressView().controlSize(.mini) }
-                Button { Task { await picker.load() } } label: {
+                Button { actions.submit { await picker.load() } } label: {
                     Image(systemName: "arrow.clockwise").font(.system(size: 11, weight: .medium))
                 }.buttonStyle(.plain).help("Refresh accounts").accessibilityLabel("Refresh accounts").disabled(picker.loading || picker.switching)
             }.padding(.horizontal, 16).padding(.top, 16).padding(.bottom, 10)
@@ -179,7 +184,7 @@ struct AccountPicker: View {
                                 }
                                 ForEach(group) { choice in
                                     Button {
-                                        Task { if await picker.select(choice, app: app) { presented = false } }
+                                        actions.submit { if await picker.select(choice, app: app) { presented = false } }
                                     } label: {
                                         HStack(spacing: 10) {
                                             Image(systemName: "building.2").foregroundStyle(choice.active ? Color.accentColor : .secondary).frame(width: 18)
@@ -204,8 +209,8 @@ struct AccountPicker: View {
             Divider()
             VStack(alignment: .leading, spacing: 2) {
                 Menu {
-                    Button("Wendy Cloud") { presented = false; Task { await app.signIn() } }
-                    Button("Development Cloud") { presented = false; Task { await app.signIn(development: true) } }
+                    Button("Wendy Cloud") { actions.submit { await app.signIn(); presented = false } }
+                    Button("Development Cloud") { actions.submit { await app.signIn(development: true); presented = false } }
                 } label: {
                     Label("Add account…", systemImage: "plus").frame(maxWidth: .infinity, alignment: .leading).padding(8)
                 }.menuStyle(.borderlessButton).disabled(app.signingIn || picker.switching)
@@ -214,7 +219,7 @@ struct AccountPicker: View {
                 }.buttonStyle(.plain)
                 if app.signingIn {
                     if let url = app.loginURL { Link("Continue in browser", destination: url).padding(8) }
-                    Button("Cancel sign-in") { Task { await app.cancelLogin() } }.buttonStyle(.plain).padding(8)
+                    Button("Cancel sign-in") { actions.submit { await app.cancelLogin() } }.buttonStyle(.plain).padding(8)
                 }
             }.font(.system(size: 12)).padding(8)
         }.frame(width: 320).fixedSize(horizontal: false, vertical: true)

@@ -18,8 +18,15 @@ struct WendyDesktopApp: App {
             DesktopNavigationCommands()
         }
         Settings { AccountsSettingsView(model: model) }
-        MenuBarExtra("Wendy VPN", systemImage: "network") {
+        MenuBarExtra {
             VPNPopover(model: model, vpn: model.vpn, showsWindowActions: true)
+        } label: {
+            Label("Wendy VPN", systemImage: "network")
+                .task { await model.cleanup.run() }
+                .task(id: model.initialized) { await model.observeEvents() }
+                .task(id: model.account) { await PushNotifications.shared.useAccount(model.account) }
+                .task { await model.vpn.observeStatus() }
+                .task { await delegate.observeTermination(model: model) }
         }.menuBarExtraStyle(.window)
     }
 }
@@ -111,6 +118,13 @@ struct DesktopNavigationCommands: Commands {
 }
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    private let termination = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
+    func observeTermination(model: AppModel) async {
+        for await _ in termination.stream {
+            await model.shutdown()
+            NSApplication.shared.reply(toApplicationShouldTerminate: true)
+        }
+    }
     weak var model: AppModel?
     func application(_ application: NSApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
         PushNotifications.shared.didRegister(deviceToken)
@@ -128,7 +142,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             alert.runModal()
             return .terminateCancel
         }
-        Task { await model?.shutdown(); sender.reply(toApplicationShouldTerminate: true) }
+        termination.continuation.yield(())
         return .terminateLater
     }
 }

@@ -3,12 +3,17 @@ import SwiftUI
 import AppKit
 
 struct SimulatorsView: View {
+    @State private var actions = AsyncActions()
     @ObservedObject var model: SimulatorModel
     let connect: (LocalSimulator) -> Void
     @State private var creating = false
     @State private var deleting: LocalSimulator?
     @State private var resetting: LocalSimulator?
     var body: some View {
+        actionContent.task { await actions.run() }
+    }
+
+    @ViewBuilder private var actionContent: some View {
         VStack(spacing: 0) {
             HStack {
                 Text("Simulators").font(.title2.weight(.semibold))
@@ -27,7 +32,7 @@ struct SimulatorsView: View {
                     if let target = model.recoveryTarget, model.recovery != WDSimRecoveryNone {
                         Button(model.recovery == WDSimRecoveryRuntime ? "Update robot runtime" : "Update agent") {
                             let action = model.recovery == WDSimRecoveryRuntime ? WDSimUpdateRuntime : WDSimUpdateAgent
-                            Task { await model.act(target, action, label: "Updating") }
+                            actions.submit { await model.act(target, action, label: "Updating") }
                         }.disabled(model.operation != nil)
                     }
                     Button { model.error = nil } label: { Image(systemName: "xmark") }.buttonStyle(.plain).accessibilityLabel("Dismiss error")
@@ -49,11 +54,11 @@ struct SimulatorsView: View {
                     if let item = model.items.first(where: { ids.contains($0.id) }) {
                         if item.running {
                             Button("Stop", systemImage: "stop.fill") {
-                                Task { await model.act(item, WDSimStop, label: "Stopping") }
+                                actions.submit { await model.act(item, WDSimStop, label: "Stopping") }
                             }.disabled(model.operation != nil)
                         } else {
                             Button("Start", systemImage: "play.fill") {
-                                Task { await model.act(item, WDSimStart, label: "Starting") }
+                                actions.submit { await model.act(item, WDSimStart, label: "Starting") }
                             }.disabled(model.operation != nil)
                         }
                     }
@@ -69,15 +74,15 @@ struct SimulatorsView: View {
                             Spacer()
                             if item.running {
                                 if !item.lite { Button("Open device") { connect(item) } }
-                                Button("Shut down") { Task { await model.act(item, WDSimStop, label: "Stopping") } }
+                                Button("Shut down") { actions.submit { await model.act(item, WDSimStop, label: "Stopping") } }
                             } else {
-                                Button("Start", systemImage: "play.fill") { Task { await model.act(item, WDSimStart, label: "Starting") } }
+                                Button("Start", systemImage: "play.fill") { actions.submit { await model.act(item, WDSimStart, label: "Starting") } }
                             }
                             Menu {
                                 if item.robot {
-                                    Button("Prepare simulation") { Task { await model.act(item, WDSimStart, label: "Preparing") } }
-                                    Button("Update robot runtime") { Task { await model.act(item, WDSimUpdateRuntime, label: "Updating runtime for") } }
-                                    Button("Update agent") { Task { await model.act(item, WDSimUpdateAgent, label: "Updating agent for") } }.disabled(!item.running)
+                                    Button("Prepare simulation") { actions.submit { await model.act(item, WDSimStart, label: "Preparing") } }
+                                    Button("Update robot runtime") { actions.submit { await model.act(item, WDSimUpdateRuntime, label: "Updating runtime for") } }
+                                    Button("Update agent") { actions.submit { await model.act(item, WDSimUpdateAgent, label: "Updating agent for") } }.disabled(!item.running)
                                     Divider()
                                 }
                                 Button("Copy device selector") { NSPasteboard.general.clearContents(); NSPasteboard.general.setString("vm:\(item.name)", forType: .string) }
@@ -93,7 +98,7 @@ struct SimulatorsView: View {
                         if !preparing && !item.error.isEmpty { Text(item.error).font(.callout).foregroundStyle(.orange).padding(.horizontal, 16) }
                         if item.robot && (item.running || preparing) {
                             RobotSimulationView(item: item, busy: model.operation != nil, preparing: preparing, control: { action, label in
-                                Task { await model.act(item, action, label: label) }
+                                actions.submit { await model.act(item, action, label: label) }
                             }, reset: { resetting = item }).id(item.name)
                         } else if item.robot {
                             ContentUnavailableView("Simulator is stopped", systemImage: "cube.transparent", description: Text("Start this simulator to load its live 3D scene."))
@@ -123,17 +128,17 @@ struct SimulatorsView: View {
         }
         .sheet(isPresented: $creating) { CreateSimulatorSheet { name, profile, image, disk in
             creating = false
-            Task { await model.create(name: name, profile: profile, image: image, disk: disk) }
+            actions.submit { await model.create(name: name, profile: profile, image: image, disk: disk) }
         } }
         .alert("Delete simulator?", isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }), presenting: deleting) { item in
             Button("Cancel", role: .cancel) {}
-            Button("Delete", role: .destructive) { Task { await model.act(item, WDSimDelete, label: "Deleting") } }
+            Button("Delete", role: .destructive) { actions.submit { await model.act(item, WDSimDelete, label: "Deleting") } }
         } message: { item in Text("Delete \(item.name), its disk, snapshots and console logs? This cannot be undone.") }
         .alert("Reset simulation?", isPresented: Binding(get: { resetting != nil }, set: { if !$0 { resetting = nil } }), presenting: resetting) { item in
             Button("Cancel", role: .cancel) {}
-            Button("Reset") { Task { await model.act(item, WDSimReset, label: "Resetting") } }
+            Button("Reset") { actions.submit { await model.act(item, WDSimReset, label: "Resetting") } }
         } message: { _ in Text("Reset the world and release its active controllers.") }
-        .focusedSceneValue(\.simulatorRefresh, PaneRefreshAction(enabled: !model.refreshing, perform: { Task { await model.refresh() } }))
+        .focusedSceneValue(\.simulatorRefresh, PaneRefreshAction(enabled: !model.refreshing, perform: { actions.submit { await model.refresh() } }))
         .task {
             while !Task.isCancelled { await model.refresh(); try? await Task.sleep(for: .seconds(3)) }
         }

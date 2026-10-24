@@ -77,7 +77,7 @@ final class AppModel: ObservableObject {
     private var cameraBatch: UInt64 = 0
     private var starting = false
     private var shuttingDown = false
-    private var cameraStops: [UUID: Task<Void, Never>] = [:]
+    let cleanup = AsyncActions()
 
     func start() async {
         guard !initialized, !starting, ProcessInfo.processInfo.environment["XCTestConfigurationFilePath"] == nil else { return }
@@ -99,15 +99,27 @@ final class AppModel: ObservableObject {
         } catch { if !Task.isCancelled { alert = error.localizedDescription } }
     }
 
-    /// Called by the root view's task, so leaving the scene cancels polling.
+    /// Polling and account refreshes share the app task's lifetime.
     func observeEvents() async {
         guard initialized else { return }
+        let refreshes = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        async let polling: Void = pollEvents(refreshes.continuation)
+        for await _ in refreshes.stream {
+            await refreshAccount()
+            await refreshCloud()
+            await refreshNearby()
+        }
+        await polling
+    }
+
+    private func pollEvents(_ refreshes: AsyncStream<Void>.Continuation) async {
+        defer { refreshes.finish() }
         while !Task.isCancelled && !shuttingDown {
             do {
                 for event in try await client.poll() {
                     try Task.checkCancellation()
                     guard !shuttingDown else { return }
-                    await receive(event)
+                    receive(event, refreshes: refreshes)
                 }
                 try await Task.sleep(for: .milliseconds(16))
             } catch {
@@ -119,7 +131,7 @@ final class AppModel: ObservableObject {
 
     func refreshAccount() async {
         guard initialized else { return }
-        do { account = try await client.account(); accountError = nil; await PushNotifications.shared.useAccount(account) }
+        do { account = try await client.account(); accountError = nil }
         catch { if !Task.isCancelled { accountError = error.localizedDescription } }
     }
 
@@ -138,7 +150,7 @@ final class AppModel: ObservableObject {
             nearbyUnitree = UnitreeSavedDevices.merge(saved: UnitreeSavedDevices.load(), discovered: discovered)
             unitreeDiscoveryError = nil
         }
-        catch { nearbyUnitree = UnitreeSavedDevices.load(); unitreeDiscoveryError = error.localizedDescription }
+        catch { if !Task.isCancelled { nearbyUnitree = UnitreeSavedDevices.load(); unitreeDiscoveryError = error.localizedDescription } }
         #endif
     }
 
@@ -294,7 +306,7 @@ final class AppModel: ObservableObject {
             camerasError = nil
             if cameraWallVisible { await playCameras() }
         }
-        catch { if session == capturedSession { camerasError = error.localizedDescription } }
+        catch { if session == capturedSession && !Task.isCancelled { camerasError = error.localizedDescription } }
     }
 
     func resources() async throws -> ResourceSnapshot { try await client.resources(session: session) }
@@ -305,7 +317,7 @@ final class AppModel: ObservableObject {
         logStream &+= 1
         let stream = logStream
         do { try await client.startLogs(app: logApp, stream: stream) }
-        catch { if logStream == stream { logError = error.localizedDescription } }
+        catch { if logStream == stream && !Task.isCancelled { logError = error.localizedDescription } }
     }
 
     func showCameraWall() async {
@@ -350,11 +362,9 @@ final class AppModel: ObservableObject {
         feed.pause()
         guard stream != 0 else { return }
         let currentSession = session
-        // onDisappear is synchronous. Own these cleanup tasks until completion
-        // and join any remaining stops before shutting down the backend.
-        let id = UUID()
-        cameraStops[id] = Task {
-            defer { cameraStops[id] = nil }
+        // The app lifetime owns these cleanup actions, including after a camera
+        // view disappears. Shutdown joins them before releasing the backend.
+        cleanup.submit { [client] in
             try? await client.stopCamera(id: feed.camera.id, stream: stream, session: currentSession)
         }
     }
@@ -368,7 +378,7 @@ final class AppModel: ObservableObject {
         guard !signingIn else { return }
         signingIn = true
         do { try await client.login(development: development) }
-        catch { signingIn = false; alert = error.localizedDescription }
+        catch { signingIn = false; if !Task.isCancelled { alert = error.localizedDescription } }
     }
 
     func cancelLogin() async {
@@ -390,7 +400,12 @@ final class AppModel: ObservableObject {
             let config = try await client.startVPN(routes: routes.map { VPNRouteSelection(selector: $0.selector, name: $0.title) })
             do { try await vpn.start(config) }
             catch { try? await client.stopVPN(); throw error }
-        } catch { vpnError = error.localizedDescription }
+        } catch {
+            if Task.isCancelled {
+                try? await vpn.stop()
+                try? await client.stopVPN()
+            } else { vpnError = error.localizedDescription }
+        }
     }
 
     func disableVPN() async {
@@ -399,20 +414,20 @@ final class AppModel: ObservableObject {
         vpnUpdating = true
         defer { vpnUpdating = false }
         do { try await vpn.stop(); try await client.stopVPN() }
-        catch { vpnError = error.localizedDescription }
+        catch { if !Task.isCancelled { vpnError = error.localizedDescription } }
     }
 
     func shutdown() async {
         shuttingDown = true
         deviceChat.stop()
         pauseCameras()
-        for task in cameraStops.values { await task.value }
+        await cleanup.finishAndWait()
         try? await vpn.stop()
         try? await client.shutdown()
         initialized = false
     }
 
-    private func receive(_ event: BridgeEvent) async {
+    private func receive(_ event: BridgeEvent, refreshes: AsyncStream<Void>.Continuation) {
         switch event.payload {
         case .loginURL(let text):
             if let url = URL(string: text), url.scheme == "https" {
@@ -423,7 +438,7 @@ final class AppModel: ObservableObject {
             }
         case .loginDone:
             signingIn = false; loginURL = nil
-            await refreshAccount(); await refreshCloud(); await refreshNearby()
+            refreshes.yield(())
         case .loginError(let text):
             if signingIn { alert = text }
             signingIn = false; loginURL = nil

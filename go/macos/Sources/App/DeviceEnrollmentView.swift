@@ -49,6 +49,7 @@ extension GoClient {
 }
 
 struct DeviceEnrollmentSettings: View {
+    @State private var actions = AsyncActions()
     @EnvironmentObject private var app: AppModel
     @Environment(\.scenePhase) private var scenePhase
     let session: UInt64
@@ -61,6 +62,10 @@ struct DeviceEnrollmentSettings: View {
     @State private var signInAfterDismiss = false
 
     var body: some View {
+        actionContent.task { await actions.run() }
+    }
+
+    @ViewBuilder private var actionContent: some View {
         VStack(alignment: .leading, spacing: 6) {
             if let snapshot {
                 Label(snapshot.title, systemImage: snapshot.enrolled ? "checkmark.shield" : "exclamationmark.triangle.fill")
@@ -84,14 +89,14 @@ struct DeviceEnrollmentSettings: View {
                 if let error { Text(error).font(.caption).foregroundStyle(.secondary).textSelection(.enabled) }
             }
             if !loading && snapshot?.enrolled != true {
-                Button("Check enrollment again") { Task { await refresh() } }.font(.caption)
+                Button("Check enrollment again") { actions.submit { await refresh() } }.font(.caption)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .task(id: session) { snapshot = nil; await refresh() }
         .task(id: scenePhase) { if scenePhase == .active { await refresh() } }
         .sheet(isPresented: $showingEnrollment, onDismiss: {
-            Task {
+            actions.submit {
                 if signInAfterDismiss { signInAfterDismiss = false; await app.signIn() }
                 await refresh()
             }
@@ -112,12 +117,13 @@ struct DeviceEnrollmentSettings: View {
             snapshot = value; error = nil
         } catch {
             guard !Task.isCancelled else { return }
-            snapshot = nil; self.error = error.localizedDescription
+            snapshot = nil; if !Task.isCancelled { self.error = error.localizedDescription }
         }
     }
 }
 
 private struct DeviceEnrollmentSheet: View {
+    @State private var actions = AsyncActions()
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject private var app: AppModel
     let session: UInt64
@@ -135,6 +141,10 @@ private struct DeviceEnrollmentSheet: View {
     private var choice: EnrollmentOrganization? { organizations.first { $0.id == selected } }
 
     var body: some View {
+        actionContent.task { await actions.run() }
+    }
+
+    @ViewBuilder private var actionContent: some View {
         NavigationStack {
             Form {
                 Section {
@@ -158,7 +168,7 @@ private struct DeviceEnrollmentSheet: View {
                             TextField("Device name", text: $name)
                         }
                         Button(organizations.isEmpty ? "Sign in…" : "Sign in to another organization…") { signIn(); dismiss() }
-                        Button("Refresh organizations") { Task { await loadOrganizations() } }
+                        Button("Refresh organizations") { actions.submit { await loadOrganizations() } }
                         if enrolling { ProgressView("Enrolling device…") }
                         if let error { Text(error).foregroundStyle(.red).textSelection(.enabled) }
                         if !canRetry { Text("Close this sheet and check the device's enrollment status before trying again.").foregroundStyle(.secondary) }
@@ -173,7 +183,7 @@ private struct DeviceEnrollmentSheet: View {
                 }
                 if !lite && !completed {
                     ToolbarItem(placement: .confirmationAction) {
-                        Button("Enroll") { Task { await enroll() } }
+                        Button("Enroll") { actions.submit { await enroll() } }
                             .disabled(loading || enrolling || choice == nil || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !canRetry || app.deviceSession != session)
                     }
                 }
@@ -191,7 +201,7 @@ private struct DeviceEnrollmentSheet: View {
         do {
             organizations = try await GoClient.shared.enrollmentOrganizations()
             if !organizations.contains(where: { $0.id == selected }) { selected = "" }
-        } catch { self.error = error.localizedDescription }
+        } catch { if !Task.isCancelled { self.error = error.localizedDescription } }
     }
     private func enroll() async {
         guard let choice, !enrolling, app.deviceSession == session else { return }
@@ -201,7 +211,7 @@ private struct DeviceEnrollmentSheet: View {
             try await GoClient.shared.enrollDevice(session: session, organization: choice, name: name.trimmingCharacters(in: .whitespacesAndNewlines))
             completed = true
         } catch {
-            self.error = error.localizedDescription
+            if !Task.isCancelled { self.error = error.localizedDescription }
             // A failed reply may follow a successful cloud mutation. Require a fresh status read.
             canRetry = false
         }

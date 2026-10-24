@@ -87,13 +87,13 @@ final class UnitreeMotionDriverTests: XCTestCase {
         }
         driver.enabled = true
         driver.update(.keys([13]), direction: "Keyboard")
-        let first = Task { await driver.step(now: Date(timeIntervalSince1970: 1)) }
+        async let first: Void = driver.step(now: Date(timeIntervalSince1970: 1))
         while resume == nil { await Task.yield() }
         driver.update(.keys([13, 12]), direction: "Keyboard")
         driver.update(.keys([13, 12, 2]), direction: "Keyboard")
         XCTAssertEqual(sent.count, 1)
         resume?.resume()
-        await first.value
+        await first
         await driver.step(now: Date(timeIntervalSince1970: 1.2))
         XCTAssertEqual(sent, [UnitreeMotion(forward: 0.6), UnitreeMotion(forward: 0.6, lateral: -0.3, yaw: 0.5)])
     }

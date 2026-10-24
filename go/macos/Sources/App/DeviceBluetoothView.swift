@@ -22,6 +22,7 @@ extension GoClient {
     }
 }
 struct DeviceBluetoothView: View {
+    @State private var actions = AsyncActions()
     let session: UInt64
     let deviceName: String
     @State private var devices: [DeviceBluetoothPeripheral] = []
@@ -30,6 +31,10 @@ struct DeviceBluetoothView: View {
     @State private var error: String?
     @State private var forgetting: DeviceBluetoothPeripheral?
     var body: some View {
+        actionContent.task { await actions.run() }
+    }
+
+    @ViewBuilder private var actionContent: some View {
         Form {
             if let error { Section { FailureNote(message: error) } }
             Section {
@@ -46,10 +51,10 @@ struct DeviceBluetoothView: View {
                         else {
                             Menu {
                                 if device.connected {
-                                    Button("Disconnect") { Task { await act(device, action: 2) } }
+                                    Button("Disconnect") { actions.submit { await act(device, action: 2) } }
                                 } else {
-                                    Button("Connect") { Task { await act(device, action: 0) } }
-                                    if !device.paired { Button("Pair and connect") { Task { await act(device, action: 1) } } }
+                                    Button("Connect") { actions.submit { await act(device, action: 0) } }
+                                    if !device.paired { Button("Pair and connect") { actions.submit { await act(device, action: 1) } } }
                                 }
                                 if device.paired { Button("Forget device", role: .destructive) { forgetting = device } }
                             } label: { Image(systemName: "ellipsis").frame(width: 44, height: 44) }
@@ -59,13 +64,13 @@ struct DeviceBluetoothView: View {
                 }
                 if devices.isEmpty && !scanning && error == nil { Text("No Bluetooth devices found.").foregroundStyle(.secondary) }
                 if scanning { HStack { ProgressView(); Text("Scanning…").foregroundStyle(.secondary) } }
-                Button("Scan again") { Task { await scan() } }.disabled(scanning || busy != nil)
+                Button("Scan again") { actions.submit { await scan() } }.disabled(scanning || busy != nil)
             } header: { Text("Nearby devices") } footer: { Text("Bluetooth devices near \(deviceName). Put your accessory in discovery mode to find it.") }
         }.formStyle(.grouped).navigationTitle("Bluetooth")
             .task(id: session) { await scan() }
             .mobileRefreshable { await scan() }
             .confirmationDialog("Forget \(forgetting?.title ?? "device")?", isPresented: Binding(get: { forgetting != nil }, set: { if !$0 { forgetting = nil } }), titleVisibility: .visible) {
-                if let device = forgetting { Button("Forget device", role: .destructive) { forgetting = nil; Task { await act(device, action: 3) } } }
+                if let device = forgetting { Button("Forget device", role: .destructive) { forgetting = nil; actions.submit { await act(device, action: 3) } } }
             }
     }
     private func scan() async {
@@ -78,6 +83,6 @@ struct DeviceBluetoothView: View {
     private func act(_ device: DeviceBluetoothPeripheral, action: Int32) async {
         busy = device.id; error = nil
         do { try await GoClient.shared.bluetoothAction(session: session, address: device.address, action: action); busy = nil; await scan() }
-        catch { self.error = error.localizedDescription; busy = nil }
+        catch { if !Task.isCancelled { self.error = error.localizedDescription }; busy = nil }
     }
 }

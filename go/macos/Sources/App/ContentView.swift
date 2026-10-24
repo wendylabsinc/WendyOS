@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct ContentView: View {
+    @State private var actions = AsyncActions()
     @EnvironmentObject private var model: AppModel
     @State private var tab = "apps"
     @State private var showingAppLogs = false
@@ -31,6 +32,10 @@ struct ContentView: View {
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some View {
+        actionContent.task { await actions.run() }
+    }
+
+    @ViewBuilder private var actionContent: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
             VStack(spacing: 0) {
                 VStack(spacing: 2) {
@@ -104,7 +109,7 @@ struct ContentView: View {
                             if model.account?.signedIn == true {
                                 Text("No cloud devices found").foregroundStyle(.secondary)
                             } else {
-                                Button("Sign in to Wendy Cloud") { Task { await model.signIn() } }
+                                Button("Sign in to Wendy Cloud") { actions.submit { await model.signIn() } }
                             }
                         }
                     }
@@ -114,7 +119,7 @@ struct ContentView: View {
                 .onChange(of: sidebarSelection) { _, id in
                     guard let device = visibleDevices.first(where: { $0.id == id }) else { return }
                     showingOrganization = false; showingSites = false; showingSimulators = false
-                    Task { await model.connect(device) }
+                    actions.submit { await model.connect(device) }
                 }
                 Divider()
                 AccountPicker(app: model)
@@ -125,12 +130,12 @@ struct ContentView: View {
             if showingSimulators {
                 SimulatorsView(model: simulators) { item in
                     showingSimulators = false
-                    Task { await model.connect(Device(id: "vm:\(item.name)", name: item.name, selector: "vm:\(item.name)", transport: .lan, address: item.address)) }
+                    actions.submit { await model.connect(Device(id: "vm:\(item.name)", name: item.name, selector: "vm:\(item.name)", transport: .lan, address: item.address)) }
                 }
             } else if showingSites {
                 SitesView { device in
                     showingSites = false; showingOrganization = false
-                    Task { await model.connect(device) }
+                    actions.submit { await model.connect(device) }
                 }.id(model.account?.context)
             } else if showingOrganization {
                 CloudManagementView().id(model.account?.context)
@@ -163,7 +168,7 @@ struct ContentView: View {
                     else if ["campaigns", "pairing", "chat", "data", "settings"].contains(tab), let devicePaneRefresh { devicePaneRefresh.perform() }
                     else {
                         refreshingPane = true
-                        Task {
+                        actions.submit {
                             defer { refreshingPane = false }
                             if model.connected != nil { await model.refreshDetails() }
                             else if deviceSource == "cloud" { await model.refreshCloud() }
@@ -193,7 +198,7 @@ struct ContentView: View {
             }.frame(width: 800, height: 760)
         }
         .sheet(isPresented: $showingInstaller) {
-            InstallView(session: installer) { Task { await model.refreshNearby() } }
+            InstallView(session: installer) { actions.submit { await model.refreshNearby() } }
         }
         .sheet(isPresented: $showingAddress) {
             VStack(alignment: .leading, spacing: 16) {
@@ -206,7 +211,7 @@ struct ContentView: View {
                         let address = manualAddress.trimmingCharacters(in: .whitespacesAndNewlines)
                         showingAddress = false
                         showingOrganization = false; showingSites = false; showingSimulators = false
-                        Task { await model.connect(Device(id: address, name: address, selector: address, transport: .lan, address: address)) }
+                        actions.submit { await model.connect(Device(id: address, name: address, selector: address, transport: .lan, address: address)) }
                     }.keyboardShortcut(.defaultAction).disabled(manualAddress.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
                 }
             }.padding(24).frame(width: 420)
@@ -218,7 +223,7 @@ struct ContentView: View {
             Button("Cancel", role: .cancel) { model.appDeletion = nil }
             Button("Delete App", role: .destructive) {
                 model.appDeletion = nil
-                Task { await model.deleteApp(target) }
+                actions.submit { await model.deleteApp(target) }
             }
         } message: { target in
             Text("Delete \"\(target.app)\" from \"\(target.device)\"? This stops and removes the app and its services. Persistent data and container images are kept.")
@@ -227,12 +232,12 @@ struct ContentView: View {
             Button("OK") { model.alert = nil }
             Button("Technical details") { errorDetails = model.alert; model.alert = nil }
         } message: { Text(PresentedFailure(model.alert ?? "").message) }
-        .alert("Could not connect", isPresented: Binding(get: { model.connectionError != nil }, set: { if !$0 { model.connectionError = nil } })) {
+        .alert(PresentedFailure(model.connectionError ?? "").title ?? "Could not connect", isPresented: Binding(get: { model.connectionError != nil }, set: { if !$0 { model.connectionError = nil } })) {
             Button("OK", role: .cancel) { model.connectionError = nil }
             if let device = model.failedConnection {
-                Button("Try again") { Task { await model.connect(device) } }
+                Button("Try again") { actions.submit { await model.connect(device) } }
                 if model.canForgetIdentity {
-                    Button("Forget saved identity and retry") { Task { await model.connect(device, forgetIdentity: true) } }
+                    Button("Forget saved identity and retry") { actions.submit { await model.connect(device, forgetIdentity: true) } }
                 }
             }
             Button("Technical details") { errorDetails = model.connectionError; model.connectionError = nil }
@@ -256,8 +261,6 @@ struct ContentView: View {
             connectByAddress: { showingAddress = true }
         ))
         .task { await model.start() }
-        .task { await model.vpn.observeStatus() }
-        .task(id: model.initialized) { await model.observeEvents() }
         .task(id: deviceSource) {
             if deviceSource == "cloud", model.cloud.isEmpty, model.account?.signedIn == true {
                 await model.refreshCloud()
@@ -310,7 +313,7 @@ struct ContentView: View {
             .accessibilityValue(deviceSource == source ? "Selected" : "")
             .contextMenu {
                 Button("Find devices again") {
-                    Task { if source == "cloud" { await model.refreshCloud() } else { await model.refreshNearby() } }
+                    actions.submit { if source == "cloud" { await model.refreshCloud() } else { await model.refreshNearby() } }
                 }.disabled(model.discovering || !model.initialized)
             }
     }
@@ -359,8 +362,8 @@ struct ContentView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             } else if let error = model.detailError {
                 FailureView(title: "Could not connect", error: error,
-                            forgetIdentity: model.canForgetIdentity ? { Task { await model.connect(device, forgetIdentity: true) } } : nil) {
-                    Task { await model.connect(device) }
+                            forgetIdentity: model.canForgetIdentity ? { actions.submit { await model.connect(device, forgetIdentity: true) } } : nil) {
+                    actions.submit { await model.connect(device) }
                 }
             } else if model.selectedDeviceReady {
                 if model.connectedLite { LiteDeviceView(model: model).id(model.deviceSession) } else {
@@ -425,6 +428,6 @@ struct ContentView: View {
     private var logsPane: some View { LogsView(model: model) }
 
     private func unavailable(_ title: String, error: String) -> some View {
-        FailureView(title: title, error: error) { Task { await model.refreshDetails() } }
+        FailureView(title: title, error: error) { actions.submit { await model.refreshDetails() } }
     }
 }

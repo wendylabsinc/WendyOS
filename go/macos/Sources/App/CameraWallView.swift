@@ -86,9 +86,14 @@ struct CameraFeedDisplay: View {
 
 #if os(macOS)
 struct CameraWallView: View {
+    @State private var actions = AsyncActions()
     @ObservedObject var model: AppModel
 
     var body: some View {
+        actionContent.task { await actions.run() }
+    }
+
+    @ViewBuilder private var actionContent: some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack {
                 Label("Camera wall", systemImage: "rectangle.grid.2x2").font(.headline)
@@ -96,7 +101,7 @@ struct CameraWallView: View {
                 Spacer()
             }
             if let error = model.camerasError {
-                FailureView(title: "Could not load cameras", error: error) { Task { await model.refreshDetails() } }
+                FailureView(title: "Could not load cameras", error: error) { actions.submit { await model.refreshDetails() } }
             } else if model.cameraFeeds.isEmpty {
                 ContentUnavailableView("No cameras found", systemImage: "video.slash")
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -105,7 +110,7 @@ struct CameraWallView: View {
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 360), spacing: 16)], spacing: 16) {
                         ForEach(model.cameraFeeds) { feed in
                             CameraTile(feed: feed,
-                                       play: { Task { await model.playCamera(feed) } },
+                                       play: { actions.submit { await model.playCamera(feed) } },
                                        pause: { model.pauseCamera(feed) })
                         }
                     }.padding(.bottom, 16)

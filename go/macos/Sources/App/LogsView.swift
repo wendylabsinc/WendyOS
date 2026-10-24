@@ -56,6 +56,7 @@ struct LogEntry: Identifiable {
 }
 
 struct LogsView: View {
+    @State private var actions = AsyncActions()
     @ObservedObject var model: AppModel
     @State private var search = ""
     @State private var problemsOnly = false
@@ -68,6 +69,10 @@ struct LogsView: View {
         }
     }
     var body: some View {
+        actionContent.task { await actions.run() }
+    }
+
+    @ViewBuilder private var actionContent: some View {
         #if os(iOS)
         mobileContent
         #else
@@ -86,7 +91,7 @@ struct LogsView: View {
                 } label: { Image(systemName: "doc.on.doc") }.help("Copy visible logs")
             }
             if let error = model.logError {
-                HStack { FailureNote(message: error); Button("Retry") { Task { await model.streamLogs() } } }
+                HStack { FailureNote(message: error); Button("Retry") { actions.submit { await model.streamLogs() } } }
             }
             VStack(spacing: 0) {
                 #if os(macOS)
@@ -145,7 +150,7 @@ struct LogsView: View {
                 if let error = model.logError {
                     Section {
                         FailureNote(message: error)
-                        Button("Retry") { Task { await model.streamLogs() } }
+                        Button("Retry") { actions.submit { await model.streamLogs() } }
                     }
                 }
                 ForEach(visibleLogs) { entry in
@@ -276,11 +281,16 @@ private struct LogRow: View {
 
 
 struct DeviceLogsPage: View {
+    @State private var actions = AsyncActions()
     @ObservedObject var model: AppModel
     var body: some View {
+        actionContent.task { await actions.run() }
+    }
+
+    @ViewBuilder private var actionContent: some View {
         LogsView(model: model)
             .navigationTitle("Logs")
             .task(id: model.deviceSession) { await model.streamLogs() }
-            .onDisappear { Task { try? await model.client.stopLogs() } }
+            .onDisappear { model.cleanup.submit { try? await model.client.stopLogs() } }
     }
 }

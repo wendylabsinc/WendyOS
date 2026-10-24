@@ -18,12 +18,17 @@ extension AppState {
     }
 }
 struct AppsView: View {
+    @State private var actions = AsyncActions()
     @ObservedObject var model: AppModel
     let apps: [DeviceApp]
     let showLogs: (DeviceApp) -> Void
     @State private var selection: Set<String> = []
 
     var body: some View {
+        actionContent.task { await actions.run() }
+    }
+
+    @ViewBuilder private var actionContent: some View {
         Table(apps, selection: $selection) {
             TableColumn("Application") { app in
                 HStack(spacing: 12) {
@@ -45,7 +50,7 @@ struct AppsView: View {
             }.width(120)
             TableColumn("") { app in
                 if app.hasWebpage {
-                    Button { Task { await model.openApp(app) } } label: {
+                    Button { actions.submit { await model.openApp(app) } } label: {
                         Label("Open", systemImage: "arrow.up.right.square")
                     }
                     .buttonStyle(.bordered).controlSize(.small)
@@ -69,13 +74,13 @@ struct AppsView: View {
             if selectedApps.count > 1 {
                 Button("Stop Selected Apps", systemImage: "stop.fill") {
                     let session = model.deviceSession
-                    Task { await model.stopApps(selectedApps, expectedSession: session) }
+                    actions.submit { await model.stopApps(selectedApps, expectedSession: session) }
                 }
                 .disabled(selectedApps.allSatisfy { $0.runningState == .stopped } || selectedApps.contains { model.appActions.contains($0.appName) })
             } else if let app = selectedApps.first {
-                AppControlMenu(model: model, app: app.appName, state: app.runningState)
+                AppControlMenu(actions: actions, model: model, app: app.appName, state: app.runningState)
                 if app.hasWebpage {
-                    Button("Open Webpage", systemImage: "arrow.up.right.square") { Task { await model.openApp(app) } }
+                    Button("Open Webpage", systemImage: "arrow.up.right.square") { actions.submit { await model.openApp(app) } }
                         .disabled(app.runningState != .running)
                 }
                 Divider()
@@ -121,6 +126,7 @@ enum AppStopBatch {
 }
 
 struct AppControlMenu: View {
+    let actions: AsyncActions
     @ObservedObject var model: AppModel
     let app: String
     let state: AppState
@@ -128,9 +134,9 @@ struct AppControlMenu: View {
         if model.appActions.contains(app) {
             Text("Updating App…")
         } else {
-            Button("Start", systemImage: "play.fill") { Task { await model.setAppRunning(app, running: true) } }
+            Button("Start", systemImage: "play.fill") { actions.submit { await model.setAppRunning(app, running: true) } }
                 .disabled(state == .running)
-            Button("Stop", systemImage: "stop.fill") { Task { await model.setAppRunning(app, running: false) } }
+            Button("Stop", systemImage: "stop.fill") { actions.submit { await model.setAppRunning(app, running: false) } }
                 .disabled(state == .stopped)
         }
     }
@@ -144,7 +150,7 @@ struct KeyboardRowSelection: ViewModifier {
     var focusRequest: Int = 0
     @FocusState private var focused: Bool
 
-    static func next(in ids: [String], selected: String?, down: Bool) -> String? {
+    nonisolated static func next(in ids: [String], selected: String?, down: Bool) -> String? {
         guard !ids.isEmpty else { return nil }
         guard let selected, let index = ids.firstIndex(of: selected) else {
             return down ? ids.first : ids.last

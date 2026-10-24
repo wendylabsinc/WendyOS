@@ -2,6 +2,7 @@ import SwiftUI
 import Charts
 
 struct DataVisualizerView: View {
+    @State private var actions = AsyncActions()
     let session: UInt64
     let deviceName: String
     var initialEpisode: String?
@@ -17,6 +18,10 @@ struct DataVisualizerView: View {
     @State private var viewport = DataTimelineViewport(start: 0, end: 1)
     @State private var timestamps: [String: [Double]] = [:]
     var body: some View {
+        actionContent.task { await actions.run() }
+    }
+
+    @ViewBuilder private var actionContent: some View {
         VStack(spacing: 0) {
             if initialEpisode == nil && !episodes.isEmpty {
                 Picker("Episode", selection: $episode) {
@@ -24,7 +29,7 @@ struct DataVisualizerView: View {
                 }.padding().pickerStyle(.menu)
             }
             if loading { ProgressView("Loading recording…").frame(maxWidth: .infinity, maxHeight: .infinity) }
-            else if let error { FailureView(title: "Could not load recording", error: error) { Task { await load() } } }
+            else if let error { FailureView(title: "Could not load recording", error: error) { actions.submit { await load() } } }
             else if let data {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 16) {
@@ -75,7 +80,7 @@ struct DataVisualizerView: View {
         }
         .onDisappear { playing = false }
         .task(id: episode) { if !episode.isEmpty { await load() } }
-        .focusedSceneValue(\.devicePaneRefresh, PaneRefreshAction(enabled: !loading, perform: { Task { await refresh() } }))
+        .focusedSceneValue(\.devicePaneRefresh, PaneRefreshAction(enabled: !loading, perform: { actions.submit { await refresh() } }))
     }
     private func refresh() async {
         do {

@@ -32,6 +32,7 @@ extension GoClient {
     }
 }
 struct DeviceInfoView: View {
+    @State private var actions = AsyncActions()
     let session: UInt64
     let deviceName: String
     @State private var info: DeviceInfoSnapshot?
@@ -44,6 +45,10 @@ struct DeviceInfoView: View {
     @State private var verified = false
     @State private var waiting = false
     var body: some View {
+        actionContent.task { await actions.run() }
+    }
+
+    @ViewBuilder private var actionContent: some View {
         Form {
             Section("Device") {
                 LabeledContent("Name", value: deviceName)
@@ -77,14 +82,14 @@ struct DeviceInfoView: View {
                 else if let update, update.available {
                     Label("Update available!", systemImage: "arrow.down.circle.fill").foregroundStyle(Color.accentColor)
                     LabeledContent("Version", value: update.latest)
-                    Button("Update Wendy Agent") { Task { await start() } }
+                    Button("Update Wendy Agent") { actions.submit { await start() } }
                 } else if let update, update.phase == "current" {
                     Label(update.installed == "dev" || update.installed.hasSuffix("-dev") ? "Development build" : "Up to date", systemImage: "checkmark.circle")
                     LabeledContent("Latest release", value: update.latest)
                 }
                 if let updateError { FailureNote(message: updateError) }
                 if !checking && !starting && !waiting && update?.busy != true {
-                    Button("Check again") { Task { await refresh() } }
+                    Button("Check again") { actions.submit { await refresh() } }
                 }
             } header: { Text("Agent update") } footer: { Text("The device downloads and installs the update. Its connection will briefly restart.") }
         }.formStyle(.grouped).navigationTitle("Device info")
@@ -102,12 +107,12 @@ struct DeviceInfoView: View {
         guard !checking else { return }
         checking = true; updateError = nil; defer { checking = false }
         do { info = try await GoClient.shared.deviceInfo(session: session); error = nil }
-        catch { self.error = error.localizedDescription }
+        catch { if !Task.isCancelled { self.error = error.localizedDescription } }
         do {
             let status = try await GoClient.shared.onlineUpdate(session: session, action: 0)
             if status.busy { expected = status.latest; update = status }
             else { update = try await GoClient.shared.onlineUpdate(session: session, action: 1) }
-        } catch { updateError = error.localizedDescription }
+        } catch { if !Task.isCancelled { updateError = error.localizedDescription } }
     }
     private func start() async {
         guard let update, update.available, !starting else { return }
@@ -116,7 +121,7 @@ struct DeviceInfoView: View {
         do {
             expected = update.latest
             self.update = try await GoClient.shared.onlineUpdate(session: session, action: 2, version: expected)
-        } catch { updateError = error.localizedDescription }
+        } catch { if !Task.isCancelled { updateError = error.localizedDescription } }
     }
     private func monitor() async {
         let deadline = Date().addingTimeInterval(12 * 60)

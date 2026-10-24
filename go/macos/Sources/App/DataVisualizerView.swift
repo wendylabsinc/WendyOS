@@ -6,6 +6,7 @@ import SceneKit
 import UniformTypeIdentifiers
 
 struct DataVisualizerView: View {
+    @State private var actions = AsyncActions()
     let session: UInt64
     let deviceName: String
     var initialEpisode: String? = nil
@@ -34,6 +35,10 @@ struct DataVisualizerView: View {
 
     private var loading: Bool { loadingList || loadingEpisode }
     var body: some View {
+        actionContent.task { await actions.run() }
+    }
+
+    @ViewBuilder private var actionContent: some View {
         VStack(spacing: 0) {
             HStack(spacing: 12) {
                 Label("Data visualizer", systemImage: "waveform.path.ecg").font(.headline)
@@ -211,7 +216,7 @@ struct DataVisualizerView: View {
         guard panel.runModal() == .OK, let destination = panel.url else { return }
         let selectedEpisode = episode
         exporting = true; error = nil; exportedURL = nil
-        Task {
+        actions.submit {
             defer { exporting = false }
             do { try await GoClient.shared.exportVisualEpisode(session: session, episode: selectedEpisode, destination: destination); exportedURL = destination }
             catch { self.error = error.localizedDescription }
@@ -519,103 +524,13 @@ private final class DataVisualPlayerHost: NSView {
 
 // Backpressure for exact seeks: one decode in flight, one replaceable target.
 // Finishing a scrub always lands on its final recorded frame.
-private struct DataVisualVideoPlayer: NSViewRepresentable {
+struct DataVisualNativeVideoPlayer: NSViewRepresentable {
     let video: DataVisualVideo
     let cursor: Double
     let playing: Bool
     let speed: Double
-    let mediaOwner: DataVisualMediaFiles
-    @MainActor final class Coordinator {
-        let player: AVPlayer
-        let owner: DataVisualMediaFiles
-        private var seeks = DataVisualSeekState()
-        private var readyObservation: NSKeyValueObservation?
-        private var scheduledSeek: Task<Void, Never>?
-        private var lastSeekHost = -Double.infinity
-        private var active = true
-        private var wantsPlayback = false
-        private var playbackRate = 1.0
-        private var playbackPosition = 0.0
-        private var playbackHost = 0.0
-        private var needsPlaybackAnchor = true
-        private var hostTime: Double { CMClockGetTime(CMClockGetHostTimeClock()).seconds }
-        init(video: DataVisualVideo, owner: DataVisualMediaFiles) {
-            self.owner = owner
-            player = AVPlayer(url: video.url)
-            player.isMuted = true
-            player.actionAtItemEnd = .pause
-            // Host-clock anchoring requires this to be false (AVPlayer.h).
-            player.automaticallyWaitsToMinimizeStalling = false
-            readyObservation = player.currentItem?.observe(\.status, options: [.initial, .new]) { [weak self] item, _ in
-                guard item.status == .readyToPlay else { return }
-                Task { @MainActor in
-                    guard let self, self.active else { return }
-                    if self.wantsPlayback { self.startPlayback() } else { self.scheduleSeek() }
-                }
-            }
-        }
-        func update(position: Double, frame: Double, playing: Bool, speed: Double) {
-            guard active else { return }
-            let changed = wantsPlayback != playing || playbackRate != speed
-            wantsPlayback = playing
-            playbackRate = speed
-            playbackPosition = position
-            playbackHost = hostTime
-            if playing {
-                if changed { needsPlaybackAnchor = true }
-                if seeks.inFlight == nil { scheduledSeek?.cancel(); scheduledSeek = nil }
-                startPlayback()
-            } else {
-                if changed { player.pause() }
-                needsPlaybackAnchor = true
-                seeks.request(frame)
-                scheduleSeek()
-            }
-        }
-        private func startPlayback() {
-            guard active, needsPlaybackAnchor, wantsPlayback, seeks.inFlight == nil,
-                  player.currentItem?.status == .readyToPlay else { return }
-            seeks = DataVisualSeekState()
-            // Establish the shared timeline/host-clock relationship once when
-            // playing or changing speed. Normal playback decodes continuously;
-            // it does not restart a GOP for each UI cursor tick.
-            player.setRate(Float(playbackRate),
-                           time: CMTime(seconds: playbackPosition, preferredTimescale: 1_000_000),
-                           atHostTime: CMTime(seconds: playbackHost, preferredTimescale: 1_000_000_000))
-            needsPlaybackAnchor = false
-        }
-        private func scheduleSeek() {
-            guard active, !wantsPlayback, seeks.inFlight == nil, scheduledSeek == nil,
-                  seeks.desired != seeks.completed, player.currentItem?.status == .readyToPlay else { return }
-            let delay = max(0, lastSeekHost + 1.0 / 30.0 - hostTime)
-            scheduledSeek = Task { [weak self] in
-                do { try await Task.sleep(for: .seconds(delay)) }
-                catch { return }
-                guard let self, self.active, !self.wantsPlayback,
-                      let target = self.seeks.begin() else { return }
-                self.lastSeekHost = self.hostTime
-                self.player.pause()
-                let finished = await self.player.seek(
-                    to: CMTime(seconds: target, preferredTimescale: 1_000_000),
-                    toleranceBefore: .zero, toleranceAfter: .zero)
-                guard self.active else { return }
-                self.seeks.finish(success: finished)
-                self.scheduledSeek = nil
-                if self.wantsPlayback { self.startPlayback() }
-                else if finished && !Task.isCancelled { self.scheduleSeek() }
-            }
-        }
-
-        func stop() {
-            active = false
-            scheduledSeek?.cancel(); scheduledSeek = nil
-            readyObservation = nil
-            player.pause()
-            player.currentItem?.cancelPendingSeeks()
-            player.replaceCurrentItem(with: nil)
-        }
-    }
-    func makeCoordinator() -> Coordinator { Coordinator(video: video, owner: mediaOwner) }
+    let controller: DataVisualVideoController
+    func makeCoordinator() -> DataVisualVideoController { controller }
     func makeNSView(context: Context) -> NSView {
         let host = DataVisualPlayerHost(frame: .zero)
         host.playerLayer.player = context.coordinator.player
@@ -625,7 +540,7 @@ private struct DataVisualVideoPlayer: NSViewRepresentable {
         guard let frame = DataVisualSearch.latest(video.timestamps, at: cursor, time: { $0 }), let origin = video.timestamps.first else { return }
         context.coordinator.update(position: cursor - origin, frame: frame - origin, playing: playing, speed: speed)
     }
-    static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) { coordinator.stop() }
+    static func dismantleNSView(_ nsView: NSView, coordinator: DataVisualVideoController) { coordinator.stop() }
 }
 
 private struct DataVisualPlot: View {
@@ -786,6 +701,7 @@ private struct DataVisualAudioPlayer: NSViewRepresentable {
 
 
 private struct DataVisualRecordingSheet: View {
+    @State private var actions = AsyncActions()
     let session: UInt64
     let deviceName: String
     let changed: (String?) -> Void
@@ -798,6 +714,10 @@ private struct DataVisualRecordingSheet: View {
     @State private var error: String?
     @State private var ready = false
     var body: some View {
+        actionContent.task { await actions.run() }
+    }
+
+    @ViewBuilder private var actionContent: some View {
         VStack(alignment: .leading, spacing: 16) {
             Text("Record on \(deviceName)").font(.title2.bold())
             if let active {
@@ -828,9 +748,9 @@ private struct DataVisualRecordingSheet: View {
                 Spacer()
                 Button("Close") { dismiss() }.disabled(busy)
                 if active != nil {
-                    Button("Stop and save") { Task { await stop() } }.disabled(busy)
+                    Button("Stop and save") { actions.submit { await stop() } }.disabled(busy)
                 } else {
-                    Button("Start recording") { Task { await start() } }.disabled(busy || !ready || selected.isEmpty)
+                    Button("Start recording") { actions.submit { await start() } }.disabled(busy || !ready || selected.isEmpty)
                 }
             }
         }.padding(24).frame(width: 640, height: 540).interactiveDismissDisabled(busy)

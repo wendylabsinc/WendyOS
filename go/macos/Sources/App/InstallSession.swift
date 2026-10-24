@@ -86,22 +86,21 @@
             terminal = view
             running = true
             page = 2
-            // Allow SwiftUI to lay out the terminal before the CLI measures its size.
-            DispatchQueue.main.async { [weak self, weak view] in
-                guard let self, let view else { return }
-                view.startProcess(
-                    executable: executable,
-                    args: arguments,
-                    environment: Self.environment(),
-                    currentDirectory: NSHomeDirectory()
-                )
-                if !view.process.running {
-                    self.running = false
-                    self.error = "The installer could not start. No write was started."
-                }
-                view.window?.makeFirstResponder(view)
+            // The terminal starts with an explicit frame and forwards later
+            // layout changes to the PTY through SwiftTerm.
+            view.startProcess(
+                executable: executable,
+                args: arguments,
+                environment: Self.environment(),
+                currentDirectory: NSHomeDirectory()
+            )
+            if !view.process.running {
+                running = false
+                error = "The installer could not start. No write was started."
             }
+            view.window?.makeFirstResponder(view)
         }
+
         static func environment(
             source: [String: String] = ProcessInfo.processInfo.environment
         ) -> [String] {
@@ -132,8 +131,10 @@
         nonisolated func setTerminalTitle(source: LocalProcessTerminalView, title: String) {}
         nonisolated func hostCurrentDirectoryUpdate(source: TerminalView, directory: String?) {}
         nonisolated func processTerminated(source: TerminalView, exitCode: Int32?) {
-            Task { @MainActor in
-                guard source === self.terminal else { return }
+            // LocalProcessTerminalView uses SwiftTerm's default main queue.
+            let sourceID = ObjectIdentifier(source)
+            MainActor.assumeIsolated {
+                guard self.terminal.map(ObjectIdentifier.init) == sourceID else { return }
                 self.running = false
                 if exitCode == 0 {
                     if self.operation == .install {

@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct CampaignRecordingsView: View {
+    @State private var actions = AsyncActions()
     let session: UInt64
     let deviceName: String
     @State var campaign: DeviceCampaign
@@ -10,6 +11,10 @@ struct CampaignRecordingsView: View {
     @State private var loading = true
     @State private var settings = false
     var body: some View {
+        actionContent.task { await actions.run() }
+    }
+
+    @ViewBuilder private var actionContent: some View {
         List {
             Section {
                 LabeledContent("Status", value: campaign.state.capitalized)
@@ -41,7 +46,7 @@ struct CampaignRecordingsView: View {
         }.listStyle(.insetGrouped)
             .navigationTitle(campaign.name).navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Campaign settings", systemImage: "gearshape") { settings = true } } }
-            .sheet(isPresented: $settings) { CampaignSettingsView(session: session, name: campaign.name) { Task { await refresh() } } }
+            .sheet(isPresented: $settings) { CampaignSettingsView(session: session, name: campaign.name) { actions.submit { await refresh() } } }
             .task { await refresh() }
             .refreshable { await refresh() }
     }

@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct CampaignsView: View {
+    @State private var actions = AsyncActions()
     let session: UInt64
     let deviceName: String
     let openClip: (String) -> Void
@@ -15,6 +16,10 @@ struct CampaignsView: View {
     @State private var selectedCampaign: DeviceCampaign?
     @State private var editingCampaign: DeviceCampaign?
     var body: some View {
+        actionContent.task { await actions.run() }
+    }
+
+    @ViewBuilder private var actionContent: some View {
         Group {
             #if os(iOS)
             mobileContent
@@ -22,9 +27,9 @@ struct CampaignsView: View {
             desktopContent
             #endif
         }
-        .sheet(item: $editingCampaign) { campaign in CampaignSettingsView(session: session, name: campaign.name) { Task { await refresh() } } }
+        .sheet(item: $editingCampaign) { campaign in CampaignSettingsView(session: session, name: campaign.name) { actions.submit { await refresh() } } }
         .task { await refresh() }
-        .sheet(isPresented: $creating) { CampaignEditor(session: session, deviceName: deviceName) { Task { await refresh() } } }
+        .sheet(isPresented: $creating) { CampaignEditor(session: session, deviceName: deviceName) { actions.submit { await refresh() } } }
     }
     #if os(iOS)
     private var mobileContent: some View {
@@ -110,7 +115,7 @@ struct CampaignsView: View {
                 .font(.caption).foregroundStyle(.secondary)
         }.padding(.horizontal, 20).padding(.bottom, 16)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .focusedSceneValue(\.devicePaneRefresh, PaneRefreshAction(enabled: !loading, perform: { Task { await refresh() } }))
+            .focusedSceneValue(\.devicePaneRefresh, PaneRefreshAction(enabled: !loading, perform: { actions.submit { await refresh() } }))
             .sheet(item: $selectedCampaign) { campaign in
                 CampaignClipsView(campaign: campaign.name, deviceName: deviceName,
                                   clips: clips.filter { $0.campaign == campaign.name }, warning: clipWarning,
@@ -143,6 +148,7 @@ struct CampaignsView: View {
 }
 
 private struct CampaignClipsView: View {
+    @State private var actions = AsyncActions()
     let campaign, deviceName: String
     let clips: [CampaignClip]
     let warning: String
@@ -152,6 +158,10 @@ private struct CampaignClipsView: View {
     let open: (String) -> Void
     @Environment(\.dismiss) private var dismiss
     var body: some View {
+        actionContent.task { await actions.run() }
+    }
+
+    @ViewBuilder private var actionContent: some View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 14) {
                 HStack {
@@ -162,7 +172,7 @@ private struct CampaignClipsView: View {
                     }
                     Spacer()
                     if loading { ProgressView().controlSize(.small) }
-                    Button { Task { await refresh() } } label: { Image(systemName: "arrow.clockwise") }.help("Refresh clips").disabled(loading)
+                    Button { actions.submit { await refresh() } } label: { Image(systemName: "arrow.clockwise") }.help("Refresh clips").disabled(loading)
                     Button("Done") { dismiss() }.keyboardShortcut(.cancelAction)
                 }
                 if let error { Text(error).font(.callout).foregroundStyle(.orange).textSelection(.enabled) }
@@ -211,6 +221,7 @@ private struct CampaignClipsView: View {
 }
 
 private struct CampaignEditor: View {
+    @State private var actions = AsyncActions()
     let session: UInt64
     let deviceName: String
     let deployed: () -> Void
@@ -224,6 +235,10 @@ private struct CampaignEditor: View {
     @State private var reviewing = false
 
     var body: some View {
+        actionContent.task { await actions.run() }
+    }
+
+    @ViewBuilder private var actionContent: some View {
         Group {
             #if os(iOS)
             mobileEditor
@@ -239,7 +254,7 @@ private struct CampaignEditor: View {
             .task {
                 defer { loading = false }
                 do { sources = try await GoClient.shared.campaignSources(session: session) }
-                catch { sourceError = error.localizedDescription }
+                catch { if !Task.isCancelled { sourceError = error.localizedDescription } }
             }
     }
     #if os(iOS)
@@ -283,7 +298,7 @@ private struct CampaignEditor: View {
                 .navigationTitle("New campaign").navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.disabled(saving) }
-                    ToolbarItem(placement: .confirmationAction) { Button(saving ? "Creating…" : "Create") { Task { await deploy() } }.disabled(!draft.valid || saving) }
+                    ToolbarItem(placement: .confirmationAction) { Button(saving ? "Creating…" : "Create") { actions.submit { await deploy() } }.disabled(!draft.valid || saving) }
                 }
         }
     }
@@ -359,7 +374,7 @@ private struct CampaignEditor: View {
                 Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction).disabled(saving)
                 if reviewing { Button("Back") { reviewing = false }.disabled(saving) }
                 Button(reviewing ? "Deploy campaign" : "Review") {
-                    if reviewing { Task { await deploy() } } else { reviewing = true }
+                    if reviewing { actions.submit { await deploy() } } else { reviewing = true }
                 }.keyboardShortcut(.defaultAction).disabled(!draft.valid || saving)
             }
         }.padding(24).desktopFrame(width: 680, height: 760).interactiveDismissDisabled(saving)
@@ -395,6 +410,6 @@ private struct CampaignEditor: View {
     private func deploy() async {
         saving = true; error = nil; defer { saving = false }
         do { try await GoClient.shared.deployCampaign(session: session, draft: draft); deployed(); dismiss() }
-        catch { self.error = error.localizedDescription }
+        catch { if !Task.isCancelled { self.error = error.localizedDescription } }
     }
 }

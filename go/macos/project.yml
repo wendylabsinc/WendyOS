@@ -78,6 +78,9 @@ targets:
         SWIFT_OBJC_BRIDGING_HEADER: Sources/Shared/Bridge.h
         OTHER_LDFLAGS: ["$(inherited)", "-lwendydesktop", "$(SRCROOT)/Build/libusb-1.0.dylib"]
     preBuildScripts:
+      - script: python3 "$SRCROOT/Scripts/check-concurrency.py"
+        name: Check structured concurrency
+        basedOnDependencyAnalysis: false
       - path: Scripts/build-go.sh
         name: Build Go libraries and bundled CLI
         basedOnDependencyAnalysis: false
@@ -105,6 +108,9 @@ targets:
         SWIFT_OBJC_BRIDGING_HEADER: Sources/Shared/VPNBridge.h
         OTHER_LDFLAGS: ["$(inherited)", "-lwendyvpn"]
     preBuildScripts:
+      - script: python3 "$SRCROOT/Scripts/check-concurrency.py"
+        name: Check structured concurrency
+        basedOnDependencyAnalysis: false
       - path: Scripts/build-go.sh
         name: Build Go libraries
         basedOnDependencyAnalysis: false
@@ -180,6 +186,9 @@ targets:
         OTHER_LDFLAGS: ["-lresolv", "-lwendydesktop"]
         SWIFT_OBJC_BRIDGING_HEADER: Sources/Shared/Bridge.h
     preBuildScripts:
+      - script: python3 "$SRCROOT/Scripts/check-concurrency.py"
+        name: Check structured concurrency
+        basedOnDependencyAnalysis: false
       - path: Scripts/build-ios-go.sh
         name: Build embedded Go backend for iOS
         basedOnDependencyAnalysis: false

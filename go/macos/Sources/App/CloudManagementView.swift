@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct CloudManagementView: View {
+    @State private var actions = AsyncActions()
     @EnvironmentObject private var app: AppModel
     @StateObject private var model = CloudManagementModel()
     @State private var invitationID: String?
@@ -55,6 +56,10 @@ struct CloudManagementView: View {
     }
 
     var body: some View {
+        actionContent.task { await actions.run() }
+    }
+
+    @ViewBuilder private var actionContent: some View {
         Group {
             #if os(iOS)
             mobileContent
@@ -64,7 +69,7 @@ struct CloudManagementView: View {
         }
             .focusedSceneValue(\.organizationRefresh, PaneRefreshAction(
                 enabled: !model.loading && !model.saving,
-                perform: { Task { await model.loadAccounts() } }
+                perform: { actions.submit { await model.loadAccounts() } }
             ))
             #if os(iOS)
             .task(id: app.mobileCloudSelectionKey) {
@@ -96,7 +101,7 @@ struct CloudManagementView: View {
                 Button("Confirm", role: .destructive) {
                     if let action = removal {
                         removal = nil
-                        Task { await remove(action) }
+                        actions.submit { await remove(action) }
                     }
                 }
             } message: {
@@ -150,7 +155,7 @@ struct CloudManagementView: View {
                     Text("Sign in to manage your organization.")
                 } actions: {
                     Button(app.signingIn ? "Signing in…" : "Sign in") {
-                        Task { await app.signIn() }
+                        actions.submit { await app.signIn() }
                     }.disabled(app.signingIn)
                     if let url = app.loginURL { Link("Continue in browser", destination: url) }
                 }
@@ -180,7 +185,7 @@ struct CloudManagementView: View {
                 if let error = model.error {
                     if model.snapshot == nil {
                         FailureView(title: "Could not load organization", error: error) {
-                            Task { await model.loadAccounts() }
+                            actions.submit { await model.loadAccounts() }
                         }.padding(.horizontal, 28)
                     } else {
                         FailureNote(message: error).padding(.horizontal, 28)
@@ -221,7 +226,7 @@ struct CloudManagementView: View {
                 if model.accounts.isEmpty {
                     ContentUnavailableView { Label("Connect to Wendy Cloud", systemImage: "cloud") }
                         description: { Text("Sign in to manage your organization.") }
-                        actions: { Button("Sign in") { Task { await app.signIn() } } }
+                        actions: { Button("Sign in") { actions.submit { await app.signIn() } } }
                 } else {
                     if let error = model.error { FailureNote(message: error) }
                     if let snapshot = model.snapshot {
@@ -306,7 +311,7 @@ struct CloudManagementView: View {
                     set: { value in
                         model.account = value
                         memberID = nil
-                        Task { await model.loadOrganizations() }
+                        actions.submit { await model.loadOrganizations() }
                     }
                 )
             ) {
@@ -320,7 +325,7 @@ struct CloudManagementView: View {
             }
             Divider()
             Button("Sign in", systemImage: "person.crop.circle.badge.plus") {
-                Task { await app.signIn() }
+                actions.submit { await app.signIn() }
             }.disabled(app.signingIn)
         } label: {
             Label(selectedAccountTitle, systemImage: "person.crop.circle")
@@ -337,7 +342,7 @@ struct CloudManagementView: View {
                 set: { value in
                     model.organization = value
                     memberID = nil
-                    Task { await model.refresh(clear: true) }
+                    actions.submit { await model.refresh(clear: true) }
                 }
             )
         ) {
@@ -384,7 +389,7 @@ struct CloudManagementView: View {
     @ViewBuilder private func team(_ s: CloudOrganizationSnapshot) -> some View {
         if !s.teamError.isEmpty {
             FailureView(title: "Could not load teammates", error: s.teamError) {
-                Task { await model.refresh() }
+                actions.submit { await model.refresh() }
             }
         } else {
             HSplitView {
@@ -519,7 +524,7 @@ struct CloudManagementView: View {
             Button("Revoke", role: .destructive) {
                 if let action = removal {
                     removal = nil
-                    Task { await remove(action) }
+                    actions.submit { await remove(action) }
                 }
             }
         } message: {
@@ -540,7 +545,7 @@ struct CloudManagementView: View {
         }.padding(.horizontal, 24).padding(.bottom, 20)
         if !s.invitesError.isEmpty {
             FailureView(title: "Could not load invitations", error: s.invitesError) {
-                Task { await model.refresh() }
+                actions.submit { await model.refresh() }
             }
         } else if s.invitations.isEmpty {
             ContentUnavailableView("No invitations", systemImage: "envelope")
@@ -642,7 +647,7 @@ struct CloudManagementView: View {
                     Button(kind == .invitation ? "Create link" : "Save") {
                         guard !formSubmitting, !model.saving else { return }
                         formSubmitting = true
-                        Task {
+                        actions.submit {
                             defer { formSubmitting = false }
                             await submit(kind)
                         }
@@ -718,7 +723,7 @@ struct CloudManagementView: View {
     private func submitForm(_ kind: CloudForm) {
         guard !formInvalid(kind) else { return }
         formSubmitting = true
-        Task {
+        actions.submit {
             defer { formSubmitting = false }
             await submit(kind)
         }

@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		00038EEF3EBF0704734DA832 /* ThermalCameraTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 73F8A73277DE33706D2B45EA /* ThermalCameraTests.swift */; };
+		000A6AEFAE84BB8282468B4E /* DataVisualVideoController.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC83B56E9C49F34DD5113A9E /* DataVisualVideoController.swift */; };
 		00E042DD50846DC379789994 /* ActivityView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0DDA1A07827F3064598323B /* ActivityView.swift */; };
 		029B7B146468C1CD6FCCC18B /* InstallView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD0EBD1A032792BDF75E472D /* InstallView.swift */; };
 		062150E93B7F5925AE16DA74 /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A49EBADB69E0A1992F50EDC0 /* ContentView.swift */; };
@@ -20,6 +21,7 @@
 		1571389C22196AD11AD63A6B /* BlockingWork.swift in Sources */ = {isa = PBXBuildFile; fileRef = EBC666362E8AC1DED444AD88 /* BlockingWork.swift */; };
 		189898BACBE793CA0FE09452 /* NetworkExtension.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = D12072D59326B47F07A71F81 /* NetworkExtension.framework */; };
 		1921AF77AED0B2287A8DF215 /* VPNController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F559A36FB62C81768A4EC94 /* VPNController.swift */; };
+		1B6FFE044B6C29E441D7F4B3 /* DataVisualVideoController.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC83B56E9C49F34DD5113A9E /* DataVisualVideoController.swift */; };
 		1C7D0AABFC28A6E85775CBC9 /* ModelLibraryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2572A9746D687639FDA728A /* ModelLibraryView.swift */; };
 		1CD00E4FBF047F8AC5479ED3 /* InstallGuidanceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BCB84175F336A9BF4A9505CB /* InstallGuidanceView.swift */; };
 		1DD72D639F28C7AEAF4A7D64 /* LogsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C9EDEC6A2D47804FCD2A19F /* LogsView.swift */; };
@@ -47,6 +49,7 @@
 		42602FEEC2F6B5CFC136BF33 /* SitesView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 56DEDD8877094ACCAD62B7D6 /* SitesView.swift */; };
 		43966E081AEC9A376A15FAB9 /* DeviceEnrollmentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E539BE71A9E784220ACB1D8A /* DeviceEnrollmentView.swift */; };
 		454187A52A88D86692831D21 /* GoClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = B709AF3886D5AA315D17DFD6 /* GoClient.swift */; };
+		47CAB401721ADCE7E33E0BAE /* AsyncActions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7BB8F41D151BA6EEF15734B2 /* AsyncActions.swift */; };
 		480C1EADE95D469CEBB3D5A9 /* ModelLibraryClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = DBDFC9A8D0ACA603DCD08924 /* ModelLibraryClient.swift */; };
 		4A4BD1F2B729376FC082F5A5 /* AVKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = BD12126A6ACB334462BB3EA1 /* AVKit.framework */; };
 		4C5CF7A1B3ED504E7994B90B /* MobilePlatform.swift in Sources */ = {isa = PBXBuildFile; fileRef = D82158ABFAEE221FC6FDCAC9 /* MobilePlatform.swift */; };
@@ -111,6 +114,7 @@
 		AB6CF01A4FF1564B74CBB462 /* ModelLibraryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F2572A9746D687639FDA728A /* ModelLibraryView.swift */; };
 		ABA5D81B189D6224182726FF /* ChatDeviceCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4263F7B880A586994FB72A3D /* ChatDeviceCardView.swift */; };
 		AC77C91B900101B45CE51169 /* PacketTunnelProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00BC44983830F926484A6FE9 /* PacketTunnelProvider.swift */; };
+		AF28993980F7F75714350D0A /* AsyncActions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7BB8F41D151BA6EEF15734B2 /* AsyncActions.swift */; };
 		B0AD2CCB920BD05A5F594059 /* CloudManagementView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 972AA28D77CF54F9EBCDDA77 /* CloudManagementView.swift */; };
 		B373491DFCC4AA57F306F882 /* Notices in Resources */ = {isa = PBXBuildFile; fileRef = 3D11C2595A0C1B2775FA2B1A /* Notices */; };
 		B3C201CCC4860577D45AF3C7 /* LiteDeviceView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E9769FE92218D369CAE4C7B1 /* LiteDeviceView.swift */; };
@@ -256,6 +260,7 @@
 		7648529217A2937BE2590CE6 /* DeviceSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceSettingsView.swift; sourceTree = "<group>"; };
 		7669EC933A46EBA4067A3592 /* MobileAssets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = MobileAssets.xcassets; sourceTree = "<group>"; };
 		78EF1B380CC110B5531DD514 /* SimulatorClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimulatorClient.swift; sourceTree = "<group>"; };
+		7BB8F41D151BA6EEF15734B2 /* AsyncActions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AsyncActions.swift; sourceTree = "<group>"; };
 		7DEAEE88B9129990D3810958 /* SimulatorsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimulatorsView.swift; sourceTree = "<group>"; };
 		830BF31D5054ED12AE4A2499 /* MobileVideoPlayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileVideoPlayer.swift; sourceTree = "<group>"; };
 		86C9324008F7F9FD0C92E45A /* UnitreeExtras.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UnitreeExtras.swift; sourceTree = "<group>"; };
@@ -279,6 +284,7 @@
 		B51F4E867CC0B70E8A1C6FE0 /* DataVisualizerTimeline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DataVisualizerTimeline.swift; sourceTree = "<group>"; };
 		B5EEDDF6B4AA3E5169763239 /* InstallSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InstallSession.swift; sourceTree = "<group>"; };
 		B709AF3886D5AA315D17DFD6 /* GoClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GoClient.swift; sourceTree = "<group>"; };
+		BC83B56E9C49F34DD5113A9E /* DataVisualVideoController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DataVisualVideoController.swift; sourceTree = "<group>"; };
 		BCB84175F336A9BF4A9505CB /* InstallGuidanceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InstallGuidanceView.swift; sourceTree = "<group>"; };
 		BD12126A6ACB334462BB3EA1 /* AVKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AVKit.framework; path = System/Library/Frameworks/AVKit.framework; sourceTree = SDKROOT; };
 		BE257C469E079D73200337A3 /* SimulatorRenderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimulatorRenderer.swift; sourceTree = "<group>"; };
@@ -376,6 +382,7 @@
 				F0DDA1A07827F3064598323B /* ActivityView.swift */,
 				CC609FC5E6A530F493D66E7D /* AppModel.swift */,
 				3123CE49AF22AD71C953CCE2 /* AppsView.swift */,
+				7BB8F41D151BA6EEF15734B2 /* AsyncActions.swift */,
 				7593BCF528C7CEB2093DEB3D /* AsyncCallback.swift */,
 				5B3ADE76629CC299C627F755 /* AutomationClient.swift */,
 				EBC666362E8AC1DED444AD88 /* BlockingWork.swift */,
@@ -394,6 +401,7 @@
 				B51F4E867CC0B70E8A1C6FE0 /* DataVisualizerTimeline.swift */,
 				1ACFB977D993156FC29A021C /* DataVisualizerView.swift */,
 				9CC8CB61B052F1C86F785BA5 /* DataVisualPlayback.swift */,
+				BC83B56E9C49F34DD5113A9E /* DataVisualVideoController.swift */,
 				A0038357CF8976FBB01A9221 /* DeviceAudioView.swift */,
 				EA42D986BDD4C2F250B3C32D /* DeviceBluetoothView.swift */,
 				3E4CC89666184527D86018FD /* DeviceChatView.swift */,
@@ -602,6 +610,7 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = E1CF300381BDEF1E0C82E874 /* Build configuration list for PBXNativeTarget "WendyDesktop" */;
 			buildPhases = (
+				740086B683638A1AD57B25F6 /* Check structured concurrency */,
 				28257389670C246E36AC7BDC /* Build Go libraries and bundled CLI */,
 				AFC123B022CA9820343569FC /* Sources */,
 				209D21119114C7AA7E05231F /* Resources */,
@@ -626,6 +635,7 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = 38ED3BB86C50AFFDF22058E2 /* Build configuration list for PBXNativeTarget "WendyMobile" */;
 			buildPhases = (
+				29F2A0BBDCDDCB2D3B0519CE /* Check structured concurrency */,
 				40A9AE88B0136BBB8C4191FC /* Build embedded Go backend for iOS */,
 				25DDD3E0CF1EC817DF239D44 /* Sources */,
 				EBBB8D69F4EFBAB44E8201CB /* Resources */,
@@ -682,6 +692,7 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = ABBA05689B181564DB9B03FF /* Build configuration list for PBXNativeTarget "WendyNetwork" */;
 			buildPhases = (
+				76F889B68740F403C2705A54 /* Check structured concurrency */,
 				9B2C5A14DB6CE2AF7B663987 /* Build Go libraries */,
 				5A070105D8A2B37DAAEDCC91 /* Sources */,
 				863AC45A4DBAF30272DDCD6D /* Frameworks */,
@@ -796,6 +807,25 @@
 			shellPath = /bin/sh;
 			shellScript = "#!/bin/bash\nset -euo pipefail\nexport PATH=\"/opt/homebrew/bin:/usr/local/bin:$PATH\"\nAPP_ROOT=\"${SRCROOT:-$(cd \"$(dirname \"$0\")/..\" && pwd)}\"\nREPO_ROOT=\"$(cd \"$APP_ROOT/../..\" && pwd)\"\nmkdir -p \"$APP_ROOT/Build\"\n# Xcode can invoke both targets concurrently. Serialize archive replacement.\nexec /usr/bin/perl -MFcntl=:flock -e 'open(my $lock, \">>\", $ARGV[0]) or die $!; flock($lock, LOCK_EX) or die $!; shift @ARGV; system(@ARGV); exit($? >> 8)' \"$APP_ROOT/Build/.lock\" /bin/bash \"$APP_ROOT/Scripts/build-go-locked.sh\" \"$APP_ROOT\" \"$REPO_ROOT\"\n";
 		};
+		29F2A0BBDCDDCB2D3B0519CE /* Check structured concurrency */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Check structured concurrency";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "python3 \"$SRCROOT/Scripts/check-concurrency.py\"";
+		};
 		40A9AE88B0136BBB8C4191FC /* Build embedded Go backend for iOS */ = {
 			isa = PBXShellScriptBuildPhase;
 			alwaysOutOfDate = 1;
@@ -814,6 +844,44 @@
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
 			shellScript = "#!/bin/bash\nset -euo pipefail\nexport PATH=\"/opt/homebrew/bin:/usr/local/bin:$PATH\"\nAPP_ROOT=\"${SRCROOT:-$(cd \"$(dirname \"$0\")/..\" && pwd)}\"\ncd \"$APP_ROOT/../..\"\ncase \"${PLATFORM_NAME:-iphonesimulator}\" in\n  iphoneos) sdk=iphoneos; target=arm64-apple-ios26.0 ;;\n  iphonesimulator) sdk=iphonesimulator; target=arm64-apple-ios26.0-simulator ;;\n  *) echo \"Unsupported iOS platform: $PLATFORM_NAME\" >&2; exit 1 ;;\nesac\noutput=\"$APP_ROOT/Build/$sdk\"\nmkdir -p \"$output\"\nexport GOOS=ios GOARCH=arm64 CGO_ENABLED=1\nexport SDKROOT=\"$(xcrun --sdk \"$sdk\" --show-sdk-path)\"\nexport CC=\"$(xcrun --sdk \"$sdk\" --find clang) -target $target\"\nexport CGO_CFLAGS=\"-isysroot $SDKROOT -O2\"\nexport CGO_LDFLAGS=\"-isysroot $SDKROOT -lresolv\"\nexport CGO_CXXFLAGS=\"$CGO_CFLAGS\"\ngo build -buildmode=c-archive -o \"$output/libwendydesktop.a\" ./go/macos/Bridge\n";
+		};
+		740086B683638A1AD57B25F6 /* Check structured concurrency */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Check structured concurrency";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "python3 \"$SRCROOT/Scripts/check-concurrency.py\"";
+		};
+		76F889B68740F403C2705A54 /* Check structured concurrency */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Check structured concurrency";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "python3 \"$SRCROOT/Scripts/check-concurrency.py\"";
 		};
 		9B2C5A14DB6CE2AF7B663987 /* Build Go libraries */ = {
 			isa = PBXShellScriptBuildPhase;
@@ -881,6 +949,7 @@
 				6FD3EF6A632B76884FA7319E /* ActivityView.swift in Sources */,
 				EAE7C22DFFF4B0E3A8F9AE2B /* AppModel.swift in Sources */,
 				AAE1DB54DE5DA0E7D55550DC /* AppsView.swift in Sources */,
+				47CAB401721ADCE7E33E0BAE /* AsyncActions.swift in Sources */,
 				A2C33E47FACD40912EAEF022 /* AsyncCallback.swift in Sources */,
 				B54454BF9E02F6A2D6B08E8A /* AutomationClient.swift in Sources */,
 				1571389C22196AD11AD63A6B /* BlockingWork.swift in Sources */,
@@ -896,6 +965,7 @@
 				B0AD2CCB920BD05A5F594059 /* CloudManagementView.swift in Sources */,
 				B3F370E0B0F697440772A15C /* DataTimelineViewport.swift in Sources */,
 				E830A2AA85FF36F939777BF2 /* DataVisualPlayback.swift in Sources */,
+				1B6FFE044B6C29E441D7F4B3 /* DataVisualVideoController.swift in Sources */,
 				289830985E949D7D00203DD0 /* DataVisualizerClient.swift in Sources */,
 				FEE23DD90EB784FD8659CD37 /* DeviceAudioView.swift in Sources */,
 				F3E322432EA8C96967DBC6AE /* DeviceBluetoothView.swift in Sources */,
@@ -965,6 +1035,7 @@
 				00E042DD50846DC379789994 /* ActivityView.swift in Sources */,
 				B6814F13047D063DDC783CEE /* AppModel.swift in Sources */,
 				40453FFA0762B7E46BA8837F /* AppsView.swift in Sources */,
+				AF28993980F7F75714350D0A /* AsyncActions.swift in Sources */,
 				DACE614CBBEDF9EA8E178D98 /* AsyncCallback.swift in Sources */,
 				FC3D409DB7E464DC4AFA12D2 /* AutomationClient.swift in Sources */,
 				62C77AC4563BC0D7E4DBDDBD /* BlockingWork.swift in Sources */,
@@ -980,6 +1051,7 @@
 				062150E93B7F5925AE16DA74 /* ContentView.swift in Sources */,
 				77E0DC184518400D18F44AEF /* DataTimelineViewport.swift in Sources */,
 				ED5C60D0DC443633C03EAAC6 /* DataVisualPlayback.swift in Sources */,
+				000A6AEFAE84BB8282468B4E /* DataVisualVideoController.swift in Sources */,
 				39ED22314913B8343406C332 /* DataVisualizerClient.swift in Sources */,
 				98527A2346F2A8FDCB3F3423 /* DataVisualizerTimeline.swift in Sources */,
 				CAD5B2B85F11FD7F6FD25A86 /* DataVisualizerView.swift in Sources */,

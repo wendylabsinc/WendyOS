@@ -380,7 +380,7 @@ struct ModelLibraryView: View {
 struct ModelDownloadProgress: View {
     let status: String
     let completed, total: Int64
-    var fraction: Double? { total > 0 ? min(1, max(0, Double(completed) / Double(total))) : nil }
+    nonisolated var fraction: Double? { total > 0 ? min(1, max(0, Double(completed) / Double(total))) : nil }
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
             HStack {

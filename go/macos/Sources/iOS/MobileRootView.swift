@@ -2,6 +2,7 @@ import SwiftUI
 
 private enum MobileDestination: Hashable { case organization, sites, device(String) }
 struct MobileRootView: View {
+    @State private var actions = AsyncActions()
     @EnvironmentObject private var model: AppModel
     @Environment(\.scenePhase) private var scenePhase
     @State private var destination: MobileDestination?
@@ -16,6 +17,10 @@ struct MobileRootView: View {
         (source == "nearby" ? model.nearby : model.cloud).filter { search.isEmpty || $0.title.localizedCaseInsensitiveContains(search) }
     }
     var body: some View {
+        actionContent.task { await actions.run() }
+    }
+
+    @ViewBuilder private var actionContent: some View {
         NavigationSplitView(preferredCompactColumn: $preferredColumn) {
             List(selection: $destination) {
                 if model.account?.signedIn == true {
@@ -49,7 +54,7 @@ struct MobileRootView: View {
                     }
                     if devices.isEmpty && !model.discovering {
                         if source == "cloud" && model.account?.signedIn != true {
-                            Button("Sign in to Wendy Cloud") { Task { await model.signIn() } }
+                            Button("Sign in to Wendy Cloud") { actions.submit { await model.signIn() } }
                         } else { Text("No devices found").foregroundStyle(.secondary) }
                     }
                     if let error = source == "nearby" ? model.nearbyError : model.cloudError { FailureNote(message: error) }
@@ -84,7 +89,6 @@ struct MobileRootView: View {
             }
         }
         .task { await model.start() }
-        .task(id: model.initialized) { await model.observeEvents() }
         .task(id: model.account) { await model.refreshMobileCloudSelection() }
         .onChange(of: model.account?.signedIn) { _, signedIn in
             if signedIn != true, destination == .organization || destination == .sites {
@@ -110,10 +114,10 @@ struct MobileRootView: View {
         .sheet(isPresented: $accounts) {
             MobileAccountsView(model: model) { development in
                 accounts = false
-                Task { await model.signIn(development: development) }
+                actions.submit { await model.signIn(development: development) }
             }
         }
-        .sheet(isPresented: Binding(get: { model.loginURL != nil }, set: { if !$0 { Task { await model.cancelLogin() } } })) {
+        .sheet(isPresented: Binding(get: { model.loginURL != nil }, set: { if !$0 { actions.submit { await model.cancelLogin() } } })) {
             if let url = model.loginURL { BrowserSheet(url: url).ignoresSafeArea() }
         }
         .sheet(isPresented: Binding(get: { model.webpageURL != nil }, set: { if !$0 { model.webpageURL = nil } })) {
@@ -136,7 +140,7 @@ struct MobileRootView: View {
             NavigationStack { ScrollView { Text(PresentedFailure(details ?? "").details).font(.caption.monospaced()).textSelection(.enabled).padding() }.navigationTitle("Details").toolbar { Button("Done") { details = nil } } }
         }
         .confirmationDialog("Delete app?", isPresented: Binding(get: { model.appDeletion != nil }, set: { if !$0 { model.appDeletion = nil } }), titleVisibility: .visible) {
-            if let target = model.appDeletion { Button("Delete \(target.app)", role: .destructive) { Task { await model.deleteApp(target) }; model.appDeletion = nil } }
+            if let target = model.appDeletion { Button("Delete \(target.app)", role: .destructive) { actions.submit { await model.deleteApp(target) }; model.appDeletion = nil } }
         } message: { Text("The app will be removed from the device.") }
     }
     private func select(_ device: Device) {
@@ -154,10 +158,15 @@ private enum MobilePane: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 private struct MobileDeviceView: View {
+    @State private var actions = AsyncActions()
     @EnvironmentObject private var model: AppModel
     let device: Device
     @State private var pane = MobilePane.chat
     var body: some View {
+        actionContent.task { await actions.run() }
+    }
+
+    @ViewBuilder private var actionContent: some View {
         VStack(spacing: 0) {
             if !model.connectedLite { ScrollView(.horizontal) {
                 HStack(spacing: 8) {
@@ -172,7 +181,7 @@ private struct MobileDeviceView: View {
             }.scrollIndicators(.hidden) }
             Divider()
             if model.connectingDevice != nil { ProgressView("Connecting to \(device.title)…").frame(maxWidth: .infinity, maxHeight: .infinity) }
-            else if let error = model.detailError { FailureView(title: "Could not connect", error: error) { Task { await model.connect(device) } } }
+            else if let error = model.detailError { FailureView(title: "Could not connect", error: error) { actions.submit { await model.connect(device) } } }
             else if model.selectedDeviceReady {
                 if model.connectedLite { LiteDeviceView(model: model).id(model.deviceSession) }
                 else { content.id(model.deviceSession) }
@@ -221,10 +230,15 @@ struct CameraWallView: View {
     }
 }
 private struct MobileCameraTile: View {
+    @State private var actions = AsyncActions()
     @ObservedObject var feed: CameraFeed
     @ObservedObject var model: AppModel
     @State private var showingError = false
     var body: some View {
+        actionContent.task { await actions.run() }
+    }
+
+    @ViewBuilder private var actionContent: some View {
         CameraFeedDisplay(feed: feed)
             .aspectRatio(4 / 3, contentMode: .fit).background(.black)
             .overlay(alignment: .bottom) {
@@ -241,7 +255,7 @@ private struct MobileCameraTile: View {
                         }
                     }.frame(maxWidth: .infinity, alignment: .leading)
                     Button {
-                        if feed.running { model.pauseCamera(feed) } else { Task { await model.playCamera(feed) } }
+                        if feed.running { model.pauseCamera(feed) } else { actions.submit { await model.playCamera(feed) } }
                     } label: {
                         Image(systemName: feed.running ? "pause.fill" : "play.fill")
                             .font(.system(size: 15, weight: .semibold))
@@ -265,11 +279,16 @@ private struct MobileCameraTile: View {
 }
 
 private struct MobileAccountsView: View {
+    @State private var actions = AsyncActions()
     @ObservedObject var model: AppModel
     let signIn: (Bool) -> Void
     private var accounts: [SavedAccount] { model.mobileCloudAccounts }
 
     var body: some View {
+        actionContent.task { await actions.run() }
+    }
+
+    @ViewBuilder private var actionContent: some View {
         NavigationStack {
             List {
                 if accounts.isEmpty && model.account?.signedIn != true {
@@ -278,7 +297,7 @@ private struct MobileAccountsView: View {
                 } else {
                     Section("Accounts") {
                     ForEach(accounts) { entry in
-                        Button { Task { await model.selectMobileCloudAccount(entry.id) } } label: {
+                        Button { actions.submit { await model.selectMobileCloudAccount(entry.id) } } label: {
                         HStack {
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(entry.account.email.isEmpty ? "Email unavailable" : entry.account.email)

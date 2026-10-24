@@ -23,6 +23,7 @@ extension GoClient {
     }
 }
 struct DeviceAudioView: View {
+    @State private var actions = AsyncActions()
     let session: UInt64
     let deviceName: String
     @State private var devices: [DeviceAudioEndpoint] = []
@@ -30,6 +31,10 @@ struct DeviceAudioView: View {
     @State private var saving: UInt32?
     @State private var error: String?
     var body: some View {
+        actionContent.task { await actions.run() }
+    }
+
+    @ViewBuilder private var actionContent: some View {
         Form {
             if let error { Section { FailureNote(message: error) } }
             if loading && devices.isEmpty {
@@ -43,7 +48,7 @@ struct DeviceAudioView: View {
             .task(id: session) { await refresh() }
             .mobileRefreshable { if saving == nil { await refresh() } }
             #if os(macOS)
-            .toolbar { Button { Task { await refresh() } } label: { Image(systemName: "arrow.clockwise") }.accessibilityLabel("Refresh audio devices").disabled(loading || saving != nil) }
+            .toolbar { Button { actions.submit { await refresh() } } label: { Image(systemName: "arrow.clockwise") }.accessibilityLabel("Refresh audio devices").disabled(loading || saving != nil) }
             #endif
     }
     private func endpoints(_ title: String, direction: Int32, symbol: String) -> some View {
@@ -51,7 +56,7 @@ struct DeviceAudioView: View {
             let choices = devices.filter { $0.direction == direction }
             if choices.isEmpty { Text(direction == 1 ? "No microphones found" : "No speakers found").foregroundStyle(.secondary) }
             ForEach(choices) { device in
-                Button { Task { await select(device) } } label: {
+                Button { actions.submit { await select(device) } } label: {
                     HStack(spacing: 12) {
                         Image(systemName: symbol).foregroundStyle(.secondary).frame(width: 24)
                         VStack(alignment: .leading, spacing: 4) {
@@ -82,6 +87,6 @@ struct DeviceAudioView: View {
             if error == nil && !devices.contains(where: { $0.id == device.id && $0.isDefault }) {
                 error = "The change was accepted, but the device has not reported this default yet. Pull to refresh to check again."
             }
-        } catch { self.error = error.localizedDescription }
+        } catch { if !Task.isCancelled { self.error = error.localizedDescription } }
     }
 }
