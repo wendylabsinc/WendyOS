@@ -595,45 +595,10 @@ func hostPort(host string, port int) string { return devices.HostPort(host, port
 // undoing the mTLS-port offset baked into a provisioned device's advertisement
 // (connectWithAutoTLS adds it back). Shared by lanAgentAddresses and
 // lanDialCandidates so both agree on the port for every address.
-func lanAgentPort(dev models.LANDevice) int {
-	port := dev.Port
-	if port == 0 {
-		port = defaultAgentPort
-	}
-	if dev.IsMTLS && dev.Port != 0 && port > agentMTLSPortOffset {
-		port -= agentMTLSPortOffset // advertised port is mTLS; connectWithAutoTLS will add the offset back
-	}
-	return port
-}
+func lanAgentPort(dev models.LANDevice) int { return devices.LANAgentPort(sdkLANDevice(dev)) }
 
 func lanAgentAddresses(dev models.LANDevice) []string {
-	port := lanAgentPort(dev)
-
-	ip, hostname := strings.TrimSpace(dev.IPAddress), strings.TrimSpace(dev.Hostname)
-	hosts := []string{ip, hostname}
-	// A zoned IPv6 literal (fe80::5741:1%enx0) can only come from the USB
-	// well-known-address probe, which just proved the agent answers there. Such
-	// a device is typically one whose mDNS is broken — that is why the probe
-	// found it — so its .local name costs a full resolver timeout plus a dial
-	// timeout before the address that works is even tried. It stays first.
-	if strings.TrimSpace(dev.USB) != "" && !strings.Contains(ip, "%") {
-		// A USB-NCM path exists. The routed Wi-Fi IP (dev.IPAddress) may be
-		// black-holed by AP isolation on residential routers, so try the
-		// link-local .local hostname (reachable over USB) first.
-		hosts = []string{hostname, ip}
-	}
-
-	var addresses []string
-	seen := make(map[string]bool)
-	for _, host := range hosts {
-		if host == "" || seen[host] {
-			continue
-		}
-		seen[host] = true
-		addresses = append(addresses, hostPort(host, port))
-	}
-
-	return addresses
+	return devices.LANAgentAddresses(sdkLANDevice(dev))
 }
 
 func preferredLANAddress(dev models.LANDevice) string {
@@ -2373,15 +2338,6 @@ func rotateCertsForOrg(certs []config.CertificateInfo, orgID int32) []config.Cer
 	return cliCredentials(certs, devices.RotateCertsForOrg(sdkCredentials(certs), orgID))
 }
 
-// isCertRejectionError recognizes certificate rejection during the handshake or
-// the agent's subsequent clientAuth check, as distinct from the client failing
-// to complete the handshake because the server isn't a TLS endpoint at all.
-// Matches "remote error: tls:" (server sent an alert) and other cert-specific
-// signals; deliberately excludes "tls: first record does not look like a TLS
-// handshake" (plaintext server probed with TLS) and plain transport errors.
-// addr is the endpoint the probe was aimed at: over loopback the verdict has
-// one extra exclusion, described below.
-
 // provisionedAgentAdvertisedMTLS takes a short pre-connection LAN discovery
 // snapshot and checks whether the target address was already advertised as an
 // mTLS-only agent.
@@ -2685,11 +2641,7 @@ func preferValidCerts(all []config.CertificateInfo, now time.Time) []config.Cert
 // so ML-DSA/pki-core certs with trailing ASN.1 bytes parse correctly; an
 // unparseable cert is treated as not-expired so it is still attempted.
 func certExpired(c config.CertificateInfo, now time.Time) bool {
-	leaves, _ := certs.ParseCertsFromPEM([]byte(c.PemCertificate))
-	if len(leaves) == 0 {
-		return false
-	}
-	return now.After(leaves[0].NotAfter)
+	return sdkCredentials([]config.CertificateInfo{c})[0].Expired(now)
 }
 
 func loadCLIAuth() *config.AuthConfig {

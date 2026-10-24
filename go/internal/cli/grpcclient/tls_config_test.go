@@ -2,20 +2,18 @@ package grpcclient
 
 import (
 	"bytes"
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
-	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"fmt"
 	"math/big"
-	"strings"
-	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 )
 
@@ -70,74 +68,38 @@ func testCertInfo(t *testing.T) *config.CertificateInfo {
 		PemCertificateChain: string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caDER})),
 	}
 }
-func TestNewAgentTLSConfigSetsSessionCache(t *testing.T) {
-	t.Setenv("HOME", t.TempDir())
-	t.Setenv("WENDY_TLS_SESSION_STORE", "file")
-	cfg, err := newAgentTLSConfig("192.168.1.10:50052", testCertInfo(t), nil, new(atomic.Int32), new(atomic.Pointer[certs.WendyIdentity]), nil, nil, nil)
-	if err != nil {
-		t.Fatalf("newAgentTLSConfig: %v", err)
-	}
-	if cfg.ClientSessionCache == nil {
-		t.Error("ClientSessionCache not set")
+
+func TestSDKHostSessionCache(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		t.Run(fmt.Sprint(enabled), func(t *testing.T) {
+			t.Setenv("HOME", t.TempDir())
+			store := "off"
+			if enabled {
+				store = "file"
+			}
+			t.Setenv("WENDY_TLS_SESSION_STORE", store)
+			cert := testCertInfo(t)
+			connector := sdkDeviceConnector("192.168.1.10:50052", cert, nil, nil)
+			credential, err := connector.Credential(context.Background(), "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			cache := connector.SessionCache("192.168.1.10:50052", credential.Certificate.Certificate[0])
+			if (cache != nil) != enabled {
+				t.Fatalf("cache=%v enabled=%v", cache, enabled)
+			}
+		})
 	}
 }
-
-func TestNewAgentTLSConfigHonorsStoreOff(t *testing.T) {
-	t.Setenv("WENDY_TLS_SESSION_STORE", "off")
-	cfg, err := newAgentTLSConfig("192.168.1.10:50052", testCertInfo(t), nil, new(atomic.Int32), new(atomic.Pointer[certs.WendyIdentity]), nil, nil, nil)
-	if err != nil {
-		t.Fatalf("newAgentTLSConfig: %v", err)
-	}
-	if cfg.ClientSessionCache != nil {
-		t.Errorf("ClientSessionCache = %v, want nil with store=off", cfg.ClientSessionCache)
-	}
-}
-
-func TestNewAgentTLSConfigDebugLogsResumption(t *testing.T) {
-	t.Setenv("WENDY_TLS_SESSION_STORE", "off")
+func TestSDKHostDebugDiagnostics(t *testing.T) {
 	t.Setenv("WENDY_TLS_DEBUG", "1")
 	var buf bytes.Buffer
-	origWriter := tlsDebugWriter
+	old := tlsDebugWriter
 	tlsDebugWriter = &buf
-	defer func() { tlsDebugWriter = origWriter }()
-
-	cfg, err := newAgentTLSConfig("192.168.1.10:50052", testCertInfo(t), nil, new(atomic.Int32), new(atomic.Pointer[certs.WendyIdentity]), nil, nil, nil)
-	if err != nil {
-		t.Fatalf("newAgentTLSConfig: %v", err)
-	}
-	// The wrapped VerifyConnection must log DidResume before delegating; an
-	// empty ConnectionState fails the inner verifier, which is fine here.
-	cfg.VerifyConnection(tls.ConnectionState{DidResume: true})
-	if !strings.Contains(buf.String(), "resumed=true") {
-		t.Errorf("debug output %q missing resumed=true", buf.String())
-	}
-}
-
-func TestOperatorCertificateSelectionIgnoresIssuerHintsOnly(t *testing.T) {
-	t.Setenv("WENDY_TLS_SESSION_STORE", "off")
-	cfg, err := newAgentTLSConfig("device:50052", testCertInfo(t), nil, new(atomic.Int32), new(atomic.Pointer[certs.WendyIdentity]), nil, nil, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	request := &tls.CertificateRequestInfo{Version: tls.VersionTLS13, SignatureSchemes: []tls.SignatureScheme{tls.ECDSAWithP256AndSHA256}, AcceptableCAs: [][]byte{[]byte("unrelated issuer")}}
-	if err := request.SupportsCertificate(&cfg.Certificates[0]); err == nil {
-		t.Fatal("fixture must reproduce default selection rejection")
-	}
-	if cfg.GetClientCertificate == nil {
-		t.Fatal("operator certificate selector missing")
-	}
-	selected, err := cfg.GetClientCertificate(request)
-	if err != nil || selected == nil || len(selected.Certificate) == 0 {
-		t.Fatalf("operator certificate omitted: %v", err)
-	}
-	if len(request.AcceptableCAs) != 1 {
-		t.Fatal("mutated server request")
-	}
-	request.SignatureSchemes = []tls.SignatureScheme{tls.PSSWithSHA256}
-	if _, err := cfg.GetClientCertificate(request); err == nil {
-		t.Fatal("accepted an incompatible signature scheme")
-	}
-	if cfg.VerifyConnection == nil {
-		t.Fatal("device certificate verification removed")
+	t.Cleanup(func() { tlsDebugWriter = old })
+	connector := sdkDeviceConnector("passthrough:///device", nil, nil, nil)
+	connector.Debugf("[tls-debug] %s resumed=%v\n", "device:443", true)
+	if got := buf.String(); got != "[tls-debug] passthrough:///device resumed=true\n" {
+		t.Fatal(got)
 	}
 }

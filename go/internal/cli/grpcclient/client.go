@@ -3,29 +3,24 @@ package grpcclient
 
 import (
 	"context"
-	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
 	"net"
-	"net/http"
 	"net/url"
 	"os"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 
 	wendy "github.com/wendylabsinc/wendy-go"
 	"github.com/wendylabsinc/wendy/go/internal/cli/linklocal"
-	"github.com/wendylabsinc/wendy/go/internal/cli/tlscache"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/internal/shared/devicepin"
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/keepalive"
 )
@@ -54,11 +49,6 @@ const (
 	// normally adjacent. Bound reuse so long-running watch/build sessions still
 	// refresh mutable fields such as interfaces and disk usage.
 	agentVersionCacheTTL = 10 * time.Second
-
-	// Limit the initial TCP probe independently of the TLS handshake budget.
-	// Allow a lost SYN to be retransmitted before treating the route as dead.
-	// Once TCP succeeds, reconnects retain gRPC's normal connection budget.
-	agentTCPDialTimeout = 2 * time.Second
 )
 
 // tlsDebugWriter is where WENDY_TLS_DEBUG resumption logging is written.
@@ -120,98 +110,18 @@ type AgentConnection struct {
 	// same RPC again. The cache is deliberately connection-local: it is never
 	// persisted across processes or carried across reconnects.
 	cachedAgentVersion atomic.Pointer[agentVersionCacheEntry]
-	// observedServerOrg holds the org ID read from the device's server
-	// certificate during the TLS handshake (set by the OnServerIdentity sink
-	// wired in ConnectWithTLSAndPins). Written on the handshake goroutine, read
-	// by callers after the first RPC returns; atomic makes that read race-free.
-	// nil for connections that never install the sink (plaintext / NewFromConn).
-	observedServerOrg *atomic.Int32
-	// observedServerIdentity holds the device's full Wendy identity (org +
-	// asset) from a server certificate this client actually VERIFIED — the
-	// OnVerifiedServerIdentity sink, which fires only after the chain and org
-	// checks pass. Same goroutine story as observedServerOrg above, hence the
-	// atomic; a pointer so "never fired" is distinguishable from a zero
-	// identity. nil for connections that never install the sink.
+	// Session proxies and externally verified connections retain host-provided
+	// identity observations here. Direct connections read WendyGo's live evidence.
+	observedServerOrg      *atomic.Int32
 	observedServerIdentity *atomic.Pointer[certs.WendyIdentity]
-	// identityMismatch holds the typed rejection raised inside VerifyConnection
-	// when the peer failed ExpectedIdentity. gRPC's lazy dial mangles that error
-	// into the first RPC's status, so the ladder reads it from here instead of
-	// string-matching. nil for connections that never install the sink.
-	identityMismatch *atomic.Pointer[certs.IdentityMismatchError]
-	// pinMismatch holds the SPKI pin-store rejection raised inside
-	// VerifyConnection when the peer's public key changed while its pinned
-	// certificate was still valid. Captured for the same reason as
-	// identityMismatch: the ladder must recognise it by type, not by digging it
-	// out of gRPC's handshake-failure string. nil for connections that never
-	// install the sink.
-	pinMismatch *atomic.Pointer[devicepin.PinMismatchError]
-	// tcpDial records failures before TCP connected, separately from TLS errors.
-	// nil when gRPC owns dialing, including HTTP CONNECT proxy transports.
-	tcpDial *agentTCPDialState
 }
 
-type agentTCPDialState struct {
-	mu        sync.Mutex
-	connected bool
-	err       error
-}
-
-// TCPDialError reports an actual TCP dial failure only if this connection has
-// never reached the endpoint. Once TCP succeeds, a later TLS or RPC failure
-// must not cause callers to discard the remaining operator certificates.
-// A nil result also covers a dial still in progress and gRPC-managed proxies.
+// TCPDialError reports pre-TLS reachability evidence from the SDK connection.
 func (c *AgentConnection) TCPDialError() error {
 	if c != nil && c.device != nil {
 		return c.device.Evidence().TCPDialError
 	}
-	if c == nil || c.tcpDial == nil {
-		return nil
-	}
-	c.tcpDial.mu.Lock()
-	defer c.tcpDial.mu.Unlock()
-	return c.tcpDial.err
-}
-
-func boundedAgentTCPDialer(dial func(context.Context, string) (net.Conn, error)) (func(context.Context, string) (net.Conn, error), *agentTCPDialState) {
-	state := new(agentTCPDialState)
-	return func(ctx context.Context, addr string) (net.Conn, error) {
-		state.mu.Lock()
-		connected := state.connected
-		state.mu.Unlock()
-		if !connected {
-			var cancel context.CancelFunc
-			ctx, cancel = context.WithTimeout(ctx, agentTCPDialTimeout)
-			defer cancel()
-		}
-		conn, err := dial(ctx, addr)
-		state.mu.Lock()
-		if err == nil {
-			state.connected = true
-			state.err = nil
-		} else if !state.connected {
-			state.err = err
-		}
-		state.mu.Unlock()
-		return conn, err
-	}, state
-}
-
-// agentProxyFromEnvironment matches gRPC's HTTPS proxy selection. Tests replace
-// it because net/http caches the process's proxy environment on first use.
-var agentProxyFromEnvironment = http.ProxyFromEnvironment
-
-func agentTCPDialOptions(address string) ([]grpc.DialOption, *agentTCPDialState) {
-	host, _, _ := net.SplitHostPort(address)
-	if !linklocal.IsIPv4LinkLocal(host) {
-		proxy, err := agentProxyFromEnvironment(&http.Request{URL: &url.URL{Scheme: "https", Host: address}})
-		if proxy != nil || err != nil {
-			// A custom dialer disables gRPC's proxy resolver. Leave configured
-			// proxies, including invalid proxy settings, to its existing path.
-			return nil, nil
-		}
-	}
-	dial, state := boundedAgentTCPDialer(linkLocalDialFn)
-	return []grpc.DialOption{grpc.WithContextDialer(dial)}, state
+	return nil
 }
 
 type agentVersionCacheEntry struct {
@@ -248,7 +158,7 @@ func (c *AgentConnection) CachedAgentVersion() (*agentpb.GetAgentVersionResponse
 // identity. PKI-issued identities deliberately have no numeric org ID.
 //
 // dst may be nil (observation not requested), in which case the returned sink is
-// a no-op — the same contract as identityMismatchSink below. This runs inside
+// a no-op. This runs inside
 // VerifyConnection, so an unguarded nil would panic mid-handshake.
 func verifiedIdentitySink(dst *atomic.Pointer[certs.WendyIdentity]) func(certs.WendyIdentity) {
 	return func(id certs.WendyIdentity) {
@@ -265,44 +175,6 @@ func verifiedIdentitySink(dst *atomic.Pointer[certs.WendyIdentity]) func(certs.W
 		}
 		stored := id
 		dst.Store(&stored)
-	}
-}
-
-// observedOrgSink returns the OnServerIdentity callback that records the
-// (unverified, diagnostics-only) org a server certificate claims. Same nil
-// contract as the sinks above, and for the same reason: it fires during the TLS
-// handshake, where a panic takes the connection down rather than surfacing as an
-// error.
-func observedOrgSink(dst *atomic.Int32) func(certs.WendyIdentity) {
-	return func(id certs.WendyIdentity) {
-		if dst == nil || id.OrgID == 0 {
-			return
-		}
-		dst.Store(id.OrgID)
-	}
-}
-
-// pinMismatchSink returns the callback that records an SPKI pin rejection from
-// the device pin store. dst may be nil (no pin store in play), in which case the
-// returned sink is a no-op.
-func pinMismatchSink(dst *atomic.Pointer[devicepin.PinMismatchError]) func(*devicepin.PinMismatchError) {
-	return func(e *devicepin.PinMismatchError) {
-		if dst == nil || e == nil {
-			return
-		}
-		dst.Store(e)
-	}
-}
-
-// identityMismatchSink returns the callback that records an ExpectedIdentity
-// rejection. dst may be nil (enforcement not requested), in which case the
-// returned sink is a no-op, so callers need no nil check.
-func identityMismatchSink(dst *atomic.Pointer[certs.IdentityMismatchError]) func(*certs.IdentityMismatchError) {
-	return func(e *certs.IdentityMismatchError) {
-		if dst == nil || e == nil {
-			return
-		}
-		dst.Store(e)
 	}
 }
 
@@ -354,127 +226,6 @@ func ConnectWithTLS(ctx context.Context, address string, certInfo *config.Certif
 	return ConnectWithTLSAndPins(ctx, address, certInfo, nil)
 }
 
-// newAgentTLSConfig builds the client TLS config for one agent target,
-// including the persistent session cache that lets repeat CLI invocations
-// skip the full ML-DSA handshake (see specs/2026-08-07-tls-session-resumption-design.md).
-func newAgentTLSConfig(
-	address string,
-	certInfo *config.CertificateInfo,
-	pins certs.PinChecker,
-	observedOrg *atomic.Int32,
-	observedIdentity *atomic.Pointer[certs.WendyIdentity],
-	expected *certs.WendyIdentity,
-	mismatch *atomic.Pointer[certs.IdentityMismatchError],
-	pinMismatch *atomic.Pointer[devicepin.PinMismatchError],
-) (*tls.Config, error) {
-	// Present normalized issuers so the agent can validate an operator signed
-	// by a sibling authority under its trusted tenant CA.
-	keyPEM, err := certInfo.PrivateKeyPEM()
-	if err != nil {
-		return nil, fmt.Errorf("loading client key: %w", err)
-	}
-	cert, err := certs.TLSKeyPair(certInfo.PemCertificate, certInfo.PemCertificateChain, keyPEM)
-	if err != nil {
-		return nil, fmt.Errorf("loading TLS cert: %w", err)
-	}
-	verifyConn, err := certs.BuildServerVerifyConnection(certs.ServerVerifyOpts{
-		ChainPEM:                 certInfo.PemCertificateChain,
-		ExpectedOrgID:            int32(certInfo.OrganizationID),
-		PinStore:                 pins,
-		ExpectedIdentity:         expected,
-		OnServerIdentity:         observedOrgSink(observedOrg),
-		OnVerifiedServerIdentity: verifiedIdentitySink(observedIdentity),
-	})
-	if err != nil {
-		return nil, fmt.Errorf("building TLS verifier: %w", err)
-	}
-	// Record a typed ExpectedIdentity rejection before any other wrap. gRPC's
-	// lazy dial mangles a VerifyConnection error into the first RPC's status,
-	// so the dial ladder needs this captured here rather than parsed out of
-	// that mangled error later. Placed closest to the verifier returned by
-	// BuildServerVerifyConnection — ahead of the WENDY_TLS_DEBUG and
-	// SetResumed wraps below — so it observes that verifier's own return
-	// value, not one a later wrap may have transformed.
-	sink := identityMismatchSink(mismatch)
-	// The SPKI store's rejection needs capturing here for the same reason and at
-	// the same point: it is raised inside VerifyConnection (step 3 of
-	// BuildServerVerifyConnection), and by the time the dial ladder sees it, it
-	// is a gRPC status string with the store's message buried in it. Without
-	// this the CLI could only recognise it by matching that text.
-	pinSink := pinMismatchSink(pinMismatch)
-	verifyConnBase := verifyConn
-	verifyConn = func(cs tls.ConnectionState) error {
-		err := verifyConnBase(cs)
-		var im *certs.IdentityMismatchError
-		if errors.As(err, &im) {
-			sink(im)
-		}
-		var pm *devicepin.PinMismatchError
-		if errors.As(err, &pm) {
-			pinSink(pm)
-		}
-		return err
-	}
-	if os.Getenv("WENDY_TLS_DEBUG") != "" {
-		inner := verifyConn
-		verifyConn = func(cs tls.ConnectionState) error {
-			fmt.Fprintf(tlsDebugWriter, "[tls-debug] %s resumed=%v\n", address, cs.DidResume)
-			return inner(cs)
-		}
-	}
-	tlsCfg := &tls.Config{
-		Certificates: []tls.Certificate{cert},
-		GetClientCertificate: func(request *tls.CertificateRequestInfo) (*tls.Certificate, error) {
-			// This connection has one explicitly selected operator identity.
-			// Older agents advertise incomplete issuer hints. Those hints are
-			// for certificate selection, not trust; both peers still verify
-			// the full chain and the device identity remains pinned.
-			supported := *request
-			supported.AcceptableCAs = nil
-			if err := supported.SupportsCertificate(&cert); err != nil {
-				return nil, fmt.Errorf("device cannot use the operator certificate: %w", err)
-			}
-			return &cert, nil
-		},
-		InsecureSkipVerify: true, //nolint:gosec — hostname bypass only; VerifyConnection validates server cert against Wendy PKI
-		MinVersion:         tls.VersionTLS12,
-	}
-	// Session resumption: nil means caching is disabled — leaving the field
-	// unset is required then, because a typed-nil *Cache in the interface
-	// would panic inside crypto/tls.
-	cache := tlscache.ForTarget(address, cert.Certificate[0])
-	if cache != nil {
-		tlsCfg.ClientSessionCache = cache
-	}
-	// Always-on wrapper — not gated behind WENDY_TLS_DEBUG, which only nests
-	// as an inner logging layer above (verifyConn already includes it when
-	// set). Records THIS connection's resumption outcome on every handshake
-	// (not just resumed ones), before delegating to the inner verifier, so a
-	// subsequent Put for the fresh ticket Go issues even on a resumed
-	// connection does not overwrite the ticket from the last full handshake
-	// (see tlscache.Cache.SetResumed's doc — without this, clients would
-	// chain tickets forever and never re-run the full ML-DSA verification).
-	// Calling SetResumed unconditionally (rather than only when DidResume is
-	// true) matters because a single *Cache is reused by a grpc.ClientConn
-	// across its internal reconnect handshakes: a later legitimate FULL
-	// handshake on that same connection must clear a stale resumed=true from
-	// an earlier handshake, or its fresh ticket would never persist.
-	// VerifyConnection runs synchronously inside the handshake, strictly
-	// BEFORE crypto/tls processes the server's post-handshake
-	// NewSessionTicket message (that happens lazily on a later Read), and
-	// gRPC dials/handshakes a ClientConn's transports sequentially, so
-	// marking always happens-before the Put it needs to affect for that
-	// handshake — no race between the two.
-	innerVerify := verifyConn
-	tlsCfg.VerifyConnection = func(cs tls.ConnectionState) error {
-		if cache != nil {
-			cache.SetResumed(cs.DidResume)
-		}
-		return innerVerify(cs)
-	}
-	return tlsCfg, nil
-}
-
 func ConnectWithTLSAndPins(ctx context.Context, address string, certInfo *config.CertificateInfo, pins certs.PinChecker) (*AgentConnection, error) {
 	return ConnectWithTLSExpecting(ctx, address, certInfo, pins, nil)
 }
@@ -490,50 +241,7 @@ func ConnectWithTLSExpecting(ctx context.Context, address string, certInfo *conf
 	if certInfo == nil {
 		return nil, errors.New("TLS device connection requires an operator certificate and key")
 	}
-	if len(extraOpts) == 0 {
-		return connectSDKDevice(ctx, address, certInfo, pins, expected)
-	}
-	// Alternate host transports retain their explicit grpc-go dial options.
-
-	observedOrg := new(atomic.Int32)
-	observedIdentity := new(atomic.Pointer[certs.WendyIdentity])
-	mismatch := new(atomic.Pointer[certs.IdentityMismatchError])
-	pinMismatch := new(atomic.Pointer[devicepin.PinMismatchError])
-	tlsCfg, err := newAgentTLSConfig(address, certInfo, pins, observedOrg, observedIdentity, expected, mismatch, pinMismatch)
-	if err != nil {
-		return nil, err
-	}
-
-	opts := []grpc.DialOption{
-		grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)),
-		grpc.WithInitialWindowSize(grpcInitialStreamWindow),
-		grpc.WithInitialConnWindowSize(grpcInitialConnWindow),
-		grpc.WithReadBufferSize(grpcReadBufferSize),
-		grpc.WithWriteBufferSize(grpcWriteBufferSize),
-		grpc.WithKeepaliveParams(keepalive.ClientParameters{
-			Time:                grpcKeepaliveTime,
-			Timeout:             grpcKeepaliveTimeout,
-			PermitWithoutStream: false,
-		}),
-	}
-	dialOpts, tcpDial := agentTCPDialOptions(address)
-	opts = append(opts, dialOpts...)
-	conn, err := grpc.NewClient(grpcTarget(address), append(opts, extraOpts...)...)
-	if err != nil {
-		return nil, fmt.Errorf("connecting to agent at %s with TLS: %w", address, err)
-	}
-
-	ac := newAgentConnection(conn)
-	ac.Host = hostFromAddress(address)
-	ac.Addr = address
-	ac.IsMTLS = true
-	ac.CertInfo = certInfo
-	ac.observedServerOrg = observedOrg
-	ac.observedServerIdentity = observedIdentity
-	ac.identityMismatch = mismatch
-	ac.pinMismatch = pinMismatch
-	ac.tcpDial = tcpDial
-	return ac, nil
+	return connectSDKDevice(ctx, address, certInfo, pins, expected, extraOpts...)
 }
 
 // grpcTarget converts a host:port address into a gRPC target string.
@@ -654,11 +362,7 @@ func (c *AgentConnection) IdentityMismatch() (*certs.IdentityMismatchError, bool
 		}
 		return nil, false
 	}
-	if c.identityMismatch == nil {
-		return nil, false
-	}
-	e := c.identityMismatch.Load()
-	return e, e != nil
+	return nil, false
 }
 
 // PinMismatch reports the SPKI pin-store rejection this connection hit, if any.
@@ -672,18 +376,12 @@ func (c *AgentConnection) PinMismatch() (*devicepin.PinMismatchError, bool) {
 		ok := errors.As(c.device.Evidence().PinMismatch, &mismatch)
 		return mismatch, ok
 	}
-	if c.pinMismatch == nil {
-		return nil, false
-	}
-	e := c.pinMismatch.Load()
-	return e, e != nil
+	return nil, false
 }
 
 func newAgentConnection(conn *grpc.ClientConn) *AgentConnection {
 	return &AgentConnection{
 		Conn:                 conn,
-		identityMismatch:     new(atomic.Pointer[certs.IdentityMismatchError]),
-		pinMismatch:          new(atomic.Pointer[devicepin.PinMismatchError]),
 		AgentService:         agentpb.NewWendyAgentServiceClient(conn),
 		ContainerService:     agentpb.NewWendyContainerServiceClient(conn),
 		ShellService:         agentpb.NewWendyShellServiceClient(conn),
@@ -711,14 +409,3 @@ func NewFromConn(conn *grpc.ClientConn) *AgentConnection {
 
 // linkLocalDialFn is a seam over linklocal.Dial for tests.
 var linkLocalDialFn = linklocal.Dial
-
-// linkLocalDialOpts sends IPv4 link-local targets through linklocal.Dial; other
-// targets keep gRPC's default dialer and its proxy support.
-func linkLocalDialOpts(address string) []grpc.DialOption {
-	if host, _, err := net.SplitHostPort(address); err != nil || !linklocal.IsIPv4LinkLocal(host) {
-		return nil
-	}
-	return []grpc.DialOption{grpc.WithContextDialer(func(ctx context.Context, addr string) (net.Conn, error) {
-		return linkLocalDialFn(ctx, addr)
-	})}
-}
