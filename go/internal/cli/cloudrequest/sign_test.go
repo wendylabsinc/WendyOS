@@ -355,8 +355,10 @@ func TestSignedMethodsAgreeWithProtoOption(t *testing.T) {
 				m := svc.Methods().Get(j)
 				name := "/" + string(svc.FullName()) + "/" + string(m.Name())
 				opt := proto.GetExtension(m.Options(), cloudpbv2.E_SignedRequest).(bool)
-				if opt != (m.Input().FullName() == signedType) {
-					t.Errorf("%s: signed_request option %v but input %s", name, opt, m.Input().FullName())
+				// A device-signed method (WDY-3926) takes SignedRequest too.
+				deviceSigned := proto.GetExtension(m.Options(), cloudpbv2.E_DeviceSignedRequest).(bool)
+				if opt && deviceSigned || (opt || deviceSigned) != (m.Input().FullName() == signedType) {
+					t.Errorf("%s: signed_request option %v, device_signed_request %v, but input %s", name, opt, deviceSigned, m.Input().FullName())
 				}
 				marked[name] = opt
 			}

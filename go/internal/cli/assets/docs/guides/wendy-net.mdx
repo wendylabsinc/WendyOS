@@ -143,3 +143,5 @@ Every boolean accepts `true` or `false`; omitted options retain their saved valu
 `status --json` returns saved choices separately from current runtime state.
 `topology --json` returns the selected device's observed links and routes.
 Changing settings requires an authenticated user in the device's organization.
+An app on the device that holds the [`admin` entitlement](/docs/advanced/apps/wendy.json#admin)
+can read status and topology through the local agent socket, but cannot change settings.

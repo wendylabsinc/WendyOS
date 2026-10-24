@@ -6,6 +6,7 @@ import (
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/ed25519"
+	"crypto/mldsa"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
@@ -145,7 +146,9 @@ func (r Record) Validate(now time.Time) error {
 
 func signInput(key crypto.PublicKey, body []byte) ([]byte, crypto.SignerOpts) {
 	input := append([]byte(recordDomain), body...)
-	if _, ok := key.(ed25519.PublicKey); ok {
+	// Ed25519 and ML-DSA sign the message itself; Go's signers refuse a digest.
+	switch key.(type) {
+	case ed25519.PublicKey, *mldsa.PublicKey:
 		return input, crypto.Hash(0)
 	}
 	h := sha256.Sum256(input)
@@ -178,7 +181,7 @@ func Sign(r Record, chain [][]byte, signer crypto.Signer, now time.Time) (Signed
 func verify(w SignedRecord, cache *localmesh.IdentityCache, now time.Time) (Record, string, error) {
 	var r Record
 	if len(w.Body) == 0 || len(w.Body) > MaxRecordBytes || len(w.Signature) == 0 ||
-		len(w.Signature) > 2048 || len(w.Fingerprint) != 64 {
+		len(w.Signature) > 8192 || len(w.Fingerprint) != 64 { // ML-DSA-65 signs in 3309 bytes
 		return r, "", errors.New("invalid wendy net service envelope")
 	}
 	if err := json.Unmarshal(w.Body, &r); err != nil {
@@ -204,6 +207,8 @@ func verify(w SignedRecord, cache *localmesh.IdentityCache, now time.Time) (Reco
 	input, _ := signInput(leaf.PublicKey, w.Body)
 	valid := false
 	switch key := leaf.PublicKey.(type) {
+	case *mldsa.PublicKey:
+		valid = mldsa.Verify(key, input, w.Signature, nil) == nil
 	case ed25519.PublicKey:
 		valid = ed25519.Verify(key, input, w.Signature)
 	case *ecdsa.PublicKey:

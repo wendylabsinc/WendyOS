@@ -6,6 +6,7 @@ package main
 
 import (
 	"context"
+	"crypto/hpke"
 	"crypto/mldsa"
 	"crypto/rand"
 	"crypto/x509"
@@ -29,8 +30,10 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/shared/cloudrelay"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
+	"github.com/wendylabsinc/wendy/go/internal/shared/registrycrypto"
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
 )
 
 type request struct {
@@ -118,6 +121,28 @@ func (b *bridge) handle(r request) (any, error) {
 		b.auth = &browserauth.Session{Settings: &settings, Client: &http.Client{}, Store: browserCredentialStore{}}
 		return true, nil
 	}
+	// The console builds postbox-relayed payloads itself; this gives it the
+	// CLI's validity rule (default 60 days, at most 365) for their valid_until.
+	if r.Method == "valid-until" {
+		var p struct {
+			ValidForSeconds int64 `json:"validForSeconds"`
+		}
+		if len(r.Params) > 0 {
+			if err := json.Unmarshal(r.Params, &p); err != nil {
+				return nil, err
+			}
+		}
+		// Bounded before the multiply, which would wrap; a non-integer fails
+		// to decode into int64.
+		if p.ValidForSeconds < 0 || p.ValidForSeconds > int64(cloudrequest.MaxValidity/time.Second) {
+			return nil, fmt.Errorf("validForSeconds %d is outside 0 to 365 days", p.ValidForSeconds)
+		}
+		until, err := cloudrequest.ValidUntil(time.Now(), time.Duration(p.ValidForSeconds)*time.Second)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"seconds": until.Unix()}, nil
+	}
 	// SECURITY: signing raw bytes is the approved console design (sem, 2026-10-19 22:55): the console builds its JWS, DPoP and management-request inputs, which verifiers check byte for byte, so no prefix can be added. Only same-origin script reaches this worker; it can use the key, never export it.
 	if r.Method == "credential" || r.Method == "sign" {
 		var p org
@@ -158,6 +183,9 @@ func (b *bridge) handle(r request) (any, error) {
 			}
 		}
 		return map[string]any{"profile": saved.Profile, "algorithm": alg, "chainDER": chain, "accessToken": saved.Tokens.Access, "publicJWK": jwk}, nil
+	}
+	if strings.HasPrefix(r.Method, "registry-") {
+		return b.registry(r)
 	}
 	if strings.HasPrefix(r.Method, "shell-") {
 		return nil, errors.New("Shell access is disabled in the browser client")
@@ -735,6 +763,101 @@ func (b *bridge) operator(ctx context.Context, o org, fresh bool) (savedRecord, 
 		return savedRecord{}, nil, errors.New("Saved certificate has expired or is not yet valid. Sign in again")
 	}
 	return saved, key, nil
+}
+
+// registry runs the encrypted-registry operations for the console (T8) with
+// the registrycrypto calls the CLI makes. This browser's registry key never
+// leaves the worker; the content and deployment keys are the page's.
+// registry-key returns the RegisterEncryptionKeyRequest payload for the page
+// to sign (x5c) and send, as the CLI does; rotate replaces the key.
+func (b *bridge) registry(r request) (any, error) {
+	var p struct {
+		org
+		Rotate             bool                     `json:"rotate"`
+		Wrap               registrycrypto.Wrap      `json:"wrap"`
+		Sealed             registrycrypto.SealedKey `json:"sealed"`
+		RecipientPublicKey []byte                   `json:"recipientPublicKey"`
+		Key                []byte                   `json:"key"`
+		DeploymentKey      []byte                   `json:"deploymentKey"`
+		Enc                []byte                   `json:"enc"`
+		Nonce              []byte                   `json:"nonce"`
+		Ciphertext         []byte                   `json:"ciphertext"`
+	}
+	if len(r.Params) > 0 {
+		if err := json.Unmarshal(r.Params, &p); err != nil {
+			return nil, err
+		}
+	}
+	switch r.Method {
+	case "registry-wrap":
+		enc, ciphertext, err := p.Wrap.Seal(p.RecipientPublicKey, p.Key)
+		return map[string]any{"enc": enc, "ciphertext": ciphertext}, err
+	case "registry-seal":
+		nonce, ciphertext, err := p.Sealed.Seal(p.DeploymentKey, p.Key)
+		return map[string]any{"nonce": nonce, "ciphertext": ciphertext}, err
+	case "registry-open":
+		key, err := p.Sealed.Open(p.DeploymentKey, p.Nonce, p.Ciphertext)
+		return map[string]any{"key": key}, err
+	case "registry-key", "registry-unwrap":
+	default:
+		return nil, fmt.Errorf("Unknown operation %q", r.Method)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 35*time.Second)
+	defer cancel()
+	saved, _, err := b.operator(ctx, p.org, false)
+	if err != nil {
+		return nil, err
+	}
+	// Only registry-key rotates: an unwrap needs the registered key.
+	priv, err := browserRegistryKey(saved.Profile, r.Method == "registry-key", r.Method == "registry-key" && p.Rotate)
+	if err != nil {
+		return nil, err
+	}
+	if r.Method == "registry-unwrap" {
+		key, err := p.Wrap.Open(priv, p.Enc, p.Ciphertext)
+		return map[string]any{"key": key}, err
+	}
+	payload, err := proto.Marshal(registrycrypto.Registration(saved.Profile.Tenant, priv.PublicKey()))
+	return map[string]any{"keyId": registrycrypto.KeyID(priv.PublicKey().Bytes()), "payload": payload}, err
+}
+
+// browserRegistryKey loads this browser's registry key for the signed-in
+// operator, wrapped like the operator seed. create generates one when none is
+// saved; rotate always does.
+func browserRegistryKey(p browserauth.Profile, create, rotate bool) (hpke.PrivateKey, error) {
+	aad := "operator-key:" + p.Tenant + ":" + p.Subject
+	if !rotate {
+		value, err := storageCall("loadRegistryKey", aad)
+		if err != nil {
+			return nil, err
+		}
+		if value.InstanceOf(js.Global().Get("Uint8Array")) {
+			defer value.Call("fill", 0)
+			raw := make([]byte, value.Length())
+			js.CopyBytesToGo(raw, value)
+			defer clear(raw)
+			return registrycrypto.KEM.NewPrivateKey(raw)
+		}
+		if !create {
+			return nil, errors.New("This browser has no registry key yet")
+		}
+	}
+	priv, err := registrycrypto.KEM.GenerateKey()
+	if err != nil {
+		return nil, err
+	}
+	raw, err := priv.Bytes()
+	if err != nil {
+		return nil, err
+	}
+	defer clear(raw)
+	buf := js.Global().Get("Uint8Array").New(len(raw))
+	js.CopyBytesToJS(buf, raw)
+	defer buf.Call("fill", 0)
+	if _, err := storageCall("saveRegistryKey", aad, buf); err != nil {
+		return nil, err
+	}
+	return priv, nil
 }
 
 // Only Wendy public HTTPS endpoints are eligible for the broker relay.

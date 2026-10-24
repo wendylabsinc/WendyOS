@@ -1115,8 +1115,18 @@ func pickAuthEntry(cloudGRPC string) (*config.AuthConfig, error) {
 	// Renew while the certificate is still valid. This shared picker has no
 	// caller context; renewal applies its own request timeout. Enrollment uses
 	// prepareEnrollmentAuth instead so expiry can trigger login before work.
+	var before string
+	if len(auth.Certificates) > 0 {
+		before = auth.Certificates[0].PemCertificate
+	}
 	if rerr := ensureFreshCertificateFn(context.Background(), auth); rerr != nil {
 		reportStaleCertificate(rerr)
+	}
+	// A renewal is a certificate refresh: retry an unbound registry key, as
+	// 'wendy auth refresh-certs' does. Here, not in the pre-flight itself,
+	// whose other callers hold the auth refresh lock this needs.
+	if auth.OAuthIssuer != "" && len(auth.Certificates) > 0 && auth.Certificates[0].PemCertificate != before {
+		retryRegistryKey(auth)
 	}
 	return auth, nil
 }

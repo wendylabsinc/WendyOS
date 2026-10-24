@@ -4,6 +4,7 @@ import (
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/ed25519"
+	"crypto/mldsa"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
@@ -86,7 +87,9 @@ type signedInventory struct {
 
 func inventorySignInput(key crypto.PublicKey, body []byte) ([]byte, crypto.SignerOpts) {
 	b := append([]byte(freshDomain), body...)
-	if _, ok := key.(ed25519.PublicKey); ok {
+	// Ed25519 and ML-DSA sign the message itself; Go's signers refuse a digest.
+	switch key.(type) {
+	case ed25519.PublicKey, *mldsa.PublicKey:
 		return b, crypto.Hash(0)
 	}
 	h := sha256.Sum256(b)
@@ -148,7 +151,7 @@ func (c *Catalog) acceptInventory(data []byte, q FreshRequest, now time.Time) er
 	if err := json.Unmarshal(data, &signed); err != nil {
 		return err
 	}
-	if len(signed.Signature) == 0 || len(signed.Signature) > 2048 || signed.Chain == nil {
+	if len(signed.Signature) == 0 || len(signed.Signature) > 8192 || signed.Chain == nil { // ML-DSA-65 signs in 3309 bytes
 		return errors.New("invalid inventory envelope")
 	}
 	if err := json.Unmarshal(signed.Body, &body); err != nil {
@@ -186,6 +189,8 @@ func (c *Catalog) acceptInventory(data []byte, q FreshRequest, now time.Time) er
 	input, _ := inventorySignInput(leaf.PublicKey, signed.Body)
 	valid := false
 	switch key := leaf.PublicKey.(type) {
+	case *mldsa.PublicKey:
+		valid = mldsa.Verify(key, input, signed.Signature, nil) == nil
 	case ed25519.PublicKey:
 		valid = ed25519.Verify(key, input, signed.Signature)
 	case *ecdsa.PublicKey:

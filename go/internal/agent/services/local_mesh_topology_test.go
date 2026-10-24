@@ -62,6 +62,23 @@ func TestLocalMeshTopologyAuthorizationAndIdentityChange(t *testing.T) {
 	}
 }
 
+// A local socket caller has no tenant of its own for the second authorization
+// to reject, so a re-enrollment during the read must be caught by the device
+// comparison instead of returning the old tenant's snapshot.
+func TestLocalMeshTopologyLocalSocketIdentityChange(t *testing.T) {
+	self, snapshot, _ := topologyFixture(t)
+	current := self
+	svc := NewLocalMeshAdminService(nil, t.TempDir(), func() (meshid.Tenant, meshid.Device) { return current.Tenant(), current })
+	otherTenant, _ := meshid.ParseTenant(otherTenantID)
+	svc.SetTopologySource(func() localmesh.NodeSnapshot {
+		current = meshid.NewDevice(otherTenant, self.UUID())
+		return snapshot
+	})
+	if _, err := svc.GetLocalMeshTopology(localAdminSocketCtx(), &pb.GetLocalMeshTopologyRequest{}); status.Code(err) != codes.Aborted {
+		t.Fatalf("enrollment replaced during local socket snapshot: %v", err)
+	}
+}
+
 func TestLocalMeshTopologySeparatesLinksRoutesAndLeaseTrust(t *testing.T) {
 	self, snapshot, now := topologyFixture(t)
 	got := projectLocalMeshTopology(self, snapshot, now)
