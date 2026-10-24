@@ -2,7 +2,15 @@
 
 `wendy-core` is the independently versioned release unit in `WendyOS/go/wendy-core` for the portable engine, selected modules, public contracts and included platform/subsystem implementations. Go is the chosen engine implementation. Core ships in language-consumable distributions. The ergonomic language SDKs build on them in their own repositories: [Wendy Swift](https://github.com/wendylabsinc/wendy-swift) and [Wendy Go](https://github.com/wendylabsinc/wendy-go); others are not started.
 
-The runnable contract currently exports `WendyHelloWorld()`, returning the integer **42**, and `WendyCoreVersion()`, returning the effective engine version. Go callers use `core.WendyHelloWorld()` and `core.Version()` directly. Every incarnation reaches the same Go engine. Host signing and RPC contracts are in `platform/`; native hosts register C callbacks through `WendyPlatform.h`. No device or Cloud workflow is implemented.
+The bootstrap contract exports `WendyHelloWorld()`, returning the integer **42**, and `WendyCoreVersion()`, returning the effective engine version. Go callers use `core.WendyHelloWorld()` and `core.Version()` directly. Every incarnation reaches the same Go engine. Host signing and RPC contracts are in `platform/`; native hosts register C callbacks through `WendyPlatform.h`.
+
+Native hosts can list an organization's Cloud devices through
+`WendyCloudListDevicesCreate` and `WendyOperationStart`, using Core's shared
+`core/cloud` client. The host supplies its bound token, key, secure entropy and
+TLS transport. The operation returns a complete protobuf inventory or a status
+error, with cancellation and owned results (see [async unary](documentation/binding-patterns/AsyncUnary.md)).
+The bootstrap JavaScript, Python and Kotlin wrappers still expose only their
+scalar/string operations; ergonomic SDKs adopt the native operation separately.
 
 Core remains a nested Go module, `github.com/wendylabsinc/WendyOS/go/wendy-core`.
 Run Core commands from this directory; root-module `go test ./...` skips it.
@@ -118,4 +126,4 @@ Licensed under the Apache License, Version 2.0; see `LICENSE` and `NOTICE`. Nati
 
 Start with the architecture and module guides above. Keep shared behavior in Core, interop mechanical, and platform/subsystem implementations behind their contracts. Run `make check compare-clean documentation` and the affected language tests before submitting changes. Runtime/domain/provider placeholders are design scaffolding, not implemented APIs or support guarantees.
 
-The C distribution is only the bridge foundation—not an ergonomic C SDK. Public headers plus protobuf schemas remain normative. API manifests, JS projections, and reference sites are derived artifacts. Planned object/stream patterns are design notes, not implemented APIs.
+The C distribution is a binding foundation, not an ergonomic C SDK. Public headers plus protobuf schemas remain normative. API manifests, JS projections, and reference sites are derived artifacts. The native device list implements the owned-object and asynchronous unary patterns; other proposed domain/stream patterns remain design notes.

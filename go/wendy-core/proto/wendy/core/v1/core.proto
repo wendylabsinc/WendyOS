@@ -1,6 +1,41 @@
 syntax = "proto3";
 package wendy.core.v1;
+option go_package = "github.com/wendylabsinc/WendyOS/go/wendy-core/internal/bindingpb";
 
-// Reserved for structured Core requests, responses and ordinary events.
-// WendyHelloWorld returns a scalar, so this release needs no protobuf values.
-// Large payloads will use raw buffers, not protobuf-embedded bulk bytes.
+// Inputs for WendyCloudListDevicesCreate. The host validates that its operator
+// key belongs to organization_id and its TLS transport is bound to authority.
+// Tokens/keys are resolved and refreshed by the host before creating the call.
+message CloudDeviceListRequest {
+  // DNS authority (host with optional port), without scheme, path or userinfo.
+  string authority = 1;
+  // Immutable tenant UUID, never the reclaimable organization/realm slug.
+  string organization_id = 2;
+  // DPoP access token bound to the registered host's ML-DSA-65 key.
+  string access_token = 3;
+  string filter = 4;
+  bool online_only = 5;
+  // UTC Unix milliseconds; zero means no deadline.
+  int64 deadline_unix_millis = 6;
+}
+
+// Complete bounded inventory, or an error with no partial inventory. Cloud's
+// existing offset pagination is internal and does not provide snapshot isolation.
+message CloudDeviceListResponse {
+  // Each item is one serialized wendycloud.v2.Asset from
+  // Proto/wendycloud/v2/assets.proto (the service-protos Cloud v2 contract).
+  // Keeping the original message preserves optional and unknown fields. Consumers
+  // decode with that published schema; no Core-specific device model is invented.
+  repeated bytes assets = 1;
+}
+
+// Ordered, repeated RPC metadata. Binary values are raw bytes, never base64.
+message MetadataEntry {
+  string name = 1;
+  bytes value = 2;
+}
+
+// WendyErrorGetDetails returns this protobuf. Empty on local errors.
+message RPCErrorDetails {
+  repeated MetadataEntry initial_metadata = 1;
+  repeated MetadataEntry trailing_metadata = 2;
+}

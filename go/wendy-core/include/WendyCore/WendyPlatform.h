@@ -26,7 +26,6 @@ extern "C" {
  * This lower provider boundary has its own callback rules, distinct from the
  * upper binding operation callbacks.
  */
-typedef uint64_t WendyHost;
 typedef uint64_t WendyHostCall;
 
 typedef struct WendyHostBytes {
@@ -51,7 +50,13 @@ enum {
     WendyHostCertificateChain = 2,
     WendyHostPublicKey = 3,
     WendyHostUnary = 4,
-    WendyHostServerStream = 5
+    WendyHostServerStream = 5,
+    /** Host secure entropy: request.message is a 4-byte unsigned big-endian
+     * byte count (1..1048576). Success returns exactly that many unpredictable
+     * bytes in result.message. Used for DPoP/nonces/correlation IDs; no keys.
+     * Existing hosts may return UNIMPLEMENTED until they support this operation.
+     * It follows the same completion/cancellation rules as signing. */
+    WendyHostRandomBytes = 6
 };
 
 typedef struct WendyHostRequest {
