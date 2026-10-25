@@ -55,10 +55,14 @@ type RecordingChannel struct {
 
 var recordingName = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,23}$`)
 
-// liveCatalogSchema is the schema of the agent's live stream catalog,
-// live.CatalogSchema. No app stream may declare it, so none can pose as
-// catalog entries.
-const liveCatalogSchema = "wendy.agent.services.v2.DataStreamInfo"
+const (
+	// MaxRecordingSchemaBytes bounds a recording stream's schema.
+	MaxRecordingSchemaBytes = 1024
+	// liveCatalogSchema is the schema of the agent's live stream catalog,
+	// live.CatalogSchema. No app stream may declare it, so none can pose as
+	// catalog entries.
+	liveCatalogSchema = "wendy.agent.services.v2.DataStreamInfo"
+)
 
 func ValidateRecordingStreams(streams map[string]RecordingStream) error {
 	if len(streams) > 16 {
@@ -87,7 +91,7 @@ func ValidateRecordingStreams(streams map[string]RecordingStream) error {
 		if s.Schema == "wendy.agent.apps.v1.TimeSeriesBatch" && (mt != "application/protobuf" || s.TimeSeries == nil) {
 			return fmt.Errorf("stream %s: TimeSeriesBatch needs application/protobuf and timeSeries", name)
 		}
-		if len(s.Schema) > 1024 || len(s.Event) > 128 || len(s.Model) > 128 {
+		if len(s.Schema) > MaxRecordingSchemaBytes || len(s.Event) > 128 || len(s.Model) > 128 {
 			return fmt.Errorf("stream %s: descriptor too long", name)
 		}
 		if s.Schema == liveCatalogSchema {

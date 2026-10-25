@@ -101,6 +101,10 @@ func TestLiveSelection(t *testing.T) {
 			t.Fatalf("rate %v: got %v, want InvalidArgument", rate, err)
 		}
 	}
+	// Any schema an app stream may declare can be selected.
+	if _, err = liveSelection(&agentpbv2.StreamDataRequest{Schemas: []string{strings.Repeat("x", appconfig.MaxRecordingSchemaBytes)}}); err != nil {
+		t.Fatalf("longest app schema: %v", err)
+	}
 }
 
 func TestStreamDataRejectsBadSelection(t *testing.T) {
@@ -113,12 +117,16 @@ func TestStreamDataRejectsBadSelection(t *testing.T) {
 	for i := range tooMany {
 		tooMany[i] = "apps/a/s"
 	}
-	for _, ids := range [][]string{tooMany, {""}, {strings.Repeat("x", maxStreamDataIDBytes+1)}} {
-		for _, req := range []*agentpbv2.StreamDataRequest{{StreamIds: ids}, {StreamPrefixes: ids}, {Schemas: ids}} {
-			err := service.StreamData(req, newFakeDataRecordStream(localAdminSocketCtx()))
-			if status.Code(err) != codes.InvalidArgument {
-				t.Fatalf("selection %v: got %v, want InvalidArgument", req, err)
-			}
+	long, longSchema := []string{strings.Repeat("x", maxStreamDataIDBytes+1)}, []string{strings.Repeat("x", appconfig.MaxRecordingSchemaBytes+1)}
+	var requests []*agentpbv2.StreamDataRequest
+	for _, ids := range [][]string{tooMany, {""}} {
+		requests = append(requests, &agentpbv2.StreamDataRequest{StreamIds: ids}, &agentpbv2.StreamDataRequest{StreamPrefixes: ids}, &agentpbv2.StreamDataRequest{Schemas: ids})
+	}
+	requests = append(requests, &agentpbv2.StreamDataRequest{StreamIds: long}, &agentpbv2.StreamDataRequest{StreamPrefixes: long}, &agentpbv2.StreamDataRequest{Schemas: longSchema})
+	for _, req := range requests {
+		err := service.StreamData(req, newFakeDataRecordStream(localAdminSocketCtx()))
+		if status.Code(err) != codes.InvalidArgument {
+			t.Fatalf("selection %v: got %v, want InvalidArgument", req, err)
 		}
 	}
 	if m.Live().Subscribed() {
