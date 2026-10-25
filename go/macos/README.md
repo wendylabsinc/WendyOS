@@ -27,6 +27,79 @@ The build produces native binaries for the build Mac. It links `libwendydesktop.
 
 `project.yml` is the source for the checked-in Xcode project. Run `xcodegen generate` from this directory after changing it. The Xcode build phases build Go automatically and serialize concurrent archive builds. The initial build can take several minutes.
 
+## Site models on macOS and iOS
+
+Connect to a gateway, then open **Site Model** in its device tabs. **Pair Cameras**
+opens the existing SensorLink and IP camera setup. **Refresh** reloads the gateway's
+camera inventory. Cameras with stable identities can be previewed before a model
+is available.
+
+Import a textured USDZ scan, or choose **Sites > Reconstruct from Photos** on
+supported hardware. iPhones and iPads with RoomPlan support also offer **Scan
+Room**, which produces room geometry without photographic textures. Add cameras,
+choose **Place in Model**, and tap their mounting locations. Selecting a marker
+opens that camera's live feed through the app's authenticated Go connection.
+
+**Sites > Export Site** saves the model and placements as a `.wendysite` file.
+Import that file on the other platform while connected to the same Cloud gateway.
+The file contains no credentials, and importing it creates a separate local copy.
+There is no automatic cross-device site sync. Sites live in Application Support's
+`WendySites` directory, inside the application sandbox on iOS.
+
+Camera identities include the gateway's tenant and asset for Cloud connections.
+LAN connections use the gateway's hardware serial and enrollment organization;
+these placements are scoped separately from Cloud placements. Numeric camera
+IDs and network addresses are never persisted as camera identities. Feeds without
+a stable identity cannot be attached to the model.
+
+Camera menus offer **Calibrate and Align**. For a geometry-only capture, this
+starts a fresh iPhone LiDAR scan. Walk through the area visible to the fixed camera,
+including textured surfaces at different depths. The scan stores sparse image
+feature descriptors and metric scene points with the model, not full photographs.
+The map is bound to the exact USDZ bytes and model revision. Exporting the site
+includes these references so alignment also works on macOS.
+
+Alignment accepts live JPEG and H.264 feeds. H.264 alignment decodes independent
+keyframes on demand and rejects stale frames or frames from a previous stream. It matches the camera image to
+scan features, estimates the optical pose and, when necessary, square-pixel lens
+intrinsics with radial distortion. Fits must pass image coverage, nonplanarity,
+held-out reprojection error, and a second live-frame pose check before saving.
+The minimum consensus is 16 points for joint lens/pose calibration or 12 for
+pose fitting. If measured alignment cannot be solved, **Align Automatically**
+tries an estimated pinhole lens with a centred principal point and zero distortion.
+The estimate must pass separate-point and second-frame checks, with looser limits
+of 5 px RMS, 30 cm position variation and 10 degrees rotation variation. Its FOV
+and pose are approximate. The app labels estimates and draws orange cones, while
+measured lenses use green cones. An estimate cannot overwrite a measured lens.
+A measured lens allows pose alignment against a flat surface.
+
+On iPhone, **Phone Screen Calibration** shows a 7×10 checkerboard to the fixed
+camera. Move the phone around the camera image and tilt it in both directions.
+The app captures distinct views automatically, uses haptics for feedback, and
+requires at least 12 accepted views. It checks image coverage, tilt diversity,
+parameter uncertainty and four splits of held-out views before saving the lens.
+The room does not need to change and no printed target is required. New lens
+measurements invalidate old poses derived from a different lens, so align again
+once the lens has been saved. This screen workflow has synthetic coverage and
+still needs validation with the physical phone and camera.
+
+For measured alignment, sets below 60 points undergo four validation splits,
+with limits on pose, intrinsics, and edge-ray variation between fits. Possible
+image matches are reported separately from points that agree on the geometry.
+Flat walls, repeated textures, large viewpoint changes, and poor LiDAR depth can
+prevent a solution. The workflow and fit limits still need physical validation
+against a fresh scan; synthetic solver tests do not establish real-world accuracy.
+Calibration writes use the gateway metadata API with revision checking. Site poses
+expire after seven days and must be refreshed if a camera moves. The display does
+not detect physical movement automatically.
+
+The model remains static scan geometry; this does not perform continuous 3D
+reconstruction. The rendered cone shows the calibrated view direction and angular
+field of view, not measured range or occlusion-aware coverage.
+The existing thermal player is available for thermal camera feeds; spatial gas
+and audio overlays are not implemented. Room scanning needs a physical supported
+iPhone or iPad and cannot be verified in the simulator.
+
 ## Concurrency
 
 Both apps compile in Swift 6 mode. App and test code must not construct
@@ -411,6 +484,109 @@ Repository evidence identifies enmax01's camera as a 160×120 PureThermal/Lepton
 Live validation still requires access to that device and confirmation of its
 current radiometric mode. No temperature accuracy claim follows from synthetic
 frame tests.
+
+## Camera placement and field of view
+
+Site Model has a searchable camera picker with a live preview. Selecting a
+camera with a current pose for this model adds it at its reported position.
+Otherwise the user can place a location marker. A location marker alone has no
+inferred viewing angle. Sites > Remove Capture moves a model and its placements
+to Recently Removed; Restore returns it to the site list.
+
+Both native apps read `ListCameraMetadata` on the existing v2
+`WendyCalibratedFrameService` every five seconds. `SetCameraMetadata` lets a device
+adapter or localization service publish intrinsics, Brown-Conrady distortion and
+poses. Metadata is keyed by the exact `VideoDevice.stable_id`, scoped to the
+authenticated gateway, and stored at `/var/lib/wendy/camera-metadata.json`.
+
+FOV comes from calibrated edge rays, including off-center principal points and
+supported distortion. The model draws a wireframe cone only when both usable lens
+data and a current pose exist. The two-metre drawing length is not a sensor range
+or an occlusion/coverage calculation. Yaw is relative to model -Z, toward +X;
+pitch is positive upward. These are not compass bearings.
+
+Read or publish metadata with:
+
+```sh
+wendy --device GATEWAY device camera metadata list
+wendy --device GATEWAY device camera metadata set request.json
+```
+
+The JSON file is a protobuf `SetCameraMetadataRequest`: `stableId`,
+`expectedRevision`, and `metadata`. Use expected revision `0` only for creation;
+read the returned revision before replacing a record. Omit `metadata` to remove
+the matching revision. Conflicts return `Aborted`, and failed disk writes never
+publish a new in-memory record. Intrinsics reuse the existing `CameraIntrinsics`
+type and require provenance, a note, calibration time and capture mode. Publishers
+must replace or clear calibration when crop, zoom, focus or lens changes make it
+invalid. A datasheet FOV must use `PROVENANCE_ASSUMED`.
+
+Every pose names the `modelRevision` UUID from the site's manifest, not a ROS
+`map` or `base_link` frame. Position is in metres in the Y-up model frame.
+Quaternion order is x,y,z,w; it rotates optical right/down/forward axes into that
+frame. Poses require an observation time and expiry no more than seven days
+later. A publisher must renew its evidence; clients hide expired poses. Visual
+localization records also require an inlier count and reprojection RMS.
+
+This API accepts pose evidence. The iOS device viewfinder and RoomPlan scanning
+now share a local appearance recognizer, described below. Appearance recognition
+does not supply a calibrated camera-body-to-optical-axis transform or an enrolled
+hardware identity. These remain necessary for fully automatic camera placement.
+The RoomPlan export contains geometry without reference images. Automatic
+image-based registration cannot be recovered from that export alone. Older
+gateways and cameras without calibration continue to provide video and location
+markers, with direction/FOV shown as unknown.
+
+### Device viewfinder
+
+On iPhone, open Devices and tap the viewfinder toolbar button. Use the info icon
+for recognition counts and processing time. **Save diagnostic frame** explicitly
+saves one grayscale camera frame and its diagnostics to
+Documents/RecognitionDiagnostic.json inside the app container. It stays on the
+phone unless retrieved for debugging; saving again replaces the previous capture.
+
+The camera view uses ARKit frames and local OpenCV SIFT feature matching, geometric RANSAC
+verification, and two consecutive observations before displaying a card. Cards
+expire after 1.5 seconds without fresh observations. Board recognition runs
+independently of OCR and does not require normal AR world tracking. It checks the full image and, after a miss, a centre crop at higher
+resolution without loosening geometric checks. The app does not upload camera frames. Two bundled Seeed Studio photographs provide experimental
+appearance recognition for XIAO ESP32S3 and ESP32S3 Sense boards. This is
+reference-image matching, not a general detector for every device or every view.
+Small, blurred, occluded, reflective, or differently enclosed boards may not match.
+
+Recognition cards stay in a fixed panel below the viewfinder toolbar; only the
+outline follows the detected device. Tap a card to choose a nearby device and
+open its normal authenticated connection.
+The sheet displays current device information, application counts for WendyOS,
+and a selectable real camera feed for WendyOS or Lite. Failed status reads remove
+the connected status; video freshness is displayed separately. An appearance match
+or nearby discovery alone never authenticates the visible physical device.
+Existing device-name labels can also be recognized using Vision OCR. Whole-name
+matches preserve all candidates when names are duplicated.
+
+For other hardware, use **Remember a device’s appearance**, put the device inside
+the guide, capture, and choose its nearby connection. This saves one reference
+per device on this phone after a successful connection. Saved appearances remain
+suggestions because identical hardware can match the same features. They do not
+provide lens calibration or automatic identity verification. Remove references
+through the stack icon. At most 12 references and 32 MiB are stored atomically in
+Application Support/WendyDeviceRecognition/references.json. No cloud sync occurs.
+
+Room scanning uses the same recognizer with RoomPlan's ARSession and shows a
+recognized appearance during capture. It does not place cameras or infer their
+viewing angles from an appearance-only reference. The native C++ layer supports
+metric planar references and checked PnP poses, tested with a synthetic calibrated
+fixture, but bundled photographs and user captures have no measured physical
+plane and deliberately cannot produce a pose. That code is not evidence of
+real-world camera calibration or automatic site alignment.
+
+Builds require CMake and Ninja on the development Mac. `Scripts/build-vision.sh`
+downloads checksum-pinned OpenCV 4.12.0 source and caches static libraries per
+Apple platform in Build/VisualRecognition. The build bundles OpenCV/Carotene
+licenses and Seeed photograph attribution. Run `bash Scripts/test-vision.sh`
+for native perspective/pose/negative-image checks; app tests cover rotated board
+recognition, ambiguity, reference validation, persistence and removal. Hardware
+recognition still requires checking against the actual boards and lighting.
 
 ## Unitree pairing and direct control
 

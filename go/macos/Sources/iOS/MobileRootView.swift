@@ -11,6 +11,7 @@ struct MobileRootView: View {
     @State private var search = ""
     @State private var address = ""
     @State private var adding = false
+    @State private var recognizing = false
     @State private var accounts = false
     @State private var details: String?
     private var devices: [Device] {
@@ -74,6 +75,7 @@ struct MobileRootView: View {
             .refreshable { await refresh() }
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) { Button { accounts = true } label: { Image(systemName: "person.crop.circle") }.accessibilityLabel("Accounts") }
+                ToolbarItem(placement: .topBarTrailing) { Button { recognizing = true } label: { Image(systemName: "viewfinder") }.accessibilityLabel("Recognize a device") }
                 ToolbarItem(placement: .topBarTrailing) { Button { adding = true } label: { Image(systemName: "plus") }.accessibilityLabel("Connect by address") }
             }
         } detail: {
@@ -111,6 +113,7 @@ struct MobileRootView: View {
         .task(id: scenePhase) {
             if scenePhase == .active { await model.refreshAccount() }
         }
+        .fullScreenCover(isPresented: $recognizing) { DeviceViewfinder() }
         .sheet(isPresented: $accounts) {
             MobileAccountsView(model: model) { development in
                 accounts = false
@@ -154,7 +157,7 @@ struct MobileRootView: View {
 }
 
 private enum MobilePane: String, CaseIterable, Identifiable {
-    case apps = "Apps", cameras = "Cameras", campaigns = "Campaigns", chat = "Chat"
+    case apps = "Apps", cameras = "Cameras", siteModel = "Site Model", campaigns = "Campaigns", chat = "Chat"
     var id: String { rawValue }
 }
 private struct MobileDeviceView: View {
@@ -204,6 +207,7 @@ private struct MobileDeviceView: View {
         switch pane {
         case .apps: ActivityView(model: model)
         case .cameras: CameraWallView(model: model)
+        case .siteModel: NativeSiteView(model: model)
         case .campaigns: CampaignsView(session: model.deviceSession, deviceName: device.title) { _ in }
         case .chat: DeviceChatView(deviceName: device.title, chat: model.deviceChat)
         }

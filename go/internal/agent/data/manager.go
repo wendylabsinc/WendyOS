@@ -346,8 +346,16 @@ const consensusQueryTimeout = 5 * time.Second
 
 func NewManager(root string) (*Manager, error) {
 	implicitRoot := root == ""
+	var storageWarning string
 	if root == "" {
-		root = DefaultRoot
+		var err error
+		root, err = defaultDataRoot()
+		if err != nil {
+			// Keep the agent reachable if migration fails (for example because
+			// the destination volume is full); the original was not modified.
+			root = DefaultRoot
+			storageWarning = fmt.Sprintf("recording storage migration failed; continuing with %s: %v", root, err)
+		}
 	}
 	if err := os.MkdirAll(root, 0o750); err != nil {
 		if !implicitRoot || !errors.Is(err, os.ErrPermission) {
@@ -364,6 +372,9 @@ func NewManager(root string) (*Manager, error) {
 	}
 	m := &Manager{root: root, downloads: make(map[string]int), active: make(map[string]*activeEpisode),
 		maxQuota: DefaultMaxQuotaBytes, reserve: DefaultReserveBytes}
+	if storageWarning != "" {
+		m.warnf("%s", storageWarning)
+	}
 	m.recordings = &recordingStore{root: filepath.Join(root, ".recordings"), journals: map[string]*recordingJournal{}}
 	if err := m.restoreStreamPreRoll(); err != nil {
 		return nil, err
@@ -1073,6 +1084,9 @@ func (m *Manager) enforceQuotaLocked(scan storeScan) error {
 		free += c.size
 	}
 	if used > quota || free < reserve {
+		if free < reserve {
+			return fmt.Errorf("recording storage at %s has %.2f GiB free; at least %.2f GiB must remain free. Free space on this filesystem or set WENDY_DATA_DIR to a larger data volume", m.root, float64(free)/(1<<30), float64(reserve)/(1<<30))
+		}
 		if scan.partialBytes > 0 {
 			return fmt.Errorf("data store holds %d bytes (%d of them in episodes still recording) against a %d byte quota and cannot preserve %d bytes free", used, scan.partialBytes, quota, reserve)
 		}

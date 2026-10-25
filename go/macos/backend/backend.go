@@ -551,11 +551,14 @@ func (b *Backend) StartLogs(app string, streamID uint64) error {
 	}()
 	return nil
 }
-func (b *Backend) StartCamera(camera uint32, streamID, sessionID uint64) error {
+func (b *Backend) StartCamera(camera uint32, streamID, sessionID uint64, expectedStableID ...string) error {
 	_, done := b.begin()
 	defer done()
 	if err := b.validSession(sessionID); err != nil {
 		return err
+	}
+	if len(expectedStableID) > 0 && expectedStableID[0] != "" && b.cameraDevices[camera].GetStableId() != expectedStableID[0] {
+		return errors.New("camera identity changed; refresh cameras before starting video")
 	}
 	if b.lite != nil {
 		return b.startLiteCamera(camera, streamID)

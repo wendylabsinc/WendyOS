@@ -1,6 +1,11 @@
 #ifndef WENDY_DESKTOP_BRIDGE_H
 #define WENDY_DESKTOP_BRIDGE_H
 #include "BridgeTypes.h"
+#include "VisualRecognition.h"
+#include "SiteLocalization.h"
+WDCameraMetadataResult *WDCameraMetadataList(uint64_t session);
+WDStatus *WDCameraAlignmentSave(uint64_t session, WDCameraAlignmentInput *input);
+void WDCameraMetadataFree(WDCameraMetadataResult *value);
 #include <TargetConditionals.h>
 #if TARGET_OS_OSX
 #include "UnitreeTypes.h"
@@ -29,7 +34,7 @@ WDStatus *WDDeleteApp(char *app, uint64_t session);
 WDCamerasResult *WDCameras(void);
 WDStatus *WDStartLogs(char *app, uint64_t stream);
 WDStatus *WDStopLogs(void);
-WDStatus *WDStartCamera(uint32_t camera, uint64_t stream, uint64_t session);
+WDStatus *WDStartCamera(uint32_t camera, uint64_t stream, uint64_t session, char *stable_id);
 WDStatus *WDStopCamera(uint32_t camera, uint64_t stream, uint64_t session);
 WDStatus *WDStopCameras(uint64_t session);
 WDVPNResult *WDStartVPN(WDRouteInput *routes, size_t count);

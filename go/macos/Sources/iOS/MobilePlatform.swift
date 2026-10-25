@@ -6,6 +6,7 @@ import SafariServices
 // The app can access devices directly without installing a system-wide VPN.
 // iOS VPN requires a separately provisioned packet-tunnel app extension.
 @MainActor final class VPNController: ObservableObject {
+    let enabled = false
     let setupIssue: String? = "System-wide VPN is not included in this iOS build. Cloud connections work inside Wendy."
     func start(_ configuration: VPNConfiguration) async throws { throw WendyError(message: setupIssue!) }
     func stop() async throws {}

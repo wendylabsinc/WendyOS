@@ -110,8 +110,8 @@ final class GoClient: Sendable {
         try await perform { try Self.withCString(app) { try Self.finish(WDStartLogs($0, stream)) } }
     }
     func stopLogs() async throws { try await perform(unlessCancelled: false) { try Self.finish(WDStopLogs()) } }
-    func startCamera(id: UInt32, stream: UInt64, session: UInt64) async throws {
-        try await perform { try Self.finish(WDStartCamera(id, stream, session)) }
+    func startCamera(id: UInt32, stream: UInt64, session: UInt64, stableID: String = "") async throws {
+        try await perform { try Self.withCString(stableID) { try Self.finish(WDStartCamera(id, stream, session, $0)) } }
     }
     func stopCamera(id: UInt32, stream: UInt64, session: UInt64) async throws {
         try await perform(unlessCancelled: false) { try Self.finish(WDStopCamera(id, stream, session)) }
@@ -185,7 +185,7 @@ final class GoClient: Sendable {
         defer { WDCamerasFree(pointer) }
         try check(pointer.pointee.status)
         return UnsafeBufferPointer(start: pointer.pointee.items, count: pointer.pointee.count).map {
-            Camera(id: $0.id, name: string($0.name), path: optionalString($0.path), thermal: $0.thermal != 0)
+            Camera(id: $0.id, name: string($0.name), path: optionalString($0.path), thermal: $0.thermal != 0, stableID: string($0.stable_id))
         }
     }
     private static func readVPN(_ pointer: UnsafeMutablePointer<WDVPNResult>?) throws -> VPNConfiguration {
@@ -296,6 +296,7 @@ struct Camera: Identifiable, Hashable {
     let name: String
     var path: String?
     var thermal = false
+    var stableID = ""
 }
 struct VPNRouteSelection { let selector: String; let name: String }
 

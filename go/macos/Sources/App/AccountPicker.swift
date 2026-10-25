@@ -207,15 +207,16 @@ struct AccountPicker: View {
             }
             if let error = picker.error { FailureNote(message: error).padding(12) }
             Divider()
-            VStack(alignment: .leading, spacing: 2) {
+            VStack(alignment: .leading, spacing: 4) {
                 Menu {
                     Button("Wendy Cloud") { actions.submit { await app.signIn(); presented = false } }
                     Button("Development Cloud") { actions.submit { await app.signIn(development: true); presented = false } }
                 } label: {
-                    Label("Add account…", systemImage: "plus").frame(maxWidth: .infinity, alignment: .leading).padding(8)
-                }.menuStyle(.borderlessButton).disabled(app.signingIn || picker.switching)
+                    AccountPickerFooterLabel(title: "Add account", icon: "plus", accessory: "chevron.down")
+                }.menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden)
+                    .disabled(app.signingIn || picker.switching)
                 SettingsLink {
-                    Label("Manage accounts…", systemImage: "person.crop.circle").frame(maxWidth: .infinity, alignment: .leading).padding(8)
+                    AccountPickerFooterLabel(title: "Manage accounts", icon: "person.crop.circle", accessory: "chevron.right")
                 }.buttonStyle(.plain)
                 if app.signingIn {
                     if let url = app.loginURL { Link("Continue in browser", destination: url).padding(8) }
@@ -223,6 +224,33 @@ struct AccountPicker: View {
                 }
             }.font(.system(size: 12)).padding(8)
         }.frame(width: 320).fixedSize(horizontal: false, vertical: true)
+    }
+}
+
+private struct AccountPickerFooterLabel: View {
+    let title: String
+    let icon: String
+    let accessory: String
+    @State private var hovering = false
+    @Environment(\.isEnabled) private var isEnabled
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: icon)
+                .font(.system(size: 14, weight: .medium))
+                .foregroundStyle(.secondary)
+                .frame(width: 18)
+            Text(title).font(.system(size: 13))
+            Spacer(minLength: 12)
+            Image(systemName: accessory)
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundStyle(.tertiary)
+        }
+        .padding(.horizontal, 10).padding(.vertical, 9)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(hovering && isEnabled ? Color.primary.opacity(0.06) : .clear, in: RoundedRectangle(cornerRadius: 7))
+        .contentShape(RoundedRectangle(cornerRadius: 7))
+        .onHover { hovering = $0 }
     }
 }
 #endif

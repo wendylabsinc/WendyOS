@@ -299,10 +299,13 @@ final class AppModel: ObservableObject {
             guard session == capturedSession, !Task.isCancelled else { return }
             cameras = result
             let previous = Dictionary(uniqueKeysWithValues: cameraFeeds.map { ($0.camera.id, $0) })
-            for feed in cameraFeeds where !cameras.contains(where: { $0.id == feed.camera.id }) {
+            for feed in cameraFeeds where !cameras.contains(feed.camera) {
                 pauseCamera(feed)
             }
-            cameraFeeds = cameras.map { previous[$0.id] ?? CameraFeed(camera: $0) }
+            cameraFeeds = cameras.map { camera in
+                if let feed = previous[camera.id], feed.camera == camera { return feed }
+                return CameraFeed(camera: camera)
+            }
             camerasError = nil
             if cameraWallVisible { await playCameras() }
         }
@@ -341,20 +344,27 @@ final class AppModel: ObservableObject {
     }
 
     func playCamera(_ feed: CameraFeed, inline: Bool = false) async {
+        _ = await playOwnedCamera(feed, inline: inline)
+    }
+
+    /// A presenting view may replace another view's stream. Return its token so
+    /// dismissal cleanup cannot stop the newer owner's camera subscription.
+    func playOwnedCamera(_ feed: CameraFeed, inline: Bool = false) async -> UInt64 {
         guard connected != nil, (cameraWallVisible || inline),
-              cameraFeeds.contains(where: { $0 === feed }) else { return }
+              cameraFeeds.contains(where: { $0 === feed }) else { return 0 }
         cameraStream &+= 1
         let stream = cameraStream
         feed.start(stream: stream)
         let currentSession = session
         do {
-            try await client.startCamera(id: feed.camera.id, stream: stream, session: currentSession)
+            try await client.startCamera(id: feed.camera.id, stream: stream, session: currentSession, stableID: feed.camera.stableID)
         } catch {
             if Task.isCancelled {
                 if feed.stream == stream { feed.pause() }
                 try? await client.stopCamera(id: feed.camera.id, stream: stream, session: currentSession)
             } else { feed.fail(error.localizedDescription, stream: stream) }
         }
+        return stream
     }
 
     func pauseCamera(_ feed: CameraFeed) {

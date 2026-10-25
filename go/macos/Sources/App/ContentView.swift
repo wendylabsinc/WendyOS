@@ -369,6 +369,7 @@ struct ContentView: View {
                 if model.connectedLite { LiteDeviceView(model: model).id(model.deviceSession) } else {
                 switch tab {
                 case "cameras": camerasPane
+                case "siteModel": NativeSiteView(model: model).id(model.deviceSession)
                 case "activity": ActivityView(model: model).id(device.id)
                 case "campaigns": CampaignsView(session: model.deviceSession, deviceName: device.title) { id in
                     requestedClip = (model.deviceSession, id)

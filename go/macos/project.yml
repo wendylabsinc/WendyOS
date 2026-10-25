@@ -41,6 +41,9 @@ targets:
         type: folder
         buildPhase: resources
       - path: Sources/Shared/VPNConfiguration.swift
+      - path: Resources/DeviceRecognition
+        type: folder
+        buildPhase: resources
       - path: Resources/Notices
         type: folder
         buildPhase: resources
@@ -75,11 +78,16 @@ targets:
         INFOPLIST_KEY_NSSystemExtensionUsageDescription: Wendy routes selected device connections over mesh and cloud.
         INFOPLIST_KEY_NSBonjourServices: ["_wendy._tcp", "_wendyos._tcp", "_wendy-mesh._udp", "_wendy-lite._tcp"]
         CODE_SIGN_ENTITLEMENTS: Resources/App.entitlements
+        CLANG_CXX_LANGUAGE_STANDARD: c++17
+        HEADER_SEARCH_PATHS: "$(SRCROOT)/Build/VisualRecognition/$(PLATFORM_NAME)/install/include/opencv4"
         SWIFT_OBJC_BRIDGING_HEADER: Sources/Shared/Bridge.h
-        OTHER_LDFLAGS: ["$(inherited)", "-lwendydesktop", "$(SRCROOT)/Build/libusb-1.0.dylib"]
+        OTHER_LDFLAGS: ["$(inherited)", "-lwendydesktop", "$(SRCROOT)/Build/libusb-1.0.dylib", "$(SRCROOT)/Build/VisualRecognition/macosx/install/lib/opencv4/3rdparty/libtegra_hal.a", "-L$(SRCROOT)/Build/VisualRecognition/$(PLATFORM_NAME)/install/lib", "-lopencv_calib3d", "-lopencv_features2d", "-lopencv_flann", "-lopencv_imgproc", "-lopencv_core", "-lc++", "-lz"]
     preBuildScripts:
       - script: python3 "$SRCROOT/Scripts/check-concurrency.py"
         name: Check structured concurrency
+        basedOnDependencyAnalysis: false
+      - script: bash "$SRCROOT/Scripts/build-vision.sh"
+        name: Build visual recognition
         basedOnDependencyAnalysis: false
       - path: Scripts/build-go.sh
         name: Build Go libraries and bundled CLI
@@ -131,6 +139,7 @@ targets:
       path: Resources/Mobile-Info.plist
       properties:
         CFBundleDisplayName: Wendy
+        NSCameraUsageDescription: Wendy uses the camera to recognize devices and scan your site into a 3D model.
         NSBonjourServices: ["_wendyos._udp", "_wendy-lite._tcp"]
         NSLocalNetworkUsageDescription: Wendy discovers and connects to your nearby devices.
         NSBluetoothAlwaysUsageDescription: Wendy uses Bluetooth to discover nearby Wendy devices.
@@ -153,6 +162,9 @@ targets:
       - path: Sources/iOS
       - path: Resources/MobileAssets.xcassets
       - path: Sources/Shared/VPNConfiguration.swift
+      - path: Resources/DeviceRecognition
+        type: folder
+        buildPhase: resources
       - path: Resources/Notices
         type: folder
         buildPhase: resources
@@ -183,11 +195,16 @@ targets:
         INFOPLIST_KEY_WendyPushEnvironment: "$(WENDY_PUSH_ENVIRONMENT)"
         LIBRARY_SEARCH_PATHS: "$(SRCROOT)/Build/$(PLATFORM_NAME)"
         LD_RUNPATH_SEARCH_PATHS: ["$(inherited)", "@executable_path/Frameworks"]
-        OTHER_LDFLAGS: ["-lresolv", "-lwendydesktop"]
+        OTHER_LDFLAGS: ["-lresolv", "-lwendydesktop", "-L$(SRCROOT)/Build/VisualRecognition/$(PLATFORM_NAME)/install/lib", "-lopencv_calib3d", "-lopencv_features2d", "-lopencv_flann", "-lopencv_imgproc", "-lopencv_core", "-lc++", "-lz"]
+        CLANG_CXX_LANGUAGE_STANDARD: c++17
+        HEADER_SEARCH_PATHS: "$(SRCROOT)/Build/VisualRecognition/$(PLATFORM_NAME)/install/include/opencv4"
         SWIFT_OBJC_BRIDGING_HEADER: Sources/Shared/Bridge.h
     preBuildScripts:
       - script: python3 "$SRCROOT/Scripts/check-concurrency.py"
         name: Check structured concurrency
+        basedOnDependencyAnalysis: false
+      - script: bash "$SRCROOT/Scripts/build-vision.sh"
+        name: Build visual recognition
         basedOnDependencyAnalysis: false
       - path: Scripts/build-ios-go.sh
         name: Build embedded Go backend for iOS
@@ -196,7 +213,7 @@ targets:
     type: bundle.unit-test
     platform: iOS
     deploymentTarget: "26.0"
-    sources: [Tests-iOS, Tests/ThermalCameraTests.swift, Tests/ConcurrencyTests.swift]
+    sources: [Tests-iOS, Tests/ThermalCameraTests.swift, Tests/ConcurrencyTests.swift, Tests/SiteTwinTests.swift, Tests/DeviceRecognitionTests.swift]
     dependencies:
       - target: WendyMobile
     settings:

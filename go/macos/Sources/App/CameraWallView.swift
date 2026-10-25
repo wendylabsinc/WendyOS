@@ -9,6 +9,9 @@ final class CameraFeed: ObservableObject, Identifiable {
     @Published private(set) var jpeg: CGImage?
     @Published private(set) var thermalFrame: ThermalCameraFrame?
     @Published var thermalScale: ThermalCameraScale = .counts
+    private(set) var lastVideoReceivedAt: Date?
+    private var jpegReceivedAt: Date?
+    private var jpegSequence: UInt64 = 0
     private(set) var thermalReceivedAt = Date.distantPast
     @Published private(set) var running = false
     @Published private(set) var receivedVideo = false
@@ -20,10 +23,12 @@ final class CameraFeed: ObservableObject, Identifiable {
     func start(stream: UInt64) {
         decoder.reset()
         jpeg = nil
+        jpegReceivedAt = nil
         thermalFrame = nil
         self.stream = stream
         error = nil
         receivedVideo = false
+        lastVideoReceivedAt = nil
         running = true
     }
 
@@ -31,9 +36,11 @@ final class CameraFeed: ObservableObject, Identifiable {
         stream = 0
         running = false
         receivedVideo = false
+        lastVideoReceivedAt = nil
         error = nil
         decoder.reset()
         jpeg = nil
+        jpegReceivedAt = nil
         thermalFrame = nil
     }
 
@@ -44,6 +51,14 @@ final class CameraFeed: ObservableObject, Identifiable {
         if thermalFrame != nil { jpeg = nil; thermalFrame = nil; receivedVideo = false }
     }
 
+    func calibrationFrame() -> CameraCalibrationFrame? {
+        guard running else { return nil }
+        if let jpeg, let jpegReceivedAt {
+            return CameraCalibrationFrame.jpeg(jpeg, received: jpegReceivedAt, sequence: jpegSequence)
+        }
+        return decoder.calibrationFrames.latest
+    }
+
     func receive(_ event: BridgeEvent) {
         guard running, stream == event.stream else { return }
         if case .cameraError(let message) = event.payload {
@@ -52,6 +67,7 @@ final class CameraFeed: ObservableObject, Identifiable {
             thermalFrame = frame
             thermalReceivedAt = Date()
             receivedVideo = true
+            lastVideoReceivedAt = Date()
         } else if case .jpeg(let bytes) = event.payload {
             guard let source = CGImageSourceCreateWithData(bytes as CFData, nil),
                   let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
@@ -62,8 +78,14 @@ final class CameraFeed: ObservableObject, Identifiable {
                 fail("The camera sent an invalid JPEG frame.", stream: event.stream); return
             }
             jpeg = image
+            jpegReceivedAt = Date()
+            jpegSequence &+= 1
             receivedVideo = true
+            lastVideoReceivedAt = Date()
         } else if case .video(let bytes) = event.payload {
+            jpeg = nil
+            jpegReceivedAt = nil
+            lastVideoReceivedAt = Date()
             decoder.feed(bytes)
             if !receivedVideo { receivedVideo = true }
         }

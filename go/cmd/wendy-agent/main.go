@@ -455,6 +455,11 @@ func main() {
 	calibratedFrameSvc := services.NewCalibratedFrameService(ctx, logger,
 		framesource.NewRegistry(services.NewRealSenseProvider(logger, videoSvc, "")))
 	defer calibratedFrameSvc.Shutdown()
+	if metadataStore, err := services.OpenCameraMetadataStore("/var/lib/wendy/camera-metadata.json"); err != nil {
+		logger.Error("camera metadata unavailable", zap.Error(err))
+	} else {
+		calibratedFrameSvc.SetMetadataStore(metadataStore)
+	}
 	// Network cameras have to be found before they can be listed, so probe
 	// periodically rather than only when a client asks.
 	videoSvc.StartDiscovery()
@@ -525,6 +530,7 @@ func main() {
 	sensorFrames := services.NewSensorFrameFeed()
 	videoSvc.SetSensorFrameFeed(sensorFrames)
 	sensorSup := mcusource.NewSupervisor(logger, videoSvc.Loopback(), sensorTransportFor, sensorFrames.WrapWriters(ros2camera.NewFrameWriter), audioLoop)
+	videoSvc.SetSensorCameraIdentities(sensorSup.CameraIdentities)
 	sensorRunner := mcusource.NewRunner(logger, sensorSup)
 	sensorAgentScope := func() certs.Scope {
 		certPEM, _, _ := mcuIdentity()

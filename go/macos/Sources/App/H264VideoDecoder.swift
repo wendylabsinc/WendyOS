@@ -82,6 +82,13 @@ final class H264AnnexBDecoder {
     private var formatDescription: CMVideoFormatDescription?
     private var currentAU = [Data]()
     private var frameCount = 0
+    let calibrationFrames = H264CalibrationFrames()
+
+    var imageSize: (width: Int, height: Int)? {
+        guard let formatDescription else { return nil }
+        let size = CMVideoFormatDescriptionGetDimensions(formatDescription)
+        return (Int(size.width), Int(size.height))
+    }
 
     func attach(layer: AVSampleBufferDisplayLayer) {
         layer.videoGravity = .resizeAspect
@@ -96,6 +103,7 @@ final class H264AnnexBDecoder {
     /// Clears all decode state and flushes the layer. Call when switching cameras
     /// so the new stream is not decoded against the previous stream's SPS/PPS.
     func reset() {
+        calibrationFrames.reset()
         parser = AnnexBParser()
         sps = nil
         pps = nil
@@ -147,6 +155,8 @@ final class H264AnnexBDecoder {
             return
         }
 
+        let keyframe = currentAU.contains { ($0.first ?? 0) & 0x1f == 5 }
+
         // Build AVCC payload: [4-byte big-endian length][NAL] repeated.
         var avcc = Data()
         for nal in currentAU {
@@ -190,6 +200,7 @@ final class H264AnnexBDecoder {
                 Unmanaged.passUnretained(kCMSampleAttachmentKey_DisplayImmediately).toOpaque(),
                 Unmanaged.passUnretained(kCFBooleanTrue).toOpaque())
         }
+        if keyframe { calibrationFrames.accept(sampleBuffer, sequence: UInt64(frameCount), received: Date()) }
         for layer in displayLayers {
             if layer.sampleBufferRenderer.status == .failed { layer.sampleBufferRenderer.flush() }
             layer.sampleBufferRenderer.enqueue(sampleBuffer)

@@ -86,7 +86,10 @@ func TestThermalStreamUsesRawStableIdentityAndCancels(t *testing.T) {
 	if _, err = b.Cameras(); err != nil {
 		t.Fatal(err)
 	}
-	if err = b.StartCamera(2, 42, 7); err != nil {
+	if err = b.StartCamera(2, 41, 7, "by-id:another-camera"); err == nil {
+		t.Fatal("accepted a reused camera number with a different identity")
+	}
+	if err = b.StartCamera(2, 42, 7, "by-id:thermal-fixture"); err != nil {
 		t.Fatal(err)
 	}
 	select {

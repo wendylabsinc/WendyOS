@@ -730,7 +730,7 @@ private struct DataVisualRecordingSheet: View {
                         ForEach(["camera", "audio", "ros2", "telemetry"], id: \.self) { kind in
                             let items = sources.filter { $0.kind == kind }
                             if !items.isEmpty {
-                                Text(kind == "ros2" ? "ROS 2 topics and domains" : kind.capitalized).font(.headline)
+                                sourceGroupHeader(kind: kind, items: items)
                                 ForEach(items) { source in
                                     Toggle(source.title, isOn: Binding(get: { selected.contains(source.id) }, set: { on in
                                         if on { selected.insert(source.id) } else { selected.remove(source.id) }
@@ -756,6 +756,26 @@ private struct DataVisualRecordingSheet: View {
         }.padding(24).frame(width: 640, height: 540).interactiveDismissDisabled(busy)
             .task { await refresh() }
     }
+
+    private func sourceGroupHeader(kind: String, items: [CampaignSource]) -> some View {
+        let title = kind == "ros2" ? "ROS 2 topics and domains" : kind.capitalized
+        let availableIDs = Set(items.filter(\.healthy).map(\.id))
+        let groupIDs = Set(items.map(\.id))
+        let selectedCount = selected.intersection(availableIDs).count
+        return HStack {
+            Text(title).font(.headline)
+            Text("\(selectedCount) of \(availableIDs.count) selected")
+                .font(.caption).foregroundStyle(.secondary)
+            Spacer()
+            Button("Select all") { selected.formUnion(availableIDs) }
+                .disabled(busy || availableIDs.isSubset(of: selected))
+                .accessibilityLabel("Select all \(title)")
+            Button("Clear") { selected.subtract(groupIDs) }
+                .disabled(busy || selected.isDisjoint(with: groupIDs))
+                .accessibilityLabel("Clear \(title) selection")
+        }.buttonStyle(.borderless)
+    }
+
     private func refresh() async {
         busy = true; defer { busy = false }
         do {

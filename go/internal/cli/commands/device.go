@@ -90,6 +90,7 @@ func newDeviceCmd() *cobra.Command {
 		newDeviceBuildHostCmd(),
 		newDeviceSetupCmd(),
 		newDeviceEnrollCmd(),
+		newDeviceEnrollmentStatusCmd(),
 		newDeviceUnenrollCmd(),
 		newDeviceRenameCmd(),
 		newDevicePowerModeCmd(),
@@ -99,6 +100,7 @@ func newDeviceCmd() *cobra.Command {
 	)
 	addToGroup("hardware",
 		newDevicePairCmd(),
+		newDeviceSensorsCmd(),
 		newDeviceUnpairCmd(),
 		newWifiCmd(),
 		newBluetoothCmd(),

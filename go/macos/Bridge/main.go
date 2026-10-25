@@ -68,8 +68,8 @@ func WDStartLogs(app *C.char, stream C.uint64_t) *C.WDStatus {
 func WDStopLogs() *C.WDStatus { return statusResult(desktop.StopLogs()) }
 
 //export WDStartCamera
-func WDStartCamera(camera C.uint32_t, stream, session C.uint64_t) *C.WDStatus {
-	return statusResult(desktop.StartCamera(uint32(camera), uint64(stream), uint64(session)))
+func WDStartCamera(camera C.uint32_t, stream, session C.uint64_t, stableID *C.char) *C.WDStatus {
+	return statusResult(desktop.StartCamera(uint32(camera), uint64(stream), uint64(session), C.GoString(stableID)))
 }
 
 //export WDStopCamera
@@ -166,7 +166,7 @@ func cameras(items []*pb.VideoDevice, err error) *C.WDCamerasResult {
 	p.status = status(err)
 	p.items, p.count = alloc[C.WDCamera](len(items)), C.size_t(len(items))
 	for i, camera := range items {
-		unsafe.Slice(p.items, len(items))[i] = C.WDCamera{id: C.uint32_t(camera.GetId()), name: C.CString(camera.GetName()), path: C.CString(camera.GetPath()), thermal: thermalFlag(camera)}
+		unsafe.Slice(p.items, len(items))[i] = C.WDCamera{id: C.uint32_t(camera.GetId()), name: C.CString(camera.GetName()), path: C.CString(camera.GetPath()), stable_id: C.CString(camera.GetStableId()), thermal: thermalFlag(camera)}
 	}
 	return p
 }
@@ -286,6 +286,7 @@ func WDCamerasFree(p *C.WDCamerasResult) {
 	for _, c := range unsafe.Slice(p.items, int(p.count)) {
 		free(c.name)
 		free(c.path)
+		free(c.stable_id)
 	}
 	free(p.items)
 	free(p.status.message)

@@ -40,8 +40,8 @@ func TestTypedResultsAndDestructors(t *testing.T) {
 			t.Fatal("nested app fields changed")
 		}
 		WDAppsFree(a)
-		c := cameras([]*pb.VideoDevice{{Id: 0, Name: "Camera zero", Path: "/dev/video0"}}, nil)
-		if c.count != 1 || c.items.id != 0 || cstring(unsafe.Pointer(c.items.path)) != "/dev/video0" {
+		c := cameras([]*pb.VideoDevice{{Id: 0, Name: "Camera zero", Path: "/dev/video0", StableId: "sensorlink:test:0"}}, nil)
+		if c.count != 1 || c.items.id != 0 || cstring(unsafe.Pointer(c.items.stable_id)) != "sensorlink:test:0" || cstring(unsafe.Pointer(c.items.path)) != "/dev/video0" {
 			t.Fatal("camera zero lost")
 		}
 		WDCamerasFree(c)
@@ -103,7 +103,7 @@ func TestTypedEntryPointsRejectInvalidState(t *testing.T) {
 		t.Fatal("unpin without refusal accepted")
 	}
 	WDConnectionFree(connection)
-	status := WDStartCamera(0, 1, 123)
+	status := WDStartCamera(0, 1, 123, nil)
 	if status.message == nil {
 		t.Fatal("camera without connection accepted")
 	}

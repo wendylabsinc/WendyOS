@@ -23,7 +23,31 @@ typedef struct {
     WDService *services; size_t service_count;
     uint32_t http_port;
 } WDApp;
-typedef struct { uint32_t id; char *name, *path; int32_t thermal; } WDCamera;
+typedef struct { uint32_t id; char *name, *path, *stable_id; int32_t thermal; } WDCamera;
+typedef struct {
+ char *model_revision, *provenance;
+ double x, y, z, qx, qy, qz, qw;
+ int32_t method;
+ int64_t observed_ms, valid_until_ms;
+} WDSiteCameraPose;
+typedef struct {
+ char *stable_id, *capture_mode, *note, *distortion_model;
+ uint64_t revision;
+ int32_t has_intrinsics, measured;
+ uint32_t width, height;
+ double fx, fy, cx, cy, k1, k2, p1, p2, k3;
+ WDSiteCameraPose *poses; size_t pose_count;
+} WDCameraMetadata;
+typedef struct { WDStatus status; WDCameraMetadata *items; size_t count; } WDCameraMetadataResult;
+typedef struct {
+ char *stable_id, *model_revision, *note, *capture_mode, *pose_provenance;
+ uint64_t expected_revision;
+ uint32_t width, height, inliers;
+ int32_t lens_measured, lens_only;
+ double fx, fy, cx, cy, k1, k2, p1, p2, k3;
+ double x, y, z, qx, qy, qz, qw, rms;
+ int64_t observed_ms, valid_until_ms;
+} WDCameraAlignmentInput;
 typedef struct { char *selector, *name; } WDRouteInput;
 typedef struct { char *selector, *name, *address, *host; } WDRoute;
 typedef struct { char *endpoint, *token; WDRoute *routes; size_t route_count; } WDVPNConfig;

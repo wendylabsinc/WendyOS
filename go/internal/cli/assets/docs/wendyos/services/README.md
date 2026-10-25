@@ -122,8 +122,12 @@ remains available locally within the buffer's retention limits. Set a collector
 host, host:port, or HTTPS URL without a path, then restart the agent.
 
 `WENDY_DATA_DIR` sets the root directory for the device-local Episode store.
-The production default is `/var/lib/wendy-agent/data/episodes`. Set it in the
-agent service environment when Episodes should live on a larger data volume:
+On Linux with a separately mounted `/data` partition, the default is
+`/data/wendy-agent/data/episodes`. At first startup, the agent copies an existing
+default store from `/var/lib/wendy-agent/data`, including campaigns and inference
+state, into the persistent partition before using it. The original is retained
+for rollback. Other hosts keep `/var/lib/wendy-agent/data/episodes` as the default.
+Set an explicit path in the agent service environment to override this selection:
 
 ```sh
 WENDY_DATA_DIR=/data/wendy-agent/data/episodes wendy-agent
@@ -131,8 +135,8 @@ WENDY_DATA_DIR=/data/wendy-agent/data/episodes wendy-agent
 
 The agent creates the directory on startup. Unprivileged developer agents that
 cannot create the production default fall back to their platform user
-configuration directory. WendyOS services should set an explicit path on the
-persistent `/data` partition when the root filesystem is small.
+configuration directory. An explicit `WENDY_DATA_DIR` is used unchanged and is
+not migrated automatically.
 
 ## Agent shutdown
 
