@@ -123,3 +123,49 @@ func TestAssemblerCapsFrameSize(t *testing.T) {
 		t.Fatalf("oversized frame returned (%d bytes)", len(f.Payload))
 	}
 }
+
+func TestAssemblerCapsFirstAndSingleChunks(t *testing.T) {
+	oversized := string(bytes.Repeat([]byte{'x'}, sensorlink.MaxFrameBytes+1))
+	for _, last := range []bool{false, true} {
+		name := "first"
+		if last {
+			name = "single"
+		}
+		t.Run(name, func(t *testing.T) {
+			var a sensorlink.Assembler
+			a.Add(chunk(1, 3, 0, false, "old"))
+			a.Add(chunk(2, 4, 0, false, "other-"))
+			if f := a.Add(chunk(1, 5, 0, last, oversized)); f != nil {
+				t.Fatalf("oversized %s chunk returned %d bytes", name, len(f.Payload))
+			}
+			if f := a.Add(chunk(1, 5, 1, true, "tail")); f != nil {
+				t.Fatal("oversized first chunk was retained")
+			}
+			if f := a.Add(chunk(1, 3, 1, true, "tail")); f != nil {
+				t.Fatal("old partial frame survived oversized replacement")
+			}
+			if f := a.Add(chunk(2, 4, 1, true, "tail")); f == nil || string(f.Payload) != "other-tail" {
+				t.Fatal("another channel was discarded")
+			}
+			if f := a.Add(chunk(1, 6, 0, true, "recovered")); f == nil || string(f.Payload) != "recovered" {
+				t.Fatal("next frame did not recover")
+			}
+		})
+	}
+}
+func TestAssemblerAcceptsExactLimit(t *testing.T) {
+	payload := string(bytes.Repeat([]byte{'x'}, sensorlink.MaxFrameBytes))
+	for _, single := range []bool{false, true} {
+		var a sensorlink.Assembler
+		f := a.Add(chunk(1, 5, 0, single, payload))
+		if !single {
+			if f != nil {
+				t.Fatal("incomplete frame returned")
+			}
+			f = a.Add(chunk(1, 5, 1, true, ""))
+		}
+		if f == nil || len(f.Payload) != sensorlink.MaxFrameBytes {
+			t.Fatal("exact-limit frame was discarded")
+		}
+	}
+}

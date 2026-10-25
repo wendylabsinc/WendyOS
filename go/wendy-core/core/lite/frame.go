@@ -41,6 +41,9 @@ func (a *Assembler) Add(d *sensorlinkpb.SensorData) *SensorFrame {
 	if d.GetChunkSeq() == 0 {
 		// A new frame starts: whatever was in progress lost its tail.
 		delete(a.partial, ch)
+		if len(d.GetPayload()) > MaxFrameBytes {
+			return nil
+		}
 		f := SensorFrame{
 			ChannelID: ch,
 			Seq:       d.GetFrameSeq(),
