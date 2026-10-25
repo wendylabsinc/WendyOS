@@ -26,24 +26,26 @@ import (
 // proxies and browsers do not close it.
 const sseKeepalive = 15 * time.Second
 
+// listenLiveSSE binds the live proxy's address, which must be a loopback one.
+func listenLiveSSE(addr string) (net.Listener, error) {
+	if err := requireLoopbackAddr(addr); err != nil {
+		return nil, err
+	}
+	return net.Listen("tcp", addr)
+}
+
 // serveLiveSSE serves the device's live records to browsers on this computer
 // as Server-Sent Events at http://addr/live, until ctx ends. It is the bridge
 // for browser viewers until Wendy Cloud relays the stream: Companion web reads
-// it with VITE_WENDY_DATA_LIVE_URL=http://addr/live.
+// it with VITE_WENDY_DATA_LIVE_URL=http://addr/live. lis, from listenLiveSSE,
+// listens on addr.
 //
 // Each request opens its own StreamData subscription with req's selection,
 // unless its query names streams. The proxy has no authentication of its own,
 // so it listens only on a loopback address, answers only requests addressed
 // to one, and refuses requests a browser marks as coming from another site:
 // by an Origin that is not loopback or, without an Origin, by Sec-Fetch-Site.
-func serveLiveSSE(ctx context.Context, client agentpbv2.DataServiceClient, addr string, req *agentpbv2.StreamDataRequest, errOut io.Writer) error {
-	if err := requireLoopbackAddr(addr); err != nil {
-		return err
-	}
-	lis, err := net.Listen("tcp", addr)
-	if err != nil {
-		return err
-	}
+func serveLiveSSE(ctx context.Context, client agentpbv2.DataServiceClient, lis net.Listener, req *agentpbv2.StreamDataRequest, errOut io.Writer) error {
 	server := &http.Server{
 		Handler:           liveSSEHandler(client, req),
 		ReadHeaderTimeout: 10 * time.Second,
@@ -54,7 +56,8 @@ func serveLiveSSE(ctx context.Context, client agentpbv2.DataServiceClient, addr 
 		<-ctx.Done()
 		_ = server.Close()
 	}()
-	if err = server.Serve(lis); errors.Is(err, http.ErrServerClosed) {
+	err := server.Serve(lis)
+	if errors.Is(err, http.ErrServerClosed) {
 		return nil
 	}
 	return err
