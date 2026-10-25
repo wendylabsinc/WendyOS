@@ -8,11 +8,13 @@ import (
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/reflect/protoregistry"
 
+	// The CLI links Core through WendyGo alongside its own generated contracts.
+	_ "github.com/wendylabsinc/wendy-go/cloud"
 	_ "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb"
 	_ "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
 )
 
-// TestCloudV1AndV2Coexist fails if wendycloud.v1 and wendycloud.v2 cannot be
+// TestCloudV1AndV2Coexist fails if Core, wendycloud.v1 and wendycloud.v2 cannot be
 // linked into the same binary. The protobuf runtime panics at init when two
 // generated packages claim the same proto file path, so vendoring v2 under a
 // path that collides with v1 would take down every process that imports both —

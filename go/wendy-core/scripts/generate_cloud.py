@@ -17,6 +17,7 @@ SOURCES = (
     "wendycloud/v2/signed_request.proto",
     "wendycloud/v2/organizations.proto",
     "wendycloud/v2/assets.proto",
+    "wendycloud/v2/notifications.proto",
 )
 
 
