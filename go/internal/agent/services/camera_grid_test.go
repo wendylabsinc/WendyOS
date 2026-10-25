@@ -388,6 +388,55 @@ func TestCameraGridLetsGoOfACameraWithoutTemperatures(t *testing.T) {
 	eventually(t, "the refusal is logged", func() bool { return rig.warned("captured as MJPEG") })
 }
 
+// A decoder that keeps failing waits twice as long after each failure, up to
+// retryMax, rather than cold-starting the camera every retryAfter for as long
+// as a viewer asks. A job that publishes resets the wait, and so do viewers
+// that ask after nobody did: they wait retryAfter after the last failure.
+func TestCameraGridBacksOffADecoderThatKeepsFailing(t *testing.T) {
+	m, err := data.NewManager(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := newCameraGrids(m, newTestVideoService(nil, nil))
+	cam := &gridCamera{sourceID: thermalSource, gridNode: gridNode{path: "/dev/video4", kind: gridThermal}}
+	g.cameras[thermalSource] = cam
+	now := time.Now()
+	fail := func(published bool) time.Duration {
+		job := &gridJob{done: make(chan struct{}), err: errors.New("device busy"), published: published}
+		close(job.done)
+		cam.job = job
+		g.reap(cam, now)
+		return cam.retryAt.Sub(now)
+	}
+	for i, want := range []time.Duration{10 * time.Second, 20 * time.Second, 40 * time.Second, 80 * time.Second, 160 * time.Second, 5 * time.Minute, 5 * time.Minute} {
+		if got := fail(false); got != want {
+			t.Fatalf("failure %d: retry in %v, want %v", i+1, got, want)
+		}
+	}
+	if got := fail(true); got != 10*time.Second {
+		t.Fatalf("after a job that published: retry in %v, want 10s", got)
+	}
+
+	// Build the wait up again, with the viewer that asked meanwhile gone.
+	for range 3 {
+		fail(false)
+	}
+	if cam.backoff != 80*time.Second || cam.wanted {
+		t.Fatalf("backoff %v, wanted %v", cam.backoff, cam.wanted)
+	}
+	viewer, err := m.Live().Subscribe(live.Selection{StreamIDs: []string{thermalGridID}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(viewer.Close)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	g.reconcile(ctx)
+	if cam.job != nil || !cam.wanted || cam.backoff != 0 || cam.retryAt.Sub(now) != 10*time.Second {
+		t.Fatalf("a new viewer: job %v, backoff %v, retry in %v; want a retry 10s after the last failure", cam.job, cam.backoff, cam.retryAt.Sub(now))
+	}
+}
+
 // A SensorLink camera's brightness comes from the frames the agent receives
 // in-process; the camera's node and hub are never touched.
 func TestCameraGridBrightnessFromTheSensorLinkFeed(t *testing.T) {

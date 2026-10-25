@@ -144,8 +144,12 @@ const (
 	cameraGridScanEvery = 5 * time.Second
 	// cameraGridRetryAfter is how long a decoder that failed waits before it
 	// tries again, for example while a viewer holds the thermal camera in a
-	// mode without temperatures.
+	// mode without temperatures. Each failure in a row doubles the wait, up
+	// to cameraGridRetryMax, so a decoder that cannot succeed, say while an
+	// app holds the camera's node, stops cold-starting the camera every few
+	// seconds.
 	cameraGridRetryAfter = 10 * time.Second
+	cameraGridRetryMax   = 5 * time.Minute
 )
 
 // cameraGridKind is the decoder a camera gets.
@@ -203,6 +207,12 @@ type gridCamera struct {
 	gridNode
 	job     *gridJob
 	retryAt time.Time
+	// backoff is the wait before retryAt: zero until the decoder fails, then
+	// doubled by each failure in a row. A job that publishes resets it, and
+	// so does a viewer that asks after nobody did.
+	backoff time.Duration
+	// wanted is whether a viewer asked for the camera at the last reconcile.
+	wanted bool
 	// failure is the last job failure logged, so a decoder that keeps failing
 	// the same way is logged once.
 	failure string
@@ -222,10 +232,11 @@ type cameraGrids struct {
 	video   *VideoService
 	// wake is signalled when a job ends.
 	wake chan struct{}
-	// scanEvery and retryAfter are cameraGridScanEvery and
-	// cameraGridRetryAfter; tests shorten them.
+	// scanEvery, retryAfter and retryMax are cameraGridScanEvery,
+	// cameraGridRetryAfter and cameraGridRetryMax; tests shorten them.
 	scanEvery  time.Duration
 	retryAfter time.Duration
+	retryMax   time.Duration
 	// Owned by the loop goroutine: cameras by source id, and the probe of
 	// every node seen, by path.
 	cameras map[string]*gridCamera
@@ -256,6 +267,7 @@ func newCameraGrids(manager *data.Manager, video *VideoService) *cameraGrids {
 		wake:       make(chan struct{}, 1),
 		scanEvery:  cameraGridScanEvery,
 		retryAfter: cameraGridRetryAfter,
+		retryMax:   cameraGridRetryMax,
 		cameras:    make(map[string]*gridCamera),
 		probed:     make(map[string]gridNode),
 	}
@@ -395,12 +407,22 @@ func (g *cameraGrids) wanted(cam *gridCamera) bool {
 }
 
 // reconcile starts the decoder of every camera a viewer asks for, unless it
-// failed a moment ago, and stops the others.
+// is backing off after failing, and stops the others.
 func (g *cameraGrids) reconcile(ctx context.Context) {
 	now := time.Now()
 	for _, cam := range g.cameras {
 		g.reap(cam, now)
 		wanted := g.wanted(cam)
+		if wanted && !cam.wanted {
+			// A viewer asks after nobody did. It does not inherit the long
+			// back-off earlier viewers built up: the decoder tries again
+			// retryAfter after its last failure, as after a first one.
+			if cam.backoff > g.retryAfter {
+				cam.retryAt = cam.retryAt.Add(g.retryAfter - cam.backoff)
+			}
+			cam.backoff = 0
+		}
+		cam.wanted = wanted
 		switch {
 		case wanted && cam.job == nil && !now.Before(cam.retryAt):
 			g.start(ctx, cam)
@@ -432,7 +454,8 @@ func (g *cameraGrids) start(ctx context.Context, cam *gridCamera) {
 }
 
 // reap collects a job that ended by itself. Its failure is logged once and
-// holds the decoder back for retryAfter.
+// holds the decoder back, for retryAfter after a job that published and twice
+// as long after each failure in a row, up to retryMax.
 func (g *cameraGrids) reap(cam *gridCamera, now time.Time) {
 	job := cam.job
 	if job == nil {
@@ -445,12 +468,13 @@ func (g *cameraGrids) reap(cam *gridCamera, now time.Time) {
 	}
 	cam.job = nil
 	if job.published {
-		cam.failure = ""
+		cam.failure, cam.backoff = "", 0
 	}
 	if job.err == nil || errors.Is(job.err, context.Canceled) {
 		return
 	}
-	cam.retryAt = now.Add(g.retryAfter)
+	cam.backoff = min(max(2*cam.backoff, g.retryAfter), g.retryMax)
+	cam.retryAt = now.Add(cam.backoff)
 	if msg := job.err.Error(); msg != cam.failure {
 		cam.failure = msg
 		g.manager.Warnf("camera grid for %s stopped, retrying while a viewer asks for it: %v", cam.sourceID, job.err)
