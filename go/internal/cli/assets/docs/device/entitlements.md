@@ -105,9 +105,11 @@ The app calls `DataService.StreamData` on its private System API socket, the one
 `apps/com.example.detector` admits that app's streams, and not those of
 `com.example.detector2`. Without an allowlist the app reads every stream. Asking
 for a stream outside the allowlist fails with `PERMISSION_DENIED`. Entries may
-name the agent's own streams too, such as `agent/campaign/people/markers/`. The
-stream catalog, `_streams/<stream-id>`, lists only the streams the allowlist
-admits, so an entry never names the catalog itself.
+name the agent's own streams too, such as `agent/campaign/people/markers/`, or
+`agent/camera/` for the temperatures and brightness the agent reads from its
+cameras, so an app needs no raw frames to measure them. The stream catalog,
+`_streams/<stream-id>`, lists only the streams the allowlist admits, so an entry
+never names the catalog itself.
 
 | Boundary | Value |
 |---|---|

@@ -645,6 +645,29 @@ nothing detected clears the boxes. They are live whether or not an Episode is
 recording, and an Episode that captures `applications` records the same records.
 A record names the camera frame it describes in `source_id` and `sample_id`.
 
+The agent also measures its cameras, so an app needs neither raw frames nor
+`admin` to read them:
+
+- A TOPDON TC001 thermal camera has `agent/camera/grid/<source>`, a
+  `wendy.data.v1.Grid` of its 256x192 temperatures in °C, and
+  `agent/camera/markers/<source>`, its hottest pixel in red and its coldest in
+  blue, labelled `max` and `min` with their temperatures.
+- A SensorLink camera that sends JPEG has `agent/camera/grid/<source>`: its
+  brightness from 0 to 100 %, averaged down to at most 160 cells across.
+
+```sh
+wendy data stream --stream agent/camera/markers/v4l2:/dev/video0
+wendy data stream --schema wendy.data.v1.Grid --rate 5
+```
+
+A grid's cells cover the camera's picture as viewers see it. These streams are
+listed while the camera is present, but the agent decodes a camera only while a
+viewer names one of its streams with `--stream`, `--prefix` or `--schema`. A viewer
+that takes every stream sees them only while another viewer names them. They are
+live only: no Episode records them. A thermal camera publishes nothing while it is
+not in its stacked 512x484 mode, and clears its markers for a frame whose mean
+temperature is outside -40 to 600 °C, which is what a wrong scale reads.
+
 Viewers recognise a record by its schema. The standard types are defined in
 `Proto/wendy/data/v1/types.proto`: `wendy.data.v1.VideoMarkers` (points and boxes on
 a camera's picture, positioned from 0 to 1), `wendy.data.v1.Grid` (a grid of
@@ -667,7 +690,10 @@ clock video frames use. For a durable or live record it is the first sample time
 `UNIX`, `CLOCK_REALTIME` or `CLOCK_BOOTTIME` timing, or its client boot time when
 the agent accepted it. Otherwise it is the agent's receipt time, which is what
 every lightweight record gets. Campaign inference markers carry the time of the
-camera frame they were found in, the `timestamp_ns` of that video frame.
+camera frame they were found in, the `timestamp_ns` of that video frame. A thermal
+grid and its markers carry the `timestamp_ns` of the raw frame they were read from,
+as a raw video subscriber sees it. A SensorLink frame has no capture time, so its
+brightness grid carries the time the agent received the frame.
 
 The stream is served over mutual TLS to user certificates, on the LAN or through
 Wendy Cloud, and on the device's local admin socket. A device that has not been
@@ -716,9 +742,9 @@ wendy data streams --json
 
 An app's recording streams (`apps/...`) are listed while the app runs, and the
 agent's own streams (`agent/...`) while their producer runs: a campaign's markers
-stream for a camera is listed while the campaign's inference streams that camera. A
-stream is `active` when it had a record in the last 10 seconds, and `idle`
-otherwise.
+stream for a camera is listed while the campaign's inference streams that camera,
+and a camera's grid streams while the camera is present. A stream is `active` when
+it had a record in the last 10 seconds, and `idle` otherwise.
 
 The list comes from a catalog on the live stream itself, so it reaches any viewer
 the stream does. For each stream the agent publishes a
