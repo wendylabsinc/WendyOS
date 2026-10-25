@@ -66,15 +66,19 @@ func authorizeDataStream(ctx context.Context) error {
 }
 
 // maxStreamDataRequestBytes is the encoded size of the largest request
-// liveSelection accepts: every list full of the longest values. A server that
-// serves StreamData must receive messages this large.
+// liveSelection accepts: every list full of the longest values it allows. A
+// server that serves StreamData must receive messages this large.
 func maxStreamDataRequestBytes() int {
-	value := strings.Repeat("x", maxStreamDataIDBytes)
-	longest := make([]string, maxStreamDataIDs)
-	for i := range longest {
-		longest[i] = value
+	full := func(n int) []string {
+		value := strings.Repeat("x", n)
+		values := make([]string, maxStreamDataIDs)
+		for i := range values {
+			values[i] = value
+		}
+		return values
 	}
-	return proto.Size(&agentpbv2.StreamDataRequest{StreamIds: longest, StreamPrefixes: longest, Schemas: longest, MaxRateHz: maxStreamDataRateHz, SendLatest: true})
+	ids := full(maxStreamDataIDBytes)
+	return proto.Size(&agentpbv2.StreamDataRequest{StreamIds: ids, StreamPrefixes: ids, Schemas: full(appconfig.MaxRecordingSchemaBytes), MaxRateHz: maxStreamDataRateHz, SendLatest: true})
 }
 
 func liveSelection(req *agentpbv2.StreamDataRequest) (live.Selection, error) {

@@ -433,7 +433,7 @@ func TestSystemAPIDataReadLargestSelection(t *testing.T) {
 		}
 		return values
 	}
-	req := &agentpbv2.StreamDataRequest{StreamIds: longest(maxStreamDataIDBytes), StreamPrefixes: longest(maxStreamDataIDBytes), Schemas: longest(maxStreamDataIDBytes), MaxRateHz: maxStreamDataRateHz, SendLatest: true}
+	req := &agentpbv2.StreamDataRequest{StreamIds: longest(maxStreamDataIDBytes), StreamPrefixes: longest(maxStreamDataIDBytes), Schemas: longest(appconfig.MaxRecordingSchemaBytes), MaxRateHz: maxStreamDataRateHz, SendLatest: true}
 	if _, err := liveSelection(req); err != nil {
 		t.Fatalf("liveSelection refused the largest selection: %v", err)
 	}
