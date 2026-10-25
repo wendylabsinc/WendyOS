@@ -41,6 +41,7 @@ type SignedRequest = cloudpbv2.SignedRequest
 // certificate/key binding and supplies its tenant. Instances are immutable and
 // safe for concurrent calls when the host capabilities are.
 type Signer struct {
+	defaultMetadata           platform.Metadata
 	key                       platform.Signer
 	entropy                   platform.Entropy
 	tenantUUID, kid, audience string
@@ -278,4 +279,17 @@ func canonicalJSON(value any) ([]byte, error) {
 		return nil, err
 	}
 	return []byte(strings.TrimSuffix(b.String(), "\n")), nil
+}
+
+// WithMetadata returns a signer using an owned copy of metadata when an Invoke
+// call supplies nil options.Metadata. It preserves a host operation's original
+// correlation ID and authentication context through higher-level workflows.
+// Explicit per-call metadata takes precedence. The original signer is unchanged.
+func (s *Signer) WithMetadata(metadata platform.Metadata) *Signer {
+	out := *s
+	out.defaultMetadata = make(platform.Metadata, len(metadata))
+	for i, entry := range metadata {
+		out.defaultMetadata[i] = platform.MetadataEntry{Name: entry.Name, Value: append([]byte(nil), entry.Value...)}
+	}
+	return &out
 }

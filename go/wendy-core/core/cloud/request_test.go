@@ -297,3 +297,42 @@ func TestInvokeSignsDeviceForwardedMethodsWithX5C(t *testing.T) {
 		t.Fatal("retried x5c-only call")
 	}
 }
+
+func TestSignerWorkflowMetadataPreservesCorrelationAndOwnership(t *testing.T) {
+	base := testSigner(t)
+	metadata := platform.Metadata{{Name: "x-correlation-id", Value: []byte("lite-flow")}, {Name: "authorization", Value: []byte("test-session")}}
+	signer := base.WithMetadata(metadata)
+	metadata[0].Value[0] = 'X'
+	metadata[1].Name = "changed"
+	for _, tc := range []struct {
+		name, want string
+		metadata   platform.Metadata
+	}{{"default", "lite-flow", nil}, {"override", "explicit", platform.Metadata{{Name: "x-correlation-id", Value: []byte("explicit")}}}} {
+		t.Run(tc.name, func(t *testing.T) {
+			transport := platformtest.Transport{UnaryFunc: func(ctx context.Context, r platform.RPCRequest) (platform.RPCResponse, error) {
+				if r.Method == "/wendycloud.v2.OperatorSessionService/RegisterOperatorLeaf" {
+					return platform.RPCResponse{}, &platform.RPCStatusError{Code: platform.RPCUnimplemented}
+				}
+				signed := new(pb.SignedRequest)
+				if err := proto.Unmarshal(r.Message, signed); err != nil {
+					t.Fatal(err)
+				}
+				_, payload := claims(t, signed.Signature)
+				if payload["correlation_id"] != tc.want {
+					t.Fatalf("correlation=%v", payload["correlation_id"])
+				}
+				if tc.metadata == nil && (r.Metadata[0].Name != "x-correlation-id" || string(r.Metadata[0].Value) != "lite-flow" || r.Metadata[1].Name != "authorization") {
+					t.Fatalf("metadata mutated: %v", r.Metadata)
+				}
+				return platform.RPCResponse{}, nil
+			}}
+			_, err := signer.Invoke(context.Background(), transport, deleteMethod, &pb.DeleteAssetRequest{Id: assetID}, InvokeOptions{Metadata: tc.metadata})
+			if err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+	if base.defaultMetadata != nil {
+		t.Fatal("original signer mutated")
+	}
+}
