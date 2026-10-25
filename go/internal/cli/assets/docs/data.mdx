@@ -164,8 +164,14 @@ campaigns; the entitlement does not grant access to sensors.
 Declare named `streams` inside the entitlement for custom data. Lightweight
 streams accept raw payloads over Unix sockets. Durable streams use Protobuf
 envelopes and acknowledge after syncing the record to local storage, even when
-no episode is recording. Time-series streams can declare channels, units, and
-sample timestamps separately from the agent's receipt time.
+no episode is recording. Live streams use the same envelopes for display data,
+such as markers, that live viewers see and the agent never stores. Time-series
+streams can declare channels, units, and sample timestamps separately from the
+agent's receipt time.
+
+To read other apps' streams live, add the
+[`data-read` entitlement](/docs/advanced/apps/wendy.json#data-read) instead of
+`admin`.
 
 An opaque JSON or binary payload does not trigger a campaign by itself. Declare
 the stream's `event` or `model` metadata; durable model records can supply

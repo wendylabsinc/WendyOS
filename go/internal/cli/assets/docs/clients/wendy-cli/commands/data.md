@@ -566,11 +566,13 @@ UTC confidence.
 ## Application recording streams
 
 The `episode-write` entitlement can declare named streams with `mode` set to
-`lightweight` or `durable`, plus a `mediaType` and an optional schema. Lightweight
-streams accept native bytes over Unix `SOCK_SEQPACKET` sockets without an SDK.
-Durable streams accept Protobuf envelopes and acknowledge after local storage sync,
-including when no episode is active. The agent injects `WENDY_DATA_STREAM_DIR`;
-each stream is available at `<directory>/<stream>.sock`.
+`lightweight`, `durable` or `live`, plus a `mediaType` and an optional schema.
+Lightweight streams accept native bytes over Unix `SOCK_SEQPACKET` sockets without
+an SDK. Durable streams accept Protobuf envelopes and acknowledge after local
+storage sync, including when no episode is active. Live streams accept the same
+envelopes but are only shown to live viewers; see [Live streams](#live-streams).
+The agent injects `WENDY_DATA_STREAM_DIR`; each stream is available at
+`<directory>/<stream>.sock`.
 
 Supported payloads include text, CSV, JSON, CBOR, Protobuf, Arrow IPC, JPEG, PNG
 and custom binary layouts. Time-series streams declare their channels and clock;
@@ -661,7 +663,7 @@ the newest record of each stream, if that is at most 10 seconds old and 256 KiB.
 Use `export-stream` or an Episode when every record matters.
 
 A record's time is the time its data describes, on the device's wall clock, the
-clock video frames use. For a durable record it is the first sample time of
+clock video frames use. For a durable or live record it is the first sample time of
 `UNIX`, `CLOCK_REALTIME` or `CLOCK_BOOTTIME` timing, or its client boot time when
 the agent accepted it. Otherwise it is the agent's receipt time, which is what
 every lightweight record gets. Campaign inference markers carry the time of the
@@ -669,7 +671,38 @@ camera frame they were found in, the `timestamp_ns` of that video frame.
 
 The stream is served over mutual TLS to user certificates, on the LAN or through
 Wendy Cloud, and on the device's local admin socket. A device that has not been
-provisioned yet does not serve it.
+provisioned yet does not serve it. An app reads it on its System API socket with
+the [`data-read` entitlement](/docs/advanced/apps/wendy.json#data-read), limited
+to the streams its allowlist admits.
+
+#### Live-only streams
+
+A stream declared with `"mode": "live"` exists only for viewers. Its packets are
+`Record` envelopes, as on a durable stream, so they carry sample times, but the
+agent never journals, buffers or records them and sends no acknowledgement. With
+nobody watching, the agent keeps only the stream's newest record in memory, for a
+viewer that starts with `--latest`. Use it for display data such as markers at 10
+to 30 Hz, which should cost no disk. Like any app stream it is in the catalog while
+the app runs. A live stream cannot declare `event` or `model`, because it never
+reaches campaigns or episodes.
+
+```json
+{
+  "type": "episode-write",
+  "streams": {
+    "markers": {
+      "mode": "live",
+      "mediaType": "application/protobuf",
+      "schema": "wendy.data.v1.VideoMarkers"
+    }
+  }
+}
+```
+
+An app may send 200 records per second across `data.sock` and its lightweight and
+durable streams; past that, the agent closes the connection. Live streams have a
+separate budget of 200 records per second per app. Past it, the agent drops the
+record and keeps the connection, so viewers see the stream at that rate.
 
 #### Listing streams
 
