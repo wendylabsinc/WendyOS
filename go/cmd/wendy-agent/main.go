@@ -524,6 +524,11 @@ func main() {
 	// and so would lock out any app that opens the camera directly.
 	sensorFrames := services.NewSensorFrameFeed()
 	videoSvc.SetSensorFrameFeed(sensorFrames)
+	// The agent's own camera grid streams (a thermal camera's temperatures, a
+	// SensorLink camera's brightness) decode frames from the camera hub and
+	// from this feed while a live viewer asks for them.
+	stopCameraGrids := dataSvc.StartCameraGrids(ctx, videoSvc)
+	defer stopCameraGrids()
 	sensorSup := mcusource.NewSupervisor(logger, videoSvc.Loopback(), sensorTransportFor, sensorFrames.WrapWriters(ros2camera.NewFrameWriter), audioLoop)
 	sensorRunner := mcusource.NewRunner(logger, sensorSup)
 	sensorAgentScope := func() certs.Scope {
