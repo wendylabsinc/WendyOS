@@ -59,11 +59,20 @@ schema replace the command line's selection for that request.`,
   wendy data stream --sse 127.0.0.1:8090`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if sse == "" {
+				return withDataClient(cmd.Context(), func(client agentpbv2.DataServiceClient) error {
+					return streamLiveData(cmd.Context(), client, &req, cmd.OutOrStdout(), cmd.ErrOrStderr(), jsonOutput)
+				})
+			}
+			// Bind first, so a bad or busy address fails before the device
+			// connection does any work.
+			lis, err := listenLiveSSE(sse)
+			if err != nil {
+				return err
+			}
+			defer lis.Close()
 			return withDataClient(cmd.Context(), func(client agentpbv2.DataServiceClient) error {
-				if sse != "" {
-					return serveLiveSSE(cmd.Context(), client, sse, &req, cmd.ErrOrStderr())
-				}
-				return streamLiveData(cmd.Context(), client, &req, cmd.OutOrStdout(), cmd.ErrOrStderr(), jsonOutput)
+				return serveLiveSSE(cmd.Context(), client, lis, &req, cmd.ErrOrStderr())
 			})
 		},
 	}
@@ -114,6 +123,10 @@ func liveDataError(ctx context.Context, err error) error {
 	if status.Code(err) == codes.Unimplemented {
 		return errors.New("this agent does not serve live data streams; update the agent on the target device")
 	}
+	if status.Code(err) == codes.PermissionDenied {
+		// What a device that is not enrolled answers on its plaintext listener.
+		return fmt.Errorf("live data streams require an authenticated mTLS connection; if the device is not enrolled, run 'wendy device enroll', otherwise reconnect using its enrolled endpoint: %w", err)
+	}
 	return err
 }
 
@@ -124,7 +137,9 @@ const maxLivePreview = 80
 // the stream id, the schema, the payload size, how many records of the stream
 // were skipped before it and, for a text payload, the start of the text.
 func writeLiveRecord(out io.Writer, r *agentpbv2.DataRecord) error {
-	schema := r.GetSchema()
+	// The schema comes from an app's wendy.json: keep it from driving the
+	// terminal.
+	schema := printable(r.GetSchema())
 	if schema == "" {
 		schema = "-"
 	}

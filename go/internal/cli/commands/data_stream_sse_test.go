@@ -226,3 +226,40 @@ func TestLiveSSERefusals(t *testing.T) {
 		})
 	}
 }
+
+// A request that cannot use the events opens no device subscription: a HEAD,
+// and a cross-site request without an Origin, such as an <img> or a no-cors
+// fetch, which cannot read the response. A loopback page's cross-site
+// EventSource sends its Origin and is served.
+func TestLiveSSEOpensNoUnusableSubscription(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		method string
+		header http.Header
+		code   int
+	}{
+		{"HEAD", http.MethodHead, nil, http.StatusMethodNotAllowed},
+		{"cross-site without an Origin", http.MethodGet, http.Header{"Sec-Fetch-Site": {"cross-site"}}, http.StatusForbidden},
+		{"loopback page on another port", http.MethodGet, http.Header{"Origin": {"http://localhost:5173"}, "Sec-Fetch-Site": {"cross-site"}}, http.StatusOK},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client := &liveDataClient{stream: &liveDataClientStream{header: metadata.MD{}}}
+			server := httptest.NewServer(liveSSEHandler(client, &agentpbv2.StreamDataRequest{}))
+			defer server.Close()
+			req, err := http.NewRequest(tc.method, server.URL+"/live", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			req.Header = tc.header.Clone()
+			resp, err := server.Client().Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, _ = io.Copy(io.Discard, resp.Body)
+			resp.Body.Close()
+			if subscribed := client.request != nil; resp.StatusCode != tc.code || subscribed != (tc.code == http.StatusOK) {
+				t.Fatalf("got %d, subscribed %v; want %d", resp.StatusCode, subscribed, tc.code)
+			}
+		})
+	}
+}

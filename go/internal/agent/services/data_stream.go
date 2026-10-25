@@ -3,8 +3,10 @@ package services
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/data/live"
+	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -20,7 +22,8 @@ const (
 	maxStreamDataIDs = 256
 	// maxStreamDataIDBytes fits the longest app stream id: "apps/", a
 	// 253-byte app id, a 57-byte service name and a 24-byte stream name. It
-	// bounds prefixes and schemas too.
+	// bounds prefixes too; a schema may be as long as an app stream's,
+	// appconfig.MaxRecordingSchemaBytes.
 	maxStreamDataIDBytes = 512
 	// defaultStreamDataRateHz is the per-stream rate cap of a request that sets
 	// none. It is a display rate: a viewer that wants more asks for it.
@@ -55,15 +58,16 @@ func authorizeDataStream(ctx context.Context) error {
 
 func liveSelection(req *agentpbv2.StreamDataRequest) (live.Selection, error) {
 	for _, list := range []struct {
-		name   string
-		values []string
-	}{{"stream ids", req.GetStreamIds()}, {"stream prefixes", req.GetStreamPrefixes()}, {"schemas", req.GetSchemas()}} {
+		name     string
+		values   []string
+		maxBytes int
+	}{{"stream ids", req.GetStreamIds(), maxStreamDataIDBytes}, {"stream prefixes", req.GetStreamPrefixes(), maxStreamDataIDBytes}, {"schemas", req.GetSchemas(), appconfig.MaxRecordingSchemaBytes}} {
 		if len(list.values) > maxStreamDataIDs {
 			return live.Selection{}, status.Errorf(codes.InvalidArgument, "at most %d %s may be selected", maxStreamDataIDs, list.name)
 		}
 		for _, v := range list.values {
-			if v == "" || len(v) > maxStreamDataIDBytes {
-				return live.Selection{}, status.Errorf(codes.InvalidArgument, "%s must be 1..%d bytes", list.name, maxStreamDataIDBytes)
+			if v == "" || len(v) > list.maxBytes {
+				return live.Selection{}, status.Errorf(codes.InvalidArgument, "%s must be 1..%d bytes", list.name, list.maxBytes)
 			}
 		}
 	}
@@ -109,6 +113,7 @@ func (s *DataService) StreamData(req *agentpbv2.StreamDataRequest, out grpc.Serv
 	if err := out.SendHeader(metadata.MD{}); err != nil {
 		return err
 	}
+	out = stallGuardedStream{out, streamDataStallTimeout}
 	for {
 		d, err := sub.Next(ctx)
 		if err != nil {
@@ -118,5 +123,36 @@ func (s *DataService) StreamData(req *agentpbv2.StreamDataRequest, out grpc.Serv
 		if err := out.Send(&agentpbv2.DataRecord{StreamId: r.StreamID, TimestampUnixNanos: r.TimestampUnixNanos, Schema: r.Schema, Payload: r.Payload, Skipped: d.Skipped, SourceId: r.SourceID, SampleId: r.SampleID}); err != nil {
 			return err
 		}
+	}
+}
+
+// streamDataStallTimeout ends a StreamData whose client takes no record for
+// this long. A client that stops reading fills its flow-control window and
+// Send blocks, while its connection still answers keepalive pings, so the
+// viewer would otherwise hold one of the hub's device-wide slots for as long
+// as the connection lives. Send waits only for the previous record to drain,
+// so a slow link still gets a minute per record. A variable so tests can
+// shorten it.
+var streamDataStallTimeout = time.Minute
+
+// stallGuardedStream fails a Send that makes no progress for timeout. Send has
+// no deadline of its own, so it runs on its own goroutine; once the handler
+// returns, gRPC cancels the stream, which unblocks it. Sends stay sequential:
+// the handler never sends again after one fails.
+type stallGuardedStream struct {
+	grpc.ServerStreamingServer[agentpbv2.DataRecord]
+	timeout time.Duration
+}
+
+func (s stallGuardedStream) Send(r *agentpbv2.DataRecord) error {
+	sent := make(chan error, 1)
+	go func() { sent <- s.ServerStreamingServer.Send(r) }()
+	timer := time.NewTimer(s.timeout)
+	defer timer.Stop()
+	select {
+	case err := <-sent:
+		return err
+	case <-timer.C:
+		return status.Errorf(codes.DeadlineExceeded, "the client read no live data for %v, so the agent ended the stream", s.timeout)
 	}
 }

@@ -8,6 +8,7 @@ import (
 
 	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 	recordingpb "github.com/wendylabsinc/wendy/go/proto/gen/recordingpb"
+	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -84,4 +85,37 @@ func validateTypedSampleBatch(cfg appconfig.RecordingStream, r *recordingpb.Reco
 		}
 	}
 	return nil
+}
+
+// batchTimingField is the field number of TimeSeriesBatch.timing.
+const batchTimingField protowire.Number = 1
+
+// batchTiming returns the timing of a TimeSeriesBatch payload, or nil when it
+// has none or does not decode. It decodes that field alone, merging repeats
+// as proto.Unmarshal does: liveRecord runs under the manager's stream lock,
+// and the columns can fill a mebibyte.
+func batchTiming(payload []byte) *recordingpb.SampleTiming {
+	var t *recordingpb.SampleTiming
+	for len(payload) > 0 {
+		num, typ, n := protowire.ConsumeTag(payload)
+		if n < 0 {
+			return nil
+		}
+		payload = payload[n:]
+		n = protowire.ConsumeFieldValue(num, typ, payload)
+		if n < 0 {
+			return nil
+		}
+		if num == batchTimingField && typ == protowire.BytesType {
+			v, _ := protowire.ConsumeBytes(payload[:n])
+			if t == nil {
+				t = new(recordingpb.SampleTiming)
+			}
+			if err := (proto.UnmarshalOptions{Merge: true}).Unmarshal(v, t); err != nil {
+				return nil
+			}
+		}
+		payload = payload[n:]
+	}
+	return t
 }

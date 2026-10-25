@@ -197,6 +197,16 @@ func (c *Client) recoverTaskOutput(ctx context.Context, ctr containerdclient.Con
 	c.outputOwners[name] = r.owner
 	c.recoveredOutput[name] = r
 	c.outputMu.Unlock()
+	// The run is watched from here on, so its recording streams are listed in
+	// the live catalog until the watcher below sees it exit.
+	var appID, serviceName string
+	labels, ownerErr := ctr.Labels(ctx)
+	if ownerErr == nil {
+		appID, serviceName, ownerErr = containerOwnerFromLabels(name, labels)
+	}
+	if ownerErr == nil {
+		c.setDataStreamsListed(appID, serviceName, true)
+	}
 	go func() {
 		exit := <-exitCh
 		code, exitedAt, exitErr := exit.Result()
@@ -209,6 +219,9 @@ func (c *Client) recoverTaskOutput(ctx context.Context, ctr containerdclient.Con
 				_ = fifos.Close()
 			}
 			c.withTaskOutputOwner(name, r.owner, func() {
+				if ownerErr == nil {
+					c.setDataStreamsListed(appID, serviceName, false)
+				}
 				recordCtx, recordCancel := context.WithTimeout(context.Background(), 5*time.Second)
 				defer recordCancel()
 				c.recordContainerExit(recordCtx, name, int32(code), classifyExit(code, taskOOMKilled(recordCtx, task)), exitedAt)

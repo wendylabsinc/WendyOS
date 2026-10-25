@@ -2,10 +2,13 @@ package live
 
 import (
 	"context"
+	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	"google.golang.org/protobuf/proto"
 )
@@ -71,6 +74,31 @@ func TestCatalogSchemaIsTheMessageName(t *testing.T) {
 	if got := string((&agentpbv2.DataStreamInfo{}).ProtoReflect().Descriptor().FullName()); got != CatalogSchema {
 		t.Fatalf("CatalogSchema %q, message %q", CatalogSchema, got)
 	}
+}
+
+// Only the catalog's own streams carry CatalogSchema. An app may not declare
+// it, and a stream that does anyway cannot pose as catalog entries to a
+// subscriber that selects the catalog by schema.
+func TestCatalogSchemaIsReserved(t *testing.T) {
+	err := appconfig.ValidateRecordingStreams(map[string]appconfig.RecordingStream{"fake": {Mode: "lightweight", MediaType: "application/protobuf", Schema: CatalogSchema}})
+	if err == nil {
+		t.Fatal("an app stream declared the catalog schema")
+	}
+
+	h, _ := clockedHub(DefaultLimits)
+	h.Advertise(StreamInfo{ID: "apps/victim/markers", Publisher: "victim"})
+	h.Advertise(StreamInfo{ID: "apps/evil/fake", Schema: CatalogSchema, Publisher: "evil"})
+	s := subscribeWith(t, h, Selection{Schemas: []string{CatalogSchema}})
+	forged, err := proto.Marshal(&agentpbv2.DataStreamInfo{StreamId: "apps/victim/markers", State: agentpbv2.DataStreamInfo_STATE_GONE})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.Offer(&Record{StreamID: "apps/evil/fake", Schema: CatalogSchema, Payload: forged})
+	if info := catalogEntry(t, next(t, s)); info.GetStreamId() != "apps/evil/fake" || info.GetState() != agentpbv2.DataStreamInfo_STATE_ACTIVE {
+		t.Fatalf("got %v, want apps/evil/fake active", info)
+	}
+	requireEmpty(t, s)
+	requireEmpty(t, subscribeWith(t, h, Selection{Schemas: []string{CatalogSchema}, StreamPrefixes: []string{"apps/"}, SendLatest: true}))
 }
 
 // A new subscriber that asks for it starts with the newest record of each
@@ -184,6 +212,56 @@ func TestCatalogLifecycle(t *testing.T) {
 	}
 }
 
+// A catalog entry's rate covers the stream's current active period: it is
+// measured from the period's first record, however long the stream was quiet
+// before, and an idle stream reports none, however recently it was active.
+func TestCatalogRate(t *testing.T) {
+	h, clock := clockedHub(DefaultLimits)
+	cat := subscribeWith(t, h, Selection{StreamPrefixes: []string{CatalogPrefix}})
+	h.Advertise(StreamInfo{ID: "apps/a/s"})
+	catalogEntry(t, next(t, cat))
+	want := func(d Delivery, state agentpbv2.DataStreamInfo_State, low, high float32) {
+		t.Helper()
+		if info := catalogEntry(t, d); info.GetState() != state || info.GetRateHz() < low || info.GetRateHz() > high {
+			t.Fatalf("got %v %v/s, want %v at %v..%v/s", info.GetState(), info.GetRateHz(), state, low, high)
+		}
+	}
+
+	// A minute after it was advertised, the stream runs at 30 Hz for 12 s.
+	// Its first entry has no rate yet; the next one, 10 s later, has 30/s.
+	clock.advance(time.Minute)
+	for i := 0; i < 12*30; i++ {
+		h.Offer(record("apps/a/s", i, 8))
+		if i == 0 {
+			want(next(t, cat), agentpbv2.DataStreamInfo_STATE_ACTIVE, 0, 0)
+		}
+		clock.advance(time.Second / 30)
+	}
+	want(next(t, cat), agentpbv2.DataStreamInfo_STATE_ACTIVE, 29, 31)
+	requireEmpty(t, cat)
+	want(next(t, subscribeWith(t, h, Selection{StreamPrefixes: []string{CatalogPrefix}, SendLatest: true})), agentpbv2.DataStreamInfo_STATE_ACTIVE, 29, 31)
+
+	// Once records stop it is idle at no rate, then and an hour later.
+	clock.advance(idleAfter)
+	sweepNow(h)
+	want(next(t, cat), agentpbv2.DataStreamInfo_STATE_IDLE, 0, 0)
+	clock.advance(time.Hour)
+	want(next(t, subscribeWith(t, h, Selection{StreamPrefixes: []string{CatalogPrefix}, SendLatest: true})), agentpbv2.DataStreamInfo_STATE_IDLE, 0, 0)
+
+	// The next active period, at 5 Hz, is measured on its own.
+	for i := 0; i <= 50; i++ {
+		if i > 0 {
+			clock.advance(200 * time.Millisecond)
+		}
+		h.Offer(record("apps/a/s", i, 8))
+		if i == 0 {
+			want(next(t, cat), agentpbv2.DataStreamInfo_STATE_ACTIVE, 0, 0)
+		}
+	}
+	want(next(t, cat), agentpbv2.DataStreamInfo_STATE_ACTIVE, 4.9, 5.1)
+	requireEmpty(t, cat)
+}
+
 // With send_latest a catalog subscriber gets every current entry at once, in
 // stream id order, then its records.
 func TestCatalogSendLatest(t *testing.T) {
@@ -219,6 +297,54 @@ func TestCatalogSendLatest(t *testing.T) {
 		}
 	}
 	requireEmpty(t, s)
+}
+
+// Catalog entries are sent once per change, so the pending-bytes cap never
+// drops one: not the entries a new subscriber starts with, not a GONE queued
+// before large records, and not a GONE offered while the subscriber is at the
+// cap. Which data records the cap drops is not this test's concern.
+func TestPendingBytesCapKeepsCatalog(t *testing.T) {
+	h, clock := clockedHub(Limits{MaxPendingBytes: 1000, MaxLatestBytes: 400})
+	streams := []string{"apps/a/1", "apps/a/2", "apps/a/3"}
+	for i, id := range streams {
+		h.Advertise(StreamInfo{ID: id})
+		clock.advance(time.Millisecond)
+		h.Offer(record(id, i, 400))
+	}
+	// catalog drains s and returns the catalog entries it held, in order.
+	catalog := func(s *Subscriber) []string {
+		t.Helper()
+		var entries []string
+		for {
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+			d, err := s.Next(ctx)
+			cancel()
+			if err != nil {
+				return entries
+			}
+			if strings.HasPrefix(d.Record.StreamID, CatalogPrefix) {
+				info := catalogEntry(t, d)
+				entries = append(entries, info.GetStreamId()+" "+info.GetState().String())
+			}
+		}
+	}
+	s := subscribeWith(t, h, Selection{StreamPrefixes: []string{CatalogPrefix, "apps/"}, SendLatest: true})
+	if got, want := catalog(s), []string{"apps/a/1 STATE_ACTIVE", "apps/a/2 STATE_ACTIVE", "apps/a/3 STATE_ACTIVE"}; !slices.Equal(got, want) {
+		t.Fatalf("snapshot entries %q, want %q", got, want)
+	}
+
+	h.Unadvertise("apps/a/1")
+	h.Offer(record("apps/b/1", 1, 600))
+	h.Offer(record("apps/b/2", 2, 600))
+	if got, want := catalog(s), []string{"apps/a/1 STATE_GONE"}; !slices.Equal(got, want) {
+		t.Fatalf("entries after large records %q, want %q", got, want)
+	}
+
+	h.Offer(record("apps/b/1", 3, 990))
+	h.Unadvertise("apps/a/2")
+	if got, want := catalog(s), []string{"apps/a/2 STATE_GONE"}; !slices.Equal(got, want) {
+		t.Fatalf("entries offered at the cap %q, want %q", got, want)
+	}
 }
 
 // Nothing runs on a timer while nobody is subscribed.

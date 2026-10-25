@@ -4,11 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
+	"net"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -122,7 +125,7 @@ func TestStreamLiveDataErrors(t *testing.T) {
 	}
 	refused := &liveDataClient{stream: &liveDataClientStream{end: status.Error(codes.PermissionDenied, "streaming live data requires a client certificate")}}
 	var errOut bytes.Buffer
-	if err = streamLiveData(context.Background(), refused, &agentpbv2.StreamDataRequest{}, io.Discard, &errOut, false); status.Code(err) != codes.PermissionDenied {
+	if err = streamLiveData(context.Background(), refused, &agentpbv2.StreamDataRequest{}, io.Discard, &errOut, false); status.Code(err) != codes.PermissionDenied || !strings.Contains(err.Error(), "run 'wendy device enroll'") {
 		t.Fatalf("refusal: %v", err)
 	}
 	if errOut.Len() != 0 {
@@ -153,5 +156,43 @@ func TestTextPreview(t *testing.T) {
 		if got, ok := textPreview([]byte(tc.payload)); got != tc.want || ok != tc.ok {
 			t.Errorf("textPreview(%q) = %q %v, want %q %v", tc.payload, got, ok, tc.want, tc.ok)
 		}
+	}
+}
+
+// A bad or busy --sse address fails at once, before the device connection,
+// which here would fail on its own with an invalid device name.
+func TestDataStreamSSEAddressCheckedBeforeConnecting(t *testing.T) {
+	setTempConfig(t, &config.Config{})
+	t.Setenv("WENDY_AGENT_SOCKET", "")
+	oldFlag := deviceFlag
+	t.Cleanup(func() { deviceFlag = oldFlag })
+	deviceFlag = "12345"
+	busy, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer busy.Close()
+	for _, addr := range []string{"0.0.0.0:8090", busy.Addr().String()} {
+		cmd := newDataStreamCmd()
+		cmd.SetArgs([]string{"--sse", addr})
+		cmd.SetOut(io.Discard)
+		cmd.SetErr(io.Discard)
+		if err := cmd.ExecuteContext(context.Background()); err == nil || errors.Is(err, errInvalidDeviceName) {
+			t.Errorf("--sse %s: got %v, want the address refused before connecting", addr, err)
+		}
+	}
+}
+
+// A schema is whatever an app's wendy.json declares. Printed raw, an escape
+// sequence in it would retitle or clear the operator's terminal.
+func TestWriteLiveRecordSanitizesSchema(t *testing.T) {
+	var out bytes.Buffer
+	r := &agentpbv2.DataRecord{StreamId: "apps/demo/markers", Schema: "x\x1b]0;owned\x07\x1b[2J\ny", Payload: []byte{0xff}}
+	if err := writeLiveRecord(&out, r); err != nil {
+		t.Fatal(err)
+	}
+	line := strings.TrimSuffix(out.String(), "\n")
+	if strings.ContainsAny(line, "\x1b\x07\n") || !strings.Contains(line, "]0;owned") {
+		t.Fatalf("schema not sanitized: %q", out.String())
 	}
 }

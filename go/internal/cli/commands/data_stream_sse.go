@@ -29,23 +29,26 @@ import (
 // proxies and browsers do not close it.
 const sseKeepalive = 15 * time.Second
 
+// listenLiveSSE binds the live proxy's address, which must be a loopback one.
+func listenLiveSSE(addr string) (net.Listener, error) {
+	if err := requireLoopbackAddr(addr); err != nil {
+		return nil, err
+	}
+	return net.Listen("tcp", addr)
+}
+
 // serveLiveSSE serves the device's live records to browsers on this computer
 // as Server-Sent Events at http://addr/live, until ctx ends. It is the bridge
 // for browser viewers until Wendy Cloud relays the stream: Companion web reads
-// it with VITE_WENDY_DATA_LIVE_URL=http://addr/live.
+// it with VITE_WENDY_DATA_LIVE_URL=http://addr/live. lis, from listenLiveSSE,
+// listens on addr.
 //
 // Each request opens its own StreamData subscription with req's selection,
 // unless its query names streams. The proxy has no authentication of its own,
 // so it listens only on a loopback address, answers only requests addressed
-// to one, and allows only loopback origins.
-func serveLiveSSE(ctx context.Context, client agentpbv2.DataServiceClient, addr string, req *agentpbv2.StreamDataRequest, errOut io.Writer) error {
-	if err := requireLoopbackAddr(addr); err != nil {
-		return err
-	}
-	lis, err := net.Listen("tcp", addr)
-	if err != nil {
-		return err
-	}
+// to one, and refuses requests a browser marks as coming from another site:
+// by an Origin that is not loopback or, without an Origin, by Sec-Fetch-Site.
+func serveLiveSSE(ctx context.Context, client agentpbv2.DataServiceClient, lis net.Listener, req *agentpbv2.StreamDataRequest, errOut io.Writer) error {
 	server := &http.Server{
 		Handler:           liveSSEHandler(client, req),
 		ReadHeaderTimeout: 10 * time.Second,
@@ -56,7 +59,8 @@ func serveLiveSSE(ctx context.Context, client agentpbv2.DataServiceClient, addr 
 		<-ctx.Done()
 		_ = server.Close()
 	}()
-	if err = server.Serve(lis); errors.Is(err, http.ErrServerClosed) {
+	err := server.Serve(lis)
+	if errors.Is(err, http.ErrServerClosed) {
 		return nil
 	}
 	return err
@@ -73,6 +77,13 @@ func requireLoopbackAddr(addr string) error {
 func liveSSEHandler(client agentpbv2.DataServiceClient, base *agentpbv2.StreamDataRequest) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /live", func(w http.ResponseWriter, r *http.Request) {
+		// The pattern also matches HEAD, which gets no events and must not
+		// open a device subscription.
+		if r.Method == http.MethodHead {
+			w.Header().Set("Allow", http.MethodGet)
+			http.Error(w, "the live proxy serves events to GET requests only", http.StatusMethodNotAllowed)
+			return
+		}
 		// A page from another site may rebind its own name to 127.0.0.1, or
 		// fetch this address directly. Neither may read device data.
 		if !isLoopbackHost(r.Host) {
@@ -87,6 +98,13 @@ func liveSSEHandler(client agentpbv2.DataServiceClient, base *agentpbv2.StreamDa
 			}
 			w.Header().Set("Access-Control-Allow-Origin", origin)
 			w.Header().Add("Vary", "Origin")
+		} else if r.Header.Get("Sec-Fetch-Site") == "cross-site" {
+			// A cross-site request without an Origin, such as an <img> or a
+			// no-cors fetch, cannot read the events, but would hold one of the
+			// device's subscriptions. Browsers send this header; curl and other
+			// tools send neither, and are served.
+			http.Error(w, "the live proxy allows only pages served from this computer", http.StatusForbidden)
+			return
 		}
 		flusher, ok := w.(http.Flusher)
 		if !ok {
