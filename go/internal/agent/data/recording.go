@@ -97,7 +97,9 @@ func validateStreamRecord(cfg appconfig.RecordingStream, r *recordingpb.Record) 
 	if ts := cfg.TimeSeries; ts != nil && r.Timing != nil && ts.Clock != r.Timing.Clock {
 		return errors.New("sample clock differs from configured timeSeries clock")
 	}
-	if ts := cfg.TimeSeries; ts != nil && cfg.Mode == "durable" && r.Timing == nil && ts.TimestampField == "" && cfg.Schema != "wendy.agent.apps.v1.TimeSeriesBatch" {
+	// Durable and live records are envelopes, so the envelope's timing is
+	// where their sample time comes from; a TimeSeriesBatch carries its own.
+	if ts := cfg.TimeSeries; ts != nil && (cfg.Mode == "durable" || cfg.Mode == "live") && r.Timing == nil && ts.TimestampField == "" && cfg.Schema != "wendy.agent.apps.v1.TimeSeriesBatch" {
 		return errors.New("time-series record needs timing or a configured timestampField")
 	}
 	if cfg.Schema == "wendy.agent.apps.v1.TimeSeriesBatch" {

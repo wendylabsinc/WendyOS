@@ -265,6 +265,40 @@ func TestRecordingTypedTimeSeries(t *testing.T) {
 	}
 }
 
+// A time-series record needs a sample time. Live records are envelopes, as
+// durable ones are, and follow the same rule: the time comes from the
+// envelope's timing, a configured timestampField, or a TimeSeriesBatch's own
+// timing.
+func TestRecordingTimeSeriesNeedsTiming(t *testing.T) {
+	series := &appconfig.RecordingTimeSeries{Clock: "UNIX", Channels: []appconfig.RecordingChannel{{Name: "temperature", Type: "float64", Unit: "Cel"}}}
+	withField := &appconfig.RecordingTimeSeries{Clock: "UNIX", TimestampField: "t", Channels: series.Channels}
+	batch, _ := proto.Marshal(&recordingpb.TimeSeriesBatch{Timing: &recordingpb.SampleTiming{Clock: "UNIX", Count: 1, TimestampsNanos: []int64{100}}, Columns: []*recordingpb.SampleColumn{{Values: &recordingpb.SampleColumn_Float64Values{Float64Values: &recordingpb.Float64Values{Values: []float64{21.5}}}}}})
+	timing := &recordingpb.SampleTiming{Clock: "UNIX", Count: 1, TimestampsNanos: []int64{100}}
+	for _, mode := range []string{"durable", "live"} {
+		for _, tc := range []struct {
+			name   string
+			cfg    appconfig.RecordingStream
+			record *recordingpb.Record
+			ok     bool
+		}{
+			{"envelope timing", appconfig.RecordingStream{Schema: "example.Temperature", TimeSeries: series}, &recordingpb.Record{Payload: []byte("21.5"), Timing: timing}, true},
+			{"batch timing", appconfig.RecordingStream{Schema: "wendy.agent.apps.v1.TimeSeriesBatch", TimeSeries: series}, &recordingpb.Record{Payload: batch}, true},
+			{"timestampField", appconfig.RecordingStream{Schema: "example.Temperature", TimeSeries: withField}, &recordingpb.Record{Payload: []byte(`{"t":100}`)}, true},
+			{"no timing", appconfig.RecordingStream{Schema: "example.Temperature", TimeSeries: series}, &recordingpb.Record{Payload: []byte("21.5")}, false},
+		} {
+			t.Run(mode+"/"+tc.name, func(t *testing.T) {
+				tc.cfg.Mode, tc.cfg.MediaType = mode, "application/protobuf"
+				if mode == "durable" {
+					tc.record.Id = "one"
+				}
+				if err := validateStreamRecord(tc.cfg, tc.record); (err == nil) != tc.ok {
+					t.Fatalf("got %v, want ok=%v", err, tc.ok)
+				}
+			})
+		}
+	}
+}
+
 func TestRecordingSegmentOrderSurvivesWallClockStep(t *testing.T) {
 	m, _ := NewManager(t.TempDir())
 	j, _ := m.recordings.journal("test.app", "", "frames")
