@@ -372,9 +372,10 @@ The app calls `DataService.StreamData` on its private System API socket,
 `WENDY_SYSTEM_SOCKET`, which it shares with `notifications`. `allowlist` is
 optional: each entry is a stream id or a prefix that ends at a `/`, so
 `apps/com.example.detector` admits that app's streams and not those of
-`com.example.detector2`. Without it the app reads every stream. An app holds at
-most 8 streams open, and the allowlist is restored with the socket after an
-agent restart.
+`com.example.detector2`. Without it the app reads every stream. The stream
+catalog, `_streams/<stream-id>`, lists only the streams the allowlist admits. An
+app holds at most 8 streams open, and the allowlist is restored with the socket
+after an agent restart.
 
 <Callout type="warning">
   **Security**: `data-read` serves `StreamData` and no other agent method. It is

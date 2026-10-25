@@ -747,8 +747,11 @@ shares with `notifications`. Every other `DataService` method is refused there.
 `apps/com.example.detector/markers`, or a prefix that ends at a `/`.
 `apps/com.example.detector` admits that app's streams and not those of
 `com.example.detector2`. Without an allowlist the app reads every stream.
-Selecting a stream outside it fails with `PERMISSION_DENIED`. At most 32
-entries, 2048 bytes in total.
+Selecting a stream outside it fails with `PERMISSION_DENIED`. Entries may name
+the agent's own streams too, such as `agent/campaign/people/markers/`. The stream
+catalog, `_streams/<stream-id>`, lists only the streams the allowlist admits, so
+an entry never names the catalog itself. At most 32 entries, 2048 bytes in
+total.
 
 | Constraint | |
 |------------|--|

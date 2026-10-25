@@ -673,7 +673,7 @@ The stream is served over mutual TLS to user certificates, on the LAN or through
 Wendy Cloud, and on the device's local admin socket. A device that has not been
 provisioned yet does not serve it. An app reads it on its System API socket with
 the [`data-read` entitlement](/docs/advanced/apps/wendy.json#data-read), limited
-to the streams its allowlist admits.
+to the streams its allowlist admits; the catalog lists only those.
 
 #### Live-only streams
 

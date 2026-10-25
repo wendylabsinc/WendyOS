@@ -104,7 +104,10 @@ The app calls `DataService.StreamData` on its private System API socket, the one
 `apps/com.example.detector/markers`, or a prefix that ends at a `/`:
 `apps/com.example.detector` admits that app's streams, and not those of
 `com.example.detector2`. Without an allowlist the app reads every stream. Asking
-for a stream outside the allowlist fails with `PERMISSION_DENIED`.
+for a stream outside the allowlist fails with `PERMISSION_DENIED`. Entries may
+name the agent's own streams too, such as `agent/campaign/people/markers/`. The
+stream catalog, `_streams/<stream-id>`, lists only the streams the allowlist
+admits, so an entry never names the catalog itself.
 
 | Boundary | Value |
 |---|---|
@@ -116,7 +119,8 @@ for a stream outside the allowlist fails with `PERMISSION_DENIED`.
 | Socket restoration | Recreated, with the same allowlist, from persisted container labels after agent/daemon restart |
 
 The grant is read-only and live-only. An app sees records accepted after it
-subscribes, newest first per stream, and nothing recorded earlier. It grants no
+subscribes, newest first per stream, or with `send_latest` the newest current
+record of each stream, and nothing recorded earlier. It grants no
 episode download, recording export, campaign control or sensor access. All
 services of a multi-service app share one socket and cannot be told apart on
 it, so the app reads the union of its services' allowlists.
