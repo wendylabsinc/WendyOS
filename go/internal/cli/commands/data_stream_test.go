@@ -84,19 +84,21 @@ func TestStreamLiveDataPrintsSkipped(t *testing.T) {
 	}
 }
 
-// --json is one protobuf JSON object per line and nothing else on stdout, so
-// a script can read records as they arrive.
+// --json is one JSON object per line and nothing else on stdout, so a script
+// can read records as they arrive. A standard type's payload is protobuf
+// JSON; a payload the CLI cannot decode stays base64.
 func TestStreamLiveDataJSON(t *testing.T) {
 	stream := &liveDataClientStream{header: metadata.MD{}, records: []*agentpbv2.DataRecord{
 		{StreamId: "apps/demo/markers", TimestampUnixNanos: 42, Schema: "wendy.data.v1.VideoMarkers", Payload: []byte{1, 2}},
 		{StreamId: "apps/demo/markers", TimestampUnixNanos: 43},
+		{StreamId: "agent/campaign/people/markers/v4l2:/dev/video0", TimestampUnixNanos: 44, Schema: "wendy.data.v1.VideoMarkers", Payload: markersPayload(t), SourceId: "v4l2:/dev/video0", SampleId: 7},
 	}}
 	var out, errOut bytes.Buffer
 	if err := streamLiveData(context.Background(), &liveDataClient{stream: stream}, &agentpbv2.StreamDataRequest{}, &out, &errOut, true); err != nil {
 		t.Fatal(err)
 	}
 	lines := strings.Split(strings.TrimSuffix(out.String(), "\n"), "\n")
-	if len(lines) != 2 || errOut.Len() != 0 {
+	if len(lines) != 3 || errOut.Len() != 0 {
 		t.Fatalf("stdout %q, stderr %q", out.String(), errOut.String())
 	}
 	var first map[string]any
@@ -105,6 +107,10 @@ func TestStreamLiveDataJSON(t *testing.T) {
 	}
 	if first["stream_id"] != "apps/demo/markers" || first["timestamp_unix_nanos"] != "42" || first["payload"] != "AQI=" {
 		t.Fatalf("record: %s", lines[0])
+	}
+	want := `{"stream_id":"agent/campaign/people/markers/v4l2:/dev/video0","timestamp_unix_nanos":"44","schema":"wendy.data.v1.VideoMarkers","payload":` + markersPayloadJSON + `,"source_id":"v4l2:/dev/video0","sample_id":"7"}`
+	if lines[2] != want {
+		t.Fatalf("markers record:\n%s\nwant:\n%s", lines[2], want)
 	}
 }
 

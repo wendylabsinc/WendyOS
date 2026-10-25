@@ -627,9 +627,11 @@ wendy data stream --rate 5 --json
 A stream id is `apps/<app-id>/<service>/<stream>`, or `apps/<app-id>/<stream>` for
 an app with no service name. `--stream` and `--prefix` choose streams, and
 `--schema` keeps only the chosen streams with that schema; all three are
-repeatable. Without them every stream is printed. `--json` writes one protobuf JSON
-object per record, with the payload in base64. Live and recorded data are the same
-records: what a viewer sees is what an Episode or an export holds.
+repeatable. Without them every stream is printed. `--json` writes one JSON object
+per record, in the shape `--sse` serves (see below): the payload is protobuf JSON
+for the standard `wendy.data.v1` types and the catalog, a JSON payload as it is, and
+base64 otherwise. Live and recorded data are the same records: what a viewer sees is
+what an Episode or an export holds.
 
 The agent publishes its own streams under `agent/`. A campaign with an `inference`
 block publishes every scored frame on `agent/campaign/<campaign>/markers/<source>`,
@@ -704,9 +706,9 @@ wendy data stream --sse 127.0.0.1:8090 --latest
 Each event is one JSON record: `stream_id`, `timestamp_unix_nanos` (a string),
 `schema`, `payload` and, when set, `skipped`, `source_id` and `sample_id` (the
 sensor sample the record describes, when its publisher names one). A payload whose
-schema the CLI knows is protobuf JSON with proto field names, a payload that is
-already a JSON object or array is passed through, and any other payload is a base64
-string. The query parameters `stream`, `prefix` and `schema` replace the command
+schema the CLI knows, such as the standard `wendy.data.v1` types and the catalog, is
+protobuf JSON with proto field names, a payload that is already a JSON object or
+array is passed through, and any other payload is a base64 string. The query parameters `stream`, `prefix` and `schema` replace the command
 line's selection for one request, for example `/live?prefix=_streams/`. Companion
 web reads it with `VITE_WENDY_DATA_LIVE_URL=http://127.0.0.1:8090/live`.
 

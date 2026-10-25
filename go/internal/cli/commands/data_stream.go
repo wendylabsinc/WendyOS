@@ -40,13 +40,15 @@ Each stream is also capped at --rate records per second, the device's 30 by
 default; a newer record replaces one the cap holds back. --latest starts with
 the newest record of each stream, if it is recent.
 
-With --json each record is one line of protobuf JSON, payload in base64.
+With --json each record is one line of JSON with protobuf JSON field names.
+Its payload is protobuf JSON when this CLI knows the schema, as it knows the
+standard wendy.data.v1 types and the catalog; a JSON payload as it is; and
+anything else in base64.
 
 With --sse ADDR the records are not printed: they are served at
 http://ADDR/live as Server-Sent Events, for a browser on this computer. Each
-event is one JSON record with the payload as protobuf JSON when this CLI knows
-its schema. Query parameters stream, prefix and schema replace the command
-line's selection for that request.`,
+event is one record in the --json shape. Query parameters stream, prefix and
+schema replace the command line's selection for that request.`,
 		Example: `  wendy data stream
   wendy data stream --stream apps/sh.wendy.demo/detector/markers
   wendy data stream --prefix apps/sh.wendy.demo/ --schema wendy.data.v1.VideoMarkers --latest
@@ -92,7 +94,7 @@ func streamLiveData(ctx context.Context, client agentpbv2.DataServiceClient, req
 			return liveDataError(ctx, err)
 		}
 		if asJSON {
-			err = encodeProtoJSON(out, r)
+			err = writeLiveJSON(out, r)
 		} else {
 			err = writeLiveRecord(out, r)
 		}
