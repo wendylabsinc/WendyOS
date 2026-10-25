@@ -138,7 +138,8 @@ func writeLiveStreams(out io.Writer, streams []*agentpbv2.DataStreamInfo) error 
 	fmt.Fprintln(w, "STREAM\tSTATE\tRATE\tLAST RECORD\tSCHEMA")
 	for _, s := range streams {
 		state := strings.ToLower(strings.TrimPrefix(s.GetState().String(), "STATE_"))
-		rate, last, schema := "-", "-", s.GetSchema()
+		// An app's wendy.json names the schema: keep its controls inert.
+		rate, last, schema := "-", "-", printable(s.GetSchema())
 		if s.GetRateHz() > 0 {
 			rate = fmt.Sprintf("%.1f/s", s.GetRateHz())
 		}
