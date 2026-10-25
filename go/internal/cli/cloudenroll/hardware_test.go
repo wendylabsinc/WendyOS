@@ -1,10 +1,12 @@
 package cloudenroll
 
 import (
+	"context"
 	"testing"
 
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	cloudpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
+	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -35,4 +37,21 @@ func TestHardwareFromDeviceInfo(t *testing.T) {
 	if !proto.Equal(empty, &cloudpbv2.DeviceHardware{}) {
 		t.Fatalf("unread fields were sent: %v", empty)
 	}
+}
+
+type hardwareConn struct {
+	statusConn
+	info *agentpbv2.GetDeviceInfoResponse
+}
+
+func (c hardwareConn) Invoke(_ context.Context, _ string, _, reply any, _ ...grpc.CallOption) error {
+	proto.Merge(reply.(proto.Message), c.info)
+	return nil
+}
+func hardwareFromDeviceInfo(info *agentpbv2.GetDeviceInfoResponse) *cloudpbv2.DeviceHardware {
+	hw, err := ReadHardware(context.Background(), hardwareConn{info: info})
+	if err != nil {
+		panic(err)
+	}
+	return hw
 }

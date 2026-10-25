@@ -28,6 +28,8 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+const maxMintAttempts = 4 // Existing bounded retry contract, independent of the SDK implementation.
+
 const testTenant = "2558fd76-afc7-466e-9613-6b715296a526"
 
 // testAuth builds the operator credential MintEAB signs with: an ML-DSA-65

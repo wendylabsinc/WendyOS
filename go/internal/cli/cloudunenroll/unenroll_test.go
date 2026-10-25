@@ -271,3 +271,32 @@ func TestRemoveRejectsChangedTenantBeforeMutation(t *testing.T) {
 		t.Fatalf("cross-tenant cleanup: result=%+v ops=%v err=%v", result, conn.mutations, err)
 	}
 }
+
+func TestRemoveValidatesAssetBeforeOpeningOperatorKey(t *testing.T) {
+	auth := testAuth(t)
+	auth.Certificates[0].PemPrivateKey = "unavailable key"
+	asset := testAssetRecord()
+	asset.Id = "invalid"
+	conn := newCleanupConn(t)
+	_, err := Remove(context.Background(), conn, auth, asset)
+	if err == nil || err.Error() != "asset ID must be a canonical nonzero UUID" {
+		t.Fatalf("asset validation must retain precedence over key loading: %v", err)
+	}
+	if conn.getCount != 0 || len(conn.mutations) != 0 {
+		t.Fatal("invalid asset performed a Cloud operation")
+	}
+}
+
+func TestRemoveRetainsMissingStoredPrincipalDiagnosticAfterInventory(t *testing.T) {
+	auth := testAuth(t)
+	auth.Certificates[0].PrincipalURI = ""
+	conn := newCleanupConn(t)
+	result, err := Remove(context.Background(), conn, auth, testAssetRecord())
+	const want = "revoking device enrollment token: /wendycloud.v2.PKIAdminService/RevokeEnrollmentToken requires an operator certificate; run 'wendy auth login'"
+	if err == nil || err.Error() != want {
+		t.Fatalf("missing stored principal diagnostic changed: %v", err)
+	}
+	if conn.getCount != 1 || len(conn.mutations) != 0 || result != (Result{}) {
+		t.Fatalf("inventory or partial progress changed: reads=%d result=%+v", conn.getCount, result)
+	}
+}

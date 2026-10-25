@@ -278,7 +278,10 @@ func (s *mcpServer) handleCloudEnrollDevice(ctx context.Context, req mcpgo.CallT
 
 	// Same EAB path as the CLI: mint device_id, operator-sign the enrollment
 	// request, EnrollDevice -> EAB, then have the connected agent ACME-enroll.
-	deviceID := uuid.NewString()
+	deviceID, err := cloudenroll.NewDeviceID(ctx)
+	if err != nil {
+		return cloudErrResult(err), nil
+	}
 	cfg, err := cloudenroll.EnrollmentConfig(auth, deviceID, "")
 	if err != nil {
 		return cloudErrResult(err), nil

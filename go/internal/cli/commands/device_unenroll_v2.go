@@ -11,8 +11,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/wendylabsinc/wendy-go/enrollment"
 	"github.com/wendylabsinc/wendy/go/internal/cli/cloudrequest"
-	"github.com/wendylabsinc/wendy/go/internal/cli/cloudunenroll"
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
@@ -27,17 +27,8 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// Output only: durable recovery evidence belongs to Cloud and Agent, not CLI.
-type v2UnenrollProgress struct {
-	Cloud       string `json:"cloud"`
-	Principal   string `json:"principal"`
-	AssetID     string `json:"assetId"`
-	Fingerprint string `json:"certificateSHA256,omitempty"`
-	Serial      string `json:"certificateSerial,omitempty"`
-	Revoked     bool   `json:"certificateRevoked"`
-	Deleted     bool   `json:"assetDeleted"`
-	Reset       bool   `json:"deviceReset"`
-}
+// Output only: durable recovery evidence belongs to Cloud and Agent.
+type v2UnenrollProgress = enrollment.Progress
 
 func isLegacyCloudEnrollment(orgID, assetID int32) bool { return orgID > 0 && assetID > 0 }
 
@@ -45,14 +36,7 @@ type v2AssetState struct {
 	Active  *cloudpbv2.Asset
 	Deleted *cloudpbv2.DeletedAsset
 }
-
-// The authorization carries exact bytes authenticated using Cloud HTTPS keys.
-// It is kept only in memory and independently verified again by the Agent.
-type v2AuthorizedReset struct {
-	deletion []byte
-	token    []byte
-}
-
+type v2AuthorizedReset struct{ deletion, token []byte }
 type v2UnenrollOps struct {
 	lookup    func(context.Context, string) (*v2AssetState, error)
 	authorize func(context.Context, string) (*v2AuthorizedReset, error)
@@ -60,127 +44,95 @@ type v2UnenrollOps struct {
 	reset     func(context.Context, string, string, []byte, *v2AuthorizedReset) error
 }
 
-// A missing active row permits only an explicit exact-asset retry. It is never
-// deletion evidence: a fresh signed reset authorization is still mandatory.
-func v2UnenrollPreflight(reply *v2AssetState, err error, j *v2UnenrollProgress) error {
+func sdkLifecycle(state *v2AssetState) (*enrollment.AssetState, error) {
+	if state == nil {
+		return nil, nil
+	}
+	out := new(enrollment.AssetState)
+	if state.Active != nil {
+		out.Active = new(enrollment.Asset)
+		if err := copyEnrollmentMessage(state.Active, out.Active); err != nil {
+			return nil, err
+		}
+	}
+	if state.Deleted != nil {
+		out.Deleted = new(enrollment.DeletedAsset)
+		if err := copyEnrollmentMessage(state.Deleted, out.Deleted); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+func copyEnrollmentMessage(source, dest proto.Message) error {
+	wire, err := proto.Marshal(source)
 	if err != nil {
-		if status.Code(err) == codes.NotFound && j.AssetID != "" {
-			return nil
-		}
-		if status.Code(err) == codes.NotFound {
-			return fmt.Errorf("Cloud device not found or not visible to this account; to resume an interrupted reset, supply its exact --asset-id; if Cloud has no record of this device, --force clears only its local enrollment: %w", err)
-		}
 		return err
 	}
-	if reply == nil || reply.Active == nil || reply.Deleted != nil {
-		return fmt.Errorf("missing active Cloud binding")
-	}
-	_, err = v2UnenrollLifecycle(reply, j)
-	return err
+	return proto.Unmarshal(wire, dest)
 }
-
+func sdkReset(a *v2AuthorizedReset) *enrollment.AuthorizedReset {
+	if a == nil {
+		return nil
+	}
+	return &enrollment.AuthorizedReset{Deletion: a.deletion, Token: a.token}
+}
+func v2UnenrollPreflight(state *v2AssetState, cause error, j *v2UnenrollProgress) error {
+	shared, err := sdkLifecycle(state)
+	if err != nil {
+		return err
+	}
+	return enrollment.UnenrollPreflight(shared, cloudrequest.EnrollmentError(cause, nil, nil), j)
+}
 func v2AuthorizedDeletion(a *v2AuthorizedReset, j *v2UnenrollProgress) (*cloudpbv2.DeletedAsset, error) {
-	if a == nil || len(a.token) == 0 || len(a.token) > 65536 || len(a.deletion) == 0 || len(a.deletion) > 4096 {
-		return nil, fmt.Errorf("verified signed Cloud reset authorization required; keys retained")
-	}
-	var d cloudpbv2.DeletedAsset
-	if err := proto.Unmarshal(a.deletion, &d); err != nil {
+	shared, err := enrollment.AuthorizedDeletion(sdkReset(a), j)
+	if err != nil {
 		return nil, err
 	}
-	if _, err := v2UnenrollLifecycle(&v2AssetState{Deleted: &d}, j); err != nil {
+	out := new(cloudpbv2.DeletedAsset)
+	if err := copyEnrollmentMessage(shared, out); err != nil {
 		return nil, err
 	}
-	return &d, nil
+	return out, nil
 }
-
 func checkV2UnenrollBinding(asset *cloudpbv2.Asset, j v2UnenrollProgress) error {
-	id, err := certs.ParsePrincipal(j.Principal)
-	if err != nil || id.EntityType != certs.EntityAsset || asset == nil || asset.GetId() != j.AssetID || asset.GetOrganizationId() != id.TenantUUID || cloudunenroll.DeviceID(asset) != id.EntityID {
-		return fmt.Errorf("refusing cleanup: exact Cloud asset/tenant/PKI binding does not match the authenticated device")
-	}
-	return nil
-}
-
-func v2UnenrollLifecycle(reply *v2AssetState, j *v2UnenrollProgress) (bool, error) {
-	if reply == nil || (reply.Active != nil && reply.Deleted != nil) {
-		return false, fmt.Errorf("invalid Cloud lifecycle evidence")
-	}
-	var asset *cloudpbv2.Asset
-	deleted := false
-	if reply.Deleted != nil {
-		d := reply.Deleted
-		if d == nil || d.GetDeletedAt() == nil || d.GetDeletedAt().CheckValid() != nil {
-			return false, fmt.Errorf("invalid Cloud deletion evidence; keys retained")
+	var shared *enrollment.Asset
+	if asset != nil {
+		shared = new(enrollment.Asset)
+		if err := copyEnrollmentMessage(asset, shared); err != nil {
+			return err
 		}
-		asset = &cloudpbv2.Asset{Id: d.GetId(), OrganizationId: d.GetOrganizationId(), PkiDeviceName: &d.DeviceId}
-		deleted = true
-	} else {
-		asset = reply.Active
 	}
-	if asset == nil {
-		return false, fmt.Errorf("missing Cloud lifecycle identity")
-	}
-	parsed, err := uuid.Parse(asset.GetId())
-	if err != nil || parsed.String() != asset.GetId() {
-		return false, fmt.Errorf("invalid Cloud asset UUID")
-	}
-	candidate := *j
-	if candidate.AssetID == "" {
-		candidate.AssetID = asset.GetId()
-	}
-	if err := checkV2UnenrollBinding(asset, candidate); err != nil {
+	return enrollment.CheckUnenrollBinding(shared, j)
+}
+func v2UnenrollLifecycle(state *v2AssetState, j *v2UnenrollProgress) (bool, error) {
+	shared, err := sdkLifecycle(state)
+	if err != nil {
 		return false, err
 	}
-	j.AssetID = candidate.AssetID
-	return deleted, nil
+	return enrollment.UnenrollLifecycle(shared, j)
 }
-
 func performV2Unenroll(ctx context.Context, j *v2UnenrollProgress, ops v2UnenrollOps) error {
-	if len(j.Fingerprint) != 64 {
-		return fmt.Errorf("verified installed certificate fingerprint required")
-	}
-	if _, err := hex.DecodeString(j.Fingerprint); err != nil {
-		return fmt.Errorf("invalid installed certificate fingerprint")
-	}
-	reply, err := ops.lookup(ctx, j.AssetID)
-	if err := v2UnenrollPreflight(reply, err, j); err != nil {
-		return fmt.Errorf("preflight Cloud asset lifecycle: %w", err)
-	}
-	// Request signing capability in the deleting operation itself. Modern Cloud
-	// refuses before deletion if its reset signer is unavailable; an authorized
-	// exact-asset retry reads the retained audit record instead of deleting again.
-	authorized, err := ops.authorize(ctx, j.AssetID)
-	if err != nil {
-		return fmt.Errorf("Cloud unenrollment failed/uncertain; keys retained: %w", err)
-	}
-	deleted, err := v2AuthorizedDeletion(authorized, j)
-	if err != nil {
-		return err
-	}
-	j.Deleted = true
-	proof, err := ops.proof(ctx)
-	if err != nil {
-		return fmt.Errorf("verifying installed-leaf PKI revocation; keys retained: %w", err)
-	}
-	j.Revoked = true
-	// OCSP acquisition may consume the short authorization lifetime. Recheck the
-	// current ACL and obtain a fresh signed authorization before local erasure.
-	fresh, err := ops.authorize(ctx, j.AssetID)
-	if err != nil {
-		return fmt.Errorf("refreshing Cloud reset authorization; keys retained: %w", err)
-	}
-	confirmed, err := v2AuthorizedDeletion(fresh, j)
-	if err != nil {
-		return err
-	}
-	if !proto.Equal(deleted, confirmed) {
-		return fmt.Errorf("Cloud deletion evidence changed; keys retained")
-	}
-	if err := ops.reset(ctx, j.Principal, j.Fingerprint, proof, fresh); err != nil {
-		return fmt.Errorf("certificate revoked and asset deleted; local reset unconfirmed: %w", err)
-	}
-	j.Reset = true
-	return nil
+	return enrollment.PerformUnenroll(ctx, j, enrollment.UnenrollOps{
+		Lookup: func(ctx context.Context, id string) (*enrollment.AssetState, error) {
+			state, err := ops.lookup(ctx, id)
+			if err != nil {
+				return nil, cloudrequest.EnrollmentError(err, nil, nil)
+			}
+			return sdkLifecycle(state)
+		},
+		Authorize: func(ctx context.Context, id string) (*enrollment.AuthorizedReset, error) {
+			a, err := ops.authorize(ctx, id)
+			return sdkReset(a), err
+		},
+		Proof: ops.proof,
+		Reset: func(ctx context.Context, principal, fingerprint string, proof []byte, a *enrollment.AuthorizedReset) error {
+			var authorization *v2AuthorizedReset
+			if a != nil {
+				authorization = &v2AuthorizedReset{deletion: a.Deletion, token: a.Token}
+			}
+			return ops.reset(ctx, principal, fingerprint, proof, authorization)
+		},
+	})
 }
 
 func directUnenrollPeerFingerprint(conn *grpcclient.AgentConnection, verifiedPeer *grpcpeer.Peer, principal certs.WendyIdentity) (string, error) {
