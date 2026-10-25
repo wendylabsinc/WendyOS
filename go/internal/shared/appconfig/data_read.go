@@ -33,14 +33,14 @@ const (
 	maxDataReadAllowlistBytes = 2048
 )
 
-// validateDataReadAllowlist checks a data-read allowlist. Each entry is a live
-// stream id, such as "apps/com.example.detector/markers", or a prefix of stream
-// ids that ends at a "/" boundary, such as "apps/com.example.detector". The
-// agent matches whole path segments, so that prefix does not admit
-// "apps/com.example.detector2". The catalog entry of an admitted stream is
-// admitted with it, so an entry never names the catalog. An empty allowlist
-// admits every stream. validateAllowlistEntries has already refused ',' and
-// '='.
+// validateDataReadAllowlist checks a data-read allowlist. Each entry admits the
+// live stream id it names and every stream id below it on a "/" boundary (see
+// live.Permits): "apps/com.example.detector" admits that app's streams but not
+// "apps/com.example.detector2/markers", and "apps/com.example.detector/markers"
+// also admits the streams of a service of that app named "markers". The
+// catalog entry of an admitted stream is admitted with it, so an entry never
+// names the catalog. An empty allowlist admits every stream.
+// validateAllowlistEntries has already refused ',' and '='.
 func validateDataReadAllowlist(allowlist []string) error {
 	if len(allowlist) > maxDataReadAllowlistEntries {
 		return fmt.Errorf("data-read allowlist has %d entries, at most %d are allowed", len(allowlist), maxDataReadAllowlistEntries)

@@ -370,9 +370,9 @@ It does not need `admin`.
 
 The app calls `DataService.StreamData` on its private System API socket,
 `WENDY_SYSTEM_SOCKET`, which it shares with `notifications`. `allowlist` is
-optional: each entry is a stream id or a prefix that ends at a `/`, so
-`apps/com.example.detector` admits that app's streams and not those of
-`com.example.detector2`. Without it the app reads every stream. The stream
+optional: each entry admits the stream id it names and every stream id below it
+at a `/`, so `apps/com.example.detector` admits that app's streams and not those
+of `com.example.detector2`. Without it the app reads every stream. The stream
 catalog, `_streams/<stream-id>`, lists only the streams the allowlist admits. An
 app holds at most 8 streams open, and all apps together 24, so operators keep
 slots of their own. The allowlist is restored with the socket after an agent
