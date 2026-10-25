@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -427,4 +428,62 @@ func TestSystemAPIDataReadPerAppCap(t *testing.T) {
 	}
 	other := agent.app("com.example.other", "", appconfig.Entitlement{Type: appconfig.EntitlementDataRead})
 	openLiveStream(t, agentpbv2.NewDataServiceClient(other))
+}
+
+// Apps together cannot take every live data slot either: however many
+// data-read apps a device runs, operators keep their reserved slots.
+func TestSystemAPIDataReadLeavesOperatorSlots(t *testing.T) {
+	agent := newSystemDataTest(t)
+	readAll := appconfig.Entitlement{Type: appconfig.EntitlementDataRead}
+	// openStream reports how a stream started: OK once its subscription is in
+	// place. cancel ends it.
+	openStream := func(client agentpbv2.DataServiceClient) (code codes.Code, cancel context.CancelFunc) {
+		t.Helper()
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		t.Cleanup(cancel)
+		stream, err := client.StreamData(ctx, &agentpbv2.StreamDataRequest{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if md, err := stream.Header(); err == nil && md != nil {
+			return codes.OK, cancel
+		}
+		_, err = stream.Recv()
+		return status.Code(err), cancel
+	}
+	appSlots := live.DefaultLimits.MaxSubscribers - reservedOperatorDataStreams
+	var open []context.CancelFunc
+	for i := 0; len(open) < appSlots; i++ {
+		client := agentpbv2.NewDataServiceClient(agent.app(fmt.Sprintf("com.example.app%d", i), "", readAll))
+		for j := 0; j < maxAppDataStreams && len(open) < appSlots; j++ {
+			code, cancel := openStream(client)
+			if code != codes.OK {
+				t.Fatalf("app stream %d: %v", len(open)+1, code)
+			}
+			open = append(open, cancel)
+		}
+	}
+	late := agentpbv2.NewDataServiceClient(agent.app("com.example.late", "", readAll))
+	if code, _ := openStream(late); code != codes.ResourceExhausted {
+		t.Fatalf("app stream past the apps' share: got %v, want ResourceExhausted", code)
+	}
+	for i := 0; i < reservedOperatorDataStreams; i++ {
+		sub, err := agent.capture.Live().Subscribe(live.Selection{})
+		if err != nil {
+			t.Fatalf("operator subscription %d: %v", i+1, err)
+		}
+		t.Cleanup(sub.Close)
+	}
+
+	// A stream that ends gives its slot back.
+	open[0]()
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+		code, _ := openStream(late)
+		if code == codes.OK {
+			break
+		}
+		if code != codes.ResourceExhausted || time.Now().After(deadline) {
+			t.Fatalf("after an app stream ended: got %v, want OK", code)
+		}
+	}
 }

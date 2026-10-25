@@ -19,6 +19,48 @@ import (
 // selections; a page with more viewers should share one subscription.
 const maxAppDataStreams = 8
 
+// reservedOperatorDataStreams are the hub slots apps never take. All apps
+// together hold at most live.DefaultLimits.MaxSubscribers minus these, so
+// however many data-read apps a device runs, an operator's viewer still gets
+// in.
+const reservedOperatorDataStreams = 8
+
+// appDataStreamQuota counts the StreamData calls all of a device's apps hold
+// open together.
+type appDataStreamQuota struct {
+	mu   sync.Mutex
+	open int
+	max  int
+}
+
+func newAppDataStreamQuota() *appDataStreamQuota {
+	return &appDataStreamQuota{max: live.DefaultLimits.MaxSubscribers - reservedOperatorDataStreams}
+}
+
+// acquire takes a slot, and reports false when every app slot is taken. A nil
+// quota has no cap.
+func (q *appDataStreamQuota) acquire() bool {
+	if q == nil {
+		return true
+	}
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if q.open >= q.max {
+		return false
+	}
+	q.open++
+	return true
+}
+
+func (q *appDataStreamQuota) release() {
+	if q == nil {
+		return
+	}
+	q.mu.Lock()
+	q.open--
+	q.mu.Unlock()
+}
+
 // errDataReadNarrowed ends a stream whose app no longer may read everything
 // the stream was opened for.
 var errDataReadNarrowed = errors.New("this app's data-read entitlement changed; subscribe again")
@@ -35,6 +77,8 @@ var errDataReadNarrowed = errors.New("this app's data-read entitlement changed; 
 type systemDataService struct {
 	agentpbv2.UnimplementedDataServiceServer
 	hub *live.Hub
+	// quota is shared by every app's socket; see reservedOperatorDataStreams.
+	quota *appDataStreamQuota
 	// scope returns the app's data-read allowlist, and false when no service
 	// of the app holds data-read any more. It takes the socket manager's lock,
 	// so it is never called with that lock held.
@@ -73,6 +117,10 @@ func (s *systemDataService) StreamData(req *agentpbv2.StreamDataRequest, out grp
 		s.mu.Unlock()
 		return status.Errorf(codes.ResourceExhausted, "an app may hold at most %d live data streams at once", maxAppDataStreams)
 	}
+	if !s.quota.acquire() {
+		s.mu.Unlock()
+		return status.Errorf(codes.ResourceExhausted, "the apps on this device already hold %d live data streams, all that apps may hold together; the rest are kept for operators", s.quota.max)
+	}
 	call := &openDataStream{allow: allow, cancel: cancel}
 	if s.open == nil {
 		s.open = make(map[*openDataStream]struct{})
@@ -83,6 +131,7 @@ func (s *systemDataService) StreamData(req *agentpbv2.StreamDataRequest, out grp
 		s.mu.Lock()
 		delete(s.open, call)
 		s.mu.Unlock()
+		s.quota.release()
 	}()
 
 	err := streamLiveData(s.hub, req, allow, dataStreamWithContext{out, ctx})

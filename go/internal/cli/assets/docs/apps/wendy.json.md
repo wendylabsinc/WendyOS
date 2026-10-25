@@ -756,7 +756,7 @@ total.
 | Constraint | |
 |------------|--|
 | At most one `data-read` per app | enforced at validation |
-| Concurrent `StreamData` calls | 8 per app; the device serves 32 in total |
+| Concurrent `StreamData` calls | 8 per app and 24 for all apps together; the device serves 32 in total, so operators keep 8 |
 | Multi-service apps | services share the socket, so the app reads the union of their allowlists |
 
 > **Security:** `data-read` is read-only and live-only. It grants no recorded

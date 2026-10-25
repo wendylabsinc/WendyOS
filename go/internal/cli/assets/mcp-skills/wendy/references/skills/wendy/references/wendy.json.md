@@ -260,7 +260,7 @@ admits that app's streams and not those of `com.example.detector2`. Without it
 the app reads every stream. The stream catalog, `_streams/<stream-id>`, lists
 only the streams the allowlist admits. Read-only and live-only: no recorded data,
 export or campaign control. At most one per app, and at most 8 open streams per
-app.
+app and 24 for all apps together.
 
 ### Admin Entitlement
 

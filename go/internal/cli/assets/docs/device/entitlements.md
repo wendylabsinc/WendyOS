@@ -115,7 +115,7 @@ admits, so an entry never names the catalog itself.
 | Injected environment | `WENDY_SYSTEM_SOCKET=/run/wendy/system/system.sock` |
 | Supplementary group | GID `2000` |
 | RPC | `wendy.agent.services.v2.DataService/StreamData`; every other method is refused |
-| Concurrent streams | 8 per app; the device serves 32 in total |
+| Concurrent streams | 8 per app and 24 for all apps together; the device serves 32 in total, so operators keep 8 |
 | Socket restoration | Recreated, with the same allowlist, from persisted container labels after agent/daemon restart |
 
 The grant is read-only and live-only. An app sees records accepted after it

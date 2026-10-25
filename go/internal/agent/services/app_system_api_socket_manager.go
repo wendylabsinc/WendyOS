@@ -100,8 +100,10 @@ type AppSystemAPISocketManager struct {
 	// liveData serves the data-read capability. Nil leaves data-read
 	// unavailable: Ensure refuses a grant that asks for it.
 	liveData *live.Hub
-	mu       sync.RWMutex
-	sockets  map[string]*appSystemAPISocket
+	// appDataStreams counts the live data streams all apps hold open.
+	appDataStreams *appDataStreamQuota
+	mu             sync.RWMutex
+	sockets        map[string]*appSystemAPISocket
 }
 
 func NewAppSystemAPISocketManager(
@@ -115,6 +117,7 @@ func NewAppSystemAPISocketManager(
 		logger:             logger,
 		notificationSender: notificationSender,
 		liveData:           liveData,
+		appDataStreams:     newAppDataStreamQuota(),
 		sockets:            make(map[string]*appSystemAPISocket),
 	}
 	go func() {
@@ -222,7 +225,7 @@ func (m *AppSystemAPISocketManager) Ensure(appID, serviceName string, grant Syst
 	socket.server = server
 	systempb.RegisterNotificationServiceServer(server, NewSystemNotificationService(appID, m.notificationSender))
 	if m.liveData != nil {
-		socket.data = &systemDataService{hub: m.liveData, scope: func() ([]string, bool) {
+		socket.data = &systemDataService{hub: m.liveData, quota: m.appDataStreams, scope: func() ([]string, bool) {
 			m.mu.RLock()
 			defer m.mu.RUnlock()
 			return dataReadScope(socket)
