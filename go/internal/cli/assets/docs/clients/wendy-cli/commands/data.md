@@ -610,3 +610,37 @@ retained IDs per stream. Age retention across reboots depends on device clock ac
 This export path does not update cloud upload state.
 Payloads and metadata are exported in checksummed Protobuf `.wdr` frames. Episodes
 also include these frames in `records.wdr`, alongside legacy `events.jsonl`.
+
+### Live streams
+
+Every application recording stream is also available live, with no change to the
+app. `wendy data stream` prints records as the agent accepts them, whether or not
+an Episode is recording, until you press Ctrl-C:
+
+```sh
+wendy data stream
+wendy data stream --stream apps/<app-id>/<service>/<stream>
+wendy data stream --json
+```
+
+A stream id is `apps/<app-id>/<service>/<stream>`, or `apps/<app-id>/<stream>` for
+an app with no service name. `--stream` is repeatable; without it every stream is
+printed. `--json` writes one protobuf JSON object per record, with the payload in
+base64. Live and recorded data are the same records: what a viewer sees is what an
+Episode or an export holds.
+
+Delivery is best effort. When the connection is slower than a stream, a newer
+record replaces the one not yet sent, so a viewer always gets the newest record of
+each stream and never slows the app. There is no history: a viewer sees records
+accepted after it connects. Use `export-stream` or an Episode when every record
+matters.
+
+A record's time is the time its data describes, on the device's wall clock, the
+clock video frames use. For a durable record it is the first sample time of
+`UNIX`, `CLOCK_REALTIME` or `CLOCK_BOOTTIME` timing, or its client boot time when
+the agent accepted it. Otherwise it is the agent's receipt time, which is what
+every lightweight record gets.
+
+The stream is served over mutual TLS to user certificates, on the LAN or through
+Wendy Cloud, and on the device's local admin socket. A device that has not been
+provisioned yet does not serve it.
