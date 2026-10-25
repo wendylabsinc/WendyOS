@@ -32,6 +32,9 @@ type InvokeOptions struct {
 // kid refusal gets one x5c retry with a fresh signature and the same flow ID.
 // It returns response metadata even when the RPC fails.
 func (s *Signer) Invoke(ctx context.Context, transport platform.Transport, method string, request proto.Message, options InvokeOptions) (platform.RPCResponse, error) {
+	if options.Metadata == nil {
+		options.Metadata = s.defaultMetadata
+	}
 	if err := ctx.Err(); err != nil {
 		return platform.RPCResponse{}, err
 	}

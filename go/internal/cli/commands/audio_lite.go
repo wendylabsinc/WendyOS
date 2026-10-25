@@ -5,15 +5,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"sync"
 	"time"
 
 	"github.com/spf13/cobra"
-	"github.com/wendylabsinc/wendy/go/internal/agent/sensorlink"
+	"github.com/wendylabsinc/wendy-go/lite"
+	sdkpb "github.com/wendylabsinc/wendy-go/lite/pb"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	sensorlinkpb "github.com/wendylabsinc/wendy/go/proto/gen/sensorlinkpb"
 	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
 )
 
 type liteAudioOptions struct {
@@ -22,15 +23,16 @@ type liteAudioOptions struct {
 }
 
 func liteAudioChannels(manifest *sensorlinkpb.SensorManifest) []*sensorlinkpb.SensorDescriptor {
-	var channels []*sensorlinkpb.SensorDescriptor
-	for _, ch := range manifest.GetSensors() {
-		if ch.GetAudio() != nil {
-			channels = append(channels, ch)
-		}
+	converted := new(sdkpb.SensorManifest)
+	_ = liteAudioMessage(manifest, converted)
+	var out []*sensorlinkpb.SensorDescriptor
+	for _, ch := range lite.AudioChannels(converted) {
+		m := new(sensorlinkpb.SensorDescriptor)
+		_ = liteAudioMessage(ch, m)
+		out = append(out, m)
 	}
-	return channels
+	return out
 }
-
 func listLiteAudio(cmd *cobra.Command, target *SelectedDevice) error {
 	// Camera and audio use the same authenticated SensorLink transport.
 	client, closeClient, err := openLiteCamera(cmd.Context(), target)
@@ -71,25 +73,18 @@ func listLiteAudio(cmd *cobra.Command, target *SelectedDevice) error {
 }
 
 func selectLiteAudio(manifest *sensorlinkpb.SensorManifest, opts liteAudioOptions) (*sensorlinkpb.SensorDescriptor, error) {
-	for _, ch := range liteAudioChannels(manifest) {
-		if opts.idSet && ch.GetChannelId() != opts.id {
-			continue
-		}
-		a := ch.GetAudio()
-		if a.GetCodec() != sensorlinkpb.AudioFormat_PCM_S16LE || a.GetSampleRate() == 0 || a.GetSampleRate() > 384000 || a.GetChannels() == 0 || a.GetChannels() > 8 {
-			if opts.idSet {
-				return nil, fmt.Errorf("SensorLink audio channel %d has an unsupported format: %s, %d Hz, %d channels", ch.GetChannelId(), a.GetCodec(), a.GetSampleRate(), a.GetChannels())
-			}
-			continue
-		}
-		if (opts.rateSet && opts.sampleRate != a.GetSampleRate()) || (opts.channelsSet && opts.channels != a.GetChannels()) {
-			continue
-		}
-		return ch, nil
+	converted := new(sdkpb.SensorManifest)
+	if err := liteAudioMessage(manifest, converted); err != nil {
+		return nil, err
 	}
-	return nil, fmt.Errorf("no PCM S16LE SensorLink microphone matches the requested ID or format; see `wendy device audio list`")
+	ch, err := lite.SelectAudio(converted, lite.AudioOptions{ID: opts.id, SampleRate: opts.sampleRate, Channels: opts.channels, IDSet: opts.idSet, RateSet: opts.rateSet, ChannelsSet: opts.channelsSet})
+	if err != nil {
+		return nil, err
+	}
+	out := new(sensorlinkpb.SensorDescriptor)
+	err = liteAudioMessage(ch, out)
+	return out, err
 }
-
 func listenLiteAudio(cmd *cobra.Command, target *SelectedDevice, opts liteAudioOptions) error {
 	ctx := cmd.Context()
 	client, closeClient, err := openLiteCamera(ctx, target)
@@ -137,86 +132,37 @@ func listenLiteAudio(cmd *cobra.Command, target *SelectedDevice, opts liteAudioO
 	return err
 }
 
-type liteAudioStream struct {
-	ctx                           context.Context
-	client                        liteCameraClient
-	channel, sampleRate, channels uint32
-	frames                        chan *agentpb.AudioChunk
-	stop                          chan struct{}
-	remove                        func()
-	once                          sync.Once
-	mu                            sync.Mutex
-	closed                        bool
-	asm                           sensorlink.Assembler
-}
+// liteAudioStream projects Core PCM chunks into the existing playback interface.
+type liteAudioStream struct{ *lite.AudioStream }
 
 func subscribeLiteAudio(ctx context.Context, client liteCameraClient, ch *sensorlinkpb.SensorDescriptor) (*liteAudioStream, error) {
-	if err := ctx.Err(); err != nil {
+	converted := new(sdkpb.SensorDescriptor)
+	if err := liteAudioMessage(ch, converted); err != nil {
 		return nil, err
 	}
-	a := ch.GetAudio()
-	s := &liteAudioStream{ctx: ctx, client: client, channel: ch.GetChannelId(), sampleRate: a.GetSampleRate(), channels: a.GetChannels(), frames: make(chan *agentpb.AudioChunk, 8), stop: make(chan struct{})}
-	s.remove = client.AddSensorDataListener(s.deliver)
-	if err := client.SensorLinkSubscribe([]uint32{s.channel}, 3*time.Second); err != nil {
-		s.Close()
-		return nil, fmt.Errorf("subscribing to SensorLink microphone: %w", err)
+	stream, err := lite.SubscribeAudio(ctx, liteAudioClient{client}, converted)
+	if err != nil {
+		return nil, err
 	}
-	return s, nil
+	return &liteAudioStream{stream}, nil
 }
-
-func (s *liteAudioStream) deliver(d *sensorlinkpb.SensorData) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.closed || d == nil || d.GetChannelId() != s.channel {
-		return
-	}
-	// Bound malformed input before assembly. The assembler also bounds the total frame.
-	if len(d.GetPayload()) > sensorlink.MaxFrameBytes {
-		s.asm = sensorlink.Assembler{}
-		return
-	}
-	f := s.asm.Add(d)
-	if f == nil || len(f.Payload) == 0 || len(f.Payload)%(2*int(s.channels)) != 0 {
-		return
-	}
-	chunk := &agentpb.AudioChunk{PcmData: f.Payload, TimestampNs: f.TsUs * 1000, SampleRate: s.sampleRate, Channels: s.channels}
-	select {
-	case s.frames <- chunk:
-	default:
-		// Keep latency bounded without blocking WendyCom's command replies.
-		select {
-		case <-s.frames:
-		default:
-		}
-		s.frames <- chunk
-	}
-}
-
 func (s *liteAudioStream) Recv() (*agentpb.AudioChunk, error) {
-	select {
-	case <-s.ctx.Done():
-		return nil, s.ctx.Err()
-	case <-s.stop:
-		return nil, io.EOF
-	case <-s.client.Done():
-		return nil, fmt.Errorf("SensorLink microphone disconnected: %w", io.ErrUnexpectedEOF)
-	case chunk := <-s.frames:
-		return chunk, nil
+	m, err := s.AudioStream.Recv()
+	if err != nil {
+		return nil, err
 	}
+	return &agentpb.AudioChunk{PcmData: m.PcmData, TimestampNs: m.TimestampNs, SampleRate: m.SampleRate, Channels: m.Channels}, nil
 }
 
-func (s *liteAudioStream) Close() {
-	s.once.Do(func() {
-		s.remove()
-		s.mu.Lock()
-		s.closed = true
-		s.asm = sensorlink.Assembler{}
-		close(s.stop)
-		s.mu.Unlock()
-		select {
-		case <-s.client.Done():
-		default:
-			s.client.SensorLinkUnsubscribe([]uint32{s.channel}, time.Second)
-		}
-	})
+type liteAudioClient struct{ liteCameraClient }
+
+func (c liteAudioClient) AddSensorDataListener(fn func(*sdkpb.SensorData)) func() {
+	return c.liteCameraClient.AddSensorDataListener(func(m *sensorlinkpb.SensorData) { out := new(sdkpb.SensorData); _ = liteAudioMessage(m, out); fn(out) })
+}
+func liteAudioMessage(src, dst proto.Message) error {
+	data, err := proto.Marshal(src)
+	if err != nil {
+		return err
+	}
+	return proto.Unmarshal(data, dst)
 }

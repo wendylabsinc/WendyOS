@@ -66,7 +66,6 @@ func (c *WendyLiteClient) ConnectViaBLEContext(ctx context.Context, address stri
 	if tlsCfg.VerifyConnection != nil {
 		c.peerCert = tlsConn.ConnectionState().PeerCertificates[0]
 	}
-	c.startReadLoop()
 	return nil
 }
 

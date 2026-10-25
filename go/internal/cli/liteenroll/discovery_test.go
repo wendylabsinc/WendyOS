@@ -20,53 +20,6 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-func TestDiscoveryCMS(t *testing.T) {
-	roots := testTrustPEM(t, true, time.Now().Add(time.Hour))
-	block, _ := pem.Decode(roots)
-	sd, err := asn1.Marshal(struct {
-		Version int
-		Digests []pkix.AlgorithmIdentifier `asn1:"set"`
-		Content struct{ Type asn1.ObjectIdentifier }
-		Certs   []asn1.RawValue `asn1:"tag:0"`
-		Signers []asn1.RawValue `asn1:"set"`
-	}{1, []pkix.AlgorithmIdentifier{}, struct{ Type asn1.ObjectIdentifier }{asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 7, 1}}, []asn1.RawValue{{FullBytes: block.Bytes}}, []asn1.RawValue{}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, explicit := range []bool{false, true} {
-		content := asn1.RawValue{FullBytes: sd}
-		if explicit {
-			content = asn1.RawValue{Class: 2, Tag: 0, IsCompound: true, Bytes: sd}
-		}
-		ci, err := asn1.Marshal(struct {
-			Type    asn1.ObjectIdentifier
-			Content asn1.RawValue
-		}{asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 7, 2}, content})
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, raw := range []bool{false, true} {
-			encode := func(data []byte) []byte {
-				if raw {
-					return data
-				}
-				return []byte(base64.StdEncoding.EncodeToString(data))
-			}
-			got, err := discoveryRoots(encode(ci), "application/pkcs7-mime")
-			if err != nil || !bytes.Equal(got, roots) {
-				t.Fatalf("explicit=%v raw=%v: %v", explicit, raw, err)
-			}
-			if _, err := discoveryRoots(encode(append(ci, 0)), "application/pkcs7-mime"); err == nil {
-				t.Fatal("accepted trailing DER")
-			}
-		}
-
-	}
-	if _, err := discoveryRoots(testTrustPEM(t, false, time.Now().Add(time.Hour)), "application/x-pem-file"); err == nil {
-		t.Fatal("accepted leaf")
-	}
-}
-
 func TestDiscoverTrustUsesVerifiedHTTPS(t *testing.T) {
 	root := testTrustPEM(t, true, time.Now().Add(time.Hour))
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

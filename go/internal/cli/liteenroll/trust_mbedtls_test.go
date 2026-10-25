@@ -100,7 +100,8 @@ func TestMbedTLSTrustChecksBothPublicKeyAndIssuerSignature(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root := testAlgorithmTrustPEM(t, tc.pub, tc.signer, x509.UnknownSignatureAlgorithm)
-			if err := validateTrustBundle(root); err != nil {
+			block, _ := pem.Decode(root)
+			if _, err := x509.ParseCertificate(block.Bytes); err != nil {
 				t.Fatalf("fixture must pass generic CA validation: %v", err)
 			}
 			err := validateMbedTLSTrustBundle(root)

@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	wendy "github.com/wendylabsinc/wendy-go"
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
@@ -661,6 +662,19 @@ func TestRefusalNamesTheKeyTheGoverningPinIsFiledUnder(t *testing.T) {
 
 	t.Run("an unauthenticated-fallback refusal names it", func(t *testing.T) {
 		setUp(t)
+		// This branch requires two unreachable endpoints. Closed ephemeral
+		// ports can be reused by concurrent tests, including by a TLS peer.
+		// Supply TCP-refusal evidence through the existing host seam instead.
+		stubSDKConnector(t, func(_ context.Context, request wendy.DeviceConnectRequest) (wendy.DeviceConnection, error) {
+			if !request.TLS {
+				t.Error("plaintext rung attempted for a pinned host")
+				return nil, errors.New("unexpected plaintext")
+			}
+			cause := errors.New("connection refused")
+			peer := failedSDKPeer(cause, 0)
+			peer.evidence.TCPDialError = cause
+			return peer, nil
+		})
 		origPlaintext := plaintextConnectFn
 		plaintextConnectFn = func(context.Context, string) (*grpcclient.AgentConnection, error) {
 			t.Error("plaintext rung attempted for a pinned host")
