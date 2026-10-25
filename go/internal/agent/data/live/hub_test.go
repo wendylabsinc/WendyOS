@@ -281,6 +281,12 @@ func TestPermits(t *testing.T) {
 		{[]string{"apps/a/markers"}, "apps/a", false},
 		{[]string{"apps/a", "apps/b"}, "apps/b/markers", true},
 		{[]string{"apps/a", "apps/b"}, "agent/inference", false},
+		{[]string{"agent/campaign/door"}, "agent/campaign/door/markers/v4l2:/dev/video0", true},
+		// A catalog entry is admitted with the stream it describes.
+		{[]string{"apps/a"}, CatalogPrefix + "apps/a/markers", true},
+		{[]string{"apps/a"}, CatalogPrefix + "apps/b/markers", false},
+		{[]string{"apps/a"}, CatalogPrefix + "apps/ab/markers", false},
+		{[]string{"apps/a"}, CatalogPrefix, false},
 	} {
 		if got := Permits(tc.allow, tc.stream); got != tc.want {
 			t.Errorf("Permits(%q, %q) = %v, want %v", tc.allow, tc.stream, got, tc.want)
@@ -315,6 +321,28 @@ func TestSelectionAllow(t *testing.T) {
 		t.Fatalf("selection outside allow delivered %s", d.Record.StreamID)
 	}
 	requireEmpty(t, narrowed)
+}
+
+// An allowlist hides the catalog entries of the streams it does not admit,
+// both the current catalog that send_latest starts with and later changes.
+func TestSelectionAllowFiltersCatalog(t *testing.T) {
+	h, _ := clockedHub(DefaultLimits)
+	h.Advertise(StreamInfo{ID: "apps/a/markers", Publisher: "a"})
+	h.Advertise(StreamInfo{ID: "apps/b/markers", Publisher: "b"})
+	s := subscribeWith(t, h, Selection{StreamPrefixes: []string{CatalogPrefix}, SendLatest: true, Allow: []string{"apps/a"}})
+	if info := catalogEntry(t, next(t, s)); info.GetStreamId() != "apps/a/markers" {
+		t.Fatalf("current catalog: %v", info)
+	}
+	requireEmpty(t, s)
+	h.Advertise(StreamInfo{ID: "apps/b/other", Publisher: "b"})
+	h.Offer(record("apps/b/markers", 1, 8))
+	h.Unadvertise("apps/b/markers")
+	requireEmpty(t, s)
+	h.Advertise(StreamInfo{ID: "apps/a/other", Publisher: "a"})
+	if info := catalogEntry(t, next(t, s)); info.GetStreamId() != "apps/a/other" {
+		t.Fatalf("catalog change: %v", info)
+	}
+	requireEmpty(t, s)
 }
 
 func TestSubscriberCap(t *testing.T) {

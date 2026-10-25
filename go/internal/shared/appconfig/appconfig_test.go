@@ -2327,7 +2327,7 @@ func TestNotificationsEntitlementDuplicateRejected(t *testing.T) {
 }
 
 func TestDataReadEntitlementValid(t *testing.T) {
-	for _, allowlist := range [][]string{nil, {"apps/com.example.detector"}, {"apps/com.example.detector/markers", "apps/"}} {
+	for _, allowlist := range [][]string{nil, {"apps/com.example.detector"}, {"apps/com.example.detector/markers", "apps/"}, {"agent/campaign/people/markers/"}} {
 		cfg := &AppConfig{AppID: "test", Entitlements: []Entitlement{{Type: EntitlementDataRead, Allowlist: allowlist}}}
 		if err := cfg.Validate(); err != nil {
 			t.Fatalf("allowlist %q: %v", allowlist, err)
@@ -2354,6 +2354,8 @@ func TestDataReadEntitlementAllowlistRejected(t *testing.T) {
 		{"apps/\u00e9"},
 		tooMany,
 		{strings.Repeat("a", maxDataReadAllowlistBytes+1)},
+		{"_streams/apps/a"},
+		{"apps/a", "_streams/"},
 	} {
 		cfg := &AppConfig{AppID: "test", Entitlements: []Entitlement{{Type: EntitlementDataRead, Allowlist: allowlist}}}
 		if err := cfg.Validate(); err == nil {

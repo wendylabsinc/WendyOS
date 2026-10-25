@@ -114,19 +114,22 @@ type Selection struct {
 	// selected catalog stream.
 	SendLatest bool
 	// Allow, when not empty, is what the subscriber may read, whatever else
-	// the selection names. See Permits. An app's data-read allowlist arrives
-	// here; operators have none.
+	// the selection names, catalog entries included. See Permits. An app's
+	// data-read allowlist arrives here; operators have none.
 	Allow []string
 }
 
 // Permits reports whether allow admits streamID. An entry admits the stream id
 // it names and every stream id below it on a "/" boundary, so
 // "apps/com.example" admits "apps/com.example/markers" but not
-// "apps/com.example.other/markers". An empty allow admits every stream.
+// "apps/com.example.other/markers". A catalog stream, CatalogPrefix + id, is
+// admitted when the stream it describes is, so a subscriber never learns of a
+// stream it may not read. An empty allow admits every stream.
 func Permits(allow []string, streamID string) bool {
 	if len(allow) == 0 {
 		return true
 	}
+	streamID = strings.TrimPrefix(streamID, CatalogPrefix)
 	for _, entry := range allow {
 		if !strings.HasPrefix(streamID, entry) {
 			continue

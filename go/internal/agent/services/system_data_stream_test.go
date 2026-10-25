@@ -18,6 +18,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 )
 
 func TestSystemAPIGrantFor(t *testing.T) {
@@ -117,14 +118,40 @@ func (s *systemDataTest) record(appID, stream, payload string) {
 // is refused before any record.
 func streamDataError(t *testing.T, conn *grpc.ClientConn, ids ...string) codes.Code {
 	t.Helper()
+	return streamDataRequestError(t, conn, &agentpbv2.StreamDataRequest{StreamIds: ids})
+}
+
+func streamDataRequestError(t *testing.T, conn *grpc.ClientConn, req *agentpbv2.StreamDataRequest) codes.Code {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	stream, err := agentpbv2.NewDataServiceClient(conn).StreamData(ctx, &agentpbv2.StreamDataRequest{StreamIds: ids})
+	stream, err := agentpbv2.NewDataServiceClient(conn).StreamData(ctx, req)
 	if err != nil {
 		return status.Code(err)
 	}
 	_, err = stream.Recv()
 	return status.Code(err)
+}
+
+// endOf reads stream until it ends and returns how it ended. Records still
+// queued for it, such as a send_latest snapshot, come first.
+func endOf(t *testing.T, stream agentpbv2.DataService_StreamDataClient) codes.Code {
+	t.Helper()
+	for {
+		if _, err := stream.Recv(); err != nil {
+			return status.Code(err)
+		}
+	}
+}
+
+// catalogInfo decodes a catalog record.
+func catalogInfo(t *testing.T, r *agentpbv2.DataRecord) *agentpbv2.DataStreamInfo {
+	t.Helper()
+	info := new(agentpbv2.DataStreamInfo)
+	if r.GetSchema() != "wendy.agent.services.v2.DataStreamInfo" || proto.Unmarshal(r.GetPayload(), info) != nil {
+		t.Fatalf("not a catalog record: %v", r)
+	}
+	return info
 }
 
 // An app reads live data on its own System API socket with data-read, and
@@ -182,6 +209,9 @@ func TestSystemAPIDataReadUnionsServices(t *testing.T) {
 
 	agent.app("com.example.viewer", "worker", appconfig.Entitlement{Type: appconfig.EntitlementDataRead, Allowlist: []string{"apps/com.example.thermal"}})
 	both := openLiveStream(t, client)
+	// Opened under the wider scope with selectors, a rate and send_latest, it
+	// ends with the scope all the same.
+	selected := openLiveStreamWith(t, client, &agentpbv2.StreamDataRequest{StreamPrefixes: []string{"apps/com.example.thermal/", "_streams/"}, Schemas: []string{"wendy.data.v1.VideoMarkers", "wendy.agent.services.v2.DataStreamInfo"}, MaxRateHz: 5, SendLatest: true})
 	agent.record("com.example.thermal", "grid", "hot")
 	if r := recvLive(t, both); r.GetStreamId() != "apps/com.example.thermal/grid" {
 		t.Fatalf("union: %v", r)
@@ -198,6 +228,9 @@ func TestSystemAPIDataReadUnionsServices(t *testing.T) {
 	agent.sockets.Release("com.example.viewer", "worker")
 	if _, err := both.Recv(); status.Code(err) != codes.Aborted {
 		t.Fatalf("stream opened under the wider scope: got %v, want Aborted", err)
+	}
+	if got := endOf(t, selected); got != codes.Aborted {
+		t.Fatalf("stream with selectors opened under the wider scope: got %v, want Aborted", got)
 	}
 	if got := streamDataError(t, api, "apps/com.example.thermal/grid"); got != codes.PermissionDenied {
 		t.Fatalf("after the worker left: got %v, want PermissionDenied", got)
@@ -216,6 +249,74 @@ func TestSystemAPIDataReadUnionsServices(t *testing.T) {
 	}
 	if got := streamDataError(t, api); got != codes.PermissionDenied {
 		t.Fatalf("after data-read was withdrawn: got %v, want PermissionDenied", got)
+	}
+}
+
+// An app's allowlist bounds the catalog as it bounds the records: the app
+// sees the catalog entries of the streams it may read and learns nothing of
+// the others, not even that they exist.
+func TestSystemAPIDataReadCatalog(t *testing.T) {
+	agent := newSystemDataTest(t)
+	viewer := agent.app("com.example.viewer", "", appconfig.Entitlement{Type: appconfig.EntitlementDataRead, Allowlist: []string{"apps/com.example.detector"}})
+	agent.capture.AdvertiseAppStream("com.example.other", "", "markers", liveMarkersStream)
+	agent.capture.AdvertiseAppStream("com.example.detector", "", "markers", liveMarkersStream)
+	agent.capture.AdvertiseAgentStream("campaign/door/markers/v4l2:/dev/video0", &recordingpb.StreamDescriptor{MediaType: "application/protobuf", Schema: "wendy.data.v1.VideoMarkers"})
+
+	// What wendy data streams asks for: the whole catalog, at once.
+	catalog := openLiveStreamWith(t, agentpbv2.NewDataServiceClient(viewer), &agentpbv2.StreamDataRequest{StreamPrefixes: []string{"_streams/"}, SendLatest: true})
+	if r := recvLive(t, catalog); r.GetStreamId() != "_streams/apps/com.example.detector/markers" || catalogInfo(t, r).GetState() != agentpbv2.DataStreamInfo_STATE_IDLE {
+		t.Fatalf("current catalog: %v", r)
+	}
+	// Other streams appearing, going active and going away stay hidden; the
+	// next entry is the allowed stream going active.
+	agent.capture.AdvertiseAppStream("com.example.other", "", "grid", liveMarkersStream)
+	agent.record("com.example.other", "markers", "not allowed")
+	agent.capture.UnadvertiseAppStream("com.example.other", "", "markers")
+	agent.record("com.example.detector", "markers", "boxes")
+	if r := recvLive(t, catalog); r.GetStreamId() != "_streams/apps/com.example.detector/markers" || catalogInfo(t, r).GetState() != agentpbv2.DataStreamInfo_STATE_ACTIVE {
+		t.Fatalf("catalog change: %v", r)
+	}
+
+	// Naming another stream's catalog entry is refused as naming the stream is.
+	if got := streamDataError(t, viewer, "_streams/apps/com.example.other/markers"); got != codes.PermissionDenied {
+		t.Fatalf("catalog entry outside the allowlist: got %v, want PermissionDenied", got)
+	}
+	named := openLiveStreamWith(t, agentpbv2.NewDataServiceClient(viewer), &agentpbv2.StreamDataRequest{StreamIds: []string{"_streams/apps/com.example.detector/markers"}, SendLatest: true})
+	if r := recvLive(t, named); r.GetStreamId() != "_streams/apps/com.example.detector/markers" {
+		t.Fatalf("allowed catalog entry: %v", r)
+	}
+}
+
+// The System API socket serves StreamData with the operator's request rules:
+// the same validation, selectors and send_latest, within the allowlist.
+func TestSystemAPIDataReadSelection(t *testing.T) {
+	agent := newSystemDataTest(t)
+	viewer := agent.app("com.example.viewer", "", appconfig.Entitlement{Type: appconfig.EntitlementDataRead, Allowlist: []string{"apps/com.example.detector"}})
+	for _, req := range []*agentpbv2.StreamDataRequest{{MaxRateHz: 5000}, {StreamPrefixes: []string{""}}, {Schemas: []string{""}}} {
+		if got := streamDataRequestError(t, viewer, req); got != codes.InvalidArgument {
+			t.Fatalf("%v: got %v, want InvalidArgument", req, got)
+		}
+	}
+
+	text := appconfig.RecordingStream{Mode: "lightweight", MediaType: "text/plain"}
+	agent.capture.AdvertiseAppStream("com.example.detector", "", "markers", liveMarkersStream)
+	agent.capture.AdvertiseAppStream("com.example.detector", "", "log", text)
+	agent.capture.AdvertiseAppStream("com.example.other", "", "markers", liveMarkersStream)
+	agent.record("com.example.other", "markers", "not allowed")
+	agent.record("com.example.detector", "markers", "boxes")
+	if _, err := agent.capture.RecordStream("com.example.detector", "", "log", text, &recordingpb.Record{Payload: []byte("hello")}); err != nil {
+		t.Fatal(err)
+	}
+	// A prefix wider than the allowlist is narrowed to it, and the schema
+	// keeps the markers.
+	markers := openLiveStreamWith(t, agentpbv2.NewDataServiceClient(viewer), &agentpbv2.StreamDataRequest{StreamPrefixes: []string{"apps/"}, Schemas: []string{"wendy.data.v1.VideoMarkers"}, SendLatest: true})
+	if r := recvLive(t, markers); r.GetStreamId() != "apps/com.example.detector/markers" || string(r.GetPayload()) != "boxes" {
+		t.Fatalf("newest allowed record: %v", r)
+	}
+	agent.record("com.example.other", "markers", "still not allowed")
+	agent.record("com.example.detector", "markers", "more boxes")
+	if r := recvLive(t, markers); string(r.GetPayload()) != "more boxes" {
+		t.Fatalf("live record: %v", r)
 	}
 }
 
@@ -244,10 +345,24 @@ func TestSystemAPIDataReadPerAppCap(t *testing.T) {
 	agent := newSystemDataTest(t)
 	conn := agent.app("com.example.viewer", "", appconfig.Entitlement{Type: appconfig.EntitlementDataRead})
 	client := agentpbv2.NewDataServiceClient(conn)
-	for i := 0; i < maxAppDataStreams; i++ {
-		openLiveStream(t, client)
+	// Every call counts, whatever it selects.
+	selections := []*agentpbv2.StreamDataRequest{
+		{},
+		{StreamIds: []string{"apps/a/markers"}},
+		{StreamPrefixes: []string{"apps/"}},
+		{StreamPrefixes: []string{"_streams/"}, SendLatest: true},
+		{Schemas: []string{"wendy.data.v1.VideoMarkers"}},
+		{MaxRateHz: 1000},
+		{StreamPrefixes: []string{"agent/"}, MaxRateHz: 0.5},
+		{SendLatest: true},
 	}
-	if got := streamDataError(t, conn); got != codes.ResourceExhausted {
+	if len(selections) != maxAppDataStreams {
+		t.Fatalf("%d selections for a cap of %d", len(selections), maxAppDataStreams)
+	}
+	for _, req := range selections {
+		openLiveStreamWith(t, client, req)
+	}
+	if got := streamDataRequestError(t, conn, &agentpbv2.StreamDataRequest{StreamPrefixes: []string{"_streams/"}}); got != codes.ResourceExhausted {
 		t.Fatalf("stream %d: got %v, want ResourceExhausted", maxAppDataStreams+1, got)
 	}
 	other := agent.app("com.example.other", "", appconfig.Entitlement{Type: appconfig.EntitlementDataRead})

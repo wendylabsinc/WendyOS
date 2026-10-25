@@ -619,8 +619,8 @@
             "allowlist": {
               "type": "array",
               "maxItems": 32,
-              "items": { "type": "string", "minLength": 1, "pattern": "^[^\\s,=]+$" },
-              "description": "Stream ids or stream id prefixes the app may read, matched on whole path segments: \"apps/com.example.detector\" admits that app's streams. Omit to read every stream."
+              "items": { "type": "string", "minLength": 1, "pattern": "^[^\\s,=]+$", "not": { "pattern": "^_streams/" } },
+              "description": "Stream ids or stream id prefixes the app may read, matched on whole path segments: \"apps/com.example.detector\" admits that app's streams. The catalog entry (_streams/<id>) of each admitted stream comes with it. Omit to read every stream."
             }
           },
           "required": ["type"],

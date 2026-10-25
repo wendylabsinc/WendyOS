@@ -1,6 +1,14 @@
 package appconfig
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
+
+// dataReadCatalogPrefix starts the id of every stream in the live catalog.
+// An allowlist names the streams themselves: the catalog entry of an allowed
+// stream comes with it, and an entry for the catalog would admit nothing.
+const dataReadCatalogPrefix = "_streams/"
 
 const (
 	// maxDataReadAllowlistEntries bounds a data-read allowlist. Apps declare at
@@ -16,8 +24,10 @@ const (
 // stream id, such as "apps/com.example.detector/markers", or a prefix of stream
 // ids that ends at a "/" boundary, such as "apps/com.example.detector". The
 // agent matches whole path segments, so that prefix does not admit
-// "apps/com.example.detector2". An empty allowlist admits every stream.
-// validateAllowlistEntries has already refused ',' and '='.
+// "apps/com.example.detector2". The catalog entry of an admitted stream is
+// admitted with it, so an entry never names the catalog. An empty allowlist
+// admits every stream. validateAllowlistEntries has already refused ',' and
+// '='.
 func validateDataReadAllowlist(allowlist []string) error {
 	if len(allowlist) > maxDataReadAllowlistEntries {
 		return fmt.Errorf("data-read allowlist has %d entries, at most %d are allowed", len(allowlist), maxDataReadAllowlistEntries)
@@ -31,6 +41,9 @@ func validateDataReadAllowlist(allowlist []string) error {
 			if c <= ' ' || c > '~' {
 				return fmt.Errorf("data-read allowlist[%d] must be printable ASCII without spaces, got %q", i, entry)
 			}
+		}
+		if strings.HasPrefix(entry, dataReadCatalogPrefix) {
+			return fmt.Errorf("data-read allowlist[%d] names the stream catalog, %q; name the streams, and their catalog entries come with them", i, entry)
 		}
 		total += len(entry)
 	}
