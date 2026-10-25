@@ -457,6 +457,11 @@ func realtimeFrameTimestamp(now time.Time) frameTimestamp {
 type hubSubscriber struct {
 	ch  chan *videoFrame
 	raw bool // wants VIDEO_CODEC_RAW frames instead of encoded video
+	// yields marks a subscriber that joined without parameters and gives the
+	// camera up to a consumer that asserts some: a camera only such
+	// subscribers hold is restarted for it (takeOverYieldingHub), and they
+	// reattach to the restarted producer. Protected by h.mu.
+	yields bool
 	// closed and err are set together, under h.mu, when the producer closes this
 	// subscriber early (raw was asked for and is not offered). closed keeps
 	// broadcast and the final teardown from touching the channel twice.
@@ -513,8 +518,9 @@ type deviceHub struct {
 	// capture may restart. Protected by h.mu.
 	subExplicit map[int]string
 	// restarted marks that this hub's producer was torn down by an episode
-	// capture takeover (takeOverDefaultedHub) rather than by a fault or a
-	// normal last-unsubscribe. Parameter-less subscribers use it to reattach
+	// capture takeover (takeOverDefaultedHub), or for a viewer that asserts
+	// parameters (takeOverYieldingHub), rather than by a fault or a normal
+	// last-unsubscribe. Parameter-less subscribers use it to reattach
 	// to the replacement hub after their channel closes. Protected by h.mu.
 	restarted bool
 	// sampleSeq is the per-device sample counter, shared with every hub that
@@ -636,10 +642,32 @@ func (h *deviceHub) heldExplicitly() (holder string, held bool) {
 	return holder, lowest != -1
 }
 
+// yield marks subscriber id as yielding the camera (hubSubscriber.yields).
+func (h *deviceHub) yield(id int) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if sub := h.subs[id]; sub != nil {
+		sub.yields = true
+	}
+}
+
+// onlyYielding reports whether the hub has subscribers and every one yields
+// the camera (hubSubscriber.yields).
+func (h *deviceHub) onlyYielding() bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, sub := range h.subs {
+		if !sub.yields {
+			return false
+		}
+	}
+	return len(h.subs) > 0
+}
+
 // wasRestarted reports whether this hub's producer was torn down by an
-// episode-capture takeover. Subscribers that observe their channel closed
-// check it to distinguish "the stream is being restarted at the campaign's
-// parameters, reattach" from "the producer stopped, give up".
+// episode-capture takeover, or for a viewer's parameters. Subscribers that
+// observe their channel closed check it to distinguish "the stream is being
+// restarted at new parameters, reattach" from "the producer stopped, give up".
 func (h *deviceHub) wasRestarted() bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -1666,6 +1694,18 @@ func (s *VideoService) getOrCreateHub(ctx context.Context, path string, req *age
 			// instead of being locked out of its own camera.
 			if !requestsDeviceDefault(req) &&
 				(h.width != req.GetWidth() || h.height != req.GetHeight() || h.framerate != req.GetFramerate()) {
+				// A camera only yielding subscribers hold, such as the camera
+				// grid decoder that opened it at defaults, is restarted for
+				// the caller. A campaign takes over a defaulted hub in
+				// joinHubForCapture instead, which notes the restart.
+				if origin == hubHolderStreamClient && h.onlyYielding() {
+					s.mu.Unlock()
+					taken, takenID, takenCh, retry, takeErr := s.takeOverYieldingHub(ctx, path, req, origin)
+					if retry {
+						continue
+					}
+					return taken, takenID, takenCh, takeErr
+				}
 				s.mu.Unlock()
 				s.logger.Debug("stream parameter mismatch", zap.String("device", path),
 					zap.Uint32("existing_w", h.width), zap.Uint32("existing_h", h.height),
@@ -1762,6 +1802,19 @@ func (s *VideoService) getOrCreateHub(ctx context.Context, path string, req *age
 // compare the returned parameters against what they asked for and report it.
 func (s *VideoService) joinHub(ctx context.Context, key string, req *agentpb.StreamVideoRequest) (*deviceHub, int, chan *videoFrame, error) {
 	hub, id, ch, _, _, _, err := s.joinHubReportingParams(ctx, key, req)
+	return hub, id, ch, err
+}
+
+// joinHubYielding is joinHub for a consumer that watches whatever the camera
+// does and yields it (hubSubscriber.yields): a viewer that asserts stream
+// parameters restarts a camera only such consumers hold rather than being
+// refused, and the consumer reattaches when it sees wasRestarted. req must
+// assert no parameters.
+func (s *VideoService) joinHubYielding(ctx context.Context, key string, req *agentpb.StreamVideoRequest) (*deviceHub, int, chan *videoFrame, error) {
+	hub, id, ch, err := s.joinHub(ctx, key, req)
+	if err == nil {
+		hub.yield(id)
+	}
 	return hub, id, ch, err
 }
 
@@ -1900,7 +1953,36 @@ func (s *VideoService) takeOverDefaultedHub(ctx context.Context, key string, req
 			describeStreamParams(w, hgt, fps),
 			describeStreamParams(req.GetWidth(), req.GetHeight(), req.GetFramerate()))
 	}
+	h, id, ch, err = s.restartHubLocked(ctx, key, req, old, hubHolderEpisodeCapture)
+	return h, id, ch, false, err
+}
 
+// takeOverYieldingHub gives a consumer that asserts stream parameters a camera
+// that only yielding subscribers hold (hubSubscriber.yields), such as the
+// camera grid decoder, by restarting it at its parameters as a campaign takes
+// over a defaulted hub. The yielding subscribers reattach to the restarted
+// producer. Returns retry=true (and no hub) when the observed hub is gone, no
+// longer conflicts, or is no longer held only by yielding subscribers, in which
+// case the caller should retry getOrCreateHub.
+func (s *VideoService) takeOverYieldingHub(ctx context.Context, key string, req *agentpb.StreamVideoRequest, holder string) (h *deviceHub, id int, ch chan *videoFrame, retry bool, err error) {
+	s.mu.Lock()
+	old, exists := s.hubs[key]
+	if !exists || old.ctx.Err() != nil || !old.onlyYielding() ||
+		old.width == req.GetWidth() && old.height == req.GetHeight() && old.framerate == req.GetFramerate() {
+		s.mu.Unlock()
+		return nil, 0, nil, true, nil
+	}
+	h, id, ch, err = s.restartHubLocked(ctx, key, req, old, holder)
+	if errors.Is(err, errCameraReleaseTimeout) {
+		err = status.Error(codes.Unavailable, err.Error())
+	}
+	return h, id, ch, false, err
+}
+
+// restartHubLocked replaces old, the hub for key, with one running at req's
+// parameters, subscribed to by holder, which asserts them. The caller holds
+// s.mu, which this releases.
+func (s *VideoService) restartHubLocked(ctx context.Context, key string, req *agentpb.StreamVideoRequest, old *deviceHub, holder string) (h *deviceHub, id int, ch chan *videoFrame, err error) {
 	hctx, cancel := context.WithCancel(s.ctx)
 	h = &deviceHub{
 		subs:      make(map[int]*hubSubscriber),
@@ -1913,7 +1995,7 @@ func (s *VideoService) takeOverDefaultedHub(ctx context.Context, key string, req
 		framerate: req.GetFramerate(),
 		sampleSeq: s.sampleSeqLocked(key),
 	}
-	id, ch, _ = h.subscribeAs(hubHolderEpisodeCapture)
+	id, ch, _ = h.subscribeAsKind(holder, req.GetCodec() == agentpb.VideoCodec_VIDEO_CODEC_RAW)
 	s.hubs[key] = h
 	old.mu.Lock()
 	old.restarted = true
@@ -1921,8 +2003,8 @@ func (s *VideoService) takeOverDefaultedHub(ctx context.Context, key string, req
 	old.cancel()
 	s.mu.Unlock()
 
-	s.logger.Info("episode capture restarting camera producer at campaign parameters",
-		zap.String("device", key),
+	s.logger.Info("restarting camera producer at explicitly requested parameters",
+		zap.String("device", key), zap.String("for", holder),
 		zap.Uint32("width", req.GetWidth()), zap.Uint32("height", req.GetHeight()),
 		zap.Uint32("framerate", req.GetFramerate()))
 
@@ -1962,12 +2044,12 @@ func (s *VideoService) takeOverDefaultedHub(ctx context.Context, key string, req
 	case <-ctx.Done():
 		waitCancel()
 		abort()
-		return nil, 0, nil, false, ctx.Err()
+		return nil, 0, nil, ctx.Err()
 	case <-waitCtx.Done():
 		if ctx.Err() != nil {
 			waitCancel()
 			abort()
-			return nil, 0, nil, false, ctx.Err()
+			return nil, 0, nil, ctx.Err()
 		}
 		// The old producer still holds the device. Starting the replacement now
 		// would bind nothing (EBUSY on VIDIOC_S_FMT) and take the camera away
@@ -1980,14 +2062,14 @@ func (s *VideoService) takeOverDefaultedHub(ctx context.Context, key string, req
 		abort()
 		s.logger.Warn("abandoning capture takeover: camera did not release in time",
 			zap.String("device", key), zap.Duration("waited", hubTeardownTimeout))
-		return nil, 0, nil, false, fmt.Errorf(
+		return nil, 0, nil, fmt.Errorf(
 			"%w: %s was still held by the previous producer after %s; refusing to start a replacement that cannot bind the device",
 			errCameraReleaseTimeout, key, hubTeardownTimeout)
 	}
 	waitCancel()
 
 	s.startProducer(hctx, h, key, req)
-	return h, id, ch, false, nil
+	return h, id, ch, nil
 }
 
 // sampleSeqLocked returns the sample counter for a device key, creating it on

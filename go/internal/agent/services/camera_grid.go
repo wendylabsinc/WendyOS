@@ -33,7 +33,9 @@ package services
 // (video_raw_tap.go), as a raw StreamVideo subscriber gets them; a SensorLink
 // camera's are the JPEG frames of the in-process feed its hub encodes
 // (sensorlink_camera_feed.go). Joining the hub asserts no stream parameters,
-// so it never takes the camera from a viewer, a recording or an app.
+// so it never takes the camera from a viewer, a recording or an app, and a
+// viewer that asks for parameters gets a camera only the decoder holds: the
+// camera restarts at them and the decoder follows (joinHubYielding).
 //
 // The streams are live only (Manager.PublishLive). What an episode holds must
 // not depend on whether someone was watching, and a 256x192 grid at 25 Hz is
@@ -594,7 +596,8 @@ type rawCaptureFrame struct {
 
 // rawFrameSubscription is one raw subscriber on a camera's hub, as a raw
 // StreamVideo client is. It asserts no stream parameters, so it joins
-// whatever the camera is doing and never takes it from anyone.
+// whatever the camera is doing and never takes it from anyone, and it yields
+// the camera to a consumer that asserts some (joinHubYielding).
 type rawFrameSubscription struct {
 	video  *VideoService
 	key    string
@@ -625,7 +628,7 @@ func (s *VideoService) subscribeRawFrames(ctx context.Context, sourceID string) 
 }
 
 func (r *rawFrameSubscription) join(ctx context.Context) error {
-	hub, id, frames, err := r.video.joinHub(ctx, r.key, &agentpb.StreamVideoRequest{DeviceId: r.devID, Codec: agentpb.VideoCodec_VIDEO_CODEC_RAW})
+	hub, id, frames, err := r.video.joinHubYielding(ctx, r.key, &agentpb.StreamVideoRequest{DeviceId: r.devID, Codec: agentpb.VideoCodec_VIDEO_CODEC_RAW})
 	if err != nil {
 		return err
 	}

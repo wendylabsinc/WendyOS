@@ -285,6 +285,53 @@ func TestCameraGridJoinsTheCameraItsViewersHold(t *testing.T) {
 	}
 }
 
+// A viewer that asks for stream parameters gets a camera the decoder alone
+// opened at defaults: the camera restarts at the viewer's parameters, held by
+// the viewer, and the decoder follows it. A camera a parameter-less viewer
+// shares with the decoder is not taken from that viewer.
+func TestCameraGridYieldsTheCameraToAViewerWithParameters(t *testing.T) {
+	rig := newGridRig(t, "/dev/video4")
+	viewer := rig.subscribe(t, live.Selection{StreamIDs: []string{thermalGridID}})
+	defaulted := rig.rawHub(t, 0)
+	ctx := context.Background()
+	hub, id, _, err := rig.video.getOrCreateHub(ctx, "/dev/video4", &agentpb.StreamVideoRequest{DeviceId: 4, Width: 512, Height: 484, Framerate: 25}, hubHolderStreamClient)
+	if err != nil {
+		t.Fatalf("a viewer with parameters was refused the decoder's camera: %v", err)
+	}
+	if hub == defaulted || !defaulted.wasRestarted() || rig.fp.count() != 2 {
+		t.Fatalf("the camera was not restarted for the viewer: %d producers", rig.fp.count())
+	}
+	if req := rig.fp.request(1); req.GetWidth() != 512 || req.GetHeight() != 484 || req.GetFramerate() != 25 {
+		t.Fatalf("restarted with %v", req)
+	}
+	if holder, held := hub.heldExplicitly(); !held || holder != hubHolderStreamClient {
+		t.Fatalf("held by %q (%v), want the viewer", holder, held)
+	}
+	eventually(t, "the decoder follows the camera", hub.wantRaw)
+	hub.rawOffered(tc001Format, tc001PictureTop)
+	hub.publishRaw(stackedThermalFrame(uniform(30)), 9, tc001Format)
+	if r := nextRecord(t, viewer); r.StreamID != thermalGridID || r.TimestampUnixNanos != 9 {
+		t.Fatalf("grid record after the restart %+v", r)
+	}
+
+	// With the viewer gone the decoder holds the camera alone, at the viewer's
+	// parameters. A parameter-less viewer joins it, and from then on a viewer
+	// that asks for other parameters is refused, as it would be without the
+	// decoder.
+	hub.unsubscribe(id)
+	bare, bareID, _, err := rig.video.getOrCreateHub(ctx, "/dev/video4", &agentpb.StreamVideoRequest{DeviceId: 4}, hubHolderStreamClient)
+	if err != nil || bare != hub {
+		t.Fatalf("a parameter-less viewer did not join the camera: %v", err)
+	}
+	defer bare.unsubscribe(bareID)
+	if _, _, _, err := rig.video.getOrCreateHub(ctx, "/dev/video4", &agentpb.StreamVideoRequest{DeviceId: 4, Width: 256, Height: 192, Framerate: 25}, hubHolderStreamClient); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("a camera a parameter-less viewer shares: got %v, want InvalidArgument", err)
+	}
+	if hub.wasRestarted() || rig.fp.count() != 2 {
+		t.Fatalf("the shared camera was restarted: %d producers", rig.fp.count())
+	}
+}
+
 // A viewer of the markers schema gets the hottest and coldest pixel on every
 // frame, and no grid is made for it. A frame the plausibility guard refuses
 // clears the dots.
