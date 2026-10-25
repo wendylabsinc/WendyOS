@@ -261,6 +261,62 @@ func TestRateCapBounds(t *testing.T) {
 	}
 }
 
+func TestPermits(t *testing.T) {
+	for _, tc := range []struct {
+		allow  []string
+		stream string
+		want   bool
+	}{
+		{nil, "apps/a/markers", true},
+		{[]string{"apps/a/markers"}, "apps/a/markers", true},
+		{[]string{"apps/a"}, "apps/a/markers", true},
+		{[]string{"apps/a"}, "apps/a/worker/markers", true},
+		{[]string{"apps/a/"}, "apps/a/markers", true},
+		{[]string{"apps/"}, "apps/b/markers", true},
+		// Prefixes match whole segments: an app id that extends another one is
+		// a different app.
+		{[]string{"apps/a"}, "apps/ab/markers", false},
+		{[]string{"apps/com.example"}, "apps/com.example.other/markers", false},
+		{[]string{"apps/a/markers"}, "apps/a/markers2", false},
+		{[]string{"apps/a/markers"}, "apps/a", false},
+		{[]string{"apps/a", "apps/b"}, "apps/b/markers", true},
+		{[]string{"apps/a", "apps/b"}, "agent/inference", false},
+	} {
+		if got := Permits(tc.allow, tc.stream); got != tc.want {
+			t.Errorf("Permits(%q, %q) = %v, want %v", tc.allow, tc.stream, got, tc.want)
+		}
+	}
+}
+
+// Allow bounds what a subscriber may read whatever it selects: an empty
+// selection reads only allowed streams, and selected ids outside it get
+// nothing.
+func TestSelectionAllow(t *testing.T) {
+	h := NewHub(DefaultLimits)
+	scoped, err := h.Subscribe(Selection{Allow: []string{"apps/a"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(scoped.Close)
+	narrowed, err := h.Subscribe(Selection{StreamIDs: []string{"apps/a/one", "apps/b/one"}, Allow: []string{"apps/a"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(narrowed.Close)
+	h.Offer(record("apps/b/one", 1, 1))
+	h.Offer(record("apps/ab/one", 2, 1))
+	h.Offer(record("apps/a/two", 3, 1))
+	h.Offer(record("apps/a/one", 4, 1))
+	if a, b := next(t, scoped), next(t, scoped); a.Record.StreamID != "apps/a/two" || b.Record.StreamID != "apps/a/one" {
+		t.Fatalf("allowed streams: %s then %s", a.Record.StreamID, b.Record.StreamID)
+	}
+	requireEmpty(t, scoped)
+	if d := next(t, narrowed); d.Record.StreamID != "apps/a/one" {
+		t.Fatalf("selection outside allow delivered %s", d.Record.StreamID)
+	}
+	requireEmpty(t, narrowed)
+}
+
 func TestSubscriberCap(t *testing.T) {
 	h := NewHub(Limits{MaxSubscribers: 2})
 	a := subscribe(t, h)

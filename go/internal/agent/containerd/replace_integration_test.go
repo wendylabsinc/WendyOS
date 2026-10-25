@@ -17,6 +17,7 @@ import (
 	"github.com/containerd/containerd/v2/pkg/cio"
 	"github.com/containerd/containerd/v2/pkg/oci"
 
+	"github.com/wendylabsinc/wendy/go/internal/agent/services"
 	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 )
@@ -122,7 +123,7 @@ type orderedSystemAPIProvider struct {
 	dir string
 }
 
-func (p *orderedSystemAPIProvider) Ensure(appID, serviceName string, _ []string) (string, error) {
+func (p *orderedSystemAPIProvider) Ensure(appID, serviceName string, _ services.SystemAPIGrant) (string, error) {
 	p.log.calls = append(p.log.calls, "system-api ensure")
 	listenSocket(p.t, p.dir, "system.sock")
 	return p.dir, nil

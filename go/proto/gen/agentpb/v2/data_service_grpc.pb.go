@@ -48,9 +48,11 @@ const (
 // Transport Layer Security server, alongside the provisioning, WiFi, container
 // and update services. It is not an application programming interface. An app
 // reaches the agent through a per-app private unix socket, which serves the
-// app-facing wendy.agent.apps.v1 package and nothing else. The one exception is
-// the local admin socket that the `admin` entitlement mounts: it carries full
-// agent authority, this service included.
+// app-facing wendy.agent.apps.v1 package and nothing else. There are two
+// exceptions. The local admin socket that the `admin` entitlement mounts
+// carries full agent authority, this service included. And an app holding the
+// `data-read` entitlement can call StreamData, and no other method, on its
+// private System API socket, limited to the streams its allowlist admits.
 //
 // The four Campaign methods in particular are command-line-facing: they are
 // what `wendy data campaign deploy`, `wendy data campaign list`, `wendy data
@@ -285,9 +287,11 @@ func (c *dataServiceClient) CampaignTrigger(ctx context.Context, in *DataCampaig
 // Transport Layer Security server, alongside the provisioning, WiFi, container
 // and update services. It is not an application programming interface. An app
 // reaches the agent through a per-app private unix socket, which serves the
-// app-facing wendy.agent.apps.v1 package and nothing else. The one exception is
-// the local admin socket that the `admin` entitlement mounts: it carries full
-// agent authority, this service included.
+// app-facing wendy.agent.apps.v1 package and nothing else. There are two
+// exceptions. The local admin socket that the `admin` entitlement mounts
+// carries full agent authority, this service included. And an app holding the
+// `data-read` entitlement can call StreamData, and no other method, on its
+// private System API socket, limited to the streams its allowlist admits.
 //
 // The four Campaign methods in particular are command-line-facing: they are
 // what `wendy data campaign deploy`, `wendy data campaign list`, `wendy data

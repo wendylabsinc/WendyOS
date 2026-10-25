@@ -154,7 +154,7 @@ func ApplyEntitlements(spec *Spec, cfg *appconfig.AppConfig, opts ApplyOptions) 
 				didSetDeviceCapabilities = true
 				SetDeviceCapabilities(spec)
 			}
-		case appconfig.EntitlementNotifications:
+		case appconfig.EntitlementNotifications, appconfig.EntitlementDataRead:
 			applySystemAPI(spec, opts.SystemAPISocketDir)
 		case appconfig.EntitlementEpisodeWrite:
 			applyDataSocket(spec, opts.DataSocketDir)
@@ -172,7 +172,7 @@ func ApplyEntitlements(spec *Spec, cfg *appconfig.AppConfig, opts ApplyOptions) 
 
 // ApplyHostSockets mounts the host sockets the agent prepares for each
 // container, for the entitlements that grant them: the D-Bus proxy
-// (bluetooth), the System API (notifications) and the data socket
+// (bluetooth), the System API (notifications, data-read) and the data socket
 // (episode-write). It completes a spec that ApplyEntitlements built with those
 // directories left empty, so a replace can build and validate the spec before
 // it removes the old container and prepares the new container's sockets
@@ -182,7 +182,7 @@ func ApplyHostSockets(spec *Spec, cfg *appconfig.AppConfig, opts ApplyOptions) {
 		switch ent.Type {
 		case appconfig.EntitlementBluetooth:
 			mountDBusProxy(spec, opts.DBusProxySocketDir)
-		case appconfig.EntitlementNotifications:
+		case appconfig.EntitlementNotifications, appconfig.EntitlementDataRead:
 			applySystemAPI(spec, opts.SystemAPISocketDir)
 		case appconfig.EntitlementEpisodeWrite:
 			applyDataSocket(spec, opts.DataSocketDir)
@@ -749,12 +749,17 @@ func applyDisplay(spec *Spec) {
 
 // applySystemAPI mounts the app's stable, private System API directory. The
 // directory is mounted rather than the socket inode so Agent socket recreation
-// is transparent to an already-running container.
+// is transparent to an already-running container. Every System API entitlement
+// (notifications, data-read) grants the same one socket, so a second one mounts
+// nothing more.
 func applySystemAPI(spec *Spec, hostDirectory string) {
 	if hostDirectory == "" {
 		return
 	}
 	const containerDirectory = "/run/wendy/system"
+	if slices.ContainsFunc(spec.Mounts, func(m Mount) bool { return m.Destination == containerDirectory }) {
+		return
+	}
 	const containerSocket = containerDirectory + "/system.sock"
 	socketPath := filepath.Join(hostDirectory, "system.sock")
 	fi, err := os.Lstat(socketPath)

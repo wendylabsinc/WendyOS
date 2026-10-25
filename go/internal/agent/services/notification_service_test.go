@@ -808,20 +808,20 @@ func TestAppSystemAPISocketManagerSharesPerAppAndIsolatesIdentity(t *testing.T) 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	sender := &recordingNotificationSender{}
-	manager := NewAppSystemAPISocketManager(ctx, zap.NewNop(), sender)
+	manager := NewAppSystemAPISocketManager(ctx, zap.NewNop(), sender, nil)
 
-	appADir, err := manager.Ensure("com.example.a", "api", []string{SystemAPICapabilityNotifications})
+	appADir, err := manager.Ensure("com.example.a", "api", SystemAPIGrant{Capabilities: []string{SystemAPICapabilityNotifications}})
 	if err != nil {
 		t.Fatalf("Ensure(app A/api) error = %v", err)
 	}
-	appAWorkerDir, err := manager.Ensure("com.example.a", "worker", []string{SystemAPICapabilityNotifications})
+	appAWorkerDir, err := manager.Ensure("com.example.a", "worker", SystemAPIGrant{Capabilities: []string{SystemAPICapabilityNotifications}})
 	if err != nil {
 		t.Fatalf("Ensure(app A/worker) error = %v", err)
 	}
 	if appADir != appAWorkerDir {
 		t.Fatalf("multi-service app directories differ: %q != %q", appADir, appAWorkerDir)
 	}
-	appBDir, err := manager.Ensure("com.example.b", "", []string{SystemAPICapabilityNotifications})
+	appBDir, err := manager.Ensure("com.example.b", "", SystemAPIGrant{Capabilities: []string{SystemAPICapabilityNotifications}})
 	if err != nil {
 		t.Fatalf("Ensure(app B) error = %v", err)
 	}
@@ -882,8 +882,8 @@ func TestAppSystemAPISocketManagerRecreatesSocketInStableDirectory(t *testing.T)
 	})
 
 	ctx1, cancel1 := context.WithCancel(context.Background())
-	manager1 := NewAppSystemAPISocketManager(ctx1, zap.NewNop(), &recordingNotificationSender{})
-	directory, err := manager1.Ensure("com.example.restart", "", []string{SystemAPICapabilityNotifications})
+	manager1 := NewAppSystemAPISocketManager(ctx1, zap.NewNop(), &recordingNotificationSender{}, nil)
+	directory, err := manager1.Ensure("com.example.restart", "", SystemAPIGrant{Capabilities: []string{SystemAPICapabilityNotifications}})
 	if err != nil {
 		t.Fatalf("first Ensure() error = %v", err)
 	}
@@ -896,8 +896,8 @@ func TestAppSystemAPISocketManagerRecreatesSocketInStableDirectory(t *testing.T)
 
 	ctx2, cancel2 := context.WithCancel(context.Background())
 	defer cancel2()
-	manager2 := NewAppSystemAPISocketManager(ctx2, zap.NewNop(), &recordingNotificationSender{})
-	restored, err := manager2.Ensure("com.example.restart", "", []string{SystemAPICapabilityNotifications})
+	manager2 := NewAppSystemAPISocketManager(ctx2, zap.NewNop(), &recordingNotificationSender{}, nil)
+	restored, err := manager2.Ensure("com.example.restart", "", SystemAPIGrant{Capabilities: []string{SystemAPICapabilityNotifications}})
 	if err != nil {
 		t.Fatalf("restored Ensure() error = %v", err)
 	}

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"time"
 
@@ -17,16 +18,58 @@ import (
 	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/status"
 
+	"github.com/wendylabsinc/wendy/go/internal/agent/data/live"
 	"github.com/wendylabsinc/wendy/go/internal/agent/localsocket"
 	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
+	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	systempb "github.com/wendylabsinc/wendy/go/proto/gen/systempb"
 )
 
 const (
 	SystemAPICapabilityNotifications = "notifications"
-	SystemAPISocketFilename          = "system.sock"
-	appSystemAPIGroupGID             = 2000
+	// SystemAPICapabilityDataRead serves DataService.StreamData, limited to the
+	// app's data-read allowlist. It reads live records only: no history, no
+	// recorded data, and no other DataService method.
+	SystemAPICapabilityDataRead = "data-read"
+	SystemAPISocketFilename     = "system.sock"
+	appSystemAPIGroupGID        = 2000
 )
+
+// SystemAPIGrant is what one entitled service of an app may use on the app's
+// System API socket.
+type SystemAPIGrant struct {
+	Capabilities []string
+	// DataReadAllowlist narrows the data-read capability to these stream ids
+	// and stream id prefixes; see live.Permits. Empty reads every stream.
+	DataReadAllowlist []string
+}
+
+// SystemAPIGrantFor returns the System API grant that entitlements carry. A
+// grant without capabilities means the service gets no System API socket.
+// Pass only entitlements from the trusted parsed app configuration or from
+// persisted container labels.
+func SystemAPIGrantFor(entitlements []appconfig.Entitlement) SystemAPIGrant {
+	var grant SystemAPIGrant
+	readsAll := false
+	for _, e := range entitlements {
+		switch e.Type {
+		case appconfig.EntitlementNotifications:
+			if !slices.Contains(grant.Capabilities, SystemAPICapabilityNotifications) {
+				grant.Capabilities = append(grant.Capabilities, SystemAPICapabilityNotifications)
+			}
+		case appconfig.EntitlementDataRead:
+			if !slices.Contains(grant.Capabilities, SystemAPICapabilityDataRead) {
+				grant.Capabilities = append(grant.Capabilities, SystemAPICapabilityDataRead)
+			}
+			readsAll = readsAll || len(e.Allowlist) == 0
+			grant.DataReadAllowlist = append(grant.DataReadAllowlist, e.Allowlist...)
+		}
+	}
+	if readsAll {
+		grant.DataReadAllowlist = nil
+	}
+	return grant
+}
 
 // AppSystemAPISocketRootPath is disk-backed so a container's directory bind
 // mount remains valid while the Agent recreates the socket after a restart.
@@ -39,7 +82,9 @@ type appSystemAPIIdentity struct {
 type appSystemAPISocket struct {
 	appID  string
 	server *grpc.Server
-	owners map[string]map[string]struct{}
+	owners map[string]SystemAPIGrant
+	// data serves data-read. Nil when the manager has no live data.
+	data *systemDataService
 }
 
 // AppSystemAPISocketManager owns one private System API gRPC server per app.
@@ -52,19 +97,24 @@ type AppSystemAPISocketManager struct {
 	ctx                context.Context
 	logger             *zap.Logger
 	notificationSender NotificationSender
-	mu                 sync.RWMutex
-	sockets            map[string]*appSystemAPISocket
+	// liveData serves the data-read capability. Nil leaves data-read
+	// unavailable: Ensure refuses a grant that asks for it.
+	liveData *live.Hub
+	mu       sync.RWMutex
+	sockets  map[string]*appSystemAPISocket
 }
 
 func NewAppSystemAPISocketManager(
 	ctx context.Context,
 	logger *zap.Logger,
 	notificationSender NotificationSender,
+	liveData *live.Hub,
 ) *AppSystemAPISocketManager {
 	manager := &AppSystemAPISocketManager{
 		ctx:                ctx,
 		logger:             logger,
 		notificationSender: notificationSender,
+		liveData:           liveData,
 		sockets:            make(map[string]*appSystemAPISocket),
 	}
 	go func() {
@@ -75,9 +125,10 @@ func NewAppSystemAPISocketManager(
 }
 
 // Ensure creates (or reuses) the app's socket and records the entitled service
-// as an owner. The caller must pass only capabilities derived from the trusted
-// parsed app configuration or persisted container labels.
-func (m *AppSystemAPISocketManager) Ensure(appID, serviceName string, capabilities []string) (string, error) {
+// as an owner. The caller must pass only a grant derived from the trusted
+// parsed app configuration or persisted container labels; see
+// SystemAPIGrantFor.
+func (m *AppSystemAPISocketManager) Ensure(appID, serviceName string, grant SystemAPIGrant) (string, error) {
 	if err := appconfig.ValidateAppID(appID); err != nil {
 		return "", fmt.Errorf("invalid app ID: %w", err)
 	}
@@ -86,11 +137,17 @@ func (m *AppSystemAPISocketManager) Ensure(appID, serviceName string, capabiliti
 			return "", fmt.Errorf("invalid service name: %w", err)
 		}
 	}
-	if len(capabilities) == 0 {
+	if len(grant.Capabilities) == 0 {
 		return "", fmt.Errorf("at least one System API capability is required")
 	}
-	for _, capability := range capabilities {
-		if capability != SystemAPICapabilityNotifications {
+	for _, capability := range grant.Capabilities {
+		switch capability {
+		case SystemAPICapabilityNotifications:
+		case SystemAPICapabilityDataRead:
+			if m.liveData == nil {
+				return "", fmt.Errorf("System API capability %q is unavailable: the agent serves no live data", capability)
+			}
+		default:
 			return "", fmt.Errorf("unsupported System API capability %q", capability)
 		}
 	}
@@ -99,13 +156,22 @@ func (m *AppSystemAPISocketManager) Ensure(appID, serviceName string, capabiliti
 	directory := filepath.Join(AppSystemAPISocketRootPath, key)
 	owner := systemAPIOwner(serviceName)
 
+	// Registered before the unlock below, so it runs after it: narrow takes
+	// the lock itself.
+	var rescoped *systemDataService
+	defer func() {
+		if rescoped != nil {
+			rescoped.narrow()
+		}
+	}()
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if socket := m.sockets[key]; socket != nil {
 		if socket.appID != appID {
 			return "", fmt.Errorf("System API identity collision")
 		}
-		socket.owners[owner] = capabilitySet(capabilities)
+		socket.owners[owner] = grant
+		rescoped = socket.data
 		return directory, nil
 	}
 
@@ -142,16 +208,27 @@ func (m *AppSystemAPISocketManager) Ensure(appID, serviceName string, capabiliti
 
 	socket := &appSystemAPISocket{
 		appID:  appID,
-		owners: map[string]map[string]struct{}{owner: capabilitySet(capabilities)},
+		owners: map[string]SystemAPIGrant{owner: grant},
 	}
 	server := grpc.NewServer(
 		grpc.MaxRecvMsgSize(16*1024),
 		grpc.MaxConcurrentStreams(16),
 		grpc.UnaryInterceptor(m.authorize(socket)),
+		// Without a stream interceptor a streaming method would skip the
+		// capability check entirely.
+		grpc.StreamInterceptor(m.authorizeStream(socket)),
 		grpc.KeepaliveParams(keepalive.ServerParameters{MaxConnectionIdle: 2 * time.Minute}),
 	)
 	socket.server = server
 	systempb.RegisterNotificationServiceServer(server, NewSystemNotificationService(appID, m.notificationSender))
+	if m.liveData != nil {
+		socket.data = &systemDataService{hub: m.liveData, scope: func() ([]string, bool) {
+			m.mu.RLock()
+			defer m.mu.RUnlock()
+			return dataReadScope(socket)
+		}}
+		agentpbv2.RegisterDataServiceServer(server, socket.data)
+	}
 	m.sockets[key] = socket
 
 	go func() {
@@ -180,6 +257,10 @@ func (m *AppSystemAPISocketManager) Release(appID, serviceName string) {
 	delete(socket.owners, owner)
 	if len(socket.owners) != 0 {
 		m.mu.Unlock()
+		// The departing service may have widened the app's data-read scope.
+		if socket.data != nil {
+			socket.data.narrow()
+		}
 		return
 	}
 	delete(m.sockets, key)
@@ -261,42 +342,76 @@ func (m *AppSystemAPISocketManager) SweepOrphanedRoots(activeAppIDs []string) {
 
 func (m *AppSystemAPISocketManager) authorize(socket *appSystemAPISocket) grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
-		capability := systemAPICapabilityForMethod(info.FullMethod)
-		if capability == "" {
-			return nil, status.Error(codes.PermissionDenied, "System API method is not authorized")
-		}
-		m.mu.RLock()
-		allowed := socketHasCapability(socket, capability)
-		m.mu.RUnlock()
-		if !allowed {
-			return nil, status.Error(codes.PermissionDenied, "System API capability is not authorized for this app")
+		if err := m.checkCapability(socket, info.FullMethod); err != nil {
+			return nil, err
 		}
 		return handler(ctx, req)
 	}
 }
 
+func (m *AppSystemAPISocketManager) authorizeStream(socket *appSystemAPISocket) grpc.StreamServerInterceptor {
+	return func(srv any, stream grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+		if err := m.checkCapability(socket, info.FullMethod); err != nil {
+			return err
+		}
+		return handler(srv, stream)
+	}
+}
+
+func (m *AppSystemAPISocketManager) checkCapability(socket *appSystemAPISocket, method string) error {
+	capability := systemAPICapabilityForMethod(method)
+	if capability == "" {
+		return status.Error(codes.PermissionDenied, "System API method is not authorized")
+	}
+	m.mu.RLock()
+	allowed := socketHasCapability(socket, capability)
+	m.mu.RUnlock()
+	if !allowed {
+		return status.Error(codes.PermissionDenied, "System API capability is not authorized for this app")
+	}
+	return nil
+}
+
+// systemAPICapabilityForMethod names the capability each System API method
+// needs. A method missing here is refused, which is what keeps the rest of
+// DataService, registered for StreamData alone, off the socket.
 func systemAPICapabilityForMethod(method string) string {
-	if method == systempb.NotificationService_Send_FullMethodName {
+	switch method {
+	case systempb.NotificationService_Send_FullMethodName:
 		return SystemAPICapabilityNotifications
+	case agentpbv2.DataService_StreamData_FullMethodName:
+		return SystemAPICapabilityDataRead
 	}
 	return ""
 }
 
 func socketHasCapability(socket *appSystemAPISocket, capability string) bool {
-	for _, capabilities := range socket.owners {
-		if _, ok := capabilities[capability]; ok {
+	for _, grant := range socket.owners {
+		if slices.Contains(grant.Capabilities, capability) {
 			return true
 		}
 	}
 	return false
 }
 
-func capabilitySet(capabilities []string) map[string]struct{} {
-	result := make(map[string]struct{}, len(capabilities))
-	for _, capability := range capabilities {
-		result[capability] = struct{}{}
+// dataReadScope is the app's data-read allowlist: the union of its entitled
+// services' allowlists, sorted. Those services share one socket and cannot be
+// told apart on it, so one service without an allowlist lets the whole app
+// read every stream. ok is false when no service holds data-read. The caller
+// holds m.mu.
+func dataReadScope(socket *appSystemAPISocket) (allow []string, ok bool) {
+	for _, grant := range socket.owners {
+		if !slices.Contains(grant.Capabilities, SystemAPICapabilityDataRead) {
+			continue
+		}
+		if len(grant.DataReadAllowlist) == 0 {
+			return nil, true
+		}
+		ok = true
+		allow = append(allow, grant.DataReadAllowlist...)
 	}
-	return result
+	slices.Sort(allow)
+	return slices.Compact(allow), ok
 }
 
 func systemAPIOwner(serviceName string) string {

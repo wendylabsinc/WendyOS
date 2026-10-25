@@ -1,0 +1,255 @@
+package services
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"reflect"
+	"testing"
+	"time"
+
+	"github.com/wendylabsinc/wendy/go/internal/agent/data"
+	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
+	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
+	recordingpb "github.com/wendylabsinc/wendy/go/proto/gen/recordingpb"
+	systempb "github.com/wendylabsinc/wendy/go/proto/gen/systempb"
+	"go.uber.org/zap"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
+)
+
+func TestSystemAPIGrantFor(t *testing.T) {
+	notifications := appconfig.Entitlement{Type: appconfig.EntitlementNotifications}
+	readAll := appconfig.Entitlement{Type: appconfig.EntitlementDataRead}
+	readDetector := appconfig.Entitlement{Type: appconfig.EntitlementDataRead, Allowlist: []string{"apps/com.example.detector"}}
+	for _, tc := range []struct {
+		name         string
+		entitlements []appconfig.Entitlement
+		want         SystemAPIGrant
+	}{
+		{"none", []appconfig.Entitlement{{Type: appconfig.EntitlementCamera}}, SystemAPIGrant{}},
+		{"notifications", []appconfig.Entitlement{notifications}, SystemAPIGrant{Capabilities: []string{SystemAPICapabilityNotifications}}},
+		{"data-read for every stream", []appconfig.Entitlement{readAll}, SystemAPIGrant{Capabilities: []string{SystemAPICapabilityDataRead}}},
+		{"data-read with an allowlist", []appconfig.Entitlement{notifications, readDetector}, SystemAPIGrant{Capabilities: []string{SystemAPICapabilityNotifications, SystemAPICapabilityDataRead}, DataReadAllowlist: []string{"apps/com.example.detector"}}},
+		// App-level and service-level entitlements can both appear. One
+		// without an allowlist reads everything, so the narrower one adds
+		// nothing.
+		{"app and service data-read", []appconfig.Entitlement{readDetector, readAll}, SystemAPIGrant{Capabilities: []string{SystemAPICapabilityDataRead}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := SystemAPIGrantFor(tc.entitlements); !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("got %+v, want %+v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestSystemAPIRefusesDataReadWithoutLiveData(t *testing.T) {
+	useSystemAPIRoot(t)
+	manager := NewAppSystemAPISocketManager(t.Context(), zap.NewNop(), &recordingNotificationSender{}, nil)
+	if _, err := manager.Ensure("com.example.viewer", "", SystemAPIGrant{Capabilities: []string{SystemAPICapabilityDataRead}}); err == nil {
+		t.Fatal("data-read granted with no live data to serve")
+	}
+}
+
+// useSystemAPIRoot points the System API sockets at a short temporary
+// directory: unix socket paths are limited to about 100 bytes.
+func useSystemAPIRoot(t *testing.T) {
+	t.Helper()
+	old := AppSystemAPISocketRootPath
+	root, err := os.MkdirTemp("/tmp", "wsd-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	AppSystemAPISocketRootPath = root
+	t.Cleanup(func() {
+		AppSystemAPISocketRootPath = old
+		_ = os.RemoveAll(root)
+	})
+}
+
+// systemDataTest is an agent with live data and a System API socket per app.
+type systemDataTest struct {
+	t       *testing.T
+	capture *data.Manager
+	sockets *AppSystemAPISocketManager
+}
+
+func newSystemDataTest(t *testing.T) *systemDataTest {
+	t.Helper()
+	useSystemAPIRoot(t)
+	capture, err := data.NewManager(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	sockets := NewAppSystemAPISocketManager(ctx, zap.NewNop(), &recordingNotificationSender{}, capture.Live())
+	t.Cleanup(func() { cancel(); sockets.stopAll() })
+	return &systemDataTest{t: t, capture: capture, sockets: sockets}
+}
+
+// app grants appID's service the entitlements and returns a connection to the
+// app's System API socket, as the app's container would dial it.
+func (s *systemDataTest) app(appID, service string, entitlements ...appconfig.Entitlement) *grpc.ClientConn {
+	s.t.Helper()
+	dir, err := s.sockets.Ensure(appID, service, SystemAPIGrantFor(entitlements))
+	if err != nil {
+		s.t.Fatal(err)
+	}
+	conn, err := grpc.NewClient("unix://"+filepath.Join(dir, SystemAPISocketFilename), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		s.t.Fatal(err)
+	}
+	s.t.Cleanup(func() { _ = conn.Close() })
+	return conn
+}
+
+func (s *systemDataTest) record(appID, stream, payload string) {
+	s.t.Helper()
+	if _, err := s.capture.RecordStream(appID, "", stream, liveMarkersStream, &recordingpb.Record{Payload: []byte(payload)}); err != nil {
+		s.t.Fatal(err)
+	}
+}
+
+// streamDataError is the status a StreamData call on conn ends with when it
+// is refused before any record.
+func streamDataError(t *testing.T, conn *grpc.ClientConn, ids ...string) codes.Code {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	stream, err := agentpbv2.NewDataServiceClient(conn).StreamData(ctx, &agentpbv2.StreamDataRequest{StreamIds: ids})
+	if err != nil {
+		return status.Code(err)
+	}
+	_, err = stream.Recv()
+	return status.Code(err)
+}
+
+// An app reads live data on its own System API socket with data-read, and
+// only what its allowlist admits. An app without data-read reads nothing, and
+// data-read reaches no other DataService method.
+func TestSystemAPIDataRead(t *testing.T) {
+	agent := newSystemDataTest(t)
+	viewer := agent.app("com.example.viewer", "", appconfig.Entitlement{Type: appconfig.EntitlementDataRead, Allowlist: []string{"apps/com.example.detector"}})
+	notifier := agent.app("com.example.notifier", "", appconfig.Entitlement{Type: appconfig.EntitlementNotifications})
+
+	scoped := openLiveStream(t, agentpbv2.NewDataServiceClient(viewer))
+	agent.record("com.example.other", "markers", "not allowed")
+	agent.record("com.example.detector2", "markers", "a different app")
+	agent.record("com.example.detector", "markers", "boxes")
+	if r := recvLive(t, scoped); r.GetStreamId() != "apps/com.example.detector/markers" || string(r.GetPayload()) != "boxes" {
+		t.Fatalf("allowlisted record: %v", r)
+	}
+
+	if got := streamDataError(t, viewer, "apps/com.example.other/markers"); got != codes.PermissionDenied {
+		t.Fatalf("stream outside the allowlist: got %v, want PermissionDenied", got)
+	}
+	if got := streamDataError(t, notifier); got != codes.PermissionDenied {
+		t.Fatalf("app without data-read: got %v, want PermissionDenied", got)
+	}
+
+	// data-read is StreamData alone: the rest of DataService, unary or
+	// streaming, stays refused, and so does a capability the app lacks.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	client := agentpbv2.NewDataServiceClient(viewer)
+	if _, err := client.Status(ctx, &agentpbv2.DataStatusRequest{}); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("Status: got %v, want PermissionDenied", err)
+	}
+	export, err := client.ExportRecording(ctx, &agentpbv2.DataRecordingExportRequest{})
+	if err == nil {
+		_, err = export.Recv()
+	}
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("ExportRecording: got %v, want PermissionDenied", err)
+	}
+	if _, err := systempb.NewNotificationServiceClient(viewer).Send(ctx, validSystemNotificationRequest()); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("notifications without the entitlement: got %v, want PermissionDenied", err)
+	}
+}
+
+// The services of one app share its socket and cannot be told apart, so the
+// app reads the union of their allowlists. A stream keeps the scope it was
+// opened with when the scope widens, and ends when it narrows.
+func TestSystemAPIDataReadUnionsServices(t *testing.T) {
+	agent := newSystemDataTest(t)
+	readDetector := appconfig.Entitlement{Type: appconfig.EntitlementDataRead, Allowlist: []string{"apps/com.example.detector"}}
+	api := agent.app("com.example.viewer", "api", readDetector)
+	client := agentpbv2.NewDataServiceClient(api)
+	detectorOnly := openLiveStream(t, client)
+
+	agent.app("com.example.viewer", "worker", appconfig.Entitlement{Type: appconfig.EntitlementDataRead, Allowlist: []string{"apps/com.example.thermal"}})
+	both := openLiveStream(t, client)
+	agent.record("com.example.thermal", "grid", "hot")
+	if r := recvLive(t, both); r.GetStreamId() != "apps/com.example.thermal/grid" {
+		t.Fatalf("union: %v", r)
+	}
+	agent.record("com.example.detector", "markers", "boxes")
+	if r := recvLive(t, detectorOnly); r.GetStreamId() != "apps/com.example.detector/markers" {
+		t.Fatalf("stream opened before the scope widened: %v", r)
+	}
+	if r := recvLive(t, both); r.GetStreamId() != "apps/com.example.detector/markers" {
+		t.Fatalf("union: %v", r)
+	}
+
+	// The worker leaves: what it granted goes with it, for open streams too.
+	agent.sockets.Release("com.example.viewer", "worker")
+	if _, err := both.Recv(); status.Code(err) != codes.Aborted {
+		t.Fatalf("stream opened under the wider scope: got %v, want Aborted", err)
+	}
+	if got := streamDataError(t, api, "apps/com.example.thermal/grid"); got != codes.PermissionDenied {
+		t.Fatalf("after the worker left: got %v, want PermissionDenied", got)
+	}
+	agent.record("com.example.detector", "markers", "more boxes")
+	if r := recvLive(t, detectorOnly); string(r.GetPayload()) != "more boxes" {
+		t.Fatalf("stream within the remaining scope: %v", r)
+	}
+
+	// Withdrawing data-read ends the rest.
+	if _, err := agent.sockets.Ensure("com.example.viewer", "api", SystemAPIGrantFor([]appconfig.Entitlement{{Type: appconfig.EntitlementNotifications}})); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := detectorOnly.Recv(); status.Code(err) != codes.Aborted {
+		t.Fatalf("stream after data-read was withdrawn: got %v, want Aborted", err)
+	}
+	if got := streamDataError(t, api); got != codes.PermissionDenied {
+		t.Fatalf("after data-read was withdrawn: got %v, want PermissionDenied", got)
+	}
+}
+
+func TestCoversScope(t *testing.T) {
+	for _, tc := range []struct {
+		scope, within []string
+		want          bool
+	}{
+		{nil, nil, true},
+		{nil, []string{"apps/a"}, true},
+		{[]string{"apps/a"}, nil, false},
+		{[]string{"apps/a"}, []string{"apps/a"}, true},
+		{[]string{"apps/a"}, []string{"apps/a/markers"}, true},
+		{[]string{"apps/a/markers"}, []string{"apps/a"}, false},
+		{[]string{"apps/a", "apps/b"}, []string{"apps/b", "apps/a/x"}, true},
+		{[]string{"apps/a"}, []string{"apps/a", "apps/ab"}, false},
+	} {
+		if got := covers(tc.scope, tc.within); got != tc.want {
+			t.Errorf("covers(%q, %q) = %v, want %v", tc.scope, tc.within, got, tc.want)
+		}
+	}
+}
+
+// One app cannot take every live data slot on the device.
+func TestSystemAPIDataReadPerAppCap(t *testing.T) {
+	agent := newSystemDataTest(t)
+	conn := agent.app("com.example.viewer", "", appconfig.Entitlement{Type: appconfig.EntitlementDataRead})
+	client := agentpbv2.NewDataServiceClient(conn)
+	for i := 0; i < maxAppDataStreams; i++ {
+		openLiveStream(t, client)
+	}
+	if got := streamDataError(t, conn); got != codes.ResourceExhausted {
+		t.Fatalf("stream %d: got %v, want ResourceExhausted", maxAppDataStreams+1, got)
+	}
+	other := agent.app("com.example.other", "", appconfig.Entitlement{Type: appconfig.EntitlementDataRead})
+	openLiveStream(t, agentpbv2.NewDataServiceClient(other))
+}

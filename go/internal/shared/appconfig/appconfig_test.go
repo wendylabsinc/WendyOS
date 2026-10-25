@@ -2326,6 +2326,51 @@ func TestNotificationsEntitlementDuplicateRejected(t *testing.T) {
 	}
 }
 
+func TestDataReadEntitlementValid(t *testing.T) {
+	for _, allowlist := range [][]string{nil, {"apps/com.example.detector"}, {"apps/com.example.detector/markers", "apps/"}} {
+		cfg := &AppConfig{AppID: "test", Entitlements: []Entitlement{{Type: EntitlementDataRead, Allowlist: allowlist}}}
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("allowlist %q: %v", allowlist, err)
+		}
+	}
+	if warnings := ValidateJSON([]byte(`{"appId":"test","entitlements":[{"type":"data-read","allowlist":["apps/com.example.detector"]}]}`)); len(warnings) != 0 {
+		t.Fatalf("got warnings for data-read entitlement: %v", warnings)
+	}
+	if warnings := ValidateJSON([]byte(`{"appId":"test","entitlements":[{"type":"data-read","streams":{}}]}`)); len(warnings) == 0 {
+		t.Fatal("expected a warning for streams on data-read")
+	}
+}
+
+func TestDataReadEntitlementAllowlistRejected(t *testing.T) {
+	tooMany := make([]string, maxDataReadAllowlistEntries+1)
+	for i := range tooMany {
+		tooMany[i] = "apps/a"
+	}
+	for _, allowlist := range [][]string{
+		{""},
+		{"apps/a b"},
+		{"apps/a,apps/b"},
+		{"apps/a=b"},
+		{"apps/\u00e9"},
+		tooMany,
+		{strings.Repeat("a", maxDataReadAllowlistBytes+1)},
+	} {
+		cfg := &AppConfig{AppID: "test", Entitlements: []Entitlement{{Type: EntitlementDataRead, Allowlist: allowlist}}}
+		if err := cfg.Validate(); err == nil {
+			t.Fatalf("allowlist %q accepted", allowlist)
+		}
+	}
+}
+
+func TestDataReadEntitlementDuplicateRejected(t *testing.T) {
+	cfg := &AppConfig{AppID: "test", Entitlements: []Entitlement{
+		{Type: EntitlementDataRead}, {Type: EntitlementDataRead, Allowlist: []string{"apps/a"}},
+	}}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected error for duplicate data-read entitlement")
+	}
+}
+
 func TestAdminEntitlementValid(t *testing.T) {
 	cfg := &AppConfig{AppID: "test", Entitlements: []Entitlement{{Type: EntitlementAdmin}}}
 	if err := cfg.Validate(); err != nil {
