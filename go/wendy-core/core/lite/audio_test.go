@@ -222,3 +222,14 @@ func TestLiteAudioLifecycle(t *testing.T) {
 		}
 	})
 }
+
+func TestAudioSubscriptionRejectsMalformedFormat(t *testing.T) {
+	for _, ch := range []*sensorlinkpb.SensorDescriptor{nil, {}, testLiteAudioChannel(1)} {
+		if ch != nil && ch.GetAudio() != nil {
+			ch.GetAudio().Channels = 0
+		}
+		if _, err := SubscribeAudio(context.Background(), fakeLiteCamera(), ch); err == nil {
+			t.Fatal("malformed audio format accepted")
+		}
+	}
+}

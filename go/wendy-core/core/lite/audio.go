@@ -67,7 +67,7 @@ func SelectAudio(manifest *sensorlinkpb.SensorManifest, opts AudioOptions) (*sen
 type AudioStream struct {
 	ctx                           context.Context
 	client                        AudioClient
-	channel, SampleRate, Channels uint32
+	channel, sampleRate, channels uint32
 	frames                        chan *AudioChunk
 	stop                          chan struct{}
 	remove                        func()
@@ -82,8 +82,11 @@ func SubscribeAudio(ctx context.Context, client AudioClient, ch *sensorlinkpb.Se
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	if _, err := SelectAudio(&sensorlinkpb.SensorManifest{Sensors: []*sensorlinkpb.SensorDescriptor{ch}}, AudioOptions{IDSet: true, ID: ch.GetChannelId()}); err != nil {
+		return nil, err
+	}
 	a := ch.GetAudio()
-	s := &AudioStream{ctx: ctx, client: client, channel: ch.GetChannelId(), SampleRate: a.GetSampleRate(), Channels: a.GetChannels(), frames: make(chan *AudioChunk, 8), stop: make(chan struct{})}
+	s := &AudioStream{ctx: ctx, client: client, channel: ch.GetChannelId(), sampleRate: a.GetSampleRate(), channels: a.GetChannels(), frames: make(chan *AudioChunk, 8), stop: make(chan struct{})}
 	s.remove = client.AddSensorDataListener(s.deliver)
 	if err := client.SensorLinkSubscribe([]uint32{s.channel}, 3*time.Second); err != nil {
 		s.Close()
@@ -104,10 +107,10 @@ func (s *AudioStream) deliver(d *sensorlinkpb.SensorData) {
 		return
 	}
 	f := s.asm.Add(d)
-	if f == nil || len(f.Payload) == 0 || len(f.Payload)%(2*int(s.Channels)) != 0 {
+	if f == nil || len(f.Payload) == 0 || len(f.Payload)%(2*int(s.channels)) != 0 {
 		return
 	}
-	chunk := &AudioChunk{PcmData: f.Payload, TimestampNs: f.TsUs * 1000, SampleRate: s.SampleRate, Channels: s.Channels}
+	chunk := &AudioChunk{PcmData: f.Payload, TimestampNs: f.TsUs * 1000, SampleRate: s.sampleRate, Channels: s.channels}
 	select {
 	case s.frames <- chunk:
 	default:

@@ -8,7 +8,8 @@ import (
 // LiteLink exchanges serialized WendyCom messages over an established host
 // connection. The host owns serial/USB/BLE access, framing, TLS and deadlines.
 // Send is safe for concurrent calls; Receive has one reader. Close interrupts
-// blocked operations. A nonpositive Receive timeout means no deadline.
+// blocked operations. A nonpositive Receive timeout means no deadline. Send
+// borrows immutable bytes until it returns; Receive transfers owned bytes.
 type LiteLink interface {
 	Handshake() error
 	Send(message []byte) error

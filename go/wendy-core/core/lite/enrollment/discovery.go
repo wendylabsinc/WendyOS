@@ -20,6 +20,9 @@ import (
 // DiscoverTrustForProfile selects authenticated CA roots compatible with the
 // firmware. It publishes the new configuration only after all checks succeed.
 func DiscoverTrustForProfile(ctx context.Context, client platform.LiteHTTPTransport, cfg *litepb.WendyConfEnrollment, endpoint string, profile TrustProfile) error {
+	if client == nil || cfg == nil || profile.Inspector == nil {
+		return fmt.Errorf("host Lite HTTPS transport and certificate inspector are required")
+	}
 	for _, bundle := range []struct {
 		name string
 		data []byte
@@ -176,6 +179,9 @@ func discoveryRootsForProfile(body []byte, contentType string, profile TrustProf
 
 // discoveryCertificates parses a PEM or EST certs-only CMS cacerts body.
 func discoveryCertificates(body []byte, contentType string, inspector platform.LiteCertificateInspector) ([]*platform.LiteCertificate, error) {
+	if inspector == nil {
+		return nil, fmt.Errorf("host Lite certificate inspector is required")
+	}
 	var certs []*platform.LiteCertificate
 	if bytes.HasPrefix(bytes.TrimSpace(body), []byte("-----BEGIN CERTIFICATE-----")) {
 		if err := validateTrustBundle(body, inspector); err != nil {
