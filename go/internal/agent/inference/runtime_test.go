@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -91,6 +92,30 @@ func TestRuntimeDownloadHonorsCancellation(t *testing.T) {
 	err := installUV(ctx, "https://unused.invalid/uv", "unused", "test", filepath.Join(t.TempDir(), "uv"))
 	if err == nil {
 		t.Fatal("cancelled runtime download succeeded")
+	}
+}
+
+// worker.py returns an input's sample unread, with the scored picture's size,
+// under these keys.
+func TestWorkerResultCarriesSampleAndPictureSize(t *testing.T) {
+	sample := Sample{ID: 7, UnixNanos: 11, BootNanos: 13}
+	line, err := json.Marshal(Input{SourceID: "v4l2:/dev/video0", Generation: 1, Sample: &sample})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sent struct {
+		Sample json.RawMessage `json:"sample"`
+	}
+	if err := json.Unmarshal(line, &sent); err != nil {
+		t.Fatal(err)
+	}
+	prediction := `{"type":"prediction","source_id":"v4l2:/dev/video0","generation":1,"detections":[],"width":640,"height":480,"sample":` + string(sent.Sample) + `}`
+	var result Result
+	if err := json.Unmarshal([]byte(prediction), &result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Width != 640 || result.Height != 480 || result.Sample == nil || *result.Sample != sample {
+		t.Fatalf("result = %+v", result)
 	}
 }
 

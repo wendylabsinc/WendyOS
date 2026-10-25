@@ -158,6 +158,7 @@ func (c *cameraSensorSubscription) Next(ctx context.Context) (SensorSample, erro
 				SampleID:         frame.sampleID,
 				BootNanos:        frame.receiptBootNanos,
 				UncertaintyNanos: frame.receiptUncertaintyNanos,
+				UnixNanos:        int64(frame.tsNs),
 				Payload:          frame.data,
 				DecoderInit:      frame.decoderInit,
 				Encoding:         codecEncodingName(frame.codec),

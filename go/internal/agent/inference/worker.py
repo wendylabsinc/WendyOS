@@ -29,6 +29,14 @@ output_lock = threading.Lock()
 FAILURE_WINDOW = 20
 MAX_FAILURES_IN_WINDOW = 10
 
+# How many fed chunks a stream remembers the samples of, at most. It is a
+# bound for a decoder that reports no packet positions, which never lets any
+# go; more than the input queue ever holds at camera chunk sizes.
+MAX_SAMPLE_MARKS = 4096
+# How far frame reordering may move a picture from its packet, in packets.
+# H.264 holds at most 16 pictures back.
+MAX_REORDER = 64
+
 
 def detection_error(exc):
     """A detector failure for one frame, cut to 512 UTF-8 bytes."""
@@ -51,6 +59,11 @@ class StreamBytes(io.RawIOBase):
         self.chunks = deque()
         self.pending = 0
         self.stopped = False
+        # Byte offset of the next chunk from the start of the stream, the
+        # position libav reports for a packet, and (offset, sample) of each
+        # chunk fed, oldest first.
+        self.fed = 0
+        self.marks = deque(maxlen=MAX_SAMPLE_MARKS)
 
     def readable(self):
         return True
@@ -58,14 +71,28 @@ class StreamBytes(io.RawIOBase):
     def seekable(self):
         return False
 
-    def feed(self, payload):
+    def feed(self, payload, sample=None):
         with self.condition:
             if self.stopped or self.pending + len(payload) > 8 << 20:
                 return False
+            self.marks.append((self.fed, sample))
+            self.fed += len(payload)
             self.chunks.append(payload)
             self.pending += len(payload)
             self.condition.notify()
             return True
+
+    def sample_at(self, position):
+        """The sample of the chunk that holds position, a byte offset libav
+        reported for a packet, or None. Packet positions only grow, so the
+        chunks before this one are forgotten."""
+        with self.condition:
+            marks = self.marks
+            while len(marks) > 1 and marks[1][0] <= position:
+                marks.popleft()
+            if marks and marks[0][0] <= position:
+                return marks[0][1]
+            return None
 
     def read(self, size=-1):
         if size == 0:
@@ -86,8 +113,29 @@ class StreamBytes(io.RawIOBase):
         with self.condition:
             self.stopped = True
             self.chunks.clear()
+            self.marks.clear()
             self.pending = 0
             self.condition.notify_all()
+
+
+def decoded_pictures(container, stream):
+    """Decodes container's video, yielding each picture with the sample of the
+    chunk that brought its first byte, or None when that is unknown.
+
+    A packet's pts names the packet, and libav carries pts through decoding,
+    frame reordering included, so a picture's pts says which packet started
+    it. The packet's byte position says which chunk that was."""
+    recent = [None] * MAX_REORDER
+    count = 0
+    for packet in container.demux(video=0):
+        if packet.size:
+            count += 1
+            recent[count % MAX_REORDER] = None if packet.pos is None else stream.sample_at(packet.pos)
+            packet.pts = count
+        for frame in packet.decode():
+            pts = frame.pts
+            known = pts is not None and 0 <= count - pts < MAX_REORDER
+            yield frame, recent[pts % MAX_REORDER] if known else None
 
 
 class Decoder:
@@ -109,11 +157,11 @@ class Decoder:
             # Probe the actual bytes: VP8 producers deliver a WebM container,
             # while H.264 producers deliver Annex B. No frame-rate guessing.
             with av.open(self.stream, mode="r") as container:
-                for frame in container.decode(video=0):
+                for frame, sample in decoded_pictures(container, self.stream):
                     with self.lock:
                         if self.stream.stopped:
                             break
-                        self.latest = (time.monotonic(), frame)
+                        self.latest = (time.monotonic(), frame, sample)
         except Exception as exc:
             if not self.stream.stopped:
                 emit({"type": "source_error", "source_id": self.source_id,
@@ -122,6 +170,7 @@ class Decoder:
             self.stream.stop()
 
     def take(self, now, interval):
+        """The newest decoded picture and the sample it came in, or None."""
         with self.lock:
             if self.stream.stopped or now - self.last_scored < interval:
                 return None
@@ -129,7 +178,7 @@ class Decoder:
             if latest is None or now - latest[0] > 5:
                 return None
             self.last_scored = now
-            return latest[1]
+            return latest[1], latest[2]
 
     def stop(self):
         self.stream.stop()
@@ -333,7 +382,7 @@ def run(config, detector):
                             initialization = b""
                         decoder = Decoder(source_id, generation, encoding, initialization)
                         decoders[source_id] = decoder
-                    if not decoder.stream.feed(payload):
+                    if not decoder.stream.feed(payload, item.get("sample")):
                         # Never splice an encoded stream after losing bytes. The next
                         # sample starts a new decoder and waits for a random-access unit.
                         decoder.stop()
@@ -349,9 +398,10 @@ def run(config, detector):
             with lock:
                 current = list(decoders.values())
             for decoder in current:
-                frame = decoder.take(time.monotonic(), 1 / config["rate"])
-                if frame is None:
+                taken = decoder.take(time.monotonic(), 1 / config["rate"])
+                if taken is None:
                     continue
+                frame, sample = taken
                 try:
                     detections = detector(frame)
                 except Exception as exc:
@@ -370,8 +420,14 @@ def run(config, detector):
                     # A source reset while inference ran invalidates the result.
                     if decoders.get(decoder.source_id) is not decoder or decoder.stream.stopped:
                         continue
-                emit({"type": "prediction", "source_id": decoder.source_id,
-                      "generation": decoder.generation, "detections": detections})
+                # Boxes are in pixels of this picture. Its size and its sample
+                # let the agent place them on the video viewers see.
+                prediction = {"type": "prediction", "source_id": decoder.source_id,
+                              "generation": decoder.generation, "detections": detections,
+                              "width": frame.width, "height": frame.height}
+                if sample is not None:
+                    prediction["sample"] = sample
+                emit(prediction)
             stopped.wait(0.02)
     finally:
         with lock:
