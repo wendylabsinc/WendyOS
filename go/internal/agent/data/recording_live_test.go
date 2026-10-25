@@ -297,6 +297,9 @@ func TestPublishAgentRecordLiveAndRecorded(t *testing.T) {
 	if d.Record.TimestampUnixNanos != sampleUnix {
 		t.Fatalf("live timestamp %d, want the sample's %d", d.Record.TimestampUnixNanos, sampleUnix)
 	}
+	if d.Record.SourceID != "v4l2:/dev/video0" || d.Record.SampleID != 42 {
+		t.Fatalf("live sample %s #%d, want the input's", d.Record.SourceID, d.Record.SampleID)
+	}
 	if _, err = m.Stop(AdHocEpisodeKey); err != nil {
 		t.Fatal(err)
 	}
@@ -431,5 +434,28 @@ func TestAdvertisedAgentStreamCatalogAndLatest(t *testing.T) {
 	}
 	if info.GetStreamId() != "agent/"+stream || info.GetState() != agentpbv2.DataStreamInfo_STATE_GONE {
 		t.Fatalf("after the producer stopped: %v", &info)
+	}
+}
+
+// A live record names the sample its envelope's first input reference names,
+// and a record without one names none.
+func TestLiveRecordNamesItsSample(t *testing.T) {
+	m, err := NewManager(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	sub := liveSubscriber(t, m)
+	inputs := []*recordingpb.SampleRef{{SourceId: "v4l2:/dev/video0", SampleId: 7}, {SourceId: "v4l2:/dev/video1", SampleId: 9}}
+	if _, err := m.RecordStream("test.app", "", "boxes", durableTestStream, &recordingpb.Record{Id: "1", Payload: []byte("x"), Inputs: inputs}); err != nil {
+		t.Fatal(err)
+	}
+	if d := nextLive(t, sub); d.Record.SourceID != "v4l2:/dev/video0" || d.Record.SampleID != 7 {
+		t.Fatalf("durable record names %s #%d", d.Record.SourceID, d.Record.SampleID)
+	}
+	if _, err := m.RecordStream("test.app", "", "text", appconfig.RecordingStream{Mode: "lightweight", MediaType: "text/plain"}, &recordingpb.Record{Payload: []byte("x")}); err != nil {
+		t.Fatal(err)
+	}
+	if d := nextLive(t, sub); d.Record.SourceID != "" || d.Record.SampleID != 0 {
+		t.Fatalf("lightweight record names %s #%d", d.Record.SourceID, d.Record.SampleID)
 	}
 }

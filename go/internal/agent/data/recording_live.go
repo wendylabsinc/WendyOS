@@ -115,14 +115,19 @@ func (m *Manager) UnadvertiseAppStream(app, service, stream string) {
 
 // liveRecord is the live view of a record publish accepted. The payload
 // aliases s, which was cloned from the caller's buffer and never changes
-// afterwards.
+// afterwards. The sample it describes is its first input reference: the
+// camera sample of an inference result, or what an app's envelope names.
 func liveRecord(s *recordingpb.StoredRecord) *live.Record {
-	return &live.Record{
+	r := &live.Record{
 		StreamID:           streamID(s),
 		Schema:             s.StreamDescriptor.GetSchema(),
 		TimestampUnixNanos: liveTimestamp(s),
 		Payload:            s.Record.GetPayload(),
 	}
+	if inputs := s.Record.GetInputs(); len(inputs) > 0 {
+		r.SourceID, r.SampleID = inputs[0].GetSourceId(), inputs[0].GetSampleId()
+	}
+	return r
 }
 
 // liveTimestamp is the time the record's data describes, on CLOCK_REALTIME,

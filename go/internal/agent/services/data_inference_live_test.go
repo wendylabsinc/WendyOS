@@ -99,6 +99,9 @@ func TestAgentInferencePublishesLiveMarkers(t *testing.T) {
 	if record.StreamID != stream || record.Schema != "wendy.data.v1.VideoMarkers" || record.TimestampUnixNanos != frameTime+1 {
 		t.Fatalf("live record: %+v", record)
 	}
+	if record.SourceID != input.SourceID || record.SampleID != 1 {
+		t.Fatalf("live record names sample %s #%d, want the frame's", record.SourceID, record.SampleID)
+	}
 	if len(markers.Markers) != 0 || markers.Camera != markersCamera(input.SourceID) || markers.ValidForNanos != int64(3*time.Second) {
 		t.Fatalf("markers of an empty frame: %v", markers)
 	}

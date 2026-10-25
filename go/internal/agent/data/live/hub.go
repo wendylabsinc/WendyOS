@@ -43,6 +43,11 @@ type Record struct {
 	// CLOCK_REALTIME: the clock of VideoFrame.timestamp_ns.
 	TimestampUnixNanos int64
 	Payload            []byte
+	// SourceID and SampleID name the sensor sample the record describes, when
+	// its publisher names one, for example "v4l2:/dev/video0" and the camera
+	// sample's id. Empty otherwise.
+	SourceID string
+	SampleID uint64
 }
 
 // Delivery is one record handed to one subscriber.
