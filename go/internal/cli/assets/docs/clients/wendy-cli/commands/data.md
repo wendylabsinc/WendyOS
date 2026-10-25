@@ -696,6 +696,7 @@ line's selection for one request, for example `/live?prefix=_streams/`. Companio
 web reads it with `VITE_WENDY_DATA_LIVE_URL=http://127.0.0.1:8090/live`.
 
 The proxy has no authentication of its own, so it listens only on a loopback
-address, answers only requests addressed to one, and allows only pages served from
-this computer. Each browser connection is one subscription on the device, which
-serves at most 32 at a time.
+address, answers only requests addressed to one, and refuses requests that a browser
+marks as coming from a page of another site, by their `Origin` or `Sec-Fetch-Site`
+header. Only a page served from this computer can read the stream. Each browser
+connection is one subscription on the device, which serves at most 32 at a time.
