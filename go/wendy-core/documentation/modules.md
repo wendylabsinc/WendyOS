@@ -9,7 +9,8 @@ Wendy Core is one strict-SemVer release unit with selectable modules and an expl
 | `core/` | Direct Go HelloWorld implementation |
 | `core/runtime/` | Shared-runtime responsibility placeholder |
 | `core/identity/` | Shared sign-in, refresh, session/context and organization protocols |
-| `core/devices/` | Proposed device domain, no APIs |
+| `core/devices/` | Shared connection and device-identity policy |
+| `core/enrollment/` | Shared enrollment, Cloud removal and reset-proof policy |
 | `core/applications/` | Proposed application-management domain, no APIs |
 | `core/events/` | Proposed event domain, no APIs |
 | `platform/` | Platform-family/variant responsibility placeholders |

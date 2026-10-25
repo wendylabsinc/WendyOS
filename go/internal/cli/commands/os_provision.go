@@ -11,7 +11,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/wendylabsinc/wendy/go/internal/agent/timesync"
 	"github.com/wendylabsinc/wendy/go/internal/cli/clouddefaults"
 	"github.com/wendylabsinc/wendy/go/internal/cli/cloudenroll"
@@ -158,7 +157,10 @@ func preEnrollDeviceACME(ctx context.Context, auth *config.AuthConfig, deviceNam
 	if auth.CloudGRPC == "" {
 		return nil, fmt.Errorf("session has no Cloud gRPC endpoint; re-run 'wendy auth login'")
 	}
-	deviceID := uuid.NewString()
+	deviceID, err := cloudenroll.NewDeviceID(ctx)
+	if err != nil {
+		return nil, err
+	}
 	cfg, err := cloudenroll.EnrollmentConfig(auth, deviceID, "")
 	if err != nil {
 		return nil, err

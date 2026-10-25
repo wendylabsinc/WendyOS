@@ -5,13 +5,9 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/google/uuid"
 	"github.com/wendylabsinc/wendy/go/internal/cli/cloudenroll"
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
-	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 func runOIDCEnrollDevice(ctx context.Context, conn *grpcclient.AgentConnection, auth *config.AuthConfig, name string, orgOverride int32, directoryURL string) error {
@@ -30,7 +26,10 @@ func runOIDCEnrollDevice(ctx context.Context, conn *grpcclient.AgentConnection, 
 	// while the name is a renameable, organization-unique discovery key, so
 	// deriving one from the other would make a relabelling rewrite an identity
 	// that pki-core has already stamped into certificates.
-	deviceID := uuid.NewString()
+	deviceID, err := cloudenroll.NewDeviceID(ctx)
+	if err != nil {
+		return err
+	}
 	cfg, err := cloudenroll.EnrollmentConfig(auth, deviceID, directoryURL)
 	if err != nil {
 		return err
@@ -42,7 +41,6 @@ func runOIDCEnrollDevice(ctx context.Context, conn *grpcclient.AgentConnection, 
 	if err := cloudenroll.CheckAgentEnrollment(ctx, conn.Conn); err != nil {
 		return err
 	}
-	agent := agentpbv2.NewWendyProvisioningServiceClient(conn.Conn)
 	hw, err := cloudenroll.ReadHardware(ctx, conn.Conn)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: %v; enrolling without hardware details.\n", err)
@@ -64,20 +62,10 @@ func runOIDCEnrollDevice(ctx context.Context, conn *grpcclient.AgentConnection, 
 		return err
 	}
 
-	resp, err := agent.StartACMEProvisioning(ctx, &agentpbv2.StartACMEProvisioningRequest{
-		CloudHost: auth.CloudGRPC, DirectoryUrl: cfg.DirectoryURL, DeviceId: cfg.DeviceID,
-		EabKeyId: cfg.EABKeyID, EabHmacKey: cfg.EABHMACKey,
-	})
-	if status.Code(err) == codes.Unimplemented {
-		return fmt.Errorf("Cloud registered asset %s, but this agent does not support direct PKI enrollment; update the agent (the device name is now reserved in Cloud)", assetID)
-	}
+	principal, err := cloudenroll.StartACMEProvisioning(ctx, conn.Conn, auth.CloudGRPC, cfg, assetID)
 	if err != nil {
-		return fmt.Errorf("Cloud registered asset %s, but device PKI enrollment failed (the device name is now reserved in Cloud): %w", assetID, err)
+		return err
 	}
-	expected, _ := cfg.PrincipalURI()
-	if resp.GetPrincipalUri() != expected {
-		return fmt.Errorf("agent returned an unexpected enrollment identity")
-	}
-	fmt.Printf("Device enrolled (name: %s, identity: %s, asset: %s).\n", name, resp.GetPrincipalUri(), assetID)
+	fmt.Printf("Device enrolled (name: %s, identity: %s, asset: %s).\n", name, principal, assetID)
 	return nil
 }

@@ -279,3 +279,11 @@ func TestRevocationEvidenceAndSignedCompletion(t *testing.T) {
 		})
 	}
 }
+
+func TestSDKProofVerifierRetainsOperatorAlgorithmDiagnostic(t *testing.T) {
+	leaf, _, _, _ := fixture(t, false)
+	err := (receiptVerifier{}).VerifyMLDSA(context.Background(), leaf.Raw, []byte("request"), []byte("signature"), "ML-DSA-65", true)
+	if err == nil || err.Error() != "operator ML-DSA key must match the signature algorithm" {
+		t.Fatalf("operator diagnostic changed: %v", err)
+	}
+}

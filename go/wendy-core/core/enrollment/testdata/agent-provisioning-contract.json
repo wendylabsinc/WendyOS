@@ -1,0 +1,165 @@
+{
+  "description": "WendyProvisioningService (v2) answers the wendy CLI relies on during `wendy device enroll`. Steps run in order against ONE fresh agent; ACME issuance is stubbed and calls have no authenticated peer. Enrollment expectations are shared by Go and Swift. Reset capabilities and refusals use explicit agentExpectations because Go supports authenticated local and Cloud reset while Swift keeps both disabled. cliPreflight is what the CLI's IsProvisioned preflight concludes from that response ('ok' or its error).",
+  "steps": [
+    {
+      "name": "unprovisioned: status advertises direct PKI enrollment",
+      "method": "IsProvisioned",
+      "request": {},
+      "code": "OK",
+      "response": {"notProvisioned": {"acmeEnrollmentSupported": true}},
+      "cliPreflight": "ok"
+    },
+    {
+      "name": "unprovisioned: reset refused",
+      "method": "Unprovision",
+      "request": {"expectedPrincipalUri": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/sim"},
+      "code": "FAILED_PRECONDITION",
+      "message": "agent is not provisioned"
+    },
+    {
+      "name": "enroll: missing Cloud host refused before PKI is contacted",
+      "method": "StartACMEProvisioning",
+      "request": {"directoryUrl": "https://acme.dev.pki.wendy.sh/11111111-1111-4111-8111-111111111111/acme/directory", "deviceId": "sim", "eabKeyId": "eab-id", "eabHmacKey": "abababababababababababababababababababababababababababababababab"},
+      "code": "INVALID_ARGUMENT",
+      "message": "cloud host is required"
+    },
+    {
+      "name": "enroll: non-hex EAB key refused",
+      "method": "StartACMEProvisioning",
+      "request": {"cloudHost": "api.dev.wendy.sh:443", "directoryUrl": "https://acme.dev.pki.wendy.sh/11111111-1111-4111-8111-111111111111/acme/directory", "deviceId": "sim", "eabKeyId": "eab-id", "eabHmacKey": "not-hex"},
+      "code": "INVALID_ARGUMENT",
+      "message": "invalid ACME enrollment config: EAB HMAC key must be hex-encoded"
+    },
+    {
+      "name": "enroll: plaintext directory refused",
+      "method": "StartACMEProvisioning",
+      "request": {"cloudHost": "api.dev.wendy.sh:443", "directoryUrl": "http://acme.dev.pki.wendy.sh/11111111-1111-4111-8111-111111111111/acme/directory", "deviceId": "sim", "eabKeyId": "eab-id", "eabHmacKey": "abababababababababababababababababababababababababababababababab"},
+      "code": "INVALID_ARGUMENT",
+      "message": "invalid ACME enrollment config: ACME directory must use HTTPS (HTTP is allowed only for loopback development servers)"
+    },
+    {
+      "name": "enroll: issues the expected device principal",
+      "method": "StartACMEProvisioning",
+      "request": {"cloudHost": "api.dev.wendy.sh:443", "directoryUrl": "https://acme.dev.pki.wendy.sh/11111111-1111-4111-8111-111111111111/acme/directory", "deviceId": "sim", "eabKeyId": "eab-id", "eabHmacKey": "abababababababababababababababababababababababababababababababab"},
+      "code": "OK",
+      "response": {"principalUri": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/sim"}
+    },
+    {
+      "name": "provisioned: status reports the PKI identity",
+      "method": "IsProvisioned",
+      "request": {},
+      "code": "OK",
+      "response": {"provisioned": {"cloudHost": "api.dev.wendy.sh:443", "principalUri": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/sim"}},
+      "agentExpectations": {
+        "go": {
+          "code": "OK",
+          "response": {"provisioned": {"cloudHost": "api.dev.wendy.sh:443", "principalUri": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/sim", "localResetSupported": true}}
+        },
+        "swift": {
+          "code": "OK",
+          "response": {"provisioned": {"cloudHost": "api.dev.wendy.sh:443", "principalUri": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/sim"}}
+        }
+      },
+      "cliPreflight": "device is already enrolled; no new enrollment was started"
+    },
+    {
+      "name": "provisioned: second enrollment refused",
+      "method": "StartACMEProvisioning",
+      "request": {"cloudHost": "api.dev.wendy.sh:443", "directoryUrl": "https://acme.dev.pki.wendy.sh/11111111-1111-4111-8111-111111111111/acme/directory", "deviceId": "sim", "eabKeyId": "eab-id", "eabHmacKey": "abababababababababababababababababababababababababababababababab"},
+      "code": "FAILED_PRECONDITION",
+      "message": "agent is already provisioned"
+    },
+    {
+      "name": "PKI reset with the expected principal refused, keys retained",
+      "method": "Unprovision",
+      "request": {"expectedPrincipalUri": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/sim"},
+      "agentExpectations": {
+        "go": {
+          "code": "UNAUTHENTICATED",
+          "message": "missing peer credentials"
+        },
+        "swift": {
+          "code": "FAILED_PRECONDITION",
+          "message": "direct PKI reset is disabled pending Cloud-authenticated authorization and durable device preparation; keys retained"
+        }
+      }
+    },
+    {
+      "name": "PKI reset with a wrong principal refused",
+      "method": "Unprovision",
+      "request": {"expectedPrincipalUri": "spiffe://wendy.sh/tenant/22222222-2222-4222-8222-222222222222/device/other"},
+      "agentExpectations": {
+        "go": {
+          "code": "UNAUTHENTICATED",
+          "message": "missing peer credentials"
+        },
+        "swift": {
+          "code": "FAILED_PRECONDITION",
+          "message": "direct PKI reset is disabled pending Cloud-authenticated authorization and durable device preparation; keys retained"
+        }
+      }
+    },
+    {
+      "name": "local-only PKI reset without an operator refused",
+      "method": "Unprovision",
+      "request": {"expectedPrincipalUri": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/sim", "localOnly": true},
+      "agentExpectations": {
+        "go": {
+          "code": "UNAUTHENTICATED",
+          "message": "missing peer credentials"
+        },
+        "swift": {
+          "code": "FAILED_PRECONDITION",
+          "message": "direct PKI reset is disabled pending Cloud-authenticated authorization and durable device preparation; keys retained"
+        }
+      }
+    },
+    {
+      "name": "legacy v1 reset of a PKI identity refused",
+      "method": "V1Unprovision",
+      "request": {},
+      "agentExpectations": {
+        "go": {
+          "code": "FAILED_PRECONDITION",
+          "message": "direct PKI reset requires the exact expected principal through v2"
+        },
+        "swift": {
+          "code": "FAILED_PRECONDITION",
+          "message": "direct PKI reset is disabled pending Cloud-authenticated authorization; keys retained"
+        }
+      }
+    },
+    {
+      "name": "refused resets kept the identity",
+      "method": "IsProvisioned",
+      "request": {},
+      "code": "OK",
+      "response": {"provisioned": {"cloudHost": "api.dev.wendy.sh:443", "principalUri": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/sim"}},
+      "agentExpectations": {
+        "go": {
+          "code": "OK",
+          "response": {"provisioned": {"cloudHost": "api.dev.wendy.sh:443", "principalUri": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/sim", "localResetSupported": true}}
+        },
+        "swift": {
+          "code": "OK",
+          "response": {"provisioned": {"cloudHost": "api.dev.wendy.sh:443", "principalUri": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/sim"}}
+        }
+      },
+      "cliPreflight": "device is already enrolled; no new enrollment was started"
+    },
+    {
+      "name": "retired agent revocation RPC",
+      "method": "RevokeACMECertificate",
+      "request": {},
+      "code": "UNIMPLEMENTED",
+      "message": "Cloud owns device unenrollment and certificate revocation"
+    },
+    {
+      "name": "retired agent revocation probe",
+      "method": "CheckACMERevocation",
+      "request": {},
+      "code": "UNIMPLEMENTED",
+      "message": "use Cloud binding preflight; no Agent ACME revocation path"
+    }
+  ]
+}
