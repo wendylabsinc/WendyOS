@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/wendylabsinc/WendyOS/go/wendy-core/core/cloud"
+	agentpb "github.com/wendylabsinc/WendyOS/go/wendy-core/core/enrollment/internal/agentpb"
 	pb "github.com/wendylabsinc/WendyOS/go/wendy-core/core/enrollment/internal/cloudpb"
 	"github.com/wendylabsinc/WendyOS/go/wendy-core/platform"
 	"github.com/wendylabsinc/WendyOS/go/wendy-core/platform/platformtest"
@@ -103,5 +104,65 @@ func TestEnrollmentConfigRefusesCrossTenantAndUntrustedEndpoint(t *testing.T) {
 		if _, err := EnrollmentConfig(testSession, "device-1", directory); err == nil {
 			t.Fatalf("accepted %s", directory)
 		}
+	}
+}
+
+func TestStartACMEProvisioningKeepsReservationAndIdentityChecks(t *testing.T) {
+	cfg, err := EnrollmentConfig(testSession, "device-1", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.EABKeyID, cfg.EABHMACKey = "single-use-key", "abcd"
+	expected, _ := cfg.PrincipalURI()
+	for _, which := range []string{"success", "wrong-principal", "unsupported", "cancelled"} {
+		t.Run(which, func(t *testing.T) {
+			calls := 0
+			transport := platformtest.Transport{UnaryFunc: func(ctx context.Context, r platform.RPCRequest) (platform.RPCResponse, error) {
+				calls++
+				if r.Method != "/wendy.agent.services.v2.WendyProvisioningService/StartACMEProvisioning" {
+					t.Fatal(r.Method)
+				}
+				var request agentpb.StartACMEProvisioningRequest
+				if err := proto.Unmarshal(r.Message, &request); err != nil {
+					t.Fatal(err)
+				}
+				if request.DeviceId != cfg.DeviceID || request.EabKeyId != cfg.EABKeyID || request.EabHmacKey != cfg.EABHMACKey {
+					t.Fatal("EAB binding lost")
+				}
+				if which == "unsupported" {
+					return platform.RPCResponse{}, &platform.RPCStatusError{Code: platform.RPCUnimplemented}
+				}
+				principal := expected
+				if which == "wrong-principal" {
+					principal += "-different"
+				}
+				wire, _ := proto.Marshal(&agentpb.StartACMEProvisioningResponse{PrincipalUri: principal})
+				return platform.RPCResponse{Message: wire}, nil
+			}}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if which == "cancelled" {
+				cancel()
+			}
+			principal, err := StartACMEProvisioning(ctx, transport, "cloud.test:443", cfg, "registered-asset")
+			switch which {
+			case "success":
+				if err != nil || principal != expected {
+					t.Fatalf("%s %v", principal, err)
+				}
+			case "wrong-principal":
+				if err == nil || err.Error() != "agent returned an unexpected enrollment identity" {
+					t.Fatal(err)
+				}
+			case "unsupported":
+				if err == nil || !strings.Contains(err.Error(), "registered-asset") || !strings.Contains(err.Error(), "reserved in Cloud") {
+					t.Fatal(err)
+				}
+			case "cancelled":
+				if calls != 0 || !errors.Is(err, context.Canceled) {
+					t.Fatalf("calls=%d err=%v", calls, err)
+				}
+			}
+		})
 	}
 }

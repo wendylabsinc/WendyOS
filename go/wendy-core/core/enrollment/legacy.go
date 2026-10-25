@@ -22,7 +22,7 @@ const (
 )
 
 // LegacyMetadata creates a fresh method-bound proof with a host-validated P-256
-// certificate/key pair. The host's ES256LegacySigner signs SHA-256(message) as
+// certificate/key pair. The host's LegacyProofSigner signs SHA-256(message) as
 // ASN.1 ECDSA, matching the existing Cloud ingress proof rather than JWS ES256.
 func LegacyMetadata(ctx context.Context, identityURI, serial, fullMethod string, entropy platform.Entropy, sign platform.LegacyProofSigner, now time.Time) (platform.Metadata, error) {
 	method := strings.TrimPrefix(fullMethod, "/")
