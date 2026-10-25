@@ -345,6 +345,85 @@ func TestSelectionAllowFiltersCatalog(t *testing.T) {
 	requireEmpty(t, s)
 }
 
+// A stream is wanted by a subscriber that names it by id, prefix or schema,
+// within its scope, and by nobody else: an empty selection takes everything
+// but asks for nothing.
+func TestWanted(t *testing.T) {
+	h := NewHub(DefaultLimits)
+	const id, schema = "agent/camera/grid/v4l2:/dev/video0", "wendy.data.v1.Grid"
+	wanted := func() bool { return h.Wanted(id, schema) }
+	if wanted() {
+		t.Fatal("wanted with nobody subscribed")
+	}
+	subscribeWith(t, h, Selection{})
+	subscribeWith(t, h, Selection{StreamPrefixes: []string{CatalogPrefix}})
+	subscribeWith(t, h, Selection{StreamIDs: []string{"agent/camera/grid/v4l2:/dev/video1"}})
+	subscribeWith(t, h, Selection{Schemas: []string{"wendy.data.v1.VideoMarkers"}})
+	subscribeWith(t, h, Selection{StreamIDs: []string{id}, Allow: []string{"apps/a"}})
+	if wanted() {
+		t.Fatal("wanted by subscribers that do not name the stream")
+	}
+	for _, sel := range []Selection{
+		{StreamIDs: []string{id}},
+		{StreamPrefixes: []string{"agent/camera/"}},
+		{Schemas: []string{schema}},
+		{StreamPrefixes: []string{"agent/"}, Allow: []string{"agent/camera"}},
+	} {
+		s, err := h.Subscribe(sel)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !wanted() {
+			t.Errorf("not wanted by %+v", sel)
+		}
+		s.Close()
+		if wanted() {
+			t.Errorf("still wanted after %+v closed", sel)
+		}
+	}
+}
+
+// SubscribersChanged wakes a waiting producer once per arrival or departure,
+// and not for a subscriber the cap turned away.
+func TestSubscribersChanged(t *testing.T) {
+	h := NewHub(Limits{MaxSubscribers: 1})
+	closed := func(c <-chan struct{}) bool {
+		select {
+		case <-c:
+			return true
+		default:
+			return false
+		}
+	}
+	changed := h.SubscribersChanged()
+	if closed(changed) || h.SubscribersChanged() != changed {
+		t.Fatal("changed before anything happened")
+	}
+	s, err := h.Subscribe(Selection{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !closed(changed) {
+		t.Fatal("a subscriber arrived unannounced")
+	}
+	changed = h.SubscribersChanged()
+	if _, err := h.Subscribe(Selection{}); !errors.Is(err, ErrTooManySubscribers) {
+		t.Fatalf("second subscriber: %v", err)
+	}
+	if closed(changed) {
+		t.Fatal("a refused subscriber was announced")
+	}
+	s.Close()
+	if !closed(changed) {
+		t.Fatal("a subscriber left unannounced")
+	}
+	changed = h.SubscribersChanged()
+	s.Close()
+	if closed(changed) {
+		t.Fatal("a second Close was announced")
+	}
+}
+
 func TestSubscriberCap(t *testing.T) {
 	h := NewHub(Limits{MaxSubscribers: 2})
 	a := subscribe(t, h)

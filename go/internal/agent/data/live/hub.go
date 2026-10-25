@@ -158,6 +158,9 @@ type Hub struct {
 	sweeper    *time.Timer
 	sweepEvery time.Duration
 	now        func() time.Time
+	// changed is closed, and cleared, when a subscriber arrives or leaves;
+	// nil until SubscribersChanged asks for it.
+	changed chan struct{}
 }
 
 // NewHub returns an empty hub. A non-positive limit takes its DefaultLimits
@@ -182,6 +185,48 @@ func NewHub(limits Limits) *Hub {
 // are costly to make may skip them while nobody listens; its streams then
 // have no newest record for SendLatest and show idle in the catalog.
 func (h *Hub) Subscribed() bool { return h.active.Load() > 0 }
+
+// Wanted reports whether a subscriber asks for the stream: names it by id or
+// by a prefix of its id, or names its schema, within its Allow scope. An empty
+// selection takes every stream but asks for none, so it does not count. A
+// producer whose records are costly to make, a camera decoder for example,
+// runs while its stream is wanted: for viewers that name what it makes, not
+// for one that takes whatever there is. Its records still reach every
+// subscriber that selects them.
+func (h *Hub) Wanted(streamID, schema string) bool {
+	if h.active.Load() == 0 {
+		return false
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for s := range h.subs {
+		if !s.all && s.selects(streamID, schema) {
+			return true
+		}
+	}
+	return false
+}
+
+// SubscribersChanged returns a channel that is closed when the next
+// subscriber arrives or leaves. A producer that runs only while its stream is
+// Wanted waits on it instead of polling, then asks Wanted again and takes a
+// new channel.
+func (h *Hub) SubscribersChanged() <-chan struct{} {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.changed == nil {
+		h.changed = make(chan struct{})
+	}
+	return h.changed
+}
+
+// subscribersChangedLocked wakes the producers waiting on SubscribersChanged.
+func (h *Hub) subscribersChangedLocked() {
+	if h.changed != nil {
+		close(h.changed)
+		h.changed = nil
+	}
+}
 
 // Offer hands r to every subscriber that selects its stream and, for an
 // advertised stream, keeps it as the stream's newest record. It never blocks
@@ -239,6 +284,7 @@ func (h *Hub) Subscribe(sel Selection) (*Subscriber, error) {
 	}
 	h.subs[s] = struct{}{}
 	h.active.Add(1)
+	h.subscribersChangedLocked()
 	if sel.SendLatest {
 		h.sendLatestLocked(s)
 	}
@@ -409,6 +455,7 @@ func (s *Subscriber) Close() {
 	if _, ok := h.subs[s]; ok {
 		delete(h.subs, s)
 		h.active.Add(-1)
+		h.subscribersChangedLocked()
 	}
 	h.mu.Unlock()
 	s.mu.Lock()
