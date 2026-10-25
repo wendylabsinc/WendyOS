@@ -11,7 +11,10 @@ import (
 
 // RecordingStream describes payloads independently of transport guarantees.
 // A durable stream sends recording.proto envelopes; a lightweight stream sends
-// raw packets. Schema is a stable identifier, not a URL the agent fetches.
+// raw packets. A live stream sends envelopes, so its records carry sample
+// times, but the agent only shows them to live viewers: it never journals,
+// buffers or records them. Schema is a stable identifier, not a URL the agent
+// fetches.
 type RecordingStream struct {
 	Mode       string               `json:"mode"`
 	MediaType  string               `json:"mediaType"`
@@ -63,8 +66,13 @@ func ValidateRecordingStreams(streams map[string]RecordingStream) error {
 		if !recordingName.MatchString(name) || name == "data" {
 			return fmt.Errorf("invalid recording stream name %q", name)
 		}
-		if s.Mode != "lightweight" && s.Mode != "durable" {
-			return fmt.Errorf("stream %s: mode must be lightweight or durable", name)
+		if s.Mode != "lightweight" && s.Mode != "durable" && s.Mode != "live" {
+			return fmt.Errorf("stream %s: mode must be lightweight, durable or live", name)
+		}
+		// event and model feed campaign triggers and episode bookkeeping,
+		// which a record that is never recorded does not reach.
+		if s.Mode == "live" && (s.Event != "" || s.Model != "") {
+			return fmt.Errorf("stream %s: a live stream is never recorded, so it cannot declare event or model", name)
 		}
 		if s.Storage != nil && s.Mode != "durable" {
 			return fmt.Errorf("stream %s: storage requires durable mode", name)

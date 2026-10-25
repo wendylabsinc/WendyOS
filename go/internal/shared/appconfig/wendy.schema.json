@@ -474,8 +474,10 @@
                   "mode": {
                     "enum": [
                       "lightweight",
-                      "durable"
-                    ]
+                      "durable",
+                      "live"
+                    ],
+                    "description": "lightweight: raw packets, recorded into episodes. durable: Protobuf envelopes, acknowledged after a journal commit. live: Protobuf envelopes shown only to live viewers, never journaled or recorded."
                   },
                   "mediaType": {
                     "type": "string",
@@ -580,6 +582,26 @@
                         }
                       }
                     }
+                  },
+                  {
+                    "if": {
+                      "properties": {
+                        "mode": {
+                          "const": "live"
+                        }
+                      },
+                      "required": [
+                        "mode"
+                      ]
+                    },
+                    "then": {
+                      "not": {
+                        "anyOf": [
+                          { "required": ["event"] },
+                          { "required": ["model"] }
+                        ]
+                      }
+                    }
                   }
                 ]
               }
@@ -589,7 +611,7 @@
             "type"
           ],
           "additionalProperties": false,
-          "description": "Record application data through private sockets. Legacy JSON events remain supported; declared streams accept raw payloads or durable Protobuf envelopes. No sensor read access or administrative API access."
+          "description": "Record application data through private sockets. Legacy JSON events remain supported; declared streams accept raw payloads, durable Protobuf envelopes, or live-only Protobuf envelopes. No sensor read access or administrative API access."
         },
         {
           "properties": {

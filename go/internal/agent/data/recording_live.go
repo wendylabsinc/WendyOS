@@ -53,7 +53,7 @@ func (m *Manager) Publish(stream string, descriptor *recordingpb.StreamDescripto
 	if err != nil {
 		return err
 	}
-	m.publish(stored)
+	m.publish(stored, false)
 	return nil
 }
 

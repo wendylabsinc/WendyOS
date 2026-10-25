@@ -43,3 +43,26 @@ func TestRecordingStorageValidation(t *testing.T) {
 		}
 	}
 }
+
+// A live stream sends envelopes that are never recorded, so the declarations
+// that exist for recording have nothing to act on.
+func TestRecordingStreamsLiveMode(t *testing.T) {
+	markers := RecordingStream{Mode: "live", MediaType: "application/protobuf", Schema: "wendy.data.v1.VideoMarkers"}
+	if err := ValidateRecordingStreams(map[string]RecordingStream{"markers": markers}); err != nil {
+		t.Fatal(err)
+	}
+	for _, change := range []func(*RecordingStream){
+		func(s *RecordingStream) { s.Event = "person" },
+		func(s *RecordingStream) { s.Model = "detector" },
+		func(s *RecordingStream) { s.Storage = &RecordingStorage{MaxBytes: 1 << 20} },
+	} {
+		s := markers
+		change(&s)
+		if err := ValidateRecordingStreams(map[string]RecordingStream{"markers": s}); err == nil {
+			t.Fatalf("accepted %+v", s)
+		}
+	}
+	if warnings := ValidateJSON([]byte(`{"appId":"test","entitlements":[{"type":"episode-write","streams":{"markers":{"mode":"live","mediaType":"application/protobuf"}}}]}`)); len(warnings) != 0 {
+		t.Fatalf("got warnings for a live stream: %v", warnings)
+	}
+}

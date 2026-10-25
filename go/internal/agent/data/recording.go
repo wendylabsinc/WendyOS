@@ -64,7 +64,7 @@ func ValidateSampleTiming(t *recordingpb.SampleTiming) error {
 	return nil
 }
 func validateStreamRecord(cfg appconfig.RecordingStream, r *recordingpb.Record) error {
-	if r == nil || len(r.Payload) > MaxRecordingPacket || cfg.Mode == "durable" && proto.Size(r) > MaxRecordingPacket {
+	if r == nil || len(r.Payload) > MaxRecordingPacket || (cfg.Mode == "durable" || cfg.Mode == "live") && proto.Size(r) > MaxRecordingPacket {
 		return errors.New("record exceeds 1 MiB")
 	}
 	if cfg.Mode == "durable" && (r.Id == "" || len(r.Id) > 128) {
@@ -84,7 +84,9 @@ func validateStreamRecord(cfg appconfig.RecordingStream, r *recordingpb.Record) 
 	if r.Uncertainty != nil && (math.IsNaN(*r.Uncertainty) || math.IsInf(*r.Uncertainty, 0) || *r.Uncertainty < 0 || *r.Uncertainty > 1) {
 		return errors.New("uncertainty must be finite and in 0..1")
 	}
-	if len(r.Inputs) > 0 || r.Uncertainty != nil {
+	// A live record may name the samples it describes. Elsewhere input
+	// references are model provenance.
+	if len(r.Inputs) > 0 && cfg.Mode != "live" || r.Uncertainty != nil {
 		if cfg.Model == "" {
 			return errors.New("input references and uncertainty require a model stream")
 		}
@@ -119,6 +121,11 @@ func (m *Manager) RecordStream(app, service, stream string, cfg appconfig.Record
 	if err != nil {
 		return false, err
 	}
+	if cfg.Mode == "live" {
+		// Live viewers only: no journal, pre-roll, episode or observer.
+		m.publish(stored, true)
+		return false, nil
+	}
 	if cfg.Mode == "durable" {
 		j, err := m.recordings.journal(app, service, stream)
 		if err != nil {
@@ -131,7 +138,7 @@ func (m *Manager) RecordStream(app, service, stream string, cfg appconfig.Record
 	}
 	// Rejected and duplicate records returned above: no viewer or episode
 	// sees them.
-	observer := m.publish(stored)
+	observer := m.publish(stored, false)
 	if observer != nil && (cfg.Event != "" || cfg.Model != "") {
 		observer(app, streamApplicationRecord(stored))
 	}
@@ -163,9 +170,14 @@ func stampStreamRecord(app, service, stream string, descriptor *recordingpb.Stre
 // payload is the one the pre-roll holds, so live and recorded are the same
 // record; stored must not change afterwards.
 //
+// A record of a live-mode stream (liveOnly) stops after the live offer. Such a
+// stream is for display at frame rate: its records are never journaled, held
+// for pre-roll or copied into an episode, so they cost no disk, and they never
+// reach the campaign observer.
+//
 // It returns the application observer, read under the same lock, so
-// RecordStream need not take the lock again.
-func (m *Manager) publish(stored *recordingpb.StoredRecord) func(string, ApplicationRecord) {
+// RecordStream need not take the lock again; nil for a live-only record.
+func (m *Manager) publish(stored *recordingpb.StoredRecord, liveOnly bool) func(string, ApplicationRecord) {
 	// Journal commits use per-stream locks. Slow storage on one stream must
 	// not hold the shared episode/pre-roll intake lock. Holding streamMu
 	// through the offer keeps each stream's live order its recorded order,
@@ -173,6 +185,9 @@ func (m *Manager) publish(stored *recordingpb.StoredRecord) func(string, Applica
 	m.streamMu.Lock()
 	defer m.streamMu.Unlock()
 	m.live.Offer(liveRecord(stored))
+	if liveOnly {
+		return nil
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.bufferStreamLocked(stored)

@@ -157,14 +157,21 @@ func (m *AppDataSocketManager) serveRecordingConn(s *appDataSocket, r *recording
 		if err != nil || n == 0 {
 			return
 		}
-		if !s.limiter.allow(time.Now()) {
+		if r.config.Mode == "live" {
+			// Past its budget a live record is dropped and the connection kept.
+			// Viewers then see the stream at the budget's rate, as a slow viewer
+			// does; closing would lose every record until the app reconnects.
+			if !s.liveStreamLimiter.allow(time.Now()) {
+				continue
+			}
+		} else if !s.limiter.allow(time.Now()) {
 			return
 		}
 		ack := &recordingpb.Ack{State: recordingpb.Ack_REJECTED}
 		var record *recordingpb.Record
 		if flags&unix.MSG_TRUNC != 0 {
 			ack.Error = "record exceeds 1 MiB"
-		} else if r.config.Mode == "durable" {
+		} else if r.config.Mode == "durable" || r.config.Mode == "live" {
 			record = new(recordingpb.Record)
 			if err = proto.Unmarshal(buf[:n], record); err != nil {
 				ack.Error = "invalid recording protobuf"
@@ -186,9 +193,10 @@ func (m *AppDataSocketManager) serveRecordingConn(s *appDataSocket, r *recording
 				ack.State = recordingpb.Ack_COMMITTED
 			}
 		}
-		if r.config.Mode == "lightweight" {
-			// No acknowledgement protocol in the raw path. A failure terminates the
-			// connection; a successful send alone never proves agent acceptance.
+		if r.config.Mode != "durable" {
+			// No acknowledgement protocol in the raw or live path. A failure
+			// terminates the connection; a successful send alone never proves
+			// agent acceptance.
 			if ack.Error != "" {
 				return
 			}
