@@ -97,6 +97,8 @@ func (m *AppDataSocketManager) EnsureStreams(appID, service string, streams map[
 	}
 	for key, r := range created {
 		s.streams[key] = r
+		// Listed in the live catalog before the app can write its first record.
+		m.capture.AdvertiseAppStream(appID, service, r.name, r.config)
 		go m.serveRecording(s, r)
 	}
 	return dir, nil
@@ -114,6 +116,7 @@ func (m *AppDataSocketManager) closeRecordingSockets(s *appDataSocket, service *
 			c.Close()
 		}
 		delete(s.streams, key)
+		m.capture.UnadvertiseAppStream(s.appID, r.service, r.name)
 	}
 }
 func (m *AppDataSocketManager) serveRecording(s *appDataSocket, r *recordingSocket) {

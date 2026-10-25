@@ -12,6 +12,7 @@ import (
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/data/live"
 	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
+	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	recordingpb "github.com/wendylabsinc/wendy/go/proto/gen/recordingpb"
 	"google.golang.org/protobuf/proto"
 )
@@ -208,5 +209,50 @@ func TestRecordStreamLiveTimestampIsReceiptForLightweight(t *testing.T) {
 	after := time.Now().UnixNano()
 	if ts := nextLive(t, sub).Record.TimestampUnixNanos; ts < before || ts > after {
 		t.Fatalf("timestamp %d outside receipt window %d..%d", ts, before, after)
+	}
+}
+
+// An app's declared stream is in the catalog from the moment its socket opens,
+// and its newest record waits for a viewer that asks for it, even when nobody
+// was subscribed while the app wrote it.
+func TestAdvertisedAppStreamCatalogAndLatest(t *testing.T) {
+	m, err := NewManager(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	markers := appconfig.RecordingStream{Mode: "lightweight", MediaType: "application/protobuf", Schema: "wendy.data.v1.VideoMarkers"}
+	m.AdvertiseAppStream("test.app", "worker", "markers", markers)
+	for _, payload := range []string{"old", "new"} {
+		if _, err := m.RecordStream("test.app", "worker", "markers", markers, &recordingpb.Record{Payload: []byte(payload)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	s, err := m.Live().Subscribe(live.Selection{StreamPrefixes: []string{live.CatalogPrefix, "apps/test.app/"}, SendLatest: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(s.Close)
+	d := nextLive(t, s)
+	var info agentpbv2.DataStreamInfo
+	if err := proto.Unmarshal(d.Record.Payload, &info); err != nil {
+		t.Fatal(err)
+	}
+	if d.Record.StreamID != "_streams/apps/test.app/worker/markers" || info.GetStreamId() != "apps/test.app/worker/markers" || info.GetPublisher() != "test.app" ||
+		info.GetSchema() != "wendy.data.v1.VideoMarkers" || info.GetMediaType() != "application/protobuf" || info.GetState() != agentpbv2.DataStreamInfo_STATE_ACTIVE {
+		t.Fatalf("catalog entry %s: %v", d.Record.StreamID, &info)
+	}
+	if d = nextLive(t, s); d.Record.StreamID != "apps/test.app/worker/markers" || string(d.Record.Payload) != "new" {
+		t.Fatalf("newest record: %s %q", d.Record.StreamID, d.Record.Payload)
+	}
+	requireNoLive(t, s)
+
+	m.UnadvertiseAppStream("test.app", "worker", "markers")
+	d = nextLive(t, s)
+	if err := proto.Unmarshal(d.Record.Payload, &info); err != nil {
+		t.Fatal(err)
+	}
+	if info.GetState() != agentpbv2.DataStreamInfo_STATE_GONE {
+		t.Fatalf("after the app stopped: %v", &info)
 	}
 }
