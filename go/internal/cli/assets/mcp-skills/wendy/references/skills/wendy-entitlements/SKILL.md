@@ -64,15 +64,14 @@ capabilities and installed CLI validation:
 | `serial` | `device` | none | Binds `/dev/<device>` (e.g. `/dev/ttyACM0`) and adds the `dialout` group. USB-only; on-board UARTs (`ttyAMA*`, `ttyS*`) are not supported. |
 | `mcp` | `port` | none | Exposes an MCP server port for agentic tool access. |
 | `episode-write` | none | `streams` | Grants app-scoped Wendy Data sockets. `WENDY_DATA_SOCKET` accepts legacy events/predictions; `WENDY_DATA_STREAM_DIR` contains declared lightweight, durable or live stream sockets. At most one entitlement per app. |
-| `data-read` | none | `allowlist` | Serves `DataService.StreamData`, and nothing else, on the app's System API socket (`WENDY_SYSTEM_SOCKET`). `allowlist` entries are stream ids or prefixes ending at a `/`, such as `apps/com.example.detector`; omit it to read every stream. Live records only. At most one per app. |
+| `data-read` | none | `allowlist` | Serves only `DataService.StreamData` on `WENDY_SYSTEM_SOCKET`. `allowlist`: stream ids or prefixes ending at `/`; omit to read every stream. At most one per app. |
 | `admin` | none | none | Grants the container the wendy-agent's local control socket (exposed as `WENDY_AGENT_SOCKET`, currently `/run/wendy/agent/agent.sock` — read the env var, don't hard-code). This is the agent's **full gRPC with no authentication** — an app with `admin` can start, stop, and delete apps and read all device data locally. **Grant it only to fully-trusted first-party apps.** At most one per app. Requires an agent build that serves the local socket. |
 
 `network.ports` being accepted by validation does not establish port forwarding.
 For host networking, verify the app's listening address and port directly.
 
 Use the `wendy-data` workflow for stream configuration, event triggers, durable
-acknowledgements, and export. Recording data does not require `admin`, and
-neither does reading live data: use `data-read`.
+acknowledgements, and export. Recording data does not require `admin`.
 
 ## Persistent volumes and executable code
 
