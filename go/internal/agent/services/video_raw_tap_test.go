@@ -315,6 +315,18 @@ func TestStackedMetadataRows_TC001(t *testing.T) {
 	}
 }
 
+// A node that cannot be opened fails, so a caller that remembers the answer
+// asks again; enumerateRawFrameSizes still reports no sizes for it.
+func TestRawFrameSizesFailsForANodeThatDidNotAnswer(t *testing.T) {
+	missing := t.TempDir() + "/video0"
+	if sizes, err := rawFrameSizes(missing, v4l2PixFmtYUYV); err == nil || len(sizes) != 0 {
+		t.Fatalf("missing node: %v %v", sizes, err)
+	}
+	if sizes := enumerateRawFrameSizes(missing, v4l2PixFmtYUYV); sizes != nil {
+		t.Fatalf("missing node listed %v", sizes)
+	}
+}
+
 func TestStackedMetadataRows_OrdinaryWebcamIsNeverCropped(t *testing.T) {
 	// 640x480 has a 640x360 sibling 120 rows shorter — and is a plain 4:3
 	// picture. The standard-aspect test on the requested mode is what protects it.

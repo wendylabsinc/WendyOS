@@ -34,6 +34,9 @@ const (
 	lumaGridID    = "agent/camera/grid/" + lumaSource
 )
 
+// tc001Modes are the YUYV modes a TC001 advertises.
+var tc001Modes = [][2]uint32{{256, 192}, {512, 384}, {512, 484}}
+
 // gridRig runs the camera grid publisher on a real data manager. Its cameras
 // are described, not opened: /dev/video4 offers the TC001's stacked mode and
 // its producer is fake, so a test puts raw frames on its hub by hand;
@@ -52,15 +55,16 @@ type gridRig struct {
 func newGridRig(t *testing.T, nodes ...string) *gridRig {
 	t.Helper()
 	rig := &gridRig{nodes: nodes}
-	prevSizes, prevIdentity := enumerateRawFrameSizes, gridNodeIdentity
+	prevSizes, prevModes, prevIdentity := enumerateRawFrameSizes, gridYUYVModes, gridNodeIdentity
 	enumerateRawFrameSizes = func(path string, pixfmt uint32) [][2]uint32 {
 		if path != "/dev/video4" || pixfmt != v4l2PixFmtYUYV {
 			return nil
 		}
-		return [][2]uint32{{256, 192}, {512, 384}, {512, 484}}
+		return tc001Modes
 	}
+	gridYUYVModes = func(path string) ([][2]uint32, error) { return enumerateRawFrameSizes(path, v4l2PixFmtYUYV), nil }
 	gridNodeIdentity = func(path string) (string, bool) { return path, true }
-	t.Cleanup(func() { enumerateRawFrameSizes, gridNodeIdentity = prevSizes, prevIdentity })
+	t.Cleanup(func() { enumerateRawFrameSizes, gridYUYVModes, gridNodeIdentity = prevSizes, prevModes, prevIdentity })
 
 	rig.video = newTestVideoService(func() ([]string, error) {
 		rig.mu.Lock()
@@ -438,6 +442,45 @@ func TestCameraGridFollowsTheCameras(t *testing.T) {
 		t.Fatalf("catalog after the camera came back: %v", info)
 	}
 	rig.thermalHub(t, 1, tc001Format, tc001PictureTop)
+}
+
+// A node that does not answer its probe, as one whose driver is still setting
+// it up after a hotplug may not, is probed again on the next scan. One that
+// answers, a camera or not, is remembered.
+func TestCameraGridProbesAgainANodeThatDidNotAnswer(t *testing.T) {
+	prevModes, prevIdentity := gridYUYVModes, gridNodeIdentity
+	t.Cleanup(func() { gridYUYVModes, gridNodeIdentity = prevModes, prevIdentity })
+	answer := false
+	probes := map[string]int{}
+	gridYUYVModes = func(path string) ([][2]uint32, error) {
+		probes[path]++
+		switch {
+		case !answer:
+			return nil, errors.New("no such device")
+		case path == "/dev/video4":
+			return tc001Modes, nil
+		}
+		return [][2]uint32{{640, 480}}, nil
+	}
+	gridNodeIdentity = func(path string) (string, bool) { return path, true }
+	video := newTestVideoService(func() ([]string, error) { return []string{"/dev/video0", "/dev/video4"}, nil }, nil)
+	m, err := data.NewManager(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	g := newCameraGrids(m, video)
+	if present, _ := g.discover(); len(present) != 0 {
+		t.Fatalf("cameras from nodes that did not answer: %v", present)
+	}
+	answer = true
+	for range 3 {
+		if present, _ := g.discover(); len(present) != 1 || present[thermalSource].kind != gridThermal {
+			t.Fatalf("after the nodes answered: %v", present)
+		}
+	}
+	if probes["/dev/video4"] != 2 || probes["/dev/video0"] != 2 {
+		t.Fatalf("probes %v; want each node probed until it answered, then remembered", probes)
+	}
 }
 
 // A raw subscriber learns why a camera has no raw frames, as a raw viewer does.

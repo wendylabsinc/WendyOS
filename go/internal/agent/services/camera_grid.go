@@ -157,8 +157,9 @@ const (
 	gridLuma
 )
 
-// gridNodeIdentity names the device behind a node, so a camera is probed once
-// rather than on every scan, and again when another device takes its number.
+// gridNodeIdentity names the device behind a node, so a camera is probed until
+// it answers rather than on every scan, and again when another device takes
+// its number.
 // A seam for tests, whose nodes do not exist.
 var gridNodeIdentity = func(path string) (string, bool) {
 	var st unix.Stat_t
@@ -168,12 +169,24 @@ var gridNodeIdentity = func(path string) (string, bool) {
 	return fmt.Sprintf("%d:%d:%d.%d", st.Rdev, st.Ino, st.Ctim.Sec, st.Ctim.Nsec), true
 }
 
+// gridYUYVModes lists the YUYV modes a node advertises, and fails when the
+// node does not answer (rawFrameSizes). A seam for tests, whose nodes do not
+// exist.
+var gridYUYVModes = func(path string) ([][2]uint32, error) {
+	return rawFrameSizes(path, v4l2PixFmtYUYV)
+}
+
 // advertisesTC001StackedMode reports whether a camera offers the TC001's
 // measured stacked mode: 512x484 YUYV, with a 512x384 picture mode 100 rows
 // shorter. A read-only enumeration, which answers while the camera streams.
-func advertisesTC001StackedMode(path string) bool {
-	return deviceSupportsRawSize(path, v4l2PixFmtYUYV, tc001FrameWidth, tc001FrameHeight) &&
-		stackedMetadataRows(path, tc001FrameWidth, tc001FrameHeight) == tc001PictureTop
+// answered is false when the node did not answer, so the caller asks again.
+func advertisesTC001StackedMode(path string) (thermal, answered bool) {
+	modes, err := gridYUYVModes(path)
+	if err != nil {
+		return false, false
+	}
+	return slices.Contains(modes, [2]uint32{tc001FrameWidth, tc001FrameHeight}) &&
+		stackedMetadataRowsIn(modes, tc001FrameWidth, tc001FrameHeight) == tc001PictureTop, true
 }
 
 // gridNode is a device node and the decoder it gets.
@@ -320,8 +333,15 @@ func (g *cameraGrids) discover() (map[string]gridNode, bool) {
 		seen[path] = true
 		node, ok := g.probed[path]
 		if !ok || node.identity != identity {
-			node = gridNode{path: path, identity: identity, kind: g.probe(path)}
-			g.probed[path] = node
+			kind, answered := g.probe(path)
+			node = gridNode{path: path, identity: identity, kind: kind}
+			// Only an answer is remembered: a node that did not answer, such
+			// as one its driver is still setting up, is probed again next scan.
+			if answered {
+				g.probed[path] = node
+			} else {
+				delete(g.probed, path)
+			}
 		}
 		if node.kind != gridNone {
 			present["v4l2:"+path] = node
@@ -335,17 +355,20 @@ func (g *cameraGrids) discover() (map[string]gridNode, bool) {
 	return present, true
 }
 
-func (g *cameraGrids) probe(path string) cameraGridKind {
+// probe returns the decoder a node gets, and false when the node did not
+// answer.
+func (g *cameraGrids) probe(path string) (cameraGridKind, bool) {
 	if isSensorLinkCameraPath(path) {
 		if g.video.sensorFrames != nil {
-			return gridLuma
+			return gridLuma, true
 		}
-		return gridNone
+		return gridNone, true
 	}
-	if advertisesTC001StackedMode(path) {
-		return gridThermal
+	thermal, answered := advertisesTC001StackedMode(path)
+	if thermal {
+		return gridThermal, true
 	}
-	return gridNone
+	return gridNone, answered
 }
 
 type gridStream struct {

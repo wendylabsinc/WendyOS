@@ -316,9 +316,19 @@ func rawFormatNames() string {
 // V4L2 node (same spirit as deviceSupportsMJPEGSize). Read-only open, so it
 // answers while the camera is streaming.
 var enumerateRawFrameSizes = func(path string, pixfmt uint32) [][2]uint32 {
+	sizes, _ := rawFrameSizes(path, pixfmt)
+	return sizes
+}
+
+// rawFrameSizes is enumerateRawFrameSizes, and also fails when the device did
+// not answer: it could not be opened, or an enumeration failed with anything
+// but the EINVAL that ends the list or the ENOTTY of a node with no sizes to
+// list. A caller that remembers the answer must not remember a failure, which
+// may be a node its driver is still setting up.
+func rawFrameSizes(path string, pixfmt uint32) ([][2]uint32, error) {
 	fd, err := unix.Open(path, unix.O_RDONLY|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
 	if err != nil {
-		return nil
+		return nil, err
 	}
 	defer unix.Close(fd) //nolint:errcheck
 	var sizes [][2]uint32
@@ -326,14 +336,17 @@ var enumerateRawFrameSizes = func(path string, pixfmt uint32) [][2]uint32 {
 		fse := v4l2FrmSizeEnum{Index: index, PixelFormat: pixfmt}
 		if _, _, errno := unix.Syscall(unix.SYS_IOCTL, uintptr(fd), vidiocEnumFramesizes,
 			uintptr(unsafe.Pointer(&fse))); errno != 0 {
-			break // EINVAL marks the end of the list
+			if errno == unix.EINVAL || errno == unix.ENOTTY {
+				break // the end of the list, or nothing to list
+			}
+			return sizes, errno
 		}
 		if fse.Type != v4l2FrmsizeTypeDiscrete {
 			break
 		}
 		sizes = append(sizes, [2]uint32{fse.Width, fse.Height})
 	}
-	return sizes
+	return sizes, nil
 }
 
 // enumerateYUYVFrameSizes is the YUYV case of the above. The stacked-mode
@@ -367,8 +380,17 @@ func stackedMetadataRows(devicePath string, w, h uint32) uint32 {
 	if w == 0 || h == 0 || hasStandardAspect(w, h) {
 		return 0
 	}
+	return stackedMetadataRowsIn(enumerateYUYVFrameSizes(devicePath), w, h)
+}
+
+// stackedMetadataRowsIn is stackedMetadataRows for a device whose YUYV modes
+// are already listed.
+func stackedMetadataRowsIn(modes [][2]uint32, w, h uint32) uint32 {
+	if w == 0 || h == 0 || hasStandardAspect(w, h) {
+		return 0
+	}
 	var picture uint32
-	for _, m := range enumerateYUYVFrameSizes(devicePath) {
+	for _, m := range modes {
 		if m[0] != w || m[1] >= h || !hasStandardAspect(m[0], m[1]) {
 			continue
 		}
