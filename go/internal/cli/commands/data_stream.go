@@ -17,7 +17,10 @@ import (
 )
 
 func newDataStreamCmd() *cobra.Command {
-	var req agentpbv2.StreamDataRequest
+	var (
+		req agentpbv2.StreamDataRequest
+		sse string
+	)
 	c := &cobra.Command{
 		Use:   "stream",
 		Short: "Print live records from the device's data streams",
@@ -37,14 +40,24 @@ Each stream is also capped at --rate records per second, the device's 30 by
 default; a newer record replaces one the cap holds back. --latest starts with
 the newest record of each stream, if it is recent.
 
-With --json each record is one line of protobuf JSON, payload in base64.`,
+With --json each record is one line of protobuf JSON, payload in base64.
+
+With --sse ADDR the records are not printed: they are served at
+http://ADDR/live as Server-Sent Events, for a browser on this computer. Each
+event is one JSON record with the payload as protobuf JSON when this CLI knows
+its schema. Query parameters stream, prefix and schema replace the command
+line's selection for that request.`,
 		Example: `  wendy data stream
   wendy data stream --stream apps/sh.wendy.demo/detector/markers
   wendy data stream --prefix apps/sh.wendy.demo/ --schema wendy.data.v1.VideoMarkers --latest
-  wendy data stream --rate 5 --json`,
+  wendy data stream --rate 5 --json
+  wendy data stream --sse 127.0.0.1:8090`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return withDataClient(cmd.Context(), func(client agentpbv2.DataServiceClient) error {
+				if sse != "" {
+					return serveLiveSSE(cmd.Context(), client, sse, &req, cmd.ErrOrStderr())
+				}
 				return streamLiveData(cmd.Context(), client, &req, cmd.OutOrStdout(), cmd.ErrOrStderr(), jsonOutput)
 			})
 		},
@@ -54,6 +67,7 @@ With --json each record is one line of protobuf JSON, payload in base64.`,
 	c.Flags().StringArrayVar(&req.Schemas, "schema", nil, "Only streams with this payload schema (repeatable)")
 	c.Flags().Float32Var(&req.MaxRateHz, "rate", 0, "At most this many records per second of each stream, 0.01 to 1000 (default: the device's, 30)")
 	c.Flags().BoolVar(&req.SendLatest, "latest", false, "Start with the newest record of each stream, if it is at most 10 seconds old")
+	c.Flags().StringVar(&sse, "sse", "", "Serve the records to browsers as Server-Sent Events at this loopback address, for example 127.0.0.1:8090")
 	return c
 }
 

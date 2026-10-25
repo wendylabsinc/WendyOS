@@ -1,0 +1,6 @@
+data: {"stream_id":"_streams/apps/sh.wendy.demo/detector/markers","timestamp_unix_nanos":"1792936987000000000","schema":"wendy.agent.services.v2.DataStreamInfo","payload":{"stream_id":"apps/sh.wendy.demo/detector/markers","schema":"wendy.data.v1.VideoMarkers","media_type":"application/json","publisher":"sh.wendy.demo","state":"STATE_ACTIVE","rate_hz":10,"last_timestamp_unix_nanos":"1792936987250000000"}}
+
+data: {"stream_id":"apps/sh.wendy.demo/detector/markers","timestamp_unix_nanos":"1792936987250000000","schema":"wendy.data.v1.VideoMarkers","payload":{"camera":"/dev/video0","valid_for_nanos":"500000000","markers":[{"x":0.25,"y":0.5,"width":0.1,"height":0.2,"label":"person","value":0.91,"color":"green"}]},"skipped":"3"}
+
+data: {"stream_id":"apps/sh.wendy.demo/detector/raw","timestamp_unix_nanos":"1792936987260000000","schema":"","payload":"AAEC"}
+
