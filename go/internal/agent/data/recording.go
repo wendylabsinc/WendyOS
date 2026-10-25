@@ -167,12 +167,20 @@ func stampStreamRecord(app, service, stream string, descriptor *recordingpb.Stre
 // RecordStream need not take the lock again.
 func (m *Manager) publish(stored *recordingpb.StoredRecord) func(string, ApplicationRecord) {
 	// Journal commits use per-stream locks. Slow storage on one stream must
-	// not hold the shared episode/pre-roll intake lock. Holding streamMu
-	// through the offer keeps each stream's live order its recorded order,
-	// and Offer never blocks.
+	// not hold the shared episode/pre-roll intake lock. streamMu orders the
+	// offers, and Offer never blocks. Each record then waits for the one
+	// offered before it to be recorded, so the recorded order is the live
+	// order, while only the recording waits for mu: a record offered behind
+	// one that is waiting still reaches viewers at once.
 	m.streamMu.Lock()
-	defer m.streamMu.Unlock()
 	m.live.Offer(liveRecord(stored))
+	previous, recorded := m.streamRecorded, make(chan struct{})
+	m.streamRecorded = recorded
+	m.streamMu.Unlock()
+	defer close(recorded)
+	if previous != nil {
+		<-previous
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.bufferStreamLocked(stored)

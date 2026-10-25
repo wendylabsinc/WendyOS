@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -355,6 +356,58 @@ func TestPublishReachesViewersBeforeStorage(t *testing.T) {
 	defer m.mu.Unlock()
 	if len(m.streamPreRoll) != 1 {
 		t.Fatalf("pre-roll holds %d records after the publish", len(m.streamPreRoll))
+	}
+}
+
+// Live goes first for every record, not only the first: while the manager
+// lock is held, a record on a second stream reaches viewers too, rather than
+// waiting behind the first record's storage. Once the lock is released, the
+// episode records both in the order viewers got them.
+func TestPublishLiveDoesNotQueueBehindStorage(t *testing.T) {
+	root := t.TempDir()
+	m, err := NewManager(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sub := liveSubscriber(t, m)
+	episode, err := m.Start(StartOptions{Sources: []string{"applications"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	descriptor := &recordingpb.StreamDescriptor{MediaType: "text/plain"}
+	streams := []string{"test/a", "test/b"}
+	done := make(chan error, len(streams))
+	m.mu.Lock()
+	unlock := sync.OnceFunc(m.mu.Unlock)
+	defer unlock() // a failed wait below must not leave the publishers blocked
+	for _, stream := range streams {
+		go func() { done <- m.Publish(stream, descriptor, &recordingpb.Record{Payload: []byte(stream)}) }()
+		if d := nextLive(t, sub); d.Record.StreamID != "agent/"+stream {
+			t.Fatalf("live record %s, want agent/%s", d.Record.StreamID, stream)
+		}
+	}
+	unlock()
+	for range streams {
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err = m.Stop(AdHocEpisodeKey); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.Open(filepath.Join(root, episode.ID, RecordingLogFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	for _, stream := range streams {
+		recorded, _, err := ReadRecording(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if recorded.Stream != stream {
+			t.Fatalf("episode recorded %s, want %s: not the live order", recorded.Stream, stream)
+		}
 	}
 }
 

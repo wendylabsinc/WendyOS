@@ -119,9 +119,10 @@ func TestAgentInferencePublishesLiveMarkers(t *testing.T) {
 	// The next frame reaches the viewer and the episode alike.
 	session.results <- result(3, person)
 	record, _ = nextMarkers(t, sub)
-	// The viewer gets a frame before the episode copy is written. Publishing
-	// holds streamMu through both, so once the frame after it is live, this
-	// one is in the episode and stopping cannot cut it off.
+	// The viewer gets a frame before the episode copy is written. Publish
+	// returns once the copy is written, and the job publishes one frame at a
+	// time, so once the frame after it is live, this one is in the episode
+	// and stopping cannot cut it off.
 	session.results <- result(4, person)
 	if next, _ := nextMarkers(t, sub); next.SampleID != 4 {
 		t.Fatalf("live record after frame 3 names sample %d, want 4", next.SampleID)
