@@ -94,10 +94,15 @@ const (
 // anyone is listening (to skip the copy when not), a way to publish, and a way
 // to record the decision either way. deviceHub implements it; producers that
 // can never offer raw get noRawSink.
+//
+// rawOffered also takes pictureTop, the first row of a raw frame that encoded
+// subscribers see: the stacked metadata rows the pipeline crops off the top
+// for them, or 0 when they see the frame from its first row. A decoder that
+// places positions on the viewers' picture needs it (camera_grid_thermal.go).
 type rawSink interface {
 	wantRaw() bool
 	publishRaw(data []byte, tsNs uint64, format *agentpb.RawFormat) bool
-	rawOffered(format *agentpb.RawFormat)
+	rawOffered(format *agentpb.RawFormat, pictureTop uint32)
 	// rawNotOffered takes the reason as a function: a refusal that has to
 	// probe the device is computed only if a raw subscriber ever asks.
 	rawNotOffered(reason func() string)
@@ -108,7 +113,7 @@ type noRawSink struct{}
 
 func (noRawSink) wantRaw() bool                                      { return false }
 func (noRawSink) publishRaw([]byte, uint64, *agentpb.RawFormat) bool { return true }
-func (noRawSink) rawOffered(*agentpb.RawFormat)                      {}
+func (noRawSink) rawOffered(*agentpb.RawFormat, uint32)              {}
 func (noRawSink) rawNotOffered(func() string)                        {}
 
 // errRawUnavailable is the answer a raw subscriber gets from a camera that has

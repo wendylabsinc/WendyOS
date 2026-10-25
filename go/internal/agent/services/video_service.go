@@ -528,6 +528,9 @@ type deviceHub struct {
 	rawState  rawTapState
 	rawReason func() string // memoised; see rawNotOffered
 	rawFormat *agentpb.RawFormat
+	// rawPictureTop is the first raw row encoded subscribers see (see
+	// rawSink.rawOffered). Protected by h.mu.
+	rawPictureTop uint32
 }
 
 // maxSubscribersPerHub caps the number of concurrent gRPC streams sharing one
@@ -823,12 +826,23 @@ func (h *deviceHub) publishRaw(data []byte, tsNs uint64, format *agentpb.RawForm
 	return h.broadcast(&videoFrame{data: data, tsNs: tsNs, codec: agentpb.VideoCodec_VIDEO_CODEC_RAW, rawFmt: format})
 }
 
-// rawOffered records that this producer tees raw frames of the given layout.
-func (h *deviceHub) rawOffered(format *agentpb.RawFormat) {
+// rawOffered records that this producer tees raw frames of the given layout,
+// whose encoded picture starts at raw row pictureTop.
+func (h *deviceHub) rawOffered(format *agentpb.RawFormat, pictureTop uint32) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.rawState = rawAvailable
 	h.rawFormat = format
+	h.rawPictureTop = pictureTop
+}
+
+// rawPicture returns the first raw row encoded subscribers see. It is set
+// before the producer's first raw frame, so a raw subscriber that holds a
+// frame reads the value that frame was captured under.
+func (h *deviceHub) rawPicture() uint32 {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.rawPictureTop
 }
 
 // rawNotOffered records that this producer has no raw frames to give, and turns
@@ -3152,7 +3166,7 @@ func (s *VideoService) runCameraPipeline(ctx context.Context, broadcast func([]b
 	}
 	if plan.raw != nil {
 		rawW.Close() //nolint:errcheck
-		sink.rawOffered(plan.raw)
+		sink.rawOffered(plan.raw, plan.rawPictureTop)
 		s.logger.Info("raw frame tap open", zap.String("device", path),
 			zap.String("format", describeRawFormat(plan.raw)))
 		go s.pumpRawTap(ctx, rawR, plan.raw, sink, path)
@@ -3441,6 +3455,10 @@ type gstPipelinePlan struct {
 	// Deferred so the probe runs only when a raw subscriber is actually
 	// refused, not on every pipeline start for viewers that never ask.
 	rawWhyLazy func() string
+	// rawPictureTop is the first row of a raw frame that encoded subscribers
+	// see: the stacked metadata rows videocrop takes off the top, or 0 when
+	// they see the whole frame from its first row.
+	rawPictureTop uint32
 }
 
 // rawRefusalReason is the reason a raw subscriber is refused with, as a
@@ -3654,6 +3672,9 @@ func planGStreamerPipeline(gstPath, devicePath string, req *agentpb.StreamVideoR
 			edge := "bottom"
 			if thermalMetadataRowsOnTop {
 				edge = "top"
+				if plan.raw != nil {
+					plan.rawPictureTop = rows
+				}
 			}
 			stages = append(stages, fmt.Sprintf("videocrop %s=%d", edge, rows))
 		}
