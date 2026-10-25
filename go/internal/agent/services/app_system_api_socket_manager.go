@@ -42,6 +42,13 @@ type SystemAPIGrant struct {
 	// DataReadAllowlist narrows the data-read capability to these stream ids
 	// and stream id prefixes; see live.Permits. Empty reads every stream.
 	DataReadAllowlist []string
+	// Camera is whether the service holds the camera entitlement (or its
+	// deprecated alias, video) beside data-read. The agent's camera streams
+	// (camera_grid.go) are pictures of what a camera sees, so data-read admits
+	// them only with it, and only for the device paths in CameraAllowlist,
+	// the camera entitlement's allowlist; empty admits every camera.
+	Camera          bool
+	CameraAllowlist []string
 }
 
 // SystemAPIGrantFor returns the System API grant that entitlements carry. A
@@ -50,7 +57,7 @@ type SystemAPIGrant struct {
 // persisted container labels.
 func SystemAPIGrantFor(entitlements []appconfig.Entitlement) SystemAPIGrant {
 	var grant SystemAPIGrant
-	readsAll := false
+	readsAll, seesAll := false, false
 	for _, e := range entitlements {
 		switch e.Type {
 		case appconfig.EntitlementNotifications:
@@ -63,10 +70,21 @@ func SystemAPIGrantFor(entitlements []appconfig.Entitlement) SystemAPIGrant {
 			}
 			readsAll = readsAll || len(e.Allowlist) == 0
 			grant.DataReadAllowlist = append(grant.DataReadAllowlist, e.Allowlist...)
+		case appconfig.EntitlementCamera, appconfig.EntitlementVideo:
+			grant.Camera = true
+			seesAll = seesAll || len(e.Allowlist) == 0
+			grant.CameraAllowlist = append(grant.CameraAllowlist, e.Allowlist...)
 		}
 	}
 	if readsAll {
 		grant.DataReadAllowlist = nil
+	}
+	if seesAll {
+		grant.CameraAllowlist = nil
+	}
+	// Camera rights reach the System API through data-read alone.
+	if !slices.Contains(grant.Capabilities, SystemAPICapabilityDataRead) {
+		grant.Camera, grant.CameraAllowlist = false, nil
 	}
 	return grant
 }
@@ -222,10 +240,11 @@ func (m *AppSystemAPISocketManager) Ensure(appID, serviceName string, grant Syst
 	socket.server = server
 	systempb.RegisterNotificationServiceServer(server, NewSystemNotificationService(appID, m.notificationSender))
 	if m.liveData != nil {
-		socket.data = &systemDataService{hub: m.liveData, scope: func() ([]string, bool) {
+		socket.data = &systemDataService{hub: m.liveData, scope: func() ([]string, cameraScope, bool) {
 			m.mu.RLock()
 			defer m.mu.RUnlock()
-			return dataReadScope(socket)
+			allow, ok := dataReadScope(socket)
+			return allow, dataReadCameras(socket), ok
 		}}
 		agentpbv2.RegisterDataServiceServer(server, socket.data)
 	}
@@ -412,6 +431,25 @@ func dataReadScope(socket *appSystemAPISocket) (allow []string, ok bool) {
 	}
 	slices.Sort(allow)
 	return slices.Compact(allow), ok
+}
+
+// dataReadCameras is the camera rights of the app's data-read services,
+// united as dataReadScope unites their allowlists. The caller holds m.mu.
+func dataReadCameras(socket *appSystemAPISocket) cameraScope {
+	var scope cameraScope
+	for _, grant := range socket.owners {
+		if !grant.Camera || !slices.Contains(grant.Capabilities, SystemAPICapabilityDataRead) {
+			continue
+		}
+		if len(grant.CameraAllowlist) == 0 {
+			return cameraScope{granted: true}
+		}
+		scope.granted = true
+		scope.devices = append(scope.devices, grant.CameraAllowlist...)
+	}
+	slices.Sort(scope.devices)
+	scope.devices = slices.Compact(scope.devices)
+	return scope
 }
 
 func systemAPIOwner(serviceName string) string {

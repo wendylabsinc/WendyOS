@@ -6,7 +6,8 @@ package services
 // which need `admin`, and a SensorLink camera's pixels only through its node,
 // which serves one reader at a time and so locks the agent's own viewers out.
 // The agent now decodes both itself and publishes standard wendy.data.v1
-// streams that viewers, and apps with `data-read`, read like any other:
+// streams that viewers, and apps with `data-read` and `camera`, read like any
+// other (cameraScope):
 //
 //	agent/camera/grid/<source>     wendy.data.v1.Grid          a TOPDON TC001's
 //	                                                           temperatures, or a
@@ -43,6 +44,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -65,6 +67,74 @@ var gridDescriptor = &recordingpb.StreamDescriptor{MediaType: "application/proto
 // "agent/".
 func cameraGridStream(sourceID string) string    { return "camera/grid/" + sourceID }
 func cameraMarkersStream(sourceID string) string { return "camera/markers/" + sourceID }
+
+// cameraStreamsPrefix is where the agent's camera streams live.
+const cameraStreamsPrefix = "agent/camera/"
+
+// cameraScope is which of the agent's camera streams an app may read. They
+// are what its cameras see: a TC001's grid is its whole thermal picture, a
+// SensorLink camera's a greyscale one. So data-read admits them only with the
+// camera entitlement too, and with that entitlement's allowlist only for the
+// cameras it names. Without them an app neither reads a camera stream nor
+// makes one wanted, so it cannot start a camera. Operators have no scope.
+type cameraScope struct {
+	granted bool
+	// devices are the device paths, such as "/dev/video0", whose streams the
+	// app may read, sorted. Empty with granted admits every camera.
+	devices []string
+}
+
+// admits reports whether the scope lets an app read streamID, a stream id and
+// never a catalog id. Every stream below cameraStreamsPrefix needs the camera
+// entitlement, so one added there later is not readable by default.
+func (c cameraScope) admits(streamID string) bool {
+	rest, ok := strings.CutPrefix(streamID, cameraStreamsPrefix)
+	if !ok {
+		return true
+	}
+	if !c.granted {
+		return false
+	}
+	if len(c.devices) == 0 {
+		return true
+	}
+	for _, kind := range []string{"grid/", "markers/"} {
+		if source, ok := strings.CutPrefix(rest, kind); ok {
+			path, ok := strings.CutPrefix(source, "v4l2:")
+			return ok && slices.Contains(c.devices, path)
+		}
+	}
+	return false
+}
+
+// covers reports whether c admits every camera stream within admits.
+func (c cameraScope) covers(within cameraScope) bool {
+	switch {
+	case !within.granted:
+		return true
+	case !c.granted:
+		return false
+	case len(c.devices) == 0:
+		return true
+	case len(within.devices) == 0:
+		return false
+	}
+	for _, device := range within.devices {
+		if !slices.Contains(c.devices, device) {
+			return false
+		}
+	}
+	return true
+}
+
+// readable is the scope as a live.Selection.Readable, nil when it admits
+// every stream.
+func (c cameraScope) readable() func(string) bool {
+	if c.granted && len(c.devices) == 0 {
+		return nil
+	}
+	return c.admits
+}
 
 const (
 	// cameraGridScanEvery is how often the cameras are listed again, and how

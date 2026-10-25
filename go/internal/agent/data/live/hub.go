@@ -117,6 +117,13 @@ type Selection struct {
 	// the selection names, catalog entries included. See Permits. An app's
 	// data-read allowlist arrives here; operators have none.
 	Allow []string
+	// Readable, when set, is what else the subscriber needs to read a stream,
+	// beyond Allow: a stream id it refuses is neither delivered nor Wanted,
+	// and its catalog entry is hidden. It gets stream ids, never catalog ids,
+	// and runs with the hub's lock held. An app's rights beyond its allowlist
+	// arrive here, such as the camera entitlement the agent's camera streams
+	// need; operators have none.
+	Readable func(streamID string) bool
 }
 
 // Permits reports whether allow admits streamID. An entry admits the stream id
@@ -187,8 +194,10 @@ func NewHub(limits Limits) *Hub {
 func (h *Hub) Subscribed() bool { return h.active.Load() > 0 }
 
 // Wanted reports whether a subscriber asks for the stream: names it by id or
-// by a prefix of its id, or names its schema, within its Allow scope. An empty
-// selection takes every stream but asks for none, so it does not count. A
+// by a prefix of its id, or names its schema, within its Allow scope and what
+// its Readable admits: a subscriber that may not read a stream never makes it
+// wanted. An empty selection takes every stream but asks for none, so it does
+// not count. A
 // producer whose records are costly to make, a camera decoder for example,
 // runs while its stream is wanted: for viewers that name what it makes, not
 // for one that takes whatever there is. Its records still reach every
@@ -254,7 +263,7 @@ func (h *Hub) Offer(r *Record) {
 
 // Subscribe registers a subscriber for sel. The caller must Close it.
 func (h *Hub) Subscribe(sel Selection) (*Subscriber, error) {
-	s := &Subscriber{hub: h, allow: slices.Clone(sel.Allow), pending: make(map[string]*Record), skipped: make(map[string]uint64), wake: make(chan struct{}, 1)}
+	s := &Subscriber{hub: h, allow: slices.Clone(sel.Allow), readable: sel.Readable, pending: make(map[string]*Record), skipped: make(map[string]uint64), wake: make(chan struct{}, 1)}
 	if len(sel.StreamIDs) == 0 && len(sel.StreamPrefixes) == 0 && len(sel.Schemas) == 0 {
 		s.all = true
 	}
@@ -304,6 +313,7 @@ type Subscriber struct {
 	schemas  map[string]struct{} // nil: any schema
 	minGap   time.Duration       // from MaxRateHz; 0 is no cap
 	allow    []string            // empty admits every stream; see Permits
+	readable func(string) bool   // nil admits every stream; see Selection.Readable
 
 	mu      sync.Mutex
 	closed  bool
@@ -316,7 +326,7 @@ type Subscriber struct {
 }
 
 func (s *Subscriber) selects(streamID, schema string) bool {
-	if !Permits(s.allow, streamID) {
+	if !Permits(s.allow, streamID) || s.readable != nil && !s.readable(strings.TrimPrefix(streamID, CatalogPrefix)) {
 		return false
 	}
 	if s.all {

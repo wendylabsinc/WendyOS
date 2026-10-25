@@ -6,11 +6,13 @@ import (
 	"errors"
 	"image"
 	"math"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
@@ -18,6 +20,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/agent/data"
 	"github.com/wendylabsinc/wendy/go/internal/agent/data/live"
 	"github.com/wendylabsinc/wendy/go/internal/agent/ros2camera"
+	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	"github.com/wendylabsinc/wendy/go/proto/gen/datapb"
@@ -406,5 +409,162 @@ func TestRawFrameSubscriptionReportsARefusal(t *testing.T) {
 	}
 	if _, err := svc.subscribeRawFrames(context.Background(), "v4l2:/dev/video04"); err == nil {
 		t.Fatal("an alias of a camera's source id was accepted")
+	}
+}
+
+// apps serves System API sockets from the rig's live data, as the agent does
+// for its apps.
+func (r *gridRig) apps(t *testing.T) *systemDataTest {
+	t.Helper()
+	useSystemAPIRoot(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	sockets := NewAppSystemAPISocketManager(ctx, zap.NewNop(), &recordingNotificationSender{}, r.manager.Live())
+	t.Cleanup(func() { cancel(); sockets.stopAll() })
+	return &systemDataTest{t: t, capture: r.manager, sockets: sockets}
+}
+
+func (r *gridRig) feedSubscribers(path string) int {
+	r.feed.mu.Lock()
+	defer r.feed.mu.Unlock()
+	return len(r.feed.subs[path])
+}
+
+// An app reads the agent's camera streams with data-read only while it holds
+// camera too, and only for the cameras a camera allowlist names. Without it
+// they are refused by name, missing from wider selections and the catalog,
+// and never start a camera. A stream opened with camera ends when the app
+// loses it.
+func TestCameraGridNeedsTheCameraEntitlement(t *testing.T) {
+	rig := newGridRig(t, "/dev/video4", "/dev/video96")
+	agent := rig.apps(t)
+	readAll := appconfig.Entitlement{Type: appconfig.EntitlementDataRead}
+	camera := appconfig.Entitlement{Type: appconfig.EntitlementCamera}
+	agent.capture.AdvertiseAppStream("com.example.detector", "", "markers", liveMarkersStream)
+
+	blindConn := agent.app("com.example.blind", "", readAll)
+	for _, id := range []string{thermalGridID, thermalMarkID, lumaGridID, live.CatalogPrefix + thermalGridID} {
+		if got := streamDataError(t, blindConn, id); got != codes.PermissionDenied {
+			t.Fatalf("%s without camera: got %v, want PermissionDenied", id, got)
+		}
+	}
+	blind := agentpbv2.NewDataServiceClient(blindConn)
+	views := []agentpbv2.DataService_StreamDataClient{
+		openLiveStreamWith(t, blind, &agentpbv2.StreamDataRequest{StreamPrefixes: []string{"agent/camera/", "apps/"}}),
+		openLiveStreamWith(t, blind, &agentpbv2.StreamDataRequest{Schemas: []string{"wendy.data.v1.Grid", "wendy.data.v1.VideoMarkers"}}),
+		openLiveStream(t, blind),
+	}
+	catalog := openLiveStreamWith(t, blind, &agentpbv2.StreamDataRequest{StreamPrefixes: []string{"_streams/"}, SendLatest: true})
+	if r := recvLive(t, catalog); r.GetStreamId() != "_streams/apps/com.example.detector/markers" {
+		t.Fatalf("catalog without camera: %v", r)
+	}
+	never(t, "an app without camera started a camera", func() bool { return rig.fp.count() > 0 || rig.feedSubscribers("/dev/video96") > 0 })
+
+	// With camera, naming the grid starts the thermal camera.
+	seeing := agentpbv2.NewDataServiceClient(agent.app("com.example.seeing", "", readAll, camera))
+	grid := openLiveStream(t, seeing, thermalGridID)
+	hub := rig.thermalHub(t, 0, tc001Format, tc001PictureTop)
+	hub.publishRaw(stackedThermalFrame(uniform(30)), 7, tc001Format)
+	if r := recvLive(t, grid); r.GetStreamId() != thermalGridID || r.GetTimestampUnixNanos() != 7 {
+		t.Fatalf("grid with camera: %v", r)
+	}
+	// Meanwhile the app without camera saw neither the grid nor its catalog
+	// entry going active: the next thing it sees is an app's record.
+	agent.record("com.example.detector", "markers", "boxes")
+	for _, view := range views {
+		if r := recvLive(t, view); r.GetStreamId() != "apps/com.example.detector/markers" {
+			t.Fatalf("an app without camera got %v", r)
+		}
+	}
+	if r := recvLive(t, catalog); r.GetStreamId() != "_streams/apps/com.example.detector/markers" {
+		t.Fatalf("catalog without camera: %v", r)
+	}
+
+	// A camera allowlist admits the cameras it names and no others.
+	narrowConn := agent.app("com.example.narrow", "", readAll, appconfig.Entitlement{Type: appconfig.EntitlementCamera, Allowlist: []string{"/dev/video96"}})
+	if got := streamDataError(t, narrowConn, thermalGridID); got != codes.PermissionDenied {
+		t.Fatalf("a camera outside the allowlist: got %v, want PermissionDenied", got)
+	}
+	openLiveStream(t, agentpbv2.NewDataServiceClient(narrowConn), lumaGridID)
+	eventually(t, "the allowed camera's decoder starts", func() bool { return rig.feedSubscribers("/dev/video96") == 1 })
+
+	// Redeployed without camera, the app's grid stream ends, and with it the
+	// thermal decoder nobody else asked for.
+	if _, err := agent.sockets.Ensure("com.example.seeing", "", SystemAPIGrantFor([]appconfig.Entitlement{readAll})); err != nil {
+		t.Fatal(err)
+	}
+	if got := endOf(t, grid); got != codes.Aborted {
+		t.Fatalf("grid stream after camera was withdrawn: got %v, want Aborted", got)
+	}
+	eventually(t, "the thermal decoder stops", func() bool { return hub.ctx.Err() != nil })
+}
+
+func TestSystemAPIGrantForCamera(t *testing.T) {
+	readAll := appconfig.Entitlement{Type: appconfig.EntitlementDataRead}
+	dataRead := []string{SystemAPICapabilityDataRead}
+	for _, tc := range []struct {
+		name         string
+		entitlements []appconfig.Entitlement
+		want         SystemAPIGrant
+	}{
+		{"camera without data-read", []appconfig.Entitlement{{Type: appconfig.EntitlementCamera}, {Type: appconfig.EntitlementNotifications}}, SystemAPIGrant{Capabilities: []string{SystemAPICapabilityNotifications}}},
+		{"data-read without camera", []appconfig.Entitlement{readAll}, SystemAPIGrant{Capabilities: dataRead}},
+		{"data-read and camera", []appconfig.Entitlement{readAll, {Type: appconfig.EntitlementCamera}}, SystemAPIGrant{Capabilities: dataRead, Camera: true}},
+		{"a camera allowlist", []appconfig.Entitlement{{Type: appconfig.EntitlementCamera, Allowlist: []string{"/dev/video0"}}, readAll}, SystemAPIGrant{Capabilities: dataRead, Camera: true, CameraAllowlist: []string{"/dev/video0"}}},
+		{"the deprecated video entitlement", []appconfig.Entitlement{readAll, {Type: appconfig.EntitlementVideo, Allowlist: []string{"/dev/video2"}}}, SystemAPIGrant{Capabilities: dataRead, Camera: true, CameraAllowlist: []string{"/dev/video2"}}},
+		// One camera entitlement without an allowlist admits every camera.
+		{"app and service camera", []appconfig.Entitlement{readAll, {Type: appconfig.EntitlementCamera, Allowlist: []string{"/dev/video0"}}, {Type: appconfig.EntitlementCamera}}, SystemAPIGrant{Capabilities: dataRead, Camera: true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := SystemAPIGrantFor(tc.entitlements); !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("got %+v, want %+v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestCameraScope(t *testing.T) {
+	none, every := cameraScope{}, cameraScope{granted: true}
+	sensorLink := cameraScope{granted: true, devices: []string{"/dev/video96"}}
+	for _, tc := range []struct {
+		name  string
+		scope cameraScope
+		id    string
+		want  bool
+	}{
+		{"no camera, grid", none, thermalGridID, false},
+		{"no camera, markers", none, thermalMarkID, false},
+		{"no camera, a later camera stream", none, "agent/camera/depth/v4l2:/dev/video4", false},
+		{"no camera, campaign markers", none, "agent/campaign/door/markers/v4l2:/dev/video4", true},
+		{"no camera, an app stream", none, "apps/com.example.detector/markers", true},
+		{"every camera", every, thermalMarkID, true},
+		{"every camera, a later camera stream", every, "agent/camera/depth/v4l2:/dev/video4", true},
+		{"an allowed camera", sensorLink, lumaGridID, true},
+		{"an allowed camera's markers", sensorLink, "agent/camera/markers/" + lumaSource, true},
+		{"another camera", sensorLink, thermalGridID, false},
+		{"a longer device path", sensorLink, "agent/camera/grid/v4l2:/dev/video960", false},
+		{"a later camera stream", sensorLink, "agent/camera/depth/" + lumaSource, false},
+	} {
+		if got := tc.scope.admits(tc.id); got != tc.want {
+			t.Errorf("%s: admits(%s) = %v, want %v", tc.name, tc.id, got, tc.want)
+		}
+	}
+	for _, tc := range []struct {
+		scope, within cameraScope
+		want          bool
+	}{
+		{none, none, true},
+		{none, sensorLink, false},
+		{sensorLink, none, true},
+		{every, sensorLink, true},
+		{sensorLink, every, false},
+		{sensorLink, sensorLink, true},
+		{sensorLink, cameraScope{granted: true, devices: []string{"/dev/video4", "/dev/video96"}}, false},
+	} {
+		if got := tc.scope.covers(tc.within); got != tc.want {
+			t.Errorf("%+v covers %+v = %v, want %v", tc.scope, tc.within, got, tc.want)
+		}
+	}
+	if every.readable() != nil || none.readable() == nil || sensorLink.readable() == nil {
+		t.Error("readable is nil only for a scope that admits every stream")
 	}
 }

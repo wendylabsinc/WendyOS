@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -343,6 +344,42 @@ func TestSelectionAllowFiltersCatalog(t *testing.T) {
 		t.Fatalf("catalog change: %v", info)
 	}
 	requireEmpty(t, s)
+}
+
+// A stream Readable refuses is not delivered, not in the catalog, and not
+// wanted, however the selection names it. Readable is asked about the stream,
+// never its catalog id.
+func TestSelectionReadable(t *testing.T) {
+	h, _ := clockedHub(DefaultLimits)
+	const camera = "agent/camera/grid/v4l2:/dev/video0"
+	h.Advertise(StreamInfo{ID: camera, Publisher: "agent"})
+	readable := func(id string) bool {
+		if strings.HasPrefix(id, CatalogPrefix) {
+			t.Errorf("Readable asked about catalog id %s", id)
+		}
+		return !strings.HasPrefix(id, "agent/camera/")
+	}
+	s := subscribeWith(t, h, Selection{StreamPrefixes: []string{"agent/", "apps/", CatalogPrefix}, SendLatest: true, Readable: readable})
+	everything := subscribeWith(t, h, Selection{Readable: readable})
+	requireEmpty(t, s)
+	h.Offer(record(camera, 1, 8))
+	h.Offer(record("apps/a/markers", 2, 8))
+	for _, sub := range []*Subscriber{s, everything} {
+		if d := next(t, sub); d.Record.StreamID != "apps/a/markers" {
+			t.Fatalf("delivered %s", d.Record.StreamID)
+		}
+		requireEmpty(t, sub)
+	}
+	if h.Wanted(camera, "test.v1.Sample") {
+		t.Fatal("wanted by a subscriber that may not read it")
+	}
+	if !h.Wanted("agent/campaign/door/markers/v4l2:/dev/video0", "") {
+		t.Fatal("a readable stream the selection names is not wanted")
+	}
+	subscribeWith(t, h, Selection{StreamIDs: []string{camera}})
+	if !h.Wanted(camera, "test.v1.Sample") {
+		t.Fatal("not wanted by a subscriber without Readable")
+	}
 }
 
 // A stream is wanted by a subscriber that names it by id, prefix or schema,

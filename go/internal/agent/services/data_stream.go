@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"errors"
+	"strings"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/data/live"
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
@@ -98,14 +99,16 @@ func (s *DataService) StreamData(req *agentpbv2.StreamDataRequest, out grpc.Serv
 	if err := authorizeDataStream(out.Context()); err != nil {
 		return err
 	}
-	return streamLiveData(s.manager.Live(), req, nil, out)
+	return streamLiveData(s.manager.Live(), req, nil, nil, out)
 }
 
 // streamLiveData serves one StreamData call from hub. allow is the caller's
-// read scope (see live.Permits); empty reads every stream. Naming a stream
-// outside it is refused rather than left silent, so an app learns that its
-// allowlist, not the publisher, is why nothing arrives.
-func streamLiveData(hub *live.Hub, req *agentpbv2.StreamDataRequest, allow []string, out grpc.ServerStreamingServer[agentpbv2.DataRecord]) error {
+// read scope (see live.Permits); empty reads every stream. readable, when not
+// nil, is what else the caller needs for a stream (live.Selection.Readable):
+// an app's camera rights. Naming a stream outside either is refused rather
+// than left silent, so an app learns that its entitlements, not the
+// publisher, are why nothing arrives.
+func streamLiveData(hub *live.Hub, req *agentpbv2.StreamDataRequest, allow []string, readable func(string) bool, out grpc.ServerStreamingServer[agentpbv2.DataRecord]) error {
 	ctx := out.Context()
 	selection, err := liveSelection(req)
 	if err != nil {
@@ -115,8 +118,12 @@ func streamLiveData(hub *live.Hub, req *agentpbv2.StreamDataRequest, allow []str
 		if !live.Permits(allow, id) {
 			return status.Errorf(codes.PermissionDenied, "stream %q is outside this app's data-read allowlist", id)
 		}
+		if readable != nil && !readable(strings.TrimPrefix(id, live.CatalogPrefix)) {
+			return status.Errorf(codes.PermissionDenied, "stream %q needs the camera entitlement for its camera", id)
+		}
 	}
 	selection.Allow = allow
+	selection.Readable = readable
 	sub, err := hub.Subscribe(selection)
 	if errors.Is(err, live.ErrTooManySubscribers) {
 		return status.Error(codes.ResourceExhausted, err.Error())

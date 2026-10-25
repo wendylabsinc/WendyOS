@@ -35,18 +35,20 @@ var errDataReadNarrowed = errors.New("this app's data-read entitlement changed; 
 type systemDataService struct {
 	agentpbv2.UnimplementedDataServiceServer
 	hub *live.Hub
-	// scope returns the app's data-read allowlist, and false when no service
-	// of the app holds data-read any more. It takes the socket manager's lock,
-	// so it is never called with that lock held.
-	scope func() (allow []string, ok bool)
+	// scope returns the app's data-read allowlist and the cameras whose
+	// streams it may read, and false when no service of the app holds
+	// data-read any more. It takes the socket manager's lock, so it is never
+	// called with that lock held.
+	scope func() (allow []string, cameras cameraScope, ok bool)
 
 	mu   sync.Mutex
 	open map[*openDataStream]struct{}
 }
 
 type openDataStream struct {
-	allow  []string
-	cancel context.CancelCauseFunc
+	allow   []string
+	cameras cameraScope
+	cancel  context.CancelCauseFunc
 }
 
 // dataStreamWithContext is a StreamData stream whose context the service can
@@ -64,7 +66,7 @@ func (s *systemDataService) StreamData(req *agentpbv2.StreamDataRequest, out grp
 	// Read the scope and register under one lock, so a narrowing either
 	// happened before this call read its scope or sees this call.
 	s.mu.Lock()
-	allow, ok := s.scope()
+	allow, cameras, ok := s.scope()
 	if !ok {
 		s.mu.Unlock()
 		return status.Error(codes.PermissionDenied, "System API capability is not authorized for this app")
@@ -73,7 +75,7 @@ func (s *systemDataService) StreamData(req *agentpbv2.StreamDataRequest, out grp
 		s.mu.Unlock()
 		return status.Errorf(codes.ResourceExhausted, "an app may hold at most %d live data streams at once", maxAppDataStreams)
 	}
-	call := &openDataStream{allow: allow, cancel: cancel}
+	call := &openDataStream{allow: allow, cameras: cameras, cancel: cancel}
 	if s.open == nil {
 		s.open = make(map[*openDataStream]struct{})
 	}
@@ -85,7 +87,7 @@ func (s *systemDataService) StreamData(req *agentpbv2.StreamDataRequest, out grp
 		s.mu.Unlock()
 	}()
 
-	err := streamLiveData(s.hub, req, allow, dataStreamWithContext{out, ctx})
+	err := streamLiveData(s.hub, req, allow, cameras.readable(), dataStreamWithContext{out, ctx})
 	if errors.Is(context.Cause(ctx), errDataReadNarrowed) {
 		return status.Error(codes.Aborted, errDataReadNarrowed.Error())
 	}
@@ -101,9 +103,9 @@ func (s *systemDataService) narrow() {
 	if len(s.open) == 0 {
 		return
 	}
-	allow, ok := s.scope()
+	allow, cameras, ok := s.scope()
 	for call := range s.open {
-		if !ok || !covers(allow, call.allow) {
+		if !ok || !covers(allow, call.allow) || !cameras.covers(call.cameras) {
 			call.cancel(errDataReadNarrowed)
 		}
 	}
