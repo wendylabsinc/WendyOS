@@ -229,12 +229,16 @@ func TestRecordingPacketLiveMode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Listed in the catalog while its socket is open, as any app stream is.
+	// Listed in the catalog while the app's task runs, as any app stream is:
+	// the containerd client lists it as the task starts.
+	m.AdvertiseStreams("test.app", "")
 	catalog, err := capture.Live().Subscribe(live.Selection{StreamIDs: []string{live.CatalogPrefix + "apps/test.app/markers"}, SendLatest: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	listed, err := catalog.Next(t.Context())
+	listCtx, cancelList := context.WithTimeout(t.Context(), 5*time.Second)
+	listed, err := catalog.Next(listCtx)
+	cancelList()
 	catalog.Close()
 	if err != nil || listed.Record.StreamID != live.CatalogPrefix+"apps/test.app/markers" {
 		t.Fatalf("live stream not in the catalog: %+v %v", listed.Record, err)

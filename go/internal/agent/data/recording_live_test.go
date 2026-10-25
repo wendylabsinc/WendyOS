@@ -797,9 +797,9 @@ func TestLiveModeValidation(t *testing.T) {
 	}
 }
 
-// A live-mode stream is in the catalog while its socket is open, as any app
-// stream is, and the hub keeps its newest record for a viewer that asks for
-// it, in memory only: nothing journals, buffers or records it.
+// A live-mode stream is in the catalog while it is listed, as any app stream
+// is while its task runs, and the hub keeps its newest record for a viewer
+// that asks for it, in memory only: nothing journals, buffers or records it.
 func TestLiveModeStreamInCatalog(t *testing.T) {
 	m, err := NewManager(t.TempDir())
 	if err != nil {
