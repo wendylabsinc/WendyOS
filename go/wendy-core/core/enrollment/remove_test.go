@@ -3,13 +3,14 @@ package enrollment
 import (
 	"context"
 	"fmt"
+	"reflect"
+	"strings"
+	"testing"
+
 	cloudpbv2 "github.com/wendylabsinc/WendyOS/go/wendy-core/core/enrollment/internal/cloudpb"
 	pkicorepb "github.com/wendylabsinc/WendyOS/go/wendy-core/core/enrollment/internal/pkipb"
 	"github.com/wendylabsinc/WendyOS/go/wendy-core/platform"
 	"google.golang.org/protobuf/proto"
-	"reflect"
-	"strings"
-	"testing"
 )
 
 const (

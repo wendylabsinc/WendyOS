@@ -5,13 +5,14 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strings"
+
 	"github.com/wendylabsinc/WendyOS/go/wendy-core/core/cloud"
 	agentpb "github.com/wendylabsinc/WendyOS/go/wendy-core/core/enrollment/internal/agentpb"
 	cloudpb "github.com/wendylabsinc/WendyOS/go/wendy-core/core/enrollment/internal/cloudpb"
 	pkipb "github.com/wendylabsinc/WendyOS/go/wendy-core/core/enrollment/internal/pkipb"
 	"github.com/wendylabsinc/WendyOS/go/wendy-core/platform"
 	"google.golang.org/protobuf/proto"
-	"strings"
 )
 
 func rpcCode(err error) platform.RPCStatusCode {

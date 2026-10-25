@@ -3,12 +3,13 @@ package enrollment
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"testing"
+
 	agentpbv2 "github.com/wendylabsinc/WendyOS/go/wendy-core/core/enrollment/internal/agentpb"
 	"github.com/wendylabsinc/WendyOS/go/wendy-core/platform"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
-	"os"
-	"testing"
 )
 
 // statusConn answers every unary call with one recorded IsProvisioned status.
@@ -24,7 +25,7 @@ func (c statusConn) Unary(context.Context, platform.RPCRequest) (platform.RPCRes
 // The agents' answers are pinned by the same contract file (Go and Swift agent
 // tests); this proves what the CLI concludes from each of them.
 func TestCheckAgentEnrollmentContract(t *testing.T) {
-	data, err := os.ReadFile("../../../../Proto/conformance/agent-provisioning-v2/contract.json")
+	data, err := os.ReadFile("testdata/agent-provisioning-contract.json")
 	if err != nil {
 		t.Fatal(err)
 	}

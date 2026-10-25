@@ -7,8 +7,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"github.com/wendylabsinc/WendyOS/go/wendy-core/platform"
 	"time"
+
+	"github.com/wendylabsinc/WendyOS/go/wendy-core/platform"
 )
 
 // MaxProofBytes bounds a single public revocation proof.

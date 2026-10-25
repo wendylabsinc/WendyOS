@@ -3,13 +3,14 @@ package enrollment
 import (
 	"context"
 	"errors"
+	"strings"
+	"testing"
+	"time"
+
 	cloudpbv2 "github.com/wendylabsinc/WendyOS/go/wendy-core/core/enrollment/internal/cloudpb"
 	"github.com/wendylabsinc/WendyOS/go/wendy-core/platform"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
-	"strings"
-	"testing"
-	"time"
 )
 
 const unenrollTenant = "11111111-1111-4111-8111-111111111111"

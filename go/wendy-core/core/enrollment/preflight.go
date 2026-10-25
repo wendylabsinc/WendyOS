@@ -3,6 +3,7 @@ package enrollment
 import (
 	"context"
 	"fmt"
+
 	agentpbv2 "github.com/wendylabsinc/WendyOS/go/wendy-core/core/enrollment/internal/agentpb"
 	"github.com/wendylabsinc/WendyOS/go/wendy-core/platform"
 )

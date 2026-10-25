@@ -5,11 +5,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
+	"strings"
+
 	"github.com/wendylabsinc/WendyOS/go/wendy-core/core/cloud"
 	cloudpbv2 "github.com/wendylabsinc/WendyOS/go/wendy-core/core/enrollment/internal/cloudpb"
 	"github.com/wendylabsinc/WendyOS/go/wendy-core/platform"
-	"net/url"
-	"strings"
 )
 
 //go:generate python3 ../../scripts/generate_enrollment.py
@@ -129,7 +130,7 @@ func RetryTakenDeviceUUID(ctx context.Context, entropy platform.Entropy, deviceI
 func (c *Client) MintEAB(tokenCtx context.Context, session Session, cfg Config, name string, hw *DeviceHardware) (out Config, assetID string, err error) {
 	out = cfg
 	if c.Signer == nil {
-		return out, "", fmt.Errorf("signing enrollment request: Cloud request signing requires an operator certificate")
+		return out, "", fmt.Errorf("signing enrollment request: device enrollment requires an operator certificate")
 	}
 	err = RetryTakenDeviceUUID(tokenCtx, c.Entropy, cfg.DeviceID, func(deviceID string) error {
 		next := cfg

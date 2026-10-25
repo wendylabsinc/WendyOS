@@ -4,14 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
+	"testing"
+	"time"
+
 	"github.com/wendylabsinc/WendyOS/go/wendy-core/core/cloud"
 	pb "github.com/wendylabsinc/WendyOS/go/wendy-core/core/enrollment/internal/cloudpb"
 	"github.com/wendylabsinc/WendyOS/go/wendy-core/platform"
 	"github.com/wendylabsinc/WendyOS/go/wendy-core/platform/platformtest"
 	"google.golang.org/protobuf/proto"
-	"strings"
-	"testing"
-	"time"
 )
 
 var testSession = Session{Principal: "spiffe://wendy.sh/tenant/" + testTenant + "/operator/op", PKIEndpoint: "https://identity.test"}
