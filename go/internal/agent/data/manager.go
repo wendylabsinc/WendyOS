@@ -132,8 +132,9 @@ type Manager struct {
 	// It has its own lock and never blocks, so records are offered outside mu.
 	live *live.Hub
 	// streamRecorded is closed once the stream record offered live last is in
-	// the pre-roll and every open episode (see publish). It is nil before the
-	// first record. streamMu guards it.
+	// the pre-roll and every open episode (see publish); a live-only record,
+	// never recorded, takes no place in it. It is nil before the first
+	// recorded record. streamMu guards it.
 	streamRecorded chan struct{}
 	// agentPreRoll is streamPreRoll for the agent's own streams, with a
 	// budget of its own (see bufferStreamLocked).
