@@ -561,3 +561,42 @@ func TestLiveModeValidation(t *testing.T) {
 		t.Fatal("lightweight record with input references accepted")
 	}
 }
+
+// A live-mode stream is in the catalog while its socket is open, as any app
+// stream is, and the hub keeps its newest record for a viewer that asks for
+// it, in memory only: nothing journals, buffers or records it.
+func TestLiveModeStreamInCatalog(t *testing.T) {
+	m, err := NewManager(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.AdvertiseAppStream("test.app", "", "markers", liveModeMarkers)
+	for _, payload := range []string{"old", "boxes"} {
+		if _, err := m.RecordStream("test.app", "", "markers", liveModeMarkers, &recordingpb.Record{Payload: []byte(payload)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s, err := m.Live().Subscribe(live.Selection{StreamPrefixes: []string{live.CatalogPrefix, "apps/test.app/"}, SendLatest: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(s.Close)
+	var info agentpbv2.DataStreamInfo
+	d := nextLive(t, s)
+	if err := proto.Unmarshal(d.Record.Payload, &info); err != nil {
+		t.Fatal(err)
+	}
+	if info.GetStreamId() != "apps/test.app/markers" || info.GetState() != agentpbv2.DataStreamInfo_STATE_ACTIVE || info.GetSchema() != "wendy.data.v1.VideoMarkers" {
+		t.Fatalf("catalog entry: %v", &info)
+	}
+	if d = nextLive(t, s); d.Record.StreamID != "apps/test.app/markers" || string(d.Record.Payload) != "boxes" {
+		t.Fatalf("newest record: %s %q", d.Record.StreamID, d.Record.Payload)
+	}
+	requireNoLive(t, s)
+	m.mu.Lock()
+	buffered := len(m.streamPreRoll)
+	m.mu.Unlock()
+	if buffered != 0 {
+		t.Fatalf("pre-roll holds %d live-mode records", buffered)
+	}
+}

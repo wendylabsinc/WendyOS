@@ -229,6 +229,16 @@ func TestRecordingPacketLiveMode(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Listed in the catalog while its socket is open, as any app stream is.
+	catalog, err := capture.Live().Subscribe(live.Selection{StreamIDs: []string{live.CatalogPrefix + "apps/test.app/markers"}, SendLatest: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	listed, err := catalog.Next(t.Context())
+	catalog.Close()
+	if err != nil || listed.Record.StreamID != live.CatalogPrefix+"apps/test.app/markers" {
+		t.Fatalf("live stream not in the catalog: %+v %v", listed.Record, err)
+	}
 	viewer, err := capture.Live().Subscribe(live.Selection{})
 	if err != nil {
 		t.Fatal(err)
