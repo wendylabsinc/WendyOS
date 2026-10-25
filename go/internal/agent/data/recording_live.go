@@ -27,8 +27,8 @@ const maxAgentStream = 480
 //
 // stream names the producer and what it publishes, for example
 // "campaign/<campaign>/markers/<source>". descriptor names the payload's
-// schema and media type. r is cloned, so the caller keeps its buffers. Its
-// timing, client boot time and inputs say which sample the record describes,
+// schema and media type. Both are cloned, so the caller may reuse them. The
+// record's timing, client boot time and inputs say which sample it describes,
 // as on an app's durable record; a record without them is stamped with its
 // receipt.
 func (m *Manager) Publish(stream string, descriptor *recordingpb.StreamDescriptor, r *recordingpb.Record) error {
@@ -44,7 +44,7 @@ func (m *Manager) Publish(stream string, descriptor *recordingpb.StreamDescripto
 	if err := ValidateSampleTiming(r.Timing); err != nil {
 		return err
 	}
-	stored, err := stampStreamRecord("", "", stream, descriptor, r)
+	stored, err := stampStreamRecord("", "", stream, proto.Clone(descriptor).(*recordingpb.StreamDescriptor), r)
 	if err != nil {
 		return err
 	}

@@ -631,6 +631,20 @@ repeatable. Without them every stream is printed. `--json` writes one protobuf J
 object per record, with the payload in base64. Live and recorded data are the same
 records: what a viewer sees is what an Episode or an export holds.
 
+The agent publishes its own streams under `agent/`. A campaign with an `inference`
+block publishes every scored frame on `agent/campaign/<campaign>/markers/<source>`,
+for example `agent/campaign/people/markers/v4l2:/dev/video0`: the frame's
+detections as boxes, labelled with the class and the score in percent. A frame with
+nothing detected clears the boxes. They are live whether or not an Episode is
+recording, and an Episode that captures `applications` records the same records.
+
+Viewers recognise a record by its schema. The standard types are defined in
+`Proto/wendy/data/v1/types.proto`: `wendy.data.v1.VideoMarkers` (points and boxes on
+a camera's picture, positioned from 0 to 1), `wendy.data.v1.Grid` (a grid of
+measurements with a scale and a unit) and `wendy.data.v1.Event` (a condition raised
+or cleared). An app publishes one by declaring a stream with `mediaType`
+`application/protobuf` and that `schema`.
+
 Delivery is best effort. When the connection is slower than a stream, a newer
 record replaces the one not yet sent, so a viewer always gets the newest record of
 each stream and never slows the app. A printed record says how many records of its
@@ -645,7 +659,8 @@ A record's time is the time its data describes, on the device's wall clock, the
 clock video frames use. For a durable record it is the first sample time of
 `UNIX`, `CLOCK_REALTIME` or `CLOCK_BOOTTIME` timing, or its client boot time when
 the agent accepted it. Otherwise it is the agent's receipt time, which is what
-every lightweight record gets.
+every lightweight record gets. Campaign inference markers carry the time of the
+camera frame they were found in, the `timestamp_ns` of that video frame.
 
 The stream is served over mutual TLS to user certificates, on the LAN or through
 Wendy Cloud, and on the device's local admin socket. A device that has not been
