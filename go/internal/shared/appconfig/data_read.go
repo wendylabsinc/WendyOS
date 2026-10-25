@@ -65,3 +65,25 @@ func validateDataReadAllowlist(allowlist []string) error {
 	}
 	return nil
 }
+
+// ValidateDataReadAllowlists checks the allowlist of every data-read
+// entitlement in entitlements with the rules Validate applies, and nothing
+// else: a service's create configuration legitimately carries the app's
+// data-read and its own. The agent runs it on every configuration it is sent.
+// The allowlist reaches the agent again, after a restart, through a container
+// label, and one these rules refuse would not come back the same: [""] would
+// come back as no allowlist, which reads every stream.
+func ValidateDataReadAllowlists(entitlements []Entitlement) error {
+	for i, e := range entitlements {
+		if e.Type != EntitlementDataRead {
+			continue
+		}
+		if err := validateAllowlistEntries(e.Allowlist, "entitlement", i); err != nil {
+			return err
+		}
+		if err := validateDataReadAllowlist(e.Allowlist); err != nil {
+			return fmt.Errorf("entitlement[%d]: %w", i, err)
+		}
+	}
+	return nil
+}
