@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/data"
+	"github.com/wendylabsinc/wendy/go/internal/agent/data/live"
 	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	recordingpb "github.com/wendylabsinc/wendy/go/proto/gen/recordingpb"
@@ -17,6 +18,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 )
@@ -249,6 +251,64 @@ func TestSystemAPIDataReadUnionsServices(t *testing.T) {
 	}
 	if got := streamDataError(t, api); got != codes.PermissionDenied {
 		t.Fatalf("after data-read was withdrawn: got %v, want PermissionDenied", got)
+	}
+}
+
+// narrowingStream is a StreamData server stream that records what it sends
+// and runs onSend inside each Send, as a slow reader's Send would block while
+// the app's grant changes.
+type narrowingStream struct {
+	grpc.ServerStream // unused; the methods below are all StreamData calls
+	ctx               context.Context
+	subbed            chan struct{}
+	sent              []string
+	onSend            func()
+}
+
+func (s *narrowingStream) Context() context.Context { return s.ctx }
+func (s *narrowingStream) SendHeader(metadata.MD) error {
+	close(s.subbed)
+	return nil
+}
+func (s *narrowingStream) Send(r *agentpbv2.DataRecord) error {
+	s.sent = append(s.sent, r.GetStreamId())
+	if s.onSend != nil {
+		s.onSend()
+		s.onSend = nil
+	}
+	return nil
+}
+
+// A narrowed stream ends at once, even for a reader that always has a record
+// waiting: it never sends a record the new scope leaves out.
+func TestSystemAPIDataReadNarrowStopsWaitingRecords(t *testing.T) {
+	hub := live.NewHub(live.Limits{})
+	scope := []string{"apps/com.example.detector", "apps/com.example.thermal"}
+	svc := &systemDataService{hub: hub, scope: func() ([]string, bool) { return scope, true }}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	out := &narrowingStream{ctx: ctx, subbed: make(chan struct{})}
+	// While the first record is being sent, a thermal record arrives and the
+	// thermal grant goes away.
+	out.onSend = func() {
+		hub.Offer(&live.Record{StreamID: "apps/com.example.thermal/grid", Payload: []byte("hot")})
+		scope = []string{"apps/com.example.detector"}
+		svc.narrow()
+	}
+	done := make(chan error, 1)
+	go func() { done <- svc.StreamData(&agentpbv2.StreamDataRequest{}, out) }()
+	<-out.subbed
+	hub.Offer(&live.Record{StreamID: "apps/com.example.detector/markers", Payload: []byte("boxes")})
+	select {
+	case err := <-done:
+		if status.Code(err) != codes.Aborted {
+			t.Fatalf("narrowed stream ended with %v, want Aborted", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("narrowed stream did not end")
+	}
+	if !reflect.DeepEqual(out.sent, []string{"apps/com.example.detector/markers"}) {
+		t.Fatalf("sent %q, want only the record from before the narrowing", out.sent)
 	}
 }
 

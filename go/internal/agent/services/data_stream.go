@@ -132,6 +132,12 @@ func streamLiveData(hub *live.Hub, req *agentpbv2.StreamDataRequest, allow []str
 	}
 	for {
 		d, err := sub.Next(ctx)
+		if err == nil {
+			// Next hands out a waiting record before it looks at ctx, so a
+			// slow reader that always has one waiting would never see ctx
+			// end, and a narrowed app stream would keep sending.
+			err = ctx.Err()
+		}
 		if err != nil {
 			return status.FromContextError(err).Err()
 		}
