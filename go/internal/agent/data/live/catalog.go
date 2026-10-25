@@ -13,7 +13,9 @@ const (
 	// of stream X is CatalogPrefix + X. An empty selection leaves the catalog
 	// out; a subscriber names it by id or prefix, or by CatalogSchema.
 	CatalogPrefix = "_streams/"
-	// CatalogSchema is the schema of catalog records.
+	// CatalogSchema is the schema of catalog records. It is reserved: an app
+	// stream may not declare it, and selecting it selects only catalog
+	// streams.
 	CatalogSchema = "wendy.agent.services.v2.DataStreamInfo"
 )
 

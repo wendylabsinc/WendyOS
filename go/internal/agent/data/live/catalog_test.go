@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	"google.golang.org/protobuf/proto"
 )
@@ -73,6 +74,31 @@ func TestCatalogSchemaIsTheMessageName(t *testing.T) {
 	if got := string((&agentpbv2.DataStreamInfo{}).ProtoReflect().Descriptor().FullName()); got != CatalogSchema {
 		t.Fatalf("CatalogSchema %q, message %q", CatalogSchema, got)
 	}
+}
+
+// Only the catalog's own streams carry CatalogSchema. An app may not declare
+// it, and a stream that does anyway cannot pose as catalog entries to a
+// subscriber that selects the catalog by schema.
+func TestCatalogSchemaIsReserved(t *testing.T) {
+	err := appconfig.ValidateRecordingStreams(map[string]appconfig.RecordingStream{"fake": {Mode: "lightweight", MediaType: "application/protobuf", Schema: CatalogSchema}})
+	if err == nil {
+		t.Fatal("an app stream declared the catalog schema")
+	}
+
+	h, _ := clockedHub(DefaultLimits)
+	h.Advertise(StreamInfo{ID: "apps/victim/markers", Publisher: "victim"})
+	h.Advertise(StreamInfo{ID: "apps/evil/fake", Schema: CatalogSchema, Publisher: "evil"})
+	s := subscribeWith(t, h, Selection{Schemas: []string{CatalogSchema}})
+	forged, err := proto.Marshal(&agentpbv2.DataStreamInfo{StreamId: "apps/victim/markers", State: agentpbv2.DataStreamInfo_STATE_GONE})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.Offer(&Record{StreamID: "apps/evil/fake", Schema: CatalogSchema, Payload: forged})
+	if info := catalogEntry(t, next(t, s)); info.GetStreamId() != "apps/evil/fake" || info.GetState() != agentpbv2.DataStreamInfo_STATE_ACTIVE {
+		t.Fatalf("got %v, want apps/evil/fake active", info)
+	}
+	requireEmpty(t, s)
+	requireEmpty(t, subscribeWith(t, h, Selection{Schemas: []string{CatalogSchema}, StreamPrefixes: []string{"apps/"}, SendLatest: true}))
 }
 
 // A new subscriber that asks for it starts with the newest record of each

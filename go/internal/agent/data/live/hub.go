@@ -250,7 +250,9 @@ func (s *Subscriber) selects(streamID, schema string) bool {
 	}
 	if s.schemas != nil {
 		_, ok := s.schemas[schema]
-		return ok
+		// CatalogSchema selects the catalog's own streams only, so another
+		// stream that declares it cannot pose as catalog entries.
+		return ok && (schema != CatalogSchema || strings.HasPrefix(streamID, CatalogPrefix))
 	}
 	return true
 }
