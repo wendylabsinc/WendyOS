@@ -750,19 +750,22 @@ shares with `notifications`. Every other `DataService` method is refused there.
 Selecting a stream outside it fails with `PERMISSION_DENIED`. Entries may name
 the agent's own streams too, such as `agent/campaign/people/markers/`, or
 `agent/camera/` for the temperatures and brightness the agent reads from its
-cameras. The stream catalog, `_streams/<stream-id>`, lists only the streams the
-allowlist admits, so an entry never names the catalog itself. At most 32
-entries, 2048 bytes in total.
+cameras. Those camera streams show what a camera sees, so the app reads them
+only if it also declares [`camera`](#camera), and with a camera `allowlist` only
+for the device paths it names; otherwise they are refused, and asking for them
+never starts a camera. The stream catalog, `_streams/<stream-id>`, lists only
+the streams the app may read, so an entry never names the catalog itself. At
+most 32 entries, 2048 bytes in total.
 
 | Constraint | |
 |------------|--|
 | At most one `data-read` per app | enforced at validation |
 | Concurrent `StreamData` calls | 8 per app; the device serves 32 in total |
-| Multi-service apps | services share the socket, so the app reads the union of their allowlists |
+| Multi-service apps | services share the socket, so the app reads the union of their allowlists, and the cameras of those that also declare `camera` |
 
 > **Security:** `data-read` is read-only and live-only. It grants no recorded
 > data, export, campaign control or sensor access, and never exposes
-> `WENDY_AGENT_SOCKET`.
+> `WENDY_AGENT_SOCKET`. The agent's camera streams need `camera` as well.
 
 ### `admin`
 

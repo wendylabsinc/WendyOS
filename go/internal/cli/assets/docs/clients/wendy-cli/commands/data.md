@@ -646,7 +646,8 @@ recording, and an Episode that captures `applications` records the same records.
 A record names the camera frame it describes in `source_id` and `sample_id`.
 
 The agent also measures its cameras, so an app needs neither raw frames nor
-`admin` to read them:
+`admin` to read them, only `data-read` beside the `camera` entitlement for that
+camera:
 
 - A TOPDON TC001 thermal camera has `agent/camera/grid/<source>`, a
   `wendy.data.v1.Grid` of its 256x192 temperatures in °C, and
@@ -699,7 +700,8 @@ The stream is served over mutual TLS to user certificates, on the LAN or through
 Wendy Cloud, and on the device's local admin socket. A device that has not been
 provisioned yet does not serve it. An app reads it on its System API socket with
 the [`data-read` entitlement](/docs/advanced/apps/wendy.json#data-read), limited
-to the streams its allowlist admits; the catalog lists only those.
+to the streams its allowlist admits, and to the agent's camera streams of the
+cameras its `camera` entitlement grants; the catalog lists only those.
 
 #### Live-only streams
 

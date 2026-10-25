@@ -76,10 +76,12 @@ name, and `agent/<stream>` for the agent's own, such as a campaign's
 measurements an app would otherwise need raw frames for: a TOPDON TC001's
 temperatures on `agent/camera/grid/<source>` (`wendy.data.v1.Grid`, °C) with
 its hottest and coldest pixel on `agent/camera/markers/<source>`, and a JPEG
-SensorLink camera's brightness on `agent/camera/grid/<source>`. It decodes a
-camera only while a reader names one of its streams by id, prefix or schema,
-and never records them. Delivery is best effort and newest-first per stream;
-use an episode or `export-stream` when every record matters.
+SensorLink camera's brightness on `agent/camera/grid/<source>`. An app reads
+those only if it also declares `camera` (with a camera `allowlist`, only for
+the device paths it names). It decodes a camera only while a reader allowed
+to read it names one of its streams by id, prefix or schema, and never records
+them. Delivery is best effort and newest-first per stream; use an episode or
+`export-stream` when every record matters.
 
 Time-series declarations record channels, units, and the sample clock. Durable
 envelopes can provide explicit sample timestamps or a start, interval, and

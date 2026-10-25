@@ -258,9 +258,10 @@ other `DataService` method is refused there. `allowlist` is optional: each
 entry is a stream id or a prefix ending at a `/`, so `apps/com.example.detector`
 admits that app's streams and not those of `com.example.detector2`. Without it
 the app reads every stream. The stream catalog, `_streams/<stream-id>`, lists
-only the streams the allowlist admits. Read-only and live-only: no recorded data,
-export or campaign control. At most one per app, and at most 8 open streams per
-app.
+only the streams the allowlist admits. The agent's camera streams,
+`agent/camera/`, also need `camera`, and a camera `allowlist` limits them to the
+device paths it names. Read-only and live-only: no recorded data, export or
+campaign control. At most one per app, and at most 8 open streams per app.
 
 ### Admin Entitlement
 
