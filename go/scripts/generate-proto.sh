@@ -396,3 +396,8 @@ protoc --proto_path="$PROTO_DIR" \
 # App recording envelopes (no generated SDK is needed for lightweight streams).
 protoc --proto_path="$PROTO_DIR" --go_out="$GO_DIR" --go_opt=module="$MODULE/go" \
     wendy/agent/apps/v1/recording.proto
+
+# Standard Wendy Data payload types: the messages a record's schema names.
+# Messages only, so no gRPC code.
+protoc --proto_path="$PROTO_DIR" --go_out="$GO_DIR" --go_opt=module="$MODULE/go" \
+    wendy/data/v1/types.proto

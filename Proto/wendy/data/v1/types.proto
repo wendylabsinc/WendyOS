@@ -1,0 +1,123 @@
+syntax = "proto3";
+
+package wendy.data.v1;
+
+option go_package = "github.com/wendylabsinc/wendy/go/proto/gen/datapb";
+
+// Standard payload types for Wendy Data record streams. A record names its
+// type by full message name: in DataRecord.schema on the live stream, and in
+// an application's recording stream declaration, for example schema
+// "wendy.data.v1.VideoMarkers" with media type "application/protobuf".
+// Viewers render the schemas they recognise and ignore the rest. Any
+// application with `episode-write` can publish any of these, so a viewer
+// range-checks what it draws.
+//
+// Versioning: changes inside wendy.data.v1 are additive, under proto3 rules.
+// A breaking change is a new package, wendy.data.v2. A publisher can emit both
+// versions on two streams while viewers move over.
+//
+// Positions on a picture are normalised to 0..1: continuous image coordinates
+// with the origin at the top-left corner of the top-left pixel, x to the right
+// and y down, divided by the picture's width and height. The centre of pixel
+// column i is at (i + 0.5) / width. One record therefore fits every size a
+// camera reaches a viewer at, and a viewer that needs pixels, such as a
+// Foxglove ImageAnnotations adapter, multiplies by its picture's size.
+
+// VideoMarkers is everything to draw on one picture at one moment: points and
+// boxes, with labels and colours. Each record replaces the previous record of
+// its stream, so a record with no markers clears the picture. Publish one
+// stream per picture.
+message VideoMarkers {
+  // The stream of the picture the markers belong on, for a picture that is not
+  // one of the agent's cameras. Empty when camera is set.
+  string frame_stream_id = 1;
+  // Hide the markers if no newer record of the stream arrives within this
+  // long. 0 leaves it to the viewer.
+  int64 valid_for_nanos = 2;
+  repeated Marker markers = 3;
+  // The agent camera whose picture the markers belong on, as the agent's video
+  // service lists it: its device path ("/dev/video96"), its stable_id
+  // ("by-id:..."), or the device id of a network camera ("1000"). Empty when
+  // the picture is not one of the agent's cameras.
+  string camera = 4;
+}
+
+// Marker is one point or box on a picture.
+message Marker {
+  enum Kind {
+    // Read as a box when width or height is non-zero, otherwise as a point.
+    KIND_UNSPECIFIED = 0;
+    KIND_POINT = 1;
+    // A box centred on (x, y), width by height. A box of zero size is still a
+    // box.
+    KIND_BOX = 2;
+  }
+
+  // The point, or the centre of the box.
+  float x = 1;
+  float y = 2;
+  // Box size in the same normalised units; 0 for a point.
+  float width = 3;
+  float height = 4;
+  // What the marker is, for example "person" or "max". Viewers key colour
+  // overrides on it.
+  string label = 5;
+  // A number to show with the label, in unit: a temperature, or a detection's
+  // score in percent.
+  optional double value = 6;
+  string unit = 7;
+  // Default colour: a CSS colour name or #RRGGBB. Empty leaves it to the
+  // viewer, which may override it either way.
+  string color = 8;
+  Kind kind = 9;
+}
+
+// Grid is a rectangular grid of measurements from one sensor frame:
+// temperatures from a thermal camera, distances from a depth camera,
+// brightness from any camera. Cells hold the sensor's native counts, as
+// DepthPlane does: value = count * scale + offset, in unit. A source that
+// cannot read its scale sends no grid rather than guessing one, so a grid
+// with scale 0 carries no values.
+message Grid {
+  uint32 width = 1;
+  uint32 height = 2;
+  // The unit of a value, for example "°C" or "m".
+  string unit = 3;
+  // Field 4 was the draft's repeated float values (wendy-data-app). Reserved,
+  // so a draft grid reads as a grid without values.
+  reserved 4;
+  reserved "values";
+  // uint16 little-endian counts, row-major, top row first: bytes_per_line *
+  // height bytes, of which the first 2 * width bytes of each line are cells.
+  bytes data = 5;
+  uint32 bytes_per_line = 6;
+  double scale = 7;
+  double offset = 8;
+  // The agent camera whose picture the grid spans, named as in
+  // VideoMarkers.camera. Cell (column, row) covers x from column / width to
+  // (column + 1) / width, and y likewise. Empty when the grid is not of a
+  // camera's picture.
+  string camera = 9;
+}
+
+// Event is a named condition changing state, for example "overheat" raised
+// or cleared. A stream keeps only its newest record for a slow viewer, so
+// publish one condition per stream: its newest record is then the
+// condition's state. The live stream is best effort; a viewer that must not
+// miss an occurrence reads the agent's durable event journal instead.
+message Event {
+  enum State {
+    STATE_UNSPECIFIED = 0;
+    STATE_RAISED = 1;
+    STATE_CLEARED = 2;
+  }
+
+  string name = 1;
+  State state = 2;
+  // The value that caused the change, in unit.
+  double value = 3;
+  string unit = 4;
+  // Where on the picture it happened, when the value has a position.
+  optional float x = 5;
+  optional float y = 6;
+}
