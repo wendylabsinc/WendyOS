@@ -255,6 +255,46 @@ func TestSystemAPIDataReadUnionsServices(t *testing.T) {
 	}
 }
 
+// A redeploy replaces a service's grant in place, with no Release first. With
+// the same grant nothing ends and a stream opened meanwhile reads the whole
+// app's scope; a narrower grant ends only the streams it no longer covers.
+func TestSystemAPIDataReadSurvivesSiblingRedeploy(t *testing.T) {
+	agent := newSystemDataTest(t)
+	readDetector := appconfig.Entitlement{Type: appconfig.EntitlementDataRead, Allowlist: []string{"apps/com.example.detector"}}
+	readThermal := appconfig.Entitlement{Type: appconfig.EntitlementDataRead, Allowlist: []string{"apps/com.example.thermal"}}
+	client := agentpbv2.NewDataServiceClient(agent.app("com.example.viewer", "api", readDetector))
+	detectorOnly := openLiveStream(t, client)
+	agent.app("com.example.viewer", "worker", readThermal)
+	union := openLiveStream(t, client)
+
+	if _, err := agent.sockets.Ensure("com.example.viewer", "worker", SystemAPIGrantFor([]appconfig.Entitlement{readThermal})); err != nil {
+		t.Fatal(err)
+	}
+	reopened := openLiveStream(t, client)
+	agent.record("com.example.thermal", "grid", "hot")
+	for name, stream := range map[string]agentpbv2.DataService_StreamDataClient{"open": union, "reopened": reopened} {
+		if r := recvLive(t, stream); r.GetStreamId() != "apps/com.example.thermal/grid" {
+			t.Fatalf("%s stream after an identical redeploy: %v", name, r)
+		}
+	}
+
+	// The worker comes back reading one thermal stream: the streams opened to
+	// read all of thermal end, the one opened before the worker joined does not.
+	if _, err := agent.sockets.Ensure("com.example.viewer", "worker", SystemAPIGrantFor([]appconfig.Entitlement{{Type: appconfig.EntitlementDataRead, Allowlist: []string{"apps/com.example.thermal/grid"}}})); err != nil {
+		t.Fatal(err)
+	}
+	if got := endOf(t, union); got != codes.Aborted {
+		t.Fatalf("stream over all of thermal after a narrower redeploy: got %v, want Aborted", got)
+	}
+	if got := endOf(t, reopened); got != codes.Aborted {
+		t.Fatalf("reopened stream after a narrower redeploy: got %v, want Aborted", got)
+	}
+	agent.record("com.example.detector", "markers", "boxes")
+	if r := recvLive(t, detectorOnly); string(r.GetPayload()) != "boxes" {
+		t.Fatalf("stream opened before the worker joined: %v", r)
+	}
+}
+
 // narrowingStream is a StreamData server stream that records what it sends
 // and runs onSend inside each Send, as a slow reader's Send would block while
 // the app's grant changes.

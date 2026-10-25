@@ -1707,6 +1707,14 @@ func (c *Client) createContainer(ctx context.Context, req *agentpb.CreateContain
 	// a redeployed shared-namespace primary would otherwise find its own old
 	// task alive and join it.
 	phaseStarted = time.Now()
+	// systemAPIOwnerKept: the old container's System API owner is still
+	// registered, waiting for the Ensure below to replace it.
+	systemAPIOwnerKept := false
+	defer func() {
+		if systemAPIOwnerKept {
+			c.systemAPISocketProvider.Release(appID, serviceName)
+		}
+	}()
 	if existing != nil {
 		// From here on the old container loses its network and its task, so
 		// a failure leaves the app without a running version, even when the
@@ -1823,8 +1831,17 @@ func (c *Client) createContainer(ctx context.Context, req *agentpb.CreateContain
 		if delErr != nil && !errdefs.IsNotFound(delErr) {
 			return fmt.Errorf("deleting existing container %q during replace: %w", containerName, delErr)
 		}
+		// A service that keeps a System API grant keeps its owner until
+		// Ensure replaces it, which ends only the app's streams the new grant
+		// no longer covers. Releasing it here would narrow the app's
+		// data-read scope in between: its siblings' streams would end, and
+		// one reopened meanwhile would stay narrow.
 		if oldHadSystemAPI && c.systemAPISocketProvider != nil {
-			c.systemAPISocketProvider.Release(appID, serviceName)
+			if _, keeps := systemAPIGrant(appCfg.Entitlements); keeps {
+				systemAPIOwnerKept = true
+			} else {
+				c.systemAPISocketProvider.Release(appID, serviceName)
+			}
 		}
 		if oldHadData && c.dataSocketProvider != nil {
 			c.dataSocketProvider.Release(appID, serviceName)
@@ -1904,6 +1921,7 @@ func (c *Client) createContainer(ctx context.Context, req *agentpb.CreateContain
 		if err != nil {
 			return fmt.Errorf("preparing app System API socket: %w", err)
 		}
+		systemAPIOwnerKept = false
 		systemAPIRefOwned = true
 		defer func() {
 			if systemAPIRefOwned {
