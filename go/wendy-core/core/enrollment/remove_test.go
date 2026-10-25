@@ -2,7 +2,9 @@ package enrollment
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"github.com/wendylabsinc/WendyOS/go/wendy-core/core/cloud"
 	"reflect"
 	"strings"
 	"testing"
@@ -274,4 +276,39 @@ func (c *cleanupConn) Unary(ctx context.Context, r platform.RPCRequest) (platfor
 }
 func (*cleanupConn) ServerStream(context.Context, platform.RPCRequest) (platform.ServerStream, error) {
 	panic("unexpected streaming call")
+}
+
+type unavailableRequestSigner struct {
+	calls int
+	err   error
+}
+
+func (s *unavailableRequestSigner) EnrollmentRequest(context.Context, string, string, string) ([]byte, error) {
+	s.calls++
+	return nil, s.err
+}
+func (s *unavailableRequestSigner) Invoke(context.Context, platform.Transport, string, proto.Message, cloud.InvokeOptions) (platform.RPCResponse, error) {
+	s.calls++
+	return platform.RPCResponse{}, s.err
+}
+func TestRemoveDefersSigningUntilAfterBindingAndCredentialInventory(t *testing.T) {
+	conn := newCleanupConn(t)
+	signer := &unavailableRequestSigner{err: errors.New("operator key unavailable")}
+	client := testClient(t, conn)
+	client.Signer = signer
+	invalid := testAssetRecord()
+	invalid.Id = "invalid"
+	if _, err := client.Remove(context.Background(), testSession, invalid); err == nil || err.Error() != "asset ID must be a canonical nonzero UUID" {
+		t.Fatalf("validation precedence changed: %v", err)
+	}
+	if signer.calls != 0 || conn.getCount != 0 {
+		t.Fatal("invalid asset opened credentials or contacted Cloud")
+	}
+	result, err := client.Remove(context.Background(), testSession, testAssetRecord())
+	if !errors.Is(err, signer.err) || err.Error() != "revoking device enrollment token: operator key unavailable" {
+		t.Fatalf("signing context changed: %v", err)
+	}
+	if signer.calls != 1 || conn.getCount != 1 || len(conn.mutations) != 0 || result != (Result{}) {
+		t.Fatalf("key failure mutated Cloud: calls=%d reads=%d result=%+v", signer.calls, conn.getCount, result)
+	}
 }

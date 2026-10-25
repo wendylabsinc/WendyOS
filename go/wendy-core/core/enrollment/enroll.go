@@ -11,6 +11,7 @@ import (
 	"github.com/wendylabsinc/WendyOS/go/wendy-core/core/cloud"
 	cloudpbv2 "github.com/wendylabsinc/WendyOS/go/wendy-core/core/enrollment/internal/cloudpb"
 	"github.com/wendylabsinc/WendyOS/go/wendy-core/platform"
+	"google.golang.org/protobuf/proto"
 )
 
 //go:generate python3 ../../scripts/generate_enrollment.py
@@ -21,11 +22,20 @@ type Session struct{ Principal, PKIEndpoint string }
 // DeviceHardware preserves optional hardware fields from the Agent report.
 type DeviceHardware = cloudpbv2.DeviceHardware
 
+// RequestSigner supplies Cloud request authority. The usual implementation is
+// cloud.Signer; hosts may defer opening credentials until an operation needs a
+// signature, preserving readiness and binding validation before key access.
+// Implementations honor context cancellation and retain signing errors verbatim.
+type RequestSigner interface {
+	EnrollmentRequest(context.Context, string, string, string) ([]byte, error)
+	Invoke(context.Context, platform.Transport, string, proto.Message, cloud.InvokeOptions) (platform.RPCResponse, error)
+}
+
 // Client uses authenticated Cloud transport supplied by the host.
 // Signer supplies Cloud request authority, with keys retained in the host.
 type Client struct {
 	Cloud    platform.Transport
-	Signer   *cloud.Signer
+	Signer   RequestSigner
 	Entropy  platform.Entropy
 	Metadata platform.Metadata
 }
