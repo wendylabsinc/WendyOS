@@ -184,6 +184,56 @@ func TestCatalogLifecycle(t *testing.T) {
 	}
 }
 
+// A catalog entry's rate covers the stream's current active period: it is
+// measured from the period's first record, however long the stream was quiet
+// before, and an idle stream reports none, however recently it was active.
+func TestCatalogRate(t *testing.T) {
+	h, clock := clockedHub(DefaultLimits)
+	cat := subscribeWith(t, h, Selection{StreamPrefixes: []string{CatalogPrefix}})
+	h.Advertise(StreamInfo{ID: "apps/a/s"})
+	catalogEntry(t, next(t, cat))
+	want := func(d Delivery, state agentpbv2.DataStreamInfo_State, low, high float32) {
+		t.Helper()
+		if info := catalogEntry(t, d); info.GetState() != state || info.GetRateHz() < low || info.GetRateHz() > high {
+			t.Fatalf("got %v %v/s, want %v at %v..%v/s", info.GetState(), info.GetRateHz(), state, low, high)
+		}
+	}
+
+	// A minute after it was advertised, the stream runs at 30 Hz for 12 s.
+	// Its first entry has no rate yet; the next one, 10 s later, has 30/s.
+	clock.advance(time.Minute)
+	for i := 0; i < 12*30; i++ {
+		h.Offer(record("apps/a/s", i, 8))
+		if i == 0 {
+			want(next(t, cat), agentpbv2.DataStreamInfo_STATE_ACTIVE, 0, 0)
+		}
+		clock.advance(time.Second / 30)
+	}
+	want(next(t, cat), agentpbv2.DataStreamInfo_STATE_ACTIVE, 29, 31)
+	requireEmpty(t, cat)
+	want(next(t, subscribeWith(t, h, Selection{StreamPrefixes: []string{CatalogPrefix}, SendLatest: true})), agentpbv2.DataStreamInfo_STATE_ACTIVE, 29, 31)
+
+	// Once records stop it is idle at no rate, then and an hour later.
+	clock.advance(idleAfter)
+	sweepNow(h)
+	want(next(t, cat), agentpbv2.DataStreamInfo_STATE_IDLE, 0, 0)
+	clock.advance(time.Hour)
+	want(next(t, subscribeWith(t, h, Selection{StreamPrefixes: []string{CatalogPrefix}, SendLatest: true})), agentpbv2.DataStreamInfo_STATE_IDLE, 0, 0)
+
+	// The next active period, at 5 Hz, is measured on its own.
+	for i := 0; i <= 50; i++ {
+		if i > 0 {
+			clock.advance(200 * time.Millisecond)
+		}
+		h.Offer(record("apps/a/s", i, 8))
+		if i == 0 {
+			want(next(t, cat), agentpbv2.DataStreamInfo_STATE_ACTIVE, 0, 0)
+		}
+	}
+	want(next(t, cat), agentpbv2.DataStreamInfo_STATE_ACTIVE, 4.9, 5.1)
+	requireEmpty(t, cat)
+}
+
 // With send_latest a catalog subscriber gets every current entry at once, in
 // stream id order, then its records.
 func TestCatalogSendLatest(t *testing.T) {
