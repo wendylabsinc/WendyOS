@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"sync"
 	"testing"
 	"time"
@@ -44,16 +45,20 @@ func requireEmpty(t *testing.T, s *Subscriber) {
 	}
 }
 
-// With nobody subscribed, a publish is one atomic load: no lock, no
-// allocation. This is the cost every app record pays when no viewer is open.
+// With nobody subscribed, a publish updates its stream's entry and allocates
+// nothing, whether or not the stream is advertised. This is the cost every
+// app record pays when no viewer is open.
 func TestOfferWithoutSubscribersAllocatesNothing(t *testing.T) {
 	h := NewHub(DefaultLimits)
 	r := record("apps/a/markers", 1, 64)
+	unadvertised := record("apps/a/other", 1, 64)
+	h.Advertise(StreamInfo{ID: r.StreamID, Schema: r.Schema})
 	if allocs := testing.AllocsPerRun(1000, func() {
 		if h.Subscribed() {
 			t.Fatal("subscribed with nobody subscribed")
 		}
 		h.Offer(r)
+		h.Offer(unadvertised)
 	}); allocs != 0 {
 		t.Fatalf("offer with no subscribers allocated %v times", allocs)
 	}
@@ -156,6 +161,103 @@ func TestSelectionByStreamID(t *testing.T) {
 	h.Offer(record("apps/a/not-yet", 3, 1))
 	if d := next(t, only); d.Record.StreamID != "apps/a/not-yet" {
 		t.Fatalf("late stream: %s", d.Record.StreamID)
+	}
+}
+
+// Ids and prefixes name streams; schemas narrow what they name. A selection
+// of schemas alone applies to every stream.
+func TestSelectionByPrefixAndSchema(t *testing.T) {
+	h := NewHub(DefaultLimits)
+	offer := func(id, schema string, seq int) {
+		h.Offer(&Record{StreamID: id, Schema: schema, TimestampUnixNanos: int64(seq)})
+	}
+	appMarkers, err := h.Subscribe(Selection{StreamPrefixes: []string{"apps/a/"}, Schemas: []string{"wendy.data.v1.VideoMarkers"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(appMarkers.Close)
+	idOrPrefix, err := h.Subscribe(Selection{StreamIDs: []string{"apps/b/log"}, StreamPrefixes: []string{"apps/a/"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(idOrPrefix.Close)
+	anyMarkers, err := h.Subscribe(Selection{Schemas: []string{"wendy.data.v1.VideoMarkers"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(anyMarkers.Close)
+
+	offer("apps/a/markers", "wendy.data.v1.VideoMarkers", 1)
+	offer("apps/a/log", "", 2)
+	offer("apps/b/markers", "wendy.data.v1.VideoMarkers", 3)
+	offer("apps/b/log", "", 4)
+	offer("apps/ab/markers", "wendy.data.v1.VideoMarkers", 5)
+
+	for _, tc := range []struct {
+		name string
+		s    *Subscriber
+		want []string
+	}{
+		{"prefix and schema", appMarkers, []string{"apps/a/markers"}},
+		{"id or prefix", idOrPrefix, []string{"apps/a/markers", "apps/a/log", "apps/b/log"}},
+		{"schema alone", anyMarkers, []string{"apps/a/markers", "apps/b/markers", "apps/ab/markers"}},
+	} {
+		for _, want := range tc.want {
+			if d := next(t, tc.s); d.Record.StreamID != want {
+				t.Fatalf("%s: got %s, want %s", tc.name, d.Record.StreamID, want)
+			}
+		}
+		requireEmpty(t, tc.s)
+	}
+}
+
+// A rate cap holds a fast stream back and replaces the held record with each
+// newer one, so it never queues. A held stream does not hold back another.
+func TestRateCapCoalescesToNewest(t *testing.T) {
+	h := NewHub(DefaultLimits)
+	const gap = 50 * time.Millisecond
+	s, err := h.Subscribe(Selection{MaxRateHz: float64(time.Second / gap)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(s.Close)
+	h.Offer(record("apps/a/fast", 1, 1))
+	if d := next(t, s); d.Record.TimestampUnixNanos != 1 {
+		t.Fatalf("first record is not sent at once: %+v", d)
+	}
+	sent := time.Now()
+	for i := 2; i <= 50; i++ {
+		h.Offer(record("apps/a/fast", i, 1))
+	}
+	h.Offer(record("apps/a/slow", 1, 1))
+	if d := next(t, s); d.Record.StreamID != "apps/a/slow" {
+		t.Fatalf("a held stream held back another: got %s", d.Record.StreamID)
+	}
+	d := next(t, s)
+	if elapsed := time.Since(sent); elapsed < gap-10*time.Millisecond {
+		t.Fatalf("second record after %v, under the %v gap", elapsed, gap)
+	}
+	if d.Record.StreamID != "apps/a/fast" || d.Record.TimestampUnixNanos != 50 || d.Skipped != 48 {
+		t.Fatalf("held stream: got %s #%d skipped %d", d.Record.StreamID, d.Record.TimestampUnixNanos, d.Skipped)
+	}
+	requireEmpty(t, s)
+}
+
+// A tiny rate asks for an absurd gap; it is bounded instead of overflowing.
+func TestRateCapBounds(t *testing.T) {
+	h := NewHub(DefaultLimits)
+	for _, tc := range []struct {
+		rate float64
+		gap  time.Duration
+	}{{0, 0}, {-5, 0}, {math.NaN(), 0}, {1e-30, maxRateGap}, {30, time.Second / 30}} {
+		s, err := h.Subscribe(Selection{MaxRateHz: tc.rate})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if s.minGap != tc.gap {
+			t.Errorf("rate %v: gap %v, want %v", tc.rate, s.minGap, tc.gap)
+		}
+		s.Close()
 	}
 }
 
@@ -321,6 +423,7 @@ func TestConcurrentPublishersAndSlowReaders(t *testing.T) {
 func BenchmarkOfferNoSubscribers(b *testing.B) {
 	h := NewHub(DefaultLimits)
 	r := record("apps/a/markers", 1, 64)
+	h.Advertise(StreamInfo{ID: r.StreamID, Schema: r.Schema})
 	b.ReportAllocs()
 	for b.Loop() {
 		h.Offer(r)
@@ -329,6 +432,7 @@ func BenchmarkOfferNoSubscribers(b *testing.B) {
 
 func BenchmarkOfferFourSubscribers(b *testing.B) {
 	h := NewHub(DefaultLimits)
+	h.Advertise(StreamInfo{ID: "apps/a/markers", Schema: "test.v1.Sample"})
 	for i := 0; i < 4; i++ {
 		s, err := h.Subscribe(Selection{})
 		if err != nil {
