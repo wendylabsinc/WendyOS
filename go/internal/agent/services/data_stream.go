@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/data/live"
 	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
@@ -111,6 +112,7 @@ func (s *DataService) StreamData(req *agentpbv2.StreamDataRequest, out grpc.Serv
 	if err := out.SendHeader(metadata.MD{}); err != nil {
 		return err
 	}
+	out = stallGuardedStream{out, streamDataStallTimeout}
 	for {
 		d, err := sub.Next(ctx)
 		if err != nil {
@@ -120,5 +122,36 @@ func (s *DataService) StreamData(req *agentpbv2.StreamDataRequest, out grpc.Serv
 		if err := out.Send(&agentpbv2.DataRecord{StreamId: r.StreamID, TimestampUnixNanos: r.TimestampUnixNanos, Schema: r.Schema, Payload: r.Payload, Skipped: d.Skipped}); err != nil {
 			return err
 		}
+	}
+}
+
+// streamDataStallTimeout ends a StreamData whose client takes no record for
+// this long. A client that stops reading fills its flow-control window and
+// Send blocks, while its connection still answers keepalive pings, so the
+// viewer would otherwise hold one of the hub's device-wide slots for as long
+// as the connection lives. Send waits only for the previous record to drain,
+// so a slow link still gets a minute per record. A variable so tests can
+// shorten it.
+var streamDataStallTimeout = time.Minute
+
+// stallGuardedStream fails a Send that makes no progress for timeout. Send has
+// no deadline of its own, so it runs on its own goroutine; once the handler
+// returns, gRPC cancels the stream, which unblocks it. Sends stay sequential:
+// the handler never sends again after one fails.
+type stallGuardedStream struct {
+	grpc.ServerStreamingServer[agentpbv2.DataRecord]
+	timeout time.Duration
+}
+
+func (s stallGuardedStream) Send(r *agentpbv2.DataRecord) error {
+	sent := make(chan error, 1)
+	go func() { sent <- s.ServerStreamingServer.Send(r) }()
+	timer := time.NewTimer(s.timeout)
+	defer timer.Stop()
+	select {
+	case err := <-sent:
+		return err
+	case <-timer.C:
+		return status.Errorf(codes.DeadlineExceeded, "the client read no live data for %v, so the agent ended the stream", s.timeout)
 	}
 }

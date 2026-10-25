@@ -60,10 +60,11 @@ type Limits struct {
 	// MaxSubscribers caps concurrent subscriptions on one hub.
 	MaxSubscribers int
 	// MaxPendingBytes caps the payload bytes one subscriber holds undelivered.
-	// Past it the oldest pending record is dropped and counted as skipped. A
-	// single record larger than the cap is still delivered on its own, and
-	// catalog entries are never dropped: each change is sent once, and they
-	// are small, at most one pending per advertised stream.
+	// A record that would take it past the cap is dropped and counted as
+	// skipped; the records other streams already have pending are kept. A
+	// record larger than the cap is still delivered when it would be alone,
+	// and catalog entries are never dropped: each change is sent once, and
+	// they are small, at most one pending per stream.
 	MaxPendingBytes int
 	// MaxLatestBytes caps the payload of the record the hub keeps as a
 	// stream's newest, for SendLatest. A larger record is delivered live but
@@ -282,16 +283,20 @@ func (s *Subscriber) offer(r *Record) {
 	}
 	s.pending[r.StreamID] = r
 	s.bytes += len(r.Payload)
-	for i := 0; s.bytes > s.hub.limits.MaxPendingBytes && i < len(s.order); {
-		id := s.order[i]
-		if id == r.StreamID || strings.HasPrefix(id, CatalogPrefix) {
-			i++
-			continue
+	// Past the cap the offered record is dropped, never another stream's:
+	// large records cannot push out a small stream's only pending record. It
+	// stays when no other stream holds pending bytes, so an oversized record
+	// is still delivered alone, and a catalog entry always stays.
+	if s.bytes > s.hub.limits.MaxPendingBytes && s.bytes > len(r.Payload) && !strings.HasPrefix(r.StreamID, CatalogPrefix) {
+		s.bytes -= len(r.Payload)
+		delete(s.pending, r.StreamID)
+		s.skipped[r.StreamID]++
+		for i, id := range s.order {
+			if id == r.StreamID {
+				s.order = append(s.order[:i], s.order[i+1:]...)
+				break
+			}
 		}
-		s.bytes -= len(s.pending[id].Payload)
-		delete(s.pending, id)
-		s.skipped[id]++
-		s.order = append(s.order[:i], s.order[i+1:]...)
 	}
 	s.mu.Unlock()
 	select {

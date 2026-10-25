@@ -166,6 +166,11 @@ func TestLiveTimestamp(t *testing.T) {
 	timing := func(clock, boot string, first int64) *recordingpb.SampleTiming {
 		return &recordingpb.SampleTiming{Clock: clock, BootId: boot, Count: 2, StartNanos: proto.Int64(first), PeriodNanos: proto.Int64(10)}
 	}
+	// A lightweight TimeSeriesBatch: the timing is in the payload only.
+	batch := func(st *recordingpb.SampleTiming) *recordingpb.StoredRecord {
+		payload := timeSeriesBatchPayload(t, st)
+		return &recordingpb.StoredRecord{Record: &recordingpb.Record{Payload: payload}, StreamDescriptor: &recordingpb.StreamDescriptor{Schema: "wendy.agent.apps.v1.TimeSeriesBatch"}, ReceiptBootId: "boot-a", ReceiptUnixNanos: receipt}
+	}
 	for _, tc := range []struct {
 		name   string
 		stored *recordingpb.StoredRecord
@@ -181,6 +186,11 @@ func TestLiveTimestamp(t *testing.T) {
 		{"accepted client boottime", stored(&recordingpb.Record{ClientBoottimeNanos: proto.Int64(bootOneSecondAgo)}, true), oneSecondAgo, true},
 		{"refused client boottime", stored(&recordingpb.Record{ClientBoottimeNanos: proto.Int64(bootOneSecondAgo)}, false), receipt, false},
 		{"UNIX timing wins over client boottime", stored(&recordingpb.Record{Timing: timing("UNIX", "", 42), ClientBoottimeNanos: proto.Int64(bootOneSecondAgo)}, true), 42, false},
+		{"TimeSeriesBatch UNIX timing", batch(timing("UNIX", "", 42)), 42, false},
+		{"TimeSeriesBatch CLOCK_BOOTTIME this boot", batch(timing("CLOCK_BOOTTIME", "boot-a", bootOneSecondAgo)), oneSecondAgo, true},
+		{"TimeSeriesBatch CLOCK_BOOTTIME other boot", batch(timing("CLOCK_BOOTTIME", "boot-b", bootOneSecondAgo)), receipt, false},
+		{"TimeSeriesBatch named device clock", batch(timing("imu0", "", 42)), receipt, false},
+		{"undecodable TimeSeriesBatch", &recordingpb.StoredRecord{Record: &recordingpb.Record{Payload: []byte{0x0a, 0xff}}, StreamDescriptor: &recordingpb.StreamDescriptor{Schema: "wendy.agent.apps.v1.TimeSeriesBatch"}, ReceiptBootId: "boot-a", ReceiptUnixNanos: receipt}, receipt, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := liveTimestamp(tc.stored)
@@ -191,6 +201,81 @@ func TestLiveTimestamp(t *testing.T) {
 				t.Fatalf("converted time off by %v", diff)
 			}
 		})
+	}
+}
+
+// timeSeriesBatchPayload is a one-channel float64 TimeSeriesBatch with timing.
+func timeSeriesBatchPayload(t *testing.T, timing *recordingpb.SampleTiming) []byte {
+	t.Helper()
+	values := make([]float64, timing.Count)
+	payload, err := proto.Marshal(&recordingpb.TimeSeriesBatch{
+		Timing:  timing,
+		Columns: []*recordingpb.SampleColumn{{Values: &recordingpb.SampleColumn_Float64Values{Float64Values: &recordingpb.Float64Values{Values: values}}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return payload
+}
+
+// A TimeSeriesBatch carries its timing in the payload, and a lightweight one
+// has nowhere else to put it. Its live time is the first sample's, not the
+// receipt, which for a one-second IMU batch is up to a second late.
+func TestRecordStreamLiveTimestampOfTimeSeriesBatch(t *testing.T) {
+	const first = int64(1_700_000_000_000_000_000)
+	payload := timeSeriesBatchPayload(t, &recordingpb.SampleTiming{Clock: "UNIX", Count: 2, TimestampsNanos: []int64{first, first + 10}})
+	series := &appconfig.RecordingTimeSeries{Clock: "UNIX", Channels: []appconfig.RecordingChannel{{Name: "x", Type: "float64"}}}
+	for _, mode := range []string{"lightweight", "durable"} {
+		t.Run(mode, func(t *testing.T) {
+			m, err := NewManager(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			sub := liveSubscriber(t, m)
+			cfg := appconfig.RecordingStream{Mode: mode, MediaType: "application/protobuf", Schema: "wendy.agent.apps.v1.TimeSeriesBatch", TimeSeries: series}
+			if err := appconfig.ValidateRecordingStreams(map[string]appconfig.RecordingStream{"imu": cfg}); err != nil {
+				t.Fatal(err)
+			}
+			r := &recordingpb.Record{Payload: payload}
+			if mode == "durable" {
+				r.Id = "one"
+			}
+			if _, err := m.RecordStream("test.app", "", "imu", cfg, r); err != nil {
+				t.Fatal(err)
+			}
+			if ts := nextLive(t, sub).Record.TimestampUnixNanos; ts != first {
+				t.Fatalf("live timestamp %d, want the first sample time %d", ts, first)
+			}
+		})
+	}
+}
+
+// batchTiming decodes only the timing field, and must read it as
+// proto.Unmarshal does: after other fields, and merged when it repeats.
+func TestBatchTimingMatchesUnmarshal(t *testing.T) {
+	part := func(b *recordingpb.TimeSeriesBatch) []byte {
+		out, err := proto.Marshal(b)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	columns := part(&recordingpb.TimeSeriesBatch{Columns: []*recordingpb.SampleColumn{{Values: &recordingpb.SampleColumn_BoolValues{BoolValues: &recordingpb.BoolValues{Values: []bool{true, false}}}}}})
+	timing := part(&recordingpb.TimeSeriesBatch{Timing: &recordingpb.SampleTiming{Clock: "UNIX", Count: 2, StartNanos: proto.Int64(5)}})
+	period := part(&recordingpb.TimeSeriesBatch{Timing: &recordingpb.SampleTiming{PeriodNanos: proto.Int64(10)}})
+	payload := append(append(append([]byte{}, columns...), timing...), period...)
+	want := new(recordingpb.TimeSeriesBatch)
+	if err := proto.Unmarshal(payload, want); err != nil {
+		t.Fatal(err)
+	}
+	if got := batchTiming(payload); !proto.Equal(got, want.Timing) {
+		t.Fatalf("got %v, want %v", got, want.Timing)
+	}
+	if got := batchTiming(columns); got != nil {
+		t.Fatalf("batch without timing: %v", got)
+	}
+	if got := batchTiming(payload[:len(payload)-1]); got != nil {
+		t.Fatalf("truncated batch: %v", got)
 	}
 }
 

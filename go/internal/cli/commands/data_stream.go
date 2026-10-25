@@ -118,6 +118,10 @@ func liveDataError(ctx context.Context, err error) error {
 	if status.Code(err) == codes.Unimplemented {
 		return errors.New("this agent does not serve live data streams; update the agent on the target device")
 	}
+	if status.Code(err) == codes.PermissionDenied {
+		// What a device that is not enrolled answers on its plaintext listener.
+		return fmt.Errorf("live data streams require an authenticated mTLS connection; if the device is not enrolled, run 'wendy device enroll', otherwise reconnect using its enrolled endpoint: %w", err)
+	}
 	return err
 }
 
@@ -128,7 +132,9 @@ const maxLivePreview = 80
 // the stream id, the schema, the payload size, how many records of the stream
 // were skipped before it and, for a text payload, the start of the text.
 func writeLiveRecord(out io.Writer, r *agentpbv2.DataRecord) error {
-	schema := r.GetSchema()
+	// The schema comes from an app's wendy.json: keep it from driving the
+	// terminal.
+	schema := printable(r.GetSchema())
 	if schema == "" {
 		schema = "-"
 	}
