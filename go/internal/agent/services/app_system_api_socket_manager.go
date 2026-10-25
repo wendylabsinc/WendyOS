@@ -213,8 +213,14 @@ func (m *AppSystemAPISocketManager) Ensure(appID, serviceName string, grant Syst
 		appID:  appID,
 		owners: map[string]SystemAPIGrant{owner: grant},
 	}
+	// A notification fits in 16 KiB. data-read takes the largest selection
+	// the operator path accepts.
+	maxRecv := 16 * 1024
+	if m.liveData != nil {
+		maxRecv = max(maxRecv, maxStreamDataRequestBytes())
+	}
 	server := grpc.NewServer(
-		grpc.MaxRecvMsgSize(16*1024),
+		grpc.MaxRecvMsgSize(maxRecv),
 		grpc.MaxConcurrentStreams(16),
 		grpc.UnaryInterceptor(m.authorize(socket)),
 		// Without a stream interceptor a streaming method would skip the

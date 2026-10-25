@@ -381,6 +381,28 @@ func TestSystemAPIDataReadSelection(t *testing.T) {
 	}
 }
 
+// The System API socket receives every selection the operator path accepts,
+// up to the largest.
+func TestSystemAPIDataReadLargestSelection(t *testing.T) {
+	agent := newSystemDataTest(t)
+	conn := agent.app("com.example.viewer", "", appconfig.Entitlement{Type: appconfig.EntitlementDataRead})
+	longest := func(n int) []string {
+		values := make([]string, maxStreamDataIDs)
+		for i := range values {
+			values[i] = fmt.Sprintf("agent/%0*d", n-len("agent/"), i)
+		}
+		return values
+	}
+	req := &agentpbv2.StreamDataRequest{StreamIds: longest(maxStreamDataIDBytes), StreamPrefixes: longest(maxStreamDataIDBytes), Schemas: longest(maxStreamDataIDBytes), MaxRateHz: maxStreamDataRateHz, SendLatest: true}
+	if _, err := liveSelection(req); err != nil {
+		t.Fatalf("liveSelection refused the largest selection: %v", err)
+	}
+	if got, want := proto.Size(req), maxStreamDataRequestBytes(); got != want {
+		t.Fatalf("largest selection is %d bytes, maxStreamDataRequestBytes says %d", got, want)
+	}
+	openLiveStreamWith(t, agentpbv2.NewDataServiceClient(conn), req)
+}
+
 func TestCoversScope(t *testing.T) {
 	for _, tc := range []struct {
 		scope, within []string

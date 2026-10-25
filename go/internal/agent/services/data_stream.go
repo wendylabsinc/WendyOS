@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"errors"
+	"strings"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/data/live"
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
@@ -11,6 +12,7 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 )
 
 const (
@@ -58,6 +60,18 @@ func authorizeDataStream(ctx context.Context) error {
 	}
 	_, err := userIdentityFromContext(ctx, "streaming live data")
 	return err
+}
+
+// maxStreamDataRequestBytes is the encoded size of the largest request
+// liveSelection accepts: every list full of the longest values. A server that
+// serves StreamData must receive messages this large.
+func maxStreamDataRequestBytes() int {
+	value := strings.Repeat("x", maxStreamDataIDBytes)
+	longest := make([]string, maxStreamDataIDs)
+	for i := range longest {
+		longest[i] = value
+	}
+	return proto.Size(&agentpbv2.StreamDataRequest{StreamIds: longest, StreamPrefixes: longest, Schemas: longest, MaxRateHz: maxStreamDataRateHz, SendLatest: true})
 }
 
 func liveSelection(req *agentpbv2.StreamDataRequest) (live.Selection, error) {
