@@ -16,7 +16,7 @@ import (
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	// The standard payload types: linked in, they are in the registry that
 	// livePayloadJSON renders from.
-	_ "github.com/wendylabsinc/wendy/go/proto/gen/datapb"
+	"github.com/wendylabsinc/wendy/go/proto/gen/datapb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -232,12 +232,19 @@ func liveJSON(r *agentpbv2.DataRecord) liveJSONRecord {
 // already a JSON object or array, as an app stream of media type
 // application/json carries, is passed through. Anything else is a base64
 // string, as protobuf JSON writes bytes.
+//
+// VideoMarkers always has its markers list, empty for a frame with no
+// detections, which protobuf JSON would leave out: the empty list is what
+// tells a viewer to clear the camera's boxes.
 func livePayloadJSON(schema string, payload []byte) json.RawMessage {
 	var out bytes.Buffer
 	if t, err := protoregistry.GlobalTypes.FindMessageByName(protoreflect.FullName(schema)); err == nil {
 		m := t.New().Interface()
 		if proto.Unmarshal(payload, m) == nil {
 			if b, err := (protojson.MarshalOptions{UseProtoNames: true}).Marshal(m); err == nil && json.Compact(&out, b) == nil {
+				if markers, ok := m.(*datapb.VideoMarkers); ok && len(markers.GetMarkers()) == 0 {
+					return withEmptyMarkers(out.Bytes())
+				}
 				return out.Bytes()
 			}
 		}
@@ -247,4 +254,14 @@ func livePayloadJSON(schema string, payload []byte) json.RawMessage {
 	}
 	b, _ := json.Marshal(base64.StdEncoding.EncodeToString(payload))
 	return b
+}
+
+// withEmptyMarkers adds "markers":[] to the compact JSON object of a
+// VideoMarkers that has none.
+func withEmptyMarkers(object []byte) json.RawMessage {
+	const key = `"markers":[]`
+	if string(object) == "{}" {
+		return json.RawMessage("{" + key + "}")
+	}
+	return json.RawMessage("{" + key + "," + string(object[1:]))
 }

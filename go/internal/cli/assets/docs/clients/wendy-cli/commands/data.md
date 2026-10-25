@@ -715,7 +715,9 @@ Each event is one JSON record: `stream_id`, `timestamp_unix_nanos` (a string),
 sensor sample the record describes, when its publisher names one). A payload whose
 schema the CLI knows, such as the standard `wendy.data.v1` types and the catalog, is
 protobuf JSON with proto field names, a payload that is already a JSON object or
-array is passed through, and any other payload is a base64 string. The query
+array is passed through, and any other payload is a base64 string. A
+`wendy.data.v1.VideoMarkers` payload always has `markers`, an empty list when there
+are none, which tells a viewer to clear the camera's boxes. The query
 parameters `stream`, `prefix` and `schema` replace the command line's selection for
 one request, for example `/live?prefix=_streams/`. Companion web reads it with
 `VITE_WENDY_DATA_LIVE_URL=http://127.0.0.1:8090/live`.

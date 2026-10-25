@@ -46,6 +46,11 @@ func TestLivePayloadJSON(t *testing.T) {
 	}{
 		{"compiled-in schema", catalog.GetSchema(), catalog.GetPayload(), `{"stream_id":"apps/a/s","state":"STATE_ACTIVE","rate_hz":2}`},
 		{"VideoMarkers", "wendy.data.v1.VideoMarkers", markersPayload(t), markersPayloadJSON},
+		// A frame with no detections clears the camera's boxes, so the
+		// viewer is sent an empty list rather than no list.
+		{"VideoMarkers without markers", "wendy.data.v1.VideoMarkers", mustMarshal(t, &datapb.VideoMarkers{Camera: "/dev/video0", ValidForNanos: 3_000_000_000}),
+			`{"markers":[],"valid_for_nanos":"3000000000","camera":"/dev/video0"}`},
+		{"empty VideoMarkers", "wendy.data.v1.VideoMarkers", nil, `{"markers":[]}`},
 		{"Grid", "wendy.data.v1.Grid", mustMarshal(t, &datapb.Grid{Width: 2, Height: 1, Unit: "°C", Data: []byte{1, 0, 2, 0}, BytesPerLine: 4, Scale: 0.1, Offset: -273.15, Camera: "/dev/video2"}),
 			`{"width":2,"height":1,"unit":"°C","data":"AQACAA==","bytes_per_line":4,"scale":0.1,"offset":-273.15,"camera":"/dev/video2"}`},
 		{"Event", "wendy.data.v1.Event", mustMarshal(t, &datapb.Event{Name: "overheat", State: datapb.Event_STATE_RAISED, Value: 81.5, Unit: "°C"}),
