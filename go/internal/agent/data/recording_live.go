@@ -40,12 +40,18 @@ func liveRecord(s *recordingpb.StoredRecord) *live.Record {
 //     client_boottime_nanos, converted at the current realtime-boottime
 //     offset. That matches video within the microseconds between two clock
 //     reads, plus any step the realtime clock took since the sample.
-//  3. The agent's receipt time. Lightweight records have nothing else.
+//  3. The agent's receipt time. Other lightweight records have nothing else.
 //
-// A named device clock is not converted: the agent has no mapping for it.
+// Sample timing is the record's, or else, for a TimeSeriesBatch payload, the
+// batch's own: a lightweight batch has no envelope to carry it. A named
+// device clock is not converted: the agent has no mapping for it.
 func liveTimestamp(s *recordingpb.StoredRecord) int64 {
 	r := s.GetRecord()
-	if t := r.GetTiming(); t != nil {
+	t := r.GetTiming()
+	if t == nil && s.GetStreamDescriptor().GetSchema() == "wendy.agent.apps.v1.TimeSeriesBatch" {
+		t = batchTiming(r.GetPayload())
+	}
+	if t != nil {
 		first, ok := firstSampleNanos(t)
 		switch {
 		case !ok:
