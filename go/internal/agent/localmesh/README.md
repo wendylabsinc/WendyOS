@@ -178,7 +178,9 @@ restarts the supplicant or station Wi-Fi.
 
 An opt-in `"leafListen": "0.0.0.0:43024"` in `local-mesh.json` enables a
 separate listener for Wendy Lite endpoints. It can be enabled alone or alongside
-the other carriers. The leaf always initiates, regardless of UUID ordering.
+the other carriers. `ConfigureLocalMesh` sets it through `leaf_listen`
+(`wendy device wendy-net configure --leaf`, or `--leaf-listen <host:port>`);
+an empty value turns it off. The leaf always initiates, regardless of UUID ordering.
 The existing TCP/QUIC carrier retains its `WMT1` framing and negotiates the
 router ALPN `wendy-net-router/2`. No downgrade or fallback between the carriers is attempted.
 
@@ -254,8 +256,10 @@ neighbours only.
 
 This is a connection role. Current device certificates do not attest Lite
 hardware or prevent the same identity from implementing another enabled
-full-node carrier. The listener is configured explicitly; this change adds no
-public gRPC fields or automatic leaf discovery.
+full-node carrier. The listener is configured explicitly, in the file or through
+`ConfigureLocalMesh`; nothing enables it automatically. Routers do not advertise
+the leaf port: Lite finds routers through the LAN carrier's `_wendy-net._udp`
+records and dials port 43024.
 
 `TestLeafRoutedEndpointIsolatedNamespace` verifies the configured TLS listener,
 signed route admission, full-MTU UDP and kernel ICMPv6 replies through the actual

@@ -125,6 +125,33 @@ Ordinary Wendy Net apps do not need direct Bluetooth or Wi-Fi Aware control
 entitlements; the agent manages those connections. Grant direct radio access
 only to applications that manage the hardware themselves.
 
+## 6. Accept Wendy Lite boards
+
+A WendyOS device can carry Wendy Net traffic for Wendy Lite boards (ESP32) on
+its network. A board is an endpoint: it connects to the WendyOS device and does
+not relay traffic for others. Devices accept no boards until you turn this on:
+
+```sh
+wendy device wendy-net configure --device <device> \
+  --participate=true --leaf=true --infrastructure-wifi=true
+```
+
+`--leaf=true` opens a separate TCP listener on port 43024, where Lite firmware
+looks for it. Boards that find a WendyOS device automatically use its Ethernet or
+Wi-Fi Wendy Net advertisement, so also enable `--infrastructure-wifi` or
+`--ethernet` for the network the boards are on. A board set up with a fixed
+device address needs only `--leaf`.
+
+Boards must be enrolled in the same organization. The listener checks each
+board's device certificate before it accepts any traffic. To listen on one
+address or another port, use `--leaf-listen <host:port>` instead of `--leaf`;
+the board's firmware must use the same port. `--leaf=false` stops accepting
+boards. `status` shows the saved address as `Lite leaf listen`, and `topology`
+shows each connected board.
+
+For boards that connect over Bluetooth, see
+[Connect Wendy Lite over Bluetooth](/docs/advanced/development/local-mesh-radio).
+
 ## Settings reference
 
 Use `wendy device wendy-net configure` with just the options you want to change.
@@ -139,6 +166,8 @@ Every boolean accepts `true` or `false`; omitted options retain their saved valu
 | `--ble` | Connect through Bluetooth Low Energy. |
 | `--share-uplink` | Offer a healthy independent Internet connection. |
 | `--roam` | Use a shared gateway when an independent Internet connection is unavailable. |
+| `--leaf` | Accept Wendy Lite boards on TCP port 43024. Off by default. |
+| `--leaf-listen` | Accept Wendy Lite boards on another `host:port`. Use instead of `--leaf`. |
 
 `status --json` returns saved choices separately from current runtime state.
 `topology --json` returns the selected device's observed links and routes.

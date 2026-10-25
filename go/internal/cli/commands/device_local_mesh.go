@@ -34,6 +34,7 @@ func newDeviceLocalMeshCmd() *cobra.Command {
 	configure.Flags().Bool("ble", false, "Enable BLE L2CAP as a net carrier")
 	configure.Flags().Bool("ethernet", false, "Discover local net peers over Ethernet")
 	configure.Flags().Bool("infrastructure-wifi", false, "Discover local net peers over infrastructure Wi-Fi")
+	addLocalMeshLeafFlags(configure)
 	configure.RunE = func(cmd *cobra.Command, _ []string) error {
 		req, err := localMeshRequest(cmd)
 		if err != nil {
@@ -182,6 +183,15 @@ func localMeshRequest(cmd *cobra.Command) (*pb.ConfigureLocalMeshRequest, error)
 			*field.dest = &value
 		}
 	}
+	leafListen, err := localMeshLeafListen(cmd)
+	if err != nil {
+		return nil, err
+	}
+	if leafListen != nil {
+		// A leaf option is a complete update even without any other flag.
+		req.LeafListen = leafListen
+		return req, nil
+	}
 	if req.Participate == nil && req.Roam == nil && req.ShareUplink == nil && req.Nan == nil && req.Ble == nil && req.Ethernet == nil && req.InfrastructureWifi == nil {
 		return nil, fmt.Errorf("specify --participate, --roam, --share-uplink, --nan, --ble, --ethernet or --infrastructure-wifi; omitted flags preserve saved settings")
 	}
@@ -205,8 +215,9 @@ func printLocalMeshStatus(cmd *cobra.Command, status *pb.LocalMeshStatus) error 
 		return err
 	}
 	configured := status.GetConfigured()
-	cmd.Printf("Participate: %t\nRoam: %t\nShare uplink: %t\nNAN: %t\nBLE: %t\nEthernet: %t\nInfrastructure Wi-Fi: %t\nTCP listen: %s\nConfigured TCP peers: %d\nAuthenticated peers: %d\nGateway principal: %s\nState: %s\n%s\n",
+	cmd.Printf("Participate: %t\nRoam: %t\nShare uplink: %t\nNAN: %t\nBLE: %t\nEthernet: %t\nInfrastructure Wi-Fi: %t\nTCP listen: %s\nConfigured TCP peers: %d\nLite leaf listen: %s\nAuthenticated peers: %d\nGateway principal: %s\nState: %s\n%s\n",
 		configured.GetParticipate(), configured.GetRoam(), configured.GetShareUplink(), configured.GetNan(), configured.GetBle(), configured.GetEthernet(), configured.GetInfrastructureWifi(), configured.GetTcpListen(), configured.GetConfiguredTcpPeers(),
+		localMeshLeafLabel(configured.GetLeafListen()),
 		status.GetAuthenticatedPeers(), status.GetGatewayPrincipal(), localNetStateLabel(status.GetState()), status.GetDetail())
 	return nil
 }

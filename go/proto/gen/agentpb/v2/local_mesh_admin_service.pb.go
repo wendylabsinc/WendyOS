@@ -33,8 +33,12 @@ type ConfigureLocalMeshRequest struct {
 	Ble                *bool `protobuf:"varint,5,opt,name=ble,proto3,oneof" json:"ble,omitempty"`
 	Ethernet           *bool `protobuf:"varint,6,opt,name=ethernet,proto3,oneof" json:"ethernet,omitempty"`
 	InfrastructureWifi *bool `protobuf:"varint,7,opt,name=infrastructure_wifi,json=infrastructureWifi,proto3,oneof" json:"infrastructure_wifi,omitempty"`
-	unknownFields      protoimpl.UnknownFields
-	sizeCache          protoimpl.SizeCache
+	// TCP host:port of the separate Wendy Lite leaf listener, e.g.
+	// "0.0.0.0:43024". Lite firmware dials port 43024 on the routers it finds.
+	// Off by default; an empty string stops accepting leaves.
+	LeafListen    *string `protobuf:"bytes,8,opt,name=leaf_listen,json=leafListen,proto3,oneof" json:"leaf_listen,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ConfigureLocalMeshRequest) Reset() {
@@ -114,6 +118,13 @@ func (x *ConfigureLocalMeshRequest) GetInfrastructureWifi() bool {
 		return *x.InfrastructureWifi
 	}
 	return false
+}
+
+func (x *ConfigureLocalMeshRequest) GetLeafListen() string {
+	if x != nil && x.LeafListen != nil {
+		return *x.LeafListen
+	}
+	return ""
 }
 
 type GetLocalMeshStatusRequest struct {
@@ -667,8 +678,10 @@ type LocalMeshConfiguration struct {
 	ConfiguredTcpPeers uint32                 `protobuf:"varint,7,opt,name=configured_tcp_peers,json=configuredTcpPeers,proto3" json:"configured_tcp_peers,omitempty"`
 	Ethernet           bool                   `protobuf:"varint,8,opt,name=ethernet,proto3" json:"ethernet,omitempty"`
 	InfrastructureWifi bool                   `protobuf:"varint,9,opt,name=infrastructure_wifi,json=infrastructureWifi,proto3" json:"infrastructure_wifi,omitempty"`
-	unknownFields      protoimpl.UnknownFields
-	sizeCache          protoimpl.SizeCache
+	// Empty when this device does not accept Wendy Lite leaves.
+	LeafListen    string `protobuf:"bytes,10,opt,name=leaf_listen,json=leafListen,proto3" json:"leaf_listen,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *LocalMeshConfiguration) Reset() {
@@ -764,6 +777,13 @@ func (x *LocalMeshConfiguration) GetInfrastructureWifi() bool {
 	return false
 }
 
+func (x *LocalMeshConfiguration) GetLeafListen() string {
+	if x != nil {
+		return x.LeafListen
+	}
+	return ""
+}
+
 type LocalMeshStatus struct {
 	state      protoimpl.MessageState  `protogen:"open.v1"`
 	Configured *LocalMeshConfiguration `protobuf:"bytes,1,opt,name=configured,proto3" json:"configured,omitempty"`
@@ -853,7 +873,7 @@ var File_wendy_agent_services_v2_local_mesh_admin_service_proto protoreflect.Fil
 
 const file_wendy_agent_services_v2_local_mesh_admin_service_proto_rawDesc = "" +
 	"\n" +
-	"6wendy/agent/services/v2/local_mesh_admin_service.proto\x12\x17wendy.agent.services.v2\"\xe7\x02\n" +
+	"6wendy/agent/services/v2/local_mesh_admin_service.proto\x12\x17wendy.agent.services.v2\"\x9d\x03\n" +
 	"\x19ConfigureLocalMeshRequest\x12%\n" +
 	"\vparticipate\x18\x01 \x01(\bH\x00R\vparticipate\x88\x01\x01\x12\x17\n" +
 	"\x04roam\x18\x02 \x01(\bH\x01R\x04roam\x88\x01\x01\x12&\n" +
@@ -861,14 +881,17 @@ const file_wendy_agent_services_v2_local_mesh_admin_service_proto_rawDesc = "" +
 	"\x03nan\x18\x04 \x01(\bH\x03R\x03nan\x88\x01\x01\x12\x15\n" +
 	"\x03ble\x18\x05 \x01(\bH\x04R\x03ble\x88\x01\x01\x12\x1f\n" +
 	"\bethernet\x18\x06 \x01(\bH\x05R\bethernet\x88\x01\x01\x124\n" +
-	"\x13infrastructure_wifi\x18\a \x01(\bH\x06R\x12infrastructureWifi\x88\x01\x01B\x0e\n" +
+	"\x13infrastructure_wifi\x18\a \x01(\bH\x06R\x12infrastructureWifi\x88\x01\x01\x12$\n" +
+	"\vleaf_listen\x18\b \x01(\tH\aR\n" +
+	"leafListen\x88\x01\x01B\x0e\n" +
 	"\f_participateB\a\n" +
 	"\x05_roamB\x0f\n" +
 	"\r_share_uplinkB\x06\n" +
 	"\x04_nanB\x06\n" +
 	"\x04_bleB\v\n" +
 	"\t_ethernetB\x16\n" +
-	"\x14_infrastructure_wifi\"\x1b\n" +
+	"\x14_infrastructure_wifiB\x0e\n" +
+	"\f_leaf_listen\"\x1b\n" +
 	"\x19GetLocalMeshStatusRequest\"\x1d\n" +
 	"\x1bGetLocalMeshTopologyRequest\"\xc7\x04\n" +
 	"\x11LocalMeshTopology\x12%\n" +
@@ -917,7 +940,7 @@ const file_wendy_agent_services_v2_local_mesh_admin_service_proto_rawDesc = "" +
 	"\x0fsequence_number\x18\t \x01(\rR\x0esequenceNumber\x12\x1f\n" +
 	"\vtrust_state\x18\n" +
 	" \x01(\tR\n" +
-	"trustState\"\xb3\x02\n" +
+	"trustState\"\xd4\x02\n" +
 	"\x16LocalMeshConfiguration\x12 \n" +
 	"\vparticipate\x18\x01 \x01(\bR\vparticipate\x12\x12\n" +
 	"\x04roam\x18\x02 \x01(\bR\x04roam\x12!\n" +
@@ -928,7 +951,10 @@ const file_wendy_agent_services_v2_local_mesh_admin_service_proto_rawDesc = "" +
 	"tcp_listen\x18\x06 \x01(\tR\ttcpListen\x120\n" +
 	"\x14configured_tcp_peers\x18\a \x01(\rR\x12configuredTcpPeers\x12\x1a\n" +
 	"\bethernet\x18\b \x01(\bR\bethernet\x12/\n" +
-	"\x13infrastructure_wifi\x18\t \x01(\bR\x12infrastructureWifi\"\x9b\x02\n" +
+	"\x13infrastructure_wifi\x18\t \x01(\bR\x12infrastructureWifi\x12\x1f\n" +
+	"\vleaf_listen\x18\n" +
+	" \x01(\tR\n" +
+	"leafListen\"\x9b\x02\n" +
 	"\x0fLocalMeshStatus\x12O\n" +
 	"\n" +
 	"configured\x18\x01 \x01(\v2/.wendy.agent.services.v2.LocalMeshConfigurationR\n" +

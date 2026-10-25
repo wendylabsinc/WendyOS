@@ -96,13 +96,8 @@ func LoadTCPConfig(path string, self meshid.Device) (*TCPConfig, error) {
 	} else if err := validateTCPAddress(cfg.Listen, true); err != nil {
 		return nil, fmt.Errorf("listen: %w", err)
 	}
-	if cfg.LeafListen != "" {
-		if err := validateTCPAddress(cfg.LeafListen, true); err != nil {
-			return nil, fmt.Errorf("leafListen: %w", err)
-		}
-		if cfg.LeafListen == cfg.Listen {
-			return nil, errors.New("leafListen must use a separate listener")
-		}
+	if err := ValidateLeafListen(cfg.LeafListen, cfg.Listen); err != nil {
+		return nil, err
 	}
 
 	if len(cfg.LeafBLEPeers) > 8 {
@@ -166,6 +161,22 @@ func LoadTCPConfig(path string, self meshid.Device) (*TCPConfig, error) {
 		cfg.devices = append(cfg.devices, device)
 	}
 	return &cfg, nil
+}
+
+// ValidateLeafListen checks a leafListen value against the saved TCP listen
+// address. Empty means the leaf carrier is off. The admin service uses it to
+// reject a bad address before anything is saved.
+func ValidateLeafListen(leafListen, listen string) error {
+	if leafListen == "" {
+		return nil
+	}
+	if err := validateTCPAddress(leafListen, true); err != nil {
+		return fmt.Errorf("leafListen: %w", err)
+	}
+	if leafListen == listen {
+		return errors.New("leafListen must use a separate listener")
+	}
+	return nil
 }
 
 func validateTCPAddress(address string, listen bool) error {

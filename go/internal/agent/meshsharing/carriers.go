@@ -12,13 +12,15 @@ import (
 
 // SaveCarrierConfig replaces only local-mesh.json. The caller retains the
 // loaded TCP listener and peers while changing NAN/BLE flags. When the last
-// radio is disabled and no TCP topology exists, absence represents disabled.
+// radio is disabled and no TCP topology, leaf listener or BLE leaf remains,
+// absence represents disabled.
 func SaveCarrierConfig(path string, self meshid.Device, config localmesh.TCPConfig) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return err
 	}
-	if config.Listen == "" && len(config.Peers) == 0 && !config.NAN && !config.BLE && !config.Ethernet && !config.InfrastructureWiFi {
+	if config.Listen == "" && len(config.Peers) == 0 && !config.NAN && !config.BLE && !config.Ethernet && !config.InfrastructureWiFi &&
+		config.LeafListen == "" && len(config.LeafBLEPeers) == 0 {
 		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
 		}

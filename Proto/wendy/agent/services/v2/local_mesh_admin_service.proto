@@ -22,6 +22,10 @@ message ConfigureLocalMeshRequest {
   optional bool ble = 5;
   optional bool ethernet = 6;
   optional bool infrastructure_wifi = 7;
+  // TCP host:port of the separate Wendy Lite leaf listener, e.g.
+  // "0.0.0.0:43024". Lite firmware dials port 43024 on the routers it finds.
+  // Off by default; an empty string stops accepting leaves.
+  optional string leaf_listen = 8;
 }
 
 message GetLocalMeshStatusRequest {}
@@ -100,6 +104,8 @@ message LocalMeshConfiguration {
   uint32 configured_tcp_peers = 7;
   bool ethernet = 8;
   bool infrastructure_wifi = 9;
+  // Empty when this device does not accept Wendy Lite leaves.
+  string leaf_listen = 10;
 }
 
 message LocalMeshStatus {
