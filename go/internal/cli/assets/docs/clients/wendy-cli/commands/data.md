@@ -614,24 +614,26 @@ also include these frames in `records.wdr`, alongside legacy `events.jsonl`.
 ### Live streams
 
 Every application recording stream is also available live, with no change to the
-app. `wendy data stream` prints records as the agent accepts them, whether or not
-an Episode is recording, until you press Ctrl-C:
+app, and so are the agent's own streams. `wendy data stream` prints records as the
+agent accepts them, whether or not an Episode is recording, until you press Ctrl-C:
 
 ```sh
 wendy data stream
 wendy data stream --stream apps/<app-id>/<service>/<stream>
 wendy data stream --prefix apps/<app-id>/ --schema wendy.data.v1.VideoMarkers --latest
+wendy data stream --prefix agent/campaign/<campaign>/markers/
 wendy data stream --rate 5 --json
 ```
 
 A stream id is `apps/<app-id>/<service>/<stream>`, or `apps/<app-id>/<stream>` for
-an app with no service name. `--stream` and `--prefix` choose streams, and
-`--schema` keeps only the chosen streams with that schema; all three are
-repeatable. Without them every stream is printed. `--json` writes one JSON object
-per record, in the shape `--sse` serves (see below): the payload is protobuf JSON
-for the standard `wendy.data.v1` types and the catalog, a JSON payload as it is, and
-base64 otherwise. Live and recorded data are the same records: what a viewer sees is
-what an Episode or an export holds.
+an app with no service name, and `agent/<stream>` for the agent's own streams,
+described below. `--stream` and `--prefix` choose streams, and `--schema` keeps
+only the chosen streams with that schema; all three are repeatable. Without them
+every stream is printed. `--json` writes one JSON object per record, in the shape
+`--sse` serves (see below): the payload is protobuf JSON for the standard
+`wendy.data.v1` types and the catalog, a JSON payload as it is, and base64
+otherwise. Live and recorded data are the same records: what a viewer sees is what
+an Episode or an export holds.
 
 The agent publishes its own streams under `agent/`. A campaign with an `inference`
 block publishes every scored frame on `agent/campaign/<campaign>/markers/<source>`,
@@ -639,6 +641,7 @@ for example `agent/campaign/people/markers/v4l2:/dev/video0`: the frame's
 detections as boxes, labelled with the class and the score in percent. A frame with
 nothing detected clears the boxes. They are live whether or not an Episode is
 recording, and an Episode that captures `applications` records the same records.
+A record names the camera frame it describes in `source_id` and `sample_id`.
 
 Viewers recognise a record by its schema. The standard types are defined in
 `Proto/wendy/data/v1/types.proto`: `wendy.data.v1.VideoMarkers` (points and boxes on
@@ -678,15 +681,19 @@ wendy data streams
 wendy data streams --json
 ```
 
-An app's recording streams are listed while the app runs. A stream is `active`
-when it had a record in the last 10 seconds, and `idle` otherwise.
+An app's recording streams (`apps/...`) are listed while the app runs, and the
+agent's own streams (`agent/...`) while their producer runs: a campaign's markers
+stream for a camera is listed while the campaign's inference streams that camera. A
+stream is `active` when it had a record in the last 10 seconds, and `idle`
+otherwise.
 
 The list comes from a catalog on the live stream itself, so it reaches any viewer
 the stream does. For each stream the agent publishes a
 `wendy.agent.services.v2.DataStreamInfo` record on stream `_streams/<stream-id>`
 when the stream appears, when its state changes, about every 10 seconds while it is
-active, and with state `GONE` when its app stops. A viewer that selects the prefix
-`_streams/` with `--latest` gets the whole catalog at once, then its changes:
+active, and with state `GONE` when its app or producer stops. A viewer that selects
+the prefix `_streams/` with `--latest` gets the whole catalog at once, then its
+changes:
 
 ```sh
 wendy data stream --prefix _streams/ --latest
@@ -708,9 +715,10 @@ Each event is one JSON record: `stream_id`, `timestamp_unix_nanos` (a string),
 sensor sample the record describes, when its publisher names one). A payload whose
 schema the CLI knows, such as the standard `wendy.data.v1` types and the catalog, is
 protobuf JSON with proto field names, a payload that is already a JSON object or
-array is passed through, and any other payload is a base64 string. The query parameters `stream`, `prefix` and `schema` replace the command
-line's selection for one request, for example `/live?prefix=_streams/`. Companion
-web reads it with `VITE_WENDY_DATA_LIVE_URL=http://127.0.0.1:8090/live`.
+array is passed through, and any other payload is a base64 string. The query
+parameters `stream`, `prefix` and `schema` replace the command line's selection for
+one request, for example `/live?prefix=_streams/`. Companion web reads it with
+`VITE_WENDY_DATA_LIVE_URL=http://127.0.0.1:8090/live`.
 
 The proxy has no authentication of its own, so it listens only on a loopback
 address, answers only requests addressed to one, and allows only pages served from

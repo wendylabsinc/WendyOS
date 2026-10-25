@@ -34,7 +34,7 @@ import (
 // Record is one record on a live stream.
 type Record struct {
 	// StreamID is opaque, stable and unique on the device, for example
-	// "apps/<app-id>/<service>/<stream>".
+	// "apps/<app-id>/<service>/<stream>" or "agent/<stream>".
 	StreamID string
 	// Schema names the payload type as its publisher declared it. It may be
 	// empty.

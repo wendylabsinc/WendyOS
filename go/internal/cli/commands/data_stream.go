@@ -26,8 +26,10 @@ func newDataStreamCmd() *cobra.Command {
 		Short: "Print live records from the device's data streams",
 		Long: `Print records from the device's data streams as the agent accepts them,
 until interrupted. Every app recording stream is included, with no change to
-the app. Stream ids are apps/<app-id>/<service>/<stream>, or
-apps/<app-id>/<stream> for an app without a service name.
+the app, and so are the agent's own streams, such as a campaign's detections.
+Stream ids are apps/<app-id>/<service>/<stream>, or apps/<app-id>/<stream> for
+an app without a service name, and agent/<stream> for the agent's, for example
+agent/campaign/<campaign>/markers/<source>.
 
 --stream and --prefix choose streams; --schema keeps only the chosen streams
 with that schema. The catalog of streams is stream _streams/<stream-id>; it is
@@ -52,6 +54,7 @@ schema replace the command line's selection for that request.`,
 		Example: `  wendy data stream
   wendy data stream --stream apps/sh.wendy.demo/detector/markers
   wendy data stream --prefix apps/sh.wendy.demo/ --schema wendy.data.v1.VideoMarkers --latest
+  wendy data stream --prefix agent/campaign/people/markers/
   wendy data stream --rate 5 --json
   wendy data stream --sse 127.0.0.1:8090`,
 		Args: cobra.NoArgs,
