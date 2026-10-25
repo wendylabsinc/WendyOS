@@ -59,12 +59,14 @@ const (
 // campaigns on a device, not an application programming interface for apps.
 type DataServiceClient interface {
 	// Streams accepted application data as it arrives. This first API deliberately
-	// has no history, resume cursor, or gap protocol.
+	// has no history beyond send_latest, no resume cursor, and no gap protocol.
 	//
 	// Delivery is best effort. The newest record wins per stream: a slow
 	// subscriber skips records and never slows a publisher or another stream.
-	// A subscriber sees only records accepted after it subscribed. Response
-	// headers are sent once the subscription is in place.
+	// Apart from send_latest, a subscriber sees only records accepted after it
+	// subscribed. Response headers are sent once the subscription is in place.
+	//
+	// The same stream carries its own catalog: see DataStreamInfo.
 	StreamData(ctx context.Context, in *StreamDataRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[DataRecord], error)
 	// Bounded, durable event inbox. An empty cursor starts at the current tail;
 	// replay=true reads retained history. Expired cursors report a gap explicitly.
@@ -294,12 +296,14 @@ func (c *dataServiceClient) CampaignTrigger(ctx context.Context, in *DataCampaig
 // campaigns on a device, not an application programming interface for apps.
 type DataServiceServer interface {
 	// Streams accepted application data as it arrives. This first API deliberately
-	// has no history, resume cursor, or gap protocol.
+	// has no history beyond send_latest, no resume cursor, and no gap protocol.
 	//
 	// Delivery is best effort. The newest record wins per stream: a slow
 	// subscriber skips records and never slows a publisher or another stream.
-	// A subscriber sees only records accepted after it subscribed. Response
-	// headers are sent once the subscription is in place.
+	// Apart from send_latest, a subscriber sees only records accepted after it
+	// subscribed. Response headers are sent once the subscription is in place.
+	//
+	// The same stream carries its own catalog: see DataStreamInfo.
 	StreamData(*StreamDataRequest, grpc.ServerStreamingServer[DataRecord]) error
 	// Bounded, durable event inbox. An empty cursor starts at the current tail;
 	// replay=true reads retained history. Expired cursors report a gap explicitly.
