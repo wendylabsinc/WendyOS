@@ -21,6 +21,8 @@ type bufferedStreamRecord struct {
 	size   int
 }
 
+// streamPreRollBytes bounds each of the two stream pre-roll rings: the
+// applications' streams, and the agent's own (see bufferStreamLocked).
 const streamPreRollBytes = 16 << 20
 
 func streamDescriptor(c appconfig.RecordingStream) *recordingpb.StreamDescriptor {
@@ -245,25 +247,34 @@ func appendRecording(path string, r *recordingpb.StoredRecord) error {
 	// independent journal sync, not this episode copy.
 	return f.Close()
 }
+
+// bufferStreamLocked keeps r for the pre-roll of episodes that start later.
+// The agent's own streams have a ring of their own, with its own budget:
+// campaign markers come with every scored frame, and they must not evict an
+// application's records.
 func (m *Manager) bufferStreamLocked(r *recordingpb.StoredRecord) {
+	ring, ringSize := &m.streamPreRoll, &m.streamPreRollSize
+	if r.AppId == "" {
+		ring, ringSize = &m.agentPreRoll, &m.agentPreRollSize
+	}
 	size := proto.Size(r) + 8
 	// Independent journal commits may finish out of receipt order.
-	i := sort.Search(len(m.streamPreRoll), func(i int) bool { return m.streamPreRoll[i].record.ReceiptBoottimeNanos > r.ReceiptBoottimeNanos })
-	m.streamPreRoll = append(m.streamPreRoll, bufferedStreamRecord{})
-	copy(m.streamPreRoll[i+1:], m.streamPreRoll[i:])
-	m.streamPreRoll[i] = bufferedStreamRecord{r, size}
-	m.streamPreRollSize += size
-	now := m.streamPreRoll[len(m.streamPreRoll)-1].record.ReceiptBoottimeNanos
+	i := sort.Search(len(*ring), func(i int) bool { return (*ring)[i].record.ReceiptBoottimeNanos > r.ReceiptBoottimeNanos })
+	*ring = append(*ring, bufferedStreamRecord{})
+	copy((*ring)[i+1:], (*ring)[i:])
+	(*ring)[i] = bufferedStreamRecord{r, size}
+	*ringSize += size
+	now := (*ring)[len(*ring)-1].record.ReceiptBoottimeNanos
 	m.evictPreRoll(now)
 	cutoff := now - preRollWindow.Nanoseconds()
-	for len(m.streamPreRoll) > 0 && (m.streamPreRoll[0].record.ReceiptBoottimeNanos < cutoff || m.streamPreRollSize > streamPreRollBytes) {
-		first := m.streamPreRoll[0]
-		m.streamPreRollSize -= first.size
+	for len(*ring) > 0 && ((*ring)[0].record.ReceiptBoottimeNanos < cutoff || *ringSize > streamPreRollBytes) {
+		first := (*ring)[0]
+		*ringSize -= first.size
 		if first.record.ReceiptBoottimeNanos >= cutoff {
 			m.preRollEvicted = append(m.preRollEvicted, first.record.ReceiptBoottimeNanos)
 		}
-		m.streamPreRoll[0] = bufferedStreamRecord{}
-		m.streamPreRoll = m.streamPreRoll[1:]
+		(*ring)[0] = bufferedStreamRecord{}
+		*ring = (*ring)[1:]
 	}
 }
 func (m *Manager) flushStreamPreRoll(dir string, origin int64, window time.Duration) (count uint64, earliest *int64, retErr error) {
@@ -277,7 +288,15 @@ func (m *Manager) flushStreamPreRoll(dir string, origin int64, window time.Durat
 			retErr = errors.Join(retErr, file.Close())
 		}
 	}()
-	for _, entry := range m.streamPreRoll {
+	// The two rings are merged in receipt order, as one ring would hold them.
+	apps, agent := m.streamPreRoll, m.agentPreRoll
+	for len(apps) > 0 || len(agent) > 0 {
+		var entry bufferedStreamRecord
+		if len(agent) == 0 || len(apps) > 0 && apps[0].record.ReceiptBoottimeNanos <= agent[0].record.ReceiptBoottimeNanos {
+			entry, apps = apps[0], apps[1:]
+		} else {
+			entry, agent = agent[0], agent[1:]
+		}
 		r := entry.record
 		stamp := streamRecordStamp(r)
 		if r.ReceiptBootId != currentBoot || r.ReceiptBoottimeNanos < origin-window.Nanoseconds() || r.ReceiptBoottimeNanos > origin || stamp < origin-window.Nanoseconds() || stamp > origin {

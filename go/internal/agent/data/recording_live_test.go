@@ -344,7 +344,7 @@ func TestPublishReachesViewersBeforeStorage(t *testing.T) {
 		done <- m.Publish("test/stream", &recordingpb.StreamDescriptor{MediaType: "text/plain"}, &recordingpb.Record{Payload: []byte("x")})
 	}()
 	d := nextLive(t, sub)
-	buffered := len(m.streamPreRoll)
+	buffered := len(m.agentPreRoll)
 	m.mu.Unlock()
 	if err := <-done; err != nil {
 		t.Fatal(err)
@@ -354,8 +354,8 @@ func TestPublishReachesViewersBeforeStorage(t *testing.T) {
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if len(m.streamPreRoll) != 1 {
-		t.Fatalf("pre-roll holds %d records after the publish", len(m.streamPreRoll))
+	if len(m.agentPreRoll) != 1 {
+		t.Fatalf("pre-roll holds %d records after the publish", len(m.agentPreRoll))
 	}
 }
 
@@ -510,5 +510,102 @@ func TestLiveRecordNamesItsSample(t *testing.T) {
 	}
 	if d := nextLive(t, sub); d.Record.SourceID != "" || d.Record.SampleID != 0 {
 		t.Fatalf("lightweight record names %s #%d", d.Record.SourceID, d.Record.SampleID)
+	}
+}
+
+// The agent's own streams, campaign markers at frame rate for example, have a
+// pre-roll budget of their own. However much they publish, they do not evict
+// an application's record that is still inside its window, and the next
+// episode's pre-roll holds it beside the agent's records.
+func TestAgentStreamsDoNotEvictApplicationPreRoll(t *testing.T) {
+	root := t.TempDir()
+	m, err := NewManager(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.RecordStream("test.app", "", "boxes", durableTestStream, testRecord("app")); err != nil {
+		t.Fatal(err)
+	}
+	const stream = "campaign/door/markers/v4l2:/dev/video0"
+	descriptor := &recordingpb.StreamDescriptor{MediaType: "application/octet-stream"}
+	big := &recordingpb.Record{Payload: make([]byte, 512<<10)}
+	for range streamPreRollBytes/len(big.Payload) + 2 {
+		if err := m.Publish(stream, descriptor, big); err != nil {
+			t.Fatal(err)
+		}
+	}
+	app, agent := 0, 0
+	for _, recorded := range startedPreRoll(t, m, root) {
+		switch {
+		case recorded.AppId == "test.app" && recorded.Record.GetId() == "app":
+			app++
+		case recorded.AppId == "" && recorded.Stream == stream:
+			agent++
+		}
+	}
+	if app != 1 || agent == 0 {
+		t.Fatalf("pre-roll holds %d app and %d agent records, want the app's one and the agent's", app, agent)
+	}
+}
+
+// The app and agent pre-roll rings reach an episode as one pre-roll, in
+// receipt order.
+func TestStreamPreRollIsInReceiptOrder(t *testing.T) {
+	root := t.TempDir()
+	m, err := NewManager(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	descriptor := &recordingpb.StreamDescriptor{MediaType: "text/plain"}
+	for _, step := range []string{"agent", "app", "agent"} {
+		if step == "app" {
+			if _, err := m.RecordStream("test.app", "", "text", appconfig.RecordingStream{Mode: "lightweight", MediaType: "text/plain"}, &recordingpb.Record{Payload: []byte("x")}); err != nil {
+				t.Fatal(err)
+			}
+		} else if err := m.Publish("test/stream", descriptor, &recordingpb.Record{Payload: []byte("x")}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var got []string
+	for _, recorded := range startedPreRoll(t, m, root) {
+		if recorded.AppId == "" {
+			got = append(got, "agent")
+		} else {
+			got = append(got, "app")
+		}
+	}
+	if strings.Join(got, ",") != "agent,app,agent" {
+		t.Fatalf("pre-roll order %v", got)
+	}
+}
+
+// startedPreRoll starts and stops an episode that captures applications, and
+// returns the pre-roll records it holds.
+func startedPreRoll(t *testing.T, m *Manager, root string) []*recordingpb.StoredRecord {
+	t.Helper()
+	episode, err := m.Start(StartOptions{Sources: []string{"applications"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = m.Stop(AdHocEpisodeKey); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.Open(filepath.Join(root, episode.ID, RecordingLogFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	var out []*recordingpb.StoredRecord
+	for {
+		recorded, _, err := ReadRecording(f)
+		if errors.Is(err, io.EOF) {
+			return out
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if recorded.Preroll {
+			out = append(out, recorded)
+		}
 	}
 }

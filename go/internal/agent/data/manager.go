@@ -135,6 +135,10 @@ type Manager struct {
 	// the pre-roll and every open episode (see publish). It is nil before the
 	// first record. streamMu guards it.
 	streamRecorded chan struct{}
+	// agentPreRoll is streamPreRoll for the agent's own streams, with a
+	// budget of its own (see bufferStreamLocked).
+	agentPreRoll     []bufferedStreamRecord
+	agentPreRollSize int
 }
 
 // SetQuota overrides the episode store bounds. maxQuota caps the store (the
