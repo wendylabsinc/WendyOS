@@ -174,22 +174,23 @@ func TestSubscriberCap(t *testing.T) {
 	}
 }
 
-// Past the pending-bytes cap the oldest pending stream is dropped, and its
-// loss is reported with that stream's next delivery.
+// Past the pending-bytes cap the offered record is dropped, not another
+// stream's, and its loss is reported with that stream's next delivery.
 func TestPendingBytesCap(t *testing.T) {
 	h := NewHub(Limits{MaxPendingBytes: 100})
 	s := subscribe(t, h)
 	h.Offer(record("apps/a/one", 1, 40))
 	h.Offer(record("apps/a/two", 2, 40))
-	h.Offer(record("apps/a/three", 3, 40)) // 120 > 100: "one" is dropped
-	if d := next(t, s); d.Record.StreamID != "apps/a/two" {
-		t.Fatalf("oldest pending stream was not dropped: got %s first", d.Record.StreamID)
+	h.Offer(record("apps/a/three", 3, 40)) // 120 > 100: "three" is dropped
+	if d := next(t, s); d.Record.StreamID != "apps/a/one" {
+		t.Fatalf("a pending stream was dropped for a new one: got %s first", d.Record.StreamID)
 	}
-	if d := next(t, s); d.Record.StreamID != "apps/a/three" {
+	if d := next(t, s); d.Record.StreamID != "apps/a/two" {
 		t.Fatalf("got %s", d.Record.StreamID)
 	}
-	h.Offer(record("apps/a/one", 4, 40))
-	if d := next(t, s); d.Record.StreamID != "apps/a/one" || d.Skipped != 1 {
+	requireEmpty(t, s)
+	h.Offer(record("apps/a/three", 4, 40))
+	if d := next(t, s); d.Record.StreamID != "apps/a/three" || d.Skipped != 1 {
 		t.Fatalf("drop not counted: %+v", d)
 	}
 	// Replacing a pending record frees its bytes rather than adding to them.
@@ -200,11 +201,45 @@ func TestPendingBytesCap(t *testing.T) {
 	if a, b := next(t, s), next(t, s); a.Record.StreamID != "apps/a/one" || b.Record.StreamID != "apps/a/two" {
 		t.Fatalf("replacement was charged twice: %s then %s", a.Record.StreamID, b.Record.StreamID)
 	}
-	// A record larger than the cap on its own is still delivered.
+	// A replacement that no longer fits is dropped as well: the stream is
+	// left with nothing pending, and both of its records count as skipped.
+	h.Offer(record("apps/a/one", 21, 40))
+	h.Offer(record("apps/a/two", 22, 40))
+	h.Offer(record("apps/a/two", 23, 70)) // 40 + 70 > 100
+	if d := next(t, s); d.Record.StreamID != "apps/a/one" {
+		t.Fatalf("got %s", d.Record.StreamID)
+	}
+	requireEmpty(t, s)
+	h.Offer(record("apps/a/two", 24, 40))
+	if d := next(t, s); d.Record.TimestampUnixNanos != 24 || d.Skipped != 2 {
+		t.Fatalf("dropped replacement: %+v", d)
+	}
+	// A record larger than the cap is delivered when it would be alone, and
+	// dropped rather than let it push another stream's record out.
 	h.Offer(record("apps/a/one", 30, 40))
 	h.Offer(record("apps/a/big", 31, 500))
-	if d := next(t, s); d.Record.StreamID != "apps/a/big" {
-		t.Fatalf("oversized record: got %s", d.Record.StreamID)
+	if d := next(t, s); d.Record.StreamID != "apps/a/one" {
+		t.Fatalf("oversized record pushed out a pending one: got %s", d.Record.StreamID)
+	}
+	requireEmpty(t, s)
+	h.Offer(record("apps/a/big", 32, 500))
+	if d := next(t, s); d.Record.StreamID != "apps/a/big" || d.Skipped != 1 {
+		t.Fatalf("oversized record alone: %+v", d)
+	}
+	requireEmpty(t, s)
+}
+
+// Under the pending-bytes cap, as without it, a stream of large records
+// cannot push out a small stream's only record: an alarm's one Event record
+// survives two camera frames that together overflow the cap.
+func TestPendingBytesCapKeepsOtherStreamsRecords(t *testing.T) {
+	h := NewHub(Limits{MaxPendingBytes: 100})
+	s := subscribe(t, h)
+	h.Offer(record("apps/a/alarm", 1, 1))
+	h.Offer(record("apps/a/camA", 2, 60))
+	h.Offer(record("apps/a/camB", 3, 60))
+	if a, b := next(t, s), next(t, s); a.Record.StreamID != "apps/a/alarm" || b.Record.StreamID != "apps/a/camA" {
+		t.Fatalf("delivered %s then %s, want alarm then camA", a.Record.StreamID, b.Record.StreamID)
 	}
 	requireEmpty(t, s)
 }
