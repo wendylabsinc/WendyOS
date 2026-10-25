@@ -188,14 +188,16 @@ func httpStatusOf(err error) int {
 }
 
 // liveJSONRecord is a DataRecord as browsers receive it, in wendy-data-app's
-// shape: protobuf JSON field names, the timestamp as a string as protobuf JSON
-// writes an int64, and the payload as JSON instead of bytes.
+// shape: protobuf JSON field names, 64-bit numbers as strings as protobuf JSON
+// writes them, and the payload as JSON instead of bytes.
 type liveJSONRecord struct {
 	StreamID           string          `json:"stream_id"`
 	TimestampUnixNanos int64           `json:"timestamp_unix_nanos,string"`
 	Schema             string          `json:"schema"`
 	Payload            json.RawMessage `json:"payload"`
 	Skipped            uint64          `json:"skipped,omitempty,string"`
+	SourceID           string          `json:"source_id,omitempty"`
+	SampleID           uint64          `json:"sample_id,omitempty,string"`
 }
 
 func liveJSON(r *agentpbv2.DataRecord) liveJSONRecord {
@@ -205,6 +207,8 @@ func liveJSON(r *agentpbv2.DataRecord) liveJSONRecord {
 		Schema:             r.GetSchema(),
 		Payload:            livePayloadJSON(r.GetSchema(), r.GetPayload()),
 		Skipped:            r.GetSkipped(),
+		SourceID:           r.GetSourceId(),
+		SampleID:           r.GetSampleId(),
 	}
 }
 

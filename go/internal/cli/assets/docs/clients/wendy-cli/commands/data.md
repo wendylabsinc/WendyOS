@@ -687,12 +687,13 @@ wendy data stream --sse 127.0.0.1:8090 --latest
 ```
 
 Each event is one JSON record: `stream_id`, `timestamp_unix_nanos` (a string),
-`schema`, `payload` and, when nonzero, `skipped`. A payload whose schema the CLI
-knows is protobuf JSON with proto field names, a payload that is already a JSON
-object or array is passed through, and any other payload is a base64 string. The
-query parameters `stream`, `prefix` and `schema` replace the command line's
-selection for one request, for example `/live?prefix=_streams/`. Companion web
-reads it with `VITE_WENDY_DATA_LIVE_URL=http://127.0.0.1:8090/live`.
+`schema`, `payload` and, when set, `skipped`, `source_id` and `sample_id` (the
+sensor sample the record describes, when its publisher names one). A payload whose
+schema the CLI knows is protobuf JSON with proto field names, a payload that is
+already a JSON object or array is passed through, and any other payload is a base64
+string. The query parameters `stream`, `prefix` and `schema` replace the command
+line's selection for one request, for example `/live?prefix=_streams/`. Companion
+web reads it with `VITE_WENDY_DATA_LIVE_URL=http://127.0.0.1:8090/live`.
 
 The proxy has no authentication of its own, so it listens only on a loopback
 address, answers only requests addressed to one, and allows only pages served from

@@ -337,7 +337,15 @@ type DataRecord struct {
 	// How many records of this stream this subscriber did not receive since its
 	// previous record of the stream, because a newer one replaced them. That is
 	// the delivery rule, not an error.
-	Skipped       uint64 `protobuf:"varint,5,opt,name=skipped,proto3" json:"skipped,omitempty"`
+	Skipped uint64 `protobuf:"varint,5,opt,name=skipped,proto3" json:"skipped,omitempty"`
+	// The sensor sample the record describes, when its publisher names one: the
+	// agent's source id, for example "v4l2:/dev/video0", and that source's
+	// sample id, as an episode's camera index numbers it. They come from the
+	// first input reference of the record's envelope (wendy.agent.apps.v1.Record
+	// inputs). Empty for a record that names none, such as every lightweight
+	// record.
+	SourceId      string `protobuf:"bytes,6,opt,name=source_id,json=sourceId,proto3" json:"source_id,omitempty"`
+	SampleId      uint64 `protobuf:"varint,7,opt,name=sample_id,json=sampleId,proto3" json:"sample_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -403,6 +411,20 @@ func (x *DataRecord) GetPayload() []byte {
 func (x *DataRecord) GetSkipped() uint64 {
 	if x != nil {
 		return x.Skipped
+	}
+	return 0
+}
+
+func (x *DataRecord) GetSourceId() string {
+	if x != nil {
+		return x.SourceId
+	}
+	return ""
+}
+
+func (x *DataRecord) GetSampleId() uint64 {
+	if x != nil {
+		return x.SampleId
 	}
 	return 0
 }
@@ -1876,14 +1898,16 @@ const file_wendy_agent_services_v2_data_service_proto_rawDesc = "" +
 	"\aschemas\x18\x03 \x03(\tR\aschemas\x12\x1e\n" +
 	"\vmax_rate_hz\x18\x04 \x01(\x02R\tmaxRateHz\x12\x1f\n" +
 	"\vsend_latest\x18\x05 \x01(\bR\n" +
-	"sendLatest\"\xa7\x01\n" +
+	"sendLatest\"\xe1\x01\n" +
 	"\n" +
 	"DataRecord\x12\x1b\n" +
 	"\tstream_id\x18\x01 \x01(\tR\bstreamId\x120\n" +
 	"\x14timestamp_unix_nanos\x18\x02 \x01(\x03R\x12timestampUnixNanos\x12\x16\n" +
 	"\x06schema\x18\x03 \x01(\tR\x06schema\x12\x18\n" +
 	"\apayload\x18\x04 \x01(\fR\apayload\x12\x18\n" +
-	"\askipped\x18\x05 \x01(\x04R\askipped\"\xed\x02\n" +
+	"\askipped\x18\x05 \x01(\x04R\askipped\x12\x1b\n" +
+	"\tsource_id\x18\x06 \x01(\tR\bsourceId\x12\x1b\n" +
+	"\tsample_id\x18\a \x01(\x04R\bsampleId\"\xed\x02\n" +
 	"\x0eDataStreamInfo\x12\x1b\n" +
 	"\tstream_id\x18\x01 \x01(\tR\bstreamId\x12\x16\n" +
 	"\x06schema\x18\x02 \x01(\tR\x06schema\x12\x1d\n" +

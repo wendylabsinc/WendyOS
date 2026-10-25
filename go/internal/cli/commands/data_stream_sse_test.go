@@ -41,6 +41,28 @@ func TestLivePayloadJSON(t *testing.T) {
 	}
 }
 
+// The sample a record describes travels with it, 64-bit numbers as strings as
+// protobuf JSON writes them, and is left out when the record names none.
+func TestLiveJSONSample(t *testing.T) {
+	for _, tc := range []struct {
+		record *agentpbv2.DataRecord
+		want   string
+	}{
+		{&agentpbv2.DataRecord{StreamId: "s", TimestampUnixNanos: 1, SourceId: "v4l2:/dev/video0", SampleId: 42},
+			`{"stream_id":"s","timestamp_unix_nanos":"1","schema":"","payload":"","source_id":"v4l2:/dev/video0","sample_id":"42"}`},
+		{&agentpbv2.DataRecord{StreamId: "s", TimestampUnixNanos: 1},
+			`{"stream_id":"s","timestamp_unix_nanos":"1","schema":"","payload":""}`},
+	} {
+		got, err := json.Marshal(liveJSON(tc.record))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(got) != tc.want {
+			t.Errorf("got %s, want %s", got, tc.want)
+		}
+	}
+}
+
 func TestRequireLoopbackAddr(t *testing.T) {
 	for _, addr := range []string{"127.0.0.1:8090", "localhost:8090", "[::1]:8090", "127.0.0.1:0"} {
 		if err := requireLoopbackAddr(addr); err != nil {

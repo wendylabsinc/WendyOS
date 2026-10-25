@@ -114,6 +114,14 @@ message DataRecord {
   // previous record of the stream, because a newer one replaced them. That is
   // the delivery rule, not an error.
   uint64 skipped = 5;
+  // The sensor sample the record describes, when its publisher names one: the
+  // agent's source id, for example "v4l2:/dev/video0", and that source's
+  // sample id, as an episode's camera index numbers it. They come from the
+  // first input reference of the record's envelope (wendy.agent.apps.v1.Record
+  // inputs). Empty for a record that names none, such as every lightweight
+  // record.
+  string source_id = 6;
+  uint64 sample_id = 7;
 }
 
 // DataStreamInfo is the payload of the live catalog, in the way Foxglove
