@@ -2,6 +2,7 @@ package commands
 
 import (
 	"bytes"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -77,10 +78,10 @@ func TestLocalMeshStatusShowsLeafListen(t *testing.T) {
 	previousJSON := jsonOutput
 	t.Cleanup(func() { jsonOutput = previousJSON })
 	for _, tc := range []struct {
-		leafListen, text, json string
+		leafListen, text string
 	}{
-		{"0.0.0.0:43024", "Lite leaf listen: 0.0.0.0:43024\n", `"leafListen": "0.0.0.0:43024"`},
-		{"", "Lite leaf listen: off\n", `"leafListen": ""`},
+		{"0.0.0.0:43024", "Lite leaf listen: 0.0.0.0:43024\n"},
+		{"", "Lite leaf listen: off\n"},
 	} {
 		status := &pb.LocalMeshStatus{Configured: &pb.LocalMeshConfiguration{Participate: true, LeafListen: tc.leafListen}}
 		for _, asJSON := range []bool{false, true} {
@@ -91,12 +92,22 @@ func TestLocalMeshStatusShowsLeafListen(t *testing.T) {
 			if err := printLocalMeshStatus(cmd, status); err != nil {
 				t.Fatal(err)
 			}
-			want := tc.text
-			if asJSON {
-				want = tc.json
+			if !asJSON {
+				if !strings.Contains(output.String(), tc.text) {
+					t.Fatalf("text output lacks %q:\n%s", tc.text, output.String())
+				}
+				continue
 			}
-			if !strings.Contains(output.String(), want) {
-				t.Fatalf("json=%t output lacks %q:\n%s", asJSON, want, output.String())
+			// protojson varies its whitespace between builds, so decode
+			// instead of matching the text.
+			var decoded struct {
+				Configured map[string]any `json:"configured"`
+			}
+			if err := json.Unmarshal(output.Bytes(), &decoded); err != nil {
+				t.Fatalf("json output does not decode: %v\n%s", err, output.String())
+			}
+			if got, ok := decoded.Configured["leafListen"]; !ok || got != tc.leafListen {
+				t.Fatalf("json configured.leafListen = %v (present %t), want %q:\n%s", got, ok, tc.leafListen, output.String())
 			}
 		}
 	}
