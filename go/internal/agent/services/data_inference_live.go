@@ -14,6 +14,21 @@ import (
 // markersDescriptor describes an inference markers stream.
 var markersDescriptor = &recordingpb.StreamDescriptor{MediaType: "application/protobuf", Schema: string(proto.MessageName(&datapb.VideoMarkers{}))}
 
+// campaignMarkersStream is the record stream, below "agent/", that carries a
+// campaign's detections on one camera source.
+func campaignMarkersStream(campaign, sourceID string) string {
+	return "campaign/" + campaign + "/markers/" + sourceID
+}
+
+// advertiseMarkers lists the source's markers stream in the live catalog and
+// returns the function that marks it gone. The job's stream goroutine holds
+// it for as long as it serves the source, reconnects included.
+func (j *campaignInferenceJob) advertiseMarkers(sourceID string) func() {
+	stream := campaignMarkersStream(j.campaign.Name, sourceID)
+	j.owner.service.manager.AdvertiseAgentStream(stream, markersDescriptor)
+	return func() { j.owner.service.manager.UnadvertiseAgentStream(stream) }
+}
+
 // publishDetections puts one scored frame's boxes on the record stream
 // "agent/campaign/<campaign>/markers/<source>", as wendy.data.v1.VideoMarkers.
 //
@@ -47,8 +62,7 @@ func (j *campaignInferenceJob) publishDetections(result inference.Result, detect
 			record.ClientBoottimeNanos, record.BootId = proto.Int64(s.BootNanos), data.BootID()
 		}
 	}
-	stream := "campaign/" + j.campaign.Name + "/markers/" + result.SourceID
-	if err := j.owner.service.manager.Publish(stream, markersDescriptor, record); err != nil {
+	if err := j.owner.service.manager.Publish(campaignMarkersStream(j.campaign.Name, result.SourceID), markersDescriptor, record); err != nil {
 		j.owner.service.manager.Warnf("campaign %q markers: %v", j.campaign.Name, err)
 	}
 }

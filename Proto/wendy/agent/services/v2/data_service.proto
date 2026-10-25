@@ -132,7 +132,8 @@ message DataRecord {
 // send_latest to receive the whole catalog at once, then its changes.
 //
 // An application stream appears when its app starts and is GONE when the app
-// stops.
+// stops. An agent stream appears when its producer starts, for example when a
+// campaign's inference starts on a camera, and is GONE when the producer stops.
 message DataStreamInfo {
   enum State {
     STATE_UNSPECIFIED = 0;
@@ -146,7 +147,7 @@ message DataStreamInfo {
   string stream_id = 1;
   string schema = 2;
   string media_type = 3;
-  // The app id of an application stream.
+  // The app id of an application stream, or "agent" for the agent's own.
   string publisher = 4;
   State state = 5;
   // Records per second the agent accepted, over about the last 10 seconds.

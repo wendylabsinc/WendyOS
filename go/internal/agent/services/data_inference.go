@@ -356,6 +356,7 @@ func (j *campaignInferenceJob) run(ctx context.Context) error {
 }
 
 func (j *campaignInferenceJob) stream(ctx context.Context, session inference.Session, sourceID string) {
+	defer j.advertiseMarkers(sourceID)()
 	for ctx.Err() == nil {
 		generation := j.nextGeneration.Add(1)
 		j.mu.Lock()

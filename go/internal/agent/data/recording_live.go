@@ -31,6 +31,11 @@ const maxAgentStream = 480
 // record's timing, client boot time and inputs say which sample it describes,
 // as on an app's durable record; a record without them is stamped with its
 // receipt.
+//
+// A producer lists its streams in the live catalog with AdvertiseAgentStream
+// when it starts and UnadvertiseAgentStream when it stops. Until it does, its
+// records are live but neither in the catalog nor kept for a viewer that asks
+// for the newest record.
 func (m *Manager) Publish(stream string, descriptor *recordingpb.StreamDescriptor, r *recordingpb.Record) error {
 	if stream == "" || len(stream) > maxAgentStream {
 		return fmt.Errorf("agent stream name must be 1..%d bytes", maxAgentStream)
@@ -52,16 +57,38 @@ func (m *Manager) Publish(stream string, descriptor *recordingpb.StreamDescripto
 	return nil
 }
 
+// agentPublisher is the publisher the live catalog names for the agent's own
+// streams, where an application stream names its app id.
+const agentPublisher = "agent"
+
+// AdvertiseAgentStream lists the agent stream "agent/<stream>" in the live
+// catalog, idle until its first record, and makes the hub keep its newest
+// record. descriptor gives the schema and media type the catalog shows. A
+// producer calls it when it starts publishing the stream, and advertising
+// again updates the description.
+func (m *Manager) AdvertiseAgentStream(stream string, descriptor *recordingpb.StreamDescriptor) {
+	m.live.Advertise(live.StreamInfo{ID: agentStreamID(stream), Schema: descriptor.GetSchema(), MediaType: descriptor.GetMediaType(), Publisher: agentPublisher})
+}
+
+// UnadvertiseAgentStream marks the agent stream gone in the live catalog,
+// when its producer stops.
+func (m *Manager) UnadvertiseAgentStream(stream string) {
+	m.live.Unadvertise(agentStreamID(stream))
+}
+
 // streamID is the live stream id of a stored record. An application's stream
 // is "apps/<app-id>/<service>/<stream>". The agent's own producers have no
 // app id, and their streams are "agent/<stream>": RecordStream refuses an
 // empty app id, so no app can publish there.
 func streamID(s *recordingpb.StoredRecord) string {
 	if s.AppId == "" {
-		return "agent/" + s.Stream
+		return agentStreamID(s.Stream)
 	}
 	return appStreamID(s.AppId, s.Service, s.Stream)
 }
+
+// agentStreamID is the live stream id of the agent's own stream.
+func agentStreamID(stream string) string { return "agent/" + stream }
 
 // appStreamID is the live stream id of an application recording stream. An
 // app without a service name has no service segment. App ids, service names

@@ -387,3 +387,49 @@ func TestPublishAndRecordStreamRefusals(t *testing.T) {
 	}
 	requireNoLive(t, sub)
 }
+
+// An agent producer's stream is in the catalog while the producer runs,
+// published by "agent", and its newest record waits for a viewer that asks
+// for it, as an app's stream does.
+func TestAdvertisedAgentStreamCatalogAndLatest(t *testing.T) {
+	m, err := NewManager(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	const stream = "campaign/door/markers/v4l2:/dev/video0"
+	descriptor := &recordingpb.StreamDescriptor{MediaType: "application/protobuf", Schema: "wendy.data.v1.VideoMarkers"}
+	m.AdvertiseAgentStream(stream, descriptor)
+	for _, payload := range []string{"old", "new"} {
+		if err := m.Publish(stream, descriptor, &recordingpb.Record{Payload: []byte(payload)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	s, err := m.Live().Subscribe(live.Selection{StreamPrefixes: []string{live.CatalogPrefix, "agent/"}, SendLatest: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(s.Close)
+	var info agentpbv2.DataStreamInfo
+	d := nextLive(t, s)
+	if err := proto.Unmarshal(d.Record.Payload, &info); err != nil {
+		t.Fatal(err)
+	}
+	if d.Record.StreamID != live.CatalogPrefix+"agent/"+stream || info.GetStreamId() != "agent/"+stream || info.GetPublisher() != "agent" ||
+		info.GetSchema() != "wendy.data.v1.VideoMarkers" || info.GetMediaType() != "application/protobuf" || info.GetState() != agentpbv2.DataStreamInfo_STATE_ACTIVE {
+		t.Fatalf("catalog entry %s: %v", d.Record.StreamID, &info)
+	}
+	if d = nextLive(t, s); d.Record.StreamID != "agent/"+stream || string(d.Record.Payload) != "new" {
+		t.Fatalf("newest record: %s %q", d.Record.StreamID, d.Record.Payload)
+	}
+	requireNoLive(t, s)
+
+	m.UnadvertiseAgentStream(stream)
+	d = nextLive(t, s)
+	if err := proto.Unmarshal(d.Record.Payload, &info); err != nil {
+		t.Fatal(err)
+	}
+	if info.GetStreamId() != "agent/"+stream || info.GetState() != agentpbv2.DataStreamInfo_STATE_GONE {
+		t.Fatalf("after the producer stopped: %v", &info)
+	}
+}

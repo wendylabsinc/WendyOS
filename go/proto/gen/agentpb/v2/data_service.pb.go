@@ -437,13 +437,14 @@ func (x *DataRecord) GetSampleId() uint64 {
 // send_latest to receive the whole catalog at once, then its changes.
 //
 // An application stream appears when its app starts and is GONE when the app
-// stops.
+// stops. An agent stream appears when its producer starts, for example when a
+// campaign's inference starts on a camera, and is GONE when the producer stops.
 type DataStreamInfo struct {
 	state     protoimpl.MessageState `protogen:"open.v1"`
 	StreamId  string                 `protobuf:"bytes,1,opt,name=stream_id,json=streamId,proto3" json:"stream_id,omitempty"`
 	Schema    string                 `protobuf:"bytes,2,opt,name=schema,proto3" json:"schema,omitempty"`
 	MediaType string                 `protobuf:"bytes,3,opt,name=media_type,json=mediaType,proto3" json:"media_type,omitempty"`
-	// The app id of an application stream.
+	// The app id of an application stream, or "agent" for the agent's own.
 	Publisher string               `protobuf:"bytes,4,opt,name=publisher,proto3" json:"publisher,omitempty"`
 	State     DataStreamInfo_State `protobuf:"varint,5,opt,name=state,proto3,enum=wendy.agent.services.v2.DataStreamInfo_State" json:"state,omitempty"`
 	// Records per second the agent accepted, over about the last 10 seconds.

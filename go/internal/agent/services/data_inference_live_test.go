@@ -11,6 +11,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/agent/data"
 	"github.com/wendylabsinc/wendy/go/internal/agent/data/live"
 	"github.com/wendylabsinc/wendy/go/internal/agent/inference"
+	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	"github.com/wendylabsinc/wendy/go/proto/gen/datapb"
 	"google.golang.org/protobuf/proto"
 )
@@ -139,5 +140,66 @@ func TestAgentInferencePublishesLiveMarkers(t *testing.T) {
 			t.Fatal("the episode and the viewer got different markers")
 		}
 		break
+	}
+}
+
+// A campaign's markers stream for each camera it scores is in the live
+// catalog while its inference runs, active once a frame is scored, and gone
+// when inference stops.
+func TestAgentInferenceAdvertisesMarkers(t *testing.T) {
+	service, factory, _, _, stop := startInferenceTestService(t, false)
+	const prefix = "agent/campaign/people-all-cameras/markers/"
+	catalog, err := service.manager.Live().Subscribe(live.Selection{StreamPrefixes: []string{live.CatalogPrefix + prefix}, SendLatest: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer catalog.Close()
+	// await reads catalog entries until stream reaches state. An entry may
+	// arrive both with the current catalog and live, so earlier states of the
+	// same stream may repeat.
+	await := func(stream string, state agentpbv2.DataStreamInfo_State) {
+		t.Helper()
+		ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+		defer cancel()
+		for {
+			d, err := catalog.Next(ctx)
+			if err != nil {
+				t.Fatalf("%s never became %v: %v", stream, state, err)
+			}
+			var info agentpbv2.DataStreamInfo
+			if err := proto.Unmarshal(d.Record.Payload, &info); err != nil {
+				t.Fatal(err)
+			}
+			if info.GetPublisher() != "agent" || info.GetSchema() != "wendy.data.v1.VideoMarkers" || info.GetMediaType() != "application/protobuf" {
+				t.Fatalf("catalog entry: %v", &info)
+			}
+			if info.GetStreamId() == stream && info.GetState() == state {
+				return
+			}
+		}
+	}
+
+	session := receiveInference(t, factory.sessions)
+	first, second := receiveInference(t, session.inputs), receiveInference(t, session.inputs)
+	await(prefix+first.SourceID, agentpbv2.DataStreamInfo_STATE_IDLE)
+	session.results <- inference.Result{Type: "prediction", SourceID: first.SourceID, Generation: first.Generation, Width: 800, Height: 600, Sample: &inference.Sample{ID: 1}}
+	await(prefix+first.SourceID, agentpbv2.DataStreamInfo_STATE_ACTIVE)
+
+	stop()
+	gone := map[string]bool{}
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	for !gone[prefix+first.SourceID] || !gone[prefix+second.SourceID] {
+		d, err := catalog.Next(ctx)
+		if err != nil {
+			t.Fatalf("after inference stopped, gone: %v (%v)", gone, err)
+		}
+		var info agentpbv2.DataStreamInfo
+		if err := proto.Unmarshal(d.Record.Payload, &info); err != nil {
+			t.Fatal(err)
+		}
+		if info.GetState() == agentpbv2.DataStreamInfo_STATE_GONE {
+			gone[info.GetStreamId()] = true
+		}
 	}
 }
