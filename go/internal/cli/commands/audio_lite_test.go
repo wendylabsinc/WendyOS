@@ -118,18 +118,18 @@ func TestLiteAudioAssemblyAndBoundedQueue(t *testing.T) {
 	c.emit(&sensorlinkpb.SensorData{ChannelId: 1, FrameSeq: 1, Payload: []byte{1, 2}})
 	c.emit(&sensorlinkpb.SensorData{ChannelId: 1, FrameSeq: 1, ChunkSeq: 2, Flags: 2, Payload: []byte{3, 4}})
 	c.emit(&sensorlinkpb.SensorData{ChannelId: 1, FrameSeq: 2, Flags: 2, Payload: []byte{1}})
-	if len(s.frames) != 0 {
-		t.Fatal("malformed frame delivered")
-	}
 	for i := uint32(3); i < 15; i++ {
 		c.emit(&sensorlinkpb.SensorData{ChannelId: 1, FrameSeq: i, Flags: 2, Payload: []byte{byte(i), 0}})
 	}
-	if len(s.frames) != 8 {
-		t.Fatalf("queue depth=%d", len(s.frames))
+	for want := byte(7); want < 15; want++ {
+		chunk, err := s.Recv()
+		if err != nil || chunk.PcmData[0] != want || chunk.SampleRate != 16000 || chunk.Channels != 1 {
+			t.Fatalf("chunk=%v err=%v", chunk, err)
+		}
 	}
-	chunk, err := s.Recv()
-	if err != nil || chunk.PcmData[0] != 7 || chunk.SampleRate != 16000 || chunk.Channels != 1 {
-		t.Fatalf("chunk=%v err=%v", chunk, err)
+	cancel()
+	if _, err := s.Recv(); !errors.Is(err, context.Canceled) {
+		t.Fatal(err)
 	}
 }
 
@@ -178,8 +178,8 @@ func TestLiteAudioLifecycle(t *testing.T) {
 		s.Close()
 		s.Close()
 		late(&sensorlinkpb.SensorData{ChannelId: 1, Flags: 2, Payload: []byte{1, 2}})
-		if len(s.frames) != 0 {
-			t.Fatal("delivered after close")
+		if _, err := s.Recv(); !errors.Is(err, io.EOF) {
+			t.Fatalf("receive after close: %v", err)
 		}
 	})
 }

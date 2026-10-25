@@ -203,6 +203,8 @@ type fakeEnrollment struct {
 	grpc.ClientConnInterface
 	reply   *cloudpb.EnrollDeviceResponse
 	request *cloudpb.EnrollDeviceRequest
+	signed  *cloudpb.SignedRequest
+	md      metadata.MD
 	// collide, when set, answers the wendy-colliding-field Cloud would name
 	// for a device UUID ("untagged" refuses with no trailer), or "" to accept.
 	collide func(deviceID string) string
@@ -211,7 +213,7 @@ type fakeEnrollment struct {
 
 // Invoke adopts the requested device UUID as the asset id, as Cloud does,
 // unless reply names another asset.
-func (f *fakeEnrollment) Invoke(_ context.Context, method string, args, reply any, opts ...grpc.CallOption) error {
+func (f *fakeEnrollment) Invoke(ctx context.Context, method string, args, reply any, opts ...grpc.CallOption) error {
 	if method == cloudpb.OperatorSessionService_RegisterOperatorLeaf_FullMethodName {
 		return status.Error(codes.Unimplemented, "registration unavailable")
 	}
@@ -222,6 +224,8 @@ func (f *fakeEnrollment) Invoke(_ context.Context, method string, args, reply an
 	if !ok || len(signed.GetSignature()) == 0 || signed.GetPayloadType() != "wendycloud.v2.EnrollDeviceRequest" {
 		return status.Error(codes.InvalidArgument, "expected signed enrollment request")
 	}
+	f.signed = signed
+	f.md, _ = metadata.FromOutgoingContext(ctx)
 	f.request = new(cloudpb.EnrollDeviceRequest)
 	if err := proto.Unmarshal(signed.GetPayload(), f.request); err != nil {
 		return err
@@ -438,5 +442,33 @@ func TestConfigDefaultsSignedTimeAndPreservesOverride(t *testing.T) {
 				t.Fatalf("time endpoint = %q, want %q", cfg.TimeUrl, tc.want)
 			}
 		})
+	}
+}
+
+func TestMintRetainsCallerMetadataAndSignedCorrelation(t *testing.T) {
+	auth := authFixture(t)
+	cfg, err := Config(auth, deviceID, "", "https://tsa.local/time", "broker", 5055)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn := &fakeEnrollment{reply: validTierCReply()}
+	ctx := metadata.NewOutgoingContext(context.Background(), metadata.Pairs("x-correlation-id", "lite-flow", "authorization", "test-host-session"))
+	if _, err = Mint(ctx, conn, auth, cfg, "board", nil, TrustProfile{}); err != nil {
+		t.Fatal(err)
+	}
+	if conn.md.Get("x-correlation-id")[0] != "lite-flow" || conn.md.Get("authorization")[0] != "test-host-session" {
+		t.Fatalf("metadata=%v", conn.md)
+	}
+	parts := strings.Split(string(conn.signed.GetSignature()), ".")
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var claims map[string]any
+	if err = json.Unmarshal(payload, &claims); err != nil {
+		t.Fatal(err)
+	}
+	if claims["correlation_id"] != "lite-flow" {
+		t.Fatalf("signed correlation=%v", claims["correlation_id"])
 	}
 }

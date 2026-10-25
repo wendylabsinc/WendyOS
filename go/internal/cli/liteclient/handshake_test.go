@@ -66,3 +66,6 @@ func TestHandshakeReportsUnsupportedPeerVersion(t *testing.T) {
 		t.Fatalf("handshake error = %v, want unsupported protocol version", err)
 	}
 }
+
+func (l *handshakeTestLink) preferredChunkSize() int { return chunkSize }
+func (l *handshakeTestLink) close() error            { return nil }

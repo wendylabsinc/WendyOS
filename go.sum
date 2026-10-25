@@ -404,12 +404,12 @@ github.com/vishvananda/netlink v1.3.1 h1:3AEMt62VKqz90r0tmNhog0r/PpWKmrEShJU0wJW
 github.com/vishvananda/netlink v1.3.1/go.mod h1:ARtKouGSTGchR8aMwmkzC0qiNPrrWO5JS/XMVl45+b4=
 github.com/vishvananda/netns v0.0.5 h1:DfiHV+j8bA32MFM7bfEunvT8IAqQ/NzSJHtcmW5zdEY=
 github.com/vishvananda/netns v0.0.5/go.mod h1:SpkAiCQRtJ6TvvxPnOSyH3BMl6unz3xZlaprSwhNNJM=
-github.com/wendylabsinc/WendyOS/go/wendy-core v0.0.0-20261025102123-b0582dfd7d89 h1:+O2WmW7NzDOXcq4fzV1oECWeds2mwNIli4EytmUpKsQ=
-github.com/wendylabsinc/WendyOS/go/wendy-core v0.0.0-20261025102123-b0582dfd7d89/go.mod h1:j/pgGnkAkSloa41WEd5SWwt7XhNB4G7zy6QfVoZQ0cM=
+github.com/wendylabsinc/WendyOS/go/wendy-core v0.0.0-20261025122433-cf31a28af1e4 h1:+27wNeAVv9pE8ofYIPGpy/G3/rJdFOBgUKTtwESMUE8=
+github.com/wendylabsinc/WendyOS/go/wendy-core v0.0.0-20261025122433-cf31a28af1e4/go.mod h1:j/pgGnkAkSloa41WEd5SWwt7XhNB4G7zy6QfVoZQ0cM=
 github.com/wendylabsinc/quic-go v0.0.0-20261021071220-8632456e04a5 h1:BFk/jAKA1NDOVzej6/n6uaslITIScLinEhmugZ781b0=
 github.com/wendylabsinc/quic-go v0.0.0-20261021071220-8632456e04a5/go.mod h1:RAro2j2yN9a9EiPACLHT9IB2NXCvGQmmo/alT0yYI0w=
-github.com/wendylabsinc/wendy-go v0.1.0-seed.1.0.20261025101352-388a94c356a7 h1:PJmRKbMhdS+evXrd9ew64/LE+/1Ydx4tF1n0Pt9ayyA=
-github.com/wendylabsinc/wendy-go v0.1.0-seed.1.0.20261025101352-388a94c356a7/go.mod h1:ieShqWoeSXaKHTQufSYm1HuXy/wTEvzJJN8PaoNJKgM=
+github.com/wendylabsinc/wendy-go v0.1.0-seed.1.0.20261025121555-c4a39317e073 h1:0mHG7XfDY4ZHl3Vrl8F6KP4mXvXsM3O86dF66kXu3+o=
+github.com/wendylabsinc/wendy-go v0.1.0-seed.1.0.20261025121555-c4a39317e073/go.mod h1:jS85BrZ0Mgg8uZtR5D7Gm0V/e11IpbjRcnTq7B6wreg=
 github.com/wlynxg/anet v0.0.5 h1:J3VJGi1gvo0JwZ/P1/Yc/8p63SoW98B5dHkYDmpgvvU=
 github.com/wlynxg/anet v0.0.5/go.mod h1:eay5PRQr7fIVAMbTbchTnO9gG65Hg/uYGdc7mguHxoA=
 github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e h1:JVG44RsyaB9T2KIHavMF/ppJZNG9ZpyihvCd0w101no=

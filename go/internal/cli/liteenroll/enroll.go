@@ -1,191 +1,77 @@
-// Package liteenroll prepares an operator-authorized Tier C enrollment.
-// The firmware creates its own key and redeems the credential directly at PKI.
+// Package liteenroll adapts CLI sessions, connections and files to WendyGo.
 package liteenroll
 
 import (
-	"bytes"
 	"context"
-	"crypto/sha256"
-	"crypto/x509/pkix"
-	"encoding/asn1"
-	"encoding/hex"
-	"fmt"
-	"io"
-	"math/big"
+	"errors"
 	"net/http"
-	"net/url"
-	"strings"
-	"time"
 
-	"github.com/google/uuid"
+	wendy "github.com/wendylabsinc/wendy-go"
+	sdk "github.com/wendylabsinc/wendy-go/lite/enrollment"
+	sdkpb "github.com/wendylabsinc/wendy-go/lite/pb"
 	"github.com/wendylabsinc/wendy/go/internal/cli/cloudenroll"
 	"github.com/wendylabsinc/wendy/go/internal/cli/cloudrequest"
-	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
-	"github.com/wendylabsinc/wendy/go/internal/shared/cloudrelay"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
 	litepb "github.com/wendylabsinc/wendy/go/proto/gen/litepb"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/metadata"
 	"google.golang.org/protobuf/proto"
 )
 
-// Config resolves PKI endpoints and the Lite relay hostname from the selected
-// session. The Lite relay has separate TCP ingress from the WendyOS listener.
-func Config(auth *config.AuthConfig, deviceID, csrURL, timeURL, brokerHost string, brokerPort uint32) (*litepb.WendyConfEnrollment, error) {
-	if auth == nil || len(auth.Certificates) == 0 {
-		return nil, fmt.Errorf("enrollment requires a PKI operator session; run 'wendy cloud login'")
-	}
-	if brokerHost == "" {
-		var err error
-		brokerHost, err = cloudrelay.LiteBrokerHost(auth.CloudGRPC)
-		if err != nil {
-			return nil, fmt.Errorf("derive WendyCom broker hostname; pass --broker-host: %w", err)
-		}
-	}
-	principal, err := certs.ParsePrincipal(auth.Certificates[0].PrincipalURI)
-	if err != nil || principal.EntityType != certs.EntityUser {
-		return nil, fmt.Errorf("enrollment requires a tenant operator identity")
-	}
-	tenant := principal.TenantUUID
-	if id, err := uuid.Parse(deviceID); err != nil || id.String() != deviceID {
-		return nil, fmt.Errorf("device ID must be a canonical lowercase UUID")
-	}
-	if csrURL == "" {
-		host := cloudenroll.PKISiblingHost(auth.PKIEndpoint, "csr")
-		if host == "" {
-			return nil, fmt.Errorf("pass --csr-url for this PKI deployment")
-		}
-		csrURL = "https://" + host + "/v1/" + tenant
-	}
-	if timeURL == "" {
-		timeURL = DefaultTimeURL
-	}
-	if timeURL == "roughtime" {
-		return nil, fmt.Errorf("mbedTLS Lite firmware uses signed RFC 3161 time; omit --time-url to use Sigstore")
-	}
-	endpoints := []string{csrURL}
-	if timeURL != "roughtime" {
-		endpoints = append(endpoints, timeURL)
-	}
-	for _, endpoint := range endpoints {
-		u, err := url.Parse(endpoint)
-		if err != nil || len(endpoint) > 256 || u.Scheme != "https" || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.RawPath != "" {
-			return nil, fmt.Errorf("enrollment endpoints must be HTTPS URLs without credentials, query or fragment")
-		}
-	}
-	u, _ := url.Parse(csrURL)
-	if u.Path != "/v1/"+tenant {
-		return nil, fmt.Errorf("CSR URL must end in /v1/%s for the selected tenant", tenant)
-	}
-	if len(brokerHost) == 0 || len(brokerHost) > 253 || strings.ContainsAny(brokerHost, "/\\@ \t\r\n") || brokerPort == 0 || brokerPort > 65535 {
-		return nil, fmt.Errorf("pass a broker hostname and port between 1 and 65535")
-	}
-	return &litepb.WendyConfEnrollment{TenantId: tenant, DeviceId: deviceID, CsrUrl: csrURL, TimeUrl: timeURL, BrokerHost: brokerHost, BrokerPort: brokerPort}, nil
-}
-
-// Mint obtains the single-use credential after Cloud reserves the device asset.
-// A device UUID Cloud refuses as taken is replaced through the shared
-// collision guard; cfg.DeviceId ends as the UUID Cloud accepted.
-func Mint(ctx context.Context, conn grpc.ClientConnInterface, auth *config.AuthConfig, cfg *litepb.WendyConfEnrollment, name string, hardware *cloudpb.DeviceHardware, profile TrustProfile) (asset string, err error) {
-	if !cfg.ProvisionTrust {
-		// Firmware-pinned roots cannot trust a newly selected authority until
-		// its roots have been provisioned over USB.
-		profile = profile.WithExistingDeviceIssuer()
-	}
-	if hardware == nil {
-		hardware = &cloudpb.DeviceHardware{}
-	} else {
-		hardware = proto.Clone(hardware).(*cloudpb.DeviceHardware)
-	}
-	// Cloud requires this exact type before accepting Lite broker presence.
-	// Class C controls credential issuance but does not set the asset's OS type.
-	hardware.Os = proto.String("wendy-lite")
-	err = cloudenroll.RetryTakenDeviceUUID(cfg.DeviceId, func(deviceID string) error {
-		cfg.DeviceId = deviceID
-		var err error
-		asset, err = mintOnce(ctx, conn, auth, cfg, name, hardware, profile)
+func copyMessage(src, dst proto.Message) error {
+	wire, err := proto.Marshal(src)
+	if err != nil {
 		return err
-	})
-	return asset, err
+	}
+	return proto.Unmarshal(wire, dst)
 }
-
-func mintOnce(ctx context.Context, conn grpc.ClientConnInterface, auth *config.AuthConfig, cfg *litepb.WendyConfEnrollment, name string, hardware *cloudpb.DeviceHardware, profile TrustProfile) (string, error) {
-	artifact, err := cloudrequest.EnrollmentRequestForChain(auth, cfg.DeviceId, "C", profile.chainAlgorithm())
+func Config(auth *config.AuthConfig, deviceID, csrURL, timeURL, brokerHost string, brokerPort uint32) (*litepb.WendyConfEnrollment, error) {
+	var session *sdk.Session
+	if auth != nil {
+		session = &sdk.Session{PKIEndpoint: auth.PKIEndpoint, CloudGRPC: auth.CloudGRPC, HasCertificates: len(auth.Certificates) > 0}
+		if len(auth.Certificates) > 0 {
+			session.PrincipalURI = auth.Certificates[0].PrincipalURI
+		}
+	}
+	cfg, err := sdk.Config(session, deviceID, csrURL, timeURL, brokerHost, brokerPort)
+	if err != nil {
+		return nil, err
+	}
+	out := new(litepb.WendyConfEnrollment)
+	err = copyMessage(cfg, out)
+	return out, err
+}
+func Mint(ctx context.Context, conn grpc.ClientConnInterface, auth *config.AuthConfig, cfg *litepb.WendyConfEnrollment, name string, hardware *cloudpb.DeviceHardware, profile TrustProfile) (string, error) {
+	shared, err := cloudrequest.LiteEnrollmentSigner(ctx, auth)
 	if err != nil {
 		return "", err
 	}
-	reply := new(cloudpb.EnrollDeviceResponse)
-	var trailer metadata.MD
-	err = cloudrequest.InvokeWithTrailer(ctx, conn, auth, cloudpb.DeviceEnrollmentService_EnrollDevice_FullMethodName, &cloudpb.EnrollDeviceRequest{DeviceId: cfg.DeviceId, DeviceClass: cloudpb.DeviceClass_DEVICE_CLASS_C, EnrollmentRequestJws: artifact, Name: name, Hardware: hardware}, reply, &trailer)
-	if cloudenroll.DeviceUUIDTaken(err, trailer) {
-		return "", fmt.Errorf("Cloud refused device UUID %s before minting anything: %w", cfg.DeviceId, cloudenroll.ErrDeviceUUIDTaken)
+	converted := new(sdkpb.WendyConfEnrollment)
+	if err = copyMessage(cfg, converted); err != nil {
+		return "", err
 	}
-	if err != nil {
-		return "", fmt.Errorf("creating Tier C enrollment: %w", err)
+	var hw *sdk.DeviceHardware
+	if hardware != nil {
+		hw = new(sdk.DeviceHardware)
+		if err = copyMessage(hardware, hw); err != nil {
+			return "", err
+		}
 	}
-	// Cloud adopts the minted UUID as the asset id. Any other id would leave
-	// the board's certificate naming a device Cloud does not know.
-	if reply.GetAssetId() != cfg.DeviceId {
-		return reply.GetAssetId(), fmt.Errorf("Cloud registered asset %q instead of the minted device UUID %s", reply.GetAssetId(), cfg.DeviceId)
+	asset, err := sdk.Mint(ctx, cloudrequest.EnrollmentTransport(conn), shared, wendy.CryptoEntropy{}, converted, name, hw, profile.sdk())
+	cfg.DeviceId, cfg.Token = converted.DeviceId, converted.Token
+	if errors.Is(err, sdk.ErrDeviceUUIDTaken) {
+		err = collisionError{err}
 	}
-	expires, err := time.Parse(time.RFC3339, reply.GetExpiresAt())
-	if reply.GetCredentialKind() != "enrollment_token" || len(reply.GetTokenValue()) == 0 || len(reply.GetTokenValue()) > 512 || strings.ContainsAny(reply.GetTokenValue(), "\r\n") || err != nil || time.Until(expires) < 30*time.Second {
-		return reply.GetAssetId(), fmt.Errorf("Cloud returned an invalid or nearly expired Tier C enrollment credential")
-	}
-	cfg.Token = reply.GetTokenValue()
-	return reply.GetAssetId(), nil
+	return asset, err
 }
 
-// SignedTime obtains a device-nonce-bound timestamp over verified HTTPS. The
-// device verifies the CMS signature and pinned TSA chain before using the time.
-func SignedTime(ctx context.Context, client *http.Client, endpoint, nonceHex string) ([]byte, error) {
-	nonce, err := hex.DecodeString(nonceHex)
-	if err != nil || len(nonce) != 32 {
-		return nil, fmt.Errorf("device returned an invalid time nonce")
-	}
-	sum := sha256.Sum256(nonce)
-	request := struct {
-		Version int
-		Imprint struct {
-			Algorithm pkix.AlgorithmIdentifier
-			Digest    []byte
-		}
-		Nonce   *big.Int
-		CertReq bool
-	}{Version: 1, Nonce: new(big.Int).SetBytes(nonce), CertReq: true}
-	request.Imprint.Algorithm.Algorithm = asn1.ObjectIdentifier{2, 16, 840, 1, 101, 3, 4, 2, 1}
-	request.Imprint.Digest = sum[:]
-	der, err := asn1.Marshal(request)
+type collisionError struct{ error }
+
+func (e collisionError) Is(target error) bool { return target == cloudenroll.ErrDeviceUUIDTaken }
+func SignedTime(ctx context.Context, client *http.Client, endpoint, nonce string) ([]byte, error) {
+	host, err := wendy.NewLiteHTTPTransport(client)
 	if err != nil {
 		return nil, err
 	}
-	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(der))
-	if err != nil {
-		return nil, err
-	}
-	if req.URL.Scheme != "https" {
-		return nil, fmt.Errorf("signed time requires HTTPS")
-	}
-	req.Header.Set("Content-Type", "application/timestamp-query")
-	secureClient := *client
-	secureClient.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	resp, err := secureClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("getting signed PKI time: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("PKI time endpoint returned HTTP %d", resp.StatusCode)
-	}
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 65537))
-	if err != nil {
-		return nil, err
-	}
-	if len(body) == 0 || len(body) > 65536 {
-		return nil, fmt.Errorf("PKI time response has invalid size")
-	}
-	return body, nil
+	return sdk.SignedTime(ctx, host, endpoint, nonce)
 }

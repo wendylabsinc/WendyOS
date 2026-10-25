@@ -14,7 +14,21 @@ func connectedOverPipe(t *testing.T) (*WendyLiteClient, net.Conn) {
 	host, device := net.Pipe()
 	c := NewWendyLiteClient()
 	c.link = newDirectLink(host)
-	c.startReadLoop()
+	done := make(chan error, 1)
+	go func() {
+		server := newDirectLink(device)
+		m, err := server.recv(time.Second)
+		if err == nil {
+			err = server.send(m)
+		}
+		done <- err
+	}()
+	if err := c.handshake(); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
 	t.Cleanup(func() {
 		device.Close()
 		c.Close()
