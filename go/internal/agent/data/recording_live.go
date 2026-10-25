@@ -22,8 +22,8 @@ func appStreamID(app, service, stream string) string {
 }
 
 // AdvertiseAppStream lists an application recording stream in the live
-// catalog and makes the hub keep its newest record. The app's recording
-// socket calls it when it opens the stream.
+// catalog and makes the hub keep its newest record. The app's data socket
+// manager calls it as the app's task starts.
 func (m *Manager) AdvertiseAppStream(app, service, stream string, cfg appconfig.RecordingStream) {
 	m.live.Advertise(live.StreamInfo{ID: appStreamID(app, service, stream), Schema: cfg.Schema, MediaType: cfg.MediaType, Publisher: app})
 }
