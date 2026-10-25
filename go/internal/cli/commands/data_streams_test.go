@@ -137,3 +137,19 @@ func TestListLiveStreamsOlderAgent(t *testing.T) {
 		t.Fatalf("older agent: %v", err)
 	}
 }
+
+// A schema comes from an app's wendy.json. Printed raw, its escape sequences
+// could rewrite the operator's terminal; the table shows it inert, on one line.
+func TestListLiveStreamsNeutralizesSchemaControls(t *testing.T) {
+	client := &liveDataClient{stream: &liveDataClientStream{header: metadata.MD{}, records: []*agentpbv2.DataRecord{
+		catalogDataRecord(t, &agentpbv2.DataStreamInfo{StreamId: "apps/demo/log", Schema: "demo.v1.Log\x1b]0;pwned\x07\x1b[2J\nforged\tline", State: agentpbv2.DataStreamInfo_STATE_IDLE}),
+	}}}
+	var out bytes.Buffer
+	if err := listLiveStreams(context.Background(), client, &out, false, time.Second); err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSuffix(out.String(), "\n"), "\n")
+	if strings.ContainsAny(out.String(), "\x1b\x07") || len(lines) != 2 || !strings.Contains(lines[1], "demo.v1.Log") {
+		t.Fatalf("output:\n%q", out.String())
+	}
+}

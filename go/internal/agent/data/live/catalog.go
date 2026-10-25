@@ -13,7 +13,9 @@ const (
 	// of stream X is CatalogPrefix + X. An empty selection leaves the catalog
 	// out; a subscriber names it by id or prefix, or by CatalogSchema.
 	CatalogPrefix = "_streams/"
-	// CatalogSchema is the schema of catalog records.
+	// CatalogSchema is the schema of catalog records. It is reserved: an app
+	// stream may not declare it, and selecting it selects only catalog
+	// streams.
 	CatalogSchema = "wendy.agent.services.v2.DataStreamInfo"
 )
 
@@ -50,8 +52,9 @@ type stream struct {
 	latest        *Record
 	lastAt        time.Time
 	lastTimestamp int64
-	// Rate measurement: records offered since windowStart, and the rate of
-	// the previous window.
+	// Rate measurement over the current active period: records offered since
+	// windowStart, and the rate of the previous window. The period's first
+	// record opens its first window.
 	windowStart time.Time
 	windowCount int
 	prevRate    float64
@@ -70,7 +73,7 @@ func (h *Hub) Advertise(info StreamInfo) {
 	now := h.now()
 	st := h.streams[info.ID]
 	if st == nil {
-		st = &stream{catalogID: CatalogPrefix + info.ID, windowStart: now}
+		st = &stream{catalogID: CatalogPrefix + info.ID}
 		h.streams[info.ID] = st
 	}
 	st.info = info
@@ -98,15 +101,23 @@ func (h *Hub) noteLocked(st *stream, r *Record, now time.Time) {
 	if len(r.Payload) <= h.limits.MaxLatestBytes {
 		st.latest = r
 	}
-	st.lastAt, st.lastTimestamp = now, r.TimestampUnixNanos
-	st.windowCount++
-	if elapsed := now.Sub(st.windowStart); elapsed >= rateWindow {
-		st.prevRate = float64(st.windowCount) / elapsed.Seconds()
-		st.windowStart, st.windowCount = now, 0
+	if h.stateLocked(st, now) == agentpbv2.DataStreamInfo_STATE_IDLE {
+		// A new active period: its rate is measured from this record, not
+		// over the quiet before it.
+		st.windowStart, st.windowCount, st.prevRate = now, 0, 0
+	} else {
+		st.windowCount++
+		if elapsed := now.Sub(st.windowStart); elapsed >= rateWindow {
+			st.prevRate = float64(st.windowCount) / elapsed.Seconds()
+			st.windowStart, st.windowCount = now, 0
+		}
 	}
+	st.lastAt, st.lastTimestamp = now, r.TimestampUnixNanos
 }
 
-// rate is the stream's records per second over about the last rateWindow.
+// rate is an active stream's records per second over about the last
+// rateWindow. It is 0 for the first second of an active period, before there
+// is anything to measure.
 func (st *stream) rate(now time.Time) float64 {
 	if elapsed := now.Sub(st.windowStart); elapsed >= time.Second {
 		return float64(st.windowCount) / elapsed.Seconds()
@@ -150,7 +161,9 @@ func (h *Hub) catalogRecord(st *stream, state agentpbv2.DataStreamInfo_State, no
 		State:                  state,
 		LastTimestampUnixNanos: st.lastTimestamp,
 	}
-	if state != agentpbv2.DataStreamInfo_STATE_GONE {
+	// An idle stream had no record for idleAfter: its rate over the last
+	// rateWindow is 0, whatever it was while active.
+	if state == agentpbv2.DataStreamInfo_STATE_ACTIVE {
 		info.RateHz = float32(st.rate(now))
 	}
 	// Marshalling a message of strings and numbers cannot fail.

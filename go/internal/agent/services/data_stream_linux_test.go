@@ -64,8 +64,9 @@ func TestAppRecordingSocketToStreamData(t *testing.T) {
 	}
 }
 
-// The catalog follows an app's streams: listed when the app's sockets open,
-// active once it writes, and gone when it stops.
+// The catalog follows an app's streams: listed while the app's task runs,
+// active once it writes, and gone when it stops, though its sockets stay for
+// the next start; and gone when they are released.
 func TestAppRecordingStreamsInCatalog(t *testing.T) {
 	sockets, capture := recordingSocketTestManager(t)
 	catalog, err := capture.Live().Subscribe(live.Selection{StreamPrefixes: []string{live.CatalogPrefix}})
@@ -94,11 +95,23 @@ func TestAppRecordingStreamsInCatalog(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Created, not started: nothing is listed.
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if d, err := catalog.Next(ctx); err == nil {
+		t.Fatalf("listed before the app started: %s", d.Record.StreamID)
+	}
+	sockets.AdvertiseStreams("test.app", "other")
+	sockets.AdvertiseStreams("test.app", "worker")
 	next(agentpbv2.DataStreamInfo_STATE_IDLE)
 	if _, err = dialRecording(t, dir, "worker", "markers").Write([]byte("boxes")); err != nil {
 		t.Fatal(err)
 	}
 	next(agentpbv2.DataStreamInfo_STATE_ACTIVE)
+	sockets.UnadvertiseStreams("test.app", "worker")
+	next(agentpbv2.DataStreamInfo_STATE_GONE)
+	sockets.AdvertiseStreams("test.app", "worker")
+	next(agentpbv2.DataStreamInfo_STATE_IDLE)
 	sockets.Release("test.app", "worker")
 	next(agentpbv2.DataStreamInfo_STATE_GONE)
 }

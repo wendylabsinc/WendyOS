@@ -38,13 +38,14 @@ func (j *campaignInferenceJob) advertiseMarkers(sourceID string) func() {
 // The record names the camera sample the frame came in as its input, and that
 // sample's receipt stamps as its time: VideoFrame.timestamp_ns live, and the
 // camera index's boot time in an episode. So the boxes line up with the video.
-func (j *campaignInferenceJob) publishDetections(result inference.Result, detections []inference.Detection) {
+// validFor is how long a viewer keeps showing them (see markersCadence).
+func (j *campaignInferenceJob) publishDetections(result inference.Result, detections []inference.Detection, validFor time.Duration) {
 	if result.Width <= 0 || result.Height <= 0 {
 		return // boxes in pixels of a picture of unknown size cannot be placed
 	}
 	markers := &datapb.VideoMarkers{
 		Camera:        markersCamera(result.SourceID),
-		ValidForNanos: int64(markersValidFor(j.campaign.Inference.Rate)),
+		ValidForNanos: int64(validFor),
 		Markers:       detectionMarkers(detections, result.Width, result.Height),
 	}
 	payload, err := proto.Marshal(markers)
@@ -67,11 +68,37 @@ func (j *campaignInferenceJob) publishDetections(result inference.Result, detect
 	}
 }
 
-// markersValidFor is how long a viewer keeps showing a frame's boxes without a
-// newer frame: three scoring intervals and at least two seconds, so the boxes
-// outlast a late frame but not a stopped model.
+// markersValidFor is the shortest time a viewer keeps showing a frame's boxes
+// without a newer frame: three scoring intervals at the configured rate, and at
+// least two seconds, so the boxes outlast a late frame but not a stopped model.
 func markersValidFor(rate float64) time.Duration {
 	return max(3*time.Duration(float64(time.Second)/rate), 2*time.Second)
+}
+
+// markersCadence holds when each camera's last frame was scored, by source.
+// The worker scores the cameras one after another, so each camera is scored
+// about once per round of inference over all of them. With a slow model or
+// several cameras, that is far less often than the configured rate.
+type markersCadence map[string]scoredFrame
+
+type scoredFrame struct {
+	generation uint64
+	at         time.Time
+}
+
+// validFor is the valid_for of a frame of source scored at now: three of the
+// camera's last measured scoring intervals, and never less than
+// markersValidFor(rate). The interval restarts with each subscription of the
+// camera (generation), so a reconnect does not count as one long interval. A
+// late frame lengthens only its own valid_for; the frame after it is back to
+// the camera's pace.
+func (c markersCadence) validFor(source string, generation uint64, now time.Time, rate float64) time.Duration {
+	validFor := markersValidFor(rate)
+	if last, ok := c[source]; ok && last.generation == generation {
+		validFor = max(validFor, 3*now.Sub(last.at))
+	}
+	c[source] = scoredFrame{generation: generation, at: now}
+	return validFor
 }
 
 // detectionMarkers turns boxes in pixels of a width by height picture into

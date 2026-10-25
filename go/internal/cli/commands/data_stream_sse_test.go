@@ -46,6 +46,11 @@ func TestLivePayloadJSON(t *testing.T) {
 	}{
 		{"compiled-in schema", catalog.GetSchema(), catalog.GetPayload(), `{"stream_id":"apps/a/s","state":"STATE_ACTIVE","rate_hz":2}`},
 		{"VideoMarkers", "wendy.data.v1.VideoMarkers", markersPayload(t), markersPayloadJSON},
+		// A frame with no detections clears the camera's boxes, so the
+		// viewer is sent an empty list rather than no list.
+		{"VideoMarkers without markers", "wendy.data.v1.VideoMarkers", mustMarshal(t, &datapb.VideoMarkers{Camera: "/dev/video0", ValidForNanos: 3_000_000_000}),
+			`{"markers":[],"valid_for_nanos":"3000000000","camera":"/dev/video0"}`},
+		{"empty VideoMarkers", "wendy.data.v1.VideoMarkers", nil, `{"markers":[]}`},
 		{"Grid", "wendy.data.v1.Grid", mustMarshal(t, &datapb.Grid{Width: 2, Height: 1, Unit: "°C", Data: []byte{1, 0, 2, 0}, BytesPerLine: 4, Scale: 0.1, Offset: -273.15, Camera: "/dev/video2"}),
 			`{"width":2,"height":1,"unit":"°C","data":"AQACAA==","bytes_per_line":4,"scale":0.1,"offset":-273.15,"camera":"/dev/video2"}`},
 		{"Event", "wendy.data.v1.Event", mustMarshal(t, &datapb.Event{Name: "overheat", State: datapb.Event_STATE_RAISED, Value: 81.5, Unit: "°C"}),
@@ -217,6 +222,43 @@ func TestLiveSSERefusals(t *testing.T) {
 			resp, body := getLive(t, server, "/live", tc.header)
 			if resp.StatusCode != tc.code || !strings.Contains(body, tc.body) {
 				t.Fatalf("got %d %q, want %d %q", resp.StatusCode, body, tc.code, tc.body)
+			}
+		})
+	}
+}
+
+// A request that cannot use the events opens no device subscription: a HEAD,
+// and a cross-site request without an Origin, such as an <img> or a no-cors
+// fetch, which cannot read the response. A loopback page's cross-site
+// EventSource sends its Origin and is served.
+func TestLiveSSEOpensNoUnusableSubscription(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		method string
+		header http.Header
+		code   int
+	}{
+		{"HEAD", http.MethodHead, nil, http.StatusMethodNotAllowed},
+		{"cross-site without an Origin", http.MethodGet, http.Header{"Sec-Fetch-Site": {"cross-site"}}, http.StatusForbidden},
+		{"loopback page on another port", http.MethodGet, http.Header{"Origin": {"http://localhost:5173"}, "Sec-Fetch-Site": {"cross-site"}}, http.StatusOK},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client := &liveDataClient{stream: &liveDataClientStream{header: metadata.MD{}}}
+			server := httptest.NewServer(liveSSEHandler(client, &agentpbv2.StreamDataRequest{}))
+			defer server.Close()
+			req, err := http.NewRequest(tc.method, server.URL+"/live", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			req.Header = tc.header.Clone()
+			resp, err := server.Client().Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, _ = io.Copy(io.Discard, resp.Body)
+			resp.Body.Close()
+			if subscribed := client.request != nil; resp.StatusCode != tc.code || subscribed != (tc.code == http.StatusOK) {
+				t.Fatalf("got %d, subscribed %v; want %d", resp.StatusCode, subscribed, tc.code)
 			}
 		})
 	}
