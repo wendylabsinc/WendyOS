@@ -465,6 +465,13 @@ func TestCameraGridBrightnessFromTheSensorLinkFeed(t *testing.T) {
 	if rig.fp.count() != 0 {
 		t.Fatal("the brightness grid started the camera's producer")
 	}
+	// The record carries the time the feed received the frame, which a frame
+	// that queued while another decoded is earlier than its decode.
+	arrived := time.Unix(1_792_000_000, 123_456_789)
+	rig.feed.publish("/dev/video96", ros2camera.Frame{Data: jpegFrame, Width: 800, Height: 600, Codec: ros2camera.CodecMJPEG, Received: arrived})
+	if r := nextRecord(t, viewer); r.TimestampUnixNanos != arrived.UnixNano() {
+		t.Fatalf("brightness record at %d, want the frame's receive time %d", r.TimestampUnixNanos, arrived.UnixNano())
+	}
 
 	// A board that sends H.264 has no brightness grid.
 	rig.feed.publish("/dev/video96", ros2camera.Frame{Data: []byte{0, 0, 0, 1}, Codec: ros2camera.CodecH264})

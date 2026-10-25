@@ -585,7 +585,12 @@ func (g *cameraGrids) runLuma(ctx context.Context, sourceID, path string, job *g
 			return err
 		}
 		frame = newestSensorFrame(frames, frame)
-		received := time.Now().UnixNano()
+		// The feed notes when it received the frame: a frame that queued
+		// while the previous one decoded arrived before now.
+		received := frame.Received
+		if received.IsZero() {
+			received = time.Now()
+		}
 		if frame.Codec != ros2camera.CodecMJPEG {
 			return errSensorFeedNotJPEG
 		}
@@ -601,7 +606,7 @@ func (g *cameraGrids) runLuma(ctx context.Context, sourceID, path string, job *g
 			continue
 		}
 		failure = ""
-		if err := g.publish(grid, gridDescriptor, sourceID, received, decoded, job); err != nil {
+		if err := g.publish(grid, gridDescriptor, sourceID, received.UnixNano(), decoded, job); err != nil {
 			return err
 		}
 	}

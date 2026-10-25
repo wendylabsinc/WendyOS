@@ -131,6 +131,21 @@ func TestSensorFrameFeedNeverBlocksTheLink(t *testing.T) {
 	}
 }
 
+// A subscriber learns when the feed received a frame, however late it reads
+// it.
+func TestSensorFrameFeedNotesWhenAFrameArrived(t *testing.T) {
+	feed := NewSensorFrameFeed()
+	frames, unsubscribe := feed.subscribe("/dev/video96")
+	defer unsubscribe()
+	before := time.Now()
+	feed.publish("/dev/video96", ros2camera.Frame{Data: []byte("x")})
+	after := time.Now()
+	time.Sleep(5 * time.Millisecond)
+	if got := receiveSensorFrame(t, frames).Received; got.Before(before) || got.After(after) {
+		t.Fatalf("received at %v, want between %v and %v", got, before, after)
+	}
+}
+
 func TestSensorFrameFeedUnsubscribe(t *testing.T) {
 	feed := NewSensorFrameFeed()
 	_, unsubscribe := feed.subscribe("/dev/video96")
