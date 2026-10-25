@@ -2,6 +2,8 @@ package live
 
 import (
 	"context"
+	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -269,6 +271,54 @@ func TestCatalogSendLatest(t *testing.T) {
 		}
 	}
 	requireEmpty(t, s)
+}
+
+// Catalog entries are sent once per change, so the pending-bytes cap never
+// drops one: not the entries a new subscriber starts with, not a GONE queued
+// before large records, and not a GONE offered while the subscriber is at the
+// cap. Which data records the cap drops is not this test's concern.
+func TestPendingBytesCapKeepsCatalog(t *testing.T) {
+	h, clock := clockedHub(Limits{MaxPendingBytes: 1000, MaxLatestBytes: 400})
+	streams := []string{"apps/a/1", "apps/a/2", "apps/a/3"}
+	for i, id := range streams {
+		h.Advertise(StreamInfo{ID: id})
+		clock.advance(time.Millisecond)
+		h.Offer(record(id, i, 400))
+	}
+	// catalog drains s and returns the catalog entries it held, in order.
+	catalog := func(s *Subscriber) []string {
+		t.Helper()
+		var entries []string
+		for {
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+			d, err := s.Next(ctx)
+			cancel()
+			if err != nil {
+				return entries
+			}
+			if strings.HasPrefix(d.Record.StreamID, CatalogPrefix) {
+				info := catalogEntry(t, d)
+				entries = append(entries, info.GetStreamId()+" "+info.GetState().String())
+			}
+		}
+	}
+	s := subscribeWith(t, h, Selection{StreamPrefixes: []string{CatalogPrefix, "apps/"}, SendLatest: true})
+	if got, want := catalog(s), []string{"apps/a/1 STATE_ACTIVE", "apps/a/2 STATE_ACTIVE", "apps/a/3 STATE_ACTIVE"}; !slices.Equal(got, want) {
+		t.Fatalf("snapshot entries %q, want %q", got, want)
+	}
+
+	h.Unadvertise("apps/a/1")
+	h.Offer(record("apps/b/1", 1, 600))
+	h.Offer(record("apps/b/2", 2, 600))
+	if got, want := catalog(s), []string{"apps/a/1 STATE_GONE"}; !slices.Equal(got, want) {
+		t.Fatalf("entries after large records %q, want %q", got, want)
+	}
+
+	h.Offer(record("apps/b/1", 3, 990))
+	h.Unadvertise("apps/a/2")
+	if got, want := catalog(s), []string{"apps/a/2 STATE_GONE"}; !slices.Equal(got, want) {
+		t.Fatalf("entries offered at the cap %q, want %q", got, want)
+	}
 }
 
 // Nothing runs on a timer while nobody is subscribed.

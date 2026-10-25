@@ -61,7 +61,9 @@ type Limits struct {
 	MaxSubscribers int
 	// MaxPendingBytes caps the payload bytes one subscriber holds undelivered.
 	// Past it the oldest pending record is dropped and counted as skipped. A
-	// single record larger than the cap is still delivered on its own.
+	// single record larger than the cap is still delivered on its own, and
+	// catalog entries are never dropped: each change is sent once, and they
+	// are small, at most one pending per advertised stream.
 	MaxPendingBytes int
 	// MaxLatestBytes caps the payload of the record the hub keeps as a
 	// stream's newest, for SendLatest. A larger record is delivered live but
@@ -280,7 +282,7 @@ func (s *Subscriber) offer(r *Record) {
 	s.bytes += len(r.Payload)
 	for i := 0; s.bytes > s.hub.limits.MaxPendingBytes && i < len(s.order); {
 		id := s.order[i]
-		if id == r.StreamID {
+		if id == r.StreamID || strings.HasPrefix(id, CatalogPrefix) {
 			i++
 			continue
 		}
