@@ -138,3 +138,17 @@ func TestTextPreview(t *testing.T) {
 		}
 	}
 }
+
+// A schema is whatever an app's wendy.json declares. Printed raw, an escape
+// sequence in it would retitle or clear the operator's terminal.
+func TestWriteLiveRecordSanitizesSchema(t *testing.T) {
+	var out bytes.Buffer
+	r := &agentpbv2.DataRecord{StreamId: "apps/demo/markers", Schema: "x\x1b]0;owned\x07\x1b[2J\ny", Payload: []byte{0xff}}
+	if err := writeLiveRecord(&out, r); err != nil {
+		t.Fatal(err)
+	}
+	line := strings.TrimSuffix(out.String(), "\n")
+	if strings.ContainsAny(line, "\x1b\x07\n") || !strings.Contains(line, "]0;owned") {
+		t.Fatalf("schema not sanitized: %q", out.String())
+	}
+}

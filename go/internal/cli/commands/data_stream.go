@@ -97,7 +97,9 @@ const maxLivePreview = 80
 // the stream id, the schema, the payload size and, for a text payload, the
 // start of the text.
 func writeLiveRecord(out io.Writer, r *agentpbv2.DataRecord) error {
-	schema := r.GetSchema()
+	// The schema comes from an app's wendy.json: keep it from driving the
+	// terminal.
+	schema := printable(r.GetSchema())
 	if schema == "" {
 		schema = "-"
 	}
