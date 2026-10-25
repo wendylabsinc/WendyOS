@@ -224,12 +224,17 @@ func TestStreamDataOverLocalSocket(t *testing.T) {
 	if r.GetStreamId() != "apps/test.app/worker/markers" || r.GetSchema() != "wendy.data.v1.VideoMarkers" || string(r.GetPayload()) != "first" || r.GetTimestampUnixNanos() < before {
 		t.Fatalf("record: %v", r)
 	}
+	// Both viewers take "first" before "second" is recorded, or the newest
+	// record of the stream would rightly replace it for the slower one.
+	if r = recvLive(t, all); string(r.GetPayload()) != "first" {
+		t.Fatalf("empty selection: got %q, want %q", r.GetPayload(), "first")
+	}
 	record("other", "unselected")
 	record("markers", "second")
 	if r = recvLive(t, selected); string(r.GetPayload()) != "second" {
 		t.Fatalf("selection let another stream through: %v", r)
 	}
-	for _, want := range []string{"first", "unselected", "second"} {
+	for _, want := range []string{"unselected", "second"} {
 		if r = recvLive(t, all); string(r.GetPayload()) != want {
 			t.Fatalf("empty selection: got %q, want %q", r.GetPayload(), want)
 		}
