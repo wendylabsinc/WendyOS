@@ -83,6 +83,10 @@ func liveDataError(ctx context.Context, err error) error {
 	if status.Code(err) == codes.Unimplemented {
 		return errors.New("this agent does not serve live data streams; update the agent on the target device")
 	}
+	if status.Code(err) == codes.PermissionDenied {
+		// What a device that is not enrolled answers on its plaintext listener.
+		return fmt.Errorf("live data streams require an authenticated mTLS connection; if the device is not enrolled, run 'wendy device enroll', otherwise reconnect using its enrolled endpoint: %w", err)
+	}
 	return err
 }
 

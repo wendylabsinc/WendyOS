@@ -105,7 +105,7 @@ func TestStreamLiveDataErrors(t *testing.T) {
 	}
 	refused := &liveDataClient{stream: &liveDataClientStream{end: status.Error(codes.PermissionDenied, "streaming live data requires a client certificate")}}
 	var errOut bytes.Buffer
-	if err = streamLiveData(context.Background(), refused, &agentpbv2.StreamDataRequest{}, io.Discard, &errOut, false); status.Code(err) != codes.PermissionDenied {
+	if err = streamLiveData(context.Background(), refused, &agentpbv2.StreamDataRequest{}, io.Discard, &errOut, false); status.Code(err) != codes.PermissionDenied || !strings.Contains(err.Error(), "run 'wendy device enroll'") {
 		t.Fatalf("refusal: %v", err)
 	}
 	if errOut.Len() != 0 {
