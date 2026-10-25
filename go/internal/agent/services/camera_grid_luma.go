@@ -6,10 +6,11 @@ package services
 // Any camera that delivers whole JPEG frames, a SensorLink ESP32 camera for
 // example, gets a grid of brightness from 0 to 100 %: its maximum is the
 // brightest spot, its minimum the darkest, its mean how lit the scene is. The
-// picture is averaged down to at most lumaGridWidth columns, so a single noisy
-// or saturated pixel cannot win the maximum or minimum the way it would at full
-// resolution, and a viewer gets a few thousand values per frame rather than
-// half a million. Ported from wendy-data-app's luma decoder.
+// picture is averaged down to at most lumaGridWidth columns and lumaGridHeight
+// rows, so a single noisy or saturated pixel cannot win the maximum or minimum
+// the way it would at full resolution, and a viewer gets a few thousand values
+// per frame rather than half a million. Ported from wendy-data-app's luma
+// decoder.
 
 import (
 	"bytes"
@@ -24,9 +25,11 @@ import (
 )
 
 const (
-	// lumaGridWidth is the most columns a brightness grid has: an 800x600
-	// SensorLink frame becomes 160x120.
-	lumaGridWidth = 160
+	// lumaGridWidth and lumaGridHeight are the most columns and rows a
+	// brightness grid has: an 800x600 SensorLink frame becomes 160x120. Bounding
+	// both keeps the grid of a picture of any shape far below a record's 1 MiB.
+	lumaGridWidth  = 160
+	lumaGridHeight = 160
 	// lumaFullScale is the count of a white cell. A count is the cell's mean
 	// luma times 257, so luma 0..255 maps onto 0..65535 exactly.
 	lumaFullScale = 65535
@@ -40,8 +43,8 @@ const (
 // picture. Bytes after the image are ignored.
 //
 // The picture is split into cells of about block x block pixels, where block
-// is the smallest whole number that keeps the grid at most lumaGridWidth
-// wide. Cell boundaries fall in proportion to the picture, so cell (col, row)
+// is the smallest whole number that keeps the grid at most lumaGridWidth wide
+// and lumaGridHeight tall. Cell boundaries fall in proportion to the picture, so cell (col, row)
 // covers exactly col/width to (col+1)/width of it across, and likewise down,
 // as Grid.camera promises, even when block does not divide the picture. At
 // 800x600 every cell is 5x5 pixels.
@@ -62,7 +65,7 @@ func lumaGrid(frame []byte, camera string) (*datapb.Grid, error) {
 	}
 	b := img.Bounds()
 	pw, ph := b.Dx(), b.Dy()
-	block := max(1, (pw+lumaGridWidth-1)/lumaGridWidth)
+	block := max(1, (pw+lumaGridWidth-1)/lumaGridWidth, (ph+lumaGridHeight-1)/lumaGridHeight)
 	w, h := pw/block, ph/block
 	if w == 0 || h == 0 {
 		return nil, errors.New("picture is smaller than one cell")

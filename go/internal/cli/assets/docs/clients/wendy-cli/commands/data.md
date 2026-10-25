@@ -654,7 +654,7 @@ camera:
   `agent/camera/markers/<source>`, its hottest pixel in red and its coldest in
   blue, labelled `max` and `min` with their temperatures.
 - A SensorLink camera that sends JPEG has `agent/camera/grid/<source>`: its
-  brightness from 0 to 100 %, averaged down to at most 160 cells across.
+  brightness from 0 to 100 %, averaged down to at most 160 cells a side.
 
 ```sh
 wendy data stream --stream agent/camera/markers/v4l2:/dev/video0

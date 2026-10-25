@@ -9,6 +9,10 @@ import (
 	"math"
 	"strings"
 	"testing"
+
+	"google.golang.org/protobuf/proto"
+
+	"github.com/wendylabsinc/wendy/go/internal/agent/data"
 )
 
 // greyJPEG encodes a w x h picture at 40 % grey with a white square and a
@@ -110,6 +114,24 @@ func TestLumaGridCellsSpanThePicture(t *testing.T) {
 	}
 	if got := brightnessAt(t, g, 1000, 600, 940, 300); math.Abs(got-40) > 2 {
 		t.Errorf("cell left of the white square reads %.1f %%", got)
+	}
+}
+
+// A tall picture sets the cell size by its height, so its grid stays within
+// 160 cells a side and fits a record: a 160x4096 frame used to make a grid of
+// 160x4096 cells, 1.3 MB, which the record limit refused.
+func TestLumaGridOfATallPictureFitsARecord(t *testing.T) {
+	frame := greyJPEG(t, 160, 4096, image.Pt(10, 10), image.Pt(100, 100), false)
+	g, err := lumaGrid(frame, "/dev/video96")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Cells of 26x26 pixels: ceil(4096/160).
+	if g.Width != 6 || g.Height != 157 || len(g.Data) != 2*6*157 {
+		t.Fatalf("grid %dx%d (%d B), want 6x157", g.Width, g.Height, len(g.Data))
+	}
+	if size := proto.Size(g); size > data.MaxRecordingPacket {
+		t.Fatalf("grid is %d bytes, over the %d-byte record limit", size, data.MaxRecordingPacket)
 	}
 }
 
