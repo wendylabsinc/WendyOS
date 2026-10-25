@@ -298,7 +298,7 @@
             "path": {
               "type": "string",
               "minLength": 1,
-              "description": "Mount path inside the container (e.g. \"/data\")."
+              "description": "Mount path inside the container (e.g. \"/data\"). Not /run/wendy/system or below it, where the agent mounts the System API socket."
             }
           },
           "required": ["type", "name", "path"],

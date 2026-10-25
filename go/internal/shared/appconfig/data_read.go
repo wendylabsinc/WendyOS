@@ -2,8 +2,21 @@ package appconfig
 
 import (
 	"fmt"
+	"path"
 	"strings"
 )
+
+// SystemAPIContainerDirectory is where the agent mounts an app's System API
+// socket, which notifications and data-read share.
+const SystemAPIContainerDirectory = "/run/wendy/system"
+
+// UnderSystemAPIDirectory reports whether the container path p is
+// SystemAPIContainerDirectory or below it, where a persist volume would hide
+// the System API socket or be hidden by it.
+func UnderSystemAPIDirectory(p string) bool {
+	p = path.Clean(p)
+	return p == SystemAPIContainerDirectory || strings.HasPrefix(p, SystemAPIContainerDirectory+"/")
+}
 
 // dataReadCatalogPrefix starts the id of every stream in the live catalog.
 // An allowlist names the streams themselves: the catalog entry of an allowed

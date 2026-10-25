@@ -114,6 +114,9 @@ func ApplyEntitlements(spec *Spec, cfg *appconfig.AppConfig, opts ApplyOptions) 
 				SetDeviceCapabilities(spec)
 			}
 		case appconfig.EntitlementPersist:
+			if appconfig.UnderSystemAPIDirectory(ent.Path) && (cfg.HasEntitlement(appconfig.EntitlementNotifications) || cfg.HasEntitlement(appconfig.EntitlementDataRead)) {
+				return fmt.Errorf("persist path %q collides with the System API socket the agent mounts at %s; choose another path", ent.Path, appconfig.SystemAPIContainerDirectory)
+			}
 			applyPersist(spec, ent, cfg.AppID)
 		case appconfig.EntitlementBluetooth:
 			if opts.AvahiProxySocketDir != "" {
@@ -751,13 +754,13 @@ func applyDisplay(spec *Spec) {
 // directory is mounted rather than the socket inode so Agent socket recreation
 // is transparent to an already-running container. Every System API entitlement
 // (notifications, data-read) grants the same one socket, so a second one mounts
-// nothing more.
+// nothing more. ApplyEntitlements refuses a persist volume in its place.
 func applySystemAPI(spec *Spec, hostDirectory string) {
 	if hostDirectory == "" {
 		return
 	}
-	const containerDirectory = "/run/wendy/system"
-	if slices.ContainsFunc(spec.Mounts, func(m Mount) bool { return m.Destination == containerDirectory }) {
+	const containerDirectory = appconfig.SystemAPIContainerDirectory
+	if slices.ContainsFunc(spec.Mounts, func(m Mount) bool { return m.Destination == containerDirectory && m.Source == hostDirectory }) {
 		return
 	}
 	const containerSocket = containerDirectory + "/system.sock"

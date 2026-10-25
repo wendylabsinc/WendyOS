@@ -388,6 +388,32 @@ func TestValidate_PersistPathUsesContainerPathSemantics(t *testing.T) {
 	}
 }
 
+// The agent mounts the System API socket at /run/wendy/system. A persist
+// volume there or below would hide it, or be hidden by it.
+func TestValidate_PersistPathReservesSystemAPIDirectory(t *testing.T) {
+	for _, tc := range []struct {
+		path string
+		ok   bool
+	}{
+		{"/run/wendy/system", false},
+		{"/run/wendy/system/", false},
+		{"/run/wendy//system", false},
+		{"/run/wendy/system/state", false},
+		{"/run/wendy", true},
+		{"/run/wendy/systemd", true},
+		{"/run/wendy/system2/state", true},
+	} {
+		cfg := &AppConfig{AppID: "com.example.app", Entitlements: []Entitlement{{Type: EntitlementPersist, Name: "state", Path: tc.path}}}
+		if err := cfg.Validate(); (err == nil) != tc.ok {
+			t.Errorf("persist at %q: got %v, want ok=%v", tc.path, err, tc.ok)
+		}
+	}
+	cfg := &AppConfig{AppID: "com.example.app", Services: map[string]*ServiceConfig{"api": {Context: ".", Entitlements: []Entitlement{{Type: EntitlementPersist, Name: "state", Path: "/run/wendy/system"}}}}}
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "reserved") {
+		t.Errorf("service persist at /run/wendy/system: got %v, want it refused as reserved", err)
+	}
+}
+
 func TestValidate_GPIOWithoutPins(t *testing.T) {
 	cfg := &AppConfig{
 		AppID: "com.example.app",

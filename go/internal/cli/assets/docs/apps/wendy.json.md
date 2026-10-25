@@ -516,7 +516,7 @@ Persistent storage that survives container restarts.
 | Field | Description |
 |-------|-------------|
 | `name` | Shared namespace (app ID). Apps with the same name can share storage. |
-| `path` | Mount path inside the container, e.g. `"/data"`. |
+| `path` | Mount path inside the container, e.g. `"/data"`. Not `/run/wendy/system` or below it, where the agent mounts the System API socket. |
 
 ### `usb`
 
