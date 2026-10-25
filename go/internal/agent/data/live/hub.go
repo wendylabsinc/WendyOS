@@ -195,13 +195,12 @@ func (h *Hub) Subscribed() bool { return h.active.Load() > 0 }
 
 // Wanted reports whether a subscriber asks for the stream: names it by id or
 // by a prefix of its id, or names its schema, within its Allow scope and what
-// its Readable admits: a subscriber that may not read a stream never makes it
+// its Readable admits, so one that may not read the stream never makes it
 // wanted. An empty selection takes every stream but asks for none, so it does
-// not count. A
-// producer whose records are costly to make, a camera decoder for example,
-// runs while its stream is wanted: for viewers that name what it makes, not
-// for one that takes whatever there is. Its records still reach every
-// subscriber that selects them.
+// not count. A producer whose records are costly to make, a camera decoder
+// for example, runs while its stream is wanted: for viewers that name what it
+// makes, not for one that takes whatever there is. Its records still reach
+// every subscriber that selects them.
 func (h *Hub) Wanted(streamID, schema string) bool {
 	if h.active.Load() == 0 {
 		return false

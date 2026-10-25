@@ -44,10 +44,10 @@ const (
 //
 // The picture is split into cells of about block x block pixels, where block
 // is the smallest whole number that keeps the grid at most lumaGridWidth wide
-// and lumaGridHeight tall. Cell boundaries fall in proportion to the picture, so cell (col, row)
-// covers exactly col/width to (col+1)/width of it across, and likewise down,
-// as Grid.camera promises, even when block does not divide the picture. At
-// 800x600 every cell is 5x5 pixels.
+// and lumaGridHeight tall. Cell boundaries fall in proportion to the picture,
+// so cell (col, row) covers exactly col/width to (col+1)/width of it across,
+// and likewise down, as Grid.camera promises, even when block does not divide
+// the picture. At 800x600 every cell is 5x5 pixels.
 func lumaGrid(frame []byte, camera string) (*datapb.Grid, error) {
 	if len(frame) < 4 || frame[0] != 0xFF || frame[1] != 0xD8 {
 		return nil, fmt.Errorf("not a JPEG frame (%d bytes)", len(frame))
