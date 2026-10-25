@@ -1,15 +1,67 @@
 package data
 
 import (
+	"errors"
+	"fmt"
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/data/live"
 	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 	recordingpb "github.com/wendylabsinc/wendy/go/proto/gen/recordingpb"
+	"google.golang.org/protobuf/proto"
 )
 
 // Live returns the hub that serves accepted records to live subscribers.
 func (m *Manager) Live() *live.Hub { return m.live }
+
+// maxAgentStream bounds an agent producer's stream name, so that
+// "agent/<stream>" stays within the 512 bytes a StreamData request may name.
+const maxAgentStream = 480
+
+// Publish puts a record of one of the agent's own producers, campaign
+// inference for example, on the record stream "agent/<stream>". It takes the
+// path an application's recording stream takes, without the socket and the
+// journal: live viewers get the record first, then the stream pre-roll and
+// every open episode that captures applications record it, as records.wdr.
+// What a viewer saw live and what an episode holds are the same record.
+//
+// stream names the producer and what it publishes, for example
+// "campaign/<campaign>/markers/<source>". descriptor names the payload's
+// schema and media type. r is cloned, so the caller keeps its buffers. Its
+// timing, client boot time and inputs say which sample the record describes,
+// as on an app's durable record; a record without them is stamped with its
+// receipt.
+func (m *Manager) Publish(stream string, descriptor *recordingpb.StreamDescriptor, r *recordingpb.Record) error {
+	if stream == "" || len(stream) > maxAgentStream {
+		return fmt.Errorf("agent stream name must be 1..%d bytes", maxAgentStream)
+	}
+	if descriptor == nil || r == nil {
+		return errors.New("agent record needs a descriptor and a record")
+	}
+	if proto.Size(r) > MaxRecordingPacket {
+		return errors.New("record exceeds 1 MiB")
+	}
+	if err := ValidateSampleTiming(r.Timing); err != nil {
+		return err
+	}
+	stored, err := stampStreamRecord("", "", stream, descriptor, r)
+	if err != nil {
+		return err
+	}
+	m.publish(stored)
+	return nil
+}
+
+// streamID is the live stream id of a stored record. An application's stream
+// is "apps/<app-id>/<service>/<stream>". The agent's own producers have no
+// app id, and their streams are "agent/<stream>": RecordStream refuses an
+// empty app id, so no app can publish there.
+func streamID(s *recordingpb.StoredRecord) string {
+	if s.AppId == "" {
+		return "agent/" + s.Stream
+	}
+	return appStreamID(s.AppId, s.Service, s.Stream)
+}
 
 // appStreamID is the live stream id of an application recording stream. An
 // app without a service name has no service segment. App ids, service names
@@ -34,12 +86,12 @@ func (m *Manager) UnadvertiseAppStream(app, service, stream string) {
 	m.live.Unadvertise(appStreamID(app, service, stream))
 }
 
-// liveRecord is the live view of a record RecordStream accepted. The payload
-// aliases s, which RecordStream cloned from the caller's buffer and never
-// changes afterwards.
+// liveRecord is the live view of a record publish accepted. The payload
+// aliases s, which was cloned from the caller's buffer and never changes
+// afterwards.
 func liveRecord(s *recordingpb.StoredRecord) *live.Record {
 	return &live.Record{
-		StreamID:           appStreamID(s.AppId, s.Service, s.Stream),
+		StreamID:           streamID(s),
 		Schema:             s.StreamDescriptor.GetSchema(),
 		TimestampUnixNanos: liveTimestamp(s),
 		Payload:            s.Record.GetPayload(),

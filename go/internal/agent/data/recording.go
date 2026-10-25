@@ -108,16 +108,17 @@ func validateStreamRecord(cfg appconfig.RecordingStream, r *recordingpb.Record) 
 // journal commit. Copying to current episodes is a separate operation. A copy
 // failure is reported to the operator; it cannot undo an acknowledged journal.
 func (m *Manager) RecordStream(app, service, stream string, cfg appconfig.RecordingStream, r *recordingpb.Record) (bool, error) {
+	// An empty app id is the agent's own namespace (see Publish).
+	if app == "" {
+		return false, errors.New("recording stream has no application id")
+	}
 	if err := validateStreamRecord(cfg, r); err != nil {
 		return false, err
 	}
-	receipt, err := readBootTime()
+	stored, err := stampStreamRecord(app, service, stream, streamDescriptor(cfg), r)
 	if err != nil {
 		return false, err
 	}
-	boot := bootID()
-	stored := &recordingpb.StoredRecord{Record: proto.Clone(r).(*recordingpb.Record), AppId: app, Service: service, Stream: stream, StreamDescriptor: streamDescriptor(cfg), ReceiptBoottimeNanos: receipt, ReceiptBootId: boot, ReceiptUnixNanos: time.Now().UnixNano()}
-	stored.ClientTimestampAccepted = r.ClientBoottimeNanos != nil && boot != "unavailable" && r.BootId == boot && abs64(*r.ClientBoottimeNanos-receipt) <= preRollWindow.Nanoseconds()
 	if cfg.Mode == "durable" {
 		j, err := m.recordings.journal(app, service, stream)
 		if err != nil {
@@ -128,11 +129,52 @@ func (m *Manager) RecordStream(app, service, stream string, cfg appconfig.Record
 			return duplicate, err
 		}
 	}
+	// Rejected and duplicate records returned above: no viewer or episode
+	// sees them.
+	observer := m.publish(stored)
+	if observer != nil && (cfg.Event != "" || cfg.Model != "") {
+		observer(app, streamApplicationRecord(stored))
+	}
+	return false, nil
+}
+
+// stampStreamRecord is the stored form of an accepted stream record: a clone
+// of r, so the caller may reuse its buffers, with the stream's identity, its
+// descriptor and the agent's receipt.
+func stampStreamRecord(app, service, stream string, descriptor *recordingpb.StreamDescriptor, r *recordingpb.Record) (*recordingpb.StoredRecord, error) {
+	receipt, err := readBootTime()
+	if err != nil {
+		return nil, err
+	}
+	boot := bootID()
+	stored := &recordingpb.StoredRecord{Record: proto.Clone(r).(*recordingpb.Record), AppId: app, Service: service, Stream: stream, StreamDescriptor: descriptor, ReceiptBoottimeNanos: receipt, ReceiptBootId: boot, ReceiptUnixNanos: time.Now().UnixNano()}
+	stored.ClientTimestampAccepted = r.ClientBoottimeNanos != nil && boot != "unavailable" && r.BootId == boot && abs64(*r.ClientBoottimeNanos-receipt) <= preRollWindow.Nanoseconds()
+	return stored, nil
+}
+
+// publish puts an accepted record on its stream. It is the one path for app
+// recording streams (RecordStream) and the agent's own producers (Publish).
+//
+// Live viewers get the record first, so neither storage nor a seal holding
+// the manager lock delays what they see. It is offered with nobody subscribed
+// too: the hub keeps it as the stream's newest record and counts it for the
+// catalog. Then the recording rules apply: the stream pre-roll and every open
+// episode that captures applications take it, as records.wdr. The viewer's
+// payload is the one the pre-roll holds, so live and recorded are the same
+// record; stored must not change afterwards.
+//
+// It returns the application observer, read under the same lock, so
+// RecordStream need not take the lock again.
+func (m *Manager) publish(stored *recordingpb.StoredRecord) func(string, ApplicationRecord) {
 	// Journal commits use per-stream locks. Slow storage on one stream must
-	// not hold the shared episode/pre-roll intake lock.
+	// not hold the shared episode/pre-roll intake lock. Holding streamMu
+	// through the offer keeps each stream's live order its recorded order,
+	// and Offer never blocks.
 	m.streamMu.Lock()
 	defer m.streamMu.Unlock()
+	m.live.Offer(liveRecord(stored))
 	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.bufferStreamLocked(stored)
 	for _, a := range m.openEpisodesLocked() {
 		if !a.capturesApplications {
@@ -141,7 +183,7 @@ func (m *Manager) RecordStream(app, service, stream string, cfg appconfig.Record
 		copy := proto.Clone(stored).(*recordingpb.StoredRecord)
 		copy.EpisodeNanos = streamRecordStamp(stored) - a.manifest.RequestBootNanos
 		if err := appendRecording(filepath.Join(a.dir, RecordingLogFile), copy); err != nil {
-			m.warnf("application stream %s could not be copied into episode %s: %v", stream, a.manifest.ID, err)
+			m.warnf("stream %s could not be copied into episode %s: %v", streamID(stored), a.manifest.ID, err)
 			continue
 		}
 		for i := range a.manifest.Sources {
@@ -152,19 +194,7 @@ func (m *Manager) RecordStream(app, service, stream string, cfg appconfig.Record
 		a.manifest.ModelIO.BinaryOutcomeLog = RecordingLogFile
 		a.noteApplicationRecord(streamApplicationRecord(stored))
 	}
-	observer := m.appObserver
-	m.mu.Unlock()
-	// Live viewers get the record just journaled, buffered and copied into
-	// episodes, sharing its payload. Rejected and duplicate records returned
-	// above and are never shown. Offer never blocks, so holding streamMu here
-	// is safe, and it keeps each stream's live order its recorded order. It is
-	// offered with nobody subscribed too: the hub keeps it as the stream's
-	// newest record and counts it for the catalog.
-	m.live.Offer(liveRecord(stored))
-	if observer != nil && (cfg.Event != "" || cfg.Model != "") {
-		observer(app, streamApplicationRecord(stored))
-	}
-	return false, nil
+	return m.appObserver
 }
 func streamRecordStamp(r *recordingpb.StoredRecord) int64 {
 	if r.ClientTimestampAccepted {
