@@ -73,6 +73,17 @@ func TestStreamLiveDataPrintsRecords(t *testing.T) {
 	}
 }
 
+func TestStreamLiveDataPrintsSkipped(t *testing.T) {
+	stream := &liveDataClientStream{header: metadata.MD{}, records: []*agentpbv2.DataRecord{{StreamId: "apps/demo/log", Payload: []byte("hi"), Skipped: 3}}}
+	var out bytes.Buffer
+	if err := streamLiveData(t.Context(), &liveDataClient{stream: stream}, &agentpbv2.StreamDataRequest{}, &out, io.Discard, false); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix(out.String(), "  apps/demo/log  -  2 B (3 skipped)  hi\n") {
+		t.Fatalf("output: %q", out.String())
+	}
+}
+
 // --json is one protobuf JSON object per line and nothing else on stdout, so
 // a script can read records as they arrive.
 func TestStreamLiveDataJSON(t *testing.T) {

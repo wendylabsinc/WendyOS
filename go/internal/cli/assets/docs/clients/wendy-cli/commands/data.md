@@ -620,20 +620,26 @@ an Episode is recording, until you press Ctrl-C:
 ```sh
 wendy data stream
 wendy data stream --stream apps/<app-id>/<service>/<stream>
-wendy data stream --json
+wendy data stream --prefix apps/<app-id>/ --schema wendy.data.v1.VideoMarkers --latest
+wendy data stream --rate 5 --json
 ```
 
 A stream id is `apps/<app-id>/<service>/<stream>`, or `apps/<app-id>/<stream>` for
-an app with no service name. `--stream` is repeatable; without it every stream is
-printed. `--json` writes one protobuf JSON object per record, with the payload in
-base64. Live and recorded data are the same records: what a viewer sees is what an
-Episode or an export holds.
+an app with no service name. `--stream` and `--prefix` choose streams, and
+`--schema` keeps only the chosen streams with that schema; all three are
+repeatable. Without them every stream is printed. `--json` writes one protobuf JSON
+object per record, with the payload in base64. Live and recorded data are the same
+records: what a viewer sees is what an Episode or an export holds.
 
 Delivery is best effort. When the connection is slower than a stream, a newer
 record replaces the one not yet sent, so a viewer always gets the newest record of
-each stream and never slows the app. There is no history: a viewer sees records
-accepted after it connects. Use `export-stream` or an Episode when every record
-matters.
+each stream and never slows the app. A printed record says how many records of its
+stream were skipped before it. Each stream is also capped at `--rate` records per
+second, 30 unless you ask for another rate from 0.01 to 1000; a newer record
+replaces one the cap holds back, so the cap never queues. There is no history: a
+viewer sees records accepted after it connects, and with `--latest` it starts with
+the newest record of each stream, if that is at most 10 seconds old and 256 KiB.
+Use `export-stream` or an Episode when every record matters.
 
 A record's time is the time its data describes, on the device's wall clock, the
 clock video frames use. For a durable record it is the first sample time of
@@ -644,3 +650,29 @@ every lightweight record gets.
 The stream is served over mutual TLS to user certificates, on the LAN or through
 Wendy Cloud, and on the device's local admin socket. A device that has not been
 provisioned yet does not serve it.
+
+#### Listing streams
+
+`wendy data streams` lists the device's live streams with their schema, state,
+rate and the time of their newest record:
+
+```sh
+wendy data streams
+wendy data streams --json
+```
+
+An app's recording streams are listed while the app runs. A stream is `active`
+when it had a record in the last 10 seconds, and `idle` otherwise.
+
+The list comes from a catalog on the live stream itself, so it reaches any viewer
+the stream does. For each stream the agent publishes a
+`wendy.agent.services.v2.DataStreamInfo` record on stream `_streams/<stream-id>`
+when the stream appears, when its state changes, about every 10 seconds while it is
+active, and with state `GONE` when its app stops. A viewer that selects the prefix
+`_streams/` with `--latest` gets the whole catalog at once, then its changes:
+
+```sh
+wendy data stream --prefix _streams/ --latest
+```
+
+The catalog is never part of an unfiltered stream.

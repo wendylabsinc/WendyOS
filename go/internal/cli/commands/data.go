@@ -62,7 +62,7 @@ func encodeProtoJSON(out io.Writer, message proto.Message) error {
 
 func newDataCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "data", Short: "Record and retrieve synchronized device data"}
-	cmd.AddCommand(newDataExportStreamCmd(), newDataStreamCmd(), newDataSourcesCmd(), newDataRecordCmd(), newDataStopCmd(), newDataEpisodesCmd(), newDataInspectCmd(), newDataDownloadCmd(), newDataCampaignCmd())
+	cmd.AddCommand(newDataExportStreamCmd(), newDataStreamCmd(), newDataStreamsCmd(), newDataSourcesCmd(), newDataRecordCmd(), newDataStopCmd(), newDataEpisodesCmd(), newDataInspectCmd(), newDataDownloadCmd(), newDataCampaignCmd())
 	return cmd
 }
 
