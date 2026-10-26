@@ -68,6 +68,7 @@ type Backend struct {
 	session             uint64
 	events              chan Event
 	relay               *vpn.Relay
+	vpnProbes           *vpnProbes
 }
 
 func New() *Backend {
@@ -375,10 +376,7 @@ func (b *Backend) Disconnect() error {
 func (b *Backend) StartVPN(routes []vpn.Route) (vpn.Config, error) {
 	_, done := b.begin()
 	defer done()
-	if b.relay != nil {
-		b.relay.Close()
-		b.relay = nil
-	}
+	b.stopVPN()
 	dial := reportVPNDialFailures(desktopDial, func(message string) {
 		// A full UI event queue must not stall a failed network flow.
 		select {
@@ -386,21 +384,32 @@ func (b *Backend) StartVPN(routes []vpn.Route) (vpn.Config, error) {
 		default:
 		}
 	})
-	relay, config, err := vpn.NewRelay(routes, dial, desktopProbe)
+	probes := newVPNProbes(routes, commands.DesktopConnect)
+	relay, config, err := vpn.NewRelay(routes, dial, probes.Probe)
 	if err != nil {
+		probes.Close()
 		return vpn.Config{}, err
 	}
-	b.relay = relay
+	b.relay, b.vpnProbes = relay, probes
 	return config, nil
 }
 func (b *Backend) StopVPN() error {
 	_, done := b.begin()
 	defer done()
+	b.stopVPN()
+	return nil
+}
+
+// Caller holds b.mu, including when replacing routes or shutting down the app.
+func (b *Backend) stopVPN() {
+	if b.vpnProbes != nil {
+		b.vpnProbes.Close()
+		b.vpnProbes = nil
+	}
 	if b.relay != nil {
 		b.relay.Close()
 		b.relay = nil
 	}
-	return nil
 }
 func (b *Backend) Shutdown() error {
 	b.UnitreeControl.Shutdown()
@@ -411,10 +420,7 @@ func (b *Backend) Shutdown() error {
 	if b.loginStop != nil {
 		b.loginStop()
 	}
-	if b.relay != nil {
-		b.relay.Close()
-		b.relay = nil
-	}
+	b.stopVPN()
 	return nil
 }
 func (b *Backend) Apps() ([]*pb.AppContainer, error) {

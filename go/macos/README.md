@@ -36,9 +36,12 @@ is available.
 
 Import a textured USDZ scan, or choose **Sites > Reconstruct from Photos** on
 supported hardware. iPhones and iPads with RoomPlan support also offer **Scan
-Room**, which produces room geometry without photographic textures. Add cameras,
-choose **Place in Model**, and tap their mounting locations. Selecting a marker
-opens that camera's live feed through the app's authenticated Go connection.
+Room**, which produces room geometry without photographic textures. **Add Camera**
+previews the feed, then uses an existing valid pose or starts automatic alignment
+against the room's visual references. It saves no placeholder location. If references
+are missing, capture them on iPhone; if matching fails, the camera stays unpositioned.
+**Place Manually** remains available in the camera menu. Selecting a positioned
+camera opens its live feed through the app's authenticated Go connection.
 
 **Sites > Export Site** saves the model and placements as a `.wendysite` file.
 Import that file on the other platform while connected to the same Cloud gateway.
@@ -65,7 +68,7 @@ scan features, estimates the optical pose and, when necessary, square-pixel lens
 intrinsics with radial distortion. Fits must pass image coverage, nonplanarity,
 held-out reprojection error, and a second live-frame pose check before saving.
 The minimum consensus is 16 points for joint lens/pose calibration or 12 for
-pose fitting. If measured alignment cannot be solved, **Align Automatically**
+pose fitting. If measured alignment cannot be solved, automatic alignment
 tries an estimated pinhole lens with a centred principal point and zero distortion.
 The estimate must pass separate-point and second-frame checks, with looser limits
 of 5 px RMS, 30 cm position variation and 10 degrees rotation variation. Its FOV
@@ -261,7 +264,7 @@ The sidebar has Nearby and Cloud navigator tabs, a local search field and an ema
 - DNS supports UDP and TCP. A queries for selected devices receive their address, AAAA queries receive no data, and unselected names receive NXDOMAIN. Public names in the matched zones, including the cloud dashboard apex, are refused by this resolver. macOS 26 DNS failover lets them use the system resolver. Other zones are not selected by the split-DNS settings.
 - TCP flows terminate in gVisor, then pass through an authenticated loopback relay to the existing mesh or cloud port dialer. Routes pin a transport; selecting Cloud does not silently switch to LAN.
 - Cloud app ports require Cloud's signed `tcp-<port>` tunnel services. Older Cloud servers return an unsupported-service error, which appears in the VPN popover. Rebuilding the desktop cannot add a missing Cloud service, and authorization failures never trigger a fallback.
-- IPv4 ICMP echo requests to selected device addresses trigger an authenticated agent version RPC over the pinned mesh/cloud connection, as in `wendy cloud ping`. An echo reply is emitted only after that device responds. Identifier, sequence and payload are preserved; latency includes connection establishment and the agent RPC. This checks agent reachability, not an application port or raw ICMP forwarding on the remote OS. Probes time out after five seconds, with eight workers and a bounded queue. Invalid checksums, unselected destinations, fragmented echoes and packets larger than the 1400-byte tunnel MTU are dropped.
+- IPv4 ICMP echo requests to selected device addresses trigger an authenticated agent version RPC over the pinned mesh/cloud connection, as in `wendy cloud ping`. An echo reply is emitted only after that device responds. The VPN reuses one probe connection per selected device, but every echo requires a new RPC response. The first echo includes connection establishment; later echoes measure the RPC over that connection. A failed probe discards the connection so the next echo reconnects. Stopping the VPN, applying a new selection, or quitting the app closes these connections. Identifier, sequence and payload are preserved. This checks agent reachability, not an application port or raw ICMP forwarding on the remote OS. Probes time out after five seconds, with eight workers and a bounded queue. Invalid checksums, unselected destinations, fragmented echoes and packets larger than the 1400-byte tunnel MTU are dropped.
 - A fresh random relay credential travels in the ephemeral VPN start options. It is not saved in the VPN profile. The extension never receives the cloud access token or operator private key.
 - The relay accepts only selected addresses, valid ports, and its current credential. It limits concurrent flows. Stopping the VPN closes active relay connections. A heartbeat removes the tunnel if the app exits or crashes.
 - UDP application traffic, ICMP types other than echo requests, IPv6 application routing, and automatic mesh/cloud failover are not implemented. TCP half-close is retained when the underlying CLI transport supports it; the existing cloud byte-pipe transport closes the connection when half-closed.
@@ -610,3 +613,216 @@ sideways, and 0.5 rad/s turning. A host crash or network loss can prevent Stop
 from reaching the robot; keep it in sight and keep the physical remote ready.
 No movement is sent during discovery or pairing. Physical robot acceptance
 still requires hardware verification.
+
+### Go2 map commands
+
+On macOS or iOS, connect to the Go2's gateway, open **Site Model**, and use the **Go2
+Command** panel. The gateway must have a connected Go2 pairing owned by the
+current account. The panel includes the original Unitree Go2 meshes, also used
+by the warehouse demo, with the license and upstream revision in `Resources/Go2`.
+
+Once a fresh scan arrives, the app searches the room mesh for matching position
+and heading candidates. It previews a suggestion only when the best fit is
+separated from competing positions and headings. A translucent Go2 and orange
+ring preview the suggestion; use **Confirm position** after checking it.
+The displayed percentage is weighted surface agreement, not probability of correctness.
+Weak fits are labeled and still require operator verification. Suggestions expire
+after 30 seconds or robot motion; confirmation cannot command movement. **Locate Go2**
+retries the search. **Place Manually** remains available for unsupported geometry
+or a poor scan. Select the robot and click a floor destination
+to preview the route; **Move here** or a right-click sends the order. **Escape**
+or **Stop** cancels it. A green selection ring, destination rings and route show
+the current order. Live joint telemetry articulates the model. The separate
+rotatable preview shows a standing pose, including before pairing. On iPhone and
+iPad, tap to preview and use **Move here** to send the order. **Go2** opens an
+expandable sheet containing its camera, localization evidence and settings.
+**Stop** remains available on the map and in the sheet toolbar. Closing the
+sheet keeps telemetry and camera localization active. **Cameras** toggles the
+camera panel and stops the active order.
+
+The Site Model shows Go2's front camera beside the map on Mac and in the Go2
+controls on iPhone. It uses a separate authenticated video subscription bound
+to the selected robot and gateway session. Video reads never hold the motion
+lock, and leaving the map closes the subscription with the robot session.
+
+Scan matching retains height and surface orientation across six overlapping
+height bands, from 25 cm to 1.5 m above the measured floor. Thin planar
+neighborhoods can contribute even when individual columns lack 50 cm of vertical
+returns. Dense occupied patches and isolated legs do not qualify as walls.
+RoomPlan architecture anchors the fit. Movable-object geometry supplies weaker
+support; horizontal tabletops are matched separately from vertical faces.
+Furniture bounding boxes never declare the space beneath a desk occupied or clear.
+Door leaves remain excluded.
+
+Each supporting vertical surface needs six distinct columns spanning 60 cm and
+a coherent thin plane. A suggestion needs an architectural anchor, at least 50%
+weighted agreement, and two surface directions separated by 20 degrees, or one
+direction plus a verified camera pose. Surface normals must agree within 15
+degrees. Competing positions and headings survive refinement. A near-equal
+alternative rejects the suggestion; the cost separation must exceed the larger
+of 0.003 and 18% of the best cost. These are conservative matching heuristics,
+not calibrated probabilities.
+
+Go2's front camera can match the site's visual reference map. Camera calibration
+and pose must pass the existing reprojection, spatial-spread and lens checks,
+then agree on two distinct fresh frames. The image arrival is paired with recent
+odometry within 150 ms and compensated for intervening motion. The camera is a
+soft position and heading constraint, with uncertainty for its body offset.
+Unverified or stale image matches do not influence localization. Visual capture
+keeps sampling later viewpoints after reaching the 12,000-landmark budget,
+replacing a bounded selection of earlier observations instead of stopping at
+capacity. The capture still has a 200-view limit. For useful references, capture
+fixed room features from near Go2's camera height during the
+iPhone room scan; a phone-height reference map may have little overlap with the
+robot's low view. **Locate Go2** preserves any measured lens while finding the robot.
+
+When **Locate Go2** needs a measured lens, it opens a calibration sheet using
+the live stream and a 7-by-10-square checkerboard (6-by-9 inner corners). Save the
+PNG and display it without stretching on a flat screen, or print it. Keep Go2
+stationary and move the whole target through the image centre and edges, with
+varied tilts and distances. At least 12 distinct fresh views are required; the
+solver rejects repeated views, insufficient coverage and unstable measurements,
+and validates on withheld views. No calibration is saved unless validation passes.
+Capture starts automatically. Remove the target and choose Continue to resume
+room localization; Cancel ends the search.
+
+Measured Brown–Conrady intrinsics are saved separately from room references in
+Application Support/WendyRobotLenses, keyed by robot serial, codec and image
+dimensions. Images are rectified before feature extraction; matched coordinates
+are mapped back to raw pixels for pose validation with the measured distortion.
+A measured-lens failure never silently retries with assumed intrinsics. A different
+stream mode needs its own measurement. This corrects lens geometry, but does not
+guarantee a pose when fixed-room reference features are missing or ambiguous.
+
+The matcher retains up to four distinct viewpoints. New evidence requires at
+least 20% novel occupied cells plus 20 cm of translation or about 10 degrees of
+rotation. Repeated accumulated voxel-map packets cannot increase viewpoint
+count. Historical agreement can distinguish alternatives but cannot make a
+geometrically invalid current fit valid. This does not drive the robot to collect
+more views.
+
+Confirming a suggestion saves observed surfaces aligned to the site. The saved
+robot map is bound to the robot, model revision and exact model digest, capped at
+3,000 cells and expires after seven days. Only observations matched to
+architecture become stable anchors. Furniture references remain weaker evidence.
+Saved maps are localization targets and never navigation free space.
+RoomPlan chair boxes are excluded from localization geometry because they can
+represent only the seat and omit the backrest. Visual and saved robot references
+within each chair's horizontal footprint, expanded by 15 cm, are excluded at all
+heights when loading localization evidence. This leaves the displayed model and
+live LiDAR obstacle grid unchanged. A furniture-only explanation that fits as
+well geometrically prevents an unverified architectural corner from resolving
+the pose solely through its stronger semantic score.
+**Localization evidence** shows camera status, viewpoint and surface counts,
+and an optional provisional scan overlay: green architecture, orange furniture,
+blue saved surfaces and gray rejected/unmatched samples. An unconfirmed overlay
+is explicitly labeled as a hypothesis.
+
+Measured clear floor supplies contradictory evidence. Only cells with a fully
+observed, obstacle-free 3 by 3 neighborhood contribute; hidden-floor departure
+allowances never enter matching. A modeled wall within 7.5 cm of such a patch's
+interior adds a penalty. More than 5% conflicting samples rejects a suggestion.
+Unobserved floor does not imply walls or missing walls.
+
+Localization requires fresh pose and surface observations independently of
+navigable-floor validation. A position can be previewed and confirmed while
+movement remains blocked by uncertain floor. Automatic matching tries up to
+three times per unchanged observation set, at least five seconds apart, and
+pauses after manual placement or Stop. It supports single-level rooms up to
+30 m across; tracking after confirmation uses odometry. Alignment is discarded
+when the site, model revision, gateway session or active view changes. Pose
+jumps also require alignment again. Do not issue orders from another controller
+while a map order is active. Obstacle, floor, timestamp and movement checks are
+unchanged by the localization evidence sources.
+
+Movement always requires fresh, precisely timestamped odometry on `rt/lf/sportmodestate`.
+LiDAR source timestamps on `rt/utlidar/voxel_map_compressed` are used when precise.
+Both four-byte and twelve-byte LiDAR packet headers are supported. Some firmware
+rounds the map's Unix capture time to 1,000-second increments, such as
+`1.792944e+09`, losing subsecond timing. The UI reports this separately from robot
+connectivity. Packet receipt time and a ROS
+bridge's receipt-stamped cloud do not establish the original capture time.
+
+**Supervised arrival timing** is enabled by default, as requested for this firmware.
+Turn it off to require verified LiDAR capture times. New, advancing gateway receipt times must stay fresh and within
+200 ms of fresh, precisely timestamped odometry. Coarse epochs must still agree
+within their rounding precision and cannot go backwards. The UI labels this mode;
+it cannot verify sensor capture age. Switching modes stops any active order and
+discards its route, scan and position candidates. Each connection starts with
+supervised arrival timing enabled and visibly labeled.
+
+The floor reference comes from a dominant upper surface in nearby voxel columns,
+rather than odometry Z=0 or each column's lowest occupied voxel. Go2's processed
+voxel map can contain occupancy beneath an observed walking surface. Nearby
+raised objects are excluded from the ground estimate and remain obstacles.
+The selected surface needs substantial support on all four sides of Go2;
+competing surfaces with comparable support are rejected. Buried occupancy does
+not invalidate floor observed above it. Coherent lower surfaces with no floor
+above them are blocked as drops. Lower-surface evidence must span both horizontal
+axes and fit a locally level top plane; three neighboring buried voxels are not
+enough. Irregular lower occupancy remains unknown, including under the robot.
+It never creates navigable floor and only the explicit fixed departure allowance
+can tolerate it.
+
+**Allow hidden floor beneath Go2** is off by default on every connection. An
+operator may enable it after checking that Go2 stands on a clear, level floor.
+It permits missing floor only in 10 cm grid cells touched by the 96 by 56 cm body envelope and clearance
+rectangle at the departure pose. That footprint stays fixed for the route; it
+does not follow the robot or fill unknown floor ahead. Obstacles and measured
+drops remain blocked, and destinations require fully observed clearance.
+Changing this option stops active motion and discards the route and candidates.
+
+The client measures the authenticated gateway clock when connecting, using
+three read-only GetClock probes and the fastest round trip below 50 ms. It
+translates gateway receipts and embedded capture times with a fixed conservative
+offset. This avoids treating ordinary iPhone/gateway clock skew as a telemetry
+reset without extending the 750 ms freshness limit. Rejected delayed or duplicate
+pose packets do not erase the last accepted pose or its continuity check. Actual
+pose jumps and clock rollbacks still invalidate alignment. The latest packet
+rejection and timing measurements stay locally in
+`Library/Caches/Wendy/go2-observation-fault.json` for device diagnosis.
+
+Unstamped odometry can display the robot but cannot enable movement. The planner
+uses observed level floor and occupied voxels, treats unknown cells as blocked,
+and checks an oriented 76 by 36 cm standing envelope with a 10 cm buffer on
+all sides. This envelope rounds up Unitree's published 70 by 31 cm dimensions;
+attachments outside it require a larger footprint. Whole occupied cells are
+checked against the swept footprint, including in-place turns. The planner
+retains arrival heading at each search node and checks the actual odometry
+heading during movement. Translation and rotation are separate, walking is
+commanded at 0.55 m/s without tapering below the physical walking minimum. The forward stopping check
+covers the command lease, a 0.5 m/s² braking assumption and 5 cm tracking tolerance.
+These assumptions still need physical verification. Destinations are limited to 8 m, routes to
+12 m, and each order to 30 seconds. A robot must already be upright; this UI
+does not change its posture or motion mode.
+
+This is supervised waypoint movement. Unitree's voxel map accumulates observations
+and is not a safety-rated live obstacle sensor. Keep the route clear and remain
+with the robot. The controller stops on stale observations, lost UI activity,
+failed commands or a blocked route. The agent separately expires MOVE after
+500 ms. Tests cover synthetic closed-loop arrival, obstacle/unknown-floor
+rejection, source timestamps, command ordering, failed Stop, and lost leases;
+they do not establish physical navigation performance.
+
+**Locate Go2** also manages gathering new viewpoints. Passive localization on
+opening the map never arms motion. An explicit Locate starts a bounded search:
+match, turn if ambiguous, stop, wait for a fresh view, then match again. If the
+lens has no measurement, the checkerboard sheet comes first. The search stops
+when a suggestion is available, after a full circle of up to twelve 30-degree turns, after five
+minutes excluding calibration, or on Stop/fault. It never confirms a pose.
+
+Turns use the live odometry frame before site alignment. The controller chooses
+a clear left or right turn at the existing manual-control rate of 0.5 rad/s,
+without tapering below that rate. Each turn has an eight-second limit, a
+two-second progress watchdog, and an 8 cm drift limit. Clearance covers the whole
+body plus 10 cm and the angular command lease/braking margin. The hidden-floor
+allowance stays fixed to the original footprint. Obstacles, drops, missing floor,
+telemetry faults, lost UI heartbeat, Stop, or disconnect abort the search. New
+geometry is still required to count another view as independent. Hardware motion
+has not been verified by the build/tests.
+
+The calibration sheet displays the existing live video decoder independently of
+checkerboard detection and lens solving. Its checklist separates sample count,
+image coverage and final validation, with directional guidance from measured
+checkerboard coverage. At capacity it replaces older samples one at a time;
+it never silently discards the entire collection and resets the counter.

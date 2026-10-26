@@ -18,8 +18,8 @@ struct SiteCameraLabel {
     }
 }
 
-/// Preview one source before adding it. The workspace uses a valid reported
-/// pose when available; otherwise it asks for a location marker.
+/// Preview a source before adding it. The workspace locates it automatically
+/// without requiring a manually placed marker.
 struct SiteCameraPicker<Preview: View>: View {
     let feeds: [SiteFeed]
     let preview: (String) -> Preview
@@ -72,15 +72,15 @@ struct SiteCameraPicker<Preview: View>: View {
                         .foregroundStyle(.secondary).padding(24)
                 }
                 HStack {
-                    Text("Preview the camera before placing it in this site.")
+                    Text("We’ll locate this camera using the room scan and its live view.")
                         .font(.caption).foregroundStyle(.secondary)
                     Spacer()
-                    Button("Place Camera") {
+                    Button("Add Camera") {
                         if let selected { choose(selected); dismiss() }
                     }.buttonStyle(.borderedProminent).disabled(selected == nil)
                 }.padding()
             }
-            .navigationTitle("Place Camera")
+            .navigationTitle("Add Camera")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }

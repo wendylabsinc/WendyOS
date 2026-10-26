@@ -18,6 +18,14 @@ actor ScreenLensCalibration {
             return Int(count)
         }
     }
+    func progress() async throws -> ScreenLensProgress {
+        try await BlockingWork.run(on: queue) { [handle] in
+            let p = WSScreenLensGetProgress(handle.pointer)
+            return ScreenLensProgress(count: Int(p.count), detection: Int(p.detection), revision: p.revision,
+                coverageReady: p.coverage_ready != 0, coverage: p.coverage,
+                minX: p.min_x, maxX: p.max_x, minY: p.min_y, maxY: p.max_y)
+        }
+    }
     func solve(width: Int, height: Int, codec: String) async throws -> SiteCameraLens {
         try await BlockingWork.run(on: queue) { [handle] in
             let fit = WSScreenLensSolve(handle.pointer)
@@ -33,5 +41,26 @@ actor ScreenLensCalibration {
             guard lens.isValid, lens.boundaryRays != nil else { throw SiteLocalizationError.invalidResult }
             return lens
         }
+    }
+}
+
+
+struct ScreenLensProgress: Sendable {
+    var count = 0, detection = 0
+    var revision: UInt64 = 0
+    var coverageReady = false
+    var coverage = 0.0, minX = 0.0, maxX = 0.0, minY = 0.0, maxY = 0.0
+    var nextStep: String {
+        if detection == 0 { return "Show the whole checkerboard to Go2 and hold it still until a view is captured." }
+        if detection == 1 { return "Bring the checkerboard closer. It is too small in Go2's image to measure accurately." }
+        if detection == 2 { return "Move the checkerboard slightly inward so its whole white border stays visible." }
+        if !coverageReady && count > 0 {
+            if minX > 0.35 { return "Move the checkerboard toward the LEFT side of this camera preview. Keep the whole pattern visible." }
+            if maxX < 0.65 { return "Move the checkerboard toward the RIGHT side of this camera preview. Keep the whole pattern visible." }
+            if minY > 0.35 { return "Move the checkerboard toward the TOP of this camera preview. Keep the whole pattern visible." }
+            if maxY < 0.65 { return "Move the checkerboard toward the BOTTOM of this camera preview. Keep the whole pattern visible." }
+            return "Bring the checkerboard closer and show it near the image corners. More of the image needs to be covered."
+        }
+        return "Tilt the checkerboard left/right and up/down, and vary its distance. Hold still until another view is captured."
     }
 }

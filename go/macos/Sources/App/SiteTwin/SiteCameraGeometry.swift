@@ -1,7 +1,7 @@
 import Foundation
 import simd
 
-public struct SiteCameraLens: Sendable, Equatable {
+public struct SiteCameraLens: Codable, Sendable, Equatable {
     var width: Int, height: Int
     var fx: Double, fy: Double, cx: Double, cy: Double
     var distortionModel: String
@@ -107,7 +107,7 @@ public struct SiteCameraMetadata: Sendable, Equatable {
     }
 }
 
-public struct SiteCameraGeometry: Sendable {
+public struct SiteCameraGeometry: Sendable, Equatable {
     var pose: SiteCameraPose
     var lens: SiteCameraLens?
 }

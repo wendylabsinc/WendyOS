@@ -1,4 +1,3 @@
-#if os(macOS)
 import Foundation
 
 struct UnitreeRobot: Identifiable, Equatable {
@@ -75,4 +74,3 @@ final class UnitreeClient: Sendable {
         try await perform(control: true, unlessCancelled: false) { try GoClient.finish(WDUnitreeClose(handle)) }
     }
 }
-#endif

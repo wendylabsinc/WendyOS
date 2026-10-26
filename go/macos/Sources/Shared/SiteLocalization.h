@@ -32,6 +32,12 @@ void *WSScreenLensCreate(void);
 void WSScreenLensDestroy(void *calibration);
 int32_t WSScreenLensAdd(void *calibration, const uint8_t *gray, int32_t width, int32_t height);
 WSLocalization WSScreenLensSolve(void *calibration);
+typedef struct {
+ int32_t count, detection, coverage_ready;
+ uint64_t revision;
+ double x, y, width, height, coverage, min_x, max_x, min_y, max_y;
+} WSScreenLensProgress;
+WSScreenLensProgress WSScreenLensGetProgress(void *calibration);
 #ifdef __cplusplus
 }
 #endif

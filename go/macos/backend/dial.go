@@ -10,7 +10,6 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/cli/commands"
 	"github.com/wendylabsinc/wendy/go/internal/shared/cloudrelay"
 	"github.com/wendylabsinc/wendy/go/macos/vpn"
-	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 )
 
 // Each flow owns its transport. Closing it also closes the cloud broker and
@@ -33,21 +32,6 @@ func desktopDial(ctx context.Context, selector string, port uint16) (net.Conn, e
 		return nil, err
 	}
 	return &ownedConn{Conn: conn, closeAgent: func() { agent.Close() }}, nil
-}
-
-// Like cloud ping, each echo requires a fresh response from the remote agent.
-// DesktopConnect retains transport selection, authorization and identity checks.
-func desktopProbe(ctx context.Context, selector string) error {
-	if !strings.HasPrefix(selector, "mesh:") && !strings.HasPrefix(selector, "cloud://") {
-		return errors.New("VPN probes require a mesh or cloud device")
-	}
-	agent, err := commands.DesktopConnect(ctx, selector)
-	if err != nil {
-		return err
-	}
-	defer agent.Close()
-	_, err = agent.AgentService.GetAgentVersion(ctx, &agentpb.GetAgentVersionRequest{})
-	return err
 }
 
 // Report missing Cloud port support once per VPN session. Other dial failures

@@ -10,7 +10,20 @@
 #include <algorithm>
 
 namespace {
-struct Map { std::vector<cv::Point3f> points; cv::Mat descriptors; cv::Ptr<cv::SIFT> sift=cv::SIFT::create(800); };
+struct Map {
+ std::vector<cv::Point3f> points;
+ cv::Mat descriptors;
+ cv::Ptr<cv::SIFT> sift=cv::SIFT::create(800);
+ uint64_t observations=0;
+};
+// A bounded reservoir keeps sampling after the map fills. Otherwise the first
+// part of a room scan consumes every slot and later viewpoints are discarded.
+uint64_t reservoirIndex(uint64_t count){
+ uint64_t value=count+0x9e3779b97f4a7c15ULL;
+ value=(value^(value>>30))*0xbf58476d1ce4e5b9ULL;
+ value=(value^(value>>27))*0x94d049bb133111ebULL;
+ return (value^(value>>31))%count;
+}
 // RootSIFT compares normalized gradient histograms using Hellinger distance.
 // https://www.robots.ox.ac.uk/~vgg/publications/2012/Arandjelovic12/
 cv::Mat rootDescriptors(const cv::Mat& input){
@@ -50,18 +63,27 @@ extern "C" int32_t WSMapCount(void*p){return p?int(static_cast<Map*>(p)->points.
 extern "C" int32_t WSMapAdd(void*p,const uint8_t*gray,int32_t w,int32_t h,const float*depth,const uint8_t*confidence,int32_t dw,int32_t dh,const double*k,const double*T){
  if(!p||!gray||!depth||!confidence||!imageSize(w,h)||dw<8||dh<8||dw>1024||dh>1024||!finiteValues(k,4)||!finiteValues(T,16)||k[0]<=0||k[1]<=0)return -1;
  try{
-  auto&m=*static_cast<Map*>(p);if(m.points.size()>=WS_MAX_LANDMARKS)return int(m.points.size());
+  auto&m=*static_cast<Map*>(p);
   std::vector<cv::KeyPoint> keys;cv::Mat desc;m.sift->detectAndCompute(cv::Mat(h,w,CV_8U,const_cast<uint8_t*>(gray)),cv::noArray(),keys,desc);
-  std::set<std::tuple<int,int,int>> seen;for(auto&v:m.points)seen.insert(voxel(v));
-  for(size_t i=0;i<keys.size()&&m.points.size()<WS_MAX_LANDMARKS;++i){
+  std::multiset<std::tuple<int,int,int>> seen;for(auto&v:m.points)seen.insert(voxel(v));
+  for(size_t i=0;i<keys.size();++i){
    double x=keys[i].pt.x,y=keys[i].pt.y;int u=int(x*dw/w),v=int(y*dh/h);
    if(u<1||v<1||u>=dw-1||v>=dh-1||confidence[v*dw+u]<2)continue;
    float z=depth[v*dw+u];if(!std::isfinite(z)||z<.25||z>6)continue;
    bool smooth=true;for(int yy=v-1;yy<=v+1;++yy)for(int xx=u-1;xx<=u+1;++xx){float d=depth[yy*dw+xx];if(!std::isfinite(d)||std::abs(d-z)>.05)smooth=false;}
    if(!smooth)continue;double cx=(x-k[2])*z/k[0],cy=(y-k[3])*z/k[1];
    cv::Point3f world(T[0]*cx+T[4]*cy+T[8]*z+T[12],T[1]*cx+T[5]*cy+T[9]*z+T[13],T[2]*cx+T[6]*cy+T[10]*z+T[14]);
-   if(!std::isfinite(world.x)||!std::isfinite(world.y)||!std::isfinite(world.z)||cv::norm(world)>1000||!seen.insert(voxel(world)).second)continue;
-   m.points.push_back(world);m.descriptors.push_back(desc.row(int(i)));
+   if(!std::isfinite(world.x)||!std::isfinite(world.y)||!std::isfinite(world.z)||cv::norm(world)>1000||seen.count(voxel(world)))continue;
+   ++m.observations;
+   if(m.points.size()<WS_MAX_LANDMARKS){
+    m.points.push_back(world);m.descriptors.push_back(desc.row(int(i)));
+   }else{
+    auto slot=reservoirIndex(m.observations);
+    if(slot>=WS_MAX_LANDMARKS)continue;
+    seen.erase(seen.find(voxel(m.points[slot])));
+    m.points[slot]=world;desc.row(int(i)).copyTo(m.descriptors.row(int(slot)));
+   }
+   seen.insert(voxel(world));
   }return int(m.points.size());
  }catch(...){return -1;}
 }
@@ -74,7 +96,7 @@ extern "C" int32_t WSMapImport(void*p,const float*data,int32_t count){
  try{Map next;for(int i=0;i<count;++i){auto*row=data+i*WS_LANDMARK_FLOATS;
   for(int j=0;j<WS_LANDMARK_FLOATS;++j)if(!std::isfinite(row[j])||(j<3?std::abs(row[j])>1000:(row[j]<0||row[j]>512)))return -1;
   next.points.emplace_back(row[0],row[1],row[2]);next.descriptors.push_back(cv::Mat(1,128,CV_32F,const_cast<float*>(row+3)).clone());
- }*static_cast<Map*>(p)=std::move(next);return count;}catch(...){return -1;}
+ }next.observations=uint64_t(count);*static_cast<Map*>(p)=std::move(next);return count;}catch(...){return -1;}
 }
 static WSLocalization solveCamera(const double*xyz,const double*uv,int32_t n,int32_t w,int32_t h,const double*known,bool estimated){
  WSLocalization out={};out.reason=1;out.matches=n;
@@ -155,8 +177,22 @@ static WSLocalization localize(void*p,const uint8_t*gray,int32_t w,int32_t h,con
  WSLocalization out={};out.reason=1;if(!p||!gray||!imageSize(w,h))return out;
  try{
   auto&m=*static_cast<Map*>(p);if(m.points.size()<120)return out;
-  cv::Mat full(h,w,CV_8U,const_cast<uint8_t*>(gray)),image;double scale=std::min(1.,960./std::max(w,h));cv::resize(full,image,cv::Size(),scale,scale,cv::INTER_AREA);
-  std::vector<cv::KeyPoint> keys;cv::Mat descriptors;cv::SIFT::create(1800)->detectAndCompute(image,cv::noArray(),keys,descriptors);if(keys.size()<size_t((known||estimated)?WS_MIN_POSE_INLIERS:WS_MIN_LENS_INLIERS))return out;
+  cv::Mat full(h,w,CV_8U,const_cast<uint8_t*>(gray)),image,K,D,mask;
+  if(known){
+   if(!finiteValues(known,9))return out;
+   K=(cv::Mat_<double>(3,3)<<known[0],0,known[2],0,known[1],known[3],0,0,1);
+   D=(cv::Mat_<double>(5,1)<<known[4],known[5],known[6],known[7],known[8]);
+   if(!validLens(K,D,w,h))return out;
+   // Match undistorted feature patches to the phone's room references. Using
+   // distortion only during PnP is too late if warped patches did not match.
+   cv::Mat rectified,valid(h,w,CV_8U,cv::Scalar(255));
+   cv::undistort(full,rectified,K,D,K);full=rectified;
+   cv::undistort(valid,mask,K,D,K);cv::threshold(mask,mask,254,255,cv::THRESH_BINARY);
+   cv::erode(mask,mask,cv::Mat(),cv::Point(-1,-1),4);
+  }
+  double scale=std::min(1.,960./std::max(w,h));cv::resize(full,image,cv::Size(),scale,scale,cv::INTER_AREA);
+  if(!mask.empty())cv::resize(mask,mask,image.size(),0,0,cv::INTER_NEAREST);
+  std::vector<cv::KeyPoint> keys;cv::Mat descriptors;cv::SIFT::create(1800)->detectAndCompute(image,mask,keys,descriptors);if(keys.size()<size_t((known||estimated)?WS_MIN_POSE_INLIERS:WS_MIN_LENS_INLIERS))return out;
   cv::FlannBasedMatcher matcher;std::vector<std::vector<cv::DMatch>> matches;matcher.knnMatch(rootDescriptors(descriptors),rootDescriptors(m.descriptors),matches,8);
   std::vector<cv::DMatch> candidates;
   for(auto&pair:matches){
@@ -177,6 +213,19 @@ static WSLocalization localize(void*p,const uint8_t*gray,int32_t w,int32_t h,con
    distinctPoints.push_back(point);distinctPixels.push_back(pixel);
    xyz.insert(xyz.end(),{point.x,point.y,point.z});uv.insert(uv.end(),{pixel.x,pixel.y});
   }
+  if(known&&!uv.empty()){
+   // PnP and its held-out residuals use the original camera model. Convert the
+   // rectified keypoints back to raw pixels, applying lens distortion once.
+   std::vector<cv::Point3f> rays;std::vector<cv::Point2f> raw;
+   for(size_t i=0;i<uv.size();i+=2)rays.emplace_back((uv[i]-known[2])/known[0],(uv[i+1]-known[3])/known[1],1);
+   cv::projectPoints(rays,cv::Vec3d(0,0,0),cv::Vec3d(0,0,0),K,D,raw);
+   std::vector<double> keptXYZ,keptUV;
+   for(size_t i=0;i<raw.size();++i)if(raw[i].x>=0&&raw[i].x<w&&raw[i].y>=0&&raw[i].y<h){
+    keptXYZ.insert(keptXYZ.end(),xyz.begin()+i*3,xyz.begin()+i*3+3);
+    keptUV.insert(keptUV.end(),{raw[i].x,raw[i].y});
+   }
+   xyz.swap(keptXYZ);uv.swap(keptUV);
+  }
   return solveCamera(xyz.data(),uv.data(),int(uv.size()/2),w,h,known,estimated);
  }catch(...){out.reason=6;return out;}
 }
@@ -189,7 +238,9 @@ extern "C" WSLocalization WSLocalizeEstimated(void*p,const uint8_t*gray,int32_t 
 
 namespace {
 struct ScreenLens {
- int width=0,height=0;
+ int width=0,height=0,detection=0;
+ uint64_t revision=0;
+ cv::Rect lastBox;
  std::vector<std::vector<cv::Point2f>> views;
 };
 std::vector<cv::Point3f> screenPattern(){
@@ -205,19 +256,38 @@ extern "C" int32_t WSScreenLensAdd(void*p,const uint8_t*gray,int32_t w,int32_t h
  try{
   auto&s=*static_cast<ScreenLens*>(p);
   if(s.width&&(s.width!=w||s.height!=h))return -2;
-  if(s.views.size()>=30)return int(s.views.size());
+  s.width=w;s.height=h;s.detection=0;s.lastBox=cv::Rect();
   std::vector<cv::Point2f> corners;
   if(!cv::findChessboardCornersSB(cv::Mat(h,w,CV_8U,const_cast<uint8_t*>(gray)),cv::Size(6,9),corners,cv::CALIB_CB_NORMALIZE_IMAGE))return int(s.views.size());
   auto box=cv::boundingRect(corners);
-  if(box.width<60||box.height<60||box.area()<.025*w*h||box.x<4||box.y<4||box.x+box.width>w-4||box.y+box.height>h-4)return int(s.views.size());
+  s.lastBox=box;
+  if(box.width<60||box.height<60||box.area()<.025*w*h){s.detection=1;return int(s.views.size());}
+  if(box.x<4||box.y<4||box.x+box.width>w-4||box.y+box.height>h-4){s.detection=2;return int(s.views.size());}
   for(auto&prior:s.views){double sum=0,reversed=0;for(size_t j=0;j<corners.size();++j){double a=cv::norm(corners[j]-prior[j]),b=cv::norm(corners[j]-prior[corners.size()-1-j]);sum+=a*a;reversed+=b*b;}
    cv::Point2f a(0,0),b(0,0);for(size_t j=0;j<corners.size();++j){a+=corners[j];b+=prior[j];}a/=float(corners.size());b/=float(corners.size());
    double radiusA=0,radiusB=0;for(size_t j=0;j<corners.size();++j){radiusA+=cv::norm(corners[j]-a);radiusB+=cv::norm(prior[j]-b);}radiusA/=corners.size();radiusB/=corners.size();
    double shape=0;for(size_t j=0;j<corners.size();++j){size_t k=sum<=reversed?j:corners.size()-1-j;double distance=cv::norm((corners[j]-a)/float(radiusA)-(prior[k]-b)/float(radiusB));shape+=distance*distance;}
-   if(std::sqrt(std::min(sum,reversed)/corners.size())<.04*std::hypot(w,h)&&std::sqrt(shape/corners.size())<.04)return int(s.views.size());
+   if(std::sqrt(std::min(sum,reversed)/corners.size())<.04*std::hypot(w,h)&&std::sqrt(shape/corners.size())<.04){s.detection=3;return int(s.views.size());}
   }
-  s.width=w;s.height=h;s.views.push_back(corners);return int(s.views.size());
+  if(s.views.size()>=30)s.views.erase(s.views.begin());
+  s.width=w;s.height=h;s.views.push_back(corners);s.detection=4;++s.revision;return int(s.views.size());
  }catch(...){return -1;}
+}
+extern "C" WSScreenLensProgress WSScreenLensGetProgress(void*p){
+ WSScreenLensProgress out={};if(!p)return out;
+ try{
+  auto&s=*static_cast<ScreenLens*>(p);out.count=int(s.views.size());out.detection=s.detection;out.revision=s.revision;
+  if(!s.width||!s.height)return out;
+  out.x=double(s.lastBox.x)/s.width;out.y=double(s.lastBox.y)/s.height;out.width=double(s.lastBox.width)/s.width;out.height=double(s.lastBox.height)/s.height;
+  if(s.views.empty())return out;
+  std::vector<cv::Point2f> all,centres;
+  for(auto&v:s.views){cv::Point2f c(0,0);for(auto&q:v){all.push_back(q);c+=q;}centres.push_back(c/float(v.size()));}
+  std::vector<cv::Point2f> hull;cv::convexHull(all,hull);auto b=cv::boundingRect(centres);
+  out.coverage=cv::contourArea(hull)/(s.width*s.height);
+  out.min_x=double(b.x)/s.width;out.max_x=double(b.x+b.width)/s.width;
+  out.min_y=double(b.y)/s.height;out.max_y=double(b.y+b.height)/s.height;
+  out.coverage_ready=out.coverage>=.4&&b.width>=.3*s.width&&b.height>=.3*s.height;
+ }catch(...){}return out;
 }
 extern "C" WSLocalization WSScreenLensSolve(void*p){
  WSLocalization out={};out.reason=1;if(!p)return out;

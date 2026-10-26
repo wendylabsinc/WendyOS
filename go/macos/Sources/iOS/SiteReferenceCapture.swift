@@ -16,7 +16,7 @@ final class SiteReferenceCapture {
 
     func run(session: ARSession) async {
         while !Task.isCancelled {
-            if frames >= 200 || landmarkCount >= 12000 { message = "Visual references captured"; return }
+            if frames >= 200 { message = "Visual reference frame limit reached"; return }
             if let frame = session.currentFrame {
                 if case .normal = frame.camera.trackingState {
                     if interrupted { message = "Tracking was interrupted. Restart this scan for camera alignment."; return }
@@ -26,7 +26,9 @@ final class SiteReferenceCapture {
                         do {
                             landmarkCount = try await engine.add(reference)
                             frames += 1; lastTransform = transform
-                            message = "\(landmarkCount) visual references"
+                            message = landmarkCount >= 12000
+                                ? "Updating visual references from new viewpoints"
+                                : "\(landmarkCount) visual references"
                         } catch { message = error.localizedDescription; return }
                     }
                 } else if frames > 0 {

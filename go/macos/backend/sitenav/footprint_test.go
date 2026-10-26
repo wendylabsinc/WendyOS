@@ -1,0 +1,142 @@
+package sitenav
+
+import (
+	"math"
+	"testing"
+)
+
+func narrowAisle() Grid {
+	g := floorGrid()
+	for x := -20; x < 60; x++ {
+		g.Obstacles[Cell{x, 3}] = true
+		g.Obstacles[Cell{x, -4}] = true
+	}
+	return g
+}
+
+func TestFootprintFitsNarrowAisleOnlyLengthways(t *testing.T) {
+	// 60 cm of clear floor: a 36 cm envelope plus 10 cm each side fits.
+	// The previous 40 cm center-radius check rejected these side walls.
+	g := narrowAisle()
+	for _, start := range []Point{{0, 0}, {.023, 0}} {
+		goal := Point{start.X + 2, 0}
+		path, err := g.PlanPose(start, 0, goal)
+		if err != nil || len(path) != 2 {
+			t.Fatalf("straight narrow route: %v %v", path, err)
+		}
+		if !g.ClearPose(start, 0) || g.ClearPose(start, math.Pi/2) {
+			t.Fatal("footprint ignored heading")
+		}
+		if g.Turn(start, 0, math.Pi/2) {
+			t.Fatal("turned through aisle walls")
+		}
+		if _, err := g.PlanPose(start, math.Pi/2, goal); err == nil {
+			t.Fatal("accepted sideways start")
+		}
+	}
+}
+
+func TestFootprintRejectsBodyOverlapAndInsufficientBuffer(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		obstacle Cell
+		clear    bool
+	}{
+		{"body", Cell{0, 1}, false},
+		{"less than ten cm beside body", Cell{0, 2}, false},
+		{"more than ten cm beside body", Cell{0, 3}, true},
+		{"less than ten cm in front", Cell{4, 0}, false},
+		{"more than ten cm in front", Cell{5, 0}, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			g := floorGrid()
+			g.Obstacles[test.obstacle] = true
+			if g.ClearPose(Point{}, 0) != test.clear {
+				t.Fatal("incorrect clearance")
+			}
+		})
+	}
+	// Sub-cell positions must not inherit the center cell's clearance.
+	g := floorGrid()
+	g.Obstacles[Cell{0, 3}] = true
+	if g.ClearPose(Point{0, .029}, 0) {
+		t.Fatal("missed cell-edge overlap")
+	}
+}
+
+func TestFootprintSweepsIntermediateTranslationAndRotation(t *testing.T) {
+	g := floorGrid()
+	g.Obstacles[Cell{10, 0}] = true
+	if !g.ClearPose(Point{}, 0) || !g.ClearPose(Point{2, 0}, 0) || g.Sweep(Point{}, Point{2, 0}, 0) {
+		t.Fatal("did not check between translation endpoints")
+	}
+	g = floorGrid()
+	g.Obstacles[Cell{3, 3}] = true
+	if !g.ClearPose(Point{}, 0) || !g.ClearPose(Point{}, math.Pi/2) {
+		t.Fatal("fixture endpoints blocked")
+	}
+	if g.Turn(Point{}, 0, math.Pi/2) {
+		t.Fatal("corner swept through obstacle between clear headings")
+	}
+	// A diagonal sweep must include cells touched only by the rotated corners.
+	g = floorGrid()
+	g.Obstacles[Cell{4, 0}] = true
+	if g.Sweep(Point{}, Point{1, 1}, math.Pi/4) {
+		t.Fatal("missed diagonal corner")
+	}
+}
+
+func TestFootprintKeepsUnknownAndMeasuredDropsBlocked(t *testing.T) {
+	for _, drop := range []bool{false, true} {
+		g := narrowAisle()
+		if drop {
+			g.Obstacles[Cell{10, 0}] = true
+		} else {
+			delete(g.Floor, Cell{10, 0})
+		}
+		g = g.WithDeparture(&Departure{Position: Point{}, Yaw: 0})
+		if g.Transition(Point{}, 0, Point{2, 0}) {
+			t.Fatal("crossed drop or unknown floor")
+		}
+		if _, err := g.PlanPose(Point{}, 0, Point{2, 0}); err == nil {
+			t.Fatal("planned through hazard in aisle")
+		}
+	}
+}
+
+func TestFootprintDetourPreservesTurnClearance(t *testing.T) {
+	g := floorGrid()
+	for y := -5; y <= 15; y++ {
+		g.Obstacles[Cell{20, y}] = true
+	}
+	for _, start := range []Point{{0, 0}, {.027, .019}} {
+		path, err := g.PlanPose(start, .17, Point{4, 0})
+		if err != nil {
+			t.Fatal(err)
+		}
+		yaw := .17
+		for i := 1; i < len(path); i++ {
+			if !g.Transition(path[i-1], yaw, path[i]) {
+				t.Fatalf("unsafe reconstructed turn/segment %v", path)
+			}
+			yaw = Heading(path[i-1], path[i])
+		}
+	}
+}
+
+func TestFootprintVelocitySeparatesTurnAndTranslation(t *testing.T) {
+	for _, yaw := range []float64{0, .01, .1, math.Pi / 2} {
+		forward, turn := Velocity(Point{}, yaw, Point{1, 0})
+		if forward > 0 && turn != 0 {
+			t.Fatal("simultaneous unplanned translation and rotation")
+		}
+		if forward > WalkingSpeed {
+			t.Fatal("walking speed exceeded")
+		}
+	}
+	far, _ := Velocity(Point{}, 0, Point{1, 0})
+	near, _ := Velocity(Point{}, 0, Point{.1, 0})
+	if near != WalkingSpeed || far != WalkingSpeed {
+		t.Fatal("approach entered the robot walking deadband")
+	}
+}

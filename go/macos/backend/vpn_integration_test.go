@@ -25,24 +25,12 @@ func TestVPNDeviceIntegration(t *testing.T) {
 	if selector == "" {
 		t.Skip("set WENDY_TEST_VPN_DEVICE for a live device check")
 	}
-	relay, cfg, err := vpn.NewRelay([]vpn.Route{{Selector: selector, Name: "VPN test"}},
-		func(ctx context.Context, selector string, port uint16) (net.Conn, error) {
-			conn, err := desktopDial(ctx, selector, port)
-			if err != nil {
-				t.Logf("device TCP dial: %v", err)
-			}
-			return conn, err
-		}, func(ctx context.Context, selector string) error {
-			err := desktopProbe(ctx, selector)
-			if err != nil {
-				t.Logf("device probe: %v", err)
-			}
-			return err
-		})
+	b := New()
+	defer b.Shutdown()
+	cfg, err := b.StartVPN([]vpn.Route{{Selector: selector, Name: "VPN test"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer relay.Close()
 	engine, err := vpn.NewEngine(cfg)
 	if err != nil {
 		t.Fatal(err)

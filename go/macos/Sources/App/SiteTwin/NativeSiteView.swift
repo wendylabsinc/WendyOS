@@ -11,22 +11,22 @@ struct NativeSiteView: View {
     @State private var alignment: SiteAlignmentRequest?
     @State private var metadata: [SiteCameraMetadata] = []
     @State private var metadataError: String?
+    @State private var cameraResolutions: [String: CGSize] = [:]
 
     var body: some View {
-        TimelineView(.periodic(from: .now, by: 1)) { _ in
-            SiteWorkspace(gatewayID: gatewayID, feeds: feeds, metadata: displayMetadata, notices: notices, controls: {
-                HStack {
-                    Button("Pair Cameras", systemImage: "plus") { pairing = true }
-                    Button("Refresh", systemImage: "arrow.clockwise") {
-                        actions.submit { await refresh() }
-                    }
-                }.buttonStyle(.bordered)
-            }, onFailure: { error, _ in model.alert = error.localizedDescription }, calibrate: { site, camera in
-                alignment = SiteAlignmentRequest(site: site, camera: camera)
-            }) { sourceID in
-                if let feed = model.cameraFeeds.first(where: { $0.camera.stableID == sourceID }) {
-                    SiteCameraPreview(model: model, feed: feed).id(feed.id)
+        SiteWorkspace(gatewayID: gatewayID, feeds: feeds, metadata: displayMetadata, notices: notices,
+                      robotSession: model.deviceSession, robotGatewayName: model.connected?.title ?? "this gateway", controls: {
+            HStack {
+                Button("Pair Cameras", systemImage: "plus") { pairing = true }
+                Button("Refresh", systemImage: "arrow.clockwise") {
+                    actions.submit { await refresh() }
                 }
+            }.buttonStyle(.bordered)
+        }, onFailure: { error, _ in model.alert = error.localizedDescription }, calibrate: { site, camera in
+            alignment = SiteAlignmentRequest(site: site, camera: camera, gatewayID: gatewayID, session: model.deviceSession)
+        }) { sourceID in
+            if let feed = model.cameraFeeds.first(where: { $0.camera.stableID == sourceID }) {
+                SiteCameraPreview(model: model, feed: feed).id(feed.id)
             }
         }
         .task { await actions.run() }
@@ -62,19 +62,19 @@ struct NativeSiteView: View {
         return model.cameraFeeds.compactMap { feed in
             guard !feed.camera.stableID.isEmpty, groups[feed.camera.stableID]?.count == 1 else { return nil }
             return SiteFeed(id: feed.camera.stableID, name: feed.camera.name,
-                            lastReceivedAt: feed.lastVideoReceivedAt, connected: feed.running)
+                            lastReceivedAt: feed.lastVideoReceivedAt, connected: feed.running, activity: { [weak feed] in
+                                (feed?.lastVideoReceivedAt, feed?.running == true)
+                            })
         }
     }
 
     private var displayMetadata: [SiteCameraMetadata] {
         metadata.map { record in
             var result = record
-            if let feed = model.cameraFeeds.first(where: { $0.camera.stableID == record.sourceID }), let lens = record.lens {
-                let width = feed.jpeg?.width ?? feed.decoder.imageSize?.width
-                let height = feed.jpeg?.height ?? feed.decoder.imageSize?.height
+            if let size = cameraResolutions[record.sourceID], let lens = record.lens {
                 // A resolution change can mean a different sensor crop. Do not
                 // silently scale calibration unless the publisher supplies it.
-                if let width, let height, width != lens.width || height != lens.height { result.lens = nil }
+                if size.width != CGFloat(lens.width) || size.height != CGFloat(lens.height) { result.lens = nil }
             }
             return result
         }
@@ -99,11 +99,20 @@ struct NativeSiteView: View {
     }
 
     private func refreshMetadata() async {
+        // Keep resolution validation current without a timer around the workspace.
+        var resolutions: [String: CGSize] = [:]
+        for feed in model.cameraFeeds {
+            if let width = feed.jpeg?.width ?? feed.decoder.imageSize?.width,
+               let height = feed.jpeg?.height ?? feed.decoder.imageSize?.height {
+                resolutions[feed.camera.stableID] = CGSize(width: width, height: height)
+            }
+        }
+        if cameraResolutions != resolutions { cameraResolutions = resolutions }
         let session = model.deviceSession
         do {
             let result = try await GoClient.shared.cameraMetadata(session: session)
             guard !Task.isCancelled, model.deviceSession == session else { return }
-            metadata = result
+            if metadata != result { metadata = result }
             metadataError = nil
         } catch {
             guard !Task.isCancelled, model.deviceSession == session else { return }

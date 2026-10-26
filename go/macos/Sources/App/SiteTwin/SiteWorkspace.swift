@@ -8,16 +8,20 @@ public struct SiteFeed: Identifiable {
     public var name: String
     public var lastReceivedAt: Date?
     public var connected: Bool
+    private var activity: (@MainActor () -> (Date?, Bool))?
 
-    public init(id: String, name: String, lastReceivedAt: Date? = nil, connected: Bool = false) {
+    public init(id: String, name: String, lastReceivedAt: Date? = nil, connected: Bool = false,
+                activity: (@MainActor () -> (Date?, Bool))? = nil) {
         self.id = id
         self.name = name
         self.lastReceivedAt = lastReceivedAt
         self.connected = connected
+        self.activity = activity
     }
 
-    public func isReceiving(at now: Date) -> Bool {
-        guard connected, let lastReceivedAt else { return false }
+    @MainActor public func isReceiving(at now: Date) -> Bool {
+        let (receivedAt, isConnected) = activity?() ?? (lastReceivedAt, connected)
+        guard isConnected, let lastReceivedAt = receivedAt else { return false }
         return (0...5).contains(now.timeIntervalSince(lastReceivedAt))
     }
 }
@@ -34,6 +38,16 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
     let preview: (String) -> Preview
     let onFailure: ((any Error, Bool) -> Void)?
     let calibrate: ((StoredSite, SiteCamera) -> Void)?
+    let robotSession: UInt64
+    let robotGatewayName: String
+    // Telemetry is observed by the scene and controls, never by the menus.
+    @State private var robots = SiteRobotMapModel()
+    #if os(iOS)
+    @State private var showingRobotControls = false
+    @State private var showingMobileCameras = false
+    #else
+    @State private var showingRobotControls = true
+    #endif
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var actions = AsyncActions()
     @State private var underlyingError: (any Error)?
@@ -58,6 +72,7 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
     @State private var camerasExpanded = true
     @State private var cameraListHeight: CGFloat?
     @State private var choosingCamera = false
+    @State private var cameraToAdd: (camera: SiteCamera, siteID: UUID)?
     @State private var pendingCamera: SiteCamera?
     @State private var removalCandidate: StoredSite?
     @State private var removedSites: [StoredSite] = []
@@ -68,6 +83,8 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
         feeds: [SiteFeed],
         metadata: [SiteCameraMetadata] = [],
         notices: [String] = [],
+        robotSession: UInt64 = 0,
+        robotGatewayName: String = "this gateway",
         @ViewBuilder controls: @escaping () -> Controls,
         onFailure: ((any Error, Bool) -> Void)? = nil,
         calibrate: ((StoredSite, SiteCamera) -> Void)? = nil,
@@ -77,6 +94,8 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
         self.feeds = feeds
         self.metadata = metadata
         self.notices = notices
+        self.robotSession = robotSession
+        self.robotGatewayName = robotGatewayName
         self.controls = controls
         self.onFailure = onFailure
         self.calibrate = calibrate
@@ -133,17 +152,26 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
         }
         .onChange(of: gatewayID) { _, _ in
             setupPreviewID = nil; selectedCamera = nil; placingCamera = nil; pendingCamera = nil
+            cameraToAdd = nil
         }
-        .sheet(isPresented: $choosingCamera) {
-            SiteCameraPicker(feeds: availableFeeds, preview: preview) { feed in
-                let camera = SiteCamera(gatewayID: gatewayID, sourceID: feed.id, name: feed.name)
-                if let site = current?.site, cameraMetadata(camera)?.pose(in: site, now: Date()) != nil {
-                    actions.submit { await edit { $0.cameras.append(camera) } }
-                } else {
-                    pendingCamera = camera
-                    placingCamera = camera.id
+        .sheet(isPresented: $choosingCamera, onDismiss: {
+            guard let pending = cameraToAdd else { return }
+            cameraToAdd = nil
+            actions.submit {
+                let camera = pending.camera
+                guard camera.gatewayID == gatewayID, current?.id == pending.siteID,
+                      await edit({ $0.cameras.append(camera) }), let current,
+                      current.id == pending.siteID, camera.gatewayID == gatewayID else { return }
+                selectedCamera = camera.id
+                camerasExpanded = false
+                if cameraMetadata(camera)?.pose(in: current.site, now: Date()) == nil {
+                    beginAlignment(camera)
                 }
-                selectedCamera = nil
+            }
+        }) {
+            SiteCameraPicker(feeds: availableFeeds, preview: preview) { feed in
+                guard let current else { return }
+                cameraToAdd = (SiteCamera(gatewayID: gatewayID, sourceID: feed.id, name: feed.name), current.id)
             }
         }
         .confirmationDialog("Remove Capture?", isPresented: Binding(
@@ -335,97 +363,148 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
 
     private func workspace(_ current: StoredSite) -> some View {
         GeometryReader { geometry in
-            SiteScene(
-                modelURL: current.modelURL,
-                site: current.site,
-                cameraGeometry: cameraGeometry(current.site),
-                placingCamera: placingCamera,
-                select: { selectedCamera = $0; camerasExpanded = false },
-                place: { id, point in
-                    actions.submit {
-                        let saved = await edit { site in
-                            if var pending = pendingCamera, pending.id == id {
-                                pending.position = point
-                                site.cameras.append(pending)
-                            } else if let index = site.cameras.firstIndex(where: { $0.id == id }) {
-                                site.cameras[index].position = point
+            SiteRobotRenderHost(model: robots) { robotRender in
+                SiteScene(
+                    modelURL: current.modelURL,
+                    site: current.site,
+                    cameraGeometry: cameraGeometry(current.site),
+                    placingCamera: placingCamera,
+                    select: { selectedCamera = $0; camerasExpanded = false
+                        robots.selected = false; showingRobotControls = false
+                        #if os(iOS)
+                        showingMobileCameras = true
+                        #endif
+                    },
+                    place: { id, point in
+                        actions.submit {
+                            let saved = await edit { site in
+                                if var pending = pendingCamera, pending.id == id {
+                                    pending.position = point
+                                    site.cameras.append(pending)
+                                } else if let index = site.cameras.firstIndex(where: { $0.id == id }) {
+                                    site.cameras[index].position = point
+                                }
                             }
+                            if saved { placingCamera = nil; pendingCamera = nil }
                         }
-                        if saved { placingCamera = nil; pendingCamera = nil }
+                    },
+                    robot: robotRender,
+                    robotPoint: { point, immediate in
+                        robots.point(point, immediate: immediate)
+                        if !robots.placing, robots.destination != nil { showingRobotControls = true }
+                    },
+                    selectRobot: {
+                        robots.selected = true; selectedCamera = nil; camerasExpanded = false; showingRobotControls = true
+                    }
+                )
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            #if os(macOS)
+            .overlay(alignment: .bottomLeading) {
+                SiteRobotPanel(model: robots, session: robotSession, gatewayName: robotGatewayName, site: current.site, modelURL: current.modelURL, availableHeight: geometry.size.height - 32)
+                    .padding(16)
+            }
+            .overlay(alignment: .bottomTrailing) {
+                cameraPanel(current, size: geometry.size).padding(16)
+            }
+            #else
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                VStack(spacing: 8) {
+                    HStack {
+                        MobileSiteRobotPanel(model: robots, session: robotSession, gatewayName: robotGatewayName, site: current.site, modelURL: current.modelURL, isPresented: $showingRobotControls)
+                        Button("Cameras", systemImage: "video") {
+                            robots.stop(); showingRobotControls = false; robots.selected = false
+                            showingMobileCameras.toggle()
+                        }.buttonStyle(.bordered)
+                    }
+                    if showingMobileCameras {
+                        cameraPanel(current, size: geometry.size)
                     }
                 }
-            )
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            #if os(iOS)
-            .ignoresSafeArea(.container, edges: .bottom)
+                .padding(.horizontal, 20).padding(.top, 12).padding(.bottom, 16)
+                .background(.regularMaterial)
+                .onChange(of: showingRobotControls) { _, visible in
+                    if visible { showingMobileCameras = false }
+                }
+            }
             #endif
-            .overlay(alignment: .bottomTrailing) {
-                VStack(alignment: .leading, spacing: 10) {
-                    if placingCamera != nil {
-                        Label("Tap the model where the camera is mounted.", systemImage: "hand.tap")
-                            .font(.callout)
-                        Button("Cancel Placement") { placingCamera = nil; pendingCamera = nil }
-                    } else {
-                        if let camera = current.site.cameras.first(where: { $0.id == selectedCamera }),
-                           camera.gatewayID == gatewayID,
-                           feeds.contains(where: { $0.id == camera.sourceID }) {
-                            HStack {
-                                Text(SiteCameraLabel(name: camera.name, sourceID: camera.sourceID).title).font(.headline).lineLimit(2)
-                                Spacer()
-                                Button { selectedCamera = nil } label: { Image(systemName: "xmark.circle.fill") }
-                                    .buttonStyle(.plain).accessibilityLabel("Close camera preview")
-                            }
-                            preview(camera.sourceID)
-                                .frame(height: min(200, geometry.size.height * 0.3))
-                                .clipShape(RoundedRectangle(cornerRadius: 10))
-                            Text(geometryDescription(camera, now: Date())).font(.caption)
-                                .fixedSize(horizontal: false, vertical: true)
-                            if calibrate != nil {
-                                Button("Calibrate and Align", systemImage: "viewfinder") { beginAlignment(camera) }
-                                    .buttonStyle(.borderedProminent)
-                                    .disabled(busy)
-                            }
-                            if let lens = cameraMetadata(camera)?.lens {
-                                Text("\(lens.width) × \(lens.height) · \(lens.captureMode)")
-                                    .font(.caption2).foregroundStyle(.secondary)
-                            }
-                        }
-                        HStack {
-                            Button { camerasExpanded.toggle() } label: {
-                                Label {
-                                    Text("Cameras · \(current.site.cameras.count)")
-                                } icon: {
-                                    Image(systemName: "chevron.right")
-                                        .rotationEffect(.degrees(camerasExpanded ? 90 : 0))
-                                }.font(.headline)
-                            }.buttonStyle(.plain)
-                                .accessibilityValue(camerasExpanded ? "Expanded" : "Collapsed")
-                            Spacer()
-                            Button("Place Camera", systemImage: "plus") { choosingCamera = true }
-                                .buttonStyle(.borderedProminent)
-                                .disabled(availableFeeds.isEmpty || gatewayID.isEmpty || busy)
-                        }
-                        if camerasExpanded {
-                            ScrollView {
-                                cameraControls(current)
-                                    .fixedSize(horizontal: false, vertical: true)
-                                    .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { cameraListHeight = $0 }
-                            }
-                            .frame(height: min(cameraListHeight ?? CGFloat(max(1, current.site.cameras.count)) * 100,
-                                               max(75, min(240, geometry.size.height * 0.3))))
-                            .transition(.opacity)
-                        }
-                        Text("Cones show viewing direction, not measured coverage.")
+        }
+    }
+
+    private func cameraPanel(_ current: StoredSite, size: CGSize) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            #if os(macOS)
+            if selectedCamera == nil {
+                SiteRobotCameraHost(model: robots, height: min(210, size.height * 0.3))
+            }
+            #endif
+            if placingCamera != nil {
+                Label("Tap the model where the camera is mounted.", systemImage: "hand.tap")
+                    .font(.callout)
+                Button("Cancel Placement") { placingCamera = nil; pendingCamera = nil }
+            } else {
+                if let camera = current.site.cameras.first(where: { $0.id == selectedCamera }),
+                   camera.gatewayID == gatewayID,
+                   feeds.contains(where: { $0.id == camera.sourceID }) {
+                    HStack {
+                        Text(SiteCameraLabel(name: camera.name, sourceID: camera.sourceID).title).font(.headline).lineLimit(2)
+                        Spacer()
+                        Button { selectedCamera = nil } label: { Image(systemName: "xmark.circle.fill") }
+                            .buttonStyle(.plain).accessibilityLabel("Close camera preview")
+                    }
+                    preview(camera.sourceID)
+                        .frame(height: min(200, size.height * 0.3))
+                        .clipShape(RoundedRectangle(cornerRadius: 10))
+                    Text(geometryDescription(camera, now: Date())).font(.caption)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if calibrate != nil {
+                        Button("Calibrate and Align", systemImage: "viewfinder") { beginAlignment(camera) }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(busy)
+                    }
+                    if let lens = cameraMetadata(camera)?.lens {
+                        Text("\(lens.width) × \(lens.height) · \(lens.captureMode)")
                             .font(.caption2).foregroundStyle(.secondary)
                     }
                 }
-                .animation(reduceMotion ? nil : .easeInOut(duration: 0.22), value: camerasExpanded)
-                .padding(14)
-                .frame(width: min(380, max(0, geometry.size.width - 32)), alignment: .leading)
-                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
-                .padding(16)
+                HStack {
+                    Button { camerasExpanded.toggle() } label: {
+                        Label {
+                            Text("Cameras · \(current.site.cameras.count)")
+                        } icon: {
+                            Image(systemName: "chevron.right")
+                                .rotationEffect(.degrees(camerasExpanded ? 90 : 0))
+                        }.font(.headline)
+                    }.buttonStyle(.plain)
+                        .accessibilityValue(camerasExpanded ? "Expanded" : "Collapsed")
+                    Spacer()
+                    Button("Add Camera", systemImage: "plus") { choosingCamera = true }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(availableFeeds.isEmpty || gatewayID.isEmpty || busy)
+                }
+                if camerasExpanded {
+                    ScrollView {
+                        cameraControls(current)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { cameraListHeight = $0 }
+                    }
+                    .frame(height: min(cameraListHeight ?? CGFloat(max(1, current.site.cameras.count)) * 100,
+                                       max(75, min(240, size.height * 0.3))))
+                    .transition(.opacity)
+                }
+                Text("Cones show viewing direction, not measured coverage.")
+                    .font(.caption2).foregroundStyle(.secondary)
             }
         }
+        #if os(macOS)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.22), value: camerasExpanded)
+        .padding(14)
+        .frame(width: min(380, max(0, size.width - 32)), alignment: .leading)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
+        #else
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .transaction { $0.animation = nil }
+        #endif
     }
 
     private var availableFeeds: [SiteFeed] {
@@ -444,7 +523,7 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
                 }
             }
             if current.site.cameras.isEmpty {
-                Text(feeds.isEmpty ? (notices.isEmpty ? "No cameras available. Use Pair Cameras to connect one." : "Camera placement is unavailable. See the gateway notice above.") : "Add a camera, preview its view, then place it in the model.")
+                Text(feeds.isEmpty ? (notices.isEmpty ? "No cameras available. Use Pair Cameras to connect one." : "Camera alignment is unavailable. See the gateway notice above.") : "Add a camera to locate it automatically using its live view and the room scan.")
                     .font(.callout).foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 8)
             }
@@ -470,9 +549,9 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
             }.buttonStyle(.plain).disabled(feed == nil)
             Menu {
                 if calibrate != nil {
-                    Button("Calibrate and Align", systemImage: "viewfinder") { beginAlignment(camera) }.disabled(feed == nil)
+                    Button("Calibrate and Align", systemImage: "viewfinder") { beginAlignment(camera) }
                 }
-                Button(camera.position == nil ? "Place in Model" : "Move Marker", systemImage: "move.3d") {
+                Button(camera.position == nil ? "Place Manually" : "Move Manual Marker", systemImage: "move.3d") {
                     pendingCamera = nil; placingCamera = camera.id
                 }.disabled(hasPose)
                 Button("Remove from Model", systemImage: "minus.circle", role: .destructive) {
@@ -491,7 +570,7 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
     private func beginAlignment(_ camera: SiteCamera) {
         guard let current else { return }
         #if os(iOS)
-        if current.visualMapURL == nil, SiteRoomCapture.isSupported {
+        if camera.gatewayID == gatewayID, current.visualMapURL == nil, SiteRoomCapture.isSupported {
             alignmentScanCamera = camera
             scanning = true
             return
