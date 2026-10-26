@@ -186,9 +186,8 @@ reach only collections that trigger on its event. A watch stores nothing.
 
 A watch's state is `waiting` (its inference is missing or starting),
 `active` or `error`. Applying a watch with `cloud` registers the Cloud app
-`watch:<name>`; an owner or admin enables its notifications in Cloud.
-Applying inference or watch documents needs an agent with data document
-support; `wendy device update` brings one. Complete examples are in
+`watch:<name>`. Applying inference or watch documents needs an agent with data
+document support; `wendy device update` brings one. Complete examples are in
 `Examples/WendyDataWatch`.
 
 ## Campaign YAML reference

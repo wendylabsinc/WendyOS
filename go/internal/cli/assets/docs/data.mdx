@@ -237,7 +237,7 @@ notify:
 
 `- cloud` delivers through Wendy Cloud, and `- webhook: <url>` to your own
 endpoint. Applying a watch with `cloud` registers `watch:front-door` in Cloud
-Apps; Cloud delivery requires a separately enabled notification grant for it.
+Apps.
 Remove the documents with `wendy data remove watch/front-door` and
 `wendy data remove inference/front-door`. Inference and watch documents need an
 agent with data document support; `wendy device update` installs one.

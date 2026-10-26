@@ -148,7 +148,9 @@ func registerAppsWithCloudV2(ctx context.Context, conn grpc.ClientConnInterface,
 	for _, id := range appIDs {
 		app, err := client.GetApp(ctx, &cloudpb.GetAppRequest{Id: id, OrganizationId: tenant})
 		if status.Code(err) == codes.NotFound {
-			name := strings.TrimPrefix(id, "campaign:")
+			// A campaign's or watch's Cloud name is its own name, without
+			// the app id's kind prefix.
+			name := strings.TrimPrefix(strings.TrimPrefix(id, "campaign:"), "watch:")
 			app = new(cloudpb.App)
 			err = cloudrequest.Invoke(ctx, conn, auth, cloudpb.AppService_UpsertApp_FullMethodName,
 				&cloudpb.UpsertAppRequest{Id: id, OrganizationId: tenant, Name: &name}, app)
