@@ -100,8 +100,9 @@ The app calls `DataService.StreamData` on its private System API socket, the one
 { "type": "data-read", "allowlist": ["apps/com.example.detector"] }
 ```
 
-`allowlist` is optional. Each entry is a stream id, such as
-`apps/com.example.detector/markers`, or a prefix that ends at a `/`:
+`allowlist` is optional. Each entry admits the stream id it names and every
+stream id below it at a `/`: `apps/com.example.detector/markers` also admits
+the streams of that app's service named `markers`, if it has one.
 `apps/com.example.detector` admits that app's streams, and not those of
 `com.example.detector2`. Without an allowlist the app reads every stream. Asking
 for a stream outside the allowlist fails with `PERMISSION_DENIED`. Entries may
@@ -121,7 +122,7 @@ itself.
 | Injected environment | `WENDY_SYSTEM_SOCKET=/run/wendy/system/system.sock` |
 | Supplementary group | GID `2000` |
 | RPC | `wendy.agent.services.v2.DataService/StreamData`; every other method is refused |
-| Concurrent streams | 8 per app; the device serves 32 in total |
+| Concurrent streams | 8 per app and 24 for all apps together; the device serves 32 in total, so operators keep 8 |
 | Socket restoration | Recreated, with the same allowlist, from persisted container labels after agent/daemon restart |
 
 The grant is read-only and live-only. An app sees records accepted after it

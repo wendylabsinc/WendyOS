@@ -1707,6 +1707,14 @@ func (c *Client) createContainer(ctx context.Context, req *agentpb.CreateContain
 	// a redeployed shared-namespace primary would otherwise find its own old
 	// task alive and join it.
 	phaseStarted = time.Now()
+	// systemAPIOwnerKept: the old container's System API owner is still
+	// registered, waiting for the Ensure below to replace it.
+	systemAPIOwnerKept := false
+	defer func() {
+		if systemAPIOwnerKept {
+			c.systemAPISocketProvider.Release(appID, serviceName)
+		}
+	}()
 	if existing != nil {
 		// From here on the old container loses its network and its task, so
 		// a failure leaves the app without a running version, even when the
@@ -1823,8 +1831,17 @@ func (c *Client) createContainer(ctx context.Context, req *agentpb.CreateContain
 		if delErr != nil && !errdefs.IsNotFound(delErr) {
 			return fmt.Errorf("deleting existing container %q during replace: %w", containerName, delErr)
 		}
+		// A service that keeps a System API grant keeps its owner until
+		// Ensure replaces it, which ends only the app's streams the new grant
+		// no longer covers. Releasing it here would narrow the app's
+		// data-read scope in between: its siblings' streams would end, and
+		// one reopened meanwhile would stay narrow.
 		if oldHadSystemAPI && c.systemAPISocketProvider != nil {
-			c.systemAPISocketProvider.Release(appID, serviceName)
+			if _, keeps := systemAPIGrant(appCfg.Entitlements); keeps {
+				systemAPIOwnerKept = true
+			} else {
+				c.systemAPISocketProvider.Release(appID, serviceName)
+			}
 		}
 		if oldHadData && c.dataSocketProvider != nil {
 			c.dataSocketProvider.Release(appID, serviceName)
@@ -1904,6 +1921,7 @@ func (c *Client) createContainer(ctx context.Context, req *agentpb.CreateContain
 		if err != nil {
 			return fmt.Errorf("preparing app System API socket: %w", err)
 		}
+		systemAPIOwnerKept = false
 		systemAPIRefOwned = true
 		defer func() {
 			if systemAPIRefOwned {
@@ -2387,6 +2405,10 @@ func (c *Client) startContainer(ctx context.Context, appName string, stdin io.Re
 	// network-operation lock above still serializes this container's lifecycle.
 	muHeld = false
 	c.mu.Unlock()
+	// forgetTaskOutput above also keeps the previous run's exit from unlisting
+	// its recording streams, so the attempt unlists them. They are listed
+	// again just before the new task starts.
+	c.setDataStreamsListed(appID, serviceName, false)
 	if hasNANEntitlement(parseEntitlementsFromAnnotations(containerLabels)) {
 		unlockNAN := c.lockNANOperation(appID)
 		defer unlockNAN()
@@ -2932,6 +2954,15 @@ func (c *Client) startContainer(ctx context.Context, appName string, stdin io.Re
 			return nil, failPreparedTask(fmt.Errorf("starting avahi bridge for app %q: %w", appID, err))
 		}
 	}
+	// List the service's recording streams in the live catalog before the
+	// entrypoint can write to them. streamOutput unlists them when the task
+	// exits; a start that fails below unlists them at once.
+	c.setDataStreamsListed(appID, serviceName, true)
+	defer func() {
+		if !taskStarted {
+			c.setDataStreamsListed(appID, serviceName, false)
+		}
+	}()
 	// Order the release of the entrypoint against whole-app StopContainer's
 	// appStopping marker. Per-container stop/delete also holds our keyed lock.
 	// The IO context survives RPC disconnect, but a request canceled during
@@ -4209,6 +4240,7 @@ func (c *Client) streamOutput(
 		c.withTaskOutputOwner(appName, outputOwner, func() {
 			recCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
+			c.unlistExitedDataStreams(recCtx, appName)
 			c.recordContainerExit(recCtx, appName, int32(code), classifyExit(code, taskOOMKilled(recCtx, task)), exitedAt)
 		})
 	}
@@ -5834,4 +5866,54 @@ func ensureDataSockets(provider AppDataSocketProvider, appID, service string, en
 		return "", fmt.Errorf("agent does not support recording streams")
 	}
 	return p.EnsureStreams(appID, service, streams)
+}
+
+// dataStreamAdvertiser is the optional capability of a data socket provider
+// to list one app service's recording streams in the live catalog. Their
+// sockets last as long as the container; the streams are listed only while
+// its task runs, from just before it starts, or from when a restarted agent
+// reattaches to it, until it stops or exits.
+type dataStreamAdvertiser interface {
+	AdvertiseStreams(appID, serviceName string)
+	UnadvertiseStreams(appID, serviceName string)
+}
+
+// setDataStreamsListed lists or unlists an app service's recording streams.
+// It does nothing for an app without streams or a provider that cannot list
+// them.
+func (c *Client) setDataStreamsListed(appID, serviceName string, listed bool) {
+	a, ok := c.dataSocketProvider.(dataStreamAdvertiser)
+	if !ok {
+		return
+	}
+	if listed {
+		a.AdvertiseStreams(appID, serviceName)
+	} else {
+		a.UnadvertiseStreams(appID, serviceName)
+	}
+}
+
+// unlistExitedDataStreams unlists the recording streams of a container whose
+// task exited. Its exit watcher knows only the container id; the container's
+// labels name its app and service.
+func (c *Client) unlistExitedDataStreams(ctx context.Context, containerID string) {
+	if _, ok := c.dataSocketProvider.(dataStreamAdvertiser); !ok {
+		return
+	}
+	ctx = c.withNamespace(ctx)
+	ctr, err := c.client.LoadContainer(ctx, containerID)
+	if err != nil {
+		if !errdefs.IsNotFound(err) {
+			c.logger.Warn("Failed to load container to unlist its data streams", zap.String("container_id", containerID), zap.Error(err))
+		}
+		return
+	}
+	labels, err := ctr.Labels(ctx)
+	if err != nil {
+		c.logger.Warn("Failed to read container labels to unlist its data streams", zap.String("container_id", containerID), zap.Error(err))
+		return
+	}
+	if appID, serviceName, err := containerOwnerFromLabels(containerID, labels); err == nil {
+		c.setDataStreamsListed(appID, serviceName, false)
+	}
 }

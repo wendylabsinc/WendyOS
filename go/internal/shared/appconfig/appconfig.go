@@ -611,6 +611,9 @@ func validateEntitlements(entitlements []Entitlement, prefix string) error {
 			if containsDotDot(e.Path) {
 				return fmt.Errorf("%s[%d]: persist path must not contain '..' components", prefix, i)
 			}
+			if UnderSystemAPIDirectory(e.Path) {
+				return fmt.Errorf("%s[%d]: persist path %q is reserved: the agent mounts the System API socket at %s", prefix, i, e.Path, SystemAPIContainerDirectory)
+			}
 		case EntitlementI2C:
 			if e.Device == "" {
 				return fmt.Errorf("%s[%d]: i2c entitlement requires a device", prefix, i)

@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/data"
+	"github.com/wendylabsinc/wendy/go/internal/agent/data/live"
 	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	recordingpb "github.com/wendylabsinc/wendy/go/proto/gen/recordingpb"
@@ -17,6 +19,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 )
@@ -252,6 +255,104 @@ func TestSystemAPIDataReadUnionsServices(t *testing.T) {
 	}
 }
 
+// A redeploy replaces a service's grant in place, with no Release first. With
+// the same grant nothing ends and a stream opened meanwhile reads the whole
+// app's scope; a narrower grant ends only the streams it no longer covers.
+func TestSystemAPIDataReadSurvivesSiblingRedeploy(t *testing.T) {
+	agent := newSystemDataTest(t)
+	readDetector := appconfig.Entitlement{Type: appconfig.EntitlementDataRead, Allowlist: []string{"apps/com.example.detector"}}
+	readThermal := appconfig.Entitlement{Type: appconfig.EntitlementDataRead, Allowlist: []string{"apps/com.example.thermal"}}
+	client := agentpbv2.NewDataServiceClient(agent.app("com.example.viewer", "api", readDetector))
+	detectorOnly := openLiveStream(t, client)
+	agent.app("com.example.viewer", "worker", readThermal)
+	union := openLiveStream(t, client)
+
+	if _, err := agent.sockets.Ensure("com.example.viewer", "worker", SystemAPIGrantFor([]appconfig.Entitlement{readThermal})); err != nil {
+		t.Fatal(err)
+	}
+	reopened := openLiveStream(t, client)
+	agent.record("com.example.thermal", "grid", "hot")
+	for name, stream := range map[string]agentpbv2.DataService_StreamDataClient{"open": union, "reopened": reopened} {
+		if r := recvLive(t, stream); r.GetStreamId() != "apps/com.example.thermal/grid" {
+			t.Fatalf("%s stream after an identical redeploy: %v", name, r)
+		}
+	}
+
+	// The worker comes back reading one thermal stream: the streams opened to
+	// read all of thermal end, the one opened before the worker joined does not.
+	if _, err := agent.sockets.Ensure("com.example.viewer", "worker", SystemAPIGrantFor([]appconfig.Entitlement{{Type: appconfig.EntitlementDataRead, Allowlist: []string{"apps/com.example.thermal/grid"}}})); err != nil {
+		t.Fatal(err)
+	}
+	if got := endOf(t, union); got != codes.Aborted {
+		t.Fatalf("stream over all of thermal after a narrower redeploy: got %v, want Aborted", got)
+	}
+	if got := endOf(t, reopened); got != codes.Aborted {
+		t.Fatalf("reopened stream after a narrower redeploy: got %v, want Aborted", got)
+	}
+	agent.record("com.example.detector", "markers", "boxes")
+	if r := recvLive(t, detectorOnly); string(r.GetPayload()) != "boxes" {
+		t.Fatalf("stream opened before the worker joined: %v", r)
+	}
+}
+
+// narrowingStream is a StreamData server stream that records what it sends
+// and runs onSend inside each Send, as a slow reader's Send would block while
+// the app's grant changes.
+type narrowingStream struct {
+	grpc.ServerStream // unused; the methods below are all StreamData calls
+	ctx               context.Context
+	subbed            chan struct{}
+	sent              []string
+	onSend            func()
+}
+
+func (s *narrowingStream) Context() context.Context { return s.ctx }
+func (s *narrowingStream) SendHeader(metadata.MD) error {
+	close(s.subbed)
+	return nil
+}
+func (s *narrowingStream) Send(r *agentpbv2.DataRecord) error {
+	s.sent = append(s.sent, r.GetStreamId())
+	if s.onSend != nil {
+		s.onSend()
+		s.onSend = nil
+	}
+	return nil
+}
+
+// A narrowed stream ends at once, even for a reader that always has a record
+// waiting: it never sends a record the new scope leaves out.
+func TestSystemAPIDataReadNarrowStopsWaitingRecords(t *testing.T) {
+	hub := live.NewHub(live.Limits{})
+	scope := []string{"apps/com.example.detector", "apps/com.example.thermal"}
+	svc := &systemDataService{hub: hub, scope: func() ([]string, cameraScope, bool) { return scope, cameraScope{}, true }}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	out := &narrowingStream{ctx: ctx, subbed: make(chan struct{})}
+	// While the first record is being sent, a thermal record arrives and the
+	// thermal grant goes away.
+	out.onSend = func() {
+		hub.Offer(&live.Record{StreamID: "apps/com.example.thermal/grid", Payload: []byte("hot")})
+		scope = []string{"apps/com.example.detector"}
+		svc.narrow()
+	}
+	done := make(chan error, 1)
+	go func() { done <- svc.StreamData(&agentpbv2.StreamDataRequest{}, out) }()
+	<-out.subbed
+	hub.Offer(&live.Record{StreamID: "apps/com.example.detector/markers", Payload: []byte("boxes")})
+	select {
+	case err := <-done:
+		if status.Code(err) != codes.Aborted {
+			t.Fatalf("narrowed stream ended with %v, want Aborted", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("narrowed stream did not end")
+	}
+	if !reflect.DeepEqual(out.sent, []string{"apps/com.example.detector/markers"}) {
+		t.Fatalf("sent %q, want only the record from before the narrowing", out.sent)
+	}
+}
+
 // An app's allowlist bounds the catalog as it bounds the records: the app
 // sees the catalog entries of the streams it may read and learns nothing of
 // the others, not even that they exist.
@@ -320,6 +421,28 @@ func TestSystemAPIDataReadSelection(t *testing.T) {
 	}
 }
 
+// The System API socket receives every selection the operator path accepts,
+// up to the largest.
+func TestSystemAPIDataReadLargestSelection(t *testing.T) {
+	agent := newSystemDataTest(t)
+	conn := agent.app("com.example.viewer", "", appconfig.Entitlement{Type: appconfig.EntitlementDataRead})
+	longest := func(n int) []string {
+		values := make([]string, maxStreamDataIDs)
+		for i := range values {
+			values[i] = fmt.Sprintf("agent/%0*d", n-len("agent/"), i)
+		}
+		return values
+	}
+	req := &agentpbv2.StreamDataRequest{StreamIds: longest(maxStreamDataIDBytes), StreamPrefixes: longest(maxStreamDataIDBytes), Schemas: longest(appconfig.MaxRecordingSchemaBytes), MaxRateHz: maxStreamDataRateHz, SendLatest: true}
+	if _, err := liveSelection(req); err != nil {
+		t.Fatalf("liveSelection refused the largest selection: %v", err)
+	}
+	if got, want := proto.Size(req), maxStreamDataRequestBytes(); got != want {
+		t.Fatalf("largest selection is %d bytes, maxStreamDataRequestBytes says %d", got, want)
+	}
+	openLiveStreamWith(t, agentpbv2.NewDataServiceClient(conn), req)
+}
+
 func TestCoversScope(t *testing.T) {
 	for _, tc := range []struct {
 		scope, within []string
@@ -367,4 +490,62 @@ func TestSystemAPIDataReadPerAppCap(t *testing.T) {
 	}
 	other := agent.app("com.example.other", "", appconfig.Entitlement{Type: appconfig.EntitlementDataRead})
 	openLiveStream(t, agentpbv2.NewDataServiceClient(other))
+}
+
+// Apps together cannot take every live data slot either: however many
+// data-read apps a device runs, operators keep their reserved slots.
+func TestSystemAPIDataReadLeavesOperatorSlots(t *testing.T) {
+	agent := newSystemDataTest(t)
+	readAll := appconfig.Entitlement{Type: appconfig.EntitlementDataRead}
+	// openStream reports how a stream started: OK once its subscription is in
+	// place. cancel ends it.
+	openStream := func(client agentpbv2.DataServiceClient) (code codes.Code, cancel context.CancelFunc) {
+		t.Helper()
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		t.Cleanup(cancel)
+		stream, err := client.StreamData(ctx, &agentpbv2.StreamDataRequest{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if md, err := stream.Header(); err == nil && md != nil {
+			return codes.OK, cancel
+		}
+		_, err = stream.Recv()
+		return status.Code(err), cancel
+	}
+	appSlots := live.DefaultLimits.MaxSubscribers - reservedOperatorDataStreams
+	var open []context.CancelFunc
+	for i := 0; len(open) < appSlots; i++ {
+		client := agentpbv2.NewDataServiceClient(agent.app(fmt.Sprintf("com.example.app%d", i), "", readAll))
+		for j := 0; j < maxAppDataStreams && len(open) < appSlots; j++ {
+			code, cancel := openStream(client)
+			if code != codes.OK {
+				t.Fatalf("app stream %d: %v", len(open)+1, code)
+			}
+			open = append(open, cancel)
+		}
+	}
+	late := agentpbv2.NewDataServiceClient(agent.app("com.example.late", "", readAll))
+	if code, _ := openStream(late); code != codes.ResourceExhausted {
+		t.Fatalf("app stream past the apps' share: got %v, want ResourceExhausted", code)
+	}
+	for i := 0; i < reservedOperatorDataStreams; i++ {
+		sub, err := agent.capture.Live().Subscribe(live.Selection{})
+		if err != nil {
+			t.Fatalf("operator subscription %d: %v", i+1, err)
+		}
+		t.Cleanup(sub.Close)
+	}
+
+	// A stream that ends gives its slot back.
+	open[0]()
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+		code, _ := openStream(late)
+		if code == codes.OK {
+			break
+		}
+		if code != codes.ResourceExhausted || time.Now().After(deadline) {
+			t.Fatalf("after an app stream ended: got %v, want OK", code)
+		}
+	}
 }

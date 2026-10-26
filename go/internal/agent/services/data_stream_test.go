@@ -101,6 +101,10 @@ func TestLiveSelection(t *testing.T) {
 			t.Fatalf("rate %v: got %v, want InvalidArgument", rate, err)
 		}
 	}
+	// Any schema an app stream may declare can be selected.
+	if _, err = liveSelection(&agentpbv2.StreamDataRequest{Schemas: []string{strings.Repeat("x", appconfig.MaxRecordingSchemaBytes)}}); err != nil {
+		t.Fatalf("longest app schema: %v", err)
+	}
 }
 
 func TestStreamDataRejectsBadSelection(t *testing.T) {
@@ -113,12 +117,16 @@ func TestStreamDataRejectsBadSelection(t *testing.T) {
 	for i := range tooMany {
 		tooMany[i] = "apps/a/s"
 	}
-	for _, ids := range [][]string{tooMany, {""}, {strings.Repeat("x", maxStreamDataIDBytes+1)}} {
-		for _, req := range []*agentpbv2.StreamDataRequest{{StreamIds: ids}, {StreamPrefixes: ids}, {Schemas: ids}} {
-			err := service.StreamData(req, newFakeDataRecordStream(localAdminSocketCtx()))
-			if status.Code(err) != codes.InvalidArgument {
-				t.Fatalf("selection %v: got %v, want InvalidArgument", req, err)
-			}
+	long, longSchema := []string{strings.Repeat("x", maxStreamDataIDBytes+1)}, []string{strings.Repeat("x", appconfig.MaxRecordingSchemaBytes+1)}
+	var requests []*agentpbv2.StreamDataRequest
+	for _, ids := range [][]string{tooMany, {""}} {
+		requests = append(requests, &agentpbv2.StreamDataRequest{StreamIds: ids}, &agentpbv2.StreamDataRequest{StreamPrefixes: ids}, &agentpbv2.StreamDataRequest{Schemas: ids})
+	}
+	requests = append(requests, &agentpbv2.StreamDataRequest{StreamIds: long}, &agentpbv2.StreamDataRequest{StreamPrefixes: long}, &agentpbv2.StreamDataRequest{Schemas: longSchema})
+	for _, req := range requests {
+		err := service.StreamData(req, newFakeDataRecordStream(localAdminSocketCtx()))
+		if status.Code(err) != codes.InvalidArgument {
+			t.Fatalf("selection %v: got %v, want InvalidArgument", req, err)
 		}
 	}
 	if m.Live().Subscribed() {
@@ -328,12 +336,17 @@ func TestStreamDataOverLocalSocket(t *testing.T) {
 	if r.GetStreamId() != "apps/test.app/worker/markers" || r.GetSchema() != "wendy.data.v1.VideoMarkers" || string(r.GetPayload()) != "first" || r.GetTimestampUnixNanos() < before {
 		t.Fatalf("record: %v", r)
 	}
+	// Both viewers take "first" before "second" is recorded, or the newest
+	// record of the stream would rightly replace it for the slower one.
+	if r = recvLive(t, all); string(r.GetPayload()) != "first" {
+		t.Fatalf("empty selection: got %q, want %q", r.GetPayload(), "first")
+	}
 	record("other", "unselected")
 	record("markers", "second")
 	if r = recvLive(t, selected); string(r.GetPayload()) != "second" {
 		t.Fatalf("selection let another stream through: %v", r)
 	}
-	for _, want := range []string{"first", "unselected", "second"} {
+	for _, want := range []string{"unselected", "second"} {
 		if r = recvLive(t, all); string(r.GetPayload()) != want {
 			t.Fatalf("empty selection: got %q, want %q", r.GetPayload(), want)
 		}
@@ -475,5 +488,66 @@ func TestStreamDataOverMutualTLS(t *testing.T) {
 	}
 	if r := recvLive(t, user); r.GetStreamId() != "apps/test.app/markers" || string(r.GetPayload()) != "boxes" {
 		t.Fatalf("record: %v", r)
+	}
+}
+
+// A viewer that stops reading fills its flow-control window, and Send then
+// blocks. The handler must end the stream after streamDataStallTimeout and
+// free its hub slot rather than hold the slot for as long as the connection
+// lives, which 32 such viewers would turn into a lockout of every other.
+func TestStreamDataEndsStalledStream(t *testing.T) {
+	old := streamDataStallTimeout
+	streamDataStallTimeout = 200 * time.Millisecond
+	t.Cleanup(func() { streamDataStallTimeout = old })
+	dir, err := os.MkdirTemp("", "wds")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	path := filepath.Join(dir, "agent.sock")
+	lis, err := localsocket.Listen(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := data.NewManager(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	serveDataService(t, lis, m)
+	// A fixed window turns off the client's window growth, so a client that
+	// never calls Recv stalls the stream after its first 64 KiB.
+	client := dialDataService(t, "unix://"+path, grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithInitialWindowSize(64<<10), grpc.WithInitialConnWindowSize(64<<10))
+	// No deadline: the stream must end because the agent ends it.
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	stalled, err := client.StreamData(ctx, &agentpbv2.StreamDataRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := stalled.Header(); err != nil {
+		t.Fatal(err)
+	}
+	frame := make([]byte, data.MaxRecordingPacket)
+	for _, stream := range []string{"frames0", "frames1", "frames2", "frames3"} {
+		if _, err := m.RecordStream("test.app", "", stream, liveMarkersStream, &recordingpb.Record{Payload: frame}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for m.Live().Subscribed() {
+		if time.Now().After(deadline) {
+			t.Fatal("a stalled viewer still holds its hub slot")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	// The viewer reads what was sent before the stall, then the reason.
+	for {
+		if _, err = stalled.Recv(); err != nil {
+			break
+		}
+	}
+	if status.Code(err) != codes.DeadlineExceeded || !strings.Contains(err.Error(), "agent ended the stream") {
+		t.Fatalf("stalled viewer ended with %v, want the agent's DeadlineExceeded", err)
 	}
 }

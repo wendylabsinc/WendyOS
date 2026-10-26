@@ -67,7 +67,7 @@ timestamps to fit the packet budget. This is not a bulk video transport.
 Every stream is also live: `wendy data stream` prints records as the agent
 accepts them. An app that reads other apps' streams declares `data-read`, not
 `admin`, and calls `DataService.StreamData` on `WENDY_SYSTEM_SOCKET`. Narrow it
-with an `allowlist` of stream ids or prefixes, such as
+with an `allowlist` of stream id prefixes that match at a `/`, such as
 `apps/com.example.detector`; the stream catalog, `_streams/<stream-id>`, then
 lists only the streams it admits. Stream ids are
 `apps/<app-id>/<service>/<stream>`, or `apps/<app-id>/<stream>` without a service

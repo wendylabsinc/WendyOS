@@ -687,21 +687,26 @@ the newest record of each stream, if that is at most 10 seconds old and 256 KiB.
 Use `export-stream` or an Episode when every record matters.
 
 A record's time is the time its data describes, on the device's wall clock, the
-clock video frames use. For a durable or live record it is the first sample time of
-`UNIX`, `CLOCK_REALTIME` or `CLOCK_BOOTTIME` timing, or its client boot time when
-the agent accepted it. Otherwise it is the agent's receipt time, which is what
-every lightweight record gets. Campaign inference markers carry the time of the
-camera frame they were found in, the `timestamp_ns` of that video frame. A thermal
-grid and its markers carry the `timestamp_ns` of the raw frame they were read from,
-as a raw video subscriber sees it. A SensorLink frame has no capture time, so its
-brightness grid carries the time the agent received the frame.
+clock video frames use. It is the first sample time of a durable or live record's
+timing, or of the timing inside a `wendy.agent.apps.v1.TimeSeriesBatch` payload in
+any mode, when that timing is on `UNIX` or `CLOCK_REALTIME`, or on `CLOCK_BOOTTIME`
+with the boot id of the device's current boot. Otherwise it is a durable or live
+record's client boot time when the agent accepted it, and failing that the agent's
+receipt time, which is what every other lightweight record gets. Campaign inference
+markers carry the time of the camera frame they were found in, the `timestamp_ns`
+of that video frame. A thermal grid and its markers carry the `timestamp_ns` of the
+raw frame they were read from, as a raw video subscriber sees it. A SensorLink frame
+has no capture time, so its brightness grid carries the time the agent received the
+frame.
 
 The stream is served over mutual TLS to user certificates, on the LAN or through
-Wendy Cloud, and on the device's local admin socket. A device that has not been
-provisioned yet does not serve it. An app reads it on its System API socket with
-the [`data-read` entitlement](/docs/advanced/apps/wendy.json#data-read), limited
-to the streams its allowlist admits, and to the agent's camera streams of the
-cameras its `camera` entitlement grants; the catalog lists only those.
+Wendy Cloud, and on the device's local admin socket, which an app with the `admin`
+entitlement reaches whether or not the device is enrolled. The plaintext listener
+of a device that is not enrolled refuses it: run `wendy device enroll` first, or
+reconnect using the device's enrolled endpoint. An app reads it on its System API
+socket with the [`data-read` entitlement](/docs/advanced/apps/wendy.json#data-read),
+limited to the streams its allowlist admits, and to the agent's camera streams of
+the cameras its `camera` entitlement grants; the catalog lists only those.
 
 #### Live-only streams
 
@@ -776,12 +781,15 @@ Each event is one JSON record: `stream_id`, `timestamp_unix_nanos` (a string),
 sensor sample the record describes, when its publisher names one). A payload whose
 schema the CLI knows, such as the standard `wendy.data.v1` types and the catalog, is
 protobuf JSON with proto field names, a payload that is already a JSON object or
-array is passed through, and any other payload is a base64 string. The query
+array is passed through, and any other payload is a base64 string. A
+`wendy.data.v1.VideoMarkers` payload always has `markers`, an empty list when there
+are none, which tells a viewer to clear the camera's boxes. The query
 parameters `stream`, `prefix` and `schema` replace the command line's selection for
 one request, for example `/live?prefix=_streams/`. Companion web reads it with
 `VITE_WENDY_DATA_LIVE_URL=http://127.0.0.1:8090/live`.
 
 The proxy has no authentication of its own, so it listens only on a loopback
-address, answers only requests addressed to one, and allows only pages served from
-this computer. Each browser connection is one subscription on the device, which
-serves at most 32 at a time.
+address, answers only requests addressed to one, and refuses requests that a browser
+marks as coming from a page of another site, by their `Origin` or `Sec-Fetch-Site`
+header. Only a page served from this computer can read the stream. Each browser
+connection is one subscription on the device, which serves at most 32 at a time.

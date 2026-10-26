@@ -55,6 +55,34 @@ func TestMarkersCameraIsTheViewersName(t *testing.T) {
 	}
 }
 
+// Boxes stay valid for three of the camera's measured scoring intervals, not
+// the configured rate's: four cameras on a model that takes a second each are
+// each scored every four seconds, even at 30 Hz.
+func TestMarkersValidForFollowsTheCamerasPace(t *testing.T) {
+	const rate = 30
+	cadence := markersCadence{}
+	start := time.Now()
+	at := func(d time.Duration) time.Time { return start.Add(d) }
+	for _, step := range []struct {
+		name       string
+		source     string
+		generation uint64
+		at         time.Time
+		want       time.Duration
+	}{
+		{"first frame", "v4l2:/dev/video0", 1, at(0), markersValidFor(rate)},
+		{"other camera's first frame", "v4l2:/dev/video2", 1, at(time.Second), markersValidFor(rate)},
+		{"scored 4s later", "v4l2:/dev/video0", 1, at(4 * time.Second), 12 * time.Second},
+		{"scored 100ms later: never below the minimum", "v4l2:/dev/video0", 1, at(4*time.Second + 100*time.Millisecond), markersValidFor(rate)},
+		{"other camera 5s later", "v4l2:/dev/video2", 1, at(6 * time.Second), 15 * time.Second},
+		{"reconnected", "v4l2:/dev/video0", 2, at(60 * time.Second), markersValidFor(rate)},
+	} {
+		if got := cadence.validFor(step.source, step.generation, step.at, rate); got != step.want {
+			t.Errorf("%s: valid for %v, want %v", step.name, got, step.want)
+		}
+	}
+}
+
 func nextMarkers(t *testing.T, sub *live.Subscriber) (*live.Record, *datapb.VideoMarkers) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
@@ -119,9 +147,10 @@ func TestAgentInferencePublishesLiveMarkers(t *testing.T) {
 	// The next frame reaches the viewer and the episode alike.
 	session.results <- result(3, person)
 	record, _ = nextMarkers(t, sub)
-	// The viewer gets a frame before the episode copy is written. Publishing
-	// holds streamMu through both, so once the frame after it is live, this
-	// one is in the episode and stopping cannot cut it off.
+	// The viewer gets a frame before the episode copy is written. Publish
+	// returns once the copy is written, and the job publishes one frame at a
+	// time, so once the frame after it is live, this one is in the episode
+	// and stopping cannot cut it off.
 	session.results <- result(4, person)
 	if next, _ := nextMarkers(t, sub); next.SampleID != 4 {
 		t.Fatalf("live record after frame 3 names sample %d, want 4", next.SampleID)

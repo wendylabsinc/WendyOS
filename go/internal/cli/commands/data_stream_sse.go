@@ -16,7 +16,7 @@ import (
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	// The standard payload types: linked in, they are in the registry that
 	// livePayloadJSON renders from.
-	_ "github.com/wendylabsinc/wendy/go/proto/gen/datapb"
+	"github.com/wendylabsinc/wendy/go/proto/gen/datapb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -29,23 +29,26 @@ import (
 // proxies and browsers do not close it.
 const sseKeepalive = 15 * time.Second
 
+// listenLiveSSE binds the live proxy's address, which must be a loopback one.
+func listenLiveSSE(addr string) (net.Listener, error) {
+	if err := requireLoopbackAddr(addr); err != nil {
+		return nil, err
+	}
+	return net.Listen("tcp", addr)
+}
+
 // serveLiveSSE serves the device's live records to browsers on this computer
 // as Server-Sent Events at http://addr/live, until ctx ends. It is the bridge
 // for browser viewers until Wendy Cloud relays the stream: Companion web reads
-// it with VITE_WENDY_DATA_LIVE_URL=http://addr/live.
+// it with VITE_WENDY_DATA_LIVE_URL=http://addr/live. lis, from listenLiveSSE,
+// listens on addr.
 //
 // Each request opens its own StreamData subscription with req's selection,
 // unless its query names streams. The proxy has no authentication of its own,
 // so it listens only on a loopback address, answers only requests addressed
-// to one, and allows only loopback origins.
-func serveLiveSSE(ctx context.Context, client agentpbv2.DataServiceClient, addr string, req *agentpbv2.StreamDataRequest, errOut io.Writer) error {
-	if err := requireLoopbackAddr(addr); err != nil {
-		return err
-	}
-	lis, err := net.Listen("tcp", addr)
-	if err != nil {
-		return err
-	}
+// to one, and refuses requests a browser marks as coming from another site:
+// by an Origin that is not loopback or, without an Origin, by Sec-Fetch-Site.
+func serveLiveSSE(ctx context.Context, client agentpbv2.DataServiceClient, lis net.Listener, req *agentpbv2.StreamDataRequest, errOut io.Writer) error {
 	server := &http.Server{
 		Handler:           liveSSEHandler(client, req),
 		ReadHeaderTimeout: 10 * time.Second,
@@ -56,7 +59,8 @@ func serveLiveSSE(ctx context.Context, client agentpbv2.DataServiceClient, addr 
 		<-ctx.Done()
 		_ = server.Close()
 	}()
-	if err = server.Serve(lis); errors.Is(err, http.ErrServerClosed) {
+	err := server.Serve(lis)
+	if errors.Is(err, http.ErrServerClosed) {
 		return nil
 	}
 	return err
@@ -73,6 +77,13 @@ func requireLoopbackAddr(addr string) error {
 func liveSSEHandler(client agentpbv2.DataServiceClient, base *agentpbv2.StreamDataRequest) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /live", func(w http.ResponseWriter, r *http.Request) {
+		// The pattern also matches HEAD, which gets no events and must not
+		// open a device subscription.
+		if r.Method == http.MethodHead {
+			w.Header().Set("Allow", http.MethodGet)
+			http.Error(w, "the live proxy serves events to GET requests only", http.StatusMethodNotAllowed)
+			return
+		}
 		// A page from another site may rebind its own name to 127.0.0.1, or
 		// fetch this address directly. Neither may read device data.
 		if !isLoopbackHost(r.Host) {
@@ -87,6 +98,13 @@ func liveSSEHandler(client agentpbv2.DataServiceClient, base *agentpbv2.StreamDa
 			}
 			w.Header().Set("Access-Control-Allow-Origin", origin)
 			w.Header().Add("Vary", "Origin")
+		} else if r.Header.Get("Sec-Fetch-Site") == "cross-site" {
+			// A cross-site request without an Origin, such as an <img> or a
+			// no-cors fetch, cannot read the events, but would hold one of the
+			// device's subscriptions. Browsers send this header; curl and other
+			// tools send neither, and are served.
+			http.Error(w, "the live proxy allows only pages served from this computer", http.StatusForbidden)
+			return
 		}
 		flusher, ok := w.(http.Flusher)
 		if !ok {
@@ -232,12 +250,19 @@ func liveJSON(r *agentpbv2.DataRecord) liveJSONRecord {
 // already a JSON object or array, as an app stream of media type
 // application/json carries, is passed through. Anything else is a base64
 // string, as protobuf JSON writes bytes.
+//
+// VideoMarkers always has its markers list, empty for a frame with no
+// detections, which protobuf JSON would leave out: the empty list is what
+// tells a viewer to clear the camera's boxes.
 func livePayloadJSON(schema string, payload []byte) json.RawMessage {
 	var out bytes.Buffer
 	if t, err := protoregistry.GlobalTypes.FindMessageByName(protoreflect.FullName(schema)); err == nil {
 		m := t.New().Interface()
 		if proto.Unmarshal(payload, m) == nil {
 			if b, err := (protojson.MarshalOptions{UseProtoNames: true}).Marshal(m); err == nil && json.Compact(&out, b) == nil {
+				if markers, ok := m.(*datapb.VideoMarkers); ok && len(markers.GetMarkers()) == 0 {
+					return withEmptyMarkers(out.Bytes())
+				}
 				return out.Bytes()
 			}
 		}
@@ -247,4 +272,14 @@ func livePayloadJSON(schema string, payload []byte) json.RawMessage {
 	}
 	b, _ := json.Marshal(base64.StdEncoding.EncodeToString(payload))
 	return b
+}
+
+// withEmptyMarkers adds "markers":[] to the compact JSON object of a
+// VideoMarkers that has none.
+func withEmptyMarkers(object []byte) json.RawMessage {
+	const key = `"markers":[]`
+	if string(object) == "{}" {
+		return json.RawMessage("{" + key + "}")
+	}
+	return json.RawMessage("{" + key + "," + string(object[1:]))
 }

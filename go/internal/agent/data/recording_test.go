@@ -265,6 +265,80 @@ func TestRecordingTypedTimeSeries(t *testing.T) {
 	}
 }
 
+// A time-series record needs a sample time. Live records are envelopes, as
+// durable ones are, and follow the same rule: the time comes from the
+// envelope's timing, a configured timestampField, or a TimeSeriesBatch's own
+// timing.
+func TestRecordingTimeSeriesNeedsTiming(t *testing.T) {
+	series := &appconfig.RecordingTimeSeries{Clock: "UNIX", Channels: []appconfig.RecordingChannel{{Name: "temperature", Type: "float64", Unit: "Cel"}}}
+	withField := &appconfig.RecordingTimeSeries{Clock: "UNIX", TimestampField: "t", Channels: series.Channels}
+	batch, _ := proto.Marshal(&recordingpb.TimeSeriesBatch{Timing: &recordingpb.SampleTiming{Clock: "UNIX", Count: 1, TimestampsNanos: []int64{100}}, Columns: []*recordingpb.SampleColumn{{Values: &recordingpb.SampleColumn_Float64Values{Float64Values: &recordingpb.Float64Values{Values: []float64{21.5}}}}}})
+	timing := &recordingpb.SampleTiming{Clock: "UNIX", Count: 1, TimestampsNanos: []int64{100}}
+	for _, mode := range []string{"durable", "live"} {
+		for _, tc := range []struct {
+			name   string
+			cfg    appconfig.RecordingStream
+			record *recordingpb.Record
+			ok     bool
+		}{
+			{"envelope timing", appconfig.RecordingStream{Schema: "example.Temperature", TimeSeries: series}, &recordingpb.Record{Payload: []byte("21.5"), Timing: timing}, true},
+			{"batch timing", appconfig.RecordingStream{Schema: "wendy.agent.apps.v1.TimeSeriesBatch", TimeSeries: series}, &recordingpb.Record{Payload: batch}, true},
+			{"timestampField", appconfig.RecordingStream{Schema: "example.Temperature", TimeSeries: withField}, &recordingpb.Record{Payload: []byte(`{"t":100}`)}, true},
+			{"no timing", appconfig.RecordingStream{Schema: "example.Temperature", TimeSeries: series}, &recordingpb.Record{Payload: []byte("21.5")}, false},
+		} {
+			t.Run(mode+"/"+tc.name, func(t *testing.T) {
+				tc.cfg.Mode, tc.cfg.MediaType = mode, "application/protobuf"
+				if mode == "durable" {
+					tc.record.Id = "one"
+				}
+				if err := validateStreamRecord(tc.cfg, tc.record); (err == nil) != tc.ok {
+					t.Fatalf("got %v, want ok=%v", err, tc.ok)
+				}
+			})
+		}
+	}
+}
+
+// A live-only record stops after the live offer: it releases the offer lock
+// and takes no place in the order recorded records wait in, so the records
+// after it, recorded or live-only, on any stream, arrive at once.
+func TestLiveModeRecordDoesNotHoldUpLaterRecords(t *testing.T) {
+	m, err := NewManager(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	sub := liveSubscriber(t, m)
+	text := appconfig.RecordingStream{Mode: "lightweight", MediaType: "text/plain"}
+	for i, step := range []struct {
+		stream string
+		cfg    appconfig.RecordingStream
+		record *recordingpb.Record
+	}{
+		{"markers", liveModeMarkers, &recordingpb.Record{Payload: []byte("boxes")}},
+		{"frames", durableTestStream, testRecord("first")},
+		{"markers", liveModeMarkers, &recordingpb.Record{Payload: []byte("more boxes")}},
+		{"markers", liveModeMarkers, &recordingpb.Record{Payload: []byte("still more boxes")}},
+		{"text", text, &recordingpb.Record{Payload: []byte("hello")}},
+	} {
+		done := make(chan error, 1)
+		go func() {
+			_, err := m.RecordStream("test.app", "", step.stream, step.cfg, step.record)
+			done <- err
+		}()
+		select {
+		case err := <-done:
+			if err != nil {
+				t.Fatalf("%s: %v", step.stream, err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("record %d, on %s, did not return", i+1, step.stream)
+		}
+		if d := nextLive(t, sub); d.Record.StreamID != "apps/test.app/"+step.stream || !bytes.Equal(d.Record.Payload, step.record.GetPayload()) {
+			t.Fatalf("record %d: live record %s, want the one on %s", i+1, d.Record.StreamID, step.stream)
+		}
+	}
+}
+
 func TestRecordingSegmentOrderSurvivesWallClockStep(t *testing.T) {
 	m, _ := NewManager(t.TempDir())
 	j, _ := m.recordings.journal("test.app", "", "frames")

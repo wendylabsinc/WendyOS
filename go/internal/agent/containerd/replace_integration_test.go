@@ -335,7 +335,9 @@ func TestIntegrationFailedRedeployLeavesOldHostSocketsAlone(t *testing.T) {
 
 // A redeploy releases the old container's sockets before the new container
 // claims them (each provider records one owner per service, so the reverse
-// order would drop the new claim), and the new container mounts them.
+// order would drop the new claim), and the new container mounts them. A
+// System API owner is not released: the new container's Ensure replaces it,
+// so the app's data-read scope never narrows in between.
 func TestIntegrationRedeployHandsHostSocketsToNewContainer(t *testing.T) {
 	c, ctx := newIntegrationClient(t)
 	proxyDir := shortTempDir(t)
@@ -354,7 +356,7 @@ func TestIntegrationRedeployHandsHostSocketsToNewContainer(t *testing.T) {
 		t.Fatalf("CreateContainerWithProgress: %v", err)
 	}
 
-	wantCalls := []string{"system-api release", "data release", "system-api ensure", "data ensure"}
+	wantCalls := []string{"data release", "system-api ensure", "data ensure"}
 	if !reflect.DeepEqual(log.calls, wantCalls) {
 		t.Fatalf("socket calls = %v, want %v", log.calls, wantCalls)
 	}
@@ -385,6 +387,41 @@ func TestIntegrationRedeployHandsHostSocketsToNewContainer(t *testing.T) {
 		if seen[dest] != 1 {
 			t.Errorf("new container mounts %s %d times, want once", dest, seen[dest])
 		}
+	}
+}
+
+// The old container's System API owner is released all the same when the new
+// container has no System API entitlement, or when the redeploy fails after
+// the swap, before the new container's Ensure replaced it.
+func TestIntegrationRedeployReleasesSystemAPIOwnerItDoesNotReplace(t *testing.T) {
+	withoutSystemAPI := []appconfig.Entitlement{{Type: appconfig.EntitlementBluetooth}, {Type: appconfig.EntitlementEpisodeWrite}}
+	for _, tc := range []struct {
+		name         string
+		entitlements []appconfig.Entitlement
+		proxyErr     error
+		wantCalls    []string
+	}{
+		{"System API dropped", withoutSystemAPI, nil, []string{"system-api release", "data release", "data ensure"}},
+		{"failure after the swap", hostSocketEntitlements, errors.New("no D-Bus proxy"), []string{"data release", "system-api release"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, ctx := newIntegrationClient(t)
+			log := &socketCallLog{}
+			c.proxyManager = &recordingProxyManager{dir: shortTempDir(t), err: tc.proxyErr}
+			c.systemAPISocketProvider = &orderedSystemAPIProvider{t: t, log: log, dir: shortTempDir(t)}
+			c.dataSocketProvider = &orderedDataProvider{t: t, log: log, dir: shortTempDir(t)}
+			startOldApp(t, c, ctx, pullReplaceTestImage(t, c, ctx), "replaced-app", hostSocketEntitlements)
+
+			req := &agentpb.CreateContainerRequest{AppName: "replaced-app", ImageName: replaceTestImage}
+			cfg := &appconfig.AppConfig{AppID: "replaced-app", Version: "2", Entitlements: tc.entitlements}
+			err := c.CreateContainerWithProgress(ctx, req, cfg, nil)
+			if (err != nil) != (tc.proxyErr != nil) {
+				t.Fatalf("CreateContainerWithProgress: %v", err)
+			}
+			if !reflect.DeepEqual(log.calls, tc.wantCalls) {
+				t.Fatalf("socket calls = %v, want %v", log.calls, tc.wantCalls)
+			}
+		})
 	}
 }
 

@@ -52,3 +52,29 @@ func TestAppSystemAPIOwnersFromLabelsRestoresDataReadAllowlist(t *testing.T) {
 		t.Fatalf("owners = %+v, want %+v", got, want)
 	}
 }
+
+// Every data-read allowlist the agent accepts comes back from the container
+// labels as it went in, so a restart never changes an app's read scope. It
+// refuses those that would not: [""] would come back as no allowlist, which
+// reads every stream, and an entry with a comma as two entries.
+func TestDataReadAllowlistSurvivesLabels(t *testing.T) {
+	for _, tc := range []struct {
+		allow   []string
+		changes bool
+	}{
+		{[]string{"apps/com.example.detector"}, false},
+		{[]string{"apps/com.example.detector/markers", "agent/campaign/people/markers/", "apps/"}, false},
+		{[]string{""}, true},
+		{[]string{"apps/a,agent/x"}, true},
+	} {
+		entitlements := []appconfig.Entitlement{{Type: appconfig.EntitlementDataRead, Allowlist: tc.allow}}
+		created := services.SystemAPIGrantFor(entitlements)
+		restored := services.SystemAPIGrantFor(parseEntitlementsFromAnnotations(appconfig.BuildEntitlementAnnotations(entitlements)))
+		if changed := !reflect.DeepEqual(created, restored); changed != tc.changes {
+			t.Fatalf("allowlist %q: restored %+v from %+v", tc.allow, restored, created)
+		}
+		if accepted := appconfig.ValidateDataReadAllowlists(entitlements) == nil; accepted == tc.changes {
+			t.Errorf("allowlist %q: accepted=%v, but the labels change it=%v", tc.allow, accepted, tc.changes)
+		}
+	}
+}

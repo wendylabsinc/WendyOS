@@ -118,8 +118,10 @@ type AppSystemAPISocketManager struct {
 	// liveData serves the data-read capability. Nil leaves data-read
 	// unavailable: Ensure refuses a grant that asks for it.
 	liveData *live.Hub
-	mu       sync.RWMutex
-	sockets  map[string]*appSystemAPISocket
+	// appDataStreams counts the live data streams all apps hold open.
+	appDataStreams *appDataStreamQuota
+	mu             sync.RWMutex
+	sockets        map[string]*appSystemAPISocket
 }
 
 func NewAppSystemAPISocketManager(
@@ -133,6 +135,7 @@ func NewAppSystemAPISocketManager(
 		logger:             logger,
 		notificationSender: notificationSender,
 		liveData:           liveData,
+		appDataStreams:     newAppDataStreamQuota(),
 		sockets:            make(map[string]*appSystemAPISocket),
 	}
 	go func() {
@@ -228,8 +231,14 @@ func (m *AppSystemAPISocketManager) Ensure(appID, serviceName string, grant Syst
 		appID:  appID,
 		owners: map[string]SystemAPIGrant{owner: grant},
 	}
+	// A notification fits in 16 KiB. data-read takes the largest selection
+	// the operator path accepts.
+	maxRecv := 16 * 1024
+	if m.liveData != nil {
+		maxRecv = max(maxRecv, maxStreamDataRequestBytes())
+	}
 	server := grpc.NewServer(
-		grpc.MaxRecvMsgSize(16*1024),
+		grpc.MaxRecvMsgSize(maxRecv),
 		grpc.MaxConcurrentStreams(16),
 		grpc.UnaryInterceptor(m.authorize(socket)),
 		// Without a stream interceptor a streaming method would skip the
@@ -240,7 +249,7 @@ func (m *AppSystemAPISocketManager) Ensure(appID, serviceName string, grant Syst
 	socket.server = server
 	systempb.RegisterNotificationServiceServer(server, NewSystemNotificationService(appID, m.notificationSender))
 	if m.liveData != nil {
-		socket.data = &systemDataService{hub: m.liveData, scope: func() ([]string, cameraScope, bool) {
+		socket.data = &systemDataService{hub: m.liveData, quota: m.appDataStreams, scope: func() ([]string, cameraScope, bool) {
 			m.mu.RLock()
 			defer m.mu.RUnlock()
 			allow, ok := dataReadScope(socket)
