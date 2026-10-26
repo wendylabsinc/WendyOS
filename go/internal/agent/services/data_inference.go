@@ -37,6 +37,8 @@ type wantedInference struct {
 	document bool
 	// ownerRef is a document's owner reference, or empty.
 	ownerRef string
+	// private marks an inference a leased watch owns; see ownedByLeasedWatch.
+	private bool
 }
 
 type campaignInferenceManager struct {
@@ -60,6 +62,8 @@ type campaignInferenceJob struct {
 	key      string
 	document bool
 	ownerRef string
+	// private keeps the job's events off the shared device-event journal.
+	private bool
 	// audience is a document job's current record audience, replaced (never
 	// mutated) under mu by run and read by the stream goroutines.
 	audience       map[string]bool
@@ -148,7 +152,7 @@ func (m *campaignInferenceManager) reconcile(ctx context.Context) {
 			continue
 		}
 		if document.IsEnabled() {
-			wanted[inferenceJobKey(stored.Name)] = wantedInference{campaign: document.Campaign(stored.Revision), document: true, ownerRef: document.Owner}
+			wanted[inferenceJobKey(stored.Name)] = wantedInference{campaign: document.Campaign(stored.Revision), document: true, ownerRef: document.Owner, private: m.ownedByLeasedWatch(document.Owner)}
 		}
 	}
 	m.mu.Lock()
@@ -181,10 +185,28 @@ func (m *campaignInferenceManager) reconcile(ctx context.Context) {
 			continue
 		}
 		child, cancel := context.WithCancel(ctx)
-		job := &campaignInferenceJob{owner: m, key: key, document: want.document, ownerRef: want.ownerRef, campaign: want.campaign, cancel: cancel, done: make(chan struct{}), queue: make(chan DetectionNotification, 16), generations: map[string]uint64{}, status: data.InferenceStatus{State: "loading", Sources: map[string]string{}}}
+		job := &campaignInferenceJob{owner: m, key: key, document: want.document, ownerRef: want.ownerRef, private: want.private, campaign: want.campaign, cancel: cancel, done: make(chan struct{}), queue: make(chan DetectionNotification, 16), generations: map[string]uint64{}, status: data.InferenceStatus{State: "loading", Sources: map[string]string{}}}
 		m.jobs[key] = job
 		go job.supervise(child)
 	}
+}
+
+// ownedByLeasedWatch reports whether owner names a leased watch, or a watch
+// that cannot be read. That watch's inference is private: like the watch's
+// journal entries, its events reach only the client that leased it, so they
+// stay off the device-event journal every reader shares (spec §6.5). A watch
+// cannot add or drop its lease, so the answer holds for the job's life.
+func (m *campaignInferenceManager) ownedByLeasedWatch(owner string) bool {
+	name, ok := strings.CutPrefix(owner, data.KindWatch+"/")
+	if !ok {
+		return false
+	}
+	stored, err := m.service.manager.Document(data.KindWatch, name)
+	if err != nil {
+		return true
+	}
+	watch, err := stored.Watch()
+	return err != nil || watch.Leased()
 }
 
 // reconcileNow runs one pass in the caller's goroutine; it returns once the
@@ -571,14 +593,14 @@ func (j *campaignInferenceJob) documentResult(state *inferencePresence, sourceID
 	if arrival && service.watches != nil {
 		service.watches.deliver(j.campaign.Name, inferenceNotification(j.campaign, sourceID, detections))
 	}
-	if _, err := service.manager.RecordApplicationFor(appID, record, audience, false); err != nil {
+	if _, err := service.manager.RecordApplicationFor(appID, record, audience, false, j.private); err != nil {
 		service.manager.Warnf("inference %q prediction: %v", j.campaign.Name, err)
 	}
 	if !arrival {
 		return
 	}
 	record.Type, record.Name = "event", j.campaign.Inference.Event
-	if _, err := service.manager.RecordApplicationFor(appID, record, audience, true); err != nil {
+	if _, err := service.manager.RecordApplicationFor(appID, record, audience, true, j.private); err != nil {
 		service.manager.Warnf("inference %q event: %v", j.campaign.Name, err)
 	}
 }

@@ -254,3 +254,42 @@ func TestOwnedInferenceWritesNothingOnceItsOwnersLeaseLapsed(t *testing.T) {
 		t.Fatalf("journal = %+v; want only the live frame's entry", entries)
 	}
 }
+
+// A leased watch's inference keeps its events off the shared device-event
+// journal, as the watch keeps its entries out of unfiltered notification reads
+// (spec §6.5). An unleased watch's inference writes there as before.
+func TestLeasedWatchesInferenceKeepsItsEventsOffTheDeviceEventJournal(t *testing.T) {
+	service, factory, sender := newDocumentTestService(t)
+	startDocumentTestService(t, service, factory, sender)
+	events := func() []string {
+		t.Helper()
+		items, _, _, err := service.manager.DeviceEvents("", "", "", true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var apps []string
+		for _, item := range items {
+			apps = append(apps, item.AppID)
+		}
+		return apps
+	}
+	arrive := func(watch, inference, lease string) {
+		t.Helper()
+		mustApply(t, service, watchYAML(watch, inference, lease))
+		mustApply(t, service, ownedInference(inference, "watch/"+watch))
+		session := receiveInference(t, factory.sessions)
+		session.results <- personResult(receiveInference(t, session.inputs))
+		eventually(t, "watch "+watch+"'s journal entry", func() bool { return len(journal(t, service, watch)) == 1 })
+	}
+
+	arrive("chat-1", "front-door", "lease: 60s\n")
+	if apps := events(); len(apps) != 0 {
+		t.Fatalf("a leased watch's inference wrote device events: %v", apps)
+	}
+
+	// Control: the same arrival under an unleased watch reaches the journal.
+	arrive("door", "back-door", "")
+	if apps := events(); !slices.Equal(apps, []string{"sh.wendy.inference.back-door"}) {
+		t.Fatalf("device events = %v; want only the unleased watch's inference", apps)
+	}
+}

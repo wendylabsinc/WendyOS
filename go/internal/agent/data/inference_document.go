@@ -22,17 +22,14 @@ const inferenceRevisionSchema = 1
 // arrival (spec §7). Its model fields are a campaign's inline inference block,
 // with the same type and validation.
 type InferenceDocument struct {
-	Kind              string           `json:"kind" yaml:"kind"`
-	Version           int              `json:"version" yaml:"version"`
-	Name              string           `json:"name" yaml:"name"`
-	Owner             string           `json:"owner,omitempty" yaml:"owner,omitempty"`
-	Sources           []CampaignSource `json:"sources" yaml:"sources"`
-	CampaignInference `yaml:",inline"`
+	datadoc.HeaderFields `yaml:",inline"`
+	Sources              []CampaignSource `json:"sources" yaml:"sources"`
+	CampaignInference    `yaml:",inline"`
 }
 
 func decodeInferenceDocument(_ datadoc.Header, contents []byte) (any, string, []string, error) {
 	var document InferenceDocument
-	if err := decodeDocumentStrict(contents, &document); err != nil {
+	if err := datadoc.DecodeStrict(contents, &document); err != nil {
 		return nil, "", nil, err
 	}
 	if err := document.validate(); err != nil {

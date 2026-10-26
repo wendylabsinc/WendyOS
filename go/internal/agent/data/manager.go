@@ -1133,33 +1133,34 @@ func (m *Manager) EndDownload(id string) {
 // RecordApplication validates and stamps an entitled application's record.
 // It returns buffered or recorded; protocol-level validation happens before it.
 func (m *Manager) RecordApplication(appID string, record ApplicationRecord) (string, error) {
-	return m.recordApplication(appID, record, true, nil)
+	return m.recordApplication(appID, record, true, nil, true)
 }
 
 // RecordCampaignApplication uses the same journal and timestamping as app
 // records, but the agent evaluates its campaign trigger synchronously against
 // the current revision rather than broadcasting it to every campaign.
 func (m *Manager) RecordCampaignApplication(appID string, record ApplicationRecord) (string, error) {
-	return m.recordApplication(appID, record, false, nil)
+	return m.recordApplication(appID, record, false, nil, true)
 }
 
 // RecordApplicationFor records an inference document's record into the
 // episodes of the named collections only: open ones now, later ones through
 // the pre-roll ring (spec §7.3). An empty audience keeps a prediction out of
-// the store entirely; an event still reaches the device-event journal and,
-// with observe, the trigger observer. The audience map must not change after
-// the call.
-func (m *Manager) RecordApplicationFor(appID string, record ApplicationRecord, audience map[string]bool, observe bool) (string, error) {
+// the store entirely; an event still reaches, with observe, the trigger
+// observer and, unless private, the device-event journal. A leased watch's
+// inference is private: its events are its client's alone (spec §6.5). The
+// audience map must not change after the call.
+func (m *Manager) RecordApplicationFor(appID string, record ApplicationRecord, audience map[string]bool, observe, private bool) (string, error) {
 	if audience == nil {
 		audience = map[string]bool{}
 	}
 	if len(audience) == 0 && record.Type != "event" {
 		return "buffered", nil
 	}
-	return m.recordApplication(appID, record, observe, audience)
+	return m.recordApplication(appID, record, observe, audience, !private)
 }
 
-func (m *Manager) recordApplication(appID string, record ApplicationRecord, observe bool, audience map[string]bool) (string, error) {
+func (m *Manager) recordApplication(appID string, record ApplicationRecord, observe bool, audience map[string]bool, journal bool) (string, error) {
 	// The receipt is sampled BEFORE m.mu is taken. It is the agent's statement
 	// of when this record arrived, so any wait for the lock belongs outside it:
 	// stamped after the wait, a record that queued behind a seal or another
@@ -1189,7 +1190,7 @@ func (m *Manager) recordApplication(appID string, record ApplicationRecord, obse
 		stamp = record.ClientBootNanos
 	}
 	stored := storedApplicationRecord{ApplicationRecord: record, AppID: appID, AgentReceiptBootNanos: receipt, ClientTimestampAccepted: accepted, TimestampUncertaintyNanos: (after - before + 1) / 2}
-	if record.Type == "event" {
+	if record.Type == "event" && journal {
 		if err := m.appendDeviceEvent(appID, record, agentBootID, receipt); err != nil {
 			return "rejected", err
 		}
