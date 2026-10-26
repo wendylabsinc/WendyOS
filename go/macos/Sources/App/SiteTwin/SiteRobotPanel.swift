@@ -380,9 +380,9 @@ final class SiteRobotMapModel: ObservableObject {
                 let mesh = try await SiteRobotGeometry.semantic(url, scale: scale)
                 var stored = try await BlockingWork.run(on: .global(qos: .userInitiated)) {
                     var map = try RobotReferenceStore.read(model: url, robot: robot, frame: f)
-                    let chairs = try SiteRobotGeometry.chairFootprints(url, scale: scale)
+                    let exclusions = try SiteRobotGeometry.referenceExclusions(url, scale: scale)
                     map.surfaces.removeAll { surface in
-                        chairs.contains { $0.contains(x: surface.position.X, z: -surface.position.Y) }
+                        exclusions.contains(x: surface.position.X, y: surface.position.Z, z: -surface.position.Y)
                     }
                     return map
                 }
@@ -699,7 +699,7 @@ struct SiteRobotLocalizationControls: View {
                      : "Check that the marker and heading match Go2.")
                     .font(.caption).foregroundStyle(candidate.coverage < 0.65 || candidate.rms > 0.20 ? .orange : .secondary)
                     .fixedSize(horizontal: false, vertical: true)
-                Text(String(format: "%.0f%% weighted surface agreement.", candidate.coverage*100))
+                Text(String(format: "%.0f%% surface agreement, not position confidence.", candidate.coverage*100))
                     .font(.caption2).foregroundStyle(.secondary)
                 Button("Confirm position") { model.confirmPosition() }
                     .buttonStyle(.borderedProminent)

@@ -125,14 +125,18 @@ final class RobotVisualLocalization {
         let (map, bytes) = try await BlockingWork.run(on: .global(qos: .userInitiated)) {
             let bytes = try Data(contentsOf: model)
             let original = try SiteVisualMap.read(visualURL, revision: revision, model: bytes)
-            let chairs = try SiteRobotGeometry.chairFootprints(model, scale: 1)
-            return (Self.removingChairReferences(from: original, chairs: chairs), bytes)
+            let exclusions = try SiteRobotGeometry.referenceExclusions(model, scale: 1)
+            return (Self.removingMovableReferences(from: original, exclusions: exclusions), bytes)
         }
         try await engine.load(map, revision: revision, model: bytes)
         self.revision = revision; loadedFrame = frame; loadedDigest = digest
     }
 
     nonisolated static func removingChairReferences(from map: SiteVisualMap, chairs: [SiteRobotGeometry.ChairFootprint]) -> SiteVisualMap {
+        removingMovableReferences(from: map, exclusions: .init(chairs: chairs, doors: []))
+    }
+
+    nonisolated static func removingMovableReferences(from map: SiteVisualMap, exclusions: SiteRobotGeometry.ReferenceExclusions) -> SiteVisualMap {
         var result = map
         var retained = Data()
         let stride = 131 * MemoryLayout<Float>.size
@@ -140,8 +144,9 @@ final class RobotVisualLocalization {
             for index in 0..<map.count {
                 let offset = index * stride
                 let x = Double(raw.loadUnaligned(fromByteOffset: offset, as: Float.self))
+                let y = Double(raw.loadUnaligned(fromByteOffset: offset + 4, as: Float.self))
                 let z = Double(raw.loadUnaligned(fromByteOffset: offset + 8, as: Float.self))
-                if !chairs.contains(where: { $0.contains(x: x, z: z) }) {
+                if !exclusions.contains(x: x, y: y, z: z) {
                     retained.append(contentsOf: raw[offset..<(offset + stride)])
                 }
             }

@@ -9,6 +9,55 @@ enum SiteRobotGeometry {
         }
     }
 
+    struct DoorSwing: Sendable {
+        var ax, az, bx, bz, radius, minY, maxY: Double
+        func contains(x: Double, y: Double, z: Double) -> Bool {
+            guard y >= minY && y <= maxY else { return false }
+            return hypot(x-ax, z-az) <= radius || hypot(x-bx, z-bz) <= radius
+        }
+    }
+
+    struct ReferenceExclusions: Sendable {
+        var chairs: [ChairFootprint]
+        var doors: [DoorSwing]
+        func contains(x: Double, y: Double, z: Double) -> Bool {
+            chairs.contains { $0.contains(x: x, z: z) } || doors.contains { $0.contains(x: x, y: y, z: z) }
+        }
+    }
+
+    private static func isDoor(_ node: SCNNode) -> Bool {
+        var ancestor: SCNNode? = node
+        while let current = ancestor {
+            if current.name?.hasPrefix("Door") == true { return true }
+            ancestor = current.parent
+        }
+        return false
+    }
+
+    // RoomPlan does not record hinge side or opening direction. Exclude saved
+    // localization references in either possible sweep, at door height only.
+    // This never removes live LiDAR obstacles or declares any floor clear.
+    static func referenceExclusions(_ url: URL, scale: Double) throws -> ReferenceExclusions {
+        let chairs = try chairFootprints(url, scale: scale)
+        let scene = try SCNScene(url: url, options: [.checkConsistency: true, .convertToYUp: true, .convertUnitsToMeters: 1.0])
+        scene.rootNode.scale = SCNVector3(scale, scale, scale)
+        var doors: [DoorSwing] = []
+        scene.rootNode.enumerateChildNodes { node, _ in
+            guard node.geometry != nil, isDoor(node) else { return }
+            let (low, high) = node.boundingBox
+            let alongX = high.x-low.x >= high.z-low.z
+            let midX = (low.x+high.x)/2, midZ = (low.z+high.z)/2
+            let a = node.convertPosition(SCNVector3(alongX ? low.x : midX, low.y, alongX ? midZ : low.z), to: nil)
+            let b = node.convertPosition(SCNVector3(alongX ? high.x : midX, low.y, alongX ? midZ : high.z), to: nil)
+            let top = node.convertPosition(SCNVector3(midX, high.y, midZ), to: nil)
+            let width = hypot(Double(b.x-a.x), Double(b.z-a.z))
+            guard width.isFinite, width > 0.1 else { return }
+            doors.append(DoorSwing(ax: Double(a.x), az: Double(a.z), bx: Double(b.x), bz: Double(b.z), radius: width+0.15,
+                                   minY: Double(min(a.y, b.y))-0.1, maxY: Double(top.y)+0.1))
+        }
+        return ReferenceExclusions(chairs: chairs, doors: doors)
+    }
+
     private static func isChair(_ node: SCNNode) -> Bool {
         var ancestor: SCNNode? = node
         while let current = ancestor {
@@ -78,7 +127,7 @@ enum SiteRobotGeometry {
                 // navigation obstacles still come from the live LiDAR grid.
                 if isFurniture && isChair(node) { return }
                 // Doors can move as well; retain the surrounding wall/opening.
-                if node.name?.hasPrefix("Door") == true { return }
+                if isDoor(node) { return }
                 guard let source = geometry.sources(for: .vertex).first,
                       source.usesFloatComponents, source.componentsPerVector >= 3,
                       [4, 8].contains(source.bytesPerComponent), source.vectorCount <= 1_000_000,

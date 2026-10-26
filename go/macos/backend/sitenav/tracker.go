@@ -109,8 +109,69 @@ func (t *PoseTracker) Update(pose Pose, cloud SurfaceCloud, fits []RegistrationF
 			return result
 		}
 	}
+	if best.NeedsCorroboration && !corroboratedView(best, pose, cloud, t.views) {
+		result.Selected = -1
+		result.Message = "One surface could be deciding this position. Waiting for new geometry from another view or a verified camera match."
+		return result
+	}
 	result.Message = "One pose fits the current geometry and available camera evidence. Check the preview before confirming."
 	return result
+}
+
+// Old accumulated returns cannot corroborate themselves after a turn. Require
+// the same alignment in an earlier view and new architectural columns in two
+// directions. Unknown and furniture returns do not count as new wall evidence.
+func corroboratedView(fit RegistrationFit, pose Pose, cloud SurfaceCloud, views []trackedView) bool {
+	for _, view := range views {
+		if pose.Position.Distance(view.pose.Position) < .20 && math.Abs(math.Remainder(pose.Yaw-view.pose.Yaw, 2*math.Pi)) < .18 {
+			continue
+		}
+		agrees := false
+		for _, previous := range view.fits {
+			if previous.Valid && compatiblePose(normalizedCandidate(fit.Pose, pose.Position), normalizedCandidate(previous.Pose, view.pose.Position)) {
+				agrees = true
+				break
+			}
+		}
+		if !agrees {
+			continue
+		}
+		type directionGroup struct {
+			direction Point
+			columns   map[Cell]bool
+		}
+		groups := map[int]*directionGroup{}
+		novel := 0
+		for i, sample := range cloud.Surfaces {
+			key := [3]int{int(math.Round(sample.Position.X / .15)), int(math.Round(sample.Position.Y / .15)), int(math.Round(sample.Position.Z / .15))}
+			if view.cells[key] {
+				continue
+			}
+			novel++
+			if sample.Horizontal || i >= len(fit.Classes) || fit.Classes[i] != 1 {
+				continue
+			}
+			angle := math.Mod(math.Atan2(sample.Direction.Y, sample.Direction.X)+math.Pi, math.Pi)
+			bucket := int(math.Round(angle/(math.Pi/18))) % 18
+			g := groups[bucket]
+			if g == nil {
+				g = &directionGroup{sample.Direction, map[Cell]bool{}}
+				groups[bucket] = g
+			}
+			g.columns[cell(Point{sample.Position.X, sample.Position.Y})] = true
+		}
+		if float64(novel)/float64(max(1, len(cloud.Surfaces))) < .20 {
+			continue
+		}
+		for _, a := range groups {
+			for _, b := range groups {
+				if len(a.columns) >= 6 && len(b.columns) >= 6 && math.Abs(a.direction.X*b.direction.Y-a.direction.Y*b.direction.X) > .342 {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 // SiteReference transforms the observed map into a confirmed site's coordinates.

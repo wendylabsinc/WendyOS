@@ -93,3 +93,40 @@ import Testing
     #expect(stored.surfaces.count == 1)
     #expect(stored.surfaces[0].stable)
 }
+
+@Test func doorSwingReferencesRespectTransformsHeightAndNestedMeshes() throws {
+    let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: root) }
+    let scene = SCNScene()
+    let wall = SCNNode(geometry: SCNBox(width: 5, height: 3, length: 0.1, chamferRadius: 0))
+    wall.name = "Wall0"
+    scene.rootNode.addChildNode(wall)
+    let door = SCNNode()
+    door.name = "Door0"
+    door.position = SCNVector3(2, 1, 3)
+    door.eulerAngles.y = .pi/2
+    let leaf = SCNNode(geometry: SCNBox(width: 1, height: 2, length: 0.05, chamferRadius: 0))
+    leaf.name = "LeafGeometry"
+    door.addChildNode(leaf)
+    scene.rootNode.addChildNode(door)
+    let url = root.appendingPathComponent("room.scn")
+    #expect(scene.write(to: url, options: nil, delegate: nil, progressHandler: nil))
+    let geometry = try SiteRobotGeometry.triangles(url, scale: 2)
+    let exclusions = try SiteRobotGeometry.referenceExclusions(url, scale: 2)
+    #expect(exclusions.doors.count == 1)
+    #expect(exclusions.contains(x: 5.5, y: 2, z: 6))
+    #expect(exclusions.contains(x: 2.5, y: 2, z: 6))
+    #expect(!exclusions.contains(x: 9, y: 2, z: 6))
+    #expect(!exclusions.contains(x: 5.5, y: 6, z: 6))
+    func landmark(_ x: Float, _ y: Float, _ z: Float) -> [Float] { [x,y,z] + Array(repeating: 1, count: 128) }
+    let retained = landmark(9,2,6) + landmark(5.5,6,6)
+    let values = landmark(5.5,2,6) + retained
+    let map = SiteVisualMap(modelRevision: UUID(), modelSHA256: String(repeating: "0", count: 64), capturedAt: Date(), frameCount: 1, landmarks: values.withUnsafeBytes { Data($0) })
+    let filtered = RobotVisualLocalization.removingMovableReferences(from: map, exclusions: exclusions)
+    #expect(filtered.landmarks == retained.withUnsafeBytes { Data($0) })
+    #expect(map.count == 3)
+    door.removeFromParentNode()
+    #expect(scene.write(to: url, options: nil, delegate: nil, progressHandler: nil))
+    #expect(try SiteRobotGeometry.triangles(url, scale: 2) == geometry)
+}

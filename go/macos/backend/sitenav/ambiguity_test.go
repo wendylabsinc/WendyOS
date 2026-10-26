@@ -57,3 +57,92 @@ func TestParallelWallRegistrationRetainsCompetingExplanation(t *testing.T) {
 		t.Fatal("well-fitting parallel walls disappeared from competing hypotheses")
 	}
 }
+
+func TestFragilePoseNeedsNewArchitecturalEvidenceFromAnotherView(t *testing.T) {
+	now := time.Now()
+	first := SurfaceCloud{}
+	for i := 0; i < 40; i++ {
+		first.Surfaces = append(first.Surfaces, Surface{Position: Vertex{float64(i) * .1, 0, .5}, Direction: Point{1, 0}})
+	}
+	fit := RegistrationFit{Pose: PoseCandidate{Position: Point{2, 3}}, Cost: .01, Valid: true, Plausible: true, NeedsCorroboration: true}
+	for _, kind := range []string{"replayed", "door-only", "furniture", "inconsistent", "new-walls"} {
+		t.Run(kind, func(t *testing.T) {
+			tracker := PoseTracker{}
+			if r := tracker.Update(Pose{}, first, []RegistrationFit{fit}, now); r.Selected >= 0 {
+				t.Fatal("single fragile view was suggested")
+			}
+			cloud := SurfaceCloud{Surfaces: append([]Surface(nil), first.Surfaces...)}
+			next := fit
+			if kind != "replayed" {
+				for i := 0; i < 12; i++ {
+					cloud.Surfaces = append(cloud.Surfaces, Surface{Position: Vertex{float64(i) * .15, 2, .5}, Direction: Point{1, 0}})
+					if kind != "door-only" {
+						cloud.Surfaces = append(cloud.Surfaces, Surface{Position: Vertex{3, float64(i) * .15, .5}, Direction: Point{0, 1}})
+					}
+				}
+			}
+			next.Classes = make([]int, len(cloud.Surfaces))
+			for i := range next.Classes {
+				next.Classes[i] = 1
+				if kind == "furniture" {
+					next.Classes[i] = 2
+				}
+			}
+			if kind == "inconsistent" {
+				next.Pose.Position.X += 1
+			}
+			r := tracker.Update(Pose{Yaw: .5}, cloud, []RegistrationFit{next}, now.Add(time.Second))
+			if (r.Selected >= 0) != (kind == "new-walls") {
+				t.Fatalf("unexpected corroboration for %s: %+v", kind, r)
+			}
+		})
+	}
+}
+
+func TestSupportPlaneAliasesAreNotIndependent(t *testing.T) {
+	if !sameSupportPlane(Point{1, 0}, 1, Point{-1, 0}, -1.1) {
+		t.Fatal("opposite normals split one plane")
+	}
+	if sameSupportPlane(Point{1, 0}, 1, Point{0, 1}, 1) || sameSupportPlane(Point{1, 0}, 1, Point{1, 0}, 2) {
+		t.Fatal("distinct planes merged")
+	}
+}
+
+func TestSingleCornerNeedsCorroborationUnlessCameraAgrees(t *testing.T) {
+	arch, furniture := semanticFixture(t)
+	model, err := NewLayeredRoom(arch, furniture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	position, rotation := Point{2.1, 3.2}, .7
+	// Only two observed planes, such as a wall plus an inward-open door.
+	cloud := fixtureSurfaceCloud(t, arch[:6], position, rotation)
+	for _, camera := range []bool{false, true} {
+		input := RegistrationInput{Cloud: cloud}
+		if camera {
+			input.Visual = &VisualHint{Position: position, Yaw: rotation, Inliers: 30, Residual: 1}
+		}
+		fits, err := RegisterSurfaces(context.Background(), model, input)
+		if err != nil {
+			t.Fatal(err)
+		}
+		found := false
+		for _, fit := range fits {
+			if !fit.Valid {
+				continue
+			}
+			if !camera {
+				found = true
+				if !fit.NeedsCorroboration {
+					t.Fatal("two-plane fit bypassed corroboration")
+				}
+			}
+			if camera && fit.Pose.Position.Distance(position) < .2 && !fit.NeedsCorroboration {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("missing usable corner fit, camera=%v", camera)
+		}
+	}
+}

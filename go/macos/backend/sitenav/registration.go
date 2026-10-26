@@ -23,16 +23,17 @@ type RegistrationInput struct {
 }
 
 type RegistrationFit struct {
-	Pose         PoseCandidate `json:"pose"`
-	Architecture int           `json:"architecture"`
-	Furniture    int           `json:"furniture"`
-	Reference    int           `json:"reference"`
-	Directions   int           `json:"directions"`
-	Cost         float64       `json:"cost"`
-	Valid        bool          `json:"valid"`
-	Plausible    bool          `json:"plausible"`
-	Rejection    string        `json:"rejection,omitempty"`
-	Classes      []int         `json:"classes"` // 0 rejected, 1 architecture, 2 furniture, 3 saved scan
+	NeedsCorroboration bool          `json:"needsCorroboration"`
+	Pose               PoseCandidate `json:"pose"`
+	Architecture       int           `json:"architecture"`
+	Furniture          int           `json:"furniture"`
+	Reference          int           `json:"reference"`
+	Directions         int           `json:"directions"`
+	Cost               float64       `json:"cost"`
+	Valid              bool          `json:"valid"`
+	Plausible          bool          `json:"plausible"`
+	Rejection          string        `json:"rejection,omitempty"`
+	Classes            []int         `json:"classes"` // 0 rejected, 1 architecture, 2 furniture, 3 saved scan
 }
 
 type LayeredRoom struct {
@@ -194,6 +195,7 @@ func RegisterSurfaces(ctx context.Context, model LayeredRoom, input Registration
 		type group struct {
 			points       []Point
 			direction    Point
+			offset       float64
 			architecture bool
 			columns      map[Cell]bool
 		}
@@ -297,7 +299,7 @@ func RegisterSurfaces(ctx context.Context, model LayeredRoom, input Registration
 				k := [3]int{groupKind, int(math.Round(angle / (math.Pi / 18))), int(math.Round(offset / .15))}
 				g := groups[k]
 				if g == nil {
-					g = &group{direction: matched.direction, architecture: kind == 1 || referenceStable, columns: map[Cell]bool{}}
+					g = &group{direction: matched.direction, offset: matched.offset, architecture: kind == 1 || referenceStable, columns: map[Cell]bool{}}
 					groups[k] = g
 				}
 				ck := cell(Point{q.X, q.Y})
@@ -360,6 +362,28 @@ func RegisterSurfaces(ctx context.Context, model LayeredRoom, input Registration
 			// would let a worse corner match appear uniquely determined.
 			out.Plausible = anchored && out.Directions >= 1 && out.Pose.Coverage >= .5 && cost < .045 && out.Pose.floorConflict <= .05
 			out.Valid = out.Plausible && (out.Directions >= 2 || visualAgrees)
+			// A door-sized plane can supply the only cross-wall direction and
+			// make a shifted corner look convincing. Test loss of each supported
+			// plane; fragile geometry needs independent camera or view evidence.
+			robust := len(supported) >= 3
+			for omitted := range supported {
+				independentDirections := false
+				for _, a := range supported {
+					if sameSupportPlane(a.direction, a.offset, supported[omitted].direction, supported[omitted].offset) || !a.architecture {
+						continue
+					}
+					for _, b := range supported {
+						if sameSupportPlane(b.direction, b.offset, supported[omitted].direction, supported[omitted].offset) || !b.architecture {
+							continue
+						}
+						if math.Abs(a.direction.X*b.direction.Y-a.direction.Y*b.direction.X) > .342 {
+							independentDirections = true
+						}
+					}
+				}
+				robust = robust && independentDirections
+			}
+			out.NeedsCorroboration = !robust && !visualAgrees
 			switch {
 			case out.Directions == 0:
 				out.Rejection = "Matched surface points do not span a reliable wall direction."
@@ -411,4 +435,17 @@ func RegisterSurfaces(ctx context.Context, model LayeredRoom, input Registration
 		}
 	}
 	return results, nil
+}
+
+// Height bands and saved references can label one physical plane more than once.
+// Removing a plane must remove those aliases as well.
+func sameSupportPlane(a Point, ao float64, b Point, bo float64) bool {
+	dot := a.X*b.X + a.Y*b.Y
+	if math.Abs(dot) < .966 {
+		return false
+	}
+	if dot < 0 {
+		bo = -bo
+	}
+	return math.Abs(ao-bo) < .25
 }

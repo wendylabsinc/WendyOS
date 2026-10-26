@@ -626,6 +626,12 @@ and heading candidates. It previews a suggestion only when the best fit is
 separated from competing positions and headings. A translucent Go2 and orange
 ring preview the suggestion; use **Confirm position** after checking it.
 The displayed percentage is weighted surface agreement, not probability of correctness.
+A fit that loses independent wall directions when one plane is removed needs a
+verified camera match or corroboration from another viewpoint. Corroboration
+requires new architectural samples in two directions; replayed accumulated scans
+and new samples from only one plane do not count. Saved visual and LiDAR
+references in possible door swing regions are excluded from localization because
+the scanned door position can change. Live door obstacles still block navigation.
 Weak fits are labeled and still require operator verification. Suggestions expire
 after 30 seconds or robot motion; confirmation cannot command movement. **Locate Go2**
 retries the search. **Place Manually** remains available for unsupported geometry
