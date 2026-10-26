@@ -407,12 +407,20 @@ func (a Alignment) ToRobot(p Point) Point {
 // walking rate until stopping; a lower proportional command is not a slow gait.
 const WalkingSpeed = .55
 
+// Match the supported look-around rate. Small heading corrections must stop
+// at the heading tolerance instead of tapering into rejected SDK velocities.
+const TurningSpeed = .5
+
+// Cover the 500ms MOVE lease, braking at 1 rad/s² and 0.05rad tolerance.
+const TurnStoppingAngle = TurningSpeed*.5 + TurningSpeed*TurningSpeed/2 + .05
+
 func Velocity(position Point, yaw float64, target Point) (forward, turn float64) {
-	error := math.Remainder(math.Atan2(target.Y-position.Y, target.X-position.X)-yaw, 2*math.Pi)
-	turn = math.Max(-0.6, math.Min(0.6, error*1.5))
-	if math.Abs(error) < 0.04 && position.Distance(target) > 0.04 {
-		forward = WalkingSpeed
-		turn = 0
+	if position.Distance(target) <= .04 {
+		return 0, 0
 	}
-	return
+	error := math.Remainder(math.Atan2(target.Y-position.Y, target.X-position.X)-yaw, 2*math.Pi)
+	if math.Abs(error) < .04 {
+		return WalkingSpeed, 0
+	}
+	return 0, math.Copysign(TurningSpeed, error)
 }

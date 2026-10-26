@@ -22,10 +22,10 @@ const lookAngle = math.Pi / 6
 
 // Match the existing manual turn control. Do not taper into low rates that
 // the physical robot may ignore; stop instead when the bounded angle is reached.
-const lookSpeed = .5
+const lookSpeed = sitenav.TurningSpeed
 
 // Cover the 500ms MOVE lease, braking at 1 rad/s² and 0.05rad tolerance.
-const lookStopMargin = lookSpeed*.5 + lookSpeed*lookSpeed/2 + .05
+const lookStopMargin = sitenav.TurnStoppingAngle
 
 func (r *SiteRobot) Look(sequence uint64, direction int) error {
 	r.mu.Lock()

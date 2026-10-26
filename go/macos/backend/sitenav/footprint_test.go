@@ -205,3 +205,24 @@ func TestRouteCanDepartAlongActualHeadingBeforeTurning(t *testing.T) {
 		t.Fatal("departure bypassed occupied start")
 	}
 }
+
+func TestRouteTurnsStayAboveSDKMinimumUntilAligned(t *testing.T) {
+	for _, yaw := range []float64{0, math.Pi - .02, -math.Pi + .02} {
+		for _, angle := range []float64{-.6, -.1, -.041, .041, .1, .6} {
+			target := Point{math.Cos(yaw + angle), math.Sin(yaw + angle)}
+			forward, turn := Velocity(Point{}, yaw, target)
+			if forward != 0 || turn != math.Copysign(TurningSpeed, angle) {
+				t.Fatalf("heading error %v produced %v %v", angle, forward, turn)
+			}
+		}
+		for _, angle := range []float64{-.039, 0, .039} {
+			forward, turn := Velocity(Point{}, yaw, Point{math.Cos(yaw + angle), math.Sin(yaw + angle)})
+			if forward != WalkingSpeed || turn != 0 {
+				t.Fatal("rotation did not stop once aligned")
+			}
+		}
+		if forward, turn := Velocity(Point{}, yaw, Point{}); forward != 0 || turn != 0 {
+			t.Fatal("arrival issued a rotation")
+		}
+	}
+}

@@ -76,10 +76,14 @@ type robotCommands struct {
 	pb.WendyUnitreeRobotServiceClient
 	commands  []*pb.UnitreeCommandRequest
 	stopError error
+	minYaw    float64
 }
 
 func (f *robotCommands) Command(_ context.Context, r *pb.UnitreeCommandRequest, _ ...grpc.CallOption) (*pb.UnitreeCommandResponse, error) {
 	f.commands = append(f.commands, r)
+	if r.Command == pb.UnitreeCommand_UNITREE_COMMAND_MOVE && r.Yaw != 0 && math.Abs(r.Yaw) < f.minYaw {
+		return nil, errors.New("SDK rejected rotation below its minimum rate")
+	}
 	if r.Command == pb.UnitreeCommand_UNITREE_COMMAND_STOP {
 		return nil, f.stopError
 	}
@@ -261,6 +265,7 @@ func TestSiteRobotFailedStopPreventsReplacementOrder(t *testing.T) {
 }
 func TestSiteRobotClosedLoopReachesTurnedDestination(t *testing.T) {
 	r, f := readySiteRobot()
+	f.minYaw = .5
 	// Begin facing away from a destination, and integrate commanded velocities.
 	// Sensors and UI remain fresh at each simulated 100 ms update.
 	r.observed.Pose.Yaw = math.Pi
@@ -279,7 +284,7 @@ func TestSiteRobotClosedLoopReachesTurnedDestination(t *testing.T) {
 		if c.Command != pb.UnitreeCommand_UNITREE_COMMAND_MOVE {
 			continue
 		}
-		if math.Abs(c.Forward) > sitenav.WalkingSpeed || math.Abs(c.Yaw) > .6 {
+		if math.Abs(c.Forward) > sitenav.WalkingSpeed || math.Abs(c.Yaw) > sitenav.TurningSpeed {
 			t.Fatal("unbounded command")
 		}
 		r.observed.Pose.Yaw += c.Yaw * .1
@@ -630,6 +635,37 @@ func TestTransientPoseRejectionUsesOnlyStillFreshAcceptedObservations(t *testing
 					}
 				}
 			})
+		}
+	}
+}
+
+func TestRouteTurnChecksClearanceBeyondItsTargetHeading(t *testing.T) {
+	for _, direction := range []float64{-1, 1} {
+		r, f := readySiteRobot()
+		r.allowUnobservedFloor = true
+		target := sitenav.Point{X: 2 * math.Cos(.06), Y: 2 * math.Sin(.06) * direction}
+		found := false
+		for x := -8; x <= 8 && !found; x++ {
+			for y := -8; y <= 8; y++ {
+				cell := sitenav.Cell{X: x, Y: y}
+				r.observed.Grid.Obstacles[cell] = true
+				g := r.observed.Grid
+				if g.Transition(sitenav.Point{}, 0, target) && !g.Turn(sitenav.Point{}, 0, direction*sitenav.TurnStoppingAngle) {
+					found = true
+					break
+				}
+				delete(g.Obstacles, cell)
+			}
+		}
+		if !found {
+			t.Fatal("missing obstacle just beyond requested turn")
+		}
+		if err := r.Destination(1, "site/revision", target.X, -target.Y, true); err != nil {
+			t.Fatal(err)
+		}
+		r.stepLocked(time.Now())
+		if r.moving || len(f.commands) != 1 || f.commands[0].Command != pb.UnitreeCommand_UNITREE_COMMAND_STOP {
+			t.Fatal("turn ignored its stopping sweep")
 		}
 	}
 }

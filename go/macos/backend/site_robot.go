@@ -340,6 +340,14 @@ func (r *SiteRobot) stepLocked(now time.Time) {
 	}
 	forward, turn := sitenav.Velocity(p, r.observed.Pose.Yaw, r.route[0])
 	// Check the stopping horizon as well as the full planned segment.
+	if turn != 0 {
+		stopYaw := r.observed.Pose.Yaw + math.Copysign(sitenav.TurnStoppingAngle, turn)
+		if !grid.Turn(p, r.observed.Pose.Yaw, stopYaw) {
+			r.message = "Obstacle or unobserved floor in the turning stopping area."
+			r.stopLocked()
+			return
+		}
+	}
 	if forward > 0 {
 		// Cover the 500 ms command lease plus braking at 0.5 m/s² and
 		// 5 cm tracking tolerance. Slow approaches need less forward space.
