@@ -170,10 +170,10 @@ notify:
 
 Every arrival goes to the device's notification journal. `- cloud` adds Wendy
 Cloud and `- webhook: <url>` adds an HTTP(S) endpoint, each at most once.
-Applying a watch with `cloud` registers `watch:<name>` in Cloud Apps without
-enabling its notification grant. `lease` (15s to 10m) is for clients that renew
-the watch; the device removes a leased watch, and what it owns, when renewals
-stop and at agent restart. Do not add a lease to a watch a person deploys.
+Applying a watch with `cloud` registers `watch:<name>` in Cloud Apps. `lease`
+(15s to 10m) is for clients that renew the watch; the device removes a leased
+watch, and what it owns, when renewals stop and at agent restart. Do not add a
+lease to a watch a person deploys.
 
 `wendy --json data documents [<kind>[/<name>]] --device <selector>` lists
 documents or inspects one. An inference reports its runtime and per-camera
