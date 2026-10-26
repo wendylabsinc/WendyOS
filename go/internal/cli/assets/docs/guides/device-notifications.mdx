@@ -24,8 +24,12 @@ You need:
 
 1. A Wendy device enrolled in the recipients' Wendy Cloud organization.
 2. An app running on that device with the `notifications` entitlement.
-3. Recipients with [Wendy Companion installed from the App Store](https://apps.apple.com/app/wendy-companion/id6761771159)
-   and signed in to the same organization.
+3. Recipients using a Wendy Companion build with Cloud v2 sign-in, signed in
+   to the same organization.
+
+Use TestFlight Alpha or Beta now, or the
+[App Store](https://apps.apple.com/app/wendy-companion/id6761771159) from the
+next release. The current App Store build (2026.09.17) cannot sign in to Cloud v2.
 
 Cloud v2 accepts Notifications from an enrolled device for its own organization;
 the app or campaign name is only a label. No per-app grant, catalog entry, or
@@ -89,10 +93,10 @@ See the
 [wendy-app-sdk README](https://github.com/wendylabsinc/wendy-app-sdk#send-a-notification)
 for WendyKit package details.
 
-## Use gRPC from other languages
+## Use gRPC without WendyKit
 
-Apps written in Python, Go, Rust, or other languages must generate or provide a
-gRPC client from `Proto/wendy/system/v1/notifications.proto`, connect through
+To call this API without WendyKit, generate or provide a gRPC client from
+`Proto/wendy/system/v1/notifications.proto`, connect through
 the Unix socket in `$WENDY_SYSTEM_SOCKET`, and call:
 
 ```text
@@ -118,9 +122,14 @@ Do not include an app, device, or organization ID. Wendy Agent supplies the
 trusted app identity, and Cloud derives the device and organization from its
 enrollment credentials.
 
+See [Examples/WendyNotify](https://github.com/wendylabsinc/WendyOS/tree/main/Examples/WendyNotify)
+for a Swift app that calls this API with grpc-swift directly and shows the real
+errors and rate limit.
+
 ## Delivery and limits
 
-- The app can select only users, teams, or roles in the device's organization.
+- On Cloud v2, the app can select only users or roles in the device's
+  organization. Team selectors are refused.
 - At most 100 selectors and 100 resolved recipients are accepted for a
   device-app send.
 - Device-app sources may create 10 accepted Notifications per minute. The agent

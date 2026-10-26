@@ -30,8 +30,10 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/shared/cloudrelay"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
+	"github.com/wendylabsinc/wendy/go/internal/shared/headack"
 	"github.com/wendylabsinc/wendy/go/internal/shared/registrycrypto"
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
+	cloudpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 )
@@ -186,6 +188,30 @@ func (b *bridge) handle(r request) (any, error) {
 	}
 	if strings.HasPrefix(r.Method, "registry-") {
 		return b.registry(r)
+	}
+	// The console's signed-ack staleness alarm (WDY-3999): the page pins the
+	// platform root and keeps the returned ack per device, passing it back as
+	// kept on the next read.
+	if r.Method == "head-ack-verify" {
+		var p struct {
+			Response       []byte      `json:"response"`
+			RootDER        []byte      `json:"rootDER"`
+			Device         string      `json:"device"`
+			OrganizationID string      `json:"organizationId"`
+			Kept           headack.Ack `json:"kept"`
+		}
+		if err := json.Unmarshal(r.Params, &p); err != nil {
+			return nil, err
+		}
+		root, err := x509.ParseCertificate(p.RootDER)
+		if err != nil {
+			return nil, err
+		}
+		var resp cloudpbv2.GetLastHeadAckResponse
+		if err := proto.Unmarshal(p.Response, &resp); err != nil {
+			return nil, err
+		}
+		return headack.Verify(&resp, root, p.Device, p.OrganizationID, p.Kept)
 	}
 	if strings.HasPrefix(r.Method, "shell-") {
 		return nil, errors.New("Shell access is disabled in the browser client")

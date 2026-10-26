@@ -2232,9 +2232,40 @@ func TestExternalProviderPickerItem(t *testing.T) {
 		}
 		// A LAN row carries no serial port, so it must not take part in the
 		// unflashed-row supersede at all.
-		if item.DedupKey != dev.ConnectionInfo["deviceId"] || item.Supersedes != "" {
+		if item.DedupKey != dev.LiteDedupID() || item.Supersedes != "" {
 			t.Errorf("DedupKey = %q, Supersedes = %q, want the device id and no supersede",
 				item.DedupKey, item.Supersedes)
+		}
+	})
+
+	// USB keeps the hardware id as deviceId after enrollment, while LAN and BLE
+	// publish the enrolled UUID there. Keying on LiteDedupID is what puts the
+	// enrolled board's USB and LAN sightings on one row.
+	t.Run("enrolled board's USB and LAN rows share a dedup key", func(t *testing.T) {
+		prov := &fakeProvider{key: "wendy-lite"}
+		const enrolled = "0b8e3a52-6f1d-4c8e-9a47-2d5f1e6c7b90"
+		usb := models.ExternalDevice{
+			ID:          "wendy-lite:/dev/cu.usbmodem2101",
+			DisplayName: "Lite Board",
+			ProviderKey: "wendy-lite",
+			ConnectionInfo: map[string]string{
+				"type": "USB", "serialPort": "/dev/cu.usbmodem2101",
+				"deviceId": "a1b2c3d4e5f6", "enrolledDeviceId": enrolled,
+			},
+		}
+		lan := models.ExternalDevice{
+			ID:          "wendy-lite:lite-board.local.",
+			DisplayName: "Lite Board",
+			ProviderKey: "wendy-lite",
+			ConnectionInfo: map[string]string{
+				"type": "LAN", "ip": "10.0.0.9", "deviceId": enrolled, "enrolledDeviceId": enrolled,
+			},
+		}
+
+		usbItem := externalProviderPickerItem(prov, &usb)
+		lanItem := externalProviderPickerItem(prov, &lan)
+		if usbItem.DedupKey != enrolled || lanItem.DedupKey != enrolled {
+			t.Errorf("DedupKey USB = %q, LAN = %q, want both %q", usbItem.DedupKey, lanItem.DedupKey, enrolled)
 		}
 	})
 
@@ -2276,7 +2307,7 @@ func TestExternalProviderPickerItem(t *testing.T) {
 		}
 		item := externalProviderPickerItem(prov, &dev)
 
-		if item.DedupKey != dev.ConnectionInfo["deviceId"] {
+		if item.DedupKey != dev.LiteDedupID() {
 			t.Errorf("DedupKey = %q, want the device id so LAN/USB rows still merge", item.DedupKey)
 		}
 		if want := unflashedLiteDedupKey("/dev/cu.usbmodem2101"); item.Supersedes != want {

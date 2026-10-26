@@ -46,6 +46,9 @@ type DeviceIdentity struct {
 	ID          string
 	Name        string
 	DisplayName string
+	// EnrolledDeviceID is the enrolled device UUID; empty when the board is
+	// unenrolled or its firmware predates the field.
+	EnrolledDeviceID string
 }
 
 type DeviceInfo struct {
@@ -601,7 +604,12 @@ func (c *WendyLiteClient) GetDeviceIdentity(timeout time.Duration) (*DeviceIdent
 	if di == nil {
 		return nil, fmt.Errorf("device returned no identity")
 	}
-	return &DeviceIdentity{ID: di.GetId(), Name: di.GetName(), DisplayName: di.GetDisplayName()}, nil
+	return &DeviceIdentity{
+		ID:               di.GetId(),
+		Name:             di.GetName(),
+		DisplayName:      di.GetDisplayName(),
+		EnrolledDeviceID: di.GetEnrolledDeviceId(),
+	}, nil
 }
 
 func (c *WendyLiteClient) GetDeviceInfo(timeout time.Duration) (*DeviceInfo, error) {

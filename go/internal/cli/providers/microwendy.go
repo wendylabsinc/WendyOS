@@ -225,6 +225,10 @@ func (p *MicroWendyProvider) serialExternalDevice(dev discovery.SerialDevice) mo
 			"deviceId":   dev.ID,
 			"name":       dev.Name,
 			"serialPort": dev.Port,
+			// deviceId stays the hardware id over USB even once enrolled; the
+			// enrolled UUID is what lets this row meet the board's LAN and BLE
+			// rows (see ExternalDevice.LiteDedupID).
+			"enrolledDeviceId": dev.EnrolledDeviceID,
 		},
 		IsWendyDevice: true,
 	}
