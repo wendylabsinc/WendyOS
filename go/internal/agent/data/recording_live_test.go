@@ -463,11 +463,13 @@ func TestPublishLiveIsNeverStored(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(root, episode.ID, RecordingLogFile)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("episode holds a record log: %v", err)
 	}
+	// Agent records have a pre-roll of their own; a live-only record is in
+	// neither.
 	m.mu.Lock()
-	buffered := len(m.streamPreRoll)
+	apps, agent := len(m.streamPreRoll), len(m.agentPreRoll)
 	m.mu.Unlock()
-	if buffered != 0 {
-		t.Fatalf("pre-roll holds %d records", buffered)
+	if apps != 0 || agent != 0 {
+		t.Fatalf("pre-roll holds %d app and %d agent records", apps, agent)
 	}
 }
 
