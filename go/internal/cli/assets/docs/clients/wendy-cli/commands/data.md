@@ -406,7 +406,8 @@ webhook bodies; Wendy Cloud notifications do not carry them yet. A
 never carries boxes or images. Readers that predate the field ignore it.
 
 A watch's journal entries carry `watch` and `inference` instead of
-`campaign`. Entries of a leased watch reach only readers that name the watch.
+`campaign`. Entries of a leased watch reach only readers that name the watch,
+and the inference it owns writes no device events.
 
 Unknown keys inside `notify` are rejected for `event` and `detection`.
 For `episode_committed`, they warn at deployment and are ignored.
