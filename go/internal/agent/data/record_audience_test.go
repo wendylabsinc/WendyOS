@@ -32,7 +32,7 @@ func TestRecordApplicationForReachesOnlyItsCollections(t *testing.T) {
 		}
 	}
 	record := ApplicationRecord{Version: 1, Type: "prediction", Model: "m", Attributes: map[string]any{"marker": "for-clips"}}
-	if _, err := m.RecordApplicationFor("sh.wendy.inference.front-door", record, map[string]bool{"clips": true}, false); err != nil {
+	if _, err := m.RecordApplicationFor("sh.wendy.inference.front-door", record, map[string]bool{"clips": true}, false, false); err != nil {
 		t.Fatal(err)
 	}
 	clips, err := m.Stop("clips")
@@ -57,7 +57,7 @@ func TestRecordApplicationForPreRollReachesOnlyItsCollections(t *testing.T) {
 		t.Fatal(err)
 	}
 	record := ApplicationRecord{Version: 1, Type: "event", Name: "front-door", Attributes: map[string]any{"marker": "pre-roll"}}
-	if _, err := m.RecordApplicationFor("sh.wendy.inference.front-door", record, map[string]bool{"clips": true}, false); err != nil {
+	if _, err := m.RecordApplicationFor("sh.wendy.inference.front-door", record, map[string]bool{"clips": true}, false, false); err != nil {
 		t.Fatal(err)
 	}
 	opts := func(key string) StartOptions {
@@ -81,11 +81,11 @@ func TestRecordApplicationForWithoutAudienceStoresNoPrediction(t *testing.T) {
 	var observed []string
 	m.SetApplicationObserver(func(_ string, record ApplicationRecord) { observed = append(observed, record.Type+":"+record.Name) })
 	prediction := ApplicationRecord{Version: 1, Type: "prediction", Model: "m", Attributes: map[string]any{"marker": "nobody"}}
-	if _, err := m.RecordApplicationFor("sh.wendy.inference.chat-1", prediction, nil, true); err != nil {
+	if _, err := m.RecordApplicationFor("sh.wendy.inference.chat-1", prediction, nil, true, false); err != nil {
 		t.Fatal(err)
 	}
 	event := ApplicationRecord{Version: 1, Type: "event", Name: "chat-1", Attributes: map[string]any{"marker": "nobody"}}
-	if _, err := m.RecordApplicationFor("sh.wendy.inference.chat-1", event, map[string]bool{}, true); err != nil {
+	if _, err := m.RecordApplicationFor("sh.wendy.inference.chat-1", event, map[string]bool{}, true, false); err != nil {
 		t.Fatal(err)
 	}
 	later := recordEpisode(t, m, StartOptions{Sources: []string{"applications"}, PreRollDuration: 10 * time.Second, Trigger: EpisodeTrigger{Reason: "event:x", CampaignName: "later"}})
@@ -98,5 +98,25 @@ func TestRecordApplicationForWithoutAudienceStoresNoPrediction(t *testing.T) {
 	events, _, _, err := m.DeviceEvents("", "chat-1", "", true)
 	if err != nil || len(events) != 1 {
 		t.Fatalf("device events = %v, %v; the event must still be journaled", events, err)
+	}
+}
+
+func TestPrivateRecordApplicationForKeepsItsEventOffTheJournal(t *testing.T) {
+	m, err := NewManager(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var observed []string
+	m.SetApplicationObserver(func(_ string, record ApplicationRecord) { observed = append(observed, record.Type+":"+record.Name) })
+	event := ApplicationRecord{Version: 1, Type: "event", Name: "chat-1"}
+	if _, err := m.RecordApplicationFor("sh.wendy.inference.chat-1", event, nil, true, true); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(observed, ",") != "event:chat-1" {
+		t.Fatalf("observer saw %v; a private event must still reach triggers", observed)
+	}
+	events, _, _, err := m.DeviceEvents("", "", "", true)
+	if err != nil || len(events) != 0 {
+		t.Fatalf("device events = %v, %v; a private event must not be journaled", events, err)
 	}
 }
