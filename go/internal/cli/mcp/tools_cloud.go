@@ -272,7 +272,7 @@ func (s *mcpServer) handleCloudEnrollDevice(ctx context.Context, req mcpgo.CallT
 		return cloudErrResult(err), nil
 	}
 
-	if err := cloudenroll.CheckAgentEnrollment(ctx, conn.Conn); err != nil {
+	if err := cloudenroll.CheckAgentEnrollment(ctx, conn.Client()); err != nil {
 		return cloudErrResult(err), nil
 	}
 
@@ -292,13 +292,13 @@ func (s *mcpServer) handleCloudEnrollDevice(ctx context.Context, req mcpgo.CallT
 	if err != nil {
 		return cloudErrResult(err), nil
 	}
-	hw, hwErr := cloudenroll.ReadHardware(ctx, conn.Conn)
+	hw, hwErr := cloudenroll.ReadHardware(ctx, conn.Client())
 	cfg, assetID, err := cloudenroll.MintEAB(tokenCtx, cloudConn, auth, cfg, name, hw)
 	if err != nil {
 		return errResult(codeFromGRPC(err), grpcErrString(err)), nil
 	}
 
-	resp, err := agentpbv2.NewWendyProvisioningServiceClient(conn.Conn).StartACMEProvisioning(ctx, &agentpbv2.StartACMEProvisioningRequest{
+	resp, err := agentpbv2.NewWendyProvisioningServiceClient(conn.Client()).StartACMEProvisioning(ctx, &agentpbv2.StartACMEProvisioningRequest{
 		CloudHost: auth.CloudGRPC, DirectoryUrl: cfg.DirectoryURL, DeviceId: cfg.DeviceID,
 		EabKeyId: cfg.EABKeyID, EabHmacKey: cfg.EABHMACKey,
 	})

@@ -131,7 +131,7 @@ func (s *mcpServer) handleLidarSummary(parent context.Context, req mcpgo.CallToo
 	defer cancel()
 	encoded, _ := json.Marshal(probe)
 	ctx = metadata.AppendToOutgoingContext(ctx, ros2inspection.LidarMetadata, ros2inspection.LidarVersion, ros2inspection.LidarOptionsMetadata, string(encoded))
-	stream, err := agentpbv2.NewROS2ServiceClient(conn.Conn).EchoTopic(ctx, &agentpbv2.EchoROS2TopicRequest{Topic: opts.topic, DomainId: opts.domain, Count: int32(opts.count)}, grpc.MaxCallRecvMsgSize(ros2inspection.LidarMaxSummaryBytes+1024))
+	stream, err := agentpbv2.NewROS2ServiceClient(conn.Client()).EchoTopic(ctx, &agentpbv2.EchoROS2TopicRequest{Topic: opts.topic, DomainId: opts.domain, Count: int32(opts.count)}, grpc.MaxCallRecvMsgSize(ros2inspection.LidarMaxSummaryBytes+1024))
 	if err != nil {
 		return ros2Error(err), nil
 	}

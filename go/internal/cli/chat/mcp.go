@@ -21,6 +21,12 @@ import (
 // MCP server registers: <app>__<tool> (internal/cli/mcp/container_mcp.go).
 const appToolSeparator = "__"
 
+// ReadOnlyCallMeta is the _meta key that marks a call read-only for the Wendy
+// MCP server (internal/cli/mcp/readonly_call.go). The server then runs only
+// read-only tools for it, and refuses any agent RPC that could change the
+// device. Chat sets it on every call of an unattended turn.
+const ReadOnlyCallMeta = "wendy.dev/read-only"
+
 type mcpToolClient interface {
 	ListTools(context.Context, mcpgo.ListToolsRequest) (*mcpgo.ListToolsResult, error)
 	CallTool(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error)
@@ -172,6 +178,9 @@ func (t *Tools) callMCPResult(ctx context.Context, call ToolCall) (ToolResult, e
 	request := mcpgo.CallToolRequest{}
 	request.Params.Name = call.Name
 	request.Params.Arguments = arguments
+	if unattendedTurn(ctx) {
+		request.Params.Meta = &mcpgo.Meta{AdditionalFields: map[string]any{ReadOnlyCallMeta: true}}
+	}
 	result, err := t.mcp.CallTool(ctx, request)
 	if err != nil {
 		return ToolResult{}, err

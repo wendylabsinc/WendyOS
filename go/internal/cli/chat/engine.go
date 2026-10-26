@@ -83,10 +83,18 @@ type TurnOptions struct {
 	// text that is not a statement from the user, such as a watch's report.
 	SkipMemory bool
 	// AppToolRefusal, when set, refuses every tool a device app provides,
-	// whatever its read-only hint says, with this text as the call's result.
-	// It applies to delegated children too. Use it for a turn nobody is
-	// present for, such as one a watch report started.
+	// whatever its read-only hint says, with this text as the call's result,
+	// and marks the turn's Wendy MCP calls read-only (ReadOnlyCallMeta). It
+	// applies to delegated children too. Use it for a turn nobody is present
+	// for, such as one a watch report started.
 	AppToolRefusal string
+}
+
+// unattendedTurn reports whether ctx belongs to a turn nobody is present for:
+// one run with TurnOptions.AppToolRefusal, or a child it delegated to.
+func unattendedTurn(ctx context.Context) bool {
+	runtime, _ := ctx.Value(turnRuntimeKey{}).(*turnRuntime)
+	return runtime != nil && runtime.appToolRefusal != ""
 }
 
 func (e *Engine) Turn(ctx context.Context, prompt string, emit func(Event), approve ApproveFunc) error {

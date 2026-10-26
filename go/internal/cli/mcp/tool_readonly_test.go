@@ -14,6 +14,11 @@ import (
 // Cloud or on this computer. Adding a name is a review decision: read the
 // tool's handler before you do.
 //
+// On the device the rule also holds by itself in those turns: chat marks their
+// calls read-only, and the server then refuses every agent RPC that grpcclient
+// does not classify as a read (readonly_call.go). Cloud and this computer
+// still rest on this list.
+//
 // Two listed tools have effects that are not changes to the user's things:
 // wendy_tools changes which tools this session advertises (in memory only), and
 // the ros2_* tools' host scope may pull an inspector image onto the device.
