@@ -593,6 +593,13 @@ func TestCameraGridNeedsTheCameraEntitlement(t *testing.T) {
 			t.Fatalf("%s without camera: got %v, want PermissionDenied", id, got)
 		}
 	}
+	// A refused request gives back its stream slots: more refusals than all
+	// apps may hold leave the streams below free to open.
+	for range newAppDataStreamQuota().max {
+		if got := streamDataError(t, blindConn, thermalGridID); got != codes.PermissionDenied {
+			t.Fatalf("a camera stream without camera: got %v, want PermissionDenied", got)
+		}
+	}
 	blind := agentpbv2.NewDataServiceClient(blindConn)
 	views := []agentpbv2.DataService_StreamDataClient{
 		openLiveStreamWith(t, blind, &agentpbv2.StreamDataRequest{StreamPrefixes: []string{"agent/camera/", "apps/"}}),
