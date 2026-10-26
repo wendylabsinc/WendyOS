@@ -82,6 +82,44 @@ func TestLowerSurfaceRequiresPlaneAndKeepsSmallDrops(t *testing.T) {
 	}
 }
 
+func TestBuriedShelvesAreNotIndependentDropSurfaces(t *testing.T) {
+	var points []Vertex
+	for x := -15; x <= 15; x++ {
+		for y := -15; y <= 15; y++ {
+			z := 0.0
+			if x >= -8 && x <= 8 && y >= -8 && y <= 8 {
+				// One occluded region has broad, locally flat shelves at
+				// different depths, as in the captured accumulated voxel map.
+				z = -.4
+				if x > 2 {
+					z = -.2
+				}
+			}
+			points = append(points, Vertex{float64(x)*CellSize + .05, float64(y)*CellSize + .05, z})
+		}
+	}
+	g := navigationGrid(points, 0)
+	if g.Obstacles[Cell{0, 0}] || g.Floor[Cell{0, 0}] {
+		t.Fatal("buried shelf must remain unknown, not a confirmed drop or free floor")
+	}
+	if g.ClearPose(Point{}, 0) {
+		t.Fatal("unknown floor permitted by default")
+	}
+	allowed := g.WithDeparture(&Departure{Position: Point{}})
+	if !allowed.ClearPose(Point{}, 0) {
+		t.Fatal("buried shelves prevented supervised departure")
+	}
+	if allowed.ClearPose(Point{.7, 0}, 0) {
+		t.Fatal("departure allowance expanded into unknown floor ahead")
+	}
+	// A separate, genuinely planar lower surface remains blocked.
+	points = append(points, Vertex{2, 2, -.2}, Vertex{2.1, 2, -.2}, Vertex{2, 2.1, -.2}, Vertex{2.1, 2.1, -.2})
+	g = navigationGrid(points, 0)
+	if !g.Obstacles[Cell{20, 20}] {
+		t.Fatal("independent lower plane was lost")
+	}
+}
+
 func TestDepartureMatchesOrientedClearanceAndStaysFixed(t *testing.T) {
 	for _, yaw := range []float64{0, .37, math.Pi / 2} {
 		g := Grid{Floor: map[Cell]bool{}, Obstacles: map[Cell]bool{}}

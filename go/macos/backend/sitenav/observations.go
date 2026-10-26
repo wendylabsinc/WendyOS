@@ -563,18 +563,35 @@ func navigationGrid(points []Vertex, floor float64) Grid {
 			delete(lower, c)
 		}
 	}
-	for c := range lower {
-		// Fit the top of occupied columns, not arbitrary points inside volume.
+	// An occluded patch can contain accumulated occupied volume with locally
+	// flat shelves at several depths. A small neighborhood on a shelf is not
+	// evidence of a drop. Validate the entire connected top surface instead.
+	// Nonplanar regions remain unknown, never observed free floor.
+	visited := make(map[Cell]bool, len(lower))
+	for seed := range lower {
+		if visited[seed] {
+			continue
+		}
+		visited[seed] = true
+		component := []Cell{seed}
 		var samples []Vertex
-		for dy := -2; dy <= 2; dy++ {
-			for dx := -2; dx <= 2; dx++ {
-				if z, ok := lower[Cell{c.X + dx, c.Y + dy}]; ok {
-					samples = append(samples, Vertex{float64(dx) * CellSize, float64(dy) * CellSize, z})
+		for i := 0; i < len(component); i++ {
+			c := component[i]
+			samples = append(samples, Vertex{float64(c.X-seed.X) * CellSize, float64(c.Y-seed.Y) * CellSize, lower[c]})
+			for dy := -1; dy <= 1; dy++ {
+				for dx := -1; dx <= 1; dx++ {
+					next := Cell{c.X + dx, c.Y + dy}
+					if _, ok := lower[next]; ok && !visited[next] {
+						visited[next] = true
+						component = append(component, next)
+					}
 				}
 			}
 		}
 		if observedLowerSurface(samples) {
-			g.Obstacles[c] = true
+			for _, c := range component {
+				g.Obstacles[c] = true
+			}
 		}
 	}
 	return g
