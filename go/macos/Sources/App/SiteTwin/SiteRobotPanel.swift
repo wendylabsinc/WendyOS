@@ -121,6 +121,20 @@ final class SiteRobotMapModel: ObservableObject {
         }
     }
 
+    func setAllowUnobservedFloor(_ enabled: Bool) {
+        guard handle != 0 else { return }
+        actionGeneration += 1
+        destination = nil; candidates = []; localizing = false
+        let request = actionGeneration, h = handle, epoch = generation
+        actions.submit {
+            guard request == self.actionGeneration, epoch == self.generation else { return }
+            do {
+                try await SiteRobotClient.shared.allowUnobservedFloor(h, sequence: request, enabled: enabled)
+                if request == self.actionGeneration, epoch == self.generation { self.error = nil; self.scheduleAutomaticLocalization() }
+            } catch { if epoch == self.generation { self.error = error.localizedDescription } }
+        }
+    }
+
     var render: SiteRobotRenderState {
         let reading = telemetry.reading
         let live = reading?.pose == true && reading?.aligned == true
@@ -626,7 +640,9 @@ struct SiteRobotSupervisionSummary: View {
             Text(model.reading?.arrivalTiming == true
                  ? "Supervised · sensor age unverified. Keep Go2 in sight."
                  : "Keep Go2 in sight and the route clear.")
-            if model.reading?.underBodyAllowance == true {
+            if model.reading?.allowUnobservedFloor == true {
+                Text("Supervised navigation: unobserved floor allowed. Keep Go2 in sight and Stop within reach.")
+            } else if model.reading?.underBodyAllowance == true {
                 Text("Hidden-floor departure enabled. Check beneath Go2.")
             }
         }.font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
@@ -636,12 +652,20 @@ struct SiteRobotSupervisionSummary: View {
 struct SiteRobotTimingControls: View {
     @ObservedObject var model: SiteRobotMapModel
     var body: some View {
-        Toggle("Allow hidden floor beneath Go2", isOn: Binding(
-            get: { model.reading?.underBodyAllowance == true },
-            set: { model.setUnderBodyAllowance($0) }
+        Toggle("Supervised navigation through unobserved floor", isOn: Binding(
+            get: { model.reading?.allowUnobservedFloor == true },
+            set: { model.setAllowUnobservedFloor($0) }
         )).font(.caption)
-        Text("Supervised departure only. Check that the floor beneath Go2 is level and clear. Obstacles and unseen floor ahead still block movement.")
+        Text("Allows unobserved floor along the route. Detected obstacles, drops and lost telemetry still stop Go2. Unseen hazards cannot be ruled out; stay with Go2 and keep Stop within reach.")
             .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        if model.reading?.allowUnobservedFloor != true {
+            Toggle("Allow hidden floor beneath Go2", isOn: Binding(
+                get: { model.reading?.underBodyAllowance == true },
+                set: { model.setUnderBodyAllowance($0) }
+            )).font(.caption)
+            Text("Supervised departure only. Check that the floor beneath Go2 is level and clear. Obstacles and unseen floor ahead still block movement.")
+                .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        }
         if model.reading?.timingUnavailable == true || model.reading?.arrivalTiming == true {
             Toggle("Supervised arrival timing", isOn: Binding(
                 get: { model.reading?.arrivalTiming == true },

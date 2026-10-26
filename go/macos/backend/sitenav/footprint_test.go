@@ -3,6 +3,7 @@ package sitenav
 import (
 	"math"
 	"testing"
+	"time"
 )
 
 func narrowAisle() Grid {
@@ -138,5 +139,69 @@ func TestFootprintVelocitySeparatesTurnAndTranslation(t *testing.T) {
 	near, _ := Velocity(Point{}, 0, Point{.1, 0})
 	if near != WalkingSpeed || far != WalkingSpeed {
 		t.Fatal("approach entered the robot walking deadband")
+	}
+}
+
+func TestUnobservedFloorPolicyPreservesObstaclesAndPlanningBounds(t *testing.T) {
+	g := Grid{Floor: map[Cell]bool{}, Obstacles: map[Cell]bool{{0, 0}: true}}
+	allowed := g.WithUnobservedFloor(Point{})
+	if allowed.ClearPose(Point{}, 0) {
+		t.Fatal("erased occupied cell or drop")
+	}
+	if g.Floor[Cell{10, 0}] || len(g.ObservedClearFloor()) != 0 {
+		t.Fatal("modified measured evidence")
+	}
+	delete(g.Obstacles, Cell{0, 0})
+	if _, err := allowed.PlanPose(Point{}, 0, Point{2, 0}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := allowed.PlanPose(Point{}, 0, Point{MaxDistance + 1, 0}); err == nil {
+		t.Fatal("extended motion bounds")
+	}
+	if allowed.ClearPose(Point{20, 0}, 0) {
+		t.Fatal("allowance is unbounded")
+	}
+}
+
+func TestRouteCanDepartAlongActualHeadingBeforeTurning(t *testing.T) {
+	start, yaw := Point{.023, .019}, 2.0
+	g := Grid{Floor: map[Cell]bool{}, Obstacles: map[Cell]bool{}}
+	exit := Point{start.X + .8*math.Cos(yaw), start.Y + .8*math.Sin(yaw)}
+	g.sweptCells(start, exit, yaw, 0, func(c Cell) bool { g.Floor[c] = true; return true })
+	for x := -30; x <= 30; x++ {
+		for y := -30; y <= 30; y++ {
+			c := Cell{x, y}
+			p := center(c)
+			forward := (p.X-start.X)*math.Cos(yaw) + (p.Y-start.Y)*math.Sin(yaw)
+			if forward > .2 {
+				g.Floor[c] = true
+			}
+		}
+	}
+	goal := Point{start.X + 1.5*math.Cos(yaw) + math.Cos(yaw+math.Pi/2), start.Y + 1.5*math.Sin(yaw) + math.Sin(yaw+math.Pi/2)}
+	if g.Transition(start, yaw, goal) {
+		t.Fatal("fixture must need a straight departure")
+	}
+	if _, err := g.planPose(start, yaw, goal, time.Now().Add(time.Second)); err == nil {
+		t.Fatal("fixture must block the original eight-heading departure")
+	}
+	path, err := g.PlanPose(start, yaw, goal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(path) < 3 || math.Abs(math.Remainder(Heading(path[0], path[1])-yaw, 2*math.Pi)) > 1e-8 {
+		t.Fatal("did not start along actual heading", path)
+	}
+	heading := yaw
+	for i := 1; i < len(path); i++ {
+		if !g.Transition(path[i-1], heading, path[i]) {
+			t.Fatal("unchecked route edge", path)
+		}
+		heading = Heading(path[i-1], path[i])
+	}
+	// A new obstacle across the straight escape cannot be bypassed by the prefix.
+	g.Obstacles[cell(start)] = true
+	if _, err := g.PlanPose(start, yaw, goal); err == nil {
+		t.Fatal("departure bypassed occupied start")
 	}
 }

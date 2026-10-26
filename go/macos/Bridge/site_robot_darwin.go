@@ -91,6 +91,9 @@ func WDSiteRobotPoll(handle C.uint64_t) *C.WDSiteRobotState {
 	if s.UnderBodyAllowance {
 		p.under_body_allowance = 1
 	}
+	if s.AllowUnobservedFloor {
+		p.allow_unobserved_floor = 1
+	}
 	if s.ScanReady {
 		p.scan_ready = 1
 	}
@@ -187,6 +190,15 @@ func WDSiteRobotUnderBodyAllowance(handle, sequence C.uint64_t, enabled C.int32_
 	r, err := siteRobot(handle)
 	if err == nil {
 		err = r.SetUnderBodyAllowance(uint64(sequence), enabled != 0)
+	}
+	return statusResult(err)
+}
+
+//export WDSiteRobotAllowUnobservedFloor
+func WDSiteRobotAllowUnobservedFloor(handle, sequence C.uint64_t, enabled C.int32_t) *C.WDStatus {
+	r, err := siteRobot(handle)
+	if err == nil {
+		err = r.SetAllowUnobservedFloor(uint64(sequence), enabled != 0)
 	}
 	return statusResult(err)
 }

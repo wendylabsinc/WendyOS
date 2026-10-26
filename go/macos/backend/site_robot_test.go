@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"github.com/wendylabsinc/wendy/go/macos/backend/sitenav"
 	pb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	"google.golang.org/grpc"
@@ -526,5 +527,109 @@ func TestWalkingDeadbandAndStoppingHorizon(t *testing.T) {
 	r.stepLocked(time.Now())
 	if r.moving || len(f.commands) != 1 || f.commands[0].Command != pb.UnitreeCommand_UNITREE_COMMAND_STOP {
 		t.Fatal("speed increase bypassed forward stopping clearance")
+	}
+}
+
+func TestSupervisedUnobservedFloorStillStopsForHazardsAndLostTelemetry(t *testing.T) {
+	for _, fault := range []string{"obstacle", "stale-pose", "stale-scan", "stop", "mode-change"} {
+		t.Run(fault, func(t *testing.T) {
+			r, f := readySiteRobot()
+			r.observed.Grid.Floor = map[sitenav.Cell]bool{}
+			if r.Snapshot().Ready || r.Snapshot().AllowUnobservedFloor {
+				t.Fatal("unknown floor allowed by default")
+			}
+			if err := r.SetAllowUnobservedFloor(1, true); err != nil {
+				t.Fatal(err)
+			}
+			if !r.Snapshot().Ready || !r.Snapshot().AllowUnobservedFloor {
+				t.Fatal("supervised mode did not admit unknown floor")
+			}
+			if len(r.observed.Grid.Floor) != 0 || len(r.observed.Grid.ObservedClearFloor()) != 0 {
+				t.Fatal("invented measured floor")
+			}
+			if err := r.Destination(2, "site/revision", 2, 0, false); err != nil {
+				t.Fatal(err)
+			}
+			if r.moving || len(f.commands) > 0 {
+				t.Fatal("mode or preview caused motion")
+			}
+			if err := r.Destination(3, "site/revision", 2, 0, true); err != nil {
+				t.Fatal(err)
+			}
+			r.stepLocked(time.Now())
+			if len(f.commands) != 1 || f.commands[0].Command != pb.UnitreeCommand_UNITREE_COMMAND_MOVE {
+				t.Fatal("unknown floor still blocked movement")
+			}
+			switch fault {
+			case "obstacle":
+				r.observed.Grid.Obstacles[sitenav.Cell{X: 5, Y: 0}] = true
+			case "stale-pose":
+				r.observed.Pose.Received = time.Now().Add(-time.Second)
+			case "stale-scan":
+				r.observed.CloudAt = time.Now().Add(-time.Second)
+			case "stop":
+				r.Stop(4)
+			case "mode-change":
+				if err := r.SetAllowUnobservedFloor(4, false); err != nil {
+					t.Fatal(err)
+				}
+			}
+			r.stepLocked(time.Now())
+			if r.moving || f.commands[len(f.commands)-1].Command != pb.UnitreeCommand_UNITREE_COMMAND_STOP {
+				t.Fatal("incident did not stop movement", fault)
+			}
+		})
+	}
+	r, f := readySiteRobot()
+	r.moving = true
+	f.stopError = errors.New("offline")
+	if r.SetAllowUnobservedFloor(1, true) == nil || r.allowUnobservedFloor {
+		t.Fatal("enabled mode without confirmed stop")
+	}
+}
+
+func TestTransientPoseRejectionUsesOnlyStillFreshAcceptedObservations(t *testing.T) {
+	for _, expired := range []bool{false, true} {
+		for _, kind := range []string{"duplicate", "delayed", "stale-capture", "future-arrival"} {
+			t.Run(fmt.Sprintf("%s/expired=%v", kind, expired), func(t *testing.T) {
+				r, f := readySiteRobot()
+				r.moving = true
+				r.started = time.Now()
+				r.message = "Moving"
+				previous := r.observed.Pose
+				now := previous.Received.Add(20 * time.Millisecond)
+				if expired {
+					now = now.Add(time.Second)
+				}
+				received, captured := now, previous.Captured
+				switch kind {
+				case "delayed":
+					received = now.Add(-time.Second)
+				case "stale-capture":
+					captured = now.Add(-time.Second)
+				case "future-arrival":
+					received = now.Add(time.Second)
+				}
+				raw, _ := json.Marshal(map[string]any{"topic": sitenav.PoseTopic, "data": map[string]any{"position": []float64{0, 0, .3}, "imu_state": map[string]any{"quaternion": []float64{1, 0, 0, 0}}, "stamp": map[string]any{"sec": captured.Unix(), "nanosec": captured.Nanosecond()}}})
+				r.lastObservationLog = now
+				r.receiveObservationLocked(sitenav.PoseTopic, raw, false, received, now)
+				if r.observed.Pose != previous {
+					t.Fatal("rejection changed accepted pose or freshness")
+				}
+				if expired {
+					if r.moving || len(f.commands) != 1 || f.commands[0].Command != pb.UnitreeCommand_UNITREE_COMMAND_STOP {
+						t.Fatal("expired pose did not stop")
+					}
+				} else {
+					if !r.moving || len(f.commands) != 0 || r.message != "Moving" {
+						t.Fatal("fresh accepted pose was poisoned")
+					}
+					r.stepLocked(now.Add(time.Second))
+					if r.moving || len(f.commands) != 1 {
+						t.Fatal("rejection renewed freshness")
+					}
+				}
+			})
+		}
 	}
 }

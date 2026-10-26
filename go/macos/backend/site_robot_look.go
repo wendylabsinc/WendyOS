@@ -56,12 +56,12 @@ func (r *SiteRobot) Look(sequence uint64, direction int) error {
 	}
 	if direction == 0 {
 		direction = 1
-		if !r.observed.Grid.WithDeparture(departure).Turn(p.Position, p.Yaw, p.Yaw+lookAngle+lookStopMargin) {
+		if !r.navigationGridLocked(departure).Turn(p.Position, p.Yaw, p.Yaw+lookAngle+lookStopMargin) {
 			direction = -1
 		}
 	}
 	target := p.Yaw + float64(direction)*lookAngle
-	if !r.observed.Grid.WithDeparture(departure).Turn(p.Position, p.Yaw, target+float64(direction)*lookStopMargin) {
+	if !r.navigationGridLocked(departure).Turn(p.Position, p.Yaw, target+float64(direction)*lookStopMargin) {
 		return errors.New("Go2 needs observed clear floor around its turning footprint, including 10 cm clearance. An obstacle, drop or unseen floor blocks this turn.")
 	}
 	r.lookState = 1
@@ -104,7 +104,7 @@ func (r *SiteRobot) stepLookLocked(now time.Time) {
 		turn.progressYaw = p.Yaw
 		turn.progressAt = now
 	}
-	if !r.observed.Grid.WithDeparture(r.departure).Turn(p.Position, p.Yaw, p.Yaw+turn.direction*(remaining+lookStopMargin)) {
+	if !r.navigationGridLocked(r.departure).Turn(p.Position, p.Yaw, p.Yaw+turn.direction*(remaining+lookStopMargin)) {
 		r.message = "Look turn stopped: obstacle, drop or unseen floor in the turning footprint."
 		r.stopLocked()
 		return

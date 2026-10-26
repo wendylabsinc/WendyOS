@@ -59,6 +59,27 @@ func (g Grid) WithDeparture(d *Departure) Grid {
 	return Grid{floor, g.Obstacles}
 }
 
+// WithUnobservedFloor is an explicit supervised traversal policy. It admits
+// missing floor within the bounded planning area, but never removes occupied
+// cells or measured drops. It must not be used as localization evidence.
+func (g Grid) WithUnobservedFloor(origin Point) Grid {
+	if !origin.Valid() {
+		return g
+	}
+	floor := make(map[Cell]bool, len(g.Floor))
+	for c, v := range g.Floor {
+		floor[c] = v
+	}
+	radius := MaxDistance + 1 // footprint and stopping margin beyond the goal
+	lo, hi := cell(Point{origin.X - radius, origin.Y - radius}), cell(Point{origin.X + radius, origin.Y + radius})
+	for y := lo.Y; y <= hi.Y; y++ {
+		for x := lo.X; x <= hi.X; x++ {
+			floor[Cell{x, y}] = true
+		}
+	}
+	return Grid{floor, g.Obstacles}
+}
+
 func (g Grid) ClearanceError(p Point, subject string) error {
 	return g.PoseClearanceError(p, 0, subject)
 }
@@ -207,6 +228,38 @@ func (g Grid) Plan(start, goal Point) ([]Point, error) { return g.PlanPose(start
 // imply that Go2 can turn sideways there. The root keeps the actual unsnapped
 // pose, and the final edge reaches the exact requested destination.
 func (g Grid) PlanPose(start Point, yaw float64, goal Point) ([]Point, error) {
+	deadline := time.Now().Add(2 * time.Second)
+	path, err := g.planPose(start, yaw, goal, deadline)
+	if err == nil || !start.Valid() || !goal.Valid() || !finite(yaw) || start.Distance(goal) > MaxDistance ||
+		!g.ClearPose(start, yaw) || !g.Floor[cell(goal)] || g.Obstacles[cell(goal)] {
+		return path, err
+	}
+	// The eight map headings can all require an impossible initial turn even
+	// when the robot can leave a narrow space along its actual heading. Try
+	// bounded straight prefixes before joining the same heading-aware search.
+	// Keep the original grid/allowance and a single deadline for every attempt.
+	for step := 1; step <= 8 && time.Now().Before(deadline); step++ {
+		distance := float64(step) * CellSize
+		exit := Point{start.X + distance*math.Cos(yaw), start.Y + distance*math.Sin(yaw)}
+		if !g.Sweep(start, exit, yaw) {
+			break
+		}
+		tail, tailErr := g.planPose(exit, yaw, goal, deadline)
+		if tailErr != nil {
+			continue
+		}
+		length := distance
+		for i := 1; i < len(tail); i++ {
+			length += tail[i-1].Distance(tail[i])
+		}
+		if length <= 12 {
+			return append([]Point{start}, tail...), nil
+		}
+	}
+	return nil, err
+}
+
+func (g Grid) planPose(start Point, yaw float64, goal Point, deadline time.Time) ([]Point, error) {
 	if !start.Valid() || !goal.Valid() || !finite(yaw) || start.Distance(goal) > MaxDistance {
 		return nil, errors.New("Choose a destination within 8 metres of Go2.")
 	}
@@ -237,7 +290,6 @@ func (g Grid) PlanPose(start Point, yaw float64, goal Point) ([]Point, error) {
 	cost := map[routeState]float64{root: 0}
 	parents := map[routeState]routeState{}
 	closed := map[routeState]bool{}
-	deadline := time.Now().Add(2 * time.Second)
 	directions := []Cell{{1, 0}, {1, 1}, {0, 1}, {-1, 1}, {-1, 0}, {-1, -1}, {0, -1}, {1, -1}}
 	// Every node shares the start's sub-cell offset. Cache the swept cells
 	// for each arrival/departure heading pair; translating that exact mask is

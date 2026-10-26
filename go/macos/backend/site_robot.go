@@ -20,6 +20,7 @@ type SiteRobotSnapshot struct {
 	ArrivalTiming, UsingArrivalTiming, TimingUnavailable bool
 	ScanReady                                            bool
 	UnderBodyAllowance                                   bool
+	AllowUnobservedFloor                                 bool
 	X, Z, Yaw, FloorY                                    float64
 	ObservationRevision                                  uint64
 	Route                                                []sitenav.Point // site X, -Z
@@ -54,6 +55,7 @@ type SiteRobot struct {
 	closed                          bool
 	stopUnconfirmed                 bool
 	underBodyAllowance              bool
+	allowUnobservedFloor            bool
 	departure                       *sitenav.Departure
 	localizations                   []siteRobotLocalization
 	localizationSequence, poseEpoch uint64
@@ -146,6 +148,12 @@ func (r *SiteRobot) receiveObservationLocked(topic string, raw []byte, binary bo
 		r.message = "Live LiDAR and odometry."
 	}
 	if err != nil && topic != sitenav.JointTopic {
+		// Rejected packets never renew the lease. A delayed/duplicate pose
+		// also must not poison a newer accepted pose that is still fresh.
+		if topic == sitenav.PoseTopic && sitenav.TransientPoseError(err) && r.observed.Ready(now) == nil {
+			r.recordObservationFault(topic, err, received, now)
+			return
+		}
 		if !errors.Is(err, sitenav.ErrDuplicatePose) {
 			r.message = err.Error()
 		}
@@ -300,8 +308,13 @@ func (r *SiteRobot) stepLocked(now time.Time) {
 		r.stopLocked()
 		return
 	}
-	grid := r.observed.Grid.WithDeparture(r.departure)
+	grid := r.navigationGridLocked(r.departure)
 	if !grid.Transition(p, r.observed.Pose.Yaw, r.route[0]) {
+		if r.allowUnobservedFloor {
+			r.message = "Detected obstacle or drop on the route. Movement stopped."
+			r.stopLocked()
+			return
+		}
 		// Stop before planning a new route around changed occupied cells.
 		if err := r.command(pb.UnitreeCommand_UNITREE_COMMAND_STOP, 0, 0); err != nil {
 			r.message = "Could not confirm Stop."
@@ -315,7 +328,7 @@ func (r *SiteRobot) stepLocked(now time.Time) {
 			return
 		}
 		arrivalYaw := sitenav.Heading(path[len(path)-2], r.goal)
-		if err := r.observed.Grid.PoseClearanceError(r.goal, arrivalYaw, "the destination"); err != nil {
+		if err := r.navigationGridLocked(nil).PoseClearanceError(r.goal, arrivalYaw, "the destination"); err != nil {
 			r.message = err.Error()
 			r.stopLocked()
 			return
@@ -401,7 +414,7 @@ func (r *SiteRobot) Destination(sequence uint64, frame string, x, z float64, mov
 	if r.underBodyAllowance {
 		r.departure = &sitenav.Departure{Position: r.observed.Pose.Position, Yaw: r.observed.Pose.Yaw}
 	}
-	path, err := r.observed.Grid.WithDeparture(r.departure).PlanPose(r.observed.Pose.Position, r.observed.Pose.Yaw, goal)
+	path, err := r.navigationGridLocked(r.departure).PlanPose(r.observed.Pose.Position, r.observed.Pose.Yaw, goal)
 	if err != nil {
 		r.departure = nil
 		return err
@@ -411,7 +424,7 @@ func (r *SiteRobot) Destination(sequence uint64, frame string, x, z float64, mov
 		arrivalYaw = sitenav.Heading(path[len(path)-2], goal)
 	}
 	// The fixed departure allowance must never authorize hidden floor at a goal.
-	if err := r.observed.Grid.PoseClearanceError(goal, arrivalYaw, "the destination"); err != nil {
+	if err := r.navigationGridLocked(nil).PoseClearanceError(goal, arrivalYaw, "the destination"); err != nil {
 		r.departure = nil
 		return err
 	}
@@ -462,6 +475,38 @@ func (r *SiteRobot) SetUnderBodyAllowance(sequence uint64, enabled bool) error {
 	return nil
 }
 
+func (r *SiteRobot) SetAllowUnobservedFloor(sequence uint64, enabled bool) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if sequence <= r.commandSequence {
+		return errors.New("This robot order was superseded.")
+	}
+	r.commandSequence = sequence
+	if r.closed || r.ctx.Err() != nil {
+		return errors.New("Robot connection closed.")
+	}
+	if r.moving || r.stopUnconfirmed {
+		if err := r.stopLocked(); err != nil {
+			return err
+		}
+	}
+	r.allowUnobservedFloor = enabled
+	r.preview = nil
+	r.route = nil
+	r.departure = nil
+	r.localizations = nil
+	r.message = "Supervised navigation changed. Choose a destination to preview its route."
+	return nil
+}
+
+// Never use this planning-only grid as measured evidence for localization.
+func (r *SiteRobot) navigationGridLocked(departure *sitenav.Departure) sitenav.Grid {
+	if r.allowUnobservedFloor {
+		return r.observed.Grid.WithUnobservedFloor(r.observed.Pose.Position)
+	}
+	return r.observed.Grid.WithDeparture(departure)
+}
+
 func (r *SiteRobot) SetArrivalTiming(sequence uint64, enabled bool) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -499,6 +544,7 @@ func (r *SiteRobot) Snapshot() SiteRobotSnapshot {
 	s.UsingArrivalTiming = r.observed.UsingArrivalTime
 	s.TimingUnavailable = r.observed.TimingUnavailable
 	s.UnderBodyAllowance = r.underBodyAllowance
+	s.AllowUnobservedFloor = r.allowUnobservedFloor
 	s.ScanReady = (r.observed.SurfaceReady(now) == nil || r.observed.LocalizationReady(now) == nil) && !r.closed && !r.stopUnconfirmed
 	if err := r.observed.Ready(now); err == nil {
 		s.Ready = s.Aligned && !r.closed && !r.stopUnconfirmed
@@ -507,7 +553,7 @@ func (r *SiteRobot) Snapshot() SiteRobotSnapshot {
 			if r.underBodyAllowance {
 				departure = &sitenav.Departure{Position: r.observed.Pose.Position, Yaw: r.observed.Pose.Yaw}
 			}
-			if err := r.observed.Grid.WithDeparture(departure).PoseClearanceError(r.observed.Pose.Position, r.observed.Pose.Yaw, "Go2"); err != nil {
+			if err := r.navigationGridLocked(departure).PoseClearanceError(r.observed.Pose.Position, r.observed.Pose.Yaw, "Go2"); err != nil {
 				s.Ready = false
 				s.Message = err.Error()
 			}

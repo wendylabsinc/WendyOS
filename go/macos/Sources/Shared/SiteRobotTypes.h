@@ -9,7 +9,7 @@ typedef struct {
     char *message;
     int32_t pose, ready, aligned, moving;
     int32_t arrival_timing, using_arrival_timing, timing_unavailable, scan_ready;
-    int32_t under_body_allowance, look_state, look_direction;
+    int32_t under_body_allowance, allow_unobserved_floor, look_state, look_direction;
     double x, z, yaw, floor_y;
     uint64_t observation_revision;
     WDSiteRoutePoint *route;
@@ -27,6 +27,7 @@ WDStatus *WDSiteRobotLook(uint64_t handle, uint64_t sequence, int32_t direction)
 void WDSiteRobotStop(uint64_t handle, uint64_t sequence);
 WDStatus *WDSiteRobotArrivalTiming(uint64_t handle, uint64_t sequence, int32_t enabled);
 WDStatus *WDSiteRobotUnderBodyAllowance(uint64_t handle, uint64_t sequence, int32_t enabled);
+WDStatus *WDSiteRobotAllowUnobservedFloor(uint64_t handle, uint64_t sequence, int32_t enabled);
 WDSiteRobotCandidates *WDSiteRobotLocalize(uint64_t handle, uint64_t sequence, char *frame, double *vertices, size_t vertex_count);
 void WDSiteRobotCandidatesFree(WDSiteRobotCandidates *value);
 WDStatus *WDSiteRobotConfirmLocalization(uint64_t handle, uint64_t sequence, uint64_t match_sequence, char *frame, int32_t candidate);
