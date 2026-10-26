@@ -2,6 +2,8 @@ package backend
 
 import (
 	"encoding/json"
+	"github.com/wendylabsinc/wendy/go/macos/backend/sitenav"
+	"math"
 	"os"
 	"path/filepath"
 	"time"
@@ -36,6 +38,52 @@ func (r *SiteRobot) recordObservationFault(topic string, err error, received, no
 		return
 	}
 	path := filepath.Join(dir, "go2-observation-fault.json")
+	if os.WriteFile(path+".tmp", data, 0600) == nil {
+		_ = os.Rename(path+".tmp", path)
+	}
+}
+
+// Keep one bounded local scan around the body to explain false turn blockers.
+// This does not initiate movement or change the observed collision grid.
+func (r *SiteRobot) recordNavigationEvidence(now time.Time) {
+	if now.Sub(r.lastNavigationLog) < time.Second {
+		return
+	}
+	r.lastNavigationLog = now
+	p := r.observed.Pose
+	type cellEvidence struct {
+		X, Y           float64
+		Floor, Blocked bool
+	}
+	var cells []cellEvidence
+	for y := -10; y <= 10; y++ {
+		for x := -10; x <= 10; x++ {
+			c := sitenav.Cell{X: int(math.Floor(p.Position.X/sitenav.CellSize)) + x, Y: int(math.Floor(p.Position.Y/sitenav.CellSize)) + y}
+			if r.observed.Grid.Floor[c] || r.observed.Grid.Obstacles[c] {
+				cells = append(cells, cellEvidence{(float64(c.X) + .5) * sitenav.CellSize, (float64(c.Y) + .5) * sitenav.CellSize, r.observed.Grid.Floor[c], r.observed.Grid.Obstacles[c]})
+			}
+		}
+	}
+	data, err := json.Marshal(struct {
+		At                   time.Time
+		Pose                 sitenav.Pose
+		FloorHeight          float64
+		AllowUnobservedFloor bool
+		Cells                []cellEvidence
+		Samples              []sitenav.Vertex
+	}{now, p, r.observed.FloorHeight, r.allowUnobservedFloor, cells, r.observed.LocalNavigationSamples})
+	if err != nil {
+		return
+	}
+	dir, err := os.UserCacheDir()
+	if err != nil {
+		return
+	}
+	dir = filepath.Join(dir, "Wendy")
+	if os.MkdirAll(dir, 0700) != nil {
+		return
+	}
+	path := filepath.Join(dir, "go2-navigation-evidence.json")
 	if os.WriteFile(path+".tmp", data, 0600) == nil {
 		_ = os.Rename(path+".tmp", path)
 	}

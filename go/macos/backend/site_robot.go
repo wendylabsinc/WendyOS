@@ -66,6 +66,7 @@ type SiteRobot struct {
 	fusionFrame                     string
 	fusionEpoch                     uint64
 	lastObservationLog              time.Time
+	lastNavigationLog               time.Time
 }
 
 // Every new desktop/mobile connection starts with the supervised settings enabled.
@@ -164,6 +165,9 @@ func (r *SiteRobot) receiveObservationLocked(topic string, raw []byte, binary bo
 		if len(r.poseHistory) > 128 {
 			r.poseHistory = r.poseHistory[len(r.poseHistory)-128:]
 		}
+	}
+	if err == nil && topic == sitenav.CloudTopic && r.observed.Ready(now) == nil {
+		r.recordNavigationEvidence(now)
 	}
 	if err == nil && topic == sitenav.CloudTopic && r.moving {
 		if navErr := r.observed.Ready(now); navErr != nil {

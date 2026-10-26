@@ -406,11 +406,11 @@ func (a Alignment) ToRobot(p Point) Point {
 
 // The physical Go2 ignores forward requests below roughly 0.5 m/s. Use its
 // walking rate until stopping; a lower proportional command is not a slow gait.
-const WalkingSpeed = .55
+const WalkingSpeed = .65
 
-// Match the supported look-around rate. Small heading corrections must stop
+// Route turns use a faster rate than localization looks. Small corrections stop
 // at the heading tolerance instead of tapering into rejected SDK velocities.
-const TurningSpeed = .5
+const TurningSpeed = .8
 
 // Cover the 500ms MOVE lease, braking at 1 rad/s² and 0.05rad tolerance.
 const TurnStoppingAngle = TurningSpeed*.5 + TurningSpeed*TurningSpeed/2 + .05

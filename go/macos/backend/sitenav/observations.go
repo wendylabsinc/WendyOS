@@ -38,23 +38,24 @@ type Pose struct {
 }
 type Observations struct {
 	// Fixed authenticated gateway-to-client offset measured when connecting.
-	ClockOffset       time.Duration
-	Pose              Pose
-	Grid              Grid
-	CloudAt           time.Time
-	CloudCapture      float64
-	CloudReceived     time.Time
-	AllowArrivalTime  bool
-	UsingArrivalTime  bool
-	TimingUnavailable bool
-	Landmarks         []Point
-	Surfaces          SurfaceCloud
-	FloorHeight       float64
-	Joints            []float64
-	JointsAt          time.Time
-	Fault             string
-	FloorFault        string
-	PoseFault         string
+	ClockOffset            time.Duration
+	Pose                   Pose
+	Grid                   Grid
+	LocalNavigationSamples []Vertex
+	CloudAt                time.Time
+	CloudCapture           float64
+	CloudReceived          time.Time
+	AllowArrivalTime       bool
+	UsingArrivalTime       bool
+	TimingUnavailable      bool
+	Landmarks              []Point
+	Surfaces               SurfaceCloud
+	FloorHeight            float64
+	Joints                 []float64
+	JointsAt               time.Time
+	Fault                  string
+	FloorFault             string
+	PoseFault              string
 }
 
 // Timing changes invalidate the old map; a new packet must pass all checks.
@@ -360,6 +361,12 @@ func (o *Observations) cloud(raw []byte, isBinary bool, received, now time.Time)
 	}
 	o.Surfaces = ExtractSurfaces(points, floor)
 	g := navigationGrid(points, floor)
+	o.LocalNavigationSamples = nil
+	for _, v := range points {
+		if (Point{v.X, v.Y}).Distance(o.Pose.Position) <= 1 {
+			o.LocalNavigationSamples = append(o.LocalNavigationSamples, v)
+		}
+	}
 	if len(g.Floor) < 100 {
 		o.FloorFault = "The current scan does not show enough level floor."
 		return nil
@@ -558,8 +565,10 @@ func navigationGrid(points []Vertex, floor float64) Grid {
 	// Buried occupancy below an observed floor is not a hole. A coherent lower
 	// surface with no floor above it is a drop. Isolated lower voxels alone do
 	// not establish a surface; those cells stay unknown, not free.
-	for c := range lower {
+	buried := map[Cell]float64{}
+	for c, z := range lower {
 		if g.Floor[c] {
+			buried[c] = z
 			delete(lower, c)
 		}
 	}
@@ -575,12 +584,21 @@ func navigationGrid(points []Vertex, floor float64) Grid {
 		visited[seed] = true
 		component := []Cell{seed}
 		var samples []Vertex
+		continuesBeneathFloor := false
 		for i := 0; i < len(component); i++ {
 			c := component[i]
 			samples = append(samples, Vertex{float64(c.X-seed.X) * CellSize, float64(c.Y-seed.Y) * CellSize, lower[c]})
 			for dy := -1; dy <= 1; dy++ {
 				for dx := -1; dx <= 1; dx++ {
 					next := Cell{c.X + dx, c.Y + dy}
+					// A lower occupied layer continuing under measured level
+					// floor is buried volume, not independent evidence of a drop.
+					// Leave the occluded patch unknown; never invent free floor.
+					if math.Abs(float64(dx))+math.Abs(float64(dy)) == 1 {
+						if z, ok := buried[next]; ok && math.Abs(z-lower[c]) <= .025+1e-6 {
+							continuesBeneathFloor = true
+						}
+					}
 					if _, ok := lower[next]; ok && !visited[next] {
 						visited[next] = true
 						component = append(component, next)
@@ -588,7 +606,7 @@ func navigationGrid(points []Vertex, floor float64) Grid {
 				}
 			}
 		}
-		if observedLowerSurface(samples) {
+		if !continuesBeneathFloor && observedLowerSurface(samples) {
 			for _, c := range component {
 				g.Obstacles[c] = true
 			}

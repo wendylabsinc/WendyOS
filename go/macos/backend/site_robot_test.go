@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/wendylabsinc/wendy/go/internal/shared/unitree"
 	"github.com/wendylabsinc/wendy/go/macos/backend/sitenav"
 	pb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	"google.golang.org/grpc"
@@ -288,7 +289,7 @@ func TestSiteRobotClosedLoopReachesTurnedDestination(t *testing.T) {
 		if c.Command != pb.UnitreeCommand_UNITREE_COMMAND_MOVE {
 			continue
 		}
-		if math.Abs(c.Forward) > sitenav.WalkingSpeed || math.Abs(c.Yaw) > sitenav.TurningSpeed {
+		if !unitree.ValidMotion(c.Forward, c.Lateral, c.Yaw) || math.Abs(c.Forward) > sitenav.WalkingSpeed || math.Abs(c.Yaw) > sitenav.TurningSpeed {
 			t.Fatal("unbounded command")
 		}
 		r.observed.Pose.Yaw += c.Yaw * .1
@@ -531,8 +532,9 @@ func TestWalkingDeadbandAndStoppingHorizon(t *testing.T) {
 	if err := r.Destination(1, "site/revision", .2, 0, true); err != nil {
 		t.Fatal(err)
 	}
-	// The target footprint is clear but the 0.55m/s stopping envelope is not.
-	r.observed.Grid.Obstacles[sitenav.Cell{X: 9, Y: 0}] = true
+	// Outside the previous 0.55 m/s stopping envelope, but inside the
+	// faster walking envelope. The destination footprint itself is clear.
+	r.observed.Grid.Obstacles[sitenav.Cell{X: 11, Y: 0}] = true
 	r.stepLocked(time.Now())
 	if r.moving || len(f.commands) != 1 || f.commands[0].Command != pb.UnitreeCommand_UNITREE_COMMAND_STOP {
 		t.Fatal("speed increase bypassed forward stopping clearance")

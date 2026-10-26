@@ -22,10 +22,10 @@ const lookAngle = math.Pi / 6
 
 // Match the existing manual turn control. Do not taper into low rates that
 // the physical robot may ignore; stop instead when the bounded angle is reached.
-const lookSpeed = sitenav.TurningSpeed
+const lookSpeed = .5
 
 // Cover the 500ms MOVE lease, braking at 1 rad/s² and 0.05rad tolerance.
-const lookStopMargin = sitenav.TurnStoppingAngle
+const lookStopMargin = lookSpeed*.5 + lookSpeed*lookSpeed/2 + .05
 
 func (r *SiteRobot) Look(sequence uint64, direction int) error {
 	r.mu.Lock()
@@ -108,7 +108,10 @@ func (r *SiteRobot) stepLookLocked(now time.Time) {
 		turn.progressAt = now
 	}
 	if !r.navigationGridLocked(r.departure).Turn(p.Position, p.Yaw, p.Yaw+turn.direction*(remaining+lookStopMargin)) {
-		r.message = "Look turn stopped: obstacle, drop or unseen floor in the turning footprint."
+		r.message = "Look turn stopped: the scan marks an obstacle or drop in the turning footprint."
+		if !r.allowUnobservedFloor {
+			r.message = "Look turn stopped: the scan marks blocked or unobserved floor in the turning footprint."
+		}
 		r.stopLocked()
 		return
 	}

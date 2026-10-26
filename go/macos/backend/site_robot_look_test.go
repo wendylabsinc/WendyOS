@@ -191,3 +191,21 @@ func TestAutomaticLookChoosesClearSide(t *testing.T) {
 		t.Fatal("wrong automatic turn rate")
 	}
 }
+
+func TestSupervisedLookAllowsUnknownFloorDuringTurn(t *testing.T) {
+	r, f := readySiteRobot()
+	r.allowUnobservedFloor = true
+	r.observed.Grid.Floor = nil
+	if err := r.Look(1, 1); err != nil {
+		t.Fatal(err)
+	}
+	r.stepLocked(time.Now())
+	if !r.moving || len(f.commands) != 1 || f.commands[0].Command != pb.UnitreeCommand_UNITREE_COMMAND_MOVE {
+		t.Fatal("unknown floor stopped supervised turn")
+	}
+	r.observed.Grid.Obstacles[sitenav.Cell{}] = true
+	r.stepLocked(time.Now())
+	if r.moving || f.commands[len(f.commands)-1].Command != pb.UnitreeCommand_UNITREE_COMMAND_STOP {
+		t.Fatal("observed blocker failed to stop turn")
+	}
+}

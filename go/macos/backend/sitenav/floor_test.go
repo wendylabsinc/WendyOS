@@ -533,3 +533,54 @@ func TestCloudIncludesLowerWallsWhenUpperWallsAlreadyPass(t *testing.T) {
 	}
 	t.Fatal("passing upper-wall readiness discarded the lower wall")
 }
+
+func TestOccludedBuriedLayerIsNotAnIndependentDrop(t *testing.T) {
+	var points []Vertex
+	for x := -10; x <= 10; x++ {
+		for y := -10; y <= 10; y++ {
+			px, py := float64(x)*CellSize+.025, float64(y)*CellSize+.025
+			// The captured failure had continuous layers at -10, -15 and
+			// -20 cm, also underneath neighboring measured floor cells.
+			for _, z := range []float64{-.2, -.15, -.1} {
+				points = append(points, Vertex{px, py, z})
+			}
+			if x < -3 || x > 2 || y < -2 || y > 1 {
+				points = append(points, Vertex{px, py, 0})
+			}
+		}
+	}
+	g := navigationGrid(points, 0)
+	if g.Obstacles[Cell{}] || g.Floor[Cell{}] {
+		t.Fatal("buried layer must remain unknown")
+	}
+	if g.ClearPose(Point{}, 0) {
+		t.Fatal("unknown floor allowed without supervision")
+	}
+	if !g.WithUnobservedFloor(Point{}).Turn(Point{}, 0, 1) {
+		t.Fatal("buried volume blocked supervised turn")
+	}
+	// Distinct lower surfaces and raised returns retain their blocking meaning.
+	points = append(points, Vertex{2.025, 2.025, -.2}, Vertex{2.125, 2.025, -.2}, Vertex{2.025, 2.125, -.2}, Vertex{2.125, 2.125, -.2}, Vertex{.025, .025, .15})
+	g = navigationGrid(points, 0)
+	if !g.Obstacles[Cell{20, 20}] || !g.Obstacles[Cell{}] {
+		t.Fatal("drop or raised obstacle was erased")
+	}
+}
+
+func TestDistinctLowerSurfaceBesideBuriedFloorStillBlocks(t *testing.T) {
+	var points []Vertex
+	for x := -5; x <= 5; x++ {
+		for y := -5; y <= 5; y++ {
+			px, py := float64(x)*CellSize+.025, float64(y)*CellSize+.025
+			if x >= 0 && x <= 1 && y >= 0 && y <= 1 {
+				points = append(points, Vertex{px, py, -.2})
+			} else {
+				points = append(points, Vertex{px, py, 0}, Vertex{px, py, -.1})
+			}
+		}
+	}
+	g := navigationGrid(points, 0)
+	if !g.Obstacles[Cell{}] || g.WithUnobservedFloor(Point{}).ClearPose(Point{}, 0) {
+		t.Fatal("a distinct lower surface was erased by nearby buried occupancy")
+	}
+}
