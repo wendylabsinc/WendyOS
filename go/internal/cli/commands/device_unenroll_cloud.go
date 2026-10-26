@@ -294,7 +294,7 @@ func runCloudDeviceUnenrollAndReset(cmd *cobra.Command, cloudGRPC, selector, dev
 		out := map[string]any{
 			"assetId": device.key, "cloud": auth.CloudGRPC, "deviceReset": deviceReset,
 			"certsRevoked": result.CertificatesRevoked, "credentialsRevoked": result.CredentialsRevoked,
-			"assetDeleted": result.AssetDeleted,
+			"assetDeleted": result.AssetDeleted, "enrollmentFenced": result.EnrollmentFenced,
 		}
 		if err != nil {
 			out["cloudError"] = err.Error()
@@ -315,6 +315,8 @@ func runCloudDeviceUnenrollAndReset(cmd *cobra.Command, cloudGRPC, selector, dev
 	} else if err == nil {
 		if assetAbsent {
 			fmt.Fprintf(cmd.OutOrStdout(), "No cloud enrollment for %q exists in the selected organization in %s.\n", label, auth.CloudGRPC)
+		} else if result.EnrollmentFenced {
+			fmt.Fprintf(cmd.OutOrStdout(), "Unenrolled %s: Cloud revoked its certificates and enrollment credentials and deleted cloud asset %s.\n", device.GetName(), device.key)
 		} else {
 			fmt.Fprintf(cmd.OutOrStdout(), "Unenrolled %s: revoked %d certificate(s) and %d enrollment credential(s), and deleted cloud asset %s.\n", device.GetName(), result.CertificatesRevoked, result.CredentialsRevoked, device.key)
 		}

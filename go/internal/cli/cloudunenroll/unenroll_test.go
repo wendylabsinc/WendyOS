@@ -6,6 +6,8 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/base64"
+	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"math/big"
@@ -70,7 +72,13 @@ type cleanupConn struct {
 	changeBinding bool
 	deleteSuccess bool
 	getCount      int
+	// denyPKI answers every PKIAdminService call as Cloud does for a role
+	// holding device:delete but no PKI administration permission.
+	denyPKI  bool
+	deletion *cloudpbv2.SignedRequest
 }
+
+var errPKIDenied = status.Error(codes.PermissionDenied, `insufficient role in organization "Wendy Labs, Inc."`)
 
 func newCleanupConn(t *testing.T) *cleanupConn {
 	return &cleanupConn{t: t, asset: testAssetRecord(), deleteSuccess: true,
@@ -117,6 +125,10 @@ func (c *cleanupConn) mutate(event string) error {
 }
 
 func (c *cleanupConn) Invoke(_ context.Context, method string, arg, reply any, _ ...grpc.CallOption) error {
+	if c.denyPKI && strings.HasPrefix(method, "/wendycloud.v2.PKIAdminService/") {
+		c.mutations = append(c.mutations, "denied "+method)
+		return errPKIDenied
+	}
 	switch method {
 	case cloudpbv2.OperatorSessionService_RegisterOperatorLeaf_FullMethodName:
 		return status.Error(codes.Unimplemented, "use x5c")
@@ -180,6 +192,7 @@ func (c *cleanupConn) Invoke(_ context.Context, method string, arg, reply any, _
 		if req.GetId() != testAsset {
 			c.t.Fatal("deleted wrong asset")
 		}
+		c.deletion = arg.(*cloudpbv2.SignedRequest)
 		if err := c.mutate("delete"); err != nil {
 			return err
 		}
@@ -269,5 +282,58 @@ func TestRemoveRejectsChangedTenantBeforeMutation(t *testing.T) {
 	result, err := Remove(context.Background(), conn, testAuth(t), testAssetRecord())
 	if err == nil || result.AssetDeleted || len(conn.mutations) != 0 {
 		t.Fatalf("cross-tenant cleanup: result=%+v ops=%v err=%v", result, conn.mutations, err)
+	}
+}
+
+// A device enrolled under its UUID has asset id == device id. DeleteAsset then
+// has pki-core fence the enrollment under device:delete: it revokes the
+// certificates, enrollment tokens and EAB keys in one transaction, and Cloud
+// refuses to delete unless pki-core confirms. Removal must not first ask for
+// PKI administration permissions the caller may lack. On 2026-10-26 a Lite
+// unenroll stopped here with PermissionDenied listing enrollment tokens.
+func TestRemoveLeavesFencedCleanupToDeleteAsset(t *testing.T) {
+	for _, name := range []*string{proto.String(testAsset), nil} {
+		t.Run(fmt.Sprintf("pki_device_name=%v", name != nil), func(t *testing.T) {
+			conn := newCleanupConn(t)
+			conn.asset.PkiDeviceName, conn.denyPKI = name, true
+			result, err := Remove(context.Background(), conn, testAuth(t), proto.Clone(conn.asset).(*cloudpbv2.Asset))
+			if err != nil || !result.AssetDeleted || !result.EnrollmentFenced || result.CredentialsRevoked != 0 || result.CertificatesRevoked != 0 {
+				t.Fatalf("result=%+v err=%v", result, err)
+			}
+			if !reflect.DeepEqual(conn.mutations, []string{"delete"}) {
+				t.Fatalf("operations=%v, want only the deletion", conn.mutations)
+			}
+			// The fence rides on this deletion: the exact device guard, and the
+			// same operator's revoke_principal request for this device.
+			var req cloudpbv2.DeleteAssetRequest
+			conn.decode(conn.deletion, &req)
+			parts := strings.Split(string(conn.deletion.GetPkiManagementRequest()), ".")
+			if req.GetExpectedDeviceId() != testAsset || len(parts) != 3 {
+				t.Fatalf("deletion lacks the device guard or PKI revocation: %v", &req)
+			}
+			payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+			if err != nil {
+				t.Fatal(err)
+			}
+			var claims struct{ Op, Principal string }
+			if err := json.Unmarshal(payload, &claims); err != nil {
+				t.Fatal(err)
+			}
+			if claims.Op != "revoke_principal" || claims.Principal != "spiffe://wendy.sh/tenant/"+testTenant+"/device/"+testAsset {
+				t.Fatalf("deletion revokes %+v, want this device", claims)
+			}
+		})
+	}
+}
+
+// A row the re-key parked keeps a former name that Cloud cannot fence, so its
+// unused credentials are still revoked here first. A caller who may not list
+// them is refused before anything changes; the deletion is never sent.
+func TestRemoveParkedAssetFailsClosedWithoutCredentialPermissions(t *testing.T) {
+	conn := newCleanupConn(t)
+	conn.denyPKI = true
+	result, err := Remove(context.Background(), conn, testAuth(t), testAssetRecord())
+	if status.Code(err) != codes.PermissionDenied || result.AssetDeleted || result.EnrollmentFenced || conn.deletion != nil {
+		t.Fatalf("result=%+v operations=%v err=%v", result, conn.mutations, err)
 	}
 }

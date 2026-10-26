@@ -1,5 +1,7 @@
 // Package cloudunenroll removes a cloud device enrollment without contacting
-// the device. Bootstrap credentials are revoked before issued certificates.
+// the device. Cloud's DeleteAsset revokes a UUID-keyed device's credentials
+// itself; for a parked row, bootstrap credentials are revoked here before
+// issued certificates.
 package cloudunenroll
 
 import (
@@ -16,10 +18,13 @@ import (
 
 // Result records only operations acknowledged by Cloud. An error may accompany
 // partial progress; the caller must not report a completed unenrollment then.
+// EnrollmentFenced means the deletion itself revoked the device's certificates
+// and bootstrap credentials; Cloud reports no counts for those.
 type Result struct {
 	CertificatesRevoked int
 	CredentialsRevoked  int
 	AssetDeleted        bool
+	EnrollmentFenced    bool
 }
 
 // DeviceID is the device UUID the asset's certificates name. Since cloud #873
@@ -59,7 +64,37 @@ func Remove(ctx context.Context, conn grpc.ClientConnInterface, auth *config.Aut
 	if err := checkBinding(); err != nil {
 		return result, err
 	}
+	// A device enrolled under its UUID (asset id == device id) is fenced by
+	// DeleteAsset itself, under device:delete alone: pki-core revokes its
+	// certificates, enrollment tokens and EAB keys in one transaction, and
+	// Cloud refuses to delete unless pki-core confirms (WDY-3910). Doing that
+	// here would need PKI administration permissions unenroll does not. A row
+	// the re-key parked keeps a former name Cloud cannot fence, so its
+	// credentials are still revoked here first, failing closed.
+	fenced := deviceID == assetID
+	if !fenced {
+		if result, err = revokeUnfenced(ctx, conn, auth, tenant, deviceID); err != nil {
+			return result, err
+		}
+		if err := checkBinding(); err != nil {
+			return result, err
+		}
+	}
+	deleted := &cloudpb.DeleteAssetResponse{}
+	if err := cloudrequest.Invoke(ctx, conn, auth, cloudpb.AssetService_DeleteAsset_FullMethodName,
+		&cloudpb.DeleteAssetRequest{Id: assetID, ExpectedDeviceId: &deviceID}, deleted); err != nil {
+		return result, fmt.Errorf("deleting cloud asset: %w", err)
+	}
+	if !deleted.GetSuccess() {
+		return result, fmt.Errorf("cloud did not confirm asset deletion")
+	}
+	result.AssetDeleted, result.EnrollmentFenced = true, fenced
+	return result, nil
+}
 
+// revokeUnfenced revokes the unused bootstrap credentials, then the issued
+// certificates, of a device identity DeleteAsset cannot fence.
+func revokeUnfenced(ctx context.Context, conn grpc.ClientConnInterface, auth *config.AuthConfig, tenant, deviceID string) (result Result, err error) {
 	pki := cloudpb.NewPKIAdminServiceClient(conn)
 	tokens, err := enrollmentTokens(ctx, pki, tenant, deviceID)
 	if err != nil {
@@ -89,18 +124,6 @@ func Remove(ctx context.Context, conn grpc.ClientConnInterface, auth *config.Aut
 	if err != nil {
 		return result, fmt.Errorf("revoking device certificates: %w", err)
 	}
-	if err := checkBinding(); err != nil {
-		return result, err
-	}
-	deleted := &cloudpb.DeleteAssetResponse{}
-	if err := cloudrequest.Invoke(ctx, conn, auth, cloudpb.AssetService_DeleteAsset_FullMethodName,
-		&cloudpb.DeleteAssetRequest{Id: assetID, ExpectedDeviceId: &deviceID}, deleted); err != nil {
-		return result, fmt.Errorf("deleting cloud asset: %w", err)
-	}
-	if !deleted.GetSuccess() {
-		return result, fmt.Errorf("cloud did not confirm asset deletion")
-	}
-	result.AssetDeleted = true
 	return result, nil
 }
 
