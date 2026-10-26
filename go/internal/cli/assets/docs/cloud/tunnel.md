@@ -1,10 +1,16 @@
 # Cloud Tunnel
 
-The `wendy cloud tunnel` command forwards a local TCP or UDP port to a service on a cloud-enrolled WendyOS device. It listens on `127.0.0.1` on your development machine and reaches the remote port on the device's loopback address through the cloud broker.
+The `wendy cloud tunnel` command forwards a local TCP or UDP port to an authorized
+service on a cloud-enrolled device. Cloud v2 authorizes each port through its
+service catalog; legacy sessions use the legacy broker. It listens on
+`127.0.0.1` on your development machine and reaches the remote service through
+the Cloud broker. Start with the
+[Cloud v2 or Legacy tab](/docs/cloud) if you have not selected a session yet.
 
 ## Prerequisites
 
-- Authenticated with Wendy Cloud (`wendy auth login`).
+- Authenticated with the intended Cloud context. Use `wendy cloud login` for v2,
+  or `wendy cloud login --legacy` for v1, then check `wendy cloud status`.
 - At least one compute device enrolled and **online** in your organization.
 
 ## Usage
@@ -13,27 +19,40 @@ The `wendy cloud tunnel` command forwards a local TCP or UDP port to a service o
 wendy cloud tunnel <local-port>:<remote-port>[/udp] [--cloud-grpc <endpoint>] [--device <id|name>]
 ```
 
-For example, forward local port 2222 to SSH on the device:
+For example, forward local port 15052 to the Wendy Agent service:
 
 ```sh
-wendy cloud tunnel 2222:22 --device shop-floor-01
+wendy cloud tunnel 15052:50052 --device shop-floor-01
 ```
 
-Without a protocol suffix, the command uses TCP. A single port such as `9000/udp` uses that port at both ends. Keep the command running while using the service, then press Ctrl+C to close the forward. Closing it does not stop the remote app.
+This is a transport for an authenticated Agent client, not an HTTP endpoint.
+Forwarding does not bypass the Agent's authentication. Keep the command running
+while using it, then press Ctrl+C to close the forward.
 
-> **Which remote ports and protocols are reachable depends on your session type.**
-> On a **cloud (OIDC) session**, Cloud brokers the connection through its
-> authorized service catalog, which today exposes only **TCP port 22 (`ssh`)
-> and TCP port 50052 (`wendy-agent`)**. Any other remote port fails with
-> `Cloud's authorized service catalog has no service for port <n>`, and `/udp`
-> fails with `Cloud's authorized service catalog does not expose UDP
-> forwarding`.
-> On a **legacy (non-OIDC) session**, any remote port and `/udp` still work, as
-> in the UDP example below:
->
-> ```sh
-> wendy cloud tunnel 9000:9000/udp --device shop-floor-01   # legacy sessions only
-> ```
+Without a protocol suffix, the command uses TCP. Append `/udp` to forward UDP
+datagrams. A single port uses that port at both ends.
+
+Cloud v2 supports any TCP or UDP port from 1 through 65535 on the device's
+loopback interface. For example:
+
+```sh
+wendy cloud tunnel 8080:3007 --device shop-floor-01
+wendy cloud tunnel 9000:9000/udp --device shop-floor-01
+```
+
+Arbitrary ports require an updated Cloud service, plus CLI and agent
+[2026.10.22-211023](https://github.com/wendylabsinc/WendyOS/releases/tag/2026.10.22-211023)
+or newer. Older v2 versions support only TCP ports 22 and 50052. Legacy
+sessions retain their existing TCP and UDP forwarding behavior.
+
+Each v2 UDP session authorizes one remote port. Separate local peers use
+separate flows, with up to 64 active flows and 16 new flows per second.
+Empty datagrams are supported; the maximum payload is 65507 bytes.
+
+Port 22 requires an SSH server on the target. Release Jetson and Raspberry Pi images do not
+include one; listing `ssh` in the catalog does not make SSH available there.
+Before moving a custom application port or UDP workflow from v1, test it on v2
+with the updated versions. See [Moving to Cloud v2](/docs/cloud-migration).
 
 The CLI:
 
@@ -46,7 +65,10 @@ The CLI:
      - In a **non-interactive environment**, exits with an error that enumerates available devices as `id=name` pairs (unnamed devices show as `(unnamed)`). Pass `--device <id|name>` to select one directly.
 3. Starts the local listener and forwards traffic to the requested port on the selected device.
 
-Only online devices (those with an active broker presence) are shown. If you need to inspect enrolled-but-offline devices, use [`wendy cloud discover --all`](../clients/wendy-cli/commands/cloud/discover.md). Run [`wendy cloud discover --json`](../clients/wendy-cli/commands/cloud/discover.md) to list the numeric asset IDs you can pass to `--device`.
+Only online devices are shown. To inspect enrolled but offline devices, use
+[`wendy cloud discover --all`](../clients/wendy-cli/commands/cloud/discover.md).
+Use `wendy cloud discover --json` to obtain selectors: UUIDs for Cloud v2,
+numeric asset IDs for legacy Cloud, or device names in either environment.
 
 ## Flags
 

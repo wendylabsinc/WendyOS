@@ -1,0 +1,18 @@
+{
+  "revision": "0af9729d0c143a86a1d725d6e2c3ad83301f3f34",
+  "version": "0.180.0",
+  "files": {
+    "three.module.js": {
+      "path": "build/three.module.js",
+      "sha256": "c8211c69345d2e9949dc7a8ac969380497aa0600a5a8ac6a459c8cd02dd9cb8a"
+    },
+    "three.core.js": {
+      "path": "build/three.core.js",
+      "sha256": "eb077d2417f61d3e6d9264c317cabc4ea35769ed6b0ab533067292a550784c20"
+    },
+    "OrbitControls.js": {
+      "path": "examples/jsm/controls/OrbitControls.js",
+      "sha256": "b97879c748170baadeb3fb84cea1ffdf4674e283dc06042f34e2acb95a76042c"
+    }
+  }
+}

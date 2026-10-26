@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"hash"
@@ -15,6 +16,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -42,7 +44,9 @@ const (
 	// A self-describing add-on bakes its module list into the .raw; systemd-sysext
 	// exposes it here once merged. ListDrivers falls back to this when the /data
 	// override is absent, mirroring wendyos-sysext-apply's precedence.
-	driverBakedModulesDir = "/usr/lib/modules-load.d"
+	driverBakedModulesDir   = "/usr/lib/modules-load.d"
+	driverPrivatePayloadDir = "/usr/lib/wendyos-driver-payloads"
+	driverActiveStateDir    = "/usr/lib/wendyos-driver-state"
 )
 
 // maxDriverImageSize caps a driver .raw to guard against a runaway upload/download.
@@ -81,13 +85,16 @@ type DriverService struct {
 	requireSignature bool
 
 	// Seams for tests.
-	enabledDir      string
-	modulesDir      string
-	bakedModulesDir string
-	applyScript     string
-	unameR          func() string
-	loadedModules   func() []string
-	httpGet         func(ctx context.Context, url string) (io.ReadCloser, error)
+	enabledDir        string
+	modulesDir        string
+	bakedModulesDir   string
+	privatePayloadDir string
+	activeStateDir    string
+	applyScript       string
+	unameR            func() string
+	loadedModules     func() []string
+	mergedExtensions  func(ctx context.Context) ([]string, error)
+	httpGet           func(ctx context.Context, url string) (io.ReadCloser, error)
 }
 
 // NewDriverService builds the driver service with production defaults. Signature
@@ -95,15 +102,18 @@ type DriverService struct {
 // driver-signing key is embedded, matching the agent-update/container paths).
 func NewDriverService(logger *zap.Logger) *DriverService {
 	return &DriverService{
-		logger:          logger,
-		verifier:        sigverify.DefaultVerifier,
-		enabledDir:      driverEnabledDir,
-		modulesDir:      driverModulesDir,
-		bakedModulesDir: driverBakedModulesDir,
-		applyScript:     sysextApplyScript,
-		unameR:          unameRelease,
-		loadedModules:   loadedKernelModules,
-		httpGet:         httpGetBody,
+		logger:            logger,
+		verifier:          sigverify.DefaultVerifier,
+		enabledDir:        driverEnabledDir,
+		modulesDir:        driverModulesDir,
+		bakedModulesDir:   driverBakedModulesDir,
+		privatePayloadDir: driverPrivatePayloadDir,
+		activeStateDir:    driverActiveStateDir,
+		applyScript:       sysextApplyScript,
+		unameR:            unameRelease,
+		loadedModules:     loadedKernelModules,
+		mergedExtensions:  mergedSysextNames,
+		httpGet:           httpGetBody,
 	}
 }
 
@@ -323,7 +333,7 @@ func (s *DriverService) finalize(ctx context.Context, spec DriverInstallSpec, tm
 	// module is indistinguishable from one that never went away. The incoming
 	// image is the only source for a self-describing add-on's list before it
 	// merges, so it joins what is already declared on disk.
-	declared := modulesUnion(s.declaredModules(spec.Name), spec.ModulesLoad)
+	declared := modulesUnion(s.listedModules(spec.Name), spec.ModulesLoad)
 	resident := s.residentModules(modulesUnion(declared, imageModules(tmpPath, spec.Name)))
 
 	// The image picks its own bucket: one pinning no kernel goes to the unpinned
@@ -353,6 +363,7 @@ func (s *DriverService) finalize(ctx context.Context, spec DriverInstallSpec, tm
 		s.pruneStore(target)
 		return false, nil
 	}
+	previousGeneration := s.activationGeneration(spec.Name)
 	if err := s.apply(ctx, spec.Name); err != nil {
 		s.removePlaced(kernel, spec.Name)
 		snap.restore()
@@ -363,6 +374,15 @@ func (s *DriverService) finalize(ctx context.Context, spec DriverInstallSpec, tm
 
 	// Still resident from before the install: modprobe could not replace it, so
 	// the kernel runs the old code until a reboot.
+	// A fresh runtime receipt proves which resident modules were actually unloaded.
+	// The runtime writes replaced-modules and then generation in one step, after
+	// refresh has discarded the previous state, and a rollback restores both
+	// together. A new generation therefore means the list came from this apply.
+	// Older runtimes have no receipt, so retain the conservative reboot fallback.
+	if generation := s.activationGeneration(spec.Name); generation != "" && generation != previousGeneration {
+		replaced := readModulesConf(filepath.Join(s.activeStateDir, spec.Name, "replaced-modules"))
+		resident = modulesDifference(resident, replaced)
+	}
 	if stuck := s.residentModules(resident); len(stuck) > 0 {
 		s.logger.Info("driver add-on installed but a reboot is needed to load it",
 			zap.String("name", spec.Name), zap.Strings("resident_modules", stuck))
@@ -631,7 +651,8 @@ func (s *DriverService) reapply(ctx context.Context) {
 // CLI Ctrl-C/disconnect must not SIGKILL it mid-merge and leave /usr half-applied.
 // A 2-minute timeout still bounds a hung script.
 // subject names the add-on this apply is for, so the script scopes its exit
-// status to it. Empty when restoring the whole set, where any failure is ours.
+// status to it. Empty when removing a package or restoring the whole set, where
+// any failure is ours.
 func (s *DriverService) apply(ctx context.Context, subject string) error {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Minute)
 	defer cancel()
@@ -643,7 +664,12 @@ func (s *DriverService) apply(ctx context.Context, subject string) error {
 	cmd.Env = driverEnvWithPath()
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return fmt.Errorf("%s: %v (%s)", s.applyScript, err, strings.TrimSpace(string(out)))
+		// A timeout kills the script mid-run; callers must be able to tell that
+		// apart from a failure it ran to completion to report.
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			err = ctxErr
+		}
+		return fmt.Errorf("%s: %w (%s)", s.applyScript, err, strings.TrimSpace(string(out)))
 	}
 	s.logger.Info("sysext-apply completed", zap.String("output", strings.TrimSpace(string(out))))
 	return nil
@@ -668,7 +694,7 @@ func (s *DriverService) RemoveDriver(req *agentpbv2.RemoveDriverRequest, stream 
 
 	// Read before anything moves: the snapshot stashes the /data conf and the
 	// apply unmerges the baked one.
-	declared := s.declaredModules(name)
+	declared := s.listedModules(name)
 
 	sendDriverProgress(stream, "removing", 30)
 	// Snapshot rather than delete outright: if the unmerge fails the driver is
@@ -684,10 +710,19 @@ func (s *DriverService) RemoveDriver(req *agentpbv2.RemoveDriverRequest, stream 
 	}
 
 	sendDriverProgress(stream, "applying", 70)
-	if err := s.apply(stream.Context(), name); err != nil {
-		snap.restore()
-		s.reapply(stream.Context())
-		return sendDriverFailure(stream, fmt.Sprintf("apply failed: %v", err))
+	// The snapshot removed every enabled copy of name. A named apply requires
+	// that package to exist, so removal must refresh the remaining set instead.
+	if err := s.apply(stream.Context(), ""); err != nil {
+		// That refresh also reports every other add-on's failures. Once name is out
+		// of the running system, a broken neighbour is no reason to put it back.
+		// A timeout killed the script mid-run, so nothing it left is settled.
+		if errors.Is(err, context.DeadlineExceeded) || !s.removalSettled(stream.Context(), name) {
+			snap.restore()
+			s.reapply(stream.Context())
+			return sendDriverFailure(stream, fmt.Sprintf("apply failed: %v", err))
+		}
+		s.logger.Warn("driver add-on removed, but another add-on failed to apply",
+			zap.String("name", name), zap.Error(err))
 	}
 	snap.commit()
 
@@ -707,17 +742,14 @@ func (s *DriverService) ListDrivers(ctx context.Context, _ *agentpbv2.ListDriver
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	merged, _ := s.mergedExtensions(ctx) //nolint:errcheck // best effort: a failed status read lists none
 	resp := &agentpbv2.ListDriversResponse{
 		BaseVersion:      osReleaseVersionID(),
 		KernelVersion:    s.unameR(),
 		LoadedModules:    s.loadedModules(),
-		MergedExtensions: mergedSysextNames(ctx),
+		MergedExtensions: merged,
 	}
-
-	loaded := make(map[string]bool, len(resp.LoadedModules))
-	for _, m := range resp.LoadedModules {
-		loaded[m] = true
-	}
+	loaded := moduleSet(resp.LoadedModules)
 
 	// Every bucket, not just the running kernel's: an add-on left behind by an
 	// OTA must still be listed and flagged, rather than silently disappearing.
@@ -737,7 +769,7 @@ func (s *DriverService) ListDrivers(ctx context.Context, _ *agentpbv2.ListDriver
 			KernelVersion: kernel,
 			Unreadable:    !readable,
 			ModulesLoad:   mods,
-			Loaded:        allModulesLoaded(mods, loaded),
+			Loaded:        readable && (kernel == "" || kernel == resp.KernelVersion) && s.payloadActive(c.name, c.rawPath) && allModulesLoaded(mods, loaded),
 		})
 	}
 	return resp, nil
@@ -1203,20 +1235,101 @@ func parseModulesConf(r io.Reader) []string {
 // script's precedence (/data override, then the list baked into the image).
 // Call it before an apply: the baked copy unmerges with the add-on.
 func (s *DriverService) declaredModules(name string) []string {
-	// Same precedence the apply script uses: this kernel, then unpinned, then the
-	// pre-keyed flat override, then the list baked into the image.
-	candidates := []string{
-		s.confPath(s.unameR(), name),
-		s.confPath(unpinnedKernelDir, name),
-		filepath.Join(s.modulesDir, name+".conf"),
-		filepath.Join(s.bakedModulesDir, name+".conf"),
+	for _, path := range s.modulesConfCandidates(name) {
+		if data, err := os.ReadFile(path); err == nil {
+			return parseModulesConf(strings.NewReader(string(data)))
+		}
 	}
-	for _, path := range candidates {
+	return nil
+}
+
+// listedModules is the first candidate that names any module. An empty override
+// stops the runtime autoloading, but a module the add-on ships can still be
+// resident, so a residency check must not stop there.
+func (s *DriverService) listedModules(name string) []string {
+	for _, path := range s.modulesConfCandidates(name) {
 		if mods := readModulesConf(path); len(mods) > 0 {
 			return mods
 		}
 	}
 	return nil
+}
+
+// modulesConfCandidates is the apply script's precedence: this kernel, then
+// unpinned, then the pre-keyed flat override, then the list in the image.
+func (s *DriverService) modulesConfCandidates(name string) []string {
+	return []string{
+		s.confPath(s.unameR(), name),
+		s.confPath(unpinnedKernelDir, name),
+		filepath.Join(s.modulesDir, name+".conf"),
+		filepath.Join(s.privatePayloadDir, name, "modules-load.conf"),
+		filepath.Join(s.bakedModulesDir, name+".conf"),
+	}
+}
+
+// Private metadata is inert until the runtime records successful exposure.
+// A rejected package must not appear loaded just because another add-on loaded
+// modules with the same names. Legacy images retain their original semantics.
+func (s *DriverService) payloadActive(name, rawPath string) bool {
+	_, err := os.Stat(filepath.Join(s.privatePayloadDir, name))
+	if os.IsNotExist(err) {
+		// An image systemd-sysext refused to merge is absent from /usr too, so
+		// only one that ships no private payload is legacy.
+		return !imageHasPrivatePayload(rawPath, name)
+	}
+	if err != nil {
+		return false
+	}
+	_, err = os.Stat(filepath.Join(s.activeStateDir, name, "files"))
+	return err == nil
+}
+
+// removalSettled reports whether a failed refresh still took name out of the
+// running system, so the failure belongs to an add-on that remains. The rest
+// must have merged: a failed refresh unmerges every add-on, which is no single
+// add-on's failure. Unknown merge state keeps the rollback.
+func (s *DriverService) removalSettled(ctx context.Context, name string) bool {
+	if _, err := os.Lstat(filepath.Join(s.activeStateDir, name)); !os.IsNotExist(err) {
+		return false // the runtime restored its exposure
+	}
+	// Detached like the apply it judges: a CLI disconnect must not turn a kept
+	// removal into a rollback and full reapply. The timeout bounds a hung status.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cancel()
+	merged, err := s.mergedExtensions(ctx)
+	if err != nil || len(merged) == 0 {
+		return false
+	}
+	return !slices.Contains(merged, name)
+}
+
+func (s *DriverService) activationGeneration(name string) string {
+	data, _ := os.ReadFile(filepath.Join(s.activeStateDir, name, "generation"))
+	return strings.TrimSpace(string(data))
+}
+
+func modulesDifference(modules, removed []string) []string {
+	gone := moduleSet(removed)
+	var kept []string
+	for _, m := range modules {
+		if !gone[moduleSysname(m)] {
+			kept = append(kept, m)
+		}
+	}
+	return kept
+}
+
+// moduleSysname is the kernel's spelling of a module name: modprobe treats '-'
+// and '_' interchangeably, and /proc/modules uses '_'.
+func moduleSysname(m string) string { return strings.ReplaceAll(m, "-", "_") }
+
+// moduleSet indexes mods by moduleSysname.
+func moduleSet(mods []string) map[string]bool {
+	set := make(map[string]bool, len(mods))
+	for _, m := range mods {
+		set[moduleSysname(m)] = true
+	}
+	return set
 }
 
 // modulesUnion is the set an install can disturb: what the add-on already
@@ -1241,27 +1354,23 @@ func (s *DriverService) residentModules(mods []string) []string {
 	if len(mods) == 0 {
 		return nil
 	}
-	loaded := make(map[string]bool)
-	for _, m := range s.loadedModules() {
-		loaded[m] = true
-	}
+	loaded := moduleSet(s.loadedModules())
 	var resident []string
 	for _, m := range mods {
-		// modprobe treats '-' and '_' interchangeably; /proc/modules uses '_'.
-		if loaded[strings.ReplaceAll(m, "-", "_")] || loaded[m] {
+		if loaded[moduleSysname(m)] {
 			resident = append(resident, m)
 		}
 	}
 	return resident
 }
 
+// allModulesLoaded reports whether every one of mods is in loaded, a moduleSet.
 func allModulesLoaded(mods []string, loaded map[string]bool) bool {
 	if len(mods) == 0 {
 		return false
 	}
 	for _, m := range mods {
-		// modprobe treats '-' and '_' interchangeably; /proc/modules uses '_'.
-		if !loaded[strings.ReplaceAll(m, "-", "_")] && !loaded[m] {
+		if !loaded[moduleSysname(m)] {
 			return false
 		}
 	}
@@ -1280,24 +1389,39 @@ func lookPathIn(pathList, name string) (string, error) {
 	return "", fmt.Errorf("%s not found in %s", name, pathList)
 }
 
-func mergedSysextNames(ctx context.Context) []string {
+func mergedSysextNames(ctx context.Context) ([]string, error) {
 	// Resolved against the scrubbed PATH explicitly: exec looks a bare name up in
 	// the parent's PATH, so cmd.Env alone would not decide which binary runs.
 	bin, err := lookPathIn(driverSystemPath, "systemd-sysext")
 	if err != nil {
-		return nil
+		return nil, err
 	}
-	cmd := exec.CommandContext(ctx, bin, "status", "--no-legend")
+	cmd := exec.CommandContext(ctx, bin, "status", "--json=short")
 	cmd.Env = driverEnvWithPath()
 	out, err := cmd.Output()
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("systemd-sysext status: %w", err)
+	}
+	return parseMergedSysextNames(out)
+}
+
+func parseMergedSysextNames(out []byte) ([]string, error) {
+	var rows []struct {
+		Hierarchy  string          `json:"hierarchy"`
+		Extensions json.RawMessage `json:"extensions"`
+	}
+	if err := json.Unmarshal(out, &rows); err != nil {
+		return nil, fmt.Errorf("parsing systemd-sysext status: %w", err)
 	}
 	var names []string
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		if fields := strings.Fields(line); len(fields) >= 2 && fields[0] == "/usr" && fields[1] != "none" {
-			names = append(names, fields[1])
+	for _, row := range rows {
+		if row.Hierarchy != "/usr" {
+			continue
+		}
+		var extensions []string
+		if json.Unmarshal(row.Extensions, &extensions) == nil {
+			names = append(names, extensions...)
 		}
 	}
-	return names
+	return names, nil
 }

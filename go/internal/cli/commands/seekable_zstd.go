@@ -25,6 +25,12 @@ func openSeekableZstd(path string) (*seekableImage, error) {
 	if err != nil {
 		return nil, fmt.Errorf("opening seekable image: %w", err)
 	}
+	return seekableZstdFromFile(f)
+}
+
+// seekableZstdFromFile builds a seekableImage over an open file. It owns f
+// from then on: f is closed on error, or by the image's Close.
+func seekableZstdFromFile(f *os.File) (*seekableImage, error) {
 	si, err := newSeekableImage(f)
 	if err != nil {
 		f.Close()

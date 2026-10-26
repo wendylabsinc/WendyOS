@@ -183,6 +183,8 @@ async function start() {
     },
     containers: (runtime) => service.containers(runtime),
     "device:snapshot": (args) => service.deviceSnapshot(args),
+    "mesh:discover": () => service.meshDiscover(),
+    "mesh:topology": (args) => service.meshTopology(args),
     "device:logs:start": (args) => service.deviceLogsStart(args),
     "device:logs:snapshot": (id) => service.deviceLogsSnapshot(id),
     "device:logs:stop": (id) => service.deviceLogsStop(id),

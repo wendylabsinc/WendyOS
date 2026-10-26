@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/wendylabsinc/wendy/go/internal/cli/cloudenroll"
 	"github.com/wendylabsinc/wendy/go/internal/cli/cloudrequest"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
@@ -25,6 +26,7 @@ import (
 	cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
 	litepb "github.com/wendylabsinc/wendy/go/proto/gen/litepb"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -46,8 +48,8 @@ func Config(auth *config.AuthConfig, deviceID, csrURL, timeURL, brokerHost strin
 		return nil, fmt.Errorf("enrollment requires a tenant operator identity")
 	}
 	tenant := principal.TenantUUID
-	if len(deviceID) == 0 || len(deviceID) > 64 || strings.Trim(deviceID, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.") != "" {
-		return nil, fmt.Errorf("device ID must contain 1–64 letters, digits, dots, underscores or hyphens")
+	if id, err := uuid.Parse(deviceID); err != nil || id.String() != deviceID {
+		return nil, fmt.Errorf("device ID must be a canonical lowercase UUID")
 	}
 	if csrURL == "" {
 		host := cloudenroll.PKISiblingHost(auth.PKIEndpoint, "csr")
@@ -83,15 +85,13 @@ func Config(auth *config.AuthConfig, deviceID, csrURL, timeURL, brokerHost strin
 }
 
 // Mint obtains the single-use credential after Cloud reserves the device asset.
-func Mint(ctx context.Context, conn grpc.ClientConnInterface, auth *config.AuthConfig, cfg *litepb.WendyConfEnrollment, name string, hardware *cloudpb.DeviceHardware, profile TrustProfile) (string, error) {
+// A device UUID Cloud refuses as taken is replaced through the shared
+// collision guard; cfg.DeviceId ends as the UUID Cloud accepted.
+func Mint(ctx context.Context, conn grpc.ClientConnInterface, auth *config.AuthConfig, cfg *litepb.WendyConfEnrollment, name string, hardware *cloudpb.DeviceHardware, profile TrustProfile) (asset string, err error) {
 	if !cfg.ProvisionTrust {
 		// Firmware-pinned roots cannot trust a newly selected authority until
 		// its roots have been provisioned over USB.
 		profile = profile.WithExistingDeviceIssuer()
-	}
-	artifact, err := cloudrequest.EnrollmentRequestForChain(auth, cfg.DeviceId, "C", profile.chainAlgorithm())
-	if err != nil {
-		return "", err
 	}
 	if hardware == nil {
 		hardware = &cloudpb.DeviceHardware{}
@@ -101,13 +101,36 @@ func Mint(ctx context.Context, conn grpc.ClientConnInterface, auth *config.AuthC
 	// Cloud requires this exact type before accepting Lite broker presence.
 	// Class C controls credential issuance but does not set the asset's OS type.
 	hardware.Os = proto.String("wendy-lite")
+	err = cloudenroll.RetryTakenDeviceUUID(cfg.DeviceId, func(deviceID string) error {
+		cfg.DeviceId = deviceID
+		var err error
+		asset, err = mintOnce(ctx, conn, auth, cfg, name, hardware, profile)
+		return err
+	})
+	return asset, err
+}
+
+func mintOnce(ctx context.Context, conn grpc.ClientConnInterface, auth *config.AuthConfig, cfg *litepb.WendyConfEnrollment, name string, hardware *cloudpb.DeviceHardware, profile TrustProfile) (string, error) {
+	artifact, err := cloudrequest.EnrollmentRequestForChain(auth, cfg.DeviceId, "C", profile.chainAlgorithm())
+	if err != nil {
+		return "", err
+	}
 	reply := new(cloudpb.EnrollDeviceResponse)
-	err = cloudrequest.Invoke(ctx, conn, auth, cloudpb.DeviceEnrollmentService_EnrollDevice_FullMethodName, &cloudpb.EnrollDeviceRequest{DeviceId: cfg.DeviceId, DeviceClass: cloudpb.DeviceClass_DEVICE_CLASS_C, EnrollmentRequestJws: artifact, Name: name, Hardware: hardware}, reply)
+	var trailer metadata.MD
+	err = cloudrequest.InvokeWithTrailer(ctx, conn, auth, cloudpb.DeviceEnrollmentService_EnrollDevice_FullMethodName, &cloudpb.EnrollDeviceRequest{DeviceId: cfg.DeviceId, DeviceClass: cloudpb.DeviceClass_DEVICE_CLASS_C, EnrollmentRequestJws: artifact, Name: name, Hardware: hardware}, reply, &trailer)
+	if cloudenroll.DeviceUUIDTaken(err, trailer) {
+		return "", fmt.Errorf("Cloud refused device UUID %s before minting anything: %w", cfg.DeviceId, cloudenroll.ErrDeviceUUIDTaken)
+	}
 	if err != nil {
 		return "", fmt.Errorf("creating Tier C enrollment: %w", err)
 	}
+	// Cloud adopts the minted UUID as the asset id. Any other id would leave
+	// the board's certificate naming a device Cloud does not know.
+	if reply.GetAssetId() != cfg.DeviceId {
+		return reply.GetAssetId(), fmt.Errorf("Cloud registered asset %q instead of the minted device UUID %s", reply.GetAssetId(), cfg.DeviceId)
+	}
 	expires, err := time.Parse(time.RFC3339, reply.GetExpiresAt())
-	if reply.GetCredentialKind() != "enrollment_token" || reply.GetAssetId() == "" || len(reply.GetTokenValue()) == 0 || len(reply.GetTokenValue()) > 512 || strings.ContainsAny(reply.GetTokenValue(), "\r\n") || err != nil || time.Until(expires) < 30*time.Second {
+	if reply.GetCredentialKind() != "enrollment_token" || len(reply.GetTokenValue()) == 0 || len(reply.GetTokenValue()) > 512 || strings.ContainsAny(reply.GetTokenValue(), "\r\n") || err != nil || time.Until(expires) < 30*time.Second {
 		return reply.GetAssetId(), fmt.Errorf("Cloud returned an invalid or nearly expired Tier C enrollment credential")
 	}
 	cfg.Token = reply.GetTokenValue()

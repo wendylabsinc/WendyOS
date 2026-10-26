@@ -100,11 +100,11 @@ func TestGuardDisqualifiedByForeignAckOrNak(t *testing.T) {
 	}
 }
 
-// Our own offers must not disqualify the link we are serving.
-func TestGuardIgnoresOwnOffers(t *testing.T) {
+// The server identifier is an address, not proof of which host sent a reply.
+// The packet watcher must filter our outgoing packets before feeding the guard.
+func TestGuardDisqualifiesCompetingServerWithSameAddress(t *testing.T) {
 	g := NewLinkGuard()
 	ours := net.IPv4(10, 98, 0, 1)
-	g.RegisterServerID(ours)
 
 	start := time.Now()
 	g.Observe("eth0", &Packet{Type: Discover}, start)
@@ -113,8 +113,8 @@ func TestGuardIgnoresOwnOffers(t *testing.T) {
 	}
 	g.Observe("eth0", &Packet{Type: Offer, ServerID: ours}, start.Add(unansweredWindow+time.Second))
 
-	if got := g.State("eth0"); got != LinkServing {
-		t.Fatalf("state = %v, want still serving after our own offer", got)
+	if got := g.State("eth0"); got != LinkDisqualified {
+		t.Fatalf("state = %v, want disqualified by an incoming reply even with our server address", got)
 	}
 }
 
@@ -122,7 +122,6 @@ func TestGuardIgnoresOwnOffers(t *testing.T) {
 // somebody else's. Failing closed is the right direction for this guard.
 func TestGuardDisqualifiedByAnonymousOffer(t *testing.T) {
 	g := NewLinkGuard()
-	g.RegisterServerID(net.IPv4(10, 98, 0, 1))
 	now := time.Now()
 	g.Observe("eth0", &Packet{Type: Offer}, now)
 	if got := g.State("eth0"); got != LinkDisqualified {

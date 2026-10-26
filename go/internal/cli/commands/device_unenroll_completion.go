@@ -15,12 +15,14 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/unenrollproof"
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	cloudpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 )
 
 // Plaintext recovery transports public evidence only. Its server is not trusted
 // as the old device: the old certificate's signature, configured trust roots and
-// exact authorized Cloud tombstone authenticate that earlier operation.
+// independently verified Cloud authorization authenticate that earlier operation.
 func reconcileCompletedV2Unenroll(ctx context.Context, raw []byte, override, assetOverride string) error {
 	return reconcileCompletedV2UnenrollPinned(ctx, raw, override, assetOverride, nil)
 }
@@ -98,10 +100,11 @@ func reconcileCompletedV2UnenrollPinned(ctx context.Context, raw []byte, overrid
 	if err := certs.VerifyPeerCertificateChain(leaf, peers, roots, x509.ExtKeyUsageServerAuth, receipt.AuthorizationTime(), receipt.AuthorizationTime()); err != nil {
 		return fmt.Errorf("untrusted completion certificate: %w", err)
 	}
-	if receipt.Version == 2 {
-		if err := unenrollproof.VerifyCompletionCloud(ctx, receipt); err != nil {
-			return fmt.Errorf("independently authenticating Cloud reset authority: %w", err)
-		}
+	if receipt.Version != 2 {
+		return fmt.Errorf("Cloud-authenticated reset completion required")
+	}
+	if err := unenrollproof.VerifyCompletionCloud(ctx, receipt); err != nil {
+		return fmt.Errorf("independently authenticating Cloud reset authority: %w", err)
 	}
 	var retained cloudpbv2.DeletedAsset
 	if err := proto.Unmarshal(receipt.CloudDeletion, &retained); err != nil {
@@ -122,13 +125,11 @@ func reconcileCompletedV2UnenrollPinned(ctx context.Context, raw []byte, overrid
 	defer cloudConn.Close()
 	tenant, device := identity.TenantUUID, identity.EntityID
 	active, lookupErr := cloudpbv2.NewAssetServiceClient(cloudConn).GetAsset(rpcctx, &cloudpbv2.GetAssetRequest{OrganizationId: &tenant, DeviceId: &device})
-	state, err := v2AssetLookupResult(active, lookupErr)
-	if err != nil {
-		return fmt.Errorf("local reset evidence authentic, Cloud completion unconfirmed: %w", err)
-	}
-	deleted, err := v2UnenrollLifecycle(state, &j)
-	if err != nil || !deleted || !proto.Equal(state.Deleted, &retained) {
-		return fmt.Errorf("Cloud completion disagrees with signed reset evidence")
+	// Modern Cloud removes the active row entirely. The independently verified
+	// version-2 completion already authenticates the deletion; this read only
+	// guards against a re-enrollment of the same tenant/device identity.
+	if active != nil || status.Code(lookupErr) != codes.NotFound {
+		return fmt.Errorf("local reset evidence authentic, Cloud identity retirement unconfirmed: %v", lookupErr)
 	}
 	j.Revoked = true
 	j.Deleted = true

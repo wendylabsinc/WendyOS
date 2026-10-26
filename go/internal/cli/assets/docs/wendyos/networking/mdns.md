@@ -67,6 +67,14 @@ If UUID or device-name files are not yet present, the script retries for up to
 10 seconds to handle ordering races. After updating the file it calls
 `avahi-daemon --reload` if the daemon is already running.
 
+Enrollment also updates identity before the next boot: when loading
+pre-provisioned credentials or completing live re-enrollment, the agent writes
+the certificate's device UUID to `/etc/wendyos/device-uuid` and the service's
+`id=` TXT record before restarting Avahi. A legacy asset certificate carries
+no device UUID and leaves these records unchanged. See
+[Pre-provisioning](../config-partition.md#pre-provisioning-provisioningjson)
+for hostname preservation.
+
 `wendy device rename` persists the operator-selected hostname in
 `/etc/wendy-agent/hostname` and updates the Avahi records at rename time; it
 does not overwrite the generated `/etc/wendyos/device-name`. Consequently, the
@@ -175,10 +183,45 @@ type MDNSService struct {
 
 | Key | Value | Example |
 |---|---|---|
-| `id` | Device UUID (from `/etc/wendyos/device-uuid`) | `550e8400-e29b-41d4-a716-446655440000` |
+| `id` | Device UUID (from `/etc/wendyos/device-uuid`; once enrolled, the UUID in the device certificate) | `550e8400-e29b-41d4-a716-446655440000` |
 | `name` | Slug device name (from `/etc/wendyos/device-name`) | `my-device` |
 | `displayname` | Title-cased device name | `My Device` |
 | `fqdn` | Optional reverse-DNS name derived from the hostname when present in the service template | `sh.wendy.my-device` |
 | `wendyosdevice` | Device UUID (preferred over `id` when present) | `769dc651-4eb2-49f3-b9f6-3e473f15694a` |
 | `tls` | `"true"` when the device is provisioned and requires mTLS (port 50052) | `true` |
 | `wired` | Comma-separated IPv4 addresses of the device's connected Ethernet ports (at most 8); absent when none. Used only to choose a route, never to trust a device | `192.168.2.50` |
+
+
+## Connect Wendy Net devices over Ethernet or Wi-Fi
+
+Devices enrolled in the same organization can find one another on a local
+Ethernet or ordinary Wi-Fi network. Run this on each device you want to connect:
+
+```sh
+wendy device wendy-net configure --participate=true --ethernet=true --infrastructure-wifi=true
+wendy device wendy-net status
+wendy device wendy-net topology
+```
+
+Add `--device <device>` to select a particular device. Check topology for
+connected peers; saving settings alone does not confirm connectivity. Omitted
+flags preserve saved choices. Set a flag to `false` to disable that connection
+type. Changing saved settings restarts local routing and can interrupt traffic.
+
+Ethernet is preferred over ordinary Wi-Fi, followed by the radio connections.
+If a connection disappears, another enabled connection can take over. Existing
+TCP sessions may survive a short outage; new connections wait for a valid route.
+
+### Network requirements and privacy
+
+Allow local multicast discovery on UDP port 5353 and encrypted peer connections
+on UDP port 43023. Devices need usable IPv4 addresses; isolated Wi-Fi clients and
+multicast filtering can prevent discovery. Container bridges, access-point
+interfaces, and IPv4 link-local addresses are not used.
+
+Discovery advertises device and organization identifiers in cleartext on the
+local network. Enable it only where that disclosure is acceptable. A discovered
+address is a hint: each peer must still authenticate before carrying traffic.
+
+The discovery service is `_wendy-net._udp`; peer traffic uses QUIC over UDP.
+There is no TCP fallback on these LAN connections.

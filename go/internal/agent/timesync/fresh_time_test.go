@@ -95,3 +95,36 @@ func TestFreshTimeRejectsUnavailableOrInvalidConsensus(t *testing.T) {
 		})
 	}
 }
+
+func TestFreshTimeKeepsQuorumWhenOtherAuthoritiesTimeOut(t *testing.T) {
+	m := NewManager(nil, t.TempDir())
+	caller := context.Background()
+	m.query = func(collection context.Context, _ []roughtime.Server) (Consensus, error) {
+		// QueryConsensus waits for every authority. Two valid responses can
+		// already establish a quorum while the remaining requests time out.
+		consensus := freshConsensus(t)
+		<-collection.Done()
+		if !errors.Is(collection.Err(), context.DeadlineExceeded) || caller.Err() != nil {
+			t.Fatal("expected only the internal collection deadline to expire")
+		}
+		return consensus, nil
+	}
+	window, err := m.FreshTime(caller)
+	if err != nil || window.Latest.Before(window.Earliest) || window.Earliest.Before(time.Now().Add(-2*time.Second)) {
+		t.Fatalf("valid quorum was discarded after another authority timed out: %+v, %v", window, err)
+	}
+}
+
+func TestFreshTimeStillRejectsExpiredCallerWithQuorum(t *testing.T) {
+	m := NewManager(nil, t.TempDir())
+	caller, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	m.query = func(collection context.Context, _ []roughtime.Server) (Consensus, error) {
+		consensus := freshConsensus(t)
+		<-collection.Done()
+		return consensus, nil
+	}
+	if _, err := m.FreshTime(caller); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expired caller was accepted despite a quorum: %v", err)
+	}
+}

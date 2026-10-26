@@ -102,6 +102,7 @@ the risk. See [Managing drivers](/docs/device/managing-drivers).
 | CAP_NET_ADMIN gated behind explicit host-admin entitlement | ✅ Shipped | — |
 | D-Bus proxy hard-fail (no silent unfiltered fallback) | ✅ Shipped | — |
 | containerd socket bind-mount denied | ✅ Shipped | — |
+| Browser isolation for OCI registry contents (Content Security Policy) | ✅ Implemented | Next release |
 | Default PID limits per container (fork-bomb guard) | ✅ Shipped | — |
 | Hook command injection fix; debug port bound to loopback | ✅ Shipped | — |
 | SBOM / SLSA provenance | ✅ Shipped | — |
@@ -147,6 +148,10 @@ Until the signing keys are deployed: container images are verified by SHA256 dig
 connection to submit.
 
 ### Security Changelog
+
+Unreleased:
+
+- OCI registry responses use `Content-Security-Policy: default-src 'none'; sandbox` to isolate publisher-supplied content opened in a browser, including an HTML media type. Image bytes, media types and content digests are preserved.
 
 Controls shipped in recent releases:
 

@@ -50,8 +50,11 @@ that the default is set but unreachable instead of opening a picker.
 
 ## 4. Show Picker
 
-mDNS and BLE discover nearby [WendyOS](../../wendyos/),
-Wendy-Agent and [Wendy Lite](../../wendy-lite/) devices.
+The picker finds nearby [WendyOS](/docs/#2-set-up-a-device), Wendy Agent and
+[Wendy Lite](/docs/advanced/wendy-lite/) devices using local-network and Bluetooth discovery.
+Finding a device here is separate from enabling
+[Wendy Net Bluetooth connections](/docs/hardware/bluetooth#wendy-net-over-bluetooth)
+between devices.
 A device picker is shown only when the terminal is interactive, so a user can
 select their target device for the current command invocation.
 
@@ -68,7 +71,7 @@ as a LAN device when local discovery is allowed by the network and macOS Local
 Network permissions.
 
 The picker table shows the same columns as
-[`wendy discover`](./commands/discover.md#interactive-table). The leading
+[`wendy discover`](./commands/discover.md#interactive-tui). The leading
 marker column displays provisioned state (`●`/`○`) for LAN devices alongside
 the `✦` default marker. If the CLI cannot verify the highlighted device's agent,
 a footer hint explains what went wrong and what to try next.

@@ -63,6 +63,10 @@ type Camera struct {
 	FirstSeen  time.Time `json:"firstSeen"`
 	LastSeen   time.Time `json:"lastSeen"`
 
+	// DHCPServed distinguishes a client on our camera segment from legacy
+	// entries recorded merely by overhearing DHCP on a shared LAN.
+	DHCPServed bool `json:"dhcpServed,omitempty"`
+
 	// Online reflects the most recent probe and is deliberately not persisted:
 	// a camera reloaded from disk is offline until something reaches it.
 	Online bool `json:"-"`
@@ -107,6 +111,39 @@ func (r *Registry) Load() error {
 	for _, c := range cameras {
 		c.Online = false
 		r.by[c.MAC] = c
+	}
+	return nil
+}
+
+// PruneUnconfirmedDHCP removes legacy, addressless DHCP observations after both
+// state files have loaded successfully. A served lease always has an address;
+// ONVIF discovery and manually supplied connection details also leave evidence.
+// Preserve all connection details and every stored login, even an empty login.
+// Old addressless observations carry no record of whether their link was served.
+// A nil credential lookup means protection is unavailable, so nothing is removed.
+func (r *Registry) PruneUnconfirmedDHCP(hasCredentials func(string) bool) error {
+	if hasCredentials == nil {
+		return nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	removed := make(map[string]Camera)
+	for mac, c := range r.by {
+		if c.Link == "" || c.DHCPServed || c.Address != "" || c.ONVIFAddr != "" ||
+			c.StreamSub != "" || c.StreamMain != "" || hasCredentials(mac) {
+			continue
+		}
+		removed[mac] = c
+		delete(r.by, mac)
+	}
+	if len(removed) == 0 {
+		return nil
+	}
+	if err := r.save(); err != nil {
+		for mac, c := range removed {
+			r.by[mac] = c
+		}
+		return err
 	}
 	return nil
 }
@@ -181,6 +218,7 @@ func (r *Registry) Upsert(c Camera) (Camera, error) {
 	merged := existing
 	merged.LastSeen = now
 	merged.Online = true
+	merged.DHCPServed = existing.DHCPServed || c.DHCPServed
 	if c.Address != "" {
 		merged.Address = c.Address
 	}

@@ -119,7 +119,7 @@ func buildServicesRemote(
 		// status, so a service whose image never reached the device must not
 		// read as built — the deploy below would otherwise create a container
 		// from whatever older image still holds this :latest name.
-		if err := reportedDeliveryError(result, spec.GetPushTarget().GetAssetId()); err != nil {
+		if err := reportedDeliveryError(result, spec.GetPushTarget().GetAssetUuid()); err != nil {
 			fmt.Fprintf(logOut, "delivery to the device failed: %v\n", err)
 			return fmt.Errorf("image built on %s but could not be delivered to the device: %w", host, err)
 		}
@@ -158,7 +158,7 @@ func serviceBuildSpec(
 		Context:  manifest,
 		Chunking: buildChunkingMode(chunking),
 		PushTarget: &agentpbv2.PushTarget{
-			AssetId:      base.GetAssetId(),
+			AssetUuid:    base.GetAssetUuid(),
 			RegistryPort: base.GetRegistryPort(),
 			Repository:   repo + ":latest",
 			AgentPort:    base.GetAgentPort(),

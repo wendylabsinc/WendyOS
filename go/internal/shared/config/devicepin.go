@@ -32,8 +32,8 @@ type DevicePin struct {
 	AssetID   string `json:"assetId,omitempty"`
 	Source    string `json:"source,omitempty"`
 	// Principal is the tenant SPIFFE principal the device's certificate
-	// carries, when it has one. It is recorded — not compared — because it is
-	// the key the SPKI pin store files the device under, and `wendy device
+	// carries, when it has one. CLI observations compare complete principals
+	// when both have one. It is also the SPKI pin-store key, and `wendy device
 	// unpin <hostname>` has no other way to reach that entry: the (org, asset)
 	// pair a legacy pin holds cannot be turned back into a principal without
 	// the tenant. Empty for an old-chain device and for pins written before

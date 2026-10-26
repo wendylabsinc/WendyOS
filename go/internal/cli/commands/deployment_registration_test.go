@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
@@ -26,6 +27,16 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+type deploymentProvisioningV2Stub struct {
+	agentpbv2.WendyProvisioningServiceClient
+	response *agentpbv2.IsProvisionedResponse
+	err      error
+}
+
+func (s deploymentProvisioningV2Stub) IsProvisioned(context.Context, *agentpbv2.IsProvisionedRequest, ...grpc.CallOption) (*agentpbv2.IsProvisionedResponse, error) {
+	return s.response, s.err
+}
+
 func registrationDevice() *agentpbv2.ProvisionedResponse {
 	return &agentpbv2.ProvisionedResponse{CloudHost: "cloud.example:443", OrganizationId: 42, AssetId: 9}
 }
@@ -38,8 +49,8 @@ func registrationTenantDevice() *agentpbv2.ProvisionedResponse {
 	}
 }
 
-func registrationProvisioned(device *agentpbv2.ProvisionedResponse) *agentpbv2.IsProvisionedResponse {
-	return &agentpbv2.IsProvisionedResponse{ResponseType: &agentpbv2.IsProvisionedResponse_Provisioned{Provisioned: device}}
+func registrationProvisioned(device *agentpbv2.ProvisionedResponse) deploymentProvisioningV2Stub {
+	return deploymentProvisioningV2Stub{response: &agentpbv2.IsProvisionedResponse{ResponseType: &agentpbv2.IsProvisionedResponse_Provisioned{Provisioned: device}}}
 }
 
 func registrationConfig() *config.Config {
@@ -76,7 +87,7 @@ func TestRegistrationSkipsUnenrolledDevicesWithoutLoadingCredentials(t *testing.
 	unenrolled := &agentpbv2.IsProvisionedResponse{ResponseType: &agentpbv2.IsProvisionedResponse_NotProvisioned{
 		NotProvisioned: &agentpbv2.NotProvisionedResponse{},
 	}}
-	err := registerDeviceApps(context.Background(), unenrolled, []string{"app"}, func() (*config.Config, error) {
+	err := registerDeviceApps(context.Background(), deploymentProvisioningV2Stub{response: unenrolled}, []string{"app"}, func() (*config.Config, error) {
 		t.Fatal("local deployment loaded Cloud credentials")
 		return nil, nil
 	}, func(context.Context, *config.AuthConfig, *agentpbv2.ProvisionedResponse, []string) error {
@@ -246,6 +257,22 @@ func TestDeploymentAuthMatchesTenantDeviceToOperatorSession(t *testing.T) {
 	moved.CloudHost = "attacker.example:443"
 	if _, err := deploymentAuth(cfg, moved); err == nil {
 		t.Fatal("device chose the Cloud host for an operator session")
+	}
+}
+
+func TestDeploymentAuthRejectsExpiredTenantOperator(t *testing.T) {
+	device := registrationTenantDevice()
+	principal := "spiffe://wendy.sh/tenant/" + testOperatorTenant + "/operator/" + testOperatorSubject
+	key := testKey(t)
+	leaf := liteLeafPEM(t, key, principal, time.Now().Add(-time.Hour), false)
+	cfg := &config.Config{Auth: []config.AuthConfig{{
+		CloudGRPC: device.CloudHost,
+		Certificates: []config.CertificateInfo{{
+			PrincipalURI: principal, PemCertificate: leaf,
+		}},
+	}}}
+	if _, err := deploymentAuth(cfg, device); err == nil {
+		t.Fatal("expired operator certificate selected for Cloud registration")
 	}
 }
 

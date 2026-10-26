@@ -20,6 +20,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/seriallock"
 	wendypb "github.com/wendylabsinc/wendy/go/proto/gen/litepb"
@@ -45,6 +46,9 @@ type DeviceIdentity struct {
 	ID          string
 	Name        string
 	DisplayName string
+	// EnrolledDeviceID is the enrolled device UUID; empty when the board is
+	// unenrolled or its firmware predates the field.
+	EnrolledDeviceID string
 }
 
 type DeviceInfo struct {
@@ -286,7 +290,9 @@ func (c *WendyLiteClient) ConnectViaRelay(ctx context.Context, cc *grpc.ClientCo
 	if err != nil {
 		return err
 	}
-	handshakeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	// The opaque relay can cross a BLE mesh uplink. Bound setup without
+	// assuming a direct Internet path; the caller can still cancel sooner.
+	handshakeCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 	conn := tls.Client(raw, cfg)
 	if err := conn.HandshakeContext(handshakeCtx); err != nil {
@@ -598,7 +604,12 @@ func (c *WendyLiteClient) GetDeviceIdentity(timeout time.Duration) (*DeviceIdent
 	if di == nil {
 		return nil, fmt.Errorf("device returned no identity")
 	}
-	return &DeviceIdentity{ID: di.GetId(), Name: di.GetName(), DisplayName: di.GetDisplayName()}, nil
+	return &DeviceIdentity{
+		ID:               di.GetId(),
+		Name:             di.GetName(),
+		DisplayName:      di.GetDisplayName(),
+		EnrolledDeviceID: di.GetEnrolledDeviceId(),
+	}, nil
 }
 
 func (c *WendyLiteClient) GetDeviceInfo(timeout time.Duration) (*DeviceInfo, error) {
@@ -1072,7 +1083,7 @@ func (c *WendyLiteClient) handshake() error {
 		},
 	}, 3*time.Second)
 	if err != nil {
-		return fmt.Errorf("device may not support protocol v%d: %w", versionMajor, err)
+		return fmt.Errorf("WendyCom protocol exchange: %w", err)
 	}
 	hs := reply.GetHandshake()
 	switch {
@@ -1166,7 +1177,11 @@ func deviceTLSConfig(ctx context.Context, cert tls.Certificate, chain, deviceID 
 	if deviceID == "" {
 		return nil, fmt.Errorf("missing Wendy Lite device identity")
 	}
-	deviceID = "lite-" + strings.TrimPrefix(deviceID, "lite-")
+	// A Lite board's one id is a canonical device UUID. Any other pin, such as
+	// a pre-UUID lite- identity, is refused rather than used verbatim.
+	if id, err := uuid.Parse(deviceID); err != nil || id.String() != deviceID {
+		return nil, fmt.Errorf("Wendy Lite device identity %q is not a device UUID; update the board's firmware, then unenroll and re-enroll it over USB", deviceID)
+	}
 	opts.ExpectedIdentity = &certs.WendyIdentity{
 		EntityType: certs.EntityAsset, EntityID: deviceID, TenantUUID: identity.TenantUUID,
 		Principal: "spiffe://wendy.sh/tenant/" + identity.TenantUUID + "/device/" + deviceID,

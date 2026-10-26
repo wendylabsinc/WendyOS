@@ -590,22 +590,28 @@ func runMultiServiceWithAgent(ctx context.Context, conn *grpcclient.AgentConnect
 		appLevelCfg = nil
 	}
 
-	createService := func(name string) error {
+	serviceCreateRequest := func(name string) (*agentpb.CreateContainerRequest, error) {
 		deviceImage := fmt.Sprintf("localhost:%d/%s:latest", regPort, serviceImageRepo(appCfg.AppID, name))
 
 		serviceCfg := svcCfgs[name]
 		appConfigData, err := json.Marshal(serviceCfg)
 		if err != nil {
-			return fmt.Errorf("marshaling config for service %s: %w", name, err)
+			return nil, fmt.Errorf("marshaling config for service %s: %w", name, err)
 		}
 
-		restartPolicy := resolveRestartPolicy(opts)
-		createReq := &agentpb.CreateContainerRequest{
+		return &agentpb.CreateContainerRequest{
 			ImageName:     deviceImage,
 			AppName:       serviceCfg.ContainerName(),
 			AppConfig:     appConfigData,
-			RestartPolicy: restartPolicy,
+			RestartPolicy: resolveRestartPolicy(opts),
 			Env:           serviceEnvs[name],
+		}, nil
+	}
+
+	createService := func(name string) error {
+		createReq, err := serviceCreateRequest(name)
+		if err != nil {
+			return err
 		}
 
 		cliLogln("Creating container for service %s...", name)
@@ -614,6 +620,10 @@ func runMultiServiceWithAgent(ctx context.Context, conn *grpcclient.AgentConnect
 		}
 		cliLogln("Service %s container created.", name)
 		return nil
+	}
+
+	if err := validateServicesBeforeReplace(ctx, conn.ContainerService, ordered, serviceCreateRequest); err != nil {
+		return err
 	}
 
 	if opts.deploy {
@@ -778,6 +788,9 @@ func buildServicesParallelCore(
 	if !quietBuild && isInteractiveTerminal() && !detachedJSONRun(ctx) {
 		title := fmt.Sprintf("Building %d service(s)...", len(names))
 		m := tui.NewMultiSpinner(title, names)
+		if progressHintsOff(ctx) {
+			m = m.WithoutHints()
+		}
 		prog = tui.NewProgressProgram(m)
 	}
 

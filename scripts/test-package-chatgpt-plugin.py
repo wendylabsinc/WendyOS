@@ -183,7 +183,7 @@ class PackageTests(unittest.TestCase):
         embedded = root / "go/internal/cli/assets/chatgpt-plugin"
         self.assertEqual(snapshot(embedded), {
             relative: public_files[relative]
-            for relative in ("plugin.json", "assets/wendy-icon.png", "skills/wendy/SKILL.md")
+            for relative in ("skills/wendy/SKILL.md",)
         })
 
     def test_no_recording_is_an_explicit_gap(self):

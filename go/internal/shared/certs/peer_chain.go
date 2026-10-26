@@ -9,15 +9,23 @@ import (
 	"time"
 )
 
-// TLSKeyPair includes the issuer chain, stripping the trailing bytes some PKI
-// certificates carry outside their ASN.1 sequence. Those bytes, not ML-DSA
-// public keys, prevent Go's TLS stack from parsing the presented chain.
+// TLSKeyPair normalizes the trailing bytes some PKI issuer certificates carry
+// outside their ASN.1 sequence, so Go TLS can parse the presented chain.
+// Proven self-signed CA roots are omitted; callers retain the original trust
+// material. Intermediates and issuers with unsupported signatures are retained.
+// leafPEM may itself be a chain bundle; issuers from both inputs are retained
+// in presentation order and duplicate certificates are sent only once.
 func TLSKeyPair(leafPEM, chainPEM, keyPEM string) (tls.Certificate, error) {
 	leaf, err := LeafCertificatePEM(leafPEM)
 	if err != nil {
 		return tls.Certificate{}, err
 	}
 	bundle := []byte(leaf)
+	leafBlock, _ := pem.Decode(bundle) // LeafCertificatePEM guarantees a certificate block.
+	embedded, err := ParseCertsFromPEM([]byte(leafPEM))
+	if err != nil {
+		return tls.Certificate{}, err
+	}
 	chain, err := ParseCertsFromPEM([]byte(chainPEM))
 	if err != nil {
 		return tls.Certificate{}, err
@@ -25,7 +33,15 @@ func TLSKeyPair(leafPEM, chainPEM, keyPEM string) (tls.Certificate, error) {
 	if chainPEM != "" && len(chain) == 0 {
 		return tls.Certificate{}, fmt.Errorf("no parseable certificates in TLS issuer chain")
 	}
-	for _, ca := range chain {
+	seen := map[string]bool{string(leafBlock.Bytes): true}
+	for _, ca := range append(embedded, chain...) {
+		if seen[string(ca.Raw)] {
+			continue
+		}
+		seen[string(ca.Raw)] = true
+		if ca.IsCA && bytes.Equal(ca.RawSubject, ca.RawIssuer) && ca.CheckSignatureFrom(ca) == nil {
+			continue
+		}
 		bundle = append(bundle, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: ca.Raw})...)
 	}
 	return tls.X509KeyPair(bundle, []byte(keyPEM))
@@ -37,21 +53,29 @@ func TLSKeyPair(leafPEM, chainPEM, keyPEM string) (tls.Certificate, error) {
 // fail closed; the standard verifier handles such chains when it supports the
 // signature algorithms. leafNow preserves the agent's NotBefore clock floor.
 func VerifyPeerCertificateChain(leaf *x509.Certificate, peers, roots []*x509.Certificate, usage x509.ExtKeyUsage, now, leafNow time.Time) error {
+	_, err := VerifyPeerCertificateChainExpiry(leaf, peers, roots, usage, now, leafNow)
+	return err
+}
+
+// VerifyPeerCertificateChainExpiry applies the same policy as
+// VerifyPeerCertificateChain and returns the earliest expiry on its successful
+// path. Unused issuers and trust anchors do not affect that path's lifetime.
+func VerifyPeerCertificateChainExpiry(leaf *x509.Certificate, peers, roots []*x509.Certificate, usage x509.ExtKeyUsage, now, leafNow time.Time) (time.Time, error) {
 	if len(peers) > 32 {
-		return fmt.Errorf("too many peer certificates")
+		return time.Time{}, fmt.Errorf("too many peer certificates")
 	}
 	if leafNow.Before(leaf.NotBefore) || now.After(leaf.NotAfter) {
-		return fmt.Errorf("peer certificate not valid at current time")
+		return time.Time{}, fmt.Errorf("peer certificate not valid at current time")
 	}
 	if len(leaf.UnhandledCriticalExtensions) != 0 || !permitsUsage(leaf, usage) {
-		return fmt.Errorf("peer certificate has unsupported extensions or authentication usage")
+		return time.Time{}, fmt.Errorf("peer certificate has unsupported extensions or authentication usage")
 	}
 	candidates := append(append([]*x509.Certificate(nil), roots...), peers...)
 	seen := map[string]bool{}
-	var walk func(*x509.Certificate, int) error
-	walk = func(child *x509.Certificate, depth int) error {
+	var walk func(*x509.Certificate, int) (time.Time, error)
+	walk = func(child *x509.Certificate, depth int) (time.Time, error) {
 		if depth >= 8 || seen[string(child.Raw)] {
-			return fmt.Errorf("certificate chain is cyclic or too deep")
+			return time.Time{}, fmt.Errorf("certificate chain is cyclic or too deep")
 		}
 		seen[string(child.Raw)] = true
 		defer delete(seen, string(child.Raw))
@@ -80,16 +104,23 @@ func VerifyPeerCertificateChain(leaf *x509.Certificate, peers, roots []*x509.Cer
 			}
 			for _, root := range roots {
 				if bytes.Equal(root.Raw, ca.Raw) {
-					return nil
+					expires := child.NotAfter
+					if ca.NotAfter.Before(expires) {
+						expires = ca.NotAfter
+					}
+					return expires, nil
 				}
 			}
-			if err := walk(ca, depth+1); err == nil {
-				return nil
+			if expires, err := walk(ca, depth+1); err == nil {
+				if child.NotAfter.Before(expires) {
+					expires = child.NotAfter
+				}
+				return expires, nil
 			} else {
 				lastErr = err
 			}
 		}
-		return lastErr
+		return time.Time{}, lastErr
 	}
 	return walk(leaf, 0)
 }

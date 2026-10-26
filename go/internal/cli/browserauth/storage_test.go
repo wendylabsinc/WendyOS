@@ -10,6 +10,7 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"testing"
 	"time"
 )
@@ -63,6 +64,42 @@ func TestSavedSignInRestoresSameCertificateAndRotatesTokens(t *testing.T) {
 	}
 	if p, err := next.Restore(context.Background()); err != nil || p != nil {
 		t.Fatal("sign-out resurrected session")
+	}
+}
+func TestRestoreRotatedAlwaysExchangesAndFailsClosed(t *testing.T) {
+	s, calls := setup(t, nil)
+	store := &memoryStore{}
+	s.Store = store
+	if _, err := s.Complete(context.Background(), "valid-code", s.state, testIssuer); err != nil {
+		t.Fatal(err)
+	}
+	// The access token has an hour left: a plain restore must not exchange.
+	before, oldRefresh := *calls, s.tokens.Refresh
+	if _, err := (&Session{Client: s.Client, Store: store}).Restore(context.Background()); err != nil || *calls != before {
+		t.Fatal("plain restore of a fresh token exchanged the refresh token", err)
+	}
+	next := &Session{Client: s.Client, Store: store}
+	if _, err := next.RestoreRotated(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if *calls != before+1 || next.tokens.Refresh == oldRefresh {
+		t.Fatal("rotated restore did not exchange the refresh token exactly once")
+	}
+	var persisted savedSession
+	if err := json.Unmarshal(store.raw, &persisted); err != nil || persisted.Tokens.Refresh != next.tokens.Refresh {
+		t.Fatal("rotated refresh token was not persisted")
+	}
+	// A refused exchange (a reused, revoked family) fails the restore; the
+	// saved access token is not used instead.
+	refuse := doerFunc(func(r *http.Request) (*http.Response, error) {
+		if r.URL.String() == testIssuer+"/oauth2/token" {
+			return reply(400, map[string]string{"error": "invalid_grant"}), nil
+		}
+		return s.Client.Do(r)
+	})
+	failed := &Session{Client: refuse, Store: store}
+	if p, err := failed.RestoreRotated(context.Background()); err == nil || p != nil || failed.tokens.Access != "" {
+		t.Fatal("rotated restore fell through to the saved token after a refused exchange")
 	}
 }
 func TestSavedSignInRejectsMismatchedCertificate(t *testing.T) {

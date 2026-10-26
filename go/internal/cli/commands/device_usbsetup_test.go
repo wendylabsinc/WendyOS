@@ -75,6 +75,11 @@ func TestDocsNameNoUSBSetupCommand(t *testing.T) {
 				return err
 			}
 			if d.IsDir() {
+				// The ignored docs-site content copy can outlive its source
+				// checkout. Scan the canonical embedded docs above instead.
+				if path == filepath.Join("..", "assets", "docs", "content") {
+					return filepath.SkipDir
+				}
 				// Skip untracked local content: installed packages, build output
 				// and gitignored working notes.
 				if n := d.Name(); path != root && (n == "node_modules" || n == "superpowers" || strings.HasPrefix(n, ".")) {

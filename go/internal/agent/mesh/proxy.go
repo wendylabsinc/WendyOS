@@ -5,9 +5,9 @@ import (
 	"io"
 	"net"
 	"net/netip"
-	"strconv"
 	"time"
 
+	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
 	"go.uber.org/zap"
 )
 
@@ -22,7 +22,7 @@ const ProxyPort = 50058
 // label its own logs without re-deriving the choice the dialer already made;
 // mode is "" on error.
 type PeerDialer interface {
-	DialDevice(ctx context.Context, deviceID int32, port uint16) (conn net.Conn, mode string, err error)
+	DialDevice(ctx context.Context, device meshid.Device, port uint16) (conn net.Conn, mode string, err error)
 }
 
 // ConnMetrics records mesh connection byte totals. Dial-outcome metrics
@@ -32,7 +32,7 @@ type PeerDialer interface {
 // Defined here (rather than depending on services.MeshMetrics's concrete
 // type) so this package doesn't import services, which already imports mesh.
 type ConnMetrics interface {
-	RecordBytes(peer int32, dir string, n int64)
+	RecordBytes(device meshid.Device, dir string, n int64)
 }
 
 // Proxy terminates REDIRECTed mesh VIP connections, recovers where the
@@ -42,20 +42,27 @@ type Proxy struct {
 	logger      *zap.Logger
 	dialer      PeerDialer
 	metrics     ConnMetrics
+	vips        *VIPTable                                  // resolves original destinations back to devices
 	origDst     func(*net.TCPConn) (netip.AddrPort, error) // swapped in tests
 	dialTimeout time.Duration
 	ln          net.Listener
 }
 
 // NewProxy builds a Proxy. metrics may be nil (e.g. in tests); RecordBytes
-// calls are skipped when it is.
-func NewProxy(logger *zap.Logger, dialer PeerDialer, metrics ConnMetrics) *Proxy {
+// calls are skipped when it is. vips is the table every REDIRECTed
+// destination is resolved through; without one the proxy refuses every
+// connection, since a VIP it cannot map to a principal has no peer to dial.
+func NewProxy(logger *zap.Logger, dialer PeerDialer, metrics ConnMetrics, vips *VIPTable) *Proxy {
 	return &Proxy{
-		logger:      logger,
-		dialer:      dialer,
-		metrics:     metrics,
-		origDst:     originalDst,
-		dialTimeout: 15 * time.Second,
+		logger:  logger,
+		dialer:  dialer,
+		metrics: metrics,
+		vips:    vips,
+		origDst: originalDst,
+		// A cold end-to-end QUIC handshake can cross multiple contended BLE
+		// hops before the app port ACK returns. Keep setup bounded while
+		// allowing those high-cost but healthy routes to settle.
+		dialTimeout: 60 * time.Second,
 	}
 }
 
@@ -96,24 +103,29 @@ func (p *Proxy) handleConn(conn net.Conn) {
 	}
 	dst, err := p.origDst(tcp)
 	if err != nil {
-		p.logger.Warn("mesh proxy: original destination unavailable", zap.Error(err))
+		p.logger.Warn("wendy net proxy: original destination unavailable", zap.Error(err))
 		return
 	}
-	deviceID, err := DeviceForVIP(dst.Addr())
+	if p.vips == nil {
+		p.logger.Warn("wendy net proxy: no VIP table configured", zap.String("dst", dst.String()))
+		return
+	}
+	device, err := p.vips.Device(dst.Addr())
 	if err != nil {
-		p.logger.Warn("mesh proxy: destination is not a mesh VIP", zap.String("dst", dst.String()), zap.Error(err))
+		p.logger.Warn("wendy net proxy: destination is not a wendy net VIP", zap.String("dst", dst.String()), zap.Error(err))
 		return
 	}
+	peerID := device.UUID().String()
 	start := time.Now()
 	ctx, cancel := context.WithTimeout(context.Background(), p.dialTimeout)
-	peer, mode, err := p.dialer.DialDevice(ctx, deviceID, dst.Port())
+	peer, mode, err := p.dialer.DialDevice(ctx, device, dst.Port())
 	cancel()
 	if err != nil {
 		// The dialer already recorded the mesh.connections/dial.duration_ms
 		// error metric for this attempt; this log is the per-connection
 		// signal (dashboard filters on the wendy.mesh scope).
-		p.logger.Warn("mesh connection failed",
-			zap.String("mesh.peer", strconv.Itoa(int(deviceID))),
+		p.logger.Warn("wendy net connection failed",
+			zap.String("mesh.peer", peerID),
 			zap.String("mesh.mode", mode),
 			zap.Uint32("mesh.port", uint32(dst.Port())),
 			zap.String("mesh.result", "error"),
@@ -123,11 +135,11 @@ func (p *Proxy) handleConn(conn net.Conn) {
 	defer peer.Close()
 	tx, rx := relayBytes(conn, peer)
 	if p.metrics != nil {
-		p.metrics.RecordBytes(deviceID, "tx", tx)
-		p.metrics.RecordBytes(deviceID, "rx", rx)
+		p.metrics.RecordBytes(device, "tx", tx)
+		p.metrics.RecordBytes(device, "rx", rx)
 	}
-	p.logger.Info("mesh connection",
-		zap.String("mesh.peer", strconv.Itoa(int(deviceID))),
+	p.logger.Info("wendy net connection",
+		zap.String("mesh.peer", peerID),
 		zap.String("mesh.mode", mode),
 		zap.Uint32("mesh.port", uint32(dst.Port())),
 		zap.String("mesh.result", "ok"),

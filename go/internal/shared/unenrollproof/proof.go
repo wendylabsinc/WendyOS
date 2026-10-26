@@ -197,7 +197,9 @@ func FetchRevocation(ctx context.Context, leaf, issuer *x509.Certificate) ([]byt
 }
 
 func fetchRevocation(ctx context.Context, leaf, issuer *x509.Certificate, client *http.Client) ([]byte, error) {
-	request, err := ocsp.CreateRequest(leaf, issuer, nil)
+	// Wendy PKI pre-signs SHA-256 CertIDs. The OCSP library's default SHA-1
+	// request has no matching response and is correctly rejected as unauthorized.
+	request, err := ocsp.CreateRequest(leaf, issuer, &ocsp.RequestOptions{Hash: crypto.SHA256})
 	if err != nil {
 		return nil, err
 	}

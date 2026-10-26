@@ -44,7 +44,7 @@ const ticketMetaPrefix = "wendy-mtls/1:"
 // still-valid cert's trust can be extended by resumption alone.
 //
 // Mesh dials are exempt from the chaining risk in a different way: with the
-// anti-MITM peer pin fix in server.go's NewClientTLSConfigExpectingPeer
+// anti-MITM peer pin fix in server.go's NewClientTLSConfigExpectingDevice
 // (VerifyConnection re-running the pin+chain check on every resumed mesh
 // connection), a resumed mesh connection re-verifies as much as a full one
 // does, so ticket chaining in the in-memory meshSessionCache is harmless and

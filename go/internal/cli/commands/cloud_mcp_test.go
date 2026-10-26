@@ -20,7 +20,9 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	cloudpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 )
 
@@ -131,7 +133,7 @@ func runRelaySessionWithTerminal(t *testing.T, opened *cloudpbv2.OpenRelaySessio
 		opts.server = wendymcp.New(&config.Config{}, nil)
 	}
 	go func() {
-		err := serveCloudMCP(term.ctx, stream, opened, term, opts.server, policy, opts.autoAccept)
+		err := serveCloudMCP(ctx, stream, opened, term, opts.server, policy, opts.autoAccept)
 		_ = term.close()
 		done <- err
 	}()
@@ -141,6 +143,24 @@ func runRelaySessionWithTerminal(t *testing.T, opened *cloudpbv2.OpenRelaySessio
 func TestCloudMCPAcceptedSessionStopsOnCtrlC(t *testing.T) {
 	for _, interrupt := range []string{"key", "signal"} {
 		t.Run(interrupt, func(t *testing.T) { testCloudMCPAcceptedSessionInterrupt(t, interrupt) })
+	}
+}
+
+func TestCloudMCPReportsRelayFailureWithoutCallerCancellation(t *testing.T) {
+	for _, code := range []codes.Code{codes.Canceled, codes.Unavailable} {
+		t.Run(code.String(), func(t *testing.T) {
+			done, _ := runRelaySession(t, testOpened(t, ""), wendymcp.BindingPolicy{}, nil, func(cloudpbv2.RelayMcpService_RelaySessionServer) error {
+				return status.Error(code, "relay ended unexpectedly")
+			})
+			select {
+			case err := <-done:
+				if status.Code(err) != code {
+					t.Fatalf("relay failure = %v; want %v", err, code)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("relay failure did not stop the session")
+			}
+		})
 	}
 }
 
@@ -690,7 +710,7 @@ func TestMCPServeRefusesWhenRealmDisallowsMCP(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("WENDY_MCP_CHANNEL", "")
-	// `wendy mcp serve` and `wendy mcp gateway` both start here.
+	// `wendy mcp serve` starts here.
 	if err := enterLocalMCPChannel(); err == nil || !strings.Contains(err.Error(), "Allow MCP") {
 		t.Fatalf("enterLocalMCPChannel = %v, want the Allow MCP refusal", err)
 	}

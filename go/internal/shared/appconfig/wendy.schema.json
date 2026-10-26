@@ -202,7 +202,8 @@
                 "additionalProperties": false,
                 "properties": {
                   "host": { "type": "integer", "minimum": 1, "maximum": 65535, "description": "Host port to publish on." },
-                  "container": { "type": "integer", "minimum": 1, "maximum": 65535, "description": "Container port to forward to." }
+                  "container": { "type": "integer", "minimum": 1, "maximum": 65535, "description": "Container port to forward to." },
+                  "protocol": { "type": "string", "enum": ["tcp", "udp"], "description": "Transport protocol; defaults to tcp. UDP is available for mesh mode." }
                 }
               }
             }
@@ -232,6 +233,21 @@
           },
           "required": ["type"],
           "additionalProperties": false
+        },
+        {
+          "properties": {
+            "type": { "const": "avahi" }
+          },
+          "required": ["type"],
+          "additionalProperties": false
+        },
+        {
+          "properties": {
+            "type": { "const": "nan" }
+          },
+          "required": ["type"],
+          "additionalProperties": false,
+          "description": "Direct access to the host's nan0 wpa_supplicant control socket. The agent provisions an app-specific NAN data interface, but the app controls its own publish, subscribe and NDP sessions. Add network mode host separately for NDP traffic."
         },
         {
           "deprecated": true,
@@ -763,7 +779,7 @@
       "required": ["profile", "entitlements"],
       "description": "App-authored backend selected only on a matching managed robot VM. Hardware deployments keep their normal configuration.",
       "properties": {
-        "profile": { "enum": ["rosmaster-r2", "go2", "g1"] },
+        "profile": { "enum": ["rosmaster-r2", "go2", "g1", "so101"] },
         "entitlements": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/entitlement" } },
         "env": { "type": "object", "propertyNames": { "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" }, "additionalProperties": { "type": "string" } }
       }

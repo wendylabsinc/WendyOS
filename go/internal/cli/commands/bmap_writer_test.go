@@ -2,7 +2,9 @@ package commands
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -10,20 +12,18 @@ import (
 	"testing"
 )
 
-func TestValidateBmapSourceRejectsOutsideCache(t *testing.T) {
-	if err := validateBmapSource("/etc/passwd"); err == nil {
-		t.Fatal("expected rejection of path outside cache root")
-	}
-}
-
-func TestValidateBmapSourceAcceptsInsideCache(t *testing.T) {
-	dir, err := osCacheDir()
-	if err != nil {
-		t.Skipf("no cache dir: %v", err)
-	}
-	p := filepath.Join(dir, "jetson", "1.0.0", "image.img.zst")
-	if err := validateBmapSource(p); err != nil {
-		t.Fatalf("expected acceptance inside cache root, got %v", err)
+// The helper runs as root under sudo, where root's HOME holds no wendy config:
+// the root command's init must not create one there.
+func TestBmapWriteSkipsRootCommandInit(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home) // Windows: os.UserHomeDir consults this
+	t.Setenv("WENDY_CONFIG_DIR", "")
+	cmd := NewRootCmd()
+	cmd.SetArgs([]string{"__bmap-write", "--device", filepath.Join(home, "missing"), "--bmap", "x.bmap"})
+	_ = cmd.Execute()
+	if _, err := os.Stat(filepath.Join(home, ".wendy")); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("__bmap-write initialized wendy config in HOME (stat: %v)", err)
 	}
 }
 

@@ -18,30 +18,24 @@ a terminal is available. Use explicit `--device <selector>` on device commands.
 Local CLI commands reconnect independently of an MCP session, so preserve the
 connected target and transport instead of relying on the default device.
 
-The local MCP server uses `wendy_status`, `device_list`, and `device_connect`;
-the ChatGPT gateway uses `list_robots` and `inspect_robot`. Inspect their actual
-tool lists. General campaign/episode management uses the CLI, and `wendy_tools`
-has no `data` group. For an alert during the current local MCP session, such as
-telling the user when a person appears, the `hardware` group's camera watch
-tools (`watch_sources`, `watch_start`, `watch_events`, `watch_stop`) record
-nothing and end with the session. The gateway has specialized YOLO deployment
-and notification tools; use
-[gateway-detection.md](references/gateway-detection.md) for those tasks. Do not
-invent tool names or treat a gateway `robot_id` as a CLI device selector. A
-skill update does not update a running server.
+The MCP server uses `wendy_status`, `device_list`, and `device_connect`.
+Inspect its actual tool list. General campaign/episode management uses the CLI,
+and `wendy_tools` has no `data` group. For an alert during the current MCP
+session, such as telling the user when a person appears, the `hardware` group's
+camera watch tools (`watch_sources`, `watch_start`, `watch_events`,
+`watch_stop`) record nothing and end with the session. Do not invent tool
+names. A skill update does not update a running server.
 
-For operations without a matching gateway tool, use `wendy data` when a local
-terminal is available. Without one, use available approved workspace tools to
-prepare files, explain the missing execution access, and provide exact operator
-commands. Gateway app deployment tools deploy apps; they do not deploy arbitrary
+Use `wendy data` when a local terminal is available. Without one, prepare the
+files, explain the missing execution access, and provide exact operator
+commands. App deployment tools deploy apps; they do not deploy arbitrary
 campaign YAML. Do not claim a campaign was deployed from a file write or an app
 deployment.
 
 ## Select the data
 
 For CLI campaigns, discover sources with
-`wendy --json data sources --device <selector>`. For hosted detectors, follow
-the gateway workflow's camera selection. Choose sources that match the
+`wendy --json data sources --device <selector>`. Choose sources that match the
 requested measurements; preserve returned IDs.
 
 | Data | Campaign selection and limits |
@@ -64,16 +58,13 @@ and units; receipt time alone does not establish when a measurement occurred.
   [campaigns.md](references/campaigns.md).
 - For application events, model input references, durable records, custom
   measurements, and `export-stream`, read [application-streams.md](references/application-streams.md).
-- For gateway YOLO detectors, approved detection triggers, or ChatGPT event
-  delivery, read [gateway-detection.md](references/gateway-detection.md).
 - If an app must be built or deployed, use the available `wendy-app-lifecycle`
   workflow. For missing device access, use `wendy-device-ops` or
   `wendy-device-debug`. These are separate from campaign deployment.
 
 For an explanation or a YAML edit, complete that task without starting capture.
 For a requested CLI deployment or test, verify the deployed plan and recorded
-episode on the selected target. For a gateway detector, verify its runtime and
-notification evidence as described in the gateway workflow. Deployment arms
+episode on the selected target. Deployment arms
 the campaign immediately.
 
 ## Report what was achieved

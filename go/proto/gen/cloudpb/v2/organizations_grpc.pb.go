@@ -31,6 +31,7 @@ const (
 	OrganizationService_RevokeAllCredentials_FullMethodName = "/wendycloud.v2.OrganizationService/RevokeAllCredentials"
 	OrganizationService_ListMembers_FullMethodName          = "/wendycloud.v2.OrganizationService/ListMembers"
 	OrganizationService_TransferOwnership_FullMethodName    = "/wendycloud.v2.OrganizationService/TransferOwnership"
+	OrganizationService_SetMemberDefaults_FullMethodName    = "/wendycloud.v2.OrganizationService/SetMemberDefaults"
 )
 
 // OrganizationServiceClient is the client API for OrganizationService service.
@@ -65,6 +66,12 @@ type OrganizationServiceClient interface {
 	ListMembers(ctx context.Context, in *ListMembersRequest, opts ...grpc.CallOption) (*ListMembersResponse, error)
 	// Signed; payload_type "wendycloud.v2.TransferOwnershipRequest".
 	TransferOwnership(ctx context.Context, in *SignedRequest, opts ...grpc.CallOption) (*TransferOwnershipResponse, error)
+	// Sets the role a new member receives when no role is named (IdP sign-in, AddMember without a
+	// role, an invite created without one) and whether a group mapping replaces it (WDY-3877).
+	// Gate: `member:set-role`. The default never applies to the adopting owner or to service
+	// accounts. Read back through GetOrganization.
+	// Signed; payload_type "wendycloud.v2.SetMemberDefaultsRequest".
+	SetMemberDefaults(ctx context.Context, in *SignedRequest, opts ...grpc.CallOption) (*Organization, error)
 }
 
 type organizationServiceClient struct {
@@ -204,6 +211,16 @@ func (c *organizationServiceClient) TransferOwnership(ctx context.Context, in *S
 	return out, nil
 }
 
+func (c *organizationServiceClient) SetMemberDefaults(ctx context.Context, in *SignedRequest, opts ...grpc.CallOption) (*Organization, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(Organization)
+	err := c.cc.Invoke(ctx, OrganizationService_SetMemberDefaults_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // OrganizationServiceServer is the server API for OrganizationService service.
 // All implementations must embed UnimplementedOrganizationServiceServer
 // for forward compatibility.
@@ -236,6 +253,12 @@ type OrganizationServiceServer interface {
 	ListMembers(context.Context, *ListMembersRequest) (*ListMembersResponse, error)
 	// Signed; payload_type "wendycloud.v2.TransferOwnershipRequest".
 	TransferOwnership(context.Context, *SignedRequest) (*TransferOwnershipResponse, error)
+	// Sets the role a new member receives when no role is named (IdP sign-in, AddMember without a
+	// role, an invite created without one) and whether a group mapping replaces it (WDY-3877).
+	// Gate: `member:set-role`. The default never applies to the adopting owner or to service
+	// accounts. Read back through GetOrganization.
+	// Signed; payload_type "wendycloud.v2.SetMemberDefaultsRequest".
+	SetMemberDefaults(context.Context, *SignedRequest) (*Organization, error)
 	mustEmbedUnimplementedOrganizationServiceServer()
 }
 
@@ -281,6 +304,9 @@ func (UnimplementedOrganizationServiceServer) ListMembers(context.Context, *List
 }
 func (UnimplementedOrganizationServiceServer) TransferOwnership(context.Context, *SignedRequest) (*TransferOwnershipResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method TransferOwnership not implemented")
+}
+func (UnimplementedOrganizationServiceServer) SetMemberDefaults(context.Context, *SignedRequest) (*Organization, error) {
+	return nil, status.Error(codes.Unimplemented, "method SetMemberDefaults not implemented")
 }
 func (UnimplementedOrganizationServiceServer) mustEmbedUnimplementedOrganizationServiceServer() {}
 func (UnimplementedOrganizationServiceServer) testEmbeddedByValue()                             {}
@@ -512,6 +538,24 @@ func _OrganizationService_TransferOwnership_Handler(srv interface{}, ctx context
 	return interceptor(ctx, in, info, handler)
 }
 
+func _OrganizationService_SetMemberDefaults_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SignedRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(OrganizationServiceServer).SetMemberDefaults(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: OrganizationService_SetMemberDefaults_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(OrganizationServiceServer).SetMemberDefaults(ctx, req.(*SignedRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // OrganizationService_ServiceDesc is the grpc.ServiceDesc for OrganizationService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -562,6 +606,10 @@ var OrganizationService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "TransferOwnership",
 			Handler:    _OrganizationService_TransferOwnership_Handler,
+		},
+		{
+			MethodName: "SetMemberDefaults",
+			Handler:    _OrganizationService_SetMemberDefaults_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

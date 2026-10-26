@@ -417,6 +417,238 @@ func (x *ListSensorPairingsResponse) GetSupportsPrincipalPairing() bool {
 	return false
 }
 
+type DiscoverSensorSourcesRequest struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// How long to browse, in milliseconds. 0 uses the agent's default (5s);
+	// larger values are capped (10s). The agent also finishes early enough to
+	// answer before the call's deadline.
+	TimeoutMs     uint32 `protobuf:"varint,1,opt,name=timeout_ms,json=timeoutMs,proto3" json:"timeout_ms,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DiscoverSensorSourcesRequest) Reset() {
+	*x = DiscoverSensorSourcesRequest{}
+	mi := &file_wendy_agent_services_v2_sensor_pairing_service_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DiscoverSensorSourcesRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DiscoverSensorSourcesRequest) ProtoMessage() {}
+
+func (x *DiscoverSensorSourcesRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_wendy_agent_services_v2_sensor_pairing_service_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DiscoverSensorSourcesRequest.ProtoReflect.Descriptor instead.
+func (*DiscoverSensorSourcesRequest) Descriptor() ([]byte, []int) {
+	return file_wendy_agent_services_v2_sensor_pairing_service_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *DiscoverSensorSourcesRequest) GetTimeoutMs() uint32 {
+	if x != nil {
+		return x.TimeoutMs
+	}
+	return 0
+}
+
+// One sensor source as this device sees it on its own network.
+type DiscoveredSensorSource struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"` // TXT id/wendyosdevice, or a fallback name
+	DisplayName   string                 `protobuf:"bytes,2,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"`
+	Hostname      string                 `protobuf:"bytes,3,opt,name=hostname,proto3" json:"hostname,omitempty"`                              // mDNS hostname, e.g. "board.local"
+	IpAddress     string                 `protobuf:"bytes,4,opt,name=ip_address,json=ipAddress,proto3" json:"ip_address,omitempty"`           // primary address this device resolved
+	Addresses     []string               `protobuf:"bytes,5,rep,name=addresses,proto3" json:"addresses,omitempty"`                            // every address this device saw, ip_address first
+	Port          int32                  `protobuf:"varint,6,opt,name=port,proto3" json:"port,omitempty"`                                     // advertised service port
+	IsMtls        bool                   `protobuf:"varint,7,opt,name=is_mtls,json=isMtls,proto3" json:"is_mtls,omitempty"`                   // "tls" TXT (WendyOS) or "mtls" TXT (Wendy Lite)
+	AssetId       int32                  `protobuf:"varint,8,opt,name=asset_id,json=assetId,proto3" json:"asset_id,omitempty"`                // legacy cloud asset id; 0 when absent
+	OrgId         int32                  `protobuf:"varint,9,opt,name=org_id,json=orgId,proto3" json:"org_id,omitempty"`                      // legacy cloud org id; 0 when absent
+	TenantUuid    string                 `protobuf:"bytes,10,opt,name=tenant_uuid,json=tenantUuid,proto3" json:"tenant_uuid,omitempty"`       // advertised PKI tenant (canonical UUID)
+	PrincipalUri  string                 `protobuf:"bytes,11,opt,name=principal_uri,json=principalUri,proto3" json:"principal_uri,omitempty"` // advertised device principal, validated against tenant_uuid
+	Caps          []string               `protobuf:"bytes,12,rep,name=caps,proto3" json:"caps,omitempty"`                                     // advertised capabilities; always includes "sensors"
+	WendyLite     bool                   `protobuf:"varint,13,opt,name=wendy_lite,json=wendyLite,proto3" json:"wendy_lite,omitempty"`         // seen on _wendy-lite._tcp rather than _wendyos._udp
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DiscoveredSensorSource) Reset() {
+	*x = DiscoveredSensorSource{}
+	mi := &file_wendy_agent_services_v2_sensor_pairing_service_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DiscoveredSensorSource) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DiscoveredSensorSource) ProtoMessage() {}
+
+func (x *DiscoveredSensorSource) ProtoReflect() protoreflect.Message {
+	mi := &file_wendy_agent_services_v2_sensor_pairing_service_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DiscoveredSensorSource.ProtoReflect.Descriptor instead.
+func (*DiscoveredSensorSource) Descriptor() ([]byte, []int) {
+	return file_wendy_agent_services_v2_sensor_pairing_service_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *DiscoveredSensorSource) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *DiscoveredSensorSource) GetDisplayName() string {
+	if x != nil {
+		return x.DisplayName
+	}
+	return ""
+}
+
+func (x *DiscoveredSensorSource) GetHostname() string {
+	if x != nil {
+		return x.Hostname
+	}
+	return ""
+}
+
+func (x *DiscoveredSensorSource) GetIpAddress() string {
+	if x != nil {
+		return x.IpAddress
+	}
+	return ""
+}
+
+func (x *DiscoveredSensorSource) GetAddresses() []string {
+	if x != nil {
+		return x.Addresses
+	}
+	return nil
+}
+
+func (x *DiscoveredSensorSource) GetPort() int32 {
+	if x != nil {
+		return x.Port
+	}
+	return 0
+}
+
+func (x *DiscoveredSensorSource) GetIsMtls() bool {
+	if x != nil {
+		return x.IsMtls
+	}
+	return false
+}
+
+func (x *DiscoveredSensorSource) GetAssetId() int32 {
+	if x != nil {
+		return x.AssetId
+	}
+	return 0
+}
+
+func (x *DiscoveredSensorSource) GetOrgId() int32 {
+	if x != nil {
+		return x.OrgId
+	}
+	return 0
+}
+
+func (x *DiscoveredSensorSource) GetTenantUuid() string {
+	if x != nil {
+		return x.TenantUuid
+	}
+	return ""
+}
+
+func (x *DiscoveredSensorSource) GetPrincipalUri() string {
+	if x != nil {
+		return x.PrincipalUri
+	}
+	return ""
+}
+
+func (x *DiscoveredSensorSource) GetCaps() []string {
+	if x != nil {
+		return x.Caps
+	}
+	return nil
+}
+
+func (x *DiscoveredSensorSource) GetWendyLite() bool {
+	if x != nil {
+		return x.WendyLite
+	}
+	return false
+}
+
+type DiscoverSensorSourcesResponse struct {
+	state         protoimpl.MessageState    `protogen:"open.v1"`
+	Sources       []*DiscoveredSensorSource `protobuf:"bytes,1,rep,name=sources,proto3" json:"sources,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DiscoverSensorSourcesResponse) Reset() {
+	*x = DiscoverSensorSourcesResponse{}
+	mi := &file_wendy_agent_services_v2_sensor_pairing_service_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DiscoverSensorSourcesResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DiscoverSensorSourcesResponse) ProtoMessage() {}
+
+func (x *DiscoverSensorSourcesResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_wendy_agent_services_v2_sensor_pairing_service_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DiscoverSensorSourcesResponse.ProtoReflect.Descriptor instead.
+func (*DiscoverSensorSourcesResponse) Descriptor() ([]byte, []int) {
+	return file_wendy_agent_services_v2_sensor_pairing_service_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *DiscoverSensorSourcesResponse) GetSources() []*DiscoveredSensorSource {
+	if x != nil {
+		return x.Sources
+	}
+	return nil
+}
+
 var File_wendy_agent_services_v2_sensor_pairing_service_proto protoreflect.FileDescriptor
 
 const file_wendy_agent_services_v2_sensor_pairing_service_proto_rawDesc = "" +
@@ -446,11 +678,35 @@ const file_wendy_agent_services_v2_sensor_pairing_service_proto_rawDesc = "" +
 	"\x19ListSensorPairingsRequest\"\x9e\x01\n" +
 	"\x1aListSensorPairingsResponse\x12B\n" +
 	"\bpairings\x18\x01 \x03(\v2&.wendy.agent.services.v2.SensorPairingR\bpairings\x12<\n" +
-	"\x1asupports_principal_pairing\x18\x02 \x01(\bR\x18supportsPrincipalPairing2\x96\x03\n" +
+	"\x1asupports_principal_pairing\x18\x02 \x01(\bR\x18supportsPrincipalPairing\"=\n" +
+	"\x1cDiscoverSensorSourcesRequest\x12\x1d\n" +
+	"\n" +
+	"timeout_ms\x18\x01 \x01(\rR\ttimeoutMs\"\xfc\x02\n" +
+	"\x16DiscoveredSensorSource\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12!\n" +
+	"\fdisplay_name\x18\x02 \x01(\tR\vdisplayName\x12\x1a\n" +
+	"\bhostname\x18\x03 \x01(\tR\bhostname\x12\x1d\n" +
+	"\n" +
+	"ip_address\x18\x04 \x01(\tR\tipAddress\x12\x1c\n" +
+	"\taddresses\x18\x05 \x03(\tR\taddresses\x12\x12\n" +
+	"\x04port\x18\x06 \x01(\x05R\x04port\x12\x17\n" +
+	"\ais_mtls\x18\a \x01(\bR\x06isMtls\x12\x19\n" +
+	"\basset_id\x18\b \x01(\x05R\aassetId\x12\x15\n" +
+	"\x06org_id\x18\t \x01(\x05R\x05orgId\x12\x1f\n" +
+	"\vtenant_uuid\x18\n" +
+	" \x01(\tR\n" +
+	"tenantUuid\x12#\n" +
+	"\rprincipal_uri\x18\v \x01(\tR\fprincipalUri\x12\x12\n" +
+	"\x04caps\x18\f \x03(\tR\x04caps\x12\x1d\n" +
+	"\n" +
+	"wendy_lite\x18\r \x01(\bR\twendyLite\"j\n" +
+	"\x1dDiscoverSensorSourcesResponse\x12I\n" +
+	"\asources\x18\x01 \x03(\v2/.wendy.agent.services.v2.DiscoveredSensorSourceR\asources2\x9f\x04\n" +
 	"\x19WendySensorPairingService\x12w\n" +
 	"\x10AddSensorPairing\x120.wendy.agent.services.v2.AddSensorPairingRequest\x1a1.wendy.agent.services.v2.AddSensorPairingResponse\x12\x80\x01\n" +
 	"\x13RemoveSensorPairing\x123.wendy.agent.services.v2.RemoveSensorPairingRequest\x1a4.wendy.agent.services.v2.RemoveSensorPairingResponse\x12}\n" +
-	"\x12ListSensorPairings\x122.wendy.agent.services.v2.ListSensorPairingsRequest\x1a3.wendy.agent.services.v2.ListSensorPairingsResponseBAZ?github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2;agentpbv2b\x06proto3"
+	"\x12ListSensorPairings\x122.wendy.agent.services.v2.ListSensorPairingsRequest\x1a3.wendy.agent.services.v2.ListSensorPairingsResponse\x12\x86\x01\n" +
+	"\x15DiscoverSensorSources\x125.wendy.agent.services.v2.DiscoverSensorSourcesRequest\x1a6.wendy.agent.services.v2.DiscoverSensorSourcesResponseBAZ?github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2;agentpbv2b\x06proto3"
 
 var (
 	file_wendy_agent_services_v2_sensor_pairing_service_proto_rawDescOnce sync.Once
@@ -464,30 +720,36 @@ func file_wendy_agent_services_v2_sensor_pairing_service_proto_rawDescGZIP() []b
 	return file_wendy_agent_services_v2_sensor_pairing_service_proto_rawDescData
 }
 
-var file_wendy_agent_services_v2_sensor_pairing_service_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
+var file_wendy_agent_services_v2_sensor_pairing_service_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
 var file_wendy_agent_services_v2_sensor_pairing_service_proto_goTypes = []any{
-	(*SensorPairing)(nil),               // 0: wendy.agent.services.v2.SensorPairing
-	(*AddSensorPairingRequest)(nil),     // 1: wendy.agent.services.v2.AddSensorPairingRequest
-	(*AddSensorPairingResponse)(nil),    // 2: wendy.agent.services.v2.AddSensorPairingResponse
-	(*RemoveSensorPairingRequest)(nil),  // 3: wendy.agent.services.v2.RemoveSensorPairingRequest
-	(*RemoveSensorPairingResponse)(nil), // 4: wendy.agent.services.v2.RemoveSensorPairingResponse
-	(*ListSensorPairingsRequest)(nil),   // 5: wendy.agent.services.v2.ListSensorPairingsRequest
-	(*ListSensorPairingsResponse)(nil),  // 6: wendy.agent.services.v2.ListSensorPairingsResponse
+	(*SensorPairing)(nil),                 // 0: wendy.agent.services.v2.SensorPairing
+	(*AddSensorPairingRequest)(nil),       // 1: wendy.agent.services.v2.AddSensorPairingRequest
+	(*AddSensorPairingResponse)(nil),      // 2: wendy.agent.services.v2.AddSensorPairingResponse
+	(*RemoveSensorPairingRequest)(nil),    // 3: wendy.agent.services.v2.RemoveSensorPairingRequest
+	(*RemoveSensorPairingResponse)(nil),   // 4: wendy.agent.services.v2.RemoveSensorPairingResponse
+	(*ListSensorPairingsRequest)(nil),     // 5: wendy.agent.services.v2.ListSensorPairingsRequest
+	(*ListSensorPairingsResponse)(nil),    // 6: wendy.agent.services.v2.ListSensorPairingsResponse
+	(*DiscoverSensorSourcesRequest)(nil),  // 7: wendy.agent.services.v2.DiscoverSensorSourcesRequest
+	(*DiscoveredSensorSource)(nil),        // 8: wendy.agent.services.v2.DiscoveredSensorSource
+	(*DiscoverSensorSourcesResponse)(nil), // 9: wendy.agent.services.v2.DiscoverSensorSourcesResponse
 }
 var file_wendy_agent_services_v2_sensor_pairing_service_proto_depIdxs = []int32{
 	0, // 0: wendy.agent.services.v2.AddSensorPairingResponse.pairing:type_name -> wendy.agent.services.v2.SensorPairing
 	0, // 1: wendy.agent.services.v2.ListSensorPairingsResponse.pairings:type_name -> wendy.agent.services.v2.SensorPairing
-	1, // 2: wendy.agent.services.v2.WendySensorPairingService.AddSensorPairing:input_type -> wendy.agent.services.v2.AddSensorPairingRequest
-	3, // 3: wendy.agent.services.v2.WendySensorPairingService.RemoveSensorPairing:input_type -> wendy.agent.services.v2.RemoveSensorPairingRequest
-	5, // 4: wendy.agent.services.v2.WendySensorPairingService.ListSensorPairings:input_type -> wendy.agent.services.v2.ListSensorPairingsRequest
-	2, // 5: wendy.agent.services.v2.WendySensorPairingService.AddSensorPairing:output_type -> wendy.agent.services.v2.AddSensorPairingResponse
-	4, // 6: wendy.agent.services.v2.WendySensorPairingService.RemoveSensorPairing:output_type -> wendy.agent.services.v2.RemoveSensorPairingResponse
-	6, // 7: wendy.agent.services.v2.WendySensorPairingService.ListSensorPairings:output_type -> wendy.agent.services.v2.ListSensorPairingsResponse
-	5, // [5:8] is the sub-list for method output_type
-	2, // [2:5] is the sub-list for method input_type
-	2, // [2:2] is the sub-list for extension type_name
-	2, // [2:2] is the sub-list for extension extendee
-	0, // [0:2] is the sub-list for field type_name
+	8, // 2: wendy.agent.services.v2.DiscoverSensorSourcesResponse.sources:type_name -> wendy.agent.services.v2.DiscoveredSensorSource
+	1, // 3: wendy.agent.services.v2.WendySensorPairingService.AddSensorPairing:input_type -> wendy.agent.services.v2.AddSensorPairingRequest
+	3, // 4: wendy.agent.services.v2.WendySensorPairingService.RemoveSensorPairing:input_type -> wendy.agent.services.v2.RemoveSensorPairingRequest
+	5, // 5: wendy.agent.services.v2.WendySensorPairingService.ListSensorPairings:input_type -> wendy.agent.services.v2.ListSensorPairingsRequest
+	7, // 6: wendy.agent.services.v2.WendySensorPairingService.DiscoverSensorSources:input_type -> wendy.agent.services.v2.DiscoverSensorSourcesRequest
+	2, // 7: wendy.agent.services.v2.WendySensorPairingService.AddSensorPairing:output_type -> wendy.agent.services.v2.AddSensorPairingResponse
+	4, // 8: wendy.agent.services.v2.WendySensorPairingService.RemoveSensorPairing:output_type -> wendy.agent.services.v2.RemoveSensorPairingResponse
+	6, // 9: wendy.agent.services.v2.WendySensorPairingService.ListSensorPairings:output_type -> wendy.agent.services.v2.ListSensorPairingsResponse
+	9, // 10: wendy.agent.services.v2.WendySensorPairingService.DiscoverSensorSources:output_type -> wendy.agent.services.v2.DiscoverSensorSourcesResponse
+	7, // [7:11] is the sub-list for method output_type
+	3, // [3:7] is the sub-list for method input_type
+	3, // [3:3] is the sub-list for extension type_name
+	3, // [3:3] is the sub-list for extension extendee
+	0, // [0:3] is the sub-list for field type_name
 }
 
 func init() { file_wendy_agent_services_v2_sensor_pairing_service_proto_init() }
@@ -501,7 +763,7 @@ func file_wendy_agent_services_v2_sensor_pairing_service_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_wendy_agent_services_v2_sensor_pairing_service_proto_rawDesc), len(file_wendy_agent_services_v2_sensor_pairing_service_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   7,
+			NumMessages:   10,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

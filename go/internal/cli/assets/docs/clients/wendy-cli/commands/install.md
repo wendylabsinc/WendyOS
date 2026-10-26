@@ -35,7 +35,7 @@ See [`wendy os install`](os/install.md) for the complete reference: the ESP32 (W
 
 ## Linux Desktop / Headless Mac
 
-Selecting **Linux Desktop** or **Headless Mac** in the interactive picker (or passing `--device-type linux-desktop` / `--device-type headless-mac`) does not write any drive. Instead it prints a `curl … | bash` one-liner for `agent.sh` — the command is identical for both, the script auto-detects the platform. When you are logged in and confirm (or pass `--pre-enroll`), it mints a short-lived (1 h) enrollment token and embeds it in the command so the freshly installed `wendy-agent` self-enrolls on first startup. Without a token the device is discovered over mDNS as described in the [Linux installation guide](/docs/installation/linux).
+Selecting **Linux Desktop** or **Headless Mac** in the interactive picker (or passing `--device-type linux-desktop` / `--device-type headless-mac`) does not write any drive. Instead it prints a `curl … | bash` one-liner for `agent.sh`, which auto-detects the platform. The Linux command adds `--network-access network` so the machine can be discovered and managed from your computer; for a Mac, choose **Allow Other Devices** when Wendy Agent first opens. When you are logged in and confirm (or pass `--pre-enroll`), it mints a short-lived (1 h) enrollment token and embeds it in the command so the freshly installed `wendy-agent` self-enrolls on first startup. Without a token the device is discovered over mDNS as described in the [Linux installation guide](/docs/installation/linux).
 
 ## Related
 

@@ -12,12 +12,28 @@ rootfs is never modified and the device never compiles anything: add-ons are bui
 CI against a pinned kernel.
 
 ```sh
+wendy device drivers                           # pick a driver to install, reinstall, or remove
+wendy device drivers --nightly                 # use the latest nightly catalog
 wendy device drivers list                      # what this device has
 wendy device drivers list --available          # what the registry publishes for it
+wendy device drivers list --available --nightly
 wendy device drivers install wendyos-hello     # from the registry
+wendy device drivers install wendyos-hello --nightly
 wendy device drivers install wendyos-hello --file ./wendyos-hello.raw
 wendy device drivers remove wendyos-hello --force
 ```
+
+Without a subcommand, `drivers` opens a picker showing installed drivers and published
+drivers compatible with the running kernel. Select a driver, then choose an action.
+Removal asks for confirmation. With `--json` or without an interactive terminal, the
+bare command lists installed drivers instead and rejects `--nightly` and `--pr`; use
+`list --available` to read a catalog from a script.
+
+By default, published drivers come from the device's current OS version.
+`--nightly` selects the latest nightly build, while `--pr <number>` selects a PR build.
+Both still filter drivers by the running kernel. These flags work with the picker,
+`list --available`, and registry installs. They cannot be combined with each other or
+with `install --file`.
 
 The examples use `wendyos-hello`, a self-test add-on published with every build, so
 they run as written on any device whose OS version is in the registry.

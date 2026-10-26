@@ -196,7 +196,7 @@ The UNO Q keeps its boot firmware on the same eMMC, so the flash also rewrites i
 
 ## Linux Desktop / Headless Mac path
 
-Choosing **Linux Desktop** or **Headless Mac** (or `--device-type linux-desktop` / `--device-type headless-mac`) does not write a drive. The command prints the `agent.sh` one-liner from the [Linux installation guide](/docs/installation/linux) (the script auto-detects the target platform). When `--pre-enroll` is supplied and a valid auth session exists, a 1-hour enrollment token is embedded in the command; the agent self-enrolls on first startup without a separate `wendy device enroll` step. Run `wendy discover` afterwards to find the device.
+Choosing **Linux Desktop** or **Headless Mac** (or `--device-type linux-desktop` / `--device-type headless-mac`) does not write a drive. The command prints the `agent.sh` one-liner from the [Linux installation guide](/docs/installation/linux) (the script auto-detects the target platform). For Linux it passes `--network-access network`; on a Mac, choose **Allow Other Devices** when Wendy Agent first opens. When `--pre-enroll` is supplied and a valid auth session exists, a 1-hour enrollment token is embedded in the command; the agent self-enrolls on first startup without a separate `wendy device enroll` step. Run `wendy discover` afterwards to find the device.
 
 ### Privileges
 
@@ -260,7 +260,10 @@ Requires an active `wendy auth login` session. The CLI creates an enrollment tok
 | `--storage` | auto | Storage variant: `nvme`/`sd` for raw imaging; AGX Orin recovery requires `nvme` or `emmc` non-interactively |
 | `--no-bmap` | false | Disable bmap-accelerated flashing even when a block map is available |
 
-> **TODO**: Post-flashing Linux devices still need certificate provisioning and Wendy Cloud enrollment if `--pre-enroll` was not used. See [`wendy device setup`](../device/setup.md), [PKI](../../../../pki/), and [Wendy Cloud](https://cloud.wendy.dev/login).
+To manage the device through Wendy Cloud later, [enroll it](../device/enroll.md)
+if you did not choose `--pre-enroll` during installation. Local app development
+does not require Cloud enrollment.
+
 ## Agent-driven installation
 
 `wendy install plan` and `wendy install verify` also work under the `wendy os install`

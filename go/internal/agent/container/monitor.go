@@ -154,6 +154,9 @@ type ContainerMonitor struct {
 	// tick would otherwise see the siblings stopped and launch a second,
 	// overlapping restart that races on the primary PID. Guarded by mu.
 	groupRestarting map[string]bool
+	// A stale NAN socket restart briefly stops a healthy task. Keep the normal
+	// crash monitor from launching a second restart during that interval.
+	nanRestarting map[string]bool
 	// suppressed counts in-flight Suppress handles per container name (see
 	// Suppress). While a name's count is > 0, planRestarts will not schedule a
 	// restart for it. A counter rather than a bool so two independent
@@ -184,6 +187,7 @@ func NewContainerMonitor(logger *zap.Logger, client services.ContainerdClient, l
 		logManager:      logManager,
 		states:          make(map[string]*containerState),
 		groupRestarting: make(map[string]bool),
+		nanRestarting:   make(map[string]bool),
 		suppressed:      make(map[string]int),
 		gpuEntitled:     make(map[string]bool),
 		interval:        interval,
@@ -333,6 +337,14 @@ func (m *ContainerMonitor) ReconcileBootContainers(ctx context.Context) {
 	if r, ok := m.containerd.(services.AppStateRebuilder); ok {
 		r.RebuildAppStateCaches(ctx)
 	}
+	// Roll back inherited CREATED tasks before filtering restart intent. An
+	// agent crash during CNI/private-daemon preparation must not leak a held
+	// process and address for a --no-restart app.
+	if r, ok := m.containerd.(services.InterruptedTaskStartRecoverer); ok {
+		if err := r.RecoverInterruptedTaskStarts(ctx); err != nil {
+			m.logger.Warn("Could not recover all interrupted container starts", zap.Error(err))
+		}
+	}
 
 	// One-time upgrade back-fill: apps stopped under an older agent carry no
 	// stopped-by-user mark, so without this the first post-upgrade boot would
@@ -340,6 +352,17 @@ func (m *ContainerMonitor) ReconcileBootContainers(ctx context.Context) {
 	// below so the marks are in place before we decide what to start.
 	if err := m.containerd.MigrateStoppedByUserOnce(ctx); err != nil {
 		m.logger.Warn("Boot reconcile migration failed; proceeding without it", zap.Error(err))
+	}
+	// A surviving task still writes to its original shim FIFOs. Reconnect them
+	// before filtering restart policies so --no-restart apps are drained too.
+	if r, ok := m.containerd.(services.RunningTaskOutputRecoverer); ok {
+		if err := r.RecoverRunningTaskOutput(ctx, func(name string, output services.ContainerOutput) {
+			if m.logManager != nil {
+				m.logManager.Publish(name, output)
+			}
+		}); err != nil {
+			m.logger.Warn("Could not recover all running task output", zap.Error(err))
+		}
 	}
 
 	bcs, err := m.containerd.ListBootContainers(ctx)
@@ -407,6 +430,32 @@ func (m *ContainerMonitor) checkContainers(ctx context.Context) {
 	m.resolveGPUEntitlements(ctx)
 
 	toRestart := m.planRestarts(containers)
+	// The nan0 entitlement uses a file bind mount. When wpa_supplicant replaces
+	// that socket, a running app retains the old inode even though its task is
+	// otherwise healthy. The detector inspects only running NAN-entitled tasks.
+	if detector, ok := m.containerd.(services.NANSocketStalenessDetector); ok {
+		stale, detectErr := detector.StaleNANSocketContainers(ctx)
+		if detectErr != nil {
+			m.logger.Warn("Failed to inspect NAN socket mounts", zap.Error(detectErr))
+		} else {
+			m.mu.Lock()
+			var eligible []string
+			for _, name := range stale {
+				state, monitored := m.states[name]
+				if monitored && !state.ExplicitStop && m.suppressed[name] == 0 && !m.nanRestarting[name] {
+					eligible = append(eligible, name)
+				}
+			}
+			m.mu.Unlock()
+			for _, act := range m.planRestartActions(ctx, eligible) {
+				if act.groupAppID != "" {
+					go m.restartGroup(ctx, act.groupAppID)
+				} else {
+					go m.restartStaleNAN(ctx, act.single)
+				}
+			}
+		}
+	}
 
 	for _, act := range m.planRestartActions(ctx, toRestart) {
 		if act.groupAppID != "" {
@@ -415,6 +464,63 @@ func (m *ContainerMonitor) checkContainers(ctx context.Context) {
 			go m.restartSingle(ctx, act.single)
 		}
 	}
+}
+
+// restartStaleNAN uses the ordinary containerd stop/start lifecycle so an app
+// can cancel its own publish and NDPs on SIGTERM before its socket is remounted.
+// It does not mark the app explicitly stopped or change its restart policy.
+func (m *ContainerMonitor) restartStaleNAN(ctx context.Context, name string) {
+	m.mu.Lock()
+	if m.nanRestarting[name] || m.suppressed[name] > 0 {
+		m.mu.Unlock()
+		return
+	}
+	state, monitored := m.states[name]
+	if !monitored || state.ExplicitStop {
+		m.mu.Unlock()
+		return
+	}
+	m.nanRestarting[name] = true
+	m.mu.Unlock()
+	defer func() {
+		m.mu.Lock()
+		delete(m.nanRestarting, name)
+		m.mu.Unlock()
+	}()
+	// A deployment may have refreshed the mount between the monitor tick and
+	// this goroutine. Recheck before stopping a now-healthy running task.
+	detector := m.containerd.(services.NANSocketStalenessDetector)
+	stale, err := detector.StaleNANSocketContainers(ctx)
+	if err != nil {
+		m.logger.Warn("Could not recheck NAN socket before restart", zap.String("app_name", name), zap.Error(err))
+		return
+	}
+	stillStale := false
+	for _, current := range stale {
+		if current == name {
+			stillStale = true
+			break
+		}
+	}
+	if !stillStale {
+		return
+	}
+
+	if err := m.containerd.StopContainer(ctx, name); err != nil {
+		m.logger.Error("Failed to stop NAN app for socket refresh", zap.String("app_name", name), zap.Error(err))
+		return
+	}
+	if m.restartBlocked(name) {
+		return // A user stop or replace won the race while the old task exited.
+	}
+	outputCh, err := m.containerd.StartContainer(ctx, name, "", nil)
+	if err != nil {
+		m.logger.Error("Failed to restart NAN app after socket refresh", zap.String("app_name", name), zap.Error(err))
+		return
+	}
+	// Output lasts for the whole new task lifetime. Release the refresh guard
+	// now so a later supplicant socket replacement can restart it again.
+	go m.drainOutput(name, outputCh)
 }
 
 // restartAction is one unit of restart work: either a single container, or an
@@ -575,9 +681,8 @@ func (m *ContainerMonitor) drainOutput(name string, outputCh <-chan services.Con
 			m.logManager.Publish(name, output)
 		}
 	}
-	if m.logManager != nil {
-		m.logManager.Publish(name, services.ContainerOutput{Done: true})
-	}
+	// The producer owns the terminal marker; an old channel closing after
+	// replacement must not end the replacement task's log stream.
 }
 
 // planRestarts reconciles the registered container states against the current
@@ -629,6 +734,9 @@ func (m *ContainerMonitor) planRestarts(containers []*agentpb.AppContainer) []st
 	now := m.now()
 	var toRestart []string
 	for appName, state := range m.states {
+		if m.nanRestarting[appName] {
+			continue
+		}
 		if running[appName] {
 			// Track how long it has been up. A container that comes back and
 			// stays up is healthy, and its next failure should restart

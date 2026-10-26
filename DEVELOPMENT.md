@@ -34,7 +34,7 @@ command from inside `go/`.**
 | `Proto/` | **Source of truth** for all `.proto` definitions |
 | `Examples/` | Sample apps you can `wendy run` |
 | `swift/` | macOS agent app + shared agent core ([its own docs](swift/README.md)) |
-| `specs/`, `Documentation/` | Design docs and specs |
+| `Documentation/` | Design docs |
 | `docs` (symlink) | Points at `go/internal/cli/assets/docs` — the docs embedded in the CLI |
 
 ---

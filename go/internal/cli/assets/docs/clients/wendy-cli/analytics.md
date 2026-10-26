@@ -1,4 +1,20 @@
-We track analytics for our CLI's usage through a dedicated self-hosted telemetry service. This is [opt-out](./commands/analytics/disable.md), or through `WENDY_ANALYTICS=false` in your environment.
+# Usage analytics
+
+Control whether Wendy sends anonymous usage analytics:
+
+```sh
+wendy analytics status
+wendy analytics disable
+```
+
+Run `wendy analytics enable` to opt in again. `WENDY_ANALYTICS=false` and CI also
+turn collection off; `status` shows the effective setting. Analytics failures do
+not change a command's result. Diagnostic reports are not uploaded automatically.
+
+## Event reference
+
+The details below describe the event fields for administrators reviewing data
+collection. Normal use does not require configuring these events.
 
 ## How it works
 
@@ -67,10 +83,8 @@ Delivery remains best-effort, with no persistent offline queue. A start without 
 
 Legacy `first_run` means the first completed CLI invocation, and `install_completed` describes the Homebrew postinstall hook. These are not device setup or first deployment events. Version 2 marks delivered milestones as successful. Historical events keep their original semantics.
 
-`first_deploy_success` is emitted by
-[`deployMetrics.markStarted`](https://github.com/wendylabsinc/WendyOS/blob/main/go/internal/cli/commands/deploymetrics.go)
-after the agent acknowledges container start for an app deployment. The
-command-completion `milestoneFor` mapping no longer owns this event. Managed-robot
+`first_deploy_success` records the first acknowledged application start,
+rather than merely a successful CLI exit. Managed-robot
 provisioning does not emit it, and a successful command exit alone is insufficient.
 
 ## Deploy events

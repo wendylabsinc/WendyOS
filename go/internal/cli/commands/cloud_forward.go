@@ -95,12 +95,6 @@ func cloudTunnelCommand(ctx context.Context, cloudGRPC, deviceName, brokerURL st
 		}
 		defer brokerConn.Close()
 	} else {
-		if udp {
-			return fmt.Errorf("Cloud's authorized service catalog does not expose UDP forwarding")
-		}
-		if remotePort != 22 && remotePort != 50052 {
-			return fmt.Errorf("Cloud's authorized service catalog has no service for port %d", remotePort)
-		}
 		if brokerURL != "" {
 			return fmt.Errorf("Cloud selects the authorized relay; --broker-url is supported only for legacy sessions")
 		}
@@ -112,7 +106,10 @@ func cloudTunnelCommand(ctx context.Context, cloudGRPC, deviceName, brokerURL st
 			return fmt.Errorf("listening on udp 127.0.0.1:%d: %w", localPort, err)
 		}
 		defer pc.Close()
-		session, err := openDatagramSession(ctx, brokerConn, auth, asset.legacy.GetId())
+		if err := pc.SetWriteBuffer(65507); err != nil {
+			return fmt.Errorf("configuring UDP forwarding buffer: %w", err)
+		}
+		session, err := asset.openDatagram(ctx, brokerConn, auth, remotePort)
 		if err != nil {
 			return datagramOpenError(err, asset.GetName())
 		}

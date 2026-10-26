@@ -1,172 +1,71 @@
 # `wendy device enroll`
 
-Enrolls the connected device with Wendy Cloud (or a local [pki-core](../../../../pki/)) and provisions it with mTLS certificates.
+Add a device to your Wendy Cloud organization so you can manage it remotely.
+For a new board, first follow its [installation guide](/docs/#2-set-up-a-device).
+For Wendy Lite, use the [USB enrollment guide](/docs/advanced/cli/lite-enrollment).
 
-> **Note:** `wendy device enroll` is an advanced command and is not listed in
-> `wendy device --help`. It remains fully functional. For most setups, use
-> [`wendy device setup`](./setup.md) instead.
+## Enroll a device
 
-## Usage
+Sign in, find your device, then enroll it:
 
 ```sh
-wendy device enroll [--name <name>] [--cloud-grpc <endpoint>] [flags]
+wendy cloud login
+wendy discover
+wendy device enroll --device playful-reed.local --name lab-pi-01
 ```
 
-## Description
+Replace the address and name. The CLI asks which organization to use when you
+have more than one sign-in. Keep the device powered and connected until the
+command finishes, then run `wendy cloud discover` to check its Cloud presence.
+`wendy cloud enroll-device` uses the same enrollment workflow.
 
-`wendy device enroll` uses your stored auth session to enroll the connected agent and obtain its certificate. Sign in first with `wendy auth login --email <your-email>` for OIDC enrollment.
+The CLI normally renews a nearly expired sign-in automatically. If it asks you
+to sign in again, follow the prompt; there is no need to log out first.
 
-In an interactive terminal, enrollment first shows an organization picker for your stored sessions, with your default organization highlighted. Press Enter to use it or select another organization for this enrollment. This choice does not change your saved default; press `d` in the picker to change it. `--cloud-grpc` limits the picker to sessions on that endpoint. An explicit legacy `--org` override skips this enrollment picker. Non-interactive and `--json` runs use the usual saved-session selection without opening a picker.
+> `wendy device enroll` is an advanced command and is hidden from
+> `wendy device --help`. The interactive `wendy device setup` wizard also helps
+> configure Wi-Fi and enrollment.
 
-Before connecting to the device, enrollment checks your certificate and attempts renewal if it is nearing expiry. If it has already expired, an interactive OIDC session offers to sign in again and then continue enrollment using the same realm and Cloud endpoints. Legacy sessions, non-interactive runs, and `--json` runs stop with login instructions. You do not need to log out first.
+## Choose a name
 
-If a previously enrolled device no longer answers with an authenticated identity, interactive enrollment asks `Do you want to trust this device anyways? [y/N]`. Accept this after intentionally resetting or reflashing the selected device. Enter declines. Accepting retries the same device's addresses over plaintext for enrollment. The previous saved identity is cleared only after enrollment succeeds; a failed connection or enrollment keeps it intact.
+Use a name that is unique within your organization: up to 63 lowercase letters,
+digits, or hyphens, starting with a letter and ending with a letter or digit.
+You can change it later with `wendy device rename`.
 
-This prompt also applies to `wendy cloud enroll-device` and enrollment from the device picker. Non-interactive and `--json` runs keep the connection error. A certificate rejection or identity mismatch does not offer this fallback.
+Without `--name`, the CLI suggests the device's hostname, lowercased and without
+`.local`. In a terminal you can accept or replace it. If there is no usable
+hostname, enter a name when prompted; scripts must supply `--name`.
 
-› **Certificate identity:** The CSR submitted during provisioning always
-› includes the device's authoritative Wendy identity as a URI Subject
-› Alternative Name (`urn:wendy:org:‹org›:asset:‹assetID›`). When the
-› enrollment token carries a `tenant_uuid` claim, a second URI SAN
-› (`spiffe://wendy.sh/tenant/‹uuid›/service/asset-‹assetID›`) is added
-› alongside it — cloud requires that SPIFFE principal to sign a relay grant.
-› Organizations with no pki tenant get no `tenant_uuid` claim and receive only
-› the urn:wendy SAN, exactly as before. The cloud certificate service
-› validates these SANs against the enrollment token at issuance time.
+The device also receives a permanent identity that Wendy manages automatically.
+Renaming it does not change that identity.
 
-## Name and identity are two different things
+## Requirements and troubleshooting
 
-Enrollment produces two identifiers, and only one of them is yours to choose.
-
-The **identity** is minted by the command as a UUID. pki-core stamps it into the device's certificate as `spiffe://wendy.sh/tenant/‹tenant›/device/‹uuid›` and carries it across every renewal for the life of the device. It is irreversible and it is never derived from the name, so relabelling a device cannot rewrite an identity that has already been issued.
-
-The **name** is how you and `wendy` find the device. It is unique within your organization, compared without regard to case, and you can change it later with `wendy device rename`. Because it has to match the device's own hostname, it is a single lowercase DNS label: it starts with `a`–`z`, continues with lowercase letters, digits or `-`, is at most 63 characters, and does not end in `-`. A name that breaks that rule is refused before anything is enrolled.
-
-The command resolves the name as follows:
-
-1. **`--name <name>`** — always wins when provided.
-2. **Hostname default** — when `--name` is omitted and the device is reachable by hostname (e.g. `Playful-Reed.local`), the name defaults to that hostname lowercased with any `.local` suffix stripped (so `Playful-Reed.local` → `playful-reed`). A hostname that is not otherwise a DNS label is reported rather than repaired.
-3. **Interactive prompt** — in a terminal, when no `--name` is given the command prompts for a name. When a hostname default is available it is shown in brackets and used if you press Enter without typing anything:
-
-   ```
-   Device name [playful-reed]:
-   ```
-4. **Bare IP / no hostname** — when the device is addressed by a bare IP (no resolvable hostname) and `--name` is omitted, there is no default. In a non-interactive environment this fails with:
-
-   ```
-   device name is required; pass --name when not running interactively
-   ```
-
-   In an interactive terminal it prompts for a name with no default and errors if you leave it blank.
-
-> **Naming an unnamed device:** A device enrolled without a usable name shows up with an empty name in [`wendy cloud discover`](../cloud/discover.md). You can still address it by its numeric asset ID — see [`wendy cloud tunnel --device <id>`](../cloud/tunnel.md).
-
-If Cloud refuses the name — because it breaks the rule above, or because another device in the organization already holds it — it says so and stops. Nothing is minted on that path, so retrying with a different name costs nothing.
-
-## Device requirements
-
-Before anything is reserved in Cloud, enrollment asks the agent whether it can enroll directly with PKI. An agent that cannot says why, and the command stops there:
-
-```
-this device cannot enroll directly with PKI: "direct PKI enrollment needs macOS 26 or later to verify ML-DSA certificate chains; this Mac runs macOS 15.5" (no Cloud reservation made)
-```
-
-**Mac targets need macOS 26 or later.** Wendy's device certificates chain to ML-DSA (post-quantum) CAs, and the macOS agent can verify that chain only from macOS 26. On macOS 15 the Mac still runs apps with `wendy run`; update macOS to enroll it. An agent too old to report direct PKI enrollment at all stops with `update the agent before enrolling`.
+- You need a current agent and permission to enroll in the selected organization.
+- A Mac target needs macOS 26 or later for Cloud enrollment. On macOS 15 you can
+  still run local apps; update macOS before enrolling.
+- If the device was intentionally reset or reflashed, the CLI may ask whether
+  to trust its setup connection again. Accept only after confirming that it is
+  the device you reset. A failed enrollment preserves the previous saved identity.
+- If it is already enrolled, [remove the old enrollment](./unenroll.md) first.
 
 ## Flags
 
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--name` | hostname (`.local` stripped) | Human-readable device name. Defaults to the device hostname when omitted; required when the device is reachable only by a bare IP address in a non-interactive environment. |
-| `--cloud-grpc` | `""` | Cloud / pki-core gRPC endpoint to use. Limits the interactive organization picker to that endpoint. Non-interactive runs use the saved default on that endpoint when available. |
-| `--org` | `0` | Organization ID override for **legacy** enrollment. OIDC enrollment rejects this override and uses the selected session's tenant. |
-| `--acme-directory-url` | derived | ACME directory URL for a custom pki-core deployment. OIDC sessions only; when omitted it is derived from the session's own pki-core identity endpoint. |
+| Flag | Description |
+| --- | --- |
+| `--device` | Address or selector of the device to enroll. Omit it to use normal device selection. |
+| `--name` | Device name. Defaults to the hostname when available. |
+| `--cloud-grpc` | Select a saved sign-in by its Cloud endpoint. Use this for a self-hosted deployment. |
+| `--org` | Organization ID override for legacy enrollments only. Current sign-ins use their selected organization. |
+| `--acme-directory-url` | Custom certificate enrollment URL supplied by your administrator. Normally selected automatically. |
 
-## Examples
+For Lite-specific certificate and connection overrides, see the
+[advanced Lite enrollment options](/docs/advanced/cli/lite-enrollment#advanced-self-hosted-deployments).
 
-Enroll, defaulting the name to the device hostname:
+## Remove enrollment later
 
-```sh
-wendy device enroll --device playful-reed.local
-```
-
-Enroll with an explicit name:
-
-```sh
-wendy device enroll --device 192.168.1.11 --name lab-pi-01
-```
-
-## Unenrollment compatibility
-
-`wendy device unenroll` has separate paths. Numeric Cloud v1 identities retain the
-original local-reset-first, best-effort Cloud cleanup. UUID/direct PKI identities
-use Cloud-owned revocation and retained deletion evidence before guarded local
-credential erasure; they never fall back to numeric cleanup.
-
-The UUID candidate requires compatible Cloud and Agent versions. The Agent's
-`ProvisionedResponse.cloud_authenticated_reset_supported` capability must be
-`true`; the old prerelease `cloud_unenrollment_supported` flag is ignored (current
-Agents report it `false` so prerelease CLIs stop before Cloud changes). Agent independently verifies a
-purpose-specific Cloud signature using HTTPS keys from its saved enrollment
-Cloud, plus the exact operator signature against its actual mTLS peer. Before
-erasure it obtains fresh authenticated Roughtime and checks freshness/validity
-throughout that interval. This reset-only query does not discipline the clock or
-read/write a clock floor. Missing proof, unavailable time or failed checks retain
-credentials for retry even after Cloud unenrollment finishes.
-
-The macOS Swift Agent does not support this direct PKI reset workflow yet. It
-reports `cloud_authenticated_reset_supported=false`, so the CLI stops before
-Cloud changes. Direct PKI `Unprovision` requests retain the Mac's credentials.
-
-AAA v0.22 (retained in v0.24), §5.1/§7(4), excludes removal-only unenrollment
-from step-up. No browser/passkey confirmation is required for asset deletion,
-device-certificate revocation or device reset. Yes/No or `--yes` confirms intent,
-not identity; `device:delete`, the exact-body operator signature, retained deletion
-record, audit and SSF protections still apply.
-
-AAA applies at the Cloud/Auth/PKI interface, not as a wholesale migration of
-local CLI or Agent behavior. This command signs and authorizes Cloud deletion;
-local guarded erasure is not a new backend postbox implementation.
-
-Compatible Cloud and Agent builds are required. These source semantics do not
-claim deployed or live-reset acceptance.
-
-### UnprovisionRequest fields (direct PKI identities)
-
-| Field | Required for UUID/PKI | Contents |
-| --- | --- | --- |
-| `expected_principal_uri` | Yes | Exact enrolled SPIFFE principal URI. |
-| `expected_certificate_sha256` | Yes | SHA-256 hex of the installed leaf certificate. |
-| `revocation_proof` | Yes | Issuer-signed revoked OCSP evidence for that installed leaf. |
-| `cloud_deletion` | Yes | Exact serialized `wendycloud.v2.DeletedAsset` authenticated by Cloud's proof. |
-| `cloud_reset_authorization` | Yes | Purpose-specific Cloud JWS, issued after committed deletion/current authorization, binding the deletion and operator-signed request to the installed leaf. |
-
-A bare/zero-value request returns `FailedPrecondition`; numeric v1 identities
-continue accepting an empty request.
-
-The Agent RPCs `RevokeACMECertificate` and `CheckACMERevocation` are deprecated and
-unconditionally return `UNIMPLEMENTED` on Agents that include these changes.
-Cloud owns revocation through `DeleteAsset`; these RPCs are not an alternate path.
-
-The v2 command has a three-minute bound covering all phases. `--check` is
-read-only: it reads the Cloud binding and Agent capability but does not revoke,
-spend EAB credentials, reset, import proof or write a CLI journal.
-
-After durable guarded erasure, `NotProvisionedResponse.unenrollment_completion`
-contains a public device-signed receipt for the **prior** principal's operation,
-not proof of current device identity or reachability. Consumers must anchor its
-historical certificate to configured trust roots and independently re-establish
-Cloud key trust for v2 proof, never trust a remotely supplied public key.
-Protected local pending recovery retains its originally authenticated key in
-existing provisioning.json; historical proof-less pending records cannot erase
-keys. Remote v2 confirmation can fail when a retired historical key is no longer
-published. An Agent without prior guarded completion has no such receipt.
-
-## Related
-
-- [Cloud-owned unenrollment](/docs/device/unenrollment) — operator flow, recovery and rollout limits.
-
-- [`wendy install` → Linux Desktop](../install.md) — mint a short-lived enrollment token and embed it in the `agent.sh` one-liner so the device self-enrolls on first startup, without needing a USB connection or a running agent.
-- [`wendy device setup`](./setup.md) — interactive wizard that provisions, configures WiFi, and enrolls in one flow.
-- `wendy cloud enroll-device` — alias for this command, reachable through the cloud tunnel.
-- `wendy device unenroll` — reverse enrollment and delete the device from Wendy Cloud, using the identity-specific paths and compatibility requirements above.
+Use [`wendy device unenroll`](./unenroll.md). For current WendyOS enrollments,
+connect over the LAN and use `--check` to verify reset support before removal.
+The native Mac agent does not yet support that reset. The
+[unenrollment guide](/docs/device/unenrollment) covers offline devices and
+interrupted cleanup.

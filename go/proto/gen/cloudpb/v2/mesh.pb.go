@@ -58,9 +58,18 @@ func (*GetMeshRosterRequest) Descriptor() ([]byte, []int) {
 }
 
 type MeshRosterEntry struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"` // device asset name, server-normalized to a DNS label
-	AssetId       string                 `protobuf:"bytes,2,opt,name=asset_id,json=assetId,proto3" json:"asset_id,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	Name  string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"` // device asset name, server-normalized to a DNS label
+	// The device UUID: the canonical lowercase UUID in the device segment of the
+	// certificate principal spiffe://wendy.sh/tenant/<tenant>/device/<uuid>.
+	// Globally unique, minted by the CLI at enrollment (collision guard
+	// regenerates); a device has one id (sem rulings 2026-10-19 12:05, 12:30).
+	// A deleted device reserves nothing. A deliberate re-enroll is a new device
+	// with a new UUID; post-expiry recovery keeps it.
+	// Cloud's asset id is this UUID once the cloud re-key (WDY-3919) is
+	// deployed; until then peers match the roster entry against the principal
+	// only after that rollout.
+	AssetId       string `protobuf:"bytes,2,opt,name=asset_id,json=assetId,proto3" json:"asset_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }

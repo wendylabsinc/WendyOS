@@ -1,46 +1,63 @@
 # `wendy cloud login`
 
-Authenticates the CLI with Wendy Cloud. This is the primary login entry point.
-
-## Usage
+Sign in to Wendy Cloud to enroll devices, deploy remotely, and manage your
+organization's devices.
 
 ```sh
 wendy cloud login
-wendy cloud login --email you@example.com
-wendy cloud login --issuer https://auth.wendy.dev/realms/<realm>
-wendy cloud login --service-account ./wendy-service-account.json
 ```
 
-## Description
+Complete sign-in in the browser. Choose your organization if prompted, then
+return to the terminal. Wendy saves your sign-in and uses it automatically for
+later commands.
 
-`wendy cloud login` is identical to [`wendy auth login`](../auth/login.md) — it
-reuses the same implementation. For now, it defaults to the legacy dashboard
-flow. With `--email` or `--issuer`, it runs the OIDC flow: it
-discovers your realm from `--email` (or takes `--issuer` directly), completes
-authorization code + PKCE through a loopback callback, obtains an operator
-certificate from pki-core, and stores it with a refreshable Cloud API session.
-Subsequent commands use the certificate automatically.
+## Check or change your sign-in
 
-`--api-key` selects local authentication. `--service-account` signs in
-headlessly as a wendy-auth service account and also targets production by
-default. See [`wendy auth login`](../auth/login.md#service-account-login).
+```sh
+wendy auth status
+wendy auth use
+```
 
-`wendy auth login` remains functional for backward compatibility but is no
-longer listed in the top-level help. See [`wendy auth login`](../auth/login.md)
-for the full flag reference and multi-session behaviour.
+Sign in again to add another organization without replacing your current one.
+Use `wendy auth use` to choose between saved sign-ins. See
+[sign-in contexts](../auth/login.md#auth-contexts) for details.
 
-## Flags
+## Other sign-in options
 
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--email` | `""` | Email address for explicit realm discovery (OIDC flow). |
-| `--issuer` | `""` | Complete realm issuer URL; skips email-based realm discovery. |
-| `--service-account` | `""` | Service-account key file for headless login; `WENDY_SERVICE_ACCOUNT_KEY` may hold its contents instead. |
-| `--cloud` | `""` | Dashboard URL override; uses `https://cloud.wendy.dev` by default. |
-| `--cloud-grpc` | `""` | gRPC endpoint override; uses `api.wendy.dev:443` by default. |
+```sh
+wendy cloud login --email you@example.com
+wendy cloud login --service-account ./wendy-service-account.json
+wendy cloud login --legacy
+```
 
-## See also
+`--email` supplies your email before opening the browser. A service-account key
+supports unattended Cloud API access; it does not provide a personal device
+certificate. See [service-account setup](../auth/login.md#service-account-login).
 
-- [`wendy cloud logout`](./logout.md)
-- [`wendy cloud status`](./status.md)
-- [`wendy auth use`](../auth/use.md) — advanced multi-session management
+## Existing Cloud v1 devices
+
+`wendy cloud login` signs in to Cloud v2. For devices still enrolled in Cloud
+v1, `wendy cloud login --legacy` opens the legacy dashboard at `cloud.wendy.sh`.
+The flag is hidden from ordinary CLI help but remains supported. It cannot be
+combined with `--email`, `--issuer`, `--service-account`, or `--api-key`.
+
+Signing in to v2 does not move v1 devices. See the [Cloud guide](/docs/cloud)
+for the Cloud v2 and Legacy workflows, and [Moving to Cloud v2](/docs/cloud-migration)
+before changing an existing device's enrollment.
+
+## Advanced flags
+
+Hosted Wendy Cloud uses production settings by default. Use overrides only
+when your administrator supplies them.
+
+| Flag | Description |
+| --- | --- |
+| `--development` | Use Wendy's development environment. |
+| `--issuer` | Sign in through a particular organization sign-in URL. |
+| `--service-account` | Service-account key file. `WENDY_SERVICE_ACCOUNT_KEY` can supply its contents instead. |
+| `--cloud` | Override the dashboard URL, normally `https://cloud.wendy.dev`. |
+| `--cloud-grpc` | Override the Cloud API endpoint, normally `api.wendy.dev:443`. |
+| `--legacy` | Use the Cloud v1 dashboard sign-in flow for existing v1 devices. |
+
+`wendy auth login` remains an equivalent command. See its
+[reference](../auth/login.md) for additional options and saved sign-ins.

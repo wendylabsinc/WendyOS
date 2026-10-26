@@ -50,7 +50,9 @@ Wendy uses the [ESP-IDF Installation Manager (`eim`)](https://dl.espressif.com/d
 
     Select the target that matches your chip, then choose your board. For generic ESP32-C5, ESP32-C6, and ESP32-S3 boards, select the variant labeled **native app support**.
 
-    The CLI detects the USB serial port, verifies the chip model, downloads the correct Wendy firmware, and flashes it directly. No separate `esptool` installation is required.
+    If multiple ESP32 USB candidates are connected, choose the device to flash from the serial port picker. Each entry shows its port path and whether it uses native USB or a USB-UART bridge. A single candidate is selected automatically.
+
+    The CLI verifies the chip model before writing and flashes the downloaded Wendy firmware directly. No separate `esptool` installation is required. Flash retries keep your selected port; if it disappears, the CLI asks you to select a device again.
   </Step>
 
   <Step>
@@ -166,6 +168,13 @@ Wendy:
 4. Builds the project with ESP-IDF 5.5.4.
 5. Uploads the native application firmware, reboots the ESP32, and reconnects.
 6. Streams the ESP-IDF console output back to your terminal.
+
+## Optional: manage the board through Wendy Cloud
+
+For remote access, connect the board over USB, configure its Wi-Fi, and
+[enroll it in Wendy Cloud](/docs/advanced/cli/lite-enrollment). The enrollment
+guide walks through sign-in, board selection, and checking that it comes online.
+You can keep developing locally without Cloud enrollment.
 
 ## Optional WASM Apps
 

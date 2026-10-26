@@ -103,8 +103,14 @@ type AgentConnection struct {
 	BuildService         agentpbv2.WendyBuildServiceClient
 	SensorPairingService agentpbv2.WendySensorPairingServiceClient
 	UnitreeService       agentpbv2.WendyUnitreeServiceClient
+	RobotArmService      agentpbv2.WendyRobotArmServiceClient
 	DriverService        agentpbv2.WendyDriverServiceClient
 	DataService          agentpbv2.DataServiceClient
+	// CalibratedFrameService serves RGB-D frames: colour plus depth aligned to
+	// it, with the scale and intrinsics that make both measurable. Separate
+	// from VideoService because a measurement is not a picture — see
+	// Proto/wendy/agent/services/v2/calibrated_frame_service.proto.
+	CalibratedFrameService agentpbv2.WendyCalibratedFrameServiceClient
 	// cachedAgentVersion retains a successful liveness probe performed while
 	// establishing this connection. Direct-agent connects already call
 	// GetAgentVersion to force gRPC's lazy dial and authenticate the peer; run
@@ -233,15 +239,23 @@ func (c *AgentConnection) CachedAgentVersion() (*agentpb.GetAgentVersionResponse
 
 // verifiedIdentitySink returns the OnVerifiedServerIdentity callback that
 // records the device identity behind a verified server certificate. Identities
-// without an org are dropped: org 0 is not a real Wendy org, so storing one
-// would let ObservedServerIdentity report an identity no certificate asserted.
+// need either a legacy org or a complete, internally consistent tenant SPIFFE
+// identity. PKI-issued identities deliberately have no numeric org ID.
 //
 // dst may be nil (observation not requested), in which case the returned sink is
 // a no-op — the same contract as identityMismatchSink below. This runs inside
 // VerifyConnection, so an unguarded nil would panic mid-handshake.
 func verifiedIdentitySink(dst *atomic.Pointer[certs.WendyIdentity]) func(certs.WendyIdentity) {
 	return func(id certs.WendyIdentity) {
-		if dst == nil || id.OrgID == 0 {
+		if dst == nil || id.OrgID < 0 {
+			return
+		}
+		if id.Principal != "" || id.TenantUUID != "" {
+			parsed, err := certs.ParsePrincipal(id.Principal)
+			if err != nil || parsed.TenantUUID != id.TenantUUID || parsed.EntityType != id.EntityType || parsed.EntityID != id.EntityID {
+				return
+			}
+		} else if id.OrgID == 0 {
 			return
 		}
 		stored := id
@@ -671,8 +685,11 @@ func newAgentConnection(conn *grpc.ClientConn) *AgentConnection {
 		BuildService:         agentpbv2.NewWendyBuildServiceClient(conn),
 		SensorPairingService: agentpbv2.NewWendySensorPairingServiceClient(conn),
 		UnitreeService:       agentpbv2.NewWendyUnitreeServiceClient(conn),
+		RobotArmService:      agentpbv2.NewWendyRobotArmServiceClient(conn),
 		DriverService:        agentpbv2.NewWendyDriverServiceClient(conn),
 		DataService:          agentpbv2.NewDataServiceClient(conn),
+
+		CalibratedFrameService: agentpbv2.NewWendyCalibratedFrameServiceClient(conn),
 	}
 }
 

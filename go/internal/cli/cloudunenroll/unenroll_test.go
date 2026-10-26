@@ -206,6 +206,19 @@ func TestRemoveScopesCredentialsAndRevokesBeforeDeleting(t *testing.T) {
 	}
 }
 
+// After cloud #873 the asset id is the device UUID and pki_device_name is empty;
+// older and parked rows record the id their certificate names as pki_device_name.
+func TestDeviceIDPrefersTheRecordedBindingThenTheAssetID(t *testing.T) {
+	asset := testAssetRecord()
+	asset.PkiDeviceName = nil
+	if got := DeviceID(asset); got != testAsset {
+		t.Fatalf("DeviceID = %q, want the asset id %q", got, testAsset)
+	}
+	if got := DeviceID(testAssetRecord()); got != testDevice {
+		t.Fatalf("DeviceID = %q, want the recorded pki_device_name %q", got, testDevice)
+	}
+}
+
 func TestRemoveStopsBeforeDeletionOnFailure(t *testing.T) {
 	for _, tc := range []struct {
 		name, fail                   string

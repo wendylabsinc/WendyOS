@@ -51,6 +51,10 @@ func anchored(w timesync.TimeWindow) timesync.TimeWindow {
 }
 
 func TestCloudResetCountsSuspendSinceFreshTime(t *testing.T) {
+	boot, err := timesync.BootTime()
+	if err != nil || boot <= int64(2*time.Minute) {
+		t.Skip("requires a boot-clock anchor at least two minutes old to model suspension")
+	}
 	svc, req, ctx := cloudResetFixture(t)
 	unchanged := checkResetStateUnchanged(t, svc)
 	svc.trustedTime = func(context.Context) (timesync.TimeWindow, error) {
@@ -59,7 +63,7 @@ func TestCloudResetCountsSuspendSinceFreshTime(t *testing.T) {
 		w.Boot -= int64(2 * time.Minute) // suspend after the sample
 		return w, nil
 	}
-	_, err := NewProvisioningServiceV2(svc).Unprovision(ctx, req)
+	_, err = NewProvisioningServiceV2(svc).Unprovision(ctx, req)
 	if !strings.Contains(status.Convert(err).Message(), "Cloud reset authorization") {
 		t.Fatalf("30-second authorization after 2m of suspend: %v", err)
 	}
@@ -137,9 +141,17 @@ func TestCloudResetCanceledRequestRetainsKeys(t *testing.T) {
 
 func TestCloudResetRecordsAuthenticatedAuthorizationTime(t *testing.T) {
 	svc, req, ctx := cloudResetFixture(t)
-	latest := time.Now().Add(10 * time.Second)
+	// Place the authenticated bound at a second boundary and age the sample
+	// without sleeping. Verification must advance it, including on non-Linux
+	// hosts whose fallback boot clock starts when the test process starts.
+	latest := time.Now().Add(10 * time.Second).Truncate(time.Second).Add(time.Second - time.Nanosecond)
+	var sample timesync.TimeWindow
+	var minimumElapsed time.Duration
 	svc.trustedTime = func(context.Context) (timesync.TimeWindow, error) {
-		return anchored(timesync.TimeWindow{Earliest: latest.Add(-10 * time.Second), Latest: latest}), nil
+		sample = anchored(timesync.TimeWindow{Earliest: latest.Add(-10 * time.Second), Latest: latest})
+		minimumElapsed = time.Duration(min(sample.Boot/2, int64(time.Second)))
+		sample.Boot -= int64(minimumElapsed)
+		return sample, nil
 	}
 	response, err := NewProvisioningServiceV2(svc).Unprovision(ctx, req)
 	if err != nil {
@@ -151,8 +163,14 @@ func TestCloudResetRecordsAuthenticatedAuthorizationTime(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if completion.AuthorizedAt != latest.Unix() {
-		t.Fatalf("authorization time = %d, want authenticated upper bound %d", completion.AuthorizedAt, latest.Unix())
+	boot, err := timesync.BootTime()
+	if err != nil {
+		t.Fatal(err)
+	}
+	authorized := time.Unix(0, completion.AuthorizedAtNanos)
+	lower, upper := latest.Add(minimumElapsed), latest.Add(time.Duration(boot-sample.Boot))
+	if authorized.Before(lower) || authorized.After(upper) || completion.AuthorizedAt != authorized.Unix() {
+		t.Fatalf("authorization time = %s (%d seconds), want advanced authenticated upper bound in [%s, %s]", authorized, completion.AuthorizedAt, lower, upper)
 	}
 }
 

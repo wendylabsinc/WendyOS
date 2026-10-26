@@ -1,6 +1,7 @@
 package ipcam
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -110,5 +111,49 @@ func TestBuildProbe(t *testing.T) {
 func TestBuildProbeIsWellFormed(t *testing.T) {
 	if _, err := ParseProbeMatch(BuildProbe("uuid:x")); err == nil {
 		t.Fatal("a Probe is not a ProbeMatch and must not parse as one")
+	}
+}
+
+func TestParseProbeMatchRequiresVideoTransmitter(t *testing.T) {
+	for _, tc := range []struct {
+		types string
+		want  bool
+	}{
+		{"dn:NetworkVideoTransmitter tds:Device", true},
+		{"camera:NetworkVideoTransmitter", true},
+		{"NetworkVideoTransmitter", true},
+		{"tds:Device", false},
+		{"wsdp:Computer", false},
+		{"wprt:PrintDeviceType", false},
+		{"dn:NetworkVideoTransmitterExtra", false},
+		{"dn:NotNetworkVideoTransmitter", false},
+		{"", false},
+	} {
+		t.Run(tc.types, func(t *testing.T) {
+			payload := strings.Replace(reolinkProbeMatch, "dn:NetworkVideoTransmitter tds:Device", tc.types, 1)
+			_, err := ParseProbeMatch([]byte(payload))
+			if tc.want && err != nil {
+				t.Fatal(err)
+			}
+			if !tc.want && !errors.Is(err, ErrNoProbeMatch) {
+				t.Fatalf("error = %v, want ErrNoProbeMatch", err)
+			}
+		})
+	}
+	payload := strings.Replace(reolinkProbeMatch, "<d:Types>dn:NetworkVideoTransmitter tds:Device</d:Types>", "", 1)
+	if _, err := ParseProbeMatch([]byte(payload)); !errors.Is(err, ErrNoProbeMatch) {
+		t.Fatalf("missing Types: %v", err)
+	}
+}
+
+func TestParseProbeMatchSkipsNonCameraMatch(t *testing.T) {
+	printer := `<d:ProbeMatch><d:Types>wprt:PrintDeviceType</d:Types><d:XAddrs>http://printer/</d:XAddrs></d:ProbeMatch>`
+	payload := strings.Replace(reolinkProbeMatch, "<d:ProbeMatches>", "<d:ProbeMatches>"+printer, 1)
+	got, err := ParseProbeMatch([]byte(payload))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Model != "RLC-520A" {
+		t.Fatalf("matched wrong device: %+v", got)
 	}
 }
