@@ -19,6 +19,22 @@ final class AppModel: ObservableObject {
     @Published var appActions: Set<String> = []
     @Published var appDeletion: AppDeletion?
     @Published var apps: [DeviceApp] = []
+    @Published var showHiddenApps = false
+    @Published private var hiddenAppsByDevice = UserDefaults.standard.dictionary(forKey: "hiddenAppsByDevice") as? [String: [String]] ?? [:]
+
+    var hiddenAppCount: Int { apps.filter { isAppHidden($0.appName) }.count }
+    var visibleApps: [DeviceApp] { apps.filter { showHiddenApps || !isAppHidden($0.appName) } }
+    func isAppHidden(_ app: String) -> Bool {
+        guard let id = connected?.id else { return false }
+        return hiddenAppsByDevice[id]?.contains(app) == true
+    }
+    func setAppHidden(_ app: String, hidden: Bool) {
+        guard let id = connected?.id else { return }
+        var names = Set(hiddenAppsByDevice[id] ?? [])
+        if hidden { names.insert(app) } else { names.remove(app) }
+        hiddenAppsByDevice[id] = names.sorted()
+        UserDefaults.standard.set(hiddenAppsByDevice, forKey: "hiddenAppsByDevice")
+    }
     @Published var cameras: [Camera] = []
     @Published var logs: [LogEntry] = []
     @Published var cameraFeeds: [CameraFeed] = []

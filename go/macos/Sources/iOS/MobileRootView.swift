@@ -157,7 +157,7 @@ struct MobileRootView: View {
 }
 
 private enum MobilePane: String, CaseIterable, Identifiable {
-    case apps = "Apps", cameras = "Cameras", siteModel = "Site Model", campaigns = "Campaigns", chat = "Chat"
+    case apps = "Apps", cameras = "Cameras", siteModel = "Digital Twin", campaigns = "Campaigns", chat = "Chat"
     var id: String { rawValue }
 }
 private struct MobileDeviceView: View {
@@ -165,6 +165,7 @@ private struct MobileDeviceView: View {
     @EnvironmentObject private var model: AppModel
     let device: Device
     @State private var pane = MobilePane.chat
+    @State private var showingEventLog = false
     var body: some View {
         actionContent.task { await actions.run() }
     }
@@ -190,8 +191,15 @@ private struct MobileDeviceView: View {
                 else { content.id(model.deviceSession) }
             }
         }
+        .onChange(of: model.deviceSession) { _, _ in showingEventLog = false }
         .navigationTitle(device.title).navigationBarTitleDisplayMode(.inline)
         .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                if model.selectedDeviceReady && !model.connectedLite {
+                    CampaignEventButton(session: model.deviceSession, deviceID: device.id, deviceName: device.title, showingLog: $showingEventLog)
+                        .id(model.deviceSession)
+                }
+            }
             ToolbarItem(placement: .topBarTrailing) {
                 NavigationLink {
                     DeviceSettingsView(session: model.deviceSession, deviceName: device.title)
@@ -208,7 +216,7 @@ private struct MobileDeviceView: View {
         case .apps: ActivityView(model: model)
         case .cameras: CameraWallView(model: model)
         case .siteModel: NativeSiteView(model: model)
-        case .campaigns: CampaignsView(session: model.deviceSession, deviceName: device.title) { _ in }
+        case .campaigns: CampaignsView(session: model.deviceSession, deviceName: device.title, openClip: { _ in }, showEventLog: { showingEventLog = true })
         case .chat: DeviceChatView(deviceName: device.title, chat: model.deviceChat)
         }
     }

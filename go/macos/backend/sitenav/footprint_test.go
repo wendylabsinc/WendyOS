@@ -16,7 +16,7 @@ func narrowAisle() Grid {
 }
 
 func TestFootprintFitsNarrowAisleOnlyLengthways(t *testing.T) {
-	// 60 cm of clear floor: a 36 cm envelope plus 10 cm each side fits.
+	// 60 cm of clear floor fits the 36 cm body envelope lengthways.
 	// The previous 40 cm center-radius check rejected these side walls.
 	g := narrowAisle()
 	for _, start := range []Point{{0, 0}, {.023, 0}} {
@@ -37,16 +37,16 @@ func TestFootprintFitsNarrowAisleOnlyLengthways(t *testing.T) {
 	}
 }
 
-func TestFootprintRejectsBodyOverlapAndInsufficientBuffer(t *testing.T) {
+func TestFootprintWithoutExtraMargin(t *testing.T) {
 	for _, test := range []struct {
 		name     string
 		obstacle Cell
 		clear    bool
 	}{
 		{"body", Cell{0, 1}, false},
-		{"less than ten cm beside body", Cell{0, 2}, false},
+		{"two cm beside body", Cell{0, 2}, true},
 		{"more than ten cm beside body", Cell{0, 3}, true},
-		{"less than ten cm in front", Cell{4, 0}, false},
+		{"two cm in front", Cell{4, 0}, true},
 		{"more than ten cm in front", Cell{5, 0}, true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -59,7 +59,7 @@ func TestFootprintRejectsBodyOverlapAndInsufficientBuffer(t *testing.T) {
 	}
 	// Sub-cell positions must not inherit the center cell's clearance.
 	g := floorGrid()
-	g.Obstacles[Cell{0, 3}] = true
+	g.Obstacles[Cell{0, 2}] = true
 	if g.ClearPose(Point{0, .029}, 0) {
 		t.Fatal("missed cell-edge overlap")
 	}
@@ -81,7 +81,7 @@ func TestFootprintSweepsIntermediateTranslationAndRotation(t *testing.T) {
 	}
 	// A diagonal sweep must include cells touched only by the rotated corners.
 	g = floorGrid()
-	g.Obstacles[Cell{4, 0}] = true
+	g.Obstacles[Cell{3, 0}] = true
 	if g.Sweep(Point{}, Point{1, 1}, math.Pi/4) {
 		t.Fatal("missed diagonal corner")
 	}

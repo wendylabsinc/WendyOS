@@ -15,6 +15,9 @@ typedef struct {
     int32_t local, unreachable, authorized;
 } WDMeshRoute;
 typedef struct {
+    char *principal, *device_id, *name, *prefix;
+} WDMeshAnnouncement;
+typedef struct {
     WDStatus status;
     int32_t topology_available, topology_runtime, topology_truncated;
     int64_t topology_captured_ms;
@@ -23,6 +26,8 @@ typedef struct {
     size_t mesh_link_count;
     WDMeshRoute *mesh_routes;
     size_t mesh_route_count;
+    WDMeshAnnouncement *mesh_announcements;
+    size_t mesh_announcement_count;
     int32_t wifi_available, wifi_connected;
     char *ssid, *wifi_error, *scan_error, *known_error, *mesh_error;
     WDWiFiNetwork *networks, *known;

@@ -21,7 +21,7 @@ public struct SitePhotoReconstruction: View {
     public var body: some View {
         NavigationStack {
             VStack(alignment: .leading, spacing: 18) {
-                Text("Build a Textured Site Model").font(.title2.bold())
+                Text("Build a Textured Digital Twin").font(.title2.bold())
                 Text(
                     "Choose a folder of overlapping photographs taken from different positions. Keep lighting consistent and cover each surface from several viewpoints. A reconstruction can take several minutes."
                 )

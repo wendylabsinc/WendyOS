@@ -3,6 +3,7 @@ import SwiftUI
 
 struct SiteRobotReading: Sendable {
     var message: String
+    var controlWarning: String = ""
     var pose, ready, aligned, moving: Bool
     var arrivalTiming, usingArrivalTiming, timingUnavailable, scanReady: Bool
     var underBodyAllowance: Bool
@@ -16,7 +17,7 @@ struct SiteRobotReading: Sendable {
 
     // Joint and pose samples animate the scene without rebuilding its controls.
     func hasSameControls(as other: Self) -> Bool {
-        lookDirection == other.lookDirection && lookState == other.lookState && message == other.message && pose == other.pose && ready == other.ready &&
+        controlWarning == other.controlWarning && lookDirection == other.lookDirection && lookState == other.lookState && message == other.message && pose == other.pose && ready == other.ready &&
         aligned == other.aligned && moving == other.moving && arrivalTiming == other.arrivalTiming &&
         usingArrivalTiming == other.usingArrivalTiming && timingUnavailable == other.timingUnavailable &&
         allowUnobservedFloor == other.allowUnobservedFloor && scanReady == other.scanReady && underBodyAllowance == other.underBodyAllowance &&
@@ -50,7 +51,7 @@ final class SiteRobotClient: Sendable {
             defer { WDSiteRobotStateFree(p) }
             try GoClient.check(p.pointee.status)
             let s = p.pointee
-            return SiteRobotReading(message: GoClient.string(s.message), pose: s.pose != 0, ready: s.ready != 0,
+            return SiteRobotReading(message: GoClient.string(s.message), controlWarning: GoClient.string(s.control_warning), pose: s.pose != 0, ready: s.ready != 0,
                 aligned: s.aligned != 0, moving: s.moving != 0,
                 arrivalTiming: s.arrival_timing != 0, usingArrivalTiming: s.using_arrival_timing != 0,
                 timingUnavailable: s.timing_unavailable != 0, scanReady: s.scan_ready != 0,

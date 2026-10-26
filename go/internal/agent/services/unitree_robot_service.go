@@ -61,7 +61,7 @@ func (s *UnitreeRobotService) Command(ctx context.Context, req *pb.UnitreeComman
 	gen := s.cancelLease(req.GetSerial())
 	timeout := teleopRobotTimeout
 	switch req.GetCommand() {
-	case pb.UnitreeCommand_UNITREE_COMMAND_STAND_UP, pb.UnitreeCommand_UNITREE_COMMAND_LIE_DOWN, pb.UnitreeCommand_UNITREE_COMMAND_HELLO:
+	case pb.UnitreeCommand_UNITREE_COMMAND_STAND_UP, pb.UnitreeCommand_UNITREE_COMMAND_LIE_DOWN, pb.UnitreeCommand_UNITREE_COMMAND_HELLO, pb.UnitreeCommand_UNITREE_COMMAND_SET_OBSTACLE_AVOIDANCE:
 		timeout = unitree.PostureAckTimeout
 	}
 	commandCtx, cancel := context.WithTimeout(ctx, timeout)
@@ -80,6 +80,18 @@ func (s *UnitreeRobotService) Command(ctx context.Context, req *pb.UnitreeComman
 		err = link.LieDown(commandCtx)
 	case pb.UnitreeCommand_UNITREE_COMMAND_HELLO:
 		err = link.Hello(commandCtx)
+	case pb.UnitreeCommand_UNITREE_COMMAND_SET_OBSTACLE_AVOIDANCE:
+		// A failed stop must never be followed by a mode change.
+		err = link.Stop(commandCtx)
+		if err == nil {
+			if configurable, ok := link.(interface {
+				SetObstacleAvoidance(context.Context, bool) error
+			}); ok {
+				err = configurable.SetObstacleAvoidance(commandCtx, req.GetObstacleAvoidanceEnabled())
+			} else {
+				return nil, status.Error(codes.Unimplemented, "this robot connection cannot configure obstacle avoidance")
+			}
+		}
 	default:
 		return nil, status.Error(codes.InvalidArgument, "unknown Go2 command")
 	}

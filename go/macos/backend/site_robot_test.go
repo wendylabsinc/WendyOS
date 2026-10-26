@@ -74,9 +74,10 @@ func TestSiteRobotRejectedPoseDoesNotEraseContinuity(t *testing.T) {
 
 type robotCommands struct {
 	pb.WendyUnitreeRobotServiceClient
-	commands  []*pb.UnitreeCommandRequest
-	stopError error
-	minYaw    float64
+	commands       []*pb.UnitreeCommandRequest
+	stopError      error
+	avoidanceError error
+	minYaw         float64
 }
 
 func (f *robotCommands) Command(_ context.Context, r *pb.UnitreeCommandRequest, _ ...grpc.CallOption) (*pb.UnitreeCommandResponse, error) {
@@ -86,6 +87,9 @@ func (f *robotCommands) Command(_ context.Context, r *pb.UnitreeCommandRequest, 
 	}
 	if r.Command == pb.UnitreeCommand_UNITREE_COMMAND_STOP {
 		return nil, f.stopError
+	}
+	if r.Command == pb.UnitreeCommand_UNITREE_COMMAND_SET_OBSTACLE_AVOIDANCE {
+		return nil, f.avoidanceError
 	}
 	return &pb.UnitreeCommandResponse{}, nil
 }
@@ -307,7 +311,7 @@ func TestSiteRobotNarrowAisleApproachAndDynamicHazards(t *testing.T) {
 				r.observed.Grid.Obstacles[sitenav.Cell{X: x, Y: 3}] = true
 				r.observed.Grid.Obstacles[sitenav.Cell{X: x, Y: -4}] = true
 			}
-			// Side clearance stays at 10 cm. The higher, executable walking rate
+			// The body envelope must still fit. The higher, executable walking rate
 			// also requires room ahead for its command lease and braking horizon.
 			for y := -3; y <= 2; y++ {
 				r.observed.Grid.Obstacles[sitenav.Cell{X: 33, Y: y}] = true
@@ -385,7 +389,7 @@ func TestSiteRobotRejectsRotationInsideNarrowAisle(t *testing.T) {
 	}
 }
 
-func TestSiteRobotUnderBodyAllowanceIsExplicitAndStopsOnChange(t *testing.T) {
+func TestSiteRobotStrictFloorModeAndAllowanceChangesStopMotion(t *testing.T) {
 	r, f := readySiteRobot()
 	for x := -3; x <= 2; x++ {
 		for y := -2; y <= 1; y++ {
@@ -393,10 +397,10 @@ func TestSiteRobotUnderBodyAllowanceIsExplicitAndStopsOnChange(t *testing.T) {
 		}
 	}
 	if r.Snapshot().Ready || r.Snapshot().UnderBodyAllowance {
-		t.Fatal("hidden departure floor was ready by default")
+		t.Fatal("strict floor mode accepted hidden departure floor")
 	}
 	if r.Destination(1, "site/revision", 2, 0, false) == nil {
-		t.Fatal("default allowed hidden floor")
+		t.Fatal("strict floor mode allowed hidden floor")
 	}
 	if err := r.SetUnderBodyAllowance(2, true); err != nil {
 		t.Fatal(err)
@@ -667,5 +671,65 @@ func TestRouteTurnChecksClearanceBeyondItsTargetHeading(t *testing.T) {
 		if r.moving || len(f.commands) != 1 || f.commands[0].Command != pb.UnitreeCommand_UNITREE_COMMAND_STOP {
 			t.Fatal("turn ignored its stopping sweep")
 		}
+	}
+}
+
+func TestSiteRobotConnectionDefaultsEnableSupervisedSettingsWithoutMotion(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	commands := &robotCommands{}
+	r := newSiteRobot(ctx, cancel, commands, "ONLY-THIS-ROBOT")
+	if !r.underBodyAllowance || !r.allowUnobservedFloor || !r.observed.AllowArrivalTime {
+		t.Fatal("a new connection did not enable all three supervised settings")
+	}
+	if r.moving || r.lookTurn != nil || len(r.route) != 0 || len(commands.commands) != 0 {
+		t.Fatal("default settings started movement")
+	}
+	if r.Snapshot().Ready {
+		t.Fatal("settings bypassed the requirement for live observations")
+	}
+	if err := r.SetAllowUnobservedFloor(1, false); err != nil || r.allowUnobservedFloor {
+		t.Fatal("could not opt out of unobserved floor", err)
+	}
+	if err := r.SetUnderBodyAllowance(2, false); err != nil || r.underBodyAllowance {
+		t.Fatal("could not opt out of hidden-floor departure", err)
+	}
+	if err := r.SetArrivalTiming(3, false); err != nil || r.observed.AllowArrivalTime {
+		t.Fatal("could not opt out of supervised arrival timing", err)
+	}
+}
+
+func TestUnsupportedAvoidanceKeepsConnectionDefaults(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	commands := &robotCommands{avoidanceError: errors.New("unknown Go2 command")}
+	r := newSiteRobot(ctx, cancel, commands, "ROBOT")
+	r.prepareDirectMovement(ctx)
+	s := r.Snapshot()
+	if ctx.Err() != nil || r.stopUnconfirmed || s.ControlWarning == "" {
+		t.Fatal("unsupported configuration disconnected or blocked the stopped robot, or hid the failure")
+	}
+	if !s.AllowUnobservedFloor || !s.UnderBodyAllowance || !s.ArrivalTiming {
+		t.Fatal("configuration failure changed supervised defaults")
+	}
+	if len(commands.commands) != 2 || commands.commands[0].Command != pb.UnitreeCommand_UNITREE_COMMAND_STOP || commands.commands[1].Command != pb.UnitreeCommand_UNITREE_COMMAND_SET_OBSTACLE_AVOIDANCE {
+		t.Fatal("configuration must stop before changing avoidance")
+	}
+}
+
+func TestFailedPreparationStopBlocksMotion(t *testing.T) {
+	r, commands := readySiteRobot()
+	commands.stopError = errors.New("no stop acknowledgement")
+	r.prepareDirectMovement(context.Background())
+	s := r.Snapshot()
+	if !r.stopUnconfirmed || s.Ready || s.ScanReady || s.ControlWarning == "" {
+		t.Fatal("failed stop did not block motion with an explanation")
+	}
+	if len(commands.commands) != 1 || commands.commands[0].Command != pb.UnitreeCommand_UNITREE_COMMAND_STOP {
+		t.Fatal("changed avoidance despite failed stop")
+	}
+	commands.stopError = nil
+	if err := r.stopLocked(); err != nil || r.Snapshot().ControlWarning != "" {
+		t.Fatal("confirmed stop did not clear warning", err)
 	}
 }

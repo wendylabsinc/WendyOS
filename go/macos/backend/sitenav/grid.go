@@ -13,8 +13,9 @@ import (
 
 const CellSize = 0.10
 
-// Clearance is outside the robot, not a radius measured from its center.
-const Clearance = 0.10
+// No extra stand-off beyond the body envelope. Swept-body collision checks
+// and velocity-dependent stopping distance still apply.
+const Clearance = 0.0
 
 // Conservative standing envelope around the odometry base origin. Rounded up
 // from Unitree's 70 x 31 cm standing dimensions (https://www.unitree.com/go2/).
@@ -95,10 +96,10 @@ func (g Grid) PoseClearanceError(p Point, yaw float64, subject string) error {
 		return true
 	})
 	if blocked {
-		return errors.New("An obstacle or drop overlaps Go2's footprint or its 10 cm clearance at " + subject + ".")
+		return errors.New("An obstacle or drop overlaps Go2's footprint at " + subject + ".")
 	}
 	if missing {
-		return errors.New("LiDAR has not observed all the floor beneath Go2's footprint and its 10 cm clearance at " + subject + ".")
+		return errors.New("LiDAR has not observed all the floor beneath Go2's footprint at " + subject + ".")
 	}
 	return nil
 }
@@ -270,7 +271,7 @@ func (g Grid) planPose(start Point, yaw float64, goal Point, deadline time.Time)
 		return []Point{start, goal}, nil
 	}
 	if !g.Floor[cell(goal)] || g.Obstacles[cell(goal)] {
-		return nil, errors.New("The destination needs observed clear floor for Go2's footprint and its 10 cm clearance.")
+		return nil, errors.New("The destination needs clear floor for Go2's footprint.")
 	}
 	root := routeState{cell(start), 8}
 	point := func(s routeState) Point {
@@ -382,7 +383,7 @@ func (g Grid) planPose(start Point, yaw float64, goal Point, deadline time.Time)
 			heap.Push(open, entry{next, nextCost + q.Distance(goal)})
 		}
 	}
-	return nil, errors.New("No route with room for Go2's footprint, 10 cm clearance and turns through observed floor.")
+	return nil, errors.New("No route with room for Go2's footprint and turns through clear floor.")
 }
 
 // Alignment converts robot odometry XY into the site's right-handed Y-up

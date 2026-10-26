@@ -29,7 +29,9 @@ struct AppsView: View {
     }
 
     @ViewBuilder private var actionContent: some View {
-        Table(apps, selection: $selection) {
+        VStack(spacing: 0) {
+        HiddenAppsFilter(model: model)
+        Table(apps.filter { model.showHiddenApps || !model.isAppHidden($0.appName) }, selection: $selection) {
             TableColumn("Application") { app in
                 HStack(spacing: 12) {
                     Image(systemName: "shippingbox").foregroundStyle(.secondary).font(.title3).frame(width: 24)
@@ -66,12 +68,21 @@ struct AppsView: View {
                     }
                 }.buttonStyle(.bordered).controlSize(.small)
             }.width(88)
+            TableColumn("") { app in
+                AppVisibilityMenu(model: model, app: app.appName)
+            }.width(36)
         }
+        .onChange(of: model.showHiddenApps) { _, _ in selection.removeAll() }
+        .onChange(of: model.visibleApps.map(\.id)) { _, ids in selection.formIntersection(ids) }
         .onChange(of: model.deviceSession) { _, _ in selection.removeAll() }
         .onChange(of: apps.map(\.id)) { _, ids in selection.formIntersection(ids) }
         .contextMenu(forSelectionType: String.self) { ids in
             let selectedApps = apps.filter { ids.contains($0.id) }
             if selectedApps.count > 1 {
+                Button("Hide Selected Apps", systemImage: "eye.slash") {
+                    for app in selectedApps { model.setAppHidden(app.appName, hidden: true) }
+                    selection.removeAll()
+                }
                 Button("Stop Selected Apps", systemImage: "stop.fill") {
                     let session = model.deviceSession
                     actions.submit { await model.stopApps(selectedApps, expectedSession: session) }
@@ -86,12 +97,14 @@ struct AppsView: View {
                 Divider()
                 Button("Show Logs", systemImage: "doc.text") { showLogs(app) }
                 Divider()
+                AppHideButton(model: model, app: app.appName)
                 AppDeleteMenu(model: model, app: app.appName)
             }
         }
         #if os(macOS)
         .tableStyle(.bordered)
         #endif
+        }
     }
     private func details(_ app: DeviceApp) -> String {
         if !app.services.isEmpty {
@@ -101,11 +114,51 @@ struct AppsView: View {
     }
 }
 
+struct HiddenAppsFilter: View {
+    @ObservedObject var model: AppModel
+    var body: some View {
+        if model.hiddenAppCount > 0 {
+            HStack {
+                Text("\(model.hiddenAppCount) hidden apps").font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                Toggle("Show hidden apps", isOn: $model.showHiddenApps).fixedSize()
+            }.padding(10)
+        }
+    }
+}
+
+struct AppHideButton: View {
+    @ObservedObject var model: AppModel
+    let app: String
+    var body: some View {
+        Button(model.isAppHidden(app) ? "Show App" : "Hide App", systemImage: model.isAppHidden(app) ? "eye" : "eye.slash") {
+            model.setAppHidden(app, hidden: !model.isAppHidden(app))
+        }.help("Hiding an app only changes these lists. The app keeps running on the device.")
+    }
+}
+
+struct AppVisibilityMenu: View {
+    @ObservedObject var model: AppModel
+    let app: String
+    var body: some View {
+        Menu {
+            AppHideButton(model: model, app: app)
+            Divider()
+            AppDeleteMenu(model: model, app: app)
+        } label: { Image(systemName: "ellipsis") }
+            #if os(macOS)
+            .menuStyle(.borderlessButton)
+            #endif
+            .fixedSize()
+            .accessibilityLabel("Actions for \(app)")
+    }
+}
+
 struct AppDeleteMenu: View {
     @ObservedObject var model: AppModel
     let app: String
     var body: some View {
-        Button("Delete App", systemImage: "trash", role: .destructive) {
+        Button("Remove App…", systemImage: "trash", role: .destructive) {
             model.requestAppDeletion(app)
         }.disabled(model.appActions.contains(app))
     }

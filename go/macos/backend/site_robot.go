@@ -16,6 +16,7 @@ type SiteRobotSnapshot struct {
 	LookDirection                                        int
 	LookState                                            int // 0 idle, 1 turning, 2 completed, 3 aborted
 	Message                                              string
+	ControlWarning                                       string
 	Pose, Ready, Aligned, Moving                         bool
 	ArrivalTiming, UsingArrivalTiming, TimingUnavailable bool
 	ScanReady                                            bool
@@ -52,6 +53,7 @@ type SiteRobot struct {
 	lookDirection                   int
 	started, heartbeat              time.Time
 	message                         string
+	controlWarning                  string
 	closed                          bool
 	stopUnconfirmed                 bool
 	underBodyAllowance              bool
@@ -64,6 +66,17 @@ type SiteRobot struct {
 	fusionFrame                     string
 	fusionEpoch                     uint64
 	lastObservationLog              time.Time
+}
+
+// Every new desktop/mobile connection starts with the supervised settings enabled.
+// Creating the handle does not issue a motion command; telemetry and route checks
+// still gate all movement.
+func newSiteRobot(ctx context.Context, cancel context.CancelFunc, client pb.WendyUnitreeRobotServiceClient, serial string) *SiteRobot {
+	r := &SiteRobot{ctx: ctx, cancel: cancel, done: make(chan struct{}), client: client, serial: serial,
+		message: "Waiting for robot observations.", heartbeat: time.Now(),
+		underBodyAllowance: true, allowUnobservedFloor: true}
+	r.observed.SetArrivalTiming(true)
+	return r
 }
 
 func (b *Backend) OpenSiteRobot(session uint64, serial string) (*SiteRobot, error) {
@@ -93,8 +106,8 @@ func (b *Backend) OpenSiteRobot(session uint64, serial string) (*SiteRobot, erro
 		return nil, errors.New("Pair and connect this Go2 on the selected gateway first.")
 	}
 	life, cancel := context.WithCancel(b.life)
-	r := &SiteRobot{ctx: life, cancel: cancel, done: make(chan struct{}), client: pb.NewWendyUnitreeRobotServiceClient(conn.Conn), serial: serial, message: "Waiting for robot observations.", heartbeat: time.Now()}
-	r.observed.SetArrivalTiming(true)
+	r := newSiteRobot(life, cancel, pb.NewWendyUnitreeRobotServiceClient(conn.Conn), serial)
+	r.prepareDirectMovement(ctx)
 	r.observed.ClockOffset = measureRobotClock(life, pb.NewWendyTimeSyncServiceClient(conn.Conn))
 	stream, err := r.client.Stream(life, &pb.UnitreeStreamRequest{Serial: serial, Topics: []string{sitenav.PoseTopic, sitenav.CloudTopic, sitenav.JointTopic}})
 	if err != nil {
@@ -126,6 +139,20 @@ func (b *Backend) OpenSiteRobot(session uint64, serial string) (*SiteRobot, erro
 	}()
 	go r.run()
 	return r, nil
+}
+
+// Configuration support must not prevent telemetry from older gateways.
+func (r *SiteRobot) prepareDirectMovement(ctx context.Context) {
+	// Older gateways cancel their move lease even for an unknown command.
+	// Stop explicitly before probing the new configuration command.
+	if _, err := r.client.Command(ctx, &pb.UnitreeCommandRequest{Serial: r.serial, Command: pb.UnitreeCommand_UNITREE_COMMAND_STOP}); err != nil {
+		r.stopUnconfirmed = true
+		return
+	}
+	if _, err := r.client.Command(ctx, &pb.UnitreeCommandRequest{Serial: r.serial,
+		Command: pb.UnitreeCommand_UNITREE_COMMAND_SET_OBSTACLE_AVOIDANCE, ObstacleAvoidanceEnabled: false}); err != nil {
+		r.controlWarning = "Could not disable onboard avoidance. Existing controls remain available. The gateway and robot must support the avoidance switch: " + err.Error()
+	}
 }
 
 // Caller holds mu. Packet rejection must not erase continuity for the next pose.
@@ -545,6 +572,10 @@ func (r *SiteRobot) Snapshot() SiteRobotSnapshot {
 	now := time.Now()
 	r.heartbeat = now
 	s := SiteRobotSnapshot{Message: r.message, Pose: sitenav.Fresh(r.observed.Pose.Received, now) && !r.closed, Aligned: r.frame != "", Moving: r.moving, FloorY: r.floorY}
+	s.ControlWarning = r.controlWarning
+	if r.stopUnconfirmed {
+		s.ControlWarning = "Go2 did not confirm Stop. Movement is blocked until Stop succeeds."
+	}
 	s.LookState = r.lookState
 	s.LookDirection = r.lookDirection
 	s.ObservationRevision = r.observed.Surfaces.Fingerprint()

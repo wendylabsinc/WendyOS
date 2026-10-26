@@ -5,6 +5,7 @@ struct ContentView: View {
     @EnvironmentObject private var model: AppModel
     @State private var tab = "apps"
     @State private var showingAppLogs = false
+    @State private var showingEventLog = false
     @State private var requestedClip: (session: UInt64, id: String)?
     @State private var showingOrganization = false
     @State private var showingSites = false
@@ -260,6 +261,7 @@ struct ContentView: View {
             cyclePage: { forward in showPage(DesktopDevicePage.adjacent(to: tab, forward: forward)) },
             connectByAddress: { showingAddress = true }
         ))
+        .onChange(of: model.deviceSession) { _, _ in showingEventLog = false }
         .task { await model.start() }
         .task(id: deviceSource) {
             if deviceSource == "cloud", model.cloud.isEmpty, model.account?.signedIn == true {
@@ -341,6 +343,7 @@ struct ContentView: View {
 
     @ViewBuilder private func deviceDetail(_ device: Device) -> some View {
         VStack(alignment: .leading, spacing: 0) {
+            HStack {
             ViewThatFits(in: .horizontal) {
                 HStack(spacing: 24) {
                     deviceIdentity(device)
@@ -351,6 +354,8 @@ struct ContentView: View {
                     deviceIdentity(device)
                     if !model.connectedLite { deviceTabs }
                 }
+            }
+            if !model.connectedLite { eventButton(device) }
             }.padding(.horizontal, 20).padding(.vertical, 12)
             Divider().padding(.bottom, ["apps", "activity", "data"].contains(tab) ? 0 : 12)
             if model.connectingDevice?.id == device.id {
@@ -371,10 +376,10 @@ struct ContentView: View {
                 case "cameras": camerasPane
                 case "siteModel": NativeSiteView(model: model).id(model.deviceSession)
                 case "activity": ActivityView(model: model).id(device.id)
-                case "campaigns": CampaignsView(session: model.deviceSession, deviceName: device.title) { id in
+                case "campaigns": CampaignsView(session: model.deviceSession, deviceName: device.title, openClip: { id in
                     requestedClip = (model.deviceSession, id)
                     tab = "data"
-                }.id(model.deviceSession)
+                }, showEventLog: { showingEventLog = true }).id(model.deviceSession)
                 case "settings": DeviceSettingsView(session: model.deviceSession, deviceName: device.title).id(model.deviceSession)
                 case "chat": DeviceChatView(deviceName: device.title, chat: model.deviceChat).id(model.deviceSession)
                 case "data": DataVisualizerView(session: model.deviceSession, deviceName: device.title,
@@ -392,6 +397,13 @@ struct ContentView: View {
             }.frame(minWidth: 640, minHeight: 500)
         }
 
+    }
+
+    @ViewBuilder private func eventButton(_ device: Device) -> some View {
+        if model.selectedDeviceReady {
+            CampaignEventButton(session: model.deviceSession, deviceID: device.id, deviceName: device.title, showingLog: $showingEventLog)
+                .id(model.deviceSession)
+        }
     }
 
     private func deviceIdentity(_ device: Device) -> some View {

@@ -62,7 +62,10 @@ func (r *SiteRobot) Look(sequence uint64, direction int) error {
 	}
 	target := p.Yaw + float64(direction)*lookAngle
 	if !r.navigationGridLocked(departure).Turn(p.Position, p.Yaw, target+float64(direction)*lookStopMargin) {
-		return errors.New("Go2 needs observed clear floor around its turning footprint, including 10 cm clearance. An obstacle, drop or unseen floor blocks this turn.")
+		if r.allowUnobservedFloor {
+			return errors.New("An obstacle or drop overlaps Go2's body during this turn.")
+		}
+		return errors.New("Go2's body would cross an obstacle, drop or unobserved floor during this turn.")
 	}
 	r.lookState = 1
 	r.lookDirection = direction

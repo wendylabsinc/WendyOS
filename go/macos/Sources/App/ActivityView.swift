@@ -80,7 +80,7 @@ struct ActivityView: View {
     private var selectedApp: String? { snapshot?.rows.first(where: { $0.id == selection })?.app }
     private var rows: [ResourceSnapshot.Row] {
         guard let rows = snapshot?.rows else { return [] }
-        return rows.filter { !$0.isService }
+        return rows.filter { !$0.isService && (model.showHiddenApps || !model.isAppHidden($0.app)) }
             .sorted(using: sortOrder + [KeyPathComparator(\ResourceSnapshot.Row.name, comparator: .localizedStandard)])
             .flatMap { parent in
                 [parent] + rows.filter { $0.isService && $0.app == parent.app }
@@ -108,11 +108,15 @@ struct ActivityView: View {
             }
         }
         .task(id: model.apps) { await refresh() }
+        .onChange(of: model.visibleApps.map(\.id)) { _, ids in
+            if let selectedApp, !ids.contains(selectedApp) { selection = nil }
+        }
         .task(id: selectedApp) { await refreshPorts() }
     }
 
     private var desktopContent: some View {
         VStack(spacing: 0) {
+            HiddenAppsFilter(model: model)
             if let snapshot {
                 VStack(spacing: 8) {
                     #if os(iOS)
@@ -221,6 +225,18 @@ struct ActivityView: View {
                             Text(row.state.title)
                         }
                     }.width(120)
+                    TableColumn("") { row in
+                        if !row.isService, let app = model.apps.first(where: { $0.appName == row.app }), app.hasWebpage {
+                            Button { actions.submit { await model.openApp(app) } } label: {
+                                Label("Open", systemImage: "arrow.up.right.square")
+                            }.buttonStyle(.bordered).controlSize(.small)
+                                .disabled(app.runningState != .running)
+                                .help(app.runningState == .running ? "Open webpage on port \(app.httpPort)" : "Start the app to open its webpage")
+                        }
+                    }.width(88)
+                    TableColumn("") { row in
+                        if !row.isService { AppVisibilityMenu(model: model, app: row.app) }
+                    }.width(36)
                 }
                 .tableStyle(.bordered)
                 .keyboardRowSelection(rows.map(\.id), selection: $selection)
@@ -229,6 +245,7 @@ struct ActivityView: View {
                         let state = snapshot.rows.first(where: { $0.id == row.app })?.state ?? row.state
                         AppControlMenu(actions: actions, model: model, app: row.app, state: state)
                         Divider()
+                        AppHideButton(model: model, app: row.app)
                         AppDeleteMenu(model: model, app: row.app)
                     }
                 }
@@ -294,7 +311,8 @@ struct ActivityView: View {
             }
             Section("Apps") {
                 if let error = model.appsError { FailureNote(message: error) }
-                ForEach(model.apps) { app in
+                HiddenAppsFilter(model: model)
+                ForEach(model.visibleApps) { app in
                     NavigationLink {
                         AppActivityDetail(model: model, appName: app.appName, initialSnapshot: snapshot)
                     } label: {
@@ -309,6 +327,14 @@ struct ActivityView: View {
                                 } else if let version = app.appVersion { Text("· " + version) }
                             }.font(.caption).foregroundStyle(.secondary).monospacedDigit()
                         }.padding(.vertical, 5)
+                    }
+                    .contextMenu {
+                        AppHideButton(model: model, app: app.appName)
+                        AppDeleteMenu(model: model, app: app.appName)
+                    }
+                    .swipeActions {
+                        Button("Hide", systemImage: "eye.slash") { model.setAppHidden(app.appName, hidden: true) }
+                        Button("Remove", systemImage: "trash", role: .destructive) { model.requestAppDeletion(app.appName) }
                     }
                 }
                 if model.apps.isEmpty && model.appsError == nil { Text("No apps installed").foregroundStyle(.secondary) }

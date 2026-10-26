@@ -7,6 +7,7 @@ typedef struct { WDStatus status; WDSiteRobotCandidate *items; size_t count; } W
 typedef struct {
     WDStatus status;
     char *message;
+    char *control_warning;
     int32_t pose, ready, aligned, moving;
     int32_t arrival_timing, using_arrival_timing, timing_unavailable, scan_ready;
     int32_t under_body_allowance, allow_unobserved_floor, look_state, look_direction;

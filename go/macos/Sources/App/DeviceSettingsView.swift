@@ -63,6 +63,10 @@ extension GoClient {
                 routes: UnsafeBufferPointer(start: value.mesh_routes, count: value.mesh_route_count).enumerated().map { index, route in
                     DeviceMeshRoute(id: index, prefix: Self.string(route.prefix), origin: Self.string(route.origin), nextHop: Self.string(route.next_hop),
                                     metric: route.metric, local: route.local != 0, unreachable: route.unreachable != 0, authorized: route.authorized != 0)
+                },
+                announcements: UnsafeBufferPointer(start: value.mesh_announcements, count: value.mesh_announcement_count).map {
+                    DeviceMeshAnnouncement(principal: Self.string($0.principal), deviceID: Self.string($0.device_id),
+                                           name: Self.string($0.name), prefix: Self.string($0.prefix))
                 })
             return DeviceNetworkSettings(topology: topology, wifiAvailable: value.wifi_available != 0, wifiConnected: value.wifi_connected != 0,
                                          ssid: Self.string(value.ssid), wifiError: Self.string(value.wifi_error), scanError: Self.string(value.scan_error),
@@ -295,7 +299,7 @@ struct DeviceSettingsView: View {
             Section {
                 Button("Show mesh graph", systemImage: "point.3.connected.trianglepath.dotted") { showingMeshGraph = true }
                 LabeledContent("Runtime", value: snapshot.runtimeAvailable ? (snapshot.meshState.isEmpty ? "Available" : snapshot.meshState.capitalized) : "Unavailable")
-                if snapshot.runtimeAvailable { LabeledContent("Authenticated peers", value: snapshot.peers.formatted()) }
+                if snapshot.runtimeAvailable { LabeledContent("Authenticated links", value: snapshot.peers.formatted()) }
                 if !snapshot.gateway.isEmpty { LabeledContent("Internet gateway", value: snapshot.gateway) }
                 if !snapshot.meshDetail.isEmpty { Text(snapshot.meshDetail).font(.caption).foregroundStyle(.secondary) }
                 if !snapshot.meshError.isEmpty { FailureNote(message: snapshot.meshError) }

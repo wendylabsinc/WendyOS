@@ -2,6 +2,88 @@ import XCTest
 import ImageIO
 @testable import WendyDesktop
 
+final class DeviceMeshGraphTests: XCTestCase {
+    private func link(_ id: UInt64, _ principal: String, transport: String = "ethernet") -> DeviceMeshPeer {
+        DeviceMeshPeer(id: id, principal: principal, deviceID: principal, address: "fd00::2",
+                       transport: transport, name: "", cost: 1)
+    }
+
+    private func route(_ id: Int, _ origin: String, via nextHop: String, metric: UInt32 = 2,
+                       unreachable: Bool = false, local: Bool = false) -> DeviceMeshRoute {
+        DeviceMeshRoute(id: id, prefix: "fd00::\(id + 3)/128", origin: origin, nextHop: nextHop,
+                        metric: metric, local: local, unreachable: unreachable, authorized: true)
+    }
+
+    private func graph(links: [DeviceMeshPeer] = [], routes: [DeviceMeshRoute] = [],
+                       announcements: [DeviceMeshAnnouncement] = []) -> DeviceMeshGraph {
+        DeviceMeshGraph(topology: DeviceMeshTopology(available: true, runtime: true, truncated: false, captured: Date(),
+                                                    error: "", principal: "self", address: "fd00::1", links: links,
+                                                    routes: routes, announcements: announcements))
+    }
+
+    func testIndirectPeersAppearWithTheirNamesAndNextHop() {
+        let mesh = graph(links: [link(1, "relay")], routes: [route(0, "camera", via: "relay")], announcements: [
+            DeviceMeshAnnouncement(principal: "relay", deviceID: "relay", name: "Relay", prefix: "fd00::2/128"),
+            DeviceMeshAnnouncement(principal: "camera", deviceID: "camera", name: "Remote camera", prefix: "fd00::3/128")
+        ])
+        XCTAssertEqual(mesh.direct.map(\.id), ["relay"])
+        XCTAssertEqual(mesh.indirect.map(\.id), ["camera"])
+        XCTAssertEqual(mesh.indirect.first?.title, "Remote camera")
+        XCTAssertEqual(mesh.indirect.first?.nextHop, "relay")
+        XCTAssertEqual(mesh.indirect.first?.subtitle, "Via Relay")
+        XCTAssertTrue(mesh.unrouted.isEmpty)
+    }
+
+    func testParallelLinksAndRepeatedAnnouncementsDoNotDuplicateDevices() {
+        let mesh = graph(links: [link(1, "relay"), link(2, "relay", transport: "ble"), link(3, "relay")],
+                         routes: [route(0, "relay", via: "relay"), route(1, "self", via: "", local: true)],
+                         announcements: [
+                            DeviceMeshAnnouncement(principal: "relay", deviceID: "relay", name: "", prefix: ""),
+                            DeviceMeshAnnouncement(principal: "relay", deviceID: "relay", name: "Relay", prefix: ""),
+                            DeviceMeshAnnouncement(principal: "self", deviceID: "self", name: "Self", prefix: ""),
+                            DeviceMeshAnnouncement(principal: "", deviceID: "", name: "", prefix: "")
+                         ])
+        XCTAssertEqual(mesh.nodes.count, 1)
+        XCTAssertEqual(mesh.direct.first?.title, "Relay")
+        XCTAssertEqual(mesh.direct.first?.subtitle, "ble, ethernet")
+        XCTAssertNil(mesh.direct.first?.nextHop)
+    }
+
+    func testUnreachableAndAnnouncementOnlyDevicesHaveNoConnectionLine() {
+        let mesh = graph(links: [link(1, "relay")], routes: [
+            route(0, "withdrawn", via: "relay", unreachable: true),
+            route(1, "infinity", via: "relay", metric: 65535),
+            route(2, "missing-hop", via: "absent")
+        ], announcements: [DeviceMeshAnnouncement(principal: "announced", deviceID: "announced", name: "Announced", prefix: "")])
+        XCTAssertTrue(mesh.indirect.isEmpty)
+        XCTAssertEqual(Set(mesh.unrouted.map(\.id)), ["withdrawn", "infinity", "missing-hop", "announced"])
+        XCTAssertEqual(mesh.nodes.first { $0.id == "withdrawn" }?.subtitle, "Unreachable")
+        XCTAssertEqual(mesh.nodes.first { $0.id == "infinity" }?.subtitle, "Unreachable")
+        XCTAssertEqual(mesh.nodes.first { $0.id == "missing-hop" }?.subtitle, "Next hop unavailable")
+        XCTAssertEqual(mesh.nodes.first { $0.id == "announced" }?.subtitle, "No route reported")
+        XCTAssertFalse(mesh.nodes.contains { $0.id == "absent" })
+    }
+
+    func testRoutesWithoutAnnouncementsChooseLowestUsableMetric() {
+        let mesh = graph(links: [link(1, "relay-a"), link(2, "relay-b")], routes: [
+            route(0, "camera", via: "relay-a", metric: 1, unreachable: true),
+            route(1, "camera", via: "relay-a", metric: 10),
+            route(2, "camera", via: "relay-b", metric: 3),
+            route(3, "camera", via: "absent", metric: 1),
+            route(4, "", via: "relay-a")
+        ])
+        XCTAssertEqual(mesh.indirect.count, 1)
+        XCTAssertEqual(mesh.indirect.first?.id, "camera")
+        XCTAssertEqual(mesh.indirect.first?.title, "camera")
+        XCTAssertEqual(mesh.indirect.first?.nextHop, "relay-b")
+        XCTAssertEqual(mesh.nodes.count, 3)
+    }
+
+    func testEmptySnapshotHasNoPeers() {
+        XCTAssertTrue(graph().nodes.isEmpty)
+    }
+}
+
 final class DesktopTests: XCTestCase {
     func testNotificationApprovalUsesReadableConsent() {
         let approval = ChatApproval(id: 42, action: "enable_campaign_notifications", app: #"{"campaign":"door-people"}"#)

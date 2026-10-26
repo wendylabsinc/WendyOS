@@ -29,6 +29,11 @@ func networkSettings(value backend.NetworkSettings, err error) *C.WDNetworkSetti
 	for _, a := range topology.GetAnnouncements() {
 		names[a.GetPrincipal()] = a.GetName()
 	}
+	announcements := topology.GetAnnouncements()
+	p.mesh_announcements, p.mesh_announcement_count = alloc[C.WDMeshAnnouncement](len(announcements)), C.size_t(len(announcements))
+	for i, a := range announcements {
+		unsafe.Slice(p.mesh_announcements, len(announcements))[i] = C.WDMeshAnnouncement{principal: C.CString(a.GetPrincipal()), device_id: C.CString(a.GetDeviceId()), name: C.CString(a.GetName()), prefix: C.CString(a.GetPrefix())}
+	}
 	links := topology.GetPeers()
 	p.mesh_links, p.mesh_link_count = alloc[C.WDMeshPeer](len(links)), C.size_t(len(links))
 	for i, n := range links {
@@ -89,8 +94,15 @@ func WDNetworkSettingsFree(p *C.WDNetworkSettingsResult) {
 		free(r.origin)
 		free(r.next_hop)
 	}
+	for _, a := range unsafe.Slice(p.mesh_announcements, int(p.mesh_announcement_count)) {
+		free(a.principal)
+		free(a.device_id)
+		free(a.name)
+		free(a.prefix)
+	}
 	free(p.mesh_links)
 	free(p.mesh_routes)
+	free(p.mesh_announcements)
 	free(p.topology_error)
 	free(p.self_principal)
 	free(p.self_address)

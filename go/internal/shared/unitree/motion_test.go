@@ -88,8 +88,12 @@ func TestTeleopWireCommandsWithFixturePeer(t *testing.T) {
 			if json.Unmarshal(msg.Data, &d) != nil {
 				return
 			}
-			if msg.Topic != sportTopic {
-				t.Error("wrong topic")
+			if d.Header.Identity.API == 1001 {
+				if msg.Topic != avoidanceTopic || d.Parameter != `{"enable":false}` {
+					t.Errorf("wrong avoidance request: %s %s", msg.Topic, d.Parameter)
+				}
+			} else if msg.Topic != sportTopic {
+				t.Error("wrong sport topic")
 			}
 			if d.Header.Identity.API == 1008 && d.Parameter != `{"x":0.1,"y":-0.05,"z":0.2}` {
 				t.Errorf("unexpected parameter %s", d.Parameter)
@@ -146,7 +150,10 @@ func TestTeleopWireCommandsWithFixturePeer(t *testing.T) {
 	if err = c.Move(ctx, 0, 0, 0); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []uint64{1008, 1003} {
+	if err = c.SetObstacleAvoidance(ctx, false); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []uint64{1008, 1003, 1001} {
 		select {
 		case got := <-commands:
 			if got != want {

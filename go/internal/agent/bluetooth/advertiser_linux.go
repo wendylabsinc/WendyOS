@@ -79,6 +79,10 @@ type advertisement struct{}
 func (a *advertisement) Release() *dbus.Error { return nil }
 
 func startAdvertising(ctx context.Context, logger *zap.Logger) error {
+	return startServiceAdvertising(ctx, logger, wendyServiceUUID, advObjectPath)
+}
+
+func startServiceAdvertising(ctx context.Context, logger *zap.Logger, serviceUUID string, objectPath dbus.ObjectPath) error {
 	conn, err := dbus.ConnectSystemBus()
 	if err != nil {
 		return fmt.Errorf("connect system bus: %w", err)
@@ -90,7 +94,7 @@ func startAdvertising(ctx context.Context, logger *zap.Logger) error {
 	}
 
 	// Export the LEAdvertisement1 object.
-	if err := conn.Export(&advertisement{}, advObjectPath, advIface); err != nil {
+	if err := conn.Export(&advertisement{}, objectPath, advIface); err != nil {
 		conn.Close()
 		return fmt.Errorf("export advertisement object: %w", err)
 	}
@@ -102,11 +106,11 @@ func startAdvertising(ctx context.Context, logger *zap.Logger) error {
 	propsSpec := map[string]map[string]*prop.Prop{
 		advIface: {
 			"Type":         {Value: "peripheral", Writable: false, Emit: prop.EmitFalse},
-			"ServiceUUIDs": {Value: []string{wendyServiceUUID}, Writable: false, Emit: prop.EmitFalse},
+			"ServiceUUIDs": {Value: []string{serviceUUID}, Writable: false, Emit: prop.EmitFalse},
 			"LocalName":    {Value: hostname, Writable: false, Emit: prop.EmitFalse},
 		},
 	}
-	if _, err := prop.Export(conn, advObjectPath, propsSpec); err != nil {
+	if _, err := prop.Export(conn, objectPath, propsSpec); err != nil {
 		conn.Close()
 		return fmt.Errorf("export advertisement properties: %w", err)
 	}
@@ -126,7 +130,7 @@ func startAdvertising(ctx context.Context, logger *zap.Logger) error {
 	// Defensive unregister: if a previous run crashed without unregistering, the
 	// slot may still be held in BlueZ. Ignore the error — it just means it wasn't
 	// registered, which is the normal case.
-	hci.Call(advManagerIface+".UnregisterAdvertisement", 0, advObjectPath)
+	hci.Call(advManagerIface+".UnregisterAdvertisement", 0, objectPath)
 
 	// Register advertisement with BlueZ. Retry for up to 30 seconds: BlueZ may
 	// need time to finish adapter initialisation after power-on, and some
@@ -134,7 +138,7 @@ func startAdvertising(ctx context.Context, logger *zap.Logger) error {
 	opts := map[string]dbus.Variant{}
 	var regErr error
 	for i := range 30 {
-		call := hci.Call(advManagerIface+".RegisterAdvertisement", 0, advObjectPath, opts)
+		call := hci.Call(advManagerIface+".RegisterAdvertisement", 0, objectPath, opts)
 		if call.Err == nil {
 			regErr = nil
 			break
@@ -163,13 +167,13 @@ func startAdvertising(ctx context.Context, logger *zap.Logger) error {
 
 	logger.Info("BLE advertisement registered",
 		zap.String("adapter", adapterPath),
-		zap.String("uuid", wendyServiceUUID),
+		zap.String("uuid", serviceUUID),
 		zap.String("name", hostname))
 
 	// Wait for context cancellation, then unregister.
 	go func() {
 		<-ctx.Done()
-		if call := hci.Call(advManagerIface+".UnregisterAdvertisement", 0, advObjectPath); call.Err != nil {
+		if call := hci.Call(advManagerIface+".UnregisterAdvertisement", 0, objectPath); call.Err != nil {
 			logger.Warn("unregister advertisement failed", zap.Error(call.Err))
 		}
 		conn.Close()

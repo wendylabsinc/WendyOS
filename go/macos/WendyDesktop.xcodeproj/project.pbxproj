@@ -17,6 +17,7 @@
 		07E59E231D6E307690E2B1AD /* Site.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0496B46C3F9CD5C1B14E23F /* Site.swift */; };
 		08287DD3EFF2E24E9258CFA7 /* ModelHardwareTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9B40B4FDD87C60533F0559A6 /* ModelHardwareTests.swift */; };
 		0ADED3D12131FEB083901F77 /* InstallHardwareView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4AF0F54AFF335D44D9766EEF /* InstallHardwareView.swift */; };
+		0C9DE9CE4C60F228AE998EAE /* CampaignEventLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6AD35567E3E64E4A8791C0FD /* CampaignEventLog.swift */; };
 		0E941602585C6FD0784BBC99 /* AccountsSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1E8604CC1B34374401BA0586 /* AccountsSettingsView.swift */; };
 		0EAC09E60BB332D21E0B19E0 /* SiteCameraPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = E4B8A9451F3CCE3202F92697 /* SiteCameraPicker.swift */; };
 		10B131E8F39984EDA6802FF1 /* DeviceSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7648529217A2937BE2590CE6 /* DeviceSettingsView.swift */; };
@@ -26,6 +27,7 @@
 		1571389C22196AD11AD63A6B /* BlockingWork.swift in Sources */ = {isa = PBXBuildFile; fileRef = EBC666362E8AC1DED444AD88 /* BlockingWork.swift */; };
 		189898BACBE793CA0FE09452 /* NetworkExtension.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = D12072D59326B47F07A71F81 /* NetworkExtension.framework */; };
 		1921AF77AED0B2287A8DF215 /* VPNController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F559A36FB62C81768A4EC94 /* VPNController.swift */; };
+		1AE87AB4BD0BFBFC231352FE /* CampaignEventLog.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6AD35567E3E64E4A8791C0FD /* CampaignEventLog.swift */; };
 		1B0BB53494D63B19B9CEE96E /* ScreenLensCalibration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A0B565A410E3EAD5C517D6C /* ScreenLensCalibration.swift */; };
 		1B6FFE044B6C29E441D7F4B3 /* DataVisualVideoController.swift in Sources */ = {isa = PBXBuildFile; fileRef = BC83B56E9C49F34DD5113A9E /* DataVisualVideoController.swift */; };
 		1BD3F9BADCA470298FEF656A /* SiteWorkspace.swift in Sources */ = {isa = PBXBuildFile; fileRef = 10A956DDF27C46E379646AA3 /* SiteWorkspace.swift */; };
@@ -49,6 +51,7 @@
 		3141DBA5B6180F2B57181663 /* Security.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 5D8FCECB47D77D65A8AD29C6 /* Security.framework */; };
 		31B01C3E3FA348CA565A4FDF /* Go2 in Resources */ = {isa = PBXBuildFile; fileRef = F89DC02C7622D70102441A63 /* Go2 */; };
 		31F0F9AD132888F47A6B72D7 /* PhoneLensCalibrationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 91E03E29F774A31822696188 /* PhoneLensCalibrationView.swift */; };
+		3329EDF5CE8BF76ABB9C58D0 /* CampaignEventTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 83ADC08CA4A40489983BE485 /* CampaignEventTests.swift */; };
 		349726133520742C203814D7 /* InstallGuide.swift in Sources */ = {isa = PBXBuildFile; fileRef = 671BA86D948522533FE7CC9D /* InstallGuide.swift */; };
 		36ABCD2BDD34D7B61468F7C2 /* CampaignRecordingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2CB41B67FAE017DE765E2F8 /* CampaignRecordingsView.swift */; };
 		37CD9AD08E158AFD5D0A1BF1 /* UnitreePairingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE99209CE4290965133EBC3F /* UnitreePairingView.swift */; };
@@ -331,6 +334,7 @@
 		67BA2414F94DF43EF70406E2 /* Install3D */ = {isa = PBXFileReference; lastKnownFileType = folder; name = Install3D; path = Resources/Install3D; sourceTree = SOURCE_ROOT; };
 		67DC08FC4BD812ADD9916DC3 /* DeviceRecognition */ = {isa = PBXFileReference; lastKnownFileType = folder; name = DeviceRecognition; path = Resources/DeviceRecognition; sourceTree = SOURCE_ROOT; };
 		6A0B565A410E3EAD5C517D6C /* ScreenLensCalibration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ScreenLensCalibration.swift; sourceTree = "<group>"; };
+		6AD35567E3E64E4A8791C0FD /* CampaignEventLog.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CampaignEventLog.swift; sourceTree = "<group>"; };
 		6C9EDEC6A2D47804FCD2A19F /* LogsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LogsView.swift; sourceTree = "<group>"; };
 		6CA03F0043D1569ECB9D2ECF /* SystemExtensions.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SystemExtensions.framework; path = System/Library/Frameworks/SystemExtensions.framework; sourceTree = SDKROOT; };
 		6CCAC50FFBAA2CB3C6E7B4EF /* SiteRobotGeometry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SiteRobotGeometry.swift; sourceTree = "<group>"; };
@@ -348,6 +352,7 @@
 		7BB8F41D151BA6EEF15734B2 /* AsyncActions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AsyncActions.swift; sourceTree = "<group>"; };
 		7DEAEE88B9129990D3810958 /* SimulatorsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimulatorsView.swift; sourceTree = "<group>"; };
 		830BF31D5054ED12AE4A2499 /* MobileVideoPlayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileVideoPlayer.swift; sourceTree = "<group>"; };
+		83ADC08CA4A40489983BE485 /* CampaignEventTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CampaignEventTests.swift; sourceTree = "<group>"; };
 		86C9324008F7F9FD0C92E45A /* UnitreeExtras.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UnitreeExtras.swift; sourceTree = "<group>"; };
 		88980115DE513BF1DED28B61 /* RobotLensCalibrationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RobotLensCalibrationView.swift; sourceTree = "<group>"; };
 		8F2C391C97D1BB19C1786EB2 /* DeviceViewfinder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceViewfinder.swift; sourceTree = "<group>"; };
@@ -492,6 +497,7 @@
 				C116AACC116B50F902BE66CD /* CameraCalibrationFrame.swift */,
 				0B2BBF5239DC522DEC32DDF6 /* CameraDisplayView.swift */,
 				C165580EAB422936E3B036B0 /* CameraWallView.swift */,
+				6AD35567E3E64E4A8791C0FD /* CampaignEventLog.swift */,
 				9DAD4BBD7CAD336DE563C175 /* CampaignModelPicker.swift */,
 				2E1689D6E0F336E711BDEDA8 /* CampaignSettingsView.swift */,
 				6206A67A4FAB8807E533A7F1 /* CampaignsView.swift */,
@@ -573,6 +579,7 @@
 		444F0C4441C02DF2AA6E16F1 /* Tests */ = {
 			isa = PBXGroup;
 			children = (
+				83ADC08CA4A40489983BE485 /* CampaignEventTests.swift */,
 				A2D3B6424879FD4924BE05FA /* ConcurrencyTests.swift */,
 				9E04EE381C6CDD0530830A0B /* DataVisualizerMediaTests.swift */,
 				49A41BF0F5377D89682F1080 /* DataVisualizerTimelineTests.swift */,
@@ -1120,6 +1127,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				3329EDF5CE8BF76ABB9C58D0 /* CampaignEventTests.swift in Sources */,
 				3F1F63B6FFECB4A9A2005738 /* ConcurrencyTests.swift in Sources */,
 				E5C3F53A4CFF34739C539614 /* DataVisualizerMediaTests.swift in Sources */,
 				54BD54EF3306A476483C5238 /* DataVisualizerTimelineTests.swift in Sources */,
@@ -1153,6 +1161,7 @@
 				C5080B1214D82DD85FBD57C3 /* CameraCalibrationFrame.swift in Sources */,
 				8AA95FCA489E18A93AA87F7C /* CameraDisplayView.swift in Sources */,
 				EDB5B7F313CEB4E662199D2E /* CameraWallView.swift in Sources */,
+				1AE87AB4BD0BFBFC231352FE /* CampaignEventLog.swift in Sources */,
 				950FD52B3A3B393B03A142F3 /* CampaignModelPicker.swift in Sources */,
 				36ABCD2BDD34D7B61468F7C2 /* CampaignRecordingsView.swift in Sources */,
 				5F73CFF7F68EEE13F2D99BC4 /* CampaignSettingsView.swift in Sources */,
@@ -1271,6 +1280,7 @@
 				6C4C3061238FAB5733D0AD59 /* CameraCalibrationFrame.swift in Sources */,
 				913F1A05C9B4169F66DFAA4E /* CameraDisplayView.swift in Sources */,
 				40DE8423E05DB0095F8329B0 /* CameraWallView.swift in Sources */,
+				0C9DE9CE4C60F228AE998EAE /* CampaignEventLog.swift in Sources */,
 				89AD3C60B440A6C2C1488871 /* CampaignModelPicker.swift in Sources */,
 				D17A0FC4CFBE9232DA7F6B34 /* CampaignSettingsView.swift in Sources */,
 				2AE48E3AFC2A12929B38DCFD /* CampaignsView.swift in Sources */,

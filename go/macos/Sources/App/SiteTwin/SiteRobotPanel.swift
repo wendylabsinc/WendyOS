@@ -637,6 +637,9 @@ struct SiteRobotSupervisionSummary: View {
     @ObservedObject var model: SiteRobotMapModel
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
+            if let warning = model.reading?.controlWarning, !warning.isEmpty {
+                Text(warning).foregroundStyle(.orange)
+            }
             Text(model.reading?.arrivalTiming == true
                  ? "Supervised · sensor age unverified. Keep Go2 in sight."
                  : "Keep Go2 in sight and the route clear.")
@@ -653,17 +656,17 @@ struct SiteRobotTimingControls: View {
     @ObservedObject var model: SiteRobotMapModel
     var body: some View {
         Toggle("Supervised navigation through unobserved floor", isOn: Binding(
-            get: { model.reading?.allowUnobservedFloor == true },
+            get: { model.reading?.allowUnobservedFloor ?? true },
             set: { model.setAllowUnobservedFloor($0) }
-        )).font(.caption)
+        )).font(.caption).disabled(model.reading == nil)
         Text("Allows unobserved floor along the route. Detected obstacles, drops and lost telemetry still stop Go2. Unseen hazards cannot be ruled out; stay with Go2 and keep Stop within reach.")
             .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-        if model.reading?.allowUnobservedFloor != true {
+        Group {
             Toggle("Allow hidden floor beneath Go2", isOn: Binding(
-                get: { model.reading?.underBodyAllowance == true },
+                get: { model.reading?.underBodyAllowance ?? true },
                 set: { model.setUnderBodyAllowance($0) }
-            )).font(.caption)
-            Text("Supervised departure only. Check that the floor beneath Go2 is level and clear. Obstacles and unseen floor ahead still block movement.")
+            )).font(.caption).disabled(model.reading == nil)
+            Text("Allows departure when the floor beneath Go2 is hidden from its sensors. Check that it is level and clear. Detected obstacles and drops still block movement.")
                 .font(.caption2).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         }
         if model.reading?.timingUnavailable == true || model.reading?.arrivalTiming == true {

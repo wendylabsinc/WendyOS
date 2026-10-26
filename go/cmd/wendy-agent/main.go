@@ -1480,6 +1480,10 @@ func main() {
 		os.Exit(0)
 	})
 
+	if accessPolicy.AllowsNetwork {
+		go bluetooth.StartBLESetup(ctx, logger, bluetooth.NewSetupDispatcher(provisioningSvcV2, networkMgr))
+	}
+
 	// Enrollment is non-blocking and begins only after callbacks are installed.
 	// A baked ACME credential must not fall through to legacy enrollment when
 	// invalid or already attempted. Conflicting handoffs require operator recovery.

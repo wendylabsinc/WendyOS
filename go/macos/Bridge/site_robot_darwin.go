@@ -98,6 +98,7 @@ func WDSiteRobotPoll(handle C.uint64_t) *C.WDSiteRobotState {
 		p.scan_ready = 1
 	}
 	p.message = C.CString(s.Message)
+	p.control_warning = C.CString(s.ControlWarning)
 	if s.Pose {
 		p.pose = 1
 	}
@@ -146,6 +147,7 @@ func WDSiteRobotStateFree(p *C.WDSiteRobotState) {
 	}
 	free(p.status.message)
 	free(p.message)
+	free(p.control_warning)
 	free(p.route)
 	free(p.joints)
 	free(p)

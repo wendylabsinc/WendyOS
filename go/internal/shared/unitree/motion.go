@@ -17,6 +17,14 @@ const MotionForwardLimit = 0.8
 const MotionLateralLimit = 0.5
 const MotionYawLimit = 1.0
 const sportTopic = "rt/api/sport/request"
+const avoidanceTopic = "rt/api/obstacles_avoid/request"
+
+// SetObstacleAvoidance uses Unitree's ObstaclesAvoidClient.SwitchSet API.
+// This changes only avoidance, not speed, gait, posture or locomotion mode.
+func (c *Connection) SetObstacleAvoidance(ctx context.Context, enabled bool) error {
+	parameter, _ := json.Marshal(map[string]bool{"enable": enabled})
+	return c.apiRequest(ctx, avoidanceTopic, 1001, string(parameter))
+}
 
 func ValidMotion(forward, lateral, yaw float64) bool {
 	within := func(v, limit float64) bool { return !math.IsNaN(v) && !math.IsInf(v, 0) && math.Abs(v) <= limit }
@@ -84,9 +92,13 @@ type pendingSportRequest struct {
 // are sent one at a time, but the wait happens outside motionMu, so a stop is
 // not held up behind a posture change waiting for its slow acknowledgement.
 func (c *Connection) sportRequest(ctx context.Context, api uint64, parameter string) error {
+	return c.apiRequest(ctx, sportTopic, api, parameter)
+}
+
+func (c *Connection) apiRequest(ctx context.Context, topic string, api uint64, parameter string) error {
 	ctx, cancel := context.WithTimeout(ctx, sportAckTimeout(api))
 	defer cancel()
-	id, response, err := c.sendSportRequest(ctx, api, parameter)
+	id, response, err := c.sendAPIRequest(ctx, topic, api, parameter)
 	if err != nil {
 		return err
 	}
@@ -105,6 +117,10 @@ func (c *Connection) sportRequest(ctx context.Context, api uint64, parameter str
 }
 
 func (c *Connection) sendSportRequest(ctx context.Context, api uint64, parameter string) (uint64, chan int, error) {
+	return c.sendAPIRequest(ctx, sportTopic, api, parameter)
+}
+
+func (c *Connection) sendAPIRequest(ctx context.Context, topic string, api uint64, parameter string) (uint64, chan int, error) {
 	c.motionMu.Lock()
 	defer c.motionMu.Unlock()
 	if err := ctx.Err(); err != nil {
@@ -113,13 +129,14 @@ func (c *Connection) sendSportRequest(ctx context.Context, api uint64, parameter
 	if !c.Connected() || c.channel == nil {
 		return 0, nil, errors.New("Go2 command channel unavailable")
 	}
-	if api == 1008 && c.channel.BufferedAmount() != 0 {
+	noReply := topic == sportTopic && api == 1008
+	if noReply && c.channel.BufferedAmount() != 0 {
 		return 0, nil, errCommandBacklog
 	}
 	// Keep numeric identifiers exactly representable by browser/robot JSON parsers.
 	id := c.requestID.Add(1) % 2147483648
 	var response chan int
-	if api != 1008 {
+	if !noReply {
 		response = make(chan int, 1)
 		c.responseMu.Lock()
 		if c.pending == nil {
@@ -143,9 +160,9 @@ func (c *Connection) sendSportRequest(ctx context.Context, api uint64, parameter
 			} `json:"header"`
 			Parameter string `json:"parameter"`
 		} `json:"data"`
-	}{Type: "req", Topic: sportTopic}
+	}{Type: "req", Topic: topic}
 	payload.Data.Header.Identity.ID, payload.Data.Header.Identity.API = id, api
-	if api == 1008 {
+	if noReply {
 		payload.Data.Header.Policy = &struct {
 			NoReply bool `json:"noreply"`
 		}{true}

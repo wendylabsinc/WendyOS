@@ -1,7 +1,7 @@
 import Foundation
 import Synchronization
 
-struct DataVisualEpisode: Identifiable {
+struct DataVisualEpisode: Identifiable, Equatable {
     let id, name, state: String
     let started: Date
     let bytes: Int64

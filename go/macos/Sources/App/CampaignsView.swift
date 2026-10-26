@@ -5,6 +5,7 @@ struct CampaignsView: View {
     let session: UInt64
     let deviceName: String
     let openClip: (String) -> Void
+    var showEventLog: (() -> Void)? = nil
     @State private var campaigns: [DeviceCampaign] = []
     @State private var loading = false
     @State private var error: String?
@@ -59,6 +60,7 @@ struct CampaignsView: View {
                 if let error { FailureNote(message: error) }
             }
             Section {
+                if let showEventLog { Button("Event log", systemImage: "bell") { showEventLog() } }
                 NavigationLink {
                     DataVisualizerView(session: session, deviceName: deviceName).navigationTitle("All recordings").navigationBarTitleDisplayMode(.inline)
                 } label: { Label("All recordings", systemImage: "film.stack") }
@@ -74,6 +76,7 @@ struct CampaignsView: View {
                 Label("Campaigns", systemImage: "bolt.horizontal.circle").font(.headline)
                 if loading { ProgressView().controlSize(.small) }
                 Spacer()
+                if let showEventLog { Button("Event log", systemImage: "bell") { showEventLog() } }
                 Button { creating = true } label: { Label("Create campaign", systemImage: "plus") }
             }
             if let error { FailureNote(message: error) }

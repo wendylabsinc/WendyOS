@@ -34,7 +34,7 @@ struct WendyDesktopApp: App {
 enum DesktopDevicePage: String, CaseIterable {
     case apps, cameras, siteModel, activity, campaigns, chat, data, settings
 
-    var title: String { self == .siteModel ? "Site Model" : rawValue.capitalized }
+    var title: String { self == .siteModel ? "Digital Twin" : rawValue.capitalized }
     var shortcut: KeyEquivalent { KeyEquivalent(Character(String(Self.allCases.firstIndex(of: self)! + 1))) }
 
     static func adjacent(to current: String, forward: Bool) -> Self {

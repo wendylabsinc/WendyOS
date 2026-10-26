@@ -189,7 +189,7 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
         .overlay(alignment: .topLeading) {
             VStack(alignment: .leading, spacing: 10) {
                 HStack {
-                    Text(current?.site.name ?? "Site Model").font(.title3.bold())
+                    Text(current?.site.name ?? "Digital Twin").font(.title3.bold())
                     Spacer()
                     siteMenu
                 }
