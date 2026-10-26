@@ -105,6 +105,12 @@ func (s *Session) refreshCloudToken(ctx context.Context) error {
 	if time.Until(expiry) >= time.Minute {
 		return nil
 	}
+	return s.rotateCloudToken(ctx)
+}
+
+// rotateCloudToken exchanges the refresh token now, whatever the access token's
+// remaining lifetime. The issuer rotates the refresh token on every exchange.
+func (s *Session) rotateCloudToken(ctx context.Context) error {
 	refreshed, err := s.exchange(ctx, url.Values{"grant_type": {"refresh_token"}, "refresh_token": {s.tokens.Refresh}, "resource": {s.settings().CloudResource}})
 	if err != nil {
 		return err
@@ -121,6 +127,18 @@ func (s *Session) refreshCloudToken(ctx context.Context) error {
 	return s.saveLocked()
 }
 func (s *Session) Restore(ctx context.Context) (*Profile, error) {
+	return s.restore(ctx, false)
+}
+
+// RestoreRotated restores like Restore but always exchanges the refresh token
+// once first. If that exchange fails, the restore fails; the saved access token
+// is never used instead. A stolen refresh token that was already used makes the
+// issuer revoke the family, so this restore fails and the theft surfaces.
+func (s *Session) RestoreRotated(ctx context.Context) (*Profile, error) {
+	return s.restore(ctx, true)
+}
+
+func (s *Session) restore(ctx context.Context, rotate bool) (*Profile, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.Store == nil {
@@ -189,7 +207,11 @@ func (s *Session) Restore(ctx context.Context) (*Profile, error) {
 	// Validate into a temporary session; a failed restore cannot replace an
 	// authenticated in-memory identity. Store is shared to retain token rotation.
 	restored := &Session{Settings: s.Settings, Client: s.Client, Store: s.Store, RequireHostedMCPPolicy: s.RequireHostedMCPPolicy, meta: meta, key: key, privatePEM: saved.PrivateKey, certificate: saved.Certificate, tokens: saved.Tokens, profile: saved.Profile}
-	if err = restored.refreshCloudToken(ctx); err != nil {
+	refresh := restored.refreshCloudToken
+	if rotate {
+		refresh = restored.rotateCloudToken
+	}
+	if err = refresh(ctx); err != nil {
 		return nil, fmt.Errorf("Could not restore sign-in: %w", err)
 	}
 	claims, err := restored.verifyAccess(ctx, restored.tokens.Access, s.settings().CloudResource)

@@ -26,11 +26,19 @@ enrollment and recover deletion evidence without a local CLI journal.
 | `organization_id` | `optional string` | Exact tenant UUID; required with `device_id` when `id` is empty. |
 | `device_id` | `optional string` | Exact PKI device UUID; required with `organization_id` when `id` is empty. |
 
-An authorized active binding returns `Asset`. An authorized retained deletion
-returns `NOT_FOUND` with one typed `DeletedAsset` detail. Plain `NOT_FOUND`, wrong
-status, duplicate details, malformed UUID/timestamp or a changed binding are
-**not deletion proof**. These typed details are response data, not a separately
-signed Cloud tombstone artifact.
+An authorized active binding returns `Asset`. Removed assets return plain
+`NOT_FOUND`; this is not deletion evidence and does not authorize local reset.
+
+### v2 `DeleteAsset`
+
+The optional string `expected_device_id` is a compare-and-delete guard: it must
+match the exact enrolled device binding when supplied. Cloud authorizes
+`device:delete`, revokes the device's certificates, removes the active asset and
+records the deletion audit. A failed revocation does not delete the active asset.
+
+For a local reset, also supply `reset_certificate_sha256` for the installed
+certificate. Cloud returns a short-lived `reset_authorization` signed for that
+exact request and operator. Its embedded `DeletedAsset` records the deletion:
 
 | `DeletedAsset` field | Type | Meaning |
 |---|---|---|
@@ -39,36 +47,28 @@ signed Cloud tombstone artifact.
 | `device_id` | `string` | Device UUID bound to this asset. |
 | `deleted_at` | `google.protobuf.Timestamp` | Recorded deletion time. |
 
-### v2 `DeleteAsset`
+An authorized exact-asset retry can obtain fresh reset authorization from the
+original audit record. It preserves the deletion identity and time, checks
+current permissions, and refuses if the same device identity has been enrolled
+again. Verify the Cloud signature and exact request bindings before trusting the
+embedded deletion. A successful delete response alone does not prove that the
+device erased its local credentials.
 
-The optional string `expected_device_id` is a compare-and-delete guard: it must
-match the exact enrolled device binding when supplied. The Cloud-owned device
-unenrollment consumer supplies it rather than deleting an unchecked asset UUID.
-Cloud authorizes `device:delete`, revokes the exact device principal through PKI,
-then retains a tombstone and deletion audit. A failed revocation does not delete
-the active asset. Replayed deletion preserves the original actor/time/evidence.
-This operation alone is not proof that the device erased its local credentials.
+### Device reset
 
-### Agent guarded-reset capability and completion receipt
+Deleting a Cloud asset revokes its Cloud access; it does not erase credentials
+from an offline device. Use [`wendy device unenroll`](/docs/advanced/clients/wendy-cli/commands/device/unenroll)
+to coordinate Cloud removal and a local reset. The
+[unenrollment guide](/docs/device/unenrollment) explains recovery and supported devices.
 
-`ProvisionedResponse.cloud_unenrollment_supported` is `true` on Agents that
-implement Cloud-owned guarded reset and protected recovery; absent/`false` on
-older Agents means the CLI must not attempt guarded erasure. It does not promise
-that the system clock is correct. Before new authorization, the Agent checks
-operator-certificate validity and revocation-evidence freshness against the system
-clock, without a separate time-server query or clock-floor write.
-
-After durable local credential erasure, the Agent's `IsProvisioned` response
-contains `NotProvisionedResponse.unenrollment_completion`: public device-signed
-evidence for the **prior** principal's operation. It is absent if no guarded
-completion exists. This is an Agent field, not a Cloud `GetAsset` response.
-
-The receipt is not proof of current device identity or reachability. Consumers
-must anchor the historical certificate to configured roots, verify the exact
-principal/fingerprint/asset/tombstone and issuer-signed revocation evidence, and
-never treat plaintext transport or mDNS as identity proof. Embedded roots alone
-are not authority. A completion receipt does not replace current authorized
-Cloud lookup when reconciling retained deletion evidence.
+For API integrations, the agent advertises `cloud_authenticated_reset_supported`
+when it supports Cloud-authorized reset. The older
+`cloud_unenrollment_supported` flag is not sufficient. After erasure, the agent
+may return `NotProvisionedResponse.unenrollment_completion`, a signed receipt for
+the prior enrollment. It is historical completion evidence, not the identity of
+the device currently answering. See the repository's
+[reset protocol reference](https://github.com/wendylabsinc/WendyOS/blob/main/go/docs/v2-device-unenrollment.md)
+for validation requirements.
 
 ### v2 reported hardware facts
 

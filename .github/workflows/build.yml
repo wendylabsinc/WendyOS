@@ -125,10 +125,6 @@ jobs:
           go-version-file: go.mod
           cache-dependency-path: go.sum
 
-      - name: Build embedded MCP app
-        if: matrix.cmd == 'wendy'
-        uses: ./.github/actions/build-mcp-app
-
       - name: Build
         working-directory: go
         env:
@@ -206,9 +202,6 @@ jobs:
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
-
-      - name: Build embedded MCP app
-        uses: ./.github/actions/build-mcp-app
 
       - name: Install musl toolchain
         run: sudo apt-get update && sudo apt-get install -y musl-tools
@@ -312,9 +305,6 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
-
-      - name: Build embedded MCP app
-        uses: ./.github/actions/build-mcp-app
 
       - name: Install libusb
         run: |
@@ -498,6 +488,51 @@ jobs:
             security delete-keychain "$KEYCHAIN_PATH" || true
           fi
 
+  # The browser client (wendy-web) as one release asset, for pages that embed
+  # it. MANIFEST holds sha256sum lines for each file plus "wendy.wasm", the
+  # decompressed module, which is what the worker's ?sha256= pin checks.
+  package-web:
+    name: Package wendy-web
+    runs-on: ubuntu-latest
+    needs: [determine-version]
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set up Go and Node
+        uses: ./.github/actions/setup-go-ci
+        with:
+          cache-name: wasm
+
+      - name: Build browser WASM assets
+        run: npm --prefix web-client run build:wasm
+
+      - name: Package wendy-web
+        env:
+          VERSION: ${{ needs.determine-version.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir wendy-web
+          cp web-client/public/{wendy.wasm.gz,wasm_exec.js,wendy-worker.js,wendy-credentials.js} wendy-web/
+          cd wendy-web
+          {
+            # Rebuilding the pin needs the same toolchain; sha256sum -c skips this line.
+            echo "# built with $(go version)"
+            sha256sum wendy.wasm.gz wasm_exec.js wendy-worker.js wendy-credentials.js
+            echo "$(gunzip -c wendy.wasm.gz | sha256sum | cut -d' ' -f1)  wendy.wasm"
+          } > MANIFEST
+          cat MANIFEST
+          tar -czf "../wendy-web-${VERSION}.tar.gz" *
+
+      - name: Upload wendy-web
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: wendy-web-${{ needs.determine-version.outputs.version }}
+          path: wendy-web-${{ needs.determine-version.outputs.version }}.tar.gz
+          retention-days: 14
+          if-no-files-found: error
+
   sbom-source:
     name: SBOM (source + swift)
     runs-on: ubuntu-latest
@@ -612,7 +647,8 @@ jobs:
 
   package-linux:
     name: Package Linux (${{ matrix.arch }})
-    runs-on: ubuntu-latest
+    # Pinned for WDY-4031: Ubuntu 26's rpmbuild writes RPM v4.0 leads that Artifact Registry rejects.
+    runs-on: ubuntu-24.04
     needs: [determine-version, build, build-cli-linux]
     if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.publish == true)
     strategy:
@@ -750,8 +786,10 @@ jobs:
           # RPM doesn't allow hyphens in version, replace with underscores
           RPM_VERSION=$(echo "$VERSION" | tr '-' '_')
 
+          # Artifact Registry requires RPM v4; RPM 6 defaults to v6 packages.
           # Build wendy .rpm
           fpm -s dir -t rpm \
+            --rpm-rpmbuild-define "_rpmformat 4" \
             -n wendy \
             -v "$RPM_VERSION" \
             --architecture ${{ matrix.rpm-arch }} \
@@ -769,6 +807,7 @@ jobs:
 
           # Build wendy-agent .rpm
           fpm -s dir -t rpm \
+            --rpm-rpmbuild-define "_rpmformat 4" \
             -n wendy-agent \
             -v "$RPM_VERSION" \
             --architecture ${{ matrix.rpm-arch }} \
@@ -804,6 +843,16 @@ jobs:
           WENDY_AGENT_DEB=$(ls -1 wendy-agent_*_${{ matrix.arch }}.deb | head -1)
           WENDY_RPM=$(ls -1 wendy-[0-9]*.rpm | head -1)
           WENDY_AGENT_RPM=$(ls -1 wendy-agent-*.rpm | head -1)
+
+          # rpm can read v6 packages that Artifact Registry rejects. RPM v4
+          # uses a 3.0 lead; check it explicitly before publishing artifacts.
+          for package in "$WENDY_RPM" "$WENDY_AGENT_RPM"; do
+            lead=$(od -An -tx1 -N6 "$package" | tr -d ' \n')
+            if [[ "$lead" != "edabeedb0300" ]]; then
+              echo "::error file=$package::Expected an RPM v4 package with a 3.0 lead, got $lead"
+              exit 1
+            fi
+          done
 
           dpkg-deb -I "$WENDY_DEB" | grep -E "Depends:.*usbutils"
           dpkg-deb -I "$WENDY_DEB" | grep -E "Depends:.*ca-certificates"
@@ -1133,7 +1182,7 @@ jobs:
   release:
     name: Release
     runs-on: ubuntu-latest
-    needs: [determine-version, build, build-go-macos, build-agent-macos-app, sbom-source, sbom-binaries, package-linux, package-windows, test-templates, integration-tests]
+    needs: [determine-version, build, build-go-macos, build-agent-macos-app, sbom-source, sbom-binaries, package-linux, package-windows, package-web, test-templates, integration-tests]
     if: |
       always() &&
       needs.determine-version.result == 'success' &&
@@ -1144,6 +1193,7 @@ jobs:
       needs.sbom-binaries.result == 'success' &&
       needs.package-linux.result == 'success' &&
       needs.package-windows.result == 'success' &&
+      needs.package-web.result == 'success' &&
       needs.test-templates.result == 'success' &&
       (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.publish == true)) &&
       (needs.integration-tests.result == 'success' || needs.integration-tests.result == 'skipped')

@@ -2,6 +2,7 @@ package commands
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -14,10 +15,15 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/models"
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 type sensorPairScanMsg struct {
-	devices          []models.DiscoveredDevice
+	devices []models.DiscoveredDevice
+	// localNetwork means devices came from this computer's network because the
+	// device's agent cannot scan its own.
+	localNetwork     bool
 	pairings         []*agentpbv2.SensorPairing
 	discoveryErr     error
 	pairingsErr      error
@@ -32,13 +38,15 @@ type sensorPairOpMsg struct {
 }
 
 type sensorPairHandler struct {
-	ctx       context.Context
-	client    agentpbv2.WendySensorPairingServiceClient
-	discover  func(context.Context) ([]models.DiscoveredDevice, error)
-	orgIDs    func() (map[int32]bool, error)
-	tenantIDs func() (map[string]bool, error)
-	name      string
-	sensors   []string
+	ctx    context.Context
+	client agentpbv2.WendySensorPairingServiceClient
+	// discoverLocal scans this computer's network. It runs only when the
+	// device's agent predates DiscoverSensorSources.
+	discoverLocal func(context.Context) ([]models.DiscoveredDevice, error)
+	orgIDs        func() (map[int32]bool, error)
+	tenantIDs     func() (map[string]bool, error)
+	name          string
+	sensors       []string
 }
 
 func (h *sensorPairHandler) scan() tea.Cmd {
@@ -53,12 +61,50 @@ func (h *sensorPairHandler) scan() tea.Cmd {
 			msg.pairings = resp.GetPairings()
 			msg.principalPairing = resp.GetSupportsPrincipalPairing()
 		}
-		msg.devices, msg.discoveryErr = h.discover(ctx)
+		msg.devices, msg.localNetwork, msg.discoveryErr = h.discoverSources(ctx)
 		if msg.discoveryErr == nil {
 			msg.discoveryErr = ctx.Err()
 		}
 		return msg
 	}
+}
+
+// discoverSources asks the device which sensor sources it sees on its own
+// network, since that is where its agent looks for the source after pairing.
+// Only an agent that predates DiscoverSensorSources (UNIMPLEMENTED) falls back
+// to this computer's network, and localNetwork reports that. Any other failure
+// is returned rather than replaced by a local scan, whose sources the device
+// may be unable to reach.
+func (h *sensorPairHandler) discoverSources(ctx context.Context) (devices []models.DiscoveredDevice, localNetwork bool, err error) {
+	resp, err := h.client.DiscoverSensorSources(ctx, &agentpbv2.DiscoverSensorSourcesRequest{})
+	if status.Code(err) == codes.Unimplemented {
+		if h.discoverLocal == nil {
+			return nil, false, errors.New("this device's Wendy Agent cannot scan its network for sensor sources; update it")
+		}
+		devices, err = h.discoverLocal(ctx)
+		return devices, true, err
+	}
+	if err != nil {
+		return nil, false, sensorDiscoveryError(ctx, err)
+	}
+	return sensorSourcesFromDevice(resp.GetSources()), false, nil
+}
+
+// sensorDiscoveryError maps a DiscoverSensorSources call that failed under ctx
+// to text for the SensorLink tab, which prefixes it with "Discovery failed: ".
+func sensorDiscoveryError(ctx context.Context, err error) error {
+	switch status.Code(err) {
+	case codes.Unavailable, codes.PermissionDenied:
+		return cleanRPCError(err)
+	case codes.DeadlineExceeded:
+		if ctx.Err() != nil {
+			// The tab's own deadline, which ListSensorPairings spends from
+			// too, ran out: the call may never have reached the device.
+			return errors.New("the device did not answer in time")
+		}
+		return errors.New("the device did not finish scanning its network in time")
+	}
+	return fmt.Errorf("the device could not scan its network: %s", userFacingGRPCError(err))
 }
 
 func (h *sensorPairHandler) pair(source models.DiscoveredDevice) tea.Cmd {
@@ -88,8 +134,10 @@ func (h *sensorPairHandler) pair(source models.DiscoveredDevice) tea.Cmd {
 		}
 		ctx, cancel := context.WithTimeout(h.ctx, 30*time.Second)
 		defer cancel()
-		// The consumer resolves the stable asset ID on its own network. The
-		// CLI's discovered IP may be unreachable from that device.
+		// Send no address, even one the device itself discovered: the consumer
+		// resolves the source by identity on its own network and re-resolves
+		// on every reconnect, while a pinned address would be reused even
+		// after the source moves.
 		resp, err := h.client.AddSensorPairing(ctx, &agentpbv2.AddSensorPairingRequest{
 			SourceAssetId: source.AssetID, SourcePrincipalUri: msg.principal, Name: pairingName(h.name, &source),
 			SensorAllowlist: h.sensors, Transport: transportForDevice(source),
@@ -182,8 +230,11 @@ type sensorPairModel struct {
 	busy             bool
 	pairingsKnown    bool
 	principalPairing bool
-	message          string
-	width, height    int
+	// localNetwork: devices came from this computer's network, not the
+	// device's, because the device's agent cannot scan its own.
+	localNetwork  bool
+	message       string
+	width, height int
 }
 
 func newSensorPairModel(h *sensorPairHandler) sensorPairModel {
@@ -252,6 +303,7 @@ func (m sensorPairModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var errors []string
 		if msg.discoveryErr == nil {
 			m.devices = msg.devices
+			m.localNetwork = msg.localNetwork
 		} else {
 			errors = append(errors, "Discovery failed: "+msg.discoveryErr.Error())
 		}
@@ -360,8 +412,14 @@ func (m sensorPairModel) View() string {
 	sort.Strings(unenrolled)
 	sort.Strings(enrolledUnsupported)
 	body := title + "\n\n"
+	where := "the device's network"
+	if m.localNetwork {
+		where = "this computer's network"
+		body += "This device's Wendy Agent cannot scan its own network, so this list shows sources on this computer's network.\n" +
+			"The device pairs only with sources it can reach. Update its agent to list those instead.\n\n"
+	}
 	if len(m.rows) == 0 && len(unenrolled) == 0 && len(enrolledUnsupported) == 0 && !m.scanning {
-		body += "No SensorLink devices found. Press r to rescan.\n"
+		body += "No SensorLink devices found on " + where + ". Press r to rescan.\n"
 	} else if len(m.rows) > 0 || m.scanning {
 		body += m.table.View() + "\n"
 	}

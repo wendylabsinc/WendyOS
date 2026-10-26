@@ -12,10 +12,16 @@ import "C"
 
 import (
 	"fmt"
+	"net"
+	"sync"
 	"unsafe"
 )
 
 type Connection struct {
+	// Keep the native handle alive throughout L2CAP I/O. Close aborts the
+	// bounded native calls, then waits for them to return before releasing it.
+	ioMu   sync.RWMutex
+	sendMu sync.Mutex
 	handle C.WendyBLEConn
 }
 
@@ -141,6 +147,15 @@ func (c *Connection) L2CAPSend(data []byte) error {
 	if len(data) == 0 {
 		return nil
 	}
+	// The native writer pumps its run loop under backpressure. Serializing
+	// here prevents a second request from running inside the first one.
+	c.sendMu.Lock()
+	defer c.sendMu.Unlock()
+	c.ioMu.RLock()
+	defer c.ioMu.RUnlock()
+	if c.handle == nil {
+		return net.ErrClosed
+	}
 	cData := (*C.uint8_t)(unsafe.Pointer(&data[0]))
 	err := C.wendy_ble_l2cap_send(c.handle, cData, C.int(len(data)))
 	if err != C.WENDY_BLE_OK {
@@ -151,6 +166,11 @@ func (c *Connection) L2CAPSend(data []byte) error {
 
 // L2CAPRecv receives data from the L2CAP channel.
 func (c *Connection) L2CAPRecv(timeoutSeconds int) ([]byte, error) {
+	c.ioMu.RLock()
+	defer c.ioMu.RUnlock()
+	if c.handle == nil {
+		return nil, net.ErrClosed
+	}
 	result := C.wendy_ble_l2cap_recv(c.handle, C.int(timeoutSeconds))
 	if result.error == C.WENDY_BLE_ERR_TIMEOUT {
 		// Distinguishable so a caller with no deadline of its own can retry.
@@ -187,7 +207,19 @@ func (c *Connection) ListServices() string {
 }
 
 // Close disconnects and frees all BLE resources.
+//
+// It aborts the L2CAP channel before taking ioMu, so a send stalled under
+// backpressure fails at its next poll instead of holding Close for the whole
+// native write timeout; Linux shuts its socket down first for the same reason.
+// Only Close writes handle, so reading it here unlocked is safe as long as
+// Close is not called concurrently with itself (l2capNetConn.Close guarantees
+// that).
 func (c *Connection) Close() {
+	if c.handle != nil {
+		C.wendy_ble_l2cap_abort(c.handle)
+	}
+	c.ioMu.Lock()
+	defer c.ioMu.Unlock()
 	if c.handle != nil {
 		C.wendy_ble_disconnect(c.handle)
 		c.handle = nil

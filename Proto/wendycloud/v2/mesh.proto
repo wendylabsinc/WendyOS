@@ -3,7 +3,7 @@ syntax = "proto3";
 package wendycloud.v2;
 
 // MeshRosterService serves the minimal name directory the WendyOS mesh needs
-// to resolve <devicename>.<org-slug>.cloud.wendy.dev to a cloud asset id. It is
+// to resolve <devicename>.<org-slug>.cloud.wendy.dev to a device UUID. It is
 // deliberately narrower than AssetService: only {name, asset_id} pairs plus the
 // caller's own org slug, scoped by the caller's asset-certificate identity.
 //
@@ -18,6 +18,15 @@ message GetMeshRosterRequest {}
 
 message MeshRosterEntry {
   string name = 1;      // device asset name, server-normalized to a DNS label
+  // The device UUID: the canonical lowercase UUID in the device segment of the
+  // certificate principal spiffe://wendy.sh/tenant/<tenant>/device/<uuid>.
+  // Globally unique, minted by the CLI at enrollment (collision guard
+  // regenerates); a device has one id (sem rulings 2026-10-19 12:05, 12:30).
+  // A deleted device reserves nothing. A deliberate re-enroll is a new device
+  // with a new UUID; post-expiry recovery keeps it.
+  // Cloud's asset id is this UUID once the cloud re-key (WDY-3919) is
+  // deployed; until then peers match the roster entry against the principal
+  // only after that rollout.
   string asset_id = 2;
 }
 

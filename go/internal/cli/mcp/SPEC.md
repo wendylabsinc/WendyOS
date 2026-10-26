@@ -46,7 +46,7 @@ backends; development tests must not flash hardware or install host dependencies
 
 ## Skills over MCP
 
-The CLI server and ChatGPT gateway advertise `io.modelcontextprotocol/skills`
+The CLI server and the hosted relay advertise `io.modelcontextprotocol/skills`
 under `capabilities.extensions`. Clients call `skills/list`, then `skills/get`
 with a catalog URI, and `resources/read` for the instructions and supporting
 files. The catalog is static and fits on one terminal page. Unknown cursors and
@@ -57,7 +57,7 @@ as one `wendy` skill, with a workflow index and the original skill directories
 under `references/skills/`. Preserve frontmatter, relative links, and source
 files; compute SHA-256 digests over the exact returned bytes. Engineering and
 unrelated embedded skills are excluded. Serve offline without a device, UI, or
-local skill installation. Gateway requests retain their existing authentication.
+local skill installation.
 
 `scripts/sync-agent-skills.py` generates the same bundle for the ChatGPT plugin
 and the embedded server files. Plugin onboarding points to the bundled

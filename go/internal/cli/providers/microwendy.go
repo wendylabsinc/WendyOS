@@ -159,6 +159,12 @@ func (p *MicroWendyProvider) mdnsExternalDevice(svc discovery.MDNSService) model
 	if displayName == "" {
 		displayName = svc.Hostname
 	}
+	// The PKI pin target is the device id in the principal an enrolled board
+	// advertises, never id=, which older firmware sets to its hardware id.
+	var enrolledDeviceID string
+	if identity, err := certs.ParseDevicePrincipal(discovery.LANDeviceFromWendyLiteService(svc).PrincipalURI); err == nil {
+		enrolledDeviceID = identity.EntityID
+	}
 	return models.ExternalDevice{
 		ID:          fmt.Sprintf("wendy-lite:%s", svc.Hostname),
 		DisplayName: displayName,
@@ -174,6 +180,8 @@ func (p *MicroWendyProvider) mdnsExternalDevice(svc discovery.MDNSService) model
 			"tenantId": svc.TXTRecords["tenant"],
 			"orgId":    svc.TXTRecords["orgid"],
 			"assetId":  svc.TXTRecords["assetid"],
+			// Set only from a principal inside the advertised tenant.
+			"enrolledDeviceId": enrolledDeviceID,
 		},
 		IsWendyDevice: true,
 	}
@@ -217,6 +225,10 @@ func (p *MicroWendyProvider) serialExternalDevice(dev discovery.SerialDevice) mo
 			"deviceId":   dev.ID,
 			"name":       dev.Name,
 			"serialPort": dev.Port,
+			// deviceId stays the hardware id over USB even once enrolled; the
+			// enrolled UUID is what lets this row meet the board's LAN and BLE
+			// rows (see ExternalDevice.LiteDedupID).
+			"enrolledDeviceId": dev.EnrolledDeviceID,
 		},
 		IsWendyDevice: true,
 	}
@@ -227,6 +239,12 @@ func (p *MicroWendyProvider) serialExternalDevice(dev discovery.SerialDevice) mo
 // no problem: ConnectViaBLE reads the info service itself and falls back to
 // liteclient.DefaultL2CAPPSM.
 func (p *MicroWendyProvider) bleExternalDevice(dev discovery.BLELiteDevice) models.ExternalDevice {
+	// Like LAN's principal=, the advertised principal only picks the pin; the
+	// TLS leaf must still match it. Without one, connectClient asks Cloud.
+	var tenant, enrolledDeviceID string
+	if identity, err := certs.ParseDevicePrincipal(dev.Info.Principal); err == nil {
+		tenant, enrolledDeviceID = identity.TenantUUID, identity.EntityID
+	}
 	return models.ExternalDevice{
 		ID:          fmt.Sprintf("wendy-lite:%s", dev.Address),
 		DisplayName: bleLiteDisplayName(dev),
@@ -238,6 +256,9 @@ func (p *MicroWendyProvider) bleExternalDevice(dev discovery.BLELiteDevice) mode
 			"address":  dev.Address,
 			"psm":      strconv.FormatUint(uint64(dev.Info.PSM), 10),
 			"mtls":     fmt.Sprintf("%t", dev.Info.MTLSEnabled),
+			"tenantId": tenant,
+			// The device UUID from the advertised principal.
+			"enrolledDeviceId": enrolledDeviceID,
 		},
 		IsWendyDevice: true,
 	}
@@ -934,6 +955,11 @@ var CloudRelayDialer func(ctx context.Context, device models.ExternalDevice, ren
 // The commands package owns credential persistence and installs this hook.
 var LiteIdentityResolver func(ctx context.Context, auth *config.AuthConfig) (config.CertificateInfo, string, error)
 
+// LiteBoardIdentityResolver maps the hardware id a Lite board advertises to the
+// tenant and device UUID of its single enrollment in the signed-in Wendy Cloud
+// organization. The commands package installs it.
+var LiteBoardIdentityResolver func(ctx context.Context, hardwareID string) (tenant, deviceID string, err error)
+
 // LiteDeviceCAChainResolver returns the session tenant's Lite Device CA chain
 // loader, so LAN and BLE verify Lite-issued boards like the Cloud relay does.
 // The commands package installs it; nil leaves only the session's trust.
@@ -968,6 +994,9 @@ func (p *MicroWendyProvider) connectClient(ctx context.Context, device models.Ex
 			if err != nil {
 				return nil, err
 			}
+			if legacy == nil && device.ConnectionInfo["enrolledDeviceId"] == "" {
+				return nil, fmt.Errorf("this board does not advertise its enrolled identity (mDNS principal=); update its firmware, or connect over USB or Wendy Cloud")
+			}
 			if legacy != nil {
 				if err := connectWithLegacyCLIIdentities(ctx, legacy.orgID, func(cert tls.Certificate, chain string, _ liteclient.LiteDeviceCAChain) error {
 					return client.ConnectWithLegacyAuthenticationContext(ctx, addr, cert, chain, legacy.orgID, legacy.assetID)
@@ -990,7 +1019,7 @@ func (p *MicroWendyProvider) connectClient(ctx context.Context, device models.Ex
 						return fmt.Errorf("client identity does not match advertised PKI tenant; sign in to the board's organization with wendy auth login --email <email>")
 					}
 				}
-				return client.ConnectWithPKIAuthenticationContext(ctx, addr, cert, chain, device.ConnectionInfo["deviceId"], lite)
+				return client.ConnectWithPKIAuthenticationContext(ctx, addr, cert, chain, device.ConnectionInfo["enrolledDeviceId"], lite)
 			}); err != nil {
 				return nil, err
 			}
@@ -1009,8 +1038,21 @@ func (p *MicroWendyProvider) connectClient(ctx context.Context, device models.Ex
 		psm64, _ := strconv.ParseUint(device.ConnectionInfo["psm"], 10, 16)
 		psm := uint16(psm64)
 		if device.ConnectionInfo["mtls"] == "true" {
-			if err := connectWithCLIIdentities(ctx, device.ConnectionInfo["tenantId"], func(cert tls.Certificate, chain string, lite liteclient.LiteDeviceCAChain) error {
-				return client.ConnectViaBLEWithPKIAuthenticationContext(ctx, address, psm, cert, chain, device.ConnectionInfo["deviceId"], lite)
+			// Firmware without the principal characteristic advertises only its
+			// hardware id, so Cloud maps it to the enrolled device UUID. Either way
+			// the pin is checked against the board's TLS leaf.
+			tenant, deviceID := device.ConnectionInfo["tenantId"], device.ConnectionInfo["enrolledDeviceId"]
+			if deviceID == "" {
+				if LiteBoardIdentityResolver == nil {
+					return nil, fmt.Errorf("wendy-lite provider: Wendy Cloud board lookup is not available")
+				}
+				var err error
+				if tenant, deviceID, err = LiteBoardIdentityResolver(ctx, device.ConnectionInfo["deviceId"]); err != nil {
+					return nil, err
+				}
+			}
+			if err := connectWithCLIIdentities(ctx, tenant, func(cert tls.Certificate, chain string, lite liteclient.LiteDeviceCAChain) error {
+				return client.ConnectViaBLEWithPKIAuthenticationContext(ctx, address, psm, cert, chain, deviceID, lite)
 			}); err != nil {
 				return nil, err
 			}

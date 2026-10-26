@@ -90,7 +90,9 @@ current default device or organization.
 | `enter` | Copy the selected device as JSON; when logged out in Cloud, start login |
 | `a` | Copy all devices in the active tab as JSON |
 | `u` | Update the selected device's agent |
-| `d` / `x` | Set or clear the default device in Nearby |
+| `d` | Make the selected device the default; press it again on the default to clear it |
+| `s` / `x` | Start or stop the selected VM in Simulator |
+| `c` / `r` | Create a VM, or remove the selected one and its disk (asks first), in Simulator |
 | `o` | Switch the active organization in Cloud |
 | `q` / `Ctrl+C` | Quit |
 

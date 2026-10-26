@@ -10,6 +10,7 @@ import (
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/clouddefaults"
 	"github.com/wendylabsinc/wendy/go/internal/cli/cloudrequest"
+	"github.com/wendylabsinc/wendy/go/internal/cli/cloudunenroll"
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/cloudrelay"
@@ -23,7 +24,15 @@ import (
 // in the caller. dial carries public Cloud/broker HTTP/2 over verified TLS.
 func (s *Session) ConnectDevice(ctx context.Context, asset string, dial func(context.Context, string) (net.Conn, error), httpClient *http.Client) (*grpcclient.AgentConnection, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	locked := true
+	defer func() {
+		if locked {
+			s.mu.Unlock()
+		}
+	}()
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if !canonicalUUID(asset) {
 		return nil, fmt.Errorf("Invalid cloud device ID")
 	}
@@ -34,19 +43,24 @@ func (s *Session) ConnectDevice(ctx context.Context, asset string, dial func(con
 		return nil, err
 	}
 	cert, access, key := s.certificate, s.tokens.Access, s.key
-	auth := &config.AuthConfig{CloudGRPC: s.settings().CloudGRPC, OAuthIssuer: s.meta.Issuer, DPoPPrivateKey: s.privatePEM, Certificates: []config.CertificateInfo{cert}}
-	opts := []grpc.DialOption{clouddefaults.TunnelDialer(func(c context.Context) (net.Conn, error) { return dial(c, s.settings().CloudGRPC) }), grpc.WithTransportCredentials(insecure.NewCredentials())}
+	settings, tenant, privatePEM := s.settings(), s.profile.Tenant, s.privatePEM
+	auth := &config.AuthConfig{CloudGRPC: settings.CloudGRPC, OAuthIssuer: s.meta.Issuer, DPoPPrivateKey: privatePEM, Certificates: []config.CertificateInfo{cert}}
+	// Token refresh and the identity snapshot are serialized. Device tunnels
+	// are independent: a slow peer must not block every topology observation.
+	locked = false
+	s.mu.Unlock()
+	opts := []grpc.DialOption{clouddefaults.TunnelDialer(func(c context.Context) (net.Conn, error) { return dial(c, settings.CloudGRPC) }), grpc.WithTransportCredentials(insecure.NewCredentials())}
 	opts = append(opts, cloudrequest.DPoPDialOptions(auth, func(context.Context) (string, crypto.Signer, error) { return access, key, nil })...)
-	cloud, err := grpc.NewClient("passthrough:///"+s.settings().CloudGRPC, opts...)
+	cloud, err := grpc.NewClient("passthrough:///"+settings.CloudGRPC, opts...)
 	if err != nil {
 		return nil, err
 	}
-	signer, err := cloudrelay.PrincipalSigner(cert.PemCertificate, []byte(s.privatePEM))
+	signer, err := cloudrelay.PrincipalSigner(cert.PemCertificate, []byte(privatePEM))
 	if err != nil {
 		cloud.Close()
 		return nil, err
 	}
-	verifier := &cloudrelay.Verifier{Issuer: s.settings().RelayIssuer, HTTP: httpClient, RelayDial: func(endpoint string) (*grpc.ClientConn, error) {
+	verifier := &cloudrelay.Verifier{Issuer: settings.RelayIssuer, HTTP: httpClient, RelayDial: func(endpoint string) (*grpc.ClientConn, error) {
 		target, err := cloudrelay.BrowserBrokerTarget(endpoint)
 		if err != nil {
 			return nil, err
@@ -58,7 +72,7 @@ func (s *Session) ConnectDevice(ctx context.Context, asset string, dial func(con
 		cloud.Close()
 		return nil, fmt.Errorf("Looking up device certificate identity: %w", err)
 	}
-	expected, err := cloudDeviceIdentity(record, asset, s.profile.Tenant)
+	expected, err := cloudDeviceIdentity(record, asset, tenant)
 	if err != nil {
 		cloud.Close()
 		return nil, err
@@ -81,7 +95,7 @@ func cloudDeviceIdentity(asset *cloudpbv2.Asset, id, tenant string) (*certs.Wend
 	if asset.GetId() != id || asset.GetOrganizationId() != tenant {
 		return nil, fmt.Errorf("Cloud returned a device belonging to a different asset or tenant")
 	}
-	name := asset.GetPkiDeviceName()
+	name := cloudunenroll.DeviceID(asset)
 	if name == "" {
 		return nil, fmt.Errorf("Cloud has no certificate identity recorded for this device")
 	}

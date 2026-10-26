@@ -12,14 +12,6 @@ import (
 
 // Keep the SDK's sessions, worker pool, notifications, and cancellation. Only
 // extension requests are consumed here, before the SDK's method dispatcher.
-func listenWithSkills(ctx context.Context, srv *server.MCPServer, in io.Reader, out io.Writer) error {
-	catalog, err := embeddedSkillCatalog()
-	if err != nil {
-		return err
-	}
-	return listenWithSkillCatalog(ctx, srv, in, out, catalog)
-}
-
 func listenWithSkillCatalog(ctx context.Context, srv *server.MCPServer, in io.Reader, out io.Writer, catalog *skillCatalog) error {
 	writer := &skillStdioWriter{out: out}
 	reader := &skillStdioReader{ctx: ctx, in: bufio.NewReader(in), out: writer, catalog: catalog}

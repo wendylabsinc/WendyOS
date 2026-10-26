@@ -46,7 +46,9 @@ const (
 	v4l2PixFmtUYVY          = 0x59565955 // 'UYVY'
 	v4l2PixFmtY16           = 0x20363159 // 'Y16 ' -- note the trailing space
 	v4l2PixFmtGrey          = 0x59455247 // 'GREY'
+	v4l2PixFmtZ16           = 0x2036315A // 'Z16 ' -- depth; named only so a refusal can say so (see rawPixelFormats)
 	v4l2FieldNone           = 1
+	v4l2BufFlagError        = 0x00000040 // V4L2_BUF_FLAG_ERROR: the driver delivered this buffer damaged
 
 	v4l2CapVideoCapture = 0x00000001
 	v4l2CapMetaCapture  = 0x00800000
@@ -524,7 +526,7 @@ type deviceHub struct {
 	// before then waits, one that joins after a refusal is turned away up front.
 	// Protected by h.mu.
 	rawState  rawTapState
-	rawReason string
+	rawReason func() string // memoised; see rawNotOffered
 	rawFormat *agentpb.RawFormat
 }
 
@@ -835,14 +837,18 @@ func (h *deviceHub) rawOffered(format *agentpb.RawFormat) {
 // subscriber's own StreamVideo call still removes it. A raw subscriber left
 // waiting on a stream that will never deliver is exactly the silent failure
 // this whole feature exists to avoid.
-func (h *deviceHub) rawNotOffered(reason string) {
+//
+// The reason is a function: the refusals for a depth node probe the device to
+// say what it is, and that probe should run only if a raw subscriber ever
+// asks. It is evaluated here only when one is already waiting.
+func (h *deviceHub) rawNotOffered(reason func() string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.rawState = rawUnavailable
-	h.rawReason = reason
+	h.rawReason = memoiseReason(reason)
 	for _, sub := range h.subs {
 		if sub.raw && !sub.closed {
-			sub.err = errRawUnavailable(reason)
+			sub.err = errRawUnavailable(h.rawReason())
 			sub.closed = true
 			close(sub.ch)
 		}
@@ -853,9 +859,10 @@ func (h *deviceHub) rawNotOffered(reason string) {
 // is offered or still undecided.
 func (h *deviceHub) rawRefusal() error {
 	h.mu.Lock()
-	defer h.mu.Unlock()
-	if h.rawState == rawUnavailable {
-		return errRawUnavailable(h.rawReason)
+	state, reason := h.rawState, h.rawReason
+	h.mu.Unlock()
+	if state == rawUnavailable {
+		return errRawUnavailable(reason())
 	}
 	return nil
 }
@@ -942,6 +949,10 @@ type VideoService struct {
 	links       *ipcam.LinkManager
 	loopback    cameraLoopback
 	ros2Cameras *ros2camera.Manager
+	// sensorFrames carries SensorLink camera frames to the hub in-process, so
+	// the hub never opens an MCU-band node (see sensorlink_camera_feed.go). Nil
+	// in tests and builds without sensor pairing, which read the node as before.
+	sensorFrames *SensorFrameFeed
 
 	// twoPlaneState holds the two-plane camera data path's nodes and pumps.
 	twoPlaneState
@@ -1055,12 +1066,7 @@ func NewVideoService(ctx context.Context, logger *zap.Logger, pool *rtps.Pool, r
 
 	// Load persisted network cameras. A failure here must not stop the video
 	// service: local cameras still work without it.
-	if err := svc.registry.Load(); err != nil {
-		logger.Warn("loading network camera registry failed", zap.Error(err))
-	}
-	if err := svc.credentials.Load(); err != nil {
-		logger.Warn("loading network camera credentials failed", zap.Error(err))
-	}
+	svc.loadNetworkCameras()
 	svc.controls = newCameraControlStore(cameraControlsPath)
 	svc.applyLocalControls = applyCameraControlsV4L2
 	svc.controlDefaultsFor = cameraControlDefaults
@@ -1128,6 +1134,13 @@ func NewVideoService(ctx context.Context, logger *zap.Logger, pool *rtps.Pool, r
 	}
 	svc.ros2Cameras = ros2camera.NewManager(svcCtx, logger, svc.loopback, ros2CameraRegistryPath, graphs, pool)
 	return svc
+}
+
+// LoadCameraDHCPAllowlist enables camera DHCP only on explicitly configured
+// interfaces. A missing allowlist leaves serving disabled while camera
+// discovery and probing continue normally. It is reread every link scan.
+func (s *VideoService) LoadCameraDHCPAllowlist(path string) error {
+	return s.links.LoadDHCPAllowlist(path)
 }
 
 // discoveryInterval is how often the agent re-probes for network cameras. It is
@@ -1389,6 +1402,28 @@ func (s *VideoService) resolveSource(devID uint32) (videoSource, error) {
 	}
 	path := fmt.Sprintf("/dev/video%d", devID)
 	return videoSource{kind: sourceV4L2, key: path, path: path}, nil
+}
+
+// loadNetworkCameras cleans old passive DHCP observations before discovery and
+// loopback creation. If either file cannot be read, keep all records: absence of
+// credentials has not been established safely.
+func (s *VideoService) loadNetworkCameras() {
+	registryErr := s.registry.Load()
+	if registryErr != nil {
+		s.logger.Warn("loading network camera registry failed", zap.Error(registryErr))
+	}
+	credentialsErr := s.credentials.Load()
+	if credentialsErr != nil {
+		s.logger.Warn("loading network camera credentials failed", zap.Error(credentialsErr))
+	}
+	if registryErr == nil && credentialsErr == nil {
+		before := len(s.registry.List())
+		if err := s.registry.PruneUnconfirmedDHCP(s.credentials.Has); err != nil {
+			s.logger.Warn("cleaning legacy DHCP camera observations failed", zap.Error(err))
+		} else if removed := before - len(s.registry.List()); removed > 0 {
+			s.logger.Info("removed unconfirmed DHCP camera observations", zap.Int("count", removed))
+		}
+	}
 }
 
 // SetCameraCredentials stores the login for a network camera. The secret is
@@ -1996,28 +2031,16 @@ func (s *VideoService) runProducer(ctx context.Context, h *deviceHub, path strin
 	if strings.HasPrefix(path, ipHubKeyPrefix) {
 		// The camera sends H.264 and the producer depayloads it without ever
 		// holding a decoded frame, so there is nothing raw to offer.
-		h.rawNotOffered("network cameras deliver encoded video only")
+		h.rawNotOffered(fixedReason("network cameras deliver encoded video only"))
 		err = s.runIPProducer(ctx, broadcast, path, req)
-	} else {
-		transport, _ := s.classifyTransport(filepath.Base(path))
-		libcameraID := s.lookupLibcameraID(ctx, transport)
-
-		// Re-assert any persisted exposure/gain before the pipeline opens the
-		// node, so a stream reconnect does not revert to the firmware default.
-		s.applyStoredCameraControls(path)
-
-		// CSI/ribbon sensors emit raw Bayer/RGB, not encoded H.264 — skip the native
-		// V4L2 H.264 path entirely and capture via GStreamer (libcamerasrc, or
-		// nvarguscamerasrc on Jetson).
-		if transport == camera.TransportCSI {
-			s.logger.Info("CSI camera detected, using GStreamer", zap.String("device", path))
-			// The ISP pipeline (libcamerasrc / Argus) produces processed video for
-			// the encoder; the sensor's own frames never reach the agent as bytes.
-			h.rawNotOffered("CSI cameras are captured through the ISP pipeline; raw frames are not offered")
-			err = s.streamGStreamer(ctx, broadcast, path, req, transport, libcameraID, pipeWireSource{}, noRawSink{})
-		} else {
-			err = s.captureLocalCamera(ctx, broadcast, path, req, transport, libcameraID, h)
+	} else if s.sensorFrames != nil && isSensorLinkCameraPath(path) {
+		err = s.streamSensorLinkCamera(ctx, broadcast, path, req, h)
+		if errors.Is(err, errSensorFeedNotJPEG) {
+			s.logger.Info("SensorLink camera sends H.264, reading its node", zap.String("device", path))
+			err = s.captureNode(ctx, broadcast, path, req, h)
 		}
+	} else {
+		err = s.captureNode(ctx, broadcast, path, req, h)
 	}
 	if err != nil && ctx.Err() == nil {
 		s.logger.Error("video producer exited with error", zap.String("device", path), zap.Error(err))
@@ -2052,6 +2075,28 @@ func (s *VideoService) runProducer(ctx context.Context, h *deviceHub, path strin
 	close(h.done)
 }
 
+// captureNode captures a camera by opening its /dev/video node.
+func (s *VideoService) captureNode(ctx context.Context, broadcast func([]byte, frameTimestamp, agentpb.VideoCodec) bool, path string, req *agentpb.StreamVideoRequest, h *deviceHub) error {
+	transport, _ := s.classifyTransport(filepath.Base(path))
+	libcameraID := s.lookupLibcameraID(ctx, transport)
+
+	// Re-assert any persisted exposure/gain before the pipeline opens the
+	// node, so a stream reconnect does not revert to the firmware default.
+	s.applyStoredCameraControls(path)
+
+	// CSI/ribbon sensors emit raw Bayer/RGB, not encoded H.264 — skip the native
+	// V4L2 H.264 path entirely and capture via GStreamer (libcamerasrc, or
+	// nvarguscamerasrc on Jetson).
+	if transport == camera.TransportCSI {
+		s.logger.Info("CSI camera detected, using GStreamer", zap.String("device", path))
+		// The ISP pipeline (libcamerasrc / Argus) produces processed video for
+		// the encoder; the sensor's own frames never reach the agent as bytes.
+		h.rawNotOffered(fixedReason("CSI cameras are captured through the ISP pipeline; raw frames are not offered"))
+		return s.streamGStreamer(ctx, broadcast, path, req, transport, libcameraID, pipeWireSource{}, noRawSink{})
+	}
+	return s.captureLocalCamera(ctx, broadcast, path, req, transport, libcameraID, h)
+}
+
 // captureLocalCamera reads a USB/unknown camera, preferring the cheapest source: raw V4L2
 // keeps MJPEG capture and the best-mode probe, so the graph is only worth its
 // raw-plus-re-encode cost once the device refuses a second streaming consumer.
@@ -2072,7 +2117,7 @@ func (s *VideoService) captureLocalCamera(ctx context.Context, broadcast func([]
 	send := func(data []byte, stamp frameTimestamp, codec agentpb.VideoCodec) bool {
 		ok := broadcast(data, stamp, codec)
 		if ok && nativePhase && !delivered {
-			sink.rawNotOffered("camera streams H.264 natively; raw frames are not offered")
+			sink.rawNotOffered(fixedReason("camera streams H.264 natively; raw frames are not offered"))
 		}
 		delivered = delivered || ok
 		return ok
@@ -2550,7 +2595,103 @@ func (s *VideoService) errCaptureSetup(ioctl, path string, errno unix.Errno) err
 // Each captured frame is delivered via the broadcast callback; if the callback returns
 // false the loop exits cleanly (no subscribers remain).
 // Returns nativeH264NotSupported if the device rejects the H.264 pixel format.
+// v4l2CaptureConfig parameterises captureV4L2Native. The mmap loop is
+// format-agnostic; everything a pixel format implies — how a default size is
+// probed, whether the device's encoder is tuned, how "this device cannot
+// produce that" is reported — arrives through here.
+type v4l2CaptureConfig struct {
+	pixelFormat   uint32
+	width, height uint32
+	// exactSize refuses a capture whose driver adjusted width x height in
+	// VIDIOC_S_FMT: a caller that interprets frames by the size it asked for
+	// (Z16 depth, read against that mode's factory intrinsics) has no use for
+	// any other.
+	exactSize bool
+	// tuneKeyframes caps the device encoder's keyframe interval — compressed
+	// formats only; a raw format has no encoder to tune.
+	tuneKeyframes bool
+	framerate     uint32
+	// setFrameInterval asks the driver for framerate via VIDIOC_S_PARM.
+	// Best-effort, raw formats only: H.264 keeps its historical behaviour
+	// (interval untouched), but a RealSense depth node left at its default
+	// interval runs Z16 at ~90 fps and triples the USB bandwidth asked of it.
+	setFrameInterval bool
+	// formatUnsupported wraps the three "device cannot produce this format"
+	// exits (S_FMT EINVAL, a silently switched format, DQBUF dying before the
+	// first frame), so the H.264 caller keeps its typed software-encoder
+	// fallback signal and other formats get an honest refusal.
+	formatUnsupported func(msg string) error
+}
+
+// vidiocSParm is _IOWR('V', 22, struct v4l2_streamparm), 204 bytes.
+const vidiocSParm = 0xC0CC5616
+
+// v4l2StreamParm mirrors struct v4l2_streamparm for the capture union:
+// timeperframe (numerator/denominator) is what sets the frame interval.
+type v4l2StreamParm struct {
+	Type           uint32
+	Capability     uint32
+	CaptureMode    uint32
+	TpfNumerator   uint32
+	TpfDenominator uint32
+	_              [184]byte
+}
+
+// setV4L2FrameInterval asks for fps frames per second. Best-effort: many UVC
+// functions refuse VIDIOC_S_PARM and keep their default, which is only a
+// bandwidth cost, never a correctness one.
+func (s *VideoService) setV4L2FrameInterval(fd int, path string, fps uint32) {
+	parm := v4l2StreamParm{Type: v4l2BufTypeVideoCapture, TpfNumerator: 1, TpfDenominator: fps}
+	if _, _, errno := unix.Syscall(unix.SYS_IOCTL, uintptr(fd), vidiocSParm, uintptr(unsafe.Pointer(&parm))); errno != 0 {
+		s.logger.Warn("VIDIOC_S_PARM refused; capture keeps the driver default interval",
+			zap.String("device", path), zap.Uint32("fps", fps), zap.Error(errno))
+	}
+}
+
 func (s *VideoService) streamV4L2Native(ctx context.Context, broadcast func([]byte, frameTimestamp, agentpb.VideoCodec) bool, path string, req *agentpb.StreamVideoRequest) error {
+	return s.captureV4L2Native(ctx, func(data []byte, stamp frameTimestamp) bool {
+		return broadcast(data, stamp, agentpb.VideoCodec_VIDEO_CODEC_H264)
+	}, path, v4l2CaptureConfig{
+		pixelFormat:   v4l2PixFmtH264,
+		width:         req.GetWidth(),
+		height:        req.GetHeight(),
+		tuneKeyframes: true,
+		framerate:     req.GetFramerate(),
+		formatUnsupported: func(msg string) error {
+			return nativeH264NotSupported{msg: msg}
+		},
+	})
+}
+
+// captureDepthZ16 pumps raw Z16 frames from a depth node — measurements, not
+// pictures, so they never meet the encoder or GStreamer. The caller owns what
+// a Z16 frame means (units, pairing, alignment); this is only the transport.
+// Its caller arrives with the calibrated-frame service
+// (specs/2026-10-12-realsense-native-rgbd-design.md §5).
+func (s *VideoService) captureDepthZ16(ctx context.Context, emit func([]byte, frameTimestamp) bool, path string, width, height, framerate uint32) error {
+	return s.captureV4L2Native(ctx, emit, path, v4l2CaptureConfig{
+		pixelFormat:      v4l2PixFmtZ16,
+		width:            width,
+		height:           height,
+		exactSize:        true,
+		framerate:        framerate,
+		setFrameInterval: true,
+		formatUnsupported: func(msg string) error {
+			return status.Errorf(codes.FailedPrecondition, "not a Z16 depth source: %s", msg)
+		},
+	})
+}
+
+// fourccName renders a V4L2 pixel format for error messages ('Z16 ', 'H264').
+func fourccName(pixfmt uint32) string {
+	return string([]byte{byte(pixfmt), byte(pixfmt >> 8), byte(pixfmt >> 16), byte(pixfmt >> 24)})
+}
+
+// captureV4L2Native owns one V4L2 capture from open to close: S_FMT, two mmap
+// buffers, STREAMON and the dequeue loop, emitting each frame until emit
+// returns false or the context ends. Extracted from the H.264-only
+// streamV4L2Native; behaviour there is unchanged.
+func (s *VideoService) captureV4L2Native(ctx context.Context, emit func([]byte, frameTimestamp) bool, path string, cfg v4l2CaptureConfig) error {
 	fd, err := unix.Open(path, unix.O_RDWR|unix.O_CLOEXEC|unix.O_NOFOLLOW, 0)
 	if err != nil {
 		s.logger.Error("failed to open video device", zap.String("device", path), zap.Error(err))
@@ -2561,16 +2702,16 @@ func (s *VideoService) streamV4L2Native(ctx context.Context, broadcast func([]by
 	}
 	defer unix.Close(fd) //nolint:errcheck
 
-	// Configure H.264 output format.
+	// Configure the capture format.
 	var vfmt v4l2Format
 	vfmt.Type = v4l2BufTypeVideoCapture
-	vfmt.Width = req.GetWidth()
-	vfmt.Height = req.GetHeight()
+	vfmt.Width = cfg.width
+	vfmt.Height = cfg.height
 	// "No preference" must not become "smallest mode the driver has" — see
 	// bestDefaultFrameSize. Only fills in what the caller left unset, so an
 	// explicit request is still honoured verbatim.
 	if vfmt.Width == 0 || vfmt.Height == 0 {
-		if w, h := bestDefaultFrameSize(fd, v4l2PixFmtH264); w > 0 && h > 0 {
+		if w, h := bestDefaultFrameSize(fd, cfg.pixelFormat); w > 0 && h > 0 {
 			if vfmt.Width == 0 {
 				vfmt.Width = w
 			}
@@ -2582,7 +2723,7 @@ func (s *VideoService) streamV4L2Native(ctx context.Context, broadcast func([]by
 				zap.Uint32("height", vfmt.Height))
 		}
 	}
-	vfmt.PixelFormat = v4l2PixFmtH264
+	vfmt.PixelFormat = cfg.pixelFormat
 	vfmt.Field = v4l2FieldNone
 
 	sfmt := func() unix.Errno {
@@ -2591,7 +2732,7 @@ func (s *VideoService) streamV4L2Native(ctx context.Context, broadcast func([]by
 	}
 	if errno := retryWhileBusy(ctx, sfmt); errno != 0 {
 		if errno == unix.EINVAL {
-			return nativeH264NotSupported{msg: fmt.Sprintf("VIDIOC_S_FMT H264 rejected: %v", errno)}
+			return cfg.formatUnsupported(fmt.Sprintf("VIDIOC_S_FMT %s rejected: %v", fourccName(cfg.pixelFormat), errno))
 		}
 		s.logger.Error("VIDIOC_S_FMT failed", zap.String("device", path), zap.Error(errno))
 		// Refuses only once the holder has allocated buffers; later sites cover the rest.
@@ -2600,13 +2741,22 @@ func (s *VideoService) streamV4L2Native(ctx context.Context, broadcast func([]by
 		}
 		return status.Errorf(codes.Internal, "failed to configure video device")
 	}
-	if vfmt.PixelFormat != v4l2PixFmtH264 {
-		return nativeH264NotSupported{msg: "device switched pixel format away from H264"}
+	if vfmt.PixelFormat != cfg.pixelFormat {
+		return cfg.formatUnsupported("device switched pixel format away from " + fourccName(cfg.pixelFormat))
+	}
+	if cfg.exactSize && (vfmt.Width != cfg.width || vfmt.Height != cfg.height) {
+		return cfg.formatUnsupported(fmt.Sprintf("device adjusted %s %dx%d to %dx%d",
+			fourccName(cfg.pixelFormat), cfg.width, cfg.height, vfmt.Width, vfmt.Height))
 	}
 
 	// Best-effort: cap the camera encoder's keyframe interval. Non-fatal — many
 	// UVC cameras reject this and keep their firmware default.
-	s.setV4L2KeyframeInterval(fd, keyframeIntervalFrames(req.GetFramerate()))
+	if cfg.tuneKeyframes {
+		s.setV4L2KeyframeInterval(fd, keyframeIntervalFrames(cfg.framerate))
+	}
+	if cfg.setFrameInterval && cfg.framerate > 0 {
+		s.setV4L2FrameInterval(fd, path, cfg.framerate)
+	}
 
 	// Two buffers: one dequeued/in-flight, one queued for the camera to fill.
 	// More buffers increase kernel-side lag when the broadcast lags the camera.
@@ -2700,10 +2850,11 @@ func (s *VideoService) streamV4L2Native(ctx context.Context, broadcast func([]by
 			if isBusyErrno(errno) {
 				return errCameraInUse(path)
 			}
-			// Device accepted H264 format but failed before delivering any frame —
-			// signal the caller to fall back to the GStreamer software encoder.
+			// Device accepted the format but failed before delivering any frame —
+			// for H.264 this signals the caller to fall back to the GStreamer
+			// software encoder.
 			if framesSent == 0 {
-				return nativeH264NotSupported{msg: fmt.Sprintf("VIDIOC_DQBUF failed before first frame: %v", errno)}
+				return cfg.formatUnsupported(fmt.Sprintf("VIDIOC_DQBUF failed before first frame: %v", errno))
 			}
 			return s.errCaptureSetup("VIDIOC_DQBUF", path, errno)
 		}
@@ -2739,7 +2890,7 @@ func (s *VideoService) streamV4L2Native(ctx context.Context, broadcast func([]by
 			} else {
 				stamp.nativeClock = "V4L2_TIMESTAMP_UNKNOWN"
 			}
-			if !broadcast(data, stamp, agentpb.VideoCodec_VIDEO_CODEC_H264) {
+			if !emit(data, stamp) {
 				return nil
 			}
 			framesSent++
@@ -3006,7 +3157,7 @@ func (s *VideoService) runCameraPipeline(ctx context.Context, broadcast func([]b
 			zap.String("format", describeRawFormat(plan.raw)))
 		go s.pumpRawTap(ctx, rawR, plan.raw, sink, path)
 	} else {
-		sink.rawNotOffered(plan.rawWhy)
+		sink.rawNotOffered(plan.rawRefusalReason())
 	}
 
 	defer func() {
@@ -3285,6 +3436,40 @@ type gstPipelinePlan struct {
 	raw *agentpb.RawFormat
 	// rawWhy says why raw is not offered — the reason a raw subscriber is refused with.
 	rawWhy string
+	// rawWhyLazy is rawWhy for the refusals that have to ask the device what it
+	// IS (an open and a VIDIOC_ENUM_FRAMESIZES for Z16, see rawWhyDepthNode).
+	// Deferred so the probe runs only when a raw subscriber is actually
+	// refused, not on every pipeline start for viewers that never ask.
+	rawWhyLazy func() string
+}
+
+// rawRefusalReason is the reason a raw subscriber is refused with, as a
+// function so a probing refusal is not computed until it is needed.
+func (p gstPipelinePlan) rawRefusalReason() func() string {
+	if p.rawWhyLazy != nil {
+		return p.rawWhyLazy
+	}
+	return fixedReason(p.rawWhy)
+}
+
+// rawReason evaluates rawRefusalReason. Tests read this; production hands the
+// function to the hub instead.
+func (p gstPipelinePlan) rawReason() string { return p.rawRefusalReason()() }
+
+// fixedReason wraps a reason already in hand for rawSink.rawNotOffered.
+func fixedReason(reason string) func() string { return func() string { return reason } }
+
+// memoiseReason evaluates a reason at most once, however many refusals it is
+// printed in, and safely from any goroutine.
+func memoiseReason(reason func() string) func() string {
+	var (
+		once sync.Once
+		v    string
+	)
+	return func() string {
+		once.Do(func() { v = reason() })
+		return v
+	}
 }
 
 // buildGStreamerArgs constructs the gst-launch-1.0 argument list for V4L2 encode.
@@ -3419,10 +3604,9 @@ func planGStreamerPipeline(gstPath, devicePath string, req *agentpb.StreamVideoR
 	case useMJPEG:
 		plan.rawWhy = fmt.Sprintf("camera is captured as MJPEG at %dx%d; raw frames are not offered", capW, capH)
 	case capW == 0 || capH == 0:
-		plan.rawWhy = "camera advertises no discrete frame size to capture raw frames at"
+		plan.rawWhyLazy = func() string { return rawWhyNoCaptureSize(devicePath) }
 	case rawFormatFor(devicePath, capW, capH) == nil:
-		plan.rawWhy = fmt.Sprintf("camera advertises none of %s at %dx%d; raw frames are not offered",
-			rawFormatNames(), capW, capH)
+		plan.rawWhyLazy = func() string { return rawWhyNoFormat(devicePath, capW, capH) }
 	case uint64(capH)*uint64(rawFormatFor(devicePath, capW, capH).bytesPerLine(capW)) > maxRawFrameBytes:
 		f := rawFormatFor(devicePath, capW, capH)
 		plan.rawWhy = fmt.Sprintf("a %dx%d %s frame exceeds the %d-byte raw frame limit",

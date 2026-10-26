@@ -274,6 +274,14 @@ func TestGracefulStopNeverSilentlyCutsPower(t *testing.T) {
 				if mode != "cancelled" && (err == nil || !strings.Contains(err.Error(), "--force")) {
 					t.Fatalf("want explicit-force guidance, got %v", err)
 				}
+				// The guest accepted the request and is powering off: say so,
+				// and how to tell when it is done, rather than "failed".
+				if mode == "timeout" && !strings.Contains(err.Error(), "still shutting down") {
+					t.Errorf("a guest that is still shutting down was described as %q", err)
+				}
+				if mode == "timeout" && !strings.Contains(err.Error(), "wendy vm list") {
+					t.Errorf("err = %q, want it to say how to see when the VM has stopped", err)
+				}
 				status, err := s.Status("dev")
 				if err != nil || !status.Running {
 					t.Fatalf("guest was killed: %+v, %v", status, err)

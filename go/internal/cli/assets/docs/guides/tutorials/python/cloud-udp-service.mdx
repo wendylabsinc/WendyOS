@@ -6,10 +6,17 @@ language: python
 
 This tutorial sends a UDP message from your development machine to a Python service on a remote WendyOS device. Wendy Cloud forwards the message and the reply through an authenticated tunnel.
 
+<Callout type="warn" title="Cloud version requirements">
+  On Cloud v2, UDP forwarding needs an updated Cloud service and CLI and Wendy
+  Agent [2026.10.22-211023](https://github.com/wendylabsinc/WendyOS/releases/tag/2026.10.22-211023)
+  or newer. Older v2 versions do not forward UDP. Legacy Cloud v1 sessions also
+  work. See the [Cloud guide](/docs/cloud) to choose a session.
+</Callout>
+
 ## Prerequisites
 
 - The [Wendy CLI](/docs/#1-install-the-wendy-cli) and Python 3 on your development machine.
-- A Linux WendyOS device [enrolled in Wendy Cloud](https://cloud.wendy.dev/login) and online.
+- A Linux WendyOS device enrolled in [Wendy Cloud](/docs/cloud) and online.
 - A signed-in account with access to that device.
 - CLI, cloud broker, and device agent versions that support UDP tunnels and cloud ping.
 - A working container build setup for `wendy run`, as described in [the quickstart](/docs/#1-install-the-wendy-cli).
@@ -21,11 +28,15 @@ The commands use `remote-device` as the enrolled device name. Replace it with yo
 Sign in and find the device:
 
 ```bash
-wendy auth login
+wendy cloud login
+wendy cloud status
 wendy --json cloud discover
 ```
 
-Send three echo requests to its agent:
+For a device on legacy Cloud v1, sign in with `wendy cloud login --legacy`
+instead. If another context is active, select the intended one shown by
+`status` with `wendy auth use <context-name>`, then repeat discovery. Send three
+echo requests to its agent:
 
 ```bash
 wendy cloud ping --device remote-device --count 3

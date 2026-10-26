@@ -1,0 +1,73 @@
+---
+title: The Wendy ecosystem
+description: Choose the Wendy tools for building apps, connecting sensors, operating devices, collecting data, and analyzing results.
+---
+
+Wendy provides tools to build and operate AI applications on robots and edge
+devices. Start with the part that matches your task. The products have separate
+setup requirements and release status; using one does not automatically
+configure the others.
+
+## Choose a starting point
+
+| Your task | Wendy component | Start here |
+| --- | --- | --- |
+| Build and deploy an application | CLI, templates, WendyOS, and Wendy Agent | [Run your first app](/docs/) |
+| Test without a physical board | WendyOS VMs and robot simulation profiles | [Simulator setup](/docs/installation/wendyos-virtual-machine) and [sim-to-real guidance](/docs/integrations/sim-to-real) |
+| Ask an AI assistant to develop or inspect an app | Wendy Chat, MCP, and coding-agent integrations | [Chat](/docs/guides/chat) and [coding-agent setup](/docs/guides/llm-integration) |
+| Reach devices outside your local network | Wendy Cloud | [Cloud v2 and Legacy workflows](/docs/cloud) |
+| Run an ESP32 application | Wendy Lite | [Native ESP-IDF setup](/docs/installation/wendy-lite-esp32) |
+| Use a small device's camera stream | SensorLink on supported Lite firmware | [Lite cameras](/docs/hardware/camera#wendy-lite-cameras) and [SensorLink overview](https://wendy.dev/blog/sensor-data-to-model-improvements) |
+| Record sensors, application events, and model results | Wendy Data | [Record an episode or deploy a campaign](/docs/data) |
+| Analyze operating data and build dashboards | Wendy BI | [BI capabilities and access](https://wendy.dev/products/wendy-bi) |
+| Inspect devices and receive alerts on an iPhone | Wendy Companion | [App Store](https://apps.apple.com/us/app/wendy-companion/id6761771159) and [device notifications](/docs/guides/device-notifications) |
+| Capture human pose demonstrations | TeleCollect | [Capture and export pose data](https://wendy.dev/blog/telecollect-pose-data-collection) |
+| Evaluate portable fire monitoring | WendyBox | [WendyBox](https://wendy.dev/products/wendy-box) |
+
+## Understand the boundaries
+
+For local development, the CLI talks to Wendy Agent on your device. Linux
+targets run containers; supported Mac targets run native applications. Wendy
+Lite uses a separate firmware workflow. You can deploy locally without Cloud
+enrollment. Initial tool, image, and model downloads can still require internet
+access.
+
+For remote operation, Cloud adds device identities, organizational access, and
+remote connections. Cloud v2 and v1 use separate enrollments, and v2 tunnels to
+application ports need updated Cloud, CLI, and Agent versions. Use the
+[migration guide](/docs/cloud-migration) before moving an existing fleet.
+
+Wendy Data records episodes on the device. Upload is a
+separate configuration, and BI needs its own access and data connection. Recording
+an episode or enrolling a device does not automatically create a BI dashboard,
+configure historical backtesting, or train a model.
+
+To alert an operator, your application can request a notification through the
+Agent. Cloud authorizes and stores it, and Companion provides the operator's
+inbox and push experience. App registration, grants, recipient access, and a
+compatible mobile build are required.
+
+## Build a workflow in stages
+
+Start with a locally running app and verify its output. Add Cloud access when
+you need to operate remotely. Use Data to record a meaningful event and inspect
+the resulting episode. Connect the data source required by your BI use case,
+then verify its query result. Configure notifications separately when someone
+needs to respond to an event.
+
+Each stage should produce a result you can check. For example, deploying a
+campaign arms it; the episode manifest confirms what actually recorded. Cloud
+accepting a notification does not guarantee a phone received the push.
+
+## Availability and security
+
+Use the [roadmap](/docs/advanced/roadmap) for release status and each setup guide
+for target-specific limits. Companion's App Store release and the reusable SDK
+have separate release tracks. A simulated robot does not establish that a
+policy is ready for physical hardware.
+
+WendyOS, the CLI, and Wendy Agent are open source. Check the relevant product's
+terms and deployment options for hosted services. Local operation, local model
+inference, Cloud storage, and hosted AI calls have different network and data
+requirements. See [Security](/docs/security) for implemented controls and work
+still in progress.

@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -951,5 +952,48 @@ func TestTestCameraCredentials_UnknownCameraNotFound(t *testing.T) {
 		&agentpb.TestCameraCredentialsRequest{DeviceId: ipcam.IDBandStart + 5})
 	if status.Code(err) != codes.NotFound {
 		t.Fatalf("code = %v, want NotFound", status.Code(err))
+	}
+}
+
+func TestLoadNetworkCamerasCleanup(t *testing.T) {
+	for _, credentialFile := range []string{"missing", "valid", "invalid", "unreadable"} {
+		t.Run(credentialFile, func(t *testing.T) {
+			dir := t.TempDir()
+			registryPath := filepath.Join(dir, "cameras.json")
+			credentialPath := filepath.Join(dir, "credentials.json")
+			reg := ipcam.NewRegistry(registryPath)
+			cam, err := reg.Upsert(ipcam.Camera{MAC: "aa:bb:cc:dd:ee:ff", Model: "iPhone", Link: "eth0"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			switch credentialFile {
+			case "valid":
+				creds := ipcam.NewCredentialStore(credentialPath)
+				if err := creds.Set(cam.MAC, ipcam.Credential{Username: "admin"}); err != nil {
+					t.Fatal(err)
+				}
+			case "invalid":
+				if err := os.WriteFile(credentialPath, []byte("invalid JSON"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			case "unreadable":
+				if err := os.Mkdir(credentialPath, 0o700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			s := &VideoService{logger: zap.NewNop(), registry: ipcam.NewRegistry(registryPath), credentials: ipcam.NewCredentialStore(credentialPath)}
+			s.loadNetworkCameras()
+			wantKept := credentialFile != "missing"
+			if _, ok := s.registry.Get(cam.ID); ok != wantKept {
+				t.Fatalf("kept = %v, want %v", ok, wantKept)
+			}
+			reloaded := ipcam.NewRegistry(registryPath)
+			if err := reloaded.Load(); err != nil {
+				t.Fatal(err)
+			}
+			if _, ok := reloaded.Get(cam.ID); ok != wantKept {
+				t.Fatalf("persisted kept = %v, want %v", ok, wantKept)
+			}
+		})
 	}
 }

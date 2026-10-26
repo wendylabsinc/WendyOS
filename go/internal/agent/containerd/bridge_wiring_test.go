@@ -281,3 +281,22 @@ func TestHasImplicitHostNetworkMode(t *testing.T) {
 		})
 	}
 }
+
+func TestInternetDefaultRouteEntitlement(t *testing.T) {
+	for _, tc := range []struct {
+		modes []string
+		want  bool
+	}{
+		{[]string{"bridge"}, true}, {[]string{"mesh"}, false},
+		{[]string{"bridge", "mesh"}, false}, {[]string{"host"}, false},
+		{[]string{"none"}, false}, {[]string{}, false},
+	} {
+		var ents []appconfig.Entitlement
+		for _, mode := range tc.modes {
+			ents = append(ents, appconfig.Entitlement{Type: appconfig.EntitlementNetwork, Mode: mode})
+		}
+		if got := needsInternetDefaultRoute(ents); got != tc.want {
+			t.Errorf("modes %v: Internet route=%v, want %v", tc.modes, got, tc.want)
+		}
+	}
+}

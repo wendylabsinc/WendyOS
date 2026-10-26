@@ -26,8 +26,8 @@ type CampaignNotificationSender interface {
 	Send(context.Context, string, DetectionNotification) error
 }
 
-// CampaignCloudSender uses the campaign name as its Cloud app identity. Cloud
-// must authorize that identity for this device before accepting a notification.
+// CampaignCloudSender labels notifications with campaign:<name>. Cloud derives
+// the destination organization from the enrolled device credential.
 // An explicit webhook continues to select direct HTTP delivery.
 type CampaignCloudSender struct {
 	Cloud NotificationSender

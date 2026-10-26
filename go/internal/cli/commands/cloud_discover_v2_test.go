@@ -156,6 +156,14 @@ func TestDevicePickerSelectsV2UUID(t *testing.T) {
 }
 
 func TestCloudDiscoveryV2DoesNotUseRetiredRelay(t *testing.T) {
+	for _, udp := range []bool{false, true} {
+		for _, port := range []uint32{1, 3007, 50052, 65535} {
+			t.Run(fmt.Sprintf("udp=%t/port=%d", udp, port), func(t *testing.T) { testCloudDiscoveryV2Port(t, udp, port) })
+		}
+	}
+}
+
+func testCloudDiscoveryV2Port(t *testing.T, udp bool, port uint32) {
 	// The v2 relay path dials the live wendycloud.tunnel.v2 authorization
 	// service (cloudrelay.OpenTCP → RequestTunnel); it must never dial the
 	// retired wendycloud.v2.TunnelBrokerService. That retired server stub is
@@ -194,7 +202,11 @@ func TestCloudDiscoveryV2DoesNotUseRetiredRelay(t *testing.T) {
 	// operator credential is ML-DSA now, so signing succeeds and the call
 	// reaches the dial — the point guarded here: whatever it dials, never the
 	// retired relay.
-	_, err = d.openTunnel(ctx, nil, auth, 50052)
+	if udp {
+		_, err = d.openDatagram(ctx, nil, auth, port)
+	} else {
+		_, err = d.openTunnel(ctx, nil, auth, port)
+	}
 	if err == nil {
 		t.Fatal("expected the tunnel dial to fail against the stub cloud endpoint")
 	}
@@ -288,7 +300,10 @@ func TestCloudDiscoverJSONV2(t *testing.T) {
 			if callErr != nil {
 				t.Fatal(callErr)
 			}
-			var infos []cloudDiscoverV2Info
+			var infos []struct {
+				cloudDiscoverV2Info
+				Selector string `json:"selector"`
+			}
 			if err := json.Unmarshal([]byte(out), &infos); err != nil {
 				t.Fatal(err)
 			}
@@ -303,6 +318,11 @@ func TestCloudDiscoverJSONV2(t *testing.T) {
 				}
 				if info.ID != wantID || info.Type != "macOS (arm64)" || info.Name != wantName {
 					t.Fatalf("unexpected info: %+v", info)
+				}
+				wantSelector := "cloud://" + auth.CloudGRPC + "/tenant/" + testOperatorTenant + "/asset/" + wantID
+				selector, matched, err := parseCloudDeviceSelector(info.Selector)
+				if info.Selector != wantSelector || err != nil || !matched || selector.String() != wantSelector {
+					t.Fatalf("discovery lost scoped UUID selector: %q, %v", info.Selector, err)
 				}
 			}
 		})
@@ -335,12 +355,20 @@ func TestCloudDiscoverJSONLegacy(t *testing.T) {
 	if callErr != nil {
 		t.Fatal(callErr)
 	}
-	var infos []discoverDeviceInfo
+	var infos []struct {
+		discoverDeviceInfo
+		Selector string `json:"selector"`
+	}
 	if err := json.Unmarshal([]byte(out), &infos); err != nil {
 		t.Fatal(err)
 	}
 	if len(infos) != 1 || infos[0].ID != 77 {
 		t.Fatalf("unexpected legacy results: %s", out)
+	}
+	wantSelector := "cloud://" + auth.CloudGRPC + "/org/7/asset/77"
+	selector, matched, err := parseCloudDeviceSelector(infos[0].Selector)
+	if infos[0].Selector != wantSelector || err != nil || !matched || selector.String() != wantSelector {
+		t.Fatalf("discovery lost scoped legacy selector: %q, %v", infos[0].Selector, err)
 	}
 }
 

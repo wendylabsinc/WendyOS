@@ -151,14 +151,6 @@ func skillFrontmatter(data []byte) (map[string]any, int, error) {
 	return fm, 4 + end + len("\n---\n"), nil
 }
 
-func registerSkills(srv *server.MCPServer) error {
-	catalog, err := embeddedSkillCatalog()
-	if err != nil {
-		return fmt.Errorf("loading MCP skills: %w", err)
-	}
-	return registerSkillCatalog(srv, catalog)
-}
-
 func registerSkillCatalog(srv *server.MCPServer, catalog *skillCatalog) error {
 	hooks := srv.GetHooks()
 	if hooks == nil {

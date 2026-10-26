@@ -23,6 +23,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/streamreason"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/status"
 )
 
 func newCameraCmd() *cobra.Command {
@@ -36,11 +37,16 @@ func newCameraCmd() *cobra.Command {
 		// "watch" is a hidden alias for "view": it just works for muscle memory
 		// but stays out of help to keep the listed commands focused.
 		newCameraWatchCmd(),
+		// "frames" is the measurement surface beside the picture one: colour
+		// plus depth aligned to it, with a declared-requirement refusal. See
+		// camera_frames.go.
+		newCameraFramesCmd(),
 		newCameraLoginCmd(),
 		newCameraForgetCmd(),
 		newCameraTestCmd(),
 		newCameraControlsCmd(),
 		newCameraSetControlCmd(),
+		newCameraDHCPCmd(),
 	)
 	return cmd
 }
@@ -613,7 +619,22 @@ func cameraStreamDiagnostic(err error) error {
 		return fmt.Errorf("camera %s has no stored credentials. Run `wendy device camera login %s`", id, id)
 	case streamreason.CameraInUse:
 		device := info.GetMetadata()["device"]
+		if hint := info.GetMetadata()["hint"]; hint != "" {
+			// The agent knows what is likely holding the node -- on a
+			// RealSense, a vendor-SDK app or its own depth capture -- and the
+			// generic wording would leave the operator guessing.
+			return fmt.Errorf("camera %s is held on this device and could not be shared. %s. Stop whichever is running, then retry", device, hint)
+		}
 		return fmt.Errorf("camera %s is held by another application on this device and could not be shared with it. Stop the app holding it, then retry", device)
+	case streamreason.RequirementUnmet:
+		// The agent already wrote the sentence naming each missing property and
+		// why. Repeating it here would only make it longer; what the operator
+		// gains is the flag to drop, spelled exactly as it is typed.
+		return fmt.Errorf("%s. Drop --require %s to stream without it, or use a camera that provides it (`wendy device camera frames --list`)",
+			status.Convert(err).Message(), info.GetMetadata()["missing"])
+	case streamreason.CalibratedSourceUnavailable, streamreason.FrameTooLarge:
+		// The agent's sentence already names the source, the cause and the fix.
+		return fmt.Errorf("%s", status.Convert(err).Message())
 	}
 	return err
 }

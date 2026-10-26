@@ -355,6 +355,35 @@ func TestPushBlobChunkedResumeRestartFromZero(t *testing.T) {
 	}
 }
 
+// TestImagePrefixMatchesLocalhostPulls ensures pushed images are registered
+// under the localhost name the CLI and agent create containers from, including
+// when local network access binds the registry to a loopback address.
+func TestImagePrefixMatchesLocalhostPulls(t *testing.T) {
+	for _, tc := range []struct {
+		listenAddr string
+		want       string
+	}{
+		{":5000", "localhost:5000/"},
+		{"0.0.0.0:5000", "localhost:5000/"},
+		{"[::]:5000", "localhost:5000/"},
+		{"127.0.0.1:5000", "localhost:5000/"},
+		{"[::1]:5001", "localhost:5001/"},
+		{"localhost:5000", "localhost:5000/"},
+		{"192.168.1.20:5000", "192.168.1.20:5000/"},
+	} {
+		got, err := imagePrefixFor(tc.listenAddr)
+		if err != nil {
+			t.Fatalf("imagePrefixFor(%q) error: %v", tc.listenAddr, err)
+		}
+		if got != tc.want {
+			t.Errorf("imagePrefixFor(%q) = %q, want %q", tc.listenAddr, got, tc.want)
+		}
+	}
+	if _, err := imagePrefixFor("5000"); err == nil {
+		t.Error("imagePrefixFor accepted an address without a port")
+	}
+}
+
 // TestPushBlobChunkedResumeGenuineMismatch ensures we still reject a real
 // mid-stream offset mismatch (a client resuming at the wrong non-zero offset)
 // with 416, since that indicates lost data we cannot recover.

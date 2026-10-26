@@ -7,6 +7,7 @@ on:
       - 'Proto/**'
       - '.github/actions/swift-e2e-run/**'
       - '.github/workflows/swift-e2e-tests.yml'
+      - '.github/scripts/restore-trusted-build-cache.sh'
   push:
     branches:
       - main
@@ -43,7 +44,7 @@ on:
         required: false
         default: ''
     secrets:
-      WENDY_E2E_SLACK_WEBHOOK_URL:
+      CI_SLACK_BOT_TOKEN:
         required: false
       CLAUDE_CODE_OAUTH_TOKEN:
         required: false
@@ -70,8 +71,33 @@ jobs:
       cancel-in-progress: false
       queue: max
     timeout-minutes: 120
+    env:
+      # Keep Go's build cache inside the workspace so it can be archived.
+      GOCACHE: ${{ github.workspace }}/swift/Build/Go/cache
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Capture Xcode version
+        id: xcode
+        shell: bash
+        run: echo "version=$(xcodebuild -version | awk '/Xcode/ { print $2 }')" >> "$GITHUB_OUTPUT"
+
+      # Reuse the WendyAgentMac DerivedData and Go build cache archived by the
+      # latest push or manual run on main; see the restore script's SECURITY
+      # note and swift-tests.yml for the trust model. Pull requests never archive.
+      - name: Restore E2E build cache from main
+        # Best effort: a missing or unusable archive means a cold build.
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUILD_CACHE_WORKFLOW_FILE: swift-e2e-tests.yml
+          BUILD_CACHE_TRUSTED_EVENTS: push workflow_dispatch
+        shell: bash
+        run: |
+          .github/scripts/restore-trusted-build-cache.sh \
+            e2e-macos-build-xcode-${{ steps.xcode.outputs.version }} \
+            swift/Build/Xcode swift/Build/Go
+
       - uses: ./.github/actions/swift-e2e-run
         with:
           tests: ${{ inputs.tests || '' }}
@@ -83,6 +109,26 @@ jobs:
           transport: local
           setup: true
           managed_agent: true
+
+      - name: Archive E2E build cache
+        id: archive_e2e
+        if: ${{ github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.workflow == 'Swift E2E Tests' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # GNU tar keeps the nanosecond mtimes incremental builds compare.
+          gtar --posix -cf - --exclude=swift/Build/Xcode/Logs swift/Build/Xcode swift/Build/Go \
+            | zstd -T0 -3 -q -o "$RUNNER_TEMP/e2e-macos-build-xcode-${{ steps.xcode.outputs.version }}.tar.zst"
+
+      - name: Upload E2E build cache
+        if: ${{ !cancelled() && steps.archive_e2e.outcome == 'success' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: e2e-macos-build-xcode-${{ steps.xcode.outputs.version }}
+          path: ${{ runner.temp }}/e2e-macos-build-xcode-${{ steps.xcode.outputs.version }}.tar.zst
+          compression-level: 0
+          retention-days: 2
+          if-no-files-found: error
 
   swift-e2e-local-ubuntu:
     name: 'Local: Ubuntu 24'
@@ -431,6 +477,10 @@ jobs:
     timeout-minutes: 60
     env:
       CLAUDE_CODE_VERSION: '2.1.199'
+      # Slack posts go through the Wendy CI Slack app to the channel (ID or
+      # #name) in FEED_E2E_SLACK_CHANNEL. Only this flag, never the bot token, is
+      # in the job environment.
+      SLACK_READY: ${{ secrets.CI_SLACK_BOT_TOKEN != '' && vars.FEED_E2E_SLACK_CHANNEL != '' }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -589,7 +639,7 @@ jobs:
       - name: Set up Node.js for review tools
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: '22'
+          node-version: '22.23.4'
 
       - name: Install Claude Code
         shell: bash
@@ -604,7 +654,7 @@ jobs:
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY || '' }}
-          SLACK_WEBHOOK_URL: ${{ secrets.WENDY_E2E_SLACK_WEBHOOK_URL || '' }}
+          SLACK_CHANNEL: ${{ vars.FEED_E2E_SLACK_CHANNEL || '' }}
         run: |
           set -euo pipefail
 
@@ -641,8 +691,9 @@ jobs:
           if [[ "${auth_mode}" == "subscription" ]]; then
             exit 0
           fi
-          if [[ -z "${SLACK_WEBHOOK_URL}" ]]; then
-            echo "WENDY_E2E_SLACK_WEBHOOK_URL is not configured; skipping Slack auth warning."
+          if [[ "${SLACK_READY}" != "true" ]]; then
+            # Plain echo: fork and Dependabot PRs never get the secret.
+            echo "CI_SLACK_BOT_TOKEN or FEED_E2E_SLACK_CHANNEL is not configured; skipping Slack auth warning."
             exit 0
           fi
 
@@ -651,11 +702,15 @@ jobs:
           if [[ "${auth_mode}" == "none" ]]; then
             fallback_note="No ANTHROPIC_API_KEY fallback configured either; the AI review was skipped."
           fi
+          # SECURITY: this job runs on GitHub-hosted ubuntu-24.04 (a fresh VM per job), and the payload holds only the channel and public run metadata.
+          slack_payload="${RUNNER_TEMP}/slack-auth-warning.json"
           jq -n \
+            --arg channel "${SLACK_CHANNEL}" \
             --arg reason "${failure_reason}" \
             --arg fallback "${fallback_note}" \
             --arg run_url "${run_url}" \
             '{
+              channel: $channel,
               attachments: [
                 {
                   color: "#f59e0b",
@@ -664,7 +719,7 @@ jobs:
                       type: "header",
                       text: {
                         type: "plain_text",
-                        text: "⚠️ Swift E2E AI review subscription auth",
+                        text: "⚠️ Wendy E2E · AI review subscription auth",
                         emoji: true
                       }
                     },
@@ -693,12 +748,23 @@ jobs:
                 }
               ]
             }' \
-            | curl --fail --silent --show-error \
-                -X POST \
-                -H 'Content-type: application/json' \
-                --data @- \
-                "${SLACK_WEBHOOK_URL}" \
-            || echo "::warning::Failed to post the Slack auth warning."
+            > "${slack_payload}"
+          echo "slack_payload=${slack_payload}" >> "$GITHUB_OUTPUT"
+
+      - name: Post AI review auth warning to Slack
+        if: steps.review-auth.outputs.slack_payload != ''
+        # A failed warning post must not fail the analysis.
+        continue-on-error: true
+        # SECURITY: the tag v4.0.0 resolves to exactly this commit (verified with the GitHub API on 2026-10-19).
+        uses: slackapi/slack-github-action@dcb1066f776dd043e64d0e8ba94ca15cc7e1875d # v4.0.0
+        with:
+          method: chat.postMessage
+          # SECURITY: deliberate - the shared Wendy CI token (chat:write, chat:write.public; it cannot read channels) replaces the webhook with the same reach as before: fork PRs get no secrets, and same-repo PR authors could already read any secret by editing this workflow.
+          token: ${{ secrets.CI_SLACK_BOT_TOKEN }}
+          errors: true
+          # One attempt, like the old webhook call, so a Slack outage cannot hold up the AI review.
+          retries: 0
+          payload-file-path: ${{ steps.review-auth.outputs.slack_payload }}
 
       - name: Verify AI review harness
         shell: bash
@@ -872,11 +938,12 @@ jobs:
               body,
             });
 
-      - name: Post Swift E2E Slack Review
+      - name: Build Swift E2E Slack Review
+        id: slack-review
         if: ${{ always() && ((github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event_name == 'workflow_dispatch') }}
         shell: bash
         env:
-          SLACK_WEBHOOK_URL: ${{ secrets.WENDY_E2E_SLACK_WEBHOOK_URL || '' }}
+          SLACK_CHANNEL: ${{ vars.FEED_E2E_SLACK_CHANNEL || '' }}
           REPORT_ARTIFACT_NAME: ${{ steps.e2e-run.outputs.run_artifact_id }}
           REPORT_ARTIFACT_URL: ${{ steps.upload_e2e_report.outputs['artifact-url'] }}
           DIFF_BASE_REF: ${{ inputs.diff_base_ref || '' }}
@@ -884,8 +951,8 @@ jobs:
           E2E_RESULT: ${{ contains(needs.*.result, 'failure') && 'failure' || contains(needs.*.result, 'cancelled') && 'cancelled' || 'success' }}
         run: |
           set -euo pipefail
-          if [[ -z "${SLACK_WEBHOOK_URL}" ]]; then
-            echo "WENDY_E2E_SLACK_WEBHOOK_URL is not configured; skipping Slack notification."
+          if [[ "${SLACK_READY}" != "true" ]]; then
+            echo "::warning::CI_SLACK_BOT_TOKEN or FEED_E2E_SLACK_CHANNEL is not configured; skipping Slack notification."
             exit 0
           fi
 
@@ -928,9 +995,12 @@ jobs:
               ;;
           esac
 
+          # SECURITY: this job runs on GitHub-hosted ubuntu-24.04 (a fresh VM per job), and the payload holds only the channel and public run metadata.
+          slack_payload="${RUNNER_TEMP}/slack-review.json"
           jq -n \
+            --arg channel "${SLACK_CHANNEL}" \
             --arg color "${status_color}" \
-            --arg title "${status_emoji} ${status_title}" \
+            --arg title "${status_emoji} Wendy E2E · ${status_title}" \
             --arg mode "${review_mode}" \
             --arg ref "${tested_ref}" \
             --arg sha "${short_sha}" \
@@ -942,6 +1012,7 @@ jobs:
             --arg artifact_url "${artifact_url}" \
             --arg artifact_name "${artifact_name}" \
             '{
+              channel: $channel,
               attachments: [
                 {
                   color: $color,
@@ -1020,9 +1091,14 @@ jobs:
                 }
               ]
             }' \
-            > slack-payload.json
-          curl --fail --silent --show-error \
-            -X POST \
-            -H 'Content-type: application/json' \
-            --data @slack-payload.json \
-            "${SLACK_WEBHOOK_URL}"
+            > "${slack_payload}"
+          echo "payload=${slack_payload}" >> "$GITHUB_OUTPUT"
+
+      - name: Post Swift E2E Slack Review
+        if: ${{ always() && steps.slack-review.outputs.payload != '' }}
+        uses: slackapi/slack-github-action@dcb1066f776dd043e64d0e8ba94ca15cc7e1875d # v4.0.0
+        with:
+          method: chat.postMessage
+          token: ${{ secrets.CI_SLACK_BOT_TOKEN }}
+          errors: true
+          payload-file-path: ${{ steps.slack-review.outputs.payload }}

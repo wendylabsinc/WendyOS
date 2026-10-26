@@ -1,94 +1,89 @@
-> **Tip:** [`wendy cloud login`](../cloud/login.md) is the recommended entry
-> point for authenticating with Wendy Cloud. This page documents
-> `wendy auth login`, which behaves identically and is kept for backward
-> compatibility but is no longer listed in the top-level help. The advanced
-> context commands (`use`, `rename`, `default`, `refresh-certs`) remain under
-> `wendy auth`.
+# `wendy auth login`
 
-Signing in to Wendy Cloud uses the production browser-based OIDC flow by default:
+Sign in to Wendy Cloud and save access to your organization. This command is
+equivalent to [`wendy cloud login`](../cloud/login.md), the recommended entry point.
 
-```bash
+```sh
 wendy cloud login
 ```
 
-The browser collects your email and organization. You can also provide your email address to discover your realm before opening the browser:
+Complete sign-in in your browser, select an organization if asked, and return to
+the terminal. Wendy saves the credentials needed for later commands. You can
+supply your email first with `--email you@example.com`.
 
-```bash
-wendy cloud login --email you@example.com
+## Auth contexts
+
+A **context** is a saved sign-in for one organization. The first is named
+`default`. Sign in again and choose another organization to add a second context;
+your current context stays selected.
+
+```sh
+wendy auth status
+wendy auth use
+wendy auth use <context>
 ```
 
-`--issuer` selects a realm directly. `--service-account` selects headless service-account login, and `--api-key` selects local authentication. Use `--legacy` to select the old dashboard flow at `cloud.wendy.sh`.
+`status` lists your sign-ins and marks the current one. `use` opens a picker;
+providing a name selects it directly. Use [`wendy auth rename`](./rename.md) to
+make a saved context easier to recognize.
 
-The CLI opens `https://auth.wendy.dev/authorize` and completes authorization code + PKCE through a loopback callback. With `--email`, it first asks `auth.wendy.dev` for the email's home realm and opens that realm's authorization page. When no organization is pinned for the email, the CLI says so and continues with the universal sign-in instead, passing the email as `login_hint`.
+Commands use the current context, or the only saved context if there is just one.
+With several contexts and none selected, interactive commands show a picker.
+Scripts must select a context first or pass `--cloud-grpc` to select its endpoint.
+If several contexts share an endpoint, the current matching context takes priority.
 
-It validates the signed ID token, nonce, access token, issuer, audience, and DPoP binding before requesting the `https://pki.wendy.sh/identity` audience. It creates a PKCS#10 CSR with the same key bound to the token and DPoP proof and sends it directly to `https://identity.pki.wendy.dev/v1/identity/certificate`. The certificate's tenant SPIFFE identity is authoritative for the saved context.
-
-The CLI then rotates the refresh-token family to the `https://cloud.wendy.dev/api` audience and stores the resulting mTLS certificate alongside the Cloud access token, rotating refresh token, and DPoP key using the platform credential store. The saved production session targets `api.wendy.dev:443`. Cloud is not involved in certificate issuance.
-
-The OAuth client is managed through the wendy-auth dashboard like any other interactive client; the auth service has no CLI-specific client configuration. Register a public, DPoP-bound client (the default client ID is `wendy-cli`) and allow the CLI's loopback redirect URIs. Use `--client-id` when the registered client has another ID.
-
-Use `--development` to select the development environment. Use `--auth`, `--cloud`, `--cloud-grpc`, and `--resource` to override individual service endpoints. `--pki-identity-endpoint` and `--pki-resource` override pki-core's exact public CSR endpoint and audience. `--issuer` accepts a complete realm issuer and skips email-based realm discovery.
-
-The stored operator certificate also signs privileged Cloud mutations. For each such RPC, the CLI creates a fresh JCS request descriptor, signs it with the CSR key, and sends the resulting ML-DSA-65 JWS in the request body, inside the `wendycloud.v2.SignedRequest` envelope beside the exact request bytes it signs; the private key never leaves the machine. The certificate also authorizes broker and direct-device operations.
-
-Every login ends with a `Session key:` line naming the key algorithm it minted and the login path, e.g. `Session key: ML-DSA-65 (OIDC login).` or `Session key: ECDSA P-256 (legacy login).` The legacy and `--api-key` paths mint classical ECDSA P-256 sessions, which cannot sign privileged Cloud mutations. `wendy auth status` shows the same per context as `Key:`.
-
-The legacy dashboard callback also prints a QR code. You can scan it with the **Wendy iOS app** to authenticate on your phone instead of the local browser.
+Wendy normally refreshes your session automatically. If a command asks you to
+sign in again, rerun `wendy cloud login`; you do not need to log out first.
 
 ## Service-account login
 
-Scripts and CI pipelines sign in as a wendy-auth **service account** instead of a person. There are no personal access tokens; a service account holds a private key.
+Use a service account for unattended Cloud API calls in scripts and CI.
+Ask your organization administrator to create one and provide a one-time
+enrollment secret and its sign-in URL.
 
-1. A tenant admin creates the service account in wendy-auth and mints a one-time enrollment secret for it.
-2. On the machine that will hold the key, register a new key with that secret:
+1. Register a key on the machine that will use it:
 
-   ```bash
+   ```sh
    wendy auth service-account enroll <one-time-secret> \
      --issuer https://auth.wendy.dev/realms/<realm> \
      --output wendy-service-account.json
    ```
 
-   The CLI generates an ML-DSA-65 key, proves possession of it to wendy-auth, and writes the key file with mode `0600`. The secret is consumed; the file is never overwritten.
-3. Sign in, with no browser or terminal needed:
+2. Sign in using the saved key:
 
-   ```bash
-   wendy auth login --service-account wendy-service-account.json
+   ```sh
+   wendy cloud login --service-account wendy-service-account.json
    ```
 
-   In CI, put the key file's contents in `WENDY_SERVICE_ACCOUNT_KEY` and run `wendy auth login`. An explicit `--email`, `--issuer`, `--api-key`, or `--legacy` takes precedence over the variable.
+The secret is used once. The key file is private: keep it out of source control
+and give it only to the intended CI job. You can instead store its contents in
+`WENDY_SERVICE_ACCOUNT_KEY` and run `wendy cloud login`. Explicit personal-login
+flags take precedence over that variable.
 
-The CLI signs a short-lived assertion with the key, exchanges it for an access token that is DPoP-bound to the key, and stores the session as a context like any other login. Every API call carries a fresh DPoP proof. There is no refresh token: when the token expires, the CLI mints a new one from the stored key. No operator certificate is issued for a service account. Service-account login also targets production by default; `--development` selects development, and `--cloud`, `--cloud-grpc`, and `--resource` override its Cloud endpoints as for browser login.
+Service accounts obtain new access tokens automatically while their key remains
+authorized. They do not receive the personal device certificate used by direct
+device and Lite relay connections. Disabling an account prevents new tokens;
+already issued tokens remain usable until expiry, normally up to one hour.
 
-Disabling or deleting the service account in wendy-auth stops new tokens immediately; a token already issued lasts until it expires (one hour by default).
+## Advanced: alternate environments
 
-## Auth contexts
+Production Wendy Cloud is the default. Your administrator may provide different
+settings for development or a self-hosted deployment.
 
-Every login is stored as a named **context**. The first login is always named
-`default` — you are never prompted — so single-org users never deal with names.
-Additional logins get a derived name (the realm, or `org-<id>`), renamable with
-[`wendy auth rename`](./rename.md). Each context owns its own operator
-certificate. Switch the active context with [`wendy auth use <context>`](./use.md);
-see all contexts (and which is current) with `wendy auth status`.
+| Flag | Purpose |
+| --- | --- |
+| `--development` | Use Wendy's development environment. |
+| `--issuer` | Use a particular organization sign-in URL. |
+| `--client-id` | Use an administrator-registered login client. |
+| `--auth` | Override the sign-in service address. |
+| `--cloud`, `--cloud-grpc` | Override the dashboard and Cloud API endpoints. |
+| `--resource` | Override the Cloud API authentication audience. |
+| `--pki-identity-endpoint`, `--pki-resource` | Override the certificate service URL and audience. |
+| `--api-key` | Use local authentication. |
+| `--legacy` | Use the older dashboard sign-in flow. |
 
-When your account belongs to more than one organization, the browser sign-in
-prompts you to pick one; the CLI stores whichever organization issued the login
-as the context (its tenant identity comes from the issued certificate, not from a flag). Sign
-in again and pick a different organization to add a second context — your current
-context is left unchanged.
+Current personal sign-ins support both device access and signed Cloud changes.
+Legacy and local-API-key sign-ins cannot authorize all current Cloud operations;
+sign in with the default browser flow if a command requires it.
 
-When more than one context is stored in `~/.wendy/config.json`, every cloud
-command resolves which one to use in the following order:
-
-1. **`--cloud-grpc` flag** — selects by endpoint; the current context wins when it lives on that endpoint.
-2. **Single stored context** — used automatically when only one exists.
-3. **Current context** — the context set with [`wendy auth use`](./use.md), when present and valid.
-4. **Interactive picker** — shown in an interactive terminal when no current context is set.
-5. **Error** — in non-interactive environments (pipes, CI, MCP) with no current context, the command exits with an error directing you to pass `--cloud-grpc` or run `wendy auth use`.
-
-A stale current context (its session was removed) is never silently replaced:
-the picker warns, `wendy auth default` self-clears, and non-interactive callers
-receive an error.
-
-Configs from an earlier CLI are migrated automatically on first use — existing
-sessions become named contexts (the previous default becomes the current
-context) with no re-login.
+See [certificate renewal](./refresh-certs.md) for connection troubleshooting.

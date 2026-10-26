@@ -18,7 +18,7 @@ from go2_sim.simulation import DEFAULT_ASSETS, Simulation
 def world():
     sim = Simulation(model=instrumented_model(DEFAULT_ASSETS))
     sampler = PhysicsSampler(sim)
-    runtime = SimpleNamespace(lock=threading.RLock())
+    runtime = SimpleNamespace(lock=threading.RLock(), sim=sim)
     assert sampler.capture(runtime)
     return sim, sampler, runtime
 
@@ -122,7 +122,7 @@ def test_lidar_uses_only_the_copied_capture_and_pause_does_not_forge_a_stamp(wor
 def test_open_and_out_of_range_rays_have_no_cloud_points_or_invented_clear_returns():
     sim = Simulation(model=instrumented_model(DEFAULT_ASSETS, sandbox=False))
     sampler = PhysicsSampler(sim)
-    runtime = SimpleNamespace(lock=threading.RLock())
+    runtime = SimpleNamespace(lock=threading.RLock(), sim=sim)
     sampler.capture(runtime)
     result = Lidar().sample(sampler)
     assert np.isinf(result["ranges"]).all()

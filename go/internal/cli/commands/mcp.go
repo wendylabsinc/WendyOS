@@ -24,8 +24,6 @@ func newMCPCmd() *cobra.Command {
 	}
 	cmd.AddCommand(newMCPServeCmd())
 	cmd.AddCommand(newMCPSetupCmd())
-	cmd.AddCommand(newMCPGatewayCmd())
-	cmd.AddCommand(newMCPExportRobotToolCmd())
 	cmd.AddCommand(newMCPManifestCmd())
 	return cmd
 }

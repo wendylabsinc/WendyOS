@@ -8,9 +8,11 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/wendylabsinc/wendy/go/internal/cli/cloudrequest"
+	"github.com/wendylabsinc/wendy/go/internal/cli/cloudunenroll"
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
@@ -44,39 +46,56 @@ type v2AssetState struct {
 	Deleted *cloudpbv2.DeletedAsset
 }
 
-// A status code or message alone is never deletion evidence.
-func v2AssetLookupResult(asset *cloudpbv2.Asset, err error) (*v2AssetState, error) {
-	if err == nil {
-		return &v2AssetState{Active: asset}, nil
-	}
-	if status.Code(err) != codes.NotFound {
-		return nil, err
-	}
-	var deleted *cloudpbv2.DeletedAsset
-	for _, detail := range status.Convert(err).Details() {
-		if d, ok := detail.(*cloudpbv2.DeletedAsset); ok {
-			if deleted != nil {
-				return nil, fmt.Errorf("ambiguous Cloud deletion details")
-			}
-			deleted = d
-		}
-	}
-	if deleted == nil {
-		return nil, fmt.Errorf("Cloud asset unknown; no retained deletion proof: %w", err)
-	}
-	return &v2AssetState{Deleted: deleted}, nil
+// The authorization carries exact bytes authenticated using Cloud HTTPS keys.
+// It is kept only in memory and independently verified again by the Agent.
+type v2AuthorizedReset struct {
+	deletion []byte
+	token    []byte
 }
 
 type v2UnenrollOps struct {
-	lookup func(context.Context, string) (*v2AssetState, error)
-	delete func(context.Context, string) error
-	proof  func(context.Context) ([]byte, error)
-	reset  func(context.Context, string, string, []byte, *cloudpbv2.DeletedAsset) error
+	lookup    func(context.Context, string) (*v2AssetState, error)
+	authorize func(context.Context, string) (*v2AuthorizedReset, error)
+	proof     func(context.Context) ([]byte, error)
+	reset     func(context.Context, string, string, []byte, *v2AuthorizedReset) error
+}
+
+// A missing active row permits only an explicit exact-asset retry. It is never
+// deletion evidence: a fresh signed reset authorization is still mandatory.
+func v2UnenrollPreflight(reply *v2AssetState, err error, j *v2UnenrollProgress) error {
+	if err != nil {
+		if status.Code(err) == codes.NotFound && j.AssetID != "" {
+			return nil
+		}
+		if status.Code(err) == codes.NotFound {
+			return fmt.Errorf("Cloud device not found or not visible to this account; to resume an interrupted reset, supply its exact --asset-id; if Cloud has no record of this device, --force clears only its local enrollment: %w", err)
+		}
+		return err
+	}
+	if reply == nil || reply.Active == nil || reply.Deleted != nil {
+		return fmt.Errorf("missing active Cloud binding")
+	}
+	_, err = v2UnenrollLifecycle(reply, j)
+	return err
+}
+
+func v2AuthorizedDeletion(a *v2AuthorizedReset, j *v2UnenrollProgress) (*cloudpbv2.DeletedAsset, error) {
+	if a == nil || len(a.token) == 0 || len(a.token) > 65536 || len(a.deletion) == 0 || len(a.deletion) > 4096 {
+		return nil, fmt.Errorf("verified signed Cloud reset authorization required; keys retained")
+	}
+	var d cloudpbv2.DeletedAsset
+	if err := proto.Unmarshal(a.deletion, &d); err != nil {
+		return nil, err
+	}
+	if _, err := v2UnenrollLifecycle(&v2AssetState{Deleted: &d}, j); err != nil {
+		return nil, err
+	}
+	return &d, nil
 }
 
 func checkV2UnenrollBinding(asset *cloudpbv2.Asset, j v2UnenrollProgress) error {
 	id, err := certs.ParsePrincipal(j.Principal)
-	if err != nil || id.EntityType != certs.EntityAsset || asset == nil || asset.GetId() != j.AssetID || asset.GetOrganizationId() != id.TenantUUID || asset.GetPkiDeviceName() != id.EntityID {
+	if err != nil || id.EntityType != certs.EntityAsset || asset == nil || asset.GetId() != j.AssetID || asset.GetOrganizationId() != id.TenantUUID || cloudunenroll.DeviceID(asset) != id.EntityID {
 		return fmt.Errorf("refusing cleanup: exact Cloud asset/tenant/PKI binding does not match the authenticated device")
 	}
 	return nil
@@ -124,31 +143,19 @@ func performV2Unenroll(ctx context.Context, j *v2UnenrollProgress, ops v2Unenrol
 		return fmt.Errorf("invalid installed certificate fingerprint")
 	}
 	reply, err := ops.lookup(ctx, j.AssetID)
-	if err != nil {
+	if err := v2UnenrollPreflight(reply, err, j); err != nil {
 		return fmt.Errorf("preflight Cloud asset lifecycle: %w", err)
 	}
-	// Cloud owns the only revocation/deletion workflow. Every retry reads its
-	// durable binding, never a CLI journal or a previous transient response.
-	deleted, err := v2UnenrollLifecycle(reply, j)
+	// Request signing capability in the deleting operation itself. Modern Cloud
+	// refuses before deletion if its reset signer is unavailable; an authorized
+	// exact-asset retry reads the retained audit record instead of deleting again.
+	authorized, err := ops.authorize(ctx, j.AssetID)
+	if err != nil {
+		return fmt.Errorf("Cloud unenrollment failed/uncertain; keys retained: %w", err)
+	}
+	deleted, err := v2AuthorizedDeletion(authorized, j)
 	if err != nil {
 		return err
-	}
-	if !deleted {
-		if err := ops.delete(ctx, j.AssetID); err != nil {
-			return fmt.Errorf("Cloud unenrollment failed/uncertain; keys retained: %w", err)
-		}
-	}
-	// A successful delete response alone is not retained binding evidence.
-	reply, err = ops.lookup(ctx, j.AssetID)
-	if err != nil {
-		return fmt.Errorf("confirming Cloud tombstone; keys retained: %w", err)
-	}
-	deleted, err = v2UnenrollLifecycle(reply, j)
-	if err != nil {
-		return err
-	}
-	if !deleted {
-		return fmt.Errorf("Cloud asset still active; reset refused")
 	}
 	j.Deleted = true
 	proof, err := ops.proof(ctx)
@@ -156,7 +163,20 @@ func performV2Unenroll(ctx context.Context, j *v2UnenrollProgress, ops v2Unenrol
 		return fmt.Errorf("verifying installed-leaf PKI revocation; keys retained: %w", err)
 	}
 	j.Revoked = true
-	if err := ops.reset(ctx, j.Principal, j.Fingerprint, proof, reply.Deleted); err != nil {
+	// OCSP acquisition may consume the short authorization lifetime. Recheck the
+	// current ACL and obtain a fresh signed authorization before local erasure.
+	fresh, err := ops.authorize(ctx, j.AssetID)
+	if err != nil {
+		return fmt.Errorf("refreshing Cloud reset authorization; keys retained: %w", err)
+	}
+	confirmed, err := v2AuthorizedDeletion(fresh, j)
+	if err != nil {
+		return err
+	}
+	if !proto.Equal(deleted, confirmed) {
+		return fmt.Errorf("Cloud deletion evidence changed; keys retained")
+	}
+	if err := ops.reset(ctx, j.Principal, j.Fingerprint, proof, fresh); err != nil {
 		return fmt.Errorf("certificate revoked and asset deleted; local reset unconfirmed: %w", err)
 	}
 	j.Reset = true
@@ -205,11 +225,19 @@ func v2UnenrollCloudContext(ctx context.Context, auth *config.AuthConfig) (conte
 	return metadata.AppendToOutgoingContext(rpcctx, "x-correlation-id", id), nil
 }
 
-func runV2DeviceUnenroll(ctx context.Context, conn *grpcclient.AgentConnection, prov *agentpbv2.ProvisionedResponse, verifiedPeer *grpcpeer.Peer, override, assetOverride string, yes, checkOnly bool) error {
+func runV2DeviceUnenroll(ctx context.Context, conn *grpcclient.AgentConnection, prov *agentpbv2.ProvisionedResponse, verifiedPeer *grpcpeer.Peer, override, assetOverride string, yes, checkOnly, force bool) error {
 	// SECURITY: only the authenticated-reset bit counts. CloudUnenrollmentSupported
 	// was advertised by prerelease Agents that trusted caller-supplied deletion
-	// fields, so it is ignored here, including for --check.
-	if !prov.GetCloudAuthenticatedResetSupported() {
+	// fields, so it is ignored here, including for --check. --force is a separate
+	// local-only mode with its own capability; it never runs the Cloud flow.
+	if force {
+		if assetOverride != "" {
+			return fmt.Errorf("--force clears only a local enrollment and cannot be combined with --asset-id")
+		}
+		if !prov.GetLocalResetSupported() {
+			return fmt.Errorf("this Agent does not support forced local enrollment reset; update it with 'wendy device update' and retry; no mutation performed")
+		}
+	} else if !prov.GetCloudAuthenticatedResetSupported() {
 		return fmt.Errorf("this Agent does not support Cloud-authenticated reset; update it with 'wendy device update' and retry; no mutation performed")
 	}
 	principal, err := certs.ParsePrincipal(prov.GetPrincipalUri())
@@ -255,53 +283,48 @@ func runV2DeviceUnenroll(ctx context.Context, conn *grpcclient.AgentConnection, 
 			return fmt.Errorf("--asset-id requires a canonical UUID")
 		}
 	}
-	tlsInfo := verifiedPeer.AuthInfo.(credentials.TLSInfo)
+	tlsInfo, ok := verifiedPeer.AuthInfo.(credentials.TLSInfo)
+	if !ok {
+		return fmt.Errorf("verified peer certificate unavailable; no mutation performed")
+	}
 	leaf := tlsInfo.State.PeerCertificates[0]
-	issuers := append([]*x509.Certificate{}, tlsInfo.State.PeerCertificates[1:]...)
-	storedChain, _ := certs.ParseCertsFromPEM([]byte(auth.Certificates[0].PemCertificateChain))
-	issuers = append(issuers, storedChain...)
-	issuer, err := unenrollproof.Issuer(leaf, issuers)
-	if err != nil {
-		return err
+	operator, err := certs.ParseCertsFromPEM([]byte(auth.Certificates[0].PemCertificate))
+	if err != nil || len(operator) != 1 {
+		return fmt.Errorf("exact reset operator certificate required; no mutation performed")
 	}
 	j.Serial = leaf.SerialNumber.Text(16)
+	var issuer *x509.Certificate
 	svc := agentpbv2.NewWendyProvisioningServiceClient(conn.Conn)
 	ops := v2UnenrollOps{
 		lookup: func(ctx context.Context, id string) (*v2AssetState, error) {
 			tenant, device := principal.TenantUUID, principal.EntityID
-			// Always use the binding selector: older UUID-only GetAsset servers
-			// reject empty id before any revocation/deletion, even with --asset-id.
-			// The selected UUID is still enforced by v2UnenrollLifecycle.
-			asset, err := assets.GetAsset(rpcctx, &cloudpbv2.GetAssetRequest{OrganizationId: &tenant, DeviceId: &device})
-			return v2AssetLookupResult(asset, err)
+			asset, err := assets.GetAsset(rpcctx, &cloudpbv2.GetAssetRequest{Id: id, OrganizationId: &tenant, DeviceId: &device})
+			if err != nil {
+				return nil, err
+			}
+			return &v2AssetState{Active: asset}, nil
+		},
+		authorize: func(ctx context.Context, id string) (*v2AuthorizedReset, error) {
+			expected := principal.EntityID
+			reply := &cloudpbv2.DeleteAssetResponse{}
+			if err := cloudrequest.Invoke(rpcctx, cloudConn, auth, cloudpbv2.AssetService_DeleteAsset_FullMethodName,
+				&cloudpbv2.DeleteAssetRequest{Id: id, ExpectedDeviceId: &expected, ResetCertificateSha256: &fingerprint}, reply); err != nil {
+				return nil, err
+			}
+			if !reply.GetSuccess() || len(reply.GetResetAuthorization()) == 0 {
+				return nil, fmt.Errorf("updated Cloud with signed reset authorization required; keys retained")
+			}
+			now := time.Now()
+			deletion, err := unenrollproof.VerifyCloudResetDeletion(ctx, reply.GetResetAuthorization(), cloud, principal.Principal, fingerprint, operator[0], now, now)
+			if err != nil {
+				return nil, fmt.Errorf("authenticating Cloud reset response: %w", err)
+			}
+			return &v2AuthorizedReset{deletion: deletion, token: reply.GetResetAuthorization()}, nil
 		},
 		proof: func(ctx context.Context) ([]byte, error) { return unenrollproof.FetchRevocation(ctx, leaf, issuer) },
-		delete: func(ctx context.Context, id string) error {
-			reply := &cloudpbv2.DeleteAssetResponse{}
-			expected := principal.EntityID
-			err := cloudrequest.Invoke(rpcctx, cloudConn, auth, cloudpbv2.AssetService_DeleteAsset_FullMethodName, &cloudpbv2.DeleteAssetRequest{Id: id, ExpectedDeviceId: &expected}, reply)
-			if err == nil && !reply.GetSuccess() {
-				return fmt.Errorf("Cloud deletion was not acknowledged")
-			}
-			return err
-		},
-		reset: func(ctx context.Context, p, fp string, evidence []byte, deleted *cloudpbv2.DeletedAsset) error {
-			// Get fresh authority after OCSP acquisition, including on tombstone replay.
-			// An empty proof or failed current ACL check never authorizes local erasure.
-			expected := principal.EntityID
-			authorized := &cloudpbv2.DeleteAssetResponse{}
-			if err := cloudrequest.Invoke(rpcctx, cloudConn, auth, cloudpbv2.AssetService_DeleteAsset_FullMethodName,
-				&cloudpbv2.DeleteAssetRequest{Id: j.AssetID, ExpectedDeviceId: &expected, ResetCertificateSha256: &fp}, authorized); err != nil {
-				return err
-			}
-			if !authorized.GetSuccess() || len(authorized.GetResetAuthorization()) == 0 {
-				return fmt.Errorf("updated Cloud with signed reset authorization required; keys retained")
-			}
-			binding, err := proto.Marshal(deleted)
-			if err != nil {
-				return err
-			}
-			response, err := svc.Unprovision(ctx, &agentpbv2.UnprovisionRequest{ExpectedPrincipalUri: p, ExpectedCertificateSha256: fp, RevocationProof: evidence, CloudDeletion: binding, CloudResetAuthorization: authorized.GetResetAuthorization()})
+		reset: func(ctx context.Context, p, fp string, evidence []byte, authorized *v2AuthorizedReset) error {
+			binding := authorized.deletion
+			response, err := svc.Unprovision(ctx, &agentpbv2.UnprovisionRequest{ExpectedPrincipalUri: p, ExpectedCertificateSha256: fp, RevocationProof: evidence, CloudDeletion: binding, CloudResetAuthorization: authorized.token})
 			if err != nil {
 				return err
 			}
@@ -316,10 +339,31 @@ func runV2DeviceUnenroll(ctx context.Context, conn *grpcclient.AgentConnection, 
 		},
 	}
 	reply, err := ops.lookup(ctx, j.AssetID)
-	if err != nil {
-		return fmt.Errorf("reading Cloud lifecycle (updated Cloud required): %w", err)
+	if force {
+		// Cloud also answers NotFound to a caller who cannot see the device, so
+		// NotFound alone never selects local reset: the operator must ask for it.
+		// A device Cloud still lists keeps the Cloud flow.
+		switch {
+		case err == nil:
+			return fmt.Errorf("Cloud still lists %s; --force only clears a device Cloud has no record of; rerun without --force to unenroll it through Cloud; no mutation performed", principal.Principal)
+		case status.Code(err) != codes.NotFound:
+			return fmt.Errorf("checking Cloud binding before forced local reset: %w", err)
+		}
+		return runV2LocalDeviceUnenroll(ctx, conn, prov, verifiedPeer, yes, checkOnly)
 	}
-	if _, err := v2UnenrollLifecycle(reply, &j); err != nil {
+	if checkOnly && err != nil {
+		return fmt.Errorf("checking active Cloud binding: %w", err)
+	}
+	if err := v2UnenrollPreflight(reply, err, &j); err != nil {
+		return fmt.Errorf("reading Cloud lifecycle: %w", err)
+	}
+	// Cloud cleanup still requires the installed leaf's issuer before mutation.
+	// Forced local cleanup needs neither an issuer nor OCSP evidence.
+	issuers := append([]*x509.Certificate{}, tlsInfo.State.PeerCertificates[1:]...)
+	storedChain, _ := certs.ParseCertsFromPEM([]byte(auth.Certificates[0].PemCertificateChain))
+	issuers = append(issuers, storedChain...)
+	issuer, err = unenrollproof.Issuer(leaf, issuers)
+	if err != nil {
 		return err
 	}
 	if checkOnly {

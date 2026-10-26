@@ -7,6 +7,10 @@ protocol StatusMenuControllerDelegate: AnyObject {
     func statusMenuControllerDidSelectWelcomeAndPermissions(_ controller: StatusMenuController)
     func statusMenuController(
         _ controller: StatusMenuController,
+        didSetNetworkAccessAllowed allowed: Bool
+    )
+    func statusMenuController(
+        _ controller: StatusMenuController,
         didSetLocalBuildServiceEnabled enabled: Bool
     )
     func statusMenuController(
@@ -29,6 +33,7 @@ final class StatusMenuController: NSObject {
         localBuildServiceIsAvailable: Bool,
         meshVPN: MeshVPNController,
         meshVPNIsAvailable: Bool,
+        networkAccessIsManaged: Bool = false,
         delegate: (any StatusMenuControllerDelegate)? = nil,
         bundle: Bundle = .main
     ) async {
@@ -39,6 +44,8 @@ final class StatusMenuController: NSObject {
         self.meshVPN = meshVPN
         self.meshVPNIsAvailable = meshVPNIsAvailable
         self.meshVPNStatus = meshVPN.status
+        self.networkAccessIsManaged = networkAccessIsManaged
+        self.networkAccessAllowed = await wendyAgent.configuration.allowsNetworkAccess
         self.delegate = delegate
         self.bundleDisplayName = AppDisplayName.resolve(from: bundle)
         self.currentStatus = await wendyAgent.status
@@ -82,6 +89,9 @@ final class StatusMenuController: NSObject {
     private var currentApps: [WendyAppInfo]
     private var localBuildServiceState: WendyRuntimeVM.State
     private var meshVPNStatus: MeshVPNController.Status
+    private let networkAccessIsManaged: Bool
+    private var networkAccessAllowed: Bool
+    private var changingNetworkAccess = false
     private var statusObservation: WendyObservation?
     private var appsObservation: WendyObservation?
     private var localBuildServiceObservation: AnyCancellable?
@@ -116,6 +126,12 @@ final class StatusMenuController: NSObject {
         self.rebuildMenu()
     }
 
+    func updateNetworkAccess(allowed: Bool? = nil, isChanging: Bool? = nil) {
+        if let allowed { self.networkAccessAllowed = allowed }
+        if let isChanging { self.changingNetworkAccess = isChanging }
+        self.rebuildMenu()
+    }
+
     private func rebuildMenu() {
         self.menu.removeAllItems()
 
@@ -135,6 +151,30 @@ final class StatusMenuController: NSObject {
         welcomeItem.target = self
         self.menu.addItem(welcomeItem)
 
+        self.menu.addItem(.separator())
+
+        let networkAccessItem = NSMenuItem(
+            title: "Allow Access from Other Devices",
+            action: #selector(self.networkAccessSelected),
+            keyEquivalent: ""
+        )
+        networkAccessItem.target = self
+        networkAccessItem.state = self.networkAccessAllowed ? .on : .off
+        networkAccessItem.isEnabled =
+            !self.networkAccessIsManaged && !self.changingNetworkAccess
+            && self.currentStatus == .running
+        networkAccessItem.toolTip =
+            "Allows network discovery and remote connections. Before enrollment, anyone who can reach this Mac can deploy apps."
+        self.menu.addItem(networkAccessItem)
+        self.menu.addItem(
+            self.makeDisabledMenuItem(
+                title: self.changingNetworkAccess
+                    ? "Changing network access…"
+                    : self.networkAccessIsManaged
+                        ? "Local access enforced by launch settings"
+                        : self.networkAccessAllowed ? "Network access enabled" : "Only this Mac"
+            )
+        )
         self.menu.addItem(.separator())
 
         if self.localBuildServiceIsAvailable {
@@ -394,6 +434,14 @@ final class StatusMenuController: NSObject {
     @objc
     private func welcomeAndPermissionsSelected() {
         self.delegate?.statusMenuControllerDidSelectWelcomeAndPermissions(self)
+    }
+
+    @objc
+    private func networkAccessSelected() {
+        self.delegate?.statusMenuController(
+            self,
+            didSetNetworkAccessAllowed: !self.networkAccessAllowed
+        )
     }
 
     @objc

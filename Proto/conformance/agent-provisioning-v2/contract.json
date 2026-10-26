@@ -1,5 +1,5 @@
 {
-  "description": "WendyProvisioningService (v2) answers the wendy CLI relies on during `wendy device enroll`. Steps run in order against ONE fresh agent; ACME issuance is stubbed and calls have no authenticated peer. Enrollment and preflight expectations are shared by Go and Swift. Reset refusals use explicit agentExpectations because Go supports Cloud-authenticated reset while Swift keeps it disabled. cliPreflight is what the CLI's IsProvisioned preflight concludes from that response ('ok' or its error).",
+  "description": "WendyProvisioningService (v2) answers the wendy CLI relies on during `wendy device enroll`. Steps run in order against ONE fresh agent; ACME issuance is stubbed and calls have no authenticated peer. Enrollment expectations are shared by Go and Swift. Reset capabilities and refusals use explicit agentExpectations because Go supports authenticated local and Cloud reset while Swift keeps both disabled. cliPreflight is what the CLI's IsProvisioned preflight concludes from that response ('ok' or its error).",
   "steps": [
     {
       "name": "unprovisioned: status advertises direct PKI enrollment",
@@ -50,6 +50,16 @@
       "request": {},
       "code": "OK",
       "response": {"provisioned": {"cloudHost": "api.dev.wendy.sh:443", "principalUri": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/sim"}},
+      "agentExpectations": {
+        "go": {
+          "code": "OK",
+          "response": {"provisioned": {"cloudHost": "api.dev.wendy.sh:443", "principalUri": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/sim", "localResetSupported": true}}
+        },
+        "swift": {
+          "code": "OK",
+          "response": {"provisioned": {"cloudHost": "api.dev.wendy.sh:443", "principalUri": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/sim"}}
+        }
+      },
       "cliPreflight": "device is already enrolled; no new enrollment was started"
     },
     {
@@ -90,6 +100,21 @@
       }
     },
     {
+      "name": "local-only PKI reset without an operator refused",
+      "method": "Unprovision",
+      "request": {"expectedPrincipalUri": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/sim", "localOnly": true},
+      "agentExpectations": {
+        "go": {
+          "code": "UNAUTHENTICATED",
+          "message": "missing peer credentials"
+        },
+        "swift": {
+          "code": "FAILED_PRECONDITION",
+          "message": "direct PKI reset is disabled pending Cloud-authenticated authorization and durable device preparation; keys retained"
+        }
+      }
+    },
+    {
       "name": "legacy v1 reset of a PKI identity refused",
       "method": "V1Unprovision",
       "request": {},
@@ -110,6 +135,16 @@
       "request": {},
       "code": "OK",
       "response": {"provisioned": {"cloudHost": "api.dev.wendy.sh:443", "principalUri": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/sim"}},
+      "agentExpectations": {
+        "go": {
+          "code": "OK",
+          "response": {"provisioned": {"cloudHost": "api.dev.wendy.sh:443", "principalUri": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/sim", "localResetSupported": true}}
+        },
+        "swift": {
+          "code": "OK",
+          "response": {"provisioned": {"cloudHost": "api.dev.wendy.sh:443", "principalUri": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/sim"}}
+        }
+      },
       "cliPreflight": "device is already enrolled; no new enrollment was started"
     },
     {

@@ -38,7 +38,7 @@ type mcpCloudTunnel struct {
 	cancel     context.CancelFunc
 	listener   net.Listener
 	udpConn    *net.UDPConn
-	session    *mcpDatagramSession
+	session    interface{ close() }
 	brokerConn *grpc.ClientConn
 	brokerURL  string
 }
@@ -345,11 +345,6 @@ func (s *mcpServer) handleCloudTunnel(ctx context.Context, req mcpgo.CallToolReq
 	if err != nil {
 		return cloudErrResult(err), nil
 	}
-	// v2 has no datagram relay (cloudrelay is TCP-only); refuse UDP there,
-	// mirroring the CLI. v2 ping/UDP is tracked as a WDY-3148 follow-up.
-	if protocol == "udp" && device.isV2 {
-		return errResult(errCodeInvalidArgument, "Cloud's authorized service catalog does not expose UDP forwarding over v2 sessions"), nil
-	}
 	target := cloudCommandTarget(auth, device, stringParam(req, "broker_url"))
 	s.mu.RLock()
 	for _, existing := range s.cloudTunnels {
@@ -382,14 +377,19 @@ func (s *mcpServer) handleCloudTunnel(ctx context.Context, req mcpgo.CallToolReq
 	tunnelCtx, cancel := context.WithCancel(context.Background())
 
 	if protocol == "udp" {
-		// Legacy sessions only (v2 refused above).
 		pc, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: localPort})
 		if err != nil {
 			cancel()
 			closeBroker()
 			return errResultf(errCodeInternal, "listening on udp 127.0.0.1:%d: %s", localPort, err.Error()), nil
 		}
-		session, err := mcpOpenDatagramSession(tunnelCtx, brokerConn, auth, device.legacyID)
+		if err := pc.SetWriteBuffer(65507); err != nil {
+			cancel()
+			_ = pc.Close()
+			closeBroker()
+			return errResultf(errCodeInternal, "configuring UDP forwarding buffer: %s", err.Error()), nil
+		}
+		session, err := device.openDatagram(tunnelCtx, brokerConn, auth, uint32(remotePort))
 		if err != nil {
 			cancel()
 			_ = pc.Close()

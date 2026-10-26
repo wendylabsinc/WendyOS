@@ -14,4 +14,3 @@ plugins/wendy/scripts/* text eol=lf
 scripts/pin-cli.sh text eol=lf
 scripts/test/plugin-launcher/* text eol=lf
 # Embedded UI bundle includes upstream shader strings with significant formatting.
-go/internal/cli/mcp/desktop_app.html    linguist-generated=true -whitespace

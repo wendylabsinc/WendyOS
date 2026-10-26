@@ -39,6 +39,7 @@ class SnapshotQueue:
 
     def capture(self, runtime):
         """Called immediately after an advancing step, with runtime.lock held."""
+        self.model = runtime.sim.model  # Environment edits preserve integration dimensions.
         state = np.empty(self.size)
         mujoco.mj_getState(self.model, runtime.sim.data, state, self.signature)
         snapshot = PhysicsSnapshot(

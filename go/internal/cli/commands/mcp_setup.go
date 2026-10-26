@@ -45,7 +45,6 @@ func newMCPSetupCmd() *cobra.Command {
 			return nil
 		},
 	}
-	cmd.AddCommand(newMCPChatGPTSetupCmd())
 	return cmd
 }
 

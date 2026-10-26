@@ -1,0 +1,8 @@
+model/assets/
+model/so101_new_calib.xml
+model/LICENSE
+model/UPSTREAM_README.md
+**/__pycache__/
+.pytest_cache/
+.venv/
+so101_sim/vendor/

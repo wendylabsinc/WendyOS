@@ -13,6 +13,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/wendylabsinc/wendy/go/internal/shared/cloudrelay"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb"
 )
@@ -386,4 +387,56 @@ func mcpPingAvg(total time.Duration, n int) time.Duration {
 		return 0
 	}
 	return total / time.Duration(n)
+}
+
+// openDatagram selects the authorized v2 UDP path or the legacy broker path.
+func (d mcpCloudDevice) openDatagram(ctx context.Context, brokerConn *grpc.ClientConn, auth *config.AuthConfig, remotePort uint32) (interface {
+	mcpDatagramSender
+	close()
+}, error) {
+	if !d.isV2 {
+		return mcpOpenDatagramSession(ctx, brokerConn, auth, d.legacyID)
+	}
+	signer, err := mcpTunnelPrincipalSigner(auth)
+	if err != nil {
+		return nil, err
+	}
+	cloudCtx, err := mcpCloudContext(ctx, auth)
+	if err != nil {
+		return nil, err
+	}
+	conn, err := mcpDialCloudGRPC(auth)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = conn.Close() }()
+	issuer, err := cloudrelay.Issuer(auth.CloudGRPC, os.Getenv("WENDY_CLOUD_GRANT_ISSUER"))
+	if err != nil {
+		return nil, err
+	}
+	session, err := cloudrelay.OpenUDP(ctx, cloudCtx, conn, &cloudrelay.Verifier{Issuer: issuer}, d.key, remotePort, signer)
+	if err != nil {
+		return nil, err
+	}
+	return &mcpV2DatagramSession{session: session, port: remotePort}, nil
+}
+
+type mcpV2DatagramSession struct {
+	session *cloudrelay.DatagramSession
+	port    uint32
+}
+
+func (s *mcpV2DatagramSession) close() { _ = s.session.Close() }
+func (s *mcpV2DatagramSession) sendDatagram(flowID, port uint32, payload []byte) error {
+	if port != s.port {
+		return fmt.Errorf("UDP port differs from authorized service")
+	}
+	return s.session.Send(flowID, payload)
+}
+func (s *mcpV2DatagramSession) recv() (*cloudpb.TunnelData, error) {
+	d, err := s.session.Recv()
+	if err != nil {
+		return nil, err
+	}
+	return &cloudpb.TunnelData{Datagram: &cloudpb.TunnelDatagram{FlowId: d.FlowId, Port: s.port, Payload: d.Payload}}, nil
 }

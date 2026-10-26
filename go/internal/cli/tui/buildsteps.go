@@ -54,6 +54,12 @@ func NewBuildStepsModel(title string) BuildStepsModel {
 	}
 }
 
+// WithoutHints drops the rotating "Tip:" line; see ProgressModel.WithoutHints.
+func (m BuildStepsModel) WithoutHints() BuildStepsModel {
+	m.hints = hintRotator{}
+	return m
+}
+
 // Init implements tea.Model.
 func (m BuildStepsModel) Init() tea.Cmd {
 	return tea.Batch(m.spinner.Tick, m.hints.tick())

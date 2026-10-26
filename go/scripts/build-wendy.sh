@@ -11,8 +11,6 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."   # the go module root
 
-make mcp-app
-
 LDFLAGS="-s -w -X github.com/wendylabsinc/wendy/go/internal/shared/version.Version=${VERSION:-dev}"
 
 if [[ "$(uname -s)" != "Darwin" ]]; then

@@ -18,9 +18,10 @@ natively, with none of the emulation an x86 machine pays when it cross-builds
 for a device.
 
 <Callout type="info">
-The VM exposes no physical camera, microphone, speaker, Bluetooth adapter, GPU, GPIO or USB
-devices. Unitree profiles publish simulated sensors over ROS 2. Physical peripheral access under **Hardware Access**
-needs a real device. The VM is for the software half of your project.
+The VM exposes no physical camera, microphone, speaker, Bluetooth adapter, GPU or GPIO.
+You can opt in to one physical serial port from the host through [managed serial passthrough](#serial-passthrough).
+This is serial byte forwarding, not general USB passthrough. Unitree profiles publish simulated sensors over ROS 2.
+Other physical peripheral access under **Hardware Access** needs a real device.
 </Callout>
 
 ## What you'll need
@@ -105,10 +106,10 @@ The tab manages simulators without dropping to `wendy vm`:
 | Key | Does |
 | --- | --- |
 | `c` | Create one at the latest release, naming it `sim`, `sim-2`, … |
-| `s` | Power off the highlighted VM |
-| `r` | Delete it, once it is stopped |
-| `d` | Save the highlighted simulator as the default device |
-| `x` | Clear the saved default device |
+| `s` | Start the highlighted VM and, the first time, build its robot |
+| `x` | Power off the highlighted VM |
+| `r` | Delete it and its disk, once it is stopped (asks first) |
+| `d` | Save the highlighted simulator as the default device; press it again to clear the default |
 
 On Windows, `c` in `wendy discover` displays the foreground VM commands and
 keeps discovery open. Run those commands in a separate terminal.
@@ -117,9 +118,10 @@ The default uses the VM's name, so it still works when its forwarded port change
 Saving a default does not start the VM. Your next device command starts it when
 needed. The `✦` marker identifies the saved default when you reopen the picker.
 
-`wendy discover` shows the same tab with the same keys; there `enter`
-copies the VM's address instead of selecting it. For a specific name, version
-or disk size, use `wendy vm create`.
+`wendy discover` shows the same tab with the same keys. There `enter` copies
+the VM's address instead of selecting it, and `s` returns to the tab once the
+VM is up, rather than deploying to it. For a specific name, version or disk
+size, use `wendy vm create`.
 
 To skip the picker entirely, name the simulator directly:
 
@@ -133,6 +135,10 @@ manual equivalent, useful when you want several VMs or need to debug one.
 ## Simulate a Unitree robot
 
 The `go2` and `g1` profiles add a virtual robot with MuJoCo, ROS 2, and a browser sandbox. Follow [Unitree simulator setup](/docs/installation/unitree-simulators), then [deploy a ROS 2 app from simulation to hardware](/docs/integrations/sim-to-real). Their virtual sensors do not provide access to physical peripherals.
+
+## Simulate an SO-101 arm
+
+The `so101` profile adds a virtual six-joint LeRobot SO-101 arm with MuJoCo and a browser viewer. It has no ROS 2 or DDS interface. Follow [SO-101 follower simulator](/docs/installation/so101-simulator).
 
 ## Create and start a VM
 
@@ -281,7 +287,7 @@ loopback address, and readiness checks use it too. This works with background
 VMs and detached applications; forwards last until the VM stops and are
 recreated on the next run.
 
-For an app with a declared [`http` endpoint](../apps/wendy.json.md#http), capture
+For an app with a declared [`http` endpoint](/docs/advanced/apps/wendy.json#http), capture
 the detached result and fetch the reported host URL:
 
 ```sh
@@ -293,7 +299,7 @@ curl --fail --retry 10 --retry-connrefused --retry-delay 1 --max-time 5 "$url"
 `vm:dev` selects the device; it is not a DNS hostname. The result's
 `readiness: "not_checked"` means start was acknowledged, so check the response
 against your app's expected behavior. If `url` is absent, inspect the declared
-HTTP endpoints, forwarding and logs. See the [detached result reference](../clients/wendy-cli/commands/run.md#detached-output)
+HTTP endpoints, forwarding and logs. See the [detached result reference](/docs/advanced/clients/wendy-cli/commands/run#detached-output)
 for fields and multi-service output.
 
 If another application or VM owns the host port, deployment reports a forwarding
@@ -330,8 +336,11 @@ before connecting to the replacement. It clears only the VM's own pin, never
 the shared `127.0.0.1` pin that other loopback addresses use. That pin is
 cleared by `wendy device unpin 127.0.0.1`.
 
-The agent's port is often already in use on a development machine. Move the
-host side of the forward:
+The agent's port is often already in use on a development machine. `wendy vm
+start` and `--device vm:<name>` then move the host side of the forward to the
+next free port on their own, and the VM keeps that port for later starts. To
+choose it yourself, pass `--port`; a port given that way that is in use is an
+error rather than a hint to move:
 
 ```sh
 wendy vm start dev --port 50151
@@ -388,7 +397,9 @@ wendy vm rm dev        # delete a VM and its disk
 ```
 
 `wendy vm create` prompts for a name and a profile: Generic WendyOS, Unitree Go2,
-or Unitree G1. Supply the name or `--profile generic|go2|g1` to skip that prompt.
+Unitree G1, LeRobot SO-101, Yahboom ROSMASTER R2, or Wendy Lite (WASM or native).
+Supply the name or `--profile generic|go2|g1|so101|rosmaster-r2|wendy-lite|wendy-lite-native`
+to skip that prompt.
 For scripts, pass the name explicitly; the profile defaults to `generic` without
 an interactive terminal, with `--json`, or with `--yes`.
 
@@ -396,9 +407,10 @@ The VM name is optional for `start`, `stop`, `logs`, and `rm` in an interactive
 terminal. Leave it out to choose a VM from a list; scripts should continue to
 pass the name explicitly.
 
-`vm stop` waits up to two minutes for the guest to shut down and flush its
-filesystems. If QMP is unavailable or the guest does not finish, it reports an
-error without killing the VM. Shut down inside an older guest without QMP, or
+`vm stop` waits up to five minutes for the guest to stop its apps, shut down and
+flush its filesystems. If QMP is unavailable
+or the guest is still shutting down after that, it reports an error without
+killing the VM. Shut down inside an older guest without QMP, or
 use `wendy vm stop dev --force` only when an immediate power cut is intended.
 
 A backgrounded VM outlives the command that started it, so closing the terminal
@@ -480,3 +492,88 @@ need to recreate its disk.
 is emulated rather than accelerated, because the guest is ARM64 and the host is
 not. It still works; it is just slower. `wendy vm start` prints which mode it
 chose.
+
+
+## Serial passthrough
+
+A Windows, macOS or Linux host can forward one serial port to a WendyOS ARM64 VM
+as a QEMU USB serial adapter. Install the adapter's driver if your host needs one,
+find its host name and the exact baud required by your device, then save the
+mapping. For example (replace the name, port and baud):
+
+| Host | Port looks like | Find it with |
+|---|---|---|
+| Windows | `COM12` | Device Manager → Ports (COM & LPT) |
+| macOS | `/dev/cu.usbmodem1101` or `/dev/cu.usbserial-…` | `ls /dev/cu.*` before and after plugging in |
+| Linux | `/dev/serial/by-id/usb-…` (stable) or `/dev/ttyACM0` | `ls -l /dev/serial/by-id/` |
+
+```sh
+wendy vm serial my-vm --port /dev/cu.usbmodem1101 --baud 1000000
+wendy vm serial my-vm
+wendy vm start my-vm
+```
+
+The first command saves `serial.json` inside this VM's directory under the Wendy
+configuration directory. The second prints the mapping as JSON (`null` if none).
+Each foreground start loads the same mapping. Stop the VM before changing it.
+To disable passthrough, run `wendy vm serial my-vm --clear` while it is stopped.
+Configuration does not open the port; availability and driver support are checked
+at the next start. A mapping saved on one host type is rejected on another.
+
+On macOS use the `cu.` node rather than `tty.`. On Linux, prefer the
+`/dev/serial/by-id/` name: `ttyACM0` can change when devices are replugged. If
+the start reports permission denied, add your user to the device's group
+(usually `dialout`) and log in again.
+
+The host line is fixed at the requested baud, **8 data bits, no parity, one stop
+bit, no handshake, DTR and RTS disabled**. Wendy submits the exact baud to the
+host driver and never selects a nearby baud: a rate the driver refuses fails the
+start. Windows also checks the driver's reported settings. A driver can still
+round the rate internally, so no host check proves the adapter's actual
+electrical baud. Guest termios baud changes and modem-control commands do not
+change the host line. The bridge forwards binary bytes in both directions without
+line processing.
+
+The guest's existing `ftdi_sio` driver normally exposes `/dev/ttyUSB0`. Check the
+actual guest path, then grant your app its serial entitlement, for example:
+
+```json
+{"type":"serial","device":"ttyUSB0"}
+```
+
+No guest image modification is required. Keep `wendy vm start` open in its
+terminal and use a second terminal for ordinary app commands targeting
+`--device vm:my-vm`. The bridge runs inside that launcher, so background starts
+(`--detach`) and automatic starts through workflows that require detaching are
+refused for a VM with a mapping; start it explicitly first. On macOS and Linux,
+`wendy vm stop my-vm` shuts it down as usual. Windows does not yet have the
+managed QMP monitor: shut down inside the guest, use Ctrl-A then X, or
+explicitly cut power with `wendy vm stop my-vm --force`.
+
+Each VM gets a dynamically allocated listener bound only to `127.0.0.1`; the
+listener closes after QEMU connects. There is no LAN listener or fixed bridge
+port. Local processes are trusted: this TCP connection has no authentication.
+The port is held exclusively while the VM runs, so two VMs cannot share it. On
+macOS and Linux Wendy also takes the advisory lock that pyserial-based tools
+(`esptool`, `idf.py monitor`) use, so they see the port as busy. Different VMs
+may use different ports (and must also have distinct forwarded agent ports,
+using `vm start --port` where necessary).
+
+Normal stop, QEMU exit and startup failures release the port and listener. A
+serial I/O error or cable disconnect that the host driver reports stops QEMU
+and prints an actionable error; reconnect the device and restart the VM. There
+is no silent reconnect. If the launcher is forcibly terminated, check for a
+remaining QEMU process before starting again. On macOS and Linux, use
+`wendy vm stop my-vm`; on Windows, check Task Manager.
+
+### Check your serial connection
+
+After starting the VM, confirm that your app can open the guest serial device
+and exchange the data it expects. Saving a mapping does not verify the adapter,
+its baud rate, or the attached hardware. Start with your device's documented
+read-only checks before enabling any physical controls.
+
+If the cable disconnects or a serial I/O error stops the VM, reconnect the device
+and start the VM again. If another program reports the port busy, stop the VM
+before using the port elsewhere. One serial device can be mapped per VM;
+this does not provide general USB, camera, or GPU passthrough.

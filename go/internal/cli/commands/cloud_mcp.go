@@ -76,7 +76,7 @@ func newCloudMCPCmd() *cobra.Command {
 			term := newPromptTerminal(ctx, os.Stdin, cmd.ErrOrStderr())
 			stopWatchingTerminal := context.AfterFunc(term.ctx, stop)
 			defer stopWatchingTerminal()
-			err = serveCloudMCP(term.ctx, stream, opened, term, srv, wendymcp.BindingPolicy{AllowRead: allowRead, AllowAll: allowAll, Tools: allowTools, Session: auth}, autoAccept)
+			err = serveCloudMCP(ctx, stream, opened, term, srv, wendymcp.BindingPolicy{AllowRead: allowRead, AllowAll: allowAll, Tools: allowTools, Session: auth}, autoAccept)
 			return errors.Join(err, term.close())
 		},
 	}
@@ -160,14 +160,20 @@ func relayBrokerEndpoint(cloudGRPC string) string {
 // printable, so none can rewrite a question the user answers.
 // ponytail: one binding per session, later pairings are denied; serve several
 // when the desktop app needs it.
-func serveCloudMCP(ctx context.Context, stream relayStream, opened *cloudpbv2.OpenRelaySessionResponse, term *promptTerminal, srv *wendymcp.Server, policy wendymcp.BindingPolicy, autoAccept bool) (result error) {
-	ctx, cancel := context.WithCancel(ctx)
+func serveCloudMCP(parent context.Context, stream relayStream, opened *cloudpbv2.OpenRelaySessionResponse, term *promptTerminal, srv *wendymcp.Server, policy wendymcp.BindingPolicy, autoAccept bool) (result error) {
+	ctx, cancel := context.WithCancel(parent)
 	relay := &relayConn{stream: stream}
 	pairings := make(chan *cloudpbv2.PairingRequested)
 	received := make(chan error, 1)
 	go func() { received <- relay.receive(ctx, pairings) }()
 	var served chan error
 	defer func() {
+		// The RPC and this server are children of the same session context.
+		// Cancellation can reach the RPC first, so consult their parent before
+		// our own cleanup cancellation would hide an unrelated relay failure.
+		if parent.Err() != nil {
+			result = nil
+		}
 		// Every exit stops the server and waits for it to close what it
 		// opened (tunnels) before the stream and the process go.
 		cancel()

@@ -70,8 +70,10 @@ class BrowserLidar:
         runtime = self.runtime
         if self.sampler is None:
             self.sampler = PhysicsSampler(runtime.sim)
-        sampler = self.sampler
         with runtime.lock:
+            if self.sampler.model is not runtime.sim.model:
+                self.sampler = PhysicsSampler(runtime.sim)
+            sampler = self.sampler
             sim = runtime.sim
             if (sim.mode in {"paused", "fault"} or runtime.stop_event.is_set()
                     or not runtime.sensor_settings["lidar_enabled"]

@@ -396,3 +396,30 @@ func TestContainerLogManager_ConcurrentPublishUnsubscribe(t *testing.T) {
 	}
 	// If we reach here without panicking, the fix is working.
 }
+
+func TestContainerLogManagerTerminalPublicationHonorsProducerOwnership(t *testing.T) {
+	lm := NewContainerLogManager(zap.NewNop(), NewTelemetryBroadcaster())
+	_, logs := lm.Subscribe("app")
+	for _, current := range []bool{false, true} {
+		invoked := false
+		lm.Publish("app", ContainerOutput{Done: true, PublishIfCurrent: func(publish func()) {
+			invoked = true
+			if current {
+				publish()
+			}
+		}})
+		if !invoked {
+			t.Fatal("terminal publication bypassed ownership guard")
+		}
+		select {
+		case output := <-logs:
+			if !current || !output.Done || output.PublishIfCurrent != nil {
+				t.Fatalf("invalid terminal publication: %+v", output)
+			}
+		default:
+			if current {
+				t.Fatal("current terminal was not published")
+			}
+		}
+	}
+}

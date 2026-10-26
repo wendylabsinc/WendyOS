@@ -30,6 +30,47 @@ You can also set it directly in `wendy.json`:
 
 Use `kernel` for low-level HCI socket access. Use `bluez` for standard Linux Bluetooth workflows through BlueZ.
 
+## Wendy Net over Bluetooth
+
+[Wendy Net](/docs/guides/wendy-net) can connect nearby WendyOS devices over Bluetooth Low Energy (BLE)
+when a faster connection is unavailable. Devices must be enrolled in the same
+organization and use a WendyOS image with full Wendy Net support. Bluetooth
+pairing is automatic; your apps need no Bluetooth entitlement for these links.
+
+### Enable Bluetooth networking
+
+Run this for each participating device:
+
+```sh
+wendy device wendy-net configure --device <device> --participate=true --ble=true
+wendy device wendy-net status --device <device>
+wendy device wendy-net topology --device <device>
+```
+
+Check the topology for connected peers. Enabling the setting alone does not
+confirm a working link. Omitted options preserve existing settings. To turn
+Bluetooth networking off, use the same configure command with `--ble=false`.
+Changing saved settings can interrupt active Wendy Net connections.
+
+BLE and Wi-Fi Aware can run together. Add `--nan=true` when your device supports
+Wi-Fi Aware. For Lite boards, follow the
+[explicit peer setup](/docs/advanced/development/local-mesh-radio).
+
+### Capacity and recovery
+
+Bluetooth has limited bandwidth and connection capacity. Each device supports
+up to three simultaneous Wendy Net Bluetooth neighbors, including configured
+Lite boards. Prefer Ethernet or Wi-Fi for large transfers. Cold connections
+across several Bluetooth hops can be slow.
+
+The agent retries when an adapter or peer returns, but a powered-off or faulty
+controller may need attention. Check agent logs if no link appears. A full agent
+restart requires fresh authentication and can take longer to reconnect.
+
+These links are separate from the device picker's Bluetooth discovery and from
+sensor or peripheral access below. Apps that use Bluetooth peripherals still
+need the appropriate entitlement.
+
 ## Scan for Devices
 
 Run the Bluetooth command without subcommands to open an interactive table for browsing and managing peripherals:

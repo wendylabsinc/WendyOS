@@ -77,7 +77,7 @@ test("runtime and simulator names are allowlisted", () => {
 
 test("simulators publish only loopback and do not mount host paths or take host networking", () => {
   for (const runtime of ["docker", "apple-container"]) {
-    for (const kind of ["go2", "g1"]) {
+    for (const kind of ["go2", "g1", "so101"]) {
       const args = simRunArgs(
         {
           runtime,

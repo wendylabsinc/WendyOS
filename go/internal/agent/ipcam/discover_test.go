@@ -5,6 +5,7 @@ import (
 	"errors"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -415,5 +416,17 @@ func TestOnceHandsTheCamerasLoginToTheResolver(t *testing.T) {
 	}
 	if seen.Username != "admin" || seen.Password != "hunter2" {
 		t.Fatalf("resolver saw credential %+v", seen)
+	}
+}
+
+func TestOnceIgnoresNonCameraDiscoveryResponse(t *testing.T) {
+	payload := strings.Replace(reolinkProbeMatch, "dn:NetworkVideoTransmitter tds:Device", "wsdp:Computer", 1)
+	d, reg := newTestDiscoverer(t, [][]byte{[]byte(payload)}, procNetARP)
+	found, err := d.Once(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(found) != 0 || len(reg.List()) != 0 {
+		t.Fatalf("non-camera registered: %+v", found)
 	}
 }

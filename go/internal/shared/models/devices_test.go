@@ -489,6 +489,139 @@ func TestMergedDevices_BLELiteDevice(t *testing.T) {
 	}
 }
 
+// liteExternal builds a wendy-lite ExternalDevice for the MergedDevices tests.
+func liteExternal(id, displayName string, info map[string]string) ExternalDevice {
+	return ExternalDevice{ID: id, DisplayName: displayName, ProviderKey: "wendy-lite", ConnectionInfo: info}
+}
+
+// An enrolled board keeps its hardware id as deviceId over USB but publishes
+// the enrolled UUID on LAN and BLE; the three sightings are still one board.
+func TestMergedDevices_LiteEnrolledAcrossTransports(t *testing.T) {
+	const enrolled = "0b8e3a52-6f1d-4c8e-9a47-2d5f1e6c7b90"
+	c := &DevicesCollection{
+		ExternalDevices: []ExternalDevice{
+			liteExternal("wendy-lite:AA:BB", "Lite Board", map[string]string{
+				"type": "BLE", "deviceId": enrolled, "enrolledDeviceId": enrolled,
+			}),
+			liteExternal("wendy-lite:lite-board.local.", "Lite Board", map[string]string{
+				"type": "LAN", "deviceId": enrolled,
+			}),
+			liteExternal("wendy-lite:/dev/cu.usbmodem2101", "Lite Board", map[string]string{
+				"type": "USB", "deviceId": "a1b2c3d4e5f6", "enrolledDeviceId": enrolled,
+			}),
+		},
+	}
+
+	merged := c.MergedDevices()
+	if len(merged) != 1 {
+		t.Fatalf("MergedDevices() returned %d entries, want 1: %+v", len(merged), merged)
+	}
+	var types []string
+	for _, ext := range merged[0].Externals {
+		types = append(types, ext.ConnectionType())
+	}
+	if got := strings.Join(types, ","); got != "USB,LAN,BLE" {
+		t.Errorf("Externals in rank order = %s, want USB,LAN,BLE", got)
+	}
+}
+
+func TestMergedDevices_LiteUnenrolledMergesOnDeviceID(t *testing.T) {
+	c := &DevicesCollection{
+		ExternalDevices: []ExternalDevice{
+			liteExternal("wendy-lite:/dev/cu.usbmodem2101", "Lite Board", map[string]string{"type": "USB", "deviceId": "a1b2c3d4e5f6"}),
+			liteExternal("wendy-lite:lite-board.local.", "Lite Board", map[string]string{"type": "LAN", "deviceId": "a1b2c3d4e5f6"}),
+		},
+	}
+
+	merged := c.MergedDevices()
+	if len(merged) != 1 || len(merged[0].Externals) != 2 {
+		t.Fatalf("MergedDevices() = %+v, want one entry with both transports", merged)
+	}
+}
+
+// The display name is not an identity: two boards can share one.
+func TestMergedDevices_LiteSameNameDifferentBoards(t *testing.T) {
+	c := &DevicesCollection{
+		ExternalDevices: []ExternalDevice{
+			liteExternal("wendy-lite:/dev/cu.usbmodem2101", "Wendy Lite", map[string]string{"type": "USB", "deviceId": "a1b2c3d4e5f6"}),
+			liteExternal("wendy-lite:/dev/cu.usbmodem2201", "Wendy Lite", map[string]string{"type": "USB", "deviceId": "0f1e2d3c4b5a"}),
+		},
+	}
+
+	if merged := c.MergedDevices(); len(merged) != 2 {
+		t.Fatalf("MergedDevices() returned %d entries, want 2", len(merged))
+	}
+}
+
+// LiteDedupID is a case-sensitive id, so the merge compares it exactly.
+func TestMergedDevices_LiteIDsDifferingOnlyInCase(t *testing.T) {
+	c := &DevicesCollection{
+		ExternalDevices: []ExternalDevice{
+			liteExternal("wendy-lite:/dev/cu.usbmodem2101", "Lite Board", map[string]string{"type": "USB", "deviceId": "a1b2c3d4e5f6"}),
+			liteExternal("wendy-lite:lite-board.local.", "Lite Board", map[string]string{"type": "LAN", "deviceId": "A1B2C3D4E5F6"}),
+		},
+	}
+
+	if merged := c.MergedDevices(); len(merged) != 2 {
+		t.Fatalf("MergedDevices() returned %d entries, want 2", len(merged))
+	}
+}
+
+// An unflashed board has no id yet, so nothing may merge into its row.
+func TestMergedDevices_LiteUnflashedStandsAlone(t *testing.T) {
+	c := &DevicesCollection{
+		ExternalDevices: []ExternalDevice{
+			liteExternal("wendy-lite:/dev/cu.usbmodem2101", "ESP32 (unflashed)", map[string]string{"type": "USB", "needsInstall": "true"}),
+			liteExternal("wendy-lite:/dev/cu.usbmodem2201", "ESP32 (unflashed)", map[string]string{"type": "USB", "needsInstall": "true"}),
+		},
+	}
+
+	if merged := c.MergedDevices(); len(merged) != 2 {
+		t.Fatalf("MergedDevices() returned %d entries, want 2", len(merged))
+	}
+}
+
+func TestMergedDevices_LiteNotMergedIntoWendyOSDeviceWithSameName(t *testing.T) {
+	c := &DevicesCollection{
+		LANDevices: []LANDevice{
+			{ID: "jetson", DisplayName: "Robot", Hostname: "robot.local.", IPAddress: "10.0.0.2"},
+		},
+		ExternalDevices: []ExternalDevice{
+			liteExternal("wendy-lite:/dev/cu.usbmodem2101", "Robot", map[string]string{"type": "USB", "deviceId": "a1b2c3d4e5f6"}),
+		},
+	}
+
+	merged := c.MergedDevices()
+	if len(merged) != 2 {
+		t.Fatalf("MergedDevices() returned %d entries, want 2", len(merged))
+	}
+	if len(merged[0].Externals) != 0 {
+		t.Errorf("WendyOS LAN entry picked up Lite transports: %+v", merged[0].Externals)
+	}
+}
+
+func TestExternalDevice_LiteDedupID(t *testing.T) {
+	tests := []struct {
+		name string
+		info map[string]string
+		want string
+	}{
+		{name: "enrolled id preferred", info: map[string]string{"deviceId": "a1b2c3d4e5f6", "enrolledDeviceId": "uuid-1"}, want: "uuid-1"},
+		{name: "device id fallback", info: map[string]string{"deviceId": "a1b2c3d4e5f6"}, want: "a1b2c3d4e5f6"},
+		{name: "empty enrolled id falls back", info: map[string]string{"deviceId": "a1b2c3d4e5f6", "enrolledDeviceId": ""}, want: "a1b2c3d4e5f6"},
+		{name: "returned unchanged", info: map[string]string{"enrolledDeviceId": "Uuid-ABC"}, want: "Uuid-ABC"},
+		{name: "no id", info: map[string]string{"needsInstall": "true"}, want: ""},
+		{name: "nil map", info: nil, want: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := (ExternalDevice{ConnectionInfo: tt.info}).LiteDedupID(); got != tt.want {
+				t.Errorf("LiteDedupID() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestBluetoothDevice_IsWendyAgent(t *testing.T) {
 	tests := []struct {
 		name string

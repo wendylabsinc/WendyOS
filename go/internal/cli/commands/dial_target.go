@@ -562,15 +562,31 @@ func refuseIdentity(format string, args ...any) *deviceIdentityRefusalError {
 // JSON, and non-interactive modes — there is deliberately no "trust this?"
 // prompt, because a MITM warning that can be dismissed gets dismissed.
 func identityRefusal(pinKey string, im *certs.IdentityMismatchError) error {
-	got := "no wendy identity"
-	if im.GotAsset != "" {
-		got = fmt.Sprintf("asset %s in organization %s", im.GotAsset, orgLabel("", im.GotOrg))
-	}
+	saved, now := identityMismatchSides(im)
 	return refuseDevicePin(devicePinDiagnostic{
 		hostname: pinKey,
 		heading:  fmt.Sprintf("Connection blocked: device %q identity changed.", pinKey),
-		details:  fmt.Sprintf("Saved: asset %s in organization %s\nNow:   %s", im.WantAsset, orgLabel("", im.WantOrg), got),
+		details:  fmt.Sprintf("Saved: %s\nNow:   %s", saved, now),
 	})
+}
+
+// identityMismatchSides names the expected and presented identities. A SPIFFE
+// principal wins where one is present: the legacy fields cannot tell tenants
+// apart, since both sides read as the same asset in org 0.
+func identityMismatchSides(im *certs.IdentityMismatchError) (saved, now string) {
+	saved = fmt.Sprintf("asset %s in organization %s", im.WantAsset, orgLabel("", im.WantOrg))
+	if im.WantPrincipal != "" {
+		saved = "principal " + im.WantPrincipal
+	}
+	switch {
+	case im.GotPrincipal != "":
+		now = "principal " + im.GotPrincipal
+	case im.GotAsset != "":
+		now = fmt.Sprintf("asset %s in organization %s", im.GotAsset, orgLabel("", im.GotOrg))
+	default:
+		now = "no wendy identity"
+	}
+	return saved, now
 }
 
 // errNoAuthenticatedEndpoint is what a "nothing answered" refusal answers

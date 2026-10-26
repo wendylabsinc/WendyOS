@@ -65,8 +65,8 @@ func (o SimulatorCreateOptions) Validate() error {
 	if err := vm.ValidName(o.Name); err != nil {
 		return err
 	}
-	if !vm.IsLiteProfile(o.Profile) && o.Profile != "generic" && o.Profile != "go2" && o.Profile != "g1" && o.Profile != "rosmaster-r2" {
-		return fmt.Errorf("profile must be generic, go2, g1, rosmaster-r2, wendy-lite or wendy-lite-native")
+	if !vm.IsLiteProfile(o.Profile) && o.Profile != "generic" && o.Profile != "go2" && o.Profile != "g1" && o.Profile != "rosmaster-r2" && o.Profile != "so101" {
+		return fmt.Errorf("profile must be generic, go2, g1, so101, rosmaster-r2, wendy-lite or wendy-lite-native")
 	}
 	if o.DiskGiB < 1 || o.DiskGiB > 1024 {
 		return fmt.Errorf("disk_gib must be an integer in 1..1024")
@@ -98,7 +98,7 @@ func (s *mcpServer) registerSimulatorTools(srv *server.MCPServer) {
 	create := []mcpgo.ToolOption{
 		mcpgo.WithDescription("Create a stopped local simulator from a published or local image. Downloads may take several minutes. Use simulator_start to boot and verify it. wendy-lite runs WASM firmware; wendy-lite-native runs native ESP-IDF firmware with OTA slots. Both use ESP32-C6 with esp-emu; image must be a merged flash binary."),
 		mcpgo.WithString("name", mcpgo.Required(), mcpgo.Description("1–32 lowercase letters, digits or dashes; starts and ends with a letter or digit")),
-		mcpgo.WithString("profile", mcpgo.Enum("generic", "go2", "g1", "rosmaster-r2", "wendy-lite", "wendy-lite-native"), mcpgo.DefaultString("generic")),
+		mcpgo.WithString("profile", mcpgo.Enum("generic", "go2", "g1", "so101", "rosmaster-r2", "wendy-lite", "wendy-lite-native"), mcpgo.DefaultString("generic")),
 		mcpgo.WithString("image", mcpgo.Description("Local raw, ZIP, gzip or zstd image path; mutually exclusive with version")),
 		mcpgo.WithString("version", mcpgo.Description("Published version; omitted downloads latest stable")),
 		mcpgo.WithInteger("disk_gib", mcpgo.Min(1), mcpgo.Max(1024), mcpgo.DefaultNumber(16)),

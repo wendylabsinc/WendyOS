@@ -6,10 +6,14 @@ package main
 
 import (
 	"context"
+	"crypto/hpke"
+	"crypto/mldsa"
+	"crypto/rand"
+	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
-	"github.com/wendylabsinc/wendy/go/internal/cli/browserauth"
 	"io"
 	"net"
 	"net/http"
@@ -21,20 +25,33 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/wendylabsinc/wendy/go/internal/cli/browserauth"
+	"github.com/wendylabsinc/wendy/go/internal/cli/cloudrequest"
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/shared/cloudrelay"
+	"github.com/wendylabsinc/wendy/go/internal/shared/config"
+	"github.com/wendylabsinc/wendy/go/internal/shared/headack"
+	"github.com/wendylabsinc/wendy/go/internal/shared/registrycrypto"
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
+	cloudpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
 	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
 )
 
 type request struct {
 	ID     int             `json:"id"`
 	Method string          `json:"method"`
 	Params json.RawMessage `json:"params"`
+	// bytes is the request's second argument: data to sign, as a Uint8Array.
+	bytes []byte
 }
+
+// signature is returned to the page as a Uint8Array, never as a string.
+type signature []byte
 
 type bridge struct {
 	auth            *browserauth.Session
+	initialized     bool
 	mu              sync.Mutex
 	conn            *grpcclient.AgentConnection
 	life            context.Context
@@ -55,16 +72,24 @@ func main() {
 	_ = os.Setenv("WENDY_TLS_SESSION_STORE", "off")
 	b := &bridge{auth: &browserauth.Session{Client: &http.Client{Transport: authProxyTransport{}}, Store: browserCredentialStore{}}}
 	callback := js.FuncOf(func(_ js.Value, args []js.Value) any {
-		if len(args) != 1 {
+		if len(args) < 1 || len(args) > 2 {
 			return nil
 		}
 		var r request
 		if json.Unmarshal([]byte(args[0].String()), &r) != nil {
 			return nil
 		}
+		if len(args) == 2 && args[1].InstanceOf(js.Global().Get("Uint8Array")) {
+			r.bytes = make([]byte, args[1].Length())
+			js.CopyBytesToGo(r.bytes, args[1])
+		}
 		go func() {
 			value, err := b.handle(r)
-			if err != nil {
+			if sig, ok := value.(signature); ok && err == nil {
+				buf := js.Global().Get("Uint8Array").New(len(sig))
+				js.CopyBytesToJS(buf, sig)
+				js.Global().Call("postMessage", js.ValueOf(map[string]any{"id": r.ID, "result": map[string]any{"signature": buf}}))
+			} else if err != nil {
 				send(map[string]any{"id": r.ID, "error": err.Error()})
 			} else {
 				send(map[string]any{"id": r.ID, "result": value})
@@ -78,8 +103,130 @@ func main() {
 }
 
 func (b *bridge) handle(r request) (any, error) {
+	if r.Method == "init" {
+		// A deployment's page pins its services. They are called directly, so
+		// the dev dashboard's same-origin auth proxy is not involved.
+		// SECURITY: the page is this worker's origin and trust domain: it picks the worker script, and saved sign-ins live in its IndexedDB, so a hostile page needs no init to misuse them. Validate holds the services to HTTPS and fixed paths; a host allowlist would break self-hosted deployments. Records from another auth host do not restore (issuer check), and init runs once.
+		var settings browserauth.Settings
+		if err := json.Unmarshal(r.Params, &settings); err != nil {
+			return nil, err
+		}
+		if err := settings.Validate(); err != nil {
+			return nil, err
+		}
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		if b.initialized {
+			return nil, errors.New("The Wendy client is already initialized")
+		}
+		b.initialized = true
+		b.auth = &browserauth.Session{Settings: &settings, Client: &http.Client{}, Store: browserCredentialStore{}}
+		return true, nil
+	}
+	// The console builds postbox-relayed payloads itself; this gives it the
+	// CLI's validity rule (default 60 days, at most 365) for their valid_until.
+	if r.Method == "valid-until" {
+		var p struct {
+			ValidForSeconds int64 `json:"validForSeconds"`
+		}
+		if len(r.Params) > 0 {
+			if err := json.Unmarshal(r.Params, &p); err != nil {
+				return nil, err
+			}
+		}
+		// Bounded before the multiply, which would wrap; a non-integer fails
+		// to decode into int64.
+		if p.ValidForSeconds < 0 || p.ValidForSeconds > int64(cloudrequest.MaxValidity/time.Second) {
+			return nil, fmt.Errorf("validForSeconds %d is outside 0 to 365 days", p.ValidForSeconds)
+		}
+		until, err := cloudrequest.ValidUntil(time.Now(), time.Duration(p.ValidForSeconds)*time.Second)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"seconds": until.Unix()}, nil
+	}
+	// SECURITY: signing raw bytes is the approved console design (sem, 2026-10-19 22:55): the console builds its JWS, DPoP and management-request inputs, which verifiers check byte for byte, so no prefix can be added. Only same-origin script reaches this worker; it can use the key, never export it.
+	if r.Method == "credential" || r.Method == "sign" {
+		var p org
+		if len(r.Params) > 0 {
+			if err := json.Unmarshal(r.Params, &p); err != nil {
+				return nil, err
+			}
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 35*time.Second)
+		defer cancel()
+		if r.Method == "sign" {
+			if len(r.bytes) == 0 {
+				return nil, errors.New("Nothing to sign")
+			}
+			_, key, err := b.operator(ctx, p, false)
+			if err != nil {
+				return nil, err
+			}
+			sig, err := key.Sign(rand.Reader, r.bytes, &mldsa.Options{})
+			return signature(sig), err
+		}
+		saved, key, err := b.operator(ctx, p, true)
+		if err != nil {
+			return nil, err
+		}
+		jwk, alg, err := cloudrequest.OperatorPublicJWK(key)
+		if err != nil {
+			return nil, err
+		}
+		chain := [][]byte{}
+		for _, raw := range []string{saved.Certificate.PemCertificate, saved.Certificate.PemCertificateChain} {
+			for rest := []byte(raw); ; {
+				var block *pem.Block
+				if block, rest = pem.Decode(rest); block == nil {
+					break
+				}
+				chain = append(chain, block.Bytes)
+			}
+		}
+		return map[string]any{"profile": saved.Profile, "algorithm": alg, "chainDER": chain, "accessToken": saved.Tokens.Access, "publicJWK": jwk}, nil
+	}
+	if strings.HasPrefix(r.Method, "registry-") {
+		return b.registry(r)
+	}
+	// The console's signed-ack staleness alarm (WDY-3999): the page pins the
+	// platform root and keeps the returned ack per device, passing it back as
+	// kept on the next read.
+	if r.Method == "head-ack-verify" {
+		var p struct {
+			Response       []byte      `json:"response"`
+			RootDER        []byte      `json:"rootDER"`
+			Device         string      `json:"device"`
+			OrganizationID string      `json:"organizationId"`
+			Kept           headack.Ack `json:"kept"`
+		}
+		if err := json.Unmarshal(r.Params, &p); err != nil {
+			return nil, err
+		}
+		root, err := x509.ParseCertificate(p.RootDER)
+		if err != nil {
+			return nil, err
+		}
+		var resp cloudpbv2.GetLastHeadAckResponse
+		if err := proto.Unmarshal(p.Response, &resp); err != nil {
+			return nil, err
+		}
+		return headack.Verify(&resp, root, p.Device, p.OrganizationID, p.Kept)
+	}
 	if strings.HasPrefix(r.Method, "shell-") {
 		return nil, errors.New("Shell access is disabled in the browser client")
+	}
+	if r.Method == "mesh-topology" {
+		if js.Global().Get("location").Get("origin").String() != "http://localhost:5173" {
+			return nil, errors.New("Local observations require the local browser relay")
+		}
+		var p struct {
+			ID string `json:"id"`
+		}
+		if err := json.Unmarshal(r.Params, &p); err != nil {
+			return nil, err
+		}
+		return b.auth.MeshTopology(context.Background(), p.ID, browserCloudDial, &http.Client{Transport: authProxyTransport{}, Timeout: 12 * time.Second}), nil
 	}
 	if r.Method == "cloud-connect" {
 		if js.Global().Get("location").Get("origin").String() != "http://localhost:5173" {
@@ -117,7 +264,7 @@ func (b *bridge) handle(r request) (any, error) {
 		b.conn, b.life, b.close = conn, life, stop
 		return true, nil
 	}
-	if r.Method == "cloud-discover" {
+	if r.Method == "cloud-discover" || r.Method == "mesh-discover" {
 		// The local relay has a fixed TLS-verified upstream. Never send the session
 		// token to a caller-supplied relay URL.
 		if js.Global().Get("location").Get("origin").String() != "http://localhost:5173" {
@@ -125,13 +272,13 @@ func (b *bridge) handle(r request) (any, error) {
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		assets, err := b.auth.Discover(ctx, func(ctx context.Context, _ string) (net.Conn, error) {
+		assets, err := b.auth.DiscoverFiltered(ctx, func(ctx context.Context, _ string) (net.Conn, error) {
 			ws, _, err := websocket.Dial(ctx, "ws://127.0.0.1:8788/cloud", nil)
 			if err != nil {
 				return nil, fmt.Errorf("Browser relay connection failed; check the npm run dev terminal: %w", err)
 			}
 			return websocket.NetConn(ctx, ws, websocket.MessageBinary), nil
-		})
+		}, r.Method == "cloud-discover")
 		profile := b.auth.Profile()
 		if profile.Subject != "" {
 			event("auth-profile", profile)
@@ -152,6 +299,8 @@ func (b *bridge) handle(r request) (any, error) {
 			Code     string `json:"code"`
 			State    string `json:"state"`
 			Issuer   string `json:"issuer"`
+			Refresh  bool   `json:"refresh"`
+			org
 		}
 		if err := json.Unmarshal(r.Params, &p); err != nil {
 			return nil, err
@@ -160,11 +309,28 @@ func (b *bridge) handle(r request) (any, error) {
 		defer cancel()
 		switch r.Method {
 		case "auth-restore":
+			if p.Tenant != "" {
+				if err := selectOrg(p.org); err != nil {
+					return nil, err
+				}
+			}
+			if p.Refresh {
+				return b.auth.RestoreRotated(ctx)
+			}
 			return b.auth.Restore(ctx)
 		case "auth-signout":
-			return true, b.auth.SignOut()
+			// With no tenant, every organization signs out.
+			if p.Tenant == "" || p.Tenant == b.auth.Profile().Tenant {
+				if err := b.auth.SignOut(); err != nil {
+					return nil, err
+				}
+			}
+			if _, err := storageCall("forget", p.Tenant); err != nil {
+				return nil, fmt.Errorf("Could not remove saved sign-in: %w", err)
+			}
+			return true, nil
 		case "auth-begin":
-			return b.auth.Begin(ctx, p.Email, p.Redirect)
+			return b.auth.Begin(ctx, p.Email, p.Issuer, p.Redirect)
 		case "auth-complete":
 			return b.auth.Complete(ctx, p.Code, p.State, p.Issuer)
 		}
@@ -533,6 +699,192 @@ func (browserCredentialStore) LoadKey(aad string) ([]byte, error) {
 	return seed, nil
 }
 func (browserCredentialStore) Clear() error { _, err := storageCall("clear"); return err }
+
+// org names one organization's saved sign-in. Tenant alone selects the most
+// recent operator signed in to it.
+type org struct {
+	Tenant  string `json:"tenant"`
+	Subject string `json:"subject"`
+}
+
+func selectOrg(o org) error {
+	if o.Tenant == "" || strings.Contains(o.Tenant, ":") || strings.Contains(o.Subject, ":") {
+		return errors.New("Invalid organization")
+	}
+	_, err := storageCall("select", o.Tenant, o.Subject)
+	return err
+}
+
+// savedRecord reads the fields of browserauth's saved session that the page's
+// own signer needs. browserauth writes it; the shell only reads it.
+type savedRecord struct {
+	Certificate config.CertificateInfo `json:"certificate"`
+	Tokens      struct {
+		Access string `json:"access_token"`
+	} `json:"tokens"`
+	Profile browserauth.Profile `json:"profile"`
+}
+
+// operator returns the selected organization's saved sign-in and its operator
+// key. The first use in this worker, a change of organization, and (when fresh
+// is set) a cloud token with under a minute left all go through Restore, which
+// validates the record and refreshes the token. The seed is never returned.
+func (b *bridge) operator(ctx context.Context, o org, fresh bool) (savedRecord, *mldsa.PrivateKey, error) {
+	current := b.auth.Profile()
+	if o.Tenant != "" && (o.Tenant != current.Tenant || o.Subject != "" && o.Subject != current.Subject) {
+		if err := selectOrg(o); err != nil {
+			return savedRecord{}, nil, err
+		}
+	}
+	load := func() (savedRecord, error) {
+		var saved savedRecord
+		raw, err := browserCredentialStore{}.Load()
+		if err == nil {
+			err = json.Unmarshal(raw, &saved)
+		}
+		return saved, err
+	}
+	saved, err := load()
+	expires, _ := time.Parse(time.RFC3339, saved.Profile.Expires)
+	if err != nil || current.Subject == "" || saved.Profile.Tenant != current.Tenant || saved.Profile.Subject != current.Subject || fresh && time.Until(expires) < time.Minute {
+		profile, err := b.auth.Restore(ctx)
+		if err != nil {
+			return savedRecord{}, nil, err
+		}
+		if profile == nil {
+			return savedRecord{}, nil, errors.New("Sign in with Wendy first")
+		}
+		if saved, err = load(); err != nil {
+			return savedRecord{}, nil, err
+		}
+	}
+	// Another tab may have rotated the token since, so only the identity must match.
+	signedIn := b.auth.Profile()
+	if saved.Profile.Tenant != signedIn.Tenant || saved.Profile.Subject != signedIn.Subject || o.Tenant != "" && saved.Profile.Tenant != o.Tenant {
+		return savedRecord{}, nil, errors.New("Sign in with Wendy first")
+	}
+	seed, err := browserCredentialStore{}.LoadKey("operator-key:" + saved.Profile.Tenant + ":" + saved.Profile.Subject)
+	if err != nil {
+		return savedRecord{}, nil, errors.New("Saved operator key is invalid. Sign in again")
+	}
+	defer clear(seed)
+	key, err := mldsa.NewPrivateKey(mldsa.MLDSA65(), seed)
+	if err != nil {
+		return savedRecord{}, nil, errors.New("Saved operator key is invalid. Sign in again")
+	}
+	block, _ := pem.Decode([]byte(saved.Certificate.PemCertificate))
+	if block == nil {
+		return savedRecord{}, nil, errors.New("Saved certificate is invalid. Sign in again")
+	}
+	leaf, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return savedRecord{}, nil, errors.New("Saved certificate is invalid. Sign in again")
+	}
+	want, _ := x509.MarshalPKIXPublicKey(key.Public())
+	got, err := x509.MarshalPKIXPublicKey(leaf.PublicKey)
+	if err != nil || string(want) != string(got) {
+		return savedRecord{}, nil, errors.New("Saved certificate does not match the operator. Sign in again")
+	}
+	if now := time.Now(); now.After(leaf.NotAfter) || now.Before(leaf.NotBefore) {
+		return savedRecord{}, nil, errors.New("Saved certificate has expired or is not yet valid. Sign in again")
+	}
+	return saved, key, nil
+}
+
+// registry runs the encrypted-registry operations for the console (T8) with
+// the registrycrypto calls the CLI makes. This browser's registry key never
+// leaves the worker; the content and deployment keys are the page's.
+// registry-key returns the RegisterEncryptionKeyRequest payload for the page
+// to sign (x5c) and send, as the CLI does; rotate replaces the key.
+func (b *bridge) registry(r request) (any, error) {
+	var p struct {
+		org
+		Rotate             bool                     `json:"rotate"`
+		Wrap               registrycrypto.Wrap      `json:"wrap"`
+		Sealed             registrycrypto.SealedKey `json:"sealed"`
+		RecipientPublicKey []byte                   `json:"recipientPublicKey"`
+		Key                []byte                   `json:"key"`
+		DeploymentKey      []byte                   `json:"deploymentKey"`
+		Enc                []byte                   `json:"enc"`
+		Nonce              []byte                   `json:"nonce"`
+		Ciphertext         []byte                   `json:"ciphertext"`
+	}
+	if len(r.Params) > 0 {
+		if err := json.Unmarshal(r.Params, &p); err != nil {
+			return nil, err
+		}
+	}
+	switch r.Method {
+	case "registry-wrap":
+		enc, ciphertext, err := p.Wrap.Seal(p.RecipientPublicKey, p.Key)
+		return map[string]any{"enc": enc, "ciphertext": ciphertext}, err
+	case "registry-seal":
+		nonce, ciphertext, err := p.Sealed.Seal(p.DeploymentKey, p.Key)
+		return map[string]any{"nonce": nonce, "ciphertext": ciphertext}, err
+	case "registry-open":
+		key, err := p.Sealed.Open(p.DeploymentKey, p.Nonce, p.Ciphertext)
+		return map[string]any{"key": key}, err
+	case "registry-key", "registry-unwrap":
+	default:
+		return nil, fmt.Errorf("Unknown operation %q", r.Method)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 35*time.Second)
+	defer cancel()
+	saved, _, err := b.operator(ctx, p.org, false)
+	if err != nil {
+		return nil, err
+	}
+	// Only registry-key rotates: an unwrap needs the registered key.
+	priv, err := browserRegistryKey(saved.Profile, r.Method == "registry-key", r.Method == "registry-key" && p.Rotate)
+	if err != nil {
+		return nil, err
+	}
+	if r.Method == "registry-unwrap" {
+		key, err := p.Wrap.Open(priv, p.Enc, p.Ciphertext)
+		return map[string]any{"key": key}, err
+	}
+	payload, err := proto.Marshal(registrycrypto.Registration(saved.Profile.Tenant, priv.PublicKey()))
+	return map[string]any{"keyId": registrycrypto.KeyID(priv.PublicKey().Bytes()), "payload": payload}, err
+}
+
+// browserRegistryKey loads this browser's registry key for the signed-in
+// operator, wrapped like the operator seed. create generates one when none is
+// saved; rotate always does.
+func browserRegistryKey(p browserauth.Profile, create, rotate bool) (hpke.PrivateKey, error) {
+	aad := "operator-key:" + p.Tenant + ":" + p.Subject
+	if !rotate {
+		value, err := storageCall("loadRegistryKey", aad)
+		if err != nil {
+			return nil, err
+		}
+		if value.InstanceOf(js.Global().Get("Uint8Array")) {
+			defer value.Call("fill", 0)
+			raw := make([]byte, value.Length())
+			js.CopyBytesToGo(raw, value)
+			defer clear(raw)
+			return registrycrypto.KEM.NewPrivateKey(raw)
+		}
+		if !create {
+			return nil, errors.New("This browser has no registry key yet")
+		}
+	}
+	priv, err := registrycrypto.KEM.GenerateKey()
+	if err != nil {
+		return nil, err
+	}
+	raw, err := priv.Bytes()
+	if err != nil {
+		return nil, err
+	}
+	defer clear(raw)
+	buf := js.Global().Get("Uint8Array").New(len(raw))
+	js.CopyBytesToJS(buf, raw)
+	defer buf.Call("fill", 0)
+	if _, err := storageCall("saveRegistryKey", aad, buf); err != nil {
+		return nil, err
+	}
+	return priv, nil
+}
 
 // Only Wendy public HTTPS endpoints are eligible for the broker relay.
 func browserCloudDial(ctx context.Context, endpoint string) (net.Conn, error) {

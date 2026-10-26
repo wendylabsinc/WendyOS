@@ -133,3 +133,11 @@ The agent creates the directory on startup. Unprivileged developer agents that
 cannot create the production default fall back to their platform user
 configuration directory. WendyOS services should set an explicit path on the
 persistent `/data` partition when the root filesystem is small.
+
+## Agent shutdown
+
+The agent handles `SIGINT` and `SIGTERM` before starting background workers,
+so termination during startup also requests resource cleanup. Its shutdown
+log entry is `Termination requested, shutting down`; it replaces
+`Received signal, shutting down` and no longer includes a signal-name field.
+Use the current entry when filtering logs or configuring alerts.
