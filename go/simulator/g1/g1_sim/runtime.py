@@ -46,17 +46,21 @@ class Runtime:
             from .simulation import DEFAULT_ASSETS
             simulation = Simulation(model=instrumented_model(DEFAULT_ASSETS))
         self.sim = simulation or Simulation()
+        self.visual_model = self.sim.model
         self.scene = BrowserScene(self.sim.model)
         # Lifecycle operations take this before lock. ROS may publish without
         # holding the physics lock, while reset/pause waits for that sample.
         self.observation_lock = threading.RLock()
         self.lock = threading.RLock()
+        self.project_lock = threading.RLock()
+        self.project_status = {"project_id": None, "revision": "", "error": None, "watcher_seen": None}
         self.observation_generation = 0
         self.sensor_generation = 0
         self.sensor_settings = {"lidar_enabled": True, "camera_enabled": True, "lidar_dropout": 0.0}
         self.camera_frame = None
         self.camera_jpeg = None
         self.camera_frames = 0
+        self.camera_demand = 0.0
         self.stop_event = threading.Event()
         self.render = render
         # Software OpenGL is needed only for actual camera sensor exposures.
@@ -247,11 +251,22 @@ class Runtime:
             options.geomgroup[3] = False
             from .camera import CameraFrame
             while not self.stop_event.is_set():
+                current_model = self.visual_model
+                if model is not current_model:
+                    renderer.close()
+                    model = current_model
+                    model.vis.quality.offsamples = 0
+                    renderer = mujoco.Renderer(model, height=360, width=640)
+                    data = mujoco.MjData(model)
+                    robot_camera = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_CAMERA, "front")
                 started = time.perf_counter()
                 thread_started = time.thread_time()
                 stages = {}
+                wanted = self.camera_wanted()
                 with self.lock:
                     stages["capture_lock_wait"] = (time.perf_counter() - started) * 1000
+                    if model is not self.visual_model:
+                        continue
                     data.qpos[:] = self.sim.data.qpos
                     data.qvel[:] = self.sim.data.qvel
                     data.time = self.sim.data.time
@@ -260,7 +275,7 @@ class Runtime:
                     epoch = self.sim.epoch
                     generation = self.observation_generation
                     wall_timestamp_ns = time.time_ns()
-                    emit_camera = (self.sensor_settings["camera_enabled"]
+                    emit_camera = (wanted and self.sensor_settings["camera_enabled"]
                                    and self.sim.mode not in {"paused", "fault"})
                 stages["capture_lock"] = (time.perf_counter() - started) * 1000
                 if not emit_camera:
@@ -315,6 +330,19 @@ class Runtime:
             if renderer is not None:
                 renderer.close()
 
+    def camera_wanted(self):
+        """Render the sensor camera only while something consumes it: a recent
+        browser /camera.jpg request or a live ROS image subscriber. Software
+        OpenGL is orders slower than a device GPU, so an always-on exposure loop
+        would run flat-out and starve wall-paced physics."""
+        if time.monotonic() - self.camera_demand < 2.0:
+            return True
+        node = getattr(self.ros_bridge, "slow_node", None)
+        try:
+            return bool(node and node.image_pub.get_subscription_count())
+        except Exception:  # ponytail: any rmw hiccup keeps the camera live
+            return True
+
     def command(self, values, token):
         with self.lock:
             self.ensure_running()
@@ -326,6 +354,7 @@ class Runtime:
         elapsed = max(time.monotonic() - self.started, 0.001)
         with self.lock:
             result = self.sim.snapshot()
+            result["project"] = self.project_status.copy()
             result["sensor_settings"] = self.sensor_settings.copy()
             result["sensor_generation"] = self.sensor_generation
             inference = list(self.sim.policy.inference_ms)

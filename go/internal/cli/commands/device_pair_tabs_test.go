@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
@@ -26,6 +27,33 @@ type pairTestClient struct {
 	removedPrincipal  string
 	supportsPrincipal bool
 	err               error
+	// sources and discoverErr answer DiscoverSensorSources, the scan of the
+	// device's own network.
+	sources     []*agentpbv2.DiscoveredSensorSource
+	discoverErr error
+	discoveries int
+}
+
+func (c *pairTestClient) DiscoverSensorSources(ctx context.Context, _ *agentpbv2.DiscoverSensorSourcesRequest, _ ...grpc.CallOption) (*agentpbv2.DiscoverSensorSourcesResponse, error) {
+	c.discoveries++
+	if err := ctx.Err(); err != nil {
+		return nil, status.FromContextError(err).Err()
+	}
+	if c.discoverErr != nil {
+		return nil, c.discoverErr
+	}
+	return &agentpbv2.DiscoverSensorSourcesResponse{Sources: c.sources}, nil
+}
+
+// deviceSource is the DiscoverSensorSources entry an agent reports for a LAN
+// sighting on its network (see services.sensorSourceToProto).
+func deviceSource(d models.LANDevice) *agentpbv2.DiscoveredSensorSource {
+	return &agentpbv2.DiscoveredSensorSource{
+		Id: d.ID, DisplayName: d.DisplayName, Hostname: d.Hostname, IpAddress: d.IPAddress,
+		Addresses: d.Addresses, Port: int32(d.Port), IsMtls: d.IsMTLS, AssetId: d.AssetID,
+		OrgId: d.OrgID, TenantUuid: d.TenantUUID, PrincipalUri: d.PrincipalURI, Caps: d.Caps,
+		WendyLite: d.WendyLite,
+	}
 }
 
 func (c *pairTestClient) ListSensorPairings(context.Context, *agentpbv2.ListSensorPairingsRequest, ...grpc.CallOption) (*agentpbv2.ListSensorPairingsResponse, error) {
@@ -74,12 +102,12 @@ func (h *pairTestBluetooth) Forget(address string) tea.Cmd {
 	}
 }
 
+// pairTestHandler's device reports one pairable source on its network. It has
+// no local fallback, so a test that reaches it without setting one fails.
 func pairTestHandler(client *pairTestClient) *sensorPairHandler {
+	client.sources = []*agentpbv2.DiscoveredSensorSource{{AssetId: 42, OrgId: 7, DisplayName: "Camera", IsMtls: true, Caps: []string{"sensors"}, IpAddress: "192.0.2.42"}}
 	return &sensorPairHandler{
 		ctx: context.Background(), client: client,
-		discover: func(context.Context) ([]models.DiscoveredDevice, error) {
-			return []models.DiscoveredDevice{{AssetID: 42, OrgID: 7, DisplayName: "Camera", Sensorlink: true, IsMTLS: true, Caps: []string{"sensors"}, IPAddress: "192.0.2.42"}}, nil
-		},
 		orgIDs: func() (map[int32]bool, error) { return map[int32]bool{7: true}, nil },
 	}
 }
@@ -91,16 +119,11 @@ func pairUpdate(m devicePairModel, msg tea.Msg) (devicePairModel, tea.Cmd) {
 
 func TestDevicePairTabsDiscoverOnVisitAndRouteBackgroundResults(t *testing.T) {
 	bt := &pairTestBluetooth{}
-	discoveries := 0
-	h := pairTestHandler(&pairTestClient{})
-	discover := h.discover
-	h.discover = func(ctx context.Context) ([]models.DiscoveredDevice, error) {
-		discoveries++
-		return discover(ctx)
-	}
+	client := &pairTestClient{}
+	h := pairTestHandler(client)
 	m := newDevicePairModel(bt, h, nil)
 	batch := m.Init()().(tea.BatchMsg)
-	if discoveries != 0 {
+	if client.discoveries != 0 {
 		t.Fatal("SensorLink scanned before its tab was opened")
 	}
 	m, scan := pairUpdate(m, tea.KeyMsg{Type: tea.KeyTab})
@@ -108,7 +131,7 @@ func TestDevicePairTabsDiscoverOnVisitAndRouteBackgroundResults(t *testing.T) {
 		t.Fatal("Tab did not start SensorLink discovery")
 	}
 	m, _ = pairUpdate(m, scan())
-	if discoveries != 1 || !strings.Contains(m.View(), "Camera") {
+	if client.discoveries != 1 || !strings.Contains(m.View(), "Camera") {
 		t.Fatal("SensorLink discovery was not rendered")
 	}
 	// Complete Bluetooth's initial scan while SensorLink is visible.
@@ -138,8 +161,8 @@ func TestDevicePairTabsDiscoverOnVisitAndRouteBackgroundResults(t *testing.T) {
 		t.Fatal("tab switching duplicated an in-flight scan")
 	}
 	m, _ = pairUpdate(m, rescan())
-	if discoveries != 2 {
-		t.Fatalf("discovered %d times, want 2", discoveries)
+	if client.discoveries != 2 {
+		t.Fatalf("discovered %d times, want 2", client.discoveries)
 	}
 }
 
@@ -223,12 +246,9 @@ func TestSensorPairShowsUnenrolledWendyLite(t *testing.T) {
 		IPAddress: "192.0.2.24", Port: 5054,
 		TXTRecords: map[string]string{"id": "441bf6804824", "caps": "sensors", "mtls": "false"},
 	})
-	collection := &models.DevicesCollection{LANDevices: []models.LANDevice{source}}
 	client := &pairTestClient{}
 	h := pairTestHandler(client)
-	h.discover = func(context.Context) ([]models.DiscoveredDevice, error) {
-		return collection.MergedDevices(), nil
-	}
+	client.sources = []*agentpbv2.DiscoveredSensorSource{deviceSource(source)}
 	m := newSensorPairModel(h)
 	updated, _ := m.Update(m.Init()())
 	m = updated.(sensorPairModel)
@@ -249,9 +269,9 @@ func TestSensorPairShowsUnenrolledWendyLite(t *testing.T) {
 	}
 
 	// Once enrollment completes, a rescan makes the same board pairable.
-	collection.LANDevices[0].AssetID = 42
-	collection.LANDevices[0].OrgID = 7
-	collection.LANDevices[0].IsMTLS = true
+	client.sources[0].AssetId = 42
+	client.sources[0].OrgId = 7
+	client.sources[0].IsMtls = true
 	updated, _ = m.Update(h.scan()())
 	m = updated.(sensorPairModel)
 	if strings.Contains(m.View(), "need enrollment") || len(m.rows) != 1 {
@@ -269,15 +289,15 @@ func TestSensorPairShowsUnenrolledWendyLite(t *testing.T) {
 
 func TestSensorPairPKIEnrollmentPairAndForget(t *testing.T) {
 	const tenant = "11111111-2222-4333-8444-555555555555"
-	principal := "spiffe://wendy.sh/tenant/" + tenant + "/device/lite-441bf6804824"
+	const device = "44444444-4444-4444-8444-444444444444"
+	principal := "spiffe://wendy.sh/tenant/" + tenant + "/device/" + device
 	source := discovery.LANDeviceFromWendyLiteService(discovery.MDNSService{
 		InstanceName: "joannis-home", IPAddress: "192.168.0.125", Port: 5054,
-		TXTRecords: map[string]string{"id": "441bf6804824", "tenant": tenant, "caps": "sensors", "mtls": "true"},
+		TXTRecords: map[string]string{"id": device, "tenant": tenant, "principal": principal, "caps": "sensors", "mtls": "true"},
 	})
-	collection := &models.DevicesCollection{LANDevices: []models.LANDevice{source}}
 	client := &pairTestClient{}
 	h := pairTestHandler(client)
-	h.discover = func(context.Context) ([]models.DiscoveredDevice, error) { return collection.MergedDevices(), nil }
+	client.sources = []*agentpbv2.DiscoveredSensorSource{deviceSource(source)}
 	h.tenantIDs = func() (map[string]bool, error) { return map[string]bool{tenant: true}, nil }
 	m := newSensorPairModel(h)
 	updated, _ := m.Update(m.Init()())
@@ -315,7 +335,7 @@ func TestSensorPairPKIEnrollmentPairAndForget(t *testing.T) {
 		t.Fatal("forget lost principal")
 	}
 	h.tenantIDs = func() (map[string]bool, error) { return map[string]bool{}, nil }
-	if msg := h.pair(collection.MergedDevices()[0])().(sensorPairOpMsg); msg.err == nil {
+	if msg := h.pair(sensorSourcesFromDevice(client.sources)[0])().(sensorPairOpMsg); msg.err == nil {
 		t.Fatal("foreign tenant passed CLI gate")
 	}
 }
@@ -348,7 +368,7 @@ func TestSensorPairErrorsPreservePairingsAndBlockUnauthorizedPair(t *testing.T) 
 	updated, _ := m.Update(m.Init()())
 	m = updated.(sensorPairModel)
 	client.err = status.Error(codes.Unavailable, "internal details")
-	h.discover = func(context.Context) ([]models.DiscoveredDevice, error) { return nil, errors.New("LAN unavailable") }
+	client.discoverErr = status.Error(codes.Internal, "LAN unavailable")
 	updated, _ = m.Update(h.scan()())
 	m = updated.(sensorPairModel)
 	if len(m.rows) != 2 || !strings.Contains(m.View(), "LAN unavailable") || !strings.Contains(m.View(), "not reachable") || strings.Contains(m.View(), "rpc error") {
@@ -397,12 +417,13 @@ func TestDevicePairTabFailureAndResizeDoNotBlockOtherTab(t *testing.T) {
 
 func TestDevicePairStartsOnSensorLinkAndHandlesEmptyScan(t *testing.T) {
 	bt := &pairTestBluetooth{}
-	h := pairTestHandler(&pairTestClient{})
-	h.discover = func(context.Context) ([]models.DiscoveredDevice, error) { return nil, nil }
+	client := &pairTestClient{}
+	h := pairTestHandler(client)
+	client.sources = nil
 	m := newDevicePairModel(bt, h, nil)
 	m.active = pairSensorLinkTab
 	m, _ = pairUpdate(m, m.Init()())
-	if bt.scans != 0 || !strings.Contains(m.View(), "No SensorLink devices found") {
+	if bt.scans != 0 || !strings.Contains(m.View(), "No SensorLink devices found on the device's network") {
 		t.Fatal("initial SensorLink tab started Bluetooth or failed to show the empty state")
 	}
 	m, pair := pairUpdate(m, tea.KeyMsg{Type: tea.KeyEnter})
@@ -423,22 +444,200 @@ func TestDevicePairStartsOnSensorLinkAndHandlesEmptyScan(t *testing.T) {
 
 func TestSensorPairScanCancellationKeepsKnownDevices(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	h := pairTestHandler(&pairTestClient{})
+	client := &pairTestClient{}
+	h := pairTestHandler(client)
 	h.ctx = ctx
-	// Discovery can return an empty collection when its context expires.
-	h.discover = func(ctx context.Context) ([]models.DiscoveredDevice, error) {
-		if ctx.Err() == nil {
-			t.Fatal("discovery did not receive the cancelled context")
-		}
-		return nil, nil
-	}
 	m := newSensorPairModel(h)
 	m.devices = []models.DiscoveredDevice{{AssetID: 42, Sensorlink: true}}
 	cancel()
+	// The fake device answers a cancelled call the way gRPC does.
 	updated, _ := m.Update(h.scan()())
 	m = updated.(sensorPairModel)
-	if len(m.devices) != 1 || m.scanning || !strings.Contains(m.message, "context canceled") {
-		t.Fatal("cancelled scan discarded known devices or stayed scanning")
+	if client.discoveries != 1 || len(m.devices) != 1 || m.scanning || !strings.Contains(m.message, "context canceled") {
+		t.Fatalf("cancelled scan discarded known devices or stayed scanning: %q", m.message)
+	}
+	// A local scan cut short by cancellation is reported the same way.
+	h.discoverLocal = func(ctx context.Context) ([]models.DiscoveredDevice, error) {
+		if ctx.Err() == nil {
+			t.Fatal("local discovery did not receive the cancelled context")
+		}
+		return nil, nil
+	}
+	h.client = &unimplementedDiscoveryClient{client}
+	updated, _ = m.Update(h.scan()())
+	m = updated.(sensorPairModel)
+	if len(m.devices) != 1 || !strings.Contains(m.message, "context canceled") {
+		t.Fatalf("cancelled local scan discarded known devices: %q", m.message)
+	}
+}
+
+// unimplementedDiscoveryClient is an agent that predates DiscoverSensorSources
+// but otherwise answers like pairTestClient, cancelled context or not.
+type unimplementedDiscoveryClient struct{ *pairTestClient }
+
+func (c *unimplementedDiscoveryClient) DiscoverSensorSources(context.Context, *agentpbv2.DiscoverSensorSourcesRequest, ...grpc.CallOption) (*agentpbv2.DiscoverSensorSourcesResponse, error) {
+	c.discoveries++
+	return nil, status.Error(codes.Unimplemented, "unknown method DiscoverSensorSources for service wendy.agent.services.v2.WendySensorPairingService")
+}
+
+func TestSensorPairDiscoversOnTheDeviceNetwork(t *testing.T) {
+	const tenant = "11111111-2222-4333-8444-555555555555"
+	client := &pairTestClient{supportsPrincipal: true}
+	h := pairTestHandler(client)
+	h.tenantIDs = func() (map[string]bool, error) { return map[string]bool{tenant: true}, nil }
+	h.discoverLocal = func(context.Context) ([]models.DiscoveredDevice, error) {
+		t.Fatal("a device that answered must not trigger a local scan")
+		return nil, nil
+	}
+	// The board sits on the device's network, at an address this computer
+	// may never see.
+	client.sources = []*agentpbv2.DiscoveredSensorSource{{
+		Id: "441bf6804824", DisplayName: "garage-cam", Hostname: "wendylt-garage.local",
+		IpAddress: "10.42.0.17", Addresses: []string{"10.42.0.17"}, Port: 5054, IsMtls: true,
+		TenantUuid: tenant, PrincipalUri: "spiffe://wendy.sh/tenant/" + tenant + "/device/lite-441bf6804824",
+		Caps: []string{"sensors"}, WendyLite: true,
+	}}
+	m := newSensorPairModel(h)
+	updated, _ := m.Update(m.Init()())
+	m = updated.(sensorPairModel)
+	view := ansi.Strip(m.View())
+	if m.localNetwork || len(m.rows) != 1 || !strings.Contains(view, "garage-cam") || !strings.Contains(view, "10.42.0.17") || strings.Contains(view, "this computer's network") {
+		t.Fatalf("device-side source not shown as the device sees it: %s", view)
+	}
+	_, pair := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	if pair == nil {
+		t.Fatal("device-side source cannot be paired")
+	}
+	pair()
+	// The device re-resolves the source by identity, so no address is pinned.
+	if client.added == nil || client.added.SourcePrincipalUri != client.sources[0].PrincipalUri || client.added.SourceAddress != "" || client.added.Transport != "wendycom" {
+		t.Fatalf("wrong pairing request: %+v", client.added)
+	}
+}
+
+func TestSensorPairFallsBackToLocalScanOnlyForOldAgents(t *testing.T) {
+	client := &pairTestClient{}
+	h := pairTestHandler(client)
+	old := &unimplementedDiscoveryClient{client}
+	h.client = old
+	locals := 0
+	h.discoverLocal = func(context.Context) ([]models.DiscoveredDevice, error) {
+		locals++
+		return []models.DiscoveredDevice{{AssetID: 43, OrgID: 7, DisplayName: "Desk sensor", Sensorlink: true, IsMTLS: true, Caps: []string{"sensors"}, IPAddress: "192.168.1.9"}}, nil
+	}
+	m := newSensorPairModel(h)
+	updated, _ := m.Update(m.Init()())
+	m = updated.(sensorPairModel)
+	view := ansi.Strip(m.View())
+	if locals != 1 || old.discoveries != 1 || !m.localNetwork || !strings.Contains(view, "Desk sensor") || !strings.Contains(view, "this computer's network") || !strings.Contains(view, "Update its agent") {
+		t.Fatalf("old agent did not fall back to a labeled local scan: %s", view)
+	}
+	if m.message != "" {
+		t.Fatalf("fallback reported as a failure: %q", m.message)
+	}
+
+	// Once the agent is updated, the device's own results replace the
+	// local ones and the label disappears.
+	h.client = client
+	updated, _ = m.Update(h.scan()())
+	m = updated.(sensorPairModel)
+	view = ansi.Strip(m.View())
+	if locals != 1 || m.localNetwork || strings.Contains(view, "Desk sensor") || !strings.Contains(view, "Camera") || strings.Contains(view, "this computer's network") {
+		t.Fatalf("updated agent's results did not replace the local scan: %s", view)
+	}
+
+	// An old agent with no local fallback configured explains what to do.
+	h.client, h.discoverLocal = old, nil
+	updated, _ = m.Update(h.scan()())
+	m = updated.(sensorPairModel)
+	if !strings.Contains(m.message, "update it") || len(m.rows) != 1 {
+		t.Fatalf("missing update hint or lost known sources: %q", m.message)
+	}
+}
+
+func TestSensorPairDeviceDiscoveryErrorsAreNotReplacedByLocalScan(t *testing.T) {
+	for _, tc := range []struct {
+		err  error
+		want string
+	}{
+		{status.Error(codes.Unavailable, "tunnel closed"), "device is not reachable"},
+		{status.Error(codes.PermissionDenied, "org mismatch"), "not authorized"},
+		{status.Error(codes.DeadlineExceeded, "context deadline exceeded"), "the device did not finish scanning its network in time"},
+		{status.Error(codes.Internal, "sensor source discovery failed on this device"), "the device could not scan its network: sensor source discovery failed on this device"},
+	} {
+		client := &pairTestClient{}
+		h := pairTestHandler(client)
+		h.discoverLocal = func(context.Context) ([]models.DiscoveredDevice, error) {
+			t.Fatalf("%v: local scan replaced a device error", tc.err)
+			return nil, nil
+		}
+		m := newSensorPairModel(h)
+		updated, _ := m.Update(m.Init()())
+		m = updated.(sensorPairModel)
+		client.discoverErr = tc.err
+		updated, _ = m.Update(h.scan()())
+		m = updated.(sensorPairModel)
+		view := ansi.Strip(m.View())
+		if !strings.Contains(m.message, "Discovery failed: "+tc.want) || strings.Contains(view, "rpc error") || m.localNetwork {
+			t.Fatalf("%v: message = %q", tc.err, m.message)
+		}
+		// Sources from the previous successful scan stay listed.
+		if len(m.rows) != 1 || !strings.Contains(view, "Camera") {
+			t.Fatalf("%v: failed rescan dropped known sources: %s", tc.err, view)
+		}
+	}
+}
+
+// When the tab's own deadline runs out (ListSensorPairings spends from it
+// too), the device may never have seen the call, so the scan is not blamed.
+func TestSensorPairDiscoveryTimeoutOnThisSideBlamesTheWait(t *testing.T) {
+	client := &pairTestClient{}
+	h := pairTestHandler(client)
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+	h.ctx = ctx
+	msg := h.scan()().(sensorPairScanMsg)
+	if client.discoveries != 1 || msg.discoveryErr == nil || msg.discoveryErr.Error() != "the device did not answer in time" {
+		t.Fatalf("discoveries = %d, err = %v; want the wait blamed", client.discoveries, msg.discoveryErr)
+	}
+}
+
+func TestSensorSourcesFromDeviceRechecksIdentityHints(t *testing.T) {
+	const tenant = "11111111-2222-4333-8444-555555555555"
+	const other = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+	principal := "spiffe://wendy.sh/tenant/" + tenant + "/device/lite-1"
+	devices := sensorSourcesFromDevice([]*agentpbv2.DiscoveredSensorSource{
+		nil,
+		{Id: "a", DisplayName: "valid", Hostname: "a.local", IpAddress: "10.0.0.1", Addresses: []string{"10.0.0.1", "fe80::1"}, Port: 5054, IsMtls: true, TenantUuid: tenant, PrincipalUri: principal, Caps: []string{"sensors"}, WendyLite: true},
+		{Id: "b", DisplayName: "foreign principal", TenantUuid: tenant, PrincipalUri: "spiffe://wendy.sh/tenant/" + other + "/device/lite-2", Caps: []string{"sensors"}},
+		{Id: "c", DisplayName: "uppercase tenant", TenantUuid: strings.ToUpper(other), PrincipalUri: "spiffe://wendy.sh/tenant/" + strings.ToUpper(other) + "/device/lite-3", Caps: []string{"sensors"}},
+		{Id: "d", DisplayName: "legacy", AssetId: 9, OrgId: 2, Port: 50052, IsMtls: true, Caps: []string{"camera", "sensors"}},
+		{Id: "e", DisplayName: "negative ids", AssetId: -4, OrgId: -1, Caps: []string{"camera"}},
+	})
+	if len(devices) != 5 {
+		t.Fatalf("got %d devices, want 5: %+v", len(devices), devices)
+	}
+	byName := map[string]models.DiscoveredDevice{}
+	for _, d := range devices {
+		byName[d.DisplayName] = d
+	}
+	valid := byName["valid"]
+	if valid.PrincipalURI != principal || valid.TenantUUID != tenant || !valid.WendyLite || !valid.IsMTLS || !valid.Sensorlink ||
+		valid.IPAddress != "10.0.0.1" || len(valid.Addresses) != 2 || valid.Port() != 5054 || valid.LAN.Hostname != "a.local" ||
+		sensorSourcePrincipal(valid) != principal || transportForDevice(valid) != "wendycom" {
+		t.Fatalf("valid source mapped wrong: %+v", valid)
+	}
+	if d := byName["foreign principal"]; d.PrincipalURI != "" || d.TenantUUID != tenant {
+		t.Fatalf("principal outside its tenant survived: %+v", d)
+	}
+	if d := byName["uppercase tenant"]; d.TenantUUID != "" || d.PrincipalURI != "" {
+		t.Fatalf("non-canonical tenant survived: %+v", d)
+	}
+	if d := byName["legacy"]; d.AssetID != 9 || d.OrgID != 2 || !d.Sensorlink || transportForDevice(d) != "grpc" {
+		t.Fatalf("legacy source mapped wrong: %+v", d)
+	}
+	if d := byName["negative ids"]; d.AssetID != 0 || d.OrgID != 0 || d.Sensorlink {
+		t.Fatalf("invalid ids or capability survived: %+v", d)
 	}
 }
 

@@ -20,6 +20,9 @@ import (
 // a certificate for orgID, or "" if none is found. It maps the org carried by
 // the verifying mTLS cert back to the cloud host that issued it.
 func cloudGRPCForOrg(cfg *config.Config, orgID int) string {
+	if orgID <= 0 {
+		return ""
+	}
 	for _, auth := range cfg.Auth {
 		for _, c := range auth.Certificates {
 			if c.OrganizationID == orgID {
@@ -28,6 +31,29 @@ func cloudGRPCForOrg(cfg *config.Config, orgID int) string {
 		}
 	}
 	return ""
+}
+
+// UUID sessions all have org ID zero. Match their tenant, never whichever
+// numeric-zero session happens to be first in the saved auth contexts.
+func cloudGRPCForIdentity(cfg *config.Config, obs observedDeviceIdentity) string {
+	if obs.principal == "" {
+		return cloudGRPCForOrg(cfg, obs.orgID)
+	}
+	identity, err := certs.ParsePrincipal(obs.principal)
+	if err != nil {
+		return ""
+	}
+	for _, auth := range cfg.Auth {
+		for _, certificate := range auth.Certificates {
+			if certificate.TenantUUID() == identity.TenantUUID {
+				return auth.CloudGRPC
+			}
+		}
+	}
+	// A legacy operator session can verify a device renewed onto the tenant
+	// PKI before that session itself acquires a tenant principal. Preserve its
+	// positive numeric-org mapping; org zero never gets this fallback.
+	return cloudGRPCForOrg(cfg, obs.orgID)
 }
 
 func displayCloud(c string) string {
@@ -55,6 +81,10 @@ type observedDeviceIdentity struct {
 	// principal is the full tenant SPIFFE principal, when the cert carries one.
 	// Recorded into the pin so an unpin can reach the SPKI entry it keys.
 	principal string
+	// identityErr records a UUID connection whose verified server identity
+	// cannot be bound to its authenticated operator tenant. It must not turn
+	// into an org-zero, assetless first-use pin.
+	identityErr error
 }
 
 // observeDeviceIdentityFn is a seam over observeDeviceIdentity: only a real
@@ -68,9 +98,18 @@ func observeDeviceIdentity(conn *grpcclient.AgentConnection) observedDeviceIdent
 		return observedDeviceIdentity{}
 	}
 	obs := observedDeviceIdentity{mTLS: true, orgID: conn.CertInfo.OrganizationID}
+	id, verified := conn.ObservedServerIdentity()
+	if tenant := conn.CertInfo.TenantUUID(); tenant != "" {
+		parsed, err := certs.ParsePrincipal(id.Principal)
+		if !verified || err != nil || parsed.TenantUUID != tenant || id.TenantUUID != tenant ||
+			parsed.EntityType != certs.EntityAsset || parsed.EntityType != id.EntityType || parsed.EntityID != id.EntityID {
+			obs.identityErr = fmt.Errorf("verified device identity does not match authenticated tenant %s", tenant)
+			return obs
+		}
+	}
 	// Only an "asset" entity is a device; a "user" URN on a server cert would
 	// be a misissued certificate, and pinning it would be meaningless.
-	if id, ok := conn.ObservedServerIdentity(); ok && id.EntityType == certs.EntityAsset {
+	if verified && id.EntityType == certs.EntityAsset {
 		obs.assetID = id.EntityID
 		obs.principal = id.Principal
 	}
@@ -257,12 +296,15 @@ func decideFallbackAction(updateErr error, changed bool, refusal error) fallback
 // also records the identity under bareKey, when there is one — which can only
 // add a pin or adopt an asset, never refuse (see recordTypedVMBarePin).
 func applyDeviceIdentity(cfg *config.Config, hostname, bareKey string, obs observedDeviceIdentity) (changed bool, refusal error) {
+	if obs.identityErr != nil {
+		return false, obs.identityErr
+	}
 	if !obs.mTLS {
 		return false, challengeUnprovisionedDevice(cfg, hostname)
 	}
 
-	cloud := cloudGRPCForOrg(cfg, obs.orgID)
-	switch cfg.EvaluateDevicePin(hostname, obs.orgID, cloud, obs.assetID) {
+	cloud := cloudGRPCForIdentity(cfg, obs)
+	switch evaluateObservedDevicePin(cfg, hostname, obs, cloud) {
 	case config.PinMatch:
 		// Backfill the principal into a pin that matches but predates the SPIFFE
 		// cutover. Same silent upgrade as PinAdoptAsset: nothing about the trust
@@ -279,18 +321,36 @@ func applyDeviceIdentity(cfg *config.Config, hostname, bareKey string, obs obser
 		changed = true
 	default: // config.PinMismatch
 		prev, _ := cfg.DevicePinFor(hostname)
+		details := fmt.Sprintf("Saved: organization %d via %s%s\nNow:   organization %d via %s%s",
+			prev.OrgID, displayCloud(prev.CloudGRPC), assetSuffix(prev.AssetID),
+			obs.orgID, displayCloud(cloud), assetSuffix(obs.assetID))
+		if prev.Principal != "" || obs.principal != "" {
+			details += fmt.Sprintf("\nSaved principal: %s\nNow principal:   %s", prev.Principal, obs.principal)
+		}
 		return false, refuseDevicePin(devicePinDiagnostic{
 			hostname: hostname,
 			heading:  fmt.Sprintf("Connection blocked: device %q identity changed.", hostname),
-			details: fmt.Sprintf("Saved: organization %d via %s%s\nNow:   organization %d via %s%s",
-				prev.OrgID, displayCloud(prev.CloudGRPC), assetSuffix(prev.AssetID),
-				obs.orgID, displayCloud(cloud), assetSuffix(obs.assetID)),
+			details:  details,
 		})
 	}
 	if recordTypedVMBarePin(cfg, bareKey, obs, cloud) {
 		changed = true
 	}
 	return changed, nil
+}
+
+func evaluateObservedDevicePin(cfg *config.Config, hostname string, obs observedDeviceIdentity, cloud string) config.PinVerdict {
+	verdict := cfg.EvaluateDevicePin(hostname, obs.orgID, cloud, obs.assetID)
+	if saved, ok := cfg.DevicePinFor(hostname); ok && saved.Principal != "" && obs.principal != "" && saved.Principal != obs.principal {
+		// Old positive-org pins could carry an unpin key before they pinned
+		// the asset itself. Keep that legacy adoption contract; UUID org-zero
+		// pins must always preserve the complete principal, even before an
+		// asset/device name has been backfilled.
+		if obs.orgID == 0 || verdict != config.PinAdoptAsset {
+			return config.PinMismatch
+		}
+	}
+	return verdict
 }
 
 // recordTypedVMBarePin records an identity just accepted under a running VM's
@@ -319,7 +379,7 @@ func recordTypedVMBarePin(cfg *config.Config, bareKey string, obs observedDevice
 	if bareKey == "" {
 		return false
 	}
-	switch cfg.EvaluateDevicePin(bareKey, obs.orgID, cloud, obs.assetID) {
+	switch evaluateObservedDevicePin(cfg, bareKey, obs, cloud) {
 	case config.PinFirstUse, config.PinAdoptAsset:
 		cfg.SetDevicePin(bareKey, obs.orgID, cloud, obs.assetID, obs.principal)
 		return true

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"io"
+	"path"
 	"strings"
 
 	"github.com/diskfs/go-diskfs/backend/file"
@@ -36,29 +37,39 @@ func parseKeyValues(r io.Reader) map[string]string {
 	return vals
 }
 
-// readExtensionRelease returns the extension-release fields the add-on image
-// declares for name. The file is named after the add-on, so a wrong name is
-// indistinguishable from a wrong image - systemd refuses to merge either.
-func readExtensionRelease(rawPath, name string) (map[string]string, error) {
+// withImage runs fn against the squashfs inside an add-on image.
+func withImage(rawPath string, fn func(fs *squashfs.FileSystem) error) error {
 	b, err := file.OpenFromPath(rawPath, true)
 	if err != nil {
-		return nil, fmt.Errorf("opening add-on image: %w", err)
+		return fmt.Errorf("opening add-on image: %w", err)
 	}
 	defer b.Close()
 
 	info, err := b.Stat()
 	if err != nil {
-		return nil, fmt.Errorf("reading add-on image: %w", err)
+		return fmt.Errorf("reading add-on image: %w", err)
 	}
 	fs, err := squashfs.Read(b, info.Size(), 0, 0)
 	if err != nil {
-		return nil, fmt.Errorf("add-on image is not a readable squashfs: %w", err)
+		return fmt.Errorf("add-on image is not a readable squashfs: %w", err)
 	}
-	content, err := fs.ReadFile(extensionReleaseDir + name)
-	if err != nil {
-		return nil, fmt.Errorf("add-on image declares no extension-release for %q; it was built under a different name", name)
-	}
-	return parseKeyValues(strings.NewReader(string(content))), nil
+	return fn(fs)
+}
+
+// readExtensionRelease returns the extension-release fields the add-on image
+// declares for name. The file is named after the add-on, so a wrong name is
+// indistinguishable from a wrong image - systemd refuses to merge either.
+func readExtensionRelease(rawPath, name string) (map[string]string, error) {
+	var fields map[string]string
+	err := withImage(rawPath, func(fs *squashfs.FileSystem) error {
+		content, err := fs.ReadFile(extensionReleaseDir + name)
+		if err != nil {
+			return fmt.Errorf("add-on image declares no extension-release for %q; it was built under a different name", name)
+		}
+		fields = parseKeyValues(strings.NewReader(string(content)))
+		return nil
+	})
+	return fields, err
 }
 
 // verifyImageKernel rejects an add-on whose own image says it targets a
@@ -101,22 +112,35 @@ func imageKernel(rawPath, name string) (kernel string, readable bool) {
 // only way to know the list before installing it. Absent is not an error: an
 // add-on may ship none, or carry a /data override instead.
 func imageModules(rawPath, name string) []string {
-	b, err := file.OpenFromPath(rawPath, true)
-	if err != nil {
+	var mods []string
+	_ = withImage(rawPath, func(fs *squashfs.FileSystem) error {
+		content, err := fs.ReadFile(imagePayloadDir(name) + "/modules-load.conf")
+		if err != nil {
+			content, err = fs.ReadFile(imageModulesDir + name + ".conf")
+		}
+		if err == nil {
+			mods = parseModulesConf(strings.NewReader(string(content)))
+		}
 		return nil
-	}
-	defer b.Close()
-	info, err := b.Stat()
-	if err != nil {
+	})
+	return mods
+}
+
+// imageHasPrivatePayload reports whether the image ships an inert private
+// payload, which is what sets a current add-on apart from a legacy one. The
+// apply script makes the same test against the merged copy.
+func imageHasPrivatePayload(rawPath, name string) bool {
+	found := false
+	_ = withImage(rawPath, func(fs *squashfs.FileSystem) error {
+		info, err := fs.Stat(imagePayloadDir(name))
+		found = err == nil && info.IsDir()
 		return nil
-	}
-	fs, err := squashfs.Read(b, info.Size(), 0, 0)
-	if err != nil {
-		return nil
-	}
-	content, err := fs.ReadFile(imageModulesDir + name + ".conf")
-	if err != nil {
-		return nil
-	}
-	return parseModulesConf(strings.NewReader(string(content)))
+	})
+	return found
+}
+
+// imagePayloadDir is where an image keeps its private payload: the path it
+// occupies once merged, made relative for go-diskfs.
+func imagePayloadDir(name string) string {
+	return path.Join(strings.TrimPrefix(driverPrivatePayloadDir, "/"), name)
 }

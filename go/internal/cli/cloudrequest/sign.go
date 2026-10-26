@@ -24,6 +24,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/proto/gen/pkicorepb"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 )
@@ -61,8 +62,20 @@ type Signer struct {
 // once signed with x5c under the same correlation_id, and the registration is
 // dropped so the next call registers again. The refusal cannot tell a stale
 // kid from a missing permission, so a second refusal is final.
+// CollidingFieldMetadataKey names the trailer Cloud attaches to a duplicate
+// refusal saying WHICH field collided ("name", "device_id", or "mesh_suffix").
+// The SQLSTATE is the same for all three; the trailer is what tells them apart.
+const CollidingFieldMetadataKey = "wendy-colliding-field"
+
 func Invoke(ctx context.Context, conn grpc.ClientConnInterface, auth *config.AuthConfig, method string, req, reply proto.Message) error {
-	return invoke(ctx, conn, auth, method, req, reply, "")
+	return invoke(ctx, conn, auth, method, req, reply, "", nil)
+}
+
+// InvokeWithTrailer is Invoke, additionally collecting the call's trailing
+// metadata into *trailer. Callers that branch on a refusal -- enrollment's
+// mesh-address collision retry -- need the trailer; everyone else uses Invoke.
+func InvokeWithTrailer(ctx context.Context, conn grpc.ClientConnInterface, auth *config.AuthConfig, method string, req, reply proto.Message, trailer *metadata.MD) error {
+	return invoke(ctx, conn, auth, method, req, reply, "", trailer)
 }
 
 // RevokePrincipalCertificates revokes the selected tenant's live device
@@ -81,7 +94,7 @@ func RevokePrincipalCertificates(ctx context.Context, conn grpc.ClientConnInterf
 	}
 	reply := new(pkicorepb.RevokeByPrincipalResponse)
 	err = invoke(ctx, conn, auth, cloudpbv2.PKIAdminService_RevokePrincipalCertificates_FullMethodName,
-		&cloudpbv2.RevokePrincipalCertificatesRequest{OrganizationId: tenant}, reply, deviceID)
+		&cloudpbv2.RevokePrincipalCertificatesRequest{OrganizationId: tenant}, reply, deviceID, nil)
 	if err != nil {
 		return 0, err
 	}
@@ -91,7 +104,7 @@ func RevokePrincipalCertificates(ctx context.Context, conn grpc.ClientConnInterf
 	return int(reply.GetRevokedCount()), nil
 }
 
-func invoke(ctx context.Context, conn grpc.ClientConnInterface, auth *config.AuthConfig, method string, req, reply proto.Message, revokeDeviceID string) error {
+func invoke(ctx context.Context, conn grpc.ClientConnInterface, auth *config.AuthConfig, method string, req, reply proto.Message, revokeDeviceID string, trailer *metadata.MD) error {
 	s, err := newSigner(auth)
 	if err != nil {
 		return err
@@ -116,7 +129,11 @@ func invoke(ctx context.Context, conn grpc.ClientConnInterface, auth *config.Aut
 			}
 			signed.PkiManagementRequest = management
 		}
-		return conn.Invoke(ctx, method, signed, reply)
+		var opts []grpc.CallOption
+		if trailer != nil {
+			opts = append(opts, grpc.Trailer(trailer))
+		}
+		return conn.Invoke(ctx, method, signed, reply, opts...)
 	}
 	if x5cOnly[method] {
 		return call(false)
@@ -140,12 +157,15 @@ func invoke(ctx context.Context, conn grpc.ClientConnInterface, auth *config.Aut
 }
 
 // x5cOnly lists the methods always signed with x5c, never kid: the leaf
-// registration itself, and the two whose JWS Cloud forwards verbatim to
-// devices (PostboxEntry.request_jws), which cannot resolve a kid.
+// registration itself, the registry key registration (Cloud serves the stored
+// request back to other clients as the binding), and the two whose JWS Cloud
+// forwards verbatim to devices (PostboxEntry.request_jws), which cannot
+// resolve a kid.
 var x5cOnly = map[string]bool{
-	cloudpbv2.OperatorSessionService_RegisterOperatorLeaf_FullMethodName: true,
-	cloudpbv2.DeploymentService_CreateDeployment_FullMethodName:          true,
-	cloudpbv2.DeploymentService_ControlContainer_FullMethodName:          true,
+	cloudpbv2.OperatorSessionService_RegisterOperatorLeaf_FullMethodName:   true,
+	cloudpbv2.KeyDirectoryService_RegisterUserEncryptionKey_FullMethodName: true,
+	cloudpbv2.DeploymentService_CreateDeployment_FullMethodName:            true,
+	cloudpbv2.DeploymentService_ControlContainer_FullMethodName:            true,
 }
 
 // registeredKIDs holds the leaves this process has registered.
@@ -278,6 +298,9 @@ func (s *Signer) signRequest(method string, req proto.Message, byKID bool, corre
 	if !ok {
 		return nil, requestTypeError(method, req)
 	}
+	if err := stampValidity(req, s.now()); err != nil {
+		return nil, err
+	}
 	payload, err := proto.Marshal(req)
 	if err != nil {
 		return nil, fmt.Errorf("marshaling Cloud request %s: %w", method, err)
@@ -385,7 +408,29 @@ var signedResources = map[string]func(tenant string, req proto.Message) (string,
 	},
 	cloudpbv2.AppService_UpsertApp_FullMethodName: func(tenant string, req proto.Message) (string, bool) {
 		in, ok := req.(*cloudpbv2.UpsertAppRequest)
-		return "org/" + in.GetOrganizationId() + "/app/" + in.GetId(), ok
+		if !ok || in.GetOrganizationId() != tenant || in.GetId() == "" {
+			return "", false
+		}
+		return "org/" + tenant + "/app/" + in.GetId(), true
+	},
+	// Cloud DeploymentServiceHandler createAppRelease / updateAppRelease.
+	cloudpbv2.DeploymentService_CreateAppRelease_FullMethodName: func(tenant string, req proto.Message) (string, bool) {
+		in, ok := req.(*cloudpbv2.CreateAppReleaseRequest)
+		if !ok || in.GetOrganizationId() != tenant || in.GetAppId() == "" {
+			return "", false
+		}
+		return "org/" + tenant + "/app/" + in.GetAppId(), true
+	},
+	cloudpbv2.DeploymentService_UpdateAppRelease_FullMethodName: func(_ string, req proto.Message) (string, bool) {
+		in, ok := req.(*cloudpbv2.UpdateAppReleaseRequest)
+		if !ok {
+			return "", false
+		}
+		id, err := uuid.Parse(in.GetId())
+		if err != nil || id.String() != in.GetId() {
+			return "", false
+		}
+		return "app-release/" + in.GetId(), true
 	},
 	// Ruled 2026-10-13 (WDY-3660); cloud's RequestSigning.md row follows.
 	cloudpbv2.RelayMcpService_OpenRelaySession_FullMethodName: func(tenant string, req proto.Message) (string, bool) {
@@ -402,6 +447,11 @@ var signedResources = map[string]func(tenant string, req proto.Message) (string,
 			return "", false
 		}
 		return "asset/" + in.GetId(), true
+	},
+	// Cloud RequestSigning.md: org/<organization_id>/encryption-key.
+	cloudpbv2.KeyDirectoryService_RegisterUserEncryptionKey_FullMethodName: func(tenant string, req proto.Message) (string, bool) {
+		in, ok := req.(*cloudpbv2.RegisterEncryptionKeyRequest)
+		return "org/" + tenant + "/encryption-key", ok && in.GetOrganizationId() == tenant
 	},
 	cloudpbv2.PKIAdminService_RevokePrincipalCertificates_FullMethodName: func(tenant string, req proto.Message) (string, bool) {
 		in, ok := req.(*cloudpbv2.RevokePrincipalCertificatesRequest)

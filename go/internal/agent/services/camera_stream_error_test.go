@@ -263,3 +263,48 @@ func TestRetryWhileBusy(t *testing.T) {
 		t.Errorf("a cancelled context must not report contention, got %v", got)
 	}
 }
+
+// An app using the RealSense vendor SDK claims every node of the camera, and
+// the agent's own depth capture holds the depth node while a calibrated
+// stream runs. The refusal names those -- and only on a RealSense node, where
+// it is true.
+func TestCameraInUseError_NamesTheLikelyHolderOnARealSenseNode(t *testing.T) {
+	prev := cameraHolderHint
+	t.Cleanup(func() { cameraHolderHint = prev })
+	names := map[string]string{
+		"/dev/video4": "Intel(R) RealSense(TM) Depth Camera 435i RGB",
+		"/dev/video0": "HD Pro Webcam C920",
+	}
+	cameraHolderHint = func(devicePath string) string {
+		if strings.Contains(strings.ToLower(names[devicePath]), "realsense") {
+			return "This is a RealSense node, and an app using the vendor SDK (librealsense) claims every node of the camera"
+		}
+		return ""
+	}
+
+	err := errCameraInUse("/dev/video4")
+	if !strings.Contains(err.Error(), "vendor SDK") {
+		t.Errorf("refusal on a RealSense node does not name the vendor SDK: %v", err)
+	}
+	if hint := streamreason.Info(err).GetMetadata()["hint"]; !strings.Contains(hint, "vendor SDK") {
+		t.Errorf("hint metadata = %q; the CLI prints this", hint)
+	}
+	if !isCameraInUse(err) {
+		t.Error("the hint changed the reason; clients must still see CAMERA_IN_USE")
+	}
+
+	plain := errCameraInUse("/dev/video0")
+	if strings.Contains(plain.Error(), "RealSense") {
+		t.Errorf("a webcam's refusal carries the RealSense hint: %v", plain)
+	}
+	if _, ok := streamreason.Info(plain).GetMetadata()["hint"]; ok {
+		t.Error("a webcam's refusal carries a hint it has no grounds for")
+	}
+}
+
+// The real seam reads sysfs; on a host without one it must stay silent.
+func TestCameraHolderHint_IsSilentWithoutSysfs(t *testing.T) {
+	if hint := cameraHolderHint("/dev/video-that-does-not-exist"); hint != "" {
+		t.Errorf("hint = %q for a node with no sysfs entry", hint)
+	}
+}

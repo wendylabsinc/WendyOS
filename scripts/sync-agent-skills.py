@@ -52,8 +52,6 @@ skips confirmation for those tools only. `device_connect` and local discovery
 through `device_list` require explicit `--allow-tool` permission and per-call
 terminal confirmation. `--allow-all` permits every supported relay tool and
 skips all per-call confirmations. `--auto-accept` controls ChatGPT pairing only.
-Local desktop gateways and separately configured standalone Cloud gateways use
-`list_robots` and `inspect_robot`.
 Use the connected server's tools and explicit target identifiers. Use CLI
 commands only when a terminal on the intended computer is available. A skill
 cannot grant access or add tools missing from the server.
@@ -114,18 +112,10 @@ def main():
         sync_files(bundle, target, args.check, differences)
     plugin_source = ROOT / "plugins/wendy-chatgpt"
     # The public plugin owns a curated skill independently of the local
-    # developer bundle. Embed that exact source without regenerating it.
+    # developer bundle. Embed that exact source for the relay's skill catalog.
     public_skill = Path("skills/wendy/SKILL.md")
-    plugin_files = {
-        Path("plugin.json"): (plugin_source / "plugin.json").read_bytes(),
-        public_skill: (plugin_source / public_skill).read_bytes(),
-    }
-    plugin_files.update({
-        p.relative_to(plugin_source): p.read_bytes()
-        for p in (plugin_source / "assets").rglob("*") if p.is_file()
-    })
     sync_files(
-        plugin_files,
+        {public_skill: (plugin_source / public_skill).read_bytes()},
         ROOT / "go/internal/cli/assets/chatgpt-plugin", args.check, differences,
     )
     if args.check and differences:

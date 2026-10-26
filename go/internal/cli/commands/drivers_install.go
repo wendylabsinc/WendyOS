@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -15,23 +16,17 @@ import (
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 )
 
-// resolveDriver finds a driver add-on for the device's OS version + kernel in the
-// GCS manifest — the same catalog `wendy os` reads, so no separate registry
-// server is needed — and returns its manifest entry plus download URL. pr>0
-// resolves against a per-PR build manifest.
-func resolveDriver(deviceType, osVersion, kernel, name string, pr int) (extensionEntry, string, error) {
-	exts, err := driverExtensionsFor(deviceType, osVersion, pr)
+// resolveDriver finds a driver for the running kernel in the selected catalog.
+func resolveDriver(ctx context.Context, deviceType, osVersion, kernel, name string, source driverManifestOptions) (extensionEntry, error) {
+	exts, err := driverExtensionsForChannelFn(ctx, deviceType, osVersion, source.nightly, source.pr)
 	if err != nil {
-		return extensionEntry{}, "", err
+		return extensionEntry{}, err
 	}
 	e, ok := selectExtension(exts, name, kernel)
 	if !ok {
-		return extensionEntry{}, "", fmt.Errorf("no driver %q published for %s on %s (kernel %s)", name, osVersion, deviceType, kernel)
+		return extensionEntry{}, fmt.Errorf("no driver %q published in %s for %s (kernel %s)", name, source.label(osVersion), deviceType, kernel)
 	}
-	if e.Path == "" {
-		return extensionEntry{}, "", fmt.Errorf("driver %q has no artifact in the manifest", name)
-	}
-	return e, gcsBaseURL + "/" + e.Path, nil
+	return e, nil
 }
 
 // kernelMatches reports whether an add-on is usable on a device running kernel.
@@ -91,20 +86,27 @@ func sha256File(path string) (string, error) {
 func newDriversInstallCmd() *cobra.Command {
 	var filePath string
 	var signatureB64 string
-	var pr int
+	var source driverManifestOptions
 	var modules []string
 
 	cmd := &cobra.Command{
 		Use:   "install <name>",
 		Short: "Install a driver add-on from the registry, or a local .raw with --file",
 		Long: "With --file, streams a local .raw driver add-on to the device. Without it, resolves\n" +
-			"<name> against the release manifest for the device's OS + kernel. Either way the add-on\n" +
-			"is verified (sha256 + signature) before it is applied. <name> is the extension name and\n" +
-			"must match the .raw's embedded extension-release, or the device refuses to merge it.",
+			"<name> for the device's kernel against the manifest for its OS version, or the latest\n" +
+			"nightly with --nightly, or a PR build with --pr. Either way the add-on is verified\n" +
+			"(sha256 + signature) before it is applied. <name> is the extension name and must\n" +
+			"match the .raw's embedded extension-release, or the device refuses to merge it.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 			name := args[0]
+			if err := source.validate(cmd); err != nil {
+				return err
+			}
+			if cmd.Flags().Changed("file") && (source.nightly || source.pr > 0) {
+				return usageErrorf("--file cannot be combined with --nightly or --pr")
+			}
 
 			// An explicitly-passed empty --file (e.g. an unset shell variable)
 			// must not silently fall through to the registry path.
@@ -122,7 +124,7 @@ func newDriversInstallCmd() *cobra.Command {
 				return fmt.Errorf("--signature is only valid with --file (registry installs use the published signature)")
 			}
 
-			target, err := resolveTarget(ctx)
+			target, err := resolveDriversTargetFn(ctx)
 			if err != nil {
 				return err
 			}
@@ -161,55 +163,66 @@ func newDriversInstallCmd() *cobra.Command {
 				if err != nil {
 					return err
 				}
-				e, downloadURL, err := resolveDriver(deviceType, dl.GetBaseVersion(), dl.GetKernelVersion(), name, pr)
+				e, err := resolveDriver(ctx, deviceType, dl.GetBaseVersion(), dl.GetKernelVersion(), name, source)
 				if err != nil {
 					return err
 				}
-				sig, err := base64.StdEncoding.DecodeString(e.Signature)
+				spec, err = publishedDriverSpec(e)
 				if err != nil {
-					return fmt.Errorf("decoding driver signature: %w", err)
-				}
-				spec = &agentpbv2.DriverSpec{
-					Name:          e.Name,
-					Version:       e.Version,
-					KernelVersion: e.KernelVersion,
-					Sha256:        e.SHA256,
-					Signature:     sig,
-					ArtifactUrl:   downloadURL,
-					ModulesLoad:   e.ModulesLoad,
+					return err
 				}
 				cliLogln("Resolved %s %s for kernel %s", e.Name, e.Version, e.KernelVersion)
 			}
-
-			stream, err := target.Agent.DriverService.InstallDriver(ctx)
-			if err != nil {
-				return fmt.Errorf("starting driver install: %w", driverServiceErr(err))
-			}
-			// The spec is always the first message on the stream.
-			if err := stream.Send(&agentpbv2.InstallDriverRequest{
-				RequestType: &agentpbv2.InstallDriverRequest_Spec{Spec: spec},
-			}); err != nil {
-				return fmt.Errorf("sending driver spec: %w", driverServiceErr(err))
-			}
-			// Only a local install streams bytes; a manifest install is fetched
-			// agent-side from artifact_url, so no chunks follow.
-			if filePath != "" {
-				if err := streamDriverChunks(stream, filePath); err != nil {
-					return err
-				}
-			}
-			if err := stream.CloseSend(); err != nil {
-				return fmt.Errorf("closing driver upload: %w", err)
-			}
-			return consumeDriverApply(stream, name, "installed")
+			return installDriver(ctx, target.Agent.DriverService, spec, filePath)
 		},
 	}
 
 	cmd.Flags().StringVar(&filePath, "file", "", "Install from a local .raw add-on instead of the registry")
 	cmd.Flags().StringVar(&signatureB64, "signature", "", "Base64 detached signature over the .raw's sha256 (--file only; required once a signing key is embedded)")
-	cmd.Flags().IntVar(&pr, "pr", 0, "Resolve against a per-PR build manifest instead of releases")
+	source.addFlags(cmd)
 	cmd.Flags().StringArrayVar(&modules, "module", nil, "Override the add-on's built-in module list (repeatable; --file only; normally the driver declares its own)")
 	return cmd
+}
+
+func publishedDriverSpec(e extensionEntry) (*agentpbv2.DriverSpec, error) {
+	if e.Path == "" {
+		return nil, fmt.Errorf("driver %q has no artifact in the manifest", e.Name)
+	}
+	sig, err := base64.StdEncoding.DecodeString(e.Signature)
+	if err != nil {
+		return nil, fmt.Errorf("decoding driver signature: %w", err)
+	}
+	return &agentpbv2.DriverSpec{
+		Name:          e.Name,
+		Version:       e.Version,
+		KernelVersion: e.KernelVersion,
+		Sha256:        e.SHA256,
+		Signature:     sig,
+		ArtifactUrl:   gcsBaseURL + "/" + e.Path,
+		ModulesLoad:   e.ModulesLoad,
+	}, nil
+}
+
+func installDriver(ctx context.Context, client agentpbv2.WendyDriverServiceClient, spec *agentpbv2.DriverSpec, filePath string) error {
+	stream, err := client.InstallDriver(ctx)
+	if err != nil {
+		return fmt.Errorf("starting driver install: %w", driverServiceErr(err))
+	}
+	if err := stream.Send(&agentpbv2.InstallDriverRequest{
+		RequestType: &agentpbv2.InstallDriverRequest_Spec{Spec: spec},
+	}); err != nil {
+		return fmt.Errorf("sending driver spec: %w", driverServiceErr(err))
+	}
+	// Remote installs are fetched by the agent; only local installs upload bytes.
+	if filePath != "" {
+		if err := streamDriverChunks(stream, filePath); err != nil {
+			return err
+		}
+	}
+	if err := stream.CloseSend(); err != nil {
+		return fmt.Errorf("closing driver upload: %w", err)
+	}
+	return consumeDriverApply(stream, spec.GetName(), "installed")
 }
 
 const driverChunkSize = 1 << 20 // 1 MiB per chunk
@@ -236,7 +249,7 @@ func streamDriverChunks(stream agentpbv2.WendyDriverService_InstallDriverClient,
 				return nil
 			}
 		}
-		if rerr == io.EOF {
+		if errors.Is(rerr, io.EOF) {
 			return nil
 		}
 		if rerr != nil {

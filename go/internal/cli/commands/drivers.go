@@ -21,17 +21,71 @@ import (
 // `wendy device apps`. Driver add-ons are prebuilt, signed systemd-sysext images
 // applied on top of the immutable /usr; see the agent's WendyDriverService.
 func newDriversCmd() *cobra.Command {
+	var source driverManifestOptions
 	cmd := &cobra.Command{
 		Use:     "drivers",
 		Aliases: []string{"driver"},
 		Short:   "Manage kernel driver add-ons on the target device",
+		Long: "Interactively select a driver to install, reinstall, or remove. With --json or\n" +
+			"without an interactive terminal, lists installed drivers and rejects --nightly\n" +
+			"and --pr. Use list --available to list published drivers, and install or remove\n" +
+			"for explicit actions.",
+		Args: cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := source.validate(cmd); err != nil {
+				return err
+			}
+			if jsonOutput || !isInteractiveTerminal() {
+				// The installed list is the same whatever the catalog, so a channel
+				// flag here would be silently dropped.
+				if source.nightly || source.pr > 0 {
+					return usageErrorf("--nightly and --pr need the interactive picker; with --json or without a terminal, use list --available")
+				}
+				return runDriversList(cmd.Context(), false, source)
+			}
+			return runDriversInteractive(cmd.Context(), source)
+		},
 	}
+	source.addFlags(cmd)
 	cmd.AddCommand(
 		newDriversListCmd(),
 		newDriversInstallCmd(),
 		newDriversRemoveCmd(),
 	)
 	return cmd
+}
+
+var resolveDriversTargetFn = resolveTarget
+var driverExtensionsForChannelFn = driverExtensionsForChannel
+
+type driverManifestOptions struct {
+	nightly bool
+	pr      int
+}
+
+func (o *driverManifestOptions) addFlags(cmd *cobra.Command) {
+	cmd.Flags().BoolVar(&o.nightly, "nightly", false, "Use drivers from the latest nightly build for this device's kernel")
+	cmd.Flags().IntVar(&o.pr, "pr", 0, "Use drivers from a per-PR build manifest")
+}
+
+func (o driverManifestOptions) validate(cmd *cobra.Command) error {
+	if cmd.Flags().Changed("pr") && o.pr <= 0 {
+		return usageErrorf("--pr must be a positive PR number")
+	}
+	if o.nightly && o.pr > 0 {
+		return usageErrorf("--nightly and --pr are mutually exclusive")
+	}
+	return nil
+}
+
+func (o driverManifestOptions) label(osVersion string) string {
+	if o.nightly {
+		return "latest nightly"
+	}
+	if o.pr > 0 {
+		return fmt.Sprintf("PR %d", o.pr)
+	}
+	return "OS " + osVersion
 }
 
 // A third state: an add-on built for another kernel is not merely unloaded, it
@@ -76,45 +130,54 @@ func driverInstalledFor(installed []*agentpbv2.InstalledDriver, e extensionEntry
 
 func newDriversListCmd() *cobra.Command {
 	var available bool
-	var pr int
+	var source driverManifestOptions
 	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List installed driver add-ons (or --available: those published for this device)",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx := cmd.Context()
-			target, err := resolveTarget(ctx)
-			if err != nil {
+			if err := source.validate(cmd); err != nil {
 				return err
 			}
-			defer target.Close()
-			if target.Agent == nil {
-				return fmt.Errorf("selected device does not support driver add-ons")
+			if !available && (source.nightly || source.pr > 0) {
+				return usageErrorf("--nightly and --pr require --available when listing drivers")
 			}
-			if available {
-				return renderAvailableDrivers(ctx, target, pr)
-			}
-			resp, err := target.Agent.DriverService.ListDrivers(ctx, &agentpbv2.ListDriversRequest{})
-			if err != nil {
-				return fmt.Errorf("listing drivers: %w", driverServiceErr(err))
-			}
-			return renderDriversList(resp)
+			return runDriversList(cmd.Context(), available, source)
 		},
 	}
-	cmd.Flags().BoolVar(&available, "available", false, "List drivers published in the registry for this device's OS + kernel")
-	cmd.Flags().IntVar(&pr, "pr", 0, "With --available, resolve against a per-PR build manifest")
+	cmd.Flags().BoolVar(&available, "available", false, "List drivers published in the registry for this device's kernel (from its OS version, or --nightly / --pr)")
+	source.addFlags(cmd)
 	return cmd
+}
+
+func runDriversList(ctx context.Context, available bool, source driverManifestOptions) error {
+	target, err := resolveDriversTargetFn(ctx)
+	if err != nil {
+		return err
+	}
+	defer target.Close()
+	if target.Agent == nil {
+		return fmt.Errorf("selected device does not support driver add-ons")
+	}
+	if available {
+		return renderAvailableDrivers(ctx, target, source)
+	}
+	resp, err := target.Agent.DriverService.ListDrivers(ctx, &agentpbv2.ListDriversRequest{})
+	if err != nil {
+		return fmt.Errorf("listing drivers: %w", driverServiceErr(err))
+	}
+	return renderDriversList(resp)
 }
 
 // renderAvailableDrivers lists the driver add-ons published for the device's OS
 // version, filtered to its running kernel and marking those already installed.
-func renderAvailableDrivers(ctx context.Context, target *SelectedDevice, pr int) error {
+func renderAvailableDrivers(ctx context.Context, target *SelectedDevice, source driverManifestOptions) error {
 	deviceType, dl, err := deviceDriverCoords(ctx, target)
 	if err != nil {
 		return err
 	}
 	osVersion, kernel := dl.GetBaseVersion(), dl.GetKernelVersion()
-	exts, err := driverExtensionsFor(deviceType, osVersion, pr)
+	exts, err := driverExtensionsForChannelFn(ctx, deviceType, osVersion, source.nightly, source.pr)
 	if err != nil {
 		return err
 	}
@@ -144,8 +207,9 @@ func renderAvailableDrivers(ctx context.Context, target *SelectedDevice, pr int)
 			DeviceType string `json:"deviceType"`
 			OSVersion  string `json:"osVersion"`
 			Kernel     string `json:"kernel"`
+			Source     string `json:"source"`
 			Available  []jr   `json:"available"`
-		}{DeviceType: deviceType, OSVersion: osVersion, Kernel: kernel}
+		}{DeviceType: deviceType, OSVersion: osVersion, Kernel: kernel, Source: source.label(osVersion)}
 		out.Available = make([]jr, 0, len(rows))
 		for _, r := range rows {
 			out.Available = append(out.Available, jr{r.e.Name, r.e.Version, r.e.KernelVersion, r.e.ModulesLoad, r.local})
@@ -158,9 +222,9 @@ func renderAvailableDrivers(ctx context.Context, target *SelectedDevice, pr int)
 		return nil
 	}
 
-	cliLogln("Available for %s · OS %s · kernel %s", deviceType, osVersion, kernel)
+	cliLogln("Available for %s · %s · kernel %s", deviceType, source.label(osVersion), kernel)
 	if len(rows) == 0 {
-		cliLogln("No drivers published for this OS version + kernel.")
+		cliLogln("No drivers published in this catalog for the running kernel.")
 		return nil
 	}
 	// A filled dot marks an add-on already installed on the device.
@@ -271,7 +335,7 @@ func newDriversRemoveCmd() *cobra.Command {
 			name := args[0]
 
 			if !force {
-				confirmed, err := tui.Confirm(fmt.Sprintf("Remove driver %s?", name))
+				confirmed, err := confirmDriverRemovalFn(fmt.Sprintf("Remove driver %s?", name))
 				if err != nil {
 					if errors.Is(err, tui.ErrCancelled) {
 						return ErrUserCancelled
@@ -284,7 +348,7 @@ func newDriversRemoveCmd() *cobra.Command {
 				}
 			}
 
-			target, err := resolveTarget(ctx)
+			target, err := resolveDriversTargetFn(ctx)
 			if err != nil {
 				return err
 			}
@@ -292,18 +356,21 @@ func newDriversRemoveCmd() *cobra.Command {
 			if target.Agent == nil {
 				return fmt.Errorf("selected device does not support driver add-ons")
 			}
-			// No --purge flag: the MVP has no content-addressed rollback store,
-			// so remove always deletes the .raw (RemoveDriverRequest.purge is
-			// reserved for when the store lands).
-			stream, err := target.Agent.DriverService.RemoveDriver(ctx, &agentpbv2.RemoveDriverRequest{Name: name})
-			if err != nil {
-				return fmt.Errorf("removing driver: %w", driverServiceErr(err))
-			}
-			return consumeDriverApply(stream, name, "removed")
+			return removeDriver(ctx, target.Agent.DriverService, name)
 		},
 	}
 	cmd.Flags().BoolVar(&force, "force", false, "Skip the confirmation prompt")
 	return cmd
+}
+
+var confirmDriverRemovalFn = tui.Confirm
+
+func removeDriver(ctx context.Context, client agentpbv2.WendyDriverServiceClient, name string) error {
+	stream, err := client.RemoveDriver(ctx, &agentpbv2.RemoveDriverRequest{Name: name})
+	if err != nil {
+		return fmt.Errorf("removing driver: %w", driverServiceErr(err))
+	}
+	return consumeDriverApply(stream, name, "removed")
 }
 
 // driverApplyRecvStream is satisfied by both the InstallDriver (bidi) and
@@ -318,7 +385,7 @@ type driverApplyRecvStream interface {
 func consumeDriverApply(stream driverApplyRecvStream, name, verb string) error {
 	for {
 		resp, err := stream.Recv()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			return fmt.Errorf("driver %s: stream ended without a result", name)
 		}
 		if err != nil {

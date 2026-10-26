@@ -37,28 +37,10 @@ endif
 # Build both CLI and agent (native)
 build: build-cli build-agent
 
-# Generate the embedded MCP UI from locked frontend dependencies.
-.PHONY: mcp-app test-race
-MCP_APP := ../web-client/mcp-app
-MCP_APP_DEPS := $(MCP_APP)/node_modules/.wendy-dependencies
-# Include directories so adding or removing an asset also invalidates the HTML.
-mcp_app_sources = $(foreach path,$(wildcard $(1)*),$(path) $(call mcp_app_sources,$(path)/))
-MCP_APP_SOURCES := $(MCP_APP)/src $(call mcp_app_sources,$(MCP_APP)/src/) \
-                  simulator/go2/go2_sim simulator/go2/go2_sim/vendor simulator/rosmaster_r2/r2_sim \
-                  $(wildcard simulator/go2/go2_sim/*.js simulator/go2/go2_sim/vendor/*.js \
-                             simulator/rosmaster_r2/r2_sim/*.js)
-
-mcp-app: internal/cli/mcp/desktop_app.html
-
-$(MCP_APP_DEPS): $(MCP_APP)/package.json $(MCP_APP)/package-lock.json
-	npm --prefix ../web-client/mcp-app ci --no-audit --no-fund
-	node -e "require('node:fs').writeFileSync(process.argv[1], '')" "$@"
-
-internal/cli/mcp/desktop_app.html: $(MCP_APP_DEPS) $(MCP_APP_SOURCES) $(MCP_APP)/build.mjs $(MCP_APP)/tsconfig.json Makefile
-	npm --prefix ../web-client/mcp-app run build
+.PHONY: test-race
 
 # Build the wendy CLI
-build-cli: mcp-app
+build-cli:
 ifeq ($(HOST_ENV),windows)
 	powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "New-Item -ItemType Directory -Force -Path bin | Out-Null; go build -o bin/wendy.exe ./cmd/wendy; if ($$LASTEXITCODE -ne 0) { exit $$LASTEXITCODE }"
 else
@@ -98,22 +80,22 @@ define build-cli-linux-native
 	fi
 endef
 
-build-cli-linux-amd64: mcp-app
+build-cli-linux-amd64:
 	$(call build-cli-linux-native,amd64)
 
-build-cli-linux-arm64: mcp-app
+build-cli-linux-arm64:
 	$(call build-cli-linux-native,arm64)
 
-build-cli-darwin-amd64: mcp-app
+build-cli-darwin-amd64:
 	CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 go build -ldflags "$(LDFLAGS)" -o bin/wendy-darwin-amd64 ./cmd/wendy
 
-build-cli-darwin-arm64: mcp-app
+build-cli-darwin-arm64:
 	CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 go build -ldflags "$(LDFLAGS)" -o bin/wendy-darwin-arm64 ./cmd/wendy
 
-build-cli-windows-amd64: mcp-app
+build-cli-windows-amd64:
 	CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags "$(LDFLAGS)" -o bin/wendy-windows-amd64.exe ./cmd/wendy
 
-build-cli-windows-arm64: mcp-app
+build-cli-windows-arm64:
 	CGO_ENABLED=0 GOOS=windows GOARCH=arm64 go build -ldflags "$(LDFLAGS)" -o bin/wendy-windows-arm64.exe ./cmd/wendy
 
 # Build Windows MSI installers (requires WiX v4+: dotnet tool install --global wix)
@@ -128,15 +110,15 @@ msi-windows-arm64: build-cli-windows-arm64
 	     -arch arm64 -o bin/wendy-windows-arm64.msi $(WXS)
 
 # Run all tests
-test: mcp-app
+test:
 	go test ./... -v -count=1 -timeout 120s
 
 # Run tests with race detector
-test-race: mcp-app
+test-race:
 	go test ./... -v -count=1 -race -timeout 120s
 
 # Run go vet
-vet: mcp-app
+vet:
 	go vet ./...
 
 # Generate protobuf code
@@ -148,7 +130,7 @@ clean:
 	rm -rf bin/
 
 # Install both binaries
-install: mcp-app
+install:
 	go install ./cmd/wendy
 	go install ./cmd/wendy-agent
 
@@ -157,15 +139,15 @@ fmt:
 	gofmt -w -s .
 
 # Lint (requires golangci-lint)
-lint: mcp-app
+lint:
 	golangci-lint run ./...
 
 # Check that dependency licenses match the committed baseline (licenses.csv)
-licenses: mcp-app
+licenses:
 	bash scripts/check-licenses.sh
 
 # Regenerate licenses.csv from current dependencies
-licenses-update: mcp-app
+licenses-update:
 	bash scripts/check-licenses.sh --update
 
 # Sync embedded docs and skills from sibling repos (requires them checked out at ../../docs and ../claude-skills)

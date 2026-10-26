@@ -355,8 +355,10 @@ func TestSignedMethodsAgreeWithProtoOption(t *testing.T) {
 				m := svc.Methods().Get(j)
 				name := "/" + string(svc.FullName()) + "/" + string(m.Name())
 				opt := proto.GetExtension(m.Options(), cloudpbv2.E_SignedRequest).(bool)
-				if opt != (m.Input().FullName() == signedType) {
-					t.Errorf("%s: signed_request option %v but input %s", name, opt, m.Input().FullName())
+				// A device-signed method (WDY-3926) takes SignedRequest too.
+				deviceSigned := proto.GetExtension(m.Options(), cloudpbv2.E_DeviceSignedRequest).(bool)
+				if opt && deviceSigned || (opt || deviceSigned) != (m.Input().FullName() == signedType) {
+					t.Errorf("%s: signed_request option %v, device_signed_request %v, but input %s", name, opt, deviceSigned, m.Input().FullName())
 				}
 				marked[name] = opt
 			}
@@ -482,9 +484,40 @@ func TestEnrollmentRequestUsesFreshReplayID(t *testing.T) {
 // Model the large ML-DSA certificate chain returned by PKI. It belongs in the
 // enrollment artifact, but the Cloud request signature carries only the leaf.
 func TestCloudSignatureOmitsLargeIssuerChain(t *testing.T) {
-	auth, _, leafDER := testAuth(t)
-	issuerDER := leafDER
-	auth.Certificates[0].PemCertificateChain = strings.Repeat(string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: issuerDER})), 3)
+	auth, key, leafDER := testAuth(t)
+	issuers := make([][]byte, 3)
+	parent := &x509.Certificate{Subject: pkix.Name{CommonName: "test root"}}
+	for i := len(issuers) - 1; i >= 0; i-- {
+		// Distinct issuer certificates survive the intentional deduplication
+		// in TLSKeyPair; repeated copies of the leaf do not model a chain.
+		template := &x509.Certificate{
+			SerialNumber:          big.NewInt(int64(i + 2)),
+			Subject:               pkix.Name{CommonName: "test issuer " + big.NewInt(int64(i)).String()},
+			NotBefore:             time.Now().Add(-time.Hour),
+			NotAfter:              time.Now().Add(time.Hour),
+			KeyUsage:              x509.KeyUsageCertSign,
+			BasicConstraintsValid: true,
+			IsCA:                  true,
+		}
+		der, err := x509.CreateCertificate(rand.Reader, template, parent, key.Public(), key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		issuers[i] = der
+		parent = template
+	}
+	leaf, err := x509.ParseCertificate(leafDER)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leafDER, err = x509.CreateCertificate(rand.Reader, leaf, parent, key.Public(), key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	auth.Certificates[0].PemCertificate = string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: leafDER}))
+	for _, der := range issuers {
+		auth.Certificates[0].PemCertificateChain += string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))
+	}
 	signer, err := newSigner(auth)
 	if err != nil {
 		t.Fatal(err)
@@ -502,8 +535,8 @@ func TestCloudSignatureOmitsLargeIssuerChain(t *testing.T) {
 		}
 		return h.X5C
 	}
-	// A representative 43-char base64url SHA-256 digest so the size assertion
-	// reflects a real body_sha256 field.
+	// A representative 43-char base64url SHA-256 digest models a real
+	// body_sha256 field.
 	descriptor, err := signer.sign("wendycloud.v2.DeviceEnrollmentService/EnrollDevice", "org/"+testTenant+"/device/sim", "47DEQpj8HBSa-_TImW-5JCeuQeRkm5NMpJWZG3hSuFU", false, uuid.NewString())
 	if err != nil {
 		t.Fatal(err)
@@ -517,8 +550,13 @@ func TestCloudSignatureOmitsLargeIssuerChain(t *testing.T) {
 		t.Fatal(err)
 	}
 	chain := header(string(artifact))
-	if len(chain) != 4 || chain[0] != certs[0] || chain[1] != base64.StdEncoding.EncodeToString(issuerDER) {
+	if len(chain) != 4 || chain[0] != certs[0] {
 		t.Fatal("enrollment body lost its issuer chain")
+	}
+	for i, issuer := range issuers {
+		if chain[i+1] != base64.StdEncoding.EncodeToString(issuer) {
+			t.Fatalf("enrollment body changed issuer %d", i)
+		}
 	}
 }
 

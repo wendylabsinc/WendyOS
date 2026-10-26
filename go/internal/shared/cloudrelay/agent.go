@@ -23,6 +23,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 )
@@ -41,6 +42,10 @@ type Agent struct {
 	lease               *pb.IssuePresenceLeaseResponse
 	leaseClaims         claims
 	slots               chan struct{}
+	sourceAddresses     func() ([]net.Addr, error)
+	sourceCheckInterval time.Duration
+	preferredSource     func(*net.TCPAddr) (net.IP, error)
+	pathReachable       func(context.Context, string) bool
 }
 
 func (a *Agent) Run(ctx context.Context) {
@@ -284,6 +289,9 @@ func (a *Agent) runOnce(parent context.Context) error {
 		return fmt.Errorf("invalid presence acceptance")
 	}
 	a.Logger.Info("registered presence with cloud relay", zap.String("endpoint", lease.Broker.Endpoint))
+	presencePeer, _ := peer.FromContext(stream.Context())
+	pathChanged := make(chan error, 1)
+	go func() { pathChanged <- a.watchPresencePath(ctx, presencePeer, lease.Broker.Endpoint) }()
 	renewal := time.NewTimer(renewalDelay(lease, c))
 	defer renewal.Stop()
 	expiry := time.NewTimer(time.Until(time.Unix(c.Exp, 0)))
@@ -324,6 +332,13 @@ func (a *Agent) runOnce(parent context.Context) error {
 			return ctx.Err()
 		case <-expiry.C:
 			return fmt.Errorf("Cloud presence lease expired")
+		case err := <-pathChanged:
+			// A local network change, not a broker refusal: the lease binds
+			// no source address, so the same broker still admits it over the
+			// new path. Re-presenting it saves an IssuePresenceLease round
+			// trip; if the broker does refuse it, that attempt drops it.
+			keepLease = true
+			return err
 		case <-renewal.C:
 			l, n, e := a.issue(ctx)
 			if e != nil {
@@ -435,7 +450,9 @@ func (a *Agent) runOnce(parent context.Context) error {
 					broker := lease.Broker
 					go func() {
 						defer func() { <-a.slots }()
-						if e := a.serve(ctx, broker, s.o, s.c, s.d); e != nil && ctx.Err() == nil {
+						// Sessions belong to the agent, so replacing its presence
+						// connection must not cancel their independent relay streams.
+						if e := a.serve(parent, broker, s.o, s.c, s.d); e != nil && parent.Err() == nil {
 							a.Logger.Warn("cloud relay session failed", zap.Error(e))
 						}
 					}()
@@ -452,6 +469,9 @@ func (a *Agent) serve(ctx context.Context, broker *pb.BrokerInstance, o *pb.Sess
 		return err
 	}
 	defer session.Close()
+	if d.Transport == pb.DialTransport_DIAL_TRANSPORT_DATAGRAM {
+		return serveDatagrams(session, d)
+	}
 	port := int(d.Port)
 	if string(d.ServiceDescriptor) == "wendy-agent" && a.MTLSPort > 0 {
 		port = a.MTLSPort

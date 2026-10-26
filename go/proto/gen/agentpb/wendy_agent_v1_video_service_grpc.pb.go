@@ -28,6 +28,8 @@ const (
 	WendyVideoService_GetCameraControls_FullMethodName     = "/wendy.agent.services.v1.WendyVideoService/GetCameraControls"
 	WendyVideoService_SetCameraControls_FullMethodName     = "/wendy.agent.services.v1.WendyVideoService/SetCameraControls"
 	WendyVideoService_ResetCameraControls_FullMethodName   = "/wendy.agent.services.v1.WendyVideoService/ResetCameraControls"
+	WendyVideoService_GetCameraDHCPStatus_FullMethodName   = "/wendy.agent.services.v1.WendyVideoService/GetCameraDHCPStatus"
+	WendyVideoService_SetCameraDHCP_FullMethodName         = "/wendy.agent.services.v1.WendyVideoService/SetCameraDHCP"
 )
 
 // WendyVideoServiceClient is the client API for WendyVideoService service.
@@ -46,6 +48,10 @@ type WendyVideoServiceClient interface {
 	GetCameraControls(ctx context.Context, in *GetCameraControlsRequest, opts ...grpc.CallOption) (*GetCameraControlsResponse, error)
 	SetCameraControls(ctx context.Context, in *SetCameraControlsRequest, opts ...grpc.CallOption) (*SetCameraControlsResponse, error)
 	ResetCameraControls(ctx context.Context, in *ResetCameraControlsRequest, opts ...grpc.CallOption) (*ResetCameraControlsResponse, error)
+	// Camera DHCP is off by default. These operator APIs inspect and persist
+	// per-port permission; enabling never bypasses competing-server guards.
+	GetCameraDHCPStatus(ctx context.Context, in *GetCameraDHCPStatusRequest, opts ...grpc.CallOption) (*CameraDHCPStatus, error)
+	SetCameraDHCP(ctx context.Context, in *SetCameraDHCPRequest, opts ...grpc.CallOption) (*CameraDHCPStatus, error)
 }
 
 type wendyVideoServiceClient struct {
@@ -155,6 +161,26 @@ func (c *wendyVideoServiceClient) ResetCameraControls(ctx context.Context, in *R
 	return out, nil
 }
 
+func (c *wendyVideoServiceClient) GetCameraDHCPStatus(ctx context.Context, in *GetCameraDHCPStatusRequest, opts ...grpc.CallOption) (*CameraDHCPStatus, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CameraDHCPStatus)
+	err := c.cc.Invoke(ctx, WendyVideoService_GetCameraDHCPStatus_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *wendyVideoServiceClient) SetCameraDHCP(ctx context.Context, in *SetCameraDHCPRequest, opts ...grpc.CallOption) (*CameraDHCPStatus, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CameraDHCPStatus)
+	err := c.cc.Invoke(ctx, WendyVideoService_SetCameraDHCP_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // WendyVideoServiceServer is the server API for WendyVideoService service.
 // All implementations must embed UnimplementedWendyVideoServiceServer
 // for forward compatibility.
@@ -171,6 +197,10 @@ type WendyVideoServiceServer interface {
 	GetCameraControls(context.Context, *GetCameraControlsRequest) (*GetCameraControlsResponse, error)
 	SetCameraControls(context.Context, *SetCameraControlsRequest) (*SetCameraControlsResponse, error)
 	ResetCameraControls(context.Context, *ResetCameraControlsRequest) (*ResetCameraControlsResponse, error)
+	// Camera DHCP is off by default. These operator APIs inspect and persist
+	// per-port permission; enabling never bypasses competing-server guards.
+	GetCameraDHCPStatus(context.Context, *GetCameraDHCPStatusRequest) (*CameraDHCPStatus, error)
+	SetCameraDHCP(context.Context, *SetCameraDHCPRequest) (*CameraDHCPStatus, error)
 	mustEmbedUnimplementedWendyVideoServiceServer()
 }
 
@@ -207,6 +237,12 @@ func (UnimplementedWendyVideoServiceServer) SetCameraControls(context.Context, *
 }
 func (UnimplementedWendyVideoServiceServer) ResetCameraControls(context.Context, *ResetCameraControlsRequest) (*ResetCameraControlsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ResetCameraControls not implemented")
+}
+func (UnimplementedWendyVideoServiceServer) GetCameraDHCPStatus(context.Context, *GetCameraDHCPStatusRequest) (*CameraDHCPStatus, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetCameraDHCPStatus not implemented")
+}
+func (UnimplementedWendyVideoServiceServer) SetCameraDHCP(context.Context, *SetCameraDHCPRequest) (*CameraDHCPStatus, error) {
+	return nil, status.Error(codes.Unimplemented, "method SetCameraDHCP not implemented")
 }
 func (UnimplementedWendyVideoServiceServer) mustEmbedUnimplementedWendyVideoServiceServer() {}
 func (UnimplementedWendyVideoServiceServer) testEmbeddedByValue()                           {}
@@ -384,6 +420,42 @@ func _WendyVideoService_ResetCameraControls_Handler(srv interface{}, ctx context
 	return interceptor(ctx, in, info, handler)
 }
 
+func _WendyVideoService_GetCameraDHCPStatus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetCameraDHCPStatusRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WendyVideoServiceServer).GetCameraDHCPStatus(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WendyVideoService_GetCameraDHCPStatus_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WendyVideoServiceServer).GetCameraDHCPStatus(ctx, req.(*GetCameraDHCPStatusRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WendyVideoService_SetCameraDHCP_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetCameraDHCPRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WendyVideoServiceServer).SetCameraDHCP(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WendyVideoService_SetCameraDHCP_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WendyVideoServiceServer).SetCameraDHCP(ctx, req.(*SetCameraDHCPRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // WendyVideoService_ServiceDesc is the grpc.ServiceDesc for WendyVideoService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -422,6 +494,14 @@ var WendyVideoService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ResetCameraControls",
 			Handler:    _WendyVideoService_ResetCameraControls_Handler,
+		},
+		{
+			MethodName: "GetCameraDHCPStatus",
+			Handler:    _WendyVideoService_GetCameraDHCPStatus_Handler,
+		},
+		{
+			MethodName: "SetCameraDHCP",
+			Handler:    _WendyVideoService_SetCameraDHCP_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

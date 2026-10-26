@@ -54,18 +54,26 @@ func (e *OrgMismatchError) Error() string {
 // mismatch, because the caller asked for a specific device and got something
 // that cannot prove it is that device.
 type IdentityMismatchError struct {
-	WantOrg   int32
-	WantAsset string
-	GotOrg    int32  // 0 when the certificate carried no Wendy identity
-	GotAsset  string // "" when the certificate carried no Wendy asset identity
+	WantOrg       int32
+	WantAsset     string
+	WantPrincipal string // authoritative SPIFFE identity, when the caller required one
+	GotOrg        int32  // 0 when the certificate carried no legacy org identity
+	GotAsset      string // "" when the certificate carried no Wendy asset identity
+	GotPrincipal  string // retained even when the peer's SPIFFE identity is not an asset
 }
 
 func (e *IdentityMismatchError) Error() string {
-	if e.GotAsset == "" {
-		return fmt.Sprintf("device presented no wendy asset identity, expected asset %s in org %d", e.WantAsset, e.WantOrg)
+	want := fmt.Sprintf("asset %s in org %d", e.WantAsset, e.WantOrg)
+	if e.WantPrincipal != "" {
+		want = "principal " + e.WantPrincipal
 	}
-	return fmt.Sprintf("device presented asset %s in org %d, expected asset %s in org %d",
-		e.GotAsset, e.GotOrg, e.WantAsset, e.WantOrg)
+	got := "no wendy asset identity"
+	if e.GotPrincipal != "" {
+		got = "principal " + e.GotPrincipal
+	} else if e.GotAsset != "" {
+		got = fmt.Sprintf("asset %s in org %d", e.GotAsset, e.GotOrg)
+	}
+	return fmt.Sprintf("device presented %s, expected %s", got, want)
 }
 
 // PinChecker is satisfied by *devicepin.Store. Defined here as an interface
@@ -103,9 +111,10 @@ type ServerVerifyOpts struct {
 	ChainPEM      string     // required: PEM-encoded CA chain for ML-DSA-aware chain verification
 	ExpectedOrgID int32      // 0 = accept any org (still extracted for pinning key); never compared against a pki-core leaf, which carries no org
 	PinStore      PinChecker // nil = skip pinning
-	// ExpectedIdentity, when non-nil, requires the server leaf to carry an
-	// "asset" Wendy identity whose org and entity id match it exactly. This is
-	// the CLI-side counterpart of agent/mtls.NewClientTLSConfigExpectingPeer:
+	// ExpectedIdentity, when non-nil, requires the server leaf to name this
+	// exact Wendy identity (SameEntity: SPIFFE principals when both sides
+	// carry one, legacy org+asset otherwise). This is the CLI-side counterpart
+	// of agent/mtls.NewClientTLSConfigExpectingIdentity:
 	// chain validity alone only proves the peer holds a cert from a trusted CA,
 	// not that it is the device the caller asked for, so any other same-CA cert
 	// could otherwise answer at an mDNS-advertised address.
@@ -330,9 +339,11 @@ func BuildServerVerifyConnection(opts ServerVerifyOpts) (func(tls.ConnectionStat
 		if opts.ExpectedIdentity != nil {
 			if !hasIdentity || identity.EntityType != EntityAsset {
 				return &IdentityMismatchError{
-					WantOrg:   opts.ExpectedIdentity.OrgID,
-					WantAsset: opts.ExpectedIdentity.EntityID,
-					GotOrg:    identity.OrgID,
+					WantOrg:       opts.ExpectedIdentity.OrgID,
+					WantAsset:     opts.ExpectedIdentity.EntityID,
+					WantPrincipal: opts.ExpectedIdentity.Principal,
+					GotOrg:        identity.OrgID,
+					GotPrincipal:  identity.Principal,
 				}
 			}
 			// SameEntity compares principals when both sides have one and falls
@@ -341,10 +352,12 @@ func BuildServerVerifyConnection(opts ServerVerifyOpts) (func(tls.ConnectionStat
 			// their own terms rather than across them.
 			if !identity.SameEntity(*opts.ExpectedIdentity) {
 				return &IdentityMismatchError{
-					WantOrg:   opts.ExpectedIdentity.OrgID,
-					WantAsset: opts.ExpectedIdentity.EntityID,
-					GotOrg:    identity.OrgID,
-					GotAsset:  identity.EntityID,
+					WantOrg:       opts.ExpectedIdentity.OrgID,
+					WantAsset:     opts.ExpectedIdentity.EntityID,
+					WantPrincipal: opts.ExpectedIdentity.Principal,
+					GotOrg:        identity.OrgID,
+					GotAsset:      identity.EntityID,
+					GotPrincipal:  identity.Principal,
 				}
 			}
 		}

@@ -25,6 +25,12 @@ Bound discovery so agents do not hang:
 wendy discover --json --type all --timeout 5s
 ```
 
+The CLI reaches a device's agent over gRPC on TCP port 50051, through USB or
+LAN. On Linux, a USB-C tethered device needs a one-time host setup: ask the user
+to run `wendy discover` in a terminal and accept its USB-C setup prompt (it
+needs sudo). An empty scan can also mean a board without WendyOS; use
+`wendy-device-install` for that.
+
 Use explicit hostnames when possible:
 
 ```bash

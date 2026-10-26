@@ -58,7 +58,7 @@ func runOIDCEnrollDevice(ctx context.Context, conn *grpcclient.AgentConnection, 
 	}
 	defer cloudConn.Close()
 
-	fmt.Printf("Enrolling %s as %s with PKI...\n", name, deviceID)
+	fmt.Printf("Enrolling %s with PKI...\n", name)
 	cfg, assetID, err := cloudenroll.MintEAB(tokenCtx, cloudConn, auth, cfg, name, hw)
 	if err != nil {
 		return err

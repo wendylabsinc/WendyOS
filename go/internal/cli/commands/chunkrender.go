@@ -79,7 +79,11 @@ func pushLayersWithProgress(ctx context.Context, cs agentpb.WendyContainerServic
 	if isRobotTour(ctx) {
 		title = "Preparing your robot app..."
 	}
-	tp := tui.NewProgressProgram(tui.NewProgress(title).WithoutErrorView())
+	bar := tui.NewProgress(title).WithoutErrorView()
+	if progressHintsOff(ctx) {
+		bar = bar.WithoutHints()
+	}
+	tp := tui.NewProgressProgram(bar)
 
 	var (
 		headers []*agentpb.RunContainerLayerHeader

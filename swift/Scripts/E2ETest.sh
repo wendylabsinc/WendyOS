@@ -552,7 +552,7 @@ run_cli_command() {
       "$(ssh_target "$CLI_USER" "$CLI_ADDRESS")" \
       "bash -lc $(shell_quote "$command")"
   else
-    # Keep the toolchain PATH selected by the caller, including setup-node in CI.
+    # Keep the toolchain PATH selected by the caller.
     bash -c "$command"
   fi
 }
@@ -643,17 +643,6 @@ cli_repo_dir="\$(expand_target_path $(shell_quote "$CLI_REPO_DIR"))"
 cli_bin_dir="\$(expand_target_path $(shell_quote "$CLI_BIN_DIR"))"
 wendy_path="\$cli_bin_dir/wendy"
 
-# This runs on the CLI host, which may differ from the Swift test runner.
-if ! command -v node >/dev/null 2>&1 || ! command -v npm >/dev/null 2>&1; then
-  echo "ERROR: building the wendy CLI needs Node.js 22 and npm on the CLI host PATH." >&2
-  echo "Install Node.js 22 on the CLI host before running Swift E2E tests." >&2
-  exit 1
-fi
-if ! node -e 'process.exit(process.versions.node.split(".")[0] === "22" ? 0 : 1)'; then
-  echo "ERROR: building the wendy CLI requires Node.js 22; found \$(node --version) on the CLI host." >&2
-  exit 1
-fi
-
 mkdir -p "\$cli_bin_dir"
 cd "\$cli_repo_dir/go"
 # The Linux CLI links libusb via cgo (Thor flashing); fail with a clear message
@@ -663,7 +652,6 @@ if [[ "\$(uname -s)" == "Linux" ]] && ! pkg-config --exists libusb-1.0 2>/dev/nu
   echo "  (apt install libusb-1.0-0-dev / dnf install libusb1-devel)" >&2
   exit 1
 fi
-make mcp-app
 go build -o "\$wendy_path" ./cmd/wendy
 
 resolved="\$(PATH="\$cli_bin_dir:\$PATH" command -v wendy || true)"

@@ -5,9 +5,11 @@ import (
 	"errors"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/clouddefaults"
 	"github.com/wendylabsinc/wendy/go/internal/shared/discovery"
+	"github.com/wendylabsinc/wendy/go/internal/shared/models"
 )
 
 // TestMain sandboxes HOME/USERPROFILE to a throwaway directory for the whole
@@ -39,6 +41,13 @@ func TestMain(m *testing.M) {
 	// own stub fails here instead of running sudo or Homebrew on the host.
 	installLinuxPackagesFn = func(context.Context, []string) error { return errors.New("test ran a Linux package manager") }
 	installEIMFn = func(context.Context) error { return errors.New("test ran Homebrew to install EIM") }
+	// Connection helpers also launch an eager provisioning browse outside
+	// the model stream. Use an empty default fixture so that browse cannot
+	// outlive a test and probe real devices through another test's dial seam.
+	// Tests for provisioning advertisements replace it with explicit rows.
+	discoverLANDevices = func(context.Context, time.Duration) ([]models.LANDevice, error) {
+		return nil, nil
+	}
 	// A developer who exported WENDY_DEVICE (as the docs suggest) must not
 	// have it copied into deviceFlag by every test that executes the root
 	// command, and leak from there into later tests.

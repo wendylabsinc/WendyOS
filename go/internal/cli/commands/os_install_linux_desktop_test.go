@@ -14,8 +14,8 @@ import (
 
 func TestRenderLinuxDesktopInstructions_Plain(t *testing.T) {
 	out := renderLinuxDesktopInstructions("", "", "", linuxDesktopMachineLabel, time.Time{})
-	if !strings.Contains(out, "curl -fsSL https://install.wendy.dev/agent.sh | bash") {
-		t.Fatalf("plain output missing curl command:\n%s", out)
+	if !strings.Contains(out, "curl -fsSL https://install.wendy.dev/agent.sh | bash -s -- --network-access network") {
+		t.Fatalf("plain output missing curl command with network access:\n%s", out)
 	}
 	if strings.Contains(out, "WENDY_ENROLLMENT_TOKEN") {
 		t.Fatalf("plain output should not mention a token:\n%s", out)
@@ -28,13 +28,19 @@ func TestRenderLinuxDesktopInstructions_Plain(t *testing.T) {
 	}
 }
 
-// The Headless Mac path reuses the same renderer with a Mac label: the command
-// is byte-for-byte identical (agent.sh auto-detects the platform) but the
-// surrounding prose names the Mac.
+// The Headless Mac path reuses the same renderer with a Mac label: agent.sh
+// auto-detects the platform but rejects --network-access on macOS, so the Mac
+// command omits it and the prose says to opt in when the app first opens.
 func TestRenderLinuxDesktopInstructions_HeadlessMac(t *testing.T) {
 	out := renderLinuxDesktopInstructions("", "", "", headlessMacMachineLabel, time.Time{})
 	if !strings.Contains(out, "curl -fsSL https://install.wendy.dev/agent.sh | bash") {
 		t.Fatalf("mac output missing curl command:\n%s", out)
+	}
+	if strings.Contains(out, "--network-access") {
+		t.Fatalf("mac output must not pass the Linux-only access flag:\n%s", out)
+	}
+	if !strings.Contains(out, "Allow Other Devices") {
+		t.Fatalf("mac output should say how to allow network access:\n%s", out)
 	}
 	if !strings.Contains(out, "your Mac") {
 		t.Fatalf("mac output should name the Mac target:\n%s", out)
@@ -51,6 +57,7 @@ func TestRenderLinuxDesktopInstructions_Enrolled(t *testing.T) {
 		"WENDY_ENROLLMENT_TOKEN=tok-abc",
 		"WENDY_CLOUD_HOST=cloud.wendy.dev:443",
 		"install.wendy.dev/agent.sh",
+		"--network-access network",
 		"Acme",
 	} {
 		if !strings.Contains(out, want) {
@@ -174,11 +181,18 @@ func TestInstallLinuxDesktop_EnrolledValidatesDeviceName(t *testing.T) {
 }
 
 func TestLinuxDesktopCommand(t *testing.T) {
-	if got := linuxDesktopCommand("", ""); got != "curl -fsSL https://install.wendy.dev/agent.sh | bash" {
+	if got := linuxDesktopCommand("", "", linuxDesktopMachineLabel); got != "curl -fsSL https://install.wendy.dev/agent.sh | bash -s -- --network-access network" {
 		t.Fatalf("plain command = %q", got)
 	}
-	got := linuxDesktopCommand("tok-abc", "cloud.wendy.dev:443")
-	want := "curl -fsSL https://install.wendy.dev/agent.sh | WENDY_ENROLLMENT_TOKEN=tok-abc WENDY_CLOUD_HOST=cloud.wendy.dev:443 bash"
+	if got := linuxDesktopCommand("", "", headlessMacMachineLabel); got != "curl -fsSL https://install.wendy.dev/agent.sh | bash" {
+		t.Fatalf("plain mac command = %q", got)
+	}
+	if got, want := linuxDesktopCommand("tok-abc", "cloud.wendy.dev:443", headlessMacMachineLabel),
+		"curl -fsSL https://install.wendy.dev/agent.sh | WENDY_ENROLLMENT_TOKEN=tok-abc WENDY_CLOUD_HOST=cloud.wendy.dev:443 bash"; got != want {
+		t.Fatalf("enrolled mac command\n got: %q\nwant: %q", got, want)
+	}
+	got := linuxDesktopCommand("tok-abc", "cloud.wendy.dev:443", linuxDesktopMachineLabel)
+	want := "curl -fsSL https://install.wendy.dev/agent.sh | WENDY_ENROLLMENT_TOKEN=tok-abc WENDY_CLOUD_HOST=cloud.wendy.dev:443 bash -s -- --network-access network"
 	if got != want {
 		t.Fatalf("enrolled command\n got: %q\nwant: %q", got, want)
 	}
@@ -195,11 +209,11 @@ func TestCopyLinuxDesktopCommand_Interactive(t *testing.T) {
 	t.Cleanup(func() { clipboardWriter = orig })
 
 	out := captureStdout(t, func() {
-		if !copyLinuxDesktopCommand("tok-xyz", "cloud.wendy.dev:443", true) {
+		if !copyLinuxDesktopCommand("tok-xyz", "cloud.wendy.dev:443", linuxDesktopMachineLabel, true) {
 			t.Fatal("expected copyLinuxDesktopCommand to report success")
 		}
 	})
-	if copied != linuxDesktopCommand("tok-xyz", "cloud.wendy.dev:443") {
+	if copied != linuxDesktopCommand("tok-xyz", "cloud.wendy.dev:443", linuxDesktopMachineLabel) {
 		t.Fatalf("clipboard got %q", copied)
 	}
 	if !strings.Contains(out, "clipboard") {
@@ -213,7 +227,7 @@ func TestCopyLinuxDesktopCommand_NonInteractive(t *testing.T) {
 	clipboardWriter = func(string) error { called = true; return nil }
 	t.Cleanup(func() { clipboardWriter = orig })
 
-	if copyLinuxDesktopCommand("tok", "host", false) {
+	if copyLinuxDesktopCommand("tok", "host", linuxDesktopMachineLabel, false) {
 		t.Fatal("must not report success when non-interactive")
 	}
 	if called {
@@ -227,7 +241,7 @@ func TestCopyLinuxDesktopCommand_ClipboardFailure(t *testing.T) {
 	t.Cleanup(func() { clipboardWriter = orig })
 
 	out := captureStdout(t, func() {
-		if copyLinuxDesktopCommand("tok", "host", true) {
+		if copyLinuxDesktopCommand("tok", "host", linuxDesktopMachineLabel, true) {
 			t.Fatal("must not report success when the clipboard write fails")
 		}
 	})

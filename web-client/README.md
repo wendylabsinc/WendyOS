@@ -20,7 +20,7 @@ npm run desktop
 
 This builds the CLI, copies the Go2 runtime source, prepares `node-pty` for
 Electron, and opens the desktop app with Vite on `127.0.0.1:5174`. Node.js 22.13+
-and Go 1.27+ are required to build. Compiling the terminal dependency may also
+and Go 1.27.3+ are required to build. Compiling the terminal dependency may also
 require Xcode Command Line Tools on macOS or a C++ toolchain on Linux/Windows.
 
 To run without a development server, or produce a native application:
@@ -131,7 +131,7 @@ physical storage. Model responses require configured chat credentials.
 
 ## Run locally
 
-Install Node.js 22.13 or newer and Go 1.27 or newer, then run from `web-client`
+Install Node.js 22.13 or newer and Go 1.27.3 or newer, then run from `web-client`
 inside the Wendy repository:
 
 ```sh
@@ -197,6 +197,32 @@ Sign-out is local; it does not log you out of other Wendy applications.
 
 ## Cloud workspace
 
+Choose **Networks** to inspect local net membership, direct peer links, and selected
+routes. The browser reads snapshots from the signed-in Cloud inventory. The
+desktop combines LAN discovery with the current CLI Cloud inventory. Each
+snapshot uses an independent authenticated connection, so viewing networks does
+not replace the device dashboard connection.
+
+Devices are grouped by their verified tenant and device identity. A device seen
+only through another peer remains visible without claiming that it is reachable
+from this client. Selecting a node shows its reported next hops, carrier types,
+route costs, and signed announcement expiry. A signed route authorizes its
+origin and prefix; it does not prove that an intermediary forwards traffic.
+
+The view polls at most four devices concurrently, then waits ten seconds before
+the next batch. **Pause** stops new reads. Snapshots older than thirty seconds
+are marked stale. An active local network also needs a valid, recent device capture time.
+Failed reads retain the last snapshot visibly as stale. Older agents
+appear as unsupported until updated. Offline, denied, and unverified devices
+remain explicit rather than becoming empty healthy networks.
+
+The underlying read-only API is
+`WendyLocalMeshAdminService.GetLocalMeshTopology`, with the same tenant-scoped
+operator authorization as the existing net administration API. The CLI exposes
+it as `wendy --device HOST:PORT --json device wendy-net topology`.
+`--observation` adds a typed result envelope for clients handling partial
+failures. Neither the API nor this view enables the net or changes its policy.
+
 The sidebar shows the signed-in email from OIDC UserInfo and the organization
 name from Cloud's v2 OrganizationService. UserInfo must match the authenticated
 subject, and organization responses must match the authenticated tenant UUID.
@@ -239,6 +265,72 @@ Hosted Cloud discovery additionally needs a trusted WSS Cloud relay and its
 configuration in the worker. Until these exist, the hosted UI explains the local
 sign-in requirement. It does not pretend to be signed in or substitute fake data.
 
+## Embedding the signer
+
+Other Wendy pages (the Cloud console) run this worker to sign in and sign
+with the operator key. Each release publishes `wendy-web-<version>.tar.gz`:
+the worker, `wendy-credentials.js`, `wasm_exec.js`, `wendy.wasm.gz` and a
+`MANIFEST` of sha256 sums. Serve the files from one directory on the page's own
+origin and start `new Worker("<dir>/wendy-worker.js?sha256=<hex>")`, with the
+MANIFEST's `wendy.wasm` line (the decompressed module) as the pin. A mismatch
+posts `{fatal: "sha256 mismatch"}` and nothing runs. MANIFEST's first line
+names the Go toolchain; `npm run build:wasm` with that toolchain at the
+release commit reproduces the pin.
+
+| Call | Params | Result |
+|---|---|---|
+| `init` | `browserauth.Settings` JSON | `true`; once, before sign-in. Services are then called directly, not through `/api/wendy-auth` |
+| `auth-begin` | `{redirect, email?, issuer?}`; `issuer` pins an organization's realm | authorize URL |
+| `auth-complete` | `{code, state, issuer}` | profile |
+| `auth-restore` | `{tenant?, subject?, refresh?}` | that organization's profile, or `null`; `refresh: true` always rotates the refresh token once and fails the restore if that exchange fails |
+| `credential` | `{tenant?}` | `{profile, algorithm, chainDER, accessToken, publicJWK}`; refreshes a token with under a minute left |
+| `sign` | `{tenant?, bytes: Uint8Array}` | `{signature: Uint8Array}` with the operator key |
+| `valid-until` | `{validForSeconds?}` | `{seconds}`: Unix time to sign as a postbox-relayed payload's `valid_until` (`expires_at` on `DeviceAssignment`) |
+| `head-ack-verify` | `{response, rootDER, device, organizationId, kept?}` | `{entryId, entryHash, observedAt}`: the device's verified signed head ack, or an error naming the refused check |
+| `auth-signout` | `{tenant?}` | `true`; no tenant signs out of every organization |
+
+Call `init` once, first, before any sign-in, `credential` or `sign` call; a
+second `init` fails. Without it the worker keeps the development dashboard's
+defaults and its `/api/wendy-auth` proxy. Every service URL must be explicit
+HTTPS (the Cloud gRPC authority on port 443). There is no host allowlist, by
+design: the page owns this worker's origin and its saved sign-ins, and a
+self-hosted deployment names its own services. Saved sign-ins from another
+auth host do not restore.
+
+Every payload cloud relays to a device postbox (`CreateDeploymentRequest`,
+`ControlContainerRequest`, `UnassignDeviceRequest`, `DeviceAssignment`) must
+carry its validity under the operator signature: a device refuses one without
+it. Get it from `valid-until` before serializing the payload. Without
+`validForSeconds` it is 60 days from now; more than 365 days (31536000 s) is
+refused, and cloud may refuse less under the organization's own limit. This is
+the time a device may still apply the instruction, not the 30-second expiry of
+the request signature.
+
+`head-ack-verify` checks a `GetLastHeadAck` response (`response`, the
+serialized `GetLastHeadAckResponse`) for one device against the platform root
+the page pins (`rootDER`, DER; never one cloud serves), both base64. Keep the
+result per device and pass it back as `kept` on the next read: an older or
+forked ack is then refused. Run the staleness alarm on the returned
+`observedAt` only; every refusal reads the same to the user.
+
+`sign` takes the bytes as the request's second argument, a non-empty
+`Uint8Array`; anything else fails with `Nothing to sign`. The bytes are signed
+as given, with no prefix.
+
+An `issuer` for `auth-begin` must be a Wendy auth realm,
+`<auth_base>/realms/<name>` on the configured auth host. The system realm is
+rejected, compared without case. The callback must return from that same realm;
+`auth-complete` with a different `issuer` fails, and sign-in must start again.
+
+Each organization keeps its own saved sign-in, keyed by tenant and operator.
+The operator key never leaves the worker. Cloud device sessions still require
+the local browser relay.
+
+Upgrading from an older wendy-web: its single `session` slot moves to its
+organization's slot on first load, and the old slot is removed. No action is
+needed. A legacy record without a tenant and operator is dropped, so that
+operator signs in again.
+
 ## Validation
 
 ```sh
@@ -246,6 +338,7 @@ sign-in requirement. It does not pretend to be signed in or substitute fake data
 go test -race ./go/internal/cli/browserauth
 node go/experiments/wasmgrpc/auth-worker.mjs
 node web-client/tests/credential-store.test.mjs
+node web-client/tests/wendy-web-bridge.test.mjs   # after npm run build:wasm
 GOOS=js GOARCH=wasm go test -exec "$(go env GOROOT)/lib/wasm/go_js_wasm_exec" ./go/cmd/wendy-web ./go/internal/cli/browserauth
 node --experimental-strip-types web-client/tests/telemetry.test.mjs
 node --experimental-strip-types --test web-client/tests/auth-proxy.test.mjs

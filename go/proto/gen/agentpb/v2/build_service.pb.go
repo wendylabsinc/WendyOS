@@ -497,22 +497,24 @@ func (x *DockerfileBuild) GetBuildArgs() map[string]string {
 // PushTarget names where a finished image goes, as a mesh peer rather than a
 // hostname.
 //
-// It is an asset id and not a name on purpose. Resolving
-// "device-<id>.cloud.wendy.dev" requires the mesh DNS server, which only exists
-// on WendyOS hosts — an adopted Linux box (where systemd-resolved owns
+// It names the Cloud asset record and not a hostname on purpose. Resolving
+// "device-<uuid>.cloud.wendy.dev" requires the mesh DNS server, which only
+// exists on WendyOS hosts — an adopted Linux box (where systemd-resolved owns
 // 127.0.0.53) cannot resolve it, so a perfectly reachable peer looked
-// unreachable. The agent's peer dialer needs only the id, and it is also a
-// tighter capability: an id can only ever address a device in this org, whereas
-// a free-form host could address anything. See WDY-2356.
+// unreachable. The build host's peer dialer resolves the asset UUID to the
+// device's mesh principal from its roster, so the UUID is also a tighter
+// capability: it can only ever address a device in this tenant, whereas a
+// free-form host could address anything. See WDY-2356.
 type PushTarget struct {
-	state        protoimpl.MessageState `protogen:"open.v1"`
-	AssetId      int32                  `protobuf:"varint,1,opt,name=asset_id,json=assetId,proto3" json:"asset_id,omitempty"`
-	RegistryPort uint32                 `protobuf:"varint,2,opt,name=registry_port,json=registryPort,proto3" json:"registry_port,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The target device's Cloud asset UUID, canonical lowercase text.
+	AssetUuid    string `protobuf:"bytes,5,opt,name=asset_uuid,json=assetUuid,proto3" json:"asset_uuid,omitempty"`
+	RegistryPort uint32 `protobuf:"varint,2,opt,name=registry_port,json=registryPort,proto3" json:"registry_port,omitempty"`
 	// "repository:tag" only — never a host component.
 	Repository string `protobuf:"bytes,3,opt,name=repository,proto3" json:"repository,omitempty"`
 	// mTLS gRPC port of this target's agent. The CLI copies the port from the
-	// connection that actually reached this device; zero is a legacy client and
-	// makes the build host use its configured/default target-agent port.
+	// connection that actually reached this device; zero makes the build host
+	// use its configured/default target-agent port.
 	AgentPort     uint32 `protobuf:"varint,4,opt,name=agent_port,json=agentPort,proto3" json:"agent_port,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -548,11 +550,11 @@ func (*PushTarget) Descriptor() ([]byte, []int) {
 	return file_wendy_agent_services_v2_build_service_proto_rawDescGZIP(), []int{6}
 }
 
-func (x *PushTarget) GetAssetId() int32 {
+func (x *PushTarget) GetAssetUuid() string {
 	if x != nil {
-		return x.AssetId
+		return x.AssetUuid
 	}
-	return 0
+	return ""
 }
 
 func (x *PushTarget) GetRegistryPort() uint32 {
@@ -912,9 +914,11 @@ func (x *BuildImageResult) GetDeliveries() []*DeliveryResult {
 // device. A failure here is specific to that device — its agent, its mesh
 // reachability, its disk — and says nothing about the others.
 type DeliveryResult struct {
-	state     protoimpl.MessageState `protogen:"open.v1"`
-	AssetId   int32                  `protobuf:"varint,1,opt,name=asset_id,json=assetId,proto3" json:"asset_id,omitempty"`
-	Delivered bool                   `protobuf:"varint,2,opt,name=delivered,proto3" json:"delivered,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The delivered-to device's Cloud asset UUID, canonical lowercase text —
+	// the same value the PushTarget carried.
+	AssetUuid string `protobuf:"bytes,4,opt,name=asset_uuid,json=assetUuid,proto3" json:"asset_uuid,omitempty"`
+	Delivered bool   `protobuf:"varint,2,opt,name=delivered,proto3" json:"delivered,omitempty"`
 	// Empty when delivered. Carries the reason otherwise, already phrased for a
 	// developer: the CLI prints it next to the device name rather than
 	// interpreting it.
@@ -953,11 +957,11 @@ func (*DeliveryResult) Descriptor() ([]byte, []int) {
 	return file_wendy_agent_services_v2_build_service_proto_rawDescGZIP(), []int{11}
 }
 
-func (x *DeliveryResult) GetAssetId() int32 {
+func (x *DeliveryResult) GetAssetUuid() string {
 	if x != nil {
-		return x.AssetId
+		return x.AssetUuid
 	}
-	return 0
+	return ""
 }
 
 func (x *DeliveryResult) GetDelivered() bool {
@@ -1011,16 +1015,17 @@ const file_wendy_agent_services_v2_build_service_proto_rawDesc = "" +
 	"build_args\x18\x02 \x03(\v27.wendy.agent.services.v2.DockerfileBuild.BuildArgsEntryR\tbuildArgs\x1a<\n" +
 	"\x0eBuildArgsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x8b\x01\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x9f\x01\n" +
 	"\n" +
-	"PushTarget\x12\x19\n" +
-	"\basset_id\x18\x01 \x01(\x05R\aassetId\x12#\n" +
+	"PushTarget\x12\x1d\n" +
+	"\n" +
+	"asset_uuid\x18\x05 \x01(\tR\tassetUuid\x12#\n" +
 	"\rregistry_port\x18\x02 \x01(\rR\fregistryPort\x12\x1e\n" +
 	"\n" +
 	"repository\x18\x03 \x01(\tR\n" +
 	"repository\x12\x1d\n" +
 	"\n" +
-	"agent_port\x18\x04 \x01(\rR\tagentPort\"\xc2\x03\n" +
+	"agent_port\x18\x04 \x01(\rR\tagentPortJ\x04\b\x01\x10\x02R\basset_id\"\xc2\x03\n" +
 	"\tBuildSpec\x12\x15\n" +
 	"\x06app_id\x18\x01 \x01(\tR\x05appId\x12\x1a\n" +
 	"\bplatform\x18\x02 \x01(\tR\bplatform\x12@\n" +
@@ -1042,11 +1047,12 @@ const file_wendy_agent_services_v2_build_service_proto_rawDesc = "" +
 	"\fimage_digest\x18\x01 \x01(\tR\vimageDigest\x12G\n" +
 	"\n" +
 	"deliveries\x18\x02 \x03(\v2'.wendy.agent.services.v2.DeliveryResultR\n" +
-	"deliveries\"_\n" +
-	"\x0eDeliveryResult\x12\x19\n" +
-	"\basset_id\x18\x01 \x01(\x05R\aassetId\x12\x1c\n" +
+	"deliveries\"s\n" +
+	"\x0eDeliveryResult\x12\x1d\n" +
+	"\n" +
+	"asset_uuid\x18\x04 \x01(\tR\tassetUuid\x12\x1c\n" +
 	"\tdelivered\x18\x02 \x01(\bR\tdelivered\x12\x14\n" +
-	"\x05error\x18\x03 \x01(\tR\x05error*u\n" +
+	"\x05error\x18\x03 \x01(\tR\x05errorJ\x04\b\x01\x10\x02R\basset_id*u\n" +
 	"\fChunkingMode\x12\x1d\n" +
 	"\x19CHUNKING_MODE_UNSPECIFIED\x10\x00\x12\x16\n" +
 	"\x12CHUNKING_MODE_AUTO\x10\x01\x12\x17\n" +

@@ -1,0 +1,195 @@
+syntax = "proto3";
+package wendy.agent.services.v2;
+option go_package = "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2;agentpbv2";
+
+// RawFormat describes the layout of a plane of pixels. It is reused rather than
+// re-declared: a colour plane here is exactly the layout a raw tap subscriber
+// already receives, and two descriptions of the same bytes drift apart.
+import "wendy/agent/services/v1/wendy_agent_v1_video_service.proto";
+
+// The calibrated frame service publishes MEASUREMENTS, where WendyVideoService
+// publishes pictures.
+//
+// StreamVideo carries bytes, a timestamp and a codec. That is everything a
+// viewer needs and nothing an RGB-D consumer does: depth without its scale is
+// uint16 in unknown units, depth without alignment describes different pixels
+// than the colour beside it, and two separately timestamped streams are not a
+// frame. An app that needs those properties therefore opens the camera through
+// the vendor SDK itself, takes exclusive ownership of the node, and locks every
+// other app off that camera -- which is the problem the shared hub exists to
+// remove, reappearing one layer up.
+//
+// So: one message per capture instant, carrying colour, depth aligned to those
+// colour pixels, the scale that turns depth into metres, the intrinsics with
+// their provenance, and the capture settings that were actually applied.
+// Alignment happens ONCE, at the source, in the only place that owns the sensor
+// and holds its factory extrinsics.
+//
+// And consumers DECLARE what they require. An unmet requirement is a
+// FailedPrecondition naming the missing property, before the first frame and
+// again if it stops holding mid-stream. Nothing is ever silently downgraded:
+// losing depth must produce an outage, not confident nonsense.
+//
+// See specs/2026-09-20-calibrated-frame-sensor-source-design.md.
+service WendyCalibratedFrameService {
+    // ListCalibratedSources reports the sources that can publish calibrated
+    // frames and, for each, what it can promise and how large one frame is.
+    // A consumer sizes its gRPC receive limit from that number rather than
+    // discovering it on the first Recv.
+    rpc ListCalibratedSources(ListCalibratedSourcesRequest) returns (ListCalibratedSourcesResponse);
+    // StreamCalibratedFrames delivers frames for as long as every declared
+    // requirement holds, and ends the stream the moment one stops.
+    rpc StreamCalibratedFrames(StreamCalibratedFramesRequest) returns (stream CalibratedFrame);
+}
+
+// FrameRequirement is a property of a frame a consumer can insist on. It is the
+// same vocabulary on both sides: a source ADVERTISES what it provides, a
+// subscriber REQUIRES a subset, and the refusal names the difference. One enum
+// so those three can never disagree about what a property is called.
+enum FrameRequirement {
+    FRAME_REQUIREMENT_UNSPECIFIED = 0;
+    // Depth present and aligned pixel-for-pixel to the colour plane, i.e.
+    // depth[y][x] measures the distance to colour[y][x]. Implies a usable
+    // scale_m: depth in unknown units is not depth.
+    FRAME_REQUIREMENT_ALIGNED_DEPTH = 1;
+    // Intrinsics read from the device's own calibration rather than derived
+    // from a datasheet field of view. A consumer computing a physical size
+    // from pixels needs to know which it got.
+    FRAME_REQUIREMENT_MEASURED_INTRINSICS = 2;
+    // The exposure and gain that were actually applied, read back from the
+    // device. A consumer that adapts to lighting cannot do so from the values
+    // it requested.
+    FRAME_REQUIREMENT_CAPTURE_SETTINGS = 3;
+}
+
+// CameraIntrinsics is the pinhole model of the COLOUR plane, at the resolution
+// named here. width/height are carried because intrinsics do not survive a
+// resize: a consumer that scales the image must scale fx/fy/cx/cy with it, and
+// can only do that if it knows what they were measured at.
+message CameraIntrinsics {
+    enum Provenance {
+        PROVENANCE_UNSPECIFIED = 0;
+        // Read from the device's own factory calibration.
+        PROVENANCE_MEASURED = 1;
+        // Derived from a datasheet field of view, or a default. Usable for a
+        // rough back-projection, not for measuring a badge at a metre.
+        PROVENANCE_ASSUMED = 2;
+    }
+    float fx = 1;
+    float fy = 2;
+    float cx = 3;
+    float cy = 4;
+    uint32 width = 5;  // the resolution these intrinsics describe
+    uint32 height = 6;
+    Provenance provenance = 7;
+    string note = 8; // where they came from, for an operator reading a listing
+}
+
+// DepthPlane is one plane of 16-bit distances. It is NEVER compressed: a lossy
+// depth plane is a plane of plausible wrong distances, which is the failure
+// mode this service exists to prevent.
+message DepthPlane {
+    enum Alignment {
+        ALIGNMENT_UNSPECIFIED = 0;
+        // depth[y][x] describes colour[y][x]. width/height equal the colour
+        // plane's -- the source enforces that, so no consumer has to check it.
+        ALIGNMENT_ALIGNED_TO_COLOUR = 1;
+        // The depth sensor's own frame. NOT interchangeable with the colour
+        // plane: different origin, different field of view. Sent so a consumer
+        // that genuinely wants sensor-native depth can have it, and refused to
+        // anyone who required ALIGNED_DEPTH.
+        ALIGNMENT_SENSOR_NATIVE = 2;
+    }
+    bytes data = 1; // uint16 little-endian, row-major, bytes_per_line * height bytes
+    uint32 width = 2;
+    uint32 height = 3;
+    uint32 bytes_per_line = 4;
+    // Metres per unit: metres = value * scale_m. A source that cannot read its
+    // scale sends NO depth plane rather than defaulting to 1 mm; an absent
+    // scale is a refusal, not a guess.
+    float scale_m = 5;
+    Alignment alignment = 6;
+}
+
+// CaptureSettings are the settings that were APPLIED, read back from the
+// device. Never the ones requested: a consumer adapting to lighting that is
+// handed its own request back has learned nothing.
+message CaptureSettings {
+    uint32 exposure_raw = 1;    // the driver's own number, whatever its unit
+    float exposure_us = 2;      // converted, when the unit is known
+    float exposure_unit_us = 3; // 0 when the unit is unknown -- do not infer one
+    float gain = 4;
+    bool auto_exposure = 5;
+}
+
+// CalibratedFrame is ONE capture instant. Both planes share frame_id and
+// captured_at_ns because pairing is the source's job: two independently
+// timestamped streams are not a frame, and a consumer cannot reconstruct the
+// pairing after the fact.
+message CalibratedFrame {
+    uint64 frame_id = 1;       // monotonic per stream
+    uint64 captured_at_ns = 2; // the capture instant shared by both planes
+    bytes colour = 3;          // layout described by colour_format
+    // The colour plane's layout. v1 sources emit packed uncompressed colour
+    // only (YUYV, UYVY, BGR3, RGB3); no source emits a compressed fourcc here.
+    wendy.agent.services.v1.RawFormat colour_format = 4;
+    DepthPlane depth = 5;           // absent when the source has no depth
+    CameraIntrinsics intrinsics = 6;
+    CaptureSettings settings = 7;   // absent when the device cannot report them
+    string source = 8;              // the source identity, as ListCalibratedSources reports it
+}
+
+// CalibratedSource is one thing that can publish calibrated frames, and what it
+// can promise -- answered without opening a stream, so a consumer learns it can
+// never have aligned depth here before it writes the code that assumes it.
+message CalibratedSource {
+    string source = 1;      // stable identity; what StreamCalibratedFramesRequest.source names
+    string kind = 2;        // capture technology: "realsense", "v4l2"
+    string description = 3; // the model, for an operator reading a listing
+    // Exactly the requirements this source can satisfy. A requirement absent
+    // here is refused at subscribe time, by name.
+    repeated FrameRequirement provides = 4;
+    uint32 colour_width = 5;
+    uint32 colour_height = 6;
+    string colour_fourcc = 7;
+    uint32 depth_width = 8;  // 0 when the source has no depth
+    uint32 depth_height = 9;
+    // An upper bound on one serialized CalibratedFrame at THIS source's
+    // default geometry (colour_width x colour_height). grpc-go's default
+    // receive limit is 4 MiB and one frame is one message, so a client whose
+    // limit is below this must raise it (grpc.MaxCallRecvMsgSize) or be
+    // refused at subscribe time with both numbers -- never handed a stream that
+    // dies on the first frame. A subscriber requesting a larger capture size
+    // gets proportionally larger frames, and the agent scales this figure by
+    // the requested pixel count before comparing.
+    uint64 max_frame_bytes = 10;
+    // available is false for a source this device knows of but cannot open
+    // right now -- most often a RealSense whose capture helper is not
+    // installed. unavailable_reason says which, in a sentence naming the fix.
+    bool available = 11;
+    string unavailable_reason = 12;
+}
+
+message ListCalibratedSourcesRequest {}
+
+message ListCalibratedSourcesResponse {
+    repeated CalibratedSource sources = 1;
+}
+
+message StreamCalibratedFramesRequest {
+    // source names a CalibratedSource. Empty selects the only source that can
+    // satisfy every requirement below, and is ambiguous (InvalidArgument) when
+    // more than one can.
+    string source = 1;
+    uint32 width = 2;     // 0 = the source's default
+    uint32 height = 3;    // 0 = the source's default
+    uint32 framerate = 4; // 0 = the source's default
+    // What this consumer cannot work without. Each is checked before the first
+    // frame and on every frame after it. Declaring nothing is allowed and gets
+    // whatever the source has -- the frame says what that was.
+    repeated FrameRequirement require = 5;
+    // The receive limit this client has configured, in bytes. 0 means the
+    // grpc-go default (4 MiB). A source whose frames exceed it is refused here,
+    // with both numbers, rather than on the first Recv.
+    uint64 max_frame_bytes = 6;
+}

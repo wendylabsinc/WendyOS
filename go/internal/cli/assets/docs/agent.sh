@@ -20,6 +20,8 @@ HOMEBREW_TAP="wendylabsinc/tap"
 HOMEBREW_CASK="wendy-agent"
 HOMEBREW_CASK_QUALIFIED="wendylabsinc/tap/wendy-agent"
 YES=false
+NETWORK_ACCESS=""
+NETWORK_ACCESS_CHANGED=false
 
 usage() {
   cat <<EOF
@@ -31,7 +33,10 @@ debugging and deployment capabilities.
 Usage: install-agent.sh [OPTIONS]
 
 Options:
-  -y            Skip confirmation prompt (assumed when no terminal is attached)
+  -y            Skip prompts; fresh Linux installs use local access
+                (also assumed when no terminal is attached)
+  --network-access local|network
+                Set Linux agent access explicitly, including on later installs
   -d DIR        Install directory (default: /usr/local/bin, only for binary fallback)
   -h, --help    Show this help message
 
@@ -49,11 +54,23 @@ EOF
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -y) YES=true; shift ;;
+    --network-access)
+      if [[ $# -lt 2 ]]; then
+        echo "Error: --network-access requires local or network." >&2
+        exit 1
+      fi
+      NETWORK_ACCESS="$2"; shift 2 ;;
+    --network-access=*) NETWORK_ACCESS="${1#*=}"; shift ;;
     -d) INSTALL_DIR="$2"; shift 2 ;;
     -h|--help) usage ;;
     *) echo "Unknown option: $1"; usage ;;
   esac
 done
+
+case "$NETWORK_ACCESS" in
+  ""|local|network) ;;
+  *) echo "Error: --network-access must be local or network." >&2; exit 1 ;;
+esac
 
 # --- Detect OS (the darwin/linux dispatch happens after helpers are defined) ---
 case "$(uname -s)" in
@@ -246,6 +263,88 @@ confirm() {
   esac
 }
 
+# --- Choose and persist Linux agent access before packages start the service ---
+agent_already_installed() {
+  command -v "$BINARY_NAME" &>/dev/null \
+    || [[ -x "${INSTALL_DIR}/${BINARY_NAME}" ]] \
+    || [[ -f /etc/systemd/system/wendy-agent.service ]] \
+    || [[ -f /usr/lib/systemd/system/wendy-agent.service ]] \
+    || [[ -f /lib/systemd/system/wendy-agent.service ]]
+}
+
+choose_network_access() {
+  local choice_file="${1:-/etc/wendy-agent/network-access}" answer
+  if [[ -n "$NETWORK_ACCESS" ]]; then return 0; fi
+  if [[ -f "$choice_file" ]]; then
+    NETWORK_ACCESS="$(cat "$choice_file")"
+    case "$NETWORK_ACCESS" in
+      local|network)
+        echo "Keeping saved network access choice: ${NETWORK_ACCESS}."
+        return 0 ;;
+      *) echo "Error: invalid saved network access choice; use --network-access local or network." >&2; exit 1 ;;
+    esac
+  fi
+  if agent_already_installed; then
+    NETWORK_ACCESS=network
+    echo "Keeping network access for the existing agent installation."
+    return 0
+  fi
+  NETWORK_ACCESS=local
+  if [[ "$YES" == true ]] || ! have_tty; then
+    echo "Using local access. Use --network-access network to allow other devices."
+    return 0
+  fi
+  echo ""
+  echo "Who should be able to connect to Wendy Agent?"
+  echo "  1) Only this computer (localhost only, default)"
+  echo "  2) Other devices (network discovery and remote access)"
+  echo "Before enrollment, reachable computers may deploy and run apps in network mode."
+  while true; do
+    printf "Choose [1/2, default 1]: "
+    if ! read -r answer </dev/tty; then
+      echo "Using local access."
+      return 0
+    fi
+    case "$answer" in
+      ""|1|local) return 0 ;;
+      2|network) NETWORK_ACCESS=network; return 0 ;;
+      *) echo "Enter 1 for local access or 2 for network access." ;;
+    esac
+  done
+}
+
+configure_network_access() {
+  local config_dir="${1:-/etc/wendy-agent}"
+  local systemd_dir="${2:-/etc/systemd/system}"
+  # The policy the installed agent applies now: agents without a saved choice
+  # keep network access. Empty for a fresh install, which packages start anyway.
+  local previous=""
+  if [[ -f "${config_dir}/network-access" ]]; then
+    previous="$(cat "${config_dir}/network-access")"
+  elif agent_already_installed; then
+    previous=network
+  fi
+  choose_network_access "${config_dir}/network-access"
+  if [[ -n "$previous" && "$previous" != "$NETWORK_ACCESS" ]]; then
+    NETWORK_ACCESS_CHANGED=true
+  fi
+  $SUDO mkdir -p "$config_dir"
+  local choice_tmp
+  choice_tmp="$($SUDO mktemp "${config_dir}/.network-access.XXXXXX")"
+  printf '%s\n' "$NETWORK_ACCESS" | $SUDO tee "$choice_tmp" >/dev/null
+  $SUDO chmod 644 "$choice_tmp"
+  $SUDO mv -f "$choice_tmp" "${config_dir}/network-access"
+
+  # Also constrain the old, separately managed registry if this is a tarball
+  # install. Current packages disable it in favor of the embedded registry.
+  local registry_host=127.0.0.1
+  if [[ "$NETWORK_ACCESS" == network ]]; then registry_host=0.0.0.0; fi
+  $SUDO mkdir -p "${systemd_dir}/wendyos-dev-registry.service.d"
+  printf '[Service]\nEnvironment=LISTEN_ADDRESS=%s:5000\n' "$registry_host" \
+    | $SUDO tee "${systemd_dir}/wendyos-dev-registry.service.d/network-access.conf" >/dev/null
+  echo "Agent access choice saved: ${NETWORK_ACCESS}."
+}
+
 # --- Stage a pre-enrollment token for the agent to self-enroll on startup ---
 stage_enrollment() {
   local token="${WENDY_ENROLLMENT_TOKEN:-}"
@@ -283,6 +382,10 @@ fi
 
 # ===== macOS: install the Wendy Agent app (Homebrew cask, or the signed zip) =====
 if [[ "$OS" == "darwin" ]]; then
+  if [[ -n "$NETWORK_ACCESS" ]]; then
+    echo "Error: --network-access is for Linux; choose access when the Mac app first opens." >&2
+    exit 1
+  fi
   if [[ "$ARCH" != "arm64" ]]; then
     # On Apple Silicon running under Rosetta, uname -m reports x86_64; still install arm64.
     if [[ "$(sysctl -in hw.optional.arm64 2>/dev/null || echo 0)" == "1" ]]; then
@@ -380,6 +483,7 @@ if [[ "$OS" == "darwin" ]]; then
 
   echo ""
   echo "Wendy Agent for macOS installed. Look for it in the menu bar."
+  echo "Open /Applications/WendyAgentMac.app to choose local or network access on first launch."
   echo "See https://docs.wendy.dev/latest/installation/wendy-agent-macos for setup."
   exit 0
 
@@ -392,6 +496,7 @@ fi
 if command -v apt-get &>/dev/null; then
   echo "APT detected. Will add the Wendy repository and install or update wendy-agent."
   confirm "Proceed?"
+  configure_network_access /etc/wendy-agent /etc/systemd/system
 
   echo "Adding Wendy APT repository..."
   # Ensure gnupg is available for key import
@@ -409,6 +514,7 @@ if command -v apt-get &>/dev/null; then
 elif command -v dnf &>/dev/null; then
   echo "DNF detected. Will add the Wendy repository and install or update wendy-agent."
   confirm "Proceed?"
+  configure_network_access /etc/wendy-agent /etc/systemd/system
 
   echo "Adding Wendy YUM repository..."
   $SUDO tee /etc/yum.repos.d/wendy.repo >/dev/null <<'REPO'
@@ -424,6 +530,7 @@ REPO
 elif command -v yum &>/dev/null; then
   echo "YUM detected. Will add the Wendy repository and install or update wendy-agent."
   confirm "Proceed?"
+  configure_network_access /etc/wendy-agent /etc/systemd/system
 
   echo "Adding Wendy YUM repository..."
   $SUDO tee /etc/yum.repos.d/wendy.repo >/dev/null <<'REPO'
@@ -439,6 +546,7 @@ REPO
 elif command -v pacman &>/dev/null; then
   echo "Pacman detected. Will install wendy-agent from the AUR."
   confirm "Proceed?"
+  configure_network_access /etc/wendy-agent /etc/systemd/system
 
   # AUR helpers and makepkg refuse to run as root. If we're root, drop
   # privileges back to the invoking user via SUDO_USER.
@@ -479,6 +587,7 @@ else
   echo "No package manager detected. Will download ${ARTIFACT}"
   echo "  and install '${BINARY_NAME}' with systemd services and dev container registry."
   confirm "Proceed?"
+  configure_network_access /etc/wendy-agent /etc/systemd/system
 
   TMPDIR_DL=$(mktemp -d)
   trap 'rm -rf "$TMPDIR_DL"' EXIT
@@ -747,3 +856,17 @@ else
 fi
 
 stage_enrollment
+
+# Package installs and upgrades restart the agent, which applies the saved
+# choice. A changed choice must also reach an agent whose package was already
+# current; restart only then, so routine updates don't interrupt it twice.
+if [[ "$NETWORK_ACCESS_CHANGED" == true && -d /run/systemd/system ]] \
+  && command -v systemctl &>/dev/null; then
+  $SUDO systemctl daemon-reload || true
+  if ! $SUDO systemctl try-restart wendy-agent; then
+    echo "Warning: could not restart wendy-agent; restart it to apply network access ${NETWORK_ACCESS}." >&2
+  fi
+  if systemctl is-active --quiet wendyos-dev-registry; then
+    $SUDO systemctl restart wendyos-dev-registry || true
+  fi
+fi

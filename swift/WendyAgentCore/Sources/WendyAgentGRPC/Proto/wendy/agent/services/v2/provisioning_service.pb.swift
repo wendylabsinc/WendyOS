@@ -125,6 +125,15 @@ public nonisolated struct Wendy_Agent_Services_V2_ProvisionedResponse: Sendable 
   /// before starting the UUID reset workflow; older Agents fail closed.
   public var cloudAuthenticatedResetSupported: Bool = false
 
+  /// The certificate's device UUID, also used as Cloud's asset UUID.
+  /// Available immediately after enrollment, without a Cloud roster refresh.
+  /// Empty for a legacy identity that has no UUID device principal.
+  public var assetUuid: String = String()
+
+  /// Explicit local credential erasure authenticated by a same-tenant operator.
+  /// This does not revoke certificates or remove Cloud records.
+  public var localResetSupported: Bool = false
+
   public var unknownFields = SwiftProtobuf.UnknownStorage()
 
   public init() {}
@@ -179,6 +188,11 @@ public nonisolated struct Wendy_Agent_Services_V2_UnprovisionRequest: Sendable {
   /// the exact operator, installed identity, tombstone and signed deletion.
   public var cloudResetAuthorization: Data = Data()
 
+  /// Explicitly erase only the local enrollment, without Cloud lifecycle or PKI
+  /// revocation proof. Requires same-tenant operator mTLS and the exact installed
+  /// principal/fingerprint. Never implies that Cloud unenrollment completed.
+  public var localOnly: Bool = false
+
   public var unknownFields = SwiftProtobuf.UnknownStorage()
 
   public init() {}
@@ -190,6 +204,9 @@ public nonisolated struct Wendy_Agent_Services_V2_UnprovisionResponse: Sendable 
   // methods supported on all messages.
 
   public var unenrollmentCompletion: Data = Data()
+
+  /// Set only after a requested local-only reset durably erased credentials.
+  public var localResetCompleted: Bool = false
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
 
@@ -395,7 +412,7 @@ nonisolated extension Wendy_Agent_Services_V2_NotProvisionedResponse: SwiftProto
 
 nonisolated extension Wendy_Agent_Services_V2_ProvisionedResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   public static let protoMessageName: String = _protobuf_package + ".ProvisionedResponse"
-  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}cloud_host\0\u{3}organization_id\0\u{3}asset_id\0\u{3}principal_uri\0\u{3}cloud_unenrollment_supported\0\u{3}cloud_authenticated_reset_supported\0")
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}cloud_host\0\u{3}organization_id\0\u{3}asset_id\0\u{3}principal_uri\0\u{3}cloud_unenrollment_supported\0\u{3}cloud_authenticated_reset_supported\0\u{3}asset_uuid\0\u{3}local_reset_supported\0")
 
   public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -409,6 +426,8 @@ nonisolated extension Wendy_Agent_Services_V2_ProvisionedResponse: SwiftProtobuf
       case 4: try { try decoder.decodeSingularStringField(value: &self.principalUri) }()
       case 5: try { try decoder.decodeSingularBoolField(value: &self.cloudUnenrollmentSupported) }()
       case 6: try { try decoder.decodeSingularBoolField(value: &self.cloudAuthenticatedResetSupported) }()
+      case 7: try { try decoder.decodeSingularStringField(value: &self.assetUuid) }()
+      case 8: try { try decoder.decodeSingularBoolField(value: &self.localResetSupported) }()
       default: break
       }
     }
@@ -433,6 +452,12 @@ nonisolated extension Wendy_Agent_Services_V2_ProvisionedResponse: SwiftProtobuf
     if self.cloudAuthenticatedResetSupported != false {
       try visitor.visitSingularBoolField(value: self.cloudAuthenticatedResetSupported, fieldNumber: 6)
     }
+    if !self.assetUuid.isEmpty {
+      try visitor.visitSingularStringField(value: self.assetUuid, fieldNumber: 7)
+    }
+    if self.localResetSupported != false {
+      try visitor.visitSingularBoolField(value: self.localResetSupported, fieldNumber: 8)
+    }
     try unknownFields.traverse(visitor: &visitor)
   }
 
@@ -443,6 +468,8 @@ nonisolated extension Wendy_Agent_Services_V2_ProvisionedResponse: SwiftProtobuf
     if lhs.principalUri != rhs.principalUri {return false}
     if lhs.cloudUnenrollmentSupported != rhs.cloudUnenrollmentSupported {return false}
     if lhs.cloudAuthenticatedResetSupported != rhs.cloudAuthenticatedResetSupported {return false}
+    if lhs.assetUuid != rhs.assetUuid {return false}
+    if lhs.localResetSupported != rhs.localResetSupported {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }
@@ -514,7 +541,7 @@ nonisolated extension Wendy_Agent_Services_V2_StartProvisioningResponse: SwiftPr
 
 nonisolated extension Wendy_Agent_Services_V2_UnprovisionRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   public static let protoMessageName: String = _protobuf_package + ".UnprovisionRequest"
-  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}expected_principal_uri\0\u{3}expected_certificate_sha256\0\u{3}revocation_proof\0\u{3}cloud_deletion\0\u{3}cloud_reset_authorization\0")
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}expected_principal_uri\0\u{3}expected_certificate_sha256\0\u{3}revocation_proof\0\u{3}cloud_deletion\0\u{3}cloud_reset_authorization\0\u{3}local_only\0")
 
   public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -527,6 +554,7 @@ nonisolated extension Wendy_Agent_Services_V2_UnprovisionRequest: SwiftProtobuf.
       case 3: try { try decoder.decodeSingularBytesField(value: &self.revocationProof) }()
       case 4: try { try decoder.decodeSingularBytesField(value: &self.cloudDeletion) }()
       case 5: try { try decoder.decodeSingularBytesField(value: &self.cloudResetAuthorization) }()
+      case 6: try { try decoder.decodeSingularBoolField(value: &self.localOnly) }()
       default: break
       }
     }
@@ -548,6 +576,9 @@ nonisolated extension Wendy_Agent_Services_V2_UnprovisionRequest: SwiftProtobuf.
     if !self.cloudResetAuthorization.isEmpty {
       try visitor.visitSingularBytesField(value: self.cloudResetAuthorization, fieldNumber: 5)
     }
+    if self.localOnly != false {
+      try visitor.visitSingularBoolField(value: self.localOnly, fieldNumber: 6)
+    }
     try unknownFields.traverse(visitor: &visitor)
   }
 
@@ -557,6 +588,7 @@ nonisolated extension Wendy_Agent_Services_V2_UnprovisionRequest: SwiftProtobuf.
     if lhs.revocationProof != rhs.revocationProof {return false}
     if lhs.cloudDeletion != rhs.cloudDeletion {return false}
     if lhs.cloudResetAuthorization != rhs.cloudResetAuthorization {return false}
+    if lhs.localOnly != rhs.localOnly {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }
@@ -564,7 +596,7 @@ nonisolated extension Wendy_Agent_Services_V2_UnprovisionRequest: SwiftProtobuf.
 
 nonisolated extension Wendy_Agent_Services_V2_UnprovisionResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   public static let protoMessageName: String = _protobuf_package + ".UnprovisionResponse"
-  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}unenrollment_completion\0")
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}unenrollment_completion\0\u{3}local_reset_completed\0")
 
   public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -573,6 +605,7 @@ nonisolated extension Wendy_Agent_Services_V2_UnprovisionResponse: SwiftProtobuf
       // enabled. https://github.com/apple/swift-protobuf/issues/1034
       switch fieldNumber {
       case 1: try { try decoder.decodeSingularBytesField(value: &self.unenrollmentCompletion) }()
+      case 2: try { try decoder.decodeSingularBoolField(value: &self.localResetCompleted) }()
       default: break
       }
     }
@@ -582,11 +615,15 @@ nonisolated extension Wendy_Agent_Services_V2_UnprovisionResponse: SwiftProtobuf
     if !self.unenrollmentCompletion.isEmpty {
       try visitor.visitSingularBytesField(value: self.unenrollmentCompletion, fieldNumber: 1)
     }
+    if self.localResetCompleted != false {
+      try visitor.visitSingularBoolField(value: self.localResetCompleted, fieldNumber: 2)
+    }
     try unknownFields.traverse(visitor: &visitor)
   }
 
   public static func ==(lhs: Wendy_Agent_Services_V2_UnprovisionResponse, rhs: Wendy_Agent_Services_V2_UnprovisionResponse) -> Bool {
     if lhs.unenrollmentCompletion != rhs.unenrollmentCompletion {return false}
+    if lhs.localResetCompleted != rhs.localResetCompleted {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }

@@ -86,7 +86,7 @@ The camera image in this example must implement both its USB driver and the
 HTTP simulator backend selected by `R2_SIMULATOR_URL`. Wendy does not translate
 hardware SDK calls or emulate USB/serial firmware.
 
-`profile` must be `rosmaster-r2`, `go2` or `g1`. `entitlements` is required and
+`profile` must be `rosmaster-r2`, `go2`, `g1` or `so101`. `entitlements` is required and
 must contain at least one grant. On the matching managed VM, it replaces the
 service's normal entitlements; `env` overlays the service environment per key.
 CLI `--env` values retain precedence. A different managed robot profile is an

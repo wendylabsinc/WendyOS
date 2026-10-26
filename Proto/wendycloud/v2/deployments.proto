@@ -17,7 +17,6 @@ service DeploymentService {
     option (wendy.signed_request) = true;
   }
   rpc ListAppReleases(ListAppReleasesRequest) returns (stream ListAppReleasesResponse);
-  rpc GetPushImageCredentials(GetPushImageCredentialsRequest) returns (GetPushImageCredentialsResponse);
 
   // ==================== Deployments ====================
   // Signed; payload_type "wendycloud.v2.CreateDeploymentRequest".
@@ -30,7 +29,9 @@ service DeploymentService {
   // ==================== Asset App Desired Instructions (wendy-agent) ====================
   rpc HandleReportedState(stream UpdateReportedStateRequest) returns (stream DesiredStateResponse);
   rpc ListAssetApps(ListAssetAppsRequest) returns (ListAssetAppsResponse);
-  rpc GetPullCredentials(GetPullCredentialsRequest) returns (GetPullCredentialsResponse);
+  // Every device's state of one app, report-only (unassigned) rows included
+  // (WDY-4000): ListAssetApps across devices, for the app and rollout views.
+  rpc ListAppDeviceStates(ListAppDeviceStatesRequest) returns (ListAppDeviceStatesResponse);
 
   // ==================== Device Container Control ====================
   rpc ListDeviceContainers(ListDeviceContainersRequest) returns (stream DeviceContainer);
@@ -47,6 +48,8 @@ message AppRelease {
   string app_id = 3;
   string name = 4;
   string details = 5;
+  // For a registry-backed release: ArtifactManifest.manifest_digest, set by
+  // ArtifactRegistryService.PublishArtifact.
   optional string image_digest = 6;
   google.protobuf.Timestamp created_at = 7;
   google.protobuf.Timestamp updated_at = 8;
@@ -83,19 +86,6 @@ message ListAppReleasesResponse {
   int32 offset = 3;
 }
 
-message GetPushImageCredentialsRequest {
-  string organization_id = 1;
-  string app_id = 2;
-}
-
-message GetPushImageCredentialsResponse {
-  string registry_url = 1;
-  string full_image_path = 2;
-  string access_token = 3;
-  google.protobuf.Timestamp expires_at = 4;
-  string username = 5;
-}
-
 // ==================== Deployments ====================
 
 message Deployment {
@@ -106,6 +96,15 @@ message Deployment {
   string details = 5;
   string created_by_user_id = 6;
   google.protobuf.Timestamp created_at = 7;
+  // Both computed on read, never stored (WDY-3573).
+  // target_count: devices with a fan-out row for this deployment (rows carry its deployment_id).
+  // updated_count: of those, devices whose reported_release_id equals this deployment's
+  // app_release_id, reported after the deployment was created (the reported_at fence).
+  int32 target_count = 8;
+  int32 updated_count = 9;
+  // The targeting the deployment was created with (WDY-3576). Both empty: every device.
+  repeated string target_tags = 10;
+  repeated string target_device_ids = 11;
 }
 
 // infer the created_by_user_id from the authService
@@ -115,7 +114,18 @@ message CreateDeploymentRequest {
   string app_release_id = 3;
   string details = 4;
   Running running = 5;
-} 
+  // Targeting (WDY-3576). The deployment goes to the union of the devices that carry any of
+  // target_tags (exact match) and the devices named in target_device_ids (UUIDs, each must
+  // belong to the organization). Both empty: every device in the organization. The set is
+  // resolved once, at create time; a device tagged later does not get the deployment. A
+  // non-empty targeting that matches no device is refused with FAILED_PRECONDITION.
+  repeated string target_tags = 6;
+  repeated string target_device_ids = 7;
+  // Instruction validity (WDY-4015 item 3, sem 2026-10-23 22:27), under the
+  // operator's signature: required when cloud relays the request to a device
+  // postbox. Rules: conformance/postbox-entry/README.md.
+  google.protobuf.Timestamp valid_until = 8;
+}
 
 message GetDeploymentRequest {
   string id = 1;
@@ -147,6 +157,29 @@ message CurrentState {
   Running reported_state = 3;
   int32 reported_restart_count = 4;
   uint32 reported_last_exit_signal = 5;
+  // The postbox entry this state answers, so cloud can tell which signed
+  // request a device applied or refused, and why.
+  int64 postbox_entry_id = 6;
+  string correlation_id = 7;
+  string manifest_digest = 8;
+  ApplyOutcome outcome = 9;
+}
+
+enum ApplyOutcome {
+  APPLY_OUTCOME_UNSPECIFIED = 0;
+  APPLY_OUTCOME_APPLIED = 1;
+  APPLY_OUTCOME_REJECTED_SIGNATURE = 2;
+  APPLY_OUTCOME_REJECTED_TARGET = 3;
+  APPLY_OUTCOME_REJECTED_STALE = 4;
+  APPLY_OUTCOME_REJECTED_DIGEST = 5;
+  APPLY_OUTCOME_REJECTED_UNWRAP = 6;
+  APPLY_OUTCOME_PULL_REFUSED = 7;
+  APPLY_OUTCOME_SUPERSEDED = 8;
+  // The entry passed every verification check, but the device failed to carry
+  // it out (e.g. the container did not start). Never reported as a
+  // REJECTED_* value: those mean the device refused the entry itself. The
+  // failure reason stays in the device's audit log.
+  APPLY_OUTCOME_APPLY_FAILED = 9;
 }
 
 // this is to be called by the wendy-agent to get the desired state of an app on an asset
@@ -154,6 +187,15 @@ message CurrentState {
 message DesiredStateResponse {
   repeated DesiredAppState desired_app_states = 1;
   optional google.protobuf.Timestamp cert_expires_at = 2;
+  // Postbox nudge (sem 2026-10-15, postbox client section approved): the
+  // device's postbox holds entries up to this id. It carries no authority: the
+  // device runs its normal DevicePostboxService.PullChanges and verifies every
+  // entry; a forged or spurious nudge only triggers a pull that finds nothing
+  // new. Unset = no nudge; timer polling stays the fallback while the stream is
+  // down. Cloud sets it only on a message that also carries the complete
+  // desired_app_states, never on a nudge-only message: an agent that ignores
+  // this field reads an empty list as "remove every app".
+  optional int64 postbox_head_entry_id = 3;
 }
 
 message DesiredAppState {
@@ -173,6 +215,9 @@ enum Running {
 enum ReleaseType {
   CONTAINER = 0;
   WASM = 1;
+  CONFIG = 2;
+  // No FIRMWARE: tier C (wendy-lite) firmware is not OCI and gets its own shape
+  // (sem 2026-10-18 16:37). TODO(tier C): add with that contract.
 }
 
 // ==================== List Asset Apps ====================
@@ -195,24 +240,56 @@ message AssetApp {
   optional string deployment_details = 10;
   optional google.protobuf.Timestamp deployment_created_at = 11;
   ReleaseType release_type = 12;
+  // Reported state v2 (apps spec section 2, approved sem 2026-10-15): the
+  // device's own word from its latest CurrentState for this app, stored next to
+  // the desired state. Facts under the device's cert, no authority; unset or
+  // zero = the device has not reported it. Freshness is reported_at (7): a
+  // stale report is shown as stale, never as current truth.
+  int64 postbox_entry_id = 13;
+  string correlation_id = 14;
+  string manifest_digest = 15;
+  ApplyOutcome outcome = 16;
+  // True: cloud holds no desired state for this app on this device; the row
+  // exists only because the device reported the app (unassigned but running,
+  // e.g. a direct push with recording off, WDY-3207). Reporting is unconditional
+  // on an enrolled device, so such an app is shown, never hidden. desired_state
+  // (5) is meaningless when true, and the row is never an assignment. False is
+  // the default, so a cloud that predates this field reads as "assigned", which
+  // every row it serves is.
+  bool unassigned = 17;
+  // The release the device reported running, when it named a release of this
+  // app; app_release_id (3) stays the desired release.
+  optional string reported_release_id = 18;
 }
 
 message ListAssetAppsResponse {
   repeated AssetApp asset_apps = 1;
 }
 
-// ==================== Pull Credentials (wendy-agent / microcontrollers) ====================
-message GetPullCredentialsRequest {
-  string app_release_id = 1;
+// ==================== List App Device States ====================
+message ListAppDeviceStatesRequest {
+  string organization_id = 1;
+  string app_id = 2;
+  // At most this many rows; 0 = the server default. The server caps it.
+  int32 page_size = 3;
+  // next_page_token of the previous page; empty = the first page.
+  string page_token = 4;
 }
 
-message GetPullCredentialsResponse {
-  string registry_url = 1;
-  string full_artifact_path = 2;
-  string access_token = 3;
-  google.protobuf.Timestamp expires_at = 4;
-  string username = 5;
-  ReleaseType release_type = 6;
+// One device's row for the app: the AssetApp ListAssetApps returns for that
+// device, and which device it is.
+message AppDeviceState {
+  string asset_id = 1;
+  string asset_name = 2;
+  AssetApp state = 3;
+}
+
+message ListAppDeviceStatesResponse {
+  // Ordered by asset_id. Only devices the caller may see: a hidden device is
+  // absent, and nothing counts it.
+  repeated AppDeviceState rows = 1;
+  // Empty = the last page.
+  string next_page_token = 2;
 }
 
 // ==================== Device Container Control ====================
@@ -247,6 +324,10 @@ message ControlContainerRequest {
   // "myapp" for whole app; "myapp.web" for one service container
   string container_name = 3;
   ContainerAction action = 4;
+  // Instruction validity (WDY-4015 item 3, sem 2026-10-23 22:27), under the
+  // operator's signature: required when cloud relays the request to a device
+  // postbox. Rules: conformance/postbox-entry/README.md.
+  google.protobuf.Timestamp valid_until = 5;
 }
 
 enum ContainerAction {

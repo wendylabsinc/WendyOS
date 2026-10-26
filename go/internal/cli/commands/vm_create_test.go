@@ -44,6 +44,7 @@ func TestResolveVMCreateInputsPromptsOnlyForOmittedValues(t *testing.T) {
 		{name: "explicit name", args: []string{"named-vm"}, profile: "generic", wantName: "named-vm", wantProfile: "go2", wantCalls: "profile"},
 		{name: "explicit generic", profile: "generic", profileSet: true, wantName: "prompted-vm", wantProfile: "generic", wantCalls: "name"},
 		{name: "explicit go2", profile: "go2", profileSet: true, wantName: "prompted-vm", wantProfile: "go2", wantCalls: "name"},
+		{name: "explicit so101", args: []string{"arm-sim"}, profile: "so101", profileSet: true, wantName: "arm-sim", wantProfile: "so101"},
 		{name: "explicit g1", profile: "g1", profileSet: true, wantName: "prompted-vm", wantProfile: "g1", wantCalls: "name"},
 		{name: "both explicit", args: []string{"named-vm"}, profile: "g1", profileSet: true, wantName: "named-vm", wantProfile: "g1"},
 	} {

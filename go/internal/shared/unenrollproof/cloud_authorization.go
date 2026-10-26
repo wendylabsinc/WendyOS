@@ -33,6 +33,45 @@ type resetClaims struct {
 	OperatorJWS string `json:"request_jws"`
 }
 
+// VerifyCloudResetDeletion authenticates a reset response and returns the exact
+// embedded deletion bytes. A missing GetAsset result is not deletion evidence;
+// only the Cloud signature, exact operator request and identity bindings are.
+func VerifyCloudResetDeletion(ctx context.Context, token []byte, cloud, principal, fingerprint string, operator *x509.Certificate, earliest, latest time.Time) ([]byte, error) {
+	if operator == nil || earliest.IsZero() || latest.Before(earliest) {
+		return nil, fmt.Errorf("invalid reset verification bounds")
+	}
+	deletion, err := resetDeletion(token)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := VerifyCloudReset(ctx, token, cloud, principal, fingerprint, deletion, operator, earliest, latest); err != nil {
+		return nil, err
+	}
+	return deletion, nil
+}
+
+// resetDeletion only extracts untrusted, bounded bytes for signature checking.
+func resetDeletion(token []byte) ([]byte, error) {
+	if len(token) == 0 || len(token) > 65536 {
+		return nil, fmt.Errorf("missing or oversized Cloud reset authorization")
+	}
+	parts := strings.Split(string(token), ".")
+	if len(parts) != 3 {
+		return nil, fmt.Errorf("Cloud reset authorization required")
+	}
+	body, err := base64.RawURLEncoding.Strict().DecodeString(parts[1])
+	if err != nil {
+		return nil, err
+	}
+	var c resetClaims
+	d := json.NewDecoder(bytes.NewReader(body))
+	d.DisallowUnknownFields()
+	if d.Decode(&c) != nil || !canonicalObject(body) || len(c.Deletion) == 0 || len(c.Deletion) > 4096 {
+		return nil, fmt.Errorf("invalid Cloud deletion claims")
+	}
+	return c.Deletion, nil
+}
+
 // VerifyCloudReset obtains Cloud keys over authenticated HTTPS to the enrolled
 // issuer only. No operator credential, caller-provided key or URL is forwarded.
 func VerifyCloudReset(ctx context.Context, token []byte, cloud, principal, fingerprint string, deletion []byte, operator *x509.Certificate, earliest, latest time.Time) ([]byte, error) {

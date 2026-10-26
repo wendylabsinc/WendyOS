@@ -16,9 +16,11 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
+	"github.com/wendylabsinc/wendy/go/internal/agent/meshingress"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
@@ -121,56 +123,78 @@ func (f *ctxAwareMeshDialStream) Send(d *agentpbv2.MeshDialData) error {
 	}
 }
 
-// testScope is the device's own tenant used by newMeshServiceForTest; every
-// existing fixture cert in this file carries "urn:wendy:org:7:...", so this
-// must stay org 7 for the pre-existing tests to keep passing under the
-// same-tenant check.
-var testScope = certs.Scope{OrgID: 7}
+const meshTestTenant = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+const meshTestDevice = "spiffe://wendy.sh/tenant/" + meshTestTenant + "/device/bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+
+var testScope = certs.Scope{TenantUUID: meshTestTenant}
+
+type testIngress func(uint16) bool
+
+func (f testIngress) DialAuthorized(port uint16, dial func(string) (net.Conn, error)) (net.Conn, error) {
+	if !f(port) {
+		return nil, meshingress.ErrPortDenied
+	}
+	return dial(net.JoinHostPort("127.0.0.1", strconv.Itoa(int(port))))
+}
 
 func newMeshServiceForTest(t *testing.T) (*MeshService, string) {
 	t.Helper()
 	dir := t.TempDir()
-	return NewMeshService(zap.NewNop(), dir, testScope), dir
+	svc := NewMeshService(zap.NewNop(), dir, testScope)
+	svc.SetIngressAuthorizer(testIngress(func(port uint16) bool { return port == 8080 }))
+	return svc, dir
+}
+
+func TestMeshDialRejectsUnpublishedPort(t *testing.T) {
+	svc, _ := newMeshServiceForTest(t)
+	in := make(chan *agentpbv2.MeshDialMessage, 1)
+	in <- &agentpbv2.MeshDialMessage{Content: &agentpbv2.MeshDialMessage_Open{Open: &agentpbv2.MeshDialOpen{Port: 9999}}}
+	stream := &fakeMeshDialStream{ctx: ctxWithPeerCert(certWithURN(t, meshTestDevice)), in: in}
+	if status.Code(svc.MeshDial(stream)) != codes.PermissionDenied {
+		t.Fatal("unpublished host port must be denied")
+	}
 }
 
 func TestMeshDialRejectsUserCert(t *testing.T) {
 	svc, _ := newMeshServiceForTest(t)
-	stream := &fakeMeshDialStream{ctx: ctxWithPeerCert(certWithURN(t, "urn:wendy:org:7:user:9"))}
+	stream := &fakeMeshDialStream{ctx: ctxWithPeerCert(certWithURN(t, "spiffe://wendy.sh/tenant/"+meshTestTenant+"/user/person"))}
 	err := svc.MeshDial(stream)
 	if status.Code(err) != codes.PermissionDenied {
 		t.Fatalf("err = %v, want PermissionDenied", err)
 	}
 }
 
-// TestMeshDialRejectsCrossOrgAsset covers the gap the mTLS org interceptor
-// leaves open when disabled (WENDY_MTLS_ORG_ENFORCEMENT=off, C-final-review
-// Fix 4): MeshService must independently enforce same-org, not delegate
-// solely to the interceptor. A same-CA asset certificate from a different org
-// than this device's own must be rejected even though it is a valid,
-// non-expired asset certificate.
-func TestMeshDialRejectsCrossOrgAsset(t *testing.T) {
+// The mesh RPC enforces tenant equality even when the listener's general
+// tenant interceptor is disabled.
+func TestMeshDialRejectsCrossTenantDevice(t *testing.T) {
 	svc, _ := newMeshServiceForTest(t)
-	stream := &fakeMeshDialStream{ctx: ctxWithPeerCert(certWithURN(t, "urn:wendy:org:9:asset:215"))}
+	stream := &fakeMeshDialStream{ctx: ctxWithPeerCert(certWithURN(t, "spiffe://wendy.sh/tenant/cccccccc-cccc-4ccc-8ccc-cccccccccccc/device/bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"))}
 	if status.Code(svc.MeshDial(stream)) != codes.PermissionDenied {
-		t.Fatal("want PermissionDenied for an asset certificate from a different org")
+		t.Fatal("want PermissionDenied for a device certificate from a different tenant")
 	}
 }
 
-// TestMeshDialSkipsOrgCheckWhenDeviceOrgUnknown mirrors the mTLS
-// interceptor's grace behavior: main.go forces org enforcement off when this
-// device could not determine its own tenant from its certificate (an unknown
-// Scope), because there is nothing meaningful to compare against. MeshService
-// must skip its own-tenant check in that case rather than reject every caller —
-// the request must still fail on other grounds (port 0) to prove the org gate
-// was skipped, not that the whole call short-circuited to success.
-func TestMeshDialSkipsOrgCheckWhenDeviceOrgUnknown(t *testing.T) {
-	dir := t.TempDir()
-	svc := NewMeshService(zap.NewNop(), dir, certs.Scope{})
-	in := make(chan *agentpbv2.MeshDialMessage, 1)
-	in <- &agentpbv2.MeshDialMessage{Content: &agentpbv2.MeshDialMessage_Open{Open: &agentpbv2.MeshDialOpen{Port: 0}}}
-	stream := &fakeMeshDialStream{ctx: ctxWithPeerCert(certWithURN(t, "urn:wendy:org:42:asset:215")), in: in}
-	if status.Code(svc.MeshDial(stream)) != codes.InvalidArgument {
-		t.Fatal("want InvalidArgument for port 0 (org check must be skipped, not rejected, when device org is unknown)")
+func TestMeshDialRejectsUnknownLocalTenant(t *testing.T) {
+	svc := NewMeshService(zap.NewNop(), t.TempDir(), certs.Scope{})
+	stream := &fakeMeshDialStream{ctx: ctxWithPeerCert(certWithURN(t, meshTestDevice))}
+	if status.Code(svc.MeshDial(stream)) != codes.PermissionDenied {
+		t.Fatal("unknown local tenant must not admit any peer")
+	}
+}
+
+func TestMeshDialRejectsUnsupportedDeviceIdentities(t *testing.T) {
+	for _, principal := range []string{
+		"urn:wendy:org:7:asset:215",
+		"spiffe://wendy.sh/tenant/" + meshTestTenant + "/service/asset-215",
+		"spiffe://wendy.sh/tenant/" + meshTestTenant + "/device/fleet/box",
+	} {
+		t.Run(principal, func(t *testing.T) {
+			svc, _ := newMeshServiceForTest(t)
+			stream := &fakeMeshDialStream{ctx: ctxWithPeerCert(certWithURN(t, principal))}
+			if status.Code(svc.MeshDial(stream)) != codes.PermissionDenied {
+				t.Fatal("non-mesh identity must not admit a peer")
+			}
+		})
 	}
 }
 
@@ -187,7 +211,7 @@ func TestMeshDialRejectsWhenDisabled(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "mesh-disabled"), nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	stream := &fakeMeshDialStream{ctx: ctxWithPeerCert(certWithURN(t, "urn:wendy:org:7:asset:215"))}
+	stream := &fakeMeshDialStream{ctx: ctxWithPeerCert(certWithURN(t, meshTestDevice))}
 	if status.Code(svc.MeshDial(stream)) != codes.PermissionDenied {
 		t.Fatal("want PermissionDenied when mesh-disabled file exists")
 	}
@@ -197,7 +221,7 @@ func TestMeshDialRequiresOpenFirst(t *testing.T) {
 	svc, _ := newMeshServiceForTest(t)
 	in := make(chan *agentpbv2.MeshDialMessage, 1)
 	in <- &agentpbv2.MeshDialMessage{Content: &agentpbv2.MeshDialMessage_Data{Data: &agentpbv2.MeshDialData{Payload: []byte("x")}}}
-	stream := &fakeMeshDialStream{ctx: ctxWithPeerCert(certWithURN(t, "urn:wendy:org:7:asset:215")), in: in}
+	stream := &fakeMeshDialStream{ctx: ctxWithPeerCert(certWithURN(t, meshTestDevice)), in: in}
 	if status.Code(svc.MeshDial(stream)) != codes.InvalidArgument {
 		t.Fatal("want InvalidArgument when first message is not open")
 	}
@@ -207,7 +231,7 @@ func TestMeshDialRejectsPortZero(t *testing.T) {
 	svc, _ := newMeshServiceForTest(t)
 	in := make(chan *agentpbv2.MeshDialMessage, 1)
 	in <- &agentpbv2.MeshDialMessage{Content: &agentpbv2.MeshDialMessage_Open{Open: &agentpbv2.MeshDialOpen{Port: 0}}}
-	stream := &fakeMeshDialStream{ctx: ctxWithPeerCert(certWithURN(t, "urn:wendy:org:7:asset:215")), in: in}
+	stream := &fakeMeshDialStream{ctx: ctxWithPeerCert(certWithURN(t, meshTestDevice)), in: in}
 	if status.Code(svc.MeshDial(stream)) != codes.InvalidArgument {
 		t.Fatal("want InvalidArgument for port 0")
 	}
@@ -243,7 +267,7 @@ func TestMeshDialUnblocksWhenClientStreamDies(t *testing.T) {
 	in := make(chan *agentpbv2.MeshDialMessage, 1)
 	in <- &agentpbv2.MeshDialMessage{Content: &agentpbv2.MeshDialMessage_Open{Open: &agentpbv2.MeshDialOpen{Port: 8080}}}
 	stream := &ctxAwareMeshDialStream{
-		ctx: ctxWithPeerCertFrom(streamCtx, certWithURN(t, "urn:wendy:org:7:asset:215")),
+		ctx: ctxWithPeerCertFrom(streamCtx, certWithURN(t, meshTestDevice)),
 		in:  in,
 		out: make(chan *agentpbv2.MeshDialData, 4),
 	}
@@ -330,7 +354,7 @@ func TestMeshDialRelaysToLocalPort(t *testing.T) {
 	in <- &agentpbv2.MeshDialMessage{Content: &agentpbv2.MeshDialMessage_Open{Open: &agentpbv2.MeshDialOpen{Port: 8080}}}
 	in <- &agentpbv2.MeshDialMessage{Content: &agentpbv2.MeshDialMessage_Data{Data: &agentpbv2.MeshDialData{Payload: []byte("ping")}}}
 	close(in)
-	stream := &fakeMeshDialStream{ctx: ctxWithPeerCert(certWithURN(t, "urn:wendy:org:7:asset:215")), in: in, out: out}
+	stream := &fakeMeshDialStream{ctx: ctxWithPeerCert(certWithURN(t, meshTestDevice)), in: in, out: out}
 
 	if err := svc.MeshDial(stream); err != nil {
 		t.Fatalf("MeshDial: %v", err)

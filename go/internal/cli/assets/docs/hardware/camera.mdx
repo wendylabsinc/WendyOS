@@ -161,6 +161,62 @@ for up to the agent's 15-second first-frame window.
 
 WendyOS also manages network (RTSP/ONVIF) cameras alongside local USB and CSI ones. A discovered camera is registered by its MAC address — the one identity that survives a DHCP address change — and given a stable device ID from a reserved band, `200`–`255`. That ID never changes for the life of the camera, even if its address does.
 
+### Connect a camera directly to Ethernet
+
+If a camera is plugged into a dedicated Ethernet port, WendyOS can give it a
+network address. Leave this disabled on a shared LAN or the device's internet
+uplink, where another DHCP server normally assigns addresses.
+
+1. Find the dedicated port:
+
+   ```sh
+   wendy device camera dhcp status
+   ```
+
+2. Enable camera addressing on that port, replacing `eth1` with its name:
+
+   ```sh
+   wendy device camera dhcp enable eth1
+   wendy device camera dhcp status
+   ```
+
+3. Wait for `serving`, then discover the camera with
+   `wendy device camera list --refresh`.
+
+`waiting` means the port is not ready yet. `blocked` or `degraded` includes a
+reason, such as a competing DHCP server or an address conflict. The agent checks
+the link periodically and stops serving if it detects an uplink or another server.
+Enabling a port alone does not mean a camera is connected.
+
+To disable it:
+
+```sh
+wendy device camera dhcp disable eth1
+```
+
+Settings and unexpired address reservations survive restarts and OS updates.
+If you rename the interface, enable its new name explicitly. Add `--device`
+to select a WendyOS device and `--json` for scripting.
+
+#### DHCP status for scripts
+
+`wendy device camera dhcp status --json` returns an `interfaces` array:
+
+| Field | Meaning |
+| --- | --- |
+| `interface_name` | Port name. |
+| `enabled` | Saved permission to assign camera addresses. |
+| `serving` | The address server is currently active. |
+| `present`, `carrier`, `up` | Port exists, has a link, and is enabled by the OS. |
+| `ipv4_addresses` | Current addresses in CIDR notation. |
+| `state`, `detail` | Current status and an explanation. |
+
+Top-level `configuration_error` and `interface_error` describe failures reading
+saved settings or inspecting ports. Missing false booleans and empty arrays may
+be omitted; do not treat an inspection error as an empty port list.
+
+### Discover and use the camera
+
 Cameras are picked up automatically as the agent's periodic discovery runs. To force a discovery round immediately and list the results in one step:
 
 ```bash
@@ -193,7 +249,7 @@ wendy device camera test <id>
 
 `test` dials the camera's RTSP port directly and reports one of three outcomes: the credentials were accepted, the camera rejected them (with a `wendy device camera login <id>` hint), or the camera was unreachable. One nuance worth knowing: a camera that never actually challenged for a login — no authentication required, or just a bad stream path — is still reported as success, with a detail like *"did not request authentication; the stream path returned RTSP 404 and may be wrong"* rather than claiming the credentials were verified.
 
-`wendy device camera view --id <id>` works the same way for network cameras as for local ones. If no credentials are stored yet, it reads `user`/`password` from a `camera` entitlement in `wendy.json` if present, or prompts once interactively, before retrying the stream — see the [`camera` entitlement fields](/docs/apps/wendy.json#camera) for the wendy.json-based option and its plaintext-storage caveat.
+`wendy device camera view --id <id>` works the same way for network cameras as for local ones. If no credentials are stored yet, it reads `user`/`password` from a `camera` entitlement in `wendy.json` if present, or prompts once interactively, before retrying the stream — see the [`camera` entitlement fields](/docs/advanced/apps/wendy.json#camera) for the wendy.json-based option and its plaintext-storage caveat.
 
 ### Container Access
 

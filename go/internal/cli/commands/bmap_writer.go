@@ -5,9 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -68,26 +68,53 @@ func (c *countingWriter) Write(p []byte) (int, error) {
 	return written, err
 }
 
-// validateBmapSource rejects a --source that is not beneath the OS image cache
-// root. The helper runs as root, so this prevents a caller from pointing it at
-// an arbitrary path via sudo.
-func validateBmapSource(path string) error {
-	root, err := osCacheDir()
+// errHelperInputRefused marks a --bmap or --source the root helper won't read.
+var errHelperInputRefused = errors.New("won't read")
+
+// helperInputOpen is os.Open; a variable so tests can swap the file between
+// openHelperInput's two checks.
+var helperInputOpen = os.Open
+
+// openHelperInput opens a --bmap or --source for the root helper. It checks the
+// path first, so a FIFO or device path is refused without being opened, then
+// the opened file, so a path swapped in between still can't be read.
+func openHelperInput(path string) (*os.File, error) {
+	fi, err := os.Stat(path)
+	if err == nil {
+		err = checkHelperInput(path, fi)
+	}
 	if err != nil {
-		return fmt.Errorf("resolving cache root: %w", err)
+		return nil, err
 	}
-	absRoot, err := filepath.Abs(root)
+	f, err := helperInputOpen(path)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	abs, err := filepath.Abs(filepath.Clean(path))
+	if fi, err = f.Stat(); err == nil {
+		err = checkHelperInput(path, fi)
+	}
 	if err != nil {
-		return err
+		f.Close()
+		return nil, err
 	}
-	if abs != absRoot && !strings.HasPrefix(abs, absRoot+string(filepath.Separator)) {
-		return fmt.Errorf("source %s is outside the image cache", path)
+	return f, nil
+}
+
+func checkHelperInput(path string, fi fs.FileInfo) error {
+	if !fi.Mode().IsRegular() {
+		return fmt.Errorf("%w %s: not a regular file", errHelperInputRefused, path)
 	}
-	return nil
+	return checkHelperInputOwner(path, fi)
+}
+
+// readHelperInput reads a whole --bmap through openHelperInput.
+func readHelperInput(path string) ([]byte, error) {
+	f, err := openHelperInput(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	return io.ReadAll(f)
 }
 
 // validateDeviceTarget rejects a --device that is not a block/character device.
@@ -115,10 +142,7 @@ func runBmapWriteSeekable(devicePath, bmapPath, sourcePath string, writers int, 
 	if err := validateDeviceTarget(devicePath); err != nil {
 		return err
 	}
-	if err := validateBmapSource(sourcePath); err != nil {
-		return err
-	}
-	data, err := os.ReadFile(bmapPath)
+	data, err := readHelperInput(bmapPath)
 	if err != nil {
 		return fmt.Errorf("reading bmap: %w", err)
 	}
@@ -126,7 +150,11 @@ func runBmapWriteSeekable(devicePath, bmapPath, sourcePath string, writers int, 
 	if err != nil {
 		return err
 	}
-	si, err := openSeekableZstd(sourcePath)
+	src, err := openHelperInput(sourcePath)
+	if err != nil {
+		return fmt.Errorf("opening seekable image: %w", err)
+	}
+	si, err := seekableZstdFromFile(src)
 	if err != nil {
 		return err
 	}
@@ -175,7 +203,7 @@ func scanBmapProgress(r io.Reader, progressFn func(int64)) {
 // root (re-exec'd under sudo by the parent), so it does not prompt or print
 // TUI — progress is tracked by the parent counting bytes fed to stdin.
 func runBmapWrite(devicePath, bmapPath string, image io.Reader) (retErr error) {
-	data, err := os.ReadFile(bmapPath)
+	data, err := readHelperInput(bmapPath)
 	if err != nil {
 		return fmt.Errorf("reading bmap: %w", err)
 	}

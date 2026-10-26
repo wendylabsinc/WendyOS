@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "engines": {
-    "node": ">=22.13.0"
+    "node": ">=22.23.4"
   },
   "scripts": {
     "install:ci": "node scripts/install-ci.mjs",
@@ -18,7 +18,8 @@
     "desktop:build": "node scripts/desktop.mjs build",
     "desktop:start": "electron .",
     "desktop:package": "node scripts/desktop.mjs package",
-    "desktop:test": "node --test tests/desktop-*.test.mjs"
+    "desktop:test": "node --test tests/desktop-*.test.mjs",
+    "desktop:check": "tsc --project tsconfig.desktop.json"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",
@@ -34,7 +35,7 @@
     "embla-carousel-react": "^8.6.0",
     "input-otp": "^1.4.2",
     "lucide-react": "^1.31.0",
-    "next": "16.4.0",
+    "next": "16.4.1",
     "next-themes": "^0.4.6",
     "node-pty": "^1.1.0",
     "radix-ui": "^1.6.7",
@@ -47,7 +48,7 @@
     "sonner": "^2.0.8",
     "tailwind-merge": "3.6.0",
     "vaul": "^1.1.2",
-    "zod": "^3.25.76"
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "1.37.1",
@@ -61,7 +62,7 @@
     "@vitejs/plugin-react": "6.0.2",
     "@vitejs/plugin-rsc": "0.5.26",
     "drizzle-kit": "0.31.10",
-    "electron": "^44.4.5",
+    "electron": "^44.9.1",
     "eslint": "9.39.4",
     "eslint-config-next": "16.2.6",
     "fake-indexeddb": "^6.2.5",

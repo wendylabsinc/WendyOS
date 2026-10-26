@@ -126,33 +126,21 @@ USB Serial JTAG currently has no flow control. If the host sends data faster tha
 
 ## WendyCom via Cloud
 
-Devices enroll with Cloud and maintain an authenticated outer TLS connection to
-TunnelBroker. WR02 control records provision trusted Cloud grant keys and bind
-an upgrade to a session ID and grant hash. The outer TLS session shuts down;
-the same socket then carries an end-to-end TLS session between CLI and device.
-The device opens a replacement control connection after handoff.
+An enrolled board can be selected through `wendy cloud discover` without a direct
+USB or LAN connection. The CLI opens an encrypted connection through Wendy Cloud;
+WendyCom commands and replies remain encrypted between the CLI and board.
+See [connect through Cloud](../lite-cloud-relay.md) for setup and troubleshooting.
 
-The CLI uses its Cloud session to call
-`wendycloud.tunnel.lite.v1.WendyComRelayDiscoveryService.Resolve`, then opens
-`WendyComRelayService.WendyComRelay` at the owning process. The first message is
-`WendyComRelayOpen` with a signed tunnel principal request. A route response can
-redirect the client, with at most three stream attempts in total. A grant response
-allows the CLI to start inner mTLS and deliver the ML-DSA-65 grant. Firmware
-verifies it before acknowledging WLA1 and accepting WendyCom.
-
-Relay payloads carry opaque TLS bytes. Framing, channel numbers and WendyCom
-messages stay inside inner TLS; the broker neither decodes them nor allocates
-channels. Cloud enforces one active session per device and four per user.
-See [Lite Cloud relay](../lite-cloud-relay.md) for signing credentials and limits.
-The old unsigned `asset_id` open and un-packaged RPC name are unsupported.
+The board maintains an outbound control connection, so its network does not need
+an inbound port. After handing a client connection over to the relay, it reconnects
+to Cloud so it can continue reporting presence.
 
 ### Time synchronization for enrollment
 
-`WendyComSyncTimeParams.server` is the pinned Roughtime server's `hostname:port`.
-The `response` bytes contain its signed reply to the device's current nonce.
-Firmware checks the server against its pinned keys and requires two-server
-consensus. This replaces the old numeric `server_index`; update CLI and firmware
-together.
+The CLI obtains signed time for the board automatically. Firmware verifies the
+reply before accepting it; your computer does not simply set the board's clock.
+The default enrollment flow uses Sigstore's signed-time service. Firmware that
+supports Roughtime can use that mode in a compatible custom deployment.
 
 ### Channel multiplexing
 

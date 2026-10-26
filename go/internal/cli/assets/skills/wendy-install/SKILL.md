@@ -123,9 +123,8 @@ same skills. Do not send end-users to the internal `claude-skills` collection.
 
 For first-time ChatGPT users, explain Wendy in one sentence and return to
 [wendy-onboarding](../wendy-onboarding/SKILL.md) after verifying installation.
-Use `wendy mcp setup chatgpt` for the local desktop connection; it requires no
-Cloud account or configured target. Hosted inspection and app control use the
-existing registered plugin and do not require installing this CLI. A request
+ChatGPT uses the hosted Wendy plugin, which needs a signed-in `wendy cloud mcp`
+session on the user's computer; see `wendy-mcp-setup`. A request
 to get started with a local workflow includes ordinary CLI and MCP setup;
 plugin installation alone does not.
 

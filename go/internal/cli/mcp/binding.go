@@ -62,7 +62,7 @@ func (p *BindingPolicy) log(tool, outcome string) {
 // drives, simulators, LAN scans, explicit addresses and broker URLs. The relay
 // can forge any call, so a bound client gets them only by --allow-tool or
 // --allow-all. Each call is confirmed unless --allow-all was passed.
-var hostTools = append([]string{"project_validate", "app_inspect", "device_list", "cloud_ping"}, gatewayHostTools...)
+var hostTools = []string{"project_validate", "app_inspect", "device_list", "cloud_ping", "os_install_plan", "os_list_drives", "os_install_start", "os_install_status", "os_install_resume", "os_install_verify", "simulator_list", "simulator_create", "simulator_start", "simulator_update_agent", "simulator_viewer", "simulator_stop", "simulator_delete"}
 
 // readOnlyTool identifies built-in reads that stay off the host. These tools
 // are allowed by default, but skip confirmation only when AllowRead is set.

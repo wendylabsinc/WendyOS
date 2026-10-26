@@ -26,7 +26,7 @@ func TestConfiguredServicesAndRealmPinning(t *testing.T) {
 		}
 		return reply(200, metadata{Issuer: issuer, Authorize: issuer + "/authorize", Token: issuer + "/oauth2/token", JWKS: issuer + "/.well-known/jwks.json"}), nil
 	})
-	login, err := s.Begin(context.Background(), "alice@example.com", "https://gateway.example/auth/callback")
+	login, err := s.Begin(context.Background(), "alice@example.com", "", "https://gateway.example/auth/callback")
 	if err != nil {
 		t.Fatal(err)
 	}

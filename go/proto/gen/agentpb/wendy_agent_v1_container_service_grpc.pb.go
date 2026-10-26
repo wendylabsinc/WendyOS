@@ -40,6 +40,7 @@ const (
 	WendyContainerService_WriteChunks_FullMethodName                 = "/wendy.agent.services.v1.WendyContainerService/WriteChunks"
 	WendyContainerService_QueryLayers_FullMethodName                 = "/wendy.agent.services.v1.WendyContainerService/QueryLayers"
 	WendyContainerService_PrepareImage_FullMethodName                = "/wendy.agent.services.v1.WendyContainerService/PrepareImage"
+	WendyContainerService_ValidateContainer_FullMethodName           = "/wendy.agent.services.v1.WendyContainerService/ValidateContainer"
 )
 
 // WendyContainerServiceClient is the client API for WendyContainerService service.
@@ -80,6 +81,14 @@ type WendyContainerServiceClient interface {
 	// RunContainer remains the source of truth and repeats these idempotent
 	// operations, so callers can fall back safely when this RPC is unavailable.
 	PrepareImage(ctx context.Context, in *RunContainerLayersRequest, opts ...grpc.CallOption) (*PrepareImageResponse, error)
+	// ValidateContainer makes the checks CreateContainer makes before it
+	// replaces an existing container of the same name (image availability,
+	// entitlement refusals, env, resource limits, the spec) without creating
+	// or replacing anything. A multi-service deploy validates every service
+	// before it replaces any, so one failing service leaves the whole app on
+	// its previous version. Agents without it return UNIMPLEMENTED, and
+	// callers then create service by service as before.
+	ValidateContainer(ctx context.Context, in *CreateContainerRequest, opts ...grpc.CallOption) (*ValidateContainerResponse, error)
 }
 
 type wendyContainerServiceClient struct {
@@ -360,6 +369,16 @@ func (c *wendyContainerServiceClient) PrepareImage(ctx context.Context, in *RunC
 	return out, nil
 }
 
+func (c *wendyContainerServiceClient) ValidateContainer(ctx context.Context, in *CreateContainerRequest, opts ...grpc.CallOption) (*ValidateContainerResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ValidateContainerResponse)
+	err := c.cc.Invoke(ctx, WendyContainerService_ValidateContainer_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // WendyContainerServiceServer is the server API for WendyContainerService service.
 // All implementations must embed UnimplementedWendyContainerServiceServer
 // for forward compatibility.
@@ -398,6 +417,14 @@ type WendyContainerServiceServer interface {
 	// RunContainer remains the source of truth and repeats these idempotent
 	// operations, so callers can fall back safely when this RPC is unavailable.
 	PrepareImage(context.Context, *RunContainerLayersRequest) (*PrepareImageResponse, error)
+	// ValidateContainer makes the checks CreateContainer makes before it
+	// replaces an existing container of the same name (image availability,
+	// entitlement refusals, env, resource limits, the spec) without creating
+	// or replacing anything. A multi-service deploy validates every service
+	// before it replaces any, so one failing service leaves the whole app on
+	// its previous version. Agents without it return UNIMPLEMENTED, and
+	// callers then create service by service as before.
+	ValidateContainer(context.Context, *CreateContainerRequest) (*ValidateContainerResponse, error)
 	mustEmbedUnimplementedWendyContainerServiceServer()
 }
 
@@ -470,6 +497,9 @@ func (UnimplementedWendyContainerServiceServer) QueryLayers(context.Context, *Qu
 }
 func (UnimplementedWendyContainerServiceServer) PrepareImage(context.Context, *RunContainerLayersRequest) (*PrepareImageResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method PrepareImage not implemented")
+}
+func (UnimplementedWendyContainerServiceServer) ValidateContainer(context.Context, *CreateContainerRequest) (*ValidateContainerResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ValidateContainer not implemented")
 }
 func (UnimplementedWendyContainerServiceServer) mustEmbedUnimplementedWendyContainerServiceServer() {}
 func (UnimplementedWendyContainerServiceServer) testEmbeddedByValue()                               {}
@@ -780,6 +810,24 @@ func _WendyContainerService_PrepareImage_Handler(srv interface{}, ctx context.Co
 	return interceptor(ctx, in, info, handler)
 }
 
+func _WendyContainerService_ValidateContainer_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CreateContainerRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WendyContainerServiceServer).ValidateContainer(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WendyContainerService_ValidateContainer_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WendyContainerServiceServer).ValidateContainer(ctx, req.(*CreateContainerRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // WendyContainerService_ServiceDesc is the grpc.ServiceDesc for WendyContainerService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -830,6 +878,10 @@ var WendyContainerService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "PrepareImage",
 			Handler:    _WendyContainerService_PrepareImage_Handler,
+		},
+		{
+			MethodName: "ValidateContainer",
+			Handler:    _WendyContainerService_ValidateContainer_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

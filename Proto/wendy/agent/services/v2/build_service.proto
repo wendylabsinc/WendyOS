@@ -122,21 +122,26 @@ message DockerfileBuild {
 // PushTarget names where a finished image goes, as a mesh peer rather than a
 // hostname.
 //
-// It is an asset id and not a name on purpose. Resolving
-// "device-<id>.cloud.wendy.dev" requires the mesh DNS server, which only exists
-// on WendyOS hosts — an adopted Linux box (where systemd-resolved owns
+// It names the Cloud asset record and not a hostname on purpose. Resolving
+// "device-<uuid>.cloud.wendy.dev" requires the mesh DNS server, which only
+// exists on WendyOS hosts — an adopted Linux box (where systemd-resolved owns
 // 127.0.0.53) cannot resolve it, so a perfectly reachable peer looked
-// unreachable. The agent's peer dialer needs only the id, and it is also a
-// tighter capability: an id can only ever address a device in this org, whereas
-// a free-form host could address anything. See WDY-2356.
+// unreachable. The build host's peer dialer resolves the asset UUID to the
+// device's mesh principal from its roster, so the UUID is also a tighter
+// capability: it can only ever address a device in this tenant, whereas a
+// free-form host could address anything. See WDY-2356.
 message PushTarget {
-  int32 asset_id = 1;
+  // Field 1 was the numeric org-scoped asset id; Cloud v2 assets are UUIDs.
+  reserved 1;
+  reserved "asset_id";
+  // The target device's Cloud asset UUID, canonical lowercase text.
+  string asset_uuid = 5;
   uint32 registry_port = 2;
   // "repository:tag" only — never a host component.
   string repository = 3;
   // mTLS gRPC port of this target's agent. The CLI copies the port from the
-  // connection that actually reached this device; zero is a legacy client and
-  // makes the build host use its configured/default target-agent port.
+  // connection that actually reached this device; zero makes the build host
+  // use its configured/default target-agent port.
   uint32 agent_port = 4;
 }
 
@@ -242,7 +247,12 @@ message BuildImageResult {
 // device. A failure here is specific to that device — its agent, its mesh
 // reachability, its disk — and says nothing about the others.
 message DeliveryResult {
-  int32 asset_id = 1;
+  // Field 1 was the numeric org-scoped asset id; Cloud v2 assets are UUIDs.
+  reserved 1;
+  reserved "asset_id";
+  // The delivered-to device's Cloud asset UUID, canonical lowercase text —
+  // the same value the PushTarget carried.
+  string asset_uuid = 4;
   bool delivered = 2;
   // Empty when delivered. Carries the reason otherwise, already phrased for a
   // developer: the CLI prints it next to the device name rather than

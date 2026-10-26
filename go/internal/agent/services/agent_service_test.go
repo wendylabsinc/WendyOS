@@ -94,7 +94,8 @@ const bufSize = 1024 * 1024
 func startAgentServer(t *testing.T, nm NetworkManager, hd HardwareDiscoverer, bm BluetoothManager, opts ...func(*AgentService)) (agentpb.WendyAgentServiceClient, func()) {
 	t.Helper()
 	lis := bufconn.Listen(bufSize)
-	srv := grpc.NewServer()
+	// Stop must join deferred RPC cleanup before callers restore shared hooks.
+	srv := grpc.NewServer(grpc.WaitForHandlers(true))
 	logger := zap.NewNop()
 	svc := NewAgentService(logger, nm, hd, bm, &AgentInstaller{})
 	for _, opt := range opts {

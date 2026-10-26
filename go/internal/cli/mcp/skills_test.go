@@ -12,7 +12,6 @@ import (
 	"io"
 	"io/fs"
 	"maps"
-	"net/http"
 	"path"
 	"reflect"
 	"slices"
@@ -23,7 +22,6 @@ import (
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/wendylabsinc/wendy/go/internal/cli/assets"
-	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 )
 
@@ -88,53 +86,14 @@ func skillCall(t *testing.T, exchange skillExchange, method string, params any) 
 	return reply
 }
 
-// Exercise the same import flow used by Scan Tools over the actual transports,
-// with no device connector or external skill installation available.
-func TestSkillsImportOverTransports(t *testing.T) {
-	for _, transport := range []string{"cli-stdio", "gateway-stdio", "gateway-http"} {
-		t.Run(transport, func(t *testing.T) {
-			var exchange skillExchange
-			if transport == "cli-stdio" {
-				srv, err := New(&config.Config{}, nil).newProtocolServer()
-				if err != nil {
-					t.Fatal(err)
-				}
-				exchange = stdioSkillExchange(t, srv, context.Background())
-			} else {
-				g, err := NewRobotGateway(gatewayTestConfig(), func(context.Context, string) (*grpcclient.AgentConnection, error) {
-					t.Error("skill import connected to a device")
-					return nil, fmt.Errorf("unexpected connection")
-				})
-				if err != nil {
-					t.Fatal(err)
-				}
-				if transport == "gateway-stdio" {
-					ctx := context.WithValue(context.Background(), gatewayPrincipalKey{}, gatewayPrincipal{"alice", robotGatewayScopes})
-					exchange = stdioSkillExchange(t, g.protocol, ctx)
-				} else {
-					h := gatewayTestHTTP(t, g)
-					exchange = func(raw []byte) []byte {
-						t.Helper()
-						req, _ := http.NewRequest(http.MethodPost, h.URL+"/mcp", bytes.NewReader(raw))
-						req.Header.Set("Authorization", "Bearer "+gatewayTestEnv("ALICE_TOKEN"))
-						req.Header.Set("Content-Type", "application/json")
-						req.Header.Set("Accept", "application/json, text/event-stream")
-						resp, err := h.Client().Do(req)
-						if err != nil {
-							t.Fatal(err)
-						}
-						defer resp.Body.Close()
-						data, err := io.ReadAll(resp.Body)
-						if err != nil || resp.StatusCode != http.StatusOK {
-							t.Fatalf("HTTP %d: %s, %v", resp.StatusCode, data, err)
-						}
-						return data
-					}
-				}
-			}
-			verifySkillImport(t, exchange)
-		})
+// Exercise the same import flow used by Scan Tools over stdio, with no
+// device connector or external skill installation available.
+func TestSkillsImportOverStdio(t *testing.T) {
+	srv, err := New(&config.Config{}, nil).newProtocolServer()
+	if err != nil {
+		t.Fatal(err)
 	}
+	verifySkillImport(t, stdioSkillExchange(t, srv, context.Background()))
 }
 
 func verifySkillImport(t *testing.T, exchange skillExchange) {
@@ -333,55 +292,30 @@ func TestSkillFrontmatterPreservesAllFields(t *testing.T) {
 	}
 }
 
-func TestGatewaySkillsRequireAuthentication(t *testing.T) {
-	g, err := NewRobotGateway(gatewayTestConfig(), func(context.Context, string) (*grpcclient.AgentConnection, error) { return nil, fmt.Errorf("offline") })
-	if err != nil {
-		t.Fatal(err)
-	}
-	h := gatewayTestHTTP(t, g)
-	for _, method := range []string{"skills/list", "skills/get", "resources/read"} {
-		raw, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1, "method": method, "params": map[string]any{"uri": skillBaseURI + "SKILL.md"}})
-		req, _ := http.NewRequest(http.MethodPost, h.URL+"/mcp", bytes.NewReader(raw))
-		req.Header.Set("Content-Type", "application/json")
-		resp, err := h.Client().Do(req)
-		if err != nil {
-			t.Fatal(err)
-		}
-		_ = resp.Body.Close()
-		if resp.StatusCode != http.StatusUnauthorized {
-			t.Fatalf("unauthenticated %s returned %d", method, resp.StatusCode)
-		}
-	}
-}
-
 // Assistants that import the bundle (Codex, ChatGPT, Claude Code) learn tools
-// from its entry point. A tool added to a group or the gateway must be listed
-// there, or the skill silently falls behind the server.
+// from the MCP reference its entry point links to. A tool added to a group must
+// be listed there, or the skill silently falls behind the server. The tool list
+// stays out of SKILL.md itself so CLI-only agents do not load it.
 func TestBundledSkillListsEveryAdvertisedTool(t *testing.T) {
 	catalog, err := embeddedSkillCatalog()
 	if err != nil {
 		t.Fatal(err)
 	}
-	main := string(catalog.files[skillBaseURI+"SKILL.md"])
+	const reference = "references/mcp.md"
+	if main := string(catalog.files[skillBaseURI+"SKILL.md"]); !strings.Contains(main, "]("+reference+")") {
+		t.Fatalf("SKILL.md must link to %s, which lists the MCP tools", reference)
+	}
+	tools := string(catalog.files[skillBaseURI+reference])
 	names := map[string]bool{}
 	for _, group := range toolGroups {
 		for _, name := range group {
 			names[name] = true
 		}
 	}
-	cfg := gatewayTestConfig()
-	cfg.StateDirectory = t.TempDir()
-	g, err := NewRobotGateway(cfg, func(context.Context, string) (*grpcclient.AgentConnection, error) { return nil, fmt.Errorf("offline") })
-	if err != nil {
-		t.Fatal(err)
-	}
-	for name := range g.protocol.ListTools() {
-		names[name] = true
-	}
 	sorted := slices.Sorted(maps.Keys(names))
 	for _, name := range sorted {
-		if !strings.Contains(main, "`"+name+"`") && !strings.Contains(main, "`"+name+"(") {
-			t.Errorf("SKILL.md does not list MCP tool %s; add it to plugins/wendy-agentic-coding/skills/wendy/SKILL.md and run scripts/sync-agent-skills.py", name)
+		if !strings.Contains(tools, "`"+name+"`") && !strings.Contains(tools, "`"+name+"(") {
+			t.Errorf("%s does not list MCP tool %s; add it to plugins/wendy-agentic-coding/skills/wendy/%s and run scripts/sync-agent-skills.py", reference, name, reference)
 		}
 	}
 }

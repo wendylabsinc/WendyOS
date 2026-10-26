@@ -5,6 +5,8 @@ import (
 	"net"
 	"testing"
 	"time"
+
+	"github.com/wendylabsinc/wendy/go/internal/agent/networkaccess"
 )
 
 // TestDualStackListenerAcceptsIPv4AndIPv6 verifies that the dual-stack loopback
@@ -102,4 +104,38 @@ func TestListenDualStackLoopbackLocalhostOnly(t *testing.T) {
 		c2.Close()
 		t.Errorf("connection via external IP %s:%d succeeded — listener should be loopback-only", externalIP, port)
 	}
+}
+
+// TestListenForAccessLocalAcceptsBothLoopbacks verifies that local mode serves
+// IPv6 loopback clients too, so localhost resolving to ::1 is not refused.
+func TestListenForAccessLocalAcceptsBothLoopbacks(t *testing.T) {
+	t.Parallel()
+
+	lis, err := listenForAccess(networkaccess.Policy{}, "0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lis.Close()
+	if ip := lis.Addr().(*net.TCPAddr).IP; !ip.IsLoopback() {
+		t.Fatalf("local listener bound to %s", ip)
+	}
+	if _, ok := lis.(*dualStackListener); !ok {
+		t.Skip("IPv6 loopback not available on this host")
+	}
+	go func() {
+		for {
+			conn, err := lis.Accept()
+			if err != nil {
+				return
+			}
+			conn.Close()
+		}
+	}()
+
+	port := lis.Addr().(*net.TCPAddr).Port
+	c, err := net.DialTimeout("tcp", fmt.Sprintf("[::1]:%d", port), time.Second)
+	if err != nil {
+		t.Fatalf("IPv6 loopback connection refused: %v", err)
+	}
+	c.Close()
 }

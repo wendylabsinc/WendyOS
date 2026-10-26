@@ -150,7 +150,7 @@ func setup(t *testing.T, alter func(map[string]any)) (*Session, *int) {
 		t.Fatalf("unexpected outbound endpoint %s", r.URL)
 		return nil, nil
 	})
-	auth, e := s.Begin(context.Background(), "", "http://localhost:5173/auth/callback")
+	auth, e := s.Begin(context.Background(), "", "", "http://localhost:5173/auth/callback")
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -255,20 +255,31 @@ func TestRealmLoginURL(t *testing.T) {
 func TestBeginRealmDiscovery(t *testing.T) {
 	universal := AuthBase + "/authorize?"
 	for _, tc := range []struct {
-		name, email string
-		lookup      map[string]string
-		want, hint  string
+		name, email, issuer string
+		lookup              map[string]string
+		want, hint          string
 	}{
 		{name: "no email", want: universal},
 		{name: "unknown", email: "user@example.test", lookup: map[string]string{"state": "unknown"}, want: universal, hint: "user@example.test"},
 		{name: "system realm", email: "user@example.test", lookup: map[string]string{"loginURL": "/realms/system/account/login"}, want: universal, hint: "user@example.test"},
 		{name: "pinned realm", email: "user@example.test", lookup: map[string]string{"realm": "acme", "loginURL": "/realms/acme/account/login"}, want: testIssuer + "/authorize?"},
+		{name: "caller realm", issuer: testIssuer, want: testIssuer + "/authorize?"},
+		{name: "upper-case system realm", email: "user@example.test", lookup: map[string]string{"realm": "SYSTEM"}, want: universal, hint: "user@example.test"},
+		{name: "caller realm skips lookup", email: "user@example.test", issuer: testIssuer, want: testIssuer + "/authorize?", hint: "user@example.test"},
+		{name: "caller system realm", issuer: AuthBase + "/realms/system"},
+		{name: "caller upper-case system realm", issuer: AuthBase + "/realms/SYSTEM"},
+		{name: "caller escaped system realm", issuer: AuthBase + "/realms/%73ystem"},
+		{name: "caller foreign issuer", issuer: "https://auth.example.test/realms/acme"},
+		{name: "caller issuer path", issuer: testIssuer + "/protocol"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s, _ := setup(t, nil)
 			existing := s.Client
 			s.Client = doerFunc(func(r *http.Request) (*http.Response, error) {
 				if r.URL.String() == AuthBase+"/api/login/realm" {
+					if tc.issuer != "" {
+						t.Fatal("a pinned realm still looked up the email")
+					}
 					var body map[string]string
 					if r.Method != "POST" || json.NewDecoder(r.Body).Decode(&body) != nil || body["email"] != tc.email {
 						t.Fatal("incorrect email lookup")
@@ -277,9 +288,20 @@ func TestBeginRealmDiscovery(t *testing.T) {
 				}
 				return existing.Do(r)
 			})
-			authorize, err := s.Begin(context.Background(), tc.email, "http://localhost:5173/auth/callback")
+			authorize, err := s.Begin(context.Background(), tc.email, tc.issuer, "http://localhost:5173/auth/callback")
+			if tc.want == "" {
+				if err == nil || authorize != "" {
+					t.Fatalf("pinned an invalid realm: %s", authorize)
+				}
+				return
+			}
 			if err != nil {
 				t.Fatal(err)
+			}
+			if tc.issuer != "" {
+				if _, err := s.Complete(context.Background(), "valid-code", s.state, AuthBase+"/realms/other"); err == nil || !strings.Contains(err.Error(), "issuer changed") {
+					t.Fatalf("pinned realm accepted another realm's callback: %v", err)
+				}
 			}
 			u, _ := url.Parse(authorize)
 			if !strings.HasPrefix(authorize, tc.want) || u.Query().Get("login_hint") != tc.hint {
