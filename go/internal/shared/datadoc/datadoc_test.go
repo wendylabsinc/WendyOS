@@ -1,6 +1,7 @@
 package datadoc
 
 import (
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -160,5 +161,28 @@ func TestNewRegistryRefusesUnnameableKinds(t *testing.T) {
 			}()
 			NewRegistry(Kind{Name: name, Versions: []int{1}, Decode: decode})
 		}()
+	}
+}
+
+func TestDecodeStrictReadsHeaderFieldsAndRejectsUnknownKeys(t *testing.T) {
+	type body struct {
+		HeaderFields `yaml:",inline"`
+		Lease        string `json:"lease" yaml:"lease"`
+	}
+	var got body
+	if err := DecodeStrict([]byte("kind: watch\nversion: 1\nname: w\nowner: inference/i\nlease: 15s\n"), &got); err != nil {
+		t.Fatal(err)
+	}
+	want := body{HeaderFields{Kind: "watch", Version: 1, Name: "w", Owner: "inference/i"}, "15s"}
+	if got != want {
+		t.Fatalf("decoded %+v, want %+v", got, want)
+	}
+	// Embedded, the header stays four top-level keys in the stored JSON.
+	if b, _ := json.Marshal(got); string(b) != `{"kind":"watch","version":1,"name":"w","owner":"inference/i","lease":"15s"}` {
+		t.Fatalf("json = %s", b)
+	}
+	err := DecodeStrict([]byte("kind: watch\nversion: 1\nname: w\ncolour: red\n"), &body{})
+	if err == nil || !strings.Contains(err.Error(), "line 4: field colour not found") {
+		t.Fatalf("unknown key: %v", err)
 	}
 }

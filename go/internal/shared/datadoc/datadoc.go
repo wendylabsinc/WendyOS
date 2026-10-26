@@ -49,8 +49,34 @@ type Kind struct {
 	// Ownable kinds may have an owner and may own other documents.
 	Ownable bool
 	// Decode parses and validates the whole document, strictly. The header
-	// has already passed the registry's checks.
+	// has already passed the registry's checks. A kind's type embeds
+	// HeaderFields and decodes with DecodeStrict.
 	Decode func(header Header, contents []byte) (body any, revision string, warnings []string, err error)
+}
+
+// HeaderFields are the header keys as fields of a kind's own type. Embedded
+// inline, they let DecodeStrict read the whole document into that type:
+//
+//	type Watch struct {
+//		datadoc.HeaderFields `yaml:",inline"`
+//		Lease string `json:"lease,omitempty" yaml:"lease,omitempty"`
+//	}
+type HeaderFields struct {
+	Kind    string `json:"kind" yaml:"kind"`
+	Version int    `json:"version" yaml:"version"`
+	Name    string `json:"name" yaml:"name"`
+	Owner   string `json:"owner,omitempty" yaml:"owner,omitempty"`
+}
+
+// DecodeStrict decodes a document into a kind's type with unknown fields
+// rejected. Parse has already checked that contents hold one document.
+func DecodeStrict(contents []byte, into any) error {
+	decoder := yaml.NewDecoder(bytes.NewReader(contents))
+	decoder.KnownFields(true)
+	if err := decoder.Decode(into); err != nil {
+		return fmt.Errorf("parsing document: %w", err)
+	}
+	return nil
 }
 
 // Registry is the set of kinds one build understands.

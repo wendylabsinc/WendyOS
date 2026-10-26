@@ -55,18 +55,15 @@ func (n *WatchNotify) UnmarshalYAML(node *yaml.Node) error {
 // Watch delivers one inference's arrivals as notifications (spec §6). A watch
 // with a lease is removed, with what it owns, when its lease lapses.
 type Watch struct {
-	Kind    string        `json:"kind" yaml:"kind"`
-	Version int           `json:"version" yaml:"version"`
-	Name    string        `json:"name" yaml:"name"`
-	Owner   string        `json:"owner,omitempty" yaml:"owner,omitempty"`
-	Lease   string        `json:"lease,omitempty" yaml:"lease,omitempty"`
-	On      WatchTarget   `json:"on" yaml:"on"`
-	Notify  []WatchNotify `json:"notify,omitempty" yaml:"notify,omitempty"`
+	datadoc.HeaderFields `yaml:",inline"`
+	Lease                string        `json:"lease,omitempty" yaml:"lease,omitempty"`
+	On                   WatchTarget   `json:"on" yaml:"on"`
+	Notify               []WatchNotify `json:"notify,omitempty" yaml:"notify,omitempty"`
 }
 
 func decodeWatch(_ datadoc.Header, contents []byte) (any, string, []string, error) {
 	var watch Watch
-	if err := decodeDocumentStrict(contents, &watch); err != nil {
+	if err := datadoc.DecodeStrict(contents, &watch); err != nil {
 		return nil, "", nil, err
 	}
 	// The Go zero value cannot tell `lease:` from no lease, which would
