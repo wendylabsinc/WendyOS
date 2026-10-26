@@ -117,3 +117,60 @@ private func measuredRobotLens() -> SiteCameraLens {
     search.cancel()
     #expect(search.direction == 0)
 }
+
+@Test func explicitPositionSearchRetriesSparseViewsWithoutAnotherClick() {
+    let now = Date(timeIntervalSince1970: 1000)
+    var search = RobotPositionSearch()
+    // Passive observation must not start a turn to compensate for sparse scans.
+    #expect({ !search.shouldRetryLocalization(pose: true, scanReady: false, aligned: false,
+                                          rematchAfterLook: false, attempts: 0, now: now) }())
+    search.start(now: now)
+    // Camera delays may exceed the passive retry count. Keep the explicit
+    // search alive, even if the robot retains an old room alignment.
+    #expect({ search.shouldRetryLocalization(pose: true, scanReady: false, aligned: true,
+                                         rematchAfterLook: false, attempts: 5, now: now.addingTimeInterval(10)) }())
+    #expect({ search.takeTurn(now: now.addingTimeInterval(11)) }())
+    search.recordDirection(-1)
+    // Completing a turn must lead to matching/reacquisition even while the
+    // new view still lacks enough landmarks for scanReady.
+    #expect({ search.shouldRetryLocalization(pose: true, scanReady: false, aligned: true,
+                                         rematchAfterLook: true, attempts: 0, now: now.addingTimeInterval(15)) }())
+    #expect({ search.takeTurn(now: now.addingTimeInterval(16)) }())
+    #expect(search.remainingTurns == 10)
+    #expect(search.direction == -1)
+    #expect({ !search.shouldRetryLocalization(pose: false, scanReady: false, aligned: false,
+                                          rematchAfterLook: true, attempts: 0, now: now.addingTimeInterval(17)) }())
+    // Waiting never extends the original deadline or rearms a cancelled search.
+    #expect({ !search.shouldRetryLocalization(pose: true, scanReady: false, aligned: false,
+                                          rematchAfterLook: true, attempts: 0, now: now.addingTimeInterval(301)) }())
+    #expect({ !search.takeTurn(now: now.addingTimeInterval(302)) }())
+    search.start(now: now)
+    search.cancel()
+    #expect({ !search.shouldRetryLocalization(pose: true, scanReady: false, aligned: false,
+                                          rematchAfterLook: true, attempts: 0, now: now) }())
+}
+
+@Test func passivePositionMatchingKeepsItsRetryAndAlignmentLimits() {
+    var search = RobotPositionSearch()
+    #expect({ search.shouldRetryLocalization(pose: true, scanReady: true, aligned: false,
+                                         rematchAfterLook: false, attempts: 2, now: .now) }())
+    #expect({ !search.shouldRetryLocalization(pose: true, scanReady: true, aligned: false,
+                                          rematchAfterLook: false, attempts: 3, now: .now) }())
+    #expect({ !search.shouldRetryLocalization(pose: true, scanReady: true, aligned: true,
+                                          rematchAfterLook: false, attempts: 0, now: .now) }())
+    #expect(!search.active)
+}
+
+@Test func calibrationSuspendsSearchRetriesAndDeadline() {
+    let now = Date(timeIntervalSince1970: 1000)
+    var search = RobotPositionSearch()
+    search.start(now: now)
+    #expect({ !search.shouldRetryLocalization(pose: true, scanReady: true, aligned: false,
+                                          rematchAfterLook: false, attempts: 0,
+                                          now: now.addingTimeInterval(400), calibrating: true) }())
+    #expect(search.active)
+    search.resumeAfterCalibration(now: now.addingTimeInterval(500))
+    #expect({ search.shouldRetryLocalization(pose: true, scanReady: false, aligned: false,
+                                         rematchAfterLook: true, attempts: 0, now: now.addingTimeInterval(501)) }())
+    #expect({ search.takeTurn(now: now.addingTimeInterval(501)) }())
+}

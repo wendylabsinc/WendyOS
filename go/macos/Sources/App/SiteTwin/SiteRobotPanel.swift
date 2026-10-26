@@ -187,8 +187,12 @@ final class SiteRobotMapModel: ObservableObject {
                     suggestionFreshness = nil
                     automaticAttempts = 0
                 }
-                if result.scanReady && !result.moving && (!result.aligned || rematchAfterLook) && !placing && !localizing && candidates.isEmpty &&
-                    !automaticPaused && !lensCalibrating && automaticAttempts < 3 && Date.now >= nextAutomaticAttempt {
+                let retryLocalization = positionSearch.shouldRetryLocalization(
+                    pose: result.pose, scanReady: result.scanReady, aligned: result.aligned,
+                    rematchAfterLook: rematchAfterLook, attempts: automaticAttempts, now: .now,
+                    calibrating: lensCalibrating || showLensCalibration)
+                if retryLocalization && !result.moving && !awaitingLook && !placing && !localizing && candidates.isEmpty &&
+                    !automaticPaused && !lensCalibrating && Date.now >= nextAutomaticAttempt {
                     automaticAttempts += 1
                     nextAutomaticAttempt = Date.now.addingTimeInterval(5)
                     locate()
@@ -346,6 +350,7 @@ final class SiteRobotMapModel: ObservableObject {
     func findPosition() {
         guard handle != 0, !localizing, !lensCalibrating, reading?.moving != true else { return }
         positionSearch.start(now: .now)
+        scheduleAutomaticLocalization()
         locate()
     }
 
@@ -414,8 +419,12 @@ final class SiteRobotMapModel: ObservableObject {
                 } else {
                     self.visualStatus = "No fresh camera reference yet. Matching measured geometry."
                     if self.positionSearch.active {
-                        self.positionSearch.cancel(); self.automaticPaused = true
-                        throw WendyError(message: "Waiting for a fresh Go2 camera frame before starting the search.")
+                        // A delayed IDR frame is not a cancelled search. Stay
+                        // stopped and let polling retry within the search's
+                        // original deadline, without requiring another click.
+                        self.visualStatus = "Waiting for a fresh Go2 camera frame. The position search will resume automatically."
+                        self.scheduleAutomaticLocalization()
+                        return
                     }
                 }
                 guard request == self.actionGeneration, epoch == self.generation else { return }

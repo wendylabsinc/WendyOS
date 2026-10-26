@@ -214,6 +214,17 @@ struct RobotPositionSearch {
     private var deadline = Date.distantPast
     mutating func start(now: Date) { active = true; remainingTurns = 12; direction = 0; deadline = now.addingTimeInterval(300) }
     mutating func resumeAfterCalibration(now: Date) { if active { deadline = now.addingTimeInterval(300) } }
+    mutating func shouldRetryLocalization(pose: Bool, scanReady: Bool, aligned: Bool,
+                                         rematchAfterLook: Bool, attempts: Int, now: Date,
+                                         calibrating: Bool = false) -> Bool {
+        guard !calibrating else { return false }
+        if active && now >= deadline { cancel() }
+        // An explicit search must be able to acquire another view when room
+        // landmarks are sparse. The backend still checks sensor freshness and
+        // the entire turning footprint before allowing any motion.
+        if active { return pose }
+        return scanReady && (!aligned || rematchAfterLook) && attempts < 3
+    }
     mutating func takeTurn(now: Date) -> Bool {
         guard active, remainingTurns > 0, now < deadline else { cancel(); return false }
         remainingTurns -= 1
