@@ -40,6 +40,10 @@ message VideoMarkers {
   // ("by-id:..."), or the device id of a network camera ("1000"). Empty when
   // the picture is not one of the agent's cameras.
   string camera = 4;
+  // Set when every marker's value is corrected for this particular sensor,
+  // as Grid.correction is for a grid's cells. Unset when the values are the
+  // sensor's own reading.
+  Correction correction = 5;
 }
 
 // Marker is one point or box on a picture.
@@ -98,6 +102,28 @@ message Grid {
   // (column + 1) / width, and y likewise. Empty when the grid is not of a
   // camera's picture.
   string camera = 9;
+  // Set when the values are corrected for this particular sensor, for example
+  // a thermal camera checked against a reference thermometer. scale and offset
+  // already include it: value = count * scale + offset is the corrected value.
+  // Unset when the values are the sensor's own reading.
+  Correction correction = 10;
+}
+
+// Correction is a linear correction of one sensor's values that the publisher
+// has already applied:
+//
+//   corrected = gain * uncorrected + offset
+//
+// in the record's unit. Some units of a sensor model read wrong in a way only
+// a reference measurement shows, such as a thermal camera reading every
+// temperature about twice too hot, and each such unit gets its own pair. A
+// viewer needs it only to show that values are corrected, or to recover what
+// the sensor itself read: uncorrected = (corrected - offset) / gain. gain is
+// never 0. A pair of gain 1 and offset 0 means the sensor was checked and
+// reads true.
+message Correction {
+  double gain = 1;
+  double offset = 2;
 }
 
 // Event is a named condition changing state, for example "overheat" raised

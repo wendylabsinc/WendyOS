@@ -1049,6 +1049,11 @@ type VideoService struct {
 	// stored control even when the write fails -- must be testable without one.
 	controlDefaultsFor func(path string, names []string) (map[string]int32, error)
 
+	// thermalCalibration keeps each radiometric thermal camera's temperature
+	// correction by stable id; the camera grids apply it (see
+	// thermal_calibration.go).
+	thermalCalibration *thermalCalibrationStore
+
 	ctx    context.Context    // cancelled on Shutdown; hub contexts are derived from this
 	cancel context.CancelFunc // cancels ctx
 	wg     sync.WaitGroup     // tracks active runProducer goroutines
@@ -1117,6 +1122,8 @@ func NewVideoService(ctx context.Context, logger *zap.Logger, pool *rtps.Pool, r
 	if err := svc.controls.Load(); err != nil {
 		logger.Warn("loading camera controls failed", zap.Error(err))
 	}
+	// Read on first use, so a test that never touches it reads no file.
+	svc.thermalCalibration = newThermalCalibrationStore(thermalCalibrationPath)
 	svc.discoverer = ipcam.NewDiscoverer(svc.registry, logger)
 	// ONVIF stream-path lookups use the same login `camera login` stored, so a
 	// camera that protects ONVIF still tells us its paths once it has one.

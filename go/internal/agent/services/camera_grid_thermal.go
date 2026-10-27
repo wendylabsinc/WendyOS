@@ -43,6 +43,18 @@ package services
 // when they matter. It still catches the factor of four both ways: any scene
 // from -55 C to 660 C, read at the wrong scale, reads above 600 C or below
 // -40 C. The TC001 is rated from -20 C to 550 C.
+//
+// Some TC001 units read every temperature about twice too hot, so a camera
+// may carry its own correction, corrected = gain * decoded + offset in degC
+// (thermal_calibration.go). Everything published in degC is corrected: the
+// grid's scale and offset, the hot and cold markers, and the mean the guard
+// judges, because the guard asks whether the frame is a plausible scene and
+// the corrected value is the best estimate of the scene. That narrows the
+// factor-of-four margin on a corrected camera: at gain 0.48 a room read at
+// the wrong scale is about 435 C and passes. What keeps a different firmware
+// out is the layout check, which a correction does not touch. Records of a
+// corrected camera carry the pair (wendy.data.v1.Correction), so a viewer
+// can tell.
 
 import (
 	"encoding/binary"
@@ -103,20 +115,22 @@ type thermalStats struct {
 	minX, minY float32
 	maxCelsius float64
 	minCelsius float64
-	// meanCelsius is what the plausibility guard judged. It is set even when
-	// the guard refuses the frame, so the refusal can be logged with the
-	// number that caused it.
+	// meanCelsius is what the plausibility guard judged, corrected like the
+	// others. It is set even when the guard refuses the frame, so the refusal
+	// can be logged with the number that caused it.
 	meanCelsius float64
 }
 
 // computeThermalStats finds the hottest and coldest sensor pixels of one raw
 // frame of the TC001 stacked mode, and checks that the frame is a plausible
 // scene. Ties go to the first pixel in row-major order (top row first, left to
-// right), so a dot does not wander across a flat region.
+// right), so a dot does not wander across a flat region. Temperatures are
+// corrected by corr; a gain is positive, so the hottest pixel is the same
+// either way.
 //
 // One pass over 49,152 values and no allocation: it runs on every frame while
 // a viewer asks for the camera's temperatures.
-func computeThermalStats(frame []byte, format *agentpb.RawFormat, pictureTop uint32) (thermalStats, bool) {
+func computeThermalStats(frame []byte, format *agentpb.RawFormat, pictureTop uint32, corr thermalCorrection) (thermalStats, bool) {
 	if !tc001Layout(format, pictureTop) || len(frame) < tc001FrameHeight*tc001FrameWidth*yuyvBytesPerPixel {
 		return thermalStats{}, false
 	}
@@ -139,18 +153,21 @@ func computeThermalStats(frame []byte, format *agentpb.RawFormat, pictureTop uin
 		}
 	}
 
-	st := thermalStats{meanCelsius: float64(sum)/thermalSensorPixels/thermalCountsPerKelvin - kelvinZeroCelsius}
+	// The mean of corrected values is the corrected mean: the correction is
+	// a line.
+	st := thermalStats{meanCelsius: corr.celsius(float64(sum)/thermalSensorPixels/thermalCountsPerKelvin - kelvinZeroCelsius)}
 	if st.meanCelsius < thermalMinMeanCelsius || st.meanCelsius > thermalMaxMeanCelsius {
 		return st, false
 	}
 	st.maxX, st.maxY = thermalPixelCentre(maxI)
 	st.minX, st.minY = thermalPixelCentre(minI)
-	st.maxCelsius = thermalCelsius(maxV)
-	st.minCelsius = thermalCelsius(minV)
+	st.maxCelsius = corr.celsius(thermalCelsius(maxV))
+	st.minCelsius = corr.celsius(thermalCelsius(minV))
 	return st, true
 }
 
-// thermalCelsius converts one count of the stacked mode to degrees Celsius.
+// thermalCelsius converts one count of the stacked mode to degrees Celsius,
+// as the camera reads it.
 func thermalCelsius(count uint16) float64 {
 	return float64(count)/thermalCountsPerKelvin - kelvinZeroCelsius
 }
@@ -165,27 +182,33 @@ func thermalPixelCentre(i int) (x, y float32) {
 
 // thermalGrid is a stacked frame's radiometric block as a grid of the camera's
 // picture: the camera's own counts, byte for byte, with the scale and offset
-// that make them degrees Celsius. Its data aliases frame, which a raw frame
-// never changes; marshalling copies it.
-func thermalGrid(frame []byte, camera string) *datapb.Grid {
+// that make them degrees Celsius, corrected by corr. Its data aliases frame,
+// which a raw frame never changes; marshalling copies it.
+//
+// The correction folds into the scale and offset, because it is a line:
+// gain * (count / 16 - 273.15) + offset is count * (gain / 16) + (offset -
+// gain * 273.15). Without one they are exactly 1/16 and -273.15.
+func thermalGrid(frame []byte, camera string, corr thermalCorrection) *datapb.Grid {
 	return &datapb.Grid{
 		Width:        thermalSensorWidth,
 		Height:       thermalSensorHeight,
 		Unit:         "°C",
 		Data:         frame[:thermalBlockBytes],
 		BytesPerLine: thermalSensorWidth * 2,
-		Scale:        1.0 / thermalCountsPerKelvin,
-		Offset:       -kelvinZeroCelsius,
+		Scale:        corr.slope() / thermalCountsPerKelvin,
+		Offset:       corr.celsius(-kelvinZeroCelsius),
 		Camera:       camera,
+		Correction:   corr.proto(),
 	}
 }
 
 // thermalMarkers points at the hottest and coldest sensor pixel on the
 // camera's picture, labelled "max" in red and "min" in blue with their
-// temperatures. A frame the plausibility guard refused has no reading, and
-// its markers are empty, which clears the dots.
-func thermalMarkers(st thermalStats, ok bool, camera string) *datapb.VideoMarkers {
-	markers := &datapb.VideoMarkers{Camera: camera, ValidForNanos: int64(thermalMarkersValidFor)}
+// temperatures, which st has already corrected by corr. A frame the
+// plausibility guard refused has no reading, and its markers are empty, which
+// clears the dots.
+func thermalMarkers(st thermalStats, ok bool, camera string, corr thermalCorrection) *datapb.VideoMarkers {
+	markers := &datapb.VideoMarkers{Camera: camera, ValidForNanos: int64(thermalMarkersValidFor), Correction: corr.proto()}
 	if !ok {
 		return markers
 	}

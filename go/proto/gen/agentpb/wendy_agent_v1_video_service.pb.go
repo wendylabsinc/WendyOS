@@ -1574,6 +1574,309 @@ func (x *CameraControlResult) GetDetail() string {
 	return ""
 }
 
+// A radiometric thermal camera's temperature correction. Some units read
+// wrong in a way only a reference thermometer shows: some TOPDON TC001s read
+// every temperature about twice too hot, on any host, so a fixed decode cannot
+// fix them. The correction is per camera, measured against references, and
+// never copied from another camera:
+//
+//	corrected degC = gain * decoded degC + offset
+//	decoded degC   = count / 16 - 273.15   (the TC001's stacked 512x484 mode)
+//
+// It is the same line, with the same meaning and bounds, as wendy-console's
+// mac-fire-detector `celsiusCalibration: {"gain": g, "offset": o}`, so a pair
+// measured for one works in the other.
+//
+// The agent applies it to the camera's grid (wendy.data.v1.Grid scale and
+// offset), to its hottest and coldest markers, and to the plausibility guard
+// on the frame's mean, and marks both kinds of record with
+// wendy.data.v1.Correction.
+type ThermalCalibration struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The camera's stable_id, as ListVideoDevices reports it, which the
+	// correction is stored under.
+	StableId string `protobuf:"bytes,1,opt,name=stable_id,json=stableId,proto3" json:"stable_id,omitempty"`
+	// The camera's /dev/videoN now, which a reboot can change, and its
+	// number. Empty and 0 when the camera is not attached (a clear by
+	// stable_id).
+	Path     string `protobuf:"bytes,2,opt,name=path,proto3" json:"path,omitempty"`
+	DeviceId uint32 `protobuf:"varint,3,opt,name=device_id,json=deviceId,proto3" json:"device_id,omitempty"`
+	// False when no correction is stored: the agent publishes the camera's own
+	// reading, which is gain 1 and offset 0 below.
+	Calibrated bool    `protobuf:"varint,4,opt,name=calibrated,proto3" json:"calibrated,omitempty"`
+	Gain       float64 `protobuf:"fixed64,5,opt,name=gain,proto3" json:"gain,omitempty"`
+	Offset     float64 `protobuf:"fixed64,6,opt,name=offset,proto3" json:"offset,omitempty"` // degC
+	// When the correction was set, in Unix nanoseconds; 0 when not calibrated.
+	UpdatedUnixNanos int64 `protobuf:"varint,7,opt,name=updated_unix_nanos,json=updatedUnixNanos,proto3" json:"updated_unix_nanos,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *ThermalCalibration) Reset() {
+	*x = ThermalCalibration{}
+	mi := &file_wendy_agent_services_v1_wendy_agent_v1_video_service_proto_msgTypes[23]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ThermalCalibration) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ThermalCalibration) ProtoMessage() {}
+
+func (x *ThermalCalibration) ProtoReflect() protoreflect.Message {
+	mi := &file_wendy_agent_services_v1_wendy_agent_v1_video_service_proto_msgTypes[23]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ThermalCalibration.ProtoReflect.Descriptor instead.
+func (*ThermalCalibration) Descriptor() ([]byte, []int) {
+	return file_wendy_agent_services_v1_wendy_agent_v1_video_service_proto_rawDescGZIP(), []int{23}
+}
+
+func (x *ThermalCalibration) GetStableId() string {
+	if x != nil {
+		return x.StableId
+	}
+	return ""
+}
+
+func (x *ThermalCalibration) GetPath() string {
+	if x != nil {
+		return x.Path
+	}
+	return ""
+}
+
+func (x *ThermalCalibration) GetDeviceId() uint32 {
+	if x != nil {
+		return x.DeviceId
+	}
+	return 0
+}
+
+func (x *ThermalCalibration) GetCalibrated() bool {
+	if x != nil {
+		return x.Calibrated
+	}
+	return false
+}
+
+func (x *ThermalCalibration) GetGain() float64 {
+	if x != nil {
+		return x.Gain
+	}
+	return 0
+}
+
+func (x *ThermalCalibration) GetOffset() float64 {
+	if x != nil {
+		return x.Offset
+	}
+	return 0
+}
+
+func (x *ThermalCalibration) GetUpdatedUnixNanos() int64 {
+	if x != nil {
+		return x.UpdatedUnixNanos
+	}
+	return 0
+}
+
+// The camera is named as in StreamVideoRequest: stable_id, scheme tag
+// included, wins over device_id and is resolved when the request arrives.
+// Only a local camera that offers a radiometric mode the agent decodes (the
+// TC001's stacked 512x484 YUYV mode) has a calibration; any other camera is
+// refused with FailedPrecondition, a network camera with InvalidArgument.
+type GetThermalCalibrationRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	DeviceId      uint32                 `protobuf:"varint,1,opt,name=device_id,json=deviceId,proto3" json:"device_id,omitempty"`
+	StableId      string                 `protobuf:"bytes,2,opt,name=stable_id,json=stableId,proto3" json:"stable_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetThermalCalibrationRequest) Reset() {
+	*x = GetThermalCalibrationRequest{}
+	mi := &file_wendy_agent_services_v1_wendy_agent_v1_video_service_proto_msgTypes[24]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetThermalCalibrationRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetThermalCalibrationRequest) ProtoMessage() {}
+
+func (x *GetThermalCalibrationRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_wendy_agent_services_v1_wendy_agent_v1_video_service_proto_msgTypes[24]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetThermalCalibrationRequest.ProtoReflect.Descriptor instead.
+func (*GetThermalCalibrationRequest) Descriptor() ([]byte, []int) {
+	return file_wendy_agent_services_v1_wendy_agent_v1_video_service_proto_rawDescGZIP(), []int{24}
+}
+
+func (x *GetThermalCalibrationRequest) GetDeviceId() uint32 {
+	if x != nil {
+		return x.DeviceId
+	}
+	return 0
+}
+
+func (x *GetThermalCalibrationRequest) GetStableId() string {
+	if x != nil {
+		return x.StableId
+	}
+	return ""
+}
+
+// Sets the correction, replacing any stored one. gain must lie in 0.1..10
+// and offset in -100..100 degC, and both must be finite: a pair outside that
+// is refused with InvalidArgument, never clamped, because a typo must not
+// turn a room into a fire or blind the camera. A camera with no stable_id is
+// refused with FailedPrecondition: a correction kept by /dev/videoN would
+// follow the number to another camera after a reboot.
+type SetThermalCalibrationRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	DeviceId      uint32                 `protobuf:"varint,1,opt,name=device_id,json=deviceId,proto3" json:"device_id,omitempty"`
+	StableId      string                 `protobuf:"bytes,2,opt,name=stable_id,json=stableId,proto3" json:"stable_id,omitempty"`
+	Gain          float64                `protobuf:"fixed64,3,opt,name=gain,proto3" json:"gain,omitempty"`
+	Offset        float64                `protobuf:"fixed64,4,opt,name=offset,proto3" json:"offset,omitempty"` // degC
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SetThermalCalibrationRequest) Reset() {
+	*x = SetThermalCalibrationRequest{}
+	mi := &file_wendy_agent_services_v1_wendy_agent_v1_video_service_proto_msgTypes[25]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SetThermalCalibrationRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SetThermalCalibrationRequest) ProtoMessage() {}
+
+func (x *SetThermalCalibrationRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_wendy_agent_services_v1_wendy_agent_v1_video_service_proto_msgTypes[25]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SetThermalCalibrationRequest.ProtoReflect.Descriptor instead.
+func (*SetThermalCalibrationRequest) Descriptor() ([]byte, []int) {
+	return file_wendy_agent_services_v1_wendy_agent_v1_video_service_proto_rawDescGZIP(), []int{25}
+}
+
+func (x *SetThermalCalibrationRequest) GetDeviceId() uint32 {
+	if x != nil {
+		return x.DeviceId
+	}
+	return 0
+}
+
+func (x *SetThermalCalibrationRequest) GetStableId() string {
+	if x != nil {
+		return x.StableId
+	}
+	return ""
+}
+
+func (x *SetThermalCalibrationRequest) GetGain() float64 {
+	if x != nil {
+		return x.Gain
+	}
+	return 0
+}
+
+func (x *SetThermalCalibrationRequest) GetOffset() float64 {
+	if x != nil {
+		return x.Offset
+	}
+	return 0
+}
+
+// Removes the correction, so the camera's own reading is published again. A
+// stable_id clears a stored correction even while that camera is not
+// attached. Clearing a camera that has none succeeds.
+type ClearThermalCalibrationRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	DeviceId      uint32                 `protobuf:"varint,1,opt,name=device_id,json=deviceId,proto3" json:"device_id,omitempty"`
+	StableId      string                 `protobuf:"bytes,2,opt,name=stable_id,json=stableId,proto3" json:"stable_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ClearThermalCalibrationRequest) Reset() {
+	*x = ClearThermalCalibrationRequest{}
+	mi := &file_wendy_agent_services_v1_wendy_agent_v1_video_service_proto_msgTypes[26]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ClearThermalCalibrationRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ClearThermalCalibrationRequest) ProtoMessage() {}
+
+func (x *ClearThermalCalibrationRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_wendy_agent_services_v1_wendy_agent_v1_video_service_proto_msgTypes[26]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ClearThermalCalibrationRequest.ProtoReflect.Descriptor instead.
+func (*ClearThermalCalibrationRequest) Descriptor() ([]byte, []int) {
+	return file_wendy_agent_services_v1_wendy_agent_v1_video_service_proto_rawDescGZIP(), []int{26}
+}
+
+func (x *ClearThermalCalibrationRequest) GetDeviceId() uint32 {
+	if x != nil {
+		return x.DeviceId
+	}
+	return 0
+}
+
+func (x *ClearThermalCalibrationRequest) GetStableId() string {
+	if x != nil {
+		return x.StableId
+	}
+	return ""
+}
+
 type GetCameraDHCPStatusRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
@@ -1582,7 +1885,7 @@ type GetCameraDHCPStatusRequest struct {
 
 func (x *GetCameraDHCPStatusRequest) Reset() {
 	*x = GetCameraDHCPStatusRequest{}
-	mi := &file_wendy_agent_services_v1_wendy_agent_v1_video_service_proto_msgTypes[23]
+	mi := &file_wendy_agent_services_v1_wendy_agent_v1_video_service_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1594,7 +1897,7 @@ func (x *GetCameraDHCPStatusRequest) String() string {
 func (*GetCameraDHCPStatusRequest) ProtoMessage() {}
 
 func (x *GetCameraDHCPStatusRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_wendy_agent_services_v1_wendy_agent_v1_video_service_proto_msgTypes[23]
+	mi := &file_wendy_agent_services_v1_wendy_agent_v1_video_service_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1607,7 +1910,7 @@ func (x *GetCameraDHCPStatusRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetCameraDHCPStatusRequest.ProtoReflect.Descriptor instead.
 func (*GetCameraDHCPStatusRequest) Descriptor() ([]byte, []int) {
-	return file_wendy_agent_services_v1_wendy_agent_v1_video_service_proto_rawDescGZIP(), []int{23}
+	return file_wendy_agent_services_v1_wendy_agent_v1_video_service_proto_rawDescGZIP(), []int{27}
 }
 
 type SetCameraDHCPRequest struct {
@@ -1620,7 +1923,7 @@ type SetCameraDHCPRequest struct {
 
 func (x *SetCameraDHCPRequest) Reset() {
 	*x = SetCameraDHCPRequest{}
-	mi := &file_wendy_agent_services_v1_wendy_agent_v1_video_service_proto_msgTypes[24]
+	mi := &file_wendy_agent_services_v1_wendy_agent_v1_video_service_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1632,7 +1935,7 @@ func (x *SetCameraDHCPRequest) String() string {
 func (*SetCameraDHCPRequest) ProtoMessage() {}
 
 func (x *SetCameraDHCPRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_wendy_agent_services_v1_wendy_agent_v1_video_service_proto_msgTypes[24]
+	mi := &file_wendy_agent_services_v1_wendy_agent_v1_video_service_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1645,7 +1948,7 @@ func (x *SetCameraDHCPRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SetCameraDHCPRequest.ProtoReflect.Descriptor instead.
 func (*SetCameraDHCPRequest) Descriptor() ([]byte, []int) {
-	return file_wendy_agent_services_v1_wendy_agent_v1_video_service_proto_rawDescGZIP(), []int{24}
+	return file_wendy_agent_services_v1_wendy_agent_v1_video_service_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *SetCameraDHCPRequest) GetInterfaceName() string {
@@ -1675,7 +1978,7 @@ type CameraDHCPStatus struct {
 
 func (x *CameraDHCPStatus) Reset() {
 	*x = CameraDHCPStatus{}
-	mi := &file_wendy_agent_services_v1_wendy_agent_v1_video_service_proto_msgTypes[25]
+	mi := &file_wendy_agent_services_v1_wendy_agent_v1_video_service_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1687,7 +1990,7 @@ func (x *CameraDHCPStatus) String() string {
 func (*CameraDHCPStatus) ProtoMessage() {}
 
 func (x *CameraDHCPStatus) ProtoReflect() protoreflect.Message {
-	mi := &file_wendy_agent_services_v1_wendy_agent_v1_video_service_proto_msgTypes[25]
+	mi := &file_wendy_agent_services_v1_wendy_agent_v1_video_service_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1700,7 +2003,7 @@ func (x *CameraDHCPStatus) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CameraDHCPStatus.ProtoReflect.Descriptor instead.
 func (*CameraDHCPStatus) Descriptor() ([]byte, []int) {
-	return file_wendy_agent_services_v1_wendy_agent_v1_video_service_proto_rawDescGZIP(), []int{25}
+	return file_wendy_agent_services_v1_wendy_agent_v1_video_service_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *CameraDHCPStatus) GetInterfaces() []*CameraDHCPInterfaceStatus {
@@ -1742,7 +2045,7 @@ type CameraDHCPInterfaceStatus struct {
 
 func (x *CameraDHCPInterfaceStatus) Reset() {
 	*x = CameraDHCPInterfaceStatus{}
-	mi := &file_wendy_agent_services_v1_wendy_agent_v1_video_service_proto_msgTypes[26]
+	mi := &file_wendy_agent_services_v1_wendy_agent_v1_video_service_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1754,7 +2057,7 @@ func (x *CameraDHCPInterfaceStatus) String() string {
 func (*CameraDHCPInterfaceStatus) ProtoMessage() {}
 
 func (x *CameraDHCPInterfaceStatus) ProtoReflect() protoreflect.Message {
-	mi := &file_wendy_agent_services_v1_wendy_agent_v1_video_service_proto_msgTypes[26]
+	mi := &file_wendy_agent_services_v1_wendy_agent_v1_video_service_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1767,7 +2070,7 @@ func (x *CameraDHCPInterfaceStatus) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CameraDHCPInterfaceStatus.ProtoReflect.Descriptor instead.
 func (*CameraDHCPInterfaceStatus) Descriptor() ([]byte, []int) {
-	return file_wendy_agent_services_v1_wendy_agent_v1_video_service_proto_rawDescGZIP(), []int{26}
+	return file_wendy_agent_services_v1_wendy_agent_v1_video_service_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *CameraDHCPInterfaceStatus) GetInterfaceName() string {
@@ -1927,7 +2230,28 @@ const file_wendy_agent_services_v1_wendy_agent_v1_video_service_proto_rawDesc = 
 	"\x13CameraControlResult\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x18\n" +
 	"\aapplied\x18\x02 \x01(\bR\aapplied\x12\x16\n" +
-	"\x06detail\x18\x03 \x01(\tR\x06detail\"\x1c\n" +
+	"\x06detail\x18\x03 \x01(\tR\x06detail\"\xdc\x01\n" +
+	"\x12ThermalCalibration\x12\x1b\n" +
+	"\tstable_id\x18\x01 \x01(\tR\bstableId\x12\x12\n" +
+	"\x04path\x18\x02 \x01(\tR\x04path\x12\x1b\n" +
+	"\tdevice_id\x18\x03 \x01(\rR\bdeviceId\x12\x1e\n" +
+	"\n" +
+	"calibrated\x18\x04 \x01(\bR\n" +
+	"calibrated\x12\x12\n" +
+	"\x04gain\x18\x05 \x01(\x01R\x04gain\x12\x16\n" +
+	"\x06offset\x18\x06 \x01(\x01R\x06offset\x12,\n" +
+	"\x12updated_unix_nanos\x18\a \x01(\x03R\x10updatedUnixNanos\"X\n" +
+	"\x1cGetThermalCalibrationRequest\x12\x1b\n" +
+	"\tdevice_id\x18\x01 \x01(\rR\bdeviceId\x12\x1b\n" +
+	"\tstable_id\x18\x02 \x01(\tR\bstableId\"\x84\x01\n" +
+	"\x1cSetThermalCalibrationRequest\x12\x1b\n" +
+	"\tdevice_id\x18\x01 \x01(\rR\bdeviceId\x12\x1b\n" +
+	"\tstable_id\x18\x02 \x01(\tR\bstableId\x12\x12\n" +
+	"\x04gain\x18\x03 \x01(\x01R\x04gain\x12\x16\n" +
+	"\x06offset\x18\x04 \x01(\x01R\x06offset\"Z\n" +
+	"\x1eClearThermalCalibrationRequest\x12\x1b\n" +
+	"\tdevice_id\x18\x01 \x01(\rR\bdeviceId\x12\x1b\n" +
+	"\tstable_id\x18\x02 \x01(\tR\bstableId\"\x1c\n" +
 	"\x1aGetCameraDHCPStatusRequest\"W\n" +
 	"\x14SetCameraDHCPRequest\x12%\n" +
 	"\x0einterface_name\x18\x01 \x01(\tR\rinterfaceName\x12\x18\n" +
@@ -1958,8 +2282,7 @@ const file_wendy_agent_services_v1_wendy_agent_v1_video_service_proto_rawDesc = 
 	"VideoCodec\x12\x14\n" +
 	"\x10VIDEO_CODEC_H264\x10\x00\x12\x13\n" +
 	"\x0fVIDEO_CODEC_VP8\x10\x01\x12\x13\n" +
-	"\x0fVIDEO_CODEC_RAW\x10\x022\xbb\n" +
-	"\n" +
+	"\x0fVIDEO_CODEC_RAW\x10\x022\xb6\r\n" +
 	"\x11WendyVideoService\x12w\n" +
 	"\x10ListVideoDevices\x120.wendy.agent.services.v1.ListVideoDevicesRequest\x1a1.wendy.agent.services.v1.ListVideoDevicesResponse\x12a\n" +
 	"\vStreamVideo\x12+.wendy.agent.services.v1.StreamVideoRequest\x1a#.wendy.agent.services.v1.VideoFrame0\x01\x12\x83\x01\n" +
@@ -1969,7 +2292,10 @@ const file_wendy_agent_services_v1_wendy_agent_v1_video_service_proto_rawDesc = 
 	"\x15TestCameraCredentials\x125.wendy.agent.services.v1.TestCameraCredentialsRequest\x1a6.wendy.agent.services.v1.TestCameraCredentialsResponse\x12z\n" +
 	"\x11GetCameraControls\x121.wendy.agent.services.v1.GetCameraControlsRequest\x1a2.wendy.agent.services.v1.GetCameraControlsResponse\x12z\n" +
 	"\x11SetCameraControls\x121.wendy.agent.services.v1.SetCameraControlsRequest\x1a2.wendy.agent.services.v1.SetCameraControlsResponse\x12\x80\x01\n" +
-	"\x13ResetCameraControls\x123.wendy.agent.services.v1.ResetCameraControlsRequest\x1a4.wendy.agent.services.v1.ResetCameraControlsResponse\x12u\n" +
+	"\x13ResetCameraControls\x123.wendy.agent.services.v1.ResetCameraControlsRequest\x1a4.wendy.agent.services.v1.ResetCameraControlsResponse\x12{\n" +
+	"\x15GetThermalCalibration\x125.wendy.agent.services.v1.GetThermalCalibrationRequest\x1a+.wendy.agent.services.v1.ThermalCalibration\x12{\n" +
+	"\x15SetThermalCalibration\x125.wendy.agent.services.v1.SetThermalCalibrationRequest\x1a+.wendy.agent.services.v1.ThermalCalibration\x12\x7f\n" +
+	"\x17ClearThermalCalibration\x127.wendy.agent.services.v1.ClearThermalCalibrationRequest\x1a+.wendy.agent.services.v1.ThermalCalibration\x12u\n" +
 	"\x13GetCameraDHCPStatus\x123.wendy.agent.services.v1.GetCameraDHCPStatusRequest\x1a).wendy.agent.services.v1.CameraDHCPStatus\x12i\n" +
 	"\rSetCameraDHCP\x12-.wendy.agent.services.v1.SetCameraDHCPRequest\x1a).wendy.agent.services.v1.CameraDHCPStatusb\x06proto3"
 
@@ -1986,7 +2312,7 @@ func file_wendy_agent_services_v1_wendy_agent_v1_video_service_proto_rawDescGZIP
 }
 
 var file_wendy_agent_services_v1_wendy_agent_v1_video_service_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
-var file_wendy_agent_services_v1_wendy_agent_v1_video_service_proto_msgTypes = make([]protoimpl.MessageInfo, 27)
+var file_wendy_agent_services_v1_wendy_agent_v1_video_service_proto_msgTypes = make([]protoimpl.MessageInfo, 31)
 var file_wendy_agent_services_v1_wendy_agent_v1_video_service_proto_goTypes = []any{
 	(VideoTransport)(0),                       // 0: wendy.agent.services.v1.VideoTransport
 	(VideoCodec)(0),                           // 1: wendy.agent.services.v1.VideoCodec
@@ -2014,10 +2340,14 @@ var file_wendy_agent_services_v1_wendy_agent_v1_video_service_proto_goTypes = []
 	(*ResetCameraControlsRequest)(nil),        // 23: wendy.agent.services.v1.ResetCameraControlsRequest
 	(*ResetCameraControlsResponse)(nil),       // 24: wendy.agent.services.v1.ResetCameraControlsResponse
 	(*CameraControlResult)(nil),               // 25: wendy.agent.services.v1.CameraControlResult
-	(*GetCameraDHCPStatusRequest)(nil),        // 26: wendy.agent.services.v1.GetCameraDHCPStatusRequest
-	(*SetCameraDHCPRequest)(nil),              // 27: wendy.agent.services.v1.SetCameraDHCPRequest
-	(*CameraDHCPStatus)(nil),                  // 28: wendy.agent.services.v1.CameraDHCPStatus
-	(*CameraDHCPInterfaceStatus)(nil),         // 29: wendy.agent.services.v1.CameraDHCPInterfaceStatus
+	(*ThermalCalibration)(nil),                // 26: wendy.agent.services.v1.ThermalCalibration
+	(*GetThermalCalibrationRequest)(nil),      // 27: wendy.agent.services.v1.GetThermalCalibrationRequest
+	(*SetThermalCalibrationRequest)(nil),      // 28: wendy.agent.services.v1.SetThermalCalibrationRequest
+	(*ClearThermalCalibrationRequest)(nil),    // 29: wendy.agent.services.v1.ClearThermalCalibrationRequest
+	(*GetCameraDHCPStatusRequest)(nil),        // 30: wendy.agent.services.v1.GetCameraDHCPStatusRequest
+	(*SetCameraDHCPRequest)(nil),              // 31: wendy.agent.services.v1.SetCameraDHCPRequest
+	(*CameraDHCPStatus)(nil),                  // 32: wendy.agent.services.v1.CameraDHCPStatus
+	(*CameraDHCPInterfaceStatus)(nil),         // 33: wendy.agent.services.v1.CameraDHCPInterfaceStatus
 }
 var file_wendy_agent_services_v1_wendy_agent_v1_video_service_proto_depIdxs = []int32{
 	0,  // 0: wendy.agent.services.v1.VideoDevice.transport:type_name -> wendy.agent.services.v1.VideoTransport
@@ -2031,7 +2361,7 @@ var file_wendy_agent_services_v1_wendy_agent_v1_video_service_proto_depIdxs = []
 	18, // 8: wendy.agent.services.v1.SetCameraControlsRequest.controls:type_name -> wendy.agent.services.v1.CameraControlSetting
 	25, // 9: wendy.agent.services.v1.SetCameraControlsResponse.results:type_name -> wendy.agent.services.v1.CameraControlResult
 	25, // 10: wendy.agent.services.v1.ResetCameraControlsResponse.results:type_name -> wendy.agent.services.v1.CameraControlResult
-	29, // 11: wendy.agent.services.v1.CameraDHCPStatus.interfaces:type_name -> wendy.agent.services.v1.CameraDHCPInterfaceStatus
+	33, // 11: wendy.agent.services.v1.CameraDHCPStatus.interfaces:type_name -> wendy.agent.services.v1.CameraDHCPInterfaceStatus
 	4,  // 12: wendy.agent.services.v1.WendyVideoService.ListVideoDevices:input_type -> wendy.agent.services.v1.ListVideoDevicesRequest
 	6,  // 13: wendy.agent.services.v1.WendyVideoService.StreamVideo:input_type -> wendy.agent.services.v1.StreamVideoRequest
 	7,  // 14: wendy.agent.services.v1.WendyVideoService.SetCameraCredentials:input_type -> wendy.agent.services.v1.SetCameraCredentialsRequest
@@ -2041,21 +2371,27 @@ var file_wendy_agent_services_v1_wendy_agent_v1_video_service_proto_depIdxs = []
 	19, // 18: wendy.agent.services.v1.WendyVideoService.GetCameraControls:input_type -> wendy.agent.services.v1.GetCameraControlsRequest
 	21, // 19: wendy.agent.services.v1.WendyVideoService.SetCameraControls:input_type -> wendy.agent.services.v1.SetCameraControlsRequest
 	23, // 20: wendy.agent.services.v1.WendyVideoService.ResetCameraControls:input_type -> wendy.agent.services.v1.ResetCameraControlsRequest
-	26, // 21: wendy.agent.services.v1.WendyVideoService.GetCameraDHCPStatus:input_type -> wendy.agent.services.v1.GetCameraDHCPStatusRequest
-	27, // 22: wendy.agent.services.v1.WendyVideoService.SetCameraDHCP:input_type -> wendy.agent.services.v1.SetCameraDHCPRequest
-	5,  // 23: wendy.agent.services.v1.WendyVideoService.ListVideoDevices:output_type -> wendy.agent.services.v1.ListVideoDevicesResponse
-	16, // 24: wendy.agent.services.v1.WendyVideoService.StreamVideo:output_type -> wendy.agent.services.v1.VideoFrame
-	8,  // 25: wendy.agent.services.v1.WendyVideoService.SetCameraCredentials:output_type -> wendy.agent.services.v1.SetCameraCredentialsResponse
-	10, // 26: wendy.agent.services.v1.WendyVideoService.ForgetCamera:output_type -> wendy.agent.services.v1.ForgetCameraResponse
-	12, // 27: wendy.agent.services.v1.WendyVideoService.RefreshCameras:output_type -> wendy.agent.services.v1.RefreshCamerasResponse
-	14, // 28: wendy.agent.services.v1.WendyVideoService.TestCameraCredentials:output_type -> wendy.agent.services.v1.TestCameraCredentialsResponse
-	20, // 29: wendy.agent.services.v1.WendyVideoService.GetCameraControls:output_type -> wendy.agent.services.v1.GetCameraControlsResponse
-	22, // 30: wendy.agent.services.v1.WendyVideoService.SetCameraControls:output_type -> wendy.agent.services.v1.SetCameraControlsResponse
-	24, // 31: wendy.agent.services.v1.WendyVideoService.ResetCameraControls:output_type -> wendy.agent.services.v1.ResetCameraControlsResponse
-	28, // 32: wendy.agent.services.v1.WendyVideoService.GetCameraDHCPStatus:output_type -> wendy.agent.services.v1.CameraDHCPStatus
-	28, // 33: wendy.agent.services.v1.WendyVideoService.SetCameraDHCP:output_type -> wendy.agent.services.v1.CameraDHCPStatus
-	23, // [23:34] is the sub-list for method output_type
-	12, // [12:23] is the sub-list for method input_type
+	27, // 21: wendy.agent.services.v1.WendyVideoService.GetThermalCalibration:input_type -> wendy.agent.services.v1.GetThermalCalibrationRequest
+	28, // 22: wendy.agent.services.v1.WendyVideoService.SetThermalCalibration:input_type -> wendy.agent.services.v1.SetThermalCalibrationRequest
+	29, // 23: wendy.agent.services.v1.WendyVideoService.ClearThermalCalibration:input_type -> wendy.agent.services.v1.ClearThermalCalibrationRequest
+	30, // 24: wendy.agent.services.v1.WendyVideoService.GetCameraDHCPStatus:input_type -> wendy.agent.services.v1.GetCameraDHCPStatusRequest
+	31, // 25: wendy.agent.services.v1.WendyVideoService.SetCameraDHCP:input_type -> wendy.agent.services.v1.SetCameraDHCPRequest
+	5,  // 26: wendy.agent.services.v1.WendyVideoService.ListVideoDevices:output_type -> wendy.agent.services.v1.ListVideoDevicesResponse
+	16, // 27: wendy.agent.services.v1.WendyVideoService.StreamVideo:output_type -> wendy.agent.services.v1.VideoFrame
+	8,  // 28: wendy.agent.services.v1.WendyVideoService.SetCameraCredentials:output_type -> wendy.agent.services.v1.SetCameraCredentialsResponse
+	10, // 29: wendy.agent.services.v1.WendyVideoService.ForgetCamera:output_type -> wendy.agent.services.v1.ForgetCameraResponse
+	12, // 30: wendy.agent.services.v1.WendyVideoService.RefreshCameras:output_type -> wendy.agent.services.v1.RefreshCamerasResponse
+	14, // 31: wendy.agent.services.v1.WendyVideoService.TestCameraCredentials:output_type -> wendy.agent.services.v1.TestCameraCredentialsResponse
+	20, // 32: wendy.agent.services.v1.WendyVideoService.GetCameraControls:output_type -> wendy.agent.services.v1.GetCameraControlsResponse
+	22, // 33: wendy.agent.services.v1.WendyVideoService.SetCameraControls:output_type -> wendy.agent.services.v1.SetCameraControlsResponse
+	24, // 34: wendy.agent.services.v1.WendyVideoService.ResetCameraControls:output_type -> wendy.agent.services.v1.ResetCameraControlsResponse
+	26, // 35: wendy.agent.services.v1.WendyVideoService.GetThermalCalibration:output_type -> wendy.agent.services.v1.ThermalCalibration
+	26, // 36: wendy.agent.services.v1.WendyVideoService.SetThermalCalibration:output_type -> wendy.agent.services.v1.ThermalCalibration
+	26, // 37: wendy.agent.services.v1.WendyVideoService.ClearThermalCalibration:output_type -> wendy.agent.services.v1.ThermalCalibration
+	32, // 38: wendy.agent.services.v1.WendyVideoService.GetCameraDHCPStatus:output_type -> wendy.agent.services.v1.CameraDHCPStatus
+	32, // 39: wendy.agent.services.v1.WendyVideoService.SetCameraDHCP:output_type -> wendy.agent.services.v1.CameraDHCPStatus
+	26, // [26:40] is the sub-list for method output_type
+	12, // [12:26] is the sub-list for method input_type
 	12, // [12:12] is the sub-list for extension type_name
 	12, // [12:12] is the sub-list for extension extendee
 	0,  // [0:12] is the sub-list for field type_name
@@ -2072,7 +2408,7 @@ func file_wendy_agent_services_v1_wendy_agent_v1_video_service_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_wendy_agent_services_v1_wendy_agent_v1_video_service_proto_rawDesc), len(file_wendy_agent_services_v1_wendy_agent_v1_video_service_proto_rawDesc)),
 			NumEnums:      3,
-			NumMessages:   27,
+			NumMessages:   31,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

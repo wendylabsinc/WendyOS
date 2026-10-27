@@ -6,6 +6,8 @@ import (
 	"errors"
 	"image"
 	"math"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"sync"
@@ -72,6 +74,7 @@ func newGridRig(t *testing.T, nodes ...string) *gridRig {
 		return append([]string(nil), rig.nodes...), nil
 	}, nil)
 	rig.fp = installFakeProducers(rig.video)
+	rig.video.thermalCalibration = newThermalCalibrationStore(filepath.Join(t.TempDir(), "thermal-calibration.json"))
 	rig.feed = NewSensorFrameFeed()
 	rig.video.SetSensorFrameFeed(rig.feed)
 	m, err := data.NewManager(t.TempDir())
@@ -244,7 +247,7 @@ func TestCameraGridRunsOnlyWhileAViewerNamesIt(t *testing.T) {
 			t.Fatalf("grid record %+v", r)
 		}
 		grid := unmarshalPayload(t, r, &datapb.Grid{})
-		if !proto.Equal(grid, thermalGrid(frame, "/dev/video4")) {
+		if !proto.Equal(grid, thermalGrid(frame, "/dev/video4", noCorrection)) {
 			t.Fatalf("grid %v is not the frame's block", grid.GetCamera())
 		}
 	}
@@ -369,6 +372,64 @@ func TestCameraGridHotAndColdMarkers(t *testing.T) {
 		t.Fatalf("an implausible frame placed markers: %v", markers)
 	}
 	eventually(t, "the refusal is logged", func() bool { return rig.warned("outside -40..600 °C") })
+}
+
+// A camera's correction reaches its grid and markers, marked, from the next
+// frame after it is set, and leaves them from the next frame after it is
+// cleared. It is found by the camera's stable id.
+func TestCameraGridAppliesTheCameraCorrection(t *testing.T) {
+	rig := newGridRig(t, "/dev/video4")
+	rig.video.readStableNames = func() map[string]stableNames {
+		return map[string]stableNames{"/dev/video4": {byID: strings.TrimPrefix(tc001StableID, "by-id:")}}
+	}
+	grids := rig.subscribe(t, live.Selection{StreamIDs: []string{thermalGridID}})
+	markers := rig.subscribe(t, live.Selection{StreamIDs: []string{thermalMarkID}})
+	hub := rig.thermalHub(t, 0, tc001Format, tc001PictureTop)
+	frame := stackedThermalFrame(roomWith(128, 96, 75.5, 10, 180, 30))
+
+	publish := func(ts uint64) (*datapb.Grid, *datapb.VideoMarkers) {
+		t.Helper()
+		hub.publishRaw(frame, ts, tc001Format)
+		return unmarshalPayload(t, nextRecord(t, grids), &datapb.Grid{}), unmarshalPayload(t, nextRecord(t, markers), &datapb.VideoMarkers{})
+	}
+	grid, marks := publish(1)
+	if grid.Correction != nil || marks.Correction != nil || grid.Scale != 1.0/16 || math.Abs(marks.Markers[0].GetValue()-75.5) > sixteenthK {
+		t.Fatalf("uncorrected camera: grid scale %v correction %v, markers %v", grid.Scale, grid.Correction, marks)
+	}
+
+	if _, err := rig.video.SetThermalCalibration(context.Background(), &agentpb.SetThermalCalibrationRequest{StableId: tc001StableID, Gain: 0.48}); err != nil {
+		t.Fatal(err)
+	}
+	grid, marks = publish(2)
+	if !proto.Equal(grid, thermalGrid(frame, "/dev/video4", asMeasured)) {
+		t.Fatalf("corrected grid: scale %v offset %v correction %v", grid.Scale, grid.Offset, grid.Correction)
+	}
+	if marks.GetCorrection().GetGain() != 0.48 || math.Abs(marks.Markers[0].GetValue()-0.48*75.5) > 0.48*sixteenthK || math.Abs(marks.Markers[1].GetValue()-0.48*22) > 0.48*sixteenthK {
+		t.Fatalf("corrected markers %v", marks)
+	}
+
+	if _, err := rig.video.ClearThermalCalibration(context.Background(), &agentpb.ClearThermalCalibrationRequest{StableId: tc001StableID}); err != nil {
+		t.Fatal(err)
+	}
+	if grid, marks = publish(3); grid.Correction != nil || marks.Correction != nil || grid.Scale != 1.0/16 {
+		t.Fatalf("after a clear: grid scale %v correction %v, markers correction %v", grid.Scale, grid.Correction, marks.Correction)
+	}
+}
+
+// A store the agent cannot read stops a thermal camera's decoder before it
+// starts the camera: a camera that needs a correction must not publish its
+// uncorrected temperatures instead.
+func TestCameraGridPublishesNoTemperaturesWithoutItsCalibrations(t *testing.T) {
+	rig := newGridRig(t, "/dev/video4")
+	rig.video.readStableNames = func() map[string]stableNames {
+		return map[string]stableNames{"/dev/video4": {byID: strings.TrimPrefix(tc001StableID, "by-id:")}}
+	}
+	if err := os.WriteFile(rig.video.thermalCalibration.path, []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rig.subscribe(t, live.Selection{StreamIDs: []string{thermalGridID}})
+	eventually(t, "the unreadable store is logged", func() bool { return rig.warned("not valid JSON") })
+	never(t, "a camera started without its calibrations", func() bool { return rig.fp.count() > 0 })
 }
 
 // A camera that is not in the measured mode, because a viewer pinned its plain

@@ -51,6 +51,7 @@ import (
 	"strings"
 	"time"
 
+	"go.uber.org/zap"
 	"golang.org/x/sys/unix"
 	"google.golang.org/protobuf/proto"
 
@@ -523,7 +524,18 @@ func (g *cameraGrids) publish(stream string, descriptor *recordingpb.StreamDescr
 // runThermal publishes a TC001's grid and hot and cold markers from its raw
 // frames while a viewer asks for either. The records carry each raw frame's
 // timestamp_ns, the time a raw StreamVideo subscriber sees on it.
-func (g *cameraGrids) runThermal(ctx context.Context, sourceID, _ string, job *gridJob) error {
+//
+// Temperatures carry the camera's correction, if it has one, and a new one
+// from the next frame after it is set. A store that cannot be read stops the
+// decoder, so a camera that needs a correction never publishes uncorrected
+// values instead. The node is the same for the job's life: a camera that
+// comes back as another node gets a new job.
+func (g *cameraGrids) runThermal(ctx context.Context, sourceID, path string, job *gridJob) error {
+	corr, gen, err := g.video.thermalCorrectionFor(path)
+	if err != nil {
+		return err
+	}
+	g.logCorrection(sourceID, corr, false)
 	sub, err := g.video.subscribeRawFrames(ctx, sourceID)
 	if err != nil {
 		return err
@@ -537,6 +549,15 @@ func (g *cameraGrids) runThermal(ctx context.Context, sourceID, _ string, job *g
 		if err != nil {
 			return err
 		}
+		if g.video.thermalCalibration.generation.Load() != gen {
+			was := corr
+			if corr, gen, err = g.video.thermalCorrectionFor(path); err != nil {
+				return err
+			}
+			if corr != was {
+				g.logCorrection(sourceID, corr, true)
+			}
+		}
 		if !tc001Layout(frame.format, frame.pictureTop) {
 			return fmt.Errorf("camera captures %s with its picture from raw row %d; temperatures need the TC001's stacked 512x484 YUYV mode with its picture from row %d",
 				describeRawFormat(frame.format), frame.pictureTop, tc001PictureTop)
@@ -546,25 +567,46 @@ func (g *cameraGrids) runThermal(ctx context.Context, sourceID, _ string, job *g
 		if !wantGrid && !wantMarkers {
 			continue // the loop stops this job
 		}
-		st, ok := computeThermalStats(frame.data, frame.format, frame.pictureTop)
+		st, ok := computeThermalStats(frame.data, frame.format, frame.pictureTop, corr)
 		if ok != plausible {
 			plausible = ok
 			if !ok {
-				g.manager.Warnf("thermal camera %s: mean %.1f °C is outside %.0f..%.0f °C, the wrong scale or not a radiometric frame; publishing no temperatures until it is",
-					sourceID, st.meanCelsius, float64(thermalMinMeanCelsius), float64(thermalMaxMeanCelsius))
+				g.manager.Warnf("thermal camera %s: mean %.1f °C%s is outside %.0f..%.0f °C, the wrong scale or not a radiometric frame; publishing no temperatures until it is",
+					sourceID, st.meanCelsius, correctionNote(corr), float64(thermalMinMeanCelsius), float64(thermalMaxMeanCelsius))
 			}
 		}
 		if ok && wantGrid {
-			if err := g.publish(grid, gridDescriptor, sourceID, frame.unixNanos, thermalGrid(frame.data, camera), job); err != nil {
+			if err := g.publish(grid, gridDescriptor, sourceID, frame.unixNanos, thermalGrid(frame.data, camera, corr), job); err != nil {
 				return err
 			}
 		}
 		if wantMarkers {
-			if err := g.publish(markers, markersDescriptor, sourceID, frame.unixNanos, thermalMarkers(st, ok, camera), job); err != nil {
+			if err := g.publish(markers, markersDescriptor, sourceID, frame.unixNanos, thermalMarkers(st, ok, camera, corr), job); err != nil {
 				return err
 			}
 		}
 	}
+}
+
+// logCorrection says which correction a thermal camera's temperatures carry:
+// when the decoder starts with one, and when one is set, changed or cleared
+// while it runs.
+func (g *cameraGrids) logCorrection(sourceID string, corr thermalCorrection, changed bool) {
+	switch {
+	case corr.calibrated:
+		g.video.logger.Info("thermal camera temperatures corrected",
+			zap.String("camera", sourceID), zap.Float64("gain", corr.gain), zap.Float64("offset", corr.offset))
+	case changed:
+		g.video.logger.Info("thermal camera temperatures no longer corrected", zap.String("camera", sourceID))
+	}
+}
+
+// correctionNote names a correction in a log line about a temperature.
+func correctionNote(corr thermalCorrection) string {
+	if !corr.calibrated {
+		return ""
+	}
+	return fmt.Sprintf(" (after the camera's correction, gain %g, offset %g)", corr.gain, corr.offset)
 }
 
 // runLuma publishes a SensorLink camera's brightness grid from its JPEG frames
