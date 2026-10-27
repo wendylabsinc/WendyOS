@@ -68,7 +68,7 @@ func TestRunBmapWriteToFile(t *testing.T) {
 	if err := os.WriteFile(devPath, make([]byte, b.ImageSize), 0o644); err != nil {
 		t.Fatalf("seed device: %v", err)
 	}
-	if err := runBmapWrite(devPath, bmapPath, bytes.NewReader(img)); err != nil {
+	if err := runBmapWrite(devPath, bmapPath, bytes.NewReader(img), 0); err != nil {
 		t.Fatalf("runBmapWrite: %v", err)
 	}
 	got, _ := os.ReadFile(devPath)

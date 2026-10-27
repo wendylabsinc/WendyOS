@@ -2022,7 +2022,7 @@ func providerBuild(ctx context.Context, p providers.DeviceProvider, device model
 	if !errors.As(err, &missingCore) {
 		return app, err
 	}
-	if err := setupLiteProject(ctx, projectPath, opts.yes); err != nil {
+	if err := setupLiteProject(ctx, projectPath, missingCore.Toolchain, opts.yes); err != nil {
 		return nil, err
 	}
 	return p.Build(ctx, device, projectPath, projectType, product, opts.debug)

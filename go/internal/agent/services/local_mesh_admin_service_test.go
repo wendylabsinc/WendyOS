@@ -337,6 +337,81 @@ func TestLocalMeshParticipationDisableRetainsCarrierChoices(t *testing.T) {
 	}
 }
 
+// The runtime polls the saved documents, so when ConfigureLocalMesh returns it
+// can still report the previous configuration, including on retries. Configure
+// must not present that state as the result: enabling a disabled device used to answer
+// "disabled", and disabling an active one answered "mesh-active".
+func TestLocalMeshAdminConfigureDoesNotReportPreChangeRuntimeState(t *testing.T) {
+	dir := t.TempDir()
+	tenant, device := adminTenant(t), adminDevice(t)
+	svc := NewLocalMeshAdminService(nil, dir, func() (meshid.Tenant, meshid.Device) { return tenant, device })
+	runtime := LocalMeshRuntimeStatus{Available: true, State: "disabled", Detail: "Wendy Net participation is disabled."}
+	svc.SetRuntimeStatusSource(func() LocalMeshRuntimeStatus { return runtime })
+	ctx := ctxWithIdentity(t, userPrincipal(adminTenantID, "alice"))
+	enable := &pb.ConfigureLocalMeshRequest{Participate: proto.Bool(true), Ble: proto.Bool(true), Ethernet: proto.Bool(true), InfrastructureWifi: proto.Bool(true)}
+
+	got, err := svc.ConfigureLocalMesh(ctx, enable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c := got.GetConfigured(); !c.GetParticipate() || !c.GetBle() || !c.GetEthernet() || !c.GetInfrastructureWifi() {
+		t.Fatalf("enable not saved: %+v", c)
+	}
+	if got.GetState() != "pending-runtime" || got.GetRuntimeAvailable() || got.GetAuthenticatedPeers() != 0 {
+		t.Fatalf("enable reported the pre-change runtime state: %+v", got)
+	}
+
+	// Retrying before the runtime polls must return the same saved intent.
+	retry, err := svc.ConfigureLocalMesh(ctx, enable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !proto.Equal(got, retry) {
+		t.Fatalf("retry attached stale runtime: first=%+v retry=%+v", got, retry)
+	}
+
+	// Configure always acknowledges saved intent; status reports observations
+	// once the runtime has applied the configuration.
+	runtime = LocalMeshRuntimeStatus{Available: true, State: "mesh-active", Detail: "Carriers: BLE: ready; LAN: ready.", AuthenticatedPeers: 2, GatewayPrincipal: device.Principal()}
+	got, err = svc.ConfigureLocalMesh(ctx, enable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !proto.Equal(got, retry) {
+		t.Fatalf("unchanged configuration attached runtime observations: %+v", got)
+	}
+	got, err = svc.GetLocalMeshStatus(ctx, &pb.GetLocalMeshStatusRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.GetState() != runtime.State || got.GetDetail() != runtime.Detail || !got.GetRuntimeAvailable() ||
+		got.GetAuthenticatedPeers() != 2 || got.GetGatewayPrincipal() != runtime.GatewayPrincipal {
+		t.Fatalf("status lost runtime observations: %+v", got)
+	}
+
+	for attempt := 0; attempt < 2; attempt++ {
+		got, err = svc.ConfigureLocalMesh(ctx, &pb.ConfigureLocalMeshRequest{Nan: proto.Bool(true)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !got.GetConfigured().GetNan() || got.GetState() != "pending-runtime" || got.GetDetail() == runtime.Detail ||
+			got.GetRuntimeAvailable() || got.GetAuthenticatedPeers() != 0 || got.GetGatewayPrincipal() != "" {
+			t.Fatalf("carrier configure attempt %d reported the previous carriers' health: %+v", attempt+1, got)
+		}
+	}
+
+	for attempt := 0; attempt < 2; attempt++ {
+		got, err = svc.ConfigureLocalMesh(ctx, &pb.ConfigureLocalMeshRequest{Participate: proto.Bool(false)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.GetConfigured().GetParticipate() || got.GetState() != "disabled" || got.GetDetail() == runtime.Detail ||
+			got.GetRuntimeAvailable() || got.GetAuthenticatedPeers() != 0 || got.GetGatewayPrincipal() != "" {
+			t.Fatalf("disable attempt %d reported the pre-change runtime state: %+v", attempt+1, got)
+		}
+	}
+}
+
 func TestLocalMeshAdminReportsPendingLANCarriers(t *testing.T) {
 	for name, carriers := range map[string]localmesh.TCPConfig{
 		"Ethernet": {Ethernet: true},

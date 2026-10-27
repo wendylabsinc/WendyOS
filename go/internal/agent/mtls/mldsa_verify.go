@@ -211,6 +211,20 @@ func NewPeerCertificateVerifier(chainPEM string, logger *zap.Logger, notBeforeFl
 	return buildPeerCertificateVerifierWithCache(caPool, caCerts, logger, notBeforeFloor, newPeerPathCache()), nil
 }
 
+// PeerTrustAnchors returns the DER of each certificate that
+// NewPeerCertificateVerifier trusts as an anchor for chainPEM.
+func PeerTrustAnchors(chainPEM string) ([][]byte, error) {
+	_, caCerts, err := peerCertificateTrust(chainPEM)
+	if err != nil {
+		return nil, err
+	}
+	anchors := make([][]byte, len(caCerts))
+	for i, ca := range caCerts {
+		anchors[i] = ca.Raw
+	}
+	return anchors, nil
+}
+
 // peerCertificateTrust excludes leaf certificates even if enrollment material
 // duplicates them in the CA bundle. Otherwise crypto/x509 can treat the leaf
 // itself as a trust anchor and bypass its issuer's expiry. General mTLS's

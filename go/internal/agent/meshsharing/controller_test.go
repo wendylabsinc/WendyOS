@@ -66,6 +66,7 @@ type fakePolicy struct {
 	failShare             bool
 	failWithdraw          int
 	failGateway           bool
+	pendingGateway        int
 	failGatewayWithdrawal bool
 	failDNS               bool
 	failDNSWithdrawal     bool
@@ -85,6 +86,10 @@ func (p *fakePolicy) SetGateway(ctx context.Context, peer meshid.Device) error {
 		*p.events = append(*p.events, "gateway:"+peer.Principal())
 		if p.failGateway {
 			return errors.New("simulated tunnel setup failure")
+		}
+		if p.pendingGateway > 0 {
+			p.pendingGateway--
+			return errGatewayPending
 		}
 	}
 	return nil
@@ -500,6 +505,44 @@ func TestControllerDonorSwitchRepointsDNSWithoutAdvertising(t *testing.T) {
 	}
 	if !slices.Contains(events, "dns:wlmp9|"+late.MeshAddress().String()) || slices.Contains(events, "offer:") {
 		t.Fatalf("donor switch DNS/offer wrong: %v", events)
+	}
+}
+
+// A BLE lease negotiation outlasts a step. The controller must report the
+// selected donor without claiming Internet access, and must not withdraw the
+// gateway: withdrawal cancels the negotiation, which is how every 15 s step
+// used to throw away a slow handshake.
+func TestControllerKeepsPendingGatewayLeaseAcrossSteps(t *testing.T) {
+	ctx := context.Background()
+	var events []string
+	donor := policyDonorDevice(t)
+	now := time.Now()
+	node := &fakeNode{view: gatewayView(donor, now), offers: []meshcatalog.Record{gatewayOffer(donor, now)}, events: &events}
+	policy := &fakePolicy{events: &events, pendingGateway: 2}
+	c, err := NewWithDeps(policySelf(t), node, policy, &fakeProbe{gateway: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := Config{Participate: true, Roam: true}
+	if _, err := c.Step(ctx, cfg); err != nil { // Health needs two samples.
+		t.Fatal(err)
+	}
+	for range 2 {
+		events = nil
+		d, err := c.Step(ctx, cfg)
+		if err != nil || d.Mode != "offline" || d.GatewayDevice != donor || !strings.Contains(d.Reason, "negotiating") {
+			t.Fatalf("pending lease reported as %+v: %v", d, err)
+		}
+		if want := []string{"gateway:" + donor.Principal(), "dns:|"}; !slices.Equal(events, want) {
+			t.Fatalf("pending lease was withdrawn: got %v, want %v", events, want)
+		}
+	}
+	events = nil
+	if d, err := c.Step(ctx, cfg); err != nil || d.Mode != "roaming" || d.GatewayDevice != donor {
+		t.Fatalf("collected lease not used: %+v %v", d, err)
+	}
+	if want := []string{"gateway:" + donor.Principal(), "dns:wlmp8|" + donor.MeshAddress().String()}; !slices.Equal(events, want) {
+		t.Fatalf("collected lease: got %v, want %v", events, want)
 	}
 }
 

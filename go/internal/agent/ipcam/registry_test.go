@@ -221,8 +221,16 @@ func TestPruneUnconfirmedDHCP(t *testing.T) {
 			if err := loaded.Load(); err != nil {
 				t.Fatal(err)
 			}
-			if err := loaded.PruneUnconfirmedDHCP(creds.Has); err != nil {
+			removed, err := loaded.PruneUnconfirmedDHCP(creds.Has)
+			if err != nil {
 				t.Fatal(err)
+			}
+			wantRemoved := 1
+			if tc.keep {
+				wantRemoved = 0
+			}
+			if removed != wantRemoved {
+				t.Fatalf("removed = %d, want %d", removed, wantRemoved)
 			}
 			for range 2 {
 				got, ok := loaded.Get(cam.ID)
@@ -253,8 +261,8 @@ func TestPruneUnconfirmedDHCPRollsBackFailedSave(t *testing.T) {
 	if err := os.Mkdir(r.path+".tmp", 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.PruneUnconfirmedDHCP(func(string) bool { return false }); err == nil {
-		t.Fatal("cleanup succeeded despite unwritable save path")
+	if removed, err := r.PruneUnconfirmedDHCP(func(string) bool { return false }); err == nil || removed != 0 {
+		t.Fatalf("failed save: removed = %d, error = %v, want zero and an error", removed, err)
 	}
 	if got, ok := r.Get(cam.ID); !ok || !reflect.DeepEqual(got, cam) {
 		t.Fatal("failed save changed registry")
@@ -267,8 +275,8 @@ func TestPruneUnconfirmedDHCPRequiresCredentialLookup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := r.PruneUnconfirmedDHCP(nil); err != nil {
-		t.Fatal(err)
+	if removed, err := r.PruneUnconfirmedDHCP(nil); err != nil || removed != 0 {
+		t.Fatalf("no credential lookup: removed = %d, error = %v", removed, err)
 	}
 	if _, ok := r.Get(cam.ID); !ok {
 		t.Fatal("pruned without credential protection")
@@ -288,10 +296,36 @@ func TestDHCPServedSurvivesPartialUpsert(t *testing.T) {
 	if err := loaded.Load(); err != nil {
 		t.Fatal(err)
 	}
-	if err := loaded.PruneUnconfirmedDHCP(func(string) bool { return false }); err != nil {
-		t.Fatal(err)
+	if removed, err := loaded.PruneUnconfirmedDHCP(func(string) bool { return false }); err != nil || removed != 0 {
+		t.Fatalf("served camera: removed = %d, error = %v", removed, err)
 	}
 	if got, ok := loaded.Get(cam.ID); !ok || !got.DHCPServed {
 		t.Fatal("lost served-link evidence")
+	}
+}
+
+func TestPruneUnconfirmedDHCPCountsOnlyRemovedRecords(t *testing.T) {
+	r := newTestRegistry(t)
+	for _, cam := range []Camera{
+		{MAC: "aa:bb:cc:dd:ee:01", Link: "eth0"},
+		{MAC: "aa:bb:cc:dd:ee:02", Link: "eth0"},
+		{MAC: "aa:bb:cc:dd:ee:03", Link: "eth0", Address: "10.98.0.50"},
+	} {
+		if _, err := r.Upsert(cam); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, want := range []int{2, 0} {
+		removed, err := r.PruneUnconfirmedDHCP(func(string) bool { return false })
+		if err != nil || removed != want {
+			t.Fatalf("removed = %d, error = %v, want %d", removed, err, want)
+		}
+	}
+	loaded := NewRegistry(r.path)
+	if err := loaded.Load(); err != nil {
+		t.Fatal(err)
+	}
+	if got := loaded.List(); len(got) != 1 || got[0].MAC != "aa:bb:cc:dd:ee:03" {
+		t.Fatalf("persisted cameras = %+v, want only the addressed camera", got)
 	}
 }

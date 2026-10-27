@@ -78,6 +78,15 @@ const wendyLiteCatalogJSON = `
             "target": "esp32s3",
             "board_cfg": "m5_stamp_s3_native",
             "flash_size": "8MB"
+        },
+        {
+            "name": "esp32s31_mosaico_native",
+            "target": "esp32s31",
+            "board_cfg": "esp32s31_mosaico_native",
+            "flash_size": "16MB",
+            "idf_image": "espressif/idf@sha256:30b42a38415e918b1b14825ccf0e4c40e7910c5132618dcd12e3c45361be0943",
+            "preview": true,
+            "project_dir": "samples/mosaico_dashboard"
         }
     ],
     "targets": [
@@ -100,6 +109,10 @@ const wendyLiteCatalogJSON = `
         {
             "name": "esp32s3",
             "display_name": "ESP32-S3"
+        },
+        {
+            "name": "esp32s31",
+            "display_name": "ESP32-S31 (preview)"
         }
     ],
     "boards": [
@@ -168,6 +181,12 @@ const wendyLiteCatalogJSON = `
             "display_name": "M5Stack StampS3, 8MB flash, native app support",
             "binary": "esp32s3_m5_stamp_s3_native",
             "target": "esp32s3"
+        },
+        {
+            "name": "esp32s31_mosaico_native",
+            "display_name": "ESP-Mosaico, 16MB flash, touch display, mesh dashboard, preview",
+            "binary": "esp32s31_mosaico_native",
+            "target": "esp32s31"
         }
     ]
 }

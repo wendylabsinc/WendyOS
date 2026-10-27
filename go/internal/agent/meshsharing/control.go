@@ -21,7 +21,19 @@ const (
 	leaseHeartbeat   = byte(1)
 	// Certificate chains can take tens of seconds over a BLE mesh leaf.
 	// Bound unauthenticated work while allowing the radio and TCP retries.
-	leaseHandshakeTimeout  = 60 * time.Second
+	leaseHandshakeTimeout = 60 * time.Second
+	// After authentication the gateway allows this long to grant a lease, and
+	// again to send its answer.
+	leaseReplyTimeout = 8 * time.Second
+	// The borrower allows the gateway's whole handshake, grant and reply
+	// bounds, so it never abandons a slow radio handshake the gateway still
+	// accepts. That is longer than one reconciliation step: leaseDialer keeps
+	// the negotiation alive across steps instead of restarting it.
+	leaseDialTimeout = leaseHandshakeTimeout + 2*leaseReplyTimeout
+	// A step waits long enough for a LAN negotiation and leaves the rest of
+	// its budget for probes and tunnel setup. A slower negotiation continues
+	// in the background and a later step collects it.
+	leaseStepWait          = 5 * time.Second
 	leaseHeartbeatInterval = 10 * time.Second
 	leaseHeartbeatTimeout  = 30 * time.Second
 	maxLeaseConnections    = 128
@@ -181,7 +193,7 @@ func serveGatewayLease(ctx context.Context, creds *localmesh.Credentials, backen
 	defer cancel()
 	expire := context.AfterFunc(sessionCtx, func() { raw.Close() })
 	defer expire()
-	grantCtx, cancelGrant := context.WithTimeout(sessionCtx, 8*time.Second)
+	grantCtx, cancelGrant := context.WithTimeout(sessionCtx, leaseReplyTimeout)
 	lease, err := backend.Grant(grantCtx, peer.Device)
 	cancelGrant()
 	if err != nil {
@@ -213,7 +225,7 @@ func serveGatewayLease(ctx context.Context, creds *localmesh.Credentials, backen
 		defer func() { close(stopWatch); <-watchDone }()
 	}
 	bounded := &expiryConn{Conn: conn, expires: expiry}
-	bounded.SetDeadline(time.Now().Add(8 * time.Second))
+	bounded.SetDeadline(time.Now().Add(leaseReplyTimeout))
 	response := []byte{byte(lease.Slot >> 8), byte(lease.Slot), 0}
 	if lease.IPv6 {
 		response[2] = 1
@@ -246,7 +258,7 @@ func dialGatewayLease(ctx context.Context, creds *localmesh.Credentials, gateway
 	if creds == nil || !gateway.IsValid() || gateway == creds.Device || gateway.Tenant() != creds.Device.Tenant() {
 		return nil, tunnelLease{}, errors.New("invalid gateway principal")
 	}
-	dialCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	dialCtx, cancel := context.WithTimeout(ctx, leaseDialTimeout)
 	defer cancel()
 	dialer := net.Dialer{LocalAddr: &net.TCPAddr{IP: net.IP(creds.Device.MeshAddress().AsSlice())}}
 	raw, err := dialer.DialContext(dialCtx, "tcp6", net.JoinHostPort(gateway.MeshAddress().String(), fmt.Sprint(leaseControlPort)))
@@ -285,7 +297,10 @@ func negotiateGatewayLease(ctx context.Context, creds *localmesh.Credentials, ga
 		return nil, lease, err
 	}
 	conn = &expiryConn{Conn: secure, expires: expiry}
-	deadline := time.Now().Add(8 * time.Second)
+	// TLS 1.3 finishes here before the gateway has received this client's
+	// certificate flight. Over a radio that upload, the grant and the reply
+	// share the remaining dial budget rather than a fixed LAN-sized bound.
+	deadline := time.Now().Add(leaseDialTimeout)
 	if bound, ok := ctx.Deadline(); ok && bound.Before(deadline) {
 		deadline = bound
 	}
@@ -302,6 +317,70 @@ func negotiateGatewayLease(ctx context.Context, creds *localmesh.Credentials, ga
 		return nil, tunnelLease{}, err
 	}
 	return conn, lease, nil
+}
+
+// leaseDialer keeps one borrower negotiation alive across reconciliation
+// steps. A step's context bounds how long that step waits, not the
+// negotiation: over BLE the certificate exchange alone can outlast a step,
+// and restarting it on every step never completes. The caller serializes use.
+type leaseDialer struct {
+	dial    func(context.Context, meshid.Device) (net.Conn, tunnelLease, error)
+	pending *leaseAttempt
+}
+
+type leaseAttempt struct {
+	gateway meshid.Device
+	cancel  context.CancelFunc
+	done    chan struct{}
+	conn    net.Conn
+	lease   tunnelLease
+	err     error
+}
+
+// await returns the lease from gateway, starting a negotiation unless one is
+// already in flight. If the step stops waiting first, the negotiation
+// continues and errGatewayPending is returned. On success the caller owns
+// the connection.
+func (d *leaseDialer) await(ctx context.Context, gateway meshid.Device) (net.Conn, tunnelLease, error) {
+	if d.pending != nil && d.pending.gateway != gateway {
+		d.stop()
+	}
+	if d.pending == nil {
+		// Only stop cancels the attempt; the dial itself bounds its duration.
+		attemptCtx, cancel := context.WithCancel(context.Background())
+		attempt := &leaseAttempt{gateway: gateway, cancel: cancel, done: make(chan struct{})}
+		go func() {
+			defer close(attempt.done)
+			attempt.conn, attempt.lease, attempt.err = d.dial(attemptCtx, gateway)
+		}()
+		d.pending = attempt
+	}
+	attempt := d.pending
+	wait, cancel := context.WithTimeout(ctx, leaseStepWait)
+	defer cancel()
+	select {
+	case <-attempt.done:
+	case <-wait.Done():
+		return nil, tunnelLease{}, errGatewayPending
+	}
+	d.pending = nil
+	attempt.cancel()
+	return attempt.conn, attempt.lease, attempt.err
+}
+
+// stop cancels a negotiation in flight and closes a lease nobody collected,
+// so the gateway revokes it at once rather than after a missed heartbeat.
+func (d *leaseDialer) stop() {
+	attempt := d.pending
+	if attempt == nil {
+		return
+	}
+	d.pending = nil
+	attempt.cancel()
+	<-attempt.done
+	if attempt.conn != nil {
+		attempt.conn.Close()
+	}
 }
 
 // Renewing an I/O deadline must never extend an authenticated lease beyond

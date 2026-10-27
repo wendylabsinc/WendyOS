@@ -9,8 +9,8 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/cli/espidftoolchain"
 )
 
-func setupLiteProject(ctx context.Context, projectPath string, assumeYes bool) error {
-	setup, err := espidftoolchain.PrepareWendyCore(projectPath)
+func setupLiteProject(ctx context.Context, projectPath string, toolchain *espidftoolchain.ProjectToolchain, assumeYes bool) error {
+	setup, err := espidftoolchain.PrepareWendyCore(projectPath, toolchain)
 	if err != nil {
 		return err
 	}

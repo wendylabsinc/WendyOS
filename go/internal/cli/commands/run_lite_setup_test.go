@@ -113,6 +113,41 @@ func TestProviderBuildOffersWendyCoreSetup(t *testing.T) {
 	}
 }
 
+func TestProviderBuildSetsUpWendyCoreWithProjectToolchain(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("fake docker uses a shell script")
+	}
+	dir := t.TempDir()
+	image := "espressif/idf@sha256:" + strings.Repeat("c", 64)
+	for name, content := range map[string]string{
+		"main/app.c":     "void app_main(void) {}\n",
+		"wendy-idf.json": `{"image":"` + image + `","target":"esp32s31"}`,
+		// Host EIM must not run for a container-pinned project.
+		"eim":    "#!/bin/sh\nexit 1\n",
+		"docker": "#!/bin/sh\nprintf '%s\\n' \"$*\" >> docker-commands\n",
+	} {
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(dir, name)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	toolchain, err := espidftoolchain.LoadProjectToolchain(dir, "esp32s31")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := &coreSetupProvider{buildErr: &providers.MissingWendyCoreError{Toolchain: toolchain}}
+	if _, err := providerBuild(context.Background(), p, models.ExternalDevice{}, dir, "esp-idf", "test", runOptions{yes: true}); err != nil {
+		t.Fatal(err)
+	}
+	commands, err := os.ReadFile(filepath.Join(dir, "docker-commands"))
+	if err != nil || !strings.Contains(string(commands), image+" idf.py add-dependency") || !strings.Contains(string(commands), image+" idf.py reconfigure") {
+		t.Fatalf("setup did not use the project container: %s, %v", commands, err)
+	}
+}
+
 // sequenceProvider fails each build with the next of errs, then succeeds.
 type sequenceProvider struct {
 	fakeProvider

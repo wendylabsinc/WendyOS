@@ -89,3 +89,11 @@ func TestParseESP32SerialPortJSON_MalformedJSON(t *testing.T) {
 		t.Fatal("expected error for malformed JSON")
 	}
 }
+
+func TestDualCDCWindowsFiltersDiagnostics(t *testing.T) {
+	input := `[{"Name":"Mosaico (COM3)","PNPDeviceID":"USB\\VID_303A&PID_4002&MI_00\\A"},{"Name":"Mosaico (COM4)","PNPDeviceID":"USB\\VID_303A&PID_4002&MI_02\\A"}]`
+	ports, err := parseESP32SerialPortsJSON(input)
+	if err != nil || len(ports) != 1 || ports[0].Port != "COM3" {
+		t.Fatalf("got %+v, %v", ports, err)
+	}
+}
