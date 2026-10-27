@@ -4001,7 +4001,7 @@ func externalProviderPickerItem(prov providers.DeviceProvider, dev *models.Exter
 	if prov.Key() == "wendy-lite" {
 		item := tui.PickerItem{
 			Name:         dev.DisplayName,
-			DedupKey:     dev.ConnectionInfo["deviceId"],
+			DedupKey:     dev.LiteDedupID(),
 			Type:         dev.ConnectionType() + " (Lite)",
 			Address:      dev.ConnectionInfo["ip"],
 			Insecure:     liteExternalInsecure(dev),

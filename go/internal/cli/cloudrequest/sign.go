@@ -437,6 +437,18 @@ var signedResources = map[string]func(tenant string, req proto.Message) (string,
 		in, ok := req.(*cloudpbv2.OpenRelaySessionRequest)
 		return "org/" + in.GetOrganizationId() + "/relay-session", ok
 	},
+	// `wendy device rename` on a v2 enrollment.
+	cloudpbv2.AssetService_UpdateAsset_FullMethodName: func(_ string, req proto.Message) (string, bool) {
+		in, ok := req.(*cloudpbv2.UpdateAssetRequest)
+		if !ok {
+			return "", false
+		}
+		id, err := uuid.Parse(in.GetId())
+		if err != nil || id.String() != in.GetId() {
+			return "", false
+		}
+		return "asset/" + in.GetId(), true
+	},
 	cloudpbv2.AssetService_DeleteAsset_FullMethodName: func(_ string, req proto.Message) (string, bool) {
 		in, ok := req.(*cloudpbv2.DeleteAssetRequest)
 		if !ok {

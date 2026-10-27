@@ -27,6 +27,11 @@ For supported Wi-Fi Aware hardware, add `--nan=true`.
 You can enable more than one connection type. Only the options you supply change;
 other saved settings are preserved.
 
+`configure` confirms saved settings, including when you repeat the same command.
+It reports `pending-runtime` when participation is enabled and `disabled` when
+it is off, with no runtime observations. Use `status` to check runtime state
+after the agent has had time to apply the settings.
+
 Changing settings restarts local routing and may interrupt existing connections.
 To disable one connection type, set its option to `false`. To stop all Wendy Net
 participation while retaining the saved connection choices, use
@@ -88,7 +93,7 @@ and route recovery after a change; a saved setting is not a connectivity test.
 | `local` | The device has a healthy Internet connection of its own. It offers it if sharing is enabled. |
 | `relay` | It participates in Wendy Net, but Internet roaming is off. |
 | `roaming` | It is using an authenticated shared gateway. |
-| `offline` | Roaming is enabled but no usable shared gateway was found. |
+| `offline` | Roaming is enabled but no usable shared gateway was found. If the detail says it is negotiating a lease, a gateway is selected and the device is still connecting to it; over Bluetooth this can take about a minute. |
 | `pending-runtime` or `error` | Read the accompanying detail; configuration is not yet active or needs attention. |
 
 Test an actual Internet request from the device or intended app before depending

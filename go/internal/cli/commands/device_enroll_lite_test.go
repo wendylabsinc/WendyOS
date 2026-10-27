@@ -45,6 +45,8 @@ func (d *enrollingLiteDevice) ResetTargetDevice(bool, time.Duration) error {
 	return nil
 }
 
+func (*enrollingLiteDevice) WaitReboot(context.Context) {}
+
 func (*enrollingLiteDevice) Close() error { return nil }
 
 func TestLiteEnrollmentUsesFreshUUIDThroughout(t *testing.T) {
