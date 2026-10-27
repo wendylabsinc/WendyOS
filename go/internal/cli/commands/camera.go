@@ -46,6 +46,7 @@ func newCameraCmd() *cobra.Command {
 		newCameraTestCmd(),
 		newCameraControlsCmd(),
 		newCameraSetControlCmd(),
+		newCameraThermalCalibrationCmd(),
 		newCameraDHCPCmd(),
 	)
 	return cmd
@@ -60,6 +61,7 @@ const (
 	cameraCustomCapture
 	cameraNetworkManagement
 	cameraV4L2Controls
+	cameraThermalCalibration
 )
 
 // Swift serves camera listing, video and USB controls, enrolled or not, like
@@ -89,6 +91,8 @@ func cameraServicePreflight(ctx context.Context, conn *grpcclient.AgentConnectio
 		return fmt.Errorf("Custom camera dimensions and frame rates are not yet supported by Wendy Agent for Mac")
 	case cameraNetworkManagement:
 		return fmt.Errorf("network camera management is not supported by Wendy Agent for macOS")
+	case cameraThermalCalibration:
+		return fmt.Errorf("thermal calibration is not available on Wendy Agent for Mac: it publishes no thermal camera temperatures")
 	}
 	return nil
 }
