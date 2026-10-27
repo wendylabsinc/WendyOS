@@ -28,3 +28,28 @@ func TestThermalFFIOwnsPixelsAndMeasurements(t *testing.T) {
 		t.Fatal("thermal capability lost across FFI")
 	}
 }
+
+func TestThermalFFIPreservesConversionAndAgentCapability(t *testing.T) {
+	p := events([]backend.Event{{Kind: backend.EventThermal, Thermal: &backend.ThermalFrame{Width: 256, Height: 192,
+		Temperature: &pb.ThermalLinearTemperature{KelvinPerCount: 1.0 / 64, KelvinOffset: 223.15, Provenance: "fixture"}}}})
+	defer WDEventsFree(p)
+	f := unsafe.Slice(p.items, int(p.count))[0].thermal
+	if f.has_temperature != 1 || f.kelvin_per_count != 1.0/64 || f.kelvin_offset != 223.15 || f.allow_scale_override != 0 {
+		t.Fatal("temperature capability lost across FFI")
+	}
+	listed := cameras([]*pb.VideoDevice{{Name: "USB Camera", Thermal: &pb.ThermalCamera{Adapter: thermal.TOPDONTC001HIK}}}, nil)
+	defer WDCamerasFree(listed)
+	if unsafe.Slice(listed.items, int(listed.count))[0].thermal != 1 {
+		t.Fatal("agent thermal capability lost")
+	}
+}
+
+func TestThermalFFIPreservesSeparateSummary(t *testing.T) {
+	p := events([]backend.Event{{Kind: backend.EventThermal, Thermal: &backend.ThermalFrame{SummaryUpdatedNS: 123,
+		Summary: &thermal.TemperatureSummary{Coldest: thermal.Point{X: 19, Y: 93}, Hottest: thermal.Point{X: 255, Y: 186}, ColdCelsius: 19.875, HotCelsius: 33.53125}}}})
+	defer WDEventsFree(p)
+	f := unsafe.Slice(p.items, int(p.count))[0].thermal
+	if f.summary_updated_ns != 123 || f.summary_cold_x != 19 || f.summary_hot_y != 186 || f.summary_cold_celsius != 19.875 || f.summary_hot_celsius != 33.53125 || f.has_temperature != 0 {
+		t.Fatal("summary confused with pixel calibration")
+	}
+}

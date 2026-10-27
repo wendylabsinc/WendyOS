@@ -202,6 +202,13 @@ func canonicalObject(raw []byte) bool {
 	}
 	return bytes.Equal(bytes.TrimSuffix(b.Bytes(), []byte{'\n'}), raw)
 }
+
+// operatorClockSkew is how far ahead of Cloud an operator's descriptor iat may
+// be: the request-signature contract admits iat within ±60 s of the verifier,
+// and Cloud had already admitted this descriptor before deleting the asset
+// (WDY-3939 #11). The expiry stays strict and the lifetime capped at 30 s.
+const operatorClockSkew = 60
+
 func verifyOperatorReset(compact string, request []byte, asset, tenant, correlation string, leaf *x509.Certificate, earliest, latest time.Time) error {
 	parts := strings.Split(compact, ".")
 	if len(parts) != 3 || len(compact) > 32768 {
@@ -272,7 +279,7 @@ func verifyOperatorReset(compact string, request []byte, asset, tenant, correlat
 		return fmt.Errorf("invalid operator descriptor")
 	}
 	digest := sha256.Sum256(request)
-	if descriptor.Audience != "https://cloud.wendy.sh/broker" || descriptor.Operation != "wendycloud.v2.AssetService/DeleteAsset" || descriptor.Target.Tenant != tenant || descriptor.Target.Resource != "asset/"+asset || descriptor.Digest != base64.RawURLEncoding.EncodeToString(digest[:]) || descriptor.Correlation != correlation || correlation == "" || len(correlation) > 64 || descriptor.Iat < 0 || descriptor.Iat > latest.Unix() || descriptor.Expiry <= latest.Unix() || descriptor.Expiry <= descriptor.Iat || descriptor.Expiry-descriptor.Iat > 30 {
+	if descriptor.Audience != "https://cloud.wendy.sh/broker" || descriptor.Operation != "wendycloud.v2.AssetService/DeleteAsset" || descriptor.Target.Tenant != tenant || descriptor.Target.Resource != "asset/"+asset || descriptor.Digest != base64.RawURLEncoding.EncodeToString(digest[:]) || descriptor.Correlation != correlation || correlation == "" || len(correlation) > 64 || descriptor.Iat < 0 || descriptor.Iat > latest.Unix()+operatorClockSkew || descriptor.Expiry <= latest.Unix() || descriptor.Expiry <= descriptor.Iat || descriptor.Expiry-descriptor.Iat > 30 {
 		return fmt.Errorf("operator descriptor binding or freshness mismatch")
 	}
 	nonce, e := base64.RawURLEncoding.Strict().DecodeString(descriptor.Nonce)

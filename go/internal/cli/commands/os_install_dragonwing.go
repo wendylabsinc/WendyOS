@@ -385,7 +385,7 @@ func installDragonwing(ctx context.Context, board dragonwingBoard, version strin
 	if err != nil {
 		return err
 	}
-	provJSON, err := resolveProvisioningJSON(ctx, preOpts, name)
+	provJSON, err := resolveProvisioningJSON(ctx, preOpts, &name)
 	if err != nil {
 		return err
 	}

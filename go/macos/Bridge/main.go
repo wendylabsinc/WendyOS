@@ -217,6 +217,15 @@ func events(items []backend.Event) *C.WDEvents {
 					out.thermal.kelvin_per_count = C.double(f.Temperature.KelvinPerCount)
 					out.thermal.kelvin_offset = C.double(f.Temperature.KelvinOffset)
 				}
+				if f.Summary != nil {
+					out.thermal.summary_updated_ns = C.uint64_t(f.SummaryUpdatedNS)
+					out.thermal.summary_cold_x = C.uint32_t(f.Summary.Coldest.X)
+					out.thermal.summary_cold_y = C.uint32_t(f.Summary.Coldest.Y)
+					out.thermal.summary_hot_x = C.uint32_t(f.Summary.Hottest.X)
+					out.thermal.summary_hot_y = C.uint32_t(f.Summary.Hottest.Y)
+					out.thermal.summary_cold_celsius = C.double(f.Summary.ColdCelsius)
+					out.thermal.summary_hot_celsius = C.double(f.Summary.HotCelsius)
+				}
 				if f.AllowScaleOverride {
 					out.thermal.allow_scale_override = 1
 				}

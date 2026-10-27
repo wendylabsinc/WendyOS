@@ -61,6 +61,10 @@ typedef struct {
  uint64_t timestamp_ns;
  int32_t has_temperature, allow_scale_override;
  double kelvin_per_count, kelvin_offset;
+ // Asynchronous camera summary; zero timestamp means unavailable.
+ uint64_t summary_updated_ns;
+ uint32_t summary_cold_x, summary_cold_y, summary_hot_x, summary_hot_y;
+ double summary_cold_celsius, summary_hot_celsius;
 } WDThermalFrame;
 typedef struct {
     WDThermalFrame thermal;

@@ -512,35 +512,55 @@ with a WendyOS device to use its cameras in campaigns and recordings.
 
 ### Thermal cameras
 
-The macOS and iOS camera walls recognize PureThermal cameras and request their
-raw Y16 stream. The heatmap, hottest point, and coldest point come from the same
-sensor frame, including in macOS full screen. Markers follow pixel centers and
-account for letterboxing. The display dims and hides measurements after three
-seconds without a new frame; stopping, retrying, or switching devices clears them.
+The macOS and iOS camera walls consume a common thermal measurement plane from
+the agent's raw capture stream. The agent identifies adapters using the camera's
+USB identity and supported modes. Generic USB camera names and Y16 alone do not
+establish thermal or temperature capabilities.
 
-Supported layouts are little-endian Y16 at 160×120 or 80×60 with an explicit row
-stride. Telemetry-row modes and other camera families, including TOPDON's stacked
-YUYV format, need their own decoder. Zero and 65535 samples are excluded and shown
-in gray. A uniform frame uses its first valid pixel for both extrema.
+| Adapter | Capture | Measurement plane | Temperature support |
+| --- | --- | --- | --- |
+| PureThermal | Y16, 160×120 or 80×60 | Entire picture | Counts by default; explicit operator TLinear scale remains available |
+| Original TOPDON TC001 | YUYV, 256×384 | Bottom 256×192 plane | Camera temperature codes in 1/64 kelvin |
+| HIK-based TOPDON TC001, USB 2bdf:0102 | YUYV, 256×392 | First 256×192 plane | Sensor pixels remain counts; separate camera summary provides minimum/maximum °C |
 
-Measurements default to sensor counts. Use the thermal scale control to select
-TLinear 0.01 K or 0.1 K only after confirming the camera's radiometric configuration.
-The conversion is `raw / 100 - 273.15` or `raw / 10 - 273.15` degrees Celsius.
-A Y16 format or PureThermal name does not prove that radiometry is enabled.
-The heatmap automatically scales to each frame's range, so colors are relative.
-See the manufacturer's [radiometry example](https://github.com/groupgets/purethermal1-uvc-capture/blob/master/python/uvc-radiometry.py)
-and [camera capability checks](https://github.com/groupgets/GetThermal/blob/master/src/leptonvariation.cpp).
+The HIK-based revision is the variant inspected on mesh-1. Its four rows after
+the sensor plane and four rows after the preview contain metadata, not image
+pixels. The encoded viewer receives only the preview at rows 196–387. Raw readers
+receive the entire original capture. The draft deliberately rejects other HIK
+layouts, including 512×484, for thermal decoding; default capture selects the
+supported 256×392 mode. An explicit request for another layout remains raw data.
 
-The decoder lives in `go/internal/agent/data/thermal`. Updated agents use it to
-attach `raw_extrema` to the exact raw `VideoFrame`; the native backend checks the
-summary against the received samples. Older agents that support Y16 streaming use
-the same decoder locally. This adds live measurement support; it does not add
-thermal samples to campaign recordings or infer Celsius from recorded H.264.
+`VideoDevice.thermal` advertises the adapter and preferred capture dimensions.
+`RawFormat.thermal_plane` describes the measurement dimensions, byte offset, row
+stride, invalid values, and optional linear conversion to kelvin. Version 1 uses
+unsigned little-endian 16-bit samples. Future adapters can emit this contract
+without adding vendor logic to the Apple apps. Unsupported versions, malformed
+planes, and invalid conversions fail explicitly. An absent conversion means
+counts. Palette colors never determine measurements.
 
-Repository evidence identifies enmax01's camera as a 160×120 PureThermal/Lepton.
-Live validation still requires access to that device and confirmation of its
-current radiometric mode. No temperature accuracy claim follows from synthetic
-frame tests.
+The heatmap uses the sensor frame. On HIK hardware, markers and Celsius labels
+use the camera's separate temperature summary and its reported positions. The
+summary updates at roughly 2.5 Hz, independently of video. The app waits for a
+changed summary after connection, preserves its age across repeated metadata,
+and hides temperatures after three seconds without a changed summary. It never
+applies the summary's conversion to sensor pixels. Markers account for
+letterboxing. Stopping or switching cameras clears readings; three seconds
+without a new frame dims the image and hides extrema. The bridge carries the
+conversion to Swift, and TC001 frames cannot inherit a PureThermal scale override.
+The existing raw stream and original payload remain available for recording.
+
+This draft does not enable the HIK vendor's separate calibrated USB stream mode,
+apply emissivity corrections, or provide calibrated temperatures at arbitrary
+pixels. Temperature accuracy has not
+been checked against a reference instrument. New agent capabilities are needed
+for generic-name TC001 discovery. Older agents retain the legacy PureThermal and
+explicit TC001-name fallback.
+
+Protocol evidence:
+- [Original TC001 capture implementation](https://github.com/leswright1977/PyThermalCamera/blob/main/src/tc001v4.2.py).
+- [HIK default sensor and preview layout, and distinct calibrated mode](https://github.com/Krastanov/ht-203u-linux/blob/main/THERMOMETRY.md).
+- [TC001N USB identity and advertised modes](https://sam.konubinix.eu/blog/posts/making_the_topdon_tc001n_thermal_camera_stream_on_android/).
+- [PureThermal radiometry example](https://github.com/groupgets/purethermal1-uvc-capture/blob/master/python/uvc-radiometry.py).
 
 ## Camera placement and field of view
 

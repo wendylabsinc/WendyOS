@@ -1243,10 +1243,11 @@ type VideoFrame struct {
 	TimestampNs uint64                 `protobuf:"varint,2,opt,name=timestamp_ns,json=timestampNs,proto3" json:"timestamp_ns,omitempty"`          // wall-clock timestamp in nanoseconds
 	Codec       VideoCodec             `protobuf:"varint,3,opt,name=codec,proto3,enum=wendy.agent.services.v1.VideoCodec" json:"codec,omitempty"` // codec used; default 0 = H264
 	RawFormat   *RawFormat             `protobuf:"bytes,4,opt,name=raw_format,json=rawFormat,proto3" json:"raw_format,omitempty"`                 // set on VIDEO_CODEC_RAW frames only
-	// Wendy Data's extrema for a supported picture-only Y16 frame. Values are
-	// sensor counts, NOT temperatures: the camera's radiometric mode and scale
-	// must be known before converting them. Absent on older agents or layouts
-	// the decoder cannot interpret. Computed from this exact raw payload.
+	// Extrema in thermal_plane sensor coordinates, computed from this exact
+	// payload. Values remain raw samples; use thermal_plane.temperature only
+	// when present to convert them. Absent for unidentified/unsupported planes.
+	// Older agents may send extrema for picture-only PureThermal Y16 frames
+	// without a plane description; their values have no implied temperature.
 	RawExtrema    *RawFrameExtrema `protobuf:"bytes,5,opt,name=raw_extrema,json=rawExtrema,proto3" json:"raw_extrema,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

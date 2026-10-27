@@ -589,7 +589,12 @@ func (b *Backend) StartCamera(camera uint32, streamID, sessionID uint64, expecte
 	request := &pb.StreamVideoRequest{DeviceId: camera, StableId: device.GetStableId(), Codec: pb.VideoCodec_VIDEO_CODEC_H264}
 	if isThermal {
 		request.Codec = pb.VideoCodec_VIDEO_CODEC_RAW
-		request.Width, request.Height = thermalProfile.CaptureWidth, thermalProfile.CaptureHeight
+		// Capable agents choose the adapter's mode as their default. Joining
+		// without explicit dimensions shares an existing viewer's capture.
+		// Older agents need the legacy adapter's explicit mode request.
+		if device.GetThermal() == nil {
+			request.Width, request.Height = thermalProfile.CaptureWidth, thermalProfile.CaptureHeight
+		}
 	}
 	stream, err := conn.VideoService.StreamVideo(streamCtx, request)
 	if err != nil {
@@ -605,6 +610,7 @@ func (b *Backend) StartCamera(camera uint32, streamID, sessionID uint64, expecte
 			stop()
 		})
 		defer firstFrame.Stop()
+		var summaryTracker thermalSummaryTracker
 		for {
 			v, err := stream.Recv()
 			if err != nil {
@@ -622,6 +628,7 @@ func (b *Backend) StartCamera(camera uint32, streamID, sessionID uint64, expecte
 					b.emitText(streamCtx, EventCameraError, session, streamID, err.Error())
 					return
 				}
+				summaryTracker.apply(measured, time.Now())
 				firstFrame.Reset(5 * time.Second)
 				b.emit(streamCtx, Event{Kind: EventThermal, Session: session, Stream: streamID, Bytes: measured.RGBA, Thermal: measured})
 				continue

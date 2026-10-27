@@ -224,10 +224,11 @@ message VideoFrame {
     uint64     timestamp_ns = 2; // wall-clock timestamp in nanoseconds
     VideoCodec codec        = 3; // codec used; default 0 = H264
     RawFormat  raw_format   = 4; // set on VIDEO_CODEC_RAW frames only
-    // Wendy Data's extrema for a supported picture-only Y16 frame. Values are
-    // sensor counts, NOT temperatures: the camera's radiometric mode and scale
-    // must be known before converting them. Absent on older agents or layouts
-    // the decoder cannot interpret. Computed from this exact raw payload.
+    // Extrema in thermal_plane sensor coordinates, computed from this exact
+    // payload. Values remain raw samples; use thermal_plane.temperature only
+    // when present to convert them. Absent for unidentified/unsupported planes.
+    // Older agents may send extrema for picture-only PureThermal Y16 frames
+    // without a plane description; their values have no implied temperature.
     RawFrameExtrema raw_extrema = 5;
 }
 

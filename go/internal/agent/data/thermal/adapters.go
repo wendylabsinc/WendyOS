@@ -79,14 +79,9 @@ func Plane(adapter string, layout *pb.RawFormat) (*pb.ThermalPlane, error) {
 	case TOPDONTC001HIK:
 		// HIK-based TC001 hardware uses sensor counts, not the older TC001's
 		// temperature codes. Four metadata rows follow the 256x192 plane.
-		// 512x484 packs the same 98304 sensor bytes into its first 96 rows.
 		// No temperature scale is established for this default capture mode.
 		if layout.GetFourcc() == "YUYV" && w == 256 && h == 392 {
 			p.Height = 192
-			return p, nil
-		}
-		if layout.GetFourcc() == "YUYV" && w == 512 && h == 484 && stride == 1024 {
-			p.Width, p.Height, p.RowStrideBytes = 256, 192, 512
 			return p, nil
 		}
 	}

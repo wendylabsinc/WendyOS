@@ -7,8 +7,10 @@ import (
 
 	"github.com/wendylabsinc/wendy/go/internal/shared/unitree"
 	pb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
+	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 )
 
@@ -35,11 +37,16 @@ type UnitreeRobotService struct {
 	mu      sync.Mutex
 	gen     map[string]uint64
 	timers  map[string]*time.Timer
+	logger  *zap.Logger
 }
 
-func NewUnitreeRobotService(pairing *UnitreeService) *UnitreeRobotService {
+func NewUnitreeRobotService(pairing *UnitreeService, loggers ...*zap.Logger) *UnitreeRobotService {
+	logger := zap.NewNop()
+	if len(loggers) > 0 && loggers[0] != nil {
+		logger = loggers[0]
+	}
 	return &UnitreeRobotService{pairing: pairing, lease: teleopMoveLease,
-		gen: make(map[string]uint64), timers: make(map[string]*time.Timer)}
+		gen: make(map[string]uint64), timers: make(map[string]*time.Timer), logger: logger}
 }
 
 func (s *UnitreeRobotService) Command(ctx context.Context, req *pb.UnitreeCommandRequest) (*pb.UnitreeCommandResponse, error) {
@@ -56,6 +63,17 @@ func (s *UnitreeRobotService) Command(ctx context.Context, req *pb.UnitreeComman
 	if err != nil {
 		return nil, err
 	}
+	started := time.Now()
+	transport := "unknown"
+	if p, ok := peer.FromContext(ctx); ok && p.Addr != nil {
+		transport = p.Addr.Network()
+	}
+	defer func() {
+		s.logger.Debug("Go2 command", zap.Time("started", started),
+			zap.String("command", req.GetCommand().String()), zap.String("transport", transport),
+			zap.Float64("forward", req.GetForward()), zap.Float64("lateral", req.GetLateral()),
+			zap.Float64("yaw", req.GetYaw()), zap.Duration("duration", time.Since(started)), zap.Error(err))
+	}()
 
 	// Cancel any pending move expiry first, so it cannot fire after this command.
 	gen := s.cancelLease(req.GetSerial())
@@ -216,6 +234,7 @@ func (s *UnitreeRobotService) armLease(serial string, gen uint64, link unitreeMo
 		s.mu.Unlock()
 		if current {
 			stopRobot(link)
+			s.logger.Debug("Go2 move lease expired", zap.Uint64("generation", gen))
 		}
 	})
 }

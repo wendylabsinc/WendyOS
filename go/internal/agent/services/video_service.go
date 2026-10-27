@@ -528,6 +528,8 @@ type deviceHub struct {
 	rawState  rawTapState
 	rawReason func() string // memoised; see rawNotOffered
 	rawFormat *agentpb.RawFormat
+	// Set before capture starts; immutable for this producer's lifetime.
+	thermalProfile *agentpb.ThermalCamera
 }
 
 // maxSubscribersPerHub caps the number of concurrent gRPC streams sharing one
@@ -820,6 +822,7 @@ func (h *deviceHub) wantRaw() bool {
 
 // publishRaw hands one raw capture frame to the hub's raw subscribers.
 func (h *deviceHub) publishRaw(data []byte, tsNs uint64, format *agentpb.RawFormat) bool {
+	format = describeThermalCapture(h.thermalProfile, format)
 	return h.broadcast(&videoFrame{data: data, tsNs: tsNs, codec: agentpb.VideoCodec_VIDEO_CODEC_RAW, rawFmt: format})
 }
 
@@ -1299,6 +1302,7 @@ func (s *VideoService) listCameras(ctx context.Context) ([]*agentpb.VideoDevice,
 		// the numeric id still addresses it, it is just not stable across a
 		// reboot.
 		dev.StableId = stable[path].stableID()
+		dev.Thermal = probeThermalCamera(path, name)
 		if identity := sensorIdentities[uint32(id)]; identity != "" {
 			dev.StableId = identity
 		}
@@ -2096,6 +2100,8 @@ func (s *VideoService) runProducer(ctx context.Context, h *deviceHub, path strin
 // captureNode captures a camera by opening its /dev/video node.
 func (s *VideoService) captureNode(ctx context.Context, broadcast func([]byte, frameTimestamp, agentpb.VideoCodec) bool, path string, req *agentpb.StreamVideoRequest, h *deviceHub) error {
 	transport, _ := s.classifyTransport(filepath.Base(path))
+	name, _ := s.readDeviceName(filepath.Base(path))
+	h.thermalProfile = probeThermalCamera(path, name)
 	libcameraID := s.lookupLibcameraID(ctx, transport)
 
 	// Re-assert any persisted exposure/gain before the pipeline opens the
@@ -3564,6 +3570,10 @@ func planGStreamerPipeline(gstPath, devicePath string, req *agentpb.StreamVideoR
 	// buildSourceElement, so it is not subject to the devicePath/encoder check above.
 	src := buildSourceElement(devicePath, transport, libcameraID, pw, available)
 	usingPipeWire := strings.HasPrefix(src, "pipewiresrc")
+	var thermalCapture *agentpb.ThermalCamera
+	if strings.HasPrefix(src, "v4l2src") {
+		thermalCapture = thermalCaptureProfile(devicePath)
+	}
 	// GOP is in frames. On the PipeWire path videorate only caps the rate, so a
 	// graph running slower than requested spaces keyframes further apart in time.
 	gop := keyframeIntervalFrames(req.GetFramerate())
@@ -3615,7 +3625,9 @@ func planGStreamerPipeline(gstPath, devicePath string, req *agentpb.StreamVideoR
 				// instead of being refused because a viewer already pinned the plain
 				// mode. Only for a true default: a caller naming a size gets that size.
 				if req.GetWidth() == 0 && req.GetHeight() == 0 && available["videocrop"] {
-					if sw, sh := stackedModeAbove(devicePath, capW, capH); sh > 0 {
+					if thermalCapture != nil {
+						capW, capH = thermalCapture.CaptureWidth, thermalCapture.CaptureHeight
+					} else if sw, sh := stackedModeAbove(devicePath, capW, capH); sh > 0 {
 						capW, capH = sw, sh
 					}
 				}
@@ -3706,7 +3718,9 @@ func planGStreamerPipeline(gstPath, devicePath string, req *agentpb.StreamVideoR
 	// render as a stripe of noise). Encoded subscribers get the picture rows; the
 	// raw tap, branched off above, keeps the whole frame for analytic readers.
 	if rawCapture && capW > 0 && capH > 0 && available["videocrop"] {
-		if rows := stackedMetadataRows(devicePath, capW, capH); rows > 0 {
+		if top, bottom, ok := thermalPreviewCrop(thermalCapture, capW, capH); ok {
+			stages = append(stages, fmt.Sprintf("videocrop top=%d bottom=%d", top, bottom))
+		} else if rows := stackedMetadataRows(devicePath, capW, capH); rows > 0 {
 			edge := "bottom"
 			if thermalMetadataRowsOnTop {
 				edge = "top"

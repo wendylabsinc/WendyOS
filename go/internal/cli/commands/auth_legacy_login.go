@@ -1,9 +1,9 @@
 package commands
 
-// The legacy Wendy Cloud dashboard sign-in as a background session. It writes
-// nothing to stdout, so `wendy mcp serve` — whose stdout is the MCP protocol
-// stream — can run it for the auth_login tool. performLogin wraps it for a
-// person at a terminal and prints each step.
+// The legacy Wendy Cloud dashboard sign-in (`wendy auth login --legacy`) as a
+// background session that writes nothing to stdout. performLogin wraps it for
+// a person at a terminal and prints each step. The MCP auth_login tool runs
+// the wendy-auth sign-in instead (beginOIDCLogin).
 
 import (
 	"context"
