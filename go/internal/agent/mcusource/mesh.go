@@ -16,6 +16,16 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/models"
 )
 
+const (
+	// meshProbeWorkers bounds the probes one scan runs at a time.
+	meshProbeWorkers = 4
+	// meshLANWindow bounds the LAN lookup once a live route reaches the
+	// source. A board on this network answers mDNS well within it; a board
+	// only on Wendy Net would otherwise hold every reconnect for the whole
+	// resolve budget before its routed address is tried.
+	meshLANWindow = time.Second
+)
+
 // LiteMeshSources discovers WendyCom sensors using signed device presence and
 // live routes. The directory has no sensor capability field, so port 5054 is
 // only a candidate hint: discovery authenticates and fetches the sensor manifest
@@ -25,13 +35,22 @@ type LiteMeshSources struct {
 	transportFor TransportFactory
 	browseLAN    func(context.Context, time.Duration, func(models.LANDevice) bool) ([]models.LANDevice, error)
 	resolveLAN   func(context.Context, SensorPairing) ([]string, bool)
-	probes       chan struct{}
+
+	mu       sync.Mutex
+	inflight map[string]*meshProbe // by source principal
+}
+
+// meshProbe is one board's authentication probe, shared by concurrent scans.
+// ok is valid once done is closed.
+type meshProbe struct {
+	done chan struct{}
+	ok   bool
 }
 
 func NewLiteMeshSources(snapshot func() localmesh.NodeSnapshot, transportFor TransportFactory) *LiteMeshSources {
 	return &LiteMeshSources{snapshot: snapshot, transportFor: transportFor,
 		browseLAN: discovery.DiscoverSensorSources, resolveLAN: resolvePairingLANAddrs,
-		probes: make(chan struct{}, 4)}
+		inflight: make(map[string]*meshProbe)}
 }
 
 func (m *LiteMeshSources) candidates() []models.LANDevice {
@@ -70,16 +89,27 @@ func meshSourceAddress(d models.LANDevice) string {
 
 // Resolve keeps LAN preference, then adds a fresh routed endpoint. A failed LAN
 // TLS handshake falls through to the mesh in the supervisor's address loop.
+// With a live route the LAN lookup gets only meshLANWindow, since a source
+// missing from this network never answers it.
 func (m *LiteMeshSources) Resolve(ctx context.Context, p SensorPairing) ([]string, bool) {
-	addresses, _ := m.resolveLAN(ctx, p)
+	var routed []string
 	if p.Transport == "wendycom" && p.SourcePrincipalURI != "" {
 		for _, d := range m.candidates() {
 			if d.PrincipalURI == p.SourcePrincipalURI {
-				addr := meshSourceAddress(d)
-				if !slices.Contains(addresses, addr) {
-					addresses = append(addresses, addr)
-				}
+				routed = append(routed, meshSourceAddress(d))
 			}
+		}
+	}
+	lanCtx := ctx
+	if len(routed) != 0 {
+		var cancel context.CancelFunc
+		lanCtx, cancel = context.WithTimeout(ctx, meshLANWindow)
+		defer cancel()
+	}
+	addresses, _ := m.resolveLAN(lanCtx, p)
+	for _, addr := range routed {
+		if !slices.Contains(addresses, addr) {
+			addresses = append(addresses, addr)
 		}
 	}
 	return addresses, len(addresses) > 0
@@ -101,14 +131,22 @@ func (m *LiteMeshSources) Browse(ctx context.Context, timeout time.Duration, exc
 		defer wg.Done()
 		lan, lanErr = m.browseLAN(ctx, timeout, exclude)
 	}()
-	// Workers are bounded even when callers scan concurrently. Each probe closes
-	// its connection without subscribing or disturbing an existing pairing.
+	// Each scan has its own workers, so one scan's stalled probes cannot hold
+	// back another's. A board another scan is already probing is not dialed
+	// twice: this scan takes that probe's result, which ends with the scan that
+	// started it. Each probe closes its connection without subscribing or
+	// disturbing an existing pairing.
 	candidates := m.candidates()
 	// A few slow/offline candidates must not consume every refresh's budget
 	// ahead of the same later devices in the signed directory.
 	rand.Shuffle(len(candidates), func(i, j int) { candidates[i], candidates[j] = candidates[j], candidates[i] })
+	type sharedProbe struct {
+		device models.LANDevice
+		probe  *meshProbe
+	}
+	var shared []sharedProbe
 	var mu sync.Mutex
-	for range min(4, len(candidates)) {
+	for range min(meshProbeWorkers, len(candidates)) {
 		wg.Go(func() {
 			for {
 				if probeCtx.Err() != nil {
@@ -125,15 +163,16 @@ func (m *LiteMeshSources) Browse(ctx context.Context, timeout time.Duration, exc
 				if exclude != nil && exclude(d) {
 					continue
 				}
-				select {
-				case m.probes <- struct{}{}:
-				case <-probeCtx.Done():
-					return
+				probe, owner := m.claimProbe(d.PrincipalURI)
+				if !owner {
+					mu.Lock()
+					shared = append(shared, sharedProbe{d, probe})
+					mu.Unlock()
+					continue
 				}
 				ok := m.probe(probeCtx, d)
-				<-m.probes
+				m.finishProbe(d.PrincipalURI, probe, ok)
 				if ok {
-					d.Sensorlink, d.Caps = true, []string{"sensors"}
 					mu.Lock()
 					mesh = append(mesh, d)
 					mu.Unlock()
@@ -142,9 +181,19 @@ func (m *LiteMeshSources) Browse(ctx context.Context, timeout time.Duration, exc
 		})
 	}
 	wg.Wait()
+	for _, s := range shared {
+		if s.probe.wait(probeCtx) {
+			mesh = append(mesh, s.device)
+		}
+	}
 	// Prefer the authenticated mesh entry when LAN and mesh name the same
-	// principal. An unsigned LAN hint must not shadow a verified source.
+	// principal. An unsigned LAN hint must not shadow a verified source, but a
+	// board on this network keeps its LAN addresses.
 	for _, d := range mesh {
+		d.Sensorlink, d.Caps = true, []string{"sensors"}
+		if merged := withLANAddresses(d, lan); exclude == nil || !exclude(merged) {
+			d = merged
+		}
 		lan = slices.DeleteFunc(lan, func(l models.LANDevice) bool { return l.PrincipalURI == d.PrincipalURI })
 		lan = append(lan, d)
 	}
@@ -155,6 +204,69 @@ func (m *LiteMeshSources) Browse(ctx context.Context, timeout time.Duration, exc
 		return lan, nil
 	}
 	return nil, lanErr
+}
+
+// withLANAddresses keeps verified source d's signed identity and lists the
+// addresses of LAN sightings claiming its principal first, matching the order
+// Resolve dials. Addresses stay reachability hints; pairing pins the principal.
+func withLANAddresses(d models.LANDevice, lan []models.LANDevice) models.LANDevice {
+	var addresses []string
+	for _, l := range lan {
+		if l.PrincipalURI != d.PrincipalURI || l.IPAddress == "" {
+			continue
+		}
+		if d.Hostname == "" {
+			d.Hostname = l.Hostname
+		}
+		for _, addr := range append([]string{l.IPAddress}, l.Addresses...) {
+			if addr != "" && !slices.Contains(addresses, addr) {
+				addresses = append(addresses, addr)
+			}
+		}
+	}
+	if len(addresses) == 0 {
+		return d
+	}
+	d.Addresses = append(addresses, d.IPAddress)
+	d.IPAddress = addresses[0]
+	return d
+}
+
+// claimProbe returns the probe already running for principal, or registers a
+// new one that the caller runs and then passes to finishProbe.
+func (m *LiteMeshSources) claimProbe(principal string) (*meshProbe, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if p := m.inflight[principal]; p != nil {
+		return p, false
+	}
+	p := &meshProbe{done: make(chan struct{})}
+	m.inflight[principal] = p
+	return p, true
+}
+
+func (m *LiteMeshSources) finishProbe(principal string, p *meshProbe, ok bool) {
+	m.mu.Lock()
+	delete(m.inflight, principal)
+	m.mu.Unlock()
+	p.ok = ok
+	close(p.done)
+}
+
+// wait reports the probe's result, or false if ctx ends first. A result that
+// is already in counts even when ctx has ended too.
+func (p *meshProbe) wait(ctx context.Context) bool {
+	select {
+	case <-p.done:
+		return p.ok
+	default:
+	}
+	select {
+	case <-p.done:
+		return p.ok
+	case <-ctx.Done():
+		return false
+	}
 }
 
 func (m *LiteMeshSources) probe(ctx context.Context, d models.LANDevice) bool {

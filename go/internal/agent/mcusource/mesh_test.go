@@ -109,6 +109,30 @@ func TestMeshSensorResolutionLANPreferenceAndRecovery(t *testing.T) {
 	}
 }
 
+func TestMeshSensorResolutionBoundsLANWaitWhenRouted(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		s, p := sensorMeshFixture(t)
+		m := NewLiteMeshSources(func() localmesh.NodeSnapshot { return s }, nil)
+		// The source is not on this network, so the LAN browse never answers.
+		m.resolveLAN = func(ctx context.Context, _ SensorPairing) ([]string, bool) { <-ctx.Done(); return nil, false }
+		resolve := func() ([]string, bool, time.Duration) {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			start := time.Now()
+			got, ok := m.Resolve(ctx, p)
+			return got, ok, time.Since(start)
+		}
+		if got, ok, waited := resolve(); !ok || len(got) != 1 || waited != meshLANWindow {
+			t.Fatalf("routed source got %v after %v", got, waited)
+		}
+		// Without a route, the LAN browse keeps the caller's whole budget.
+		s.Routes = nil
+		if got, ok, waited := resolve(); ok || waited != 5*time.Second {
+			t.Fatalf("unrouted source got %v after %v", got, waited)
+		}
+	})
+}
+
 type meshProbeTransport struct {
 	fetch  func(context.Context) (*sensorlinkpb.SensorManifest, error)
 	closed atomic.Int32
@@ -133,15 +157,26 @@ func TestMeshSensorBrowseAuthenticatesAndDeduplicates(t *testing.T) {
 		}
 		return tr, nil
 	})
+	const meshIP = "fd45:b891:567f:4333:8333:3333:3333:3333"
 	m.browseLAN = func(context.Context, time.Duration, func(models.LANDevice) bool) ([]models.LANDevice, error) {
-		return []models.LANDevice{{PrincipalURI: p.SourcePrincipalURI, DisplayName: "unsigned hint"}, {ID: "legacy", Sensorlink: true}}, nil
+		return []models.LANDevice{{PrincipalURI: p.SourcePrincipalURI, DisplayName: "unsigned hint", Hostname: "lite.local",
+			IPAddress: "192.0.2.7", Addresses: []string{"192.0.2.7"}}, {ID: "legacy", Sensorlink: true}}, nil
 	}
 	got, err := m.Browse(context.Background(), time.Second, nil)
 	if err != nil || len(got) != 2 || got[0].ID != "legacy" || got[1].DisplayName != "remote-lite" || !got[1].Sensorlink || !got[1].IsMTLS || !got[1].WendyLite {
 		t.Fatalf("got %+v, %v", got, err)
 	}
+	// A board also on this network keeps its LAN address, which Resolve dials first.
+	if got[1].IPAddress != "192.0.2.7" || got[1].Hostname != "lite.local" || !slices.Equal(got[1].Addresses, []string{"192.0.2.7", meshIP}) {
+		t.Fatalf("LAN address not kept: %+v", got[1])
+	}
 	if tr.closed.Load() != 1 {
 		t.Fatal("probe connection leaked")
+	}
+	// A LAN address that names this device must not hide the verified source.
+	got, err = m.Browse(context.Background(), time.Second, func(d models.LANDevice) bool { return d.IPAddress == "192.0.2.7" })
+	if err != nil || len(got) != 2 || got[1].IPAddress != meshIP || len(got[1].Addresses) != 0 {
+		t.Fatalf("excluded LAN hint hid mesh source: %+v, %v", got, err)
 	}
 	m.browseLAN = func(context.Context, time.Duration, func(models.LANDevice) bool) ([]models.LANDevice, error) {
 		return nil, errors.New("mdns unavailable")
@@ -166,52 +201,185 @@ func TestMeshSensorBrowseAuthenticatesAndDeduplicates(t *testing.T) {
 	}
 }
 
-func TestMeshSensorProbesBoundedAcrossConcurrentScans(t *testing.T) {
+// addMeshSensorPeers adds n more candidates to s, each with its own
+// authenticated UUID and route, and returns their probe addresses.
+func addMeshSensorPeers(s *localmesh.NodeSnapshot, n int) []string {
+	var addrs []string
+	for i := 0; i < n; i++ {
+		d := s.Devices[0]
+		d.Device[15] = byte(i)
+		peer := meshid.NewDevice(s.Self.Tenant(), d.Device)
+		origin := *d.Route
+		origin.Prefix = netip.PrefixFrom(peer.MeshAddress(), 128)
+		d.Route = &origin
+		s.Devices = append(s.Devices, d)
+		s.RouteAuthorizations[origin] = true
+		r := s.Routes[0]
+		r.Prefix = origin.Prefix
+		s.Routes = append(s.Routes, r)
+		addrs = append(addrs, "["+peer.MeshAddress().String()+"]:5054")
+	}
+	return addrs
+}
+
+func noLANSensorSources(context.Context, time.Duration, func(models.LANDevice) bool) ([]models.LANDevice, error) {
+	return nil, nil
+}
+
+var cameraManifest = &sensorlinkpb.SensorManifest{Sensors: []*sensorlinkpb.SensorDescriptor{{Name: "camera"}}}
+
+func TestMeshSensorProbesBoundedPerScanAndShared(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		s, _ := sensorMeshFixture(t)
-		// Each entry has its own authenticated UUID and route.
-		for i := 0; i < 7; i++ {
-			d := s.Devices[0]
-			d.Device[15] = byte(i)
-			peer := meshid.NewDevice(s.Self.Tenant(), d.Device)
-			origin := *d.Route
-			origin.Prefix = netip.PrefixFrom(peer.MeshAddress(), 128)
-			d.Route = &origin
-			s.Devices = append(s.Devices, d)
-			s.RouteAuthorizations[origin] = true
-			r := s.Routes[0]
-			r.Prefix = origin.Prefix
-			s.Routes = append(s.Routes, r)
-		}
-		var active, opened, closed atomic.Int32
-		m := NewLiteMeshSources(func() localmesh.NodeSnapshot { return s }, func(SensorPairing, string) (SensorTransport, error) {
+		addMeshSensorPeers(&s, 7)
+		var opened, closed atomic.Int32
+		var mu sync.Mutex
+		active := make(map[string]int)
+		m := NewLiteMeshSources(func() localmesh.NodeSnapshot { return s }, func(_ SensorPairing, addr string) (SensorTransport, error) {
 			opened.Add(1)
 			return &meshProbeTransport{fetch: func(ctx context.Context) (*sensorlinkpb.SensorManifest, error) {
-				if active.Add(1) > 4 {
-					t.Error("too many concurrent probes")
+				mu.Lock()
+				if active[addr]++; active[addr] > 1 {
+					t.Errorf("%s probed twice at once", addr)
 				}
-				defer active.Add(-1)
+				mu.Unlock()
+				defer func() { mu.Lock(); active[addr]--; mu.Unlock() }()
 				defer closed.Add(1)
 				<-ctx.Done()
 				return nil, ctx.Err()
 			}}, nil
 		})
-		m.browseLAN = func(context.Context, time.Duration, func(models.LANDevice) bool) ([]models.LANDevice, error) {
-			return nil, nil
-		}
+		m.browseLAN = noLANSensorSources
 		ctx, cancel := context.WithCancel(context.Background())
 		var wg sync.WaitGroup
 		wg.Go(func() { _, _ = m.Browse(ctx, time.Minute, nil) })
+		synctest.Wait()
+		if opened.Load() != meshProbeWorkers {
+			t.Fatalf("one scan opened %d probes", opened.Load())
+		}
+		// The second scan shares the four boards already being probed and
+		// probes the other four itself.
 		wg.Go(func() { _, _ = m.Browse(ctx, time.Minute, nil) })
 		synctest.Wait()
-		if active.Load() != 4 {
-			t.Fatalf("active %d", active.Load())
+		if opened.Load() != 2*meshProbeWorkers {
+			t.Fatalf("two scans opened %d probes", opened.Load())
 		}
 		cancel()
 		wg.Wait()
-		if active.Load() != 0 || opened.Load() != closed.Load() {
+		if opened.Load() != closed.Load() {
 			t.Fatal("probe cancellation leaked work")
 		}
+	})
+}
+
+func TestMeshSensorStalledScanDoesNotStarveAnother(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		healthy, _ := sensorMeshFixture(t)
+		// Four slow boards; the fixture's own board is only in the healthy set.
+		stalled, _ := sensorMeshFixture(t)
+		slow := addMeshSensorPeers(&stalled, meshProbeWorkers)
+		stalled.Devices, stalled.Routes = stalled.Devices[1:], stalled.Routes[1:]
+		var scans atomic.Int32
+		m := NewLiteMeshSources(func() localmesh.NodeSnapshot {
+			if scans.Add(1) == 1 {
+				return stalled
+			}
+			return healthy
+		}, func(_ SensorPairing, addr string) (SensorTransport, error) {
+			return &meshProbeTransport{fetch: func(ctx context.Context) (*sensorlinkpb.SensorManifest, error) {
+				if slices.Contains(slow, addr) {
+					<-ctx.Done() // a handshake still in progress over a slow route
+					return nil, ctx.Err()
+				}
+				return cameraManifest, nil
+			}}, nil
+		})
+		m.browseLAN = noLANSensorSources
+		var wg sync.WaitGroup
+		wg.Go(func() { _, _ = m.Browse(context.Background(), 10*time.Second, nil) })
+		synctest.Wait()
+		start := time.Now()
+		got, err := m.Browse(context.Background(), 5*time.Second, nil)
+		if err != nil || len(got) != 1 || time.Since(start) != 0 {
+			t.Fatalf("concurrent scan got %+v, %v after %v", got, err, time.Since(start))
+		}
+		wg.Wait()
+	})
+}
+
+func TestMeshSensorConcurrentScansShareProbe(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		s, _ := sensorMeshFixture(t)
+		release := make(chan struct{})
+		var opened atomic.Int32
+		m := NewLiteMeshSources(func() localmesh.NodeSnapshot { return s }, func(SensorPairing, string) (SensorTransport, error) {
+			opened.Add(1)
+			return &meshProbeTransport{fetch: func(context.Context) (*sensorlinkpb.SensorManifest, error) {
+				<-release
+				return cameraManifest, nil
+			}}, nil
+		})
+		m.browseLAN = noLANSensorSources
+		found := make(chan int, 2)
+		var wg sync.WaitGroup
+		for range 2 {
+			wg.Go(func() {
+				got, _ := m.Browse(context.Background(), time.Minute, nil)
+				found <- len(got)
+			})
+			synctest.Wait()
+		}
+		close(release)
+		wg.Wait()
+		close(found)
+		for n := range found {
+			if n != 1 {
+				t.Fatalf("scan found %d sources", n)
+			}
+		}
+		if opened.Load() != 1 {
+			t.Fatalf("board probed %d times", opened.Load())
+		}
+	})
+}
+
+func TestMeshSensorSharedResultSurvivesOwnStalledProbe(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		healthy, p := sensorMeshFixture(t)
+		both, _ := sensorMeshFixture(t)
+		slow := addMeshSensorPeers(&both, 1)
+		release := make(chan struct{})
+		var scans atomic.Int32
+		m := NewLiteMeshSources(func() localmesh.NodeSnapshot {
+			if scans.Add(1) == 1 {
+				return healthy
+			}
+			return both
+		}, func(_ SensorPairing, addr string) (SensorTransport, error) {
+			return &meshProbeTransport{fetch: func(ctx context.Context) (*sensorlinkpb.SensorManifest, error) {
+				if slices.Contains(slow, addr) {
+					<-ctx.Done()
+					return nil, ctx.Err()
+				}
+				<-release
+				return cameraManifest, nil
+			}}, nil
+		})
+		m.browseLAN = noLANSensorSources
+		var wg sync.WaitGroup
+		wg.Go(func() { _, _ = m.Browse(context.Background(), time.Minute, nil) })
+		synctest.Wait()
+		// The second scan shares the healthy board's probe and stalls on its own
+		// slow board until its deadline, after the shared result is in.
+		wg.Go(func() {
+			got, _ := m.Browse(context.Background(), 5*time.Second, nil)
+			if len(got) != 1 || got[0].PrincipalURI != p.SourcePrincipalURI {
+				t.Errorf("second scan got %+v", got)
+			}
+		})
+		synctest.Wait()
+		close(release)
+		wg.Wait()
 	})
 }
 
