@@ -77,6 +77,9 @@ type DataService struct {
 	// campaign-less episode started through the Start RPC.
 	activeCaptures map[string][]runningDataCapture
 	autoStopCancel map[string]context.CancelFunc
+	// extended holds the running recordings of campaigns with capture.extend,
+	// by campaign name (data_extend.go).
+	extended map[string]*extendedRecording
 	// keyLocks holds one mutex per campaign key, created on demand. Keys are
 	// campaign names plus data.AdHocEpisodeKey, so the map is bounded by the
 	// number of deployed campaigns.
@@ -395,23 +398,17 @@ func (s *DataService) stopCaptureIfCurrent(ctx context.Context, key, episodeID s
 // stopCaptureLocked finalizes the episode for key. The caller holds that key's
 // mutex; captureMu is taken only around the map reads and writes.
 func (s *DataService) stopCaptureLocked(ctx context.Context, key string) (*agentpbv2.DataEpisode, error) {
+	// capture.extend: stopping a part stops the whole recording, and a stop
+	// nobody else gave a reason for is an operator's (data_extend.go).
+	s.endExtendedPart(key)
+	s.manager.SetEndReason(key, data.EndReasonManualStop)
 	s.captureMu.Lock()
 	if cancel := s.autoStopCancel[key]; cancel != nil {
 		cancel()
 		delete(s.autoStopCancel, key)
 	}
-	captures := s.activeCaptures[key]
-	delete(s.activeCaptures, key)
 	s.captureMu.Unlock()
-	var results []data.CaptureResult
-	var captureErrs []error
-	for i := len(captures) - 1; i >= 0; i-- {
-		r, err := captures[i].Stop(ctx)
-		results = append(results, r...)
-		if err != nil {
-			captureErrs = append(captureErrs, err)
-		}
-	}
+	results, captureErrs := s.stopAdaptersLocked(ctx, key)
 	// The episode's camera pre-roll ring (if any) was consumed at trigger. Re-arm
 	// the campaign the moment its adapters have released the camera, BEFORE the
 	// seal and its post-seal drain: re-arming afterwards left the ring empty for
@@ -444,6 +441,25 @@ func (s *DataService) stopCaptureLocked(ctx context.Context, key string) (*agent
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 	return manifestEpisode(m), nil
+}
+
+// stopAdaptersLocked stops the capture adapters of the episode keyed by key,
+// last started first. The caller holds that key's mutex.
+func (s *DataService) stopAdaptersLocked(ctx context.Context, key string) ([]data.CaptureResult, []error) {
+	s.captureMu.Lock()
+	captures := s.activeCaptures[key]
+	delete(s.activeCaptures, key)
+	s.captureMu.Unlock()
+	var results []data.CaptureResult
+	var captureErrs []error
+	for i := len(captures) - 1; i >= 0; i-- {
+		r, err := captures[i].Stop(ctx)
+		results = append(results, r...)
+		if err != nil {
+			captureErrs = append(captureErrs, err)
+		}
+	}
+	return results, captureErrs
 }
 
 func campaignMessage(campaign data.Campaign) (*agentpbv2.DataCampaign, error) {
@@ -530,14 +546,16 @@ func (s *DataService) CampaignTrigger(ctx context.Context, req *agentpbv2.DataCa
 	return s.triggerCampaign(ctx, campaign, reason, "manual")
 }
 
-func (s *DataService) triggerCampaign(ctx context.Context, campaign data.Campaign, reason, expression string) (*agentpbv2.DataEpisode, error) {
+// campaignStartOptions resolves the campaign's sources and builds the options
+// for one of its episodes.
+func (s *DataService) campaignStartOptions(campaign data.Campaign, reason, expression string) (data.StartOptions, error) {
 	// Degrading, not aborting: a ROS 2 topic that nobody publishes at the moment
 	// of the trigger costs the episode that source, not the camera, the telemetry
 	// and the application records of the event that fired it. The unresolved
 	// selectors are carried into the manifest as absent sources.
 	sources, topics, captures, unresolved, err := s.manager.ResolveCampaignSourcesDegrading(campaign)
 	if err != nil {
-		return nil, status.Error(codes.FailedPrecondition, err.Error())
+		return data.StartOptions{}, status.Error(codes.FailedPrecondition, err.Error())
 	}
 	for _, source := range unresolved {
 		s.manager.Warnf("campaign %q: source %s did not resolve at trigger; the episode records its other sources and marks this one absent in the manifest: %s", campaign.Name, source.ID, source.Detail)
@@ -571,7 +589,7 @@ func (s *DataService) triggerCampaign(ctx context.Context, campaign data.Campaig
 	if campaign.Inference != nil {
 		models[campaign.Inference.Model] = campaign.Inference.Revision
 	}
-	episode, err := s.startCapture(ctx, data.StartOptions{
+	return data.StartOptions{
 		Name:                 campaign.Name,
 		Sources:              sources,
 		SourceCaptures:       captures,
@@ -586,7 +604,18 @@ func (s *DataService) triggerCampaign(ctx context.Context, campaign data.Campaig
 		Privacy:              privacy,
 		Upload:               data.WorkflowState{State: "pending", Destination: campaign.Upload.Destination},
 		Labeling:             data.WorkflowState{State: "unlabeled", Destination: campaign.Export.Annotation},
-	})
+	}, nil
+}
+
+func (s *DataService) triggerCampaign(ctx context.Context, campaign data.Campaign, reason, expression string) (*agentpbv2.DataEpisode, error) {
+	if campaign.Capture.Extend {
+		return s.triggerExtended(ctx, campaign, reason, expression)
+	}
+	opts, err := s.campaignStartOptions(campaign, reason, expression)
+	if err != nil {
+		return nil, err
+	}
+	episode, err := s.startCapture(ctx, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -638,11 +667,16 @@ func (s *DataService) observeApplicationRecord(_ string, record data.Application
 		if s.inference != nil {
 			s.inference.notifyEvent(campaign, record)
 		}
-		if activeKeys[campaign.Name] {
+		if activeKeys[campaign.Name] && !campaign.Capture.Extend {
 			continue
 		}
 		reason, expression, matched := campaign.Match(record)
 		if !matched {
+			continue
+		}
+		// capture.extend: a match while the campaign records keeps the
+		// recording going rather than being dropped (data_extend.go).
+		if activeKeys[campaign.Name] && s.extendCampaign(campaign.Name) {
 			continue
 		}
 		campaign := campaign

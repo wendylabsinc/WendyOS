@@ -335,6 +335,11 @@ func (j *campaignInferenceJob) run(ctx context.Context) error {
 				j.owner.service.manager.Warnf("recording campaign prediction: %v", err)
 			}
 			state := presence[result.SourceID]
+			// capture.extend: a detection in view, or one that has not cleared
+			// yet, keeps the campaign's recording going (data_extend.go).
+			if state != nil && (len(detections) > 0 || state.present) {
+				j.owner.service.extendCampaign(j.campaign.Name)
+			}
 			if state == nil || !state.observe(len(detections) > 0, time.Now(), j.campaign.Inference) {
 				continue
 			}

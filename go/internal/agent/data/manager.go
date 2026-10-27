@@ -548,6 +548,7 @@ func (m *Manager) Start(opts StartOptions) (Manifest, error) {
 		requestedTopics = []string{}
 	}
 	manifest := Manifest{Version: ManifestVersion, ID: id, Name: opts.Name, State: "recording", Device: deviceIdentity(currentBootID), CanonicalClock: "CLOCK_BOOTTIME", BootID: currentBootID, RequestBootNanos: origin, StartedUnixNanos: time.Now().UnixNano(), Trigger: trigger, CollectorVersion: collectorVersion, ModelVersions: modelVersions, RequestedTopics: requestedTopics, UTCObservations: []UTCObservation{obs}, PreRollAccounting: "exact", SystemClockStatus: "system_reported", Calibrations: []Calibration{}, Privacy: privacy, Upload: upload, Labeling: labeling, Files: []File{}, ModelIO: newModelIO()}
+	manifest.Extension = opts.Extension
 	if consensus != nil {
 		recordConsensus(dir, &manifest, *consensus)
 		manifest.SystemClockStatus = clockAgreement(obs, *consensus)
@@ -1445,17 +1446,26 @@ func (m *Manager) beginSeal(key string, drain bool) (*activeEpisode, error) {
 	if !drain || !a.wantsDrain() {
 		return a, nil
 	}
-	m.mu.Lock()
-	if m.active[key] != a {
-		m.mu.Unlock()
-		return nil, ErrNoActiveEpisode
+	if err := m.releaseKey(a); err != nil {
+		return nil, err
 	}
-	delete(m.active, key)
-	a.draining = true
-	m.sealing = append(m.sealing, a)
-	m.mu.Unlock()
 	time.Sleep(a.drain)
 	return a, nil
+}
+
+// releaseKey moves an episode whose capture has stopped from m.active to
+// m.sealing, which frees its campaign key for the next episode while it still
+// accepts application records.
+func (m *Manager) releaseKey(a *activeEpisode) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.active[a.key] != a {
+		return ErrNoActiveEpisode
+	}
+	delete(m.active, a.key)
+	a.draining = true
+	m.sealing = append(m.sealing, a)
+	return nil
 }
 
 // stillOpenLocked reports whether an episode returned by beginSeal is still the

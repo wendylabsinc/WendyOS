@@ -291,6 +291,71 @@ condition:
 Prediction uncertainty is read from the structured `uncertainty` attribute
 when present, otherwise from the prediction value.
 
+### Recording for as long as the event lasts
+
+By default an Episode records for `after_trigger` after its trigger and then
+stops, whatever is happening by then, and a trigger that arrives while it
+records is dropped. With `capture.extend: true`, anything that would have
+triggered the campaign keeps its recording going instead:
+
+- an application event matching one of `capture.triggers`;
+- `wendy data campaign trigger`, which returns the Episode recording now
+  instead of failing;
+- the campaign's inference, while the detection is in view and until
+  `inference.clear_after` clears it.
+
+The recording ends `after_trigger` after the trigger condition was last
+active. A fire that burns for two minutes under `after_trigger: 10s` is
+recorded from its pre-roll until ten seconds after the last detection, not as
+one 20-second clip.
+
+`capture.max_duration` caps one Episode. If the recording is still going when
+an Episode reaches the cap, that Episode is sealed and a follow-up opens at
+once: the cap splits a long recording into parts and never shortens it. If the
+condition ended and its `after_trigger` ran out before the cap, nothing
+follows. The cap counts from when the Episode began recording, so the first
+part's pre-roll comes on top. It must be a duration from `after_trigger`
+through `24h` and is accepted only with `extend: true`. Without it the cap is
+`1m`, or `after_trigger` when that is longer. A minute suits metered links: an
+interrupted upload sends the file it was on again from its start, a minute of
+camera video plus its `playable.mp4` is tens of megabytes, and nothing of an
+event is sealed, uploaded or notified on (`episode_committed`) until its first
+part ends.
+
+A follow-up does not repeat the campaign's `buffer`. It reaches back two
+seconds into the part it continues, to the last camera keyframe before that,
+so its video decodes from its first frame and nothing between the parts is
+lost. Expect a follow-up's first two to three seconds to repeat the end of the
+previous part, and application records from that window to be in both. Audio
+and ROS 2 sources restart at the handover. A follow-up records with the plan
+deployed at that moment and the first part's trigger, without `notify`: one
+event commits one `episode_committed` notification, not one per part.
+
+Every part's manifest has an `extension` block, which other Episodes do not:
+
+| Field | Description |
+|---|---|
+| `part` | Position in the recording, from 1. |
+| `previous_episode` | The Episode this one continues; absent on part 1. |
+| `next_episode` | The follow-up that continues this Episode; absent when the recording ended here. |
+| `max_duration_nanos` | The cap this part recorded under. |
+| `end_reason` | `event_cleared`, `max_duration`, or `manual_stop`. |
+
+`wendy data inspect` prints the part, why it ended, and the parts on either
+side. `wendy data stop` ends the whole recording, not only its current part. A
+plan without `extend` records exactly as before and keeps its revision;
+adding `extend` or `max_duration` changes the revision.
+
+```yaml
+capture:
+  buffer: 10s
+  after_trigger: 10s
+  extend: true
+  max_duration: 1m
+  triggers:
+    - event: person_detected
+```
+
 The `upload` and `retention` blocks:
 
 | Field | Required | Description |

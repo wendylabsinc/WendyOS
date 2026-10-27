@@ -148,6 +148,14 @@ type CampaignCapture struct {
 	Drain        string            `json:"drain,omitempty" yaml:"drain,omitempty"`
 	AfterTrigger string            `json:"after_trigger" yaml:"after_trigger"`
 	Triggers     []CampaignTrigger `json:"triggers" yaml:"triggers"`
+	// Extend keeps the episode recording while its trigger condition stays
+	// active, so it ends AfterTrigger after the condition was last active
+	// rather than AfterTrigger after the trigger. False is the fixed window.
+	Extend bool `json:"extend,omitempty" yaml:"extend,omitempty"`
+	// MaxDuration caps one extended episode. An event that outlasts it is
+	// split: the episode is sealed and a linked follow-up continues it. Empty
+	// takes DefaultExtendMaxDuration; it is valid only with Extend.
+	MaxDuration string `json:"max_duration,omitempty" yaml:"max_duration,omitempty"`
 }
 
 type CampaignUpload struct {
@@ -382,6 +390,13 @@ func (c Campaign) planDigestInput() map[string]any {
 		"models":    c.Models,
 		"privacy":   privacy,
 	}
+	// Only an extending plan has the keys, so a plan without capture.extend
+	// keeps its revision without a revisionSchema bump.
+	if c.Capture.Extend {
+		capture := plan["capture"].(map[string]any)
+		capture["extend"] = true
+		capture["max_duration"] = c.Capture.MaxDuration
+	}
 	if c.Notify != nil {
 		// Only the fields this schema version knows. UnknownKeys is deploy-time
 		// state a newer cloud may add and is deliberately excluded, exactly as
@@ -467,6 +482,9 @@ func (c Campaign) validate() error {
 	after, err := time.ParseDuration(c.Capture.AfterTrigger)
 	if err != nil || after <= 0 || after > 24*time.Hour {
 		return errors.New("capture.after_trigger must be a duration greater than 0s and no more than 24h")
+	}
+	if err := c.Capture.validateExtend(after); err != nil {
+		return err
 	}
 	if len(c.Capture.Triggers) == 0 {
 		return errors.New("capture.triggers must contain at least one trigger")
@@ -572,6 +590,19 @@ func (c Campaign) DrainDuration() time.Duration {
 
 func (c Campaign) AfterTriggerDuration() time.Duration {
 	d, _ := time.ParseDuration(c.Capture.AfterTrigger)
+	return d
+}
+
+// MaxEpisodeDuration is the cap on one episode of a campaign with capture.extend
+// (see extend.go), and zero for any other campaign.
+func (c Campaign) MaxEpisodeDuration() time.Duration {
+	if !c.Capture.Extend {
+		return 0
+	}
+	if c.Capture.MaxDuration == "" {
+		return max(DefaultExtendMaxDuration, c.AfterTriggerDuration())
+	}
+	d, _ := time.ParseDuration(c.Capture.MaxDuration)
 	return d
 }
 
