@@ -559,6 +559,9 @@ func (s *DataService) campaignMessage(campaign data.Campaign) (*agentpbv2.DataCa
 			}
 		}
 	}
+	if len(campaign.Rules) > 0 && s.rules != nil {
+		campaign.RulesStatus = s.rules.status(campaign)
+	}
 	return campaignMessage(campaign)
 }
 
@@ -577,6 +580,19 @@ func (s *DataService) triggerInference(ctx context.Context, campaign data.Campai
 	}
 	_, err = s.triggerCampaign(ctx, campaign, "event:"+campaign.Inference.Event, "event:"+campaign.Inference.Event)
 	return true, err
+}
+
+// enqueueFor sends request through the notification job of the campaign's
+// current revision, and reports false when that job is not running.
+func (m *campaignInferenceManager) enqueueFor(campaign data.Campaign, request DetectionNotification) bool {
+	m.mu.Lock()
+	job := m.jobs[campaign.Name]
+	m.mu.Unlock()
+	if job == nil || job.campaign.Revision != campaign.Revision {
+		return false
+	}
+	job.enqueueNotification(request)
+	return true
 }
 
 // notifyEvent routes application events independently of episode capture triggers.

@@ -55,6 +55,7 @@ func dataStatusError(err error) error {
 
 type DataService struct {
 	inference    *campaignInferenceManager
+	rules        *gridRuleRuntime // the deployed campaigns' grid rules (grid_rules.go)
 	video        inferenceVideo
 	deploymentMu sync.Mutex
 	agentpbv2.UnimplementedDataServiceServer
@@ -117,6 +118,7 @@ type runningDataCapture interface {
 
 func NewDataService(m *data.Manager) *DataService {
 	s := &DataService{manager: m, activeCaptures: make(map[string][]runningDataCapture), autoStopCancel: make(map[string]context.CancelFunc), keyLocks: make(map[string]*sync.Mutex), adHocDrain: data.DefaultSealDrain}
+	s.rules = newGridRuleRuntime(s)
 	m.SetSourceProvider(s.discoverAdapterSources)
 	m.SetApplicationObserver(s.observeApplicationRecord)
 	return s
@@ -468,6 +470,9 @@ func (s *DataService) CampaignDeploy(_ context.Context, req *agentpbv2.DataCampa
 	if parsed.Notify != nil && parsed.Notify.On == data.NotifyOnEvent && s.inference == nil {
 		return nil, status.Error(codes.FailedPrecondition, "agent campaign notification runtime is unavailable")
 	}
+	if len(parsed.Rules) > 0 && s.video == nil {
+		return nil, status.Error(codes.FailedPrecondition, "agent camera grid runtime is unavailable, so this agent cannot run campaign rules")
+	}
 
 	campaign, err := s.manager.DeployCampaign(req.GetCampaignYaml())
 	if err != nil {
@@ -481,6 +486,11 @@ func (s *DataService) CampaignDeploy(_ context.Context, req *agentpbv2.DataCampa
 	// opens BEFORE the trigger instant. Arming subscribes to camera hubs, so it
 	// runs off the request path.
 	go s.armCampaign(campaign)
+	// The new revision's rules replace the old ones before this returns, and
+	// the camera grids learn of them at once (gridRuleRuntime.changes).
+	if s.rules != nil {
+		s.rules.reconcile()
+	}
 	if s.inference != nil {
 		select {
 		case s.inference.wake <- struct{}{}:

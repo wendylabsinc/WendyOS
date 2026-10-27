@@ -52,6 +52,10 @@ func (s *CampaignCloudSender) Send(ctx context.Context, endpoint string, notific
 		return err
 	}
 	appID := "campaign:" + notification.Campaign
+	body := fmt.Sprintf("Campaign %s emitted %s.", notification.Campaign, notification.Event)
+	if notification.Message != "" {
+		body = notification.Message
+	}
 	response, err := s.Cloud.CreateNotificationV2(ctx, &cloudpb.CreateNotificationV2Request{
 		AppId: &appID,
 		Audience: &cloudpb.NotificationAudience{Roles: []cloudpb.OrganizationRole{
@@ -59,7 +63,7 @@ func (s *CampaignCloudSender) Send(ctx context.Context, endpoint string, notific
 			cloudpb.OrganizationRole_ORGANIZATION_ROLE_ADMIN,
 		}},
 		Title:          "Campaign event",
-		Body:           fmt.Sprintf("Campaign %s emitted %s.", notification.Campaign, notification.Event),
+		Body:           body,
 		Severity:       cloudpb.NotificationSeverity_NOTIFICATION_SEVERITY_INFO,
 		DeepLink:       "wendy://live",
 		NotificationId: notification.ID,

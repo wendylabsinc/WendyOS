@@ -56,6 +56,13 @@ type gridRig struct {
 
 func newGridRig(t *testing.T, nodes ...string) *gridRig {
 	t.Helper()
+	return newGridRigWith(t, nil, nodes...)
+}
+
+// newGridRigWith is newGridRig, with setup run on the rig and its publisher
+// before the publisher starts.
+func newGridRigWith(t *testing.T, setup func(*gridRig, *cameraGrids), nodes ...string) *gridRig {
+	t.Helper()
 	rig := &gridRig{nodes: nodes}
 	prevSizes, prevModes, prevIdentity := enumerateRawFrameSizes, gridYUYVModes, gridNodeIdentity
 	enumerateRawFrameSizes = func(path string, pixfmt uint32) [][2]uint32 {
@@ -90,6 +97,9 @@ func newGridRig(t *testing.T, nodes ...string) *gridRig {
 
 	g := newCameraGrids(m, rig.video)
 	g.scanEvery, g.retryAfter = 10*time.Millisecond, 150*time.Millisecond
+	if setup != nil {
+		setup(rig, g)
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
