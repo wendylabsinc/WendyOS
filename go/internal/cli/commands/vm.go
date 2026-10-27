@@ -82,7 +82,7 @@ func newVMCreateCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&nightly, "nightly", false, "Use nightly/prerelease builds")
 	cmd.Flags().IntVar(&prNumber, "pr", 0, "Create from a pull request's build, so a change can be tried before it merges")
 	cmd.Flags().IntVar(&diskGiB, "disk", 16, "Disk size in GiB (the image is grown to this size)")
-	cmd.Flags().StringVar(&profile, "profile", "generic", "Simulator profile: generic, go2, g1, rosmaster-r2, wendy-lite or wendy-lite-native (provisioned on first connection)")
+	cmd.Flags().StringVar(&profile, "profile", "generic", "Simulator profile: generic, go2, g1, so101, rosmaster-r2, wendy-lite or wendy-lite-native (provisioned on first connection)")
 	return cmd
 }
 
@@ -220,6 +220,7 @@ func newVMStartCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			o.autoPort = !cmd.Flags().Changed("port")
 			return runVMStart(cmd, name, o)
 		},
 	}
@@ -228,8 +229,8 @@ func newVMStartCmd() *cobra.Command {
 			"'wendy discover' cannot see the VM; 'shared' puts it on a host-visible "+
 			"network so discover works (needs socket_vmnet)")
 	cmd.Flags().IntVar(&o.hostPort, "port", vm.DefaultAgentPort,
-		"Host port to forward to the guest agent's 50051. Only needed when "+
-			"something else already holds the default")
+		"Host port to forward to the guest agent's 50051. Without it the VM "+
+			"reuses its last port, or the first free one from the default")
 	cmd.Flags().IntVar(&o.memoryMiB, "memory", vm.DefaultMemoryMiB, "Guest memory in MiB")
 	cmd.Flags().IntVar(&o.cpus, "cpus", vm.DefaultCPUs, "Guest CPU count")
 	cmd.Flags().BoolVarP(&o.detach, "detach", "d", false,
@@ -244,6 +245,30 @@ type vmStartOptions struct {
 	memoryMiB int
 	cpus      int
 	detach    bool
+
+	// autoPort is set when `wendy vm start` was not given --port: the start
+	// then picks the port itself instead of failing on a busy hostPort.
+	autoPort bool
+}
+
+// vmStartHostPort picks the host port for a start without --port, the way
+// ensureSimulatorRunning does: the VM's sticky port first, so its address
+// survives a restart and a VM that --device vm:<name> moved off a busy 50051
+// stays moved, then the next free span. preferred is where the search began.
+// Shared networking forwards nothing, so it picks nothing and returns 0.
+func vmStartHostPort(store *vm.Store, name, netMode string) (preferred, port int, err error) {
+	if mode, err := vm.ParseNetMode(netMode); err != nil || mode != vm.NetUser {
+		// resolveVMSpec reports a bad mode.
+		return 0, 0, nil
+	}
+	preferred = vm.DefaultAgentPort
+	if vm.ValidName(name) == nil {
+		if meta, ok := store.ReadMeta(name); ok && meta.AgentPort != 0 {
+			preferred = meta.AgentPort
+		}
+	}
+	port, err = vm.PickHostPort(preferred, simulatorPortSearchTries)
+	return preferred, port, err
 }
 
 // resolveVMSpec turns the host's capabilities and the caller's flags into a
@@ -329,17 +354,39 @@ func resolveVMSpec(name string, o vmStartOptions) (vm.Spec, *vm.Store, error) {
 
 // runVMStart boots a VM, either attached to this terminal or in the background.
 func runVMStart(cmd *cobra.Command, name string, o vmStartOptions) error {
-	spec, store, err := resolveVMSpec(name, o)
+	preferred := 0
+	var spec vm.Spec
+	var store *vm.Store
+	var err error
+	if o.autoPort {
+		// Something else on the host often holds 50051 (Multipass's daemon
+		// does). Move past it, as --device vm:<name> already does, rather than
+		// send the user off to pick a port by hand.
+		if store, err = vm.NewStore(); err == nil {
+			var port int
+			if preferred, port, err = vmStartHostPort(store, name, o.netMode); err == nil && port != 0 {
+				// The busy port may be this VM's own: a running VM holds its
+				// forward. Moving past it would print a new address for a
+				// start that then fails on the run lock, so ask now -- the
+				// port check would have failed the start here before.
+				if port != preferred && vmIsRunning(name) {
+					return vmAlreadyRunningError(name)
+				}
+				o.hostPort = port
+			}
+		}
+	}
+	if err == nil {
+		spec, store, err = resolveVMSpec(name, o)
+	}
 	if err != nil {
 		// A running VM still holds its forwarded port, so the port check fires
 		// first and blames the port for what is really "already running". Asked
 		// only once the start has failed anyway: a liveness probe on the happy
 		// path would turn a transient reading into a start that silently does
 		// nothing.
-		if s, sErr := vm.NewStore(); sErr == nil {
-			if st, sErr := s.Status(name); sErr == nil && st.Running {
-				return fmt.Errorf("VM %q is already running; reach it with 'wendy vm logs %s' or stop it first", name, name)
-			}
+		if vmIsRunning(name) {
+			return vmAlreadyRunningError(name)
 		}
 		return err
 	}
@@ -360,26 +407,64 @@ func runVMStart(cmd *cobra.Command, name string, o vmStartOptions) error {
 		if err := confirmVMSurvivedStartup(store, name); err != nil {
 			return err
 		}
+		recordVMStartPort(store, name, spec, o)
 		fmt.Fprintf(out, "Started %s in the background (pid %d).\n", name, st.PID)
+		vmPrintPortMove(out, spec, o, preferred)
 		if vm.IsLiteProfile(spec.Profile) {
 			fmt.Fprintf(out, "Reach it with 'wendy --device vm:%s device info'. Firmware uses a private virtual Wi-Fi network.\n", name)
 		} else {
-			vmPrintReachability(out, name, spec.Net, o.hostPort)
+			vmPrintReachability(out, name, spec.Net, spec.Net.AgentPort)
 		}
 		fmt.Fprintf(out, "Console: 'wendy vm logs %s'. Stop it with 'wendy vm stop %s'.\n", name, name)
 		return nil
 	}
 
 	fmt.Fprintf(out, "Starting %s (%s acceleration, %s networking).\n", name, spec.Accel, spec.Net.Mode)
-	vmPrintReachability(out, name, spec.Net, o.hostPort)
+	vmPrintPortMove(out, spec, o, preferred)
+	vmPrintReachability(out, name, spec.Net, spec.Net.AgentPort)
 	fmt.Fprintln(out, "Press Ctrl-A then X to power it off.")
 
+	// Before the boot, not after it: RunForeground returns only when the guest
+	// powers off, and a terminal closed on the console never gets that far. A
+	// pick that moved has already ruled out this VM running elsewhere, and one
+	// that did not records the port the VM preferred anyway.
+	recordVMStartPort(store, name, spec, o)
 	// Hand the terminal to QEMU: the guest console is the point of `vm start`.
 	err = store.RunForeground(cmd.Context(), spec, os.Stdin, out, cmd.ErrOrStderr())
 	if errors.Is(err, vm.ErrAlreadyRunning) {
-		return fmt.Errorf("VM %q is already running; reach it with 'wendy vm logs %s' or stop it first", name, name)
+		return vmAlreadyRunningError(name)
 	}
 	return err
+}
+
+// vmIsRunning reports whether name is running, as far as its run lock says.
+// An unreadable store counts as not running: the caller's own error is the
+// better one to show.
+func vmIsRunning(name string) bool {
+	st, err := vmStatusFn(name)
+	return err == nil && st.Running
+}
+
+func vmAlreadyRunningError(name string) error {
+	return fmt.Errorf("VM %q is already running; reach it with 'wendy vm logs %s' or stop it first", name, name)
+}
+
+// recordVMStartPort makes a port this start picked sticky, as
+// ensureSimulatorRunning does, so --device vm:<name> and the next start reuse
+// it. An explicit --port is left as a one-off. Best-effort: a VM whose record
+// cannot be updated still started.
+func recordVMStartPort(store *vm.Store, name string, spec vm.Spec, o vmStartOptions) {
+	if o.autoPort && spec.Net.AgentPort != 0 {
+		_ = store.RecordAgentPort(name, spec.Net.AgentPort)
+	}
+}
+
+// vmPrintPortMove says when the start moved off the port it would have used,
+// so the new address is not a surprise.
+func vmPrintPortMove(out io.Writer, spec vm.Spec, o vmStartOptions, preferred int) {
+	if o.autoPort && preferred != 0 && spec.Net.AgentPort != 0 && spec.Net.AgentPort != preferred {
+		fmt.Fprintf(out, "Port %d is in use; forwarding the agent from 127.0.0.1:%d instead.\n", preferred, spec.Net.AgentPort)
+	}
 }
 
 // vmStartupSettleTime is how long a detached start waits before believing the
@@ -591,16 +676,28 @@ func newVMStopCmd() *cobra.Command {
 	return cmd
 }
 
-// Allow systemd's normal service-stop timeout and filesystem flushing. Timing
-// out leaves the guest running; power cuts require an explicit --force.
-const vmStopGrace = 120 * time.Second
+// vmStopGrace is how long a stop waits for the guest to power off. It covers
+// systemd's slowest ordinary power-off: up to 90 s for a service that does not
+// stop (DefaultTimeoutStopSec), up to 90 s more for processes still running at
+// the final kill, then unmounting and flushing. A guest whose agent predates
+// the prompt host-shutdown path takes about 3.5 minutes with apps running, and
+// the previous 2-minute wait reported that ordinary shutdown as a failure.
+// Running out never kills the guest: cutting power takes an explicit --force.
+const vmStopGrace = 5 * time.Minute
 
-func runVMStop(cmd *cobra.Command, name string, force bool) error {
+// stopVMFn asks a VM to shut down and waits up to grace for it to power off.
+// A seam, like vmStatusFn: without it the stop paths can only be reached with
+// a real emulator.
+var stopVMFn = func(ctx context.Context, name string, force bool, grace time.Duration) error {
 	store, err := vm.NewStore()
 	if err != nil {
 		return err
 	}
-	st, err := store.Status(name)
+	return store.StopContext(ctx, name, force, grace)
+}
+
+func runVMStop(cmd *cobra.Command, name string, force bool) error {
+	st, err := vmStatusFn(name)
 	if err != nil {
 		return err
 	}
@@ -611,9 +708,16 @@ func runVMStop(cmd *cobra.Command, name string, force bool) error {
 		fmt.Fprintf(cmd.OutOrStdout(), "VM %q is not running.\n", name)
 		return nil
 	}
+	// The guest stops its apps and services before it powers off, which can
+	// take a while. Say what the command is waiting for, on stderr so stdout
+	// keeps only the result. Not for a VM that is still starting: the stop
+	// refuses that at once.
+	if !force && st.State.PID != 0 {
+		fmt.Fprintf(cmd.ErrOrStderr(), "Shutting down VM %q; waiting for it to power off...\n", name)
+	}
 	// Store.Stop makes the "still starting" refusal itself, so that `vm rm
 	// --force` gets it too rather than only this command.
-	if err := store.StopContext(cmd.Context(), name, force, vmStopGrace); err != nil {
+	if err := stopVMFn(cmd.Context(), name, force, vmStopGrace); err != nil {
 		return err
 	}
 	fmt.Fprintf(cmd.OutOrStdout(), "Stopped VM %q.\n", name)

@@ -69,11 +69,17 @@ WendyBLEReadResult wendy_ble_wait_notification(WendyBLEConn conn, const char *se
 // Open an L2CAP channel on the given PSM.
 WendyBLEError wendy_ble_open_l2cap(WendyBLEConn conn, uint16_t psm, int timeout_seconds);
 
-// Send data over the L2CAP channel.
+// Send data over the L2CAP channel. Blocks until every byte is accepted, the
+// channel fails, or a fixed timeout passes. Callers must serialize sends.
 WendyBLEError wendy_ble_l2cap_send(WendyBLEConn conn, const uint8_t *data, int length);
 
 // Receive data from the L2CAP channel (blocks until data or timeout).
 WendyBLEL2CAPRecvResult wendy_ble_l2cap_recv(WendyBLEConn conn, int timeout_seconds);
+
+// Fail the L2CAP channel so an in-flight send or receive returns promptly.
+// Safe to call concurrently with them; the handle stays valid until
+// wendy_ble_disconnect.
+void wendy_ble_l2cap_abort(WendyBLEConn conn);
 
 // Check whether a specific service UUID was discovered. Returns 1 if found, 0 if not.
 int wendy_ble_has_service(WendyBLEConn conn, const char *service_uuid);

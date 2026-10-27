@@ -1,0 +1,141 @@
+---
+title: Live simulation projects
+description: Edit local environment files and refresh a managed Go2 or G1 sandbox
+---
+
+Add crates, ramps, and other fixed objects to a simulated Go2 or G1 environment.
+Edit files on your computer and see accepted changes in the same browser viewer.
+You can use your editor or a coding assistant.
+
+You need a running Go2 or G1 simulator with live-project support. For a new
+simulator, follow the steps below. For an existing one, `wendy vm robot update
+my-go2` installs the current runtime and resets its world; create a separate VM
+if you need to preserve the existing scene.
+
+## Connect a folder once
+
+```sh
+wendy vm create my-go2 --profile go2 --yes
+wendy vm robot start my-go2
+wendy vm robot project init ./my-environment --vm my-go2
+wendy vm robot project watch ./my-environment
+```
+
+Leave the watcher running. In another terminal, open the viewer with
+`wendy vm robot open my-go2`. Edit `scene.json` in the new folder; valid changes
+appear in the viewer and pause the simulation. Resume it in the browser.
+
+For G1, create with `--profile g1`. To use your own existing folder, or a copy of
+`Examples/LiveSimulationEnvironment`, use `project link` instead of `project init`:
+
+```sh
+wendy vm robot project link ./my-environment --vm my-go2
+wendy vm robot project sync ./my-environment
+wendy vm robot project watch ./my-environment
+```
+
+`init` requires a new folder; `link` requires an existing scene. Both require
+an explicit, running Go2/G1 VM with the matching runtime. They write local binding
+metadata in `.wendy-simulation.json`. Keep this file local and ignore it in Git;
+share `scene.json` and `assets/` instead. No command falls back to a default device,
+boots a stopped VM, updates its runtime, or deploys to physical hardware.
+
+`link` records the binding; `sync` or `watch` applies it. Watch runs in the foreground.
+Ctrl+C disconnects the watcher without stopping the VM. An update already sent
+may finish; the last accepted scene stays loaded.
+Run watch again to reconnect. A VM accepts one project identity at a time. To switch
+folders, stop the old watcher, explicitly restart the managed runtime with
+`wendy vm robot restart my-go2`, and link/watch the new folder.
+
+## What you can change
+
+Add fixed collision or visual geometry to the managed room. The robot, its
+controller, sensors, room boundaries, and built-in movable obstacle remain
+managed by Wendy. Other robot models, dynamic objects, textures, and imported
+physics models are not supported.
+
+## Scene format reference
+
+```json
+{
+  "version": 1,
+  "profile": "go2",
+  "geoms": [
+    {
+      "name": "crate",
+      "type": "box",
+      "size": [0.4, 0.5, 0.4],
+      "position": [3, -2, 0.4],
+      "quaternion": [1, 0, 0, 0],
+      "rgba": [0.3, 0.6, 0.8, 1]
+    }
+  ]
+}
+```
+
+Coordinates are metres, Z up. Quaternion order is **wxyz**, must be unit length,
+and defaults to `[1,0,0,0]`. RGBA defaults to `[0.6,0.7,0.8,1]`; components are
+between zero and one with positive alpha. Unique names start with a letter and
+contain at most 48 letters, digits, or underscores. All numbers must be finite.
+Only the fields shown above, and `mesh` for mesh geoms, are supported.
+
+| Type | Size |
+| --- | --- |
+| `box` | Three half extents |
+| `sphere` | Radius |
+| `ellipsoid` | Three radii |
+| `cylinder` | Radius, half height |
+| `capsule` | Radius, half cylindrical length |
+| `mesh` | Three positive scale factors; also specify `"mesh": "assets/ramp.obj"` |
+
+Sizes/scales are positive and at most 4. Position components are bounded by 20m.
+Keep surfaces inside the managed room (walls at ±6m). The compiled bounding sphere
+of each added surface must stay outside a 1.2m horizontal spawn clearance around
+the robot. This conservative rule also applies to rotated meshes and ramps.
+Meshes use MuJoCo's convex collision representation; concave structures should be
+assembled from separate convex surfaces. The browser displays compiled mesh geometry.
+
+Only UTF-8 OBJ `v x y z` and triangular `f a b c` records are accepted, plus comments.
+Face indices must be positive and refer to already declared vertices. No `mtllib`,
+texture coordinates, normals, external files, or executable plugins are loaded.
+Each mesh supports at most 4096 vertices and 8192 triangles; vertex coordinates
+are bounded by ±4m before scaling. Use a closed, three-dimensional mesh.
+
+Limits: 64 added surfaces, eight referenced assets, 2 MiB per file, 8 MiB total,
+and a 16 MiB compiled browser scene. Asset paths must be relative `assets/*.obj`
+paths without traversal or symlinks. Nested asset directories are allowed. Wendy
+reads only `scene.json` and referenced assets; unrelated project files are ignored.
+
+## Resets and transient controls
+
+Every accepted **file-content change**, including JSON reformatting, compiles a
+fresh model and resets simulation time, robot pose, policy history, velocities,
+and obstacle state. It revokes browser/ROS control grants and leaves physics
+**paused**. Resume in the browser, then rearm/restart the controlling publisher as
+required by its interface. The browser automatically fetches new geometry and
+poses at the same URL. An unchanged snapshot does not reset or pause the world.
+Ordinary browser Reset keeps the accepted project geometry and uses the runtime's
+normal reset behavior.
+
+The browser's movable-obstacle control changes runtime state only. It never writes
+your local files. A reset or accepted project edit restores that obstacle's default
+position. To save an environment change, edit the project files.
+
+## Fix an edit or reconnect
+
+A malformed scene or missing asset leaves the previous working world intact.
+Read the error in the terminal or viewer, fix the files, and save again. The
+watcher combines rapid saves and applies valid changes automatically. A large
+scene rebuild can take tens of seconds on an emulated VM.
+
+If the same rejected edit needs retrying after you fix an external problem,
+restart the watcher or run:
+
+```sh
+wendy vm robot project sync ./my-environment
+```
+
+If the VM stops, start it explicitly. The watcher reconnects automatically when
+it becomes reachable. A runtime restart restores the default world; keep the
+watcher running or run `sync` to reapply your files. If another watcher controls
+the scene, stop it before retrying.

@@ -289,10 +289,11 @@ func TestSensorPairShowsUnenrolledWendyLite(t *testing.T) {
 
 func TestSensorPairPKIEnrollmentPairAndForget(t *testing.T) {
 	const tenant = "11111111-2222-4333-8444-555555555555"
-	principal := "spiffe://wendy.sh/tenant/" + tenant + "/device/lite-441bf6804824"
+	const device = "44444444-4444-4444-8444-444444444444"
+	principal := "spiffe://wendy.sh/tenant/" + tenant + "/device/" + device
 	source := discovery.LANDeviceFromWendyLiteService(discovery.MDNSService{
 		InstanceName: "joannis-home", IPAddress: "192.168.0.125", Port: 5054,
-		TXTRecords: map[string]string{"id": "441bf6804824", "tenant": tenant, "caps": "sensors", "mtls": "true"},
+		TXTRecords: map[string]string{"id": device, "tenant": tenant, "principal": principal, "caps": "sensors", "mtls": "true"},
 	})
 	client := &pairTestClient{}
 	h := pairTestHandler(client)

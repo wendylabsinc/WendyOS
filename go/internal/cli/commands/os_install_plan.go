@@ -52,7 +52,7 @@ func buildInstallPlan(ctx context.Context, o onboarding.Options, resolve func(st
 		}
 		p.Method, p.EraseScope = "agent", "No OS image write; install the Wendy Agent on the existing Linux system."
 		p.Documentation = "https://docs.wendy.dev/latest/installation/linux"
-		p.Requirements = []string{"Confirm the target Linux host, SSH access, sudo access, and Internet connectivity.", "Run the agent installer on the target host: curl -fsSL https://install.wendy.dev/agent.sh | bash"}
+		p.Requirements = []string{"Confirm the target Linux host, SSH access, sudo access, and Internet connectivity.", "Run the agent installer on the target host: " + linuxDesktopCommand("", "", linuxDesktopMachineLabel)}
 		if o.DeviceType == "unitree-g1" {
 			p.Documentation = "https://docs.wendy.dev/latest/installation/wendy-agent-unitree-g1"
 			p.Requirements = append(p.Requirements, "Use the G1 PC2's vendor Ubuntu installation. Do not flash a generic Jetson developer-kit image onto its custom carrier.")

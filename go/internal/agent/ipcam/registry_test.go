@@ -3,8 +3,11 @@ package ipcam
 import (
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
+	"time"
 )
 
 func newTestRegistry(t *testing.T) *Registry {
@@ -177,5 +180,152 @@ func TestForgetUnknownID(t *testing.T) {
 	r := newTestRegistry(t)
 	if r.Forget(IDBandStart) {
 		t.Fatal("Forget returned true for an unknown ID")
+	}
+}
+
+func TestPruneUnconfirmedDHCP(t *testing.T) {
+	cases := []struct {
+		name       string
+		camera     Camera
+		credential bool
+		keep       bool
+	}{
+		{name: "legacy phone", camera: Camera{Link: "eth0", Model: "iPhone"}},
+		{name: "legacy laptop", camera: Camera{Link: "eth0", Model: "MacBooks-Air"}},
+		{name: "stored login", camera: Camera{Link: "eth0"}, credential: true, keep: true},
+		{name: "served client", camera: Camera{Link: "eth0", DHCPServed: true}, keep: true},
+		{name: "leased camera", camera: Camera{Link: "eth0", Address: "10.98.0.50"}, keep: true},
+		{name: "ambiguous LAN address", camera: Camera{Link: "eth0", Address: "192.168.1.50"}, keep: true},
+		{name: "ONVIF", camera: Camera{Link: "eth0", ONVIFAddr: "http://camera/onvif"}, keep: true},
+		{name: "sub stream", camera: Camera{Link: "eth0", StreamSub: "/sub"}, keep: true},
+		{name: "main stream", camera: Camera{Link: "eth0", StreamMain: "/main"}, keep: true},
+		{name: "no DHCP link", camera: Camera{Model: "manually configured"}, keep: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r := newTestRegistry(t)
+			r.now = func() time.Time { return time.Date(2026, 10, 21, 0, 0, 0, 0, time.UTC) }
+			tc.camera.MAC = "aa:bb:cc:dd:ee:ff"
+			cam, err := r.Upsert(tc.camera)
+			if err != nil {
+				t.Fatal(err)
+			}
+			creds := NewCredentialStore(filepath.Join(t.TempDir(), "credentials.json"))
+			if tc.credential {
+				// Even empty stored credentials protect the record.
+				if err := creds.Set(cam.MAC, Credential{}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			loaded := NewRegistry(r.path)
+			if err := loaded.Load(); err != nil {
+				t.Fatal(err)
+			}
+			removed, err := loaded.PruneUnconfirmedDHCP(creds.Has)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantRemoved := 1
+			if tc.keep {
+				wantRemoved = 0
+			}
+			if removed != wantRemoved {
+				t.Fatalf("removed = %d, want %d", removed, wantRemoved)
+			}
+			for range 2 {
+				got, ok := loaded.Get(cam.ID)
+				if ok != tc.keep {
+					t.Fatalf("kept = %v, want %v", ok, tc.keep)
+				}
+				if ok {
+					cam.Online = false
+					if !reflect.DeepEqual(got, cam) {
+						t.Fatalf("changed saved camera: %+v, want %+v", got, cam)
+					}
+				}
+				loaded = NewRegistry(r.path)
+				if err := loaded.Load(); err != nil {
+					t.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
+func TestPruneUnconfirmedDHCPRollsBackFailedSave(t *testing.T) {
+	r := newTestRegistry(t)
+	cam, err := r.Upsert(Camera{MAC: "aa:bb:cc:dd:ee:ff", Link: "eth0"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(r.path+".tmp", 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if removed, err := r.PruneUnconfirmedDHCP(func(string) bool { return false }); err == nil || removed != 0 {
+		t.Fatalf("failed save: removed = %d, error = %v, want zero and an error", removed, err)
+	}
+	if got, ok := r.Get(cam.ID); !ok || !reflect.DeepEqual(got, cam) {
+		t.Fatal("failed save changed registry")
+	}
+}
+
+func TestPruneUnconfirmedDHCPRequiresCredentialLookup(t *testing.T) {
+	r := newTestRegistry(t)
+	cam, err := r.Upsert(Camera{MAC: "aa:bb:cc:dd:ee:ff", Link: "eth0"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if removed, err := r.PruneUnconfirmedDHCP(nil); err != nil || removed != 0 {
+		t.Fatalf("no credential lookup: removed = %d, error = %v", removed, err)
+	}
+	if _, ok := r.Get(cam.ID); !ok {
+		t.Fatal("pruned without credential protection")
+	}
+}
+
+func TestDHCPServedSurvivesPartialUpsert(t *testing.T) {
+	r := newTestRegistry(t)
+	cam, err := r.Upsert(Camera{MAC: "aa:bb:cc:dd:ee:ff", Link: "eth0", DHCPServed: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Upsert(Camera{MAC: cam.MAC, Model: "camera"}); err != nil {
+		t.Fatal(err)
+	}
+	loaded := NewRegistry(r.path)
+	if err := loaded.Load(); err != nil {
+		t.Fatal(err)
+	}
+	if removed, err := loaded.PruneUnconfirmedDHCP(func(string) bool { return false }); err != nil || removed != 0 {
+		t.Fatalf("served camera: removed = %d, error = %v", removed, err)
+	}
+	if got, ok := loaded.Get(cam.ID); !ok || !got.DHCPServed {
+		t.Fatal("lost served-link evidence")
+	}
+}
+
+func TestPruneUnconfirmedDHCPCountsOnlyRemovedRecords(t *testing.T) {
+	r := newTestRegistry(t)
+	for _, cam := range []Camera{
+		{MAC: "aa:bb:cc:dd:ee:01", Link: "eth0"},
+		{MAC: "aa:bb:cc:dd:ee:02", Link: "eth0"},
+		{MAC: "aa:bb:cc:dd:ee:03", Link: "eth0", Address: "10.98.0.50"},
+	} {
+		if _, err := r.Upsert(cam); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, want := range []int{2, 0} {
+		removed, err := r.PruneUnconfirmedDHCP(func(string) bool { return false })
+		if err != nil || removed != want {
+			t.Fatalf("removed = %d, error = %v, want %d", removed, err, want)
+		}
+	}
+	loaded := NewRegistry(r.path)
+	if err := loaded.Load(); err != nil {
+		t.Fatal(err)
+	}
+	if got := loaded.List(); len(got) != 1 || got[0].MAC != "aa:bb:cc:dd:ee:03" {
+		t.Fatalf("persisted cameras = %+v, want only the addressed camera", got)
 	}
 }

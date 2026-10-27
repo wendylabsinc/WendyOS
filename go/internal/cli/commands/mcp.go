@@ -78,6 +78,9 @@ func newMCPServer(deviceFlag string, toolGroups []string) (*wendymcp.Server, err
 	// Long-lived: read credentials fresh rather than from the snapshot
 	// loaded below (see wendymcp.EnableConfigReload).
 	wendymcp.EnableConfigReload(config.Load)
+	// The server outlives wendy-auth's one-hour access token: renew it per
+	// RPC, as terminal commands do.
+	wendymcp.SetDPoPTokenProvider(cliDPoPTokenProvider)
 	cfg, err := config.Load()
 	if err != nil {
 		return nil, fmt.Errorf("loading config: %w", err)

@@ -35,20 +35,31 @@ var serviceNamePattern = regexp.MustCompile(`^[a-z]([a-z0-9-]{0,55}[a-z0-9])?$`)
 const (
 	EntitlementNetwork   = "network"
 	EntitlementBluetooth = "bluetooth"
-	EntitlementVideo     = "video"
-	EntitlementGPU       = "gpu"
-	EntitlementNPU       = "npu"
-	EntitlementPersist   = "persist"
-	EntitlementAudio     = "audio"
-	EntitlementCamera    = "camera"
-	EntitlementUSB       = "usb"
-	EntitlementI2C       = "i2c"
-	EntitlementGPIO      = "gpio"
-	EntitlementSPI       = "spi"
-	EntitlementInput     = "input"
-	EntitlementSerial    = "serial"
-	EntitlementMCP       = "mcp"
-	EntitlementDisplay   = "display"
+	// EntitlementAvahi grants an app its own Avahi mDNS stack: the agent
+	// runs a per-container avahi-daemon inside the app network namespace
+	// and exposes only that instance over a filtered D-Bus socket. Apps use
+	// stock avahi-compat (dns_sd.h) or native Avahi clients with no special
+	// socket handling; the daemon multicasts on the app bridge exactly like
+	// any other speaker, so the existing catalog bridge picks publications
+	// up transparently.
+	EntitlementAvahi = "avahi"
+	// EntitlementNAN grants direct control of the host's NAN management socket.
+	// Network access for NDP traffic is a separate entitlement.
+	EntitlementNAN     = "nan"
+	EntitlementVideo   = "video"
+	EntitlementGPU     = "gpu"
+	EntitlementNPU     = "npu"
+	EntitlementPersist = "persist"
+	EntitlementAudio   = "audio"
+	EntitlementCamera  = "camera"
+	EntitlementUSB     = "usb"
+	EntitlementI2C     = "i2c"
+	EntitlementGPIO    = "gpio"
+	EntitlementSPI     = "spi"
+	EntitlementInput   = "input"
+	EntitlementSerial  = "serial"
+	EntitlementMCP     = "mcp"
+	EntitlementDisplay = "display"
 	// EntitlementEpisodeWrite grants write access to the device's episode
 	// recorder through the app-private episode event socket, and nothing else.
 	// The app pushes its own event and prediction records into whatever
@@ -82,6 +93,8 @@ const (
 var ValidEntitlementTypes = []string{
 	EntitlementNetwork,
 	EntitlementBluetooth,
+	EntitlementAvahi,
+	EntitlementNAN,
 	EntitlementVideo,
 	EntitlementGPU,
 	EntitlementNPU,
@@ -120,6 +133,8 @@ var deprecatedEntitlementReplacements = map[string]string{
 var allowedKeys = map[string][]string{
 	EntitlementNetwork:       {"type", "mode", "ports", "serviceCIDR"},
 	EntitlementBluetooth:     {"type", "mode"},
+	EntitlementAvahi:         {"type"},
+	EntitlementNAN:           {"type"},
 	EntitlementVideo:         {"type", "mode", "allowlist"},
 	EntitlementGPU:           {"type"},
 	EntitlementNPU:           {"type"},
@@ -207,8 +222,8 @@ func (sim *SimulationConfig) validate(prefix string) error {
 	if sim == nil {
 		return nil
 	}
-	if sim.Profile != "rosmaster-r2" && sim.Profile != "go2" && sim.Profile != "g1" {
-		return fmt.Errorf("%s.profile: expected rosmaster-r2, go2 or g1", prefix)
+	if sim.Profile != "rosmaster-r2" && sim.Profile != "go2" && sim.Profile != "g1" && sim.Profile != "so101" {
+		return fmt.Errorf("%s.profile: expected rosmaster-r2, go2, g1 or so101", prefix)
 	}
 	if len(sim.Entitlements) == 0 {
 		return fmt.Errorf("%s.entitlements: explicitly declare the simulator grants", prefix)
@@ -420,6 +435,8 @@ type PythonConfig struct {
 type PortMapping struct {
 	Host      uint16 `json:"host"`
 	Container uint16 `json:"container"`
+	// Empty is TCP for compatibility with existing app manifests.
+	Protocol string `json:"protocol,omitempty"`
 }
 
 // Entitlement represents a single entitlement entry in wendy.json.
@@ -559,6 +576,14 @@ func validateEntitlements(entitlements []Entitlement, prefix string) error {
 			} else if e.ServiceCIDR != "" {
 				return fmt.Errorf("%s[%d]: network serviceCIDR is only valid with mode \"mesh\", got mode %q", prefix, i, e.Mode)
 			}
+			for _, pm := range e.Ports {
+				if pm.Host == 0 || pm.Container == 0 || (pm.Protocol != "" && pm.Protocol != "tcp" && pm.Protocol != "udp") {
+					return fmt.Errorf("%s[%d]: invalid network port mapping", prefix, i)
+				}
+				if pm.Protocol == "udp" && e.Mode != "mesh" {
+					return fmt.Errorf("%s[%d]: UDP port mappings require network mode \"mesh\"", prefix, i)
+				}
+			}
 		case EntitlementPersist:
 			if e.Name == "" {
 				return fmt.Errorf("%s[%d]: persist entitlement requires a name", prefix, i)
@@ -649,6 +674,15 @@ func validateEntitlements(entitlements []Entitlement, prefix string) error {
 	}
 	if adminCount > 1 {
 		return fmt.Errorf("at most one admin entitlement is allowed in %s, found %d", prefix, adminCount)
+	}
+	nanCount := 0
+	for _, e := range entitlements {
+		if e.Type == EntitlementNAN {
+			nanCount++
+		}
+	}
+	if nanCount > 1 {
+		return fmt.Errorf("at most one nan entitlement is allowed in %s, found %d", prefix, nanCount)
 	}
 
 	return nil
@@ -847,21 +881,8 @@ func (c *AppConfig) Validate() error {
 		if err := ValidateEnv(fmt.Sprintf("services[%q].env", name), svc.Env); err != nil {
 			return err
 		}
-		ros2 := c.GetROS2Config()
-		if svc.Frameworks != nil && svc.Frameworks.ROS2 != nil {
-			ros2 = svc.Frameworks.ROS2
-		}
-		if ros2 != nil {
-			// Multi-service containers receive both app-level and service-level
-			// entitlements, so validate the effective network mode rather than the
-			// service slice alone. This also catches a service that isolates an
-			// inherited device/peripherals scope from the host network.
-			entitlements := make([]Entitlement, 0, len(c.Entitlements)+len(svc.Entitlements))
-			entitlements = append(entitlements, c.Entitlements...)
-			entitlements = append(entitlements, svc.Entitlements...)
-			if err := validateROS2Config(fmt.Sprintf("services[%q].frameworks.ros2", name), ros2, entitlements); err != nil {
-				return err
-			}
+		if err := c.validateServiceROS2(name, svc); err != nil {
+			return err
 		}
 		if err := svc.Resources.validate(fmt.Sprintf("services[%q].resources", name)); err != nil {
 			return err
@@ -1041,42 +1062,86 @@ func LoadComposeCompanion(dir string) (*AppConfig, []string, error) {
 		return nil, nil, fmt.Errorf("parsing companion wendy.json: %w", err)
 	}
 
-	if err := ValidateAppID(cfg.AppID); err != nil {
+	if err := cfg.ValidateComposeCompanion(); err != nil {
 		return nil, nil, err
 	}
+	return &cfg, ValidateJSON(data), nil
+}
 
-	if err := validateEntitlements(cfg.Entitlements, "entitlement"); err != nil {
-		return nil, nil, err
+// ValidateComposeCompanion validates a manifest accompanying a Compose file.
+// Compose owns build contexts and dependencies, so those need not be repeated.
+func (c *AppConfig) ValidateComposeCompanion() error {
+	if err := ValidateAppID(c.AppID); err != nil {
+		return err
 	}
 
-	if err := ValidateReadiness("readiness", cfg.Readiness); err != nil {
-		return nil, nil, err
+	if err := validateEntitlements(c.Entitlements, "entitlement"); err != nil {
+		return err
 	}
 
-	if err := ValidateEnv("env", cfg.Env); err != nil {
-		return nil, nil, err
+	if err := ValidateReadiness("readiness", c.Readiness); err != nil {
+		return err
 	}
 
-	for name, svc := range cfg.Services {
+	if err := ValidateEnv("env", c.Env); err != nil {
+		return err
+	}
+
+	for name, svc := range c.Services {
 		if svc == nil {
-			return nil, nil, fmt.Errorf("services[%q]: must not be null", name)
+			return fmt.Errorf("services[%q]: must not be null", name)
 		}
 		if err := svc.Simulation.validate(fmt.Sprintf("services[%q].simulation", name)); err != nil {
-			return nil, nil, err
+			return err
 		}
 		if err := validateEntitlements(svc.Entitlements, fmt.Sprintf("services[%q].entitlement", name)); err != nil {
-			return nil, nil, err
+			return err
 		}
 		if err := ValidateReadiness(fmt.Sprintf("services[%q].readiness", name), svc.Readiness); err != nil {
-			return nil, nil, err
+			return err
 		}
 		if err := ValidateEnv(fmt.Sprintf("services[%q].env", name), svc.Env); err != nil {
-			return nil, nil, err
+			return err
 		}
 	}
 
-	warnings := ValidateJSON(data)
-	return &cfg, warnings, nil
+	if c.Frameworks != nil {
+		if err := validateROS2Config("frameworks.ros2", c.Frameworks.ROS2, c.Entitlements); err != nil {
+			return err
+		}
+	}
+	if err := c.Resources.validate("resources"); err != nil {
+		return err
+	}
+	for name, svc := range c.Services {
+		if err := c.validateServiceROS2(name, svc); err != nil {
+			return err
+		}
+		if err := svc.Resources.validate(fmt.Sprintf("services[%q].resources", name)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validateServiceROS2 validates the ROS 2 config a service runs with: its own,
+// or the app's when it has none.
+func (c *AppConfig) validateServiceROS2(name string, svc *ServiceConfig) error {
+	ros2 := c.GetROS2Config()
+	if svc.Frameworks != nil && svc.Frameworks.ROS2 != nil {
+		ros2 = svc.Frameworks.ROS2
+	}
+	if ros2 == nil {
+		return nil
+	}
+	// Multi-service containers receive both app-level and service-level
+	// entitlements, so validate the effective network mode rather than the
+	// service slice alone. This also catches a service that isolates an
+	// inherited device/peripherals scope from the host network.
+	entitlements := make([]Entitlement, 0, len(c.Entitlements)+len(svc.Entitlements))
+	entitlements = append(entitlements, c.Entitlements...)
+	entitlements = append(entitlements, svc.Entitlements...)
+	return validateROS2Config(fmt.Sprintf("services[%q].frameworks.ros2", name), ros2, entitlements)
 }
 
 // isValidI2CDevice reports whether device is a safe I2C device name (i2c-N).

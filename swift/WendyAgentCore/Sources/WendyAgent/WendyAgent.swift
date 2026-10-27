@@ -24,7 +24,7 @@ public actor WendyAgent {
         return version
     }()
 
-    public let configuration: WendyAgentConfiguration
+    public private(set) var configuration: WendyAgentConfiguration
     public private(set) var status: WendyAgentStatus = .idle
     public private(set) var apps: [WendyAppInfo] = []
 
@@ -35,18 +35,22 @@ public actor WendyAgent {
     /// Snapshotted before any RPC service starts so post-update verification
     /// describes the executable this process actually mapped.
     private let runningExecutableSHA256: String
+    private let reportedVersion: @Sendable () -> String
     private let probesLinuxContainerRuntime: Bool
 
     public init(configuration: WendyAgentConfiguration = .init()) {
-        self.configuration = configuration
-        self.runningExecutableSHA256 = AgentExecutableDigest.sha256(at: Bundle.main.executableURL)
-        self.probesLinuxContainerRuntime = true
+        self.init(configuration: configuration, probesLinuxContainerRuntime: true)
     }
 
-    /// Test-only seam for listener fixtures that must not start a local
-    /// container runtime or its registry listeners.
-    init(configuration: WendyAgentConfiguration, probesLinuxContainerRuntime: Bool) {
+    /// Test-only seams for listener fixtures outside the signed app bundle.
+    /// They can supply a version and avoid starting container runtimes/registries.
+    init(
+        configuration: WendyAgentConfiguration,
+        probesLinuxContainerRuntime: Bool,
+        reportedVersion: @escaping @Sendable () -> String = { WendyAgent.version }
+    ) {
         self.configuration = configuration
+        self.reportedVersion = reportedVersion
         self.runningExecutableSHA256 = AgentExecutableDigest.sha256(at: Bundle.main.executableURL)
         self.probesLinuxContainerRuntime = probesLinuxContainerRuntime
     }
@@ -182,6 +186,24 @@ public actor WendyAgent {
         await self.containerService?.stopAllApps()
     }
 
+    /// Rebind management and registry listeners without stopping deployed apps.
+    /// Disabling access also withdraws Bonjour and closes the cloud relay.
+    public func setNetworkAccess(allowed: Bool) async throws {
+        guard case .running = self.status, !self.switchingMainServer else {
+            throw WendyAgentError.networkAccessChangeUnavailable
+        }
+        guard allowed != self.configuration.allowsNetworkAccess else { return }
+        let previousHost = self.configuration.host
+        do {
+            try await self.switchMainServer(host: allowed ? "::" : "127.0.0.1")
+        } catch {
+            // A failed opt-in must not silently become the next launch's policy.
+            // A failed revocation must never restore remote access.
+            self.configuration.host = allowed ? previousHost : "127.0.0.1"
+            throw error
+        }
+    }
+
     // MARK: - Private
 
     private static let bootstrapLogging: Void = {
@@ -212,7 +234,7 @@ public actor WendyAgent {
     /// leave it alone. Cancelled (and awaited, so the port is released) only
     /// on a full agent stop or a failed startup.
     private var pullRegistryTask: Task<Void, Never>?
-    /// The registry's wildcard push listener (port 5555, all interfaces) that
+    /// The registry's push listener (port 5555, scoped by configuration.host) that
     /// the CLI pushes images to: plain HTTP while unprovisioned, TLS with
     /// client-certificate verification once provisioned. Unlike the pull
     /// listener it IS restarted on provisioning transitions (via
@@ -236,6 +258,9 @@ public actor WendyAgent {
     private var mainServerIsMTLS = false
     /// Guards against overlapping plaintext<->mTLS transitions.
     private var switchingMainServer = false
+    /// Set when a provisioning callback arrives while a switch is running, so
+    /// the switch rebuilds once more when it finishes.
+    private var provisioningChangedDuringSwitch = false
     /// How long `switchMainServer` waits before tearing the old server down, to
     /// let the provisioning RPC that triggered the switch flush its response to
     /// the client first (mirrors the Go agent's delayed restart).
@@ -368,6 +393,7 @@ public actor WendyAgent {
         let videoService = VideoService()
         let services: [any RegistrableRPCService] = [
             AgentService(
+                reportedVersion: self.reportedVersion,
                 binarySHA256: self.runningExecutableSHA256,
                 updateLock: self.agentUpdateLock,
                 updateDependencies: .init(
@@ -377,6 +403,7 @@ public actor WendyAgent {
             containerService,
             AudioService(),
             SensorService(),
+            RobotArmService(path: stateDirectory.appendingPathComponent("robot-arm-bindings.json")),
             provisioningService,
             ProvisioningServiceV2(v1: provisioningService),
             TelemetryService(broadcaster: broadcaster),
@@ -415,7 +442,7 @@ public actor WendyAgent {
 
         // Once the mTLS server is listening, dial out to the cloud tunnel
         // broker so the device shows online and is remotely reachable.
-        if isMTLS, let certs {
+        if self.configuration.allowsNetworkAccess, isMTLS, let certs {
             self.startTunnelBroker(info: info, certs: certs, port: runtime.port)
         }
         // Management is already listening. USB restoration must not delay
@@ -491,13 +518,14 @@ public actor WendyAgent {
         }
     }
 
-    private func stopMainServer() async {
+    private func stopMainServer(cancelActiveConnections: Bool = false) async {
         // Stop dialing the broker before tearing the server down.
         self.tunnelBrokerTask?.cancel()
         await self.tunnelBrokerTask?.value
         self.tunnelBrokerTask = nil
 
         self.mainServer?.beginGracefulShutdown()
+        if cancelActiveConnections { self.mainServerTask?.cancel() }
         _ = try? await self.mainServerTask?.value
         self.mainServer = nil
         self.mainServerTask = nil
@@ -689,6 +717,7 @@ public actor WendyAgent {
     }
 
     private func startBonjour() async throws {
+        guard self.configuration.allowsNetworkAccess else { return }
         guard let listeningPort else { throw WendyAgentError.stoppedDuringStartup }
 
         let info = await self.provisioningService?.provisioningInfo()
@@ -723,17 +752,30 @@ public actor WendyAgent {
     /// Called (via a detached task) after the device is provisioned. Switches the
     /// main server from plaintext to mTLS and re-advertises Bonjour.
     private func handleProvisioned() async {
-        guard case .running = self.status, !self.mainServerIsMTLS else { return }
+        guard case .running = self.status else { return }
+        if self.deferProvisioningChange() { return }
+        guard !self.mainServerIsMTLS else { return }
         self.logger.info("Device provisioned — switching main server to mTLS")
-        await self.switchMainServer()
+        try? await self.switchMainServer()
     }
 
     /// Called (via a detached task) after the device is unprovisioned. Switches
     /// the main server from mTLS back to plaintext and re-advertises Bonjour.
     private func handleUnprovisioned() async {
-        guard case .running = self.status, self.mainServerIsMTLS else { return }
+        guard case .running = self.status else { return }
+        if self.deferProvisioningChange() { return }
+        guard self.mainServerIsMTLS else { return }
         self.logger.info("Device unprovisioned — switching main server to plaintext")
-        await self.switchMainServer()
+        try? await self.switchMainServer()
+    }
+
+    /// A provisioning change that arrives during another switch (for example a
+    /// network access change) is applied once that switch finishes. The running
+    /// switch may already have loaded the old provisioning state.
+    private func deferProvisioningChange() -> Bool {
+        guard self.switchingMainServer else { return false }
+        self.provisioningChangedDuringSwitch = true
+        return true
     }
 
     /// Rebuilds and restarts the main gRPC server (and Bonjour) in whatever mode
@@ -746,26 +788,42 @@ public actor WendyAgent {
     /// (mirroring the Go agent's delayed restart). The runtime monitor is stopped
     /// before teardown so the intentional stop isn't misread as a crash, then
     /// resumed with the fresh task handles.
-    private func switchMainServer() async {
-        guard case .running = self.status, !self.switchingMainServer else { return }
+    private func switchMainServer(host: String? = nil) async throws {
+        guard case .running = self.status, !self.switchingMainServer else {
+            throw WendyAgentError.networkAccessChangeUnavailable
+        }
         self.switchingMainServer = true
-        defer { self.switchingMainServer = false }
+        defer {
+            self.switchingMainServer = false
+            if self.provisioningChangedDuringSwitch {
+                self.provisioningChangedDuringSwitch = false
+                // Rebuild once more so the server reloads provisioning state saved
+                // after this switch read it. A stopped agent rejects the switch.
+                Task { try? await self.switchMainServer() }
+            }
+        }
 
         // A cancelled sleep just proceeds to the status re-check below, which is
         // the intended behavior during shutdown.
         try? await Task.sleep(for: Self.serverSwitchFlushDelay)
-        guard case .running = self.status else { return }
+        guard case .running = self.status else { throw WendyAgentError.stoppedDuringStartup }
 
         self.stopMonitorTask()
         // The switch builds a fresh ContainerService, so the supervisor has to
         // be torn down with the old one and restarted against the new one.
         await self.stopAppSupervisor()
         await self.stopBonjour()
-        await self.stopMainServer()
+        // Close the registry before rebinding: it must not retain the old scope
+        // while an active management stream is being cancelled.
+        await self.stopPushRegistry()
+        await self.stopMainServer(cancelActiveConnections: host != nil)
+        guard case .running = self.status else { throw WendyAgentError.stoppedDuringStartup }
+        if let host { self.configuration.host = host }
 
         let backend = await self.makeLinuxBackend()
         let broadcaster = self.telemetryBroadcaster ?? TelemetryBroadcaster()
 
+        var accessChangeError: (any Error)?
         do {
             try await self.startMainServer(
                 linuxBackend: backend,
@@ -774,13 +832,21 @@ public actor WendyAgent {
             try await self.startBonjour()
         } catch {
             self.logger.error(
-                "Failed to switch main server after provisioning change",
+                "Failed to switch main server",
                 metadata: ["error": "\(Self.errorMessage(for: error))"]
             )
-            await self.rollbackStartup()
-            self.clearRuntimeState()
-            self.updateStatus(.failed(Self.errorMessage(for: error)))
-            return
+            // A failed access change keeps serving on loopback rather than taking
+            // management, the registry and app supervision down with it.
+            if host != nil,
+                await self.restartLocalMainServer(linuxBackend: backend, broadcaster: broadcaster)
+            {
+                accessChangeError = error
+            } else {
+                await self.rollbackStartup()
+                self.clearRuntimeState()
+                self.updateStatus(.failed(Self.errorMessage(for: error)))
+                throw error
+            }
         }
 
         // Restart the push listener so its scheme (plain HTTP vs mTLS) tracks
@@ -801,10 +867,33 @@ public actor WendyAgent {
         // one held, so supervise from here on but do NOT reconcile.
         self.startAppSupervisor(reconcile: false)
 
+        if let accessChangeError { throw accessChangeError }
         self.logger.info(
             "Main server switched",
             metadata: ["mtls": "\(self.mainServerIsMTLS)"]
         )
+    }
+
+    /// Rebinds the main server to loopback after a failed access change.
+    /// Returns false if the agent stopped meanwhile or loopback also failed.
+    private func restartLocalMainServer(
+        linuxBackend: (any LinuxContainerBackend)?,
+        broadcaster: TelemetryBroadcaster
+    ) async -> Bool {
+        await self.stopBonjour()
+        await self.stopMainServer(cancelActiveConnections: true)
+        guard case .running = self.status else { return false }
+        self.configuration.host = "127.0.0.1"
+        do {
+            try await self.startMainServer(linuxBackend: linuxBackend, broadcaster: broadcaster)
+            return true
+        } catch {
+            self.logger.error(
+                "Failed to restore the local main server",
+                metadata: ["error": "\(Self.errorMessage(for: error))"]
+            )
+            return false
+        }
     }
 
     /// Starts the loopback pull listener (`127.0.0.1:5556`, plain HTTP,
@@ -837,7 +926,7 @@ public actor WendyAgent {
         }
     }
 
-    /// (Re)starts the wildcard push listener (port 5555, all interfaces):
+    /// (Re)starts the push listener (port 5555, scoped by configuration.host):
     /// plain HTTP while unprovisioned, TLS with client-certificate
     /// verification once provisioned. Always stop-then-start so a provisioning
     /// transition swaps the scheme (mirroring the Linux agent's registry
@@ -848,9 +937,7 @@ public actor WendyAgent {
     /// container squatting on 5555) must not brick native-app management or
     /// provisioning, so it is logged, not fatal.
     private func startPushRegistry() async {
-        self.pushRegistryTask?.cancel()
-        await self.pushRegistryTask?.value
-        self.pushRegistryTask = nil
+        await self.stopPushRegistry()
 
         var tls: RegistryTLS.Configuration?
         if let certs = await self.provisioningService?.provisioningCerts() {
@@ -859,7 +946,7 @@ public actor WendyAgent {
         let registry = AgentImageRegistry(
             store: BlobStore(root: WendyAgentPaths.stateDirectory),
             configuration: .init(
-                host: "::",
+                host: self.configuration.host,
                 port: LocalRegistryRef.pushPort,
                 tls: tls,
                 routes: .pushAndPull,
@@ -879,6 +966,12 @@ public actor WendyAgent {
                 )
             }
         }
+    }
+
+    private func stopPushRegistry() async {
+        self.pushRegistryTask?.cancel()
+        await self.pushRegistryTask?.value
+        self.pushRegistryTask = nil
     }
 
     /// Cancels and awaits both registry listeners so their ports are released.
@@ -912,8 +1005,7 @@ public actor WendyAgent {
 
     private func startMonitorTask(runIdentifier: UInt64) {
         guard let mainServerTask = self.mainServerTask,
-            let otelServerTask = self.otelServerTask,
-            let bonjourTask = self.bonjourTask
+            let otelServerTask = self.otelServerTask
         else {
             return
         }
@@ -923,7 +1015,7 @@ public actor WendyAgent {
             agent: self,
             mainServerTask: mainServerTask,
             otelServerTask: otelServerTask,
-            bonjourTask: bonjourTask,
+            bonjourTask: self.bonjourTask,
             runIdentifier: runIdentifier
         )
     }
@@ -1027,7 +1119,7 @@ public actor WendyAgent {
     private func monitorRuntimeTasks(
         mainServerTask: Task<Void, any Error>,
         otelServerTask: Task<Void, any Error>,
-        bonjourTask: Task<Void, any Error>,
+        bonjourTask: Task<Void, any Error>?,
         runIdentifier: UInt64
     ) async {
         await withTaskGroup(of: Void.self) { group in
@@ -1045,12 +1137,14 @@ public actor WendyAgent {
                     runIdentifier: runIdentifier
                 )
             }
-            group.addTask {
-                await self.monitorRuntimeTask(
-                    bonjourTask,
-                    subsystem: "bonjour",
-                    runIdentifier: runIdentifier
-                )
+            if let bonjourTask {
+                group.addTask {
+                    await self.monitorRuntimeTask(
+                        bonjourTask,
+                        subsystem: "bonjour",
+                        runIdentifier: runIdentifier
+                    )
+                }
             }
 
             await group.next()
@@ -1228,7 +1322,7 @@ public actor WendyAgent {
         agent: WendyAgent,
         mainServerTask: Task<Void, any Error>,
         otelServerTask: Task<Void, any Error>,
-        bonjourTask: Task<Void, any Error>,
+        bonjourTask: Task<Void, any Error>?,
         runIdentifier: UInt64
     ) -> Task<Void, Never> {
         Task.detached {

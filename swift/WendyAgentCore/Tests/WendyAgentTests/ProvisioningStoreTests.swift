@@ -323,6 +323,40 @@ struct ProvisioningStoreTests {
         #expect(try String(contentsOf: state, encoding: .utf8) == legacy)
     }
 
+    @Test("a failed state file repair keeps the device enrolled")
+    func failedRepairKeepsEnrollment() throws {
+        let dir = tempDir()
+        defer {
+            try? FileManager.default.setAttributes(
+                [.posixPermissions: 0o700],
+                ofItemAtPath: dir.path
+            )
+            try? FileManager.default.removeItem(at: dir)
+        }
+        let store = self.store(at: dir)
+        try store.save(
+            cloudHost: "h",
+            orgID: 1,
+            assetID: 2,
+            keyBacking: .softwarePEM("KEY"),
+            certPEM: "CERT",
+            chainPEM: "CHAIN"
+        )
+        // Both files need a mode repair, and a read-only directory makes it fail.
+        for name in ["device-key.pem", "provisioning.json"] {
+            try FileManager.default.setAttributes(
+                [.posixPermissions: 0o644],
+                ofItemAtPath: dir.appendingPathComponent(name).path
+            )
+        }
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: dir.path)
+
+        let loaded = try #require(store.load())
+        #expect(loaded.enrolled)
+        #expect(loaded.keyBacking == .softwarePEM("KEY"))
+        #expect(loaded.certPEM == "CERT")
+    }
+
     @Test("saving never removes a directory at a state file path")
     func savePreservesUnexpectedDirectory() throws {
         for name in ["device-key.pem", "provisioning.json"] {

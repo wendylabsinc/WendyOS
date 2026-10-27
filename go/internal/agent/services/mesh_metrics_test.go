@@ -69,13 +69,14 @@ func attrString(attrs []*commonpb.KeyValue, key string) (string, bool) {
 func TestMeshMetricsPublishesConnectionsBytesAndDialDuration(t *testing.T) {
 	pub := &fakeTelemetryPublisher{}
 	m := NewMeshMetrics(pub, zap.NewNop())
+	device := appTestMeshDevice(t)
 
-	m.RecordDial(215, "lan-direct", "ok", 3)
-	m.RecordDial(215, "lan-direct", "ok", 4)
-	m.RecordDial(215, "relay", "error", 120)
-	m.RecordBytes(215, "tx", 100)
-	m.RecordBytes(215, "tx", 50)
-	m.RecordBytes(215, "rx", 30)
+	m.RecordDial(device, "lan-direct", "ok", 3)
+	m.RecordDial(device, "lan-direct", "ok", 4)
+	m.RecordDial(device, "relay", "error", 120)
+	m.RecordBytes(device, "tx", 100)
+	m.RecordBytes(device, "tx", 50)
+	m.RecordBytes(device, "rx", 30)
 
 	m.publish(newAgentResource(), time.Now())
 
@@ -100,8 +101,8 @@ func TestMeshMetricsPublishesConnectionsBytesAndDialDuration(t *testing.T) {
 		peer, _ := attrString(dp.GetAttributes(), "mesh.peer")
 		mode, _ := attrString(dp.GetAttributes(), "mesh.mode")
 		result, _ := attrString(dp.GetAttributes(), "mesh.result")
-		if peer != "215" {
-			t.Fatalf("mesh.peer = %q, want 215", peer)
+		if peer != device.UUID().String() {
+			t.Fatalf("mesh.peer = %q, want %s", peer, device.UUID())
 		}
 		switch {
 		case mode == "lan-direct" && result == "ok":
@@ -128,8 +129,8 @@ func TestMeshMetricsPublishesConnectionsBytesAndDialDuration(t *testing.T) {
 	var tx, rx int64
 	for _, dp := range bsum.GetDataPoints() {
 		peer, _ := attrString(dp.GetAttributes(), "mesh.peer")
-		if peer != "215" {
-			t.Fatalf("mesh.peer = %q, want 215", peer)
+		if peer != device.UUID().String() {
+			t.Fatalf("mesh.peer = %q, want %s", peer, device.UUID())
 		}
 		dir, _ := attrString(dp.GetAttributes(), "mesh.dir")
 		switch dir {
@@ -188,8 +189,9 @@ func TestMeshMetricsPublishSkipsWhenNothingRecorded(t *testing.T) {
 func TestMeshMetricsHistogramBucketBoundaries(t *testing.T) {
 	pub := &fakeTelemetryPublisher{}
 	m := NewMeshMetrics(pub, zap.NewNop())
-	m.RecordDial(1, "relay", "ok", meshDialDurationBoundsMs[0]) // exactly the first bound
-	m.RecordDial(1, "relay", "ok", 999999)                      // far past the last bound
+	device := appTestMeshDevice(t)
+	m.RecordDial(device, "relay", "ok", meshDialDurationBoundsMs[0]) // exactly the first bound
+	m.RecordDial(device, "relay", "ok", 999999)                      // far past the last bound
 	m.publish(newAgentResource(), time.Now())
 
 	dial := findMetric(pub.metricReqs[0], "mesh.dial.duration_ms")
@@ -216,6 +218,6 @@ func TestMeshMetricsHistogramBucketBoundaries(t *testing.T) {
 // forest of nil-checks at every call site.
 func TestMeshMetricsNilReceiverIsNoOp(t *testing.T) {
 	var m *MeshMetrics
-	m.RecordDial(1, "lan-direct", "ok", 5)
-	m.RecordBytes(1, "tx", 10)
+	m.RecordDial(appTestMeshDevice(t), "lan-direct", "ok", 5)
+	m.RecordBytes(appTestMeshDevice(t), "tx", 10)
 }

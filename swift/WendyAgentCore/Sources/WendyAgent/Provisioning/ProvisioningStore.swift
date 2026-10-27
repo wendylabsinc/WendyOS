@@ -67,17 +67,27 @@ struct ProvisioningStore {
         let chainPEM = state.chainPem ?? ""
 
         let backing: KeyBacking
-        do {
-            if state.keyBacking == "secureEnclave" {
-                backing = .secureEnclave
-            } else {
-                let storedKey = (try? String(contentsOf: self.keyPath, encoding: .utf8)) ?? ""
-                let keyPEM = storedKey.isEmpty ? (state.keyPem ?? "") : storedKey
-                guard !keyPEM.isEmpty else { return nil }
-                // A failed migration must leave the legacy JSON key intact.
+        if state.keyBacking == "secureEnclave" {
+            backing = .secureEnclave
+        } else {
+            let storedKey = (try? String(contentsOf: self.keyPath, encoding: .utf8)) ?? ""
+            let keyPEM = storedKey.isEmpty ? (state.keyPem ?? "") : storedKey
+            guard !keyPEM.isEmpty else { return nil }
+            do {
                 try self.writeFile(self.keyPath, contents: keyPEM, permissions: 0o600)
-                backing = .softwarePEM(keyPEM)
+            } catch let error where storedKey.isEmpty {
+                // A failed migration must leave the legacy JSON key intact.
+                self.logger.error("Failed to migrate device key: \(error)")
+                return nil
+            } catch {
+                // The key is already on disk, so like the Go agent, a failed
+                // repair keeps the enrollment instead of discarding it.
+                self.logger.warning("Failed to repair device key file: \(error)")
             }
+            backing = .softwarePEM(keyPEM)
+        }
+
+        do {
             if state.keyPem != nil {
                 // Retain fields written by a newer agent while removing the
                 // migrated secret, matching the Go agent's state migration.
@@ -99,8 +109,7 @@ struct ProvisioningStore {
                 try self.writeFile(self.statePath, data: data, permissions: 0o600)
             }
         } catch {
-            self.logger.error("Failed to persist provisioning state: \(error)")
-            return nil
+            self.logger.warning("Failed to repair provisioning state file: \(error)")
         }
 
         return LoadedState(

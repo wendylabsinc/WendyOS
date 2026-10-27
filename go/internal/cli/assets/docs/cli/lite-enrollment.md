@@ -1,201 +1,124 @@
-# Enroll Wendy Lite with pki-core
+# Enroll Wendy Lite in Wendy Cloud
 
-Build this CLI with Go 1.27.3 or newer, then use an OIDC operator session for the
-Wendy development PKI:
+Enroll your Wendy Lite board to manage it remotely with the Wendy CLI. You need
+a USB data cable, current Wendy Lite firmware, a Wi-Fi connection for the board,
+and a Wendy Cloud account with permission to enroll devices.
+
+## 1. Connect and sign in
+
+Connect the board to your computer over USB, then run:
 
 ```sh
-cd go
-go build -o ./wendy ./cmd/wendy
-./wendy cloud login --email YOU@YOUR_ORGANIZATION
-./wendy cloud enroll-device \
+wendy cloud login
+wendy discover
+```
+
+Find the board's USB selector in discovery. On macOS it looks like
+`wendy-lite:/dev/cu.usbmodemXXXX`; use the selector shown for your board.
+Enrollment requires USB even if the board is already reachable over Wi-Fi or
+Bluetooth. Configure its Wi-Fi before continuing:
+
+```sh
+wendy device wifi connect --device wendy-lite:/dev/cu.usbmodemXXXX
+```
+
+Choose a network and enter its password when prompted.
+
+## 2. Enroll the board
+
+```sh
+wendy cloud enroll-device \
   --device wendy-lite:/dev/cu.usbmodemXXXX \
   --name lite-desk
 ```
 
-This is the same `cloud enroll-device` command used for WendyOS. The selected
-device determines the protocol: agent gRPC for WendyOS, or WendyCom over USB for
-Lite. Omit `--device` to use the normal picker, or use a USB device ID shown by
-`wendy discover`. The hidden `wendy device enroll` alias uses the same dispatch.
+Replace the selector and name. If you omit `--device`, choose the USB connection
+in the device picker. Select your organization when prompted. The CLI checks the
+firmware, sends the enrollment settings, reboots the board, and waits for it to
+install its device certificate. Keep USB connected until the command finishes.
+The board creates its private key itself.
 
-The board needs Wi-Fi and the enrollment-capable firmware from
-[wendy-lite#57](https://github.com/wendylabsinc/wendy-lite/pull/57) and its dedicated
-identity partition. Trust bundles can be provisioned during enrollment, so
-the firmware does not need deployment-specific roots. The CLI checks firmware
-support before minting a token. Current firmware reports whether PKI, the cloud
-connection task and Wi-Fi are enabled. The CLI stops before reserving an asset
-if firmware explicitly reports that enrollment is disabled. Older firmware that
-does not report this capability remains supported.
-Lite enrollment requires a physical USB connection. The CLI rejects LAN,
-Bluetooth and Cloud targets before opening a connection or minting a credential.
-After reboot, completion checks reuse the selected USB connection.
+For hosted Wendy Cloud, the CLI selects the connection and certificate settings
+automatically. You do not need to build the CLI or supply certificate files.
+If the CLI says the firmware does not support enrollment, update the board
+using the [Wendy Lite installation guide](/docs/installation/wendy-lite-esp32).
 
-Signed time defaults to [Sigstore's public RFC 3161 service](https://docs.sigstore.dev/cosign/verifying/timestamps/)
-at `https://timestamp.sigstore.dev/api/v1/timestamp`. The CLI bundles Sigstore's
-TSA root, discovers device roots from the selected PKI's EST endpoint, and obtains
-HTTPS roots from connections verified by the enrolling computer. No time or root
-flags are needed with a deployment that supports EST discovery.
-
-Update older Lite firmware before using this default. The verifier must support
-Sigstore's P-384 timestamp signer and RFC 3161 signing-certificate issuer details.
-Cloudflare's Roughtime service uses a different protocol and is not supported by
-this firmware.
-
-For custom device trust, supply `--device-roots device-ca-bundle.pem` and
-`--https-roots server-ca-bundle.pem` together. The default TSA root is still
-included, and the CLI adds the verified HTTPS root for Sigstore. To use a custom
-RFC 3161 service, pass `--time-url https://time.example/v1/time` and provide
-`--tsa-roots tsa-ca-bundle.pem` with the device and HTTPS bundles. Obtain custom
-bundles from the PKI administrator. Firmware with all three custom bundles pinned
-at build time can omit the file flags.
-
-Firmware uses mbedTLS by default. When the board does not advertise ML-DSA
-verification, the CLI requests the tenant's P-256 device CA chain and signs that
-choice into the Class C enrollment request. PKI binds the token to that authority,
-so the device's own P-256 CSR receives a chain it can verify. This requires PKI and
-broker versions that support the P-256 device authority; an older PKI returning
-ML-DSA roots still stops enrollment before reserving an asset. Explicit device
-root files and firmware-pinned roots retain the deployment's configured issuer.
-Supplied files must pass the board's algorithm compatibility checks.
-
-Firmware built with `CONFIG_WENDY_PKI_WOLFSSL=y` advertises ML-DSA verification and
-retains the normal device CA chain. The flag is disabled by default. A P-256 leaf
-beneath an ML-DSA issuer requires this verifier. Both profiles support a TSA signing with
-ECDSA P-256 or P-384 and SHA-256. The HTTPS bundle must cover the broker too.
-
-The firmware stores bundles with enrollment configuration and uses them after
-reboot. Each bundle supports at most eight CA certificates and 16 KiB. Bundles
-plus the signed-time response must fit within 64 KiB. Normal Wi-Fi configuration
-updates preserve enrollment. Replacing or erasing the entire configuration removes
-its bundles. To change an enrolled board's trust, unenroll it over USB and then
-enroll again. This does not introduce remote trust rotation.
-
-The CLI obtains the board's nonce and a signed RFC 3161 timestamp. The board
-verifies the TSA chain, signature, nonce, imprint and persisted rollback floor. The CLI then asks
-Cloud's `DeviceEnrollmentService.EnrollDevice` for a Class C credential. Both the Cloud
-RPC and PKI enrollment artifact are signed with the operator's existing identity.
-Cloud reserves the tenant/device asset in PostgreSQL. The single-use token and
-public setup data go to the board over USB; its private key is generated
-on-device. The CLI reboots the board and waits for certificate installation.
-
-The CSR URL derives from the selected session's `PKIEndpoint`. The default time
-service is independent of that deployment.
-Self-hosted deployments can pass `--csr-url https://csr.example/v1/TENANT_UUID`
-and `--time-url https://time.example/v1/time`. Production Cloud sessions at
-`api.wendy.dev` or `api.wendy.sh` use `tunnel.wendy.dev:5055` for the Lite broker.
-Development sessions at `api.dev.wendy.sh` or `api.dev.wendy.dev` use
-`tunnel.dev.wendy.dev:5055`. Hosted Cloud sessions need no broker flags.
-The WendyOS devices hostname does not expose the Lite listener. Other Cloud
-endpoints retain their existing hostname selection,
-with port 5055 by default. Explicit `--broker-host` and `--broker-port` values
-are preserved for separately deployed Lite listeners.
-Use `--cloud-grpc` to select a particular Cloud endpoint/session.
-
-A reserved asset or uploaded configuration is not a successful enrollment.
-Failures report the reserved asset ID; rerunning does not silently recover an
-expired or existing identity. After enrollment, `wendy cloud discover` shows
-presence once the board completes mTLS and the broker's presence checks.
-
-After enrollment, select the online Lite asset through `wendy cloud discover`.
-The CLI opens a broker-authorized relay using the selected Cloud session, then
-uses the exact operator certificate that signed the relay request to authenticate
-directly to the device.
-It verifies the device certificate against the enrolled PKI device name and tenant
-before sending WendyCom. Keep the ML-DSA login identity for Cloud administration
-and enrollment authorization. For the Cloud relay, the CLI uses a separate P-256
-Lite operator certificate with the same operator SPIFFE URI. It requests that
-certificate from pki-core over the ML-DSA login when it needs one, and stores it
-with the login. `WENDY_LITE_OPERATOR_CERT` (leaf and CA chain, PEM) and
-`WENDY_LITE_OPERATOR_KEY` override it with a pki-core-issued pair; the CLI
-rejects an identity that differs from the selected operator.
-
-The CLI verifies a P-256 device certificate through the tenant's Lite Device CA,
-which the tenant Intermediate signs with ML-DSA, up to the trust the ML-DSA login
-already holds, over Cloud, LAN and BLE alike. It starts fetching that CA chain
-from the selected PKI as it connects, and only a board issued by the Lite Device
-CA waits for it; other boards never wait on PKI. The chain is reused for 15
-minutes, and a failed fetch for 30 seconds; if the fetch fails, only boards
-issued by the Lite Device CA are refused.
-A CA that does not chain to the session trust is refused, including the
-self-signed copy the board pins. The CLI checks the chain, validity and the exact
-device identity in your tenant. It does not check the device certificate's
-revocation status. This authority remains separate from the Lite operator authority used to
-authenticate the CLI to the device.
-
-The broker authenticates the device's initial mTLS control connection, requests an
-upgrade, and closes that TLS session without closing TCP. It then forwards opaque
-bytes between the CLI and the same device socket. The device becomes the TLS
-server and requires an operator certificate. The firmware reconnects its control
-connection after each handoff so another session can connect while the current
-one remains active. Relay payloads contain TLS bytes, with WendyCom framing inside
-the encrypted session. Older bare-protobuf relay clients are incompatible.
-
-This requires the coordinated firmware and broker update in
-[cloud#753](https://github.com/wendylabsinc/cloud/pull/753), tracked by WDY-3512.
-
-## Remove an old enrollment
-
-A Lite board's PKI device ID is `lite-` followed by its hardware ID, such as
-`lite-441bf6804824`. Renaming the board does not release that ID from an existing
-cloud asset. Remove the old enrollment before enrolling the same board again.
-
-Use cloud unenrollment when the board is offline or its firmware is corrupt:
+## 3. Check that it is online
 
 ```sh
-wendy cloud discover --all --json
-wendy cloud device unenroll --device <asset-uuid-or-name>
+wendy cloud discover
 ```
 
-The selector also accepts the PKI device ID reported by an enrollment conflict:
+Wait for your board to appear online, then select it for your next command.
+Cloud presence can take a little longer than enrollment. The board needs Wi-Fi
+and internet access to connect to Wendy Cloud.
 
-```sh
-wendy cloud device unenroll --device lite-441bf6804824
-```
+Over LAN and Bluetooth, the CLI requires the board's certificate to name the
+device UUID the board advertises. Firmware that does not advertise it over
+Bluetooth is looked up in the selected Cloud organization by its hardware ID, so
+sign in first. Over LAN, update firmware that advertises no device identity.
 
-The equivalent device command is:
+## If enrollment does not finish
 
-```sh
-wendy device unenroll --cloud-only --device <asset-uuid-or-name>
-```
+- **The board is already enrolled or has a pending enrollment:** let the pending
+  operation finish. To start over, remove its enrollment over USB as shown below.
+- **An error reports a reserved asset:** Cloud has created a device record, but
+  the board has not finished enrolling. Keep the reported asset ID for cleanup;
+  a Cloud record alone does not mean the board is ready.
+- **The board is enrolled but offline:** check its power, Wi-Fi and internet
+  connection. Read its console for a more specific error:
 
-These commands use your cloud session without connecting to the board. They
-revoke its certificates and bootstrap credentials, delete the cloud asset, and
-release its device ID. Add `--yes` when running non-interactively. Use
-`--cloud-grpc` to select another cloud endpoint/session.
+  ```sh
+  wendy device logs --device wendy-lite:/dev/cu.usbmodemXXXX
+  ```
 
-For a USB-connected board, the normal device command checks firmware reset
-support, reads its hardware ID and removes the matching cloud enrollment. It then
-clears the local enrollment and reboots the board:
+  Press Ctrl+C to stop reading. The Lite console does not support the WendyOS
+  app filters, `--tail`, or `--no-follow` options.
+
+## Remove or change the enrollment
+
+Sign in to the organization the board is currently enrolled in, connect it over
+USB, and run:
 
 ```sh
 wendy device unenroll --device wendy-lite:/dev/cu.usbmodemXXXX
 ```
 
-This requires firmware that advertises enrollment reset support. Older firmware
-is rejected before any cloud credentials are revoked. Update that firmware over
-USB first, or explicitly use `--cloud-only` to remove only the cloud enrollment.
-LAN, Bluetooth and Cloud connections cannot clear a Lite board's identity.
+Confirm the removal. The command removes Cloud access, clears the board's local
+enrollment, and reboots it. Wi-Fi and app configuration are preserved. You can
+then enroll it again, including in another organization.
 
-The reset removes the device key, certificate, pending issuance and enrollment
-configuration while preserving Wi-Fi and app configuration. The firmware checks
-the hardware ID and a fresh device challenge before accepting the USB reset.
-The CLI verifies that the identity was cleared before requesting a reboot.
+If Cloud removal succeeds but the USB reset fails, reconnect the board and rerun
+the same command. Firmware without reset support, or that does not report its
+enrollment identity, must be updated first. If several Cloud records carry the
+board's hardware ID, the command lists them and removes none; remove each with
+`wendy cloud device unenroll --device <asset-id>`, then run it again.
+Bluetooth and LAN connections cannot clear a Lite board's enrollment.
 
-If cloud cleanup succeeded but local reset failed, rerun the same USB unenroll
-command. It also handles a cloud asset previously removed with `--cloud-only`,
-after checking the selected organization's cloud inventory. Authentication or
-cloud lookup failures stop the reset. Once unenrollment completes, run
-`wendy device enroll` with the same USB device selected. Rebooting alone or
-replacing configuration does not clear an issued identity.
-
-
-Read the firmware console with:
+If the board is unavailable, remove its Cloud access without contacting it:
 
 ```sh
-wendy device logs --device wendy-lite:/dev/cu.usbmodemXXXX
+wendy cloud discover --all --json
+wendy cloud device unenroll --device <asset-id-or-name>
 ```
 
-This streams buffered and live output without blocking firmware tasks. Ctrl-C
-detaches; `--json` reports console chunks with `data`, `stderr`, and `gap` fields.
-WendyOS app/service/severity filters, `--tail`, and `--no-follow` are not supported
-by the Lite console. USB was tested on the XIAO ESP32-S3; LAN and BLE use the
-provider's existing authenticated connection paths.
+This leaves the board's local enrollment in place. Before re-enrolling that
+board, connect it over USB and run the normal `wendy device unenroll` command.
+See [unenrollment options](/docs/advanced/clients/wendy-cli/commands/device/unenroll).
+
+## Advanced: self-hosted deployments
+
+Use settings supplied by your Wendy administrator. `--cloud-grpc` selects the
+Cloud endpoint of a saved sign-in. Hosted Wendy Cloud needs no overrides.
+
+| Option | When to use it |
+| --- | --- |
+| `--broker-host`, `--broker-port` | Your deployment uses a separate Lite relay. |
+| `--csr-url` | Your administrator supplies a custom certificate enrollment URL. |
+| `--device-roots`, `--https-roots` | Your administrator supplies custom CA certificate bundles. Provide both files together. |
+| `--time-url`, `--tsa-roots` | Your administrator supplies a custom signed-time service and its trusted CA bundle. |
+
+The default signed-time service is Sigstore. Keep firmware current so it can
+verify that service. Certificate bundles are saved on the board for later boots.
+To replace an enrolled board's trust settings, unenroll it over USB and enroll
+again with the administrator's settings.

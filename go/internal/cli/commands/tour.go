@@ -1302,7 +1302,7 @@ func (m tourWizardModel) viewAptInstall(w int) string {
 	var sb strings.Builder
 	sb.WriteString(wizTitleStyle.Render("Step 2 — Install the Wendy Agent") + "\n")
 	sb.WriteString(wizSubStyle.Render("Run the following on your Linux device:") + "\n\n")
-	sb.WriteString("  " + wizCodeStyle.Render("curl -fsSL https://install.wendy.dev/agent.sh | bash") + "\n\n")
+	sb.WriteString("  " + wizCodeStyle.Render(linuxDesktopCommand("", "", linuxDesktopMachineLabel)) + "\n\n")
 	sb.WriteString(wizBodyStyle.Width(w).Render(
 		"Or using APT:\n") + "\n")
 	sb.WriteString("  " + wizCodeStyle.Render("curl -fsSL https://install.wendy.dev/apt-key.gpg | sudo apt-key add -") + "\n")

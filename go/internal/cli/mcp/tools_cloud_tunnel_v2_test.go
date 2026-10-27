@@ -127,32 +127,16 @@ func TestResolveCloudDeviceV2UsesUUID(t *testing.T) {
 	}
 }
 
-func TestCloudTunnelRefusesUDPOnV2(t *testing.T) {
-	const deviceUUID = "11111111-1111-4111-8111-111111111111"
-	addr := startFakeAssetV2Server(t, &fakeAssetV2Server{
-		online: []*cloudpbv2.Asset{{Id: deviceUUID, Name: "edge-one", IsComputeDevice: true}},
-	})
-	auth := v2TestAuth(t, addr)
-	s := New(&config.Config{Auth: []config.AuthConfig{*auth}}, nil)
-
-	res, err := s.callTool(context.Background(), "cloud_tunnel", map[string]any{
-		"device_name": "edge-one",
-		"local_port":  15353,
-		"protocol":    "udp",
-	})
-	if err != nil {
-		t.Fatalf("callTool: %v", err)
-	}
-	if !res.IsError || !strings.Contains(toolResultText(t, res), "does not expose UDP forwarding") {
-		t.Fatalf("v2 UDP tunnel should be refused; got %+v", res)
-	}
-}
-
 // TestCloudTunnelV2UsesLiveRelay proves the v2 tunnel dials the live
 // wendycloud.tunnel.v2 relay, never the retired wendycloud.v2.TunnelBrokerService
 // (WDY-3119). It captures the first dialed method against an unknown-service
 // handler; the RPC itself failing afterward is fine.
 func TestCloudTunnelV2UsesLiveRelay(t *testing.T) {
+	for _, protocol := range []string{"tcp", "udp"} {
+		t.Run(protocol, func(t *testing.T) { testCloudTunnelV2UsesLiveRelay(t, protocol) })
+	}
+}
+func testCloudTunnelV2UsesLiveRelay(t *testing.T, protocol string) {
 	var gotMethod string
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -169,7 +153,11 @@ func TestCloudTunnelV2UsesLiveRelay(t *testing.T) {
 	device := mcpCloudDevice{name: "edge-one", key: "11111111-1111-4111-8111-111111111111", isV2: true}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	_, _ = device.openTunnel(ctx, nil, auth, 50052) // error is expected; we only inspect the dialed method
+	if protocol == "tcp" {
+		_, _ = device.openTunnel(ctx, nil, auth, 8080)
+	} else {
+		_, _ = device.openDatagram(ctx, nil, auth, 5353)
+	} // error is expected; we only inspect the dialed method
 
 	if !strings.HasPrefix(gotMethod, "/wendycloud.tunnel.v2.") {
 		t.Fatalf("v2 tunnel dialed %q, want the live wendycloud.tunnel.v2 relay", gotMethod)
@@ -220,7 +208,10 @@ func TestMCPTunnelServiceMapping(t *testing.T) {
 	}{
 		{50052, "wendy-agent", false},
 		{22, "ssh", false},
-		{8080, "", true},
+		{8080, "tcp-8080", false},
+		{65535, "tcp-65535", false},
+		{0, "", true},
+		{65536, "", true},
 	} {
 		got, err := mcpTunnelService(tc.port)
 		if tc.wantErr {

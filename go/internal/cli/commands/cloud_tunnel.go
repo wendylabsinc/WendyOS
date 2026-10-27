@@ -100,18 +100,17 @@ func cloudContext(ctx context.Context, auth *config.AuthConfig) (context.Context
 }
 
 func connectToCloudAgent(ctx context.Context, cloudGRPC, deviceName, brokerURL string) (*grpcclient.AgentConnection, error) {
-	return connectToCloudAgentExpecting(ctx, cloudGRPC, deviceName, brokerURL, nil)
-}
-
-// connectToCloudAgentExpecting checks a saved LAN identity before treating a
-// Cloud name match as the same default device. A reused name in another org or
-// after re-enrollment must not silently redirect a run to a different asset.
-func connectToCloudAgentExpecting(ctx context.Context, cloudGRPC, deviceName, brokerURL string, expected *certs.WendyIdentity) (*grpcclient.AgentConnection, error) {
 	auth, err := pickAuthEntry(cloudGRPC)
 	if err != nil {
 		return nil, err
 	}
 
+	return connectToCloudAgentWithAuthExpecting(ctx, auth, deviceName, brokerURL, nil)
+}
+
+// connectToCloudAgentWithAuthExpecting checks a saved identity before treating
+// a Cloud name match as the same device (see connectToPinnedCloudName).
+func connectToCloudAgentWithAuthExpecting(ctx context.Context, auth *config.AuthConfig, deviceName, brokerURL string, expected *certs.WendyIdentity) (*grpcclient.AgentConnection, error) {
 	asset, err := pickCloudDiscoveryDevice(ctx, auth, deviceName, brokerURL)
 	if err != nil {
 		return nil, err
@@ -185,28 +184,11 @@ func connectCloudDiscoveryDevice(ctx context.Context, auth *config.AuthConfig, a
 	})
 
 	cert := auth.Certificates[0]
-	keyPEM, err := cert.PrivateKeyPEM()
-	if err != nil {
-		return nil, fmt.Errorf("loading client key: %w", err)
-	}
-	x509Cert, err := certs.TLSKeyPair(cert.PemCertificate, cert.PemCertificateChain, keyPEM)
-	if err != nil {
-		return nil, fmt.Errorf("loading agent mTLS cert: %w", err)
-	}
 	expectedIdentity := cloudDiscoveryIdentity(auth, asset)
-	verifyConn, err := certs.BuildServerVerifyConnection(certs.ServerVerifyOpts{
-		ChainPEM:         cert.PemCertificateChain,
-		ExpectedOrgID:    int32(cert.OrganizationID),
-		ExpectedIdentity: &expectedIdentity,
-	})
+	var verifiedIdentity grpcclient.VerifiedServerIdentity
+	tlsCfg, err := cloudAgentTLSConfig(cert, expectedIdentity, &verifiedIdentity)
 	if err != nil {
-		return nil, fmt.Errorf("building TLS verifier: %w", err)
-	}
-	tlsCfg := &tls.Config{
-		Certificates:       []tls.Certificate{x509Cert},
-		InsecureSkipVerify: true, //nolint:gosec — hostname bypass only; VerifyConnection validates server cert against Wendy PKI
-		VerifyConnection:   verifyConn,
-		MinVersion:         tls.VersionTLS12,
+		return nil, err
 	}
 
 	grpcConn, err := grpc.NewClient(
@@ -227,7 +209,7 @@ func connectCloudDiscoveryDevice(ctx context.Context, auth *config.AuthConfig, a
 		return nil, fmt.Errorf("creating tunnelled gRPC connection: %w", err)
 	}
 
-	agentConn := grpcclient.NewFromConn(grpcConn)
+	agentConn := grpcclient.NewFromConnWithVerifiedIdentity(grpcConn, &verifiedIdentity)
 	agentConn.Host = asset.GetName()
 	if asset.legacy != nil {
 		agentConn.MeshHost = meshname.Device(asset.legacy.GetId())
@@ -263,8 +245,14 @@ func waitForCloudAgentRestart(ctx context.Context, auth *config.AuthConfig, asse
 	})
 }
 
+// cloudAgentRestartTimeout is how long waitForCloudDeviceRestart waits for an
+// agent reached through Cloud to answer again after it restarts. It is longer
+// than a LAN restart wait: the new agent process must first register its
+// presence with the Cloud relay again, and only then can a new tunnel reach it.
+const cloudAgentRestartTimeout = 60 * time.Second
+
 func waitForCloudDeviceRestart(ctx context.Context, name, id string, connect func(context.Context) (*grpcclient.AgentConnection, error)) (*grpcclient.AgentConnection, error) {
-	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, cloudAgentRestartTimeout)
 	defer cancel()
 	restartErr := func() error {
 		return fmt.Errorf("timed out waiting for %s (id=%s) to restart", name, id)
@@ -281,7 +269,14 @@ func waitForCloudDeviceRestart(ctx context.Context, name, id string, connect fun
 			return nil, restartErr()
 		default:
 		}
-		attemptCtx, attemptCancel := context.WithTimeout(ctx, 10*time.Second)
+		// connect only creates a lazy client, so the tunnel itself (Cloud
+		// authorization, both sides joining the relay, the mTLS handshake) is
+		// built inside the probe RPC. That takes 6-10 s when the device is on a
+		// slow uplink, so the probe gets the whole attempt budget, the same one
+		// `cloud discover` gives a new tunnel to fetch the agent version. A
+		// short probe deadline cancels every attempt and reports a successful
+		// restart as a timeout.
+		attemptCtx, attemptCancel := context.WithTimeout(ctx, cloudVersionFetchTimeout)
 		conn, err := connect(attemptCtx)
 		if err != nil {
 			attemptCancel()
@@ -292,9 +287,7 @@ func waitForCloudDeviceRestart(ctx context.Context, name, id string, connect fun
 			}
 			continue
 		}
-		probeCtx, probeCancel := context.WithTimeout(ctx, 3*time.Second)
-		resp, probeErr := conn.AgentService.GetAgentVersion(probeCtx, &agentpb.GetAgentVersionRequest{})
-		probeCancel()
+		resp, probeErr := conn.AgentService.GetAgentVersion(attemptCtx, &agentpb.GetAgentVersionRequest{})
 		attemptCancel()
 		if probeErr == nil {
 			conn.CacheAgentVersion(resp)
@@ -307,6 +300,34 @@ func waitForCloudDeviceRestart(ctx context.Context, name, id string, connect fun
 			return nil, restartErr()
 		}
 	}
+}
+
+// cloudAgentTLSConfig retains the identity accepted by the end-to-end device
+// verifier; Cloud inventory names and routing asset IDs are not peer proofs.
+func cloudAgentTLSConfig(cert config.CertificateInfo, expectedIdentity certs.WendyIdentity, verifiedIdentity *grpcclient.VerifiedServerIdentity) (*tls.Config, error) {
+	keyPEM, err := cert.PrivateKeyPEM()
+	if err != nil {
+		return nil, fmt.Errorf("loading client key: %w", err)
+	}
+	x509Cert, err := certs.TLSKeyPair(cert.PemCertificate, cert.PemCertificateChain, keyPEM)
+	if err != nil {
+		return nil, fmt.Errorf("loading agent mTLS cert: %w", err)
+	}
+	verifyConn, err := certs.BuildServerVerifyConnection(certs.ServerVerifyOpts{
+		ChainPEM:                 cert.PemCertificateChain,
+		ExpectedOrgID:            int32(cert.OrganizationID),
+		ExpectedIdentity:         &expectedIdentity,
+		OnVerifiedServerIdentity: verifiedIdentity.Observe,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("building TLS verifier: %w", err)
+	}
+	return &tls.Config{
+		Certificates:       []tls.Certificate{x509Cert},
+		InsecureSkipVerify: true, //nolint:gosec — hostname bypass only; VerifyConnection validates server cert against Wendy PKI
+		VerifyConnection:   verifyConn,
+		MinVersion:         tls.VersionTLS12,
+	}, nil
 }
 
 func openBrokerTunnel(ctx context.Context, brokerConn *grpc.ClientConn, auth *config.AuthConfig, assetID int32, remotePort uint32) (net.Conn, error) {
@@ -348,14 +369,9 @@ func (d cloudDiscoveryDevice) openTunnel(ctx context.Context, brokerConn *grpc.C
 	if d.legacy != nil {
 		return openBrokerTunnel(ctx, brokerConn, auth, d.legacy.GetId(), remotePort)
 	}
-	service := ""
-	switch remotePort {
-	case 50052:
-		service = "wendy-agent"
-	case 22:
-		service = "ssh"
-	default:
-		return nil, fmt.Errorf("Cloud's authorized tunnel catalog has no service for port %d", remotePort)
+	service, err := cloudrelay.PortService("tcp", remotePort)
+	if err != nil {
+		return nil, err
 	}
 	signer, err := tunnelPrincipalSigner(auth)
 	if err != nil {

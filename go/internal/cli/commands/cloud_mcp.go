@@ -24,6 +24,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/cli/cloudrequest"
 	wendymcp "github.com/wendylabsinc/wendy/go/internal/cli/mcp"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
+	"github.com/wendylabsinc/wendy/go/internal/shared/cloudrelay"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	cloudpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
 	"google.golang.org/grpc/codes"
@@ -140,8 +141,8 @@ func openRelaySession(ctx context.Context, auth *config.AuthConfig) (relayStream
 // their own gRPC host.
 func relayBrokerEndpoint(cloudGRPC string) string {
 	host, _, _ := net.SplitHostPort(cloudGRPC)
-	switch host {
-	case "api.dev.wendy.sh", "api.dev.wendy.dev":
+	switch cloudrelay.CanonicalAPIHost(host) {
+	case "api.dev.wendy.sh":
 		return "https://tunnel.dev.wendy.dev:443"
 	case "api.wendy.sh", "api.wendy.dev":
 		return "https://tunnel.wendy.dev:443"

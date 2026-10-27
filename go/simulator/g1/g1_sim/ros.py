@@ -125,6 +125,8 @@ class RobotObservations(Node):
                 self._sample(snapshot)
 
     def _sample(self, snapshot=None):
+        if self.sampler.model is not self.runtime.sim.model:
+            self.sampler = PhysicsSampler(self.runtime.sim)
         if snapshot is None:
             if not self.sampler.capture(self.runtime):
                 return

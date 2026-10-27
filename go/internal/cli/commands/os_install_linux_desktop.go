@@ -23,11 +23,18 @@ const (
 	headlessMacValue     = "headless-mac"
 	linuxDesktopAgentURL = "https://install.wendy.dev/agent.sh"
 
-	// Machine labels woven into the install instructions. The agent.sh command
-	// is identical for both — it auto-detects the platform (uname -s) and does
-	// the right thing — so only the surrounding prose differs.
+	// Machine labels woven into the install instructions. The same agent.sh
+	// script serves both — it auto-detects the platform (uname -s) — but the
+	// Linux command also opts into network access (see linuxDesktopCommand).
 	linuxDesktopMachineLabel = "Linux machine"
 	headlessMacMachineLabel  = "Mac"
+
+	// linuxDesktopNetworkAccessArgs opts a Linux install into network access.
+	// These instructions set up a machine managed from another computer, but a
+	// fresh agent.sh install otherwise keeps the agent local-only, hidden from
+	// discovery and without a cloud relay. agent.sh rejects the flag on macOS,
+	// where the app asks on first launch instead.
+	linuxDesktopNetworkAccessArgs = " -s -- --network-access network"
 )
 
 // linuxDesktopCmdStyle renders the copyable install command in bold sky (the
@@ -38,36 +45,52 @@ var linuxDesktopCmdStyle = lipgloss.NewStyle().Foreground(tui.Sky500).Bold(true)
 
 // renderLinuxDesktopInstructions returns the text printed when the user picks
 // "Linux Desktop" or "Headless Mac". machineLabel names the target machine in
-// the prose (e.g. "Linux machine" or "Mac"); the agent.sh command itself is
-// identical, since the script auto-detects the platform. With an empty token
-// it prints the plain (unenrolled) docs command; with a token it prints the
-// pre-enrollment one-liner.
+// the prose (e.g. "Linux machine" or "Mac") and selects the command form (see
+// linuxDesktopCommand). With an empty token it prints the plain (unenrolled)
+// docs command; with a token it prints the pre-enrollment one-liner.
 func renderLinuxDesktopInstructions(token, cloudHost, orgName, machineLabel string, expiresAt time.Time) string {
 	var b strings.Builder
 	if token == "" {
 		fmt.Fprintf(&b, "%s\n\n", tui.Header("Install wendy-agent on your "+machineLabel+":"))
-		fmt.Fprintf(&b, "  %s\n\n", linuxDesktopCmdStyle.Render(linuxDesktopCommand("", "")))
+		fmt.Fprintf(&b, "  %s\n\n", linuxDesktopCmdStyle.Render(linuxDesktopCommand("", "", machineLabel)))
+		writeMacNetworkAccessStep(&b, machineLabel)
 		fmt.Fprintf(&b, "The device is discovered over your local network — run %s.\n", tui.Command("wendy discover"))
 		fmt.Fprintf(&b, "To enroll it into an org later, run %s\n", tui.Command("wendy device enroll"))
 		fmt.Fprintf(&b, "%s\n", tui.Dim("(or re-run `wendy install` while logged in for a pre-enrollment token)."))
 		return b.String()
 	}
 	fmt.Fprintf(&b, "Install wendy-agent on your %s; it will enroll into %s automatically.\n\n", machineLabel, tui.Device(orgName))
-	fmt.Fprintf(&b, "  %s\n\n", linuxDesktopCmdStyle.Render(linuxDesktopCommand(token, cloudHost)))
+	fmt.Fprintf(&b, "  %s\n\n", linuxDesktopCmdStyle.Render(linuxDesktopCommand(token, cloudHost, machineLabel)))
+	writeMacNetworkAccessStep(&b, machineLabel)
 	fmt.Fprintf(&b, "This enrollment token expires at %s (about 1 hour). Run the command before then.\n", tui.Value(expiresAt.Format(time.RFC1123)))
 	fmt.Fprintf(&b, "After it boots, run %s to find the device.\n", tui.Command("wendy discover"))
 	return b.String()
 }
 
+// writeMacNetworkAccessStep tells a Headless Mac user to opt into network
+// access, which the Mac app asks for on first launch and defaults to off.
+func writeMacNetworkAccessStep(b *strings.Builder, machineLabel string) {
+	if machineLabel != headlessMacMachineLabel {
+		return
+	}
+	fmt.Fprintf(b, "When Wendy Agent first opens, choose %s so other computers can reach it\n", tui.Value("Allow Other Devices"))
+	fmt.Fprintf(b, "(or turn on %s in its menu later).\n\n", tui.Value("Allow Access from Other Devices"))
+}
+
 // linuxDesktopCommand returns the runnable, single-line agent.sh install
 // command — the form copied to the clipboard so it pastes and runs directly.
-// The multi-line display form lives in renderLinuxDesktopInstructions.
-func linuxDesktopCommand(token, cloudHost string) string {
-	if token == "" {
-		return fmt.Sprintf("curl -fsSL %s | bash", linuxDesktopAgentURL)
+// The multi-line display form lives in renderLinuxDesktopInstructions. Only
+// the Linux form carries linuxDesktopNetworkAccessArgs.
+func linuxDesktopCommand(token, cloudHost, machineLabel string) string {
+	args := ""
+	if machineLabel == linuxDesktopMachineLabel {
+		args = linuxDesktopNetworkAccessArgs
 	}
-	return fmt.Sprintf("curl -fsSL %s | WENDY_ENROLLMENT_TOKEN=%s WENDY_CLOUD_HOST=%s bash",
-		linuxDesktopAgentURL, token, cloudHost)
+	if token == "" {
+		return fmt.Sprintf("curl -fsSL %s | bash%s", linuxDesktopAgentURL, args)
+	}
+	return fmt.Sprintf("curl -fsSL %s | WENDY_ENROLLMENT_TOKEN=%s WENDY_CLOUD_HOST=%s bash%s",
+		linuxDesktopAgentURL, token, cloudHost, args)
 }
 
 // copyLinuxDesktopCommand copies the runnable install command to the clipboard
@@ -75,11 +98,11 @@ func linuxDesktopCommand(token, cloudHost string) string {
 // best-effort convenience: it no-ops when not attached to an interactive
 // terminal, and a clipboard failure (no tool, headless host) is silently
 // ignored rather than surfaced as an error.
-func copyLinuxDesktopCommand(token, cloudHost string, interactive bool) bool {
+func copyLinuxDesktopCommand(token, cloudHost, machineLabel string, interactive bool) bool {
 	if !interactive {
 		return false
 	}
-	if err := clipboardWriter(linuxDesktopCommand(token, cloudHost)); err != nil {
+	if err := clipboardWriter(linuxDesktopCommand(token, cloudHost, machineLabel)); err != nil {
 		return false
 	}
 	fmt.Fprintln(os.Stdout, "\n"+tui.SuccessMessage("Copied the command to your clipboard."))
@@ -96,9 +119,9 @@ var linuxDesktopConfigLoad = config.Load
 
 // installDesktop prints agent.sh install instructions for turning an
 // existing Linux machine or Mac into a managed Wendy device. machineLabel
-// names the target in the printed prose ("Linux machine" or "Mac"); the
-// agent.sh command is identical for both because the script auto-detects the
-// platform. When the user is logged in and does not decline, it mints a
+// names the target in the printed prose ("Linux machine" or "Mac") and picks
+// the command form: only Linux passes --network-access to agent.sh, while the
+// Mac app asks on first launch. When the user is logged in and does not decline, it mints a
 // short-lived enrollment token and prints the pre-enrollment one-liner. It
 // never writes a drive or downloads an image.
 func installDesktop(ctx context.Context, preOpts preEnrollOptions, deviceName, machineLabel string) error {
@@ -167,7 +190,7 @@ func installDesktop(ctx context.Context, preOpts preEnrollOptions, deviceName, m
 	}
 
 	fmt.Fprint(os.Stdout, renderLinuxDesktopInstructions(token, cloudHost, orgName, machineLabel, expiresAt))
-	copyLinuxDesktopCommand(token, cloudHost, interactive)
+	copyLinuxDesktopCommand(token, cloudHost, machineLabel, interactive)
 	return nil
 }
 

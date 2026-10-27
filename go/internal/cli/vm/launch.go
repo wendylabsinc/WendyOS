@@ -248,7 +248,7 @@ func (s *Store) StopContext(ctx context.Context, name string, force bool, grace 
 	if force {
 		return fmt.Errorf("VM %q did not exit after SIGKILL", name)
 	}
-	return fmt.Errorf("VM %q has not shut down after %s; it was not killed: wait longer or use 'wendy vm stop %s --force' to cut power", name, grace, name)
+	return fmt.Errorf("VM %q is still shutting down after %s; it was not killed: wait for it to power off ('wendy vm list' shows when it has stopped) or use 'wendy vm stop %s --force' to cut power", name, grace, name)
 }
 
 // RunForeground runs a VM attached to the given streams and blocks until it

@@ -11,7 +11,11 @@ import (
 	"math/big"
 	"net/url"
 	"testing"
+
+	"github.com/google/uuid"
 	"time"
+
+	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
 )
 
 func TestPKIDeviceTLSRequiresSameTenantOnFullAndResumedSessions(t *testing.T) {
@@ -343,64 +347,127 @@ func testPeerLeafRaw(t *testing.T, ca *x509.Certificate, caKey *ecdsa.PrivateKey
 	return der
 }
 
-// TestNewClientTLSConfigExpectingPeerPinsIdentity covers the LAN-dial peer
-// pinning fix (C-final-review Fix 2): mDNS advertises a device's cloud asset
-// ID unauthenticated, so meshDialLAN must not trust chain validity alone —
-// any device holding a cert signed by the same CA (a different asset in the
-// same org, or a user cert) could otherwise impersonate the mDNS-advertised
-// target and MITM the connection. NewClientTLSConfigExpectingPeer's
-// VerifyPeerCertificate must accept only a peer leaf whose wendy identity is
-// exactly the expected asset in the expected org.
-func TestNewClientTLSConfigExpectingPeerPinsIdentity(t *testing.T) {
-	ca, caKey, chainPEM := testCAKeyPair(t)
-	// The config's own identity supplies the expected tenant: the peer's scope
-	// is compared against the scope of the certificate we ourselves present, so
-	// the dialer has to be an org-7 asset for the org half of the pin to bite.
-	ownCertPEM, ownKeyPEM := testLeafCertificate(t, "sh/wendy/7/1")
-
-	cfg, err := NewClientTLSConfigExpectingPeer(ownCertPEM, chainPEM, ownKeyPEM, nil, "215")
+// testDeviceLeafPEM mints a leaf whose URI SAN is a SPIFFE device principal —
+// the shape a v2-enrolled agent's credential carries.
+func testDeviceLeafPEM(t *testing.T, principal string) (certPEM, keyPEM string) {
+	t.Helper()
+	leafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
-		t.Fatalf("NewClientTLSConfigExpectingPeer: %v", err)
+		t.Fatalf("generating key: %v", err)
+	}
+	u, err := url.Parse(principal)
+	if err != nil {
+		t.Fatalf("parsing principal %q: %v", principal, err)
+	}
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(time.Now().UnixNano()),
+		Subject:      pkix.Name{CommonName: "device"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth, x509.ExtKeyUsageClientAuth},
+		URIs:         []*url.URL{u},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, &leafKey.PublicKey, leafKey)
+	if err != nil {
+		t.Fatalf("creating leaf: %v", err)
+	}
+	certPEM = string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))
+	keyDER, err := x509.MarshalECPrivateKey(leafKey)
+	if err != nil {
+		t.Fatalf("marshaling key: %v", err)
+	}
+	return certPEM, string(pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER}))
+}
+
+// TestNewClientTLSConfigExpectingDevicePinsPrincipal covers the LAN-dial peer
+// pinning: mDNS advertises a device's SPIFFE principal unauthenticated, so
+// meshDialLAN must not trust chain validity alone — any device holding a cert
+// signed by the same CA could otherwise impersonate the mDNS-advertised
+// target and MITM the connection. VerifyPeerCertificate must accept only a
+// peer leaf whose device principal is exactly the dialed device.
+func TestNewClientTLSConfigExpectingDevicePinsPrincipal(t *testing.T) {
+	const tenant1 = "11111111-1111-4111-8111-111111111111"
+	const tenant2 = "22222222-2222-4222-8222-222222222222"
+	const device1 = "33333333-3333-4333-8333-333333333333"
+	const device2 = "44444444-4444-4444-8444-444444444444"
+
+	ca, caKey, chainPEM := testCAKeyPair(t)
+	ownCertPEM, ownKeyPEM := testDeviceLeafPEM(t, "spiffe://wendy.sh/tenant/"+tenant1+"/device/"+device2)
+	want, err := meshid.ParseDevice(mustTenant(t, tenant1), device1)
+	if err != nil {
+		t.Fatalf("parsing want device: %v", err)
+	}
+
+	cfg, err := NewClientTLSConfigExpectingDevice(ownCertPEM, chainPEM, ownKeyPEM, nil, want)
+	if err != nil {
+		t.Fatalf("NewClientTLSConfigExpectingDevice: %v", err)
 	}
 	if cfg.VerifyPeerCertificate == nil {
 		t.Fatal("VerifyPeerCertificate must not be nil (InsecureSkipVerify relies on it)")
 	}
 
-	t.Run("matching asset in expected org is accepted", func(t *testing.T) {
-		leaf := testPeerLeafRaw(t, ca, caKey, "urn:wendy:org:7:asset:215")
+	t.Run("matching device principal is accepted", func(t *testing.T) {
+		leaf := testPeerLeafRaw(t, ca, caKey, "spiffe://wendy.sh/tenant/"+tenant1+"/device/"+device1)
 		if err := cfg.VerifyPeerCertificate([][]byte{leaf}, nil); err != nil {
 			t.Fatalf("expected acceptance, got: %v", err)
 		}
 	})
 
-	t.Run("wrong asset ID in the right org is rejected", func(t *testing.T) {
-		leaf := testPeerLeafRaw(t, ca, caKey, "urn:wendy:org:7:asset:999")
+	t.Run("different device UUID is rejected", func(t *testing.T) {
+		leaf := testPeerLeafRaw(t, ca, caKey, "spiffe://wendy.sh/tenant/"+tenant1+"/device/"+device2)
 		if err := cfg.VerifyPeerCertificate([][]byte{leaf}, nil); err == nil {
-			t.Fatal("expected rejection for wrong asset ID, got nil")
+			t.Fatal("expected rejection for wrong device UUID, got nil")
 		}
 	})
 
-	t.Run("right asset ID in the wrong org is rejected", func(t *testing.T) {
-		leaf := testPeerLeafRaw(t, ca, caKey, "urn:wendy:org:9:asset:215")
+	t.Run("same device UUID in a foreign tenant is rejected", func(t *testing.T) {
+		leaf := testPeerLeafRaw(t, ca, caKey, "spiffe://wendy.sh/tenant/"+tenant2+"/device/"+device1)
 		if err := cfg.VerifyPeerCertificate([][]byte{leaf}, nil); err == nil {
-			t.Fatal("expected rejection for wrong org, got nil")
+			t.Fatal("expected rejection for foreign tenant, got nil")
 		}
 	})
 
-	t.Run("user certificate for the expected identity's org is rejected", func(t *testing.T) {
-		leaf := testPeerLeafRaw(t, ca, caKey, "urn:wendy:org:7:user:215")
+	t.Run("legacy asset certificate is rejected", func(t *testing.T) {
+		leaf := testPeerLeafRaw(t, ca, caKey, "urn:wendy:org:7:asset:215")
 		if err := cfg.VerifyPeerCertificate([][]byte{leaf}, nil); err == nil {
-			t.Fatal("expected rejection for a user certificate, got nil")
+			t.Fatal("expected rejection for a legacy asset certificate, got nil")
+		}
+	})
+
+	t.Run("dialed device outside own tenant is rejected", func(t *testing.T) {
+		foreign, err := meshid.ParseDevice(mustTenant(t, tenant2), device1)
+		if err != nil {
+			t.Fatalf("parsing foreign device: %v", err)
+		}
+		foreignCfg, err := NewClientTLSConfigExpectingDevice(ownCertPEM, chainPEM, ownKeyPEM, nil, foreign)
+		if err != nil {
+			t.Fatalf("NewClientTLSConfigExpectingDevice(foreign): %v", err)
+		}
+		// The peer leaf matches `foreign` exactly; the own-tenant guard must
+		// still refuse the dial because this device lives in tenant1.
+		leaf := testPeerLeafRaw(t, ca, caKey, "spiffe://wendy.sh/tenant/"+tenant2+"/device/"+device1)
+		if err := foreignCfg.VerifyPeerCertificate([][]byte{leaf}, nil); err == nil {
+			t.Fatal("expected rejection for a dialed device outside own tenant, got nil")
 		}
 	})
 
 	t.Run("chain validity is still enforced (untrusted CA rejected)", func(t *testing.T) {
 		otherCA, otherKey, _ := testCAKeyPair(t)
-		leaf := testPeerLeafRaw(t, otherCA, otherKey, "urn:wendy:org:7:asset:215")
+		leaf := testPeerLeafRaw(t, otherCA, otherKey, "spiffe://wendy.sh/tenant/"+tenant1+"/device/"+device1)
 		if err := cfg.VerifyPeerCertificate([][]byte{leaf}, nil); err == nil {
 			t.Fatal("expected rejection for a leaf signed by an untrusted CA, got nil")
 		}
 	})
+}
+
+func mustTenant(t *testing.T, text string) meshid.Tenant {
+	t.Helper()
+	tenant, err := meshid.ParseTenant(text)
+	if err != nil {
+		t.Fatalf("parsing tenant %q: %v", text, err)
+	}
+	return tenant
 }
 
 // TestVerifyPeerDevice covers the device-to-device rule (WDY-3919): one id,
@@ -449,11 +516,11 @@ func TestVerifyPeerDevice(t *testing.T) {
 
 // A UUID pin takes the device rule, which has no own-tenant grace: a caller
 // with a legacy (tenantless) leaf cannot verify a device peer.
-func TestNewClientTLSConfigExpectingPeerAppliesDeviceRuleToUUIDs(t *testing.T) {
+func TestNewClientTLSConfigExpectingDeviceRequiresOwnTenant(t *testing.T) {
 	ca, caKey, chainPEM := testCAKeyPair(t)
 	ownCertPEM, ownKeyPEM := testLeafCertificate(t, "sh/wendy/7/1")
 	const device = "019535d9-3df7-79fb-b466-fa907fa17f9e"
-	cfg, err := NewClientTLSConfigExpectingPeer(ownCertPEM, chainPEM, ownKeyPEM, nil, device)
+	cfg, err := NewClientTLSConfigExpectingDevice(ownCertPEM, chainPEM, ownKeyPEM, nil, meshid.NewDevice(mustTenant(t, "2558fd76-afc7-466e-9613-6b715296a526"), uuid.MustParse(device)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -490,5 +557,24 @@ func TestNewTLSConfigServesNormalizedIssuerChain(t *testing.T) {
 		if _, err := x509.ParseCertificate(der); err != nil {
 			t.Fatalf("TLS peer cannot parse transmitted certificate: %v", err)
 		}
+	}
+}
+
+func TestDevicePinUsesCallerTenantForOperatorCredentials(t *testing.T) {
+	const tenant = "11111111-1111-4111-8111-111111111111"
+	const device = "33333333-3333-4333-8333-333333333333"
+	ca, caKey, chainPEM := testCAKeyPair(t)
+	ownCert, ownKey := testDeviceLeafPEM(t, "spiffe://wendy.sh/tenant/"+tenant+"/operator/test-operator")
+	want, err := meshid.ParseDevice(mustTenant(t, tenant), device)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := NewClientTLSConfigExpectingDevice(ownCert, chainPEM, ownKey, nil, want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	peer := testPeerLeafRaw(t, ca, caKey, "spiffe://wendy.sh/tenant/"+tenant+"/device/"+device)
+	if err := cfg.VerifyPeerCertificate([][]byte{peer}, nil); err != nil {
+		t.Fatalf("same-tenant operator could not pin a device: %v", err)
 	}
 }

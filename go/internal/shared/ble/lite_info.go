@@ -38,6 +38,7 @@ const (
 	liteInfoDeviceNameUUID  = "4E57454E-4459-0002-0003-000000000000"
 	liteInfoDisplayNameUUID = "4E57454E-4459-0002-0004-000000000000"
 	liteInfoMTLSUUID        = "4E57454E-4459-0002-0005-000000000000"
+	liteInfoPrincipalUUID   = "4E57454E-4459-0002-0006-000000000000"
 )
 
 // LiteInfo is the content of a Wendy Lite device's GATT info service.
@@ -47,6 +48,9 @@ type LiteInfo struct {
 	DeviceName  string
 	DisplayName string
 	MTLSEnabled bool
+	// Principal is the enrolled device's SPIFFE URI; empty when unenrolled or
+	// on firmware without the characteristic.
+	Principal string
 }
 
 // ErrLiteInfoUnavailable reports that the device does not publish the info
@@ -77,7 +81,8 @@ func ReadLiteInfoAt(address string, timeout time.Duration) (*LiteInfo, error) {
 // PSM to open along with the identity the device advertises for itself.
 //
 // Every characteristic in the service is required — identity, mTLS, and PSM
-// alike; a device that answers some but not all of them is not recognized, and
+// alike, except the optional principal; a device that answers some but not all
+// of the required ones is not recognized, and
 // this returns ErrLiteInfoUnavailable rather than a partially filled LiteInfo.
 // A caller must never be handed a partial identity — bleExternalDevice would
 // surface a blank name, and MicroWendyProvider's mTLS filter cannot tell "not
@@ -128,12 +133,17 @@ func ReadLiteInfo(conn *central.Connection, timeout time.Duration) (*LiteInfo, e
 		return nil, fmt.Errorf("%w: mTLS characteristic is empty", ErrLiteInfoUnavailable)
 	}
 
+	// Older firmware lacks the principal and unenrolled boards leave it empty,
+	// so a failed read only means no principal.
+	principal, _ := conn.ReadCharacteristic(LiteInfoServiceUUID, liteInfoPrincipalUUID)
+
 	return &LiteInfo{
 		PSM:         psm,
 		DeviceID:    deviceID,
 		DeviceName:  deviceName,
 		DisplayName: displayName,
 		MTLSEnabled: mtls[0] != 0,
+		Principal:   string(principal),
 	}, nil
 }
 

@@ -189,80 +189,179 @@ func effectiveVerificationTime(realNow, notBeforeFloor, certNotBefore time.Time)
 // so that certs issued at provisioning time are still accepted. Pass a zero
 // time.Time to disable the floor.
 func buildVerifyPeerCertificate(caPool *x509.CertPool, caCerts []*x509.Certificate, logger *zap.Logger, notBeforeFloor time.Time) func([][]byte, [][]*x509.Certificate) error {
+	verify := buildPeerCertificateVerifier(caPool, caCerts, logger, notBeforeFloor)
 	return func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
-		if len(rawCerts) == 0 {
-			return fmt.Errorf("no client certificate presented")
-		}
+		_, err := verify(rawCerts, time.Now())
+		return err
+	}
+}
 
+// NewPeerCertificateVerifier verifies against configured CA trust and returns
+// the expiry of the path that actually verified. Unlike the general mTLS
+// loopback policy, the local leaf is not an independent trust anchor.
+// Current time and checkRevocation's leaf validity-window policy are checked on
+// every call; this verifier does not query a Cloud revocation service. A bounded,
+// short-lived cache reuses only signature/path verification for exact chains.
+// New roots or policy require a new verifier and therefore a fresh cache.
+func NewPeerCertificateVerifier(chainPEM string, logger *zap.Logger, notBeforeFloor time.Time) (func([][]byte, time.Time) (time.Time, error), error) {
+	caPool, caCerts, err := peerCertificateTrust(chainPEM)
+	if err != nil {
+		return nil, err
+	}
+	return buildPeerCertificateVerifierWithCache(caPool, caCerts, logger, notBeforeFloor, newPeerPathCache()), nil
+}
+
+// PeerTrustAnchors returns the DER of each certificate that
+// NewPeerCertificateVerifier trusts as an anchor for chainPEM.
+func PeerTrustAnchors(chainPEM string) ([][]byte, error) {
+	_, caCerts, err := peerCertificateTrust(chainPEM)
+	if err != nil {
+		return nil, err
+	}
+	anchors := make([][]byte, len(caCerts))
+	for i, ca := range caCerts {
+		anchors[i] = ca.Raw
+	}
+	return anchors, nil
+}
+
+// peerCertificateTrust excludes leaf certificates even if enrollment material
+// duplicates them in the CA bundle. Otherwise crypto/x509 can treat the leaf
+// itself as a trust anchor and bypass its issuer's expiry. General mTLS's
+// explicit loopback policy does not use this mesh-only trust builder.
+func peerCertificateTrust(chainPEM string) (*x509.CertPool, []*x509.Certificate, error) {
+	if chainPEM == "" {
+		return nil, nil, fmt.Errorf("CA chain PEM is required to verify client certificates; device may need to be re-provisioned")
+	}
+	parsed, err := parseCertsFromPEM([]byte(chainPEM))
+	if err != nil {
+		return nil, nil, fmt.Errorf("parsing chain PEM: %w", err)
+	}
+	caPool := x509.NewCertPool()
+	var caCerts []*x509.Certificate
+	for _, ca := range parsed {
+		if !ca.BasicConstraintsValid || !ca.IsCA || ca.KeyUsage != 0 && ca.KeyUsage&x509.KeyUsageCertSign == 0 {
+			continue
+		}
+		caPool.AddCert(ca)
+		caCerts = append(caCerts, ca)
+	}
+	if len(caCerts) == 0 {
+		return nil, nil, fmt.Errorf("parsing chain PEM: no eligible certificate authorities found")
+	}
+	return caPool, caCerts, nil
+}
+
+func buildPeerCertificateVerifier(caPool *x509.CertPool, caCerts []*x509.Certificate, logger *zap.Logger, notBeforeFloor time.Time) func([][]byte, time.Time) (time.Time, error) {
+	return buildPeerCertificateVerifierWithCache(caPool, caCerts, logger, notBeforeFloor, nil)
+}
+
+func buildPeerCertificateVerifierWithCache(caPool *x509.CertPool, caCerts []*x509.Certificate, logger *zap.Logger, notBeforeFloor time.Time, cache *peerPathCache) func([][]byte, time.Time) (time.Time, error) {
+	return func(rawCerts [][]byte, realNow time.Time) (time.Time, error) {
+		if cache != nil {
+			cache.observe()
+		}
+		if len(rawCerts) == 0 {
+			return time.Time{}, fmt.Errorf("no client certificate presented")
+		}
 		leaf, err := x509.ParseCertificate(rawCerts[0])
 		if err != nil {
-			return fmt.Errorf("parsing client certificate: %w", err)
+			return time.Time{}, fmt.Errorf("parsing client certificate: %w", err)
 		}
-
-		realNow := time.Now()
 		effectiveNow := effectiveVerificationTime(realNow, notBeforeFloor, leaf.NotBefore)
-
-		// Pre-reject expired certs before any further processing. The floor must
-		// not mask real-time expiry: checking here with realNow eliminates any
-		// TOCTOU window between the clock snapshot and the verification call.
+		// These checks also run when the cryptographic path is reused. A clock
+		// floor may accommodate NotBefore, but must never mask real expiry.
 		if realNow.After(leaf.NotAfter) {
 			expiredErr := fmt.Errorf("certificate expired (notAfter=%v)", leaf.NotAfter)
-			// The floor is irrelevant once the cert is expired against the real
-			// clock: pass realNow so the rejection log reflects the actual clock
-			// and never mistakes an expired cert for a clock-skew case.
 			logCertRejection(logger, leaf, expiredErr, realNow, realNow)
-			return expiredErr
+			return time.Time{}, expiredErr
 		}
-
-		// Build an intermediates pool from the rest of the chain presented by the client.
-		intermediates := x509.NewCertPool()
-		var peerCAs []*x509.Certificate
-		for _, rawCert := range rawCerts[1:] {
-			if intermediate, parseErr := x509.ParseCertificate(rawCert); parseErr == nil {
-				intermediates.AddCert(intermediate)
-				peerCAs = append(peerCAs, intermediate)
-			}
+		if effectiveNow.Before(leaf.NotBefore) {
+			err := fmt.Errorf("certificate not valid before %v", leaf.NotBefore)
+			logCertRejection(logger, leaf, err, realNow, effectiveNow)
+			return time.Time{}, err
 		}
-
-		// Try standard Go verification first (handles RSA/ECDSA chains).
-		// CurrentTime uses effectiveNow so that certs issued at provisioning are
-		// accepted when the device clock has not yet synced via NTP.
-		opts := x509.VerifyOptions{
-			Roots:         caPool,
-			Intermediates: intermediates,
-			KeyUsages:     []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
-			CurrentTime:   effectiveNow,
+		if err := checkRevocation(leaf); err != nil {
+			logCertRejection(logger, leaf, err, realNow, effectiveNow)
+			return time.Time{}, err
 		}
-		// Try standard Go verification first (handles RSA/ECDSA chains).
-		stdErr := func() error { _, e := leaf.Verify(opts); return e }()
-		if stdErr != nil {
-			// Only fall back to ML-DSA verification when the leaf cert uses an ML-DSA
-			// signature algorithm; for all other failures return the standard error.
-			sigOID, oidErr := certSigAlgOID(leaf)
-			if oidErr != nil {
-				logCertRejection(logger, leaf, stdErr, realNow, effectiveNow)
-				return stdErr
-			}
-			if _, schemeErr := mldsaScheme(sigOID); schemeErr != nil {
-				logCertRejection(logger, leaf, stdErr, realNow, effectiveNow)
-				return stdErr
-			}
-			mldsaErr := certs.VerifyPeerCertificateChain(leaf, peerCAs, caCerts, x509.ExtKeyUsageClientAuth, realNow, effectiveNow)
-			if mldsaErr != nil {
-				logCertRejection(logger, leaf, mldsaErr, realNow, effectiveNow)
-				return mldsaErr
-			}
+		var expires time.Time
+		if cache == nil {
+			expires, err = verifyPeerCertificatePath(leaf, rawCerts, caPool, caCerts, realNow, effectiveNow)
+		} else {
+			expires, err = cache.verify(rawCerts, realNow, effectiveNow, func(chain [][]byte, now time.Time) (time.Time, error) {
+				// The cache owns these exact bytes before verification starts.
+				parsed, err := x509.ParseCertificate(chain[0])
+				if err != nil {
+					return time.Time{}, err
+				}
+				return verifyPeerCertificatePath(parsed, chain, caPool, caCerts, now, effectiveVerificationTime(now, notBeforeFloor, parsed.NotBefore))
+			})
 		}
-
-		// Single revocation check after successful verification by either path.
-		// checkRevocation only inspects the leaf's validity window, so it needs no
-		// CA list and cannot be bypassed by either the standard or ML-DSA branch.
-		if revErr := checkRevocation(leaf); revErr != nil {
-			logCertRejection(logger, leaf, revErr, realNow, effectiveNow)
-			return revErr
+		if err != nil {
+			logCertRejection(logger, leaf, err, realNow, effectiveNow)
+			return time.Time{}, err
 		}
-		return nil
+		return expires, nil
 	}
+}
+
+// verifyPeerCertificatePath verifies immutable chain constraints and signatures.
+// The caller applies current leaf validity and revocation policy separately.
+func verifyPeerCertificatePath(leaf *x509.Certificate, rawCerts [][]byte, caPool *x509.CertPool, caCerts []*x509.Certificate, realNow, effectiveNow time.Time) (time.Time, error) {
+	// Build an intermediates pool from the rest of the chain presented by the client.
+	intermediates := x509.NewCertPool()
+	var peerCAs []*x509.Certificate
+	for _, rawCert := range rawCerts[1:] {
+		if intermediate, parseErr := x509.ParseCertificate(rawCert); parseErr == nil {
+			intermediates.AddCert(intermediate)
+			peerCAs = append(peerCAs, intermediate)
+		}
+	}
+
+	// Try standard Go verification first (handles RSA/ECDSA chains).
+	// CurrentTime uses effectiveNow so that certs issued at provisioning are
+	// accepted when the device clock has not yet synced via NTP.
+	opts := x509.VerifyOptions{
+		Roots:         caPool,
+		Intermediates: intermediates,
+		KeyUsages:     []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+		CurrentTime:   effectiveNow,
+	}
+	// Try standard Go verification first (handles RSA/ECDSA chains).
+	paths, stdErr := leaf.Verify(opts)
+	var expires time.Time
+	if stdErr != nil {
+		// Only fall back to ML-DSA verification when the leaf cert uses an ML-DSA
+		// signature algorithm; for all other failures return the standard error.
+		sigOID, oidErr := certSigAlgOID(leaf)
+		if oidErr != nil {
+			return time.Time{}, stdErr
+		}
+		if _, schemeErr := mldsaScheme(sigOID); schemeErr != nil {
+			return time.Time{}, stdErr
+		}
+		var mldsaErr error
+		expires, mldsaErr = certs.VerifyPeerCertificateChainExpiry(leaf, peerCAs, caCerts, x509.ExtKeyUsageClientAuth, realNow, effectiveNow)
+		if mldsaErr != nil {
+			return time.Time{}, mldsaErr
+		}
+	} else {
+		// Every returned path verified. Choose the path whose earliest
+		// certificate expiry is latest, without including unrelated input.
+		for _, path := range paths {
+			until := leaf.NotAfter
+			for _, certificate := range path {
+				if certificate.NotAfter.Before(until) {
+					until = certificate.NotAfter
+				}
+			}
+			if until.After(expires) {
+				expires = until
+			}
+		}
+	}
+	return expires, nil
 }
 
 // logCertRejection logs a WARN when a client cert is rejected, with a clock

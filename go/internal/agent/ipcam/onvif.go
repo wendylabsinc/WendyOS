@@ -55,6 +55,7 @@ type probeMatchEnvelope struct {
 	Body    struct {
 		ProbeMatches struct {
 			ProbeMatch []struct {
+				Types  string `xml:"Types"`
 				XAddrs string `xml:"XAddrs"`
 				Scopes string `xml:"Scopes"`
 			} `xml:"ProbeMatch"`
@@ -66,27 +67,56 @@ type probeMatchEnvelope struct {
 // ProbeMatch, which happens for unrelated multicast traffic on port 3702.
 var ErrNoProbeMatch = errors.New("payload contains no ProbeMatch")
 
-// ParseProbeMatch extracts the first ProbeMatch from a discovery response.
+// ErrProbeMatchTypeMismatch is returned when every ProbeMatch explicitly
+// advertises types without the exact NetworkVideoTransmitter local name.
+var ErrProbeMatchTypeMismatch = errors.New("ProbeMatch types do not include NetworkVideoTransmitter")
+
+// ParseProbeMatch extracts the first usable video-transmitter match from a
+// discovery response. Explicit non-camera types are rejected. Omitted or empty
+// Types are accepted: WS-Discovery allows a target to omit them even when
+// answering our NetworkVideoTransmitter-filtered probe.
 func ParseProbeMatch(payload []byte) (ProbeMatch, error) {
 	var env probeMatchEnvelope
 	if err := xml.Unmarshal(payload, &env); err != nil {
 		return ProbeMatch{}, fmt.Errorf("parsing probe response: %w", err)
 	}
 	matches := env.Body.ProbeMatches.ProbeMatch
-	if len(matches) == 0 {
-		return ProbeMatch{}, ErrNoProbeMatch
+	hasCompatibleType := false
+	for _, match := range matches {
+		if strings.TrimSpace(match.Types) != "" && !hasVideoTransmitterType(match.Types) {
+			continue
+		}
+		hasCompatibleType = true
+		out := ProbeMatch{
+			XAddrs: strings.Fields(match.XAddrs),
+			Scopes: strings.Fields(match.Scopes),
+		}
+		// A match with no service address tells us nothing we can act on.
+		if len(out.XAddrs) == 0 {
+			continue
+		}
+		out.Model = modelFromScopes(out.Scopes)
+		return out, nil
 	}
-	first := matches[0]
-	out := ProbeMatch{
-		XAddrs: strings.Fields(first.XAddrs),
-		Scopes: strings.Fields(first.Scopes),
+	if len(matches) > 0 && !hasCompatibleType {
+		return ProbeMatch{}, ErrProbeMatchTypeMismatch
 	}
-	// A match with no service address tells us nothing we can act on.
-	if len(out.XAddrs) == 0 {
-		return ProbeMatch{}, ErrNoProbeMatch
+	return ProbeMatch{}, ErrNoProbeMatch
+}
+
+func hasVideoTransmitterType(types string) bool {
+	for _, typ := range strings.Fields(types) {
+		// Like element names above, QName prefixes vary by vendor. Match
+		// the complete local name, never a substring or a fixed prefix.
+		_, local, prefixed := strings.Cut(typ, ":")
+		if !prefixed {
+			local = typ
+		}
+		if local == "NetworkVideoTransmitter" {
+			return true
+		}
 	}
-	out.Model = modelFromScopes(out.Scopes)
-	return out, nil
+	return false
 }
 
 // modelFromScopes prefers the ONVIF name scope, falling back to hardware so a

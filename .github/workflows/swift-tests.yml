@@ -66,6 +66,9 @@ jobs:
         shell: bash
         run: .github/scripts/restore-trusted-build-cache.sh swiftpm-build-xcode-${{ steps.xcode.outputs.version }} swift/Build/SwiftPM
 
+      - name: Test Mac network-access migration
+        run: bash swift/Scripts/NetworkAccessPreferences_test.sh
+
       - name: Run swift test
         working-directory: swift
         shell: bash

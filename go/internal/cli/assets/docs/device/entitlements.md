@@ -110,6 +110,21 @@ A "network" type entitlement can have the following values:
 }
 ```
 
+### Wendy Net service access
+
+Use `network` mode `mesh` with `serviceCIDR: "10.99.0.0/16"` and isolated
+networking. Declare incoming TCP or UDP ports explicitly. This enables service
+access, not general outbound Internet access. Follow the
+[service sharing guide](/docs/guides/wendy-net-services) for complete manifests.
+
+### Private Avahi
+
+Add `{ "type": "avahi" }` when an app uses Avahi through D-Bus or compatible
+client libraries. Apps using their own mDNS socket do not need this grant.
+Avahi does not grant network access by itself; combine it with the appropriate
+private network entitlement. See the
+[Avahi workflow](/docs/guides/wendy-net-services#alternative-use-private-avahi-through-d-bus).
+
 ## HTTP
 
 Use `http` to declare a web endpoint for clients to discover. It grants no
@@ -127,6 +142,18 @@ Ordinary detached agent deployments include HTTP URLs in their
 [endpoint report](../clients/wendy-cli/commands/run.md#detached-output), without
 checking application health. See the [full `http` reference](../apps/wendy.json.md#http)
 for discovery and attached-run behavior.
+
+## Wi-Fi Aware
+
+Use `{ "type": "nan" }` only when your app needs to manage Wi-Fi Aware discovery
+and direct connections itself. Ordinary Wendy Net apps do not need this grant.
+For an app that sends IP traffic over those direct connections, also add
+`{ "type": "network", "mode": "host" }`.
+
+This grants direct radio control to a trusted app. Wi-Fi Aware shares the device's
+radio with other apps and Wendy Net, so avoid radio-wide start, stop, or reset
+commands. See the [configuration reference](../apps/wendy.json.md#nan) for the
+app's control socket, interface, and reply-directory settings.
 
 ## Input
 

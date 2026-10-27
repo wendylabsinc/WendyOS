@@ -273,7 +273,9 @@ func (v *Verifier) verify(ctx context.Context, compact, typ, audience string, no
 	if c.Iss != v.Issuer || c.Aud != audience || !bounded(audience, 512) {
 		return c, fmt.Errorf("Cloud artifact issuer or audience mismatch")
 	}
-	if c.Iat < 0 || c.Exp <= c.Iat || c.Exp-c.Iat > ttl || c.Iat > now.Unix() || c.Exp <= now.Unix() {
+	// iat is Cloud's clock and now is ours, so iat gets cloudClockSkew. exp
+	// stays strict, and exp-iat <= ttl still bounds what the skew can extend.
+	if c.Iat < 0 || c.Exp <= c.Iat || c.Exp-c.Iat > ttl || c.Iat > now.Add(cloudClockSkew).Unix() || c.Exp <= now.Unix() {
 		return c, fmt.Errorf("Cloud artifact outside validity window")
 	}
 	if !bounded(c.JTI, 128) || !bounded(c.Route, 128) || !bounded(c.Correlation, 128) {
@@ -295,7 +297,7 @@ func (v *Verifier) verify(ctx context.Context, compact, typ, audience string, no
 	return c, nil
 }
 
-// brokerChallengeSkew is the clock-skew allowance applied to both ends of the
+// cloudClockSkew is the clock-skew allowance applied to both ends of the
 // challenge-expiry window. The broker mints expires_at at most 30s after issue
 // (tunnel/v2 BrokerChallenge), so with a zero-tolerance window any positive
 // broker-ahead skew trips the upper bound and any dialer-ahead skew near expiry
@@ -304,7 +306,11 @@ func (v *Verifier) verify(ctx context.Context, compact, typ, audience string, no
 // purpose -- reject genuinely stale or absurd-TTL challenges -- while surviving
 // ordinary skew. Comparison is on absolute instants (google.protobuf.Timestamp
 // -> AsTime()), so it is time-zone independent by construction.
-const brokerChallengeSkew = 5 * time.Second
+//
+// The same allowance covers the iat of Cloud leases and grants (WDY-3939 #11):
+// Cloud stamps iat from its own clock, so a device or CLI running a second
+// behind it would otherwise reject every fresh artifact.
+const cloudClockSkew = 5 * time.Second
 
 func proof(key *ecdsa.PrivateKey, domain, audience, id, jti, artifact, role string, ch *pb.BrokerChallenge) ([]byte, error) {
 	if ch == nil || len(ch.ChallengeId) != 16 || len(ch.Nonce) != 32 || ch.ExpiresAt == nil || ch.ExpiresAt.CheckValid() != nil {
@@ -312,7 +318,7 @@ func proof(key *ecdsa.PrivateKey, domain, audience, id, jti, artifact, role stri
 	}
 	now := time.Now()
 	expiry := ch.ExpiresAt.AsTime()
-	if !expiry.After(now.Add(-brokerChallengeSkew)) || expiry.After(now.Add(30*time.Second+brokerChallengeSkew)) {
+	if !expiry.After(now.Add(-cloudClockSkew)) || expiry.After(now.Add(30*time.Second+cloudClockSkew)) {
 		return nil, fmt.Errorf("expired or excessive broker challenge")
 	}
 	input := canonical([]byte("wendycloud.tunnel.v1/"+domain+"-proof/1"), []byte(audience), []byte(id), []byte(jti), digest([]byte(artifact)), []byte(role), ch.ChallengeId, ch.Nonce)

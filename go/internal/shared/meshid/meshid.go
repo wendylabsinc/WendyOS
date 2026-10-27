@@ -99,6 +99,10 @@ func NewDevice(tenant Tenant, id uuid.UUID) Device {
 	return Device{tenant: tenant, id: id}
 }
 
+// ParseDeviceUUID validates a canonical device UUID carried in an existing
+// Cloud asset_id wire field. It grants no tenant scope or peer authorization.
+func ParseDeviceUUID(text string) (uuid.UUID, error) { return parseCanonical(text) }
+
 // ParseDevice parses a canonical device UUID within a known tenant, e.g. from
 // a roster entry or configured peer list.
 func ParseDevice(tenant Tenant, text string) (Device, error) {

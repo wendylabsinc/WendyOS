@@ -1,0 +1,30 @@
+[
+  {
+    "network_name": "field",
+    "device_uuid": "11111111-2222-3333-4444-555555555555",
+    "psm": 129,
+    "binary_hex": "000081c0d211111111",
+    "local_name": "!&~3o8*;-z"
+  },
+  {
+    "network_name": "production.mesh",
+    "device_uuid": "6f6b1c9e-2d4a-4c8f-9a01-7e5d3b2c1a09",
+    "psm": 128,
+    "binary_hex": "00008016ef6f6b1c9e",
+    "local_name": "!&v}&M0uCK"
+  },
+  {
+    "network_name": "tenant:9ba0dd9f-65ea-34da-8878-d92358210b80:default",
+    "device_uuid": "00000000-0000-4000-8000-000000000001",
+    "psm": 255,
+    "binary_hex": "0000fff05a00000000",
+    "local_name": "!,mw'BG-W}"
+  },
+  {
+    "network_name": "mêsh/🌏",
+    "device_uuid": "ffffffff-ffff-4fff-8fff-ffffffffffff",
+    "psm": 131,
+    "binary_hex": "000083cb00ffffffff",
+    "local_name": "!')&))F/-h"
+  }
+]

@@ -68,10 +68,33 @@ func EnrollmentConfig(auth *config.AuthConfig, deviceID, directoryURL string) (a
 // three regenerations. A random UUID colliding even once is already rare.
 const maxMintAttempts = 4
 
-// errDeviceUUIDTaken is Cloud's pre-mint refusal of a device UUID that is
+// ErrDeviceUUIDTaken is Cloud's pre-mint refusal of a device UUID that is
 // already in use, or whose wendy net address another identity claims, in ANY
 // tenant. Cloud names only the field, never the holder.
-var errDeviceUUIDTaken = errors.New("device UUID already in use")
+var ErrDeviceUUIDTaken = errors.New("device UUID already in use")
+
+// DeviceUUIDTaken reports whether err is Cloud's EnrollDevice refusal of the
+// device UUID itself: AlreadyExists with the colliding-field trailer naming
+// device_id or mesh_suffix. A name duplicate carries no such trailer, and a
+// fresh UUID cannot clear it.
+func DeviceUUIDTaken(err error, trailer metadata.MD) bool {
+	field := trailer.Get(cloudrequest.CollidingFieldMetadataKey)
+	return status.Code(err) == codes.AlreadyExists && (slices.Contains(field, "device_id") || slices.Contains(field, "mesh_suffix"))
+}
+
+// RetryTakenDeviceUUID is the one device UUID collision guard every
+// enrollment path shares (compute and Lite). It calls enroll with deviceID and,
+// while enroll fails with ErrDeviceUUIDTaken, again with a fresh UUID, at most
+// maxMintAttempts times in all; a refused UUID is never reused.
+func RetryTakenDeviceUUID(deviceID string, enroll func(deviceID string) error) error {
+	for attempt := 1; ; attempt++ {
+		err := enroll(deviceID)
+		if !errors.Is(err, ErrDeviceUUIDTaken) || attempt == maxMintAttempts {
+			return err
+		}
+		deviceID = uuid.NewString()
+	}
+}
 
 // MintEAB signs the operator enrollment request and relays it to Cloud's
 // DeviceEnrollmentService.EnrollDevice, returning cfg populated with the
@@ -83,19 +106,23 @@ var errDeviceUUIDTaken = errors.New("device UUID already in use")
 // nil sends none, as the pre-enroll bake must, having no device to ask.
 //
 // The device UUID in cfg is the device's one identity: Cloud adopts it as the
-// asset id. When Cloud refuses it as taken, MintEAB mints a fresh UUID and
-// re-signs, at most maxMintAttempts times in all; a refused UUID is never
-// reused. The returned cfg carries the UUID Cloud accepted.
-func MintEAB(tokenCtx context.Context, cloudConn *grpc.ClientConn, auth *config.AuthConfig, cfg acmeenroll.Config, name string, hw *cloudpbv2.DeviceHardware) (acmeenroll.Config, string, error) {
-	for attempt := 1; ; attempt++ {
-		out, assetID, err := mintOnce(tokenCtx, cloudConn, auth, cfg, name, hw)
-		if !errors.Is(err, errDeviceUUIDTaken) || attempt == maxMintAttempts {
-			return out, assetID, err
+// asset id. A UUID Cloud refuses as taken is replaced through
+// RetryTakenDeviceUUID. The returned cfg carries the UUID Cloud accepted.
+func MintEAB(tokenCtx context.Context, cloudConn *grpc.ClientConn, auth *config.AuthConfig, cfg acmeenroll.Config, name string, hw *cloudpbv2.DeviceHardware) (out acmeenroll.Config, assetID string, err error) {
+	out = cfg
+	err = RetryTakenDeviceUUID(cfg.DeviceID, func(deviceID string) error {
+		next := cfg
+		if deviceID != cfg.DeviceID {
+			var err error
+			if next, err = EnrollmentConfig(auth, deviceID, cfg.DirectoryURL); err != nil {
+				return err
+			}
 		}
-		if cfg, err = EnrollmentConfig(auth, uuid.NewString(), cfg.DirectoryURL); err != nil {
-			return cfg, "", err
-		}
-	}
+		var err error
+		out, assetID, err = mintOnce(tokenCtx, cloudConn, auth, next, name, hw)
+		return err
+	})
+	return out, assetID, err
 }
 
 func mintOnce(tokenCtx context.Context, cloudConn *grpc.ClientConn, auth *config.AuthConfig, cfg acmeenroll.Config, name string, hw *cloudpbv2.DeviceHardware) (acmeenroll.Config, string, error) {
@@ -113,9 +140,8 @@ func mintOnce(tokenCtx context.Context, cloudConn *grpc.ClientConn, auth *config
 	case codes.Unimplemented:
 		return cfg, "", fmt.Errorf("this Cloud deployment does not support OIDC device enrollment; it needs DeviceEnrollmentService/EnrollDevice")
 	case codes.AlreadyExists:
-		field := trailer.Get(cloudrequest.CollidingFieldMetadataKey)
-		if slices.Contains(field, "device_id") || slices.Contains(field, "mesh_suffix") {
-			return cfg, "", fmt.Errorf("Cloud refused device UUID %s before minting anything: %w", cfg.DeviceID, errDeviceUUIDTaken)
+		if DeviceUUIDTaken(err, trailer) {
+			return cfg, "", fmt.Errorf("Cloud refused device UUID %s before minting anything: %w", cfg.DeviceID, ErrDeviceUUIDTaken)
 		}
 		// Cloud validates the name and its unique indexes BEFORE relaying to
 		// pki-core, so nothing was minted. Saying so is the point: the operator

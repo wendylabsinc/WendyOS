@@ -157,10 +157,10 @@ For Raspberry Pi 5, 4, or 3:
 
 <YouTubeVideo id="MjJ-LgXN0Pg" title="Getting started with DGX Spark" />
 
-Use any Linux machine, such as Ubuntu 22.04 or later on ARM64 or x86-64. The video uses an NVIDIA DGX Spark. Run this on that machine:
+Use any Linux machine, such as Ubuntu 22.04 or later on ARM64 or x86-64. The video uses an NVIDIA DGX Spark. Run this on that machine to install the agent with network access, so your development machine can reach it:
 
 ```bash
-curl -fsSL https://install.wendy.dev/agent.sh | bash
+curl -fsSL https://install.wendy.dev/agent.sh | bash -s -- --network-access network
 ```
 
 Keep it on the same network as your development machine, and confirm that `wendy discover` lists it. [Full guide](/docs/installation/linux)
@@ -209,8 +209,11 @@ Stuck? See [troubleshoot your first deployment](/docs/errors).
 ## Next steps
 
 <Cards>
+  <Card title="Operate through Cloud v2" href="/docs/cloud">Enroll a device and deploy remotely. Existing users can follow the Legacy tab and migration guide.</Card>
+  <Card title="Explore the Wendy ecosystem" href="/docs/concepts/ecosystem">Find the tools for sensors, data collection, BI, mobile operation, and AI development.</Card>
   <Card title="Use Wendy in ChatGPT" href="/docs/guides/chatgpt">Connect the hosted Wendy plugin to your devices through a CLI session.</Card>
   <Card title="Build in your language" href="/docs/guides/tutorials">Tutorials for Python, Swift, Rust, C++, TypeScript, and Mojo.</Card>
+  <Card title="Connect devices with Wendy Net" href="/docs/guides/wendy-net">Configure local links, share Internet access, and connect apps across devices.</Card>
   <Card title="Use cameras and GPUs" href="/docs/hardware">Give your app access to device hardware.</Card>
   <Card title="Record data with campaigns" href="/docs/data">Capture sensor data, application events, and model results around a trigger.</Card>
   <Card title="Debug your app" href="/docs/remote-debugging/vscode-extension">Set breakpoints in VS Code while your app runs on the device.</Card>

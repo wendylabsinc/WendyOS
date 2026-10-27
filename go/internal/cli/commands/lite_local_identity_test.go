@@ -108,7 +108,7 @@ func TestLocalLiteDeviceInfoUsesTenantPrimaryIdentity(t *testing.T) {
 			}
 			device := models.ExternalDevice{ConnectionInfo: map[string]string{
 				"type": "LAN", "ip": host, "port": port, "mtls": "true",
-				"tenantId": liteTestTenant, "deviceId": "lite-00aa11bb",
+				"tenantId": liteTestTenant, "deviceId": "00aa11bb", "enrolledDeviceId": liteTestAssetID,
 			}}
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
@@ -183,7 +183,7 @@ func localLiteTestPKI(t *testing.T) (*config.AuthConfig, *tls.Config) {
 	}
 	auth.Certificates[0].PemCertificate = string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: primaryDER}))
 	_, deviceKey := newP256KeyPEM(t)
-	deviceURI, err := url.Parse("spiffe://wendy.sh/tenant/" + liteTestTenant + "/device/lite-00aa11bb")
+	deviceURI, err := url.Parse("spiffe://wendy.sh/tenant/" + liteTestTenant + "/device/" + liteTestAssetID)
 	if err != nil {
 		t.Fatal(err)
 	}

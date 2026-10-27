@@ -12,6 +12,22 @@ Use campaigns to investigate an emergency stop, collect uncertain model
 predictions, or save examples of an object detected by a camera. For a single
 recording, use `wendy data record` without deploying a campaign.
 
+## Local capture, Cloud, and BI
+
+Start with a local episode and verify its manifest before adding remote
+services. Local capture and download do not require Cloud enrollment. On an
+enrolled device, campaign registration and upload have separate requirements;
+use `upload.when: manual` when you want to control when data leaves the device.
+See [current limits](#current-limits) for upload and privacy behavior.
+
+[Wendy Cloud](/docs/cloud) provides remote device access. [Wendy BI](https://wendy.dev/products/wendy-bi)
+provides analysis and dashboards with its own access and data-connection setup.
+Recording an episode does not automatically make it queryable in BI or configure
+model training. Confirm the intended storage and BI integration before building
+a workflow around it. For an existing v1 deployment, check the
+[Cloud v2 migration guide](/docs/cloud-migration), including app-port version
+requirements and service-account limits.
+
 ## What you can record
 
 | Data | How Wendy captures it |

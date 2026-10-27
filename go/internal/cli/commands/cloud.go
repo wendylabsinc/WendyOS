@@ -152,7 +152,7 @@ func newCloudEnrollDeviceCmd() *cobra.Command {
 	cmd := newDeviceEnrollCmd()
 	cmd.Use = "enroll-device"
 	cmd.Hidden = false
-	cmd.Short = "Enroll the selected device with Wendy Cloud or a local pki-core"
+	cmd.Short = "Enroll the selected device in Wendy Cloud"
 	cmd.Long = "Alias for 'wendy device enroll'. " + cmd.Long
 	return cmd
 }

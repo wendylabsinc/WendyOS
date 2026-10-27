@@ -14,7 +14,7 @@ from g1_sim.simulation import DEFAULT_ASSETS, Simulation
 @pytest.fixture
 def sampled():
     sim = Simulation(model=instrumented_model(DEFAULT_ASSETS))
-    runtime = SimpleNamespace(lock=threading.RLock())
+    runtime = SimpleNamespace(lock=threading.RLock(), sim=sim)
     return sim, PhysicsSampler(sim), runtime
 
 

@@ -145,6 +145,9 @@ message RunContainerLayersRequest {
     // Same semantics as CreateContainerRequest.env, which this path forwards to.
     // Agents predating this field ignore it and start the container without it.
     repeated string env = 11;
+
+    // See CreateContainerRequest.release_id.
+    optional string release_id = 12;
 }
 
 message CreateContainerRequest {
@@ -159,9 +162,20 @@ message CreateContainerRequest {
     // Applied after the image's built-in env and before Wendy system env vars,
     // so Wendy vars always win.
     repeated string env = 8;
+
+    // Cloud AppRelease id (a UUID) this deploy was recorded as, set only when
+    // the operator opted into recording (`wendy run --record-release`). The
+    // agent labels the container with it and reports it as the running
+    // release. Unset: the deploy is not a recorded release. Agents predating
+    // this field ignore it.
+    optional string release_id = 9;
 }
 
-message CreateContainerResponse {}
+message CreateContainerResponse {
+    // Digest of the image manifest the container was created from, as the
+    // device holds it. The CLI records it on the release it created.
+    optional string image_digest = 1;
+}
 
 message ValidateContainerResponse {}
 
@@ -269,7 +283,10 @@ message RunContainerLayersResponse {
         ConsoleOutput stderr_output = 3;
     }
 
-    message Started {}
+    message Started {
+        // See CreateContainerResponse.image_digest.
+        optional string image_digest = 1;
+    }
 
     message ConsoleOutput {
         bytes data = 1;

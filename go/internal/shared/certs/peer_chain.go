@@ -53,21 +53,29 @@ func TLSKeyPair(leafPEM, chainPEM, keyPEM string) (tls.Certificate, error) {
 // fail closed; the standard verifier handles such chains when it supports the
 // signature algorithms. leafNow preserves the agent's NotBefore clock floor.
 func VerifyPeerCertificateChain(leaf *x509.Certificate, peers, roots []*x509.Certificate, usage x509.ExtKeyUsage, now, leafNow time.Time) error {
+	_, err := VerifyPeerCertificateChainExpiry(leaf, peers, roots, usage, now, leafNow)
+	return err
+}
+
+// VerifyPeerCertificateChainExpiry applies the same policy as
+// VerifyPeerCertificateChain and returns the earliest expiry on its successful
+// path. Unused issuers and trust anchors do not affect that path's lifetime.
+func VerifyPeerCertificateChainExpiry(leaf *x509.Certificate, peers, roots []*x509.Certificate, usage x509.ExtKeyUsage, now, leafNow time.Time) (time.Time, error) {
 	if len(peers) > 32 {
-		return fmt.Errorf("too many peer certificates")
+		return time.Time{}, fmt.Errorf("too many peer certificates")
 	}
 	if leafNow.Before(leaf.NotBefore) || now.After(leaf.NotAfter) {
-		return fmt.Errorf("peer certificate not valid at current time")
+		return time.Time{}, fmt.Errorf("peer certificate not valid at current time")
 	}
 	if len(leaf.UnhandledCriticalExtensions) != 0 || !permitsUsage(leaf, usage) {
-		return fmt.Errorf("peer certificate has unsupported extensions or authentication usage")
+		return time.Time{}, fmt.Errorf("peer certificate has unsupported extensions or authentication usage")
 	}
 	candidates := append(append([]*x509.Certificate(nil), roots...), peers...)
 	seen := map[string]bool{}
-	var walk func(*x509.Certificate, int) error
-	walk = func(child *x509.Certificate, depth int) error {
+	var walk func(*x509.Certificate, int) (time.Time, error)
+	walk = func(child *x509.Certificate, depth int) (time.Time, error) {
 		if depth >= 8 || seen[string(child.Raw)] {
-			return fmt.Errorf("certificate chain is cyclic or too deep")
+			return time.Time{}, fmt.Errorf("certificate chain is cyclic or too deep")
 		}
 		seen[string(child.Raw)] = true
 		defer delete(seen, string(child.Raw))
@@ -96,16 +104,23 @@ func VerifyPeerCertificateChain(leaf *x509.Certificate, peers, roots []*x509.Cer
 			}
 			for _, root := range roots {
 				if bytes.Equal(root.Raw, ca.Raw) {
-					return nil
+					expires := child.NotAfter
+					if ca.NotAfter.Before(expires) {
+						expires = ca.NotAfter
+					}
+					return expires, nil
 				}
 			}
-			if err := walk(ca, depth+1); err == nil {
-				return nil
+			if expires, err := walk(ca, depth+1); err == nil {
+				if child.NotAfter.Before(expires) {
+					expires = child.NotAfter
+				}
+				return expires, nil
 			} else {
 				lastErr = err
 			}
 		}
-		return lastErr
+		return time.Time{}, lastErr
 	}
 	return walk(leaf, 0)
 }

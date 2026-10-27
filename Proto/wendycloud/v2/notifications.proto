@@ -373,7 +373,12 @@ message DeleteNotificationsThroughRequest {
 }
 
 message DeleteNotificationsThroughResponse {
+  // At most 1000 active recipient rows per call, newest-first by
+  // (created_at, notification_id). Previously deleted rows do not count.
   int32 deleted_count = 1;
+  // More matching rows remain at or before the same anchor. Repeat the same
+  // request until false; the anchor remains valid after its recipient row is deleted.
+  bool more_available = 2;
 }
 
 message MarkAsReadRequest {
@@ -409,7 +414,12 @@ message SetNotificationReadStatusThroughRequest {
 }
 
 message SetNotificationReadStatusThroughResponse {
+  // At most 1000 changed recipient rows per call, newest-first by
+  // (created_at, notification_id). Rows already in the requested state do not count.
   int32 updated_count = 1;
+  // More matching rows still need the requested read state at or before the same
+  // anchor. Repeat the same request until false.
+  bool more_available = 2;
 }
 
 message CountNotificationsRequest {

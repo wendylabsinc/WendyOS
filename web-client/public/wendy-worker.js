@@ -77,6 +77,8 @@ self.onmessage = ({ data }) => {
           "cloud-connect",
           "credential",
           "sign",
+          "registry-key",
+          "registry-unwrap",
         ].includes(data.method);
         if (shared && self.navigator?.locks)
           await self.navigator.locks.request("wendy-credentials", run);

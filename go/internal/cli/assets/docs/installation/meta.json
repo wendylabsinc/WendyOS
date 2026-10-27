@@ -3,6 +3,7 @@
   "pages": [
     "agent-assisted-setup",
     "wendyos-virtual-machine",
+    "so101-simulator",
     "wendyos-nvidia-jetson-orin-nano",
     "wendyos-nvidia-jetson-agx-thor",
     "wendyos-raspberry-pi-5",

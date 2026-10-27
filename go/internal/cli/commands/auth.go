@@ -112,10 +112,9 @@ func newAuthLoginCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "login",
-		Short: "Log in to Wendy Cloud or a local pki-core instance",
-		Long: "Signs in to production Wendy Cloud using the browser-based OIDC flow by default. The browser collects your email and organization. The CLI obtains an operator certificate from pki-core and saves a refreshable Cloud API session. Pass --email to discover your realm before opening the browser, or --issuer to name it directly.\n" +
-			"With --api-key: issues a certificate from a self-hosted pki-core instance using a Bearer API key.\n" +
-			"With --service-account <key-file> (or " + serviceAccountKeyEnv + "): signs in headlessly as a wendy-auth service account; no browser or terminal is needed.",
+		Short: "Sign in to Wendy Cloud",
+		Long: "Sign in to Wendy Cloud in your browser, choose your organization, then return to the terminal. Wendy saves the sign-in for later commands. Pass --email to supply your email first.\n" +
+			"For scripts, use --service-account <key-file> or " + serviceAccountKeyEnv + ": no browser or terminal is needed. Use --api-key only for a self-hosted deployment that supports it.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			targetCount := 0
 			for _, selected := range []bool{production, development, legacy} {
@@ -235,16 +234,16 @@ func newAuthLoginCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&cloudDashboard, "cloud", "", "Cloud dashboard URL")
-	cmd.Flags().StringVar(&cloudGRPC, "cloud-grpc", "", "Cloud gRPC endpoint, or local pki-core address (host:port) when using --api-key")
-	cmd.Flags().StringVar(&apiKey, "api-key", "", "Bearer API key for local pki-core authentication")
+	cmd.Flags().StringVar(&cloudGRPC, "cloud-grpc", "", "Cloud API endpoint, or self-hosted authentication address (host:port) with --api-key")
+	cmd.Flags().StringVar(&apiKey, "api-key", "", "API key for a self-hosted authentication service")
 	cmd.Flags().Int32Var(&orgID, "org", 1, "Organization ID for --api-key local login. For Wendy Cloud, each login is stored as an auth context; switch with 'wendy auth use <context>'.")
 	cmd.Flags().StringVar(&issuer, "issuer", "", "wendy-auth realm issuer URL, e.g. https://auth.wendy.dev/realms/acme")
 	cmd.Flags().StringVar(&email, "email", "", "Email address for explicit organization discovery with wendy-auth")
 	cmd.Flags().StringVar(&authBase, "auth", defaultProdAuthBase, "wendy-auth base URL for browser login and --email discovery")
 	cmd.Flags().StringVar(&clientID, "client-id", "wendy-cli", "public DPoP OAuth client ID registered in wendy-auth")
 	cmd.Flags().StringVar(&resource, "resource", "", "RFC 8707 API resource indicator (used with OIDC login)")
-	cmd.Flags().StringVar(&identityResource, "pki-resource", defaultPKIIdentityResource, "RFC 8707 pki-core identity resource (used with OIDC login)")
-	cmd.Flags().StringVar(&identityEndpoint, "pki-identity-endpoint", defaultProdPKIIdentityEndpoint, "pki-core operator identity CSR endpoint")
+	cmd.Flags().StringVar(&identityResource, "pki-resource", defaultPKIIdentityResource, "Certificate service authentication audience for browser login")
+	cmd.Flags().StringVar(&identityEndpoint, "pki-identity-endpoint", defaultProdPKIIdentityEndpoint, "Certificate service URL for personal sign-in")
 	cmd.Flags().BoolVar(&printClaims, "print-claims", false, "Print the decoded access-token claims after login (used with --issuer)")
 	cmd.Flags().StringVar(&serviceAccount, "service-account", "", "Service-account key file for headless login (or set "+serviceAccountKeyEnv+" to its contents)")
 	// Keep explicit environment selection and the legacy flow available without
@@ -519,7 +518,7 @@ func newAuthRefreshCertsCmd() *cobra.Command {
 	var all bool
 	cmd := &cobra.Command{
 		Use:   "refresh-certs",
-		Short: "Refresh mTLS certificates of the current auth context",
+		Short: "Renew the current sign-in certificate",
 		Long:  "Generates a new key pair and CSR, then issues new certificates using existing credentials. Only the current auth context (see 'wendy auth use') is refreshed unless --all asks for every stored context.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
@@ -748,7 +747,11 @@ func refreshCertsForAuth(ctx context.Context, auth *config.AuthConfig) error {
 		return fmt.Errorf("no existing certificates")
 	}
 	if auth.OAuthIssuer != "" {
-		return refreshOIDCCertificate(ctx, auth, false)
+		if err := refreshOIDCCertificate(ctx, auth, false); err != nil {
+			return err
+		}
+		registerRegistryKeyAfterMint(ctx, auth)
+		return nil
 	}
 
 	current := auth.Certificates[0]

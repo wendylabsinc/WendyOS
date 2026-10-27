@@ -195,7 +195,7 @@ Regular ESP-IDF projects are the recommended app model for ESP32 targets. Wendy 
 wendy run
 ```
 
-The connected device must run a firmware variant with native app support. Wendy reads its chip target, ensures ESP-IDF 5.5.4 is available through `eim` (offering to install `eim` with Homebrew when it is missing), runs `idf.py set-target` when needed, builds the project, uploads the native application firmware, reboots, reconnects, and streams its console output. ESP-IDF projects are detected automatically; `--build-type` does not need to be set.
+The connected device must run a firmware variant with native app support. Wendy reads its chip target, ensures ESP-IDF 6.0.3 is available through `eim` (offering to install `eim` with Homebrew when it is missing), runs `idf.py set-target` when needed, builds the project, uploads the native application firmware, reboots, reconnects, and streams its console output. ESP-IDF projects are detected automatically; `--build-type` does not need to be set.
 
 See [ESP32 installation](/docs/installation/wendy-lite-esp32) for setup and a minimal project layout.
 
@@ -684,3 +684,16 @@ grant it in Cloud app settings.
 Registration errors stop deployment. Use `--skip-cloud-registration` for an
 offline deployment, then deploy again without it to register later. Unenrolled
 devices skip registration automatically.
+
+## Recording a release
+
+`--record-release <tag>` records the deploy in Cloud as a release of the app:
+the CLI creates the release under the tag before the deploy, the device labels
+the container with it, and the CLI stores the image digest the device reports.
+It is off by default. Without it nothing is recorded, and the device still
+reports the app, which Cloud keeps as an unassigned app. It needs a
+single-container app and one WendyOS device enrolled with Wendy Cloud, checked
+before anything is built. It does not combine with `--watch`,
+`--skip-cloud-registration`, several devices in one run, Compose projects or
+provider targets such as `--device docker`. To record a release without
+deploying, use [`wendy app release`](app/release.md).

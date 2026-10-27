@@ -10,6 +10,14 @@ Use the Go version declared in the repo root’s `go.mod`. The CI workflows use 
 go version   # should match or exceed the `go` line in go.mod
 ```
 
+### Separate routing module
+
+`go/babel` has its own `go.mod`. Work inside that directory when changing its
+library or running its tests; parent-module `./...` patterns skip it. CI uses the
+repository root's Go toolchain version for both modules. The library keeps a
+separate minimum language version for consumers. See the
+[routing test instructions](./testing.md#routing-engine-tests).
+
 ### System Dependencies
 
 #### macOS
@@ -90,7 +98,7 @@ Local `.env*` files are ignored by git, while `.env.example` files may be
 committed as templates. Do not commit real credentials.
 
 For screencast voiceover variables, use `screencast/.env.example` and see
-[screencast tooling](screencasts.md).
+[screencast tooling](/docs/advanced/development/screencasts).
 
 ## Cloning
 
@@ -248,7 +256,7 @@ Then run the agent with:
 sudo ./bin/wendy-agent
 ```
 
-The agent listens on port `50051` (plaintext, pre-provisioning) and port `50052` (mTLS, post-provisioning). It also serves a local unix socket at `/var/lib/wendy/agent-control/agent.sock` for on-device containers with the admin entitlement; inside an entitled container that socket appears at `/run/wendy/agent/agent.sock` (also exported as `WENDY_AGENT_SOCKET`). The OTEL collector listens on `4317` (gRPC) and `4318` (HTTP). All ports can be overridden via environment variables — see [debugging.md](debugging.md).
+The agent listens on port `50051` (plaintext, pre-provisioning) and port `50052` (mTLS, post-provisioning). It also serves a local unix socket at `/var/lib/wendy/agent-control/agent.sock` for on-device containers with the admin entitlement; inside an entitled container that socket appears at `/run/wendy/agent/agent.sock` (also exported as `WENDY_AGENT_SOCKET`). The OTEL collector listens on `4317` (gRPC) and `4318` (HTTP). All ports can be overridden via environment variables — see [debugging.md](/docs/advanced/development/debugging).
 
 ## Dependency License Checks
 

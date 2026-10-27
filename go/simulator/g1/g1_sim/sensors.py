@@ -22,7 +22,7 @@ SCAN_MAX = 12.0
 SCAN_ANGLES = np.linspace(-math.pi, math.pi, SCAN_COUNT, endpoint=False)
 
 
-def instrumented_model(asset_dir, *, sandbox=True, visual_mesh_dir=None):
+def instrumented_model(asset_dir, *, sandbox=True, visual_mesh_dir=None, environment=None):
     """Add massless sensors and optional room geometry to the matching model."""
     robot_dir = Path(asset_dir).resolve() / "robot"
     robot = ET.parse(robot_dir / "g1_29dof.xml").getroot()
@@ -57,6 +57,9 @@ def instrumented_model(asset_dir, *, sandbox=True, visual_mesh_dir=None):
         obstacle = ET.SubElement(world, "body", name="sandbox_obstacle", mocap="true", pos="2.5 1.5 0.4")
         ET.SubElement(obstacle, "geom", name="obstacle", type="box", size="0.4 0.5 0.4",
                       rgba="0.85 0.44 0.18 1", group="0")
+    if environment is not None:
+        from .project import append_environment
+        append_environment(scene, environment)
     for child in robot:
         scene.append(child)
     return mujoco.MjModel.from_xml_string(ET.tostring(scene, encoding="unicode"))
@@ -77,6 +80,8 @@ class PhysicsSampler:
 
     def capture(self, runtime):
         with runtime.lock:
+            if self.model is not runtime.sim.model:
+                self.__init__(runtime.sim)
             if self.sim.mode in {"paused", "fault"}:
                 return False
             mujoco.mj_getState(self.model, self.sim.data, self.integration_state, self.signature)

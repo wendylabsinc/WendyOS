@@ -1,4 +1,5 @@
 import Foundation
+import WendyAgentGRPC
 
 /// A single discovered hardware capability, matching the proto
 /// `ListHardwareCapabilitiesResponse.HardwareCapability` shape.
@@ -25,6 +26,9 @@ struct HardwareInventory: HardwareDiscovering {
     var gpuDiscovery = GPUDiscovery()
 
     func discover(categoryFilter: String?) async throws -> [HardwareCapability] {
+        // Share the serial inventory with pairing. This category reads only
+        // IORegistry metadata and never opens a port.
+        if categoryFilter == "serial" { return serialCapabilities() }
         async let displays = dataType("SPDisplaysDataType")
         async let usb = dataType("SPUSBDataType")
         async let camera = dataType("SPCameraDataType")
@@ -56,11 +60,31 @@ struct HardwareInventory: HardwareDiscovering {
             )
         }
         caps.append(contentsOf: Self.networkCapabilities())
+        caps.append(contentsOf: serialCapabilities())
 
         if let categoryFilter, !categoryFilter.isEmpty {
             caps = caps.filter { $0.category == categoryFilter }
         }
         return caps
+    }
+
+    /// An IORegistry failure yields no serial entries, with or without a
+    /// category filter, as on the Go Agent.
+    private func serialCapabilities() -> [HardwareCapability] {
+        let devices = (try? USBSerialInventory().discover()) ?? []
+        return devices.map { device in
+            HardwareCapability(
+                category: "serial",
+                devicePath: device.devicePath,
+                description: device.product,
+                properties: [
+                    "usb_identity": device.id, "identity_kind": device.identityKind,
+                    "vendor_id": device.vendorID, "product_id": device.productID,
+                    "serial_number": device.serialNumber, "manufacturer": device.manufacturer,
+                    "usb_location": device.usbLocation, "usb_interface": device.usbInterface,
+                ]
+            )
+        }
     }
 
     private func dataType(_ name: String) async -> Data? {

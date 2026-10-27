@@ -5,7 +5,8 @@ operator-facing Wendy Notifications in a Wendy Cloud organization.
 
 ## Proto package
 
-`wendycloud.v1` — defined in `Proto/cloud/notifications.proto`.
+`wendycloud.v1` is defined in `Proto/cloud/notifications.proto`; the UUID-native
+Cloud v2 service is defined in `Proto/wendycloud/v2/notifications.proto`.
 
 ## App-facing API (`wendy.system.v1`)
 
@@ -18,8 +19,11 @@ attempts APNs delivery; apps do not send an arbitrary APNs payload directly.
 WendyKit is currently the only application SDK for this API, and it is
 Swift-only. Apps written in other languages call this gRPC service directly.
 See [Send notifications from a device app](/docs/guides/device-notifications)
-for entitlement and Cloud grant setup, Swift and direct gRPC examples, and
-delivery behavior.
+for local entitlement setup, Swift and direct gRPC examples, and delivery behavior.
+
+Cloud v2 accepts Notifications from an enrolled device for its own organization;
+the app or campaign name is only a label. No per-app grant, catalog entry, or
+Cloud deployment assignment is required.
 
 The private socket binds every call to trusted app identity. The request cannot
 supply an app ID, device ID, or organization ID; the agent adds app identity and
@@ -38,13 +42,15 @@ spelling—returns `ALREADY_EXISTS`; the prior success is never replayed.
 
 Local validation and rate-limit failures happen before forwarding and do not
 claim the UUID. After correcting the request or waiting for the local rate limit,
-the caller may retry with the same `notification_id`.
+the caller may retry with the same `notification_id`. These rate-limit and
+idempotency semantics are the same on the ACME Cloud v2 and legacy Cloud v1
+forwarding paths.
 
 #### `SendRequest`
 
 | Field | Type | Description |
 |---|---|---|
-| `audience` | `NotificationAudience` | Union of the user, organization team, and organization role selectors below. |
+| `audience` | `NotificationAudience` | Union of `user_ids` and `roles` for Cloud v2. |
 | `title` | `string` | Notification title. |
 | `body` | `string` | Notification body. |
 | `severity` | `NotificationSeverity` | `INFO`, `WARNING`, `ERROR`, or `CRITICAL`. |
@@ -54,20 +60,15 @@ the caller may retry with the same `notification_id`.
 
 #### `NotificationAudience`
 
-The app-facing and Cloud messages use the same plural selector shape. All three
-fields have union semantics. At most 100 selector entries may be supplied across
-the three lists. Cloud normalizes and deduplicates them, remains authoritative
-for recipient resolution, and resolves at most 100 recipients for a device-app
-send.
+User and role selectors have union semantics. At most 100 raw selectors may be
+supplied. Cloud resolves and deduplicates recipients inside the device's
+organization. A user selected through more than one field receives one
+Notification. The legacy numeric team field is not forwarded to Cloud v2.
 
 | Field | Type | Description |
 |---|---|---|
 | `user_ids` | `repeated string` | User IDs to include. |
-| `team_ids` | `repeated int32` | Organization team IDs to include. |
 | `roles` | `repeated OrganizationRole` | Organization roles to include. |
-
-At least one selector is required. A user selected through more than one field
-receives one Notification.
 
 #### `SendResponse`
 
@@ -148,8 +149,8 @@ the Wendy agent stamps `app_id` from trusted container state.
 
 | Field | Type | Description |
 |---|---|---|
-| `organization_id` | `optional int32` | Required for user-authenticated callers; omitted by provisioned devices. |
-| `audience` | `NotificationAudience` | Union of repeated `user_ids`, `team_ids`, and `roles`; see above. |
+| `organization_id` | `optional int32` (v1), `optional string` (v2) | Required for user-authenticated callers; omitted by provisioned devices. |
+| `audience` | `NotificationAudience` | Union of repeated `user_ids` and `roles` for Cloud v2. |
 | `title` | `string` | Notification title. |
 | `body` | `string` | Notification body. |
 | `severity` | `NotificationSeverity` | `INFO`, `WARNING`, `ERROR`, or `CRITICAL`. |
@@ -157,6 +158,9 @@ the Wendy agent stamps `app_id` from trusted container state.
 | `notification_id` | `string` | Caller-chosen Notification resource UUID v4; Cloud stores and returns canonical lowercase form and rejects every canonical reuse with `ALREADY_EXISTS`. |
 | `metadata` | `optional Struct` | Structured JSON-compatible metadata. |
 | `app_id` | `optional string` | Required for provisioned-device calls and stamped from trusted app identity by the Wendy agent. |
+
+ACME-enrolled devices use the Cloud v2 service over device mTLS; the Agent
+forwards user and role selectors and omits the retired team selector.
 
 #### `CreateNotificationV2Response`
 
@@ -226,7 +230,7 @@ MarkAsRead(MarkAsReadRequest) → MarkAsReadResponse
 
 Marks the requested Notification IDs as read and returns the number marked.
 
-## Campaign notifications and catalog registration
+## Campaign notifications
 
 A campaign with `notify.on: event` and `notify.event: <name>` sends an immediate
 notification for the matching event. `notify.on: detection` sends on an inference
@@ -234,11 +238,11 @@ appearance. Omit `notify.webhook` for Wendy Cloud delivery, or supply an HTTP(S)
 endpoint for webhook delivery. `episode_committed` remains manifest intent for
 notification after upload; it is separate from immediate delivery.
 
-Cloud delivery currently requires a legacy enrollment with positive numeric
-organization and asset IDs. Experimental direct-PKI/OIDC enrollments with only
-a SPIFFE principal cannot use this sender: it rejects them before sending with
-`FailedPrecondition`, reported in `inference_status.notification_error`. Use an
-explicit `notify.webhook` for immediate notifications on those devices.
+Campaigns use the same device-authenticated Cloud sender as apps. On ACME-enrolled
+devices they call the Cloud v2 service over device mTLS with `app_id` set to
+`campaign:<name>` and owner/admin recipients. The campaign label needs no app
+catalog entry, grant, or deployment assignment. Legacy numeric enrollments retain
+the Cloud v1 sender. An explicit webhook still selects HTTP delivery instead.
 
 The agent uses its enrolled device credentials and a bounded, nonpersistent
 queue. There are at most three attempts, with 10-second timeouts and the same

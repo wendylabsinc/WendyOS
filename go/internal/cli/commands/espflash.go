@@ -39,6 +39,7 @@ const (
 	chipESP32P4
 	chipESP32S3
 	chipESP32C61
+	chipESP32S31
 )
 
 func chipModelForTarget(target string) (chipModel, error) {
@@ -51,6 +52,8 @@ func chipModelForTarget(target string) (chipModel, error) {
 		return chipESP32P4, nil
 	case "esp32s3":
 		return chipESP32S3, nil
+	case "esp32s31":
+		return chipESP32S31, nil
 	case "esp32c61":
 		return chipESP32C61, nil
 	default:
@@ -68,6 +71,8 @@ func chipModelName(chip chipModel) string {
 		return "ESP32-P4"
 	case chipESP32S3:
 		return "ESP32-S3"
+	case chipESP32S31:
+		return "ESP32-S31"
 	case chipESP32C61:
 		return "ESP32-C61"
 	default:
@@ -132,6 +137,28 @@ var regsESP32C5 = chipRegs{
 	spiUser2:      0x60003020,
 	spiMisoDlen:   0x60003028,
 	spiW0:         0x60003058,
+}
+
+// ESP32-S31 ROM addresses, verified against esptool 5.6.0 esp32s31.py.
+var regsESP32S31 = chipRegs{
+	name:          "ESP32-S31",
+	wdtProtect:    0x20801018,
+	wdtConfig0:    0x20801000,
+	swdProtect:    0x20801020,
+	swdConf:       0x2080101c,
+	swdWkey:       0x50d83aa1,
+	swdAutoFeedEn: 0x00040000, // 1<<18
+	efuseA:        0x20715030,
+	efuseB:        0x20715038,
+	chipID0:       0x20715050,
+	chipID1:       0x20715054,
+	macLow:        0x20715050,
+	macHigh:       0x20715054,
+	spiCmd:        0x20501000,
+	spiUser:       0x20501018,
+	spiUser2:      0x20501020,
+	spiMisoDlen:   0x20501028,
+	spiW0:         0x20501058,
 }
 
 var regsESP32C6 = chipRegs{
@@ -656,6 +683,9 @@ func (f *espFlasher) detectChip() error {
 	case 0x0009:
 		f.chip = chipESP32S3
 		f.regs = &regsESP32S3
+	case 0x0020:
+		f.chip = chipESP32S31
+		f.regs = &regsESP32S31
 	case 0x0014:
 		f.chip = chipESP32C61
 		f.regs = &regsESP32C61
@@ -1366,11 +1396,33 @@ func flashFirmwareBytes(portPath string, firmware []byte, transport discovery.Se
 		}
 	}
 
+	// Mosaico uses USB OTG. Its ROM needs a watchdog reset to boot the app;
+	// toggling DTR/RTS only applies to the USB Serial/JTAG controller.
+	if f.chip == chipESP32S31 {
+		return f.watchdogReset()
+	}
+
 	// Step 9: Reboot.
 	// Please note that we never succeeded in using flashEnd() here.
 	if err := resetESP32(f.port, false, transport); err != nil {
 		return fmt.Errorf("resetting after flash: %w", err)
 	}
 
+	return nil
+}
+
+// watchdogReset follows the S31 ROM reset sequence used by esptool.
+func (f *espFlasher) watchdogReset() error {
+	for _, write := range [][2]uint32{
+		{f.regs.wdtProtect, 0x50d83aa1},
+		{f.regs.wdtConfig0 + 4, 2000},
+		{f.regs.wdtConfig0, (1 << 31) | (5 << 28) | (1 << 8) | 2},
+		{f.regs.wdtProtect, 0},
+	} {
+		if err := f.writeReg(write[0], write[1], 0xffffffff, 0); err != nil {
+			return fmt.Errorf("S31 watchdog reset: %w", err)
+		}
+	}
+	time.Sleep(500 * time.Millisecond)
 	return nil
 }

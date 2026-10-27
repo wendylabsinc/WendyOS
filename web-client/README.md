@@ -197,6 +197,32 @@ Sign-out is local; it does not log you out of other Wendy applications.
 
 ## Cloud workspace
 
+Choose **Networks** to inspect local net membership, direct peer links, and selected
+routes. The browser reads snapshots from the signed-in Cloud inventory. The
+desktop combines LAN discovery with the current CLI Cloud inventory. Each
+snapshot uses an independent authenticated connection, so viewing networks does
+not replace the device dashboard connection.
+
+Devices are grouped by their verified tenant and device identity. A device seen
+only through another peer remains visible without claiming that it is reachable
+from this client. Selecting a node shows its reported next hops, carrier types,
+route costs, and signed announcement expiry. A signed route authorizes its
+origin and prefix; it does not prove that an intermediary forwards traffic.
+
+The view polls at most four devices concurrently, then waits ten seconds before
+the next batch. **Pause** stops new reads. Snapshots older than thirty seconds
+are marked stale. An active local network also needs a valid, recent device capture time.
+Failed reads retain the last snapshot visibly as stale. Older agents
+appear as unsupported until updated. Offline, denied, and unverified devices
+remain explicit rather than becoming empty healthy networks.
+
+The underlying read-only API is
+`WendyLocalMeshAdminService.GetLocalMeshTopology`, with the same tenant-scoped
+operator authorization as the existing net administration API. The CLI exposes
+it as `wendy --device HOST:PORT --json device wendy-net topology`.
+`--observation` adds a typed result envelope for clients handling partial
+failures. Neither the API nor this view enables the net or changes its policy.
+
 The sidebar shows the signed-in email from OIDC UserInfo and the organization
 name from Cloud's v2 OrganizationService. UserInfo must match the authenticated
 subject, and organization responses must match the authenticated tenant UUID.
@@ -259,6 +285,8 @@ release commit reproduces the pin.
 | `auth-restore` | `{tenant?, subject?, refresh?}` | that organization's profile, or `null`; `refresh: true` always rotates the refresh token once and fails the restore if that exchange fails |
 | `credential` | `{tenant?}` | `{profile, algorithm, chainDER, accessToken, publicJWK}`; refreshes a token with under a minute left |
 | `sign` | `{tenant?, bytes: Uint8Array}` | `{signature: Uint8Array}` with the operator key |
+| `valid-until` | `{validForSeconds?}` | `{seconds}`: Unix time to sign as a postbox-relayed payload's `valid_until` (`expires_at` on `DeviceAssignment`) |
+| `head-ack-verify` | `{response, rootDER, device, organizationId, kept?}` | `{entryId, entryHash, observedAt}`: the device's verified signed head ack, or an error naming the refused check |
 | `auth-signout` | `{tenant?}` | `true`; no tenant signs out of every organization |
 
 Call `init` once, first, before any sign-in, `credential` or `sign` call; a
@@ -268,6 +296,22 @@ HTTPS (the Cloud gRPC authority on port 443). There is no host allowlist, by
 design: the page owns this worker's origin and its saved sign-ins, and a
 self-hosted deployment names its own services. Saved sign-ins from another
 auth host do not restore.
+
+Every payload cloud relays to a device postbox (`CreateDeploymentRequest`,
+`ControlContainerRequest`, `UnassignDeviceRequest`, `DeviceAssignment`) must
+carry its validity under the operator signature: a device refuses one without
+it. Get it from `valid-until` before serializing the payload. Without
+`validForSeconds` it is 60 days from now; more than 365 days (31536000 s) is
+refused, and cloud may refuse less under the organization's own limit. This is
+the time a device may still apply the instruction, not the 30-second expiry of
+the request signature.
+
+`head-ack-verify` checks a `GetLastHeadAck` response (`response`, the
+serialized `GetLastHeadAckResponse`) for one device against the platform root
+the page pins (`rootDER`, DER; never one cloud serves), both base64. Keep the
+result per device and pass it back as `kept` on the next read: an older or
+forked ack is then refused. Run the staleness alarm on the returned
+`observedAt` only; every refusal reads the same to the user.
 
 `sign` takes the bytes as the request's second argument, a non-empty
 `Uint8Array`; anything else fails with `Nothing to sign`. The bytes are signed

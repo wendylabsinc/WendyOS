@@ -1,136 +1,138 @@
 # `wendy device pair`
 
-Discover and manage paired devices in the `Bluetooth | SensorLink | IP Cameras | Unitree`
-tabs. Use `Tab` or `Shift+Tab` to switch tabs. Opening a tab refreshes its devices.
+Connect peripherals and save their settings on the selected Wendy device.
 
 ```sh
-wendy device pair
+wendy device pair --device <device>
 ```
 
+Use Tab or Shift+Tab to switch between **Bluetooth**, **SensorLink**, **IP Cameras**,
+**USB Arms**, and **Unitree**. Discovery runs on the selected device, so it lists
+peripherals reachable from that device even when your CLI is elsewhere.
+
 | Key | Action |
-|-----|--------|
-| `↑` / `↓` | Select a device |
-| `Tab` / `Shift+Tab` | Switch tabs |
-| `Enter` | Pair a device, or edit an IP camera's login |
-| `f` | Forget the selected device |
-| `r` | Refresh discovery |
-| `l` | Log in to a Unitree account in the Unitree tab |
-| `i` | Enter the selected Unitree robot's IP address |
-| `q` / `Esc` | Quit |
+| --- | --- |
+| Arrow keys | Select a peripheral. |
+| Enter | Pair it, or edit an IP camera's login. |
+| `f` | Forget the selected saved pairing. |
+| `r` | Refresh discovery. |
+| `q` / Esc | Quit. |
 
-Bluetooth scans on the connected WendyOS device. Unnamed peripherals are hidden
-by default; `h` shows or hides them. `Enter` connects and pairs, and `d`
-disconnects the selected peripheral.
+## Bluetooth peripherals
 
-SensorLink discovers sources on the connected WendyOS device's network: WendyOS
-devices and Wendy Lite boards that advertise sensors. The device does not list
-itself. The source must be reachable from that device, even when the CLI runs
-elsewhere, for example over Wendy Cloud. Addresses in the list are the ones the
-device sees. After pairing, the device finds the source by its identity, so a
-source whose address changes is found again.
+Select a peripheral and press Enter to connect and pair it. Unnamed peripherals
+are hidden; press `h` to show them. Press `d` to disconnect a selected peripheral.
+This is separate from Wendy Net's automatic Bluetooth links between devices.
 
-If the device's agent is too old to scan its own network, the tab scans the
-CLI's local network instead and labels the list. The device can pair only with
-sources it can reach, so update its agent to list those. Other discovery errors,
-such as an unreachable device, are reported instead of falling back.
+## SensorLink sources
 
-Sources must belong to the same organization as the target device, and you must
-be logged into that organization. An mTLS Wendy Lite source with a valid
-advertised PKI principal can pair without a numeric asset ID when the target
-Agent supports principal pairing.
-Update the target Agent if it reports that principal pairing is unsupported.
-Sources without either a numeric asset ID or an authenticated PKI identity appear
-under "Found sensors that need enrollment". Enroll those sources before pairing,
-then press `r` to rescan. Saved pairings remain available to forget when their
-sources are offline.
+Select a sensor source and press Enter to pair it. Sources must be reachable
+from the selected Wendy device, enrolled in the same organization, and accessible
+to your signed-in account. Sources needing enrollment are listed separately;
+enroll them and press `r` to refresh.
 
-IP cameras are discovered on the connected device's network. `Enter` opens a
-username and password form that saves the camera's login on the device. Passwords
-are masked. Inside the form, `Tab` switches fields, `Enter` advances or saves, and
-`Esc` returns to the camera list. Saved offline cameras can be forgotten with `f`,
-which removes the camera and its stored login.
+Saved sources are found again if their address changes, and remain available to
+forget while offline. If an older agent falls back to discovery on the CLI's
+network, the list says so; update that agent to scan from the device instead.
 
-The Unitree tab discovers Go2 robots on the selected WendyOS device's LAN. It
-browses mDNS advertisements for known account or saved robot serials and sends
-Unitree's UDP LAN discovery request for stock Go2 robots. The robot must be
-reachable from that WendyOS device, even when the CLI runs elsewhere.
+`--name` gives the pairing a friendly name; `--sensors` limits it to selected
+sensor names. Either flag opens the SensorLink tab. Use `--list` to print saved
+SensorLink pairings.
+
+## IP cameras
+
+Select a camera and press Enter to save its login. Replace the suggested `admin`
+username with your camera's account and enter its password. Passwords are masked.
+Inside the form, Tab switches fields, Enter advances or saves, and Esc cancels.
+Press `f` to forget a camera and remove its saved login, including when offline.
+
+See [network cameras](/docs/hardware/camera#ip-cameras) for streaming and
+camera-specific commands.
+
+## Unitree Go2 robots
+
+Agree with the robot's operator before pairing: the connection uses a robot
+client slot and remains active after you close the CLI. Arrange a handoff if a
+mobile app or another controller already uses it.
 
 ```sh
 wendy device pair --device my-wendy --unitree
-wendy device pair --device my-wendy --ip 192.168.1.42
 ```
 
-Press `l` to enter your Unitree account email and password. The CLI logs in to
-Unitree and retrieves the encryption keys for the robots registered to that
-account. The password is masked and is not saved. Select the matching robot by
-serial number, then press `Enter` to connect. Press `i` to enter or change its IP
-address. With `--ip`, select the account robot at that address and press `Enter`.
-Wendy never picks a key from a different account robot automatically.
+1. Press `l` to sign in to your Unitree account. Use `--unitree-region cn` for an
+   account registered in China; the default region is `global`.
+2. Select your robot by its serial number. Press Enter to connect.
+3. If discovery does not find its address, press `i` to enter it. You can also
+   start with `--ip 192.168.1.42` and select the matching account robot.
 
-Use `--unitree-region cn` for an account registered in Unitree's China region.
-The default is `global`. Inside the login form, `Tab` switches fields, `Enter`
-advances or submits, and `Esc` cancels.
+The password is masked and is not saved. The Wendy device saves the selected
+robot's connection key so it can reconnect after a restart. Keys are stored in a
+private file, without encryption at rest. Forget the pairing with `f` to remove
+that key. Sign in again and reconnect to refresh it. Pairings belong to the Wendy
+device's organization; unenrollment removes them.
 
-The selected WendyOS device stores the robot's key and connects to its local
-WebRTC service. Pairing requires an authenticated WendyOS connection belonging
-to the agent's pairing-owner tenant, or the device's private local agent socket.
-The owner check applies even if the shared mTLS listener uses `grace` or `off`
-tenant enforcement for other services. Newer Go2 firmware requires a key from
-the account. Older firmware can use its legacy local connection protocol when
-the account has no encryption key. Wendy selects the protocol supported by the
-robot. LAN offers never include the Unitree account token. If the account
-supplies a robot key, Wendy refuses weaker notifications and legacy-port
-fallback rather than exposing credentials or trusting an unauthenticated peer.
-Saved robots remain listed while offline. Select one and press `Enter` to
-reconnect without logging in again, or `i` to change its IP. Press `f` to remove
-the saved pairing and key. To refresh a saved robot's key, log in again and
-connect the matching account robot.
+Saved offline robots stay listed. Press Enter to reconnect or `i` to change an
+address. Use a trusted robot LAN, especially with older firmware that cannot
+provide authenticated connections.
 
-The Unitree account token stays within the CLI's vendor-cloud exchange; it is
-not returned to the pairing UI or sent to the agent. Legacy pairing uses a
-fixed, non-secret account-flow marker instead, not proof of account ownership.
+Pairing sends connection checks and heartbeats, not movement commands.
+`connected` does not confirm camera streaming, motor readiness, or physical safety.
 
-Robot keys are stored in a private, permission-restricted file on the agent;
-they are not encrypted at rest. Account passwords and tokens are not persisted
-or returned by pairing RPCs. Pairings are bound to the agent's enrolled tenant
-(or local ownership before enrollment), not automatically transferred to a new
-tenant. Unprovisioning closes sessions and removes the Unitree credential file
-before it reports success; if removal fails, the agent retries when it restarts
-unenrolled. Within-tenant certificate renewal preserves pairings when the current signed
-certificate scope proves the relationship. The version-2 store keeps both
-legacy-org and tenant-UUID identity during dual-SAN renewal; UUID wins over a
-conflicting legacy org. Stored old identity never widens the current RPC scope.
-Unscoped/version-1 stores from pre-release builds are rejected rather than
-automatically adopted.
+## USB robot arms
 
-Legacy firmware's public protocol validation is not a cryptographic proof of
-the robot's identity: use a trusted robot LAN.
+Connect the arm to the selected Mac or Linux Wendy device, then open its inventory:
 
-Pairing sends validation and heartbeat messages, not movement commands. It
-still occupies a robot WebRTC client slot and remains active after the CLI
-exits. `connected` means the data channel passed protocol validation, not that
-camera streaming, movement, or a physical safety check has been tested.
+```sh
+wendy device pair --device <target> --usb-arms
+```
 
-The agent reconnects saved robots after a restart, with at most four concurrent
-connection setups and staggered retries, including after a connection drops. If the robot's DHCP address changes,
-refresh discovery or enter its new IP. Before pairing, agree with the
-robot's current operator who owns the connection. Do not interrupt an active
-mobile-app or other robot session; if the robot is busy, arrange an explicit
-handoff before retrying.
+Select the USB serial endpoint, press Enter, and confirm that it is an SO-101.
+Press `f` to forget a saved arm or `r` to refresh after reconnecting it. On a Mac,
+use the native Wendy Agent app; the Go agent on macOS does not support this inventory.
 
-| Flag | Description |
-|------|-------------|
-| `--list` | Print current SensorLink pairings |
-| `--name` | Set a friendly name for a SensorLink pairing |
-| `--sensors` | Limit a SensorLink pairing to these sensor names |
-| `--unitree` | Open the Unitree Go2 tab |
-| `--ip` | Connect to a Unitree Go2 at this IPv4 address |
-| `--unitree-region` | Unitree account region, `global` or `cn` |
+Pairing saves a configuration; it does not move, calibrate, or verify the arm.
+USB adapter information cannot prove which arm is attached. Check the physical
+connection yourself before confirming. A saved arm may be present, disconnected,
+or ambiguous. Resolve ambiguous matches before pairing; Wendy does not choose
+one automatically.
 
-Passing `--name` or `--sensors` opens the SensorLink tab first.
-Passing any Unitree flag opens the Unitree tab first. `--list` cannot be combined
-with Unitree flags.
+Adapters with a serial number can keep their binding when moved between USB ports.
+Without a serial number, the binding follows the USB port, including a replacement
+adapter. The interactive prompt explains this; scripts must explicitly accept it
+with `--allow-location-binding`.
 
-The camera username starts with `admin` as an editable suggestion. Enter the
-account configured on your camera and replace any factory-default password
-before pairing it.
+### USB scripting
+
+List the inventory, then copy the exact `id` into a bind or forget command:
+
+```sh
+wendy --json device pair --device <target> --usb-arms --list
+wendy --json device pair --device <target> --usb-arms --bind '<id>' --arm-name Follower
+wendy --json device pair --device <target> --usb-arms --forget '<id>'
+```
+
+Listing returns `{ "devices": [...] }`, binding returns `{ "device": {...} }`,
+and forgetting returns `{ "forgotten": "<id>" }`. Field names use snake_case.
+`configured` means a binding was saved; it does not mean the arm was verified.
+`access_status` remains `unknown` because discovery does not open the serial port.
+
+Bindings survive agent restarts. If the saved configuration is corrupt, Wendy
+reports an error and preserves the file; ask your administrator to back it up
+before repair. An unsupported agent reports that it needs updating rather than
+scanning the CLI computer instead.
+
+## Selection flags
+
+| Flag | Purpose |
+| --- | --- |
+| `--list` | List SensorLink pairings, or USB inventory with `--usb-arms`. |
+| `--name`, `--sensors` | Name or filter a SensorLink pairing. |
+| `--unitree` | Open the Unitree tab. |
+| `--ip` | Supply a Go2's IPv4 address. Opens the Unitree tab. |
+| `--unitree-region` | Unitree account region, `global` or `cn`. |
+| `--usb-arms` | Open or script USB arm setup. |
+| `--bind`, `--forget` | Save or remove an exact USB inventory ID. |
+| `--arm-name` | Friendly USB arm name, up to 128 UTF-8 bytes. |
+| `--allow-location-binding` | Accept a USB-port-based identity in scripts. |
+
+Do not combine SensorLink, Unitree, and USB-specific flags in one operation.

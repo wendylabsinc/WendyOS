@@ -58,6 +58,31 @@ permissions:
   contents: read
 
 jobs:
+  babel:
+    name: Babel tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: go/babel
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          # Use the repository's maintained compiler; Babel's module keeps its
+          # own minimum language version for library consumers.
+          go-version-file: go.mod
+          cache: false
+
+      # Babel is a nested module, so the parent module's ./... skips it.
+      - name: Run Babel race tests
+        run: go test -race -count=1 -timeout 300s ./...
+
+      - name: Vet Babel
+        run: go vet ./...
+
   unit-tests:
     name: Race tests
     runs-on: runs-on,runner=2cpu-linux-x64
@@ -70,7 +95,7 @@ jobs:
           cache-name: race
 
       - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libusb-1.0-0-dev
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev libusb-1.0-0-dev iproute2 dnsmasq-base busybox
 
       - name: Run tests
         working-directory: go
@@ -80,6 +105,15 @@ jobs:
         # -timeout is per package: internal/cli/commands alone took 115s of
         # the former 120s under -race on main (2026-10-06).
         run: go test -gcflags=all=-c=1 ./... -race -vet=off -count=1 -timeout 300s
+
+      - name: Check camera discovery on a shared LAN
+        # Privileged kernel fixtures run only for repository-owned branches.
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        working-directory: go
+        run: |
+          go test -c -o "$RUNNER_TEMP/ipcam.test" ./internal/agent/ipcam
+          sudo unshare --mount --net --propagation private env WENDY_TEST_NETNS=1 \
+            "$RUNNER_TEMP/ipcam.test" -test.run '^TestDHCPLinuxSharedLANClient$' -test.v -test.timeout 30s
 
       - name: Check runtime skill packaging
         run: python3 scripts/sync-agent-skills.py --check
@@ -131,7 +165,7 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: '24'
+          node-version: '24.22.1'
           cache: npm
           cache-dependency-path: web-client/package-lock.json
 
@@ -191,11 +225,12 @@ jobs:
   test:
     name: Test
     if: ${{ always() }}
-    needs: [unit-tests, windows, windows-telemetry, wasm, vet, agent-startup]
+    needs: [babel, unit-tests, windows, windows-telemetry, wasm, vet, agent-startup]
     runs-on: ubuntu-latest
     steps:
       - name: Check test results
         env:
+          BABEL_RESULT: ${{ needs.babel.result }}
           RACE_RESULT: ${{ needs.unit-tests.result }}
           WINDOWS_RESULT: ${{ needs.windows.result }}
           WINDOWS_TELEMETRY_RESULT: ${{ needs.windows-telemetry.result }}
@@ -203,6 +238,7 @@ jobs:
           VET_RESULT: ${{ needs.vet.result }}
           STARTUP_RESULT: ${{ needs.agent-startup.result }}
         run: |
+          test "$BABEL_RESULT" = success
           test "$RACE_RESULT" = success
           test "$WINDOWS_RESULT" = success
           test "$WINDOWS_TELEMETRY_RESULT" = success
@@ -278,6 +314,10 @@ jobs:
         run: shellcheck packaging/linux/fpm/wendy-agent-*.sh .github/scripts/agent-package-scripts_test.sh
       - name: resolver + deferral tests
         run: bash .github/scripts/install-scripts_test.sh
+      - name: agent access choice tests
+        run: bash .github/scripts/agent-network-access_test.sh
+      - name: Test package discovery identity
+        run: bash .github/scripts/agent-mdns_test.sh
       - name: manifest merge tests
         run: bash .github/scripts/install-manifest-merge_test.sh
       - name: agent package script tests

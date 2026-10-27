@@ -22,13 +22,23 @@ type Result struct {
 	AssetDeleted        bool
 }
 
+// DeviceID is the device UUID the asset's certificates name. Since cloud #873
+// that is the asset id. Older rows, and rows the re-key parked, record it as
+// pki_device_name instead, which then differs from the id.
+func DeviceID(asset *cloudpb.Asset) string {
+	if name := asset.GetPkiDeviceName(); name != "" {
+		return name
+	}
+	return asset.GetId()
+}
+
 // Remove validates the selected asset, revokes its unused bootstrap credentials
 // and issued certificates, then deletes the asset. No device connection is used.
 func Remove(ctx context.Context, conn grpc.ClientConnInterface, auth *config.AuthConfig, asset *cloudpb.Asset) (result Result, err error) {
 	if auth == nil || len(auth.Certificates) == 0 || asset == nil {
 		return result, fmt.Errorf("an operator session and cloud asset are required")
 	}
-	tenant, deviceID, assetID := auth.Certificates[0].TenantUUID(), asset.GetPkiDeviceName(), asset.GetId()
+	tenant, deviceID, assetID := auth.Certificates[0].TenantUUID(), DeviceID(asset), asset.GetId()
 	if id, parseErr := uuid.Parse(assetID); parseErr != nil || id.String() != assetID || id == uuid.Nil {
 		return result, fmt.Errorf("asset ID must be a canonical nonzero UUID")
 	}
@@ -41,7 +51,7 @@ func Remove(ctx context.Context, conn grpc.ClientConnInterface, auth *config.Aut
 		if lookupErr != nil {
 			return fmt.Errorf("checking cloud asset binding: %w", lookupErr)
 		}
-		if current.GetId() != assetID || current.GetOrganizationId() != tenant || current.GetPkiDeviceName() != deviceID {
+		if current.GetId() != assetID || current.GetOrganizationId() != tenant || DeviceID(current) != deviceID {
 			return fmt.Errorf("cloud asset binding changed; refusing to remove a different enrollment")
 		}
 		return nil

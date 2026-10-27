@@ -5,252 +5,70 @@ description: 'Build and deploy apps to WendyOS robots and edge devices, includin
 
 # WendyOS
 
-WendyOS is an Embedded Linux operating system for edge computing. It supports:
-- NVIDIA Jetson devices (production with OTA updates); target JetPack 7.2 or later
-- Raspberry Pi 4/5 (edge devices)
-- ARM64/AMD64 VMs (development)
+Wendy builds container apps and deploys them to WendyOS devices (NVIDIA Jetson
+on JetPack 7.2 or later, Raspberry Pi 4/5, x86), local simulators (`vm:<name>`)
+and the local Docker provider (`docker`).
 
-## Learning About Wendy
+## Choose the workflow
 
-Before helping with Wendy commands, explore the command tree with the built-in help:
+- Wendy MCP tools are connected (`wendy_status` is available): read
+  [references/mcp.md](references/mcp.md) and use the tools.
+- Build, deploy, logs, start, stop or remove with the CLI: use the commands
+  below, and `wendy-app-lifecycle` for result fields, variants and the Docker
+  provider.
+- New app from a template: `wendy-template-app`. Entitlements: `wendy-entitlements`.
+  Robots and ROS 2: `wendy-robot-deploy`. Sensor recording: `wendy-data`.
+- Device info, WiFi and agent updates: `wendy-device-ops`. A failure the deploy
+  result and logs do not explain: `wendy-device-debug`.
+- No CLI yet: `wendy-install`. First-time user: `wendy-onboarding`. New board
+  or empty discovery: `wendy-device-install`.
+- ESP32 boards run Wendy Lite: `wendy docs wendy-lite/getting-started`.
+
+## CLI commands
+
+Pass `--device <selector>` to every command. Without a terminal the CLI prints
+JSON on stdout and progress on stderr. `--yes` accepts prompts and creates a
+minimal `wendy.json` when the project has none.
 
 ```bash
-wendy --help
-wendy <command> --help
+wendy --json run --device <selector> --detach --wait-ready --yes
+wendy --json device apps list --device <selector>
+wendy --json device logs --app <app-id> --tail 50 --no-follow --device <selector>
+wendy json validate
+wendy discover --json
+wendy --json vm list
 ```
 
-Use `--json` for list/status commands and agent-backed `run --detach`. Detached
-run returns a JSON result with the target, app and available HTTP URLs; progress
-goes to stderr. Build, attached run and flash still emit progress text. Supply
-explicit targets and choices to avoid interactive pickers. (There is no `-j` shorthand.)
+Run `--help` only for a command this skill and `wendy-app-lifecycle` do not
+cover, or when one of these commands is rejected.
 
-## Using the Wendy MCP tools
+A deploy result shows that the app started and, with `--wait-ready`, that its
+port accepts connections. Then check the behavior the user asked for once, such
+as one HTTP request to the result's `url`, and report what you checked.
 
-When the Wendy MCP server (`wendy mcp serve`) is connected, prefer its tools to
-CLI commands for device state, apps, logs and deploys. Results are structured
-and reuse the session's single device connection.
+Keep tool output small: print status, identity, errors and the relevant lines
+rather than full build logs, inspect objects or long JSON arrays.
 
-1. Call `wendy_status`. It reports the connection, Cloud sign-in (`auth`), the
-   server's CLI version and any update notice, and a suggested next step.
-2. Find a target with `device_list` (`scan=true` adds LAN discovery). Pass its
-   selector unchanged to `device_connect`: host:port, `vm:<name>` or a
-   `cloud://` selector. `device_disconnect` closes the connection. With no
-   physical device, follow *No device available* below.
-3. Deploy with `run(project_path=<absolute path>)`. It reuses the connected
-   target unless you pass `device`. `start=false` creates without starting.
-4. Verify: `container_list` (`running_state`, `termination_reason`), then
-   `telemetry_logs(app_name=...)` for startup errors, then the app's own output.
-   `run` reports `readiness: "not_checked"`.
-
-On `AUTH_REQUIRED`, or a device error that names `wendy auth login`, call
-`auth_login` and show the user the returned link; it must be opened on the
-computer running the server. Fall back to `wendy auth login` in a terminal only
-when `auth_login` is unavailable. When `wendy_status` reports `auth` as
-`logged_out` or `expired`, only Cloud devices are out of reach: local simulators
-and LAN devices that are not Cloud-enrolled need no sign-in. Continue with
-those, and sign in only when the task needs a Cloud device.
-
-Only the core group is listed at first. `wendy_tools(groups=[...])` replaces the
-enabled specialist groups (core always stays), so list every group you still
-need. Hosts that cache the tool list can start `wendy mcp serve --tool-groups all`.
-The hosted relay (`wendy cloud mcp`) offers a subset of these same tools under
-its own permission policy.
-
-| Group | Tools | Use for |
-|---|---|---|
-| core | `wendy_status`, `wendy_tools`, `auth_login`, `device_list`, `device_connect`, `device_disconnect`, `device_info`, `hardware_capabilities`, `run`, `container_list`, `container_start`, `container_stop`, `container_delete`, `container_stats`, `container_exec`, `telemetry_logs` | Connect, deploy, control apps, read app logs, versions, battery and hardware |
-| setup | `project_validate`, `os_install_plan`, `os_list_drives`, `os_install_start`, `os_install_resume`, `os_install_status`, `os_install_verify`, `os_update`, `os_update_status`, `device_update_agent`, `device_set_default`, `cloud_enroll_device`, `provisioning_start`, `provisioning_status`, `wifi_list`, `wifi_status`, `wifi_known_networks`, `wifi_connect`, `wifi_disconnect` | Project checks, installs, agent and OS updates, saved default, Cloud enrollment, WiFi |
-| simulator | `simulator_list`, `simulator_create`, `simulator_start`, `simulator_stop`, `simulator_delete` | Local VMs; `device_connect(device="vm:<name>")` also boots one |
-| hardware | `camera_list`, `camera_controls`, `camera_set_control`, `camera_snapshot`, `bluetooth_scan`, `bluetooth_connect`, `bluetooth_disconnect` | Cameras and Bluetooth |
-| robotics | `ros2_topics`, `ros2_topic_info`, `ros2_topic_sample`, `ros2_topic_hz`, `ros2_lidar_summary` | ROS 2 inspection; see `wendy-robot-deploy` |
-| observability | `app_inspect`, `device_os_logs`, `telemetry_metrics`, `telemetry_traces` | Service state and recorded exits, kernel log (dmesg), metrics, traces |
-| cloud | `cloud_discover`, `cloud_connect`, `cloud_ping`, `cloud_tunnel`, `cloud_tunnel_list`, `cloud_tunnel_close` | Cloud devices, reachability and port forwards |
-
-The server also provides:
-
-- Resources: read `wendy://guide` for tool details this skill omits,
-  `wendy://docs/...` for Wendy documentation (listed by `resources/list`), and
-  `wendy://diagnostics` when an expected tool is missing.
-- Prompts: `deploy_app`, `diagnose_container` and `provision_device`.
-- App tools: a running app with an `mcp` entitlement adds tools prefixed with its
-  app name while its device is connected.
-
-Errors carry an `error_code` to branch on: `NOT_CONNECTED`, `DEVICE_UNREACHABLE`,
-`ENTITLEMENT_DENIED`, `AUTH_REQUIRED`, `INVALID_ARGUMENT`, `NOT_FOUND`,
-`MULTIPLE_SESSIONS`, `UNSUPPORTED`, `TIMEOUT`, `CANCELLED`, `INTERNAL`, or
-`DENIED` when a `wendy cloud mcp` relay policy refuses the call. List
-results nest rows under one key such as `devices`, `containers` or `logs`. Ask
-before calls that interrupt or erase: `container_stop`, `container_delete`,
-`wifi_connect` (the device leaves its current network), `os_update`,
-`device_update_agent` and `simulator_delete`.
-
-A running server keeps the tools of the CLI that started it. When `wendy_status`
-reports a CLI update, give the user the update command and ask them to restart
-the MCP server; newer skill text cannot add tools to an older process.
-
-### No device available
+## No device available
 
 A simulator runs WendyOS with the same agent, containerd and entitlements as
-hardware. When no physical device is connected or listed, run checks that need
-no physical hardware on a simulator: builds, deploys, container state, logs,
-telemetry, HTTP endpoints, configuration, and ROS 2 apps on a robot profile
-(`go2`, `g1`, `rosmaster-r2`). A request to test "on the device" is such a check
-unless it depends on the hardware listed at the end of this section.
+hardware. When no physical device is listed, use one for builds, deploys, app
+state, logs, HTTP endpoints, configuration, and ROS 2 apps on a robot profile
+(`go2`, `g1`, `rosmaster-r2`). A request to test "on the device" counts unless
+it needs the hardware listed below.
 
 1. Use a connected or listed physical device when there is one.
-2. Otherwise use an existing simulator. `device_list` returns it as a
-   `simulator` row with a `vm:<name>` selector. Tell the user which one you are
-   using and connect without waiting for approval:
-   `device_connect(device="vm:<name>")` boots a stopped one. Prefer a `generic`
-   VM unless the task needs a robot profile. If `wendy_status`'s
-   `suggested_next_step` does not mention simulators, the server predates these
-   rows: enable the `simulator` group and call `simulator_list` instead.
-3. With no simulator, ask the user before creating one, and offer it as the way
-   to finish the check now. `simulator_create` downloads an image of a few
-   hundred MB, and the first boot can take minutes.
+2. Otherwise use an existing simulator from `wendy --json vm list` or a
+   `simulator` row in MCP `device_list`. Tell the user which one and use it
+   without waiting for approval: `--device vm:<name>` or `device_connect` boots
+   a stopped one. Prefer a `generic` VM unless the task needs a robot profile.
+3. With no simulator, ask the user before creating one (`wendy vm create` or
+   MCP `simulator_create`): it downloads an image of a few hundred MB, and the
+   first boot can take minutes.
 4. Report results as verified on simulator `vm:<name>`, and say that the
-   user's hardware was not connected. Leave the VM running; stop or delete it
-   only when asked.
+   user's hardware was not connected. Leave the VM running unless asked.
 
 Physical cameras, microphones, speakers, Bluetooth, GPU or CUDA, GPIO, USB and
 serial peripherals, OS installation, real network conditions, performance and
-physical motion still need hardware. For those, run what the simulator can and
-name what remains unverified.
-
-Without MCP, `wendy --json vm list` lists simulators and
-`wendy run --device vm:<name>` boots an existing one before deploying.
-
-## Common Tasks
-
-For first-time setup, use `wendy-onboarding` to install and verify a physical
-device or start a local simulator while waiting for hardware. With the MCP server
-connected, use the matching tools from the table above instead of these commands.
-
-- Run an app: `wendy run`
-- Create a new project: `wendy init`
-- Discover devices: `wendy discover`
-- Update agent: `wendy device update`
-- Configure WiFi: `wendy device wifi connect --ssid "<ssid>" --password "<password>"`
-  (see `wendy-device-ops`)
-- Install WendyOS on an external drive: `wendy os install`
-- Set a device as default using `wendy device set-default`
-- Check the default device with `wendy device get-default`
-- Record sensor data or application events: use `wendy-data` for campaigns,
-  episodes, model results, notifications, and durable recording streams.
-
-### Create and deploy an app
-
-`wendy init` creates a WendyOS container project (Python, Swift, Rust, Node or C++).
-Use explicit template variables and `--assistant skip --git-init no` for unattended
-scaffolding. When already inside the requested destination, include `--here` so
-`--app-id` does not create another directory. See `wendy-template-app`.
-
-`wendy run --device <selector> --detach --yes` builds, transfers and starts the app.
-Verify the returned target, container state, logs and application health
-separately: detached run skips readiness waits.
-For a local VM, `--device vm:dev` selects the agent; it is not a DNS hostname or
-HTTP URL. With default user networking, fetch the detached result's `url` (for
-example `http://127.0.0.1:18880`), rather than `vm:dev`, `dev`, or the guest's
-`10.0.2.15` address. Declare the app's HTTP port in an `http` entitlement so Wendy
-can forward and report it. `readiness: "not_checked"` means start was acknowledged,
-not that the HTTP endpoint is healthy; verify the expected response separately.
-Wendy Lite uses a separate MCU/WASM workflow for ESP32; read
-`wendy docs wendy-lite/getting-started` or the `wendy://docs/wendy-lite/` resources.
-
-## Setup and Configuration
-
-Wendy CLI connects to a device over gRPC (TCP) port 50051. If Wendy CLI is not installed yet, run `curl -fsSL https://install.wendy.dev/cli.sh | bash`.
-
-Devices are discovered over USB or LAN. On Linux, USB tethering may need a
-one-time host setup: run `wendy discover` in a terminal and accept its USB-C
-setup prompt (it needs sudo). An empty scan can also mean a blank board.
-Use `wendy-device-install` for initial installation and first-boot checks.
-Unitree G1 PC2 keeps vendor Ubuntu and receives the Agent, not a generic Jetson
-image.
-
-For robotics, use `wendy-robot-deploy`: inspect actual ROS topics, QoS, frames,
-clocks and DDS scope, test in simulation, deploy without automatic motion, and
-verify the app's output before any authorized physical test.
-
-## Development
-
-WendyOS runs apps as Linux containers. `wendy run` picks a build from the project
-directory: a Compose file, then a Stagefile, Dockerfile or Containerfile, then a
-Swift package (`Package.swift`, cross-compiled by the CLI), then a Python project
-(`requirements.txt`, `setup.py` or `pyproject.toml`). Xcode projects target Wendy
-for Mac and ESP-IDF projects target Wendy Lite. `--build-type` overrides the
-choice when several apply; see `wendy-app-lifecycle`.
-
-### Entitlements
-
-Apps declare the device access they need in `wendy.json`, and the container is
-set up with only those permissions. Add one with
-`wendy project entitlements add <type>` (modes are chosen at an interactive
-prompt; there is no `--mode` flag). See `references/wendy.json.md` for every
-entitlement and `wendy-entitlements` for choosing them.
-
-### Common Entitlements
-
-| Entitlement | Use Case |
-|-------------|----------|
-| `network` (host mode) | Web servers, HTTP APIs, incoming connections |
-| `gpu` | ML inference/computer vision (Jetson), board telemetry (Raspberry Pi) |
-| `display` | Present to local monitor as Wayland client |
-| `camera` | Camera access, video capture |
-| `audio` | Microphone, speakers |
-| `bluetooth` | BLE devices, Bluetooth communication |
-
-## Remote Debugging
-
-`wendy run --debug` starts the app under a debugger.
-
-For **Python** apps the agent rewrites the entrypoint to run under `debugpy`.
-The CLI does **not** inject debugpy into the image, so the image must already
-bundle it — for Stagefile projects the CLI checks the pip requirements up front
-and fails fast rather than letting the app crash-loop with
-`No module named debugpy`.
-
-For **Swift** apps, attach with the WendyOS VS Code extension, which generates a
-debug configuration per executable target. See the
-[VS Code extension guide](https://docs.wendy.dev/latest/remote-debugging/vscode-extension) for
-the ports and prerequisites — the debugger wiring lives in that extension, not
-in this CLI.
-
-## Observability
-
-For synchronized sensor capture, event-triggered recordings, model input/output
-records, or custom measurements, use `wendy-data`. Its campaign and episode
-workflow is separate from the OpenTelemetry collector described below.
-
-WendyOS runs a local OpenTelemetry collector on each device. Apps should export
-logs, metrics and traces to it over OTLP/HTTP, not gRPC. Standard OpenTelemetry
-SDKs in any language read these environment variables:
-
-```bash
-OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
-OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318
-```
-
-The collector forwards telemetry to your backend. Read it back with
-`wendy device logs` or the MCP `telemetry_logs`, `telemetry_metrics` and
-`telemetry_traces` tools.
-
-## Troubleshooting
-
-| Problem | Solution |
-|---------|----------|
-| Device not found | Check USB/LAN connection, run `wendy discover`. On Linux with USB-C, the CLI offers to run its USB setup step automatically — accept that prompt. |
-| Network access denied | Add network entitlement with host mode |
-| GPU not detected | Add gpu entitlement (Jetson for CUDA, Raspberry Pi for board telemetry) |
-| Camera not found | Add camera entitlement, verify camera at `/dev/video0` (for CSI cameras also check `/run/udev` is present on host) |
-| Build fails | Read the build log that `wendy run` prints on failure; check configuration with `wendy json validate` or the MCP `project_validate` tool |
-
-## Reference Files
-
-Load these files as needed for specific topics:
-
-- **`references/wendy.json.md`** - App configuration, entitlements (network, gpu, display, camera, audio, bluetooth), common configurations, CLI commands
-
-## Further Reading
-
-WendyOS documentation at https://docs.wendy.dev/latest/
+physical motion still need hardware. Run what the simulator can and name what
+remains unverified.

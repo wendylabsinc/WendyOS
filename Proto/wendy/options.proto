@@ -10,4 +10,14 @@ extend google.protobuf.MethodOptions {
   // the handler runs. This option is the one list of signed methods; broker,
   // console and CLI read it instead of keeping their own copies.
   bool signed_request = 50001;
+
+  // The method is device-signed (WDY-3926): its input is
+  // wendycloud.v2.SignedRequest, but the signer is a device, not an operator.
+  // Operator-signed means the request signature is made with an operator leaf
+  // and verified as an operator request. Device-signed means it is made with
+  // the device leaf (`x5c`), and the server verifies it against the device's
+  // mTLS peer certificate: the leaf in `x5c` must be that peer. A method
+  // carries exactly one of the two options; every method whose input is
+  // SignedRequest carries one.
+  bool device_signed_request = 50002;
 }

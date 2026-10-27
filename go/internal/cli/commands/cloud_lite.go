@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/wendylabsinc/wendy/go/internal/cli/cloudunenroll"
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/cli/providers"
 	"github.com/wendylabsinc/wendy/go/internal/shared/cloudrelay"
@@ -30,6 +31,52 @@ func init() {
 	providers.CloudRelayDialer = dialLiteCloudRelay
 	providers.LiteIdentityResolver = localLiteIdentity
 	providers.LiteDeviceCAChainResolver = liteDeviceCAChain
+	providers.LiteBoardIdentityResolver = resolveLiteBoardIdentity
+}
+
+// resolveLiteBoardIdentity is the Lite provider's providers.LiteBoardIdentityResolver.
+// Like USB unenroll, it finds the board's asset in the current session's
+// organization by the hardware id kept as its serial number.
+func resolveLiteBoardIdentity(ctx context.Context, hardwareID string) (string, string, error) {
+	const signIn = "sign in to Wendy Cloud to resolve this board's identity, or connect over LAN or USB"
+	if hardwareID == "" {
+		return "", "", fmt.Errorf("this board advertises no hardware id over BLE; connect over LAN or USB")
+	}
+	auth, _, err := resolveCloudUnenrollAuthFn("", "")
+	if err != nil || len(auth.Certificates) == 0 || auth.Certificates[0].TenantUUID() == "" {
+		return "", "", fmt.Errorf("no Wendy Cloud operator session; %s", signIn)
+	}
+	if err := ensureFreshCertificateFn(ctx, auth); err != nil {
+		return "", "", fmt.Errorf("%w; %s", err, signIn)
+	}
+	conn, err := dialCloudGRPC(auth)
+	if err != nil {
+		return "", "", fmt.Errorf("%w; %s", err, signIn)
+	}
+	defer conn.Close()
+	cloudCtx, err := cloudContext(ctx, auth)
+	if err != nil {
+		return "", "", fmt.Errorf("%w; %s", err, signIn)
+	}
+	tenant := auth.Certificates[0].TenantUUID()
+	assets, err := fetchUnenrollAssets(cloudCtx, cloudpbv2.NewAssetServiceClient(conn), tenant)
+	if err != nil {
+		return "", "", fmt.Errorf("%w; %s", err, signIn)
+	}
+	var ids []string
+	for _, asset := range assets {
+		if asset.v2 != nil && isLiteCloudAsset(asset.v2) && asset.v2.GetSerialNumber() == hardwareID {
+			ids = append(ids, cloudunenroll.DeviceID(asset.v2))
+		}
+	}
+	const noAdvert = "this board's firmware does not advertise its enrolled device ID over BLE"
+	switch len(ids) {
+	case 1:
+		return tenant, ids[0], nil
+	case 0:
+		return "", "", fmt.Errorf("%s, and no enrollment in the selected organization carries its hardware id %q; connect over LAN, USB or Wendy Cloud, or enroll the board", noAdvert, hardwareID)
+	}
+	return "", "", fmt.Errorf("%s, and several enrollments (devices %s) carry its hardware id %q; connect over LAN, USB or Wendy Cloud, or remove the extra ones with 'wendy device unenroll --cloud-only --device <asset-id>'", noAdvert, strings.Join(ids, ", "), hardwareID)
 }
 
 // localLiteIdentity uses the session's primary credential for LAN and BLE. The
@@ -89,7 +136,7 @@ func cloudLiteSelectedDevice(auth *config.AuthConfig, asset *cloudpbv2.Asset, se
 				"assetId":  asset.GetId(),
 				"cloud":    auth.CloudGRPC,
 				"tenantId": auth.Certificates[0].TenantUUID(),
-				"deviceId": asset.GetPkiDeviceName(),
+				"deviceId": cloudunenroll.DeviceID(asset),
 			},
 			IsWendyDevice:   true,
 			OS:              asset.GetOsType(),

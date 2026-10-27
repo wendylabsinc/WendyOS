@@ -263,6 +263,9 @@ func TestROS2StreamDeadlineAndCallerCancellation(t *testing.T) {
 				}
 				<-stream.Context().Done()
 				close(cancelled)
+				if stream.Context().Err() == context.DeadlineExceeded {
+					return status.FromContextError(stream.Context().Err()).Err()
+				}
 				return nil
 			}})
 			result := ros2Call(t, s, ctx, "ros2_topic_hz", map[string]any{"topic": "/lidar", "duration_seconds": 1})

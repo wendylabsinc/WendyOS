@@ -1,103 +1,102 @@
 # `wendy device unenroll`
 
-Removes a device's enrollment from Wendy Cloud. Cloud mode works when the device
-is offline or its firmware cannot run.
+Remove a device from Wendy Cloud and, when connected directly, clear its local
+enrollment so it can enroll again. Sign in to the organization that owns it.
 
-## Usage
+## Remove a reachable device
+
+For WendyOS, use a direct LAN address. With a current enrollment, check support
+first, then confirm the removal:
 
 ```sh
-wendy device unenroll [--device <selector>] [--cloud-only] [--cloud-grpc <endpoint>] [--yes]
-wendy cloud device unenroll --device <asset-id-or-name> [--cloud-grpc <endpoint>] [--yes]
+wendy device unenroll --device <device-address> --check
+wendy device unenroll --device <device-address>
 ```
 
-## Remove an offline device
+Update the agent with `wendy device update` if the command asks you to.
+The native Mac agent does not yet support this reset for current enrollments.
 
-Find the old asset, then remove it using its asset ID, name, or PKI device ID:
+For Lite, connect USB and use its selector from `wendy discover`:
+
+```sh
+wendy device unenroll --device wendy-lite:/dev/cu.usbmodemXXXX
+```
+
+Lite reboots after removal and keeps its Wi-Fi and app settings. Firmware must
+support enrollment reset. LAN and Bluetooth cannot clear a Lite enrollment.
+
+## Remove an offline device's Cloud access
 
 ```sh
 wendy cloud discover --all --json
 wendy cloud device unenroll --device <asset-id-or-name>
 ```
 
-For example, an enrollment conflict for `lite-441bf6804824` can be resolved with:
+You can also use:
 
 ```sh
-wendy cloud device unenroll --device lite-441bf6804824
+wendy device unenroll --cloud-only --device <asset-id-or-name>
 ```
 
-`wendy device unenroll --cloud-only --device <asset-id-or-name>` performs the same
-operation. Cloud mode authenticates with your stored cloud session, revokes the
-device's certificates and bootstrap credentials, and deletes its cloud asset.
-It releases the asset's device ID for another enrollment without connecting to
-the device. Local enrollment credentials remain on the device.
+Cloud-only removal revokes access and deletes the Cloud record without
+contacting the device. Its local credentials remain intact. The selector can
+also be the device ID shown in an enrollment-conflict error.
+A `cloud://` selector, including a saved Cloud default, chooses Cloud-only removal.
 
-## Remove a reachable device
+## Retry after a failure
+
+For current WendyOS enrollments, rerun the same command over the direct LAN
+connection. For Lite, reconnect USB and rerun it. This also handles Cloud removal
+that succeeded before the local reset failed.
+
+Older numeric Cloud enrollments reset locally before Cloud cleanup. They require
+an owner or administrator account. If cleanup fails, run the exact Cloud removal
+command printed in the error; it retains the old enrollment details needed to
+finish. See [device unenrollment](/docs/device/unenrollment) for recovery guidance.
+
+Once a WendyOS device confirms its reset, the command also clears the identity
+pins this CLI saved for it, the entries `wendy device unpin` clears. For older
+numeric enrollments this happens even when the Cloud cleanup that follows
+fails, because the device no longer presents that identity. Until that cleanup
+succeeds, Cloud still lists the device, so commands that read Cloud's device
+list, such as `wendy cloud discover`, pin it again. If a later connection is
+refused, run the `wendy device unpin` command the unenroll output prints.
+Cloud-only removal does not contact the device, so it keeps those pins.
+
+## Clear a device that Cloud no longer has
+
+If Cloud has no record of a reachable WendyOS device, `--force` clears only the
+device's local enrollment over the LAN so it can enroll again:
 
 ```sh
-wendy device unenroll --device <device-selector>
+wendy device unenroll --device <device-address> --force
 ```
 
-For a WendyOS agent with numeric Cloud v1 enrollment, this first verifies that
-the user in the selected Cloud session is an owner or admin of the device's
-organization, then lists every page of the device's certificates. A failed
-check leaves the device enrolled and its Cloud records unchanged. Members,
-viewers, billing managers, and users absent from the organization's membership
-list cannot run this reset. Sign in as an owner or admin of that organization
-to continue. If the session has no stored user ID, run `wendy auth login` again.
+It asks for confirmation, or accepts `--yes` (required with `--json`). Cloud
+reports "not found" both for a missing device and for one your account cannot
+access, so make sure the device is no longer in use. `--force` refuses a device
+Cloud still lists, and stops on any other Cloud error. It does not delete a
+Cloud record or revoke the device certificate. It needs an updated agent, a
+sign-in to the device's organization and a direct LAN connection. To resume an
+interrupted Cloud removal, use `--asset-id` instead.
 
-After these checks, the command clears the device's enrollment and provisioning
-state, restarts the agent, and removes its cloud enrollment. Cleanup lists the
-certificates again after reset before revoking them and deleting the asset.
-
-If Cloud cleanup fails after the reset, the command reports the original Cloud,
-organization and asset, plus a `wendy cloud device unenroll` command scoped to
-that enrollment. Use that command to retry cleanup without contacting the reset
-device. If the legacy Cloud API remains unavailable, use that Cloud dashboard
-to remove the asset. Rerunning local unenrollment cannot recover the erased
-enrollment identifiers.
-
-For a WendyOS device with UUID/direct PKI enrollment, connect over the LAN
-(direct mTLS, not a Cloud tunnel). Cloud revokes the device certificate and
-deletes the asset; the device then verifies Cloud's signed reset authorization
-and the certificate's revocation before erasing its credentials, and can enroll
-again with the same device ID. If any check fails, the device keeps its keys
-and the same command can be retried. Agents without Cloud-authenticated reset
-support are refused before any Cloud change; update them with
-`wendy device update` first. `--check` only verifies the Cloud binding and the
-Agent's support. Use `--cloud-only` when you intend to remove only the Cloud
-enrollment; this leaves local device credentials intact. See
-[device unenrollment](../../../../device/unenrollment.mdx) and the
-[unenrollment compatibility requirements](./enroll.md#unenrollment-compatibility).
-
-For Wendy Lite, select the board's USB connection. The command checks firmware
-reset support before changing Cloud, revokes and deletes the matching cloud
-enrollment, then clears the local enrollment identity and reboots the board.
-Wi-Fi and app configuration are preserved. Firmware without reset support is
-rejected before cloud deletion and must be updated first. LAN and Bluetooth
-cannot perform this reset; use `--cloud-only` for cloud cleanup alone.
-
-If the cloud asset was already deleted, including by an earlier `--cloud-only`
-command, rerun normal unenrollment over USB. It checks the selected cloud
-organization's inventory before clearing the remaining local identity. Cloud
-authentication and lookup failures stop the reset. If local reset fails after
-cloud cleanup, the error reports that partial result and the same command can
-be retried. After successful reset, the board can enroll again.
-
-A `cloud://` selector supplied through `--device` or the saved default uses cloud
-removal directly, without opening a device connection.
+If the connection drops before the device confirms, the command reports the
+reset as unconfirmed and keeps the saved device pins. After checking the device
+reset, clear them with `wendy device unpin <hostname-or-identity>`.
 
 ## Flags
 
 | Flag | Description |
-|------|-------------|
-| `--device` | Device selector. In cloud mode, accepts a cloud asset ID, name, or PKI device ID. |
-| `--cloud-only` | Remove the cloud enrollment without connecting to the device. Available on `wendy device unenroll`. |
-| `--cloud-grpc` | Cloud gRPC endpoint for the stored session used to remove the enrollment. |
-| `--asset-id` | Exact Cloud asset UUID for a WendyOS v2 device; must match its Cloud binding. Unavailable for cloud mode and Wendy Lite. |
-| `--check` | Verify the Cloud binding and the Agent's authenticated-reset support without changing anything. Unavailable for cloud mode and Wendy Lite. |
-| `--yes` | Skip confirmation. Required when running non-interactively. |
+| --- | --- |
+| `--device` | Device selector. Cloud-only removal accepts an asset ID, name, or device ID. |
+| `--cloud-only` | Remove Cloud access without connecting to the device. |
+| `--cloud-grpc` | Cloud endpoint of the saved sign-in to use. |
+| `--asset-id` | Check the exact Cloud asset UUID for a current WendyOS enrollment. Not available for Lite or Cloud-only removal. |
+| `--check` | Check the Cloud binding and agent reset support without making changes; with `--force`, check the forced local reset instead. Not available for Lite or Cloud-only removal. |
+| `--force` | Clear only the local enrollment of a device Cloud has no record of. Does not delete a Cloud record or revoke the certificate. Not available with `--asset-id`, for Lite, or for Cloud-only removal. |
+| `--yes` | Confirm removal without a prompt. Required when running non-interactively. |
 
 ## Related
 
-- [`wendy device enroll`](./enroll.md)
-- [Wendy Lite enrollment](../../../../cli/lite-enrollment.md)
+- [Enroll a device](./enroll.md)
+- [Enroll Wendy Lite](/docs/advanced/cli/lite-enrollment)

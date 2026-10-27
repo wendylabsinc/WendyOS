@@ -11,6 +11,7 @@ func TestSimulationServiceConfigValidation(t *testing.T) {
 		valid     bool
 	}{
 		{"valid", `{"profile":"rosmaster-r2","entitlements":[{"type":"network","mode":"host"}],"env":{"R2_SIMULATOR_URL":"http://127.0.0.1:8890"}}`, true},
+		{"SO101 virtual override", `{"profile":"so101","entitlements":[{"type":"network","mode":"host"}],"env":{"SO101_SIMULATOR_URL":"http://127.0.0.1:8890"}}`, true},
 		{"unknown profile", `{"profile":"unknown","entitlements":[{"type":"network","mode":"host"}]}`, false},
 		{"implicit grants", `{"profile":"rosmaster-r2"}`, false},
 		{"bad environment", `{"profile":"rosmaster-r2","entitlements":[{"type":"network","mode":"host"}],"env":{"INVALID-KEY":"1"}}`, false},

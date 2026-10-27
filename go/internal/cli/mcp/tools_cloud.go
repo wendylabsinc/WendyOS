@@ -38,7 +38,7 @@ type mcpCloudTunnel struct {
 	cancel     context.CancelFunc
 	listener   net.Listener
 	udpConn    *net.UDPConn
-	session    *mcpDatagramSession
+	session    interface{ close() }
 	brokerConn *grpc.ClientConn
 	brokerURL  string
 }
@@ -295,7 +295,7 @@ func (s *mcpServer) handleCloudEnrollDevice(ctx context.Context, req mcpgo.CallT
 	hw, hwErr := cloudenroll.ReadHardware(ctx, conn.Conn)
 	cfg, assetID, err := cloudenroll.MintEAB(tokenCtx, cloudConn, auth, cfg, name, hw)
 	if err != nil {
-		return errResult(codeFromGRPC(err), grpcErrString(err)), nil
+		return cloudErrResult(err), nil
 	}
 
 	resp, err := agentpbv2.NewWendyProvisioningServiceClient(conn.Conn).StartACMEProvisioning(ctx, &agentpbv2.StartACMEProvisioningRequest{
@@ -345,11 +345,6 @@ func (s *mcpServer) handleCloudTunnel(ctx context.Context, req mcpgo.CallToolReq
 	if err != nil {
 		return cloudErrResult(err), nil
 	}
-	// v2 has no datagram relay (cloudrelay is TCP-only); refuse UDP there,
-	// mirroring the CLI. v2 ping/UDP is tracked as a WDY-3148 follow-up.
-	if protocol == "udp" && device.isV2 {
-		return errResult(errCodeInvalidArgument, "Cloud's authorized service catalog does not expose UDP forwarding over v2 sessions"), nil
-	}
 	target := cloudCommandTarget(auth, device, stringParam(req, "broker_url"))
 	s.mu.RLock()
 	for _, existing := range s.cloudTunnels {
@@ -382,14 +377,19 @@ func (s *mcpServer) handleCloudTunnel(ctx context.Context, req mcpgo.CallToolReq
 	tunnelCtx, cancel := context.WithCancel(context.Background())
 
 	if protocol == "udp" {
-		// Legacy sessions only (v2 refused above).
 		pc, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: localPort})
 		if err != nil {
 			cancel()
 			closeBroker()
 			return errResultf(errCodeInternal, "listening on udp 127.0.0.1:%d: %s", localPort, err.Error()), nil
 		}
-		session, err := mcpOpenDatagramSession(tunnelCtx, brokerConn, auth, device.legacyID)
+		if err := pc.SetWriteBuffer(65507); err != nil {
+			cancel()
+			_ = pc.Close()
+			closeBroker()
+			return errResultf(errCodeInternal, "configuring UDP forwarding buffer: %s", err.Error()), nil
+		}
+		session, err := device.openDatagram(tunnelCtx, brokerConn, auth, uint32(remotePort))
 		if err != nil {
 			cancel()
 			_ = pc.Close()
@@ -518,17 +518,29 @@ type cloudResolveErr struct {
 
 func (e *cloudResolveErr) Error() string { return e.msg }
 
+// signInAgainHint ends the message for a session Wendy Cloud no longer accepts.
+const signInAgainHint = "sign in again: call auth_login and show the user the link (or run 'wendy auth login' in a terminal)"
+
 // cloudErrResult maps an error from the cloud auth/asset-resolution helpers
 // (cloudAuthEntry, pickCloudAsset, connectToCloudAgent, mcpListCloudAssets) to
-// an MCP error result with the correct error_code. Tagged errors get their
+// an MCP error result with the correct error_code.
+func cloudErrResult(err error) *mcpgo.CallToolResult {
+	return errResult(cloudErrDetail(err))
+}
+
+// cloudErrDetail is cloudErrResult's code and message. Tagged errors get their
 // specific code; anything else (including real gRPC errors, which may be
 // wrapped with fmt.Errorf %w) falls back to codeFromGRPC.
-func cloudErrResult(err error) *mcpgo.CallToolResult {
+func cloudErrDetail(err error) (errorCode, string) {
 	var re *cloudResolveErr
 	if errors.As(err, &re) {
-		return errResult(re.code, re.msg)
+		return re.code, re.msg
 	}
-	return errResult(codeFromGRPC(err), grpcErrString(err))
+	code, msg := codeFromGRPC(err), grpcErrString(err)
+	if code == errCodeAuthRequired {
+		msg = fmt.Sprintf("Wendy Cloud did not accept the session (%s); %s", msg, signInAgainHint)
+	}
+	return code, msg
 }
 
 func (s *mcpServer) cloudAuthEntry(cloudGRPC string) (*config.AuthConfig, error) {
@@ -850,9 +862,8 @@ func mcpDialCloudGRPC(auth *config.AuthConfig) (*grpc.ClientConn, error) {
 		return nil, err
 	}
 	dialOptions := []grpc.DialOption{grpc.WithTransportCredentials(creds)}
-	// Per-RPC DPoP proof for a cnf-bound token; nil for unbound sessions. The
-	// MCP provider uses the stored token without refreshing (WDY-3107).
-	dialOptions = append(dialOptions, cloudrequest.DPoPDialOptions(auth, mcpDPoPTokenProvider(auth))...)
+	// Per-RPC DPoP proof for a cnf-bound token; nil for unbound sessions.
+	dialOptions = append(dialOptions, cloudrequest.DPoPDialOptions(auth, cloudTokenProvider(auth))...)
 	conn, err := grpc.NewClient(auth.CloudGRPC, dialOptions...)
 	if err != nil {
 		return nil, fmt.Errorf("connecting to cloud: %w", err)
@@ -860,10 +871,45 @@ func mcpDialCloudGRPC(auth *config.AuthConfig) (*grpc.ClientConn, error) {
 	return conn, nil
 }
 
+// dpopTokenProviderFn supplies each cloud RPC's access token. Nil — the
+// default, and what tests that build a server from an in-memory Config get —
+// means mcpDPoPTokenProvider. A package variable like reloadConfigFn: one
+// server runs per process.
+var dpopTokenProviderFn func(*config.AuthConfig) cloudrequest.DPoPTokenProvider
+
+// SetDPoPTokenProvider makes cloud tools take each RPC's access token from fn,
+// which may refresh it. wendy-auth access tokens last an hour and the server
+// runs for days, so the CLI installs its refreshing provider. Call it once,
+// before Start.
+func SetDPoPTokenProvider(fn func(*config.AuthConfig) cloudrequest.DPoPTokenProvider) {
+	dpopTokenProviderFn = fn
+}
+
+// cloudTokenProvider is the DPoP token source for auth. When it cannot produce
+// a token the session needs a new sign-in, so the error becomes AUTH_REQUIRED;
+// a cancelled call or an unreachable wendy-auth keeps its own error.
+func cloudTokenProvider(auth *config.AuthConfig) cloudrequest.DPoPTokenProvider {
+	newProvider := mcpDPoPTokenProvider
+	if dpopTokenProviderFn != nil {
+		newProvider = dpopTokenProviderFn
+	}
+	provider := newProvider(auth)
+	return func(ctx context.Context) (string, crypto.Signer, error) {
+		token, key, err := provider(ctx)
+		var netErr net.Error
+		if err != nil && ctx.Err() == nil && !errors.As(err, &netErr) {
+			return "", nil, &cloudResolveErr{
+				code: errCodeAuthRequired,
+				msg:  fmt.Sprintf("the Wendy Cloud session could not be renewed (%v); %s", err, signInAgainHint),
+			}
+		}
+		return token, key, err
+	}
+}
+
 // mcpDPoPTokenProvider returns the stored access token and its bound ML-DSA key
-// for a DPoP proof. Unlike the CLI it does NOT auto-refresh — the MCP tools path
-// has never refreshed OAuth tokens, so this only adds the proof (no behavior
-// change); an expired token still fails the same way it does today.
+// for a DPoP proof, without refreshing it. It serves until the CLI installs its
+// refreshing provider (SetDPoPTokenProvider); an expired token fails at Cloud.
 func mcpDPoPTokenProvider(auth *config.AuthConfig) cloudrequest.DPoPTokenProvider {
 	return func(context.Context) (string, crypto.Signer, error) {
 		keyPEM, err := auth.OAuthDPoPKey()

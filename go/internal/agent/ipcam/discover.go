@@ -2,6 +2,7 @@ package ipcam
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/url"
@@ -100,7 +101,11 @@ func (d *Discoverer) Once(ctx context.Context) ([]Camera, error) {
 	for _, payload := range payloads {
 		match, err := ParseProbeMatch(payload)
 		if err != nil {
-			d.logger.Debug("ignoring discovery response", zap.Error(err))
+			if errors.Is(err, ErrProbeMatchTypeMismatch) {
+				d.logger.Debug("ignoring discovery response with non-camera types", zap.Error(err))
+			} else {
+				d.logger.Debug("ignoring discovery response", zap.Error(err))
+			}
 			continue
 		}
 		host := HostFromXAddrs(match.XAddrs)

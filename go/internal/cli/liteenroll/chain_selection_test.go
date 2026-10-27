@@ -50,7 +50,7 @@ func TestEnrollmentUsesFirmwareChainSelection(t *testing.T) {
 			defer srv.Close()
 			challenge := &litepb.WendyComEnrollmentChallenge{UsbTrustSupported: true, MldsaVerificationSupported: tc.capability}
 			profile := TrustProfileFromChallenge(challenge)
-			cfg := &litepb.WendyConfEnrollment{DeviceId: "lite-test", TenantId: tenant, CsrUrl: srv.URL + "/csr", TimeUrl: DefaultTimeURL}
+			cfg := &litepb.WendyConfEnrollment{DeviceId: deviceID, TenantId: tenant, CsrUrl: srv.URL + "/csr", TimeUrl: DefaultTimeURL}
 			if tc.explicitRoots {
 				profile = profile.WithExistingDeviceIssuer()
 				cfg.DeviceRoots = classical
@@ -64,7 +64,7 @@ func TestEnrollmentUsesFirmwareChainSelection(t *testing.T) {
 			if err := CheckTrustSupport(cfg, challenge); err != nil {
 				t.Fatal(err)
 			}
-			cloud := &fakeEnrollment{reply: &cloudpb.EnrollDeviceResponse{CredentialKind: "enrollment_token", TokenValue: "test-token", AssetId: "42", ExpiresAt: time.Now().Add(time.Minute).Format(time.RFC3339)}}
+			cloud := &fakeEnrollment{reply: &cloudpb.EnrollDeviceResponse{CredentialKind: "enrollment_token", TokenValue: "test-token", ExpiresAt: time.Now().Add(time.Minute).Format(time.RFC3339)}}
 			if _, err := Mint(context.Background(), cloud, auth, cfg, "lite-test", nil, profile); err != nil {
 				t.Fatal(err)
 			}
@@ -97,8 +97,8 @@ func TestExplicitRootsRetainFirmwareAlgorithmRestrictions(t *testing.T) {
 }
 
 func TestBuiltInRootsPreserveConfiguredIssuer(t *testing.T) {
-	cfg := &litepb.WendyConfEnrollment{DeviceId: "lite-test", TenantId: tenant}
-	cloud := &fakeEnrollment{reply: &cloudpb.EnrollDeviceResponse{CredentialKind: "enrollment_token", TokenValue: "test-token", AssetId: "42", ExpiresAt: time.Now().Add(time.Minute).Format(time.RFC3339)}}
+	cfg := &litepb.WendyConfEnrollment{DeviceId: deviceID, TenantId: tenant}
+	cloud := &fakeEnrollment{reply: &cloudpb.EnrollDeviceResponse{CredentialKind: "enrollment_token", TokenValue: "test-token", ExpiresAt: time.Now().Add(time.Minute).Format(time.RFC3339)}}
 	if _, err := Mint(context.Background(), cloud, authFixture(t), cfg, "lite-test", nil, TrustProfile{}); err != nil {
 		t.Fatal(err)
 	}

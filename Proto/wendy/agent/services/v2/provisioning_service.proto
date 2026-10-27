@@ -54,6 +54,13 @@ message ProvisionedResponse {
     // that accepted caller-serialized deletion fields. Clients require this
     // before starting the UUID reset workflow; older Agents fail closed.
     bool cloud_authenticated_reset_supported = 6;
+    // The certificate's device UUID, also used as Cloud's asset UUID.
+    // Available immediately after enrollment, without a Cloud roster refresh.
+    // Empty for a legacy identity that has no UUID device principal.
+    string asset_uuid = 7;
+    // Explicit local credential erasure authenticated by a same-tenant operator.
+    // This does not revoke certificates or remove Cloud records.
+    bool local_reset_supported = 8;
 }
 
 message StartProvisioningRequest {
@@ -77,10 +84,16 @@ message UnprovisionRequest {
     // its enrolled Cloud's authenticated JWKS, not from this request. Must bind
     // the exact operator, installed identity, tombstone and signed deletion.
     bytes cloud_reset_authorization = 5;
+    // Explicitly erase only the local enrollment, without Cloud lifecycle or PKI
+    // revocation proof. Requires same-tenant operator mTLS and the exact installed
+    // principal/fingerprint. Never implies that Cloud unenrollment completed.
+    bool local_only = 6;
 }
 
 message UnprovisionResponse {
     bytes unenrollment_completion = 1;
+    // Set only after a requested local-only reset durably erased credentials.
+    bool local_reset_completed = 2;
 }
 
 message RevokeACMECertificateRequest {

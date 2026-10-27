@@ -924,6 +924,8 @@ func TestResolveDeviceNameFlagValidation(t *testing.T) {
 		{"starts with number", "1device", "start with a lowercase letter"},
 		{"uppercase", "Wendy", "lowercase letters, digits, and hyphens"},
 		{"underscore", "wendy_pi", "lowercase letters, digits, and hyphens"},
+		// Cloud (WDY-3016) and the agent both refuse a trailing hyphen.
+		{"trailing hyphen", "wendy-", "must not end with a hyphen"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -1400,6 +1402,23 @@ func TestShouldPromptFlashMode(t *testing.T) {
 	}
 }
 
+// WDY-3974: the full Jetson flash goes over the recovery USB-C port; the
+// picker used to call it a UART flash.
+func TestT234FlashModeItemsNameTheUSBCTransport(t *testing.T) {
+	items := t234FlashModeItems()
+	if len(items) != 2 || items[0].Value != "rootfs" || items[1].Value != "full" {
+		t.Fatalf("flash modes = %+v; want rootfs then full", items)
+	}
+	for _, item := range items {
+		if strings.Contains(strings.ToUpper(item.Name+" "+item.Description), "UART") {
+			t.Errorf("flash mode %q mentions UART: %+v", item.Value, item)
+		}
+	}
+	if !strings.Contains(items[1].Name, "USB-C") {
+		t.Errorf("full flash label %q does not name USB-C", items[1].Name)
+	}
+}
+
 // TestFlashRetryAction covers installESP32Firmware's post-flash decision
 // rules. The load-bearing case is cancellation: tui.ProgressModel reports q,
 // Ctrl+C and SIGINT as context.Canceled, and the retry prompt defaults to Yes,
@@ -1515,17 +1534,26 @@ func TestPreflightImageFits(t *testing.T) {
 	const imageSize = 18_165_548_032
 	bmapXML := fmt.Sprintf(`<bmap version="2.0"><ImageSize>%d</ImageSize><BlockSize>4096</BlockSize>`+
 		`<ChecksumType>sha256</ChecksumType><BlockMap><Range chksum="ab">0</Range></BlockMap></bmap>`, imageSize)
+	// The WDY-3974 Jetson NVMe bmap: a 251.3 GB image whose mapped data ends
+	// at 26.8 GB, then the backup GPT in its last 5 blocks.
+	gptBmapXML := `<bmap version="2.0"><ImageSize>251255586816</ImageSize><BlockSize>4096</BlockSize>` +
+		`<ChecksumType>sha256</ChecksumType><BlockMap><Range chksum="ab">0-100</Range>` +
+		`<Range chksum="ab">6550784-6551807</Range><Range chksum="ab">61341691-61341695</Range></BlockMap></bmap>`
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/image.bmap" {
+		switch r.URL.Path {
+		case "/image.bmap":
+			io.WriteString(w, bmapXML)
+		case "/gpt.bmap":
+			io.WriteString(w, gptBmapXML)
+		default:
 			http.NotFound(w, r)
-			return
 		}
-		io.WriteString(w, bmapXML)
 	}))
 	defer srv.Close()
 
 	small := drive{Name: "SD Card", DevicePath: "/dev/sdb", SizeBytes: 7_948_206_080}
 	large := drive{Name: "SD Card", DevicePath: "/dev/sdb", SizeBytes: 31_914_983_424}
+	ssd := drive{Name: "RTL9210C", DevicePath: "/dev/disk8", SizeBytes: 128_035_676_160}
 	tests := []struct {
 		name    string
 		bmapURL string
@@ -1538,6 +1566,9 @@ func TestPreflightImageFits(t *testing.T) {
 		{"no-bmap skips the check", srv.URL + "/image.bmap", small, true, false},
 		{"no bmap published", "", small, false, false},
 		{"bmap fetch fails", srv.URL + "/missing.bmap", small, false, false},
+		{"GPT image: drive below its mapped data", srv.URL + "/gpt.bmap", small, false, true},
+		{"GPT image: drive above its mapped data", srv.URL + "/gpt.bmap", large, false, false},
+		{"WDY-3974: GPT image on a 128 GB SSD", srv.URL + "/gpt.bmap", ssd, false, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

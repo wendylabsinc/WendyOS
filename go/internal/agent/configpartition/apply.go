@@ -20,6 +20,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/network"
+	"github.com/wendylabsinc/wendy/go/internal/agent/networkaccess"
 	"github.com/wendylabsinc/wendy/go/internal/agent/services"
 	"github.com/wendylabsinc/wendy/go/internal/shared/atomicfile"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
@@ -405,25 +406,43 @@ func updateAvahiDeviceName(logger *zap.Logger, name string, env []string) {
 }
 
 // UpdateAvahiForProvisioning rewrites the _wendyos._udp service block in the
-// avahi service file to advertise the mTLS port, a tls=true TXT record, and
-// (when assetID > 0 / orgID > 0) assetid=<N> and orgid=<N> TXT records, then
-// restarts avahi-daemon so the mDNS advertisement reflects that the device is
-// now provisioned.
-func UpdateAvahiForProvisioning(logger *zap.Logger, mtlsPort int, assetID, orgID int32) {
-	updateAvahiService(logger, defaultAvahiServiceDir, mtlsPort, true, assetID, orgID, func() bool {
+// avahi service file to advertise the mTLS port, a tls=true TXT record, and a
+// principal=<SPIFFE device URI> TXT record, then restarts avahi-daemon so the
+// mDNS advertisement reflects that the device is now provisioned. The
+// principal is what mesh peers dial: it is the full device identity, so a
+// sighting cannot be spoofed by re-advertising someone else's id.
+func UpdateAvahiForProvisioning(logger *zap.Logger, mtlsPort int, principal string) {
+	updateAvahiService(logger, defaultAvahiServiceDir, mtlsPort, true, principal, func() bool {
 		return restartAvahiDaemon(logger, nil)
 	})
 }
 
 // UpdateAvahiForUnprovisioning reverts the _wendyos._udp service block to
 // advertise the plaintext agent port, a tls=false TXT record, and removes the
-// assetid and orgid TXT records, then restarts avahi-daemon. It is the
-// inverse of UpdateAvahiForProvisioning, used when a device is unprovisioned
-// so it is rediscoverable for re-enrollment.
+// principal TXT record, then restarts avahi-daemon. It is the inverse of
+// UpdateAvahiForProvisioning, used when a device is unprovisioned so it is
+// rediscoverable for re-enrollment.
 func UpdateAvahiForUnprovisioning(logger *zap.Logger, plaintextPort int) {
-	updateAvahiService(logger, defaultAvahiServiceDir, plaintextPort, false, 0, 0, func() bool {
+	updateAvahiService(logger, defaultAvahiServiceDir, plaintextPort, false, "", func() bool {
 		return restartAvahiDaemon(logger, nil)
 	})
+}
+
+// ApplyDiscoveryAccess hides or restores Wendy's avahi advertisements to match
+// the saved network access choice. Best-effort like the other discovery
+// updates: local mode binds only loopback anyway, so a read-only or
+// locked-down /etc is logged rather than stopping the agent.
+func ApplyDiscoveryAccess(logger *zap.Logger, policy networkaccess.Policy) {
+	unlock := services.LockAvahiServiceFile()
+	defer unlock()
+
+	changed, err := policy.UpdateAdvertisements(defaultAvahiServiceDir)
+	if err != nil {
+		logger.Warn("Could not apply discovery access choice", zap.Error(err))
+	}
+	if changed {
+		restartAvahiDaemon(logger, nil)
+	}
 }
 
 // defaultAvahiServiceDir is the directory scanned for avahi service files on
@@ -431,7 +450,7 @@ func UpdateAvahiForUnprovisioning(logger *zap.Logger, plaintextPort int) {
 const defaultAvahiServiceDir = "/etc/avahi/services"
 
 // updateAvahiService points the _wendyos._udp advertisement at the given port
-// and sets its tls and assetid TXT records. The service file name varies by
+// and sets its tls and principal TXT records. The service file name varies by
 // image (e.g. wendyos-mdns.service or wendy-agent.service), so we scan all
 // files in serviceDir and update the first one that contains a _wendyos._udp
 // block.
@@ -441,7 +460,7 @@ const defaultAvahiServiceDir = "/etc/avahi/services"
 // temporary directory, so every guard passes and the restart is reached for
 // real. Left un-injected it prompts for polkit authorization on a developer
 // machine and blocks the package's tests for the length of that timeout.
-func updateAvahiService(logger *zap.Logger, serviceDir string, port int, tls bool, assetID, orgID int32, restartAvahi func() bool) {
+func updateAvahiService(logger *zap.Logger, serviceDir string, port int, tls bool, principal string, restartAvahi func() bool) {
 	unlock := services.LockAvahiServiceFile()
 	defer unlock()
 
@@ -464,7 +483,7 @@ func updateAvahiService(logger *zap.Logger, serviceDir string, port int, tls boo
 			continue
 		}
 
-		content := updateWendyOSServicePort(string(data), port, tls, assetID, orgID)
+		content := updateWendyOSServicePort(string(data), port, tls, principal)
 		if err := os.WriteFile(serviceFile, []byte(content), 0o644); err != nil {
 			logger.Warn("Could not write avahi service file",
 				zap.String("path", serviceFile), zap.Error(err))
@@ -473,7 +492,7 @@ func updateAvahiService(logger *zap.Logger, serviceDir string, port int, tls boo
 
 		if restartAvahi() {
 			logger.Info("Updated avahi advertisement",
-				zap.String("file", e.Name()), zap.Int("port", port), zap.Bool("tls", tls), zap.Int32("assetId", assetID), zap.Int32("orgId", orgID))
+				zap.String("file", e.Name()), zap.Int("port", port), zap.Bool("tls", tls), zap.String("principal", principal))
 		}
 		return
 	}
@@ -482,11 +501,10 @@ func updateAvahiService(logger *zap.Logger, serviceDir string, port int, tls boo
 }
 
 // updateWendyOSServicePort finds the _wendyos._udp service block and updates
-// its port, tls TXT record, assetid TXT record, and orgid TXT record. Other
-// service blocks (SSH, HTTP, etc.) are left untouched. When assetID <= 0 or
-// orgID <= 0, the corresponding TXT record is removed (used on
-// unprovisioning).
-func updateWendyOSServicePort(content string, port int, tls bool, assetID, orgID int32) string {
+// its port, tls TXT record, and principal TXT record. Other service blocks
+// (SSH, HTTP, etc.) are left untouched. When principal is empty, the TXT
+// record is removed (used on unprovisioning).
+func updateWendyOSServicePort(content string, port int, tls bool, principal string) string {
 	const typeTag = "<type>_wendyos._udp</type>"
 	portRe := regexp.MustCompile(`<port>\d+</port>`)
 
@@ -525,55 +543,33 @@ func updateWendyOSServicePort(content string, port int, tls bool, assetID, orgID
 			"    <txt-record>tls="+tlsValue+"</txt-record>\n  </service>", 1)
 	}
 
-	block = updateAssetIDTXTRecord(block, assetID)
-	block = updateOrgIDTXTRecord(block, orgID)
+	block = updatePrincipalTXTRecord(block, principal)
 
 	return content[:serviceStart] + block + content[serviceEnd:]
 }
 
-// updateAssetIDTXTRecord adds, updates, or removes the assetid TXT record
-// within a single _wendyos._udp service block. assetID <= 0 removes the
-// record (used on unprovisioning, where the asset ID is no longer known).
-func updateAssetIDTXTRecord(block string, assetID int32) string {
-	assetIDRe := regexp.MustCompile(`\s*<txt-record>assetid=[^<]*</txt-record>`)
-	hasRecord := strings.Contains(block, "<txt-record>assetid=")
+// updatePrincipalTXTRecord adds, updates, or removes the principal TXT record
+// within a single _wendyos._udp service block. The record carries the device's
+// full SPIFFE principal — the identity mesh peers dial and pin TLS against.
+// An empty principal removes the record (used on unprovisioning, where no
+// identity is held).
+func updatePrincipalTXTRecord(block string, principal string) string {
+	block = regexp.MustCompile(`\s*<txt-record>(orgid|assetid)=[^<]*</txt-record>`).ReplaceAllString(block, "")
+	principalRe := regexp.MustCompile(`\s*<txt-record>principal=[^<]*</txt-record>`)
+	hasRecord := strings.Contains(block, "<txt-record>principal=")
 
-	if assetID <= 0 {
+	if principal == "" {
 		if hasRecord {
-			block = assetIDRe.ReplaceAllString(block, "")
+			block = principalRe.ReplaceAllString(block, "")
 		}
 		return block
 	}
 
-	value := fmt.Sprintf("%d", assetID)
 	if hasRecord {
-		return replaceTXTRecord(block, "assetid", value)
+		return replaceTXTRecord(block, "principal", principal)
 	}
 	return strings.Replace(block, "</service>",
-		"    <txt-record>assetid="+value+"</txt-record>\n  </service>", 1)
-}
-
-// updateOrgIDTXTRecord adds, updates, or removes the orgid TXT record within
-// a single _wendyos._udp service block. The mesh friendly-name resolver reads
-// this to filter LAN peers to the dialer's own org. orgID <= 0 removes the
-// record (used on unprovisioning, where the org is no longer known).
-func updateOrgIDTXTRecord(block string, orgID int32) string {
-	orgIDRe := regexp.MustCompile(`\s*<txt-record>orgid=[^<]*</txt-record>`)
-	hasRecord := strings.Contains(block, "<txt-record>orgid=")
-
-	if orgID <= 0 {
-		if hasRecord {
-			block = orgIDRe.ReplaceAllString(block, "")
-		}
-		return block
-	}
-
-	value := fmt.Sprintf("%d", orgID)
-	if hasRecord {
-		return replaceTXTRecord(block, "orgid", value)
-	}
-	return strings.Replace(block, "</service>",
-		"    <txt-record>orgid="+value+"</txt-record>\n  </service>", 1)
+		"    <txt-record>principal="+principal+"</txt-record>\n  </service>", 1)
 }
 
 // UpdateAvahiSensorlink adds or removes the sensorlink=true TXT record on the

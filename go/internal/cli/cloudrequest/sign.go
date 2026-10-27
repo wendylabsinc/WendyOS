@@ -22,6 +22,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	cloudpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
 	"github.com/wendylabsinc/wendy/go/proto/gen/pkicorepb"
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -31,8 +32,25 @@ import (
 
 const (
 	brokerAudience = "https://cloud.wendy.sh/broker"
-	signatureTTL   = 30 * time.Second
+	// signatureTTL is a request descriptor's lifetime. Cloud admits iat within
+	// ±60 s of its clock and enforces expiry strictly, so 60 s, as the console
+	// signs, tolerates a clock up to a minute slow (WDY-3939 #11).
+	signatureTTL = 60 * time.Second
+	// relayedSignatureTTL is the lifetime of what Cloud hands on to another
+	// verifier: the PKI management request, and the descriptors of
+	// relayedSignatures, which the device checks again. The agent's reset
+	// verifier caps a DeleteAsset descriptor at 30 s.
+	relayedSignatureTTL = 30 * time.Second
 )
+
+// relayedSignatures lists the methods whose descriptor Cloud forwards to the
+// device: DeleteAsset inside the reset authorization, and the postbox
+// request_jws of the deployment methods.
+var relayedSignatures = map[string]bool{
+	cloudpbv2.AssetService_DeleteAsset_FullMethodName:           true,
+	cloudpbv2.DeploymentService_CreateDeployment_FullMethodName: true,
+	cloudpbv2.DeploymentService_ControlContainer_FullMethodName: true,
+}
 
 // Signer creates the JWS request descriptors required by Wendy Cloud for
 // operator-privileged mutations. A Signer is safe for concurrent RPCs: it
@@ -133,7 +151,7 @@ func invoke(ctx context.Context, conn grpc.ClientConnInterface, auth *config.Aut
 		if trailer != nil {
 			opts = append(opts, grpc.Trailer(trailer))
 		}
-		return conn.Invoke(ctx, method, signed, reply, opts...)
+		return explainClock(conn.Invoke(ctx, method, signed, reply, opts...))
 	}
 	if x5cOnly[method] {
 		return call(false)
@@ -157,12 +175,15 @@ func invoke(ctx context.Context, conn grpc.ClientConnInterface, auth *config.Aut
 }
 
 // x5cOnly lists the methods always signed with x5c, never kid: the leaf
-// registration itself, and the two whose JWS Cloud forwards verbatim to
-// devices (PostboxEntry.request_jws), which cannot resolve a kid.
+// registration itself, the registry key registration (Cloud serves the stored
+// request back to other clients as the binding), and the two whose JWS Cloud
+// forwards verbatim to devices (PostboxEntry.request_jws), which cannot
+// resolve a kid.
 var x5cOnly = map[string]bool{
-	cloudpbv2.OperatorSessionService_RegisterOperatorLeaf_FullMethodName: true,
-	cloudpbv2.DeploymentService_CreateDeployment_FullMethodName:          true,
-	cloudpbv2.DeploymentService_ControlContainer_FullMethodName:          true,
+	cloudpbv2.OperatorSessionService_RegisterOperatorLeaf_FullMethodName:   true,
+	cloudpbv2.KeyDirectoryService_RegisterUserEncryptionKey_FullMethodName: true,
+	cloudpbv2.DeploymentService_CreateDeployment_FullMethodName:            true,
+	cloudpbv2.DeploymentService_ControlContainer_FullMethodName:            true,
 }
 
 // registeredKIDs holds the leaves this process has registered.
@@ -172,16 +193,41 @@ var registeredKIDs sync.Map
 
 // kidRefused reports the two refusals a kid-signed call may get for its key
 // reference: a generic PERMISSION_DENIED, or the explicit "leaf not stored".
-// Any other FAILED_PRECONDITION comes from the handler and is not retried.
+// Any other FAILED_PRECONDITION comes from the handler and is not retried, nor
+// is an expired signature, which x5c signed by the same clock repeats.
 func kidRefused(err error) bool {
 	st, _ := status.FromError(err)
 	switch st.Code() {
 	case codes.PermissionDenied:
-		return true
+		return !signatureExpired(err)
 	case codes.FailedPrecondition:
 		return strings.Contains(st.Message(), "leaf not stored")
 	}
 	return false
+}
+
+// signatureExpired reports Cloud's refusal of a descriptor outside its
+// validity window: PERMISSION_DENIED with ErrorInfo reason "expired".
+func signatureExpired(err error) bool {
+	st, _ := status.FromError(err)
+	if st.Code() != codes.PermissionDenied {
+		return false
+	}
+	for _, detail := range st.Details() {
+		if info, ok := detail.(*errdetails.ErrorInfo); ok && info.GetDomain() == "wendy.sh" && info.GetReason() == "expired" {
+			return true
+		}
+	}
+	return false
+}
+
+// explainClock names the likely cause of an expired signature: this
+// computer's clock, which neither a retry nor a new login fixes.
+func explainClock(err error) error {
+	if !signatureExpired(err) {
+		return err
+	}
+	return fmt.Errorf("%w (Cloud found the request signature outside its validity window: check that this computer's clock is within a minute of the correct time)", err)
 }
 
 // register reports whether the leaf is registered and may be named by kid. A
@@ -200,7 +246,7 @@ func (s *Signer) register(ctx context.Context, conn grpc.ClientConnInterface, co
 		if status.Code(err) == codes.Unimplemented {
 			return false, nil
 		}
-		return false, fmt.Errorf("registering the operator certificate with Cloud: %w", err)
+		return false, fmt.Errorf("registering the operator certificate with Cloud: %w", explainClock(err))
 	}
 	if resp.GetKid() != s.kid {
 		return false, fmt.Errorf("Cloud registered operator certificate %q, not this session's %q", resp.GetKid(), s.kid)
@@ -295,6 +341,9 @@ func (s *Signer) signRequest(method string, req proto.Message, byKID bool, corre
 	if !ok {
 		return nil, requestTypeError(method, req)
 	}
+	if err := stampValidity(req, s.now()); err != nil {
+		return nil, err
+	}
 	payload, err := proto.Marshal(req)
 	if err != nil {
 		return nil, fmt.Errorf("marshaling Cloud request %s: %w", method, err)
@@ -376,7 +425,7 @@ func (s *Signer) principalRevocationManagementRequest(deviceID string) ([]byte, 
 	payload, err := canonicalJSON(map[string]any{
 		"op": "revoke_principal", "tenant": s.tenantUUID,
 		"principal": "spiffe://wendy.sh/tenant/" + s.tenantUUID + "/device/" + deviceID,
-		"iat":       now, "exp": now + int64(signatureTTL/time.Second), "jti": uuid.NewString(),
+		"iat":       now, "exp": now + int64(relayedSignatureTTL/time.Second), "jti": uuid.NewString(),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("encoding unenrollment authority: %w", err)
@@ -407,10 +456,41 @@ var signedResources = map[string]func(tenant string, req proto.Message) (string,
 		}
 		return "org/" + tenant + "/app/" + in.GetId(), true
 	},
+	// Cloud DeploymentServiceHandler createAppRelease / updateAppRelease.
+	cloudpbv2.DeploymentService_CreateAppRelease_FullMethodName: func(tenant string, req proto.Message) (string, bool) {
+		in, ok := req.(*cloudpbv2.CreateAppReleaseRequest)
+		if !ok || in.GetOrganizationId() != tenant || in.GetAppId() == "" {
+			return "", false
+		}
+		return "org/" + tenant + "/app/" + in.GetAppId(), true
+	},
+	cloudpbv2.DeploymentService_UpdateAppRelease_FullMethodName: func(_ string, req proto.Message) (string, bool) {
+		in, ok := req.(*cloudpbv2.UpdateAppReleaseRequest)
+		if !ok {
+			return "", false
+		}
+		id, err := uuid.Parse(in.GetId())
+		if err != nil || id.String() != in.GetId() {
+			return "", false
+		}
+		return "app-release/" + in.GetId(), true
+	},
 	// Ruled 2026-10-13 (WDY-3660); cloud's RequestSigning.md row follows.
 	cloudpbv2.RelayMcpService_OpenRelaySession_FullMethodName: func(tenant string, req proto.Message) (string, bool) {
 		in, ok := req.(*cloudpbv2.OpenRelaySessionRequest)
 		return "org/" + in.GetOrganizationId() + "/relay-session", ok
+	},
+	// `wendy device rename` on a v2 enrollment.
+	cloudpbv2.AssetService_UpdateAsset_FullMethodName: func(_ string, req proto.Message) (string, bool) {
+		in, ok := req.(*cloudpbv2.UpdateAssetRequest)
+		if !ok {
+			return "", false
+		}
+		id, err := uuid.Parse(in.GetId())
+		if err != nil || id.String() != in.GetId() {
+			return "", false
+		}
+		return "asset/" + in.GetId(), true
 	},
 	cloudpbv2.AssetService_DeleteAsset_FullMethodName: func(_ string, req proto.Message) (string, bool) {
 		in, ok := req.(*cloudpbv2.DeleteAssetRequest)
@@ -422,6 +502,11 @@ var signedResources = map[string]func(tenant string, req proto.Message) (string,
 			return "", false
 		}
 		return "asset/" + in.GetId(), true
+	},
+	// Cloud RequestSigning.md: org/<organization_id>/encryption-key.
+	cloudpbv2.KeyDirectoryService_RegisterUserEncryptionKey_FullMethodName: func(tenant string, req proto.Message) (string, bool) {
+		in, ok := req.(*cloudpbv2.RegisterEncryptionKeyRequest)
+		return "org/" + tenant + "/encryption-key", ok && in.GetOrganizationId() == tenant
 	},
 	cloudpbv2.PKIAdminService_RevokePrincipalCertificates_FullMethodName: func(tenant string, req proto.Message) (string, bool) {
 		in, ok := req.(*cloudpbv2.RevokePrincipalCertificatesRequest)
@@ -447,11 +532,15 @@ func (s *Signer) sign(operation, resource, bodyDigest string, byKID bool, correl
 		return "", fmt.Errorf("generating request nonce: %w", err)
 	}
 	now := s.now().Unix()
+	ttl := signatureTTL
+	if relayedSignatures["/"+operation] {
+		ttl = relayedSignatureTTL
+	}
 	descriptor := map[string]any{
 		"aud":            s.audience,
 		"body_sha256":    bodyDigest,
 		"correlation_id": correlationID,
-		"expiry":         now + int64(signatureTTL/time.Second),
+		"expiry":         now + int64(ttl/time.Second),
 		"iat":            now,
 		"nonce":          base64.RawURLEncoding.EncodeToString(nonceBytes),
 		"operation":      operation,

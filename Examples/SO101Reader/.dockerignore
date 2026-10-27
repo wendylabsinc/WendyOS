@@ -1,0 +1,6 @@
+*
+!reader.py
+!protocol.py
+!transport.py
+!identity.py
+!Dockerfile
