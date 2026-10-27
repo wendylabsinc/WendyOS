@@ -48,9 +48,9 @@ several contexts hold certificates, Wendy lists them and refreshes none.
 
 A replacement must match the tenant, operator and requested key and have more
 than its own renewal margin remaining. These checks also apply to explicit
-refreshes. Its issuance time may be up to 60 seconds ahead of this computer's
-clock, without extending its expiry. A held certificate further in the future
-reports a clock problem without spending a refresh token.
+refreshes. Its issuance time may be up to and including 60 seconds ahead of this
+computer's clock, without extending its expiry. A held certificate further in the
+future reports a clock problem without spending a refresh token.
 
 Rotated refresh tokens are saved immediately, before further validation or
 issuance. A failed save stops the command.
@@ -58,8 +58,9 @@ issuance. A failed save stops the command.
 ## If renewal is refused
 
 For an OIDC sign-in, certificate-service and network failures preserve a
-still-valid certificate. Wendy asks you to sign in only when the sign-in service
-refuses the session. A Cloud authentication refusal alone does not offer sign-in.
+still-valid certificate. Wendy asks you to sign in only when the Auth sign-in
+service refuses the session, such as when a refresh token has expired. A Cloud
+API `Unauthenticated` response alone does not offer sign-in for OIDC contexts.
 When asked, run:
 
 ```sh

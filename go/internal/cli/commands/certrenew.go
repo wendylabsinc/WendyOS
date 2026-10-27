@@ -55,6 +55,7 @@ const (
 	//
 	// Custom deployments require an explicit endpoint. Known Wendy deployments
 	// use the documented renewal URL, never a host/port inferred by substitution.
+	// Keep this name in sync with the refresh-certs command reference.
 	renewEndpointEnv = "WENDY_PKI_RENEW_ENDPOINT"
 
 	renewRequestTimeout = 15 * time.Second
