@@ -329,6 +329,14 @@ camera without a stable id cannot be calibrated. Corrections are stored in
 partition, so they survive agent and OS updates. `clear --stable-id` removes
 the correction of a camera that is no longer attached.
 
+To get coloured areas on the video and an alarm without writing an app, for
+example "40 to 50 °C yellow, above 50 °C red, alert on red", add `rules` to a
+Wendy Data campaign. A rule reads the camera's grid on every frame, draws its
+areas as live markers, and raises events that start a recording and send a
+notification. Calibrate first: a rule's thresholds mean nothing on a camera
+that reads double. See [rules](/docs/advanced/clients/wendy-cli/commands/data#rules)
+in the data command reference.
+
 ## App Configuration
 
 A minimal `wendy.json` camera app looks like this:
