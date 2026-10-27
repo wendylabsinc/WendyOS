@@ -27,9 +27,10 @@ const (
 )
 
 // LiteMeshSources discovers WendyCom sensors using signed device presence and
-// live routes. The directory has no sensor capability field, so port 5054 is
-// only a candidate hint: discovery authenticates and fetches the sensor manifest
-// before offering a source. No application catalogue or multicast relay is needed.
+// live routes. The directory has no sensor capability field, so the WendyCom
+// port is only a candidate hint: discovery authenticates and fetches the sensor
+// manifest before offering a source. No application catalogue or multicast
+// relay is needed.
 type LiteMeshSources struct {
 	snapshot     func() localmesh.NodeSnapshot
 	transportFor TransportFactory
@@ -62,7 +63,7 @@ func (m *LiteMeshSources) candidates() []models.LANDevice {
 	var out []models.LANDevice
 	for _, manifest := range s.Devices {
 		device := meshid.NewDevice(s.Self.Tenant(), manifest.Device)
-		if device == s.Self || manifest.Withdraw || manifest.Expires <= now || manifest.AgentPort != 5054 ||
+		if device == s.Self || manifest.Withdraw || manifest.Expires <= now || manifest.AgentPort != discovery.WendyLitePort ||
 			manifest.Route == nil || !s.RouteAuthorizations[*manifest.Route] {
 			continue
 		}

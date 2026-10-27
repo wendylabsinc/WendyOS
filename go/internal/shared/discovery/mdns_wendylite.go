@@ -16,6 +16,10 @@ import (
 // caps and their own mtls key (see LANDeviceFromWendyLiteService).
 const WendyLiteServiceType = "_wendy-lite._tcp"
 
+// WendyLitePort is the port Lite firmware serves WendyCom on, and the port it
+// advertises for WendyLiteServiceType and in its Wendy Net manifest.
+const WendyLitePort = 5054
+
 // LANDeviceFromWendyLiteService converts a resolved _wendy-lite._tcp mDNS
 // sighting into a models.LANDevice, for callers outside this package (the
 // sensor-pairing picker, the agent's LAN resolve) that already consume

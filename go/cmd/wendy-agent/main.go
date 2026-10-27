@@ -769,15 +769,7 @@ func main() {
 		return deviceIdentity(provisioningSvc)
 	})
 	localMeshAdmin.SetRuntimeStatusSource(meshSharing.Status)
-	localMeshAdmin.SetTopologySource(func() localmesh.NodeSnapshot {
-		localMeshMu.RLock()
-		snapshot := localMeshSnapshot
-		localMeshMu.RUnlock()
-		if snapshot == nil {
-			return localmesh.NodeSnapshot{}
-		}
-		return snapshot()
-	})
+	localMeshAdmin.SetTopologySource(meshSnapshot)
 
 	registerAllServices := func(srv *grpc.Server) {
 		// Each authenticated listener is created with the device's current tenant.
