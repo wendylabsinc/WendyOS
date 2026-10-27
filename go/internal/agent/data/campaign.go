@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/wendylabsinc/wendy/go/internal/agent/data/gridrules"
 	"github.com/wendylabsinc/wendy/go/internal/shared/atomicfile"
 	"gopkg.in/yaml.v3"
 )
@@ -239,6 +240,11 @@ func (n *CampaignNotify) UnmarshalYAML(node *yaml.Node) error {
 // Campaign is the durable, device-local collection plan. Deployment arms its
 // triggers; it does not require the configured sensors or network destination
 // to be online at deployment time.
+//
+// Rules are grid rules (gridrules) the agent runs on its camera grids while
+// the campaign is deployed; their events reach this campaign's triggers and
+// notify block (campaign_rules.go). RulesStatus is their live state, which,
+// like InferenceStatus, is never part of the plan or its revision.
 type Campaign struct {
 	Inference         *CampaignInference `json:"inference,omitempty" yaml:"inference,omitempty"`
 	InferenceStatus   *InferenceStatus   `json:"inference_status,omitempty" yaml:"-"`
@@ -253,6 +259,8 @@ type Campaign struct {
 	Models            map[string]string  `json:"models" yaml:"models,omitempty"`
 	Privacy           []CampaignPrivacy  `json:"privacy" yaml:"privacy,omitempty"`
 	Notify            *CampaignNotify    `json:"notify,omitempty" yaml:"notify,omitempty"`
+	Rules             []gridrules.Rule   `json:"rules,omitempty" yaml:"rules,omitempty"`
+	RulesStatus       RuleStatuses       `json:"rules_status,omitempty" yaml:"-"`
 	State             string             `json:"state" yaml:"-"`
 	Revision          string             `json:"revision" yaml:"-"`
 	DeployedUnixNanos int64              `json:"deployed_unix_nanos" yaml:"-"`
@@ -402,6 +410,16 @@ func (c Campaign) planDigestInput() map[string]any {
 			plan["inference"].(map[string]any)["model_file"] = i.ModelFile
 		}
 	}
+	// Only a plan with rules has the key, so every plan written before rules
+	// existed keeps its revision without a revisionSchema bump, and a plan
+	// with rules can never digest like one without.
+	if len(c.Rules) > 0 {
+		rules := make([]map[string]any, 0, len(c.Rules))
+		for _, rule := range c.Rules {
+			rules = append(rules, rule.DigestInput())
+		}
+		plan["rules"] = rules
+	}
 	return plan
 }
 
@@ -505,6 +523,9 @@ func (c Campaign) validate() error {
 		}
 	}
 	if err := c.Inference.validate(); err != nil {
+		return err
+	}
+	if err := c.validateRules(); err != nil {
 		return err
 	}
 	if c.Inference != nil {
