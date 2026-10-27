@@ -241,6 +241,7 @@ func (n *CampaignNotify) UnmarshalYAML(node *yaml.Node) error {
 // to be online at deployment time.
 type Campaign struct {
 	Inference         *CampaignInference `json:"inference,omitempty" yaml:"inference,omitempty"`
+	Training          *CampaignTraining  `json:"training,omitempty" yaml:"training,omitempty"`
 	InferenceStatus   *InferenceStatus   `json:"inference_status,omitempty" yaml:"-"`
 	Version           int                `json:"version" yaml:"version"`
 	Name              string             `json:"name" yaml:"name"`
@@ -302,7 +303,11 @@ func ParseCampaign(contents []byte) (Campaign, error) {
 // identity operators and the fleet backend use to tell "the plan changed" from
 // "the same plan was redeployed", so what feeds it is part of the on-device
 // schema and changes only with this number.
-const revisionSchema = 2
+//
+// Schema 3 adds the training block. The bump is deliberate: it re-pins every
+// already-deployed campaign to a new revision once, which is why the YAML
+// `version` stays `1` while this number advances.
+const revisionSchema = 3
 
 // planDigestInput is the exact, enumerated set of author-declared plan fields
 // the revision digest covers.
@@ -400,6 +405,17 @@ func (c Campaign) planDigestInput() map[string]any {
 		}
 		if i.ModelFile != "" {
 			plan["inference"].(map[string]any)["model_file"] = i.ModelFile
+		}
+	}
+	if tr := c.Training; tr != nil {
+		plan["training"] = map[string]any{
+			"rate_hz": tr.RateHz,
+			"action": map[string]any{
+				"stream":   tr.Action.Stream,
+				"channels": tr.Action.Channels,
+				"range":    tr.Action.Range,
+				"unit":     tr.Action.Unit,
+			},
 		}
 	}
 	return plan
@@ -505,6 +521,9 @@ func (c Campaign) validate() error {
 		}
 	}
 	if err := c.Inference.validate(); err != nil {
+		return err
+	}
+	if err := c.Training.validate(); err != nil {
 		return err
 	}
 	if c.Inference != nil {

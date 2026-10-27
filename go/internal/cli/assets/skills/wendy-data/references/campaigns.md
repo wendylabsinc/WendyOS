@@ -169,6 +169,32 @@ notification block does not establish delivery. Check
 `inference_status.notification_error`, agent logs, and delivery evidence for
 the intended endpoint when a notification test is requested.
 
+## Training
+
+Add a `training` block when a campaign is training and simulator ready. Its mere
+presence is the signal; there is no boolean flag. It declares the control rate a
+trained policy runs at and the action stream that policy emits:
+
+```yaml
+training:
+  rate_hz: 20
+  action:
+    stream: cmd
+    channels: [wheel_l, wheel_r]
+    range: [[-1, 1], [-1, 1]]
+    unit: m/s
+```
+
+`rate_hz` is the control or frame rate in hertz, in `(0, 1000]`. `action.stream`
+names the application record or episode-write stream carrying the command and
+follows the recording-stream name rule: a lowercase letter followed by up to 23
+lowercase letters, numbers, `-`, or `_`. `action.channels` is an ordered,
+nonempty, unique list naming the action vector. `action.range` gives one
+`[low, high]` pair per channel in the same order, each with `low` below `high`.
+`action.unit` is optional: a single unit for every channel, or a list with one
+unit per channel. Unknown keys inside `training` are rejected like the rest of
+the document.
+
 ## Upload and retention
 
 `upload.when` accepts `always`, `wifi`, and `manual`; `wifi` currently behaves

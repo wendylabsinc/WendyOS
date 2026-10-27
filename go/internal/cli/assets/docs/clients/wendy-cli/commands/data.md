@@ -129,6 +129,7 @@ timestamps and boot ID.
 | `wendy data campaign list` | List deployed campaigns and revisions. |
 | `wendy data campaign inspect <name>` | Print the canonical deployed plan and state. |
 | `wendy data campaign trigger <name>` | Trigger a campaign manually; `--reason` is stored in the Episode. |
+| `wendy data export-env <campaign>` | Translate a training campaign into a simulator-environment directory. See [Simulator environment export](#simulator-environment-export). |
 
 Event and model-uncertainty triggers are armed immediately after deployment.
 A complete plan is in `Examples/WendyDataCampaign` in the WendyOS repository.
@@ -166,6 +167,7 @@ and are ignored when `notify.on` is `episode_committed`. The immediate modes
 | `models` | no | Map of model name to deployed version, copied into Episodes. |
 | `privacy` | no | List of declared transforms with optional revisions. |
 | `inference` | no | Agent-managed object detection from pinned Hugging Face models, using Transformers or YOLO ONNX; see below. |
+| `training` | no | Marks the campaign as training and simulator ready; declares the control rate and the action stream a trained policy emits; see below. |
 | `notify` | no | Episode-commit notification intent or immediate event/detection delivery; see below. |
 
 Each `sources` item selects exactly one source:
@@ -329,9 +331,35 @@ errors. Temporary camera loss retains presence/cooldown state so reconnecting
 does not produce a duplicate detection.
 
 See [the all-camera people example](https://github.com/wendylabsinc/WendyOS/tree/main/Examples/WendyDataPeople)
-for a complete campaign. Campaign revision hashing now uses revision schema 2,
-which includes inference and notification settings. Existing plans receive new
-revision hashes when redeployed; the YAML `version` remains `1`.
+for a complete campaign. Campaign revision hashing now uses revision schema 3,
+which includes inference, training, and notification settings. Existing plans
+receive new revision hashes when redeployed; the YAML `version` remains `1`.
+
+### Training
+
+A `training` block marks a campaign as training and simulator ready. Its
+presence is the signal; there is no boolean flag. It declares the control rate
+and the action stream that a trained policy emits.
+
+```yaml
+training:
+  rate_hz: 20
+  action:
+    stream: cmd
+    channels: [wheel_l, wheel_r]
+    range: [[-1, 1], [-1, 1]]
+    unit: m/s
+```
+
+| Field | Required | Description |
+|---|---|---|
+| `rate_hz` | yes | Control or frame rate in hertz, in `(0, 1000]`. |
+| `action.stream` | yes | Name of the application record or episode-write stream carrying the command. A lowercase letter followed by up to 23 lowercase letters, numbers, `-`, or `_`, matching the recording-stream name rule. |
+| `action.channels` | yes | Ordered, nonempty, unique channel names forming the action vector. |
+| `action.range` | yes | One `[low, high]` pair per channel, in the same order, each with `low` below `high`. |
+| `action.unit` | no | A single unit applied to every channel, or a list with one unit per channel. |
+
+Unknown keys inside `training` are rejected like the rest of the document.
 
 ### Notifications
 
@@ -610,3 +638,39 @@ retained IDs per stream. Age retention across reboots depends on device clock ac
 This export path does not update cloud upload state.
 Payloads and metadata are exported in checksummed Protobuf `.wdr` frames. Episodes
 also include these frames in `records.wdr`, alongside legacy `events.jsonl`.
+
+## Simulator environment export
+
+`wendy data export-env <campaign>` reads a deployed training campaign, resolves its
+sources against the device, and writes a simulator-environment directory:
+
+```sh
+wendy data export-env pick_place --device workshop.local -o pick_place-env
+```
+
+```
+export-env <campaign> [--device <sel>] [-o <dir>] [--profile go2|g1|so101|rosmaster-r2|custom] [--json]
+```
+
+The campaign must carry a [`training`](#training) block; its presence is what marks
+a campaign as simulator ready. Without a campaign name, the sole deployed campaign is
+used when exactly one exists; zero or several deployed campaigns are an error that
+names what is present. A campaign with no `training` block is rejected with guidance
+to add a `training.action` stream.
+
+The directory holds three files. `env.json` is the interface manifest: a schema
+version, the profile, the control rate, the simulated observations, and the action a
+policy drives. `scene.xml` is a MuJoCo (MJCF) scene scaffold meant to sit beside the
+matching simulator model under `go/simulator/<kind>/`; for the default `custom`
+profile it emits a clearly marked placeholder body. `README.md` records what was
+generated. Both generated files are a scaffold, not a validated world, so review them
+before use.
+
+`--profile` selects the robot model the scene scaffold includes; it defaults to
+`custom`. The command never fails on a single source it cannot translate: such a
+source is skipped and the reason is printed to standard error and recorded under
+`warnings` in `env.json`, so any observation whose shape could not be derived from
+the campaign is set by hand rather than trusted. The command refuses to overwrite an
+existing destination, writes through a `.partial` staging directory, and renames it
+into place only once every file is written. `--json` prints the campaign, revision,
+profile, destination, written file names, and warnings.

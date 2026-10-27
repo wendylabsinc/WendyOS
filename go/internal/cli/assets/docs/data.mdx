@@ -186,6 +186,19 @@ The [recording stream reference](/docs/advanced/clients/wendy-cli/commands/data#
 and [WendyRecording examples](https://github.com/wendylabsinc/WendyOS/tree/main/Examples/WendyRecording)
 include configuration, senders, and an export reader.
 
+A campaign that declares a `training` block is simulator ready. Translate it into a
+simulator-environment directory with:
+
+```sh
+wendy data export-env <campaign> --device workshop.local -o <campaign>-env
+```
+
+This writes `env.json` (the interface manifest of simulated observations and the
+action a policy drives), `scene.xml` (a MuJoCo scene scaffold for the chosen
+`--profile`, `custom` by default), and `README.md`. Observations whose shape cannot
+be derived from the campaign are recorded under `warnings` in `env.json` for you to
+set by hand.
+
 ## Detect objects without a model app
 
 A campaign's optional `inference` block runs object detection on its selected

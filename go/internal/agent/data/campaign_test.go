@@ -399,9 +399,10 @@ export: {annotation: cvat}
 // point: under the old scheme every campaign on the fleet changed revision
 // whenever an agent release added a field to the struct, and TestCampaign
 // RevisionIgnoresUnrelatedStructFields is the guard that it cannot happen
-// again. Schema 2 adds inference and immediate notification fields.
+// again. Schema 2 adds inference and immediate notification fields; schema 3
+// adds the training block, re-pinning this value once more.
 // Re-pinning is allowed only alongside a revisionSchema bump.
-const drainDigestPinRevision = "a11f0b6b3485ec1c3273421fc3ff8b07f541d0c8d101af105e1a8b59d49d431f"
+const drainDigestPinRevision = "ac2a05890611954698a1d023c5c83c7c50ff19c7ce15ffbe6c9550e4832367cd"
 
 func TestCampaignDrainValidation(t *testing.T) {
 	withDrain := func(drain string) []byte {
