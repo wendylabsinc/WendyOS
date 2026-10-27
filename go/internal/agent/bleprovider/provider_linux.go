@@ -5,6 +5,7 @@ package bleprovider
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"net"
@@ -385,8 +386,13 @@ func (r *runtime) makeServerTLS() *tls.Config {
 		// the whole TLS flight. BLE uses classical X25519 key exchange while the
 		// enrolled mTLS certificate and signature verification remain unchanged.
 		CurvePreferences: []tls.CurveID{tls.X25519},
-		Certificates:     []tls.Certificate{r.cfg.Credentials.Certificate},
-		ClientAuth:       tls.RequireAnyClientCert, NextProtos: []string{ALPN},
+		// Present only the leaf to a client that named our issuer set (see
+		// tls_issuers_linux.go). Without SNI, crypto/tls consults
+		// GetCertificate only when Certificates is empty.
+		GetCertificate: func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
+			return serverCertificate(r.cfg.Credentials, hello), nil
+		},
+		ClientAuth: tls.RequireAnyClientCert, NextProtos: []string{ALPN},
 		VerifyConnection: func(state tls.ConnectionState) error {
 			chain := make([][]byte, 0, len(state.PeerCertificates))
 			for _, cert := range state.PeerCertificates {
@@ -463,7 +469,7 @@ func (r *runtime) acceptLink(ctx context.Context, raw net.Conn) {
 	if r.cfg.Selection != nil {
 		r.cfg.Selection.Connected(peer, localmesh.RadioBLE)
 	}
-	r.cfg.Logger.Info("BLE inbound TLS established", zap.Stringer("peer", peer.UUID()), zap.Duration("admission_wait", wait), zap.Duration("handshake_time", elapsed), zap.Bool("resumed", state.DidResume))
+	r.cfg.Logger.Info("BLE inbound TLS established", zap.Stringer("peer", peer.UUID()), zap.Duration("admission_wait", wait), zap.Duration("handshake_time", elapsed), zap.Bool("resumed", state.DidResume), zap.Int("peer_certificates", len(state.PeerCertificates)))
 	if r.hasCheaperLink(peer) && (r.confirmCheaperLink(ctx, nil, peer) || ctx.Err() != nil) {
 		r.cfg.Logger.Debug("BLE closing inbound CoC on cheaper-link decision", zap.Stringer("peer", peer.UUID()))
 		_ = secure.Close()
@@ -822,7 +828,7 @@ func (r *runtime) dialLink(ctx context.Context, peer candidate) {
 	if r.cfg.Selection != nil {
 		r.cfg.Selection.Connected(device, localmesh.RadioBLE)
 	}
-	r.cfg.Logger.Info("BLE outbound TLS established", zap.String("radio", peer.address), zap.Duration("admission_wait", wait), zap.Duration("handshake_time", elapsed), zap.Bool("resumed", secure.ConnectionState().DidResume))
+	r.cfg.Logger.Info("BLE outbound TLS established", zap.String("radio", peer.address), zap.Duration("admission_wait", wait), zap.Duration("handshake_time", elapsed), zap.Bool("resumed", secure.ConnectionState().DidResume), zap.Int("peer_certificates", len(secure.ConnectionState().PeerCertificates)))
 	if r.hasCheaperLink(device) && (r.confirmCheaperLink(ctx, nil, device) || ctx.Err() != nil) {
 		r.cfg.Logger.Debug("BLE closing outbound CoC on cheaper-link decision", zap.String("radio", peer.address))
 		return
@@ -877,8 +883,9 @@ func tuneMeshBeforeTLS(ctx context.Context, tune func(context.Context) (time.Dur
 		return 0, false, ctx.Err()
 	}
 	var unavailable *leUpdateUnavailableError
+	var rejected *leUpdateRejectedError
 	var completed *leUpdateCompletedError
-	return interval, errors.As(err, &unavailable) || errors.As(err, &completed), err
+	return interval, errors.As(err, &unavailable) || errors.As(err, &rejected) || errors.As(err, &completed), err
 }
 
 func watchLinkContext(ctx context.Context, conn net.Conn) func() {
@@ -916,6 +923,7 @@ func (r *runtime) clientTLS(peer candidate) (*tls.Config, *meshid.Device, error)
 			return nil, nil, err
 		}
 	}
+	var server []*x509.Certificate
 	previous := config.VerifyConnection
 	config.VerifyConnection = func(state tls.ConnectionState) error {
 		if previous != nil {
@@ -948,7 +956,16 @@ func (r *runtime) clientTLS(peer candidate) (*tls.Config, *meshid.Device, error)
 			}
 		}
 		authenticated = device
+		server = state.PeerCertificates
 		return nil
+	}
+	if digest := r.cfg.Credentials.IssuerDigest(); digest != "" {
+		config.NextProtos = []string{ALPN, issuerHintPrefix + digest}
+		// crypto/tls runs VerifyConnection on the server's certificate
+		// before it calls GetClientCertificate.
+		config.GetClientCertificate = func(*tls.CertificateRequestInfo) (*tls.Certificate, error) {
+			return clientCertificate(r.cfg.Credentials, server), nil
+		}
 	}
 	return config, &authenticated, nil
 }

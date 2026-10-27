@@ -131,3 +131,19 @@ TLS negotiates `wendy-local-mesh-ble/1`, followed by router hello version 1.
 version includes shared HAVE/WANT service and presence/router announcements;
 there is no full-record-push fallback. BLE advertisements keep their independent
 discovery format/version. Endpoint-only leaf ALPN and hello remain separate.
+
+## Certificate issuers
+
+Enrolled ML-DSA issuers are about 20 KB per direction, five times the 3.9 KB
+leaf. At the ~1 KB/s a busy CoC carries, two full chains (about 50 KB) need
+more than the 30-second inbound handshake budget. A client whose presented
+issuers are all its own trust anchors also offers the ALPN value
+`wendy-net-issuers/<digest>`, where the digest is the first 16 bytes of SHA-256
+over the sorted SHA-256 of each issuer, in unpadded base64url. Servers never
+select it. A server whose own issuers have the same digest presents only its
+leaf. The client then presents only its leaf if the server's leaf names the
+client's issuer. Every other pair exchanges full chains, so a peer without this
+value interoperates unchanged. Each side still verifies the received leaf
+against its own trust anchors: an issuer the receiver lacks fails verification,
+it is never skipped. The digest travels in the clear ClientHello and names only
+the issuer set; advertisements already carry the tenant service UUID.

@@ -28,7 +28,8 @@ type Node interface {
 
 // Policy owns its own NAT, forwarding, DNS proxy and resolver changes. The
 // Linux implementation owns an authenticated IPv6 tunnel to the selected donor;
-// tests use an in-memory policy.
+// tests use an in-memory policy. SetGateway returns errGatewayPending while it
+// is still negotiating with a donor; a later call for that donor collects it.
 type Policy interface {
 	SetGateway(context.Context, meshid.Device) error
 	SetSharing(context.Context, string, string) error
@@ -44,6 +45,11 @@ type Probe interface {
 	Uplink(context.Context, string, string) bool
 	Gateway(context.Context, netip.Addr, netip.Addr) bool
 }
+
+// errGatewayPending is returned by Policy.SetGateway while a lease negotiation
+// with that gateway is still running. The policy keeps it alive across steps;
+// withdrawing the gateway would cancel it.
+var errGatewayPending = errors.New("negotiating a lease with the selected gateway")
 
 type dnsState struct {
 	gateway        meshid.Device
@@ -186,7 +192,11 @@ func (c *Controller) Step(ctx context.Context, config Config) (Decision, error) 
 		c.gatewayDevice = meshid.Device{}
 	}
 	decision := Decide(config, c.self, uplinks, gateway, time.Now())
-	if err := c.reconcile(ctx, decision); err != nil {
+	if err := c.reconcile(ctx, decision); errors.Is(err, errGatewayPending) {
+		// Name the selected donor, but claim no Internet access before its
+		// lease and tunnel exist.
+		decision.Mode, decision.Reason = "offline", err.Error()
+	} else if err != nil {
 		return decision, err
 	}
 	return decision, errors.Join(config.Validate(), discoveryErr)
@@ -375,7 +385,14 @@ func (c *Controller) reconcile(ctx context.Context, d Decision) error {
 	if c.shareKey != "" {
 		return errors.New("refusing to borrow Internet while sharing an uplink")
 	}
-	if err := c.policy.SetGateway(ctx, d.GatewayDevice); err != nil {
+	if err := c.policy.SetGateway(ctx, d.GatewayDevice); errors.Is(err, errGatewayPending) {
+		// Withdrawing the gateway would cancel the negotiation. No borrowed
+		// default exists yet, so only remove a previous donor's resolver.
+		if err := c.setDNS(cleanup, dnsState{}); err != nil {
+			return err
+		}
+		return errGatewayPending
+	} else if err != nil {
 		return errors.Join(err, c.withdrawGateway(cleanup))
 	}
 	// DNS reaches the donor's mesh ULA over Babel independently of the borrowed

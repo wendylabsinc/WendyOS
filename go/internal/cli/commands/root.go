@@ -255,20 +255,34 @@ func NewRootCmd() *cobra.Command {
 
 	var bmapDevice, bmapFile, bmapSource string
 	var bmapWriters int
+	var bmapWriteLimit int64
 	bmapWriteCmd := &cobra.Command{
 		Use:    "__bmap-write",
 		Hidden: true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if bmapSource != "" {
-				return runBmapWriteSeekable(bmapDevice, bmapFile, bmapSource, bmapWriters, cmd.OutOrStdout())
+				return runBmapWriteSeekable(bmapDevice, bmapFile, bmapSource, bmapWriters, bmapWriteLimit, cmd.OutOrStdout())
 			}
-			return runBmapWrite(bmapDevice, bmapFile, cmd.InOrStdin())
+			return runBmapWrite(bmapDevice, bmapFile, cmd.InOrStdin(), bmapWriteLimit)
 		},
 	}
 	bmapWriteCmd.Flags().StringVar(&bmapDevice, "device", "", "Raw device path to write")
 	bmapWriteCmd.Flags().StringVar(&bmapFile, "bmap", "", "Path to the .bmap file")
 	bmapWriteCmd.Flags().StringVar(&bmapSource, "source", "", "Path to the seekable .img.zst source")
 	bmapWriteCmd.Flags().IntVar(&bmapWriters, "writers", 0, "Concurrent writer goroutines (0 = sequential default)")
+	bmapWriteCmd.Flags().Int64Var(&bmapWriteLimit, "write-limit", 0, "Skip image bytes at or past this offset, the end of a smaller drive (0 = write all)")
+
+	var gptDevice string
+	gptRelocateCmd := &cobra.Command{
+		Use:    "__gpt-relocate",
+		Hidden: true,
+		Args:   cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return runGPTRelocate(gptDevice)
+		},
+	}
+	gptRelocateCmd.Flags().StringVar(&gptDevice, "device", "", "Raw device path whose GPT to rewrite for its size")
+	_ = gptRelocateCmd.MarkFlagRequired("device")
 
 	// Visible commands are added in display order (command sorting is disabled
 	// above); hidden commands follow and never appear in help.
@@ -300,6 +314,7 @@ func NewRootCmd() *cobra.Command {
 		bleCheckCmd,
 		sessionBrokerCmd,
 		bmapWriteCmd,
+		gptRelocateCmd,
 		newT234WriteCmd(),
 		newUSBSetupHiddenCmd(),
 		watchCmd,

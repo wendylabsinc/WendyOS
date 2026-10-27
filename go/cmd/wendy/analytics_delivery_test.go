@@ -252,6 +252,7 @@ func TestInvocationAnalyticsExcludesLocalDiagnosticsAndHelpers(t *testing.T) {
 		{"install", "plan", "--help"}, {"os", "install", "plan", "--help"},
 		{"__session-broker", "--help"}, {"__usb-setup", "--help"},
 		{"__t234-write", "--help"}, {"__ble-check", "--help"},
+		{"__gpt-relocate", "--help"},
 		{"analytics", "disable", "--help"},
 	} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {

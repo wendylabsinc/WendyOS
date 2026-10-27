@@ -1466,10 +1466,9 @@ func (s *VideoService) loadNetworkCameras() {
 		s.logger.Warn("loading network camera credentials failed", zap.Error(credentialsErr))
 	}
 	if registryErr == nil && credentialsErr == nil {
-		before := len(s.registry.List())
-		if err := s.registry.PruneUnconfirmedDHCP(s.credentials.Has); err != nil {
+		if removed, err := s.registry.PruneUnconfirmedDHCP(s.credentials.Has); err != nil {
 			s.logger.Warn("cleaning legacy DHCP camera observations failed", zap.Error(err))
-		} else if removed := before - len(s.registry.List()); removed > 0 {
+		} else if removed > 0 {
 			s.logger.Info("removed unconfirmed DHCP camera observations", zap.Int("count", removed))
 		}
 	}

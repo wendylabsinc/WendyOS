@@ -3,8 +3,10 @@ package commands
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"testing"
@@ -15,6 +17,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/internal/shared/discoverycache"
 	"github.com/wendylabsinc/wendy/go/internal/shared/models"
+	"google.golang.org/grpc"
 )
 
 // TestLanDialCandidatesIncludesEverySightedAddress proves the picker connect
@@ -109,6 +112,176 @@ func TestPinnedUnreachableDoesNotBlameThePin(t *testing.T) {
 	// its name proves nothing (see blocksUnauthenticatedFallback).
 	if !blocksUnauthenticatedFallback(err) {
 		t.Errorf("err = %v would let a pinned device be reached over a transport that enforces nothing", err)
+	}
+}
+
+// TestPinnedUnprovisionedDeviceIsToldHowToUnpin is WDY-3974 end to end. The
+// device was reset to unprovisioned (unenrolled, reflashed, factory reset): its
+// plaintext port answers and its mTLS port is closed. The ladder's TLS probe of
+// the plaintext port is answered in plaintext, which is the one piece of
+// evidence that separates this from an unreachable device.
+//
+// The old refusal folded that address's two ports into the mTLS port's
+// "connection refused" and told the user unpinning was not the fix — when an
+// intentional reset is exactly what unpinning is for. The refusal must still
+// refuse, still never dial plaintext, and only change what it says.
+func TestPinnedUnprovisionedDeviceIsToldHowToUnpin(t *testing.T) {
+	setTempConfig(t, &config.Config{DevicePins: map[string]config.DevicePin{
+		"orin": {OrgID: 7, CloudGRPC: "grpc.wendy.dev:443", AssetID: "42", Source: config.PinSourceLAN},
+	}})
+	setPinCache(t)
+	origPlaintext := plaintextConnectFn
+	plaintextConnectFn = func(context.Context, string) (*grpcclient.AgentConnection, error) {
+		t.Error("a pinned host was dialled in plaintext")
+		return nil, errors.New("plaintext forbidden")
+	}
+	t.Cleanup(func() { plaintextConnectFn = origPlaintext })
+
+	// An unprovisioned agent: plaintext gRPC on the port, nothing on port+1.
+	addr := deadAgentAddr(t)
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		t.Skipf("cannot listen on %s: %v", addr, err)
+	}
+	server := grpc.NewServer()
+	go func() { _ = server.Serve(listener) }()
+	t.Cleanup(server.Stop)
+	host, portText, _ := net.SplitHostPort(addr)
+	port, _ := strconv.Atoi(portText)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	conn, _, err := dialAgentLadderWithCerts(ctx, newDialTarget("orin.local", addr), []config.CertificateInfo{selfSignedCLICert(t, 7)})
+	if conn != nil {
+		conn.Close()
+		t.Fatal("a pinned device that answered unprovisioned was connected to")
+	}
+	var failure *noAuthenticatedEndpointError
+	if !errors.As(err, &failure) {
+		t.Fatalf("err = %v, want the pinned-host refusal", err)
+	}
+	msg := err.Error()
+	for _, want := range []string{
+		"answers unprovisioned",
+		"wendy device unpin orin",
+		"If you intentionally unenrolled, reset, reflashed",
+		"keep the pin and verify the device first",
+		addr + " answered without TLS",
+		fmt.Sprintf("%s (port %d: answered without TLS; port %d: connection refused)", host, port, port+1),
+	} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("refusal is missing %q:\n%s", want, msg)
+		}
+	}
+	if strings.Contains(msg, "not the fix") {
+		t.Errorf("the device answered, unprovisioned; telling the user unpinning is not the fix sends them away from the recovery:\n%s", msg)
+	}
+	if strings.Contains(msg, "no agent answered") {
+		t.Errorf("its only address answered; there is no silent address to warn about:\n%s", msg)
+	}
+	var styled interface {
+		error
+		CLIMessage() string
+	}
+	if !errors.As(err, &styled) || !strings.Contains(styled.CLIMessage(), "wendy device unpin orin") {
+		t.Errorf("styled rendering lost the recovery command:\n%v", err)
+	}
+	// Still the same refusal to every caller that branches on it: enrollment's
+	// explicit trust prompt, the BLE gate and error classification.
+	if !errors.Is(err, errNoAuthenticatedEndpoint) || errors.Is(err, errDeviceIdentityRefused) || !blocksUnauthenticatedFallback(err) {
+		t.Errorf("err = %v changed type; only its wording may change", err)
+	}
+	if failure.certSeen || failure.pinnedKey != "orin.local" {
+		t.Errorf("certSeen = %v, pinnedKey = %q; enrollment trust recovery depends on both", failure.certSeen, failure.pinnedKey)
+	}
+}
+
+// The unpin guidance rests on one piece of evidence — an address answered the
+// TLS probe in plaintext — and every other outcome keeps the reachability
+// wording that tells the user not to unpin.
+func TestPinnedRefusalOffersUnpinOnlyWhenTheDeviceAnsweredWithoutTLS(t *testing.T) {
+	const notTLS = `rpc error: code = Unavailable desc = connection error: desc = "transport: authentication handshake failed: tls: first record does not look like a TLS handshake"`
+	refused := func(addr string) error {
+		return fmt.Errorf(`rpc error: code = Unavailable desc = connection error: desc = "transport: Error while dialing: dial tcp %s: connect: connection refused"`, addr)
+	}
+	candidates := []string{"169.254.213.32:50051", "[fe80::5741:1%en17]:50051"}
+	// The report's shape: two certificates tried against the plaintext port,
+	// then the mTLS port refuses; the link-local IPv6 address refuses on both.
+	answered := []mtlsAttemptError{
+		{addr: "169.254.213.32:50051", err: errors.New(notTLS)},
+		{addr: "169.254.213.32:50051", err: errors.New(notTLS)},
+		{addr: "169.254.213.32:50052", err: refused("169.254.213.32:50052")},
+		{addr: "[fe80::5741:1%en17]:50051", err: refused("[fe80::5741:1%en17]:50051")},
+		{addr: "[fe80::5741:1%en17]:50052", err: refused("[fe80::5741:1%en17]:50052")},
+	}
+	silent := []mtlsAttemptError{
+		{addr: "169.254.213.32:50051", err: refused("169.254.213.32:50051")},
+		{addr: "169.254.213.32:50052", err: refused("169.254.213.32:50052")},
+	}
+	answeredEverywhere := []mtlsAttemptError{
+		{addr: "169.254.213.32:50051", err: errors.New(notTLS)},
+		{addr: "169.254.213.32:50052", err: refused("169.254.213.32:50052")},
+		{addr: "[fe80::5741:1%en17]:50051", err: errors.New(notTLS)},
+		{addr: "[fe80::5741:1%en17]:50052", err: refused("[fe80::5741:1%en17]:50052")},
+	}
+	for _, tc := range []struct {
+		name      string
+		attempts  []mtlsAttemptError
+		certSeen  bool
+		wantUnpin bool
+		want      []string
+		notWant   []string
+	}{
+		{
+			name: "plaintext port answered", attempts: answered, wantUnpin: true,
+			want: []string{
+				"169.254.213.32:50051 answered without TLS",
+				"169.254.213.32 (port 50051: answered without TLS; port 50052: connection refused)",
+				"fe80::5741:1%en17 (connection refused)",
+				// The other address was silent, so the answering one may be a
+				// stale record pointing at another machine.
+				"no agent answered at fe80::5741:1%en17. If 169.254.213.32 is no longer this device's address (a stale DNS or mDNS record)",
+			},
+		},
+		{
+			name: "every address answered without TLS", attempts: answeredEverywhere, wantUnpin: true,
+			want:    []string{"169.254.213.32:50051, [fe80::5741:1%en17]:50051 answered without TLS"},
+			notWant: []string{"no agent answered", "stale DNS"},
+		},
+		{name: "nothing answered", attempts: silent, want: []string{"not the fix", "169.254.213.32 (connection refused)"}},
+		{name: "a certificate was refused too", attempts: answered, certSeen: true, want: []string{"not the fix", "present a certificate"}},
+		{name: "no certificate to try", want: []string{"not the fix", "no usable client certificate"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			failure := pinnedHostNoAuthenticatedEndpointError("wendyos-hack-device-7.local", candidates, tc.attempts, tc.certSeen)
+			msg := failure.Error()
+			if got := strings.Contains(msg, "wendy device unpin wendyos-hack-device-7.local"); got != tc.wantUnpin {
+				t.Errorf("offers unpin = %v, want %v:\n%s", got, tc.wantUnpin, msg)
+			}
+			// Only the unprovisioned refusal carries a styled rendering: the CLI
+			// entry point restyles anything in the chain that has one, and a
+			// reachability refusal must keep the plain rendering.
+			var styled interface {
+				error
+				CLIMessage() string
+			}
+			if got := errors.As(error(failure), &styled); got != tc.wantUnpin {
+				t.Errorf("styled rendering = %v, want %v", got, tc.wantUnpin)
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(msg, want) {
+					t.Errorf("message is missing %q:\n%s", want, msg)
+				}
+			}
+			for _, notWant := range tc.notWant {
+				if strings.Contains(msg, notWant) {
+					t.Errorf("message has %q:\n%s", notWant, msg)
+				}
+			}
+			if !errors.Is(failure, errNoAuthenticatedEndpoint) || failure.certSeen != tc.certSeen || !reflect.DeepEqual(failure.candidates, candidates) {
+				t.Errorf("refusal lost its type or recovery state: %+v", failure)
+			}
+		})
 	}
 }
 
@@ -657,6 +830,27 @@ func TestDescribeDialAttemptsFoldsPortsByAddress(t *testing.T) {
 	}
 	if !strings.Contains(got[1], "no route to host") {
 		t.Fatalf("describeDialAttempts = %v, want the last reason for each address", got)
+	}
+}
+
+// Folding by address must not fold the ports' outcomes into one: an address
+// whose plaintext port answered and whose mTLS port refused is not an address
+// that refused (WDY-3974). Within one port, the last failure still wins.
+func TestDescribeDialAttemptsKeepsEachPortsOutcome(t *testing.T) {
+	notTLS := errors.New(`transport: authentication handshake failed: tls: first record does not look like a TLS handshake`)
+	got := describeDialAttempts([]mtlsAttemptError{
+		{addr: "10.0.0.5:50051", err: errors.New("no route to host")},
+		{addr: "10.0.0.5:50051", err: notTLS},
+		{addr: "10.0.0.5:50052", err: errors.New("connection refused")},
+		{addr: "[fe80::1%en0]:50051", err: errors.New("connection refused")},
+		{addr: "[fe80::1%en0]:50052", err: errors.New("connection refused")},
+	})
+	want := []string{
+		"10.0.0.5 (port 50051: answered without TLS; port 50052: connection refused)",
+		"fe80::1%en0 (connection refused)",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("describeDialAttempts = %q, want %q", got, want)
 	}
 }
 

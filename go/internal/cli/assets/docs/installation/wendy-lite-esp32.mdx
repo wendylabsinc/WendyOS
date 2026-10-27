@@ -70,6 +70,31 @@ Wendy uses the [ESP-IDF Installation Manager (`eim`)](https://dl.espressif.com/d
   </Step>
 </Steps>
 
+## ESP-Mosaico
+
+Mosaico uses an ESP32-S31 and a dedicated 16 MB firmware layout. Select
+**ESP-Mosaico** in the `wendy install` picker once that firmware has
+been published. From the powered-off state, hold BOOT, briefly press POWER, then
+release BOOT with USB connected. The installer resets the S31 through its
+watchdog after the flash completes.
+
+The running dashboard exposes two USB CDC ports. Use the first for Wendy
+management and native deployment; the second carries independent diagnostics.
+From `samples/mosaico_dashboard` in the firmware checkout:
+
+```sh
+wendy run --device wendy-lite:PORT --yes --detach
+```
+
+The sample's `wendy-idf.json` selects a digest-pinned ESP-IDF container, target
+`esp32s31`, `preview: true`, and `workspaceRoot: "../.."` so the build can access
+shared firmware components. Docker must be running. The workspace root is
+relative to the project and must contain it. The CLI mounts that workspace at
+`/project`, builds, uploads the app into the inactive OTA slot, and reboots.
+Projects without this file continue to use the EIM toolchain. Native app uploads
+require an existing compatible partition layout; use `wendy install` for the
+first installation.
+
 ## Use a Regular ESP-IDF Project
 
 Wendy recognizes the standard ESP-IDF project markers: a top-level `CMakeLists.txt` that includes `project.cmake`, or an `sdkconfig`/`sdkconfig.defaults` file. Keep the normal ESP-IDF layout and add a small `wendy.json` manifest:

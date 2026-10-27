@@ -19,6 +19,14 @@ test("connection, timeout, authentication, and identity failures remain distinct
   assert.match(monitoringError("Pinned to enrolled identity; no authenticated endpoint could be reached"), /Sign in.*access/);
   assert.match(monitoringError('device "127.0.0.1" is pinned to an enrolled identity and no authenticated endpoint answered at 127.0.0.1:50051: connection refused'), /Cannot reach/);
   assert.match(monitoringError("Connection blocked: device identity changed."), /does not match the saved identity/);
+  const unprovisioned = monitoringError([
+    'Connection blocked: device "orin" is pinned to an enrolled identity but now answers unprovisioned.',
+    "This CLI still remembers its previous enrollment (a local pin).",
+    "  wendy device unpin orin",
+    "Tried: 10.0.0.5 (port 50051: answered without TLS; port 50052: connection refused)",
+  ].join("\n"));
+  assert.match(unprovisioned, /answers as unprovisioned.*device unpin command/);
+  assert.doesNotMatch(unprovisioned, /Sign in|Cannot reach|wendy device/);
   assert.match(monitoringError("x509: certificate has expired"), /invalid certificate date/);
 });
 

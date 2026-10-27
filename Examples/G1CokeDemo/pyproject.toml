@@ -5,7 +5,7 @@ description = "G1 Coke expert simulation and exact learned-policy demo"
 requires-python = ">=3.12,<3.13"
 dependencies = [
   "numpy==2.2.6",
-  "torch==2.13.0",
+  "torch==2.14.1",
   "mujoco==3.12.0",
   "imageio-ffmpeg==0.6.0",
   "Pillow>=11,<14",

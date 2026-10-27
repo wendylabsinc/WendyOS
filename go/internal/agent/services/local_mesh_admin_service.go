@@ -111,16 +111,22 @@ func (s *LocalMeshAdminService) read(device meshid.Device) (meshsharing.Config, 
 	return sharing, *carriers, nil
 }
 
-func (s *LocalMeshAdminService) response(sharing meshsharing.Config, carriers localmesh.TCPConfig) *pb.LocalMeshStatus {
+// savedIntent reports the saved configuration with no runtime observation.
+// Participation stays pending until the runtime reports on it.
+func savedIntent(sharing meshsharing.Config, carriers localmesh.TCPConfig) *pb.LocalMeshStatus {
 	state, detail := "disabled", "Wendy net is disabled."
 	if sharing.Participate {
 		state, detail = "pending-runtime", "Configuration is saved; awaiting runtime state."
 	}
-	out := &pb.LocalMeshStatus{Configured: &pb.LocalMeshConfiguration{
+	return &pb.LocalMeshStatus{Configured: &pb.LocalMeshConfiguration{
 		Participate: sharing.Participate, Roam: sharing.Roam, ShareUplink: sharing.ShareUplink,
 		Nan: carriers.NAN, Ble: carriers.BLE, Ethernet: carriers.Ethernet, InfrastructureWifi: carriers.InfrastructureWiFi,
 		TcpListen: carriers.Listen, ConfiguredTcpPeers: uint32(len(carriers.Peers)),
 	}, State: state, Detail: detail}
+}
+
+func (s *LocalMeshAdminService) response(sharing meshsharing.Config, carriers localmesh.TCPConfig) *pb.LocalMeshStatus {
+	out := savedIntent(sharing, carriers)
 	if s.runtime != nil {
 		runtime := s.runtime()
 		out.RuntimeAvailable = runtime.Available
@@ -216,5 +222,8 @@ func (s *LocalMeshAdminService) ConfigureLocalMesh(ctx context.Context, req *pb.
 			zap.Bool("nan", carriers.NAN), zap.Bool("ble", carriers.BLE),
 			zap.Bool("ethernet", carriers.Ethernet), zap.Bool("infrastructureWifi", carriers.InfrastructureWiFi))
 	}
-	return s.response(sharing, carriers), nil
+	// The runtime polls the saved documents. Even an unchanged request can be
+	// a retry before it applies the previous change. Always acknowledge saved
+	// intent; GetLocalMeshStatus provides runtime observations.
+	return savedIntent(sharing, carriers), nil
 }
