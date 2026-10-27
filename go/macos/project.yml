@@ -77,7 +77,7 @@ targets:
         INFOPLIST_KEY_CFBundleDisplayName: Wendy
         INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.developer-tools
         INFOPLIST_KEY_NSLocalNetworkUsageDescription: Wendy discovers and connects to nearby devices.
-        INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription: Wendy uses Bluetooth to connect to nearby mesh devices.
+        INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription: Wendy uses Bluetooth to set up nearby devices and connect to the mesh.
         INFOPLIST_KEY_NSSystemExtensionUsageDescription: Wendy routes selected device connections over mesh and cloud.
         INFOPLIST_KEY_NSBonjourServices: ["_wendy._tcp", "_wendyos._tcp", "_wendy-mesh._udp", "_wendy-lite._tcp"]
         CODE_SIGN_ENTITLEMENTS: Resources/App.entitlements

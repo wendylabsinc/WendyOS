@@ -2,7 +2,11 @@
 
 A SwiftUI app linked to this repository's Go CLI packages through a C archive. It lists nearby LAN and authenticated mesh devices, connects to Wendy Cloud, displays running apps and service states, streams logs, and displays a camera wall of simultaneous H.264 feeds using each camera’s native resolution and frame rate.
 
-Connected devices show their Wendy Cloud enrollment status in device Settings. An unenrolled WendyOS device offers **Enroll device**, where you explicitly choose a saved organization account and device name, or sign in to another organization. Enrollment uses that account without changing the global account selection and checks the resulting device organization before reporting success. Failed status reads remain unknown. Wendy Lite shows enrollment status and USB enrollment instructions in its Settings tab.
+Connected devices show their Wendy Cloud enrollment status in device Settings. An unenrolled WendyOS device offers **Enroll device**, where you explicitly choose a saved organization account and device name, or sign in to another organization. Enrollment uses that account without changing the global account selection and checks the resulting device organization before reporting success. Failed status reads remain unknown. Wendy Lite offers Bluetooth enrollment from its Settings tab.
+
+On macOS and iOS, choose **Nearby → Set up nearby device** to discover unregistered devices advertising the setup service. Select a device, choose a saved organization account, and enter a device name. Wi-Fi configuration is optional and collapsed by default. Setup uses encrypted BLE L2CAP on PSM 130, separate from management and mesh connections. It supports WendyOS ACME enrollment and Wendy Lite enrollment with provisioned trust roots and device-bound signed time.
+
+The setup sheet remains open when advertisements disappear. **Retry connection** opens a fresh encrypted session. Once a Cloud mint may have happened, the app retains that attempt for the same Bluetooth address until the app exits and prevents another mint. **Check enrollment status** verifies the expected device UUID and organization using fresh Cloud presence; a saved Lite configuration alone is not success. A device may start enrollment without Wi-Fi, but it needs a supported network path to complete issuance and appear online. If the app quits during an uncertain attempt, inspect the organization's Cloud device list before starting again.
 
 The app embeds a packet-tunnel Network Extension. Select mesh or cloud devices in the toolbar VPN popover or the macOS menu bar, then enable the VPN to resolve their Wendy DNS names and route TCP connections from other Mac apps.
 
@@ -28,6 +32,56 @@ The build produces native binaries for the build Mac. It links `libwendydesktop.
 `project.yml` is the source for the checked-in Xcode project. Run `xcodegen generate` from this directory after changing it. The Xcode build phases build Go automatically and serialize concurrent archive builds. The initial build can take several minutes.
 
 ## Site models on macOS and iOS
+
+### Fog of war exploration
+
+Open an existing **Site Model** and enable **Fog of war** below the site title.
+The imported house starts dark. Once Go2 has a confirmed, live position in that
+model, nearby areas become bright. Areas it leaves remain dim, retaining the
+exploration history. The counter shows approximate explored map area in square
+metres. Select Go2 and use the existing floor destination preview and movement
+controls as before. Fog does not start a search, issue orders, or change any
+navigation checks. **Locate Go2** still has its existing explicit look-around
+behavior; enabling fog does not invoke it.
+
+**Reset** clears exploration and immediately reveals the current valid position.
+Turning fog off restores the original model materials and pauses recording;
+turning it back on retains history in the same view. History is local to the
+current view and resets on a different site, model revision, scale, gateway,
+robot connection, or alignment. It is not saved in `.wendysite` exports.
+Unconfirmed suggestions and manual placement previews never reveal the map.
+Missing or stale telemetry removes live visibility while retaining history;
+loss of alignment clears history because its coordinates are no longer trusted.
+
+Visibility is a demo approximation: a 2.5 m horizontal circle, with line-of-sight
+tests against the imported mesh 35 cm above the robot's reported floor. A grid
+uses 25 cm cells, growing the cells for models larger than 32 m to stay within
+128 by 128 cells. The model uses the same world-space mask at every height, so
+this is intended for single-level captures. The area counter counts revealed
+grid cells within the model bounds, not verified walkable floor or a percentage
+of the house. Saved geometry can be incomplete or out of date, and this display
+does not measure actual camera or LiDAR coverage. Robot markers, cameras, routes,
+and localization evidence stay visible. This version follows the single active
+Go2 supported by the existing map; it does not autonomously explore or combine
+multiple robots.
+
+`Tests/SiteFogTests.swift` covers history, bounds, rejected poses, stale telemetry,
+placement previews, scaled wall occlusion, rendered pixel brightness, reset,
+context changes, and material restoration. Run the macOS test scheme with:
+
+```sh
+cd go/macos
+xcodegen generate
+xcodebuild -project WendyDesktop.xcodeproj -scheme WendyDesktop \
+  -configuration Debug -derivedDataPath Build/DerivedData \
+  CODE_SIGNING_ALLOWED=NO -destination 'platform=macOS' test
+```
+
+The renderer tests use a synthetic room and issue no robot commands. They write
+`wendy-fog-revealed.png`, `wendy-fog-remembered.png`, and
+`wendy-fog-restored.png` to the test process's temporary directory.
+
+### Importing and viewing sites
 
 Connect to a gateway, then open **Site Model** in its device tabs. **Pair Cameras**
 opens the existing SensorLink and IP camera setup. **Refresh** reloads the gateway's

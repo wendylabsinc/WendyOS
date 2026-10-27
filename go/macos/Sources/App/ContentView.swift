@@ -80,6 +80,7 @@ struct ContentView: View {
                 Divider()
                 List(selection: $sidebarSelection) {
                     if model.discovering { ProgressView().controlSize(.small) }
+                    if deviceSource == "nearby" { NearbySetupButton() }
                     deviceRows
                     if !model.nearbyUnitree.isEmpty {
                         ForEach(model.nearbyUnitree.filter { search.isEmpty || "\($0.name) \($0.serial) \($0.address)".localizedCaseInsensitiveContains(search) }) { robot in

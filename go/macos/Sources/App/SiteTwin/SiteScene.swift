@@ -14,6 +14,8 @@ public struct SiteScene: View {
     let robot: SiteRobotRenderState?
     let robotPoint: (SitePoint, Bool) -> Void
     let selectRobot: () -> Void
+    let fog: SiteFogConfiguration
+    let fogSummary: (SiteFogSummary) -> Void
 
     public init(
         modelURL: URL,
@@ -24,7 +26,9 @@ public struct SiteScene: View {
         place: @escaping (UUID, SitePoint) -> Void,
         robot: SiteRobotRenderState? = nil,
         robotPoint: @escaping (SitePoint, Bool) -> Void = { _, _ in },
-        selectRobot: @escaping () -> Void = {}
+        selectRobot: @escaping () -> Void = {},
+        fog: SiteFogConfiguration = .init(),
+        fogSummary: @escaping (SiteFogSummary) -> Void = { _ in }
     ) {
         self.modelURL = modelURL
         self.site = site
@@ -35,21 +39,28 @@ public struct SiteScene: View {
         self.robot = robot
         self.robotPoint = robotPoint
         self.selectRobot = selectRobot
+        self.fog = fog
+        self.fogSummary = fogSummary
     }
 
     public var body: some View {
-        SceneSurface(
-            modelURL: modelURL,
-            site: site,
-            cameraGeometry: cameraGeometry,
-            placingCamera: placingCamera,
-            select: select,
-            place: place,
-            robot: robot,
-            robotPoint: robotPoint,
-            selectRobot: selectRobot
-        )
-        .accessibilityLabel("3D model of \(site.name)")
+        TimelineView(.animation(minimumInterval: 0.25, paused: !fog.enabled)) { context in
+            SceneSurface(
+                modelURL: modelURL,
+                site: site,
+                cameraGeometry: cameraGeometry,
+                placingCamera: placingCamera,
+                select: select,
+                place: place,
+                robot: robot,
+                robotPoint: robotPoint,
+                selectRobot: selectRobot,
+                fog: fog,
+                fogSummary: fogSummary,
+                refreshDate: context.date
+            )
+            .accessibilityLabel("3D model of \(site.name)")
+        }
     }
 }
 
@@ -63,6 +74,10 @@ private struct SceneSurface {
     var robot: SiteRobotRenderState?
     var robotPoint: (SitePoint, Bool) -> Void
     var selectRobot: () -> Void
+    var fog: SiteFogConfiguration
+    var fogSummary: (SiteFogSummary) -> Void
+    // Forces a native-view update even when telemetry stops arriving.
+    var refreshDate: Date
 
     @MainActor final class Coordinator: NSObject {
         var parent: SceneSurface
@@ -79,6 +94,8 @@ private struct SceneSurface {
         var lastCameras: [SiteCamera]?
         var lastCameraGeometry: [UUID: SiteCameraGeometry] = [:]
         var lastRobot: SiteRobotRenderState?
+        let fogRenderer = SiteFogRenderer()
+        var lastFogSummary: SiteFogSummary?
 
         init(_ parent: SceneSurface) { self.parent = parent }
 
@@ -134,6 +151,18 @@ private struct SceneSurface {
             model.scale = SCNVector3(scale, scale, scale)
             frameOverviewIfNeeded()
             updateRobot()
+            let summary = fogRenderer.update(model: model, configuration: parent.fog, robot: parent.robot)
+            if summary != lastFogSummary {
+                lastFogSummary = summary
+                let configuration = parent.fog
+                // SwiftUI is currently updating the native view. Publish the HUD
+                // on the next run-loop turn, rejecting superseded contexts.
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, self.parent.fog == configuration,
+                          self.lastFogSummary == summary else { return }
+                    self.parent.fogSummary(summary)
+                }
+            }
             let currentGeometry = parent.cameraGeometry.filter {
                 $0.value.pose.isCurrent(revision: parent.site.modelRevision, now: Date())
             }

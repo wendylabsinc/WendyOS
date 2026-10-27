@@ -42,6 +42,7 @@ struct MobileRootView: View {
                             .padding(.vertical, 4)
                     }
                 }
+                if source == "nearby" { Section { NearbySetupButton() } }
                 Section {
                     ForEach(devices) { device in
                         NavigationLink(value: MobileDestination.device(device.id)) {

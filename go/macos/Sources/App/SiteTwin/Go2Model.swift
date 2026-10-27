@@ -2,6 +2,8 @@
 import SwiftUI
 
 public struct SiteRobotRenderState: Equatable {
+    var explorationEpoch = UUID()
+    var receivedAt = Date()
     var position: SitePoint?
     var yaw = 0.0
     var joints: [Double] = []

@@ -2861,9 +2861,10 @@ func (x *BluetoothDeviceInfo) GetIcon() string {
 }
 
 // Unenrolled-device setup only, on service 7565e9eb-4c20-4b67-9272-d708b397b632,
-// LE CoC PSM 129. Never dispatch these through the authenticated management service.
+// LE CoC PSM 130. Never dispatch these through the authenticated management service.
 type SetupStatusCommand struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
+	RequestNonce  bool                   `protobuf:"varint,1,opt,name=request_nonce,json=requestNonce,proto3" json:"request_nonce,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2898,11 +2899,23 @@ func (*SetupStatusCommand) Descriptor() ([]byte, []int) {
 	return file_wendy_agent_services_v1_wendy_agent_v1_bluetooth_proto_rawDescGZIP(), []int{42}
 }
 
+func (x *SetupStatusCommand) GetRequestNonce() bool {
+	if x != nil {
+		return x.RequestNonce
+	}
+	return false
+}
+
 type SetupStatusResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Enrolled      bool                   `protobuf:"varint,1,opt,name=enrolled,proto3" json:"enrolled,omitempty"`
 	AcmeSupported bool                   `protobuf:"varint,2,opt,name=acme_supported,json=acmeSupported,proto3" json:"acme_supported,omitempty"`
 	PrincipalUri  string                 `protobuf:"bytes,3,opt,name=principal_uri,json=principalUri,proto3" json:"principal_uri,omitempty"`
+	DeviceClass   string                 `protobuf:"bytes,4,opt,name=device_class,json=deviceClass,proto3" json:"device_class,omitempty"`
+	Nonce         string                 `protobuf:"bytes,5,opt,name=nonce,proto3" json:"nonce,omitempty"`
+	HardwareId    string                 `protobuf:"bytes,6,opt,name=hardware_id,json=hardwareId,proto3" json:"hardware_id,omitempty"`
+	LiteSupported bool                   `protobuf:"varint,7,opt,name=lite_supported,json=liteSupported,proto3" json:"lite_supported,omitempty"`
+	MaxConfigSize uint32                 `protobuf:"varint,8,opt,name=max_config_size,json=maxConfigSize,proto3" json:"max_config_size,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2958,6 +2971,41 @@ func (x *SetupStatusResponse) GetPrincipalUri() string {
 	return ""
 }
 
+func (x *SetupStatusResponse) GetDeviceClass() string {
+	if x != nil {
+		return x.DeviceClass
+	}
+	return ""
+}
+
+func (x *SetupStatusResponse) GetNonce() string {
+	if x != nil {
+		return x.Nonce
+	}
+	return ""
+}
+
+func (x *SetupStatusResponse) GetHardwareId() string {
+	if x != nil {
+		return x.HardwareId
+	}
+	return ""
+}
+
+func (x *SetupStatusResponse) GetLiteSupported() bool {
+	if x != nil {
+		return x.LiteSupported
+	}
+	return false
+}
+
+func (x *SetupStatusResponse) GetMaxConfigSize() uint32 {
+	if x != nil {
+		return x.MaxConfigSize
+	}
+	return 0
+}
+
 type SetupEnrollCommand struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	CloudHost     string                 `protobuf:"bytes,1,opt,name=cloud_host,json=cloudHost,proto3" json:"cloud_host,omitempty"`
@@ -2965,6 +3013,7 @@ type SetupEnrollCommand struct {
 	DeviceId      string                 `protobuf:"bytes,3,opt,name=device_id,json=deviceId,proto3" json:"device_id,omitempty"`
 	EabKeyId      string                 `protobuf:"bytes,4,opt,name=eab_key_id,json=eabKeyId,proto3" json:"eab_key_id,omitempty"`
 	EabHmacKey    string                 `protobuf:"bytes,5,opt,name=eab_hmac_key,json=eabHmacKey,proto3" json:"eab_hmac_key,omitempty"`
+	LiteConfig    []byte                 `protobuf:"bytes,6,opt,name=lite_config,json=liteConfig,proto3" json:"lite_config,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3034,9 +3083,17 @@ func (x *SetupEnrollCommand) GetEabHmacKey() string {
 	return ""
 }
 
+func (x *SetupEnrollCommand) GetLiteConfig() []byte {
+	if x != nil {
+		return x.LiteConfig
+	}
+	return nil
+}
+
 type SetupEnrollResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	PrincipalUri  string                 `protobuf:"bytes,1,opt,name=principal_uri,json=principalUri,proto3" json:"principal_uri,omitempty"`
+	Pending       bool                   `protobuf:"varint,2,opt,name=pending,proto3" json:"pending,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3076,6 +3133,13 @@ func (x *SetupEnrollResponse) GetPrincipalUri() string {
 		return x.PrincipalUri
 	}
 	return ""
+}
+
+func (x *SetupEnrollResponse) GetPending() bool {
+	if x != nil {
+		return x.Pending
+	}
+	return false
 }
 
 // Ephemeral X25519 handshake. HKDF-SHA256 salt is client_public || server_public,
@@ -3380,12 +3444,19 @@ const file_wendy_agent_services_v1_wendy_agent_v1_bluetooth_proto_rawDesc = "" +
 	"deviceType\x12\x17\n" +
 	"\x04icon\x18\b \x01(\tH\x01R\x04icon\x88\x01\x01B\a\n" +
 	"\x05_rssiB\a\n" +
-	"\x05_icon\"\x14\n" +
-	"\x12SetupStatusCommand\"}\n" +
+	"\x05_icon\"9\n" +
+	"\x12SetupStatusCommand\x12#\n" +
+	"\rrequest_nonce\x18\x01 \x01(\bR\frequestNonce\"\xa6\x02\n" +
 	"\x13SetupStatusResponse\x12\x1a\n" +
 	"\benrolled\x18\x01 \x01(\bR\benrolled\x12%\n" +
 	"\x0eacme_supported\x18\x02 \x01(\bR\racmeSupported\x12#\n" +
-	"\rprincipal_uri\x18\x03 \x01(\tR\fprincipalUri\"\xb5\x01\n" +
+	"\rprincipal_uri\x18\x03 \x01(\tR\fprincipalUri\x12!\n" +
+	"\fdevice_class\x18\x04 \x01(\tR\vdeviceClass\x12\x14\n" +
+	"\x05nonce\x18\x05 \x01(\tR\x05nonce\x12\x1f\n" +
+	"\vhardware_id\x18\x06 \x01(\tR\n" +
+	"hardwareId\x12%\n" +
+	"\x0elite_supported\x18\a \x01(\bR\rliteSupported\x12&\n" +
+	"\x0fmax_config_size\x18\b \x01(\rR\rmaxConfigSize\"\xd6\x01\n" +
 	"\x12SetupEnrollCommand\x12\x1d\n" +
 	"\n" +
 	"cloud_host\x18\x01 \x01(\tR\tcloudHost\x12#\n" +
@@ -3394,9 +3465,12 @@ const file_wendy_agent_services_v1_wendy_agent_v1_bluetooth_proto_rawDesc = "" +
 	"\n" +
 	"eab_key_id\x18\x04 \x01(\tR\beabKeyId\x12 \n" +
 	"\feab_hmac_key\x18\x05 \x01(\tR\n" +
-	"eabHmacKey\":\n" +
+	"eabHmacKey\x12\x1f\n" +
+	"\vlite_config\x18\x06 \x01(\fR\n" +
+	"liteConfig\"T\n" +
 	"\x13SetupEnrollResponse\x12#\n" +
-	"\rprincipal_uri\x18\x01 \x01(\tR\fprincipalUri\"+\n" +
+	"\rprincipal_uri\x18\x01 \x01(\tR\fprincipalUri\x12\x18\n" +
+	"\apending\x18\x02 \x01(\bR\apending\"+\n" +
 	"\n" +
 	"SetupHello\x12\x1d\n" +
 	"\n" +

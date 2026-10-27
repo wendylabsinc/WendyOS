@@ -42,6 +42,8 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
     let robotGatewayName: String
     // Telemetry is observed by the scene and controls, never by the menus.
     @State private var robots = SiteRobotMapModel()
+    @State private var fog = SiteFogConfiguration()
+    @State private var fogSummary = SiteFogSummary()
     #if os(iOS)
     @State private var showingRobotControls = false
     @State private var showingMobileCameras = false
@@ -194,6 +196,9 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
                     siteMenu
                 }
                 controls()
+                if current != nil {
+                    SiteFogControls(configuration: $fog, summary: fogSummary)
+                }
                 ForEach(notices, id: \.self) { notice in
                     Label(notice, systemImage: "exclamationmark.triangle")
                         .font(.caption).foregroundStyle(.secondary)
@@ -395,7 +400,9 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
                     },
                     selectRobot: {
                         robots.selected = true; selectedCamera = nil; camerasExpanded = false; showingRobotControls = true
-                    }
+                    },
+                    fog: fogConfiguration(current, robot: robotRender),
+                    fogSummary: { fogSummary = $0 }
                 )
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -429,6 +436,12 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
             }
             #endif
         }
+    }
+
+    private func fogConfiguration(_ current: StoredSite, robot: SiteRobotRenderState) -> SiteFogConfiguration {
+        var value = fog
+        value.context = "\(gatewayID)/\(robotSession)/\(current.id)/\(current.site.modelRevision)/\(current.site.metresPerModelUnit)/\(robot.explorationEpoch)"
+        return value
     }
 
     private func cameraPanel(_ current: StoredSite, size: CGSize) -> some View {

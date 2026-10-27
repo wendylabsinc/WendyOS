@@ -73,9 +73,9 @@ struct DeviceEnrollmentSettings: View {
                     .foregroundStyle(snapshot.enrolled ? Color.secondary : Color.orange)
                 if !snapshot.enrolled {
                     if lite {
-                        Text("Enroll this Wendy Lite device in an organization using a USB connection to your Mac.")
+                        Text("Enroll this Wendy Lite device over Bluetooth.")
                             .font(.caption).foregroundStyle(.secondary)
-                        Button("How to enroll…") { showingEnrollment = true }
+                        NearbySetupButton()
                     } else {
                         Text("Choose an organization to manage this device in Wendy Cloud.")
                             .font(.caption).foregroundStyle(.secondary)

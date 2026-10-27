@@ -39,6 +39,7 @@ type Event struct {
 	Thermal         *ThermalFrame
 }
 type Backend struct {
+	nearby                  nearbySetup
 	UnitreeControl          UnitreeController
 	modelRun                *ModelRun
 	chatTurn                *ChatTurn
@@ -412,6 +413,7 @@ func (b *Backend) stopVPN() {
 	}
 }
 func (b *Backend) Shutdown() error {
+	b.NearbyClose(0)
 	b.UnitreeControl.Shutdown()
 	b.ReserveConnection()
 	_, done := b.begin()

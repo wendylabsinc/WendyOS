@@ -60,6 +60,8 @@ final class SiteRobotMapModel: ObservableObject {
     private var matchSequence: UInt64 = 0
     private var geometryURL: URL?
     private var geometryScale = 1.0
+    private var explorationEpoch = UUID()
+    private var lastReadingAt = Date.distantPast
     private var lastPosition: SitePoint?
     private var lastYaw = 0.0
     @Published var selected = true
@@ -140,7 +142,7 @@ final class SiteRobotMapModel: ObservableObject {
         let live = reading?.pose == true && reading?.aligned == true
         let candidate = candidates.indices.contains(candidateIndex) ? candidates[candidateIndex] : nil
         let position = placing ? anchor : candidate?.position ?? lastPosition
-        return SiteRobotRenderState(position: position,
+        return SiteRobotRenderState(explorationEpoch: explorationEpoch, receivedAt: lastReadingAt, position: position,
             yaw: candidate?.yaw ?? lastYaw, joints: reading?.joints ?? [], selected: selected,
             fresh: live && candidate == nil, moving: reading?.moving == true, route: reading?.route ?? [], destination: destination, placing: placing, scan: showScan ? fusionReport?.overlay ?? [] : [])
     }
@@ -155,6 +157,7 @@ final class SiteRobotMapModel: ObservableObject {
     }
     func observe(session: UInt64, site: Site, modelURL: URL, active: Bool) async {
         generation += 1
+        explorationEpoch = UUID()
         let epoch = generation
         telemetry.reading = nil; reading = nil; anchor = nil; lastPosition = nil; lastYaw = 0; destination = nil; placing = false; error = nil
         handle = 0; connecting = false
@@ -220,6 +223,8 @@ final class SiteRobotMapModel: ObservableObject {
         if epoch == generation { handle = 0; connecting = false; telemetry.reading = nil; reading = nil }
     }
     func accept(_ result: SiteRobotReading) {
+        lastReadingAt = .now
+        if result.aligned != true && telemetry.reading?.aligned == true { explorationEpoch = UUID() }
         if result.pose && result.aligned {
             lastPosition = SitePoint(x: result.x, y: result.floorY, z: result.z)
             lastYaw = result.yaw
@@ -300,6 +305,7 @@ final class SiteRobotMapModel: ObservableObject {
                 do {
                     try await SiteRobotClient.shared.align(h, sequence: request, frame: f, position: anchor, yaw: yaw)
                     guard request == self.actionGeneration, self.generation == epoch else { return }
+                    self.explorationEpoch = UUID()
                     self.placing = false; self.error = nil
                 } catch { if self.generation == epoch { self.error = error.localizedDescription } }
             }
@@ -479,6 +485,7 @@ final class SiteRobotMapModel: ObservableObject {
             do {
                 try await SiteRobotClient.shared.confirmLocalization(h, sequence: request, matchSequence: match, frame: f, candidate: index)
                 guard epoch == self.generation, request == self.actionGeneration else { return }
+                self.explorationEpoch = UUID()
                 self.candidates = []; self.error = nil
                 if let stored = self.savedMap, let observations = self.fusionReport?.reference, let url = self.geometryURL {
                     let value = RobotReferenceStore.merging(observations, into: stored)
