@@ -25,6 +25,7 @@ var protocolID = [4]byte{'R', 'T', 'P', 'S'}
 const (
 	subACKNACK   = 0x06
 	subHEARTBEAT = 0x07
+	subGAP       = 0x08
 	subINFO_TS   = 0x09
 	subINFO_SRC  = 0x0c
 	subINFO_DST  = 0x0e
@@ -434,6 +435,20 @@ func buildAcknack(readerID, writerID uint32, base, last SequenceNumber, count ui
 // ignored.
 func buildInfoDst(prefix GUIDPrefix) []byte {
 	return buildSubmessage(subINFO_DST, 0x00, prefix[:])
+}
+
+// buildGap tells a reliable discovery reader that [first, next) is no longer
+// available. The empty bitmap starts at next, so the range has no size limit.
+func buildGap(readerID, writerID uint32, first, next SequenceNumber) []byte {
+	body := make([]byte, 28)
+	binary.BigEndian.PutUint32(body[0:4], readerID)
+	binary.BigEndian.PutUint32(body[4:8], writerID)
+	// SequenceNumber_t stores high then low 32-bit words, not a uint64.
+	binary.LittleEndian.PutUint32(body[8:12], uint32(first>>32))
+	binary.LittleEndian.PutUint32(body[12:16], uint32(first))
+	binary.LittleEndian.PutUint32(body[16:20], uint32(next>>32))
+	binary.LittleEndian.PutUint32(body[20:24], uint32(next))
+	return buildSubmessage(subGAP, 0, body)
 }
 
 // buildData frames a DATA submessage carrying a serialized payload.

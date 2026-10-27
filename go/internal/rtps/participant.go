@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -31,6 +32,7 @@ func spdpMulticastPort(domainID int) int { return portBase + domainIDGain*domain
 // us from a peer's participant table.
 const (
 	announceInterval   = 30 * time.Second
+	subscribeInterval  = time.Second
 	leaseSeconds       = 90
 	maxSampleSize      = 16 * 1024 * 1024
 	maxSampleFragments = 64 * 1024
@@ -59,6 +61,11 @@ type Sample struct {
 type fragmentKey struct {
 	writer GUID
 	sn     SequenceNumber
+}
+
+type subscriptionAnnouncement struct {
+	sn       SequenceNumber
+	datagram []byte
 }
 
 type fragmentSet struct {
@@ -166,7 +173,7 @@ type Participant struct {
 	// announce tick. A single announcement is one UDP datagram: if it is lost,
 	// or arrives before the peer has finished discovering us, the subscription
 	// never matches and no data ever flows.
-	subAnnounce map[GUID][]byte
+	subAnnounce map[GUID]subscriptionAnnouncement
 
 	// fragmentsMu isolates potentially large fragment copies from participant
 	// bookkeeping such as subscription changes and discovery updates.
@@ -250,7 +257,7 @@ func newParticipant(cfg Config) *Participant {
 		endpointSN:  map[GUID]SequenceNumber{},
 		leases:      map[*Lease]struct{}{},
 		closed:      make(chan struct{}),
-		subAnnounce: map[GUID][]byte{},
+		subAnnounce: map[GUID]subscriptionAnnouncement{},
 		ackCount:    map[writerKey]uint32{},
 		sedpHighest: map[writerKey]SequenceNumber{},
 		subWriters:  map[GUID]struct{}{},
@@ -559,6 +566,8 @@ func (p *Participant) dropExpiredFragmentSetsLocked(now time.Time) {
 func (p *Participant) announceLoop(ctx context.Context) {
 	t := time.NewTicker(announceInterval)
 	defer t.Stop()
+	subscriptions := time.NewTicker(subscribeInterval)
+	defer subscriptions.Stop()
 	p.announce()
 	for {
 		select {
@@ -566,6 +575,10 @@ func (p *Participant) announceLoop(ctx context.Context) {
 			return
 		case <-t.C:
 			p.announce()
+		case <-subscriptions.C:
+			p.mu.Lock()
+			p.announceSubscriptionsLocked()
+			p.mu.Unlock()
 		}
 	}
 }
@@ -1049,8 +1062,8 @@ func (p *Participant) Subscribe(ep Endpoint) error {
 	payload := p.subscriptionPayload(reader, ep)
 	p.seqByWriter[entitySEDPSubWriter]++
 	dgram := buildMessage(p.prefix, buildData(entityUnknown, entitySEDPSubWriter, p.seqByWriter[entitySEDPSubWriter], payload))
-	p.subAnnounce[ep.GUID] = dgram
-	p.sendDiscoveryLocked(dgram)
+	p.subAnnounce[ep.GUID] = subscriptionAnnouncement{sn: p.seqByWriter[entitySEDPSubWriter], datagram: dgram}
+	p.announceSubscriptionsLocked()
 	return nil
 }
 
@@ -1076,14 +1089,38 @@ func (p *Participant) Unsubscribe(writer GUID) {
 
 func (p *Participant) sendDiscoveryLocked(dgram []byte) {
 	p.sendTo(&net.UDPAddr{IP: net.ParseIP(spdpMulticastAddr), Port: spdpMulticastPort(p.cfg.DomainID)}, dgram)
-	seen := map[string]bool{}
-	for _, locators := range p.peers {
+	for prefix, locators := range p.peers {
+		seen := map[string]bool{}
+		directed := buildMessage(p.prefix, buildInfoDst(prefix), dgram[20:])
 		for _, loc := range locators {
 			if addr, ok := loc.UDPAddr(); ok && !seen[addr.String()] {
 				seen[addr.String()] = true
-				p.sendTo(addr, dgram)
+				p.sendTo(addr, directed)
 			}
 		}
+	}
+}
+
+// Reliable SEDP readers deliver subscriptions in sequence order. A late peer
+// has not seen earlier readers (including those already disposed), so replay
+// every retained reader in order and explicitly GAP the unavailable history.
+// Without GAP, CycloneDDS buffers the camera subscription forever waiting for
+// sequence 1, even though publication discovery in the other direction works.
+// Repeating this bounded snapshot also repairs lost announcement/GAP datagrams
+// before the camera's first-frame timeout, without user-data reliability.
+func (p *Participant) announceSubscriptionsLocked() {
+	announcements := make([]subscriptionAnnouncement, 0, len(p.subAnnounce))
+	for _, announcement := range p.subAnnounce {
+		announcements = append(announcements, announcement)
+	}
+	sort.Slice(announcements, func(i, j int) bool { return announcements[i].sn < announcements[j].sn })
+	next := SequenceNumber(1)
+	for _, announcement := range announcements {
+		if announcement.sn > next {
+			p.sendDiscoveryLocked(buildMessage(p.prefix, buildGap(entitySEDPSubReader, entitySEDPSubWriter, next, announcement.sn)))
+		}
+		p.sendDiscoveryLocked(announcement.datagram)
+		next = announcement.sn + 1
 	}
 }
 
@@ -1167,9 +1204,7 @@ func (p *Participant) announce() {
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	for _, dgram := range p.subAnnounce {
-		p.sendDiscoveryLocked(dgram)
-	}
+	p.announceSubscriptionsLocked()
 }
 
 func (p *Participant) sendTo(addr *net.UDPAddr, pkt []byte) bool {

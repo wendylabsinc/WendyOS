@@ -337,6 +337,10 @@ func TestManagerRestartPreservesCameraIDAndRejectsStaleEvents(t *testing.T) {
 	ep := rtps.Endpoint{GUID: rtps.GUID{EntityID: 7}, Topic: "rt/camera", Type: TypeImage}
 	m.registerEndpoint(old, ep)
 	id := m.List()[0].ID
+	// A publisher can fail decoding before it ever opens a writer. Retiring
+	// its participant must still clear that failure for its replacement.
+	m.cameras[id].decodeErr = errors.New("old publisher's invalid encoding")
+	m.cameras[id].loopbackErr = errors.New("old publisher's loopback failure")
 	m.stopStaleParticipants(nil)
 	m.registerEndpoint(old, ep)
 	if len(m.List()) != 0 {
@@ -347,6 +351,9 @@ func TestManagerRestartPreservesCameraIDAndRejectsStaleEvents(t *testing.T) {
 	m.registerEndpoint(newState, ep)
 	if cameras := m.List(); len(cameras) != 1 || cameras[0].ID != id {
 		t.Fatalf("restart changed camera ID: %+v", cameras)
+	}
+	if cam := m.cameras[id]; cam.decodeErr != nil || cam.loopbackErr != nil {
+		t.Fatalf("replacement publisher retained old failure: decode=%v loopback=%v", cam.decodeErr, cam.loopbackErr)
 	}
 }
 

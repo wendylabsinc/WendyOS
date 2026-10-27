@@ -123,6 +123,39 @@ jobs:
           python3 scripts/test-package-chatgpt-plugin.py
           python3 scripts/package-chatgpt-plugin.py --check
 
+  ros2-cameras:
+    name: ROS 2 camera interoperability
+    # Like the shared-LAN test, this privileged fixture is trusted-branch only.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: runs-on,runner=2cpu-linux-x64
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ./.github/actions/setup-go-ci
+        with:
+          cache-name: ros2-cameras
+      - name: Compile camera fixture
+        env:
+          CGO_ENABLED: '0'
+        run: go test -c -o "$RUNNER_TEMP/ros2camera.test" ./go/internal/agent/ros2camera
+      - name: Receive real CycloneDDS images locally and across a virtual LAN
+        # No action provides this privileged network/mount-namespace fixture.
+        # Only this disposable container needs ROS; the Agent has no ROS deps.
+        run: |
+          docker run --rm --privileged \
+            -v "$GITHUB_WORKSPACE:/src:ro" \
+            -v "$RUNNER_TEMP/ros2camera.test:/ros2camera.test:ro" \
+            -w /src/go/internal/agent/ros2camera \
+            ros:humble-ros-base@sha256:860e53793ccf575e5369b5e9a19939de2bfcfb46a299954d06f54f2af54fed19 \
+            bash -ec '
+              apt-get update -qq
+              apt-get install -y --no-install-recommends iproute2 ros-humble-rmw-cyclonedds-cpp ros-humble-sensor-msgs
+              source /opt/ros/humble/setup.bash
+              unshare --mount --net --propagation private env WENDY_TEST_ROS2=1 \
+                /ros2camera.test -test.run "^TestCycloneImageLinux$" -test.v -test.timeout 90s
+            '
+
   windows:
     name: Windows CLI
     runs-on: runs-on,runner=2cpu-linux-x64

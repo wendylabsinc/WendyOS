@@ -101,6 +101,8 @@ type cameraState struct {
 	active      bool
 	viewRefs    int
 	lastFrame   time.Time
+	decodeErr   error
+	loopbackErr error
 }
 
 // Manager owns DDS discovery and the frame pumps feeding ROS 2 loopback nodes.
@@ -112,6 +114,7 @@ type Manager struct {
 	graphs    GraphSource
 	registry  *registry
 	newWriter func(string) cameraWriter
+	frameWait time.Duration
 
 	reconcileMu     sync.Mutex
 	pool            *rtps.Pool
@@ -141,7 +144,7 @@ func NewManager(ctx context.Context, logger *zap.Logger, loopback Loopback, regi
 	}
 	return &Manager{
 		ctx: ctx, cancel: cancel, logger: logger, loopback: loopback, graphs: graphs,
-		registry: r, newWriter: newFrameWriter, pool: pool, ownPool: ownPool,
+		registry: r, newWriter: newFrameWriter, frameWait: firstFrameTimeout, pool: pool, ownPool: ownPool,
 		hostInterfaces: rtps.HostInterfaces, graphInterfaces: rtps.DiscoveryInterfaces,
 		acquire:      func(ctx context.Context, cfg rtps.Config) (discoveryLease, error) { return pool.Acquire(ctx, cfg) },
 		participants: map[string]*participantState{}, cameras: map[uint32]*cameraState{},
@@ -344,11 +347,8 @@ func (m *Manager) stopStaleParticipants(desired map[string]bool) {
 	for _, item := range staleCameras {
 		item.camera.pumpMu.Lock()
 		m.mu.Lock()
-		if !item.camera.active && item.camera.participant == item.participant && item.camera.writer != nil {
-			_ = item.camera.writer.Close()
-			item.camera.writer = nil
-			item.camera.ready = make(chan struct{})
-			item.camera.readyClosed = false
+		if !item.camera.active && item.camera.participant == item.participant {
+			m.closeWriterLocked(item.camera)
 		}
 		m.mu.Unlock()
 		item.camera.pumpMu.Unlock()
@@ -424,6 +424,9 @@ func (m *Manager) closeWriterLocked(cam *cameraState) {
 	}
 	cam.ready = make(chan struct{})
 	cam.readyClosed = false
+	cam.decodeErr, cam.loopbackErr = nil, nil
+	cam.loggedError = false
+	cam.lastFrame = time.Time{}
 }
 
 func (m *Manager) registerEndpoint(p *participantState, endpoint rtps.Endpoint) {
@@ -485,7 +488,7 @@ func (m *Manager) registerEndpoint(p *participantState, endpoint rtps.Endpoint) 
 
 	if m.loopback != nil {
 		if err := m.loopback.EnsureNode(m.ctx, id, nameForNode(cam.Name, id)); err != nil {
-			m.logger.Debug("creating ROS 2 camera loopback failed", zap.Uint32("camera_id", id), zap.Error(err))
+			m.logger.Warn("creating ROS 2 camera loopback failed", zap.Uint32("camera_id", id), zap.Error(err))
 		}
 	}
 	if wanted {
@@ -551,6 +554,9 @@ func (m *Manager) handleSample(p discoveryLease, sample rtps.Sample) {
 	defer cam.pumpMu.Unlock()
 	path, ok := m.loopback.NodePath(cam.ID)
 	if !ok {
+		m.mu.Lock()
+		cam.loopbackErr = fmt.Errorf("node /dev/video%d is missing", cam.ID)
+		m.mu.Unlock()
 		return
 	}
 	now := time.Now()
@@ -568,6 +574,9 @@ func (m *Manager) handleSample(p discoveryLease, sample rtps.Sample) {
 	m.mu.Unlock()
 	frame, err := DecodeFrame(typeName, sample.Payload)
 	if err != nil {
+		m.mu.Lock()
+		cam.decodeErr = err
+		m.mu.Unlock()
 		m.logCameraErrorOnce(cam, "decoding ROS 2 camera frame failed", err)
 		return
 	}
@@ -578,10 +587,14 @@ func (m *Manager) handleSample(p discoveryLease, sample rtps.Sample) {
 	w := cam.writer
 	m.mu.Unlock()
 	if err := w.WriteFrame(frame); err != nil {
+		m.mu.Lock()
+		cam.loopbackErr = err
+		m.mu.Unlock()
 		m.logCameraErrorOnce(cam, "writing ROS 2 camera loopback failed", err)
 		return
 	}
 	m.mu.Lock()
+	cam.decodeErr, cam.loopbackErr = nil, nil
 	if !cam.readyClosed {
 		close(cam.ready)
 		cam.readyClosed = true
@@ -665,11 +678,15 @@ func (m *Manager) Acquire(ctx context.Context, id uint32) (Camera, func(), error
 	}
 	if m.loopback == nil {
 		m.release(cam)
-		return Camera{}, nil, errors.New("ROS 2 loopback camera support unavailable")
+		return Camera{}, nil, errors.New("ROS 2 camera loopback failed: loopback camera support unavailable")
 	}
 	if err := m.loopback.EnsureNode(ctx, id, nameForNode(cam.Name, id)); err != nil {
 		m.release(cam)
-		return Camera{}, nil, err
+		return Camera{}, nil, fmt.Errorf("ROS 2 camera loopback failed: %w", err)
+	}
+	if _, ok := m.loopback.NodePath(id); !ok {
+		m.release(cam)
+		return Camera{}, nil, fmt.Errorf("ROS 2 camera loopback failed: node /dev/video%d is missing", id)
 	}
 	if err := m.ensureSubscribed(cam); err != nil {
 		m.release(cam)
@@ -678,7 +695,7 @@ func (m *Manager) Acquire(ctx context.Context, id uint32) (Camera, func(), error
 	m.mu.Lock()
 	ready := cam.ready
 	m.mu.Unlock()
-	timer := time.NewTimer(firstFrameTimeout)
+	timer := time.NewTimer(m.frameWait)
 	defer timer.Stop()
 	select {
 	case <-ready:
@@ -686,8 +703,11 @@ func (m *Manager) Acquire(ctx context.Context, id uint32) (Camera, func(), error
 		m.release(cam)
 		return Camera{}, nil, ctx.Err()
 	case <-timer.C:
+		m.mu.Lock()
+		err := firstFrameError(cam)
+		m.mu.Unlock()
 		m.release(cam)
-		return Camera{}, nil, fmt.Errorf("timed out waiting for the first frame on %s", cam.Topic)
+		return Camera{}, nil, err
 	}
 	result, ok := m.Get(id)
 	if !ok {
@@ -696,6 +716,18 @@ func (m *Manager) Acquire(ctx context.Context, id uint32) (Camera, func(), error
 	}
 	var once sync.Once
 	return result, func() { once.Do(func() { m.release(cam) }) }, nil
+}
+
+// Caller holds m.mu. Preserve the underlying cause and keep these categories
+// stable: Companion maps them to camera-specific recovery text.
+func firstFrameError(cam *cameraState) error {
+	if cam.loopbackErr != nil {
+		return fmt.Errorf("ROS 2 camera loopback failed: %w", cam.loopbackErr)
+	}
+	if cam.decodeErr != nil {
+		return fmt.Errorf("timed out waiting for the first frame on %s: samples received but undecodable: %w", cam.Topic, cam.decodeErr)
+	}
+	return fmt.Errorf("timed out waiting for the first frame on %s: no samples received from the publisher", cam.Topic)
 }
 
 func (m *Manager) release(cam *cameraState) {
@@ -708,12 +740,7 @@ func (m *Manager) release(cam *cameraState) {
 	wanted := cam.viewRefs > 0 || m.containerUse
 	if !wanted {
 		m.unsubscribeLocked(cam)
-	}
-	if !wanted && cam.writer != nil {
-		_ = cam.writer.Close()
-		cam.writer = nil
-		cam.ready = make(chan struct{})
-		cam.readyClosed = false
+		m.closeWriterLocked(cam)
 	}
 	m.mu.Unlock()
 }
@@ -724,7 +751,7 @@ func (m *Manager) EnsureNodes(ctx context.Context) {
 	}
 	for _, cam := range m.List() {
 		if err := m.loopback.EnsureNode(ctx, cam.ID, nameForNode(cam.Name, cam.ID)); err != nil {
-			m.logger.Debug("ensuring ROS 2 camera loopback failed", zap.Uint32("camera_id", cam.ID), zap.Error(err))
+			m.logger.Warn("ensuring ROS 2 camera loopback failed", zap.Uint32("camera_id", cam.ID), zap.Error(err))
 		}
 	}
 }
@@ -752,12 +779,7 @@ func (m *Manager) SetContainerConsumers(names []string) {
 			m.mu.Lock()
 			if cam.viewRefs == 0 {
 				m.unsubscribeLocked(cam)
-			}
-			if cam.viewRefs == 0 && cam.writer != nil {
-				_ = cam.writer.Close()
-				cam.writer = nil
-				cam.ready = make(chan struct{})
-				cam.readyClosed = false
+				m.closeWriterLocked(cam)
 			}
 			m.mu.Unlock()
 			cam.pumpMu.Unlock()
