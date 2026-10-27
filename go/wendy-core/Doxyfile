@@ -1,0 +1,33 @@
+PROJECT_NAME           = "Wendy Core"
+PROJECT_BRIEF          = "Standalone cross-language Core bridge contract"
+OUTPUT_DIRECTORY       = .build/sdk/site
+INPUT                  = include documentation core platform subsystems bindings \
+                         .build/sdk/protobuf-reference.md \
+                         README.md examples/README.md \
+                         examples/c/README.md examples/go/README.md \
+                         examples/swift/README.md examples/python/README.md \
+                         examples/kotlin/README.md examples/javascript/README.md
+RECURSIVE              = YES
+FILE_PATTERNS           = *.h *.md
+USE_MDFILE_AS_MAINPAGE = documentation/main-page.md
+
+GENERATE_HTML          = YES
+GENERATE_XML           = YES
+XML_OUTPUT             = xml
+HTML_OUTPUT            = html
+
+EXTRACT_ALL            = NO
+HIDE_UNDOC_MEMBERS     = YES
+HIDE_UNDOC_CLASSES     = YES
+JAVADOC_AUTOBRIEF      = YES
+MARKDOWN_SUPPORT       = YES
+AUTOLINK_SUPPORT       = YES
+
+WARN_IF_UNDOCUMENTED   = YES
+WARN_IF_DOC_ERROR      = YES
+WARN_AS_ERROR          = YES
+QUIET                  = YES
+
+ENABLE_PREPROCESSING   = YES
+MACRO_EXPANSION        = YES
+PREDEFINED             = WENDY_CORE_CALL=

@@ -1,0 +1,29 @@
+{
+  "name": "@wendylabs/core",
+  "version": "0.1.0-seed.1",
+  "license": "Apache-2.0",
+  "description": "Wendy Core: one bridge interface for Node.js and browsers",
+  "repository": { "type": "git", "url": "git+https://github.com/wendylabsinc/WendyOS.git", "directory": "go/wendy-core" },
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "exports": {
+    ".": {
+      "types": "./src/index.d.ts",
+      "node": "./src/node.mjs",
+      "browser": "./src/browser.mjs",
+      "default": "./src/browser.mjs"
+    }
+  },
+  "files": ["src", "assets", "README.md", "LICENSE", "NOTICE"],
+  "publishConfig": { "access": "public" },
+  "scripts": {
+    "test": "node --test tests/node.test.mjs tests/server.test.mjs && playwright test",
+    "test:types": "tsc --noEmit --strict --module nodenext --target es2022 tests/types.mts",
+    "build:native": "node-gyp rebuild --directory native"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.64.0",
+    "node-gyp": "13.1.0",
+    "typescript": "7.0.2"
+  }
+}

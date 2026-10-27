@@ -1,0 +1,12 @@
+Wendy Core
+Copyright 2026 Wendy Labs
+
+Wendy Core is licensed under the Apache License, Version 2.0.
+
+Native and WebAssembly distributions include the Go runtime, developed by
+The Go Authors and licensed separately under the BSD 3-Clause License.
+The corresponding copyright and license text is included as LICENSE-Go.txt.
+
+The imported Git history includes the Gradle Wrapper, licensed under the
+Apache License, Version 2.0, with its original notices. The wrapper is not
+included in the current source tree; Kotlin builds use an installed Gradle.

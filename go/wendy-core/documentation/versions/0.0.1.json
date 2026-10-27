@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "version": "0.0.1",
+  "contract": {
+    "ownership": "documentation/c-contract/Ownership.md",
+    "concurrency": "documentation/c-contract/Concurrency.md",
+    "streaming": "documentation/c-contract/Streaming.md",
+    "errors": "documentation/c-contract/Errors.md",
+    "buffers": "documentation/c-contract/Buffers.md",
+    "patterns": "documentation/binding-patterns"
+  },
+  "c": {
+    "functions": [
+      {
+        "name": "WendyHelloWorld",
+        "signature": "int32_t (void)",
+        "pattern": "scalar-unary",
+        "ownership": "returns a value; no resources are transferred",
+        "threading": "safe for concurrent calls",
+        "availability": "0.0.1",
+        "comment": "Returns 42 from the shared Go engine. This is the only operation in the initial runnable Core contract. It is synchronous, thread-safe, and requires no platform capability. It returns a scalar without transferring resources; runtime initialization is separate. There are no input pointers, owned objects, callbacks, or error conditions. Binding pattern: scalar-unary. Ownership: returns a value; no resources are transferred. Threading: safe for concurrent calls. Availability: 0.0.1."
+      }
+    ]
+  },
+  "protobuf": {
+    "messages": null,
+    "services": null
+  }
+}

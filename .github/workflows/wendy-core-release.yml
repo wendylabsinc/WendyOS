@@ -1,0 +1,52 @@
+name: Release Wendy Core (build only)
+
+on:
+  # Manual artifact builds only. Tags and releases cannot trigger publication.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: go/wendy-core
+
+concurrency:
+  group: core-release-${{ github.ref }}-${{ github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  identity:
+    name: Release identity
+    permissions:
+      contents: read
+    runs-on: ubuntu-24.04
+    outputs:
+      identity: ${{ steps.plan.outputs.identity }}
+      source_sha: ${{ steps.plan.outputs.source_sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.13'
+      - name: Validate exact stable or seed tag against VERSION
+        id: plan
+        run: python scripts/versioning.py plan --github-output
+      - name: Validate the base version before building distributions
+        env:
+          CORE_BUILD_IDENTITY: ${{ steps.plan.outputs.identity }}
+        run: |
+          python scripts/build.py version
+          python scripts/check_release.py
+
+  core:
+    needs: identity
+    permissions:
+      contents: read
+    uses: ./.github/workflows/wendy-core-build-core.yml
+    with:
+      identity: ${{ needs.identity.outputs.identity }}
+      source-sha: ${{ needs.identity.outputs.source_sha }}

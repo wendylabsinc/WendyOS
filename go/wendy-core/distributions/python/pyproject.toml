@@ -1,0 +1,14 @@
+[build-system]
+requires = ["setuptools>=77", "wheel>=0.45"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "wendy-core"
+version = "0.1.0a1"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+description = "The Python incarnation of Wendy Core, not the Wendy Python SDK"
+requires-python = ">=3.9"
+
+[project.urls]
+Repository = "https://github.com/wendylabsinc/WendyOS/tree/main/go/wendy-core"

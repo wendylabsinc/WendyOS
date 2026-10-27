@@ -1,0 +1,6 @@
+syntax = "proto3";
+package wendy.core.v1;
+
+// Reserved for structured Core requests, responses and ordinary events.
+// WendyHelloWorld returns a scalar, so this release needs no protobuf values.
+// Large payloads will use raw buffers, not protobuf-embedded bulk bytes.

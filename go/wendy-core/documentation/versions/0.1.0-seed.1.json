@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "version": "0.1.0-seed.1",
+  "contract": {
+    "ownership": "documentation/c-contract/Ownership.md",
+    "concurrency": "documentation/c-contract/Concurrency.md",
+    "streaming": "documentation/c-contract/Streaming.md",
+    "errors": "documentation/c-contract/Errors.md",
+    "buffers": "documentation/c-contract/Buffers.md",
+    "patterns": "documentation/binding-patterns"
+  },
+  "c": {
+    "functions": [
+      {
+        "name": "WendyCoreVersion",
+        "signature": "char *(void)",
+        "pattern": "borrowed-string-unary",
+        "ownership": "returns a borrowed, read-only string; no resources are transferred",
+        "threading": "safe for concurrent calls",
+        "availability": "0.1.0-seed.1",
+        "comment": "Returns the effective Wendy Core version without a leading v. Packaged engines report their build identity, including preview/development suffixes. Unreleased source builds use a language-neutral development identity such as 0.1.0-dev+a0e8ddc when a commit is known, or 0.1.0-dev otherwise. Tagged dependencies retain their release/prerelease version. The NUL-terminated UTF-8 string is borrowed and valid for the life of the process. Callers must not modify or free it. No Go pointer crosses the ABI, and there are no error conditions. Binding pattern: borrowed-string-unary. Ownership: returns a borrowed, read-only string; no resources are transferred. Threading: safe for concurrent calls. Availability: 0.1.0-seed.1."
+      },
+      {
+        "name": "WendyHelloWorld",
+        "signature": "int32_t (void)",
+        "pattern": "scalar-unary",
+        "ownership": "returns a value; no resources are transferred",
+        "threading": "safe for concurrent calls",
+        "availability": "0.0.1",
+        "comment": "Returns 42 from the shared Go engine. This operation is synchronous, thread-safe, and requires no platform capability. It returns a scalar without transferring resources; runtime initialization is separate. There are no input pointers, owned objects, callbacks, or error conditions. Binding pattern: scalar-unary. Ownership: returns a value; no resources are transferred. Threading: safe for concurrent calls. Availability: 0.0.1."
+      }
+    ]
+  },
+  "protobuf": {
+    "messages": null,
+    "services": null
+  }
+}

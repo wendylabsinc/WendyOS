@@ -1,0 +1,17 @@
+name: Publish Wendy Core (disabled)
+
+# The standalone publisher assumes repository-root manifests and tags.
+# Re-enable only after the monorepo release and Swift distribution design is approved.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  disabled:
+    permissions:
+      contents: read
+    runs-on: ubuntu-24.04
+    steps:
+      - run: echo 'Core publication is disabled during the monorepo migration.'

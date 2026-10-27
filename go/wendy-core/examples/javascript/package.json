@@ -1,0 +1,7 @@
+{
+  "name": "wendy-hello-world",
+  "private": true,
+  "type": "module",
+  "scripts": { "start": "node hello.mjs" },
+  "dependencies": { "@wendylabs/core": "file:../../distributions/javascript" }
+}

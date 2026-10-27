@@ -1,0 +1,15 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Wendy Core browser conformance</title>
+<script type="importmap">{"imports":{"@wendylabs/core":"__CORE_BROWSER_ENTRY__"}}</script>
+<script type="module">
+try {
+  const core = await import('@wendylabs/core');
+  const { assertCore } = await import('./conformance.mjs');
+  globalThis.result = assertCore(core);
+  globalThis.coreVersion = core.WendyCoreVersion();
+} catch (error) {
+  globalThis.failure = String(error);
+  console.error(error);
+}
+</script>

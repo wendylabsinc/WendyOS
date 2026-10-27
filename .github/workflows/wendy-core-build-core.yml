@@ -1,0 +1,258 @@
+name: Build Wendy Core distributions
+
+on:
+  workflow_call:
+    inputs:
+      identity:
+        type: string
+        required: true
+      source-sha:
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    working-directory: go/wendy-core
+
+env:
+  CORE_BUILD_IDENTITY: ${{ inputs.identity }}
+  WENDY_CORE_VERSION: ${{ fromJSON(inputs.identity).version }}
+
+jobs:
+  native:
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: linux-x64, os: ubuntu-22.04, manylinux: manylinux_2_35_x86_64, swift: true }
+          # setup-swift installs x86_64 toolchains on Arm runners; use the official image.
+          - { target: linux-arm64, os: ubuntu-24.04-arm, manylinux: manylinux_2_39_aarch64, swift: true, swift-image: 'swift:6.2.1-noble' }
+          - { target: darwin-x64, os: macos-15-intel, swift: true }
+          - { target: darwin-arm64, os: macos-15, swift: true }
+          - { target: win32-x64, os: windows-2022, swift: false }
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+        working-directory: go/wendy-core
+    env:
+      MACOSX_DEPLOYMENT_TARGET: '15.0'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.source-sha }}
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go/wendy-core/.go-version
+          cache-dependency-path: go/wendy-core/go.sum
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: go/wendy-core/distributions/javascript/package-lock.json
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.13'
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+        with:
+          gradle-version: '9.8.1'
+      - if: runner.os == 'Windows'
+        uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e # v2.33.0
+        with:
+          install: mingw-w64-x86_64-gcc
+      - if: runner.os == 'Windows'
+        name: Expose the C compiler to Go and JNI builds
+        run: echo 'C:/msys64/mingw64/bin' >> "$GITHUB_PATH"
+      - name: Build and test the real Go/C engine
+        run: |
+          python scripts/build.py version
+          go test ./...
+          CGO_ENABLED=0 go test ./core
+          go vet ./...
+          python -m unittest discover -s scripts -p 'test_*.py' -v
+          python scripts/build.py native
+      - name: Build and test Node interop
+        run: |
+          npm ci --prefix distributions/javascript
+          python scripts/build.py node
+          cd distributions/javascript
+          node --test tests/node.test.mjs tests/server.test.mjs
+          npm run test:types
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '22'
+      - name: Verify the minimum supported Node release with the same addon
+        run: cd distributions/javascript && node --test tests/node.test.mjs tests/server.test.mjs
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+      - name: Build and test Kotlin/JVM interop
+        run: |
+          python scripts/build.py jni
+          gradle -p distributions/kotlin test --no-daemon
+      - if: matrix.swift && runner.os == 'Linux' && !matrix.swift-image
+        uses: swift-actions/setup-swift@7ca6abe6b3b0e8b5421b88be48feee39cbf52c6a # v2.4.0
+        with:
+          swift-version: '6.2.1'
+      - if: matrix.swift && runner.os == 'macOS'
+        uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1.7.0
+        with:
+          xcode-version: '26.3'
+      - if: matrix.swift && runner.os == 'macOS'
+        run: npm install --global xcodebuildmcp@2.7.0
+      - if: matrix.swift && !matrix.swift-image
+        name: Build the static Swift binaries and test the root Swift package
+        run: python scripts/tasks.py swift
+      - if: matrix.swift-image
+        name: Build the static Swift binaries and test the root Swift package in the Swift image
+        env:
+          SWIFT_IMAGE: ${{ matrix.swift-image }}
+        run: |
+          python scripts/build.py swift
+          docker run --rm -v "$PWD:/src" -w /src "$SWIFT_IMAGE" swift test --scratch-path /tmp/swift
+      # Swift setup can prepend its own Python/tools to PATH. Restore the
+      # selected interpreter before installing and using the locked wheel tools.
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.13'
+      - name: Build a platform-specific, Python-version-independent wheel
+        run: |
+          python -m pip install --require-hashes -r scripts/ci-build-tools.txt
+          python scripts/build.py wheel
+      - if: runner.os == 'Linux'
+        name: Verify and repair the declared Linux compatibility tag
+        env:
+          MANYLINUX_PLATFORM: ${{ matrix.manylinux }}
+        run: |
+          # Ubuntu 22.04's patchelf is older than auditwheel's minimum.
+          python -m auditwheel repair --plat "$MANYLINUX_PLATFORM" --wheel-dir .build/repaired .build/wheels/*.whl
+          rm .build/wheels/*.whl
+          cp .build/repaired/*.whl .build/wheels/
+      - name: Install and test the wheel as a consumer
+        run: |
+          python -m pip install .build/wheels/*.whl
+          python -m unittest discover -s distributions/python/tests -v
+      - name: Record version, target, and native checksums
+        run: python scripts/build.py inventory
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: native-${{ matrix.target }}
+          path: go/wendy-core/.build/native/${{ matrix.target }}/
+          include-hidden-files: true
+          if-no-files-found: error
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: wheel-${{ matrix.target }}
+          path: go/wendy-core/.build/wheels/*.whl
+          include-hidden-files: true
+          if-no-files-found: error
+
+  wasm:
+    permissions:
+      contents: read
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.source-sha }}
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go/wendy-core/.go-version
+          cache-dependency-path: go/wendy-core/go.sum
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.13'
+      - name: Build the actual Go engine for the browser
+        run: python scripts/build.py wasm
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: wasm
+          path: go/wendy-core/distributions/javascript/assets/wasm/
+          if-no-files-found: error
+
+  packages:
+    needs: [native, wasm]
+    permissions:
+      contents: read
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.source-sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go/wendy-core/.go-version
+          cache-dependency-path: go/wendy-core/go.sum
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: '3.13'
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: go/wendy-core/distributions/javascript/package-lock.json
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+        with:
+          gradle-version: '9.8.1'
+      - name: Install reference tools
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler clang doxygen graphviz
+      - name: Check generated contract, JS projection, and version compatibility
+        run: |
+          make generate compare-clean documentation
+          git diff --exit-code -- distributions/javascript/src documentation/versions
+          python scripts/check_release.py
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: '@(native-*|wheel-*|wasm)'
+          path: go/wendy-core/.build/artifacts
+      - name: Assemble only complete, version-matching artifacts
+        run: python scripts/build.py assemble
+      - name: Test the common JS contract in Node and a real browser
+        run: |
+          npm ci --prefix distributions/javascript
+          cd distributions/javascript
+          npx playwright install --with-deps chromium
+          npm test
+          npm run test:types
+      - name: Pack and test the installed npm artifact in both runtimes
+        run: |
+          python scripts/build.py pack
+          python scripts/build.py test-npm
+      - uses: swift-actions/setup-swift@7ca6abe6b3b0e8b5421b88be48feee39cbf52c6a # v2.4.0
+        with:
+          swift-version: '6.2.1'
+      - name: Consume the packed Swift binaries through a tagged SwiftPM dependency
+        run: python scripts/swift_release.py .build/release
+      - name: Build the all-target Maven artifact
+        run: |
+          gradle -p distributions/kotlin test jar sourcesJar javadocJar generatePomFileForCorePublication --no-daemon
+          cp distributions/kotlin/build/libs/*.jar .build/release/
+          cp distributions/kotlin/build/publications/core/pom-default.xml ".build/release/wendy-core-${WENDY_CORE_VERSION}.pom"
+          cp .build/sdk/api.json .build/release/api.json
+          cp -R .build/sdk/site/html .build/release/documentation
+          python scripts/build.py seal
+      - name: Verify sealed artifacts and their embedded package versions
+        run: python scripts/publication.py verify --directory .build/release
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: core-release
+          path: go/wendy-core/.build/release/
+          include-hidden-files: true
+          if-no-files-found: error
