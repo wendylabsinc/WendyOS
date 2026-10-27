@@ -57,11 +57,12 @@ func TestRegistryKeyStoreRoundTrip(t *testing.T) {
 
 type keyDirectory struct {
 	cloudpb.UnimplementedKeyDirectoryServiceServer
-	calls  int
-	got    *cloudpb.SignedRequest
-	ack    string // key_id to acknowledge; empty acknowledges the registered key
-	refuse error  // refuses every registration
-	served []*cloudpb.RecipientKey
+	calls       int
+	got         *cloudpb.SignedRequest
+	ack         string // key_id to acknowledge; empty acknowledges the registered key
+	refuse      error  // refuses every registration
+	refuseFirst bool   // refuses only the initial registration
+	served      []*cloudpb.RecipientKey
 }
 
 func (k *keyDirectory) RegisterUserEncryptionKey(_ context.Context, in *cloudpb.SignedRequest) (*cloudpb.RegisterEncryptionKeyResponse, error) {
@@ -69,6 +70,9 @@ func (k *keyDirectory) RegisterUserEncryptionKey(_ context.Context, in *cloudpb.
 	k.got = in
 	if k.refuse != nil {
 		return nil, k.refuse
+	}
+	if k.refuseFirst && k.calls == 1 {
+		return nil, status.Error(codes.Unavailable, "key directory temporarily unavailable")
 	}
 	var req cloudpb.RegisterEncryptionKeyRequest
 	if err := proto.Unmarshal(in.GetPayload(), &req); err != nil {

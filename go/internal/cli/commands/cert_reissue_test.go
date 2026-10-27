@@ -511,7 +511,7 @@ func TestNonCurrentCertificateReissueIsQuietUntilExpiry(t *testing.T) {
 
 func TestPickerReissueRetriesRegistryKeyAfterAuthUnlock(t *testing.T) {
 	auth, tokens, issues := reissueTestSession(t, 200, testOperatorTenant, time.Now(), time.Now().Add(time.Hour))
-	directory := &keyDirectory{}
+	directory := &keyDirectory{refuseFirst: true}
 	auth.CloudGRPC = serveKeyDirectory(t, directory)
 	if err := config.Save(&config.Config{CurrentContext: auth.Name, Auth: []config.AuthConfig{*auth}}); err != nil {
 		t.Fatal(err)
@@ -524,9 +524,9 @@ func TestPickerReissueRetriesRegistryKeyAfterAuthUnlock(t *testing.T) {
 	if picked.Certificates[0].PemCertificate == held || tokens.Load() != 2 || issues.Load() != 1 {
 		t.Fatalf("picker did not silently replace the expired leaf: token/issue=%d/%d", tokens.Load(), issues.Load())
 	}
-	// Registration persists under the auth lock itself. Reaching this point
-	// proves certificate preparation released that lock before the retry.
-	if directory.calls != 1 || picked.RegistryKeyID == "" || savedRegistryKeyID(t) != picked.RegistryKeyID {
+	// The first registration, during minting, failed. The picker retry must
+	// acquire the auth lock to save the recovered registration after preparation.
+	if directory.calls != 2 || picked.RegistryKeyID == "" || savedRegistryKeyID(t) != picked.RegistryKeyID {
 		t.Fatalf("re-issue did not register and save the key: calls=%d", directory.calls)
 	}
 	if _, err := pickAuthEntry(auth.CloudGRPC); err != nil {
@@ -536,7 +536,7 @@ func TestPickerReissueRetriesRegistryKeyAfterAuthUnlock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if directory.calls != 1 || tokens.Load() != 2 || issues.Load() != 1 || cfg.Auth[0].RefreshToken != "refresh-3" {
+	if directory.calls != 2 || tokens.Load() != 2 || issues.Load() != 1 || cfg.Auth[0].RefreshToken != "refresh-3" {
 		t.Fatalf("repeated picker changed key/token custody: registrations=%d token/issue=%d/%d", directory.calls, tokens.Load(), issues.Load())
 	}
 }
