@@ -472,7 +472,7 @@ Any value other than `auto`, `force`, or `off` is rejected with an error before 
 
 ### Uploads over Cloud v2
 
-The registry fallback is unavailable over Cloud v2. If an upload drops,
+`wendy run` skips automatic registry fallback over Cloud v2. If an upload drops,
 the CLI reports the device (or its Cloud ID if unnamed) and bytes sent across
 resume attempts against the largest upload plan. Check that the device is online
 with `wendy cloud discover`, then retry. A single-service upload gets
@@ -486,10 +486,9 @@ Other builders stop with a Docker hint before attempting a registry upload.
 An Agent that lacks the required upload method gets an update hint; image
 preparation failures are reported separately from connection drops.
 
-`--chunking=off` and single-service `--deploy` still select the registry path,
-which cannot upload through a Cloud v2 connection. Use the default chunk path
-for Cloud v2 uploads. Set `WENDY_TLS_DEBUG=1` to log underlying upload and
-reconnect diagnostics.
+`--chunking=off` and single-service `--deploy` still select the explicit registry
+path. Explicit registry uploads are unchanged. Set `WENDY_TLS_DEBUG=1` to log
+underlying upload and reconnect diagnostics.
 
 ## Environment variables
 

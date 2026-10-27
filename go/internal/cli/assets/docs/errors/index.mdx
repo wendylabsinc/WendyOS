@@ -35,7 +35,8 @@ Check that the device is online with `wendy cloud discover`, then retry the
 upload. The CLI identifies unnamed devices by their Cloud ID and reports bytes
 sent across resume attempts. A lost connection during upload or while waiting
 for the app's start acknowledgement exits with status 5
-(`device_unreachable`, retryable). Cloud v2 has no registry fallback.
+(`device_unreachable`, retryable). `wendy run` skips automatic registry fallback
+over Cloud v2.
 Set `WENDY_TLS_DEBUG=1` to print the underlying upload and reconnect diagnostics
 to stderr. For Compose and multi-service uploads over Cloud v2, use
 `--builder docker`. If the CLI asks you to update the Agent, update it before
