@@ -30,8 +30,8 @@ func TestInitialTuneClassifiesSubmissionBoundary(t *testing.T) {
 		{name: "attempted write failed", sendErr: unix.EIO},
 		{name: "short submitted write", short: true},
 		{name: "monitor lost", packets: nil},
-		{name: "command disallowed", packets: [][]byte{leConnectionUpdateCommand(0, meshIntervalUnits), statusPacket(0x0c)}},
-		{name: "submitted unsupported", packets: [][]byte{leConnectionUpdateCommand(0, meshIntervalUnits), statusPacket(0x01)}},
+		{name: "command disallowed", packets: [][]byte{leConnectionUpdateCommand(0, meshIntervalUnits), statusPacket(0x0c)}, fallback: true},
+		{name: "submitted unsupported", packets: [][]byte{leConnectionUpdateCommand(0, meshIntervalUnits), statusPacket(0x01)}, fallback: true},
 		{name: "accepted timeout", packets: [][]byte{leConnectionUpdateCommand(0, meshIntervalUnits), statusPacket(0)}},
 		{name: "completion rejected", packets: [][]byte{leConnectionUpdateCommand(0, meshIntervalUnits), statusPacket(0), completePacket(0, 12, 0, meshTimeoutUnits, 0x1f)}, fallback: true},
 		{name: "invalid parameters rejected", packets: [][]byte{leConnectionUpdateCommand(0, meshIntervalUnits), statusPacket(0), completePacket(0, 36, 0, meshTimeoutUnits, 0x1e)}, fallback: true},
@@ -74,6 +74,52 @@ func TestInitialTuneClassifiesSubmissionBoundary(t *testing.T) {
 				t.Fatalf("interval=%s", interval)
 			}
 		})
+	}
+}
+
+// Replays btmon from mesh-3 on 2026-10-25. It was the peripheral on handle 25
+// of an ACL its peer had opened, and its Realtek controller lacks the
+// Connection Parameters Request procedure. Every dial was refused this way and
+// closed before TLS. The link must keep the central's parameters instead.
+func TestInitialTunePeripheralCommandDisallowedKeepsLink(t *testing.T) {
+	const handle = 25
+	monitorFrame := func(opcode uint16, packet []byte) []byte {
+		frame := make([]byte, 6, 6+len(packet)-1)
+		binary.LittleEndian.PutUint16(frame[:2], opcode)
+		binary.LittleEndian.PutUint16(frame[2:4], 0) // hci0
+		binary.LittleEndian.PutUint16(frame[4:6], uint16(len(packet)-1))
+		return append(frame, packet[1:]...)
+	}
+	frames := [][]byte{
+		monitorFrame(hciMonitorCommand, leConnectionUpdateCommand(handle, meshIntervalUnits)),
+		// Command Status: Command Disallowed (0x0c), ncmd 2, LE Connection Update.
+		monitorFrame(hciMonitorEvent, []byte{hciEventPacket, hciCommandStatus, 4, 0x0c, 2, 0x13, 0x20}),
+	}
+	sent, closed := 0, 0
+	interval, fallback, err := tuneMeshBeforeTLS(context.Background(), func(ctx context.Context) (time.Duration, error) {
+		return submitMeshIntervalUpdate(ctx, handle, meshIntervalUnits, func(context.Context) (*leUpdateIO, error) {
+			next := 0
+			return &leUpdateIO{
+				send: func(command []byte) (int, error) { sent++; return len(command), nil },
+				read: func(context.Context) ([]byte, error) {
+					for next < len(frames) {
+						next++
+						if packet := monitorPacket(frames[next-1], 0); packet != nil {
+							return packet, nil
+						}
+					}
+					return nil, context.DeadlineExceeded
+				},
+				close: func() { closed++ },
+			}, nil
+		})
+	})
+	var rejected *leUpdateRejectedError
+	if !fallback || !errors.As(err, &rejected) || rejected.status != 0x0c || interval != 0 {
+		t.Fatalf("interval=%s fallback=%v err=%v", interval, fallback, err)
+	}
+	if sent != 1 || closed != 1 {
+		t.Fatalf("submitted IO lifecycle: sent=%d closed=%d", sent, closed)
 	}
 }
 

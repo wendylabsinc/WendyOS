@@ -3,6 +3,7 @@ package services
 import (
 	"bytes"
 	"context"
+	"crypto/mldsa"
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
@@ -146,6 +147,7 @@ type ProvisioningService struct {
 	certPEM             string
 	chainPEM            string
 	principalURI        string
+	acmeDirectoryURL    string
 	CloudDialer         CloudDialer
 	OnProvisioned       OnProvisionedFunc
 	OnUnprovisioned     OnUnprovisionedFunc
@@ -165,6 +167,8 @@ func NewProvisioningService(logger *zap.Logger, configPath string, clock ...*tim
 	svc.resetRecoveryErr = svc.recoverProvisioningReset()
 	if svc.resetRecoveryErr == nil {
 		svc.loadState()
+	} else {
+		logger.Error("Enrollment state recovery failed", zap.Error(svc.resetRecoveryErr))
 	}
 	return svc
 }
@@ -264,8 +268,10 @@ func (s *ProvisioningService) StartProvisioning(ctx context.Context, req *agentp
 		zap.Int32("asset_id", req.GetAssetId()),
 	)
 
-	// Reuse the device's existing private key if present, otherwise generate a new one.
-	keyPEM, err := s.loadOrGenerateKey()
+	// Reuse the device's existing private key if present, otherwise generate a
+	// new one. The legacy Cloud issuer predates ML-DSA device keys, so this path
+	// stays P-256; pki-core enrollments use ML-DSA-65 (provisioning_acme.go).
+	keyPEM, err := s.loadOrGenerateKey(false)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to load or generate key pair: %v", err)
 	}
@@ -369,6 +375,7 @@ func (s *ProvisioningService) persistProvisioning(state *provisioningState, keyP
 	s.orgID = state.OrgID
 	s.assetID = state.AssetID
 	s.principalURI = state.PrincipalURI
+	s.acmeDirectoryURL = state.ACMEDirectoryURL
 	s.keyPEM = keyPEM
 	s.certPEM = state.CertPEM
 	s.chainPEM = state.ChainPEM
@@ -527,6 +534,7 @@ func (s *ProvisioningService) clearStateFiles() error {
 func (s *ProvisioningService) clearCredentialFiles() error {
 	files := []string{
 		filepath.Join(s.configPath, "device-key.pem"),
+		filepath.Join(s.configPath, pendingDeviceKeyFile),
 		filepath.Join(s.configPath, "device.pem"),
 		filepath.Join(s.configPath, "ca.pem"),
 		filepath.Join(s.configPath, ".provisioned"),
@@ -556,8 +564,10 @@ func (s *ProvisioningService) statePath() string {
 // key is migrated to device-key.pem and removed from provisioning.json so that
 // subsequent reads use the dedicated file.
 func (s *ProvisioningService) loadState() {
+	defer s.finishInterruptedRenewal() // also drops a pending key on an unenrolled device
 	data, err := os.ReadFile(s.statePath())
-	if err != nil {
+	// Like readProvisioningState, treat an empty file as no enrollment.
+	if err != nil || len(data) == 0 {
 		return
 	}
 
@@ -572,6 +582,7 @@ func (s *ProvisioningService) loadState() {
 	s.orgID = state.OrgID
 	s.assetID = state.AssetID
 	s.principalURI = state.PrincipalURI
+	s.acmeDirectoryURL = state.ACMEDirectoryURL
 	s.certPEM = state.CertPEM
 	s.chainPEM = state.ChainPEM
 
@@ -614,19 +625,28 @@ func (s *ProvisioningService) loadState() {
 }
 
 // loadOrGenerateKey returns the PEM-encoded private key for this device as []byte.
-// It reuses the key at {configPath}/device-key.pem if it exists, otherwise
-// generates a new one and persists it.
-func (s *ProvisioningService) loadOrGenerateKey() ([]byte, error) {
+// It reuses the key at {configPath}/device-key.pem if it exists and is
+// ML-DSA-65 exactly when mldsaKey asks for it; otherwise (a leftover of a failed
+// enrollment on the other path) it generates a new one and persists it. Only
+// unenrolled devices get here, so replacing a key strands no certificate.
+func (s *ProvisioningService) loadOrGenerateKey(mldsaKey bool) ([]byte, error) {
 	keyPath := filepath.Join(s.configPath, "device-key.pem")
 	if data, err := os.ReadFile(keyPath); err == nil && len(data) > 0 {
-		if err := WriteDeviceKey(s.configPath, data); err != nil {
-			return nil, err
+		if isMLDSA65Key(data) == mldsaKey {
+			if err := WriteDeviceKey(s.configPath, data); err != nil {
+				return nil, err
+			}
+			s.logger.Info("Reusing existing device key", zap.String("path", keyPath), zap.Bool("ml_dsa_65", mldsaKey))
+			return data, nil
 		}
-		s.logger.Info("Reusing existing device key", zap.String("path", keyPath))
-		return data, nil
+		s.logger.Info("Replacing leftover device key of the other algorithm", zap.String("path", keyPath), zap.Bool("ml_dsa_65", mldsaKey))
 	}
 
-	keyStr, err := certs.GenerateKeyPair()
+	generate := certs.GenerateKeyPair
+	if mldsaKey {
+		generate = certs.GenerateMLDSAKeyPair
+	}
+	keyStr, err := generate()
 	if err != nil {
 		return nil, err
 	}
@@ -638,6 +658,12 @@ func (s *ProvisioningService) loadOrGenerateKey() ([]byte, error) {
 	}
 
 	return keyPEM, nil
+}
+
+func isMLDSA65Key(keyPEM []byte) bool {
+	signer, err := certs.ParseSigningPrivateKeyPEM(keyPEM)
+	key, ok := signer.(*mldsa.PrivateKey)
+	return err == nil && ok && key.PublicKey().Parameters() == mldsa.MLDSA65()
 }
 
 // saveState writes provisioning state to disk.

@@ -647,7 +647,8 @@ jobs:
 
   package-linux:
     name: Package Linux (${{ matrix.arch }})
-    runs-on: ubuntu-latest
+    # Pinned for WDY-4031: Ubuntu 26's rpmbuild writes RPM v4.0 leads that Artifact Registry rejects.
+    runs-on: ubuntu-24.04
     needs: [determine-version, build, build-cli-linux]
     if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.publish == true)
     strategy:
@@ -785,8 +786,10 @@ jobs:
           # RPM doesn't allow hyphens in version, replace with underscores
           RPM_VERSION=$(echo "$VERSION" | tr '-' '_')
 
+          # Artifact Registry requires RPM v4; RPM 6 defaults to v6 packages.
           # Build wendy .rpm
           fpm -s dir -t rpm \
+            --rpm-rpmbuild-define "_rpmformat 4" \
             -n wendy \
             -v "$RPM_VERSION" \
             --architecture ${{ matrix.rpm-arch }} \
@@ -804,6 +807,7 @@ jobs:
 
           # Build wendy-agent .rpm
           fpm -s dir -t rpm \
+            --rpm-rpmbuild-define "_rpmformat 4" \
             -n wendy-agent \
             -v "$RPM_VERSION" \
             --architecture ${{ matrix.rpm-arch }} \
@@ -839,6 +843,16 @@ jobs:
           WENDY_AGENT_DEB=$(ls -1 wendy-agent_*_${{ matrix.arch }}.deb | head -1)
           WENDY_RPM=$(ls -1 wendy-[0-9]*.rpm | head -1)
           WENDY_AGENT_RPM=$(ls -1 wendy-agent-*.rpm | head -1)
+
+          # rpm can read v6 packages that Artifact Registry rejects. RPM v4
+          # uses a 3.0 lead; check it explicitly before publishing artifacts.
+          for package in "$WENDY_RPM" "$WENDY_AGENT_RPM"; do
+            lead=$(od -An -tx1 -N6 "$package" | tr -d ' \n')
+            if [[ "$lead" != "edabeedb0300" ]]; then
+              echo "::error file=$package::Expected an RPM v4 package with a 3.0 lead, got $lead"
+              exit 1
+            fi
+          done
 
           dpkg-deb -I "$WENDY_DEB" | grep -E "Depends:.*usbutils"
           dpkg-deb -I "$WENDY_DEB" | grep -E "Depends:.*ca-certificates"

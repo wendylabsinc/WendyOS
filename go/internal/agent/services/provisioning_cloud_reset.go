@@ -52,6 +52,13 @@ func (s *ProvisioningService) readProvisioningState() (*provisioningState, error
 	if err != nil {
 		return nil, err
 	}
+	// Older writers could leave a zero-byte file after an interrupted write.
+	// Like an absent file, it contains no enrollment or reset authorization.
+	// Leave all credentials untouched and allow a new enrollment to replace it.
+	// Nonempty invalid JSON must still fail closed, including truncated resets.
+	if len(raw) == 0 {
+		return &provisioningState{}, nil
+	}
 	var state provisioningState
 	if err := json.Unmarshal(raw, &state); err != nil {
 		return nil, err

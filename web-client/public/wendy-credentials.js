@@ -136,11 +136,71 @@ self.wendyCredentials = (() => {
         wrappingKey,
         seed,
       );
+      // A token refresh rewrites the record; this browser's registry key stays.
+      const previous = await get(slot);
+      const { registryWrappingKey, registryIV, wrappedRegistryKey } =
+        typeof previous === "object" && previous ? previous : {};
       await transaction("readwrite", (store) => {
-        store.put({ session, wrappingKey, iv, wrappedSeed }, slot);
+        store.put(
+          {
+            session,
+            wrappingKey,
+            iv,
+            wrappedSeed,
+            registryWrappingKey,
+            registryIV,
+            wrappedRegistryKey,
+          },
+          slot,
+        );
         return store.put(slot, CURRENT);
       });
       current = slot;
+    },
+    // This browser's registry encryption key (one per operator device, WDY-3968),
+    // wrapped like the seed under its own non-extractable key, in the sign-in's
+    // record: it survives token refreshes and goes with sign-out.
+    loadRegistryKey: async (aad) => {
+      const record = await get(slotOf(aad));
+      if (!record?.wrappedRegistryKey) return undefined;
+      return new Uint8Array(
+        await crypto.subtle.decrypt(
+          {
+            name: "AES-GCM",
+            iv: record.registryIV,
+            additionalData: new TextEncoder().encode("registry-" + aad),
+          },
+          record.registryWrappingKey,
+          record.wrappedRegistryKey,
+        ),
+      );
+    },
+    saveRegistryKey: async (aad, key) => {
+      const slot = slotOf(aad);
+      const registryWrappingKey = await crypto.subtle.generateKey(
+        { name: "AES-GCM", length: 256 },
+        false,
+        ["encrypt", "decrypt"],
+      );
+      const registryIV = crypto.getRandomValues(new Uint8Array(12));
+      const wrappedRegistryKey = await crypto.subtle.encrypt(
+        {
+          name: "AES-GCM",
+          iv: registryIV,
+          additionalData: new TextEncoder().encode("registry-" + aad),
+        },
+        registryWrappingKey,
+        key,
+      );
+      const record = await get(slot);
+      if (typeof record?.session !== "string")
+        throw new Error("No saved sign-in for the registry key");
+      await transaction("readwrite", (store) =>
+        store.put(
+          { ...record, registryWrappingKey, registryIV, wrappedRegistryKey },
+          slot,
+        ),
+      );
     },
     clear: async () => {
       const slot = await currentSlot();

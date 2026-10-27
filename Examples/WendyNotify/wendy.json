@@ -1,0 +1,11 @@
+{
+    "appId": "sh.wendy.examples.wendynotify",
+    "platform": "linux",
+    "version": "1.0.0",
+    "language": "swift",
+    "entitlements": [
+        { "type": "notifications" },
+        { "type": "network", "mode": "host" },
+        { "type": "http", "port": 8080 }
+    ]
+}

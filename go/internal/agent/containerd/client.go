@@ -1197,6 +1197,11 @@ func (c *Client) createContainer(ctx context.Context, req *agentpb.CreateContain
 			return fmt.Errorf("invalid service name: %w", err)
 		}
 	}
+	// Cloud stores the release id as a UUID; a label it would refuse to read
+	// back must not be written.
+	if req.ReleaseId != nil && !isCanonicalUUID(req.GetReleaseId()) {
+		return fmt.Errorf("invalid release id: want a canonical lowercase UUID")
+	}
 
 	// Both values are now validated; promote to short names for readability.
 	appID, serviceName := rawAppID, rawServiceName
@@ -1585,6 +1590,7 @@ func (c *Client) createContainer(ctx context.Context, req *agentpb.CreateContain
 		}
 	}
 	labels := wendyLabels(appID, serviceName, version, req.GetRestartPolicy(), appCfg.Entitlements, appCfg.Isolation, dependsOn)
+	addReleaseIdentity(labels, image.Target().Digest.String(), req.ReleaseId)
 	if identities := captureSerialIdentities(appCfg.Entitlements); len(identities) > 0 {
 		encoded, err := json.Marshal(identities)
 		if err != nil {

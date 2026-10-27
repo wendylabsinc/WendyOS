@@ -39,6 +39,7 @@ type testRelay struct {
 	renewLease     <-chan struct{}
 	reconnected    chan struct{}
 	registrations  int
+	issues         int
 	renewOnly      bool
 	renewed        chan struct{}
 	pb.UnimplementedTunnelAuthorizationServiceServer
@@ -100,6 +101,7 @@ func (r *testRelay) IssuePresenceLease(ctx context.Context, req *pb.IssuePresenc
 		r.mu.Lock()
 	}
 	defer r.mu.Unlock()
+	r.issues++
 	r.signing = bytes.Clone(req.AgentSigningPublicKeySpkiDer)
 	r.encryption = bytes.Clone(req.AgentKeyAgreementPublicKeySpkiDer)
 	now := time.Now().Unix()

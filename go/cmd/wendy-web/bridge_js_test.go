@@ -163,3 +163,50 @@ func TestCredentialAndSignUseEachOrganizationsSavedOperator(t *testing.T) {
 		t.Fatal("returned A's credential for B")
 	}
 }
+
+// rotate is registry-key's alone: an unwrap carrying it must not replace the
+// registered key.
+func TestRegistryUnwrapDoesNotRotate(t *testing.T) {
+	loadCredentialScript(t)
+	authority, err := mldsa.GenerateKey(mldsa.MLDSA65())
+	if err != nil {
+		t.Fatal(err)
+	}
+	issuer := browserauth.AuthBase + "/realms/acme"
+	jwks, _ := json.Marshal(map[string]any{"keys": []map[string]string{{"kid": "test", "alg": "ML-DSA-65", "kty": "AKP", "pub": base64.RawURLEncoding.EncodeToString(authority.Public().(*mldsa.PublicKey).Bytes())}}})
+	discovery, _ := json.Marshal(map[string]string{"issuer": issuer, "authorization_endpoint": issuer + "/authorize", "token_endpoint": issuer + "/oauth2/token", "jwks_uri": issuer + "/.well-known/jwks.json"})
+	client := doerFunc(func(r *http.Request) (*http.Response, error) {
+		body := map[string][]byte{issuer + "/.well-known/openid-configuration": discovery, issuer + "/.well-known/jwks.json": jwks}[r.URL.String()]
+		if body == nil {
+			t.Fatalf("unexpected request to %s", r.URL)
+		}
+		return &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(bytes.NewReader(body))}, nil
+	})
+	const tenant = "11111111-1111-1111-1111-111111111111"
+	saveOperator(t, authority, issuer, tenant)
+	br := &bridge{auth: &browserauth.Session{Client: client, Store: browserCredentialStore{}}}
+	call := func(method string, rotate bool) (any, error) {
+		params, _ := json.Marshal(map[string]any{"tenant": tenant, "rotate": rotate})
+		return br.handle(request{Method: method, Params: params})
+	}
+	keyID := func() any {
+		value, err := call("registry-key", false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return value.(map[string]any)["keyId"]
+	}
+	registered := keyID()
+	if _, err := call("registry-unwrap", true); err == nil {
+		t.Fatal("unwrap of an empty wrap succeeded")
+	}
+	if got := keyID(); got != registered {
+		t.Fatalf("registry-unwrap with rotate replaced the key: %v, was %v", got, registered)
+	}
+	if _, err := call("registry-key", true); err != nil {
+		t.Fatal(err)
+	}
+	if got := keyID(); got == registered {
+		t.Fatal("registry-key with rotate kept the key")
+	}
+}

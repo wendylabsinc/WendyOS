@@ -2,16 +2,23 @@ package services
 
 import (
 	"context"
+	"net"
+	"os"
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/localmesh"
+	"github.com/wendylabsinc/wendy/go/internal/agent/localsocket"
 	"github.com/wendylabsinc/wendy/go/internal/agent/meshsharing"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
 	pb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 )
@@ -45,6 +52,140 @@ func adminDevice(t *testing.T) meshid.Device {
 // admin service accepts for local mesh administration.
 func userPrincipal(tenantID, name string) string {
 	return certs.UserSPIFFEURI(tenantID, name)
+}
+
+// localAdminSocketCtx is a caller on the agent's local control socket as grpc
+// reports it on Linux: a unix peer with no TLS.
+func localAdminSocketCtx() context.Context {
+	return peer.NewContext(context.Background(), &peer.Peer{Addr: &net.UnixAddr{Name: "@", Net: "unix"}})
+}
+
+// plaintextTCPCtx is a caller on the pre-provisioning plaintext listener. It
+// has no TLS either, and anyone on the LAN can be it.
+func plaintextTCPCtx() context.Context {
+	return peer.NewContext(context.Background(), &peer.Peer{Addr: &net.TCPAddr{IP: net.IPv4(10, 0, 0, 9), Port: 50051}})
+}
+
+// Only the read-only RPCs widen, and only for the local admin socket. Writes
+// still demand a user in this device's tenant, and the plaintext listener is
+// refused everything even though it also carries no certificate.
+func TestLocalMeshAdminCallerMatrix(t *testing.T) {
+	_, snapshot, _ := topologyFixture(t)
+	tenant, device := adminTenant(t), adminDevice(t)
+	for _, tc := range []struct {
+		name        string
+		ctx         context.Context
+		read, write codes.Code
+	}{
+		{"local admin socket", localAdminSocketCtx(), codes.OK, codes.PermissionDenied},
+		{"plaintext TCP", plaintextTCPCtx(), codes.PermissionDenied, codes.PermissionDenied},
+		{"no peer", context.Background(), codes.PermissionDenied, codes.PermissionDenied},
+		{"device certificate", ctxWithIdentity(t, device.Principal()), codes.PermissionDenied, codes.PermissionDenied},
+		{"user in another tenant", ctxWithIdentity(t, userPrincipal(otherTenantID, "bob")), codes.PermissionDenied, codes.PermissionDenied},
+		{"user in this tenant", ctxWithIdentity(t, userPrincipal(adminTenantID, "alice")), codes.OK, codes.OK},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			svc := NewLocalMeshAdminService(nil, dir, func() (meshid.Tenant, meshid.Device) { return tenant, device })
+			reads := 0
+			svc.SetTopologySource(func() localmesh.NodeSnapshot { reads++; return snapshot })
+			if _, err := svc.GetLocalMeshStatus(tc.ctx, &pb.GetLocalMeshStatusRequest{}); status.Code(err) != tc.read {
+				t.Fatalf("status: got %v, want %v", err, tc.read)
+			}
+			topology, err := svc.GetLocalMeshTopology(tc.ctx, &pb.GetLocalMeshTopologyRequest{})
+			if status.Code(err) != tc.read {
+				t.Fatalf("topology: got %v, want %v", err, tc.read)
+			}
+			if tc.read == codes.OK && (!topology.GetRuntimeAvailable() || topology.GetSelfDeviceId() != device.UUID().String() || len(topology.GetPeers()) != 2) {
+				t.Fatalf("topology: %v", topology)
+			}
+			if tc.read != codes.OK && reads != 0 {
+				t.Fatal("refused caller read topology")
+			}
+			_, err = svc.ConfigureLocalMesh(tc.ctx, &pb.ConfigureLocalMeshRequest{Participate: proto.Bool(true), Nan: proto.Bool(true)})
+			if status.Code(err) != tc.write {
+				t.Fatalf("configure: got %v, want %v", err, tc.write)
+			}
+			if tc.write != codes.OK {
+				for _, name := range []string{"nan-mesh.json", "local-mesh.json"} {
+					if _, err := os.Stat(filepath.Join(dir, name)); !os.IsNotExist(err) {
+						t.Fatalf("refused configure saved %s: %v", name, err)
+					}
+				}
+			}
+		})
+	}
+}
+
+// The local socket widens who may read, not when: an unenrolled device has no
+// tenant to scope its view to, so every reader gets the same refusal.
+func TestLocalMeshAdminReadRequiresEnrollment(t *testing.T) {
+	_, snapshot, _ := topologyFixture(t)
+	for name, identity := range map[string]func() (meshid.Tenant, meshid.Device){
+		"no identity source": nil,
+		"not enrolled":       func() (meshid.Tenant, meshid.Device) { return meshid.Tenant{}, meshid.Device{} },
+	} {
+		t.Run(name, func(t *testing.T) {
+			svc := NewLocalMeshAdminService(nil, t.TempDir(), identity)
+			reads := 0
+			svc.SetTopologySource(func() localmesh.NodeSnapshot { reads++; return snapshot })
+			for caller, ctx := range map[string]context.Context{
+				"local admin socket":  localAdminSocketCtx(),
+				"user in this tenant": ctxWithIdentity(t, userPrincipal(adminTenantID, "alice")),
+			} {
+				if _, err := svc.GetLocalMeshStatus(ctx, &pb.GetLocalMeshStatusRequest{}); status.Code(err) != codes.FailedPrecondition {
+					t.Fatalf("%s status: got %v, want FailedPrecondition", caller, err)
+				}
+				if _, err := svc.GetLocalMeshTopology(ctx, &pb.GetLocalMeshTopologyRequest{}); status.Code(err) != codes.FailedPrecondition {
+					t.Fatalf("%s topology: got %v, want FailedPrecondition", caller, err)
+				}
+			}
+			if reads != 0 {
+				t.Fatal("unenrolled device read topology")
+			}
+		})
+	}
+}
+
+// The tests above fake the peer. This one serves the service on a real
+// localsocket listener, so it fails if grpc stops reporting such a caller as a
+// unix peer: that network is all that separates it from the plaintext listener.
+func TestLocalMeshAdminOverRealLocalSocket(t *testing.T) {
+	// Not t.TempDir: unix socket paths are limited to about 100 bytes.
+	dir, err := os.MkdirTemp("", "wnet")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	path := filepath.Join(dir, "agent.sock")
+	lis, err := localsocket.Listen(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, snapshot, _ := topologyFixture(t)
+	tenant, device := adminTenant(t), adminDevice(t)
+	svc := NewLocalMeshAdminService(nil, t.TempDir(), func() (meshid.Tenant, meshid.Device) { return tenant, device })
+	svc.SetTopologySource(func() localmesh.NodeSnapshot { return snapshot })
+	srv := grpc.NewServer()
+	pb.RegisterWendyLocalMeshAdminServiceServer(srv, svc)
+	go func() { _ = srv.Serve(lis) }()
+	t.Cleanup(srv.Stop)
+
+	conn, err := grpc.NewClient("unix://"+path, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	client := pb.NewWendyLocalMeshAdminServiceClient(conn)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	topology, err := client.GetLocalMeshTopology(ctx, &pb.GetLocalMeshTopologyRequest{})
+	if err != nil || topology.GetSelfDeviceId() != device.UUID().String() {
+		t.Fatalf("topology over the local socket: %v %v", topology, err)
+	}
+	if _, err := client.ConfigureLocalMesh(ctx, &pb.ConfigureLocalMeshRequest{Nan: proto.Bool(true)}); status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("configure over the local socket: got %v, want PermissionDenied", err)
+	}
 }
 
 func TestLocalMeshAdminAuthorizationAndPartialUpdates(t *testing.T) {
@@ -192,6 +333,81 @@ func TestLocalMeshParticipationDisableRetainsCarrierChoices(t *testing.T) {
 		}
 		if !enabled && got.GetState() != "disabled" {
 			t.Fatalf("saved disabled state: %+v", got)
+		}
+	}
+}
+
+// The runtime polls the saved documents, so when ConfigureLocalMesh returns it
+// can still report the previous configuration, including on retries. Configure
+// must not present that state as the result: enabling a disabled device used to answer
+// "disabled", and disabling an active one answered "mesh-active".
+func TestLocalMeshAdminConfigureDoesNotReportPreChangeRuntimeState(t *testing.T) {
+	dir := t.TempDir()
+	tenant, device := adminTenant(t), adminDevice(t)
+	svc := NewLocalMeshAdminService(nil, dir, func() (meshid.Tenant, meshid.Device) { return tenant, device })
+	runtime := LocalMeshRuntimeStatus{Available: true, State: "disabled", Detail: "Wendy Net participation is disabled."}
+	svc.SetRuntimeStatusSource(func() LocalMeshRuntimeStatus { return runtime })
+	ctx := ctxWithIdentity(t, userPrincipal(adminTenantID, "alice"))
+	enable := &pb.ConfigureLocalMeshRequest{Participate: proto.Bool(true), Ble: proto.Bool(true), Ethernet: proto.Bool(true), InfrastructureWifi: proto.Bool(true)}
+
+	got, err := svc.ConfigureLocalMesh(ctx, enable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c := got.GetConfigured(); !c.GetParticipate() || !c.GetBle() || !c.GetEthernet() || !c.GetInfrastructureWifi() {
+		t.Fatalf("enable not saved: %+v", c)
+	}
+	if got.GetState() != "pending-runtime" || got.GetRuntimeAvailable() || got.GetAuthenticatedPeers() != 0 {
+		t.Fatalf("enable reported the pre-change runtime state: %+v", got)
+	}
+
+	// Retrying before the runtime polls must return the same saved intent.
+	retry, err := svc.ConfigureLocalMesh(ctx, enable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !proto.Equal(got, retry) {
+		t.Fatalf("retry attached stale runtime: first=%+v retry=%+v", got, retry)
+	}
+
+	// Configure always acknowledges saved intent; status reports observations
+	// once the runtime has applied the configuration.
+	runtime = LocalMeshRuntimeStatus{Available: true, State: "mesh-active", Detail: "Carriers: BLE: ready; LAN: ready.", AuthenticatedPeers: 2, GatewayPrincipal: device.Principal()}
+	got, err = svc.ConfigureLocalMesh(ctx, enable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !proto.Equal(got, retry) {
+		t.Fatalf("unchanged configuration attached runtime observations: %+v", got)
+	}
+	got, err = svc.GetLocalMeshStatus(ctx, &pb.GetLocalMeshStatusRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.GetState() != runtime.State || got.GetDetail() != runtime.Detail || !got.GetRuntimeAvailable() ||
+		got.GetAuthenticatedPeers() != 2 || got.GetGatewayPrincipal() != runtime.GatewayPrincipal {
+		t.Fatalf("status lost runtime observations: %+v", got)
+	}
+
+	for attempt := 0; attempt < 2; attempt++ {
+		got, err = svc.ConfigureLocalMesh(ctx, &pb.ConfigureLocalMeshRequest{Nan: proto.Bool(true)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !got.GetConfigured().GetNan() || got.GetState() != "pending-runtime" || got.GetDetail() == runtime.Detail ||
+			got.GetRuntimeAvailable() || got.GetAuthenticatedPeers() != 0 || got.GetGatewayPrincipal() != "" {
+			t.Fatalf("carrier configure attempt %d reported the previous carriers' health: %+v", attempt+1, got)
+		}
+	}
+
+	for attempt := 0; attempt < 2; attempt++ {
+		got, err = svc.ConfigureLocalMesh(ctx, &pb.ConfigureLocalMeshRequest{Participate: proto.Bool(false)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.GetConfigured().GetParticipate() || got.GetState() != "disabled" || got.GetDetail() == runtime.Detail ||
+			got.GetRuntimeAvailable() || got.GetAuthenticatedPeers() != 0 || got.GetGatewayPrincipal() != "" {
+			t.Fatalf("disable attempt %d reported the pre-change runtime state: %+v", attempt+1, got)
 		}
 	}
 }

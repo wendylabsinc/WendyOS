@@ -67,18 +67,26 @@ type probeMatchEnvelope struct {
 // ProbeMatch, which happens for unrelated multicast traffic on port 3702.
 var ErrNoProbeMatch = errors.New("payload contains no ProbeMatch")
 
+// ErrProbeMatchTypeMismatch is returned when every ProbeMatch explicitly
+// advertises types without the exact NetworkVideoTransmitter local name.
+var ErrProbeMatchTypeMismatch = errors.New("ProbeMatch types do not include NetworkVideoTransmitter")
+
 // ParseProbeMatch extracts the first usable video-transmitter match from a
-// discovery response. Other WS-Discovery devices (printers, computers, etc.)
-// can answer on the same port and must not enter the camera registry.
+// discovery response. Explicit non-camera types are rejected. Omitted or empty
+// Types are accepted: WS-Discovery allows a target to omit them even when
+// answering our NetworkVideoTransmitter-filtered probe.
 func ParseProbeMatch(payload []byte) (ProbeMatch, error) {
 	var env probeMatchEnvelope
 	if err := xml.Unmarshal(payload, &env); err != nil {
 		return ProbeMatch{}, fmt.Errorf("parsing probe response: %w", err)
 	}
-	for _, match := range env.Body.ProbeMatches.ProbeMatch {
-		if !hasVideoTransmitterType(match.Types) {
+	matches := env.Body.ProbeMatches.ProbeMatch
+	hasCompatibleType := false
+	for _, match := range matches {
+		if strings.TrimSpace(match.Types) != "" && !hasVideoTransmitterType(match.Types) {
 			continue
 		}
+		hasCompatibleType = true
 		out := ProbeMatch{
 			XAddrs: strings.Fields(match.XAddrs),
 			Scopes: strings.Fields(match.Scopes),
@@ -89,6 +97,9 @@ func ParseProbeMatch(payload []byte) (ProbeMatch, error) {
 		}
 		out.Model = modelFromScopes(out.Scopes)
 		return out, nil
+	}
+	if len(matches) > 0 && !hasCompatibleType {
+		return ProbeMatch{}, ErrProbeMatchTypeMismatch
 	}
 	return ProbeMatch{}, ErrNoProbeMatch
 }

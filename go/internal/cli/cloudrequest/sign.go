@@ -157,12 +157,15 @@ func invoke(ctx context.Context, conn grpc.ClientConnInterface, auth *config.Aut
 }
 
 // x5cOnly lists the methods always signed with x5c, never kid: the leaf
-// registration itself, and the two whose JWS Cloud forwards verbatim to
-// devices (PostboxEntry.request_jws), which cannot resolve a kid.
+// registration itself, the registry key registration (Cloud serves the stored
+// request back to other clients as the binding), and the two whose JWS Cloud
+// forwards verbatim to devices (PostboxEntry.request_jws), which cannot
+// resolve a kid.
 var x5cOnly = map[string]bool{
-	cloudpbv2.OperatorSessionService_RegisterOperatorLeaf_FullMethodName: true,
-	cloudpbv2.DeploymentService_CreateDeployment_FullMethodName:          true,
-	cloudpbv2.DeploymentService_ControlContainer_FullMethodName:          true,
+	cloudpbv2.OperatorSessionService_RegisterOperatorLeaf_FullMethodName:   true,
+	cloudpbv2.KeyDirectoryService_RegisterUserEncryptionKey_FullMethodName: true,
+	cloudpbv2.DeploymentService_CreateDeployment_FullMethodName:            true,
+	cloudpbv2.DeploymentService_ControlContainer_FullMethodName:            true,
 }
 
 // registeredKIDs holds the leaves this process has registered.
@@ -295,6 +298,9 @@ func (s *Signer) signRequest(method string, req proto.Message, byKID bool, corre
 	if !ok {
 		return nil, requestTypeError(method, req)
 	}
+	if err := stampValidity(req, s.now()); err != nil {
+		return nil, err
+	}
 	payload, err := proto.Marshal(req)
 	if err != nil {
 		return nil, fmt.Errorf("marshaling Cloud request %s: %w", method, err)
@@ -407,10 +413,41 @@ var signedResources = map[string]func(tenant string, req proto.Message) (string,
 		}
 		return "org/" + tenant + "/app/" + in.GetId(), true
 	},
+	// Cloud DeploymentServiceHandler createAppRelease / updateAppRelease.
+	cloudpbv2.DeploymentService_CreateAppRelease_FullMethodName: func(tenant string, req proto.Message) (string, bool) {
+		in, ok := req.(*cloudpbv2.CreateAppReleaseRequest)
+		if !ok || in.GetOrganizationId() != tenant || in.GetAppId() == "" {
+			return "", false
+		}
+		return "org/" + tenant + "/app/" + in.GetAppId(), true
+	},
+	cloudpbv2.DeploymentService_UpdateAppRelease_FullMethodName: func(_ string, req proto.Message) (string, bool) {
+		in, ok := req.(*cloudpbv2.UpdateAppReleaseRequest)
+		if !ok {
+			return "", false
+		}
+		id, err := uuid.Parse(in.GetId())
+		if err != nil || id.String() != in.GetId() {
+			return "", false
+		}
+		return "app-release/" + in.GetId(), true
+	},
 	// Ruled 2026-10-13 (WDY-3660); cloud's RequestSigning.md row follows.
 	cloudpbv2.RelayMcpService_OpenRelaySession_FullMethodName: func(tenant string, req proto.Message) (string, bool) {
 		in, ok := req.(*cloudpbv2.OpenRelaySessionRequest)
 		return "org/" + in.GetOrganizationId() + "/relay-session", ok
+	},
+	// `wendy device rename` on a v2 enrollment.
+	cloudpbv2.AssetService_UpdateAsset_FullMethodName: func(_ string, req proto.Message) (string, bool) {
+		in, ok := req.(*cloudpbv2.UpdateAssetRequest)
+		if !ok {
+			return "", false
+		}
+		id, err := uuid.Parse(in.GetId())
+		if err != nil || id.String() != in.GetId() {
+			return "", false
+		}
+		return "asset/" + in.GetId(), true
 	},
 	cloudpbv2.AssetService_DeleteAsset_FullMethodName: func(_ string, req proto.Message) (string, bool) {
 		in, ok := req.(*cloudpbv2.DeleteAssetRequest)
@@ -422,6 +459,11 @@ var signedResources = map[string]func(tenant string, req proto.Message) (string,
 			return "", false
 		}
 		return "asset/" + in.GetId(), true
+	},
+	// Cloud RequestSigning.md: org/<organization_id>/encryption-key.
+	cloudpbv2.KeyDirectoryService_RegisterUserEncryptionKey_FullMethodName: func(tenant string, req proto.Message) (string, bool) {
+		in, ok := req.(*cloudpbv2.RegisterEncryptionKeyRequest)
+		return "org/" + tenant + "/encryption-key", ok && in.GetOrganizationId() == tenant
 	},
 	cloudpbv2.PKIAdminService_RevokePrincipalCertificates_FullMethodName: func(tenant string, req proto.Message) (string, bool) {
 		in, ok := req.(*cloudpbv2.RevokePrincipalCertificatesRequest)

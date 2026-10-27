@@ -5,9 +5,14 @@ import (
 	"errors"
 	"io"
 	"net"
+	"slices"
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"go.uber.org/zap"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
 )
@@ -150,5 +155,67 @@ func TestTunnelBrokerRelayHardWriteFailureUnblocksOppositeDirection(t *testing.T
 	}
 	if !cancelled.Load() {
 		t.Fatal("hard TCP failure did not cancel the broker stream")
+	}
+}
+
+// runBrokerSessions drives Run through sessions that each live for the given
+// time on a fake clock and then fail, returning the backoff before each redial.
+func runBrokerSessions(t *testing.T, lifetimes ...time.Duration) []time.Duration {
+	t.Helper()
+	origRunOnce, origNow, origAfter := brokerRunOnceFn, brokerNowFn, brokerAfterFn
+	t.Cleanup(func() { brokerRunOnceFn, brokerNowFn, brokerAfterFn = origRunOnce, origNow, origAfter })
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	now := time.Unix(0, 0)
+	var delays []time.Duration
+	brokerNowFn = func() time.Time { return now }
+	brokerAfterFn = func(d time.Duration) <-chan time.Time {
+		delays = append(delays, d)
+		now = now.Add(d)
+		fired := make(chan time.Time, 1)
+		fired <- now
+		return fired
+	}
+	brokerRunOnceFn = func(*TunnelBrokerClient, context.Context) error {
+		if len(lifetimes) == 0 {
+			cancel()
+			return ctx.Err()
+		}
+		now = now.Add(lifetimes[0])
+		lifetimes = lifetimes[1:]
+		return status.Error(codes.Unavailable, "stream terminated")
+	}
+
+	(&TunnelBrokerClient{logger: zap.NewNop()}).Run(ctx)
+	return delays
+}
+
+func TestTunnelBrokerRunResetsBackoffAfterALongSessionFails(t *testing.T) {
+	// Boot-time dial failures, then hour-long streams the platform ends with an error.
+	got := runBrokerSessions(t, 0, 0, 0, time.Hour, time.Hour)
+	want := []time.Duration{time.Second, 2 * time.Second, 4 * time.Second, time.Second, time.Second}
+	if !slices.Equal(got, want) {
+		t.Fatalf("backoffs = %v, want %v", got, want)
+	}
+}
+
+func TestTunnelBrokerRunKeepsBackingOffWhileSessionsFailFast(t *testing.T) {
+	// The stream opens but the broker refuses it on the first receive.
+	got := runBrokerSessions(t, slices.Repeat([]time.Duration{200 * time.Millisecond}, 9)...)
+	want := []time.Duration{
+		time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second, 16 * time.Second,
+		32 * time.Second, 64 * time.Second, brokerMaxBackoff, brokerMaxBackoff,
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("backoffs = %v, want %v", got, want)
+	}
+}
+
+func TestTunnelBrokerRunResetsOnlyAfterOutlivingTheLongestBackoff(t *testing.T) {
+	got := runBrokerSessions(t, 0, brokerMaxBackoff-time.Second, brokerMaxBackoff)
+	want := []time.Duration{time.Second, 2 * time.Second, time.Second}
+	if !slices.Equal(got, want) {
+		t.Fatalf("backoffs = %v, want %v", got, want)
 	}
 }

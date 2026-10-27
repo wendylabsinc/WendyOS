@@ -70,19 +70,27 @@ const controlTestClient = "00000000-0000-4000-8000-000000000001"
 const controlTestGateway = "00000000-0000-4000-8000-000000000002"
 
 type controlTestBackend struct {
-	grants    atomic.Int32
-	granted   chan meshid.Device
-	revoked   chan meshid.Device
-	refusal   error
-	leaseGone chan struct{}
+	grants     atomic.Int32
+	granted    chan meshid.Device
+	revoked    chan meshid.Device
+	refusal    error
+	leaseGone  chan struct{}
+	grantDelay time.Duration
 }
 
 func (b *controlTestBackend) LeaseDone(meshid.Device, tunnelLease) <-chan struct{} {
 	return b.leaseGone
 }
 
-func (b *controlTestBackend) Grant(_ context.Context, peer meshid.Device) (tunnelLease, error) {
+func (b *controlTestBackend) Grant(ctx context.Context, peer meshid.Device) (tunnelLease, error) {
 	b.grants.Add(1)
+	if b.grantDelay > 0 {
+		select {
+		case <-time.After(b.grantDelay):
+		case <-ctx.Done():
+			return tunnelLease{}, ctx.Err()
+		}
+	}
 	if b.refusal != nil {
 		return tunnelLease{}, b.refusal
 	}

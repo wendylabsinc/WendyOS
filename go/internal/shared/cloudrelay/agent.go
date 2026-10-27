@@ -333,6 +333,11 @@ func (a *Agent) runOnce(parent context.Context) error {
 		case <-expiry.C:
 			return fmt.Errorf("Cloud presence lease expired")
 		case err := <-pathChanged:
+			// A local network change, not a broker refusal: the lease binds
+			// no source address, so the same broker still admits it over the
+			// new path. Re-presenting it saves an IssuePresenceLease round
+			// trip; if the broker does refuse it, that attempt drops it.
+			keepLease = true
 			return err
 		case <-renewal.C:
 			l, n, e := a.issue(ctx)

@@ -25,7 +25,7 @@ func (s *LocalMeshAdminService) SetTopologySource(source func() localmesh.NodeSn
 }
 
 func (s *LocalMeshAdminService) GetLocalMeshTopology(ctx context.Context, _ *pb.GetLocalMeshTopologyRequest) (*pb.LocalMeshTopology, error) {
-	device, err := s.authorize(ctx)
+	device, err := s.authorizeRead(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -46,7 +46,7 @@ func (s *LocalMeshAdminService) GetLocalMeshTopology(ctx context.Context, _ *pb.
 	}
 	// Enrollment may have changed while the source was read. Never label an old
 	// tenant's snapshot with the new identity or return it to a new tenant caller.
-	current, err := s.authorize(ctx)
+	current, err := s.authorizeRead(ctx)
 	if err != nil {
 		return nil, err
 	}

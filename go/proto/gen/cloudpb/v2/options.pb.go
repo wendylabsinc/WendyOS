@@ -30,6 +30,14 @@ var file_wendy_options_proto_extTypes = []protoimpl.ExtensionInfo{
 		Tag:           "varint,50001,opt,name=signed_request",
 		Filename:      "wendy/options.proto",
 	},
+	{
+		ExtendedType:  (*descriptorpb.MethodOptions)(nil),
+		ExtensionType: (*bool)(nil),
+		Field:         50002,
+		Name:          "wendy.device_signed_request",
+		Tag:           "varint,50002,opt,name=device_signed_request",
+		Filename:      "wendy/options.proto",
+	},
 }
 
 // Extension fields to descriptorpb.MethodOptions.
@@ -41,6 +49,17 @@ var (
 	//
 	// optional bool signed_request = 50001;
 	E_SignedRequest = &file_wendy_options_proto_extTypes[0]
+	// The method is device-signed (WDY-3926): its input is
+	// wendycloud.v2.SignedRequest, but the signer is a device, not an operator.
+	// Operator-signed means the request signature is made with an operator leaf
+	// and verified as an operator request. Device-signed means it is made with
+	// the device leaf (`x5c`), and the server verifies it against the device's
+	// mTLS peer certificate: the leaf in `x5c` must be that peer. A method
+	// carries exactly one of the two options; every method whose input is
+	// SignedRequest carries one.
+	//
+	// optional bool device_signed_request = 50002;
+	E_DeviceSignedRequest = &file_wendy_options_proto_extTypes[1]
 )
 
 var File_wendy_options_proto protoreflect.FileDescriptor
@@ -48,17 +67,19 @@ var File_wendy_options_proto protoreflect.FileDescriptor
 const file_wendy_options_proto_rawDesc = "" +
 	"\n" +
 	"\x13wendy/options.proto\x12\x05wendy\x1a google/protobuf/descriptor.proto:G\n" +
-	"\x0esigned_request\x12\x1e.google.protobuf.MethodOptions\x18ц\x03 \x01(\bR\rsignedRequestb\x06proto3"
+	"\x0esigned_request\x12\x1e.google.protobuf.MethodOptions\x18ц\x03 \x01(\bR\rsignedRequest:T\n" +
+	"\x15device_signed_request\x12\x1e.google.protobuf.MethodOptions\x18҆\x03 \x01(\bR\x13deviceSignedRequestb\x06proto3"
 
 var file_wendy_options_proto_goTypes = []any{
 	(*descriptorpb.MethodOptions)(nil), // 0: google.protobuf.MethodOptions
 }
 var file_wendy_options_proto_depIdxs = []int32{
 	0, // 0: wendy.signed_request:extendee -> google.protobuf.MethodOptions
-	1, // [1:1] is the sub-list for method output_type
-	1, // [1:1] is the sub-list for method input_type
-	1, // [1:1] is the sub-list for extension type_name
-	0, // [0:1] is the sub-list for extension extendee
+	0, // 1: wendy.device_signed_request:extendee -> google.protobuf.MethodOptions
+	2, // [2:2] is the sub-list for method output_type
+	2, // [2:2] is the sub-list for method input_type
+	2, // [2:2] is the sub-list for extension type_name
+	0, // [0:2] is the sub-list for extension extendee
 	0, // [0:0] is the sub-list for field type_name
 }
 
@@ -74,7 +95,7 @@ func file_wendy_options_proto_init() {
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_wendy_options_proto_rawDesc), len(file_wendy_options_proto_rawDesc)),
 			NumEnums:      0,
 			NumMessages:   0,
-			NumExtensions: 1,
+			NumExtensions: 2,
 			NumServices:   0,
 		},
 		GoTypes:           file_wendy_options_proto_goTypes,

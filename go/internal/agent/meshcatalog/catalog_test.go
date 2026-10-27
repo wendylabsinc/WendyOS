@@ -1,8 +1,10 @@
 package meshcatalog
 
 import (
+	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
+	"crypto/mldsa"
 	"crypto/rand"
 	"crypto/x509"
 	"encoding/json"
@@ -42,15 +44,32 @@ func newFixture(t *testing.T) fixture {
 
 func newFixtureWithOptions(t *testing.T, lifetime time.Duration, reuse map[string]*localmesh.Credentials) fixture {
 	t.Helper()
+	return newFixtureWithKeys(t, lifetime, reuse, false)
+}
+
+// newFixtureWithKeys issues ML-DSA-65 keys when mldsaKeys is set, as Cloud v2
+// enrollment does. reuse applies to P-256 fixtures only.
+func newFixtureWithKeys(t *testing.T, lifetime time.Duration, reuse map[string]*localmesh.Credentials, mldsaKeys bool) fixture {
+	t.Helper()
 	now := time.Now().Truncate(time.Second)
-	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatal(err)
+	newKey := func() crypto.Signer {
+		var key crypto.Signer
+		var err error
+		if mldsaKeys {
+			key, err = mldsa.GenerateKey(mldsa.MLDSA65())
+		} else {
+			key, err = ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		return key
 	}
+	caKey := newKey()
 	caTmpl := &x509.Certificate{SerialNumber: big.NewInt(1), NotBefore: now.Add(-time.Hour),
 		NotAfter: now.Add(lifetime), IsCA: true, BasicConstraintsValid: true,
 		KeyUsage: x509.KeyUsageCertSign | x509.KeyUsageCRLSign}
-	caDER, err := x509.CreateCertificate(rand.Reader, caTmpl, caTmpl, &caKey.PublicKey, caKey)
+	caDER, err := x509.CreateCertificate(rand.Reader, caTmpl, caTmpl, caKey.Public(), caKey)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,10 +80,7 @@ func newFixtureWithOptions(t *testing.T, lifetime time.Duration, reuse map[strin
 	chain := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caDER}))
 	creds := map[string]*localmesh.Credentials{}
 	for _, principal := range []string{p533, p534, p535, p536} {
-		key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-		if err != nil {
-			t.Fatal(err)
-		}
+		key := newKey()
 		if previous := reuse[principal]; previous != nil {
 			key = previous.Signer.(*ecdsa.PrivateKey)
 		}
@@ -72,16 +88,16 @@ func newFixtureWithOptions(t *testing.T, lifetime time.Duration, reuse map[strin
 		leaf := &x509.Certificate{SerialNumber: big.NewInt(time.Now().UnixNano()), NotBefore: caTmpl.NotBefore,
 			NotAfter: caTmpl.NotAfter, URIs: []*url.URL{uri}, KeyUsage: x509.KeyUsageDigitalSignature,
 			ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth}}
-		der, err := x509.CreateCertificate(rand.Reader, leaf, caCert, &key.PublicKey, caKey)
+		der, err := x509.CreateCertificate(rand.Reader, leaf, caCert, key.Public(), caKey)
 		if err != nil {
 			t.Fatal(err)
 		}
-		keyDER, err := x509.MarshalECPrivateKey(key)
+		keyDER, err := x509.MarshalPKCS8PrivateKey(key)
 		if err != nil {
 			t.Fatal(err)
 		}
 		certPEM := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))
-		keyPEM := string(pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER}))
+		keyPEM := string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER}))
 		creds[principal], err = localmesh.NewCredentials(certPEM, chain, keyPEM)
 		if err != nil {
 			t.Fatal(err)
@@ -186,6 +202,50 @@ func TestSignedPublicationAndProjection(t *testing.T) {
 	}
 	if denied, err := ProjectDNS(got, "com.wendy.browser", func(string, Record) bool { return false }, testVIPs(t), f.now); err != nil || len(denied) != 0 {
 		t.Fatalf("browse policy leak: %v %v", denied, err)
+	}
+}
+
+// Cloud v2 enrolls devices with ML-DSA-65 keys. Their service records and
+// freshness proofs must sign and verify: a failed proof closes the peer link
+// about two seconds after it forms.
+func TestMLDSAOriginsSignRecordsAndFreshnessProofs(t *testing.T) {
+	f := newFixtureWithKeys(t, 24*time.Hour, nil, true)
+	origin, _ := f.newCatalog(t, p533, "default", nil, nil)
+	dest, _ := f.newCatalog(t, p535, "default", nil, nil)
+	w, err := origin.Publish(testSpec(), f.now)
+	if err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+	synchronizeServiceIdentity(t, origin, dest, f.now)
+	forged := w
+	forged.Signature = append([]byte(nil), w.Signature...)
+	forged.Signature[0] ^= 1
+	if _, err := dest.Accept(forged, f.now); err == nil {
+		t.Fatal("accepted a record with a damaged ML-DSA signature")
+	}
+	if changed, err := dest.Accept(w, f.now); err != nil || !changed {
+		t.Fatalf("accept = %v, %v", changed, err)
+	}
+
+	q := FreshRequest{Origin: p533, Requester: p535, Nonce: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", Hops: 32}
+	proof, err := origin.signInventory(q, f.now)
+	if err != nil {
+		t.Fatalf("sign inventory: %v", err)
+	}
+	var signed signedInventory
+	if err := json.Unmarshal(proof, &signed); err != nil {
+		t.Fatal(err)
+	}
+	signed.Signature[0] ^= 1
+	damaged, err := json.Marshal(signed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := dest.acceptInventory(damaged, q, f.now); err == nil {
+		t.Fatal("accepted an inventory with a damaged ML-DSA signature")
+	}
+	if err := dest.acceptInventory(proof, q, f.now); err != nil {
+		t.Fatalf("accept inventory: %v", err)
 	}
 }
 

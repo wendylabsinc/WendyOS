@@ -120,7 +120,8 @@ func parseLEUpdateEvent(packet []byte, handle uint16) updateEvent {
 	if len(packet) < 3 || packet[0] != hciEventPacket || int(packet[2]) > len(packet)-3 {
 		return updateEvent{}
 	}
-	params := packet[3 : 3+packet[2]]
+	// Widen before adding: a byte sum wraps for 253-255 byte parameters.
+	params := packet[3 : 3+int(packet[2])]
 	switch packet[1] {
 	case hciCommandStatus:
 		if len(params) >= 4 && binary.LittleEndian.Uint16(params[2:4]) == leUpdateOpcode {
@@ -178,7 +179,7 @@ func waitForLEUpdate(ctx context.Context, handle uint16, expectedUnits uint16, r
 				continue
 			}
 			if event.status != 0 {
-				return 0, fmt.Errorf("LE connection update command status %#x", event.status)
+				return 0, &leUpdateRejectedError{status: event.status}
 			}
 			accepted = true
 		}
@@ -202,9 +203,20 @@ func waitForLEUpdate(ctx context.Context, handle uint16, expectedUnits uint16, r
 	}
 }
 
+// A nonzero Command Status means the controller did not start this request
+// (Core Vol4 PartE 7.7.15), so no completion follows and nothing from it is in
+// flight. A peripheral whose controller lacks the Connection Parameters Request
+// procedure gets Command Disallowed (0x0c) on every attempt: only the central
+// may then change the parameters. The caller keeps the established ones.
+type leUpdateRejectedError struct{ status byte }
+
+func (e *leUpdateRejectedError) Error() string {
+	return fmt.Sprintf("LE connection update command status %#x", e.status)
+}
+
 // A matched failed completion ends this submitted procedure. It differs from
-// a missing completion or a rejected command that may leave another procedure
-// active. The caller can retain the already established connection parameters.
+// a missing completion, whose procedure may still be active. The caller can
+// retain the already established connection parameters.
 type leUpdateCompletedError struct{ status byte }
 
 func (e *leUpdateCompletedError) Error() string {
@@ -241,8 +253,9 @@ func meshACLHandle(conn net.Conn) (uint16, error) {
 }
 
 // A failure before submission leaves no update from this request in flight.
-// A matched failed completion has its own terminal error type; missing replies
-// and command rejection are kept separate because their outcome may be unclear.
+// A matched command rejection and a matched failed completion have their own
+// terminal error types; missing replies are kept separate because their
+// outcome may be unclear.
 type leUpdateUnavailableError struct{ err error }
 
 func (e *leUpdateUnavailableError) Error() string {

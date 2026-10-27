@@ -41,13 +41,15 @@ A failure that occurs *during* the fallback write (short write, decode error, or
 
 ### Drive-size check
 
-`wendy install` refuses a target drive that is smaller than the uncompressed image, since a truncated image never boots:
+`wendy install` refuses a target drive that cannot hold the image:
 
 ```
 sdb (/dev/sdb) is too small for this image: it holds 7.9 GB but the image needs 18.2 GB; use a larger SD card or drive
 ```
 
-When a block map is published, its image size is checked before the Wi-Fi, device-name and pre-enrollment prompts and before the download, so an undersized drive is rejected up front. The check runs again before writing, using the image actually written. It is skipped when the drive or image size cannot be determined.
+For an image with a GPT partition table, such as the Jetson NVMe images, the drive must hold the image's partitions plus the backup partition table, not the whole image. These images declare a disk far larger than their partitions use (the Jetson Orin Nano NVMe image declares 251 GB, but its partitions end at 27.6 GB, and `/data` grows to fill the drive on first boot). On a smaller drive, `wendy install` skips the empty tail of the image and then rewrites the partition table for the drive's real size, as `sgdisk -e` would. It does the same rewrite on a larger drive, so the partition table always matches the drive it is on. It refuses the drive if any partition would be cut off. Images without a GPT, such as the Raspberry Pi images, still need a drive at least as large as the whole image.
+
+When a block map is published, it is checked before the Wi-Fi, device-name and pre-enrollment prompts and before the download, so an undersized drive is rejected up front. For a GPT image this early check can only tell where the image's data ends ("needs at least …"). The exact check runs before writing, against the image's partition table, or against its size when it has none. It is skipped when the drive or image size cannot be determined.
 
 ### Image formats
 

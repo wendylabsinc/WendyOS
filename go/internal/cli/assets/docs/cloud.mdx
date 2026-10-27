@@ -1,171 +1,229 @@
 ---
-title: Cloud
-description: Manage your fleet from anywhere with the wendy cloud commands — enroll, discover, and operate WendyOS devices over the internet.
+title: Wendy Cloud
+description: Enroll devices, deploy apps, and operate remotely with Cloud v2. Existing Cloud v1 users can follow the Legacy tab.
 ---
 
-import { LogIn, Radar, Plug, Server } from 'lucide-react';
+Wendy Cloud connects your CLI to devices outside your local network. Enrolled
+devices connect outbound, so you do not need to open inbound ports or assign
+public IP addresses. You can still build and operate local devices without a
+Cloud account.
 
-## Managing Your Fleet
+Use **Cloud v2** for new setups. Choose **Legacy** if your devices still belong
+to Cloud v1. Signing into v2 does not move existing devices or applications.
+Follow [Moving to Cloud v2](/docs/cloud-migration) before migrating a deployment.
 
-Once a device leaves your desk it is no longer on your USB cable or your LAN, so
-the local `wendy device` workflow can't reach it. **Wendy Cloud** closes that
-gap: each device enrolls once, dials home to the cloud broker over mutually
-authenticated TLS, and from then on you can reach it by name from anywhere using
-the `wendy cloud` commands.
+<Tabs items={['Cloud v2', 'Legacy']}>
+<Tab value="Cloud v2">
 
-`wendy cloud` is the cloud-connected mirror of the local CLI. Everything you do
-to a single device over USB-C — inspect it, deploy apps, stream logs, update the
-agent — you can do to your whole fleet over the internet, with the same commands
-and the same zero-trust [PKI](/docs/advanced/cloud/requirements) backing every
-connection.
+## Start with Cloud v2
 
-<Cards>
-  <Card icon={<LogIn />} title="Authenticate once">
-    Log in to your organization and every following command reuses the stored
-    mTLS session.
-  </Card>
-  <Card icon={<Server />} title="Enroll devices">
-    Provision a device with a cloud identity so it appears in your fleet.
-  </Card>
-  <Card icon={<Radar />} title="Discover your fleet">
-    List which devices are online, their hardware type, and the agent version
-    they're running.
-  </Card>
-  <Card icon={<Plug />} title="Operate remotely">
-    Reach any enrolled device by name to deploy, debug, and update — wherever it is.
-  </Card>
-</Cards>
+These examples use CLI [2026.10.17-123916](https://github.com/wendylabsinc/WendyOS/releases/tag/2026.10.17-123916)
+or newer. You need the [current Wendy CLI](https://github.com/wendylabsinc/WendyOS/releases),
+access to your organization in [Wendy Cloud](https://cloud.wendy.dev/login), and
+a supported device running a compatible Wendy Agent. Keep local access to the
+device during its first enrollment. Use an owner or admin account to enroll it;
+access to other operations depends on your organization's permissions.
 
-## Authentication
-
-Before you can manage a fleet you authenticate the CLI with your cloud
-organization. `wendy cloud login` opens your dashboard in a browser, completes
-the OAuth handshake, then issues and stores an mTLS certificate that every
-later command uses automatically.
-
-| Command | What it does |
-|---------|--------------|
-| [`wendy cloud login`](/docs/advanced/clients/wendy-cli/commands/cloud/login) | Sign in to your organization and store an mTLS session. |
-| [`wendy cloud status`](/docs/advanced/clients/wendy-cli/commands/cloud/status) | Show who you're logged in as and the active endpoint. |
-| [`wendy cloud logout`](/docs/advanced/clients/wendy-cli/commands/cloud/logout) | Clear the stored session. |
+### Sign in and check your organization
 
 ```sh
 wendy cloud login
+wendy cloud status
 ```
 
-## Enrolling Devices
+The current CLI opens the production Cloud v2 sign-in page. Select your
+organization in the browser. The CLI saves a named context containing your
+Cloud session and operator certificate. An older CLI may default to Cloud v1;
+update it before following this guide.
 
-A device joins your fleet by enrolling: the CLI mints an enrollment token from
-your session and provisions the connected device with its own mTLS certificate.
-After enrollment the device connects to the cloud broker on its own and shows up
-in `wendy cloud discover`.
+If you have multiple saved contexts, sign-in can leave the previous context
+active. Use `wendy cloud status` to inspect their names and endpoints, then
+select the intended one:
 
 ```sh
-# Run while the new device is connected over USB-C
-wendy cloud enroll-device --name shop-floor-01
+wendy auth use <context-name>
 ```
 
-The device's certificate is what the cloud uses to authenticate and authorize it
-— see [Security](/docs/security) for the trust model.
+For v2, check that the selected context points to `cloud.wendy.dev` and reports
+an OIDC login. [Login options](/docs/advanced/clients/wendy-cli/commands/cloud/login)
+cover email-based sign-in and service accounts.
 
-## Discovering Your Fleet
+### Enroll a new device
 
-`wendy cloud discover` lists the devices in your organization. By default it
-shows only **online** devices; pass `--all` to include ones that are currently
-offline. In a terminal it opens a live table that refreshes every few seconds
-and shows each device's name, hardware type, and running agent version.
+Connect the device locally by USB networking or LAN, discover it, and enroll it
+using the selector returned by discovery:
 
 ```sh
-wendy cloud discover           # online devices, live table
-wendy cloud discover --all     # include offline devices
-wendy cloud discover --json    # machine-readable output for scripting
+wendy discover
+wendy cloud enroll-device --device <local-device-selector> --name shop-floor-01
+wendy cloud discover --all
 ```
 
-From the live table you can highlight a device and press `u` to update its agent
-to the latest release in place — a quick way to keep the fleet current. For
-scripted rollouts, `--json` gives you each device's stable numeric ID to feed
-into other commands.
+The device receives its own identity and Cloud binding. Wait for it to appear
+online before trying remote commands. A successful sign-in alone does not
+enroll a device. For an already enrolled v1 device, use the
+[migration guide](/docs/cloud-migration) instead of repeating enrollment.
 
-See [`wendy cloud discover`](/docs/advanced/clients/wendy-cli/commands/cloud/discover)
-for the full column, keyboard, and flag reference.
+Wendy Lite has a separate firmware workflow and requires physical USB access
+for enrollment. Start with [ESP32 setup](/docs/installation/wendy-lite-esp32).
+Mac targets also have their own [setup and limitations](/docs/installation/wendy-agent-macos).
 
-## Save a cloud device as the default
-
-Run `wendy device set-default` to open the device picker. Switch to the **Cloud**
-tab, highlight a device and press `d` to save it as the default. Press `d` again
-on the default to clear it. This shortcut also works in the live cloud discovery
-table.
-
-Later `wendy run` and `wendy device` commands use that cloud device when you omit
-`--device`. The saved choice includes its cloud endpoint, organization and asset
-ID, so renaming the device or changing your default organization does not change
-the target. If the saved device is offline or its login is missing, the command
-reports that problem. Use `--device` to override the default for one command.
-
-The **Simulator** tab supports the same shortcuts and saves `vm:<name>`. You can
-set a stopped simulator as default; a later command starts it when needed.
-
-## Operating Devices Remotely
-
-Everything under `wendy device` is mirrored under **`wendy cloud device`**, which
-routes the same operations through the cloud broker instead of a local
-connection. You address a device by its enrolled name (or numeric ID), and the
-rest of the command is identical to the local workflow.
+### Discover, deploy, and verify
 
 ```sh
-# List the apps running on a remote device
-wendy cloud device apps --device shop-floor-01
+wendy cloud discover
+wendy cloud discover --all
+wendy cloud discover --json
+```
 
-# Stream its logs from anywhere
+Discovery shows online devices by default. `--all` includes offline devices;
+`--json` supports scripts. Cloud v2 identifies devices with UUIDs. Use a name
+or UUID returned by discovery, rather than a legacy numeric asset ID.
+
+Run `wendy device set-default`, open its **Cloud** tab, and press **d** on the
+intended device. Press **d** again on the default to clear it; the same key works
+in the live `wendy cloud discover` table. The saved choice keeps its Cloud
+endpoint, organization, and device identity, so renaming the device or switching
+context does not retarget it. Use `--device` to override it for one command.
+From your app's project directory:
+
+```sh
+wendy run
+wendy cloud device apps list --device shop-floor-01
 wendy cloud device logs --device shop-floor-01
-
-# Push the latest agent to it
-wendy cloud device update --device shop-floor-01
 ```
 
-Because it mirrors the local commands, the [Device Management](/docs/device/managing-apps)
-guides apply unchanged — only the transport differs.
+The saved Cloud target makes `wendy run` deploy through Cloud. Check the app's
+state, logs, and expected output after deployment. A completed upload does not
+prove the application is ready. To reach an app's own web or API port
+remotely, use a tunnel as described below.
 
-### Tunnels
+### Reach services through a tunnel
 
-When you need a raw connection to a service running on a device — a web UI, a
-debugger, an SSH session — `wendy cloud tunnel` forwards a local port through the
-broker to the remote device.
+Cloud v2 forwards TCP or UDP to any port from 1 through 65535 on the device's
+loopback interface. Arbitrary ports need an updated Cloud service and CLI and
+Wendy Agent [2026.10.22-211023](https://github.com/wendylabsinc/WendyOS/releases/tag/2026.10.22-211023)
+or newer. Older v2 versions forward only TCP port **50052** for Wendy Agent and
+TCP port **22** for SSH.
 
 ```sh
-# Forward local port 8080 to port 80 on the device
-wendy cloud tunnel 8080:80 --device shop-floor-01
+# An HTTP service listening on device port 3000
+wendy cloud tunnel 8080:3000 --device shop-floor-01
+
+# A UDP service listening on device port 9000
+wendy cloud tunnel 9000:9000/udp --device shop-floor-01
+
+# The Wendy Agent service
+wendy cloud tunnel 15052:50052 --device shop-floor-01
 ```
 
-See [`wendy cloud tunnel`](/docs/advanced/clients/wendy-cli/commands/cloud/tunnel)
-for device selection and flag details.
+The Agent port is a transport for an authenticated client, not a web page.
+Forwarding it does not remove the Agent's authentication requirements. Keep the
+command running while using a tunnel, then press Ctrl+C to close it.
 
-## Notify operators from a device app
-
-An app running on an enrolled device can create a Wendy Notification for users,
-teams, or roles in its organization. Wendy Agent authenticates the app locally,
-Cloud records the Notification, and Companion receives it through its inbox and
-best-effort APNs delivery.
-
-See [Send notifications from a device app](/docs/guides/device-notifications)
-for the required app entitlement, Cloud grant, WendyKit example, and direct gRPC
-interface for other languages.
-
-## How It Works
-
-1. You authenticate once; the CLI stores an mTLS session for your organization.
-2. Each device enrolls and receives its own client certificate.
-3. Devices dial out to the cloud **broker** and keep a connection open — no
-   inbound ports or static IPs required.
-4. `wendy cloud` commands reach a device by name through that broker tunnel,
-   authenticated end to end with mTLS.
-
-This is the same architecture as the local CLI, extended across the internet.
-For the deeper reference — connectivity, the asset API, telemetry, and
-requirements — see the [Cloud reference](/docs/advanced/cloud/requirements).
-
-<Callout type="info">
-  Wendy Cloud is rolling out for teams scaling from a handful of prototypes to
-  thousands of devices. The `wendy cloud` commands described here are the
-  interface you'll use to manage that fleet.
+<Callout type="warn">
+  A tunnel reaches only a service that is already listening on the device. Port
+  22 works only when the target actually runs SSH; release Jetson and Raspberry
+  Pi images do not include an SSH server.
 </Callout>
+
+Cloud selects the v2 relay. Do not pass `--broker-url` for a v2 session.
+See the [tunnel reference](/docs/advanced/cloud/tunnel) for UDP limits,
+selection rules, and errors.
+
+### Use service accounts for automation
+
+A tenant admin can create a service account and enroll its key. Then sign in
+without an interactive browser:
+
+```sh
+wendy cloud login --service-account ./wendy-service-account.json
+```
+
+Follow [service-account setup](/docs/advanced/clients/wendy-cli/commands/auth/login#service-account-login)
+to create the key and configure CI. Service-account login does not issue an
+operator certificate. Successful sign-in does not imply that device deployment,
+compute-device tunnels, or certificate-signed operations are available to that
+account. Check the operation's permissions and supported principal type before
+moving an unattended collector or deployment pipeline to v2.
+
+</Tab>
+<Tab value="Legacy">
+
+## Keep using Cloud v1
+
+Use this path for devices that are still enrolled in
+[legacy Wendy Cloud](https://cloud.wendy.sh). The current CLI retains the v1
+login flow behind an explicit flag:
+
+```sh
+wendy cloud login --legacy
+wendy cloud status
+```
+
+If another saved context is active, select the legacy context by the name shown
+in `status`:
+
+```sh
+wendy auth use <legacy-context-name>
+wendy cloud discover --all
+```
+
+Check that its dashboard is `cloud.wendy.sh` and its login path is legacy.
+`wendy auth login --legacy` is an equivalent entry point. Signing into v2
+does not replace the credentials installed on your v1 devices.
+
+### Operate existing devices
+
+```sh
+wendy cloud device apps list --device shop-floor-01
+wendy cloud device logs --device shop-floor-01
+```
+
+Legacy discovery supports numeric asset IDs as well as device names. Keep
+existing scripts on their matching legacy context until you have validated the
+v2 replacements. To deploy, select the device in the **Cloud** tab of
+`wendy device set-default`, then run `wendy run` from your project.
+
+### Forward an application port or UDP service
+
+Legacy sessions keep their existing TCP and UDP forwarding. Each example needs
+a service already running on the remote device.
+
+```sh
+# An existing HTTP service listening on device port 80
+wendy cloud tunnel 8080:80 --device shop-floor-01
+
+# An existing UDP service listening on device port 9000
+wendy cloud tunnel 9000:9000/udp --device shop-floor-01
+```
+
+For a complete UDP example, use
+[Reach a UDP service through Wendy Cloud](/docs/guides/tutorials/python/cloud-udp-service).
+Keep the tunnel running while using the service.
+
+### Plan your upgrade
+
+Check application ports and UDP, unattended access, notification delivery, and
+Companion support before changing device enrollment. On v2, application ports
+and UDP need the updated Cloud, CLI, and Agent versions. Use
+[Moving to Cloud v2](/docs/cloud-migration) to validate a spare device and plan
+the cutover. Keep the working v1 deployment until its replacement is verified.
+
+</Tab>
+</Tabs>
+
+## Connect Cloud to the rest of Wendy
+
+| What you want to do | Start here | What to check |
+| --- | --- | --- |
+| Alert operators in Companion | [Send notifications from an app](/docs/guides/device-notifications) | App registration, assignment, notification entitlement, Cloud grant, and a compatible signed-in Companion build. Push delivery is best-effort. |
+| Record sensor data or model results | [Wendy Data](/docs/data) | Recordings can stay local. Cloud enrollment alone does not configure upload, retention, or a BI connection. |
+| Analyze operating data | [Wendy BI](https://wendy.dev/products/wendy-bi) | BI has its own access and data-connection setup. Confirm the supported source and integration with the Wendy team. |
+| Work through an AI assistant | [MCP setup](/docs/guides/llm-integration) and [ChatGPT setup](/docs/guides/chatgpt) | Local tools and hosted access have different setup requirements. Device permissions still apply. |
+
+For a product map, see [The Wendy ecosystem](/docs/concepts/ecosystem).
+For device identities, permissions, and unfinished security controls, see
+[Security](/docs/security). The [Cloud reference](/docs/advanced/cloud/requirements)
+contains protocol requirements; requirements are not a guarantee that every
+workflow is available in the deployed service.

@@ -2042,6 +2042,25 @@ func TestLoadComposeCompanion_ContextNotRequired(t *testing.T) {
 	}
 }
 
+func TestLoadComposeCompanion_ServiceInheritsROS2Scope(t *testing.T) {
+	// A service without its own ROS 2 config runs with the app's, so its
+	// bridge network must fail scope "device" just as Validate fails it.
+	dir := t.TempDir()
+	data := `{
+		"appId": "com.example.robot",
+		"frameworks": { "ros2": { "scope": "device" } },
+		"services": {
+			"vision": { "entitlements": [{ "type": "network", "mode": "bridge" }] }
+		}
+	}`
+	if err := os.WriteFile(filepath.Join(dir, "wendy.json"), []byte(data), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := LoadComposeCompanion(dir); err == nil || !strings.Contains(err.Error(), `services["vision"]`) {
+		t.Fatalf("LoadComposeCompanion error = %v, want the inherited scope rejected for vision", err)
+	}
+}
+
 func TestFrameworksConfig_ParseJSON(t *testing.T) {
 	data := `{
 		"appId": "com.example.app",

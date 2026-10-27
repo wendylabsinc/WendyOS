@@ -38,6 +38,13 @@ const (
 	defaultMTLSPort = 50052
 )
 
+// brokerRunOnceFn, brokerNowFn and brokerAfterFn are seams for tests.
+var (
+	brokerRunOnceFn = (*TunnelBrokerClient).runOnce
+	brokerNowFn     = time.Now
+	brokerAfterFn   = time.After
+)
+
 type TunnelBrokerClient struct {
 	logger   *zap.Logger
 	url      string
@@ -90,14 +97,15 @@ func brokerIdentityFromCert(logger *zap.Logger, certPEM string) string {
 func (c *TunnelBrokerClient) Run(ctx context.Context) {
 	attempt := 0
 	for {
-		if err := c.runOnce(ctx); err != nil {
+		started := brokerNowFn()
+		if err := brokerRunOnceFn(c, ctx); err != nil {
 			if ctx.Err() != nil {
 				return
 			}
 			moved := errors.Is(err, errBrokerPathMoved)
-			if moved {
-				// Not a failure, but still pause: the broker must finish
-				// dropping the old stream before the new one registers.
+			// A path move or a session that outlived the longest backoff is not a
+			// failure, but still pause: the broker must drop the old stream first.
+			if moved || brokerNowFn().Sub(started) >= brokerMaxBackoff {
 				attempt = 0
 			}
 			backoff := time.Duration(math.Min(
@@ -109,7 +117,7 @@ func (c *TunnelBrokerClient) Run(ctx context.Context) {
 					zap.Error(err), zap.Duration("backoff", backoff))
 			}
 			select {
-			case <-time.After(backoff):
+			case <-brokerAfterFn(backoff):
 			case <-ctx.Done():
 				return
 			}
@@ -262,7 +270,7 @@ func brokerTLSConfig(logger *zap.Logger, certPEM, keyPEM, chainPEM string) (*tls
 		RootCAs:    caPool,
 	}
 
-	// Present the device's ECDSA leaf certificate so the broker can authenticate
+	// Present the device's leaf certificate (P-256 or ML-DSA-65) so the broker can authenticate
 	// this connection via mTLS once it starts requesting client certs. Loading
 	// only the leaf (not the ML-DSA CA chain) keeps Go's TLS stack from tripping
 	// over ML-DSA parse failures.

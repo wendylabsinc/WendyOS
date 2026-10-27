@@ -18,6 +18,7 @@ import (
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/health"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
+	"google.golang.org/grpc/keepalive"
 )
 
 func TestDeviceCloudMTLSChainAndHostname(t *testing.T) {
@@ -121,6 +122,44 @@ func TestLiteBrokerHost(t *testing.T) {
 		t.Run("invalid/"+cloud, func(t *testing.T) {
 			if _, err := LiteBrokerHost(cloud); err == nil {
 				t.Fatalf("accepted invalid Cloud endpoint %q", cloud)
+			}
+		})
+	}
+}
+
+// Both Cloud dials must pass brokerKeepalive to gRPC. Pings faster than
+// Cloud's 10s floor are answered with GOAWAY (BrokerHTTP2Config.swift), and an
+// idle presence stream must keep pinging or it is dropped as idle.
+func TestBrokerDialsUseCloudKeepalive(t *testing.T) {
+	want := keepalive.ClientParameters{Time: 30 * time.Second, Timeout: 20 * time.Second, PermitWithoutStream: true}
+	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	template := &x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "device"}, NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour), KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}}
+	der, e := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if e != nil {
+		t.Fatal(e)
+	}
+	rawKey, _ := x509.MarshalECPrivateKey(key)
+	certPEM := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: rawKey})
+
+	for name, dial := range map[string]func() (*grpc.ClientConn, error){
+		"DialCloud":  func() (*grpc.ClientConn, error) { return DialCloud("devices.example:443", certPEM, certPEM, keyPEM) },
+		"DialBroker": func() (*grpc.ClientConn, error) { return DialBroker("broker.example:443") },
+	} {
+		t.Run(name, func(t *testing.T) {
+			var got []keepalive.ClientParameters
+			defer func(orig func(keepalive.ClientParameters) grpc.DialOption) { withKeepalive = orig }(withKeepalive)
+			withKeepalive = func(p keepalive.ClientParameters) grpc.DialOption {
+				got = append(got, p)
+				return grpc.WithKeepaliveParams(p)
+			}
+			conn, e := dial()
+			if e != nil {
+				t.Fatal(e)
+			}
+			conn.Close()
+			if len(got) != 1 || got[0] != want {
+				t.Fatalf("keepalive dial options = %+v, want exactly %+v", got, want)
 			}
 		})
 	}

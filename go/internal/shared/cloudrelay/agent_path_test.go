@@ -150,11 +150,21 @@ func TestPresencePathProbeBackoffDoesNotDelaySourceRemoval(t *testing.T) {
 }
 
 // Exercise a real accepted gRPC presence stream, including its transport peer
-// context. Removing its source must end presence and invalidate the committed
-// lease without waiting for server traffic, renewal, or TCP retransmission.
+// context. Removing its source must end presence without waiting for server
+// traffic, renewal, or TCP retransmission, and keep the still-valid lease. A
+// lease that expires before the reconnect is replaced, not re-presented.
 func TestAgentEndsPresenceWhenPathChanges(t *testing.T) {
-	for _, removedSource := range []bool{true, false} {
-		t.Run(map[bool]string{true: "removed", false: "moved"}[removedSource], func(t *testing.T) {
+	for _, tc := range []struct {
+		name                   string
+		removedSource, expired bool
+	}{
+		{"removed", true, false},
+		{"moved", false, false},
+		{"removed/expired lease", true, true},
+		{"moved/expired lease", false, true},
+	} {
+		removedSource := tc.removedSource
+		t.Run(tc.name, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -221,13 +231,41 @@ func TestAgentEndsPresenceWhenPathChanges(t *testing.T) {
 			case <-ctx.Done():
 				t.Fatal("removed source kept stale presence")
 			}
-			if a.lease != nil {
-				t.Fatal("committed lease retained")
+			// The broker never refused the lease, so the reconnect presents
+			// it again instead of asking Cloud for a new one.
+			if a.lease == nil {
+				t.Fatal("valid lease dropped on a path change")
 			}
-			if _, err := os.Stat(filepath.Join(a.StateDir, "lease.pb")); !os.IsNotExist(err) {
-				t.Fatalf("persisted lease retained: %v", err)
+			if _, err := os.Stat(filepath.Join(a.StateDir, "lease.pb")); err != nil {
+				t.Fatalf("persisted lease dropped: %v", err)
 			}
-
+			r.mu.Lock()
+			issued, issues := r.lease.JTI, r.issues
+			r.mu.Unlock()
+			if tc.expired {
+				a.leaseClaims.Exp = time.Now().Unix()
+			}
+			r.reconnected = make(chan struct{})
+			removed.Store(false)
+			go func() { done <- a.runOnce(ctx) }()
+			select {
+			case <-r.reconnected:
+			case err := <-done:
+				t.Fatalf("reconnect failed: %v", err)
+			case <-ctx.Done():
+				t.Fatal("presence did not reconnect")
+			}
+			cancel()
+			<-done
+			r.mu.Lock()
+			defer r.mu.Unlock()
+			if tc.expired {
+				if r.issues-issues != 1 || r.lease.JTI == issued {
+					t.Fatalf("expired lease reconnect issued %d leases, want 1", r.issues-issues)
+				}
+			} else if r.issues != issues || r.lease.JTI != issued {
+				t.Fatal("path change requested a new lease while the current one was valid")
+			}
 		})
 	}
 }

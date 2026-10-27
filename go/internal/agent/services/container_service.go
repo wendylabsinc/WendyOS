@@ -202,7 +202,42 @@ func (s *ContainerService) CreateContainer(ctx context.Context, req *agentpb.Cre
 		zap.String("app_name", req.GetAppName()),
 		zap.String("image", req.GetImageName()),
 	)
-	return &agentpb.CreateContainerResponse{}, nil
+	return &agentpb.CreateContainerResponse{ImageDigest: s.imageDigest(ctx, req.GetImageName())}, nil
+}
+
+// imageDigester is the optional capability that reports the manifest digest of
+// a created container's image, which a recorded deploy stores on its release.
+type imageDigester interface {
+	ImageDigest(ctx context.Context, imageName string) (string, error)
+}
+
+// imageDigest is the digest for a create response; nil when the runtime cannot
+// tell, which an older agent's response reads as too.
+func (s *ContainerService) imageDigest(ctx context.Context, imageName string) *string {
+	d, ok := s.containerd.(imageDigester)
+	if !ok {
+		return nil
+	}
+	digest, err := d.ImageDigest(ctx, imageName)
+	if err != nil {
+		s.logger.Warn("image digest unavailable", zap.String("image", imageName), zap.Error(err))
+		return nil
+	}
+	return &digest
+}
+
+// startedDigestStream fills the image digest into the Started message of a
+// RunContainer stream.
+type startedDigestStream struct {
+	grpc.ServerStreamingServer[agentpb.RunContainerLayersResponse]
+	digest *string
+}
+
+func (w startedDigestStream) Send(m *agentpb.RunContainerLayersResponse) error {
+	if started := m.GetStarted(); started != nil {
+		started.ImageDigest = w.digest
+	}
+	return w.ServerStreamingServer.Send(m)
 }
 
 // ValidateContainer reports whether CreateContainer would accept req, without
@@ -243,7 +278,7 @@ func (s *ContainerService) CreateContainerWithProgress(req *agentpb.CreateContai
 	// Send completed response.
 	return stream.Send(&agentpb.CreateContainerProgressResponse{
 		ResponseType: &agentpb.CreateContainerProgressResponse_Completed{
-			Completed: &agentpb.CreateContainerResponse{},
+			Completed: &agentpb.CreateContainerResponse{ImageDigest: s.imageDigest(stream.Context(), req.GetImageName())},
 		},
 	})
 }
@@ -460,6 +495,7 @@ func (s *ContainerService) RunContainer(req *agentpb.RunContainerLayersRequest, 
 		RestartPolicy: req.GetRestartPolicy(),
 		UserArgs:      req.GetUserArgs(),
 		Env:           req.GetEnv(),
+		ReleaseId:     req.ReleaseId,
 	}
 
 	if err := s.containerd.CreateContainer(ctx, createReq, appCfg); err != nil {
@@ -476,7 +512,8 @@ func (s *ContainerService) RunContainer(req *agentpb.RunContainerLayersRequest, 
 		zap.Duration("create_container", createDur),
 		zap.Duration("total_before_start", time.Since(runStartedAt)))
 
-	return s.streamContainerOutput(ctx, req.GetAppName(), postStartAgentHookFromContext(ctx), nil, stream)
+	digestStream := startedDigestStream{stream, s.imageDigest(ctx, req.GetImageName())}
+	return s.streamContainerOutput(ctx, req.GetAppName(), postStartAgentHookFromContext(ctx), nil, digestStream)
 }
 
 func (s *ContainerService) StartContainer(req *agentpb.StartContainerRequest, stream grpc.ServerStreamingServer[agentpb.RunContainerLayersResponse]) error {

@@ -12,6 +12,7 @@ import (
 	pb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 )
 
@@ -49,22 +50,50 @@ func (s *LocalMeshAdminService) SetRuntimeStatusSource(source func() LocalMeshRu
 	s.mu.Unlock()
 }
 
+// authorize admits only a user certificate in this device's tenant. It gates
+// ConfigureLocalMesh, whose audit log names that user.
 func (s *LocalMeshAdminService) authorize(ctx context.Context) (meshid.Device, error) {
 	actor, err := userIdentityFromContext(ctx, "administering wendy net")
 	if err != nil {
 		return meshid.Device{}, err
 	}
-	if s.identity == nil {
-		return meshid.Device{}, status.Error(codes.FailedPrecondition, "device identity unavailable")
-	}
-	tenant, device := s.identity()
-	if tenant == (meshid.Tenant{}) || device == (meshid.Device{}) {
-		return meshid.Device{}, status.Error(codes.FailedPrecondition, "device must be enrolled")
+	tenant, device, err := s.enrolledIdentity()
+	if err != nil {
+		return meshid.Device{}, err
 	}
 	if actor.TenantUUID == "" || actor.TenantUUID != tenant.UUID().String() {
 		return meshid.Device{}, status.Error(codes.PermissionDenied, "wendy net administration requires a user in this device's tenant")
 	}
 	return device, nil
+}
+
+// authorizeRead gates the read-only RPCs. Beyond what authorize admits, it
+// admits the local admin socket: that caller has no certificate, but reaching
+// the socket is already full-agent authority (see onLocalAdminSocket), so
+// withholding this device's own Wendy Net view from it protects nothing. The
+// plaintext provisioning listener has no certificate either, but it is TCP, so
+// it falls through to authorize and is refused. Writes stay user-only, as
+// SetBuildHostEnabled does: they change which radios run and what this device
+// offers its tenant, and the audit log should name the person who did that.
+func (s *LocalMeshAdminService) authorizeRead(ctx context.Context) (meshid.Device, error) {
+	if p, ok := peer.FromContext(ctx); ok && onLocalAdminSocket(p) {
+		_, device, err := s.enrolledIdentity()
+		return device, err
+	}
+	return s.authorize(ctx)
+}
+
+// enrolledIdentity re-reads the device identity on every call, because
+// enrollment can replace it while the agent runs.
+func (s *LocalMeshAdminService) enrolledIdentity() (meshid.Tenant, meshid.Device, error) {
+	if s.identity == nil {
+		return meshid.Tenant{}, meshid.Device{}, status.Error(codes.FailedPrecondition, "device identity unavailable")
+	}
+	tenant, device := s.identity()
+	if tenant == (meshid.Tenant{}) || device == (meshid.Device{}) {
+		return meshid.Tenant{}, meshid.Device{}, status.Error(codes.FailedPrecondition, "device must be enrolled")
+	}
+	return tenant, device, nil
 }
 
 func (s *LocalMeshAdminService) read(device meshid.Device) (meshsharing.Config, localmesh.TCPConfig, error) {
@@ -82,16 +111,22 @@ func (s *LocalMeshAdminService) read(device meshid.Device) (meshsharing.Config, 
 	return sharing, *carriers, nil
 }
 
-func (s *LocalMeshAdminService) response(sharing meshsharing.Config, carriers localmesh.TCPConfig) *pb.LocalMeshStatus {
+// savedIntent reports the saved configuration with no runtime observation.
+// Participation stays pending until the runtime reports on it.
+func savedIntent(sharing meshsharing.Config, carriers localmesh.TCPConfig) *pb.LocalMeshStatus {
 	state, detail := "disabled", "Wendy net is disabled."
 	if sharing.Participate {
 		state, detail = "pending-runtime", "Configuration is saved; awaiting runtime state."
 	}
-	out := &pb.LocalMeshStatus{Configured: &pb.LocalMeshConfiguration{
+	return &pb.LocalMeshStatus{Configured: &pb.LocalMeshConfiguration{
 		Participate: sharing.Participate, Roam: sharing.Roam, ShareUplink: sharing.ShareUplink,
 		Nan: carriers.NAN, Ble: carriers.BLE, Ethernet: carriers.Ethernet, InfrastructureWifi: carriers.InfrastructureWiFi,
 		TcpListen: carriers.Listen, ConfiguredTcpPeers: uint32(len(carriers.Peers)),
 	}, State: state, Detail: detail}
+}
+
+func (s *LocalMeshAdminService) response(sharing meshsharing.Config, carriers localmesh.TCPConfig) *pb.LocalMeshStatus {
+	out := savedIntent(sharing, carriers)
 	if s.runtime != nil {
 		runtime := s.runtime()
 		out.RuntimeAvailable = runtime.Available
@@ -110,7 +145,7 @@ func (s *LocalMeshAdminService) response(sharing meshsharing.Config, carriers lo
 }
 
 func (s *LocalMeshAdminService) GetLocalMeshStatus(ctx context.Context, _ *pb.GetLocalMeshStatusRequest) (*pb.LocalMeshStatus, error) {
-	device, err := s.authorize(ctx)
+	device, err := s.authorizeRead(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -187,5 +222,8 @@ func (s *LocalMeshAdminService) ConfigureLocalMesh(ctx context.Context, req *pb.
 			zap.Bool("nan", carriers.NAN), zap.Bool("ble", carriers.BLE),
 			zap.Bool("ethernet", carriers.Ethernet), zap.Bool("infrastructureWifi", carriers.InfrastructureWiFi))
 	}
-	return s.response(sharing, carriers), nil
+	// The runtime polls the saved documents. Even an unchanged request can be
+	// a retry before it applies the previous change. Always acknowledge saved
+	// intent; GetLocalMeshStatus provides runtime observations.
+	return savedIntent(sharing, carriers), nil
 }

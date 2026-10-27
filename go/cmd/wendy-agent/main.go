@@ -1215,6 +1215,28 @@ func main() {
 		meshRoster.RunSync(ctx, 5*time.Minute)
 	}()
 
+	// Report every app's state to cloud (apps spec section 2). Like the
+	// roster it starts unconditionally and stays silent until enrolled.
+	var reportedState *services.ReportedState
+	var postbox *services.Postbox
+	if ctrdErr == nil {
+		reportedState = services.NewReportedState(logger, ctrdClient, telemetryBuf, cloudGRPCURLForCloudHost(cloudHost), certPEM, keyPEM, chainPEM)
+		// The operator-signed postbox (AAA contract section 5.3): woken by the
+		// reported-state nudge, it applies only what it verifies itself.
+		postbox = services.NewPostbox(logger, telemetryBuf, configPath, services.NewPostboxControl(containerSvc))
+		postbox.UpdateIdentity(cloudGRPCURLForCloudHost(cloudHost), certPEM, keyPEM, chainPEM)
+		reportedState.AttachPostbox(postbox)
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			reportedState.Run(ctx)
+		}()
+		go func() {
+			defer wg.Done()
+			postbox.Run(ctx)
+		}()
+	}
+
 	if alreadyProvisioned {
 		startMTLSServer(certPEM, chainPEM, keyPEM)
 		startTunnelBroker()
@@ -1365,6 +1387,10 @@ func main() {
 		// peer, until the agent is restarted — so swap in the freshly issued
 		// identity here.
 		meshRoster.UpdateIdentity(cloudGRPCURLForCloudHost(cloudHost), certPEM, keyPEM, chainPEM)
+		if reportedState != nil {
+			reportedState.UpdateIdentity(cloudGRPCURLForCloudHost(cloudHost), certPEM, keyPEM, chainPEM)
+			postbox.UpdateIdentity(cloudGRPCURLForCloudHost(cloudHost), certPEM, keyPEM, chainPEM)
+		}
 		// The freshly issued identity may name a different tenant than the
 		// boot snapshot. Retire every VIP slot outside the new tenant (they
 		// are never re-allocated) and re-point DNS at the new scope.
@@ -1412,6 +1438,10 @@ func main() {
 		localMeshMu.Unlock()
 		meshDialer.UpdateIdentity("", "", "")
 		meshRoster.UpdateIdentity("", "", "", "")
+		if reportedState != nil {
+			reportedState.UpdateIdentity("", "", "", "")
+			postbox.UpdateIdentity("", "", "", "")
+		}
 		_ = meshProxy.Close()
 		if udpProxy != nil {
 			_ = udpProxy.Close()
@@ -1433,6 +1463,15 @@ func main() {
 		logger.Info("Device unprovisioned — restarting agent into unprovisioned mode")
 		os.Exit(0)
 	}
+
+	// Renew the device certificate before it expires, with a fresh ML-DSA-65
+	// key. The renewed identity loads through the same clean restart.
+	// ponytail: restart per renewal (once per lifetime/3); swap in place if
+	// restarts start to hurt.
+	go provisioningSvc.RunRenewal(ctx, func() {
+		logger.Info("Device certificate renewed — restarting agent to load the new identity")
+		os.Exit(0)
+	})
 
 	// Enrollment is non-blocking and begins only after callbacks are installed.
 	// A baked ACME credential must not fall through to legacy enrollment when

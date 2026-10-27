@@ -45,7 +45,9 @@ func (s *ProvisioningServiceV2) StartACMEProvisioning(ctx context.Context, req *
 	if svc.enrolled {
 		return nil, status.Error(codes.FailedPrecondition, "agent is already provisioned")
 	}
-	keyPEM, err := svc.loadOrGenerateKey()
+	// pki-core accepts ML-DSA-65 for tier A/B and refuses it for tier C by the
+	// token's profile; the agent never chooses by tier (sem 2026-10-20 21:29).
+	keyPEM, err := svc.loadOrGenerateKey(true)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "loading device key: %v", err)
 	}

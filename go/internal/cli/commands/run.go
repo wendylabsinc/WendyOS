@@ -316,6 +316,7 @@ func createContainerWithProgressPlain(stream agentpb.WendyContainerService_Creat
 				cliLogln("Creating container...")
 			}
 		case *agentpb.CreateContainerProgressResponse_Completed:
+			noteImageDigest(stream.Context(), r.Completed.GetImageDigest())
 			completed = true
 		}
 
@@ -340,9 +341,11 @@ func isUnimplementedRPCError(err error) bool {
 }
 
 func createContainerWithoutProgress(ctx context.Context, svc agentpb.WendyContainerServiceClient, req *agentpb.CreateContainerRequest) error {
-	if _, err := svc.CreateContainer(ctx, req); err != nil {
+	resp, err := svc.CreateContainer(ctx, req)
+	if err != nil {
 		return fmt.Errorf("creating container: %w", err)
 	}
+	noteImageDigest(ctx, resp.GetImageDigest())
 	return nil
 }
 
@@ -418,6 +421,7 @@ func createContainerWithProgressTUI(cancel context.CancelFunc, stream agentpb.We
 					}
 				}
 			case *agentpb.CreateContainerProgressResponse_Completed:
+				noteImageDigest(stream.Context(), r.Completed.GetImageDigest())
 				completed = true
 				if !progressDone {
 					progressDone = true
@@ -529,7 +533,11 @@ type runOptions struct {
 	debug                 bool
 	deploy                bool
 	skipCloudRegistration bool
-	detach                bool
+	// recordRelease is the tag of the release this deploy is recorded as
+	// (--record-release); empty records nothing. release records it.
+	recordRelease string
+	release       *deployRelease
+	detach        bool
 	// detachedOutput enables the ordinary CLI run result. Fleet and internal
 	// provisioning callers own their output and leave this false.
 	detachedOutput       bool
@@ -687,6 +695,7 @@ func newRunCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&opts.debug, "debug", false, "Enable debug logging")
 	cmd.Flags().BoolVar(&opts.deploy, "deploy", false, "Create container but do not start it")
 	cmd.Flags().BoolVar(&opts.skipCloudRegistration, "skip-cloud-registration", false, "Deploy without registering apps in Cloud (offline use)")
+	cmd.Flags().StringVar(&opts.recordRelease, "record-release", "", "Record this deploy in Cloud as a release with this tag (off by default)")
 	cmd.Flags().BoolVar(&opts.detach, "detach", false, "Start container and return without streaming logs or opening the app URL; waits for readiness only with --wait-ready")
 	addReadinessFlags(cmd, &opts)
 	cmd.Flags().BoolVarP(&opts.yes, "yes", "y", false, "Automatically accept all interactive prompts")
@@ -1042,6 +1051,10 @@ func runCommand(ctx context.Context, opts runOptions) (retErr error) {
 		if err := validateFleetRun(extras, opts.buildHost, opts.detach); err != nil {
 			return err
 		}
+		// Every device would carry the release created for the first one.
+		if opts.recordRelease != "" {
+			return errRecordReleaseUnsupported("a deploy to several devices")
+		}
 		deviceFlag = primary
 		opts.fleetDevices = extras
 		opts.detachedOutput = false
@@ -1083,6 +1096,9 @@ func runCommand(ctx context.Context, opts runOptions) (retErr error) {
 		}
 		if opts.waitReady {
 			return errWaitReadyUnsupported("Compose projects")
+		}
+		if opts.recordRelease != "" {
+			return errRecordReleaseUnsupported("a Compose project")
 		}
 		return runComposeCommand(ctx, cwd, opts)
 	}
@@ -1845,6 +1861,9 @@ func runWithProvider(ctx context.Context, p providers.DeviceProvider, device mod
 	if opts.waitReady || opts.readinessTimeout != 0 {
 		return commandErrorf(errConfigInvalid, "--wait-ready and --readiness-timeout require a WendyOS device target")
 	}
+	if opts.recordRelease != "" {
+		return errRecordReleaseUnsupported("a deploy to a provider target")
+	}
 	if opts.builder != "" {
 		return commandErrorf(errConfigInvalid, "--builder is only used when --device selects a WendyOS device; use --device docker or --device apple-container for local provider runs")
 	}
@@ -2003,7 +2022,7 @@ func providerBuild(ctx context.Context, p providers.DeviceProvider, device model
 	if !errors.As(err, &missingCore) {
 		return app, err
 	}
-	if err := setupLiteProject(ctx, projectPath, opts.yes); err != nil {
+	if err := setupLiteProject(ctx, projectPath, missingCore.Toolchain, opts.yes); err != nil {
 		return nil, err
 	}
 	return p.Build(ctx, device, projectPath, projectType, product, opts.debug)
@@ -2186,13 +2205,40 @@ func runWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cwd str
 		return err
 	}
 	opts = opts.withConfiguredRestartPolicy(appCfg.RestartPolicy)
+	if opts.recordRelease != "" {
+		// ponytail: one container per recorded deploy; multi-service apps and
+		// watch loops need a release per service or per cycle first.
+		switch {
+		case len(appCfg.Services) > 0:
+			return errRecordReleaseUnsupported("a multi-service app")
+		case opts.isWatch():
+			return errRecordReleaseUnsupported("a --watch loop")
+		case opts.skipCloudRegistration:
+			return errRecordReleaseUnsupported("an offline deploy (--skip-cloud-registration)")
+		}
+		var err error
+		if opts.release, err = newDeployRelease(appCfg.AppID, opts.recordRelease); err != nil {
+			return err
+		}
+	}
 	if err := registerCloudApps(ctx, conn, []string{appCfg.AppID}, opts.skipCloudRegistration); err != nil {
 		return err
+	}
+	if opts.release != nil {
+		if err := opts.release.prepare(ctx, deploymentProvisioningService{conn}, config.Load); err != nil {
+			return err
+		}
+		ctx = withDeployRelease(ctx, opts.release)
 	}
 	metrics := newDeployMetrics(opts)
 	metrics.ctx = ctx
 	err := runWithAgentRecorded(ctx, conn, cwd, appCfg, opts, metrics)
 	metrics.emit(err)
+	if opts.release != nil {
+		if recErr := opts.release.outcome(err); recErr != nil {
+			err = errors.Join(err, recErr)
+		}
+	}
 	return err
 }
 
@@ -2404,7 +2450,8 @@ func runWithAgentRecorded(ctx context.Context, conn *grpcclient.AgentConnection,
 	// hashed only when they can use it: an unpinned FROM python:3.12-slim
 	// never reads it (WDY-3216).
 	deviceKey := deviceFingerprintKey(versionResp)
-	fingerprintUsed := !isDarwinAgent && !opts.deploy
+	// A recorded deploy always creates its container, so it carries the release.
+	fingerprintUsed := !isDarwinAgent && !opts.deploy && opts.release == nil
 	desiredHash, hashErr := "", errBasesNotPinned
 	if fingerprintUsed {
 		desiredHash, hashErr = singleServiceDesiredHash(cwd, opts.dockerfile, platform, resolvedStagefileBackend(ctx), buildArgs, deployEnv, appCfg, opts)
@@ -2771,10 +2818,14 @@ func resolveServiceEnv(appCfg *appconfig.AppConfig) []string {
 // optionally starts it, streams output, and manages readiness + postStart hooks.
 func startAndStreamContainer(ctx context.Context, conn *grpcclient.AgentConnection, appCfg *appconfig.AppConfig, createReq *agentpb.CreateContainerRequest, opts runOptions) error {
 	activationStep(ctx, "deploy", nil)
+	releaseID, err := opts.release.begin(ctx)
+	if err != nil {
+		return err
+	}
+	createReq.ReleaseId = releaseID
 	if opts.deploy {
-		_, err := conn.ContainerService.CreateContainer(ctx, createReq)
-		if err != nil {
-			return fmt.Errorf("creating container: %w", err)
+		if err := createContainerWithoutProgress(ctx, conn.ContainerService, createReq); err != nil {
+			return err
 		}
 		cliLogln("Container %s created (not started).", containerDisplayName(appCfg))
 		return nil
@@ -3612,6 +3663,8 @@ func streamRunContainerWithStarted(ctx context.Context, conn *grpcclient.AgentCo
 				}
 			}
 			rc("  ↳ runcontainer: device create+start")
+			// Storing the digest is a Cloud call, not the device's create+start.
+			noteImageDigest(ctx, resp.GetStarted().GetImageDigest())
 			if opts.deploy {
 				cliLogln("Container %s created (not started).", containerDisplayName(appCfg))
 				return nil
@@ -4099,6 +4152,10 @@ func deployByChunkDiff(ctx context.Context, conn *grpcclient.AgentConnection, cw
 		logSub = startRunLogSubscription(ctx, pushConn, appCfg.AppID, os.Stdout, runLogStreamWarning)
 		defer logSub.stop()
 	}
+	releaseID, err := opts.release.begin(ctx)
+	if err != nil {
+		return nil, hint, err
+	}
 	runStarted := time.Now()
 	stream, err := pushConn.ContainerService.RunContainer(runCtx, &agentpb.RunContainerLayersRequest{
 		ImageName:      imageName,
@@ -4110,6 +4167,7 @@ func deployByChunkDiff(ctx context.Context, conn *grpcclient.AgentConnection, cw
 		UserArgs:       opts.userArgs,
 		ImageSignature: imageSignature,
 		Env:            deployEnv,
+		ReleaseId:      releaseID,
 	})
 	if err != nil {
 		return nil, hint, err

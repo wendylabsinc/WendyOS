@@ -186,6 +186,25 @@ func TestLEUpdateUsesValidNegotiatedParameters(t *testing.T) {
 	}
 }
 
+func TestLEUpdateIgnoresMaximumLengthEvents(t *testing.T) {
+	// The HCI monitor also delivers unrelated events with up to 255 parameter
+	// bytes, such as advertising reports. They must be skipped, not crash.
+	for _, length := range []int{252, 253, 254, 255} {
+		packet := make([]byte, 3+length)
+		packet[0], packet[1], packet[2] = hciEventPacket, hciLEMetaEvent, byte(length)
+		if event := parseLEUpdateEvent(packet, 0x0800); event != (updateEvent{}) {
+			t.Fatalf("%d-byte event parsed as %+v", length, event)
+		}
+		interval, err := waitForLEUpdate(context.Background(), 0x0800, meshIntervalUnits, eventReader(
+			leConnectionUpdateCommand(0x0800, meshIntervalUnits), packet, statusPacket(0),
+			completePacket(0x0800, 12, 0, 400, 0),
+		))
+		if err != nil || interval != 15*time.Millisecond {
+			t.Fatalf("%d-byte event: interval=%s err=%v", length, interval, err)
+		}
+	}
+}
+
 func TestLEUpdateDoesNotAcceptOldEventLengthCommand(t *testing.T) {
 	old := leConnectionUpdateCommand(0x0800, meshIntervalUnits)
 	binary.LittleEndian.PutUint16(old[14:16], 1)
