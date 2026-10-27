@@ -1,6 +1,7 @@
 package liteclient
 
 import (
+	"context"
 	"net"
 	"strings"
 	"testing"
@@ -59,5 +60,45 @@ func TestDoneClosesOnClose(t *testing.T) {
 	case <-c.Done():
 	default:
 		t.Fatal("Done still open after Close returned")
+	}
+}
+
+func TestWaitRebootReturnsAtOnceOffSerial(t *testing.T) {
+	c, _ := connectedOverPipe(t)
+	start := time.Now()
+	c.WaitReboot(context.Background())
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("non-serial WaitReboot blocked for %v", elapsed)
+	}
+}
+
+func TestWaitRebootWaitsForSerialPeer(t *testing.T) {
+	for _, end := range []string{"link dropped", "cancelled"} {
+		t.Run(end, func(t *testing.T) {
+			c := NewWendyLiteClient()
+			c.link = &directLink{isSerial: true}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			returned := make(chan struct{})
+			go func() {
+				c.WaitReboot(ctx)
+				close(returned)
+			}()
+			select {
+			case <-returned:
+				t.Fatal("closed the serial link before the peer handled REBOOT")
+			case <-time.After(50 * time.Millisecond):
+			}
+			if end == "link dropped" {
+				close(c.done)
+			} else {
+				cancel()
+			}
+			select {
+			case <-returned:
+			case <-time.After(2 * time.Second):
+				t.Fatalf("WaitReboot ignored %s", end)
+			}
+		})
 	}
 }

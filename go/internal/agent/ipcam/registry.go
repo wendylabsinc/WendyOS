@@ -121,9 +121,11 @@ func (r *Registry) Load() error {
 // Preserve all connection details and every stored login, even an empty login.
 // Old addressless observations carry no record of whether their link was served.
 // A nil credential lookup means protection is unavailable, so nothing is removed.
-func (r *Registry) PruneUnconfirmedDHCP(hasCredentials func(string) bool) error {
+// The count includes only removals successfully persisted to disk; a failed save
+// restores the records and returns zero.
+func (r *Registry) PruneUnconfirmedDHCP(hasCredentials func(string) bool) (int, error) {
 	if hasCredentials == nil {
-		return nil
+		return 0, nil
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -137,15 +139,15 @@ func (r *Registry) PruneUnconfirmedDHCP(hasCredentials func(string) bool) error 
 		delete(r.by, mac)
 	}
 	if len(removed) == 0 {
-		return nil
+		return 0, nil
 	}
 	if err := r.save(); err != nil {
 		for mac, c := range removed {
 			r.by[mac] = c
 		}
-		return err
+		return 0, err
 	}
-	return nil
+	return len(removed), nil
 }
 
 // save writes the registry atomically. Callers hold r.mu.

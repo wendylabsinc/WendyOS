@@ -194,8 +194,8 @@ func ackContinueUnenrolled() error {
 // abort UX but mints an EAB credential via DeviceEnrollmentService.EnrollDevice
 // instead of the retired v1 token+certificate path, and drops the org lookup:
 // the tenant rides in the operator session's signed identity. The ESP32/litepb
-// install keeps resolvePreEnrollment unchanged (it is a different device class
-// that does not run the ACME agent). Returns nil to bake nothing.
+// install uses resolveLiteInstallEnrollment and enrolls over USB after reboot
+// with a device challenge. Returns nil to bake nothing.
 func resolveACMEPreEnrollment(ctx context.Context, cfg *config.Config, opts preEnrollOptions, interactive bool, deviceName string) (*acmeEnrollmentBake, error) {
 	switch opts.mode {
 	case preEnrollSkip:

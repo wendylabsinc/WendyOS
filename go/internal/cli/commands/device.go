@@ -28,6 +28,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/cli/providers"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
+	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/internal/shared/version"
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
@@ -1250,8 +1251,10 @@ func newDeviceUnenrollCmd() *cobra.Command {
 			}
 
 			// Determine the device's current enrollment so we know which cloud
-			// asset to clean up afterwards.
-			provResp, err := conn.ProvisioningService.IsProvisioned(ctx, &agentpb.IsProvisionedRequest{})
+			// asset to clean up afterwards. The peer is the certificate a numeric
+			// legacy reset forgets the pins of.
+			var provPeer grpcpeer.Peer
+			provResp, err := conn.ProvisioningService.IsProvisioned(ctx, &agentpb.IsProvisionedRequest{}, grpc.Peer(&provPeer))
 			if err != nil {
 				return fmt.Errorf("checking provisioning status: %w", err)
 			}
@@ -1294,7 +1297,7 @@ func newDeviceUnenrollCmd() *cobra.Command {
 				}
 			}
 
-			cloudConn, cloudCtx, cloudAuth, err := dialCloud(ctx, cloudGRPC, cloudHost)
+			cloudConn, cloudCtx, cloudAuth, err := dialLegacyUnenrollCloudFn(ctx, cloudGRPC, cloudHost)
 			if err != nil {
 				return fmt.Errorf("cloud cleanup preflight failed; device was not reset: %w", err)
 			}
@@ -1306,6 +1309,15 @@ func newDeviceUnenrollCmd() *cobra.Command {
 			})
 			if !result.DeviceReset {
 				return cloudErr
+			}
+			// The reset erased the device's enrolled identity whether or not
+			// Cloud cleanup then succeeded, so forget it now: a pin left behind
+			// refuses every later connection to the unprovisioned device
+			// (WDY-3974). The Cloud retry below never contacts the device.
+			identityKeys := legacyResetIdentityKeys(conn, &provPeer, orgID, assetID)
+			pinErr := forgetResetDeviceIdentity(identityKeys...)
+			if pinErr != nil {
+				pinErr = fmt.Errorf("device reset, but clearing this CLI's saved identity for it failed: %w; run %s", pinErr, unpinCommandsFor(identityKeys))
 			}
 			retrySelector := (cloudDeviceSelector{Endpoint: cloudConn.Target(), OrgID: orgID, AssetID: assetID}).String()
 			retryCommand := "wendy cloud device unenroll --device " + shellQuoteArg(retrySelector)
@@ -1323,6 +1335,9 @@ func newDeviceUnenrollCmd() *cobra.Command {
 					out["cloudError"] = cloudErr.Error()
 					out["retryCommand"] = retryCommand
 				}
+				if pinErr != nil {
+					out["pinError"] = pinErr.Error()
+				}
 				data, marshalErr := json.MarshalIndent(out, "", "  ")
 				if marshalErr != nil {
 					return marshalErr
@@ -1334,15 +1349,19 @@ func newDeviceUnenrollCmd() *cobra.Command {
 					fmt.Printf("Cloud cleanup is incomplete for org %d, asset %d in %s.\n", orgID, assetID, cloudConn.Target())
 					fmt.Printf("Retry cloud cleanup: %s\n", retryCommand)
 					fmt.Printf("If the legacy Cloud API remains unavailable, remove asset %d from organization %d in that Cloud dashboard.\n", assetID, orgID)
+					// The pins just cleared come back while the asset is listed:
+					// Cloud's roster is authority for seedPinsFromCloudAssets, and
+					// the Cloud-only retry deliberately keeps pins.
+					fmt.Printf("Until then, commands that read Cloud's device list, such as 'wendy cloud discover', pin this device again; if a later connection is refused, run 'wendy device unpin %s'.\n", shellQuoteArg(certs.AssetURN(orgID, assetID)))
 				} else {
 					fmt.Printf("Revoked %d certificate(s) and deleted asset %d from Wendy Cloud.\n", result.CertificatesRevoked, assetID)
 				}
 			}
 
-			if cloudErr != nil {
-				return cloudErr
+			if pinErr != nil {
+				return errors.Join(cloudErr, pinErr)
 			}
-			return nil
+			return cloudErr
 		},
 	}
 
@@ -2792,11 +2811,12 @@ func newDeviceUpdateCmd() *cobra.Command {
 				// update and to re-dial the SAME device after the reboot; passing nil
 				// here would nil-deref once the OS-update gate lets a device through.
 				reconnect := updatedAgentReconnectFunc(ctx, conn)
+				restartTimeout := agentRestartTimeoutForConn(conn, preUpdateVersion.GetOs())
 				if conn != nil {
 					_ = conn.Close()
 					conn = nil
 				}
-				conn, err = awaitAgentRestart(ctx, reconnect, preUpdateVersion.GetOs(), jsonOutput)
+				conn, err = awaitAgentRestart(ctx, reconnect, restartTimeout, jsonOutput)
 				if err != nil {
 					return err
 				}
@@ -2814,7 +2834,7 @@ func newDeviceUpdateCmd() *cobra.Command {
 				requireHash := strings.EqualFold(preUpdateVersion.GetOs(), "darwin")
 				verified, verifyErr := verifyAgentAfterUpdate(ctx, conn.AgentService, verificationSHA, expectedAgentVersion,
 					agentVerifyWaitOptions{
-						Timeout:     agentRestartTimeoutFor(preUpdateVersion.GetOs()),
+						Timeout:     restartTimeout,
 						RequireHash: requireHash,
 					})
 				if verifyErr != nil {
@@ -3084,6 +3104,20 @@ func agentRestartTimeoutFor(osName string) time.Duration {
 	return defaultAgentRestartTimeout
 }
 
+// agentRestartTimeoutForConn is agentRestartTimeoutFor for the device that
+// conn reaches. A Cloud tunnel connection (one with a pinned Reconnect) gets at
+// least cloudAgentRestartTimeout, the window its own restart wait
+// (waitForCloudDeviceRestart) is built for. The Linux default is sized for a
+// LAN and would cut that wait short: through Cloud, the new agent must
+// register with the relay again before a tunnel can reach it.
+func agentRestartTimeoutForConn(conn *grpcclient.AgentConnection, osName string) time.Duration {
+	timeout := agentRestartTimeoutFor(osName)
+	if conn != nil && conn.Reconnect != nil && timeout < cloudAgentRestartTimeout {
+		return cloudAgentRestartTimeout
+	}
+	return timeout
+}
+
 // uploadAgentBinary uploads binaryData to the device, showing a spinner when
 // interactive and a plain status line otherwise (nothing extra in JSON mode).
 // It is the shared upload used by both `device update`'s initial agent update
@@ -3117,13 +3151,12 @@ func uploadAgentBinary(ctx context.Context, agentService agentpb.WendyAgentServi
 	return deviceUpdateUpload(ctx, agentService, binaryData, sha256Hash)
 }
 
-// awaitAgentRestart waits for the agent to come back after an upload and returns
-// a live connection to it (showing a spinner when interactive). osName selects
-// the restart timeout via agentRestartTimeoutFor — pass "" when the device's OS
-// is unknown or irrelevant (e.g. it can never be darwin at that call site) to
-// get the default Linux timeout.
-func awaitAgentRestart(ctx context.Context, reconnect func(context.Context) (*grpcclient.AgentConnection, error), osName string, jsonOutput bool) (*grpcclient.AgentConnection, error) {
-	opts := agentRestartWaitOptions{Timeout: agentRestartTimeoutFor(osName)}
+// awaitAgentRestart waits up to timeout for the agent to come back after an
+// upload and returns a live connection to it (showing a spinner when
+// interactive). Callers pick timeout with agentRestartTimeoutForConn, from the
+// connection the upload went through and the device's reported OS.
+func awaitAgentRestart(ctx context.Context, reconnect func(context.Context) (*grpcclient.AgentConnection, error), timeout time.Duration, jsonOutput bool) (*grpcclient.AgentConnection, error) {
+	opts := agentRestartWaitOptions{Timeout: timeout}
 	if isInteractiveTerminal() && !jsonOutput {
 		return runAgentConnectionSpinner(ctx, "Waiting for agent to restart...", func(spinCtx context.Context) (*grpcclient.AgentConnection, error) {
 			return waitForUpdatedAgentReady(spinCtx, reconnect, opts)
@@ -3143,11 +3176,11 @@ func awaitAgentRestart(ctx context.Context, reconnect func(context.Context) (*gr
 // then waits once more for the re-applied dev agent to return, hash-verifies
 // that the uploaded binary is what runs, and returns the version it reports.
 // osName is
-// forwarded to awaitAgentRestart for its restart-timeout selection; in
+// forwarded to agentRestartTimeoutForConn for the restart-timeout selection; in
 // practice this path is unreachable for darwin (an OS update is refused on
 // Macs before reaching here), so osName is always a Linux-family value.
 func reapplyBinaryAfterOSUpdate(ctx context.Context, priorConn *grpcclient.AgentConnection, osName string, binaryData []byte, sha256Hash string, jsonOutput bool) (agentVerifyResult, error) {
-	conn, err := awaitAgentRestart(ctx, updatedAgentReconnectFunc(ctx, priorConn), osName, jsonOutput)
+	conn, err := awaitAgentRestart(ctx, updatedAgentReconnectFunc(ctx, priorConn), agentRestartTimeoutForConn(priorConn, osName), jsonOutput)
 	if err != nil {
 		return agentVerifyResult{}, err
 	}
@@ -3163,8 +3196,9 @@ func reapplyBinaryAfterOSUpdate(ctx context.Context, priorConn *grpcclient.Agent
 	}
 
 	reconnectAfter := updatedAgentReconnectFunc(ctx, conn)
+	restartTimeout := agentRestartTimeoutForConn(conn, osName)
 	_ = conn.Close()
-	readyConn, err := awaitAgentRestart(ctx, reconnectAfter, osName, jsonOutput)
+	readyConn, err := awaitAgentRestart(ctx, reconnectAfter, restartTimeout, jsonOutput)
 	if err != nil {
 		return agentVerifyResult{}, err
 	}

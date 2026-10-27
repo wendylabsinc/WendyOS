@@ -225,6 +225,10 @@ func (p *MicroWendyProvider) serialExternalDevice(dev discovery.SerialDevice) mo
 			"deviceId":   dev.ID,
 			"name":       dev.Name,
 			"serialPort": dev.Port,
+			// deviceId stays the hardware id over USB even once enrolled; the
+			// enrolled UUID is what lets this row meet the board's LAN and BLE
+			// rows (see ExternalDevice.LiteDedupID).
+			"enrolledDeviceId": dev.EnrolledDeviceID,
 		},
 		IsWendyDevice: true,
 	}
@@ -609,7 +613,10 @@ func (e *AppRequirementsUnsupportedError) Error() string {
 }
 
 // MissingWendyCoreError lets the CLI offer to configure an ESP-IDF project.
-type MissingWendyCoreError struct{}
+// Toolchain is the one that configured the project, so setup uses it too.
+type MissingWendyCoreError struct {
+	Toolchain *espidftoolchain.ProjectToolchain
+}
 
 func (*MissingWendyCoreError) Error() string {
 	return "this project does not include the wendy_core component; run 'wendy run' interactively to add it, or add it to main/idf_component.yml and call ESP_ERROR_CHECK(wendy_core_init()) first in app_main()"
@@ -630,23 +637,21 @@ func (p *MicroWendyProvider) buildEspIdf(ctx context.Context, device models.Exte
 		return nil, &AppRequirementsUnsupportedError{Device: device, Missing: "native apps"}
 	}
 
-	// ensures the ESP-IDF toolchain is available, install it if not
-	if err := espidftoolchain.EnsureVersion(ctx); err != nil {
-		return nil, err
-	}
-
-	// check if the project has been configured for the right target
 	target := di.DeviceType
 	if strings.ContainsAny(target, " \t\r\n") {
 		return nil, fmt.Errorf("invalid device target %q", target)
 	}
+	toolchain, err := espidftoolchain.LoadProjectToolchain(projectPath, target)
+	if err != nil {
+		return nil, err
+	}
+	if err := toolchain.Ensure(ctx); err != nil {
+		return nil, err
+	}
+
 	configuredTarget := espidftoolchain.ProjectTarget(projectPath)
 	if target != "" && target != configuredTarget {
-		cmd := espidftoolchain.IdfCommandContext(ctx, "set-target", target)
-		cmd.Dir = projectPath
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
-		if err := cmd.Run(); err != nil {
+		if err := toolchain.Run(ctx, projectPath, "set-target", target); err != nil {
 			return nil, fmt.Errorf("idf.py set-target %s: %w", target, err)
 		}
 	}
@@ -671,16 +676,13 @@ func (p *MicroWendyProvider) buildEspIdf(ctx context.Context, device models.Exte
 			return nil, err
 		}
 		if !hasCore {
-			return nil, &MissingWendyCoreError{}
+			return nil, &MissingWendyCoreError{Toolchain: toolchain}
 		}
 	}
 
 	// build the project
-	cmd := espidftoolchain.IdfCommandContext(ctx, "gen_project_binary") // build only the app binary, not the whole firmware image
-	cmd.Dir = projectPath
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
+	// Build only the app binary, not the whole firmware image.
+	if err := toolchain.Run(ctx, projectPath, "gen_project_binary"); err != nil {
 		return nil, fmt.Errorf("build: idf.py gen_project_binary: %w", err)
 	}
 
@@ -759,6 +761,10 @@ func (p *MicroWendyProvider) Run(ctx context.Context, app *BuiltApp, detach bool
 		fmt.Println("Rebooting device...")
 		if err := client.ResetTargetDevice(true, 30*time.Second); err != nil {
 			return fmt.Errorf("device reset: %w", err)
+		}
+		client.WaitReboot(ctx)
+		if err := ctx.Err(); err != nil {
+			return err
 		}
 		if err := client.Close(); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: close: %v\n", err)
@@ -919,6 +925,7 @@ func (p *MicroWendyProvider) pushWifiConf(ctx context.Context, device models.Ext
 	if err := client.ResetTargetDevice(true, 0); err != nil {
 		return fmt.Errorf("device reset: %w", err)
 	}
+	client.WaitReboot(ctx)
 	return nil
 }
 

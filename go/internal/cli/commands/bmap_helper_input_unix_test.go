@@ -71,7 +71,7 @@ func TestBmapWriteSeekableIgnoresHOME(t *testing.T) {
 	t.Setenv("XDG_CACHE_HOME", "")
 	runHelperAsRootFor(t, os.Getuid())
 
-	err := runBmapWriteSeekable("/dev/null", bmap, src, 0, io.Discard)
+	err := runBmapWriteSeekable("/dev/null", bmap, src, 0, 0, io.Discard)
 	if err == nil || !strings.Contains(err.Error(), "seekable image size 10000 != bmap image size 32768") {
 		t.Fatalf("runBmapWriteSeekable = %v, want it to read the source and stop at the size check", err)
 	}
@@ -183,10 +183,10 @@ func TestBmapHelperRefusesBmapTheSudoUserDoesNotOwn(t *testing.T) {
 	// A missing source keeps the seekable case from being refused for the
 	// source instead of the bmap.
 	missing := filepath.Join(t.TempDir(), "missing.img.zst")
-	if err := runBmapWriteSeekable("/dev/null", bmap, missing, 0, io.Discard); !errors.Is(err, errHelperInputRefused) {
+	if err := runBmapWriteSeekable("/dev/null", bmap, missing, 0, 0, io.Discard); !errors.Is(err, errHelperInputRefused) {
 		t.Errorf("runBmapWriteSeekable = %v, want the bmap refused", err)
 	}
-	if err := runBmapWrite("/dev/null", bmap, bytes.NewReader(nil)); !errors.Is(err, errHelperInputRefused) {
+	if err := runBmapWrite("/dev/null", bmap, bytes.NewReader(nil), 0); !errors.Is(err, errHelperInputRefused) {
 		t.Errorf("runBmapWrite = %v, want the bmap refused", err)
 	}
 }
@@ -201,7 +201,7 @@ func TestBmapWriteSeekableRefusesSourceTheSudoUserDoesNotOwn(t *testing.T) {
 	}
 	runHelperAsRootFor(t, os.Getuid())
 
-	if err := runBmapWriteSeekable("/dev/null", bmap, src, 0, io.Discard); !errors.Is(err, errHelperInputRefused) {
+	if err := runBmapWriteSeekable("/dev/null", bmap, src, 0, 0, io.Discard); !errors.Is(err, errHelperInputRefused) {
 		t.Fatalf("runBmapWriteSeekable = %v, want the source refused", err)
 	}
 }
