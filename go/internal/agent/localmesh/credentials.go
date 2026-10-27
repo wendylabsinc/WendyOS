@@ -1,12 +1,16 @@
 package localmesh
 
 import (
+	"bytes"
 	"container/list"
 	"crypto"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 	"time"
 
@@ -32,6 +36,7 @@ type Credentials struct {
 	peerTLSTickets func(meshid.Device, string, string) (*tls.Config, error)
 	ticketOnce     sync.Once
 	ticketMemory   *meshSessionCache
+	issuerDigest   string
 }
 
 // NewCredentials loads the provisioned identity and derives the local-mesh
@@ -69,6 +74,10 @@ func NewCredentials(certPEM, chainPEM, keyPEM string) (*Credentials, error) {
 	// Mesh requires a verified issuer path for its own identity too. The
 	// general mTLS loopback shortcut must not extend an expired local issuer.
 	if _, err := verifyChain(cert.Certificate, time.Now()); err != nil {
+		return nil, err
+	}
+	anchors, err := mtls.PeerTrustAnchors(chainPEM)
+	if err != nil {
 		return nil, err
 	}
 	verify := func(chain [][]byte, now time.Time) (Identity, error) {
@@ -115,7 +124,7 @@ func NewCredentials(certPEM, chainPEM, keyPEM string) (*Credentials, error) {
 	peerConfigs := make(map[meshid.Device]*list.Element)
 	var peerRecency list.List
 
-	credentials := &Credentials{Device: self, Certificate: cert, Signer: signer, Verify: verify, peerTLS: func(peer meshid.Device) (*tls.Config, error) {
+	credentials := &Credentials{Device: self, Certificate: cert, Signer: signer, Verify: verify, issuerDigest: anchoredIssuerDigest(cert.Certificate[1:], anchors), peerTLS: func(peer meshid.Device) (*tls.Config, error) {
 		peerMu.Lock()
 		defer peerMu.Unlock()
 		if cached := peerConfigs[peer]; cached != nil {
@@ -226,6 +235,49 @@ func (c *Credentials) PeerTLSWithTickets(peer meshid.Device, alpn, transport str
 		return nil, errors.New("missing wendy net credential ticket scope")
 	}
 	return c.peerTLSTickets(peer, alpn, transport)
+}
+
+// IssuerDigest names the CA certificates this identity presents after its
+// leaf. It is empty when there are none, or when any of them is not also one of
+// this device's own trust anchors. Two devices with the same digest present
+// the same issuers and each already trusts them, so either may omit them when
+// it authenticates to the other without changing what the receiver verifies.
+func (c *Credentials) IssuerDigest() string {
+	if c == nil {
+		return ""
+	}
+	return c.issuerDigest
+}
+
+// LeafCertificate is this identity without its issuers, for a peer that
+// already trusts them (see IssuerDigest).
+func (c *Credentials) LeafCertificate() tls.Certificate {
+	leaf := c.Certificate
+	leaf.Certificate = leaf.Certificate[:min(len(leaf.Certificate), 1)]
+	return leaf
+}
+
+func anchoredIssuerDigest(issuers, anchors [][]byte) string {
+	if len(issuers) == 0 {
+		return ""
+	}
+	trusted := make(map[string]bool, len(anchors))
+	for _, anchor := range anchors {
+		trusted[string(anchor)] = true
+	}
+	sums := make([][sha256.Size]byte, 0, len(issuers))
+	for _, issuer := range issuers {
+		if !trusted[string(issuer)] {
+			return ""
+		}
+		sums = append(sums, sha256.Sum256(issuer))
+	}
+	slices.SortFunc(sums, func(a, b [sha256.Size]byte) int { return bytes.Compare(a[:], b[:]) })
+	digest := sha256.New()
+	for _, sum := range sums {
+		digest.Write(sum[:])
+	}
+	return base64.RawURLEncoding.EncodeToString(digest.Sum(nil)[:16])
 }
 
 func (c *Credentials) ticketCache() *meshSessionCache {
