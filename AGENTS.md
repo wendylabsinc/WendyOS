@@ -27,9 +27,9 @@ Supports: Claude Code, Claude Desktop, Cursor, Windsurf, Codex.
    device, call `auth_login` and show the user the returned link. Local simulators
    and LAN devices that are not Cloud-enrolled need no sign-in.
 2. Call `device_list` (optionally `scan: true`) to find available devices.
-   - On Linux, a USB-C tethered device can't be reached until the host's USB-C link
-     is configured; `device_list` then returns a `usb` warning. Ask the user to run
-     `wendy discover` in a terminal and accept its USB-C setup prompt (it needs sudo).
+   - On Linux, a USB-tethered device can't be reached until the host's USB link is
+     configured; `device_list` then returns a `usb` warning. Ask the user to run
+     `wendy discover` in a terminal and accept its USB setup prompt (it needs sudo).
    - It also lists local simulators (`vm:name`). Without hardware, connect to one
      rather than skipping on-device checks; ask the user before creating a new one.
 3. Call `device_connect` with a selector from `device_list`: host:port for LAN,

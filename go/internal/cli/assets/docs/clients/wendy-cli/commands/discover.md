@@ -36,7 +36,7 @@ Local discovery combines these mechanisms and merges their results:
 mDNS discovery works on all platforms. On Linux, the CLI performs an mDNS browse
 that requires UDP port 5353 open on the host firewall (e.g., `sudo ufw allow 5353/udp`).
 On macOS, the CLI browses through mDNSResponder in-process and requires Local Network TCC permission.
-For a USB-C-connected device on Linux, `wendy discover` notices when the host's
+For a USB-connected device on Linux, `wendy discover` notices when the host's
 link to it isn't configured yet and offers to set it up before scanning (it needs
 sudo). The offer only appears in an interactive terminal; with `--json` or
 without a terminal, `wendy discover` prints a notice on stderr instead.
