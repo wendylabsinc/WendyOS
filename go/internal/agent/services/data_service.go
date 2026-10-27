@@ -209,12 +209,26 @@ func (s *DataService) armCampaign(campaign data.Campaign) {
 	if arming == nil || campaign.State != "armed" || campaign.BufferDuration() <= 0 {
 		return
 	}
-	cameras := s.cameraSourcesFor(campaign)
+	// The caller's copy can be stale: an inference worker keeps the plan it
+	// started with, and deploy arms off the request path. Arm what is stored
+	// now, and only while it is still armed, so a disarm or remove that landed
+	// in between is not undone.
+	current, err := s.manager.Campaign(campaign.Name)
+	if err != nil || current.State != data.CampaignStateArmed || current.BufferDuration() <= 0 {
+		return
+	}
+	cameras := s.cameraSourcesFor(current)
 	if len(cameras) == 0 {
 		return
 	}
-	arming.Disarm(campaign.Name)
-	arming.Arm(campaign.Name, campaign.BufferDuration(), cameras)
+	arming.Disarm(current.Name)
+	arming.Arm(current.Name, current.BufferDuration(), cameras)
+	// A disarm can still land while the rings start. It stores its state
+	// before it releases the rings, so either it released these, or reading
+	// the state again here finds it and releases them.
+	if after, err := s.manager.Campaign(current.Name); err != nil || after.State != data.CampaignStateArmed {
+		arming.Disarm(current.Name)
+	}
 }
 
 // rearmByName re-arms the campaign with the given name after its episode has
@@ -298,6 +312,14 @@ func (s *DataService) startCapture(ctx context.Context, opts data.StartOptions) 
 	lock := s.keyLock(key)
 	lock.Lock()
 	defer lock.Unlock()
+	// Read under the key's lock, which disarm and remove also take, so a
+	// trigger already on its way when one of them returned cannot open an
+	// episode after it.
+	if key != data.AdHocEpisodeKey {
+		if err := s.requireArmed(key); err != nil {
+			return nil, err
+		}
+	}
 	m, err := s.manager.Start(opts)
 	if err != nil {
 		return nil, status.Error(codes.FailedPrecondition, err.Error())
@@ -522,6 +544,9 @@ func (s *DataService) CampaignTrigger(ctx context.Context, req *agentpbv2.DataCa
 	campaign, err := s.manager.Campaign(req.GetName())
 	if err != nil {
 		return nil, dataStatusError(err)
+	}
+	if campaign.State == data.CampaignStateDisarmed {
+		return nil, campaignDisarmedError(campaign.Name)
 	}
 	reason := strings.TrimSpace(req.GetReason())
 	if reason == "" {

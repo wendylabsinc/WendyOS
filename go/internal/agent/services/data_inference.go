@@ -32,6 +32,11 @@ type campaignInferenceManager struct {
 	wake    chan struct{}
 	mu      sync.Mutex
 	jobs    map[string]*campaignInferenceJob
+	ctx     context.Context
+	// reconcileMu runs one pass at a time: a pass that read the plans before
+	// a removal must not restart a job that a later pass, run for that
+	// removal, has just retired.
+	reconcileMu sync.Mutex
 }
 
 type campaignInferenceJob struct {
@@ -51,7 +56,7 @@ type campaignInferenceJob struct {
 // camera subscriptions to exit before the video service is shut down.
 func (s *DataService) StartCampaignInference(ctx context.Context, factory inference.Factory, sender CampaignNotificationSender) func() {
 	ctx, cancel := context.WithCancel(ctx)
-	manager := &campaignInferenceManager{service: s, factory: factory, sender: sender, wake: make(chan struct{}, 1), jobs: map[string]*campaignInferenceJob{}}
+	manager := &campaignInferenceManager{service: s, factory: factory, sender: sender, wake: make(chan struct{}, 1), ctx: ctx, jobs: map[string]*campaignInferenceJob{}}
 	s.inference = manager // Configured once, before registering the RPC server.
 	done := make(chan struct{})
 	go func() {
@@ -93,6 +98,8 @@ func (m *campaignInferenceManager) stopAll() {
 }
 
 func (m *campaignInferenceManager) reconcile(ctx context.Context) {
+	m.reconcileMu.Lock()
+	defer m.reconcileMu.Unlock()
 	campaigns, err := m.service.manager.Campaigns()
 	if err != nil {
 		m.service.manager.Warnf("reading inference campaigns: %v", err)
@@ -135,6 +142,22 @@ func (m *campaignInferenceManager) reconcile(ctx context.Context) {
 		go job.supervise(child)
 	}
 }
+
+// reconcileNow runs one pass in the caller's goroutine; it returns once the
+// jobs it retired have stopped.
+func (m *campaignInferenceManager) reconcileNow() { m.reconcile(m.ctx) }
+
+// wakeNow asks the loop for a pass without waiting for it.
+func (m *campaignInferenceManager) wakeNow() {
+	select {
+	case m.wake <- struct{}{}:
+	default:
+	}
+}
+
+// campaignJobKey is the jobs key of a campaign's inference. Lookups from
+// outside reconcile go through it, so a change of key reaches all of them.
+func campaignJobKey(name string) string { return name }
 
 // Keep retired jobs visible until their process and camera subscriptions exit.
 // Persisting enabled:false only requests shutdown; it does not complete it.
@@ -556,6 +579,15 @@ func (s *DataService) campaignMessage(campaign data.Campaign) (*agentpbv2.DataCa
 			}
 		}
 	}
+	// A disarmed campaign runs nothing, so its inference reports exactly that,
+	// once its worker has stopped, rather than "pending" for a start that is
+	// never coming.
+	if campaign.InferenceStatus != nil && campaign.State == data.CampaignStateDisarmed {
+		campaign.InferenceStatus = &data.InferenceStatus{State: data.CampaignStateDisarmed}
+		if s.inference != nil && s.inference.inferenceActive(campaignJobKey(campaign.Name)) {
+			campaign.InferenceStatus.State = "stopping"
+		}
+	}
 	return campaignMessage(campaign)
 }
 
@@ -565,6 +597,11 @@ func (s *DataService) triggerInference(ctx context.Context, campaign data.Campai
 	current, err := s.manager.Campaign(campaign.Name)
 	if err != nil || current.Revision != campaign.Revision || !current.Inference.IsEnabled() || ctx.Err() != nil {
 		return false, err
+	}
+	// A disarmed campaign's worker is being retired; what it saw last is not
+	// a detection anyone asked for any more.
+	if current.State != data.CampaignStateArmed {
+		return false, nil
 	}
 	if _, err := s.manager.RecordCampaignApplication(campaignAppPrefix+campaign.Name, record); err != nil {
 		return true, err

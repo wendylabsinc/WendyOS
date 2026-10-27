@@ -108,10 +108,37 @@ wendy --json data stop --device <selector>
 ```
 
 `stop` finalizes the ad-hoc episode when present, otherwise the single active
-campaign episode. It is not a campaign-disarm command. Do not use it as general
-cleanup when another capture could be active. The current campaign CLI has
-`deploy`, `list`, `inspect`, and `trigger`; do not invent stop, delete, or replay
-subcommands.
+campaign episode. It does not disarm a campaign. Do not use it as general
+cleanup when another capture could be active. The campaign CLI has `deploy`,
+`list`, `inspect`, `trigger`, `arm`, `disarm`, and `remove`; do not invent
+stop, delete, or replay subcommands.
+
+## Switch a campaign off, or remove it
+
+```sh
+wendy data campaign disarm incident-review --device <selector>
+wendy data campaign arm incident-review --device <selector>
+wendy data campaign remove incident-review --device <selector>
+```
+
+- `disarm` keeps the plan, revision, and episodes, but stops the campaign's
+  triggers and agent inference and releases its camera pre-roll, so the camera
+  is no longer held for it. `list` and `inspect` show `disarmed`, and
+  `inference_status.state` is `disarmed`. Manual `trigger` is refused. A
+  recording in progress finishes its `after_trigger` window and seals normally.
+- The state survives agent restarts and reboots. Redeploying a disarmed
+  campaign stores the new plan and keeps it disarmed; only `arm` switches it
+  back on. Setting `inference.enabled: false` stops only the model, so prefer
+  `disarm` to switch a campaign off.
+- `remove` deletes the plan and keeps every episode, which still upload under
+  the removed plan's upload policy. It refuses while the campaign is recording
+  and names the episode; `--force` stops and seals that recording first. Do not
+  pass `--force` unless the user accepts ending that recording early.
+- These act on the connected device only, even when the plan names a `fleet`.
+  To keep a fleet campaign off on one device, disarm it: a removed campaign
+  returns, armed, if the plan is deployed again.
+- An agent that predates these commands is reported as needing
+  `wendy device update`.
 
 Check the manifest's trigger, campaign revision, source identities and status,
 requested/achieved pre-roll, capture-policy notes, drops, clock evidence,

@@ -117,6 +117,12 @@ records, use `episodes`, `inspect`, and `download` as above. Check the manifest
 for the sources that actually recorded and any errors. A successful deployment
 means the campaign is armed, not that a recording has already succeeded.
 
+To switch the campaign off without losing its plan or episodes, run
+`wendy data campaign disarm machine-faults`; it stays off across restarts and
+redeploys until `wendy data campaign arm machine-faults`. To delete the plan,
+run `wendy data campaign remove machine-faults`. Every episode it recorded is
+kept.
+
 On a cloud-enrolled device, deployment also registers `campaign:<name>` in Cloud
 Apps. For an intentionally offline deployment, pass `--skip-cloud-registration`.
 Unenrolled devices skip registration automatically.

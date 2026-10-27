@@ -48,8 +48,9 @@ and units; receipt time alone does not establish when a measurement occurred.
 
 ## Follow the requested workflow
 
-- For campaign YAML, one-off recording, deployment, inference, notifications,
-  and episode retrieval, read [campaigns.md](references/campaigns.md).
+- For campaign YAML, one-off recording, deployment, switching a campaign off
+  or removing it, inference, notifications, and episode retrieval, read
+  [campaigns.md](references/campaigns.md).
 - For application events, model input references, durable records, custom
   measurements, and `export-stream`, read [application-streams.md](references/application-streams.md).
 - If an app must be built or deployed, use the available `wendy-app-lifecycle`
@@ -59,7 +60,8 @@ and units; receipt time alone does not establish when a measurement occurred.
 For an explanation or a YAML edit, complete that task without starting capture.
 For a requested CLI deployment or test, verify the deployed plan and recorded
 episode on the selected target. Deployment arms
-the campaign immediately.
+the campaign immediately, unless it was disarmed before: a disarmed campaign
+stays disarmed until `wendy data campaign arm`.
 
 ## Report what was achieved
 
