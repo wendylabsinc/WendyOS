@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
@@ -16,9 +17,12 @@ import (
 )
 
 // campaignStateAgent answers the campaign calls the way the agent does, for
-// one campaign whose state the arm and disarm calls switch.
+// one campaign whose state the arm and disarm calls switch. Each command dials
+// its own connection, so the handlers run on unrelated goroutines and mu
+// orders them.
 type campaignStateAgent struct {
 	agentpbv2.UnimplementedDataServiceServer
+	mu        sync.Mutex
 	campaign  *agentpbv2.DataCampaign
 	recording bool
 }
@@ -30,6 +34,8 @@ func (a *campaignStateAgent) withState(state string) *agentpbv2.DataCampaign {
 }
 
 func (a *campaignStateAgent) Campaigns(context.Context, *agentpbv2.DataCampaignsRequest) (*agentpbv2.DataCampaignsResponse, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	if a.campaign == nil {
 		return &agentpbv2.DataCampaignsResponse{}, nil
 	}
@@ -37,24 +43,32 @@ func (a *campaignStateAgent) Campaigns(context.Context, *agentpbv2.DataCampaigns
 }
 
 func (a *campaignStateAgent) CampaignInspect(_ context.Context, req *agentpbv2.DataCampaignInspectRequest) (*agentpbv2.DataCampaign, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	if a.campaign == nil || req.GetName() != a.campaign.GetName() {
 		return nil, status.Errorf(codes.NotFound, "campaign %s is not deployed on this device", req.GetName())
 	}
 	return a.campaign, nil
 }
 
-func (a *campaignStateAgent) CampaignArm(_ context.Context, req *agentpbv2.DataCampaignArmRequest) (*agentpbv2.DataCampaignArmResponse, error) {
+func (a *campaignStateAgent) CampaignArm(context.Context, *agentpbv2.DataCampaignArmRequest) (*agentpbv2.DataCampaignArmResponse, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	changed := a.campaign.GetState() != "armed"
 	return &agentpbv2.DataCampaignArmResponse{Campaign: a.withState("armed"), Changed: changed}, nil
 }
 
-func (a *campaignStateAgent) CampaignDisarm(_ context.Context, req *agentpbv2.DataCampaignDisarmRequest) (*agentpbv2.DataCampaignDisarmResponse, error) {
+func (a *campaignStateAgent) CampaignDisarm(context.Context, *agentpbv2.DataCampaignDisarmRequest) (*agentpbv2.DataCampaignDisarmResponse, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	changed := a.campaign.GetState() != "disarmed"
 	return &agentpbv2.DataCampaignDisarmResponse{Campaign: a.withState("disarmed"), Changed: changed,
 		Warnings: []string{"campaign c920-yolo-live names fleet lab. It stays disarmed on this device even when the plan is deployed again, until it is armed here"}}, nil
 }
 
 func (a *campaignStateAgent) CampaignRemove(_ context.Context, req *agentpbv2.DataCampaignRemoveRequest) (*agentpbv2.DataCampaignRemoveResponse, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	if a.recording && !req.GetForce() {
 		return nil, status.Error(codes.FailedPrecondition, "campaign c920-yolo-live is recording episode ep-7; wait for it to be sealed, or remove the campaign with --force to stop and seal that recording first")
 	}
