@@ -322,9 +322,9 @@ func (m *LinkManager) ensureWatching(ctx context.Context, iface Interface) {
 	m.watchingSince[link] = m.now()
 	m.mu.Unlock()
 
-	// Info, not Debug: when a camera does not appear, the first question is
-	// whether the agent is watching its link at all, and production logging drops
-	// Debug.
+	// Keep this at Info so production journald/stderr logs show whether the agent
+	// is watching the camera's link. Debug still reaches the telemetry core and
+	// wendy device logs, regardless of the production output level.
 	m.logger.Info("watching camera link for DHCP", zap.String("link", link))
 
 	// Registry and address I/O must never stop the reader from inspecting the

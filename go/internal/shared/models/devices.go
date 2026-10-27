@@ -319,10 +319,12 @@ func normalizeHostKey(s string) string {
 }
 
 // MergedDevices returns a deduplicated slice of DiscoveredDevice by merging LAN,
-// Bluetooth, and wendy-lite entries that refer to the same physical device. Two
-// transports match when they share a normalized hostname (the stable identity
-// BLE and mDNS both carry) or, failing that, a case-insensitive DisplayName. LAN
-// metadata takes precedence; other transports backfill missing fields.
+// Bluetooth, and wendy-lite entries that refer to the same physical device. LAN
+// and Bluetooth entries match when they share a normalized hostname (the stable
+// identity BLE and mDNS both carry) or, failing that, a case-insensitive
+// DisplayName. wendy-lite entries match only each other, by
+// ExternalDevice.LiteDedupID — the same key the device picker dedups them on.
+// LAN metadata takes precedence; other transports backfill missing fields.
 func (c *DevicesCollection) MergedDevices() []DiscoveredDevice {
 	// A device is indexed under every key it can be matched by (hostname and
 	// display name), so a later transport finds it regardless of which key it
@@ -410,14 +412,21 @@ func (c *DevicesCollection) MergedDevices() []DiscoveredDevice {
 		order = append(order, merged)
 	}
 
-	// Merge wendy-lite external devices by name. These represent the same
-	// physical Wendy Lite hardware discovered via mDNS (WiFi) instead of BLE.
+	// Merge wendy-lite external devices that are one board seen over USB, LAN
+	// and BLE. The key is LiteDedupID, compared exactly, not the display name:
+	// two boards can share a name.
+	// The prefix keeps it from ever matching a LAN or BLE key. A row with no id
+	// (an unflashed board) is keyed by its connection so it stands alone.
 	for i := range c.ExternalDevices {
 		d := &c.ExternalDevices[i]
 		if d.ProviderKey != "wendy-lite" {
 			continue
 		}
-		if existing := lookup(strings.ToLower(d.DisplayName)); existing != nil {
+		key := "wendy-lite-connection:" + d.ID
+		if id := d.LiteDedupID(); id != "" {
+			key = "wendy-lite:" + id
+		}
+		if existing := lookup(key); existing != nil {
 			existing.Externals = append(existing.Externals, d)
 			sort.Slice(existing.Externals, func(i, j int) bool {
 				return existing.Externals[i].Rank() > existing.Externals[j].Rank()
@@ -432,7 +441,7 @@ func (c *DevicesCollection) MergedDevices() []DiscoveredDevice {
 			CPUArchitecture: d.CPUArchitecture,
 			Externals:       []*ExternalDevice{d},
 		}
-		register(merged, strings.ToLower(d.DisplayName))
+		register(merged, key)
 		order = append(order, merged)
 	}
 

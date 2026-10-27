@@ -183,10 +183,12 @@ func probeUplinkFamily(parent context.Context, iface, dns, family string) bool {
 
 // Gateway probes the donor's ULA over the mesh route with an ICMPv6 echo
 // bound to this host's own ULA: a reply proves the route the decision names.
+// A BLE hop regularly answers in over a second, so wait two; the caller's
+// three-second bound still applies.
 func (linuxProbe) Gateway(ctx context.Context, local, remote netip.Addr) bool {
 	if !meshid.InMesh(local) || !meshid.InMesh(remote) {
 		return false
 	}
-	_, err := command(ctx, "ping", "-n", "-6", "-I", local.String(), "-c", "1", "-W", "1", remote.String())
+	_, err := command(ctx, "ping", "-n", "-6", "-I", local.String(), "-c", "1", "-W", "2", remote.String())
 	return err == nil
 }

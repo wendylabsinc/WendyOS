@@ -286,6 +286,7 @@ release commit reproduces the pin.
 | `credential` | `{tenant?}` | `{profile, algorithm, chainDER, accessToken, publicJWK}`; refreshes a token with under a minute left |
 | `sign` | `{tenant?, bytes: Uint8Array}` | `{signature: Uint8Array}` with the operator key |
 | `valid-until` | `{validForSeconds?}` | `{seconds}`: Unix time to sign as a postbox-relayed payload's `valid_until` (`expires_at` on `DeviceAssignment`) |
+| `head-ack-verify` | `{response, rootDER, device, organizationId, kept?}` | `{entryId, entryHash, observedAt}`: the device's verified signed head ack, or an error naming the refused check |
 | `auth-signout` | `{tenant?}` | `true`; no tenant signs out of every organization |
 
 Call `init` once, first, before any sign-in, `credential` or `sign` call; a
@@ -304,6 +305,13 @@ it. Get it from `valid-until` before serializing the payload. Without
 refused, and cloud may refuse less under the organization's own limit. This is
 the time a device may still apply the instruction, not the 30-second expiry of
 the request signature.
+
+`head-ack-verify` checks a `GetLastHeadAck` response (`response`, the
+serialized `GetLastHeadAckResponse`) for one device against the platform root
+the page pins (`rootDER`, DER; never one cloud serves), both base64. Keep the
+result per device and pass it back as `kept` on the next read: an older or
+forked ack is then refused. Run the staleness alarm on the returned
+`observedAt` only; every refusal reads the same to the user.
 
 `sign` takes the bytes as the request's second argument, a non-empty
 `Uint8Array`; anything else fails with `Nothing to sign`. The bytes are signed

@@ -169,14 +169,14 @@ Unpinning by hostname also clears pins filed under the device's *other* names (t
 
 ### Re-enrolling after an intentional reset or organization move
 
-Unenrolling a device does not clear the identity saved by this CLI. If you intentionally unenrolled, reset, or reflashed it, or know it is moving to another organization, clear the old local pin before retrying enrollment:
+`wendy device unenroll` on a reachable device clears the identity this CLI saved for it once the device confirms its reset, even when the Cloud cleanup that follows fails: the device can no longer present that identity. Cloud-only unenrollment (`--cloud-only`, `wendy cloud device unenroll`) never contacts or resets the device, so it keeps the pin. So does a reset, reflash, or organization move done any other way, or unenrollment run from another machine. In those cases, clear the old local pin before retrying enrollment:
 
 ```sh
 wendy device unpin wendyos-ccr1.local
 wendy device enroll --device wendyos-ccr1.local
 ```
 
-Use the hostname printed in the refusal. Unpinning does not enroll the device or delete its cloud asset. If unenrollment reported a cloud cleanup failure, finish that cleanup in the Wendy Cloud dashboard separately. If the identity change was unexpected, keep the pin and verify the device first; check `wendy auth login` if this CLI is missing the organization's credentials.
+Use the hostname printed in the refusal. A pinned device whose plaintext port answers while no mTLS endpoint does is refused with exactly this guidance, because that is what an unprovisioned agent looks like. If another of its addresses has no agent at all, the refusal also notes that the answering address may be a stale DNS or mDNS record for another machine; keep the pin in that case. When nothing answers at all, the refusal says unpinning is not the fix: that is a reachability problem, not an identity one. The CLI can only tell these cases apart by probing with a client certificate. When it holds none for the device (signed out, for example), the refusal says no authenticated connection could be attempted; run `wendy auth login` and retry to get the guidance for your case. Unpinning does not enroll the device or delete its cloud asset. If unenrollment reported a cloud cleanup failure, run the `wendy cloud device unenroll` command it printed, or finish that cleanup in the Wendy Cloud dashboard. Until then Cloud still lists the device, and commands that read that list pin it again; the unenroll output prints the `wendy device unpin` command that clears such a pin. If the identity change was unexpected, keep the pin and verify the device first; check `wendy auth login` if this CLI is missing the organization's credentials.
 
 ## Pin sources and precedence
 
