@@ -83,8 +83,9 @@ type AgentConnection struct {
 	IsSessionProxy bool                    // true when Conn reaches a local session broker retaining the mTLS transport
 	CertInfo       *config.CertificateInfo // cert used to establish mTLS; nil for plaintext
 	RegistryDialer func(context.Context, int) (net.Conn, error)
-	// IsCloudV2 identifies the restricted Cloud v2 relay, whose service catalog
-	// has no container registry. LAN and legacy Cloud connections leave it false.
+	// IsCloudV2 identifies Cloud v2 connections, where the CLI surfaces chunk
+	// failures without an automatic registry fallback. LAN and legacy Cloud
+	// connections leave it false.
 	IsCloudV2 bool
 	// OperatorMeshTarget retains the selected device independently of the first
 	// hop and Cloud's reconnect marker. AppDialer reuses its authenticated agent
