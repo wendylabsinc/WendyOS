@@ -669,6 +669,19 @@ live only: no Episode records them. A thermal camera publishes nothing while it 
 not in its stacked 512x484 mode, and clears its markers for a frame whose mean
 temperature is outside -40 to 600 °C, which is what a wrong scale reads.
 
+Some TC001 units read every temperature about twice too hot, so a thermal camera
+can carry its own correction, kept by its stable id:
+
+```sh
+wendy device camera thermal-calibration set --id 4 --gain 0.48 --offset 0
+```
+
+The agent then publishes corrected °C = gain × camera °C + offset, where camera °C
+is count / 16 - 273.15: in the grid's `scale` and `offset`, in the markers'
+values, and in the -40 to 600 °C check, which judges the corrected mean. Its grids
+and markers carry the pair in `correction`, so a viewer can tell corrected values
+from the camera's own. See [Camera Access](/docs/hardware/camera#thermal-camera-temperatures).
+
 Viewers recognise a record by its schema. The standard types are defined in
 `Proto/wendy/data/v1/types.proto`: `wendy.data.v1.VideoMarkers` (points and boxes on
 a camera's picture, positioned from 0 to 1), `wendy.data.v1.Grid` (a grid of

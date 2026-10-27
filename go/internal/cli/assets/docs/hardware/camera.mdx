@@ -270,6 +270,65 @@ Apps with the `camera` entitlement (see [Camera Entitlement](/docs/device/entitl
   available until the compatible module is present.
 </Callout>
 
+## Thermal camera temperatures
+
+A TOPDON TC001 in its stacked 512x484 mode carries a temperature for every
+sensor pixel. The agent publishes them as live data streams, a grid and the
+hottest and coldest pixel; see `wendy data stream` in the CLI reference.
+
+Some TC001 units read every temperature about twice too hot, on any host, so a
+room reads 45 °C and a hand 75 °C. Give such a camera its own correction:
+
+```bash
+wendy device camera thermal-calibration show
+wendy device camera thermal-calibration set --id 4 --gain 0.48 --offset 0
+wendy device camera thermal-calibration clear --id 4
+```
+
+The agent then publishes, for that camera only:
+
+```text
+corrected °C = gain × camera °C + offset
+camera °C    = count / 16 - 273.15
+```
+
+It corrects the grid's `scale` and `offset`, the hottest and coldest markers,
+and the check that a frame's mean is a plausible scene (-40 to 600 °C). Its
+grids and markers carry the pair in a `correction` field, so a viewer can tell
+corrected values from the camera's own. `gain` must lie between 0.1 and 10 and
+`offset` between -100 and 100 °C; anything else is refused, as is a camera
+without the TC001's stacked mode.
+
+To measure the pair, clear any correction the camera has, then fill the frame
+with ice water (0 °C) and then with boiling water, and read each with a
+reference thermometer and with the camera. Take the camera's reading as the
+median of a grid from `wendy data stream --stream
+agent/camera/grid/v4l2:/dev/video4 --json`, not its hottest pixel, which is
+one pixel's noise. Then:
+
+```text
+gain   = (t_hot - t_cold) / (r_hot - r_cold)
+offset = t_cold - gain × r_cold
+```
+
+where `t` is the thermometer and `r` the camera. Water boils below 100 °C away
+from sea level, so trust the thermometer. Check the result on a room and a
+hand, which should read room temperature and 33 to 36 °C.
+
+The line is the same as `celsiusCalibration` in wendy-console's Mac fire
+detector, so a pair measured there works here. A Jetson edge-detector that
+overrides its scale with `FIRE_THERMAL_COUNTS_PER_K=k` is the line
+`gain = 16 / k`, `offset = 273.15 × (16 / k - 1)`.
+
+The correction belongs to one camera: never copy it to another. The agent
+keeps it by the camera's stable id (its `/dev/v4l/by-id` name), so it follows
+the camera when a reboot renumbers `/dev/video*` or the camera moves to
+another port, and the camera that takes its old number does not inherit it. A
+camera without a stable id cannot be calibrated. Corrections are stored in
+`/var/lib/wendy/thermal-calibration.json`, which on WendyOS lives on the data
+partition, so they survive agent and OS updates. `clear --stable-id` removes
+the correction of a camera that is no longer attached.
+
 ## App Configuration
 
 A minimal `wendy.json` camera app looks like this:
