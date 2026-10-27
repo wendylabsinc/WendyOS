@@ -17,10 +17,27 @@ final class CameraFeed: ObservableObject, Identifiable {
     @Published private(set) var receivedVideo = false
     @Published private(set) var error: String?
     private(set) var stream: UInt64 = 0
+    private(set) var manuallyPaused = false
+    private var startedAt = Date.distantPast
+    private var startAttempts = 0
+
+    func shouldAutoStart(at now: Date) -> Bool {
+        guard camera.thermal, !manuallyPaused else { return false }
+        if running {
+            return now.timeIntervalSince(lastVideoReceivedAt ?? startedAt) >= 15
+        }
+        return now.timeIntervalSince(startedAt) >= min(30, pow(2, Double(min(startAttempts, 5))))
+    }
+
+    func allowAutoplay() { manuallyPaused = false }
+
 
     init(camera: Camera) { self.camera = camera }
 
     func start(stream: UInt64) {
+        manuallyPaused = false
+        startedAt = Date()
+        startAttempts += 1
         decoder.reset()
         jpeg = nil
         jpegReceivedAt = nil
@@ -32,7 +49,8 @@ final class CameraFeed: ObservableObject, Identifiable {
         running = true
     }
 
-    func pause() {
+    func pause(manually: Bool = false) {
+        if manually { manuallyPaused = true }
         stream = 0
         running = false
         receivedVideo = false
@@ -66,6 +84,7 @@ final class CameraFeed: ObservableObject, Identifiable {
         } else if case .thermal(let frame) = event.payload {
             thermalFrame = frame
             thermalReceivedAt = Date()
+            startAttempts = 0
             receivedVideo = true
             lastVideoReceivedAt = Date()
         } else if case .jpeg(let bytes) = event.payload {
@@ -97,7 +116,6 @@ struct CameraFeedDisplay: View {
     var body: some View {
         if let frame = feed.thermalFrame {
             ThermalCameraDisplay(feed: feed, frame: frame)
-                .padding(.bottom, 64) // Keep measurements clear of the player controls.
         } else if let image = feed.jpeg {
             Image(decorative: image, scale: 1).resizable().scaledToFit()
         } else {
@@ -238,6 +256,8 @@ struct CameraPlayer: View {
             }
             .foregroundStyle(.white).padding(16).padding(.top, 28)
             .background(LinearGradient(colors: [.clear, .black.opacity(0.85)], startPoint: .top, endPoint: .bottom))
+            .opacity(feed.thermalFrame == nil || showControls ? 1 : 0)
+            .allowsHitTesting(feed.thermalFrame == nil || showControls)
         }
         .clipped().onHover { hovering = $0 }
         .animation(.easeInOut(duration: 0.15), value: showControls)

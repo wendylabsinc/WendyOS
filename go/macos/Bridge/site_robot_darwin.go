@@ -94,6 +94,9 @@ func WDSiteRobotPoll(handle C.uint64_t) *C.WDSiteRobotState {
 	if s.AllowUnobservedFloor {
 		p.allow_unobserved_floor = 1
 	}
+	if s.MeasurementsReady {
+		p.measurements_ready = 1
+	}
 	if s.ScanReady {
 		p.scan_ready = 1
 	}

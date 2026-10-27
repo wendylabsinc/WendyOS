@@ -212,7 +212,7 @@ final class SiteRobotMapModel: ObservableObject {
                     automaticAttempts = 0
                 }
                 let retryLocalization = positionSearch.shouldRetryLocalization(
-                    pose: result.pose, scanReady: result.scanReady, aligned: result.aligned,
+                    pose: result.pose, scanReady: result.scanReady, measurementsReady: result.measurementsReady, aligned: result.aligned,
                     rematchAfterLook: rematchAfterLook, attempts: automaticAttempts, now: .now,
                     calibrating: lensCalibrating || showLensCalibration)
                 if positionSearch.outcome != nil && searchConclusion == nil { finishUnmatchedSearch() }
@@ -240,7 +240,7 @@ final class SiteRobotMapModel: ObservableObject {
         }
         telemetry.reading = result
         if reading?.hasSameControls(as: result) != true { reading = result }
-        if !result.pose || result.aligned || result.moving { showRotationPrompt = false }
+        if showRotationPrompt && (!result.pose || result.aligned || result.moving) { showRotationPrompt = false }
     }
 
     func acceptCameraDecoder(_ decoder: H264AnnexBDecoder) {
@@ -340,6 +340,10 @@ final class SiteRobotMapModel: ObservableObject {
     }
     private func lookAutomatically() {
         guard handle != 0, !lensCalibrating, reading?.moving != true else { return }
+        guard reading?.measurementsReady == true else {
+            waitForLocalizationMeasurements()
+            return
+        }
         guard positionSearch.takeTurn(now: .now) else {
             finishUnmatchedSearch()
             return
@@ -377,6 +381,11 @@ final class SiteRobotMapModel: ObservableObject {
         automaticAttempts = 0
         automaticPaused = false
         nextAutomaticAttempt = Date.now.addingTimeInterval(1)
+    }
+
+    private func waitForLocalizationMeasurements() {
+        error = "Waiting for fresh LiDAR and odometry. The position search will resume automatically."
+        scheduleAutomaticLocalization()
     }
 
     var canStartRotationSearch: Bool {
@@ -480,6 +489,7 @@ final class SiteRobotMapModel: ObservableObject {
                     catch SiteLocalizationError.noSolution(let reason, let matches, let inliers) {
                         let detail: String
                         switch reason {
+                        case 1: detail = "Too few shared features were found between this view and the room references."
                         case 3: detail = "Matches occupy too little of the image to verify a position."
                         case 7: detail = "Matches lie on one plane, so this view cannot determine the camera lens."
                         default: detail = "The matches did not pass camera geometry validation."
@@ -500,6 +510,10 @@ final class SiteRobotMapModel: ObservableObject {
                 }
                 guard request == self.actionGeneration, epoch == self.generation else { return }
                 self.savedMap = stored
+                if self.reading?.measurementsReady != true {
+                    self.waitForLocalizationMeasurements()
+                    return
+                }
                 if self.positionSearch.active && self.reading?.scanReady != true {
                     self.lookAutomatically()
                     return
@@ -507,6 +521,10 @@ final class SiteRobotMapModel: ObservableObject {
                 let input = RobotFusionRequest(frame: f, architecture: mesh.architecture, furniture: mesh.furniture, visual: hint, reference: stored.surfaces)
                 let report = try await SiteRobotClient.shared.fuse(h, sequence: request, request: input)
                 guard request == self.actionGeneration, epoch == self.generation else { return }
+                if report.waitingForObservations {
+                    self.waitForLocalizationMeasurements()
+                    return
+                }
                 self.fusionReport = report
                 self.candidates = (report.candidates ?? []).map { SiteRobotCandidate(position: SitePoint(x:$0.X,y:$0.FloorY,z:$0.Z),yaw:$0.Yaw,rms:$0.RMS,coverage:$0.Coverage) }
                 noMatch = self.candidates.isEmpty

@@ -84,7 +84,7 @@ import Combine
 @MainActor @Test func robotTelemetryDoesNotRepublishControlsButUpdatesScene() {
     let model = SiteRobotMapModel()
     var reading = SiteRobotReading(message: "Live", pose: true, ready: true, aligned: true, moving: false,
-        arrivalTiming: true, usingArrivalTiming: true, timingUnavailable: false, scanReady: true,
+        arrivalTiming: true, usingArrivalTiming: true, timingUnavailable: false, scanReady: true, measurementsReady: true,
         underBodyAllowance: false, x: 1, z: 2, yaw: 0, floorY: 0, route: [], joints: [])
     model.accept(reading)
     var controlUpdates = 0
@@ -105,6 +105,10 @@ import Combine
     #expect(controlUpdates == 1)
     #expect(model.reading?.ready == false)
     #expect(model.reading?.message == "Obstacle ahead")
+    reading.measurementsReady = false
+    model.accept(reading)
+    #expect(controlUpdates == 2)
+    #expect(model.reading?.measurementsReady == false)
     withExtendedLifetime(subscription) {}
 }
 

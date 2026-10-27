@@ -19,7 +19,7 @@ type SiteRobotSnapshot struct {
 	ControlWarning                                       string
 	Pose, Ready, Aligned, Moving                         bool
 	ArrivalTiming, UsingArrivalTiming, TimingUnavailable bool
-	ScanReady                                            bool
+	ScanReady, MeasurementsReady                         bool
 	UnderBodyAllowance                                   bool
 	AllowUnobservedFloor                                 bool
 	X, Z, Yaw, FloorY                                    float64
@@ -598,6 +598,7 @@ func (r *SiteRobot) Snapshot() SiteRobotSnapshot {
 	s.TimingUnavailable = r.observed.TimingUnavailable
 	s.UnderBodyAllowance = r.underBodyAllowance
 	s.AllowUnobservedFloor = r.allowUnobservedFloor
+	s.MeasurementsReady = r.observed.MeasurementsReady(now) == nil && !r.closed && !r.stopUnconfirmed
 	s.ScanReady = (r.observed.SurfaceReady(now) == nil || r.observed.LocalizationReady(now) == nil) && !r.closed && !r.stopUnconfirmed
 	if err := r.observed.Ready(now); err == nil {
 		s.Ready = s.Aligned && !r.closed && !r.stopUnconfirmed

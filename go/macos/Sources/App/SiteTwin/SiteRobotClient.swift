@@ -5,7 +5,7 @@ struct SiteRobotReading: Sendable {
     var message: String
     var controlWarning: String = ""
     var pose, ready, aligned, moving: Bool
-    var arrivalTiming, usingArrivalTiming, timingUnavailable, scanReady: Bool
+    var arrivalTiming, usingArrivalTiming, timingUnavailable, scanReady, measurementsReady: Bool
     var underBodyAllowance: Bool
     var allowUnobservedFloor: Bool = false
     var x, z, yaw, floorY: Double
@@ -20,7 +20,7 @@ struct SiteRobotReading: Sendable {
         controlWarning == other.controlWarning && lookDirection == other.lookDirection && lookState == other.lookState && message == other.message && pose == other.pose && ready == other.ready &&
         aligned == other.aligned && moving == other.moving && arrivalTiming == other.arrivalTiming &&
         usingArrivalTiming == other.usingArrivalTiming && timingUnavailable == other.timingUnavailable &&
-        allowUnobservedFloor == other.allowUnobservedFloor && scanReady == other.scanReady && underBodyAllowance == other.underBodyAllowance &&
+        allowUnobservedFloor == other.allowUnobservedFloor && scanReady == other.scanReady && measurementsReady == other.measurementsReady && underBodyAllowance == other.underBodyAllowance &&
         floorY == other.floorY && route == other.route
     }
 }
@@ -54,7 +54,7 @@ final class SiteRobotClient: Sendable {
             return SiteRobotReading(message: GoClient.string(s.message), controlWarning: GoClient.string(s.control_warning), pose: s.pose != 0, ready: s.ready != 0,
                 aligned: s.aligned != 0, moving: s.moving != 0,
                 arrivalTiming: s.arrival_timing != 0, usingArrivalTiming: s.using_arrival_timing != 0,
-                timingUnavailable: s.timing_unavailable != 0, scanReady: s.scan_ready != 0,
+                timingUnavailable: s.timing_unavailable != 0, scanReady: s.scan_ready != 0, measurementsReady: s.measurements_ready != 0,
                 underBodyAllowance: s.under_body_allowance != 0, allowUnobservedFloor: s.allow_unobserved_floor != 0, x: s.x, z: s.z, yaw: s.yaw, floorY: s.floor_y, observationRevision: s.observation_revision, lookState: Int(s.look_state), lookDirection: s.look_direction,
                 route: UnsafeBufferPointer(start: s.route, count: s.route_count).map { SitePoint(x: $0.x, y: s.floor_y, z: $0.z) },
                 joints: Array(UnsafeBufferPointer(start: s.joints, count: s.joint_count)))

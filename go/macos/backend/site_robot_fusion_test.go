@@ -45,3 +45,43 @@ func TestCameraEvidenceRequiresFreshPairedOdometry(t *testing.T) {
 		})
 	}
 }
+
+func TestFusionWaitsForFreshMeasurementsWithoutRetainingCandidates(t *testing.T) {
+	for _, fault := range []string{"odometry-arrival", "odometry-capture", "lidar"} {
+		t.Run(fault, func(t *testing.T) {
+			r, commands := readySiteRobot()
+			r.localizations = []siteRobotLocalization{{frame: "old"}}
+			stale := time.Now().Add(-time.Second)
+			switch fault {
+			case "odometry-arrival":
+				r.observed.Pose.Received = stale
+			case "odometry-capture":
+				r.observed.Pose.Captured = stale
+			case "lidar":
+				r.observed.CloudAt = stale
+			}
+			report, err := r.FuseLocalization(1, SiteFusionRequest{Frame: "site/revision"})
+			if err != nil || !report.WaitingForObservations || report.Tracking.Selected != -1 || len(report.Candidates) != 0 {
+				t.Fatalf("expected recoverable wait without pose: %+v, %v", report, err)
+			}
+			if len(r.localizations) != 0 || len(commands.commands) != 0 || r.Snapshot().MeasurementsReady {
+				t.Fatal("waiting retained a candidate, moved, or reported fresh measurements")
+			}
+			// Fresh readings can resume acquisition, even before there is enough
+			// room structure to match. Timing must not hide a geometry failure.
+			now := time.Now()
+			r.observed.Pose.Received, r.observed.Pose.Captured, r.observed.CloudAt = now, now, now
+			if s := r.Snapshot(); !s.MeasurementsReady || s.ScanReady {
+				t.Fatal("fresh sparse scan was confused with delayed measurements")
+			}
+			if report, err = r.FuseLocalization(2, SiteFusionRequest{Frame: "site/revision"}); err == nil || report.WaitingForObservations {
+				t.Fatal("fresh insufficient geometry was reported as a timing wait")
+			}
+			// Waiting does not permit a stale request to supersede Stop.
+			r.Stop(3)
+			if _, err = r.FuseLocalization(2, SiteFusionRequest{Frame: "site/revision"}); err == nil {
+				t.Fatal("superseded request resumed after Stop")
+			}
+		})
+	}
+}

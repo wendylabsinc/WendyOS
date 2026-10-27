@@ -22,14 +22,15 @@ type SiteScanPoint struct {
 	Class   int
 }
 type SiteFusionReport struct {
-	Message             string                 `json:"message"`
-	Candidates          []SiteRobotCandidate   `json:"candidates"`
-	Tracking            sitenav.TrackingResult `json:"tracking"`
-	Overlay             []SiteScanPoint        `json:"overlay"`
-	Reference           []sitenav.Surface      `json:"reference"`
-	Accepted, Rejected  int
-	VisualUsed          bool   `json:"visualUsed"`
-	ObservationRevision uint64 `json:"observationRevision"`
+	Message                string                 `json:"message"`
+	Candidates             []SiteRobotCandidate   `json:"candidates"`
+	Tracking               sitenav.TrackingResult `json:"tracking"`
+	Overlay                []SiteScanPoint        `json:"overlay"`
+	Reference              []sitenav.Surface      `json:"reference"`
+	Accepted, Rejected     int
+	VisualUsed             bool   `json:"visualUsed"`
+	WaitingForObservations bool   `json:"waitingForObservations"`
+	ObservationRevision    uint64 `json:"observationRevision"`
 }
 
 func fusionTriangles(values []float64) ([]sitenav.Triangle, error) {
@@ -75,6 +76,10 @@ func (r *SiteRobot) FuseLocalization(sequence uint64, request SiteFusionRequest)
 	}
 	r.localizations = nil
 	r.preview = nil
+	if err = r.observed.MeasurementsReady(time.Now()); err != nil {
+		r.mu.Unlock()
+		return waitingForFusionObservations(err), nil
+	}
 	if err = r.observed.SurfaceReady(time.Now()); err != nil {
 		r.mu.Unlock()
 		return report, err
@@ -100,6 +105,9 @@ func (r *SiteRobot) FuseLocalization(sequence uint64, request SiteFusionRequest)
 	defer r.mu.Unlock()
 	if r.closed || r.ctx.Err() != nil || r.commandSequence != sequence || r.poseEpoch != epoch {
 		return report, errors.New("This localization request was superseded.")
+	}
+	if err = r.observed.MeasurementsReady(time.Now()); err != nil {
+		return waitingForFusionObservations(err), nil
 	}
 	if err = r.observed.SurfaceReady(time.Now()); err != nil {
 		return report, err
@@ -156,6 +164,14 @@ func (r *SiteRobot) FuseLocalization(sequence uint64, request SiteFusionRequest)
 	}
 	r.recordLocalizationEvidence(request, input, report, time.Now())
 	return report, nil
+}
+
+// Waiting never exposes an old candidate or allows confirmation. A later fresh
+// request must repeat matching under the existing command and epoch checks.
+func waitingForFusionObservations(err error) SiteFusionReport {
+	message := "Waiting for fresh LiDAR and odometry. " + err.Error()
+	return SiteFusionReport{WaitingForObservations: true, Message: message,
+		Tracking: sitenav.TrackingResult{Selected: -1, Message: message}}
 }
 
 // Camera hints use host arrival time and must have an odometry sample from that

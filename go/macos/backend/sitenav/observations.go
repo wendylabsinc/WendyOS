@@ -94,6 +94,11 @@ func (o *Observations) LocalizationReady(now time.Time) error {
 	return localizationStructure(o.Landmarks)
 }
 
+// MeasurementsReady checks timing independently of landmark richness or floor clearance.
+func (o *Observations) MeasurementsReady(now time.Time) error {
+	return o.freshCloud(now)
+}
+
 func (o *Observations) freshCloud(now time.Time) error {
 	if !Fresh(o.Pose.Received, now) {
 		if o.PoseFault != "" {

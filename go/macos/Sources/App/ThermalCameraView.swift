@@ -105,53 +105,54 @@ struct ThermalCameraDisplay: View {
             let summaryFresh = fresh && frame.summaryIsFresh(at: context.date)
             let coldest = summaryFresh ? (frame.summaryColdest ?? frame.coldest) : frame.coldest
             let hottest = summaryFresh ? (frame.summaryHottest ?? frame.hottest) : frame.hottest
-            VStack(spacing: 0) {
-                VStack(alignment: .leading, spacing: 5) {
-                    HStack(spacing: 8) {
-                        Image(systemName: "thermometer.medium")
-                        Text(fresh ? "Thermal" : "Thermal · No recent frame")
-                        Spacer(minLength: 0)
-                        if frame.allowScaleOverride {
-                            Button { choosingScale = true } label: { Image(systemName: "slider.horizontal.3") }
-                                .buttonStyle(.plain).accessibilityLabel("Thermal temperature scale")
-                        }
-                    }.font(.caption.weight(.semibold))
-                    if summaryFresh {
-                        Text("Camera temperatures · Updated separately from video")
-                    } else if frame.kelvinPerCount == nil && !frame.allowScaleOverride {
-                        Text("Sensor counts · Waiting for temperature readings")
-                    }
-                    if fresh {
-                        Text("+ Hottest \(frame.label(hottest, scale: feed.thermalScale))")
-                            .foregroundStyle(.orange)
-                        Text("− Coldest \(frame.label(coldest, scale: feed.thermalScale))")
-                            .foregroundStyle(.cyan)
-                    }
-                }
-                .font(.caption.monospacedDigit()).foregroundStyle(.white)
-                .padding(10).background(.black.opacity(0.75), in: RoundedRectangle(cornerRadius: 8))
-                .padding(10)
-                ZStack {
-                    Image(decorative: frame.image, scale: 1).resizable().interpolation(.none).scaledToFit()
+            GeometryReader { geometry in
+                ZStack(alignment: .topLeading) {
+                    Image(decorative: frame.image, scale: 1)
+                        .resizable().interpolation(.none).scaledToFit()
+                        .frame(width: geometry.size.width, height: geometry.size.height)
                         .opacity(fresh ? 1 : 0.35)
                     if fresh {
-                        GeometryReader { geometry in
-                            marker(coldest, label: "Coldest", symbol: "minus", color: .cyan, size: geometry.size)
-                            marker(hottest, label: "Hottest", symbol: "plus", color: .orange, size: geometry.size)
-                        }.allowsHitTesting(false)
+                        marker(coldest, label: "MIN", color: .cyan, size: geometry.size)
+                        marker(hottest, label: "MAX", color: .orange, size: geometry.size)
                     }
-                }.padding(12)
+                    HStack(spacing: 5) {
+                        Image(systemName: "thermometer.medium")
+                        Text(fresh ? "THERMAL" : "NO RECENT FRAME")
+                        if fresh && !summaryFresh && frame.kelvinPerCount == nil && feed.thermalScale == .counts {
+                            Text("· RAW")
+                        }
+                    }
+                    .font(.system(size: 9, weight: .semibold, design: .rounded))
+                    .tracking(0.7).foregroundStyle(.white.opacity(0.9))
+                    .padding(.horizontal, 8).padding(.vertical, 5)
+                    .background(.black.opacity(0.4), in: Capsule())
+                    .padding(12)
+                }
+                .overlay(alignment: .topTrailing) {
+                    Button { choosingScale = true } label: {
+                        Image(systemName: frame.allowScaleOverride ? "slider.horizontal.3" : "info.circle")
+                            .font(.system(size: 12)).foregroundStyle(.white.opacity(0.8))
+                            .padding(7).background(.black.opacity(0.35), in: Circle())
+                    }
+                    .buttonStyle(.plain).padding(10)
+                    .accessibilityLabel("Thermal measurement details")
+                }
             }
         }
         .popover(isPresented: $choosingScale) {
             VStack(alignment: .leading, spacing: 12) {
-                Text("Thermal temperature scale").font(.headline)
-                Picker("Sensor output", selection: $feed.thermalScale) {
-                    ForEach(ThermalCameraScale.allCases) { Text($0.rawValue).tag($0) }
-                }.pickerStyle(.menu)
-                Text("Use a TLinear scale only when the camera is configured for radiometric output at that resolution. Y16 can also contain uncalibrated sensor counts.")
-                    .font(.caption).foregroundStyle(.secondary)
-                Text("The heatmap scales to each frame's measured range. Gray pixels have no valid measurement.")
+                Text("Thermal measurements").font(.headline)
+                if frame.allowScaleOverride {
+                    Picker("Sensor output", selection: $feed.thermalScale) {
+                        ForEach(ThermalCameraScale.allCases) { Text($0.rawValue).tag($0) }
+                    }.pickerStyle(.menu)
+                    Text("Use a TLinear scale only when the camera is configured for radiometric output at that resolution.")
+                        .font(.caption).foregroundStyle(.secondary)
+                } else {
+                    Text("MIN and MAX show camera-reported temperatures. They update separately from the live image and disappear when readings stop updating.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Text("The heatmap scales to each frame's sensor range. Gray pixels have no valid measurement.")
                     .font(.caption).foregroundStyle(.secondary)
                 Button("Done") { choosingScale = false }
             }.padding().frame(width: 300)
@@ -159,22 +160,26 @@ struct ThermalCameraDisplay: View {
         }
     }
 
-    private func marker(_ point: ThermalCameraFrame.Point, label: String, symbol: String, color: Color, size: CGSize) -> some View {
+    private func marker(_ point: ThermalCameraFrame.Point, label: String, color: Color, size: CGSize) -> some View {
         let position = ThermalCameraFrame.position(x: point.x, y: point.y, width: frame.width, height: frame.height, in: size)
         return ZStack(alignment: .topLeading) {
-            Image(systemName: symbol)
-                .font(.system(size: 13, weight: .bold)).foregroundStyle(color)
-                .frame(width: 20, height: 20).background(.black.opacity(0.65), in: Circle())
-                .overlay(Circle().stroke(color, lineWidth: 1.5))
+            Image(systemName: "plus")
+                .font(.system(size: 17, weight: .light)).foregroundStyle(color)
+                .shadow(color: .black, radius: 1)
                 .position(position)
-            Text("\(label) \(frame.label(point, scale: feed.thermalScale))")
-                .font(.caption2.monospacedDigit().weight(.semibold)).foregroundStyle(color)
-                .padding(.horizontal, 5).padding(.vertical, 3)
-                .background(.black.opacity(0.8), in: RoundedRectangle(cornerRadius: 4))
-                .fixedSize()
-                .position(x: min(max(position.x, 85), max(85, size.width - 85)),
-                          y: position.y > size.height / 2 ? max(12, position.y - 24) : min(size.height - 12, position.y + 24))
+            HStack(spacing: 4) {
+                Text(label).font(.system(size: 8, weight: .bold, design: .rounded)).foregroundStyle(color)
+                Text(frame.label(point, scale: feed.thermalScale))
+                    .font(.system(size: 11, weight: .medium, design: .rounded).monospacedDigit())
+                    .foregroundStyle(.white)
+            }
+            .padding(.horizontal, 6).padding(.vertical, 4)
+            .background(.black.opacity(0.65), in: RoundedRectangle(cornerRadius: 5))
+            .fixedSize()
+            .position(x: min(max(position.x + (position.x < size.width / 2 ? 46 : -46), 48), max(48, size.width - 48)),
+                      y: position.y > size.height / 2 ? max(36, position.y - 19) : min(size.height - 36, max(46, position.y + 19)))
         }
+        .allowsHitTesting(false)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(label) \(frame.label(point, scale: feed.thermalScale)), pixel \(point.x), \(point.y)")
     }

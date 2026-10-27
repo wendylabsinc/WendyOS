@@ -120,6 +120,23 @@ final class ThermalCameraTests: XCTestCase {
     }
 
     @MainActor
+    func testThermalAutoplayRecoversAndRespectsPause() {
+        let feed = CameraFeed(camera: Camera(id: 2, name: "TC001", thermal: true))
+        XCTAssertTrue(feed.shouldAutoStart(at: Date()))
+        feed.start(stream: 1)
+        XCTAssertFalse(feed.shouldAutoStart(at: Date()))
+        XCTAssertTrue(feed.shouldAutoStart(at: Date().addingTimeInterval(16)))
+        feed.fail("Startup interrupted", stream: 1)
+        XCTAssertTrue(feed.shouldAutoStart(at: Date().addingTimeInterval(3)))
+        feed.pause(manually: true)
+        XCTAssertFalse(feed.shouldAutoStart(at: Date().addingTimeInterval(60)))
+        feed.allowAutoplay()
+        XCTAssertTrue(feed.shouldAutoStart(at: Date().addingTimeInterval(60)))
+        let ordinary = CameraFeed(camera: Camera(id: 0, name: "Webcam"))
+        XCTAssertFalse(ordinary.shouldAutoStart(at: Date()))
+    }
+
+    @MainActor
     func testThermalDisplayRenders() throws {
         let feed = CameraFeed(camera: Camera(id: 2, name: "PureThermal", thermal: true))
         let image = try frame()

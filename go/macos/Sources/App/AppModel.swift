@@ -91,6 +91,7 @@ final class AppModel: ObservableObject {
     private var cameraStream: UInt64 = 0
     private var cameraWallVisible = false
     private var cameraBatch: UInt64 = 0
+    private var cameraRecoveryGeneration: UInt64 = 0
     private var starting = false
     private var shuttingDown = false
     let cleanup = AsyncActions()
@@ -316,7 +317,7 @@ final class AppModel: ObservableObject {
             cameras = result
             let previous = Dictionary(uniqueKeysWithValues: cameraFeeds.map { ($0.camera.id, $0) })
             for feed in cameraFeeds where !cameras.contains(feed.camera) {
-                pauseCamera(feed)
+                pauseCamera(feed, manually: false)
             }
             cameraFeeds = cameras.map { camera in
                 if let feed = previous[camera.id], feed.camera == camera { return feed }
@@ -341,11 +342,26 @@ final class AppModel: ObservableObject {
 
     func showCameraWall() async {
         cameraWallVisible = true
+        for feed in cameraFeeds { feed.allowAutoplay() }
+        cameraRecoveryGeneration &+= 1
+        let generation = cameraRecoveryGeneration
         await playCameras()
+        // The camera wall's view task owns retries and cancels on dismissal.
+        while !Task.isCancelled {
+            do { try await Task.sleep(for: .seconds(2)) } catch { return }
+            guard cameraWallVisible, cameraRecoveryGeneration == generation else { return }
+            let expectedSession = session
+            for feed in cameraFeeds where feed.shouldAutoStart(at: Date()) {
+                guard cameraWallVisible, cameraRecoveryGeneration == generation,
+                      session == expectedSession, !Task.isCancelled else { return }
+                await playCamera(feed)
+            }
+        }
     }
 
     func hideCameraWall() {
         cameraWallVisible = false
+        cameraRecoveryGeneration &+= 1
         pauseCameras()
     }
 
@@ -355,7 +371,7 @@ final class AppModel: ObservableObject {
         let currentSession = session
         for feed in cameraFeeds {
             guard cameraWallVisible, cameraBatch == batch, session == currentSession, !Task.isCancelled else { return }
-            if !feed.running { await playCamera(feed) }
+            if !feed.running && !feed.manuallyPaused { await playCamera(feed) }
         }
     }
 
@@ -383,9 +399,9 @@ final class AppModel: ObservableObject {
         return stream
     }
 
-    func pauseCamera(_ feed: CameraFeed) {
+    func pauseCamera(_ feed: CameraFeed, manually: Bool = true) {
         let stream = feed.stream
-        feed.pause()
+        feed.pause(manually: manually)
         guard stream != 0 else { return }
         let currentSession = session
         // The app lifetime owns these cleanup actions, including after a camera
@@ -397,7 +413,7 @@ final class AppModel: ObservableObject {
 
     func pauseCameras() {
         cameraBatch &+= 1
-        for feed in cameraFeeds { pauseCamera(feed) }
+        for feed in cameraFeeds { pauseCamera(feed, manually: false) }
     }
 
     func signIn(development: Bool = false) async {
@@ -446,7 +462,7 @@ final class AppModel: ObservableObject {
     func shutdown() async {
         shuttingDown = true
         deviceChat.stop()
-        pauseCameras()
+        hideCameraWall()
         await cleanup.finishAndWait()
         try? await vpn.stop()
         try? await client.shutdown()

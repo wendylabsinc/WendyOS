@@ -44,6 +44,7 @@ struct RobotFusionReport: Decodable, Sendable {
     var overlay: [RobotScanPoint]?
     var reference: [RobotObservedSurface]?
     var Accepted, Rejected: Int
+    var waitingForObservations: Bool
     var visualUsed: Bool
     var observationRevision: UInt64
 }
@@ -243,12 +244,12 @@ struct RobotPositionSearch {
     private var deadline = Date.distantPast
     mutating func start(now: Date) { active = true; outcome = nil; remainingTurns = 12; direction = 0; deadline = now.addingTimeInterval(300) }
     mutating func resumeAfterCalibration(now: Date) { if active { deadline = now.addingTimeInterval(300) } }
-    mutating func shouldRetryLocalization(pose: Bool, scanReady: Bool, aligned: Bool,
+    mutating func shouldRetryLocalization(pose: Bool, scanReady: Bool, measurementsReady: Bool, aligned: Bool,
                                          rematchAfterLook: Bool, attempts: Int, now: Date,
                                          calibrating: Bool = false) -> Bool {
         guard !calibrating else { return false }
         if active && now >= deadline { finish(.timedOut) }
-        if outcome != nil { return false }
+        if outcome != nil || !measurementsReady { return false }
         // An explicit search must be able to acquire another view when room
         // landmarks are sparse. The backend still checks sensor freshness and
         // the entire turning footprint before allowing any motion.
