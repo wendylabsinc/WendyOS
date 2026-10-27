@@ -26,16 +26,28 @@ struct ThermalCameraFrame {
     let coldest: Point
     let hottest: Point
     let timestampNanoseconds: UInt64
+    let kelvinPerCount: Double?
+    let kelvinOffset: Double
+    let allowScaleOverride: Bool
+
+    func label(_ raw: UInt16, scale: ThermalCameraScale) -> String {
+        if let kelvinPerCount {
+            return String(format: "%.1f°C", Double(raw) * kelvinPerCount + kelvinOffset - 273.15)
+        }
+        return (allowScaleOverride ? scale : .counts).label(raw)
+    }
     var width: Int { image.width }
     var height: Int { image.height }
 
     init(_ frame: WDThermalFrame, bytes: UnsafePointer<UInt8>?, count: Int) throws {
         let width = Int(frame.width), height = Int(frame.height)
-        guard ((width == 160 && height == 120) || (width == 80 && height == 60)),
+        guard width > 0, height > 0, width <= 4096, height <= 4096, width * height <= 4_000_000,
+              frame.has_temperature == 0 || (frame.kelvin_per_count.isFinite && frame.kelvin_per_count > 0 && frame.kelvin_offset.isFinite &&
+                  (65535 * frame.kelvin_per_count + frame.kelvin_offset).isFinite),
               count == width * height * 4, let bytes,
               frame.cold_x < frame.width, frame.hot_x < frame.width,
               frame.cold_y < frame.height, frame.hot_y < frame.height,
-              frame.cold_raw > 0, frame.hot_raw < UInt16.max, frame.cold_raw <= frame.hot_raw,
+              frame.cold_raw <= frame.hot_raw,
               let provider = CGDataProvider(data: Data(bytes: bytes, count: count) as CFData),
               let image = CGImage(width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 32,
                                   bytesPerRow: width * 4, space: CGColorSpaceCreateDeviceRGB(),
@@ -47,6 +59,9 @@ struct ThermalCameraFrame {
         coldest = Point(x: Int(frame.cold_x), y: Int(frame.cold_y), raw: frame.cold_raw)
         hottest = Point(x: Int(frame.hot_x), y: Int(frame.hot_y), raw: frame.hot_raw)
         timestampNanoseconds = frame.timestamp_ns
+        kelvinPerCount = frame.has_temperature != 0 ? frame.kelvin_per_count : nil
+        kelvinOffset = frame.kelvin_offset
+        allowScaleOverride = frame.allow_scale_override != 0
     }
 
     /// Pixel centers within an aspect-fit image, including letterboxing.
@@ -71,13 +86,18 @@ struct ThermalCameraDisplay: View {
                         Image(systemName: "thermometer.medium")
                         Text(fresh ? "Thermal" : "Thermal · No recent frame")
                         Spacer(minLength: 0)
-                        Button { choosingScale = true } label: { Image(systemName: "slider.horizontal.3") }
-                            .buttonStyle(.plain).accessibilityLabel("Thermal temperature scale")
+                        if frame.allowScaleOverride {
+                            Button { choosingScale = true } label: { Image(systemName: "slider.horizontal.3") }
+                                .buttonStyle(.plain).accessibilityLabel("Thermal temperature scale")
+                        }
                     }.font(.caption.weight(.semibold))
+                    if frame.kelvinPerCount == nil && !frame.allowScaleOverride {
+                        Text("Sensor counts · Temperature calibration unavailable")
+                    }
                     if fresh {
-                        Text("+ Hottest \(feed.thermalScale.label(frame.hottest.raw))")
+                        Text("+ Hottest \(frame.label(frame.hottest.raw, scale: feed.thermalScale))")
                             .foregroundStyle(.orange)
-                        Text("− Coldest \(feed.thermalScale.label(frame.coldest.raw))")
+                        Text("− Coldest \(frame.label(frame.coldest.raw, scale: feed.thermalScale))")
                             .foregroundStyle(.cyan)
                     }
                 }
@@ -118,6 +138,6 @@ struct ThermalCameraDisplay: View {
             .frame(width: 20, height: 20).background(.black.opacity(0.65), in: Circle())
             .overlay(Circle().stroke(color, lineWidth: 1.5))
             .position(ThermalCameraFrame.position(x: point.x, y: point.y, width: frame.width, height: frame.height, in: size))
-            .accessibilityLabel("\(label) \(feed.thermalScale.label(point.raw)), pixel \(point.x), \(point.y)")
+            .accessibilityLabel("\(label) \(frame.label(point.raw, scale: feed.thermalScale)), pixel \(point.x), \(point.y)")
     }
 }

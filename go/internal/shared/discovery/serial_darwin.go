@@ -40,7 +40,7 @@ static int intProp(io_service_t svc, CFStringRef key, int *out) {
 
 typedef struct { char **paths; int count; } WendySerialList;
 
-static WendySerialList wendy_find_usb_serial(int wantVID, int wantPID) {
+static WendySerialList wendy_find_usb_serial(int wantVID, int wantPID, int wantInterface) {
 	WendySerialList result = {NULL, 0};
 	int cap = 8;
 	result.paths = (char**)malloc(cap * sizeof(char*));
@@ -59,15 +59,19 @@ static WendySerialList wendy_find_usb_serial(int wantVID, int wantPID) {
 
 		// Walk up the registry tree to find the USB node with VID/PID.
 		int matched = 0;
+		int interfaceNumber = -1;
 		io_service_t cur = svc;
 		IOObjectRetain(cur);
 		io_service_t parent;
 		while (IORegistryEntryGetParentEntry(cur, kIOServicePlane, &parent) == KERN_SUCCESS) {
 			IOObjectRelease(cur);
 			cur = parent;
+			if (interfaceNumber < 0) intProp(cur, CFSTR("bInterfaceNumber"), &interfaceNumber);
 			int vid = 0, pid = 0;
-			if (intProp(cur, CFSTR("idVendor"), &vid) && intProp(cur, CFSTR("idProduct"), &pid)) {
-				matched = (vid == wantVID && pid == wantPID);
+			if ((wantInterface < 0 || interfaceNumber >= 0) &&
+			    intProp(cur, CFSTR("idVendor"), &vid) && intProp(cur, CFSTR("idProduct"), &pid)) {
+				matched = (vid == wantVID && pid == wantPID &&
+				    (wantInterface < 0 || interfaceNumber == wantInterface));
 				break;
 			}
 		}
@@ -114,7 +118,12 @@ func resolveESP32SerialPorts() ([]SerialPortInfo, error) {
 	var result []SerialPortInfo
 	seen := make(map[string]struct{})
 	for _, id := range supportedESP32SerialUSBIDs {
-		list := C.wendy_find_usb_serial(C.int(id.vendorID), C.int(id.productID))
+		iface := -1
+		if !serialUSBInterfaceAllowed(id, -1) {
+			// macOS attaches the serial node to the CDC data interface.
+			iface = 1
+		}
+		list := C.wendy_find_usb_serial(C.int(id.vendorID), C.int(id.productID), C.int(iface))
 		count := int(list.count)
 		paths := unsafe.Slice(list.paths, count)
 		for _, cp := range paths {

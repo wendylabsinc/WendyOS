@@ -212,6 +212,14 @@ func events(items []backend.Event) *C.WDEvents {
 				out.thermal = C.WDThermalFrame{width: C.uint32_t(f.Width), height: C.uint32_t(f.Height),
 					cold_x: C.uint32_t(f.Coldest.X), cold_y: C.uint32_t(f.Coldest.Y), cold_raw: C.uint16_t(f.Coldest.Raw),
 					hot_x: C.uint32_t(f.Hottest.X), hot_y: C.uint32_t(f.Hottest.Y), hot_raw: C.uint16_t(f.Hottest.Raw), timestamp_ns: C.uint64_t(f.TimestampNS)}
+				if f.Temperature != nil {
+					out.thermal.has_temperature = 1
+					out.thermal.kelvin_per_count = C.double(f.Temperature.KelvinPerCount)
+					out.thermal.kelvin_offset = C.double(f.Temperature.KelvinOffset)
+				}
+				if f.AllowScaleOverride {
+					out.thermal.allow_scale_override = 1
+				}
 			}
 			if len(e.Bytes) > 0 {
 				out.bytes = (*C.uint8_t)(C.CBytes(e.Bytes))
@@ -384,7 +392,7 @@ func WDAccountsFree(p *C.WDAccountsResult) {
 }
 
 func thermalFlag(camera *pb.VideoDevice) C.int32_t {
-	if thermal.IsPureThermal(camera.GetName(), camera.GetPixelFormats()) {
+	if thermal.CameraProfile(camera) != nil {
 		return 1
 	}
 	return 0

@@ -12,7 +12,7 @@ import (
 )
 
 func floorGrid() Grid {
-	g := Grid{map[Cell]bool{}, map[Cell]bool{}}
+	g := Grid{Floor: map[Cell]bool{}, Obstacles: map[Cell]bool{}}
 	for y := -30; y < 50; y++ {
 		for x := -30; x < 80; x++ {
 			g.Floor[Cell{x, y}] = true

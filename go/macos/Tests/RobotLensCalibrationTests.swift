@@ -88,6 +88,68 @@ private func measuredRobotLens() -> SiteCameraLens {
     #expect(!takeTurn(now.addingTimeInterval(501)))
 }
 
+@Test func rotationOfferFollowsFailedMatchAndDoesNotRepeat() {
+    let now = Date(timeIntervalSince1970: 1000)
+    var offer = RobotRotationOffer()
+    #expect({ !offer.shouldPresent(eligible: true, scanReady: true, now: now) }())
+    #expect({ offer.shouldPresent(eligible: true, scanReady: true, failedMatch: true, now: now) }())
+    offer.dismiss()
+    #expect({ !offer.shouldPresent(eligible: true, scanReady: true, failedMatch: true, now: now.addingTimeInterval(30)) }())
+    #expect({ !offer.shouldPresent(eligible: true, scanReady: false, now: now.addingTimeInterval(60)) }())
+    // A new observation session can offer again, without reusing old consent.
+    offer = RobotRotationOffer()
+    #expect({ offer.shouldPresent(eligible: true, scanReady: true, failedMatch: true, now: now) }())
+}
+
+@Test func completedRotationSearchDoesNotFallBackIntoEndlessMatching() {
+    let now = Date(timeIntervalSince1970: 1000)
+    var search = RobotPositionSearch()
+    search.start(now: now)
+    for _ in 0..<12 { #expect({ search.takeTurn(now: now) }()) }
+    // The final view still gets matched before declaring failure.
+    #expect({ search.shouldRetryLocalization(pose: true, scanReady: true, aligned: false,
+                                            rematchAfterLook: true, attempts: 0, now: now) }())
+    #expect({ !search.takeTurn(now: now) }())
+    #expect(search.outcome == .exhausted)
+    #expect({ !search.shouldRetryLocalization(pose: true, scanReady: true, aligned: false,
+                                             rematchAfterLook: false, attempts: 0, now: now) }())
+    search.start(now: now)
+    #expect(search.outcome == nil)
+    #expect({ search.takeTurn(now: now) }())
+    #expect({ !search.shouldRetryLocalization(pose: true, scanReady: true, aligned: false,
+                                             rematchAfterLook: false, attempts: 0, now: now.addingTimeInterval(301)) }())
+    #expect(search.outcome == .timedOut)
+}
+
+@Test func rotationOfferWaitsForSparseScansAndResetsWhenIneligible() {
+    let now = Date(timeIntervalSince1970: 1000)
+    var offer = RobotRotationOffer()
+    #expect({ !offer.shouldPresent(eligible: true, scanReady: false, now: now) }())
+    #expect({ !offer.shouldPresent(eligible: true, scanReady: false, now: now.addingTimeInterval(4)) }())
+    // Losing the pose or entering placement/calibration restarts the grace period.
+    #expect({ !offer.shouldPresent(eligible: false, scanReady: false, failedMatch: true, now: now.addingTimeInterval(5)) }())
+    #expect({ !offer.shouldPresent(eligible: true, scanReady: false, now: now.addingTimeInterval(6)) }())
+    #expect({ offer.shouldPresent(eligible: true, scanReady: false, now: now.addingTimeInterval(11)) }())
+}
+
+@Test func rotationOfferAllowsPassiveMatchingBeforePrompting() {
+    let now = Date(timeIntervalSince1970: 1000)
+    var offer = RobotRotationOffer()
+    #expect({ !offer.shouldPresent(eligible: true, scanReady: false, now: now) }())
+    #expect({ !offer.shouldPresent(eligible: true, scanReady: true, now: now.addingTimeInterval(6)) }())
+    #expect({ !offer.shouldPresent(eligible: true, scanReady: false, now: now.addingTimeInterval(7)) }())
+    #expect({ !offer.shouldPresent(eligible: true, scanReady: false, now: now.addingTimeInterval(11)) }())
+    #expect({ offer.shouldPresent(eligible: true, scanReady: false, now: now.addingTimeInterval(12)) }())
+}
+
+@MainActor @Test func rotationSearchRejectsDisconnectedOrStalePrompt() {
+    let model = SiteRobotMapModel()
+    #expect(!model.canStartRotationSearch)
+    model.startRotationSearch()
+    #expect(!model.showRotationPrompt)
+    #expect(!model.localizing)
+}
+
 
 @Test func calibrationGuidanceNamesMissingImageRegions() {
     var progress = ScreenLensProgress(count: 15, detection: 4, revision: 15, coverageReady: false,

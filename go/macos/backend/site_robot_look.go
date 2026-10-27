@@ -20,12 +20,12 @@ type siteLookTurn struct {
 
 const lookAngle = math.Pi / 6
 
-// Match the existing manual turn control. Do not taper into low rates that
-// the physical robot may ignore; stop instead when the bounded angle is reached.
-const lookSpeed = .5
+// Use the navigation turning rate. The previous 0.5 rad/s look rate was
+// rejected on hardware; stop at the bounded angle instead of tapering.
+const lookSpeed = sitenav.TurningSpeed
 
 // Cover the 500ms MOVE lease, braking at 1 rad/s² and 0.05rad tolerance.
-const lookStopMargin = lookSpeed*.5 + lookSpeed*lookSpeed/2 + .05
+const lookStopMargin = sitenav.TurnStoppingAngle
 
 func (r *SiteRobot) Look(sequence uint64, direction int) error {
 	r.mu.Lock()
@@ -116,7 +116,7 @@ func (r *SiteRobot) stepLookLocked(now time.Time) {
 		return
 	}
 	if err := r.command(pb.UnitreeCommand_UNITREE_COMMAND_MOVE, 0, turn.direction*lookSpeed); err != nil {
-		r.message = "Look turn command failed."
+		r.message = siteCommandFailure("Look turn command", err)
 		r.stopLocked()
 	}
 }

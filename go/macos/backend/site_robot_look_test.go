@@ -135,11 +135,12 @@ func TestLookTurnRequiresFreshObservationsAndValidDirection(t *testing.T) {
 	}
 }
 
-// Verify that the command stream never tapers below the existing manual
-// control rate near the target; transport success alone cannot prove actuation.
+// Simulate an SDK that rejects the old 0.5 rad/s rate, including near the
+// target. Transport success alone cannot prove physical actuation.
 func TestLookTurnDoesNotTaperIntoLowYawRates(t *testing.T) {
 	for _, direction := range []int{-1, 1} {
 		r, f := readySiteRobot()
+		f.minYaw = .6
 		if err := r.Look(1, direction); err != nil {
 			t.Fatal(err)
 		}
@@ -147,7 +148,7 @@ func TestLookTurnDoesNotTaperIntoLowYawRates(t *testing.T) {
 			r.observed.Pose.Yaw = float64(direction) * (lookAngle - remaining)
 			r.stepLocked(time.Now())
 			command := f.commands[len(f.commands)-1]
-			if command.Command != pb.UnitreeCommand_UNITREE_COMMAND_MOVE || math.Abs(command.Yaw) < .5 || command.Yaw*float64(direction) <= 0 {
+			if command.Command != pb.UnitreeCommand_UNITREE_COMMAND_MOVE || math.Abs(command.Yaw) < f.minYaw || command.Yaw*float64(direction) <= 0 {
 				t.Fatal("sub-threshold turn", command)
 			}
 		}
@@ -187,7 +188,7 @@ func TestAutomaticLookChoosesClearSide(t *testing.T) {
 		t.Fatal("automatic look did not choose clear right turn")
 	}
 	r.stepLocked(time.Now())
-	if len(f.commands) != 1 || f.commands[0].Yaw != -.5 {
+	if len(f.commands) != 1 || f.commands[0].Yaw != -lookSpeed {
 		t.Fatal("wrong automatic turn rate")
 	}
 }
@@ -207,5 +208,35 @@ func TestSupervisedLookAllowsUnknownFloorDuringTurn(t *testing.T) {
 	r.stepLocked(time.Now())
 	if r.moving || f.commands[len(f.commands)-1].Command != pb.UnitreeCommand_UNITREE_COMMAND_STOP {
 		t.Fatal("observed blocker failed to stop turn")
+	}
+}
+
+func TestLookTurnFasterRateReachesBoundedTarget(t *testing.T) {
+	for _, direction := range []int{-1, 1} {
+		r, f := readySiteRobot()
+		f.minYaw = .6
+		if err := r.Look(1, direction); err != nil {
+			t.Fatal(err)
+		}
+		now := time.Now()
+		for i := 0; i < 20 && r.moving; i++ {
+			now = now.Add(100 * time.Millisecond)
+			r.heartbeat = now
+			r.observed.Pose.Received, r.observed.Pose.Captured, r.observed.CloudAt = now, now, now
+			r.stepLocked(now)
+			command := f.commands[len(f.commands)-1]
+			if command.Command == pb.UnitreeCommand_UNITREE_COMMAND_MOVE {
+				if command.Forward != 0 || command.Lateral != 0 || math.Abs(command.Yaw) > 1 {
+					t.Fatal("unbounded look turn", command)
+				}
+				r.observed.Pose.Yaw += command.Yaw * .1
+			}
+		}
+		if r.moving || r.lookState != 2 || f.commands[len(f.commands)-1].Command != pb.UnitreeCommand_UNITREE_COMMAND_STOP {
+			t.Fatal("faster look did not finish with a stop", r.message)
+		}
+		if overshoot := math.Abs(r.observed.Pose.Yaw) - lookAngle; overshoot < -.025 || overshoot > lookSpeed*.1 {
+			t.Fatal("turn exceeded target by more than one controller tick", overshoot)
+		}
 	}
 }

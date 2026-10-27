@@ -211,19 +211,44 @@ struct RobotLocalizationDiagnostics: View {
     }
 }
 
-// Only an explicit Locate action arms movement. Passive observations never do.
+// Offer once per observation session. A failed match can offer immediately;
+// sparse scans get time to arrive before suggesting a new viewpoint.
+struct RobotRotationOffer {
+    private(set) var offered = false
+    private var waitingSince: Date?
+
+    mutating func shouldPresent(eligible: Bool, scanReady: Bool, failedMatch: Bool = false, now: Date) -> Bool {
+        guard eligible, !offered else { waitingSince = nil; return false }
+        if failedMatch {
+            offered = true
+            return true
+        }
+        guard !scanReady else { waitingSince = nil; return false }
+        if waitingSince == nil { waitingSince = now }
+        guard let waitingSince, now.timeIntervalSince(waitingSince) >= 5 else { return false }
+        offered = true
+        return true
+    }
+
+    mutating func dismiss() { offered = true; waitingSince = nil }
+}
+
+// Only accepting the rotation prompt arms movement. Passive observations never do.
 struct RobotPositionSearch {
+    enum Outcome { case exhausted, timedOut }
+    private(set) var outcome: Outcome?
     private(set) var active = false
     private(set) var remainingTurns = 0
     private(set) var direction: Int32 = 0
     private var deadline = Date.distantPast
-    mutating func start(now: Date) { active = true; remainingTurns = 12; direction = 0; deadline = now.addingTimeInterval(300) }
+    mutating func start(now: Date) { active = true; outcome = nil; remainingTurns = 12; direction = 0; deadline = now.addingTimeInterval(300) }
     mutating func resumeAfterCalibration(now: Date) { if active { deadline = now.addingTimeInterval(300) } }
     mutating func shouldRetryLocalization(pose: Bool, scanReady: Bool, aligned: Bool,
                                          rematchAfterLook: Bool, attempts: Int, now: Date,
                                          calibrating: Bool = false) -> Bool {
         guard !calibrating else { return false }
-        if active && now >= deadline { cancel() }
+        if active && now >= deadline { finish(.timedOut) }
+        if outcome != nil { return false }
         // An explicit search must be able to acquire another view when room
         // landmarks are sparse. The backend still checks sensor freshness and
         // the entire turning footprint before allowing any motion.
@@ -231,10 +256,13 @@ struct RobotPositionSearch {
         return scanReady && (!aligned || rematchAfterLook) && attempts < 3
     }
     mutating func takeTurn(now: Date) -> Bool {
-        guard active, remainingTurns > 0, now < deadline else { cancel(); return false }
+        guard active else { return false }
+        guard now < deadline else { finish(.timedOut); return false }
+        guard remainingTurns > 0 else { finish(.exhausted); return false }
         remainingTurns -= 1
         return true
     }
     mutating func recordDirection(_ value: Int32) { if active && direction == 0 && (value == 1 || value == -1) { direction = value } }
-    mutating func cancel() { active = false; remainingTurns = 0; direction = 0 }
+    mutating func cancel() { active = false; outcome = nil; remainingTurns = 0; direction = 0 }
+    private mutating func finish(_ outcome: Outcome) { active = false; self.outcome = outcome }
 }

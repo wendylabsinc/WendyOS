@@ -4,7 +4,7 @@ A SwiftUI app linked to this repository's Go CLI packages through a C archive. I
 
 Connected devices show their Wendy Cloud enrollment status in device Settings. An unenrolled WendyOS device offers **Enroll device**, where you explicitly choose a saved organization account and device name, or sign in to another organization. Enrollment uses that account without changing the global account selection and checks the resulting device organization before reporting success. Failed status reads remain unknown. Wendy Lite offers Bluetooth enrollment from its Settings tab.
 
-On macOS and iOS, choose **Nearby → Set up nearby device** to discover unregistered devices advertising the setup service. Select a device, choose a saved organization account, and enter a device name. Wi-Fi configuration is optional and collapsed by default. Setup uses encrypted BLE L2CAP on PSM 130, separate from management and mesh connections. It supports WendyOS ACME enrollment and Wendy Lite enrollment with provisioned trust roots and device-bound signed time.
+On macOS, choose **+ → Set up nearby device** in the toolbar. On iOS, choose **Nearby → Set up nearby device** to discover unregistered devices advertising the setup service. Select a device, choose a saved organization account, and enter a device name. Wi-Fi configuration is optional and collapsed by default. Setup uses encrypted BLE L2CAP on PSM 130, separate from management and mesh connections. It supports WendyOS ACME enrollment and Wendy Lite enrollment with provisioned trust roots and device-bound signed time.
 
 The setup sheet remains open when advertisements disappear. **Retry connection** opens a fresh encrypted session. Once a Cloud mint may have happened, the app retains that attempt for the same Bluetooth address until the app exits and prevents another mint. **Check enrollment status** verifies the expected device UUID and organization using fresh Cloud presence; a saved Lite configuration alone is not success. A device may start enrollment without Wi-Fi, but it needs a supported network path to complete issuance and appear online. If the app quits during an uncertain attempt, inspect the organization's Cloud device list before starting again.
 
@@ -41,8 +41,8 @@ model, nearby areas become bright. Areas it leaves remain dim, retaining the
 exploration history. The counter shows approximate explored map area in square
 metres. Select Go2 and use the existing floor destination preview and movement
 controls as before. Fog does not start a search, issue orders, or change any
-navigation checks. **Locate Go2** still has its existing explicit look-around
-behavior; enabling fog does not invoke it.
+navigation checks. Rotation search still requires accepting its popup;
+enabling fog does not invoke it.
 
 **Reset** clears exploration and immediately reveals the current valid position.
 Turning fog off restores the original model materials and pauses recording;
@@ -734,9 +734,9 @@ replacing a bounded selection of earlier observations instead of stopping at
 capacity. The capture still has a 200-view limit. For useful references, capture
 fixed room features from near Go2's camera height during the
 iPhone room scan; a phone-height reference map may have little overlap with the
-robot's low view. **Locate Go2** preserves any measured lens while finding the robot.
+robot's low view. Rotation search preserves any measured lens while finding the robot.
 
-When **Locate Go2** needs a measured lens, it opens a calibration sheet using
+When rotation search needs a measured lens, it opens a calibration sheet using
 the live stream and a 7-by-10-square checkerboard (6-by-9 inner corners). Save the
 PNG and display it without stretching on a flat screen, or print it. Keep Go2
 stationary and move the whole target through the image centre and edges, with
@@ -826,7 +826,7 @@ can tolerate it.
 
 **Allow hidden floor beneath Go2** is off by default on every connection. An
 operator may enable it after checking that Go2 stands on a clear, level floor.
-It permits missing floor only in 10 cm grid cells touched by the 96 by 56 cm body envelope and clearance
+It permits missing floor only in 10 cm grid cells touched by the 70 by 31 cm body envelope
 rectangle at the departure pose. That footprint stays fixed for the route; it
 does not follow the robot or fill unknown floor ahead. Obstacles and measured
 drops remain blocked, and destinations require fully observed clearance.
@@ -844,10 +844,16 @@ rejection and timing measurements stay locally in
 
 Unstamped odometry can display the robot but cannot enable movement. The planner
 uses observed level floor and occupied voxels, treats unknown cells as blocked,
-and checks an oriented 76 by 36 cm standing envelope with a 10 cm buffer on
-all sides. This envelope rounds up Unitree's published 70 by 31 cm dimensions;
-attachments outside it require a larger footprint. Whole occupied cells are
-checked against the swept footprint, including in-place turns. The planner
+and checks an oriented 70 by 31 cm standing envelope with no extra horizontal
+stand-off, using [Unitree's standing dimensions](https://www.unitree.com/go2/).
+Raised obstacles retain their voxel size and position within the 10 cm grid;
+the collision check tests those voxels against the swept body, including turns.
+Overhead returns above the body top are excluded from navigation obstacles,
+but remain available for localization. The body top is at least 40 cm above
+the measured floor and rises with the odometry base, allowing 10 cm from the
+base to the top. Voxel half-height is included in the vertical overlap check.
+Measured drops still block their entire floor cells. Attachments beyond the
+standard body dimensions require a larger envelope. The planner
 retains arrival heading at each search node and checks the actual odometry
 heading during movement. Translation and rotation are separate, walking is
 commanded at 0.55 m/s without tapering below the physical walking minimum. The forward stopping check
@@ -864,18 +870,32 @@ failed commands or a blocked route. The agent separately expires MOVE after
 rejection, source timestamps, command ordering, failed Stop, and lost leases;
 they do not establish physical navigation performance.
 
-**Locate Go2** also manages gathering new viewpoints. Passive localization on
-opening the map never arms motion. An explicit Locate starts a bounded search:
+Passive localization starts when the map opens. If matching produces no reliable
+candidate, a popup offers **Start rotation**. It also appears after five seconds
+with a live pose but insufficient scan structure. **Not now** keeps passive
+matching active and suppresses further popups for that observation session.
+The popup disappears if the pose is lost, Go2 moves, or its position is aligned.
+There is no **Locate Go2** button. Accepting the popup starts a bounded search:
 match, turn if ambiguous, stop, wait for a fresh view, then match again. If the
 lens has no measurement, the checkerboard sheet comes first. The search stops
 when a suggestion is available, after a full circle of up to twelve 30-degree turns, after five
 minutes excluding calibration, or on Stop/fault. It never confirms a pose.
+If a full rotation or the time limit produces no match, the panel keeps a
+**Search finished without a match** result and stops automatic retries.
+**Try rotation again** asks for confirmation before another search; **Place
+Manually** uses the existing position-and-heading placement flow.
+
+For local diagnosis, launch with `WENDY_LOCALIZATION_DIAGNOSTICS=1` to keep the
+latest bounded match input and result in
+`Library/Caches/Wendy/go2-localization-evidence.json`. This opt-in file contains
+room geometry and observed surfaces, stays on the Mac, and updates at most once
+every five seconds. It enables offline replay without commanding the robot.
 
 Turns use the live odometry frame before site alignment. The controller chooses
-a clear left or right turn at the existing manual-control rate of 0.5 rad/s,
+a clear left or right turn at the navigation turning rate of 0.8 rad/s,
 without tapering below that rate. Each turn has an eight-second limit, a
 two-second progress watchdog, and an 8 cm drift limit. Clearance covers the whole
-body plus 10 cm and the angular command lease/braking margin. The hidden-floor
+body and the angular command lease/braking margin. The hidden-floor
 allowance stays fixed to the original footprint. Obstacles, drops, missing floor,
 telemetry faults, lost UI heartbeat, Stop, or disconnect abort the search. New
 geometry is still required to count another view as independent. Hardware motion

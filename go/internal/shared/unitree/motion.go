@@ -72,6 +72,11 @@ const motionAckTimeout = 200 * time.Millisecond
 
 var errCommandBacklog = errors.New("Go2 command channel is backlogged")
 
+// BufferedAmount includes data already sent but not yet SCTP-acknowledged.
+// Requiring zero serializes Move on delayed transport ACKs. Allow a small
+// pipeline, including the next message, without accumulating old velocities.
+const maxMotionBufferedBytes = 512
+
 // PostureAckTimeout allows the robot to finish a stand, lie-down or wave before
 // acknowledging it; Move and StopMove retain the shorter motionAckTimeout.
 const PostureAckTimeout = 3 * time.Second
@@ -130,9 +135,6 @@ func (c *Connection) sendAPIRequest(ctx context.Context, topic string, api uint6
 		return 0, nil, errors.New("Go2 command channel unavailable")
 	}
 	noReply := topic == sportTopic && api == 1008
-	if noReply && c.channel.BufferedAmount() != 0 {
-		return 0, nil, errCommandBacklog
-	}
 	// Keep numeric identifiers exactly representable by browser/robot JSON parsers.
 	id := c.requestID.Add(1) % 2147483648
 	var response chan int
@@ -155,20 +157,34 @@ func (c *Connection) sendAPIRequest(ctx context.Context, topic string, api uint6
 					API uint64 `json:"api_id"`
 				} `json:"identity"`
 				Policy *struct {
-					NoReply bool `json:"noreply"`
+					Priority int  `json:"priority"`
+					NoReply  bool `json:"noreply"`
 				} `json:"policy,omitempty"`
 			} `json:"header"`
 			Parameter string `json:"parameter"`
+			Binary    *[]int `json:"binary,omitempty"`
 		} `json:"data"`
 	}{Type: "req", Topic: topic}
 	payload.Data.Header.Identity.ID, payload.Data.Header.Identity.API = id, api
 	if noReply {
+		// The WebRTC bridge distinguishes a DDS publication (msg) from a
+		// request awaiting a response (req). SportClient's no-reply Move is
+		// a publication; setting noreply on a req does not select that path.
+		payload.Type = "msg"
+		payload.Data.Binary = &[]int{}
 		payload.Data.Header.Policy = &struct {
-			NoReply bool `json:"noreply"`
-		}{true}
+			Priority int  `json:"priority"`
+			NoReply  bool `json:"noreply"`
+		}{NoReply: true}
 	}
 	payload.Data.Parameter = parameter
 	raw, _ := json.Marshal(payload)
+	if noReply {
+		buffered := c.channel.BufferedAmount()
+		if buffered > maxMotionBufferedBytes || uint64(len(raw)) > maxMotionBufferedBytes-buffered {
+			return 0, nil, errCommandBacklog
+		}
+	}
 	if err := c.channel.SendText(string(raw)); err != nil {
 		c.responseMu.Lock()
 		delete(c.pending, id)

@@ -25,6 +25,8 @@ struct ContentView: View {
     @State private var deviceSource = "nearby"
     @State private var manualAddress = ""
     @State private var showingAddress = false
+    @State private var showingNearbySetup = false
+    @State private var setupSignInAfterDismiss = false
     @State private var showingUnitree = false
     @State private var selectedUnitree: UnitreeRobot?
     @State private var showingInstaller = false
@@ -80,7 +82,6 @@ struct ContentView: View {
                 Divider()
                 List(selection: $sidebarSelection) {
                     if model.discovering { ProgressView().controlSize(.small) }
-                    if deviceSource == "nearby" { NearbySetupButton() }
                     deviceRows
                     if !model.nearbyUnitree.isEmpty {
                         ForEach(model.nearbyUnitree.filter { search.isEmpty || "\($0.name) \($0.serial) \($0.address)".localizedCaseInsensitiveContains(search) }) { robot in
@@ -183,6 +184,10 @@ struct ContentView: View {
                     .disabled(!showingSimulators && !showingSites && !showingOrganization && model.selection != nil && !model.selectedDeviceReady)
                     .disabled(showingSimulators ? simulatorRefresh?.enabled != true : showingSites ? fleetRefresh?.enabled != true : showingOrganization ? organizationRefresh?.enabled != true : ["campaigns", "pairing", "chat", "data", "settings"].contains(tab) ? devicePaneRefresh?.enabled != true : refreshingPane || model.discovering || !model.initialized)
                 Menu {
+                    Button { showingNearbySetup = true } label: {
+                        Label("Set up nearby device…", systemImage: "antenna.radiowaves.left.and.right")
+                    }
+                    Divider()
                     Button(installer.running ? "Show running installer" : "Install Wendy on a device") { showingInstaller = true }
                     Button("Connect by address") { showingAddress = true }
                     Button("Connect to Unitree Go2") { selectedUnitree = nil; showingUnitree = true }
@@ -192,6 +197,14 @@ struct ContentView: View {
                     }
                 } label: { Label("Add", systemImage: "plus") }
             }
+        }
+        .sheet(isPresented: $showingNearbySetup, onDismiss: {
+            actions.submit {
+                if setupSignInAfterDismiss { setupSignInAfterDismiss = false; await model.signIn() }
+                await model.refreshNearby()
+            }
+        }) {
+            NearbySetupView { setupSignInAfterDismiss = true }
         }
         .sheet(isPresented: $showingUnitree) {
             VStack(spacing: 0) {

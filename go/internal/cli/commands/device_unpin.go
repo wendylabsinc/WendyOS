@@ -1,9 +1,11 @@
 package commands
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"net"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -143,6 +145,43 @@ func printClearedPins(w io.Writer, cleared []clearedPin) {
 	}
 }
 
+// forgetResetDeviceIdentity is `wendy device unpin <identity>` run on the
+// user's behalf by `wendy device unenroll`, once the device has confirmed that
+// it erased identity. From then on every pin naming it describes a certificate
+// the device can never present again, so keeping them only refuses each later
+// connection to the now-unprovisioned device (WDY-3974).
+//
+// Call it only after the device's own reset. A Cloud-only unenrollment leaves
+// the device holding and presenting its certificate, and its pin is still the
+// binding the next connection must be judged against.
+//
+// It clears by identity, as unpin does when handed a URN: the identity is
+// exact, so no discovery-derived alias is consulted, and pins the device
+// collected under other names go with it rather than refusing the next dial
+// under those names. One identity can be filed under more than one key — a
+// numeric enrollment's urn:wendy URN and the tenant SPIFFE principal its
+// certificate also carries — so the caller passes every key it knows. What it
+// cleared goes to stderr, as clearDevicePinForRepin's does — stdout may be
+// carrying the command's JSON.
+//
+// Unlike unpin it reports an SPKI store it could not update: unenroll reports
+// any error with its result (the legacy path adds the unpin commands that
+// finish the clear), and a half-done clear that said nothing would read as a
+// clean reset.
+func forgetResetDeviceIdentity(identityKeys ...string) error {
+	var cleared []clearedPin
+	var spkiErr error
+	err := config.Update(func(cfg *config.Config) (bool, error) {
+		cleared, spkiErr = clearPinsForIdentityKeys(cfg, identityKeys)
+		return clearedAnyConfigPin(cleared), nil
+	})
+	// A broker may still hold an authenticated session to the identity just
+	// erased; see the unpin command.
+	_ = sessionbroker.InvalidateAll()
+	printClearedPins(os.Stderr, cleared)
+	return errors.Join(err, spkiErr)
+}
+
 // clearPinsForIdentity clears everything filed under one certificate identity:
 // the SPKI entry keyed by that URN, plus any config pin that derives the same
 // URN. Both halves matter — clearing only the SPKI entry would leave the config
@@ -154,13 +193,24 @@ func printClearedPins(w io.Writer, cleared []clearedPin) {
 // identity, so "every pin naming this identity" is exactly the right blast
 // radius and no discovery-derived data is consulted at all.
 func clearPinsForIdentity(cfg *config.Config, identity certs.WendyIdentity) []clearedPin {
-	key := identity.IdentityKey()
+	// Best-effort on the SPKI half, as removeSPKIPins explains.
+	cleared, _ := clearPinsForIdentityKeys(cfg, []string{identity.IdentityKey()})
+	return cleared
+}
+
+// clearPinsForIdentityKeys is clearPinsForIdentity for every key in
+// identityKeys. It returns what it removed and, unlike removeSPKIPins, why the
+// SPKI store could not be updated.
+func clearPinsForIdentityKeys(cfg *config.Config, identityKeys []string) ([]clearedPin, error) {
 	var cleared []clearedPin
-	for _, host := range configPinKeysForIdentity(cfg, key) {
-		cfg.ClearDevicePin(host)
-		cleared = append(cleared, clearedPin{store: clearedConfigPin, key: host, identity: key})
+	for _, key := range identityKeys {
+		for _, host := range configPinKeysForIdentity(cfg, key) {
+			cfg.ClearDevicePin(host)
+			cleared = append(cleared, clearedPin{store: clearedConfigPin, key: host, identity: key})
+		}
 	}
-	return append(cleared, removeSPKIPins([]string{key})...)
+	spki, err := removeSPKIPinsReporting(identityKeys)
+	return append(cleared, spki...), err
 }
 
 // configPinKeysForIdentity lists the config pin keys whose pin names
@@ -326,21 +376,29 @@ func cachedIdentityKey(pinKey string) string {
 // Best-effort: an unopenable store leaves the config side of the unpin done,
 // which is strictly better than failing the command outright.
 func removeSPKIPins(identityKeys []string) []clearedPin {
+	cleared, _ := removeSPKIPinsReporting(identityKeys)
+	return cleared
+}
+
+// removeSPKIPinsReporting is removeSPKIPins that also returns why an entry
+// could not be removed. It still removes every key it can.
+func removeSPKIPinsReporting(identityKeys []string) ([]clearedPin, error) {
 	if len(identityKeys) == 0 {
-		return nil
+		return nil, nil
 	}
 	// Same config-directory resolution as openPinStore, but that helper returns
 	// certs.PinChecker, which only exposes CheckAndUpdate — not Remove. Open the
 	// concrete store directly.
 	dir, err := config.ConfigDir()
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("opening the certificate key pin store: %w", err)
 	}
 	store, err := devicepin.Open(dir)
 	if err != nil {
-		return nil
+		return nil, fmt.Errorf("opening the certificate key pin store: %w", err)
 	}
 	var cleared []clearedPin
+	var errs []error
 	seen := map[string]bool{}
 	for _, key := range identityKeys {
 		if key == "" || seen[key] {
@@ -354,11 +412,12 @@ func removeSPKIPins(identityKeys []string) []clearedPin {
 			continue
 		}
 		if err := store.Remove(key); err != nil {
+			errs = append(errs, fmt.Errorf("removing certificate key pin %q: %w", key, err))
 			continue
 		}
 		cleared = append(cleared, clearedPin{store: clearedIdentityPin, key: key, identity: key})
 	}
-	return cleared
+	return cleared, errors.Join(errs...)
 }
 
 // clearedAnyConfigPin reports whether a clear touched the config store, which

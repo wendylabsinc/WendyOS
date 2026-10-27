@@ -32,6 +32,8 @@ type SiteRobotSnapshot struct {
 // UI polling renews a short lease, not motion itself. The agent independently
 // expires MOVE after 500ms if this process or its transport disappears.
 type SiteRobot struct {
+	commandFaultSink                func(siteCommandFault)
+	pendingCommandFaults            []siteCommandFault
 	commandSequence                 uint64
 	mu                              sync.Mutex
 	ctx                             context.Context
@@ -67,6 +69,7 @@ type SiteRobot struct {
 	fusionEpoch                     uint64
 	lastObservationLog              time.Time
 	lastNavigationLog               time.Time
+	lastLocalizationLog             time.Time
 }
 
 // Every new desktop/mobile connection starts with the supervised settings enabled.
@@ -74,7 +77,7 @@ type SiteRobot struct {
 // still gate all movement.
 func newSiteRobot(ctx context.Context, cancel context.CancelFunc, client pb.WendyUnitreeRobotServiceClient, serial string) *SiteRobot {
 	r := &SiteRobot{ctx: ctx, cancel: cancel, done: make(chan struct{}), client: client, serial: serial,
-		message: "Waiting for robot observations.", heartbeat: time.Now(),
+		message: "Waiting for robot observations.", heartbeat: time.Now(), commandFaultSink: recordSiteCommandFault,
 		underBodyAllowance: true, allowUnobservedFloor: true}
 	r.observed.SetArrivalTiming(true)
 	return r
@@ -275,12 +278,19 @@ func (r *SiteRobot) run() {
 	}
 }
 func (r *SiteRobot) command(command pb.UnitreeCommand, forward, turn float64) error {
+	started := time.Now()
 	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
 	defer cancel()
 	_, err := r.client.Command(ctx, &pb.UnitreeCommandRequest{Serial: r.serial, Command: command, Forward: forward, Yaw: turn})
+	if err != nil && r.commandFaultSink != nil {
+		code, message := siteCommandError(err)
+		r.pendingCommandFaults = append(r.pendingCommandFaults, siteCommandFault{At: time.Now(), Command: command, Code: code.String(), Message: message, DurationMS: time.Since(started).Milliseconds()})
+	}
 	return err
 }
 func (r *SiteRobot) stopLocked() error {
+	// Persist diagnostics only after the stop request has finished.
+	defer r.flushCommandFaults()
 	r.moving = false
 	if r.lookTurn != nil && r.lookState != 2 {
 		r.lookState = 3
@@ -391,7 +401,7 @@ func (r *SiteRobot) stepLocked(now time.Time) {
 		}
 	}
 	if err := r.command(pb.UnitreeCommand_UNITREE_COMMAND_MOVE, forward, turn); err != nil {
-		r.message = "Movement command failed."
+		r.message = siteCommandFailure("Movement command", err)
 		r.stopLocked()
 	}
 }

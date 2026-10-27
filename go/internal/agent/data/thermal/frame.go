@@ -7,7 +7,10 @@ import (
 	"fmt"
 	"image"
 	"image/color"
+	"math"
 	"strings"
+
+	pb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 )
 
 // Point uses zero-based sensor coordinates, before any display scaling.
@@ -20,6 +23,8 @@ type Frame struct {
 	Width, Height    uint32
 	Coldest, Hottest Point
 	Pixels           []uint16
+	Valid            []bool
+	Temperature      *pb.ThermalLinearTemperature
 }
 
 // IsPureThermal identifies the camera family, not radiometric calibration.
@@ -50,18 +55,47 @@ func DecodePureThermal(payload []byte, fourcc string, width, height, stride uint
 	if !((width == 160 && height == 120) || (width == 80 && height == 60)) {
 		return nil, fmt.Errorf("unsupported PureThermal picture size %dx%d; use 160x120 or 80x60 without telemetry rows", width, height)
 	}
-	if stride < width*2 || stride > 16384 || uint64(stride)*uint64(height) != uint64(len(payload)) {
-		return nil, fmt.Errorf("invalid thermal frame stride or payload length")
+	return Decode(payload, &pb.RawFormat{Fourcc: fourcc, Width: width, Height: height, BytesPerLine: stride,
+		ThermalPlane: &pb.ThermalPlane{Version: 1, Adapter: PureThermal, Width: width, Height: height, RowStrideBytes: stride, InvalidValues: []uint32{0, 65535}}})
+}
+
+// Decode consumes a described measurement plane, independently of camera brand.
+// Capture bytes remain untouched; returned samples use sensor coordinates.
+func Decode(payload []byte, layout *pb.RawFormat) (*Frame, error) {
+	p := layout.GetThermalPlane()
+	if p == nil || p.GetVersion() != 1 {
+		return nil, fmt.Errorf("missing or unsupported thermal measurement-plane version")
 	}
-	f := &Frame{Width: width, Height: height, Pixels: make([]uint16, int(width*height))}
+	w, h, stride, offset := uint64(p.Width), uint64(p.Height), uint64(p.RowStrideBytes), uint64(p.OffsetBytes)
+	if w == 0 || h == 0 || w > 4096 || h > 4096 || w*h > 4_000_000 || stride < w*2 || stride > 65536 ||
+		uint64(layout.GetBytesPerLine())*uint64(layout.GetHeight()) != uint64(len(payload)) ||
+		offset+(h-1)*stride+w*2 > uint64(len(payload)) || len(p.InvalidValues) > 256 {
+		return nil, fmt.Errorf("invalid thermal plane geometry, stride or payload length")
+	}
+	if t := p.Temperature; t != nil {
+		if t.KelvinPerCount <= 0 || math.IsNaN(t.KelvinPerCount) || math.IsInf(t.KelvinPerCount, 0) ||
+			math.IsNaN(t.KelvinOffset) || math.IsInf(t.KelvinOffset, 0) || t.Provenance == "" ||
+			math.IsInf(65535*t.KelvinPerCount+t.KelvinOffset, 0) {
+			return nil, fmt.Errorf("invalid thermal temperature conversion")
+		}
+	}
+	invalid := make(map[uint16]bool, len(p.InvalidValues))
+	for _, v := range p.InvalidValues {
+		if v > 65535 {
+			return nil, fmt.Errorf("invalid thermal sentinel %d", v)
+		}
+		invalid[uint16(v)] = true
+	}
+	f := &Frame{Width: p.Width, Height: p.Height, Pixels: make([]uint16, int(w*h)), Valid: make([]bool, int(w*h)), Temperature: p.Temperature}
 	found := false
-	for y := uint32(0); y < height; y++ {
-		for x := uint32(0); x < width; x++ {
-			v := binary.LittleEndian.Uint16(payload[int(y*stride+x*2):])
-			f.Pixels[y*width+x] = v
-			if v == 0 || v == 65535 {
+	for y := uint32(0); y < p.Height; y++ {
+		for x := uint32(0); x < p.Width; x++ {
+			v := binary.LittleEndian.Uint16(payload[int(offset+uint64(y)*stride+uint64(x)*2):])
+			f.Pixels[y*p.Width+x] = v
+			if invalid[v] {
 				continue
 			}
+			f.Valid[y*p.Width+x] = true
 			p := Point{X: x, Y: y, Raw: v}
 			if !found || v < f.Coldest.Raw {
 				f.Coldest = p
@@ -86,7 +120,7 @@ func (f *Frame) Image() *image.RGBA {
 	span := float64(f.Hottest.Raw - f.Coldest.Raw)
 	for i, v := range f.Pixels {
 		c := color.RGBA{80, 80, 80, 255}
-		if v != 0 && v != 65535 {
+		if f.Valid[i] {
 			t := 0.5
 			if span > 0 {
 				t = float64(v-f.Coldest.Raw) / span

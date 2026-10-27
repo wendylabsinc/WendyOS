@@ -77,12 +77,16 @@ type robotCommands struct {
 	pb.WendyUnitreeRobotServiceClient
 	commands       []*pb.UnitreeCommandRequest
 	stopError      error
+	moveError      error
 	avoidanceError error
 	minYaw         float64
 }
 
 func (f *robotCommands) Command(_ context.Context, r *pb.UnitreeCommandRequest, _ ...grpc.CallOption) (*pb.UnitreeCommandResponse, error) {
 	f.commands = append(f.commands, r)
+	if r.Command == pb.UnitreeCommand_UNITREE_COMMAND_MOVE && f.moveError != nil {
+		return nil, f.moveError
+	}
 	if r.Command == pb.UnitreeCommand_UNITREE_COMMAND_MOVE && r.Yaw != 0 && math.Abs(r.Yaw) < f.minYaw {
 		return nil, errors.New("SDK rejected rotation below its minimum rate")
 	}

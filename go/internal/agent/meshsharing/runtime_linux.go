@@ -50,6 +50,7 @@ type linuxTunnelPolicy struct {
 	pool              leasePool
 	grants            map[uint16]*grantedTunnel
 	borrowed          *borrowedTunnel
+	dialer            leaseDialer
 	sharing, upstream string
 	sharing6          bool
 	donorRouting      donorRouting
@@ -65,6 +66,9 @@ func newLinuxTunnelPolicy(ctx context.Context, credentials *localmesh.Credential
 		return nil, errors.New("Wendy Net Internet sharing requires credentials")
 	}
 	p = &linuxTunnelPolicy{credentials: credentials, grants: map[uint16]*grantedTunnel{}, resolver: &localmesh.HostPolicy{}, probeIPv6: probeUplinkIPv6}
+	p.dialer.dial = func(ctx context.Context, gateway meshid.Device) (net.Conn, tunnelLease, error) {
+		return dialGatewayLease(ctx, credentials, gateway)
+	}
 	defer func() {
 		if err != nil {
 			err = errors.Join(err, p.Close())
@@ -383,6 +387,10 @@ func (p *linuxTunnelPolicy) SetGateway(ctx context.Context, peer meshid.Device) 
 			return nil
 		}
 	}
+	if !peer.IsValid() {
+		// Withdrawal also abandons a negotiation that is still in flight.
+		p.dialer.stop()
+	}
 	if err = p.stopBorrowingLocked(ctx); err != nil {
 		return err
 	}
@@ -392,7 +400,7 @@ func (p *linuxTunnelPolicy) SetGateway(ctx context.Context, peer meshid.Device) 
 	if p.sharing != "" || len(p.grants) != 0 {
 		return errors.New("cannot borrow Internet while sharing an uplink")
 	}
-	control, lease, err := dialGatewayLease(ctx, p.credentials, peer)
+	control, lease, err := p.dialer.await(ctx, peer)
 	if err != nil {
 		return err
 	}
@@ -530,6 +538,7 @@ func (p *linuxTunnelPolicy) Close() error {
 	p.mu.Lock()
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
+	p.dialer.stop()
 	errs = append(errs, p.stopBorrowingLocked(ctx), p.stopSharingLocked(ctx), p.resolver.Close())
 	if p.borrowed == nil && len(p.grants) == 0 && !p.forwarding6 {
 		errs = append(errs, removeInternetRules(ctx, &p.base), hostnetwork.ReleaseForwarding("mesh-internet"))

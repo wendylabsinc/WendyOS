@@ -154,6 +154,7 @@ func (r *SiteRobot) FuseLocalization(sequence uint64, request SiteFusionRequest)
 			report.Overlay = append(report.Overlay, SiteScanPoint{p.X, model.Base.FloorY + v.Z - cloud.Floor, -p.Y, 0})
 		}
 	}
+	r.recordLocalizationEvidence(request, input, report, time.Now())
 	return report, nil
 }
 

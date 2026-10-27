@@ -68,6 +68,15 @@ message VideoDevice {
     // Empty for older agents, non-V4L2 sources, or an unavailable format query.
     // These describe the sensor output, not the encoded delivery codec.
     repeated string pixel_formats = 14;
+    // A recognized adapter and its preferred raw capture geometry. Presence
+    // does not promise temperatures: inspect each frame's thermal_plane.
+    ThermalCamera thermal = 15;
+}
+
+message ThermalCamera {
+    string adapter = 1; // versioned decoder profile, e.g. "topdon-tc001-v1"
+    uint32 capture_width = 2;
+    uint32 capture_height = 3;
 }
 
 enum VideoTransport {
@@ -182,6 +191,32 @@ message RawFormat {
     uint32 height         = 2; // rows, including any non-picture rows the mode carries
     string fourcc         = 3; // V4L2 pixel format, e.g. "YUYV" (2 bytes per pixel)
     uint32 bytes_per_line = 4; // stride; data is exactly bytes_per_line * height bytes
+    // Optional measurement plane within the untouched capture payload. Never
+    // infer thermal measurements from the FourCC or geometry alone.
+    ThermalPlane thermal_plane = 5;
+}
+
+// Version 1 describes row-major unsigned 16-bit little-endian sensor samples.
+// Offsets and stride are bytes in VideoFrame.data, not preview coordinates.
+// Preview/header/telemetry bytes outside the plane are not measurements.
+message ThermalPlane {
+    uint32 version = 1;
+    string adapter = 2;
+    uint32 width = 3;
+    uint32 height = 4;
+    uint32 offset_bytes = 5;
+    uint32 row_stride_bytes = 6;
+    repeated uint32 invalid_values = 7;
+    // Absent means raw counts only. The adapter must establish the active
+    // radiometric mode before providing a conversion. This is not an accuracy
+    // guarantee or a claim that scene-specific emissivity has been corrected.
+    ThermalLinearTemperature temperature = 8;
+}
+
+message ThermalLinearTemperature {
+    double kelvin_per_count = 1;
+    double kelvin_offset = 2;
+    string provenance = 3; // identifies the conversion/configuration evidence
 }
 
 message VideoFrame {

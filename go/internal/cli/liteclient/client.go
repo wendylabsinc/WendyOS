@@ -394,6 +394,28 @@ func (c *WendyLiteClient) ResetTargetDevice(appAutoStart bool, delay time.Durati
 	})
 }
 
+// rebootDrainTimeout bounds WaitReboot when a serial peer keeps the port
+// open while it restarts, as a USB-to-UART bridge does.
+const rebootDrainTimeout = 5 * time.Second
+
+// WaitReboot follows ResetTargetDevice before Close. Serial Close sends the
+// leave-protocol escape, and sending it right after REBOOT can discard that
+// command before the device handles it. On a serial link, WaitReboot returns
+// once the peer drops the link, after rebootDrainTimeout, or when ctx ends.
+// Other transports send no escape, so it returns at once.
+func (c *WendyLiteClient) WaitReboot(ctx context.Context) {
+	if link, ok := c.link.(*directLink); !ok || !link.isSerial {
+		return
+	}
+	timer := time.NewTimer(rebootDrainTimeout)
+	defer timer.Stop()
+	select {
+	case <-c.done:
+	case <-timer.C:
+	case <-ctx.Done():
+	}
+}
+
 func (c *WendyLiteClient) PushApp(path string, appType AppType, onProgress func(written, total uint32)) error {
 	var pbAppType wendypb.WendyComAppType
 	switch appType {

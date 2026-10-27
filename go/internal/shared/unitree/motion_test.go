@@ -70,7 +70,7 @@ func TestTeleopWireCommandsWithFixturePeer(t *testing.T) {
 				_ = ch.SendText(`{"type":"validation","data":"Validation Ok."}`)
 				return
 			}
-			if msg.Type != "req" {
+			if msg.Type != "req" && msg.Type != "msg" {
 				return
 			}
 			var d struct {
@@ -100,10 +100,18 @@ func TestTeleopWireCommandsWithFixturePeer(t *testing.T) {
 			}
 			commands <- d.Header.Identity.API
 			if d.Header.Identity.API == 1008 {
+				if msg.Type != "msg" {
+					t.Error("no-reply velocity must use the WebRTC DDS publication path")
+					return
+				}
 				if !d.Header.Policy.NoReply {
 					t.Error("velocity update must request no reply")
 				}
 				return // Match firmware that never acknowledges velocity updates.
+			}
+			if msg.Type != "req" {
+				t.Error("acknowledged command must use the WebRTC request path")
+				return
 			}
 			if d.Header.Policy.NoReply {
 				t.Error("Stop must still request acknowledgement")
@@ -122,22 +130,8 @@ func TestTeleopWireCommandsWithFixturePeer(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer c.Close()
-	// Validation can finish before SCTP acknowledges the validation response.
-	// Wait for those bytes to drain before exercising Move's backlog guard.
-	drained := make(chan struct{}, 1)
-	c.channel.OnBufferedAmountLow(func() {
-		select {
-		case drained <- struct{}{}:
-		default:
-		}
-	})
-	for c.channel.BufferedAmount() != 0 {
-		select {
-		case <-drained:
-		case <-ctx.Done():
-			t.Fatal("validation response did not drain from command channel")
-		}
-	}
+	// Validation bytes may still await their transport ACK; a small amount
+	// of in-flight data must not prevent the first velocity update.
 	if err = c.Move(ctx, .1, -.05, .2); err != nil {
 		t.Fatal(err)
 	}

@@ -59,6 +59,8 @@ typedef struct {
  uint32_t width, height, cold_x, cold_y, hot_x, hot_y;
  uint16_t cold_raw, hot_raw;
  uint64_t timestamp_ns;
+ int32_t has_temperature, allow_scale_override;
+ double kelvin_per_count, kelvin_offset;
 } WDThermalFrame;
 typedef struct {
     WDThermalFrame thermal;

@@ -584,10 +584,12 @@ func (b *Backend) StartCamera(camera uint32, streamID, sessionID uint64, expecte
 	streamCtx, stop := context.WithCancel(b.life)
 	b.videoStops[camera] = cameraSubscription{stream: streamID, stop: stop}
 	device := b.cameraDevices[camera]
-	isThermal := thermal.IsPureThermal(device.GetName(), device.GetPixelFormats())
+	thermalProfile := thermal.CameraProfile(device)
+	isThermal := thermalProfile != nil
 	request := &pb.StreamVideoRequest{DeviceId: camera, StableId: device.GetStableId(), Codec: pb.VideoCodec_VIDEO_CODEC_H264}
 	if isThermal {
 		request.Codec = pb.VideoCodec_VIDEO_CODEC_RAW
+		request.Width, request.Height = thermalProfile.CaptureWidth, thermalProfile.CaptureHeight
 	}
 	stream, err := conn.VideoService.StreamVideo(streamCtx, request)
 	if err != nil {
@@ -615,7 +617,7 @@ func (b *Backend) StartCamera(camera uint32, streamID, sessionID uint64, expecte
 				continue
 			}
 			if isThermal {
-				measured, err := decodeThermalFrame(v)
+				measured, err := decodeThermalFrame(v, thermalProfile)
 				if err != nil {
 					b.emitText(streamCtx, EventCameraError, session, streamID, err.Error())
 					return

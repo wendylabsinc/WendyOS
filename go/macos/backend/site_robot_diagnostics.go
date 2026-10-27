@@ -9,6 +9,36 @@ import (
 	"time"
 )
 
+// Opt-in, local-only replay of one bounded localization attempt. This contains
+// room geometry, so it is disabled unless explicitly enabled for diagnosis.
+func (r *SiteRobot) recordLocalizationEvidence(request SiteFusionRequest, input sitenav.RegistrationInput, report SiteFusionReport, now time.Time) {
+	if os.Getenv("WENDY_LOCALIZATION_DIAGNOSTICS") != "1" || now.Sub(r.lastLocalizationLog) < 5*time.Second {
+		return
+	}
+	r.lastLocalizationLog = now
+	data, err := json.Marshal(struct {
+		At      time.Time
+		Request SiteFusionRequest
+		Input   sitenav.RegistrationInput
+		Report  SiteFusionReport
+	}{now, request, input, report})
+	if err != nil {
+		return
+	}
+	dir, err := os.UserCacheDir()
+	if err != nil {
+		return
+	}
+	dir = filepath.Join(dir, "Wendy")
+	if os.MkdirAll(dir, 0700) != nil {
+		return
+	}
+	path := filepath.Join(dir, "go2-localization-evidence.json")
+	if os.WriteFile(path+".tmp", data, 0600) == nil {
+		_ = os.Rename(path+".tmp", path)
+	}
+}
+
 // Keep the latest rejection locally for device support. No raw sensor data,
 // robot identifier or authentication data is recorded. Limit disk writes to
 // one per second even when a broken stream rejects every packet.

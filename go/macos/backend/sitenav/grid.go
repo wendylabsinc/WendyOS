@@ -17,16 +17,22 @@ const CellSize = 0.10
 // and velocity-dependent stopping distance still apply.
 const Clearance = 0.0
 
-// Conservative standing envelope around the odometry base origin. Rounded up
-// from Unitree's 70 x 31 cm standing dimensions (https://www.unitree.com/go2/).
+// Standing envelope around the odometry base origin, using Unitree's
+// 70 x 31 x 40 cm dimensions (https://www.unitree.com/go2/).
 // Attachments extending outside this envelope require a larger footprint.
-const HalfLength = 0.38
-const HalfWidth = 0.18
+const HalfLength = 0.35
+const HalfWidth = 0.155
+const StandingHeight = 0.40
 const MaxDistance = 8.0
 
 type Point struct{ X, Y float64 }
 type Cell struct{ X, Y int }
-type Grid struct{ Floor, Obstacles map[Cell]bool }
+type Grid struct {
+	Floor, Obstacles map[Cell]bool
+	// Occupied voxels retain their measured footprint within the coarse grid.
+	// A blocked cell without voxel detail is a drop or a full-cell obstacle.
+	voxels map[Cell][]obstacleVoxel
+}
 
 // ObservedClearFloor returns measured cells only. Call on the original scan,
 // never the departure grid that may contain an operator-authorized allowance.
@@ -57,7 +63,8 @@ func (g Grid) WithDeparture(d *Departure) Grid {
 		floor[c] = v
 	}
 	g.sweptCells(d.Position, d.Position, d.Yaw, 0, func(c Cell) bool { floor[c] = true; return true })
-	return Grid{floor, g.Obstacles}
+	g.Floor = floor
+	return g
 }
 
 // WithUnobservedFloor is an explicit supervised traversal policy. It admits
@@ -78,7 +85,8 @@ func (g Grid) WithUnobservedFloor(origin Point) Grid {
 			floor[Cell{x, y}] = true
 		}
 	}
-	return Grid{floor, g.Obstacles}
+	g.Floor = floor
+	return g
 }
 
 func (g Grid) ClearanceError(p Point, subject string) error {
@@ -91,7 +99,7 @@ func (g Grid) PoseClearanceError(p Point, yaw float64, subject string) error {
 	}
 	missing, blocked := false, false
 	g.sweptCells(p, p, yaw, 0, func(c Cell) bool {
-		blocked = blocked || g.Obstacles[c]
+		blocked = blocked || g.obstacleOverlaps(c, p, p, yaw, 0)
 		missing = missing || !g.Floor[c]
 		return true
 	})
@@ -156,17 +164,23 @@ func (g Grid) ClearPose(p Point, yaw float64) bool {
 }
 
 func (g Grid) Sweep(a, b Point, yaw float64) bool {
-	return g.sweptCells(a, b, yaw, 0, func(c Cell) bool { return g.Floor[c] && !g.Obstacles[c] })
+	return g.sweptCells(a, b, yaw, 0, func(c Cell) bool { return g.Floor[c] && !g.obstacleOverlaps(c, a, b, yaw, 0) })
 }
 
 // Turn checks the shortest in-place turn used by the controller. Padding bounds
 // every corner's travel between angular samples, so intermediate poses cannot
 // slip between the checks. Translation and rotation are commanded separately.
 func (g Grid) Turn(p Point, from, to float64) bool {
-	return g.turnCells(p, from, to, func(c Cell) bool { return g.Floor[c] && !g.Obstacles[c] })
+	return g.turnCellsAt(p, from, to, func(c Cell, yaw, padding float64) bool {
+		return g.Floor[c] && !g.obstacleOverlaps(c, p, p, yaw, padding)
+	})
 }
 
 func (g Grid) turnCells(p Point, from, to float64, visit func(Cell) bool) bool {
+	return g.turnCellsAt(p, from, to, func(c Cell, _, _ float64) bool { return visit(c) })
+}
+
+func (g Grid) turnCellsAt(p Point, from, to float64, visit func(Cell, float64, float64) bool) bool {
 	if !finite(from) || !finite(to) {
 		return false
 	}
@@ -175,7 +189,7 @@ func (g Grid) turnCells(p Point, from, to float64, visit func(Cell) bool) bool {
 	padding := math.Hypot(HalfLength+Clearance, HalfWidth+Clearance) * math.Abs(delta) / float64(n) / 2
 	for i := 0; i <= n; i++ {
 		yaw := from + delta*float64(i)/float64(n)
-		if !g.sweptCells(p, p, yaw, padding, visit) {
+		if !g.sweptCells(p, p, yaw, padding, func(c Cell) bool { return visit(c, yaw, padding) }) {
 			return false
 		}
 	}
@@ -317,11 +331,17 @@ func (g Grid) planPose(start Point, yaw float64, goal Point, deadline time.Time)
 			})
 			masks[key] = mask
 		}
+		refine := false
 		for _, offset := range mask {
 			c := Cell{at.cell.X + offset.X, at.cell.Y + offset.Y}
-			if !g.Floor[c] || g.Obstacles[c] {
+			if !g.Floor[c] || (g.Obstacles[c] && len(g.voxels[c]) == 0) {
 				return false
 			}
+			refine = refine || g.Obstacles[c]
+		}
+		if refine {
+			a := point(at)
+			return g.Transition(a, angle(at), Point{a.X + float64(d.X)*CellSize, a.Y + float64(d.Y)*CellSize})
 		}
 		return true
 	}
@@ -408,7 +428,7 @@ func (a Alignment) ToRobot(p Point) Point {
 // walking rate until stopping; a lower proportional command is not a slow gait.
 const WalkingSpeed = .65
 
-// Route turns use a faster rate than localization looks. Small corrections stop
+// Route and localization turns use the same rate. Small corrections stop
 // at the heading tolerance instead of tapering into rejected SDK velocities.
 const TurningSpeed = .8
 

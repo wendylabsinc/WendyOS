@@ -16,7 +16,7 @@ func narrowAisle() Grid {
 }
 
 func TestFootprintFitsNarrowAisleOnlyLengthways(t *testing.T) {
-	// 60 cm of clear floor fits the 36 cm body envelope lengthways.
+	// 60 cm of clear floor fits the 31 cm body envelope lengthways.
 	// The previous 40 cm center-radius check rejected these side walls.
 	g := narrowAisle()
 	for _, start := range []Point{{0, 0}, {.023, 0}} {
@@ -44,9 +44,9 @@ func TestFootprintWithoutExtraMargin(t *testing.T) {
 		clear    bool
 	}{
 		{"body", Cell{0, 1}, false},
-		{"two cm beside body", Cell{0, 2}, true},
+		{"four cm beside body", Cell{0, 2}, true},
 		{"more than ten cm beside body", Cell{0, 3}, true},
-		{"two cm in front", Cell{4, 0}, true},
+		{"five cm in front", Cell{4, 0}, true},
 		{"more than ten cm in front", Cell{5, 0}, true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -60,7 +60,7 @@ func TestFootprintWithoutExtraMargin(t *testing.T) {
 	// Sub-cell positions must not inherit the center cell's clearance.
 	g := floorGrid()
 	g.Obstacles[Cell{0, 2}] = true
-	if g.ClearPose(Point{0, .029}, 0) {
+	if g.ClearPose(Point{0, .049}, 0) {
 		t.Fatal("missed cell-edge overlap")
 	}
 }
@@ -72,7 +72,7 @@ func TestFootprintSweepsIntermediateTranslationAndRotation(t *testing.T) {
 		t.Fatal("did not check between translation endpoints")
 	}
 	g = floorGrid()
-	g.Obstacles[Cell{3, 3}] = true
+	g.Obstacles[Cell{2, 2}] = true
 	if !g.ClearPose(Point{}, 0) || !g.ClearPose(Point{}, math.Pi/2) {
 		t.Fatal("fixture endpoints blocked")
 	}

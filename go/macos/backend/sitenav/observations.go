@@ -360,7 +360,10 @@ func (o *Observations) cloud(raw []byte, isBinary bool, received, now time.Time)
 		}
 	}
 	o.Surfaces = ExtractSurfaces(points, floor)
-	g := navigationGrid(points, floor)
+	// The body top is about 10 cm above its odometry base. Follow a raised
+	// stance instead of assuming every pose has the nominal standing height.
+	top := math.Max(StandingHeight, o.Pose.Height-floor+.10)
+	g := navigationGridForBody(points, floor, top, m.Resolution)
 	o.LocalNavigationSamples = nil
 	for _, v := range points {
 		if (Point{v.X, v.Y}).Distance(o.Pose.Position) <= 1 {
@@ -546,15 +549,19 @@ func observedFloorHeight(points []Vertex, origin Point) (float64, error) {
 }
 
 func navigationGrid(points []Vertex, floor float64) Grid {
-	g := Grid{map[Cell]bool{}, map[Cell]bool{}}
+	return navigationGridForBody(points, floor, StandingHeight, .05)
+}
+
+func navigationGridForBody(points []Vertex, floor, bodyTop, resolution float64) Grid {
+	g := Grid{Floor: map[Cell]bool{}, Obstacles: map[Cell]bool{}, voxels: map[Cell][]obstacleVoxel{}}
 	lower := map[Cell]float64{}
 	for _, v := range points {
 		c, h := cell(Point{v.X, v.Y}), v.Z-floor
 		if math.Abs(h) <= .06+1e-6 {
 			g.Floor[c] = true
 		}
-		if h > .08 && h < .9 {
-			g.Obstacles[c] = true
+		if h > .08 && h-resolution/2 <= bodyTop {
+			g.addObstacleVoxel(Point{v.X, v.Y}, resolution)
 		}
 		if h < -.08 {
 			if old, ok := lower[c]; !ok || v.Z > old {
@@ -609,6 +616,7 @@ func navigationGrid(points []Vertex, floor float64) Grid {
 		if !continuesBeneathFloor && observedLowerSurface(samples) {
 			for _, c := range component {
 				g.Obstacles[c] = true
+				delete(g.voxels, c) // A drop occupies the entire floor cell.
 			}
 		}
 	}

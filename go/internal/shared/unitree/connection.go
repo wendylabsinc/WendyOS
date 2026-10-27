@@ -44,9 +44,14 @@ var legacyGCMKey = []byte{232, 86, 130, 189, 22, 84, 155, 0, 142, 4, 166, 104, 4
 // only through explicitly invoked, bounded Move/Stop requests. The public
 // validation challenge is not a cryptographic proof of robot identity; modern
 // signaling is authenticated separately with the account's per-device key.
+type motionDataChannel interface {
+	SendText(string) error
+	BufferedAmount() uint64
+}
+
 type Connection struct {
 	peer        *webrtc.PeerConnection
-	channel     *webrtc.DataChannel
+	channel     motionDataChannel
 	connected   atomic.Bool
 	validated   atomic.Bool
 	done        chan struct{}

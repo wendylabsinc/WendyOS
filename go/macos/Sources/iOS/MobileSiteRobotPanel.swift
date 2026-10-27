@@ -39,6 +39,7 @@ struct MobileSiteRobotPanel: View {
         .task(id: "\(session)/\(model.serial)/\(site.id)/\(site.modelRevision)/\(scenePhase)/\(model.reconnectGeneration)") {
             await model.observe(session: session, site: site, modelURL: modelURL, active: scenePhase == .active)
         }
+        .modifier(SiteRobotRotationPrompt(model: model, enabled: !isPresented, onStart: { isPresented = true }))
         .sheet(isPresented: $isPresented) {
             NavigationStack {
                 ScrollView { controlsContent.padding(20) }
@@ -58,6 +59,7 @@ struct MobileSiteRobotPanel: View {
             .presentationDetents([.medium, .large])
             .presentationDragIndicator(.visible)
             .presentationBackgroundInteraction(.enabled(upThrough: .medium))
+            .modifier(SiteRobotRotationPrompt(model: model))
             .sheet(isPresented: $pairing, onDismiss: { model.actions.submit { await model.load(session: session) } }) {
                 MobileGo2PairingView(session: session, gatewayName: gatewayName)
             }
@@ -87,10 +89,6 @@ struct MobileSiteRobotPanel: View {
                     }
                 } else {
                     HStack {
-                        if model.candidates.isEmpty {
-                            Button("Locate Go2", systemImage: "scope") { model.findPosition() }
-                                .disabled(model.reading?.pose != true || model.localizing || model.reading?.moving == true || model.lensCalibrating)
-                        }
                         if model.destination != nil {
                             Button("Move here", systemImage: "location.fill") { model.command(move: true) }
                                 .buttonStyle(.borderedProminent).tint(.green)
