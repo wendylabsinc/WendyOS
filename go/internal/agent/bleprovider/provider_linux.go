@@ -478,7 +478,15 @@ func (r *runtime) makeServerTLS() *tls.Config {
 }
 
 func (r *runtime) acceptLink(ctx context.Context, raw net.Conn) {
-	defer raw.Close()
+	authenticated := false
+	defer func() {
+		_ = raw.Close()
+		if authenticated {
+			// A connect can consume the controller's advertising set even
+			// when LAN preference rejects the authenticated BLE stream.
+			r.requestAdvertisementRefresh()
+		}
+	}()
 	key := fmt.Sprintf("incoming:%p", raw)
 	var incomingCandidate *candidate
 	if radio, ok := raw.RemoteAddr().(l2addr); ok {
@@ -520,6 +528,7 @@ func (r *runtime) acceptLink(ctx context.Context, raw net.Conn) {
 		return
 	}
 	lease.Identify(peer)
+	authenticated = true
 	if incomingCandidate != nil {
 		lease.ObserveReady(func() { r.candidateQueue().Succeeded(key) })
 		defer func() {
