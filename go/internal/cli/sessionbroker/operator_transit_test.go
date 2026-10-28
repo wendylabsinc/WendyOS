@@ -39,6 +39,9 @@ func newBrokerTransitFixture(t *testing.T, parent context.Context, tenant meshid
 	f := &brokerTransitFixture{ctx: ctx}
 	var workers sync.WaitGroup
 	var listeners []net.Listener
+	// Register state cleanup before the worker cleanup below: the Node writes
+	// its final checkpoint while it exits, including under the race detector.
+	stateDirectory := t.TempDir()
 	t.Cleanup(func() {
 		cancel()
 		if f.connection != nil {
@@ -48,6 +51,11 @@ func newBrokerTransitFixture(t *testing.T, parent context.Context, tenant meshid
 			l.Close()
 		}
 		workers.Wait()
+		for _, network := range f.networks {
+			if network != nil {
+				_ = network.Close()
+			}
+		}
 	})
 	for i, id := range []string{"33333333-3333-4333-8333-333333333333", "44444444-4444-4444-8444-444444444444"} {
 		device, err := meshid.ParseDevice(tenant, id)
@@ -68,7 +76,7 @@ func newBrokerTransitFixture(t *testing.T, parent context.Context, tenant meshid
 			t.Fatal(err)
 		}
 		f.networks[i] = network
-		node, err := localmesh.NewNodeWithNetwork(ctx, filepath.Join(t.TempDir(), "node"), credentials, "transit fixture", 50052, network)
+		node, err := localmesh.NewNodeWithNetwork(ctx, filepath.Join(stateDirectory, id, "node"), credentials, "transit fixture", 50052, network)
 		if err != nil {
 			network.Close()
 			t.Fatal(err)

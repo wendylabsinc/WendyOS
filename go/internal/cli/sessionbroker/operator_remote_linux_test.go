@@ -311,7 +311,7 @@ func operatorRemoteBrokerTwoKernelRouters(t *testing.T, reconnect bool) {
 		if i == 0 {
 			endpoint = "10.221.0.2:43024"
 		}
-		write(filepath.Join(dir, "local-mesh.json"), localmesh.TCPConfig{Listen: fmt.Sprintf("10.222.0.%d:43020", i+1), EndpointListen: endpoint, Peers: []localmesh.TCPPeer{{Device: devices[1-i].UUID().String(), Address: fmt.Sprintf("10.222.0.%d:43020", 2-i)}}})
+		write(filepath.Join(dir, "local-mesh.json"), localmesh.TCPConfig{Listen: fmt.Sprintf("10.222.0.%d:43020", i+1), TLSListen: endpoint, Peers: []localmesh.TCPPeer{{Device: devices[1-i].UUID().String(), Address: fmt.Sprintf("10.222.0.%d:43020", 2-i)}}})
 		cfg := remoteKernelConfig{Identity: identities[i], Dir: dir, Principal: certificate.PrincipalURI, Ready: filepath.Join(dir, "ready"), Stop: filepath.Join(dir, "stop"), Remote: i == 1}
 		childCfg[i] = cfg
 		path := filepath.Join(dir, "child.json")

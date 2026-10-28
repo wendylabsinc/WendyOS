@@ -45,7 +45,6 @@ type Options struct {
 	Automatic      bool
 	CarrierSources []carriers.Source
 	Discover       func(context.Context) ([]Options, error)
-	LeaseDuration  time.Duration
 	StateDirectory string
 	Certificate    config.CertificateInfo
 	RouterAddress  string
@@ -72,7 +71,6 @@ type Session struct {
 	Node            *localmesh.Node
 	options         Options
 	routerConfig    meshoperatorlink.ClientConfig
-	routerTLS       *tls.Config
 	initialRouter   *meshoperatorlink.RouterLink
 	nodeCancel      context.CancelFunc
 	linkMu          sync.RWMutex
@@ -291,22 +289,6 @@ func endpointStatePath(directory string, operator meshoperator.Operator) string 
 	key := sha256.Sum256([]byte(operator.Principal()))
 	return filepath.Join(directory, fmt.Sprintf("operator-endpoint-%x.cbor", key))
 }
-func advanceEndpoint(directory string, operator meshoperator.Operator, state *endpointState) (uint64, error) {
-	if state.Revision == ^uint64(0) {
-		return 0, errors.New("operator endpoint revision exhausted")
-	}
-	next := *state
-	next.Revision++
-	data, err := netwire.Marshal(next)
-	if err != nil {
-		return 0, err
-	}
-	if err = atomicfile.Write(endpointStatePath(directory, operator), data, 0600); err != nil {
-		return 0, err
-	}
-	*state = next
-	return next.Revision, nil
-}
 
 // Open uses only cached selected credentials/trust. It performs no login,
 // discovery, Cloud requests, system routing, or fallback credential selection.
@@ -442,7 +424,7 @@ func Open(ctx context.Context, options Options) (_ *Session, err error) {
 			return nil, err
 		}
 	}
-	session := &Session{certificate: options.Certificate, revision: &revision, Endpoint: endpoint, Node: node, nodeCancel: nodeCancel, initialRouter: link, adjacentPeer: router, linkChanged: make(chan struct{}, 1), options: options, routerConfig: cfg, routerTLS: tlsConfig, release: release, info: Info{endpoint.Address().String(), router.Principal(), state.Revision}}
+	session := &Session{certificate: options.Certificate, revision: &revision, Endpoint: endpoint, Node: node, nodeCancel: nodeCancel, initialRouter: link, adjacentPeer: router, linkChanged: make(chan struct{}, 1), options: options, routerConfig: cfg, release: release, info: Info{endpoint.Address().String(), router.Principal(), state.Revision}}
 	session.links = make(map[*meshoperatorlink.RouterLink]managedCarrier)
 	if link != nil {
 		session.link = link.Link

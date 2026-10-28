@@ -326,20 +326,26 @@ func DialOperatorLite(ctx context.Context, selector string) (net.Conn, error) {
 
 type operatorLiteConn struct {
 	net.Conn
-	remote      net.Conn
-	stream      grpc.ClientStream
-	cancel      context.CancelFunc
-	release     func() error
-	once        sync.Once
-	writeMu     sync.Mutex
-	writeClosed atomic.Bool
-	writeDone   chan struct{}
-	readMu      sync.Mutex
-	readErr     error
+	remote               net.Conn
+	stream               grpc.ClientStream
+	cancel               context.CancelFunc
+	release              func() error
+	once                 sync.Once
+	writeMu              sync.Mutex
+	writeClosed          atomic.Bool
+	writeDone            chan struct{}
+	writeErr             error // published by closing writeDone
+	closed               chan struct{}
+	deadlineMu           sync.Mutex
+	writeDeadline        time.Time
+	writeDeadlineChanged chan struct{}
+	readMu               sync.Mutex
+	readErr              error
 }
 
 func (c *operatorLiteConn) Close() error {
 	c.once.Do(func() {
+		close(c.closed)
 		c.cancel()
 		c.Conn.Close()
 		c.remote.Close()
@@ -373,14 +379,77 @@ func (c *operatorLiteConn) Write(bytes []byte) (int, error) {
 func (c *operatorLiteConn) CloseWrite() error {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
-	if c.writeClosed.Swap(true) {
-		return nil
+	if !c.writeClosed.Swap(true) {
+		// Interrupt only the outgoing pipe reader; it finishes bytes accepted
+		// by Write before closing the gRPC request direction exactly once.
+		_ = c.remote.SetReadDeadline(time.Now())
 	}
-	// Interrupt only the outgoing pipe reader; it finishes bytes accepted by
-	// Write before closing the gRPC request direction exactly once.
-	_ = c.remote.SetReadDeadline(time.Now())
-	<-c.writeDone
+	for {
+		select {
+		case <-c.writeDone:
+			return c.writeErr
+		default:
+		}
+		c.deadlineMu.Lock()
+		deadline := c.writeDeadline
+		c.deadlineMu.Unlock()
+		var timer *time.Timer
+		var expired <-chan time.Time
+		if !deadline.IsZero() {
+			if !time.Now().Before(deadline) {
+				// The final accepted pipe chunk can be parked in gRPC Send.
+				// Retire this flow without closing the shared broker connection.
+				_ = c.Close()
+				return os.ErrDeadlineExceeded
+			}
+			timer = time.NewTimer(time.Until(deadline))
+			expired = timer.C
+		}
+		select {
+		case <-c.writeDone:
+			if timer != nil {
+				timer.Stop()
+			}
+			return c.writeErr
+		case <-c.closed:
+			if timer != nil {
+				timer.Stop()
+			}
+			return net.ErrClosed
+		case <-c.writeDeadlineChanged:
+		case <-expired:
+		}
+		if timer != nil {
+			timer.Stop()
+		}
+		// A concurrent caller may have extended or cleared the deadline.
+	}
+}
+
+func (c *operatorLiteConn) SetWriteDeadline(t time.Time) error {
+	if err := c.Conn.SetWriteDeadline(t); err != nil && !c.writeClosed.Load() {
+		return err
+	}
+	select {
+	case <-c.closed:
+		return net.ErrClosed
+	default:
+	}
+	c.deadlineMu.Lock()
+	c.writeDeadline = t
+	c.deadlineMu.Unlock()
+	select {
+	case c.writeDeadlineChanged <- struct{}{}:
+	default:
+	}
 	return nil
+}
+
+func (c *operatorLiteConn) SetDeadline(t time.Time) error {
+	if err := c.Conn.SetReadDeadline(t); err != nil {
+		return err
+	}
+	return c.SetWriteDeadline(t)
 }
 func openOperatorLite(ctx context.Context, cc *grpc.ClientConn, selector string, release func() error) (net.Conn, error) {
 	return openOperatorStream(ctx, cc, selector, operatorLiteMethod, nil, release)
@@ -409,7 +478,7 @@ func openOperatorStream(ctx context.Context, cc *grpc.ClientConn, selector, meth
 		return fail(ctx.Err())
 	}
 	local, remote := net.Pipe()
-	conn := &operatorLiteConn{Conn: local, remote: remote, stream: stream, cancel: cancel, release: release, writeDone: make(chan struct{})}
+	conn := &operatorLiteConn{Conn: local, remote: remote, stream: stream, cancel: cancel, release: release, writeDone: make(chan struct{}), closed: make(chan struct{}), writeDeadlineChanged: make(chan struct{}, 1)}
 	context.AfterFunc(owner, func() { _ = conn.Close() })
 	go func() {
 		defer conn.Close()
@@ -431,19 +500,25 @@ func openOperatorStream(ctx context.Context, cc *grpc.ClientConn, selector, meth
 	}()
 	go func() {
 		defer close(conn.writeDone)
-		defer stream.CloseSend()
+		defer func() {
+			if err := stream.CloseSend(); conn.writeErr == nil {
+				conn.writeErr = err
+			}
+		}()
 		buffer := make([]byte, operatorLiteChunk)
 		for {
 			n, err := remote.Read(buffer)
 			if n > 0 {
 				data := rawMessage(append([]byte(nil), buffer[:n]...))
 				if err := stream.SendMsg(&data); err != nil {
+					conn.writeErr = err
 					conn.Close()
 					return
 				}
 			}
 			if err != nil {
 				if !conn.writeClosed.Load() {
+					conn.writeErr = err
 					conn.Close()
 				}
 				return
