@@ -25,16 +25,17 @@ import (
 )
 
 type Network struct {
-	self     netip.Addr
-	stack    *stack.Stack
-	endpoint *channel.Endpoint
-	ctx      context.Context
-	cancel   context.CancelFunc
-	done     chan struct{}
-	mu       sync.RWMutex
-	ports    map[babel.LinkID]*packetPort
-	routes   map[netip.Addr]babel.LinkID
-	once     sync.Once
+	self       netip.Addr
+	stack      *stack.Stack
+	endpoint   *channel.Endpoint
+	ctx        context.Context
+	cancel     context.CancelFunc
+	done       chan struct{}
+	mu         sync.RWMutex
+	ports      map[babel.LinkID]*packetPort
+	routes     map[netip.Addr]babel.LinkID
+	once       sync.Once
+	operations sync.WaitGroup
 }
 
 func NewNetwork(self meshid.Device) (*Network, error) {
@@ -74,7 +75,24 @@ func NewNetwork(self meshid.Device) (*Network, error) {
 	}()
 	return n, nil
 }
-func (n *Network) ReconcileBase() error { return nil }
+func (n *Network) ReconcileBase() error {
+	if n.ctx.Err() != nil {
+		return net.ErrClosed
+	}
+	return nil
+}
+
+// beginOperation excludes new stack users once shutdown starts. Register under
+// the same lock as cancellation so Close can join without racing WaitGroup.Add.
+func (n *Network) beginOperation() bool {
+	n.mu.RLock()
+	defer n.mu.RUnlock()
+	if n.ctx.Err() != nil {
+		return false
+	}
+	n.operations.Add(1)
+	return true
+}
 func (n *Network) AddPeer(id babel.LinkID, peer meshid.Device) (io.ReadWriteCloser, error) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
@@ -109,6 +127,10 @@ func (n *Network) Apply(routes []babel.Route) error {
 		}
 	}
 	n.mu.Lock()
+	if n.ctx.Err() != nil {
+		n.mu.Unlock()
+		return net.ErrClosed
+	}
 	n.routes = next
 	n.mu.Unlock()
 	return nil
@@ -116,15 +138,21 @@ func (n *Network) Apply(routes []babel.Route) error {
 func (n *Network) Stop() error { return n.Apply(nil) }
 func (n *Network) Close() error {
 	n.once.Do(func() {
+		n.mu.Lock()
 		n.cancel()
+		for _, p := range n.ports {
+			_ = p.Close()
+		}
+		n.ports = nil
+		n.routes = nil
+		n.mu.Unlock()
+		// gVisor does not close endpoints created during Stack.Close. Cancel and
+		// join every dial and inbound injection before destroying the stack. The
+		// outgoing pump also owns stack packets and must finish before teardown.
+		n.operations.Wait()
+		<-n.done
 		n.stack.Close()
 		n.endpoint.Close()
-		<-n.done
-		n.mu.Lock()
-		defer n.mu.Unlock()
-		for _, p := range n.ports {
-			p.Close()
-		}
 		n.stack.Wait()
 	})
 	return nil
@@ -165,6 +193,9 @@ func (n *Network) forward(packet []byte, received bool) {
 	}
 }
 func (n *Network) DialContext(ctx context.Context, address string) (net.Conn, error) {
+	if n.ctx.Err() != nil {
+		return nil, net.ErrClosed
+	}
 	target, err := netip.ParseAddrPort(address)
 	if err != nil || target.Port() == 0 || !meshid.InMesh(target.Addr()) {
 		return nil, errors.New("mesh dial requires an IPv6 mesh address and port")
@@ -176,7 +207,25 @@ func (n *Network) DialContext(ctx context.Context, address string) (net.Conn, er
 	if !ok || p == nil {
 		return nil, errors.New("mesh destination has no authenticated route")
 	}
-	return gonet.DialContextTCP(ctx, n.stack, tcpip.FullAddress{NIC: 1, Addr: tcpip.AddrFrom16(target.Addr().As16()), Port: target.Port()}, ipv6.ProtocolNumber)
+	if !n.beginOperation() {
+		return nil, net.ErrClosed
+	}
+	defer n.operations.Done()
+	dialCtx, cancel := context.WithCancel(ctx)
+	stop := context.AfterFunc(n.ctx, cancel)
+	defer stop()
+	defer cancel()
+	connection, err := gonet.DialContextTCP(dialCtx, n.stack, tcpip.FullAddress{NIC: 1, Addr: tcpip.AddrFrom16(target.Addr().As16()), Port: target.Port()}, ipv6.ProtocolNumber)
+	if n.ctx.Err() != nil {
+		if connection != nil {
+			_ = connection.Close()
+		}
+		return nil, net.ErrClosed
+	}
+	if err != nil {
+		return nil, err
+	}
+	return connection, nil
 }
 
 type packetPort struct {
@@ -203,6 +252,10 @@ func (p *packetPort) Write(b []byte) (int, error) {
 		return 0, net.ErrClosed
 	default:
 	}
+	if !p.network.beginOperation() {
+		return 0, net.ErrClosed
+	}
+	defer p.network.operations.Done()
 	p.network.forward(append([]byte(nil), b...), true)
 	return len(b), nil
 }
