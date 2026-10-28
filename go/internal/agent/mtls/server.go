@@ -12,6 +12,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/agent/interceptor"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
+	"github.com/wendylabsinc/wendy/go/internal/shared/meshoperatorlink"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
@@ -115,7 +116,7 @@ func NewServer(certPEM, chainPEM, keyPEM string, logger *zap.Logger, notBeforeFl
 		return nil, fmt.Errorf("creating TLS config: %w", err)
 	}
 
-	creds := credentials.NewTLS(tlsConfig)
+	creds := meshoperatorlink.AgentTransportCredentials(credentials.NewTLS(tlsConfig))
 	opts := []grpc.ServerOption{
 		grpc.Creds(creds),
 		// mTLS interceptors are mandatory: they run before any caller-provided interceptors

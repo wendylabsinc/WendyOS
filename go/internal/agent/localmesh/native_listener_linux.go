@@ -12,16 +12,29 @@ import (
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
+	"github.com/wendylabsinc/wendy/go/internal/shared/meshoperatorlink"
 )
 
 func nativeServerTLS(c *Credentials) (*tls.Config, error) {
 	if c == nil || c.Verify == nil || len(c.Certificate.Certificate) == 0 {
 		return nil, errors.New("native listener requires enrolled credentials")
 	}
+	protocols := []string{StreamALPN}
+	if c.SupportsPrimaryOperators() {
+		protocols = append(protocols, meshoperatorlink.RouterALPN)
+	}
 	return &tls.Config{
 		Certificates: []tls.Certificate{c.Certificate}, MinVersion: tls.VersionTLS13, MaxVersion: tls.VersionTLS13,
-		ClientAuth: tls.RequireAnyClientCert, NextProtos: []string{StreamALPN}, SessionTicketsDisabled: true,
+		ClientAuth: tls.RequireAnyClientCert, NextProtos: protocols, SessionTicketsDisabled: true,
 		VerifyConnection: func(s tls.ConnectionState) error {
+			if s.NegotiatedProtocol == meshoperatorlink.RouterALPN {
+				chain := make([][]byte, len(s.PeerCertificates))
+				for i, c := range s.PeerCertificates {
+					chain[i] = c.Raw
+				}
+				_, err := c.VerifyPrimaryOperator(chain, time.Now())
+				return err
+			}
 			if s.NegotiatedProtocol != StreamALPN {
 				return errors.New("native stream ALPN required")
 			}
@@ -57,7 +70,9 @@ func runNetTLSListener(parent context.Context, node *Node, listener net.Listener
 	defer func() { cancel(); _ = listener.Close(); workers.Wait() }()
 	stop := context.AfterFunc(ctx, func() { _ = listener.Close() })
 	defer stop()
-	connections, handshakes := make(chan struct{}, LANMaxConnections), make(chan struct{}, LANMaxOutgoingAttempts)
+	connections, handshakes := make(chan struct{}, LANMaxConnections+maxOperatorAttachments), make(chan struct{}, LANMaxOutgoingAttempts)
+	deviceSlots := make(chan struct{}, LANMaxConnections)
+	operatorSlots := make(chan struct{}, maxOperatorAttachments)
 	for {
 		raw, err := listener.Accept()
 		if err != nil {
@@ -79,22 +94,61 @@ func runNetTLSListener(parent context.Context, node *Node, listener net.Listener
 			_ = raw.Close()
 			continue
 		}
-		lease := policy.ReserveGroup(fmt.Sprintf("tls-incoming:%p", raw), meshid.Device{}, false, group)
-		if lease == nil {
-			<-handshakes
-			<-connections
-			_ = raw.Close()
-			continue
-		}
 		workers.Add(1)
 		go func() {
 			defer workers.Done()
 			defer func() { <-connections }()
-			defer lease.Release()
+			var lease *ConnectionLease
+			var slot chan struct{}
+			defer func() {
+				if lease != nil {
+					lease.Release()
+				}
+				if slot != nil {
+					<-slot
+				}
+			}()
 			defer raw.Close()
 			stop := context.AfterFunc(ctx, func() { _ = raw.Close() })
 			defer stop()
-			secure := tls.Server(lease.TrackIncoming(raw), config)
+			handshakeConfig := config.Clone()
+			handshakeConfig.GetConfigForClient = func(hello *tls.ClientHelloInfo) (*tls.Config, error) {
+				selected := ""
+				for _, supported := range config.NextProtos {
+					for _, offered := range hello.SupportedProtos {
+						if supported == offered {
+							selected = supported
+							break
+						}
+					}
+					if selected != "" {
+						break
+					}
+				}
+				if slot == nil {
+					if selected == meshoperatorlink.RouterALPN {
+						slot = operatorSlots
+					} else if selected == StreamALPN {
+						slot = deviceSlots
+					} else {
+						return nil, errors.New("native stream ALPN required")
+					}
+					select {
+					case slot <- struct{}{}:
+					default:
+						slot = nil
+						return nil, errors.New("native carrier role capacity reached")
+					}
+					if selected == StreamALPN {
+						lease = policy.ReserveGroup(fmt.Sprintf("tls-incoming:%p", raw), meshid.Device{}, false, group)
+						if lease == nil {
+							return nil, errors.New("device neighbour capacity reached")
+						}
+					}
+				}
+				return config, nil
+			}
+			secure := tls.Server(raw, handshakeConfig)
 			setup, done := context.WithTimeout(ctx, 8*time.Second)
 			err := secure.HandshakeContext(setup)
 			done()
@@ -102,11 +156,16 @@ func runNetTLSListener(parent context.Context, node *Node, listener net.Listener
 			if err != nil {
 				return
 			}
+			if secure.ConnectionState().NegotiatedProtocol == meshoperatorlink.RouterALPN {
+				_ = node.AttachOperatorStream(WithCarrier(ctx, "tls-stream"), secure, cost)
+				return
+			}
 			peer, err := lanAuthenticatedPeer(node.Credentials, secure.ConnectionState())
 			if err != nil {
 				return
 			}
 			lease.Identify(peer)
+			lease.Progress()
 			_ = node.AttachStream(WithConnectionLease(ctx, lease), peer, secure, cost)
 		}()
 	}

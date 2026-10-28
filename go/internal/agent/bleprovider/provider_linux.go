@@ -10,16 +10,19 @@ import (
 	"fmt"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/godbus/dbus/v5"
 	"github.com/wendylabsinc/wendy/go/internal/agent/localmesh"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
+	"github.com/wendylabsinc/wendy/go/internal/shared/meshoperatorlink"
 	"github.com/wendylabsinc/wendy/go/internal/shared/tsarelay"
 	"go.uber.org/zap"
 )
 
 type runtime struct {
+	operatorSlots        chan struct{}
 	policy               *localmesh.ConnectionPolicy
 	candidates           localmesh.CandidateQueue
 	nextDial             time.Time
@@ -440,6 +443,39 @@ func (r *runtime) acceptLoop(ctx context.Context, listener *l2Listener) error {
 	return nil
 }
 
+const maxBLEOperatorAttachments = 1
+
+type operatorStreamNode interface {
+	AttachOperatorStream(context.Context, *tls.Conn, uint16) error
+}
+
+// Operator attachments have a distinct, bounded role. They share the physical
+// radio and TLS admission gate, but never occupy a router-neighbour lease.
+func (r *runtime) operatorAdmission() chan struct{} {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.operatorSlots == nil {
+		r.operatorSlots = make(chan struct{}, maxBLEOperatorAttachments)
+	}
+	return r.operatorSlots
+}
+
+type incomingConnectionTarget struct{ conn net.Conn }
+type incomingRoleConn struct {
+	net.Conn
+	target atomic.Pointer[incomingConnectionTarget]
+}
+
+func (c *incomingRoleConn) selected() net.Conn {
+	if target := c.target.Load(); target != nil {
+		return target.conn
+	}
+	return c.Conn
+}
+func (c *incomingRoleConn) Read(b []byte) (int, error)  { return c.selected().Read(b) }
+func (c *incomingRoleConn) Write(b []byte) (int, error) { return c.selected().Write(b) }
+func (c *incomingRoleConn) NetConn() net.Conn           { return c.Conn }
+
 func (r *runtime) makeServerTLS() *tls.Config {
 	config := &tls.Config{
 		MinVersion: tls.VersionTLS13, MaxVersion: tls.VersionTLS13,
@@ -460,11 +496,15 @@ func (r *runtime) makeServerTLS() *tls.Config {
 			for _, cert := range state.PeerCertificates {
 				chain = append(chain, cert.Raw)
 			}
+			if state.NegotiatedProtocol == meshoperatorlink.RouterALPN {
+				_, err := r.cfg.Credentials.VerifyPrimaryOperator(chain, time.Now())
+				return err
+			}
 			id, err := r.cfg.Credentials.Verify(chain, time.Now())
 			if err != nil {
 				return err
 			}
-			if id.Device.Tenant() != r.cfg.Credentials.Device.Tenant() {
+			if id.Device.IsOperator() || id.Device.Tenant() != r.cfg.Credentials.Device.Tenant() {
 				return errors.New("BLE inbound peer is outside the tenant")
 			}
 			if id.Device == r.cfg.Credentials.Device {
@@ -474,6 +514,9 @@ func (r *runtime) makeServerTLS() *tls.Config {
 		},
 	}
 	r.cfg.Credentials.ServerTicketStore(ALPN, "ble-tls").Configure(config)
+	if _, ok := r.cfg.Node.(operatorStreamNode); ok && r.cfg.Credentials.SupportsPrimaryOperators() {
+		config.NextProtos = append(config.NextProtos, meshoperatorlink.RouterALPN)
+	}
 	return config
 }
 
@@ -497,27 +540,79 @@ func (r *runtime) acceptLink(ctx context.Context, raw net.Conn) {
 			key = c.key()
 		}
 	}
-	lease := r.connectionPolicy().Reserve(key, meshid.Device{}, false)
-	if lease == nil {
-		return
-	}
-	defer lease.Release()
-	ctx = localmesh.WithConnectionLease(ctx, lease)
+	var lease *localmesh.ConnectionLease
+	operatorSlot := false
+	defer func() {
+		if lease != nil {
+			lease.Release()
+		}
+		if operatorSlot {
+			<-r.operatorAdmission()
+		}
+	}()
 	stopWatch := watchLinkContext(ctx, raw)
 	defer stopWatch()
-	measured, meter := meterHandshake(lease.TrackIncoming(raw), r.cfg.Logger)
-	secure := tls.Server(measured, r.serverTLS)
+	roleConn := &incomingRoleConn{Conn: raw}
+	measured, meter := meterHandshake(roleConn, r.cfg.Logger)
+	handshakeConfig := r.serverTLS.Clone()
+	handshakeConfig.GetConfigForClient = func(hello *tls.ClientHelloInfo) (*tls.Config, error) {
+		selected := ""
+		for _, protocol := range r.serverTLS.NextProtos {
+			for _, offered := range hello.SupportedProtos {
+				if protocol == offered {
+					selected = protocol
+					break
+				}
+			}
+			if selected != "" {
+				break
+			}
+		}
+		if selected == meshoperatorlink.RouterALPN {
+			if !operatorSlot {
+				select {
+				case r.operatorAdmission() <- struct{}{}:
+					operatorSlot = true
+				default:
+					return nil, errors.New("BLE operator attachment capacity reached")
+				}
+			}
+			operatorConfig := r.serverTLS.Clone()
+			// Device ticket admission is deliberately separate from primary operators.
+			operatorConfig.SessionTicketsDisabled = true
+			operatorConfig.WrapSession, operatorConfig.UnwrapSession = nil, nil
+			return operatorConfig, nil
+		}
+		if selected == ALPN && lease == nil {
+			lease = r.connectionPolicy().Reserve(key, meshid.Device{}, false)
+			if lease == nil {
+				return nil, errors.New("BLE neighbour capacity reached")
+			}
+			roleConn.target.Store(&incomingConnectionTarget{conn: lease.TrackIncoming(raw)})
+		}
+		return r.serverTLS, nil
+	}
+	secure := tls.Server(measured, handshakeConfig)
 	meter.start()
 	wait, elapsed, err := r.tlsGate.run(ctx, meshTLSAdmissionWait, meshTLSHandshakeTimeout, secure.HandshakeContext)
 	measurement := meter.finish()
 	state := secure.ConnectionState()
+	if err == nil && state.NegotiatedProtocol == meshoperatorlink.RouterALPN && operatorSlot {
+		authenticated = true
+		measurement.log(r.cfg.Logger, "inbound-operator", meshid.Device{}, state, true)
+		defer secure.Close()
+		attached := time.Now()
+		err = r.cfg.Node.(operatorStreamNode).AttachOperatorStream(localmesh.WithCarrier(ctx, "ble"), secure, LinkCost)
+		r.cfg.Logger.Info("BLE operator attachment ended", zap.Duration("lifetime", time.Since(attached)), zap.Bool("cancelled", ctx.Err() != nil), zap.Error(err))
+		return
+	}
 	var peer meshid.Device
 	if err == nil && state.NegotiatedProtocol == ALPN {
 		chain := make([][]byte, 0, len(state.PeerCertificates))
 		for _, cert := range state.PeerCertificates {
 			chain = append(chain, cert.Raw)
 		}
-		if id, verifyErr := r.cfg.Credentials.Verify(chain, time.Now()); verifyErr == nil && id.Device.Tenant() == r.cfg.Credentials.Device.Tenant() && id.Device != r.cfg.Credentials.Device {
+		if id, verifyErr := r.cfg.Credentials.Verify(chain, time.Now()); verifyErr == nil && !id.Device.IsOperator() && id.Device.Tenant() == r.cfg.Credentials.Device.Tenant() && id.Device != r.cfg.Credentials.Device {
 			peer = id.Device
 		}
 	}
@@ -527,6 +622,7 @@ func (r *runtime) acceptLink(ctx context.Context, raw net.Conn) {
 		_ = secure.Close()
 		return
 	}
+	ctx = localmesh.WithConnectionLease(ctx, lease)
 	lease.Identify(peer)
 	authenticated = true
 	if incomingCandidate != nil {
