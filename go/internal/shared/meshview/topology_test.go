@@ -61,4 +61,24 @@ func TestTopologyNormalOperatorInstallationsKeepRealPrincipalAndRoutes(t *testin
 			t.Fatal("operator route authorization or physical next hop lost", route)
 		}
 	}
+	// Different installations share a principal. Their display order must stay
+	// stable when a snapshot's map iteration produces a different row order.
+	third, err := identity.WithInstance(uuid.MustParse("55555555-5555-4555-8555-555555555555"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondManifest := snapshot.Devices[0]
+	secondOwner := *secondManifest.Owner
+	secondOwner.Instance = third.UUID()
+	secondManifest.Owner = &secondOwner
+	secondOrigin := origin
+	secondOrigin.Prefix = netip.PrefixFrom(third.MeshAddress(), 128)
+	secondOrigin.RouterID = 11
+	secondManifest.Route = &secondOrigin
+	snapshot.Devices = []localmesh.Manifest{secondManifest, snapshot.Devices[0]}
+	two := Topology(self, snapshot, now)
+	if len(two.Announcements) != 2 || two.Announcements[0].DeviceId != other.UUID().String() || two.Announcements[1].DeviceId != third.UUID().String() {
+		t.Fatal("operator installations do not have a stable order", two.Announcements)
+	}
+
 }

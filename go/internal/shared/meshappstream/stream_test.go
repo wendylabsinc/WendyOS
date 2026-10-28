@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"fmt"
 	"io"
 	"net"
 	"testing"
@@ -182,4 +183,95 @@ func TestNormalApplicationPendingOpenCancellationReleasesStream(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("pending application stream did not stop")
 	}
+}
+
+// An application may stop consuming an otherwise healthy RPC. Its upload can
+// fill HTTP/2's bounded stream window while the final local pipe chunk is
+// already accepted. Half-close must still respect the socket's write deadline.
+func TestNormalApplicationHalfCloseHonorsStalledWriteDeadline(t *testing.T) {
+	for _, updateDuringClose := range []bool{false, true} {
+		t.Run(fmt.Sprintf("deadline_during_close_%t", updateDuringClose), func(t *testing.T) {
+			stalledApplicationHalfClose(t, updateDuringClose)
+		})
+	}
+}
+func stalledApplicationHalfClose(t *testing.T, updateDuringClose bool) {
+	t.Helper()
+	finished := make(chan struct{}, 2)
+	client := applicationClient(t, func(stream pb.WendyMeshService_MeshDialServer) error {
+		defer func() { finished <- struct{}{} }()
+		if _, err := acceptApplication(stream); err != nil {
+			return err
+		}
+		<-stream.Context().Done()
+		return stream.Context().Err()
+	})
+	setup, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	flow, err := Dial(setup, client, 8083)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer flow.Close()
+	_ = flow.SetWriteDeadline(time.Now().Add(150 * time.Millisecond))
+	payload := make([]byte, ChunkSize)
+	var accepted int
+	for {
+		n, err := flow.Write(payload)
+		accepted += n
+		if err != nil {
+			if deadline, ok := err.(net.Error); !ok || !deadline.Timeout() {
+				t.Fatal("stalled upload did not respect write deadline", err)
+			}
+			break
+		}
+	}
+	if accepted == 0 {
+		t.Fatal("fixture did not accept any upload before backpressure")
+	}
+	if updateDuringClose {
+		if err := flow.SetWriteDeadline(time.Time{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	closed := make(chan error, 1)
+	go func() { closed <- flow.(interface{ CloseWrite() error }).CloseWrite() }()
+	if updateDuringClose {
+		until := time.Now().Add(time.Second)
+		for !flow.(*Conn).writeClosed.Load() && time.Now().Before(until) {
+			time.Sleep(time.Millisecond)
+		}
+		if !flow.(*Conn).writeClosed.Load() {
+			t.Fatal("half-close did not reach its pending drain")
+		}
+		if err := flow.SetWriteDeadline(time.Now().Add(20 * time.Millisecond)); err != nil {
+			t.Fatal("update half-close deadline", err)
+		}
+	}
+	select {
+	case err := <-closed:
+		if deadline, ok := err.(net.Error); !ok || !deadline.Timeout() {
+			t.Fatal("stalled half-close did not report its write deadline", err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		_ = flow.Close()
+		t.Fatal("stalled half-close outlived the write deadline")
+	}
+	select {
+	case <-finished:
+	case <-time.After(time.Second):
+		t.Fatal("expired application stream did not cancel its RPC")
+	}
+	select {
+	case <-flow.(*Conn).writeDone:
+	case <-time.After(time.Second):
+		t.Fatal("expired application stream retained its sender")
+	}
+	// Expiring one application's stream does not retire the shared agent RPC
+	// transport. Another normal application can obtain port admission on it.
+	other, err := Dial(setup, client, 8084)
+	if err != nil {
+		t.Fatal("write deadline closed the shared agent connection", err)
+	}
+	_ = other.Close()
 }
