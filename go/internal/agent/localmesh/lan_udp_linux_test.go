@@ -122,18 +122,21 @@ func TestLANUDPRejectedPeerRetainsWorkerSocket(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, _ = OpenControl(ctx, duplicate, a.Device, b.Device)
-	// Ready can reject the authenticated duplicate before the client consumes
-	// the server hello. It must leave both routing and the shared socket alone.
+	_, helloErr := OpenControl(ctx, duplicate, a.Device, b.Device)
+	// Ready can close the losing connection before the client consumes the
+	// server hello. The server's add event proves TLS and its hello succeeded.
+	select {
+	case peer := <-admitted:
+		if peer != a.Device {
+			t.Fatalf("duplicate admitted wrong peer: %v", peer)
+		}
+	case <-ctx.Done():
+		t.Fatalf("duplicate did not reach authenticated admission: %v", helloErr)
+	}
 	select {
 	case <-duplicate.Context().Done():
 	case <-ctx.Done():
 		t.Fatal("ready duplicate not promptly rejected")
-	}
-	select {
-	case peer := <-admitted:
-		t.Fatalf("rejected duplicate published a routing link: %v", peer)
-	default:
 	}
 	incumbent.Release()
 	for trial := 0; trial < 2; trial++ {

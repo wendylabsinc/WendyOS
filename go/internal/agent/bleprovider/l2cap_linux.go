@@ -46,7 +46,10 @@ const (
 	meshReceiveMTU = 65535
 	// A frame's total budget may be longer, but a blocked CoC writer must
 	// release the link if the peer stops granting credits or draining data.
-	defaultWriteIdleTimeout = 5 * time.Second
+	// Six-node BLE runs can pause credit progress for more than five seconds
+	// while peers process TLS and signed catalogues. Keep a finite idle bound
+	// below Lite's 30-second carrier stall budget.
+	defaultWriteIdleTimeout = 15 * time.Second
 )
 
 type l2addr struct {
