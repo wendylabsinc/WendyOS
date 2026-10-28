@@ -25,6 +25,20 @@ const (
 	pooledPortACKLimit = 20 * time.Second
 )
 
+type appRetirement struct {
+	quic *quic.Conn
+	udp  interface{ Close() error }
+}
+
+func (r appRetirement) close(reason string) {
+	if r.quic != nil {
+		_ = r.quic.CloseWithError(0, reason)
+	}
+	if r.udp != nil {
+		_ = r.udp.Close()
+	}
+}
+
 // Client reuses one authenticated QUIC session per destination device
 // principal. Each flow opens a separately authorized stream. Build a new
 // Client whenever credentials or trust change; Close stops the pool at agent
@@ -37,6 +51,7 @@ type Client struct {
 	peers          map[meshid.Device]*pooledSession
 	sessions       map[*pooledSession]struct{} // includes retired sessions with active streams
 	udpSessions    map[*udpSession]struct{}    // dedicated datagram sessions, including pending setup
+	tlsApps        map[*tlsAppConn]struct{}
 	closed         bool
 	stop           chan struct{}
 	done           chan struct{}
@@ -114,11 +129,11 @@ func (c *Client) Close() error {
 	}
 	c.closed = true
 	close(c.stop)
-	var conns []*quic.Conn
+	var conns []appRetirement
 	for entry := range c.sessions {
 		entry.retired = true
 		if entry.conn != nil {
-			conns = append(conns, entry.conn)
+			conns = append(conns, appRetirement{quic: entry.conn})
 		}
 	}
 	for entry := range c.udpSessions {
@@ -127,13 +142,20 @@ func (c *Client) Close() error {
 			entry.cancel()
 		}
 		if entry.flow != nil {
-			conns = append(conns, entry.flow.conn)
+			conns = append(conns, appRetirement{udp: entry.flow})
 		}
 	}
 	c.peers = make(map[meshid.Device]*pooledSession)
+	tlsApps := make([]*tlsAppConn, 0, len(c.tlsApps))
+	for conn := range c.tlsApps {
+		tlsApps = append(tlsApps, conn)
+	}
 	c.mu.Unlock()
+	for _, conn := range tlsApps {
+		_ = conn.Close()
+	}
 	for _, conn := range conns {
-		_ = conn.CloseWithError(0, "wendy net app client stopped")
+		conn.close("wendy net app client stopped")
 	}
 	<-c.done
 	if c.ownsUDPManager {
@@ -150,9 +172,18 @@ func (c *Client) Invalidate(peer meshid.Device) {
 	}
 	c.mu.Lock()
 	conns := c.invalidateLocked(peer)
+	var tlsApps []*tlsAppConn
+	for conn := range c.tlsApps {
+		if conn.peer == peer {
+			tlsApps = append(tlsApps, conn)
+		}
+	}
 	c.mu.Unlock()
+	for _, conn := range tlsApps {
+		_ = conn.Close()
+	}
 	for _, conn := range conns {
-		_ = conn.CloseWithError(0, "wendy net app route withdrawn")
+		conn.close("wendy net app route withdrawn")
 	}
 }
 
@@ -170,7 +201,7 @@ func (c *Client) WithdrawRoute(peer meshid.Device) {
 	conns := c.retirePeerLocked(peer, true)
 	c.mu.Unlock()
 	for _, conn := range conns {
-		_ = conn.CloseWithError(0, "wendy net app route withdrawn")
+		conn.close("wendy net app route withdrawn")
 	}
 }
 
@@ -181,7 +212,7 @@ func (c *Client) PruneRoutes(snapshot localmesh.NodeSnapshot) {
 	if c == nil {
 		return
 	}
-	var stale []*quic.Conn
+	var stale []appRetirement
 	c.mu.Lock()
 	peers := make(map[meshid.Device]netip.AddrPort)
 	for peer, entry := range c.peers {
@@ -194,6 +225,19 @@ func (c *Client) PruneRoutes(snapshot localmesh.NodeSnapshot) {
 		}
 	}
 	for entry := range c.udpSessions {
+		if entry.tls {
+			endpoint, err := ResolveApp(snapshot, entry.peer)
+			if err != nil || endpoint.Transport != localmesh.AppTLS || endpoint.Address != entry.address {
+				entry.retired = true
+				if entry.cancel != nil {
+					entry.cancel()
+				}
+				if entry.flow != nil {
+					stale = append(stale, appRetirement{udp: entry.flow})
+				}
+			}
+			continue
+		}
 		address, err := Resolve(snapshot, entry.peer)
 		if err != nil || address != entry.address {
 			peers[entry.peer] = entry.address
@@ -209,26 +253,26 @@ func (c *Client) PruneRoutes(snapshot localmesh.NodeSnapshot) {
 	}
 	c.mu.Unlock()
 	for _, conn := range stale {
-		_ = conn.CloseWithError(0, "wendy net app route withdrawn")
+		conn.close("wendy net app route withdrawn")
 	}
 }
 
 // Caller holds c.mu. Close is done after unlocking.
-func (c *Client) invalidateLocked(peer meshid.Device) []*quic.Conn {
+func (c *Client) invalidateLocked(peer meshid.Device) []appRetirement {
 	return c.retirePeerLocked(peer, false)
 }
 
-func (c *Client) retirePeerLocked(peer meshid.Device, preserveActiveTCP bool) []*quic.Conn {
+func (c *Client) retirePeerLocked(peer meshid.Device, preserveActiveTCP bool) []appRetirement {
 	if entry := c.peers[peer]; entry != nil {
 		entry.retired = true
 	}
 	delete(c.peers, peer)
-	var conns []*quic.Conn
+	var conns []appRetirement
 	for entry := range c.sessions {
 		if entry.peer == peer {
 			entry.retired = true
 			if !preserveActiveTCP || entry.active == 0 {
-				conns = append(conns, entry.conn)
+				conns = append(conns, appRetirement{quic: entry.conn})
 			}
 		}
 	}
@@ -241,7 +285,7 @@ func (c *Client) retirePeerLocked(peer meshid.Device, preserveActiveTCP bool) []
 			entry.cancel()
 		}
 		if entry.flow != nil {
-			conns = append(conns, entry.flow.conn)
+			conns = append(conns, appRetirement{udp: entry.flow})
 		}
 	}
 	return conns

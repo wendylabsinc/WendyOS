@@ -121,6 +121,37 @@ func resolvePairingLANAddrs(ctx context.Context, p SensorPairing) ([]string, boo
 	return nil, false
 }
 
+// NewSourceResolver supplements physical-LAN resolution with currently routed
+// mesh services. Only principal-pinned WendyCom pairings use that catalogue;
+// legacy pairings keep their original discovery and transport selection.
+func NewSourceResolver(meshSources func() []models.LANDevice) SourceResolver {
+	return func(ctx context.Context, p SensorPairing) ([]string, bool) {
+		if p.SourcePrincipalURI != "" && p.Transport == "wendycom" && meshSources != nil {
+			var addresses []string
+			seen := make(map[string]bool)
+			for _, d := range meshSources() {
+				if d.PrincipalURI != p.SourcePrincipalURI || !d.WendyLite || !d.IsMTLS || !d.Sensorlink || d.Port <= 0 {
+					continue
+				}
+				for _, host := range append([]string{d.IPAddress}, d.Addresses...) {
+					if host == "" {
+						continue
+					}
+					address := net.JoinHostPort(host, strconv.Itoa(d.Port))
+					if !seen[address] {
+						addresses = append(addresses, address)
+						seen[address] = true
+					}
+				}
+			}
+			if len(addresses) != 0 {
+				return addresses, true
+			}
+		}
+		return resolvePairingLANAddrs(ctx, p)
+	}
+}
+
 // Runner owns one cancelable goroutine per active pairing, all driven through
 // the single shared Supervisor (its node-id allocator must stay shared across
 // every pairing on the agent).
@@ -144,6 +175,17 @@ func NewRunner(logger *zap.Logger, sup *Supervisor) *Runner {
 // reconnect so a source that changes IP is still found. A non-empty addr is a
 // pinned target RunPairing reuses unchanged.
 func (r *Runner) Start(p SensorPairing, addr string) {
+	r.start(p, addr, false)
+}
+
+// StartDiscovered treats a principal-based source's picker address as an
+// initial hint, then re-resolves its identity on every reconnect. Explicit
+// Start callers retain their pinned-address behavior, as do legacy pairings.
+func (r *Runner) StartDiscovered(p SensorPairing, addr string) {
+	r.start(p, addr, p.SourcePrincipalURI != "")
+}
+
+func (r *Runner) start(p SensorPairing, addr string, dynamic bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	// A restart retains allocations but must not overlap the previous writers.
@@ -153,7 +195,7 @@ func (r *Runner) Start(p SensorPairing, addr string) {
 	r.runs[p.Key()] = pairingRun{cancel: cancel, done: done}
 	go func() {
 		defer close(done)
-		if err := r.sup.RunPairing(ctx, p, addr); err != nil && ctx.Err() == nil {
+		if err := r.sup.runPairing(ctx, p, addr, addr != "" && !dynamic); err != nil && ctx.Err() == nil {
 			r.logger.Warn("sensor pairing supervisor exited", zap.String("source", p.Key()), zap.Error(err))
 		}
 	}()

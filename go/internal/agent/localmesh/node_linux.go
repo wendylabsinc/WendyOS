@@ -141,7 +141,7 @@ func NewNode(parent context.Context, dir string, credentials *Credentials, name 
 	}
 	ctx, cancel := context.WithCancel(parent)
 	n := &Node{controlHub: NewControlHub(cache.Certificates()), Credentials: credentials, kernel: kernel, cache: cache, directory: directory, bundleHints: newBundleHintCache(), store: store, state: state, peers: map[babel.LinkID]*nodePeer{}, events: make(chan nodeEvent, 256), ctx: ctx, cancel: cancel, started: now,
-		advertisement: Manifest{Version: ManifestVersionRoute, Device: credentials.Device.UUID(), Name: name, AgentPort: agentPort, AgentTransport: AgentMTLS, Platform: PlatformWendyOS, AppEndpoints: []AppEndpoint{{Transport: AppQUIC, Port: AppSessionPort}}},
+		advertisement: Manifest{Version: ManifestVersionRoute, Device: credentials.Device.UUID(), Name: name, AgentPort: agentPort, AgentTransport: AgentMTLS, Platform: PlatformWendyOS, AppEndpoints: []AppEndpoint{{Transport: AppQUIC, Port: AppSessionPort}, {Transport: AppTLS, Port: AppSessionTLSPort}}},
 		diagnostics:   carrierDiagnostics{enabled: os.Getenv("WENDY_NET_CARRIER_DIAGNOSTICS") == "1"}}
 	ok := false
 	defer func() {
