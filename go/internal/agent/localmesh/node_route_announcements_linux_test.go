@@ -153,19 +153,23 @@ func TestNodeRoutePublicationFailureDoesNotExposeNewProof(t *testing.T) {
 			n.Credentials.Signer = &routePublicationSigner{Signer: n.Credentials.Signer, beforeSign: func() {
 				t.Fatal("private key used despite failed persistence")
 			}}
+			checkpoint.Seqno++
+			var publishErr error
 			if phase == "checkpoint" {
 				n.store.path = brokenPath
+				publishErr = n.Persist(checkpoint)
 			} else {
-				// publish checks cached identity only after Persist saves the new
-				// checkpoint. Fail the subsequent origin-revision write.
-				verify := n.cache.verify
-				n.cache.verify = func(chain [][]byte, now time.Time) (Identity, error) {
-					n.store.path = brokenPath
-					return verify(chain, now)
+				// Persist the new checkpoint inside the signing gate, then fail
+				// the actual origin write when publication becomes eligible.
+				// Cached identities need not invoke the verifier on publication.
+				if err := n.Persist(checkpoint); err != nil {
+					t.Fatal(err)
 				}
+				n.store.path = brokenPath
+				n.nextPublication = time.Now().Add(-time.Millisecond)
+				publishErr = n.publish()
 			}
-			checkpoint.Seqno++
-			if err := n.Persist(checkpoint); err == nil {
+			if publishErr == nil {
 				t.Fatal("persistence failure ignored")
 			}
 			if !reflect.DeepEqual(n.advertisement, before) || !reflect.DeepEqual(n.directory.Records(time.Now()), records) {
