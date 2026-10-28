@@ -12,15 +12,29 @@
 #define BLE_SCAN_DARWIN_H
 
 #include <stdint.h>
+#include <stddef.h>
 
 // Opaque handle to a running scan session.
 typedef void *WendyBLEScanHandle;
+
+// Raw service bytes cross the native bridge directly; no text/base64 envelope.
+typedef struct {
+    const char *uuid;
+    const uint8_t *bytes;
+    size_t size;
+} WendyBLEServiceDataC;
 
 // WendyBLEScanDeviceC is one discovered peripheral.
 typedef struct {
     const char *address;       // CoreBluetooth peripheral identifier UUID string
     const char *name;          // advertised local name, or "" when unknown
     const char *service_uuids; // comma-separated advertised service UUIDs, or ""
+    WendyBLEServiceDataC *service_data;
+    size_t service_data_count;
+    double last_seen;
+    double service_data_seen;
+    const char *advertisement_name;
+    double advertisement_name_seen;
     int rssi;                  // signal strength in dBm
 } WendyBLEScanDeviceC;
 
