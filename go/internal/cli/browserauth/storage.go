@@ -225,6 +225,7 @@ func (s *Session) restore(ctx context.Context, rotate bool) (*Profile, error) {
 	s.key = key
 	s.privatePEM = saved.PrivateKey
 	s.certificate = saved.Certificate
+	s.liteCertificate = config.CertificateInfo{}
 	s.tokens = restored.tokens
 	s.profile = restored.profile
 	p := s.profile
@@ -235,6 +236,7 @@ func (s *Session) clearLocked() {
 	s.privatePEM = ""
 	s.tokens = token{}
 	s.certificate = config.CertificateInfo{}
+	s.liteCertificate = config.CertificateInfo{}
 	s.profile = Profile{}
 	s.state = ""
 	s.verifier = ""
