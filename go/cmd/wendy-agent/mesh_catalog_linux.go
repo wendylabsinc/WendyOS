@@ -211,6 +211,12 @@ func (m *meshCatalogManager) SetGatewayOffer(enable bool) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.active == nil {
+		// The old catalogue and its signed offers are already detached. A
+		// pending sharing cleanup must be able to finish after node shutdown;
+		// otherwise it prevents every subsequent carrier activation.
+		if !enable {
+			return nil
+		}
 		return errors.New("wendy net catalog is not active")
 	}
 	if enable {
