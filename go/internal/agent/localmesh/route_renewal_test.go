@@ -140,7 +140,7 @@ func TestRouteRenewalResignCannotReviveElapsedRemainingLease(t *testing.T) {
 	now := time.Now().Truncate(time.Second)
 	d, old, renewed, renew := routeRenewalDirectory(t, now, false)
 	m := routeManifest(old.Device, now)
-	m.Expires = now.Add(MaxLease).UnixMilli()
+	m.Expires = now.Add(2 * time.Minute).UnixMilli()
 	// Admit under a rolled-back clock with only thirty seconds of known
 	// remaining lifetime, despite a signed absolute expiry ninety seconds away.
 	d.RouteAuthorizations(now.Add(90 * time.Second))

@@ -125,7 +125,7 @@ func replaceServiceType(value, old, new string) string {
 }
 
 func TestLANCacheExcludesRouterDiscoveryAcrossRecordPaths(t *testing.T) {
-	for _, routerType := range []string{"_wendy-net._udp", "_WeNdY-NeT._UdP", "_wendy-mesh._tcp", "_WeNdY-MeSh._TcP"} {
+	for _, routerType := range []string{"_wendy-net._udp", "_WeNdY-NeT._UdP", "_wendy-net._tcp", "_WeNdY-NeT._TcP", "_wendy-mesh._tcp", "_WeNdY-MeSh._TcP"} {
 		for _, enumerationOnly := range []bool{false, true} {
 			t.Run(routerType+"/enumeration="+map[bool]string{false: "false", true: "true"}[enumerationOnly], func(t *testing.T) {
 				now := time.Now()

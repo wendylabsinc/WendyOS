@@ -14,13 +14,14 @@ import (
 // full principal, so the hello only has to prove the peer read the pinned
 // identity correctly - there is no numeric identity to announce.
 type LinkHello struct {
-	Version  int       `json:"version"`
-	Device   uuid.UUID `json:"device"`
-	Peer     uuid.UUID `json:"peer"`
-	MTU      int       `json:"mtu"`
-	Datagram int       `json:"datagram"`
-	// IPDatagram is router-QUIC-only. Stream/leaf peers must leave it zero.
-	IPDatagram int `json:"ipDatagram,omitempty"`
+	Version  int       `json:"version" cbor:"v"`
+	Role     string    `json:"role,omitempty" cbor:"r,omitempty"`
+	Device   uuid.UUID `json:"device" cbor:"d"`
+	Peer     uuid.UUID `json:"peer" cbor:"p"`
+	MTU      int       `json:"mtu" cbor:"m"`
+	Datagram int       `json:"datagram" cbor:"g"`
+	// IPDatagram is router-QUIC-only. Stream peers must leave it zero.
+	IPDatagram int `json:"ipDatagram,omitempty" cbor:"i,omitempty"`
 }
 
 // MaxQUICCryptoStreamSize bounds TLS data at each encryption level while
@@ -37,7 +38,7 @@ func QUICConfig() *quic.Config {
 // The device with the lower UUID opens the sole bidirectional stream, retained
 // for directory synchronization; the authenticated hello also bounds each
 // direction's IP receive capability. It cannot interoperate accidentally with
-// older router protocols or stream/leaf carriers.
+// older router protocols or stream carriers.
 func OpenControl(ctx context.Context, conn *quic.Conn, self, peer meshid.Device) (*quic.Stream, error) {
 	stream, _, err := openRouterControl(ctx, conn, self, peer, WholeIPDatagramLimit)
 	return stream, err

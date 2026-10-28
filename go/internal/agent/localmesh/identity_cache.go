@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -41,9 +42,9 @@ func DefaultCacheLimits() CacheLimits {
 }
 
 type cachedIdentity struct {
-	Chain [][]byte  `json:"chain"`
-	Added time.Time `json:"added"`
-	Used  time.Time `json:"used"`
+	Chain [][]byte  `json:"chain" cbor:"c"`
+	Added time.Time `json:"added" cbor:"a"`
+	Used  time.Time `json:"used" cbor:"u"`
 }
 
 // IdentityCache persists public certificate bundles only; presence and service
@@ -141,17 +142,21 @@ func OpenIdentityCacheWithCertificates(path string, limits CacheLimits, verify I
 // is never a hit, whatever the file claimed.
 func (c *IdentityCache) valid(principal string, e cachedIdentity, now time.Time) (Identity, bool) {
 	if len(e.Chain) == 0 || len(e.Chain) > 16 || e.Added.IsZero() || now.Before(e.Added) || now.Sub(e.Added) >= c.limits.Age || e.Used.Before(e.Added) {
+		log.Printf("wendy net identity cache unavailable: principal=%q stage=retention parts=%d added=%s used=%s now=%s", principal, len(e.Chain), e.Added.Format(time.RFC3339Nano), e.Used.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano))
 		return Identity{}, false
 	}
 	id, err := c.verify(e.Chain, now)
 	if err != nil {
+		log.Printf("wendy net identity cache unavailable: principal=%q stage=verification reason=%q", principal, err)
 		return Identity{}, false
 	}
 	key, err := principalOf(id)
 	if err != nil || key != principal {
+		log.Printf("wendy net identity cache unavailable: principal=%q stage=principal verified=%q reason=%v", principal, key, err)
 		return Identity{}, false
 	}
 	if !now.Before(id.NotAfter) {
+		log.Printf("wendy net identity cache unavailable: principal=%q stage=expiry expires=%s now=%s", principal, id.NotAfter.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano))
 		return Identity{}, false
 	}
 	return id, true
