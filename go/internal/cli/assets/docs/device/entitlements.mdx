@@ -355,6 +355,35 @@ another app's records.
   protocol. It never exposes the separate administrative `WENDY_AGENT_SOCKET`.
 </Callout>
 
+### Live Data Entitlement (`data-read`)
+
+The `data-read` entitlement lets an app read the device's live data streams:
+the records apps publish on their recording streams, as the agent accepts them.
+It does not need `admin`.
+
+```json
+{
+  "type": "data-read",
+  "allowlist": ["apps/com.example.detector"]
+}
+```
+
+The app calls `DataService.StreamData` on its private System API socket,
+`WENDY_SYSTEM_SOCKET`, which it shares with `notifications`. `allowlist` is
+optional: each entry admits the stream id it names and every stream id below it
+at a `/`, so `apps/com.example.detector` admits that app's streams and not those
+of `com.example.detector2`. Without it the app reads every stream. The stream
+catalog, `_streams/<stream-id>`, lists only the streams the allowlist admits. An
+app holds at most 8 streams open, and all apps together 24, so operators keep
+slots of their own. The allowlist is restored with the socket after an agent
+restart.
+
+<Callout type="warning">
+  **Security**: `data-read` serves `StreamData` and no other agent method. It is
+  live-only: no recorded data, export or campaign control. The services of one
+  app share its socket, so the app reads the union of their allowlists.
+</Callout>
+
 ### Admin Entitlement
 
 The admin entitlement grants the container the wendy-agent's full gRPC over a local unix socket (`/run/wendy/agent.sock`, exposed as `WENDY_AGENT_SOCKET`) — with no authentication.

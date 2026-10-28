@@ -4,6 +4,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/wendylabsinc/wendy/go/internal/agent/services"
 	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 )
 
@@ -28,7 +29,7 @@ func (p *recordingSocketProvider) SweepOrphanedRoots(activeAppIDs []string) {
 
 type recordingSystemAPIProvider struct{ recordingSocketProvider }
 
-func (p *recordingSystemAPIProvider) Ensure(string, string, []string) (string, error) {
+func (p *recordingSystemAPIProvider) Ensure(string, string, services.SystemAPIGrant) (string, error) {
 	return "", nil
 }
 

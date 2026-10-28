@@ -1631,5 +1631,18 @@ func parseAppConfig(data []byte) (*appconfig.AppConfig, error) {
 			return nil, err
 		}
 	}
+	// A data-read allowlist is restored from a container label after an agent
+	// restart, so one the label cannot carry back unchanged could widen.
+	if err := appconfig.ValidateDataReadAllowlists(cfg.Entitlements); err != nil {
+		return nil, err
+	}
+	for name, svc := range cfg.Services {
+		if svc == nil {
+			continue
+		}
+		if err := appconfig.ValidateDataReadAllowlists(svc.Entitlements); err != nil {
+			return nil, fmt.Errorf("services[%q]: %w", name, err)
+		}
+	}
 	return &cfg, nil
 }

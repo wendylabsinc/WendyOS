@@ -70,6 +70,12 @@ const (
 	// reading is native, through the agent-fed node the camera entitlement
 	// grants.
 	EntitlementEpisodeWrite = "episode-write"
+	// EntitlementDataRead grants read access to the device's live data streams,
+	// DataService.StreamData, through the app's private System API socket, and
+	// nothing else. An optional allowlist narrows it to stream ids and stream id
+	// prefixes. It is the read side of episode-write: an app needs it, not admin,
+	// to show or act on what other apps publish.
+	EntitlementDataRead = "data-read"
 	// EntitlementNotifications grants access only to the app-attributed Wendy
 	// System Notification API. It does not expose the Agent control plane.
 	EntitlementNotifications = "notifications"
@@ -110,6 +116,7 @@ var ValidEntitlementTypes = []string{
 	EntitlementMCP,
 	EntitlementDisplay,
 	EntitlementEpisodeWrite,
+	EntitlementDataRead,
 	EntitlementNotifications,
 	EntitlementAdmin,
 	EntitlementBuild,
@@ -150,6 +157,7 @@ var allowedKeys = map[string][]string{
 	EntitlementMCP:           {"type", "port"},
 	EntitlementDisplay:       {"type"},
 	EntitlementEpisodeWrite:  {"type", "streams"},
+	EntitlementDataRead:      {"type", "allowlist"},
 	EntitlementNotifications: {"type"},
 	EntitlementAdmin:         {"type"},
 	EntitlementBuild:         {"type"},
@@ -444,7 +452,7 @@ type Entitlement struct {
 	Streams   map[string]RecordingStream `json:"streams,omitempty"`
 	Type      string                     `json:"type"`
 	Mode      string                     `json:"mode,omitempty"`      // Network, Bluetooth, Video
-	Allowlist []string                   `json:"allowlist,omitempty"` // Camera, Video
+	Allowlist []string                   `json:"allowlist,omitempty"` // Camera, Video, DataRead
 	Name      string                     `json:"name,omitempty"`      // Persist
 	Path      string                     `json:"path,omitempty"`      // Persist
 	Device    string                     `json:"device,omitempty"`    // I2C, Serial
@@ -562,6 +570,10 @@ func validateEntitlements(entitlements []Entitlement, prefix string) error {
 			if err := ValidateRecordingStreams(e.Streams); err != nil {
 				return fmt.Errorf("%s[%d]: %w", prefix, i, err)
 			}
+		case EntitlementDataRead:
+			if err := validateDataReadAllowlist(e.Allowlist); err != nil {
+				return fmt.Errorf("%s[%d]: %w", prefix, i, err)
+			}
 		case EntitlementNetwork:
 			if e.Mode != "" && e.Mode != "host" && e.Mode != "host-admin" && e.Mode != "none" && e.Mode != "mesh" && e.Mode != "bridge" {
 				return fmt.Errorf("%s[%d]: network mode must be \"host\", \"host-admin\", \"none\", \"bridge\", or \"mesh\", got %q", prefix, i, e.Mode)
@@ -598,6 +610,9 @@ func validateEntitlements(entitlements []Entitlement, prefix string) error {
 			}
 			if containsDotDot(e.Path) {
 				return fmt.Errorf("%s[%d]: persist path must not contain '..' components", prefix, i)
+			}
+			if UnderSystemAPIDirectory(e.Path) {
+				return fmt.Errorf("%s[%d]: persist path %q is reserved: the agent mounts the System API socket at %s", prefix, i, e.Path, SystemAPIContainerDirectory)
 			}
 		case EntitlementI2C:
 			if e.Device == "" {
@@ -664,6 +679,16 @@ func validateEntitlements(entitlements []Entitlement, prefix string) error {
 	}
 	if notificationsCount > 1 {
 		return fmt.Errorf("at most one notifications entitlement is allowed in %s, found %d", prefix, notificationsCount)
+	}
+
+	dataReadCount := 0
+	for _, e := range entitlements {
+		if e.Type == EntitlementDataRead {
+			dataReadCount++
+		}
+	}
+	if dataReadCount > 1 {
+		return fmt.Errorf("at most one data-read entitlement is allowed in %s, found %d", prefix, dataReadCount)
 	}
 
 	adminCount := 0

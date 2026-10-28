@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/data/live"
@@ -13,6 +14,7 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 )
 
 const (
@@ -35,8 +37,9 @@ const (
 	maxStreamDataRateHz = 1000
 )
 
-// authorizeDataStream decides who may read live data. registerAllServices puts
-// DataService on three listeners, which are not equally trusted:
+// authorizeDataStream decides who may read live data through DataService.
+// registerAllServices puts DataService on three listeners, which are not
+// equally trusted:
 //
 //   - The mTLS TCP server: a user certificate is admitted, on the LAN and
 //     through the cloud tunnel alike, and so is a pki-core service account,
@@ -47,6 +50,12 @@ const (
 //   - The pre-provisioning plaintext TCP server: refused. Anyone on the LAN can
 //     reach it, with no credential at all.
 //
+// Every caller admitted here reads every stream. An app without admin reads
+// through its System API socket instead, where the data-read entitlement and
+// its allowlist decide; see systemDataService. That socket is a unix socket
+// too, so it must never serve this handler: onLocalAdminSocket would take it
+// for the admin socket.
+//
 // The interceptors on the mTLS server already enforce the device's tenant.
 func authorizeDataStream(ctx context.Context) error {
 	if p, ok := peer.FromContext(ctx); ok && onLocalAdminSocket(p) {
@@ -54,6 +63,22 @@ func authorizeDataStream(ctx context.Context) error {
 	}
 	_, err := userIdentityFromContext(ctx, "streaming live data")
 	return err
+}
+
+// maxStreamDataRequestBytes is the encoded size of the largest request
+// liveSelection accepts: every list full of the longest values it allows. A
+// server that serves StreamData must receive messages this large.
+func maxStreamDataRequestBytes() int {
+	full := func(n int) []string {
+		value := strings.Repeat("x", n)
+		values := make([]string, maxStreamDataIDs)
+		for i := range values {
+			values[i] = value
+		}
+		return values
+	}
+	ids := full(maxStreamDataIDBytes)
+	return proto.Size(&agentpbv2.StreamDataRequest{StreamIds: ids, StreamPrefixes: ids, Schemas: full(appconfig.MaxRecordingSchemaBytes), MaxRateHz: maxStreamDataRateHz, SendLatest: true})
 }
 
 func liveSelection(req *agentpbv2.StreamDataRequest) (live.Selection, error) {
@@ -92,15 +117,29 @@ func liveSelection(req *agentpbv2.StreamDataRequest) (live.Selection, error) {
 // slowly receives the newest record of each stream and skips the rest; it
 // never slows a publisher.
 func (s *DataService) StreamData(req *agentpbv2.StreamDataRequest, out grpc.ServerStreamingServer[agentpbv2.DataRecord]) error {
-	ctx := out.Context()
-	if err := authorizeDataStream(ctx); err != nil {
+	if err := authorizeDataStream(out.Context()); err != nil {
 		return err
 	}
+	return streamLiveData(s.manager.Live(), req, nil, out)
+}
+
+// streamLiveData serves one StreamData call from hub. allow is the caller's
+// read scope (see live.Permits); empty reads every stream. Naming a stream
+// outside it is refused rather than left silent, so an app learns that its
+// allowlist, not the publisher, is why nothing arrives.
+func streamLiveData(hub *live.Hub, req *agentpbv2.StreamDataRequest, allow []string, out grpc.ServerStreamingServer[agentpbv2.DataRecord]) error {
+	ctx := out.Context()
 	selection, err := liveSelection(req)
 	if err != nil {
 		return err
 	}
-	sub, err := s.manager.Live().Subscribe(selection)
+	for _, id := range selection.StreamIDs {
+		if !live.Permits(allow, id) {
+			return status.Errorf(codes.PermissionDenied, "stream %q is outside this app's data-read allowlist", id)
+		}
+	}
+	selection.Allow = allow
+	sub, err := hub.Subscribe(selection)
 	if errors.Is(err, live.ErrTooManySubscribers) {
 		return status.Error(codes.ResourceExhausted, err.Error())
 	}
@@ -116,6 +155,12 @@ func (s *DataService) StreamData(req *agentpbv2.StreamDataRequest, out grpc.Serv
 	out = stallGuardedStream{out, streamDataStallTimeout}
 	for {
 		d, err := sub.Next(ctx)
+		if err == nil {
+			// Next hands out a waiting record before it looks at ctx, so a
+			// slow reader that always has one waiting would never see ctx
+			// end, and a narrowed app stream would keep sending.
+			err = ctx.Err()
+		}
 		if err != nil {
 			return status.FromContextError(err).Err()
 		}

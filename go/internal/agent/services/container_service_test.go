@@ -1756,6 +1756,33 @@ func TestParseAppConfigAcceptsValidAppID(t *testing.T) {
 	}
 }
 
+// A data-read allowlist comes back from a container label after an agent
+// restart. The agent refuses one the label would not carry back unchanged, as
+// the CLI does: [""] would come back as no allowlist and read every stream.
+func TestParseAppConfigRefusesDataReadAllowlistsLabelsCannotCarry(t *testing.T) {
+	for _, config := range []string{
+		`{"appId":"com.example.app","entitlements":[{"type":"data-read","allowlist":[""]}]}`,
+		`{"appId":"com.example.app","entitlements":[{"type":"data-read","allowlist":["apps/a,agent/x"]}]}`,
+		`{"appId":"com.example.app","entitlements":[{"type":"data-read","allowlist":["apps/a=b"]}]}`,
+		`{"appId":"com.example.app","entitlements":[{"type":"data-read","allowlist":["_streams/apps/a"]}]}`,
+		`{"appId":"com.example.app","services":{"api":{"entitlements":[{"type":"data-read","allowlist":[""]}]}}}`,
+	} {
+		if _, err := parseAppConfig([]byte(config)); err == nil {
+			t.Errorf("accepted %s", config)
+		}
+	}
+	// A service's create configuration carries the app's data-read and its
+	// own, so two are fine here.
+	for _, config := range []string{
+		`{"appId":"com.example.app","entitlements":[{"type":"data-read"}]}`,
+		`{"appId":"com.example.app","entitlements":[{"type":"data-read","allowlist":["apps/a"]},{"type":"data-read","allowlist":["agent/campaign/"]}]}`,
+	} {
+		if _, err := parseAppConfig([]byte(config)); err != nil {
+			t.Errorf("%s: %v", config, err)
+		}
+	}
+}
+
 func TestGetResourceStatsHandler(t *testing.T) {
 	svc := &ContainerService{
 		logger: zap.NewNop(),

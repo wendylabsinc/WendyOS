@@ -116,6 +116,32 @@ type Selection struct {
 	// selected advertised stream, and the current catalog entry of each
 	// selected catalog stream.
 	SendLatest bool
+	// Allow, when not empty, is what the subscriber may read, whatever else
+	// the selection names, catalog entries included. See Permits. An app's
+	// data-read allowlist arrives here; operators have none.
+	Allow []string
+}
+
+// Permits reports whether allow admits streamID. An entry admits the stream id
+// it names and every stream id below it on a "/" boundary, so
+// "apps/com.example" admits "apps/com.example/markers" but not
+// "apps/com.example.other/markers". A catalog stream, CatalogPrefix + id, is
+// admitted when the stream it describes is, so a subscriber never learns of a
+// stream it may not read. An empty allow admits every stream.
+func Permits(allow []string, streamID string) bool {
+	if len(allow) == 0 {
+		return true
+	}
+	streamID = strings.TrimPrefix(streamID, CatalogPrefix)
+	for _, entry := range allow {
+		if !strings.HasPrefix(streamID, entry) {
+			continue
+		}
+		if len(streamID) == len(entry) || strings.HasSuffix(entry, "/") || streamID[len(entry)] == '/' {
+			return true
+		}
+	}
+	return false
 }
 
 // maxRateGap bounds the gap a tiny Selection.MaxRateHz asks for.
@@ -186,7 +212,7 @@ func (h *Hub) Offer(r *Record) {
 
 // Subscribe registers a subscriber for sel. The caller must Close it.
 func (h *Hub) Subscribe(sel Selection) (*Subscriber, error) {
-	s := &Subscriber{hub: h, pending: make(map[string]*Record), skipped: make(map[string]uint64), wake: make(chan struct{}, 1)}
+	s := &Subscriber{hub: h, allow: slices.Clone(sel.Allow), pending: make(map[string]*Record), skipped: make(map[string]uint64), wake: make(chan struct{}, 1)}
 	if len(sel.StreamIDs) == 0 && len(sel.StreamPrefixes) == 0 && len(sel.Schemas) == 0 {
 		s.all = true
 	}
@@ -234,6 +260,7 @@ type Subscriber struct {
 	prefixes []string
 	schemas  map[string]struct{} // nil: any schema
 	minGap   time.Duration       // from MaxRateHz; 0 is no cap
+	allow    []string            // empty admits every stream; see Permits
 
 	mu      sync.Mutex
 	closed  bool
@@ -246,6 +273,9 @@ type Subscriber struct {
 }
 
 func (s *Subscriber) selects(streamID, schema string) bool {
+	if !Permits(s.allow, streamID) {
+		return false
+	}
 	if s.all {
 		return !strings.HasPrefix(streamID, CatalogPrefix)
 	}

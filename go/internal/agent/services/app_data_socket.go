@@ -29,7 +29,8 @@ const (
 	dataProtocolMaxRecord = 64 << 10
 	dataSocketGroupGID    = 2000
 	// dataRatePerSecond bounds records accepted per app across all of the
-	// app's connections combined (see appDataSocket.limiter).
+	// app's connections combined (see appDataSocket.limiter). Live-mode stream
+	// records have a budget of the same size of their own.
 	dataRatePerSecond = 200
 	// dataMaxLiveConnectionsPerApp bounds how many connections one app may hold
 	// open on its data socket at once.
@@ -80,6 +81,10 @@ type appDataSocket struct {
 	// limiter is shared by every connection the app opens, so the rate limit
 	// is enforced per app rather than per connection.
 	limiter *notificationRateLimiter
+	// liveStreamLimiter is the same per-app budget for records of live-mode
+	// streams, which are never stored. It is separate so a stream drawn at
+	// frame rate cannot spend the budget of the app's recorded data.
+	liveStreamLimiter *notificationRateLimiter
 	// live counts the connections currently being served for this app and
 	// lastRefusalLog is when the connection cap last logged. Both are guarded
 	// by AppDataSocketManager.mu.
@@ -170,7 +175,7 @@ func (m *AppDataSocketManager) Ensure(appID, service string) (string, error) {
 			return "", err
 		}
 	}
-	s := &appDataSocket{appID: appID, listener: l, owners: map[string]struct{}{owner: {}}, limiter: m.newLimiter()}
+	s := &appDataSocket{appID: appID, listener: l, owners: map[string]struct{}{owner: {}}, limiter: m.newLimiter(), liveStreamLimiter: m.newLimiter()}
 	m.sockets[key] = s
 	go m.serve(s)
 	return dir, nil

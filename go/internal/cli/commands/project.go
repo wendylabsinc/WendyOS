@@ -35,6 +35,7 @@ var entitlementDescriptions = map[string]string{
 	appconfig.EntitlementHTTP:          "Declare the app's web interface port",
 	appconfig.EntitlementDisplay:       "Access the device display",
 	appconfig.EntitlementEpisodeWrite:  "Write application events to episode recordings",
+	appconfig.EntitlementDataRead:      "Read live data streams without admin",
 	appconfig.EntitlementNotifications: "Send app notifications",
 	appconfig.EntitlementAdmin:         "Full local control of the device agent",
 	appconfig.EntitlementBuild:         "Grant privileges for nested container builds",

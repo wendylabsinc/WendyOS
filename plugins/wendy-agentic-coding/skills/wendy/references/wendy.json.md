@@ -243,6 +243,27 @@ recipients. Trusted local state supplies Cloud `app_id`, stored as
 organization identity. This entitlement never exposes the administrative
 `WENDY_AGENT_SOCKET`.
 
+### Data Read Entitlement
+
+Reads the device's live data streams without `admin`: the records apps publish
+on their recording streams, as the agent accepts them.
+
+```json
+{ "type": "data-read", "allowlist": ["apps/com.example.detector"] }
+```
+
+The app calls `wendy.agent.services.v2.DataService/StreamData` on its private
+System API socket, `WENDY_SYSTEM_SOCKET`, shared with `notifications`; every
+other `DataService` method is refused there. `allowlist` is optional: each
+entry admits the stream id it names and every stream id below it at a `/`, so
+`apps/com.example.detector` admits that app's streams and not those of
+`com.example.detector2`. Without it the app reads every stream. The stream
+catalog, `_streams/<stream-id>`, lists only the streams the allowlist admits.
+Read-only and live-only: no recorded data, export or campaign control. At most
+one at the top level and one per service; they add up, so the app reads the
+union of every allowlist it declares. At most 8 open streams per app and 24 for
+all apps together.
+
 ### Admin Entitlement
 
 Grants the container the wendy-agent's full gRPC over a local unix socket, exposed as `WENDY_AGENT_SOCKET` (`/run/wendy/agent/agent.sock`) — with no authentication.

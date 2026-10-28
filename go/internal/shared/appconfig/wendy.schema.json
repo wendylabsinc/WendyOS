@@ -298,7 +298,7 @@
             "path": {
               "type": "string",
               "minLength": 1,
-              "description": "Mount path inside the container (e.g. \"/data\")."
+              "description": "Mount path inside the container (e.g. \"/data\"). Not /run/wendy/system or below it, where the agent mounts the System API socket."
             }
           },
           "required": ["type", "name", "path"],
@@ -474,8 +474,10 @@
                   "mode": {
                     "enum": [
                       "lightweight",
-                      "durable"
-                    ]
+                      "durable",
+                      "live"
+                    ],
+                    "description": "lightweight: raw packets, recorded into episodes. durable: Protobuf envelopes, acknowledged after a journal commit. live: Protobuf envelopes shown only to live viewers, never journaled or recorded."
                   },
                   "mediaType": {
                     "type": "string",
@@ -580,6 +582,26 @@
                         }
                       }
                     }
+                  },
+                  {
+                    "if": {
+                      "properties": {
+                        "mode": {
+                          "const": "live"
+                        }
+                      },
+                      "required": [
+                        "mode"
+                      ]
+                    },
+                    "then": {
+                      "not": {
+                        "anyOf": [
+                          { "required": ["event"] },
+                          { "required": ["model"] }
+                        ]
+                      }
+                    }
                   }
                 ]
               }
@@ -589,7 +611,21 @@
             "type"
           ],
           "additionalProperties": false,
-          "description": "Record application data through private sockets. Legacy JSON events remain supported; declared streams accept raw payloads or durable Protobuf envelopes. No sensor read access or administrative API access."
+          "description": "Record application data through private sockets. Legacy JSON events remain supported; declared streams accept raw payloads, durable Protobuf envelopes, or live-only Protobuf envelopes. No sensor read access or administrative API access."
+        },
+        {
+          "properties": {
+            "type": { "const": "data-read" },
+            "allowlist": {
+              "type": "array",
+              "maxItems": 32,
+              "items": { "type": "string", "minLength": 1, "pattern": "^[^\\s,=]+$", "not": { "pattern": "^_streams/" } },
+              "description": "Stream id prefixes the app may read, matched on whole path segments: an entry admits the stream id it names and every stream id below it, so \"apps/com.example.detector\" admits that app's streams. The catalog entry (_streams/<id>) of each admitted stream comes with it. Omit to read every stream."
+            }
+          },
+          "required": ["type"],
+          "additionalProperties": false,
+          "description": "Read the device's live data streams (DataService.StreamData) through the app's private Wendy System API socket, without admin. Read-only: no recorded data, no other agent API. At most one at the top level and one per service; a service gets the union of both allowlists."
         },
         {
           "properties": {

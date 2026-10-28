@@ -12,6 +12,7 @@ JSON event/prediction endpoint uses `WENDY_DATA_SOCKET`.
 | Legacy JSON socket | Existing event/prediction clients | `buffered` means volatile pre-roll; `recorded` means accepted into an active episode. Neither means cloud upload. |
 | Lightweight stream | Native text, CSV, JSON, images, or binary packets with no SDK | A successful send means the kernel accepted the packet. The agent uses bounded memory and copies records into episodes. |
 | Durable stream | Records that need acknowledgement after local persistence, including outside an episode | `COMMITTED` follows storage sync; `DUPLICATE` identifies an already retained record; `REJECTED` requires handling. These are not cloud acknowledgements. |
+| Live stream | Display data with sample times, such as markers at 10 to 30 Hz, that should cost no disk | No acknowledgement. Live viewers see the record, and the agent keeps only the stream's newest in memory for a viewer that asks with `send_latest`. It is never journaled, buffered or recorded, so it cannot declare `event` or `model`. |
 
 Do not treat durable journaling as a guarantee that a trigger successfully
 started a campaign. Inspect the episode separately.
@@ -55,9 +56,25 @@ instead of inventing a wire format.
 
 Packets must be nonempty and at most 1 MiB including a durable envelope. Kernel
 socket buffers can impose a smaller limit. Per-app limits are 200 packets per
-second and 16 concurrent connections, shared with the legacy endpoint. Batch
-samples with their acquisition timestamps to fit the packet budget. This is
-not a bulk video transport.
+second and 16 concurrent connections, shared with the legacy endpoint; past the
+rate the connection is closed. Live streams use the `Record` envelope without an
+ID and have their own budget of 200 packets per second per app; past it a packet
+is dropped and the connection kept. Batch samples with their acquisition
+timestamps to fit the packet budget. This is not a bulk video transport.
+
+## Read live data
+
+Every stream is also live: `wendy data stream` prints records as the agent
+accepts them. An app that reads other apps' streams declares `data-read`, not
+`admin`, and calls `DataService.StreamData` on `WENDY_SYSTEM_SOCKET`. Narrow it
+with an `allowlist` of stream id prefixes that match at a `/`, such as
+`apps/com.example.detector`; the stream catalog, `_streams/<stream-id>`, then
+lists only the streams it admits. Stream ids are
+`apps/<app-id>/<service>/<stream>`, or `apps/<app-id>/<stream>` without a service
+name, and `agent/<stream>` for the agent's own, such as a campaign's
+`agent/campaign/<campaign>/markers/<source>`. Delivery is best effort and
+newest-first per stream; use an episode or `export-stream` when every record
+matters.
 
 Time-series declarations record channels, units, and the sample clock. Durable
 envelopes can provide explicit sample timestamps or a start, interval, and

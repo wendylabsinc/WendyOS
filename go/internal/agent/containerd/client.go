@@ -70,7 +70,7 @@ var _ services.ContainerdClient = (*Client)(nil)
 const DefaultAddress = "/run/containerd/containerd.sock"
 
 type AppSystemAPISocketProvider interface {
-	Ensure(appID, serviceName string, capabilities []string) (string, error)
+	Ensure(appID, serviceName string, grant services.SystemAPIGrant) (string, error)
 	Release(appID, serviceName string)
 	ReleaseApp(appID string)
 }
@@ -312,6 +312,14 @@ func (c *Client) SetAppDataSocketProvider(provider AppDataSocketProvider) {
 type appSystemAPIOwner struct {
 	appID       string
 	serviceName string
+	grant       services.SystemAPIGrant
+}
+
+// systemAPIGrant returns the System API grant entitlements carry, and whether
+// they carry any: notifications, data-read, or both.
+func systemAPIGrant(entitlements []appconfig.Entitlement) (services.SystemAPIGrant, bool) {
+	grant := services.SystemAPIGrantFor(entitlements)
+	return grant, len(grant.Capabilities) > 0
 }
 
 func appSystemAPIOwnersFromLabels(labelSets []map[string]string) []appSystemAPIOwner {
@@ -322,8 +330,8 @@ func appSystemAPIOwnersFromLabels(labelSets []map[string]string) []appSystemAPIO
 		if appconfig.ValidateAppID(appID) != nil || (serviceName != "" && appconfig.ValidateServiceName(serviceName) != nil) {
 			continue
 		}
-		if entitlementsContain(parseEntitlementsFromAnnotations(labels), appconfig.EntitlementNotifications) {
-			owners = append(owners, appSystemAPIOwner{appID: appID, serviceName: serviceName})
+		if grant, ok := systemAPIGrant(parseEntitlementsFromAnnotations(labels)); ok {
+			owners = append(owners, appSystemAPIOwner{appID: appID, serviceName: serviceName, grant: grant})
 		}
 	}
 	return owners
@@ -353,7 +361,7 @@ func (c *Client) RestoreAppSystemAPISockets(ctx context.Context) {
 	}
 	for _, owner := range appSystemAPIOwnersFromLabels(labelSets) {
 		if c.systemAPISocketProvider != nil {
-			if _, err := c.systemAPISocketProvider.Ensure(owner.appID, owner.serviceName, []string{services.SystemAPICapabilityNotifications}); err != nil {
+			if _, err := c.systemAPISocketProvider.Ensure(owner.appID, owner.serviceName, owner.grant); err != nil {
 				c.logger.Warn("restore app System API socket failed", zap.String(logfields.AppID, owner.appID), zap.Error(err))
 			}
 		}
@@ -1311,8 +1319,8 @@ func (c *Client) createContainer(ctx context.Context, req *agentpb.CreateContain
 	if hasAvahi(appCfg) && c.avahiManager == nil {
 		return fmt.Errorf("avahi bridge manager is not configured")
 	}
-	if appCfg.HasEntitlement(appconfig.EntitlementNotifications) && c.systemAPISocketProvider == nil {
-		return fmt.Errorf("notifications entitlement unavailable: app System API socket manager is not configured")
+	if _, ok := systemAPIGrant(appCfg.Entitlements); ok && c.systemAPISocketProvider == nil {
+		return fmt.Errorf("notifications and data-read entitlements unavailable: app System API socket manager is not configured")
 	}
 	if appCfg.HasEntitlement(appconfig.EntitlementEpisodeWrite) && c.dataSocketProvider == nil {
 		return fmt.Errorf("episode-write entitlement unavailable: app data socket manager is not configured")
@@ -1699,6 +1707,14 @@ func (c *Client) createContainer(ctx context.Context, req *agentpb.CreateContain
 	// a redeployed shared-namespace primary would otherwise find its own old
 	// task alive and join it.
 	phaseStarted = time.Now()
+	// systemAPIOwnerKept: the old container's System API owner is still
+	// registered, waiting for the Ensure below to replace it.
+	systemAPIOwnerKept := false
+	defer func() {
+		if systemAPIOwnerKept {
+			c.systemAPISocketProvider.Release(appID, serviceName)
+		}
+	}()
 	if existing != nil {
 		oldNPUTaskRetained := false
 		// From here on the old container loses its network and its task, so
@@ -1718,7 +1734,7 @@ func (c *Client) createContainer(ctx context.Context, req *agentpb.CreateContain
 		oldHadNPU := false
 		if oldLabels, labelErr := existing.Labels(ctx); labelErr == nil {
 			oldEntitlements := parseEntitlementsFromAnnotations(oldLabels)
-			oldHadSystemAPI = entitlementsContain(oldEntitlements, appconfig.EntitlementNotifications)
+			_, oldHadSystemAPI = systemAPIGrant(oldEntitlements)
 			oldHadData = entitlementsContain(oldEntitlements, appconfig.EntitlementEpisodeWrite)
 			oldHadNAN = hasNANEntitlement(oldEntitlements)
 			oldHadNPU = entitlementsContain(oldEntitlements, appconfig.EntitlementNPU)
@@ -1829,8 +1845,17 @@ func (c *Client) createContainer(ctx context.Context, req *agentpb.CreateContain
 		if delErr != nil && !errdefs.IsNotFound(delErr) {
 			return fmt.Errorf("deleting existing container %q during replace: %w", containerName, delErr)
 		}
+		// A service that keeps a System API grant keeps its owner until
+		// Ensure replaces it, which ends only the app's streams the new grant
+		// no longer covers. Releasing it here would narrow the app's
+		// data-read scope in between: its siblings' streams would end, and
+		// one reopened meanwhile would stay narrow.
 		if oldHadSystemAPI && c.systemAPISocketProvider != nil {
-			c.systemAPISocketProvider.Release(appID, serviceName)
+			if _, keeps := systemAPIGrant(appCfg.Entitlements); keeps {
+				systemAPIOwnerKept = true
+			} else {
+				c.systemAPISocketProvider.Release(appID, serviceName)
+			}
 		}
 		if oldHadData && c.dataSocketProvider != nil {
 			c.dataSocketProvider.Release(appID, serviceName)
@@ -1905,15 +1930,12 @@ func (c *Client) createContainer(ctx context.Context, req *agentpb.CreateContain
 	systemAPIRefOwned := false
 	var dataSocketDir string
 	dataRefOwned := false
-	if appCfg.HasEntitlement(appconfig.EntitlementNotifications) {
-		systemAPISocketDir, err = c.systemAPISocketProvider.Ensure(
-			appID,
-			serviceName,
-			[]string{services.SystemAPICapabilityNotifications},
-		)
+	if grant, ok := systemAPIGrant(appCfg.Entitlements); ok {
+		systemAPISocketDir, err = c.systemAPISocketProvider.Ensure(appID, serviceName, grant)
 		if err != nil {
 			return fmt.Errorf("preparing app System API socket: %w", err)
 		}
+		systemAPIOwnerKept = false
 		systemAPIRefOwned = true
 		defer func() {
 			if systemAPIRefOwned {

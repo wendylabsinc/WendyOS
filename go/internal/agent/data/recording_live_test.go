@@ -694,3 +694,144 @@ func startedPreRoll(t *testing.T, m *Manager, root string) []*recordingpb.Stored
 		}
 	}
 }
+
+var liveModeMarkers = appconfig.RecordingStream{Mode: "live", MediaType: "application/protobuf", Schema: "wendy.data.v1.VideoMarkers"}
+
+// A live-mode record reaches the viewers subscribed at that moment, stamped
+// with the sample time its envelope carries, and nothing else: no journal, no
+// pre-roll, no episode copy and no campaign observer, even while an episode
+// that captures applications is open.
+func TestLiveModeRecordIsShownAndNeverStored(t *testing.T) {
+	root := t.TempDir()
+	m, err := NewManager(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	observed := 0
+	m.SetApplicationObserver(func(string, ApplicationRecord) { observed++ })
+	episode, err := m.Start(StartOptions{Sources: []string{"applications"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const frameTime = int64(1_700_000_000_123_456_789)
+	markers := func(payload string) *recordingpb.Record {
+		return &recordingpb.Record{
+			Payload: []byte(payload),
+			Timing:  &recordingpb.SampleTiming{Clock: "UNIX", Count: 1, TimestampsNanos: []int64{frameTime}},
+			Inputs:  []*recordingpb.SampleRef{{SourceId: "v4l2:/dev/video0", SampleId: 7}},
+		}
+	}
+	// Nobody is watching yet: no viewer gets the record, and nothing stores it.
+	if _, err := m.RecordStream("test.app", "", "markers", liveModeMarkers, markers("unseen")); err != nil {
+		t.Fatal(err)
+	}
+	sub := liveSubscriber(t, m)
+	if _, err := m.RecordStream("test.app", "", "markers", liveModeMarkers, markers("boxes")); err != nil {
+		t.Fatal(err)
+	}
+	d := nextLive(t, sub)
+	if d.Record.StreamID != "apps/test.app/markers" || d.Record.Schema != "wendy.data.v1.VideoMarkers" || string(d.Record.Payload) != "boxes" {
+		t.Fatalf("live record: %+v", d.Record)
+	}
+	if d.Record.TimestampUnixNanos != frameTime {
+		t.Fatalf("timestamp %d, want the envelope's sample time %d", d.Record.TimestampUnixNanos, frameTime)
+	}
+	requireNoLive(t, sub)
+
+	mf, err := m.Stop(AdHocEpisodeKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, source := range mf.Sources {
+		if source.Source.ID == "applications" && source.Count != 0 {
+			t.Fatalf("episode counted %d application records", source.Count)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(root, episode.ID, RecordingLogFile)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("episode holds a record log: %v", err)
+	}
+	m.mu.Lock()
+	buffered := len(m.streamPreRoll)
+	m.mu.Unlock()
+	if buffered != 0 {
+		t.Fatalf("pre-roll holds %d records", buffered)
+	}
+	if err := m.ExportRecording("test.app", "", "markers", func(*recordingpb.StoredRecord) error { return nil }); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("a journal exists for the live stream: %v", err)
+	}
+	if observed != 0 {
+		t.Fatalf("campaign observer saw %d live records", observed)
+	}
+}
+
+// A live record is an envelope without an id. It may name the frame it
+// describes; uncertainty stays a model stream's.
+func TestLiveModeValidation(t *testing.T) {
+	m, err := NewManager(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	liveSubscriber(t, m)
+	for _, tc := range []struct {
+		name   string
+		record *recordingpb.Record
+		ok     bool
+	}{
+		{"no id", &recordingpb.Record{Payload: []byte("x")}, true},
+		{"input references", &recordingpb.Record{Payload: []byte("x"), Inputs: []*recordingpb.SampleRef{{SourceId: "camera", SampleId: 1}}}, true},
+		{"uncertainty", &recordingpb.Record{Payload: []byte("x"), Uncertainty: proto.Float64(0.5)}, false},
+		{"bad timing", &recordingpb.Record{Payload: []byte("x"), Timing: &recordingpb.SampleTiming{Clock: "UNIX"}}, false},
+		{"oversized", &recordingpb.Record{Payload: make([]byte, MaxRecordingPacket+1)}, false},
+		{"oversized envelope", &recordingpb.Record{Payload: make([]byte, MaxRecordingPacket), Id: "padding"}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := m.RecordStream("test.app", "", "markers", liveModeMarkers, tc.record)
+			if (err == nil) != tc.ok {
+				t.Fatalf("got %v, want ok=%v", err, tc.ok)
+			}
+		})
+	}
+	// Outside a live stream, input references still need a model.
+	if _, err := m.RecordStream("test.app", "", "text", appconfig.RecordingStream{Mode: "lightweight", MediaType: "text/plain"}, &recordingpb.Record{Payload: []byte("x"), Inputs: []*recordingpb.SampleRef{{SourceId: "camera", SampleId: 1}}}); err == nil {
+		t.Fatal("lightweight record with input references accepted")
+	}
+}
+
+// A live-mode stream is in the catalog while it is listed, as any app stream
+// is while its task runs, and the hub keeps its newest record for a viewer
+// that asks for it, in memory only: nothing journals, buffers or records it.
+func TestLiveModeStreamInCatalog(t *testing.T) {
+	m, err := NewManager(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.AdvertiseAppStream("test.app", "", "markers", liveModeMarkers)
+	for _, payload := range []string{"old", "boxes"} {
+		if _, err := m.RecordStream("test.app", "", "markers", liveModeMarkers, &recordingpb.Record{Payload: []byte(payload)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s, err := m.Live().Subscribe(live.Selection{StreamPrefixes: []string{live.CatalogPrefix, "apps/test.app/"}, SendLatest: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(s.Close)
+	var info agentpbv2.DataStreamInfo
+	d := nextLive(t, s)
+	if err := proto.Unmarshal(d.Record.Payload, &info); err != nil {
+		t.Fatal(err)
+	}
+	if info.GetStreamId() != "apps/test.app/markers" || info.GetState() != agentpbv2.DataStreamInfo_STATE_ACTIVE || info.GetSchema() != "wendy.data.v1.VideoMarkers" {
+		t.Fatalf("catalog entry: %v", &info)
+	}
+	if d = nextLive(t, s); d.Record.StreamID != "apps/test.app/markers" || string(d.Record.Payload) != "boxes" {
+		t.Fatalf("newest record: %s %q", d.Record.StreamID, d.Record.Payload)
+	}
+	requireNoLive(t, s)
+	m.mu.Lock()
+	buffered := len(m.streamPreRoll)
+	m.mu.Unlock()
+	if buffered != 0 {
+		t.Fatalf("pre-roll holds %d live-mode records", buffered)
+	}
+}

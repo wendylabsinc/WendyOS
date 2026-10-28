@@ -4,6 +4,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
@@ -103,5 +104,62 @@ func TestApplyHostSockets_IgnoresSocketsWithoutEntitlement(t *testing.T) {
 	}
 	if hasGID(spec, appSystemAPIGroupGID) {
 		t.Error("app without the entitlement got the socket group")
+	}
+}
+
+// notifications and data-read grant the same one System API socket: each
+// mounts it alone, and both together mount it once.
+func TestApplyHostSockets_SystemAPIMountedOncePerApp(t *testing.T) {
+	systemAPIDir := listenInTempDir(t, "system.sock")
+	for _, entitlements := range [][]appconfig.Entitlement{
+		{{Type: appconfig.EntitlementDataRead}},
+		{{Type: appconfig.EntitlementNotifications}, {Type: appconfig.EntitlementDataRead, Allowlist: []string{"apps/com.example.detector"}}},
+	} {
+		spec := DefaultSpec("/rootfs", []string{"/bin/sh"})
+		cfg := &appconfig.AppConfig{AppID: "viewer", Entitlements: entitlements}
+		if err := ApplyEntitlements(spec, cfg, ApplyOptions{}); err != nil {
+			t.Fatalf("ApplyEntitlements: %v", err)
+		}
+		ApplyHostSockets(spec, cfg, ApplyOptions{SystemAPISocketDir: systemAPIDir})
+		mounts := 0
+		for _, m := range spec.Mounts {
+			if m.Destination == "/run/wendy/system" {
+				mounts++
+			}
+		}
+		if mounts != 1 || countEnv(spec, "WENDY_SYSTEM_SOCKET=/run/wendy/system/system.sock") != 1 {
+			t.Errorf("%v: %d System API mounts, want one with one WENDY_SYSTEM_SOCKET", entitlements, mounts)
+		}
+		if hasMount(spec, "/run/wendy/agent") || hasMount(spec, "/run/wendy/data") {
+			t.Errorf("%v: data-read mounted the admin or data socket", entitlements)
+		}
+	}
+}
+
+// A persist volume at or below /run/wendy/system would hide the System API
+// socket, or be hidden by it: the agent refuses it rather than drop either.
+func TestApplyEntitlements_PersistCannotHideSystemAPI(t *testing.T) {
+	for _, systemAPI := range []appconfig.Entitlement{{Type: appconfig.EntitlementNotifications}, {Type: appconfig.EntitlementDataRead}} {
+		for _, path := range []string{"/run/wendy/system", "/run/wendy/system/state"} {
+			cfg := &appconfig.AppConfig{AppID: "viewer", Entitlements: []appconfig.Entitlement{{Type: appconfig.EntitlementPersist, Name: "state", Path: path}, systemAPI}}
+			if err := ApplyEntitlements(DefaultSpec("/rootfs", []string{"/bin/sh"}), cfg, ApplyOptions{}); err == nil {
+				t.Errorf("persist at %s with %s accepted", path, systemAPI.Type)
+			}
+		}
+	}
+	// Without a System API entitlement nothing is hidden.
+	cfg := &appconfig.AppConfig{AppID: "viewer", Entitlements: []appconfig.Entitlement{{Type: appconfig.EntitlementPersist, Name: "state", Path: "/run/wendy/system"}}}
+	if err := ApplyEntitlements(DefaultSpec("/rootfs", []string{"/bin/sh"}), cfg, ApplyOptions{}); err != nil {
+		t.Errorf("persist without a System API entitlement: %v", err)
+	}
+
+	// Another mount at the System API's place does not count as the System
+	// API: it is still mounted, with its socket variable.
+	systemAPIDir := listenInTempDir(t, "system.sock")
+	spec := DefaultSpec("/rootfs", []string{"/bin/sh"})
+	spec.Mounts = append(spec.Mounts, Mount{Destination: "/run/wendy/system", Source: t.TempDir(), Type: "bind"})
+	applySystemAPI(spec, systemAPIDir)
+	if countEnv(spec, "WENDY_SYSTEM_SOCKET=/run/wendy/system/system.sock") != 1 || !slices.ContainsFunc(spec.Mounts, func(m Mount) bool { return m.Source == systemAPIDir }) {
+		t.Error("another mount at /run/wendy/system dropped the System API")
 	}
 }

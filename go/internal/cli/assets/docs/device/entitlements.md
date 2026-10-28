@@ -89,6 +89,43 @@ Wendy Sensors). The agent records the references in the Episode so
 `(input, outcome)` pairs can be reconstructed offline; a record without them is
 still accepted.
 
+## Live data (data-read)
+
+Use `{ "type": "data-read" }` when an app needs to read the device's live data:
+the records apps publish on their recording streams, as the agent accepts them.
+The app calls `DataService.StreamData` on its private System API socket, the one
+`notifications` uses. It does not need `admin`.
+
+```json
+{ "type": "data-read", "allowlist": ["apps/com.example.detector"] }
+```
+
+`allowlist` is optional. Each entry admits the stream id it names and every
+stream id below it at a `/`: `apps/com.example.detector/markers` also admits
+the streams of that app's service named `markers`, if it has one.
+`apps/com.example.detector` admits that app's streams, and not those of
+`com.example.detector2`. Without an allowlist the app reads every stream. Asking
+for a stream outside the allowlist fails with `PERMISSION_DENIED`. Entries may
+name the agent's own streams too, such as `agent/campaign/people/markers/`. The
+stream catalog, `_streams/<stream-id>`, lists only the streams the allowlist
+admits, so an entry never names the catalog itself.
+
+| Boundary | Value |
+|---|---|
+| Read-only mount | `/run/wendy/system`, shared with `notifications` |
+| Injected environment | `WENDY_SYSTEM_SOCKET=/run/wendy/system/system.sock` |
+| Supplementary group | GID `2000` |
+| RPC | `wendy.agent.services.v2.DataService/StreamData`; every other method is refused |
+| Concurrent streams | 8 per app and 24 for all apps together; the device serves 32 in total, so operators keep 8 |
+| Socket restoration | Recreated, with the same allowlist, from persisted container labels after agent/daemon restart |
+
+The grant is read-only and live-only. An app sees records accepted after it
+subscribes, newest first per stream, or with `send_latest` the newest current
+record of each stream, and nothing recorded earlier. It grants no
+episode download, recording export, campaign control or sensor access. All
+services of a multi-service app share one socket and cannot be told apart on
+it, so the app reads the union of its services' allowlists.
+
 ## Network
 
 The network entitlement allows the container to access the device's network. If the device is connected to WiFi, Ethernet or otherwise, the container will have access to make TCP and UDP connections to the internet.

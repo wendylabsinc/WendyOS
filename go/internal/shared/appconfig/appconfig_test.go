@@ -388,6 +388,32 @@ func TestValidate_PersistPathUsesContainerPathSemantics(t *testing.T) {
 	}
 }
 
+// The agent mounts the System API socket at /run/wendy/system. A persist
+// volume there or below would hide it, or be hidden by it.
+func TestValidate_PersistPathReservesSystemAPIDirectory(t *testing.T) {
+	for _, tc := range []struct {
+		path string
+		ok   bool
+	}{
+		{"/run/wendy/system", false},
+		{"/run/wendy/system/", false},
+		{"/run/wendy//system", false},
+		{"/run/wendy/system/state", false},
+		{"/run/wendy", true},
+		{"/run/wendy/systemd", true},
+		{"/run/wendy/system2/state", true},
+	} {
+		cfg := &AppConfig{AppID: "com.example.app", Entitlements: []Entitlement{{Type: EntitlementPersist, Name: "state", Path: tc.path}}}
+		if err := cfg.Validate(); (err == nil) != tc.ok {
+			t.Errorf("persist at %q: got %v, want ok=%v", tc.path, err, tc.ok)
+		}
+	}
+	cfg := &AppConfig{AppID: "com.example.app", Services: map[string]*ServiceConfig{"api": {Context: ".", Entitlements: []Entitlement{{Type: EntitlementPersist, Name: "state", Path: "/run/wendy/system"}}}}}
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "reserved") {
+		t.Errorf("service persist at /run/wendy/system: got %v, want it refused as reserved", err)
+	}
+}
+
 func TestValidate_GPIOWithoutPins(t *testing.T) {
 	cfg := &AppConfig{
 		AppID: "com.example.app",
@@ -2323,6 +2349,53 @@ func TestNotificationsEntitlementDuplicateRejected(t *testing.T) {
 	}}
 	if err := cfg.Validate(); err == nil {
 		t.Fatal("expected error for duplicate notifications entitlement")
+	}
+}
+
+func TestDataReadEntitlementValid(t *testing.T) {
+	for _, allowlist := range [][]string{nil, {"apps/com.example.detector"}, {"apps/com.example.detector/markers", "apps/"}, {"agent/campaign/people/markers/"}} {
+		cfg := &AppConfig{AppID: "test", Entitlements: []Entitlement{{Type: EntitlementDataRead, Allowlist: allowlist}}}
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("allowlist %q: %v", allowlist, err)
+		}
+	}
+	if warnings := ValidateJSON([]byte(`{"appId":"test","entitlements":[{"type":"data-read","allowlist":["apps/com.example.detector"]}]}`)); len(warnings) != 0 {
+		t.Fatalf("got warnings for data-read entitlement: %v", warnings)
+	}
+	if warnings := ValidateJSON([]byte(`{"appId":"test","entitlements":[{"type":"data-read","streams":{}}]}`)); len(warnings) == 0 {
+		t.Fatal("expected a warning for streams on data-read")
+	}
+}
+
+func TestDataReadEntitlementAllowlistRejected(t *testing.T) {
+	tooMany := make([]string, maxDataReadAllowlistEntries+1)
+	for i := range tooMany {
+		tooMany[i] = "apps/a"
+	}
+	for _, allowlist := range [][]string{
+		{""},
+		{"apps/a b"},
+		{"apps/a,apps/b"},
+		{"apps/a=b"},
+		{"apps/\u00e9"},
+		tooMany,
+		{strings.Repeat("a", maxDataReadAllowlistBytes+1)},
+		{"_streams/apps/a"},
+		{"apps/a", "_streams/"},
+	} {
+		cfg := &AppConfig{AppID: "test", Entitlements: []Entitlement{{Type: EntitlementDataRead, Allowlist: allowlist}}}
+		if err := cfg.Validate(); err == nil {
+			t.Fatalf("allowlist %q accepted", allowlist)
+		}
+	}
+}
+
+func TestDataReadEntitlementDuplicateRejected(t *testing.T) {
+	cfg := &AppConfig{AppID: "test", Entitlements: []Entitlement{
+		{Type: EntitlementDataRead}, {Type: EntitlementDataRead, Allowlist: []string{"apps/a"}},
+	}}
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("expected error for duplicate data-read entitlement")
 	}
 }
 

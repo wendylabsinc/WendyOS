@@ -516,7 +516,7 @@ Persistent storage that survives container restarts.
 | Field | Description |
 |-------|-------------|
 | `name` | Shared namespace (app ID). Apps with the same name can share storage. |
-| `path` | Mount path inside the container, e.g. `"/data"`. |
+| `path` | Mount path inside the container, e.g. `"/data"`. Not `/run/wendy/system` or below it, where the agent mounts the System API socket. |
 
 ### `usb`
 
@@ -718,13 +718,51 @@ The agent injects `WENDY_DATA_STREAM_DIR`; each stream uses
 `<directory>/<stream>.sock`. Lightweight streams accept native payload bytes.
 Durable streams use Protobuf envelopes, acknowledge after local storage sync,
 and retain records even when no episode is active. They reject new records
-when their journal is full, so producers must buffer and retry.
+when their journal is full, so producers must buffer and retry. Live streams
+use the same envelopes, so records carry their sample times, but the agent only
+shows them to live viewers: they are never journaled, buffered or recorded, and
+get no acknowledgement. Use them for display data such as markers at 10 to 30
+Hz.
 
 See [Wendy Data](/docs/data#record-data-from-your-app) for the recording workflow,
 the [stream reference](/docs/advanced/clients/wendy-cli/commands/data#application-recording-streams)
 for retention and export, and the
 [WendyRecording examples](https://github.com/wendylabsinc/WendyOS/tree/main/Examples/WendyRecording)
 for time-series schemas and senders.
+
+### `data-read`
+
+Allows an app to read the device's live data streams without `admin`: the
+records apps publish on their recording streams, as the agent accepts them.
+
+```json
+{ "type": "data-read", "allowlist": ["apps/com.example.detector"] }
+```
+
+The app calls `wendy.agent.services.v2.DataService/StreamData` on its private
+System API socket, `WENDY_SYSTEM_SOCKET=/run/wendy/system/system.sock`, which it
+shares with `notifications`. Every other `DataService` method is refused there.
+
+`allowlist` is optional. Each entry admits the stream id it names and every
+stream id below it at a `/`: `apps/com.example.detector/markers` also admits
+the streams of that app's service named `markers`, if it has one.
+`apps/com.example.detector` admits that app's streams and not those of
+`com.example.detector2`. Without an allowlist the app reads every stream.
+Selecting a stream outside it fails with `PERMISSION_DENIED`. Entries may name
+the agent's own streams too, such as `agent/campaign/people/markers/`. The stream
+catalog, `_streams/<stream-id>`, lists only the streams the allowlist admits, so
+an entry never names the catalog itself. At most 32 entries, 2048 bytes in
+total.
+
+| Constraint | |
+|------------|--|
+| At most one `data-read` at the top level and one per service | enforced at validation; a service gets the union of both allowlists |
+| Concurrent `StreamData` calls | 8 per app and 24 for all apps together; the device serves 32 in total, so operators keep 8 |
+| Multi-service apps | services share the socket, so the app reads the union of their allowlists |
+
+> **Security:** `data-read` is read-only and live-only. It grants no recorded
+> data, export, campaign control or sensor access, and never exposes
+> `WENDY_AGENT_SOCKET`.
 
 ### `admin`
 

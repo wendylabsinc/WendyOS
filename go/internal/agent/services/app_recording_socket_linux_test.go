@@ -5,6 +5,7 @@ package services
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/data"
+	"github.com/wendylabsinc/wendy/go/internal/agent/data/live"
 	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 	sharedenv "github.com/wendylabsinc/wendy/go/internal/shared/env"
 	recordingpb "github.com/wendylabsinc/wendy/go/proto/gen/recordingpb"
@@ -206,5 +208,91 @@ func TestRecordingPacketContinuousVibration(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
+	}
+}
+
+// A live stream's envelope reaches viewers with its own sample time and no
+// acknowledgement. Past the app's live budget a record is dropped and the
+// connection kept, and spending that budget leaves the app's recorded streams
+// theirs.
+func TestRecordingPacketLiveMode(t *testing.T) {
+	m, capture := recordingSocketTestManager(t)
+	// Two records per budget, never refilled.
+	m.newLimiter = func() *notificationRateLimiter {
+		l := newNotificationRateLimiter(2, time.Hour)
+		return &l
+	}
+	dir, err := m.EnsureStreams("test.app", "", map[string]appconfig.RecordingStream{
+		"markers": {Mode: "live", MediaType: "application/protobuf", Schema: "wendy.data.v1.VideoMarkers"},
+		"samples": {Mode: "durable", MediaType: "application/octet-stream"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Listed in the catalog while the app's task runs, as any app stream is:
+	// the containerd client lists it as the task starts.
+	m.AdvertiseStreams("test.app", "")
+	catalog, err := capture.Live().Subscribe(live.Selection{StreamIDs: []string{live.CatalogPrefix + "apps/test.app/markers"}, SendLatest: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	listCtx, cancelList := context.WithTimeout(t.Context(), 5*time.Second)
+	listed, err := catalog.Next(listCtx)
+	cancelList()
+	catalog.Close()
+	if err != nil || listed.Record.StreamID != live.CatalogPrefix+"apps/test.app/markers" {
+		t.Fatalf("live stream not in the catalog: %+v %v", listed.Record, err)
+	}
+	viewer, err := capture.Live().Subscribe(live.Selection{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(viewer.Close)
+	next := func(wait time.Duration) (live.Delivery, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), wait)
+		defer cancel()
+		return viewer.Next(ctx)
+	}
+
+	const frameTime = int64(1_700_000_000_000_000_000)
+	c := dialRecording(t, dir, "", "markers")
+	send := func(seq int64) {
+		t.Helper()
+		b, err := proto.Marshal(&recordingpb.Record{Payload: []byte{byte(seq)}, Timing: &recordingpb.SampleTiming{Clock: "UNIX", Count: 1, TimestampsNanos: []int64{frameTime + seq}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err = c.Write(b); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for seq := int64(1); seq <= 2; seq++ {
+		send(seq)
+		d, err := next(3 * time.Second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if d.Record.StreamID != "apps/test.app/markers" || d.Record.TimestampUnixNanos != frameTime+seq {
+			t.Fatalf("record %d: %+v", seq, d.Record)
+		}
+	}
+	send(3) // over the live budget
+	if d, err := next(100 * time.Millisecond); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("record over the budget delivered: %+v %v", d.Record, err)
+	}
+	// No acknowledgement, and the agent has not closed the connection: a read
+	// waits instead of seeing the end of the stream.
+	c.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+	if _, err = c.Read(make([]byte, 64)); !errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("live connection: %v", err)
+	}
+
+	durable := dialRecording(t, dir, "", "samples")
+	b, _ := proto.Marshal(&recordingpb.Record{Id: "one", Payload: []byte{1}})
+	if _, err = durable.Write(b); err != nil {
+		t.Fatal(err)
+	}
+	if ack := receiveRecordingAck(t, durable); ack.State != recordingpb.Ack_COMMITTED {
+		t.Fatalf("durable record after the live budget ran out: %v", ack)
 	}
 }

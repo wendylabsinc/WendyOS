@@ -32,7 +32,7 @@ func projectCatalog() []projectFeature {
 		"serial": "USB serial device", "http": "Web interface", "mcp": "MCP server",
 		"input": "Input devices", "display": "Display access", "bluetooth": "Bluetooth access",
 		"avahi": "Private mDNS (Avahi)", "nan": "Wi-Fi Aware control",
-		"episode-write": "Episode recording", "notifications": "Notifications", "admin": "Agent administration",
+		"episode-write": "Episode recording", "data-read": "Live data streams", "notifications": "Notifications", "admin": "Agent administration",
 		"build": "Container builds", "video": "Video access (deprecated; use camera)",
 	}
 	for _, name := range appconfig.ValidEntitlementTypes {
@@ -75,6 +75,8 @@ func projectFields(name string) []projectField {
 		return []projectField{{"allowlist", "allowlist", "Allowed cameras", "Comma-separated camera names or paths; empty for all", "list", "", false}}
 	case "episode-write":
 		return []projectField{{"streams", "streams", "Recording streams", "JSON object of recording streams; use edit --raw for larger configurations", "object", "", false}}
+	case "data-read":
+		return []projectField{{"allowlist", "stream-allowlist", "Readable streams", "Comma-separated stream ids or prefixes, for example apps/com.example.detector; empty for every stream", "list", "", false}}
 	case "ros2":
 		return []projectField{
 			{"domainId", "domain-id", "Domain ID", "0 to 232; empty derives a stable ID from appId", "int", "", false},

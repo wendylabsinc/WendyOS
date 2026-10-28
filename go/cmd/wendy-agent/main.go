@@ -430,7 +430,7 @@ func main() {
 	notificationSender := services.NewCloudNotificationSender(logger, provisioningSvc)
 	stopInference := dataSvc.StartCampaignInference(ctx, &inference.ManagedFactory{Root: dataManager.InferenceDirectory()}, &services.CampaignCloudSender{Cloud: notificationSender})
 	defer stopInference()
-	systemAPISocketManager := services.NewAppSystemAPISocketManager(ctx, logger, notificationSender)
+	systemAPISocketManager := services.NewAppSystemAPISocketManager(ctx, logger, notificationSender, dataManager.Live())
 	appDataSocketManager := services.NewAppDataSocketManager(ctx, logger, dataManager)
 	if ctrdClient != nil {
 		ctrdClient.SetAppSystemAPISocketProvider(systemAPISocketManager)
