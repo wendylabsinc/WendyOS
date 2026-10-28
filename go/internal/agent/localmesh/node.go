@@ -142,7 +142,7 @@ func newNode(parent context.Context, dir string, credentials *Credentials, name 
 		return nil, err
 	}
 	now := time.Now()
-	derived, err := instanceRouterID()
+	derived, err := routerIDCandidate(credentials.Device)
 	if err != nil {
 		return nil, err
 	}
