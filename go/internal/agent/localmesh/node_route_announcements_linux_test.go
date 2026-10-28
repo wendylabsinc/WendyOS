@@ -363,3 +363,119 @@ func TestNodeSequenceFanoutPersistsAndQueuesGossipProofBeforeSend(t *testing.T) 
 		t.Fatalf("sequence fanout did not exercise both persistence barriers: %v", checked)
 	}
 }
+
+// A service edit starts the one-second signing gate immediately before a real
+// local sequence request. Keep forwarding and ordinary control/liveness active,
+// then publish/fetch the signed proof before promptly exporting the new sequence.
+func TestNodeSequenceDuringServicePublicationGate(t *testing.T) {
+	n := routePublicationNode(t)
+	io := &sequencePublicationIO{routingRecorder: &routingRecorder{}, node: n}
+	var err error
+	n.routing, err = NewRouting(babel.Config{RouterID: 1, HelloInterval: time.Second, UpdateInterval: 16 * time.Second, AdvertiseLocalRoute: n.advertiseLocalRoute}, nil, io)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prefix := netip.PrefixFrom(n.Credentials.Device.MeshAddress(), 128)
+	elapsed := time.Duration(0)
+	seen := make(map[babel.LinkID]bool)
+	receivers := make(map[babel.LinkID]*Routing)
+	directories := make(map[babel.LinkID]*Directory)
+	pool := netgossip.NewPool()
+	for _, id := range []babel.LinkID{1, 2} {
+		n.peers[id] = &nodePeer{id: id, control: make(chan ControlMessage, 128), sync: NewSynchronizer(n.directory, n.cache, pool)}
+		defer n.peers[id].sync.Close()
+		directory, err := NewDirectory(n.Credentials.Device.Tenant(), 10, n.cache)
+		if err != nil {
+			t.Fatal(err)
+		}
+		directories[id] = directory
+		receiver, err := NewRouting(babel.Config{RouterID: babel.RouterID(10 + id), AcceptRouteUpdate: func(origin babel.RouterID, p netip.Prefix, seq uint16) bool {
+			allowed := directory.RouteAuthorizations(time.Now())[RouteOrigin{RouterID: origin, Prefix: p, Seqno: seq}]
+			if origin == 1 && p == prefix && seq == 1 {
+				if !allowed {
+					t.Fatal("new local sequence reached Babel before its signed proof")
+				}
+				seen[id] = true
+			}
+			return allowed
+		}}, nil, &routingRecorder{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		receivers[id] = receiver
+		if err := receiver.Step(0, babel.AddLink{Link: babel.Link{ID: id, Local: netip.MustParseAddr("fe80::2"), Peer: netip.MustParseAddr("fe80::1"), Cost: 64}}); err != nil {
+			t.Fatal(err)
+		}
+		if err := n.routing.Step(0, babel.AddLink{Link: babel.Link{ID: id, Local: netip.MustParseAddr("fe80::1"), Peer: netip.MustParseAddr("fe80::2"), Cost: 64}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	io.check = func(d babel.Datagram) {
+		// Fetch and independently verify the queued exact signed artifact before
+		// delivering the accompanying Babel output to its normal route consumer.
+		receiver := NewSynchronizer(directories[d.Link], n.cache, netgossip.NewPool())
+		defer receiver.Close()
+		for len(n.peers[d.Link].control) > 0 {
+			message := <-n.peers[d.Link].control
+			exchangeDirectoryMessages(t, n.peers[d.Link].sync, receiver, []ControlMessage{message}, time.Now())
+		}
+		if err := receivers[d.Link].Step(elapsed, babel.Receive{ID: d.Link, Packet: d.Payload}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := n.routing.Step(0, babel.Originate{Prefix: prefix}); err != nil {
+		t.Fatal(err)
+	}
+	for elapsed = 100 * time.Millisecond; elapsed <= 500*time.Millisecond; elapsed += 100 * time.Millisecond {
+		if err := n.routing.Step(elapsed, babel.Tick{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Model an idle interval: the first service edit must sign immediately.
+	n.nextPublication = time.Now().Add(-time.Millisecond)
+	before := n.state.Revision
+	services := []ManifestService{{Mesh: "default", AppID: "com.wendy.test", ServiceID: "temperature", Type: "_sensorlink._tcp", Instance: "Room", Port: 28080}}
+	if err := n.handle(nodeEvent{services: &services}); err != nil || n.state.Revision != before+1 {
+		t.Fatal("idle service edit did not publish immediately", err)
+	}
+	serviceRevision := n.state.Revision
+	elapsed = 600 * time.Millisecond
+	if err := n.routing.Step(elapsed, babel.Receive{ID: 1, Packet: routeSequenceRequest(prefix, 1, 1)}); err != nil {
+		t.Fatal(err)
+	}
+	livenessBefore := len(io.sent)
+	for elapsed = 700 * time.Millisecond; elapsed <= 1200*time.Millisecond; elapsed += 100 * time.Millisecond {
+		if err := n.routing.Step(elapsed, babel.Tick{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if seen[1] || seen[2] || n.state.Revision != serviceRevision || !n.publicationDirty {
+		t.Fatal("rate gate exported or signed a new origin prematurely")
+	}
+	if len(io.sent) <= livenessBefore {
+		t.Fatal("publication gate stopped ordinary Babel liveness output")
+	}
+	if err := n.handleControl(n.peers[1], &ControlMessage{Kind: "future-optional-control"}); err != nil {
+		t.Fatal("publication gate blocked control processing", err)
+	}
+	local := n.routing.Snapshot().Routes
+	if len(local) != 1 || !local[0].Local || local[0].Unreachable || local[0].Seqno != 1 {
+		t.Fatal("publication gate prevented the forwarding transaction from committing", local)
+	}
+	// Model the publication deadline without sleeping or changing signed time.
+	n.nextPublication = time.Now().Add(-time.Millisecond)
+	if err := n.publish(); err != nil || n.state.Revision != serviceRevision+1 {
+		t.Fatal("coalesced origin did not publish at the gate", err)
+	}
+	deadline, ok := n.routing.NextDeadline()
+	if !ok || deadline > n.routing.Snapshot().Now+150*time.Millisecond {
+		t.Fatal("pending origin waits for a periodic update instead of prompt retry", deadline)
+	}
+	elapsed = deadline
+	if err := n.routing.Step(elapsed, babel.Tick{}); err != nil {
+		t.Fatal(err)
+	}
+	if !seen[1] || !seen[2] || n.state.Revision != serviceRevision+1 || len(n.advertisement.Services) != 1 {
+		t.Fatal("published sequence did not promptly reach both neighbours without another signature", seen)
+	}
+}
