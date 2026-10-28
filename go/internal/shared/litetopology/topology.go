@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"net/netip"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
@@ -23,6 +24,11 @@ type ReadPage func(context.Context, *lite.WendyComNetTopologyParams) (*lite.Wend
 // change discards all collected rows and permits one fresh attempt. Periodic
 // routing timers do not change the device's structural generation.
 func Read(ctx context.Context, read ReadPage) (*pb.LocalMeshTopology, error) {
+	return readWithin(ctx, read, AggregateBudget)
+}
+func readWithin(parent context.Context, read ReadPage, budget time.Duration) (*pb.LocalMeshTopology, error) {
+	ctx, cancel := context.WithTimeout(parent, budget)
+	defer cancel()
 	for attempt := 0; attempt < 2; attempt++ {
 		snapshot, changed, err := collect(ctx, read)
 		if err != nil {

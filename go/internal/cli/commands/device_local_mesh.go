@@ -10,6 +10,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/cli/browserauth"
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
+	"github.com/wendylabsinc/wendy/go/internal/shared/litetopology"
 	"github.com/wendylabsinc/wendy/go/internal/shared/models"
 	pb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	"google.golang.org/grpc/codes"
@@ -22,7 +23,7 @@ var observedLocalMeshTopologyIdentity = func(conn *grpcclient.AgentConnection) (
 	return conn.ObservedServerIdentity()
 }
 
-const localMeshTopologyTimeout = 60 * time.Second
+const localMeshTopologyTimeout = 15 * time.Second
 
 // Register this constructor under the device command's manage group.
 func newDeviceLocalMeshCmd() *cobra.Command {
@@ -141,7 +142,9 @@ func readLocalMeshReporter(parent context.Context) (*pb.LocalMeshTopology, strin
 		if !ok {
 			return nil, "", status.Error(codes.Unimplemented, "selected provider does not support topology")
 		}
-		snapshot, err := provider.NetTopology(ctx, *target.External)
+		liteCtx, stopLite := context.WithTimeout(parent, litetopology.SetupBudget+litetopology.AggregateBudget)
+		defer stopLite()
+		snapshot, err := provider.NetTopology(liteCtx, *target.External)
 		return snapshot, "wendy-lite", err
 	}
 	conn := target.Agent

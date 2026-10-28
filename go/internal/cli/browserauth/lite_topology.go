@@ -20,17 +20,25 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/cloudrelay"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/internal/shared/literelay"
+	"github.com/wendylabsinc/wendy/go/internal/shared/litetopology"
 	cloud "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )
 
 type liteReporter struct {
-	Conn net.Conn
-	Peer certs.WendyIdentity
+	Conn   net.Conn
+	Peer   certs.WendyIdentity
+	Read   litetopology.ReadPage
+	cancel context.CancelFunc
 }
 
-func (c *liteReporter) Close() error { return c.Conn.Close() }
+func (c *liteReporter) Close() error {
+	if c.cancel != nil {
+		c.cancel()
+	}
+	return c.Conn.Close()
+}
 func liteAsset(asset *cloud.Asset) bool {
 	return strings.EqualFold(asset.GetOsType(), "wendy-lite") || strings.EqualFold(asset.GetDeviceType(), "wendy-lite") || strings.EqualFold(asset.GetDeviceType(), "micro-wendy")
 }
@@ -94,7 +102,9 @@ func (s *Session) liteOperatorLocked(ctx context.Context) (config.CertificateInf
 	return certificate, nil
 }
 func (s *Session) connectLiteReporter(ctx context.Context, cc *grpc.ClientConn, asset string, expected *certs.WendyIdentity, dial func(context.Context, string) (net.Conn, error), client *http.Client) (*liteReporter, error) {
-	s.mu.Lock()
+	if err := s.lockReporterIdentity(ctx); err != nil {
+		return nil, err
+	}
 	identity, err := s.liteOperatorLocked(ctx)
 	active, access, key, private, settings := s.certificate, s.tokens.Access, s.key, s.privatePEM, s.settings()
 	s.mu.Unlock()
@@ -138,11 +148,13 @@ func (s *Session) connectLiteReporter(ctx context.Context, cc *grpc.ClientConn, 
 			raw.Close()
 		}
 	}()
+	handshake, cancelHandshake := context.WithTimeout(ctx, browserLiteHandshakeBudget)
+	defer cancelHandshake()
 	conn := tls.Client(raw, cfg)
-	if err := conn.HandshakeContext(ctx); err != nil {
+	if err := conn.HandshakeContext(handshake); err != nil {
 		return nil, err
 	}
-	if deadline, ok := ctx.Deadline(); ok {
+	if deadline, ok := handshake.Deadline(); ok {
 		if err := conn.SetDeadline(deadline); err != nil {
 			return nil, err
 		}
@@ -161,8 +173,12 @@ func (s *Session) connectLiteReporter(ctx context.Context, cc *grpc.ClientConn, 
 		return nil, err
 	}
 	// Close the pipe first; TLS close_notify must never wait behind a broker.
+	read, err := litetopology.OpenStream(handshake, conn)
+	if err != nil {
+		return nil, err
+	}
 	failed = false
-	return &liteReporter{Conn: &liteTLSConn{Conn: conn, raw: raw}, Peer: *expected}, nil
+	return &liteReporter{Read: read, Conn: &liteTLSConn{Conn: conn, raw: raw}, Peer: *expected}, nil
 }
 
 type liteTLSConn struct {

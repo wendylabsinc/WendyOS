@@ -314,7 +314,7 @@ test("collection bounds concurrency, retains per-device failures and ignores can
     (id, result) => received.push([id, result]),
     new AbortController().signal,
   );
-  assert.equal(maximum, 1);
+  assert.equal(maximum, 3);
   assert.equal(received.length, 10);
   assert.equal(received.find(([id]) => id === "2")[1].status, "error");
 
@@ -332,6 +332,16 @@ test("collection bounds concurrency, retains per-device failures and ignores can
     (...args) => late.push(args),
     controller.signal,
   );
-  assert.equal(calls, 1);
+  assert.equal(calls, 3);
   assert.equal(late.length, 0);
+});
+
+
+test("one slow reporter does not block others and aliases stay serialized",async()=>{
+ let release;const slow=new Promise(resolve=>{release=resolve});let active=0,maxAlias=0;const received=[];
+ const done=collectMeshSnapshots([{id:"c6-lan",reporterKey:"c6"},{id:"c6-cloud",reporterKey:"c6"},{id:"os"}],async id=>{
+  if(id.startsWith("c6")){maxAlias=Math.max(maxAlias,++active);await slow;active--}
+  return {status:"ok"};
+ },id=>received.push(id),new AbortController().signal);
+ await new Promise(resolve=>setImmediate(resolve));assert.deepEqual(received,["os"]);release();await done;assert.equal(maxAlias,1);assert.equal(received.length,3);
 });

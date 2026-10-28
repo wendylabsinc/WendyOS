@@ -76,7 +76,9 @@ export class DesktopService {
     this.viewerChecks = new Map();
     this.deviceSnapshots = new Map();
     this.meshSnapshots = new Map();
-    this.meshQueue = Promise.resolve();
+    this.meshQueue = [];
+    this.meshActive = new Set();
+    this.meshReporterKeys = new Map();
     this.monitorLogs = new DeviceLogs({ cli: this.cli, env });
     this.monitorGeneration = 0;
   }
@@ -317,24 +319,57 @@ export class DesktopService {
     if (this.meshSnapshots.size >= 64)
       throw new Error("The local observation queue is full. Try again shortly.");
     const generation = this.monitorGeneration;
-    const request = this.meshQueue.catch(() => {}).then(() => {
-      if (generation !== this.monitorGeneration) throw new Error("This local network view is no longer open.");
-      return this.monitorTarget(target);
-    }).then((address) => this.run(
-      this.cli,
-      ["device", "wendy-net", "topology", "--device", address, "--json", "--observation"],
-      { timeout: 65_000, maxBuffer: 2 * 1024 * 1024 },
-    )).then((output) => {
-      if (generation !== this.monitorGeneration) throw new Error("This local network view is no longer open.");
-      const observation = JSON.parse(output);
-      if (!observation || !["ok", "unsupported", "unavailable", "unauthorized", "error"].includes(observation.status) ||
-          (observation.status === "ok" && (!observation.topology || typeof observation.topology.selfPrincipal !== "string")))
-        throw new Error("The CLI returned an invalid local observation.");
-      return observation;
-    }).finally(() => this.meshSnapshots.delete(target));
-    this.meshQueue = request.catch(() => {});
+    const reporter = this.meshReporterKeys.get(target) || target;
+    const expiresAt = Date.now() + 160_000;
+    let entry;
+    const request = new Promise((resolve, reject) => {
+      entry = { reporter, generation, resolve, reject, read: async () => {
+        if (generation !== this.monitorGeneration) throw new Error("This local network view is no longer open.");
+        const address = await this.monitorTarget(target);
+        if (generation !== this.monitorGeneration) throw new Error("This local network view is no longer open.");
+        const remaining = expiresAt - Date.now();
+        if (remaining <= 0) throw new Error("The topology observation timed out while waiting for admission.");
+        const output = await this.run(this.cli,
+          ["device", "wendy-net", "topology", "--device", address, "--json", "--observation"],
+          { timeout: remaining, maxBuffer: 2 * 1024 * 1024 });
+        if (generation !== this.monitorGeneration) throw new Error("This local network view is no longer open.");
+        const observation = JSON.parse(output);
+        if (!observation || !["ok", "unsupported", "unavailable", "unauthorized", "error"].includes(observation.status) ||
+            (observation.status === "ok" && (!observation.topology || typeof observation.topology.selfPrincipal !== "string")))
+          throw new Error("The CLI returned an invalid local observation.");
+        return observation;
+      }};
+      entry.timer = setTimeout(() => {
+        const index = this.meshQueue.indexOf(entry);
+        if (index >= 0) {
+          this.meshQueue.splice(index, 1);
+          reject(new Error("The topology observation timed out while waiting for admission."));
+        }
+      }, 160_000);
+      this.meshQueue.push(entry);
+    }).finally(() => { clearTimeout(entry.timer); this.meshSnapshots.delete(target); });
     this.meshSnapshots.set(target, request);
+    this.drainMeshQueue();
     return request;
+  }
+
+  drainMeshQueue() {
+    for (let index = 0; index < this.meshQueue.length;) {
+      const job = this.meshQueue[index];
+      if (job.generation !== this.monitorGeneration) {
+        this.meshQueue.splice(index, 1);
+        job.reject(new Error("This local network view is no longer open."));
+        continue;
+      }
+      if (this.meshActive.size >= 3 || this.meshActive.has(job.reporter)) { index++; continue; }
+      this.meshQueue.splice(index, 1);
+      clearTimeout(job.timer);
+      this.meshActive.add(job.reporter);
+      Promise.resolve().then(job.read).then(job.resolve, job.reject).finally(() => {
+        this.meshActive.delete(job.reporter);
+        this.drainMeshQueue();
+      });
+    }
   }
 
   async meshDiscover() {
@@ -343,10 +378,13 @@ export class DesktopService {
       this.run(this.cli, ["cloud", "discover", "--all", "--json"], { timeout: 25_000 }).then(JSON.parse),
     ]);
     const devices = new Map();
+    this.meshReporterKeys.clear();
     const warnings = [];
-    const add = (target, name, deviceType, platform) => {
+    const reporterKey = (id) => typeof id === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id) ? `device:${id.toLowerCase()}` : undefined;
+    const add = (target, name, deviceType, platform, key) => {
       target = deviceTarget(target);
-      if (!devices.has(target)) devices.set(target, { id: target, name: name || target, deviceType, platform });
+      if (key) this.meshReporterKeys.set(target, key);
+      if (!devices.has(target)) devices.set(target, { id: target, name: name || target, deviceType, platform, reporterKey: key });
     };
     if (sources.every((source) => source.status === "rejected")) {
       // Preserve the view's last inventory and let its observations age stale.
@@ -388,7 +426,7 @@ export class DesktopService {
           const target = device.connectionInfo?.type === "BLE"
             ? `wendy-lite:ble:${device.connectionInfo.address}` : device.id;
           if (typeof target !== "string" || !target.startsWith("wendy-lite:")) continue;
-          add(target, device.displayName, "Wendy Lite", "wendy-lite");
+          add(target, device.displayName, "Wendy Lite", "wendy-lite", reporterKey(device.connectionInfo?.enrolledDeviceId));
         } catch { invalidAddress = true; }
       }
       if (invalidAddress) warnings.push("Local discovery omitted devices with invalid addresses.");
@@ -402,7 +440,7 @@ export class DesktopService {
           // session. An asset ID alone cannot identify a Cloud login.
           const selector = cloudDiscoverySelector(device);
           if (!selector) { invalidSelector = true; continue; }
-          add(selector, device.name, device.type, device.osType || (/lite/i.test(device.type || "") ? "wendy-lite" : undefined));
+          add(selector, device.name, device.type, device.osType || (/lite/i.test(device.type || "") ? "wendy-lite" : undefined), reporterKey(device.pkiDeviceName || device.id));
         }
         if (invalidSelector) warnings.push("Cloud discovery omitted devices without a valid scoped selector. Update the Wendy CLI and retry.");
       }
@@ -420,6 +458,7 @@ export class DesktopService {
 
   close() {
     this.monitorGeneration++;
+    this.drainMeshQueue();
     this.monitorLogs.close();
   }
 

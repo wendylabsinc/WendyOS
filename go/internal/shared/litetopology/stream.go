@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"time"
 
 	pb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	lite "github.com/wendylabsinc/wendy/go/proto/gen/litepb"
@@ -18,6 +19,19 @@ import (
 // ReadStream uses a private authenticated WendyCom stream. Cancellation closes
 // it, including an in-progress frame write; callers own the connection lifetime.
 func ReadStream(ctx context.Context, conn net.Conn) (*pb.LocalMeshTopology, error) {
+	handshake, cancel := context.WithTimeout(ctx, HandshakeBudget)
+	read, err := OpenStream(handshake, conn)
+	cancel()
+	if err != nil {
+		return nil, err
+	}
+	return Read(ctx, read)
+}
+
+// OpenStream performs only the WendyCom handshake on a private authenticated
+// stream. TLS and WendyCom can share one setup deadline; later pages receive
+// independent short deadlines and a separate aggregate budget.
+func OpenStream(ctx context.Context, conn net.Conn) (ReadPage, error) {
 	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
 	defer stop()
 	if deadline, ok := ctx.Deadline(); ok {
@@ -42,7 +56,21 @@ func ReadStream(ctx context.Context, conn net.Conn) (*pb.LocalMeshTopology, erro
 	if handshake == nil || handshake.HandshakeId != id || handshake.GetVersion().GetMajor() != 2 {
 		return nil, status.Error(codes.Unimplemented, "unsupported WendyCom protocol")
 	}
-	return Read(ctx, func(ctx context.Context, params *lite.WendyComNetTopologyParams) (*lite.WendyComNetTopologyPage, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if err := conn.SetDeadline(time.Time{}); err != nil {
+		return nil, err
+	}
+	return func(parent context.Context, params *lite.WendyComNetTopologyParams) (*lite.WendyComNetTopologyPage, error) {
+		ctx, cancel := context.WithTimeout(parent, PageBudget)
+		defer cancel()
+		stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
+		defer stop()
+		deadline, _ := ctx.Deadline()
+		if err := conn.SetDeadline(deadline); err != nil {
+			return nil, err
+		}
 		id++
 		if err := wire.send(&lite.WendyComMessage{Msg: &lite.WendyComMessage_Command{Command: &lite.WendyComCommand{RequestId: id, Params: &lite.WendyComCommand_NetTopology{NetTopology: params}}}}); err != nil {
 			return nil, err
@@ -65,7 +93,7 @@ func ReadStream(ctx context.Context, conn net.Conn) (*pb.LocalMeshTopology, erro
 			return response.GetNetTopology(), nil
 		}
 		return nil, status.Error(codes.Unavailable, "no matching topology reply")
-	})
+	}, nil
 }
 
 type stream struct{ conn net.Conn }

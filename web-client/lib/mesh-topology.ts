@@ -5,6 +5,7 @@ export type MeshDevice = {
   deviceType?: string;
   osType?: string;
   platform?: string;
+  reporterKey?: string;
   lastHeartbeat?: string;
   organizationId?: string;
   pkiDeviceName?: string;
@@ -363,23 +364,35 @@ export async function collectMeshSnapshots(
   receive: (id: string, result: MeshResult) => void,
   signal: AbortSignal,
 ) {
+  // Aliases of one physical reporter share a worker. Other reporters can
+  // progress while a constrained device establishes its management session.
+  const byReporter = new Map<string, MeshDevice[]>();
+  for (const device of devices) {
+    const key = device.reporterKey || device.id;
+    if (!byReporter.has(key)) byReporter.set(key, []);
+    byReporter.get(key)!.push(device);
+  }
+  const groups = [...byReporter.values()];
   let cursor = 0;
   const worker = async () => {
-    while (!signal.aborted && cursor < devices.length) {
-      const device = devices[cursor++];
-      let result: MeshResult;
-      try {
-        result = await read(device.id);
-      } catch (error) {
-        result = {
-          status: "error",
-          error: error instanceof Error ? error.message : String(error),
-        };
+    while (!signal.aborted && cursor < groups.length) {
+      const group = groups[cursor++];
+      for (const device of group) {
+        if (signal.aborted) break;
+        let result: MeshResult;
+        try {
+          result = await read(device.id);
+        } catch (error) {
+          result = {
+            status: "error",
+            error: error instanceof Error ? error.message : String(error),
+          };
+        }
+        if (!signal.aborted) receive(device.id, result);
       }
-      if (!signal.aborted) receive(device.id, result);
     }
   };
   await Promise.all(
-    Array.from({ length: Math.min(1, devices.length) }, worker),
+    Array.from({ length: Math.min(3, groups.length) }, worker),
   );
 }

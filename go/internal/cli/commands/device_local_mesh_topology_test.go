@@ -218,6 +218,9 @@ type liteTopologyFixtureProvider struct {
 
 func (p *liteTopologyFixtureProvider) NetTopology(ctx context.Context, device models.ExternalDevice) (*pb.LocalMeshTopology, error) {
 	p.calls++
+	if deadline, ok := ctx.Deadline(); !ok || time.Until(deadline) < 130*time.Second {
+		return nil, errors.New("Lite inherited the OS setup deadline")
+	}
 	if device.ID != "wendy-lite:physical" {
 		return nil, errors.New("wrong provider device")
 	}

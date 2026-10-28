@@ -97,7 +97,7 @@ test("topology calls use bounded read-only command and retain typed unsupported 
   const result = await service.meshTopology({target: "one.local:50052"});
   assert.equal(result.status, "unsupported");
   assert.deepEqual(command.args, ["device", "wendy-net", "topology", "--device", "one.local:50052", "--json", "--observation"]);
-  assert.equal(command.options.timeout, 65000);
+  assert.ok(command.options.timeout > 159000 && command.options.timeout <= 160000);
   assert.equal(service.meshSnapshots.size, 0);
   assert.throws(() => service.meshTopology({target: "--device=other"}));
 });
@@ -114,7 +114,7 @@ test("mesh refresh deduplicates a target and bounds simultaneous subprocesses", 
   const rest = ["two.local", "three.local", "four.local"].map((target) => service.meshTopology({target}));
   release();
   await Promise.all([first, ...rest]);
-  assert.equal(maximum,1);
+  assert.equal(maximum,3);
   assert.equal(service.meshSnapshots.size, 0);
 });
 
@@ -163,7 +163,27 @@ test("closing a topology view discards queued observations before dialing",async
  service.run=async()=>{calls++;await gate;return JSON.stringify({status:"unavailable"})};
  const first=service.meshTopology({target:"one.local"});
  await new Promise(resolve=>setImmediate(resolve));
+ service.meshReporterKeys.set("two.local","one.local");
  const second=service.meshTopology({target:"two.local"});
  service.close();release();
  const results=await Promise.allSettled([first,second]);assert.equal(calls,1);assert.ok(results.every(r=>r.status==="rejected"));
+});
+
+
+test("a slow Lite reporter does not block OS reads and aliases share admission",async()=>{
+ const service=fixture();let release;const gate=new Promise(resolve=>{release=resolve});let active=0,maximum=0;
+ service.meshReporterKeys.set("lite-lan","c6");service.meshReporterKeys.set("lite-cloud","c6");
+ service.run=async(_file,args)=>{if(args[4].startsWith("lite")){maximum=Math.max(maximum,++active);await gate;active--}return JSON.stringify({status:"unavailable"})};
+ const first=service.meshTopology({target:"lite-lan"});const alias=service.meshTopology({target:"lite-cloud"});
+ assert.equal((await service.meshTopology({target:"os.local"})).status,"unavailable");assert.equal(active,1);release();await Promise.all([first,alias]);assert.equal(maximum,1);
+});
+
+
+test("queued reporter admission expires within the request ceiling",async(t)=>{
+ t.mock.timers.enable({apis:["setTimeout"]});const service=fixture();let release,calls=0;const gate=new Promise(resolve=>{release=resolve});
+ service.run=async()=>{calls++;await gate;return JSON.stringify({status:"unavailable"})};
+ const active=["a.local","b.local","c.local"].map(target=>service.meshTopology({target}));
+ await new Promise(resolve=>setImmediate(resolve));
+ const queued=service.meshTopology({target:"d.local"});const expired=assert.rejects(queued,/waiting for admission/);
+ t.mock.timers.tick(160000);await expired;assert.equal(calls,3);release();await Promise.all(active);
 });

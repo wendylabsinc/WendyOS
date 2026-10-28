@@ -50,28 +50,71 @@ func TopologyFailure(err error) TopologyObservation {
 
 // MeshTopology uses a separate, bounded connection. It never replaces a live
 // dashboard connection, starts a device, changes its clock, or changes mesh policy.
+var browserTopologyTimeout = 12 * time.Second
+var browserLiteSetupBudget = litetopology.SetupBudget
+var browserLiteHandshakeBudget = litetopology.HandshakeBudget
+var browserLiteReadBudget = litetopology.AggregateBudget
+var browserTopologyTotalBudget = 150 * time.Second
+
+type topologyFlight struct {
+	done   chan struct{}
+	result TopologyObservation
+}
+
 func (s *Session) MeshTopology(ctx context.Context, asset string, dial func(context.Context, string) (net.Conn, error), client *http.Client) TopologyObservation {
-	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, browserTopologyTotalBudget)
 	defer cancel()
-	s.mu.Lock()
+	s.topologyMu.Lock()
+	if s.topologyFlights == nil {
+		s.topologyFlights = make(map[string]*topologyFlight)
+	}
+	if pending := s.topologyFlights[asset]; pending != nil {
+		s.topologyMu.Unlock()
+		select {
+		case <-pending.done:
+			return pending.result
+		case <-ctx.Done():
+			return TopologyFailure(ctx.Err())
+		}
+	}
 	if s.topologyGate == nil {
-		s.topologyGate = make(chan struct{}, 1)
+		s.topologyGate = make(chan struct{}, 3)
 	}
 	gate := s.topologyGate
-	s.mu.Unlock()
+	pending := &topologyFlight{done: make(chan struct{})}
+	s.topologyFlights[asset] = pending
+	s.topologyMu.Unlock()
+	var result TopologyObservation
+	defer func() {
+		s.topologyMu.Lock()
+		pending.result = result
+		delete(s.topologyFlights, asset)
+		close(pending.done)
+		s.topologyMu.Unlock()
+	}()
 	select {
 	case gate <- struct{}{}:
 		defer func() { <-gate }()
 	case <-ctx.Done():
-		return TopologyFailure(ctx.Err())
+		result = TopologyFailure(ctx.Err())
+		return result
 	}
-	conn, lite, err := s.connectReporter(ctx, asset, dial, client, true)
+	result = s.meshTopology(ctx, asset, dial, client)
+	return result
+}
+
+func (s *Session) meshTopology(ctx context.Context, asset string, dial func(context.Context, string) (net.Conn, error), client *http.Client) TopologyObservation {
+	ctx, cancel := context.WithTimeout(ctx, browserTopologyTotalBudget)
+	defer cancel()
+	conn, lite, readContext, err := s.connectReporter(ctx, asset, dial, client, true)
 	if err != nil {
 		return TopologyFailure(err)
 	}
 	if lite != nil {
 		defer lite.Close()
-		snapshot, err := litetopology.ReadStream(ctx, lite.Conn)
+		readCtx, stopRead := context.WithTimeout(ctx, browserLiteReadBudget)
+		defer stopRead()
+		snapshot, err := litetopology.Read(readCtx, lite.Read)
 		if err != nil {
 			return TopologyFailure(err)
 		}
@@ -85,7 +128,7 @@ func (s *Session) MeshTopology(ctx context.Context, asset string, dial func(cont
 		return TopologyObservation{Status: "ok", Topology: data, ObservedAt: time.Now().UTC(), Platform: "wendy-lite"}
 	}
 	defer conn.Close()
-	snapshot, err := pb.NewWendyLocalMeshAdminServiceClient(conn.Conn).GetLocalMeshTopology(ctx, &pb.GetLocalMeshTopologyRequest{})
+	snapshot, err := pb.NewWendyLocalMeshAdminServiceClient(conn.Conn).GetLocalMeshTopology(readContext, &pb.GetLocalMeshTopologyRequest{})
 	if err != nil {
 		return TopologyFailure(err)
 	}

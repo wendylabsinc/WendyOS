@@ -209,7 +209,8 @@ from this client. Selecting a node shows its reported next hops, carrier types,
 route costs, and signed announcement expiry. A signed route authorizes its
 origin and prefix; it does not prove that an intermediary forwards traffic.
 
-The view reads one device at a time, then waits ten seconds before
+The view reads up to three reporters concurrently, while aliases of the same device
+remain serialized, then waits ten seconds before
 the next batch. **Pause** stops new reads. Snapshots older than thirty seconds
 are marked stale. An active local network also needs a valid, recent device capture time.
 Failed reads retain the last snapshot visibly as stale. Older agents
@@ -225,6 +226,14 @@ the desktop CLI selects the existing device provider. The CLI exposes the read
 as `wendy --device SELECTOR --json device wendy-net topology`.
 `--observation` adds a typed result envelope for clients handling partial
 failures. Neither the API nor this view enables the net or changes its policy.
+
+WendyOS observations keep their short read budget. Lite has a separate bounded
+75-second connection setup allowance and 60-second paged observation allowance;
+TLS and WendyCom can use up to 60 seconds across mesh links. A slow Lite reporter
+does not block updates from other devices. The browser worker and desktop
+subprocess allow 160 seconds only for this topology operation, and caller
+cancellation remains effective during setup and collection. Failed or incomplete
+reads retain prior observations visibly as stale.
 
 The sidebar shows the signed-in email from OIDC UserInfo and the organization
 name from Cloud's v2 OrganizationService. UserInfo must match the authenticated

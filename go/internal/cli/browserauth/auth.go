@@ -83,6 +83,8 @@ type Session struct {
 	certificate                           config.CertificateInfo
 	liteCertificate                       config.CertificateInfo
 	topologyGate                          chan struct{}
+	topologyFlights                       map[string]*topologyFlight
+	topologyMu                            sync.Mutex
 	tokens                                token
 	profile                               Profile
 }

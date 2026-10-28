@@ -2,6 +2,8 @@ package providers
 
 import (
 	"context"
+	"crypto/x509"
+	"github.com/wendylabsinc/wendy/go/internal/cli/liteclient"
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
@@ -12,18 +14,39 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-func (p *MicroWendyProvider) NetTopology(ctx context.Context, device models.ExternalDevice) (*pb.LocalMeshTopology, error) {
-	client, err := p.connectClient(ctx, device)
+var liteTopologySetupBudget = litetopology.SetupBudget
+var liteTopologyReadBudget = litetopology.AggregateBudget
+
+type liteTopologyClient interface {
+	NetTopology(context.Context) (*pb.LocalMeshTopology, error)
+	PeerCertificate() *x509.Certificate
+	GetDeviceIdentity(time.Duration) (*liteclient.DeviceIdentity, error)
+	Close() error
+}
+
+var connectLiteTopologyClient = func(ctx context.Context, p *MicroWendyProvider, device models.ExternalDevice) (liteTopologyClient, error) {
+	return p.connectClient(ctx, device)
+}
+
+func (p *MicroWendyProvider) NetTopology(parent context.Context, device models.ExternalDevice) (*pb.LocalMeshTopology, error) {
+	ctx, finishSetup, cancel := litetopology.BeginSetup(parent, liteTopologySetupBudget)
+	defer cancel()
+	client, err := connectLiteTopologyClient(ctx, p, device)
 	if err != nil {
 		return nil, err
 	}
 	defer client.Close()
+	if err := finishSetup(); err != nil {
+		return nil, err
+	}
+	readCtx, stopRead := context.WithTimeout(ctx, liteTopologyReadBudget)
+	defer stopRead()
 	stop := context.AfterFunc(ctx, func() { _ = client.Close() })
 	defer stop()
 	if client.PeerCertificate() == nil && device.ConnectionInfo["type"] != "USB" {
 		return nil, status.Error(codes.Unauthenticated, "topology requires an authenticated device or physical USB")
 	}
-	snapshot, err := client.NetTopology(ctx)
+	snapshot, err := client.NetTopology(readCtx)
 	if err != nil {
 		return nil, err
 	}

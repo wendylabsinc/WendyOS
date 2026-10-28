@@ -197,6 +197,14 @@ func topologyWriteFrame(conn net.Conn, message *lite.WendyComMessage) error {
 	return err
 }
 func TestBrowserCloudLiteTopologyEncryptedReporter(t *testing.T) {
+	oldNormal, oldSetup, oldHandshake, oldRead := browserTopologyTimeout, browserLiteSetupBudget, browserLiteHandshakeBudget, browserLiteReadBudget
+	defer func() {
+		browserTopologyTimeout, browserLiteSetupBudget, browserLiteHandshakeBudget, browserLiteReadBudget = oldNormal, oldSetup, oldHandshake, oldRead
+	}()
+	browserTopologyTimeout = 250 * time.Millisecond
+	browserLiteSetupBudget = 800 * time.Millisecond
+	browserLiteHandshakeBudget = 700 * time.Millisecond
+	browserLiteReadBudget = 1000 * time.Millisecond
 	for _, enabled := range []bool{false, true} {
 		t.Run(fmt.Sprint(enabled), func(t *testing.T) {
 			session, _ := setup(t, nil)
@@ -224,6 +232,9 @@ func TestBrowserCloudLiteTopologyEncryptedReporter(t *testing.T) {
 				defer raw.Close()
 				raw.SetDeadline(time.Now().Add(5 * time.Second))
 				conn := tls.Server(raw, config)
+				if enabled {
+					time.Sleep(350 * time.Millisecond)
+				}
 				if err := conn.Handshake(); err != nil {
 					deviceDone <- err
 					return
@@ -261,6 +272,9 @@ func TestBrowserCloudLiteTopologyEncryptedReporter(t *testing.T) {
 				state := lite.WendyComNetState_WENDY_COM_NET_OFF
 				if enabled {
 					state = lite.WendyComNetState_WENDY_COM_NET_RUNNING
+				}
+				if enabled {
+					time.Sleep(550 * time.Millisecond)
 				}
 				page := &lite.WendyComNetTopologyPage{Tenant: tenant[:], Device: id[:], RuntimeAvailable: enabled, Partial: enabled, CapturedAtUnixMs: time.Now().UnixMilli(), Status: &lite.WendyComNetStatus{State: state, Desired: &lite.WendyComNetConfig{Enabled: enabled, Ble: true}}}
 				if enabled {

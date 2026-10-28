@@ -11,7 +11,9 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-func (c *WendyLiteClient) NetTopology(ctx context.Context) (*pb.LocalMeshTopology, error) {
+func (c *WendyLiteClient) NetTopology(parent context.Context) (*pb.LocalMeshTopology, error) {
+	ctx, cancel := context.WithTimeout(parent, litetopology.AggregateBudget)
+	defer cancel()
 	stop := context.AfterFunc(ctx, func() { _ = c.Close() })
 	defer stop()
 	return litetopology.Read(ctx, func(ctx context.Context, params *lite.WendyComNetTopologyParams) (*lite.WendyComNetTopologyPage, error) {
