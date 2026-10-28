@@ -1,4 +1,26 @@
 import Foundation
+import CoreTransferable
+import UniformTypeIdentifiers
+
+/// Prepare the archive only when the system requests it for sharing.
+struct SiteShare: Transferable, Sendable {
+    let store: SiteStore
+    let id: UUID
+    let name: String
+    let onFailure: @MainActor @Sendable (any Error) -> Void
+
+    static var transferRepresentation: some TransferRepresentation {
+        FileRepresentation(exportedContentType: .data) { item in
+            do {
+                return SentTransferredFile(try await item.store.shareArchive(id: item.id))
+            } catch {
+                await item.onFailure(error)
+                throw error
+            }
+        }
+        .suggestedFileName { SiteStore.shareFilename($0.name) }
+    }
+}
 
 /// V1 stores a manifest and USDZ. V2 adds a bounded visual reference map, tied
 /// to the exact model bytes and revision. Neither format contains credentials.

@@ -61,15 +61,17 @@ struct RobotLensCalibrationView: View {
     @State private var message = "Keep Go2 stationary. Show the whole checkerboard to its front camera."
     @State private var pattern: RobotCalibrationPattern?
     @State private var exporting = false
+    @State private var showingHelp = false
 
     var body: some View {
         NavigationStack {
+            Group {
+            #if os(macOS)
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     Text("Go2 needs a lens measurement").font(.title2.bold())
                     Text("The wide-angle lens bends straight lines. Wendy needs to measure that distortion before it can compare this camera with your room scan. Capture starts automatically; keep Go2 stationary.")
                     Text("Move a flat checkerboard through the centre and edges of the camera view. Tilt it left/right and up/down, and vary its distance. Hold it still briefly at each position.")
-                    #if os(macOS)
                     HStack(alignment: .top, spacing: 20) {
                         VStack(alignment: .leading, spacing: 10) {
                             preview
@@ -78,11 +80,6 @@ struct RobotLensCalibrationView: View {
                         }.frame(maxWidth: .infinity)
                         RobotCheckerboard().frame(width: 210)
                     }
-                    #else
-                    RobotCheckerboard().frame(maxHeight: 460)
-                    Text("Face this screen toward Go2, or use the saved pattern on another flat screen.")
-                    preview.frame(maxHeight: 140)
-                    #endif
                     HStack {
                         Text(saved ? "Calibration complete" : validating ? "Checking calibration…" : "\(count) views captured").font(.headline).monospacedDigit()
                         if processing { ProgressView().controlSize(.small) }
@@ -95,7 +92,12 @@ struct RobotLensCalibrationView: View {
                     Text(saved || failed || validating || (lastSolvedRevision > 0 && progress.coverageReady && progress.detection >= 3) ? message : progress.nextStep)
                         .font(.headline).foregroundStyle(saved ? Color.green : .primary)
                         .fixedSize(horizontal: false, vertical: true)
-                    if !saved { Text("Keep going until all three checks pass. The app will show Calibration complete and save the result automatically.").font(.callout).foregroundStyle(.secondary) }
+                    if !saved {
+                        Text(validating
+                             ? "No new views are captured during this check. You can lower the phone while it finishes."
+                             : "Keep going until all three checks pass. The app will show Calibration complete and save the result automatically.")
+                            .font(.callout).foregroundStyle(.secondary)
+                    }
                     if let mode = samples.mode { Text(mode.label).font(.caption).foregroundStyle(.secondary) }
                     HStack {
                         Button("Save checkerboard…", systemImage: "square.and.arrow.down") {
@@ -107,22 +109,115 @@ struct RobotLensCalibrationView: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }.padding(20)
             }
+            #else
+            mobileContent
+            #endif
+            }
             .navigationTitle("Go2 Lens Calibration")
+            #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+            #endif
             .toolbar {
+                #if os(iOS)
+                ToolbarItem(placement: .cancellationAction) {
+                    Menu {
+                        Button("Help", systemImage: "questionmark.circle") { showingHelp = true }
+                        Button("Save checkerboard…", systemImage: "square.and.arrow.down") {
+                            do { pattern = try RobotCalibrationPattern(); exporting = true }
+                            catch { message = error.localizedDescription }
+                        }
+                    } label: { Label("Calibration options", systemImage: "ellipsis.circle") }
+                }
+                #endif
                 ToolbarItem(placement: .confirmationAction) {
-                    Button(saved ? "Target removed — Continue" : "Cancel") { dismiss() }
+                    Button(saved ? "Continue" : "Cancel") { dismiss() }
                 }
             }
         }
         #if os(macOS)
         .frame(width: 760, height: 680)
+        #else
+        .preferredColorScheme(.light)
         #endif
         .interactiveDismissDisabled(processing)
+        .sheet(isPresented: $showingHelp) { help }
         .fileExporter(isPresented: $exporting, document: pattern, contentType: .png, defaultFilename: "Go2-calibration-checkerboard") { result in
             if case .failure(let error) = result { message = error.localizedDescription }
         }
         .onDisappear { if let session { model.endLensCalibration(session, completed: saved) } }
         .task { await observe() }
+    }
+
+    private var guidance: String {
+        saved || failed || validating || (lastSolvedRevision > 0 && progress.coverageReady && progress.detection >= 3)
+            ? message : progress.nextStep
+    }
+
+    // Keep the target outside the scrolling guidance so its border cannot
+    // disappear beneath the navigation bar while samples are being captured.
+    private var mobileContent: some View {
+        GeometryReader { geometry in
+            let landscape = geometry.size.width > geometry.size.height
+            Group {
+                if landscape {
+                    HStack(spacing: 16) {
+                        RobotCheckerboard().frame(width: min(geometry.size.width * 0.4, (geometry.size.height - 24) * 0.75))
+                        mobileStatus
+                    }
+                } else {
+                    VStack(spacing: 12) {
+                        RobotCheckerboard().frame(height: min(360, geometry.size.height * 0.46))
+                            .frame(maxWidth: .infinity)
+                        mobileStatus
+                    }
+                }
+            }.padding(12)
+        }.background(.white)
+    }
+
+    private var mobileStatus: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 12) {
+                    preview.frame(width: 112, height: 63)
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            Text(saved ? "Calibration complete" : validating ? "Checking lens…" : "\(count) views captured")
+                                .font(.headline).monospacedDigit()
+                            if processing { ProgressView().controlSize(.small) }
+                        }
+                        if let mode = samples.mode { Text(mode.label).font(.caption).foregroundStyle(.secondary) }
+                    }
+                }
+                VStack(alignment: .leading, spacing: 4) {
+                    check("12+ different views", complete: count >= 12)
+                    check("Image coverage", complete: progress.coverageReady)
+                    check("Lens validated", complete: saved)
+                }
+                Text(guidance).font(.callout.weight(.medium))
+                    .foregroundStyle(saved ? Color.green : .primary)
+                    .fixedSize(horizontal: false, vertical: true)
+                if validating {
+                    Text("You can lower the phone while the saved views are checked.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }.frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private var help: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    Text("Keep Go2 stationary and face the whole checkerboard toward its front camera. Capture starts automatically.")
+                    Text("Move the pattern through the centre and edges of the camera view. Tilt it left/right and up/down, and vary its distance. Pause at each position. Keep the white border visible.")
+                    Text("The checks show captured views, image coverage, and lens validation. Calibration is saved automatically only when all three pass. Remove the checkerboard before choosing Continue.")
+                    Text("Use Save checkerboard in the options menu to display the pattern on another flat screen or print it. Keep its proportions unchanged.")
+                }.padding()
+            }
+            .navigationTitle("Calibration help")
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showingHelp = false } } }
+        }
     }
 
     private func check(_ title: String, complete: Bool) -> some View {
@@ -133,7 +228,15 @@ struct RobotLensCalibrationView: View {
     private var preview: some View {
         Group {
             if let decoder = model.cameraDecoder { CameraDisplayView(decoder: decoder) }
-            else { Rectangle().fill(.black).overlay { ProgressView("Waiting for camera…") } }
+            else {
+                Rectangle().fill(.black).overlay {
+                    VStack(spacing: 4) {
+                        ProgressView().tint(.white)
+                        Text("Waiting for video").font(.caption2).foregroundStyle(.white)
+                            .multilineTextAlignment(.center)
+                    }.padding(4)
+                }
+            }
         }.aspectRatio(16 / 9, contentMode: .fit).clipShape(RoundedRectangle(cornerRadius: 10))
     }
 
@@ -142,6 +245,9 @@ struct RobotLensCalibrationView: View {
             let token = try model.beginLensCalibration()
             session = token; capturing = true
             while !Task.isCancelled {
+                if showingHelp || exporting {
+                    try await Task.sleep(for: .milliseconds(350)); continue
+                }
                 guard let frame = try model.lensCalibrationFrame(token), frame.isFresh(at: .now) else {
                     message = "Waiting for a fresh Go2 camera frame."
                     try await Task.sleep(for: .milliseconds(350)); continue
@@ -157,7 +263,7 @@ struct RobotLensCalibrationView: View {
                             if count >= 12 && progress.coverageReady && progress.revision >= lastSolvedRevision + 3 {
                                 lastSolvedRevision = progress.revision
                                 validating = true
-                                message = "Checking the lens against separate views. The live preview will keep updating."
+                                message = "Checking \(count) captured views. The live preview will keep updating."
                                 do {
                                     let lens = try await engine.solve(width: frame.width, height: frame.height, codec: frame.codec)
                                     try Task.checkCancellation()

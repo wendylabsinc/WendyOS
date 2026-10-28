@@ -7,10 +7,14 @@ import (
 )
 
 type trackedView struct {
+	at    time.Time
 	pose  Pose
 	cells map[[3]int]bool
 	fits  []RegistrationFit
 }
+
+const localizationViewMaxAge = 30 * time.Second
+
 type PoseTracker struct {
 	views  []trackedView
 	lastAt time.Time
@@ -36,10 +40,16 @@ func compatiblePose(a, b PoseCandidate) bool {
 // view requires both new geometry and a changed viewpoint. Replaying packets
 // cannot make an ambiguous position become confident.
 func (t *PoseTracker) Update(pose Pose, cloud SurfaceCloud, fits []RegistrationFit, now time.Time) TrackingResult {
-	if !t.lastAt.IsZero() && (now.Before(t.lastAt) || now.Sub(t.lastAt) > 30*time.Second) {
+	if !t.lastAt.IsZero() && now.Before(t.lastAt) {
 		t.views = nil
 	}
 	t.lastAt = now
+	// Age each view from its original acquisition. Continuous failed matches
+	// and replayed accumulated packets must not keep old evidence alive.
+	for len(t.views) > 0 && now.Sub(t.views[0].at) >= localizationViewMaxAge {
+		t.views[0] = trackedView{}
+		t.views = t.views[1:]
+	}
 	cells := map[[3]int]bool{}
 	for _, p := range cloud.Surfaces {
 		cells[[3]int{int(math.Round(p.Position.X / .15)), int(math.Round(p.Position.Y / .15)), int(math.Round(p.Position.Z / .15))}] = true
@@ -78,7 +88,7 @@ func (t *PoseTracker) Update(pose Pose, cloud SurfaceCloud, fits []RegistrationF
 		independent = novel >= .20 && (pose.Position.Distance(last.Position) >= .20 || math.Abs(math.Remainder(pose.Yaw-last.Yaw, 2*math.Pi)) >= .18)
 	}
 	if independent && len(cells) >= 24 {
-		t.views = append(t.views, trackedView{pose, cells, append([]RegistrationFit(nil), fits...)})
+		t.views = append(t.views, trackedView{at: now, pose: pose, cells: cells, fits: append([]RegistrationFit(nil), fits...)})
 		if len(t.views) > 4 {
 			t.views = t.views[len(t.views)-4:]
 		}

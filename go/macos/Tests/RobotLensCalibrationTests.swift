@@ -169,6 +169,55 @@ private func measuredRobotLens() -> SiteCameraLens {
     #expect(progress.nextStep.contains("Tilt"))
 }
 
+@Test func phoneCalibrationMarksOnlyRecordedPositions() {
+    var progress = ScreenLensProgress()
+    #expect(ScreenLensSide.allCases.allSatisfy { !progress.hasSample(toward: $0) })
+    #expect(progress.phoneMotion == .showPattern)
+    progress = ScreenLensProgress(count: 12, detection: 4, revision: 12, coverageReady: false,
+                                  coverage: 0.2, minX: 0.4, maxX: 0.6, minY: 0.4, maxY: 0.6)
+    #expect(progress.phoneMotion == .position(.left))
+    progress.minX = 0.2
+    #expect(progress.hasSample(toward: .left))
+    #expect(progress.phoneMotion == .position(.right))
+    progress.maxX = 0.8
+    #expect(progress.phoneMotion == .position(.top))
+    progress.minY = 0.2
+    #expect(progress.phoneMotion == .position(.bottom))
+    progress.maxY = 0.8
+    #expect(ScreenLensSide.allCases.allSatisfy { progress.hasSample(toward: $0) })
+    // Four positions alone do not establish enough image coverage.
+    #expect(progress.phoneMotion == .closer)
+    #expect(!progress.shouldSolve(after: 0))
+    progress.coverageReady = true
+    #expect(progress.phoneMotion == .sideEdges)
+    progress.revision = 14
+    #expect(progress.phoneMotion == .topBottomEdges)
+    progress.detection = 1
+    #expect(progress.phoneMotion == .closer)
+    progress.detection = 2
+    #expect(progress.phoneMotion == .inward)
+    progress.detection = 0
+    #expect(progress.phoneMotion == .showPattern)
+}
+
+@Test func phoneCalibrationKeepsSolvingWhenRetainedSampleCountIsFull() {
+    var progress = ScreenLensProgress(count: 30, detection: 4, revision: 30, coverageReady: true)
+    #expect(!progress.shouldSolve(after: 30))
+    progress.revision = 32
+    #expect(!progress.shouldSolve(after: 30))
+    progress.revision = 33
+    #expect(progress.shouldSolve(after: 30))
+    // Replacements can lose an earlier edge sample. Do not keep it checked.
+    progress.coverageReady = false
+    progress.minX = 0.45
+    #expect(!progress.hasSample(toward: .left))
+    #expect(!progress.shouldSolve(after: 30))
+    progress.coverageReady = true
+    progress.count = 11
+    #expect(!progress.shouldSolve(after: 0))
+    #expect(!progress.shouldSolve(after: 100))
+}
+
 @Test func fullCircleSearchKeepsItsChosenDirection() {
     var search = RobotPositionSearch()
     search.start(now: .now)

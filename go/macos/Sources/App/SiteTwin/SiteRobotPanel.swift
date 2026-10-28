@@ -753,6 +753,7 @@ struct SiteRobotRotationPrompt: ViewModifier {
 
 struct SiteRobotStatus: View {
     @ObservedObject var model: SiteRobotMapModel
+    var showsDetails = true
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 6) {
@@ -760,7 +761,7 @@ struct SiteRobotStatus: View {
                 Text(model.statusLabel).font(.caption)
                 if model.connecting { ProgressView().controlSize(.small) }
             }
-            if let message = model.reading?.message, !message.isEmpty,
+            if showsDetails, let message = model.reading?.message, !message.isEmpty,
                message != "Live LiDAR and odometry.", message != "Route ready", message != model.statusLabel {
                 Text(message).font(.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -854,5 +855,10 @@ struct SiteRobotLocalizationControls: View {
                     .buttonStyle(.borderedProminent)
             }
         }
+        Button("Calibrate camera", systemImage: "camera.aperture") {
+            model.showLensCalibration = true
+        }
+        .buttonStyle(.bordered)
+        .disabled(model.handle == 0 || model.reading?.moving == true || model.lensCalibrating)
     }
 }

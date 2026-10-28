@@ -2,6 +2,7 @@ import Foundation
 import CoreGraphics
 import CoreMedia
 import CoreVideo
+import CoreImage
 import VideoToolbox
 import Synchronization
 
@@ -59,15 +60,34 @@ final class H264CalibrationFrames: @unchecked Sendable {
         var enabled = false
         var explicitlyEnabled = false
         var owners: Set<UUID> = []
+        var colorOwners: Set<UUID> = []
         var generation: UInt64 = 0
         var pending = false
         var latest: CameraCalibrationFrame?
+        var latestColor: SiteCameraColorFrame?
     }
     private struct Sample: @unchecked Sendable { let value: CMSampleBuffer }
     private let state = Mutex(State())
     private let queue = DispatchQueue(label: "dev.wendy.calibration-frames", qos: .userInitiated)
+    private let colorContext = CIContext(options: [.cacheIntermediates: false])
 
     var latest: CameraCalibrationFrame? { state.withLock { $0.latest } }
+    var latestColor: SiteCameraColorFrame? { state.withLock { $0.latestColor } }
+    func acquireColor() -> UUID {
+        let token = UUID()
+        state.withLock { current in
+            current.colorOwners.insert(token)
+            Self.updateEnabled(&current)
+        }
+        return token
+    }
+    func releaseColor(_ token: UUID) {
+        state.withLock { current in
+            current.colorOwners.remove(token)
+            if current.colorOwners.isEmpty { current.latestColor = nil }
+            Self.updateEnabled(&current)
+        }
+    }
     func setEnabled(_ enabled: Bool) {
         state.withLock { current in
             current.explicitlyEnabled = enabled
@@ -89,16 +109,17 @@ final class H264CalibrationFrames: @unchecked Sendable {
         }
     }
     private static func updateEnabled(_ current: inout State) {
-        let enabled = current.explicitlyEnabled || !current.owners.isEmpty
+        let enabled = current.explicitlyEnabled || !current.owners.isEmpty || !current.colorOwners.isEmpty
         guard current.enabled != enabled else { return }
         current.enabled = enabled
         current.generation &+= 1
         current.latest = nil
+        current.latestColor = nil
         current.pending = false
     }
     var isEnabled: Bool { state.withLock { $0.enabled } }
     func reset() {
-        state.withLock { $0.generation &+= 1; $0.latest = nil; $0.pending = false }
+        state.withLock { $0.generation &+= 1; $0.latest = nil; $0.latestColor = nil; $0.pending = false }
     }
     func accept(_ buffer: CMSampleBuffer, sequence: UInt64, received: Date) {
         let generation = state.withLock { current -> UInt64? in
@@ -124,7 +145,17 @@ final class H264CalibrationFrames: @unchecked Sendable {
             let status = VTDecompressionSessionDecodeFrame(session, sampleBuffer: sample.value, flags: [], infoFlagsOut: nil) { [self] status, _, image, _, _ in
                 guard status == noErr, let image,
                       let frame = CameraCalibrationFrame.luma(image, received: received, sequence: sequence) else { return }
-                state.withLock { if $0.enabled && $0.generation == generation { $0.latest = frame } }
+                let wantsColor = state.withLock { !$0.colorOwners.isEmpty && $0.generation == generation }
+                let ciImage = wantsColor ? CIImage(cvPixelBuffer: image) : nil
+                let color = ciImage.flatMap { colorContext.createCGImage($0, from: $0.extent) }
+                state.withLock {
+                    if $0.enabled && $0.generation == generation {
+                        $0.latest = frame
+                        if !$0.colorOwners.isEmpty, let color {
+                            $0.latestColor = SiteCameraColorFrame(image: color, received: received, sequence: sequence)
+                        }
+                    }
+                }
             }
             if status == noErr { VTDecompressionSessionWaitForAsynchronousFrames(session) }
         }

@@ -41,7 +41,9 @@ struct NativeSiteView: View {
             AnyView(SiteAutomaticAlignmentView(model: model, site: site, gatewayID: gatewayID,
                 enabled: automaticAlignmentEnabled && scenePhase == .active && alignment == nil && !pairing && !editing,
                 worker: automaticAlignment))
-        }, alignmentStatuses: automaticAlignmentEnabled && scenePhase == .active && alignment == nil ? automaticAlignment.statuses : [:]) { sourceID in
+        }, alignmentStatuses: automaticAlignmentEnabled && scenePhase == .active && alignment == nil ? automaticAlignment.statuses : [:], colorCapture: { sourceIDs in
+            AnyView(SiteCameraColorCapture(model: model, sourceIDs: sourceIDs))
+        }) { sourceID in
             if let feed = model.cameraFeeds.first(where: { $0.camera.stableID == sourceID }) {
                 SiteCameraPreview(model: model, feed: feed).id(feed.id)
             }
@@ -82,7 +84,8 @@ struct NativeSiteView: View {
         return model.cameraFeeds.compactMap { feed in
             guard !feed.camera.stableID.isEmpty, groups[feed.camera.stableID]?.count == 1 else { return nil }
             return SiteFeed(id: feed.camera.stableID, name: feed.camera.name,
-                            lastReceivedAt: feed.lastVideoReceivedAt, connected: feed.running, activity: { [weak feed] in
+                            lastReceivedAt: feed.lastVideoReceivedAt, connected: feed.running,
+                            colorSource: feed.camera.thermal ? nil : feed.colorSource, activity: { [weak feed] in
                                 (feed?.lastVideoReceivedAt, feed?.running == true)
                             })
         }
@@ -217,5 +220,43 @@ private struct SiteCameraPreview: View {
         guard feed.running else { return feed.error == nil ? "Paused" : "Camera unavailable" }
         guard let received = feed.lastVideoReceivedAt else { return "Waiting for video…" }
         return (0...5).contains(now.timeIntervalSince(received)) ? "Receiving video" : "No recent video"
+    }
+}
+
+/// A twin owns its color subscriptions independently of the selected preview.
+private struct SiteCameraColorCapture: View {
+    @ObservedObject var model: AppModel
+    let sourceIDs: [String]
+    var body: some View {
+        ForEach(model.cameraFeeds.filter { sourceIDs.contains($0.camera.stableID) && !$0.camera.thermal }) { feed in
+            SiteCameraColorFeedCapture(model: model, feed: feed)
+        }
+    }
+}
+
+private struct SiteCameraColorFeedCapture: View {
+    @ObservedObject var model: AppModel
+    @ObservedObject var feed: CameraFeed
+    @Environment(\.scenePhase) private var scenePhase
+
+    var body: some View {
+        Color.clear.frame(width: 0, height: 0)
+            .task(id: "\(model.deviceSession)/\(scenePhase)") {
+                guard scenePhase == .active else { return }
+                let session = model.deviceSession
+                var ownedStream: UInt64 = 0
+                var nextAttempt = Date.distantPast
+                defer {
+                    if ownedStream != 0, feed.stream == ownedStream { model.pauseCamera(feed, manually: false) }
+                }
+                while !Task.isCancelled, session == model.deviceSession {
+                    if feed.running { nextAttempt = .distantPast }
+                    if !feed.running, !feed.manuallyPaused, Date() >= nextAttempt {
+                        nextAttempt = Date().addingTimeInterval(10)
+                        ownedStream = await model.playOwnedCamera(feed, inline: true)
+                    }
+                    do { try await Task.sleep(for: .seconds(1)) } catch { return }
+                }
+            }
     }
 }

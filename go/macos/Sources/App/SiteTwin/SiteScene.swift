@@ -8,6 +8,8 @@ public struct SiteScene: View {
     let modelURL: URL
     let site: Site
     let cameraGeometry: [UUID: SiteCameraGeometry]
+    let colorSources: [UUID: SiteCameraColorSource]
+    let colorStatus: ([UUID: String]) -> Void
     let placingCamera: UUID?
     let select: (UUID) -> Void
     let place: (UUID, SitePoint) -> Void
@@ -21,6 +23,8 @@ public struct SiteScene: View {
         modelURL: URL,
         site: Site,
         cameraGeometry: [UUID: SiteCameraGeometry] = [:],
+        colorSources: [UUID: SiteCameraColorSource] = [:],
+        colorStatus: @escaping ([UUID: String]) -> Void = { _ in },
         placingCamera: UUID?,
         select: @escaping (UUID) -> Void,
         place: @escaping (UUID, SitePoint) -> Void,
@@ -33,6 +37,8 @@ public struct SiteScene: View {
         self.modelURL = modelURL
         self.site = site
         self.cameraGeometry = cameraGeometry
+        self.colorSources = colorSources
+        self.colorStatus = colorStatus
         self.placingCamera = placingCamera
         self.select = select
         self.place = place
@@ -44,11 +50,13 @@ public struct SiteScene: View {
     }
 
     public var body: some View {
-        TimelineView(.animation(minimumInterval: 0.25, paused: !fog.enabled)) { context in
+        TimelineView(.animation(minimumInterval: 0.25, paused: !fog.enabled && colorSources.isEmpty)) { context in
             SceneSurface(
                 modelURL: modelURL,
                 site: site,
                 cameraGeometry: cameraGeometry,
+                colorSources: colorSources,
+                colorStatus: colorStatus,
                 placingCamera: placingCamera,
                 select: select,
                 place: place,
@@ -61,6 +69,13 @@ public struct SiteScene: View {
             )
             .accessibilityLabel("3D model of \(site.name)")
         }
+        .task(id: colorSources.values.map(\.id).sorted { $0.uuidString < $1.uuidString }) {
+            let leases = colorSources.values.map { ($0, $0.acquire()) }
+            defer { for (source, lease) in leases { source.release(lease) } }
+            while !Task.isCancelled {
+                do { try await Task.sleep(for: .seconds(60)) } catch { return }
+            }
+        }
     }
 }
 
@@ -68,6 +83,8 @@ private struct SceneSurface {
     var modelURL: URL
     var site: Site
     var cameraGeometry: [UUID: SiteCameraGeometry]
+    var colorSources: [UUID: SiteCameraColorSource]
+    var colorStatus: ([UUID: String]) -> Void
     var placingCamera: UUID?
     var select: (UUID) -> Void
     var place: (UUID, SitePoint) -> Void
@@ -93,8 +110,11 @@ private struct SceneSurface {
         var selection = SCNNode()
         var lastCameras: [SiteCamera]?
         var lastCameraGeometry: [UUID: SiteCameraGeometry] = [:]
+        var lastMarkerScale: Float?
         var lastRobot: SiteRobotRenderState?
         let fogRenderer = SiteFogRenderer()
+        var colorRenderers: [UUID: SiteCameraColorRenderer] = [:]
+        var lastColorStatus: [UUID: String] = [:]
         var lastFogSummary: SiteFogSummary?
 
         init(_ parent: SceneSurface) { self.parent = parent }
@@ -151,7 +171,32 @@ private struct SceneSurface {
             model.scale = SCNVector3(scale, scale, scale)
             frameOverviewIfNeeded()
             updateRobot()
-            let summary = fogRenderer.update(model: model, configuration: parent.fog, robot: parent.robot)
+            colorRenderers = colorRenderers.filter { parent.colorSources[$0.key] != nil }
+            var activeColors: [SiteCameraColorRenderer] = []
+            var statuses: [UUID: String] = [:]
+            for id in parent.colorSources.keys.sorted(by: { $0.uuidString < $1.uuidString }) {
+                guard activeColors.count < 8 else {
+                    statuses[id] = "Eight cameras are already contributing color."
+                    continue
+                }
+                let renderer = colorRenderers[id] ?? SiteCameraColorRenderer()
+                colorRenderers[id] = renderer
+                if renderer.update(model: model, revision: parent.site.modelRevision,
+                    source: parent.colorSources[id], geometry: parent.cameraGeometry[id], device: view.device, now: Date()) {
+                    activeColors.append(renderer)
+                }
+                statuses[id] = renderer.status
+            }
+            if lastColorStatus != statuses {
+                lastColorStatus = statuses
+                let currentStatuses = statuses
+                DispatchQueue.main.async { [weak self] in
+                    guard let self, self.lastColorStatus == currentStatuses else { return }
+                    self.parent.colorStatus(currentStatuses)
+                }
+            }
+            let summary = fogRenderer.update(model: model, configuration: parent.fog, robot: parent.robot,
+                colors: activeColors)
             if summary != lastFogSummary {
                 lastFogSummary = summary
                 let configuration = parent.fog
@@ -166,9 +211,11 @@ private struct SceneSurface {
             let currentGeometry = parent.cameraGeometry.filter {
                 $0.value.pose.isCurrent(revision: parent.site.modelRevision, now: Date())
             }
-            guard lastCameras != parent.site.cameras || lastCameraGeometry != currentGeometry else { return }
+            guard lastCameras != parent.site.cameras || lastCameraGeometry != currentGeometry || lastMarkerScale != scale else { return }
             lastCameras = parent.site.cameras
             lastCameraGeometry = currentGeometry
+            lastMarkerScale = scale
+            SCNTransaction.flush()
             markers.childNodes.forEach { $0.removeFromParentNode() }
             for camera in parent.site.cameras {
                 let reported = parent.cameraGeometry[camera.id]
@@ -180,6 +227,10 @@ private struct SceneSurface {
                 let node = SCNNode(geometry: geometry)
                 node.name = "sensor:\(camera.id.uuidString)"
                 node.position = SCNVector3(position.x, position.y, position.z)
+                if let current {
+                    node.simdPosition = SiteCameraWallPlacement.displayPosition(
+                        node.simdPosition, forward: SIMD3<Float>(current.pose.forward), in: model)
+                }
                 markers.addChildNode(node)
                 if let current, let rays = current.lens?.boundaryRays {
                     // Two metres is a drawing length, not sensor range or visible
@@ -357,6 +408,48 @@ private struct SceneSurface {
                 tap(at: gesture.location(in: view), immediate: true)
             }
         #endif
+    }
+}
+
+/// Keeps camera annotations clear of nearby RoomPlan walls. This is a display
+/// adjustment only; localization and persisted calibration retain the fitted pose.
+@MainActor
+enum SiteCameraWallPlacement {
+    static func displayPosition(_ position: SIMD3<Float>, forward: SIMD3<Float>, in model: SCNNode) -> SIMD3<Float> {
+        let clearance: Float = 0.09 // Eight-centimetre marker plus one centimetre.
+        let maximumCorrection: Float = 0.5
+        var result = position
+        var nearest = Float.infinity
+        model.enumerateChildNodes { wall, _ in
+            // RoomPlan's WallN meshes use local +Z for the room-facing surface.
+            // Do not attach cameras to furniture, doors or unclassified meshes.
+            guard let name = wall.name, name.hasPrefix("Wall"),
+                  !name.dropFirst(4).isEmpty, name.dropFirst(4).allSatisfy(\.isNumber),
+                  wall.geometry != nil else { return }
+            let normal = simd_normalize(SIMD3<Float>(wall.convertVector(SCNVector3(0, 0, 1), to: nil)))
+            guard abs(normal.y) < 0.2, simd_dot(normal, forward) > 0.2 else { return }
+            let surface = SIMD3<Float>(wall.convertPosition(SCNVector3(0, 0, wall.boundingBox.max.z), to: nil))
+            let distance = simd_dot(position - surface, normal)
+            guard distance < clearance, distance >= -maximumCorrection else { return }
+            // Intersect the actual mesh rather than its bounding box, preserving
+            // openings and avoiding attachment above a partial-height wall.
+            let start = wall.convertPosition(SCNVector3(position + normal * (maximumCorrection + clearance)), from: nil)
+            let end = wall.convertPosition(SCNVector3(position - normal * 0.01), from: nil)
+            let hits = wall.hitTestWithSegment(from: start, to: end, options: [
+                SCNHitTestOption.backFaceCulling.rawValue: false,
+                SCNHitTestOption.clipToZRange.rawValue: false,
+                SCNHitTestOption.searchMode.rawValue: SCNHitTestSearchMode.all.rawValue,
+            ])
+            for hit in hits where simd_dot(simd_normalize(SIMD3<Float>(hit.worldNormal)), normal) > 0.9 {
+                let candidate = SIMD3<Float>(hit.worldCoordinates) + normal * clearance
+                let correction = simd_distance(position, candidate)
+                if correction < nearest {
+                    nearest = correction
+                    result = candidate
+                }
+            }
+        }
+        return result
     }
 }
 

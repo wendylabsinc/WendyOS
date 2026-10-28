@@ -20,6 +20,22 @@ final class CameraFeed: ObservableObject, Identifiable {
     private(set) var manuallyPaused = false
     private var startedAt = Date.distantPast
     private var startAttempts = 0
+    lazy var colorSource = SiteCameraColorSource(frame: { [weak self] in
+        guard let self, self.running, !self.camera.thermal else { return nil }
+        if let image = self.jpeg, let received = self.jpegReceivedAt {
+            return SiteCameraColorFrame(image: image, received: received, sequence: self.jpegSequence)
+        }
+        return self.decoder.calibrationFrames.latestColor
+    }, acquire: { [weak self] in
+        self?.decoder.calibrationFrames.acquireColor() ?? UUID()
+    }, release: { [weak self] token in
+        self?.decoder.calibrationFrames.releaseColor(token)
+    }, unavailableReason: { [weak self] in
+        guard let self else { return "Camera unavailable." }
+        if self.manuallyPaused { return "Camera paused. Resume its video to add color." }
+        if let error = self.error { return PresentedFailure(error).message }
+        return self.running ? nil : "Starting camera…"
+    })
 
     func shouldAutoStart(at now: Date) -> Bool {
         guard camera.thermal, !manuallyPaused else { return false }

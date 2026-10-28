@@ -61,15 +61,26 @@ type Observations struct {
 // Timing changes invalidate the old map; a new packet must pass all checks.
 func (o *Observations) SetArrivalTiming(enabled bool) {
 	o.AllowArrivalTime = enabled
-	o.UsingArrivalTime = false
-	o.CloudAt = time.Time{}
+	o.ClearCloud("Waiting for a new LiDAR packet after changing timing mode.")
 	o.CloudReceived = time.Time{}
 	o.CloudCapture = 0
+}
+
+// ClearCloud discards the client's cached scan after a continuity break. It
+// cannot reset Unitree's accumulated map; the next packet may contain old voxels.
+func (o *Observations) ClearCloud(message string) {
+	o.UsingArrivalTime = false
+	o.TimingUnavailable = false
+	o.CloudAt = time.Time{}
+	// Keep the capture/arrival high-water marks so clearing the cache does
+	// not let a replayed packet establish fresh observations.
 	o.Grid = Grid{}
+	o.LocalNavigationSamples = nil
 	o.Landmarks = nil
 	o.Surfaces = SurfaceCloud{}
+	o.FloorHeight = 0
 	o.FloorFault = ""
-	o.Fault = "Waiting for a new LiDAR packet after changing timing mode."
+	o.Fault = message
 }
 
 func Fresh(stamp, now time.Time) bool {

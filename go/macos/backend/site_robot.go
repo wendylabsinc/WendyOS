@@ -220,6 +220,7 @@ func (r *SiteRobot) receiveObservationLocked(topic string, raw []byte, binary bo
 			r.localizations = nil
 			r.frame = ""
 			r.observed.Pose = sitenav.Pose{}
+			r.observed.ClearCloud("Waiting for a new LiDAR packet after Go2's pose changed.")
 		}
 		if r.moving {
 			r.stopLocked()

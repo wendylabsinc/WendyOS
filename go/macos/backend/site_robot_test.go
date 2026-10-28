@@ -19,6 +19,12 @@ func TestSiteRobotRejectedPoseDoesNotEraseContinuity(t *testing.T) {
 		t.Run(kind, func(t *testing.T) {
 			r, _ := readySiteRobot()
 			previous := r.observed.Pose
+			r.observed.Landmarks = []sitenav.Point{{X: 1, Y: 2}}
+			r.observed.Surfaces = sitenav.SurfaceCloud{Surfaces: []sitenav.Surface{{Position: sitenav.Vertex{X: 1, Y: 2, Z: .5}}}}
+			r.observed.LocalNavigationSamples = []sitenav.Vertex{{X: 1, Y: 2, Z: .5}}
+			r.observed.CloudReceived = previous.Received
+			r.observed.CloudCapture = float64(previous.Captured.UnixNano()) / 1e9
+			cloudCapture := r.observed.CloudCapture
 			r.poseHistory = []sitenav.Pose{previous}
 			now := previous.Received.Add(20 * time.Millisecond)
 			received, capture := now, now
@@ -47,10 +53,29 @@ func TestSiteRobotRejectedPoseDoesNotEraseContinuity(t *testing.T) {
 				if r.frame != "" || r.poseEpoch != 1 || !r.observed.Pose.Received.IsZero() {
 					t.Fatal("discontinuity retained alignment")
 				}
+				if !r.observed.CloudAt.IsZero() || len(r.observed.Grid.Floor) != 0 || len(r.observed.Landmarks) != 0 || len(r.observed.Surfaces.Surfaces) != 0 || len(r.observed.LocalNavigationSamples) != 0 {
+					t.Fatal("discontinuity retained the old scan")
+				}
+				if r.observed.CloudReceived != previous.Received || r.observed.CloudCapture != cloudCapture {
+					t.Fatal("clearing the scan erased replay protection")
+				}
+				// Recovering odometry alone must not make the pre-jump scan ready.
+				next := now.Add(20 * time.Millisecond)
+				raw, _ = json.Marshal(map[string]any{"topic": sitenav.PoseTopic, "data": map[string]any{
+					"position": position, "imu_state": map[string]any{"quaternion": []float64{1, 0, 0, 0}},
+					"stamp": map[string]any{"sec": next.Unix(), "nanosec": next.Nanosecond()},
+				}})
+				r.receiveObservationLocked(sitenav.PoseTopic, raw, false, next, next)
+				if r.observed.Pose.Received.IsZero() || r.observed.MeasurementsReady(next) == nil {
+					t.Fatal("fresh odometry revived the pre-jump scan")
+				}
 				return
 			}
 			if r.frame != "site/revision" || r.poseEpoch != 0 || r.observed.Pose != previous || len(r.poseHistory) != 1 {
 				t.Fatal("rejected packet erased or renewed accepted pose")
+			}
+			if r.observed.CloudAt.IsZero() || len(r.observed.Surfaces.Surfaces) != 1 {
+				t.Fatal("transient pose rejection cleared the accepted scan")
 			}
 			if !r.Snapshot().Pose {
 				t.Fatal("fresh last-known pose flickered off")

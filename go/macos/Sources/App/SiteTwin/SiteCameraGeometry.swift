@@ -10,6 +10,10 @@ public struct SiteCameraLens: Codable, Sendable, Equatable {
     var note: String
     var captureMode: String
 
+    var alignmentResidualLimit: Double {
+        (measured ? 2.5 : 5) * Double(max(width, height)) / Double(WS_ALIGNMENT_REFERENCE_SIZE)
+    }
+
     var isValid: Bool {
         (1...8192).contains(width) && (1...8192).contains(height)
         && [fx, fy, cx, cy].allSatisfy(\.isFinite) && fx > 0 && fy > 0
@@ -140,7 +144,7 @@ extension GoClient {
 extension GoClient {
     func saveCameraAlignment(session: UInt64, sourceID: String, expectedRevision: UInt64, result: SiteLocalizationResult) async throws {
         guard let revision = result.pose.modelRevision, result.lens.isValid,
-              result.pose.isCurrent(revision: revision, now: Date()), result.inliers >= Int(!result.lens.measured ? WS_MIN_ESTIMATED_INLIERS : (result.fittedLens ? WS_MIN_LENS_INLIERS : WS_MIN_POSE_INLIERS)), result.residual.isFinite, result.residual <= (result.lens.measured ? 2.5 : 5) else {
+              result.pose.isCurrent(revision: revision, now: Date()), result.inliers >= Int(!result.lens.measured ? WS_MIN_ESTIMATED_INLIERS : (result.fittedLens ? WS_MIN_LENS_INLIERS : WS_MIN_POSE_INLIERS)), result.residual.isFinite, result.residual <= result.lens.alignmentResidualLimit else {
             throw SiteLocalizationError.invalidResult
         }
         try await perform {

@@ -3,6 +3,7 @@
 #include <opencv2/calib3d.hpp>
 #include <opencv2/imgproc.hpp>
 #include <cassert>
+#include <chrono>
 #include <iostream>
 // Render a raw distorted sensor image from an ideal pinhole image. Each output
 // pixel is independently mapped through the inverse camera model.
@@ -34,6 +35,27 @@ int main(){
  for(auto&v:noisyUV)v+=random.gaussian(.15);
  auto noisy=WSSolveCamera(noisyXYZ.data(),noisyUV.data(),int(points.size()),640,480,nullptr);
  assert(noisy.success&&std::abs(noisy.fx-570)<15&&noisy.rms<2);
+ // Preserve the same geometric evidence when only capture resolution and
+ // pixel units change, including the move from 640x480 to 1600x1200.
+ auto resolutionUV=uv;
+ for(size_t i=0;i<points.size();++i){
+  resolutionUV[i*2]+=1.6*std::sin(i*.73);
+  resolutionUV[i*2+1]+=1.6*std::cos(i*.91);
+ }
+ cv::setRNGSeed(431);
+ auto reference=WSSolveCamera(xyz.data(),resolutionUV.data(),int(points.size()),640,480,known);
+ assert(reference.success);
+ for(double scale:{.5,1.25,2.5}){
+  auto scaledUV=resolutionUV;for(auto&pixel:scaledUV)pixel*=scale;
+  double scaledLens[9];std::copy(known,known+9,scaledLens);
+  for(int i=0;i<4;++i)scaledLens[i]*=scale;
+  cv::setRNGSeed(431);
+  auto scaled=WSSolveCamera(xyz.data(),scaledUV.data(),int(points.size()),int(640*scale),int(480*scale),scaledLens);
+  std::cout<<"Resolution "<<scale<<": success="<<scaled.success<<" inliers="<<scaled.inliers<<" rms="<<scaled.rms<<std::endl;
+  assert(scaled.success&&scaled.inliers>=reference.inliers*.95);
+  assert(std::abs(scaled.rms/scale-reference.rms)<.15);
+  for(int axis=0;axis<3;++axis)assert(std::abs(scaled.world_from_camera[12+axis]-reference.world_from_camera[12+axis])<.02);
+ }
  // Sparse, well-distributed correspondences should be judged by their
  // geometry and withheld-point accuracy, not an arbitrary sixty-point floor.
  for(int count:{17,21}){
@@ -173,6 +195,8 @@ int main(){
  // detection and calibration together, including rejection of repeated views.
  auto screen=WSScreenLensCreate();assert(screen);
  auto curvedScreen=WSScreenLensCreate();assert(curvedScreen);int curvedAccepted=0;
+ auto wideScreen=WSScreenLensCreate();assert(wideScreen);
+ auto flatScreen=WSScreenLensCreate();assert(flatScreen);
  cv::Mat board(480,360,CV_8U,cv::Scalar(255));
  for(int y=0;y<10;++y)for(int x=0;x<7;++x)if((x+y)%2==0)cv::rectangle(board,cv::Rect((x+1)*40,(y+1)*40,40,40),cv::Scalar(0),-1);
  cv::Mat targetK=(cv::Mat_<double>(3,3)<<570,0,320,0,570,240,0,0,1);
@@ -191,6 +215,23 @@ int main(){
   cv::GaussianBlur(view,view,cv::Size(3,3),.4);
   auto rawView=distort(view,targetK,barrelD);
   curvedAccepted=WSScreenLensAdd(curvedScreen,rawView.data,640,480);
+  // Independently render the Go2's 1280x720 mode, covering its wider frame.
+  cv::Mat wideK=(cv::Mat_<double>(3,3)<<855,0,640,0,855,360,0,0,1);
+  double wideU=240+(i%3)*400,wideV=200+((i/3)%3)*160;
+  cv::Mat wideCentre=(cv::Mat_<double>(3,1)<<(wideU-640)*z/855,(wideV-360)*z/855,z);
+  cv::Mat wideTranslation=wideCentre-matrix*offset;
+  cv::projectPoints(outer,rotation,wideTranslation,wideK,cv::Mat(),destination);
+  cv::Mat wideIdeal;
+  cv::warpPerspective(board,wideIdeal,cv::getPerspectiveTransform(source,destination),cv::Size(1280,720),cv::INTER_LINEAR,cv::BORDER_CONSTANT,cv::Scalar(150));
+  auto wide=distort(wideIdeal,wideK,barrelD);
+  assert(WSScreenLensAdd(wideScreen,wide.data,1280,720)>=0);
+  // Image coverage alone must not make front-facing views a calibration.
+  double frontU=120+(i%5)*100,frontV=130+((i/5)%3)*110,frontZ=27;
+  cv::Mat frontTranslation=(cv::Mat_<double>(3,1)<<(frontU-320)*frontZ/570-2.5,(frontV-240)*frontZ/570-4,frontZ);
+  cv::projectPoints(outer,cv::Vec3d(),frontTranslation,targetK,cv::Mat(),destination);
+  cv::Mat front;
+  cv::warpPerspective(board,front,cv::getPerspectiveTransform(source,destination),cv::Size(640,480),cv::INTER_LINEAR,cv::BORDER_CONSTANT,cv::Scalar(150));
+  assert(WSScreenLensAdd(flatScreen,front.data,640,480)>=0);
   accepted=WSScreenLensAdd(screen,view.data,640,480);assert(accepted>=0);
   const auto capturedProgress=WSScreenLensGetProgress(screen);
   assert(capturedProgress.count==accepted);
@@ -201,12 +242,23 @@ int main(){
  }
  auto coverageProgress=WSScreenLensGetProgress(screen);
  assert(coverageProgress.count>=12&&coverageProgress.coverage_ready&&coverageProgress.coverage>=.4);
+ auto solveStarted=std::chrono::steady_clock::now();
  auto measured=WSScreenLensSolve(screen);
+ std::cout<<"Screen solve seconds="<<std::chrono::duration<double>(std::chrono::steady_clock::now()-solveStarted).count()<<std::endl;
  std::cout<<"Screen calibration: views="<<accepted<<" success="<<measured.success<<" reason="<<measured.reason<<" fx="<<measured.fx<<" rms="<<measured.rms<<std::endl;
  assert(accepted>=12&&measured.success&&std::abs(measured.fx-570)<20&&measured.rms<1);
  auto curvedMeasured=WSScreenLensSolve(curvedScreen);
  std::cout<<"Barrel calibration: views="<<curvedAccepted<<" success="<<curvedMeasured.success<<" reason="<<curvedMeasured.reason<<" fx="<<curvedMeasured.fx<<" rms="<<curvedMeasured.rms<<std::endl;
  assert(curvedAccepted>=12&&curvedMeasured.success&&std::abs(curvedMeasured.fx-570)<20&&curvedMeasured.rms<1);
+ const auto wideMeasured=WSScreenLensSolve(wideScreen);
+ std::cout<<"1280x720 calibration: success="<<wideMeasured.success<<" reason="<<wideMeasured.reason<<" fx="<<wideMeasured.fx<<" rms="<<wideMeasured.rms<<std::endl;
+ assert(wideMeasured.success&&std::abs(wideMeasured.fx-855)<30&&std::abs(wideMeasured.cx-640)<12&&wideMeasured.rms<1.5);
+ const auto flatProgress=WSScreenLensGetProgress(flatScreen);
+ assert(flatProgress.count>=12&&flatProgress.coverage_ready);
+ const auto flatMeasured=WSScreenLensSolve(flatScreen);
+ std::cout<<"Front-facing calibration rejected: reason="<<flatMeasured.reason<<std::endl;
+ assert(!flatMeasured.success);
+ WSScreenLensDestroy(wideScreen);WSScreenLensDestroy(flatScreen);
  // Check independent rays across the frame; individual polynomial coefficients
  // can compensate for each other despite small image error.
  cv::Mat measuredK=(cv::Mat_<double>(3,3)<<curvedMeasured.fx,0,curvedMeasured.cx,0,curvedMeasured.fy,curvedMeasured.cy,0,0,1);

@@ -8,14 +8,17 @@ public struct SiteFeed: Identifiable {
     public var name: String
     public var lastReceivedAt: Date?
     public var connected: Bool
+    public var colorSource: SiteCameraColorSource?
     private var activity: (@MainActor () -> (Date?, Bool))?
 
     public init(id: String, name: String, lastReceivedAt: Date? = nil, connected: Bool = false,
+                colorSource: SiteCameraColorSource? = nil,
                 activity: (@MainActor () -> (Date?, Bool))? = nil) {
         self.id = id
         self.name = name
         self.lastReceivedAt = lastReceivedAt
         self.connected = connected
+        self.colorSource = colorSource
         self.activity = activity
     }
 
@@ -40,12 +43,15 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
     let calibrate: ((StoredSite, SiteCamera) -> Void)?
     let automaticAlignment: ((StoredSite, Bool) -> AnyView)?
     let alignmentStatuses: [String: String]
+    let colorCapture: (([String]) -> AnyView)?
     let robotSession: UInt64
     let robotGatewayName: String
     // Telemetry is observed by the scene and controls, never by the menus.
     @State private var robots = SiteRobotMapModel()
     @State private var fog = SiteFogConfiguration()
     @State private var fogSummary = SiteFogSummary()
+    @State private var cameraColorEnabled = false
+    @State private var cameraColorStatuses: [UUID: String] = [:]
     #if os(iOS)
     @State private var showingRobotControls = false
     @State private var showingMobileCameras = false
@@ -98,6 +104,7 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
         calibrate: ((StoredSite, SiteCamera) -> Void)? = nil,
         automaticAlignment: ((StoredSite, Bool) -> AnyView)? = nil,
         alignmentStatuses: [String: String] = [:],
+        colorCapture: (([String]) -> AnyView)? = nil,
         @ViewBuilder preview: @escaping (String) -> Preview
     ) {
         self.gatewayID = gatewayID
@@ -111,6 +118,7 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
         self.calibrate = calibrate
         self.automaticAlignment = automaticAlignment
         self.alignmentStatuses = alignmentStatuses
+        self.colorCapture = colorCapture
         self.preview = preview
     }
 
@@ -163,6 +171,9 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
             }
         }
         .background {
+            if cameraColorEnabled, let current, let colorCapture {
+                colorCapture(current.site.cameras.filter { $0.gatewayID == gatewayID }.map(\.sourceID))
+            }
             if let current, let automaticAlignment {
                 automaticAlignment(current, placingCamera != nil || scanning || busy || choosingCamera || importing)
             }
@@ -214,6 +225,7 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
                     controls()
                     if current != nil {
                         Divider()
+                        Toggle("Camera color", isOn: $cameraColorEnabled)
                         Toggle("Fog of war", isOn: $fog.enabled)
                         if fog.enabled {
                             Button("Reset exploration", systemImage: "arrow.counterclockwise") { fog.reset = UUID() }
@@ -240,6 +252,7 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
                 }
                 controls()
                 if current != nil {
+                    cameraColorControls
                     SiteFogControls(configuration: $fog, summary: fogSummary)
                 }
                 ForEach(notices, id: \.self) { notice in
@@ -375,6 +388,16 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
                 }
             }
             if let current {
+                if let store {
+                    ShareLink(
+                        item: SiteShare(store: store, id: current.id, name: current.site.name) { cause in
+                            report(cause, message: "The digital twin could not be shared. Try again.")
+                        },
+                        preview: SharePreview(current.site.name, image: Image(systemName: "building.2"))
+                    ) {
+                        Label("Share Digital Twin…", systemImage: "square.and.arrow.up")
+                    }
+                }
                 Button("Export Site", systemImage: "square.and.arrow.up") {
                     actions.submit { await exportSite(current.id) }
                 }
@@ -410,6 +433,38 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
         }
     }
 
+    private func colorSources(_ site: Site) -> [UUID: SiteCameraColorSource] {
+        guard cameraColorEnabled, placingCamera == nil else { return [:] }
+        var result: [UUID: SiteCameraColorSource] = [:]
+        for camera in site.cameras where camera.gatewayID == gatewayID {
+            if let source = feeds.first(where: { $0.id == camera.sourceID })?.colorSource { result[camera.id] = source }
+        }
+        return result
+    }
+
+    private var cameraColorControls: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Toggle("Camera color", isOn: $cameraColorEnabled).toggleStyle(.switch).fixedSize()
+            if cameraColorEnabled, let current {
+                let cameras = current.site.cameras
+                let contributing = cameraColorStatuses.values.filter { $0.hasPrefix("Live camera color") }.count
+                Text("\(contributing) of \(cameras.count) cameras contributing").font(.caption)
+                ForEach(cameras) { camera in
+                    Text("\(SiteCameraLabel(name: camera.name, sourceID: camera.sourceID).title): \(colorStatus(camera))")
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
+                if cameras.isEmpty { Text("Add cameras to this twin to color the model.").font(.caption) }
+            }
+        }
+    }
+
+    private func colorStatus(_ camera: SiteCamera) -> String {
+        guard camera.gatewayID == gatewayID else { return "Connect to this camera's gateway." }
+        guard let feed = feeds.first(where: { $0.id == camera.sourceID }) else { return "Camera unavailable on this gateway." }
+        guard feed.colorSource != nil else { return "This feed does not provide visual color." }
+        return cameraColorStatuses[camera.id] ?? "Waiting for camera…"
+    }
+
     private func workspace(_ current: StoredSite) -> some View {
         GeometryReader { geometry in
             SiteRobotRenderHost(model: robots) { robotRender in
@@ -417,6 +472,8 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
                     modelURL: current.modelURL,
                     site: current.site,
                     cameraGeometry: cameraGeometry(current.site),
+                    colorSources: colorSources(current.site),
+                    colorStatus: { cameraColorStatuses = $0 },
                     placingCamera: placingCamera,
                     select: { selectedCamera = $0; camerasExpanded = false
                         robots.selected = false; showingRobotControls = false
@@ -448,6 +505,9 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
                     fog: fogConfiguration(current, robot: robotRender),
                     fogSummary: { fogSummary = $0 }
                 )
+                #if os(iOS)
+                .ignoresSafeArea(.container, edges: .bottom)
+                #endif
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             #if os(macOS)
@@ -474,9 +534,7 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
                         }.buttonStyle(.bordered)
                     }
                 }
-                .padding(12)
-                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 24))
-                .padding(12)
+                .padding(24)
                 .onChange(of: showingRobotControls) { _, visible in
                     if visible { showingMobileCameras = false }
                 }
@@ -516,6 +574,9 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
 
     private func cameraPanel(_ current: StoredSite, size: CGSize) -> some View {
         VStack(alignment: .leading, spacing: 10) {
+            #if os(iOS)
+            cameraColorControls
+            #endif
             #if os(macOS)
             if selectedCamera == nil {
                 SiteRobotCameraHost(model: robots, height: min(210, size.height * 0.3))
@@ -540,6 +601,9 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
                         .clipShape(RoundedRectangle(cornerRadius: 10))
                     Text(geometryDescription(camera, now: Date())).font(.caption)
                         .fixedSize(horizontal: false, vertical: true)
+                    if cameraColorEnabled {
+                        Text(colorStatus(camera)).font(.caption).foregroundStyle(.secondary)
+                    }
                     if let status = alignmentStatuses[camera.sourceID] {
                         Text(status).font(.caption).foregroundStyle(.secondary)
                     }

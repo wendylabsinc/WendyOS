@@ -100,6 +100,7 @@ extern "C" int32_t WSMapImport(void*p,const float*data,int32_t count){
 }
 static WSLocalization solveCameraFit(const double*xyz,const double*uv,int32_t n,int32_t w,int32_t h,const double*known,bool estimated,bool refineFocal=false){
  WSLocalization out={};out.reason=1;out.matches=n;
+ const double pixelScale=double(std::max(w,h))/WS_ALIGNMENT_REFERENCE_SIZE;
  const int minimum=estimated?WS_MIN_ESTIMATED_INLIERS:(known?WS_MIN_POSE_INLIERS:WS_MIN_LENS_INLIERS);
  if(n<minimum||n>1800||!imageSize(w,h)||!finiteValues(xyz,n*3)||!finiteValues(uv,n*2)||(known&&!finiteValues(known,9)))return out;
  try{
@@ -109,11 +110,11 @@ static WSLocalization solveCameraFit(const double*xyz,const double*uv,int32_t n,
   cv::Mat distortion=cv::Mat::zeros(5,1,CV_64F);if(known)for(int i=0;i<5;++i)distortion.at<double>(i)=known[i+4];
   std::vector<double> guesses=known?std::vector<double>{known[0]}:std::vector<double>{.45*w,.6*w,.8*w,1.0*w,1.4*w,2.0*w};
   for(double f:guesses){cv::Mat K=(cv::Mat_<double>(3,3)<<f,0,known?known[2]:w/2.0,0,known?known[1]:f,known?known[3]:h/2.0,0,0,1),r,t,mask;
-   bool ok=cv::solvePnPRansac(points,pixels,K,distortion,r,t,false,estimated?3000:1500,(known&&!estimated)?3.0:6.0,.999,mask,cv::SOLVEPNP_EPNP);
+   bool ok=cv::solvePnPRansac(points,pixels,K,distortion,r,t,false,estimated?3000:1500,((known&&!estimated)?3.0:6.0)*pixelScale,.999,mask,cv::SOLVEPNP_EPNP);
    if(ok&&mask.rows>=best&&mask.rows>0){
     std::vector<cv::Point3f> supported;std::vector<cv::Point2f> observed;
     for(int i=0;i<mask.rows;++i){int index=mask.at<int>(i);supported.push_back(points[index]);observed.push_back(pixels[index]);}
-    double error=reprojection(supported,observed,K,distortion,r,t);
+    double error=reprojection(supported,observed,K,distortion,r,t,8*pixelScale);
     // Sparse sets often give several focal guesses the same consensus count.
     // Choose the better geometric fit instead of depending on guess order.
     if(mask.rows>best||error<bestError){best=mask.rows;bestError=error;bestK=K;bestR=r;bestT=t;bestMask=mask;}
@@ -149,8 +150,8 @@ static WSLocalization solveCameraFit(const double*xyz,const double*uv,int32_t n,
     fitR=rotations[0];fitT=translations[0];
    }
    if(!validLens(fitK,fitD,w,h))return out;
-   double training=reprojection(train,trainUV,fitK,fitD,fitR,fitT,estimated?16:8),validation=reprojection(hold,holdUV,fitK,fitD,fitR,fitT,estimated?16:8);
-   out.reason=5;out.rms=validation;if(training>(estimated?5:2.5)||validation>(estimated?5:2.5))return out;
+   double training=reprojection(train,trainUV,fitK,fitD,fitR,fitT,(estimated?16:8)*pixelScale),validation=reprojection(hold,holdUV,fitK,fitD,fitR,fitT,(estimated?16:8)*pixelScale);
+   out.reason=5;out.rms=validation;if(training>(estimated?5:2.5)*pixelScale||validation>(estimated?5:2.5)*pixelScale)return out;
    validationSum+=validation*validation*hold.size();validationCount+=int(hold.size());
    if(fold==0){K=fitK;D=fitD;r=fitR;t=fitT;}
    else{
@@ -203,7 +204,7 @@ static WSLocalization solveCamera(const double*xyz,const double*uv,int32_t n,int
  best=candidates.front();
  for(auto&fit:candidates)if(fit.inliers>best.inliers||(fit.inliers==best.inliers&&fit.rms<best.rms))best=fit;
  for(auto&fit:candidates){
-  if(fit.inliers<std::ceil(best.inliers*.9)||fit.rms>std::max(best.rms*1.5,best.rms+.5))continue;
+  if(fit.inliers<std::ceil(best.inliers*.9)||fit.rms>std::max(best.rms*1.5,best.rms+.5*double(std::max(w,h))/WS_ALIGNMENT_REFERENCE_SIZE))continue;
   double distance=0,trace=0;
   for(int row=0;row<3;++row){
    double delta=fit.world_from_camera[12+row]-best.world_from_camera[12+row];distance+=delta*delta;
@@ -333,34 +334,40 @@ extern "C" WSScreenLensProgress WSScreenLensGetProgress(void*p){
  }catch(...){}return out;
 }
 extern "C" WSLocalization WSScreenLensSolve(void*p){
- WSLocalization out={};out.reason=1;if(!p)return out;
+ WSLocalization out={};out.reason=WS_SCREEN_LENS_VIEWS;if(!p)return out;
  try{
   auto&s=*static_cast<ScreenLens*>(p);out.matches=int(s.views.size());if(s.views.size()<12)return out;
   std::vector<cv::Point2f> all,centres;
   for(auto&v:s.views){cv::Point2f centre(0,0);for(auto&q:v){all.push_back(q);centre+=q;}centres.push_back(centre/float(v.size()));}
   std::vector<cv::Point2f> hull;cv::convexHull(all,hull);auto bounds=cv::boundingRect(centres);
-  out.reason=3;if(cv::contourArea(hull)<.4*s.width*s.height||bounds.width<.3*s.width||bounds.height<.3*s.height)return out;
+  out.reason=WS_SCREEN_LENS_COVERAGE;if(cv::contourArea(hull)<.4*s.width*s.height||bounds.width<.3*s.width||bounds.height<.3*s.height)return out;
   auto pattern=screenPattern();cv::Mat firstK,firstD;double totalError=0;int tested=0;
   for(int fold=0;fold<4;++fold){
    std::vector<std::vector<cv::Point2f>> images;std::vector<std::vector<cv::Point3f>> objects;
    for(size_t i=0;i<s.views.size();++i)if(int(i)%4!=fold){images.push_back(s.views[i]);objects.push_back(pattern);}
    cv::Mat K=(cv::Mat_<double>(3,3)<<s.width,0,s.width/2.,0,s.width,s.height/2.,0,0,1),D=cv::Mat::zeros(5,1,CV_64F),sdK,sdPose,errors;
    std::vector<cv::Mat> rotations,translations;
-   int flags=cv::CALIB_USE_INTRINSIC_GUESS|cv::CALIB_FIX_ASPECT_RATIO|cv::CALIB_ZERO_TANGENT_DIST|cv::CALIB_FIX_K3;
-   out.reason=4;
+   // QR avoids repeated SVD solves of the large per-view parameter system.
+   // Keep the uncertainty, independent-view and withheld-point checks below.
+   int flags=cv::CALIB_USE_INTRINSIC_GUESS|cv::CALIB_FIX_ASPECT_RATIO|cv::CALIB_ZERO_TANGENT_DIST|cv::CALIB_FIX_K3|cv::CALIB_USE_QR;
+   out.reason=WS_SCREEN_LENS_FIT;
    double rms=cv::calibrateCamera(objects,images,cv::Size(s.width,s.height),K,D,rotations,translations,sdK,sdPose,errors,flags);
-   if(rms>1.5||!validLens(K,D,s.width,s.height)||!cv::checkRange(sdK)||sdK.at<double>(1)>K.at<double>(1,1)*.05||sdK.at<double>(2)>s.width*.03||sdK.at<double>(3)>s.height*.03)return out;
+   out.rms=rms;
+   if(!std::isfinite(rms)||rms>1.5||!validLens(K,D,s.width,s.height))return out;
    // Require independently tilted views; moving a front-facing screen alone
    // leaves focal length and distance ambiguous.
    double tiltSpread=0;
    for(size_t a=0;a<rotations.size();++a)for(size_t b=0;b<a;++b){cv::Mat A,B;cv::Rodrigues(rotations[a],A);cv::Rodrigues(rotations[b],B);tiltSpread=std::max(tiltSpread,cv::norm(A.col(2)-B.col(2)));}
-   if(tiltSpread<.35)return out;
+   out.reason=WS_SCREEN_LENS_TILT;if(tiltSpread<.35)return out;
+   out.reason=WS_SCREEN_LENS_UNCERTAIN;
+   if(!cv::checkRange(sdK)||sdK.at<double>(1)>K.at<double>(1,1)*.05||sdK.at<double>(2)>s.width*.03||sdK.at<double>(3)>s.height*.03)return out;
+   out.reason=WS_SCREEN_LENS_DISAGREEMENT;
    if(fold==0){firstK=K;firstD=D;}
    else if(std::abs(K.at<double>(0,0)/firstK.at<double>(0,0)-1)>.05||std::abs(K.at<double>(0,2)-firstK.at<double>(0,2))>.03*s.width||std::abs(K.at<double>(1,2)-firstK.at<double>(1,2))>.03*s.height)return out;
    for(size_t i=0;i<s.views.size();++i)if(int(i)%4==fold){
     std::vector<cv::Point3f> train,hold;std::vector<cv::Point2f> trainUV,holdUV;
     for(size_t j=0;j<pattern.size();++j)if(j%4==0){hold.push_back(pattern[j]);holdUV.push_back(s.views[i][j]);}else{train.push_back(pattern[j]);trainUV.push_back(s.views[i][j]);}
-    cv::Mat r,t;out.reason=5;
+    cv::Mat r,t;out.reason=WS_SCREEN_LENS_VALIDATION;
     if(!cv::solvePnP(train,trainUV,K,D,r,t,false,cv::SOLVEPNP_ITERATIVE))return out;
     double error=reprojection(hold,holdUV,K,D,r,t,4);if(error>1.5)return out;
     totalError+=error*error;++tested;
@@ -369,5 +376,5 @@ extern "C" WSLocalization WSScreenLensSolve(void*p){
   out.fx=firstK.at<double>(0,0);out.fy=firstK.at<double>(1,1);out.cx=firstK.at<double>(0,2);out.cy=firstK.at<double>(1,2);
   for(int j=0;j<5;++j)out.distortion[j]=firstD.at<double>(j);
   out.rms=std::sqrt(totalError/tested);out.inliers=int(s.views.size())*54;out.fitted_lens=1;out.reason=0;out.success=1;return out;
- }catch(...){out.reason=6;return out;}
+ }catch(...){out.reason=WS_SCREEN_LENS_INTERNAL;return out;}
 }

@@ -150,7 +150,7 @@ final class H264AnnexBDecoder {
     // MARK: - Access unit -> display layer
 
     private func flushAccessUnit() {
-        guard !currentAU.isEmpty, let formatDescription, !displayLayers.isEmpty else {
+        guard !currentAU.isEmpty, let formatDescription, (!displayLayers.isEmpty || calibrationFrames.isEnabled) else {
             currentAU.removeAll()
             return
         }

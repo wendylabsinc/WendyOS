@@ -58,6 +58,19 @@ Room capture exports RoomPlan's detected geometry without extending furniture
 bounds. Glass can be missing from that capture. Automatic camera alignment does
 not reconstruct missing cabinet surfaces or infer obstacle-free space there.
 
+### Camera color
+
+Enable **Camera color** in the twin settings menu or Cameras sheet on iPhone,
+or beside **Fog of war** on macOS. Up to eight aligned visual cameras can color
+the model together, independently of the selected preview. Per-camera status
+explains missing calibration, stale frames, resolution changes, and unavailable
+feeds. Turning the switch off stops subscriptions owned by the color overlay.
+
+This remains an experimental view-only projection. It uses the saved geometry,
+handles RoomPlan meshes without texture coordinates and nearby mounting-wall
+overlap, and preserves fog. Missing geometry and moving objects can still cause
+projection artifacts. Source models and site exports are unchanged.
+
 ### Fog of war exploration
 
 Open an existing **Site Model** and enable **Fog of war** below the site title.
@@ -122,7 +135,10 @@ are missing, capture them on iPhone; if matching fails, the camera stays unposit
 **Place Manually** remains available in the camera menu. Selecting a positioned
 camera opens its live feed through the app's authenticated Go connection.
 
-**Sites > Export Site** saves the model and placements as a `.wendysite` file.
+**Sites > Share Digital Twin… > AirDrop** sends the model, saved camera placements,
+and visual references as a `.wendysite` file through the system share sheet.
+On the receiving device, use **Sites > Import Model or Site** to open it.
+**Sites > Export Site** saves the same archive to a folder.
 Import that file on the other platform while connected to the same Cloud gateway.
 The file contains no credentials, and importing it creates a separate local copy.
 There is no automatic cross-device site sync. Sites live in Application Support's
@@ -160,12 +176,22 @@ and pose are approximate. The app labels estimates and draws orange cones, while
 measured lenses use green cones. An estimate cannot overwrite a measured lens.
 A measured lens allows pose alignment against a flat surface.
 
+Pixel-error limits refer to a 640-pixel long image edge and scale with capture
+resolution. For example, 5 px at 640×480 is 12.5 px at 1600×1200. Saved RMS
+values remain in the original capture's pixels; metric position and angular
+stability limits do not change with resolution.
+
 Estimated alignment validates each focal-length candidate before choosing one.
 When the references have enough depth variation, it also refines focal length
 and pose together, keeping the principal point centred and distortion zero.
 Comparable fits that differ by more than 30 cm or 10 degrees are rejected as
 distance-ambiguous. Later attempts re-estimate an assumed lens rather than
 locking retries to an earlier guess. A measured lens remains fixed.
+
+Camera markers and viewing cones that intersect a nearby RoomPlan wall are drawn
+on its room-facing surface, with clearance for the marker. This display adjustment
+preserves height and viewing angle, checks the actual mesh so openings stay clear,
+and only applies within 50 cm of a wall. The saved calibration remains unchanged.
 
 On iPhone, **Phone Screen Calibration** shows a 7×10 checkerboard to the fixed
 camera. Move the phone around the camera image and tilt it in both directions.
@@ -794,7 +820,10 @@ iPhone room scan; a phone-height reference map may have little overlap with the
 robot's low view. Rotation search preserves any measured lens while finding the robot.
 
 When rotation search needs a measured lens, it opens a calibration sheet using
-the live stream and a 7-by-10-square checkerboard (6-by-9 inner corners). Save the
+the live stream and a 7-by-10-square checkerboard (6-by-9 inner corners). You can
+also open **Calibrate camera** in Go2's expanded controls without starting a
+rotation search. The preview remains raw video; calibration affects matching.
+The current solver uses Brown–Conrady distortion, not a dedicated fisheye model. Save the
 PNG and display it without stretching on a flat screen, or print it. Keep Go2
 stationary and move the whole target through the image centre and edges, with
 varied tilts and distances. At least 12 distinct fresh views are required; the
@@ -811,12 +840,18 @@ A measured-lens failure never silently retries with assumed intrinsics. A differ
 stream mode needs its own measurement. This corrects lens geometry, but does not
 guarantee a pose when fixed-room reference features are missing or ambiguous.
 
-The matcher retains up to four distinct viewpoints. New evidence requires at
-least 20% novel occupied cells plus 20 cm of translation or about 10 degrees of
+The matcher retains up to four distinct viewpoints, each for at most 30 seconds
+from acquisition. Continuous retries do not extend that lifetime. New evidence
+requires at least 20% novel occupied cells plus 20 cm of translation or about 10 degrees of
 rotation. Repeated accumulated voxel-map packets cannot increase viewpoint
 count. Historical agreement can distinguish alternatives but cannot make a
 geometrically invalid current fit valid. This does not drive the robot to collect
 more views.
+
+A detected pose discontinuity also discards the Mac's cached scan and waits for
+a new LiDAR packet. These resets clear client evidence only. Wendy does not
+currently expose a command to clear Unitree's onboard accumulated voxel map, so
+a new packet may still contain old observations.
 
 Confirming a suggestion saves observed surfaces aligned to the site. The saved
 robot map is bound to the robot, model revision and exact model digest, capped at
@@ -971,3 +1006,9 @@ checkerboard detection and lens solving. Its checklist separates sample count,
 image coverage and final validation, with directional guidance from measured
 checkerboard coverage. At capacity it replaces older samples one at a time;
 it never silently discards the entire collection and resets the counter.
+On iPhone, the complete checkerboard stays fixed above the preview, checks and
+current instruction. Only the status area scrolls; in landscape it sits beside
+the pattern. The options menu contains Help and Save checkerboard. Opening Help
+pauses sample collection. Lens validation also pauses collection while checking
+the saved views. Failed checks distinguish insufficient tilt, uncertain lens
+parameters, disagreement between view groups, and validation-view errors.

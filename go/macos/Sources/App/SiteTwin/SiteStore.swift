@@ -123,6 +123,33 @@ public actor SiteStore {
         return try SiteArchive(site: saved.site, model: model, visualMap: map)
     }
 
+    nonisolated static func shareFilename(_ name: String) -> String {
+        let separators = CharacterSet(charactersIn: "/\\:").union(.controlCharacters)
+        let clean = name.components(separatedBy: separators).joined(separator: "-")
+            .trimmingCharacters(in: .whitespacesAndNewlines.union(CharacterSet(charactersIn: ".")))
+        let stem = String(String.UnicodeScalarView(clean.unicodeScalars.prefix(40)))
+        return (stem.isEmpty ? "Digital Twin" : stem) + ".wendysite"
+    }
+
+    /// Give each transfer its own file so concurrent shares cannot overwrite it.
+    /// Keep it in temporary storage while the system copies it for AirDrop.
+    func shareArchive(id: UUID) throws -> URL {
+        let archive = try archive(id: id)
+        try Task.checkCancellation()
+        let folder = FileManager.default.temporaryDirectory
+            .appendingPathComponent("WendyShare-" + UUID().uuidString, isDirectory: true)
+        do {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            let file = folder.appendingPathComponent(Self.shareFilename(archive.site.name))
+            try archive.data().write(to: file, options: .atomic)
+            try Task.checkCancellation()
+            return file
+        } catch {
+            try? FileManager.default.removeItem(at: folder)
+            throw error
+        }
+    }
+
     /// Imports a copy without overwriting a local site. Placements remain in the
     /// same model revision and gateway identities still require authentication.
     public func importArchive(_ archive: SiteArchive) throws -> StoredSite {

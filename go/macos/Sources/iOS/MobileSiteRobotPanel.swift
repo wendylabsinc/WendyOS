@@ -11,6 +11,9 @@ struct MobileSiteRobotPanel: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var pairing = false
     @State private var expanded = false
+    @State private var sheetDetent: PresentationDetent = .height(320)
+
+    private var showsDetails: Bool { sheetDetent != .height(320) }
 
     // Keep the session owner on the map. Dismissing the controls must not tear
     // down telemetry, discard localization, or restart the robot connection.
@@ -40,23 +43,18 @@ struct MobileSiteRobotPanel: View {
             await model.observe(session: session, site: site, modelURL: modelURL, active: scenePhase == .active)
         }
         .modifier(SiteRobotRotationPrompt(model: model, enabled: !isPresented, onStart: { isPresented = true }))
-        .sheet(isPresented: $isPresented) {
+        .sheet(isPresented: $isPresented, onDismiss: { sheetDetent = .height(320) }) {
             NavigationStack {
                 ScrollView { controlsContent.padding(20) }
                     .navigationTitle("Go2")
                     .navigationBarTitleDisplayMode(.inline)
                     .toolbar {
-                        ToolbarItem(placement: .cancellationAction) {
-                            Button("Stop", systemImage: "stop.fill") { model.stop() }
-                                .buttonStyle(.borderedProminent).tint(.red)
-                                .disabled(model.robots.isEmpty)
-                        }
                         ToolbarItem(placement: .confirmationAction) {
                             Button("Done") { isPresented = false }
                         }
                     }
             }
-            .presentationDetents([.medium, .large])
+            .presentationDetents([.height(320), .medium, .large], selection: $sheetDetent)
             .presentationDragIndicator(.visible)
             .presentationBackgroundInteraction(.enabled(upThrough: .medium))
             .modifier(SiteRobotRotationPrompt(model: model))
@@ -75,35 +73,37 @@ struct MobileSiteRobotPanel: View {
             } else {
                 SiteRobotCameraView(handle: model.handle, onFrame: model.acceptCameraFrame, onDecoder: model.acceptCameraDecoder)
                     .frame(height: 180)
-                if model.robots.count > 1 {
-                    Picker("Robot", selection: $model.serial) {
-                        ForEach(model.robots) { Text($0.name.isEmpty ? $0.serial : $0.name).tag($0.serial) }
-                    }
-                }
-                SiteRobotStatus(model: model)
-                if model.placing {
-                    HStack {
-                        Text(model.anchor == nil ? "Tap the floor beneath Go2." : "Tap directly ahead to set its heading.")
-                            .font(.callout)
-                        Button("Cancel") { model.placing = false; model.anchor = nil }.buttonStyle(.bordered)
-                    }
-                } else {
-                    HStack {
-                        if model.destination != nil {
-                            Button("Move here", systemImage: "location.fill") { model.command(move: true) }
-                                .buttonStyle(.borderedProminent).tint(.green)
-                                .disabled(model.reading?.ready != true || model.reading?.route.isEmpty != false)
+                SiteRobotStatus(model: model, showsDetails: showsDetails)
+                if showsDetails {
+                    if model.robots.count > 1 {
+                        Picker("Robot", selection: $model.serial) {
+                            ForEach(model.robots) { Text($0.name.isEmpty ? $0.serial : $0.name).tag($0.serial) }
                         }
-                    }.buttonStyle(.bordered)
-                }
-                SiteRobotLocalizationControls(model: model)
-                RobotLocalizationDiagnostics(model: model)
-                SiteRobotSupervisionSummary(model: model)
-                DisclosureGroup("Settings and help", isExpanded: $expanded) {
-                    settingsContent
+                    }
+                    if model.placing {
+                        HStack {
+                            Text(model.anchor == nil ? "Tap the floor beneath Go2." : "Tap directly ahead to set its heading.")
+                                .font(.callout)
+                            Button("Cancel") { model.placing = false; model.anchor = nil }.buttonStyle(.bordered)
+                        }
+                    } else {
+                        HStack {
+                            if model.destination != nil {
+                                Button("Move here", systemImage: "location.fill") { model.command(move: true) }
+                                    .buttonStyle(.borderedProminent).tint(.green)
+                                    .disabled(model.reading?.ready != true || model.reading?.route.isEmpty != false)
+                            }
+                        }.buttonStyle(.bordered)
+                    }
+                    SiteRobotLocalizationControls(model: model)
+                    RobotLocalizationDiagnostics(model: model)
+                    SiteRobotSupervisionSummary(model: model)
+                    DisclosureGroup("Settings and help", isExpanded: $expanded) {
+                        settingsContent
+                    }
                 }
             }
-            if let error = model.error, error != model.reading?.message {
+            if showsDetails, let error = model.error, error != model.reading?.message {
                 Text(error).font(.caption).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
             }
         }

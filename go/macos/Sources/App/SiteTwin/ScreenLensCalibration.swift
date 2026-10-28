@@ -30,7 +30,7 @@ actor ScreenLensCalibration {
         try await BlockingWork.run(on: queue) { [handle] in
             let fit = WSScreenLensSolve(handle.pointer)
             guard fit.success != 0 else {
-                throw WendyError(message: fit.reason == 3 ? "Move the screen toward each edge of the camera view." : "Tilt the screen left/right and up/down, and vary its distance. Hold it still briefly at each angle.")
+                throw WendyError(message: Self.failureMessage(reason: fit.reason))
             }
             var raw = fit.distortion
             let distortion = withUnsafeBytes(of: &raw) { Array($0.bindMemory(to: Double.self)) }
@@ -42,6 +42,27 @@ actor ScreenLensCalibration {
             return lens
         }
     }
+
+    nonisolated static func failureMessage(reason: Int32) -> String {
+        switch reason {
+        case Int32(WS_SCREEN_LENS_VIEWS):
+            return "More distinct views are needed. Move and tilt the checkerboard, pausing at each position."
+        case Int32(WS_SCREEN_LENS_COVERAGE):
+            return "More of the camera image needs samples. Move the screen toward the edges, keeping its white border visible."
+        case Int32(WS_SCREEN_LENS_TILT):
+            return "The captured views are too similar in angle. Bring the left edge closer, then the right edge; repeat with the top and bottom edges. Pause at each angle."
+        case Int32(WS_SCREEN_LENS_UNCERTAIN):
+            return "The views do not constrain the lens accurately enough. Add tilted views at different distances, keeping the whole checkerboard visible."
+        case Int32(WS_SCREEN_LENS_DISAGREEMENT):
+            return "Different groups of views give different lens measurements. Keep the pattern flat and unchanged; add sharp views at several angles and distances."
+        case Int32(WS_SCREEN_LENS_FIT):
+            return "The lens model does not fit the captured corners accurately enough. Keep the pattern flat, avoid glare, and pause so each new view is sharp."
+        case Int32(WS_SCREEN_LENS_VALIDATION):
+            return "The lens fit failed on separate validation views. Add sharp, tilted views near the image edges, keeping the whole checkerboard visible."
+        default:
+            return "The lens calculation failed. Cancel and restart calibration. No new calibration was saved."
+        }
+    }
 }
 
 
@@ -50,6 +71,32 @@ struct ScreenLensProgress: Sendable {
     var revision: UInt64 = 0
     var coverageReady = false
     var coverage = 0.0, minX = 0.0, maxX = 0.0, minY = 0.0, maxY = 0.0
+    // These describe positions in the retained samples, not inferred phone
+    // orientation or a percentage of calibration accuracy.
+    func hasSample(toward side: ScreenLensSide) -> Bool {
+        guard count > 0 else { return false }
+        switch side {
+        case .left: return minX <= 0.35
+        case .right: return maxX >= 0.65
+        case .top: return minY <= 0.35
+        case .bottom: return maxY >= 0.65
+        }
+    }
+    var phoneMotion: ScreenLensMotion {
+        if detection == 0 { return .showPattern }
+        if detection == 1 { return .closer }
+        if detection == 2 { return .inward }
+        if !coverageReady {
+            if let missing = ScreenLensSide.allCases.first(where: { !hasSample(toward: $0) }) { return .position(missing) }
+            return .closer
+        }
+        // Advance the demonstration only with accepted samples. Animation time
+        // must never mark an angle as measured or calibration as complete.
+        return (revision / 2).isMultiple(of: 2) ? .sideEdges : .topBottomEdges
+    }
+    func shouldSolve(after revision: UInt64) -> Bool {
+        count >= 12 && coverageReady && self.revision >= revision && self.revision - revision >= 3
+    }
     var nextStep: String {
         if detection == 0 { return "Show the whole checkerboard to Go2 and hold it still until a view is captured." }
         if detection == 1 { return "Bring the checkerboard closer. It is too small in Go2's image to measure accurately." }
@@ -62,5 +109,24 @@ struct ScreenLensProgress: Sendable {
             return "Bring the checkerboard closer and show it near the image corners. More of the image needs to be covered."
         }
         return "Tilt the checkerboard left/right and up/down, and vary its distance. Hold still until another view is captured."
+    }
+}
+
+enum ScreenLensSide: String, CaseIterable, Sendable {
+    case left = "Left", right = "Right", top = "Top", bottom = "Bottom"
+}
+
+enum ScreenLensMotion: Equatable, Sendable {
+    case showPattern, closer, inward, position(ScreenLensSide), sideEdges, topBottomEdges
+
+    var instruction: String {
+        switch self {
+        case .showPattern: return "Face this screen toward the camera. Keep the whole checkerboard visible."
+        case .closer: return "Move the phone closer to the camera. Keep the whole white border visible."
+        case .inward: return "Move the phone back toward the middle of the camera preview."
+        case .position(let side): return "Move the phone toward the \(side.rawValue.lowercased()) of the camera preview."
+        case .sideEdges: return "Bring the left edge closer to the camera, then the right edge. Pause at each angle."
+        case .topBottomEdges: return "Bring the top edge closer to the camera, then the bottom edge. Pause at each angle."
+        }
     }
 }

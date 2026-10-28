@@ -2,12 +2,59 @@ import Foundation
 import Testing
 import simd
 import AVFoundation
+@preconcurrency import SceneKit
 
 #if os(iOS)
 @testable import WendyMobile
 #else
 @testable import WendyDesktop
 #endif
+
+@Suite @MainActor struct CameraWallPlacementTests {
+    private func room() -> SCNScene {
+        let scene = SCNScene()
+        let wall = SCNNode(geometry: SCNBox(width: 2, height: 2, length: 0.16, chamferRadius: 0))
+        wall.name = "Wall0"
+        wall.position.z = -0.08
+        scene.rootNode.addChildNode(wall)
+        SCNTransaction.flush()
+        return scene
+    }
+
+    @Test func clearsWallWithoutChangingHeightOrLateralOffset() {
+        let scene = room()
+        for z: Float in [-0.18, -0.08, 0.04] {
+            let result = SiteCameraWallPlacement.displayPosition(SIMD3(0.2, 0.3, z), forward: SIMD3(0, 0, 1), in: scene.rootNode)
+            #expect(simd_distance(result, SIMD3(0.2, 0.3, 0.09)) < 0.0001)
+        }
+    }
+
+    @Test func leavesClearDistantAndNonWallPositionsAlone() {
+        let scene = room()
+        for position: SIMD3<Float> in [SIMD3(0, 0, 0.5), SIMD3(0, 0, -0.8), SIMD3(0, 2, -0.1), SIMD3(2, 0, -0.1)] {
+            #expect(SiteCameraWallPlacement.displayPosition(position, forward: SIMD3(0, 0, 1), in: scene.rootNode) == position)
+        }
+        let position = SIMD3<Float>(0, 0, -0.1)
+        #expect(SiteCameraWallPlacement.displayPosition(position, forward: SIMD3(0, 0, -1), in: scene.rootNode) == position)
+        scene.rootNode.childNodes[0].name = "Storage0"
+        #expect(SiteCameraWallPlacement.displayPosition(position, forward: SIMD3(0, 0, 1), in: scene.rootNode) == position)
+    }
+
+    @Test func respectsModelRotationAndMetricScale() {
+        let scene = room()
+        let model = SCNNode()
+        scene.rootNode.childNodes.forEach { model.addChildNode($0) }
+        scene.rootNode.addChildNode(model)
+        model.scale = SCNVector3(2, 2, 2)
+        model.eulerAngles.y = .pi / 3
+        model.position = SCNVector3(3, 0, -2)
+        SCNTransaction.flush()
+        let origin = SIMD3<Float>(model.convertPosition(SCNVector3(0.2, 0.3, -0.1), to: nil))
+        let normal = simd_normalize(SIMD3<Float>(model.convertVector(SCNVector3(0, 0, 1), to: nil)))
+        let expected = SIMD3<Float>(model.convertPosition(SCNVector3(0.2, 0.3, 0), to: nil)) + normal * 0.09
+        #expect(simd_distance(SiteCameraWallPlacement.displayPosition(origin, forward: normal, in: model), expected) < 0.0001)
+    }
+}
 
 @Test func cameraFOVUsesCalibrationAndOffCenterPrincipalPoint() throws {
     var lens = SiteCameraLens(width: 640, height: 480, fx: 320, fy: 320, cx: 320, cy: 240,
@@ -195,6 +242,46 @@ private func visualMapFixture(site: Site, model: Data) -> SiteVisualMap {
     for i in 0..<120 { rows[i*131] = Float(i)/100; rows[i*131+2] = 2; rows[i*131+3] = 32 }
     return SiteVisualMap(modelRevision: site.modelRevision, modelSHA256: SiteVisualMap.digest(model),
         capturedAt: Date(), frameCount: 3, landmarks: rows.withUnsafeBytes { Data($0) })
+}
+
+@Test func sharedTwinPreservesModelPlacementsAndVisualReferences() async throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let camera = SiteCamera(gatewayID: "gateway", sourceID: "camera", name: "Entrance",
+                            position: .init(x: 2, y: 3, z: -1))
+    let site = Site(name: "Office / upstairs", cameras: [camera])
+    let model = Data([0x50, 0x4b, 0x03, 0x04, 1])
+    let map = visualMapFixture(site: site, model: model)
+    let store = SiteStore(directory: directory)
+    let saved = try await store.importArchive(SiteArchive(site: site, model: model, visualMap: map))
+    let first = try await store.shareArchive(id: saved.id)
+    defer { try? FileManager.default.removeItem(at: first.deletingLastPathComponent()) }
+    let second = try await store.shareArchive(id: saved.id)
+    defer { try? FileManager.default.removeItem(at: second.deletingLastPathComponent()) }
+    #expect(first != second)
+    #expect(first.lastPathComponent == "Office - upstairs.wendysite")
+    let shared = try SiteArchive(data: Data(contentsOf: first))
+    #expect(shared.site == saved.site)
+    #expect(shared.model == model)
+    #expect(shared.visualMap?.landmarks == map.landmarks)
+    #expect(shared.visualMap?.modelRevision == saved.site.modelRevision)
+    let received = try await store.importArchive(shared)
+    #expect(received.id != saved.id)
+    #expect(received.site.cameras == saved.site.cameras)
+    #expect(try await store.load(id: saved.id).site == saved.site)
+}
+
+@Test func sharedTwinNamesStayWithinOnePortableFilename() {
+    for name in ["../Room\\up:stairs\n", String(repeating: "🏠", count: 200), " . "] {
+        let filename = SiteStore.shareFilename(name)
+        #expect(!filename.contains("/"))
+        #expect(!filename.contains("\\"))
+        #expect(!filename.contains(":"))
+        #expect(!filename.contains("\n"))
+        #expect(filename.utf8.count < 255)
+        #expect(filename.hasSuffix(".wendysite"))
+    }
+    #expect(SiteStore.shareFilename(" . ") == "Digital Twin.wendysite")
 }
 
 @Test func visualReferenceArchiveChecksExactModelAndRevision() throws {

@@ -42,8 +42,10 @@ struct SiteCameraAlignmentView: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
-                    Text(SiteCameraLabel(name: request.camera.name, sourceID: request.camera.sourceID).title).font(.title2.bold())
+                VStack(alignment: .leading, spacing: 20) {
+                    Label(SiteCameraLabel(name: request.camera.name, sourceID: request.camera.sourceID).title, systemImage: "video")
+                        .font(.subheadline.weight(.medium))
+                        .foregroundStyle(.secondary)
                     if !onCameraGateway {
                         Label("Connect to this camera's gateway", systemImage: "network.slash").font(.headline)
                         Text("This camera belongs to a different gateway or the connection has changed. Open its gateway, then choose Calibrate and Align again.")
@@ -53,32 +55,23 @@ struct SiteCameraAlignmentView: View {
                     } else if let feed {
                         AlignmentLivePreview(model: model, feed: feed) { previewReady = true }
                             .frame(maxWidth: .infinity).aspectRatio(4/3, contentMode: .fit)
-                            .background(.black).clipShape(RoundedRectangle(cornerRadius: 12))
-                        Text("Keep the fixed camera still. Alignment uses a measured lens when available. Otherwise it can estimate the view using an assumed lens; estimated direction and FOV are less accurate.")
-                        if let saved {
-                            Label(saved.lens.measured ? "Calibrated alignment saved" : "Estimated alignment saved", systemImage: saved.lens.measured ? "checkmark.circle.fill" : "viewfinder")
-                                .foregroundStyle(saved.lens.measured ? Color.green : Color.orange)
-                            if !saved.lens.measured { Text("Approximate position, direction and FOV. The lens has not been measured.").font(.callout).foregroundStyle(.secondary) }
-                            if let horizontal = saved.lens.horizontalFOV, let vertical = saved.lens.verticalFOV {
-                                Text(String(format: "Field of view %.1f° × %.1f°", horizontal, vertical))
-                            }
-                            Text(String(format: "Direction %.1f° · Tilt %.1f°", saved.pose.yaw, saved.pose.pitch))
-                            Text(String(format: "%d matches · %.2f px validation error", saved.inliers, saved.residual)).font(.caption).foregroundStyle(.secondary)
-                        } else if attemptedAutomaticAlignment {
-                            Button("Retry Automatic Alignment", systemImage: "viewfinder") { actions.submit { await align() } }
-                                .buttonStyle(.borderedProminent).disabled(!loaded || busy)
+                            .background(.black).clipShape(RoundedRectangle(cornerRadius: 20))
+                        alignmentStatus
+                        if !busy, saved == nil, attemptedAutomaticAlignment {
+                            Button("Retry alignment", systemImage: "arrow.clockwise") { actions.submit { await align() } }
+                                .buttonStyle(.borderedProminent).disabled(!loaded)
                         }
-                        #if os(iOS)
-                        Button("Phone Screen Calibration", systemImage: "iphone") { actions.submit { await startScreenCalibration() } }
-                            .buttonStyle(.bordered).disabled(busy)
-                        Text("For better accuracy, show a pattern on this phone to the camera. The room can stay as it is.")
-                            .font(.caption).foregroundStyle(.secondary)
-                        #else
-                        Text("For a measured lens, use Phone Screen Calibration in the iPhone app. The lens calibration is saved to the gateway.")
-                            .font(.caption).foregroundStyle(.secondary)
-                        #endif
-                        if busy { ProgressView("Locating camera in the room…") }
-                        else if !loaded && message == nil { ProgressView("Loading room references…") }
+                        if let saved {
+                            if !saved.lens.measured {
+                                calibrationAction
+                            }
+                            alignmentDetails(saved)
+                        } else if !busy {
+                            DisclosureGroup("Lens calibration") {
+                                calibrationAction.padding(.top, 8)
+                            }
+                            .font(.subheadline)
+                        }
                     } else {
                         Label("Camera unavailable", systemImage: "video.slash").font(.headline)
                         Text("This camera is saved in the room, but the gateway is not currently listing a live feed. Check that it is connected and paired with this gateway.")
@@ -91,15 +84,20 @@ struct SiteCameraAlignmentView: View {
                         if refreshingCamera { ProgressView("Looking for camera…") }
                     }
                     if let message {
-                        Text(message).foregroundStyle(.secondary).textSelection(.enabled)
-                        if saved == nil {
-                            Text("No position was assigned. You can retry with clearer room references, or use Place Manually from the camera menu.")
-                                .font(.caption).foregroundStyle(.secondary)
+                        DisclosureGroup("Details") {
+                            Text(message)
+                                .textSelection(.enabled)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(.top, 8)
                         }
+                        .font(.subheadline).foregroundStyle(.secondary)
                     }
                 }.padding(20)
             }
-            .navigationTitle("Camera Alignment")
+            .navigationTitle("Camera alignment")
+            #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+            #endif
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() }.disabled(busy) } }
         }
         #if os(macOS)
@@ -127,6 +125,79 @@ struct SiteCameraAlignmentView: View {
                 loaded = true
             } catch is CancellationError {} catch { message = error.localizedDescription }
         }
+    }
+
+    private var alignmentStatus: some View {
+        HStack(alignment: .top, spacing: 12) {
+            if busy || (saved == nil && message == nil) {
+                ProgressView().padding(.top, 2)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(loaded ? "Aligning camera…" : "Loading room…").font(.headline)
+                    Text("Keep the camera still.").font(.subheadline).foregroundStyle(.secondary)
+                }
+            } else if let saved {
+                Image(systemName: saved.lens.measured ? "checkmark.circle.fill" : "viewfinder")
+                    .font(.title3)
+                    .foregroundStyle(saved.lens.measured ? Color.green : Color.orange)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(saved.lens.measured ? "Alignment saved" : "Estimated alignment saved")
+                        .font(.headline)
+                    Text(saved.lens.measured ? "Your camera is positioned in the room." : "Position and field of view are approximate.")
+                        .font(.subheadline).foregroundStyle(.secondary)
+                }
+            } else {
+                Image(systemName: "viewfinder").font(.title3).foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Camera not aligned").font(.headline)
+                    Text("Retry alignment or choose Place Manually from the camera menu.")
+                        .font(.subheadline).foregroundStyle(.secondary)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(16)
+        .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 16))
+        .accessibilityElement(children: .combine)
+    }
+
+    private var calibrationAction: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            #if os(iOS)
+            Button {
+                actions.submit { await startScreenCalibration() }
+            } label: {
+                Label("Improve accuracy", systemImage: "iphone")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+            .disabled(busy)
+            Text("Use this phone to calibrate the camera lens.")
+                .font(.caption).foregroundStyle(.secondary)
+            #else
+            Text("To improve accuracy, calibrate the lens in the iPhone app.")
+                .font(.subheadline).foregroundStyle(.secondary)
+            #endif
+        }
+    }
+
+    private func alignmentDetails(_ result: SiteLocalizationResult) -> some View {
+        DisclosureGroup("Alignment details") {
+            VStack(alignment: .leading, spacing: 12) {
+                LabeledContent("Lens", value: result.lens.measured ? "Calibrated" : "Estimated")
+                if let horizontal = result.lens.horizontalFOV, let vertical = result.lens.verticalFOV {
+                    LabeledContent("Field of view", value: String(format: "%.1f° × %.1f°", horizontal, vertical))
+                }
+                LabeledContent("Direction", value: String(format: "%.1f°", result.pose.yaw))
+                LabeledContent("Tilt", value: String(format: "%.1f°", result.pose.pitch))
+                LabeledContent("Matches", value: "\(result.inliers)")
+                LabeledContent("Validation error", value: String(format: "%.2f px", result.residual))
+                if result.lens.measured { calibrationAction }
+            }
+            .padding(.top, 12)
+        }
+        .font(.subheadline)
+        .tint(.secondary)
     }
 
     private func refreshCamera() async {
@@ -167,7 +238,7 @@ struct SiteCameraAlignmentView: View {
             guard model.deviceSession == lensSession else { throw SiteLocalizationError.invalidImage }
             try await GoClient.shared.saveCameraLens(session: lensSession, sourceID: request.camera.sourceID, expectedRevision: lensRevision, lens: lens)
             saved = nil
-            message = "Lens calibration saved. Retry Automatic Alignment to position the camera using this measured lens."
+            message = "Lens calibration saved. Retry alignment to position the camera using the measured lens."
         } catch { message = error.localizedDescription }
     }
 

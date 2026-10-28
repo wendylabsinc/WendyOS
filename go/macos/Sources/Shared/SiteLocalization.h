@@ -10,6 +10,9 @@ extern "C" {
 #define WS_MIN_POSE_INLIERS 12
 #define WS_MIN_ESTIMATED_INLIERS 8
 #define WS_MIN_LENS_INLIERS 16
+// Alignment tolerances are relative to a 640-pixel long image edge. Returned
+// RMS values and intrinsics remain in the original capture's pixel units.
+#define WS_ALIGNMENT_REFERENCE_SIZE 640
 void *WSMapCreate(void);
 void WSMapDestroy(void *map);
 int32_t WSMapCount(void *map);
@@ -32,6 +35,13 @@ WSLocalization WSSolveCameraEstimated(const double *xyz, const double *uv, int32
 void *WSScreenLensCreate(void);
 void WSScreenLensDestroy(void *calibration);
 int32_t WSScreenLensAdd(void *calibration, const uint8_t *gray, int32_t width, int32_t height);
+// Screen calibration failure reasons, separate from room-localization reasons.
+enum {
+ WS_SCREEN_LENS_VIEWS = 1, WS_SCREEN_LENS_COVERAGE = 3,
+ WS_SCREEN_LENS_FIT = 4, WS_SCREEN_LENS_VALIDATION = 5,
+ WS_SCREEN_LENS_INTERNAL = 6, WS_SCREEN_LENS_TILT = 7,
+ WS_SCREEN_LENS_UNCERTAIN = 8, WS_SCREEN_LENS_DISAGREEMENT = 9
+};
 WSLocalization WSScreenLensSolve(void *calibration);
 typedef struct {
  int32_t count, detection, coverage_ready;
