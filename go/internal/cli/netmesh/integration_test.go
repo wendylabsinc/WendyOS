@@ -330,6 +330,9 @@ func TestFullOperatorRouterMultihopTCPFailover(t *testing.T) {
 		found := false
 		for _, m := range node.Snapshot().Devices {
 			if m.Owner != nil && m.Owner.Principal == credentials[1].Device.Principal() && m.Route != nil && m.Route.Prefix.Addr() == credentials[1].Device.MeshAddress() {
+				if m.Device != uuid.Nil || m.AgentPort != 0 || m.AgentTransport != "" || m.Platform != "" || len(m.AppEndpoints) != 0 || len(m.Services) != 0 || len(m.Caps) != 0 {
+					t.Fatalf("operator origin advertised device services on node %d: %+v", i, m)
+				}
 				found = true
 			}
 		}
