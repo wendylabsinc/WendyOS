@@ -8,6 +8,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"math"
 	"math/big"
 	"net"
 	"net/url"
@@ -30,6 +31,7 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
+	"google.golang.org/protobuf/proto"
 )
 
 var liveMarkersStream = appconfig.RecordingStream{Mode: "lightweight", MediaType: "application/protobuf", Schema: "wendy.data.v1.VideoMarkers"}
@@ -81,6 +83,30 @@ func TestAuthorizeDataStream(t *testing.T) {
 	}
 }
 
+func TestLiveSelection(t *testing.T) {
+	sel, err := liveSelection(&agentpbv2.StreamDataRequest{StreamIds: []string{"apps/a/s"}, StreamPrefixes: []string{"_streams/"}, Schemas: []string{"wendy.data.v1.VideoMarkers"}, SendLatest: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sel.StreamIDs) != 1 || len(sel.StreamPrefixes) != 1 || len(sel.Schemas) != 1 || !sel.SendLatest || sel.MaxRateHz != defaultStreamDataRateHz {
+		t.Fatalf("selection: %+v", sel)
+	}
+	for _, rate := range []float32{0.01, 2.5, 1000} {
+		if sel, err = liveSelection(&agentpbv2.StreamDataRequest{MaxRateHz: rate}); err != nil || sel.MaxRateHz != float64(rate) {
+			t.Fatalf("rate %v: %+v %v", rate, sel, err)
+		}
+	}
+	for _, rate := range []float32{-1, 0.001, 1001, float32(math.NaN()), float32(math.Inf(1))} {
+		if _, err = liveSelection(&agentpbv2.StreamDataRequest{MaxRateHz: rate}); status.Code(err) != codes.InvalidArgument {
+			t.Fatalf("rate %v: got %v, want InvalidArgument", rate, err)
+		}
+	}
+	// Any schema an app stream may declare can be selected.
+	if _, err = liveSelection(&agentpbv2.StreamDataRequest{Schemas: []string{strings.Repeat("x", appconfig.MaxRecordingSchemaBytes)}}); err != nil {
+		t.Fatalf("longest app schema: %v", err)
+	}
+}
+
 func TestStreamDataRejectsBadSelection(t *testing.T) {
 	m, err := data.NewManager(t.TempDir())
 	if err != nil {
@@ -91,10 +117,16 @@ func TestStreamDataRejectsBadSelection(t *testing.T) {
 	for i := range tooMany {
 		tooMany[i] = "apps/a/s"
 	}
-	for _, ids := range [][]string{tooMany, {""}, {strings.Repeat("x", maxStreamDataIDBytes+1)}} {
-		err := service.StreamData(&agentpbv2.StreamDataRequest{StreamIds: ids}, newFakeDataRecordStream(localAdminSocketCtx()))
+	long, longSchema := []string{strings.Repeat("x", maxStreamDataIDBytes+1)}, []string{strings.Repeat("x", appconfig.MaxRecordingSchemaBytes+1)}
+	var requests []*agentpbv2.StreamDataRequest
+	for _, ids := range [][]string{tooMany, {""}} {
+		requests = append(requests, &agentpbv2.StreamDataRequest{StreamIds: ids}, &agentpbv2.StreamDataRequest{StreamPrefixes: ids}, &agentpbv2.StreamDataRequest{Schemas: ids})
+	}
+	requests = append(requests, &agentpbv2.StreamDataRequest{StreamIds: long}, &agentpbv2.StreamDataRequest{StreamPrefixes: long}, &agentpbv2.StreamDataRequest{Schemas: longSchema})
+	for _, req := range requests {
+		err := service.StreamData(req, newFakeDataRecordStream(localAdminSocketCtx()))
 		if status.Code(err) != codes.InvalidArgument {
-			t.Fatalf("selection of %d ids: got %v, want InvalidArgument", len(ids), err)
+			t.Fatalf("selection %v: got %v, want InvalidArgument", req, err)
 		}
 	}
 	if m.Live().Subscribed() {
@@ -144,13 +176,66 @@ func TestStreamDataReleasesSubscriptionOnCancel(t *testing.T) {
 	}
 }
 
+// gatedDataRecordStream holds each Send until the test releases it, so the
+// test knows which record the handler is sending while it offers more.
+type gatedDataRecordStream struct {
+	*fakeDataRecordStream
+	release chan struct{}
+}
+
+func (g *gatedDataRecordStream) Send(r *agentpbv2.DataRecord) error {
+	g.records <- r
+	select {
+	case <-g.release:
+		return nil
+	case <-g.ctx.Done():
+		return g.ctx.Err()
+	}
+}
+
+// A viewer is told how many records of a stream it missed while it was busy
+// sending, and receives the newest.
+func TestStreamDataSendsSkipped(t *testing.T) {
+	m, err := data.NewManager(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(localAdminSocketCtx())
+	defer cancel()
+	stream := &gatedDataRecordStream{fakeDataRecordStream: newFakeDataRecordStream(ctx), release: make(chan struct{})}
+	go func() { _ = NewDataService(m).StreamData(&agentpbv2.StreamDataRequest{MaxRateHz: 1000}, stream) }()
+	<-stream.headers
+	record := func(payload string) {
+		t.Helper()
+		if _, err := m.RecordStream("test.app", "", "markers", liveMarkersStream, &recordingpb.Record{Payload: []byte(payload)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	record("1")
+	if r := <-stream.records; string(r.GetPayload()) != "1" || r.GetSkipped() != 0 {
+		t.Fatalf("first: %v", r)
+	}
+	for _, p := range []string{"2", "3", "4"} {
+		record(p)
+	}
+	stream.release <- struct{}{}
+	if r := <-stream.records; string(r.GetPayload()) != "4" || r.GetSkipped() != 2 {
+		t.Fatalf("after a busy send: %v", r)
+	}
+}
+
 // openLiveStream starts StreamData and waits for its headers, after which
 // every accepted record is offered to it.
 func openLiveStream(t *testing.T, client agentpbv2.DataServiceClient, ids ...string) agentpbv2.DataService_StreamDataClient {
 	t.Helper()
+	return openLiveStreamWith(t, client, &agentpbv2.StreamDataRequest{StreamIds: ids})
+}
+
+func openLiveStreamWith(t *testing.T, client agentpbv2.DataServiceClient, req *agentpbv2.StreamDataRequest) agentpbv2.DataService_StreamDataClient {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	t.Cleanup(cancel)
-	stream, err := client.StreamData(ctx, &agentpbv2.StreamDataRequest{StreamIds: ids})
+	stream, err := client.StreamData(ctx, req)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -188,10 +273,10 @@ func dialDataService(t *testing.T, target string, opts ...grpc.DialOption) agent
 	return agentpbv2.NewDataServiceClient(conn)
 }
 
-// An app record reaches a viewer on the agent's local socket, the way an
-// on-device page reads it today, with the stream id, schema and payload the
-// app's stream declared, and a selection keeps other streams out.
-func TestStreamDataOverLocalSocket(t *testing.T) {
+// localDataService serves m on a unix socket, as the agent's local admin
+// socket does, and dials it.
+func localDataService(t *testing.T, m *data.Manager) agentpbv2.DataServiceClient {
+	t.Helper()
 	// Not t.TempDir: unix socket paths are limited to about 100 bytes.
 	dir, err := os.MkdirTemp("", "wds")
 	if err != nil {
@@ -203,12 +288,19 @@ func TestStreamDataOverLocalSocket(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	serveDataService(t, lis, m)
+	return dialDataService(t, "unix://"+path, grpc.WithTransportCredentials(insecure.NewCredentials()))
+}
+
+// An app record reaches a viewer on the agent's local socket, the way an
+// on-device page reads it today, with the stream id, schema and payload the
+// app's stream declared, and a selection keeps other streams out.
+func TestStreamDataOverLocalSocket(t *testing.T) {
 	m, err := data.NewManager(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	serveDataService(t, lis, m)
-	client := dialDataService(t, "unix://"+path, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	client := localDataService(t, m)
 	all := openLiveStream(t, client)
 	selected := openLiveStream(t, client, "apps/test.app/worker/markers")
 
@@ -238,6 +330,58 @@ func TestStreamDataOverLocalSocket(t *testing.T) {
 		if r = recvLive(t, all); string(r.GetPayload()) != want {
 			t.Fatalf("empty selection: got %q, want %q", r.GetPayload(), want)
 		}
+	}
+}
+
+// send_latest starts a viewer with the catalog and the newest record of the
+// streams it selects by prefix and schema, written before it connected.
+func TestStreamDataSendLatestAndCatalog(t *testing.T) {
+	m, err := data.NewManager(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := localDataService(t, m)
+	text := appconfig.RecordingStream{Mode: "lightweight", MediaType: "text/plain"}
+	m.AdvertiseAppStream("test.app", "worker", "markers", liveMarkersStream)
+	m.AdvertiseAppStream("test.app", "worker", "log", text)
+	for _, w := range []struct {
+		stream  string
+		cfg     appconfig.RecordingStream
+		payload string
+	}{{"markers", liveMarkersStream, "old boxes"}, {"markers", liveMarkersStream, "boxes"}, {"log", text, "hello"}} {
+		if _, err := m.RecordStream("test.app", "worker", w.stream, w.cfg, &recordingpb.Record{Payload: []byte(w.payload)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	viewer := openLiveStreamWith(t, client, &agentpbv2.StreamDataRequest{
+		StreamPrefixes: []string{"_streams/", "apps/test.app/"},
+		Schemas:        []string{"wendy.agent.services.v2.DataStreamInfo", "wendy.data.v1.VideoMarkers"},
+		SendLatest:     true,
+	})
+	for _, want := range []string{"_streams/apps/test.app/worker/log", "_streams/apps/test.app/worker/markers"} {
+		r := recvLive(t, viewer)
+		var info agentpbv2.DataStreamInfo
+		if err := proto.Unmarshal(r.GetPayload(), &info); err != nil {
+			t.Fatal(err)
+		}
+		if r.GetStreamId() != want || info.GetState() != agentpbv2.DataStreamInfo_STATE_ACTIVE || info.GetPublisher() != "test.app" {
+			t.Fatalf("catalog: %s %v, want %s", r.GetStreamId(), &info, want)
+		}
+	}
+	if r := recvLive(t, viewer); r.GetStreamId() != "apps/test.app/worker/markers" || string(r.GetPayload()) != "boxes" {
+		t.Fatalf("newest record: %v", r)
+	}
+	// The log stream's schema is not selected; its next record is not sent,
+	// and the next markers record is.
+	if _, err := m.RecordStream("test.app", "worker", "log", text, &recordingpb.Record{Payload: []byte("again")}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.RecordStream("test.app", "worker", "markers", liveMarkersStream, &recordingpb.Record{Payload: []byte("more boxes")}); err != nil {
+		t.Fatal(err)
+	}
+	if r := recvLive(t, viewer); string(r.GetPayload()) != "more boxes" {
+		t.Fatalf("live record after the latest: %v", r)
 	}
 }
 

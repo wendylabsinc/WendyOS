@@ -21,12 +21,14 @@ option go_package = "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2;agent
 // campaigns on a device, not an application programming interface for apps.
 service DataService {
   // Streams accepted application data as it arrives. This first API deliberately
-  // has no history, resume cursor, or gap protocol.
+  // has no history beyond send_latest, no resume cursor, and no gap protocol.
   //
   // Delivery is best effort. The newest record wins per stream: a slow
   // subscriber skips records and never slows a publisher or another stream.
-  // A subscriber sees only records accepted after it subscribed. Response
-  // headers are sent once the subscription is in place.
+  // Apart from send_latest, a subscriber sees only records accepted after it
+  // subscribed. Response headers are sent once the subscription is in place.
+  //
+  // The same stream carries its own catalog: see DataStreamInfo.
   rpc StreamData(StreamDataRequest) returns (stream DataRecord);
 
   // Bounded, durable event inbox. An empty cursor starts at the current tail;
@@ -67,12 +69,31 @@ message DataEventsResponse {
   bool notifications = 4;
 }
 
-// StreamDataRequest selects streams. An empty request selects every stream.
-// Future additive selectors narrow the set further.
+// StreamDataRequest selects streams and says how to deliver them. An empty
+// request selects every stream except the catalog.
+//
+// Ids and prefixes name streams: a stream is selected when it matches any of
+// them, or when the request gives neither. Schemas then keep only the streams
+// whose schema is listed. So stream_prefixes ["apps/<app-id>/"] with schemas
+// ["wendy.data.v1.VideoMarkers"] selects the markers of one app.
 message StreamDataRequest {
   // Exact stream ids. An id that no stream has published yet is not an error:
   // its records arrive once it does.
   repeated string stream_ids = 1;
+  // Stream id prefixes, for example "apps/<app-id>/", or "_streams/" for the
+  // catalog.
+  repeated string stream_prefixes = 2;
+  // Exact payload schemas, for example "wendy.data.v1.VideoMarkers".
+  repeated string schemas = 3;
+  // At most this many records per second of each stream. A stream that is
+  // faster is held back, and a newer record replaces the held one, so the cap
+  // never queues. 0 means the device default, 30. Otherwise 0.01 to 1000.
+  float max_rate_hz = 4;
+  // Start with the newest record of each selected stream, if it is at most
+  // 10 seconds old and at most 256 KiB, so a new viewer sees the current state
+  // at once instead of waiting for the next change. Catalog streams start with
+  // their current entry.
+  bool send_latest = 5;
 }
 
 // One self-describing item on the generic live data stream. timestamp_unix_nanos
@@ -83,12 +104,55 @@ message StreamDataRequest {
 //
 // stream_id is opaque and stable. An application recording stream is
 // "apps/<app-id>/<service>/<stream>", or "apps/<app-id>/<stream>" for an app
-// without a service name.
+// without a service name. Ids that start with "_streams/" are the catalog.
 message DataRecord {
   string stream_id = 1;
   int64 timestamp_unix_nanos = 2;
   string schema = 3;
   bytes payload = 4;
+  // How many records of this stream this subscriber did not receive since its
+  // previous record of the stream, because a newer one replaced them. That is
+  // the delivery rule, not an error.
+  uint64 skipped = 5;
+  // The sensor sample the record describes, when its publisher names one: the
+  // agent's source id, for example "v4l2:/dev/video0", and that source's
+  // sample id, as an episode's camera index numbers it. They come from the
+  // first input reference of the record's envelope (wendy.agent.apps.v1.Record
+  // inputs). Empty for a record that names none, such as every lightweight
+  // record.
+  string source_id = 6;
+  uint64 sample_id = 7;
+}
+
+// DataStreamInfo is the payload of the live catalog, in the way Foxglove
+// advertises channels. For every stream it knows, the agent publishes one on
+// stream "_streams/<stream_id>", schema "wendy.agent.services.v2.DataStreamInfo":
+// when the stream appears, when its state changes, and about every 10 seconds
+// while it is active. Subscribe with stream_prefixes ["_streams/"] and
+// send_latest to receive the whole catalog at once, then its changes.
+//
+// An application stream appears when its app starts and is GONE when the app
+// stops.
+message DataStreamInfo {
+  enum State {
+    STATE_UNSPECIFIED = 0;
+    // A record arrived in the last 10 seconds.
+    STATE_ACTIVE = 1;
+    // Published, but no record in the last 10 seconds, or none yet.
+    STATE_IDLE = 2;
+    // Its publisher stopped. Sent once; the stream then leaves the catalog.
+    STATE_GONE = 3;
+  }
+  string stream_id = 1;
+  string schema = 2;
+  string media_type = 3;
+  // The app id of an application stream.
+  string publisher = 4;
+  State state = 5;
+  // Records per second the agent accepted, over about the last 10 seconds.
+  float rate_hz = 6;
+  // The newest record's timestamp_unix_nanos; 0 before the first record.
+  int64 last_timestamp_unix_nanos = 7;
 }
 
 message DataSource {

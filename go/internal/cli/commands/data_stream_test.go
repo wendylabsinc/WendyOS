@@ -4,11 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
+	"net"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -70,6 +73,17 @@ func TestStreamLiveDataPrintsRecords(t *testing.T) {
 	}
 	if !strings.Contains(errOut.String(), "Ctrl-C") {
 		t.Fatalf("no subscription notice on stderr: %q", errOut.String())
+	}
+}
+
+func TestStreamLiveDataPrintsSkipped(t *testing.T) {
+	stream := &liveDataClientStream{header: metadata.MD{}, records: []*agentpbv2.DataRecord{{StreamId: "apps/demo/log", Payload: []byte("hi"), Skipped: 3}}}
+	var out bytes.Buffer
+	if err := streamLiveData(t.Context(), &liveDataClient{stream: stream}, &agentpbv2.StreamDataRequest{}, &out, io.Discard, false); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix(out.String(), "  apps/demo/log  -  2 B (3 skipped)  hi\n") {
+		t.Fatalf("output: %q", out.String())
 	}
 }
 
@@ -135,6 +149,30 @@ func TestTextPreview(t *testing.T) {
 	} {
 		if got, ok := textPreview([]byte(tc.payload)); got != tc.want || ok != tc.ok {
 			t.Errorf("textPreview(%q) = %q %v, want %q %v", tc.payload, got, ok, tc.want, tc.ok)
+		}
+	}
+}
+
+// A bad or busy --sse address fails at once, before the device connection,
+// which here would fail on its own with an invalid device name.
+func TestDataStreamSSEAddressCheckedBeforeConnecting(t *testing.T) {
+	setTempConfig(t, &config.Config{})
+	t.Setenv("WENDY_AGENT_SOCKET", "")
+	oldFlag := deviceFlag
+	t.Cleanup(func() { deviceFlag = oldFlag })
+	deviceFlag = "12345"
+	busy, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer busy.Close()
+	for _, addr := range []string{"0.0.0.0:8090", busy.Addr().String()} {
+		cmd := newDataStreamCmd()
+		cmd.SetArgs([]string{"--sse", addr})
+		cmd.SetOut(io.Discard)
+		cmd.SetErr(io.Discard)
+		if err := cmd.ExecuteContext(context.Background()); err == nil || errors.Is(err, errInvalidDeviceName) {
+			t.Errorf("--sse %s: got %v, want the address refused before connecting", addr, err)
 		}
 	}
 }

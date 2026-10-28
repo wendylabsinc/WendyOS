@@ -11,13 +11,24 @@
 // Records are shared, not copied. Every subscriber that selects a stream
 // receives the same *Record, so a publisher must not change a record, or the
 // payload it aliases, after offering it.
+//
+// Publishers advertise their streams. The hub keeps the newest record of each
+// advertised stream for subscribers that ask for it (send_latest), and
+// publishes the catalog: one DataStreamInfo record per advertised stream, on
+// stream CatalogPrefix + id.
 package live
 
 import (
 	"context"
 	"errors"
+	"math"
+	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
+
+	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 )
 
 // Record is one record on a live stream.
@@ -51,14 +62,25 @@ type Limits struct {
 	// MaxPendingBytes caps the payload bytes one subscriber holds undelivered.
 	// A record that would take it past the cap is dropped and counted as
 	// skipped; the records other streams already have pending are kept. A
-	// record larger than the cap is still delivered when it would be alone.
+	// record larger than the cap is still delivered when it would be alone,
+	// and catalog entries are never dropped: each change is sent once, and
+	// they are small, at most one pending per stream.
 	MaxPendingBytes int
+	// MaxLatestBytes caps the payload of the record the hub keeps as a
+	// stream's newest, for SendLatest. A larger record is delivered live but
+	// not kept, so a stream of large records starts with nothing.
+	MaxLatestBytes int
+	// MaxLatestAge is how long a kept record stays current. SendLatest skips a
+	// stream whose newest record is older, so a stale value is not shown as
+	// the present.
+	MaxLatestAge time.Duration
 }
 
 // DefaultLimits keep the worst case predictable on a Jetson or IQ9-class
-// device: 32 subscribers holding at most 8 MiB of payload each. Payloads are
-// shared, so that is a bound on retained records, not on copies.
-var DefaultLimits = Limits{MaxSubscribers: 32, MaxPendingBytes: 8 << 20}
+// device: 32 subscribers holding at most 8 MiB of payload each, and at most
+// 256 KiB kept per advertised stream for 10 seconds. Payloads are shared, so
+// these bound retained records, not copies.
+var DefaultLimits = Limits{MaxSubscribers: 32, MaxPendingBytes: 8 << 20, MaxLatestBytes: 256 << 10, MaxLatestAge: 10 * time.Second}
 
 var (
 	// ErrTooManySubscribers is returned by Subscribe when the hub is full.
@@ -67,23 +89,47 @@ var (
 	ErrClosed = errors.New("live data subscription closed")
 )
 
-// Selection says which streams a subscriber receives. The zero value selects
-// every stream.
+// Selection says which streams a subscriber receives and how. The zero value
+// selects every stream except the catalog, uncapped, from the next record on.
+//
+// StreamIDs and StreamPrefixes name streams: a stream is selected when it
+// matches any of them, or when both are empty. Schemas then keep only the
+// streams whose schema is listed.
 type Selection struct {
 	// StreamIDs are exact stream ids. An id that has not published yet is not
 	// an error; its records arrive once it does.
 	StreamIDs []string
+	// StreamPrefixes match stream ids by prefix.
+	StreamPrefixes []string
+	// Schemas are exact schema names.
+	Schemas []string
+	// MaxRateHz caps the records per second of each stream. A faster stream
+	// is held back, and a newer record replaces the held one, so the cap never
+	// queues. Zero or less means no cap.
+	MaxRateHz float64
+	// SendLatest starts the subscriber with the newest current record of each
+	// selected advertised stream, and the current catalog entry of each
+	// selected catalog stream.
+	SendLatest bool
 }
+
+// maxRateGap bounds the gap a tiny Selection.MaxRateHz asks for.
+const maxRateGap = time.Hour
 
 // Hub is the device-wide fan-out point. The zero value is not usable; call
 // NewHub.
 type Hub struct {
 	limits Limits
-	// active counts subscribers. Publishers read it without the lock, so a
-	// publish with nobody listening costs one atomic load.
-	active atomic.Int32
-	mu     sync.Mutex
-	subs   map[*Subscriber]struct{}
+	// active counts subscribers. Subscribed reads it without the lock.
+	active  atomic.Int32
+	mu      sync.Mutex
+	subs    map[*Subscriber]struct{}
+	streams map[string]*stream // advertised streams
+	// sweeper runs every sweepEvery while anyone is subscribed; nil otherwise.
+	// now is the clock. Tests replace both.
+	sweeper    *time.Timer
+	sweepEvery time.Duration
+	now        func() time.Time
 }
 
 // NewHub returns an empty hub. A non-positive limit takes its DefaultLimits
@@ -95,29 +141,39 @@ func NewHub(limits Limits) *Hub {
 	if limits.MaxPendingBytes <= 0 {
 		limits.MaxPendingBytes = DefaultLimits.MaxPendingBytes
 	}
-	return &Hub{limits: limits, subs: make(map[*Subscriber]struct{})}
+	if limits.MaxLatestBytes <= 0 {
+		limits.MaxLatestBytes = DefaultLimits.MaxLatestBytes
+	}
+	if limits.MaxLatestAge <= 0 {
+		limits.MaxLatestAge = DefaultLimits.MaxLatestAge
+	}
+	return &Hub{limits: limits, subs: make(map[*Subscriber]struct{}), streams: make(map[string]*stream), sweepEvery: sweepInterval, now: time.Now}
 }
 
-// Subscribed reports whether anyone is subscribed. A publisher checks it
-// before it builds a Record, so that work, timestamp conversion included, is
-// skipped while nobody listens.
+// Subscribed reports whether anyone is subscribed. A producer whose records
+// are costly to make may skip them while nobody listens; its streams then
+// have no newest record for SendLatest and show idle in the catalog.
 func (h *Hub) Subscribed() bool { return h.active.Load() > 0 }
 
-// Offer hands r to every subscriber that selects its stream. It never blocks
+// Offer hands r to every subscriber that selects its stream and, for an
+// advertised stream, keeps it as the stream's newest record. It never blocks
 // on a subscriber: it only replaces each one's pending slot for the stream.
-// It is small enough to inline, so the no-subscriber case stays in the caller.
+// With nobody subscribed it updates one table entry and allocates nothing.
 func (h *Hub) Offer(r *Record) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if st := h.streams[r.StreamID]; st != nil {
+		now := h.now()
+		h.noteLocked(st, r, now)
+		if st.announced != agentpbv2.DataStreamInfo_STATE_ACTIVE || now.Sub(st.announcedAt) >= announceEvery {
+			h.announceLocked(st, agentpbv2.DataStreamInfo_STATE_ACTIVE, now)
+		}
+	}
 	if h.active.Load() == 0 {
 		return
 	}
-	h.offer(r)
-}
-
-func (h *Hub) offer(r *Record) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
 	for s := range h.subs {
-		if s.selects(r.StreamID) {
+		if s.selects(r.StreamID, r.Schema) {
 			s.offer(r)
 		}
 	}
@@ -126,11 +182,27 @@ func (h *Hub) offer(r *Record) {
 // Subscribe registers a subscriber for sel. The caller must Close it.
 func (h *Hub) Subscribe(sel Selection) (*Subscriber, error) {
 	s := &Subscriber{hub: h, pending: make(map[string]*Record), skipped: make(map[string]uint64), wake: make(chan struct{}, 1)}
+	if len(sel.StreamIDs) == 0 && len(sel.StreamPrefixes) == 0 && len(sel.Schemas) == 0 {
+		s.all = true
+	}
 	if len(sel.StreamIDs) > 0 {
 		s.ids = make(map[string]struct{}, len(sel.StreamIDs))
 		for _, id := range sel.StreamIDs {
 			s.ids[id] = struct{}{}
 		}
+	}
+	if len(sel.StreamPrefixes) > 0 {
+		s.prefixes = slices.Clone(sel.StreamPrefixes)
+	}
+	if len(sel.Schemas) > 0 {
+		s.schemas = make(map[string]struct{}, len(sel.Schemas))
+		for _, schema := range sel.Schemas {
+			s.schemas[schema] = struct{}{}
+		}
+	}
+	if sel.MaxRateHz > 0 {
+		s.minGap = time.Duration(math.Min(float64(time.Second)/sel.MaxRateHz, float64(maxRateGap)))
+		s.sent = make(map[string]time.Time)
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -139,30 +211,60 @@ func (h *Hub) Subscribe(sel Selection) (*Subscriber, error) {
 	}
 	h.subs[s] = struct{}{}
 	h.active.Add(1)
+	if sel.SendLatest {
+		h.sendLatestLocked(s)
+	}
+	if h.sweeper == nil {
+		h.sweeper = time.AfterFunc(h.sweepEvery, h.sweep)
+	}
 	return s, nil
 }
 
 // Subscriber receives the records of the streams it selected, newest first
 // per stream. Next and Close may be called from different goroutines.
 type Subscriber struct {
-	hub *Hub
-	ids map[string]struct{} // nil selects every stream
+	hub      *Hub
+	all      bool                // an empty selection: every stream but the catalog
+	ids      map[string]struct{} // nil: no ids named
+	prefixes []string
+	schemas  map[string]struct{} // nil: any schema
+	minGap   time.Duration       // from MaxRateHz; 0 is no cap
 
 	mu      sync.Mutex
 	closed  bool
 	pending map[string]*Record // the newest undelivered record of each stream
 	order   []string           // streams with a pending record, oldest first
 	skipped map[string]uint64
-	bytes   int           // payload bytes held in pending
-	wake    chan struct{} // capacity 1: a record or Close is waiting
+	sent    map[string]time.Time // when each stream was last delivered, under a rate cap
+	bytes   int                  // payload bytes held in pending
+	wake    chan struct{}        // capacity 1: a record or Close is waiting
 }
 
-func (s *Subscriber) selects(streamID string) bool {
-	if s.ids == nil {
-		return true
+func (s *Subscriber) selects(streamID, schema string) bool {
+	if s.all {
+		return !strings.HasPrefix(streamID, CatalogPrefix)
 	}
-	_, ok := s.ids[streamID]
-	return ok
+	if s.ids != nil || s.prefixes != nil {
+		if _, ok := s.ids[streamID]; !ok && !hasPrefix(streamID, s.prefixes) {
+			return false
+		}
+	}
+	if s.schemas != nil {
+		_, ok := s.schemas[schema]
+		// CatalogSchema selects the catalog's own streams only, so another
+		// stream that declares it cannot pose as catalog entries.
+		return ok && (schema != CatalogSchema || strings.HasPrefix(streamID, CatalogPrefix))
+	}
+	return true
+}
+
+func hasPrefix(id string, prefixes []string) bool {
+	for _, p := range prefixes {
+		if strings.HasPrefix(id, p) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Subscriber) offer(r *Record) {
@@ -184,8 +286,8 @@ func (s *Subscriber) offer(r *Record) {
 	// Past the cap the offered record is dropped, never another stream's:
 	// large records cannot push out a small stream's only pending record. It
 	// stays when no other stream holds pending bytes, so an oversized record
-	// is still delivered alone.
-	if s.bytes > s.hub.limits.MaxPendingBytes && s.bytes > len(r.Payload) {
+	// is still delivered alone, and a catalog entry always stays.
+	if s.bytes > s.hub.limits.MaxPendingBytes && s.bytes > len(r.Payload) && !strings.HasPrefix(r.StreamID, CatalogPrefix) {
 		s.bytes -= len(r.Payload)
 		delete(s.pending, r.StreamID)
 		s.skipped[r.StreamID]++
@@ -204,34 +306,73 @@ func (s *Subscriber) offer(r *Record) {
 }
 
 // Next returns the pending record of the stream that has waited longest,
-// blocking until there is one, ctx is done, or the subscriber is closed.
+// blocking until there is one, ctx is done, or the subscriber is closed. Under
+// a rate cap, a stream sent less than its gap ago waits, and the streams
+// behind it go first.
 func (s *Subscriber) Next(ctx context.Context) (Delivery, error) {
+	var timer *time.Timer
+	defer func() {
+		if timer != nil {
+			timer.Stop()
+		}
+	}()
 	for {
 		s.mu.Lock()
 		if s.closed {
 			s.mu.Unlock()
 			return Delivery{}, ErrClosed
 		}
-		if len(s.order) > 0 {
-			id := s.order[0]
-			copy(s.order, s.order[1:])
-			s.order[len(s.order)-1] = ""
-			s.order = s.order[:len(s.order)-1]
-			r := s.pending[id]
-			delete(s.pending, id)
-			s.bytes -= len(r.Payload)
-			d := Delivery{Record: r, Skipped: s.skipped[id]}
-			delete(s.skipped, id)
-			s.mu.Unlock()
+		d, wait, ok := s.takeLocked()
+		s.mu.Unlock()
+		if ok {
 			return d, nil
 		}
-		s.mu.Unlock()
+		var held <-chan time.Time
+		if wait > 0 {
+			if timer == nil {
+				timer = time.NewTimer(wait)
+			} else {
+				timer.Reset(wait)
+			}
+			held = timer.C
+		}
 		select {
 		case <-ctx.Done():
 			return Delivery{}, ctx.Err()
 		case <-s.wake:
+		case <-held:
 		}
 	}
+}
+
+// takeLocked removes and returns the first pending record the rate cap lets
+// through. Otherwise it reports how long until a held stream may go, or zero
+// when nothing is pending.
+func (s *Subscriber) takeLocked() (Delivery, time.Duration, bool) {
+	var now time.Time
+	var wait time.Duration
+	for i, id := range s.order {
+		if s.minGap > 0 {
+			if now.IsZero() {
+				now = s.hub.now()
+			}
+			if left := s.minGap - now.Sub(s.sent[id]); left > 0 {
+				if wait == 0 || left < wait {
+					wait = left
+				}
+				continue
+			}
+			s.sent[id] = now
+		}
+		s.order = slices.Delete(s.order, i, i+1)
+		r := s.pending[id]
+		delete(s.pending, id)
+		s.bytes -= len(r.Payload)
+		d := Delivery{Record: r, Skipped: s.skipped[id]}
+		delete(s.skipped, id)
+		return d, 0, true
+	}
+	return Delivery{}, wait, false
 }
 
 // Close unregisters the subscriber and releases its pending records. A
@@ -246,7 +387,7 @@ func (s *Subscriber) Close() {
 	h.mu.Unlock()
 	s.mu.Lock()
 	s.closed = true
-	s.pending, s.order, s.skipped, s.bytes = nil, nil, nil, 0
+	s.pending, s.order, s.skipped, s.sent, s.bytes = nil, nil, nil, nil, 0
 	s.mu.Unlock()
 	select {
 	case s.wake <- struct{}{}:

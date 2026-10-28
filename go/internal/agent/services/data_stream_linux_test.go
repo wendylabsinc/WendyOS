@@ -3,12 +3,16 @@
 package services
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
+	"github.com/wendylabsinc/wendy/go/internal/agent/data/live"
 	"github.com/wendylabsinc/wendy/go/internal/agent/localsocket"
 	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
+	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	recordingpb "github.com/wendylabsinc/wendy/go/proto/gen/recordingpb"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -58,4 +62,56 @@ func TestAppRecordingSocketToStreamData(t *testing.T) {
 	if r := recvLive(t, viewer); r.GetStreamId() != "apps/test.app/worker/samples" || r.GetTimestampUnixNanos() != 1_700_000_000_000_000_000 {
 		t.Fatalf("durable record: %v", r)
 	}
+}
+
+// The catalog follows an app's streams: listed while the app's task runs,
+// active once it writes, and gone when it stops, though its sockets stay for
+// the next start; and gone when they are released.
+func TestAppRecordingStreamsInCatalog(t *testing.T) {
+	sockets, capture := recordingSocketTestManager(t)
+	catalog, err := capture.Live().Subscribe(live.Selection{StreamPrefixes: []string{live.CatalogPrefix}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(catalog.Close)
+	next := func(want agentpbv2.DataStreamInfo_State) {
+		t.Helper()
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		d, err := catalog.Next(ctx)
+		if err != nil {
+			t.Fatalf("no catalog record, want %v: %v", want, err)
+		}
+		var info agentpbv2.DataStreamInfo
+		if err := proto.Unmarshal(d.Record.Payload, &info); err != nil {
+			t.Fatal(err)
+		}
+		if info.GetStreamId() != "apps/test.app/worker/markers" || info.GetState() != want || info.GetSchema() != liveMarkersStream.Schema || info.GetPublisher() != "test.app" {
+			t.Fatalf("got %v, want %v", &info, want)
+		}
+	}
+
+	dir, err := sockets.EnsureStreams("test.app", "worker", map[string]appconfig.RecordingStream{"markers": liveMarkersStream})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Created, not started: nothing is listed.
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if d, err := catalog.Next(ctx); err == nil {
+		t.Fatalf("listed before the app started: %s", d.Record.StreamID)
+	}
+	sockets.AdvertiseStreams("test.app", "other")
+	sockets.AdvertiseStreams("test.app", "worker")
+	next(agentpbv2.DataStreamInfo_STATE_IDLE)
+	if _, err = dialRecording(t, dir, "worker", "markers").Write([]byte("boxes")); err != nil {
+		t.Fatal(err)
+	}
+	next(agentpbv2.DataStreamInfo_STATE_ACTIVE)
+	sockets.UnadvertiseStreams("test.app", "worker")
+	next(agentpbv2.DataStreamInfo_STATE_GONE)
+	sockets.AdvertiseStreams("test.app", "worker")
+	next(agentpbv2.DataStreamInfo_STATE_IDLE)
+	sockets.Release("test.app", "worker")
+	next(agentpbv2.DataStreamInfo_STATE_GONE)
 }

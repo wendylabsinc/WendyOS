@@ -114,6 +114,38 @@ func (m *AppDataSocketManager) closeRecordingSockets(s *appDataSocket, service *
 			c.Close()
 		}
 		delete(s.streams, key)
+		m.capture.UnadvertiseAppStream(s.appID, r.service, r.name)
+	}
+}
+
+// AdvertiseStreams lists the recording streams of one service of an app in
+// the live catalog. The sockets last as long as the service's container, but
+// its streams are listed only while its task runs: the containerd client
+// calls this as the task starts, and UnadvertiseStreams when it stops or
+// exits.
+func (m *AppDataSocketManager) AdvertiseStreams(appID, service string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if s := m.sockets[appDataKey(appID)]; s != nil && s.appID == appID {
+		for _, r := range s.streams {
+			if r.service == service {
+				m.capture.AdvertiseAppStream(appID, service, r.name, r.config)
+			}
+		}
+	}
+}
+
+// UnadvertiseStreams marks the recording streams of one service of an app
+// gone in the live catalog, and keeps their sockets for the next start.
+func (m *AppDataSocketManager) UnadvertiseStreams(appID, service string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if s := m.sockets[appDataKey(appID)]; s != nil && s.appID == appID {
+		for _, r := range s.streams {
+			if r.service == service {
+				m.capture.UnadvertiseAppStream(appID, service, r.name)
+			}
+		}
 	}
 }
 func (m *AppDataSocketManager) serveRecording(s *appDataSocket, r *recordingSocket) {

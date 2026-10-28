@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/data/live"
+	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -15,12 +16,23 @@ import (
 )
 
 const (
-	// maxStreamDataIDs bounds one request's selection. Apps declare at most 16
-	// streams each, so this is far above any real selection.
+	// maxStreamDataIDs bounds each list of one request's selection: ids,
+	// prefixes and schemas. Apps declare at most 16 streams each, so this is
+	// far above any real selection.
 	maxStreamDataIDs = 256
 	// maxStreamDataIDBytes fits the longest app stream id: "apps/", a
-	// 253-byte app id, a 57-byte service name and a 24-byte stream name.
+	// 253-byte app id, a 57-byte service name and a 24-byte stream name. It
+	// bounds prefixes too; a schema may be as long as an app stream's,
+	// appconfig.MaxRecordingSchemaBytes.
 	maxStreamDataIDBytes = 512
+	// defaultStreamDataRateHz is the per-stream rate cap of a request that sets
+	// none. It is a display rate: a viewer that wants more asks for it.
+	defaultStreamDataRateHz = 30
+	// minStreamDataRateHz and maxStreamDataRateHz bound max_rate_hz. Apps may
+	// write at most 200 records per second in total, so the top of the range
+	// is no cap at all.
+	minStreamDataRateHz = 0.01
+	maxStreamDataRateHz = 1000
 )
 
 // authorizeDataStream decides who may read live data. registerAllServices puts
@@ -45,22 +57,39 @@ func authorizeDataStream(ctx context.Context) error {
 }
 
 func liveSelection(req *agentpbv2.StreamDataRequest) (live.Selection, error) {
-	ids := req.GetStreamIds()
-	if len(ids) > maxStreamDataIDs {
-		return live.Selection{}, status.Errorf(codes.InvalidArgument, "at most %d stream ids may be selected", maxStreamDataIDs)
-	}
-	for _, id := range ids {
-		if id == "" || len(id) > maxStreamDataIDBytes {
-			return live.Selection{}, status.Errorf(codes.InvalidArgument, "stream ids must be 1..%d bytes", maxStreamDataIDBytes)
+	for _, list := range []struct {
+		name     string
+		values   []string
+		maxBytes int
+	}{{"stream ids", req.GetStreamIds(), maxStreamDataIDBytes}, {"stream prefixes", req.GetStreamPrefixes(), maxStreamDataIDBytes}, {"schemas", req.GetSchemas(), appconfig.MaxRecordingSchemaBytes}} {
+		if len(list.values) > maxStreamDataIDs {
+			return live.Selection{}, status.Errorf(codes.InvalidArgument, "at most %d %s may be selected", maxStreamDataIDs, list.name)
+		}
+		for _, v := range list.values {
+			if v == "" || len(v) > list.maxBytes {
+				return live.Selection{}, status.Errorf(codes.InvalidArgument, "%s must be 1..%d bytes", list.name, list.maxBytes)
+			}
 		}
 	}
-	return live.Selection{StreamIDs: ids}, nil
+	rate := req.GetMaxRateHz()
+	if rate == 0 {
+		rate = defaultStreamDataRateHz
+	} else if !(rate >= minStreamDataRateHz && rate <= maxStreamDataRateHz) {
+		return live.Selection{}, status.Errorf(codes.InvalidArgument, "max_rate_hz must be 0 for the default of %d, or %g to %d", defaultStreamDataRateHz, minStreamDataRateHz, maxStreamDataRateHz)
+	}
+	return live.Selection{
+		StreamIDs:      req.GetStreamIds(),
+		StreamPrefixes: req.GetStreamPrefixes(),
+		Schemas:        req.GetSchemas(),
+		MaxRateHz:      float64(rate),
+		SendLatest:     req.GetSendLatest(),
+	}, nil
 }
 
 // StreamData sends the device's live records: every app recording stream, as
-// the agent accepts each record. It runs until the client goes away. A client
-// that reads slowly receives the newest record of each stream and skips the
-// rest; it never slows a publisher.
+// the agent accepts each record, and the catalog of those streams. It runs
+// until the client goes away. A client that reads slowly receives the newest
+// record of each stream and skips the rest; it never slows a publisher.
 func (s *DataService) StreamData(req *agentpbv2.StreamDataRequest, out grpc.ServerStreamingServer[agentpbv2.DataRecord]) error {
 	ctx := out.Context()
 	if err := authorizeDataStream(ctx); err != nil {
@@ -90,7 +119,7 @@ func (s *DataService) StreamData(req *agentpbv2.StreamDataRequest, out grpc.Serv
 			return status.FromContextError(err).Err()
 		}
 		r := d.Record
-		if err := out.Send(&agentpbv2.DataRecord{StreamId: r.StreamID, TimestampUnixNanos: r.TimestampUnixNanos, Schema: r.Schema, Payload: r.Payload}); err != nil {
+		if err := out.Send(&agentpbv2.DataRecord{StreamId: r.StreamID, TimestampUnixNanos: r.TimestampUnixNanos, Schema: r.Schema, Payload: r.Payload, Skipped: d.Skipped}); err != nil {
 			return err
 		}
 	}

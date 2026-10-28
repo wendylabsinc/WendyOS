@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/data/live"
+	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 	recordingpb "github.com/wendylabsinc/wendy/go/proto/gen/recordingpb"
 )
 
@@ -18,6 +19,19 @@ func appStreamID(app, service, stream string) string {
 		return "apps/" + app + "/" + stream
 	}
 	return "apps/" + app + "/" + service + "/" + stream
+}
+
+// AdvertiseAppStream lists an application recording stream in the live
+// catalog and makes the hub keep its newest record. The app's data socket
+// manager calls it as the app's task starts.
+func (m *Manager) AdvertiseAppStream(app, service, stream string, cfg appconfig.RecordingStream) {
+	m.live.Advertise(live.StreamInfo{ID: appStreamID(app, service, stream), Schema: cfg.Schema, MediaType: cfg.MediaType, Publisher: app})
+}
+
+// UnadvertiseAppStream marks the stream gone in the live catalog, when its
+// app stops or is removed.
+func (m *Manager) UnadvertiseAppStream(app, service, stream string) {
+	m.live.Unadvertise(appStreamID(app, service, stream))
 }
 
 // liveRecord is the live view of a record RecordStream accepted. The payload
