@@ -24,9 +24,14 @@ const (
 	DefaultPSM uint16 = 0x0081
 	// AdvertisementSize leaves room for flags (3), ServiceData header (2),
 	// and the 128-bit tenant service UUID (16) in a legacy 31-byte packet.
-	AdvertisementSize         = 9
-	LocalNameSize             = 10
-	AdvertisementVersion byte = 0
+	AdvertisementSize         = 10
+	LocalNameSize             = 13
+	AdvertisementVersion byte = 1
+)
+
+const (
+	CapabilityNativeAccepting byte = 1 << iota
+	CapabilityTimeRelay
 )
 
 var ErrInvalidAdvertisement = errors.New("invalid Wendy BLE advertisement")
@@ -40,15 +45,15 @@ func ServiceUUID(tenant meshid.Tenant) string {
 	return tenant.String()
 }
 
-// Advertisement holds the small, non-secret peer hint carried as ServiceData.
-// Binary v0 is version/reserved (1), PSM (2, BE), network hash (2), UUID prefix
-// (4). With a 128-bit ServiceData UUID and flags it occupies 30 bytes.
-// Neither this hint nor its local-name representation grants authority.
+// Advertisement is an untrusted, tenant-scoped discovery hint. Binary v1 is
+// version/capabilities/native PSM (BE)/network hash/UUID prefix, exactly ten
+// bytes. Capabilities describe independent endpoints, never authentication.
 type Advertisement struct {
-	Version     byte
-	DeviceHint  [4]byte
-	NetworkHash [2]byte
-	PSM         uint16
+	Version      byte
+	Capabilities byte
+	DeviceHint   [4]byte
+	NetworkHash  [2]byte
+	PSM          uint16
 }
 
 func NetworkNameHash(name string) [2]byte {
@@ -62,7 +67,7 @@ func NewAdvertisement(device uuid.UUID, networkName string, psm uint16) (Adverti
 	if device == uuid.Nil || networkName == "" || !ValidPSM(psm) {
 		return Advertisement{}, ErrInvalidAdvertisement
 	}
-	return Advertisement{DeviceHint: deviceHint(device), NetworkHash: NetworkNameHash(networkName), PSM: psm}, nil
+	return Advertisement{Version: AdvertisementVersion, Capabilities: CapabilityNativeAccepting | CapabilityTimeRelay, DeviceHint: deviceHint(device), NetworkHash: NetworkNameHash(networkName), PSM: psm}, nil
 }
 
 func (a Advertisement) MarshalBinary() ([]byte, error) {
@@ -71,9 +76,10 @@ func (a Advertisement) MarshalBinary() ([]byte, error) {
 	}
 	b := make([]byte, AdvertisementSize)
 	b[0] = a.Version
-	binary.BigEndian.PutUint16(b[1:3], a.PSM)
-	copy(b[3:5], a.NetworkHash[:])
-	copy(b[5:9], a.DeviceHint[:])
+	b[1] = a.Capabilities
+	binary.BigEndian.PutUint16(b[2:4], a.PSM)
+	copy(b[4:6], a.NetworkHash[:])
+	copy(b[6:10], a.DeviceHint[:])
 	return b, nil
 }
 
@@ -81,19 +87,20 @@ func ParseAdvertisement(data []byte, networkName string) (Advertisement, error) 
 	if len(data) != AdvertisementSize || networkName == "" {
 		return Advertisement{}, ErrInvalidAdvertisement
 	}
-	a := Advertisement{Version: data[0], PSM: binary.BigEndian.Uint16(data[1:3])}
-	copy(a.NetworkHash[:], data[3:5])
-	copy(a.DeviceHint[:], data[5:9])
+	a := Advertisement{Version: data[0], Capabilities: data[1], PSM: binary.BigEndian.Uint16(data[2:4])}
+	copy(a.NetworkHash[:], data[4:6])
+	copy(a.DeviceHint[:], data[6:10])
 	if a.Version != AdvertisementVersion || !ValidPSM(a.PSM) || a.NetworkHash != NetworkNameHash(networkName) {
 		return Advertisement{}, ErrInvalidAdvertisement
 	}
 	return a, nil
 }
 
-// MarshalLocalName encodes the logical fields as one 65-bit unsigned integer:
-// version (1), PSM (16), network hash (16), UUID prefix (32), most significant
-// first. Ten base-94 digits use only ASCII '!'..'~'; leading '!' are required.
-// This representation is for platforms unable to advertise ServiceData.
+func (a Advertisement) NativeAccepting() bool    { return a.Capabilities&CapabilityNativeAccepting != 0 }
+func (a Advertisement) TimeRelayAvailable() bool { return a.Capabilities&CapabilityTimeRelay != 0 }
+
+// MarshalLocalName encodes the exact canonical binary bytes as thirteen
+// fixed-width base94 characters. No alternate compressed field layout exists.
 func (a Advertisement) MarshalLocalName() (string, error) {
 	raw, err := a.MarshalBinary()
 	if err != nil {
@@ -103,7 +110,7 @@ func (a Advertisement) MarshalLocalName() (string, error) {
 }
 
 func encodeLocalName(raw []byte) (string, error) {
-	if len(raw) != AdvertisementSize || raw[0] > 1 {
+	if len(raw) != AdvertisementSize {
 		return "", ErrInvalidAdvertisement
 	}
 	value := new(big.Int).SetBytes(raw)
@@ -127,7 +134,7 @@ func decodeLocalName(name string) ([]byte, error) {
 		}
 		value.Mul(value, radix).Add(value, digit.SetUint64(uint64(name[i]-'!')))
 	}
-	if value.BitLen() > 65 {
+	if value.BitLen() > AdvertisementSize*8 {
 		return nil, ErrInvalidAdvertisement
 	}
 	return value.FillBytes(make([]byte, AdvertisementSize)), nil

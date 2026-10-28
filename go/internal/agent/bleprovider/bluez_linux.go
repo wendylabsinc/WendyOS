@@ -87,6 +87,9 @@ func candidates(objects managedObjects, adapter dbus.ObjectPath, uuid, networkNa
 }
 
 func candidateFromProperties(path dbus.ObjectPath, props map[string]dbus.Variant, adv Advertisement, self meshid.Device) (candidate, bool) {
+	if !adv.NativeAccepting() {
+		return candidate{}, false
+	}
 	// Raw CoC sockets bypass Device1.Connect. Apply BlueZ's local policy
 	// equally to binary service data and live local-name candidates.
 	if policy, present := props["Blocked"]; present {
@@ -289,7 +292,7 @@ func cleanupBlueZ(bus *dbus.Conn, adapter dbus.ObjectPath, logger *zap.Logger) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	obj := bus.Object(bluezName, adapter)
-	if err := obj.CallWithContext(ctx, adapterInterface+".StopDiscovery", 0).Err; err != nil {
+	if err := stoppedDiscoveryResult(obj.CallWithContext(ctx, adapterInterface+".StopDiscovery", 0).Err); err != nil {
 		logger.Debug("BLE StopDiscovery failed", zap.Error(err))
 	}
 	if err := obj.CallWithContext(ctx, advertManagerInterface+".UnregisterAdvertisement", 0, advertPath).Err; err != nil {
