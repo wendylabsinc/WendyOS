@@ -12,8 +12,8 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
 )
 
-// MeshAppDialer is the opt-in local mesh VIP path. It uses only an end-to-end
-// authenticated peer QUIC session. The existing cloud byte relay lacks a
+// MeshAppDialer is the opt-in local mesh VIP path. It uses authenticated app
+// sessions or an explicitly advertised native mTLS agent service. The existing cloud byte relay lacks a
 // device-originated app admission protocol and cannot safely carry these
 // app flows until that protocol and its service policy are implemented.
 type MeshAppDialer struct{ mesh *MeshDialer }
