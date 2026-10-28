@@ -70,24 +70,25 @@ func unpinCommandsFor(identityKeys []string) string {
 	return strings.Join(commands, " and ")
 }
 
-// Check Cloud before erasing the only local record of the enrollment. Keep
-// reset before revocation, since Cloud cleanup can disrupt device connectivity.
-// Authorization is Cloud's: the CLI does not pre-check the caller's role, so a
-// caller Cloud refuses sees its PermissionDenied from the RPC that refused.
+// The device is reset only after Cloud confirmed the asset's deletion, so a
+// caller Cloud refuses (its PermissionDenied, not a CLI role read: WDY-4052)
+// leaves the device's enrollment, the only local record of it, untouched.
+// ponytail: a certificate the device renews between the inventory and the
+// deletion is dropped unrevoked by legacy Cloud's cascade; the reset that
+// follows erases its key.
 func performLegacyDeviceUnenroll(ctx context.Context, conn grpc.ClientConnInterface, assetID int32, reset func() error) (result legacyUnenrollResult, err error) {
-	if _, err := listLegacyUnenrollCertificates(ctx, conn, assetID); err != nil {
-		return result, fmt.Errorf("cloud cleanup preflight failed; device was not reset: %w", err)
+	result.CertificatesRevoked, result.AssetDeleted, err = cloudUnenrollCleanupClient(ctx, conn, assetID)
+	if err != nil {
+		return result, fmt.Errorf("cloud cleanup failed; device was not reset: %w", err)
 	}
 	if err := reset(); err != nil {
 		if status.Code(err) != codes.Unavailable {
-			return result, fmt.Errorf("unprovisioning device: %w", err)
+			return result, fmt.Errorf("cloud removed asset %d and revoked its certificates, but resetting the device failed; it still holds its revoked enrollment: %w", assetID, err)
 		}
 		cliLogln("Device connection closed (agent is restarting).")
 	}
 	result.DeviceReset = true
-	// Read again after reset to include certificates issued during preflight.
-	result.CertificatesRevoked, result.AssetDeleted, err = cloudUnenrollCleanupClient(ctx, conn, assetID)
-	return result, err
+	return result, nil
 }
 
 const maxLegacyUnenrollCertificates = 10000

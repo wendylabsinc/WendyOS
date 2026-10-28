@@ -49,18 +49,14 @@ For current WendyOS enrollments, rerun the same command over the direct LAN
 connection. For Lite, reconnect USB and rerun it. This also handles Cloud removal
 that succeeded before the local reset failed.
 
-Older numeric Cloud enrollments reset locally before Cloud cleanup. They require
-an owner or administrator account. If cleanup fails, run the exact Cloud removal
-command printed in the error; it retains the old enrollment details needed to
-finish. See [device unenrollment](/docs/device/unenrollment) for recovery guidance.
+Older numeric Cloud enrollments revoke their certificates and delete the asset in
+Cloud first, and reset the device only after Cloud confirmed the deletion. If
+Cloud refuses, for example because the account may not delete devices in that
+organization, the device is not reset. See
+[device unenrollment](/docs/device/unenrollment) for recovery guidance.
 
 Once a WendyOS device confirms its reset, the command also clears the identity
-pins this CLI saved for it, the entries `wendy device unpin` clears. For older
-numeric enrollments this happens even when the Cloud cleanup that follows
-fails, because the device no longer presents that identity. Until that cleanup
-succeeds, Cloud still lists the device, so commands that read Cloud's device
-list, such as `wendy cloud discover`, pin it again. If a later connection is
-refused, run the `wendy device unpin` command the unenroll output prints.
+pins this CLI saved for it, the entries `wendy device unpin` clears.
 Cloud-only removal does not contact the device, so it keeps those pins.
 
 ## Clear a device that Cloud no longer has

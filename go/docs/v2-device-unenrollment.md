@@ -14,7 +14,7 @@ Cloud owns unenrollment for CLI and console callers. Its signed DeleteAsset path
 
 `wendy device unenroll --force` clears an enrollment left on a LAN device that Cloud has no record of. That local reset is a separate, explicitly requested operation with no Cloud deletion or revocation claim.
 
-The CLI signs the Cloud request and its exact tenant/device revoke_principal management authority with the same operator leaf. Existing kid/x5c behavior is retained, with a fresh PKI replay identity on each retry. Numeric Cloud v1 verifies that the selected session's user is an owner or admin in the device's organization and checks the complete certificate inventory before reset. It then repeats the inventory and performs best-effort revocation and deletion after reset. This does not add a numeric fallback for PKI identities.
+The CLI signs the Cloud request and its exact tenant/device revoke_principal management authority with the same operator leaf. Existing kid/x5c behavior is retained, with a fresh PKI replay identity on each retry. Numeric Cloud v1 reads the complete certificate inventory, revokes it and deletes the asset first, and resets the device only after Cloud confirmed the deletion; authorization is Cloud's, so a refusal leaves the device untouched. This does not add a numeric fallback for PKI identities.
 
 ## Preconditions and phases
 

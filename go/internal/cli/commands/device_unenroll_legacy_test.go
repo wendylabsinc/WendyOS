@@ -218,9 +218,11 @@ func activeLegacyUnenrollCertificate(id int32) *cloudpb.Certificate {
 	return &cloudpb.Certificate{Id: id, Status: cloudpb.CertificateStatus_CERTIFICATE_STATUS_ACTIVE}
 }
 
-func TestLegacyDeviceUnenrollPreflightsBeforeReset(t *testing.T) {
+// TestLegacyDeviceUnenrollResetsOnlyAfterCloudDeletion is WDY-4052: the CLI no
+// longer reads the caller's role, so Cloud's own refusal is what must keep the
+// device's enrollment, the only local record of it, from being erased.
+func TestLegacyDeviceUnenrollResetsOnlyAfterCloudDeletion(t *testing.T) {
 	first := activeLegacyUnenrollCertificate(11)
-	later := activeLegacyUnenrollCertificate(13)
 	for _, tc := range []struct {
 		name       string
 		pages      []legacyUnenrollListPage
@@ -228,12 +230,23 @@ func TestLegacyDeviceUnenrollPreflightsBeforeReset(t *testing.T) {
 		deleteErr  error
 		want       legacyUnenrollResult
 		wantError  string
+		wantCode   codes.Code
 		wantEvents []string
 	}{
 		{
-			name:       "caller cloud refuses preserves enrollment",
+			name:       "cloud refuses deletion leaves device untouched",
+			pages:      []legacyUnenrollListPage{{certificates: []*cloudpb.Certificate{first}}},
+			deleteErr:  status.Error(codes.PermissionDenied, "asset deletion refused"),
+			want:       legacyUnenrollResult{CertificatesRevoked: 1},
+			wantError:  "device was not reset",
+			wantCode:   codes.PermissionDenied,
+			wantEvents: []string{"list 0", "revoke 11", "delete 42"},
+		},
+		{
+			name:       "cloud refuses inventory leaves device untouched",
 			pages:      []legacyUnenrollListPage{{err: status.Error(codes.PermissionDenied, "not an organization member")}},
 			wantError:  "device was not reset",
+			wantCode:   codes.PermissionDenied,
 			wantEvents: []string{"list 0"},
 		},
 		{
@@ -249,7 +262,7 @@ func TestLegacyDeviceUnenrollPreflightsBeforeReset(t *testing.T) {
 			wantEvents: []string{"list 0"},
 		},
 		{
-			name: "later preflight page failure preserves enrollment",
+			name: "later inventory page failure preserves enrollment",
 			pages: []legacyUnenrollListPage{
 				{certificates: []*cloudpb.Certificate{first}, total: 2},
 				{offset: 1, err: status.Error(codes.Unavailable, "later page interrupted")},
@@ -258,51 +271,25 @@ func TestLegacyDeviceUnenrollPreflightsBeforeReset(t *testing.T) {
 			wantEvents: []string{"list 0", "list 1"},
 		},
 		{
-			name:       "reset failure preserves cloud enrollment",
+			name:       "cloud deletion then reset",
 			pages:      []legacyUnenrollListPage{{certificates: []*cloudpb.Certificate{first}}},
-			resetErr:   errors.New("reset refused"),
-			wantError:  "reset refused",
-			wantEvents: []string{"list 0", "reset"},
+			want:       legacyUnenrollResult{DeviceReset: true, CertificatesRevoked: 1, AssetDeleted: true},
+			wantEvents: []string{"list 0", "revoke 11", "delete 42", "reset"},
 		},
 		{
-			name: "relist after reset includes newly issued certificate",
-			pages: []legacyUnenrollListPage{
-				{certificates: []*cloudpb.Certificate{first}},
-				{certificates: []*cloudpb.Certificate{first, later}},
-			},
-			want:       legacyUnenrollResult{DeviceReset: true, CertificatesRevoked: 2, AssetDeleted: true},
-			wantEvents: []string{"list 0", "reset", "list 0", "revoke 11", "revoke 13", "delete 42"},
-		},
-		{
-			name: "agent restart retains existing cleanup behavior",
-			pages: []legacyUnenrollListPage{
-				{certificates: []*cloudpb.Certificate{first}},
-				{certificates: []*cloudpb.Certificate{first}},
-			},
+			name:       "agent restart counts as reset",
+			pages:      []legacyUnenrollListPage{{certificates: []*cloudpb.Certificate{first}}},
 			resetErr:   status.Error(codes.Unavailable, "agent restarting"),
 			want:       legacyUnenrollResult{DeviceReset: true, CertificatesRevoked: 1, AssetDeleted: true},
-			wantEvents: []string{"list 0", "reset", "list 0", "revoke 11", "delete 42"},
+			wantEvents: []string{"list 0", "revoke 11", "delete 42", "reset"},
 		},
 		{
-			name: "post reset listing failure reports partial result",
-			pages: []legacyUnenrollListPage{
-				{certificates: []*cloudpb.Certificate{first}},
-				{err: status.Error(codes.Unknown, "")},
-			},
-			want:       legacyUnenrollResult{DeviceReset: true},
-			wantError:  "listing certificates",
-			wantEvents: []string{"list 0", "reset", "list 0"},
-		},
-		{
-			name: "post reset permission change reports partial result",
-			pages: []legacyUnenrollListPage{
-				{certificates: []*cloudpb.Certificate{first}},
-				{certificates: []*cloudpb.Certificate{first}},
-			},
-			deleteErr:  status.Error(codes.PermissionDenied, "asset deletion refused"),
-			want:       legacyUnenrollResult{DeviceReset: true, CertificatesRevoked: 1},
-			wantError:  "asset deletion refused",
-			wantEvents: []string{"list 0", "reset", "list 0", "revoke 11", "delete 42"},
+			name:       "reset failure after cloud deletion is reported",
+			pages:      []legacyUnenrollListPage{{certificates: []*cloudpb.Certificate{first}}},
+			resetErr:   errors.New("reset refused"),
+			want:       legacyUnenrollResult{CertificatesRevoked: 1, AssetDeleted: true},
+			wantError:  "resetting the device failed",
+			wantEvents: []string{"list 0", "revoke 11", "delete 42", "reset"},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -318,6 +305,9 @@ func TestLegacyDeviceUnenrollPreflightsBeforeReset(t *testing.T) {
 			})
 			if got != tc.want || (err == nil) != (tc.wantError == "") || err != nil && !strings.Contains(err.Error(), tc.wantError) {
 				t.Fatalf("got result=%+v error=%v, want result=%+v error containing %q", got, err, tc.want, tc.wantError)
+			}
+			if tc.wantCode != codes.OK && status.Code(err) != tc.wantCode {
+				t.Fatalf("error code = %v, want Cloud's %v: %v", status.Code(err), tc.wantCode, err)
 			}
 			if tc.resetErr != nil && status.Code(tc.resetErr) != codes.Unavailable && !errors.Is(err, tc.resetErr) {
 				t.Fatalf("reset error was not preserved: got %v, want %v", err, tc.resetErr)
@@ -454,10 +444,9 @@ func seedSessionBrokerState(t *testing.T) string {
 }
 
 // TestLegacyUnenrollForgetsTheResetIdentity is WDY-3974. Once the agent has
-// reset, its enrolled identity is gone whatever Cloud cleanup does next, so the
-// pins naming it must go too — the report's case is Cloud failing the asset
-// delete after the reset, which used to return before anything was cleared and
-// left every later command refused. A reset that never happened clears nothing.
+// reset, its enrolled identity is gone, so the pins naming it must go too, or
+// every later command is refused. Cloud cleanup runs first (WDY-4052), so a
+// Cloud failure means no reset, and a reset that never happened clears nothing.
 //
 // A certificate carrying a tenant principal files the device under that
 // principal instead of its urn:wendy URN, so the identity the device presented
@@ -473,8 +462,8 @@ func TestLegacyUnenrollForgetsTheResetIdentity(t *testing.T) {
 		wantErr   string
 	}{
 		{name: "cloud cleanup succeeds", wantReset: true},
-		{name: "cloud cleanup fails after reset", deleteErr: status.Error(codes.Unknown, ""), wantReset: true, wantErr: "deleting asset 42"},
-		{name: "cloud cleanup fails after reset, text output", deleteErr: status.Error(codes.Unknown, ""), text: true, wantReset: true, wantErr: "deleting asset 42"},
+		{name: "cloud cleanup succeeds, text output", text: true, wantReset: true},
+		{name: "cloud refuses deletion before reset", deleteErr: status.Error(codes.PermissionDenied, "asset deletion refused"), wantErr: "device was not reset"},
 		{name: "certificate carries a tenant principal", principal: true, wantReset: true},
 		{name: "preflight fails before reset", listErr: status.Error(codes.PermissionDenied, "not a member"), wantErr: "device was not reset"},
 	} {
@@ -507,7 +496,6 @@ func TestLegacyUnenrollForgetsTheResetIdentity(t *testing.T) {
 
 			certificate := activeLegacyUnenrollCertificate(11)
 			service, cloudConn := startLegacyUnenrollSequenceServer(t, []legacyUnenrollListPage{
-				{certificates: []*cloudpb.Certificate{certificate}},
 				{certificates: []*cloudpb.Certificate{certificate}},
 			})
 			service.deleteErr = tc.deleteErr
@@ -566,14 +554,7 @@ func TestLegacyUnenrollForgetsTheResetIdentity(t *testing.T) {
 				t.Errorf("cleared pins were not reported on stderr:\n%s", stderr)
 			}
 			if tc.text {
-				// Cloud still lists the asset, so roster syncs pin it again
-				// until the retry succeeds; the output has to say how to clear
-				// that pin, since the Cloud-only retry keeps it.
-				for _, want := range []string{
-					"Retry cloud cleanup: wendy cloud device unenroll --device",
-					"'wendy cloud discover', pin this device again",
-					"run 'wendy device unpin urn:wendy:org:55:asset:42'",
-				} {
+				for _, want := range []string{"deleted asset 42 from Wendy Cloud", "Device reset to unprovisioned state."} {
 					if !strings.Contains(stdout, want) {
 						t.Errorf("text output is missing %q:\n%s", want, stdout)
 					}
@@ -584,15 +565,8 @@ func TestLegacyUnenrollForgetsTheResetIdentity(t *testing.T) {
 			if err := json.Unmarshal([]byte(stdout), &report); err != nil {
 				t.Fatalf("stdout is not the JSON report (cleared pins belong on stderr): %v\n%s", err, stdout)
 			}
-			if report["deviceReset"] != true || report["pinError"] != nil {
+			if report["deviceReset"] != true || report["assetDeleted"] != true || report["pinError"] != nil {
 				t.Errorf("report = %v", report)
-			}
-			if tc.deleteErr != nil {
-				cloudErr, _ := report["cloudError"].(string)
-				retry, _ := report["retryCommand"].(string)
-				if !strings.Contains(cloudErr, "deleting asset 42") || !strings.Contains(retry, "wendy cloud device unenroll --device") {
-					t.Errorf("the Cloud failure and its retry must still be reported: %v", report)
-				}
 			}
 		})
 	}
