@@ -2,8 +2,8 @@ package localmesh
 
 import (
 	"bytes"
-	"encoding/json"
 	"errors"
+	"github.com/wendylabsinc/wendy/go/internal/agent/netwire"
 	"testing"
 	"time"
 
@@ -144,24 +144,6 @@ func TestManifestHaveWantDiamondTransfersEachRevisionOnce(t *testing.T) {
 	}
 }
 
-func TestRouterGossipRejectsUnsolicitedManifestButLeafRemainsCompatible(t *testing.T) {
-	d, chain, key, device, now := directoryFixture(t)
-	w, err := SignManifest(routeManifest(device, now), chain, key, now)
-	if err != nil {
-		t.Fatal(err)
-	}
-	router := NewSynchronizer(d, d.cache, netgossip.NewPool())
-	defer router.Close()
-	if _, _, err := router.Receive(ControlMessage{Kind: "manifest", Manifest: &w}, now); err == nil {
-		t.Fatal("router accepted full unsolicited manifest")
-	}
-	leaf := NewSynchronizer(d, d.cache)
-	defer leaf.Close()
-	if _, _, err := leaf.Receive(ControlMessage{Kind: "manifest", Manifest: &w}, now); err != nil {
-		t.Fatal("legacy leaf envelope rejected", err)
-	}
-}
-
 func TestManifestGossipQueueBudgetDoesNotConsumeAnnouncement(t *testing.T) {
 	d, chain, key, device, now := directoryFixture(t)
 	w, _ := SignManifest(routeManifest(device, now), chain, key, now)
@@ -186,8 +168,8 @@ func TestManifestGossipExpiredUnverifiedBodyDoesNotCreateReceipt(t *testing.T) {
 	// Expiry is rejected before authentication. Even this bad signature must not
 	// become a shared receipt or prevent an independent supplier from being tried.
 	w.Signature[0] ^= 1
-	body, _ := json.Marshal(w)
-	later := now.Add(2 * time.Minute)
+	body, _ := netwire.Marshal(w)
+	later := now.Add(MaxLease)
 	source := netgossip.NewPool().NewSession(netgossip.Manifest)
 	have := source.Offer(body, later.Add(MaxLease), later)
 	pool := netgossip.NewPool()
@@ -242,7 +224,7 @@ func TestManifestGossipRecoversEvictedPayloadAndRechecksTrust(t *testing.T) {
 	if err != nil || len(replies) != 2 || replies[0].Certificate == nil || replies[1].Gossip == nil || replies[1].Gossip.Op != "data" {
 		t.Fatal("evicted body was not recovered from its directory key", replies, err)
 	}
-	body, _ := json.Marshal(w)
+	body, _ := netwire.Marshal(w)
 	if !bytes.Equal(replies[1].Gossip.Data, body) {
 		t.Fatal("recovery changed the signed envelope")
 	}

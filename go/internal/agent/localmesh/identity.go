@@ -9,7 +9,6 @@ import (
 
 	"github.com/wendylabsinc/WendyOS/go/babel"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
-	"github.com/wendylabsinc/wendy/go/internal/shared/meshoperator"
 )
 
 // Interface names this package owns. Declared here, rather than in the Linux
@@ -29,7 +28,7 @@ func ownedInterface(name string) bool {
 // authorize their exact derived /128, never an aggregate. The node separately
 // requires a live signed origin/router-ID/sequence binding for every route.
 func admittedPrefix(p netip.Prefix) bool {
-	return (meshid.InMesh(p.Addr()) || meshoperator.InOperatorPool(p.Addr())) && p.Bits() == 128
+	return meshid.InMesh(p.Addr()) && p.Bits() == 128
 }
 
 // instanceRouterID derives this instance's Babel router ID with the profile's

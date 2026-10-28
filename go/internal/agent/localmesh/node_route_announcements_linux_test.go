@@ -4,7 +4,7 @@ package localmesh
 
 import (
 	"crypto"
-	"encoding/json"
+	"github.com/wendylabsinc/wendy/go/internal/agent/netwire"
 	"io"
 	"net/netip"
 	"os"
@@ -123,6 +123,8 @@ func TestNodeRoutePublicationPersistsBeforeSigning(t *testing.T) {
 		t.Fatal("unchanged sequence churned the signed announcement")
 	}
 	checkpoint.Seqno++
+	// Model an idle interval so this change publishes immediately.
+	n.nextPublication = time.Now().Add(-time.Millisecond)
 	wantRevision++
 	if err := n.Persist(checkpoint); err != nil {
 		t.Fatal(err)
@@ -263,8 +265,8 @@ func (r *sequencePublicationIO) Send(d babel.Datagram) error {
 
 func TestNodeSequenceFanoutPersistsAndQueuesGossipProofBeforeSend(t *testing.T) {
 	n := routePublicationNode(t)
-	// Router neighbours share one announcement pool; the leaf adapter has a
-	// separate bundle protocol and must not stand in for this publication path.
+	// Router neighbours share one announcement pool and fetch exact signed
+	// artifacts through HAVE/WANT rather than an independent service stream.
 	pool := netgossip.NewPool()
 	io := &sequencePublicationIO{routingRecorder: &routingRecorder{}, node: n}
 	var err error
@@ -331,7 +333,7 @@ func TestNodeSequenceFanoutPersistsAndQueuesGossipProofBeforeSend(t *testing.T) 
 			t.Fatalf("link %d sent before its new proof was queued", d.Link)
 		}
 		var manifest Manifest
-		if err := json.Unmarshal(proof.Body, &manifest); err != nil {
+		if err := netwire.Unmarshal(proof.Body, &manifest); err != nil {
 			t.Fatal(err)
 		}
 		if manifest.Route == nil || manifest.Route.Seqno != 1 || manifest.Revision != persisted.Revision {
@@ -349,6 +351,8 @@ func TestNodeSequenceFanoutPersistsAndQueuesGossipProofBeforeSend(t *testing.T) 
 		}
 		checked[d.Link] = true
 	}
+	// Model an idle publication gate before this sequence change.
+	n.nextPublication = time.Now().Add(-time.Millisecond)
 	if err := n.routing.Step(500*time.Millisecond, babel.Receive{ID: 1, Packet: routeSequenceRequest(prefix, 1, 1)}); err != nil {
 		t.Fatal(err)
 	}

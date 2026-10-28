@@ -292,7 +292,6 @@ func TestCertificateExchangeUnsolicitedAndBounds(t *testing.T) {
 		t.Fatal("unsolicited bytes retained", q, done, err, c.parts.bytes)
 	}
 	for _, bad := range []CertificateMessage{
-		{},
 		{Request: &CertificateRequest{Hash: "invalid"}},
 		{Request: &CertificateRequest{Hash: certificateHash(data), Offset: maxCertificateBytes}},
 		{Chunk: &CertificateChunk{Hash: certificateHash(data), Total: maxCertificateBytes + 1, Data: data}},

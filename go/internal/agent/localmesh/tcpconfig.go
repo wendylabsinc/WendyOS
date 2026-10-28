@@ -7,10 +7,8 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"net/url"
 	"os"
 	"strconv"
-	"strings"
 
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
 )
@@ -22,12 +20,6 @@ type TCPConfig struct {
 	Peers  []TCPPeer `json:"peers"`
 	NAN    bool      `json:"nan,omitempty"`
 	BLE    bool      `json:"ble,omitempty"`
-	// LeafListen explicitly enables the separate TLS leaf carrier. It never
-	// changes the configured TCP/QUIC carrier or enables automatic fallback.
-	LeafListen   string        `json:"leafListen,omitempty"`
-	LeafBLEPeers []LeafBLEPeer `json:"leafBLEPeers,omitempty"`
-	LeafTimeURL  string        `json:"leafTimeURL,omitempty"`
-
 	// devices holds the parsed peer identities, in the same order as Peers.
 	devices            []meshid.Device
 	Ethernet           bool `json:"ethernet,omitempty"`
@@ -90,61 +82,11 @@ func LoadTCPConfig(path string, self meshid.Device) (*TCPConfig, error) {
 		return nil, errors.New("wendy net config has trailing data")
 	}
 	if cfg.Listen == "" {
-		if (!cfg.NAN && !cfg.BLE && !cfg.Ethernet && !cfg.InfrastructureWiFi && cfg.LeafListen == "" && len(cfg.LeafBLEPeers) == 0) || len(cfg.Peers) != 0 {
+		if (!cfg.NAN && !cfg.BLE && !cfg.Ethernet && !cfg.InfrastructureWiFi) || len(cfg.Peers) != 0 {
 			return nil, errors.New("listen is required for configured TCP peers; enable a carrier for discovery-only networking")
 		}
 	} else if err := validateTCPAddress(cfg.Listen, true); err != nil {
 		return nil, fmt.Errorf("listen: %w", err)
-	}
-	if cfg.LeafListen != "" {
-		if err := validateTCPAddress(cfg.LeafListen, true); err != nil {
-			return nil, fmt.Errorf("leafListen: %w", err)
-		}
-		if cfg.LeafListen == cfg.Listen {
-			return nil, errors.New("leafListen must use a separate listener")
-		}
-	}
-
-	if len(cfg.LeafBLEPeers) > 8 {
-		return nil, errors.New("too many BLE leaves")
-	}
-	if len(cfg.LeafBLEPeers) != 0 {
-		if err := validateLeafTimeURL(cfg.LeafTimeURL); err != nil {
-			return nil, err
-		}
-	} else if cfg.LeafTimeURL != "" {
-		return nil, errors.New("leafTimeURL requires BLE leaves")
-	}
-	seenLeaves := make(map[string]bool)
-	seenAddresses := make(map[string]bool)
-	for i := range cfg.LeafBLEPeers {
-		p := &cfg.LeafBLEPeers[i]
-		device, err := meshid.ParseDevice(self.Tenant(), p.Device)
-		if err != nil || device == self || seenLeaves[p.Device] {
-			return nil, errors.New("invalid or duplicate BLE leaf device")
-		}
-		address, err := net.ParseMAC(p.Address)
-		if err != nil || len(address) != 6 || strings.ReplaceAll(address.String(), ":", "") == "000000000000" {
-			return nil, errors.New("invalid BLE leaf address")
-		}
-		if p.AddressType == "" {
-			p.AddressType = "public"
-		}
-		if p.AddressType != "public" && p.AddressType != "random" {
-			return nil, errors.New("invalid BLE leaf address type")
-		}
-		p.Address = address.String()
-		key := p.Address + "/" + p.AddressType
-		if seenAddresses[key] {
-			return nil, errors.New("duplicate BLE leaf address")
-		}
-		seenLeaves[p.Device], seenAddresses[key] = true, true
-		if p.PSM == 0 {
-			p.PSM = 129
-		}
-		if p.PSM < 128 || p.PSM > 255 {
-			return nil, errors.New("BLE leaf PSM must be 128..255")
-		}
 	}
 	if len(cfg.Peers) > 64 {
 		return nil, errors.New("too many configured wendy net peers")
@@ -179,22 +121,6 @@ func validateTCPAddress(address string, listen bool) error {
 	}
 	if !listen && (host == "" || host == "0.0.0.0" || host == "::") {
 		return errors.New("peer needs a concrete host")
-	}
-	return nil
-}
-
-// The device pin is independent of the Bluetooth address used to dial it.
-type LeafBLEPeer struct {
-	Device      string `json:"device"`
-	Address     string `json:"address"`
-	AddressType string `json:"addressType,omitempty"`
-	PSM         uint16 `json:"psm,omitempty"`
-}
-
-func validateLeafTimeURL(value string) error {
-	u, err := url.Parse(value)
-	if err != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
-		return errors.New("leafTimeURL must be a fixed HTTPS timestamp authority URL")
 	}
 	return nil
 }

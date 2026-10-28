@@ -14,20 +14,19 @@ import (
 )
 
 const (
-	Manifest      uint8 = 1
-	Service       uint8 = 2
-	OperatorRoute uint8 = 3
-	Version             = 1
-	MaxObject           = 40 << 10
-	ChunkSize           = 1024
-	IdleTimeout         = 30 * time.Second
-	HintLifetime        = 2 * time.Minute
-	maxKnown            = 4096
-	maxPending          = 128
-	maxSuppliers        = 64
-	maxInFlight         = 16
-	maxPerPeer          = 4
-	maxBytes            = 8 << 20
+	Manifest     uint8 = 1
+	Service      uint8 = 2
+	Version            = 1
+	MaxObject          = 40 << 10
+	ChunkSize          = 1024
+	IdleTimeout        = 30 * time.Second
+	HintLifetime       = 2 * time.Minute
+	maxKnown           = 4096
+	maxPending         = 128
+	maxSuppliers       = 64
+	maxInFlight        = 16
+	maxPerPeer         = 4
+	maxBytes           = 8 << 20
 )
 
 // Digests and DATA are native CBOR byte strings. DATA is chunked so actual progress, rather than polling, extends
@@ -77,7 +76,7 @@ func (m Message) Validate() error {
 	if m.Op != "" && !m.Known() {
 		return nil
 	}
-	if m.Version != Version || (m.Type != Manifest && m.Type != Service && m.Type != OperatorRoute) || len(m.Digest) != sha256.Size {
+	if m.Version != Version || (m.Type != Manifest && m.Type != Service) || len(m.Digest) != sha256.Size {
 		return errors.New("invalid gossip version, type or digest")
 	}
 	switch m.Op {

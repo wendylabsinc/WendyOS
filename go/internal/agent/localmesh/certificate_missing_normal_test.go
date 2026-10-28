@@ -2,10 +2,8 @@ package localmesh
 
 import (
 	"bytes"
-	"crypto/x509"
 	"testing"
 
-	"github.com/wendylabsinc/wendy/go/internal/agent/netgossip"
 	"github.com/wendylabsinc/wendy/go/internal/agent/netwire"
 )
 
@@ -93,7 +91,7 @@ func TestCertificateMissingTransfersToAlternateSupplier(t *testing.T) {
 
 func TestFutureCertificateControlKeepsStreamUsable(t *testing.T) {
 	var stream bytes.Buffer
-	future := map[string]any{"kind": "certificate", "certificate": map[string]any{"future-availability": true}}
+	future := map[string]any{"k": "certificate", "c": map[string]any{"future-availability": true}}
 	payload, err := netwire.Marshal(future)
 	if err != nil {
 		t.Fatal(err)
@@ -110,73 +108,5 @@ func TestFutureCertificateControlKeepsStreamUsable(t *testing.T) {
 	next, err := ReadControl(&stream)
 	if err != nil || next.Kind != "identity-request" {
 		t.Fatal("future optional frame interrupted following request", next.Kind, err)
-	}
-}
-
-func TestOperatorCertificateMissingReleasesArtifactSupplier(t *testing.T) {
-	f := operatorProofCredentials(t, "P256")
-	parts := NewCertificatePool()
-	destination, err := newOperatorDirectory(testTenant(t), []*x509.Certificate{f.root}, parts, nil, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	forgotten, err := newOperatorDirectory(testTenant(t), []*x509.Certificate{f.root}, NewCertificatePool(), nil, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	source := newOperatorSynchronizer(forgotten, netgossip.NewPool())
-	defer source.close()
-	gossip := netgossip.NewPool()
-	first := newOperatorSynchronizer(destination, gossip)
-	defer first.close()
-	other := newOperatorSynchronizer(destination, gossip)
-	defer other.close()
-	data, err := forgotten.artifact(f.proof(t, 1, 1), f.identity)
-	if err != nil {
-		t.Fatal(err)
-	}
-	have := source.record(data, f.now)
-	if len(have) != 1 {
-		t.Fatal("missing valid proof availability")
-	}
-	requested, _, err := first.receive(have[0], f.now, 4)
-	if err != nil || len(requested) != 1 || requested[0].Operator == nil {
-		t.Fatal(requested, err)
-	}
-	queued, _, err := other.receive(have[0], f.now, 4)
-	if err != nil || len(queued) != 0 {
-		t.Fatal(queued, err)
-	}
-	want := *requested[0].Operator
-	var repair []ControlMessage
-	for offset := 0; offset < len(data); offset += netgossip.ChunkSize {
-		packet := want
-		packet.Op = "data"
-		packet.Offset = offset
-		packet.Total = len(data)
-		packet.Data = data[offset:min(len(data), offset+netgossip.ChunkSize)]
-		out, _, err := first.receive(ControlMessage{Kind: "operator-gossip", Operator: &packet}, f.now, 4)
-		if err != nil {
-			t.Fatal(err)
-		}
-		repair = append(repair, out...)
-	}
-	if len(repair) != 1 || repair[0].OperatorCertificate == nil || repair[0].OperatorCertificate.Request == nil {
-		t.Fatal("no serial DER repair", repair)
-	}
-	miss, _, err := source.receive(repair[0], f.now, 4)
-	if err != nil || len(miss) != 1 || miss[0].OperatorCertificate.Missing == nil {
-		t.Fatal(miss, err)
-	}
-	queued, _, err = first.receive(miss[0], f.now, 4)
-	if err != nil || len(queued) != 0 || len(first.pending) != 0 || first.waiting != nil {
-		t.Fatal("supplier retained after DER miss", queued, err)
-	}
-	queued, _, err = other.poll(f.now, 4, true)
-	if err != nil || len(queued) != 1 || queued[0].Operator == nil || queued[0].Operator.Op != "want" {
-		t.Fatal("alternate proof supplier did not resume immediately", queued, err)
-	}
-	if len(destination.entries) != 0 || parts.bytes != 0 {
-		t.Fatal("unverified artifact retained authority or temporary DER")
 	}
 }

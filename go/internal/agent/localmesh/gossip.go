@@ -39,8 +39,8 @@ func (s *Synchronizer) resolveManifest(w SignedManifest, now time.Time, accepted
 	s.gossip.Resolve(data, time.UnixMilli(manifest.Expires), now, accepted)
 }
 
-// Router links require HAVE/WANT; the legacy constructor is retained only for
-// the separately negotiated endpoint-only leaf protocol and protocol fixtures.
+// Router links require HAVE/WANT. Direct-message fixtures exercise the same
+// directory and certificate admission without opening a network carrier.
 func (s *Synchronizer) Receive(m ControlMessage, now time.Time, slots ...int) ([]ControlMessage, []SignedManifest, error) {
 	if len(slots) > 0 && slots[0] < directoryResponseDemand(m) {
 		return nil, nil, ErrControlBackpressure

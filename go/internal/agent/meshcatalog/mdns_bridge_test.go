@@ -123,7 +123,7 @@ func TestProjectionGoodbyesAndScopedAnswer(t *testing.T) {
 	if response == nil || len(response.Answer) != 1 || len(response.Extra) != 3 {
 		t.Fatalf("PTR browse response = %+v", response)
 	}
-	if response.Answer[0].Header().Ttl > 89 {
+	if response.Answer[0].Header().Ttl > uint32((MaxLease-time.Second)/time.Second) {
 		t.Fatal("projection exceeded signed lease")
 	}
 	query.Answer = append(query.Answer, dns.Copy(response.Answer[0]))
@@ -250,10 +250,10 @@ func TestBridgeLearnsBoundedServiceTypes(t *testing.T) {
 	if fresh := bridge.learnTypes(response, f.now); len(fresh) != 1 || fresh[0] != "_http._tcp" {
 		t.Fatalf("learned %v", fresh)
 	}
-	if names := bridge.knownTypes(f.now.Add(MaxLease - time.Second)); len(names) != 1 {
+	if names := bridge.knownTypes(f.now.Add(299 * time.Second)); len(names) != 1 {
 		t.Fatalf("bounded lease: %v", names)
 	}
-	if names := bridge.knownTypes(f.now.Add(MaxLease)); len(names) != 0 {
+	if names := bridge.knownTypes(f.now.Add(300 * time.Second)); len(names) != 0 {
 		t.Fatalf("expired type: %v", names)
 	}
 }

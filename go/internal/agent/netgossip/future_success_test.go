@@ -8,7 +8,7 @@ import (
 
 func TestFutureOperationLeavesSessionUsable(t *testing.T) {
 	var future Message
-	wire, err := netwire.Marshal(map[string]any{"op": "future-cache-hint", "data": map[string]any{"mode": "compact"}})
+	wire, err := netwire.Marshal(map[string]any{netwire.Key("op"): "future-cache-hint", netwire.Key("data"): map[string]any{"mode": "compact"}})
 	if err != nil {
 		t.Fatal(err)
 	}

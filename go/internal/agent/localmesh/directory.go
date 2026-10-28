@@ -24,8 +24,8 @@ import (
 
 const (
 	MaxManifestBytes = 32768
-	// ML-DSA-65 origin proofs are3309 bytes; CA algorithms do not set this bound.
-	MaxManifestSignatureBytes = 3309
+	// Bound supports both ML-DSA-65 and ML-DSA-87 origin proofs.
+	MaxManifestSignatureBytes = 8192
 	MaxLease                  = 15 * time.Minute
 	manifestDomain            = "wendy-local-mesh/manifest/4\x00"
 	// ManifestVersionRoute binds the full principal and exact route origin to

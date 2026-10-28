@@ -15,21 +15,19 @@ import (
 
 // MDNSBridge serves one isolated app bridge. The container lifecycle supplies
 // the app identity, bridge index, container IP and declared port mapping.
-// emit should be Runtime.Broadcast; it receives only signed, admitted changes.
+// emit observes local intent changes already submitted to the complete manifest.
 type MDNSBridge struct {
-	vips             *mesh.VIPTable
-	scope            AppScope
-	collector        *Collector
-	catalog          *Catalog
-	policy           BrowsePolicy
-	snapshot         func() localmesh.NodeSnapshot
-	remoteReady      func(meshid.Device) bool
-	remoteInvalidate func(meshid.Device)
-	lanSource        func(time.Time) []LANService
-	lanAccess        *LANProjector
-	emit             func(Record)
-	projected        map[string]dns.RR
-	seenTypes        map[string]time.Time
+	vips      *mesh.VIPTable
+	scope     AppScope
+	collector *Collector
+	catalog   *Catalog
+	policy    BrowsePolicy
+	snapshot  func() localmesh.NodeSnapshot
+	lanSource func(time.Time) []LANService
+	lanAccess *LANProjector
+	emit      func(Record)
+	projected map[string]dns.RR
+	seenTypes map[string]time.Time
 	// App-owned mDNS names take precedence on this app's bridge. Claims are
 	// learned only from its container IP/interface and expire with their TTL.
 	appClaims          map[string]map[uint16]time.Time
@@ -50,16 +48,9 @@ func NewMDNSBridge(scope AppScope, catalog *Catalog, vips *mesh.VIPTable, policy
 }
 
 // SetLANProjection adds unsigned, directly reachable physical-LAN services
-// to this app's multicast bridge. They never enter Catalog or Runtime.
+// to this app's multicast bridge. They never enter the signed device manifest.
 func (b *MDNSBridge) SetLANProjection(source func(time.Time) []LANService, access *LANProjector) {
 	b.lanSource, b.lanAccess = source, access
-}
-
-// SetRemoteSync makes a remote signed service visible only after the origin
-// has reconciled its catalog on the current route. Directly observed LAN
-// services use their separate lease and do not depend on this gate.
-func (b *MDNSBridge) SetRemoteSync(ready func(meshid.Device) bool, invalidate func(meshid.Device)) {
-	b.remoteReady, b.remoteInvalidate = ready, invalidate
 }
 
 const maxDiscoveredTypes = 32
@@ -270,12 +261,6 @@ func (b *MDNSBridge) projection(now time.Time) ([]dns.RR, error) {
 			ok, checked := reachable[device]
 			if !checked {
 				ok = eligibleSnapshot(view, device, now)
-				if !ok && b.remoteInvalidate != nil {
-					b.remoteInvalidate(device)
-				}
-				if ok && b.remoteReady != nil {
-					ok = b.remoteReady(device)
-				}
 				reachable[device] = ok
 			}
 			if !ok {

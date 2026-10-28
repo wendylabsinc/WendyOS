@@ -19,11 +19,13 @@ import (
 func TestManifestNativeMLDSAOriginPositive(t *testing.T) {
 	now := time.Now().Truncate(time.Second)
 	authority := newManifestTestAuthority(t, now)
-	for _, algorithm := range []string{"P256", "MLDSA65"} {
+	for _, algorithm := range []string{"P256", "MLDSA65", "MLDSA87"} {
 		t.Run(algorithm, func(t *testing.T) {
 			var signer crypto.Signer
 			var err error
-			if algorithm == "MLDSA65" {
+			if algorithm == "MLDSA87" {
+				signer, err = mldsa.GenerateKey(mldsa.MLDSA87())
+			} else if algorithm == "MLDSA65" {
 				signer, err = mldsa.GenerateKey(mldsa.MLDSA65())
 			} else {
 				signer, err = ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -73,6 +75,9 @@ func TestManifestNativeMLDSAOriginPositive(t *testing.T) {
 				}
 				if algorithm == "MLDSA65" && len(wire.Signature) != 3309 {
 					t.Fatal("ML-DSA65 proof length", len(wire.Signature))
+				}
+				if algorithm == "MLDSA87" && len(wire.Signature) != 4627 {
+					t.Fatal("ML-DSA87 proof length", len(wire.Signature))
 				}
 				if algorithm == "P256" && len(wire.Signature) > 80 {
 					t.Fatal("P-256 proof length", len(wire.Signature))

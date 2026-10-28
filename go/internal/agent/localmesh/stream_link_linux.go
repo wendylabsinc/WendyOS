@@ -72,7 +72,7 @@ func OpenStreamHello(ctx context.Context, conn net.Conn, self, peer meshid.Devic
 }
 
 // OpenStreamHelloWithALPN binds the hello to one explicit carrier protocol.
-// Router streams require StreamALPN; endpoint attachments negotiate their own role.
+// Ordinary router streams require StreamALPN before node admission.
 func OpenStreamHelloWithALPN(ctx context.Context, conn net.Conn, self, peer meshid.Device, alpn string) error {
 	if alpn != StreamALPN {
 		return errors.New("unsupported net stream protocol")
