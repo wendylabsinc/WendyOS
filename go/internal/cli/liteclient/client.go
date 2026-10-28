@@ -1093,6 +1093,13 @@ func (c *WendyLiteClient) sendCommand(cmd *wendypb.WendyComCommand, timeout time
 }
 
 func (c *WendyLiteClient) handshake() error {
+	return c.handshakeWithin(3 * time.Second)
+}
+
+func (c *WendyLiteClient) handshakeWithin(budget time.Duration) error {
+	if budget <= 0 {
+		return context.DeadlineExceeded
+	}
 	if err := c.link.linkHandshake(); err != nil {
 		return err
 	}
@@ -1111,7 +1118,7 @@ func (c *WendyLiteClient) handshake() error {
 				},
 			},
 		},
-	}, 3*time.Second)
+	}, budget)
 	if err != nil {
 		return fmt.Errorf("WendyCom protocol exchange: %w", err)
 	}
@@ -1278,9 +1285,22 @@ func (c *WendyLiteClient) connectTLSContext(ctx context.Context, address string,
 	return nil
 }
 
+const sensorSourceTCPDialTimeout = 15 * time.Second
+const sensorSourceTLSSetupTimeout = 60 * time.Second
+
+// SensorSourceSetupTimeout bounds a native source connection's TCP dial and
+// authenticated TLS/WendyCom setup. C6 certificate flights on a routed BLE
+// endpoint take about 29–33 seconds; established SensorLink I/O has its own
+// shorter request deadlines.
+const SensorSourceSetupTimeout = sensorSourceTCPDialTimeout + sensorSourceTLSSetupTimeout
+
 // ConnectSensorSource authenticates a pinned SensorLink source using this
 // consumer's device identity. The source limits device callers to SensorLink.
 func (c *WendyLiteClient) ConnectSensorSource(ctx context.Context, address string, cert tls.Certificate, chain, principal string) error {
+	return c.connectSensorSourceWithBudgets(ctx, address, cert, chain, principal, sensorSourceTCPDialTimeout, sensorSourceTLSSetupTimeout)
+}
+
+func (c *WendyLiteClient) connectSensorSourceWithBudgets(ctx context.Context, address string, cert tls.Certificate, chain, principal string, tcpBudget, tlsBudget time.Duration) error {
 	if len(cert.Certificate) == 0 {
 		return fmt.Errorf("missing consumer certificate")
 	}
@@ -1300,24 +1320,44 @@ func (c *WendyLiteClient) ConnectSensorSource(ctx context.Context, address strin
 	if err != nil {
 		return err
 	}
-	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	defer cancel()
 	cfg := &tls.Config{MinVersion: tls.VersionTLS13, Certificates: []tls.Certificate{cert},
 		InsecureSkipVerify: true, // VerifyConnection authenticates the full chain and exact device principal.
 		VerifyConnection:   verify}
-	conn, err := (&tls.Dialer{Config: cfg}).DialContext(ctx, "tcp", address)
+	dialCtx, cancelDial := context.WithTimeout(ctx, tcpBudget)
+	raw, err := (&net.Dialer{}).DialContext(dialCtx, "tcp", address)
+	cancelDial()
 	if err != nil {
 		return fmt.Errorf("connect SensorLink (mTLS): %w", err)
 	}
-	stop := context.AfterFunc(ctx, func() { conn.Close() })
+	// TCP connection establishment and certificate delivery across routed BLE
+	// have separate ceilings. TLS 1.3's client can finish before the source
+	// has verified its certificate flight, so include the WendyCom exchange
+	// in this same finite authenticated setup budget.
+	setup, cancel := context.WithTimeout(ctx, tlsBudget)
+	defer cancel()
+	conn := tls.Client(raw, cfg)
+	if err := conn.HandshakeContext(setup); err != nil {
+		raw.Close()
+		return fmt.Errorf("connect SensorLink (mTLS): %w", err)
+	}
+	stop := context.AfterFunc(setup, func() { raw.Close() })
 	defer stop()
 	c.link = newDirectLink(conn)
-	if err := c.handshake(); err != nil {
+	deadline, _ := setup.Deadline()
+	if err := c.handshakeWithin(time.Until(deadline)); err != nil {
 		c.link.close()
 		c.link = nil
+		if setup.Err() != nil {
+			err = setup.Err()
+		}
 		return fmt.Errorf("SensorLink handshake: %w", err)
 	}
-	c.peerCert = conn.(*tls.Conn).ConnectionState().PeerCertificates[0]
+	if !stop() || setup.Err() != nil {
+		c.link.close()
+		c.link = nil
+		return fmt.Errorf("SensorLink handshake: %w", setup.Err())
+	}
+	c.peerCert = conn.ConnectionState().PeerCertificates[0]
 	c.startReadLoop()
 	return nil
 }

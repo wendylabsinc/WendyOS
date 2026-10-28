@@ -109,3 +109,31 @@ func dialAppQUIC(ctx context.Context, credentials *localmesh.Credentials, endpoi
 	}()
 	return conn, nil
 }
+
+// Bind the stable mesh host address while allowing it to appear after startup.
+// TCP remains free to use a different routed carrier for later packets.
+func listenAppTCP(ctx context.Context, credentials *localmesh.Credentials, addr string) (net.Listener, error) {
+	address, err := net.ResolveTCPAddr("tcp", addr)
+	if err != nil {
+		return nil, err
+	}
+	if address.IP.IsUnspecified() || len(address.IP) == 0 {
+		address.IP = net.IP(credentials.Device.MeshAddress().AsSlice())
+	}
+	lc := net.ListenConfig{}
+	network := "tcp6"
+	if address.IP.To4() != nil {
+		network = "tcp4"
+	}
+	if meshid.MeshPrefix.Contains(address.AddrPort().Addr()) {
+		lc.Control = func(_, _ string, raw syscall.RawConn) error {
+			var sockErr error
+			err := raw.Control(func(fd uintptr) { sockErr = unix.SetsockoptInt(int(fd), unix.IPPROTO_IPV6, unix.IPV6_FREEBIND, 1) })
+			if err != nil {
+				return err
+			}
+			return sockErr
+		}
+	}
+	return lc.Listen(ctx, network, address.String())
+}

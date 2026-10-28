@@ -13,7 +13,10 @@ import (
 const UDPProxyPort = 50059
 const udpFlowLimit = 256
 const udpFlowIdle = 30 * time.Second
-const udpDialTimeout = 40 * time.Second
+
+// Cover the TLS certificate flights and app-port setup on routed BLE paths.
+// Established flows retain their separate, shorter idle timeout.
+const udpDialTimeout = meshsession.TLSAppSessionSetupTimeout
 
 // UDPFlow sends and receives complete unreliable UDP messages, including empty.
 // Every received Message must be released after final local delivery or discard.

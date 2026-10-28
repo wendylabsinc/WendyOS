@@ -180,6 +180,7 @@ func (f *DatagramFlow) Send(payload []byte) error {
 	}
 	return f.endpoint.Send(payload)
 }
+func (f *DatagramFlow) Done() <-chan struct{} { return f.conn.Context().Done() }
 func (f *DatagramFlow) Receive(ctx context.Context) (*udpmessage.Message, error) {
 	if f == nil || f.conn == nil {
 		return nil, net.ErrClosed
