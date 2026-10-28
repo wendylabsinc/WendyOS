@@ -49,7 +49,7 @@ func Key(name string) string {
 		return "d"
 	case "digest":
 		return "h"
-	case "endpointListen":
+	case "tls_listen":
 		return "e"
 	case "error":
 		return "e"

@@ -176,6 +176,16 @@ func (f *advertisementFreshness) candidates(objects managedObjects, at time.Time
 	return peers, updates
 }
 
+// nativeReady rechecks the newest live endpoint hint immediately before a
+// queued dial. A busy announcement replaces ready without losing time discovery.
+func (f *advertisementFreshness) nativeReady(peer candidate, now time.Time) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	entry, ok := f.seen[peer.path]
+	return ok && !now.Before(entry.seen) && now.Sub(entry.seen) < advertisementFreshnessTTL &&
+		entry.advert.NativeAccepting() && entry.advert.PSM == peer.psm && entry.advert.DeviceHint == peer.hint
+}
+
 // Subscribe before StartDiscovery. InterfacesAdded is deliberately ignored:
 // a newly created Device1 may contain persisted ServiceData. DuplicateData
 // reports the next live advertisement as PropertiesChanged. The owner is the

@@ -126,7 +126,7 @@ func TestLocalNameRejectsWrongIdentityAndMalformedBinaryFallback(t *testing.T) {
 	wrong, _ := NewAdvertisement(lowDevice, "elsewhere", DefaultPSM)
 	wrongName, _ := wrong.MarshalLocalName()
 	versioned := bytes.Clone(binary)
-	versioned[0] = 1
+	versioned[0] = 2
 	unknownName, _ := encodeLocalName(versioned)
 	cases := map[string][]byte{
 		"wrong tenant":                      append(adField(7, wireUUID(otherTenant.UUID())), n...),
