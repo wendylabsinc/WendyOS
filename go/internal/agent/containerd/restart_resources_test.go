@@ -144,6 +144,21 @@ func TestEnsureDBusProxyForStartYieldsLegacyAvahiMount(t *testing.T) {
 	}
 }
 
+func TestEnsureAvahiForStartRequiresManagerForPersistedMounts(t *testing.T) {
+	name := "sh.wendy.cloudv2.validation"
+	for _, source := range []string{
+		avahibridge.ProxySocketDir(name),
+		filepath.Join("/run/wendy/avahi", name, "proxy"),
+	} {
+		client := &Client{logger: zap.NewNop()}
+		mounts := []specs.Mount{{Destination: "/var/run/dbus", Source: source, Type: "bind"}}
+		prepared, err := client.ensureAvahiForStart(context.Background(), name, mounts)
+		if err == nil || prepared {
+			t.Fatalf("persisted Avahi mount %q bypassed preparation: prepared=%v err=%v", source, prepared, err)
+		}
+	}
+}
+
 func TestCaptureAndRefreshSerialIdentityAfterRenumber(t *testing.T) {
 	origGlob := globSerialByID
 	origEval := evalSerialPath

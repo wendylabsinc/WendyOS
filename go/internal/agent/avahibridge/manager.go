@@ -102,11 +102,12 @@ func (m *Manager) proxyDir(containerName string) string {
 	return filepath.Join(m.stateDir(containerName), "proxy")
 }
 
-// ProxySocketDir returns the directory this manager's Prepare will provide.
-// It does not create the directory or start a private bus. Call Prepare before
-// using the directory as a container mount.
+// ProxySocketDir plans the bounded directory for a new container. A recovered
+// container may still use its persisted legacy directory until Stop; replacing
+// it must plan the current path before retiring the old stack. When replacing,
+// call Stop before Prepare; preparation must precede the new container mount.
 func (m *Manager) ProxySocketDir(containerName string) string {
-	return m.proxyDir(containerName)
+	return filepath.Join(m.baseDir, stateKey(containerName), "proxy")
 }
 
 // ProxySocketDir returns the production proxy directory to mount at /var/run/dbus.
@@ -129,7 +130,10 @@ func isProxySocketDir(base, containerName, dir string) bool {
 		return false
 	}
 	legacy := filepath.Join(base, containerName, "proxy")
-	return len(filepath.Join(legacy, proxySocketName)) < 104 && dir == legacy
+	// Recognition follows the persisted mount, not the socket limit of the
+	// agent host: Linux accepts legacy paths longer than macOS does. Prepare
+	// reports any actual socket creation failure for this platform.
+	return dir == legacy
 }
 
 // RestoreProxySocketDir adopts the exact persisted OCI mount before Prepare.
@@ -628,6 +632,12 @@ func (m *Manager) stop(containerName string, preserveDirs bool) error {
 	m.mu.Lock()
 	inst, ok := m.instances[containerName]
 	if !ok {
+		// Failed preparation and preserving cleanup can leave an adopted path
+		// without an instance. An explicit stop still retires that adoption so
+		// a later replacement uses the new-container path.
+		if !preserveDirs {
+			m.restoredDirs.Delete(containerName)
+		}
 		m.mu.Unlock()
 		return nil
 	}

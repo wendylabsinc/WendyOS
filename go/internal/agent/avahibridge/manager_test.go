@@ -61,9 +61,90 @@ func TestRestoreLegacyProxyAfterAgentRestart(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	// A replacement agent has no in-memory adoption. It must restore the same
+	// persisted source while keeping the surviving task's mount inode intact.
+	successor := NewManagerInDir(zap.NewNop(), m.baseDir)
+	successor.identity = m.identity
+	t.Cleanup(successor.StopAll)
+	if err := successor.RestoreProxySocketDir(name, legacy); err != nil {
+		t.Fatal(err)
+	}
+	dir, err := successor.Prepare(ctx, name)
+	if err != nil || dir != legacy {
+		t.Fatalf("replacement agent: dir=%q err=%v", dir, err)
+	}
+	after, err := os.Stat(dir)
+	if err != nil || !os.SameFile(before, after) {
+		t.Fatalf("replacement agent replaced the mounted directory: %v", err)
+	}
 	// Creating a separate app still uses the bounded current format.
 	if got := m.ProxySocketDir("fresh"); got != filepath.Join(m.baseDir, stateKey("fresh"), "proxy") {
 		t.Fatalf("fresh app path = %q", got)
+	}
+}
+
+// Replacement plans its OCI mount while the old container is still running.
+// Retiring that container must make Prepare provide the path already planned.
+func TestLegacyProxyReplacementUsesPlannedPath(t *testing.T) {
+	for _, cleanup := range []string{"active", "preserved", "prepare-failed"} {
+		t.Run(cleanup, func(t *testing.T) {
+			bin := t.TempDir()
+			stubBinaries(t, bin)
+			t.Setenv("AVAHI_STUB_LOG", filepath.Join(bin, "calls.log"))
+			m := newStubManager(t)
+			name := "validation"
+			legacy := filepath.Join(m.baseDir, name, "proxy")
+			if err := m.RestoreProxySocketDir(name, legacy); err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			identity := m.identity
+			if cleanup == "prepare-failed" {
+				m.identity = func() (int, int, error) { return 0, 0, errors.New("identity unavailable") }
+			}
+			dir, err := m.Prepare(ctx, name)
+			m.identity = identity
+			if cleanup == "prepare-failed" {
+				if err == nil {
+					t.Fatal("preparation unexpectedly succeeded without the service identity")
+				}
+			} else if err != nil || dir != legacy {
+				t.Fatalf("restored stack: dir=%q err=%v", dir, err)
+			}
+			if cleanup == "preserved" {
+				if err := m.StopPreservingMounts(name); err != nil {
+					t.Fatal(err)
+				}
+			}
+			planned := m.ProxySocketDir(name)
+			if planned == legacy {
+				t.Fatal("replacement planned the retiring container's legacy mount")
+			}
+			if err := m.Stop(name); err != nil {
+				t.Fatal(err)
+			}
+			dir, err = m.Prepare(ctx, name)
+			if err != nil || dir != planned {
+				t.Fatalf("replacement mount: dir=%q planned=%q err=%v", dir, planned, err)
+			}
+		})
+	}
+}
+
+func TestRecognizePersistedProxyPaths(t *testing.T) {
+	// These legacy socket lengths were usable on Linux before hashing. Their
+	// OCI mounts must still be recognized when an upgraded agent restores them.
+	for _, socketLen := range []int{103, 104, 107} {
+		nameLen := socketLen - len(filepath.Join(defaultBaseDir, "proxy", proxySocketName)) - 1
+		name := strings.Repeat("a", nameLen)
+		legacy := filepath.Join(defaultBaseDir, name, "proxy")
+		if !IsProxySocketDir(name, legacy) {
+			t.Fatalf("legacy socket length %d was not recognized", len(filepath.Join(legacy, proxySocketName)))
+		}
+		if !IsProxySocketDir(name, ProxySocketDir(name)) {
+			t.Fatal("current mount was not recognized")
+		}
 	}
 }
 
