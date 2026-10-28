@@ -15,8 +15,8 @@ const advertisementRefreshInterval = time.Second
 
 // Connecting consumes a connectable advertising set on some controllers. BlueZ
 // refreshes its existing client instance on ServiceData PropertiesChanged, even
-// when the value is unchanged. Request only after an inbound peer authenticates
-// and is admitted; failed TLS attempts already close their connection.
+// when the value is unchanged. Refresh admitted links and authenticated inbound
+// disconnects, including links declined because a cheaper LAN path exists.
 func (r *runtime) requestAdvertisementRefresh() {
 	select {
 	case r.advertisementRefresh <- struct{}{}:
