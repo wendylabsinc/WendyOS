@@ -1549,12 +1549,16 @@ func connectPickedLANDevice(ctx context.Context, d *models.DiscoveredDevice, add
 		return connectAgentAtAddressWithProvisionedHint(ctx, addr, func() bool { return mtls }, candidates...)
 	}
 	conn, err := dial()
-	if err != nil && !blocksUnauthenticatedFallback(err) {
+	if err != nil {
 		// A picked device that rejects our certificate gets the same clock
 		// recovery as a named one: before this, a device chosen in the picker
 		// went straight to "TLS authentication failed" with no time proof.
 		// Same endpoint and candidates; the picker only runs interactively, so
 		// read-only monitoring (always non-interactive) never reaches here.
+		// autoSyncTimeAndRetry declines identity refusals itself. A pinned
+		// device that rejected our certificate arrives as the pinned refusal,
+		// so filtering on blocksUnauthenticatedFallback here would skip the
+		// one picker case that needs the time proof.
 		conn, err = autoSyncTimeAndRetry(ctx, err, dial)
 	}
 	if err != nil {
