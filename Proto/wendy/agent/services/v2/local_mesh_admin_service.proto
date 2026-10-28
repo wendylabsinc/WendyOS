@@ -25,7 +25,12 @@ message ConfigureLocalMeshRequest {
 }
 
 message GetLocalMeshStatusRequest {}
-message GetLocalMeshTopologyRequest {}
+message GetLocalMeshTopologyRequest {
+  // Optional public service descriptions from the same verified manifests.
+  // Omitted for normal device discovery to keep recurring observations small.
+  bool include_services = 1;
+
+}
 
 // A local observation, not a global graph or proof of end-to-end reachability.
 // Each repeated field is bounded to 1024 entries. No certificates, signatures,
@@ -43,6 +48,9 @@ message LocalMeshTopology {
   repeated LocalMeshRoute routes = 9;
   repeated LocalMeshAnnouncement announcements = 10;
   bool truncated = 11;
+  // True only when this reporter implements and handled include_services.
+  bool services_included = 12;
+
 }
 
 message LocalMeshPeerLink {
@@ -88,6 +96,25 @@ message LocalMeshAnnouncement {
   // verified-at-snapshot: signature and certificate trust were accepted when
   // the node captured this entry. No current/global trust assertion is made.
   string trust_state = 10;
+  // Public agent hints from the same verified announcement. The caller must
+  // authenticate the destination independently; these do not grant identity.
+  uint32 agent_port = 11;
+  string agent_transport = 12;
+  string platform = 13;
+  repeated string caps = 14;
+  // Inherits this announcement's device identity, revision and expiry.
+  // Populated only on request and bounded across the response.
+  repeated LocalMeshService services = 15;
+}
+
+message LocalMeshService {
+  string mesh = 1;
+  string app_id = 2;
+  string service_id = 3;
+  string type = 4;
+  string instance = 5;
+  uint32 port = 6;
+  repeated string txt = 7;
 }
 
 message LocalMeshConfiguration {

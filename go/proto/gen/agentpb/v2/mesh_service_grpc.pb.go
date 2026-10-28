@@ -26,10 +26,11 @@ const (
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
-// WendyMeshService is the LAN-direct mesh data plane between two WendyOS
-// devices. A peer agent (not the CLI) opens MeshDial over the mTLS port,
-// authenticated with its asset certificate; the stream carries one TCP
-// connection to a local port, mirroring the cloud broker's tunnel semantics.
+// WendyMeshService carries running-app TCP streams on an authenticated agent
+// connection. Canonical same-tenant device and primary operator identities are
+// admitted; the current running-app ingress registry owns port authorization.
+// The first response is an empty MeshDialData acknowledging the actual admitted
+// destination connection; later responses carry data and directional half-close.
 type WendyMeshServiceClient interface {
 	MeshDial(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[MeshDialMessage, MeshDialData], error)
 }
@@ -59,10 +60,11 @@ type WendyMeshService_MeshDialClient = grpc.BidiStreamingClient[MeshDialMessage,
 // All implementations must embed UnimplementedWendyMeshServiceServer
 // for forward compatibility.
 //
-// WendyMeshService is the LAN-direct mesh data plane between two WendyOS
-// devices. A peer agent (not the CLI) opens MeshDial over the mTLS port,
-// authenticated with its asset certificate; the stream carries one TCP
-// connection to a local port, mirroring the cloud broker's tunnel semantics.
+// WendyMeshService carries running-app TCP streams on an authenticated agent
+// connection. Canonical same-tenant device and primary operator identities are
+// admitted; the current running-app ingress registry owns port authorization.
+// The first response is an empty MeshDialData acknowledging the actual admitted
+// destination connection; later responses carry data and directional half-close.
 type WendyMeshServiceServer interface {
 	MeshDial(grpc.BidiStreamingServer[MeshDialMessage, MeshDialData]) error
 	mustEmbedUnimplementedWendyMeshServiceServer()
