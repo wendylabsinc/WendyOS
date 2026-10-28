@@ -14,13 +14,14 @@ import (
 // full principal, so the hello only has to prove the peer read the pinned
 // identity correctly - there is no numeric identity to announce.
 type LinkHello struct {
-	Version  int       `json:"version"`
-	Device   uuid.UUID `json:"device"`
-	Peer     uuid.UUID `json:"peer"`
-	MTU      int       `json:"mtu"`
-	Datagram int       `json:"datagram"`
+	Version  int       `json:"version" cbor:"v"`
+	Role     string    `json:"role,omitempty" cbor:"r,omitempty"`
+	Device   uuid.UUID `json:"device" cbor:"d"`
+	Peer     uuid.UUID `json:"peer" cbor:"p"`
+	MTU      int       `json:"mtu" cbor:"m"`
+	Datagram int       `json:"datagram" cbor:"g"`
 	// IPDatagram is router-QUIC-only. Stream/leaf peers must leave it zero.
-	IPDatagram int `json:"ipDatagram,omitempty"`
+	IPDatagram int `json:"ipDatagram,omitempty" cbor:"i,omitempty"`
 }
 
 // MaxQUICCryptoStreamSize bounds TLS data at each encryption level while

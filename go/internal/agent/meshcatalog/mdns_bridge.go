@@ -27,7 +27,7 @@ type MDNSBridge struct {
 	remoteInvalidate func(meshid.Device)
 	lanSource        func(time.Time) []LANService
 	lanAccess        *LANProjector
-	emit             func(SignedRecord)
+	emit             func(Record)
 	projected        map[string]dns.RR
 	seenTypes        map[string]time.Time
 	// App-owned mDNS names take precedence on this app's bridge. Claims are
@@ -36,7 +36,7 @@ type MDNSBridge struct {
 	claimsOverflowTill time.Time
 }
 
-func NewMDNSBridge(scope AppScope, catalog *Catalog, vips *mesh.VIPTable, policy BrowsePolicy, emit func(SignedRecord), snapshot func() localmesh.NodeSnapshot) (*MDNSBridge, error) {
+func NewMDNSBridge(scope AppScope, catalog *Catalog, vips *mesh.VIPTable, policy BrowsePolicy, emit func(Record), snapshot func() localmesh.NodeSnapshot) (*MDNSBridge, error) {
 	if policy == nil || emit == nil || vips == nil || snapshot == nil {
 		return nil, errors.New("missing scoped mDNS policy or relay")
 	}

@@ -1,3 +1,7 @@
+Mesh control messages and signed artifacts use the binary CBOR protocol
+documented in [netwire](../netwire/README.md). Certificates travel as raw DER.
+There is no old-wire compatibility path. JSON examples below are host configuration.
+
 # Wendy net peer transport and routing
 
 This stage adds a Linux router using enrolled Wendy device certificates,
@@ -30,14 +34,19 @@ mutual TLS pins the full peer principal. The unauthenticated TCP preface is an
 identity hint, never authorization. The framed TCP carrier simulates graph
 topologies; automatically discovered LAN, NAN and BLE have their own providers.
 
-Production Ethernet and infrastructure Wi-Fi discovery uses native QUIC over
-IPv4 UDP port 43023, bound to each eligible physical interface and local address.
-It never uses the simulator TCP adapter or falls back to TCP. LAN discovery
-advertises `_wendy-net._udp` with `protocol=quic-v1`, full device principal and
-mesh hash as opt-in cleartext hints; old `_wendy-mesh._tcp` advertisements are
-not compatible. Permit UDP port 43023 for neighbour QUIC and UDP port 5353 for mDNS on the
-selected LAN. IPv6 LAN discovery is not added here. Wi-Fi Aware/NAN already
-uses native UDP QUIC and is unchanged.
+Ethernet and infrastructure Wi-Fi advertise and scan both `_wendy-net._udp`
+(`protocol=quic-v1`, UDP 43023) and `_wendy-net._tcp` (`protocol=tls-v1`, TCP
+43024). Both advertisements contain the enrolled principal, tenant mesh hint,
+and a `platform` TXT field. WendyOS publishes `platform=WendyOS` and skips a
+WendyOS peer's TCP advertisement, retaining native QUIC between full OS devices.
+Lite publishes `platform=Lite` and uses ordinary TLS in either dial direction.
+Its `role=embedded-router` advertises native Babel participation; an optional
+`role=endpoint` profile uses the smaller signed-attachment protocol.
+
+Both service types share candidate/connection policy and interface selection.
+Permit UDP 5353 for mDNS plus the applicable carrier ports. IPv6 LAN discovery
+is not added here. Wi-Fi Aware/NAN on WendyOS uses native UDP QUIC. Lite's NAN
+experiments and chip limitations are documented separately in the investigation.
 
 Either full identity may initiate. Outbound mTLS pins the discovered complete
 tenant/device principal. Inbound mTLS accepts an unknown enrolled same-tenant
@@ -174,59 +183,31 @@ interface, no application-owned NAN interface and the existing no-receive
 evidence. It remains limited to one attempt per provider run. Recovery never
 restarts the supplicant or station Wi-Fi.
 
-## Lite leaf carrier
+## Lite router and constrained endpoint carriers
 
-An opt-in `"leafListen": "0.0.0.0:43024"` in `local-mesh.json` enables a
-separate listener for Wendy Lite endpoints. It can be enabled alone or alongside
-the other carriers. The leaf always initiates, regardless of UUID ordering.
-The existing TCP/QUIC carrier retains its `WMT1` framing and negotiates the
-router ALPN `wendy-net-router/2`. No downgrade or fallback between the carriers is attempted.
+Lite's native router uses the same signed route proofs, certificate descriptors
+and chunk requests, HAVE/WANT/GONE dissemination, service catalogue and Babel
+exchange as WendyOS. It can accept and initiate TLS carriers and forward transit
+traffic. Stream TLS uses ALPN `wendy-local-mesh-ble/2`; router QUIC uses
+`wendy-net-router/3`. A four-byte big-endian length bounds each CBOR control
+message to 64 KiB. Stream multiplexing carries control and Babel/IP datagrams
+through the bounded writer; tunnel MTU remains 1320.
 
-The leaf sends `WML3`, its 16-byte tenant UUID and its 16-byte device UUID.
-This 36-byte preface is untrusted. TLS 1.3 then verifies both enrolled device
-certificates and pins the complete expected principal, in the same tenant,
-using ALPN `wendy-local-mesh-leaf/3`. Tickets, resumption and 0-RTT are disabled.
-The connection closes when either verified certificate chain expires. The
-ordinary length-prefixed JSON hello follows, with version 3, MTU 1320 and
-datagram limit 1100. Subsequent frames contain a one-byte kind and four-byte
-big-endian payload length: kind 1 carries a control message including its
-existing four-byte JSON length; kind 2 carries a Babel or IP-fragment datagram.
-Control messages retain the 64 KiB bound and IP packets the 1320-byte bound.
+The separate constrained endpoint profile negotiates `wendy-net-endpoint/2`.
+It does not run Babel or relay catalogues. Its authenticated WendyOS neighbour
+offers an exact /128 and current Babel origin; the endpoint signs that offer
+with a short-lived version-4 manifest. Only that verified signed authorization
+allows the attached router to originate the endpoint's route. Incoming endpoint
+packets must have that device's derived mesh address as their source; outgoing
+packets must target it. Endpoints do not forward transit or IPv4 tunnels.
 
-The listener admits at most 32 pending or active connections, eight concurrent
-preface/TLS handshakes, and one active connection per authenticated leaf.
-Unauthenticated prefaces cannot reserve or replace a device's active session.
-The preface has a five-second deadline and the combined handshake an eight-second
-deadline. Cancellation closes connections and joins the routing/TUN workers.
-
-The Linux receive path limits a leaf to its own signed manifest, certificate
-bundle and exact derived /128 route. The shared verifier still checks signatures,
-revision, router ID, sequence number and lease expiry. Third-party announcements,
-aggregate routes, foreign next hops and wildcard retractions are rejected.
-Wildcard route requests and same-tenant identity lookups remain available for
-endpoint discovery. These checks use the same Babel decoder as the routing
-engine, including compressed prefixes and packet-local context.
-
-After transport reassembly, incoming IPv6 packets must carry the leaf's exact
-source ULA and a mesh destination. Outgoing packets must target that leaf's ULA.
-This first endpoint profile supports TCP, UDP and ICMPv6 without IPv6 extension
-headers. Its MTU is 1320, so endpoints must obey path MTU limits instead of
-emitting IPv6 fragments. The carrier fragments a valid full-size packet into
-at most two frames. Raw IPv4 and IPv6-in-IPv6 remain refused. IPv4-in-IPv6 is
-admitted only for the Internet-sharing lease pool, with an IPv4 header without
-options or fragments, and TCP, UDP or ICMP payload. The outer source on ingress
-and destination on egress must still be the authenticated leaf's ULA. This does
-not admit leaf transit. The gateway separately requires its same-tenant mTLS
-lease and enforces the exact assigned inner address in its tunnel firewall.
-
-Lite's optional Cloud borrower uses this path for automatic Internet fallback.
-It authenticates the gateway with `wendy-mesh-internet/1`; Cloud TLS remains end
-to end. See the companion firmware's signed-mesh-leaf documentation for the
-borrower configuration and hardware validation limits. The gateway allows a
-bounded 60-second mTLS handshake so certificate chains can cross a BLE link.
-Lite operator setup over the Cloud relay also permits 60 seconds in the CLI
-and companion firmware. Caller cancellation, certificate expiry and signed
-session-grant expiry still apply; the gateway does not terminate operator TLS.
+`"endpointListen": "0.0.0.0:43024"` enables an explicit TLS listener, and LAN
+providers publish the TLS service automatically when enabled. The listener
+accepts either stream-router or endpoint ALPN, authenticates the enrolled
+same-tenant principal before allocating its peer TUN, and accepts either dial
+direction. It bounds pending/active connections to 32 and concurrent handshakes
+to four, with a 15-second handshake deadline. No static peer UUID/address list
+or untrusted leaf preface is needed. The old leaf protocol has been removed.
 
 The BLE IP queue retains its 16 KiB cap and per-source fairness. Its minimum
 allows two full packets plus a short ACK for each of four senders, so an ACK
@@ -243,29 +224,6 @@ scheduling policy.
 The stream writer gives directory/Babel the first turn, then alternates with
 waiting IP packets. A proof backlog cannot monopolize the writer, and all
 fragments of an admitted IP packet are still written together.
-
-The leaf protocol exchanges complete currently verified certificate bundles,
-including replies to identity lookups. Certificate descriptors and chunk requests
-remain specific to full-router links; Lite does not implement that exchange.
-
-Leaf links do not implement catalogue relay. They are excluded from catalogue
-peer registration; service inventories, repair and freshness proofs use full-router
-neighbours only.
-
-This is a connection role. Current device certificates do not attest Lite
-hardware or prevent the same identity from implementing another enabled
-full-node carrier. The listener is configured explicitly; this change adds no
-public gRPC fields or automatic leaf discovery.
-
-`TestLeafRoutedEndpointIsolatedNamespace` verifies the configured TLS listener,
-signed route admission, full-MTU UDP and kernel ICMPv6 replies through the actual
-TUN/FIB, duplicate/source rejection and teardown. It runs inside an isolated
-Linux network namespace with NET_ADMIN and TUN. A container with read-only
-sysctls can supply the required IPv6 interface defaults and forwarding at
-creation; the router checks already-correct values without rewriting them.
-`TestLeafCManifestInteroperability` uses `WENDY_LITE_FIXTURE_TOOL` to verify the
-production C encoder/signer against the Go directory verifier, including integer
-precision, tampering, expiry and replay across restart.
 
 ## Identity and addressing
 
@@ -296,23 +254,23 @@ restart; it is not a certificate identity.
 
 ## Route admission
 
-Every finite remote route requires a current version-3 manifest signed by the
+Every finite remote route requires a current version-4 manifest signed by the
 destination device. The manifest binds its full certificate principal to its exact
 Wendy Net /128, Babel origin router ID, and origin sequence number. An authenticated
 neighbour can relay that proof unchanged, but cannot sign for another device,
 advertise an aggregate, or advance another origin's sequence number. Version-1
-and version-2 manifests are rejected, including directory-only presence.
+through version-3 manifests are unsupported, including directory-only presence.
 
-The signature preimage is the bytes `wendy-local-mesh/manifest/3` followed by a
+The signature preimage is the bytes `wendy-local-mesh/manifest/4` followed by a
 NUL byte, the canonical full principal's UTF-8 byte length as a four-byte
-big-endian unsigned integer, those principal bytes, and the exact JSON body
+big-endian unsigned integer, those principal bytes, and the exact CBOR body
 bytes. Ed25519 signs this preimage directly; P-256 and RSA sign its SHA-256 hash.
 Binding the complete principal prevents a proof being relabeled into another
-tenant even when both tenants trust the same key and device UUID. The JSON body
+tenant even when both tenants trust the same key and device UUID. The CBOR body
 is not reserialized for verification.
 
-Nodes publish a 60-second lease every 20 seconds, capped at the identity's
-certificate expiry. Receivers reject leases longer than two minutes and issue
+Nodes publish a 15-minute lease every five minutes, capped at the identity's
+certificate expiry. Receivers reject leases longer than 15 minutes and issue
 times more than five seconds in the future. The origin's persistent revision
 prevents rollback to an older announcement. A Babel sequence change is persisted
 and signed before its updates are sent. Proofs travel over the existing reliable
@@ -335,16 +293,14 @@ valid lease. Hop-local Babel retractions remain unchanged: they only remove that
 neighbour's candidate. Babel feasibility, split horizon, loop prevention, and
 end-to-end application authentication still apply.
 
-Router QUIC links require hello version 2, ALPN `wendy-net-router/2` and the
+Router QUIC links require hello version 2, ALPN `wendy-net-router/3` and the
 authenticated IP carrier capability described below. BLE TLS uses hello version 1
-and `wendy-local-mesh-ble/1` without router IP capabilities. Both router carriers
+and `wendy-local-mesh-ble/2` without router IP capabilities. Both router carriers
 include signed route authorization, neighbour service catalogue, certificate
 exchange and HAVE/WANT dissemination. Signed manifest and service schema versions
-remain independent. The opt-in leaf listener requires
-`wendy-local-mesh-leaf/3` and the `WML3` preface. Earlier BLE and leaf protocols
-are rejected during negotiation. Every carrier rejects earlier manifest versions
-for both directory presence and route admission, including peers that still
-negotiate the preserved router protocol. No automatic downgrade is attempted;
+remain independent. The constrained endpoint uses `wendy-net-endpoint/2`.
+Every carrier requires the binary wire format and current signed manifest schema.
+No automatic downgrade is attempted;
 upgrade each connected Wendy Net network together.
 This changes the internal Wendy Net wire
 contract, not public gRPC messages or application-session ALPNs.
@@ -371,14 +327,14 @@ outside that transition, or after replacement verification, remain fatal.
 
 ## Control and payload flow
 
-Router QUIC uses ALPN `wendy-net-router/2` and hello version 2. Its authenticated
+Router QUIC uses ALPN `wendy-net-router/3` and hello version 2. Its authenticated
 hello keeps the tunnel MTU at 1320 and baseline datagram limit at 1100, and
 independently advertises an IP carrier receive limit of 1100 or 1329. A complete
 tunnel packet can use one nine-byte-header carrier datagram when the peer and
 current validated QUIC path support it. Otherwise the original 1091-byte fixed
 fragment positions apply. QUIC starts at a 1200-byte UDP payload and may probe
 up to a 1400-byte ceiling; application QUIC and tunnel/container MTUs are
-unchanged. BLE and leaf stream protocols retain their separate version and
+unchanged. Router and endpoint TLS stream protocols retain their separate ALPN and
 framing, and do not advertise the router capability.
 
 Nonblocking datagram admission drops on queue pressure without withdrawing a
@@ -421,7 +377,8 @@ chain; chain verification and principal pinning remain mandatory. WendyOS explic
 the upstream default remains16 KiB.
 
 Signed device manifests advertise name, agent port, revision and an absolute
-expiry. Version 3 also binds the signed route origin; application services use the
+expiry. Version 4 also binds the signed route origin and permits bounded optional
+metadata extensions; application services use the
 separate catalogue protocol.
 Every receiver verifies the origin's certificate and signature before relaying
 an accepted version to its other neighbours. Missing certificates cause a
@@ -453,9 +410,9 @@ identity caches still persist verified full chains with their own 1,024-entry,
 are never persisted.
 
 Certificate exchange is part of each role's advertised control protocol.
-TLS handshake certificates and their verification remain unchanged. The endpoint-only
-leaf carrier keeps its separate ALPN and hello version 3; the router bridges its
-verified announcements into router HAVE/WANT dissemination.
+TLS handshake certificates and their verification remain unchanged. The constrained endpoint
+carrier keeps its separate ALPN and hello version 1; its TLS handshake provides
+the identity chain and its router relays the verified route authorization.
 
 Changed records immediately advertise a HAVE digest. Duplicate revisions do not
 renew their expiry. Reconciliation advertises live digests periodically to repair
@@ -519,15 +476,17 @@ includes publications, renewals and withdrawal tombstones; a device manifest
 includes presence, signed router authorization and withdrawal revisions.
 
 The artifact ID is SHA-256 over the domain `wendy-mesh-artifact/1`, its one-byte
-type, a big-endian four-byte envelope length and the deterministic signed JSON
+type, a big-endian four-byte envelope length and the deterministic signed CBOR
 envelope. The domain ends with NUL. The signature is included and forwarded
-unchanged. Digest fields carry 32 raw bytes, base64-encoded by JSON, not hex.
+unchanged. Digest fields carry 32 raw bytes in CBOR byte strings.
 Each gossip message has version 1 and an explicit artifact type:
 
 - `have`: availability hint containing a digest, with no signed body.
 - `want`: digest plus a nonzero request ID scoped to the neighbour session.
 - `data`: matching digest/request, total bytes, offset and at most 1,024 bytes.
 - `unavailable`: matching request whose body is no longer available.
+- `gone`: proactive removal of this neighbour as a supplier for the digest.
+  A waiting requester can immediately choose another announcing neighbour.
 
 If B and C advertise the same object to D, D selects only one supplier. The
 other remains an alternate. Complete bytes awaiting origin verification retain

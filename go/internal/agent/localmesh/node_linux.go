@@ -26,20 +26,28 @@ import (
 )
 
 type nodePeer struct {
-	assembler      IPAssembler
-	id             babel.LinkID
-	device         meshid.Device
-	cost           uint16
-	transport      string
-	link           nodeLink
-	tun            *os.File
-	pendingBundles sync.Map // fingerprints queued or being written on this link
-	control        chan ControlMessage
-	catalog        chan ControlMessage
-	done           chan struct{}
-	sync           *Synchronizer
-	replies        []ControlMessage
-	replyBytes     int
+	operator        *operatorSynchronizer
+	reconcileNeeded bool // Actor-owned: retry a change after bounded queue pressure.
+	closeDiagnostic sync.Once
+	ingress         *nodeEvent // One actor-owned input; its reader awaits acknowledgement.
+
+	assembler                                           IPAssembler
+	id                                                  babel.LinkID
+	device                                              meshid.Device
+	cost                                                uint16
+	transport                                           string
+	link                                                nodeLink
+	tun                                                 *os.File
+	pendingBundles                                      sync.Map // fingerprints queued or being written on this link
+	control                                             chan ControlMessage
+	done                                                chan struct{}
+	timestamp                                           *timestampReply
+	sync                                                *Synchronizer
+	replies                                             []ControlMessage
+	replyBytes                                          int
+	endpointOrigin, endpointOffer, endpointAcknowledged RouteOrigin
+	endpointOfferedAt                                   time.Time
+	endpointCost                                        uint16
 }
 
 type nodeLink interface {
@@ -68,40 +76,53 @@ func (l *quicNodeLink) WriteControl(m ControlMessage) error  { return WriteContr
 func (l *quicNodeLink) ReadControl() (ControlMessage, error) { return ReadControl(l.stream) }
 
 type nodeEvent struct {
-	add     *nodePeer
-	id      babel.LinkID
-	remove  bool
-	packet  []byte
-	control *ControlMessage
-	result  chan error
+	services      *[]ManifestService
+	operator      *operatorEvent
+	add           *nodePeer
+	id            babel.LinkID
+	remove        bool
+	packet        []byte
+	control       *ControlMessage
+	controlResult chan error
+	result        chan error
+	timestamp     *timestampReply
 }
 
 // Node serializes all Babel/directory mutations. Radio providers only establish
 // authenticated QUIC connections and pass them to Attach; no NAN concepts appear
 // in routing or service synchronization. Parallel links have distinct LinkIDs.
 type Node struct {
-	controlHub      *ControlHub
-	Credentials     *Credentials
-	kernel          *Kernel
-	cache           *IdentityCache
-	directory       *Directory
-	bundleHints     *bundleHintCache
-	store           *StateStore
-	state           PersistentState
-	routing         *Routing
-	peers           map[babel.LinkID]*nodePeer
-	events          chan nodeEvent
-	ctx             context.Context
-	cancel          context.CancelFunc
-	started         time.Time
-	nextLink        babel.LinkID
-	advertisement   Manifest
-	view            atomic.Pointer[NodeSnapshot]
-	gate            sync.RWMutex
-	paused, stopped bool
-	forwardRoutes   []babel.Route
-	diagnostics     carrierDiagnostics
-	routeOrigins    map[RouteOrigin]bool
+	// operatorAgent is configured through SetOperatorAgent under gate.
+	operatorAgent func(context.Context, net.Conn) error
+
+	operators        *operatorDirectory
+	operatorPeers    map[babel.LinkID]*operatorAttachment
+	controlHub       *ControlHub
+	Credentials      *Credentials
+	kernel           *Kernel
+	cache            *IdentityCache
+	directory        *Directory
+	bundleHints      *bundleHintCache
+	store            *StateStore
+	state            PersistentState
+	routing          *Routing
+	peers            map[babel.LinkID]*nodePeer
+	events           chan nodeEvent
+	ctx              context.Context
+	cancel           context.CancelFunc
+	started          time.Time
+	nextLink         babel.LinkID
+	advertisement    Manifest
+	publicationDirty bool
+	nextPublication  time.Time
+	view             atomic.Pointer[NodeSnapshot]
+	gate             sync.RWMutex
+	paused, stopped  bool
+	forwardRoutes    []babel.Route
+	diagnostics      carrierDiagnostics
+	routeOrigins     map[RouteOrigin]bool
+	endpointLinks    map[netip.Prefix]babel.LinkID
+	timestampWorkers chan struct{}
 }
 
 func NewNode(parent context.Context, dir string, credentials *Credentials, name string, agentPort uint16) (*Node, error) {
@@ -134,7 +155,7 @@ func NewNode(parent context.Context, dir string, credentials *Credentials, name 
 	}
 	ctx, cancel := context.WithCancel(parent)
 	n := &Node{controlHub: NewControlHub(cache.Certificates()), Credentials: credentials, kernel: kernel, cache: cache, directory: directory, bundleHints: newBundleHintCache(), store: store, state: state, peers: map[babel.LinkID]*nodePeer{}, events: make(chan nodeEvent, 256), ctx: ctx, cancel: cancel, started: now,
-		advertisement: Manifest{Version: ManifestVersionRoute, Device: credentials.Device.UUID(), Name: name, AgentPort: agentPort},
+		advertisement: Manifest{Version: ManifestVersionRoute, Device: credentials.Device.UUID(), Name: name, AgentPort: agentPort, AgentTransport: AgentMTLS, Platform: PlatformWendyOS, AppEndpoints: []AppEndpoint{{Transport: AppQUIC, Port: AppSessionPort}, {Transport: AppTLS, Port: AppSessionTLSPort}}},
 		diagnostics:   carrierDiagnostics{enabled: os.Getenv("WENDY_NET_CARRIER_DIAGNOSTICS") == "1"}}
 	ok := false
 	defer func() {
@@ -154,10 +175,22 @@ func NewNode(parent context.Context, dir string, credentials *Credentials, name 
 	}, now); err != nil {
 		return nil, err
 	}
+	n.operators, err = newOperatorDirectory(credentials.Device.Tenant(), credentials.primaryRoots, cache.parts, state.OperatorReceipts, func(receipts []OperatorReceipt) error {
+		next := n.state
+		next.OperatorReceipts = receipts
+		if err := n.store.Save(next); err != nil {
+			return err
+		}
+		n.state = next
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
 	// Neighbor authentication admits a link, not its routing claims. Every
 	// finite remote route needs the origin's current signed address/ID/sequence
 	// binding. step snapshots that policy before entering the Babel engine.
-	config := babel.Config{RouterID: babel.RouterID(state.RouterID), HelloInterval: time.Second, UpdateInterval: 4 * time.Second, AcceptRoute: func(_ babel.RouterID, prefix netip.Prefix) bool {
+	config := babel.Config{RouterID: babel.RouterID(state.RouterID), HelloInterval: time.Second, UpdateInterval: 16 * time.Second, AcceptRoute: func(_ babel.RouterID, prefix netip.Prefix) bool {
 		return admittedPrefix(prefix)
 	}, AcceptRouteUpdate: func(origin babel.RouterID, prefix netip.Prefix, seqno uint16) bool {
 		return n.routeOrigins[RouteOrigin{Prefix: prefix, RouterID: origin, Seqno: seqno}]
@@ -168,6 +201,12 @@ func NewNode(parent context.Context, dir string, credentials *Credentials, name 
 	}
 	if state.Babel != nil {
 		n.nextLink = state.Babel.LastLink
+	}
+	n.controlHub.manifestServices = func(services []ManifestService) error {
+		if err := CheckManifestServices(services); err != nil {
+			return err
+		}
+		return n.request(n.ctx, nodeEvent{services: &services})
 	}
 	n.view.Store(&NodeSnapshot{})
 	ok = true
@@ -198,16 +237,16 @@ func (n *Node) Snapshot() NodeSnapshot {
 		}
 	}
 	out.Routes = append([]babel.Route(nil), v.Routes...)
+	if v.ForwardingRoutes != nil {
+		out.ForwardingRoutes = append([]babel.Route{}, v.ForwardingRoutes...)
+	}
 	out.RouteAuthorizations = make(map[RouteOrigin]bool, len(v.RouteAuthorizations))
 	for origin, authorized := range v.RouteAuthorizations {
 		out.RouteAuthorizations[origin] = authorized
 	}
 	out.Devices = append([]Manifest(nil), v.Devices...)
 	for i := range out.Devices {
-		if route := out.Devices[i].Route; route != nil {
-			copy := *route
-			out.Devices[i].Route = &copy
-		}
+		out.Devices[i] = cloneManifest(out.Devices[i])
 	}
 	return out
 }
@@ -228,6 +267,9 @@ func (n *Node) refresh() {
 	devices := n.directory.Snapshot(now)
 	links := make([]PeerLink, 0, len(n.peers))
 	for _, p := range n.peers {
+		if l, endpoint := endpointLink(p); endpoint && (!l.live() || n.endpointLinks[netip.PrefixFrom(p.device.MeshAddress(), 128)] != p.id) {
+			continue
+		}
 		link := PeerLink{ID: p.id, Device: p.device, Cost: p.cost, Transport: p.transport, assembler: &p.assembler}
 		if carrier, ok := p.link.(*quicNodeLink); ok {
 			link.carrier = carrier.sendIP
@@ -235,7 +277,7 @@ func (n *Node) refresh() {
 		switch stream := p.link.(type) {
 		case *streamNodeLink:
 			link.queue = stream.ipPackets
-		case *leafNodeLink:
+		case *endpointNodeLink:
 			link.queue = stream.ipPackets
 		}
 		links = append(links, link)
@@ -246,17 +288,30 @@ func (n *Node) refresh() {
 		}
 		return meshid.Compare(links[i].Device, links[j].Device) < 0
 	})
-	n.view.Store(&NodeSnapshot{Self: n.Credentials.Device, CapturedAt: now, Peers: len(n.peers), Links: links, Devices: devices, Routes: n.routing.Snapshot().Routes, RouteAuthorizations: authorizedOrigins(devices, n.Credentials.Device.Tenant())})
+	authorizations := authorizedOrigins(devices, n.Credentials.Device.Tenant())
+	if n.operators != nil {
+		for origin := range n.operators.origins(now) {
+			authorizations[origin] = true
+		}
+	}
+	n.view.Store(&NodeSnapshot{Self: n.Credentials.Device, CapturedAt: now, Peers: len(n.peers), Links: links, Devices: devices, Routes: n.routing.Snapshot().Routes, ForwardingRoutes: append([]babel.Route{}, n.forwardRoutes...), RouteAuthorizations: authorizations})
 }
 
 func (n *Node) Run() error {
 	defer n.cancel()
 	defer func() {
 		_ = n.Stop()
-		n.controlHub.Close()
 		for _, p := range n.peers {
-			p.sync.Close()
+			if p.sync != nil {
+				p.sync.Close()
+			}
+			if p.operator != nil {
+				p.operator.close()
+			}
 			_ = p.link.Close()
+		}
+		for _, p := range n.operatorPeers {
+			_ = p.conn.NetConn().Close()
 		}
 		_ = n.kernel.Close()
 		_ = n.cache.Flush(time.Now())
@@ -274,14 +329,15 @@ func (n *Node) Run() error {
 	defer timer.Stop()
 	maintenance := time.NewTicker(time.Second)
 	defer maintenance.Stop()
-	renew := time.NewTicker(20 * time.Second)
-	defer renew.Stop()
-	reconcile := time.NewTicker(30 * time.Second)
+	reconcile := time.NewTicker(5 * time.Minute)
 	defer reconcile.Stop()
 	for {
 		delay := time.Second
 		if deadline, ok := n.routing.NextDeadline(); ok {
 			delay = max(time.Millisecond, deadline-time.Since(n.started))
+		}
+		if due := n.publicationDeadline(); !due.IsZero() {
+			delay = min(delay, max(time.Millisecond, time.Until(due)))
 		}
 		if !timer.Stop() {
 			select {
@@ -294,6 +350,11 @@ func (n *Node) Run() error {
 		case <-n.ctx.Done():
 			return n.ctx.Err()
 		case <-timer.C:
+			if due := n.publicationDeadline(); !due.IsZero() && !time.Now().Before(due) {
+				if err := n.publish(); err != nil {
+					return err
+				}
+			}
 			if err := n.step(babel.Tick{}); err != nil {
 				return err
 			}
@@ -312,30 +373,39 @@ func (n *Node) Run() error {
 			// drains. This uses the existing maintenance tick, not a new scan
 			// interval, and stops once the pass completes.
 			for _, p := range n.peers {
-				replies, changed, err := p.sync.ContinueCertificates(time.Now(), directoryReplySlots(p))
+				n.flushReplies(p)
+				if err := n.continueIngress(p); err != nil {
+					return err
+				}
+				n.pumpTimestamp(p)
+				if err := n.pollOperator(p, time.Now()); err != nil {
+					n.closePeer(p, "operator-maintenance", err)
+					continue
+				}
+				if p.reconcileNeeded {
+					p.reconcileNeeded = false
+					n.reconcilePeer(p, time.Now())
+				}
+				if p.sync == nil {
+					continue
+				}
+				replies, changed, err := p.sync.ContinueCertificates(time.Now(), directoryResponseSlots(p))
 				if err != nil {
-					_ = p.link.Close()
+					n.closePeer(p, "directory-maintenance", err)
 					continue
 				}
 				if !n.queueReplies(p, replies) {
-					_ = p.link.Close()
+					n.closePeer(p, "directory-maintenance-queue", errors.New("directory reply reserve full"))
 					continue
 				}
 				for _, record := range changed {
 					for id, dest := range n.peers {
-						if id != p.id {
+						if id != p.id && dest.sync != nil {
 							n.queue(dest, dest.sync.Record(record, time.Now()))
 						}
 					}
 				}
 				n.continueReconcilePeer(p, time.Now())
-			}
-		case <-renew.C:
-			if err := n.publish(); err != nil {
-				return err
-			}
-			if err := n.step(babel.Tick{}); err != nil {
-				return err
 			}
 		case <-reconcile.C:
 			for _, p := range n.peers {
@@ -353,11 +423,22 @@ func (n *Node) Run() error {
 				return err
 			}
 		}
+		if err := n.reconcileEndpoints(time.Now()); err != nil {
+			return err
+		}
+		if err := n.reconcileOperators(time.Now()); err != nil {
+			return err
+		}
 	}
 }
 
 func (n *Node) step(event babel.Event) error {
 	n.routeOrigins = n.directory.RouteAuthorizations(time.Now())
+	if n.operators != nil {
+		for origin := range n.operators.origins(time.Now()) {
+			n.routeOrigins[origin] = true
+		}
+	}
 	if err := n.routing.Step(time.Since(n.started), event); err != nil {
 		return errors.Join(babel.ErrStopped, err)
 	}
@@ -366,19 +447,19 @@ func (n *Node) step(event babel.Event) error {
 }
 
 func (n *Node) handle(e nodeEvent) error {
+	if e.services != nil {
+		n.advertisement.Services = cloneServices(*e.services)
+		return n.publish()
+	}
+	if e.operator != nil {
+		return n.handleOperator(e.operator)
+	}
 	if e.add != nil {
 		if len(n.peers) >= 64 {
 			return errors.New("wendy net link capacity reached")
 		}
 		if e.add.device.Principal() == n.Credentials.Device.Principal() {
 			return errors.New("self link")
-		}
-		if _, leaf := e.add.link.(*leafNodeLink); leaf {
-			for _, active := range n.peers {
-				if active.device == e.add.device {
-					return errors.New("leaf already has an active net link")
-				}
-			}
 		}
 		n.nextLink++
 		e.add.id = n.nextLink
@@ -387,26 +468,16 @@ func (n *Node) handle(e nodeEvent) error {
 			return err
 		}
 		e.add.tun = tun
-		if _, leaf := e.add.link.(*leafNodeLink); leaf {
-			e.add.sync = newLeafSynchronizer(n.directory, n.cache)
-		} else {
-			e.add.sync = NewSynchronizer(n.directory, n.cache, n.controlHub.Announcements())
+		if _, endpoint := endpointLink(e.add); endpoint {
+			n.peers[e.add.id] = e.add
+			n.refresh()
+			return nil
 		}
+		if n.operators != nil {
+			e.add.operator = newOperatorSynchronizer(n.operators, n.controlHub.Announcements())
+		}
+		e.add.sync = NewSynchronizer(n.directory, n.cache, n.controlHub.Announcements())
 		n.peers[e.add.id] = e.add
-		p := e.add
-		// The endpoint-only leaf protocol has no catalogue capability.
-		if _, leaf := p.link.(*leafNodeLink); !leaf {
-			n.controlHub.Add(ControlPeer{ID: p.id, Device: p.device}, func(ctx context.Context, data []byte) error {
-				select {
-				case p.catalog <- ControlMessage{Kind: "catalog", Catalog: data}:
-					return nil
-				case <-p.done:
-					return io.ErrClosedPipe
-				case <-ctx.Done():
-					return ctx.Err()
-				}
-			}, func() { _ = p.link.Close() })
-		}
 
 		// Both ends derive the same complementary pair from the full UUIDs.
 		local, peer, err := meshid.LinkLocalAddresses(n.Credentials.Device, e.add.device)
@@ -416,7 +487,9 @@ func (n *Node) handle(e nodeEvent) error {
 		if err = n.step(babel.AddLink{Link: babelLinkForPeer(e.add, local, peer)}); err != nil {
 			return err
 		}
-		n.reconcilePeer(e.add, time.Now())
+		now := time.Now()
+		n.queue(e.add, e.add.sync.bootstrapOwn(n.Credentials.Device.Principal(), now, cap(e.add.control)-len(e.add.control)))
+		n.reconcilePeer(e.add, now)
 		return nil
 	}
 	p := n.peers[e.id]
@@ -424,11 +497,20 @@ func (n *Node) handle(e nodeEvent) error {
 		return nil
 	}
 	if e.remove {
-		p.sync.Close()
-		if err := n.step(babel.RemoveLink{ID: e.id}); err != nil {
-			return err
+		if _, endpoint := endpointLink(p); endpoint {
+			delete(n.peers, e.id)
+			if err := n.reconcileEndpoints(time.Now()); err != nil {
+				return err
+			}
+		} else {
+			p.sync.Close()
+			if p.operator != nil {
+				p.operator.close()
+			}
+			if err := n.step(babel.RemoveLink{ID: e.id}); err != nil {
+				return err
+			}
 		}
-		n.controlHub.Remove(e.id)
 		close(p.done)
 		delete(n.peers, e.id)
 		_ = n.kernel.RemovePeer(e.id)
@@ -438,45 +520,99 @@ func (n *Node) handle(e nodeEvent) error {
 	if e.packet != nil {
 		return n.step(babel.Receive{ID: e.id, Packet: e.packet})
 	}
+	if e.timestamp != nil {
+		if p.timestamp != nil && p.timestamp.id == e.timestamp.id {
+			p.timestamp = e.timestamp
+			n.pumpTimestamp(p)
+			if p.reconcileNeeded {
+				p.reconcileNeeded = false
+				n.reconcilePeer(p, time.Now())
+			}
+		}
+		return nil
+	}
 	if e.control != nil {
-		if e.control.Kind == "catalog" {
-			if err := n.controlHub.Deliver(e.id, e.control.Catalog); err != nil {
-				_ = p.link.Close()
-			}
-			return nil
-		}
-		replies, changed, err := p.sync.Receive(*e.control, time.Now(), directoryReplySlots(p))
-		if err != nil {
-			_ = p.link.Close()
-			return nil
-		}
-		if !n.queueReplies(p, replies) {
-			_ = p.link.Close()
-			return nil
-		}
-		for _, record := range changed {
-			for id, dest := range n.peers {
-				if id != p.id {
-					n.queue(dest, dest.sync.Record(record, time.Now()))
-				}
-			}
-		}
-		// Reevaluate immediately when a proof arrives or is withdrawn. Routing
-		// updates can precede their reliable control message; periodic Babel
-		// updates repair that ordering without retaining unverified packets.
-		if len(changed) != 0 {
-			return n.step(babel.Tick{})
-		}
-		n.refresh()
+		return n.admitIngress(p, e)
 	}
 	return nil
 }
 
+func (n *Node) handleControl(p *nodePeer, control *ControlMessage) error {
+	if !knownControlKind(control.Kind) {
+		return nil
+	}
+	if control.Kind == "operator-gossip" || control.Kind == "operator-certificate" {
+		err := n.operatorControl(p, *control)
+		if errors.Is(err, ErrControlBackpressure) {
+			return err
+		}
+		if err != nil {
+			n.closePeer(p, "operator-control", err)
+		}
+		return nil
+	}
+	if _, endpoint := endpointLink(p); endpoint {
+		if err := n.endpointControl(p, *control); err != nil {
+			n.closePeer(p, "endpoint-control", err)
+		}
+		return nil
+	}
+	if control.Kind == "time" {
+		n.timestampControl(p, control.Time)
+		return nil
+	}
+
+	replies, changed, err := p.sync.Receive(*control, time.Now(), directoryResponseSlots(p))
+	if err != nil {
+		if errors.Is(err, ErrControlBackpressure) {
+			return err
+		}
+		n.closePeer(p, "directory-control", err)
+		return nil
+	}
+	if !n.queueReplies(p, replies) {
+		n.closePeer(p, "directory-control-queue", errors.New("directory reply reserve full"))
+		return nil
+	}
+	for _, record := range changed {
+		for id, dest := range n.peers {
+			if id != p.id && dest.sync != nil {
+				n.queue(dest, dest.sync.Record(record, time.Now()))
+			}
+		}
+	}
+	// Reevaluate immediately when a proof arrives or is withdrawn. Routing
+	// updates can precede their reliable control message; periodic Babel
+	// updates repair that ordering without retaining unverified packets.
+	if len(changed) != 0 {
+		return n.step(babel.Tick{})
+	}
+	n.refresh()
+	return nil
+}
+
 func (n *Node) reconcilePeer(p *nodePeer, now time.Time) {
+	n.flushReplies(p)
+	if len(p.replies) != 0 {
+		p.reconcileNeeded = true
+		return
+	}
+	if p.operator != nil {
+		n.queue(p, p.operator.reconcile(now, max(0, cap(p.control)-len(p.control)-directoryResponseReserve)))
+		if p.operator.reconcilePending {
+			p.reconcileNeeded = true
+		}
+	}
+	if p.sync == nil {
+		return
+	}
 	n.queue(p, p.sync.ReconcileBounded(now, cap(p.control)-len(p.control)))
 }
 
 func (n *Node) continueReconcilePeer(p *nodePeer, now time.Time) {
+	if p.sync == nil {
+		return
+	}
 	n.queue(p, p.sync.ContinueReconcile(now, cap(p.control)-len(p.control)))
 }
 
@@ -558,7 +694,8 @@ func (n *Node) queue(p *nodePeer, messages []ControlMessage) {
 		}
 		select {
 		case p.control <- m:
-		default: /* periodic reconciliation repairs congestion */
+		default:
+			p.reconcileNeeded = true // Maintenance retries changes without waiting five minutes.
 			if m.Kind == "bundle" {
 				p.pendingBundles.Delete(Fingerprint(m.Bundle))
 			}
@@ -566,7 +703,20 @@ func (n *Node) queue(p *nodePeer, messages []ControlMessage) {
 	}
 }
 
+// The common lease is renewed relative to the most recent successful edit,
+// not a boot-anchored ticker that could re-sign freshly published state.
+func (n *Node) publicationDeadline() time.Time {
+	if n.nextPublication.IsZero() || n.publicationDirty {
+		return n.nextPublication
+	}
+	return n.nextPublication.Add(5*time.Minute - time.Second)
+}
+
 func (n *Node) publish() error {
+	if time.Now().Before(n.nextPublication) {
+		n.publicationDirty = true
+		return nil
+	}
 	principal := n.Credentials.Device.Principal()
 	if _, _, ok := n.cache.Get(principal, time.Now()); !ok {
 		if _, err := n.cache.Put(n.Credentials.Certificate.Certificate, time.Now()); err != nil {
@@ -592,7 +742,7 @@ func (n *Node) publish() error {
 	if !ok {
 		return errors.New("route announcement identity expired")
 	}
-	m.Expires = min(now.Add(time.Minute).UnixMilli(), identity.NotAfter.UnixMilli())
+	m.Expires = min(now.Add(MaxLease).UnixMilli(), identity.NotAfter.UnixMilli())
 	w, err := SignManifest(m, n.Credentials.Certificate.Certificate, n.Credentials.Signer, now)
 	if err != nil {
 		return err
@@ -601,8 +751,12 @@ func (n *Node) publish() error {
 		return err
 	}
 	n.advertisement = m
+	n.publicationDirty = false
+	n.nextPublication = time.Now().Add(time.Second)
 	for _, p := range n.peers {
-		n.queue(p, p.sync.Record(w, now))
+		if p.sync != nil {
+			n.queue(p, p.sync.Record(w, now))
+		}
 	}
 	n.refresh()
 	return nil
@@ -692,42 +846,15 @@ func (n *Node) verifyPeerCertificates(peer meshid.Device, certs []*x509.Certific
 // boundary. Renewal or supersession while a previous write blocks must not
 // send an obsolete signature or tear down a healthy neighbour link.
 func (n *Node) writeControls(ctx context.Context, p *nodePeer) error {
-	// Route/device control has priority, with one catalogue frame after
-	// at most four control messages. No catalogue work runs on Node.Run.
-	urgent := 0
 	for {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		var m ControlMessage
-		if urgent >= 4 {
-			select {
-			case m = <-p.catalog:
-				urgent = 0
-			default:
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case message := <-p.control:
+			if err := n.writePeerControl(p, message); err != nil {
+				return err
 			}
 		}
-		if m.Kind == "" && urgent < 4 {
-			select {
-			case m = <-p.control:
-				urgent++
-			default:
-			}
-		}
-		if m.Kind == "" {
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case m = <-p.control:
-				urgent++
-			case m = <-p.catalog:
-				urgent = 0
-			}
-		}
-		if err := n.writePeerControl(p, m); err != nil {
-			return err
-		}
-
 	}
 }
 
@@ -736,14 +863,12 @@ func (n *Node) attachLink(ctx context.Context, peer meshid.Device, cost uint16, 
 	if cost == 0 || cost == ^uint16(0) {
 		return errors.New("invalid wendy net link cost")
 	}
-	// Arbitrate authenticated duplicates before publishing a TUN, route or
-	// catalogue peer. A losing reconnect must not disturb the active link.
-	if !ConnectionReady(ctx, peer, func() { _ = link.Close() }) {
-		return nil
-	}
-	p := &nodePeer{device: peer, cost: cost, transport: carrierName(ctx, "unknown"), link: link, control: make(chan ControlMessage, 128), catalog: make(chan ControlMessage, 16), done: make(chan struct{})}
+	p := &nodePeer{device: peer, cost: cost, transport: carrierName(ctx, "unknown"), link: link, control: make(chan ControlMessage, 128), done: make(chan struct{})}
 	if err := n.request(ctx, nodeEvent{add: p}); err != nil {
 		return err
+	}
+	if !ConnectionReady(ctx, peer, func() { _ = link.Close() }) {
+		return n.request(n.ctx, nodeEvent{id: p.id, remove: true})
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -759,19 +884,7 @@ func (n *Node) attachLink(ctx context.Context, peer meshid.Device, cost uint16, 
 	done := make(chan error, 4)
 	worker := func(f func() error) { wg.Add(1); go func() { defer wg.Done(); done <- f() }() }
 	worker(func() error { return n.writeControls(ctx, p) })
-	worker(func() error {
-		for {
-			m, err := link.ReadControl()
-			if err != nil {
-				return err
-			}
-			select {
-			case n.events <- nodeEvent{id: p.id, control: &m}:
-			case <-ctx.Done():
-				return ctx.Err()
-			}
-		}
-	})
+	worker(func() error { return n.readControls(ctx, p) })
 	worker(func() error { return n.readTUN(ctx, p) })
 	worker(func() error { return n.readLink(ctx, p) })
 	err := <-done
@@ -801,7 +914,7 @@ func (n *Node) readTUN(ctx context.Context, p *nodePeer) error {
 		if !validIP(packet) {
 			continue
 		}
-		if leaf, ok := p.link.(*leafNodeLink); ok && !leaf.admitsIP(packet, false) {
+		if endpoint, ok := endpointLink(p); ok && (!endpoint.live() || !endpointAdmitsIP(p.device, packet, false)) {
 			continue
 		}
 		n.gate.RLock()
@@ -866,8 +979,8 @@ func (n *Node) readLink(ctx context.Context, p *nodePeer) error {
 			if packet == nil {
 				continue
 			}
-			if leaf, ok := p.link.(*leafNodeLink); ok && !leaf.admitsIP(packet, true) {
-				return errors.New("leaf sent an unauthorized IP packet")
+			if endpoint, ok := endpointLink(p); ok && (!endpoint.live() || !endpointAdmitsIP(p.device, packet, true)) {
+				return errors.New("endpoint sent an unauthorized IP packet")
 			}
 			switch packet[0] >> 4 {
 			case 4, 6:
@@ -881,7 +994,11 @@ func (n *Node) readLink(ctx context.Context, p *nodePeer) error {
 				}
 			}
 			n.gate.RLock()
-			if !n.stopped && linkAdmits(n, packet) {
+			selected := true
+			if _, endpoint := endpointLink(p); endpoint {
+				selected = forwardLink(n.forwardRoutes, p.device.MeshAddress()) == p.id
+			}
+			if !n.stopped && selected && linkAdmits(n, packet) {
 				if talker, ok := p.link.(interface{ noteTalker([]byte, bool) }); ok {
 					talker.noteTalker(packet, false)
 				}
@@ -928,10 +1045,11 @@ func linkAdmits(_ *Node, packet []byte) bool {
 func (n *Node) Apply(routes []babel.Route) error {
 	n.gate.Lock()
 	n.paused = true
-	if err := n.kernel.Apply(routes); err != nil {
+	forward := n.operatorForwardRoutes(n.endpointForwardRoutes(routes))
+	if err := n.kernel.Apply(forward); err != nil {
 		return err
 	}
-	n.forwardRoutes = append([]babel.Route(nil), routes...)
+	n.forwardRoutes = forward
 	return nil
 }
 func (n *Node) Persist(cp babel.Checkpoint) error {

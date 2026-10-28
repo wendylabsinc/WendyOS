@@ -12,8 +12,8 @@ import (
 	"crypto/x509"
 	"encoding/binary"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
+	"github.com/wendylabsinc/wendy/go/internal/agent/netwire"
 	"sort"
 	"sync"
 	"time"
@@ -24,34 +24,45 @@ import (
 
 const (
 	MaxManifestBytes = 32768
-	MaxLease         = 2 * time.Minute
-	manifestDomain   = "wendy-local-mesh/manifest/3\x00"
+	// ML-DSA-65 origin proofs are3309 bytes; CA algorithms do not set this bound.
+	MaxManifestSignatureBytes = 3309
+	MaxLease                  = 15 * time.Minute
+	manifestDomain            = "wendy-local-mesh/manifest/4\x00"
 	// ManifestVersionRoute binds the full principal and exact route origin to
 	// the signed device lease. Earlier versions are rejected without fallback.
-	ManifestVersionRoute = 3
+	ManifestVersionRoute = 4
 )
 
-// Manifest is a device's own signed advertisement. Version 3 authorizes one exact
+// Manifest is a device's own signed advertisement. Version 4 authorizes one exact
 // route origin for its lease and includes the full principal in the signed input.
 type Manifest struct {
-	Version int       `json:"version"`
-	Device  uuid.UUID `json:"device"`
+	Version int       `json:"version" cbor:"v"`
+	Device  uuid.UUID `json:"device" cbor:"d"`
 	// Revision is a persistently increasing origin counter, including restart.
-	Revision        uint64 `json:"revision"`
-	Issued, Expires int64
-	Name            string       `json:"name"`
-	AgentPort       uint16       `json:"agentPort"`
-	Withdraw        bool         `json:"withdraw,omitempty"`
-	Route           *RouteOrigin `json:"route,omitempty"`
+	Revision       uint64 `json:"revision" cbor:"R"`
+	Issued         int64  `json:"Issued" cbor:"i"`
+	Expires        int64  `json:"Expires" cbor:"e"`
+	Name           string `json:"name" cbor:"n"`
+	AgentPort      uint16 `json:"agentPort" cbor:"P"`
+	AgentTransport string `json:"agentTransport,omitempty" cbor:"T,omitempty"`
+	// Native agent discovery travels with the signed router lease, without
+	// a separate service publication or catalogue inventory refresh.
+	Platform     string            `json:"platform,omitempty" cbor:"l,omitempty"`
+	Caps         []string          `json:"caps,omitzero" cbor:"c,omitzero"`
+	Requires     []string          `json:"requires,omitempty" cbor:"q,omitempty"`
+	Withdraw     bool              `json:"withdraw,omitempty" cbor:"w,omitempty"`
+	Route        *RouteOrigin      `json:"route,omitempty" cbor:"r,omitempty"`
+	AppEndpoints []AppEndpoint     `json:"appEndpoints" cbor:"a"`
+	Services     []ManifestService `json:"services" cbor:"s"`
 }
 
 // SignedManifest is a manifest plus the full device principal of the identity
 // that signed it. The principal is both the lookup key and part of the signature
 // preimage; the manifest body carries the UUID, and Accept requires them to agree.
 type SignedManifest struct {
-	Principal string          `json:"principal"`
-	Body      json.RawMessage `json:"body"`
-	Signature []byte          `json:"signature"`
+	Principal string `json:"principal" cbor:"p"`
+	Body      []byte `json:"body" cbor:"b"`
+	Signature []byte `json:"signature" cbor:"s"`
 }
 
 var ErrExpiredManifest = errors.New("expired wendy net manifest")
@@ -66,11 +77,17 @@ var ErrInvalidManifestSignature = errors.New("invalid manifest signature")
 var ErrManifestOutlivesCertificate = errors.New("manifest outlives certificate")
 
 func (m Manifest) validate(now time.Time) error {
+	if m.Version != ManifestVersionRoute {
+		return &UnsupportedManifestError{Version: m.Version}
+	}
+	if err := validateManifestRequirements(m.Requires); err != nil {
+		return err
+	}
 	issued, expires := time.UnixMilli(m.Issued), time.UnixMilli(m.Expires)
 	if !expires.After(now) {
 		return ErrExpiredManifest
 	}
-	if m.Version != ManifestVersionRoute || m.Revision == 0 ||
+	if m.Revision == 0 ||
 		issued.After(now.Add(5*time.Second)) || !expires.After(issued) || expires.Sub(issued) > MaxLease ||
 		len(m.Name) > 255 || (!m.Withdraw && m.AgentPort == 0) {
 		return errors.New("invalid or expired wendy net manifest")
@@ -78,12 +95,24 @@ func (m Manifest) validate(now time.Time) error {
 	if m.Route == nil {
 		return errors.New("manifest version does not match route authorization")
 	}
-	return nil
+	if m.AgentTransport != "" && m.AgentTransport != AgentMTLS {
+		return &UnsupportedManifestError{Version: m.Version, Transport: m.AgentTransport}
+	}
+	if m.AgentTransport != "" && m.AgentPort == 0 {
+		return errors.New("invalid agent service transport")
+	}
+	if err := validateNativeAgentMetadata(m.Platform, m.Caps); err != nil {
+		return err
+	}
+	if err := validateServices(m.Services); err != nil {
+		return err
+	}
+	return validateAppEndpoints(m.AppEndpoints)
 }
 
 func signingInput(key crypto.PublicKey, principal string, body []byte) ([]byte, crypto.SignerOpts) {
 	// Callers derive or validate the canonical full principal before signing.
-	// The length prefix binds its boundary independently of the JSON body.
+	// The length prefix binds its boundary independently of the encoded body.
 	input := make([]byte, 0, len(manifestDomain)+4+len(principal)+len(body))
 	input = append(input, manifestDomain...)
 	input = binary.BigEndian.AppendUint32(input, uint32(len(principal)))
@@ -103,6 +132,9 @@ func signingInput(key crypto.PublicKey, principal string, body []byte) ([]byte, 
 // than discovered later by a receiver.
 func SignManifest(m Manifest, chain [][]byte, signer crypto.Signer, now time.Time) (SignedManifest, error) {
 	var out SignedManifest
+	m = cloneManifest(m)
+	sort.Strings(m.Caps)
+	sort.Strings(m.Requires)
 	if err := m.validate(now); err != nil {
 		return out, err
 	}
@@ -124,7 +156,7 @@ func SignManifest(m Manifest, chain [][]byte, signer crypto.Signer, now time.Tim
 		return out, err
 	}
 	out.Principal = device.Principal()
-	body, err := json.Marshal(m)
+	body, err := netwire.Marshal(m)
 	if err != nil {
 		return out, err
 	}
@@ -173,10 +205,10 @@ type Directory struct {
 
 // DirectoryReceipt is durable replay protection, not cached presence.
 type DirectoryReceipt struct {
-	Device   string    `json:"device"` // full device principal
-	Revision uint64    `json:"revision"`
-	Hash     string    `json:"hash"`
-	Until    time.Time `json:"until"`
+	Device   string    `json:"device" cbor:"d"` // full device principal
+	Revision uint64    `json:"revision" cbor:"R"`
+	Hash     string    `json:"hash" cbor:"h"`
+	Until    time.Time `json:"until" cbor:"u"`
 }
 
 func (d *Directory) SetPersistence(receipts []DirectoryReceipt, persist func([]DirectoryReceipt) error, now time.Time) error {
@@ -218,8 +250,7 @@ func NewDirectory(tenant meshid.Tenant, limit int, cache *IdentityCache) (*Direc
 // true for a new version or a replacement of an invalid old signature by a
 // current key. Duplicate delivery and re-signing never renew the signed expiry.
 func (d *Directory) Accept(w SignedManifest, now time.Time) (bool, error) {
-	// ML-DSA-65 and ML-DSA-87 signatures are 3309 and 4627 bytes respectively.
-	if len(w.Body) > MaxManifestBytes || len(w.Signature) > 8192 || w.Principal == "" || len(w.Principal) > maxPrincipalBytes {
+	if len(w.Body) > MaxManifestBytes || len(w.Signature) > MaxManifestSignatureBytes || w.Principal == "" || len(w.Principal) > maxPrincipalBytes {
 		return false, errors.New("oversized manifest envelope")
 	}
 	device, err := meshid.DeviceFromPrincipal(w.Principal)
@@ -232,8 +263,8 @@ func (d *Directory) Accept(w SignedManifest, now time.Time) (bool, error) {
 	if device.Tenant() != d.tenant {
 		return false, errors.New("manifest belongs to another tenant")
 	}
-	var m Manifest
-	if err := json.Unmarshal(w.Body, &m); err != nil {
+	m, err := DecodeManifest(w.Body)
+	if err != nil {
 		return false, err
 	}
 	if err = m.validate(now); err != nil {
@@ -378,7 +409,7 @@ func (b *manifestSignatureBinding) matches(leafHash string, verify func() bool) 
 }
 
 func cloneSignedManifest(w SignedManifest) SignedManifest {
-	w.Body = append(json.RawMessage(nil), w.Body...)
+	w.Body = append([]byte(nil), w.Body...)
 	w.Signature = append([]byte(nil), w.Signature...)
 	return w
 }
@@ -457,11 +488,7 @@ func (d *Directory) Snapshot(now time.Time) []Manifest {
 		if _, ok := d.currentEntryChain(principal, e, now); !ok {
 			continue
 		}
-		if m.Route != nil {
-			route := *m.Route
-			m.Route = &route
-		}
-		out = append(out, m)
+		out = append(out, cloneManifest(m))
 	}
 	sort.Slice(out, func(i, j int) bool { return bytes.Compare(out[i].Device[:], out[j].Device[:]) < 0 })
 	return out
@@ -479,7 +506,7 @@ func (d *Directory) Records(now time.Time) []SignedManifest {
 			continue
 		}
 		w := e.wire
-		w.Body = append(json.RawMessage(nil), w.Body...)
+		w.Body = append([]byte(nil), w.Body...)
 		w.Signature = append([]byte(nil), w.Signature...)
 		out = append(out, w)
 	}
