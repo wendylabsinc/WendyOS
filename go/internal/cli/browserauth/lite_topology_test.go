@@ -41,6 +41,27 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+func TestLiteReporterCertificateFollowsSessionLifetime(t *testing.T) {
+	for _, transition := range []string{"sign-out", "new-sign-in"} {
+		t.Run(transition, func(t *testing.T) {
+			session, _ := setup(t, nil)
+			session.liteCertificate = config.CertificateInfo{PemCertificate: "ephemeral leaf", PemPrivateKey: "ephemeral key"}
+			var err error
+			if transition == "sign-out" {
+				err = session.SignOut()
+			} else {
+				_, err = session.Begin(context.Background(), "", "", "http://localhost:5173/auth/callback")
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if session.liteCertificate.PemCertificate != "" || session.liteCertificate.PemPrivateKey != "" {
+				t.Fatal("session transition retained the ephemeral Lite reporter identity")
+			}
+		})
+	}
+}
+
 type topologyRelayOpen struct {
 	assetID       string
 	authorization []string

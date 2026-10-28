@@ -212,6 +212,7 @@ func (s *Session) Begin(ctx context.Context, email, issuer, redirect string) (st
 	s.tokens = token{}
 	s.profile = Profile{}
 	s.certificate = config.CertificateInfo{}
+	s.liteCertificate = config.CertificateInfo{}
 	challenge := sha256.Sum256([]byte(s.verifier))
 	q := url.Values{"response_type": {"code"}, "client_id": {s.settings().ClientID}, "redirect_uri": {redirect}, "scope": {"openid email profile groups"}, "resource": {s.settings().IdentityResource}, "state": {s.state}, "code_challenge": {base64.RawURLEncoding.EncodeToString(challenge[:])}, "code_challenge_method": {"S256"}}
 	// A caller-pinned realm keeps the hint; a looked-up one, like `wendy auth
