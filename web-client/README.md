@@ -223,7 +223,7 @@ stops new refreshes. Failed reads retain the previous report and mark it stale.
 Offline, denied, unverified and unsupported reporters remain distinct from an
 empty healthy mesh. Older firmware may need an update to supply topology.
 
-A C6 has one incoming management/SensorLink slot. Its direct topology report may
+A C6 has one incoming native mesh management/SensorLink slot. Its topology report may
 be unavailable while another client, such as a SensorLink consumer, occupies
 that slot. Close the other client or retry later; neighbouring reports can still
 show the C6. Reading topology requires operator permissions and does not extend
