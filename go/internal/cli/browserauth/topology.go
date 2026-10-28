@@ -146,6 +146,14 @@ func (s *Session) meshTopology(ctx context.Context, asset string, dial func(cont
 	return TopologyObservation{Status: "ok", Topology: data, ObservedAt: time.Now().UTC(), Platform: "wendyos"}
 }
 
+// LocalCLIUnavailable is the browser boundary for private native broker IPC.
+// Cloud reporters remain supported; a browser cannot join the local CLI owner.
+func LocalCLIUnavailable() TopologyObservation {
+	result := TopologyFailure(status.Error(codes.Unavailable, "The local CLI router is available in the desktop client; this browser cannot access private local IPC."))
+	result.Platform = "wendy-cli"
+	return result
+}
+
 // ValidateTopologyReporter binds the claimed local observation to the TLS peer.
 func ValidateTopologyReporter(snapshot *pb.LocalMeshTopology, peer certs.WendyIdentity) error {
 	return litetopology.ValidateReporter(snapshot, peer)

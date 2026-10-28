@@ -88,7 +88,10 @@ export type MeshObservation = {
 export type MeshNode = {
   id: string;
   tenant: string;
-  deviceId: string;
+  principal: string;
+  role: "device" | "operator";
+  routingId: string;
+  deviceId?: string;
   name: string;
   address?: string;
   inventory?: MeshDevice;
@@ -112,18 +115,39 @@ const principalPattern = new RegExp(
   "i",
 );
 
-export function meshIdentity(principal?: string) {
+export function meshIdentity(principal?: string, routingId?: string) {
   const match = principal?.match(principalPattern);
-  return match
-    ? {
-        principal: principal!.toLowerCase(),
-        tenant: match[1].toLowerCase(),
-        deviceId: match[2].toLowerCase(),
-      }
-    : null;
+  if (match) {
+    const canonical = principal!.toLowerCase();
+    return { id: canonical, principal: canonical, tenant: match[1].toLowerCase(),
+      role: "device" as const, routingId: match[2].toLowerCase(), deviceId: match[2].toLowerCase() };
+  }
+  const operator = principal?.match(new RegExp(`^spiffe://wendy\\.sh/tenant/(${uuid})/operator/([^?#]+)$`));
+  if (!operator || !routingId || !new RegExp(`^${uuid}$`, "i").test(routingId) || principal!.length > 1024 || /[\x00-\x20\x7f]/.test(principal!)) return null;
+  const instance = routingId.toLowerCase();
+  if (instance === "00000000-0000-0000-0000-000000000000") return null;
+  return { id: `${principal}#${instance}`, principal: principal!, tenant: operator[1],
+    role: "operator" as const, routingId: instance, deviceId: undefined };
+}
+
+// An operator principal can have multiple installations. A route's actual
+// destination/next-hop address disambiguates them; no device ID is invented.
+export function meshNodeFor(group: MeshGroup, principal?: string, routingId?: string, address?: string) {
+  const identity = meshIdentity(principal, routingId);
+  if (identity) return group.nodes.find(node => node.id === identity.id);
+  const candidates = group.nodes.filter(node => node.principal === principal &&
+    (!address || node.address === address.split("/")[0]));
+  return candidates.length === 1 ? candidates[0] : undefined;
+}
+
+export function mergeMeshInventory(previous: MeshDevice[], current: MeshDevice[], retainPrevious = false) {
+  if (!retainPrevious) return current;
+  const incoming = new Set(current.map(device => device.id));
+  return [...current, ...previous.filter(device => !incoming.has(device.id))];
 }
 
 function inventoryIdentity(device: MeshDevice) {
+  if (device.platform === "wendy-cli") return null;
   return meshIdentity(
     `spiffe://wendy.sh/tenant/${device.organizationId}/device/${device.pkiDeviceName}`,
   );
@@ -199,7 +223,7 @@ export function nodeState(
     case "unauthorized":
       return { label: "Access denied", tone: "warn" };
     case "unavailable":
-      return { label: "Unreachable", tone: "warn" };
+      return { label: "Reporter unavailable", tone: "warn" };
     case "error":
       return { label: "Read failed", tone: "bad" };
   }
@@ -236,33 +260,37 @@ export function buildMeshGroups(
     tenant: string,
     name?: string,
     address?: string,
+    routingId?: string,
   ) => {
-    const identity = meshIdentity(principal);
+    const identity = meshIdentity(principal, routingId);
     if (!identity || identity.tenant !== tenant) return null;
     getGroup(tenant);
     const nodes = nodeMaps.get(tenant)!;
-    if (!nodes.has(identity.principal))
-      nodes.set(identity.principal, {
-        id: identity.principal,
+    if (!nodes.has(identity.id))
+      nodes.set(identity.id, {
+        id: identity.id,
+        principal: identity.principal,
         tenant,
+        role: identity.role,
+        routingId: identity.routingId,
         deviceId: identity.deviceId,
-        name: name || identity.deviceId.slice(0, 8),
+        name: name || (identity.role === "operator" ? "CLI " : "") + identity.routingId.slice(0, 8),
         address,
       });
-    const node = nodes.get(identity.principal)!;
+    const node = nodes.get(identity.id)!;
     if (address) node.address = address;
     return node;
   };
   for (const device of devices) {
     const observation = observations[device.id];
     const topology = observation?.topology;
-    const self = meshIdentity(topology?.selfPrincipal);
+    const self = meshIdentity(topology?.selfPrincipal, topology?.selfDeviceId);
     const enrolled = inventoryIdentity(device);
     // Conflicting identity claims never join a graph, even if a bridge regresses.
     const identity =
       self &&
       topology?.selfTenantId?.toLowerCase() === self.tenant &&
-      topology?.selfDeviceId?.toLowerCase() === self.deviceId &&
+      topology?.selfDeviceId?.toLowerCase() === self.routingId &&
       (!enrolled || enrolled.principal === self.principal)
         ? self
         : !topology
@@ -277,6 +305,7 @@ export function buildMeshGroups(
       identity.tenant,
       device.name,
       topology?.selfMeshAddress,
+      identity.routingId,
     )!;
     if (
       node.observation?.topology &&
@@ -297,7 +326,7 @@ export function buildMeshGroups(
       const topology = node.observation?.topology;
       if (!topology) continue;
       for (const announcement of topology.announcements || []) {
-        ensureNode(announcement.principal, tenant, announcement.name);
+        ensureNode(announcement.principal, tenant, announcement.name, announcement.prefix?.split("/")[0], announcement.deviceId);
       }
       for (const peer of topology.peers || []) {
         const target = ensureNode(
@@ -305,6 +334,7 @@ export function buildMeshGroups(
           tenant,
           undefined,
           peer.meshAddress,
+          peer.deviceId,
         );
         if (!target || target.id === node.id) continue;
         const pair = [node.id, target.id].sort();

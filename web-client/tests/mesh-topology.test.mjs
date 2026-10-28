@@ -1,11 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFileSync } from "node:fs";
 import {
   buildMeshGroups,
   collectMeshSnapshots,
   isStale,
   mergeMeshObservation,
+  mergeMeshInventory,
   meshIdentity,
+  meshNodeFor,
   nodeState,
   routeState,
 } from "../lib/mesh-topology.ts";
@@ -344,4 +347,55 @@ test("one slow reporter does not block others and aliases stay serialized",async
   return {status:"ok"};
  },id=>received.push(id),new AbortController().signal);
  await new Promise(resolve=>setImmediate(resolve));assert.deepEqual(received,["os"]);release();await done;assert.equal(maxAlias,1);assert.equal(received.length,3);
+});
+
+
+const localTopology = JSON.parse(readFileSync(new URL("./fixtures/operator-topology.json", import.meta.url), "utf8"));
+const localReporter = { id: "cli://local", name: "This computer's CLI router", platform: "wendy-cli" };
+
+test("actual Go Node projection renders an operator full router and installation IDs", () => {
+ const now=Number(localTopology.capturedAtUnixMs);
+ const observation=mergeMeshObservation(undefined,{status:"ok",platform:"wendy-cli",topology:localTopology},now);
+ const {groups,unknown}=buildMeshGroups([localReporter],{[localReporter.id]:observation},now);
+ assert.deepEqual(unknown,[]);assert.equal(groups.length,1);
+ const group=groups[0],self=group.nodes.find(node=>node.inventory?.id===localReporter.id);
+ assert.equal(self.role,"operator");assert.equal(self.principal,localTopology.selfPrincipal);
+ assert.equal(self.id,`${localTopology.selfPrincipal}#${localTopology.selfDeviceId}`);
+ assert.equal(self.routingId,localTopology.selfDeviceId);assert.equal(self.deviceId,undefined);
+ assert.equal(self.address,localTopology.selfMeshAddress);assert.match(self.address,/^fd45:b891:5680:/);
+ assert.equal(group.links.length,2);assert.equal(group.nodes.filter(node=>node.role==="operator").length,2);
+ const other=group.nodes.find(node=>node.role==="operator" && node.id!==self.id);
+ assert.equal(other.principal,self.principal);assert.notEqual(other.routingId,self.routingId);
+ assert.equal(meshNodeFor(group,other.principal,undefined,other.address)?.id,other.id);
+ assert.equal(meshNodeFor(group,other.principal),undefined,"principal alone cannot choose between installations");
+ assert.equal(meshIdentity(localTopology.selfPrincipal,localTopology.selfDeviceId).principal.endsWith("/Alice"),true);
+ assert.equal(meshIdentity(localTopology.selfPrincipal.toLowerCase(),localTopology.selfDeviceId).id===self.id,false);
+ const devicePeer=localTopology.peers.find(peer=>peer.principal.includes("/device/"));
+ assert.equal(devicePeer.linkId,"18446744073709551615");
+ assert.equal(localTopology.routes.find(route=>route.originPrincipal===devicePeer.principal).originRouterId,"18446744073709551614");
+ assert.equal(typeof devicePeer.meshAddress,"string");
+});
+
+test("a busy C6 reporter stays unavailable while CLI and neighbor observations retain its links",()=>{
+ const now=Number(localTopology.capturedAtUnixMs),c6=localTopology.peers.find(peer=>peer.principal.includes("/device/"));
+ const inventory={id:"c6",name:"C6",organizationId:tenant,pkiDeviceName:c6.deviceId,platform:"wendy-lite"};
+ const observations={
+  [localReporter.id]:mergeMeshObservation(undefined,{status:"ok",platform:"wendy-cli",topology:localTopology},now),
+  c6:mergeMeshObservation(undefined,{status:"unavailable",platform:"wendy-lite",error:"The native management slot is occupied."},now),
+ };
+ const {groups}=buildMeshGroups([localReporter,inventory],observations,now);
+ const node=groups[0].nodes.find(node=>node.principal===c6.principal);
+ assert.equal(nodeState(node,now).label,"Reporter unavailable");assert.equal(node.observation.topology,undefined);
+ assert.ok(groups[0].links.some(link=>link.target===node.id || link.source===node.id));
+ const partial=snapshot(c6.deviceId,{selfMeshAddress:c6.meshAddress,truncated:true,status:{state:"mesh-active",detail:"Partial endpoint directory."}});
+ observations.c6=mergeMeshObservation(observations.c6,{status:"ok",platform:"wendy-lite",topology:partial},now+1);
+ const updated=buildMeshGroups([localReporter,inventory],observations,now+1).groups[0].nodes.find(node=>node.principal===c6.principal);
+ assert.equal(updated.observation.topology.truncated,true);
+});
+
+test("device inventory outage retains prior sources while the independent CLI reporter is queried",()=>{
+ const old=[device(a),device(b)];
+ const merged=mergeMeshInventory(old,[localReporter],true);
+ assert.deepEqual(merged.map(item=>item.id),["cli://local",a,b]);
+ assert.deepEqual(mergeMeshInventory(old,[localReporter]),[localReporter]);
 });

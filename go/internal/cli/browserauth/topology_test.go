@@ -77,3 +77,10 @@ func TestClosedTopologyMonitoringStreamIsUnavailable(t *testing.T) {
 		}
 	}
 }
+
+func TestBrowserLocalCLIReporterIsExplicitlyUnavailable(t *testing.T) {
+	result := LocalCLIUnavailable()
+	if result.Status != "unavailable" || result.Platform != "wendy-cli" || result.Topology != nil {
+		t.Fatal(result)
+	}
+}

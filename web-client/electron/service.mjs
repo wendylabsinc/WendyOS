@@ -325,13 +325,13 @@ export class DesktopService {
     const request = new Promise((resolve, reject) => {
       entry = { reporter, generation, resolve, reject, read: async () => {
         if (generation !== this.monitorGeneration) throw new Error("This local network view is no longer open.");
-        const address = await this.monitorTarget(target);
+        const address = target === "cli://local" ? target : await this.monitorTarget(target);
         if (generation !== this.monitorGeneration) throw new Error("This local network view is no longer open.");
         const remaining = expiresAt - Date.now();
         if (remaining <= 0) throw new Error("The topology observation timed out while waiting for admission.");
         const output = await this.run(this.cli,
-          ["device", "wendy-net", "topology", "--device", address, "--json", "--observation"],
-          { timeout: remaining, maxBuffer: 2 * 1024 * 1024 });
+          ["device", "wendy-net", "topology", ...(target === "cli://local" ? ["--local-cli"] : ["--device", address]), "--json", "--observation"],
+          { timeout: target === "cli://local" ? Math.min(remaining, 5_000) : remaining, maxBuffer: 2 * 1024 * 1024 });
         if (generation !== this.monitorGeneration) throw new Error("This local network view is no longer open.");
         const observation = JSON.parse(output);
         if (!observation || !["ok", "unsupported", "unavailable", "unauthorized", "error"].includes(observation.status) ||
@@ -386,12 +386,12 @@ export class DesktopService {
       if (key) this.meshReporterKeys.set(target, key);
       if (!devices.has(target)) devices.set(target, { id: target, name: name || target, deviceType, platform, reporterKey: key });
     };
+    // The desktop's own CLI owner is independent of device inventory. Reading
+    // it joins only an existing private broker and never enables a participant.
+    add("cli://local", "This computer's CLI router", "Operator router", "wendy-cli", "cli://local");
     if (sources.every((source) => source.status === "rejected")) {
-      // Preserve the view's last inventory and let its observations age stale.
-      // An unavailable inventory does not establish that every device is gone.
-      throw new Error(sources.map((source, index) =>
-        `${index === 0 ? "Local" : "Cloud"} discovery: ${source.reason.message}`,
-      ).join("; "));
+      return { devices: [...devices.values()], retainPrevious: true, warnings: sources.map((source, index) =>
+        `${index === 0 ? "Local" : "Cloud"} discovery: ${source.reason.message}`) };
     }
     if (sources[0].status === "fulfilled") {
       const collection = sources[0].value;
