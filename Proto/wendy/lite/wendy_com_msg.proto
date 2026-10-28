@@ -87,6 +87,43 @@ message WendyComDeviceIdentity {
     string enrolled_device_id = 4;
 }
 
+// Native Wendy Net policy. Disabled by default; carrier choices are retained
+// independently. Limits are local resource policy, never a special leaf role.
+message WendyComNetConfig {
+    bool enabled = 1;
+    bool ble = 2;
+    bool infrastructure_wifi = 3;
+    bool nan = 4;
+    uint32 max_links = 5;
+    uint32 ble_links = 6;
+    uint32 wifi_links = 7;
+    uint32 nan_links = 8;
+}
+message WendyComNetGetParams {}
+message WendyComNetSetParams { WendyComNetConfig config = 1; }
+enum WendyComNetState {
+    WENDY_COM_NET_OFF = 0;
+    WENDY_COM_NET_STARTING = 1;
+    WENDY_COM_NET_RUNNING = 2;
+    WENDY_COM_NET_STOPPING = 3;
+    WENDY_COM_NET_FAILED = 4;
+}
+message WendyComNetStatus {
+    WendyComNetConfig desired = 1;
+    WendyComNetConfig applied = 2;
+    WendyComNetState state = 3;
+    bool ble_supported = 4;
+    bool wifi_supported = 5;
+    bool nan_supported = 6;
+    bool psram = 7;
+    uint32 memory_limit_bytes = 8;
+    optional uint32 allocated_bytes = 9;
+    optional uint32 internal_bytes = 10;
+    uint32 active_links = 11;
+    uint32 error_code = 12;
+    bool restarting = 13; // saved carrier change; reboot is pending
+}
+
 message WendyComGetDeviceInfoParams {}
 
 // USB-only bootstrap challenge. The nonce is generated and retained on-device.
@@ -102,7 +139,7 @@ message WendyComEnrollmentChallenge {
     bool builtin_tsa_roots_ready = 6;
     bool enrollment_reset_supported = 7; // physical USB reset with current nonce
     optional bool cloud_enrollment_supported = 8; // absent on older firmware
-    optional bool mldsa_verification_supported = 9; // wolfSSL ML-DSA CA and peer certificate verification
+    optional bool mldsa_verification_supported = 9; // ML-DSA-65 CA and peer certificate verification
     string device_id = 10; // configured PKI identity; distinct from the USB hardware ID
     string tenant_id = 11;
     bool uuid_enrollment_supported = 12; // UUID discovery and enrollment identity reporting
@@ -199,6 +236,8 @@ message WendyComCommand {
         WendyComEnrollmentChallengeParams enrollment_challenge = 19;
         WendyComSyncTimeParams sync_time = 20;
         WendyComEnrollmentResetParams enrollment_reset = 21;
+        WendyComNetGetParams net_get = 22;
+        WendyComNetSetParams net_set = 23;
     }
 }
 
@@ -211,6 +250,11 @@ enum WendyComResult {
     WENDY_COM_RESULT_BAD_APP_TYPE         = 5;
     WENDY_COM_RESULT_BAD_APP_SIZE         = 6;
     WENDY_COM_RESULT_BAD_CONF_SIZE        = 7;
+    WENDY_COM_RESULT_APPLIED_RESTARTING   = 8;
+    WENDY_COM_RESULT_NET_NO_WIFI          = 9;
+    WENDY_COM_RESULT_NET_NO_BLE           = 10;
+    WENDY_COM_RESULT_NET_NO_NAN           = 11;
+    WENDY_COM_RESULT_NET_ONE_CARRIER_ONLY = 12;
 }
 
 // Response to a WendyComCommand — request_id matches the request.
@@ -223,6 +267,7 @@ message WendyComResponse {
         wendy.lite.sensorlink.SensorManifest sensor_link_manifest = 5;
         WendyComEnrollmentChallenge enrollment_challenge = 6;
         WendyComSyncTimeResult sync_time = 7;
+        WendyComNetStatus net_status = 8;
     }
 }
 

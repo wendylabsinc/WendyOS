@@ -34,16 +34,28 @@ func newDeviceLocalMeshCmd() *cobra.Command {
 	configure.Flags().Bool("ble", false, "Enable BLE L2CAP as a net carrier")
 	configure.Flags().Bool("ethernet", false, "Discover local net peers over Ethernet")
 	configure.Flags().Bool("infrastructure-wifi", false, "Discover local net peers over infrastructure Wi-Fi")
+	configure.Flags().Uint32("max-links", 0, "Lite: limit simultaneous mesh carriers")
+	configure.Flags().Uint32("ble-links", 0, "Lite: limit simultaneous BLE mesh carriers")
+	configure.Flags().Uint32("wifi-links", 0, "Lite: limit simultaneous infrastructure Wi-Fi mesh carriers")
+	configure.Flags().Uint32("nan-links", 0, "Lite: limit simultaneous NAN mesh carriers")
 	configure.RunE = func(cmd *cobra.Command, _ []string) error {
-		req, err := localMeshRequest(cmd)
-		if err != nil {
-			return err
-		}
 		target, err := resolveTarget(cmd.Context(), SuppressUpdateCheck())
 		if err != nil {
 			return err
 		}
 		defer target.Close()
+		if target.External != nil {
+			return configureLiteNet(cmd, target)
+		}
+		for _, name := range liteNetLimitFlags {
+			if cmd.Flags().Changed(name) {
+				return fmt.Errorf("--%s applies to Wendy Lite peers", name)
+			}
+		}
+		req, err := localMeshRequest(cmd)
+		if err != nil {
+			return err
+		}
 		if target.Agent == nil || target.Agent.Conn == nil {
 			return fmt.Errorf("Wendy Net settings require a WendyOS agent")
 		}
@@ -60,6 +72,9 @@ func newDeviceLocalMeshCmd() *cobra.Command {
 			return err
 		}
 		defer target.Close()
+		if target.External != nil {
+			return inspectLiteNet(cmd, target)
+		}
 		if target.Agent == nil || target.Agent.Conn == nil {
 			return fmt.Errorf("Wendy Net status requires a WendyOS agent")
 		}
