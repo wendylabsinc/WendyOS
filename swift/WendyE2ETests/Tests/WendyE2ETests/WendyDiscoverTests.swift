@@ -21,7 +21,7 @@ struct `'wendy discover'` {
                 #expect(stdout.contains("wendy discover [flags]"))
                 #expect(stdout.contains("--timeout"))
                 #expect(stdout.contains("--type"))
-                #expect(stdout.contains("usb, lan, bluetooth, external, all"))
+                #expect(stdout.contains("usb, lan, bluetooth, external, mesh, all"))
                 #expect(stdout.contains("--json"))
                 #expect(result.stderr == "")
             }
@@ -135,7 +135,7 @@ struct `'wendy discover'` {
                 #expect(result.status.isFailure)
                 #expect(result.stdout == "")
                 #expect(result.stderr.contains("unknown discovery type: nonsense"))
-                #expect(result.stderr.contains("usb, lan, bluetooth, external, all"))
+                #expect(result.stderr.contains("usb, lan, bluetooth, external, mesh, all"))
             }
         }
     }
