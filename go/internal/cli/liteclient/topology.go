@@ -2,7 +2,6 @@ package liteclient
 
 import (
 	"context"
-	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/shared/litetopology"
 	pb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
@@ -17,7 +16,13 @@ func (c *WendyLiteClient) NetTopology(parent context.Context) (*pb.LocalMeshTopo
 	stop := context.AfterFunc(ctx, func() { _ = c.Close() })
 	defer stop()
 	return litetopology.Read(ctx, func(ctx context.Context, params *lite.WendyComNetTopologyParams) (*lite.WendyComNetTopologyPage, error) {
-		response, err := c.sendCommand(&lite.WendyComCommand{RequestId: c.requestIdGen.Add(1), Params: &lite.WendyComCommand_NetTopology{NetTopology: params}}, 3*time.Second)
+		// sendCommand starts its response timer after writing. Bound the private
+		// stream too so a backpressured write cannot consume the whole read budget.
+		ctx, cancel := context.WithTimeout(ctx, litetopology.PageBudget)
+		defer cancel()
+		stop := context.AfterFunc(ctx, func() { _ = c.Close() })
+		defer stop()
+		response, err := c.sendCommand(&lite.WendyComCommand{RequestId: c.requestIdGen.Add(1), Params: &lite.WendyComCommand_NetTopology{NetTopology: params}}, litetopology.PageBudget)
 		if err != nil {
 			if ctx.Err() != nil {
 				return nil, ctx.Err()
