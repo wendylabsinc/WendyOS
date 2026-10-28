@@ -263,7 +263,7 @@ func (l *RouterLink) routerWrite(kind byte, data []byte) error {
 	if !l.Live() {
 		return net.ErrClosed
 	}
-	if err := writeFrame(l.conn, kind, bytes.Clone(data)); err != nil {
+	if err := l.Link.writeFrame(kind, bytes.Clone(data)); err != nil {
 		_ = l.Close()
 		return err
 	}

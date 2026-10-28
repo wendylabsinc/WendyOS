@@ -2,6 +2,7 @@ package meshoperatorlink
 
 import (
 	"errors"
+	"github.com/wendylabsinc/wendy/go/internal/agent/netwire"
 	"io"
 	"time"
 )
@@ -35,7 +36,11 @@ func (l *Link) expire() {
 func (l *Link) writeControl(m control) error {
 	l.writeMu.Lock()
 	defer l.writeMu.Unlock()
-	return writeControl(l.conn, m)
+	data, err := netwire.Marshal(m)
+	if err != nil {
+		return err
+	}
+	return l.writeFrame(1, data)
 }
 
 // A reader never writes to its full-duplex transport. Its bounded reply goes
@@ -76,4 +81,23 @@ func (l *Link) controlWriter() {
 			}
 		}
 	}
+}
+
+// writeFrame is called under writeMu. A long credential lease is not a carrier
+// write-progress allowance: a full physical send buffer must retire within the
+// same finite budget as ordinary framed mesh streams.
+func (l *Link) writeFrame(kind byte, data []byte) error {
+	budget := 8 * time.Second
+	if kind != 4 {
+		budget = min(budget+time.Duration((len(data)+1023)/1024)*2*time.Second, 45*time.Second)
+	}
+	expires := l.currentExpiry()
+	deadline := minTime(expires, time.Now().Add(budget))
+	if err := l.conn.SetWriteDeadline(deadline); err != nil {
+		return err
+	}
+	if err := writeFrame(l.conn, kind, data); err != nil {
+		return err
+	}
+	return l.conn.SetWriteDeadline(expires)
 }

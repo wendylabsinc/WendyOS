@@ -346,7 +346,7 @@ func (c *agentStream) Write(data []byte) (int, error) {
 		binary.BigEndian.PutUint32(body, c.id)
 		copy(body[4:], data[:n])
 		c.link.writeMu.Lock()
-		err := writeFrame(c.link.conn, 3, body)
+		err := c.link.writeFrame(3, body)
 		c.link.writeMu.Unlock()
 		c.mu.Lock()
 		c.inFrame = false
@@ -377,6 +377,7 @@ func (c *agentStream) close(notify bool) error {
 		return nil
 	}
 	c.closed = true
+	inFrame := c.inFrame
 	if c.writeTimer != nil {
 		c.writeTimer.Stop()
 	}
@@ -391,6 +392,17 @@ func (c *agentStream) close(notify bool) error {
 		c.link.agent = nil
 	}
 	c.link.agentMu.Unlock()
+	if inFrame {
+		// A partially written shared frame cannot be abandoned and resumed by
+		// another stream. Closing its transport is the only way to unblock the
+		// writer while retaining framing, matching the write-deadline policy.
+		// Link.Close marks itself closed before closeAgent, so that path must
+		// not re-enter its sync.Once while retiring the stream.
+		if c.link.Live() {
+			c.link.Close()
+		}
+		return nil
+	}
 	if notify {
 		if err := c.link.queueControl(control{Kind: "operator-agent-close", Stream: c.id}); err != nil {
 			c.link.Close()
