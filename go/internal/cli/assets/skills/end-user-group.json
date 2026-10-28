@@ -14,6 +14,7 @@
     "wendy-onboarding",
     "wendy-project-setup",
     "wendy-robot-deploy",
-    "wendy-template-app"
+    "wendy-template-app",
+    "wendy-training"
   ]
 }
