@@ -1,5 +1,22 @@
 # Wendy Net binary protocol
 
+This package supplies the canonical CBOR codec, bounded extensible-artifact
+decoder, SHA-256 text/byte conversion and semantic field-key lookup. It is a
+standalone foundation: it does not change existing transports or implement the
+manifest, carrier, Lite, or WASM integrations described below. Those layers must
+adopt this wire contract together.
+
+`Marshal` emits canonical CBOR for ordinary Go values. Schema structs must declare
+their compact names with `cbor` tags, and dynamically built maps must call `Key`
+explicitly; the codec does not rewrite map keys or text values. `Unmarshal` permits
+unknown fields, while `UnmarshalSigned` rejects unknown struct fields.
+`UnmarshalExtensibleArtifact` also validates skipped metadata against the bounded
+artifact value grammar. Callers enforce their schema's required fields, types,
+null restrictions and version rules, and supply message-specific byte bounds.
+`RawMessage` embeds its existing encoding verbatim, including in a canonical
+envelope, so callers must retain and validate foreign signed bytes rather than
+expecting `Marshal` to normalize them.
+
 This prototype format is a breaking change. Update peers together: there is no
 JSON/base64 fallback, old service-catalogue protocol or compatibility decoder.
 Carrier ALPNs remain `wendy-local-mesh-ble/2`, `wendy-net-endpoint/2` and
