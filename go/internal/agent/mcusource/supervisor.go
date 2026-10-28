@@ -34,17 +34,28 @@ type AudioLoop interface {
 // Supervisor runs one reconcile goroutine per pairing: dial the source, mount
 // its camera and microphone channels, and pump frames with backoff.
 type Supervisor struct {
-	logger       *zap.Logger
-	lb           Loopback
-	transportFor TransportFactory
-	newWriter    func(path string) ros2camera.CameraWriter
-	audioLoop    AudioLoop
+	logger        *zap.Logger
+	lb            Loopback
+	transportFor  TransportFactory
+	newWriter     func(path string) ros2camera.CameraWriter
+	audioLoop     AudioLoop
+	resolveSource SourceResolver
 
 	statusMu  sync.Mutex
 	connected map[string]bool
 
 	nodeIDsMu sync.Mutex
 	nodeIDs   map[string]uint32 // "pairing key:channelID" -> MCU-band node id
+}
+
+// SourceResolver locates the current endpoints for a saved source identity.
+// Resolution is repeated on reconnect; addresses are never persisted.
+type SourceResolver func(context.Context, SensorPairing) ([]string, bool)
+
+// SetSourceResolver installs network-specific discovery before pairings start.
+// Nil keeps the normal physical-LAN discovery path.
+func (s *Supervisor) SetSourceResolver(resolve SourceResolver) {
+	s.resolveSource = resolve
 }
 
 // transportFor is called once per streamOnce attempt (not cached) so each
@@ -158,22 +169,29 @@ func backoffDelay(level int) time.Duration {
 // rejoins WiFi with a new IP), the next reconnect re-browses mDNS and dials
 // the source's CURRENT address instead of forever redialing the stale one.
 func (s *Supervisor) RunPairing(ctx context.Context, p SensorPairing, addr string) error {
-	pinned := addr != ""
+	return s.runPairing(ctx, p, addr, addr != "")
+}
+
+func (s *Supervisor) runPairing(ctx context.Context, p SensorPairing, addr string, pinned bool) error {
 	level := 0
 	for {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
 		dialAddrs := []string{addr}
-		if !pinned {
+		if !pinned && addr == "" {
 			rctx, rcancel := context.WithTimeout(ctx, 5*time.Second)
-			resolved, ok := resolvePairingLANAddrs(rctx, p)
+			resolve := s.resolveSource
+			if resolve == nil {
+				resolve = resolvePairingLANAddrs
+			}
+			resolved, ok := resolve(rctx, p)
 			rcancel()
 			if !ok {
-				// Source not (yet) on the LAN — boot-resume before it's up, or
+				// Source not (yet) reachable — boot-resume before it's up, or
 				// mid-move between addresses. Back off on the same schedule as
 				// a failed stream and retry the browse.
-				s.logger.Warn("sensor source not found on LAN, retrying", zap.String("source", p.Key()))
+				s.logger.Warn("sensor source not currently reachable, retrying", zap.String("source", p.Key()))
 				select {
 				case <-ctx.Done():
 					return ctx.Err()
@@ -185,6 +203,11 @@ func (s *Supervisor) RunPairing(ctx context.Context, p SensorPairing, addr strin
 				continue
 			}
 			dialAddrs = resolved
+		}
+		if !pinned {
+			// A picker address is a first-attempt hint. Subsequent attempts
+			// resolve the saved identity again, including its current port.
+			addr = ""
 		}
 		var delivered bool
 		var err error

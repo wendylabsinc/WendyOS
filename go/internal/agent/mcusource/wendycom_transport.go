@@ -174,7 +174,11 @@ func (t *wendycomTransport) clientFor(ctx context.Context) (wendycomClient, erro
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	connectCtx, cancel := context.WithTimeout(ctx, wendycomConnectTimeout)
+	budget := wendycomConnectTimeout
+	if t.sourcePrincipalURI != "" {
+		budget = liteclient.SensorSourceSetupTimeout
+	}
+	connectCtx, cancel := context.WithTimeout(ctx, budget)
 	defer cancel()
 	c, err := t.connect(connectCtx)
 	if connectCtx.Err() != nil {
