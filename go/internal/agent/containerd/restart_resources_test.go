@@ -133,6 +133,17 @@ func TestRestoreDBusProxyForRunningTaskAfterAgentRestart(t *testing.T) {
 	}
 }
 
+func TestEnsureDBusProxyForStartYieldsLegacyAvahiMount(t *testing.T) {
+	name := "sh.wendy.cloudv2.validation"
+	proxy := &recordingProxyManager{}
+	client := &Client{logger: zap.NewNop(), proxyManager: proxy}
+	mounts := []specs.Mount{{Destination: "/var/run/dbus", Source: filepath.Join("/run/wendy/avahi", name, "proxy"), Type: "bind"}}
+	started, err := client.ensureDBusProxyForStart(context.Background(), name, mounts)
+	if err != nil || started || len(proxy.started) != 0 {
+		t.Fatalf("legacy private Avahi mount routed to Bluetooth: started=%v err=%v calls=%v", started, err, proxy.started)
+	}
+}
+
 func TestCaptureAndRefreshSerialIdentityAfterRenumber(t *testing.T) {
 	origGlob := globSerialByID
 	origEval := evalSerialPath

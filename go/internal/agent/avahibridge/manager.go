@@ -79,6 +79,9 @@ func missingBinaries() []string {
 
 // StateDir returns the host state directory for a container.
 func (m *Manager) stateDir(containerName string) string {
+	if dir, ok := m.restoredDirs.Load(containerName); ok {
+		return dir.(string)
+	}
 	return filepath.Join(m.baseDir, stateKey(containerName))
 }
 
@@ -109,6 +112,40 @@ func (m *Manager) ProxySocketDir(containerName string) string {
 // ProxySocketDir returns the production proxy directory to mount at /var/run/dbus.
 func ProxySocketDir(containerName string) string {
 	return filepath.Join(StateDir(containerName), "proxy")
+}
+
+// IsProxySocketDir recognizes this container's current or pre-hash persisted
+// mount. Existing tasks keep their directory inode across agent upgrades.
+func IsProxySocketDir(containerName, dir string) bool {
+	return isProxySocketDir(defaultBaseDir, containerName, dir)
+}
+
+func isProxySocketDir(base, containerName, dir string) bool {
+	dir = filepath.Clean(dir)
+	if dir == filepath.Join(base, stateKey(containerName), "proxy") {
+		return true
+	}
+	if containerName == "." || containerName == ".." || filepath.Base(containerName) != containerName {
+		return false
+	}
+	legacy := filepath.Join(base, containerName, "proxy")
+	return len(filepath.Join(legacy, proxySocketName)) < 104 && dir == legacy
+}
+
+// RestoreProxySocketDir adopts the exact persisted OCI mount before Prepare.
+// Newly created containers continue to use the bounded hashed path.
+func (m *Manager) RestoreProxySocketDir(containerName, dir string) error {
+	dir = filepath.Clean(dir)
+	if !isProxySocketDir(m.baseDir, containerName, dir) {
+		return fmt.Errorf("avahi persisted proxy does not match container %q", containerName)
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, exists := m.instances[containerName]; exists && m.proxyDir(containerName) != dir {
+		return fmt.Errorf("avahi proxy already active at another path for %q", containerName)
+	}
+	m.restoredDirs.Store(containerName, filepath.Dir(dir))
+	return nil
 }
 
 // busConfig admits the root agent/proxy and Avahi's service identity. Apps
@@ -181,12 +218,13 @@ type instance struct {
 
 // Manager tracks one avahi stack per container name.
 type Manager struct {
-	logger    *zap.Logger
-	mu        sync.Mutex
-	baseDir   string
-	instances map[string]*instance
-	ready     func(context.Context, string) error
-	identity  func() (int, int, error)
+	logger       *zap.Logger
+	mu           sync.Mutex
+	baseDir      string
+	instances    map[string]*instance
+	ready        func(context.Context, string) error
+	identity     func() (int, int, error)
+	restoredDirs sync.Map // container name -> exact persisted state directory
 }
 
 // NewManager creates an avahi bridge manager.
@@ -568,6 +606,7 @@ func (m *Manager) stopInstance(containerName string, inst *instance, preserveDir
 	}
 	if !preserveDirs {
 		_ = os.RemoveAll(m.stateDir(containerName))
+		m.restoredDirs.Delete(containerName)
 	}
 }
 

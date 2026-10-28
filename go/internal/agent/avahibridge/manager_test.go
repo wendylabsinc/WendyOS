@@ -29,6 +29,44 @@ func TestStatePaths(t *testing.T) {
 	}
 }
 
+func TestRestoreLegacyProxyAfterAgentRestart(t *testing.T) {
+	bin := t.TempDir()
+	stubBinaries(t, bin)
+	t.Setenv("AVAHI_STUB_LOG", filepath.Join(bin, "calls.log"))
+	m := newStubManager(t)
+	name := "validation"
+	legacy := filepath.Join(m.baseDir, name, "proxy")
+	if err := os.MkdirAll(legacy, 0755); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.Stat(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := m.RestoreProxySocketDir(name, legacy); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	for attempt := 0; attempt < 2; attempt++ {
+		dir, err := m.Prepare(ctx, name)
+		if err != nil || dir != legacy {
+			t.Fatalf("legacy proxy restore: dir=%q err=%v", dir, err)
+		}
+		after, err := os.Stat(dir)
+		if err != nil || !os.SameFile(before, after) {
+			t.Fatalf("persisted bind mount directory replaced: %v", err)
+		}
+		if err := m.StopPreservingMounts(name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Creating a separate app still uses the bounded current format.
+	if got := m.ProxySocketDir("fresh"); got != filepath.Join(m.baseDir, stateKey("fresh"), "proxy") {
+		t.Fatalf("fresh app path = %q", got)
+	}
+}
+
 func TestBusConfigListenPath(t *testing.T) {
 	cfg := busConfig("/run/wendy/avahi/x/bus.sock", os.Getuid())
 	if !strings.Contains(cfg, "unix:path=/run/wendy/avahi/x/bus.sock") {
