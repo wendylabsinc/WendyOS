@@ -1,5 +1,6 @@
 import { writeCLIReference } from './cli-reference.mjs';
-import { publishMarkdown } from './publish-markdown.mjs';
+import { pageSlug, publishMarkdown } from './publish-markdown.mjs';
+import { gitLastModified, writeSitemap } from './sitemap.mjs';
 import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -50,6 +51,7 @@ const markdownFiles = [];
 const metaFiles = [];
 const assetFiles = [];
 const routeDirsBySourceDir = new Map();
+const sourceBySlug = new Map();
 
 async function walk(dir) {
   const entries = await readdir(dir, { withFileTypes: true });
@@ -82,6 +84,7 @@ for (const file of markdownFiles) {
   const raw = normalizeMarkdown(await readFile(file.absolutePath, 'utf8'), targetRelativePath);
 
   addRouteDirForSource(file.relativePath, targetRelativePath);
+  sourceBySlug.set(pageSlug(targetRelativePath), file.relativePath.replaceAll(path.sep, '/'));
   await mkdir(path.dirname(targetPath), { recursive: true });
   await writeFile(targetPath, withFrontmatter(raw, targetRelativePath), 'utf8');
 }
@@ -99,7 +102,8 @@ await writeAdvancedMeta();
 await writeCLIReference(docsRoot, contentRoot, publicRoot, normalizeMarkdown);
 await writePublicAsset(path.join(publicRoot, 'reference/wendy.schema.json'),
   await readFile(path.resolve(docsRoot, '../../../shared/appconfig/wendy.schema.json')));
-await publishMarkdown(contentRoot, publicRoot, basePath);
+const pages = await publishMarkdown(contentRoot, publicRoot, basePath);
+await writePublishedSitemap(pages);
 
 for (const file of assetFiles) {
   const raw = await readFile(file.absolutePath);
@@ -242,7 +246,13 @@ function inferDescription(raw) {
 
   if (!paragraph) return 'WendyOS developer documentation.';
 
-  return stripMarkdown(paragraph).replace(/\s+/g, ' ').slice(0, 180);
+  const description = stripMarkdown(paragraph).replace(/\s+/g, ' ');
+  if (description.length <= 180) return description;
+
+  // End at the last whole sentence that fits, or else at a word boundary.
+  const sentences = description.slice(0, 181).match(/^.*[.!?](?=\s)/)?.[0];
+
+  return sentences || `${description.slice(0, 180).replace(/\s+\S*$/, '')}…`;
 }
 
 function stripMarkdown(value) {
@@ -262,6 +272,20 @@ function toTitle(value) {
     .replace(/\bMcp\b/g, 'MCP')
     .replace(/\bOci\b/g, 'OCI')
     .replace(/\bPki\b/g, 'PKI');
+}
+
+// Each hand-written page is dated by its source file's last commit. Generated
+// pages, such as the CLI reference, have no single source and get no date.
+async function writePublishedSitemap(pages) {
+  const lastModified = gitLastModified(docsRoot);
+  const sitemapPages = pages.map(({ slug }) => ({ slug, lastmod: lastModified.get(sourceBySlug.get(slug)) }));
+  const undated = sitemapPages.filter((page) => sourceBySlug.has(page.slug) && !page.lastmod).length;
+
+  if (undated) {
+    console.warn(`sitemap.xml: ${undated} hand-written pages have no git commit date (shallow or missing history); their <lastmod> is omitted.`);
+  }
+
+  await writeSitemap(publicRoot, basePath, sitemapPages);
 }
 
 async function writeAdvancedIndexPage() {
