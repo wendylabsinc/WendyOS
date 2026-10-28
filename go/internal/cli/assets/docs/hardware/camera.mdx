@@ -324,10 +324,16 @@ The correction belongs to one camera: never copy it to another. The agent
 keeps it by the camera's stable id (its `/dev/v4l/by-id` name), so it follows
 the camera when a reboot renumbers `/dev/video*` or the camera moves to
 another port, and the camera that takes its old number does not inherit it. A
-camera without a stable id cannot be calibrated. Corrections are stored in
+camera without a stable id cannot be calibrated: the agent refuses the request
+with an error rather than store a correction under a `/dev/videoN` path that a
+reboot could hand to a different camera. Corrections are stored in
 `/var/lib/wendy/thermal-calibration.json`, which on WendyOS lives on the data
 partition, so they survive agent and OS updates. `clear --stable-id` removes
-the correction of a camera that is no longer attached.
+the correction of a camera that is no longer attached:
+
+```bash
+wendy device camera thermal-calibration clear --stable-id "usb-TOPDON_TC001_..."
+```
 
 ## App Configuration
 

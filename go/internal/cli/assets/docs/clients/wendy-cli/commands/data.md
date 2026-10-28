@@ -665,7 +665,9 @@ A grid's cells cover the camera's picture as viewers see it. These streams are
 listed while the camera is present, but the agent decodes a camera only while a
 viewer names one of its streams with `--stream`, `--prefix` or `--schema`. A viewer
 that takes every stream sees them only while another viewer names them. They are
-live only: no Episode records them. A thermal camera publishes nothing while it is
+live only: no Episode or pre-roll records them. The agent keeps the newest record
+of each stream in memory, so `--latest` returns it to a viewer that connects after
+the frame was produced. A thermal camera publishes nothing while it is
 not in its stacked 512x484 mode, and clears its markers for a frame whose mean
 temperature is outside -40 to 600 °C, which is what a wrong scale reads.
 
@@ -681,6 +683,11 @@ is count / 16 - 273.15: in the grid's `scale` and `offset`, in the markers'
 values, and in the -40 to 600 °C check, which judges the corrected mean. Its grids
 and markers carry the pair in `correction`, so a viewer can tell corrected values
 from the camera's own. See [Camera Access](/docs/hardware/camera#thermal-camera-temperatures).
+
+`wendy.data.v1.Correction` carries the `gain` and `offset` the agent already
+applied (corrected = gain × uncorrected + offset, in the record's unit). A viewer
+needs it only to show that values are corrected, or to recover the camera's own
+reading: uncorrected = (corrected − offset) / gain. `gain` is never 0.
 
 Viewers recognise a record by its schema. The standard types are defined in
 `Proto/wendy/data/v1/types.proto`: `wendy.data.v1.VideoMarkers` (points and boxes on
