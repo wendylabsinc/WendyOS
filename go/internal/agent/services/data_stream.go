@@ -45,6 +45,12 @@ func authorizeDataStream(ctx context.Context) error {
 }
 
 func liveSelection(req *agentpbv2.StreamDataRequest) (live.Selection, error) {
+	// SECURITY: an empty selection gives an admitted operator every app's live
+	// stream. That is the device's existing trust boundary, not a widening of it:
+	// the same certificate already reads every app's recorded data (Download,
+	// ExportRecording), watches every camera (StreamVideo) and opens a root host
+	// shell. The agent has no per-app operator authorization, so filtering here
+	// alone would protect nothing. Apps are gated separately by data-read.
 	ids := req.GetStreamIds()
 	if len(ids) > maxStreamDataIDs {
 		return live.Selection{}, status.Errorf(codes.InvalidArgument, "at most %d stream ids may be selected", maxStreamDataIDs)
