@@ -9,10 +9,14 @@ contract and the message-specific validation described below.
 `Marshal` emits canonical CBOR for ordinary Go values. Schema structs must declare
 their compact names with `cbor` tags, and dynamically built maps must call `Key`
 explicitly; the codec does not rewrite map keys or text values. `Unmarshal` permits
-unknown fields, while `UnmarshalSigned` rejects unknown struct fields.
+unknown fields, while `UnmarshalSigned` rejects unknown struct fields. Nil Go
+slices and maps encode as empty containers, including an empty byte string for
+`[]byte`, rather than CBOR null. Use `omitempty` for optional fields that should
+be absent.
 `UnmarshalExtensibleArtifact` also validates skipped metadata against the bounded
 artifact value grammar. Callers enforce their schema's required fields, types,
 null restrictions and version rules, and supply message-specific byte bounds.
+Extensible artifacts require nonempty input and a positive `maxBytes` limit.
 `RawMessage` embeds its existing encoding verbatim, including in a canonical
 envelope, so callers must retain and validate foreign signed bytes rather than
 expecting `Marshal` to normalize them.
@@ -85,3 +89,8 @@ The local WASM publication/browse ABI still uses JSON. The host converts a guest
 definition once to compact binary intent and renders verified lookup metadata
 back to JSON. Cloud HTTP, management protobufs and host JSON diagnostics retain
 their existing formats; none is a mesh wire fallback.
+
+`HashText` converts exactly 32 digest bytes to lowercase hexadecimal; `HashBytes`
+accepts exactly 64 lowercase hex characters and returns those 32 bytes. Both
+return an error for other lengths, and `HashBytes` also rejects invalid or
+uppercase hexadecimal. These helpers convert identifiers; they do not hash input.
