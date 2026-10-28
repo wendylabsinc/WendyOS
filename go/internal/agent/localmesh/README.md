@@ -545,9 +545,9 @@ by any particular hop; clients still authenticate the destination end to end.
 
 Applications with the mesh network entitlement can browse signed Wendy Net
 services over their private DNS-SD bridge. Remote services appear while the
-origin has a live host route, a current device announcement and a reconciled
-service inventory. Route loss withdraws their DNS records without renewing the
-signed service lease; recovery projects only services still present and live.
+origin has a live host route and a current verified device manifest containing
+those services. Route loss withdraws their DNS records without renewing the
+manifest lease; recovery projects only services still present and live.
 
 When Ethernet or infrastructure Wi-Fi is enabled for Wendy Net, the same app
 bridge also exposes services observed directly on those physical links. These
