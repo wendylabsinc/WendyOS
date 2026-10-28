@@ -39,7 +39,7 @@ func newDiscoverCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "discover",
-		Short: "Discover local and cloud WendyOS devices",
+		Short: "Discover nearby, mesh, and Cloud Wendy devices",
 		Long:  "Continuously discover WendyOS devices in Nearby, Simulator, and Cloud tabs until Ctrl+C. Use --timeout to scan local devices once for a fixed duration.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			var opts discovery.DiscoveryOptions
@@ -51,18 +51,22 @@ func newDiscoverCmd() *cobra.Command {
 				opts.Types = []models.InterfaceType{models.InterfaceLAN}
 			case "bluetooth":
 				opts.Types = []models.InterfaceType{models.InterfaceBluetooth}
+			case "mesh":
+				opts.Types = []models.InterfaceType{models.InterfaceMesh}
 			case "external":
 				opts.Types = []models.InterfaceType{models.InterfaceExternal}
 			case "all", "":
 				// discover all types
 			default:
-				return fmt.Errorf("unknown discovery type: %s (valid: usb, lan, bluetooth, external, all)", discoverType)
+				return fmt.Errorf("unknown discovery type: %s (valid: usb, lan, bluetooth, external, mesh, all)", discoverType)
 			}
 
 			// Pre-flight: on Linux, if a USB-C Wendy device is tethered but its
 			// host link isn't configured, offer to set it up so it shows up in
 			// the scan below. No-op on other platforms / non-interactive runs.
-			_ = maybeOfferUSBSetup(cmd.Context())
+			if discoverType != "mesh" {
+				_ = maybeOfferUSBSetup(cmd.Context())
+			}
 
 			timeoutSet := cmd.Flags().Changed("timeout")
 
@@ -91,7 +95,7 @@ func newDiscoverCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&discoverType, "type", "all", "Local discovery type: usb, lan, bluetooth, external, all")
+	cmd.Flags().StringVar(&discoverType, "type", "all", "Local discovery type: usb, lan, bluetooth, external, mesh, all")
 	cmd.Flags().DurationVar(&timeout, "timeout", 5*time.Second, "Scan once for this duration then exit")
 
 	return cmd
@@ -500,6 +504,7 @@ func waitExternalSnapshot(p providers.DeviceProvider, ch <-chan []models.Externa
 
 // discoverDeviceInfo is the JSON structure copied to the clipboard.
 type discoverDeviceInfo struct {
+	Mesh         *models.MeshDevice   `json:"mesh,omitempty"`
 	ProbeFailure *models.ProbeFailure `json:"probeFailure,omitempty"`
 	ID           int32                `json:"id,omitempty"`
 	Name         string               `json:"name"`
@@ -693,6 +698,9 @@ func (m discoverModel) scanExternalProvider(p providers.DeviceProvider) tea.Cmd 
 
 func (m discoverModel) Init() tea.Cmd {
 	var cmds []tea.Cmd
+	if includeMeshDiscovery(m.opts) {
+		cmds = append(cmds, m.startMeshStream())
+	}
 	if m.shouldDiscover(models.InterfaceUSB) {
 		cmds = append(cmds, m.scanUSB())
 	}
@@ -801,6 +809,14 @@ func (m discoverModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.table, cmd = m.table.Update(msg)
 		return m, cmd
+	case meshSnapshotMsg:
+		m.hasResults = true
+		m.collection.MeshDevices, m.collection.MeshDiscovery = meshCollection(msg.snapshot)
+		m.refreshTable()
+		if msg.ch != nil {
+			return m, waitMeshSnapshot(msg.ch)
+		}
+		return m, nil
 	case usbScanMsg:
 		m.collection.USBDevices = msg.devices
 		m.hasResults = true
@@ -970,6 +986,13 @@ func (m discoverModel) View() string {
 		sb.WriteString(m.viewLine(dimStyle.Render("  ↑/↓ navigate"+scrollHint+", enter copy, a copy all, u update, d toggle default, q quit")) + "\n")
 	}
 
+	if state := m.collection.MeshDiscovery; state != nil && state.State != "not-connected" {
+		suffix := ""
+		if state.Truncated {
+			suffix = " (incomplete snapshot)"
+		}
+		sb.WriteString(m.viewLine(dimStyle.Render("  Wendy Net: "+state.State+suffix)) + "\n")
+	}
 	if warning := m.bleWarningLine(); warning != "" {
 		sb.WriteString(m.viewLine(dimStyle.Render("  Bluetooth: "+warning)) + "\n")
 	}
@@ -1538,6 +1561,9 @@ func discoverTableItems(collection *models.DevicesCollection) []discoverTableIte
 		}
 		address := d.Address()
 		defaultDevice := d.DisplayName
+		if d.Mesh != nil {
+			defaultDevice = d.Mesh.Selector
+		}
 		lanName := ""
 		lanKey := ""
 		if d.LAN != nil {
@@ -1545,6 +1571,14 @@ func discoverTableItems(collection *models.DevicesCollection) []discoverTableIte
 			lanKey = discoverycache.Key(d.LAN.ID, d.LAN.DisplayName)
 			address = preferredLANAddress(*d.LAN)
 			defaultDevice = firstNonEmpty(d.LAN.Hostname, d.LAN.IPAddress, d.LAN.DisplayName)
+		}
+		hint := lanProbeHint(d.LAN)
+		key := d.DisplayName
+		if d.Mesh != nil {
+			key = d.Mesh.Principal
+			if d.LAN == nil {
+				hint = meshPathHint(d.Mesh)
+			}
 		}
 		provisioned := lanProvisionedDisplay(d.LAN)
 		var failure *models.ProbeFailure
@@ -1566,13 +1600,14 @@ func discoverTableItems(collection *models.DevicesCollection) []discoverTableIte
 				OS:            d.OS,
 				OSVersion:     d.OSVersion,
 				Provisioned:   provisioned,
-				Hint:          lanProbeHint(d.LAN),
+				Hint:          hint,
 				Probe:         probe,
-				DedupKey:      d.DisplayName,
+				DedupKey:      key,
 				SortKey:       deviceSortKey(d.DisplayName, usb),
 			},
 			info: discoverDeviceInfo{
 				Name:         d.DisplayName,
+				Mesh:         d.Mesh,
 				Type:         deviceType,
 				USB:          usb,
 				Address:      address,

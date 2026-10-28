@@ -94,10 +94,31 @@
             [uuidStrings addObject:s];
         }
     }
+    NSDictionary<CBUUID *, NSData *> *serviceData = advertisementData[CBAdvertisementDataServiceDataKey];
+    NSMutableDictionary *rawData = [NSMutableDictionary dictionary];
+    for (CBUUID *key in serviceData) {
+        NSData *data=serviceData[key];
+        if (data.length>512 || rawData.count>=8) {continue;}
+        rawData[key.UUIDString]=[data copy];
+        if (![uuidStrings containsObject:key.UUIDString]) {[uuidStrings addObject:key.UUIDString];}
+    }
+    NSString *advertisementName=advertisementData[CBAdvertisementDataLocalNameKey];
+    double observed=[NSDate date].timeIntervalSince1970;
     NSString *joined = [uuidStrings componentsJoinedByString:@","];
 
     [self.discoveredLock lock];
     NSDictionary *existing = self.discovered[address];
+    // A background mesh join may scan for days. Bound even unrelated radio
+    // advertisements before they cross the native bridge.
+    if (!existing && self.discovered.count >= 1024) {
+        NSString *oldest = nil;
+        for (NSString *key in self.discovered) {
+            if (!oldest || [self.discovered[key][@"last_seen"] doubleValue] < [self.discovered[oldest][@"last_seen"] doubleValue]) {
+                oldest = key;
+            }
+        }
+        if (oldest) { [self.discovered removeObjectForKey:oldest]; }
+    }
     // Preserve fields a later, sparser advertisement omits: a device may
     // advertise its name and its service UUIDs in different packets.
     if (existing) {
@@ -112,6 +133,11 @@
         @"name": name ?: @"",
         @"service_uuids": joined ?: @"",
         @"rssi": RSSI ?: @0,
+        @"service_data": serviceData ? [rawData copy] : (existing[@"service_data"] ?: @{}),
+        @"service_data_seen": serviceData ? @(observed) : (existing[@"service_data_seen"] ?: @0),
+        @"advertisement_name": advertisementName ?: (existing[@"advertisement_name"] ?: @""),
+        @"advertisement_name_seen": advertisementName ? @(observed) : (existing[@"advertisement_name_seen"] ?: @0),
+        @"last_seen": @(observed),
     };
     [self.discoveredLock unlock];
 }
@@ -167,6 +193,36 @@
         devices[i].address = strdup([address UTF8String]);
         devices[i].name = strdup([(d[@"name"] ?: @"") UTF8String]);
         devices[i].service_uuids = strdup([(d[@"service_uuids"] ?: @"") UTF8String]);
+        devices[i].advertisement_name=strdup([(d[@"advertisement_name"] ?: @"") UTF8String]);
+        devices[i].advertisement_name_seen=[d[@"advertisement_name_seen"] doubleValue];
+        devices[i].service_data_seen=[d[@"service_data_seen"] doubleValue];
+        NSDictionary<NSString *,NSData *> *parts=d[@"service_data"];
+        devices[i].service_data_count=parts.count;
+        if (parts.count) {
+            devices[i].service_data=calloc(parts.count,sizeof(WendyBLEServiceDataC));
+            if (!devices[i].service_data) {
+                wendy_blescan_free_snapshot((WendyBLEScanSnapshot){devices,count,NULL});
+                [self.discoveredLock unlock];
+                return (WendyBLEScanSnapshot){NULL,0,strdup("out of memory copying advertisement data")};
+            }
+            size_t index=0;
+            for (NSString *key in parts) {
+                NSData *data=parts[key];
+                WendyBLEServiceDataC *part=&devices[i].service_data[index++];
+                part->uuid=strdup(key.UTF8String);
+                part->size=data.length;
+                if(data.length){
+                    part->bytes=malloc(data.length);
+                    if(!part->bytes){
+                        wendy_blescan_free_snapshot((WendyBLEScanSnapshot){devices,count,NULL});
+                        [self.discoveredLock unlock];
+                        return (WendyBLEScanSnapshot){NULL,0,strdup("out of memory copying advertisement bytes")};
+                    }
+                    memcpy((void *)part->bytes,data.bytes,data.length);
+                }
+            }
+        }
+        devices[i].last_seen = [d[@"last_seen"] doubleValue];
         devices[i].rssi = [d[@"rssi"] intValue];
     }
     [self.discoveredLock unlock];
@@ -223,6 +279,14 @@ void wendy_blescan_free_snapshot(WendyBLEScanSnapshot snapshot) {
         free((void *)snapshot.devices[i].address);
         free((void *)snapshot.devices[i].name);
         free((void *)snapshot.devices[i].service_uuids);
+        free((void *)snapshot.devices[i].advertisement_name);
+        if(snapshot.devices[i].service_data){
+            for(size_t j=0;j<snapshot.devices[i].service_data_count;j++){
+                free((void *)snapshot.devices[i].service_data[j].uuid);
+                free((void *)snapshot.devices[i].service_data[j].bytes);
+            }
+            free(snapshot.devices[i].service_data);
+        }
     }
     free(snapshot.devices);
 }

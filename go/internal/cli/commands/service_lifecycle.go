@@ -124,9 +124,17 @@ func (r *serviceHookRunner) runOne(ctx, hookCtx context.Context, cfg *appconfig.
 	if ctx.Err() != nil {
 		return
 	}
+
+	browserURL, err := prepareOperatorBrowserURL(hookCtx, r.conn, effectiveCfg, route.host)
+	if err != nil {
+		if hookCtx.Err() == nil {
+			cliNotice("Unable to open the mesh app locally: %v", err)
+		}
+		return
+	}
+	route.browserURL = browserURL
 	r.opts.completeHostLifecycle(containerName)
 	completed = true
-
 	cmd := startRoutedPostStartHook(hookCtx, effectiveCfg, route, cfg.ServiceName)
 	if cmd != nil {
 		if r.opts.isWatch() {

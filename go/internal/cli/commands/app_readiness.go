@@ -329,7 +329,7 @@ func waitForGatedAppReady(ctx context.Context, conn *grpcclient.AgentConnection,
 	}
 	switch {
 	case hasProbe && hostOK:
-		addr, probeOnce, closeProbe := makeReadinessProbe(
+		addr, probeOnce, closeProbe := makeAgentReadinessProbe(conn,
 			host,
 			readiness.TCPSocket.Port,
 			cloudHTTPReadinessPort(conn, appCfg, readiness, host) != 0,
