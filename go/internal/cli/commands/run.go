@@ -3013,11 +3013,28 @@ func startExistingContainer(ctx context.Context, conn *grpcclient.AgentConnectio
 // HTTP-over-mesh probes complete a request instead of leaving an empty relayed TCP connection in
 // front of the browser request that follows.
 func makeReadinessProbe(hostname string, port int, useHTTP bool) (string, func(context.Context) error, func()) {
+	return makeReadinessProbeWithDial(hostname, port, useHTTP, deviceLinkDialFn)
+}
+
+func makeAgentReadinessProbe(conn *grpcclient.AgentConnection, hostname string, port int, useHTTP bool) (string, func(context.Context) error, func()) {
+	if conn != nil && conn.OperatorMeshTarget.IsValid() && conn.AppDialer != nil {
+		dial := func(ctx context.Context, _ string) (net.Conn, error) {
+			if port < 1 || port > 65535 {
+				return nil, fmt.Errorf("readiness port is outside the TCP range")
+			}
+			return conn.AppDialer(ctx, uint16(port))
+		}
+		return makeReadinessProbeWithDial(hostname, port, useHTTP, dial)
+	}
+	return makeReadinessProbe(hostname, port, useHTTP)
+}
+
+func makeReadinessProbeWithDial(hostname string, port int, useHTTP bool, dialStream func(context.Context, string) (net.Conn, error)) (string, func(context.Context) error, func()) {
 	addr := net.JoinHostPort(hostname, fmt.Sprintf("%d", port))
 	dial := func(ctx context.Context, _, target string) (net.Conn, error) {
 		ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
 		defer cancel()
-		return deviceLinkDialFn(ctx, target)
+		return dialStream(ctx, target)
 	}
 	if !useHTTP {
 		return addr, func(ctx context.Context) error {
@@ -3069,8 +3086,17 @@ func readinessProbeTimeout(cfg *appconfig.ReadinessConfig, override time.Duratio
 }
 
 // waitForReadinessWithin is waitForReadiness with an explicit deadline.
-func waitForReadinessWithin(ctx context.Context, cfg *appconfig.ReadinessConfig, hostname string, httpPort int, timeout time.Duration) error {
+func waitForReadinessWithin(ctx context.Context, cfg *appconfig.ReadinessConfig, hostname string, httpPort int, timeout time.Duration, connections ...*grpcclient.AgentConnection) error {
+	if len(connections) > 0 {
+		return waitForReadinessProbe(ctx, cfg, hostname, httpPort, timeout, agentReadinessProbeFactory(connections[0]))
+	}
 	return waitForReadinessProbe(ctx, cfg, hostname, httpPort, timeout, makeReadinessProbe)
+}
+
+func agentReadinessProbeFactory(conn *grpcclient.AgentConnection) readinessProbeFactory {
+	return func(hostname string, port int, useHTTP bool) (string, func(context.Context) error, func()) {
+		return makeAgentReadinessProbe(conn, hostname, port, useHTTP)
+	}
 }
 
 // readinessProbeFactory builds one readiness probe: the address it reports, a
@@ -3122,14 +3148,21 @@ func waitForReadinessProbe(ctx context.Context, cfg *appconfig.ReadinessConfig, 
 	}
 }
 
-// cloudHTTPReadinessPort selects a request-level readiness probe only for an
-// HTTP entitlement reached through the cloud mesh, i.e. when host is the
-// cloud connection's mesh hostname (see hostSideAppAddress). Direct TCP
-// readiness — including a cloud device probed on its reachable LAN address —
-// keeps its documented connect-only semantics, while mesh HTTP avoids leaving
-// an empty relayed connection in front of the real browser request.
+// cloudHTTPReadinessPort selects request-level readiness for an HTTP app
+// reached through the Cloud VPN hostname or an operator's authenticated app
+// stream. A normal direct LAN TCP probe keeps its connect-only semantics.
 func cloudHTTPReadinessPort(conn *grpcclient.AgentConnection, appCfg *appconfig.AppConfig, readiness *appconfig.ReadinessConfig, host string) int {
-	if conn == nil || conn.Reconnect == nil || readiness == nil || readiness.TCPSocket == nil {
+	if conn == nil || readiness == nil || readiness.TCPSocket == nil {
+		return 0
+	}
+	if conn.OperatorMeshTarget.IsValid() && conn.AppDialer != nil {
+		port, ok := httpEntitlementPort(appCfg.Entitlements)
+		if ok && port == readiness.TCPSocket.Port {
+			return port
+		}
+		return 0
+	}
+	if conn.Reconnect == nil {
 		return 0
 	}
 	if host == "" || host != conn.MeshHost {
@@ -3287,14 +3320,11 @@ func activeMeshHost(ctx context.Context, conn *grpcclient.AgentConnection) strin
 	return ""
 }
 
-// isCloudConnection reports whether conn reaches the device through the Wendy
-// Cloud tunnel. conn.Reconnect != nil is the cloud marker: it is the sole
-// assignment (cloud_tunnel.go, on the connection cloud_tunnel.go builds) for a
-// transport where the connection identity can't be re-derived from Host alone.
-// conn.Addr can't be used instead — it is empty for NewFromConn conns, cloud
-// tunnels included.
+// isCloudConnection distinguishes Cloud's retained tunnel from an operator
+// mesh context. Both supply reconnect callbacks; only the latter carries its
+// separately selected typed mesh device.
 func isCloudConnection(conn *grpcclient.AgentConnection) bool {
-	return conn != nil && conn.Reconnect != nil
+	return conn != nil && conn.Reconnect != nil && !conn.OperatorMeshTarget.IsValid()
 }
 
 // cloudLANProbeTimeout bounds the one reachability check a cloud-tunnel run
@@ -3346,6 +3376,11 @@ var lanAddressReachable = func(ctx context.Context, ip string) bool {
 // host-side probes, and resolveHookRoute too when it cannot forward, with
 // cloudHostSkipNotice (readiness is not checked from this machine).
 func hostSideAppAddress(ctx context.Context, conn *grpcclient.AgentConnection, appCfg *appconfig.AppConfig) (host, url string, ok bool) {
+	if conn != nil && conn.OperatorMeshTarget.IsValid() && conn.AppDialer != nil {
+		// A userspace address is not a host-browser route; the attached hook
+		// obtains its own loopback viewer instead of printing a false URL.
+		return conn.OperatorMeshTarget.MeshAddress().String(), "", true
+	}
 	if meshHost := activeMeshHost(ctx, conn); meshHost != "" {
 		return meshHost, reachableAppURLForHost(appCfg, meshHost), true
 	}
@@ -3504,6 +3539,14 @@ func runPostStartIfReady(ctx, hookCtx context.Context, conn *grpcclient.AgentCon
 	if ctx.Err() != nil {
 		return nil
 	}
+	browserURL, err := prepareOperatorBrowserURL(hookCtx, conn, effectiveCfg, route.host)
+	if err != nil {
+		if hookCtx.Err() == nil {
+			cliNotice("Unable to open the mesh app locally: %v", err)
+		}
+		return nil
+	}
+	route.browserURL = browserURL
 	opts.completeHostLifecycle(containerName)
 	completed = true
 	cmd := startRoutedPostStartHook(hookCtx, effectiveCfg, route, appCfg.ServiceName)
@@ -3549,6 +3592,9 @@ func startRoutedPostStartHook(ctx context.Context, appCfg *appconfig.AppConfig, 
 		url := expandHookEnv(hook.OpenURL, urlSafeHost(hostname), appCfg.AppID, serviceName)
 		if route.tunnel != nil {
 			url, _ = route.tunnel.localURL(url)
+		}
+		if route.browserURL != "" {
+			url = route.browserURL
 		}
 		if !postStartBrowserAllowed() {
 			cliLogln("Hook postStart: not opening a browser without an interactive terminal; open %s", tui.Path(url))
