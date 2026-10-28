@@ -3,6 +3,7 @@ package commands
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"strings"
@@ -401,5 +402,24 @@ func TestCloudPickerUsesV2AndPreservesUUID(t *testing.T) {
 	}
 	if got, err := resolveCloudDiscoveryDevice(duplicates, selected.key); err != nil || got.key != selected.key {
 		t.Fatal("exact UUID did not resolve")
+	}
+}
+
+// The offline re-query only explains a miss. The legacy path skips seeding
+// there too (pickCloudDeviceFromRoster).
+func TestUUIDOfflineRequeryDoesNotSeedPins(t *testing.T) {
+	auth := discoveryV2Auth(t, 1, false)
+	if _, err := pickCloudDiscoveryDevice(context.Background(), auth, "offline-device", ""); !errors.Is(err, errDeviceOffline) {
+		t.Fatalf("want an offline device error, got %v", err)
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := cfg.DevicePinFor("online-device"); !ok {
+		t.Fatal("online lookup did not seed its roster")
+	}
+	if pin, ok := cfg.DevicePinFor("offline-device"); ok {
+		t.Fatalf("offline re-query seeded a pin: %+v", pin)
 	}
 }

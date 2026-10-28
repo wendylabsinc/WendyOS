@@ -485,7 +485,7 @@ delete it to give a device a fresh chance at uncompressed uploads.
 | `WENDY_BT_ADAPTER` | Pin a specific BlueZ adapter path. |
 
 > **Two things the docs get wrong, so you don't burn time on them:**
-> - `WENDY_NETWORK_MANAGER` is a **Swift-agent** feature. The Go `wendy-agent`
+> - `WENDY_NETWORK_MANAGER` was read only by the earlier Swift agent for Linux. The Go `wendy-agent`
 >   ignores it and always uses `nmcli`.
 > - There is **no `WENDY_ADB_LOCK`**. The variable for pinning a Thor/Tegra USB
 >   device is `WENDY_ADB_PATH`.

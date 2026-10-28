@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"net"
-	"strings"
 	"testing"
 	"time"
 
@@ -170,11 +169,20 @@ func TestOldCloudRefusesPortService(t *testing.T) {
 	ctx := context.Background()
 	sign := func(b []byte) ([]byte, error) { return b, nil }
 	asset := "00000000-0000-4000-8000-000000000042"
+	_, err = OpenTCP(ctx, ctx, conn, nil, asset, "tcp-3000", sign)
 	var unsupported *UnsupportedServiceError
-	if _, err := OpenTCP(ctx, ctx, conn, nil, asset, "tcp-3000", sign); !errors.As(err, &unsupported) || unsupported.Service != "tcp-3000" {
+	if !errors.As(err, &unsupported) || unsupported.Service != "tcp-3000" {
 		t.Fatalf("TCP: %v", err)
 	}
-	if _, err := OpenUDP(ctx, ctx, conn, nil, asset, 5353, sign); err == nil || !strings.Contains(err.Error(), `Cloud does not offer tunnel service "udp-5353"`) {
+	// Callers tell a refusal no retry can fix by its status.
+	if status.Code(err) != codes.NotFound {
+		t.Fatalf("TCP: status %v, want NotFound", status.Code(err))
+	}
+	_, err = OpenUDP(ctx, ctx, conn, nil, asset, 5353, sign)
+	if !errors.As(err, &unsupported) || unsupported.Service != "udp-5353" {
 		t.Fatalf("UDP: %v", err)
+	}
+	if status.Code(err) != codes.NotFound {
+		t.Fatalf("UDP: status %v, want NotFound", status.Code(err))
 	}
 }

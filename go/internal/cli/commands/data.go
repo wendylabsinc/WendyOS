@@ -19,7 +19,9 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/wendylabsinc/wendy/go/internal/agent/data"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
+	"github.com/wendylabsinc/wendy/go/internal/shared/datadoc"
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 )
@@ -74,7 +76,7 @@ func newDataCampaignCmd() *cobra.Command {
 
 func newDataCampaignDeployCmd() *cobra.Command {
 	var skipCloudRegistration bool
-	command := &cobra.Command{Use: "deploy [campaign.yaml]", Short: "Validate, persist, and arm a campaign on the connected device", Long: "Deploy a campaign YAML file. Without a path, select a .yaml or .yml file from the current directory.\nNon-interactive and --json invocations require an explicit path.", Args: cobra.MaximumNArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+	command := &cobra.Command{Use: "deploy [campaign.yaml]", Short: "Validate, persist, and arm a campaign on the connected device", Long: "Deploy a campaign YAML file. Without a path, select a campaign file from the current directory (a YAML file whose header is a campaign's).\nNon-interactive and --json invocations require an explicit path.", Args: cobra.MaximumNArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
 		path, err := resolveCampaignDeployFile(args, !jsonOutput && isInteractiveTerminal(), pickFromItems)
 		if err != nil {
 			return err
@@ -83,9 +85,13 @@ func newDataCampaignDeployCmd() *cobra.Command {
 		if err != nil {
 			return fmt.Errorf("reading campaign %q: %w", path, err)
 		}
-		plan, err := data.ParseCampaign(contents)
+		document, err := data.ParseDocument(contents)
 		if err != nil {
 			return err
+		}
+		plan, ok := document.Body.(data.Campaign)
+		if !ok {
+			return fmt.Errorf("%s is a %s document, not a campaign", path, document.Header.Kind)
 		}
 		conn, err := connectToAgent(cmd.Context())
 		if err != nil {
@@ -97,7 +103,7 @@ func newDataCampaignDeployCmd() *cobra.Command {
 		}
 		campaign, err := conn.DataService.CampaignDeploy(cmd.Context(), &agentpbv2.DataCampaignDeployRequest{CampaignYaml: contents})
 		if err != nil {
-			return err
+			return campaignDeployError(err)
 		}
 		if jsonOutput {
 			_, err = cmd.OutOrStdout().Write(campaign.GetPlanJson())
@@ -113,6 +119,16 @@ func newDataCampaignDeployCmd() *cobra.Command {
 	return command
 }
 
+// campaignDeployError explains the one refusal a new CLI can get from an
+// older agent: a campaign file that starts with kind: collection, which the
+// agent's strict parser does not know. The gRPC status is kept.
+func campaignDeployError(err error) error {
+	if err == nil || !strings.Contains(status.Convert(err).Message(), "field kind not found in type data.Campaign") {
+		return err
+	}
+	return status.Errorf(status.Code(err), "%s\nThis device's agent predates the kind field: update it with `wendy device update`, or remove the kind line from the campaign file.", status.Convert(err).Message())
+}
+
 func resolveCampaignDeployFile(args []string, interactive bool, pick func(string, []tui.PickerItem) (string, error)) (string, error) {
 	if len(args) > 0 {
 		return args[0], nil
@@ -123,7 +139,7 @@ func resolveCampaignDeployFile(args []string, interactive bool, pick func(string
 		return "", fmt.Errorf("listing campaign files in the current directory: %w; %s", err, usage)
 	}
 	var items []tui.PickerItem
-	var names []string
+	var names, skipped []string
 	for _, entry := range entries {
 		ext := strings.ToLower(filepath.Ext(entry.Name()))
 		if ext != ".yaml" && ext != ".yml" {
@@ -133,16 +149,50 @@ func resolveCampaignDeployFile(args []string, interactive bool, pick func(string
 		if err != nil || !info.Mode().IsRegular() {
 			continue
 		}
+		// Offer only files whose header is a campaign's, not every YAML file:
+		// a project folder also holds compose files, stagefiles and, with data
+		// documents, inference and watch files.
+		if reason := campaignFileSkipReason(entry.Name(), info.Size()); reason != "" {
+			skipped = append(skipped, fmt.Sprintf("%s (%s)", entry.Name(), reason))
+			continue
+		}
 		names = append(names, entry.Name())
 		items = append(items, tui.PickerItem{Name: entry.Name(), Value: entry.Name()})
 	}
 	if len(items) == 0 {
+		if len(skipped) > 0 {
+			return "", fmt.Errorf("no campaign files in the current directory (these YAML files are not campaigns: %s); %s", strings.Join(skipped, ", "), usage)
+		}
 		return "", fmt.Errorf("no .yaml or .yml files found in the current directory; %s", usage)
 	}
 	if !interactive {
-		return "", fmt.Errorf("a campaign YAML path is required in non-interactive or --json mode; %s\nYAML files in the current directory: %s", usage, strings.Join(names, ", "))
+		return "", fmt.Errorf("a campaign YAML path is required in non-interactive or --json mode; %s\nCampaign files in the current directory: %s", usage, strings.Join(names, ", "))
 	}
 	return pick("Select a campaign YAML file", items)
+}
+
+// maxCampaignFileBytes bounds what the picker reads per file. Campaigns are a
+// few kilobytes; anything far larger is not one.
+const maxCampaignFileBytes = 1 << 20
+
+// campaignFileSkipReason returns "" when the file is a campaign, otherwise why
+// the picker leaves it out.
+func campaignFileSkipReason(name string, size int64) string {
+	if size > maxCampaignFileBytes {
+		return "file too large"
+	}
+	contents, err := os.ReadFile(name)
+	if err != nil {
+		return err.Error()
+	}
+	header, err := data.DocumentHeader(contents)
+	if err != nil {
+		return err.Error()
+	}
+	if header.Kind != datadoc.DefaultKind {
+		return "kind " + header.Kind
+	}
+	return ""
 }
 
 func newDataCampaignListCmd() *cobra.Command {

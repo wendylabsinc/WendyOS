@@ -40,9 +40,9 @@ The diagram below shows the major ordering relationships. Solid arrows indicate 
 ```
 local-fs.target
    |
-   +-- data.mount
+   +-- wendyos-data.service (first-boot format and grow of /data)
    |      |
-   |      +-- mender-systemd-growfs-data.service (Tegra only)
+   |      +-- data.mount
    |             |
    +-- wendyos-etc-binds.service ────────────────────────────────────+
           |                                                           |

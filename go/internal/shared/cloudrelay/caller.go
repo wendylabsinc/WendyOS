@@ -198,7 +198,7 @@ func openPortSession(ctx, authCtx context.Context, cloudConn *grpc.ClientConn, v
 	if err != nil {
 		// A Cloud before WDY-3955 (cloud #895) knows only ssh and wendy-agent.
 		if st, ok := status.FromError(err); ok && st.Code() == codes.NotFound && st.Message() == "unknown service" {
-			return nil, &UnsupportedServiceError{Service: service}
+			return nil, fmt.Errorf("%w: %w", &UnsupportedServiceError{Service: service}, err)
 		}
 		return nil, fmt.Errorf("authorizing Cloud tunnel (%s): %w", pb.TunnelAuthorizationService_RequestTunnel_FullMethodName, err)
 	}

@@ -146,6 +146,11 @@ type BuildServiceOptions struct {
 	// TargetAgentPort is the fallback mTLS gRPC port for a PushTarget sent by a
 	// legacy CLI without its own agent_port. Zero means DefaultTargetAgentPort.
 	TargetAgentPort uint16
+	// CheckInternet reports whether this host reaches the registry a build
+	// pulls from; the agent passes CheckRegistryReachable. Nil skips the check
+	// and leaves internet_check_supported false, as an older agent would, so a
+	// test constructing this service never touches the network.
+	CheckInternet InternetCheck
 }
 
 // BuildService lets a CLI delegate an image build to this device. See the
@@ -166,6 +171,9 @@ type BuildService struct {
 	dialTarget         targetDialer
 	buildkitProcDir    string
 	buildkitConfigPath string
+	// checkInternet is nil when the check is off. See internetStatus.
+	checkInternet        InternetCheck
+	internetCheckTimeout time.Duration
 
 	// contextLocks serialises builds that share a context directory. See
 	// lockContextDir.
@@ -207,6 +215,8 @@ func NewBuildService(logger *zap.Logger, opts BuildServiceOptions) *BuildService
 		dialTarget:           meshTargetDialer(opts.Peers, opts.ResolveTarget, opts.PushTLS, opts.TargetAgentPort),
 		buildkitProcDir:      "/proc",
 		buildkitConfigPath:   defaultBuildkitConfigPath,
+		checkInternet:        opts.CheckInternet,
+		internetCheckTimeout: defaultInternetCheckTimeout,
 	}
 }
 
@@ -327,7 +337,7 @@ func userIdentityFromContext(ctx context.Context, action string) (certs.WendyIde
 	return ident, nil
 }
 
-func (s *BuildService) GetBuildCapabilities(_ context.Context, _ *agentpbv2.GetBuildCapabilitiesRequest) (*agentpbv2.GetBuildCapabilitiesResponse, error) {
+func (s *BuildService) GetBuildCapabilities(ctx context.Context, _ *agentpbv2.GetBuildCapabilitiesRequest) (*agentpbv2.GetBuildCapabilitiesResponse, error) {
 	available := buildkitSocketPresent(s.buildkitAddress)
 	resp := &agentpbv2.GetBuildCapabilitiesResponse{
 		BuildkitAvailable: available,
@@ -362,6 +372,15 @@ func (s *BuildService) GetBuildCapabilities(_ context.Context, _ *agentpbv2.GetB
 			resp.BuildkitRootTotalBytes, resp.BuildkitRootFreeBytes = buildkitRootSpaceWithin(
 				location.statPath, location.statBoundary)
 		}
+	}
+	// Checked whether or not BuildKit is present: a host with no BuildKit and
+	// no internet cannot install one either, and saying only "unavailable"
+	// hides the reason it will stay that way.
+	if s.checkInternet != nil {
+		internet := s.internetStatus(ctx)
+		resp.InternetCheckSupported = true
+		resp.InternetReachable = internet.Reachable
+		resp.InternetDetail = internet.Detail
 	}
 	return resp, nil
 }

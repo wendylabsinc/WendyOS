@@ -100,7 +100,7 @@ func driverServiceErr(err error) error {
 	if status.Code(err) != codes.Unimplemented {
 		return err
 	}
-	return errors.New("this device does not serve driver add-ons. They are reachable only on an enrolled device (`wendy cloud enroll-device`); an agent predating driver support answers the same way")
+	return errors.New("this device does not serve driver add-ons. They are reachable only on an enrolled device (`wendy device enroll`); an agent predating driver support answers the same way")
 }
 
 // driverStale reports whether an installed add-on will not load as it stands:

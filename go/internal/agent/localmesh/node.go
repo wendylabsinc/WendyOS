@@ -754,12 +754,14 @@ func (n *Node) attachLink(ctx context.Context, peer meshid.Device, cost uint16, 
 	if cost == 0 || cost == ^uint16(0) {
 		return errors.New("invalid wendy net link cost")
 	}
+	// Arbitrate authenticated duplicates before publishing a TUN, route or
+	// catalogue peer. A losing reconnect must not disturb the active link.
+	if !ConnectionReady(ctx, peer, func() { _ = link.Close() }) {
+		return nil
+	}
 	p := &nodePeer{device: peer, cost: cost, transport: carrierName(ctx, "unknown"), link: link, control: make(chan ControlMessage, 128), catalog: make(chan ControlMessage, 16), done: make(chan struct{})}
 	if err := n.request(ctx, nodeEvent{add: p}); err != nil {
 		return err
-	}
-	if !ConnectionReady(ctx, peer, func() { _ = link.Close() }) {
-		return n.request(n.ctx, nodeEvent{id: p.id, remove: true})
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()

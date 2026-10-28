@@ -29,12 +29,15 @@ instructions; users perform physical steps between calls. Success after flashing
 does not imply successful boot or application readiness.
 
 CLI updates appear in `wendy_status.cli_update` and as a text notice appended
-to the next tool result once per release per session. Keep notices independent
-of terminal notice state and preserve tool payloads and errors. Relay the update
-command and MCP restart step to the user. The injected release checker runs off
-the startup path and hourly, respects the existing 24-hour cache and development
-build exclusion, and cancels when serving stops. Cached availability is not proof
-of a successful latest check; the check timestamp records an attempt.
+to the next tool result once per release per session, repeated after 24 hours
+of wall-clock time while the server is outdated. Only the appended notice asks
+the assistant to tell the user; the status field stays informational. Keep
+notices independent of terminal notice state and preserve tool payloads and
+errors. Relay the update command and MCP restart step to the user. The injected
+release checker runs off the startup path and hourly, respects the existing
+24-hour cache and development build exclusion, and cancels when serving stops.
+Cached availability is not proof of a successful latest check; the check
+timestamp records an attempt.
 
 ## Constraints
 

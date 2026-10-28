@@ -790,6 +790,9 @@ func main() {
 			// Legacy fallback for a CLI that does not put each target's actual
 			// mTLS agent port in PushTarget.
 			TargetAgentPort: uint16(mtlsPortNum),
+			// Reported with the build capabilities, so a device reachable only
+			// over USB says it has no internet before a build fails on it.
+			CheckInternet: services.CheckRegistryReachable,
 			// The Cloud asset UUID is the device UUID. Still require membership
 			// in this tenant's roster before delivery. Read fresh per build:
 			// roster sync and enrollment can change membership while running.
