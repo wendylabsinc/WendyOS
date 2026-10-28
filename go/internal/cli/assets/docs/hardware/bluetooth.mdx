@@ -52,16 +52,19 @@ confirm a working link. Omitted options preserve existing settings. To turn
 Bluetooth networking off, use the same configure command with `--ble=false`.
 Changing saved settings can interrupt active Wendy Net connections.
 
-BLE and Wi-Fi Aware can run together. Add `--nan=true` when your device supports
-Wi-Fi Aware. For Lite boards, follow the
-[explicit peer setup](/docs/advanced/development/local-mesh-radio).
+WendyOS can use BLE and Wi-Fi Aware together when the hardware supports them.
+Add `--nan=true` to enable Wi-Fi Aware. Lite profiles have different carrier
+limits: C5 with PSRAM can use BLE and Wi-Fi, while the constrained C6 profile
+selects one carrier and does not support NAN. Follow the
+[Lite configuration and automatic discovery guide](/docs/advanced/development/local-mesh-radio#configure-a-lite-device).
 
 ### Capacity and recovery
 
-Bluetooth has limited bandwidth and connection capacity. Each device supports
-up to three simultaneous Wendy Net Bluetooth neighbors, including configured
-Lite boards. Prefer Ethernet or Wi-Fi for large transfers. Cold connections
-across several Bluetooth hops can be slow.
+Bluetooth has limited bandwidth and connection capacity. WendyOS supports up to
+three simultaneous Wendy Net Bluetooth neighbours. Lite discovers peers
+automatically; its own connection limit depends on its firmware and memory
+profile. Prefer Ethernet or Wi-Fi for large transfers. Cold connections across
+several Bluetooth hops can be slow.
 
 The agent retries when an adapter or peer returns, but a powered-off or faulty
 controller may need attention. Check agent logs if no link appears. A full agent
