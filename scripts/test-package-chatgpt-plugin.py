@@ -186,6 +186,28 @@ class PackageTests(unittest.TestCase):
             for relative in ("skills/wendy/SKILL.md",)
         })
 
+    def test_sync_keeps_crlf_entrypoint_line_endings(self):
+        """An older core.autocrlf=true clone can still hold CRLF skill sources."""
+        script = Path(__file__).with_name("sync-agent-skills.py")
+        spec = importlib.util.spec_from_file_location("sync_agent_skills", script)
+        sync = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(sync)
+        sync.SOURCE = self.root / "skills"
+        (sync.SOURCE / "wendy").mkdir(parents=True)
+        (sync.SOURCE / "wendy/SKILL.md").write_bytes(
+            b"---\r\nname: wendy\r\ndescription: Developer workflow\r\n---\r\nBody\r\n"
+        )
+        main = sync.mcp_bundle(["wendy"])[Path("SKILL.md")]
+        self.assertTrue(main.startswith(
+            b"---\r\nname: wendy\r\ndescription: Developer workflow\r\n---\r\n"
+            b"\r\n## Bundled workflows\r\n"
+        ), main)
+        self.assertTrue(main.endswith(
+            b"- [wendy](references/skills/wendy/SKILL.md)\r\n\r\nBody\r\n"
+        ), main)
+        # The index follows the entrypoint, so --check matches a CRLF checkout.
+        self.assertNotIn(b"\n", main.replace(b"\r\n", b""))
+
     def test_no_recording_is_an_explicit_gap(self):
         extension = copy.deepcopy(self.manifest["extensions"]["com.openai"])
         extension["review"].pop("demo_recording_url", None)

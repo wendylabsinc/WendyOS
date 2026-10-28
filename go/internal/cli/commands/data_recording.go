@@ -62,7 +62,7 @@ func newDataExportStreamCmd() *cobra.Command {
 						return err
 					}
 				} else {
-					fmt.Fprintf(cmd.ErrOrStderr(), "Exported %d records to %s\n", count, destination)
+					fmt.Fprintf(cmd.ErrOrStderr(), "Exported %d records to %s\n", count, absDisplayPath(destination))
 				}
 				if !follow {
 					return nil
@@ -142,11 +142,11 @@ func exportRecordingFile(ctx context.Context, client agentpbv2.DataServiceClient
 	if req.Checkpoint && count > 0 {
 		tokens := stream.Trailer().Get("wendy-recording-checkpoint")
 		if len(tokens) != 1 || tokens[0] == "" {
-			return count, errors.New("export saved, but server omitted reclamation checkpoint")
+			return count, fmt.Errorf("export saved to %s, but server omitted reclamation checkpoint", absDisplayPath(output))
 		}
 		_, err = client.AcknowledgeRecordingExport(ctx, &agentpbv2.DataRecordingExportAckRequest{AppId: req.AppId, Service: req.Service, Stream: req.Stream, Checkpoint: tokens[0]})
 		if err != nil {
-			return count, fmt.Errorf("export saved to %s, but reclamation acknowledgement failed: %w", output, err)
+			return count, fmt.Errorf("export saved to %s, but reclamation acknowledgement failed: %w", absDisplayPath(output), err)
 		}
 	}
 	return count, nil
