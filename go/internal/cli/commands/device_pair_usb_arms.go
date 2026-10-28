@@ -74,21 +74,29 @@ func runArmPair(ctx context.Context, client pb.WendyRobotArmServiceClient, bind,
 		}
 	}
 	if message, ok := result.(proto.Message); ok {
-		// snake_case fields with explicit defaults; devices is [] when empty.
-		// protojson's whitespace differs between builds, so re-indent it.
-		raw, err := protojson.MarshalOptions{UseProtoNames: true, EmitUnpopulated: true}.Marshal(message)
-		if err != nil {
-			return err
-		}
-		var indented bytes.Buffer
-		if err = json.Indent(&indented, raw, "", "  "); err != nil {
-			return err
-		}
-		indented.WriteByte('\n')
-		_, err = out.Write(indented.Bytes())
-		return err
+		return writePairProtoJSON(out, message)
 	}
 	return writeJSON(out, result)
+}
+
+// pairJSON encodes pairing replies with snake_case fields and explicit
+// defaults, so a list is [] when empty.
+var pairJSON = protojson.MarshalOptions{UseProtoNames: true, EmitUnpopulated: true}
+
+// writePairProtoJSON writes a pairing reply as indented pairJSON. protojson's
+// whitespace differs between builds, so it is re-indented.
+func writePairProtoJSON(out io.Writer, message proto.Message) error {
+	raw, err := pairJSON.Marshal(message)
+	if err != nil {
+		return err
+	}
+	var indented bytes.Buffer
+	if err = json.Indent(&indented, raw, "", "  "); err != nil {
+		return err
+	}
+	indented.WriteByte('\n')
+	_, err = out.Write(indented.Bytes())
+	return err
 }
 
 func armBindingState(d *pb.RobotArm) string {
