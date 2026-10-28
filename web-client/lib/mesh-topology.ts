@@ -183,9 +183,11 @@ export function mergeMeshObservation(
   // A successful empty/disabled snapshot replaces old links. A failed request
   // retains its old snapshot, which must be presented as stale.
   if (result.status === "ok" && result.topology) {
+    const topology = result.topology.runtimeAvailable ? result.topology :
+      { ...result.topology, peers: [], routes: [], announcements: [] };
     return {
-      result,
-      topology: result.topology,
+      result: { ...result, topology },
+      topology,
       receivedAt: now,
       attemptedAt: now,
     };
@@ -324,7 +326,7 @@ export function buildMeshGroups(
     const edges = new Map<string, MeshLink>();
     for (const node of [...nodes.values()]) {
       const topology = node.observation?.topology;
-      if (!topology) continue;
+      if (!topology?.runtimeAvailable) continue;
       for (const announcement of topology.announcements || []) {
         ensureNode(announcement.principal, tenant, announcement.name, announcement.prefix?.split("/")[0], announcement.deviceId);
       }

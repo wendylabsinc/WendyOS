@@ -27,6 +27,8 @@ import (
 	"github.com/google/uuid"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
+	"github.com/wendylabsinc/wendy/go/internal/shared/meshoperator"
+	pb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	cloud "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
 	lite "github.com/wendylabsinc/wendy/go/proto/gen/litepb"
 	"github.com/wendylabsinc/wendy/go/proto/gen/wcomrelaypb"
@@ -35,6 +37,7 @@ import (
 	grpcmetadata "google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
+	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -205,8 +208,14 @@ func TestBrowserCloudLiteTopologyEncryptedReporter(t *testing.T) {
 	browserLiteSetupBudget = 800 * time.Millisecond
 	browserLiteHandshakeBudget = 700 * time.Millisecond
 	browserLiteReadBudget = 1000 * time.Millisecond
-	for _, enabled := range []bool{false, true} {
-		t.Run(fmt.Sprint(enabled), func(t *testing.T) {
+	for _, report := range []struct {
+		name           string
+		enabled, typed bool
+	}{
+		{"off", false, false}, {"partial", true, false}, {"typed-operators", true, true},
+	} {
+		t.Run(report.name, func(t *testing.T) {
+			enabled := report.enabled
 			session, _ := setup(t, nil)
 			if _, err := session.Complete(context.Background(), "valid-code", session.state, testIssuer); err != nil {
 				t.Fatal(err)
@@ -276,14 +285,59 @@ func TestBrowserCloudLiteTopologyEncryptedReporter(t *testing.T) {
 				if enabled {
 					time.Sleep(550 * time.Millisecond)
 				}
-				page := &lite.WendyComNetTopologyPage{Tenant: tenant[:], Device: id[:], RuntimeAvailable: enabled, Partial: enabled, CapturedAtUnixMs: time.Now().UnixMilli(), Status: &lite.WendyComNetStatus{State: state, Desired: &lite.WendyComNetConfig{Enabled: enabled, Ble: true}}}
+				page := &lite.WendyComNetTopologyPage{Tenant: tenant[:], Device: id[:], RuntimeAvailable: enabled, Partial: enabled && !report.typed, CapturedAtUnixMs: time.Now().UnixMilli(), Status: &lite.WendyComNetStatus{State: state, Desired: &lite.WendyComNetConfig{Enabled: enabled, Ble: true}}}
 				if enabled {
 					page.Generation = 1
 					identity, _ := meshid.DeviceFromPrincipal(principal)
 					address := identity.MeshAddress().As16()
 					page.Record = &lite.WendyComNetTopologyRecord{Kind: 1, Device: id[:], Address: address[:], LinkId: 1, Transport: 2, Metric: 8192}
 				}
-				deviceDone <- topologyWriteFrame(conn, &lite.WendyComMessage{Msg: &lite.WendyComMessage_Response{Response: &lite.WendyComResponse{RequestId: request.GetCommand().RequestId, Data: &lite.WendyComResponse_NetTopology{NetTopology: page}}}})
+				pages := []*lite.WendyComNetTopologyPage{page}
+				if report.typed {
+					operator, _ := meshoperator.ParsePrincipal("spiffe://wendy.sh/tenant/" + session.profile.Tenant + "/operator/Alice")
+					var rows []*lite.WendyComNetTopologyRecord
+					gateway := uuid.MustParse("eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee")
+					for index, text := range []string{"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "cccccccc-cccc-4ccc-8ccc-cccccccccccc"} {
+						instance := uuid.MustParse(text)
+						endpoint := meshoperator.Endpoint{Operator: operator, Instance: meshoperator.InstanceID(instance)}
+						address := endpoint.Address().As16()
+						row := &lite.WendyComNetTopologyRecord{Kind: 3, OwnerRole: 2, OwnerPrincipal: operator.Principal(), OwnerInstance: instance[:], Address: address[:], RouterId: ^uint64(0) - uint64(index), Revision: ^uint64(0), Authorized: true, ExpiresAtUnixMs: page.CapturedAtUnixMs + 300000}
+						rows = append(rows, row)
+						route := proto.Clone(row).(*lite.WendyComNetTopologyRecord)
+						route.Kind = 2
+						route.NextHopDevice = gateway[:]
+						route.Metric = 128
+						rows = append(rows, route)
+					}
+					rows = append(rows, &lite.WendyComNetTopologyRecord{Kind: 2, Address: net.ParseIP("fd45:b891:5680::99").To16(), Metric: 65535, Unreachable: true})
+					pages = nil
+					for index, row := range rows {
+						current := proto.Clone(page).(*lite.WendyComNetTopologyPage)
+						current.Record = row
+						if index+1 < len(rows) {
+							current.NextCursor = uint32(index + 1)
+						}
+						pages = append(pages, current)
+					}
+				}
+				for index, current := range pages {
+					if index > 0 {
+						request, err = topologyReadFrame(conn)
+						if err != nil {
+							deviceDone <- err
+							return
+						}
+					}
+					if request.GetCommand().GetNetTopology().GetCursor() != uint32(index) {
+						deviceDone <- fmt.Errorf("page order changed")
+						return
+					}
+					if err := topologyWriteFrame(conn, &lite.WendyComMessage{Msg: &lite.WendyComMessage_Response{Response: &lite.WendyComResponse{RequestId: request.GetCommand().RequestId, Data: &lite.WendyComResponse_NetTopology{NetTopology: current}}}}); err != nil {
+						deviceDone <- err
+						return
+					}
+				}
+				deviceDone <- nil
 				// Keep the stream alive until the observation closes its private session.
 				io.Copy(io.Discard, conn)
 			}
@@ -310,8 +364,24 @@ func TestBrowserCloudLiteTopologyEncryptedReporter(t *testing.T) {
 			if document["selfPrincipal"] != principal {
 				t.Fatal(document)
 			}
-			if enabled && document["truncated"] != true {
+			if enabled && !report.typed && document["truncated"] != true {
 				t.Fatal("partial endpoint view hidden", document)
+			}
+			if report.typed {
+				snapshot := new(pb.LocalMeshTopology)
+				if err := protojson.Unmarshal(observation.Topology, snapshot); err != nil {
+					t.Fatal(err)
+				}
+				if len(snapshot.Announcements) != 2 || len(snapshot.Routes) != 3 || snapshot.Truncated {
+					t.Fatal(snapshot)
+				}
+				first, second := snapshot.Announcements[0], snapshot.Announcements[1]
+				if first.Principal != second.Principal || first.DeviceId == second.DeviceId || first.Prefix == second.Prefix || first.DeviceId != "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa" || !bytes.Contains(observation.Topology, []byte("18446744073709551615")) {
+					t.Fatal(string(observation.Topology))
+				}
+				if snapshot.Routes[2].OriginPrincipal != "" || !snapshot.Routes[2].Unreachable {
+					t.Fatal(snapshot.Routes[2])
+				}
 			}
 			if err := <-deviceDone; err != nil {
 				t.Fatal(err)

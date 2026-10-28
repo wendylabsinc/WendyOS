@@ -220,6 +220,12 @@ from this client. Selecting a node shows its reported next hops, carrier types,
 route costs, and signed announcement expiry. A signed route authorizes its
 origin and prefix; it does not prove that an intermediary forwards traffic.
 
+Operator routers appear separately from enrolled devices, with their exact
+principal and routing installation UUID. C5 can report verified operator routes
+learned through a device neighbor; those routes do not create direct carrier
+links to the operator. A route whose owner metadata has expired remains an
+address-only observation. An unavailable runtime contributes no relationships.
+
 The view reads up to three reporters concurrently, while aliases of the same device
 remain serialized, then waits ten seconds before
 the next batch. **Pause** stops new reads. Snapshots older than thirty seconds

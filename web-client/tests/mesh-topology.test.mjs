@@ -399,3 +399,68 @@ test("device inventory outage retains prior sources while the independent CLI re
  assert.deepEqual(merged.map(item=>item.id),["cli://local",a,b]);
  assert.deepEqual(mergeMeshInventory(old,[localReporter]),[localReporter]);
 });
+
+const liteTopology = JSON.parse(readFileSync(new URL("./fixtures/lite-operator-topology.json", import.meta.url), "utf8"));
+const c5Reporter = { id: "cloud://cloud.example:443/tenant/11111111-1111-4111-8111-111111111111/asset/bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", name: "C5 Cloud", platform: "wendy-lite" };
+
+test("actual nanopb wire through the production Go normalizer renders typed C5 operator origins", () => {
+  const now = Number(liteTopology.capturedAtUnixMs);
+  const observation = mergeMeshObservation(undefined, { status: "ok", platform: "wendy-lite", topology: liteTopology }, now);
+  const { groups, unknown } = buildMeshGroups([c5Reporter], { [c5Reporter.id]: observation }, now);
+  assert.deepEqual(unknown, []);
+  const group = groups[0];
+  const operators = group.nodes.filter(node => node.role === "operator");
+  assert.equal(operators.length, 2);
+  assert.equal(operators[0].principal, operators[1].principal);
+  assert.notEqual(operators[0].id, operators[1].id);
+  assert.deepEqual(operators.map(node => node.routingId).sort(), [a, c]);
+  for (const node of operators) {
+    assert.equal(node.deviceId, undefined, "installation is not an enrolled device");
+    assert.match(node.address, /^fd45:b891:5680:/);
+    assert.ok(node.name.startsWith("CLI "));
+    assert.equal(node.agentPort, undefined);
+    const route = liteTopology.routes.find(route => route.prefix === node.address + "/128");
+    assert.equal(meshNodeFor(group, route.originPrincipal, undefined, route.prefix)?.id, node.id);
+    assert.equal(routeState(route, now), "Authorized at snapshot");
+  }
+  assert.equal(group.links.length, 2);
+  assert.ok(group.links.every(link => !operators.some(node => node.id === link.source || node.id === link.target)), "learned operator routes are not direct Lite carriers");
+  const addressOnly = liteTopology.routes.find(route => !route.originPrincipal);
+  assert.equal(addressOnly.prefix, "fd45:b891:5680::99/128");
+  assert.equal(routeState(addressOnly, now), "Unreachable");
+  assert.equal(meshNodeFor(group, addressOnly.originPrincipal, undefined, addressOnly.prefix), undefined);
+  assert.equal(liteTopology.peers[0].linkId, "18446744073709551615");
+  assert.equal(liteTopology.announcements[0].revision, "18446744073709551615");
+});
+
+test("typed C5 evidence survives a busy or partial C6 reporter without inventing a C6 operator registry", () => {
+  const now = Number(liteTopology.capturedAtUnixMs);
+  const peer = liteTopology.peers.find(peer => peer.transport === "ble");
+  const c6 = { id: "c6", name: "C6", platform: "wendy-lite", organizationId: tenant, pkiDeviceName: peer.deviceId };
+  const observations = {
+    [c5Reporter.id]: observe(liteTopology, now),
+    c6: mergeMeshObservation(undefined, { status: "unavailable", platform: "wendy-lite", error: "The native slot is occupied." }, now),
+  };
+  let group = buildMeshGroups([c5Reporter, c6], observations, now).groups[0];
+  const node = group.nodes.find(node => node.principal === peer.principal);
+  assert.equal(nodeState(node, now).label, "Reporter unavailable");
+  assert.ok(group.links.some(link => link.source === node.id || link.target === node.id));
+  const partial = snapshot(peer.deviceId, { selfMeshAddress: peer.meshAddress, truncated: true, status: { state: "mesh-active", detail: "Partial endpoint directory." } });
+  observations.c6 = mergeMeshObservation(observations.c6, { status: "ok", platform: "wendy-lite", topology: partial }, now + 1);
+  group = buildMeshGroups([c5Reporter, c6], observations, now + 1).groups[0];
+  assert.equal(group.nodes.find(node => node.principal === peer.principal).observation.topology.truncated, true);
+  assert.equal(group.nodes.filter(node => node.role === "operator").length, 2);
+});
+
+test("a successful unavailable-runtime observation clears retained relationships from every frontend surface", () => {
+  const now = Number(liteTopology.capturedAtUnixMs);
+  const stopped = mergeMeshObservation(observe(liteTopology, now), {
+    status: "ok",
+    topology: { ...liteTopology, runtimeAvailable: false, status: { state: "stopping" } },
+  }, now + 1);
+  assert.equal(stopped.topology.peers.length + stopped.topology.routes.length + stopped.topology.announcements.length, 0);
+  assert.equal(stopped.result.topology, stopped.topology);
+  const group = buildMeshGroups([c5Reporter], { [c5Reporter.id]: stopped }, now + 1).groups[0];
+  assert.equal(group.nodes.length, 1);
+  assert.equal(group.links.length, 0);
+});

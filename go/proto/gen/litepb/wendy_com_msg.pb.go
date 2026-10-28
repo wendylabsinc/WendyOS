@@ -1409,6 +1409,9 @@ type WendyComNetTopologyRecord struct {
 	IssuedAtUnixMs  int64                  `protobuf:"varint,13,opt,name=issued_at_unix_ms,json=issuedAtUnixMs,proto3" json:"issued_at_unix_ms,omitempty"`
 	Transport       uint32                 `protobuf:"varint,14,opt,name=transport,proto3" json:"transport,omitempty"` // 1 infrastructure Wi-Fi, 2 BLE, 3 NAN
 	NextHopDevice   []byte                 `protobuf:"bytes,15,opt,name=next_hop_device,json=nextHopDevice,proto3" json:"next_hop_device,omitempty"`
+	OwnerRole       uint32                 `protobuf:"varint,16,opt,name=owner_role,json=ownerRole,proto3" json:"owner_role,omitempty"`               // 0 legacy device, 1 device, 2 operator
+	OwnerPrincipal  string                 `protobuf:"bytes,17,opt,name=owner_principal,json=ownerPrincipal,proto3" json:"owner_principal,omitempty"` // exact public operator principal, at most 1024 UTF-8 bytes
+	OwnerInstance   []byte                 `protobuf:"bytes,18,opt,name=owner_instance,json=ownerInstance,proto3" json:"owner_instance,omitempty"`    // operator routing installation UUID, sixteen bytes, never a device ID
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
@@ -1544,6 +1547,27 @@ func (x *WendyComNetTopologyRecord) GetTransport() uint32 {
 func (x *WendyComNetTopologyRecord) GetNextHopDevice() []byte {
 	if x != nil {
 		return x.NextHopDevice
+	}
+	return nil
+}
+
+func (x *WendyComNetTopologyRecord) GetOwnerRole() uint32 {
+	if x != nil {
+		return x.OwnerRole
+	}
+	return 0
+}
+
+func (x *WendyComNetTopologyRecord) GetOwnerPrincipal() string {
+	if x != nil {
+		return x.OwnerPrincipal
+	}
+	return ""
+}
+
+func (x *WendyComNetTopologyRecord) GetOwnerInstance() []byte {
+	if x != nil {
+		return x.OwnerInstance
 	}
 	return nil
 }
@@ -3705,7 +3729,7 @@ const file_wendy_com_msg_proto_rawDesc = "" +
 	"\x06cursor\x18\x01 \x01(\rR\x06cursor\x12\x1e\n" +
 	"\n" +
 	"generation\x18\x02 \x01(\x04R\n" +
-	"generation\"\xdd\x03\n" +
+	"generation\"\xcc\x04\n" +
 	"\x19WendyComNetTopologyRecord\x12\x12\n" +
 	"\x04kind\x18\x01 \x01(\rR\x04kind\x12\x16\n" +
 	"\x06device\x18\x02 \x01(\fR\x06device\x12\x18\n" +
@@ -3724,7 +3748,11 @@ const file_wendy_com_msg_proto_rawDesc = "" +
 	"\brevision\x18\f \x01(\x04R\brevision\x12)\n" +
 	"\x11issued_at_unix_ms\x18\r \x01(\x03R\x0eissuedAtUnixMs\x12\x1c\n" +
 	"\ttransport\x18\x0e \x01(\rR\ttransport\x12&\n" +
-	"\x0fnext_hop_device\x18\x0f \x01(\fR\rnextHopDevice\"\xfe\x02\n" +
+	"\x0fnext_hop_device\x18\x0f \x01(\fR\rnextHopDevice\x12\x1d\n" +
+	"\n" +
+	"owner_role\x18\x10 \x01(\rR\townerRole\x12'\n" +
+	"\x0fowner_principal\x18\x11 \x01(\tR\x0eownerPrincipal\x12%\n" +
+	"\x0eowner_instance\x18\x12 \x01(\fR\rownerInstance\"\xfe\x02\n" +
 	"\x17WendyComNetTopologyPage\x12\x16\n" +
 	"\x06tenant\x18\x01 \x01(\fR\x06tenant\x12\x16\n" +
 	"\x06device\x18\x02 \x01(\fR\x06device\x12-\n" +

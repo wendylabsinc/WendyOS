@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
+	"github.com/wendylabsinc/wendy/go/internal/shared/meshoperator"
 	pb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	lite "github.com/wendylabsinc/wendy/go/proto/gen/litepb"
 	"google.golang.org/grpc/codes"
@@ -83,7 +84,7 @@ func collect(ctx context.Context, read ReadPage) (*pb.LocalMeshTopology, bool, e
 			return nil, true, nil
 		}
 		out.Truncated = out.Truncated || page.Truncated || page.Partial
-		if page.Record != nil {
+		if page.RuntimeAvailable && page.Record != nil {
 			if err := appendRecord(out, page.Record); err != nil {
 				return nil, false, err
 			}
@@ -102,21 +103,26 @@ func normalizeStatus(page *lite.WendyComNetTopologyPage) *pb.LocalMeshStatus {
 	net := page.GetStatus()
 	config := net.GetDesired()
 	state := "runtime-unavailable"
-	switch net.GetState() {
-	case lite.WendyComNetState_WENDY_COM_NET_OFF:
-		state = "disabled"
-	case lite.WendyComNetState_WENDY_COM_NET_STARTING:
-		state = "starting"
-	case lite.WendyComNetState_WENDY_COM_NET_RUNNING:
-		if page.RuntimeAvailable {
-			state = "mesh-active"
-		} else {
-			state = "waiting-for-peers"
+	if page.RuntimeAvailable {
+		state = "mesh-active"
+	}
+	if net != nil {
+		switch net.GetState() {
+		case lite.WendyComNetState_WENDY_COM_NET_OFF:
+			state = "disabled"
+		case lite.WendyComNetState_WENDY_COM_NET_STARTING:
+			state = "starting"
+		case lite.WendyComNetState_WENDY_COM_NET_RUNNING:
+			if page.RuntimeAvailable {
+				state = "mesh-active"
+			} else {
+				state = "waiting-for-peers"
+			}
+		case lite.WendyComNetState_WENDY_COM_NET_STOPPING:
+			state = "stopping"
+		case lite.WendyComNetState_WENDY_COM_NET_FAILED:
+			state = "failed"
 		}
-	case lite.WendyComNetState_WENDY_COM_NET_STOPPING:
-		state = "stopping"
-	case lite.WendyComNetState_WENDY_COM_NET_FAILED:
-		state = "failed"
 	}
 	detail := "Wendy Lite local observation."
 	if page.Partial {
@@ -125,7 +131,11 @@ func normalizeStatus(page *lite.WendyComNetTopologyPage) *pb.LocalMeshStatus {
 	if net.GetRestarting() {
 		detail += " Saved radio change is awaiting restart."
 	}
-	return &pb.LocalMeshStatus{RuntimeAvailable: page.RuntimeAvailable, State: state, Detail: detail, AuthenticatedPeers: net.GetActiveLinks(), Configured: &pb.LocalMeshConfiguration{Participate: config.GetEnabled(), Ble: config.GetBle(), Nan: config.GetNan(), InfrastructureWifi: config.GetInfrastructureWifi()}}
+	var configured *pb.LocalMeshConfiguration
+	if config != nil {
+		configured = &pb.LocalMeshConfiguration{Participate: config.GetEnabled(), Ble: config.GetBle(), Nan: config.GetNan(), InfrastructureWifi: config.GetInfrastructureWifi()}
+	}
+	return &pb.LocalMeshStatus{RuntimeAvailable: page.RuntimeAvailable, State: state, Detail: detail, AuthenticatedPeers: net.GetActiveLinks(), Configured: configured}
 }
 func principal(tenant string, raw []byte) (string, string, error) {
 	if len(raw) == 0 {
@@ -148,12 +158,40 @@ func address(raw []byte) (string, error) {
 	copy(a[:], raw)
 	return netip.AddrFrom16(a).String(), nil
 }
+
+// The wire installation is bytes16, but normalized protobuf fields are UUID
+// text. Never marshal the generated WendyCom record directly into UI JSON.
+func owner(tenant, addr string, row *lite.WendyComNetTopologyRecord) (string, string, error) {
+	switch row.OwnerRole {
+	case 0, 1:
+		if row.OwnerPrincipal != "" || len(row.OwnerInstance) != 0 {
+			return "", "", status.Error(codes.DataLoss, "Lite device row contains operator identity fields")
+		}
+		return principal(tenant, row.Device)
+	case 2:
+		operator, err := meshoperator.ParsePrincipal(row.OwnerPrincipal)
+		if err != nil || operator.Tenant().String() != tenant || len(row.Device) != 0 {
+			return "", "", status.Error(codes.DataLoss, "Lite operator row has no matching tenant identity")
+		}
+		instance, err := uuid.FromBytes(row.OwnerInstance)
+		if err != nil || instance == uuid.Nil {
+			return "", "", status.Error(codes.DataLoss, "Lite operator row has no installation UUID")
+		}
+		endpoint := meshoperator.Endpoint{Operator: operator, Instance: meshoperator.InstanceID(instance)}
+		if endpoint.Address().String() != addr {
+			return "", "", status.Error(codes.DataLoss, "Lite operator row address does not match its installation")
+		}
+		return operator.Principal(), instance.String(), nil
+	default:
+		return "", "", status.Error(codes.DataLoss, "unknown Lite topology owner role")
+	}
+}
 func appendRecord(out *pb.LocalMeshTopology, row *lite.WendyComNetTopologyRecord) error {
-	origin, id, err := principal(out.SelfTenantId, row.Device)
+	addr, err := address(row.Address)
 	if err != nil {
 		return err
 	}
-	addr, err := address(row.Address)
+	origin, id, err := owner(out.SelfTenantId, addr, row)
 	if err != nil {
 		return err
 	}
@@ -180,7 +218,7 @@ func appendRecord(out *pb.LocalMeshTopology, row *lite.WendyComNetTopologyRecord
 			}
 			nextAddress = d.MeshAddress().String()
 		}
-		out.Routes = append(out.Routes, &pb.LocalMeshRoute{Prefix: addr + "/128", OriginRouterId: row.RouterId, SequenceNumber: row.Sequence, Metric: row.Metric, LinkId: row.LinkId, Local: row.Local, Unreachable: row.Unreachable, OriginPrincipal: origin, OriginAuthorized: row.Authorized, SignedRouteExpiresAtUnixMs: row.ExpiresAtUnixMs, NextHopPrincipal: next, NextHopAddress: nextAddress})
+		out.Routes = append(out.Routes, &pb.LocalMeshRoute{Prefix: addr + "/128", OriginRouterId: row.RouterId, SequenceNumber: row.Sequence, Metric: row.Metric, LinkId: row.LinkId, Local: row.Local, Unreachable: row.Unreachable, OriginPrincipal: origin, OriginAuthorized: row.Authorized && origin != "", SignedRouteExpiresAtUnixMs: row.ExpiresAtUnixMs, NextHopPrincipal: next, NextHopAddress: nextAddress})
 	case 3:
 		if origin == "" || addr == "" {
 			return status.Error(codes.DataLoss, "incomplete Lite announcement")

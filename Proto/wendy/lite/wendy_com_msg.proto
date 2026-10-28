@@ -145,6 +145,9 @@ message WendyComNetTopologyRecord {
     int64 issued_at_unix_ms = 13;
     uint32 transport = 14; // 1 infrastructure Wi-Fi, 2 BLE, 3 NAN
     bytes next_hop_device = 15;
+    uint32 owner_role = 16; // 0 legacy device, 1 device, 2 operator
+    string owner_principal = 17; // exact public operator principal, at most 1024 UTF-8 bytes
+    bytes owner_instance = 18; // operator routing installation UUID, sixteen bytes, never a device ID
 }
 message WendyComNetTopologyPage {
     bytes tenant = 1;
