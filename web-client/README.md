@@ -199,7 +199,7 @@ Sign-out is local; it does not log you out of other Wendy applications.
 
 Choose **Networks** to inspect local net membership, direct peer links, and selected
 routes. The browser reads snapshots from the signed-in Cloud inventory. The
-desktop combines LAN discovery with the current CLI Cloud inventory. Each
+desktop combines LAN, physical Wendy Lite provider discovery and the current CLI Cloud inventory. Each
 snapshot uses an independent authenticated connection, so viewing networks does
 not replace the device dashboard connection.
 
@@ -209,17 +209,20 @@ from this client. Selecting a node shows its reported next hops, carrier types,
 route costs, and signed announcement expiry. A signed route authorizes its
 origin and prefix; it does not prove that an intermediary forwards traffic.
 
-The view polls at most four devices concurrently, then waits ten seconds before
+The view reads one device at a time, then waits ten seconds before
 the next batch. **Pause** stops new reads. Snapshots older than thirty seconds
 are marked stale. An active local network also needs a valid, recent device capture time.
 Failed reads retain the last snapshot visibly as stale. Older agents
 appear as unsupported until updated. Offline, denied, and unverified devices
 remain explicit rather than becoming empty healthy networks.
 
-The underlying read-only API is
-`WendyLocalMeshAdminService.GetLocalMeshTopology`, with the same tenant-scoped
-operator authorization as the existing net administration API. The CLI exposes
-it as `wendy --device HOST:PORT --json device wendy-net topology`.
+WendyOS uses `WendyLocalMeshAdminService.GetLocalMeshTopology`. Wendy Lite uses
+bounded WendyCom pages over its existing physical or authenticated Cloud
+connection. Both normalize to the same report. Lite endpoint gateway profiles
+show a partial directory explicitly, including omitted full remote route details.
+The browser selects its protocol from the authenticated Cloud asset's OS type;
+the desktop CLI selects the existing device provider. The CLI exposes the read
+as `wendy --device SELECTOR --json device wendy-net topology`.
 `--observation` adds a typed result envelope for clients handling partial
 failures. Neither the API nor this view enables the net or changes its policy.
 

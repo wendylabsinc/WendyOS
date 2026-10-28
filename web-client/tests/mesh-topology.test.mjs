@@ -314,7 +314,7 @@ test("collection bounds concurrency, retains per-device failures and ignores can
     (id, result) => received.push([id, result]),
     new AbortController().signal,
   );
-  assert.equal(maximum, 4);
+  assert.equal(maximum, 1);
   assert.equal(received.length, 10);
   assert.equal(received.find(([id]) => id === "2")[1].status, "error");
 
@@ -332,6 +332,6 @@ test("collection bounds concurrency, retains per-device failures and ignores can
     (...args) => late.push(args),
     controller.signal,
   );
-  assert.equal(calls, 4);
+  assert.equal(calls, 1);
   assert.equal(late.length, 0);
 });

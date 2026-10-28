@@ -97,7 +97,7 @@ test("topology calls use bounded read-only command and retain typed unsupported 
   const result = await service.meshTopology({target: "one.local:50052"});
   assert.equal(result.status, "unsupported");
   assert.deepEqual(command.args, ["device", "wendy-net", "topology", "--device", "one.local:50052", "--json", "--observation"]);
-  assert.equal(command.options.timeout, 15000);
+  assert.equal(command.options.timeout, 65000);
   assert.equal(service.meshSnapshots.size, 0);
   assert.throws(() => service.meshTopology({target: "--device=other"}));
 });
@@ -109,10 +109,12 @@ test("mesh refresh deduplicates a target and bounds simultaneous subprocesses", 
   service.run = async () => { await gate; return JSON.stringify({status: "unavailable"}); };
   const first = service.meshTopology({target: "one.local"});
   assert.equal(first, service.meshTopology({target: "one.local"}));
+  let active=0,maximum=0;
+  const original=service.run;service.run=async(...args)=>{maximum=Math.max(maximum,++active);try{return await original(...args)}finally{active--}};
   const rest = ["two.local", "three.local", "four.local"].map((target) => service.meshTopology({target}));
-  assert.throws(() => service.meshTopology({target: "five.local"}), /already in progress/);
   release();
   await Promise.all([first, ...rest]);
+  assert.equal(maximum,1);
   assert.equal(service.meshSnapshots.size, 0);
 });
 
@@ -140,4 +142,28 @@ test("a total discovery outage fails the refresh instead of replacing prior inve
   const service = fixture();
   service.run = async (_file, args) => { throw new Error(args[0] === "cloud" ? "Cloud offline" : "Network unavailable"); };
   await assert.rejects(service.meshDiscover(), /Local discovery: Network unavailable; Cloud discovery: Cloud offline/);
+});
+
+
+test("physical Lite reporters retain provider selectors and platform",async()=>{
+ const service=fixture();service.run=async(_file,args)=>JSON.stringify(args[0]==="cloud"?[]:{externalDevices:[
+  {id:"wendy-lite:/dev/cu.usbmodem1",displayName:"C6",providerKey:"wendy-lite",isWendyDevice:true,connectionInfo:{type:"USB"}},
+  {id:"wendy-lite:board.local",displayName:"C5",providerKey:"wendy-lite",isWendyDevice:true,connectionInfo:{type:"LAN"}},
+  {id:"wendy-lite:ble-id",providerKey:"wendy-lite",isWendyDevice:true,connectionInfo:{type:"BLE",address:"ble-id"}},
+ ]});
+ const inventory=await service.meshDiscover();assert.deepEqual(inventory.devices.map(d=>d.id),["wendy-lite:/dev/cu.usbmodem1","wendy-lite:board.local","wendy-lite:ble:ble-id"]);
+ assert.ok(inventory.devices.every(d=>d.platform==="wendy-lite"));
+ service.run=async(_file,args)=>{assert.equal(args[4],inventory.devices[0].id);return JSON.stringify({status:"ok",platform:"wendy-lite",topology:{selfPrincipal:"spiffe://wendy.sh/tenant/t/device/d"}})};
+ assert.equal((await service.meshTopology({target:inventory.devices[0].id})).platform,"wendy-lite");
+});
+
+
+test("closing a topology view discards queued observations before dialing",async()=>{
+ const service=fixture();let release,calls=0;const gate=new Promise(resolve=>{release=resolve});
+ service.run=async()=>{calls++;await gate;return JSON.stringify({status:"unavailable"})};
+ const first=service.meshTopology({target:"one.local"});
+ await new Promise(resolve=>setImmediate(resolve));
+ const second=service.meshTopology({target:"two.local"});
+ service.close();release();
+ const results=await Promise.allSettled([first,second]);assert.equal(calls,1);assert.ok(results.every(r=>r.status==="rejected"));
 });

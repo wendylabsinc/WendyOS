@@ -76,6 +76,7 @@ export class DesktopService {
     this.viewerChecks = new Map();
     this.deviceSnapshots = new Map();
     this.meshSnapshots = new Map();
+    this.meshQueue = Promise.resolve();
     this.monitorLogs = new DeviceLogs({ cli: this.cli, env });
     this.monitorGeneration = 0;
   }
@@ -313,13 +314,16 @@ export class DesktopService {
     target = deviceTarget(target);
     const pending = this.meshSnapshots.get(target);
     if (pending) return pending;
-    if (this.meshSnapshots.size >= 4)
-      throw new Error("Four local observations are already in progress. Try again shortly.");
+    if (this.meshSnapshots.size >= 64)
+      throw new Error("The local observation queue is full. Try again shortly.");
     const generation = this.monitorGeneration;
-    const request = this.monitorTarget(target).then((address) => this.run(
+    const request = this.meshQueue.catch(() => {}).then(() => {
+      if (generation !== this.monitorGeneration) throw new Error("This local network view is no longer open.");
+      return this.monitorTarget(target);
+    }).then((address) => this.run(
       this.cli,
       ["device", "wendy-net", "topology", "--device", address, "--json", "--observation"],
-      { timeout: 15_000, maxBuffer: 2 * 1024 * 1024 },
+      { timeout: 65_000, maxBuffer: 2 * 1024 * 1024 },
     )).then((output) => {
       if (generation !== this.monitorGeneration) throw new Error("This local network view is no longer open.");
       const observation = JSON.parse(output);
@@ -328,6 +332,7 @@ export class DesktopService {
         throw new Error("The CLI returned an invalid local observation.");
       return observation;
     }).finally(() => this.meshSnapshots.delete(target));
+    this.meshQueue = request.catch(() => {});
     this.meshSnapshots.set(target, request);
     return request;
   }
@@ -339,9 +344,9 @@ export class DesktopService {
     ]);
     const devices = new Map();
     const warnings = [];
-    const add = (target, name, deviceType) => {
+    const add = (target, name, deviceType, platform) => {
       target = deviceTarget(target);
-      if (!devices.has(target)) devices.set(target, { id: target, name: name || target, deviceType });
+      if (!devices.has(target)) devices.set(target, { id: target, name: name || target, deviceType, platform });
     };
     if (sources.every((source) => source.status === "rejected")) {
       // Preserve the view's last inventory and let its observations age stale.
@@ -374,6 +379,18 @@ export class DesktopService {
           } catch { invalidAddress = true; }
         }
       }
+      // Existing provider IDs retain physical USB/LAN/BLE selection semantics.
+      // Inventory identity hints are labels; the selected stream authenticates
+      // its reporter independently before it can contribute graph edges.
+      for (const device of Array.isArray(collection?.externalDevices) ? collection.externalDevices : []) {
+        if (!device?.isWendyDevice || device.providerKey !== "wendy-lite" || device.connectionInfo?.needsInstall === "true") continue;
+        try {
+          const target = device.connectionInfo?.type === "BLE"
+            ? `wendy-lite:ble:${device.connectionInfo.address}` : device.id;
+          if (typeof target !== "string" || !target.startsWith("wendy-lite:")) continue;
+          add(target, device.displayName, "Wendy Lite", "wendy-lite");
+        } catch { invalidAddress = true; }
+      }
       if (invalidAddress) warnings.push("Local discovery omitted devices with invalid addresses.");
     } else warnings.push("Local discovery: " + sources[0].reason.message);
     if (sources[1].status === "fulfilled") {
@@ -385,7 +402,7 @@ export class DesktopService {
           // session. An asset ID alone cannot identify a Cloud login.
           const selector = cloudDiscoverySelector(device);
           if (!selector) { invalidSelector = true; continue; }
-          add(selector, device.name, device.type);
+          add(selector, device.name, device.type, device.osType || (/lite/i.test(device.type || "") ? "wendy-lite" : undefined));
         }
         if (invalidSelector) warnings.push("Cloud discovery omitted devices without a valid scoped selector. Update the Wendy CLI and retry.");
       }

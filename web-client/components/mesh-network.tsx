@@ -697,6 +697,8 @@ function DeviceDetails({
           </p>
         )}
         <dl>
+          <dt>Platform</dt>
+          <dd>{node.observation?.result.platform || node.inventory?.platform || node.inventory?.osType || "Not reported"}</dd>
           <dt>Device identity</dt>
           <dd>{node.deviceId}</dd>
           <dt>Net address</dt>

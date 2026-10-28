@@ -2,6 +2,8 @@ package browserauth
 
 import (
 	"context"
+	"io"
+	"net"
 	"testing"
 
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
@@ -64,6 +66,14 @@ func TestTopologyFailuresDoNotLookLikeEmptyHealthyNetworks(t *testing.T) {
 		got := TopologyFailure(test.err)
 		if got.Status != test.state || len(got.Topology) != 0 || len(got.Error) == 0 || got.ObservedAt.IsZero() {
 			t.Fatalf("incorrect failure observation: %+v", got)
+		}
+	}
+}
+
+func TestClosedTopologyMonitoringStreamIsUnavailable(t *testing.T) {
+	for _, err := range []error{io.EOF, net.ErrClosed} {
+		if got := TopologyFailure(err); got.Status != "unavailable" {
+			t.Fatal(got)
 		}
 	}
 }

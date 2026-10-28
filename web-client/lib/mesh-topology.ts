@@ -4,6 +4,7 @@ export type MeshDevice = {
   name?: string;
   deviceType?: string;
   osType?: string;
+  platform?: string;
   lastHeartbeat?: string;
   organizationId?: string;
   pkiDeviceName?: string;
@@ -71,6 +72,7 @@ export type MeshTopology = {
   truncated?: boolean;
 };
 export type MeshResult = {
+  platform?: string;
   status: "ok" | "unsupported" | "unavailable" | "unauthorized" | "error";
   topology?: MeshTopology;
   error?: string;
@@ -378,6 +380,6 @@ export async function collectMeshSnapshots(
     }
   };
   await Promise.all(
-    Array.from({ length: Math.min(4, devices.length) }, worker),
+    Array.from({ length: Math.min(1, devices.length) }, worker),
   );
 }

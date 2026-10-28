@@ -10,18 +10,19 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/cli/browserauth"
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
+	"github.com/wendylabsinc/wendy/go/internal/shared/models"
 	pb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protojson"
 )
 
-var connectLocalMeshTopology = connectToAgent
+var resolveLocalMeshTopologyTarget = resolveTargetInner
 var observedLocalMeshTopologyIdentity = func(conn *grpcclient.AgentConnection) (certs.WendyIdentity, bool) {
 	return conn.ObservedServerIdentity()
 }
 
-const localMeshTopologyTimeout = 15 * time.Second
+const localMeshTopologyTimeout = 60 * time.Second
 
 // Register this constructor under the device command's manage group.
 func newDeviceLocalMeshCmd() *cobra.Command {
@@ -102,15 +103,15 @@ func newDeviceLocalMeshTopologyCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "topology",
 		Short: "Show the selected device's observed local net peers, routes and route proofs",
-		Long:  "Reads one live topology snapshot from the selected agent. Observations are local to that device; they do not prove fleet-wide reachability. Use --json for the complete snapshot.",
+		Long:  "Reads a live topology observation from the selected WendyOS or Wendy Lite device. Observations are local to that device; they do not prove fleet-wide reachability. Use --json for the complete snapshot.",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if observation && !jsonOutput {
 				return fmt.Errorf("--observation requires --json")
 			}
-			topology, err := readLocalMeshTopology(cmd.Context())
+			topology, platform, err := readLocalMeshReporter(cmd.Context())
 			if observation {
-				return printLocalMeshObservation(cmd, topology, err)
+				return printLocalMeshObservation(cmd, topology, err, platform)
 			}
 			if err != nil {
 				return err
@@ -122,36 +123,50 @@ func newDeviceLocalMeshTopologyCmd() *cobra.Command {
 	return cmd
 }
 
-func readLocalMeshTopology(parent context.Context) (*pb.LocalMeshTopology, error) {
+func readLocalMeshReporter(parent context.Context) (*pb.LocalMeshTopology, string, error) {
 	ctx, cancel := context.WithTimeout(parent, localMeshTopologyTimeout)
 	defer cancel()
-	conn, err := connectLocalMeshTopology(ctx, ReadOnlyMonitoring())
+	target, err := resolveLocalMeshTopologyTarget(ctx, ReadOnlyMonitoring())
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
+	if target == nil {
+		return nil, "", fmt.Errorf("no topology reporter selected")
+	}
+	defer target.Close()
+	if target.External != nil {
+		provider, ok := target.Provider.(interface {
+			NetTopology(context.Context, models.ExternalDevice) (*pb.LocalMeshTopology, error)
+		})
+		if !ok {
+			return nil, "", status.Error(codes.Unimplemented, "selected provider does not support topology")
+		}
+		snapshot, err := provider.NetTopology(ctx, *target.External)
+		return snapshot, "wendy-lite", err
+	}
+	conn := target.Agent
 	if conn == nil {
-		return nil, fmt.Errorf("local topology requires a WendyOS agent")
+		return nil, "", fmt.Errorf("local topology requires a WendyOS agent")
 	}
-	defer conn.Close()
 	if conn.Conn == nil {
-		return nil, fmt.Errorf("local topology requires a WendyOS agent")
+		return nil, "", fmt.Errorf("local topology requires a WendyOS agent")
 	}
 	client := pb.NewWendyLocalMeshAdminServiceClient(conn.Conn)
 	topology, err := client.GetLocalMeshTopology(ctx, &pb.GetLocalMeshTopologyRequest{})
 	if err != nil {
-		return nil, fmt.Errorf("reading local topology: %w", err)
+		return nil, "", fmt.Errorf("reading local topology: %w", err)
 	}
 	peer, verified := observedLocalMeshTopologyIdentity(conn)
 	if !verified {
-		return nil, status.Error(codes.Unauthenticated, "topology reporter identity was not verified")
+		return nil, "", status.Error(codes.Unauthenticated, "topology reporter identity was not verified")
 	}
 	if err := browserauth.ValidateTopologyReporter(topology, peer); err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	return topology, nil
+	return topology, "wendyos", nil
 }
 
-func printLocalMeshObservation(cmd *cobra.Command, topology *pb.LocalMeshTopology, readErr error) error {
+func printLocalMeshObservation(cmd *cobra.Command, topology *pb.LocalMeshTopology, readErr error, platform string) error {
 	var observation browserauth.TopologyObservation
 	if readErr != nil {
 		observation = browserauth.TopologyFailure(readErr)
@@ -160,7 +175,7 @@ func printLocalMeshObservation(cmd *cobra.Command, topology *pb.LocalMeshTopolog
 		if err != nil {
 			observation = browserauth.TopologyFailure(err)
 		} else {
-			observation = browserauth.TopologyObservation{Status: "ok", Topology: data, ObservedAt: time.Now().UTC()}
+			observation = browserauth.TopologyObservation{Status: "ok", Topology: data, ObservedAt: time.Now().UTC(), Platform: platform}
 		}
 	}
 	encoder := json.NewEncoder(cmd.OutOrStdout())

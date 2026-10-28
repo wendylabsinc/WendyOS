@@ -9,8 +9,10 @@ import (
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
+	"github.com/wendylabsinc/wendy/go/internal/cli/providers"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
+	"github.com/wendylabsinc/wendy/go/internal/shared/models"
 	pb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -20,7 +22,21 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+var connectLocalMeshTopology = connectToAgent
+
+func topologyResolverFixture(t *testing.T) {
+	previous := resolveLocalMeshTopologyTarget
+	resolveLocalMeshTopologyTarget = func(ctx context.Context, options ...resolveOption) (*SelectedDevice, error) {
+		conn, err := connectLocalMeshTopology(ctx, options...)
+		if err != nil {
+			return nil, err
+		}
+		return &SelectedDevice{Agent: conn}, nil
+	}
+	t.Cleanup(func() { resolveLocalMeshTopologyTarget = previous })
+}
 func TestLocalMeshTopologyReadsOnlySelectedAgent(t *testing.T) {
+	topologyResolverFixture(t)
 	const principal = "spiffe://wendy.sh/tenant/5c9e14bb-49c0-4178-9cc5-493a151f9885/device/b1026a08-24e8-4563-acf8-4138cb5986cb"
 	identity, err := certs.ParsePrincipal(principal)
 	if err != nil {
@@ -115,6 +131,7 @@ func TestLocalMeshTopologyReadsOnlySelectedAgent(t *testing.T) {
 }
 
 func TestLocalMeshTopologyObservationClassifiesConnectionErrors(t *testing.T) {
+	topologyResolverFixture(t)
 	for _, test := range []struct {
 		name   string
 		err    error
@@ -156,6 +173,7 @@ func TestLocalMeshTopologyObservationClassifiesConnectionErrors(t *testing.T) {
 }
 
 func TestLocalMeshTopologyRejectsUnverifiedReporter(t *testing.T) {
+	topologyResolverFixture(t)
 	connection, err := grpc.NewClient("passthrough:///unverified-agent",
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithUnaryInterceptor(func(_ context.Context, _ string, _, reply any, _ *grpc.ClientConn, _ grpc.UnaryInvoker, _ ...grpc.CallOption) error {
@@ -171,12 +189,13 @@ func TestLocalMeshTopologyRejectsUnverifiedReporter(t *testing.T) {
 	connectLocalMeshTopology = func(context.Context, ...resolveOption) (*grpcclient.AgentConnection, error) {
 		return &grpcclient.AgentConnection{Conn: connection}, nil
 	}
-	if snapshot, err := readLocalMeshTopology(context.Background()); snapshot != nil || status.Code(err) != codes.Unauthenticated {
+	if snapshot, _, err := readLocalMeshReporter(context.Background()); snapshot != nil || status.Code(err) != codes.Unauthenticated {
 		t.Fatalf("accepted unauthenticated snapshot: %v, %v", snapshot, err)
 	}
 }
 
 func TestLocalMeshTopologyObservationRequiresJSONBeforeConnecting(t *testing.T) {
+	topologyResolverFixture(t)
 	previousConnect, previousJSON := connectLocalMeshTopology, jsonOutput
 	t.Cleanup(func() { connectLocalMeshTopology, jsonOutput = previousConnect, previousJSON })
 	jsonOutput = false
@@ -189,5 +208,37 @@ func TestLocalMeshTopologyObservationRequiresJSONBeforeConnecting(t *testing.T) 
 	cmd.SilenceUsage, cmd.SilenceErrors = true, true
 	if err := cmd.Execute(); err == nil {
 		t.Fatal("accepted --observation without --json")
+	}
+}
+
+type liteTopologyFixtureProvider struct {
+	providers.DeviceProvider
+	calls int
+}
+
+func (p *liteTopologyFixtureProvider) NetTopology(ctx context.Context, device models.ExternalDevice) (*pb.LocalMeshTopology, error) {
+	p.calls++
+	if device.ID != "wendy-lite:physical" {
+		return nil, errors.New("wrong provider device")
+	}
+	return &pb.LocalMeshTopology{SelfDeviceId: "selected-lite"}, nil
+}
+func TestLiteTopologyUsesExistingProviderCapability(t *testing.T) {
+	previous := resolveLocalMeshTopologyTarget
+	defer func() { resolveLocalMeshTopologyTarget = previous }()
+	provider := &liteTopologyFixtureProvider{}
+	resolveLocalMeshTopologyTarget = func(_ context.Context, options ...resolveOption) (*SelectedDevice, error) {
+		cfg := resolveConfig{}
+		for _, option := range options {
+			option(&cfg)
+		}
+		if !cfg.readOnlyMonitoring {
+			t.Fatal("observation can mutate lifecycle")
+		}
+		return &SelectedDevice{External: &models.ExternalDevice{ID: "wendy-lite:physical"}, Provider: provider}, nil
+	}
+	snapshot, platform, err := readLocalMeshReporter(context.Background())
+	if err != nil || platform != "wendy-lite" || snapshot.SelfDeviceId != "selected-lite" || provider.calls != 1 {
+		t.Fatal(snapshot, platform, provider.calls, err)
 	}
 }

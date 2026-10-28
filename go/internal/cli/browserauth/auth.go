@@ -81,6 +81,8 @@ type Session struct {
 	privatePEM, state, verifier, redirect string
 	started                               time.Time
 	certificate                           config.CertificateInfo
+	liteCertificate                       config.CertificateInfo
+	topologyGate                          chan struct{}
 	tokens                                token
 	profile                               Profile
 }
@@ -522,7 +524,11 @@ func requestPKIIdentityCertificate(
 	if err != nil {
 		return config.CertificateInfo{}, fmt.Errorf("parsing pki-core certificate chain: %w", err)
 	}
-	wantPublicKey, err := x509.MarshalPKIXPublicKey(key.Public())
+	csrKey, err := certs.ParseSigningPrivateKeyPEM([]byte(privateKeyPEM))
+	if err != nil {
+		return config.CertificateInfo{}, err
+	}
+	wantPublicKey, err := x509.MarshalPKIXPublicKey(csrKey.Public())
 	if err != nil {
 		return config.CertificateInfo{}, fmt.Errorf("encoding generated operator public key: %w", err)
 	}

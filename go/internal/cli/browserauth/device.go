@@ -22,7 +22,12 @@ import (
 
 // ConnectDevice keeps tunnel authorization, grant verification and device mTLS
 // in the caller. dial carries public Cloud/broker HTTP/2 over verified TLS.
-func (s *Session) ConnectDevice(ctx context.Context, asset string, dial func(context.Context, string) (net.Conn, error), httpClient *http.Client) (*grpcclient.AgentConnection, error) {
+func (s *Session) ConnectDevice(ctx context.Context, asset string, dial func(context.Context, string) (net.Conn, error), client *http.Client) (*grpcclient.AgentConnection, error) {
+	conn, _, err := s.connectReporter(ctx, asset, dial, client, false)
+	return conn, err
+}
+
+func (s *Session) connectReporter(ctx context.Context, asset string, dial func(context.Context, string) (net.Conn, error), httpClient *http.Client, topology bool) (*grpcclient.AgentConnection, *liteReporter, error) {
 	s.mu.Lock()
 	locked := true
 	defer func() {
@@ -31,16 +36,16 @@ func (s *Session) ConnectDevice(ctx context.Context, asset string, dial func(con
 		}
 	}()
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if !canonicalUUID(asset) {
-		return nil, fmt.Errorf("Invalid cloud device ID")
+		return nil, nil, fmt.Errorf("Invalid cloud device ID")
 	}
 	if s.tokens.Access == "" {
-		return nil, fmt.Errorf("Sign in with Wendy first")
+		return nil, nil, fmt.Errorf("Sign in with Wendy first")
 	}
 	if err := s.refreshCloudToken(ctx); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	cert, access, key := s.certificate, s.tokens.Access, s.key
 	settings, tenant, privatePEM := s.settings(), s.profile.Tenant, s.privatePEM
@@ -53,12 +58,12 @@ func (s *Session) ConnectDevice(ctx context.Context, asset string, dial func(con
 	opts = append(opts, cloudrequest.DPoPDialOptions(auth, func(context.Context) (string, crypto.Signer, error) { return access, key, nil })...)
 	cloud, err := grpc.NewClient("passthrough:///"+settings.CloudGRPC, opts...)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	signer, err := cloudrelay.PrincipalSigner(cert.PemCertificate, []byte(privatePEM))
 	if err != nil {
 		cloud.Close()
-		return nil, err
+		return nil, nil, err
 	}
 	verifier := &cloudrelay.Verifier{Issuer: settings.RelayIssuer, HTTP: httpClient, RelayDial: func(endpoint string) (*grpc.ClientConn, error) {
 		target, err := cloudrelay.BrowserBrokerTarget(endpoint)
@@ -70,12 +75,21 @@ func (s *Session) ConnectDevice(ctx context.Context, asset string, dial func(con
 	record, err := cloudpbv2.NewAssetServiceClient(cloud).GetAsset(ctx, &cloudpbv2.GetAssetRequest{Id: asset})
 	if err != nil {
 		cloud.Close()
-		return nil, fmt.Errorf("Looking up device certificate identity: %w", err)
+		return nil, nil, fmt.Errorf("Looking up device certificate identity: %w", err)
 	}
 	expected, err := cloudDeviceIdentity(record, asset, tenant)
 	if err != nil {
 		cloud.Close()
-		return nil, err
+		return nil, nil, err
+	}
+
+	if topology && liteAsset(record) {
+		reporter, err := s.connectLiteReporter(ctx, cloud, asset, expected, dial, httpClient)
+		if err != nil {
+			cloud.Close()
+			return nil, nil, err
+		}
+		return nil, reporter, nil
 	}
 
 	conn, err := grpcclient.ConnectWithTLSExpecting(ctx, "passthrough:///cloud-device", &cert, nil, expected, clouddefaults.TunnelDialer(func(c context.Context) (net.Conn, error) {
@@ -83,10 +97,10 @@ func (s *Session) ConnectDevice(ctx context.Context, asset string, dial func(con
 	}))
 	if err != nil {
 		cloud.Close()
-		return nil, err
+		return nil, nil, err
 	}
 	conn.ExtraClosers = append(conn.ExtraClosers, cloud)
-	return conn, nil
+	return conn, nil, nil
 }
 
 // Cloud asset IDs identify inventory rows. Only the enrollment binding names
