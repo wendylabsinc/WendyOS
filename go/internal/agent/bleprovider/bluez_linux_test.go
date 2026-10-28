@@ -300,7 +300,7 @@ func TestVersionedBinaryAdvertisementHasNoNameOrUUIDList(t *testing.T) {
 	if len(data) != 1 || !bytes.Equal(data[ServiceUUID(testTenant)].Value().([]byte), raw) {
 		t.Fatal("versioned payload changed in registration")
 	}
-	if len(raw) != 9 || 3+2+16+len(raw) != 30 {
-		t.Fatal("binary advertisement exceeds primary packet budget")
+	if len(raw) != AdvertisementSize || 3+2+16+len(raw) != 31 {
+		t.Fatalf("binary advertisement has %d payload bytes and %d primary packet bytes; want %d and 31", len(raw), 3+2+16+len(raw), AdvertisementSize)
 	}
 }
