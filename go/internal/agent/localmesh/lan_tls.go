@@ -21,7 +21,7 @@ func lanAuthenticatedPeer(c *Credentials, state tls.ConnectionState) (meshid.Dev
 	if err != nil {
 		return meshid.Device{}, err
 	}
-	if id.Device == (meshid.Device{}) || id.Device == c.Device || id.Device.Tenant() != c.Device.Tenant() {
+	if id.Device.IsOperator() || id.Device == (meshid.Device{}) || id.Device == c.Device || id.Device.Tenant() != c.Device.Tenant() {
 		return meshid.Device{}, errors.New("LAN peer must be another enrolled device in this tenant")
 	}
 	return id.Device, nil
