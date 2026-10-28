@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/wendylabsinc/wendy/go/internal/agent/data/live"
 	"github.com/wendylabsinc/wendy/go/internal/agent/timesync"
 	"github.com/wendylabsinc/wendy/go/internal/shared/atomicfile"
 )
@@ -127,6 +128,9 @@ type Manager struct {
 	// eviction tests drive a store small enough to evict deterministically.
 	maxQuota int64
 	reserve  int64
+	// live serves accepted records to live subscribers (DataService.StreamData).
+	// It has its own lock and never blocks, so records are offered outside mu.
+	live *live.Hub
 }
 
 // SetQuota overrides the episode store bounds. maxQuota caps the store (the
@@ -363,7 +367,7 @@ func NewManager(root string) (*Manager, error) {
 		}
 	}
 	m := &Manager{root: root, downloads: make(map[string]int), active: make(map[string]*activeEpisode),
-		maxQuota: DefaultMaxQuotaBytes, reserve: DefaultReserveBytes}
+		maxQuota: DefaultMaxQuotaBytes, reserve: DefaultReserveBytes, live: live.NewHub(live.DefaultLimits)}
 	m.recordings = &recordingStore{root: filepath.Join(root, ".recordings"), journals: map[string]*recordingJournal{}}
 	if err := m.restoreStreamPreRoll(); err != nil {
 		return nil, err

@@ -8,10 +8,11 @@ option go_package = "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2;agent
 //
 // CONTROL PLANE ONLY. This service is registered on the agent's device mutual
 // Transport Layer Security server, alongside the provisioning, WiFi, container
-// and update services, and is never exposed to applications. An app reaches the
-// agent solely through a per-app private unix socket, which serves the
-// app-facing wendy.agent.apps.v1 package and nothing else; no entitlement makes
-// any method below callable by an application.
+// and update services. It is not an application programming interface. An app
+// reaches the agent through a per-app private unix socket, which serves the
+// app-facing wendy.agent.apps.v1 package and nothing else. The one exception is
+// the local admin socket that the `admin` entitlement mounts: it carries full
+// agent authority, this service included.
 //
 // The four Campaign methods in particular are command-line-facing: they are
 // what `wendy data campaign deploy`, `wendy data campaign list`, `wendy data
@@ -19,6 +20,15 @@ option go_package = "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2;agent
 // authenticated channel. They are operator commands for managing capture
 // campaigns on a device, not an application programming interface for apps.
 service DataService {
+  // Streams accepted application data as it arrives. This first API deliberately
+  // has no history, resume cursor, or gap protocol.
+  //
+  // Delivery is best effort. The newest record wins per stream: a slow
+  // subscriber skips records and never slows a publisher or another stream.
+  // A subscriber sees only records accepted after it subscribed. Response
+  // headers are sent once the subscription is in place.
+  rpc StreamData(StreamDataRequest) returns (stream DataRecord);
+
   // Bounded, durable event inbox. An empty cursor starts at the current tail;
   // replay=true reads retained history. Expired cursors report a gap explicitly.
   rpc Events(DataEventsRequest) returns (DataEventsResponse);
@@ -55,6 +65,30 @@ message DataEventsResponse {
   bool gap = 3;
   // Echoes notifications_only so clients can detect agents that predate it.
   bool notifications = 4;
+}
+
+// StreamDataRequest selects streams. An empty request selects every stream.
+// Future additive selectors narrow the set further.
+message StreamDataRequest {
+  // Exact stream ids. An id that no stream has published yet is not an error:
+  // its records arrive once it does.
+  repeated string stream_ids = 1;
+}
+
+// One self-describing item on the generic live data stream. timestamp_unix_nanos
+// uses the same wall-clock domain as the existing public VideoFrame and
+// AudioChunk timestamps. It is the time the data describes, not the time the
+// record was sent. The schema identifies the versioned payload type; clients
+// render only schemas they recognize.
+//
+// stream_id is opaque and stable. An application recording stream is
+// "apps/<app-id>/<service>/<stream>", or "apps/<app-id>/<stream>" for an app
+// without a service name.
+message DataRecord {
+  string stream_id = 1;
+  int64 timestamp_unix_nanos = 2;
+  string schema = 3;
+  bytes payload = 4;
 }
 
 message DataSource {
