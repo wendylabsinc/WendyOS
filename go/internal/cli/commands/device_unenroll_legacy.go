@@ -72,10 +72,9 @@ func unpinCommandsFor(identityKeys []string) string {
 
 // Check Cloud before erasing the only local record of the enrollment. Keep
 // reset before revocation, since Cloud cleanup can disrupt device connectivity.
-func performLegacyDeviceUnenroll(ctx context.Context, conn grpc.ClientConnInterface, orgID, assetID int32, userID string, reset func() error) (result legacyUnenrollResult, err error) {
-	if err := checkLegacyUnenrollRole(ctx, conn, orgID, userID); err != nil {
-		return result, fmt.Errorf("cloud cleanup preflight failed; device was not reset: %w", err)
-	}
+// Authorization is Cloud's: the CLI does not pre-check the caller's role, so a
+// caller Cloud refuses sees its PermissionDenied from the RPC that refused.
+func performLegacyDeviceUnenroll(ctx context.Context, conn grpc.ClientConnInterface, assetID int32, reset func() error) (result legacyUnenrollResult, err error) {
 	if _, err := listLegacyUnenrollCertificates(ctx, conn, assetID); err != nil {
 		return result, fmt.Errorf("cloud cleanup preflight failed; device was not reset: %w", err)
 	}
@@ -89,42 +88,6 @@ func performLegacyDeviceUnenroll(ctx context.Context, conn grpc.ClientConnInterf
 	// Read again after reset to include certificates issued during preflight.
 	result.CertificatesRevoked, result.AssetDeleted, err = cloudUnenrollCleanupClient(ctx, conn, assetID)
 	return result, err
-}
-
-// Legacy certificate listing only checks membership and can return an empty
-// inventory for non-members. Asset deletion requires an owner or admin, so check
-// the user from the selected Cloud certificate before any reset or revocation.
-func checkLegacyUnenrollRole(ctx context.Context, conn grpc.ClientConnInterface, orgID int32, userID string) error {
-	if userID == "" {
-		return fmt.Errorf("selected cloud auth session has no user ID; re-run 'wendy auth login' with an owner or admin of organization %d", orgID)
-	}
-	client := cloudpb.NewOrganizationServiceClient(conn)
-	seenTokens := make(map[string]bool)
-	for pageToken := ""; ; {
-		response, err := client.ListMembers(ctx, &cloudpb.ListMembersRequest{OrganizationId: orgID, PageToken: pageToken})
-		if err != nil {
-			return fmt.Errorf("checking owner or admin membership in organization %d: %w", orgID, err)
-		}
-		for _, member := range response.GetMembers() {
-			if member.GetUserId() != userID || member.GetOrganizationId() != orgID {
-				continue
-			}
-			switch member.GetRole() {
-			case cloudpb.OrganizationRole_ORGANIZATION_ROLE_OWNER, cloudpb.OrganizationRole_ORGANIZATION_ROLE_ADMIN:
-				return nil
-			default:
-				return fmt.Errorf("unenrolling this device requires an owner or admin of organization %d; selected user has role %s", orgID, member.GetRole())
-			}
-		}
-		pageToken = response.GetNextPageToken()
-		if pageToken == "" {
-			return fmt.Errorf("selected user is not listed as a member of organization %d; sign in as an owner or admin of that organization", orgID)
-		}
-		if seenTokens[pageToken] {
-			return fmt.Errorf("cloud membership inventory repeats a page token for organization %d; cannot verify owner or admin membership", orgID)
-		}
-		seenTokens[pageToken] = true
-	}
 }
 
 const maxLegacyUnenrollCertificates = 10000

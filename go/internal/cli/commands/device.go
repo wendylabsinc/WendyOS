@@ -1296,13 +1296,13 @@ func newDeviceUnenrollCmd() *cobra.Command {
 				}
 			}
 
-			cloudConn, cloudCtx, cloudAuth, err := dialLegacyUnenrollCloudFn(ctx, cloudGRPC, cloudHost)
+			cloudConn, cloudCtx, _, err := dialLegacyUnenrollCloudFn(ctx, cloudGRPC, cloudHost)
 			if err != nil {
 				return fmt.Errorf("cloud cleanup preflight failed; device was not reset: %w", err)
 			}
 			defer cloudConn.Close()
 
-			result, cloudErr := performLegacyDeviceUnenroll(cloudCtx, cloudConn, orgID, assetID, cloudAuth.Certificates[0].UserID, func() error {
+			result, cloudErr := performLegacyDeviceUnenroll(cloudCtx, cloudConn, assetID, func() error {
 				_, err := conn.ProvisioningService.Unprovision(ctx, &agentpb.UnprovisionRequest{})
 				return err
 			})

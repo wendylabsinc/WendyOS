@@ -158,36 +158,17 @@ type legacyUnenrollListPage struct {
 
 type legacyUnenrollSequenceServer struct {
 	*legacyUnenrollServer
-	pages       []legacyUnenrollListPage
-	listCalls   int
-	memberPages []legacyUnenrollMembersPage
-	memberCalls int
+	pages     []legacyUnenrollListPage
+	listCalls int
 }
 
-type legacyUnenrollMembersPage struct {
-	token     string
-	members   []*cloudpb.OrganizationMember
-	nextToken string
-	err       error
-}
-
-func (s *legacyUnenrollSequenceServer) ListMembers(_ context.Context, req *cloudpb.ListMembersRequest) (*cloudpb.ListMembersResponse, error) {
+// ListMembers records the call so a test can prove unenroll never makes it:
+// the member role is a projection Cloud is dropping (WDY-4052).
+func (s *legacyUnenrollSequenceServer) ListMembers(context.Context, *cloudpb.ListMembersRequest) (*cloudpb.ListMembersResponse, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	index := s.memberCalls
-	s.memberCalls++
-	s.events = append(s.events, fmt.Sprintf("members %q", req.GetPageToken()))
-	if index >= len(s.memberPages) {
-		return nil, status.Error(codes.Internal, "unexpected organization member list call")
-	}
-	page := s.memberPages[index]
-	if req.GetOrganizationId() != 55 || req.GetPageToken() != page.token {
-		return nil, status.Errorf(codes.InvalidArgument, "unexpected member query: organization=%d token=%q", req.GetOrganizationId(), req.GetPageToken())
-	}
-	if page.err != nil {
-		return nil, page.err
-	}
-	return &cloudpb.ListMembersResponse{Members: page.members, NextPageToken: page.nextToken}, nil
+	s.events = append(s.events, "members")
+	return nil, status.Error(codes.Internal, "unexpected organization member list call")
 }
 
 func (s *legacyUnenrollSequenceServer) ListCertificates(req *cloudpb.ListCertificatesRequest, stream grpc.ServerStreamingServer[cloudpb.ListCertificatesResponse]) error {
@@ -216,9 +197,6 @@ func startLegacyUnenrollSequenceServer(t *testing.T, pages []legacyUnenrollListP
 	service := &legacyUnenrollSequenceServer{
 		legacyUnenrollServer: &legacyUnenrollServer{revokeSuccess: true, deleteSuccess: true},
 		pages:                pages,
-		memberPages: []legacyUnenrollMembersPage{{members: []*cloudpb.OrganizationMember{
-			{OrganizationId: 55, UserId: "selected-user", Role: cloudpb.OrganizationRole_ORGANIZATION_ROLE_ADMIN},
-		}}},
 	}
 	listener := bufconn.Listen(1 << 20)
 	server := grpc.NewServer()
@@ -240,154 +218,6 @@ func activeLegacyUnenrollCertificate(id int32) *cloudpb.Certificate {
 	return &cloudpb.Certificate{Id: id, Status: cloudpb.CertificateStatus_CERTIFICATE_STATUS_ACTIVE}
 }
 
-func TestLegacyDeviceUnenrollRequiresAdministrativeMembershipBeforeReset(t *testing.T) {
-	admin := &cloudpb.OrganizationMember{OrganizationId: 55, UserId: "selected-user", Role: cloudpb.OrganizationRole_ORGANIZATION_ROLE_ADMIN}
-	otherAdmin := &cloudpb.OrganizationMember{OrganizationId: 55, UserId: "other-user", Role: cloudpb.OrganizationRole_ORGANIZATION_ROLE_ADMIN}
-	type testCase struct {
-		name            string
-		pages           []legacyUnenrollMembersPage
-		missingIdentity bool
-		allowed         bool
-		wantCode        codes.Code
-		wantEvents      []string
-	}
-	cases := []testCase{
-		{
-			name:            "missing selected identity",
-			missingIdentity: true,
-		},
-		{
-			name:       "nonmember cannot list organization members",
-			pages:      []legacyUnenrollMembersPage{{err: status.Error(codes.PermissionDenied, "not an organization member")}},
-			wantCode:   codes.PermissionDenied,
-			wantEvents: []string{`members ""`},
-		},
-		{
-			name:       "membership lookup unavailable",
-			pages:      []legacyUnenrollMembersPage{{err: status.Error(codes.Unavailable, "organization service unavailable")}},
-			wantCode:   codes.Unavailable,
-			wantEvents: []string{`members ""`},
-		},
-		{
-			name:       "selected caller absent from roster",
-			pages:      []legacyUnenrollMembersPage{{members: []*cloudpb.OrganizationMember{otherAdmin}}},
-			wantEvents: []string{`members ""`},
-		},
-		{
-			name:       "empty organization roster",
-			pages:      []legacyUnenrollMembersPage{{}},
-			wantEvents: []string{`members ""`},
-		},
-		{
-			name: "admin of another organization",
-			pages: []legacyUnenrollMembersPage{{members: []*cloudpb.OrganizationMember{
-				{OrganizationId: 99, UserId: "selected-user", Role: cloudpb.OrganizationRole_ORGANIZATION_ROLE_ADMIN},
-			}}},
-			wantEvents: []string{`members ""`},
-		},
-		{
-			name: "admin appears on later page",
-			pages: []legacyUnenrollMembersPage{
-				{members: []*cloudpb.OrganizationMember{otherAdmin}, nextToken: "next"},
-				{token: "next", members: []*cloudpb.OrganizationMember{admin}},
-			},
-			allowed:    true,
-			wantEvents: []string{`members ""`, `members "next"`},
-		},
-		{
-			name: "later membership page unavailable",
-			pages: []legacyUnenrollMembersPage{
-				{members: []*cloudpb.OrganizationMember{otherAdmin}, nextToken: "next"},
-				{token: "next", err: status.Error(codes.Unavailable, "later membership page unavailable")},
-			},
-			wantCode:   codes.Unavailable,
-			wantEvents: []string{`members ""`, `members "next"`},
-		},
-		{
-			name: "repeated membership page token",
-			pages: []legacyUnenrollMembersPage{
-				{members: []*cloudpb.OrganizationMember{otherAdmin}, nextToken: "next"},
-				{token: "next", members: []*cloudpb.OrganizationMember{otherAdmin}, nextToken: "next"},
-			},
-			wantEvents: []string{`members ""`, `members "next"`},
-		},
-	}
-	for _, role := range []struct {
-		name    string
-		role    cloudpb.OrganizationRole
-		allowed bool
-	}{
-		{"owner", cloudpb.OrganizationRole_ORGANIZATION_ROLE_OWNER, true},
-		{"admin", cloudpb.OrganizationRole_ORGANIZATION_ROLE_ADMIN, true},
-		{"billing manager", cloudpb.OrganizationRole_ORGANIZATION_ROLE_BILLING_MANAGER, false},
-		{"member", cloudpb.OrganizationRole_ORGANIZATION_ROLE_MEMBER, false},
-		{"viewer", cloudpb.OrganizationRole_ORGANIZATION_ROLE_VIEWER, false},
-		{"unspecified role", cloudpb.OrganizationRole_ORGANIZATION_ROLE_UNSPECIFIED, false},
-		{"unknown role", cloudpb.OrganizationRole(99), false},
-	} {
-		cases = append(cases, testCase{
-			name: role.name,
-			pages: []legacyUnenrollMembersPage{{members: []*cloudpb.OrganizationMember{
-				otherAdmin,
-				{OrganizationId: 55, UserId: "selected-user", Role: role.role},
-			}}},
-			allowed:    role.allowed,
-			wantEvents: []string{`members ""`},
-		})
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			first := activeLegacyUnenrollCertificate(11)
-			service, conn := startLegacyUnenrollSequenceServer(t, []legacyUnenrollListPage{
-				{certificates: []*cloudpb.Certificate{first}},
-				{certificates: []*cloudpb.Certificate{first}},
-			})
-			service.memberPages = tc.pages
-			userID := "selected-user"
-			if tc.missingIdentity {
-				userID = ""
-			}
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			got, err := performLegacyDeviceUnenroll(ctx, conn, 55, 42, userID, func() error {
-				service.mu.Lock()
-				service.events = append(service.events, "reset")
-				service.mu.Unlock()
-				return nil
-			})
-			want := legacyUnenrollResult{}
-			wantEvents := tc.wantEvents
-			if tc.allowed {
-				want = legacyUnenrollResult{DeviceReset: true, CertificatesRevoked: 1, AssetDeleted: true}
-				wantEvents = append(wantEvents, "list 0", "reset", "list 0", "revoke 11", "delete 42")
-				if err != nil {
-					t.Fatalf("administrative caller was rejected: %v", err)
-				}
-			} else {
-				if err == nil {
-					t.Fatal("unverified or unauthorized caller was allowed to unenroll")
-				}
-				for _, message := range []string{"device was not reset", "owner or admin"} {
-					if !strings.Contains(err.Error(), message) {
-						t.Errorf("preflight error must explain %q: %v", message, err)
-					}
-				}
-			}
-			if tc.wantCode != codes.OK && status.Code(err) != tc.wantCode {
-				t.Fatalf("error code = %v, want %v: %v", status.Code(err), tc.wantCode, err)
-			}
-			if got != want {
-				t.Fatalf("result = %+v, want %+v", got, want)
-			}
-			service.mu.Lock()
-			defer service.mu.Unlock()
-			if !reflect.DeepEqual(service.events, wantEvents) {
-				t.Fatalf("operation order = %v, want %v", service.events, wantEvents)
-			}
-		})
-	}
-}
-
 func TestLegacyDeviceUnenrollPreflightsBeforeReset(t *testing.T) {
 	first := activeLegacyUnenrollCertificate(11)
 	later := activeLegacyUnenrollCertificate(13)
@@ -400,6 +230,12 @@ func TestLegacyDeviceUnenrollPreflightsBeforeReset(t *testing.T) {
 		wantError  string
 		wantEvents []string
 	}{
+		{
+			name:       "caller cloud refuses preserves enrollment",
+			pages:      []legacyUnenrollListPage{{err: status.Error(codes.PermissionDenied, "not an organization member")}},
+			wantError:  "device was not reset",
+			wantEvents: []string{"list 0"},
+		},
 		{
 			name:       "empty unknown error preserves enrollment",
 			pages:      []legacyUnenrollListPage{{err: status.Error(codes.Unknown, "")}},
@@ -474,7 +310,7 @@ func TestLegacyDeviceUnenrollPreflightsBeforeReset(t *testing.T) {
 			service.deleteErr = tc.deleteErr
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			got, err := performLegacyDeviceUnenroll(ctx, conn, 55, 42, "selected-user", func() error {
+			got, err := performLegacyDeviceUnenroll(ctx, conn, 42, func() error {
 				service.mu.Lock()
 				service.events = append(service.events, "reset")
 				service.mu.Unlock()
@@ -488,9 +324,9 @@ func TestLegacyDeviceUnenrollPreflightsBeforeReset(t *testing.T) {
 			}
 			service.mu.Lock()
 			defer service.mu.Unlock()
-			wantEvents := append([]string{`members ""`}, tc.wantEvents...)
-			if !reflect.DeepEqual(service.events, wantEvents) {
-				t.Fatalf("operation order = %v, want %v", service.events, wantEvents)
+			// No "members" event: Cloud, not a CLI role read, decides.
+			if !reflect.DeepEqual(service.events, tc.wantEvents) {
+				t.Fatalf("operation order = %v, want %v", service.events, tc.wantEvents)
 			}
 		})
 	}
@@ -628,19 +464,19 @@ func seedSessionBrokerState(t *testing.T) string {
 // is cleared as well as the one its enrollment reports.
 func TestLegacyUnenrollForgetsTheResetIdentity(t *testing.T) {
 	for _, tc := range []struct {
-		name       string
-		deleteErr  error
-		membersErr error
-		principal  bool
-		text       bool
-		wantReset  bool
-		wantErr    string
+		name      string
+		deleteErr error
+		listErr   error
+		principal bool
+		text      bool
+		wantReset bool
+		wantErr   string
 	}{
 		{name: "cloud cleanup succeeds", wantReset: true},
 		{name: "cloud cleanup fails after reset", deleteErr: status.Error(codes.Unknown, ""), wantReset: true, wantErr: "deleting asset 42"},
 		{name: "cloud cleanup fails after reset, text output", deleteErr: status.Error(codes.Unknown, ""), text: true, wantReset: true, wantErr: "deleting asset 42"},
 		{name: "certificate carries a tenant principal", principal: true, wantReset: true},
-		{name: "preflight fails before reset", membersErr: status.Error(codes.PermissionDenied, "not a member"), wantErr: "device was not reset"},
+		{name: "preflight fails before reset", listErr: status.Error(codes.PermissionDenied, "not a member"), wantErr: "device was not reset"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			preserveCloudUnenrollmentHooks(t)
@@ -675,9 +511,7 @@ func TestLegacyUnenrollForgetsTheResetIdentity(t *testing.T) {
 				{certificates: []*cloudpb.Certificate{certificate}},
 			})
 			service.deleteErr = tc.deleteErr
-			if tc.membersErr != nil {
-				service.memberPages = []legacyUnenrollMembersPage{{err: tc.membersErr}}
-			}
+			service.pages[0].err = tc.listErr
 			origDial := dialLegacyUnenrollCloudFn
 			dialLegacyUnenrollCloudFn = func(ctx context.Context, _, _ string) (*grpc.ClientConn, context.Context, *config.AuthConfig, error) {
 				return cloudConn, ctx, &config.AuthConfig{Certificates: []config.CertificateInfo{{UserID: "selected-user"}}}, nil
