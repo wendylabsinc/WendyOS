@@ -130,7 +130,7 @@ TLS negotiates `wendy-local-mesh-ble/1`, followed by router hello version 1.
 `bleprovider.ALPN` aliases the common `localmesh.StreamALPN` constant. This
 version includes shared HAVE/WANT service and presence/router announcements;
 there is no full-record-push fallback. BLE advertisements keep their independent
-discovery format/version. Endpoint-only leaf ALPN and hello remain separate.
+discovery format/version. The retired endpoint-only leaf ALPN and hello are no longer supported.
 
 ## Certificate issuers
 

@@ -32,6 +32,15 @@ func TestCombinedManifestImmediateAndCoalescedPublication(t *testing.T) {
 	if len(n.directory.Snapshot(time.Now())[0].Services) != 0 {
 		t.Fatal("unsigned draft leaked into roster")
 	}
+	// Route edits in the same burst share the same durable publication gate.
+	checkpoint := *n.state.Babel
+	checkpoint.Seqno++
+	if err := n.Persist(checkpoint); err != nil {
+		t.Fatal(err)
+	}
+	if n.state.Revision != first.Revision || n.state.Babel.Seqno != checkpoint.Seqno || n.advertisement.Route.Seqno != first.Route.Seqno {
+		t.Fatal("coalesced route change published early or lost its durable checkpoint")
+	}
 	// Advance the monotonic gate without sleeping or altering signed wall time.
 	n.nextPublication = time.Now().Add(-time.Millisecond)
 	if err := n.publish(); err != nil {
@@ -41,7 +50,7 @@ func TestCombinedManifestImmediateAndCoalescedPublication(t *testing.T) {
 	if !n.publicationDeadline().After(quiet) {
 		t.Fatal("an edit did not push back the quiet refresh")
 	}
-	if latest.Revision != first.Revision+1 || latest.Route.Seqno != first.Route.Seqno || len(latest.Services) != 1 || latest.Services[0].Port != 28082 || n.publicationDirty {
+	if latest.Revision != first.Revision+1 || latest.Route.Seqno != checkpoint.Seqno || len(latest.Services) != 1 || latest.Services[0].Port != 28082 || n.publicationDirty {
 		t.Fatalf("coalesced publication = %+v", latest)
 	}
 	if latest.Expires < first.Expires || latest.Expires-latest.Issued != MaxLease.Milliseconds() {

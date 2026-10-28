@@ -28,7 +28,6 @@ import (
 // uses the same device UUID for asset_id; certificate and tenant verification
 // still establish the complete authenticated principal.
 type Credentials struct {
-	primaryRoots   []*x509.Certificate
 	Device         meshid.Device
 	Certificate    tls.Certificate
 	Signer         crypto.Signer
@@ -125,15 +124,7 @@ func NewCredentials(certPEM, chainPEM, keyPEM string) (*Credentials, error) {
 	peerConfigs := make(map[meshid.Device]*list.Element)
 	var peerRecency list.List
 
-	primaryRoots := make([]*x509.Certificate, 0, len(anchors))
-	for _, der := range anchors {
-		root, err := x509.ParseCertificate(der)
-		if err != nil {
-			return nil, err
-		}
-		primaryRoots = append(primaryRoots, root)
-	}
-	credentials := &Credentials{primaryRoots: primaryRoots, Device: self, Certificate: cert, Signer: signer, Verify: verify, issuerDigest: anchoredIssuerDigest(cert.Certificate[1:], anchors), peerTLS: func(peer meshid.Device) (*tls.Config, error) {
+	credentials := &Credentials{Device: self, Certificate: cert, Signer: signer, Verify: verify, issuerDigest: anchoredIssuerDigest(cert.Certificate[1:], anchors), peerTLS: func(peer meshid.Device) (*tls.Config, error) {
 		peerMu.Lock()
 		defer peerMu.Unlock()
 		if cached := peerConfigs[peer]; cached != nil {

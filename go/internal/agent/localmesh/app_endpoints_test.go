@@ -1,7 +1,7 @@
 package localmesh
 
 import (
-	"encoding/json"
+	"github.com/wendylabsinc/wendy/go/internal/agent/netwire"
 	"testing"
 )
 
@@ -25,7 +25,7 @@ func TestAppEndpointsAreSignedValidatedAndOwned(t *testing.T) {
 		t.Fatal("capability aliases directory")
 	}
 	manifest.AppEndpoints[0].Transport = AppQUIC
-	modified, _ := json.Marshal(manifest)
+	modified, _ := netwire.Marshal(manifest)
 	wire.Body = modified
 	if _, err = directory.Accept(wire, now); err == nil {
 		t.Fatal("unsigned transport mutation accepted")
@@ -74,7 +74,7 @@ func TestAgentMTLSCapabilityIsSignedAndValidated(t *testing.T) {
 		t.Fatal("lost agent capability")
 	}
 	manifest.AgentTransport = ""
-	wire.Body, _ = json.Marshal(manifest)
+	wire.Body, _ = netwire.Marshal(manifest)
 	if _, err = directory.Accept(wire, now); err == nil {
 		t.Fatal("unsigned capability removal accepted")
 	}

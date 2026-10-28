@@ -20,13 +20,12 @@ import (
 // selected for it. They are stored together because the checkpoint's feasibility
 // history is only meaningful for the router ID that produced it.
 type PersistentState struct {
-	Version          int
-	Device           string `json:"device" cbor:"d"`
-	RouterID         uint64 `json:"routerID" cbor:"r"`
-	Revision         uint64 `json:"revision" cbor:"R"`
-	Babel            *babel.Checkpoint
-	OperatorReceipts []OperatorReceipt `json:"operatorReceipts,omitempty" cbor:"o,omitempty"`
-	Receipts         []DirectoryReceipt
+	Version  int
+	Device   string `json:"device" cbor:"d"`
+	RouterID uint64 `json:"routerID" cbor:"r"`
+	Revision uint64 `json:"revision" cbor:"R"`
+	Babel    *babel.Checkpoint
+	Receipts []DirectoryReceipt
 }
 
 type StateStore struct {

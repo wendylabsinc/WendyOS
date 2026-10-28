@@ -34,19 +34,11 @@ mutual TLS pins the full peer principal. The unauthenticated TCP preface is an
 identity hint, never authorization. The framed TCP carrier simulates graph
 topologies; automatically discovered LAN, NAN and BLE have their own providers.
 
-Ethernet and infrastructure Wi-Fi advertise and scan both `_wendy-net._udp`
-(`protocol=quic-v1`, UDP 43023) and `_wendy-net._tcp` (`protocol=tls-v1`, TCP
-43024). Both advertisements contain the enrolled principal, tenant mesh hint,
-and a `platform` TXT field. WendyOS publishes `platform=WendyOS` and skips a
-WendyOS peer's TCP advertisement, retaining native QUIC between full OS devices.
-Lite publishes `platform=Lite` and uses ordinary TLS in either dial direction.
-Its `role=embedded-router` advertises native Babel participation; an optional
-`role=endpoint` profile uses the smaller signed-attachment protocol.
-
-Both service types share candidate/connection policy and interface selection.
-Permit UDP 5353 for mDNS plus the applicable carrier ports. IPv6 LAN discovery
-is not added here. Wi-Fi Aware/NAN on WendyOS uses native UDP QUIC. Lite's NAN
-experiments and chip limitations are documented separately in the investigation.
+Ethernet and infrastructure Wi-Fi advertise and scan `_wendy-net._udp`
+(`protocol=quic-v1`, UDP 43023). Both use the existing native QUIC carrier.
+Permit UDP 5353 for mDNS and UDP 43023 for the carrier. Native LAN TLS discovery
+and listeners are integrated separately; understanding a signed TLS app endpoint
+does not start a listener or advertise one.
 
 Either full identity may initiate. Outbound mTLS pins the discovered complete
 tenant/device principal. Inbound mTLS accepts an unknown enrolled same-tenant
@@ -94,12 +86,14 @@ Suppression expires after five idle seconds and ends on teardown. This is a
 bounded hint, independent of certificate verification and existing handshake
 deadlines. There is no UUID eligibility filter or isolated-node grace timer.
 
-Crossed connections may still race. After certificate verification, mesh hello
-and local node admission, both ends retain the same preferred connection:
+Crossed connections may still race. After certificate verification and mesh hello,
+both ends retain the same preferred connection:
 lower UUID initiates for LAN/configured TCP/NAN, higher UUID for BLE. A sole
 reverse connection remains usable; no existing connection is retired just
-because a preferred attempt started. Only the losing stream/QUIC connection is
-closed. BLE never disconnects the whole BlueZ device/ACL during this decision.
+because a preferred attempt started. Arbitration completes before peer TUN
+creation, route publication or catalog visibility. Only the losing stream/QUIC
+connection is closed. BLE never disconnects the whole BlueZ device/ACL during
+this decision.
 NAN tracks NDP incarnations independently and reference-counts shared underlay
 neighbours, so one path cannot remove another path's neighbour entry. Ambiguous
 firmware events do not select an arbitrary path for teardown.
@@ -183,47 +177,24 @@ interface, no application-owned NAN interface and the existing no-receive
 evidence. It remains limited to one attempt per provider run. Recovery never
 restarts the supplicant or station Wi-Fi.
 
-## Lite router and constrained endpoint carriers
+## Ordinary stream peers
 
-Lite's native router uses the same signed route proofs, certificate descriptors
-and chunk requests, HAVE/WANT/GONE dissemination, service catalogue and Babel
-exchange as WendyOS. It can accept and initiate TLS carriers and forward transit
-traffic. Stream TLS uses ALPN `wendy-local-mesh-ble/2`; router QUIC uses
-`wendy-net-router/3`. A four-byte big-endian length bounds each CBOR control
-message to 64 KiB. Stream multiplexing carries control and Babel/IP datagrams
-through the bounded writer; tunnel MTU remains 1320.
+Ordinary peers share signed v4 manifests, certificate descriptors and chunk
+requests, HAVE/WANT/GONE dissemination, and Babel exchange. TLS stream carriers
+negotiate `wendy-local-mesh-ble/2`; router QUIC negotiates `wendy-net-router/3`.
+Control frames contain a four-byte big-endian length followed by CBOR, bounded
+to 64 KiB. The stream multiplexes control and Babel/IP datagrams through the
+existing bounded writer. Tunnel MTU remains 1320.
 
-The separate constrained endpoint profile negotiates `wendy-net-endpoint/2`.
-It does not run Babel or relay catalogues. Its authenticated WendyOS neighbour
-offers an exact /128 and current Babel origin; the endpoint signs that offer
-with a short-lived version-4 manifest. Only that verified signed authorization
-allows the attached router to originate the endpoint's route. Incoming endpoint
-packets must have that device's derived mesh address as their source; outgoing
-packets must target it. Endpoints do not forward transit or IPv4 tunnels.
+The original leaf protocol, leaf listener, radio peer configuration and delegated
+`wendy-net-endpoint/2` strategy are retired. No endpoint route offer/ready exchange
+or delegated route origin is accepted. Each ordinary peer supplies its own
+signed Babel origin; the node passes Babel's selected routes to the kernel.
+Native Lite carrier discovery and listeners are a separate integration layer.
 
-`"endpointListen": "0.0.0.0:43024"` enables an explicit TLS listener, and LAN
-providers publish the TLS service automatically when enabled. The listener
-accepts either stream-router or endpoint ALPN, authenticates the enrolled
-same-tenant principal before allocating its peer TUN, and accepts either dial
-direction. It bounds pending/active connections to 32 and concurrent handshakes
-to four, with a 15-second handshake deadline. No static peer UUID/address list
-or untrusted leaf preface is needed. The old leaf protocol has been removed.
-
-The BLE IP queue retains its 16 KiB cap and per-source fairness. Its minimum
-allows two full packets plus a short ACK for each of four senders, so an ACK
-does not evict its own waiting data packet. Packet age
-allows the bounded queue plus one active packet to drain at the observed rate,
-capped at five seconds; before a rate sample it allows two seconds. A faster
-socket write raises the drain estimate by at most 25% so it cannot immediately
-expire another sender's waiting packet. This prevents a queued TCP segment from
-expiring while the previous segment is still being serialized on a slow radio.
-At overflow, TCP data keeps its earliest queued segment within the same flow,
-including lease-pool IPv4-in-IPv6 traffic. Earlier retransmissions may replace
-later data; other flows and senders retain the existing queue limits and
-scheduling policy.
 The stream writer gives directory/Babel the first turn, then alternates with
-waiting IP packets. A proof backlog cannot monopolize the writer, and all
-fragments of an admitted IP packet are still written together.
+waiting IP packets. A proof backlog cannot monopolize the writer, and fragments
+of an admitted IP packet are written together.
 
 ## Identity and addressing
 
@@ -296,9 +267,8 @@ end-to-end application authentication still apply.
 Router QUIC links require hello version 2, ALPN `wendy-net-router/3` and the
 authenticated IP carrier capability described below. BLE TLS uses hello version 1
 and `wendy-local-mesh-ble/2` without router IP capabilities. Both router carriers
-include signed route authorization, neighbour service catalogue, certificate
-exchange and HAVE/WANT dissemination. Signed manifest and service schema versions
-remain independent. The constrained endpoint uses `wendy-net-endpoint/2`.
+include the complete signed route/service manifest, certificate exchange and
+HAVE/WANT dissemination. Services share their parent manifest revision and lease.
 Every carrier requires the binary wire format and current signed manifest schema.
 No automatic downgrade is attempted;
 upgrade each connected Wendy Net network together.
@@ -334,8 +304,8 @@ tunnel packet can use one nine-byte-header carrier datagram when the peer and
 current validated QUIC path support it. Otherwise the original 1091-byte fixed
 fragment positions apply. QUIC starts at a 1200-byte UDP payload and may probe
 up to a 1400-byte ceiling; application QUIC and tunnel/container MTUs are
-unchanged. Router and endpoint TLS stream protocols retain their separate ALPN and
-framing, and do not advertise the router capability.
+unchanged. TLS stream carriers retain their own ALPN and framing, and do not advertise
+the router QUIC datagram capability.
 
 Nonblocking datagram admission drops on queue pressure without withdrawing a
 healthy routing link. A synchronous whole-frame size refusal may fall back
@@ -378,8 +348,9 @@ the upstream default remains16 KiB.
 
 Signed device manifests advertise name, agent port, revision and an absolute
 expiry. Version 4 also binds the signed route origin and permits bounded optional
-metadata extensions; application services use the
-separate catalogue protocol.
+metadata extensions. Its service array is the complete current app-service
+set. Removing an entry withdraws it; there is no independent service signature,
+inventory, freshness exchange or service gossip runtime.
 Every receiver verifies the origin's certificate and signature before relaying
 an accepted version to its other neighbours. Missing certificates cause a
 bounded pending record and an identity request to the sending neighbour.
@@ -387,7 +358,7 @@ Identity announcements carry an ordered list of SHA-256 certificate hashes.
 The receiver reuses individual certificates from its own enrolled chain,
 authenticated handshakes and previously verified identities. It requests only
 the first missing chain element, in sequential chunks of at most 1,024 bytes.
-Concurrent directory/service caches and neighbour links can share the same
+The directory and neighbour links share the same
 bounded byte pool; only the first announcing supplier is asked. Disconnect
 releases its request immediately, and a silent supplier yields to another
 announcing neighbour after 30 seconds without progress. Routing and application
@@ -409,10 +380,13 @@ identity caches still persist verified full chains with their own 1,024-entry,
 8 MiB and 24-hour bounds. Restart can reuse those chains; unverified fragments
 are never persisted.
 
-Certificate exchange is part of each role's advertised control protocol.
-TLS handshake certificates and their verification remain unchanged. The constrained endpoint
-carrier keeps its separate ALPN and hello version 1; its TLS handshake provides
-the identity chain and its router relays the verified route authorization.
+Certificate exchange uses raw DER on the existing reliable control stream.
+TLS handshake certificates and their verification remain unchanged. Unknown
+optional control kinds and gossip operations are consumed within their frame;
+unknown optional manifest fields remain in the exact signed body. Unsupported
+manifest versions and required extensions do not advance replay state.
+The timestamp-control schema is understood, with active TSA relay effects left
+to native carrier integration.
 
 Changed records immediately advertise a HAVE digest. Duplicate revisions do not
 renew their expiry. Reconciliation advertises live digests periodically to repair
@@ -420,11 +394,13 @@ reconnects; full signed records are sent only on request between routers. A repa
 pass uses only free control-queue slots and resumes from its last admitted
 principal on the existing maintenance tick; it stops when the pass completes.
 Insufficient queue space does not consume a certificate-description stamp.
-The node currently signs a fresh presence manifest every 20 seconds, with a
-one-minute lease; receivers allow at most two minutes. Reconciliation runs every
-30 seconds. These intervals are separate from Babel's one-second
-Hello and four-second Update intervals. Durable revisions and bounded replay
-receipts prevent restart from resurrecting superseded announcements.
+The node uses one 15-minute manifest lease for route, presence and services.
+An edit publishes immediately when idle; edits within one second coalesce into
+the latest complete state. Five quiet minutes after a successful publication
+trigger refresh. Reconciliation runs every five minutes, with bounded repair
+continuation on the one-second maintenance tick. These intervals are separate
+from Babel's one-second Hello and 16-second Update intervals. Durable revisions
+and bounded replay receipts prevent restart from resurrecting superseded state.
 
 The payload path is IPv6 through peer TUNs and the selected Babel next hop. A
 1320-byte logical packet uses the negotiated whole form when current capacity
@@ -449,9 +425,9 @@ completion, duplicate/stale/invalid pieces, expiry/eviction/discard counts and
 current/peak reservations. These are hop-local receive counters, not app-message
 metrics or proof of delivery.
 
-Application catalogue gossip uses the separate protocol described below; it
-should not be inferred from the device presence directory. Internet-sharing
-overlays and LAN service projection have their own policy and runtime layers.
+Application services derive from the same verified manifest directory.
+Internet-sharing overlays and physical LAN service projection retain their own
+policy and runtime layers.
 
 ## Cloud relay presence
 
@@ -469,11 +445,10 @@ The kernel feature contract is checked by WendyOS-Builder's
 
 ## Shared HAVE/WANT announcements
 
-`netgossip.Pool` is shared by every router neighbour and both announcement
-classes through `ControlHub.Announcements()`. Transport-specific synchronizers
-only adapt signed device manifests and signed service records. A service record
-includes publications, renewals and withdrawal tombstones; a device manifest
-includes presence, signed router authorization and withdrawal revisions.
+`netgossip.Pool` is shared by router neighbours through
+`ControlHub.Announcements()`. Its active announcement class is the complete
+signed device manifest, including route authorization, presence, services and
+withdrawal revisions.
 
 The artifact ID is SHA-256 over the domain `wendy-mesh-artifact/1`, its one-byte
 type, a big-endian four-byte envelope length and the deterministic signed CBOR
@@ -509,7 +484,7 @@ session to four. Envelopes are at most 40 KiB and cached payloads at most 8 MiB.
 Evicting payload bytes retains the verified receipt until signed expiry, so a
 new HAVE does not redownload an already admitted object. A serving router can
 recover evicted bytes with a keyed authoritative-store lookup retained in its
-bounded verified receipt. Unknown requests never scan the directory/catalogue.
+bounded verified receipt. Unknown requests never scan the directory.
 Authenticated stale bodies receive short suppression receipts; expired or
 unverified certificate-wait bodies release their claim without a shared receipt. Advertised
 hints expire after two minutes. No cache is seeded from durable generation
@@ -532,9 +507,8 @@ repair waits for a later publication or lease cycle; no directory scan or extra
 artifact metadata is retained for this case.
 
 First delivery adds a request round trip per relay hop; larger bodies also drain
-through the bounded chunk scheduler. Presence/route-proof replies use the
-existing high-priority directory queue; service replies use their bounded reply
-reserve. Both retain application packet fairness. The existing immediate route
+through the bounded chunk scheduler. Complete-manifest replies use the existing high-priority directory queue and
+bounded reply reserve while retaining application packet fairness. The existing immediate route
 reevaluation runs after proof verification; early Babel updates can be rejected
 until their requested proof arrives and periodic Babel updates repair ordering.
 
@@ -553,62 +527,17 @@ namespace, never in a host or Jetson management namespace. The container needs
 `iproute2`, `iptables`, `iputils-ping`, `/dev/net/tun` and IPv6 enabled. Namespace
 tests do not establish physical radio performance.
 
-## Neighbour service catalogue
+## Combined service projection
 
-Service catalogue messages use the existing reliable neighbour control stream,
-not a TCP listener or a connection to each routed origin. The catalogue owns a
-synchronizer for each authenticated link incarnation. The node exposes a bounded
-ControlHub and never runs catalogue signature verification or disk writes in its
-routing event loop. Catalogue messages are split into 1 KiB fragments, with a
-64 KiB logical-message bound; the neighbour writer interleaves these fragments
-with urgent device control. Babel datagrams retain the carrier's existing path.
+`meshcatalog` stores authorized local app-service intent and submits the complete
+replacement list through `ControlHub.ReplaceServices`. Remote records derive
+from verified, live device manifests. Catalog projection requires a selected
+reachable Babel route for remote devices; it has no second synchronization gate,
+identity cache, signature owner, inventory or network transport.
 
-Every neighbour exchanges its current certificate inventory and a HAVE-only
-service snapshot. Accepted origin signatures are preserved on relay. The
-existing 15-second repair scan re-advertises current digests; it does not push
-full records. Advertised records remain pending until their origin checks
-complete, including signatures waiting for certificate repair. Projection
-requires the independent origin-signed freshness proof, which installs durable
-generation floors before readiness; a slow or newly joined neighbour does not
-hide services already proven fresh. Failed queue admission
-does not consume a send stamp. Certificate cache misses can be repaired through
-other neighbours with bounded, coalesced requests. Directory, authenticated
-handshake and catalogue paths share the same public certificate-element pool.
-Service announcements and freshness proofs describe certificate hashes instead
-of embedding whole chains; only missing bytes are requested, one chunk at a time.
-A burst of records from the same unknown origin requests its identity once.
-Pending unverified records are bounded to128 records/128 KiB and their signed
-expiry, and requested replies have a separate16-frame/128-KiB reserve.
-Ordinary signed-record formats,
-service leases and device-directory renewal/repair intervals are unchanged.
-
-Projection readiness uses a fresh origin-signed inventory challenge instead of an
-origin TLS session. A route loss or process restart invalidates readiness. On
-route recovery, a random 256-bit nonce request follows neighbour control links
-towards the origin; the signed response follows bounded reverse-path state. The
-response binds mesh, full origin/requester principals, nonce, issue/expiry times,
-and a complete immutable inventory of the origin's durable per-service generation
-and body-hash receipts, including inactive keys. Responses are chunked, bounded to
-4 MiB each and 8 MiB retained assembly, and expire after 30 seconds. Generation
-fences persist before readiness becomes visible. Newer concurrent publications
-are preserved; old active bodies cannot bypass an inactive inventory fence, while
-signed withdrawal bodies remain relayable. Request, transfer and queue bounds
-limit work on malformed or non-responsive peers. No request creates a routed
-socket. These freshness requests occur on readiness recovery, not on each normal
-service renewal. An origin without a live route remains unprojected.
-
-Each neighbour ALPN selects its complete role-specific contract described
-above, so connected routers must be updated together. There is no fallback to
-full-record push.
-Origin-signed route proofs retain their existing signature contract. Certificate
-inventories and origin freshness challenges remain separate from HAVE/WANT.
-
-Run the native affected-package race checks and the opt-in
-`TestNeighbourCatalogueLinuxNamespaces` in a disposable privileged Linux container.
-The latter creates four real routers in separate network namespaces with only
-A-B, B-C and C-D links, checks multihop catalogue readiness and withdrawal after
-partition/heal, and asserts no catalogue TCP listener on port 43022.
-
+The native WendyOS manifest advertises only its installed QUIC app listener.
+The schema accepts explicit TLS app endpoints, but TLS advertisement is added
+only alongside listener startup in the native VIP integration layer.
 
 ## Application service discovery
 

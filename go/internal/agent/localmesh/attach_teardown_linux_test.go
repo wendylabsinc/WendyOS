@@ -134,3 +134,47 @@ func TestAttachCancellationKeepsKernelOwnedTUN(t *testing.T) {
 		})
 	}
 }
+
+// A reconnect that loses duplicate arbitration must not publish a transient
+// Babel link or allocate a TUN: either can disturb the incumbent route.
+func TestRejectedDuplicateDoesNotPublishLink(t *testing.T) {
+	self, peer := selectionDevice(1), selectionDevice(2)
+	policy := NewConnectionPolicy(self, true, ConnectionLimits{2, 2, 8})
+	incumbent := policy.Reserve("outgoing", peer, true)
+	if incumbent == nil || !incumbent.Ready(peer, func() { t.Error("incumbent closed") }) {
+		t.Fatal("could not establish incumbent")
+	}
+	defer incumbent.Release()
+	duplicate := policy.Reserve("incoming", meshid.Device{}, false)
+	if duplicate == nil {
+		t.Fatal("could not reserve incoming handshake")
+	}
+	defer duplicate.Release()
+	duplicate.Identify(peer)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	node := &Node{ctx: ctx, events: make(chan nodeEvent, 1)}
+	link := &teardownTestLink{done: make(chan struct{}), reading: make(chan struct{})}
+	done := make(chan error, 1)
+	go func() { done <- node.attachLink(WithConnectionLease(ctx, duplicate), peer, 64, link) }()
+	select {
+	case event := <-node.events:
+		cancel()
+		<-done
+		t.Fatalf("rejected duplicate reached routing engine: add=%v remove=%v", event.add != nil, event.remove)
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("duplicate admission blocked")
+	}
+	select {
+	case <-link.done:
+	default:
+		t.Fatal("rejected connection not closed")
+	}
+	if policy.Counts().Ready != 1 {
+		t.Fatal("incumbent lost readiness")
+	}
+}

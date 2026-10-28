@@ -17,8 +17,7 @@ type NodeSnapshot struct {
 	Links      []PeerLink
 	Devices    []Manifest
 	Routes     []babel.Route
-	// ForwardingRoutes includes delegated endpoint origins translated to their
-	// actual selected peer link. Routes retains the Babel protocol origins.
+	// ForwardingRoutes contains the selected routes installed in the kernel.
 	ForwardingRoutes    []babel.Route
 	RouteAuthorizations map[RouteOrigin]bool
 }
@@ -52,7 +51,7 @@ func WithCarrier(ctx context.Context, carrier string) context.Context {
 func carrierName(ctx context.Context, fallback string) string {
 	carrier, _ := ctx.Value(carrierContextKey{}).(string)
 	switch carrier {
-	case "ethernet", "infrastructure-wifi", "tcp", "nan", "ble", "quic", "tls-stream", "endpoint-tls":
+	case "ethernet", "infrastructure-wifi", "tcp", "nan", "ble", "quic", "tls-stream":
 		return carrier
 	default:
 		return fallback

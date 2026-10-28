@@ -174,7 +174,7 @@ func TestAppMDNSMulticastLifetimesWithAvahi(t *testing.T) {
 	// At least two more query cycles must not cause five-second generations.
 	select {
 	case w := <-emitted:
-		t.Fatalf("unchanged service renewed within12s: %s", w)
+		t.Fatalf("unchanged service renewed within 12s: %+v", w)
 	case <-time.After(12 * time.Second):
 	}
 	call("UpdateServiceTxt", int32(-1), int32(0), uint32(0), "Stable Service", "_http._tcp", "local", [][]byte{[]byte("path=/changed")})

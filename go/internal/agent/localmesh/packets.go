@@ -9,7 +9,7 @@ import (
 
 const (
 	// Router QUIC negotiates the explicit whole-IP receive capability. Stream
-	// and leaf roles retain their own independent protocol versions/framing.
+	// carriers retain their own independent protocol versions/framing.
 	// All roles require signed route origins bound to the complete principal.
 	// Require exact ALPN/hello matches; never fall back to weaker protocols.
 	LinkALPN            = "wendy-net-router/3"

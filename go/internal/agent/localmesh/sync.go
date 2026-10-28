@@ -54,15 +54,14 @@ func directoryResponseDemand(m ControlMessage) int {
 // Control messages use one bounded reliable stream per authenticated link;
 // routing and payload packets remain independent QUIC datagrams.
 type ControlMessage struct {
-	Kind                string              `json:"kind" cbor:"k"`
-	Hello               *LinkHello          `json:"hello,omitempty" cbor:"h,omitempty"`
-	Bundle              [][]byte            `json:"bundle,omitempty" cbor:"b,omitempty"`
-	Manifest            *SignedManifest     `json:"manifest,omitempty" cbor:"m,omitempty"`
-	Principal           string              `json:"principal,omitempty" cbor:"p,omitempty"`
-	Certificate         *CertificateMessage `json:"certificate,omitempty" cbor:"c,omitempty"`
-	Gossip              *netgossip.Message  `json:"gossip,omitempty" cbor:"g,omitempty"`
-	Route               *RouteOrigin        `json:"route,omitempty" cbor:"r,omitempty"`
-	Time                *TimestampControl   `json:"time,omitempty" cbor:"t,omitempty"`
+	Kind        string              `json:"kind" cbor:"k"`
+	Hello       *LinkHello          `json:"hello,omitempty" cbor:"h,omitempty"`
+	Bundle      [][]byte            `json:"bundle,omitempty" cbor:"b,omitempty"`
+	Manifest    *SignedManifest     `json:"manifest,omitempty" cbor:"m,omitempty"`
+	Principal   string              `json:"principal,omitempty" cbor:"p,omitempty"`
+	Certificate *CertificateMessage `json:"certificate,omitempty" cbor:"c,omitempty"`
+	Gossip      *netgossip.Message  `json:"gossip,omitempty" cbor:"g,omitempty"`
+	Time        *TimestampControl   `json:"time,omitempty" cbor:"t,omitempty"`
 }
 
 func knownControlKind(kind string) bool {
@@ -139,45 +138,13 @@ func ReadControl(r io.Reader) (ControlMessage, error) {
 	if m.Kind != "gossip" && m.Gossip != nil {
 		return m, errors.New("unexpected gossip payload")
 	}
-	if m.Kind != "route-offer" && m.Kind != "route-ready" && m.Route != nil {
-		return m, errors.New("unexpected endpoint route payload")
-	}
-	if m.Kind != "operator-gossip" && m.Operator != nil || m.Kind != "operator-certificate" && m.OperatorCertificate != nil {
-		return m, errors.New("unexpected operator payload")
-	}
 	switch m.Kind {
-	case "operator-gossip", "operator-certificate":
-		if m.Hello != nil || m.Manifest != nil || m.Certificate != nil || m.Gossip != nil || m.Route != nil || m.Time != nil || len(m.Bundle) != 0 || m.Principal != "" {
-			return m, errors.New("invalid operator control envelope")
-		}
-		if m.Kind == "operator-gossip" {
-			if m.Operator == nil {
-				return m, errors.New("missing operator gossip")
-			}
-			if m.Operator.Known() && m.Operator.Type != netgossip.OperatorRoute {
-				return m, errors.New("invalid operator artifact class")
-			}
-			if err := m.Operator.Validate(); err != nil {
-				return m, err
-			}
-		} else {
-			if m.OperatorCertificate == nil || m.OperatorCertificate.Chain != nil {
-				return m, errors.New("operator DER exchange requires request or chunk")
-			}
-			if err := m.OperatorCertificate.Validate(); err != nil {
-				return m, err
-			}
-		}
 	case "time":
-		if m.Hello != nil || m.Manifest != nil || m.Certificate != nil || m.Gossip != nil || m.Route != nil || len(m.Bundle) != 0 || m.Principal != "" {
+		if m.Hello != nil || m.Manifest != nil || m.Certificate != nil || m.Gossip != nil || len(m.Bundle) != 0 || m.Principal != "" {
 			return m, errors.New("invalid timestamp envelope")
 		}
 		if err := m.Time.validate(); err != nil {
 			return m, err
-		}
-	case "route-offer", "route-ready":
-		if m.Route == nil || m.Hello != nil || m.Manifest != nil || len(m.Bundle) != 0 || m.Principal != "" {
-			return m, errors.New("invalid endpoint route envelope")
 		}
 	case "gossip":
 		if m.Gossip != nil && m.Gossip.Op != "" && !m.Gossip.Known() {
@@ -434,7 +401,7 @@ func (s *Synchronizer) receive(m ControlMessage, now time.Time, slots ...int) (r
 		// Go does not originate principal-based manifest lookups. There is no
 		// outstanding request here to cancel; consume the availability reply.
 	case "manifest-request":
-		// Endpoint-only peers can retain verified capabilities independently
+		// Constrained peers can retain verified capabilities independently
 		// of routing/key caches. Answer misses through ordinary HAVE/WANT,
 		// preserving the existing bounded transfer and verification path.
 		available := 2

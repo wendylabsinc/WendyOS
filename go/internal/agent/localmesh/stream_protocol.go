@@ -7,7 +7,7 @@ import "github.com/wendylabsinc/wendy/go/internal/shared/meshid"
 const StreamALPN = "wendy-local-mesh-ble/2"
 
 // StreamProtocolVersion is independent of router QUIC frame capabilities.
-// Leaf carriers enforce their own version at their explicit admission boundary.
+// Stream carriers validate their own hello before node admission.
 const StreamProtocolVersion = 1
 
 // validStreamHelloVersion deliberately refuses router-only IP capabilities.
