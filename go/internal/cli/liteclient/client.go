@@ -1267,22 +1267,54 @@ func (c *WendyLiteClient) ConnectWithPKIAuthenticationContext(ctx context.Contex
 // connectTLSContext uses an already configured verifier for the TLS handshake,
 // then establishes WendyCom under the same cancellation context.
 func (c *WendyLiteClient) connectTLSContext(ctx context.Context, address string, cfg *tls.Config) error {
-	dialer := tls.Dialer{NetDialer: &net.Dialer{Timeout: 15 * time.Second}, Config: cfg}
-	conn, err := dialer.DialContext(ctx, "tcp", address)
+	return c.connectTLSWithDialerContext(ctx, address, cfg, nil)
+}
+
+func (c *WendyLiteClient) connectTLSWithDialerContext(ctx context.Context, address string, cfg *tls.Config, dial func(context.Context, string, string) (net.Conn, error)) error {
+	conn, err := dialAuthenticatedTLSWithDialer(ctx, address, cfg, 15*time.Second, 60*time.Second, dial)
 	if err != nil {
 		return fmt.Errorf("connect (mTLS): %w", err)
 	}
 	stopCancel := context.AfterFunc(ctx, func() { conn.Close() })
 	defer stopCancel()
 	c.link = newDirectLink(conn)
-	if err := c.handshake(); err != nil {
+	// TLS1.3 clients can finish before the server has received and verified
+	// their certificate flight. Across BLE that work can outlast a local
+	// protocol RTT; keep caller cancellation and a finite radio budget.
+	if err := c.handshakeWithin(60 * time.Second); err != nil {
 		c.link.close()
 		c.link = nil
 		return fmt.Errorf("handshake: %w", err)
 	}
-	c.peerCert = conn.(*tls.Conn).ConnectionState().PeerCertificates[0]
+	c.peerCert = conn.ConnectionState().PeerCertificates[0]
 	c.startReadLoop()
 	return nil
+}
+
+// TCP setup and certificate flights have different budgets. A TCP endpoint
+// can terminate beyond BLE mesh hops, even when its first hop is a LAN proxy.
+func dialAuthenticatedTLS(ctx context.Context, address string, cfg *tls.Config, tcpBudget, tlsBudget time.Duration) (*tls.Conn, error) {
+	return dialAuthenticatedTLSWithDialer(ctx, address, cfg, tcpBudget, tlsBudget, nil)
+}
+
+func dialAuthenticatedTLSWithDialer(ctx context.Context, address string, cfg *tls.Config, tcpBudget, tlsBudget time.Duration, dial func(context.Context, string, string) (net.Conn, error)) (*tls.Conn, error) {
+	if dial == nil {
+		dial = (&net.Dialer{}).DialContext
+	}
+	setup, cancelDial := context.WithTimeout(ctx, tcpBudget)
+	raw, err := dial(setup, "tcp", address)
+	cancelDial()
+	if err != nil {
+		return nil, err
+	}
+	secure := tls.Client(raw, cfg)
+	handshake, cancel := context.WithTimeout(ctx, tlsBudget)
+	defer cancel()
+	if err := secure.HandshakeContext(handshake); err != nil {
+		_ = raw.Close()
+		return nil, err
+	}
+	return secure, nil
 }
 
 const sensorSourceTCPDialTimeout = 15 * time.Second
