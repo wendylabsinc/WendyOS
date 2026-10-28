@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"errors"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -67,8 +69,17 @@ func TestNormalHTTPSOverOpaqueTimestampTunnel(t *testing.T) {
 	}
 	select {
 	case err := <-completed:
-		if err != nil {
+		if ctx.Err() != nil {
+			t.Fatal(ctx.Err())
+		}
+		// Both HTTP peers close this single-use TLS connection after the
+		// verified exchange. A final close_notify can race TCP teardown; the
+		// opaque relay deliberately still returns that raw socket error.
+		if err != nil && !errors.Is(err, syscall.ECONNRESET) {
 			t.Fatal(err)
+		}
+		if err != nil {
+			t.Logf("verified HTTPS exchange completed before TCP teardown reset: %v", err)
 		}
 	case <-ctx.Done():
 		t.Fatal(ctx.Err())
