@@ -251,8 +251,14 @@ func validateCameraMetadata(m *pb.CameraMetadata) error {
 		if p.ReprojectionRmsPixels != nil && (!finite(*p.ReprojectionRmsPixels) || *p.ReprojectionRmsPixels < 0 || *p.ReprojectionRmsPixels > 1000) {
 			return bad()
 		}
-		if p.Method == pb.SiteCameraPose_METHOD_VISUAL_LOCALIZATION && (p.ReprojectionRmsPixels == nil || p.InlierCount < 12) {
-			return bad()
+		if p.Method == pb.SiteCameraPose_METHOD_VISUAL_LOCALIZATION {
+			minimum := uint32(12)
+			if m.GetIntrinsics().GetProvenance() == pb.CameraIntrinsics_PROVENANCE_ASSUMED {
+				minimum = 8
+			}
+			if p.ReprojectionRmsPixels == nil || p.InlierCount < minimum {
+				return bad()
+			}
 		}
 	}
 	return nil

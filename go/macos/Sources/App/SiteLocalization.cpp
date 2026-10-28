@@ -98,19 +98,26 @@ extern "C" int32_t WSMapImport(void*p,const float*data,int32_t count){
   next.points.emplace_back(row[0],row[1],row[2]);next.descriptors.push_back(cv::Mat(1,128,CV_32F,const_cast<float*>(row+3)).clone());
  }next.observations=uint64_t(count);*static_cast<Map*>(p)=std::move(next);return count;}catch(...){return -1;}
 }
-static WSLocalization solveCamera(const double*xyz,const double*uv,int32_t n,int32_t w,int32_t h,const double*known,bool estimated){
+static WSLocalization solveCameraFit(const double*xyz,const double*uv,int32_t n,int32_t w,int32_t h,const double*known,bool estimated,bool refineFocal=false){
  WSLocalization out={};out.reason=1;out.matches=n;
- const int minimum=(known||estimated)?WS_MIN_POSE_INLIERS:WS_MIN_LENS_INLIERS;
+ const int minimum=estimated?WS_MIN_ESTIMATED_INLIERS:(known?WS_MIN_POSE_INLIERS:WS_MIN_LENS_INLIERS);
  if(n<minimum||n>1800||!imageSize(w,h)||!finiteValues(xyz,n*3)||!finiteValues(uv,n*2)||(known&&!finiteValues(known,9)))return out;
  try{
   std::vector<cv::Point3f> points;std::vector<cv::Point2f> pixels;
   for(int i=0;i<n;++i){if(std::abs(xyz[i*3])>1000||std::abs(xyz[i*3+1])>1000||std::abs(xyz[i*3+2])>1000||uv[i*2]<0||uv[i*2]>=w||uv[i*2+1]<0||uv[i*2+1]>=h)return out;points.emplace_back(xyz[i*3],xyz[i*3+1],xyz[i*3+2]);pixels.emplace_back(uv[i*2],uv[i*2+1]);}
-  cv::Mat bestK,bestR,bestT,bestMask;int best=0;
+  cv::Mat bestK,bestR,bestT,bestMask;int best=0;double bestError=1e9;
   cv::Mat distortion=cv::Mat::zeros(5,1,CV_64F);if(known)for(int i=0;i<5;++i)distortion.at<double>(i)=known[i+4];
   std::vector<double> guesses=known?std::vector<double>{known[0]}:std::vector<double>{.45*w,.6*w,.8*w,1.0*w,1.4*w,2.0*w};
   for(double f:guesses){cv::Mat K=(cv::Mat_<double>(3,3)<<f,0,known?known[2]:w/2.0,0,known?known[1]:f,known?known[3]:h/2.0,0,0,1),r,t,mask;
    bool ok=cv::solvePnPRansac(points,pixels,K,distortion,r,t,false,estimated?3000:1500,(known&&!estimated)?3.0:6.0,.999,mask,cv::SOLVEPNP_EPNP);
-   if(ok&&mask.rows>best){best=mask.rows;bestK=K;bestR=r;bestT=t;bestMask=mask;}
+   if(ok&&mask.rows>=best&&mask.rows>0){
+    std::vector<cv::Point3f> supported;std::vector<cv::Point2f> observed;
+    for(int i=0;i<mask.rows;++i){int index=mask.at<int>(i);supported.push_back(points[index]);observed.push_back(pixels[index]);}
+    double error=reprojection(supported,observed,K,distortion,r,t);
+    // Sparse sets often give several focal guesses the same consensus count.
+    // Choose the better geometric fit instead of depending on guess order.
+    if(mask.rows>best||error<bestError){best=mask.rows;bestError=error;bestK=K;bestR=r;bestT=t;bestMask=mask;}
+   }
   }
   out.reason=2;out.inliers=best;if(best<minimum||best<n*(estimated?.25:.4))return out;
   std::vector<cv::Point3f> consensus;
@@ -129,13 +136,14 @@ static WSLocalization solveCamera(const double*xyz,const double*uv,int32_t n,int
   for(int fold=0;fold<folds;++fold){
    std::vector<cv::Point3f> train,hold;std::vector<cv::Point2f> trainUV,holdUV;
    for(int i=0;i<best;++i){if(i%4==fold){hold.push_back(consensus[i]);holdUV.push_back(allUV[i]);}else{train.push_back(consensus[i]);trainUV.push_back(allUV[i]);}}
-   out.reason=7;if(!known&&!estimated&&!nonplanar(train))return out;
+   out.reason=refineFocal?8:7;if((refineFocal||(!known&&!estimated))&&!nonplanar(train))return out;
    cv::Mat fitK=bestK.clone(),fitD=distortion.clone(),fitR=bestR.clone(),fitT=bestT.clone();
    out.reason=4;
-   if(known||estimated){cv::solvePnPRefineLM(train,trainUV,fitK,fitD,fitR,fitT);}
+   if((known||estimated)&&!refineFocal){cv::solvePnPRefineLM(train,trainUV,fitK,fitD,fitR,fitT);}
    else{
     std::vector<cv::Mat> rotations,translations;cv::Mat sdK,sdPose,viewError;
     int flags=cv::CALIB_USE_INTRINSIC_GUESS|cv::CALIB_FIX_ASPECT_RATIO|cv::CALIB_ZERO_TANGENT_DIST|cv::CALIB_FIX_K3;
+    if(refineFocal)flags|=cv::CALIB_FIX_PRINCIPAL_POINT|cv::CALIB_FIX_K1|cv::CALIB_FIX_K2;
     cv::calibrateCamera(std::vector<std::vector<cv::Point3f>>{train},std::vector<std::vector<cv::Point2f>>{trainUV},cv::Size(w,h),fitK,fitD,rotations,translations,sdK,sdPose,viewError,flags,cv::TermCriteria(cv::TermCriteria::COUNT|cv::TermCriteria::EPS,100,1e-9));
     if(rotations.empty()||!cv::checkRange(sdK)||sdK.at<double>(1)>fitK.at<double>(1,1)*(estimated?.30:.08)||sdK.at<double>(2)>w*.05||sdK.at<double>(3)>h*.05)return out;
     fitR=rotations[0];fitT=translations[0];
@@ -173,6 +181,41 @@ static WSLocalization solveCamera(const double*xyz,const double*uv,int32_t n,int
   for(int i=0;i<5;++i)out.distortion[i]=D.at<double>(i);out.success=1;out.reason=0;return out;
  }catch(...){out.reason=6;return out;}
 }
+static WSLocalization solveCamera(const double*xyz,const double*uv,int32_t n,int32_t w,int32_t h,const double*known,bool estimated){
+ if(!estimated||known)return solveCameraFit(xyz,uv,n,w,h,known,estimated);
+ try{
+ // Validate every assumed focal length independently. Choosing a RANSAC
+ // winner first can discard a valid solution, or hide focal/depth ambiguity.
+ WSLocalization best={};best.reason=1;best.matches=n;
+ std::vector<WSLocalization> candidates;
+ for(double factor:{.35,.45,.6,.8,1.0,1.4,2.0}){
+  double lens[]={factor*w,factor*w,w/2.,h/2.,0,0,0,0,0};
+  auto fit=solveCameraFit(xyz,uv,n,w,h,lens,true);
+  if(fit.success)candidates.push_back(fit);
+  else if(fit.inliers>best.inliers||(fit.inliers==best.inliers&&fit.reason>best.reason))best=fit;
+  // With real depth variation, solve the focal length continuously rather
+  // than quantizing distance to the seed grid. This remains an estimated
+  // pinhole lens, with principal point and distortion explicitly assumed.
+  auto refined=solveCameraFit(xyz,uv,n,w,h,lens,true,true);
+  if(refined.success)candidates.push_back(refined);
+ }
+ if(candidates.empty())return best;
+ best=candidates.front();
+ for(auto&fit:candidates)if(fit.inliers>best.inliers||(fit.inliers==best.inliers&&fit.rms<best.rms))best=fit;
+ for(auto&fit:candidates){
+  if(fit.inliers<std::ceil(best.inliers*.9)||fit.rms>std::max(best.rms*1.5,best.rms+.5))continue;
+  double distance=0,trace=0;
+  for(int row=0;row<3;++row){
+   double delta=fit.world_from_camera[12+row]-best.world_from_camera[12+row];distance+=delta*delta;
+   for(int col=0;col<3;++col)trace+=fit.world_from_camera[col*4+row]*best.world_from_camera[col*4+row];
+  }
+  double angle=std::acos(std::clamp((trace-1)*.5,-1.,1.));
+  if(std::sqrt(distance)>.30||angle>10*CV_PI/180){best.success=0;best.reason=8;return best;}
+ }
+ best.fitted_lens=2;
+ return best;
+ }catch(...){WSLocalization failure={};failure.reason=6;failure.matches=n;return failure;}
+}
 static WSLocalization localize(void*p,const uint8_t*gray,int32_t w,int32_t h,const double*known,bool estimated){
  WSLocalization out={};out.reason=1;if(!p||!gray||!imageSize(w,h))return out;
  try{
@@ -192,7 +235,7 @@ static WSLocalization localize(void*p,const uint8_t*gray,int32_t w,int32_t h,con
   }
   double scale=std::min(1.,960./std::max(w,h));cv::resize(full,image,cv::Size(),scale,scale,cv::INTER_AREA);
   if(!mask.empty())cv::resize(mask,mask,image.size(),0,0,cv::INTER_NEAREST);
-  std::vector<cv::KeyPoint> keys;cv::Mat descriptors;cv::SIFT::create(1800)->detectAndCompute(image,mask,keys,descriptors);if(keys.size()<size_t((known||estimated)?WS_MIN_POSE_INLIERS:WS_MIN_LENS_INLIERS))return out;
+  std::vector<cv::KeyPoint> keys;cv::Mat descriptors;cv::SIFT::create(1800)->detectAndCompute(image,mask,keys,descriptors);if(keys.size()<size_t(estimated?WS_MIN_ESTIMATED_INLIERS:(known?WS_MIN_POSE_INLIERS:WS_MIN_LENS_INLIERS)))return out;
   cv::FlannBasedMatcher matcher;std::vector<std::vector<cv::DMatch>> matches;matcher.knnMatch(rootDescriptors(descriptors),rootDescriptors(m.descriptors),matches,8);
   std::vector<cv::DMatch> candidates;
   for(auto&pair:matches){

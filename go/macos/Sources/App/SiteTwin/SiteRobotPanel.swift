@@ -31,6 +31,12 @@ struct SiteRobotCameraHost: View {
 
 @MainActor
 final class SiteRobotMapModel: ObservableObject {
+    private let observationClient: any SiteRobotObserving
+
+    init(observationClient: any SiteRobotObserving = SiteRobotClient.shared) {
+        self.observationClient = observationClient
+    }
+
     @Published var robots: [UnitreeRobot] = []
     @Published var serial = ""
     @Published private(set) var reading: SiteRobotReading?
@@ -85,6 +91,7 @@ final class SiteRobotMapModel: ObservableObject {
 
     var statusLabel: String {
         if connecting { return "Connecting…" }
+        if reading?.disconnected == true || (handle == 0 && error != nil) { return "Go2 disconnected" }
         if lensCalibrating { return "Measuring camera lens…" }
         if searchConclusion != nil { return "Search finished without a match" }
         if reading?.moving == true { return "Moving" }
@@ -161,6 +168,21 @@ final class SiteRobotMapModel: ObservableObject {
         } catch { if !Task.isCancelled { self.error = error.localizedDescription } }
     }
     func observe(session: UInt64, site: Site, modelURL: URL, active: Bool) async {
+        // Replace the whole handle so camera, alignment and pending actions all
+        // belong to the new subscription. Recovery never repeats a motion order.
+        for attempt in 0...3 {
+            if attempt > 0 {
+                do { try await Task.sleep(for: .seconds(1 << (attempt - 1))) }
+                catch { return }
+            }
+            guard !Task.isCancelled else { return }
+            let retry = await observeConnection(session: session, site: site, modelURL: modelURL,
+                active: active, recovering: attempt > 0)
+            guard retry, !Task.isCancelled else { return }
+        }
+    }
+
+    private func observeConnection(session: UInt64, site: Site, modelURL: URL, active: Bool, recovering: Bool) async -> Bool {
         generation += 1
         explorationEpoch = UUID()
         let epoch = generation
@@ -170,25 +192,33 @@ final class SiteRobotMapModel: ObservableObject {
         showRotationPrompt = false; rotationOffer = RobotRotationOffer()
         lensSession = nil; lensCalibrating = false; measuredLens = nil; awaitingLook = false; rematchAfterLook = false; positionSearch.cancel(); showLensCalibration = false
         candidates = []; localizing = false; candidateIndex = 0
+        suggestionFreshness = nil
         geometryURL = modelURL; geometryScale = site.metresPerModelUnit
         siteRevision = site.modelRevision; fusionReport = nil; savedMap = nil; cameraFrame = nil; cameraDecoder = nil; referenceCount = 0; lastEvidence = 0
         scheduleAutomaticLocalization()
         frame = "\(site.id.uuidString)/\(site.modelRevision.uuidString)"
-        guard active, session != 0, !serial.isEmpty else { return }
+        guard active, session != 0, !serial.isEmpty else { return false }
         connecting = true
         var owned: UInt64 = 0
+        var retry = false
         do {
-            owned = try await SiteRobotClient.shared.open(session: session, serial: serial)
+            owned = try await observationClient.open(session: session, serial: serial)
             guard !Task.isCancelled, epoch == generation else {
-                await SiteRobotClient.shared.close(owned); return
+                await observationClient.close(owned); return false
             }
             handle = owned; connecting = false
             while !Task.isCancelled {
                 let polledAction = actionGeneration
                 let pollWasAwaitingLook = awaitingLook
-                let result = try await SiteRobotClient.shared.poll(owned)
+                let result = try await observationClient.poll(owned)
                 guard epoch == generation, !Task.isCancelled else { break }
                 accept(result)
+                if result.disconnected {
+                    actionGeneration += 1
+                    error = result.message
+                    retry = true
+                    break
+                }
                 if awaitingLook && pollWasAwaitingLook && polledAction == actionGeneration && !result.moving && result.lookState != 1 {
                     awaitingLook = false
                     if result.lookState == 2 {
@@ -226,10 +256,18 @@ final class SiteRobotMapModel: ObservableObject {
                 try await Task.sleep(for: .milliseconds(100))
             }
         } catch {
-            if epoch == generation, !Task.isCancelled { self.error = error.localizedDescription }
+            if epoch == generation, !Task.isCancelled {
+                self.error = error.localizedDescription
+                retry = recovering
+            }
         }
-        if owned != 0 { await SiteRobotClient.shared.close(owned) }
-        if epoch == generation { handle = 0; connecting = false; telemetry.reading = nil; reading = nil; showRotationPrompt = false }
+        if owned != 0 { await observationClient.close(owned) }
+        if epoch == generation {
+            handle = 0; connecting = false; telemetry.reading = nil; reading = nil; showRotationPrompt = false
+            positionSearch.cancel(); awaitingLook = false; rematchAfterLook = false
+            candidates = []; localizing = false; destination = nil; fusionReport = nil
+        }
+        return retry && epoch == generation && !Task.isCancelled
     }
     func accept(_ result: SiteRobotReading) {
         lastReadingAt = .now

@@ -124,4 +124,87 @@ import Combine
     connected = false
     #expect(!feed.isReceiving(at: now))
 }
+
+private actor RecoveringRobotObserver: SiteRobotObserving {
+    var events: [String] = []
+    var opens = 0
+    let alwaysDisconnect: Bool
+
+    init(alwaysDisconnect: Bool = false) { self.alwaysDisconnect = alwaysDisconnect }
+
+    func open(session: UInt64, serial: String) async throws -> UInt64 {
+        opens += 1
+        events.append("open \(opens) \(session) \(serial)")
+        return UInt64(opens)
+    }
+
+    func poll(_ handle: UInt64) async throws -> SiteRobotReading {
+        try await Task.sleep(for: .milliseconds(10))
+        let disconnected = alwaysDisconnect || handle == 1
+        return SiteRobotReading(message: disconnected ? "Go2 observation stream disconnected." : "Live pose",
+            disconnected: disconnected, pose: !disconnected, ready: false, aligned: false, moving: false,
+            arrivalTiming: true, usingArrivalTiming: true, timingUnavailable: false, scanReady: false,
+            measurementsReady: false, underBodyAllowance: true, x: 0, z: 0, yaw: 0, floorY: 0, route: [], joints: [])
+    }
+
+    func close(_ handle: UInt64) async { events.append("close \(handle)") }
+}
+
+@MainActor @Test func robotObservationReconnectsWithNewHandleAndClosesOldOne() async throws {
+    let observer = RecoveringRobotObserver()
+    let model = SiteRobotMapModel(observationClient: observer)
+    model.serial = "test-go2"
+    try await withThrowingTaskGroup(of: Void.self) { group in
+        group.addTask {
+            await model.observe(session: 7, site: Site(name: "Test"),
+                modelURL: URL(fileURLWithPath: "/unused.scn"), active: true)
+        }
+        defer { group.cancelAll() }
+        for _ in 0..<300 {
+            if model.handle == 2 && model.reading?.pose == true { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(model.handle == 2)
+        #expect(model.reading?.pose == true)
+        #expect(model.reading?.moving == false)
+        #expect(model.reading?.aligned == false)
+        #expect(model.destination == nil && model.candidates.isEmpty)
+        #expect(model.error == nil)
+        #expect(await observer.events == ["open 1 7 test-go2", "close 1", "open 2 7 test-go2"])
+    }
+    #expect(await observer.events.last == "close 2")
+    #expect(model.handle == 0)
+}
+
+@MainActor @Test func robotObservationCancellationDuringBackoffDoesNotReconnect() async throws {
+    let observer = RecoveringRobotObserver()
+    let model = SiteRobotMapModel(observationClient: observer)
+    model.serial = "test-go2"
+    try await withThrowingTaskGroup(of: Void.self) { group in
+        group.addTask {
+            await model.observe(session: 7, site: Site(name: "Test"),
+                modelURL: URL(fileURLWithPath: "/unused.scn"), active: true)
+        }
+        defer { group.cancelAll() }
+        for _ in 0..<100 {
+            if await observer.events.contains("close 1") { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(model.statusLabel == "Go2 disconnected")
+    }
+    #expect(await observer.events == ["open 1 7 test-go2", "close 1"])
+}
+
+@MainActor @Test func robotObservationRecoveryStopsAfterThreeRetries() async {
+    let observer = RecoveringRobotObserver(alwaysDisconnect: true)
+    let model = SiteRobotMapModel(observationClient: observer)
+    model.serial = "test-go2"
+    await model.observe(session: 7, site: Site(name: "Test"),
+        modelURL: URL(fileURLWithPath: "/unused.scn"), active: true)
+    #expect(await observer.opens == 4)
+    #expect(await observer.events.last == "close 4")
+    #expect(model.statusLabel == "Go2 disconnected")
+    #expect(model.error == "Go2 observation stream disconnected.")
+    #expect(model.handle == 0)
+}
 #endif

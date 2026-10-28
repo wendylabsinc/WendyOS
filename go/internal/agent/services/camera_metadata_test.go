@@ -129,3 +129,27 @@ func TestCameraMetadataFailedSaveDoesNotPublishAndExpiryRejected(t *testing.T) {
 		t.Fatal("expired pose accepted")
 	}
 }
+
+func TestCameraMetadataSparseEstimatedPose(t *testing.T) {
+	for _, measured := range []bool{false, true} {
+		for _, count := range []uint32{7, 8, 9, 10, 11, 12} {
+			m := metadataFixture()
+			if !measured {
+				m.Intrinsics.Provenance = pb.CameraIntrinsics_PROVENANCE_ASSUMED
+			}
+			p := m.SitePoses[0]
+			p.Method = pb.SiteCameraPose_METHOD_VISUAL_LOCALIZATION
+			p.InlierCount = count
+			rms := 1.0
+			p.ReprojectionRmsPixels = &rms
+			valid := count >= 12 || (!measured && count >= 8)
+			if err := validateCameraMetadata(m); (err == nil) != valid {
+				t.Fatalf("measured=%v count=%d valid=%v: %v", measured, count, valid, err)
+			}
+			p.ReprojectionRmsPixels = nil
+			if err := validateCameraMetadata(m); err == nil {
+				t.Fatal("accepted sparse pose without validation residual")
+			}
+		}
+	}
+}

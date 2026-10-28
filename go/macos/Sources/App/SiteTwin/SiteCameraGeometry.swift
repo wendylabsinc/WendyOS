@@ -140,7 +140,7 @@ extension GoClient {
 extension GoClient {
     func saveCameraAlignment(session: UInt64, sourceID: String, expectedRevision: UInt64, result: SiteLocalizationResult) async throws {
         guard let revision = result.pose.modelRevision, result.lens.isValid,
-              result.pose.isCurrent(revision: revision, now: Date()), result.inliers >= Int((result.fittedLens && result.lens.measured) ? WS_MIN_LENS_INLIERS : WS_MIN_POSE_INLIERS), result.residual.isFinite, result.residual <= (result.lens.measured ? 2.5 : 5) else {
+              result.pose.isCurrent(revision: revision, now: Date()), result.inliers >= Int(!result.lens.measured ? WS_MIN_ESTIMATED_INLIERS : (result.fittedLens ? WS_MIN_LENS_INLIERS : WS_MIN_POSE_INLIERS)), result.residual.isFinite, result.residual <= (result.lens.measured ? 2.5 : 5) else {
             throw SiteLocalizationError.invalidResult
         }
         try await perform {

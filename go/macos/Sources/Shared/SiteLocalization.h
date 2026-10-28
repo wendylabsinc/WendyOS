@@ -8,6 +8,7 @@ extern "C" {
 #define WS_LANDMARK_FLOATS 131
 #define WS_MAX_LANDMARKS 12000
 #define WS_MIN_POSE_INLIERS 12
+#define WS_MIN_ESTIMATED_INLIERS 8
 #define WS_MIN_LENS_INLIERS 16
 void *WSMapCreate(void);
 void WSMapDestroy(void *map);

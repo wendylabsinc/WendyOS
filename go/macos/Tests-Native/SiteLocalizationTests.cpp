@@ -59,7 +59,45 @@ int main(){
  auto knownFlat=WSSolveCamera(xyz.data(),uv.data(),int(uv.size()/2),640,480,known);
  assert(knownFlat.success&&!knownFlat.fitted_lens);
  auto estimatedFlat=WSSolveCameraEstimated(xyz.data(),uv.data(),int(uv.size()/2),640,480);
- assert(estimatedFlat.success&&estimatedFlat.fitted_lens==2);
+ // A wall can fit several focal lengths at very different distances. Low
+ // reprojection error alone must not turn that ambiguity into a saved pose.
+ assert(!estimatedFlat.success&&estimatedFlat.reason==8);
+
+
+ // An assumed lens can support 8–10 independent points, but never upgrades
+ // them to a measured calibration or accepts an unstable / concentrated fit.
+ std::vector<double> smallXYZ,smallUV;
+ for(int i=0;i<10;++i){
+  double x=(i%3-1)*.8,y=(i/3-1.5)*.55,z=3+.2*(i%4);
+  smallXYZ.insert(smallXYZ.end(),{x,y,z});
+  smallUV.insert(smallUV.end(),{640*x/z+320,640*y/z+240});
+ }
+ for(int count:{8,9,10}){
+  auto few=WSSolveCameraEstimated(smallXYZ.data(),smallUV.data(),count,640,480);
+  std::cout<<"Estimated "<<count<<": success="<<few.success<<" reason="<<few.reason<<" rms="<<few.rms<<std::endl;
+  assert(few.success&&few.fitted_lens==2&&few.inliers>=8&&few.rms<.01);
+  for(int axis=0;axis<3;++axis)assert(std::abs(few.world_from_camera[12+axis])<.01);
+  auto measuredFew=WSSolveCamera(smallXYZ.data(),smallUV.data(),count,640,480,nullptr);
+  assert(!measuredFew.success);
+ }
+ assert(!WSSolveCameraEstimated(smallXYZ.data(),smallUV.data(),7,640,480).success);
+ // Recover a focal length between the old discrete guesses. The same image
+ // evidence must constrain depth, not merely produce a plausible direction.
+ auto offGridUV=smallUV;
+ for(int i=0;i<10;++i){
+  offGridUV[i*2]=530*smallXYZ[i*3]/smallXYZ[i*3+2]+320;
+  offGridUV[i*2+1]=530*smallXYZ[i*3+1]/smallXYZ[i*3+2]+240;
+ }
+ auto offGrid=WSSolveCameraEstimated(smallXYZ.data(),offGridUV.data(),10,640,480);
+ std::cout<<"Off-grid focal: success="<<offGrid.success<<" reason="<<offGrid.reason<<" fx="<<offGrid.fx<<" z="<<offGrid.world_from_camera[14]<<std::endl;
+ assert(offGrid.success&&offGrid.fitted_lens==2&&std::abs(offGrid.fx-530)<1);
+ for(int axis=0;axis<3;++axis)assert(std::abs(offGrid.world_from_camera[12+axis])<.01);
+ auto clustered=smallUV;
+ for(int i=0;i<10;++i){clustered[i*2]=320+(clustered[i*2]-320)*.1;clustered[i*2+1]=240+(clustered[i*2+1]-240)*.1;}
+ assert(!WSSolveCameraEstimated(smallXYZ.data(),clustered.data(),10,640,480).success);
+ auto wrong=smallUV;
+ for(int i=0;i<10;++i){wrong[i*2]=random.uniform(1.,639.);wrong[i*2+1]=random.uniform(1.,479.);}
+ assert(!WSSolveCameraEstimated(smallXYZ.data(),wrong.data(),10,640,480).success);
 
 
  auto map=WSMapCreate();assert(map);std::vector<float> data(120*WS_LANDMARK_FLOATS,0);

@@ -357,19 +357,16 @@ struct ContentView: View {
 
     @ViewBuilder private func deviceDetail(_ device: Device) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack {
             ViewThatFits(in: .horizontal) {
                 HStack(spacing: 24) {
                     deviceIdentity(device)
-                    if !model.connectedLite { deviceTabs.fixedSize() }
+                    if !model.connectedLite { deviceNavigation(device).fixedSize() }
                     Spacer(minLength: 0)
                 }
                 VStack(alignment: .leading, spacing: 10) {
                     deviceIdentity(device)
-                    if !model.connectedLite { deviceTabs }
+                    if !model.connectedLite { deviceNavigation(device) }
                 }
-            }
-            if !model.connectedLite { eventButton(device) }
             }.padding(.horizontal, 20).padding(.vertical, 12)
             Divider().padding(.bottom, ["apps", "activity", "data"].contains(tab) ? 0 : 12)
             if model.connectingDevice?.id == device.id {
@@ -417,6 +414,13 @@ struct ContentView: View {
         if model.selectedDeviceReady {
             CampaignEventButton(session: model.deviceSession, deviceID: device.id, deviceName: device.title, showingLog: $showingEventLog)
                 .id(model.deviceSession)
+        }
+    }
+
+    private func deviceNavigation(_ device: Device) -> some View {
+        HStack(alignment: .center, spacing: 12) {
+            deviceTabs
+            eventButton(device)
         }
     }
 

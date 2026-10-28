@@ -57,6 +57,8 @@ struct CameraCalibrationFrame: Sendable {
 final class H264CalibrationFrames: @unchecked Sendable {
     private struct State {
         var enabled = false
+        var explicitlyEnabled = false
+        var owners: Set<UUID> = []
         var generation: UInt64 = 0
         var pending = false
         var latest: CameraCalibrationFrame?
@@ -67,8 +69,34 @@ final class H264CalibrationFrames: @unchecked Sendable {
 
     var latest: CameraCalibrationFrame? { state.withLock { $0.latest } }
     func setEnabled(_ enabled: Bool) {
-        state.withLock { $0.enabled = enabled; $0.generation &+= 1; $0.latest = nil; $0.pending = false }
+        state.withLock { current in
+            current.explicitlyEnabled = enabled
+            Self.updateEnabled(&current)
+        }
     }
+    func acquire() -> UUID {
+        let token = UUID()
+        state.withLock { current in
+            current.owners.insert(token)
+            Self.updateEnabled(&current)
+        }
+        return token
+    }
+    func release(_ token: UUID) {
+        state.withLock { current in
+            current.owners.remove(token)
+            Self.updateEnabled(&current)
+        }
+    }
+    private static func updateEnabled(_ current: inout State) {
+        let enabled = current.explicitlyEnabled || !current.owners.isEmpty
+        guard current.enabled != enabled else { return }
+        current.enabled = enabled
+        current.generation &+= 1
+        current.latest = nil
+        current.pending = false
+    }
+    var isEnabled: Bool { state.withLock { $0.enabled } }
     func reset() {
         state.withLock { $0.generation &+= 1; $0.latest = nil; $0.pending = false }
     }

@@ -86,6 +86,9 @@ func WDSiteRobotPoll(handle C.uint64_t) *C.WDSiteRobotState {
 		return p
 	}
 	s := r.Snapshot()
+	if s.Disconnected {
+		p.disconnected = 1
+	}
 	p.look_state = C.int32_t(s.LookState)
 	p.look_direction = C.int32_t(s.LookDirection)
 	if s.UnderBodyAllowance {

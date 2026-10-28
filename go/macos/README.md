@@ -35,6 +35,29 @@ The build produces native binaries for the build Mac. It links `libwendydesktop.
 
 ## Site models on macOS and iOS
 
+### Automatic camera alignment
+
+**Auto-align cameras** is enabled by default in Digital Twin. While the view is
+open and the app is active, it locates saved cameras using fresh video and the
+selected room's visual reference map. It checks one camera at a time, rechecks
+successful automatic positions after a minute, and backs off failed attempts
+from 30 seconds to five minutes. Each camera shows its alignment status.
+The toggle pauses the work; closing Digital Twin, changing gateways or models,
+opening manual calibration, and putting the app in the background cancel it.
+Manual placements and manually paused camera feeds are preserved.
+
+Automatic and manual alignment share the same two-frame stability, image
+coverage, held-out reprojection, and metadata revision checks. An approximate
+position using an assumed lens needs at least eight independent matches.
+A measured-lens pose still needs twelve, and joint lens calibration needs sixteen.
+Failed checks keep the existing metadata; automatic retries cannot guarantee a
+position from an unrecognizable view. A missing visual reference map still needs
+an iPhone room scan. This runs in the app, not as an unattended gateway service.
+
+Room capture exports RoomPlan's detected geometry without extending furniture
+bounds. Glass can be missing from that capture. Automatic camera alignment does
+not reconstruct missing cabinet surfaces or infer obstacle-free space there.
+
 ### Fog of war exploration
 
 Open an existing **Site Model** and enable **Fog of war** below the site title.
@@ -105,6 +128,11 @@ The file contains no credentials, and importing it creates a separate local copy
 There is no automatic cross-device site sync. Sites live in Application Support's
 `WendySites` directory, inside the application sandbox on iOS.
 
+On iPhone, the twin fills the workspace. The Cameras button opens a sheet for
+previews, alignment status and camera management. The settings menu holds
+automatic alignment, pairing, refresh and fog controls. Robot controls open
+separately, and Stop remains available on the map when a robot is paired.
+
 Camera identities include the gateway's tenant and asset for Cloud connections.
 LAN connections use the gateway's hardware serial and enrollment organization;
 these placements are scoped separately from Cloud placements. Numeric camera
@@ -123,14 +151,21 @@ keyframes on demand and rejects stale frames or frames from a previous stream. I
 scan features, estimates the optical pose and, when necessary, square-pixel lens
 intrinsics with radial distortion. Fits must pass image coverage, nonplanarity,
 held-out reprojection error, and a second live-frame pose check before saving.
-The minimum consensus is 16 points for joint lens/pose calibration or 12 for
-pose fitting. If measured alignment cannot be solved, automatic alignment
+The minimum consensus is 16 points for joint lens/pose calibration, 12 for
+measured-lens pose fitting, or 8 for an approximate pose with an assumed lens. If measured alignment cannot be solved, automatic alignment
 tries an estimated pinhole lens with a centred principal point and zero distortion.
 The estimate must pass separate-point and second-frame checks, with looser limits
 of 5 px RMS, 30 cm position variation and 10 degrees rotation variation. Its FOV
 and pose are approximate. The app labels estimates and draws orange cones, while
 measured lenses use green cones. An estimate cannot overwrite a measured lens.
 A measured lens allows pose alignment against a flat surface.
+
+Estimated alignment validates each focal-length candidate before choosing one.
+When the references have enough depth variation, it also refines focal length
+and pose together, keeping the principal point centred and distortion zero.
+Comparable fits that differ by more than 30 cm or 10 degrees are rejected as
+distance-ambiguous. Later attempts re-estimate an assumed lens rather than
+locking retries to an earlier guess. A measured lens remains fixed.
 
 On iPhone, **Phone Screen Calibration** shows a 7×10 checkerboard to the fixed
 camera. Move the phone around the camera image and tilt it in both directions.
@@ -863,6 +898,14 @@ pose packets do not erase the last accepted pose or its continuity check. Actual
 pose jumps and clock rollbacks still invalidate alignment. The latest packet
 rejection and timing measurements stay locally in
 `Library/Caches/Wendy/go2-observation-fault.json` for device diagnosis.
+
+If the Go2 observation stream disconnects, or delivers no odometry packets for
+five seconds, the client stops movement and reports the stream failure. It closes
+the old handle and retries telemetry up to three times, after one, two and four
+seconds. Recovery discards the old alignment, route and rotation search; movement
+requires a new order. The 750 ms observation freshness checks still apply during
+the five-second stream timeout. Leaving the view or deliberately replacing a
+connection cancels recovery. If retries fail, use **Reconnect** in the Go2 panel.
 
 Unstamped odometry can display the robot but cannot enable movement. The planner
 uses observed level floor and occupied voxels, treats unknown cells as blocked,

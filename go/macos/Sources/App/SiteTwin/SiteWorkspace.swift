@@ -38,6 +38,8 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
     let preview: (String) -> Preview
     let onFailure: ((any Error, Bool) -> Void)?
     let calibrate: ((StoredSite, SiteCamera) -> Void)?
+    let automaticAlignment: ((StoredSite, Bool) -> AnyView)?
+    let alignmentStatuses: [String: String]
     let robotSession: UInt64
     let robotGatewayName: String
     // Telemetry is observed by the scene and controls, never by the menus.
@@ -47,6 +49,10 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
     #if os(iOS)
     @State private var showingRobotControls = false
     @State private var showingMobileCameras = false
+    @State private var pendingMobileCameraAction: MobileCameraAction?
+    private enum MobileCameraAction {
+        case add, align(SiteCamera), place(UUID)
+    }
     #else
     @State private var showingRobotControls = true
     #endif
@@ -90,6 +96,8 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
         @ViewBuilder controls: @escaping () -> Controls,
         onFailure: ((any Error, Bool) -> Void)? = nil,
         calibrate: ((StoredSite, SiteCamera) -> Void)? = nil,
+        automaticAlignment: ((StoredSite, Bool) -> AnyView)? = nil,
+        alignmentStatuses: [String: String] = [:],
         @ViewBuilder preview: @escaping (String) -> Preview
     ) {
         self.gatewayID = gatewayID
@@ -101,6 +109,8 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
         self.controls = controls
         self.onFailure = onFailure
         self.calibrate = calibrate
+        self.automaticAlignment = automaticAlignment
+        self.alignmentStatuses = alignmentStatuses
         self.preview = preview
     }
 
@@ -152,6 +162,11 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
                 }
             }
         }
+        .background {
+            if let current, let automaticAlignment {
+                automaticAlignment(current, placingCamera != nil || scanning || busy || choosingCamera || importing)
+            }
+        }
         .onChange(of: gatewayID) { _, _ in
             setupPreviewID = nil; selectedCamera = nil; placingCamera = nil; pendingCamera = nil
             cameraToAdd = nil
@@ -166,7 +181,8 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
                       current.id == pending.siteID, camera.gatewayID == gatewayID else { return }
                 selectedCamera = camera.id
                 camerasExpanded = false
-                if cameraMetadata(camera)?.pose(in: current.site, now: Date()) == nil {
+                if cameraMetadata(camera)?.pose(in: current.site, now: Date()) == nil,
+                   automaticAlignment == nil || current.visualMapURL == nil {
                     beginAlignment(camera)
                 }
             }
@@ -189,6 +205,33 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
         .sheet(isPresented: $showingRemoved) { removedCaptures }
 
         .overlay(alignment: .topLeading) {
+            #if os(iOS)
+            HStack(spacing: 12) {
+                Text(current?.site.name ?? "Digital Twin").font(.headline).lineLimit(1)
+                Spacer(minLength: 8)
+                siteMenu.labelStyle(.iconOnly)
+                Menu {
+                    controls()
+                    if current != nil {
+                        Divider()
+                        Toggle("Fog of war", isOn: $fog.enabled)
+                        if fog.enabled {
+                            Button("Reset exploration", systemImage: "arrow.counterclockwise") { fog.reset = UUID() }
+                        }
+                    }
+                    if !notices.isEmpty {
+                        Divider()
+                        ForEach(notices, id: \.self) { notice in Text(notice) }
+                    }
+                } label: {
+                    Image(systemName: notices.isEmpty ? "slider.horizontal.3" : "exclamationmark.triangle")
+                        .frame(minWidth: 44, minHeight: 44)
+                }.accessibilityLabel("Twin settings")
+            }
+            .padding(.leading, 16).padding(.trailing, 4)
+            .background(.regularMaterial, in: Capsule())
+            .padding(12)
+            #else
             VStack(alignment: .leading, spacing: 10) {
                 HStack {
                     Text(current?.site.name ?? "Digital Twin").font(.title3.bold())
@@ -208,6 +251,7 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
             .frame(maxWidth: 500, alignment: .leading)
             .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
             .padding(16)
+            #endif
         }
         .fileImporter(
             isPresented: $importing,
@@ -415,24 +459,50 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
                 cameraPanel(current, size: geometry.size).padding(16)
             }
             #else
-            .safeAreaInset(edge: .bottom, spacing: 0) {
+            .overlay(alignment: .bottom) {
                 VStack(spacing: 8) {
+                    if placingCamera != nil {
+                        Text("Tap the model where the camera is mounted.").font(.callout)
+                        Button("Cancel Placement") { placingCamera = nil; pendingCamera = nil }
+                    }
                     HStack {
                         MobileSiteRobotPanel(model: robots, session: robotSession, gatewayName: robotGatewayName, site: current.site, modelURL: current.modelURL, isPresented: $showingRobotControls)
                         Button("Cameras", systemImage: "video") {
                             robots.stop(); showingRobotControls = false; robots.selected = false
-                            showingMobileCameras.toggle()
+                            camerasExpanded = true
+                            showingMobileCameras = true
                         }.buttonStyle(.bordered)
                     }
-                    if showingMobileCameras {
-                        cameraPanel(current, size: geometry.size)
-                    }
                 }
-                .padding(.horizontal, 20).padding(.top, 12).padding(.bottom, 16)
-                .background(.regularMaterial)
+                .padding(12)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 24))
+                .padding(12)
                 .onChange(of: showingRobotControls) { _, visible in
                     if visible { showingMobileCameras = false }
                 }
+            }
+            .sheet(isPresented: $showingMobileCameras, onDismiss: {
+                let pending = pendingMobileCameraAction
+                pendingMobileCameraAction = nil
+                selectedCamera = nil
+                switch pending {
+                case .add: choosingCamera = true
+                case .align(let camera): beginAlignment(camera)
+                case .place(let id): pendingCamera = nil; placingCamera = id
+                case nil: break
+                }
+            }) {
+                NavigationStack {
+                    ScrollView { cameraPanel(current, size: geometry.size).padding(20) }
+                        .navigationTitle("Cameras").navigationBarTitleDisplayMode(.inline)
+                        .toolbar {
+                            ToolbarItem(placement: .confirmationAction) {
+                                Button("Done") { showingMobileCameras = false }
+                            }
+                        }
+                }
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
             }
             #endif
         }
@@ -470,6 +540,9 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
                         .clipShape(RoundedRectangle(cornerRadius: 10))
                     Text(geometryDescription(camera, now: Date())).font(.caption)
                         .fixedSize(horizontal: false, vertical: true)
+                    if let status = alignmentStatuses[camera.sourceID] {
+                        Text(status).font(.caption).foregroundStyle(.secondary)
+                    }
                     if calibrate != nil {
                         Button("Calibrate and Align", systemImage: "viewfinder") { beginAlignment(camera) }
                             .buttonStyle(.borderedProminent)
@@ -491,7 +564,13 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
                     }.buttonStyle(.plain)
                         .accessibilityValue(camerasExpanded ? "Expanded" : "Collapsed")
                     Spacer()
-                    Button("Add Camera", systemImage: "plus") { choosingCamera = true }
+                    Button("Add Camera", systemImage: "plus") {
+                        #if os(iOS)
+                        pendingMobileCameraAction = .add; showingMobileCameras = false
+                        #else
+                        choosingCamera = true
+                        #endif
+                    }
                         .buttonStyle(.borderedProminent)
                         .disabled(availableFeeds.isEmpty || gatewayID.isEmpty || busy)
                 }
@@ -555,6 +634,10 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
                     VStack(alignment: .leading, spacing: 4) {
                         Text(label.title).font(.subheadline.weight(.medium)).lineLimit(2)
                         Text(status).font(.caption).foregroundStyle(.secondary)
+                        if let alignmentStatus = alignmentStatuses[camera.sourceID] {
+                            Text(alignmentStatus).font(.caption).foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
                         Text(geometryDescription(camera, now: now)).font(.caption).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }.frame(maxWidth: .infinity, alignment: .leading)
@@ -565,7 +648,11 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
                     Button("Calibrate and Align", systemImage: "viewfinder") { beginAlignment(camera) }
                 }
                 Button(camera.position == nil ? "Place Manually" : "Move Manual Marker", systemImage: "move.3d") {
+                    #if os(iOS)
+                    pendingMobileCameraAction = .place(camera.id); showingMobileCameras = false
+                    #else
                     pendingCamera = nil; placingCamera = camera.id
+                    #endif
                 }.disabled(hasPose)
                 Button("Remove from Model", systemImage: "minus.circle", role: .destructive) {
                     actions.submit {
@@ -583,6 +670,11 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
     private func beginAlignment(_ camera: SiteCamera) {
         guard let current else { return }
         #if os(iOS)
+        if showingMobileCameras {
+            pendingMobileCameraAction = .align(camera)
+            showingMobileCameras = false
+            return
+        }
         if camera.gatewayID == gatewayID, current.visualMapURL == nil, SiteRoomCapture.isSupported {
             alignmentScanCamera = camera
             scanning = true

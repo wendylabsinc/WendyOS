@@ -177,10 +177,11 @@ enum SiteLocalizationError: LocalizedError {
         case .coordinateMismatch: "The exported room coordinates could not be verified against the scan. No alignment map was saved."
         case .noSolution(let reason, let matches, let inliers):
             switch reason {
-            case 1: "Found \(matches) possible matches. Lens calibration needs at least \(WS_MIN_LENS_INLIERS) consistent points; alignment with a measured lens needs \(WS_MIN_POSE_INLIERS)."
+            case 1: "Found \(matches) possible matches. Lens calibration needs at least \(WS_MIN_LENS_INLIERS) consistent points; alignment with a measured lens needs \(WS_MIN_POSE_INLIERS), or \(WS_MIN_ESTIMATED_INLIERS) for an approximate position."
             case 2: "Found \(matches) possible matches, but only \(inliers) agree on the camera geometry. Include more distinctive objects in the scan and camera view."
             case 3: "The matches are concentrated in a small part of the image. Try Estimated Alignment, or measure the lens with your phone screen."
             case 7: "These matches lie on a flat surface, so the lens cannot be measured from this view alone. Use Estimated Alignment or Phone Screen Calibration; the room does not need to change."
+            case 8: "The viewing direction is plausible, but the camera’s distance is ambiguous. Different lens estimates fit this view at different positions. No position was saved."
             case 4, 5: "The \(inliers) geometric matches did not give a stable calibration across validation checks. Include clearer views of the camera’s scene and try again."
             default: "Automatic calibration could not solve this view. No calibration was saved."
             }

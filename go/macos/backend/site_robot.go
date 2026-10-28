@@ -13,6 +13,7 @@ import (
 )
 
 type SiteRobotSnapshot struct {
+	Disconnected                                         bool
 	LookDirection                                        int
 	LookState                                            int // 0 idle, 1 turning, 2 completed, 3 aborted
 	Message                                              string
@@ -61,6 +62,8 @@ type SiteRobot struct {
 	message                         string
 	controlWarning                  string
 	closed                          bool
+	streamDisconnected              bool
+	lastPosePacket                  time.Time
 	stopUnconfirmed                 bool
 	underBodyAllowance              bool
 	allowUnobservedFloor            bool
@@ -81,7 +84,7 @@ type SiteRobot struct {
 // still gate all movement.
 func newSiteRobot(ctx context.Context, cancel context.CancelFunc, client pb.WendyUnitreeRobotServiceClient, serial string) *SiteRobot {
 	r := &SiteRobot{ctx: ctx, cancel: cancel, done: make(chan struct{}), client: client, serial: serial,
-		message: "Waiting for robot observations.", heartbeat: time.Now(), commandFaultSink: recordSiteCommandFault,
+		message: "Waiting for robot observations.", heartbeat: time.Now(), lastPosePacket: time.Now(), commandFaultSink: recordSiteCommandFault,
 		underBodyAllowance: true, allowUnobservedFloor: true}
 	r.observed.SetArrivalTiming(true)
 	return r
@@ -122,31 +125,38 @@ func (b *Backend) OpenSiteRobot(session uint64, serial string) (*SiteRobot, erro
 		cancel()
 		return nil, err
 	}
+	r.lastPosePacket = time.Now()
 	// Video has its own subscription so decoding/backpressure cannot delay
 	// the observations used by the motion watchdog. Both end with this session.
 	r.videoFrames = make(chan []byte, 2)
 	go r.receiveVideo()
-	go func() {
-		defer cancel()
-		for {
-			m, err := stream.Recv()
-			if err != nil {
-				r.mu.Lock()
-				r.message = "Go2 observation stream disconnected."
-				r.mu.Unlock()
-				return
-			}
-			t := m.GetTopic()
-			if t == nil {
-				continue
-			}
-			r.mu.Lock()
-			r.receiveObservationLocked(t.Topic, t.Data, t.Binary, time.Unix(0, t.ReceivedUnixNanos), time.Now())
-			r.mu.Unlock()
-		}
-	}()
+	go r.receiveObservations(stream)
 	go r.run()
 	return r, nil
+}
+
+func (r *SiteRobot) receiveObservations(stream interface {
+	Recv() (*pb.UnitreeStreamMessage, error)
+}) {
+	defer r.cancel()
+	for {
+		m, err := stream.Recv()
+		if err != nil {
+			r.mu.Lock()
+			if r.ctx.Err() == nil {
+				r.disconnectStreamLocked("Go2 observation stream disconnected. Reconnect to receive telemetry.")
+			}
+			r.mu.Unlock()
+			return
+		}
+		t := m.GetTopic()
+		if t == nil {
+			continue
+		}
+		r.mu.Lock()
+		r.receiveObservationLocked(t.Topic, t.Data, t.Binary, time.Unix(0, t.ReceivedUnixNanos), time.Now())
+		r.mu.Unlock()
+	}
 }
 
 // Configuration support must not prevent telemetry from older gateways.
@@ -165,6 +175,13 @@ func (r *SiteRobot) prepareDirectMovement(ctx context.Context) {
 
 // Caller holds mu. Packet rejection must not erase continuity for the next pose.
 func (r *SiteRobot) receiveObservationLocked(topic string, raw []byte, binary bool, received, now time.Time) {
+	if r.closed || r.ctx.Err() != nil {
+		return
+	}
+	if topic == sitenav.PoseTopic {
+		// Receipt here detects a silent subscription; it never renews pose freshness.
+		r.lastPosePacket = now
+	}
 	received = received.Add(-r.observed.ClockOffset)
 	err := r.observed.Receive(topic, raw, binary, received, now)
 	if err == nil && topic == sitenav.PoseTopic {
@@ -274,12 +291,37 @@ func (r *SiteRobot) run() {
 			return
 		case now := <-ticker.C:
 			r.mu.Lock()
+			r.checkObservationStreamLocked(now)
 			if r.moving {
 				r.stepLocked(now)
 			}
 			r.mu.Unlock()
 		}
 	}
+}
+
+// A live gRPC stream can stop delivering without returning an error. Give a
+// subscription five seconds to deliver odometry before replacing it. Invalid
+// packets still use the normal observation faults and cannot authorize motion.
+func (r *SiteRobot) checkObservationStreamLocked(now time.Time) {
+	if !r.closed && r.ctx.Err() == nil && now.Sub(r.lastPosePacket) > 5*time.Second {
+		r.disconnectStreamLocked("Go2 odometry stream stopped delivering packets. Reconnect to receive telemetry.")
+	}
+}
+
+func (r *SiteRobot) disconnectStreamLocked(message string) {
+	r.closed = true
+	r.streamDisconnected = true
+	r.message = message
+	if r.moving {
+		_ = r.stopLocked()
+	}
+	// Old alignment, candidates and orders cannot survive a new subscription.
+	r.frame = ""
+	r.route = nil
+	r.preview = nil
+	r.localizations = nil
+	r.cancel()
 }
 func (r *SiteRobot) command(command pb.UnitreeCommand, forward, turn float64) error {
 	started := time.Now()
@@ -613,6 +655,16 @@ func (r *SiteRobot) Snapshot() SiteRobotSnapshot {
 	s.ControlWarning = r.controlWarning
 	if r.stopUnconfirmed {
 		s.ControlWarning = "Go2 did not confirm Stop. Movement is blocked until Stop succeeds."
+	}
+	// Report terminal stream failures before readiness can replace them with a
+	// generic stale-pose message. Deliberate Close/replacement must not reconnect.
+	if r.closed || r.ctx.Err() != nil {
+		s.Disconnected = r.streamDisconnected
+		s.Pose, s.Ready, s.Aligned, s.Moving = false, false, false, false
+		if !r.streamDisconnected && !r.stopUnconfirmed {
+			s.Message = "Go2 connection closed."
+		}
+		return s
 	}
 	s.LookState = r.lookState
 	s.LookDirection = r.lookDirection
