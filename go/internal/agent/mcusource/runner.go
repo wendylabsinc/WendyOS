@@ -5,6 +5,7 @@ import (
 	"net"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/shared/models"
 
@@ -121,16 +122,27 @@ func resolvePairingLANAddrs(ctx context.Context, p SensorPairing) ([]string, boo
 	return nil, false
 }
 
-// NewSourceResolver supplements physical-LAN resolution with currently routed
-// mesh services. Only principal-pinned WendyCom pairings use that catalogue;
-// legacy pairings keep their original discovery and transport selection.
+// meshSourceLANWindow bounds discovery, not authenticated source setup. A
+// routed-only source must not spend the full browse budget waiting for LAN.
+const meshSourceLANWindow = time.Second
+
+// NewSourceResolver resolves LAN first and retains a live signed mesh endpoint
+// as a sequential alternative. No TLS connection or manifest probe is opened
+// by discovery. Each attempt still authenticates the saved source principal.
 func NewSourceResolver(meshSources func() []models.LANDevice) SourceResolver {
+	return newSourceResolver(meshSources, resolvePairingLANAddrs)
+}
+
+func newSourceResolver(meshSources func() []models.LANDevice, resolveLAN SourceResolver) SourceResolver {
 	return func(ctx context.Context, p SensorPairing) ([]string, bool) {
-		if p.SourcePrincipalURI != "" && p.Transport == "wendycom" && meshSources != nil {
+		if p.SourcePrincipalURI == "" || p.Transport != "wendycom" || meshSources == nil {
+			return resolveLAN(ctx, p)
+		}
+		routed := func() []string {
 			var addresses []string
 			seen := make(map[string]bool)
 			for _, d := range meshSources() {
-				if d.PrincipalURI != p.SourcePrincipalURI || !d.WendyLite || !d.IsMTLS || !d.Sensorlink || d.Port <= 0 {
+				if d.PrincipalURI != p.SourcePrincipalURI || !d.WendyLite || !d.IsMTLS || !d.Sensorlink || d.Port <= 0 || d.Port > 65535 {
 					continue
 				}
 				for _, host := range append([]string{d.IPAddress}, d.Addresses...) {
@@ -144,11 +156,31 @@ func NewSourceResolver(meshSources func() []models.LANDevice) SourceResolver {
 					}
 				}
 			}
-			if len(addresses) != 0 {
-				return addresses, true
+			return addresses
+		}
+		lanCtx := ctx
+		cancel := func() {}
+		if len(routed()) != 0 {
+			lanCtx, cancel = context.WithTimeout(ctx, meshSourceLANWindow)
+		}
+		addresses, _ := resolveLAN(lanCtx, p)
+		cancel()
+		if ctx.Err() != nil {
+			return nil, false
+		}
+		seen := make(map[string]bool)
+		var candidates []string
+		// Read the mesh projection again after browsing, so a withdrawn route
+		// or changed signed port cannot leave a stale fallback in this attempt.
+		for _, list := range [][]string{addresses, routed()} {
+			for _, address := range list {
+				if address != "" && !seen[address] {
+					candidates = append(candidates, address)
+					seen[address] = true
+				}
 			}
 		}
-		return resolvePairingLANAddrs(ctx, p)
+		return candidates, len(candidates) != 0
 	}
 }
 

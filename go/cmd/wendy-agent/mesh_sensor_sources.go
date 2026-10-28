@@ -7,6 +7,7 @@ import (
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/localmesh"
 	"github.com/wendylabsinc/wendy/go/internal/agent/meshsession"
+	"github.com/wendylabsinc/wendy/go/internal/agent/services"
 	"github.com/wendylabsinc/wendy/go/internal/shared/discovery"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
 	"github.com/wendylabsinc/wendy/go/internal/shared/models"
@@ -50,14 +51,19 @@ func meshSensorSources(snapshot localmesh.NodeSnapshot) []models.LANDevice {
 }
 
 func browseSensorSources(meshSources func() []models.LANDevice) func(context.Context, time.Duration, func(models.LANDevice) bool) ([]models.LANDevice, error) {
+	return browseSensorSourcesWithLAN(discovery.DiscoverSensorSources, meshSources)
+}
+
+func browseSensorSourcesWithLAN(browse services.SensorSourceBrowseFunc, meshSources func() []models.LANDevice) services.SensorSourceBrowseFunc {
 	return func(ctx context.Context, timeout time.Duration, exclude func(models.LANDevice) bool) ([]models.LANDevice, error) {
-		lan, err := discovery.DiscoverSensorSources(ctx, timeout, exclude)
+		lan, err := browse(ctx, timeout, exclude)
+		var mesh []models.LANDevice
 		for _, source := range meshSources() {
 			if exclude == nil || !exclude(source) {
-				lan = append(lan, source)
+				mesh = append(mesh, source)
 			}
 		}
-		sources := discovery.MergeSensorSources(lan)
+		sources := discovery.MergeSensorSourcesWithMesh(lan, mesh)
 		if len(sources) != 0 && ctx.Err() == nil {
 			err = nil // A working mesh source remains useful without mDNS.
 		}

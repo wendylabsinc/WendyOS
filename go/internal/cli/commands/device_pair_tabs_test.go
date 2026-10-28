@@ -239,6 +239,29 @@ func TestSensorPairRowsMergeByIdentity(t *testing.T) {
 	}
 }
 
+func TestSensorPairUsesMergedSignedSourceWithoutPinning(t *testing.T) {
+	const tenant = "11111111-2222-4333-8444-555555555555"
+	const principal = "spiffe://wendy.sh/tenant/" + tenant + "/device/44444444-4444-4444-8444-444444444444"
+	signed := models.LANDevice{ID: "signed-id", DisplayName: "Signed camera", IPAddress: "fd45:b891:567f::5", Port: 5055,
+		TenantUUID: tenant, PrincipalURI: principal, IsMTLS: true, WendyLite: true, Sensorlink: true, Caps: []string{"sensors"}}
+	lan := signed
+	lan.DisplayName, lan.Hostname, lan.IPAddress = "LAN camera", "board.local", "192.0.2.20"
+	merged := discovery.MergeSensorSourcesWithMesh([]models.LANDevice{lan}, []models.LANDevice{signed})
+	client := &pairTestClient{supportsPrincipal: true}
+	handler := pairTestHandler(client)
+	client.sources = []*agentpbv2.DiscoveredSensorSource{deviceSource(merged[0])}
+	handler.tenantIDs = func() (map[string]bool, error) { return map[string]bool{tenant: true}, nil }
+	scan := handler.scan()().(sensorPairScanMsg)
+	rows := sensorPairRows(scan.devices, scan.pairings)
+	if len(rows) != 1 || rows[0].name != "Signed camera" || rows[0].source.PrincipalURI != principal {
+		t.Fatalf("signed source did not reach picker: %+v", rows)
+	}
+	message := handler.pair(*rows[0].source)().(sensorPairOpMsg)
+	if message.err != nil || client.added == nil || client.added.SourceAddress != "" || client.added.SourcePrincipalUri != principal || client.added.Transport != "wendycom" {
+		t.Fatalf("picker pinned an address instead of source identity: %+v %v", client.added, message.err)
+	}
+}
+
 func TestSensorPairShowsUnenrolledWendyLite(t *testing.T) {
 	// Unenrolled firmware advertises its sensor capability but no asset ID.
 	source := discovery.LANDeviceFromWendyLiteService(discovery.MDNSService{
