@@ -6,65 +6,67 @@ nearby observers. TLS verifies the full tenant/device principal and resolves
 equal device prefixes. Certificate-based membership in a specific named network
 is future work.
 
-## Binary Service Data, version zero
+## Binary Service Data, version one
 
-The service-data key is the tenant UUID (128 bits). Its nine-byte payload is:
+The service-data key is the tenant UUID (128 bits). Its ten-byte payload is:
 
 | Offset | Bytes | Meaning |
-| --- | --- | --- |
-| 0 | 1 | Version/reserved: exactly `00` |
-| 1 | 2 | LE dynamic PSM, unsigned big-endian |
-| 3 | 2 | First two bytes of SHA-256 of the network-name UTF-8 bytes |
-| 5 | 4 | First four canonical bytes of the device UUID |
+| --- | ---: | --- |
+| 0 | 1 | Version: exactly `01` |
+| 1 | 1 | Capabilities: bit0 native carrier admission open; bit1 encrypted time relay available |
+| 2 | 2 | Native LE dynamic PSM, unsigned big-endian |
+| 4 | 2 | First two bytes of SHA-256 of the network-name UTF-8 bytes |
+| 6 | 4 | First four canonical bytes of the device UUID |
 
-There is no Unicode normalization or case folding of the network name. The
-agent's default network name remains `tenant:<tenant-uuid>:default`. The UUID
-prefix is not hashed and is not an identity or authorization token. A zero
-prefix is valid, including for nonzero UUIDs whose leading bytes are zero.
+Unknown capability bits are preserved but ignored for selection. The native PSM
+remains the carrier endpoint; it is never repurposed to mean busy. The encrypted
+time relay is a separate endpoint at reserved PSM130, advertised only while
+its existing bounded admission has room. A full node can
+advertise `02` while retaining time discovery; a node offering both advertises
+`03`. Native candidate selection requires bit0. This is advisory availability,
+not a reservation, guarantee, identity or route authorization. Established links
+are unaffected by later advertisements.
 
-Flags (3 bytes), AD framing (2), service UUID (16), and payload (9) occupy
-30 bytes of the legacy 31-byte advertisement. Linux continues advertising only
-Service Data; it does not add a local name or another service-UUID-list field.
-The optional BlueZ `TxPower` property requests advertising-set power and is not
-an instruction to include a TX-power AD field.
+The agent's default network name is `tenant:<tenant-uuid>:default`; no Unicode
+normalization/case folding occurs. The device prefix is a short hint, including
+valid zero prefixes. TLS still checks the complete principal and tenant.
 
-The former unversioned ten-byte layout is rejected. This discovery version is
-independent of the Wendy Net session protocol and ALPN version.
+Flags (3 bytes), AD framing (2), service UUID (16), and payload (10) occupy
+exactly31 bytes. Linux emits only Service Data, without a local name or redundant
+UUID-list field. Optional BlueZ TxPower config does not add a TX-power AD field.
+Version zero and the old unversioned format are intentionally unsupported.
+Discovery version is independent of the session ALPN version.
 
-## Local-name representation, version zero
+Incoming capacity includes pending reservations. The existing scan-loop cadence
+coalesces changes onto the existing advertisement refresh worker; the separate
+time listener stays advertised when the carrier is full. On reception, a live
+busy observation immediately replaces cached ready state. Selection and the
+queued dial recheck require the newest fresh ready observation; skipped busy
+candidates incur no dial failure penalty. Already opened/established links are
+not canceled by an availability hint.
 
-Platforms unable to advertise Service Data can advertise the tenant UUID in
-their service UUID list, plus a ten-byte ASCII local name. Treat the fields as
-one unsigned 65-bit integer, most significant first:
+## Local-name representation, version one
 
-```text
-version (1 bit) | PSM (16 bits) | network hash (16 bits) | UUID prefix (32 bits)
-```
+The receiver supports platforms that publish the tenant UUID plus a complete
+local name. There is currently **no production local-name sender** in this
+repository. Linux advertises binary Service Data. We retain the receive fallback
+without a second packed field layout: interpret the exact canonical ten binary
+bytes as one unsigned80-bit big-endian integer and encode it as exactly thirteen
+base94 digits, using ASCII `!`..`~`, most significant digit first. Preserve leading
+`!` characters. Decoding reconstructs the same ten bytes and applies the same
+version, capabilities, native PSM, network and device-hint semantics.
 
-The network hash and UUID prefix are interpreted as big-endian unsigned integers
-for this concatenation. Encode the integer as exactly ten base-94 digits;
-digit values 0 through 93 map to ASCII `!` (0x21) through `~` (0x7e). The
-leftmost character is the most significant digit. Preserve leading `!`
-characters. Do not encode fields separately, add a text prefix, trim, escape,
-case-fold, or normalize the transmitted string. JSON/source-code escaping is
-not part of the on-air representation.
-
-Decoders reject other lengths, characters outside that alphabet, integers at
-least 2^65, and any version other than zero. The one-bit slot reserves version
-one; it is not accepted yet. Binary versions/reserved values other than zero
-are also rejected. Both representations retain the existing LE dynamic PSM
-range 0x0080 through 0x00ff.
-
-`testdata/advertisement-v0.json` contains independent Python-generated vectors
-for other implementations. For example, network `field`, PSM 0x0081, UUID
-`11111111-2222-3333-4444-555555555555` produces binary
-`000081c0d211111111` and local name `!&~3o8*;-z`.
+This deliberately replaces the old ten-character representation. Thirteen name
+characters fit in a legacy scan response; complete names may be correlated with
+the tenant UUID in the primary advertisement. `testdata/advertisement-v1.json`
+contains independent Python-produced binary and name vectors. No speculative
+65-bit capability packing or iOS sender implementation is introduced.
 
 Apple controls placement of the name, including scan response placement and
 truncation. Ordinary background advertising omits the local name. The encoding
 and Linux receiver do not constitute an iOS sender implementation or hardware
 qualification. A shortened-name AD field is never accepted as a complete
-payload, even when it happens to contain ten characters.
+payload, even when it happens to contain thirteen characters.
 
 ## Linux reception and freshness
 
@@ -126,11 +128,11 @@ provider aliases `localmesh.StreamALPN` so TLS and stream admission cannot drift
 
 ## Router-hop protocol
 
-TLS negotiates `wendy-local-mesh-ble/1`, followed by router hello version 1.
+TLS negotiates `wendy-local-mesh-ble/2`, followed by router hello version 1.
 `bleprovider.ALPN` aliases the common `localmesh.StreamALPN` constant. This
 version includes shared HAVE/WANT service and presence/router announcements;
 there is no full-record-push fallback. BLE advertisements keep their independent
-discovery format/version. The retired endpoint-only leaf ALPN and hello are no longer supported.
+discovery format/version. Endpoint-only leaf ALPN and hello remain separate.
 
 ## Certificate issuers
 

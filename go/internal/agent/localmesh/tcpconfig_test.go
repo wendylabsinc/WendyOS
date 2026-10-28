@@ -2,6 +2,7 @@ package localmesh
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -54,11 +55,12 @@ func TestTCPConfigRequiresReciprocalConcretePeers(t *testing.T) {
 		{`{"ethernet":true}`, true},
 		{`{"infrastructureWifi":true}`, true},
 		{`{"ethernet":true,"infrastructureWifi":true}`, true},
+		{`{"tls_listen":"0.0.0.0:43024"}`, true},
 		{`{"leafListen":"0.0.0.0:43024"}`, false},
-		{`{"leafListen":"[::]:43024","ethernet":true}`, false},
-		{`{"leafListen":"0.0.0.0:0"}`, false},
-		{`{"leafListen":"missing-port"}`, false},
-		{`{"listen":"0.0.0.0:43024","leafListen":"0.0.0.0:43024"}`, false},
+		{`{"tls_listen":"[::]:43024","ethernet":true}`, true},
+		{`{"tls_listen":"0.0.0.0:0"}`, false},
+		{`{"tls_listen":"missing-port"}`, false},
+		{`{"listen":"0.0.0.0:43024","tls_listen":"0.0.0.0:43024"}`, false},
 		{`{"nan":true,"peers":[{"asset":2,"address":"127.0.0.1:7002"}]}`, false},
 		{`{"peers":[]}`, false},
 	} {
@@ -92,5 +94,27 @@ func TestTCPConfigRejectsOversizedFile(t *testing.T) {
 	self := testDevice(t, testPrincipal(testTenantUUID, testDeviceAID))
 	if _, err := LoadTCPConfig(path, self); err == nil {
 		t.Fatal("oversized configuration accepted")
+	}
+}
+
+func TestNormalNativeTLSListenerConfigAlongsideManualTCP(t *testing.T) {
+	self := testDevice(t, testPrincipal(testTenantUUID, testDeviceAID))
+	peer := testDevice(t, testPrincipal(testTenantUUID, testDeviceBID))
+	path := filepath.Join(t.TempDir(), "local-mesh.json")
+	for _, body := range []string{
+		`{"tls_listen":"0.0.0.0:43024"}`,
+		`{"listen":"127.0.0.1:7001","tls_listen":"0.0.0.0:43024","peers":[{"device":"` + peer.UUID().String() + `","address":"127.0.0.1:7002"}]}`,
+	} {
+		if err := os.WriteFile(path, []byte(body), 0600); err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := LoadTCPConfig(path, self)
+		if err != nil || cfg.TLSListen != "0.0.0.0:43024" {
+			t.Fatalf("native TLS configuration: %+v %v", cfg, err)
+		}
+		encoded, err := json.Marshal(cfg)
+		if err != nil || !bytes.Contains(encoded, []byte(`"tls_listen":"0.0.0.0:43024"`)) {
+			t.Fatalf("native TLS configuration spelling: %s %v", encoded, err)
+		}
 	}
 }
