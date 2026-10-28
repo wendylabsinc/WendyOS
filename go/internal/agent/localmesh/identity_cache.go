@@ -15,11 +15,12 @@ import (
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
+	"github.com/wendylabsinc/wendy/go/internal/shared/meshoperator"
 )
 
-// maxPrincipalBytes bounds a device principal carried in a key, a file, or a
-// control message. A canonical SPIFFE device principal is far shorter.
-const maxPrincipalBytes = 512
+// maxPrincipalBytes bounds an authenticated routing principal carried in a key,
+// file or control message. Operator subjects may be longer than device UUIDs.
+const maxPrincipalBytes = meshoperator.MaxPrincipalBytes
 
 // IdentityVerifier must validate the complete chain against CURRENT trust and
 // return the authorized device identity and earliest certificate expiry. It is
@@ -66,12 +67,12 @@ type IdentityCache struct {
 	pendingSave bool
 }
 
-// principalOf returns the cache key a chain authorizes, rejecting chains whose
-// leaf is not a device principal.
+// principalOf returns the bounded device or operator principal authorized by
+// the independently verified leaf.
 func principalOf(id Identity) (string, error) {
 	principal := id.Device.Principal()
 	if principal == "" || len(principal) > maxPrincipalBytes {
-		return "", errors.New("identity has no device principal")
+		return "", errors.New("identity has no routing principal")
 	}
 	return principal, nil
 }
