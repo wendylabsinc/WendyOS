@@ -292,6 +292,36 @@ func TestSkillFrontmatterPreservesAllFields(t *testing.T) {
 	}
 }
 
+func TestSkillFrontmatterLineEndingsPreserveResourceBytes(t *testing.T) {
+	frontmatter := "name: example\ndescription: |\n  Multiple lines\n  preserved here.\nmetadata:\n  version: 2\n"
+	for _, tc := range []struct {
+		name, opening, content, closing, body string
+	}{
+		{"LF", "---\n", frontmatter, "---\n", "\nBody café\n"},
+		{"CRLF", "---\r\n", strings.ReplaceAll(frontmatter, "\n", "\r\n"), "---\r\n", "\r\nBody café\r\n"},
+		{"mixed checkout", "---\r\n", frontmatter, "---\n", "\r\nBody café\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			data := []byte(tc.opening + tc.content + tc.closing + tc.body)
+			original := bytes.Clone(data)
+			fm, offset, err := skillFrontmatter(data)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if fm["name"] != "example" || fm["description"] != "Multiple lines\npreserved here.\n" || fm["metadata"].(map[string]any)["version"] != float64(2) {
+				t.Fatalf("frontmatter differs: %+v", fm)
+			}
+			wantOffset := len(tc.opening + tc.content + tc.closing)
+			if offset != wantOffset || string(data[offset:]) != tc.body {
+				t.Fatalf("body offset = %d, want %d; body = %q", offset, wantOffset, data[offset:])
+			}
+			if !bytes.Equal(data, original) {
+				t.Fatal("parsing changed the original resource bytes")
+			}
+		})
+	}
+}
+
 // Assistants that import the bundle (Codex, ChatGPT, Claude Code) learn tools
 // from the MCP reference its entry point links to. A tool added to a group must
 // be listed there, or the skill silently falls behind the server. The tool list
