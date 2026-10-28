@@ -32,6 +32,17 @@ func admittedPrefix(p netip.Prefix) bool {
 	return (meshid.InMesh(p.Addr()) || meshoperator.InOperatorPool(p.Addr())) && p.Bits() == 128
 }
 
+// routerIDCandidate keeps independent operator installations distinct even
+// when their brokers share a host/NIC with another broker or the WendyOS agent.
+// The state store pins the selected ID; a fresh random candidate on reopen never
+// replaces an existing identity or its Babel safety history.
+func routerIDCandidate(peer meshid.Device) (babel.RouterID, error) {
+	if peer.IsOperator() {
+		return randomRouterID()
+	}
+	return instanceRouterID()
+}
+
 // instanceRouterID derives this instance's Babel router ID with the profile's
 // Stage-1 helpers: the permanent hardware address in the 0x0000||MAC48 form when
 // a usable one exists, otherwise the tagged-random 0x0001||RANDOM48 form.
@@ -46,6 +57,10 @@ func instanceRouterID() (babel.RouterID, error) {
 			return id, nil
 		}
 	}
+	return randomRouterID()
+}
+
+func randomRouterID() (babel.RouterID, error) {
 	var seed [6]byte
 	if _, err := rand.Read(seed[:]); err != nil {
 		return 0, err
