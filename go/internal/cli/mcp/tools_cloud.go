@@ -681,7 +681,7 @@ func connectPinnedMCPCloudAgent(ctx context.Context, auth *config.AuthConfig, de
 		return next, err
 	}
 	if brokerConn != nil {
-		agentConn.ExtraClosers = append(agentConn.ExtraClosers, brokerConn)
+		agentConn.AddCloser(brokerConn)
 	}
 	cleanupBroker = false
 	return agentConn, device, cloudCommandTarget(auth, device, brokerURL), nil

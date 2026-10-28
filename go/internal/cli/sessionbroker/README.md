@@ -26,10 +26,10 @@ Explicit TCP and BLE first-hop recipes authenticate the exact selected WendyOS
 peer with the primary operator certificate, tenant chain and profile pins. The
 same shared node can own additional authenticated carriers. The bounded scheduler
 holds at most 256 candidates, eight connections, two BLE connections and two
-concurrent setup attempts. Native provider discovery is an injectable extension;
-its default sources are disabled in this unit. Automatic preparation remains available through injected discovery hooks, while
-explicit recipes operate without discovery. Native discovery and public CLI
-command dispatch are integrated separately.
+concurrent setup attempts. Automatic discovery supplies LAN TLS and host BLE
+candidates to the same scheduler. macOS and Linux support outgoing BLE; explicit TCP recipes do not
+require radio discovery. The direct first hop must currently be a WendyOS peer;
+Lite targets are reached through its routed connections.
 
 A first-hop failure retains the broker's IPC endpoint and installation identity.
 The carrier scheduler reconnects while the node remains alive; if the participant
@@ -89,10 +89,9 @@ The attachment and topology formats remain binary CBOR/DER and protobuf. The
 hidden helper's existing base64 process-launch recipe is non-secret local process
 metadata, not a mesh packet.
 
-Positive host tests cover retained ownership, real detached process startup,
-P-256 and ML-DSA-65 identities, credential renewal, reconnect/handover, transit
-without command leases, native application TLS, bounded inventories and streams,
-slow consumers, half-close and cancellation. Linux integration tests additionally
-exercise isolated kernel-router topologies when suitable networking privileges
-are available. Physical BLE and lab hardware qualification are recorded separately
-from these host fixtures; no hardware claim follows from this package's tests.
+For commands, device selection and supported operations, see the
+[CLI mesh guide](../assets/docs/development/local-mesh-radio.md).
+Tests in this package cover ownership, reconnect, forwarding, bounded inventories
+and stream lifecycle; hardware-specific behavior still depends on the host and
+selected radio. Windows TCP and named-pipe support builds, but this does not
+establish physical Windows device interoperability.
