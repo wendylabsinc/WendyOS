@@ -113,6 +113,11 @@ type SourceStats struct {
 	ModelInputs *SourceModelInputs `json:"model_inputs,omitempty"`
 }
 
+// DropAccountingSourceAbsent is the DropAccounting of a source a campaign
+// named that did not resolve when the episode was triggered. The manifest keeps
+// the source to show it was asked for, but nothing of it is recorded.
+const DropAccountingSourceAbsent = "source_absent_at_trigger"
+
 // Payload retention classes for samples a source handed to a model. They say
 // what the episode holds for those samples; they never claim more than the
 // capture policy can deliver.
