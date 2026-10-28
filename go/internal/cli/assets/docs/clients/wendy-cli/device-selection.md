@@ -104,10 +104,15 @@ diagnose guest startup problems.
 
 ## Automatic connection recovery
 
-After a possible clock-related TLS failure, the CLI attempts to broadcast a
-signed time proof on the LAN and retries the connection. It reports whether
-sending failed and whether the retry connected; sending a proof does not confirm
-that the device received it or changed its clock.
+After a possible clock-related TLS failure, the CLI broadcasts a signed time
+proof on the LAN and retries the connection, sending the proof again before
+each of three retries over about 10 seconds. This applies to a saved default
+device, a device named with `--device`, and a device chosen in the picker.
+Nothing acknowledges the proof, so the CLI counts it as accepted only when the
+device accepts the connection. If the device still rejects it, the CLI says so
+and names the next step: give the device internet access so it sets its own
+clock, or, when no time server answered and the CLI sent a saved proof, give
+this computer internet access.
 
 The CLI offers to refresh certificates when it has evidence that the client
 credentials need renewal. A timeout or generic TLS rejection alone does not
