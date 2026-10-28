@@ -76,14 +76,6 @@ func runConfiguredWithNode(parent context.Context, configDir string, id TCPIdent
 		}
 		defer listener.Close()
 	}
-	var leafListener net.Listener
-	if cfg.LeafListen != "" {
-		leafListener, err = listen("tcp", cfg.LeafListen)
-		if err != nil {
-			return fmt.Errorf("listen for net leaves: %w", err)
-		}
-		defer leafListener.Close()
-	}
 	node, err := NewNode(ctx, stateDir, credentials, id.Name, id.AgentPort)
 	if err != nil {
 		return err
@@ -93,11 +85,6 @@ func runConfiguredWithNode(parent context.Context, configDir string, id TCPIdent
 	}
 	nodeDone := make(chan error, 1)
 	go func() { nodeDone <- node.Run(); cancel() }()
-	var leafDone chan error
-	if leafListener != nil {
-		leafDone = make(chan error, 1)
-		go func() { leafDone <- runLeafListener(ctx, node, leafListener) }()
-	}
 	if observe != nil {
 		observe(node, cfg)
 	}
@@ -203,7 +190,7 @@ func runConfiguredWithNode(parent context.Context, configDir string, id TCPIdent
 			}
 		}()
 	}
-	nodeStopped, leafStopped := false, false
+	nodeStopped := false
 	select {
 	case <-parent.Done():
 	case err = <-nodeDone:
@@ -211,8 +198,6 @@ func runConfiguredWithNode(parent context.Context, configDir string, id TCPIdent
 		if errors.Is(err, context.Canceled) {
 			err = nil
 		}
-	case err = <-leafDone:
-		leafStopped = true
 	}
 	if observe != nil {
 		observe(nil, nil)
@@ -223,9 +208,6 @@ func runConfiguredWithNode(parent context.Context, configDir string, id TCPIdent
 	}
 	<-acceptDone
 	wg.Wait()
-	if leafDone != nil && !leafStopped {
-		err = errors.Join(err, <-leafDone)
-	}
 	if !nodeStopped {
 		// Normal node cancellation must not hide an earlier listener failure
 		// when the independent runtime results are combined.

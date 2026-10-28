@@ -88,8 +88,8 @@ func TestSyncIdentityRequestIsPrincipalScoped(t *testing.T) {
 	dest, _ := NewDirectory(testTenant(t), 10, cache)
 	sender, receiver := NewSynchronizer(source, source.cache), NewSynchronizer(dest, cache)
 	replies, _, err := receiver.Receive(ControlMessage{Kind: "identity-request", Principal: device.Principal()}, now)
-	if err != nil || len(replies) != 0 {
-		t.Fatal("receiver answered a bundle it does not hold", err)
+	if err != nil || len(replies) != 1 || replies[0].Kind != "identity-missing" {
+		t.Fatal("receiver did not report its missing identity", replies, err)
 	}
 	replies, _, err = sender.Receive(ControlMessage{Kind: "identity-request", Principal: device.Principal()}, now)
 	if err != nil || len(replies) != 1 || replies[0].Kind != "certificate" {

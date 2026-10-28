@@ -2,8 +2,8 @@ package localmesh
 
 import (
 	"crypto/sha256"
-	"encoding/json"
 	"errors"
+	"github.com/wendylabsinc/wendy/go/internal/agent/netwire"
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/netgossip"
@@ -13,11 +13,11 @@ func (s *Synchronizer) offerManifest(w SignedManifest, now time.Time) []ControlM
 	if _, ok := s.directory.CurrentRecordChain(w, now); !ok {
 		return nil
 	}
-	var manifest Manifest
-	if json.Unmarshal(w.Body, &manifest) != nil {
+	manifest, err := DecodeManifest(w.Body)
+	if err != nil {
 		return nil
 	}
-	data, err := json.Marshal(w)
+	data, err := netwire.Marshal(w)
 	if err != nil {
 		return nil
 	}
@@ -31,20 +31,28 @@ func (s *Synchronizer) offerManifest(w SignedManifest, now time.Time) []ControlM
 	return []ControlMessage{{Kind: "gossip", Gossip: m}}
 }
 func (s *Synchronizer) resolveManifest(w SignedManifest, now time.Time, accepted bool) {
-	var manifest Manifest
-	_ = json.Unmarshal(w.Body, &manifest)
-	data, _ := json.Marshal(w)
+	manifest, err := DecodeManifest(w.Body)
+	if err != nil {
+		return
+	}
+	data, _ := netwire.Marshal(w)
 	s.gossip.Resolve(data, time.UnixMilli(manifest.Expires), now, accepted)
 }
 
-// Router links require HAVE/WANT; the legacy constructor is retained only for
-// the separately negotiated endpoint-only leaf protocol and protocol fixtures.
+// Router links require HAVE/WANT. Direct-message fixtures exercise the same
+// directory and certificate admission without opening a network carrier.
 func (s *Synchronizer) Receive(m ControlMessage, now time.Time, slots ...int) ([]ControlMessage, []SignedManifest, error) {
+	if len(slots) > 0 && slots[0] < directoryResponseDemand(m) {
+		return nil, nil, ErrControlBackpressure
+	}
 	if m.Kind != "gossip" {
 		if s.gossip != nil && m.Kind == "manifest" {
 			return nil, nil, errors.New("unsolicited router manifest")
 		}
-		return s.receive(m, now)
+		return s.receive(m, now, slots...)
+	}
+	if m.Gossip != nil && m.Gossip.Op != "" && !m.Gossip.Known() {
+		return nil, nil, nil
 	}
 	if s.gossip == nil || m.Gossip == nil {
 		return nil, nil, errors.New("manifest gossip not negotiated")
@@ -61,7 +69,7 @@ func (s *Synchronizer) Receive(m ControlMessage, now time.Time, slots ...int) ([
 	if m.Gossip.Op == "have" {
 		if payload := s.gossip.Lookup(m.Gossip.ID(), now); len(payload) > 0 {
 			var w SignedManifest
-			if json.Unmarshal(payload, &w) != nil {
+			if netwire.Unmarshal(payload, &w) != nil {
 				return nil, nil, errors.New("invalid cached manifest artifact")
 			}
 			if _, _, trusted := s.cache.Get(w.Principal, now); !trusted {
@@ -78,7 +86,7 @@ func (s *Synchronizer) Receive(m ControlMessage, now time.Time, slots ...int) ([
 		payload := s.gossip.Lookup(m.Gossip.ID(), now)
 		if len(payload) > 0 {
 			var w SignedManifest
-			if err := json.Unmarshal(payload, &w); err != nil {
+			if err := netwire.Unmarshal(payload, &w); err != nil {
 				return nil, nil, err
 			}
 			chain, ok := s.directory.CurrentRecordChain(w, now)
@@ -89,7 +97,7 @@ func (s *Synchronizer) Receive(m ControlMessage, now time.Time, slots ...int) ([
 			if descriptor == nil {
 				return nil, nil, errors.New("invalid current manifest chain")
 			}
-			encoded, _ := json.Marshal(descriptor.Chain)
+			encoded, _ := netwire.Marshal(descriptor.Chain)
 			digest := sha256.Sum256(encoded)
 			hintKey = string(digest[:])
 			if s.sent[hintKey].After(now) {
@@ -97,23 +105,31 @@ func (s *Synchronizer) Receive(m ControlMessage, now time.Time, slots ...int) ([
 			}
 		}
 	}
-	reply, data, err := s.gossip.Receive(*m.Gossip, now)
+	bounded := len(slots) > 0
+	var reply *netgossip.Message
+	var data []byte
+	var err error
+	if bounded {
+		reply, data, err = s.gossip.ReceiveDeferred(*m.Gossip, now)
+	} else {
+		reply, data, err = s.gossip.Receive(*m.Gossip, now)
+	}
 	var replies []ControlMessage
-	if reply != nil {
-		if reply.Op == "data" && descriptor != nil {
-			// The exact verified chain precedes the first DATA, so a warm peer
-			// can bind a bounded retry before its new leaf finishes fetching.
-			// Callers atomically queue this batch or close the session.
-			if len(s.sent) >= 1024 {
-				s.sent = map[string]time.Time{}
-			}
-			s.sent[hintKey] = now.Add(MaxLease)
-			replies = append(replies, ControlMessage{Kind: "certificate", Certificate: descriptor})
+	if descriptor != nil && (reply != nil && reply.Op == "data" || bounded && reply == nil && m.Gossip.Op == "want" && err == nil) {
+		// The exact verified chain precedes the first DATA, so a warm peer
+		// can bind a bounded retry before its new leaf finishes fetching.
+		// Callers atomically queue this batch or close the session.
+		if len(s.sent) >= 1024 {
+			s.sent = map[string]time.Time{}
 		}
+		s.sent[hintKey] = now.Add(MaxLease)
+		replies = append(replies, ControlMessage{Kind: "certificate", Certificate: descriptor})
+	}
+	if reply != nil {
 		replies = append(replies, ControlMessage{Kind: "gossip", Gossip: reply})
 	}
 	if err == nil && m.Gossip.Op == "want" && len(slots) > 0 {
-		for _, chunk := range s.gossip.Poll(now, max(0, slots[0]-len(replies))) {
+		for _, chunk := range s.gossip.Poll(now, max(0, slots[0]-len(replies)-directoryResponseReserve)) {
 			replies = append(replies, ControlMessage{Kind: "gossip", Gossip: chunk})
 		}
 	}
@@ -121,12 +137,12 @@ func (s *Synchronizer) Receive(m ControlMessage, now time.Time, slots ...int) ([
 		return replies, nil, err
 	}
 	var w SignedManifest
-	if err = json.Unmarshal(data, &w); err != nil {
+	if err = netwire.Unmarshal(data, &w); err != nil {
 		return nil, nil, err
 	}
 	// Require the exact deterministic envelope used for hashing, including no
 	// unknown fields. Otherwise re-marshalling could leave a claim unresolved.
-	canonical, _ := json.Marshal(w)
+	canonical, _ := netwire.Marshal(w)
 	if string(canonical) != string(data) {
 		return nil, nil, errors.New("noncanonical manifest artifact")
 	}
@@ -149,7 +165,7 @@ func (d *Directory) manifestPayload(principal string, now time.Time) []byte {
 	if _, ok := d.CurrentRecordChain(e.wire, now); !ok {
 		return nil
 	}
-	data, _ := json.Marshal(e.wire)
+	data, _ := netwire.Marshal(e.wire)
 	return data
 }
 
@@ -157,6 +173,6 @@ func (s *Synchronizer) discardManifest(w SignedManifest) {
 	if s.gossip == nil {
 		return
 	}
-	data, _ := json.Marshal(w)
+	data, _ := netwire.Marshal(w)
 	s.gossip.Discard(data)
 }
