@@ -54,6 +54,9 @@ routers. Lite management, app upload/start, logs and supported SensorLink comman
 use WendyCom. Container registry, deployment and other agent-only commands still
 require WendyOS.
 
+For Lite topology, use matching CLI and firmware versions with WendyCom
+topology support.
+
 To use a Lite guest's advertised TCP service from a local program, forward a
 local port to its published port:
 
