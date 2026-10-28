@@ -278,6 +278,21 @@ func verifySkillImport(t *testing.T, exchange skillExchange) {
 	}
 }
 
+func TestSkillFrontmatterWindowsLineEndings(t *testing.T) {
+	for _, opening := range []string{"\n", "\r\n"} {
+		for _, closing := range []string{"\n", "\r\n"} {
+			data := []byte("---" + opening + "name: example\r\ndescription: Windows checkout\r\n---" + closing + "\r\nBody\r\n")
+			fm, offset, err := skillFrontmatter(data)
+			if err != nil {
+				t.Fatalf("opening %q, closing %q: %v", opening, closing, err)
+			}
+			if fm["name"] != "example" || fm["description"] != "Windows checkout" || string(data[offset:]) != "\r\nBody\r\n" {
+				t.Fatalf("incorrect metadata or original-byte offset: %+v, %d", fm, offset)
+			}
+		}
+	}
+}
+
 func TestSkillFrontmatterPreservesAllFields(t *testing.T) {
 	data := []byte("---\nname: example\ndescription: |\n  Multiple lines\n  preserved here.\nlicense: MIT\ndisable-model-invocation: true\nmetadata:\n  version: 2\nallowed-tools:\n  - resources/read\n---\n\nBody\n")
 	fm, offset, err := skillFrontmatter(data)

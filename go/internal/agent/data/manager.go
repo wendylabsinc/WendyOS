@@ -21,8 +21,6 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/atomicfile"
 )
 
-const DefaultRoot = "/var/lib/wendy-agent/data/episodes"
-
 const (
 	preRollWindow = 5 * time.Minute
 	preRollLimit  = 50 << 20
@@ -95,7 +93,12 @@ type Manager struct {
 	// nothing of it and no new episode is ever started for it. Ordering is
 	// irrelevant, so a slice is enough; a campaign can have several sealing
 	// episodes at once only if its drain outlasts its next episode.
-	sealing      []*activeEpisode
+	sealing []*activeEpisode
+	// finalizing holds what InProgress reports about episodes that finalize
+	// has detached and is sealing with m.mu released. A view taken at
+	// detachment is kept rather than the episode, because the seal writes the
+	// episode's manifest without the lock.
+	finalizing   []InProgressEpisode
 	consensus    func(context.Context) (timesync.Consensus, error)
 	preRoll      []bufferedRecord
 	preRollBytes int
@@ -127,6 +130,9 @@ type Manager struct {
 	// eviction tests drive a store small enough to evict deterministically.
 	maxQuota int64
 	reserve  int64
+	// location records where the store is, why, and where campaign plans
+	// live; see StoreLocation.
+	location StoreLocation
 }
 
 // SetQuota overrides the episode store bounds. maxQuota caps the store (the
@@ -344,10 +350,14 @@ func (a *activeEpisode) noteTelemetryDropLocked() {
 // for the slowest server in the pool, so an unreachable server costs this long.
 const consensusQueryTimeout = 5 * time.Second
 
+// NewManager opens the episode store at root, or at the default chosen by
+// defaultStoreLayout when root is empty; StoreLocation reports which and why.
 func NewManager(root string) (*Manager, error) {
 	implicitRoot := root == ""
-	if root == "" {
-		root = DefaultRoot
+	location := explicitStoreLocation(root)
+	if implicitRoot {
+		location = defaultStoreLayout.choose()
+		root = location.Path
 	}
 	if err := os.MkdirAll(root, 0o750); err != nil {
 		if !implicitRoot || !errors.Is(err, os.ErrPermission) {
@@ -361,9 +371,11 @@ func NewManager(root string) (*Manager, error) {
 		if fallbackErr = os.MkdirAll(root, 0o750); fallbackErr != nil {
 			return nil, errors.Join(err, fallbackErr)
 		}
+		location = besideStore(StoreLocation{Path: root,
+			Reason: fmt.Sprintf("%s; %s is not writable by this user, so the store is in the user's config directory", location.Reason, location.Path)})
 	}
 	m := &Manager{root: root, downloads: make(map[string]int), active: make(map[string]*activeEpisode),
-		maxQuota: DefaultMaxQuotaBytes, reserve: DefaultReserveBytes}
+		maxQuota: DefaultMaxQuotaBytes, reserve: DefaultReserveBytes, location: location}
 	m.recordings = &recordingStore{root: filepath.Join(root, ".recordings"), journals: map[string]*recordingJournal{}}
 	if err := m.restoreStreamPreRoll(); err != nil {
 		return nil, err
@@ -565,7 +577,7 @@ func (m *Manager) Start(opts StartOptions) (Manifest, error) {
 	// present-in-the-plan, absent-in-the-episode rather than omitted, so a
 	// degraded episode never reads as one that was never asked for them.
 	for _, s := range opts.UnresolvedSources {
-		manifest.Sources = append(manifest.Sources, SourceStats{Source: s, DropAccounting: "source_absent_at_trigger"})
+		manifest.Sources = append(manifest.Sources, SourceStats{Source: s, DropAccounting: DropAccountingSourceAbsent})
 	}
 	for source, contents := range opts.Calibrations {
 		name := safeName(source) + ".calibration"
@@ -1029,7 +1041,7 @@ func appendRoughtimeEvidence(dir string, c timesync.Consensus) (retErr error) {
 func (m *Manager) enforceQuotaLocked(scan storeScan) error {
 	total, free, err := diskSpace(m.root)
 	if err != nil {
-		return fmt.Errorf("data filesystem quota: %w", err)
+		return errStoreUnreadable(m.root, err)
 	}
 	quota := total / 5
 	if quota > m.maxQuota {
@@ -1038,7 +1050,7 @@ func (m *Manager) enforceQuotaLocked(scan storeScan) error {
 	reserve := m.reserve
 	used := scan.used
 	for _, name := range scan.readFailures {
-		m.warnf("episode %s has an unreadable manifest; its bytes count against the data quota but it can never be uploaded or evicted by state", name)
+		m.warnf("Wendy Data can't read the manifest of episode %s; its bytes count toward the store's limit, but it can never be uploaded or removed to make room", name)
 	}
 	candidates := make([]evictionCandidate, 0, len(scan.candidates))
 	for _, c := range scan.candidates {
@@ -1060,11 +1072,11 @@ func (m *Manager) enforceQuotaLocked(scan storeScan) error {
 		}
 		switch {
 		case c.quarantined:
-			m.warnf("evicting quarantined episode %s, which recovery could not read, to preserve the data quota", c.id)
+			m.warnf("Wendy Data is removing quarantined episode %s, which recovery could not read, to make room for a new recording", c.id)
 		case c.tier == 2:
-			m.warnf("evicting episode %s (campaign %s) before its upload completed to preserve the data quota", c.id, c.campaign)
+			m.warnf("Wendy Data is removing episode %s (campaign %s) before its upload finished, to make room for a new recording", c.id, c.campaign)
 		case c.tier == 1:
-			m.warnf("evicting episode %s (campaign %s), which failed to upload and was never retried, to preserve the data quota", c.id, c.campaign)
+			m.warnf("Wendy Data is removing episode %s (campaign %s), whose upload failed and was never retried, to make room for a new recording", c.id, c.campaign)
 		}
 		if err := os.RemoveAll(c.path); err != nil {
 			return fmt.Errorf("evicting %s: %w", filepath.Base(c.path), err)
@@ -1073,10 +1085,8 @@ func (m *Manager) enforceQuotaLocked(scan storeScan) error {
 		free += c.size
 	}
 	if used > quota || free < reserve {
-		if scan.partialBytes > 0 {
-			return fmt.Errorf("data store holds %d bytes (%d of them in episodes still recording) against a %d byte quota and cannot preserve %d bytes free", used, scan.partialBytes, quota, reserve)
-		}
-		return fmt.Errorf("data store holds %d bytes against a %d byte quota and cannot preserve %d bytes free", used, quota, reserve)
+		return &StoreSpaceError{Path: m.root, Free: free, Reserve: reserve, Used: used, Quota: quota, MaxQuota: m.maxQuota,
+			Recording: scan.partialBytes, SuggestDataPartition: defaultStoreLayout.suggestDataPartition(m.root)}
 	}
 	return nil
 }
@@ -1537,11 +1547,15 @@ func (m *Manager) finalize(a *activeEpisode, state, reason string) (Manifest, er
 		return Manifest{}, ErrNoActiveEpisode
 	}
 	m.forgetLocked(a)
+	m.finalizing = append(m.finalizing, inProgressViewLocked(a, EpisodeStateSealing))
 	a.manifest.State, a.manifest.Interruption = state, reason
 	consensus := m.consensus
 	m.mu.Unlock()
 
 	if err := m.sealDetached(a, consensus); err != nil {
+		m.mu.Lock()
+		m.forgetFinalizingLocked(a.manifest.ID)
+		m.mu.Unlock()
 		m.Warnf("episode %s: seal failed, leaving %s for recovery on the next start: %v",
 			a.manifest.ID, filepath.Base(a.dir), err)
 		return Manifest{}, err
@@ -1602,6 +1616,9 @@ func (m *Manager) sealDetached(a *activeEpisode, consensus func(context.Context)
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	// Under the same lock as the rename, so no caller sees the episode both
+	// sealing and published.
+	m.forgetFinalizingLocked(a.manifest.ID)
 	if err := writeManifest(a.dir, a.manifest); err != nil {
 		return err
 	}
@@ -1643,6 +1660,11 @@ const EpisodeStateDraining = "draining"
 func (m *Manager) Status() *Manifest {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	return m.statusLocked()
+}
+
+// statusLocked is Status for a caller that holds m.mu.
+func (m *Manager) statusLocked() *Manifest {
 	if a := m.active[AdHocEpisodeKey]; a != nil {
 		v := snapshotManifest(a.manifest)
 		return &v
