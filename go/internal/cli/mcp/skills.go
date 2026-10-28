@@ -123,15 +123,33 @@ func buildSkillCatalogFromRoot(root string) (*skillCatalog, error) {
 // Decode the whole YAML mapping, not just name/description. The importer checks
 // that the catalog contains every frontmatter field from the returned SKILL.md.
 func skillFrontmatter(data []byte) (map[string]any, int, error) {
-	if !bytes.HasPrefix(data, []byte("---\n")) {
+	start := 4
+	if bytes.HasPrefix(data, []byte("---\r\n")) {
+		start = 5
+	} else if !bytes.HasPrefix(data, []byte("---\n")) {
 		return nil, 0, fmt.Errorf("missing YAML frontmatter")
 	}
-	end := bytes.Index(data[4:], []byte("\n---\n"))
+	// Match delimiter lines without rewriting the resource: callers use the
+	// returned byte offset and publish digests of the original embedded bytes.
+	end, offset := -1, start
+	for offset < len(data) {
+		newline := bytes.IndexByte(data[offset:], '\n')
+		if newline < 0 {
+			break
+		}
+		next := offset + newline + 1
+		line := bytes.TrimSuffix(data[offset:next-1], []byte("\r"))
+		if bytes.Equal(line, []byte("---")) {
+			end, offset = offset, next
+			break
+		}
+		offset = next
+	}
 	if end < 0 {
 		return nil, 0, fmt.Errorf("unterminated YAML frontmatter")
 	}
 	var fm map[string]any
-	if err := yaml.Unmarshal(data[4:4+end], &fm); err != nil {
+	if err := yaml.Unmarshal(data[start:end], &fm); err != nil {
 		return nil, 0, err
 	}
 	for _, key := range []string{"name", "description"} {
@@ -148,7 +166,7 @@ func skillFrontmatter(data []byte) (map[string]any, int, error) {
 	if err := json.Unmarshal(raw, &fm); err != nil {
 		return nil, 0, err
 	}
-	return fm, 4 + end + len("\n---\n"), nil
+	return fm, offset, nil
 }
 
 func registerSkillCatalog(srv *server.MCPServer, catalog *skillCatalog) error {
