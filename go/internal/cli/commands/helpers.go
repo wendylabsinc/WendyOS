@@ -3779,6 +3779,9 @@ func pickerItemDeviceID(item tui.PickerItem) string {
 	if !ok {
 		return ""
 	}
+	if entry.mergedDevice != nil && entry.mergedDevice.Mesh != nil && entry.mergedDevice.LAN == nil && len(entry.mergedDevice.Externals) == 0 {
+		return entry.mergedDevice.Mesh.Selector
+	}
 	// For LAN devices, use the mDNS hostname (matches what pickDeviceForDefault returns).
 	if entry.mergedDevice != nil && entry.mergedDevice.LAN != nil {
 		addr := entry.mergedDevice.LAN.Hostname
@@ -3839,6 +3842,13 @@ func mergePickerItem(existing *tui.PickerItem, incoming tui.PickerItem) {
 
 	md := e.mergedDevice
 	nd := n.mergedDevice
+	if nd.Mesh != nil {
+		md.Mesh = nd.Mesh
+	}
+	if md.PrincipalURI == "" {
+		md.PrincipalURI = nd.PrincipalURI
+		md.TenantUUID = nd.TenantUUID
+	}
 
 	if nd.LAN != nil && md.LAN == nil {
 		md.LAN = nd.LAN
@@ -4000,6 +4010,7 @@ func unflashedLiteDedupKey(serialPort string) string {
 func externalProviderPickerItem(prov providers.DeviceProvider, dev *models.ExternalDevice) tui.PickerItem {
 	if prov.Key() == "wendy-lite" {
 		item := tui.PickerItem{
+			IdentityKey:  models.CanonicalDevicePrincipal("spiffe://wendy.sh/tenant/" + dev.ConnectionInfo["tenantId"] + "/device/" + dev.LiteDedupID()),
 			Name:         dev.DisplayName,
 			DedupKey:     dev.LiteDedupID(),
 			Type:         dev.ConnectionType() + " (Lite)",
@@ -4226,6 +4237,17 @@ func pickDeviceWithCloudAuth(ctx context.Context, excludeProviders map[string]bo
 		}
 	}()
 
+	go func() {
+		ch, err := meshDirectoryWatch(discoverCtx)
+		if err != nil {
+			return
+		}
+		for snapshot := range ch {
+			p.Send(devicePickerMeshMsg{snapshot})
+		}
+		p.Send(devicePickerMeshMsg{sessionbroker.OperatorDirectory{Version: 1, State: "unavailable"}})
+	}()
+
 	// USB well-known-address probe: a USB-attached device appears in the picker
 	// even when mDNS is broken on this host — precisely the case the stream
 	// above cannot cover, since it only ever learns of devices that announce
@@ -4366,6 +4388,9 @@ func lanPickerEventMsg(ev discovery.LANEvent) tea.Msg {
 	case discovery.LANCached, discovery.LANOffline:
 		return nil
 	case discovery.LANRetracted:
+		if models.CanonicalDevicePrincipal(ev.Device.PrincipalURI) != "" {
+			return tui.PickerMapMsg{Map: func(item tui.PickerItem) (tui.PickerItem, bool) { return withoutLANPickerItem(item, ev.Device) }}
+		}
 		return lanPickerRemoveMsg(ev.Device)
 	default:
 		probe, insecure := lanRowState(ev)
@@ -4384,6 +4409,7 @@ func lanPickerItem(dev models.LANDevice, insecure bool, probe tui.ProbeState) tu
 		hint = lanProbeHint(&devCopy)
 	}
 	return tui.PickerItem{
+		IdentityKey:   models.CanonicalDevicePrincipal(dev.PrincipalURI),
 		Name:          dev.DisplayName,
 		Type:          "LAN",
 		USB:           dev.USB,
@@ -4405,6 +4431,7 @@ func lanPickerItem(dev models.LANDevice, insecure bool, probe tui.ProbeState) tu
 			OSVersion:       dev.OSVersion,
 			CPUArchitecture: dev.CPUArchitecture,
 			LAN:             &devCopy,
+			PrincipalURI:    dev.PrincipalURI, TenantUUID: dev.TenantUUID,
 		}},
 	}
 }
@@ -4431,6 +4458,10 @@ func connectLocalPickerChoice(ctx context.Context, sel *tui.PickerItem, suppress
 	// Merged LAN/Bluetooth/External device — prefer LAN (gRPC), fall back to BLE/External.
 	if entry.mergedDevice != nil {
 		d := entry.mergedDevice
+		if d.Mesh != nil && d.LAN == nil && len(d.Externals) == 0 {
+			picked, _, err := connectNamedDeviceSelector(ctx, d.Mesh.Selector, suppressUpdateCheck)
+			return picked, err
+		}
 		if d.LAN != nil {
 			addr, _, _, err := resolveLANAgentVersion(ctx, *d.LAN)
 			if err != nil {
