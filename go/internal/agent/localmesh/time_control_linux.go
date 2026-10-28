@@ -4,8 +4,9 @@ package localmesh
 
 import (
 	"context"
-	"github.com/wendylabsinc/wendy/go/internal/shared/tsarelay"
 	"time"
+
+	"github.com/wendylabsinc/wendy/go/internal/shared/tsarelay"
 )
 
 type timestampReply struct {

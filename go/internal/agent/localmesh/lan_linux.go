@@ -303,7 +303,7 @@ func runLANInterface(parent context.Context, cfg LANConfig, selected lanInterfac
 		timeDone <- nil
 	}
 	go func() {
-		err := runNetTLSListener(ctx, cfg.Node, tcp, selected.cost, claims.policy, strconv.Itoa(int(selected.cost)))
+		err := runNetTLSListener(WithCarrier(ctx, selected.transport), cfg.Node, tcp, selected.cost, claims.policy, strconv.Itoa(int(selected.cost)))
 		tlsDone <- err
 		cancel()
 	}()
