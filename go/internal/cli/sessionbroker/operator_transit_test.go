@@ -10,6 +10,7 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/tls"
+	"crypto/x509"
 	"io"
 	"net"
 	"path/filepath"
@@ -17,7 +18,7 @@ import (
 	"testing"
 	"time"
 
-	"crypto/x509"
+	"github.com/wendylabsinc/WendyOS/go/babel"
 	"github.com/wendylabsinc/wendy/go/internal/agent/localmesh"
 	"github.com/wendylabsinc/wendy/go/internal/cli/netmesh"
 	"github.com/wendylabsinc/wendy/go/internal/cli/netmesh/carriers"
@@ -122,7 +123,13 @@ func (f *brokerTransitFixture) source(ctx context.Context, emit func([]carriers.
 func (f *brokerTransitFixture) roundTrip(t *testing.T) {
 	t.Helper()
 	if f.connection == nil {
-		until := time.NewTimer(8 * time.Second)
+		// A new framed link can send its initial IHU before receiving a Hello,
+		// advertising Infinity until the next IHU at 2 * DefaultHelloInterval.
+		// Allow that full cycle plus one Hello interval for attachment, triggered
+		// route propagation and race-detector scheduling; do not race the 8s IHU.
+		const convergenceTimeout = 3 * babel.DefaultHelloInterval
+		started := time.Now()
+		until := time.NewTimer(convergenceTimeout)
 		defer until.Stop()
 		for {
 			ready := false
@@ -132,13 +139,18 @@ func (f *brokerTransitFixture) roundTrip(t *testing.T) {
 				}
 			}
 			if ready {
+				t.Logf("broker transit route ready after %s (budget %s)", time.Since(started), convergenceTimeout)
 				break
 			}
 			select {
 			case <-f.ctx.Done():
 				t.Fatal(f.ctx.Err())
 			case <-until.C:
-				t.Fatal("broker did not become the remote routers' transit path")
+				for i, node := range f.nodes {
+					snapshot := node.Snapshot()
+					t.Logf("remote node %d: self=%s peers=%d routes=%+v forwarding=%+v", i, snapshot.Self.Principal(), snapshot.Peers, snapshot.Routes, snapshot.ForwardingRoutes)
+				}
+				t.Fatalf("broker did not become the remote routers' transit path within %s", convergenceTimeout)
 			case <-time.After(20 * time.Millisecond):
 			}
 		}
