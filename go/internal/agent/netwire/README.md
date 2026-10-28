@@ -2,9 +2,9 @@
 
 This package supplies the canonical CBOR codec, bounded extensible-artifact
 decoder, SHA-256 text/byte conversion and semantic field-key lookup. It is a
-standalone foundation: it does not change existing transports or implement the
-manifest, carrier, Lite, or WASM integrations described below. Those layers must
-adopt this wire contract together.
+shared codec used by manifests, carriers and Lite integrations. It does not own
+network connections or application lifecycles; their callers apply this wire
+contract and the message-specific validation described below.
 
 `Marshal` emits canonical CBOR for ordinary Go values. Schema structs must declare
 their compact names with `cbor` tags, and dynamically built maps must call `Key`
@@ -17,10 +17,11 @@ null restrictions and version rules, and supply message-specific byte bounds.
 envelope, so callers must retain and validate foreign signed bytes rather than
 expecting `Marshal` to normalize them.
 
-This prototype format is a breaking change. Update peers together: there is no
+This format is a breaking change. Update peers together: there is no
 JSON/base64 fallback, old service-catalogue protocol or compatibility decoder.
-Carrier ALPNs remain `wendy-local-mesh-ble/2`, `wendy-net-endpoint/2` and
-`wendy-net-router/3`. Application TLS is independent of carrier TLS.
+Device carriers use `wendy-local-mesh-ble/2` for reliable TLS streams and
+`wendy-net-router/3` for QUIC. The former `wendy-net-endpoint/2` leaf protocol is
+removed. Application TLS is independent of carrier TLS.
 
 The wire uses definite CBOR maps, arrays, text, raw byte strings, integers and
 booleans. Defined map fields have single-letter names; no positional tuples.
