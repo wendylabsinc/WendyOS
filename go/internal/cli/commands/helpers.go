@@ -3842,6 +3842,12 @@ func mergePickerItem(existing *tui.PickerItem, incoming tui.PickerItem) {
 
 	md := e.mergedDevice
 	nd := n.mergedDevice
+	// A physical row can precede the probe that learns its enrolled identity.
+	// Retain that identity on the picker row too, so later mesh observations
+	// join the existing path rather than adding another selectable device.
+	if existing.IdentityKey == "" {
+		existing.IdentityKey = incoming.IdentityKey
+	}
 	if nd.Mesh != nil {
 		md.Mesh = nd.Mesh
 	}

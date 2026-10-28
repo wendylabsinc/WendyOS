@@ -115,3 +115,30 @@ func TestMeshNearbyNameAndDefaultUseCanonicalSelector(t *testing.T) {
 		t.Fatal("normal duplicate name needs explicit selection", matched, err)
 	}
 }
+
+func TestMeshNearbyPickerJoinsIdentityLearnedAfterPhysicalSighting(t *testing.T) {
+	snapshot := nearbyMeshFixture()
+	mesh := snapshot.Devices[0]
+	lan := models.LANDevice{DisplayName: "physical", Hostname: "physical.local"}
+	picker := tui.NewPicker()
+	picker.MergeItem = mergePickerItem
+	m := newDevicePickerModel(context.Background(), picker, nil, 0, true, devicePickerLocalTab)
+	m, _ = m.updateLocal(tui.PickerAddMsg{Items: []tui.PickerItem{lanPickerItem(lan, false, tui.ProbePending)}})
+	// A normal authenticated probe enriches an existing mDNS row after its
+	// first sighting; the later mesh path must join that same device.
+	lan.PrincipalURI, lan.TenantUUID, lan.IsMTLS = mesh.Principal, mesh.Tenant, true
+	m, _ = m.updateLocal(tui.PickerAddMsg{Items: []tui.PickerItem{lanPickerItem(lan, false, tui.ProbeOK)}})
+	m, _ = reconcileMeshPicker(m, snapshot)
+	count := 0
+	_, _ = m.local.Update(tui.PickerMapMsg{Map: func(item tui.PickerItem) (tui.PickerItem, bool) {
+		count++
+		d := item.Value.(*pickerEntry).mergedDevice
+		if item.IdentityKey != mesh.Principal || d.LAN == nil || d.Mesh == nil {
+			t.Errorf("authenticated physical and mesh paths were not joined: %#v, %#v", item, d)
+		}
+		return item, true
+	}})
+	if count != 1 {
+		t.Fatalf("device acquired %d picker rows after identity enrichment; want 1", count)
+	}
+}
