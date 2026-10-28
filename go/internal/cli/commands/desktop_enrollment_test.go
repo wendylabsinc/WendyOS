@@ -120,7 +120,7 @@ func TestDesktopEnrollmentUsesChosenOrganizationAndVerifies(t *testing.T) {
 				return nil
 			}
 			conn := &grpcclient.AgentConnection{Conn: client, Host: "sim.local"}
-			err = DesktopEnrollDevice(context.Background(), conn, "chosen", testOperatorTenant, "test-device")
+			_, err = DesktopEnrollDevice(context.Background(), conn, "chosen", testOperatorTenant, "test-device")
 			if (err == nil) != (mode == "success") {
 				t.Fatalf("enroll = %v", err)
 			}
@@ -149,7 +149,7 @@ func TestDesktopEnrollmentRejectsStaleOrganizationChoice(t *testing.T) {
 	auth.Name = "chosen"
 	seedConfig(t, &config.Config{Auth: []config.AuthConfig{*auth}})
 	for _, choice := range [][2]string{{"", ""}, {"removed", testOperatorTenant}, {"chosen", "different-tenant"}} {
-		if err := DesktopEnrollDevice(context.Background(), nil, choice[0], choice[1], "test"); err == nil {
+		if _, err := DesktopEnrollDevice(context.Background(), nil, choice[0], choice[1], "test"); err == nil {
 			t.Fatal("accepted stale choice")
 		}
 	}

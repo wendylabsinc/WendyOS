@@ -1,5 +1,39 @@
 import SwiftUI
 
+enum DeviceEnrollmentForm {
+    static func suggestedName(_ displayName: String) -> String {
+        let folded = displayName.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: Locale(identifier: "en_US_POSIX")).lowercased()
+        var name = folded.components(separatedBy: CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyz0123456789").inverted)
+            .filter { !$0.isEmpty }.joined(separator: "-")
+        if name.isEmpty { name = "wendy-device" }
+        if let first = name.first, first.isNumber { name = "device-" + name }
+        return String(name.prefix(63)).trimmingCharacters(in: CharacterSet(charactersIn: "-"))
+    }
+
+    static func validName(_ name: String) -> Bool {
+        name.range(of: "^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$", options: .regularExpression) == name.startIndex..<name.endIndex
+    }
+
+    // The Go bridge preserves error text, not gRPC status. Only these explicit
+    // pre-mint refusals prove that retrying cannot spend a second credential.
+    static func canRetryEnrollment(_ message: String) -> Bool {
+        let prefix = "Cloud refused this enrollment before minting anything, so no credential was spent: rpc error: code = "
+        return ["AlreadyExists", "InvalidArgument"].contains {
+            message.hasPrefix(prefix + $0 + " desc = ")
+        }
+    }
+
+    // These failures come from the device after Cloud has reserved the name.
+    // Connecting Wi-Fi must not start another Cloud registration.
+    static func needsWiFiRecovery(_ message: String) -> Bool {
+        let message = message.lowercased()
+        return message.contains("device pki enrollment failed") && [
+            "network is unreachable", "no route to host", "network is down",
+            "temporary failure in name resolution", "no such host", "i/o timeout"
+        ].contains(where: message.contains)
+    }
+}
+
 struct DeviceEnrollmentSnapshot {
     let enrolled: Bool
     let organizationID, organizationName: String
@@ -138,6 +172,11 @@ private struct DeviceEnrollmentSheet: View {
     @State private var completed = false
     @State private var error: String?
     @State private var canRetry = true
+    @State private var showingWiFi = false
+    @State private var resumeAfterWiFi = false
+    @State private var wifiNetworks: [DeviceWiFiNetwork] = []
+    @State private var notice: String?
+    private var trimmedName: String { name.trimmingCharacters(in: .whitespacesAndNewlines) }
     private var choice: EnrollmentOrganization? { organizations.first { $0.id == selected } }
 
     var body: some View {
@@ -165,13 +204,24 @@ private struct DeviceEnrollmentSheet: View {
                                 Text("Choose an organization").tag("")
                                 ForEach(organizations) { Text($0.title).tag($0.id) }
                             }
-                            TextField("Device name", text: $name)
+                            TextField("Device name", text: $name).autocorrectionDisabled()
+                                #if os(iOS)
+                                .textInputAutocapitalization(.never)
+                                #endif
+                            if !DeviceEnrollmentForm.validName(trimmedName) {
+                                Text("Use 1–63 lowercase letters, numbers or hyphens. Start with a letter and end with a letter or number.")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
                         }
                         Button(organizations.isEmpty ? "Sign in…" : "Sign in to another organization…") { signIn(); dismiss() }
                         Button("Refresh organizations") { actions.submit { await loadOrganizations() } }
-                        if enrolling { ProgressView("Enrolling device…") }
+                        if enrolling { ProgressView("Preparing enrollment…") }
+                        if let notice { Text(notice).foregroundStyle(.secondary) }
+                        if !canRetry && notice != nil {
+                            Button("Connect to Wi-Fi…") { showingWiFi = true }
+                        }
                         if let error { Text(error).foregroundStyle(.red).textSelection(.enabled) }
-                        if !canRetry { Text("Close this sheet and check the device's enrollment status before trying again.").foregroundStyle(.secondary) }
+                        if !canRetry && notice == nil { Text("Close this sheet and check the device's enrollment status before trying again.").foregroundStyle(.secondary) }
                     }
                 }.disabled(enrolling)
             }
@@ -184,7 +234,7 @@ private struct DeviceEnrollmentSheet: View {
                 if !lite && !completed {
                     ToolbarItem(placement: .confirmationAction) {
                         Button("Enroll") { actions.submit { await enroll() } }
-                            .disabled(loading || enrolling || choice == nil || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !canRetry || app.deviceSession != session)
+                            .disabled(loading || enrolling || choice == nil || !DeviceEnrollmentForm.validName(trimmedName) || !canRetry || app.deviceSession != session)
                     }
                 }
             }
@@ -193,7 +243,24 @@ private struct DeviceEnrollmentSheet: View {
         .frame(width: 520, height: 440)
         #endif
         .interactiveDismissDisabled(enrolling)
-        .task { name = deviceName; if !lite { await loadOrganizations() } }
+        .onChange(of: name) { _, _ in if canRetry { error = nil } }
+        .onChange(of: selected) { _, _ in if canRetry { error = nil } }
+        .sheet(isPresented: $showingWiFi, onDismiss: {
+            if resumeAfterWiFi {
+                resumeAfterWiFi = false
+                actions.submit { await enroll(checkWiFi: false) }
+            }
+        }) {
+            WiFiJoinSheet(session: session, deviceName: deviceName, network: nil,
+                          networks: wifiNetworks,
+                          explanation: canRetry
+                            ? "Connect this device to the internet before enrolling in Wendy Cloud. If it already has internet through Ethernet or another connection, you can continue."
+                            : "The device could not reach Wendy Cloud. Connect it to Wi-Fi, then check its enrollment status. Its Cloud name has already been reserved.",
+                          skip: canRetry ? { resumeAfterWiFi = true; showingWiFi = false } : nil) {
+                resumeAfterWiFi = canRetry
+            }
+        }
+        .task { name = DeviceEnrollmentForm.suggestedName(deviceName); if !lite { await loadOrganizations() } }
     }
     private func loadOrganizations() async {
         loading = true; error = nil
@@ -203,17 +270,38 @@ private struct DeviceEnrollmentSheet: View {
             if !organizations.contains(where: { $0.id == selected }) { selected = "" }
         } catch { if !Task.isCancelled { self.error = error.localizedDescription } }
     }
-    private func enroll() async {
-        guard let choice, !enrolling, app.deviceSession == session else { return }
+    private func enroll(checkWiFi: Bool = true) async {
+        guard let choice, !enrolling, canRetry, DeviceEnrollmentForm.validName(trimmedName), app.deviceSession == session else { return }
         enrolling = true; error = nil
         defer { enrolling = false }
+        if checkWiFi {
+            do {
+                let settings = try await GoClient.shared.networkSettings(session: session)
+                guard !Task.isCancelled, app.deviceSession == session else { return }
+                wifiNetworks = settings.networks
+                if settings.wifiAvailable && settings.wifiError.isEmpty && !settings.wifiConnected {
+                    showingWiFi = true
+                    return
+                }
+            } catch {
+                if !Task.isCancelled { self.error = error.localizedDescription }
+                return
+            }
+        }
+        guard !Task.isCancelled, app.deviceSession == session else { return }
         do {
-            try await GoClient.shared.enrollDevice(session: session, organization: choice, name: name.trimmingCharacters(in: .whitespacesAndNewlines))
+            try await GoClient.shared.enrollDevice(session: session, organization: choice, name: trimmedName)
             completed = true
         } catch {
-            if !Task.isCancelled { self.error = error.localizedDescription }
-            // A failed reply may follow a successful cloud mutation. Require a fresh status read.
-            canRetry = false
+            // Unknown outcomes remain blocked; a confirmed pre-mint refusal is safe to retry.
+            canRetry = DeviceEnrollmentForm.canRetryEnrollment(error.localizedDescription)
+            guard !Task.isCancelled else { return }
+            if DeviceEnrollmentForm.needsWiFiRecovery(error.localizedDescription) {
+                notice = "Connect the device to the internet, then close this sheet and check enrollment again. The device name is already reserved in Wendy Cloud."
+                showingWiFi = true
+            } else {
+                self.error = error.localizedDescription
+            }
         }
     }
 }

@@ -372,15 +372,22 @@ struct DeviceSettingsView: View {
     }
 }
 
-private struct WiFiJoinSheet: View {
+struct WiFiJoinSheet: View {
     @State private var actions = AsyncActions()
     let session: UInt64
     let deviceName: String
     let network: DeviceWiFiNetwork?
+    var networks: [DeviceWiFiNetwork] = []
+    var explanation: String? = nil
+    var skip: (() -> Void)? = nil
     let joined: () -> Void
     @Environment(\.dismiss) private var dismiss
     @State private var ssid = ""
     @State private var password = ""
+    @State private var selectedNetworkID = ""
+    private var selectedNetwork: DeviceWiFiNetwork? {
+        network ?? networks.first { $0.id == selectedNetworkID }
+    }
     @State private var security: Int32 = 4
     @State private var hidden = false
     @State private var saving = false
@@ -400,25 +407,40 @@ private struct WiFiJoinSheet: View {
                     .disabled(ssid.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || security == 6)
             }.padding().disabled(saving)
             Form {
+                if let explanation { Text(explanation).foregroundStyle(.secondary) }
                 Section {
+                    if network == nil && !networks.isEmpty {
+                        Picker("Network", selection: $selectedNetworkID) {
+                            Text("Other network…").tag("")
+                            ForEach(networks) { Text($0.ssid).tag($0.id) }
+                        }
+                        .onChange(of: selectedNetworkID) { _, _ in
+                            ssid = selectedNetwork?.ssid ?? ""
+                            security = selectedNetwork?.security ?? 4
+                            password = ""
+                            hidden = false
+                        }
+                    }
                     TextField("Network name", text: $ssid).autocorrectionDisabled()
                         #if os(iOS)
                         .textInputAutocapitalization(.never)
                         #endif
-                    if network == nil {
+                        .disabled(selectedNetwork != nil)
+                    if selectedNetwork == nil {
                         Picker("Security", selection: $security) {
                             Text("Open").tag(Int32(1)); Text("WPA2").tag(Int32(4)); Text("WPA3").tag(Int32(5))
                         }
                         Toggle("Hidden network", isOn: $hidden)
-                    } else { LabeledContent("Security", value: network?.securityLabel ?? "") }
-                    if security != 1 && security != 6 { SecureField(network?.known == true ? "Password (leave blank to use saved)" : "Password", text: $password) }
+                    } else { LabeledContent("Security", value: selectedNetwork?.securityLabel ?? "") }
+                    if security != 1 && security != 6 { SecureField(selectedNetwork?.known == true ? "Password (leave blank to use saved)" : "Password", text: $password) }
                     if security == 6 { Text("Enterprise authentication is not supported by this connection form.").foregroundStyle(.secondary) }
                 } footer: { Text("Connects \(deviceName) to this network. The device may disconnect from Wendy while switching networks.") }
                 if let error { FailureNote(message: error) }
                 if saving { ProgressView("Connecting…") }
+                if let skip { Button("Continue without Wi-Fi") { password = ""; skip() } }
             }.formStyle(.grouped).disabled(saving)
         }
-        .desktopFrame(width: 460, height: 380)
+        .desktopFrame(width: 460, height: explanation == nil ? 380 : 520)
         .interactiveDismissDisabled(saving)
         .onAppear { ssid = network?.ssid ?? ""; security = network?.security ?? 4 }
         .onDisappear { password = "" }

@@ -6,6 +6,7 @@ import (
 	"net"
 	"time"
 
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/peer"
 )
@@ -59,7 +60,13 @@ func presencePreferredSource(remote *net.TCPAddr) (net.IP, error) {
 func (a *Agent) presencePathReachable(ctx context.Context, endpoint string) bool {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	c, err := a.Verifier.dialRelay(endpoint)
+	// A fallback connection only proves the current alternative still works.
+	// Probe the system route alone before moving presence back to it.
+	dial := a.Verifier.dialRelay
+	if a.Verifier.RelayDial == nil && a.Verifier.relayDial == nil {
+		dial = func(endpoint string) (*grpc.ClientConn, error) { return dialBroker(endpoint, false) }
+	}
+	c, err := dial(endpoint)
 	if err != nil {
 		return false
 	}

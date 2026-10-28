@@ -110,7 +110,7 @@ struct NearbySetupView: View {
                     Section {
                         Text("Keep your unregistered Wendy device nearby and powered on.").foregroundStyle(.secondary)
                         ForEach(devices) { device in
-                            Button { actions.submit { name = device.title.lowercased(); await connect(device) } } label: {
+                            Button { actions.submit { name = DeviceEnrollmentForm.suggestedName(device.title); await connect(device) } } label: {
                                 Label(device.title, systemImage: "server.rack")
                             }.disabled(busy)
                         }

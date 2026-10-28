@@ -47,6 +47,10 @@ type SiteRobot struct {
 	frame                           string
 	floorY                          float64
 	route                           []sitenav.Point
+	routeOrigin                     sitenav.Point
+	forwardOrigin                   *sitenav.Pose
+	lastRouteRequest                *siteRouteRequest
+	navigationCommands              []siteNavigationCommand
 	preview                         []sitenav.Point
 	goal                            sitenav.Point
 	moving                          bool
@@ -292,6 +296,7 @@ func (r *SiteRobot) stopLocked() error {
 	// Persist diagnostics only after the stop request has finished.
 	defer r.flushCommandFaults()
 	r.moving = false
+	r.forwardOrigin = nil
 	if r.lookTurn != nil && r.lookState != 2 {
 		r.lookState = 3
 	}
@@ -331,6 +336,9 @@ func (r *SiteRobot) stepLocked(now time.Time) {
 		return
 	}
 	p := r.observed.Pose.Position
+	if !r.checkForwardProgressLocked() {
+		return
+	}
 	if p.Distance(r.alignment.Origin) > sitenav.MaxDistance {
 		r.message = "Align Go2 again before moving farther."
 		r.stopLocked()
@@ -341,8 +349,8 @@ func (r *SiteRobot) stepLocked(now time.Time) {
 		r.stopLocked()
 		return
 	}
-	for len(r.route) > 1 && p.Distance(r.route[0]) < .04 {
-		r.route = r.route[1:]
+	if !r.advanceRouteLocked() {
+		return
 	}
 	if len(r.route) == 0 {
 		r.message = "Route unavailable."
@@ -375,6 +383,8 @@ func (r *SiteRobot) stepLocked(now time.Time) {
 			return
 		}
 		r.route = path[1:]
+		r.routeOrigin = p
+		r.forwardOrigin = nil
 		// Planning can outlast a sensor or UI lease. Stay stopped until the
 		// next tick rechecks freshness before issuing another MOVE.
 		return
@@ -399,6 +409,16 @@ func (r *SiteRobot) stepLocked(now time.Time) {
 			r.stopLocked()
 			return
 		}
+	}
+	if forward > 0 && r.forwardOrigin == nil {
+		pose := r.observed.Pose
+		r.forwardOrigin = &pose
+	} else if turn != 0 {
+		r.forwardOrigin = nil
+	}
+	r.navigationCommands = append(r.navigationCommands, siteNavigationCommand{At: now, Pose: r.observed.Pose, Forward: forward, Yaw: turn})
+	if len(r.navigationCommands) > 100 {
+		r.navigationCommands = r.navigationCommands[len(r.navigationCommands)-100:]
 	}
 	if err := r.command(pb.UnitreeCommand_UNITREE_COMMAND_MOVE, forward, turn); err != nil {
 		r.message = siteCommandFailure("Movement command", err)
@@ -477,7 +497,11 @@ func (r *SiteRobot) Destination(sequence uint64, frame string, x, z float64, mov
 		r.departure = nil
 		return err
 	}
+	r.lastRouteRequest = &siteRouteRequest{At: time.Now(), Pose: r.observed.Pose, Alignment: r.alignment, SiteTarget: p, OdometryTarget: goal, Route: append([]sitenav.Point(nil), path...), Move: move}
+	r.navigationCommands = nil
 	r.preview = path
+	r.routeOrigin = r.observed.Pose.Position
+	r.forwardOrigin = nil
 	r.goal = goal
 	r.message = "Route ready"
 	if move {

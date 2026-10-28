@@ -525,3 +525,59 @@ extension DesktopTests {
         XCTAssertTrue(model.selectedDeviceReady)
     }
 }
+
+final class DeviceEnrollmentFormTests: XCTestCase {
+    func testNameRejectionAllowsAnEditedNameToBeRetried() {
+        let prefix = "Cloud refused this enrollment before minting anything, so no credential was spent: rpc error: code = "
+        XCTAssertTrue(DeviceEnrollmentForm.canRetryEnrollment(prefix + "AlreadyExists desc = another device in this organization is already named ccr2"))
+        XCTAssertTrue(DeviceEnrollmentForm.canRetryEnrollment(prefix + "InvalidArgument desc = invalid device name"))
+    }
+
+    func testUncertainEnrollmentStillCannotBeRetried() {
+        for message in [
+            "creating PKI enrollment credential: rpc error: code = DeadlineExceeded desc = timed out",
+            "rpc error: code = AlreadyExists desc = another device is named ccr2",
+            "Cloud registered asset asset-id, but device PKI enrollment failed (the device name is now reserved in Cloud): network is unreachable",
+            "enrollment was sent, but could not be verified; reconnect and check its status",
+            "Cloud refused this enrollment before minting anything, so no credential was spent: rpc error: code = Unavailable desc = connection closed",
+        ] {
+            XCTAssertFalse(DeviceEnrollmentForm.canRetryEnrollment(message), message)
+        }
+    }
+
+    func testSuggestedNamesAreValidCloudHostnames() {
+        let cases = [
+            ("Agile Raven", "agile-raven"),
+            ("  Agile   Raven  ", "agile-raven"),
+            ("RAVEN-2", "raven-2"),
+            ("123 Raven", "device-123-raven"),
+            ("Café / Pi", "cafe-pi"),
+            (" 🐦 ", "wendy-device"),
+            ("", "wendy-device"),
+            (String(repeating: "A", count: 62) + " Raven", String(repeating: "a", count: 62)),
+            (String(repeating: "A", count: 80), String(repeating: "a", count: 63)),
+        ]
+        for (input, expected) in cases {
+            let name = DeviceEnrollmentForm.suggestedName(input)
+            XCTAssertEqual(name, expected, input)
+            XCTAssertTrue(DeviceEnrollmentForm.validName(name), name)
+        }
+    }
+
+    func testInvalidEditedNamesCannotBeSubmitted() {
+        for name in ["", "Agile Raven", "agile raven", "1raven", "raven-", "raven.local", "café", "raven\n", String(repeating: "a", count: 64)] {
+            XCTAssertFalse(DeviceEnrollmentForm.validName(name), name)
+        }
+        for name in ["a", "agile-raven", "raven-2", String(repeating: "a", count: 63)] {
+            XCTAssertTrue(DeviceEnrollmentForm.validName(name), name)
+        }
+    }
+
+    func testDeviceNetworkFailureOffersWiFiRecovery() {
+        let prefix = "Cloud registered asset asset-id, but device PKI enrollment failed (the device name is now reserved in Cloud): "
+        XCTAssertTrue(DeviceEnrollmentForm.needsWiFiRecovery(prefix + "rpc error: code = Internal desc = enrolling with PKI: registering ACME account: lookup acme.pki.wendy.dev on 9.9.9.9:53: dial udp 9.9.9.9:53: connect: network is unreachable"))
+        XCTAssertTrue(DeviceEnrollmentForm.needsWiFiRecovery(prefix + "dial tcp: no route to host"))
+        XCTAssertFalse(DeviceEnrollmentForm.needsWiFiRecovery(prefix + "invalid EAB credentials"))
+        XCTAssertFalse(DeviceEnrollmentForm.needsWiFiRecovery("connecting to cloud: network is unreachable"))
+    }
+}

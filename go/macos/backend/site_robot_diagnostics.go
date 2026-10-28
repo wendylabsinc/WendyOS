@@ -73,6 +73,21 @@ func (r *SiteRobot) recordObservationFault(topic string, err error, received, no
 	}
 }
 
+type siteRouteRequest struct {
+	At                         time.Time
+	Pose                       sitenav.Pose
+	Alignment                  sitenav.Alignment
+	SiteTarget, OdometryTarget sitenav.Point // SiteTarget uses X, -Z.
+	Route                      []sitenav.Point
+	Move                       bool
+}
+
+type siteNavigationCommand struct {
+	At           time.Time
+	Pose         sitenav.Pose
+	Forward, Yaw float64
+}
+
 // Keep one bounded local scan around the body to explain false turn blockers.
 // This does not initiate movement or change the observed collision grid.
 func (r *SiteRobot) recordNavigationEvidence(now time.Time) {
@@ -101,7 +116,11 @@ func (r *SiteRobot) recordNavigationEvidence(now time.Time) {
 		AllowUnobservedFloor bool
 		Cells                []cellEvidence
 		Samples              []sitenav.Vertex
-	}{now, p, r.observed.FloorHeight, r.allowUnobservedFloor, cells, r.observed.LocalNavigationSamples})
+		LastRouteRequest     *siteRouteRequest
+		Commands             []siteNavigationCommand
+		Moving               bool
+		Message              string
+	}{now, p, r.observed.FloorHeight, r.allowUnobservedFloor, cells, r.observed.LocalNavigationSamples, r.lastRouteRequest, r.navigationCommands, r.moving, r.message})
 	if err != nil {
 		return
 	}

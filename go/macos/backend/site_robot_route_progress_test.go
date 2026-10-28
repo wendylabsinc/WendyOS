@@ -52,3 +52,51 @@ func TestDestinationTransformAgreesWithDisplayedNoseInEveryQuadrant(t *testing.T
 		}
 	}
 }
+
+func TestPassedRouteOutsideCorridorAndFinalOvershootStop(t *testing.T) {
+	for _, kind := range []string{"missed-corner", "large-overshoot", "final-target"} {
+		t.Run(kind, func(t *testing.T) {
+			r, commands := readySiteRobot()
+			if err := r.Destination(1, "site/revision", 2, 0, true); err != nil {
+				t.Fatal(err)
+			}
+			r.route = []sitenav.Point{{X: .5}, {X: 2}}
+			r.observed.Pose.Position = sitenav.Point{X: .57, Y: .09}
+			if kind == "large-overshoot" {
+				r.observed.Pose.Position = sitenav.Point{X: .8}
+			}
+			if kind == "final-target" {
+				r.route = []sitenav.Point{{X: 2}}
+				r.observed.Pose.Position = sitenav.Point{X: 2.12}
+			}
+			r.stepLocked(time.Now())
+			c := commands.commands[len(commands.commands)-1]
+			if r.moving || c.Command != pb.UnitreeCommand_UNITREE_COMMAND_STOP {
+				t.Fatalf("unsafe recovery: %s, %v", r.message, c)
+			}
+		})
+	}
+}
+
+func TestOppositeForwardOdometryStopsWithoutChangingAlignment(t *testing.T) {
+	for _, yaw := range []float64{0, math.Pi / 2, math.Pi, -math.Pi / 2} {
+		r, commands := readySiteRobot()
+		for x := -50; x <= 50; x++ {
+			for y := -50; y <= 50; y++ {
+				r.observed.Grid.Floor[sitenav.Cell{X: x, Y: y}] = true
+			}
+		}
+		r.observed.Pose.Yaw = yaw
+		if err := r.Destination(1, "site/revision", 2*math.Cos(yaw), -2*math.Sin(yaw), true); err != nil {
+			t.Fatal(err)
+		}
+		alignment := r.alignment
+		r.stepLocked(time.Now())
+		r.observed.Pose.Position = sitenav.Point{X: -.09 * math.Cos(yaw), Y: -.09 * math.Sin(yaw)}
+		r.stepLocked(time.Now())
+		c := commands.commands[len(commands.commands)-1]
+		if r.moving || c.Command != pb.UnitreeCommand_UNITREE_COMMAND_STOP || r.alignment != alignment {
+			t.Fatalf("backwards feedback was not stopped: %s %v", r.message, c)
+		}
+	}
+}

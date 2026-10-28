@@ -58,5 +58,13 @@ func (b *Backend) EnrollDevice(session uint64, account, organization, name strin
 	if err != nil {
 		return err
 	}
-	return commands.DesktopEnrollDevice(ctx, conn, account, organization, name)
+	next, err := commands.DesktopEnrollDevice(ctx, conn, account, organization, name)
+	if err != nil {
+		return err
+	}
+	if next != conn {
+		b.conn = next
+		conn.Close()
+	}
+	return nil
 }
