@@ -101,7 +101,7 @@ func TestProjectionGoodbyesAndScopedAnswer(t *testing.T) {
 	catalog, _ := f.newCatalog(t, p533, "default", nil, nil)
 	scope := AppScope{AppID: "com.wendy.test", AppIP: net.IPv4(10, 77, 0, 2), BridgeIndex: 7,
 		AllowedTypes: []string{"_http._tcp"}, Ports: map[uint16]uint16{8080: 18080}}
-	bridge, err := NewMDNSBridge(scope, catalog, testVIPs(t), func(_ string, _ Record) bool { return true }, func(SignedRecord) {}, emptyBridgeRouteView)
+	bridge, err := NewMDNSBridge(scope, catalog, testVIPs(t), func(_ string, _ Record) bool { return true }, func(Record) {}, emptyBridgeRouteView)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,13 +155,13 @@ func TestRemoteProjectionFollowsSignedRouteWithoutChangingService(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := local.Accept(w, f.now); err != nil {
+	if _, err := local.acceptTestRecord(w, f.now); err != nil {
 		t.Fatal(err)
 	}
 	scope := AppScope{AppID: "com.wendy.browse", AppIP: net.IPv4(10, 77, 0, 2), BridgeIndex: 7}
 	var view localmesh.NodeSnapshot
 	bridge, err := NewMDNSBridge(scope, local, testVIPs(t), func(string, Record) bool { return true },
-		func(SignedRecord) {}, func() localmesh.NodeSnapshot { return view })
+		func(Record) {}, func() localmesh.NodeSnapshot { return view })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -239,7 +239,7 @@ func TestBridgeLearnsBoundedServiceTypes(t *testing.T) {
 	catalog, _ := f.newCatalog(t, p533, "default", nil, nil)
 	bridge, err := NewMDNSBridge(AppScope{AppID: "com.wendy.test", AppIP: net.IPv4(10, 77, 0, 2),
 		BridgeIndex: 7, Ports: map[uint16]uint16{8080: 18080}}, catalog, testVIPs(t),
-		func(string, Record) bool { return true }, func(SignedRecord) {}, emptyBridgeRouteView)
+		func(string, Record) bool { return true }, func(Record) {}, emptyBridgeRouteView)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -269,12 +269,12 @@ func TestAppResponderTakesPrecedenceOverProjectedName(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := local.Accept(w, f.now); err != nil {
+	if _, err := local.acceptTestRecord(w, f.now); err != nil {
 		t.Fatal(err)
 	}
 	scope := AppScope{AppID: "com.wendy.test", AppIP: net.IPv4(10, 77, 0, 2), BridgeIndex: 7,
 		Ports: map[uint16]uint16{8080: 18080}}
-	bridge, err := NewMDNSBridge(scope, local, testVIPs(t), func(_ string, r Record) bool { return r.Key.Device != p533 }, func(SignedRecord) {}, func() localmesh.NodeSnapshot { return bridgeRouteView(t, f.now, p535) })
+	bridge, err := NewMDNSBridge(scope, local, testVIPs(t), func(_ string, r Record) bool { return r.Key.Device != p533 }, func(Record) {}, func() localmesh.NodeSnapshot { return bridgeRouteView(t, f.now, p535) })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -366,7 +366,7 @@ func TestAppResponderTakesPrecedenceOverProjectedName(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := local.Accept(withdraw, f.now.Add(10*time.Second)); err != nil {
+	if _, err := local.acceptTestRecord(withdraw, f.now.Add(10*time.Second)); err != nil {
 		t.Fatal(err)
 	}
 	removed, err := bridge.projection(f.now.Add(10 * time.Second))
@@ -443,7 +443,7 @@ func TestAppClaimLimitSuppressesProjectionUntilClaimsExpire(t *testing.T) {
 	}
 	scope := AppScope{AppID: "com.wendy.test", AppIP: net.IPv4(10, 77, 0, 2), BridgeIndex: 7,
 		Ports: map[uint16]uint16{8080: 18080}}
-	bridge, err := NewMDNSBridge(scope, catalog, testVIPs(t), func(string, Record) bool { return true }, func(SignedRecord) {}, emptyBridgeRouteView)
+	bridge, err := NewMDNSBridge(scope, catalog, testVIPs(t), func(string, Record) bool { return true }, func(Record) {}, emptyBridgeRouteView)
 	if err != nil {
 		t.Fatal(err)
 	}

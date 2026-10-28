@@ -12,26 +12,28 @@ import (
 // fetch hint, never a trust assertion. The full device principal stays the
 // identity-cache key after independent verification of the assembled chain.
 type CertificateChain struct {
-	Principal string   `json:"principal"`
-	Hashes    []string `json:"hashes"`
+	Principal string   `json:"principal" cbor:"p"`
+	Hashes    []string `json:"hashes" cbor:"h"`
 }
 
 type CertificateRequest struct {
-	Hash   string `json:"hash"`
-	Offset int    `json:"offset"`
+	Hash   string `json:"hash" cbor:"h"`
+	Offset int    `json:"offset" cbor:"f"`
 }
 
 type CertificateChunk struct {
-	Hash   string `json:"hash"`
-	Offset int    `json:"offset"`
-	Total  int    `json:"total"`
-	Data   []byte `json:"data"`
+	Hash   string `json:"hash" cbor:"h"`
+	Offset int    `json:"offset" cbor:"f"`
+	Total  int    `json:"total" cbor:"l"`
+	Data   []byte `json:"data" cbor:"d"`
 }
 
 type CertificateMessage struct {
-	Chain   *CertificateChain   `json:"chain,omitempty"`
-	Request *CertificateRequest `json:"request,omitempty"`
-	Chunk   *CertificateChunk   `json:"chunk,omitempty"`
+	Chain   *CertificateChain   `json:"chain,omitempty" cbor:"c,omitempty"`
+	Request *CertificateRequest `json:"request,omitempty" cbor:"r,omitempty"`
+	Chunk   *CertificateChunk   `json:"chunk,omitempty" cbor:"d,omitempty"`
+	// Missing retires only this supplier for the exact requested hash/offset.
+	Missing *CertificateRequest `json:"missing,omitempty" cbor:"m,omitempty"`
 }
 
 // Validate checks the bounded transfer envelope without granting trust.
@@ -55,10 +57,12 @@ func (m CertificateMessage) validate() error {
 			seen[hash] = true
 		}
 	}
-	if q := m.Request; q != nil {
-		fields++
-		if !validCertificateHash(q.Hash) || q.Offset < 0 || q.Offset >= maxCertificateBytes || q.Offset%certificateChunkBytes != 0 {
-			return errors.New("invalid certificate request")
+	for _, q := range []*CertificateRequest{m.Request, m.Missing} {
+		if q != nil {
+			fields++
+			if !validCertificateHash(q.Hash) || q.Offset < 0 || q.Offset >= maxCertificateBytes || q.Offset%certificateChunkBytes != 0 {
+				return errors.New("invalid certificate request")
+			}
 		}
 	}
 	if c := m.Chunk; c != nil {
@@ -67,7 +71,9 @@ func (m CertificateMessage) validate() error {
 			return errors.New("invalid certificate chunk")
 		}
 	}
-	if fields != 1 {
+	// An unknown optional certificate control decodes to zero known fields.
+	// Consume it without interpreting it as any known operation.
+	if fields > 1 {
 		return errors.New("ambiguous certificate message")
 	}
 	return nil
@@ -100,6 +106,39 @@ func (e *CertificateExchange) Close() {
 	clear(e.pending)
 	e.waiting = nil
 	e.cache.parts.release(e.owner)
+}
+
+// forgetPrincipal cancels only this supplier's exact descriptor. A late
+// identity-missing can follow a descriptor/partial body already in flight.
+// Release its partial claim now so another supplier need not await timeout.
+func (e *CertificateExchange) forgetPrincipal(principal string, now time.Time) {
+	pending, ok := e.pending[principal]
+	if !ok {
+		return
+	}
+	delete(e.pending, principal)
+	if e.waiting == nil {
+		return
+	}
+	needed := false
+	for _, hash := range pending.chain.Hashes {
+		if hash == e.waiting.Hash {
+			needed = true
+			break
+		}
+	}
+	if !needed {
+		return
+	}
+	for _, other := range e.pending {
+		for _, hash := range other.chain.Hashes {
+			if hash == e.waiting.Hash {
+				return
+			}
+		}
+	}
+	e.cache.parts.unavailable(e.waiting.Hash, e.owner, now)
+	e.waiting = nil
 }
 
 // Pending reports bounded chain assembly owned by this protocol actor.
@@ -168,7 +207,10 @@ func DescribeCertificates(principal string, chain [][]byte) *CertificateMessage 
 
 // Receive returns only a bounded descriptor/request/chunk response. Completed
 // principals have already passed this cache's unchanged full-chain verifier.
-func (e *CertificateExchange) Receive(m CertificateMessage, now time.Time) (replies []*CertificateMessage, completed []string, err error) {
+func (e *CertificateExchange) Receive(m CertificateMessage, now time.Time, slots ...int) (replies []*CertificateMessage, completed []string, err error) {
+	if len(slots) > 0 && slots[0] < 1 {
+		return nil, nil, ErrControlBackpressure
+	}
 	if e.closed {
 		return nil, nil, errors.New("certificate exchange ended")
 	}
@@ -189,6 +231,17 @@ func (e *CertificateExchange) Receive(m CertificateMessage, now time.Time) (repl
 		if q.Offset < len(data) {
 			end := min(len(data), q.Offset+certificateChunkBytes)
 			replies = append(replies, &CertificateMessage{Chunk: &CertificateChunk{Hash: q.Hash, Offset: q.Offset, Total: len(data), Data: append([]byte(nil), data[q.Offset:end]...)}})
+		} else {
+			copy := *q
+			replies = append(replies, &CertificateMessage{Missing: &copy})
+		}
+	}
+	if m.Missing != nil && e.waiting != nil && *m.Missing == *e.waiting {
+		missing := e.MissingPrincipals(m.Missing)
+		e.cache.parts.unavailable(m.Missing.Hash, e.owner, now)
+		e.waiting = nil
+		for _, principal := range missing {
+			delete(e.pending, principal)
 		}
 	}
 	if c := m.Chunk; c != nil && e.waiting != nil && e.waiting.Hash == c.Hash {
@@ -205,15 +258,26 @@ func (e *CertificateExchange) Receive(m CertificateMessage, now time.Time) (repl
 			replies = append(replies, &CertificateMessage{Request: e.waiting})
 		}
 	}
-	more, completed, err := e.Poll(now)
+	budget := maxCertificatePending + 2
+	if len(slots) > 0 {
+		budget = max(0, slots[0]-len(replies))
+	}
+	more, completed, err := e.Poll(now, budget)
 	return append(replies, more...), completed, err
 }
 
 // Poll also completes chains whose missing element was supplied by another
 // neighbour. Call on the existing maintenance tick and after received data.
-func (e *CertificateExchange) Poll(now time.Time) (replies []*CertificateMessage, completed []string, err error) {
+func (e *CertificateExchange) Poll(now time.Time, slots ...int) (replies []*CertificateMessage, completed []string, err error) {
 	if e.closed {
 		return nil, nil, nil
+	}
+	// A completed principal can make its retained manifest emit one identity
+	// repair response. Charge a conservative slot before verification/removal,
+	// not after the caller has already lost the pending continuation.
+	budget := maxCertificatePending + 2
+	if len(slots) > 0 {
+		budget = max(0, slots[0])
 	}
 	if e.waiting != nil && !e.cache.parts.owned(e.waiting.Hash, e.owner, now) {
 		e.waiting = nil
@@ -229,13 +293,17 @@ func (e *CertificateExchange) Poll(now time.Time) (replies []*CertificateMessage
 			delete(e.pending, principal)
 			continue
 		}
+		if budget == 0 {
+			continue
+		}
 		chain := make([][]byte, 0, len(pending.chain.Hashes))
 		for _, hash := range pending.chain.Hashes {
 			data := e.cache.certificate(hash, now)
 			if data == nil {
-				if e.waiting == nil && e.cache.parts.claim(hash, e.owner, now) {
+				if budget > 0 && e.waiting == nil && e.cache.parts.claim(hash, e.owner, now) {
 					e.waiting = &CertificateRequest{Hash: hash}
 					replies = append(replies, &CertificateMessage{Request: e.waiting})
+					budget--
 				}
 				break // Learn one missing chain element before requesting another.
 			}
@@ -250,6 +318,7 @@ func (e *CertificateExchange) Poll(now time.Time) (replies []*CertificateMessage
 		}
 		delete(e.pending, principal)
 		completed = append(completed, principal)
+		budget--
 	}
 	return replies, completed, nil
 }
@@ -317,4 +386,23 @@ func (c *IdentityCache) ResolveCertificateChain(description CertificateChain, no
 		chain = append(chain, data)
 	}
 	return c.put(chain, description.Principal, now)
+}
+
+// MissingPrincipals identifies only chains blocked by the outstanding request.
+// It allows directory adapters to discard their matching unverified artifacts,
+// releasing shared gossip claims so another neighbour can supply them now.
+func (e *CertificateExchange) MissingPrincipals(q *CertificateRequest) []string {
+	if q == nil || e.waiting == nil || *q != *e.waiting {
+		return nil
+	}
+	var principals []string
+	for principal, p := range e.pending {
+		for _, hash := range p.chain.Hashes {
+			if hash == q.Hash {
+				principals = append(principals, principal)
+				break
+			}
+		}
+	}
+	return principals
 }

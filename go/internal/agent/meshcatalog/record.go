@@ -1,92 +1,52 @@
-// Package meshcatalog holds origin-signed, leased app services for one mesh.
-// Multicast observations are not admitted as ownership or retransmitted.
+// Package meshcatalog projects services from verified device manifests.
 package meshcatalog
 
 import (
-	"crypto"
-	"crypto/ecdsa"
-	"crypto/ed25519"
-	"crypto/mldsa"
-	"crypto/rand"
-	"crypto/rsa"
-	"crypto/sha256"
-	"crypto/x509"
-	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
+	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
 	"regexp"
 	"strings"
 	"time"
 	"unicode/utf8"
-
-	"github.com/wendylabsinc/wendy/go/internal/agent/localmesh"
-	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
-	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
 )
 
 const (
-	MaxRecordBytes = 8192
-	MaxLease       = 2 * time.Minute
-	MaxTXTBytes    = 1200
-	MaxTXTEntries  = 32
-	recordDomain   = "wendy-mesh-service/record/1\x00"
-	// GatewayAppID and GatewayServiceID identify the agent-owned capability.
-	// It is never an app service or a DNS-SD endpoint.
+	MaxLease          = 15 * time.Minute
+	MaxTXTBytes       = 1200
+	MaxTXTEntries     = 32
 	GatewayAppID      = "wendy.mesh.system"
 	GatewayServiceID  = "internet-gateway"
-	GatewayOfferLease = 600 * time.Second
+	GatewayOfferLease = MaxLease
 )
 
 var (
-	ErrExpired             = errors.New("expired wendy net service record")
-	ErrStale               = errors.New("stale wendy net service generation")
-	ErrIdentityNeeded      = errors.New("wendy net service identity bundle needed")
-	errCertificateMismatch = errors.New("wendy net service certificate fingerprint mismatch")
-	labelPattern           = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,62}$`)
-	typePattern            = regexp.MustCompile(`^_[A-Za-z0-9][A-Za-z0-9-]{0,14}\._(tcp|udp)$`)
+	ErrExpired   = errors.New("expired manifest service")
+	labelPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,62}$`)
+	typePattern  = regexp.MustCompile(`^_[A-Za-z0-9][A-Za-z0-9-]{0,14}\._(tcp|udp)$`)
 )
 
-// Retain the exact verified chain that produced a lifetime failure. Another
-// actor may renew the shared cache before this link inspects its descriptor.
-type serviceCertificateLifetimeError struct{ chain localmesh.CertificateChain }
-
-func (*serviceCertificateLifetimeError) Error() string {
-	return "wendy net service lease does not match certificate lifetime"
-}
-
-// Key is a service's stable owner scope: the mesh name plus the owning
-// device's full SPIFFE principal. A display name and TXT UUID are never used
-// as identity. Generation increases for both publish and remove.
 type Key struct {
-	Mesh      string `json:"mesh"`
-	Device    string `json:"device"`
-	AppID     string `json:"appId"`
-	ServiceID string `json:"serviceId"`
+	Mesh      string `json:"mesh" cbor:"m"`
+	Device    string `json:"device" cbor:"d"`
+	AppID     string `json:"appId" cbor:"a"`
+	ServiceID string `json:"serviceId" cbor:"s"`
 }
 
 type Record struct {
-	Version    int      `json:"version"`
-	Key        Key      `json:"key"`
-	Generation uint64   `json:"generation"`
-	Type       string   `json:"type"`
-	Instance   string   `json:"instance"`
-	HostPort   uint16   `json:"hostPort"`
-	TXT        []string `json:"txt,omitempty"`
-	Issued     int64    `json:"issued"`
-	Expires    int64    `json:"expires"`
-	Withdraw   bool     `json:"withdraw,omitempty"`
+	Version    int      `json:"version" cbor:"v"`
+	Key        Key      `json:"key" cbor:"k"`
+	Generation uint64   `json:"generation" cbor:"G"`
+	Type       string   `json:"type" cbor:"t"`
+	Instance   string   `json:"instance" cbor:"n"`
+	HostPort   uint16   `json:"hostPort" cbor:"h"`
+	TXT        []string `json:"txt,omitempty" cbor:"x,omitempty"`
+	Issued     int64    `json:"issued" cbor:"i"`
+	Expires    int64    `json:"expires" cbor:"e"`
+	Withdraw   bool     `json:"withdraw,omitempty" cbor:"w,omitempty"`
 }
 
-type SignedRecord struct {
-	Fingerprint string          `json:"fingerprint"`
-	Body        json.RawMessage `json:"body"`
-	Signature   []byte          `json:"signature"`
-}
-
-// IsGatewayOffer identifies the exact reserved, endpoint-free system record.
-// Callers must obtain records from a Catalog to rely on signature and lease
-// verification; this shape check alone does not authenticate a record.
 func IsGatewayOffer(r Record) bool {
 	return r.Version == 1 && r.Key.AppID == GatewayAppID &&
 		r.Key.ServiceID == GatewayServiceID && r.Type == "" &&
@@ -142,88 +102,6 @@ func (r Record) Validate(now time.Time) error {
 		return errors.New("wendy net service TXT too large")
 	}
 	return nil
-}
-
-func signInput(key crypto.PublicKey, body []byte) ([]byte, crypto.SignerOpts) {
-	input := append([]byte(recordDomain), body...)
-	// Ed25519 and ML-DSA sign the message itself; Go's signers refuse a digest.
-	switch key.(type) {
-	case ed25519.PublicKey, *mldsa.PublicKey:
-		return input, crypto.Hash(0)
-	}
-	h := sha256.Sum256(input)
-	return h[:], crypto.SHA256
-}
-
-func Sign(r Record, chain [][]byte, signer crypto.Signer, now time.Time) (SignedRecord, error) {
-	var out SignedRecord
-	if err := r.Validate(now); err != nil {
-		return out, err
-	}
-	if signer == nil || len(chain) == 0 {
-		return out, errors.New("missing wendy net service signer")
-	}
-	body, err := json.Marshal(r)
-	if err != nil {
-		return out, err
-	}
-	if len(body) > MaxRecordBytes {
-		return out, errors.New("oversized wendy net service record")
-	}
-	input, opts := signInput(signer.Public(), body)
-	sig, err := signer.Sign(rand.Reader, input, opts)
-	if err != nil {
-		return out, err
-	}
-	return SignedRecord{localmesh.Fingerprint(chain), body, sig}, nil
-}
-
-func verify(w SignedRecord, cache *localmesh.IdentityCache, now time.Time) (Record, string, error) {
-	var r Record
-	if len(w.Body) == 0 || len(w.Body) > MaxRecordBytes || len(w.Signature) == 0 ||
-		len(w.Signature) > 8192 || len(w.Fingerprint) != 64 { // ML-DSA-65 signs in 3309 bytes
-		return r, "", errors.New("invalid wendy net service envelope")
-	}
-	if err := json.Unmarshal(w.Body, &r); err != nil {
-		return r, "", err
-	}
-	if err := r.Validate(now); err != nil {
-		return r, "", err
-	}
-	chain, id, ok := cache.Get(r.Key.Device, now)
-	if !ok {
-		return r, "", ErrIdentityNeeded
-	}
-	if id.Device.Principal() != r.Key.Device {
-		return r, "", errors.New("wendy net service origin does not match certificate")
-	}
-	if localmesh.Fingerprint(chain) != w.Fingerprint {
-		return r, "", errCertificateMismatch
-	}
-	leaf, err := x509.ParseCertificate(chain[0])
-	if err != nil {
-		return r, "", err
-	}
-	input, _ := signInput(leaf.PublicKey, w.Body)
-	valid := false
-	switch key := leaf.PublicKey.(type) {
-	case *mldsa.PublicKey:
-		valid = mldsa.Verify(key, input, w.Signature, nil) == nil
-	case ed25519.PublicKey:
-		valid = ed25519.Verify(key, input, w.Signature)
-	case *ecdsa.PublicKey:
-		valid = ecdsa.VerifyASN1(key, input, w.Signature)
-	case *rsa.PublicKey:
-		valid = rsa.VerifyPKCS1v15(key, crypto.SHA256, input, w.Signature) == nil
-	}
-	if !valid {
-		return r, "", errors.New("invalid wendy net service signature")
-	}
-	if time.UnixMilli(r.Expires).After(id.NotAfter) {
-		return r, "", &serviceCertificateLifetimeError{chain: *localmesh.DescribeCertificates(r.Key.Device, chain).Chain}
-	}
-	h := sha256.Sum256(w.Body)
-	return r, hex.EncodeToString(h[:]), nil
 }
 
 // PublishSpec comes only from an already identified local app. HostPort must

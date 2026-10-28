@@ -124,8 +124,10 @@ func TestManifestHaveWantDiamondTransfersEachRevisionOnce(t *testing.T) {
 			if len(records) != 1 {
 				t.Fatal("manifest missing", node)
 			}
-			var got Manifest
-			json.Unmarshal(records[0].Body, &got)
+			got, err := DecodeManifest(records[0].Body)
+			if err != nil {
+				t.Fatal(err)
+			}
 			if got.Revision != revision || got.Withdraw != m.Withdraw {
 				t.Fatal("wrong revision/withdrawal", got)
 			}

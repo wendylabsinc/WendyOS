@@ -193,3 +193,23 @@ func (p *CertificatePool) release(owner uint64) {
 		}
 	}
 }
+
+// unavailable releases a supplier's exact active repair immediately. Retain
+// other suppliers' existing hints, with no new negative-cache allocation.
+func (p *CertificatePool) unavailable(hash string, owner uint64, now time.Time) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.prune(now)
+	f := p.pending[hash]
+	if f == nil || f.owner != owner {
+		return
+	}
+	p.bytes -= f.total
+	f.data, f.total, f.owner, f.avoid = nil, 0, 0, 0
+	delete(f.suppliers, owner)
+	if len(f.suppliers) == 0 {
+		delete(p.pending, hash)
+	} else {
+		f.expires = now.Add(certificateFetchTTL)
+	}
+}
