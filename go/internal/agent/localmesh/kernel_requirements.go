@@ -9,7 +9,6 @@ import (
 const (
 	kernelIPv6Requirement   = "CONFIG_IPV6 and IPv6 enabled at boot and on the interface"
 	kernelPolicyRequirement = "CONFIG_IPV6_MULTIPLE_TABLES"
-	kernelDummyRequirement  = "CONFIG_DUMMY built in or an available dummy module"
 	kernelTUNRequirement    = "CONFIG_TUN and an accessible /dev/net/tun character device"
 )
 

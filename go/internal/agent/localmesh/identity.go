@@ -11,17 +11,15 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
 )
 
-// Interface names this package owns. Declared here, rather than in the Linux
-// adapter, so router-ID derivation can exclude its own interfaces: the dummy
-// host link and every TUN carry a freshly randomised address on each boot, and
-// deriving a router ID from one would make it change on every restart.
+// Interface names this package owns or reclaims from older agents. Router-ID
+// derivation excludes these temporary links; loopback is excluded by its flags.
 const (
-	InterfaceName       = "wlmesh0"
+	legacyInterfaceName = "wlmesh0"
 	peerInterfacePrefix = "wlmp"
 )
 
 func ownedInterface(name string) bool {
-	return name == InterfaceName || strings.HasPrefix(name, peerInterfacePrefix)
+	return name == legacyInterfaceName || strings.HasPrefix(name, peerInterfacePrefix)
 }
 
 // admittedPrefix is only the structural boundary. Device announcements may

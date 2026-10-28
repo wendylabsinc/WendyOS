@@ -12,8 +12,8 @@ import (
 
 // preflightKernel checks capabilities without creating an interface, changing
 // a route, or reclaiming state. Probe actual APIs rather than reading kernel
-// config files, which vendor images need not expose. Dummy support is checked
-// by the real, ownership-tracked LinkAdd during setup.
+// config files, which vendor images need not expose. No dedicated host link
+// or dummy network driver is needed.
 func preflightKernel() error {
 	return runKernelPreflight([]kernelCapabilityCheck{
 		{"open an IPv6 socket", kernelIPv6Requirement, func() error {

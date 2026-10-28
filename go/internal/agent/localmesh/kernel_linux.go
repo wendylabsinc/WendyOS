@@ -32,25 +32,25 @@ type kernelPeer struct {
 // forwarding is shared with Internet sharing through hostnetwork ownership.
 // Session policy must quiesce transport around Apply.
 //
-// The mesh is IPv6-only: the host link carries the device's own ULA address, each
+// The mesh is IPv6-only: loopback carries the device's own ULA address, each
 // point-to-point TUN carries the complementary pair derived from the two device
 // UUIDs, and Babel routes are installed as ULA destinations with link-local next
 // hops on the interface they arrived on.
 type Kernel struct {
-	link        *netlink.Dummy
-	peers       map[babel.LinkID]kernelPeer
-	routes      []netlink.Route
-	rule        *netlink.Rule
-	device      meshid.Device
-	address     net.IP
-	forwarding  bool
-	forwardRule bool
+	link             netlink.Link
+	addressInstalled bool
+	peers            map[babel.LinkID]kernelPeer
+	routes           []netlink.Route
+	rule             *netlink.Rule
+	device           meshid.Device
+	address          net.IP
+	forwarding       bool
+	forwardRule      bool
 }
 
-// ReconcileBase restores only this kernel's invariant host address, policy
-// rule and fall-through guard. NetworkManager may remove these after link
-// creation even when it is subsequently told to leave wlmesh0 unmanaged.
-// Never adopt a replacement interface or replace an unfamiliar rule/route.
+// ReconcileBase restores only this kernel's tagged loopback address, policy
+// rule and fall-through guard. Never modify the shared loopback interface,
+// adopt an untagged address or replace an unfamiliar rule/route.
 func (k *Kernel) ReconcileBase() error {
 	state, err := k.inspectBase()
 	if err != nil {
@@ -65,14 +65,8 @@ func (k *Kernel) ReconcileBase() error {
 		}
 	}
 	if !state.address {
-		addr := &netlink.Addr{IPNet: ipNet(netip.PrefixFrom(k.device.MeshAddress(), 128)), Flags: unix.IFA_F_NOPREFIXROUTE | unix.IFA_F_NODAD}
-		if err := netlink.AddrAdd(state.link, addr); err != nil && !errors.Is(err, unix.EEXIST) {
+		if err := addLoopbackAddress(state.link, k.device.MeshAddress()); err != nil && !errors.Is(err, unix.EEXIST) {
 			return fmt.Errorf("restore wendy net address: %w", err)
-		}
-	}
-	if !state.up {
-		if err := netlink.LinkSetUp(state.link); err != nil {
-			return fmt.Errorf("restore wendy net link state: %w", err)
 		}
 	}
 	if !state.rule {
@@ -86,7 +80,7 @@ func (k *Kernel) ReconcileBase() error {
 	if err != nil {
 		return err
 	}
-	if !state.address || !state.up || !state.guard || !state.rule {
+	if !state.address || !state.guard || !state.rule {
 		return errors.New("wendy net base state changed during reconciliation")
 	}
 	return nil
@@ -95,7 +89,6 @@ func (k *Kernel) ReconcileBase() error {
 type baseState struct {
 	link    netlink.Link
 	address bool
-	up      bool
 	rule    bool
 	guard   bool
 }
@@ -105,28 +98,17 @@ func (k *Kernel) inspectBase() (baseState, error) {
 	if k.link == nil || k.rule == nil || len(k.routes) == 0 {
 		return state, errors.New("wendy net kernel is not initialized")
 	}
-	live, err := netlink.LinkByName(InterfaceName)
+	live, err := meshLoopback()
 	if err != nil {
 		return state, fmt.Errorf("wendy net interface missing: %w", err)
 	}
-	if live.Attrs().Index != k.link.Index || live.Attrs().Alias != interfaceOwner || live.Type() != "dummy" {
-		return state, errors.New("wendy net interface ownership changed")
+	if live.Attrs().Index != k.link.Attrs().Index {
+		return state, errors.New("wendy net loopback interface changed")
 	}
 	state.link = live
-	state.up = live.Attrs().Flags&net.FlagUp != 0
-	addresses, err := netlink.AddrList(live, netlink.FAMILY_V6)
+	state.address, err = inspectLoopbackAddress(live, k.device.MeshAddress())
 	if err != nil {
 		return state, fmt.Errorf("inspect wendy net address: %w", err)
-	}
-	own := ipNet(netip.PrefixFrom(k.device.MeshAddress(), 128))
-	for _, address := range addresses {
-		if !address.IP.Equal(k.address) {
-			continue
-		}
-		if address.IPNet == nil || address.IPNet.String() != own.String() {
-			return state, errors.New("wendy net address has conflicting prefix")
-		}
-		state.address = true
 	}
 	rules, err := netlink.RuleList(netlink.FAMILY_V6)
 	if err != nil {
@@ -241,46 +223,47 @@ func NewKernel(device meshid.Device) (*Kernel, error) {
 	if err := preflightKernel(); err != nil {
 		return nil, err
 	}
+	loopback, err := meshLoopback()
+	if err != nil {
+		return nil, err
+	}
+	addresses, err := readLoopbackAddresses(loopback)
+	if err != nil {
+		return nil, fmt.Errorf("inspect loopback address capabilities: %w", err)
+	}
+	if err := requireLoopbackAddressProtocol(addresses); err != nil {
+		return nil, err
+	}
+	if _, err := inspectLoopbackAddress(loopback, device.MeshAddress()); err != nil {
+		return nil, err
+	}
 	if err := reclaimMeshForwarding(); err != nil {
 		return nil, kernelOperationError("reclaim net forwarding", "", err)
 	}
 	address := device.MeshAddress()
-	// An abrupt exit leaves the dummy link, its TUNs, their rules and the mesh
+	// An abrupt exit leaves the tagged address, its TUNs, their rules and the mesh
 	// routes behind. Reclaim exactly the state this package owns first, so a
 	// restart recovers instead of refusing to start forever; anything else in
 	// the reserved table or rule slots belongs to someone else and stays a
 	// hard conflict.
-	var err error
 	if err = reclaimReservedState(); err != nil {
 		return nil, err
 	}
-	attrs := netlink.NewLinkAttrs()
-	attrs.Name = InterfaceName
-	attrs.Alias = interfaceOwner
-	attrs.MTU = TunnelMTU
-	k := &Kernel{link: &netlink.Dummy{LinkAttrs: attrs}, peers: map[babel.LinkID]kernelPeer{}, device: device, address: net.IP(address.AsSlice())}
-	if err = netlink.LinkAdd(k.link); err != nil {
-		return nil, kernelOperationError("create dummy interface "+InterfaceName, kernelDummyRequirement, err)
-	}
+	k := &Kernel{link: loopback, peers: map[babel.LinkID]kernelPeer{}, device: device, address: net.IP(address.AsSlice())}
 	ok := false
 	defer func() {
 		if !ok {
 			_ = k.Close()
 		}
 	}()
-	if err = netlink.LinkSetAlias(k.link, interfaceOwner); err != nil {
-		return nil, kernelOperationError("mark dummy interface ownership", "", err)
+	if err = addLoopbackAddress(k.link, address); err != nil {
+		return nil, kernelOperationError("assign loopback mesh address", kernelIPv6Requirement, err)
 	}
-	// The host link is quiesced before it is raised: it carries only the
-	// device's own mesh address, never a router-advertised or SLAAC address.
-	if err = sysctls(InterfaceName); err != nil {
-		return nil, kernelOperationError("configure dummy interface IPv6", kernelIPv6Requirement, err)
-	}
-	if err = netlink.AddrAdd(k.link, &netlink.Addr{IPNet: ipNet(netip.PrefixFrom(address, 128)), Flags: unix.IFA_F_NOPREFIXROUTE | unix.IFA_F_NODAD}); err != nil {
-		return nil, kernelOperationError("assign dummy interface IPv6 address", kernelIPv6Requirement, err)
-	}
-	if err = netlink.LinkSetUp(k.link); err != nil {
-		return nil, kernelOperationError("bring up dummy interface", kernelDummyRequirement, err)
+	k.addressInstalled = true
+	if present, err := inspectLoopbackAddress(k.link, address); err != nil {
+		return nil, fmt.Errorf("verify loopback mesh address ownership (requires Linux IFA_PROTO support): %w", err)
+	} else if !present {
+		return nil, errors.New("loopback mesh address disappeared during setup")
 	}
 	// A permanent unreachable default prevents this table from falling through
 	// to the host's ordinary uplink. A learnt route has a lower priority.
@@ -335,10 +318,10 @@ func validateStaleKernelOwnershipWith(listLinks func() ([]netlink.Link, error), 
 	ownedLinks := false
 	for _, link := range links {
 		name := link.Attrs().Name
-		if name != InterfaceName && !strings.HasPrefix(name, peerInterfacePrefix) {
+		if name != legacyInterfaceName && !strings.HasPrefix(name, peerInterfacePrefix) {
 			continue
 		}
-		if link.Attrs().Alias != interfaceOwner || (name == InterfaceName && link.Type() != "dummy") || (name != InterfaceName && (!ownedPeerInterfaceName(name) || link.Type() != "tuntap")) {
+		if link.Attrs().Alias != interfaceOwner || (name == legacyInterfaceName && link.Type() != "dummy") || (name != legacyInterfaceName && (!ownedPeerInterfaceName(name) || link.Type() != "tuntap")) {
 			return fmt.Errorf("interface %q is not owned by wendy-net", name)
 		}
 		ownedLinks = true
@@ -582,14 +565,15 @@ func (k *Kernel) Close() error {
 		}
 	}
 	k.routes = nil
-	live, err := netlink.LinkByName(InterfaceName)
-	if err != nil {
-		return errors.Join(append(errs, err)...)
+	if k.addressInstalled {
+		err := removeLoopbackAddress(k.link, loopbackAddress{
+			prefix: netip.PrefixFrom(k.device.MeshAddress(), 128), protocol: meshAddressProtocol,
+		})
+		errs = append(errs, err)
+		if err == nil {
+			k.addressInstalled = false
+		}
 	}
-	if live.Attrs().Index != k.link.Index || live.Attrs().Alias != interfaceOwner || live.Type() != "dummy" {
-		return errors.Join(append(errs, errors.New("wendy net interface ownership changed"))...)
-	}
-	errs = append(errs, netlink.LinkDel(live))
 	return errors.Join(errs...)
 }
 
@@ -635,16 +619,23 @@ func reclaimReservedState() error {
 }
 
 type kernelCleanupOps struct {
-	links       func() ([]netlink.Link, error)
-	deleteLink  func(netlink.Link) error
-	rules       func(int) ([]netlink.Rule, error)
-	deleteRule  func(*netlink.Rule) error
-	routes      func(int, *netlink.Route, uint64) ([]netlink.Route, error)
-	deleteRoute func(*netlink.Route) error
+	links         func() ([]netlink.Link, error)
+	deleteLink    func(netlink.Link) error
+	addresses     func(netlink.Link) ([]loopbackAddress, error)
+	deleteAddress func(netlink.Link, loopbackAddress) error
+	rules         func(int) ([]netlink.Rule, error)
+	deleteRule    func(*netlink.Rule) error
+	routes        func(int, *netlink.Route, uint64) ([]netlink.Route, error)
+	deleteRoute   func(*netlink.Route) error
 }
 
 func netlinkKernelCleanup() kernelCleanupOps {
-	return kernelCleanupOps{netlink.LinkList, netlink.LinkDel, netlink.RuleList, netlink.RuleDel, netlink.RouteListFiltered, netlink.RouteDel}
+	return kernelCleanupOps{
+		links: netlink.LinkList, deleteLink: netlink.LinkDel,
+		addresses: readLoopbackAddresses, deleteAddress: removeLoopbackAddress,
+		rules: netlink.RuleList, deleteRule: netlink.RuleDel,
+		routes: netlink.RouteListFiltered, deleteRoute: netlink.RouteDel,
+	}
 }
 
 func reclaimReservedStateWith(ops kernelCleanupOps, allowUnavailableQueries bool) error {
@@ -653,14 +644,32 @@ func reclaimReservedStateWith(ops kernelCleanupOps, allowUnavailableQueries bool
 		return kernelOperationError("inspect existing interfaces", "", err)
 	}
 	var ownedLinks []netlink.Link
+	var loopback netlink.Link
+	var ownedAddresses []loopbackAddress
 	for _, l := range links {
 		name := l.Attrs().Name
-		if name != InterfaceName && !strings.HasPrefix(name, peerInterfacePrefix) {
+		if name == loopbackInterfaceName {
+			if l.Attrs().Flags&net.FlagLoopback == 0 {
+				return errors.New("lo is not a loopback interface")
+			}
+			loopback = l
+			addresses, err := ops.addresses(l)
+			if err != nil && !(allowUnavailableQueries && (errors.Is(err, unix.EAFNOSUPPORT) || errors.Is(err, unix.EOPNOTSUPP))) {
+				return fmt.Errorf("inspect loopback mesh addresses: %w", err)
+			}
+			for _, address := range addresses {
+				if address.owned() {
+					ownedAddresses = append(ownedAddresses, address)
+				}
+			}
+			continue
+		}
+		if name != legacyInterfaceName && !strings.HasPrefix(name, peerInterfacePrefix) {
 			continue
 		}
 		if l.Attrs().Alias != interfaceOwner ||
-			(name == InterfaceName && l.Type() != "dummy") ||
-			(name != InterfaceName && (!ownedPeerInterfaceName(name) || l.Type() != "tuntap")) {
+			(name == legacyInterfaceName && l.Type() != "dummy") ||
+			(name != legacyInterfaceName && (!ownedPeerInterfaceName(name) || l.Type() != "tuntap")) {
 			return fmt.Errorf("interface %q exists and is not owned by wendy net", name)
 		}
 		ownedLinks = append(ownedLinks, l)
@@ -709,6 +718,11 @@ func reclaimReservedStateWith(ops kernelCleanupOps, allowUnavailableQueries bool
 	for _, l := range ownedLinks {
 		if err := ops.deleteLink(l); err != nil && !errors.Is(err, unix.ENODEV) {
 			return kernelOperationError("reclaim owned interface "+l.Attrs().Name, "", err)
+		}
+	}
+	for _, address := range ownedAddresses {
+		if err := ops.deleteAddress(loopback, address); err != nil {
+			return fmt.Errorf("reclaim loopback mesh address: %w", err)
 		}
 	}
 	return nil

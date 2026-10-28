@@ -431,7 +431,8 @@ func TestLeafRoutedEndpointIsolatedNamespace(t *testing.T) {
 		t.Fatal(err)
 	}
 	stopped = true
-	if _, err := netlink.LinkByName(InterfaceName); err == nil {
+	assertNoOwnedLoopbackAddresses(t)
+	if _, err := netlink.LinkByName(legacyInterfaceName); err == nil {
 		t.Fatal("shutdown retained mesh host interface")
 	}
 	links, err := netlink.LinkList()
@@ -522,7 +523,8 @@ func TestLeafListenerFailureReportsRuntimeError(t *testing.T) {
 	case <-ctx.Done():
 		t.Fatal("runtime did not drain after listener failure")
 	}
-	if _, err := netlink.LinkByName(InterfaceName); err == nil {
+	assertNoOwnedLoopbackAddresses(t)
+	if _, err := netlink.LinkByName(legacyInterfaceName); err == nil {
 		t.Fatal("failed runtime retained mesh host interface")
 	}
 }

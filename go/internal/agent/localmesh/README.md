@@ -104,9 +104,23 @@ devices already reached on another carrier do not displace the fallback.
 
 Before changing kernel networking state, the router checks actual IPv6 policy
 routing and TUN APIs. Setup failures identify the failed operation and relevant
-kernel requirements. Linux images need IPv6 policy tables, dummy interfaces and
-TUN support; container UDP interception additionally needs TPROXY support. An
-agent update cannot supply kernel features compiled out of an installed image.
+kernel requirements. Linux images need IPv6 policy tables and TUN support;
+container UDP interception additionally needs TPROXY support. An agent update
+cannot supply kernel features compiled out of an installed image.
+
+The device's mesh /128 lives on the host's existing `lo` interface. The agent
+tags that address with Linux `IFA_PROTO` value 186 and only reclaims tagged mesh
+/128 addresses. This requires kernel support for IPv6 address protocol tags.
+It leaves `::1`, other owners' addresses, and loopback's MTU, alias, link state
+and IPv6 sysctls unchanged. Loopback must already be up with IPv6 enabled and
+an existing IPv6 address, normally `::1`, whose metadata proves tag support.
+A kernel without this metadata is rejected before any network state changes.
+An untagged address matching the device's mesh address is an ownership conflict.
+Peer traffic still uses the `wlmp*` TUNs. A restart or unenrollment cleans up
+tagged addresses, including addresses left by a previous device identity.
+Upgrade cleanup also removes a legacy `wlmesh0` dummy link when its type and
+ownership alias match an older Wendy agent; creating a dummy link is no longer
+part of startup, so `CONFIG_DUMMY` is not required.
 
 ## LAN and Wi-Fi Aware discovery
 

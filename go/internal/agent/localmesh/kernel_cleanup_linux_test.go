@@ -15,11 +15,16 @@ import (
 func emptyKernelCleanupOps(t *testing.T) kernelCleanupOps {
 	t.Helper()
 	return kernelCleanupOps{
-		links:  func() ([]netlink.Link, error) { return nil, nil },
-		rules:  func(int) ([]netlink.Rule, error) { return nil, nil },
-		routes: func(int, *netlink.Route, uint64) ([]netlink.Route, error) { return nil, nil },
+		links:     func() ([]netlink.Link, error) { return nil, nil },
+		addresses: func(netlink.Link) ([]loopbackAddress, error) { return nil, nil },
+		rules:     func(int) ([]netlink.Rule, error) { return nil, nil },
+		routes:    func(int, *netlink.Route, uint64) ([]netlink.Route, error) { return nil, nil },
 		deleteLink: func(netlink.Link) error {
 			t.Fatal("unexpected interface deletion")
+			return nil
+		},
+		deleteAddress: func(netlink.Link, loopbackAddress) error {
+			t.Fatal("unexpected address deletion")
 			return nil
 		},
 		deleteRule: func(*netlink.Rule) error {
@@ -42,7 +47,7 @@ func TestResetKernelCleanupDoesNotSuppressDeletionErrors(t *testing.T) {
 				switch operation {
 				case "link":
 					ops.links = func() ([]netlink.Link, error) {
-						return []netlink.Link{&netlink.Dummy{LinkAttrs: netlink.LinkAttrs{Name: InterfaceName, Alias: interfaceOwner}}}, nil
+						return []netlink.Link{&netlink.Dummy{LinkAttrs: netlink.LinkAttrs{Name: legacyInterfaceName, Alias: interfaceOwner}}}, nil
 					}
 					ops.deleteLink = func(netlink.Link) error { deleted = true; return failure }
 				case "rule":
@@ -114,7 +119,7 @@ func TestResetKernelCleanupMissingPolicySupport(t *testing.T) {
 		for _, owned := range []bool{false, true} {
 			listLinks := func() ([]netlink.Link, error) {
 				if owned {
-					return []netlink.Link{&netlink.Dummy{LinkAttrs: netlink.LinkAttrs{Name: InterfaceName, Alias: interfaceOwner}}}, nil
+					return []netlink.Link{&netlink.Dummy{LinkAttrs: netlink.LinkAttrs{Name: legacyInterfaceName, Alias: interfaceOwner}}}, nil
 				}
 				return nil, nil
 			}
@@ -146,11 +151,14 @@ func TestResetKernelCleanupPreservesForeignRule(t *testing.T) {
 	if os.Getenv("WENDY_LOCALMESH_ISOLATED_TEST") != "1" {
 		t.Skip("requires disposable network namespace")
 	}
-	link := &netlink.Dummy{LinkAttrs: netlink.LinkAttrs{Name: InterfaceName, Alias: interfaceOwner}}
+	link := &netlink.Dummy{LinkAttrs: netlink.LinkAttrs{Name: legacyInterfaceName, Alias: interfaceOwner}}
 	if err := netlink.LinkAdd(link); err != nil {
 		t.Fatal(err)
 	}
 	defer netlink.LinkDel(link)
+	if err := netlink.LinkSetAlias(link, interfaceOwner); err != nil {
+		t.Fatal(err)
+	}
 	foreign := netlink.NewRule()
 	foreign.Family = netlink.FAMILY_V6
 	foreign.Table = RouteTable
@@ -162,7 +170,7 @@ func TestResetKernelCleanupPreservesForeignRule(t *testing.T) {
 	if err := CleanupStaleKernel(); err == nil {
 		t.Fatal("reset cleanup accepted a foreign rule selecting the reserved table")
 	}
-	if _, err := netlink.LinkByName(InterfaceName); err != nil {
+	if _, err := netlink.LinkByName(legacyInterfaceName); err != nil {
 		t.Fatalf("ownership validation mutated state before rejecting the conflict: %v", err)
 	}
 	rules, err := netlink.RuleList(netlink.FAMILY_V6)

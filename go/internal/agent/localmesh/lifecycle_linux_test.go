@@ -311,13 +311,13 @@ func TestMeshRouteLifecycleIsolatedNamespaces(t *testing.T) {
 			t.Fatalf("%s has no unreachable fallback in table %d:\n%s", namespace, RouteTable, table)
 		}
 	}
-	// Each namespace carries its own ULA on the host link and the peer's ULA as
+	// Each namespace carries its own ULA on loopback and the peer's ULA as
 	// a mesh-table route. The instance's own /128 is an address plus a local
 	// route, never something this package installs into the mesh table.
 	for namespace, own := range map[string]netip.Addr{names[0]: meshLower, names[1]: meshHigher} {
-		out, err := exec.Command("ip", "-n", namespace, "-6", "addr", "show", "dev", InterfaceName).CombinedOutput()
+		out, err := exec.Command("ip", "-n", namespace, "-6", "addr", "show", "dev", loopbackInterfaceName).CombinedOutput()
 		if err != nil {
-			t.Fatalf("ip -6 addr show dev %s in %s: %v %s", InterfaceName, namespace, err, out)
+			t.Fatalf("ip -6 addr show dev %s in %s: %v %s", loopbackInterfaceName, namespace, err, out)
 		}
 		if !strings.Contains(string(out), own.String()) {
 			t.Fatalf("%s does not carry its own wendy net address %s:\n%s", namespace, own, out)
@@ -406,12 +406,13 @@ func TestKernelProcessLifecycle(t *testing.T) {
 		if err := CleanupStaleKernel(); err != nil {
 			t.Fatalf("unenrolled startup cleanup: %v", err)
 		}
+		assertNoOwnedLoopbackAddresses(t)
 		links, err := netlink.LinkList()
 		if err != nil {
 			t.Fatal(err)
 		}
 		for _, link := range links {
-			if link.Attrs().Name == InterfaceName || strings.HasPrefix(link.Attrs().Name, peerInterfacePrefix) {
+			if link.Attrs().Name == legacyInterfaceName || strings.HasPrefix(link.Attrs().Name, peerInterfacePrefix) {
 				t.Fatalf("reset retained mesh interface %s", link.Attrs().Name)
 			}
 		}
@@ -451,7 +452,7 @@ func TestKernelProcessLifecycle(t *testing.T) {
 }
 
 // TestKernelCrashRecoveryIsolatedNamespace proves an agent restart reclaims the
-// dummy link, rules and routes its crashed predecessor left, while a route it
+// tagged address, rules and routes its crashed predecessor left, while a route it
 // never owned stays a hard conflict.
 func TestKernelCrashRecoveryIsolatedNamespace(t *testing.T) {
 	if os.Getenv("WENDY_LOCALMESH_ISOLATED_TEST") != "1" {
@@ -504,8 +505,8 @@ func TestKernelCrashRecoveryIsolatedNamespace(t *testing.T) {
 // assertDerivedLinkLocals shows that a mesh interface carries exactly the
 // link-local this package derived from the device UUIDs. addr_gen_mode is set
 // to none before any address is added, so the kernel never manufactures a
-// MAC-derived link-local beside it, and the host mesh link carries no
-// link-local at all - only the device's own ULA.
+// MAC-derived link-local beside it. Loopback carries the tagged mesh ULA
+// alongside the host's existing addresses.
 func assertDerivedLinkLocals(t *testing.T, self, peer meshid.Device) {
 	t.Helper()
 	want, _, err := meshid.LinkLocalAddresses(self, peer)
@@ -519,7 +520,7 @@ func assertDerivedLinkLocals(t *testing.T, self, peer meshid.Device) {
 	tunnels := 0
 	for _, l := range links {
 		name := l.Attrs().Name
-		if name != InterfaceName && !strings.HasPrefix(name, peerInterfacePrefix) {
+		if name != loopbackInterfaceName && !strings.HasPrefix(name, peerInterfacePrefix) {
 			continue
 		}
 		addrs, err := netlink.AddrList(l, netlink.FAMILY_V6)
@@ -534,6 +535,9 @@ func assertDerivedLinkLocals(t *testing.T, self, peer meshid.Device) {
 			}
 			addr = addr.Unmap()
 			switch {
+			case name == loopbackInterfaceName && addr != self.MeshAddress():
+				// Other loopback addresses belong to the host.
+				continue
 			case addr.IsLinkLocalUnicast():
 				derived++
 				if addr != want {
@@ -545,10 +549,8 @@ func assertDerivedLinkLocals(t *testing.T, self, peer meshid.Device) {
 				t.Fatalf("%s carries %s, which is neither the derived link-local nor the device's own wendy net address", name, addr)
 			}
 		}
-		if name == InterfaceName {
-			// The host mesh link is a routing anchor: the device's own ULA and
-			// nothing else. A kernel link-local here would be a second,
-			// MAC-derived identity on the same host.
+		if name == loopbackInterfaceName {
+			// Loopback retains the host addresses alongside our own ULA.
 			if derived != 0 || own != 1 {
 				t.Fatalf("%s carries %d link-local and %d wendy net addresses, want 0 and 1", name, derived, own)
 			}

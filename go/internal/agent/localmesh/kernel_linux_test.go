@@ -17,7 +17,7 @@ import (
 )
 
 // TestKernelIsolatedNamespace exercises the real FIB: a device's own ULA address
-// on the host link, a peer TUN addressed with the complementary link-local pair
+// on loopback, a peer TUN addressed with the complementary link-local pair
 // derived from the two device UUIDs, and a Babel route for the peer's ULA /128
 // with a link-local next hop.
 func TestKernelIsolatedNamespace(t *testing.T) {
@@ -127,11 +127,14 @@ func TestKernelRefusesForeignTableOwnership(t *testing.T) {
 		t.Skip("requires disposable privileged container network namespace")
 	}
 	self, _ := testDevices(t)
-	owned := &netlink.Dummy{LinkAttrs: netlink.LinkAttrs{Name: InterfaceName, Alias: interfaceOwner}}
+	owned := &netlink.Dummy{LinkAttrs: netlink.LinkAttrs{Name: legacyInterfaceName, Alias: interfaceOwner}}
 	if err := netlink.LinkAdd(owned); err != nil {
 		t.Fatal(err)
 	}
 	defer netlink.LinkDel(owned)
+	if err := netlink.LinkSetAlias(owned, interfaceOwner); err != nil {
+		t.Fatal(err)
+	}
 	foreign := netlink.Route{Table: RouteTable, Protocol: 187, Family: netlink.FAMILY_V6, Dst: ipNet(netip.MustParsePrefix("fd00::445:1/128")), LinkIndex: 1}
 	if err := netlink.RouteReplace(&foreign); err != nil {
 		t.Skipf("cannot plant a foreign route: %v", err)
@@ -149,7 +152,7 @@ func TestKernelRefusesForeignTableOwnership(t *testing.T) {
 	if _, err := NewKernel(self); err == nil {
 		t.Fatal("kernel adopted a foreign route in the reserved table")
 	}
-	if live, err := netlink.LinkByName(InterfaceName); err != nil || live.Attrs().Index != owned.Index {
+	if live, err := netlink.LinkByName(legacyInterfaceName); err != nil || live.Attrs().Index != owned.Index {
 		t.Fatalf("ownership refusal removed the pre-existing owned link: %v", err)
 	}
 	rules, err := netlink.RuleList(netlink.FAMILY_V6)
@@ -213,7 +216,7 @@ func ipv6Addresses(p []byte) (netip.Addr, netip.Addr, error) {
 // TestKernelReconcileBaseIsolatedNamespace runs in the same disposable
 // namespace: a peer's advertised default coexists with the guard, base state
 // stripped behind the instance's back is restored, and foreign owners of the
-// guard, the link or the reserved rule slot are refused.
+// guard or the reserved rule slot are refused. Loopback stays host-managed.
 func TestKernelReconcileBaseIsolatedNamespace(t *testing.T) {
 	if os.Getenv("WENDY_LOCALMESH_ISOLATED_TEST") != "1" {
 		t.Skip("requires disposable privileged container network namespace")
@@ -247,7 +250,7 @@ func TestKernelReconcileBaseIsolatedNamespace(t *testing.T) {
 		t.Fatal(err)
 	}
 	own := ipNet(netip.PrefixFrom(self.MeshAddress(), 128))
-	live, err := netlink.LinkByName(InterfaceName)
+	live, err := netlink.LinkByName(loopbackInterfaceName)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -294,13 +297,7 @@ func TestKernelReconcileBaseIsolatedNamespace(t *testing.T) {
 	if err := k.ReconcileBase(); err != nil {
 		t.Fatalf("idempotent reconciliation: %v", err)
 	}
-	if err := netlink.LinkSetDown(live); err != nil {
-		t.Fatal(err)
-	}
-	if err := k.ReconcileBase(); err != nil {
-		t.Fatalf("restore link state: %v", err)
-	}
-	live, err = netlink.LinkByName(InterfaceName)
+	live, err = netlink.LinkByName(loopbackInterfaceName)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -352,13 +349,27 @@ func TestKernelReconcileBaseIsolatedNamespace(t *testing.T) {
 	if err := netlink.RouteDel(&foreign); err != nil {
 		t.Fatal(err)
 	}
-	if err := netlink.LinkSetAlias(live, "another-owner"); err != nil {
+	// Bringing lo down removes routes attached to it. Check the host-down
+	// refusal only after verifying reconciliation preserved the foreign route.
+	if err := netlink.LinkSetDown(live); err != nil {
 		t.Fatal(err)
 	}
 	if err := k.ReconcileBase(); err == nil {
-		t.Fatal("foreign replacement link accepted")
+		t.Fatal("accepted a down host loopback")
 	}
-	if err := netlink.LinkSetAlias(live, interfaceOwner); err != nil {
+	if err := netlink.LinkSetUp(live); err != nil {
+		t.Fatal(err)
+	}
+	if err := k.ReconcileBase(); err != nil {
+		t.Fatal(err)
+	}
+	if err := netlink.LinkSetAlias(live, "another-owner"); err != nil {
+		t.Fatal(err)
+	}
+	if err := k.ReconcileBase(); err != nil {
+		t.Fatalf("host loopback alias is not ours to enforce: %v", err)
+	}
+	if err := netlink.LinkSetAlias(live, ""); err != nil {
 		t.Fatal(err)
 	}
 	if err := netlink.RuleDel(k.rule); err != nil {

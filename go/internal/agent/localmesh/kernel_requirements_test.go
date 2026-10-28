@@ -18,12 +18,12 @@ func TestKernelOperationError(t *testing.T) {
 		absent      string
 	}{
 		{"ipv6 policy unavailable", "inspect IPv6 policy routing", kernelPolicyRequirement, syscall.EAFNOSUPPORT, "CONFIG_IPV6_MULTIPLE_TABLES", "CAP_NET_ADMIN"},
-		{"dummy unavailable", "create dummy interface wlmesh0", kernelDummyRequirement, syscall.EOPNOTSUPP, "CONFIG_DUMMY", "CAP_NET_ADMIN"},
+		{"IPv6 address unavailable", "assign loopback mesh address", kernelIPv6Requirement, syscall.EOPNOTSUPP, "CONFIG_IPV6", "CAP_NET_ADMIN"},
 		{"tun absent", "inspect TUN device capabilities", kernelTUNRequirement, syscall.ENOENT, "CONFIG_TUN", "CAP_NET_ADMIN"},
 		{"wrapped unsupported", "create peer TUN", kernelTUNRequirement, fmt.Errorf("ioctl: %w", syscall.ENODEV), "CONFIG_TUN", "CAP_NET_ADMIN"},
-		{"permission denied", "create dummy interface wlmesh0", kernelDummyRequirement, syscall.EPERM, "CAP_NET_ADMIN", "CONFIG_DUMMY"},
+		{"permission denied", "assign loopback mesh address", kernelIPv6Requirement, syscall.EPERM, "CAP_NET_ADMIN", "CONFIG_IPV6"},
 		{"device permission denied", "inspect TUN device capabilities", kernelTUNRequirement, syscall.EACCES, "permissions", "CONFIG_TUN"},
-		{"foreign link", "create dummy interface wlmesh0", kernelDummyRequirement, syscall.EEXIST, "file exists", "CONFIG_DUMMY"},
+		{"foreign address", "assign loopback mesh address", kernelIPv6Requirement, syscall.EEXIST, "file exists", "CONFIG_IPV6"},
 		{"invalid operation", "install IPv6 policy rule", kernelPolicyRequirement, syscall.EINVAL, "invalid argument", "CONFIG_IPV6_MULTIPLE_TABLES"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
