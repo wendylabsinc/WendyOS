@@ -10,6 +10,7 @@ import (
 	"image/color"
 	"image/jpeg"
 	"strings"
+	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/rtps/cdr"
 )
@@ -40,6 +41,10 @@ type Frame struct {
 	Data          []byte
 	Width, Height int
 	Codec         Codec
+	// Received is when the agent received the frame, on its wall clock, or
+	// zero when nobody noted it. The SensorLink frame feed notes it for the
+	// frames it hands out.
+	Received time.Time
 }
 
 // SupportsType reports whether typeName carries a video frame this package can

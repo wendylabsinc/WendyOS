@@ -109,8 +109,12 @@ func (f *SensorFrameFeed) publish(path string, frame ros2camera.Frame) {
 		return
 	}
 	// Subscribers hold a frame while the link reads the next one, so they get
-	// their own copy rather than the transport's buffer.
+	// their own copy rather than the transport's buffer. They may also read it
+	// later than now, so it says when it arrived.
 	frame.Data = bytes.Clone(frame.Data)
+	if frame.Received.IsZero() {
+		frame.Received = time.Now()
+	}
 	for ch := range subs {
 		select {
 		case ch <- frame:

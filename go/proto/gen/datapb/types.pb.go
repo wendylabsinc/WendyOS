@@ -119,7 +119,7 @@ func (x Event_State) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use Event_State.Descriptor instead.
 func (Event_State) EnumDescriptor() ([]byte, []int) {
-	return file_wendy_data_v1_types_proto_rawDescGZIP(), []int{3, 0}
+	return file_wendy_data_v1_types_proto_rawDescGZIP(), []int{4, 0}
 }
 
 // VideoMarkers is everything to draw on one picture at one moment: points and
@@ -139,7 +139,11 @@ type VideoMarkers struct {
 	// service lists it: its device path ("/dev/video96"), its stable_id
 	// ("by-id:..."), or the device id of a network camera ("1000"). Empty when
 	// the picture is not one of the agent's cameras.
-	Camera        string `protobuf:"bytes,4,opt,name=camera,proto3" json:"camera,omitempty"`
+	Camera string `protobuf:"bytes,4,opt,name=camera,proto3" json:"camera,omitempty"`
+	// Set when every marker's value is corrected for this particular sensor,
+	// as Grid.correction is for a grid's cells. Unset when the values are the
+	// sensor's own reading.
+	Correction    *Correction `protobuf:"bytes,5,opt,name=correction,proto3" json:"correction,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -200,6 +204,13 @@ func (x *VideoMarkers) GetCamera() string {
 		return x.Camera
 	}
 	return ""
+}
+
+func (x *VideoMarkers) GetCorrection() *Correction {
+	if x != nil {
+		return x.Correction
+	}
+	return nil
 }
 
 // Marker is one point or box on a picture.
@@ -341,7 +352,12 @@ type Grid struct {
 	// VideoMarkers.camera. Cell (column, row) covers x from column / width to
 	// (column + 1) / width, and y likewise. Empty when the grid is not of a
 	// camera's picture.
-	Camera        string `protobuf:"bytes,9,opt,name=camera,proto3" json:"camera,omitempty"`
+	Camera string `protobuf:"bytes,9,opt,name=camera,proto3" json:"camera,omitempty"`
+	// Set when the values are corrected for this particular sensor, for example
+	// a thermal camera checked against a reference thermometer. scale and offset
+	// already include it: value = count * scale + offset is the corrected value.
+	// Unset when the values are the sensor's own reading.
+	Correction    *Correction `protobuf:"bytes,10,opt,name=correction,proto3" json:"correction,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -432,6 +448,77 @@ func (x *Grid) GetCamera() string {
 	return ""
 }
 
+func (x *Grid) GetCorrection() *Correction {
+	if x != nil {
+		return x.Correction
+	}
+	return nil
+}
+
+// Correction is a linear correction of one sensor's values that the publisher
+// has already applied:
+//
+//	corrected = gain * uncorrected + offset
+//
+// in the record's unit. Some units of a sensor model read wrong in a way only
+// a reference measurement shows, such as a thermal camera reading every
+// temperature about twice too hot, and each such unit gets its own pair. A
+// viewer needs it only to show that values are corrected, or to recover what
+// the sensor itself read: uncorrected = (corrected - offset) / gain. gain is
+// never 0. A pair of gain 1 and offset 0 means the sensor was checked and
+// reads true.
+type Correction struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Gain          float64                `protobuf:"fixed64,1,opt,name=gain,proto3" json:"gain,omitempty"`
+	Offset        float64                `protobuf:"fixed64,2,opt,name=offset,proto3" json:"offset,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *Correction) Reset() {
+	*x = Correction{}
+	mi := &file_wendy_data_v1_types_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *Correction) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*Correction) ProtoMessage() {}
+
+func (x *Correction) ProtoReflect() protoreflect.Message {
+	mi := &file_wendy_data_v1_types_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use Correction.ProtoReflect.Descriptor instead.
+func (*Correction) Descriptor() ([]byte, []int) {
+	return file_wendy_data_v1_types_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *Correction) GetGain() float64 {
+	if x != nil {
+		return x.Gain
+	}
+	return 0
+}
+
+func (x *Correction) GetOffset() float64 {
+	if x != nil {
+		return x.Offset
+	}
+	return 0
+}
+
 // Event is a named condition changing state, for example "overheat" raised
 // or cleared. A stream keeps only its newest record for a slow viewer, so
 // publish one condition per stream: its newest record is then the
@@ -453,7 +540,7 @@ type Event struct {
 
 func (x *Event) Reset() {
 	*x = Event{}
-	mi := &file_wendy_data_v1_types_proto_msgTypes[3]
+	mi := &file_wendy_data_v1_types_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -465,7 +552,7 @@ func (x *Event) String() string {
 func (*Event) ProtoMessage() {}
 
 func (x *Event) ProtoReflect() protoreflect.Message {
-	mi := &file_wendy_data_v1_types_proto_msgTypes[3]
+	mi := &file_wendy_data_v1_types_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -478,7 +565,7 @@ func (x *Event) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Event.ProtoReflect.Descriptor instead.
 func (*Event) Descriptor() ([]byte, []int) {
-	return file_wendy_data_v1_types_proto_rawDescGZIP(), []int{3}
+	return file_wendy_data_v1_types_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *Event) GetName() string {
@@ -527,12 +614,15 @@ var File_wendy_data_v1_types_proto protoreflect.FileDescriptor
 
 const file_wendy_data_v1_types_proto_rawDesc = "" +
 	"\n" +
-	"\x19wendy/data/v1/types.proto\x12\rwendy.data.v1\"\xa7\x01\n" +
+	"\x19wendy/data/v1/types.proto\x12\rwendy.data.v1\"\xe2\x01\n" +
 	"\fVideoMarkers\x12&\n" +
 	"\x0fframe_stream_id\x18\x01 \x01(\tR\rframeStreamId\x12&\n" +
 	"\x0fvalid_for_nanos\x18\x02 \x01(\x03R\rvalidForNanos\x12/\n" +
 	"\amarkers\x18\x03 \x03(\v2\x15.wendy.data.v1.MarkerR\amarkers\x12\x16\n" +
-	"\x06camera\x18\x04 \x01(\tR\x06camera\"\xa3\x02\n" +
+	"\x06camera\x18\x04 \x01(\tR\x06camera\x129\n" +
+	"\n" +
+	"correction\x18\x05 \x01(\v2\x19.wendy.data.v1.CorrectionR\n" +
+	"correction\"\xa3\x02\n" +
 	"\x06Marker\x12\f\n" +
 	"\x01x\x18\x01 \x01(\x02R\x01x\x12\f\n" +
 	"\x01y\x18\x02 \x01(\x02R\x01y\x12\x14\n" +
@@ -548,7 +638,7 @@ const file_wendy_data_v1_types_proto_rawDesc = "" +
 	"\n" +
 	"KIND_POINT\x10\x01\x12\f\n" +
 	"\bKIND_BOX\x10\x02B\b\n" +
-	"\x06_value\"\xd6\x01\n" +
+	"\x06_value\"\x91\x02\n" +
 	"\x04Grid\x12\x14\n" +
 	"\x05width\x18\x01 \x01(\rR\x05width\x12\x16\n" +
 	"\x06height\x18\x02 \x01(\rR\x06height\x12\x12\n" +
@@ -557,7 +647,15 @@ const file_wendy_data_v1_types_proto_rawDesc = "" +
 	"\x0ebytes_per_line\x18\x06 \x01(\rR\fbytesPerLine\x12\x14\n" +
 	"\x05scale\x18\a \x01(\x01R\x05scale\x12\x16\n" +
 	"\x06offset\x18\b \x01(\x01R\x06offset\x12\x16\n" +
-	"\x06camera\x18\t \x01(\tR\x06cameraJ\x04\b\x04\x10\x05R\x06values\"\xee\x01\n" +
+	"\x06camera\x18\t \x01(\tR\x06camera\x129\n" +
+	"\n" +
+	"correction\x18\n" +
+	" \x01(\v2\x19.wendy.data.v1.CorrectionR\n" +
+	"correctionJ\x04\b\x04\x10\x05R\x06values\"8\n" +
+	"\n" +
+	"Correction\x12\x12\n" +
+	"\x04gain\x18\x01 \x01(\x01R\x04gain\x12\x16\n" +
+	"\x06offset\x18\x02 \x01(\x01R\x06offset\"\xee\x01\n" +
 	"\x05Event\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x120\n" +
 	"\x05state\x18\x02 \x01(\x0e2\x1a.wendy.data.v1.Event.StateR\x05state\x12\x14\n" +
@@ -585,24 +683,27 @@ func file_wendy_data_v1_types_proto_rawDescGZIP() []byte {
 }
 
 var file_wendy_data_v1_types_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_wendy_data_v1_types_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
+var file_wendy_data_v1_types_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
 var file_wendy_data_v1_types_proto_goTypes = []any{
 	(Marker_Kind)(0),     // 0: wendy.data.v1.Marker.Kind
 	(Event_State)(0),     // 1: wendy.data.v1.Event.State
 	(*VideoMarkers)(nil), // 2: wendy.data.v1.VideoMarkers
 	(*Marker)(nil),       // 3: wendy.data.v1.Marker
 	(*Grid)(nil),         // 4: wendy.data.v1.Grid
-	(*Event)(nil),        // 5: wendy.data.v1.Event
+	(*Correction)(nil),   // 5: wendy.data.v1.Correction
+	(*Event)(nil),        // 6: wendy.data.v1.Event
 }
 var file_wendy_data_v1_types_proto_depIdxs = []int32{
 	3, // 0: wendy.data.v1.VideoMarkers.markers:type_name -> wendy.data.v1.Marker
-	0, // 1: wendy.data.v1.Marker.kind:type_name -> wendy.data.v1.Marker.Kind
-	1, // 2: wendy.data.v1.Event.state:type_name -> wendy.data.v1.Event.State
-	3, // [3:3] is the sub-list for method output_type
-	3, // [3:3] is the sub-list for method input_type
-	3, // [3:3] is the sub-list for extension type_name
-	3, // [3:3] is the sub-list for extension extendee
-	0, // [0:3] is the sub-list for field type_name
+	5, // 1: wendy.data.v1.VideoMarkers.correction:type_name -> wendy.data.v1.Correction
+	0, // 2: wendy.data.v1.Marker.kind:type_name -> wendy.data.v1.Marker.Kind
+	5, // 3: wendy.data.v1.Grid.correction:type_name -> wendy.data.v1.Correction
+	1, // 4: wendy.data.v1.Event.state:type_name -> wendy.data.v1.Event.State
+	5, // [5:5] is the sub-list for method output_type
+	5, // [5:5] is the sub-list for method input_type
+	5, // [5:5] is the sub-list for extension type_name
+	5, // [5:5] is the sub-list for extension extendee
+	0, // [0:5] is the sub-list for field type_name
 }
 
 func init() { file_wendy_data_v1_types_proto_init() }
@@ -611,14 +712,14 @@ func file_wendy_data_v1_types_proto_init() {
 		return
 	}
 	file_wendy_data_v1_types_proto_msgTypes[1].OneofWrappers = []any{}
-	file_wendy_data_v1_types_proto_msgTypes[3].OneofWrappers = []any{}
+	file_wendy_data_v1_types_proto_msgTypes[4].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_wendy_data_v1_types_proto_rawDesc), len(file_wendy_data_v1_types_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   4,
+			NumMessages:   5,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

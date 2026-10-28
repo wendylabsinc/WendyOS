@@ -415,6 +415,91 @@ func TestPublishAgentRecordLiveAndRecorded(t *testing.T) {
 	}
 }
 
+// An agent record published live only reaches viewers, with its sample's
+// time, and is kept as the stream's newest; no episode or pre-roll holds it,
+// even with an episode that captures applications open.
+func TestPublishLiveIsNeverStored(t *testing.T) {
+	root := t.TempDir()
+	m, err := NewManager(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const stream = "camera/grid/v4l2:/dev/video0"
+	descriptor := &recordingpb.StreamDescriptor{MediaType: "application/protobuf", Schema: "wendy.data.v1.Grid"}
+	m.AdvertiseAgentStream(stream, descriptor)
+	sub := liveSubscriber(t, m, "agent/"+stream)
+	episode, err := m.Start(StartOptions{Sources: []string{"applications"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const frameTime = int64(1_792_000_000_123_456_789)
+	record := &recordingpb.Record{
+		Payload: []byte("grid"),
+		Timing:  &recordingpb.SampleTiming{Clock: "CLOCK_REALTIME", Count: 1, TimestampsNanos: []int64{frameTime}},
+		Inputs:  []*recordingpb.SampleRef{{SourceId: "v4l2:/dev/video0"}},
+	}
+	if err := m.PublishLive(stream, descriptor, record); err != nil {
+		t.Fatal(err)
+	}
+	d := nextLive(t, sub)
+	if d.Record.StreamID != "agent/"+stream || d.Record.Schema != "wendy.data.v1.Grid" || string(d.Record.Payload) != "grid" ||
+		d.Record.TimestampUnixNanos != frameTime || d.Record.SourceID != "v4l2:/dev/video0" {
+		t.Fatalf("live record: %+v", d.Record)
+	}
+	latest, err := m.Live().Subscribe(live.Selection{StreamIDs: []string{"agent/" + stream}, SendLatest: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(latest.Close)
+	if d := nextLive(t, latest); string(d.Record.Payload) != "grid" {
+		t.Fatalf("newest record: %q", d.Record.Payload)
+	}
+	if err := m.PublishLive("", descriptor, record); err == nil {
+		t.Fatal("an empty stream name was published")
+	}
+	if _, err := m.Stop(AdHocEpisodeKey); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(root, episode.ID, RecordingLogFile)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("episode holds a record log: %v", err)
+	}
+	// Agent records have a pre-roll of their own; a live-only record is in
+	// neither.
+	m.mu.Lock()
+	apps, agent := len(m.streamPreRoll), len(m.agentPreRoll)
+	m.mu.Unlock()
+	if apps != 0 || agent != 0 {
+		t.Fatalf("pre-roll holds %d app and %d agent records", apps, agent)
+	}
+}
+
+// AgentStreamWanted is the hub's Wanted for "agent/<stream>": a viewer that
+// names the stream or its schema wants it, one that takes everything does not.
+func TestAgentStreamWanted(t *testing.T) {
+	m, err := NewManager(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	const stream = "camera/grid/v4l2:/dev/video0"
+	descriptor := &recordingpb.StreamDescriptor{MediaType: "application/protobuf", Schema: "wendy.data.v1.Grid"}
+	liveSubscriber(t, m)
+	if m.AgentStreamWanted(stream, descriptor) {
+		t.Fatal("wanted by a viewer that names nothing")
+	}
+	s, err := m.Live().Subscribe(live.Selection{Schemas: []string{"wendy.data.v1.Grid"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !m.AgentStreamWanted(stream, descriptor) {
+		t.Fatal("not wanted by a viewer of its schema")
+	}
+	s.Close()
+	liveSubscriber(t, m, "agent/"+stream)
+	if !m.AgentStreamWanted(stream, descriptor) {
+		t.Fatal("not wanted by a viewer of its id")
+	}
+}
+
 // Live goes first: a viewer gets a record while a seal holds the manager
 // lock, before the record reaches the pre-roll or an episode.
 func TestPublishReachesViewersBeforeStorage(t *testing.T) {

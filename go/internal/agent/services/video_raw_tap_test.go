@@ -315,6 +315,18 @@ func TestStackedMetadataRows_TC001(t *testing.T) {
 	}
 }
 
+// A node that cannot be opened fails, so a caller that remembers the answer
+// asks again; enumerateRawFrameSizes still reports no sizes for it.
+func TestRawFrameSizesFailsForANodeThatDidNotAnswer(t *testing.T) {
+	missing := t.TempDir() + "/video0"
+	if sizes, err := rawFrameSizes(missing, v4l2PixFmtYUYV); err == nil || len(sizes) != 0 {
+		t.Fatalf("missing node: %v %v", sizes, err)
+	}
+	if sizes := enumerateRawFrameSizes(missing, v4l2PixFmtYUYV); sizes != nil {
+		t.Fatalf("missing node listed %v", sizes)
+	}
+}
+
 func TestStackedMetadataRows_OrdinaryWebcamIsNeverCropped(t *testing.T) {
 	// 640x480 has a 640x360 sibling 120 rows shorter — and is a plain 4:3
 	// picture. The standard-aspect test on the requested mode is what protects it.
@@ -379,6 +391,35 @@ func TestPlan_DefaultCaptureOfAStackedThermalModulePromotesToTheStackedMode(t *t
 	explicit := mustPlan(t, &agentpb.StreamVideoRequest{Width: 1280, Height: 720}, map[string]bool{"x264enc": true, "videocrop": true})
 	if ej := strings.Join(explicit.args, " "); strings.Contains(ej, "820") || !strings.Contains(ej, "width=1280,height=720") {
 		t.Errorf("an explicit 1280x720 request must not be promoted to its stacked sibling: %s", ej)
+	}
+}
+
+// The plan tells the hub where the encoded picture starts in a raw frame, so a
+// decoder that places positions on the viewers' picture knows the stacked rows
+// are cropped off: only for the cropped stacked mode. Ported from #2434.
+func TestPlan_RawPictureTopOnlyForTheCroppedStackedMode(t *testing.T) {
+	withYUYVModes(t, [][2]uint32{{256, 192}, {512, 384}, {512, 484}, {1280, 720}})
+	prev := bestDefaultFrameSizeForDevice
+	bestDefaultFrameSizeForDevice = func(string) (uint32, uint32) { return 512, 384 }
+	t.Cleanup(func() { bestDefaultFrameSizeForDevice = prev })
+	prevTop := thermalMetadataRowsOnTop
+	t.Cleanup(func() { thermalMetadataRowsOnTop = prevTop })
+
+	thermalMetadataRowsOnTop = true
+	if plan := mustPlan(t, &agentpb.StreamVideoRequest{}, map[string]bool{"x264enc": true, "videocrop": true}); plan.rawPictureTop != 100 || plan.raw.GetHeight() != 484 {
+		t.Errorf("TC001 default capture: raw %v with the picture from row %d, want 484 rows from row 100", plan.raw, plan.rawPictureTop)
+	}
+	// Without videocrop the default is the plain picture, which has no block.
+	if plan := mustPlan(t, &agentpb.StreamVideoRequest{}, map[string]bool{"x264enc": true}); plan.rawPictureTop != 0 {
+		t.Errorf("no videocrop: picture from row %d, want 0", plan.rawPictureTop)
+	}
+	if plan := mustPlan(t, &agentpb.StreamVideoRequest{Width: 1280, Height: 720}, map[string]bool{"x264enc": true, "videocrop": true}); plan.rawPictureTop != 0 {
+		t.Errorf("plain 1280x720: picture from row %d, want 0", plan.rawPictureTop)
+	}
+	// Rows stacked underneath leave the picture at the top of the frame.
+	thermalMetadataRowsOnTop = false
+	if plan := mustPlan(t, &agentpb.StreamVideoRequest{}, map[string]bool{"x264enc": true, "videocrop": true}); plan.rawPictureTop != 0 {
+		t.Errorf("metadata at the bottom: picture from row %d, want 0", plan.rawPictureTop)
 	}
 }
 

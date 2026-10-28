@@ -37,6 +37,20 @@ const maxAgentStream = 480
 // records are live but neither in the catalog nor kept for a viewer that asks
 // for the newest record.
 func (m *Manager) Publish(stream string, descriptor *recordingpb.StreamDescriptor, r *recordingpb.Record) error {
+	return m.publishAgent(stream, descriptor, r, false)
+}
+
+// PublishLive is Publish for a stream that exists only for live viewers, as an
+// application's "mode": "live" stream does: viewers get the record, and the
+// hub keeps it as the stream's newest, but no stream pre-roll or episode
+// records it. It is for records that are large, made at frame rate, or made
+// only while a viewer asks for them, such as a camera's measurement grids: an
+// episode must not hold data that depends on whether someone was watching.
+func (m *Manager) PublishLive(stream string, descriptor *recordingpb.StreamDescriptor, r *recordingpb.Record) error {
+	return m.publishAgent(stream, descriptor, r, true)
+}
+
+func (m *Manager) publishAgent(stream string, descriptor *recordingpb.StreamDescriptor, r *recordingpb.Record, liveOnly bool) error {
 	if stream == "" || len(stream) > maxAgentStream {
 		return fmt.Errorf("agent stream name must be 1..%d bytes", maxAgentStream)
 	}
@@ -53,7 +67,7 @@ func (m *Manager) Publish(stream string, descriptor *recordingpb.StreamDescripto
 	if err != nil {
 		return err
 	}
-	m.publish(stored, false)
+	m.publish(stored, liveOnly)
 	return nil
 }
 
@@ -74,6 +88,14 @@ func (m *Manager) AdvertiseAgentStream(stream string, descriptor *recordingpb.St
 // when its producer stops.
 func (m *Manager) UnadvertiseAgentStream(stream string) {
 	m.live.Unadvertise(agentStreamID(stream))
+}
+
+// AgentStreamWanted reports whether a live viewer asks for the agent stream
+// "agent/<stream>" by its id, a prefix of it, or its schema (live.Hub.Wanted).
+// A producer whose records are costly to make makes them only while it is,
+// and waits on Live().SubscribersChanged() otherwise.
+func (m *Manager) AgentStreamWanted(stream string, descriptor *recordingpb.StreamDescriptor) bool {
+	return m.live.Wanted(agentStreamID(stream), descriptor.GetSchema())
 }
 
 // streamID is the live stream id of a stored record. An application's stream

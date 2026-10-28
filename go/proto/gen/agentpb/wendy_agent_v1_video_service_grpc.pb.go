@@ -19,17 +19,20 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	WendyVideoService_ListVideoDevices_FullMethodName      = "/wendy.agent.services.v1.WendyVideoService/ListVideoDevices"
-	WendyVideoService_StreamVideo_FullMethodName           = "/wendy.agent.services.v1.WendyVideoService/StreamVideo"
-	WendyVideoService_SetCameraCredentials_FullMethodName  = "/wendy.agent.services.v1.WendyVideoService/SetCameraCredentials"
-	WendyVideoService_ForgetCamera_FullMethodName          = "/wendy.agent.services.v1.WendyVideoService/ForgetCamera"
-	WendyVideoService_RefreshCameras_FullMethodName        = "/wendy.agent.services.v1.WendyVideoService/RefreshCameras"
-	WendyVideoService_TestCameraCredentials_FullMethodName = "/wendy.agent.services.v1.WendyVideoService/TestCameraCredentials"
-	WendyVideoService_GetCameraControls_FullMethodName     = "/wendy.agent.services.v1.WendyVideoService/GetCameraControls"
-	WendyVideoService_SetCameraControls_FullMethodName     = "/wendy.agent.services.v1.WendyVideoService/SetCameraControls"
-	WendyVideoService_ResetCameraControls_FullMethodName   = "/wendy.agent.services.v1.WendyVideoService/ResetCameraControls"
-	WendyVideoService_GetCameraDHCPStatus_FullMethodName   = "/wendy.agent.services.v1.WendyVideoService/GetCameraDHCPStatus"
-	WendyVideoService_SetCameraDHCP_FullMethodName         = "/wendy.agent.services.v1.WendyVideoService/SetCameraDHCP"
+	WendyVideoService_ListVideoDevices_FullMethodName        = "/wendy.agent.services.v1.WendyVideoService/ListVideoDevices"
+	WendyVideoService_StreamVideo_FullMethodName             = "/wendy.agent.services.v1.WendyVideoService/StreamVideo"
+	WendyVideoService_SetCameraCredentials_FullMethodName    = "/wendy.agent.services.v1.WendyVideoService/SetCameraCredentials"
+	WendyVideoService_ForgetCamera_FullMethodName            = "/wendy.agent.services.v1.WendyVideoService/ForgetCamera"
+	WendyVideoService_RefreshCameras_FullMethodName          = "/wendy.agent.services.v1.WendyVideoService/RefreshCameras"
+	WendyVideoService_TestCameraCredentials_FullMethodName   = "/wendy.agent.services.v1.WendyVideoService/TestCameraCredentials"
+	WendyVideoService_GetCameraControls_FullMethodName       = "/wendy.agent.services.v1.WendyVideoService/GetCameraControls"
+	WendyVideoService_SetCameraControls_FullMethodName       = "/wendy.agent.services.v1.WendyVideoService/SetCameraControls"
+	WendyVideoService_ResetCameraControls_FullMethodName     = "/wendy.agent.services.v1.WendyVideoService/ResetCameraControls"
+	WendyVideoService_GetThermalCalibration_FullMethodName   = "/wendy.agent.services.v1.WendyVideoService/GetThermalCalibration"
+	WendyVideoService_SetThermalCalibration_FullMethodName   = "/wendy.agent.services.v1.WendyVideoService/SetThermalCalibration"
+	WendyVideoService_ClearThermalCalibration_FullMethodName = "/wendy.agent.services.v1.WendyVideoService/ClearThermalCalibration"
+	WendyVideoService_GetCameraDHCPStatus_FullMethodName     = "/wendy.agent.services.v1.WendyVideoService/GetCameraDHCPStatus"
+	WendyVideoService_SetCameraDHCP_FullMethodName           = "/wendy.agent.services.v1.WendyVideoService/SetCameraDHCP"
 )
 
 // WendyVideoServiceClient is the client API for WendyVideoService service.
@@ -48,6 +51,14 @@ type WendyVideoServiceClient interface {
 	GetCameraControls(ctx context.Context, in *GetCameraControlsRequest, opts ...grpc.CallOption) (*GetCameraControlsResponse, error)
 	SetCameraControls(ctx context.Context, in *SetCameraControlsRequest, opts ...grpc.CallOption) (*SetCameraControlsResponse, error)
 	ResetCameraControls(ctx context.Context, in *ResetCameraControlsRequest, opts ...grpc.CallOption) (*ResetCameraControlsResponse, error)
+	// A radiometric thermal camera's per-camera temperature correction, which
+	// the agent applies to every temperature it publishes for that camera.
+	// Stored by the camera's stable_id, so it follows the camera across a
+	// reboot or a replug, and kept across agent and OS updates. See
+	// ThermalCalibration.
+	GetThermalCalibration(ctx context.Context, in *GetThermalCalibrationRequest, opts ...grpc.CallOption) (*ThermalCalibration, error)
+	SetThermalCalibration(ctx context.Context, in *SetThermalCalibrationRequest, opts ...grpc.CallOption) (*ThermalCalibration, error)
+	ClearThermalCalibration(ctx context.Context, in *ClearThermalCalibrationRequest, opts ...grpc.CallOption) (*ThermalCalibration, error)
 	// Camera DHCP is off by default. These operator APIs inspect and persist
 	// per-port permission; enabling never bypasses competing-server guards.
 	GetCameraDHCPStatus(ctx context.Context, in *GetCameraDHCPStatusRequest, opts ...grpc.CallOption) (*CameraDHCPStatus, error)
@@ -161,6 +172,36 @@ func (c *wendyVideoServiceClient) ResetCameraControls(ctx context.Context, in *R
 	return out, nil
 }
 
+func (c *wendyVideoServiceClient) GetThermalCalibration(ctx context.Context, in *GetThermalCalibrationRequest, opts ...grpc.CallOption) (*ThermalCalibration, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ThermalCalibration)
+	err := c.cc.Invoke(ctx, WendyVideoService_GetThermalCalibration_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *wendyVideoServiceClient) SetThermalCalibration(ctx context.Context, in *SetThermalCalibrationRequest, opts ...grpc.CallOption) (*ThermalCalibration, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ThermalCalibration)
+	err := c.cc.Invoke(ctx, WendyVideoService_SetThermalCalibration_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *wendyVideoServiceClient) ClearThermalCalibration(ctx context.Context, in *ClearThermalCalibrationRequest, opts ...grpc.CallOption) (*ThermalCalibration, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ThermalCalibration)
+	err := c.cc.Invoke(ctx, WendyVideoService_ClearThermalCalibration_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *wendyVideoServiceClient) GetCameraDHCPStatus(ctx context.Context, in *GetCameraDHCPStatusRequest, opts ...grpc.CallOption) (*CameraDHCPStatus, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(CameraDHCPStatus)
@@ -197,6 +238,14 @@ type WendyVideoServiceServer interface {
 	GetCameraControls(context.Context, *GetCameraControlsRequest) (*GetCameraControlsResponse, error)
 	SetCameraControls(context.Context, *SetCameraControlsRequest) (*SetCameraControlsResponse, error)
 	ResetCameraControls(context.Context, *ResetCameraControlsRequest) (*ResetCameraControlsResponse, error)
+	// A radiometric thermal camera's per-camera temperature correction, which
+	// the agent applies to every temperature it publishes for that camera.
+	// Stored by the camera's stable_id, so it follows the camera across a
+	// reboot or a replug, and kept across agent and OS updates. See
+	// ThermalCalibration.
+	GetThermalCalibration(context.Context, *GetThermalCalibrationRequest) (*ThermalCalibration, error)
+	SetThermalCalibration(context.Context, *SetThermalCalibrationRequest) (*ThermalCalibration, error)
+	ClearThermalCalibration(context.Context, *ClearThermalCalibrationRequest) (*ThermalCalibration, error)
 	// Camera DHCP is off by default. These operator APIs inspect and persist
 	// per-port permission; enabling never bypasses competing-server guards.
 	GetCameraDHCPStatus(context.Context, *GetCameraDHCPStatusRequest) (*CameraDHCPStatus, error)
@@ -237,6 +286,15 @@ func (UnimplementedWendyVideoServiceServer) SetCameraControls(context.Context, *
 }
 func (UnimplementedWendyVideoServiceServer) ResetCameraControls(context.Context, *ResetCameraControlsRequest) (*ResetCameraControlsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ResetCameraControls not implemented")
+}
+func (UnimplementedWendyVideoServiceServer) GetThermalCalibration(context.Context, *GetThermalCalibrationRequest) (*ThermalCalibration, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetThermalCalibration not implemented")
+}
+func (UnimplementedWendyVideoServiceServer) SetThermalCalibration(context.Context, *SetThermalCalibrationRequest) (*ThermalCalibration, error) {
+	return nil, status.Error(codes.Unimplemented, "method SetThermalCalibration not implemented")
+}
+func (UnimplementedWendyVideoServiceServer) ClearThermalCalibration(context.Context, *ClearThermalCalibrationRequest) (*ThermalCalibration, error) {
+	return nil, status.Error(codes.Unimplemented, "method ClearThermalCalibration not implemented")
 }
 func (UnimplementedWendyVideoServiceServer) GetCameraDHCPStatus(context.Context, *GetCameraDHCPStatusRequest) (*CameraDHCPStatus, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetCameraDHCPStatus not implemented")
@@ -420,6 +478,60 @@ func _WendyVideoService_ResetCameraControls_Handler(srv interface{}, ctx context
 	return interceptor(ctx, in, info, handler)
 }
 
+func _WendyVideoService_GetThermalCalibration_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetThermalCalibrationRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WendyVideoServiceServer).GetThermalCalibration(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WendyVideoService_GetThermalCalibration_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WendyVideoServiceServer).GetThermalCalibration(ctx, req.(*GetThermalCalibrationRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WendyVideoService_SetThermalCalibration_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetThermalCalibrationRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WendyVideoServiceServer).SetThermalCalibration(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WendyVideoService_SetThermalCalibration_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WendyVideoServiceServer).SetThermalCalibration(ctx, req.(*SetThermalCalibrationRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WendyVideoService_ClearThermalCalibration_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ClearThermalCalibrationRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WendyVideoServiceServer).ClearThermalCalibration(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WendyVideoService_ClearThermalCalibration_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WendyVideoServiceServer).ClearThermalCalibration(ctx, req.(*ClearThermalCalibrationRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _WendyVideoService_GetCameraDHCPStatus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(GetCameraDHCPStatusRequest)
 	if err := dec(in); err != nil {
@@ -494,6 +606,18 @@ var WendyVideoService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ResetCameraControls",
 			Handler:    _WendyVideoService_ResetCameraControls_Handler,
+		},
+		{
+			MethodName: "GetThermalCalibration",
+			Handler:    _WendyVideoService_GetThermalCalibration_Handler,
+		},
+		{
+			MethodName: "SetThermalCalibration",
+			Handler:    _WendyVideoService_SetThermalCalibration_Handler,
+		},
+		{
+			MethodName: "ClearThermalCalibration",
+			Handler:    _WendyVideoService_ClearThermalCalibration_Handler,
 		},
 		{
 			MethodName: "GetCameraDHCPStatus",

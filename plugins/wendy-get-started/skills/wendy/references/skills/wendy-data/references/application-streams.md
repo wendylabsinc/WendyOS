@@ -72,9 +72,20 @@ with an `allowlist` of stream id prefixes that match at a `/`, such as
 lists only the streams it admits. Stream ids are
 `apps/<app-id>/<service>/<stream>`, or `apps/<app-id>/<stream>` without a service
 name, and `agent/<stream>` for the agent's own, such as a campaign's
-`agent/campaign/<campaign>/markers/<source>`. Delivery is best effort and
-newest-first per stream; use an episode or `export-stream` when every record
-matters.
+`agent/campaign/<campaign>/markers/<source>`. The agent also publishes camera
+measurements an app would otherwise need raw frames for: a TOPDON TC001's
+temperatures on `agent/camera/grid/<source>` (`wendy.data.v1.Grid`, °C) with
+its hottest and coldest pixel on `agent/camera/markers/<source>`, and a JPEG
+SensorLink camera's brightness on `agent/camera/grid/<source>`. An app reads
+those only if it also declares `camera` (with a camera `allowlist`, only for
+the device paths it names). It decodes a camera only while a reader allowed
+to read it names one of its streams by id, prefix or schema, and never records
+them. A TC001 that reads wrong gets its own correction,
+`wendy device camera thermal-calibration set --id <id> --gain <g> --offset <o>`
+(corrected °C = gain × camera °C + offset, kept by the camera's stable id); its
+grids and markers then carry corrected values and the pair in `correction`, so
+temperature thresholds hold on that unit. Delivery is best effort and newest-first per stream; use an episode or
+`export-stream` when every record matters.
 
 Time-series declarations record channels, units, and the sample clock. Durable
 envelopes can provide explicit sample timestamps or a start, interval, and

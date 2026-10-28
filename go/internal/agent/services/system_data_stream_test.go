@@ -325,7 +325,7 @@ func (s *narrowingStream) Send(r *agentpbv2.DataRecord) error {
 func TestSystemAPIDataReadNarrowStopsWaitingRecords(t *testing.T) {
 	hub := live.NewHub(live.Limits{})
 	scope := []string{"apps/com.example.detector", "apps/com.example.thermal"}
-	svc := &systemDataService{hub: hub, scope: func() ([]string, bool) { return scope, true }}
+	svc := &systemDataService{hub: hub, scope: func() ([]string, cameraScope, bool) { return scope, cameraScope{}, true }}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	out := &narrowingStream{ctx: ctx, subbed: make(chan struct{})}

@@ -15,6 +15,14 @@ service WendyVideoService {
     rpc GetCameraControls(GetCameraControlsRequest) returns (GetCameraControlsResponse);
     rpc SetCameraControls(SetCameraControlsRequest) returns (SetCameraControlsResponse);
     rpc ResetCameraControls(ResetCameraControlsRequest) returns (ResetCameraControlsResponse);
+    // A radiometric thermal camera's per-camera temperature correction, which
+    // the agent applies to every temperature it publishes for that camera.
+    // Stored by the camera's stable_id, so it follows the camera across a
+    // reboot or a replug, and kept across agent and OS updates. See
+    // ThermalCalibration.
+    rpc GetThermalCalibration(GetThermalCalibrationRequest) returns (ThermalCalibration);
+    rpc SetThermalCalibration(SetThermalCalibrationRequest) returns (ThermalCalibration);
+    rpc ClearThermalCalibration(ClearThermalCalibrationRequest) returns (ThermalCalibration);
     // Camera DHCP is off by default. These operator APIs inspect and persist
     // per-port permission; enabling never bypasses competing-server guards.
     rpc GetCameraDHCPStatus(GetCameraDHCPStatusRequest) returns (CameraDHCPStatus);
@@ -259,6 +267,72 @@ message CameraControlResult {
     string name    = 1;
     bool   applied = 2;
     string detail  = 3; // when not applied, why -- e.g. "unknown control" or the errno text
+}
+
+// A radiometric thermal camera's temperature correction. Some units read
+// wrong in a way only a reference thermometer shows: some TOPDON TC001s read
+// every temperature about twice too hot, on any host, so a fixed decode cannot
+// fix them. The correction is per camera, measured against references, and
+// never copied from another camera:
+//
+//   corrected degC = gain * decoded degC + offset
+//   decoded degC   = count / 16 - 273.15   (the TC001's stacked 512x484 mode)
+//
+// It is the same line, with the same meaning and bounds, as wendy-console's
+// mac-fire-detector `celsiusCalibration: {"gain": g, "offset": o}`, so a pair
+// measured for one works in the other.
+//
+// The agent applies it to the camera's grid (wendy.data.v1.Grid scale and
+// offset), to its hottest and coldest markers, and to the plausibility guard
+// on the frame's mean, and marks both kinds of record with
+// wendy.data.v1.Correction.
+message ThermalCalibration {
+    // The camera's stable_id, as ListVideoDevices reports it, which the
+    // correction is stored under.
+    string stable_id = 1;
+    // The camera's /dev/videoN now, which a reboot can change, and its
+    // number. Empty and 0 when the camera is not attached (a clear by
+    // stable_id).
+    string path      = 2;
+    uint32 device_id = 3;
+    // False when no correction is stored: the agent publishes the camera's own
+    // reading, which is gain 1 and offset 0 below.
+    bool   calibrated = 4;
+    double gain       = 5;
+    double offset     = 6; // degC
+    // When the correction was set, in Unix nanoseconds; 0 when not calibrated.
+    int64  updated_unix_nanos = 7;
+}
+
+// The camera is named as in StreamVideoRequest: stable_id, scheme tag
+// included, wins over device_id and is resolved when the request arrives.
+// Only a local camera that offers a radiometric mode the agent decodes (the
+// TC001's stacked 512x484 YUYV mode) has a calibration; any other camera is
+// refused with FailedPrecondition, a network camera with InvalidArgument.
+message GetThermalCalibrationRequest {
+    uint32 device_id = 1;
+    string stable_id = 2;
+}
+
+// Sets the correction, replacing any stored one. gain must lie in 0.1..10
+// and offset in -100..100 degC, and both must be finite: a pair outside that
+// is refused with InvalidArgument, never clamped, because a typo must not
+// turn a room into a fire or blind the camera. A camera with no stable_id is
+// refused with FailedPrecondition: a correction kept by /dev/videoN would
+// follow the number to another camera after a reboot.
+message SetThermalCalibrationRequest {
+    uint32 device_id = 1;
+    string stable_id = 2;
+    double gain      = 3;
+    double offset    = 4; // degC
+}
+
+// Removes the correction, so the camera's own reading is published again. A
+// stable_id clears a stored correction even while that camera is not
+// attached. Clearing a camera that has none succeeds.
+message ClearThermalCalibrationRequest {
+    uint32 device_id = 1;
+    string stable_id = 2;
 }
 
 message GetCameraDHCPStatusRequest {}

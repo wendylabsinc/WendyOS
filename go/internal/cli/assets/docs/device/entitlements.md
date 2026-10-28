@@ -106,9 +106,15 @@ the streams of that app's service named `markers`, if it has one.
 `apps/com.example.detector` admits that app's streams, and not those of
 `com.example.detector2`. Without an allowlist the app reads every stream. Asking
 for a stream outside the allowlist fails with `PERMISSION_DENIED`. Entries may
-name the agent's own streams too, such as `agent/campaign/people/markers/`. The
-stream catalog, `_streams/<stream-id>`, lists only the streams the allowlist
-admits, so an entry never names the catalog itself.
+name the agent's own streams too, such as `agent/campaign/people/markers/`, or
+`agent/camera/` for the temperatures and brightness the agent reads from its
+cameras, so an app needs no raw frames to measure them. Those camera streams
+show what a camera sees, so the app reads them only if it also declares
+`camera`, and with a camera `allowlist` only for the device paths it names.
+Without that they are refused like a stream outside the allowlist, and asking
+for them never starts a camera. The stream catalog, `_streams/<stream-id>`,
+lists only the streams the app may read, so an entry never names the catalog
+itself.
 
 | Boundary | Value |
 |---|---|
@@ -122,9 +128,11 @@ admits, so an entry never names the catalog itself.
 The grant is read-only and live-only. An app sees records accepted after it
 subscribes, newest first per stream, or with `send_latest` the newest current
 record of each stream, and nothing recorded earlier. It grants no
-episode download, recording export, campaign control or sensor access. All
-services of a multi-service app share one socket and cannot be told apart on
-it, so the app reads the union of its services' allowlists.
+episode download, recording export, campaign control or sensor access; the
+agent's camera streams need `camera` as well. All services of a multi-service
+app share one socket and cannot be told apart on it, so the app reads the union
+of its services' allowlists, and the cameras of those that also declare
+`camera`.
 
 ## Network
 
