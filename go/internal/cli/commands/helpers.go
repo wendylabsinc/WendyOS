@@ -111,14 +111,22 @@ type tlsHandshakeRejectedError struct {
 	// switchStep, when set, is the advice to follow instead of renewing the
 	// current auth context, which would not fix this rejection (WDY-3864).
 	switchStep string
+	// expiredLogin is set when the device's own certificate names a tenant
+	// whose stored login has expired by this computer's clock. That, not the
+	// device clock, is why it refused the handshake.
+	expiredLogin *expiredLogin
 }
 
 func newTLSHandshakeRejectedError(cause error) error {
 	return tlsHandshakeRejectedError{cause: cause}
 }
 
+// Is also reports an expired login as the provisioned agent refusing this
+// CLI's credentials: the device is reachable and answered, so neither another
+// address, nor the default-device picker, nor a Cloud name lookup can help.
 func (e tlsHandshakeRejectedError) Is(target error) bool {
-	return target == errTLSHandshakeRejected
+	return target == errTLSHandshakeRejected ||
+		(target == errProvisionedAgentUnauthorized && e.expiredLogin != nil)
 }
 
 func (e tlsHandshakeRejectedError) Unwrap() error {
@@ -279,15 +287,33 @@ func (e orgMismatchWithCause) Unwrap() []error {
 // through to errTLSHandshakeRejected, whose downstream handling offers the
 // clock-skew and refresh-certs remedies.
 func chooseRejectionError(ctx context.Context, observedDeviceOrg int32, allCerts []config.CertificateInfo, cause error) error {
+	return chooseRejectionErrorForScope(ctx, certs.Scope{OrgID: observedDeviceOrg}, allCerts, cause)
+}
+
+// chooseRejectionErrorForScope is chooseRejectionError for a device whose
+// certificate may name a pki-core tenant rather than a numeric org. Such a
+// device has org 0, and an org-0 diagnosis weighs every stored login: one
+// unexpired login for any other tenant hid the device tenant's expired one, and
+// the rejection was then reported as a possible device clock error. A login
+// that has expired is checked first, for that tenant only, and is never
+// treated as a clock problem.
+func chooseRejectionErrorForScope(ctx context.Context, device certs.Scope, allCerts []config.CertificateInfo, cause error) error {
+	observedDeviceOrg := device.OrgID
 	if observedDeviceOrg != 0 && !orgInCerts(observedDeviceOrg, allCerts) {
 		return orgMismatchWithCause{
 			mismatch: newOrgMismatchDeviceError(observedDeviceOrg, allCerts, resolveUserOrgNamesFn(ctx, allCerts)),
 			cause:    cause,
 		}
 	}
+	now := time.Now()
+	if device.TenantUUID != "" {
+		if login := expiredLoginForTenant(device.TenantUUID, allCerts, now); login != nil {
+			return tlsHandshakeRejectedError{cause: cause, expiredLogin: login}
+		}
+	}
 	rejection := tlsHandshakeRejectedError{cause: cause, switchStep: switchContextStep(observedDeviceOrg)}
 	if isTLSCertificateError(cause) {
-		rejection.refreshReason = expiredClientCertificateReason(observedDeviceOrg, allCerts, time.Now())
+		rejection.refreshReason = expiredClientCertificateReason(observedDeviceOrg, allCerts, now)
 	}
 	return rejection
 }
@@ -1553,13 +1579,14 @@ func connectPickedLANDevice(ctx context.Context, d *models.DiscoveredDevice, add
 		// A picked device that rejects our certificate gets the same clock
 		// recovery as a named one: before this, a device chosen in the picker
 		// went straight to "TLS authentication failed" with no time proof.
-		// Same endpoint and candidates; the picker only runs interactively, so
-		// read-only monitoring (always non-interactive) never reaches here.
-		// autoSyncTimeAndRetry declines identity refusals itself. A pinned
-		// device that rejected our certificate arrives as the pinned refusal,
-		// so filtering on blocksUnauthenticatedFallback here would skip the
-		// one picker case that needs the time proof.
-		conn, err = autoSyncTimeAndRetry(ctx, err, dial)
+		// An expired login is renewed instead. Same endpoint and candidates;
+		// the picker only runs interactively, so read-only monitoring (always
+		// non-interactive) never reaches here. Recovery declines identity
+		// refusals itself. A pinned device that rejected our certificate
+		// arrives as the pinned refusal, so filtering on
+		// blocksUnauthenticatedFallback here would skip the one picker case
+		// that needs the time proof.
+		conn, err = recoverRejectedHandshake(ctx, err, dial)
 	}
 	if err != nil {
 		// Neither refusal is "the LAN attempt failed", and the BLE half of this
@@ -1571,6 +1598,11 @@ func connectPickedLANDevice(ctx context.Context, d *models.DiscoveredDevice, add
 		// wording of these refusals is not a contract, and a message rewrite
 		// must not silently reopen this.
 		if blocksUnauthenticatedFallback(err) {
+			return nil, err
+		}
+		// The device answered and refused an expired login. Bluetooth would
+		// present the same credentials over a path that explains less.
+		if expiredLoginFrom(err) != nil {
 			return nil, err
 		}
 		// LAN failed — fall back to BLE if available.
@@ -2500,7 +2532,11 @@ type mtlsWalk struct {
 	// The primary's org and failure evidence are kept separately from the
 	// walk-wide fields, which a later candidate would have overwritten.
 	primaryObservedOrg int32
-	primaryLastErr     error
+	// primaryObservedTenant is the pki-core tenant the primary's certificate
+	// named. A tenant device reports org 0, so without it the diagnosis could
+	// not tell which stored login the device needed.
+	primaryObservedTenant string
+	primaryLastErr        error
 	// Keep explicit certificate failures when a later port is unreachable.
 	// This evidence is diagnostic only; the suppression buckets stay unchanged.
 	primaryCertificateErr error
@@ -2649,6 +2685,9 @@ func (w *mtlsWalk) dialAddr(ctx context.Context, cand string, isPrimary bool) (*
 					w.jumped = true
 				}
 			}
+			if tenant, ok := conn.ObservedServerTenant(); ok && isPrimary {
+				w.primaryObservedTenant = tenant
+			}
 			conn.Close()
 			certRejected := isCertRejectionError(cand, probeErr)
 			if certRejected {
@@ -2752,7 +2791,14 @@ func dialAgentLadderWithCerts(ctx context.Context, target dialTarget, allCerts [
 			if walk.primaryCertificateErr != nil {
 				cause = walk.primaryCertificateErr
 			}
-			return nil, cause, chooseRejectionError(ctx, walk.primaryObservedOrg, allCerts, cause)
+			device := certs.Scope{OrgID: walk.primaryObservedOrg, TenantUUID: walk.primaryObservedTenant}
+			if device.TenantUUID == "" && target.Expected != nil {
+				// The device's own certificate never arrived (or named no
+				// tenant); the pin recorded for this name still says which
+				// tenant it belongs to.
+				device.TenantUUID = target.Expected.TenantUUID
+			}
+			return nil, cause, chooseRejectionErrorForScope(ctx, device, allCerts, cause)
 		}
 	}
 	if err := ctx.Err(); err != nil {
@@ -2772,7 +2818,11 @@ func dialAgentLadderWithCerts(ctx context.Context, target dialTarget, allCerts [
 		// errNoAuthenticatedEndpoint).
 		failure := pinnedHostNoAuthenticatedEndpointError(target.refusalKey(), candidates, walk.attempts, walk.anyCertRejection)
 		failure.pinKey = target.PinKey
-		return nil, walk.lastMTLSErr, failure
+		tenant := ""
+		if target.Expected != nil {
+			tenant = target.Expected.TenantUUID
+		}
+		return nil, walk.lastMTLSErr, pinnedRefusalError(failure, tenant, allCerts, time.Now())
 	}
 	// The plaintext rung stays on the primary address rather than walking the
 	// candidates. grpc.NewClient is lazy, so a plaintext "success" against a dead

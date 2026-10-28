@@ -67,6 +67,9 @@ func certificateRefreshReason(err error) string {
 func isCertRefreshableError(err error) bool { return certificateRefreshReason(err) != "" }
 
 func tlsRecoveryMessage(err error) string {
+	if login := expiredLoginFrom(err); login != nil {
+		return login.message() + "\n  " + login.loginStep
+	}
 	message := "TLS authentication failed. A wrong device clock or incompatible credentials may be responsible."
 	if reason := certificateRefreshReason(err); reason != "" {
 		message = "TLS authentication failed. " + reason
@@ -75,6 +78,9 @@ func tlsRecoveryMessage(err error) string {
 }
 
 func tlsRecoveryNextSteps(err error) []string {
+	if login := expiredLoginFrom(err); login != nil {
+		return []string{login.loginStep}
+	}
 	if certificateRefreshReason(err) != "" {
 		var rejection tlsHandshakeRejectedError
 		errors.As(err, &rejection)
@@ -106,13 +112,31 @@ func recoverAgentConnection(ctx context.Context, nonInteractive bool, cause erro
 		return nil, cause
 	}
 	if !isCertRefreshableError(cause) {
-		conn, err := autoSyncTimeAndRetry(ctx, cause, retry)
+		conn, err := recoverRejectedHandshake(ctx, cause, retry)
 		if err == nil {
 			return conn, nil
 		}
 		cause = err
 	}
 	return offerCertRefreshAndRetry(ctx, nonInteractive, cause, retry)
+}
+
+// recoverRejectedHandshake is the recovery a refused handshake gets without
+// asking: renewing an expired login, or else correcting the device clock. Both
+// entry points and a picker selection use it. An expired login never gets a
+// time proof: the device refused a certificate that has expired by this
+// computer's own clock, and the device clock cannot change that.
+func recoverRejectedHandshake(ctx context.Context, cause error, retry func() (*grpcclient.AgentConnection, error)) (*grpcclient.AgentConnection, error) {
+	if login := expiredLoginFrom(cause); login != nil {
+		conn, err, retried := renewExpiredLoginAndRetry(ctx, login, cause, retry)
+		if !retried || err == nil || ctx.Err() != nil {
+			return conn, err
+		}
+		// Renewed, and the device still refused. That failure has its own
+		// evidence now that the certificate is current; diagnose it as usual.
+		cause = err
+	}
+	return autoSyncTimeAndRetry(ctx, cause, retry)
 }
 
 func offerCertRefreshAndRetry(ctx context.Context, nonInteractive bool, cause error, retry func() (*grpcclient.AgentConnection, error)) (*grpcclient.AgentConnection, error) {
@@ -222,7 +246,7 @@ func autoSyncTimeAndRetry(ctx context.Context, cause error, retry func() (*grpcc
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
 	}
-	if stopConnectionRecovery(cause) || !isClockSkewSuspectError(cause) || clockSkewSyncAttempted {
+	if stopConnectionRecovery(cause) || !isClockSkewSuspectError(cause) || expiredLoginFrom(cause) != nil || clockSkewSyncAttempted {
 		return nil, cause
 	}
 	clockSkewSyncAttempted = true
@@ -265,7 +289,7 @@ func autoSyncTimeAndRetry(ctx context.Context, cause error, retry func() (*grpcc
 		if ctx.Err() != nil {
 			return nil, err
 		}
-		if stopConnectionRecovery(err) || !isClockSkewSuspectError(err) {
+		if stopConnectionRecovery(err) || !isClockSkewSuspectError(err) || expiredLoginFrom(err) != nil {
 			// The device now fails for another reason, which its error explains.
 			fmt.Fprintln(os.Stderr, "Connection retry failed after broadcasting the time proof.")
 			return nil, err

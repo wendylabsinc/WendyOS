@@ -124,6 +124,11 @@ type AgentConnection struct {
 	// by callers after the first RPC returns; atomic makes that read race-free.
 	// nil for connections that never install the sink (plaintext / NewFromConn).
 	observedServerOrg *atomic.Int32
+	// observedServerTenant is observedServerOrg's counterpart for a device
+	// certificate that names a pki-core tenant instead of a numeric org: the
+	// tenant UUID its server certificate claimed, recorded before any
+	// verification. Diagnostics only, with the same goroutine story.
+	observedServerTenant *atomic.Pointer[string]
 	// observedServerIdentity holds the device's full Wendy identity (org +
 	// asset) from a server certificate this client actually VERIFIED — the
 	// OnVerifiedServerIdentity sink, which fires only after the chain and org
@@ -511,6 +516,8 @@ func ConnectWithTLSExpecting(ctx context.Context, address string, certInfo *conf
 	if err != nil {
 		return nil, err
 	}
+	observedTenant := new(atomic.Pointer[string])
+	tlsCfg.VerifyConnection = observeServerTenant(observedTenant, tlsCfg.VerifyConnection)
 
 	opts := []grpc.DialOption{
 		grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)),
@@ -537,6 +544,7 @@ func ConnectWithTLSExpecting(ctx context.Context, address string, certInfo *conf
 	ac.IsMTLS = true
 	ac.CertInfo = certInfo
 	ac.observedServerOrg = observedOrg
+	ac.observedServerTenant = observedTenant
 	ac.observedServerIdentity = observedIdentity
 	ac.identityMismatch = mismatch
 	ac.pinMismatch = pinMismatch
@@ -620,6 +628,40 @@ func (c *AgentConnection) ObservedServerOrg() (int32, bool) {
 	}
 	v := c.observedServerOrg.Load()
 	return v, v != 0
+}
+
+// observeServerTenant records the pki-core tenant the peer's leaf certificate
+// names, then runs verify. It records before verification, like the org sink:
+// a device that refuses this CLI's certificate has still said which tenant it
+// belongs to, and that is what tells an expired login apart from a wrong clock.
+func observeServerTenant(dst *atomic.Pointer[string], verify func(tls.ConnectionState) error) func(tls.ConnectionState) error {
+	return func(cs tls.ConnectionState) error {
+		if len(cs.PeerCertificates) > 0 {
+			if id, ok, err := certs.IdentityFromCert(cs.PeerCertificates[0]); ok && err == nil && id.TenantUUID != "" {
+				tenant := id.TenantUUID
+				dst.Store(&tenant)
+			}
+		}
+		if verify == nil {
+			return nil
+		}
+		return verify(cs)
+	}
+}
+
+// ObservedServerTenant returns the pki-core tenant UUID named by the device's
+// server certificate during the TLS handshake, or ("", false) when none was
+// observed. Like ObservedServerOrg it is unverified and for diagnostics only:
+// it must never decide whom to trust.
+func (c *AgentConnection) ObservedServerTenant() (string, bool) {
+	if c == nil || c.observedServerTenant == nil {
+		return "", false
+	}
+	tenant := c.observedServerTenant.Load()
+	if tenant == nil || *tenant == "" {
+		return "", false
+	}
+	return *tenant, true
 }
 
 // ObservedServerIdentity returns the device's Wendy identity (org + entity, the
