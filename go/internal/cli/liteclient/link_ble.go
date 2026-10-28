@@ -50,7 +50,9 @@ func (c *WendyLiteClient) ConnectViaBLEContext(ctx context.Context, address stri
 			MinVersion:         tls.VersionTLS12,
 		}
 	}
-	_ = stream.SetDeadline(time.Now().Add(bleDialTimeout))
+	// Certificate flights have the same finite radio budget as a mesh TCP
+	// endpoint; GAP/GATT/L2CAP setup retain their shorter independent limits.
+	_ = stream.SetDeadline(time.Now().Add(60 * time.Second))
 	tlsConn := tls.Client(stream, tlsCfg)
 	if err := tlsConn.HandshakeContext(ctx); err != nil {
 		stream.Close() //nolint:errcheck,gosec -- teardown on an already-failed path
@@ -58,7 +60,7 @@ func (c *WendyLiteClient) ConnectViaBLEContext(ctx context.Context, address stri
 	}
 	_ = stream.SetDeadline(time.Time{})
 	c.link = newDirectLink(tlsConn)
-	if err := c.handshake(); err != nil {
+	if err := c.handshakeWithin(60 * time.Second); err != nil {
 		c.link.close()
 		c.link = nil
 		return fmt.Errorf("handshake: %w", err)
