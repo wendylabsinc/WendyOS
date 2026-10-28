@@ -37,11 +37,7 @@ type observedRR struct {
 	expires time.Time
 }
 
-type publication struct {
-	digest  [32]byte
-	renewAt time.Time
-	expires int64 // Last successfully signed absolute expiry, in wire milliseconds.
-}
+type publication struct{ digest [32]byte }
 
 // Collector accepts only DNS-SD advertisements arriving from its app's IP on
 // its app bridge. It validates PTR/SRV/TXT/A ownership and declared host-port
@@ -106,7 +102,7 @@ func rrKey(rr dns.RR) string {
 // supplied by the socket's control message, not a field inside the DNS packet.
 // Outgoing projected records are sourced from the agent gateway and are thus
 // never re-exported as this app's own advertisements.
-func (c *Collector) Observe(msg *dns.Msg, source net.IP, bridgeIndex int, now time.Time) ([]SignedRecord, error) {
+func (c *Collector) Observe(msg *dns.Msg, source net.IP, bridgeIndex int, now time.Time) ([]Record, error) {
 	if msg == nil || !msg.Response || bridgeIndex != c.scope.BridgeIndex || !source.Equal(c.scope.AppIP) {
 		return nil, nil
 	}
@@ -160,13 +156,12 @@ func (c *Collector) pruneRecords(now time.Time) {
 	}
 }
 
-// Sweep expires incomplete announcements, renews unchanged publications near
-// half-lease only when their signed expiry advances, and signs removals before
-// the ingress mapping is released.
-func (c *Collector) Sweep(now time.Time) ([]SignedRecord, error) {
+// Sweep updates the complete active service set when DNS content or liveness
+// changes. DNS renewals never cause a signed publication.
+func (c *Collector) Sweep(now time.Time) ([]Record, error) {
 	c.pruneRecords(now)
 	active := map[string]bool{}
-	var changed []SignedRecord
+	var changed []Record
 	for _, item := range c.records {
 		ptr, ok := item.rr.(*dns.PTR)
 		if !ok {
@@ -233,20 +228,14 @@ func (c *Collector) Sweep(now time.Time) ([]SignedRecord, error) {
 			Type: typeName, Instance: instance, HostPort: hostPort,
 			TXT: append([]string(nil), txt.Txt...), Lease: lease}
 		digest := sha256.Sum256([]byte(fmt.Sprintf("%s\x00%s\x00%d\x00%q", typeName, instance, hostPort, spec.TXT)))
-		expires := now.Add(lease).UnixMilli()
-		// The remaining DNS TTL shrinks on every Sweep. Re-signing that same
-		// absolute deadline adds a generation without extending authority.
-		// Fresh DNS observations can extend it; content changes still publish
-		// immediately. Compare at the signed wire format's precision.
-		if old, found := c.published[serviceID]; found && old.digest == digest &&
-			(now.Before(old.renewAt) || expires <= old.expires) {
+		if old, found := c.published[serviceID]; found && old.digest == digest {
 			continue
 		}
 		w, err := c.catalog.Publish(spec, now)
 		if err != nil {
 			return changed, err
 		}
-		c.published[serviceID] = publication{digest: digest, renewAt: now.Add(lease / 2), expires: expires}
+		c.published[serviceID] = publication{digest: digest}
 		changed = append(changed, w)
 	}
 	for serviceID := range c.published {
@@ -265,8 +254,8 @@ func (c *Collector) Sweep(now time.Time) ([]SignedRecord, error) {
 
 // WithdrawAll is called before an app bridge or ingress mapping is removed.
 // It clears observation state so a later bridge instance starts cleanly.
-func (c *Collector) WithdrawAll(now time.Time) ([]SignedRecord, error) {
-	var changed []SignedRecord
+func (c *Collector) WithdrawAll(now time.Time) ([]Record, error) {
+	var changed []Record
 	for serviceID := range c.published {
 		w, err := c.catalog.Remove(c.scope.AppID, serviceID, now)
 		if err != nil {

@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
+	"github.com/wendylabsinc/wendy/go/internal/agent/netwire"
 	"sort"
 	"sync"
 	"time"
@@ -28,26 +29,58 @@ const (
 	maxBytes           = 8 << 20
 )
 
-// Digests are raw SHA-256 bytes (base64 in the surrounding JSON envelope), not
-// hex strings. DATA is chunked so actual progress, rather than polling, extends
+// Digests and DATA are native CBOR byte strings. DATA is chunked so actual progress, rather than polling, extends
 // ownership on slow links. Each request belongs to one session incarnation.
 type Message struct {
-	Version int    `json:"v"`
-	Op      string `json:"op"`
-	Type    uint8  `json:"type"`
-	Digest  []byte `json:"digest"`
-	Request uint64 `json:"request,omitempty"`
-	Offset  int    `json:"offset,omitempty"`
-	Total   int    `json:"total,omitempty"`
-	Data    []byte `json:"data,omitempty"`
+	Version int    `json:"v" cbor:"v"`
+	Op      string `json:"op" cbor:"o"`
+	Type    uint8  `json:"type" cbor:"t"`
+	Digest  []byte `json:"digest" cbor:"h"`
+	Request uint64 `json:"request,omitempty" cbor:"r,omitempty"`
+	Offset  int    `json:"offset,omitempty" cbor:"f,omitempty"`
+	Total   int    `json:"total,omitempty" cbor:"l,omitempty"`
+	Data    []byte `json:"data,omitempty" cbor:"d,omitempty"`
+}
+
+// Known separates optional future operations from the formats understood here.
+// Unknown operations are consumed without changing hints, claims or authority.
+func (m Message) Known() bool {
+	switch m.Op {
+	case "have", "want", "unavailable", "data", "gone":
+		return true
+	}
+	return false
+}
+
+func (m *Message) UnmarshalCBOR(data []byte) error {
+	var head struct {
+		Op string `json:"op" cbor:"o"`
+	}
+	if err := netwire.Unmarshal(data, &head); err != nil {
+		return err
+	}
+	if head.Op != "" && !(Message{Op: head.Op}).Known() {
+		*m = Message{Op: head.Op}
+		return nil
+	}
+	type plain Message
+	var parsed plain
+	if err := netwire.Unmarshal(data, &parsed); err != nil {
+		return err
+	}
+	*m = Message(parsed)
+	return nil
 }
 
 func (m Message) Validate() error {
+	if m.Op != "" && !m.Known() {
+		return nil
+	}
 	if m.Version != Version || (m.Type != Manifest && m.Type != Service) || len(m.Digest) != sha256.Size {
 		return errors.New("invalid gossip version, type or digest")
 	}
 	switch m.Op {
-	case "have":
+	case "have", "gone":
 		if m.Request != 0 || m.Offset != 0 || m.Total != 0 || len(m.Data) != 0 {
 			return errors.New("invalid HAVE")
 		}
@@ -261,6 +294,13 @@ func Unavailable(request Message) *Message {
 	return message("unavailable", request.ID(), request.Request)
 }
 
+// Gone proactively withdraws this peer's HAVE for exactly one artifact. It is
+// cache residency information, never an origin-signed service withdrawal.
+// Send only to peers supporting this prototype extension, after eviction and
+// before advertising subsequent availability on that session. Accepted outgoing
+// transfers must retain their object; evict an idle object instead.
+func Gone(id ID) *Message { return message("gone", id, 0) }
+
 // Resolve runs only after the adapter's existing identity/signature/scope and
 // version checks finish. Authenticated stale bodies get a short receipt;
 // unverified expired bodies use Discard, and invalid bodies fail their session.
@@ -344,8 +384,22 @@ func (s *Session) claim(id ID, now time.Time) *Message {
 // Receive returns a protocol reply and, at most once, a complete untrusted
 // body for the adapter to authenticate. Unsolicited/obsolete DATA is ignored.
 func (s *Session) Receive(m Message, now time.Time) (*Message, []byte, error) {
+	return s.receive(m, now, false)
+}
+
+// ReceiveDeferred retains an accepted WANT in the existing bounded upload
+// slots without advancing its first DATA. Poll emits that DATA only when the
+// adapter has bulk output credit. Immediate replies need at most one slot.
+func (s *Session) ReceiveDeferred(m Message, now time.Time) (*Message, []byte, error) {
+	return s.receive(m, now, true)
+}
+
+func (s *Session) receive(m Message, now time.Time, deferUpload bool) (*Message, []byte, error) {
 	if err := m.Validate(); err != nil {
 		return nil, nil, err
+	}
+	if !m.Known() {
+		return nil, nil, nil
 	}
 	if s.closed || m.Type != s.kind {
 		return nil, nil, errors.New("gossip session type mismatch")
@@ -356,6 +410,22 @@ func (s *Session) Receive(m Message, now time.Time) (*Message, []byte, error) {
 	p.prune(now)
 	id := m.ID()
 	switch m.Op {
+	case "gone":
+		delete(s.seen, id)
+		delete(s.unavailable, id)
+		if f := p.pending[id]; f != nil {
+			delete(f.suppliers, s.owner)
+			// Completed bytes may already be under independent verification.
+			// Withdrawal cannot release that reservation or discard those bytes.
+			if f.owner == s.owner && !f.received {
+				f.owner, f.request, f.avoid = 0, 0, s.owner
+				f.data, f.total = nil, 0
+			}
+			if f.owner == 0 && len(f.suppliers) == 0 {
+				delete(p.pending, id)
+			}
+		}
+		return nil, nil, nil
 	case "have":
 		if object, known := p.objects[id]; known {
 			object.used = now
@@ -381,6 +451,9 @@ func (s *Session) Receive(m Message, now time.Time) (*Message, []byte, error) {
 		x := &transfer{message: *message("data", id, m.Request), data: o.data}
 		s.out = append(s.out, x)
 		p.serving++
+		if deferUpload {
+			return nil, nil, nil
+		}
 		return s.chunk(), nil, nil
 	case "unavailable":
 		if f := p.pending[id]; f != nil && f.owner == s.owner && f.request == m.Request && !f.received {

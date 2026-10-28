@@ -3,8 +3,8 @@ package localmesh
 import (
 	"bytes"
 	"encoding/binary"
-	"encoding/json"
 	"errors"
+	"github.com/wendylabsinc/wendy/go/internal/agent/netwire"
 	"io"
 	"sort"
 	"time"
@@ -15,21 +15,65 @@ import (
 
 const MaxControlMessage = 64 << 10
 
+// Unsolicited/bulk polling leaves these slots for responses which let both
+// sides of a slow full-duplex control stream continue making progress.
+const directoryResponseReserve = 8
+
+// ErrControlBackpressure consumes no input or transfer state. The actor keeps
+// that one ingress message and retries only after output credit becomes free.
+var ErrControlBackpressure = errors.New("directory response credit unavailable")
+
+// These are immediate response obligations, not total transfer size. Full
+// certificate chains and manifests are received normally; outgoing router
+// bytes use bounded descriptors/chunks. Deferred WANT uploads need only their
+// descriptor (or unavailable) now and leave DATA for separately credited Poll.
+func directoryResponseDemand(m ControlMessage) int {
+	switch m.Kind {
+	case "gossip":
+		if m.Gossip == nil || !m.Gossip.Known() {
+			return 0
+		}
+		switch m.Gossip.Op {
+		case "gone", "unavailable":
+			return 0
+		case "data":
+			if m.Gossip.Offset+len(m.Gossip.Data) < m.Gossip.Total {
+				return 0
+			}
+		}
+		return 1
+	case "manifest-request":
+		return 2
+	case "certificate", "identity-request", "manifest", "bundle":
+		return 1
+	default:
+		return 0
+	}
+}
+
 // Control messages use one bounded reliable stream per authenticated link;
 // routing and payload packets remain independent QUIC datagrams.
 type ControlMessage struct {
-	Kind        string              `json:"kind"`
-	Hello       *LinkHello          `json:"hello,omitempty"`
-	Bundle      [][]byte            `json:"bundle,omitempty"`
-	Manifest    *SignedManifest     `json:"manifest,omitempty"`
-	Principal   string              `json:"principal,omitempty"`
-	Certificate *CertificateMessage `json:"certificate,omitempty"`
-	Gossip      *netgossip.Message  `json:"gossip,omitempty"`
-	Catalog     []byte              `json:"catalog,omitempty"`
+	Kind        string              `json:"kind" cbor:"k"`
+	Hello       *LinkHello          `json:"hello,omitempty" cbor:"h,omitempty"`
+	Bundle      [][]byte            `json:"bundle,omitempty" cbor:"b,omitempty"`
+	Manifest    *SignedManifest     `json:"manifest,omitempty" cbor:"m,omitempty"`
+	Principal   string              `json:"principal,omitempty" cbor:"p,omitempty"`
+	Certificate *CertificateMessage `json:"certificate,omitempty" cbor:"c,omitempty"`
+	Gossip      *netgossip.Message  `json:"gossip,omitempty" cbor:"g,omitempty"`
+	Time        *TimestampControl   `json:"time,omitempty" cbor:"t,omitempty"`
+}
+
+func knownControlKind(kind string) bool {
+	switch kind {
+	case "time", "gossip", "certificate", "hello", "bundle", "manifest", "identity-request", "manifest-request", "identity-missing", "manifest-missing":
+		return true
+	}
+	return false
 }
 
 func WriteControl(w io.Writer, m ControlMessage) error {
-	data, err := json.Marshal(m)
+	data, err := netwire.Marshal(m)
 	if err != nil {
 		return err
 	}
@@ -72,11 +116,21 @@ func ReadControl(r io.Reader) (ControlMessage, error) {
 	if _, err := io.ReadFull(r, data); err != nil {
 		return m, err
 	}
-	if err := json.Unmarshal(data, &m); err != nil {
+	var head struct {
+		Kind string `json:"kind" cbor:"k"`
+	}
+	if err := netwire.Unmarshal(data, &head); err != nil {
 		return m, err
 	}
-	if m.Kind != "catalog" && len(m.Catalog) != 0 {
-		return m, errors.New("unexpected catalogue payload")
+	if head.Kind != "" && !knownControlKind(head.Kind) {
+		return ControlMessage{Kind: head.Kind}, nil
+	}
+	if err := netwire.Unmarshal(data, &m); err != nil {
+		return m, err
+	}
+
+	if m.Kind != "time" && m.Time != nil {
+		return m, errors.New("unexpected timestamp payload")
 	}
 	if m.Kind != "certificate" && m.Certificate != nil {
 		return m, errors.New("unexpected certificate message")
@@ -85,16 +139,22 @@ func ReadControl(r io.Reader) (ControlMessage, error) {
 		return m, errors.New("unexpected gossip payload")
 	}
 	switch m.Kind {
+	case "time":
+		if m.Hello != nil || m.Manifest != nil || m.Certificate != nil || m.Gossip != nil || len(m.Bundle) != 0 || m.Principal != "" {
+			return m, errors.New("invalid timestamp envelope")
+		}
+		if err := m.Time.validate(); err != nil {
+			return m, err
+		}
 	case "gossip":
+		if m.Gossip != nil && m.Gossip.Op != "" && !m.Gossip.Known() {
+			return m, nil
+		}
 		if m.Gossip == nil || m.Gossip.Type != netgossip.Manifest || m.Hello != nil || m.Manifest != nil || len(m.Bundle) != 0 || m.Principal != "" {
 			return m, errors.New("invalid manifest gossip envelope")
 		}
 		if err := m.Gossip.Validate(); err != nil {
 			return m, err
-		}
-	case "catalog":
-		if len(m.Catalog) == 0 || len(m.Catalog) > MaxCatalogFrame || m.Hello != nil || m.Manifest != nil || len(m.Bundle) != 0 || m.Principal != "" {
-			return m, errors.New("invalid catalogue frame")
 		}
 	case "certificate":
 		if m.Certificate == nil || m.Hello != nil || m.Manifest != nil || len(m.Bundle) != 0 || m.Principal != "" {
@@ -115,7 +175,7 @@ func ReadControl(r io.Reader) (ControlMessage, error) {
 		if m.Manifest == nil || len(m.Bundle) != 0 || m.Principal != "" {
 			return m, errors.New("invalid manifest message")
 		}
-	case "identity-request":
+	case "identity-request", "manifest-request", "identity-missing", "manifest-missing":
 		// Only a full device principal addresses an identity: no hash, no number.
 		if _, err := meshid.DeviceFromPrincipal(m.Principal); err != nil {
 			return m, errors.New("invalid identity request")
@@ -149,8 +209,6 @@ type Synchronizer struct {
 	gossip    *netgossip.Session
 	directory *Directory
 	cache     *IdentityCache
-	// leafBundles selects the negotiated Lite bundle role; routers use descriptors.
-	leafBundles bool
 	// Legacy leaf-fingerprint keys mean known bundles. Gossip keys are full
 	// descriptor digests with freshness bounded by the certificate fetch lease.
 	sent    map[string]time.Time
@@ -162,6 +220,7 @@ type Synchronizer struct {
 	// repeatedly filling a bounded neighbour queue with its sorted prefix.
 	reconcileAfter     string
 	reconcileRemaining int
+	bootstrapAfter     string // own proof already queued for the first reconciliation
 }
 
 func NewSynchronizer(d *Directory, c *IdentityCache, pools ...*netgossip.Pool) *Synchronizer {
@@ -181,6 +240,23 @@ func (s *Synchronizer) SeedKnownBundles(fingerprints []string) {
 			s.sent[fp] = time.Time{}
 		}
 	}
+}
+
+// bootstrapOwn queues the neighbour's directly verifiable proof before bulk
+// records whose keys the receiver may need to fetch. The next bounded pass
+// continues after this principal and omits its already queued announcement.
+func (s *Synchronizer) bootstrapOwn(principal string, now time.Time, slots int) []ControlMessage {
+	for _, w := range s.directory.Records(now) {
+		if w.Principal != principal {
+			continue
+		}
+		messages, fits := s.recordBounded(w, now, slots)
+		if fits && len(messages) > 0 {
+			s.bootstrapAfter = principal
+		}
+		return messages
+	}
+	return nil
 }
 
 func (s *Synchronizer) Record(w SignedManifest, now time.Time) []ControlMessage {
@@ -219,17 +295,14 @@ func (s *Synchronizer) recordBounded(w SignedManifest, now time.Time, slots int)
 		s.sent[fp] = time.Time{}
 		out = append(out, s.identityMessage(w.Principal, chain))
 	}
-	w.Body = append(json.RawMessage(nil), w.Body...)
+	w.Body = append([]byte(nil), w.Body...)
 	w.Signature = append([]byte(nil), w.Signature...)
 	return append(out, ControlMessage{Kind: "manifest", Manifest: &w}), true
 }
 
 // identityMessage is called only with a current independently verified cache
-// entry. The leaf protocol cannot fetch descriptors or certificate chunks.
+// entry. Router peers fetch public certificate bytes through bounded chunks.
 func (s *Synchronizer) identityMessage(principal string, chain [][]byte) ControlMessage {
-	if s.leafBundles {
-		return ControlMessage{Kind: "bundle", Bundle: chain}
-	}
 	return ControlMessage{Kind: "certificate", Certificate: DescribeCertificates(principal, chain)}
 }
 
@@ -248,6 +321,16 @@ func (s *Synchronizer) Reconcile(now time.Time) []ControlMessage {
 func (s *Synchronizer) ReconcileBounded(now time.Time, slots int) []ControlMessage {
 	records := s.directory.Records(now)
 	s.reconcileRemaining = len(records)
+	if s.bootstrapAfter != "" {
+		for _, w := range records {
+			if w.Principal == s.bootstrapAfter {
+				s.reconcileAfter = s.bootstrapAfter
+				s.reconcileRemaining--
+				break
+			}
+		}
+		s.bootstrapAfter = ""
+	}
 	return s.reconcileBatch(records, now, slots)
 }
 
@@ -279,10 +362,16 @@ func (s *Synchronizer) reconcileBatch(records []SignedManifest, now time.Time, s
 	return out
 }
 
+// Availability is only reported for device principals in this directory's tenant.
+func (s *Synchronizer) localDevicePrincipal(principal string) bool {
+	device, err := meshid.DeviceFromPrincipal(principal)
+	return err == nil && device.Tenant() == s.directory.tenant
+}
+
 // Receive returns replies plus independently verified changed records to relay.
 // Invalid signatures or lifetimes are fatal except for a bounded retry while
 // an exact advertised renewed chain is in flight. Unverified data grants no trust.
-func (s *Synchronizer) receive(m ControlMessage, now time.Time) (replies []ControlMessage, changed []SignedManifest, err error) {
+func (s *Synchronizer) receive(m ControlMessage, now time.Time, slots ...int) (replies []ControlMessage, changed []SignedManifest, err error) {
 	s.prunePendingRenewals(now)
 	switch m.Kind {
 	case "certificate":
@@ -294,12 +383,48 @@ func (s *Synchronizer) receive(m ControlMessage, now time.Time) (replies []Contr
 				s.dropPendingManifest(c.Principal)
 			}
 		}
-		replies, completed, err := s.certificates.Receive(*m.Certificate, now)
+		missing := s.certificates.MissingPrincipals(m.Certificate.Missing)
+		replies, completed, err := s.certificates.Receive(*m.Certificate, now, slots...)
+		if err == nil {
+			for _, principal := range missing {
+				s.dropPendingManifest(principal)
+			}
+		}
 		return s.certificateResult(replies, completed, err, now)
+	case "identity-missing":
+		// This synchronizer owns only this neighbour's outstanding claims.
+		// Forget its unverified download without creating a shared receipt,
+		// allowing a different announcing supplier to take over immediately.
+		s.dropPendingManifest(m.Principal)
+		s.certificates.forgetPrincipal(m.Principal, now)
+	case "manifest-missing":
+		// Go does not originate principal-based manifest lookups. There is no
+		// outstanding request here to cancel; consume the availability reply.
+	case "manifest-request":
+		// Constrained peers can retain verified capabilities independently
+		// of routing/key caches. Answer misses through ordinary HAVE/WANT,
+		// preserving the existing bounded transfer and verification path.
+		available := 2
+		if len(slots) > 0 {
+			available = slots[0]
+		}
+		found := false
+		for _, w := range s.directory.Records(now) {
+			if w.Principal == m.Principal {
+				found = true
+				replies, _ = s.recordBounded(w, now, available)
+				break
+			}
+		}
+		if !found && s.localDevicePrincipal(m.Principal) {
+			replies = append(replies, ControlMessage{Kind: "manifest-missing", Principal: m.Principal})
+		}
 	case "identity-request":
 		chain, _, ok := s.cache.Get(m.Principal, now)
 		if ok {
 			replies = append(replies, s.identityMessage(m.Principal, chain))
+		} else if s.localDevicePrincipal(m.Principal) {
+			replies = append(replies, ControlMessage{Kind: "identity-missing", Principal: m.Principal})
 		}
 	case "bundle":
 		principal, e := s.cache.Put(m.Bundle, now)
@@ -321,6 +446,12 @@ func (s *Synchronizer) receive(m ControlMessage, now time.Time) (replies []Contr
 			return nil, nil, errors.New("missing manifest")
 		}
 		ok, e := s.directory.Accept(*m.Manifest, now)
+		if errors.Is(e, ErrUnsupportedManifest) {
+			// Future artifacts are unsupported claims, not broken carriers.
+			// Discard their fetch slot without installing routes/replay state.
+			s.discardManifest(*m.Manifest)
+			return nil, nil, nil
+		}
 		if s.gossip != nil && (e == nil || errors.Is(e, ErrStaleManifest)) {
 			s.resolveManifest(*m.Manifest, now, e == nil)
 		}
@@ -363,6 +494,9 @@ func (s *Synchronizer) receive(m ControlMessage, now time.Time) (replies []Contr
 			changed = append(changed, *m.Manifest)
 		}
 	default:
+		if m.Kind != "" && !knownControlKind(m.Kind) {
+			return nil, nil, nil
+		}
 		return nil, nil, errors.New("unknown directory message")
 	}
 	return replies, changed, nil
@@ -413,18 +547,22 @@ func (s *Synchronizer) ContinueCertificates(now time.Time, slots ...int) ([]Cont
 	s.prunePendingRenewals(now)
 	if s.gossip != nil {
 		for principal, w := range s.pending {
-			var m Manifest
-			if json.Unmarshal(w.Body, &m) != nil || !time.UnixMilli(m.Expires).After(now) {
+			m, decodeErr := DecodeManifest(w.Body)
+			if decodeErr != nil || !time.UnixMilli(m.Expires).After(now) {
 				s.dropPendingManifest(principal)
 			}
 		}
 	}
-	messages, completed, err := s.certificates.Poll(now)
+	certificateBudget := slots
+	if len(slots) > 0 {
+		certificateBudget = []int{max(0, slots[0]-directoryResponseReserve)}
+	}
+	messages, completed, err := s.certificates.Poll(now, certificateBudget...)
 	replies, changed, err := s.certificateResult(messages, completed, err, now)
 	if s.gossip != nil {
 		budget := 12
 		if len(slots) > 0 {
-			budget = max(0, slots[0]-len(replies))
+			budget = max(0, slots[0]-len(replies)-directoryResponseReserve)
 		}
 		for _, m := range s.gossip.Poll(now, budget) {
 			replies = append(replies, ControlMessage{Kind: "gossip", Gossip: m})
@@ -444,8 +582,8 @@ func (s *Synchronizer) deferPendingRenewal(w SignedManifest, now time.Time, life
 	}
 	// Accept already parsed and validated this body before reporting the
 	// renewal mismatch. Bound retained state by that signed expiry too.
-	var manifest Manifest
-	if json.Unmarshal(w.Body, &manifest) != nil {
+	manifest, decodeErr := DecodeManifest(w.Body)
+	if decodeErr != nil {
 		return false
 	}
 	pending := pendingManifestRenewal{chain: description, expires: minTime(deadline, time.UnixMilli(manifest.Expires)), fetchUntil: deadline}

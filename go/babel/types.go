@@ -47,6 +47,11 @@ type Config struct {
 	// origin authorization, but cannot change another peer's candidate or source
 	// feasibility history. Locally originated routes do not use this hook.
 	AcceptRouteUpdate func(RouterID, netip.Prefix, uint16) bool `json:"-"`
+	// AdvertiseLocalRoute optionally gates finite local advertisements until the
+	// embedding application has published their signed origin authorization.
+	// False retains the bounded triggered-update retry; Hello/IHU, remote routes
+	// and forwarding continue. The callback must not call back into the engine.
+	AdvertiseLocalRoute func(RouterID, netip.Prefix, uint16) bool `json:"-"`
 }
 
 type Link struct {
