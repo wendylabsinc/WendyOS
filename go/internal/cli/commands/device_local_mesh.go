@@ -3,20 +3,25 @@ package commands
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/wendylabsinc/wendy/go/internal/cli/browserauth"
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
+	"github.com/wendylabsinc/wendy/go/internal/cli/sessionbroker"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
+	"github.com/wendylabsinc/wendy/go/internal/shared/litetopology"
+	"github.com/wendylabsinc/wendy/go/internal/shared/models"
 	pb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protojson"
 )
 
-var connectLocalMeshTopology = connectToAgent
+var resolveLocalMeshTopologyTarget = resolveTargetInner
+var readLocalOperatorTopology = sessionbroker.ReadOperatorTopology
 var observedLocalMeshTopologyIdentity = func(conn *grpcclient.AgentConnection) (certs.WendyIdentity, bool) {
 	return conn.ObservedServerIdentity()
 }
@@ -98,19 +103,30 @@ func newDeviceLocalMeshCmd() *cobra.Command {
 }
 
 func newDeviceLocalMeshTopologyCmd() *cobra.Command {
-	var observation bool
+	var observation, localCLI bool
 	cmd := &cobra.Command{
 		Use:   "topology",
-		Short: "Show the selected device's observed local net peers, routes and route proofs",
-		Long:  "Reads one live topology snapshot from the selected agent. Observations are local to that device; they do not prove fleet-wide reachability. Use --json for the complete snapshot.",
+		Short: "Show a router's observed local net peers, routes and route proofs",
+		Long:  "Reads a live topology observation from the selected WendyOS or Wendy Lite device, or the existing local CLI router with --local-cli. Observations are local to that reporter; they do not prove fleet-wide reachability. Use --json for the complete snapshot.",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if observation && !jsonOutput {
 				return fmt.Errorf("--observation requires --json")
 			}
-			topology, err := readLocalMeshTopology(cmd.Context())
+			var topology *pb.LocalMeshTopology
+			var platform string
+			var err error
+			if localCLI {
+				if cmd.Flags().Changed("device") || cmd.InheritedFlags().Changed("device") {
+					return fmt.Errorf("--local-cli and --device select different reporters; choose one")
+				}
+				topology, err = readCLIReporter(cmd.Context())
+				platform = "wendy-cli"
+			} else {
+				topology, platform, err = readLocalMeshReporter(cmd.Context())
+			}
 			if observation {
-				return printLocalMeshObservation(cmd, topology, err)
+				return printLocalMeshObservation(cmd, topology, err, platform)
 			}
 			if err != nil {
 				return err
@@ -118,40 +134,81 @@ func newDeviceLocalMeshTopologyCmd() *cobra.Command {
 			return printLocalMeshTopology(cmd, topology)
 		},
 	}
+	cmd.Flags().BoolVar(&localCLI, "local-cli", false, "Read the existing local CLI full router through private IPC; never start or enable mesh")
 	cmd.Flags().BoolVar(&observation, "observation", false, "With --json, emit a typed observation result including unsupported, unavailable and unauthorized states")
 	return cmd
 }
 
-func readLocalMeshTopology(parent context.Context) (*pb.LocalMeshTopology, error) {
-	ctx, cancel := context.WithTimeout(parent, localMeshTopologyTimeout)
+// ReadOperatorTopology authenticates the selected private broker and validates
+// the actual operator principal/installation binding. There is no target TLS.
+func readCLIReporter(parent context.Context) (*pb.LocalMeshTopology, error) {
+	ctx, cancel := context.WithTimeout(parent, 3*time.Second)
 	defer cancel()
-	conn, err := connectLocalMeshTopology(ctx, ReadOnlyMonitoring())
+	snapshot, err := readLocalOperatorTopology(ctx)
+	if errors.Is(err, sessionbroker.ErrUnavailable) {
+		return nil, status.Error(codes.Unavailable, err.Error())
+	}
 	if err != nil {
 		return nil, err
 	}
-	if conn == nil {
-		return nil, fmt.Errorf("local topology requires a WendyOS agent")
+	if snapshot == nil {
+		return nil, status.Error(codes.Unavailable, "the existing CLI router returned no topology")
 	}
-	defer conn.Close()
+	if snapshot.Status == nil {
+		snapshot.Status = &pb.LocalMeshStatus{RuntimeAvailable: snapshot.RuntimeAvailable, Configured: &pb.LocalMeshConfiguration{Participate: snapshot.RuntimeAvailable}, AuthenticatedPeers: uint32(len(snapshot.Peers)), State: "waiting-for-peers", Detail: "Local CLI full router; operator identity and installation routing instance."}
+		if snapshot.RuntimeAvailable && len(snapshot.Peers) > 0 {
+			snapshot.Status.State = "mesh-active"
+		}
+	}
+	return snapshot, nil
+}
+
+func readLocalMeshReporter(parent context.Context) (*pb.LocalMeshTopology, string, error) {
+	ctx, cancel := context.WithTimeout(parent, localMeshTopologyTimeout)
+	defer cancel()
+	target, err := resolveLocalMeshTopologyTarget(ctx, ReadOnlyMonitoring())
+	if err != nil {
+		return nil, "", err
+	}
+	if target == nil {
+		return nil, "", fmt.Errorf("no topology reporter selected")
+	}
+	defer target.Close()
+	if target.External != nil {
+		provider, ok := target.Provider.(interface {
+			NetTopology(context.Context, models.ExternalDevice) (*pb.LocalMeshTopology, error)
+		})
+		if !ok {
+			return nil, "", status.Error(codes.Unimplemented, "selected provider does not support topology")
+		}
+		liteCtx, stopLite := context.WithTimeout(parent, litetopology.SetupBudget+litetopology.AggregateBudget)
+		defer stopLite()
+		snapshot, err := provider.NetTopology(liteCtx, *target.External)
+		return snapshot, "wendy-lite", err
+	}
+	conn := target.Agent
+	if conn == nil {
+		return nil, "", fmt.Errorf("local topology requires a WendyOS agent")
+	}
 	if conn.Conn == nil {
-		return nil, fmt.Errorf("local topology requires a WendyOS agent")
+		return nil, "", fmt.Errorf("local topology requires a WendyOS agent")
 	}
 	client := pb.NewWendyLocalMeshAdminServiceClient(conn.Conn)
 	topology, err := client.GetLocalMeshTopology(ctx, &pb.GetLocalMeshTopologyRequest{})
 	if err != nil {
-		return nil, fmt.Errorf("reading local topology: %w", err)
+		return nil, "", fmt.Errorf("reading local topology: %w", err)
 	}
 	peer, verified := observedLocalMeshTopologyIdentity(conn)
 	if !verified {
-		return nil, status.Error(codes.Unauthenticated, "topology reporter identity was not verified")
+		return nil, "", status.Error(codes.Unauthenticated, "topology reporter identity was not verified")
 	}
 	if err := browserauth.ValidateTopologyReporter(topology, peer); err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	return topology, nil
+	return topology, "wendyos", nil
 }
 
-func printLocalMeshObservation(cmd *cobra.Command, topology *pb.LocalMeshTopology, readErr error) error {
+func printLocalMeshObservation(cmd *cobra.Command, topology *pb.LocalMeshTopology, readErr error, platform string) error {
 	var observation browserauth.TopologyObservation
 	if readErr != nil {
 		observation = browserauth.TopologyFailure(readErr)
@@ -160,8 +217,11 @@ func printLocalMeshObservation(cmd *cobra.Command, topology *pb.LocalMeshTopolog
 		if err != nil {
 			observation = browserauth.TopologyFailure(err)
 		} else {
-			observation = browserauth.TopologyObservation{Status: "ok", Topology: data, ObservedAt: time.Now().UTC()}
+			observation = browserauth.TopologyObservation{Status: "ok", Topology: data, ObservedAt: time.Now().UTC(), Platform: platform}
 		}
+	}
+	if platform != "" {
+		observation.Platform = platform
 	}
 	encoder := json.NewEncoder(cmd.OutOrStdout())
 	encoder.SetIndent("", "  ")
@@ -184,7 +244,7 @@ func printLocalMeshTopology(cmd *cobra.Command, topology *pb.LocalMeshTopology) 
 	if topology.GetCapturedAtUnixMs() > 0 {
 		captured = time.UnixMilli(topology.GetCapturedAtUnixMs()).UTC().Format(time.RFC3339Nano)
 	}
-	_, err := fmt.Fprintf(cmd.OutOrStdout(), "Device: %s\nNet address: %s\nCaptured: %s\nRuntime available: %t\nState: %s\n%s\nObserved peers: %d\nRoutes: %d\nRoute announcements: %d\nSnapshot truncated: %t\nUse --json for peer, route and proof details.\n",
+	_, err := fmt.Fprintf(cmd.OutOrStdout(), "Reporter: %s\nNet address: %s\nCaptured: %s\nRuntime available: %t\nState: %s\n%s\nObserved peers: %d\nRoutes: %d\nRoute announcements: %d\nSnapshot truncated: %t\nUse --json for peer, route and proof details.\n",
 		topology.GetSelfPrincipal(), topology.GetSelfMeshAddress(), captured, topology.GetRuntimeAvailable(),
 		localNetStateLabel(topology.GetStatus().GetState()), topology.GetStatus().GetDetail(), len(topology.GetPeers()),
 		len(topology.GetRoutes()), len(topology.GetAnnouncements()), topology.GetTruncated())

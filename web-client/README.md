@@ -198,30 +198,74 @@ Sign-out is local; it does not log you out of other Wendy applications.
 ## Cloud workspace
 
 Choose **Networks** to inspect local net membership, direct peer links, and selected
-routes. The browser reads snapshots from the signed-in Cloud inventory. The
-desktop combines LAN discovery with the current CLI Cloud inventory. Each
+routes.
+
+The desktop also lists **This computer's CLI router**. This reads the existing
+private CLI broker's actual ongoing Babel node through local IPC; it never starts
+or enables participation and opens no device TLS connection. Its genuine
+operator principal and per-installation routing UUID are shown separately from
+enrolled device identities. Operator routing addresses use the `fd45:b891:5680::/48` allocation.
+If the CLI router is absent or explicitly off, its reporter is unavailable. The
+browser continues to use authenticated Cloud reporters and cannot access this
+private local IPC source.
+
+The browser reads snapshots from the signed-in Cloud inventory. The
+desktop combines LAN, physical Wendy Lite provider discovery and the current CLI Cloud inventory. Each
 snapshot uses an independent authenticated connection, so viewing networks does
 not replace the device dashboard connection.
 
-Devices are grouped by their verified tenant and device identity. A device seen
+Routers and devices are grouped by their verified tenant and routing identity. A device seen
 only through another peer remains visible without claiming that it is reachable
 from this client. Selecting a node shows its reported next hops, carrier types,
 route costs, and signed announcement expiry. A signed route authorizes its
 origin and prefix; it does not prove that an intermediary forwards traffic.
 
-The view polls at most four devices concurrently, then waits ten seconds before
+Operator routers appear separately from enrolled devices, with their exact
+principal and routing installation UUID. C5 can report verified operator routes
+learned through a device neighbor; those routes do not create direct carrier
+links to the operator. A route whose owner metadata has expired remains an
+address-only observation. An unavailable runtime contributes no relationships.
+
+The desktop includes mesh-only Lite reporters from the CLI router's signed
+inventory. It preserves their complete mesh selectors and refreshes their signed
+endpoint through the existing CLI provider when reading. Physical, Cloud and
+mesh paths with the same enrolled identity share one reporter and one in-flight
+read. Cached observations remain visible if the selected path changes; unavailable
+or partial mesh inventory stays explicit.
+
+The view reads up to three reporters concurrently, while aliases of the same device
+remain serialized, then waits ten seconds before
 the next batch. **Pause** stops new reads. Snapshots older than thirty seconds
-are marked stale. An active local network also needs a valid, recent device capture time.
+are marked stale. An active local network also needs a valid, recent reporter capture time.
 Failed reads retain the last snapshot visibly as stale. Older agents
 appear as unsupported until updated. Offline, denied, and unverified devices
 remain explicit rather than becoming empty healthy networks.
 
-The underlying read-only API is
-`WendyLocalMeshAdminService.GetLocalMeshTopology`, with the same tenant-scoped
-operator authorization as the existing net administration API. The CLI exposes
-it as `wendy --device HOST:PORT --json device wendy-net topology`.
+WendyOS uses `WendyLocalMeshAdminService.GetLocalMeshTopology`. Wendy Lite uses
+bounded WendyCom pages over its existing physical or authenticated Cloud
+connection. Both normalize to the same report. Lite endpoint gateway profiles
+show a partial directory explicitly, including omitted full remote route details.
+The browser selects its protocol from the authenticated Cloud asset's OS type;
+the desktop CLI selects the existing device provider. The CLI exposes the read
+as `wendy --device SELECTOR --json device wendy-net topology`.
 `--observation` adds a typed result envelope for clients handling partial
 failures. Neither the API nor this view enables the net or changes its policy.
+
+WendyOS observations keep their short read budget. Lite has a separate bounded
+75-second connection setup allowance and 60-second paged observation allowance;
+TLS and WendyCom can use up to 60 seconds across mesh links. A slow Lite reporter
+does not block updates from other devices. The browser worker and desktop
+subprocess allow 160 seconds only for this topology operation, and caller
+cancellation remains effective during setup and collection. Failed or incomplete
+reads retain prior observations visibly as stale.
+
+C6's accepted profile has one incoming native management/SensorLink slot. An
+independent operator topology connection can be unavailable while a device-role
+SensorLink consumer occupies that slot. The consumer keeps SensorLink-only
+permissions. The view can still show C6 through the CLI router and neighboring
+reporters; an unavailable reporter does not erase those observations. A full-role
+operator WendyCom client can carry both sensor and topology commands on its own
+connection. No cross-client proxy or permission expansion is used.
 
 The sidebar shows the signed-in email from OIDC UserInfo and the organization
 name from Cloud's v2 OrganizationService. UserInfo must match the authenticated
