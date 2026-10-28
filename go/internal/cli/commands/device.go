@@ -1162,8 +1162,13 @@ func reportStaleCertificate(err error) {
 		plainNotice("warning: %s. Sign in again to get a new one: wendy auth login", err.Error())
 		return
 	}
-	fmt.Fprintln(os.Stderr, tui.WarningMessage(capitalizeFirst(err.Error())+"."))
-	fmt.Fprintln(os.Stderr, "  Sign in again to get a new one: wendy auth login")
+	fmt.Fprintln(os.Stderr, staleCertificateWarning(err))
+}
+
+// staleCertificateWarning is the styled warning and remedy, also shown inside
+// views that own the terminal.
+func staleCertificateWarning(err error) string {
+	return tui.WarningMessage(capitalizeFirst(err.Error())+".") + "\n  Sign in again to get a new one: wendy auth login"
 }
 
 // capitalizeFirst upper-cases the first rune so an error string reads as a
