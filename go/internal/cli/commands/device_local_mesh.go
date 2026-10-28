@@ -39,6 +39,13 @@ func newDeviceLocalMeshCmd() *cobra.Command {
 	configure.Flags().Uint32("wifi-links", 0, "Lite: limit simultaneous infrastructure Wi-Fi mesh carriers")
 	configure.Flags().Uint32("nan-links", 0, "Lite: limit simultaneous NAN mesh carriers")
 	configure.RunE = func(cmd *cobra.Command, _ []string) error {
+		changed := false
+		for _, name := range append([]string{"participate", "roam", "share-uplink", "nan", "ble", "ethernet", "infrastructure-wifi"}, liteNetLimitFlags...) {
+			changed = changed || cmd.Flags().Changed(name)
+		}
+		if !changed {
+			return fmt.Errorf("specify a Wendy Net setting; omitted flags preserve saved settings")
+		}
 		target, err := resolveTarget(cmd.Context(), SuppressUpdateCheck())
 		if err != nil {
 			return err

@@ -2,10 +2,10 @@ package providers
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/liteclient"
-
 	"github.com/wendylabsinc/wendy/go/internal/shared/models"
 	"github.com/wendylabsinc/wendy/go/proto/gen/litepb"
 )
@@ -46,7 +46,7 @@ func (p *MicroWendyProvider) ConfigureNet(ctx context.Context, device models.Ext
 	}
 	config := status.GetDesired()
 	if config == nil {
-		config = &litepb.WendyComNetConfig{}
+		return nil, fmt.Errorf("device returned no saved Wendy Net settings; refusing to replace omitted settings")
 	}
 	if err := update(config); err != nil {
 		return nil, err

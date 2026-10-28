@@ -85,6 +85,9 @@ func updateLiteNetConfig(cmd *cobra.Command, config *litepb.WendyComNetConfig) e
 }
 
 func printLiteNetStatus(cmd *cobra.Command, status *litepb.WendyComNetStatus) error {
+	if status == nil {
+		return fmt.Errorf("device returned no Wendy Net status")
+	}
 	if status.GetRestarting() {
 		fmt.Fprintln(cmd.ErrOrStderr(), "Wendy Net settings applied; the device is restarting to change its carrier. Reconnect after it boots.")
 	}

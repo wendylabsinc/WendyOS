@@ -139,7 +139,7 @@ message WendyComEnrollmentChallenge {
     bool builtin_tsa_roots_ready = 6;
     bool enrollment_reset_supported = 7; // physical USB reset with current nonce
     optional bool cloud_enrollment_supported = 8; // absent on older firmware
-    optional bool mldsa_verification_supported = 9; // ML-DSA-65 CA and peer certificate verification
+    optional bool mldsa_verification_supported = 9; // wolfSSL ML-DSA CA and peer certificate verification
     string device_id = 10; // configured PKI identity; distinct from the USB hardware ID
     string tenant_id = 11;
     bool uuid_enrollment_supported = 12; // UUID discovery and enrollment identity reporting

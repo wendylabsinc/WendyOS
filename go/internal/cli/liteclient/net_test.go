@@ -2,6 +2,7 @@ package liteclient
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -103,5 +104,51 @@ func TestWendyComCarrierCapabilityReasons(t *testing.T) {
 		if err := resultToError(test.result); err == nil || err.Error() != test.reason {
 			t.Errorf("%v = %v", test.result, err)
 		}
+	}
+}
+
+func TestWendyComNetResponseValidation(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		set    bool
+		result pb.WendyComResult
+		status *pb.WendyComNetStatus
+		want   string
+	}{
+		{name: "old firmware rejects command", result: pb.WendyComResult_WENDY_COM_RESULT_UNKNOWN_ERROR, want: "unavailable"},
+		{name: "missing status", result: pb.WendyComResult_WENDY_COM_RESULT_OK, want: "no Wendy Net status"},
+		{name: "restart only applies to writes", result: pb.WendyComResult_WENDY_COM_RESULT_APPLIED_RESTARTING, status: &pb.WendyComNetStatus{}, want: "invalid restarting response"},
+		{name: "restart requires status", set: true, result: pb.WendyComResult_WENDY_COM_RESULT_APPLIED_RESTARTING, want: "invalid restarting response"},
+		{name: "capability error includes device diagnostic", set: true, result: pb.WendyComResult_WENDY_COM_RESULT_NET_NO_NAN, status: &pb.WendyComNetStatus{ErrorCode: 42}, want: "NAN is not supported by this device (device code 42)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client, peer := connectedOverPipe(t)
+			wire := newDirectLink(peer)
+			done := make(chan error, 1)
+			go func() {
+				message, err := wire.recv(time.Second)
+				if err != nil {
+					done <- err
+					return
+				}
+				response := &pb.WendyComResponse{RequestId: message.GetCommand().RequestId, Result: tc.result}
+				if tc.status != nil {
+					response.Data = &pb.WendyComResponse_NetStatus{NetStatus: tc.status}
+				}
+				done <- wire.send(&pb.WendyComMessage{Msg: &pb.WendyComMessage_Response{Response: response}})
+			}()
+			var err error
+			if tc.set {
+				_, err = client.SetNetConfig(&pb.WendyComNetConfig{}, time.Second)
+			} else {
+				_, err = client.GetNetStatus(time.Second)
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("error = %v, want %q", err, tc.want)
+			}
+			if err := <-done; err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }

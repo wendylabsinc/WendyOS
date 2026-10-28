@@ -2,6 +2,7 @@ package providers
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -18,7 +19,11 @@ type netSettingsFixture struct {
 
 func (f *netSettingsFixture) GetNetStatus(timeout time.Duration) (*pb.WendyComNetStatus, error) {
 	f.calls = append(f.calls, "get")
-	return &pb.WendyComNetStatus{Desired: proto.Clone(f.config).(*pb.WendyComNetConfig), BleSupported: true}, nil
+	var desired *pb.WendyComNetConfig
+	if f.config != nil {
+		desired = proto.Clone(f.config).(*pb.WendyComNetConfig)
+	}
+	return &pb.WendyComNetStatus{Desired: desired, BleSupported: true}, nil
 }
 func (f *netSettingsFixture) SetNetConfig(config *pb.WendyComNetConfig, timeout time.Duration) (*pb.WendyComNetStatus, error) {
 	f.calls = append(f.calls, "set")
@@ -56,5 +61,45 @@ func TestPhysicalLiteBLEProviderConfiguresTwoLinksExplicitly(t *testing.T) {
 	}
 	if fixture.closed != 2 || len(fixture.calls) != 3 || fixture.calls[1] != "get" || fixture.calls[2] != "set" {
 		t.Fatalf("management sequence %+v closes%d", fixture.calls, fixture.closed)
+	}
+}
+
+func TestLiteNetProviderPreservesExistingTransport(t *testing.T) {
+	old := connectLiteNetClient
+	t.Cleanup(func() { connectLiteNetClient = old })
+	for _, transport := range []string{"USB", "LAN", "BLE", "Cloud"} {
+		t.Run(transport, func(t *testing.T) {
+			device := models.ExternalDevice{ID: "selected-device", ConnectionInfo: map[string]string{"type": transport, "address": "retained", "assetId": "retained"}}
+			fixture := &netSettingsFixture{config: &pb.WendyComNetConfig{MaxLinks: 2, BleLinks: 2}}
+			connectLiteNetClient = func(_ context.Context, _ *MicroWendyProvider, got models.ExternalDevice) (liteNetClient, error) {
+				if got.ID != device.ID || got.ConnectionType() != transport || got.ConnectionInfo["address"] != "retained" || got.ConnectionInfo["assetId"] != "retained" {
+					t.Fatalf("transport replaced: %+v", got)
+				}
+				return fixture, nil
+			}
+			provider := &MicroWendyProvider{}
+			if _, err := provider.NetStatus(context.Background(), device); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := provider.ConfigureNet(context.Background(), device, func(config *pb.WendyComNetConfig) error { config.Enabled = true; return nil }); err != nil {
+				t.Fatal(err)
+			}
+			if fixture.closed != 2 || len(fixture.calls) != 3 || !fixture.config.Enabled || fixture.config.BleLinks != 2 {
+				t.Fatalf("unexpected calls/config: %+v", fixture)
+			}
+		})
+	}
+}
+
+func TestLiteNetProviderRefusesUpdateWithoutSavedSettings(t *testing.T) {
+	old := connectLiteNetClient
+	t.Cleanup(func() { connectLiteNetClient = old })
+	fixture := &netSettingsFixture{}
+	connectLiteNetClient = func(context.Context, *MicroWendyProvider, models.ExternalDevice) (liteNetClient, error) {
+		return fixture, nil
+	}
+	_, err := (&MicroWendyProvider{}).ConfigureNet(context.Background(), models.ExternalDevice{}, func(*pb.WendyComNetConfig) error { t.Fatal("invoked update without saved settings"); return nil })
+	if err == nil || !strings.Contains(err.Error(), "no saved") || len(fixture.calls) != 1 || fixture.closed != 1 {
+		t.Fatalf("missing policy update = %v, %+v", err, fixture)
 	}
 }
