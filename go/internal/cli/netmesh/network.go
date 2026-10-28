@@ -9,6 +9,8 @@ import (
 	"net"
 	"net/netip"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/wendylabsinc/WendyOS/go/babel"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
@@ -26,17 +28,18 @@ import (
 )
 
 type Network struct {
-	self       netip.Addr
-	stack      *stack.Stack
-	endpoint   *channel.Endpoint
-	ctx        context.Context
-	cancel     context.CancelFunc
-	done       chan struct{}
-	mu         sync.RWMutex
-	ports      map[babel.LinkID]*packetPort
-	routes     map[netip.Addr]babel.LinkID
-	once       sync.Once
-	operations sync.WaitGroup
+	lastTransit atomic.Int64
+	self        netip.Addr
+	stack       *stack.Stack
+	endpoint    *channel.Endpoint
+	ctx         context.Context
+	cancel      context.CancelFunc
+	done        chan struct{}
+	mu          sync.RWMutex
+	ports       map[babel.LinkID]*packetPort
+	routes      map[netip.Addr]babel.LinkID
+	once        sync.Once
+	operations  sync.WaitGroup
 }
 
 func NewNetwork(self meshid.Device) (*Network, error) {
@@ -191,6 +194,9 @@ func (n *Network) forward(packet []byte, received bool) {
 	select {
 	case <-p.done:
 	case p.queue <- packet:
+		if received {
+			n.lastTransit.Store(time.Now().UnixNano())
+		}
 	default:
 	}
 }
@@ -199,6 +205,13 @@ func (n *Network) DialContext(ctx context.Context, address string) (net.Conn, er
 }
 
 func (n *Network) Address() netip.Addr { return n.self }
+
+// HasRecentTransit lets the retained broker keep an otherwise idle router
+// while it is forwarding real packets for other mesh participants.
+func (n *Network) HasRecentTransit(window time.Duration) bool {
+	at := n.lastTransit.Load()
+	return at != 0 && time.Since(time.Unix(0, at)) < window
+}
 
 func (n *Network) Dial(ctx context.Context, network, address string) (net.Conn, error) {
 	if n.ctx.Err() != nil {
