@@ -76,6 +76,14 @@ func runConfiguredWithNode(parent context.Context, configDir string, id TCPIdent
 		}
 		defer listener.Close()
 	}
+	var endpointListener net.Listener
+	if cfg.TLSListen != "" {
+		endpointListener, err = listen("tcp", cfg.TLSListen)
+		if err != nil {
+			return fmt.Errorf("listen for net endpoints: %w", err)
+		}
+		defer endpointListener.Close()
+	}
 	node, err := NewNode(ctx, stateDir, credentials, id.Name, id.AgentPort)
 	if err != nil {
 		return err
@@ -85,6 +93,11 @@ func runConfiguredWithNode(parent context.Context, configDir string, id TCPIdent
 	}
 	nodeDone := make(chan error, 1)
 	go func() { nodeDone <- node.Run(); cancel() }()
+	var endpointDone chan error
+	if endpointListener != nil {
+		endpointDone = make(chan error, 1)
+		go func() { endpointDone <- RunTLSListener(ctx, node, endpointListener, WiFiLinkCost) }()
+	}
 	if observe != nil {
 		observe(node, cfg)
 	}
@@ -190,7 +203,7 @@ func runConfiguredWithNode(parent context.Context, configDir string, id TCPIdent
 			}
 		}()
 	}
-	nodeStopped := false
+	nodeStopped, endpointStopped := false, false
 	select {
 	case <-parent.Done():
 	case err = <-nodeDone:
@@ -198,6 +211,8 @@ func runConfiguredWithNode(parent context.Context, configDir string, id TCPIdent
 		if errors.Is(err, context.Canceled) {
 			err = nil
 		}
+	case err = <-endpointDone:
+		endpointStopped = true
 	}
 	if observe != nil {
 		observe(nil, nil)
@@ -208,6 +223,9 @@ func runConfiguredWithNode(parent context.Context, configDir string, id TCPIdent
 	}
 	<-acceptDone
 	wg.Wait()
+	if endpointDone != nil && !endpointStopped {
+		err = errors.Join(err, <-endpointDone)
+	}
 	if !nodeStopped {
 		// Normal node cancellation must not hide an earlier listener failure
 		// when the independent runtime results are combined.

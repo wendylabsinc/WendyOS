@@ -16,14 +16,17 @@ import (
 // TCPConfig retains explicit TCP simulation links and independently enables
 // discovered wendy net carriers. Each explicit edge is configured at both ends.
 type TCPConfig struct {
-	Listen string    `json:"listen"`
-	Peers  []TCPPeer `json:"peers"`
-	NAN    bool      `json:"nan,omitempty"`
-	BLE    bool      `json:"ble,omitempty"`
+	Listen string    `json:"listen" cbor:"l"`
+	Peers  []TCPPeer `json:"peers" cbor:"p"`
+	NAN    bool      `json:"nan,omitempty" cbor:"n,omitempty"`
+	BLE    bool      `json:"ble,omitempty" cbor:"b,omitempty"`
+	// TLSListen enables native TLS packet attachments without per-device configuration.
+	TLSListen string `json:"endpointListen,omitempty" cbor:"e,omitempty"`
+
 	// devices holds the parsed peer identities, in the same order as Peers.
 	devices            []meshid.Device
-	Ethernet           bool `json:"ethernet,omitempty"`
-	InfrastructureWiFi bool `json:"infrastructureWifi,omitempty"`
+	Ethernet           bool `json:"ethernet,omitempty" cbor:"E,omitempty"`
+	InfrastructureWiFi bool `json:"infrastructureWifi,omitempty" cbor:"i,omitempty"`
 }
 
 // TCPPeer names a configured neighbour by its device UUID - the same 16 bytes
@@ -31,8 +34,8 @@ type TCPConfig struct {
 // number and no organization number: the tenant comes from this device's own
 // verified certificate.
 type TCPPeer struct {
-	Device  string `json:"device"`
-	Address string `json:"address"`
+	Device  string `json:"device" cbor:"d"`
+	Address string `json:"address" cbor:"a"`
 }
 
 type TCPIdentity struct {
@@ -82,11 +85,19 @@ func LoadTCPConfig(path string, self meshid.Device) (*TCPConfig, error) {
 		return nil, errors.New("wendy net config has trailing data")
 	}
 	if cfg.Listen == "" {
-		if (!cfg.NAN && !cfg.BLE && !cfg.Ethernet && !cfg.InfrastructureWiFi) || len(cfg.Peers) != 0 {
+		if (!cfg.NAN && !cfg.BLE && !cfg.Ethernet && !cfg.InfrastructureWiFi && cfg.TLSListen == "") || len(cfg.Peers) != 0 {
 			return nil, errors.New("listen is required for configured TCP peers; enable a carrier for discovery-only networking")
 		}
 	} else if err := validateTCPAddress(cfg.Listen, true); err != nil {
 		return nil, fmt.Errorf("listen: %w", err)
+	}
+	if cfg.TLSListen != "" {
+		if err := validateTCPAddress(cfg.TLSListen, true); err != nil {
+			return nil, fmt.Errorf("endpointListen: %w", err)
+		}
+		if cfg.TLSListen == cfg.Listen {
+			return nil, errors.New("endpointListen must use a separate listener")
+		}
 	}
 	if len(cfg.Peers) > 64 {
 		return nil, errors.New("too many configured wendy net peers")
