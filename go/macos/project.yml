@@ -1,0 +1,245 @@
+name: WendyDesktop
+options:
+  deploymentTarget:
+    macOS: "26.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    WENDY_PUSH_ENVIRONMENT: development
+    SWIFT_VERSION: "6.0"
+    SWIFT_STRICT_CONCURRENCY: complete
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    ENABLE_USER_SCRIPT_SANDBOXING: NO
+    ENABLE_HARDENED_RUNTIME: YES
+    ENABLE_DEBUG_DYLIB: NO
+    CODE_SIGN_STYLE: Automatic
+    CODE_SIGN_IDENTITY: "Apple Development"
+    DEVELOPMENT_TEAM: ""
+    ARCHS: "$(NATIVE_ARCH_ACTUAL)"
+    ONLY_ACTIVE_ARCH: YES
+    LIBRARY_SEARCH_PATHS: "$(SRCROOT)/Build"
+    LD_RUNPATH_SEARCH_PATHS: ["$(inherited)", "@executable_path/../Frameworks"]
+    OTHER_LDFLAGS: ["-lresolv"]
+  configs:
+    Release:
+      WENDY_PUSH_ENVIRONMENT: production
+packages:
+  SwiftTerm:
+    url: https://github.com/migueldeicaza/SwiftTerm.git
+    exactVersion: 1.18.0
+targets:
+  WendyDesktop:
+    type: application
+    platform: macOS
+    sources:
+      - path: Sources/App
+      - path: Resources/Go2
+        type: folder
+        buildPhase: resources
+      - path: Resources/Install3D
+        type: folder
+        buildPhase: resources
+      - path: ../internal/cli/assets/docs/videos/installation
+        type: folder
+        buildPhase: resources
+      - path: Sources/Shared/VPNConfiguration.swift
+      - path: Resources/DeviceRecognition
+        type: folder
+        buildPhase: resources
+      - path: Resources/Notices
+        type: folder
+        buildPhase: resources
+    dependencies:
+      - package: SwiftTerm
+      - target: WendyNetwork
+        embed: true
+        codeSign: true
+      - sdk: NetworkExtension.framework
+      - sdk: SystemExtensions.framework
+      - sdk: CoreBluetooth.framework
+      - sdk: IOKit.framework
+      - sdk: DiskArbitration.framework
+      - sdk: Security.framework
+      - sdk: CoreFoundation.framework
+      - sdk: UserNotifications.framework
+      - sdk: WebKit.framework
+      - sdk: AVKit.framework
+      - sdk: AVFoundation.framework
+      - sdk: CoreMedia.framework
+      - sdk: AudioToolbox.framework
+      - sdk: CoreAudio.framework
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.wendy.desktop
+        PRODUCT_NAME: WendyDesktop
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: Wendy
+        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.developer-tools
+        INFOPLIST_KEY_NSLocalNetworkUsageDescription: Wendy discovers and connects to nearby devices.
+        INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription: Wendy uses Bluetooth to set up nearby devices and connect to the mesh.
+        INFOPLIST_KEY_NSSystemExtensionUsageDescription: Wendy routes selected device connections over mesh and cloud.
+        INFOPLIST_KEY_NSBonjourServices: ["_wendy._tcp", "_wendyos._tcp", "_wendy-mesh._udp", "_wendy-lite._tcp"]
+        CODE_SIGN_ENTITLEMENTS: Resources/App.entitlements
+        CLANG_CXX_LANGUAGE_STANDARD: c++17
+        HEADER_SEARCH_PATHS: "$(SRCROOT)/Build/VisualRecognition/$(PLATFORM_NAME)/install/include/opencv4"
+        SWIFT_OBJC_BRIDGING_HEADER: Sources/Shared/Bridge.h
+        OTHER_LDFLAGS: ["$(inherited)", "-lwendydesktop", "$(SRCROOT)/Build/libusb-1.0.dylib", "$(SRCROOT)/Build/VisualRecognition/macosx/install/lib/opencv4/3rdparty/libtegra_hal.a", "-L$(SRCROOT)/Build/VisualRecognition/$(PLATFORM_NAME)/install/lib", "-lopencv_calib3d", "-lopencv_features2d", "-lopencv_flann", "-lopencv_imgproc", "-lopencv_core", "-lc++", "-lz"]
+    preBuildScripts:
+      - script: python3 "$SRCROOT/Scripts/check-concurrency.py"
+        name: Check structured concurrency
+        basedOnDependencyAnalysis: false
+      - script: bash "$SRCROOT/Scripts/build-vision.sh"
+        name: Build visual recognition
+        basedOnDependencyAnalysis: false
+      - path: Scripts/build-go.sh
+        name: Build Go libraries and bundled CLI
+        basedOnDependencyAnalysis: false
+    postBuildScripts:
+      - path: Scripts/embed-cli.sh
+        name: Embed CLI worker
+        basedOnDependencyAnalysis: false
+  WendyNetwork:
+    type: system-extension
+    platform: macOS
+    productName: dev.wendy.desktop.network
+    sources:
+      - path: Sources/Shared/VPNConfiguration.swift
+      - path: Sources/Extension
+        excludes: [Info.plist]
+    dependencies:
+      - sdk: NetworkExtension.framework
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.wendy.desktop.network
+        PRODUCT_NAME: "$(PRODUCT_BUNDLE_IDENTIFIER)"
+        PRODUCT_MODULE_NAME: WendyNetwork
+        INFOPLIST_FILE: Sources/Extension/Info.plist
+        CODE_SIGN_ENTITLEMENTS: Resources/Network.entitlements
+        SWIFT_OBJC_BRIDGING_HEADER: Sources/Shared/VPNBridge.h
+        OTHER_LDFLAGS: ["$(inherited)", "-lwendyvpn"]
+    preBuildScripts:
+      - script: python3 "$SRCROOT/Scripts/check-concurrency.py"
+        name: Check structured concurrency
+        basedOnDependencyAnalysis: false
+      - path: Scripts/build-go.sh
+        name: Build Go libraries
+        basedOnDependencyAnalysis: false
+  WendyDesktopTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources: [Tests]
+    dependencies:
+      - target: WendyDesktop
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+  WendyMobile:
+    type: application
+    platform: iOS
+    deploymentTarget: "26.0"
+    info:
+      path: Resources/Mobile-Info.plist
+      properties:
+        CFBundleDisplayName: Wendy
+        NSCameraUsageDescription: Wendy uses the camera to recognize devices and scan your site into a 3D model.
+        NSBonjourServices: ["_wendyos._udp", "_wendy-lite._tcp"]
+        NSLocalNetworkUsageDescription: Wendy discovers and connects to your nearby devices.
+        NSBluetoothAlwaysUsageDescription: Wendy uses Bluetooth to discover nearby Wendy devices.
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
+        UISupportedInterfaceOrientations~ipad: [UIInterfaceOrientationPortrait, UIInterfaceOrientationPortraitUpsideDown, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
+    sources:
+      - path: Sources/App
+        excludes:
+          - WendyDesktopApp.swift
+          - ContentView.swift
+          - VPNControls.swift
+          - DataVisualizerView.swift
+          - DataVisualizerTimeline.swift
+          - AccountPicker.swift
+          - SimulatorClient.swift
+          - SimulatorRenderer.swift
+          - SimulatorsView.swift
+      - path: Sources/iOS
+      - path: Resources/Go2
+        type: folder
+        buildPhase: resources
+      - path: Resources/MobileAssets.xcassets
+      - path: Sources/Shared/VPNConfiguration.swift
+      - path: Resources/DeviceRecognition
+        type: folder
+        buildPhase: resources
+      - path: Resources/Notices
+        type: folder
+        buildPhase: resources
+    dependencies:
+      - sdk: UserNotifications.framework
+      - sdk: AVFoundation.framework
+      - sdk: CoreMedia.framework
+      - sdk: CoreBluetooth.framework
+      - sdk: Security.framework
+      - sdk: CoreFoundation.framework
+      - sdk: NetworkExtension.framework
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.wendy.mobile
+        PRODUCT_NAME: WendyMobile
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: Wendy
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
+        INFOPLIST_KEY_NSLocalNetworkUsageDescription: Wendy discovers and connects to your nearby devices.
+        INFOPLIST_KEY_NSBluetoothAlwaysUsageDescription: Wendy uses Bluetooth to discover nearby Wendy devices.
+        TARGETED_DEVICE_FAMILY: "1,2"
+        SUPPORTS_MACCATALYST: NO
+        ARCHS: arm64
+        ENABLE_HARDENED_RUNTIME: NO
+        CODE_SIGN_ENTITLEMENTS: Resources/Mobile.entitlements
+        INFOPLIST_KEY_WendyPushEnvironment: "$(WENDY_PUSH_ENVIRONMENT)"
+        LIBRARY_SEARCH_PATHS: "$(SRCROOT)/Build/$(PLATFORM_NAME)"
+        LD_RUNPATH_SEARCH_PATHS: ["$(inherited)", "@executable_path/Frameworks"]
+        OTHER_LDFLAGS: ["-lresolv", "-lwendydesktop", "-L$(SRCROOT)/Build/VisualRecognition/$(PLATFORM_NAME)/install/lib", "-lopencv_calib3d", "-lopencv_features2d", "-lopencv_flann", "-lopencv_imgproc", "-lopencv_core", "-lc++", "-lz"]
+        CLANG_CXX_LANGUAGE_STANDARD: c++17
+        HEADER_SEARCH_PATHS: "$(SRCROOT)/Build/VisualRecognition/$(PLATFORM_NAME)/install/include/opencv4"
+        SWIFT_OBJC_BRIDGING_HEADER: Sources/Shared/Bridge.h
+    preBuildScripts:
+      - script: python3 "$SRCROOT/Scripts/check-concurrency.py"
+        name: Check structured concurrency
+        basedOnDependencyAnalysis: false
+      - script: bash "$SRCROOT/Scripts/build-vision.sh"
+        name: Build visual recognition
+        basedOnDependencyAnalysis: false
+      - path: Scripts/build-ios-go.sh
+        name: Build embedded Go backend for iOS
+        basedOnDependencyAnalysis: false
+  WendyMobileTests:
+    type: bundle.unit-test
+    platform: iOS
+    deploymentTarget: "26.0"
+    sources: [Tests-iOS, Tests/ThermalCameraTests.swift, Tests/ConcurrencyTests.swift, Tests/SiteTwinTests.swift, Tests/DeviceRecognitionTests.swift]
+    dependencies:
+      - target: WendyMobile
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: dev.wendy.mobile.tests
+        ARCHS: arm64
+        OTHER_LDFLAGS: []
+        LIBRARY_SEARCH_PATHS: "$(SRCROOT)/Build/$(PLATFORM_NAME)"
+        LD_RUNPATH_SEARCH_PATHS: ["$(inherited)", "@executable_path/Frameworks", "@loader_path/Frameworks"]
+schemes:
+  WendyDesktop:
+    build:
+      targets:
+        WendyDesktop: all
+    test:
+      targets: [WendyDesktopTests]
+  WendyMobile:
+    build:
+      targets:
+        WendyMobile: all
+    test:
+      targets: [WendyMobileTests]

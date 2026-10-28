@@ -1058,11 +1058,7 @@ func (r *runtime) handshakeOutbound(ctx context.Context, secure *tls.Conn) (time
 	// dialSlot already serializes outgoing setup, starting before CoC creation.
 	// Sharing inbound admission here deadlocks crossed discovery: each device
 	// can hold an outgoing slot while its peer waits for that slot to accept.
-	handshakeCtx, cancel := context.WithTimeout(ctx, meshTLSOutboundTimeout)
-	defer cancel()
-	started := time.Now()
-	err := secure.HandshakeContext(handshakeCtx)
-	return time.Since(started), err
+	return handshakeMeshOutbound(ctx, secure)
 }
 
 // Bound initial tuning before TLS firstflight so controller procedures cannot

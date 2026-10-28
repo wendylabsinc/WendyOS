@@ -538,7 +538,7 @@ func TestDragonwingUnusableCacheAdviceDependsOnReachability(t *testing.T) {
 
 // A download or extraction failure happens before the first write command, with
 // the destructive prompt already answered: untagged, it reports nothing at all,
-// leaving the board in EDL with no word about DIP switch 3.
+// leaving the board in EDL with no word about its EDL switch.
 func TestDragonwingDownloadFailureReportsAnUntouchedBoard(t *testing.T) {
 	board, _ := dragonwingBoardFor("dragonwing-iq-8275")
 	dir := filepath.Join(dragonwingVersionCacheDir(t.TempDir(), board, "0.19.3"), "aaaaaaaaaaaa")
@@ -568,7 +568,7 @@ func TestDragonwingDownloadFailureReportsAnUntouchedBoard(t *testing.T) {
 	if gotErr := finishDragonwingFlash(&out, board, run.collected(), "0.19.3", err, false); gotErr == nil {
 		t.Fatal("the failure was swallowed")
 	}
-	for _, want := range []string{"Nothing was written", "DIP switch 3"} {
+	for _, want := range []string{"Nothing was written", "S2-8"} {
 		if !strings.Contains(out.String(), want) {
 			t.Errorf("failure output %q is missing %q", out.String(), want)
 		}
@@ -968,5 +968,17 @@ func TestReportDragonwingFailureCoversCancellation(t *testing.T) {
 				t.Errorf("output = %q, want it to mention %q", buf.String(), tc.want)
 			}
 		})
+	}
+}
+
+func TestDragonwingEDLInstructionsMatchTheBoard(t *testing.T) {
+	for _, tc := range []struct{ board, pole string }{{"dragonwing-iq-8275", "S2-8"}, {"dragonwing-iq-9075", "SW2-3"}} {
+		board, _ := dragonwingBoardFor(tc.board)
+		guide := board.guide()
+		for label, value := range map[string]string{"entry": strings.Join(guide.entry, "\n"), "ready": guide.ready, "done": strings.Join(guide.done, "\n"), "retry": guide.retry, "reenter": strings.Join(guide.reenter, "\n")} {
+			if !strings.Contains(value, tc.pole) {
+				t.Errorf("%s %s omits %s", tc.board, label, tc.pole)
+			}
+		}
 	}
 }

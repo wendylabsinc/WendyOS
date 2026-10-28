@@ -41,9 +41,13 @@ type oidcCallbackResult struct {
 // performOIDCLogin creates and saves a refreshable Cloud API session for the
 // person at the terminal, printing each step.
 func performOIDCLogin(ctx context.Context, opts oidcLoginOptions) error {
+	authorize := showOIDCLoginURL
+	if openURL, ok := ctx.Value(desktopLoginURLKey{}).(func(string)); ok && openURL != nil {
+		authorize = openURL
+	}
 	return runOIDCLogin(ctx, opts, oidcLoginHooks{
 		say:       func(line string) { fmt.Println(line) },
-		authorize: showOIDCLoginURL,
+		authorize: authorize,
 	})
 }
 

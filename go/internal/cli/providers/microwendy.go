@@ -189,7 +189,7 @@ func (p *MicroWendyProvider) mdnsExternalDevice(svc discovery.MDNSService) model
 
 // connectableLiteMDNSService rejects incomplete/stale DNS-SD records. The
 // Wendy Lite LAN connector requires both an IP and a port; presenting a row
-// without them creates a blank-address "LAN (Lite)" device that can never be
+// without them creates a blank-address "LAN" device that can never be
 // selected successfully (commonly an offline device lingering in the macOS
 // mDNSResponder cache).
 func connectableLiteMDNSService(svc discovery.MDNSService) bool {
@@ -931,6 +931,14 @@ func (p *MicroWendyProvider) pushWifiConf(ctx context.Context, device models.Ext
 // SensorLink commands. The caller must close the client.
 func (p *MicroWendyProvider) ConnectSensorLink(device models.ExternalDevice) (*liteclient.WendyLiteClient, error) {
 	return p.connectClient(context.Background(), device)
+}
+
+// ConnectSensorLinkContext opens a cancellable authenticated WendyCom connection.
+func (p *MicroWendyProvider) ConnectSensorLinkContext(ctx context.Context, device models.ExternalDevice) (*liteclient.WendyLiteClient, error) {
+	if device.ConnectionInfo["needsInstall"] == "true" {
+		return nil, &AppRequirementsUnsupportedError{Device: device, Missing: "Wendy Lite firmware (none installed)"}
+	}
+	return p.connectClient(ctx, device)
 }
 
 // ConnectEnrollment opens a physical USB serial connection for enrollment and

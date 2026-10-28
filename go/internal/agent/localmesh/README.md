@@ -571,3 +571,29 @@ LAN browsing currently supports IPv4 endpoints and excludes Wendy Net carrier,
 underlay and service address ranges. Namespace tests cover scoped forwarding,
 withdrawal and coexistence with host Avahi; physical-link acceptance remains a
 separate validation step.
+
+## Desktop operator endpoints
+
+The native macOS app uses the CLI session broker for mesh discovery and target
+connections. Its bundled CLI runs the broker helper. Discovery uses the selected
+organization's existing primary operator certificate and the broker's bounded
+carrier discovery. It does not enroll the computer as a device.
+
+Operator identities retain their complete SPIFFE principal and bind a separate,
+persistent installation UUID. Multiple computers can use the same principal
+without sharing their routing address or replay state. The signed version-4
+manifest carries the operator owner and installation binding. Operator origins
+cannot advertise a device agent or claim another device's route.
+
+Desktop discovery preserves the broker's canonical `mesh://tenant/device`
+selector and verified principal. Target RPCs use the broker's authenticated
+connection policy. The desktop supplies its bundled CLI executable to the broker
+because the SwiftUI executable cannot run CLI helper commands.
+
+`PacketNetwork` separates routing from Linux interface management. Agents retain
+their kernel backend, while the operator broker uses a private gVisor IPv6 stack.
+The app's optional VPN extension provides host routing separately.
+
+Device manifests may also include signed agent version, OS, device type, and CPU
+architecture metadata. This optional metadata uses the version-4 binary encoding
+and is copied when directory snapshots are returned.

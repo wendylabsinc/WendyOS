@@ -105,12 +105,15 @@ func Start(key string, conn *grpcclient.AgentConnection) error {
 	return startSpec(spec)
 }
 
+// HelperExecutable is set once by native embedders to their bundled CLI.
+var HelperExecutable = os.Executable
+
 func startSpec(spec Spec) error {
 	b, err := json.Marshal(spec)
 	if err != nil {
 		return err
 	}
-	exe, err := os.Executable()
+	exe, err := HelperExecutable()
 	if err != nil {
 		return err
 	}

@@ -60,6 +60,7 @@ type ProbeFailure struct {
 
 // LANDevice represents a device discovered via mDNS on the local network.
 type LANDevice struct {
+	Mesh         bool          `json:"mesh,omitempty"`
 	ProbeFailure *ProbeFailure `json:"probeFailure,omitempty"`
 	ID           string        `json:"id"`
 	DisplayName  string        `json:"displayName"`
@@ -268,31 +269,43 @@ func (d *DiscoveredDevice) ConnectionTypes() string {
 		}
 	}
 	if d.LAN != nil {
-		types = append(types, "LAN")
+		if d.LAN.Mesh {
+			types = append(types, "Mesh")
+		} else {
+			types = append(types, "LAN")
+		}
 	}
 	if d.Bluetooth != nil {
-		if d.Bluetooth.IsWendyAgent() {
-			types = append(types, "BLE")
-		} else {
-			types = append(types, "BLE (Lite)")
-		}
+		types = append(types, "BLE")
 	}
 	for _, ext := range d.Externals {
 		if ct := ext.ConnectionType(); ct != "" {
-			if ext.ProviderKey == "wendy-lite" {
-				types = append(types, ct+" (Lite)")
-			} else {
-				types = append(types, ct)
-			}
+			types = append(types, ct)
 		}
 	}
 	return strings.Join(types, ", ")
+}
+
+// DisplayOS identifies Lite devices even when discovery supplies no OS metadata.
+func (d *DiscoveredDevice) DisplayOS() string {
+	if d.WendyLite || (d.LAN != nil && d.LAN.WendyLite) || (d.Bluetooth != nil && !d.Bluetooth.IsWendyAgent()) {
+		return "Wendy Lite"
+	}
+	for _, ext := range d.Externals {
+		if ext.ProviderKey == "wendy-lite" {
+			return "Wendy Lite"
+		}
+	}
+	return d.OS
 }
 
 // Address returns the best available address for display purposes.
 // Prefers the LAN IP/hostname over the BLE address.
 func (d *DiscoveredDevice) Address() string {
 	if d.LAN != nil {
+		if d.LAN.Mesh {
+			return d.LAN.Hostname
+		}
 		if d.LAN.IPAddress != "" {
 			return d.LAN.IPAddress
 		}

@@ -32,6 +32,12 @@ import "wendy/agent/services/v1/wendy_agent_v1_video_service.proto";
 //
 // See specs/2026-09-20-calibrated-frame-sensor-source-design.md.
 service WendyCalibratedFrameService {
+    // Metadata does not open a capture. Missing metadata means unknown.
+    // These operator RPCs use the same authenticated transport as camera controls.
+    rpc ListCameraMetadata(ListCameraMetadataRequest) returns (ListCameraMetadataResponse);
+    // Compare-and-swap replacement. expected_revision=0 creates a new record.
+    // An absent metadata body deletes an existing record at expected_revision.
+    rpc SetCameraMetadata(SetCameraMetadataRequest) returns (SetCameraMetadataResponse);
     // ListCalibratedSources reports the sources that can publish calibrated
     // frames and, for each, what it can promise and how large one frame is.
     // A consumer sizes its gRPC receive limit from that number rather than
@@ -41,6 +47,56 @@ service WendyCalibratedFrameService {
     // requirement holds, and ends the stream the moment one stops.
     rpc StreamCalibratedFrames(StreamCalibratedFramesRequest) returns (stream CalibratedFrame);
 }
+
+message CameraMetadata {
+    // Exact VideoDevice.stable_id on this gateway, never a numeric device ID.
+    string stable_id = 1;
+    uint64 revision = 2; // server assigned
+    CameraIntrinsics intrinsics = 3;
+    // "none" or "brown_conrady". Brown order: k1,k2,p1,p2,k3.
+    string distortion_model = 4;
+    repeated double distortion = 5;
+    // Identifies the active calibrated crop/zoom/mode. The publisher must clear
+    // or replace intrinsics when zoom, crop, focus or lens changes invalidate
+    // them. Consumers must not apply these to a different capture mode.
+    string capture_mode = 6;
+    int64 calibrated_at_unix_ms = 7;
+    repeated SiteCameraPose site_poses = 8;
+}
+
+message SiteCameraPose {
+    // UUID of the immutable model revision. A robot's map frame, gravity or
+    // compass heading alone is NOT a transform into this coordinate frame.
+    string model_revision = 1;
+    // Metres, right-handed Y-up site coordinates.
+    repeated double position = 2; // x,y,z
+    // Unit quaternion x,y,z,w mapping optical right/down/forward into the site.
+    repeated double rotation = 3;
+    enum Method {
+        METHOD_UNSPECIFIED = 0;
+        METHOD_REPORTED = 1; // source knows its transform into this exact model
+        METHOD_VISUAL_LOCALIZATION = 2;
+    }
+    Method method = 4;
+    string provenance = 5;
+    int64 observed_at_unix_ms = 6;
+    // Required expiry. Consumers must hide expired poses until refreshed.
+    int64 valid_until_unix_ms = 7;
+    // For visual localization only; diagnostic, not a claimed accuracy bound.
+    optional double reprojection_rms_pixels = 8;
+    uint32 inlier_count = 9;
+}
+
+message ListCameraMetadataRequest {
+    repeated string stable_ids = 1; // empty lists all; otherwise exact matches
+}
+message ListCameraMetadataResponse { repeated CameraMetadata cameras = 1; }
+message SetCameraMetadataRequest {
+    string stable_id = 1;
+    uint64 expected_revision = 2;
+    CameraMetadata metadata = 3;
+}
+message SetCameraMetadataResponse { CameraMetadata metadata = 1; }
 
 // FrameRequirement is a property of a frame a consumer can insist on. It is the
 // same vocabulary on both sides: a source ADVERTISES what it provides, a
@@ -69,7 +125,7 @@ enum FrameRequirement {
 message CameraIntrinsics {
     enum Provenance {
         PROVENANCE_UNSPECIFIED = 0;
-        // Read from the device's own factory calibration.
+        // Measured by factory calibration or a validated calibration procedure.
         PROVENANCE_MEASURED = 1;
         // Derived from a datasheet field of view, or a default. Usable for a
         // rough back-projection, not for measuring a badge at a metre.

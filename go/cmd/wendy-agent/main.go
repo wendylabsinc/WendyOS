@@ -456,6 +456,11 @@ func main() {
 	calibratedFrameSvc := services.NewCalibratedFrameService(ctx, logger,
 		framesource.NewRegistry(services.NewRealSenseProvider(logger, videoSvc, "")))
 	defer calibratedFrameSvc.Shutdown()
+	if metadataStore, err := services.OpenCameraMetadataStore("/var/lib/wendy/camera-metadata.json"); err != nil {
+		logger.Error("camera metadata unavailable", zap.Error(err))
+	} else {
+		calibratedFrameSvc.SetMetadataStore(metadataStore)
+	}
 	// Network cameras have to be found before they can be listed, so probe
 	// periodically rather than only when a client asks.
 	videoSvc.StartDiscovery()
@@ -526,6 +531,7 @@ func main() {
 	sensorFrames := services.NewSensorFrameFeed()
 	videoSvc.SetSensorFrameFeed(sensorFrames)
 	sensorSup := mcusource.NewSupervisor(logger, videoSvc.Loopback(), sensorTransportFor, sensorFrames.WrapWriters(ros2camera.NewFrameWriter), audioLoop)
+	videoSvc.SetSensorCameraIdentities(sensorSup.CameraIdentities)
 	sensorSup.SetSourceResolver(mcusource.NewSourceResolver(meshCatalog.SensorSources))
 	sensorRunner := mcusource.NewRunner(logger, sensorSup)
 	sensorAgentScope := func() certs.Scope {
@@ -545,7 +551,7 @@ func main() {
 	_, _, _, unitreeEnrolled := provisioningSvc.ProvisioningInfo()
 	unitreeSvc := services.NewUnitreeService(ctx, filepath.Join(configPath, "unitree-pairings.json"), unitreePairingOwner(deviceScope(provisioningSvc), unitreeEnrolled))
 	defer unitreeSvc.Close()
-	unitreeRobotSvc := services.NewUnitreeRobotService(unitreeSvc)
+	unitreeRobotSvc := services.NewUnitreeRobotService(unitreeSvc, logger)
 	if err := unitreeSvc.Restore(); err != nil {
 		logger.Warn("loading Unitree pairings failed", zap.Error(err))
 	}
@@ -1095,6 +1101,7 @@ func main() {
 				runMeshSupervisor(meshCtx, 5*time.Second, func(ctx context.Context) error {
 					return runConfiguredNetCarriers(ctx, configPath, localmesh.TCPIdentity{
 						Name: name, AgentPort: uint16(mtlsPortNum),
+						Agent:        services.MeshAgentMetadata(),
 						AppEndpoints: []localmesh.AppEndpoint{{Transport: localmesh.AppQUIC, Port: meshsession.Port}, {Transport: localmesh.AppTLS, Port: meshsession.TLSPort}},
 						Certificate:  certPEM, Chain: chainPEM, Key: keyPEM,
 					}, logger, meshCatalog, meshVIPs, meshSharing, func(snapshot func() localmesh.NodeSnapshot) {
@@ -1529,6 +1536,10 @@ func main() {
 		logger.Info("Device certificate renewed — restarting agent to load the new identity")
 		os.Exit(0)
 	})
+
+	if accessPolicy.AllowsNetwork {
+		go bluetooth.StartBLESetup(ctx, logger, bluetooth.NewSetupDispatcher(provisioningSvcV2, networkMgr))
+	}
 
 	// Enrollment is non-blocking and begins only after callbacks are installed.
 	// A baked ACME credential must not fall through to legacy enrollment when

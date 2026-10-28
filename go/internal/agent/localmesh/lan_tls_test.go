@@ -193,7 +193,6 @@ func TestLANUDPListenerRejectsTrustedNonDevicePrincipals(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, principal := range []string{
-		"spiffe://wendy.sh/tenant/" + testTenantUUID + "/operator/auth0|lan-review-operator",
 		"spiffe://wendy.sh/tenant/" + testTenantUUID + "/service/user-lan-review",
 		"spiffe://wendy.sh/tenant/" + testTenantUUID + "/service/lan-review",
 	} {

@@ -43,6 +43,7 @@ type TCPIdentity struct {
 	AgentPort               uint16
 	AppEndpoints            []AppEndpoint // supplied only for ready local listeners
 	Certificate, Chain, Key string
+	Agent                   *AgentMetadata
 }
 
 // Devices returns the parsed peers of a config loaded for self.

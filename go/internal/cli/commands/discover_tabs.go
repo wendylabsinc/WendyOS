@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 )
@@ -31,6 +32,7 @@ type discoverTabsModel struct {
 	startVMName  string
 	cancelled    bool
 	windowWidth  int
+	windowHeight int
 }
 
 // active preserves the tab when returning from a prompt outside the TUI.
@@ -205,8 +207,13 @@ func (m discoverTabsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case tea.WindowSizeMsg:
 		m.windowWidth = msg.Width
+		m.windowHeight = msg.Height
 		var cmds []tea.Cmd
-		local, localCmd := m.updateLocal(msg)
+		localSize := msg
+		if msg.Height > 0 {
+			localSize.Height = max(1, msg.Height-2) // tab header and separator
+		}
+		local, localCmd := m.updateLocal(localSize)
 		m = local
 		cmds = append(cmds, localCmd)
 		// The simulator picker shares the terminal with the tab header and footer.
@@ -218,7 +225,11 @@ func (m discoverTabsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m = sim
 		cmds = append(cmds, simCmd)
 		if m.cloudAuth != nil {
-			cloud, cloudCmd := m.updateCloud(msg)
+			cloudSize := msg
+			if msg.Height > 0 {
+				cloudSize.Height = max(1, msg.Height-4) // tabs and organization label
+			}
+			cloud, cloudCmd := m.updateCloud(cloudSize)
 			m = cloud
 			cmds = append(cmds, cloudCmd)
 		}
@@ -277,6 +288,34 @@ func (m discoverTabsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m discoverTabsModel) View() string {
+	view := strings.TrimRight(m.viewContent(), "\n")
+	if m.windowHeight > 0 {
+		// Status messages, errors, legends and wrapped hints can appear after
+		// the last resize. Measure the complete frame and shrink the table,
+		// preserving the selected row rather than letting the terminal scroll.
+		if excess := lipgloss.Height(view) - m.windowHeight; excess > 0 {
+			switch m.active {
+			case devicePickerLocalTab:
+				m.local.table.SetHeight(max(2, m.local.table.Height()-excess))
+			case devicePickerCloudTab:
+				if m.cloudAuth != nil {
+					m.cloud.table.SetHeight(max(2, m.cloud.table.Height()-excess))
+				}
+			}
+			view = strings.TrimRight(m.viewContent(), "\n")
+		}
+	}
+	// Very small terminals may not even fit the fixed controls. Never emit a
+	// frame larger than the viewport, including a trailing newline at its end.
+	view = tui.CropANSIView(view, 0, m.windowWidth)
+	lines := strings.Split(view, "\n")
+	if m.windowHeight > 0 && len(lines) > m.windowHeight {
+		view = strings.Join(lines[:m.windowHeight], "\n")
+	}
+	return view
+}
+
+func (m discoverTabsModel) viewContent() string {
 	if m.cancelled || m.action != devicePickerNoAction {
 		return ""
 	}

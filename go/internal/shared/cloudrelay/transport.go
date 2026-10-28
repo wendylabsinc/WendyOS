@@ -162,14 +162,19 @@ func DialCloud(endpoint, certPEM, chainPEM string, keyPEM []byte) (*grpc.ClientC
 		}
 		return certs.VerifyPeerCertificateChain(leaf, cs.PeerCertificates[1:], trust, x509.ExtKeyUsageServerAuth, time.Now(), time.Now())
 	}
-	return grpc.NewClient(t, grpc.WithTransportCredentials(credentials.NewTLS(config)), withKeepalive(brokerKeepalive))
+	return newCloudClient(t, credentials.NewTLS(config), true)
 }
 
 // DialBroker deliberately has no client certificate or identity metadata.
 func DialBroker(endpoint string) (*grpc.ClientConn, error) {
+	return dialBroker(endpoint, true)
+}
+
+func dialBroker(endpoint string, fallback bool) (*grpc.ClientConn, error) {
 	t, err := target(endpoint)
 	if err != nil {
 		return nil, err
 	}
-	return grpc.NewClient(t, grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{MinVersion: tls.VersionTLS13})), withKeepalive(brokerKeepalive))
+	host, _, _ := net.SplitHostPort(t)
+	return newCloudClient(t, credentials.NewTLS(&tls.Config{MinVersion: tls.VersionTLS13, ServerName: host}), fallback)
 }

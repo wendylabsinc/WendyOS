@@ -404,6 +404,9 @@ func (c Campaign) planDigestInput() map[string]any {
 			"clear_after": i.ClearAfter, "cooldown": i.Cooldown, "enabled": i.Enabled,
 		}
 		// Preserve revisions of existing Transformers campaigns.
+		if i.Task != "" {
+			plan["inference"].(map[string]any)["task"] = i.Task
+		}
 		if i.Backend != "" {
 			plan["inference"].(map[string]any)["backend"] = i.Backend
 		}

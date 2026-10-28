@@ -21,10 +21,11 @@ import (
 )
 
 // Credentials reuses the agent's provisioned signer and ML-DSA-aware trust
-// verifier. Reconstruct this object (and the session/cache) when provisioning or
+// verifier. Desktop callers reuse an organization operator certificate instead.
+// Reconstruct this object (and the session/cache) when provisioning or
 // trust changes. No mesh-specific private key or trust-on-first-use is created.
 //
-// The mesh identity is the leaf's device principal
+// Device identities use the leaf's device principal
 // "spiffe://wendy.sh/tenant/<tenant-uuid>/device/<device-uuid>". Nothing here
 // carries an organization number, an asset number, or a hash of either. Cloud
 // uses the same device UUID for asset_id; certificate and tenant verification
