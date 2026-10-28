@@ -44,9 +44,9 @@ func testNormalDatagramEchoAndRouteLifecycle(t *testing.T, plainTLS bool) {
 	}
 	var address netip.AddrPort
 	if plainTLS {
-		_, address = startTLSAppTest(t, b, testUDPAuthorization{registry})
+		_, address = startTLSAppTest(t, b, WithAgentService(testUDPAuthorization{registry}, 50052))
 	} else {
-		server, err := NewServer(b, testUDPAuthorization{registry})
+		server, err := NewServer(b, WithAgentService(testUDPAuthorization{registry}, 50052))
 		if err != nil {
 			t.Fatal(err)
 		}

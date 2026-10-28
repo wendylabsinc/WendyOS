@@ -52,6 +52,7 @@ type Client struct {
 	sessions       map[*pooledSession]struct{} // includes retired sessions with active streams
 	udpSessions    map[*udpSession]struct{}    // dedicated datagram sessions, including pending setup
 	tlsApps        map[*tlsAppConn]struct{}
+	tlsDials       map[*tlsAppDial]struct{}
 	closed         bool
 	stop           chan struct{}
 	done           chan struct{}
@@ -129,6 +130,10 @@ func (c *Client) Close() error {
 	}
 	c.closed = true
 	close(c.stop)
+	for pending := range c.tlsDials {
+		pending.retired = true
+		pending.cancel()
+	}
 	var conns []appRetirement
 	for entry := range c.sessions {
 		entry.retired = true
@@ -214,40 +219,44 @@ func (c *Client) PruneRoutes(snapshot localmesh.NodeSnapshot) {
 	}
 	var stale []appRetirement
 	c.mu.Lock()
+	for pending := range c.tlsDials {
+		endpoint, err := ResolveApp(snapshot, pending.peer)
+		if err != nil || endpoint.Transport != localmesh.AppTLS || endpoint.Address != pending.address {
+			pending.retired = true
+			pending.cancel()
+		}
+	}
 	peers := make(map[meshid.Device]netip.AddrPort)
 	for peer, entry := range c.peers {
 		peers[peer] = entry.address
 	}
 	for entry := range c.sessions {
-		address, err := Resolve(snapshot, entry.peer)
-		if err != nil || address != entry.address {
+		endpoint, err := ResolveApp(snapshot, entry.peer)
+		if err != nil || endpoint.Transport != localmesh.AppQUIC || endpoint.Address != entry.address {
 			peers[entry.peer] = entry.address
 		}
 	}
 	for entry := range c.udpSessions {
+		endpoint, err := ResolveApp(snapshot, entry.peer)
+		transport := localmesh.AppQUIC
 		if entry.tls {
-			endpoint, err := ResolveApp(snapshot, entry.peer)
-			if err != nil || endpoint.Transport != localmesh.AppTLS || endpoint.Address != entry.address {
-				entry.retired = true
-				if entry.cancel != nil {
-					entry.cancel()
-				}
-				if entry.flow != nil {
-					stale = append(stale, appRetirement{udp: entry.flow})
-				}
-			}
-			continue
+			transport = localmesh.AppTLS
 		}
-		address, err := Resolve(snapshot, entry.peer)
-		if err != nil || address != entry.address {
-			peers[entry.peer] = entry.address
+		if err != nil || endpoint.Transport != transport || endpoint.Address != entry.address {
+			entry.retired = true
+			if entry.cancel != nil {
+				entry.cancel()
+			}
+			if entry.flow != nil {
+				stale = append(stale, appRetirement{udp: entry.flow})
+			}
 		}
 	}
-	for peer, endpoint := range peers {
-		address, err := Resolve(snapshot, peer)
-		if err != nil {
+	for peer, address := range peers {
+		endpoint, err := ResolveApp(snapshot, peer)
+		if err != nil || endpoint.Transport != localmesh.AppQUIC {
 			stale = append(stale, c.retirePeerLocked(peer, true)...)
-		} else if address != endpoint {
+		} else if endpoint.Address != address {
 			stale = append(stale, c.invalidateLocked(peer)...)
 		}
 	}
@@ -263,6 +272,12 @@ func (c *Client) invalidateLocked(peer meshid.Device) []appRetirement {
 }
 
 func (c *Client) retirePeerLocked(peer meshid.Device, preserveActiveTCP bool) []appRetirement {
+	for pending := range c.tlsDials {
+		if pending.peer == peer {
+			pending.retired = true
+			pending.cancel()
+		}
+	}
 	if entry := c.peers[peer]; entry != nil {
 		entry.retired = true
 	}

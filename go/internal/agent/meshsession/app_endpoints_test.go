@@ -13,7 +13,7 @@ func TestResolveAuthenticatedAppTransport(t *testing.T) {
 	peer := fixtureDevice(t, fixtureDeviceB)
 	snapshot := localmesh.NodeSnapshot{Routes: []babel.Route{{Prefix: netip.PrefixFrom(peer.MeshAddress(), 128)}}}
 	endpoint, err := ResolveApp(snapshot, peer)
-	if err != nil || endpoint.Transport != localmesh.AppQUIC || endpoint.Address.Port() != Port {
+	if !errors.Is(err, ErrUnsupportedTransport) {
 		t.Fatal(endpoint, err)
 	}
 	snapshot.Devices = []localmesh.Manifest{{Device: peer.UUID(), Expires: time.Now().Add(time.Minute).UnixMilli(), AppEndpoints: []localmesh.AppEndpoint{{Transport: localmesh.AppTLS, Port: localmesh.AppSessionTLSPort}}}}
@@ -31,8 +31,8 @@ func TestResolveAuthenticatedAppTransport(t *testing.T) {
 		t.Fatalf("explicitly unavailable app transports: %v", err)
 	}
 	snapshot.Devices[0].AppEndpoints = nil
-	if legacy, err := ResolveApp(snapshot, peer); err != nil || legacy.Transport != localmesh.AppQUIC {
-		t.Fatalf("legacy absent capabilities: %+v %v", legacy, err)
+	if _, err := ResolveApp(snapshot, peer); !errors.Is(err, ErrUnsupportedTransport) {
+		t.Fatalf("absent explicit endpoints: %v", err)
 	}
 	snapshot.Devices[0].Expires = 0
 	if _, err = ResolveApp(snapshot, peer); !errors.Is(err, ErrNoRoute) {

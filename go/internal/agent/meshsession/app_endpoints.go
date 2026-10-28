@@ -30,9 +30,6 @@ func ResolveApp(snapshot localmesh.NodeSnapshot, target meshid.Device) (AppEndpo
 		if device.Withdraw || device.Expires <= time.Now().UnixMilli() {
 			return AppEndpoint{}, ErrNoRoute
 		}
-		if device.AppEndpoints == nil {
-			break
-		} // Earlier authenticated WendyOS manifests use QUIC.
 		for _, transport := range []string{localmesh.AppQUIC, localmesh.AppTLS} {
 			for _, endpoint := range device.AppEndpoints {
 				if endpoint.Transport == transport && endpoint.Port != 0 {
@@ -42,7 +39,7 @@ func ResolveApp(snapshot localmesh.NodeSnapshot, target meshid.Device) (AppEndpo
 		}
 		return AppEndpoint{}, ErrUnsupportedTransport
 	}
-	return AppEndpoint{Transport: localmesh.AppQUIC, Address: base}, nil
+	return AppEndpoint{}, ErrUnsupportedTransport
 }
 
 // ResolveAgentMTLS permits routed TCP only for the exact, signed native mTLS

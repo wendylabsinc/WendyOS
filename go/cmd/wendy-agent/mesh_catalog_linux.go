@@ -19,6 +19,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/agent/meshingress"
 	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
+	"github.com/wendylabsinc/wendy/go/internal/shared/models"
 	"go.uber.org/zap"
 )
 
@@ -326,4 +327,14 @@ func (m *meshCatalogManager) startBridge(a *catalogActivation, app catalogApp) e
 		}
 	}()
 	return nil
+}
+
+// SensorSources projects only live authenticated native SensorLink endpoints.
+func (m *meshCatalogManager) SensorSources() []models.LANDevice {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.active == nil || m.active.ctx.Err() != nil {
+		return nil
+	}
+	return meshSensorSources(m.active.snapshot())
 }

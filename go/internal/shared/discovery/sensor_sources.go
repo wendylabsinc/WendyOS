@@ -125,3 +125,10 @@ func sensorSourceIdentity(d models.LANDevice) string {
 		d.WendyLite, d.ID, d.DisplayName, d.Hostname, d.Port, d.IsMTLS,
 		d.AssetID, d.OrgID, d.TenantUUID, d.PrincipalURI, strings.Join(d.Caps, ","))
 }
+
+// MergeSensorSources combines ordinary LAN and authenticated mesh sightings
+// using the existing source identity rules. Addresses with different ports or
+// identity metadata remain distinct so each endpoint keeps its own identity.
+func MergeSensorSources(sightings []models.LANDevice) []models.LANDevice {
+	return mergeSensorSources(sightings)
+}

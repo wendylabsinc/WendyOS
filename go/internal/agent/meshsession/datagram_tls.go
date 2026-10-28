@@ -180,6 +180,7 @@ func (f *TLSDatagramFlow) Receive(ctx context.Context) (*udpmessage.Message, err
 				if e, ok := err.(net.Error); ok && e.Timeout() {
 					continue
 				}
+				f.Close()
 				return nil, err
 			}
 			if f.headerUsed != len(f.header) {
@@ -201,6 +202,7 @@ func (f *TLSDatagramFlow) Receive(ctx context.Context) (*udpmessage.Message, err
 				if e, ok := err.(net.Error); ok && e.Timeout() {
 					continue
 				}
+				f.Close()
 				return nil, err
 			}
 			if f.payloadUsed != len(f.payload) {

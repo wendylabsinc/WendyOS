@@ -293,3 +293,156 @@ func TestTLSAppMissingALPNAndSetupCancellation(t *testing.T) {
 		t.Fatal("duplicate setup attempts")
 	}
 }
+
+func TestNormalTLSAppRouteChangeKeepsEstablishedStream(t *testing.T) {
+	a, b := fixtureCredentials(t)
+	port := tlsEchoApp(t)
+	_, address := startTLSAppTest(t, b, allowPort(func(p uint16) bool { return p == port }))
+	client, err := NewClient(a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	flow, err := client.DialTLS(context.Background(), b.Device, address, port)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer flow.Close()
+	client.WithdrawRoute(b.Device)
+	tlsEcho(t, flow, []byte("established TCP survives carrier withdrawal"))
+	client.PruneRoutes(localmesh.NodeSnapshot{})
+	tlsEcho(t, flow, []byte("TCP retains the same authenticated endpoint"))
+	client.Invalidate(b.Device)
+	var one [1]byte
+	if _, err := flow.Read(one[:]); err == nil {
+		t.Fatal("explicit identity invalidation left a live stream")
+	}
+}
+
+func TestNormalTLSAppLostConnectionReleasesLocalStream(t *testing.T) {
+	a, b := fixtureCredentials(t)
+	app, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer app.Close()
+	closed := make(chan struct{})
+	go func() {
+		conn, err := app.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		_, _ = io.Copy(io.Discard, conn)
+		close(closed)
+	}()
+	port := uint16(app.Addr().(*net.TCPAddr).Port)
+	server, address := startTLSAppTest(t, b, allowPort(func(p uint16) bool { return p == port }))
+	flow, err := dialTLS(context.Background(), a, b.Device, address, port)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer flow.Close()
+	// Model an ordinary TCP loss without TLS close_notify. The app's input
+	// EOF must release the relay, even if it has no final response to send.
+	_ = flow.Conn.NetConn().Close()
+	select {
+	case <-closed:
+	case <-time.After(3 * time.Second):
+		t.Fatal("lost TLS connection retained its local app socket")
+	}
+	until := time.Now().Add(3 * time.Second)
+	for {
+		server.mu.Lock()
+		active := len(server.tlsConnections)
+		server.mu.Unlock()
+		if active == 0 {
+			break
+		}
+		if time.Now().After(until) {
+			t.Fatal("lost TLS connection retained a relay worker")
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func TestNormalTLSAppWithdrawalCancelsPendingSetup(t *testing.T) {
+	a, b := fixtureCredentials(t)
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	accepted := make(chan net.Conn, 1)
+	go func() {
+		conn, err := listener.Accept()
+		if err == nil {
+			accepted <- conn
+		}
+	}()
+	client, err := NewClient(a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	done := make(chan error, 1)
+	go func() {
+		flow, err := client.DialTLS(context.Background(), b.Device, netip.MustParseAddrPort(listener.Addr().String()), 28080)
+		if flow != nil {
+			flow.Close()
+		}
+		done <- err
+	}()
+	select {
+	case conn := <-accepted:
+		defer conn.Close()
+	case <-time.After(3 * time.Second):
+		t.Fatal("pending TLS dial did not connect")
+	}
+	client.WithdrawRoute(b.Device)
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("withdrawn setup succeeded")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("route withdrawal did not cancel TLS setup")
+	}
+}
+
+func TestNormalTLSListenerReadinessFollowsBind(t *testing.T) {
+	_, b := fixtureCredentials(t)
+	server, err := NewServer(b, allowPort(func(uint16) bool { return false }))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer server.Close()
+	occupied, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer occupied.Close()
+	called := false
+	if err := server.RunTLS(context.Background(), occupied.Addr().String(), func() { called = true }); err == nil || called {
+		t.Fatalf("failed bind reported readiness: called=%v err=%v", called, err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	ready := make(chan struct{})
+	go func() {
+		done <- server.RunTLS(ctx, "127.0.0.1:0", func() { close(ready) })
+	}()
+	select {
+	case <-ready:
+		if server.TLSAddr() == nil {
+			t.Fatal("readiness preceded the bound listener")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("listener did not report readiness")
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}

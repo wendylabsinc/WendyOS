@@ -14,7 +14,6 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/agent/localmesh"
 	"github.com/wendylabsinc/wendy/go/internal/agent/udpmessage"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
-	"github.com/wendylabsinc/wendy/go/internal/shared/tsarelay"
 )
 
 const TLSALPN = "wendy-app-mesh-tls/1"
@@ -29,6 +28,13 @@ const TLSAppSessionSetupTimeout = 120 * time.Second
 // TCP/TLS carries one independently authorized app stream per connection.
 // Its WAS1 port request and ACK are identical to one QUIC app stream. Neither
 // discovery hints nor a failed QUIC connection authorize this transport.
+type tlsAppDial struct {
+	peer    meshid.Device
+	address netip.AddrPort
+	cancel  context.CancelFunc
+	retired bool // guarded by Client.mu
+}
+
 type tlsAppConn struct {
 	*tlsRecordConn
 	peer    meshid.Device
@@ -189,27 +195,27 @@ func (c *Client) DialTLS(ctx context.Context, peer meshid.Device, address netip.
 	if c == nil {
 		return nil, ErrNoRoute
 	}
-	c.mu.Lock()
-	closed := c.closed
-	c.mu.Unlock()
-	if closed {
-		return nil, net.ErrClosed
-	}
 	setup, cancel := context.WithCancel(ctx)
 	defer cancel()
-	go func() {
-		select {
-		case <-c.stop:
-			cancel()
-		case <-setup.Done():
-		}
-	}()
-	conn, err := dialTLS(setup, c.credentials, peer, address, port)
-	if err != nil {
-		return nil, err
-	}
+	pending := &tlsAppDial{peer: peer, address: address, cancel: cancel}
 	c.mu.Lock()
 	if c.closed {
+		c.mu.Unlock()
+		return nil, net.ErrClosed
+	}
+	if c.tlsDials == nil {
+		c.tlsDials = make(map[*tlsAppDial]struct{})
+	}
+	c.tlsDials[pending] = struct{}{}
+	c.mu.Unlock()
+	conn, err := dialTLS(setup, c.credentials, peer, address, port)
+	c.mu.Lock()
+	delete(c.tlsDials, pending)
+	if err != nil {
+		c.mu.Unlock()
+		return nil, err
+	}
+	if c.closed || pending.retired {
 		c.mu.Unlock()
 		conn.Close()
 		return nil, net.ErrClosed
@@ -235,7 +241,8 @@ func (s *Server) TLSAddr() net.Addr {
 	return s.tlsListener.Addr()
 }
 
-func (s *Server) RunTLS(ctx context.Context, addr string) error {
+// RunTLS calls ready, when supplied, after binding the TLS listener.
+func (s *Server) RunTLS(ctx context.Context, addr string, ready ...func()) error {
 	run, cancel := context.WithCancel(ctx)
 	defer cancel()
 	listener, err := listenAppTCP(run, s.credentials, addr)
@@ -253,6 +260,9 @@ func (s *Server) RunTLS(ctx context.Context, addr string) error {
 		s.tlsConnections = map[*tls.Conn]struct{}{}
 	}
 	s.mu.Unlock()
+	if len(ready) != 0 && ready[0] != nil {
+		ready[0]()
+	}
 	config := s.TLSConfig()
 	config.NextProtos = []string{TLSALPN}
 	config.SessionTicketsDisabled = true
@@ -375,12 +385,6 @@ func (s *Server) serveTLS(parent context.Context, secure *tls.Conn, expires time
 	if port == 0 || session.Err() != nil {
 		return
 	}
-	if port == tsarelay.Port {
-		if _, err := secure.Write([]byte{1}); err == nil {
-			_ = tsarelay.ServeConnection(session, records)
-		}
-		return
-	}
 	local, err := s.authorizer.DialAuthorized(port, func(address string) (net.Conn, error) {
 		return (&net.Dialer{Timeout: 5 * time.Second}).DialContext(session, "tcp4", address)
 	})
@@ -415,15 +419,30 @@ func (s *Server) serveTLS(parent context.Context, secure *tls.Conn, expires time
 	if err := secure.SetDeadline(time.Time{}); err != nil {
 		return
 	}
-	done := make(chan struct{}, 2)
+	done := make(chan error, 2)
 	go func() {
-		_, _ = io.Copy(local, secure)
-		if half, ok := local.(interface{ CloseWrite() error }); ok {
-			_ = half.CloseWrite()
+		_, err := io.Copy(local, secure)
+		if err == nil {
+			if half, ok := local.(interface{ CloseWrite() error }); ok {
+				err = half.CloseWrite()
+			} else {
+				err = local.Close()
+			}
 		}
-		done <- struct{}{}
+		done <- err
 	}()
-	go func() { _, _ = io.Copy(records, local); _ = records.CloseWrite(); done <- struct{}{} }()
-	<-done
+	go func() {
+		_, err := io.Copy(records, local)
+		if err == nil {
+			err = records.CloseWrite()
+		}
+		done <- err
+	}()
+	if err := <-done; err != nil {
+		// A failed direction cannot complete a graceful half-close. Release
+		// the other copy worker as well when an ordinary connection is lost.
+		secure.Close()
+		local.Close()
+	}
 	<-done
 }

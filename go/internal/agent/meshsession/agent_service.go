@@ -2,6 +2,7 @@ package meshsession
 
 import (
 	"net"
+	"net/netip"
 	"strconv"
 )
 
@@ -26,4 +27,27 @@ func (a agentServiceAuthorizer) DialAuthorized(port uint16, dial func(string) (n
 		return nil, ErrDenied
 	}
 	return a.apps.DialAuthorized(port, dial)
+}
+
+// Preserve application datagram ownership when the TCP-only native agent
+// exception wraps an app registry. The agent port itself gains no UDP grant.
+func (a agentServiceAuthorizer) UDPToken(port uint16) uint64 {
+	if auth, ok := a.apps.(UDPAuthorizer); ok {
+		return auth.UDPToken(port)
+	}
+	return 0
+}
+func (a agentServiceAuthorizer) UDPDone(port uint16, token uint64) <-chan struct{} {
+	if auth, ok := a.apps.(UDPAuthorizer); ok {
+		return auth.UDPDone(port, token)
+	}
+	done := make(chan struct{})
+	close(done)
+	return done
+}
+func (a agentServiceAuthorizer) WithAuthorizedUDPToken(port uint16, token uint64, send func(netip.AddrPort) error) error {
+	if auth, ok := a.apps.(UDPAuthorizer); ok {
+		return auth.WithAuthorizedUDPToken(port, token, send)
+	}
+	return ErrDenied
 }

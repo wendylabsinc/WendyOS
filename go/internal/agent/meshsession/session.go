@@ -239,7 +239,8 @@ func (s *Server) TLSConfig() *tls.Config {
 	return config
 }
 
-func (s *Server) Run(ctx context.Context, addr string) error {
+// Run calls ready, when supplied, after binding the QUIC listener.
+func (s *Server) Run(ctx context.Context, addr string, ready ...func()) error {
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	packets, err := listenAppPackets(runCtx, s.credentials, addr)
@@ -261,6 +262,9 @@ func (s *Server) Run(ctx context.Context, addr string) error {
 	s.packets = packets
 	s.listener = listener
 	s.mu.Unlock()
+	if len(ready) != 0 && ready[0] != nil {
+		ready[0]()
+	}
 	sem := make(chan struct{}, 64)
 	var wg sync.WaitGroup
 	defer func() { cancel(); _ = s.Close(); wg.Wait() }()

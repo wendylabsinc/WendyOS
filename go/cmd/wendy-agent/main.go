@@ -64,7 +64,6 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/cloudrelay"
 	"github.com/wendylabsinc/wendy/go/internal/shared/discovery"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
-	"github.com/wendylabsinc/wendy/go/internal/shared/meshoperatorlink"
 	"github.com/wendylabsinc/wendy/go/internal/shared/models"
 	"github.com/wendylabsinc/wendy/go/internal/shared/unitree"
 	"github.com/wendylabsinc/wendy/go/internal/shared/version"
@@ -786,6 +785,9 @@ func main() {
 			// Legacy fallback for a CLI that does not put each target's actual
 			// mTLS agent port in PushTarget.
 			TargetAgentPort: uint16(mtlsPortNum),
+			// Reported with the build capabilities, so a device reachable only
+			// over USB says it has no internet before a build fails on it.
+			CheckInternet: services.CheckRegistryReachable,
 			// The Cloud asset UUID is the device UUID. Still require membership
 			// in this tenant's roster before delivery. Read fresh per build:
 			// roster sync and enrollment can change membership while running.
@@ -845,9 +847,6 @@ func main() {
 			agentpbv2.RegisterROS2ServiceServer(srv, ros2Svc)
 		}
 	}
-
-	meshAgentListener := meshoperatorlink.NewAgentListener()
-	defer meshAgentListener.Close()
 
 	startMTLSServer := func(certPEM, chainPEM, keyPEM string) {
 		mtlsMu.Lock()
@@ -947,13 +946,6 @@ func main() {
 		}
 
 		mtlsServer = srv
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			if err := srv.Serve(meshAgentListener); err != nil && !errors.Is(err, grpc.ErrServerStopped) {
-				logger.Error("authenticated mesh gRPC ingress stopped", zap.Error(err))
-			}
-		}()
 
 		wg.Add(1)
 		go func() {
@@ -1025,9 +1017,11 @@ func main() {
 			return
 		}
 		localMeshLife.Start(ctx, func(meshCtx context.Context, launch func(func())) {
+			meshCtx, stopSessions := context.WithCancel(meshCtx)
 			appClient, err := meshsession.NewClient(credentials, appUDPMessages)
 			if err != nil {
 				logger.Error("wendy net app client unavailable", zap.Error(err))
+				stopSessions()
 				return
 			}
 			localMeshMu.Lock()
@@ -1056,29 +1050,47 @@ func main() {
 			sessionServer, err := meshsession.NewServer(credentials, sessionIngress, appUDPMessages)
 			if err != nil {
 				logger.Error("wendy net app session unavailable", zap.Error(err))
-			} else {
-				launch(func() {
-					if err := sessionServer.RunTLS(meshCtx, fmt.Sprintf(":%d", meshsession.TLSPort)); err != nil && meshCtx.Err() == nil {
-						logger.Error("wendy net TLS app session stopped", zap.Error(err))
-					}
-				})
-				launch(func() {
-					if err := sessionServer.Run(meshCtx, fmt.Sprintf(":%d", meshsession.Port)); err != nil && meshCtx.Err() == nil {
-						logger.Error("wendy net app session stopped", zap.Error(err))
-					}
-				})
+				stopSessions()
+				return
+			}
+			// Publish app capabilities only after both sockets have bound. A
+			// listener failure ends the carriers and their signed advertisement.
+			ready := make(chan struct{}, 2)
+			onReady := func() { ready <- struct{}{} }
+			launch(func() {
+				defer stopSessions()
+				if err := sessionServer.RunTLS(meshCtx, fmt.Sprintf(":%d", meshsession.TLSPort), onReady); err != nil && meshCtx.Err() == nil {
+					logger.Error("wendy net TLS app session stopped", zap.Error(err))
+				}
+			})
+			launch(func() {
+				defer stopSessions()
+				if err := sessionServer.Run(meshCtx, fmt.Sprintf(":%d", meshsession.Port), onReady); err != nil && meshCtx.Err() == nil {
+					logger.Error("wendy net app session stopped", zap.Error(err))
+				}
+			})
+			for range 2 {
+				select {
+				case <-ready:
+				case <-meshCtx.Done():
+					return
+				}
+			}
+			if meshCtx.Err() != nil {
+				return
 			}
 			name, _ := os.Hostname()
 			launch(func() {
 				runMeshSupervisor(meshCtx, 5*time.Second, func(ctx context.Context) error {
 					return runConfiguredNetCarriers(ctx, configPath, localmesh.TCPIdentity{
 						Name: name, AgentPort: uint16(mtlsPortNum),
-						Certificate: certPEM, Chain: chainPEM, Key: keyPEM,
+						AppEndpoints: []localmesh.AppEndpoint{{Transport: localmesh.AppQUIC, Port: meshsession.Port}, {Transport: localmesh.AppTLS, Port: meshsession.TLSPort}},
+						Certificate:  certPEM, Chain: chainPEM, Key: keyPEM,
 					}, logger, meshCatalog, meshVIPs, meshSharing, func(snapshot func() localmesh.NodeSnapshot) {
 						localMeshMu.Lock()
 						localMeshSnapshot = snapshot
 						localMeshMu.Unlock()
-					}, meshAgentListener.Deliver)
+					})
 				}, func(err error) {
 					logger.Error("configured wendy net stopped", zap.Error(err))
 				})
