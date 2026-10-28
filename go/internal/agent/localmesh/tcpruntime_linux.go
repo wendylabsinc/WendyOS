@@ -76,6 +76,14 @@ func runConfiguredWithNode(parent context.Context, configDir string, id TCPIdent
 		}
 		defer listener.Close()
 	}
+	var tlsListener net.Listener
+	if cfg.TLSListen != "" {
+		tlsListener, err = listen("tcp", cfg.TLSListen)
+		if err != nil {
+			return fmt.Errorf("listen for native TLS peers: %w", err)
+		}
+		defer tlsListener.Close()
+	}
 	node, err := NewNode(ctx, stateDir, credentials, id.Name, id.AgentPort)
 	if err != nil {
 		return err
@@ -85,6 +93,12 @@ func runConfiguredWithNode(parent context.Context, configDir string, id TCPIdent
 	}
 	nodeDone := make(chan error, 1)
 	go func() { nodeDone <- node.Run(); cancel() }()
+	policy := NewConnectionPolicy(credentials.Device, true, ConnectionLimits{LANMaxOutgoing, LANMaxOutgoingAttempts, LANMaxConnections})
+	var tlsDone chan error
+	if tlsListener != nil {
+		tlsDone = make(chan error, 1)
+		go func() { tlsDone <- runNetTLSListener(ctx, node, tlsListener, WiFiLinkCost, policy, "") }()
+	}
 	if observe != nil {
 		observe(node, cfg)
 	}
@@ -92,7 +106,6 @@ func runConfiguredWithNode(parent context.Context, configDir string, id TCPIdent
 	for _, peer := range cfg.devices {
 		allowed[peer.Principal()] = peer
 	}
-	policy := NewConnectionPolicy(credentials.Device, true, ConnectionLimits{LANMaxOutgoing, LANMaxOutgoingAttempts, LANMaxConnections})
 	queue := &CandidateQueue{}
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -190,7 +203,7 @@ func runConfiguredWithNode(parent context.Context, configDir string, id TCPIdent
 			}
 		}()
 	}
-	nodeStopped := false
+	nodeStopped, tlsStopped := false, false
 	select {
 	case <-parent.Done():
 	case err = <-nodeDone:
@@ -198,6 +211,8 @@ func runConfiguredWithNode(parent context.Context, configDir string, id TCPIdent
 		if errors.Is(err, context.Canceled) {
 			err = nil
 		}
+	case err = <-tlsDone:
+		tlsStopped = true
 	}
 	if observe != nil {
 		observe(nil, nil)
@@ -208,6 +223,9 @@ func runConfiguredWithNode(parent context.Context, configDir string, id TCPIdent
 	}
 	<-acceptDone
 	wg.Wait()
+	if tlsDone != nil && !tlsStopped {
+		err = errors.Join(err, <-tlsDone)
+	}
 	if !nodeStopped {
 		// Normal node cancellation must not hide an earlier listener failure
 		// when the independent runtime results are combined.

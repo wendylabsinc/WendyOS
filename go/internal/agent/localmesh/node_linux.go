@@ -43,6 +43,7 @@ type nodePeer struct {
 	sync           *Synchronizer
 	replies        []ControlMessage
 	replyBytes     int
+	timestamp      *timestampReply
 }
 
 type nodeLink interface {
@@ -79,6 +80,7 @@ type nodeEvent struct {
 	control       *ControlMessage
 	controlResult chan error
 	result        chan error
+	timestamp     *timestampReply
 }
 
 // Node serializes all Babel/directory mutations. Radio providers only establish
@@ -109,6 +111,7 @@ type Node struct {
 	forwardRoutes    []babel.Route
 	diagnostics      carrierDiagnostics
 	routeOrigins     map[RouteOrigin]bool
+	timestampWorkers chan struct{}
 }
 
 func NewNode(parent context.Context, dir string, credentials *Credentials, name string, agentPort uint16) (*Node, error) {
@@ -335,6 +338,7 @@ func (n *Node) Run() error {
 				if err := n.continueIngress(p); err != nil {
 					return err
 				}
+				n.pumpTimestamp(p)
 				if p.reconcileNeeded {
 					p.reconcileNeeded = false
 					n.reconcilePeer(p, time.Now())
@@ -441,6 +445,13 @@ func (n *Node) handle(e nodeEvent) error {
 	if e.packet != nil {
 		return n.step(babel.Receive{ID: e.id, Packet: e.packet})
 	}
+	if e.timestamp != nil {
+		if p.timestamp != nil && p.timestamp.id == e.timestamp.id {
+			p.timestamp = e.timestamp
+			n.pumpTimestamp(p)
+		}
+		return nil
+	}
 	if e.control != nil {
 		return n.admitIngress(p, e)
 	}
@@ -452,6 +463,7 @@ func (n *Node) handleControl(p *nodePeer, control *ControlMessage) error {
 		return nil
 	}
 	if control.Kind == "time" {
+		n.timestampControl(p, control.Time)
 		return nil
 	}
 
