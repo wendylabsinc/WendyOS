@@ -1,5 +1,3 @@
-//go:build linux
-
 package localmesh
 
 import (
@@ -36,7 +34,7 @@ type nodePeer struct {
 	cost           uint16
 	transport      string
 	link           nodeLink
-	tun            *os.File
+	tun            io.ReadWriteCloser
 	pendingBundles sync.Map // fingerprints queued or being written on this link
 	control        chan ControlMessage
 	done           chan struct{}
@@ -89,7 +87,7 @@ type nodeEvent struct {
 type Node struct {
 	controlHub       *ControlHub
 	Credentials      *Credentials
-	kernel           *Kernel
+	kernel           PacketNetwork
 	cache            *IdentityCache
 	directory        *Directory
 	bundleHints      *bundleHintCache
@@ -115,6 +113,19 @@ type Node struct {
 }
 
 func NewNode(parent context.Context, dir string, credentials *Credentials, name string, agentPort uint16, appEndpoints ...[]AppEndpoint) (*Node, error) {
+	return newNode(parent, dir, credentials, name, agentPort, newHostNetwork, appEndpoints...)
+}
+
+// NewNodeWithNetwork runs the same authenticated router with a caller-owned
+// packet backend. The node closes the backend when Run returns.
+func NewNodeWithNetwork(parent context.Context, dir string, credentials *Credentials, name string, agentPort uint16, network PacketNetwork, appEndpoints ...[]AppEndpoint) (*Node, error) {
+	if network == nil {
+		return nil, errors.New("missing mesh packet network")
+	}
+	return newNode(parent, dir, credentials, name, agentPort, func(meshid.Device) (PacketNetwork, error) { return network, nil }, appEndpoints...)
+}
+
+func newNode(parent context.Context, dir string, credentials *Credentials, name string, agentPort uint16, createNetwork func(meshid.Device) (PacketNetwork, error), appEndpoints ...[]AppEndpoint) (*Node, error) {
 	if credentials == nil || agentPort == 0 {
 		return nil, errors.New("missing wendy net credentials or agent port")
 	}
@@ -147,7 +158,7 @@ func NewNode(parent context.Context, dir string, credentials *Credentials, name 
 	if err != nil {
 		return nil, err
 	}
-	kernel, err := NewKernel(credentials.Device)
+	kernel, err := createNetwork(credentials.Device)
 	if err != nil {
 		return nil, err
 	}
