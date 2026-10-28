@@ -7,6 +7,7 @@ import {
   isStale,
   mergeMeshObservation,
   mergeMeshInventory,
+  getMeshObservation,
   meshIdentity,
   meshNodeFor,
   nodeState,
@@ -400,6 +401,11 @@ test("device inventory outage retains prior sources while the independent CLI re
  assert.deepEqual(mergeMeshInventory(old,[localReporter]),[localReporter]);
 });
 
+test("retaining a partial inventory does not duplicate another path to the same reporter", () => {
+  const key = `device:${tenant}/${a}`;
+  assert.deepEqual(mergeMeshInventory([{ id: "physical", reporterKey: key }], [{ id: "mesh", reporterKey: key }], true), [{ id: "mesh", reporterKey: key }]);
+});
+
 const liteTopology = JSON.parse(readFileSync(new URL("./fixtures/lite-operator-topology.json", import.meta.url), "utf8"));
 const c5Reporter = { id: "cloud://cloud.example:443/tenant/11111111-1111-4111-8111-111111111111/asset/bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", name: "C5 Cloud", platform: "wendy-lite" };
 
@@ -463,4 +469,21 @@ test("a successful unavailable-runtime observation clears retained relationships
   const group = buildMeshGroups([c5Reporter], { [c5Reporter.id]: stopped }, now + 1).groups[0];
   assert.equal(group.nodes.length, 1);
   assert.equal(group.links.length, 0);
+});
+
+
+test("cached observations follow a canonical reporter across physical and mesh paths", () => {
+  const now = Number(liteTopology.capturedAtUnixMs), key = `device:${tenant}/${b}`;
+  const observations = { [key]: observe(liteTopology, now) };
+  const physical = { id: "wendy-lite:/dev/cu.usbmodemC5", reporterKey: key };
+  const mesh = { id: `mesh://${tenant}/${b}`, reporterKey: key };
+  assert.equal(getMeshObservation(observations, physical), getMeshObservation(observations, mesh));
+  let group = buildMeshGroups([mesh], observations, now).groups[0];
+  assert.equal(group.links.length, 2);
+  observations[key] = mergeMeshObservation(observations[key], { status: "unavailable", error: "The selected native slot is occupied." }, now + 1);
+  group = buildMeshGroups([mesh], observations, now + 1).groups[0];
+  const reporter = group.nodes.find(node => node.principal === liteTopology.selfPrincipal);
+  assert.equal(nodeState(reporter, now + 1).label, "Stale");
+  assert.equal(group.links.length, 2);
+  assert.ok(group.links.every(link => link.observations.every(item => item.stale)));
 });

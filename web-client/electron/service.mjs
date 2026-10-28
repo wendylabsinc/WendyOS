@@ -314,12 +314,12 @@ export class DesktopService {
 
   meshTopology({ target }) {
     target = deviceTarget(target);
-    const pending = this.meshSnapshots.get(target);
+    const reporter = this.meshReporterKeys.get(target) || target;
+    const pending = this.meshSnapshots.get(reporter);
     if (pending) return pending;
     if (this.meshSnapshots.size >= 64)
       throw new Error("The local observation queue is full. Try again shortly.");
     const generation = this.monitorGeneration;
-    const reporter = this.meshReporterKeys.get(target) || target;
     const expiresAt = Date.now() + 160_000;
     let entry;
     const request = new Promise((resolve, reject) => {
@@ -347,8 +347,8 @@ export class DesktopService {
         }
       }, 160_000);
       this.meshQueue.push(entry);
-    }).finally(() => { clearTimeout(entry.timer); this.meshSnapshots.delete(target); });
-    this.meshSnapshots.set(target, request);
+    }).finally(() => { clearTimeout(entry.timer); this.meshSnapshots.delete(reporter); });
+    this.meshSnapshots.set(reporter, request);
     this.drainMeshQueue();
     return request;
   }
@@ -380,10 +380,14 @@ export class DesktopService {
     const devices = new Map();
     this.meshReporterKeys.clear();
     const warnings = [];
-    const reporterKey = (id) => typeof id === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id) ? `device:${id.toLowerCase()}` : undefined;
-    const add = (target, name, deviceType, platform, key) => {
+    let retainPrevious = false;
+    const identities = new Map();
+    const canonicalUUID = (id) => typeof id === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id) && id !== "00000000-0000-0000-0000-000000000000" ? id.toLowerCase() : undefined;
+    const add = (target, name, deviceType, platform, key, deviceUUID, tenantUUID) => {
       target = deviceTarget(target);
       if (key) this.meshReporterKeys.set(target, key);
+      const uuid = canonicalUUID(deviceUUID);
+      if (uuid) identities.set(target, { uuid, tenant: canonicalUUID(tenantUUID) });
       if (!devices.has(target)) devices.set(target, { id: target, name: name || target, deviceType, platform, reporterKey: key });
     };
     // The desktop's own CLI owner is independent of device inventory. Reading
@@ -426,8 +430,38 @@ export class DesktopService {
           const target = device.connectionInfo?.type === "BLE"
             ? `wendy-lite:ble:${device.connectionInfo.address}` : device.id;
           if (typeof target !== "string" || !target.startsWith("wendy-lite:")) continue;
-          add(target, device.displayName, "Wendy Lite", "wendy-lite", reporterKey(device.connectionInfo?.enrolledDeviceId));
+          add(target, device.displayName, "Wendy Lite", "wendy-lite", undefined, device.connectionInfo?.enrolledDeviceId, device.connectionInfo?.tenantId);
         } catch { invalidAddress = true; }
+      }
+      // CLI4 supplies retained, signed native endpoint metadata. Keep its
+      // selector intact: the CLI resolver refreshes/authenticates it at read.
+      // No IP/port is guessed and no extra target probe is performed here.
+      const mesh = collection?.meshDiscovery;
+      const meshRows = Array.isArray(collection?.meshDevices) ? collection.meshDevices : [];
+      const ready = mesh?.state === "ready" && Number.isFinite(mesh.capturedAtUnixMs) && mesh.capturedAtUnixMs > 0 && mesh.capturedAtUnixMs <= Date.now() + 1000;
+      const fresh = ready && Date.now() - mesh.capturedAtUnixMs <= 10_000;
+      if (mesh && (!fresh || mesh.truncated)) {
+        retainPrevious = true;
+        warnings.push(`Mesh discovery: ${fresh ? "partial signed inventory" : mesh.state === "ready" ? "stale signed inventory" : mesh.state || "unavailable"}. Previous observations may be stale.`);
+      }
+      // Another inventory source may have delayed this response. Retain a
+      // still-live selector as a candidate; the provider refreshes it at read.
+      if (ready) {
+        let omitted = false;
+        for (const row of meshRows) {
+          if (row?.platform !== "Lite") continue;
+          const tenant = canonicalUUID(row.tenant), uuid = canonicalUUID(row.device);
+          if (!tenant || !uuid || row.tenant !== tenant || row.device !== uuid ||
+              row.selector !== `mesh://${tenant}/${uuid}` || row.principal !== `spiffe://wendy.sh/tenant/${tenant}/device/${uuid}` ||
+              row.transport !== "mtls-v1" || !Number.isFinite(row.expiresAtUnixMs) || row.expiresAtUnixMs <= Date.now()) {
+            omitted = true; continue;
+          }
+          add(row.selector, row.name, "Wendy Lite", "wendy-lite", undefined, uuid, tenant);
+        }
+        if (omitted) {
+          retainPrevious = true;
+          warnings.push("Mesh discovery omitted expired or incomplete Lite reporters.");
+        }
       }
       if (invalidAddress) warnings.push("Local discovery omitted devices with invalid addresses.");
     } else warnings.push("Local discovery: " + sources[0].reason.message);
@@ -440,12 +474,38 @@ export class DesktopService {
           // session. An asset ID alone cannot identify a Cloud login.
           const selector = cloudDiscoverySelector(device);
           if (!selector) { invalidSelector = true; continue; }
-          add(selector, device.name, device.type, device.osType || (/lite/i.test(device.type || "") ? "wendy-lite" : undefined), reporterKey(device.pkiDeviceName || device.id));
+          const parts = new URL(selector).pathname.split("/");
+          const tenant = parts[1] === "tenant" ? canonicalUUID(parts[2]) : undefined;
+          const asset = canonicalUUID(device.id);
+          // v2 asset IDs carry device UUIDs. Match a known physical/signed
+          // identity before treating it as an alias; Cloud-only contexts keep
+          // their complete independent endpoint/tenant selectors.
+          const known = canonicalUUID(device.pkiDeviceName) || (tenant && asset && [...identities.values()].some(identity => identity.uuid === asset && (!identity.tenant || identity.tenant === tenant)) ? asset : undefined);
+          add(selector, device.name, device.type, device.osType || (/lite/i.test(device.type || "") ? "wendy-lite" : undefined), undefined, known, tenant);
         }
         if (invalidSelector) warnings.push("Cloud discovery omitted devices without a valid scoped selector. Update the Wendy CLI and retry.");
       }
     } else warnings.push("Cloud discovery: " + sources[1].reason.message);
-    return { devices: [...devices.values()], warnings };
+    // A physical USB row may know its enrolled UUID before its tenant. Join
+    // that alias only when this inventory has one unambiguous tenant for it.
+    const tenants = new Map();
+    for (const { uuid, tenant } of identities.values()) if (tenant) {
+      if (!tenants.has(uuid)) tenants.set(uuid, new Set());
+      tenants.get(uuid).add(tenant);
+    }
+    for (const [target, identity] of identities) {
+      const choices = tenants.get(identity.uuid);
+      const tenant = identity.tenant || (choices?.size === 1 ? [...choices][0] : undefined);
+      this.meshReporterKeys.set(target, `device:${tenant ? tenant + "/" : ""}${identity.uuid}`);
+    }
+    const reporters = [], seen = new Set();
+    for (const [target, device] of devices) {
+      const key = this.meshReporterKeys.get(target);
+      if (key && seen.has(key)) continue;
+      if (key) { seen.add(key); device.reporterKey = key; }
+      reporters.push(device);
+    }
+    return { devices: reporters, warnings, ...(retainPrevious ? { retainPrevious: true } : {}) };
   }
 
   deviceLogsSnapshot(id) {

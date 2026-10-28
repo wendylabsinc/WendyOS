@@ -143,7 +143,12 @@ export function meshNodeFor(group: MeshGroup, principal?: string, routingId?: st
 export function mergeMeshInventory(previous: MeshDevice[], current: MeshDevice[], retainPrevious = false) {
   if (!retainPrevious) return current;
   const incoming = new Set(current.map(device => device.id));
-  return [...current, ...previous.filter(device => !incoming.has(device.id))];
+  const reporters = new Set(current.map(device => device.reporterKey).filter(Boolean));
+  return [...current, ...previous.filter(device => !incoming.has(device.id) && (!device.reporterKey || !reporters.has(device.reporterKey)))];
+}
+
+export function getMeshObservation(observations: Record<string, MeshObservation>, device: MeshDevice) {
+  return (device.reporterKey ? observations[device.reporterKey] : undefined) || observations[device.id];
 }
 
 function inventoryIdentity(device: MeshDevice) {
@@ -284,7 +289,7 @@ export function buildMeshGroups(
     return node;
   };
   for (const device of devices) {
-    const observation = observations[device.id];
+    const observation = getMeshObservation(observations, device);
     const topology = observation?.topology;
     const self = meshIdentity(topology?.selfPrincipal, topology?.selfDeviceId);
     const enrolled = inventoryIdentity(device);

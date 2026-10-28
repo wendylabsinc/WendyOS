@@ -212,3 +212,91 @@ test("slow or unavailable Lite leaves the existing local CLI router responsive",
  const pending=service.meshTopology({target:"wendy-lite:board.local"});
  assert.equal((await service.meshTopology({target:"cli://local"})).platform,"wendy-cli");release();assert.equal((await pending).status,"unavailable");
 });
+
+const cli4Models = JSON.parse(readFileSync(new URL("./fixtures/cli4-mesh-inventory.json", import.meta.url), "utf8"));
+const cli4Inventory = cli4Models.collection;
+function freshCLI4Inventory() {
+  const inventory = structuredClone(cli4Inventory);
+  inventory.meshDiscovery.capturedAtUnixMs = Date.now();
+  for (const device of inventory.meshDevices) device.expiresAtUnixMs = Date.now() + 300_000;
+  return inventory;
+}
+const c5Cloud = `cloud://cloud.example:443/tenant/${cli4Inventory.meshDevices[1].tenant}/asset/${cli4Inventory.meshDevices[1].device}`;
+async function discoverCLI4(service) {
+  service.run = async (_file, args) => JSON.stringify(args[0] === "cloud"
+    ? cli4Models.cloud : freshCLI4Inventory());
+  return service.meshDiscover();
+}
+
+test("real CLI4 model JSON exposes mesh-only C6 through its exact Lite selector", async () => {
+  const service = fixture();
+  const inventory = await discoverCLI4(service);
+  const c6 = cli4Inventory.meshDevices[0];
+  assert.equal(c6.revision, "18446744073709551615");
+  assert.deepEqual(inventory.devices.map(device => device.id), ["cli://local", cli4Inventory.externalDevices[0].id, c6.selector]);
+  assert.equal(inventory.devices[2].platform, "wendy-lite");
+  assert.equal(inventory.devices[2].reporterKey, `device:${c6.tenant}/${c6.device}`);
+  assert.deepEqual(inventory.warnings, []);
+  let partial = false;
+  service.run = async (_file, args) => {
+    assert.deepEqual(args, ["device", "wendy-net", "topology", "--device", c6.selector, "--json", "--observation"]);
+    return JSON.stringify(partial
+      ? { status: "ok", platform: "wendy-lite", topology: { selfPrincipal: c6.principal, selfTenantId: c6.tenant, selfDeviceId: c6.device, selfMeshAddress: c6.address.slice(1, c6.address.indexOf("]")), capturedAtUnixMs: String(Date.now()), runtimeAvailable: true, truncated: true, status: { state: "mesh-active", detail: "Partial endpoint directory." } } }
+      : { status: "unavailable", platform: "wendy-lite", error: "The native slot is occupied." });
+  };
+  assert.equal((await service.meshTopology({ target: c6.selector })).status, "unavailable");
+  partial = true;
+  const observed = await service.meshTopology({ target: c6.selector });
+  assert.equal(observed.topology.truncated, true);
+  assert.match(observed.topology.status.detail, /Partial/);
+});
+
+test("physical Cloud and mesh aliases share one reporter and one in-flight read", async () => {
+  const service = fixture();
+  await discoverCLI4(service);
+  const physical = cli4Inventory.externalDevices[0].id;
+  const mesh = cli4Inventory.meshDevices[1].selector;
+  assert.equal(service.meshReporterKeys.get(physical), service.meshReporterKeys.get(mesh));
+  assert.equal(service.meshReporterKeys.get(mesh), service.meshReporterKeys.get(c5Cloud));
+  let release, reads = 0;
+  const waiting = new Promise(resolve => { release = resolve; });
+  service.run = async (_file, args) => {
+    if (args.includes("--local-cli")) return JSON.stringify({ status: "unavailable", platform: "wendy-cli" });
+    reads++;
+    await waiting;
+    return JSON.stringify({ status: "unavailable", platform: "wendy-lite" });
+  };
+  const first = service.meshTopology({ target: physical });
+  assert.equal(first, service.meshTopology({ target: mesh }));
+  assert.equal(first, service.meshTopology({ target: c5Cloud }));
+  assert.equal((await service.meshTopology({ target: "cli://local" })).platform, "wendy-cli");
+  release();
+  await first;
+  assert.equal(reads, 1);
+});
+
+test("partial or unavailable signed mesh inventory retains prior observations explicitly", async () => {
+  const service = fixture();
+  const inventory = freshCLI4Inventory();
+  inventory.meshDiscovery.truncated = true;
+  service.run = async (_file, args) => JSON.stringify(args[0] === "cloud" ? [] : inventory);
+  let result = await service.meshDiscover();
+  assert.equal(result.retainPrevious, true);
+  assert.match(result.warnings[0], /partial signed inventory/);
+  inventory.meshDiscovery.state = "not-connected";
+  inventory.meshDevices = [];
+  result = await service.meshDiscover();
+  assert.equal(result.retainPrevious, true);
+  assert.match(result.warnings[0], /not-connected/);
+});
+
+
+test("a delayed but live signed mesh candidate stays selectable with an explicit stale warning", async () => {
+  const service = fixture(), inventory = freshCLI4Inventory();
+  inventory.meshDiscovery.capturedAtUnixMs -= 20_000;
+  service.run = async (_file, args) => JSON.stringify(args[0] === "cloud" ? [] : inventory);
+  const result = await service.meshDiscover();
+  assert.equal(result.retainPrevious, true);
+  assert.match(result.warnings[0], /stale signed inventory/);
+  assert.ok(result.devices.some(device => device.id === inventory.meshDevices[0].selector));
+});

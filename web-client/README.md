@@ -226,6 +226,13 @@ learned through a device neighbor; those routes do not create direct carrier
 links to the operator. A route whose owner metadata has expired remains an
 address-only observation. An unavailable runtime contributes no relationships.
 
+The desktop includes mesh-only Lite reporters from the CLI router's signed
+inventory. It preserves their complete mesh selectors and refreshes their signed
+endpoint through the existing CLI provider when reading. Physical, Cloud and
+mesh paths with the same enrolled identity share one reporter and one in-flight
+read. Cached observations remain visible if the selected path changes; unavailable
+or partial mesh inventory stays explicit.
+
 The view reads up to three reporters concurrently, while aliases of the same device
 remain serialized, then waits ten seconds before
 the next batch. **Pause** stops new reads. Snapshots older than thirty seconds

@@ -23,6 +23,7 @@ import {
   isStale,
   mergeMeshObservation,
   mergeMeshInventory,
+  getMeshObservation,
   meshIdentity,
   meshNodeFor,
   nodeState,
@@ -89,15 +90,17 @@ export default function MeshNetwork({
           setDevices(reporters);
           setWarnings(inventory.warnings);
           setLoaded(true);
+          const reporterKeys = new Map(reporters.map(device => [device.id, device.reporterKey || device.id]));
           await collectMeshSnapshots(
             reporters,
             source.read,
             (id, result) => {
               const received = Date.now();
+              const key = reporterKeys.get(id) || id;
               setNow(received);
               setObservations((previous) => ({
                 ...previous,
-                [id]: mergeMeshObservation(previous[id], result, received),
+                [key]: mergeMeshObservation(previous[key] || previous[id], result, received),
               }));
             },
             controller.signal,
@@ -145,7 +148,7 @@ export default function MeshNetwork({
     (latest, observation) => Math.max(latest, observation.receivedAt || 0),
     0,
   );
-  const waiting = devices.filter((device) => !observations[device.id]).length;
+  const waiting = devices.filter((device) => !getMeshObservation(observations, device)).length;
   return (
     <section className={styles.network} aria-label="Local networks">
       <div className={styles.heading}>
@@ -464,16 +467,16 @@ export default function MeshNetwork({
                 <span>
                   <strong>{device.name || device.id}</strong>
                   <small>
-                    {observations[device.id]?.result.error ||
-                      (observations[device.id]?.result.status === "unsupported"
+                    {getMeshObservation(observations, device)?.result.error ||
+                      (getMeshObservation(observations, device)?.result.status === "unsupported"
                         ? "This agent does not support topology snapshots."
-                        : observations[device.id]
+                        : getMeshObservation(observations, device)
                           ? "No matching canonical local net identity returned."
                           : "Waiting for a topology snapshot.")}
                   </small>
                 </span>
                 <span className={styles.state}>
-                  {observations[device.id]?.result.status || "Not observed"}
+                  {getMeshObservation(observations, device)?.result.status || "Not observed"}
                 </span>
               </div>
             ))}
