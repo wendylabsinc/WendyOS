@@ -13,7 +13,7 @@ import (
 func TestTLSLANDiscoveryHasIndependentServiceAndCapability(t *testing.T) {
 	self, peer := lanDevice(t, 445), lanDevice(t, 460)
 	selected := lanInterface{iface: net.Interface{Index: 3}, ip: net.IPv4(192, 168, 2, 3)}
-	for _, role := range []string{"router", "embedded-router", "endpoint"} {
+	for _, role := range []string{"router", "embedded-router"} {
 		zone, err := tlsLANMDNSService(&Credentials{Device: peer}, selected, role)
 		if err != nil {
 			t.Fatal(err)

@@ -70,7 +70,7 @@ func parseTLSLANEntry(entry *mdns.ServiceEntry, self meshid.Device) (meshid.Devi
 			copy.InfoFields = append(copy.InfoFields, field)
 		}
 	}
-	if version != "1" || protocol != tlsLANProtocol || (role != "router" && role != "embedded-router" && role != "endpoint") {
+	if version != "1" || protocol != tlsLANProtocol || (role != "router" && role != "embedded-router") {
 		return meshid.Device{}, nil, "", false
 	}
 	device, ip, ok := parseLANEntry(&copy, self)
@@ -80,10 +80,14 @@ func parseTLSLANEntry(entry *mdns.ServiceEntry, self meshid.Device) (meshid.Devi
 // Ordinary WendyOS peers retain QUIC. Native TLS discovery gives embedded
 // peers both dial directions without a static device or address allow-list.
 func scanTLSLAN(ctx context.Context, cfg LANConfig, selected lanInterface, claims *lanClaims) {
+	scanTLSLANWithQuery(ctx, cfg, selected, claims, queryLANService)
+}
+
+func scanTLSLANWithQuery(ctx context.Context, cfg LANConfig, selected lanInterface, claims *lanClaims, query func(context.Context, lanInterface, string) ([]*mdns.ServiceEntry, error)) {
 	var workers sync.WaitGroup
 	defer workers.Wait()
 	for ctx.Err() == nil {
-		entries, _ := queryLANService(ctx, selected, tlsLANService)
+		entries, _ := query(ctx, selected, tlsLANService)
 		byKey := map[string]*mdns.ServiceEntry{}
 		var keys []string
 		for _, entry := range entries {
@@ -122,18 +126,16 @@ func scanTLSLAN(ctx context.Context, cfg LANConfig, selected lanInterface, claim
 				}
 				config.ClientSessionCache = nil
 				config.SessionTicketsDisabled = true
-				alpn := StreamALPN
-				if role == "endpoint" {
-					alpn = EndpointALPN
-				}
-				config.NextProtos = []string{alpn}
-				attempt, cancel := context.WithTimeout(ctx, 15*time.Second)
+				config.NextProtos = []string{StreamALPN}
+				attempt, cancel := context.WithTimeout(ctx, 8*time.Second)
 				raw, err := (&net.Dialer{LocalAddr: &net.TCPAddr{IP: selected.ip}, Control: bindToInterface(selected.iface.Name)}).DialContext(attempt, "tcp4", net.JoinHostPort(ip.String(), strconv.Itoa(TLSLANPort)))
 				if err != nil {
 					cancel()
 					return
 				}
 				defer raw.Close()
+				stop := context.AfterFunc(ctx, func() { _ = raw.Close() })
+				defer stop()
 				secure := tls.Client(raw, config)
 				err = secure.HandshakeContext(attempt)
 				cancel()
@@ -141,11 +143,7 @@ func scanTLSLAN(ctx context.Context, cfg LANConfig, selected lanInterface, claim
 					return
 				}
 				linkCtx := WithCarrier(WithConnectionLease(ctx, lease), selected.transport)
-				if alpn == EndpointALPN {
-					_ = cfg.Node.AttachEndpointStream(linkCtx, peer, secure, selected.cost)
-				} else {
-					_ = cfg.Node.AttachStream(linkCtx, peer, secure, selected.cost)
-				}
+				_ = cfg.Node.AttachStream(linkCtx, peer, secure, selected.cost)
 			}()
 		}
 		select {

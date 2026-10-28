@@ -83,6 +83,14 @@ func (p *ConnectionPolicy) Counts() ConnectionCounts {
 	return p.counts()
 }
 
+// IncomingAvailable reports advisory discovery capacity, including pending leases.
+// It never reserves a slot or changes established connection ownership.
+func (p *ConnectionPolicy) IncomingAvailable() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.counts().Total < p.limits.Total
+}
+
 func (p *ConnectionPolicy) preferred(l *ConnectionLease) bool {
 	lower := meshid.Compare(p.self, l.peer) < 0
 	return l.outgoing == (lower == p.preferLower)

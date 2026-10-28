@@ -21,7 +21,7 @@ type TCPConfig struct {
 	NAN    bool      `json:"nan,omitempty" cbor:"n,omitempty"`
 	BLE    bool      `json:"ble,omitempty" cbor:"b,omitempty"`
 	// TLSListen enables native TLS packet attachments without per-device configuration.
-	TLSListen string `json:"endpointListen,omitempty" cbor:"e,omitempty"`
+	TLSListen string `json:"tls_listen,omitempty" cbor:"e,omitempty"`
 
 	// devices holds the parsed peer identities, in the same order as Peers.
 	devices            []meshid.Device
@@ -93,10 +93,10 @@ func LoadTCPConfig(path string, self meshid.Device) (*TCPConfig, error) {
 	}
 	if cfg.TLSListen != "" {
 		if err := validateTCPAddress(cfg.TLSListen, true); err != nil {
-			return nil, fmt.Errorf("endpointListen: %w", err)
+			return nil, fmt.Errorf("tls_listen: %w", err)
 		}
 		if cfg.TLSListen == cfg.Listen {
-			return nil, errors.New("endpointListen must use a separate listener")
+			return nil, errors.New("tls_listen must use a separate listener")
 		}
 	}
 	if len(cfg.Peers) > 64 {
