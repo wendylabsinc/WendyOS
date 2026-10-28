@@ -50,7 +50,7 @@ func DecodeManifest(body []byte) (Manifest, error) {
 	types := map[string]byte{
 		"version": 0, "device": 3, "revision": 0, "Issued": 0, "Expires": 0,
 		"name": 3, "agentPort": 0, "agentTransport": 3, "platform": 3,
-		"caps": 4, "requires": 4, "withdraw": 7, "route": 5, "appEndpoints": 4, "s": 4,
+		"owner": 5, "caps": 4, "requires": 4, "withdraw": 7, "route": 5, "appEndpoints": 4, "s": 4,
 	}
 	if err := manifestFieldTypes(fields, types, "version", "device", "revision", "Issued", "Expires", "agentPort", "route"); err != nil {
 		return m, err

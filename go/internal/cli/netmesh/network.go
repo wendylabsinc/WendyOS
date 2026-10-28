@@ -12,6 +12,7 @@ import (
 
 	"github.com/wendylabsinc/WendyOS/go/babel"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
+	"github.com/wendylabsinc/wendy/go/internal/shared/meshoperator"
 	"gvisor.dev/gvisor/pkg/buffer"
 	"gvisor.dev/gvisor/pkg/tcpip"
 	"gvisor.dev/gvisor/pkg/tcpip/adapters/gonet"
@@ -39,7 +40,7 @@ type Network struct {
 }
 
 func NewNetwork(self meshid.Device) (*Network, error) {
-	if !self.IsValid() {
+	if !self.IsValid() || !self.MeshAddress().IsValid() {
 		return nil, errors.New("missing mesh identity")
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -58,7 +59,8 @@ func NewNetwork(self meshid.Device) (*Network, error) {
 		return nil, errors.New(err.String())
 	}
 	subnet, _ := tcpip.NewSubnet(tcpip.AddrFrom16(meshid.MeshPrefix.Addr().As16()), tcpip.MaskFromBytes(net.CIDRMask(48, 128)))
-	n.stack.SetRouteTable([]tcpip.Route{{Destination: subnet, NIC: 1}})
+	operatorSubnet, _ := tcpip.NewSubnet(tcpip.AddrFrom16(meshoperator.Prefix.Addr().As16()), tcpip.MaskFromBytes(net.CIDRMask(48, 128)))
+	n.stack.SetRouteTable([]tcpip.Route{{Destination: subnet, NIC: 1}, {Destination: operatorSubnet, NIC: 1}})
 	go func() {
 		defer close(n.done)
 		for {
@@ -122,7 +124,7 @@ func (n *Network) RemovePeer(id babel.LinkID) error {
 func (n *Network) Apply(routes []babel.Route) error {
 	next := map[netip.Addr]babel.LinkID{}
 	for _, r := range routes {
-		if !r.Local && !r.Unreachable && r.Prefix.Bits() == 128 && meshid.InMesh(r.Prefix.Addr()) {
+		if !r.Local && !r.Unreachable && r.Prefix.Bits() == 128 && meshAddress(r.Prefix.Addr()) {
 			next[r.Prefix.Addr()] = r.Link
 		}
 	}
@@ -163,7 +165,7 @@ func (n *Network) forward(packet []byte, received bool) {
 	}
 	source := netip.AddrFrom16([16]byte(packet[8:24]))
 	dest := netip.AddrFrom16([16]byte(packet[24:40]))
-	if !meshid.InMesh(source) || !meshid.InMesh(dest) {
+	if !meshAddress(source) || !meshAddress(dest) {
 		return
 	}
 	if received && dest == n.self {
@@ -193,11 +195,17 @@ func (n *Network) forward(packet []byte, received bool) {
 	}
 }
 func (n *Network) DialContext(ctx context.Context, address string) (net.Conn, error) {
+	return n.Dial(ctx, "tcp", address)
+}
+
+func (n *Network) Address() netip.Addr { return n.self }
+
+func (n *Network) Dial(ctx context.Context, network, address string) (net.Conn, error) {
 	if n.ctx.Err() != nil {
 		return nil, net.ErrClosed
 	}
 	target, err := netip.ParseAddrPort(address)
-	if err != nil || target.Port() == 0 || !meshid.InMesh(target.Addr()) {
+	if err != nil || target.Port() == 0 || !meshAddress(target.Addr()) {
 		return nil, errors.New("mesh dial requires an IPv6 mesh address and port")
 	}
 	n.mu.RLock()
@@ -215,7 +223,28 @@ func (n *Network) DialContext(ctx context.Context, address string) (net.Conn, er
 	stop := context.AfterFunc(n.ctx, cancel)
 	defer stop()
 	defer cancel()
-	connection, err := gonet.DialContextTCP(dialCtx, n.stack, tcpip.FullAddress{NIC: 1, Addr: tcpip.AddrFrom16(target.Addr().As16()), Port: target.Port()}, ipv6.ProtocolNumber)
+	remote := tcpip.FullAddress{NIC: 1, Addr: tcpip.AddrFrom16(target.Addr().As16()), Port: target.Port()}
+	local := tcpip.FullAddress{NIC: 1, Addr: tcpip.AddrFrom16(n.self.As16())}
+	var connection net.Conn
+	switch network {
+	case "tcp", "tcp6":
+		conn, dialErr := gonet.DialTCPWithBind(dialCtx, n.stack, local, remote, ipv6.ProtocolNumber)
+		err = dialErr
+		if conn != nil {
+			connection = conn
+		}
+	case "udp", "udp6":
+		if err = dialCtx.Err(); err == nil {
+			conn, dialErr := gonet.DialUDP(n.stack, &local, &remote, ipv6.ProtocolNumber)
+			err = dialErr
+			if conn != nil {
+				connection = conn
+			}
+		}
+	default:
+		return nil, errors.New("mesh transport requires TCP or UDP")
+	}
+
 	if n.ctx.Err() != nil {
 		if connection != nil {
 			_ = connection.Close()
@@ -260,3 +289,27 @@ func (p *packetPort) Write(b []byte) (int, error) {
 	return len(b), nil
 }
 func (p *packetPort) Close() error { p.once.Do(func() { close(p.done) }); return nil }
+
+func meshAddress(address netip.Addr) bool {
+	return meshid.InMesh(address) || meshoperator.InOperatorPool(address)
+}
+
+// ListenTCP binds a packet-network listener while participating in shutdown.
+func (n *Network) ListenTCP(port uint16) (net.Listener, error) {
+	if port == 0 {
+		return nil, errors.New("mesh listener requires a port")
+	}
+	if !n.beginOperation() {
+		return nil, net.ErrClosed
+	}
+	defer n.operations.Done()
+	listener, err := gonet.ListenTCP(n.stack, tcpip.FullAddress{NIC: 1, Addr: tcpip.AddrFrom16(n.self.As16()), Port: port}, ipv6.ProtocolNumber)
+	if err != nil {
+		return nil, err
+	}
+	if n.ctx.Err() != nil {
+		_ = listener.Close()
+		return nil, net.ErrClosed
+	}
+	return listener, nil
+}
