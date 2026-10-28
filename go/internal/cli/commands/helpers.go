@@ -1544,7 +1544,19 @@ func connectPickedLANDevice(ctx context.Context, d *models.DiscoveredDevice, add
 	// a device the CLI can reach only over its USB link (WiFi on another net)
 	// advertises both, and dialing addr alone (its unreachable WiFi IP) is what
 	// made `device info/shell/pair` report a reachable device as unreachable.
-	conn, err := connectAgentAtAddressWithProvisionedHint(ctx, addr, func() bool { return mtls }, lanDialCandidates(ctx, *d.LAN)...)
+	candidates := lanDialCandidates(ctx, *d.LAN)
+	dial := func() (*grpcclient.AgentConnection, error) {
+		return connectAgentAtAddressWithProvisionedHint(ctx, addr, func() bool { return mtls }, candidates...)
+	}
+	conn, err := dial()
+	if err != nil && !blocksUnauthenticatedFallback(err) {
+		// A picked device that rejects our certificate gets the same clock
+		// recovery as a named one: before this, a device chosen in the picker
+		// went straight to "TLS authentication failed" with no time proof.
+		// Same endpoint and candidates; the picker only runs interactively, so
+		// read-only monitoring (always non-interactive) never reaches here.
+		conn, err = autoSyncTimeAndRetry(ctx, err, dial)
+	}
 	if err != nil {
 		// Neither refusal is "the LAN attempt failed", and the BLE half of this
 		// row is named by the same unauthenticated advertisement that named the
