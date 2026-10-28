@@ -81,6 +81,10 @@ type Session struct {
 	privatePEM, state, verifier, redirect string
 	started                               time.Time
 	certificate                           config.CertificateInfo
+	liteCertificate                       config.CertificateInfo
+	topologyGate                          chan struct{}
+	topologyFlights                       map[string]*topologyFlight
+	topologyMu                            sync.Mutex
 	tokens                                token
 	profile                               Profile
 }
@@ -208,6 +212,7 @@ func (s *Session) Begin(ctx context.Context, email, issuer, redirect string) (st
 	s.tokens = token{}
 	s.profile = Profile{}
 	s.certificate = config.CertificateInfo{}
+	s.liteCertificate = config.CertificateInfo{}
 	challenge := sha256.Sum256([]byte(s.verifier))
 	q := url.Values{"response_type": {"code"}, "client_id": {s.settings().ClientID}, "redirect_uri": {redirect}, "scope": {"openid email profile groups"}, "resource": {s.settings().IdentityResource}, "state": {s.state}, "code_challenge": {base64.RawURLEncoding.EncodeToString(challenge[:])}, "code_challenge_method": {"S256"}}
 	// A caller-pinned realm keeps the hint; a looked-up one, like `wendy auth
@@ -522,7 +527,11 @@ func requestPKIIdentityCertificate(
 	if err != nil {
 		return config.CertificateInfo{}, fmt.Errorf("parsing pki-core certificate chain: %w", err)
 	}
-	wantPublicKey, err := x509.MarshalPKIXPublicKey(key.Public())
+	csrKey, err := certs.ParseSigningPrivateKeyPEM([]byte(privateKeyPEM))
+	if err != nil {
+		return config.CertificateInfo{}, err
+	}
+	wantPublicKey, err := x509.MarshalPKIXPublicKey(csrKey.Public())
 	if err != nil {
 		return config.CertificateInfo{}, fmt.Errorf("encoding generated operator public key: %w", err)
 	}
