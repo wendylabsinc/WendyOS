@@ -63,6 +63,17 @@ func TestLiteReporterCertificateFollowsSessionLifetime(t *testing.T) {
 	}
 }
 
+func TestLiteReporterCertificateFollowsRedirectSignIn(t *testing.T) {
+	session, _, callback, _ := redirectSetup(t)
+	session.liteCertificate = config.CertificateInfo{PemCertificate: "prior session leaf", PemPrivateKey: "prior session key"}
+	if _, err := session.CompleteRedirect(context.Background(), callback); err != nil {
+		t.Fatal(err)
+	}
+	if session.liteCertificate.PemCertificate != "" || session.liteCertificate.PemPrivateKey != "" {
+		t.Fatal("redirect sign-in retained the previous session's Lite reporter identity")
+	}
+}
+
 func TestLiteReporterIssuanceFailurePreservesCloudRefreshRecovery(t *testing.T) {
 	session, _ := setup(t, nil)
 	if _, err := session.Complete(context.Background(), "valid-code", session.state, testIssuer); err != nil {
