@@ -129,27 +129,19 @@ func skillFrontmatter(data []byte) (map[string]any, int, error) {
 	} else if !bytes.HasPrefix(data, []byte("---\n")) {
 		return nil, 0, fmt.Errorf("missing YAML frontmatter")
 	}
-	// Match delimiter lines without rewriting the resource: callers use the
-	// returned byte offset and publish digests of the original embedded bytes.
-	end, offset := -1, start
-	for offset < len(data) {
-		newline := bytes.IndexByte(data[offset:], '\n')
-		if newline < 0 {
-			break
-		}
-		next := offset + newline + 1
-		line := bytes.TrimSuffix(data[offset:next-1], []byte("\r"))
-		if bytes.Equal(line, []byte("---")) {
-			end, offset = offset, next
-			break
-		}
-		offset = next
+	// Windows checkouts may embed CRLF. Keep offsets in the original bytes so
+	// callers can read the body without changing resource contents or digests.
+	end := bytes.Index(data[start:], []byte("\n---\n"))
+	delimiterLen := len("\n---\n")
+	if crlfEnd := bytes.Index(data[start:], []byte("\n---\r\n")); crlfEnd >= 0 && (end < 0 || crlfEnd < end) {
+		end = crlfEnd
+		delimiterLen = len("\n---\r\n")
 	}
 	if end < 0 {
 		return nil, 0, fmt.Errorf("unterminated YAML frontmatter")
 	}
 	var fm map[string]any
-	if err := yaml.Unmarshal(data[start:end], &fm); err != nil {
+	if err := yaml.Unmarshal(data[start:start+end], &fm); err != nil {
 		return nil, 0, err
 	}
 	for _, key := range []string{"name", "description"} {
@@ -166,7 +158,7 @@ func skillFrontmatter(data []byte) (map[string]any, int, error) {
 	if err := json.Unmarshal(raw, &fm); err != nil {
 		return nil, 0, err
 	}
-	return fm, offset, nil
+	return fm, start + end + delimiterLen, nil
 }
 
 func registerSkillCatalog(srv *server.MCPServer, catalog *skillCatalog) error {
