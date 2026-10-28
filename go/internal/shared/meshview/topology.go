@@ -60,7 +60,12 @@ func Topology(self meshid.Device, snapshot localmesh.NodeSnapshot, now time.Time
 		}
 		out.Announcements = append(out.Announcements, announcement)
 	}
-	sort.Slice(out.Announcements, func(i, j int) bool { return out.Announcements[i].Principal < out.Announcements[j].Principal })
+	sort.Slice(out.Announcements, func(i, j int) bool {
+		if out.Announcements[i].Principal == out.Announcements[j].Principal {
+			return out.Announcements[i].DeviceId < out.Announcements[j].DeviceId
+		}
+		return out.Announcements[i].Principal < out.Announcements[j].Principal
+	})
 	if len(out.Announcements) > maxTopologyEntries {
 		out.Announcements, out.Truncated = out.Announcements[:maxTopologyEntries], true
 	}

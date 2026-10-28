@@ -14,7 +14,9 @@ payload frames emitted by these adapters are at most 16 KiB.
 
 The returned socket owns one RPC stream, not its shared agent connection.
 Read/write use separate bounded pipes so either side can half-close independently,
-with actual per-direction deadlines and backpressure. Setup cancellation stops
+with actual per-direction deadlines and backpressure. A pending write-half-close
+also honors updated write deadlines, including a frame already blocked inside
+gRPC flow control; expiry cancels only that application stream. Setup cancellation stops
 an outstanding open; a returned socket survives cancellation of its setup context
 and is released by Close. No transfer is replayed after a transport loss.
 
