@@ -72,9 +72,10 @@ func NewL2CAPStream(c *Connection) net.Conn {
 
 type l2capNetConn struct {
 	conn         *Connection
-	buf          []byte     // leftover from a previous L2CAPRecv
-	readDeadline time.Time  // zero means no deadline; owned by the single reader
-	recvMu       sync.Mutex // held across L2CAPRecv so Close can't free under it
+	buf          []byte       // leftover from a previous L2CAPRecv
+	deadlineMu   sync.RWMutex // guards readDeadline while a Read is in flight
+	readDeadline time.Time    // zero means no deadline
+	recvMu       sync.Mutex   // held across L2CAPRecv so Close can't free under it
 	closed       atomic.Bool
 }
 
@@ -91,8 +92,11 @@ func (c *l2capNetConn) Read(b []byte) (int, error) {
 
 	for {
 		chunk := recvChunkSeconds
-		if !c.readDeadline.IsZero() {
-			remaining := time.Until(c.readDeadline)
+		c.deadlineMu.RLock()
+		deadline := c.readDeadline
+		c.deadlineMu.RUnlock()
+		if !deadline.IsZero() {
+			remaining := time.Until(deadline)
 			if remaining <= 0 {
 				return 0, &timeoutErr{}
 			}
@@ -167,11 +171,15 @@ func (c *l2capNetConn) LocalAddr() net.Addr  { return bleNetAddr{} }
 func (c *l2capNetConn) RemoteAddr() net.Addr { return bleNetAddr{} }
 
 func (c *l2capNetConn) SetDeadline(t time.Time) error {
-	c.readDeadline = t
+	if err := c.SetReadDeadline(t); err != nil {
+		return err
+	}
 	return c.SetWriteDeadline(t)
 }
 func (c *l2capNetConn) SetReadDeadline(t time.Time) error {
+	c.deadlineMu.Lock()
 	c.readDeadline = t
+	c.deadlineMu.Unlock()
 	return nil
 }
 

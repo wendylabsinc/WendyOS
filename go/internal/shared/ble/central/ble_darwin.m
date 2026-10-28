@@ -1,9 +1,6 @@
 #import <CoreBluetooth/CoreBluetooth.h>
 #import <Foundation/Foundation.h>
 #include "ble_darwin.h"
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
 
 // Longest GATT characteristic value the Bluetooth core spec allows (Vol 3,
 // Part F). A compliant peripheral cannot exceed this, so a longer value is
@@ -369,13 +366,6 @@ didOpenL2CAPChannel:(CBL2CAPChannel *)channel
 // thread exits before it receives this request.
 - (void)performL2CAPWrite:(WendyBLEWriteRequest *)request {
     NSUInteger offset = 0;
-    const char *traceFlag = getenv("WENDY_BLE_TRACE_WRITES");
-    BOOL trace = traceFlag && strcmp(traceFlag, "1") == 0;
-    NSTimeInterval traceStart = trace ? NSProcessInfo.processInfo.systemUptime : 0;
-    NSTimeInterval lastProgress = traceStart;
-    NSUInteger writeCalls = 0, zeroWrites = 0, waitTurns = 0;
-    if (trace) fprintf(stderr, "wendy_ble_write_begin {\"requested\":%llu,\"budget_ms\":%.3f}\n",
-        (unsigned long long)request.data.length, MAX(0, request.wholeDeadline - traceStart) * 1000);
     NSOutputStream *output = self.l2capChannel.outputStream;
     request.error = WENDY_BLE_OK;
     while (offset < request.data.length) {
@@ -389,7 +379,6 @@ didOpenL2CAPChannel:(CBL2CAPChannel *)channel
             break;
         }
         if (output.hasSpaceAvailable) {
-            writeCalls++;
             NSInteger n = [output write:(const uint8_t *)request.data.bytes + offset
                               maxLength:request.data.length - offset];
             if (n < 0 || (NSUInteger)n > request.data.length - offset) {
@@ -398,21 +387,10 @@ didOpenL2CAPChannel:(CBL2CAPChannel *)channel
             }
             if (n > 0) {
                 offset += (NSUInteger)n;
-                lastProgress = NSProcessInfo.processInfo.systemUptime;
-                request.progressDeadline = lastProgress + request.idleTimeout;
-                if (trace) {
-                    // Preserve the first accepted prefix even if a later
-                    // native stream call blocks until the caller aborts.
-                    if (offset == (NSUInteger)n) fprintf(stderr,
-                        "wendy_ble_write_progress {\"requested\":%llu,\"accepted\":%llu,\"elapsed_ms\":%.3f}\n",
-                        (unsigned long long)request.data.length, (unsigned long long)offset,
-                        (lastProgress - traceStart) * 1000);
-                }
+                request.progressDeadline = NSProcessInfo.processInfo.systemUptime + request.idleTimeout;
                 continue;
             }
-            zeroWrites++;
         }
-        waitTurns++;
         NSDate *until = [NSDate dateWithTimeIntervalSinceNow:MIN(remaining, 0.01)];
         if (![[NSRunLoop currentRunLoop] runMode:NSDefaultRunLoopMode beforeDate:until]) {
             [NSThread sleepUntilDate:until];
@@ -422,18 +400,6 @@ didOpenL2CAPChannel:(CBL2CAPChannel *)channel
         // A prefix may already be on the wire. No later write may reuse this
         // stream as if the failed record had never been sent.
         [self failL2CAP];
-    }
-    if (trace) {
-        NSTimeInterval now = NSProcessInfo.processInfo.systemUptime;
-        // A bounded metadata-only summary per request. Never emit bytes, credentials
-        // or peer identifiers; tracing does not change the write budget.
-        fprintf(stderr, "wendy_ble_write {\"requested\":%llu,\"accepted\":%llu,"
-            "\"write_calls\":%llu,\"zero_writes\":%llu,\"wait_turns\":%llu,"
-            "\"elapsed_ms\":%.3f,\"last_progress_ms\":%.3f,\"error_code\":%d}\n",
-            (unsigned long long)request.data.length, (unsigned long long)offset,
-            (unsigned long long)writeCalls, (unsigned long long)zeroWrites,
-            (unsigned long long)waitTurns, (now - traceStart) * 1000,
-            (lastProgress - traceStart) * 1000, (int)request.error);
     }
     dispatch_semaphore_signal(request.completed);
 }

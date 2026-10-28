@@ -105,6 +105,7 @@ static void exercise(NSArray<NSNumber *> *writes, BOOL resume, BOOL disconnect,
     WendyBLEError result = wendyBLEL2CAPSend(handle, data, sizeof(data) - 1, 0.2, 1.0);
     assert(result == expected);
     assert(NSProcessInfo.processInfo.systemUptime - before < 1.0);
+    stop(conn);
     assert([output.received isEqualToData:[received dataUsingEncoding:NSUTF8StringEncoding]]);
     if (expected != WENDY_BLE_OK) {
         assert(conn.l2capError);
@@ -112,7 +113,6 @@ static void exercise(NSArray<NSNumber *> *writes, BOOL resume, BOOL disconnect,
         assert(wendy_ble_l2cap_send(handle, data, sizeof(data) - 1) == WENDY_BLE_ERR_DISCONNECTED);
         assert([output.received isEqualToData:[received dataUsingEncoding:NSUTF8StringEncoding]]);
     }
-    stop(conn);
 }
 
 int main(void) {
@@ -124,7 +124,7 @@ int main(void) {
         exercise(@[@2, @0], NO, YES, WENDY_BLE_ERR_DISCONNECTED, @"ab");
 
         // A certificate-sized ordinary request keeps exact bytes across the
-        //16KiB boundary, transient backpressure and multiple partial writes.
+        // 16KiB boundary, transient backpressure and multiple partial writes.
         FakeOutput *certificateOutput = [FakeOutput new];
         certificateOutput.writes = @[@16384, @0, @3678, @0, @5584];
         certificateOutput.resumeAfterZero = YES;
@@ -159,10 +159,10 @@ int main(void) {
         assert(wendyBLEL2CAPSend((__bridge WendyBLEConn)finiteConn,
             (const uint8_t *)"abcdefgh", 8, 0.12, 0.15) == WENDY_BLE_ERR_TIMEOUT);
         assert(NSProcessInfo.processInfo.systemUptime - finiteStart < 0.5);
+        stop(finiteConn);
         assert(finite.received.length > 0 && finite.received.length < 8);
         assert([finite.received isEqualToData:[[@"abcdefgh" dataUsingEncoding:NSUTF8StringEncoding]
             subdataWithRange:NSMakeRange(0, finite.received.length)]]);
-        stop(finiteConn);
 
         // A caller can shorten an in-flight budget without waiting for the
         // stream owner's idle limit, or clear a previously expired deadline.
@@ -178,8 +178,8 @@ int main(void) {
         assert(wendyBLEL2CAPSend((__bridge WendyBLEConn)callerConn,
             (const uint8_t *)"abcdefgh", 8, 0.3, 1.5) == WENDY_BLE_ERR_TIMEOUT);
         assert(NSProcessInfo.processInfo.systemUptime - callerStart < 0.5);
-        assert(callerOutput.received.length > 0 && callerOutput.received.length < 8);
         stop(callerConn);
+        assert(callerOutput.received.length > 0 && callerOutput.received.length < 8);
 
         FakeOutput *cleared = [FakeOutput new];
         FakeConnection *clearedConn = start(cleared);
@@ -189,6 +189,34 @@ int main(void) {
             (const uint8_t *)"abcdefgh", 8, 0.1, 0.2) == WENDY_BLE_OK);
         assert([cleared.received isEqualToData:[@"abcdefgh" dataUsingEncoding:NSUTF8StringEncoding]]);
         stop(clearedConn);
+
+        // Expired caller deadlines are consulted before the first native write.
+        FakeOutput *expired = [FakeOutput new];
+        FakeConnection *expiredConn = start(expired);
+        wendy_ble_l2cap_set_write_deadline((__bridge WendyBLEConn)expiredConn, -1, 1);
+        assert(wendyBLEL2CAPSend((__bridge WendyBLEConn)expiredConn,
+            (const uint8_t *)"abcdefgh", 8, 0.3, 1.5) == WENDY_BLE_ERR_TIMEOUT);
+        stop(expiredConn);
+        assert(expired.received.length == 0);
+
+        // Both the waiter and stream owner observe clearing or extending a
+        // pending caller deadline, while retaining the independent idle cap.
+        for (NSNumber *clear in @[@YES, @NO]) {
+            FakeOutput *updated = [FakeOutput new];
+            updated.writes = @[@1, @1, @1, @1, @1, @1, @1, @1];
+            updated.pauseAfterPositive = 0.04;
+            FakeConnection *updatedConn = start(updated);
+            wendy_ble_l2cap_set_write_deadline((__bridge WendyBLEConn)updatedConn, 0.15, 1);
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 30 * NSEC_PER_MSEC),
+                           dispatch_get_global_queue(QOS_CLASS_DEFAULT, 0), ^{
+                wendy_ble_l2cap_set_write_deadline((__bridge WendyBLEConn)updatedConn,
+                    1.0, !clear.boolValue);
+            });
+            assert(wendyBLEL2CAPSend((__bridge WendyBLEConn)updatedConn,
+                (const uint8_t *)"abcdefgh", 8, 0.3, 1.5) == WENDY_BLE_OK);
+            stop(updatedConn);
+            assert([updated.received isEqualToData:[@"abcdefgh" dataUsingEncoding:NSUTF8StringEncoding]]);
+        }
 
         // A request queued onto an I/O thread that has already exited never
         // runs. The sender must notice the dead thread long before its deadline.
@@ -216,8 +244,8 @@ int main(void) {
         assert(wendyBLEL2CAPSend((__bridge WendyBLEConn)stalledConn, (const uint8_t *)"abcdefgh", 8, 5.0, 5.0)
                == WENDY_BLE_ERR_DISCONNECTED);
         assert(NSProcessInfo.processInfo.systemUptime - before < 1.0);
-        assert([stalled.received isEqualToData:[@"abc" dataUsingEncoding:NSUTF8StringEncoding]]);
         stop(stalledConn);
+        assert([stalled.received isEqualToData:[@"abc" dataUsingEncoding:NSUTF8StringEncoding]]);
     }
     return 0;
 }
