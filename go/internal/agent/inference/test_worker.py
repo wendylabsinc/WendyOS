@@ -24,6 +24,20 @@ class StreamTests(unittest.TestCase):
         self.assertEqual(stream.pending, 0)
         self.assertFalse(stream.feed(b"z"))
 
+    def test_positions_name_the_sample_of_their_chunk(self):
+        stream = StreamBytes()
+        self.assertTrue(stream.feed(b"init"))
+        self.assertTrue(stream.feed(b"abc", {"id": 1}))
+        self.assertTrue(stream.feed(b"defg", {"id": 2}))
+        self.assertIsNone(stream.sample_at(3))  # initialization has no sample
+        self.assertEqual(stream.sample_at(4), {"id": 1})
+        self.assertEqual(stream.sample_at(6), {"id": 1})
+        self.assertEqual(stream.sample_at(7), {"id": 2})
+        # Positions only grow: the first chunks are forgotten.
+        self.assertEqual(len(stream.marks), 1)
+        self.assertIsNone(stream.sample_at(4))
+        self.assertEqual(stream.sample_at(10), {"id": 2})
+
     def test_stop_unblocks_libav_read(self):
         stream = StreamBytes()
         result = []
@@ -157,6 +171,97 @@ class WebMLateJoinTests(unittest.TestCase):
                 decoder.stop()
 
 
+class PictureSampleTests(unittest.TestCase):
+    """Each decoded picture names the sample that brought its first byte, so
+    the agent can place a prediction on the video's timeline."""
+
+    WIDTH, HEIGHT, FRAMES = 320, 240, 40
+
+    def setUp(self):
+        try:
+            import av
+            import numpy as np
+        except ImportError:
+            self.skipTest("requires PyAV and numpy")
+        if "libx264" not in av.codecs_available:
+            self.skipTest("requires libx264")
+        self.av, self.np = av, np
+
+    def picture(self, index, rng):
+        # Noise makes each picture several kilobytes; eight bars on the left
+        # carry its index through the codec.
+        a = rng.integers(0, 255, (self.HEIGHT, self.WIDTH, 3), dtype=self.np.uint8)
+        a[:, :160] = 0
+        for bit in range(8):
+            if index >> bit & 1:
+                a[:, bit * 20:(bit + 1) * 20] = 255
+        return self.av.VideoFrame.from_ndarray(a, format="rgb24").reformat(format="yuv420p")
+
+    def index(self, frame):
+        y = frame.to_ndarray(format="gray")
+        return sum(1 << bit for bit in range(8) if y[:, bit * 20 + 5:bit * 20 + 15].mean() > 128)
+
+    def access_units(self, b_frames):
+        """H.264 access units in decode order, each with the index of the picture it holds."""
+        from fractions import Fraction
+        encoder = self.av.CodecContext.create("libx264", "w")
+        encoder.width, encoder.height, encoder.pix_fmt = self.WIDTH, self.HEIGHT, "yuv420p"
+        encoder.time_base, encoder.framerate = Fraction(1, 30), Fraction(30)
+        encoder.options = {"bf": str(b_frames), "g": "15"}
+        rng = self.np.random.default_rng(7)
+        units = []
+        for i in range(self.FRAMES):
+            frame = self.picture(i, rng)
+            frame.pts = i
+            units += [(int(p.pts), bytes(p)) for p in encoder.encode(frame)]
+        units += [(int(p.pts), bytes(p)) for p in encoder.encode(None)]
+        return units
+
+    def decode(self, chunks):
+        """Feeds (payload, sample) chunks and decodes every picture in them."""
+        from worker import decoded_pictures
+
+        class FinishedStream(StreamBytes):
+            # Ends once its chunks are read, as a file does. A camera stream
+            # never ends, and libav keeps probing until it does.
+            def read(self, size=-1):
+                with self.condition:
+                    if not self.chunks:
+                        return b""
+                return super().read(size)
+
+        stream = FinishedStream()
+        for payload, sample in chunks:
+            self.assertTrue(stream.feed(payload, sample))
+        with self.av.open(stream, mode="r") as container:
+            return [(self.index(frame), sample, frame.width, frame.height)
+                    for frame, sample in decoded_pictures(container, stream)]
+
+    def test_access_units(self):
+        for b_frames in (0, 2):
+            units = self.access_units(b_frames)
+            pictures = self.decode([(payload, {"id": shown}) for shown, payload in units])
+            self.assertEqual(len(pictures), self.FRAMES, b_frames)
+            for shown, sample, width, height in pictures:
+                self.assertEqual(sample, {"id": shown}, f"bframes={b_frames}")
+                self.assertEqual((width, height), (self.WIDTH, self.HEIGHT))
+
+    def test_arbitrary_chunks(self):
+        # A pipe reader cuts the stream anywhere: a picture names the chunk
+        # its first byte arrived in.
+        units = self.access_units(0)
+        data = b"".join(payload for _, payload in units)
+        starts, offset = {}, 0
+        for shown, payload in units:
+            starts[shown] = offset
+            offset += len(payload)
+        size = 4096
+        pictures = self.decode([(data[o:o + size], {"id": o // size}) for o in range(0, len(data), size)])
+        self.assertEqual(len(pictures), self.FRAMES)
+        for shown, sample, _, _ in pictures:
+            self.assertEqual(sample, {"id": starts[shown] // size}, shown)
+
+
 class DetectorFailureTests(unittest.TestCase):
     def run_with_detector(self, detector, frame_count=None, wait=30):
         """Runs worker.run over one camera that always has a frame ready and
@@ -170,16 +275,19 @@ class DetectorFailureTests(unittest.TestCase):
         finished = threading.Event()
         taken = []
 
+        class Frame(int):
+            width, height = 64, 48
+
         class FakeDecoder:
             def __init__(self, source_id, generation, encoding, initialization=b""):
                 self.source_id, self.generation, self.encoding = source_id, generation, encoding
-                self.stream = types.SimpleNamespace(stopped=False, feed=lambda payload: True)
+                self.stream = types.SimpleNamespace(stopped=False, feed=lambda payload, sample=None: True)
 
             def take(self, now, interval):
                 if frame_count is not None and len(taken) >= frame_count:
                     return None
                 taken.append(1)
-                return len(taken)
+                return Frame(len(taken)), {"id": len(taken)}
 
             def stop(self):
                 self.stream.stopped = True
@@ -215,7 +323,8 @@ class DetectorFailureTests(unittest.TestCase):
         self.assertEqual(emitted, [
             {"type": "source_error", "source_id": "camera", "generation": 1,
              "error": "inference: ValueError: bad frame"},
-            {"type": "prediction", "source_id": "camera", "generation": 1, "detections": []},
+            {"type": "prediction", "source_id": "camera", "generation": 1, "detections": [],
+             "width": 64, "height": 48, "sample": {"id": 2}},
         ])
 
     def test_detector_that_always_fails_ends_the_worker_with_an_error(self):

@@ -193,6 +193,26 @@ func (g *gatedDataRecordStream) Send(r *agentpbv2.DataRecord) error {
 	}
 }
 
+// A record that names the sample it describes carries it to the viewer.
+func TestStreamDataSendsSample(t *testing.T) {
+	m, err := data.NewManager(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(localAdminSocketCtx())
+	defer cancel()
+	stream := newFakeDataRecordStream(ctx)
+	go func() { _ = NewDataService(m).StreamData(&agentpbv2.StreamDataRequest{}, stream) }()
+	<-stream.headers
+	descriptor := &recordingpb.StreamDescriptor{MediaType: "application/protobuf", Schema: "wendy.data.v1.VideoMarkers"}
+	if err := m.Publish("test/markers", descriptor, &recordingpb.Record{Payload: []byte("boxes"), Inputs: []*recordingpb.SampleRef{{SourceId: "v4l2:/dev/video0", SampleId: 42}}}); err != nil {
+		t.Fatal(err)
+	}
+	if r := <-stream.records; r.GetStreamId() != "agent/test/markers" || r.GetSourceId() != "v4l2:/dev/video0" || r.GetSampleId() != 42 {
+		t.Fatalf("record: %v", r)
+	}
+}
+
 // A viewer is told how many records of a stream it missed while it was busy
 // sending, and receives the newest.
 func TestStreamDataSendsSkipped(t *testing.T) {

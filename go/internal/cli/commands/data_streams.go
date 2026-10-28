@@ -30,9 +30,11 @@ func newDataStreamsCmd() *cobra.Command {
 		Use:   "streams",
 		Short: "List the device's live data streams",
 		Long: `List the live data streams on the device, with each stream's schema, state,
-rate and the time of its newest record. An app's recording streams are listed
-while the app runs. A stream is active when it had a record in the last 10
-seconds, and idle otherwise.
+rate and the time of its newest record. An app's recording streams
+(apps/<app-id>/...) are listed while the app runs, and the agent's own streams
+(agent/...) while their producer runs: for example a campaign's markers stream
+for each camera its inference scores. A stream is active when it had a record
+in the last 10 seconds, and idle otherwise.
 
 The list comes from the catalog the agent publishes on the live stream, under
 _streams/. With --json each stream is one line of protobuf JSON.`,

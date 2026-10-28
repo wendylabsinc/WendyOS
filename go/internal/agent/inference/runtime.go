@@ -46,7 +46,20 @@ type Input struct {
 	Initialization []byte `json:"initialization,omitempty"`
 	Payload        []byte `json:"payload,omitempty"`
 	DroppedBefore  uint64 `json:"dropped_before,omitempty"`
-	End            bool   `json:"end,omitempty"`
+	// Sample is the camera sample Payload came in.
+	Sample *Sample `json:"sample,omitempty"`
+	End    bool    `json:"end,omitempty"`
+}
+
+// Sample identifies a camera sample: its id within its source and the agent's
+// two stamps of its receipt, VideoFrame.timestamp_ns on CLOCK_REALTIME and
+// CLOCK_BOOTTIME. The worker does not read it. It carries it through decoding
+// and returns it with the prediction for the picture whose first byte it
+// brought.
+type Sample struct {
+	ID        uint64 `json:"id"`
+	UnixNanos int64  `json:"unix_nanos,omitempty"`
+	BootNanos int64  `json:"boot_nanos,omitempty"`
 }
 
 type Detection struct {
@@ -61,7 +74,13 @@ type Result struct {
 	SourceID       string      `json:"source_id"`
 	Generation     uint64      `json:"generation"`
 	Detections     []Detection `json:"detections,omitempty"`
-	Error          string      `json:"error,omitempty"`
+	// Width and Height are the scored picture's size in pixels, the frame of
+	// the detection boxes. Sample is the camera sample that brought the
+	// picture's first byte, when the worker could tell.
+	Width  int     `json:"width,omitempty"`
+	Height int     `json:"height,omitempty"`
+	Sample *Sample `json:"sample,omitempty"`
+	Error  string  `json:"error,omitempty"`
 }
 
 type Session interface {

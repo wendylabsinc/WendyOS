@@ -236,8 +236,8 @@ type StreamDataRequest struct {
 	// Exact stream ids. An id that no stream has published yet is not an error:
 	// its records arrive once it does.
 	StreamIds []string `protobuf:"bytes,1,rep,name=stream_ids,json=streamIds,proto3" json:"stream_ids,omitempty"`
-	// Stream id prefixes, for example "apps/<app-id>/", or "_streams/" for the
-	// catalog.
+	// Stream id prefixes, for example "apps/<app-id>/", "agent/", or
+	// "_streams/" for the catalog.
 	StreamPrefixes []string `protobuf:"bytes,2,rep,name=stream_prefixes,json=streamPrefixes,proto3" json:"stream_prefixes,omitempty"`
 	// Exact payload schemas, for example "wendy.data.v1.VideoMarkers".
 	Schemas []string `protobuf:"bytes,3,rep,name=schemas,proto3" json:"schemas,omitempty"`
@@ -327,7 +327,9 @@ func (x *StreamDataRequest) GetSendLatest() bool {
 //
 // stream_id is opaque and stable. An application recording stream is
 // "apps/<app-id>/<service>/<stream>", or "apps/<app-id>/<stream>" for an app
-// without a service name. Ids that start with "_streams/" are the catalog.
+// without a service name. The agent's own streams are "agent/<stream>", for
+// example "agent/campaign/<campaign>/markers/<source>", a campaign's
+// detections on one camera. Ids that start with "_streams/" are the catalog.
 type DataRecord struct {
 	state              protoimpl.MessageState `protogen:"open.v1"`
 	StreamId           string                 `protobuf:"bytes,1,opt,name=stream_id,json=streamId,proto3" json:"stream_id,omitempty"`
@@ -437,13 +439,14 @@ func (x *DataRecord) GetSampleId() uint64 {
 // send_latest to receive the whole catalog at once, then its changes.
 //
 // An application stream appears when its app starts and is GONE when the app
-// stops.
+// stops. An agent stream appears when its producer starts, for example when a
+// campaign's inference starts on a camera, and is GONE when the producer stops.
 type DataStreamInfo struct {
 	state     protoimpl.MessageState `protogen:"open.v1"`
 	StreamId  string                 `protobuf:"bytes,1,opt,name=stream_id,json=streamId,proto3" json:"stream_id,omitempty"`
 	Schema    string                 `protobuf:"bytes,2,opt,name=schema,proto3" json:"schema,omitempty"`
 	MediaType string                 `protobuf:"bytes,3,opt,name=media_type,json=mediaType,proto3" json:"media_type,omitempty"`
-	// The app id of an application stream.
+	// The app id of an application stream, or "agent" for the agent's own.
 	Publisher string               `protobuf:"bytes,4,opt,name=publisher,proto3" json:"publisher,omitempty"`
 	State     DataStreamInfo_State `protobuf:"varint,5,opt,name=state,proto3,enum=wendy.agent.services.v2.DataStreamInfo_State" json:"state,omitempty"`
 	// Records per second the agent accepted, over about the last 10 seconds.

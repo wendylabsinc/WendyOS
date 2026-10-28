@@ -128,6 +128,15 @@ func receiveInference[T any](t *testing.T, channel <-chan T) T {
 
 func newInferenceTestService(t *testing.T, restore bool) (*DataService, *inferenceTestFactory, *inferenceTestSender, *inferenceTestAdapter) {
 	t.Helper()
+	service, factory, sender, adapter, _ := startInferenceTestService(t, restore)
+	return service, factory, sender, adapter
+}
+
+// startInferenceTestService is newInferenceTestService that also returns the
+// function that stops campaign inference, as the agent does at shutdown. The
+// test's cleanup calls it too.
+func startInferenceTestService(t *testing.T, restore bool) (*DataService, *inferenceTestFactory, *inferenceTestSender, *inferenceTestAdapter, func()) {
+	t.Helper()
 	manager, err := data.NewManager(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -159,7 +168,7 @@ func newInferenceTestService(t *testing.T, restore bool) (*DataService, *inferen
 			t.Fatal(err)
 		}
 	}
-	return service, factory, sender, adapter
+	return service, factory, sender, adapter, stop
 }
 
 func TestAgentInferenceAllCamerasRecordAndNotify(t *testing.T) {

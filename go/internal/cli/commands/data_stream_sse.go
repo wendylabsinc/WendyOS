@@ -14,6 +14,9 @@ import (
 	"time"
 
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
+	// The standard payload types: linked in, they are in the registry that
+	// livePayloadJSON renders from.
+	"github.com/wendylabsinc/wendy/go/proto/gen/datapb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -218,6 +221,17 @@ type liveJSONRecord struct {
 	SampleID           uint64          `json:"sample_id,omitempty,string"`
 }
 
+// writeLiveJSON writes one record as a line of JSON, in the shape the --sse
+// proxy serves.
+func writeLiveJSON(out io.Writer, r *agentpbv2.DataRecord) error {
+	b, err := json.Marshal(liveJSON(r))
+	if err != nil {
+		return err
+	}
+	_, err = out.Write(append(b, '\n'))
+	return err
+}
+
 func liveJSON(r *agentpbv2.DataRecord) liveJSONRecord {
 	return liveJSONRecord{
 		StreamID:           r.GetStreamId(),
@@ -231,16 +245,24 @@ func liveJSON(r *agentpbv2.DataRecord) liveJSONRecord {
 }
 
 // livePayloadJSON renders a payload for a browser. A schema this CLI has
-// compiled in becomes protobuf JSON with proto field names. A payload that is
+// compiled in, such as the wendy.data.v1 types and the catalog, becomes
+// protobuf JSON with proto field names. A payload that is
 // already a JSON object or array, as an app stream of media type
 // application/json carries, is passed through. Anything else is a base64
 // string, as protobuf JSON writes bytes.
+//
+// VideoMarkers always has its markers list, empty for a frame with no
+// detections, which protobuf JSON would leave out: the empty list is what
+// tells a viewer to clear the camera's boxes.
 func livePayloadJSON(schema string, payload []byte) json.RawMessage {
 	var out bytes.Buffer
 	if t, err := protoregistry.GlobalTypes.FindMessageByName(protoreflect.FullName(schema)); err == nil {
 		m := t.New().Interface()
 		if proto.Unmarshal(payload, m) == nil {
 			if b, err := (protojson.MarshalOptions{UseProtoNames: true}).Marshal(m); err == nil && json.Compact(&out, b) == nil {
+				if markers, ok := m.(*datapb.VideoMarkers); ok && len(markers.GetMarkers()) == 0 {
+					return withEmptyMarkers(out.Bytes())
+				}
 				return out.Bytes()
 			}
 		}
@@ -250,4 +272,14 @@ func livePayloadJSON(schema string, payload []byte) json.RawMessage {
 	}
 	b, _ := json.Marshal(base64.StdEncoding.EncodeToString(payload))
 	return b
+}
+
+// withEmptyMarkers adds "markers":[] to the compact JSON object of a
+// VideoMarkers that has none.
+func withEmptyMarkers(object []byte) json.RawMessage {
+	const key = `"markers":[]`
+	if string(object) == "{}" {
+		return json.RawMessage("{" + key + "}")
+	}
+	return json.RawMessage("{" + key + "," + string(object[1:]))
 }

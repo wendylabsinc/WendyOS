@@ -7,6 +7,8 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -339,5 +341,356 @@ func TestAdvertisedAppStreamCatalogAndLatest(t *testing.T) {
 	}
 	if info.GetState() != agentpbv2.DataStreamInfo_STATE_GONE {
 		t.Fatalf("after the app stopped: %v", &info)
+	}
+}
+
+// An agent producer's record takes the app stream path: the viewer gets it on
+// "agent/<stream>", stamped with the time of the sample it describes, and the
+// episode records the same record on that sample's place in its timeline.
+func TestPublishAgentRecordLiveAndRecorded(t *testing.T) {
+	root := t.TempDir()
+	m, err := NewManager(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const stream = "campaign/door/markers/v4l2:/dev/video0"
+	sub := liveSubscriber(t, m, "agent/"+stream)
+	episode, err := m.Start(StartOptions{Sources: []string{"applications"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sampleBoot, err := readBootTime()
+	if err != nil {
+		t.Fatal(err)
+	}
+	const sampleUnix = int64(1_792_000_000_123_456_789)
+	descriptor := &recordingpb.StreamDescriptor{MediaType: "application/protobuf", Schema: "wendy.data.v1.VideoMarkers"}
+	record := &recordingpb.Record{
+		Payload:             []byte("boxes"),
+		Timing:              &recordingpb.SampleTiming{Clock: "CLOCK_REALTIME", Count: 1, TimestampsNanos: []int64{sampleUnix}},
+		ClientBoottimeNanos: proto.Int64(sampleBoot),
+		BootId:              bootID(),
+		Inputs:              []*recordingpb.SampleRef{{SourceId: "v4l2:/dev/video0", SampleId: 42}},
+	}
+	if err := m.Publish(stream, descriptor, record); err != nil {
+		t.Fatal(err)
+	}
+	record.Payload[0] = 'X' // the caller keeps its buffer
+	d := nextLive(t, sub)
+	if d.Record.StreamID != "agent/"+stream || d.Record.Schema != "wendy.data.v1.VideoMarkers" || string(d.Record.Payload) != "boxes" {
+		t.Fatalf("live record: %+v", d.Record)
+	}
+	if d.Record.TimestampUnixNanos != sampleUnix {
+		t.Fatalf("live timestamp %d, want the sample's %d", d.Record.TimestampUnixNanos, sampleUnix)
+	}
+	if d.Record.SourceID != "v4l2:/dev/video0" || d.Record.SampleID != 42 {
+		t.Fatalf("live sample %s #%d, want the input's", d.Record.SourceID, d.Record.SampleID)
+	}
+	if _, err = m.Stop(AdHocEpisodeKey); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.Open(filepath.Join(root, episode.ID, RecordingLogFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	recorded, _, err := ReadRecording(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recorded.AppId != "" || recorded.Stream != stream || !bytes.Equal(recorded.Record.Payload, d.Record.Payload) {
+		t.Fatalf("recorded: %+v", recorded)
+	}
+	if bootID() == "unavailable" {
+		// Without a kernel boot id (macOS) no client boot time is trusted, and
+		// the episode places the record at its receipt.
+		if recorded.ClientTimestampAccepted {
+			t.Fatal("client boot time accepted without a boot id")
+		}
+	} else if !recorded.ClientTimestampAccepted || recorded.EpisodeNanos != sampleBoot-episode.RequestBootNanos {
+		t.Fatalf("recorded at %d (accepted %v), want the sample's offset %d", recorded.EpisodeNanos, recorded.ClientTimestampAccepted, sampleBoot-episode.RequestBootNanos)
+	}
+	if in := recorded.Record.GetInputs(); len(in) != 1 || in[0].SampleId != 42 {
+		t.Fatalf("recorded inputs: %v", in)
+	}
+}
+
+// Live goes first: a viewer gets a record while a seal holds the manager
+// lock, before the record reaches the pre-roll or an episode.
+func TestPublishReachesViewersBeforeStorage(t *testing.T) {
+	m, err := NewManager(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	sub := liveSubscriber(t, m)
+	m.mu.Lock()
+	done := make(chan error, 1)
+	go func() {
+		done <- m.Publish("test/stream", &recordingpb.StreamDescriptor{MediaType: "text/plain"}, &recordingpb.Record{Payload: []byte("x")})
+	}()
+	d := nextLive(t, sub)
+	buffered := len(m.agentPreRoll)
+	m.mu.Unlock()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if d.Record.StreamID != "agent/test/stream" || buffered != 0 {
+		t.Fatalf("live record %+v with %d pre-roll records already buffered", d.Record, buffered)
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(m.agentPreRoll) != 1 {
+		t.Fatalf("pre-roll holds %d records after the publish", len(m.agentPreRoll))
+	}
+}
+
+// Live goes first for every record, not only the first: while the manager
+// lock is held, a record on a second stream reaches viewers too, rather than
+// waiting behind the first record's storage. Once the lock is released, the
+// episode records both in the order viewers got them.
+func TestPublishLiveDoesNotQueueBehindStorage(t *testing.T) {
+	root := t.TempDir()
+	m, err := NewManager(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sub := liveSubscriber(t, m)
+	episode, err := m.Start(StartOptions{Sources: []string{"applications"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	descriptor := &recordingpb.StreamDescriptor{MediaType: "text/plain"}
+	streams := []string{"test/a", "test/b"}
+	done := make(chan error, len(streams))
+	m.mu.Lock()
+	unlock := sync.OnceFunc(m.mu.Unlock)
+	defer unlock() // a failed wait below must not leave the publishers blocked
+	for _, stream := range streams {
+		go func() { done <- m.Publish(stream, descriptor, &recordingpb.Record{Payload: []byte(stream)}) }()
+		if d := nextLive(t, sub); d.Record.StreamID != "agent/"+stream {
+			t.Fatalf("live record %s, want agent/%s", d.Record.StreamID, stream)
+		}
+	}
+	unlock()
+	for range streams {
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err = m.Stop(AdHocEpisodeKey); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.Open(filepath.Join(root, episode.ID, RecordingLogFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	for _, stream := range streams {
+		recorded, _, err := ReadRecording(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if recorded.Stream != stream {
+			t.Fatalf("episode recorded %s, want %s: not the live order", recorded.Stream, stream)
+		}
+	}
+}
+
+// The agent namespace is the agent's: a recording stream with no app id is
+// refused, and Publish refuses what an episode could not store.
+func TestPublishAndRecordStreamRefusals(t *testing.T) {
+	m, err := NewManager(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	sub := liveSubscriber(t, m)
+	cfg := appconfig.RecordingStream{Mode: "lightweight", MediaType: "text/plain"}
+	if _, err := m.RecordStream("", "", "markers", cfg, &recordingpb.Record{Payload: []byte("x")}); err == nil {
+		t.Fatal("recording stream without an app id accepted")
+	}
+	descriptor := &recordingpb.StreamDescriptor{MediaType: "text/plain"}
+	for _, tc := range []struct {
+		name       string
+		stream     string
+		descriptor *recordingpb.StreamDescriptor
+		record     *recordingpb.Record
+	}{
+		{"empty stream", "", descriptor, &recordingpb.Record{}},
+		{"long stream", strings.Repeat("s", maxAgentStream+1), descriptor, &recordingpb.Record{}},
+		{"no descriptor", "s", nil, &recordingpb.Record{}},
+		{"no record", "s", descriptor, nil},
+		{"oversized", "s", descriptor, &recordingpb.Record{Payload: make([]byte, MaxRecordingPacket)}},
+		{"timing without a clock", "s", descriptor, &recordingpb.Record{Timing: &recordingpb.SampleTiming{Count: 1}}},
+	} {
+		if err := m.Publish(tc.stream, tc.descriptor, tc.record); err == nil {
+			t.Errorf("%s: accepted", tc.name)
+		}
+	}
+	requireNoLive(t, sub)
+}
+
+// An agent producer's stream is in the catalog while the producer runs,
+// published by "agent", and its newest record waits for a viewer that asks
+// for it, as an app's stream does.
+func TestAdvertisedAgentStreamCatalogAndLatest(t *testing.T) {
+	m, err := NewManager(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	const stream = "campaign/door/markers/v4l2:/dev/video0"
+	descriptor := &recordingpb.StreamDescriptor{MediaType: "application/protobuf", Schema: "wendy.data.v1.VideoMarkers"}
+	m.AdvertiseAgentStream(stream, descriptor)
+	for _, payload := range []string{"old", "new"} {
+		if err := m.Publish(stream, descriptor, &recordingpb.Record{Payload: []byte(payload)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	s, err := m.Live().Subscribe(live.Selection{StreamPrefixes: []string{live.CatalogPrefix, "agent/"}, SendLatest: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(s.Close)
+	var info agentpbv2.DataStreamInfo
+	d := nextLive(t, s)
+	if err := proto.Unmarshal(d.Record.Payload, &info); err != nil {
+		t.Fatal(err)
+	}
+	if d.Record.StreamID != live.CatalogPrefix+"agent/"+stream || info.GetStreamId() != "agent/"+stream || info.GetPublisher() != "agent" ||
+		info.GetSchema() != "wendy.data.v1.VideoMarkers" || info.GetMediaType() != "application/protobuf" || info.GetState() != agentpbv2.DataStreamInfo_STATE_ACTIVE {
+		t.Fatalf("catalog entry %s: %v", d.Record.StreamID, &info)
+	}
+	if d = nextLive(t, s); d.Record.StreamID != "agent/"+stream || string(d.Record.Payload) != "new" {
+		t.Fatalf("newest record: %s %q", d.Record.StreamID, d.Record.Payload)
+	}
+	requireNoLive(t, s)
+
+	m.UnadvertiseAgentStream(stream)
+	d = nextLive(t, s)
+	if err := proto.Unmarshal(d.Record.Payload, &info); err != nil {
+		t.Fatal(err)
+	}
+	if info.GetStreamId() != "agent/"+stream || info.GetState() != agentpbv2.DataStreamInfo_STATE_GONE {
+		t.Fatalf("after the producer stopped: %v", &info)
+	}
+}
+
+// A live record names the sample its envelope's first input reference names,
+// and a record without one names none.
+func TestLiveRecordNamesItsSample(t *testing.T) {
+	m, err := NewManager(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	sub := liveSubscriber(t, m)
+	inputs := []*recordingpb.SampleRef{{SourceId: "v4l2:/dev/video0", SampleId: 7}, {SourceId: "v4l2:/dev/video1", SampleId: 9}}
+	if _, err := m.RecordStream("test.app", "", "boxes", durableTestStream, &recordingpb.Record{Id: "1", Payload: []byte("x"), Inputs: inputs}); err != nil {
+		t.Fatal(err)
+	}
+	if d := nextLive(t, sub); d.Record.SourceID != "v4l2:/dev/video0" || d.Record.SampleID != 7 {
+		t.Fatalf("durable record names %s #%d", d.Record.SourceID, d.Record.SampleID)
+	}
+	if _, err := m.RecordStream("test.app", "", "text", appconfig.RecordingStream{Mode: "lightweight", MediaType: "text/plain"}, &recordingpb.Record{Payload: []byte("x")}); err != nil {
+		t.Fatal(err)
+	}
+	if d := nextLive(t, sub); d.Record.SourceID != "" || d.Record.SampleID != 0 {
+		t.Fatalf("lightweight record names %s #%d", d.Record.SourceID, d.Record.SampleID)
+	}
+}
+
+// The agent's own streams, campaign markers at frame rate for example, have a
+// pre-roll budget of their own. However much they publish, they do not evict
+// an application's record that is still inside its window, and the next
+// episode's pre-roll holds it beside the agent's records.
+func TestAgentStreamsDoNotEvictApplicationPreRoll(t *testing.T) {
+	root := t.TempDir()
+	m, err := NewManager(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.RecordStream("test.app", "", "boxes", durableTestStream, testRecord("app")); err != nil {
+		t.Fatal(err)
+	}
+	const stream = "campaign/door/markers/v4l2:/dev/video0"
+	descriptor := &recordingpb.StreamDescriptor{MediaType: "application/octet-stream"}
+	big := &recordingpb.Record{Payload: make([]byte, 512<<10)}
+	for range streamPreRollBytes/len(big.Payload) + 2 {
+		if err := m.Publish(stream, descriptor, big); err != nil {
+			t.Fatal(err)
+		}
+	}
+	app, agent := 0, 0
+	for _, recorded := range startedPreRoll(t, m, root) {
+		switch {
+		case recorded.AppId == "test.app" && recorded.Record.GetId() == "app":
+			app++
+		case recorded.AppId == "" && recorded.Stream == stream:
+			agent++
+		}
+	}
+	if app != 1 || agent == 0 {
+		t.Fatalf("pre-roll holds %d app and %d agent records, want the app's one and the agent's", app, agent)
+	}
+}
+
+// The app and agent pre-roll rings reach an episode as one pre-roll, in
+// receipt order.
+func TestStreamPreRollIsInReceiptOrder(t *testing.T) {
+	root := t.TempDir()
+	m, err := NewManager(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	descriptor := &recordingpb.StreamDescriptor{MediaType: "text/plain"}
+	for _, step := range []string{"agent", "app", "agent"} {
+		if step == "app" {
+			if _, err := m.RecordStream("test.app", "", "text", appconfig.RecordingStream{Mode: "lightweight", MediaType: "text/plain"}, &recordingpb.Record{Payload: []byte("x")}); err != nil {
+				t.Fatal(err)
+			}
+		} else if err := m.Publish("test/stream", descriptor, &recordingpb.Record{Payload: []byte("x")}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var got []string
+	for _, recorded := range startedPreRoll(t, m, root) {
+		if recorded.AppId == "" {
+			got = append(got, "agent")
+		} else {
+			got = append(got, "app")
+		}
+	}
+	if strings.Join(got, ",") != "agent,app,agent" {
+		t.Fatalf("pre-roll order %v", got)
+	}
+}
+
+// startedPreRoll starts and stops an episode that captures applications, and
+// returns the pre-roll records it holds.
+func startedPreRoll(t *testing.T, m *Manager, root string) []*recordingpb.StoredRecord {
+	t.Helper()
+	episode, err := m.Start(StartOptions{Sources: []string{"applications"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = m.Stop(AdHocEpisodeKey); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.Open(filepath.Join(root, episode.ID, RecordingLogFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	var out []*recordingpb.StoredRecord
+	for {
+		recorded, _, err := ReadRecording(f)
+		if errors.Is(err, io.EOF) {
+			return out
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if recorded.Preroll {
+			out = append(out, recorded)
+		}
 	}
 }

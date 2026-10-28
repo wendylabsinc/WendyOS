@@ -4,3 +4,5 @@ data: {"stream_id":"apps/sh.wendy.demo/detector/markers","timestamp_unix_nanos":
 
 data: {"stream_id":"apps/sh.wendy.demo/detector/raw","timestamp_unix_nanos":"1792936987260000000","schema":"","payload":"AAEC"}
 
+data: {"stream_id":"agent/campaign/people/markers/v4l2:/dev/video0","timestamp_unix_nanos":"1792936987300000000","schema":"wendy.data.v1.VideoMarkers","payload":{"valid_for_nanos":"3000000000","markers":[{"x":0.375,"y":0.5,"width":0.25,"height":0.5,"label":"person","value":87,"unit":"%","kind":"KIND_BOX"}],"camera":"/dev/video0"},"source_id":"v4l2:/dev/video0","sample_id":"1207"}
+

@@ -12,10 +12,27 @@ import (
 	"testing"
 
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
+	"github.com/wendylabsinc/wendy/go/proto/gen/datapb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 )
+
+// markersPayload is a campaign inference frame's boxes, as the agent
+// publishes them on agent/campaign/<campaign>/markers/<source>.
+func markersPayload(t *testing.T) []byte {
+	t.Helper()
+	b, err := proto.Marshal(&datapb.VideoMarkers{Camera: "/dev/video0", ValidForNanos: 3_000_000_000, Markers: []*datapb.Marker{
+		{Kind: datapb.Marker_KIND_BOX, X: 0.375, Y: 0.5, Width: 0.25, Height: 0.5, Label: "person", Value: proto.Float64(87), Unit: "%"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
+const markersPayloadJSON = `{"valid_for_nanos":"3000000000","markers":[{"x":0.375,"y":0.5,"width":0.25,"height":0.5,"label":"person","value":87,"unit":"%","kind":"KIND_BOX"}],"camera":"/dev/video0"}`
 
 var updateLiveSSEFixture = flag.Bool("update-live-sse", false, "rewrite testdata/live-sse.txt")
 
@@ -28,6 +45,16 @@ func TestLivePayloadJSON(t *testing.T) {
 		want    string
 	}{
 		{"compiled-in schema", catalog.GetSchema(), catalog.GetPayload(), `{"stream_id":"apps/a/s","state":"STATE_ACTIVE","rate_hz":2}`},
+		{"VideoMarkers", "wendy.data.v1.VideoMarkers", markersPayload(t), markersPayloadJSON},
+		// A frame with no detections clears the camera's boxes, so the
+		// viewer is sent an empty list rather than no list.
+		{"VideoMarkers without markers", "wendy.data.v1.VideoMarkers", mustMarshal(t, &datapb.VideoMarkers{Camera: "/dev/video0", ValidForNanos: 3_000_000_000}),
+			`{"markers":[],"valid_for_nanos":"3000000000","camera":"/dev/video0"}`},
+		{"empty VideoMarkers", "wendy.data.v1.VideoMarkers", nil, `{"markers":[]}`},
+		{"Grid", "wendy.data.v1.Grid", mustMarshal(t, &datapb.Grid{Width: 2, Height: 1, Unit: "°C", Data: []byte{1, 0, 2, 0}, BytesPerLine: 4, Scale: 0.1, Offset: -273.15, Camera: "/dev/video2"}),
+			`{"width":2,"height":1,"unit":"°C","data":"AQACAA==","bytes_per_line":4,"scale":0.1,"offset":-273.15,"camera":"/dev/video2"}`},
+		{"Event", "wendy.data.v1.Event", mustMarshal(t, &datapb.Event{Name: "overheat", State: datapb.Event_STATE_RAISED, Value: 81.5, Unit: "°C"}),
+			`{"name":"overheat","state":"STATE_RAISED","value":81.5,"unit":"°C"}`},
 		{"JSON object", "wendy.data.v1.VideoMarkers", []byte(" {\n \"camera\": \"/dev/video0\" }\n"), `{"camera":"/dev/video0"}`},
 		{"JSON array", "", []byte(`[1, 2]`), `[1,2]`},
 		{"binary", "test.v1.Unknown", []byte{1, 2}, `"AQI="`},
@@ -63,6 +90,15 @@ func TestLiveJSONSample(t *testing.T) {
 	}
 }
 
+func mustMarshal(t *testing.T, m proto.Message) []byte {
+	t.Helper()
+	b, err := proto.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
 func TestRequireLoopbackAddr(t *testing.T) {
 	for _, addr := range []string{"127.0.0.1:8090", "localhost:8090", "[::1]:8090", "127.0.0.1:0"} {
 		if err := requireLoopbackAddr(addr); err != nil {
@@ -78,15 +114,18 @@ func TestRequireLoopbackAddr(t *testing.T) {
 
 // liveSSEFixtureRecords are the records behind testdata/live-sse.txt. That file
 // is what a browser reads from the proxy; Companion web's readLiveStream
-// parses the markers record in it. The markers payload is protobuf JSON, as an
-// app stream of media type application/json carries it; a protobuf payload
-// renders the same once this CLI compiles the schema in.
+// parses both markers records in it. The app's markers payload is protobuf
+// JSON, as an app stream of media type application/json carries it. The
+// agent's campaign markers are protobuf, which the CLI renders as protobuf
+// JSON because it compiles wendy.data.v1 in.
 func liveSSEFixtureRecords(t *testing.T) []*agentpbv2.DataRecord {
 	return []*agentpbv2.DataRecord{
 		catalogDataRecord(t, &agentpbv2.DataStreamInfo{StreamId: "apps/sh.wendy.demo/detector/markers", Schema: "wendy.data.v1.VideoMarkers", MediaType: "application/json", Publisher: "sh.wendy.demo", State: agentpbv2.DataStreamInfo_STATE_ACTIVE, RateHz: 10, LastTimestampUnixNanos: 1792936987250000000}),
 		{StreamId: "apps/sh.wendy.demo/detector/markers", TimestampUnixNanos: 1792936987250000000, Schema: "wendy.data.v1.VideoMarkers", Skipped: 3,
 			Payload: []byte(`{"camera":"/dev/video0","valid_for_nanos":"500000000","markers":[{"x":0.25,"y":0.5,"width":0.1,"height":0.2,"label":"person","value":0.91,"color":"green"}]}`)},
 		{StreamId: "apps/sh.wendy.demo/detector/raw", TimestampUnixNanos: 1792936987260000000, Payload: []byte{0, 1, 2}},
+		{StreamId: "agent/campaign/people/markers/v4l2:/dev/video0", TimestampUnixNanos: 1792936987300000000, Schema: "wendy.data.v1.VideoMarkers",
+			Payload: markersPayload(t), SourceId: "v4l2:/dev/video0", SampleId: 1207},
 	}
 }
 

@@ -86,10 +86,11 @@ func liveSelection(req *agentpbv2.StreamDataRequest) (live.Selection, error) {
 	}, nil
 }
 
-// StreamData sends the device's live records: every app recording stream, as
-// the agent accepts each record, and the catalog of those streams. It runs
-// until the client goes away. A client that reads slowly receives the newest
-// record of each stream and skips the rest; it never slows a publisher.
+// StreamData sends the device's live records: every app recording stream and
+// the agent's own streams, as the agent accepts each record, and the catalog
+// of those streams. It runs until the client goes away. A client that reads
+// slowly receives the newest record of each stream and skips the rest; it
+// never slows a publisher.
 func (s *DataService) StreamData(req *agentpbv2.StreamDataRequest, out grpc.ServerStreamingServer[agentpbv2.DataRecord]) error {
 	ctx := out.Context()
 	if err := authorizeDataStream(ctx); err != nil {
@@ -119,7 +120,7 @@ func (s *DataService) StreamData(req *agentpbv2.StreamDataRequest, out grpc.Serv
 			return status.FromContextError(err).Err()
 		}
 		r := d.Record
-		if err := out.Send(&agentpbv2.DataRecord{StreamId: r.StreamID, TimestampUnixNanos: r.TimestampUnixNanos, Schema: r.Schema, Payload: r.Payload, Skipped: d.Skipped}); err != nil {
+		if err := out.Send(&agentpbv2.DataRecord{StreamId: r.StreamID, TimestampUnixNanos: r.TimestampUnixNanos, Schema: r.Schema, Payload: r.Payload, Skipped: d.Skipped, SourceId: r.SourceID, SampleId: r.SampleID}); err != nil {
 			return err
 		}
 	}

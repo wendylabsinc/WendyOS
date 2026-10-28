@@ -14,9 +14,11 @@ type SensorSample struct {
 	SourceID string
 	SampleID uint64
 	// BootNanos is the agent's bracketed CLOCK_BOOTTIME receipt of the sample;
-	// UncertaintyNanos is the bracket half-width.
+	// UncertaintyNanos is the bracket half-width. UnixNanos is its
+	// CLOCK_REALTIME stamp, the timestamp_ns viewers of the camera see on it.
 	BootNanos        int64
 	UncertaintyNanos int64
+	UnixNanos        int64
 	DecoderInit      []byte // demuxer initialization, separate from recorded sample bytes
 	Payload          []byte
 	Encoding         string

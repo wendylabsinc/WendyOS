@@ -80,8 +80,8 @@ message StreamDataRequest {
   // Exact stream ids. An id that no stream has published yet is not an error:
   // its records arrive once it does.
   repeated string stream_ids = 1;
-  // Stream id prefixes, for example "apps/<app-id>/", or "_streams/" for the
-  // catalog.
+  // Stream id prefixes, for example "apps/<app-id>/", "agent/", or
+  // "_streams/" for the catalog.
   repeated string stream_prefixes = 2;
   // Exact payload schemas, for example "wendy.data.v1.VideoMarkers".
   repeated string schemas = 3;
@@ -104,7 +104,9 @@ message StreamDataRequest {
 //
 // stream_id is opaque and stable. An application recording stream is
 // "apps/<app-id>/<service>/<stream>", or "apps/<app-id>/<stream>" for an app
-// without a service name. Ids that start with "_streams/" are the catalog.
+// without a service name. The agent's own streams are "agent/<stream>", for
+// example "agent/campaign/<campaign>/markers/<source>", a campaign's
+// detections on one camera. Ids that start with "_streams/" are the catalog.
 message DataRecord {
   string stream_id = 1;
   int64 timestamp_unix_nanos = 2;
@@ -132,7 +134,8 @@ message DataRecord {
 // send_latest to receive the whole catalog at once, then its changes.
 //
 // An application stream appears when its app starts and is GONE when the app
-// stops.
+// stops. An agent stream appears when its producer starts, for example when a
+// campaign's inference starts on a camera, and is GONE when the producer stops.
 message DataStreamInfo {
   enum State {
     STATE_UNSPECIFIED = 0;
@@ -146,7 +149,7 @@ message DataStreamInfo {
   string stream_id = 1;
   string schema = 2;
   string media_type = 3;
-  // The app id of an application stream.
+  // The app id of an application stream, or "agent" for the agent's own.
   string publisher = 4;
   State state = 5;
   // Records per second the agent accepted, over about the last 10 seconds.
