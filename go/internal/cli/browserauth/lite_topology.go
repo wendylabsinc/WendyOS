@@ -58,7 +58,9 @@ func (s *Session) liteOperatorLocked(ctx context.Context) (config.CertificateInf
 	if identity.Refresh != "" {
 		s.tokens.Refresh = identity.Refresh
 	}
-	s.tokens.Access = ""
+	// Keep the existing Cloud-audience token while saving the rotated refresh
+	// token. If restoring Cloud access fails transiently, the cleared expiry
+	// makes the next normal operation retry instead of appearing signed out.
 	s.profile.Expires = ""
 	if err := s.saveLocked(); err != nil {
 		return config.CertificateInfo{}, err

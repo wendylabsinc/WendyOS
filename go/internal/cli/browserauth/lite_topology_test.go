@@ -14,6 +14,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"io"
 	"math/big"
@@ -59,6 +60,37 @@ func TestLiteReporterCertificateFollowsSessionLifetime(t *testing.T) {
 				t.Fatal("session transition retained the ephemeral Lite reporter identity")
 			}
 		})
+	}
+}
+
+func TestLiteReporterIssuanceFailurePreservesCloudRefreshRecovery(t *testing.T) {
+	session, _ := setup(t, nil)
+	if _, err := session.Complete(context.Background(), "valid-code", session.state, testIssuer); err != nil {
+		t.Fatal(err)
+	}
+	access, refresh, original := session.tokens.Access, session.tokens.Refresh, session.Client
+	exchanges := 0
+	session.Client = doerFunc(func(request *http.Request) (*http.Response, error) {
+		if request.URL.String() == IdentityEndpoint {
+			return &http.Response{StatusCode: http.StatusServiceUnavailable, Header: http.Header{}, Body: io.NopCloser(bytes.NewBufferString("PKI temporarily unavailable"))}, nil
+		}
+		if request.URL.String() == testIssuer+"/oauth2/token" {
+			exchanges++
+			if exchanges == 2 {
+				return nil, errors.New("Cloud temporarily unavailable")
+			}
+		}
+		return original.Do(request)
+	})
+	if _, err := session.liteOperatorLocked(context.Background()); err == nil {
+		t.Fatal("temporary PKI failure was hidden")
+	}
+	if session.tokens.Access != access || session.tokens.Refresh == refresh || session.profile.Expires != "" {
+		t.Fatal("temporary Lite setup failure lost Cloud refresh recovery")
+	}
+	session.Client = original
+	if err := session.refreshCloudToken(context.Background()); err != nil || session.profile.Expires == "" {
+		t.Fatal("Cloud access did not recover on retry", err)
 	}
 }
 
