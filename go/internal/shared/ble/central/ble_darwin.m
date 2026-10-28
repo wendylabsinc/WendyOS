@@ -15,13 +15,17 @@ static const NSUInteger kWendyBLEMaxGATTValue = 512;
 static const NSUInteger kWendyBLEMaxL2CAPChunk = 65536;
 
 // A stalled output stream must not hold a TLS write or Close indefinitely.
-static const NSTimeInterval kWendyBLEWriteTimeout = 10.0;
+static const NSTimeInterval kWendyBLEWriteIdleTimeout = 10.0;
+static const NSTimeInterval kWendyBLEWriteWholeTimeout = 60.0;
 
 @interface WendyBLEWriteRequest : NSObject
 @property (strong) NSData *data;
-@property NSTimeInterval deadline;
+@property NSTimeInterval wholeDeadline;
+@property NSTimeInterval idleTimeout;
+// Atomic: the stream owner renews this and the calling waiter reads it.
+@property (atomic) NSTimeInterval progressDeadline;
 @property (strong) dispatch_semaphore_t completed;
-@property BOOL cancelled;
+@property (atomic) BOOL cancelled;
 @property WendyBLEError error;
 @end
 
@@ -105,6 +109,7 @@ static BOOL wendyBLECopyOut(const void *bytes, NSUInteger n, uint8_t **outData, 
 // Required in CLI binaries where the main run loop is never started.
 @property (strong) NSThread *l2capIOThread;
 @property BOOL l2capIORunning;
+@property (atomic) NSTimeInterval l2capCallerWriteDeadline; // monotonic; zero disables
 @property BOOL l2capOutputReady; // YES once outputStream fires NSStreamEventHasSpaceAvailable
 
 // Target peripheral UUID for scanning
@@ -114,6 +119,15 @@ static BOOL wendyBLECopyOut(const void *bytes, NSUInteger n, uint8_t **outData, 
 - (void)failL2CAP;
 
 @end
+
+// Both threads must consult the same renewed idle deadline. A caller deadline
+// can be changed while a send is in flight; it never extends the whole budget.
+static NSTimeInterval wendyBLEWriteRemaining(WendyBLEConnection *conn, WendyBLEWriteRequest *request) {
+    NSTimeInterval deadline = MIN(request.wholeDeadline, request.progressDeadline);
+    NSTimeInterval caller = conn.l2capCallerWriteDeadline;
+    if (caller != 0) deadline = MIN(deadline, caller);
+    return deadline - NSProcessInfo.processInfo.systemUptime;
+}
 
 @implementation WendyBLEConnection
 
@@ -355,7 +369,7 @@ didOpenL2CAPChannel:(CBL2CAPChannel *)channel
     NSOutputStream *output = self.l2capChannel.outputStream;
     request.error = WENDY_BLE_OK;
     while (offset < request.data.length) {
-        NSTimeInterval remaining = request.deadline - NSProcessInfo.processInfo.systemUptime;
+        NSTimeInterval remaining = wendyBLEWriteRemaining(self, request);
         if (request.cancelled || remaining <= 0) {
             request.error = WENDY_BLE_ERR_TIMEOUT;
             break;
@@ -373,6 +387,7 @@ didOpenL2CAPChannel:(CBL2CAPChannel *)channel
             }
             if (n > 0) {
                 offset += (NSUInteger)n;
+                request.progressDeadline = NSProcessInfo.processInfo.systemUptime + request.idleTimeout;
                 continue;
             }
         }
@@ -651,7 +666,7 @@ WendyBLEError wendy_ble_open_l2cap(WendyBLEConn handle, uint16_t psm, int timeou
 }
 
 static WendyBLEError wendyBLEL2CAPSend(WendyBLEConn handle, const uint8_t *data, int length,
-                                     NSTimeInterval timeout) {
+                                     NSTimeInterval idleTimeout, NSTimeInterval wholeTimeout) {
     WendyBLEConnection *conn = (__bridge WendyBLEConnection *)handle;
     if (!conn.connected || !conn.l2capChannel || !conn.l2capIORunning) return WENDY_BLE_ERR_DISCONNECTED;
 
@@ -660,7 +675,10 @@ static WendyBLEError wendyBLEL2CAPSend(WendyBLEConn handle, const uint8_t *data,
     // above, leaving performSelector's unbounded wait blocked forever.
     WendyBLEWriteRequest *request = [WendyBLEWriteRequest new];
     request.data = [NSData dataWithBytes:data length:length];
-    request.deadline = NSProcessInfo.processInfo.systemUptime + timeout;
+    NSTimeInterval now = NSProcessInfo.processInfo.systemUptime;
+    request.wholeDeadline = now + wholeTimeout;
+    request.idleTimeout = idleTimeout;
+    request.progressDeadline = now + idleTimeout;
     request.completed = dispatch_semaphore_create(0);
     [conn performSelector:@selector(performL2CAPWrite:)
                  onThread:conn.l2capIOThread
@@ -670,7 +688,7 @@ static WendyBLEError wendyBLEL2CAPSend(WendyBLEConn handle, const uint8_t *data,
     // and the perform being queued; the request then never runs, and waiting
     // out the whole timeout would hold Close for as long.
     for (;;) {
-        NSTimeInterval remaining = request.deadline - NSProcessInfo.processInfo.systemUptime;
+        NSTimeInterval remaining = wendyBLEWriteRemaining(conn, request);
         NSTimeInterval slice = MAX(0.0, MIN(remaining, 0.05));
         if (dispatch_semaphore_wait(request.completed,
             dispatch_time(DISPATCH_TIME_NOW, (int64_t)(slice * NSEC_PER_SEC))) == 0) {
@@ -680,7 +698,9 @@ static WendyBLEError wendyBLEL2CAPSend(WendyBLEConn handle, const uint8_t *data,
         if (stranded && dispatch_semaphore_wait(request.completed, DISPATCH_TIME_NOW) == 0) {
             return request.error; // the thread ran the request just before it exited
         }
-        if (stranded || remaining <= slice) {
+        // Progress may have renewed the idle budget during the wait. Never
+        // expire from a stale snapshot taken before that positive write.
+        if (stranded || wendyBLEWriteRemaining(conn, request) <= 0) {
             request.cancelled = YES;
             [conn failL2CAP];
             return stranded ? WENDY_BLE_ERR_DISCONNECTED : WENDY_BLE_ERR_TIMEOUT;
@@ -689,7 +709,14 @@ static WendyBLEError wendyBLEL2CAPSend(WendyBLEConn handle, const uint8_t *data,
 }
 
 WendyBLEError wendy_ble_l2cap_send(WendyBLEConn handle, const uint8_t *data, int length) {
-    return wendyBLEL2CAPSend(handle, data, length, kWendyBLEWriteTimeout);
+    return wendyBLEL2CAPSend(handle, data, length, kWendyBLEWriteIdleTimeout,
+                            kWendyBLEWriteWholeTimeout);
+}
+
+void wendy_ble_l2cap_set_write_deadline(WendyBLEConn handle, double remaining_seconds, int enabled) {
+    if (!handle) return;
+    WendyBLEConnection *conn = (__bridge WendyBLEConnection *)handle;
+    conn.l2capCallerWriteDeadline = enabled ? NSProcessInfo.processInfo.systemUptime + remaining_seconds : 0;
 }
 
 void wendy_ble_l2cap_abort(WendyBLEConn handle) {
