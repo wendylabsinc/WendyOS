@@ -22,12 +22,12 @@ func TestLANProjectionSurvivesBabelRouteLossAndWithdrawsOnGoodbye(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := local.Accept(w, f.now); err != nil {
+	if _, err := local.acceptTestRecord(w, f.now); err != nil {
 		t.Fatal(err)
 	}
 	var view localmesh.NodeSnapshot
 	bridge, err := NewMDNSBridge(AppScope{AppID: "com.wendy.browse", AppIP: net.ParseIP("10.42.2.2"), BridgeIndex: 8},
-		local, testVIPs(t), func(string, Record) bool { return true }, func(SignedRecord) {}, func() localmesh.NodeSnapshot { return view })
+		local, testVIPs(t), func(string, Record) bool { return true }, func(Record) {}, func() localmesh.NodeSnapshot { return view })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +97,7 @@ func TestLANProjectionCoexistsWithNativePublisherOfSameServiceType(t *testing.T)
 	catalog, _ := f.newCatalog(t, p533, "default", nil, nil)
 	appIP := net.ParseIP("10.42.2.2")
 	bridge, err := NewMDNSBridge(AppScope{AppID: "com.wendy.browse", AppIP: appIP, BridgeIndex: 8},
-		catalog, testVIPs(t), func(string, Record) bool { return true }, func(SignedRecord) {}, func() localmesh.NodeSnapshot { return localmesh.NodeSnapshot{} })
+		catalog, testVIPs(t), func(string, Record) bool { return true }, func(Record) {}, func() localmesh.NodeSnapshot { return localmesh.NodeSnapshot{} })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -237,7 +237,7 @@ func TestLANProjectorRetriesFinalRouteAndGuardCleanup(t *testing.T) {
 func TestLANProjectionWithdrawsGrantsDuringNativeClaimOverflow(t *testing.T) {
 	f := newFixture(t)
 	catalog, _ := f.newCatalog(t, p533, "default", nil, nil)
-	bridge, err := NewMDNSBridge(AppScope{AppID: "com.wendy.browse", AppIP: net.ParseIP("10.42.2.2"), BridgeIndex: 8}, catalog, testVIPs(t), func(string, Record) bool { return true }, func(SignedRecord) {}, emptyBridgeRouteView)
+	bridge, err := NewMDNSBridge(AppScope{AppID: "com.wendy.browse", AppIP: net.ParseIP("10.42.2.2"), BridgeIndex: 8}, catalog, testVIPs(t), func(string, Record) bool { return true }, func(Record) {}, emptyBridgeRouteView)
 	if err != nil {
 		t.Fatal(err)
 	}
