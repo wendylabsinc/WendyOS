@@ -56,9 +56,10 @@ wendy data sources --device workshop.local
 wendy data record --device workshop.local --name commissioning --source telemetry
 ```
 
-The recording runs on the device after the command returns. Stop it when you
-have captured enough data, then inspect and download the episode ID from the
-output:
+The recording runs on the device after the command returns.
+`wendy data status --device workshop.local` shows how long it has been running
+and how much it has written. Stop it when you have captured enough data, then
+inspect and download the episode ID from the output:
 
 ```sh
 wendy data stop --device workshop.local
@@ -68,9 +69,10 @@ wendy data download <episode-id> --device workshop.local --output ./commissionin
 ```
 
 `inspect` verifies the sealed files' checksums. `download` resumes interrupted
-transfers, verifies each file, and saves the episode locally. Camera episodes
-include a browser-playable MP4 when the captured stream can be remuxed; the
-manifest explains when that file could not be created.
+transfers, verifies each file, and saves the episode locally. In a terminal,
+leave out the episode ID to choose from the device's episodes instead. Camera
+episodes include a browser-playable MP4 when the captured stream can be
+remuxed; the manifest explains when that file could not be created.
 
 Use the source IDs returned by `sources` to add a camera or microphone. Repeat
 `--source` for multiple sources. With no source flags, `record` selects every

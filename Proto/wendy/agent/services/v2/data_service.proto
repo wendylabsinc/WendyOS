@@ -97,9 +97,47 @@ message DataEpisode {
   int64 started_unix_nanos = 4;
   int64 size_bytes = 5;
   string boot_id = 6;
+  // The fields below are set only on an episode listed in in_progress (see
+  // DataStatusResponse). There, state is "recording", "draining" (capture has
+  // stopped and the episode still accepts late application records) or
+  // "sealing" (its files are being remuxed and checksummed), and size_bytes is
+  // what the episode holds on disk so far.
+  //
+  // What started it: "manual" for `wendy data record`, otherwise the campaign
+  // trigger's reason, such as "event:person_detected".
+  string trigger_reason = 7;
+  // The campaign that started it; empty for `wendy data record`.
+  string campaign_name = 8;
+  // IDs of the sources it records. A campaign source that did not resolve at
+  // trigger is left out, because nothing of it is being recorded.
+  repeated string sources = 9;
+  // How long it has captured, measured on the device's CLOCK_BOOTTIME so a
+  // wrong wall clock cannot distort it. It stops growing when capture stops.
+  int64 duration_nanos = 10;
 }
-message DataStatusResponse { DataEpisode active = 1; }
-message DataEpisodesResponse { repeated DataEpisode episodes = 1; }
+message DataStatusResponse {
+  // One open episode: the ad-hoc one, else the earliest-started campaign
+  // episode, else a draining one. Kept for clients that predate in_progress.
+  DataEpisode active = 1;
+  // Every episode that has not been finalized yet, newest first: recording,
+  // draining or sealing. Episodes lists only finalized episodes, so without
+  // this a recording is invisible until it ends.
+  repeated DataEpisode in_progress = 2;
+  // True from agents that fill in_progress. An older agent reports at most
+  // one open episode, in active, and none of the in-progress fields.
+  bool reports_in_progress = 3;
+}
+message DataEpisodesResponse {
+  // Finalized episodes only, newest first, exactly as before in_progress
+  // existed, so a script that downloads every entry keeps working.
+  repeated DataEpisode episodes = 1;
+  // The same list as DataStatusResponse.in_progress, without any episode that
+  // finalized while this response was built. Empty from older agents.
+  repeated DataEpisode in_progress = 2;
+  // True from agents that fill in_progress, so an empty in_progress means
+  // nothing is in progress and a client need not also ask Status.
+  bool reports_in_progress = 3;
+}
 message DataInspectResponse { bytes manifest_json = 1; repeated string verification_errors = 2; }
 // One chunk of one file of an episode.
 //
