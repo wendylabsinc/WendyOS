@@ -10,9 +10,12 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
+	"time"
 
 	"go.uber.org/zap"
 
+	"github.com/wendylabsinc/wendy/go/internal/agent/logfields"
 	"github.com/wendylabsinc/wendy/go/internal/shared/nmcli"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 )
@@ -21,6 +24,17 @@ import (
 type NMCLINetworkManager struct {
 	logger    *zap.Logger
 	nmcliPath string
+
+	// scanMu guards lastScan and scanning. The agent builds a single manager
+	// and hands it to the v1 and v2 gRPC services and the BLE dispatcher, so
+	// they all share one scan rate limit (see scanWiFi).
+	scanMu sync.Mutex
+	// lastScan is when the last scan the agent asked for returned. Zero
+	// until the first one.
+	lastScan time.Time
+	// scanning is closed when the scan in progress returns. Nil while no
+	// scan is in progress.
+	scanning chan struct{}
 }
 
 func NewNMCLINetworkManager(logger *zap.Logger) *NMCLINetworkManager {
@@ -172,16 +186,11 @@ func classifyKeyMgmt(k string) agentpb.WiFiSecurityType {
 	return agentpb.WiFiSecurityType_WIFI_SECURITY_TYPE_UNSPECIFIED
 }
 
-// ListWiFiNetworks scans for and lists available WiFi networks, merging scan
-// results with saved profiles so the response carries is_known/priority/security.
+// ListWiFiNetworks lists available WiFi networks, merging scan results with
+// saved profiles so the response carries is_known/priority/security. It scans
+// first at most once per scanInterval (see scanWiFi).
 func (n *NMCLINetworkManager) ListWiFiNetworks(ctx context.Context) ([]*agentpb.ListWiFiNetworksResponse_WiFiNetwork, error) {
-	rescan := nmcli.Command(ctx, n.nmcliPath, "device", "wifi", "rescan")
-	_ = rescan.Run()
-
-	cmd := nmcli.Command(ctx, n.nmcliPath, "-t",
-		"-f", "IN-USE,SSID,SIGNAL,SECURITY",
-		"device", "wifi", "list")
-	output, err := cmd.Output()
+	output, err := n.scanWiFi(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("nmcli wifi list: %w", err)
 	}
@@ -197,6 +206,152 @@ func (n *NMCLINetworkManager) ListWiFiNetworks(ctx context.Context) ([]*agentpb.
 	networks := parseWiFiList(string(output), known)
 	n.logger.Info("Listed WiFi networks", zap.Int("count", len(networks)))
 	return networks, nil
+}
+
+// scanInterval is the least time between two scans the agent asks for, counted
+// from when the previous one returned. List calls inside it get
+// NetworkManager's current list without a scan. Why 30 s:
+//
+//   - The WiFi screen (`wendy device wifi`) polls every 2.5 s, and a scan on a
+//     Jetson Orin Nano holds the radio for 3.8–10.6 s. A scan per call would
+//     keep the radio scanning for as long as the screen is open.
+//   - Realtek's vendor drivers, rtl88x2ce on the Orin Nano developer kit
+//     among them, refuse a scan while the link is busy, unless the previous
+//     scan request is younger than scan_interval_thr (16 s by default in
+//     Realtek's non-Android builds). Asking more often than that gets past
+//     the check that protects a busy link.
+//   - nmcli itself treats a list from the last 30 s as fresh.
+const scanInterval = 30 * time.Second
+
+// scanTimeout bounds the wait for a scan. nmcli stops waiting after 15 s and
+// prints the list it has, so this only catches an nmcli or NetworkManager
+// that never answers.
+var scanTimeout = 20 * time.Second
+
+// nmcliTimeout bounds the nmcli calls that don't scan, `device status` and
+// `device wifi list --rescan no`. They only read NetworkManager's state, so
+// this too only catches an nmcli or NetworkManager that never answers.
+var nmcliTimeout = 10 * time.Second
+
+// scanWiFi returns `nmcli -t -f IN-USE,SSID,SIGNAL,SECURITY device wifi list`
+// output. Across all callers, the agent asks for a scan at most once per
+// scanInterval. A call that starts the scan or arrives during it waits for
+// it, or for its own ctx, whichever comes first. Then every call gets
+// NetworkManager's current list.
+//
+// The scan runs on its own goroutine, bounded by scanTimeout rather than by
+// the ctx of the call that started it. It serves every call waiting on it,
+// so a caller that goes away (a closed picker, a dropped BLE link) doesn't
+// cut it short for the rest.
+//
+// The scan is `--rescan yes`: nmcli requests a scan and waits (at most 15 s)
+// for one that ends after the call started. Don't go back to `device wifi
+// rescan` plus a plain `device wifi list`: rescan returns as soon as
+// NetworkManager accepts the request, seconds before the scan ends, and a
+// plain list (`--rescan auto`) prints NetworkManager's list whenever any scan
+// ended in the last 30 s. NetworkManager counts a scan the driver refused as
+// ended, so that list can be minutes old.
+//
+// Don't ask again when a scan "ends" too fast to be real (under about 1.5 s).
+// The driver refused it because the link was busy, and the Realtek driver
+// honors a request that comes soon after, so asking again would get past
+// the check that protects a busy link. The next scan waits for the next
+// interval instead.
+//
+// No scan is asked for while a WiFi connection is being activated. That
+// counts as a scan for the interval: NetworkManager would hold the request
+// and run it as soon as the connection is up, and the agent shouldn't scan
+// a link that has just come up either.
+func (n *NMCLINetworkManager) scanWiFi(ctx context.Context) ([]byte, error) {
+	if scanning := n.scanIfDue(ctx); scanning != nil {
+		select {
+		case <-scanning:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	return n.listWiFi(ctx, "no")
+}
+
+// scanIfDue starts a scan if none was asked for in the last scanInterval. It
+// returns a channel that is closed when the scan in progress returns, or nil
+// if no scan is in progress.
+func (n *NMCLINetworkManager) scanIfDue(ctx context.Context) <-chan struct{} {
+	n.scanMu.Lock()
+	defer n.scanMu.Unlock()
+
+	if n.scanning != nil {
+		return n.scanning
+	}
+	if time.Since(n.lastScan) < scanInterval {
+		return nil
+	}
+	scanning := make(chan struct{})
+	n.scanning = scanning
+	go func() {
+		n.scan(context.WithoutCancel(ctx))
+		n.scanMu.Lock()
+		n.lastScan = time.Now()
+		n.scanning = nil
+		n.scanMu.Unlock()
+		close(scanning)
+	}()
+	return scanning
+}
+
+// scan asks for a scan and waits for it, unless a WiFi connection is being
+// activated. It drops nmcli's output: callers read NetworkManager's list
+// once the scan returns.
+func (n *NMCLINetworkManager) scan(ctx context.Context) {
+	if n.wifiActivating(ctx) {
+		n.logger.Info("Skipped WiFi scan: a WiFi connection is being activated")
+		return
+	}
+	start := time.Now()
+	if _, err := n.listWiFi(ctx, "yes"); err != nil {
+		n.logger.Warn("WiFi scan failed; listing the networks NetworkManager already has", zap.Error(err))
+		return
+	}
+	// A refused scan "ends" in about 0.5 s; real ones take seconds.
+	n.logger.Info("WiFi scan ended", zap.Duration(logfields.Duration, time.Since(start)))
+}
+
+// listWiFi runs `nmcli device wifi list` with the given --rescan mode. It
+// gives up after scanTimeout for a scan and nmcliTimeout otherwise.
+func (n *NMCLINetworkManager) listWiFi(ctx context.Context, rescan string) ([]byte, error) {
+	timeout := nmcliTimeout
+	if rescan == "yes" {
+		timeout = scanTimeout
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	cmd := nmcli.Command(ctx, n.nmcliPath, "-t",
+		"-f", "IN-USE,SSID,SIGNAL,SECURITY",
+		"device", "wifi", "list", "--rescan", rescan)
+	return cmd.Output()
+}
+
+// wifiActivating reports whether NetworkManager is connecting or
+// disconnecting a WiFi device. It doesn't scan in those states: it holds an
+// explicit scan request until the state ends, while `--rescan yes` waits up
+// to 15 s.
+func (n *NMCLINetworkManager) wifiActivating(ctx context.Context) bool {
+	ctx, cancel := context.WithTimeout(ctx, nmcliTimeout)
+	defer cancel()
+	cmd := nmcli.Command(ctx, n.nmcliPath, "-t", "-f", "TYPE,STATE", "device", "status")
+	output, err := cmd.Output()
+	if err != nil {
+		return false
+	}
+	scanner := bufio.NewScanner(strings.NewReader(string(output)))
+	for scanner.Scan() {
+		fields := splitNMCLI(scanner.Text(), 2)
+		if len(fields) == 2 && fields[0] == "wifi" &&
+			(strings.HasPrefix(fields[1], "connecting") || fields[1] == "deactivating") {
+			return true
+		}
+	}
+	return false
 }
 
 // parseWiFiList merges the output of `nmcli -t -f IN-USE,SSID,SIGNAL,SECURITY
