@@ -154,6 +154,13 @@ func (m *Manager) RecordStream(app, service, stream string, cfg appconfig.Record
 	}
 	observer := m.appObserver
 	m.mu.Unlock()
+	// Live viewers get the record just journaled, buffered and copied into
+	// episodes, sharing its payload. Rejected and duplicate records returned
+	// above and are never shown. Offer never blocks, so holding streamMu here
+	// is safe, and it keeps each stream's live order its recorded order.
+	if m.live.Subscribed() {
+		m.live.Offer(liveRecord(stored))
+	}
 	if observer != nil && (cfg.Event != "" || cfg.Model != "") {
 		observer(app, streamApplicationRecord(stored))
 	}

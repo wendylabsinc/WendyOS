@@ -20,6 +20,7 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
+	DataService_StreamData_FullMethodName                 = "/wendy.agent.services.v2.DataService/StreamData"
 	DataService_Events_FullMethodName                     = "/wendy.agent.services.v2.DataService/Events"
 	DataService_ExportRecording_FullMethodName            = "/wendy.agent.services.v2.DataService/ExportRecording"
 	DataService_AcknowledgeRecordingExport_FullMethodName = "/wendy.agent.services.v2.DataService/AcknowledgeRecordingExport"
@@ -45,10 +46,11 @@ const (
 //
 // CONTROL PLANE ONLY. This service is registered on the agent's device mutual
 // Transport Layer Security server, alongside the provisioning, WiFi, container
-// and update services, and is never exposed to applications. An app reaches the
-// agent solely through a per-app private unix socket, which serves the
-// app-facing wendy.agent.apps.v1 package and nothing else; no entitlement makes
-// any method below callable by an application.
+// and update services. It is not an application programming interface. An app
+// reaches the agent through a per-app private unix socket, which serves the
+// app-facing wendy.agent.apps.v1 package and nothing else. The one exception is
+// the local admin socket that the `admin` entitlement mounts: it carries full
+// agent authority, this service included.
 //
 // The four Campaign methods in particular are command-line-facing: they are
 // what `wendy data campaign deploy`, `wendy data campaign list`, `wendy data
@@ -56,6 +58,14 @@ const (
 // authenticated channel. They are operator commands for managing capture
 // campaigns on a device, not an application programming interface for apps.
 type DataServiceClient interface {
+	// Streams accepted application data as it arrives. This first API deliberately
+	// has no history, resume cursor, or gap protocol.
+	//
+	// Delivery is best effort. The newest record wins per stream: a slow
+	// subscriber skips records and never slows a publisher or another stream.
+	// A subscriber sees only records accepted after it subscribed. Response
+	// headers are sent once the subscription is in place.
+	StreamData(ctx context.Context, in *StreamDataRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[DataRecord], error)
 	// Bounded, durable event inbox. An empty cursor starts at the current tail;
 	// replay=true reads retained history. Expired cursors report a gap explicitly.
 	Events(ctx context.Context, in *DataEventsRequest, opts ...grpc.CallOption) (*DataEventsResponse, error)
@@ -85,6 +95,25 @@ func NewDataServiceClient(cc grpc.ClientConnInterface) DataServiceClient {
 	return &dataServiceClient{cc}
 }
 
+func (c *dataServiceClient) StreamData(ctx context.Context, in *StreamDataRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[DataRecord], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &DataService_ServiceDesc.Streams[0], DataService_StreamData_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[StreamDataRequest, DataRecord]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type DataService_StreamDataClient = grpc.ServerStreamingClient[DataRecord]
+
 func (c *dataServiceClient) Events(ctx context.Context, in *DataEventsRequest, opts ...grpc.CallOption) (*DataEventsResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(DataEventsResponse)
@@ -97,7 +126,7 @@ func (c *dataServiceClient) Events(ctx context.Context, in *DataEventsRequest, o
 
 func (c *dataServiceClient) ExportRecording(ctx context.Context, in *DataRecordingExportRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[recordingpb.StoredRecord], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &DataService_ServiceDesc.Streams[0], DataService_ExportRecording_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &DataService_ServiceDesc.Streams[1], DataService_ExportRecording_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -186,7 +215,7 @@ func (c *dataServiceClient) Inspect(ctx context.Context, in *DataInspectRequest,
 
 func (c *dataServiceClient) Download(ctx context.Context, in *DataDownloadRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[DataDownloadChunk], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &DataService_ServiceDesc.Streams[1], DataService_Download_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &DataService_ServiceDesc.Streams[2], DataService_Download_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -252,10 +281,11 @@ func (c *dataServiceClient) CampaignTrigger(ctx context.Context, in *DataCampaig
 //
 // CONTROL PLANE ONLY. This service is registered on the agent's device mutual
 // Transport Layer Security server, alongside the provisioning, WiFi, container
-// and update services, and is never exposed to applications. An app reaches the
-// agent solely through a per-app private unix socket, which serves the
-// app-facing wendy.agent.apps.v1 package and nothing else; no entitlement makes
-// any method below callable by an application.
+// and update services. It is not an application programming interface. An app
+// reaches the agent through a per-app private unix socket, which serves the
+// app-facing wendy.agent.apps.v1 package and nothing else. The one exception is
+// the local admin socket that the `admin` entitlement mounts: it carries full
+// agent authority, this service included.
 //
 // The four Campaign methods in particular are command-line-facing: they are
 // what `wendy data campaign deploy`, `wendy data campaign list`, `wendy data
@@ -263,6 +293,14 @@ func (c *dataServiceClient) CampaignTrigger(ctx context.Context, in *DataCampaig
 // authenticated channel. They are operator commands for managing capture
 // campaigns on a device, not an application programming interface for apps.
 type DataServiceServer interface {
+	// Streams accepted application data as it arrives. This first API deliberately
+	// has no history, resume cursor, or gap protocol.
+	//
+	// Delivery is best effort. The newest record wins per stream: a slow
+	// subscriber skips records and never slows a publisher or another stream.
+	// A subscriber sees only records accepted after it subscribed. Response
+	// headers are sent once the subscription is in place.
+	StreamData(*StreamDataRequest, grpc.ServerStreamingServer[DataRecord]) error
 	// Bounded, durable event inbox. An empty cursor starts at the current tail;
 	// replay=true reads retained history. Expired cursors report a gap explicitly.
 	Events(context.Context, *DataEventsRequest) (*DataEventsResponse, error)
@@ -292,6 +330,9 @@ type DataServiceServer interface {
 // pointer dereference when methods are called.
 type UnimplementedDataServiceServer struct{}
 
+func (UnimplementedDataServiceServer) StreamData(*StreamDataRequest, grpc.ServerStreamingServer[DataRecord]) error {
+	return status.Error(codes.Unimplemented, "method StreamData not implemented")
+}
 func (UnimplementedDataServiceServer) Events(context.Context, *DataEventsRequest) (*DataEventsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Events not implemented")
 }
@@ -354,6 +395,17 @@ func RegisterDataServiceServer(s grpc.ServiceRegistrar, srv DataServiceServer) {
 	}
 	s.RegisterService(&DataService_ServiceDesc, srv)
 }
+
+func _DataService_StreamData_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(StreamDataRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(DataServiceServer).StreamData(m, &grpc.GenericServerStream[StreamDataRequest, DataRecord]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type DataService_StreamDataServer = grpc.ServerStreamingServer[DataRecord]
 
 func _DataService_Events_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(DataEventsRequest)
@@ -650,6 +702,11 @@ var DataService_ServiceDesc = grpc.ServiceDesc{
 		},
 	},
 	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "StreamData",
+			Handler:       _DataService_StreamData_Handler,
+			ServerStreams: true,
+		},
 		{
 			StreamName:    "ExportRecording",
 			Handler:       _DataService_ExportRecording_Handler,
