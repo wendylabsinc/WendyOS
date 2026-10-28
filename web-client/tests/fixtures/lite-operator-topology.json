@@ -1,0 +1,79 @@
+{
+  "announcements": [
+    {
+      "deviceId": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+      "originRouterId": "18446744073709551614",
+      "prefix": "fd45:b891:5680:cca:1cd7:f65e:b581:101b/128",
+      "principal": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/operator/Alice",
+      "revision": "18446744073709551615",
+      "trustState": "verified-at-snapshot"
+    },
+    {
+      "deviceId": "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+      "originRouterId": "9",
+      "prefix": "fd45:b891:5680:2a58:92f9:474c:30e0:a233/128",
+      "principal": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/operator/Alice",
+      "revision": "5",
+      "trustState": "verified-at-snapshot"
+    }
+  ],
+  "capturedAtUnixMs": "1800000000123",
+  "peers": [
+    {
+      "cost": 128,
+      "deviceId": "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+      "linkId": "18446744073709551615",
+      "meshAddress": "fd45:b891:567f:4eee:8eee:eeee:eeee:eeee",
+      "principal": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+      "transport": "infrastructure-wifi"
+    },
+    {
+      "cost": 8192,
+      "deviceId": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+      "linkId": "18446744073709551614",
+      "meshAddress": "fd45:b891:567f:4ddd:8ddd:dddd:dddd:dddd",
+      "principal": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+      "transport": "ble"
+    }
+  ],
+  "routes": [
+    {
+      "linkId": "18446744073709551615",
+      "metric": 128,
+      "nextHopAddress": "fd45:b891:567f:4eee:8eee:eeee:eeee:eeee",
+      "nextHopPrincipal": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+      "originAuthorized": true,
+      "originPrincipal": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/operator/Alice",
+      "originRouterId": "18446744073709551614",
+      "prefix": "fd45:b891:5680:cca:1cd7:f65e:b581:101b/128",
+      "signedRouteExpiresAtUnixMs": "1800000300123"
+    },
+    {
+      "linkId": "18446744073709551615",
+      "metric": 128,
+      "nextHopAddress": "fd45:b891:567f:4eee:8eee:eeee:eeee:eeee",
+      "nextHopPrincipal": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+      "originAuthorized": true,
+      "originPrincipal": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/operator/Alice",
+      "originRouterId": "9",
+      "prefix": "fd45:b891:5680:2a58:92f9:474c:30e0:a233/128",
+      "signedRouteExpiresAtUnixMs": "1800000300123"
+    },
+    {
+      "metric": 65535,
+      "originRouterId": "17",
+      "prefix": "fd45:b891:5680::99/128",
+      "unreachable": true
+    }
+  ],
+  "runtimeAvailable": true,
+  "selfDeviceId": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+  "selfMeshAddress": "fd45:b891:567f:4bbb:8bbb:bbbb:bbbb:bbbb",
+  "selfPrincipal": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+  "selfTenantId": "11111111-1111-4111-8111-111111111111",
+  "status": {
+    "detail": "Wendy Lite local observation.",
+    "runtimeAvailable": true,
+    "state": "mesh-active"
+  }
+}

@@ -22,7 +22,10 @@ import {
   elapsed,
   isStale,
   mergeMeshObservation,
+  mergeMeshInventory,
+  getMeshObservation,
   meshIdentity,
+  meshNodeFor,
   nodeState,
   routeState,
   type MeshDevice,
@@ -35,7 +38,7 @@ import {
 import styles from "./mesh-network.module.css";
 
 export type MeshDataSource = {
-  discover: () => Promise<{ devices: MeshDevice[]; warnings: string[] }>;
+  discover: () => Promise<{ devices: MeshDevice[]; warnings: string[]; retainPrevious?: boolean }>;
   read: (id: string) => Promise<MeshResult>;
 };
 
@@ -61,6 +64,7 @@ export default function MeshNetwork({
   const [selection, setSelection] = useState("");
   const [showRoutes, setShowRoutes] = useState(true);
   const pending = useRef<Promise<void>>(Promise.resolve());
+  const inventoryDevices = useRef<MeshDevice[]>([]);
   useEffect(() => {
     const clock = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(clock);
@@ -81,18 +85,22 @@ export default function MeshNetwork({
         try {
           const inventory = await source.discover();
           if (controller.signal.aborted) return;
-          setDevices(inventory.devices);
+          const reporters = mergeMeshInventory(inventoryDevices.current, inventory.devices, inventory.retainPrevious);
+          inventoryDevices.current = reporters;
+          setDevices(reporters);
           setWarnings(inventory.warnings);
           setLoaded(true);
+          const reporterKeys = new Map(reporters.map(device => [device.id, device.reporterKey || device.id]));
           await collectMeshSnapshots(
-            inventory.devices,
+            reporters,
             source.read,
             (id, result) => {
               const received = Date.now();
+              const key = reporterKeys.get(id) || id;
               setNow(received);
               setObservations((previous) => ({
                 ...previous,
-                [id]: mergeMeshObservation(previous[id], result, received),
+                [key]: mergeMeshObservation(previous[key] || previous[id], result, received),
               }));
             },
             controller.signal,
@@ -140,7 +148,7 @@ export default function MeshNetwork({
     (latest, observation) => Math.max(latest, observation.receivedAt || 0),
     0,
   );
-  const waiting = devices.filter((device) => !observations[device.id]).length;
+  const waiting = devices.filter((device) => !getMeshObservation(observations, device)).length;
   return (
     <section className={styles.network} aria-label="Local networks">
       <div className={styles.heading}>
@@ -148,7 +156,7 @@ export default function MeshNetwork({
           <span className={styles.eyebrow}>Connectivity</span>
           <h1>Networks</h1>
           <p>
-            Live peer observations and route announcements from your devices.
+            Live peer observations and route announcements from your routers and devices.
           </p>
         </div>
         <div className={styles.actions}>
@@ -189,7 +197,7 @@ export default function MeshNetwork({
         {paused
           ? "Updates paused"
           : busy
-            ? "Reading device snapshots"
+            ? "Reading reporter snapshots"
             : "Auto-refresh every 10 seconds"}
         <span className={styles.separator} />
         Last successful read {elapsed(received, now).toLowerCase()}
@@ -220,7 +228,7 @@ export default function MeshNetwork({
           <p>
             {!loaded && busy
               ? "Loading devices from your signed-in organization."
-              : "A network appears once a device reports its verified organization and device identity. Devices without one are listed below."}
+              : "A network appears once a reporter provides its verified tenant and routing identity. Other reporters are listed below."}
           </p>
           {loaded && !devices.length && (
             <p>No devices were found.</p>
@@ -260,7 +268,7 @@ export default function MeshNetwork({
           </div>
           <div className={styles.metrics}>
             <div>
-              <span>Devices in this tenant</span>
+              <span>Routers and devices</span>
               <strong>{group.nodes.length}</strong>
               <small>
                 {group.nodes.filter((node) => !node.inventory).length} known
@@ -338,7 +346,7 @@ export default function MeshNetwork({
             </div>
             <aside
               className={styles.details}
-              aria-label="Selected device details"
+              aria-label="Selected reporter details"
             >
               {selected ? (
                 <DeviceDetails
@@ -350,7 +358,7 @@ export default function MeshNetwork({
               ) : (
                 <div className={styles.selectionEmpty}>
                   <Network size={28} />
-                  <h2>Inspect a device</h2>
+                  <h2>Inspect a router or device</h2>
                   <p>
                     Select a node to see its direct peers, learned routes and
                     announcement expiry.
@@ -369,9 +377,9 @@ export default function MeshNetwork({
           <div className={styles.inventory}>
             <div className={styles.panelHeader}>
               <div>
-                <h2>Device observations</h2>
+                <h2>Router and device observations</h2>
                 <p>
-                  State comes from each device, not from its Cloud heartbeat.
+                  State comes from each reporter’s local snapshot.
                 </p>
               </div>
               <span className={styles.count}>{group.nodes.length}</span>
@@ -380,7 +388,7 @@ export default function MeshNetwork({
               <table>
                 <thead>
                   <tr>
-                    <th>Device</th>
+                    <th>Router or device</th>
                     <th>Local peer state</th>
                     <th>Direct peers</th>
                     <th>Last read</th>
@@ -405,7 +413,7 @@ export default function MeshNetwork({
                             <Cpu size={16} />
                             <span>
                               {node.name}
-                              <small>{node.deviceId}</small>
+                              <small>{node.role === "operator" ? "CLI · routing instance " : ""}{node.routingId}</small>
                             </span>
                           </button>
                         </td>
@@ -446,7 +454,7 @@ export default function MeshNetwork({
             <div>
               <h2>Identity not available</h2>
               <p>
-                These devices cannot be assigned to a tenant graph from the
+                These reporters cannot be assigned to a tenant graph from the
                 current evidence.
               </p>
             </div>
@@ -459,16 +467,16 @@ export default function MeshNetwork({
                 <span>
                   <strong>{device.name || device.id}</strong>
                   <small>
-                    {observations[device.id]?.result.error ||
-                      (observations[device.id]?.result.status === "unsupported"
+                    {getMeshObservation(observations, device)?.result.error ||
+                      (getMeshObservation(observations, device)?.result.status === "unsupported"
                         ? "This agent does not support topology snapshots."
-                        : observations[device.id]
+                        : getMeshObservation(observations, device)
                           ? "No matching canonical local net identity returned."
                           : "Waiting for a topology snapshot.")}
                   </small>
                 </span>
                 <span className={styles.state}>
-                  {observations[device.id]?.result.status || "Not observed"}
+                  {getMeshObservation(observations, device)?.result.status || "Not observed"}
                 </span>
               </div>
             ))}
@@ -521,14 +529,14 @@ function Topology({
           !route.local &&
           !route.unreachable &&
           route.originPrincipal &&
-          route.originPrincipal !== selected?.id,
+          meshNodeFor(group, route.originPrincipal, undefined, route.prefix)?.id !== selected?.id,
       )
     : [];
   return (
     <div className={styles.canvas}>
       {group.nodes.length > 24 && (
         <p className={styles.graphLimit}>
-          Showing 24 of {group.nodes.length} devices. Select any device in the
+          Showing 24 of {group.nodes.length} nodes. Select any node in the
           table below.
         </p>
       )}
@@ -592,7 +600,7 @@ function Topology({
         {learned.map((route, index) => {
           const from = points.get(selected!.id),
             to = points.get(
-              meshIdentity(route.originPrincipal)?.principal || "",
+              meshNodeFor(group, route.originPrincipal, undefined, route.prefix)?.id || "",
             );
           if (!from || !to) return null;
           const dx = to.x - from.x,
@@ -636,7 +644,7 @@ function Topology({
                 data-tone={state.tone}
                 aria-pressed={selected?.id === node.id}
                 onClick={() => onSelect(node.id)}
-                aria-label={`${node.name}, ${state.label}. Inspect device.`}
+                aria-label={`${node.name}, ${state.label}. Inspect reporter.`}
               >
                 <span className={styles.nodeTop}>
                   <Cpu size={14} />
@@ -669,16 +677,15 @@ function DeviceDetails({
   const captured = new Date(Number(topology?.capturedAtUnixMs));
   const routes = (topology?.routes || []).filter((route) => !route.local);
   const announcements = (topology?.announcements || []).filter(
-    (item) => item.principal === node.id,
+    (item) => item.principal === node.principal && (node.role === "device" || item.deviceId === node.routingId),
   );
-  const name = (principal?: string) =>
-    group.nodes.find((item) => item.id === principal)?.name ||
-    meshIdentity(principal)?.deviceId.slice(0, 8) ||
-    "Unknown";
+  const name = (principal?: string, routingId?: string, address?: string) =>
+    meshNodeFor(group, principal, routingId, address)?.name ||
+    meshIdentity(principal, routingId)?.routingId.slice(0, 8) || "Unknown";
   return (
     <>
       <div className={styles.detailHeader}>
-        <span className={styles.eyebrow}>Device details</span>
+        <span className={styles.eyebrow}>{node.role === "operator" ? "CLI router details" : "Device details"}</span>
         <h2>{node.name}</h2>
         <span className={`${styles.state} ${styles[state.tone]}`}>
           {state.label}
@@ -697,13 +704,17 @@ function DeviceDetails({
           </p>
         )}
         <dl>
-          <dt>Device identity</dt>
-          <dd>{node.deviceId}</dd>
+          <dt>Platform</dt>
+          <dd>{node.observation?.result.platform || node.inventory?.platform || node.inventory?.osType || "Not reported"}</dd>
+          <dt>Principal</dt>
+          <dd>{node.principal}</dd>
+          <dt>{node.role === "operator" ? "Routing instance" : "Device identity"}</dt>
+          <dd>{node.routingId}</dd>
           <dt>Net address</dt>
           <dd>{node.address || "Not reported"}</dd>
           <dt>Snapshot received</dt>
           <dd>{elapsed(node.observation?.receivedAt, now)}</dd>
-          <dt>Captured on device</dt>
+          <dt>Captured by reporter</dt>
           <dd>
             {captured.getTime() > 0
               ? captured.toLocaleTimeString()
@@ -715,7 +726,7 @@ function DeviceDetails({
         )}
         {topology?.truncated && (
           <p className={styles.detailWarning}>
-            The device truncated this snapshot. Some peers, routes or
+            This reporter returned a partial snapshot. Some peers, routes or
             announcements are omitted.
           </p>
         )}
@@ -723,7 +734,7 @@ function DeviceDetails({
           Direct peers <span>{topology?.peers?.length || 0}</span>
         </h3>
         {!topology ? (
-          <p className={styles.help}>No snapshot from this device.</p>
+          <p className={styles.help}>No snapshot from this reporter.</p>
         ) : !topology.peers?.length ? (
           <p className={styles.help}>No direct peers reported.</p>
         ) : (
@@ -732,13 +743,13 @@ function DeviceDetails({
               <button
                 key={`${peer.linkId}-${index}`}
                 disabled={
-                  !group.nodes.some((item) => item.id === peer.principal)
+                  !meshNodeFor(group, peer.principal, peer.deviceId, peer.meshAddress)
                 }
-                onClick={() => peer.principal && onSelect(peer.principal)}
+                onClick={() => { const target = meshNodeFor(group, peer.principal, peer.deviceId, peer.meshAddress); if (target) onSelect(target.id); }}
               >
                 <Wifi size={15} />
                 <span>
-                  {name(peer.principal)}
+                  {name(peer.principal, peer.deviceId, peer.meshAddress)}
                   <small>
                     {peer.transport || "Carrier not reported"} · cost{" "}
                     {peer.cost ?? "unknown"}
@@ -763,8 +774,8 @@ function DeviceDetails({
                 key={`${route.prefix}-${index}`}
                 route={route}
                 now={now}
-                destination={name(route.originPrincipal)}
-                nextHop={name(route.nextHopPrincipal)}
+                destination={name(route.originPrincipal, undefined, route.prefix)}
+                nextHop={name(route.nextHopPrincipal, undefined, route.nextHopAddress)}
               />
             ))}
           </div>
