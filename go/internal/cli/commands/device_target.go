@@ -12,21 +12,20 @@ import (
 )
 
 // deviceEnvVar selects a target device for every command run in one shell — or
-// one AI session, via the MCP server's env block — without touching the saved
-// default that every session shares. Precedence: --device > WENDY_DEVICE >
-// saved default.
+// one AI session, via the MCP server's env block. Precedence: --device >
+// WENDY_DEVICE.
 const deviceEnvVar = "WENDY_DEVICE"
 
 // noDeviceMessage is the error for a command that needs a device and has none.
 //
-// It must keep the exact prefix "no device specified; use --device flag or set
-// a default" verbatim: two enabled Swift E2E tests match on that substring —
+// It must keep the exact prefix "no device specified; use --device flag"
+// verbatim: two enabled Swift E2E tests match on that substring —
 // swift/WendyE2ETests/Tests/WendyE2ETests/WendyDeviceVersionTests.swift:59 and
 // swift/WendyE2ETests/Tests/WendyE2ETests/WendyDeviceInfoTests.swift:266-268 —
 // reached through the JSON-mode branches at helpers.go's resolveDeviceAddress,
 // connectToAgentInner and resolveTargetInner. Do not shorten or reword that
 // prefix; extend the message after it instead.
-const noDeviceMessage = "no device specified; use --device flag or set a default with 'wendy device set-default <device>', or set WENDY_DEVICE for this shell"
+const noDeviceMessage = "no device specified; use --device flag or set WENDY_DEVICE for this shell"
 
 // deviceFlagFromEnv is the value applyDeviceEnv copied from WENDY_DEVICE into
 // deviceFlag, or "" when --device was given or the variable is unset.
@@ -98,31 +97,14 @@ func resolveOptionsDevice(opts []resolveOption) string {
 	return cfg.device
 }
 
-// withoutDeviceOverride runs fn with --device and WENDY_DEVICE suspended, so a
-// connection made inside it resolves to the saved default. set-default uses it
-// to confirm and pin the device it just saved.
-func withoutDeviceOverride(fn func()) {
-	prevFlag, prevEnv := deviceFlag, deviceFlagFromEnv
-	deviceFlag, deviceFlagFromEnv = "", ""
-	defer func() { deviceFlag, deviceFlagFromEnv = prevFlag, prevEnv }()
-	fn()
-}
-
 // mcpStartupDevice picks the device `wendy mcp serve` connects to on startup,
 // with the same precedence as every other command: its own -d/--device, then
-// WENDY_DEVICE (set per AI session in the MCP client's env block), then the
-// saved default.
-func mcpStartupDevice(flag string, cfg *config.Config) string {
+// WENDY_DEVICE (set per AI session in the MCP client's env block).
+func mcpStartupDevice(flag string) string {
 	if flag != "" {
 		return flag
 	}
-	if env := envDevice(); env != "" {
-		return env
-	}
-	if cfg != nil {
-		return cfg.DefaultDevice
-	}
-	return ""
+	return envDevice()
 }
 
 // errInvalidDeviceName marks a device name the direct path cannot dial.
@@ -185,7 +167,6 @@ func numericDeviceMessage(device, host, selector string) string {
 	if selector != "" {
 		fmt.Fprintf(&b, "If %s is a Wendy Cloud asset ID, name it by its cloud selector:\n", host)
 		fmt.Fprintf(&b, "  wendy --device %s <command>\n", selector)
-		fmt.Fprintf(&b, "  wendy device set-default %s\n", selector)
 	} else {
 		fmt.Fprintf(&b, "If %s is a Wendy Cloud asset ID, name it by its cloud selector (log in with 'wendy cloud login' to see yours):\n", host)
 		fmt.Fprintf(&b, "  wendy --device cloud://<cloud-grpc-host:port>/org/<org-id>/asset/%s <command>\n", host)

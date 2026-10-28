@@ -15,7 +15,7 @@ Before asking the user for their board, firmware, OS, or agent version, inspect 
 wendy --json device info --device <target>
 ```
 
-Reuse the target from the failing command or conversation, or omit `--device` to use the configured default. If the target is unknown, use discovery below and select the unambiguous match to the user's context. Ask only for an unresolved target choice or relevant facts the inspection could not retrieve.
+Reuse the target from the failing command or conversation, or omit `--device` to use `WENDY_DEVICE` when it is set. If the target is unknown, use discovery below and select the unambiguous match to the user's context. Ask only for an unresolved target choice or relevant facts the inspection could not retrieve.
 
 ## Discover and select a device
 
@@ -31,15 +31,14 @@ to run `wendy discover` in a terminal and accept its USB-C setup prompt (it
 needs sudo). An empty scan can also mean a board without WendyOS; use
 `wendy-device-install` for that.
 
-Use explicit hostnames when possible:
+Use explicit hostnames when possible: pass `--device <hostname>` on each
+command, or set `WENDY_DEVICE` for the whole shell. Either avoids the
+interactive picker:
 
 ```bash
-wendy device set-default <hostname>
-wendy device get-default
-wendy device unset-default
+wendy --device <hostname> device info
+export WENDY_DEVICE=<hostname>
 ```
-
-Passing the hostname to `set-default` avoids the interactive picker. Change the default only when that is part of the user's task. For diagnostic commands, use `--device <target>` to select the device without changing the default.
 
 ## Inspect device state
 
@@ -110,7 +109,6 @@ the enabled set, so list every group you still need.
 
 - Inspect (core): `device_info` (versions, storage, battery) and
   `hardware_capabilities(category=...)`.
-- Default device (`setup`): `device_set_default(address=...)`.
 - WiFi (`setup`): `wifi_status`, `wifi_list`, `wifi_known_networks`,
   `wifi_connect(ssid=..., password=...)` and `wifi_disconnect`. Connecting drops
   the current network, so the session may lose the device. Forget and rank have

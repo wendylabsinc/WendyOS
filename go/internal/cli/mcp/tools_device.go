@@ -11,7 +11,6 @@ import (
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
-	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 )
 
@@ -51,9 +50,11 @@ func (s *mcpServer) registerDeviceTools(srv *server.MCPServer) {
 	srv.AddTool(mcpgo.NewTool("device_info", infoOpts...), s.handleDeviceInfo)
 
 	setDefaultOpts := []mcpgo.ToolOption{
-		mcpgo.WithDescription("Save an address as the default device in ~/.wendy/config.json, replacing the current default"),
-		mcpgo.WithString("address", mcpgo.Required(), mcpgo.Description("Device address to save as default, e.g. mydevice.local:50051")),
+		mcpgo.WithDescription("Removed: Wendy no longer saves a default device. Pass the device to device_connect or run instead."),
+		mcpgo.WithString("address", mcpgo.Required(), mcpgo.Description("Ignored; the tool always fails")),
 	}
+	// Kept only so Cloud relay catalogs that still list this tool stay
+	// pairable (see manifests/README.md). Retire it with the next catalog.
 	setDefaultOpts = append(setDefaultOpts, destructive()...)
 	setDefaultOpts = append(setDefaultOpts, idempotent()...)
 	setDefaultOpts = append(setDefaultOpts, localOnly()...)
@@ -80,14 +81,6 @@ func (s *mcpServer) handleDeviceList(ctx context.Context, req mcpgo.CallToolRequ
 	}()
 
 	var devices []map[string]any
-	if s.cfg.DefaultDevice != "" {
-		devices = append(devices, map[string]any{
-			"device":  s.cfg.DefaultDevice,
-			"address": s.cfg.DefaultDevice,
-			"type":    "default",
-			"source":  "config",
-		})
-	}
 
 	if scan {
 		found, err := s.discoverLANFn(ctx, 3*time.Second)
@@ -329,20 +322,6 @@ func (s *mcpServer) handleDeviceInfo(ctx context.Context, _ mcpgo.CallToolReques
 	return okResult(info), nil
 }
 
-func (s *mcpServer) handleDeviceSetDefault(_ context.Context, req mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
-	address := stringParam(req, "address")
-	if address == "" {
-		return errResult(errCodeInvalidArgument, "address is required"), nil
-	}
-	// Change only this field of the config as it is on disk now. Saving the
-	// startup snapshot would undo any login, pin or default another wendy
-	// process wrote since this server started.
-	if err := config.Update(func(cfg *config.Config) (bool, error) {
-		cfg.DefaultDevice = address
-		return true, nil
-	}); err != nil {
-		return errResultf(errCodeInternal, "saving config: %s", err.Error()), nil
-	}
-	s.cfg.DefaultDevice = address
-	return okText(fmt.Sprintf("default device set to %s", address)), nil
+func (s *mcpServer) handleDeviceSetDefault(_ context.Context, _ mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error) {
+	return errResult(errCodeUnsupported, "Wendy no longer saves a default device; pass the device to device_connect or run instead"), nil
 }

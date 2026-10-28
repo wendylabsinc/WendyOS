@@ -25,7 +25,7 @@ func runChildEnvironment(base []string, target commandTarget) []string {
 }
 
 // mcpDefaultAgentPort is the CLI's plaintext agent port; the CLI derives the
-// mTLS port from it, exactly as for the startup default device.
+// mTLS port from it, exactly as for the startup device.
 const mcpDefaultAgentPort = 50051
 
 // withDefaultAgentPort renders a bare host as host:port.

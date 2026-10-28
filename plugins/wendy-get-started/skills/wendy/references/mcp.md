@@ -52,12 +52,15 @@ its own permission policy.
 | Group | Tools | Use for |
 |---|---|---|
 | core | `wendy_status`, `wendy_tools`, `auth_login`, `device_list`, `device_connect`, `device_disconnect`, `device_info`, `hardware_capabilities`, `run`, `container_list`, `container_start`, `container_stop`, `container_delete`, `container_stats`, `container_exec`, `telemetry_logs` | Connect, deploy, control apps, read app logs, versions, battery and hardware |
-| setup | `project_validate`, `os_install_plan`, `os_list_drives`, `os_install_start`, `os_install_resume`, `os_install_status`, `os_install_verify`, `os_update`, `os_update_status`, `device_update_agent`, `device_set_default`, `cloud_enroll_device`, `provisioning_start`, `provisioning_status`, `wifi_list`, `wifi_status`, `wifi_known_networks`, `wifi_connect`, `wifi_disconnect` | Project checks, installs, agent and OS updates, saved default, Cloud enrollment, WiFi |
+| setup | `project_validate`, `os_install_plan`, `os_list_drives`, `os_install_start`, `os_install_resume`, `os_install_status`, `os_install_verify`, `os_update`, `os_update_status`, `device_update_agent`, `device_set_default`, `cloud_enroll_device`, `provisioning_start`, `provisioning_status`, `wifi_list`, `wifi_status`, `wifi_known_networks`, `wifi_connect`, `wifi_disconnect` | Project checks, installs, agent and OS updates, Cloud enrollment, WiFi |
 | simulator | `simulator_list`, `simulator_create`, `simulator_start`, `simulator_stop`, `simulator_delete` | Local VMs; `device_connect(device="vm:<name>")` also boots one |
 | hardware | `camera_list`, `camera_controls`, `camera_set_control`, `camera_snapshot`, `bluetooth_scan`, `bluetooth_connect`, `bluetooth_disconnect` | Cameras and Bluetooth |
 | robotics | `ros2_topics`, `ros2_topic_info`, `ros2_topic_sample`, `ros2_topic_hz`, `ros2_lidar_summary` | ROS 2 inspection; see `wendy-robot-deploy` |
 | observability | `app_inspect`, `device_os_logs`, `telemetry_metrics`, `telemetry_traces` | Service state and recorded exits, kernel log (dmesg), metrics, traces |
 | cloud | `cloud_discover`, `cloud_connect`, `cloud_ping`, `cloud_tunnel`, `cloud_tunnel_list`, `cloud_tunnel_close` | Cloud devices, reachability and port forwards |
+
+`device_set_default` remains only for compatibility and always fails: Wendy no
+longer saves a default device. Pass the device to `device_connect` or `run`.
 
 ## Resources, prompts and errors
 

@@ -68,7 +68,6 @@ func TestReportFailureForTourCancellation(t *testing.T) {
 		{"failure", errors.New("failed"), true, 1},
 		{"tour auth failure", config.ErrNotLoggedIn, true, 3},
 		{"interactive auth failure", config.ErrNotLoggedIn, false, 3},
-		{"default cleared", commands.ErrDefaultCleared, true, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			entrypoint := ""
@@ -393,7 +392,6 @@ func TestErrorClass_Mapping(t *testing.T) {
 	}{
 		{"nil", nil, ""},
 		{"user_cancelled", commands.ErrUserCancelled, "user_cancelled"},
-		{"default_cleared", commands.ErrDefaultCleared, "user_cancelled"},
 		{"user_cancelled_wrapped", fmt.Errorf("aborted: %w", commands.ErrUserCancelled), "user_cancelled"},
 		{"swift_picker_cancelled", fmt.Errorf("product: %w", swifttoolchain.ErrUserCancelled), "user_cancelled"},
 		{"tui_cancelled", tui.ErrCancelled, "user_cancelled"},
@@ -773,11 +771,11 @@ var refusedDial = status.Error(codes.Unavailable,
 // A hint appended after the gRPC error (fmt.Errorf("...: %w\n  hint")) used to
 // vanish when formatError replaced the transport text with fixed prose.
 func TestFormatError_KeepsHintAppendedAfterGRPCError(t *testing.T) {
-	err := fmt.Errorf("default device %q is set but could not be reached: %w\n  Confirm it with 'wendy device get-default'.",
+	err := fmt.Errorf("device %q could not be reached: %w\n  Check that it is powered on.",
 		"127.0.0.1:1", refusedDial)
-	want := `default device "127.0.0.1:1" is set but could not be reached: ` +
+	want := `device "127.0.0.1:1" could not be reached: ` +
 		"Could not connect to device. Is it powered on and connected to the network?\n" +
-		"  Confirm it with 'wendy device get-default'."
+		"  Check that it is powered on."
 	if got := formatError(err).Error(); got != want {
 		t.Errorf("formatError() = %q, want %q", got, want)
 	}
@@ -862,7 +860,7 @@ func TestErrorClass_DeviceDialFailures(t *testing.T) {
 		want string
 	}{
 		{dialedError{"10.255.255.1:50051", status.Error(codes.DeadlineExceeded, "context deadline exceeded while waiting for connections to become ready")}, "device_unreachable"},
-		{fmt.Errorf("default device: %w", dialedError{"x.local:50051", status.Error(codes.DeadlineExceeded, "context deadline exceeded")}), "device_unreachable"},
+		{fmt.Errorf("connecting: %w", dialedError{"x.local:50051", status.Error(codes.DeadlineExceeded, "context deadline exceeded")}), "device_unreachable"},
 		{dialedError{"127.0.0.1:1", refusedDial}, "device_unreachable"},
 		{dialedError{"nosuchhost.invalid:50051", status.Error(codes.Unavailable, "name resolver error: produced zero addresses")}, "device_not_resolved"},
 		{dialedError{"wendyos-zzz:50051", status.Error(codes.Unavailable, "name resolver error: produced zero addresses")}, "device_unreachable"},

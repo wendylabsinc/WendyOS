@@ -84,7 +84,7 @@ func TestConnectWithAutoTLS_UsesAgentSocketEnv(t *testing.T) {
 }
 
 // resolveTarget is the front door real commands use (e.g. `wendy device info`).
-// With no configured/default device — as inside a fresh container — it must
+// With no configured device — as inside a fresh container — it must
 // still use the socket instead of falling through to mDNS discovery.
 func TestResolveTarget_UsesAgentSocketEnv(t *testing.T) {
 	startUDSAgent(t)

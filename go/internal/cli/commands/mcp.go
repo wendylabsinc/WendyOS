@@ -98,7 +98,7 @@ func newMCPServer(deviceFlag string, toolGroups []string) (*wendymcp.Server, err
 	})
 	srv.SetLoginStarter(mcpLoginStarter)
 	srv.SetUSBSetupNotice(pendingUSBSetupNotice)
-	address := mcpStartupDevice(deviceFlag, cfg)
+	address := mcpStartupDevice(deviceFlag)
 	switch {
 	case os.Getenv("WENDY_AGENT_SOCKET") != "":
 		// Admin-entitled on-device container: connect over the local

@@ -97,7 +97,7 @@ the risk. See [Managing drivers](/docs/device/managing-drivers).
 | CLI↔agent mTLS (port 50052) | ✅ Shipped | — |
 | Post-quantum data-in-transit | ✅ Shipped | — |
 | Zero-trust cloud enrollment (PKI) | ✅ Shipped | — |
-| CLI device/org pinning on set-default | ✅ Shipped | — |
+| CLI device/org pinning on first connection | ✅ Shipped | — |
 | Container seccomp baseline | ✅ Shipped | — |
 | CAP_NET_ADMIN gated behind explicit host-admin entitlement | ✅ Shipped | — |
 | D-Bus proxy hard-fail (no silent unfiltered fallback) | ✅ Shipped | — |
@@ -162,7 +162,7 @@ Controls shipped in recent releases:
 - Default PID limit (4096) applied to every container regardless of manifest declarations
 - Hook command injection fix — hooks execute via `exec.Command`, not `sh -c`
 - Debug port (`debugpy`) bound to loopback `127.0.0.1:5678`, not `0.0.0.0`
-- CLI pins device organization and cloud host on `set-default`; subsequent connections verify the pin
+- CLI pins device organization and cloud host on the first connection to a device; subsequent connections verify the pin
 
 ## Stay Updated
 

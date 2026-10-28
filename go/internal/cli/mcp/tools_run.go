@@ -18,7 +18,7 @@ import (
 )
 
 // Explicit selectors override the session. Never let a child choose a different
-// default device, or lose the cloud organization and broker of a live session.
+// device, or lose the cloud organization and broker of a live session.
 func (s *mcpServer) runTarget(req mcpgo.CallToolRequest) (commandTarget, error) {
 	device, cloud := stringParam(req, "device"), stringParam(req, "device_name")
 	endpoint, broker := stringParam(req, "cloud_grpc"), stringParam(req, "broker_url")

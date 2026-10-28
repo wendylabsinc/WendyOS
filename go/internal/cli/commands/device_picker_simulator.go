@@ -8,7 +8,6 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/go/internal/cli/vm"
-	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 )
 
 // defaultSimulatorVMName is the VM provisioned for someone who never named one.
@@ -58,11 +57,6 @@ func newSimulatorPickerModel(ctx context.Context) simulatorPickerModel {
 		picker: tui.NewPickerWithTitleAndColumns("Select a simulator", simulatorPickerColumns()),
 	}
 	m.picker.RemoveHint = "remove"
-	m.picker.OnSetDefault = setPickerDefault
-	m.picker.OnUnsetDefault = unsetPickerDefault
-	if cfg, err := config.Load(); err == nil {
-		m.picker.DefaultKey = cfg.DefaultDevice
-	}
 	m.picker.OnStopItem = func(item tui.PickerItem) (string, bool) { return stopSimulatorRow(ctx, item) }
 	m.picker.OnRemoveItem = removeSimulatorRow
 	m.picker.RemoveConfirmation = removeSimulatorQuestion

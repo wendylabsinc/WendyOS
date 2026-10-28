@@ -9,20 +9,20 @@ import (
 )
 
 func TestImplicitDeviceLinesNamesTheDevice(t *testing.T) {
-	lines := implicitDeviceLines("thor.local", implicitDefaultDevice, false)
+	lines := implicitDeviceLines("thor.local", implicitEnvDevice, false)
 	if len(lines) != 1 {
 		t.Fatalf("got %d lines, want 1 without the hint: %q", len(lines), lines)
 	}
 	if !strings.Contains(lines[0], "thor.local") {
 		t.Errorf("line = %q, want it to name the device", lines[0])
 	}
-	if !strings.Contains(lines[0], "default device") {
-		t.Errorf("line = %q, want it to say the default was used", lines[0])
+	if !strings.Contains(lines[0], "WENDY_DEVICE") {
+		t.Errorf("line = %q, want it to say WENDY_DEVICE chose it", lines[0])
 	}
 }
 
-// The cloud path never consults the configured default, so calling its choice a
-// "default device" would tell the user something untrue.
+// Calling the cloud path's choice a "default device" would tell the user
+// something untrue.
 func TestImplicitDeviceLinesDoesNotCallSoleCloudDeviceADefault(t *testing.T) {
 	lines := implicitDeviceLines("thor.local", implicitSoleCloudDevice, false)
 	if strings.Contains(lines[0], "default") {
@@ -45,21 +45,18 @@ func TestImplicitDeviceHintForSoleCloudDevicePointsAtOfflineDevices(t *testing.T
 	if !strings.Contains(hint, "--device") || !strings.Contains(hint, "wendy cloud discover --all") {
 		t.Errorf("hint = %q, want --device and 'wendy cloud discover --all'", hint)
 	}
-	if strings.Contains(hint, "set-default") {
-		t.Errorf("hint = %q, must not suggest set-default: the cloud path never consults it", hint)
-	}
 }
 
 func TestImplicitDeviceLinesHintIsSeparateAndOptional(t *testing.T) {
-	with := implicitDeviceLines("thor.local", implicitDefaultDevice, true)
+	with := implicitDeviceLines("thor.local", implicitEnvDevice, true)
 	if len(with) != 2 {
 		t.Fatalf("got %d lines, want 2 with the hint: %q", len(with), with)
 	}
 	if !strings.Contains(with[1], "--device") {
 		t.Errorf("hint = %q, want it to mention the override flag", with[1])
 	}
-	if !strings.Contains(with[1], "wendy device set-default") {
-		t.Errorf("hint = %q, want it to mention how to change the default", with[1])
+	if !strings.Contains(with[1], "unset WENDY_DEVICE") {
+		t.Errorf("hint = %q, want it to mention how to stop using WENDY_DEVICE", with[1])
 	}
 }
 
@@ -67,7 +64,7 @@ func TestImplicitDeviceLinesHintIsSeparateAndOptional(t *testing.T) {
 // touched is the entire point, so only the explanation is rate-limited.
 func TestImplicitDeviceLinesAlwaysIncludesIdentityLine(t *testing.T) {
 	for _, withHint := range []bool{true, false} {
-		lines := implicitDeviceLines("thor.local", implicitDefaultDevice, withHint)
+		lines := implicitDeviceLines("thor.local", implicitEnvDevice, withHint)
 		if len(lines) == 0 || !strings.Contains(lines[0], "thor.local") {
 			t.Errorf("withHint=%v: identity line missing from %q", withHint, lines)
 		}
@@ -84,8 +81,8 @@ func TestNoteImplicitDeviceInJSONModeWritesOnePlainStderrLine(t *testing.T) {
 
 	jsonOutput = true
 	noticedImplicitDevice = false
-	noteImplicitDevice("thor.local", implicitDefaultDevice)
-	if got, want := out.String(), "Using default device thor.local.\n"; got != want {
+	noteImplicitDevice("thor.local", implicitEnvDevice)
+	if got, want := out.String(), "Using device thor.local from WENDY_DEVICE.\n"; got != want {
 		t.Errorf("JSON-mode notice = %q, want %q", got, want)
 	}
 	if !noticedImplicitDevice {
@@ -109,10 +106,10 @@ func TestNoteImplicitDeviceOnlyFiresOncePerInvocation(t *testing.T) {
 	jsonOutput = true // keep the test quiet; the guard is what is under test
 	swapNoticeOut(t, io.Discard)
 	noticedImplicitDevice = false
-	noteImplicitDevice("thor.local", implicitDefaultDevice)
+	noteImplicitDevice("thor.local", implicitEnvDevice)
 	noticedImplicitDevice = true
 	before := noticedImplicitDevice
-	noteImplicitDevice("other.local", implicitDefaultDevice)
+	noteImplicitDevice("other.local", implicitEnvDevice)
 	if noticedImplicitDevice != before {
 		t.Error("guard did not hold across repeated calls")
 	}
@@ -123,7 +120,7 @@ func TestNoteImplicitDeviceIgnoresEmptyName(t *testing.T) {
 	t.Cleanup(func() { noticedImplicitDevice = origNoticed })
 
 	noticedImplicitDevice = false
-	noteImplicitDevice("", implicitDefaultDevice)
+	noteImplicitDevice("", implicitEnvDevice)
 	if noticedImplicitDevice {
 		t.Error("announced a device with no name")
 	}
@@ -164,7 +161,7 @@ func TestImplicitDeviceLinesSayTheTargetCameFromWENDY_DEVICE(t *testing.T) {
 		t.Errorf("line = %q, want it to name the device and WENDY_DEVICE", lines[0])
 	}
 	if strings.Contains(lines[0], "default") {
-		t.Errorf("line = %q: a WENDY_DEVICE target is not the default device", lines[0])
+		t.Errorf("line = %q: a WENDY_DEVICE target must not be called a default", lines[0])
 	}
 	if !strings.Contains(lines[1], "--device") || !strings.Contains(lines[1], "unset WENDY_DEVICE") {
 		t.Errorf("hint = %q, want --device and 'unset WENDY_DEVICE'", lines[1])

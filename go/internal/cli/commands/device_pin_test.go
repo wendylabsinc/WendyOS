@@ -17,7 +17,6 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
-	"github.com/wendylabsinc/wendy/go/internal/shared/discovery"
 	"github.com/wendylabsinc/wendy/go/internal/shared/discoverycache"
 	"github.com/wendylabsinc/wendy/go/internal/shared/flock"
 	"github.com/wendylabsinc/wendy/go/internal/shared/models"
@@ -200,79 +199,6 @@ func TestEnforceDeviceIdentityAcceptsAssetlessCert(t *testing.T) {
 	}
 }
 
-// TestClearDevicePinForRepin backs the escape hatch both refusal messages point
-// at: `wendy device set-default <host>` names the device explicitly, which is
-// the user asserting they mean this one — so it drops the stale pin and lets
-// the connect that follows record a fresh one. Without this the advice is a
-// dead end, because that command's own connect hits the same refusal.
-func TestClearDevicePinForRepin(t *testing.T) {
-	readPins := writePinTestConfig(t, map[string]config.DevicePin{
-		"wendy-thor": {OrgID: 7, CloudGRPC: "grpc.a.sh:443", AssetID: "42"},
-		"wendy-orin": {OrgID: 7, CloudGRPC: "grpc.a.sh:443", AssetID: "9"},
-	})
-
-	clearDevicePinForRepin("wendy-thor.local")
-
-	pins := readPins()
-	if _, ok := pins["wendy-thor"]; ok {
-		t.Error("pin for the named device survived clearDevicePinForRepin")
-	}
-	if _, ok := pins["wendy-orin"]; !ok {
-		t.Error("clearDevicePinForRepin dropped an unrelated device's pin")
-	}
-}
-
-// TestSetDefaultClearsPinForHostPortDevice covers the escape hatch for the one
-// default shape that used to have none: `wendy device set-default
-// my-host.local:50051`. Enforcement keys that host under "my-host" (pinKeyForAddr
-// strips the port), so passing set-default's raw argument through to
-// clearDevicePinForRepin cleared a key nothing was ever filed under — the pin
-// survived, the connect that follows hit the refusal, and with the interactive
-// "trust it anyway?" prompt now gone there was no other way back.
-func TestSetDefaultClearsPinForHostPortDevice(t *testing.T) {
-	stubNonInteractive(t)
-	readPins := writePinTestConfig(t, map[string]config.DevicePin{
-		"wendy-thor": {OrgID: 7, CloudGRPC: "grpc.a.sh:443", AssetID: "42"},
-		"wendy-orin": {OrgID: 7, CloudGRPC: "grpc.a.sh:443", AssetID: "9"},
-	})
-
-	// set-default connects afterwards to record a fresh pin. Keep that off the
-	// network: nothing resolves, so the dial fails and set-default ignores it
-	// (an offline device is pinned on its next successful connection instead).
-	origLookup, origBrowse, origLadder := osLookupHostFn, lanBrowseFn, dialAgentLadderFn
-	osLookupHostFn = func(context.Context, string) ([]string, error) { return nil, errors.New("no resolver in test") }
-	lanBrowseFn = func(context.Context, time.Duration) ([]models.LANDevice, error) { return nil, nil }
-	dialAgentLadderFn = func(context.Context, dialTarget) (*grpcclient.AgentConnection, error, error) {
-		return nil, nil, errors.New("device offline in test")
-	}
-	// The failed connect also reaches the provisioned-mTLS hint's LAN browse
-	// and the USB-direct fallback, whose real probes outlive this test and
-	// land on later tests' fake dialers.
-	origDiscover, origUSB := discoverLANDevices, usbDirectCandidatesFn
-	discoverLANDevices = func(context.Context, time.Duration) ([]models.LANDevice, error) { return nil, nil }
-	usbDirectCandidatesFn = func() []discovery.USBDirectCandidate { return nil }
-	t.Cleanup(func() {
-		osLookupHostFn, lanBrowseFn, dialAgentLadderFn = origLookup, origBrowse, origLadder
-		discoverLANDevices, usbDirectCandidatesFn = origDiscover, origUSB
-	})
-
-	cmd := newDeviceSetDefaultCmd()
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	cmd.SetContext(ctx)
-	if err := cmd.RunE(cmd, []string{"wendy-thor.local:50051"}); err != nil {
-		t.Fatalf("set-default with an explicit port: %v", err)
-	}
-
-	pins := readPins()
-	if pin, ok := pins["wendy-thor"]; ok {
-		t.Errorf("pin %+v survived `set-default wendy-thor.local:50051`: the user named the device explicitly and still has no way past its refusal", pin)
-	}
-	if _, ok := pins["wendy-orin"]; !ok {
-		t.Error("set-default dropped an unrelated device's pin")
-	}
-}
-
 // TestEnforceDeviceIdentityHardFails covers the approved policy change: a
 // mismatch is refused identically in every mode, with no prompt.
 //
@@ -389,16 +315,15 @@ func assertNoPromptInIdentityPath(t *testing.T) {
 	}
 }
 
-// TestEnforceDeviceIdentityAppliesToNonDefault guards the scope widening: the
-// pin used to be checked only for the saved default device, so `--device
-// <host>` — just as spoofable — went unchecked.
+// TestEnforceDeviceIdentityAppliesToDeviceFlag checks that `--device <host>` is
+// held to its pin.
 //
-// It also pins down the correctness trap in that widening. The LKG stub asserts
+// It also pins down a correctness trap. The LKG stub asserts
 // the key the DIAL was constrained by, and the refusal text carries the key the
 // CHECK was made against; asserting both are "wendy-thor.local" is what proves
 // a host cannot be pinned under one key and verified under another, which would
 // disable enforcement while looking like it works.
-func TestEnforceDeviceIdentityAppliesToNonDefault(t *testing.T) {
+func TestEnforceDeviceIdentityAppliesToDeviceFlag(t *testing.T) {
 	stubNonInteractive(t)
 
 	origFlag := deviceFlag
@@ -408,12 +333,6 @@ func TestEnforceDeviceIdentityAppliesToNonDefault(t *testing.T) {
 	readPins := writePinTestConfig(t, map[string]config.DevicePin{
 		"wendy-thor": {OrgID: 9, CloudGRPC: "grpc.b.sh:443", AssetID: "42"},
 	})
-	// The whole point is that this device is NOT the default: with a default set
-	// the old code would have checked it anyway and the test would prove nothing.
-	if cfg, err := config.Load(); err != nil || cfg.DefaultDevice != "" {
-		t.Fatalf("precondition: no default device may be set (default=%q, err=%v)", cfg.DefaultDevice, err)
-	}
-
 	// Reach the device over the cache fast path so no name resolution or real
 	// dialling happens; the connection it hands back carries a certificate for
 	// org 7, while the pin above says org 9.
@@ -464,7 +383,7 @@ func TestEnforceDeviceIdentityAppliesToNonDefault(t *testing.T) {
 }
 
 // TestPickerPinKeyMatchesDeviceFlagKey is the fourth path's half of the same
-// agreement TestEnforceDeviceIdentityAppliesToNonDefault proves for --device:
+// agreement TestEnforceDeviceIdentityAppliesToDeviceFlag proves for --device:
 // picking a device from the TUI must file its pin exactly where naming it on
 // the command line looks for it.
 //
@@ -479,7 +398,7 @@ func TestPickerPinKeyMatchesDeviceFlagKey(t *testing.T) {
 	origFlag := deviceFlag
 	deviceFlag = "wendyos-agx-orin.local"
 	t.Cleanup(func() { deviceFlag = origFlag })
-	_, flagKey, _, err := resolveDeviceAddress()
+	_, flagKey, err := resolveDeviceAddress()
 	if err != nil {
 		t.Fatalf("resolveDeviceAddress: %v", err)
 	}
@@ -500,7 +419,7 @@ func TestPickerPinKeyMatchesDeviceFlagKey(t *testing.T) {
 // TestPickerEnforcesPinBeforeAgentUpdate is the picker path's ORDERING, which
 // is a separate question from whether the pin is checked at all.
 //
-// With no default device, `wendy run` goes straight to the picker. If something
+// With no --device, `wendy run` goes straight to the picker. If something
 // squats the pinned hostname and answers, every step taken between the connect
 // and the pin check is a step taken against a device the CLI is about to
 // reject — and one of those steps is the agent update check, which prompts
@@ -681,54 +600,6 @@ func TestPickerLadderRefusalDoesNotFallBackToBluetooth(t *testing.T) {
 			t.Fatalf("selection = %+v, want the row's Bluetooth half", sel)
 		}
 	})
-}
-
-// TestDefaultDeviceNameForPrefersPinKey covers what `wendy device set-default`
-// with no argument stores.
-//
-// selected.Agent.Host is the address the picker dialled, which on any LAN row
-// is an IP. Saving that made the default device a DHCP lease — and worse, it
-// keyed every later connection's pin on the IP while the picker had just pinned
-// the device under its HOSTNAME seconds earlier. pinCandidateKeys cannot map an
-// IP back to a hostname row, so that pin was never consulted again and
-// enforcement was silently off for the whole configuration.
-func TestDefaultDeviceNameForPrefersPinKey(t *testing.T) {
-	picked := &SelectedDevice{
-		Agent:  &grpcclient.AgentConnection{Host: "10.0.0.9"},
-		PinKey: "wendyos-agx-orin.local",
-	}
-
-	got, err := defaultDeviceNameFor(picked)
-	if err != nil {
-		t.Fatalf("defaultDeviceNameFor: %v", err)
-	}
-	if got != "wendyos-agx-orin.local" {
-		t.Fatalf("default device name = %q, want the pin key %q — an IP is a DHCP lease, not a device", got, picked.PinKey)
-	}
-
-	// The consequence, stated directly: the pin the picker just wrote has to be
-	// visible to every later connect keyed on the saved default.
-	cfg := &config.Config{}
-	cfg.SetDevicePin(picked.PinKey, 7, "grpc.a.sh:443", "42", "")
-	if _, ok := cfg.DevicePinFor(pinKeyForAddr(got)); !ok {
-		t.Fatalf("the pin recorded under %q is invisible to a default of %q: every later connect keys on a name no pin was filed under, and enforcement is off",
-			picked.PinKey, got)
-	}
-
-	// A selection with no pin key has nothing else to identify it; the address
-	// stays the fallback, exactly as before.
-	noKey := &SelectedDevice{Agent: &grpcclient.AgentConnection{Host: "10.0.0.9"}}
-	if got, err := defaultDeviceNameFor(noKey); err != nil || got != "10.0.0.9" {
-		t.Fatalf("keyless selection = (%q, %v), want the dialled host as the fallback", got, err)
-	}
-
-	ext := &SelectedDevice{External: &models.ExternalDevice{ProviderKey: "adb"}}
-	if got, err := defaultDeviceNameFor(ext); err != nil || got != "adb" {
-		t.Fatalf("external selection = (%q, %v), want its provider key", got, err)
-	}
-	if _, err := defaultDeviceNameFor(&SelectedDevice{}); err == nil {
-		t.Error("an empty selection must not name a default device")
-	}
 }
 
 // TestPickerRunsUpdateCheckOnceThePinHolds is the other half of the ordering

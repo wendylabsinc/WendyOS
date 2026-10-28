@@ -27,8 +27,8 @@ Doctor recognizes a project in the current directory, or you can select one:
 wendy doctor --project ./my-app --report
 ```
 
-It checks the target chosen by `--device`, then `WENDY_DEVICE`, then the saved
-default device. To check a particular target:
+It checks the target chosen by `--device`, then `WENDY_DEVICE`. To check a
+particular target:
 
 ```sh
 wendy doctor --device my-device.local

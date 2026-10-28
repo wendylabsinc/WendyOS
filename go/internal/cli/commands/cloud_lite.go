@@ -143,8 +143,8 @@ func cloudLiteSelectedDevice(auth *config.AuthConfig, asset *cloudpbv2.Asset, se
 			OSVersion:       asset.GetOsVersion(),
 			CPUArchitecture: asset.GetArchitecture(),
 		},
-		Provider:        provider,
-		DefaultSelector: selector,
+		Provider: provider,
+		Selector: selector,
 	}, nil
 }
 

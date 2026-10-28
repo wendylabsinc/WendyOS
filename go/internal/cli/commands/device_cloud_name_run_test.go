@@ -108,64 +108,56 @@ func TestRunCloudNameFailureDoesNotRetryThroughUnpinnedSession(t *testing.T) {
 }
 
 // A dial that fails without a DNS miss skips the Cloud name lookup and reaches
-// the final fallback. A pinned --device, and the default, must still be looked
-// up with the pin's session and identity there, not the current session.
+// the final fallback. A pinned --device must still be looked up with the pin's
+// session and identity there, not the current session.
 func TestRunFinalCloudFallbackUsesPinnedSession(t *testing.T) {
-	for _, explicit := range []bool{true, false} {
-		t.Run(map[bool]string{true: "explicit device", false: "default device"}[explicit], func(t *testing.T) {
-			restoreDeviceGlobals(t)
-			stubNonInteractive(t)
-			setPinCache(t)
-			t.Setenv("WENDY_AGENT_SOCKET", "")
-			t.Setenv(runNoCloudFallbackEnv, "")
-			const name = "ci-mesh-2"
-			pin := config.DevicePin{OrgID: 7, CloudGRPC: "grpc.a.sh:443", AssetID: "42"}
-			cfg := &config.Config{
-				CurrentContext: "current",
-				Auth: []config.AuthConfig{
-					{Name: "current", CloudGRPC: "grpc.b.sh:443", Certificates: []config.CertificateInfo{{OrganizationID: pin.OrgID}}},
-					{Name: "pinned", CloudGRPC: pin.CloudGRPC, Certificates: []config.CertificateInfo{{OrganizationID: pin.OrgID}}},
-				},
-				DevicePins: map[string]config.DevicePin{name: pin},
-			}
-			if explicit {
-				deviceFlag = name
-			} else {
-				cfg.DefaultDevice = name
-			}
-			setTempConfig(t, cfg)
+	restoreDeviceGlobals(t)
+	stubNonInteractive(t)
+	setPinCache(t)
+	t.Setenv("WENDY_AGENT_SOCKET", "")
+	t.Setenv(runNoCloudFallbackEnv, "")
+	const name = "ci-mesh-2"
+	pin := config.DevicePin{OrgID: 7, CloudGRPC: "grpc.a.sh:443", AssetID: "42"}
+	cfg := &config.Config{
+		CurrentContext: "current",
+		Auth: []config.AuthConfig{
+			{Name: "current", CloudGRPC: "grpc.b.sh:443", Certificates: []config.CertificateInfo{{OrganizationID: pin.OrgID}}},
+			{Name: "pinned", CloudGRPC: pin.CloudGRPC, Certificates: []config.CertificateInfo{{OrganizationID: pin.OrgID}}},
+		},
+		DevicePins: map[string]config.DevicePin{name: pin},
+	}
+	deviceFlag = name
+	setTempConfig(t, cfg)
 
-			oldLookup, oldBrowse, oldDiscover := osLookupHostFn, lanBrowseFn, discoverLANDevices
-			oldUSB, oldFind := usbDirectCandidatesFn, findDeviceByIDFn
-			oldCloud, oldFresh, oldDial := connectCloudLookupFn, ensureFreshCertificateFn, dialAgentLadderFn
-			t.Cleanup(func() {
-				osLookupHostFn, lanBrowseFn, discoverLANDevices = oldLookup, oldBrowse, oldDiscover
-				usbDirectCandidatesFn, findDeviceByIDFn = oldUSB, oldFind
-				connectCloudLookupFn, ensureFreshCertificateFn, dialAgentLadderFn = oldCloud, oldFresh, oldDial
-			})
-			timeout := errors.New("dial tcp 192.0.2.10:50052: i/o timeout")
-			osLookupHostFn = func(context.Context, string) ([]string, error) { return []string{"192.0.2.10"}, nil }
-			lanBrowseFn = func(context.Context, time.Duration) ([]models.LANDevice, error) { return nil, nil }
-			discoverLANDevices = lanBrowseFn
-			usbDirectCandidatesFn = func() []discovery.USBDirectCandidate { return nil }
-			findDeviceByIDFn = func(context.Context, string) *SelectedDevice { return nil }
-			dialAgentLadderFn = func(context.Context, dialTarget) (*grpcclient.AgentConnection, error, error) {
-				return nil, nil, timeout
-			}
-			ensureFreshCertificateFn = func(context.Context, *config.AuthConfig) error { return nil }
-			calls := 0
-			connectCloudLookupFn = func(_ context.Context, auth *config.AuthConfig, selector, _ string, expected *certs.WendyIdentity) (*grpcclient.AgentConnection, error) {
-				calls++
-				if auth.Name != "pinned" || selector != pin.AssetID || expected == nil || expected.EntityID != pin.AssetID || expected.OrgID != int32(pin.OrgID) {
-					t.Fatalf("Cloud lookup = session %q, selector %q, expected %+v; want the pinned session and asset", auth.Name, selector, expected)
-				}
-				return nil, errors.New("device is offline")
-			}
+	oldLookup, oldBrowse, oldDiscover := osLookupHostFn, lanBrowseFn, discoverLANDevices
+	oldUSB, oldFind := usbDirectCandidatesFn, findDeviceByIDFn
+	oldCloud, oldFresh, oldDial := connectCloudLookupFn, ensureFreshCertificateFn, dialAgentLadderFn
+	t.Cleanup(func() {
+		osLookupHostFn, lanBrowseFn, discoverLANDevices = oldLookup, oldBrowse, oldDiscover
+		usbDirectCandidatesFn, findDeviceByIDFn = oldUSB, oldFind
+		connectCloudLookupFn, ensureFreshCertificateFn, dialAgentLadderFn = oldCloud, oldFresh, oldDial
+	})
+	timeout := errors.New("dial tcp 192.0.2.10:50052: i/o timeout")
+	osLookupHostFn = func(context.Context, string) ([]string, error) { return []string{"192.0.2.10"}, nil }
+	lanBrowseFn = func(context.Context, time.Duration) ([]models.LANDevice, error) { return nil, nil }
+	discoverLANDevices = lanBrowseFn
+	usbDirectCandidatesFn = func() []discovery.USBDirectCandidate { return nil }
+	findDeviceByIDFn = func(context.Context, string) *SelectedDevice { return nil }
+	dialAgentLadderFn = func(context.Context, dialTarget) (*grpcclient.AgentConnection, error, error) {
+		return nil, nil, timeout
+	}
+	ensureFreshCertificateFn = func(context.Context, *config.AuthConfig) error { return nil }
+	calls := 0
+	connectCloudLookupFn = func(_ context.Context, auth *config.AuthConfig, selector, _ string, expected *certs.WendyIdentity) (*grpcclient.AgentConnection, error) {
+		calls++
+		if auth.Name != "pinned" || selector != pin.AssetID || expected == nil || expected.EntityID != pin.AssetID || expected.OrgID != int32(pin.OrgID) {
+			t.Fatalf("Cloud lookup = session %q, selector %q, expected %+v; want the pinned session and asset", auth.Name, selector, expected)
+		}
+		return nil, errors.New("device is offline")
+	}
 
-			got, err := resolveWithCloudFallback(context.Background(), "", SuppressProvisioningHint(), DisableSessionBroker(), NonInteractive(), ExcludeProviders("local"))
-			if got != nil || err == nil || calls != 1 {
-				t.Fatalf("connection = %v, %v, Cloud lookups = %d; want one pinned lookup", got, err, calls)
-			}
-		})
+	got, err := resolveWithCloudFallback(context.Background(), "", SuppressProvisioningHint(), DisableSessionBroker(), NonInteractive(), ExcludeProviders("local"))
+	if got != nil || err == nil || calls != 1 {
+		t.Fatalf("connection = %v, %v, Cloud lookups = %d; want one pinned lookup", got, err, calls)
 	}
 }

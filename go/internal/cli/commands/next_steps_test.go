@@ -9,11 +9,11 @@ import (
 )
 
 func TestWithNextStepsKeepsTextLayoutAndExposesSteps(t *testing.T) {
-	cause := errors.New("default device \"x\" is set but could not be reached: boom")
-	err := withNextSteps(cause, "Confirm it with 'wendy device get-default'.", "Or connect by IP.")
+	cause := errors.New("device \"x\" could not be reached: boom")
+	err := withNextSteps(cause, "Check that it is powered on.", "Or connect by IP.")
 
-	want := "default device \"x\" is set but could not be reached: boom\n" +
-		"  Confirm it with 'wendy device get-default'.\n" +
+	want := "device \"x\" could not be reached: boom\n" +
+		"  Check that it is powered on.\n" +
 		"  Or connect by IP."
 	if err.Error() != want {
 		t.Errorf("Error() = %q, want %q", err.Error(), want)
@@ -21,7 +21,7 @@ func TestWithNextStepsKeepsTextLayoutAndExposesSteps(t *testing.T) {
 	if !errors.Is(err, cause) {
 		t.Error("withNextSteps hid its cause from errors.Is")
 	}
-	wantSteps := []string{"Confirm it with 'wendy device get-default'.", "Or connect by IP."}
+	wantSteps := []string{"Check that it is powered on.", "Or connect by IP."}
 	if got := NextSteps(fmt.Errorf("outer: %w", err)); !reflect.DeepEqual(got, wantSteps) {
 		t.Errorf("NextSteps = %q, want %q", got, wantSteps)
 	}

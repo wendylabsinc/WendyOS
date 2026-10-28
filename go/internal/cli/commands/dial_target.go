@@ -20,8 +20,8 @@ import (
 // exactly what let a spoofed mDNS answer redirect a connection to another
 // same-CA host.
 type dialTarget struct {
-	// PinKey is the name the user asked for (--device value, saved default, or
-	// the picker's device name) — never the resolved IP, which changes on
+	// PinKey is the name the user asked for (--device value or the picker's
+	// device name) — never the resolved IP, which changes on
 	// ordinary DHCP churn and would train users to unpin reflexively. An empty
 	// PinKey disables pin enforcement for this dial.
 	PinKey string
@@ -201,7 +201,7 @@ func governingPin(pinKey string) (config.DevicePin, string, bool) {
 // always did (see typedVMBarePinKey).
 func pinKeyForAddr(addr string) string {
 	// SplitHostPort accepts non-numeric service names, so vm:dev would
-	// otherwise become just "vm" when set-default/unpin derives its key.
+	// otherwise become just "vm" when unpin derives its key.
 	if name, matched, err := simulatorName(addr); err == nil && matched {
 		return vmDeviceIDPrefix + name
 	}
@@ -283,22 +283,6 @@ func runningVMAgentPort(name string) (int, bool) {
 		}
 	}
 	return 0, false
-}
-
-// dialPinKeyForDevice is the pin key a dial to device — as typed for --device
-// or set-default — is checked under. It adds the default agent port and
-// re-aims a running VM's mTLS forward first, exactly as resolveDeviceAddress
-// does, because a running VM's forward is keyed by its port: `set-default
-// 127.0.0.1` dials 127.0.0.1:50051, which is checked under vm:<name> while a
-// VM forwards that port and under the bare 127.0.0.1 otherwise.
-func dialPinKeyForDevice(device string) string {
-	if _, matched, err := simulatorName(device); matched || err != nil {
-		return pinKeyForAddr(device)
-	}
-	if _, _, err := net.SplitHostPort(device); err != nil {
-		device = hostPort(device, defaultAgentPort)
-	}
-	return pinKeyForAddr(vmForwardDialAddr(device))
 }
 
 // typedVMBarePinKey is the key a connection judged under pinKey, and dialled

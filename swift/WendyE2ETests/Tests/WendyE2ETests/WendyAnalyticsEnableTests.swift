@@ -82,11 +82,11 @@ struct `'wendy analytics enable'` {
             try await cli.sh(
                 posix: """
                     mkdir -p "$HOME/.wendy"
-                    printf '%s\n' '{"defaultDevice":"keep-device","lastCLIUpdateCheck":"2026-07-20T12:00:00Z","availableCLIUpdate":"2026.07.20","completionPromptDismissed":true,"analytics":{"enabled":false}}' > "$HOME/.wendy/config.json"
+                    printf '%s\n' '{"defaultBuildHost":"keep-device","lastCLIUpdateCheck":"2026-07-20T12:00:00Z","availableCLIUpdate":"2026.07.20","completionPromptDismissed":true,"analytics":{"enabled":false}}' > "$HOME/.wendy/config.json"
                     """,
                 power: """
                     New-Item -ItemType Directory -Force -Path (Join-Path $env:HOME '.wendy') | Out-Null
-                    Set-Content -LiteralPath (Join-Path $env:HOME '.wendy/config.json') -Value '{"defaultDevice":"keep-device","lastCLIUpdateCheck":"2026-07-20T12:00:00Z","availableCLIUpdate":"2026.07.20","completionPromptDismissed":true,"analytics":{"enabled":false}}'
+                    Set-Content -LiteralPath (Join-Path $env:HOME '.wendy/config.json') -Value '{"defaultBuildHost":"keep-device","lastCLIUpdateCheck":"2026-07-20T12:00:00Z","availableCLIUpdate":"2026.07.20","completionPromptDismissed":true,"analytics":{"enabled":false}}'
                     """
             )
 
@@ -99,7 +99,7 @@ struct `'wendy analytics enable'` {
                     try JSONSerialization.jsonObject(with: Data(result.stdout.utf8))
                         as? [String: Any]
                 )
-                #expect(json["defaultDevice"] as? String == "keep-device")
+                #expect(json["defaultBuildHost"] as? String == "keep-device")
                 #expect(json["lastCLIUpdateCheck"] as? String == "2026-07-20T12:00:00Z")
                 #expect(json["availableCLIUpdate"] as? String == "2026.07.20")
                 #expect(json["completionPromptDismissed"] as? Bool == true)

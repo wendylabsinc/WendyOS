@@ -155,7 +155,7 @@ func TestRootCommand_DeviceFlagDocumentsWENDY_DEVICE(t *testing.T) {
 // command runs, and an explicit --device still wins.
 func TestRootAppliesWENDY_DEVICEBeforeCommandsRun(t *testing.T) {
 	restoreDeviceGlobals(t)
-	setTempConfig(t, &config.Config{DefaultDevice: "saved.local"})
+	setTempConfig(t, &config.Config{})
 	t.Setenv("WENDY_ANALYTICS", "false")
 	t.Setenv(deviceEnvVar, "env-device.local")
 
