@@ -27,7 +27,7 @@ func topologyFixture(t *testing.T) (meshid.Device, localmesh.NodeSnapshot, time.
 	return self, localmesh.NodeSnapshot{
 		Self: self, CapturedAt: now, Peers: 2,
 		Links:               []localmesh.PeerLink{{ID: 2, Device: peer, Cost: 4096, Transport: "ble"}, {ID: 1, Device: peer, Cost: 64, Transport: "ethernet"}},
-		Devices:             []localmesh.Manifest{{Version: localmesh.ManifestVersionRoute, Device: peer.UUID(), Revision: 42, Name: "peer", Issued: now.Add(-time.Second).UnixMilli(), Expires: now.Add(time.Minute).UnixMilli(), Route: &origin}},
+		Devices:             []localmesh.Manifest{{Version: localmesh.ManifestVersionRoute, Device: peer.UUID(), Revision: 42, Name: "peer", AgentPort: 50052, AgentTransport: localmesh.AgentMTLS, Platform: localmesh.PlatformWendyOS, Caps: []string{"sensors"}, Issued: now.Add(-time.Second).UnixMilli(), Expires: now.Add(time.Minute).UnixMilli(), Route: &origin}},
 		Routes:              []babel.Route{{Prefix: origin.Prefix, RouterID: origin.RouterID, Seqno: origin.Seqno, Metric: 128, Link: 1, NextHop: netip.MustParseAddr("fe80::2")}, {Prefix: netip.PrefixFrom(self.MeshAddress(), 128), Local: true}},
 		RouteAuthorizations: map[localmesh.RouteOrigin]bool{origin: true},
 	}, now
@@ -87,6 +87,10 @@ func TestLocalMeshTopologySeparatesLinksRoutesAndLeaseTrust(t *testing.T) {
 	}
 	if len(got.Routes) != 2 || len(got.Announcements) != 1 {
 		t.Fatalf("route/announcement projection: %v", got)
+	}
+	hint := got.Announcements[0]
+	if hint.AgentPort != 50052 || hint.AgentTransport != localmesh.AgentMTLS || hint.Platform != localmesh.PlatformWendyOS || len(hint.Caps) != 1 || hint.Caps[0] != "sensors" {
+		t.Fatalf("verified agent hints lost: %v", hint)
 	}
 	var remote *pb.LocalMeshRoute
 	for _, route := range got.Routes {
