@@ -235,6 +235,12 @@ func resolveAgentArtifact(osName, arch string, nightly bool) (payload []byte, ve
 	return bin, rel.TagName, "github", nil
 }
 
+// Seams over the agent release lookups for tests.
+var (
+	resolveAgentVersionFn  = resolveAgentVersion
+	resolveAgentArtifactFn = resolveAgentArtifact
+)
+
 // checkDarwinArtifactVersion guards against a macOS-specific version-skew
 // window: the mac build runs in a separate, slower job from the GCS manifest
 // publish, so "latest" can advance to a release whose macOS zip doesn't exist

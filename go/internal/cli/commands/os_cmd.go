@@ -460,7 +460,10 @@ The device uses its in-house wendyos-update engine to apply the update.`,
 				return err
 			}
 			fmt.Println("Device is back online.")
-			return reportOSUpdateOutcome(ctx, conn, preUpdateOSVersion, baseline)
+			if err := reportOSUpdateOutcome(ctx, conn, preUpdateOSVersion, baseline); err != nil {
+				return err
+			}
+			return restoreAgentAfterOSUpdate(ctx, conn, nightly)
 		},
 	}
 
@@ -1570,9 +1573,9 @@ func ensureAgentUpToDate(ctx context.Context, conn *grpcclient.AgentConnection, 
 
 	fmt.Printf("Agent version: %s — checking for updates...\n", agentVer)
 
-	latestVer, _, err := resolveAgentVersion(nightly)
+	latestVer, _, err := resolveAgentVersionFn(nightly)
 	if err != nil {
-		fmt.Printf("Could not check for agent updates: %v\n", err)
+		fmt.Printf("Could not check for agent updates (run '%s' later): %v\n", agentRerunCommand(nightly), err)
 		return conn, nil
 	}
 
@@ -1587,7 +1590,11 @@ func ensureAgentUpToDate(ctx context.Context, conn *grpcclient.AgentConnection, 
 	}
 
 	fmt.Printf("Updating agent: %s → %s\n", agentVer, latestVer)
-	if err := performAgentUpdate(ctx, conn, osName, arch, nightly); err != nil {
+	// The agent restarts as the binary lands and can drop the ack; an unconfirmed
+	// upload is checked against what the restarted agent reports.
+	err = performAgentUpdate(ctx, conn, osName, arch, nightly)
+	unconfirmed := errors.Is(err, errAgentUpdateUnconfirmed)
+	if err != nil && !unconfirmed {
 		return nil, fmt.Errorf("agent update failed: %w", err)
 	}
 	conn.Close()
@@ -1598,7 +1605,49 @@ func ensureAgentUpToDate(ctx context.Context, conn *grpcclient.AgentConnection, 
 		return nil, fmt.Errorf("agent did not come back after update: %w", err)
 	}
 	fmt.Println(" done.")
+	if unconfirmed {
+		if _, err := verifyAgentAfterUpdate(ctx, newConn.AgentService, "", latestVer, agentVerifyWaitOptions{}); err != nil {
+			newConn.Close()
+			return nil, err
+		}
+	}
 	return newConn, nil
+}
+
+// restoreAgentAfterOSUpdate re-runs the agent step on the newly booted slot,
+// whose agent was frozen at image build time; call it only after the commit.
+func restoreAgentAfterOSUpdate(ctx context.Context, prior *grpcclient.AgentConnection, nightly bool) (err error) {
+	defer func() {
+		// Not "re-run os update": the OS is already committed, and that can reinstall it.
+		if err != nil {
+			err = fmt.Errorf("the OS update committed, but the agent could not be brought current; run '%s' to finish: %w",
+				agentRerunCommand(nightly), err)
+		}
+	}()
+
+	conn, err := dialOSUpdateAgent(ctx, prior)
+	if err != nil {
+		return fmt.Errorf("reconnecting after the OS update: %w", err)
+	}
+	defer func() { conn.Close() }()
+
+	versionResp, err := conn.AgentService.GetAgentVersion(ctx, &agentpb.GetAgentVersionRequest{})
+	if err != nil {
+		return fmt.Errorf("querying the agent after the OS update: %w", err)
+	}
+	next, err := ensureAgentUpToDate(ctx, conn, versionResp, nightly)
+	if next != nil {
+		conn = next
+	}
+	return err
+}
+
+// agentRerunCommand is the command that brings the agent to its channel.
+func agentRerunCommand(nightly bool) string {
+	if nightly {
+		return "wendy device update --nightly"
+	}
+	return "wendy device update"
 }
 
 // Seams over linklocal for tests.
