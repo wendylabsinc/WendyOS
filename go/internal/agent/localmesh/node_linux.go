@@ -164,7 +164,7 @@ func NewNode(parent context.Context, dir string, credentials *Credentials, name 
 	// Neighbor authentication admits a link, not its routing claims. Every
 	// finite remote route needs the origin's current signed address/ID/sequence
 	// binding. step snapshots that policy before entering the Babel engine.
-	config := babel.Config{RouterID: babel.RouterID(state.RouterID), HelloInterval: time.Second, UpdateInterval: 16 * time.Second, AcceptRoute: func(_ babel.RouterID, prefix netip.Prefix) bool {
+	config := babel.Config{RouterID: babel.RouterID(state.RouterID), HelloInterval: time.Second, UpdateInterval: 16 * time.Second, AdvertiseLocalRoute: n.advertiseLocalRoute, AcceptRoute: func(_ babel.RouterID, prefix netip.Prefix) bool {
 		return admittedPrefix(prefix)
 	}, AcceptRouteUpdate: func(origin babel.RouterID, prefix netip.Prefix, seqno uint16) bool {
 		return n.routeOrigins[RouteOrigin{Prefix: prefix, RouterID: origin, Seqno: seqno}]
@@ -928,6 +928,16 @@ func (n *Node) Apply(routes []babel.Route) error {
 	n.forwardRoutes = routes
 	return nil
 }
+
+// advertiseLocalRoute is called only by the node-owned Babel engine. A durable
+// checkpoint may advance inside the one-second manifest gate; only the latest
+// successfully published proof permits its matching local route onto the wire.
+func (n *Node) advertiseLocalRoute(id babel.RouterID, prefix netip.Prefix, seqno uint16) bool {
+	proof := n.advertisement.Route
+	return proof != nil && proof.RouterID == id && proof.Prefix == prefix && proof.Seqno == seqno &&
+		!n.advertisement.Withdraw && n.advertisement.Expires > time.Now().UnixMilli()
+}
+
 func (n *Node) Persist(cp babel.Checkpoint) error {
 	next := n.state
 	next.Babel = &cp
@@ -936,9 +946,9 @@ func (n *Node) Persist(cp babel.Checkpoint) error {
 	}
 	n.state = next
 	// A sequence request can advance our origin during any routing event.
-	// Sign only after its checkpoint is durable. Idle changes queue their proof
-	// before routing output; a burst publishes its latest origin at the one-second
-	// gate. A peer that sees an update first retries through periodic Babel repair.
+	// Sign only after its checkpoint is durable. Babel retains a bounded trigger
+	// while the one-second gate coalesces changes, then exports the current local
+	// sequence promptly after its matching signed proof has been queued.
 	if n.advertisement.Route == nil || n.advertisement.Route.Seqno != cp.Seqno {
 		return n.publish()
 	}
