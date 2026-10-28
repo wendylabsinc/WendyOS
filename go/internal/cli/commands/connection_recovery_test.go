@@ -494,8 +494,12 @@ func TestPickedDeviceGetsClockRecovery(t *testing.T) {
 		wantBroadcast int
 	}{
 		{"clock rejection is recovered", rejected, 1},
+		// A pinned device that rejected our certificate at any candidate
+		// ends in the pinned refusal; that is the clock case too.
+		{"pinned certificate rejection is recovered", &noAuthenticatedEndpointError{msg: "pinned, rejected", certSeen: true}, 1},
 		// A refusal is never retried with a clock change, or handed to BLE.
 		{"identity refusal is not", errDeviceIdentityRefused, 0},
+		{"pinned device that never answered is not", &noAuthenticatedEndpointError{msg: "pinned, silent"}, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			clockSkewSyncAttempted = false

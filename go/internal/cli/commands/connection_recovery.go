@@ -206,6 +206,13 @@ func clockSkewRetryBudget() time.Duration {
 var clockSkewSyncAttempted bool
 
 func isClockSkewSuspectError(err error) bool {
+	// A pinned device whose candidate walk ended without a connection reports
+	// the pinned refusal, which carries no TLS error text. If any address
+	// rejected our certificate, that rejection is the same clock signal.
+	var unauthenticated *noAuthenticatedEndpointError
+	if errors.As(err, &unauthenticated) && unauthenticated.certSeen {
+		return true
+	}
 	// Keep the existing bounded recovery attempt for a dial-ladder rejection,
 	// even when its final port attempt obscures the original TLS alert.
 	return errors.Is(err, errTLSHandshakeRejected) || isTLSCertificateError(err)
