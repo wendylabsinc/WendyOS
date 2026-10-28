@@ -35,6 +35,7 @@ func TestOperatorAuxiliaryRegistryTLSUsesSelectedTargetAndSurvivesSetupCancel(t 
 	operator, operatorKey := liteManagementCertificate(t, root, rootKey, "operator", "spiffe://wendy.sh/tenant/"+target.Tenant().String()+"/operator/alice", false)
 	device, deviceKey := liteManagementCertificate(t, root, rootKey, "registry device", target.Principal(), false)
 	r.certificate = config.CertificateInfo{PemCertificate: string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: operator.Raw}))}
+	fixtureLocalOperatorReporter(t, r, mutate, 0)
 	pool := x509.NewCertPool()
 	pool.AddCert(root)
 	listener, err := net.Listen("tcp", "127.0.0.1:0")

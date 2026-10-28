@@ -27,7 +27,7 @@ func (r *operatorTargets) auxiliaryAddress(ctx context.Context, info OperatorTar
 	if err != nil {
 		return "", err
 	}
-	_, adjacent, err := r.adjacentPeer()
+	adjacent, err := r.reporter()
 	if err != nil {
 		return "", err
 	}

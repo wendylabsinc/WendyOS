@@ -29,6 +29,11 @@ import (
 	"google.golang.org/grpc/metadata"
 )
 
+// encoding/json can expand one valid URI byte (for example &) to six bytes.
+const operatorJSONPrincipalBytes = 6 * meshoperator.MaxPrincipalBytes
+const operatorRecipeBytes = operatorJSONPrincipalBytes + 4096
+const operatorStateBytes = 4*operatorJSONPrincipalBytes + 4096
+
 // OperatorSpec is a non-secret recipe. Credentials remain in the selected
 // persistent profile. One context belongs to an exact operator principal and
 // that profile's persisted endpoint instance, independently of its first hop.
@@ -293,11 +298,11 @@ func readOperatorRecipe(path string) (OperatorSpec, error) {
 		return recipe, err
 	}
 	defer file.Close()
-	data, err := io.ReadAll(io.LimitReader(file, 4097))
+	data, err := io.ReadAll(io.LimitReader(file, operatorRecipeBytes+1))
 	if err != nil {
 		return recipe, err
 	}
-	if len(data) > 4096 {
+	if len(data) > operatorRecipeBytes {
 		return recipe, errors.New("oversized operator recipe")
 	}
 	err = json.Unmarshal(data, &recipe)
@@ -518,12 +523,12 @@ func connectOperatorProxy(ctx context.Context, spec Spec, certificate *config.Ce
 	if err != nil {
 		return nil, err
 	}
-	data, readErr := io.ReadAll(io.LimitReader(file, 8193))
+	data, readErr := io.ReadAll(io.LimitReader(file, operatorStateBytes+1))
 	file.Close()
 	if readErr != nil {
 		return nil, readErr
 	}
-	if len(data) > 8192 {
+	if len(data) > operatorStateBytes {
 		return nil, errors.New("oversized operator broker state")
 	}
 	var state stateFile
@@ -549,7 +554,7 @@ func connectOperatorProxy(ctx context.Context, spec Spec, certificate *config.Ce
 	}
 	probe, cancel := context.WithTimeout(ctx, timeout)
 	request, reply := rawMessage{}, rawMessage{}
-	err = client.Conn.Invoke(probe, operatorContextMethod, &request, &reply, grpc.ForceCodec(rawCodec{}), grpc.MaxCallRecvMsgSize(1024))
+	err = client.Conn.Invoke(probe, operatorContextMethod, &request, &reply, grpc.ForceCodec(rawCodec{}), grpc.MaxCallRecvMsgSize(operatorContextBytes))
 	cancel()
 	var observation operatorContextStatus
 	if err == nil && (json.Unmarshal(reply, &observation) != nil || observation.Version != operatorIPCVersion || observation.Principal != spec.Operator.Principal) {

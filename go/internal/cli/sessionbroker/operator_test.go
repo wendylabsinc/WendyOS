@@ -39,6 +39,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/internal/shared/discovery"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
+	"github.com/wendylabsinc/wendy/go/internal/shared/meshoperator"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshoperatorlink"
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	"go.uber.org/zap"
@@ -82,6 +83,11 @@ func (s *operatorBrokerAgent) GetAgentVersion(ctx context.Context, _ *agentpb.Ge
 func TestOperatorBrokerNormalConcurrentInvocationsRenewAndIdle(t *testing.T) {
 	for _, algorithm := range []string{"P256", "MLDSA65", "P256-process"} {
 		t.Run(algorithm, func(t *testing.T) { operatorBrokerNormal(t, algorithm, false) })
+	}
+}
+func TestOperatorBrokerNormalLongOpaquePrincipal(t *testing.T) {
+	for _, mode := range []string{"P256-long", "P256-long-escaped"} {
+		t.Run(mode, func(t *testing.T) { operatorBrokerNormal(t, mode, false) })
 	}
 }
 func TestOperatorBrokerEnableAutomaticKeepsExistingOwner(t *testing.T) {
@@ -140,6 +146,14 @@ func operatorBrokerNormal(t *testing.T, algorithm string, disconnect bool) {
 	tenant, _ := meshid.ParseTenant("11111111-1111-4111-8111-111111111111")
 	router, _ := meshid.ParseDevice(tenant, "22222222-2222-4222-8222-222222222222")
 	principal := "spiffe://wendy.sh/tenant/" + tenant.String() + "/operator/alice%7Cbroker"
+	if strings.HasPrefix(algorithm, "P256-long") {
+		prefix := "spiffe://wendy.sh/tenant/" + tenant.String() + "/operator/"
+		subjectByte := "s"
+		if strings.HasSuffix(algorithm, "escaped") {
+			subjectByte = "&"
+		}
+		principal = prefix + strings.Repeat(subjectByte, meshoperator.MaxPrincipalBytes-len(prefix))
+	}
 	issue := func(serial int64, principal string, key crypto.Signer, usage x509.ExtKeyUsage) (tls.Certificate, string, string) {
 		uri, _ := url.Parse(principal)
 		leaf := &x509.Certificate{SerialNumber: big.NewInt(serial), Subject: pkix.Name{CommonName: "operator broker normal leaf"}, NotBefore: now.Add(-time.Minute), NotAfter: now.Add(time.Hour), URIs: []*url.URL{uri}, KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{usage}}

@@ -6,10 +6,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
+	"github.com/wendylabsinc/wendy/go/internal/shared/meshoperator"
 	pb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
@@ -65,6 +67,7 @@ func TestOperatorServicesNormalInheritedLeasePortRefreshAndRouteLoss(t *testing.
 
 func TestOperatorServicesNormal64DeviceObservationRemainsBounded(t *testing.T) {
 	r, _, _, mutate := liteManagementFixture(t)
+	fixtureLocalOperatorReporter(t, r, mutate, meshoperator.MaxPrincipalBytes)
 	r.serviceTopology = r.topology
 	mutate(func(view *pb.LocalMeshTopology) {
 		originalHint, originalRoute := view.Announcements[0], view.Routes[0]
@@ -79,7 +82,7 @@ func TestOperatorServicesNormal64DeviceObservationRemainsBounded(t *testing.T) {
 			hint.DeviceId = device.UUID().String()
 			hint.Prefix = device.MeshAddress().String() + "/128"
 			for service := range 16 {
-				hint.Services = append(hint.Services, &pb.LocalMeshService{Mesh: "lab", AppId: "sh.wendy.sensor", ServiceId: fmt.Sprintf("sensor-%d", service), Type: "_sensor._tcp", Instance: fmt.Sprintf("Sensor %d", service), Port: uint32(8080 + service), Txt: []string{"units=celsius"}})
+				hint.Services = append(hint.Services, &pb.LocalMeshService{Mesh: "lab", AppId: "sh.wendy.sensor", ServiceId: fmt.Sprintf("sensor-%d", service), Type: "_sensor._tcp", Instance: fmt.Sprintf("Sensor %d", service), Port: uint32(8080 + service), Txt: []string{"units=" + strings.Repeat("c", 220)}})
 			}
 			route := proto.Clone(originalRoute).(*pb.LocalMeshRoute)
 			route.Prefix = hint.Prefix

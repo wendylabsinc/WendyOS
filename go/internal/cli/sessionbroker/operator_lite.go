@@ -32,6 +32,9 @@ const (
 // observation. Destination TLS still authenticates the exact selected device.
 const operatorIPCVersion = 2
 
+// Both principal fields can contain a complete valid operator URI.
+const operatorContextBytes = 2*operatorJSONPrincipalBytes + 256
+
 type operatorContextStatus struct {
 	Version   int    `json:"version"`
 	Principal string `json:"principal"`

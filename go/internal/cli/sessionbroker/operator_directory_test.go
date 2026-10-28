@@ -5,12 +5,17 @@ package sessionbroker
 import (
 	"context"
 	"encoding/json"
+	"encoding/pem"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/wendylabsinc/wendy/go/internal/agent/localmesh"
+	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
+	"github.com/wendylabsinc/wendy/go/internal/shared/meshoperator"
 	pb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/proto"
@@ -18,6 +23,7 @@ import (
 
 func TestOperatorDirectoryBoundedSignedRowsAndPortRefresh(t *testing.T) {
 	r, _, _, mutate := liteManagementFixture(t)
+	fixtureLocalOperatorReporter(t, r, mutate, meshoperator.MaxPrincipalBytes)
 	initial := r.directorySnapshot(context.Background())
 	if initial.State != "ready" || len(initial.Devices) != 1 || initial.Devices[0].Platform != "Lite" || len(initial.Devices[0].Caps) != 2 {
 		t.Fatal(initial)
@@ -52,6 +58,9 @@ func TestOperatorDirectoryBoundedSignedRowsAndPortRefresh(t *testing.T) {
 		}
 	})
 	full := r.directorySnapshot(context.Background())
+	// The shared watcher adds cadence metadata to the same bounded snapshot.
+	full.PollIntervalMillis = operatorDirectoryPoll.Milliseconds()
+	full.HeartbeatMillis = operatorDirectoryHeartbeat.Milliseconds()
 	encoded, err := json.Marshal(full)
 	if err != nil || len(full.Devices) == 0 || len(full.Devices) > operatorDirectoryRows || !full.Truncated || len(encoded) > operatorDirectoryBytes {
 		t.Fatal("bounded snapshot", len(full.Devices), len(encoded), full.Truncated, err)
@@ -274,4 +283,35 @@ func TestOperatorDirectoryNormalHandoverChangesSourceAndKeepsTarget(t *testing.T
 		release()
 		t.Fatal("old target silently became replacement peer", selected)
 	}
+}
+
+// Exercise the production local-node shape rather than a first-hop observer.
+func fixtureLocalOperatorReporter(t *testing.T, r *operatorTargets, mutate func(func(*pb.LocalMeshTopology)), principalBytes int) {
+	t.Helper()
+	op, err := operatorPrincipal(r.certificate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	principal := op.Principal()
+	if principalBytes > len(principal) {
+		prefix := "spiffe://wendy.sh/tenant/" + op.Tenant().String() + "/operator/"
+		principal = prefix + strings.Repeat("s", principalBytes-len(prefix))
+		certificate, _ := liteManagementCertificate(t, nil, nil, "operator", principal, false)
+		r.certificate = config.CertificateInfo{PemCertificate: string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certificate.Raw}))}
+	}
+	self, err := meshid.PeerFromPrincipal(principal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	self, err = self.WithInstance(uuid.MustParse("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.localSnapshot = func() localmesh.NodeSnapshot { return localmesh.NodeSnapshot{Self: self} }
+	mutate(func(v *pb.LocalMeshTopology) {
+		v.SelfPrincipal = self.Principal()
+		v.SelfTenantId = self.Tenant().String()
+		v.SelfDeviceId = self.UUID().String()
+		v.SelfMeshAddress = self.MeshAddress().String()
+	})
 }

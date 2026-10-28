@@ -277,7 +277,9 @@ func TestOperatorLiteSlowReaderFlowControlHalfCloseAndClose(t *testing.T) {
 			return
 		}
 		defer raw.Close()
-		raw.(*net.TCPConn).SetReadBuffer(1024)
+		// Keep a small, bounded socket window without triggering Linux TCP
+		// tiny-window persist delays that also affect a plain TCP stream.
+		raw.(*net.TCPConn).SetReadBuffer(16 * 1024)
 		raw.SetDeadline(time.Now().Add(8 * time.Second))
 		<-begin
 		hash := make([]byte, len(payload))
@@ -300,7 +302,7 @@ func TestOperatorLiteSlowReaderFlowControlHalfCloseAndClose(t *testing.T) {
 	r.packetDial = func(ctx context.Context, _, _ string) (net.Conn, error) {
 		raw, err := (&net.Dialer{}).DialContext(ctx, "tcp", listener.Addr().String())
 		if err == nil {
-			raw.(*net.TCPConn).SetWriteBuffer(1024)
+			raw.(*net.TCPConn).SetWriteBuffer(16 * 1024)
 		}
 		return raw, err
 	}

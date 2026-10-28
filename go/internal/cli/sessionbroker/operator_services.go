@@ -106,7 +106,10 @@ func (r *operatorTargets) serviceSnapshot(ctx context.Context, query OperatorSer
 	}
 	out.State = "ready"
 	seen := make(map[string]bool)
-	bytes := 512
+	budget := out
+	budget.Truncated = true
+	envelope, _ := json.Marshal(budget)
+	bytes := len(envelope) // Include the actual source principal and wrapper.
 outer:
 	for _, hint := range view.Announcements {
 		device, err := meshid.DeviceFromPrincipal(hint.Principal)

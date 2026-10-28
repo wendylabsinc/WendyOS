@@ -64,7 +64,12 @@ func (r *operatorTargets) directorySnapshot(ctx context.Context) OperatorDirecto
 	}
 	out.State = "ready"
 	seen := make(map[string]bool)
-	bytes := 512 // wrapper, state and source; leave room for the closing envelope.
+	budget := out
+	budget.Truncated = true
+	budget.PollIntervalMillis = operatorDirectoryPoll.Milliseconds()
+	budget.HeartbeatMillis = operatorDirectoryHeartbeat.Milliseconds()
+	envelope, _ := json.Marshal(budget)
+	bytes := len(envelope) // Include the actual source principal and wrapper.
 	for _, hint := range view.Announcements {
 		if seen[hint.Principal] {
 			continue
