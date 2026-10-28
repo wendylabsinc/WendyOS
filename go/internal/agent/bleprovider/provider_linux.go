@@ -533,7 +533,7 @@ func (r *runtime) acceptLink(ctx context.Context, raw net.Conn) {
 	}
 	r.cfg.Logger.Info("BLE inbound TLS established", zap.Stringer("peer", peer.UUID()), zap.Duration("admission_wait", wait), zap.Duration("handshake_time", elapsed), zap.Bool("resumed", state.DidResume), zap.Int("peer_certificates", len(state.PeerCertificates)))
 	if r.hasCheaperLink(peer) && (r.confirmCheaperLink(ctx, nil, peer) || ctx.Err() != nil) {
-		r.cfg.Logger.Info("BLE closing inbound CoC on cheaper-link decision", zap.Stringer("peer", peer.UUID()))
+		r.cfg.Logger.Debug("BLE closing inbound CoC on cheaper-link decision", zap.Stringer("peer", peer.UUID()))
 		_ = secure.Close()
 		return
 	}
@@ -542,11 +542,9 @@ func (r *runtime) acceptLink(ctx context.Context, raw net.Conn) {
 	r.requestAdvertisementRefresh()
 	stopCheaperWatch := r.watchCheaperLink(ctx, peer, secure)
 	defer stopCheaperWatch()
-	attached := time.Now()
-	err = r.cfg.Node.AttachStream(localmesh.WithCarrier(ctx, "ble"), peer, secure, LinkCost)
-	r.cfg.Logger.Info("BLE link ended", zap.Stringer("peer", peer.UUID()),
-		zap.String("direction", "inbound"), zap.Duration("lifetime", time.Since(attached)),
-		zap.Bool("cancelled", ctx.Err() != nil), zap.Error(err))
+	if err = r.cfg.Node.AttachStream(localmesh.WithCarrier(ctx, "ble"), peer, secure, LinkCost); err != nil && ctx.Err() == nil {
+		r.cfg.Logger.Debug("BLE link ended", zap.Stringer("peer", peer.UUID()), zap.Error(err))
+	}
 }
 
 // Discovery hints can match for many UUIDv7 devices. Remember an authenticated
@@ -806,7 +804,7 @@ func (r *runtime) maybeRestartDiscovery(ctx context.Context, bus *dbus.Conn, ada
 
 func (r *runtime) dialLink(ctx context.Context, peer candidate) (skipped bool) {
 	if known, ok := r.knownCandidate(peer); ok && r.hasCheaperLink(known) {
-		r.cfg.Logger.Info("BLE closing outbound CoC on cheaper-link decision", zap.String("radio", peer.address))
+		r.cfg.Logger.Debug("BLE closing outbound CoC on cheaper-link decision", zap.String("radio", peer.address))
 		return
 	}
 	// Reserve the complete outgoing setup before opening a CoC. Its remote
@@ -944,11 +942,10 @@ func (r *runtime) dialLink(ctx context.Context, peer candidate) (skipped bool) {
 	}
 	<-r.dialSlot
 	slotHeld = false
-	attached := time.Now()
 	err = r.cfg.Node.AttachStream(localmesh.WithCarrier(ctx, "ble"), device, secure, LinkCost)
-	r.cfg.Logger.Info("BLE link ended", zap.String("radio", peer.address), zap.Stringer("peer", device.UUID()),
-		zap.String("direction", "outbound"), zap.Duration("lifetime", time.Since(attached)),
-		zap.Bool("cancelled", ctx.Err() != nil), zap.Error(err))
+	if err != nil && ctx.Err() == nil {
+		r.cfg.Logger.Debug("BLE link ended", zap.String("radio", peer.address), zap.Error(err))
+	}
 	return
 }
 

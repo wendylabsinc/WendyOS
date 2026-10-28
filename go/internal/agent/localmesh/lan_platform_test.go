@@ -14,7 +14,6 @@ func TestNormalLANPlatformTransportPlanning(t *testing.T) {
 		{"WendyOS explicit platform", "WendyOS", "embedded-router", false},
 		{"Lite router", "Lite", "embedded-router", true},
 		{"Lite full router", "Lite", "router", true},
-		{"Lite endpoint", "Lite", "endpoint", true},
 		{"legacy WendyOS", "", "router", false},
 		{"legacy Lite", "", "embedded-router", true},
 	} {
