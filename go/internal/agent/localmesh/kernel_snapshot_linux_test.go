@@ -21,13 +21,44 @@ func TestKernelSnapshotDuringAddressChanges(t *testing.T) {
 		if reads < 3 {
 			return baseState{address: true}, fmt.Errorf("inspect wendy net address: %w", netlink.ErrDumpInterrupted)
 		}
-		return baseState{link: live, up: true, rule: true, guard: true, operatorRule: true}, nil
+		return baseState{link: live, up: true, rule: true, guard: true}, nil
 	})
 	if err != nil || reads != 3 {
 		t.Fatalf("completed snapshot: reads=%d err=%v", reads, err)
 	}
-	if state.link != live || state.address || !state.up || !state.rule || !state.guard || !state.operatorRule {
+	if state.link != live || state.address || !state.up || !state.rule || !state.guard {
 		t.Fatalf("mixed partial and completed snapshots: %+v", state)
+	}
+}
+
+func TestKernelSnapshotCompletesWithinRetryBudget(t *testing.T) {
+	for _, completedAttempt := range []int{1, kernelSnapshotAttempts} {
+		t.Run(fmt.Sprintf("attempt_%d", completedAttempt), func(t *testing.T) {
+			reads := 0
+			want := baseState{address: true, up: true, rule: true, guard: true}
+			state, err := readConsistentBase(func() (baseState, error) {
+				reads++
+				if reads < completedAttempt {
+					return baseState{}, netlink.ErrDumpInterrupted
+				}
+				return want, nil
+			})
+			if err != nil || reads != completedAttempt || state != want {
+				t.Fatalf("completed snapshot: reads=%d state=%+v err=%v", reads, state, err)
+			}
+		})
+	}
+}
+
+func TestKernelSnapshotPreservesReadFailure(t *testing.T) {
+	want := errors.New("inspect wendy net policy rule: permission denied")
+	reads := 0
+	state, err := readConsistentBase(func() (baseState, error) {
+		reads++
+		return baseState{address: true}, want
+	})
+	if reads != 1 || err != want || state != (baseState{}) {
+		t.Fatalf("read failure: reads=%d state=%+v err=%v", reads, state, err)
 	}
 }
 
