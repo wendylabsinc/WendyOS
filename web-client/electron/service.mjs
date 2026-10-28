@@ -78,6 +78,7 @@ export class DesktopService {
     this.meshSnapshots = new Map();
     this.meshQueue = [];
     this.meshActive = new Set();
+    this.meshControllers = new Set();
     this.meshReporterKeys = new Map();
     this.monitorLogs = new DeviceLogs({ cli: this.cli, env });
     this.monitorGeneration = 0;
@@ -321,9 +322,10 @@ export class DesktopService {
       throw new Error("The local observation queue is full. Try again shortly.");
     const generation = this.monitorGeneration;
     const expiresAt = Date.now() + 160_000;
+    const controller = new AbortController();
     let entry;
     const request = new Promise((resolve, reject) => {
-      entry = { reporter, generation, resolve, reject, read: async () => {
+      entry = { reporter, generation, controller, resolve, reject, read: async () => {
         if (generation !== this.monitorGeneration) throw new Error("This local network view is no longer open.");
         const address = target === "cli://local" ? target : await this.monitorTarget(target);
         if (generation !== this.monitorGeneration) throw new Error("This local network view is no longer open.");
@@ -331,7 +333,7 @@ export class DesktopService {
         if (remaining <= 0) throw new Error("The topology observation timed out while waiting for admission.");
         const output = await this.run(this.cli,
           ["device", "wendy-net", "topology", ...(target === "cli://local" ? ["--local-cli"] : ["--device", address]), "--json", "--observation"],
-          { timeout: target === "cli://local" ? Math.min(remaining, 5_000) : remaining, maxBuffer: 2 * 1024 * 1024 });
+          { timeout: target === "cli://local" ? Math.min(remaining, 5_000) : remaining, maxBuffer: 2 * 1024 * 1024, signal: controller.signal });
         if (generation !== this.monitorGeneration) throw new Error("This local network view is no longer open.");
         const observation = JSON.parse(output);
         if (!observation || !["ok", "unsupported", "unavailable", "unauthorized", "error"].includes(observation.status) ||
@@ -365,8 +367,10 @@ export class DesktopService {
       this.meshQueue.splice(index, 1);
       clearTimeout(job.timer);
       this.meshActive.add(job.reporter);
+      this.meshControllers.add(job.controller);
       Promise.resolve().then(job.read).then(job.resolve, job.reject).finally(() => {
         this.meshActive.delete(job.reporter);
+        this.meshControllers.delete(job.controller);
         this.drainMeshQueue();
       });
     }
@@ -378,14 +382,14 @@ export class DesktopService {
       this.run(this.cli, ["cloud", "discover", "--all", "--json"], { timeout: 25_000 }).then(JSON.parse),
     ]);
     const devices = new Map();
-    this.meshReporterKeys.clear();
+    const reporterKeys = new Map();
     const warnings = [];
-    let retainPrevious = false;
+    let retainPrevious = sources.some(source => source.status === "rejected");
     const identities = new Map();
     const canonicalUUID = (id) => typeof id === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id) && id !== "00000000-0000-0000-0000-000000000000" ? id.toLowerCase() : undefined;
     const add = (target, name, deviceType, platform, key, deviceUUID, tenantUUID) => {
       target = deviceTarget(target);
-      if (key) this.meshReporterKeys.set(target, key);
+      if (key) reporterKeys.set(target, key);
       const uuid = canonicalUUID(deviceUUID);
       if (uuid) identities.set(target, { uuid, tenant: canonicalUUID(tenantUUID) });
       if (!devices.has(target)) devices.set(target, { id: target, name: name || target, deviceType, platform, reporterKey: key });
@@ -496,8 +500,12 @@ export class DesktopService {
     for (const [target, identity] of identities) {
       const choices = tenants.get(identity.uuid);
       const tenant = identity.tenant || (choices?.size === 1 ? [...choices][0] : undefined);
-      this.meshReporterKeys.set(target, `device:${tenant ? tenant + "/" : ""}${identity.uuid}`);
+      reporterKeys.set(target, `device:${tenant ? tenant + "/" : ""}${identity.uuid}`);
     }
+    // Publish the aliases together. A partial inventory cannot establish that
+    // a previous alias disappeared, including while a read is in flight.
+    this.meshReporterKeys = retainPrevious
+      ? new Map([...this.meshReporterKeys, ...reporterKeys]) : reporterKeys;
     const reporters = [], seen = new Set();
     for (const [target, device] of devices) {
       const key = this.meshReporterKeys.get(target);
@@ -518,6 +526,7 @@ export class DesktopService {
 
   close() {
     this.monitorGeneration++;
+    for (const controller of this.meshControllers) controller.abort();
     this.drainMeshQueue();
     this.monitorLogs.close();
   }

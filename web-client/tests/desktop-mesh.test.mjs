@@ -1,6 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { DesktopService } from "../electron/service.mjs";
 
 const cloudAsset = "00000000-0000-4000-8000-000000000001";
@@ -85,7 +88,26 @@ test("mesh discovery retains local results and exposes unavailable Cloud invento
   };
   const result = await service.meshDiscover();
   assert.equal(result.devices.length, 2);
+  assert.equal(result.retainPrevious, true);
   assert.deepEqual(result.warnings, ["Cloud discovery: Sign in first"]);
+});
+
+test("a partial discovery refresh retains previous reporter aliases atomically", async () => {
+  const service = fixture();
+  await discoverCLI4(service);
+  const physical = cli4Inventory.externalDevices[0].id;
+  const key = service.meshReporterKeys.get(physical);
+  let release;
+  const waiting = new Promise(resolve => { release = resolve; });
+  service.run = async (_file, args) => {
+    if (args[0] === "cloud") { await waiting; throw new Error("Cloud offline"); }
+    return "{}";
+  };
+  const pending = service.meshDiscover();
+  assert.equal(service.meshReporterKeys.get(physical), key);
+  release();
+  assert.equal((await pending).retainPrevious, true);
+  assert.equal(service.meshReporterKeys.get(physical), key);
 });
 
 test("topology calls use bounded read-only command and retain typed unsupported results", async () => {
@@ -171,6 +193,42 @@ test("closing a topology view discards queued observations before dialing",async
  const second=service.meshTopology({target:"two.local"});
  service.close();release();
  const results=await Promise.allSettled([first,second]);assert.equal(calls,1);assert.ok(results.every(r=>r.status==="rejected"));
+});
+
+test("closing the desktop service terminates an active topology child process", async (t) => {
+  const service = fixture();
+  const directory = await mkdtemp(join(tmpdir(), "wendy-topology-close-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const ready = join(directory, "ready");
+  const run = service.run.bind(service);
+  service.run = (_file, _args, options) => run(process.execPath, ["-e",
+    "require('node:fs').writeFileSync(process.argv[1], String(process.pid)); setInterval(() => {}, 1000)", ready], options);
+  const pending = service.meshTopology({ target: "one.local" });
+  // Register the rejection before close can terminate the child.
+  const rejected = assert.rejects(pending, /aborted|no longer open/);
+  let pid;
+  try {
+    const deadline = Date.now() + 3000;
+    while (!pid && Date.now() < deadline) {
+      try { pid = Number(await readFile(ready, "utf8")); } catch {}
+      if (!pid) await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    assert.ok(pid, "topology child did not start");
+    service.close();
+    await rejected;
+    // execFile rejects on abort before the operating system necessarily reaps
+    // its child. The process must leave promptly without its 160-second timer.
+    const stoppedBy = Date.now() + 1000;
+    while (Date.now() < stoppedBy) {
+      try { process.kill(pid, 0); } catch (error) { if (error.code === "ESRCH") break; throw error; }
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    assert.throws(() => process.kill(pid, 0), { code: "ESRCH" });
+    assert.equal(service.meshSnapshots.size, 0);
+  } finally {
+    service.close();
+    if (pid) { try { process.kill(pid); } catch {} }
+  }
 });
 
 
