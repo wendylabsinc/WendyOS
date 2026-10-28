@@ -3,6 +3,7 @@ package localmesh
 
 import (
 	"bytes"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -123,7 +124,7 @@ func OpenIdentityCacheWithCertificates(path string, limits CacheLimits, verify I
 			continue
 		}
 		// A key that is not a device principal cannot be addressed by any peer.
-		if _, err := meshid.DeviceFromPrincipal(principal); err != nil {
+		if _, err := meshid.PeerFromPrincipal(principal); err != nil {
 			continue
 		}
 		if entry.Used.After(now) {
@@ -262,6 +263,10 @@ func (c *IdentityCache) put(chain [][]byte, expected string, now time.Time) (str
 		// expires no earlier, so a replayed older bundle cannot displace it.
 		// An entry that is already expired or untrusted is simply replaced.
 		if previous, valid := c.valid(principal, old, now); valid && previous.NotAfter.After(id.NotAfter) {
+			if id.Device.IsOperator() {
+				c.rememberCertificates(chain, id.NotAfter, now)
+				return principal, nil
+			}
 			return "", errors.New("identity bundle is not a renewal")
 		}
 	}
@@ -425,4 +430,49 @@ func (c *IdentityCache) save() error {
 	}
 	c.pendingSave = false
 	return nil
+}
+
+// manifestIdentity preserves independent live primary keys for installations of
+// one operator. Exact immutable chain hashes use the existing bounded DER pool;
+// a principal's most recently selected leaf cannot relabel another owner's wire.
+func (c *IdentityCache) manifestIdentity(principal string, m Manifest, now time.Time) ([][]byte, Identity, bool) {
+	if m.Owner == nil {
+		return c.Get(principal, now)
+	}
+	if m.Owner.Principal != principal || len(m.Owner.Hashes) == 0 || len(m.Owner.Hashes) > 16 {
+		return nil, Identity{}, false
+	}
+	chain := make([][]byte, len(m.Owner.Hashes))
+	for i, hash := range m.Owner.Hashes {
+		if len(hash) != 32 {
+			return nil, Identity{}, false
+		}
+		chain[i] = c.parts.get(hex.EncodeToString(hash), now)
+		if len(chain[i]) == 0 {
+			return nil, Identity{}, false
+		}
+	}
+	identity, err := c.verify(chain, now)
+	if err != nil || !identity.Device.IsOperator() || identity.Device.Principal() != principal || !now.Before(identity.NotAfter) {
+		return nil, Identity{}, false
+	}
+	return chain, identity, true
+}
+
+func (c *IdentityCache) verifiedDescription(description CertificateChain, now time.Time) ([][]byte, Identity, bool) {
+	if len(description.Hashes) == 0 || len(description.Hashes) > 16 {
+		return nil, Identity{}, false
+	}
+	chain := make([][]byte, len(description.Hashes))
+	for i, hash := range description.Hashes {
+		chain[i] = c.parts.get(hash, now)
+		if len(chain[i]) == 0 {
+			return nil, Identity{}, false
+		}
+	}
+	identity, err := c.verify(chain, now)
+	if err != nil || identity.Device.Principal() != description.Principal || !now.Before(identity.NotAfter) {
+		return nil, Identity{}, false
+	}
+	return chain, identity, true
 }

@@ -21,7 +21,7 @@ func (s *Synchronizer) offerManifest(w SignedManifest, now time.Time) []ControlM
 	if err != nil {
 		return nil
 	}
-	directory, principal := s.directory, w.Principal
+	directory, principal := s.directory, w.ownerKey()
 	m := s.gossip.Offer(data, time.UnixMilli(manifest.Expires), now, func(at time.Time) []byte {
 		return directory.manifestPayload(principal, at)
 	})
@@ -72,8 +72,12 @@ func (s *Synchronizer) Receive(m ControlMessage, now time.Time, slots ...int) ([
 			if netwire.Unmarshal(payload, &w) != nil {
 				return nil, nil, errors.New("invalid cached manifest artifact")
 			}
-			if _, _, trusted := s.cache.Get(w.Principal, now); !trusted {
-				if _, waiting := s.pending[w.Principal]; waiting || len(s.pending) >= 128 {
+			_, _, trusted := s.cache.Get(w.Principal, now)
+			if owner, err := w.peer(); err == nil && owner.IsOperator() {
+				_, trusted = s.directory.CurrentRecordChain(w, now)
+			}
+			if !trusted {
+				if _, waiting := s.pending[w.ownerKey()]; waiting || len(s.pending) >= 128 {
 					return nil, nil, nil
 				}
 				return s.receive(ControlMessage{Kind: "manifest", Manifest: &w}, now)

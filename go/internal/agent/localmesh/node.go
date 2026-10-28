@@ -85,6 +85,9 @@ type nodeEvent struct {
 // authenticated QUIC connections and pass them to Attach; no NAN concepts appear
 // in routing or service synchronization. Parallel links have distinct LinkIDs.
 type Node struct {
+	// operatorAgent is configured through SetOperatorAgent under gate.
+	operatorAgent func(context.Context, net.Conn) error
+
 	controlHub       *ControlHub
 	Credentials      *Credentials
 	kernel           PacketNetwork
@@ -126,7 +129,7 @@ func NewNodeWithNetwork(parent context.Context, dir string, credentials *Credent
 }
 
 func newNode(parent context.Context, dir string, credentials *Credentials, name string, agentPort uint16, createNetwork func(meshid.Device) (PacketNetwork, error), appEndpoints ...[]AppEndpoint) (*Node, error) {
-	if credentials == nil || agentPort == 0 {
+	if credentials == nil || (agentPort == 0 && !credentials.Device.IsOperator()) {
 		return nil, errors.New("missing wendy net credentials or agent port")
 	}
 	// A node alone does not own an app listener. The host supplies the
@@ -166,6 +169,14 @@ func newNode(parent context.Context, dir string, credentials *Credentials, name 
 	n := &Node{controlHub: NewControlHub(cache.Certificates()), Credentials: credentials, kernel: kernel, cache: cache, directory: directory, bundleHints: newBundleHintCache(), store: store, state: state, peers: map[babel.LinkID]*nodePeer{}, events: make(chan nodeEvent, 256), ctx: ctx, cancel: cancel, started: now,
 		advertisement: Manifest{Version: ManifestVersionRoute, Device: credentials.Device.UUID(), Name: name, AgentPort: agentPort, AgentTransport: AgentMTLS, Platform: PlatformWendyOS, AppEndpoints: endpoints},
 		diagnostics:   carrierDiagnostics{enabled: os.Getenv("WENDY_NET_CARRIER_DIAGNOSTICS") == "1"}}
+	if credentials.Device.IsOperator() {
+		n.advertisement.Device = [16]byte{}
+		n.advertisement.Owner = &OperatorOwner{Principal: credentials.Device.Principal(), Instance: credentials.Device.UUID()}
+		n.advertisement.AgentPort = 0
+		n.advertisement.AgentTransport = ""
+		n.advertisement.Platform = ""
+		n.advertisement.AppEndpoints = []AppEndpoint{}
+	}
 	ok := false
 	defer func() {
 		if !ok {
@@ -421,7 +432,7 @@ func (n *Node) handle(e nodeEvent) error {
 		if len(n.peers) >= 64 {
 			return errors.New("wendy net link capacity reached")
 		}
-		if e.add.device.Principal() == n.Credentials.Device.Principal() {
+		if e.add.device == n.Credentials.Device {
 			return errors.New("self link")
 		}
 		n.nextLink++
@@ -443,7 +454,7 @@ func (n *Node) handle(e nodeEvent) error {
 			return err
 		}
 		now := time.Now()
-		n.queue(e.add, e.add.sync.bootstrapOwn(n.Credentials.Device.Principal(), now, cap(e.add.control)-len(e.add.control)))
+		n.queue(e.add, e.add.sync.bootstrapOwn(n.Credentials.Device.Key(), now, cap(e.add.control)-len(e.add.control)))
 		n.reconcilePeer(e.add, now)
 		return nil
 	}
@@ -553,7 +564,7 @@ func (n *Node) writePeerControl(p *nodePeer, m ControlMessage) error {
 		if err != nil {
 			return nil
 		}
-		device, err := meshid.DeviceFromCert(leaf)
+		device, err := meshid.PeerFromCert(leaf)
 		if err != nil {
 			return nil
 		}
@@ -571,7 +582,13 @@ func (n *Node) writePeerControl(p *nodePeer, m ControlMessage) error {
 			return nil
 		}
 		principal := m.Certificate.Chain.Principal
-		chain, _, ok := n.cache.Get(principal, time.Now())
+		var chain [][]byte
+		var ok bool
+		if identity, err := meshid.PeerFromPrincipal(principal); err == nil && identity.IsOperator() {
+			chain, _, ok = n.cache.verifiedDescription(*m.Certificate.Chain, time.Now())
+		} else {
+			chain, _, ok = n.cache.Get(principal, time.Now())
+		}
 		if !ok {
 			return nil
 		}
@@ -731,9 +748,11 @@ func (n *Node) AttachStream(ctx context.Context, peer meshid.Device, conn net.Co
 	if err := n.verifyPeerCertificates(peer, tlsConn.ConnectionState().PeerCertificates); err != nil {
 		return err
 	}
-	if err := OpenStreamHello(ctx, conn, n.Credentials.Device, peer); err != nil {
+	boundPeer, err := openStreamHelloPeer(ctx, conn, n.Credentials.Device, peer, StreamALPN)
+	if err != nil {
 		return err
 	}
+	peer = boundPeer
 	return n.attachLink(WithCarrier(ctx, carrierName(ctx, "tls-stream")), peer, cost, newStreamNodeLink(conn))
 }
 
@@ -749,7 +768,7 @@ func (n *Node) verifyPeerCertificates(peer meshid.Device, certs []*x509.Certific
 	if err != nil {
 		return err
 	}
-	if id.Device != peer {
+	if id.Device.Principal() != peer.Principal() {
 		return errors.New("wendy net peer certificate does not match expected device")
 	}
 	if n.cache != nil {

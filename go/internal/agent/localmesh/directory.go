@@ -36,8 +36,9 @@ const (
 // Manifest is a device's own signed advertisement. Version 4 authorizes one exact
 // route origin for its lease and includes the full principal in the signed input.
 type Manifest struct {
-	Version int       `json:"version" cbor:"v"`
-	Device  uuid.UUID `json:"device" cbor:"d"`
+	Version int            `json:"version" cbor:"v"`
+	Device  uuid.UUID      `json:"device" cbor:"d"`
+	Owner   *OperatorOwner `json:"owner,omitempty" cbor:"o,omitempty"`
 	// Revision is a persistently increasing origin counter, including restart.
 	Revision       uint64 `json:"revision" cbor:"R"`
 	Issued         int64  `json:"Issued" cbor:"i"`
@@ -89,8 +90,11 @@ func (m Manifest) validate(now time.Time) error {
 	}
 	if m.Revision == 0 ||
 		issued.After(now.Add(5*time.Second)) || !expires.After(issued) || expires.Sub(issued) > MaxLease ||
-		len(m.Name) > 255 || (!m.Withdraw && m.AgentPort == 0) {
+		len(m.Name) > 255 || (!m.Withdraw && m.AgentPort == 0 && m.Owner == nil) {
 		return errors.New("invalid or expired wendy net manifest")
+	}
+	if m.Owner != nil && (m.AgentPort != 0 || m.AgentTransport != "" || m.Platform != "" || len(m.Caps) != 0 || len(m.AppEndpoints) != 0 || len(m.Services) != 0) {
+		return errors.New("operator origin does not advertise a device agent")
 	}
 	if m.Route == nil {
 		return errors.New("manifest version does not match route authorization")
@@ -133,6 +137,13 @@ func signingInput(key crypto.PublicKey, principal string, body []byte) ([]byte, 
 func SignManifest(m Manifest, chain [][]byte, signer crypto.Signer, now time.Time) (SignedManifest, error) {
 	var out SignedManifest
 	m = cloneManifest(m)
+	if m.Owner != nil {
+		m.Owner.Hashes = make([][]byte, len(chain))
+		for i, der := range chain {
+			hash := sha256.Sum256(der)
+			m.Owner.Hashes[i] = append([]byte(nil), hash[:]...)
+		}
+	}
 	sort.Strings(m.Caps)
 	sort.Strings(m.Requires)
 	if err := m.validate(now); err != nil {
@@ -145,11 +156,12 @@ func SignManifest(m Manifest, chain [][]byte, signer crypto.Signer, now time.Tim
 	if err != nil {
 		return out, err
 	}
-	device, err := meshid.DeviceFromCert(leaf)
+	identity, err := meshid.PeerFromCert(leaf)
 	if err != nil {
 		return out, err
 	}
-	if device.UUID() != m.Device {
+	device, err := m.Peer(identity.Tenant())
+	if err != nil || device.Principal() != identity.Principal() {
 		return out, errors.New("manifest identity mismatch")
 	}
 	if err := m.validateRoute(device); err != nil {
@@ -219,10 +231,10 @@ func (d *Directory) SetPersistence(receipts []DirectoryReceipt, persist func([]D
 	}
 	history := map[string]DirectoryReceipt{}
 	for _, r := range receipts {
-		if len(r.Device) > maxPrincipalBytes || r.Revision == 0 || len(r.Hash) != 64 {
+		if len(r.Device) > maxPrincipalBytes+37 || r.Revision == 0 || len(r.Hash) != 64 {
 			return errors.New("invalid directory receipt")
 		}
-		device, err := meshid.DeviceFromPrincipal(r.Device)
+		device, err := meshid.PeerFromKey(r.Device)
 		if err != nil || device.Tenant() != d.tenant {
 			return errors.New("invalid directory receipt")
 		}
@@ -253,14 +265,14 @@ func (d *Directory) Accept(w SignedManifest, now time.Time) (bool, error) {
 	if len(w.Body) > MaxManifestBytes || len(w.Signature) > MaxManifestSignatureBytes || w.Principal == "" || len(w.Principal) > maxPrincipalBytes {
 		return false, errors.New("oversized manifest envelope")
 	}
-	device, err := meshid.DeviceFromPrincipal(w.Principal)
+	identity, err := meshid.PeerFromPrincipal(w.Principal)
 	if err != nil {
 		return false, err
 	}
-	if w.Principal != device.Principal() {
+	if w.Principal != identity.Principal() {
 		return false, errors.New("manifest principal is not canonical")
 	}
-	if device.Tenant() != d.tenant {
+	if identity.Tenant() != d.tenant {
 		return false, errors.New("manifest belongs to another tenant")
 	}
 	m, err := DecodeManifest(w.Body)
@@ -270,14 +282,16 @@ func (d *Directory) Accept(w SignedManifest, now time.Time) (bool, error) {
 	if err = m.validate(now); err != nil {
 		return false, err
 	}
-	chain, id, ok := d.cache.Get(w.Principal, now)
+	device, err := m.Peer(identity.Tenant())
+	if err != nil || device.Principal() != w.Principal {
+		return false, errors.New("manifest owner mismatch")
+	}
+	owner := device.Key()
+	chain, id, ok := d.cache.manifestIdentity(w.Principal, m, now)
 	if !ok {
 		return false, ErrIdentityNeeded
 	}
 	if id.Device.Principal() != device.Principal() {
-		return false, errors.New("manifest identity mismatch")
-	}
-	if m.Device != device.UUID() {
 		return false, errors.New("manifest identity mismatch")
 	}
 	if err := m.validateRoute(device); err != nil {
@@ -309,7 +323,7 @@ func (d *Directory) Accept(w SignedManifest, now time.Time) (bool, error) {
 	if d.history == nil {
 		d.history = map[string]DirectoryReceipt{}
 	}
-	if receipt, ok := d.history[device.Principal()]; ok && receipt.Until.After(now) {
+	if receipt, ok := d.history[owner]; ok && receipt.Until.After(now) {
 		if m.Revision < receipt.Revision {
 			return false, ErrStaleManifest
 		}
@@ -317,7 +331,7 @@ func (d *Directory) Accept(w SignedManifest, now time.Time) (bool, error) {
 			return false, errors.New("conflicting persisted manifest revision")
 		}
 	}
-	if old, exists := d.entries[device.Principal()]; exists {
+	if old, exists := d.entries[owner]; exists {
 		if m.Revision < old.manifest.Revision {
 			return false, ErrStaleManifest
 		}
@@ -331,10 +345,10 @@ func (d *Directory) Accept(w SignedManifest, now time.Time) (bool, error) {
 			if !old.signature.matches(binding.leafHash, func() bool { return validManifestSignature(old.wire, leaf) }) {
 				old.wire = cloneSignedManifest(w)
 				old.signature = binding
-				d.entries[device.Principal()] = old
+				d.entries[owner] = old
 				return true, nil
 			}
-			d.entries[device.Principal()] = old
+			d.entries[owner] = old
 			return false, nil
 		}
 	} else if len(d.entries) >= d.limit {
@@ -347,16 +361,16 @@ func (d *Directory) Accept(w SignedManifest, now time.Time) (bool, error) {
 			next[principal] = r
 		}
 	}
-	if _, ok := next[device.Principal()]; !ok && len(next) >= d.limit {
+	if _, ok := next[owner]; !ok && len(next) >= d.limit {
 		return false, errors.New("directory receipt capacity reached")
 	}
-	receipt := DirectoryReceipt{Device: device.Principal(), Revision: m.Revision, Hash: hash, Until: d.wallHighWater.Add(MaxLease + 5*time.Second)}
-	if old, ok := next[device.Principal()]; ok && old.Revision == m.Revision && old.Hash == hash {
+	receipt := DirectoryReceipt{Device: owner, Revision: m.Revision, Hash: hash, Until: d.wallHighWater.Add(MaxLease + 5*time.Second)}
+	if old, ok := next[owner]; ok && old.Revision == m.Revision && old.Hash == hash {
 		// Replaying the same record after restart restores only its original
 		// absolute lease and receipt lifetime, never a fresh lease.
 		receipt = old
 	}
-	next[device.Principal()] = receipt
+	next[owner] = receipt
 	if d.persist != nil {
 		all := make([]DirectoryReceipt, 0, len(next))
 		for _, r := range next {
@@ -368,7 +382,7 @@ func (d *Directory) Accept(w SignedManifest, now time.Time) (bool, error) {
 		}
 	}
 	d.history = next
-	d.entries[device.Principal()] = directoryEntry{
+	d.entries[owner] = directoryEntry{
 		manifest: m, wire: w, hash: hash, signature: binding,
 		retainUntil: receipt.Until,
 		activeUntil: now.Add(time.UnixMilli(m.Expires).Sub(d.wallHighWater)),
@@ -424,11 +438,12 @@ func (d *Directory) CurrentRecordChain(w SignedManifest, now time.Time) ([][]byt
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.expireLocked(now)
-	e, ok := d.entries[w.Principal]
+	owner := w.ownerKey()
+	e, ok := d.entries[owner]
 	if !ok || !bytes.Equal(w.Body, e.wire.Body) || !bytes.Equal(w.Signature, e.wire.Signature) {
 		return nil, false
 	}
-	return d.currentEntryChain(w.Principal, e, now)
+	return d.currentEntryChain(owner, e, now)
 }
 
 // currentEntryChain requires d.mu and updates only the entry's signature memo.
@@ -438,8 +453,8 @@ func (d *Directory) currentEntryChain(principal string, e directoryEntry, now ti
 	if e.expired || !e.activeUntil.After(now) || !expires.After(now) || !expires.After(d.wallHighWater) {
 		return nil, false
 	}
-	chain, id, ok := d.cache.Get(principal, now)
-	if !ok || id.Device.Principal() != principal || expires.After(id.NotAfter) {
+	chain, id, ok := d.cache.manifestIdentity(e.wire.Principal, e.manifest, now)
+	if !ok || id.Device.Principal() != e.wire.Principal || expires.After(id.NotAfter) {
 		return nil, false
 	}
 	valid := e.signature.matches(certificateHash(chain[0]), func() bool {
@@ -511,8 +526,8 @@ func (d *Directory) Records(now time.Time) []SignedManifest {
 		out = append(out, w)
 	}
 	sort.Slice(out, func(i, j int) bool {
-		if out[i].Principal != out[j].Principal {
-			return out[i].Principal < out[j].Principal
+		if out[i].ownerKey() != out[j].ownerKey() {
+			return out[i].ownerKey() < out[j].ownerKey()
 		}
 		return string(out[i].Body) < string(out[j].Body)
 	})

@@ -14,5 +14,5 @@ const StreamProtocolVersion = 1
 // The caller supplies its explicit stream role's version, independently of
 // LinkProtocolVersion, which applies only to router QUIC.
 func validStreamHelloVersion(h *LinkHello, self, peer meshid.Device, version int) bool {
-	return h != nil && h.Version == version && h.Device == peer.UUID() && h.Peer == self.UUID() && h.MTU == TunnelMTU && h.Datagram == DatagramLimit && h.IPDatagram == 0
+	return h != nil && h.Version == version && h.Device == peer.UUID() && (h.Peer == self.UUID() || (self.IsOperator() && h.Peer == ([16]byte{}))) && h.MTU == TunnelMTU && h.Datagram == DatagramLimit && h.IPDatagram == 0
 }
