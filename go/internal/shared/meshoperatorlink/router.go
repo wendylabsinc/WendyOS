@@ -29,6 +29,7 @@ type RouterLink struct {
 	peer     meshid.Device
 	packets  chan []byte
 	controls chan []byte
+	transmit chan []byte
 }
 
 func (l *RouterLink) Peer() meshid.Device                  { return l.peer }
@@ -165,9 +166,10 @@ func routerReady(ctx context.Context, c *tls.Conn, peer, self meshid.Device, ser
 		return nil, err
 	}
 	base.agentHandler, base.agentContext = agent, ctx
-	l := &RouterLink{Link: base, peer: peer, packets: make(chan []byte, 32), controls: make(chan []byte, 8)}
-	base.workers.Add(1)
+	l := &RouterLink{Link: base, peer: peer, packets: make(chan []byte, 32), controls: make(chan []byte, 8), transmit: make(chan []byte, 32)}
+	base.workers.Add(2)
 	go func() { defer base.workers.Done(); defer base.Close(); _ = l.readRouter() }()
+	go func() { defer base.workers.Done(); defer base.Close(); l.writeDatagrams() }()
 	return l, nil
 }
 
@@ -214,7 +216,22 @@ func (l *RouterLink) SendDatagram(data []byte) error {
 	if len(data) == 0 || len(data) > 1100 {
 		return errors.New("invalid router datagram size")
 	}
-	return l.routerWrite(4, data)
+	// Datagram congestion must not block the Babel actor. Like an ordinary
+	// stream carrier, drop a congested datagram and let its protocol recover.
+	select {
+	case <-l.done:
+		return net.ErrClosed
+	default:
+	}
+	copyData := bytes.Clone(data)
+	select {
+	case <-l.done:
+		return net.ErrClosed
+	case l.transmit <- copyData:
+		return nil
+	default:
+		return nil
+	}
 }
 func (l *RouterLink) ReceiveDatagram(ctx context.Context) ([]byte, error) {
 	select {
@@ -251,4 +268,17 @@ func (l *RouterLink) routerWrite(kind byte, data []byte) error {
 		return err
 	}
 	return nil
+}
+
+func (l *RouterLink) writeDatagrams() {
+	for {
+		select {
+		case <-l.done:
+			return
+		case data := <-l.transmit:
+			if err := l.routerWrite(4, data); err != nil {
+				return
+			}
+		}
+	}
 }
