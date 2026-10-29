@@ -45,6 +45,7 @@ func lanServerTLS(c *Credentials) (*tls.Config, error) {
 	}
 	// Unknown-peer listeners have a separate, bounded server ticket domain.
 	// Pinned outbound QUIC still uses the existing per-peer link client cache.
+	c.ConfigureTLSServer(config)
 	c.ServerTicketStore(LinkALPN, "lan-udp").Configure(config)
 	return config, nil
 }

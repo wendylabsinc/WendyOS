@@ -6,7 +6,6 @@ import (
 	"bytes"
 	"crypto/tls"
 	"crypto/x509"
-	"slices"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/localmesh"
 )
@@ -23,11 +22,8 @@ const issuerHintPrefix = "wendy-net-issuers/"
 // issuer set. That client trusts every certificate left out, so its
 // verification has exactly the same candidates as with the full chain.
 func serverCertificate(credentials *localmesh.Credentials, hello *tls.ClientHelloInfo) *tls.Certificate {
-	if digest := credentials.IssuerDigest(); digest != "" && slices.Contains(hello.SupportedProtos, issuerHintPrefix+digest) {
-		leaf := credentials.LeafCertificate()
-		return &leaf
-	}
-	return &credentials.Certificate
+	certificate, _ := credentials.ServerCertificate(hello)
+	return certificate
 }
 
 // clientCertificate omits our issuers only when the verified server presented

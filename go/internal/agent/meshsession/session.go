@@ -235,6 +235,7 @@ func (s *Server) TLSConfig() *tls.Config {
 			}
 			return nil
 		}}
+	s.credentials.ConfigureTLSServer(config)
 	s.tickets.Configure(config)
 	return config
 }

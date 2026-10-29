@@ -23,7 +23,7 @@ func nativeServerTLS(c *Credentials) (*tls.Config, error) {
 	if c.SupportsPrimaryOperators() {
 		protocols = append(protocols, meshoperatorlink.RouterALPN)
 	}
-	return &tls.Config{
+	config := &tls.Config{
 		Certificates: []tls.Certificate{c.Certificate}, MinVersion: tls.VersionTLS13, MaxVersion: tls.VersionTLS13,
 		ClientAuth: tls.RequireAnyClientCert, NextProtos: protocols, SessionTicketsDisabled: true,
 		VerifyConnection: func(s tls.ConnectionState) error {
@@ -41,7 +41,9 @@ func nativeServerTLS(c *Credentials) (*tls.Config, error) {
 			_, err := lanAuthenticatedPeer(c, s)
 			return err
 		},
-	}, nil
+	}
+	c.ConfigureTLSServer(config)
+	return config, nil
 }
 
 // RunTLSListener owns a native peer listener and drains every attachment before

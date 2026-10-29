@@ -102,7 +102,7 @@ func dialTLSWithDialer(ctx context.Context, credentials *localmesh.Credentials, 
 	if err != nil {
 		return nil, err
 	}
-	config.NextProtos = []string{TLSALPN}
+	config.NextProtos = credentials.ClientProtocols(TLSALPN)
 	config.ClientSessionCache = nil
 	config.SessionTicketsDisabled = true
 	bounded, cancel := context.WithTimeout(ctx, TLSAppSessionSetupTimeout)

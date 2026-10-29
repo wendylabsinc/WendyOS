@@ -145,13 +145,15 @@ func controlPeer(creds *localmesh.Credentials, state tls.ConnectionState) (local
 }
 
 func controlTLS(creds *localmesh.Credentials) *tls.Config {
-	return &tls.Config{
+	config := &tls.Config{
 		MinVersion: tls.VersionTLS13, MaxVersion: tls.VersionTLS13,
 		Certificates: []tls.Certificate{creds.Certificate},
 		ClientAuth:   tls.RequireAnyClientCert, SessionTicketsDisabled: true,
 		NextProtos:       []string{leaseControlALPN},
 		VerifyConnection: func(state tls.ConnectionState) error { _, err := controlPeer(creds, state); return err },
 	}
+	creds.ConfigureTLSServer(config)
+	return config
 }
 
 func controlExpiry(creds *localmesh.Credentials, peer localmesh.Identity) (time.Time, error) {
@@ -283,7 +285,7 @@ func negotiateGatewayLease(ctx context.Context, creds *localmesh.Credentials, ga
 	if err != nil {
 		return nil, lease, err
 	}
-	config.NextProtos = []string{leaseControlALPN}
+	config.NextProtos = creds.ClientProtocols(leaseControlALPN)
 	secure := tls.Client(raw, config)
 	if err = secure.HandshakeContext(ctx); err != nil {
 		return nil, lease, err

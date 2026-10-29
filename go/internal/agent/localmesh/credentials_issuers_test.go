@@ -72,7 +72,7 @@ func issuedCredentials(t *testing.T, leaf issuedCert, certPEM, chainPEM string) 
 	return credentials
 }
 
-func TestIssuerDigestNamesOnlyTrustedPresentedIssuers(t *testing.T) {
+func TestIssuerDigestNamesVerifiedAvailableIssuers(t *testing.T) {
 	root := mintIssued(t, "root", "", nil)
 	top := mintIssued(t, "top", "", &root)
 	issuing := mintIssued(t, "issuing", "", &top)
@@ -100,10 +100,10 @@ func TestIssuerDigestNamesOnlyTrustedPresentedIssuers(t *testing.T) {
 	if branch := issuedCredentials(t, c, c.pem, other.pem+top.pem+root.pem); branch.IssuerDigest() == "" || branch.IssuerDigest() == sameA.IssuerDigest() {
 		t.Fatalf("another issuing CA has digest %q", branch.IssuerDigest())
 	}
-	// An issuer carried only in the certificate PEM is presented but is not a
-	// local anchor. A peer with the same digest could not rely on it.
-	if embedded := issuedCredentials(t, a, a.pem+issuing.pem, top.pem+root.pem); embedded.IssuerDigest() != "" {
-		t.Fatal("digest names an issuer that is not a local trust anchor")
+	// An independently verified intermediate is usable even when it is
+	// carried with the identity rather than listed as a trust anchor.
+	if embedded := issuedCredentials(t, a, a.pem+issuing.pem, top.pem+root.pem); embedded.IssuerDigest() != sameA.IssuerDigest() {
+		t.Fatal("available verified intermediate was excluded from the hint")
 	}
 	// A chain of only a provable self-signed root presents no issuers.
 	direct := mintIssued(t, "direct", testPrincipal(testTenantUUID, testDeviceAID), &root)
@@ -142,5 +142,27 @@ func TestLeafOnlyIdentityNeedsLocalIssuer(t *testing.T) {
 	}
 	if sender.IssuerDigest() == otherIssuers.IssuerDigest() {
 		t.Fatal("receivers that need the issuers share the sender's digest")
+	}
+}
+
+// Normal enrollment: issuers travel with our own identity, while only the root
+// is an anchor. Both peers already possess the same intermediate DER material.
+func TestSharedIntermediatesWithRootOnlyTrust(t *testing.T) {
+	root := mintIssued(t, "root", "", nil)
+	top := mintIssued(t, "top", "", &root)
+	issuing := mintIssued(t, "issuing", "", &top)
+	a := mintIssued(t, "a", testPrincipal(testTenantUUID, testDeviceAID), &issuing)
+	b := mintIssued(t, "b", testPrincipal(testTenantUUID, testDeviceBID), &issuing)
+	ca := issuedCredentials(t, a, a.pem+issuing.pem+top.pem, root.pem)
+	cb := issuedCredentials(t, b, b.pem+issuing.pem+top.pem, root.pem)
+	if ca.IssuerDigest() == "" || ca.IssuerDigest() != cb.IssuerDigest() {
+		t.Fatalf("shared known intermediates did not produce the same hint: %q %q", ca.IssuerDigest(), cb.IssuerDigest())
+	}
+	for _, pair := range [][2]*Credentials{{ca, cb}, {cb, ca}} {
+		leaf := pair[0].LeafCertificate()
+		identity, err := pair[1].Verify(leaf.Certificate, time.Now())
+		if err != nil || identity.Device != pair[0].Device {
+			t.Fatalf("known intermediates were not used as path candidates: %v %v", identity, err)
+		}
 	}
 }
