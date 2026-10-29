@@ -72,7 +72,7 @@ func issuedCredentials(t *testing.T, leaf issuedCert, certPEM, chainPEM string) 
 	return credentials
 }
 
-func TestIssuerDigestNamesVerifiedAvailableIssuers(t *testing.T) {
+func TestIssuerPrefixesNameAvailableCertificates(t *testing.T) {
 	root := mintIssued(t, "root", "", nil)
 	top := mintIssued(t, "top", "", &root)
 	issuing := mintIssued(t, "issuing", "", &top)
@@ -87,8 +87,8 @@ func TestIssuerDigestNamesVerifiedAvailableIssuers(t *testing.T) {
 	if len(sameA.Certificate.Certificate) != 3 {
 		t.Fatalf("presented %d certificates, want leaf and two issuers", len(sameA.Certificate.Certificate))
 	}
-	if sameA.IssuerDigest() == "" || sameA.IssuerDigest() != sameB.IssuerDigest() {
-		t.Fatalf("devices with one enrolled chain disagree: %q %q", sameA.IssuerDigest(), sameB.IssuerDigest())
+	if sameA.ClientProtocols(LinkALPN)[0] == LinkALPN || sameA.ClientProtocols(LinkALPN)[0] != sameB.ClientProtocols(LinkALPN)[0] {
+		t.Fatalf("devices with one enrolled chain disagree: %q %q", sameA.ClientProtocols(LinkALPN)[0], sameB.ClientProtocols(LinkALPN)[0])
 	}
 	leaf := sameA.LeafCertificate()
 	if len(leaf.Certificate) != 1 || string(leaf.Certificate[0]) != string(a.cert.Raw) || leaf.PrivateKey != sameA.Certificate.PrivateKey {
@@ -97,20 +97,20 @@ func TestIssuerDigestNamesVerifiedAvailableIssuers(t *testing.T) {
 	if len(sameA.Certificate.Certificate) != 3 {
 		t.Fatal("LeafCertificate modified the full identity")
 	}
-	if branch := issuedCredentials(t, c, c.pem, other.pem+top.pem+root.pem); branch.IssuerDigest() == "" || branch.IssuerDigest() == sameA.IssuerDigest() {
-		t.Fatalf("another issuing CA has digest %q", branch.IssuerDigest())
+	if branch := issuedCredentials(t, c, c.pem, other.pem+top.pem+root.pem); branch.ClientProtocols(LinkALPN)[0] == "" || branch.ClientProtocols(LinkALPN)[0] == sameA.ClientProtocols(LinkALPN)[0] {
+		t.Fatalf("another issuing CA has digest %q", branch.ClientProtocols(LinkALPN)[0])
 	}
 	// An independently verified intermediate is usable even when it is
 	// carried with the identity rather than listed as a trust anchor.
-	if embedded := issuedCredentials(t, a, a.pem+issuing.pem, top.pem+root.pem); embedded.IssuerDigest() != sameA.IssuerDigest() {
+	if embedded := issuedCredentials(t, a, a.pem+issuing.pem, top.pem+root.pem); embedded.ClientProtocols(LinkALPN)[0] != sameA.ClientProtocols(LinkALPN)[0] {
 		t.Fatal("available verified intermediate was excluded from the hint")
 	}
-	// A chain of only a provable self-signed root presents no issuers.
+	// A root-only path advertises the root while presenting only the leaf.
 	direct := mintIssued(t, "direct", testPrincipal(testTenantUUID, testDeviceAID), &root)
-	if rootOnly := issuedCredentials(t, direct, direct.pem, root.pem); len(rootOnly.Certificate.Certificate) != 1 || rootOnly.IssuerDigest() != "" {
-		t.Fatal("root-only enrollment named presented issuers")
+	if rootOnly := issuedCredentials(t, direct, direct.pem, root.pem); len(rootOnly.Certificate.Certificate) != 1 || rootOnly.ClientProtocols(LinkALPN)[0] == LinkALPN {
+		t.Fatal("root-only availability or leaf presentation changed")
 	}
-	if (*Credentials)(nil).IssuerDigest() != "" || (&Credentials{}).IssuerDigest() != "" {
+	if len((*Credentials)(nil).ClientProtocols(LinkALPN)) != 1 || len((&Credentials{}).ClientProtocols(LinkALPN)) != 1 {
 		t.Fatal("empty credentials named issuers")
 	}
 }
@@ -140,7 +140,7 @@ func TestLeafOnlyIdentityNeedsLocalIssuer(t *testing.T) {
 	if identity, err := otherIssuers.Verify(sender.Certificate.Certificate, time.Now()); err != nil || identity.Device != sender.Device {
 		t.Fatalf("receiver without the sender's issuer, full chain: %v %v", identity.Device, err)
 	}
-	if sender.IssuerDigest() == otherIssuers.IssuerDigest() {
+	if sender.ClientProtocols(LinkALPN)[0] == otherIssuers.ClientProtocols(LinkALPN)[0] {
 		t.Fatal("receivers that need the issuers share the sender's digest")
 	}
 }
@@ -155,8 +155,8 @@ func TestSharedIntermediatesWithRootOnlyTrust(t *testing.T) {
 	b := mintIssued(t, "b", testPrincipal(testTenantUUID, testDeviceBID), &issuing)
 	ca := issuedCredentials(t, a, a.pem+issuing.pem+top.pem, root.pem)
 	cb := issuedCredentials(t, b, b.pem+issuing.pem+top.pem, root.pem)
-	if ca.IssuerDigest() == "" || ca.IssuerDigest() != cb.IssuerDigest() {
-		t.Fatalf("shared known intermediates did not produce the same hint: %q %q", ca.IssuerDigest(), cb.IssuerDigest())
+	if ca.ClientProtocols(LinkALPN)[0] == LinkALPN || ca.ClientProtocols(LinkALPN)[0] != cb.ClientProtocols(LinkALPN)[0] {
+		t.Fatalf("shared known intermediates did not produce the same hint: %q %q", ca.ClientProtocols(LinkALPN)[0], cb.ClientProtocols(LinkALPN)[0])
 	}
 	for _, pair := range [][2]*Credentials{{ca, cb}, {cb, ca}} {
 		leaf := pair[0].LeafCertificate()

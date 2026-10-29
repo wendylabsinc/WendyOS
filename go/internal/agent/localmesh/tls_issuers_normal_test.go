@@ -20,13 +20,31 @@ func TestNormalKnownIssuersTLSWire(t *testing.T) {
 	ca := issuedCredentials(t, a, a.pem+issuing.pem+top.pem, root.pem)
 	cb := issuedCredentials(t, b, b.pem+issuing.pem+top.pem, root.pem)
 	cc := issuedCredentials(t, c, c.pem+other.pem+top.pem, root.pem)
+	t.Run("shared-QUIC", func(t *testing.T) {
+		client, err := ca.PeerTLSWithTickets(cb.Device, LinkALPN, LinkQUICSessionScope)
+		if err != nil {
+			t.Fatal(err)
+		}
+		server, err := lanServerTLS(cb)
+		if err != nil {
+			t.Fatal(err)
+		}
+		result := rootQUICRoundtrip(client, server)
+		if result.err != nil {
+			t.Fatal(result.err)
+		}
+		if len(result.client.PeerCertificates) != 1 || len(result.server.PeerCertificates) != 1 {
+			t.Fatalf("QUIC sent known intermediates: client=%d server=%d", len(result.client.PeerCertificates), len(result.server.PeerCertificates))
+		}
+	})
 	for _, pair := range []struct {
 		name           string
 		client, server *Credentials
 		count          int
+		turnover       bool
 	}{
-		{"shared-a-b", ca, cb, 1}, {"shared-b-a", cb, ca, 1},
-		{"distinct-a-c", ca, cc, 3}, {"distinct-c-a", cc, ca, 3},
+		{"shared-a-b", ca, cb, 1, false}, {"shared-b-a", cb, ca, 1, false},
+		{"distinct-a-c", ca, cc, 2, false}, {"cached-c-a", cc, ca, 1, false}, {"cache-turnover-during-setup", ca, cc, 1, true},
 	} {
 		t.Run(pair.name, func(t *testing.T) {
 			clientConfig, err := pair.client.PeerTLS(pair.server.Device)
@@ -36,6 +54,21 @@ func TestNormalKnownIssuersTLSWire(t *testing.T) {
 			serverConfig, err := lanServerTLS(pair.server)
 			if err != nil {
 				t.Fatal(err)
+			}
+			if pair.turnover {
+				forget := func(c *Credentials) {
+					c.issuerMaterial.mu.Lock()
+					c.issuerMaterial.cached = nil
+					c.issuerMaterial.bytes = 0
+					c.issuerMaterial.mu.Unlock()
+				}
+				forget(pair.client) // Its offered inventory is already frozen.
+				previous := serverConfig.GetConfigForClient
+				serverConfig.GetConfigForClient = func(hello *tls.ClientHelloInfo) (*tls.Config, error) {
+					selected, err := previous(hello)
+					forget(pair.server) // Its acknowledged inventory is frozen too.
+					return selected, err
+				}
 			}
 			left, right := net.Pipe()
 			defer left.Close()
@@ -53,7 +86,7 @@ func TestNormalKnownIssuersTLSWire(t *testing.T) {
 				t.Fatal(err)
 			}
 			for role, state := range map[string]tls.ConnectionState{"client": client.ConnectionState(), "server": server.ConnectionState()} {
-				if state.NegotiatedProtocol != LinkALPN || len(state.PeerCertificates) != pair.count {
+				if ApplicationProtocol(state.NegotiatedProtocol) != LinkALPN || len(state.PeerCertificates) != pair.count {
 					t.Fatalf("%s: protocol %q, certificates %d, want %d", role, state.NegotiatedProtocol, len(state.PeerCertificates), pair.count)
 				}
 				bytes := 0

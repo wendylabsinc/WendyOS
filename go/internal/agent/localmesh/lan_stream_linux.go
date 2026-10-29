@@ -126,7 +126,7 @@ func scanTLSLANWithQuery(ctx context.Context, cfg LANConfig, selected lanInterfa
 				}
 				config.ClientSessionCache = nil
 				config.SessionTicketsDisabled = true
-				config.NextProtos = cfg.Credentials.ClientProtocols(StreamALPN)
+				cfg.Credentials.ConfigureTLSClient(config, StreamALPN)
 				attempt, cancel := context.WithTimeout(ctx, 8*time.Second)
 				raw, err := (&net.Dialer{LocalAddr: &net.TCPAddr{IP: selected.ip}, Control: bindToInterface(selected.iface.Name)}).DialContext(attempt, "tcp4", net.JoinHostPort(ip.String(), strconv.Itoa(TLSLANPort)))
 				if err != nil {

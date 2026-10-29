@@ -1,16 +1,12 @@
 package localmesh
 
 import (
-	"bytes"
 	"container/list"
 	"crypto"
-	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
-	"encoding/base64"
 	"errors"
 	"fmt"
-	"slices"
 	"sync"
 	"time"
 
@@ -39,7 +35,7 @@ type Credentials struct {
 	peerTLSTickets func(meshid.Device, string, string) (*tls.Config, error)
 	ticketOnce     sync.Once
 	ticketMemory   *meshSessionCache
-	issuerDigest   string
+	issuerMaterial *issuerMaterial
 }
 
 // SupportsPrimaryOperators reports whether this enrolled identity has locally
@@ -52,7 +48,7 @@ func (c *Credentials) VerifyPrimaryOperator(chain [][]byte, now time.Time) (mesh
 	if c == nil {
 		return meshoperator.VerifiedOperator{}, errors.New("missing enrolled credentials")
 	}
-	return meshoperator.VerifyPrimary(c.knownIssuerCandidates(chain), c.primaryRoots, c.Device.Tenant(), now)
+	return meshoperator.VerifyPrimary(c.knownIssuerCandidates(chain, now), c.primaryRoots, c.Device.Tenant(), now)
 }
 
 // NewCredentials loads the provisioned identity and derives the local-mesh
@@ -115,7 +111,6 @@ func newCredentials(certPEM, chainPEM, keyPEM string, instance uuid.UUID, operat
 	if err != nil {
 		return nil, err
 	}
-	knownIssuerCandidates := func(chain [][]byte) [][]byte { return withKnownIssuers(chain, cert) }
 	primaryRoots := make([]*x509.Certificate, 0, len(anchors))
 	for _, der := range anchors {
 		root, err := x509.ParseCertificate(der)
@@ -124,6 +119,7 @@ func newCredentials(certPEM, chainPEM, keyPEM string, instance uuid.UUID, operat
 		}
 		primaryRoots = append(primaryRoots, root)
 	}
+	material := newIssuerMaterial(cert, primaryRoots)
 	verify := func(chain [][]byte, now time.Time) (Identity, error) {
 		if len(chain) == 0 || len(chain) > 16 {
 			return Identity{}, errors.New("invalid identity bundle")
@@ -151,17 +147,18 @@ func newCredentials(certPEM, chainPEM, keyPEM string, instance uuid.UUID, operat
 		}
 		var expires time.Time
 		if device.IsOperator() {
-			verified, err := meshoperator.VerifyPrimary(knownIssuerCandidates(chain), primaryRoots, self.Tenant(), now)
+			verified, err := meshoperator.VerifyPrimary(material.candidates(chain, now), primaryRoots, self.Tenant(), now)
 			if err != nil {
 				return Identity{}, err
 			}
 			expires = verified.NotAfter()
 		} else {
-			expires, err = verifyChain(knownIssuerCandidates(chain), now)
+			expires, err = verifyChain(material.candidates(chain, now), now)
 			if err != nil {
 				return Identity{}, err
 			}
 		}
+		material.remember(chain, now)
 		return Identity{Device: device, NotAfter: expires}, nil
 	}
 	if _, err := verify(cert.Certificate, time.Now()); err != nil {
@@ -180,7 +177,7 @@ func newCredentials(certPEM, chainPEM, keyPEM string, instance uuid.UUID, operat
 	peerConfigs := make(map[meshid.Device]*list.Element)
 	var peerRecency list.List
 
-	credentials := &Credentials{primaryRoots: primaryRoots, Device: self, Certificate: cert, Signer: signer, Verify: verify, issuerDigest: knownIssuerDigest(cert.Certificate[1:]), peerTLS: func(peer meshid.Device) (*tls.Config, error) {
+	credentials := &Credentials{primaryRoots: primaryRoots, Device: self, Certificate: cert, Signer: signer, Verify: verify, issuerMaterial: material, peerTLS: func(peer meshid.Device) (*tls.Config, error) {
 		peerMu.Lock()
 		defer peerMu.Unlock()
 		if cached := peerConfigs[peer]; cached != nil {
@@ -222,7 +219,7 @@ func newCredentials(certPEM, chainPEM, keyPEM string, instance uuid.UUID, operat
 			return nil, err
 		}
 		key := fmt.Sprintf("%s/%d:%s/%d:%s", peer.Principal(), len(alpn), alpn, len(transport), transport)
-		cfg.NextProtos = credentials.ClientProtocols(alpn)
+		credentials.ConfigureTLSClient(cfg, alpn)
 		cfg.ServerName = fmt.Sprintf("device-%s.mesh.wendy.invalid", peer.UUID())
 		cfg.ClientSessionCache = scopedClientSessionCache{cache: credentials.ticketCache(), scope: key}
 		(&TicketStore{cache: credentials.ticketCache(), scope: key}).Configure(cfg)
@@ -304,38 +301,12 @@ func (c *Credentials) PeerTLSWithTickets(peer meshid.Device, alpn, transport str
 	return c.peerTLSTickets(peer, alpn, transport)
 }
 
-// IssuerDigest names the independently verified issuer material available
-// with our own identity. A matching peer can omit these intermediates; they
-// remain untrusted path candidates and must lead to the configured anchors.
-func (c *Credentials) IssuerDigest() string {
-	if c == nil {
-		return ""
-	}
-	return c.issuerDigest
-}
-
-// LeafCertificate is this identity without its issuers, for a peer that
-// already possesses them (see IssuerDigest).
+// LeafCertificate is this identity without its issuers. Normal TLS selection
+// uses the negotiated per-certificate availability instead of assuming trust.
 func (c *Credentials) LeafCertificate() tls.Certificate {
 	leaf := c.Certificate
 	leaf.Certificate = leaf.Certificate[:min(len(leaf.Certificate), 1)]
 	return leaf
-}
-
-func knownIssuerDigest(issuers [][]byte) string {
-	if len(issuers) == 0 {
-		return ""
-	}
-	sums := make([][sha256.Size]byte, 0, len(issuers))
-	for _, issuer := range issuers {
-		sums = append(sums, sha256.Sum256(issuer))
-	}
-	slices.SortFunc(sums, func(a, b [sha256.Size]byte) int { return bytes.Compare(a[:], b[:]) })
-	digest := sha256.New()
-	for _, sum := range sums {
-		digest.Write(sum[:])
-	}
-	return base64.RawURLEncoding.EncodeToString(digest.Sum(nil)[:16])
 }
 
 func (c *Credentials) ticketCache() *meshSessionCache {

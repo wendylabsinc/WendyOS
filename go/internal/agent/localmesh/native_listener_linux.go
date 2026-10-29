@@ -27,7 +27,7 @@ func nativeServerTLS(c *Credentials) (*tls.Config, error) {
 		Certificates: []tls.Certificate{c.Certificate}, MinVersion: tls.VersionTLS13, MaxVersion: tls.VersionTLS13,
 		ClientAuth: tls.RequireAnyClientCert, NextProtos: protocols, SessionTicketsDisabled: true,
 		VerifyConnection: func(s tls.ConnectionState) error {
-			if s.NegotiatedProtocol == meshoperatorlink.RouterALPN {
+			if ApplicationProtocol(s.NegotiatedProtocol) == meshoperatorlink.RouterALPN {
 				chain := make([][]byte, len(s.PeerCertificates))
 				for i, c := range s.PeerCertificates {
 					chain[i] = c.Raw
@@ -35,7 +35,7 @@ func nativeServerTLS(c *Credentials) (*tls.Config, error) {
 				_, err := c.VerifyPrimaryOperator(chain, time.Now())
 				return err
 			}
-			if s.NegotiatedProtocol != StreamALPN {
+			if ApplicationProtocol(s.NegotiatedProtocol) != StreamALPN {
 				return errors.New("native stream ALPN required")
 			}
 			_, err := lanAuthenticatedPeer(c, s)
@@ -148,7 +148,7 @@ func runNetTLSListener(parent context.Context, node *Node, listener net.Listener
 						}
 					}
 				}
-				return config, nil
+				return config.GetConfigForClient(hello)
 			}
 			secure := tls.Server(raw, handshakeConfig)
 			setup, done := context.WithTimeout(ctx, 8*time.Second)
@@ -158,7 +158,7 @@ func runNetTLSListener(parent context.Context, node *Node, listener net.Listener
 			if err != nil {
 				return
 			}
-			if secure.ConnectionState().NegotiatedProtocol == meshoperatorlink.RouterALPN {
+			if ApplicationProtocol(secure.ConnectionState().NegotiatedProtocol) == meshoperatorlink.RouterALPN {
 				_ = node.AttachOperatorStream(WithCarrier(ctx, "tls-stream"), secure, cost)
 				return
 			}

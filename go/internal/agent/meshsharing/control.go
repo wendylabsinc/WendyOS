@@ -127,7 +127,7 @@ func (s *leaseServer) Close() error {
 }
 
 func controlPeer(creds *localmesh.Credentials, state tls.ConnectionState) (localmesh.Identity, error) {
-	if state.Version != tls.VersionTLS13 || state.NegotiatedProtocol != leaseControlALPN {
+	if state.Version != tls.VersionTLS13 || localmesh.ApplicationProtocol(state.NegotiatedProtocol) != leaseControlALPN {
 		return localmesh.Identity{}, errors.New("invalid gateway control TLS protocol")
 	}
 	chain := make([][]byte, len(state.PeerCertificates))
@@ -285,7 +285,7 @@ func negotiateGatewayLease(ctx context.Context, creds *localmesh.Credentials, ga
 	if err != nil {
 		return nil, lease, err
 	}
-	config.NextProtos = creds.ClientProtocols(leaseControlALPN)
+	creds.ConfigureTLSClient(config, leaseControlALPN)
 	secure := tls.Client(raw, config)
 	if err = secure.HandshakeContext(ctx); err != nil {
 		return nil, lease, err
