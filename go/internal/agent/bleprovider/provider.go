@@ -9,6 +9,7 @@ import (
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/localmesh"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
+	"github.com/wendylabsinc/wendy/go/internal/shared/tsarelay"
 )
 
 // StreamNode is implemented by localmesh.Node.AttachStream. The provider
@@ -43,6 +44,9 @@ func (c *Config) defaults() error {
 	}
 	if c.PSM == 0 {
 		c.PSM = DefaultPSM
+	}
+	if c.PSM == tsarelay.BLETimePSM {
+		return errors.New("BLE native PSM conflicts with timestamp HTTPS relay")
 	}
 	if !ValidPSM(c.PSM) {
 		return errors.New("BLE PSM must be an LE dynamic PSM (0x0080–0x00ff)")

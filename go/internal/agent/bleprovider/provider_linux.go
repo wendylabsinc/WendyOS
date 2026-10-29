@@ -15,6 +15,7 @@ import (
 	"github.com/godbus/dbus/v5"
 	"github.com/wendylabsinc/wendy/go/internal/agent/localmesh"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
+	"github.com/wendylabsinc/wendy/go/internal/shared/tsarelay"
 	"go.uber.org/zap"
 )
 
@@ -41,6 +42,8 @@ type runtime struct {
 	dialCoC              func(context.Context, string, string, uint16) (net.Conn, error)
 	serverTLS            *tls.Config
 	advertisementRefresh chan struct{}
+	advertisement        Advertisement
+	timeSlots            chan struct{}
 	tlsGate              tlsHandshakeAdmission
 	discovery            discoveryRecovery
 	reportErrors         <-chan error
@@ -266,6 +269,9 @@ func Run(ctx context.Context, cfg Config) error {
 	if err != nil {
 		return err
 	}
+	if cfg.Policy != nil && !cfg.Policy.IncomingAvailable() {
+		adv.Capabilities = CapabilityTimeRelay
+	}
 	payload, _ := adv.MarshalBinary()
 	bus, closeTransport, err := connectProviderBus(runCtx)
 	if err != nil {
@@ -290,6 +296,13 @@ func Run(ctx context.Context, cfg Config) error {
 		return err
 	}
 	defer listener.Close()
+	timeLocal := local
+	timeLocal.PSM = tsarelay.BLETimePSM
+	timeListener, err := listenL2CAP(timeLocal)
+	if err != nil {
+		return fmt.Errorf("BLE timestamp HTTPS listener: %w", err)
+	}
+	defer timeListener.Close()
 	hciIndex, parseErr := adapterHCIIndex(adapter)
 	if parseErr != nil {
 		return parseErr
@@ -321,23 +334,33 @@ func Run(ctx context.Context, cfg Config) error {
 		return err
 	}
 	r := &runtime{cfg: cfg, uuid: uuid, owner: owner, hciIndex: hciIndex, local: local, ownerLookup: bluezOwner, bus: bus, freshness: freshness, reportErrors: reportErrors, reportErr: reportErr, dialSlot: make(chan struct{}, 1), tlsGate: newTLSHandshakeAdmission()}
+	r.advertisement = adv
+	r.timeSlots = make(chan struct{}, 2)
 	r.serverTLS = r.makeServerTLS()
 	r.advertisementRefresh = make(chan struct{}, 1)
 	var loops sync.WaitGroup
-	loopErrors := make(chan error, 4)
+	loopErrors := make(chan error, 5)
 	// Publish setup completion before the loops can report a discovery failure.
 	r.publishDiscoveryHealth(runCtx)
-	loops.Add(4)
+	loops.Add(5)
 	go func() {
 		defer loops.Done()
 		loopErrors <- runManagementReports(runCtx, hciIndex, freshness, reportSource, openManagementReports, reportErrors)
 	}()
 	go func() { defer loops.Done(); loopErrors <- r.acceptLoop(runCtx, listener) }()
+	go func() { defer loops.Done(); loopErrors <- r.acceptTimeLoop(runCtx, timeListener) }()
 	go func() { defer loops.Done(); loopErrors <- r.scanLoop(runCtx, bus, adapter) }()
 	go func() {
 		defer loops.Done()
 		loopErrors <- runAdvertisementRefresh(runCtx, r.advertisementRefresh, advertisementRefreshInterval, func(ctx context.Context) error {
-			return refreshOwnedAdvertisement(ctx, bus, closeTransport, owner, uuid, payload)
+			r.mu.Lock()
+			current := r.advertisement
+			r.mu.Unlock()
+			latest, err := current.MarshalBinary()
+			if err != nil {
+				return err
+			}
+			return refreshOwnedAdvertisement(ctx, bus, closeTransport, owner, uuid, latest)
 		})
 	}()
 	var loopErr error
@@ -350,9 +373,43 @@ func Run(ctx context.Context, cfg Config) error {
 	}
 	cancelRun()
 	_ = listener.Close()
+	_ = timeListener.Close()
 	loops.Wait()
 	r.links.Wait()
 	return loopErr
+}
+
+// The fixed-destination time relay has a separate small admission bound and
+// never consumes a router-link slot or changes the shared adapter's state.
+func (r *runtime) acceptTimeLoop(ctx context.Context, listener *l2Listener) error {
+	sem := r.timeSlots
+	if sem == nil {
+		return errors.New("BLE timestamp relay admission unavailable")
+	}
+	for ctx.Err() == nil {
+		conn, err := listener.Accept(ctx)
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
+			return fmt.Errorf("BLE timestamp HTTPS accept: %w", err)
+		}
+		select {
+		case sem <- struct{}{}:
+			r.updateAdvertisementAdmission()
+			r.links.Add(1)
+			go func() {
+				defer r.links.Done()
+				defer func() { <-sem; r.updateAdvertisementAdmission() }()
+				if err := tsarelay.TunnelConnection(ctx, conn); err != nil && ctx.Err() == nil {
+					r.cfg.Logger.Debug("BLE timestamp HTTPS relay ended", zap.Error(err))
+				}
+			}()
+		default:
+			_ = conn.Close()
+		}
+	}
+	return nil
 }
 
 func (r *runtime) acceptLoop(ctx context.Context, listener *l2Listener) error {
@@ -369,8 +426,13 @@ func (r *runtime) acceptLoop(ctx context.Context, listener *l2Listener) error {
 		}
 		select {
 		case sem <- struct{}{}:
+			r.updateAdvertisementAdmission()
 			r.links.Add(1)
-			go func() { defer r.links.Done(); defer func() { <-sem }(); r.acceptLink(ctx, conn) }()
+			go func() {
+				defer r.links.Done()
+				defer func() { <-sem; r.updateAdvertisementAdmission() }()
+				r.acceptLink(ctx, conn)
+			}()
 		default:
 			_ = conn.Close()
 		}
@@ -416,7 +478,15 @@ func (r *runtime) makeServerTLS() *tls.Config {
 }
 
 func (r *runtime) acceptLink(ctx context.Context, raw net.Conn) {
-	defer raw.Close()
+	authenticated := false
+	defer func() {
+		_ = raw.Close()
+		if authenticated {
+			// A connect can consume the controller's advertising set even
+			// when LAN preference rejects the authenticated BLE stream.
+			r.requestAdvertisementRefresh()
+		}
+	}()
 	key := fmt.Sprintf("incoming:%p", raw)
 	var incomingCandidate *candidate
 	if radio, ok := raw.RemoteAddr().(l2addr); ok {
@@ -458,6 +528,7 @@ func (r *runtime) acceptLink(ctx context.Context, raw net.Conn) {
 		return
 	}
 	lease.Identify(peer)
+	authenticated = true
 	if incomingCandidate != nil {
 		lease.ObserveReady(func() { r.candidateQueue().Succeeded(key) })
 		defer func() {
@@ -514,6 +585,7 @@ func (r *runtime) scanLoop(ctx context.Context, bus *dbus.Conn, adapter dbus.Obj
 	defer ticker.Stop()
 	consecutiveErrors := 0
 	for {
+		r.updateAdvertisementAdmission()
 		r.governDiscovery(ctx, bus, adapter)
 		if err := r.scanOnce(ctx, bus, adapter); err != nil {
 			if ctx.Err() != nil {
@@ -538,6 +610,26 @@ func (r *runtime) scanLoop(ctx context.Context, bus *dbus.Conn, adapter dbus.Obj
 			r.publishDiscoveryHealth(ctx)
 		case <-ticker.C:
 		}
+	}
+}
+
+// Existing scan-loop cadence observes reservations, not only authenticated
+// peers. A coalesced request updates this provider's advertisement instance;
+// time relay stays independently advertised while native admission is full.
+func (r *runtime) updateAdvertisementAdmission() {
+	caps := byte(0)
+	if r.timeSlots != nil && len(r.timeSlots) < cap(r.timeSlots) {
+		caps |= CapabilityTimeRelay
+	}
+	if r.connectionPolicy().IncomingAvailable() {
+		caps |= CapabilityNativeAccepting
+	}
+	r.mu.Lock()
+	changed := r.advertisement.Capabilities != caps
+	r.advertisement.Capabilities = caps
+	r.mu.Unlock()
+	if changed {
+		r.requestAdvertisementRefresh()
 	}
 }
 
@@ -638,6 +730,9 @@ func (r *runtime) startCandidates(ctx context.Context, peers []candidate, now ti
 	}
 	for _, key := range r.candidateQueue().Order(keys, now) {
 		peer := byKey[key]
+		if r.freshness != nil && !r.freshness.nativeReady(peer, now) {
+			continue
+		}
 		lease := r.reserveCandidate(peer)
 		if lease == nil {
 			continue
@@ -651,9 +746,9 @@ func (r *runtime) startCandidates(ctx context.Context, peers []candidate, now ti
 		go func() {
 			defer r.links.Done()
 			defer lease.Release()
-			r.dialLink(localmesh.WithConnectionLease(ctx, lease), peer)
+			skipped := r.dialLink(localmesh.WithConnectionLease(ctx, lease), peer)
 			known, _ := r.knownCandidate(peer)
-			if ctx.Err() == nil && !lease.Retired() && (known == (meshid.Device{}) || !r.hasCheaperLink(known)) {
+			if !skipped && ctx.Err() == nil && !lease.Retired() && (known == (meshid.Device{}) || !r.hasCheaperLink(known)) {
 				r.failedCandidate(peer)
 			}
 		}()
@@ -716,7 +811,7 @@ func (r *runtime) maybeRestartDiscovery(ctx context.Context, bus *dbus.Conn, ada
 	r.cfg.Logger.Info("BLE discovery restarted after wendy net advertisement silence", zap.Duration("wendy_net_advert_silence", now.Sub(r.discovery.lastMeshSignal)))
 }
 
-func (r *runtime) dialLink(ctx context.Context, peer candidate) {
+func (r *runtime) dialLink(ctx context.Context, peer candidate) (skipped bool) {
 	if known, ok := r.knownCandidate(peer); ok && r.hasCheaperLink(known) {
 		r.cfg.Logger.Debug("BLE closing outbound CoC on cheaper-link decision", zap.String("radio", peer.address))
 		return
@@ -740,6 +835,9 @@ func (r *runtime) dialLink(ctx context.Context, peer candidate) {
 	}()
 	if ctx.Err() != nil {
 		return
+	}
+	if r.freshness != nil && !r.freshness.nativeReady(peer, time.Now()) {
+		return true
 	}
 	// Multiple BlueZ advertisements share the controller's advertising time.
 	// A BLE CoC connect can wait for the peer's next connectable advertisement
@@ -857,6 +955,7 @@ func (r *runtime) dialLink(ctx context.Context, peer candidate) {
 	if err != nil && ctx.Err() == nil {
 		r.cfg.Logger.Debug("BLE link ended", zap.String("radio", peer.address), zap.Error(err))
 	}
+	return
 }
 
 func (r *runtime) handshakeOutbound(ctx context.Context, secure *tls.Conn) (time.Duration, error) {

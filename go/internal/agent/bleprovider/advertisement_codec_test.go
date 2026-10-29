@@ -14,7 +14,7 @@ import (
 )
 
 func TestAdvertisementConformanceVectors(t *testing.T) {
-	raw, err := os.ReadFile("testdata/advertisement-v0.json")
+	raw, err := os.ReadFile("testdata/advertisement-v1.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,28 +48,28 @@ func TestAdvertisementConformanceVectors(t *testing.T) {
 					t.Fatalf("decoded %+v: %v", got, err)
 				}
 			}
-			if len(name) != 10 || 3+2+16+len(binary) != 30 {
+			if len(name) != 13 || 3+2+16+len(binary) != 31 {
 				t.Fatal("wire budget changed")
 			}
 		})
 	}
 }
 
-func TestLocalNameAll65BitBoundaries(t *testing.T) {
-	values := []string{"0", "1", "18446744073709551615", "18446744073709551616", "36893488147419103231"}
+func TestLocalNameAll80BitBoundaries(t *testing.T) {
+	values := []string{"0", "1", "18446744073709551615", "18446744073709551616", "36893488147419103231", "1208925819614629174706175"}
 	for _, decimal := range values {
 		n, _ := new(big.Int).SetString(decimal, 10)
-		raw := n.FillBytes(make([]byte, 9))
+		raw := n.FillBytes(make([]byte, AdvertisementSize))
 		name, err := encodeLocalName(raw)
 		if err != nil {
 			t.Fatal(err)
 		}
 		got, err := decodeLocalName(name)
 		if err != nil || !bytes.Equal(got, raw) {
-			t.Fatalf("65-bit boundary %s: %x %v", decimal, got, err)
+			t.Fatalf("80-bit boundary %s: %x %v", decimal, got, err)
 		}
 	}
-	if name, _ := encodeLocalName(make([]byte, 9)); name != "!!!!!!!!!!" {
+	if name, _ := encodeLocalName(make([]byte, AdvertisementSize)); name != strings.Repeat("!", LocalNameSize) {
 		t.Fatalf("zero padding: %q", name)
 	}
 	for _, name := range []string{"", "!!!!!!!!!", "!!!!!!!!!!!", "~~~~~~~~~~", " !!!!!!!!!", "\x7f!!!!!!!!!", "é!!!!!!!!"} {
@@ -78,14 +78,14 @@ func TestLocalNameAll65BitBoundaries(t *testing.T) {
 		}
 	}
 	if _, err := encodeLocalName(append([]byte{2}, make([]byte, 8)...)); err == nil {
-		t.Fatal("encoded 66-bit value")
+		t.Fatal("encoded wrong-length value")
 	}
 }
 
 func TestAdvertisementStrictVersionsAndFields(t *testing.T) {
 	a, _ := NewAdvertisement(lowDevice, "field", 0x81)
 	raw, _ := a.MarshalBinary()
-	for _, version := range []byte{1, 2, 0x80, 0xff} {
+	for _, version := range []byte{0, 2, 0x80, 0xff} {
 		bad := bytes.Clone(raw)
 		bad[0] = version
 		if _, err := ParseAdvertisement(bad, "field"); err == nil {
@@ -98,10 +98,10 @@ func TestAdvertisementStrictVersionsAndFields(t *testing.T) {
 		if _, err := a.MarshalLocalName(); err == nil {
 			t.Fatal("marshaled unknown name version")
 		}
-		if version == 1 {
+		if version == 2 {
 			name, _ := encodeLocalName(bad)
 			if _, err := ParseLocalName(name, "field"); err == nil {
-				t.Fatal("accepted text version 1")
+				t.Fatal("accepted text version 2")
 			}
 		}
 	}
@@ -110,11 +110,11 @@ func TestAdvertisementStrictVersionsAndFields(t *testing.T) {
 		t.Fatal("accepted wrong mesh")
 	}
 	if _, err := ParseAdvertisement(append(raw, 0), "field"); err == nil {
-		t.Fatal("accepted legacy ten-byte length")
+		t.Fatal("accepted trailing payload byte")
 	}
 	for _, psm := range []uint16{0, 1, 0x7f, 0x100, 0x1001, 0xffff} {
 		bad := bytes.Clone(raw)
-		bad[1], bad[2] = byte(psm>>8), byte(psm)
+		bad[2], bad[3] = byte(psm>>8), byte(psm)
 		name, _ := encodeLocalName(bad)
 		if _, err := ParseLocalName(name, "field"); err == nil {
 			t.Fatalf("accepted PSM %x", psm)
@@ -125,7 +125,7 @@ func TestAdvertisementStrictVersionsAndFields(t *testing.T) {
 func TestLocalNameRandomPayloads(t *testing.T) {
 	rng := rand.New(rand.NewPCG(22, 41))
 	for range 10000 {
-		raw := make([]byte, 9)
+		raw := make([]byte, AdvertisementSize)
 		raw[0] = byte(rng.Uint32() & 1)
 		for i := 1; i < len(raw); i++ {
 			raw[i] = byte(rng.Uint32())
