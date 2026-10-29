@@ -92,8 +92,11 @@ func (s *mcpServer) handleRun(ctx context.Context, req mcpgo.CallToolRequest) (*
 	} else {
 		start = !req.GetBool("deploy", false)
 	}
-	// Started deployments wait by default; create-only requests have no running
-	// process to check. An explicit true still rejects a create-only request.
+	// Started deployments wait by default where the CLI can (see
+	// waitReadyByDefault); create-only requests have no running process to
+	// check. An explicit true still rejects a create-only request.
+	_, waitRequested := req.GetArguments()["wait_ready"]
+	_, deadlineRequested := req.GetArguments()["readiness_timeout_seconds"]
 	waitReady, err := runBoolean(req, "wait_ready", start)
 	if err != nil {
 		return errResult(errCodeInvalidArgument, err.Error()), nil
@@ -128,11 +131,18 @@ func (s *mcpServer) handleRun(ctx context.Context, req mcpgo.CallToolRequest) (*
 	if target.Selector != "" {
 		selector = target.Selector
 	}
+	cloudRun := target.Transport == "cloud" && target.Selector == ""
+	if waitReady && !waitRequested && !deadlineRequested {
+		waitReady = s.waitReadyByDefault(projectPath, stringParam(req, "build_type"), selector, cloudRun)
+	}
 	if waitReady && (selector == "docker" || selector == "podman") {
 		return errResult(errCodeUnsupported, "wait_ready requires a WendyOS target; set wait_ready=false for local Docker/Podman and check application readiness separately"), nil
 	}
+	if waitReady && cloudRun {
+		return errResult(errCodeUnsupported, "wait_ready is not supported for device_name deployments; set wait_ready=false, or connect with cloud_connect and run without device_name"), nil
+	}
 	args := []string{"run", "--prefix", projectPath, "--device", selector, "--yes"}
-	if target.Transport == "cloud" && target.Selector == "" {
+	if cloudRun {
 		args = append([]string{"cloud"}, args...)
 		if target.CloudGRPC != "" {
 			args = append(args, "--cloud-grpc", target.CloudGRPC)
@@ -248,6 +258,21 @@ func (s *mcpServer) handleRun(ctx context.Context, req mcpgo.CallToolRequest) (*
 	}
 	reportProgress(ctx, tok, 1, 1, "deployment command completed")
 	return okResult(result), nil
+}
+
+// waitReadyByDefault reports whether a started run that leaves wait_ready out
+// should wait. `wendy cloud run` has no --wait-ready, local Docker/Podman have
+// no readiness wait, and `wendy run` refuses the wait for some projects
+// (Compose, multi-service, Xcode, native commands, host-built Swift, a build
+// host); the project backend reports those with the CLI's own checks.
+func (s *mcpServer) waitReadyByDefault(projectPath, buildType, selector string, cloudRun bool) bool {
+	if cloudRun || selector == "docker" || selector == "podman" {
+		return false
+	}
+	s.mu.RLock()
+	unsupported := s.project.WaitReadyUnsupported
+	s.mu.RUnlock()
+	return unsupported == nil || unsupported(projectPath, buildType) == nil
 }
 
 // Keep the tail while the process runs, including on failure. A large compiler
