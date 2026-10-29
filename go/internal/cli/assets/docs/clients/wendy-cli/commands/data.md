@@ -217,7 +217,7 @@ with the same header:
 kind: watch          # collection, inference or watch; no kind means collection
 version: 1
 name: front-door
-owner: watch/chat-3fa91c0e-1   # optional
+owner: watch/chat-3fa91c0e5b7d2a46-1   # optional
 ```
 
 - A **collection** is a campaign: everything in the campaign reference below.

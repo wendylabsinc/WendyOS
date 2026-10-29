@@ -20,8 +20,11 @@ connected target and transport instead of relying on the default device.
 
 The MCP server uses `wendy_status`, `device_list`, and `device_connect`.
 Inspect its actual tool list. General campaign/episode management uses the CLI,
-and `wendy_tools` has no `data` group. Do not invent tool names. A skill update
-does not update a running server.
+and `wendy_tools` has no `data` group. For an alert during the current MCP
+session, such as telling the user when a person appears, the `hardware` group's
+camera watch tools (`watch_sources`, `watch_start`, `watch_events`,
+`watch_stop`) record nothing and end with the session. Do not invent tool
+names. A skill update does not update a running server.
 
 Use `wendy data` when a local terminal is available. Without one, prepare the
 files, explain the missing execution access, and provide exact operator

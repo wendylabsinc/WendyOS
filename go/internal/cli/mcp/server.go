@@ -55,6 +55,7 @@ type mcpServer struct {
 	mu                   sync.RWMutex
 	proxyDiag            []proxyDiagEntry
 	containerMCP         *containerMCPManager
+	watches              *watchManager // guarded by mu; set while Start runs
 	runCommandFn         func(context.Context, []string, commandTarget, int) (string, bool, error)
 	runLogs              map[string]runLogRecord
 	runLogOrder          []string
@@ -123,6 +124,10 @@ func (s *mcpServer) setConnectionLocked(conn *grpcclient.AgentConnection, connTy
 	s.connRevision++
 	if s.containerMCP != nil {
 		s.containerMCP.invalidateLocked()
+	}
+	if s.watches != nil {
+		// Never call the manager with mu held: it reads the revision itself.
+		go s.watches.endStale(s.connRevision)
 	}
 	if conn == nil {
 		s.connType = ""
@@ -322,6 +327,7 @@ func (s *mcpServer) newProtocolServer() (*server.MCPServer, error) {
 	s.registerDeviceMaintenanceTools(srv)
 	s.registerProjectTools(srv)
 	s.registerCloudTools(srv)
+	s.registerWatchTools(srv)
 	applyToolTitles(srv)
 	registerToolAnalytics(srv)
 	// Analytics must wrap update notices so both events use the tool call's
@@ -363,6 +369,8 @@ func (s *mcpServer) run(ctx context.Context, serve func(*server.MCPServer) error
 	defer cancelStartup()
 	stopContainerMCP := s.startContainerMCP(startupCtx, srv)
 	defer stopContainerMCP()
+	stopWatches := s.startWatches(srv)
+	defer stopWatches() // runs first: removes watches while the connection is still open
 	go s.runStartupConnect(startupCtx)
 	go s.runCLIUpdateChecks(startupCtx, time.Hour)
 
