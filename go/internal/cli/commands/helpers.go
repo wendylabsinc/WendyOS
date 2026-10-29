@@ -1544,7 +1544,23 @@ func connectPickedLANDevice(ctx context.Context, d *models.DiscoveredDevice, add
 	// a device the CLI can reach only over its USB link (WiFi on another net)
 	// advertises both, and dialing addr alone (its unreachable WiFi IP) is what
 	// made `device info/shell/pair` report a reachable device as unreachable.
-	conn, err := connectAgentAtAddressWithProvisionedHint(ctx, addr, func() bool { return mtls }, lanDialCandidates(ctx, *d.LAN)...)
+	candidates := lanDialCandidates(ctx, *d.LAN)
+	dial := func() (*grpcclient.AgentConnection, error) {
+		return connectAgentAtAddressWithProvisionedHint(ctx, addr, func() bool { return mtls }, candidates...)
+	}
+	conn, err := dial()
+	if err != nil {
+		// A picked device that rejects our certificate gets the same clock
+		// recovery as a named one: before this, a device chosen in the picker
+		// went straight to "TLS authentication failed" with no time proof.
+		// Same endpoint and candidates; the picker only runs interactively, so
+		// read-only monitoring (always non-interactive) never reaches here.
+		// autoSyncTimeAndRetry declines identity refusals itself. A pinned
+		// device that rejected our certificate arrives as the pinned refusal,
+		// so filtering on blocksUnauthenticatedFallback here would skip the
+		// one picker case that needs the time proof.
+		conn, err = autoSyncTimeAndRetry(ctx, err, dial)
+	}
 	if err != nil {
 		// Neither refusal is "the LAN attempt failed", and the BLE half of this
 		// row is named by the same unauthenticated advertisement that named the
@@ -1556,6 +1572,12 @@ func connectPickedLANDevice(ctx context.Context, d *models.DiscoveredDevice, add
 		// must not silently reopen this.
 		if blocksUnauthenticatedFallback(err) {
 			return nil, err
+		}
+		// A cancelled command isn't a failed LAN attempt either. Clock
+		// recovery can wait ~10 s, and Ctrl-C during it must end the command,
+		// not go on to a Bluetooth connect.
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
 		}
 		// LAN failed — fall back to BLE if available.
 		if d.Bluetooth != nil {
