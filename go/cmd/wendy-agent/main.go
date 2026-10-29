@@ -346,10 +346,26 @@ func main() {
 	provisioningSvcV2 := services.NewProvisioningServiceV2(provisioningSvc)
 	audioSvcV2 := services.NewAudioServiceV2(audioSvc)
 	telemetrySvcV2 := services.NewTelemetryServiceV2(logger, broadcaster, telemetryBuf)
+	// WENDY_DATA_DIR wins outright. Without it the store goes on the data
+	// partition when /var/lib/wendy is a separate, larger filesystem than the
+	// one holding /var/lib/wendy-agent, and stays there otherwise; the log says
+	// which and why.
 	dataRoot := os.Getenv("WENDY_DATA_DIR")
 	dataManager, err := agentdata.NewManager(dataRoot)
 	if err != nil {
 		logger.Fatal("Failed to initialize episode data manager", zap.Error(err))
+	}
+	dataStore := dataManager.StoreLocation()
+	logger.Info("Wendy Data episode store",
+		zap.String("path", dataStore.Path),
+		zap.String("campaigns", dataStore.CampaignDir),
+		zap.String("inference", dataStore.InferenceDir),
+		zap.String("reason", dataStore.Reason),
+		zap.String("campaignsReason", dataStore.CampaignReason),
+		zap.String("inferenceReason", dataStore.InferenceReason))
+	if msg := dataStore.LeftBehindMessage(); msg != "" {
+		logger.Warn(msg, zap.Int("episodes", dataStore.LeftBehind), zap.Int64("bytes", dataStore.LeftBehindBytes),
+			zap.Int("notUploaded", dataStore.LeftBehindNotUploaded))
 	}
 	dataManager.SetConsensusProvider(func(ctx context.Context) (timesync.Consensus, error) {
 		return timesync.QueryConsensus(ctx, timesync.Servers)
@@ -784,6 +800,9 @@ func main() {
 			// Legacy fallback for a CLI that does not put each target's actual
 			// mTLS agent port in PushTarget.
 			TargetAgentPort: uint16(mtlsPortNum),
+			// Reported with the build capabilities, so a device reachable only
+			// over USB says it has no internet before a build fails on it.
+			CheckInternet: services.CheckRegistryReachable,
 			// The Cloud asset UUID is the device UUID. Still require membership
 			// in this tenant's roster before delivery. Read fresh per build:
 			// roster sync and enrollment can change membership while running.
@@ -1218,12 +1237,22 @@ func main() {
 	// Report every app's state to cloud (apps spec section 2). Like the
 	// roster it starts unconditionally and stays silent until enrolled.
 	var reportedState *services.ReportedState
+	var postbox *services.Postbox
 	if ctrdErr == nil {
 		reportedState = services.NewReportedState(logger, ctrdClient, telemetryBuf, cloudGRPCURLForCloudHost(cloudHost), certPEM, keyPEM, chainPEM)
-		wg.Add(1)
+		// The operator-signed postbox (AAA contract section 5.3): woken by the
+		// reported-state nudge, it applies only what it verifies itself.
+		postbox = services.NewPostbox(logger, telemetryBuf, configPath, services.NewPostboxControl(containerSvc))
+		postbox.UpdateIdentity(cloudGRPCURLForCloudHost(cloudHost), certPEM, keyPEM, chainPEM)
+		reportedState.AttachPostbox(postbox)
+		wg.Add(2)
 		go func() {
 			defer wg.Done()
 			reportedState.Run(ctx)
+		}()
+		go func() {
+			defer wg.Done()
+			postbox.Run(ctx)
 		}()
 	}
 
@@ -1379,6 +1408,7 @@ func main() {
 		meshRoster.UpdateIdentity(cloudGRPCURLForCloudHost(cloudHost), certPEM, keyPEM, chainPEM)
 		if reportedState != nil {
 			reportedState.UpdateIdentity(cloudGRPCURLForCloudHost(cloudHost), certPEM, keyPEM, chainPEM)
+			postbox.UpdateIdentity(cloudGRPCURLForCloudHost(cloudHost), certPEM, keyPEM, chainPEM)
 		}
 		// The freshly issued identity may name a different tenant than the
 		// boot snapshot. Retire every VIP slot outside the new tenant (they
@@ -1429,6 +1459,7 @@ func main() {
 		meshRoster.UpdateIdentity("", "", "", "")
 		if reportedState != nil {
 			reportedState.UpdateIdentity("", "", "", "")
+			postbox.UpdateIdentity("", "", "", "")
 		}
 		_ = meshProxy.Close()
 		if udpProxy != nil {

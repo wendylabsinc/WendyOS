@@ -69,7 +69,7 @@ func (f fakeMetricsPublisher) PublishMetrics(req *colmetricspb.ExportMetricsServ
 	f.metrics <- req
 }
 
-func startReportedState(t *testing.T, apps AppReporter, poll, heartbeat time.Duration) (*fakeReportedCloud, fakeMetricsPublisher, *ReportedState, *atomic.Int32) {
+func startReportedState(t *testing.T, apps AppReporter, poll, heartbeat time.Duration, postbox *Postbox) (*fakeReportedCloud, fakeMetricsPublisher, *ReportedState, *atomic.Int32) {
 	t.Helper()
 	cloud := &fakeReportedCloud{reports: make(chan *cloudpbv2.UpdateReportedStateRequest, 16)}
 	lis := bufconn.Listen(1 << 20)
@@ -81,6 +81,9 @@ func startReportedState(t *testing.T, apps AppReporter, poll, heartbeat time.Dur
 	pub := fakeMetricsPublisher{metrics: make(chan *colmetricspb.ExportMetricsServiceRequest, 16)}
 	r := NewReportedState(zap.NewNop(), apps, pub, "cloud", "cert", "key", "")
 	r.poll, r.heartbeat = poll, heartbeat
+	if postbox != nil {
+		r.AttachPostbox(postbox)
+	}
 	dials := new(atomic.Int32)
 	r.dial = func(string, string, string, string) (grpc.ClientConnInterface, io.Closer, error) {
 		dials.Add(1)
@@ -90,8 +93,10 @@ func startReportedState(t *testing.T, apps AppReporter, poll, heartbeat time.Dur
 		return conn, conn, err
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-	go r.Run(ctx)
+	done := make(chan struct{})
+	go func() { r.Run(ctx); close(done) }()
+	// Run must stop before a postbox fixture's temp dir is removed: Reported saves there.
+	t.Cleanup(func() { cancel(); <-done })
 	return cloud, pub, r, dials
 }
 
@@ -120,7 +125,7 @@ func nextReport(t *testing.T, reports <-chan *cloudpbv2.UpdateReportedStateReque
 func TestReportedStateReportsUnassignedApp(t *testing.T) {
 	apps := &fakeAppReporter{}
 	apps.set(AppReport{AppID: "com.example.cam", ReleaseID: "0b6f2c1e-8a3d-4c5e-9f00-1234567890ab", ManifestDigest: "sha256:abc", Running: true})
-	cloud, pub, _, _ := startReportedState(t, apps, time.Hour, time.Hour)
+	cloud, pub, _, _ := startReportedState(t, apps, time.Hour, time.Hour, nil)
 
 	want := &cloudpbv2.UpdateReportedStateRequest{CurrentStates: []*cloudpbv2.CurrentState{{
 		AppId:          "com.example.cam",
@@ -147,7 +152,7 @@ func TestReportedStateReportsUnassignedApp(t *testing.T) {
 func TestReportedStateSendsChangeAtOnce(t *testing.T) {
 	apps := &fakeAppReporter{}
 	apps.set(AppReport{AppID: "com.example.cam", Running: true})
-	cloud, _, _, _ := startReportedState(t, apps, 10*time.Millisecond, time.Hour)
+	cloud, _, _, _ := startReportedState(t, apps, 10*time.Millisecond, time.Hour, nil)
 
 	nextReport(t, cloud.reports)
 	noReport(t, cloud.reports, 100*time.Millisecond)
@@ -163,7 +168,7 @@ func TestReportedStateHeartbeatResendsUnchanged(t *testing.T) {
 	apps := &fakeAppReporter{}
 	apps.set(AppReport{AppID: "com.example.cam", Running: true})
 	const heartbeat = 200 * time.Millisecond
-	cloud, _, _, _ := startReportedState(t, apps, 10*time.Millisecond, heartbeat)
+	cloud, _, _, _ := startReportedState(t, apps, 10*time.Millisecond, heartbeat, nil)
 
 	first := nextReport(t, cloud.reports)
 	sent := time.Now()
@@ -180,7 +185,7 @@ func TestReportedStateHeartbeatResendsUnchanged(t *testing.T) {
 func TestReportedStateReconnectsOnIdentityChange(t *testing.T) {
 	apps := &fakeAppReporter{}
 	apps.set(AppReport{AppID: "com.example.cam"})
-	cloud, _, r, dials := startReportedState(t, apps, time.Hour, time.Hour)
+	cloud, _, r, dials := startReportedState(t, apps, time.Hour, time.Hour, nil)
 
 	nextReport(t, cloud.reports)
 	r.UpdateIdentity("cloud", "cert2", "key2", "")

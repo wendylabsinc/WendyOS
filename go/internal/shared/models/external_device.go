@@ -55,3 +55,17 @@ func (d ExternalDevice) Rank() int {
 	}
 	return 0
 }
+
+// LiteDedupID is the key that collapses one Wendy Lite board's USB, LAN and BLE
+// sightings into one row: the enrolled device UUID when the transport reported
+// one, else the device id it published (the hardware id on an unenrolled
+// board). Preferring the enrolled UUID is what lets USB, whose device id stays
+// the hardware id after enrollment, meet LAN and BLE. It is a case-sensitive id,
+// returned exactly as reported; empty when the row carries neither (an
+// unflashed board).
+func (d ExternalDevice) LiteDedupID() string {
+	if id := d.ConnectionInfo["enrolledDeviceId"]; id != "" {
+		return id
+	}
+	return d.ConnectionInfo["deviceId"]
+}

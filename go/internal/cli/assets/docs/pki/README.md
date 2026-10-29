@@ -44,7 +44,7 @@ Unprovisioning still removes copies left by older agents. Agent services,
 including the embedded container registry, receive credentials in memory;
 these persistence files are internal agent state, not an app credential API.
 
-The Swift agent follows the same layout for software-backed keys. With a
+The macOS agent (Swift) follows the same layout for software-backed keys. With a
 Secure Enclave key, there is no `device-key.pem`; the wrapped key is held in
 the Keychain.
 
@@ -169,14 +169,14 @@ Unpinning by hostname also clears pins filed under the device's *other* names (t
 
 ### Re-enrolling after an intentional reset or organization move
 
-Unenrolling a device does not clear the identity saved by this CLI. If you intentionally unenrolled, reset, or reflashed it, or know it is moving to another organization, clear the old local pin before retrying enrollment:
+`wendy device unenroll` on a reachable device clears the identity this CLI saved for it once the device confirms its reset, even when the Cloud cleanup that follows fails: the device can no longer present that identity. Cloud-only unenrollment (`--cloud-only`, `wendy cloud device unenroll`) never contacts or resets the device, so it keeps the pin. So does a reset, reflash, or organization move done any other way, or unenrollment run from another machine. In those cases, clear the old local pin before retrying enrollment:
 
 ```sh
 wendy device unpin wendyos-ccr1.local
 wendy device enroll --device wendyos-ccr1.local
 ```
 
-Use the hostname printed in the refusal. Unpinning does not enroll the device or delete its cloud asset. If unenrollment reported a cloud cleanup failure, finish that cleanup in the Wendy Cloud dashboard separately. If the identity change was unexpected, keep the pin and verify the device first; check `wendy auth login` if this CLI is missing the organization's credentials.
+Use the hostname printed in the refusal. A pinned device whose plaintext port answers while no mTLS endpoint does is refused with exactly this guidance, because that is what an unprovisioned agent looks like. If another of its addresses has no agent at all, the refusal also notes that the answering address may be a stale DNS or mDNS record for another machine; keep the pin in that case. When nothing answers at all, the refusal says unpinning is not the fix: that is a reachability problem, not an identity one. The CLI can only tell these cases apart by probing with a client certificate. When it holds none for the device (signed out, for example), the refusal says no authenticated connection could be attempted; run `wendy auth login` and retry to get the guidance for your case. Unpinning does not enroll the device or delete its cloud asset. If unenrollment reported a cloud cleanup failure, run the `wendy cloud device unenroll` command it printed, or finish that cleanup in the Wendy Cloud dashboard. Until then Cloud still lists the device, and commands that read that list pin it again; the unenroll output prints the `wendy device unpin` command that clears such a pin. If the identity change was unexpected, keep the pin and verify the device first; check `wendy auth login` if this CLI is missing the organization's credentials.
 
 ## Pin sources and precedence
 
@@ -189,7 +189,7 @@ A pin's `source` field records how the CLI learned it:
 
 Pins written before sources were tracked carry an empty `source` and are treated as `lan`.
 
-A `cloud` write is authoritative and overwrites whatever was pinned for that name, `lan`-sourced or not — that is how cloud-known devices get their trust-on-first-use window closed before the CLI ever meets them on the network (see below). The reverse never holds: a LAN sighting cannot upgrade or override a `cloud` pin, and specifically:
+A `cloud` write is authoritative and overwrites whatever was pinned for that name, `lan`-sourced or not — that is how cloud-known devices get their trust-on-first-use window closed before the CLI ever meets them on the network (see below). The one exception is a tenant session's roster meeting a pin that already holds a different tenant principal, which it leaves alone (see [Cloud pin seeding](#cloud-pin-seeding)). The reverse never holds: a LAN sighting cannot upgrade or override a `cloud` pin, and specifically:
 
 - A `lan`-sourced pin that predates asset ids (no asset recorded) is backfilled with the observed asset id on the first connection whose org and cloud still match — org and cloud already vouch for the connection, so this is a one-time upgrade, not a challenge. A `cloud`-sourced pin with no asset id is **not** backfilled this way: the cloud already spoke for this name, and a LAN sighting is not evidence to the contrary, so it is treated as a plain match instead.
 - An asset-less `cloud` pin is never displaced by a `lan` pin in a way that would erase an existing exact-identity constraint on that name — cloud authority decides *which* binding to believe, and applying it is worthless if the result is a name constrained to no asset at all.
@@ -209,6 +209,8 @@ Consulting an alias can only ever *find* a pin, never discard one: an attacker-c
 ## Cloud pin seeding
 
 A hostname the CLI has never connected to has no pin, so its first connection is trust-on-first-use — the one moment this scheme cannot, by construction, distinguish the real device from an impostor answering first. Seeding pins from the cloud closes that window for every device the org's cloud already knows about: whenever the CLI fetches the org's asset roster over an authenticated session, each named asset is recorded as a `cloud`-sourced pin (org, asset id) before the CLI has ever reached it on the network. An impostor answering an mDNS query for that name is then rejected on the very first LAN connection attempt, not just the second.
+
+A tenant (UUID) session's roster records each asset's device principal, taken from its PKI device binding when it has one. It replaces pins that hold no principal, such as the numeric pins an earlier Cloud session left behind, but never a pin that holds a different principal. That pin names a device the CLI already verified, or a binding an earlier roster made, and a Cloud name that now belongs to another asset stays refused until `wendy device unpin`. Cloud connections fetch the roster too, so replacing the pin would let the retry of a refused connection reach the name's new holder. A name that two assets share is not seeded, because Cloud lookups refuse it as ambiguous. Two lookups do not seed at all: the offline re-query that explains why a name was not found, and unenrollment, which deletes the asset it finds.
 
 ## CA key rollover
 

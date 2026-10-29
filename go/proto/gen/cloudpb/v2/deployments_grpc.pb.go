@@ -19,18 +19,17 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	DeploymentService_CreateAppRelease_FullMethodName        = "/wendycloud.v2.DeploymentService/CreateAppRelease"
-	DeploymentService_UpdateAppRelease_FullMethodName        = "/wendycloud.v2.DeploymentService/UpdateAppRelease"
-	DeploymentService_ListAppReleases_FullMethodName         = "/wendycloud.v2.DeploymentService/ListAppReleases"
-	DeploymentService_GetPushImageCredentials_FullMethodName = "/wendycloud.v2.DeploymentService/GetPushImageCredentials"
-	DeploymentService_CreateDeployment_FullMethodName        = "/wendycloud.v2.DeploymentService/CreateDeployment"
-	DeploymentService_GetDeployment_FullMethodName           = "/wendycloud.v2.DeploymentService/GetDeployment"
-	DeploymentService_ListDeployments_FullMethodName         = "/wendycloud.v2.DeploymentService/ListDeployments"
-	DeploymentService_HandleReportedState_FullMethodName     = "/wendycloud.v2.DeploymentService/HandleReportedState"
-	DeploymentService_ListAssetApps_FullMethodName           = "/wendycloud.v2.DeploymentService/ListAssetApps"
-	DeploymentService_GetPullCredentials_FullMethodName      = "/wendycloud.v2.DeploymentService/GetPullCredentials"
-	DeploymentService_ListDeviceContainers_FullMethodName    = "/wendycloud.v2.DeploymentService/ListDeviceContainers"
-	DeploymentService_ControlContainer_FullMethodName        = "/wendycloud.v2.DeploymentService/ControlContainer"
+	DeploymentService_CreateAppRelease_FullMethodName     = "/wendycloud.v2.DeploymentService/CreateAppRelease"
+	DeploymentService_UpdateAppRelease_FullMethodName     = "/wendycloud.v2.DeploymentService/UpdateAppRelease"
+	DeploymentService_ListAppReleases_FullMethodName      = "/wendycloud.v2.DeploymentService/ListAppReleases"
+	DeploymentService_CreateDeployment_FullMethodName     = "/wendycloud.v2.DeploymentService/CreateDeployment"
+	DeploymentService_GetDeployment_FullMethodName        = "/wendycloud.v2.DeploymentService/GetDeployment"
+	DeploymentService_ListDeployments_FullMethodName      = "/wendycloud.v2.DeploymentService/ListDeployments"
+	DeploymentService_HandleReportedState_FullMethodName  = "/wendycloud.v2.DeploymentService/HandleReportedState"
+	DeploymentService_ListAssetApps_FullMethodName        = "/wendycloud.v2.DeploymentService/ListAssetApps"
+	DeploymentService_ListAppDeviceStates_FullMethodName  = "/wendycloud.v2.DeploymentService/ListAppDeviceStates"
+	DeploymentService_ListDeviceContainers_FullMethodName = "/wendycloud.v2.DeploymentService/ListDeviceContainers"
+	DeploymentService_ControlContainer_FullMethodName     = "/wendycloud.v2.DeploymentService/ControlContainer"
 )
 
 // DeploymentServiceClient is the client API for DeploymentService service.
@@ -43,11 +42,6 @@ type DeploymentServiceClient interface {
 	// Signed; payload_type "wendycloud.v2.UpdateAppReleaseRequest".
 	UpdateAppRelease(ctx context.Context, in *SignedRequest, opts ...grpc.CallOption) (*AppRelease, error)
 	ListAppReleases(ctx context.Context, in *ListAppReleasesRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ListAppReleasesResponse], error)
-	// Deprecated: Do not use.
-	// Retired by the encrypted registry (registry.proto): no CLI holds a registry
-	// token. Deprecated now, deleted once cloud serves ArtifactRegistryService
-	// (expand, migrate, contract).
-	GetPushImageCredentials(ctx context.Context, in *GetPushImageCredentialsRequest, opts ...grpc.CallOption) (*GetPushImageCredentialsResponse, error)
 	// ==================== Deployments ====================
 	// Signed; payload_type "wendycloud.v2.CreateDeploymentRequest".
 	CreateDeployment(ctx context.Context, in *SignedRequest, opts ...grpc.CallOption) (*Deployment, error)
@@ -56,11 +50,9 @@ type DeploymentServiceClient interface {
 	// ==================== Asset App Desired Instructions (wendy-agent) ====================
 	HandleReportedState(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[UpdateReportedStateRequest, DesiredStateResponse], error)
 	ListAssetApps(ctx context.Context, in *ListAssetAppsRequest, opts ...grpc.CallOption) (*ListAssetAppsResponse, error)
-	// Deprecated: Do not use.
-	// Retired by the encrypted registry (registry.proto): devices pull through
-	// DeviceArtifactService on their own mTLS. Deprecated now, deleted once cloud
-	// serves it (expand, migrate, contract).
-	GetPullCredentials(ctx context.Context, in *GetPullCredentialsRequest, opts ...grpc.CallOption) (*GetPullCredentialsResponse, error)
+	// Every device's state of one app, report-only (unassigned) rows included
+	// (WDY-4000): ListAssetApps across devices, for the app and rollout views.
+	ListAppDeviceStates(ctx context.Context, in *ListAppDeviceStatesRequest, opts ...grpc.CallOption) (*ListAppDeviceStatesResponse, error)
 	// ==================== Device Container Control ====================
 	ListDeviceContainers(ctx context.Context, in *ListDeviceContainersRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[DeviceContainer], error)
 	// Signed; payload_type "wendycloud.v2.ControlContainerRequest".
@@ -113,17 +105,6 @@ func (c *deploymentServiceClient) ListAppReleases(ctx context.Context, in *ListA
 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type DeploymentService_ListAppReleasesClient = grpc.ServerStreamingClient[ListAppReleasesResponse]
-
-// Deprecated: Do not use.
-func (c *deploymentServiceClient) GetPushImageCredentials(ctx context.Context, in *GetPushImageCredentialsRequest, opts ...grpc.CallOption) (*GetPushImageCredentialsResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(GetPushImageCredentialsResponse)
-	err := c.cc.Invoke(ctx, DeploymentService_GetPushImageCredentials_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
 
 func (c *deploymentServiceClient) CreateDeployment(ctx context.Context, in *SignedRequest, opts ...grpc.CallOption) (*Deployment, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
@@ -187,11 +168,10 @@ func (c *deploymentServiceClient) ListAssetApps(ctx context.Context, in *ListAss
 	return out, nil
 }
 
-// Deprecated: Do not use.
-func (c *deploymentServiceClient) GetPullCredentials(ctx context.Context, in *GetPullCredentialsRequest, opts ...grpc.CallOption) (*GetPullCredentialsResponse, error) {
+func (c *deploymentServiceClient) ListAppDeviceStates(ctx context.Context, in *ListAppDeviceStatesRequest, opts ...grpc.CallOption) (*ListAppDeviceStatesResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(GetPullCredentialsResponse)
-	err := c.cc.Invoke(ctx, DeploymentService_GetPullCredentials_FullMethodName, in, out, cOpts...)
+	out := new(ListAppDeviceStatesResponse)
+	err := c.cc.Invoke(ctx, DeploymentService_ListAppDeviceStates_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -237,11 +217,6 @@ type DeploymentServiceServer interface {
 	// Signed; payload_type "wendycloud.v2.UpdateAppReleaseRequest".
 	UpdateAppRelease(context.Context, *SignedRequest) (*AppRelease, error)
 	ListAppReleases(*ListAppReleasesRequest, grpc.ServerStreamingServer[ListAppReleasesResponse]) error
-	// Deprecated: Do not use.
-	// Retired by the encrypted registry (registry.proto): no CLI holds a registry
-	// token. Deprecated now, deleted once cloud serves ArtifactRegistryService
-	// (expand, migrate, contract).
-	GetPushImageCredentials(context.Context, *GetPushImageCredentialsRequest) (*GetPushImageCredentialsResponse, error)
 	// ==================== Deployments ====================
 	// Signed; payload_type "wendycloud.v2.CreateDeploymentRequest".
 	CreateDeployment(context.Context, *SignedRequest) (*Deployment, error)
@@ -250,11 +225,9 @@ type DeploymentServiceServer interface {
 	// ==================== Asset App Desired Instructions (wendy-agent) ====================
 	HandleReportedState(grpc.BidiStreamingServer[UpdateReportedStateRequest, DesiredStateResponse]) error
 	ListAssetApps(context.Context, *ListAssetAppsRequest) (*ListAssetAppsResponse, error)
-	// Deprecated: Do not use.
-	// Retired by the encrypted registry (registry.proto): devices pull through
-	// DeviceArtifactService on their own mTLS. Deprecated now, deleted once cloud
-	// serves it (expand, migrate, contract).
-	GetPullCredentials(context.Context, *GetPullCredentialsRequest) (*GetPullCredentialsResponse, error)
+	// Every device's state of one app, report-only (unassigned) rows included
+	// (WDY-4000): ListAssetApps across devices, for the app and rollout views.
+	ListAppDeviceStates(context.Context, *ListAppDeviceStatesRequest) (*ListAppDeviceStatesResponse, error)
 	// ==================== Device Container Control ====================
 	ListDeviceContainers(*ListDeviceContainersRequest, grpc.ServerStreamingServer[DeviceContainer]) error
 	// Signed; payload_type "wendycloud.v2.ControlContainerRequest".
@@ -278,9 +251,6 @@ func (UnimplementedDeploymentServiceServer) UpdateAppRelease(context.Context, *S
 func (UnimplementedDeploymentServiceServer) ListAppReleases(*ListAppReleasesRequest, grpc.ServerStreamingServer[ListAppReleasesResponse]) error {
 	return status.Error(codes.Unimplemented, "method ListAppReleases not implemented")
 }
-func (UnimplementedDeploymentServiceServer) GetPushImageCredentials(context.Context, *GetPushImageCredentialsRequest) (*GetPushImageCredentialsResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method GetPushImageCredentials not implemented")
-}
 func (UnimplementedDeploymentServiceServer) CreateDeployment(context.Context, *SignedRequest) (*Deployment, error) {
 	return nil, status.Error(codes.Unimplemented, "method CreateDeployment not implemented")
 }
@@ -296,8 +266,8 @@ func (UnimplementedDeploymentServiceServer) HandleReportedState(grpc.BidiStreami
 func (UnimplementedDeploymentServiceServer) ListAssetApps(context.Context, *ListAssetAppsRequest) (*ListAssetAppsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListAssetApps not implemented")
 }
-func (UnimplementedDeploymentServiceServer) GetPullCredentials(context.Context, *GetPullCredentialsRequest) (*GetPullCredentialsResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method GetPullCredentials not implemented")
+func (UnimplementedDeploymentServiceServer) ListAppDeviceStates(context.Context, *ListAppDeviceStatesRequest) (*ListAppDeviceStatesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListAppDeviceStates not implemented")
 }
 func (UnimplementedDeploymentServiceServer) ListDeviceContainers(*ListDeviceContainersRequest, grpc.ServerStreamingServer[DeviceContainer]) error {
 	return status.Error(codes.Unimplemented, "method ListDeviceContainers not implemented")
@@ -373,24 +343,6 @@ func _DeploymentService_ListAppReleases_Handler(srv interface{}, stream grpc.Ser
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type DeploymentService_ListAppReleasesServer = grpc.ServerStreamingServer[ListAppReleasesResponse]
 
-func _DeploymentService_GetPushImageCredentials_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(GetPushImageCredentialsRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(DeploymentServiceServer).GetPushImageCredentials(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: DeploymentService_GetPushImageCredentials_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(DeploymentServiceServer).GetPushImageCredentials(ctx, req.(*GetPushImageCredentialsRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 func _DeploymentService_CreateDeployment_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(SignedRequest)
 	if err := dec(in); err != nil {
@@ -463,20 +415,20 @@ func _DeploymentService_ListAssetApps_Handler(srv interface{}, ctx context.Conte
 	return interceptor(ctx, in, info, handler)
 }
 
-func _DeploymentService_GetPullCredentials_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(GetPullCredentialsRequest)
+func _DeploymentService_ListAppDeviceStates_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListAppDeviceStatesRequest)
 	if err := dec(in); err != nil {
 		return nil, err
 	}
 	if interceptor == nil {
-		return srv.(DeploymentServiceServer).GetPullCredentials(ctx, in)
+		return srv.(DeploymentServiceServer).ListAppDeviceStates(ctx, in)
 	}
 	info := &grpc.UnaryServerInfo{
 		Server:     srv,
-		FullMethod: DeploymentService_GetPullCredentials_FullMethodName,
+		FullMethod: DeploymentService_ListAppDeviceStates_FullMethodName,
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(DeploymentServiceServer).GetPullCredentials(ctx, req.(*GetPullCredentialsRequest))
+		return srv.(DeploymentServiceServer).ListAppDeviceStates(ctx, req.(*ListAppDeviceStatesRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -526,10 +478,6 @@ var DeploymentService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _DeploymentService_UpdateAppRelease_Handler,
 		},
 		{
-			MethodName: "GetPushImageCredentials",
-			Handler:    _DeploymentService_GetPushImageCredentials_Handler,
-		},
-		{
 			MethodName: "CreateDeployment",
 			Handler:    _DeploymentService_CreateDeployment_Handler,
 		},
@@ -542,8 +490,8 @@ var DeploymentService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _DeploymentService_ListAssetApps_Handler,
 		},
 		{
-			MethodName: "GetPullCredentials",
-			Handler:    _DeploymentService_GetPullCredentials_Handler,
+			MethodName: "ListAppDeviceStates",
+			Handler:    _DeploymentService_ListAppDeviceStates_Handler,
 		},
 		{
 			MethodName: "ControlContainer",

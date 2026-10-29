@@ -16,8 +16,11 @@ the Cloud broker. Start with the
 ## Usage
 
 ```sh
-wendy cloud tunnel <local-port>:<remote-port>[/udp] [--cloud-grpc <endpoint>] [--device <id|name>]
+wendy cloud tunnel [<local-port>:<remote-port>[/udp]] [--cloud-grpc <endpoint>] [--device <id|name>]
 ```
+
+Without a port mapping, the command prompts for one in a terminal. Scripts
+and `--json` invocations must pass the mapping.
 
 For example, forward local port 15052 to the Wendy Agent service:
 

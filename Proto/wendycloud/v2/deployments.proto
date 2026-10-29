@@ -17,12 +17,6 @@ service DeploymentService {
     option (wendy.signed_request) = true;
   }
   rpc ListAppReleases(ListAppReleasesRequest) returns (stream ListAppReleasesResponse);
-  // Retired by the encrypted registry (registry.proto): no CLI holds a registry
-  // token. Deprecated now, deleted once cloud serves ArtifactRegistryService
-  // (expand, migrate, contract).
-  rpc GetPushImageCredentials(GetPushImageCredentialsRequest) returns (GetPushImageCredentialsResponse) {
-    option deprecated = true;
-  }
 
   // ==================== Deployments ====================
   // Signed; payload_type "wendycloud.v2.CreateDeploymentRequest".
@@ -35,12 +29,9 @@ service DeploymentService {
   // ==================== Asset App Desired Instructions (wendy-agent) ====================
   rpc HandleReportedState(stream UpdateReportedStateRequest) returns (stream DesiredStateResponse);
   rpc ListAssetApps(ListAssetAppsRequest) returns (ListAssetAppsResponse);
-  // Retired by the encrypted registry (registry.proto): devices pull through
-  // DeviceArtifactService on their own mTLS. Deprecated now, deleted once cloud
-  // serves it (expand, migrate, contract).
-  rpc GetPullCredentials(GetPullCredentialsRequest) returns (GetPullCredentialsResponse) {
-    option deprecated = true;
-  }
+  // Every device's state of one app, report-only (unassigned) rows included
+  // (WDY-4000): ListAssetApps across devices, for the app and rollout views.
+  rpc ListAppDeviceStates(ListAppDeviceStatesRequest) returns (ListAppDeviceStatesResponse);
 
   // ==================== Device Container Control ====================
   rpc ListDeviceContainers(ListDeviceContainersRequest) returns (stream DeviceContainer);
@@ -95,19 +86,6 @@ message ListAppReleasesResponse {
   int32 offset = 3;
 }
 
-message GetPushImageCredentialsRequest {
-  string organization_id = 1;
-  string app_id = 2;
-}
-
-message GetPushImageCredentialsResponse {
-  string registry_url = 1;
-  string full_image_path = 2;
-  string access_token = 3;
-  google.protobuf.Timestamp expires_at = 4;
-  string username = 5;
-}
-
 // ==================== Deployments ====================
 
 message Deployment {
@@ -143,6 +121,10 @@ message CreateDeploymentRequest {
   // non-empty targeting that matches no device is refused with FAILED_PRECONDITION.
   repeated string target_tags = 6;
   repeated string target_device_ids = 7;
+  // Instruction validity (WDY-4015 item 3, sem 2026-10-23 22:27), under the
+  // operator's signature: required when cloud relays the request to a device
+  // postbox. Rules: conformance/postbox-entry/README.md.
+  google.protobuf.Timestamp valid_until = 8;
 }
 
 message GetDeploymentRequest {
@@ -193,6 +175,11 @@ enum ApplyOutcome {
   APPLY_OUTCOME_REJECTED_UNWRAP = 6;
   APPLY_OUTCOME_PULL_REFUSED = 7;
   APPLY_OUTCOME_SUPERSEDED = 8;
+  // The entry passed every verification check, but the device failed to carry
+  // it out (e.g. the container did not start). Never reported as a
+  // REJECTED_* value: those mean the device refused the entry itself. The
+  // failure reason stays in the device's audit log.
+  APPLY_OUTCOME_APPLY_FAILED = 9;
 }
 
 // this is to be called by the wendy-agent to get the desired state of an app on an asset
@@ -279,18 +266,30 @@ message ListAssetAppsResponse {
   repeated AssetApp asset_apps = 1;
 }
 
-// ==================== Pull Credentials (wendy-agent / microcontrollers) ====================
-message GetPullCredentialsRequest {
-  string app_release_id = 1;
+// ==================== List App Device States ====================
+message ListAppDeviceStatesRequest {
+  string organization_id = 1;
+  string app_id = 2;
+  // At most this many rows; 0 = the server default. The server caps it.
+  int32 page_size = 3;
+  // next_page_token of the previous page; empty = the first page.
+  string page_token = 4;
 }
 
-message GetPullCredentialsResponse {
-  string registry_url = 1;
-  string full_artifact_path = 2;
-  string access_token = 3;
-  google.protobuf.Timestamp expires_at = 4;
-  string username = 5;
-  ReleaseType release_type = 6;
+// One device's row for the app: the AssetApp ListAssetApps returns for that
+// device, and which device it is.
+message AppDeviceState {
+  string asset_id = 1;
+  string asset_name = 2;
+  AssetApp state = 3;
+}
+
+message ListAppDeviceStatesResponse {
+  // Ordered by asset_id. Only devices the caller may see: a hidden device is
+  // absent, and nothing counts it.
+  repeated AppDeviceState rows = 1;
+  // Empty = the last page.
+  string next_page_token = 2;
 }
 
 // ==================== Device Container Control ====================
@@ -325,6 +324,10 @@ message ControlContainerRequest {
   // "myapp" for whole app; "myapp.web" for one service container
   string container_name = 3;
   ContainerAction action = 4;
+  // Instruction validity (WDY-4015 item 3, sem 2026-10-23 22:27), under the
+  // operator's signature: required when cloud relays the request to a device
+  // postbox. Rules: conformance/postbox-entry/README.md.
+  google.protobuf.Timestamp valid_until = 5;
 }
 
 enum ContainerAction {

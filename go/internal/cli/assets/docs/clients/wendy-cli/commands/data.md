@@ -35,9 +35,10 @@ and most recent rounds in `roughtime_observations` and counts the rounds in
 | `wendy data sources` | List camera, audio, ROS 2, application, and telemetry sources. |
 | `wendy data record` | Start one detached Episode. With no source flags, every healthy discovered source is selected. |
 | `wendy data stop` | Stop and seal the active Episode. |
-| `wendy data episodes` | List finalized Episodes. |
-| `wendy data inspect <episode>` | Print the manifest and verify every sealed payload checksum. |
-| `wendy data download <episode>` | Resume a per-file download, verify it, and publish the local directory atomically. |
+| `wendy data status` | Show the Episodes still in progress: state, start time, duration, trigger, sources and size so far. |
+| `wendy data episodes` | List finalized Episodes, with any still in progress at the top. |
+| `wendy data inspect [episode]` | Print the manifest and verify every sealed payload checksum. |
+| `wendy data download [episode]` | Resume a per-file download, verify it, and publish the local directory atomically. |
 
 Use repeatable `--source` flags to narrow recording or `--exclude-source` to
 remove a default source. `record` also accepts `--name`, repeatable
@@ -49,11 +50,22 @@ monotonic ordering.
 ```sh
 wendy data sources
 wendy data record --name commissioning --source v4l2:/dev/video2
+wendy data status
 wendy data stop
 wendy data episodes
 wendy data inspect <episode-id>
 wendy data download <episode-id> --output ./commissioning-episode
 ```
+
+With no episode ID in an interactive terminal, `inspect` and `download` list
+the device's Episodes newest first, with name, state, size and start time.
+Enter selects one; Escape or Ctrl-C cancels. With no finalized Episodes on the
+device they say so instead. Non-interactive, `--non-interactive` and `--json`
+use requires the ID; `wendy data episodes` lists them.
+
+`download` reports the absolute path of the directory it wrote. Without
+`--output` that is a new directory named after the Episode ID in the current
+directory. The `--json` result keeps `destination` as the path was given.
 
 `wendy data stop` seals an Episode that captures application records only after
 its post-seal drain has elapsed, so the command takes up to two seconds longer
@@ -102,8 +114,8 @@ wendy data sources --kind audio            # every audio source, nothing summari
 Every `data` subcommand whose payload is a protocol buffer message prints it as
 canonical protobuf JSON on one compact line, with protocol buffer field names
 exactly as the `.proto` declares them, and unpopulated fields omitted. That
-covers `sources`, `episodes`, `record`, `stop`, `campaign list` and
-`campaign trigger`.
+covers `sources`, `episodes`, `record`, `stop`, `status`, `campaign list`
+and `campaign trigger`.
 
 Some payloads are already a JSON document the device produced, and those bytes
 are written through untouched so they stay checkable against the device:
@@ -121,6 +133,55 @@ Episode IDs are stable opaque identifiers. Their readable UTC prefix is only a
 convenience; canonical ordering comes from the Episode's `CLOCK_BOOTTIME`
 timestamps and boot ID.
 
+### Episodes in progress
+
+An Episode is not finalized until its seal ends, so before that it is listed
+apart from the finalized ones. That covers one started by `wendy data record`
+and one a campaign trigger started. It passes through up to three states:
+
+| State | Meaning |
+|---|---|
+| `recording` | Capturing. |
+| `draining` | Capture has stopped; it still accepts late application records for its drain. |
+| `sealing` | Its playable video and checksums are being written. |
+
+`wendy data episodes` lists these first. They add a `DURATION` column, measured
+on the device's `CLOCK_BOOTTIME` and frozen once capture stops, and a `TRIGGER`
+column, which reads `manual` or names the campaign. Their `SIZE` is what they
+hold on disk so far.
+
+```text
+EPISODE                            STATE      SIZE     NAME           DURATION  TRIGGER
+20261027T120641Z-9f2e4d6c8b0a1357  draining   2621440  door-watch     31s       campaign door-watch
+20261027T120501Z-0b7c9d1e2f3a4b5c  recording  3145728  commissioning  2m13s     manual
+20261027T115329Z-e4418826f638364e  complete   7245349  manual-test
+```
+
+`wendy data status` prints each of them in full, including the trigger reason
+and the sources, and prints `No recording in progress.` when there is none.
+
+```text
+Episode: 20261027T120501Z-0b7c9d1e2f3a4b5c (commissioning)
+State: recording
+Started: 2026-10-27T12:05:01Z (device clock)
+Duration: 2m13s
+Trigger: manual
+Sources: telemetry, v4l2:/dev/video0
+Size so far: 3145728 bytes
+```
+
+Under `--json`, `episodes` keeps finalized Episodes in `episodes` and lists the
+others in a separate `in_progress` array, so a script that downloads every entry
+of `episodes` keeps working. Both commands' responses set `reports_in_progress`
+when the agent fills `in_progress`, so an empty `in_progress` then means nothing
+is in progress. `status` prints the agent's response: every Episode in
+`in_progress`, and `active` for older clients.
+
+An agent that predates `in_progress` reports at most one Episode in progress,
+with no trigger, sources or size. The CLI still shows that one, estimates its
+duration from the device's start time and marks it with `~`, and says so in a
+note.
+
 ## Campaign commands
 
 | Command | Description |
@@ -136,8 +197,9 @@ A complete plan is in `Examples/WendyDataCampaign` in the WendyOS repository.
 ### Deployment and Cloud registration
 
 `wendy data campaign deploy [file]` validates the plan before contacting the
-device. With no filename in an interactive terminal, it offers `.yaml` and
-`.yml` files in the current directory. Enter selects a file; Escape or Ctrl-C
+device. With no filename in an interactive terminal, it offers the campaign files
+in the current directory: YAML files with a campaign's `version` and `name`
+(compose files and stagefiles are left out). Enter selects a file; Escape or Ctrl-C
 cancels. Non-interactive and `--json` use requires an explicit filename.
 
 An enrolled device's campaign is registered in Cloud Apps as `campaign:<name>`
@@ -305,7 +367,9 @@ The `upload` and `retention` blocks:
 An `inference` block runs object detection in the agent without a separate model
 application. The agent installs its managed Python runtime and downloads the
 pinned Hugging Face checkpoint on first use; this requires network access and
-disk space outside the episode quota. Remote model code is disabled.
+disk space in the agent's `inference` folder, outside the episode quota. An
+agent update reuses what an earlier agent downloaded. Remote model code is
+disabled.
 
 | Field | Required | Description |
 |---|---|---|
@@ -538,6 +602,23 @@ The device-wide quota is the smaller of a fifth of the episode store's
 filesystem and `WENDY_DATA_MAX_BYTES` (default 50 GiB), and eviction preserves
 `WENDY_DATA_RESERVE_BYTES` of free space on it (default 5 GiB). Both are read
 by the agent from its environment file.
+
+On WendyOS the episode store is `/var/lib/wendy/wendy-data/episodes`, on the
+`/data` partition. Where `/var/lib/wendy` is not a separate filesystem larger
+than the one holding `/var/lib/wendy-agent`, the store stays at
+`/var/lib/wendy-agent/data/episodes`. Campaign inference keeps its runtime and
+model files in an `inference` folder beside the store, except on a device that
+already ran campaign inference under an earlier agent: that device keeps using
+`/var/lib/wendy-agent/data/inference`, so the update downloads nothing. The
+agent logs `Wendy Data episode store` at startup with the paths it chose and
+why. Set `WENDY_DATA_DIR` only to put the store somewhere else.
+
+When there is no room, `wendy data record` and campaign triggers fail with a
+message that names the disk, its free space and the space Wendy Data keeps free:
+
+```text
+Wendy Data can't record: the disk holding /var/lib/wendy-agent/data/episodes has 4.1 GB free and needs 5.4 GB free. Point WENDY_DATA_DIR at a folder on a bigger disk (e.g. under /data) or lower WENDY_DATA_RESERVE_BYTES.
+```
 
 ## Current layer boundaries
 

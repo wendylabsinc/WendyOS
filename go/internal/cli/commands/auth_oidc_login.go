@@ -38,12 +38,53 @@ type oidcCallbackResult struct {
 	Err error
 }
 
-// performOIDCLogin creates and saves a refreshable Cloud API session.
+// performOIDCLogin creates and saves a refreshable Cloud API session for the
+// person at the terminal, printing each step.
+func performOIDCLogin(ctx context.Context, opts oidcLoginOptions) error {
+	return runOIDCLogin(ctx, opts, oidcLoginHooks{
+		say:       func(line string) { fmt.Println(line) },
+		authorize: showOIDCLoginURL,
+	})
+}
+
+// showOIDCLoginURL opens the sign-in URL in the browser, or prints it alone on
+// its line when no one is at the terminal.
+func showOIDCLoginURL(authURL string) {
+	if !humanPresent() {
+		printLoginURLForManualOpen(authURL)
+		return
+	}
+	fmt.Println(tui.InfoMessage("Opening your browser to sign in..."))
+	fmt.Println("  " + authURL)
+	if openErr := openBrowser(authURL); openErr != nil {
+		fmt.Println(tui.WarningMessage("Could not open a browser automatically; open the URL above manually."))
+	}
+}
+
+// oidcLoginHooks is how runOIDCLogin reports progress. performOIDCLogin prints
+// each step; beginOIDCLogin, whose caller's stdout may carry the MCP protocol,
+// prints nothing. Each hook may be nil.
+type oidcLoginHooks struct {
+	// say receives each status line.
+	say func(line string)
+	// authorize receives the sign-in URL once the callback listener is up.
+	authorize func(authURL string)
+	// saving may adjust the config the new session is saved into.
+	saving func(cfg *config.Config, added config.AuthConfig)
+}
+
+func (h oidcLoginHooks) print(line string) {
+	if h.say != nil {
+		h.say(line)
+	}
+}
+
+// runOIDCLogin creates and saves a refreshable Cloud API session.
 //
 // The DPoP key is generated once the realm (or the universal start) is settled
 // and before the browser opens, because wendy-auth binds the access and
 // refresh-token family to its thumbprint.
-func performOIDCLogin(ctx context.Context, opts oidcLoginOptions) error {
+func runOIDCLogin(ctx context.Context, opts oidcLoginOptions, hooks oidcLoginHooks) error {
 	if opts.Issuer == "" && opts.AuthorizationBase == "" {
 		return fmt.Errorf("an OIDC issuer or authorization base is required")
 	}
@@ -101,7 +142,7 @@ func performOIDCLogin(ctx context.Context, opts oidcLoginOptions) error {
 	if err != nil {
 		return fmt.Errorf("computing key thumbprint: %w", err)
 	}
-	fmt.Println(tui.SuccessMessage(fmt.Sprintf("Generated operator key (jkt %s).", thumbprint)))
+	hooks.print(tui.SuccessMessage(fmt.Sprintf("Generated operator key (jkt %s).", thumbprint)))
 
 	// Step 3: loopback listener for the redirect.
 	listener, redirectURI, err := startLoopbackListener()
@@ -148,14 +189,8 @@ func performOIDCLogin(ctx context.Context, opts oidcLoginOptions) error {
 	if err != nil {
 		return err
 	}
-	if !humanPresent() {
-		printLoginURLForManualOpen(authURL)
-	} else {
-		fmt.Println(tui.InfoMessage("Opening your browser to sign in..."))
-		fmt.Println("  " + authURL)
-		if openErr := openBrowser(authURL); openErr != nil {
-			fmt.Println(tui.WarningMessage("Could not open a browser automatically; open the URL above manually."))
-		}
+	if hooks.authorize != nil {
+		hooks.authorize(authURL)
 	}
 
 	// Step 5: wait for the redirect.
@@ -212,7 +247,7 @@ func performOIDCLogin(ctx context.Context, opts oidcLoginOptions) error {
 	if accessSubject, _ := claims["sub"].(string); accessSubject != subject {
 		return fmt.Errorf("ID token and access token identify different subjects")
 	}
-	fmt.Println(tui.SuccessMessage("Access token signature and sender constraint verified."))
+	hooks.print(tui.SuccessMessage("Access token signature and sender constraint verified."))
 
 	if opts.PrintClaims {
 		printClaims(claims, identityToken)
@@ -224,7 +259,7 @@ func performOIDCLogin(ctx context.Context, opts oidcLoginOptions) error {
 	// Step 8: create a PKCS#10 request with the same key used for DPoP and ask
 	// pki-core directly. pki-core enforces the three-way binding between this
 	// key, token cnf.jkt, and the proof's embedded JWK.
-	fmt.Println(tui.InfoMessage("Requesting an operator certificate from pki-core..."))
+	hooks.print(tui.InfoMessage("Requesting an operator certificate from pki-core..."))
 	certInfo, err := requestPKIIdentityCertificate(
 		ctx, http.DefaultClient, opts.IdentityEndpoint, privateKeyPEM, key,
 		identityToken.AccessToken, "", subject,
@@ -254,10 +289,6 @@ func performOIDCLogin(ctx context.Context, opts oidcLoginOptions) error {
 		refreshToken = identityToken.RefreshToken
 	}
 
-	cfg, err := config.Load()
-	if err != nil {
-		return fmt.Errorf("loading config: %w", err)
-	}
 	authEntry := config.AuthConfig{
 		CloudDashboard: opts.CloudURL,
 		CloudGRPC:      opts.CloudGRPC,
@@ -272,20 +303,45 @@ func performOIDCLogin(ctx context.Context, opts oidcLoginOptions) error {
 		DPoPPrivateKey: privateKeyPEM,
 		Certificates:   []config.CertificateInfo{certInfo},
 	}
-	cfg.AddAuth(authEntry)
-	// Name the new session as a context; the first login becomes "default" and
-	// current. A later login does not change the current context.
-	cfg.EnsureContexts()
-	if err := config.Save(cfg); err != nil {
+	// Registering calls Cloud, so it runs on a snapshot outside the config lock.
+	prior, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("loading config: %w", err)
+	}
+	keepRegistryKey(prior, &authEntry)
+	registerRegistryKeyAfterMint(ctx, &authEntry)
+	// Update, not Load then Save: auth_login runs this inside the long-lived
+	// MCP server, which may persist a refreshed token while the browser is open.
+	if err := config.Update(func(cfg *config.Config) (bool, error) {
+		cfg.AddAuth(authEntry)
+		// Name the new session as a context; the first login becomes "default"
+		// and current. A later login changes the current context only through
+		// the saving hook.
+		cfg.EnsureContexts()
+		if hooks.saving != nil {
+			hooks.saving(cfg, authEntry)
+		}
+		return true, nil
+	}); err != nil {
 		return fmt.Errorf("saving OAuth session and certificates: %w", err)
 	}
 	// Record the org's display name while the access token is fresh, so
 	// pickers and labels show it rather than the tenant UUID.
 	cloudOrganizationName(ctx, &authEntry)
-	fmt.Println(tui.SuccessMessage(fmt.Sprintf("Signed in to %s. API session and certificates saved.", issuerRealm(effectiveIssuer))))
-	fmt.Println(sessionKeyLine(keyAlgorithmName(key.Public()), "OIDC"))
+	hooks.print(tui.SuccessMessage(fmt.Sprintf("Signed in to %s. API session and certificates saved.", issuerRealm(effectiveIssuer))))
+	hooks.print(sessionKeyLine(keyAlgorithmName(key.Public()), "OIDC"))
 	clitimesync.CacheProof(ctx)
 	return nil
+}
+
+// keepRegistryKey keeps this machine's registry key across sign-ins of the
+// same operator on the same session; another principal starts without one.
+func keepRegistryKey(cfg *config.Config, entry *config.AuthConfig) {
+	for _, prior := range cfg.Auth {
+		if sameOAuthSession(&prior, entry) && len(prior.Certificates) > 0 && prior.Certificates[0].PrincipalURI == entry.Certificates[0].PrincipalURI {
+			entry.RegistryPrivateKey, entry.RegistryKeyID = prior.RegistryPrivateKey, prior.RegistryKeyID
+		}
+	}
 }
 
 type oidcHTTPDoer interface {

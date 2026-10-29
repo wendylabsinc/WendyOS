@@ -124,10 +124,16 @@ func (s *mcpServer) handleDeviceList(ctx context.Context, req mcpgo.CallToolRequ
 	out := map[string]any{}
 	var warnings []map[string]any
 	if cloud.err != nil {
-		warnings = append(warnings, map[string]any{
+		warning := map[string]any{
 			"source":  "cloud",
 			"message": fmt.Sprintf("Cloud discovery unavailable: %s", cloud.err),
-		})
+		}
+		// Cloud devices are missing until the user signs in again; say so.
+		if code, msg := cloudErrDetail(cloud.err); code == errCodeAuthRequired {
+			warning["error_code"] = string(code)
+			warning["message"] = "Cloud discovery unavailable: " + msg
+		}
+		warnings = append(warnings, warning)
 	}
 	if simulatorErr != nil {
 		warnings = append(warnings, map[string]any{

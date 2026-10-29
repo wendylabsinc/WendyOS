@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"io"
+	"maps"
 	"math/rand/v2"
 	"os"
+	"slices"
 	"sync"
 	"time"
 
@@ -41,9 +43,9 @@ type AppReporter interface {
 // ReportedState reports the device's apps to cloud over the v2
 // DeploymentService.HandleReportedState stream (apps spec section 2): every
 // app, unconditionally, on change and on a heartbeat, while the device is
-// enrolled and cloud is reachable. It never blocks local operation, applies
-// nothing cloud answers, and only surfaces the postbox nudge (log + metric);
-// pulling the postbox is a later client's job.
+// enrolled and cloud is reachable. It never blocks local operation and applies
+// nothing cloud answers: the postbox nudge only wakes the attached Postbox,
+// whose per-app outcomes ride along on the next report.
 type ReportedState struct {
 	logger    *zap.Logger
 	apps      AppReporter
@@ -52,6 +54,7 @@ type ReportedState struct {
 	heartbeat time.Duration      // an unchanged report is resent this often
 	retry     time.Duration
 	dial      func(cloudURL, certPEM, keyPEM, chainPEM string) (grpc.ClientConnInterface, io.Closer, error)
+	postbox   *Postbox // nil: no postbox client
 
 	mu                                  sync.Mutex
 	cloudURL, certPEM, keyPEM, chainPEM string
@@ -85,6 +88,9 @@ func dialDeviceCloud(cloudURL, certPEM, keyPEM, chainPEM string) (grpc.ClientCon
 	}
 	return conn, conn, nil
 }
+
+// AttachPostbox routes nudges to p and reports its outcomes. Call before Run.
+func (r *ReportedState) AttachPostbox(p *Postbox) { r.postbox = p }
 
 // UpdateIdentity swaps the device identity (enrollment or unenrollment while
 // running); an open stream is dropped and reopened under the new identity.
@@ -141,6 +147,7 @@ func (r *ReportedState) session(ctx context.Context) error {
 		return err
 	}
 	recvErr := make(chan error, 1)
+	answered := make(chan struct{})
 	go func() {
 		for {
 			resp, err := stream.Recv()
@@ -150,10 +157,22 @@ func (r *ReportedState) session(ctx context.Context) error {
 			}
 			if head := resp.PostboxHeadEntryId; head != nil {
 				r.nudged(*head)
+				if r.postbox != nil {
+					r.postbox.Nudge(*head)
+				}
+			}
+			select {
+			case answered <- struct{}{}:
+			case <-ctx.Done():
+				return
 			}
 		}
 	}()
 
+	// pending is the newest report sent since cloud's last answer. Cloud
+	// coalesces answers, so an answer is not matched to one report: the next
+	// answer only marks pending as followed by an answer (Postbox.Reported).
+	var pending *cloudpbv2.UpdateReportedStateRequest
 	var last *cloudpbv2.UpdateReportedStateRequest
 	var lastSent time.Time
 	ticker := time.NewTicker(r.poll)
@@ -168,6 +187,7 @@ func (r *ReportedState) session(ctx context.Context) error {
 				return err
 			}
 			last, lastSent = req, time.Now()
+			pending = req
 		}
 		select {
 		case <-ctx.Done():
@@ -176,6 +196,11 @@ func (r *ReportedState) session(ctx context.Context) error {
 			return errIdentityChanged
 		case err := <-recvErr:
 			return err
+		case <-answered:
+			if pending != nil && r.postbox != nil {
+				r.postbox.Reported(pending)
+			}
+			pending = nil
 		case <-ticker.C:
 		}
 	}
@@ -202,11 +227,28 @@ func (r *ReportedState) snapshot(ctx context.Context) (*cloudpbv2.UpdateReported
 		}
 		req.CurrentStates = append(req.CurrentStates, state)
 	}
+	if r.postbox == nil {
+		return req, nil
+	}
+	outcomes := r.postbox.Outcomes()
+	for _, state := range req.CurrentStates {
+		if o, ok := outcomes[state.AppId]; ok {
+			state.PostboxEntryId, state.CorrelationId, state.Outcome = o.EntryID, o.CorrelationID, o.Outcome
+			delete(outcomes, state.AppId)
+		}
+	}
+	// A refused or pending app is not on the device: report it absent.
+	for _, app := range slices.Sorted(maps.Keys(outcomes)) {
+		o := outcomes[app]
+		req.CurrentStates = append(req.CurrentStates, &cloudpbv2.CurrentState{
+			AppId: app, ReportedState: cloudpbv2.Running_ABSENT,
+			PostboxEntryId: o.EntryID, CorrelationId: o.CorrelationID, Outcome: o.Outcome,
+		})
+	}
 	return req, nil
 }
 
-// nudged surfaces the postbox head cloud announced. It carries no authority
-// and triggers nothing yet.
+// nudged surfaces the postbox head cloud announced. It carries no authority.
 func (r *ReportedState) nudged(head int64) {
 	r.logger.Info("postbox nudge", zap.Int64("postbox_head_entry_id", head))
 	if r.pub == nil {

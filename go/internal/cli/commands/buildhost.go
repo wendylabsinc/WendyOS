@@ -217,6 +217,44 @@ func buildChunkingMode(mode string) agentpbv2.ChunkingMode {
 	}
 }
 
+// buildkitdInstallHint is the remedy for a Linux build host with no BuildKit
+// daemon. One string, so the run preflight and `build-host status` name the
+// same daemon and the same socket the agent looks for.
+const buildkitdInstallHint = "install buildkitd there and start it on unix:///run/buildkit/buildkitd.sock"
+
+// buildHostInternetRemedy names the fix for a build host with no internet.
+//
+// device is pasted into a command line, so a display name that is not a
+// selector -- a cloud device shown as "Spark 3 [asset 472]", or none at all --
+// becomes a placeholder rather than a command that would select nothing.
+func buildHostInternetRemedy(device string) string {
+	if device == "" || strings.ContainsAny(device, " []") {
+		device = "<device>"
+	}
+	return fmt.Sprintf("connect it with `wendy device wifi connect --device %s`, or plug in ethernet", device)
+}
+
+// buildHostInternetNotice is the warning for a build host that reports it
+// cannot reach the internet, or "" when it can, or when its agent predates the
+// check and so reported nothing either way.
+//
+// A warning and not a refusal: a build whose layers are all cached, or whose
+// base images come from a registry on the local network, still works. But the
+// usual build pulls a base image, and without this it fails minutes in, on the
+// first layer that is not cached, with an error about DNS that does not say
+// the device is offline.
+func buildHostInternetNotice(host string, resp *agentpbv2.GetBuildCapabilitiesResponse) string {
+	if !resp.GetInternetCheckSupported() || resp.GetInternetReachable() {
+		return ""
+	}
+	reason := ""
+	if detail := resp.GetInternetDetail(); detail != "" {
+		reason = " (" + detail + ")"
+	}
+	return fmt.Sprintf("%s reports no internet access%s, so it cannot pull base images; the build will fail unless every layer is already cached there or comes from a local registry. To fix it, %s.",
+		host, reason, buildHostInternetRemedy(host))
+}
+
 // checkBuildHostCapabilities refuses a build host before any context is
 // transferred. Every failure names the host, and none falls back to a local
 // build: a long build the developer believed was running on the Spark is worse
@@ -225,6 +263,11 @@ func checkBuildHostCapabilities(host string, resp *agentpbv2.GetBuildCapabilitie
 	if !resp.GetBuilderEnabled() {
 		return fmt.Errorf("%s is not configured as a build host; run `wendy device build-host enable --device <build-host>` to enable it, or omit --build-host to build locally", host)
 	}
+	// Before the refusals below, not after: a host with no internet cannot
+	// install the BuildKit they ask for either, and that is the reason to see.
+	if notice := buildHostInternetNotice(host, resp); notice != "" {
+		cliNotice("%s", notice)
+	}
 	if !resp.GetBuildkitAvailable() {
 		// On darwin this is a design fact, not a misconfiguration: the Mac agent
 		// runs Linux containers through Apple Container, which has no BuildKit
@@ -232,7 +275,7 @@ func checkBuildHostCapabilities(host string, resp *agentpbv2.GetBuildCapabilitie
 		if strings.EqualFold(resp.GetOs(), "darwin") {
 			return fmt.Errorf("%s has no BuildKit daemon: macOS hosts run containers through Apple Container, which has no BuildKit underneath, so a Mac cannot be a build host", host)
 		}
-		return fmt.Errorf("%s is enabled as a build host but has no BuildKit daemon; install buildkitd there and start it on unix:///run/buildkit/buildkitd.sock, or omit --build-host to build locally", host)
+		return fmt.Errorf("%s is enabled as a build host but has no BuildKit daemon; %s, or omit --build-host to build locally", host, buildkitdInstallHint)
 	}
 	if err := checkBuildkitRootSpace(host, resp); err != nil {
 		return err

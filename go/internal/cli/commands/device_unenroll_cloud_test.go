@@ -339,6 +339,7 @@ func (s *unenrollConfirmationServer) RevokePrincipalCertificates(context.Context
 
 func TestCloudUnenrollConfirmsBeforeMutation(t *testing.T) {
 	preserveCloudUnenrollmentHooks(t)
+	t.Setenv("WENDY_CONFIG_DIR", t.TempDir())
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -382,6 +383,10 @@ func TestCloudUnenrollConfirmsBeforeMutation(t *testing.T) {
 	}
 	if server.lists.Load() != 2 || server.gets.Load() != 1 || server.online.Load() {
 		t.Fatalf("wrong offline asset lookup: lists=%d gets=%d online=%v", server.lists.Load(), server.gets.Load(), server.online.Load())
+	}
+	// Finding the asset to delete must not pin its name.
+	if cfg, err := config.Load(); err != nil || len(cfg.DevicePins) != 0 {
+		t.Fatalf("unenroll lookup pinned devices: err=%v cfg=%+v", err, cfg)
 	}
 }
 

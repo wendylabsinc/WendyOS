@@ -239,8 +239,14 @@ func waitForCloudAgentRestart(ctx context.Context, auth *config.AuthConfig, asse
 	})
 }
 
+// cloudAgentRestartTimeout is how long waitForCloudDeviceRestart waits for an
+// agent reached through Cloud to answer again after it restarts. It is longer
+// than a LAN restart wait: the new agent process must first register its
+// presence with the Cloud relay again, and only then can a new tunnel reach it.
+const cloudAgentRestartTimeout = 60 * time.Second
+
 func waitForCloudDeviceRestart(ctx context.Context, name, id string, connect func(context.Context) (*grpcclient.AgentConnection, error)) (*grpcclient.AgentConnection, error) {
-	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, cloudAgentRestartTimeout)
 	defer cancel()
 	restartErr := func() error {
 		return fmt.Errorf("timed out waiting for %s (id=%s) to restart", name, id)
@@ -257,7 +263,14 @@ func waitForCloudDeviceRestart(ctx context.Context, name, id string, connect fun
 			return nil, restartErr()
 		default:
 		}
-		attemptCtx, attemptCancel := context.WithTimeout(ctx, 10*time.Second)
+		// connect only creates a lazy client, so the tunnel itself (Cloud
+		// authorization, both sides joining the relay, the mTLS handshake) is
+		// built inside the probe RPC. That takes 6-10 s when the device is on a
+		// slow uplink, so the probe gets the whole attempt budget, the same one
+		// `cloud discover` gives a new tunnel to fetch the agent version. A
+		// short probe deadline cancels every attempt and reports a successful
+		// restart as a timeout.
+		attemptCtx, attemptCancel := context.WithTimeout(ctx, cloudVersionFetchTimeout)
 		conn, err := connect(attemptCtx)
 		if err != nil {
 			attemptCancel()
@@ -268,9 +281,7 @@ func waitForCloudDeviceRestart(ctx context.Context, name, id string, connect fun
 			}
 			continue
 		}
-		probeCtx, probeCancel := context.WithTimeout(ctx, 3*time.Second)
-		resp, probeErr := conn.AgentService.GetAgentVersion(probeCtx, &agentpb.GetAgentVersionRequest{})
-		probeCancel()
+		resp, probeErr := conn.AgentService.GetAgentVersion(attemptCtx, &agentpb.GetAgentVersionRequest{})
 		attemptCancel()
 		if probeErr == nil {
 			conn.CacheAgentVersion(resp)
