@@ -68,6 +68,12 @@ func (s *mcpServer) replaceExpiredDeviceConnection(ctx context.Context, now time
 	if err == nil && next == nil {
 		err = errors.New("reconnect returned no connection")
 	}
+	if err != nil && next != nil {
+		// A failed reconnect that still handed back a connection must not
+		// leak it.
+		_ = next.Close()
+		next = nil
+	}
 
 	s.mu.Lock()
 	if s.conn != conn || s.connRevision != revision {
