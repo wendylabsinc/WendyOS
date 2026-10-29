@@ -1573,6 +1573,12 @@ func connectPickedLANDevice(ctx context.Context, d *models.DiscoveredDevice, add
 		if blocksUnauthenticatedFallback(err) {
 			return nil, err
 		}
+		// A cancelled command isn't a failed LAN attempt either. Clock
+		// recovery can wait ~10 s, and Ctrl-C during it must end the command,
+		// not go on to a Bluetooth connect.
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		// LAN failed — fall back to BLE if available.
 		if d.Bluetooth != nil {
 			return &SelectedDevice{Bluetooth: d.Bluetooth}, nil
