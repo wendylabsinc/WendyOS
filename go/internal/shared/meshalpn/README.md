@@ -33,3 +33,9 @@ until verification consumes it, even if the cache turns over meanwhile. No
 cache mutex is held during TLS I/O or signature work. Lite uses loans from its
 existing bounded RAM certificate store; the cache skips active loans and their
 bytes remain alive until release, including during shutdown.
+
+WendyOS session tickets record the fingerprints of omitted path candidates.
+If a later handshake no longer holds those candidates, it declines resumption
+and performs a fresh certificate exchange. A cache eviction or process restart
+therefore loses an optimisation rather than breaking an otherwise valid dial.
+Lite session resumption remains disabled; fresh Lite handshakes send the leaf.

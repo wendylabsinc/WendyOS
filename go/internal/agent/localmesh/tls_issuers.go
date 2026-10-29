@@ -2,8 +2,9 @@ package localmesh
 
 import (
 	"crypto/tls"
-	"github.com/wendylabsinc/wendy/go/internal/shared/meshalpn"
 	"time"
+
+	"github.com/wendylabsinc/wendy/go/internal/shared/meshalpn"
 )
 
 func (c *Credentials) ClientProtocols(protocols ...string) []string {

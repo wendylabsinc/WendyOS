@@ -92,4 +92,29 @@ func TestNormalKnownIssuersTLSWire(t *testing.T) {
 			}
 		})
 	}
+	t.Run("cached-issuer-ticket-turnover", func(t *testing.T) {
+		ca.issuerMaterial.Remember(cc.Certificate.Certificate, time.Now())
+		cc.issuerMaterial.Remember(ca.Certificate.Certificate, time.Now())
+		for index, wantResume := range []bool{false, true, false, true} {
+			if index == 2 {
+				ca.issuerMaterial.Clear()
+			}
+			client, err := ca.PeerTLSWithTickets(cc.Device, LinkALPN, "known-ca-turnover")
+			if err != nil {
+				t.Fatal(err)
+			}
+			server, err := lanServerTLS(cc)
+			if err != nil {
+				t.Fatal(err)
+			}
+			result := rootQUICRoundtrip(client, server)
+			if result.err != nil {
+				t.Fatalf("round %d: %v", index, result.err)
+			}
+			if result.client.DidResume != wantResume || result.server.DidResume != wantResume {
+				t.Fatalf("round %d: client resumed=%v server resumed=%v want=%v", index, result.client.DidResume, result.server.DidResume, wantResume)
+			}
+		}
+	})
+
 }

@@ -33,25 +33,26 @@ func (c *Certificates) bindIssuerSnapshot(config *tls.Config, available []*x509.
 	if c == nil {
 		return
 	}
-	held := available
+	loan := &handshakeIssuers{available: available}
+	loan.configureTickets(config)
 	chainVerify := config.VerifyPeerCertificate
 	if chainVerify != nil {
 		config.VerifyPeerCertificate = func(raw [][]byte, verified [][]*x509.Certificate) error {
-			err := chainVerify(c.candidatesFrom(raw, held), verified)
+			err := chainVerify(c.candidatesFrom(raw, loan.available), verified)
 			if err != nil {
-				held = nil
+				loan.available = nil
 			}
 			return err
 		}
 	}
 	previous := config.VerifyConnection
 	config.VerifyConnection = func(state tls.ConnectionState) error {
-		defer func() { held = nil }()
+		defer func() { loan.available = nil }()
 		raw := make([][]byte, len(state.PeerCertificates))
 		for i, cert := range state.PeerCertificates {
 			raw[i] = cert.Raw
 		}
-		complete := c.candidatesFrom(raw, held)
+		complete := c.candidatesFrom(raw, loan.available)
 		augmented := state
 		augmented.PeerCertificates = append([]*x509.Certificate(nil), state.PeerCertificates...)
 		for _, der := range complete[len(raw):] {
@@ -65,6 +66,10 @@ func (c *Certificates) bindIssuerSnapshot(config *tls.Config, available []*x509.
 			if err := previous(augmented); err != nil {
 				return err
 			}
+		}
+		loan.dependencies = loan.dependencies[:0]
+		for _, der := range complete[len(raw):] {
+			loan.dependencies = append(loan.dependencies, Hash(der))
 		}
 		c.Remember(raw, time.Now())
 		return nil
@@ -132,6 +137,9 @@ func (c *Certificates) ServerCertificate(hello *tls.ClientHelloInfo) (*tls.Certi
 // longest client prefix locally available. ClientHello selection remains
 // stateless on a shared listener, including concurrent no-SNI handshakes.
 func (c *Certificates) ConfigureServer(config *tls.Config) {
+	if c == nil {
+		return
+	}
 	config.Certificates = nil
 	config.GetCertificate = c.ServerCertificate
 	previous := config.GetConfigForClient

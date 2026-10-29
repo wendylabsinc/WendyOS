@@ -97,6 +97,9 @@ func (m *Certificates) reap(now time.Time) {
 }
 
 func (m *Certificates) Remember(chain [][]byte, now time.Time) {
+	if len(chain) < 2 {
+		return
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.reap(now)

@@ -215,15 +215,15 @@ func newCredentials(certPEM, chainPEM, keyPEM string, instance uuid.UUID, operat
 		if alpn == "" || transport == "" {
 			return nil, errors.New("wendy net ticket scope needs ALPN and transport")
 		}
-		cfg, err := credentials.PeerTLS(peer)
+		cfg, err := credentials.peerTLS(peer)
 		if err != nil {
 			return nil, err
 		}
 		key := fmt.Sprintf("%s/%d:%s/%d:%s", peer.Principal(), len(alpn), alpn, len(transport), transport)
-		credentials.ConfigureTLSClient(cfg, alpn)
 		cfg.ServerName = fmt.Sprintf("device-%s.mesh.wendy.invalid", peer.UUID())
 		cfg.ClientSessionCache = scopedClientSessionCache{cache: credentials.ticketCache(), scope: key}
 		(&TicketStore{cache: credentials.ticketCache(), scope: key}).Configure(cfg)
+		credentials.ConfigureTLSClient(cfg, alpn)
 
 		return cfg, nil
 	}
