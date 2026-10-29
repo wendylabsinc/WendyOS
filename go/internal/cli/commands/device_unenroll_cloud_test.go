@@ -268,6 +268,18 @@ type unenrollConfirmationServer struct {
 	deletes       atomic.Int32
 	online        atomic.Bool
 	computeFilter atomic.Bool
+	// pkiDenied refuses PKI administration as Cloud does for a role that
+	// holds device:delete only; pkiCalls counts those calls.
+	pkiDenied bool
+	pkiCalls  atomic.Int32
+}
+
+func (s *unenrollConfirmationServer) pkiAdmin() error {
+	s.pkiCalls.Add(1)
+	if s.pkiDenied {
+		return status.Error(codes.PermissionDenied, `insufficient role in organization "Wendy Labs, Inc."`)
+	}
+	return nil
 }
 
 func (s *unenrollConfirmationServer) GetAsset(_ context.Context, req *cloudpbv2.GetAssetRequest) (*cloudpbv2.Asset, error) {
@@ -312,6 +324,9 @@ func (s *unenrollConfirmationServer) DeleteAsset(context.Context, *cloudpbv2.Sig
 }
 
 func (s *unenrollConfirmationServer) ListEnrollmentTokens(context.Context, *cloudpbv2.ListEnrollmentTokensRequest) (*pkicorepb.ListEnrollmentTokensResponse, error) {
+	if err := s.pkiAdmin(); err != nil {
+		return nil, err
+	}
 	if s.pendingToken {
 		return &pkicorepb.ListEnrollmentTokensResponse{Tokens: []*pkicorepb.EnrollmentTokenInfo{{TokenId: "pending", DeviceId: s.asset.GetPkiDeviceName()}}}, nil
 	}
@@ -323,17 +338,19 @@ func (s *unenrollConfirmationServer) ListEnrollmentTokens(context.Context, *clou
 var errMemberRole = status.Error(codes.PermissionDenied, "insufficient role in organization test")
 
 func (s *unenrollConfirmationServer) RevokeEnrollmentToken(context.Context, *cloudpbv2.SignedRequest) (*pkicorepb.RevokeEnrollmentTokenResponse, error) {
+	s.pkiCalls.Add(1)
 	return nil, errMemberRole
 }
 
 func (s *unenrollConfirmationServer) ListEABKeys(context.Context, *cloudpbv2.ListEABKeysRequest) (*pkicorepb.ListEABKeysResponse, error) {
-	return &pkicorepb.ListEABKeysResponse{}, nil
+	return &pkicorepb.ListEABKeysResponse{}, s.pkiAdmin()
 }
 
 // DeleteAsset revokes the device certificates itself, so unenrollment must not
 // call this; the count stays to prove it.
 func (s *unenrollConfirmationServer) RevokePrincipalCertificates(context.Context, *cloudpbv2.SignedRequest) (*pkicorepb.RevokeByPrincipalResponse, error) {
 	s.revokes.Add(1)
+	s.pkiCalls.Add(1)
 	return nil, errMemberRole
 }
 
@@ -600,6 +617,54 @@ func TestCloudUnenrollWithResetStopsOnCloudFailure(t *testing.T) {
 			}
 			if failure == "pending credential" && (service.deletes.Load() != 0 || !strings.Contains(err.Error(), "requires an owner or admin")) {
 				t.Fatalf("member with an unused credential: deletes=%d err=%v", service.deletes.Load(), err)
+			}
+		})
+	}
+}
+
+// The 2026-10-26 report: a Lite board enrolled under its device UUID, removed
+// over USB by a user whose role allows device:delete but no PKI administration.
+// DeleteAsset fences that enrollment itself, so Cloud removal and the board
+// reset both finish without a single PKIAdminService call.
+func TestLiteUnenrollOverUSBNeedsOnlyDeviceDelete(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		asJSON bool
+	}{{name: "text"}, {name: "JSON", asJSON: true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			preserveCloudUnenrollmentHooks(t)
+			service := &unenrollConfirmationServer{pkiDenied: true, asset: unenrollTestCloudDevice(liteTestAssetID, "desk", liteTestAssetID).v2}
+			startUnenrollResetServer(t, service)
+			jsonOutput = tc.asJSON
+			cmd := &cobra.Command{}
+			cmd.SetContext(context.Background())
+			var output bytes.Buffer
+			cmd.SetOut(&output)
+			resets := 0
+			err := runCloudDeviceUnenrollWithResetForTenant(cmd, "", liteTestAssetID, testOperatorTenant, "", true, func() error {
+				resets++
+				return nil
+			})
+			if err != nil || resets != 1 || service.deletes.Load() != 1 || service.pkiCalls.Load() != 0 {
+				t.Fatalf("err=%v resets=%d deletes=%d pkiCalls=%d output=%q", err, resets, service.deletes.Load(), service.pkiCalls.Load(), output.String())
+			}
+			if !tc.asJSON {
+				if !strings.Contains(output.String(), "Cloud revoked its certificates and enrollment credentials and deleted cloud asset "+liteTestAssetID) || strings.Contains(output.String(), "revoked 0") {
+					t.Fatalf("inaccurate removal report: %q", output.String())
+				}
+				return
+			}
+			var result struct {
+				AssetDeleted     bool   `json:"assetDeleted"`
+				EnrollmentFenced bool   `json:"enrollmentFenced"`
+				DeviceReset      bool   `json:"deviceReset"`
+				CloudError       string `json:"cloudError"`
+			}
+			if err := json.Unmarshal(output.Bytes(), &result); err != nil {
+				t.Fatal(err)
+			}
+			if !result.AssetDeleted || !result.EnrollmentFenced || !result.DeviceReset || result.CloudError != "" {
+				t.Fatalf("inaccurate JSON completion: %+v", result)
 			}
 		})
 	}

@@ -1,6 +1,7 @@
 // Package cloudunenroll removes a cloud device enrollment without contacting
-// the device. Unused bootstrap credentials are revoked first; Cloud's
-// DeleteAsset then revokes the issued certificates and deletes the asset.
+// the device. Cloud's DeleteAsset revokes the issued certificates and, for a
+// UUID-keyed device, its bootstrap credentials too; for a parked row, unused
+// bootstrap credentials are revoked here first.
 package cloudunenroll
 
 import (
@@ -21,9 +22,12 @@ import (
 // partial progress; the caller must not report a completed unenrollment then.
 // AssetDeleted also means the device certificates are revoked: DeleteAsset
 // revokes them first and refuses to delete otherwise. It reports no count.
+// EnrollmentFenced means the deletion also revoked the device's enrollment
+// tokens and EAB keys, so none were revoked here.
 type Result struct {
 	CredentialsRevoked int
 	AssetDeleted       bool
+	EnrollmentFenced   bool
 }
 
 // DeviceID is the device UUID the asset's certificates name. Since cloud #873
@@ -36,11 +40,11 @@ func DeviceID(asset *cloudpb.Asset) string {
 	return asset.GetId()
 }
 
-// Remove validates the selected asset, revokes its unused bootstrap credentials,
-// then deletes the asset. No device connection is used. Cloud revokes the
-// issued certificates inside DeleteAsset under device:delete, which members
-// hold; a separate RevokePrincipalCertificates call would need pki:cert-revoke,
-// which only owners and admins hold (WDY-3939 #14).
+// Remove validates the selected asset, revokes a parked row's unused bootstrap
+// credentials, then deletes the asset. No device connection is used. Cloud
+// revokes the issued certificates inside DeleteAsset under device:delete, which
+// members hold; a separate RevokePrincipalCertificates call would need
+// pki:cert-revoke, which only owners and admins hold (WDY-3939 #14).
 func Remove(ctx context.Context, conn grpc.ClientConnInterface, auth *config.AuthConfig, asset *cloudpb.Asset) (result Result, err error) {
 	if auth == nil || len(auth.Certificates) == 0 || asset == nil {
 		return result, fmt.Errorf("an operator session and cloud asset are required")
@@ -66,34 +70,22 @@ func Remove(ctx context.Context, conn grpc.ClientConnInterface, auth *config.Aut
 	if err := checkBinding(); err != nil {
 		return result, err
 	}
-
-	pki := cloudpb.NewPKIAdminServiceClient(conn)
-	tokens, err := enrollmentTokens(ctx, pki, tenant, deviceID)
-	if err != nil {
-		return result, err
-	}
-	keys, err := eabKeys(ctx, pki, tenant, deviceID)
-	if err != nil {
-		return result, err
-	}
-	for _, tokenID := range tokens {
-		err := cloudrequest.Invoke(ctx, conn, auth, cloudpb.PKIAdminService_RevokeEnrollmentToken_FullMethodName,
-			&cloudpb.RevokeEnrollmentTokenRequest{OrganizationId: tenant, TokenId: tokenID}, &pkicorepb.RevokeEnrollmentTokenResponse{})
-		if err != nil {
-			return result, credentialRevocationError("enrollment token", err)
+	// A device enrolled under its UUID (asset id == device id) is fenced by
+	// DeleteAsset itself, under device:delete alone: pki-core revokes its
+	// certificates, enrollment tokens and EAB keys in one transaction, and
+	// Cloud refuses to delete unless pki-core confirms (WDY-3910). Doing that
+	// here would need PKI administration permissions unenroll does not. A row
+	// the re-key parked keeps a former name Cloud cannot fence, so its unused
+	// credentials are still revoked here first, failing closed; DeleteAsset
+	// still revokes its certificates.
+	fenced := deviceID == assetID
+	if !fenced {
+		if result.CredentialsRevoked, err = revokeUnfenced(ctx, conn, auth, tenant, deviceID); err != nil {
+			return result, err
 		}
-		result.CredentialsRevoked++
-	}
-	for _, keyID := range keys {
-		err := cloudrequest.Invoke(ctx, conn, auth, cloudpb.PKIAdminService_RevokeEABKey_FullMethodName,
-			&cloudpb.RevokeEABKeyRequest{OrganizationId: tenant, KeyId: keyID}, &pkicorepb.RevokeEABKeyResponse{})
-		if err != nil {
-			return result, credentialRevocationError("EAB credential", err)
+		if err := checkBinding(); err != nil {
+			return result, err
 		}
-		result.CredentialsRevoked++
-	}
-	if err := checkBinding(); err != nil {
-		return result, err
 	}
 	deleted := &cloudpb.DeleteAssetResponse{}
 	if err := cloudrequest.Invoke(ctx, conn, auth, cloudpb.AssetService_DeleteAsset_FullMethodName,
@@ -103,13 +95,45 @@ func Remove(ctx context.Context, conn grpc.ClientConnInterface, auth *config.Aut
 	if !deleted.GetSuccess() {
 		return result, fmt.Errorf("cloud did not confirm asset deletion")
 	}
-	result.AssetDeleted = true
+	result.AssetDeleted, result.EnrollmentFenced = true, fenced
 	return result, nil
 }
 
+// revokeUnfenced revokes the unused bootstrap credentials of a device identity
+// DeleteAsset cannot fence, and returns how many Cloud acknowledged.
+func revokeUnfenced(ctx context.Context, conn grpc.ClientConnInterface, auth *config.AuthConfig, tenant, deviceID string) (revoked int, err error) {
+	pki := cloudpb.NewPKIAdminServiceClient(conn)
+	tokens, err := enrollmentTokens(ctx, pki, tenant, deviceID)
+	if err != nil {
+		return revoked, err
+	}
+	keys, err := eabKeys(ctx, pki, tenant, deviceID)
+	if err != nil {
+		return revoked, err
+	}
+	for _, tokenID := range tokens {
+		err := cloudrequest.Invoke(ctx, conn, auth, cloudpb.PKIAdminService_RevokeEnrollmentToken_FullMethodName,
+			&cloudpb.RevokeEnrollmentTokenRequest{OrganizationId: tenant, TokenId: tokenID}, &pkicorepb.RevokeEnrollmentTokenResponse{})
+		if err != nil {
+			return revoked, credentialRevocationError("enrollment token", err)
+		}
+		revoked++
+	}
+	for _, keyID := range keys {
+		err := cloudrequest.Invoke(ctx, conn, auth, cloudpb.PKIAdminService_RevokeEABKey_FullMethodName,
+			&cloudpb.RevokeEABKeyRequest{OrganizationId: tenant, KeyId: keyID}, &pkicorepb.RevokeEABKeyResponse{})
+		if err != nil {
+			return revoked, credentialRevocationError("EAB credential", err)
+		}
+		revoked++
+	}
+	return revoked, nil
+}
+
 // Revoking an unused enrollment token or EAB key needs pki:enrollment-token-revoke
-// or pki:eab-revoke, which only owners and admins hold. A device whose enrollment
-// completed has none left, so this refusal reaches a member only for a pending one.
+// or pki:eab-revoke, which only owners and admins hold. Only a parked row is
+// revoked here, and one whose enrollment completed has none left, so this
+// refusal reaches a member only for a pending one.
 func credentialRevocationError(kind string, err error) error {
 	if status.Code(err) == codes.PermissionDenied {
 		return fmt.Errorf("the device still has an unused %s from an enrollment that never completed, and revoking it requires an owner or admin of the organization; the asset was not deleted, so ask an owner or admin to unenroll it: %w", kind, err)

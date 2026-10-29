@@ -74,9 +74,14 @@ type cleanupConn struct {
 	getCount      int
 	// member answers every PKIAdminService revocation the way Cloud answers a
 	// caller with the default member role: device:delete, no pki:*-revoke.
-	member  bool
+	member bool
+	// denyPKI answers every PKIAdminService call as Cloud does for a role
+	// holding device:delete but no PKI administration permission.
+	denyPKI bool
 	deleted *cloudpbv2.SignedRequest
 }
+
+var errPKIDenied = status.Error(codes.PermissionDenied, `insufficient role in organization "Wendy Labs, Inc."`)
 
 func newCleanupConn(t *testing.T) *cleanupConn {
 	return &cleanupConn{t: t, asset: testAssetRecord(), deleteSuccess: true,
@@ -131,6 +136,10 @@ func (c *cleanupConn) revoke(event string) error {
 }
 
 func (c *cleanupConn) Invoke(_ context.Context, method string, arg, reply any, _ ...grpc.CallOption) error {
+	if c.denyPKI && strings.HasPrefix(method, "/wendycloud.v2.PKIAdminService/") {
+		c.mutations = append(c.mutations, "denied "+method)
+		return errPKIDenied
+	}
 	switch method {
 	case cloudpbv2.OperatorSessionService_RegisterOperatorLeaf_FullMethodName:
 		return status.Error(codes.Unimplemented, "use x5c")
@@ -181,7 +190,7 @@ func (c *cleanupConn) Invoke(_ context.Context, method string, arg, reply any, _
 	case cloudpbv2.AssetService_DeleteAsset_FullMethodName:
 		var req cloudpbv2.DeleteAssetRequest
 		c.decode(arg, &req)
-		if req.GetId() != testAsset || req.GetExpectedDeviceId() != testDevice {
+		if req.GetId() != testAsset || req.GetExpectedDeviceId() != DeviceID(c.asset) {
 			c.t.Fatal("deleted wrong asset or without its device binding")
 		}
 		c.deleted = proto.Clone(arg.(*cloudpbv2.SignedRequest)).(*cloudpbv2.SignedRequest)
@@ -212,8 +221,8 @@ func TestRemoveScopesCredentialsAndRevokesBeforeDeleting(t *testing.T) {
 }
 
 // A member holds device:delete but no pki:*-revoke right. Cloud's DeleteAsset
-// revokes the device principal under device:delete, so a device whose
-// enrollment completed is removed by DeleteAsset alone (WDY-3939 #14).
+// revokes the device principal under device:delete, so even a parked device
+// whose enrollment completed is removed by DeleteAsset alone (WDY-3939 #14).
 func TestRemoveByMemberDeletesWithoutCertificateRevocation(t *testing.T) {
 	conn := newCleanupConn(t)
 	conn.member = true
@@ -241,32 +250,11 @@ func TestRemoveDeletionCarriesSameLeafPrincipalRevocation(t *testing.T) {
 	if _, err := Remove(context.Background(), conn, testAuth(t), testAssetRecord()); err != nil {
 		t.Fatal(err)
 	}
-	leaf := func(jws []byte) (string, []byte) {
-		parts := strings.Split(string(jws), ".")
-		if len(parts) != 3 {
-			t.Fatalf("malformed JWS with %d segments", len(parts))
-		}
-		header, err := base64.RawURLEncoding.DecodeString(parts[0])
-		if err != nil {
-			t.Fatal(err)
-		}
-		var h struct {
-			X5C []string `json:"x5c"`
-		}
-		if err := json.Unmarshal(header, &h); err != nil || len(h.X5C) == 0 {
-			t.Fatalf("JWS does not name its leaf: %s %v", header, err)
-		}
-		payload, err := base64.RawURLEncoding.DecodeString(parts[1])
-		if err != nil {
-			t.Fatal(err)
-		}
-		return h.X5C[0], payload
-	}
 	if conn.deleted == nil {
 		t.Fatal("DeleteAsset was not sent")
 	}
-	requestLeaf, _ := leaf(conn.deleted.GetSignature())
-	managementLeaf, payload := leaf(conn.deleted.GetPkiManagementRequest())
+	requestLeaf, _ := decodeJWS(t, conn.deleted.GetSignature())
+	managementLeaf, payload := decodeJWS(t, conn.deleted.GetPkiManagementRequest())
 	var claims struct {
 		Op, Tenant, Principal string
 	}
@@ -279,6 +267,31 @@ func TestRemoveDeletionCarriesSameLeafPrincipalRevocation(t *testing.T) {
 	if managementLeaf != requestLeaf {
 		t.Fatal("revocation authority signed by a different leaf than the request")
 	}
+}
+
+// decodeJWS returns the leaf certificate a compact JWS names in its x5c header,
+// and its decoded payload.
+func decodeJWS(t *testing.T, jws []byte) (string, []byte) {
+	t.Helper()
+	parts := strings.Split(string(jws), ".")
+	if len(parts) != 3 {
+		t.Fatalf("malformed JWS with %d segments", len(parts))
+	}
+	header, err := base64.RawURLEncoding.DecodeString(parts[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var h struct {
+		X5C []string `json:"x5c"`
+	}
+	if err := json.Unmarshal(header, &h); err != nil || len(h.X5C) == 0 {
+		t.Fatalf("JWS does not name its leaf: %s %v", header, err)
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	return h.X5C[0], payload
 }
 
 // Revoking an unused enrollment credential stays owner/admin-only, so a member
@@ -373,5 +386,51 @@ func TestRemoveRejectsChangedTenantBeforeMutation(t *testing.T) {
 	result, err := Remove(context.Background(), conn, testAuth(t), testAssetRecord())
 	if err == nil || result.AssetDeleted || len(conn.mutations) != 0 {
 		t.Fatalf("cross-tenant cleanup: result=%+v ops=%v err=%v", result, conn.mutations, err)
+	}
+}
+
+// A device enrolled under its UUID has asset id == device id. DeleteAsset then
+// has pki-core fence the enrollment under device:delete: it revokes the
+// certificates, enrollment tokens and EAB keys in one transaction, and Cloud
+// refuses to delete unless pki-core confirms. Removal must not first ask for
+// PKI administration permissions the caller may lack. On 2026-10-26 a Lite
+// unenroll stopped here with PermissionDenied listing enrollment tokens.
+func TestRemoveLeavesFencedCleanupToDeleteAsset(t *testing.T) {
+	for _, name := range []*string{proto.String(testAsset), nil} {
+		t.Run(fmt.Sprintf("pki_device_name=%v", name != nil), func(t *testing.T) {
+			conn := newCleanupConn(t)
+			conn.asset.PkiDeviceName, conn.denyPKI = name, true
+			result, err := Remove(context.Background(), conn, testAuth(t), proto.Clone(conn.asset).(*cloudpbv2.Asset))
+			if err != nil || !result.AssetDeleted || !result.EnrollmentFenced || result.CredentialsRevoked != 0 {
+				t.Fatalf("result=%+v err=%v", result, err)
+			}
+			if !reflect.DeepEqual(conn.mutations, []string{"delete"}) {
+				t.Fatalf("operations=%v, want only the deletion", conn.mutations)
+			}
+			// The fence rides on this deletion: the exact device guard, and the
+			// same operator's revoke_principal request for this device.
+			var req cloudpbv2.DeleteAssetRequest
+			conn.decode(conn.deleted, &req)
+			_, payload := decodeJWS(t, conn.deleted.GetPkiManagementRequest())
+			var claims struct{ Op, Principal string }
+			if err := json.Unmarshal(payload, &claims); err != nil {
+				t.Fatal(err)
+			}
+			if req.GetExpectedDeviceId() != testAsset || claims.Op != "revoke_principal" || claims.Principal != "spiffe://wendy.sh/tenant/"+testTenant+"/device/"+testAsset {
+				t.Fatalf("deletion guards %q and revokes %+v, want this device", req.GetExpectedDeviceId(), claims)
+			}
+		})
+	}
+}
+
+// A row the re-key parked keeps a former name that Cloud cannot fence, so its
+// unused credentials are still revoked here first. A caller who may not list
+// them is refused before anything changes; the deletion is never sent.
+func TestRemoveParkedAssetFailsClosedWithoutCredentialPermissions(t *testing.T) {
+	conn := newCleanupConn(t)
+	conn.denyPKI = true
+	result, err := Remove(context.Background(), conn, testAuth(t), testAssetRecord())
+	if status.Code(err) != codes.PermissionDenied || result.AssetDeleted || result.EnrollmentFenced || conn.deleted != nil {
+		t.Fatalf("result=%+v operations=%v err=%v", result, conn.mutations, err)
 	}
 }

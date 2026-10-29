@@ -358,10 +358,10 @@ func TestLiteUnenrollChecksConfiguredTenantBeforeAbsentAssetReset(t *testing.T) 
 			if mode == "same tenant asset" {
 				wantDeletes = 1
 			}
-			// The server answers as Cloud does for a member: the board is reset
-			// after DeleteAsset alone, with no separate certificate revocation.
-			if service.revokes.Load() != 0 || service.deletes.Load() != wantDeletes {
-				t.Fatalf("cloud cleanup did not match the configured tenant inventory: revokes=%d deletes=%d", service.revokes.Load(), service.deletes.Load())
+			// The UUID-keyed asset is fenced by DeleteAsset itself: the board is
+			// reset after DeleteAsset alone, with no PKIAdminService call.
+			if service.pkiCalls.Load() != 0 || service.deletes.Load() != wantDeletes {
+				t.Fatalf("cloud cleanup did not match the configured tenant inventory: pkiCalls=%d deletes=%d", service.pkiCalls.Load(), service.deletes.Load())
 			}
 		})
 	}
