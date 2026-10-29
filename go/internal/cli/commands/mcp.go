@@ -97,7 +97,7 @@ func newMCPServer(deviceFlag string, toolGroups []string) (*wendymcp.Server, err
 	}
 	srv.SetInstallationBackend(installationJobBackend())
 	srv.SetSimulatorBackend(simulatorBackend())
-	srv.SetProjectBackend(wendymcp.ProjectBackend{Validate: validateMCPProject})
+	srv.SetProjectBackend(wendymcp.ProjectBackend{Validate: validateMCPProject, WaitReadyUnsupported: waitReadyUnsupportedForMCP})
 	srv.SetLANDiscoverer(func(ctx context.Context, timeout time.Duration) ([]models.LANDevice, error) {
 		return discovery.CollectLAN(ctx, cliLANStreamOptions(ctx), timeout)
 	})

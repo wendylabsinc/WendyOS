@@ -9,6 +9,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"golang.org/x/sync/errgroup"
 )
 
 const gcsBaseURL = "https://storage.googleapis.com/wendyos-images-public"
@@ -261,29 +263,7 @@ func getAvailableDevices() ([]deviceInfo, error) {
 		return nil, err
 	}
 
-	var devices []deviceInfo
-	for key, dev := range main.Devices {
-		if dev.ManifestPath == "" {
-			continue
-		}
-
-		dm, err := fetchDeviceManifest(dev.ManifestPath)
-		if err != nil {
-			// Skip devices whose manifest can't be fetched.
-			continue
-		}
-
-		info := deviceInfo{
-			Key:            key,
-			Name:           humanizeDeviceKey(key),
-			LatestVersion:  dev.Latest,
-			NightlyVersion: dev.LatestNightly,
-			Stability:      dev.Stability,
-			Manifest:       dm,
-		}
-
-		devices = append(devices, info)
-	}
+	devices := fetchDeviceInfos(main, func(dev manifestDevice) string { return dev.Latest }, fetchDeviceManifest)
 
 	// Stable devices first, then alphabetically within each group.
 	sort.Slice(devices, func(i, j int) bool {
@@ -296,6 +276,54 @@ func getAvailableDevices() ([]deviceInfo, error) {
 	})
 
 	return devices, nil
+}
+
+// deviceManifestFetchLimit caps how many device manifests fetchDeviceInfos
+// downloads at once.
+const deviceManifestFetchLimit = 8
+
+// fetchDeviceInfos downloads the manifest of every device in main that has one
+// and returns a deviceInfo for each, in no particular order. The downloads run
+// in parallel: fetched one after another they took seconds before the device
+// picker could open, and minutes on a slow network. latest picks the version
+// reported as the device's latest. Devices whose manifest can't be fetched are
+// skipped.
+func fetchDeviceInfos(main *mainManifest, latest func(manifestDevice) string, fetch func(path string) (*deviceManifest, error)) []deviceInfo {
+	var keys []string
+	for key, dev := range main.Devices {
+		if dev.ManifestPath != "" {
+			keys = append(keys, key)
+		}
+	}
+
+	manifests := make([]*deviceManifest, len(keys))
+	errs := make([]error, len(keys))
+	var g errgroup.Group
+	g.SetLimit(deviceManifestFetchLimit)
+	for i, key := range keys {
+		g.Go(func() error {
+			manifests[i], errs[i] = fetch(main.Devices[key].ManifestPath)
+			return nil
+		})
+	}
+	_ = g.Wait()
+
+	var devices []deviceInfo
+	for i, key := range keys {
+		if errs[i] != nil {
+			continue
+		}
+		dev := main.Devices[key]
+		devices = append(devices, deviceInfo{
+			Key:            key,
+			Name:           humanizeDeviceKey(key),
+			LatestVersion:  latest(dev),
+			NightlyVersion: dev.LatestNightly,
+			Stability:      dev.Stability,
+			Manifest:       manifests[i],
+		})
+	}
+	return devices
 }
 
 // prBasePath returns the GCS path prefix under which a PR build's manifests
@@ -360,29 +388,7 @@ func getAvailablePRDevices(pr int) ([]deviceInfo, error) {
 		return nil, err
 	}
 
-	var devices []deviceInfo
-	for key, dev := range main.Devices {
-		if dev.ManifestPath == "" {
-			continue
-		}
-
-		dm, err := fetchDeviceManifest(dev.ManifestPath)
-		if err != nil {
-			// Skip devices whose manifest can't be fetched.
-			continue
-		}
-
-		info := deviceInfo{
-			Key:            key,
-			Name:           humanizeDeviceKey(key),
-			LatestVersion:  prDeviceVersion(dev),
-			NightlyVersion: dev.LatestNightly,
-			Stability:      dev.Stability,
-			Manifest:       dm,
-		}
-
-		devices = append(devices, info)
-	}
+	devices := fetchDeviceInfos(main, prDeviceVersion, fetchDeviceManifest)
 
 	sort.Slice(devices, func(i, j int) bool { return devices[i].Name < devices[j].Name })
 
