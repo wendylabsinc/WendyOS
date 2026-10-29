@@ -2,159 +2,40 @@ package localmesh
 
 import (
 	"crypto/tls"
-	"crypto/x509"
-	"time"
-
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshalpn"
+	"time"
 )
 
-// ClientProtocols offers root-first fingerprints and cached CA availability.
-// Aliases acknowledge the shared prefix without changing the application.
 func (c *Credentials) ClientProtocols(protocols ...string) []string {
 	if c == nil || c.issuerMaterial == nil {
 		return append([]string(nil), protocols...)
 	}
-	return c.clientProtocols(c.issuerMaterial.snapshot(time.Now()), protocols...)
+	return c.issuerMaterial.ClientProtocols(protocols...)
 }
-func (c *Credentials) clientProtocols(known []*x509.Certificate, protocols ...string) []string {
-	cached := make([]meshalpn.Fingerprint, 0, len(known))
-	for _, cert := range known {
-		cached = append(cached, meshalpn.Hash(cert.Raw))
-	}
-	var result []string
-	for _, protocol := range protocols {
-		result = append(result, meshalpn.Offer(protocol, c.issuerMaterial.path, cached)...)
-	}
-	return result
-}
-
-// A connection keeps the exact immutable CA snapshot it advertised/acknowledged.
-// Cache FIFO turnover may drop its metadata but Go references retain the DER
-// until verification has consumed it. No lock is held during TLS or crypto.
-func (c *Credentials) bindIssuerSnapshot(config *tls.Config, available []*x509.Certificate) {
+func (c *Credentials) ConfigureTLSClient(config *tls.Config, protocols ...string) {
 	if c.issuerMaterial == nil {
+		config.NextProtos = append([]string(nil), protocols...)
 		return
 	}
-	held := available
-	chainVerify := config.VerifyPeerCertificate
-	if chainVerify != nil {
-		config.VerifyPeerCertificate = func(raw [][]byte, verified [][]*x509.Certificate) error {
-			err := chainVerify(c.issuerMaterial.candidatesFrom(raw, held), verified)
-			if err != nil {
-				held = nil
-			}
-			return err
-		}
-	}
-	previous := config.VerifyConnection
-	config.VerifyConnection = func(state tls.ConnectionState) error {
-		defer func() { held = nil }()
-		if previous == nil {
-			return nil
-		}
-		raw := make([][]byte, len(state.PeerCertificates))
-		for i, cert := range state.PeerCertificates {
-			raw[i] = cert.Raw
-		}
-		complete := c.issuerMaterial.candidatesFrom(raw, held)
-		augmented := state
-		augmented.PeerCertificates = append([]*x509.Certificate(nil), state.PeerCertificates...)
-		for _, der := range complete[len(raw):] {
-			cert, err := x509.ParseCertificate(der)
-			if err != nil {
-				return err
-			}
-			augmented.PeerCertificates = append(augmented.PeerCertificates, cert)
-		}
-		return previous(augmented)
-	}
+	c.issuerMaterial.ConfigureClient(config, protocols...)
 }
-
-func omitKnownCertificates(certificate tls.Certificate, known map[meshalpn.Fingerprint]bool) *tls.Certificate {
-	filtered := certificate
-	filtered.Certificate = make([][]byte, 0, len(certificate.Certificate))
-	for index, der := range certificate.Certificate {
-		if index == 0 || !known[meshalpn.Hash(der)] {
-			filtered.Certificate = append(filtered.Certificate, der)
-		}
-	}
-	return &filtered
-}
-
-// ConfigureTLSClient operates on a connection-specific config. Its certificate
-// selection state must not be shared by cached TLS configs or concurrent dials.
-func (c *Credentials) ConfigureTLSClient(config *tls.Config, protocols ...string) {
-	if c.issuerMaterial != nil {
-		available := c.issuerMaterial.snapshot(time.Now())
-		config.NextProtos = c.clientProtocols(available, protocols...)
-		c.bindIssuerSnapshot(config, available)
-	} else {
-		config.NextProtos = append([]string(nil), protocols...)
-	}
-	var acknowledged []meshalpn.Fingerprint
-	previous := config.VerifyConnection
-	config.VerifyConnection = func(state tls.ConnectionState) error {
-		if previous != nil {
-			if err := previous(state); err != nil {
-				return err
-			}
-		}
-		_, acknowledged = meshalpn.Decode(state.NegotiatedProtocol)
-		return nil
-	}
-	config.GetClientCertificate = func(*tls.CertificateRequestInfo) (*tls.Certificate, error) {
-		known := make(map[meshalpn.Fingerprint]bool, len(acknowledged))
-		for _, hash := range acknowledged {
-			known[hash] = true
-		}
-		return omitKnownCertificates(c.Certificate, known), nil
-	}
-}
-
-// ServerCertificate removes only the exact CA certificates advertised by the
-// client. Certificate verification and trust anchors are unchanged.
 func (c *Credentials) ServerCertificate(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
-	return omitKnownCertificates(c.Certificate, meshalpn.Offered(hello.SupportedProtos, "")), nil
+	if c.issuerMaterial == nil {
+		return &c.Certificate, nil
+	}
+	return c.issuerMaterial.ServerCertificate(hello)
 }
-
-// ConfigureTLSServer uses a connection-specific config to acknowledge the
-// longest client prefix locally available. ClientHello selection remains
-// stateless on a shared listener, including concurrent no-SNI handshakes.
 func (c *Credentials) ConfigureTLSServer(config *tls.Config) {
-	config.Certificates = nil
-	config.GetCertificate = c.ServerCertificate
-	previous := config.GetConfigForClient
-	config.GetConfigForClient = func(hello *tls.ClientHelloInfo) (*tls.Config, error) {
-		selected := config
-		if previous != nil {
-			var err error
-			selected, err = previous(hello)
-			if err != nil {
-				return nil, err
-			}
-			if selected == nil {
-				selected = config
-			}
-		}
-		known := make(map[meshalpn.Fingerprint]bool)
-		var available []*x509.Certificate
-		if c.issuerMaterial != nil {
-			available = c.issuerMaterial.snapshot(time.Now())
-			for _, cert := range available {
-				known[meshalpn.Hash(cert.Raw)] = true
-			}
-		}
-		protocol := meshalpn.Select(selected.NextProtos, hello.SupportedProtos, func(hash meshalpn.Fingerprint) bool { return known[hash] })
-		if protocol == "" {
-			return selected, nil
-		} // TLS reports the ordinary ALPN failure.
-		result := selected.Clone()
-		result.GetConfigForClient = nil
-		result.NextProtos = []string{protocol}
-		c.bindIssuerSnapshot(result, available)
-		return result, nil
+	if c.issuerMaterial != nil {
+		c.issuerMaterial.ConfigureServer(config)
 	}
 }
+func (c *Credentials) knownIssuerCandidates(chain [][]byte, now time.Time) [][]byte {
+	if c.issuerMaterial == nil {
+		return chain
+	}
+	return c.issuerMaterial.Candidates(chain, now)
+}
 
-// ApplicationProtocol removes only the recognized bounded availability suffix.
+// ApplicationProtocol returns the actual service carried by a known variant.
 func ApplicationProtocol(protocol string) string { return meshalpn.Application(protocol) }

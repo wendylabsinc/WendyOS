@@ -56,12 +56,7 @@ func TestNormalKnownIssuersTLSWire(t *testing.T) {
 				t.Fatal(err)
 			}
 			if pair.turnover {
-				forget := func(c *Credentials) {
-					c.issuerMaterial.mu.Lock()
-					c.issuerMaterial.cached = nil
-					c.issuerMaterial.bytes = 0
-					c.issuerMaterial.mu.Unlock()
-				}
+				forget := func(c *Credentials) { c.issuerMaterial.Clear() }
 				forget(pair.client) // Its offered inventory is already frozen.
 				previous := serverConfig.GetConfigForClient
 				serverConfig.GetConfigForClient = func(hello *tls.ClientHelloInfo) (*tls.Config, error) {

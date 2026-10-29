@@ -1,4 +1,4 @@
-package localmesh
+package meshalpn
 
 import (
 	"bytes"
@@ -6,20 +6,21 @@ import (
 	"crypto/x509"
 	"sync"
 	"time"
-
-	"github.com/wendylabsinc/wendy/go/internal/shared/meshalpn"
 )
 
 const cachedIssuerLimit = 64
 const cachedIssuerBytes = 512 << 10
 
-type issuerMaterial struct {
-	anchors map[meshalpn.Fingerprint]bool
-	mu      sync.Mutex
-	own     []*x509.Certificate
-	path    []meshalpn.Fingerprint
-	cached  []*x509.Certificate // Bounded FIFO; these never become trust anchors.
-	bytes   int
+// Certificates retains CA material as untrusted path candidates. It does not
+// add roots or replace the TLS caller's principal, time or certificate policy.
+type Certificates struct {
+	certificate tls.Certificate
+	anchors     map[Fingerprint]bool
+	mu          sync.Mutex
+	own         []*x509.Certificate
+	path        []Fingerprint
+	cached      []*x509.Certificate // Bounded FIFO; these never become trust anchors.
+	bytes       int
 }
 
 func issuerParent(child, parent *x509.Certificate) bool {
@@ -27,11 +28,11 @@ func issuerParent(child, parent *x509.Certificate) bool {
 		(len(child.AuthorityKeyId) == 0 || len(parent.SubjectKeyId) == 0 || bytes.Equal(child.AuthorityKeyId, parent.SubjectKeyId))
 }
 
-func newIssuerMaterial(certificate tls.Certificate, roots []*x509.Certificate) *issuerMaterial {
-	material := &issuerMaterial{anchors: make(map[meshalpn.Fingerprint]bool)}
-	seen := make(map[meshalpn.Fingerprint]bool)
+func NewCertificates(certificate tls.Certificate, roots []*x509.Certificate) *Certificates {
+	material := &Certificates{certificate: certificate, anchors: make(map[Fingerprint]bool)}
+	seen := make(map[Fingerprint]bool)
 	add := func(cert *x509.Certificate) {
-		hash := meshalpn.Hash(cert.Raw)
+		hash := Hash(cert.Raw)
 		if cert.IsCA && !seen[hash] {
 			material.own = append(material.own, cert)
 			seen[hash] = true
@@ -65,16 +66,16 @@ func newIssuerMaterial(certificate tls.Certificate, roots []*x509.Certificate) *
 		}
 	}
 	for _, root := range roots {
-		material.anchors[meshalpn.Hash(root.Raw)] = true
+		material.anchors[Hash(root.Raw)] = true
 		add(root)
 	}
 	for _, cert := range path {
-		material.path = append(material.path, meshalpn.Hash(cert.Raw))
+		material.path = append(material.path, Hash(cert.Raw))
 	}
 	return material
 }
 
-func (m *issuerMaterial) snapshot(now time.Time) []*x509.Certificate {
+func (m *Certificates) snapshot(now time.Time) []*x509.Certificate {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.reap(now)
@@ -82,7 +83,7 @@ func (m *issuerMaterial) snapshot(now time.Time) []*x509.Certificate {
 	return append(result, m.cached...)
 }
 
-func (m *issuerMaterial) reap(now time.Time) {
+func (m *Certificates) reap(now time.Time) {
 	kept := m.cached[:0]
 	for _, cert := range m.cached {
 		if now.Before(cert.NotAfter) {
@@ -95,19 +96,19 @@ func (m *issuerMaterial) reap(now time.Time) {
 	m.cached = kept
 }
 
-func (m *issuerMaterial) remember(chain [][]byte, now time.Time) {
+func (m *Certificates) Remember(chain [][]byte, now time.Time) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.reap(now)
-	known := make(map[meshalpn.Fingerprint]bool, len(m.own)+len(m.cached))
+	known := make(map[Fingerprint]bool, len(m.own)+len(m.cached))
 	for _, cert := range m.own {
-		known[meshalpn.Hash(cert.Raw)] = true
+		known[Hash(cert.Raw)] = true
 	}
 	for _, cert := range m.cached {
-		known[meshalpn.Hash(cert.Raw)] = true
+		known[Hash(cert.Raw)] = true
 	}
 	for _, raw := range chain[1:] {
-		hash := meshalpn.Hash(raw)
+		hash := Hash(raw)
 		if known[hash] || len(raw) > cachedIssuerBytes {
 			continue
 		}
@@ -129,15 +130,15 @@ func (m *issuerMaterial) remember(chain [][]byte, now time.Time) {
 // Complete only missing parent candidates. Every supplied certificate remains
 // untrusted; the ordinary verifier still builds a valid path to its original
 // configured anchors. Unrelated cached CAs are not appended to each handshake.
-func (m *issuerMaterial) candidates(wire [][]byte, now time.Time) [][]byte {
+func (m *Certificates) Candidates(wire [][]byte, now time.Time) [][]byte {
 	return m.candidatesFrom(wire, m.snapshot(now))
 }
 
-func (m *issuerMaterial) candidatesFrom(wire [][]byte, available []*x509.Certificate) [][]byte {
+func (m *Certificates) candidatesFrom(wire [][]byte, available []*x509.Certificate) [][]byte {
 	result := append([][]byte(nil), wire...)
-	seen := make(map[meshalpn.Fingerprint]bool, len(wire)+len(available))
+	seen := make(map[Fingerprint]bool, len(wire)+len(available))
 	for _, raw := range wire {
-		seen[meshalpn.Hash(raw)] = true
+		seen[Hash(raw)] = true
 	}
 	for index := 0; index < len(result) && len(result) < 32; index++ {
 		child, err := x509.ParseCertificate(result[index])
@@ -145,7 +146,7 @@ func (m *issuerMaterial) candidatesFrom(wire [][]byte, available []*x509.Certifi
 			continue
 		}
 		for _, parent := range available {
-			hash := meshalpn.Hash(parent.Raw)
+			hash := Hash(parent.Raw)
 			if !seen[hash] && !m.anchors[hash] && issuerParent(child, parent) {
 				result = append(result, parent.Raw)
 				seen[hash] = true
@@ -158,9 +159,11 @@ func (m *issuerMaterial) candidatesFrom(wire [][]byte, available []*x509.Certifi
 	return result
 }
 
-func (c *Credentials) knownIssuerCandidates(chain [][]byte, now time.Time) [][]byte {
-	if c.issuerMaterial == nil {
-		return chain
-	}
-	return c.issuerMaterial.candidates(chain, now)
+// Clear forgets foreign CA metadata. Active handshake snapshots keep their DER
+// alive until verification has completed; immutable own material is retained.
+func (m *Certificates) Clear() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.cached = nil
+	m.bytes = 0
 }

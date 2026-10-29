@@ -7,6 +7,8 @@ import (
 	"strings"
 )
 
+const WendyCom = "wendy-com/2"
+
 const FingerprintSize = 16
 const MaxChain = 8
 const MaxCached = 64

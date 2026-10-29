@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/wendylabsinc/wendy/go/internal/agent/mtls"
+	"github.com/wendylabsinc/wendy/go/internal/shared/meshalpn"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshoperator"
 )
@@ -35,7 +36,7 @@ type Credentials struct {
 	peerTLSTickets func(meshid.Device, string, string) (*tls.Config, error)
 	ticketOnce     sync.Once
 	ticketMemory   *meshSessionCache
-	issuerMaterial *issuerMaterial
+	issuerMaterial *meshalpn.Certificates
 }
 
 // SupportsPrimaryOperators reports whether this enrolled identity has locally
@@ -119,7 +120,7 @@ func newCredentials(certPEM, chainPEM, keyPEM string, instance uuid.UUID, operat
 		}
 		primaryRoots = append(primaryRoots, root)
 	}
-	material := newIssuerMaterial(cert, primaryRoots)
+	material := meshalpn.NewCertificates(cert, primaryRoots)
 	verify := func(chain [][]byte, now time.Time) (Identity, error) {
 		if len(chain) == 0 || len(chain) > 16 {
 			return Identity{}, errors.New("invalid identity bundle")
@@ -147,18 +148,18 @@ func newCredentials(certPEM, chainPEM, keyPEM string, instance uuid.UUID, operat
 		}
 		var expires time.Time
 		if device.IsOperator() {
-			verified, err := meshoperator.VerifyPrimary(material.candidates(chain, now), primaryRoots, self.Tenant(), now)
+			verified, err := meshoperator.VerifyPrimary(material.Candidates(chain, now), primaryRoots, self.Tenant(), now)
 			if err != nil {
 				return Identity{}, err
 			}
 			expires = verified.NotAfter()
 		} else {
-			expires, err = verifyChain(material.candidates(chain, now), now)
+			expires, err = verifyChain(material.Candidates(chain, now), now)
 			if err != nil {
 				return Identity{}, err
 			}
 		}
-		material.remember(chain, now)
+		material.Remember(chain, now)
 		return Identity{Device: device, NotAfter: expires}, nil
 	}
 	if _, err := verify(cert.Certificate, time.Now()); err != nil {
