@@ -170,6 +170,7 @@ type Endpoint struct {
 	guard          Guard
 	closed         atomic.Bool
 	sendMu         sync.Mutex
+	deliveryMu     sync.Mutex
 	try            func([]byte) error
 	local          bool
 	maximum        int
@@ -227,6 +228,8 @@ func (e *Endpoint) attach(maximum int, local bool, guard Guard, send func([]byte
 	}
 	e.sendMu.Lock()
 	defer e.sendMu.Unlock()
+	e.deliveryMu.Lock()
+	defer e.deliveryMu.Unlock()
 	m := e.manager
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -276,11 +279,13 @@ func (e *Endpoint) ReserveSocketBytes(n int) error {
 	return nil
 }
 
-// WithGuard serializes a final bounded action with transport admission and
-// Close. The callback must not acquire another registry authorization lock.
+// WithGuard serializes final receive/delivery actions with Close. Ordered
+// transport writes have a separate lock so a full write window cannot stop
+// the application from draining replies. The callback must not acquire
+// another registry authorization lock.
 func (e *Endpoint) WithGuard(action func() error) error {
-	e.sendMu.Lock()
-	defer e.sendMu.Unlock()
+	e.deliveryMu.Lock()
+	defer e.deliveryMu.Unlock()
 	if e.closed.Load() {
 		return ErrClosed
 	}
@@ -322,9 +327,11 @@ func (e *Endpoint) Close() {
 	}
 	close(e.done)
 	defer close(e.retired)
-	// Joining one TrySend/local MSG_DONTWAIT prevents emission after Close.
+	// Join both admission directions before releasing their reservations.
 	e.sendMu.Lock()
 	e.sendMu.Unlock()
+	e.deliveryMu.Lock()
+	e.deliveryMu.Unlock()
 	m := e.manager
 	m.mu.Lock()
 	defer m.mu.Unlock()
