@@ -40,16 +40,17 @@ struct ThermalCameraFrame {
         return age >= -1 && age < 3
     }
 
-    func label(_ point: Point, scale: ThermalCameraScale) -> String {
+    func temperatureLabel(_ point: Point, scale: ThermalCameraScale) -> String? {
         if let celsius = point.celsius { return String(format: "%.1f°C", celsius) }
-        return label(point.raw, scale: scale)
+        return temperatureLabel(point.raw, scale: scale)
     }
 
-    func label(_ raw: UInt16, scale: ThermalCameraScale) -> String {
+    func temperatureLabel(_ raw: UInt16, scale: ThermalCameraScale) -> String? {
         if let kelvinPerCount {
             return String(format: "%.1f°C", Double(raw) * kelvinPerCount + kelvinOffset - 273.15)
         }
-        return (allowScaleOverride ? scale : .counts).label(raw)
+        guard allowScaleOverride, scale != .counts else { return nil }
+        return scale.label(raw)
     }
     var width: Int { image.width }
     var height: Int { image.height }
@@ -92,6 +93,20 @@ struct ThermalCameraFrame {
         return CGPoint(x: (size.width - CGFloat(width) * scale) / 2 + (CGFloat(x) + 0.5) * scale,
                        y: (size.height - CGFloat(height) * scale) / 2 + (CGFloat(y) + 0.5) * scale)
     }
+
+    static func markerLabelPosition(_ position: CGPoint, avoiding other: CGPoint, isMinimum: Bool, in size: CGSize) -> CGPoint {
+        func preferred(_ point: CGPoint) -> CGPoint {
+            CGPoint(x: min(max(point.x + (point.x < size.width / 2 ? 46 : -46), 48), max(48, size.width - 48)),
+                    y: point.y > size.height / 2 ? max(36, point.y - 19) : min(size.height - 36, max(46, point.y + 19)))
+        }
+        var label = preferred(position)
+        let otherLabel = preferred(other)
+        if abs(label.x - otherLabel.x) < 100 && abs(label.y - otherLabel.y) < 28 {
+            let top = max(36, min(min(label.y, otherLabel.y), size.height - 64))
+            label.y = top + (isMinimum ? 0 : 28)
+        }
+        return label
+    }
 }
 
 struct ThermalCameraDisplay: View {
@@ -112,8 +127,8 @@ struct ThermalCameraDisplay: View {
                         .frame(width: geometry.size.width, height: geometry.size.height)
                         .opacity(fresh ? 1 : 0.35)
                     if fresh {
-                        marker(coldest, label: "MIN", color: .cyan, size: geometry.size)
-                        marker(hottest, label: "MAX", color: .orange, size: geometry.size)
+                        marker(coldest, other: hottest, label: "MIN", color: .cyan, size: geometry.size)
+                        marker(hottest, other: coldest, label: "MAX", color: .orange, size: geometry.size)
                     }
                     HStack(spacing: 5) {
                         Image(systemName: "thermometer.medium")
@@ -149,7 +164,7 @@ struct ThermalCameraDisplay: View {
                     Text("Use a TLinear scale only when the camera is configured for radiometric output at that resolution.")
                         .font(.caption).foregroundStyle(.secondary)
                 } else {
-                    Text("MIN and MAX show camera-reported temperatures. They update separately from the live image and disappear when readings stop updating.")
+                    Text("MIN and MAX identify the coldest and hottest points. Camera-reported temperatures update separately from the live image. When temperatures are unavailable, only MIN and MAX are shown.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Text("The heatmap scales to each frame's sensor range. Gray pixels have no valid measurement.")
@@ -160,8 +175,10 @@ struct ThermalCameraDisplay: View {
         }
     }
 
-    private func marker(_ point: ThermalCameraFrame.Point, label: String, color: Color, size: CGSize) -> some View {
+    private func marker(_ point: ThermalCameraFrame.Point, other: ThermalCameraFrame.Point, label: String, color: Color, size: CGSize) -> some View {
         let position = ThermalCameraFrame.position(x: point.x, y: point.y, width: frame.width, height: frame.height, in: size)
+        let otherPosition = ThermalCameraFrame.position(x: other.x, y: other.y, width: frame.width, height: frame.height, in: size)
+        let temperature = frame.temperatureLabel(point, scale: feed.thermalScale)
         return ZStack(alignment: .topLeading) {
             Image(systemName: "plus")
                 .font(.system(size: 17, weight: .light)).foregroundStyle(color)
@@ -169,18 +186,19 @@ struct ThermalCameraDisplay: View {
                 .position(position)
             HStack(spacing: 4) {
                 Text(label).font(.system(size: 8, weight: .bold, design: .rounded)).foregroundStyle(color)
-                Text(frame.label(point, scale: feed.thermalScale))
-                    .font(.system(size: 11, weight: .medium, design: .rounded).monospacedDigit())
-                    .foregroundStyle(.white)
+                if let temperature {
+                    Text(temperature)
+                        .font(.system(size: 11, weight: .medium, design: .rounded).monospacedDigit())
+                        .foregroundStyle(.white)
+                }
             }
             .padding(.horizontal, 6).padding(.vertical, 4)
             .background(.black.opacity(0.65), in: RoundedRectangle(cornerRadius: 5))
             .fixedSize()
-            .position(x: min(max(position.x + (position.x < size.width / 2 ? 46 : -46), 48), max(48, size.width - 48)),
-                      y: position.y > size.height / 2 ? max(36, position.y - 19) : min(size.height - 36, max(46, position.y + 19)))
+            .position(ThermalCameraFrame.markerLabelPosition(position, avoiding: otherPosition, isMinimum: label == "MIN", in: size))
         }
         .allowsHitTesting(false)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(label) \(frame.label(point, scale: feed.thermalScale)), pixel \(point.x), \(point.y)")
+        .accessibilityLabel("\(label), \(temperature ?? "temperature unavailable"), pixel \(point.x), \(point.y)")
     }
 }

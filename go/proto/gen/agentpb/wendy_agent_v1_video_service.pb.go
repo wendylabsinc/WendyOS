@@ -547,9 +547,15 @@ type StreamVideoRequest struct {
 	// No match is an error, deliberately. Falling back to device_id would
 	// stream whatever the kernel happened to put at that number, which is the
 	// silent-wrong-camera failure this field exists to remove.
-	StableId      string `protobuf:"bytes,6,opt,name=stable_id,json=stableId,proto3" json:"stable_id,omitempty"` // empty = address by device_id, as before
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	StableId string `protobuf:"bytes,6,opt,name=stable_id,json=stableId,proto3" json:"stable_id,omitempty"` // empty = address by device_id, as before
+	// Adapt RAW delivery to this subscriber's transport capacity. Starts at
+	// 5 fps, reduces the rate under backpressure and probes upward gradually.
+	// Frames are skipped before transmission; capture and other subscribers
+	// are unaffected. Intended for live viewers, not full-rate recording or
+	// analytics. Ignored for encoded video and by older agents.
+	AdaptiveFramerate bool `protobuf:"varint,7,opt,name=adaptive_framerate,json=adaptiveFramerate,proto3" json:"adaptive_framerate,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *StreamVideoRequest) Reset() {
@@ -622,6 +628,13 @@ func (x *StreamVideoRequest) GetStableId() string {
 		return x.StableId
 	}
 	return ""
+}
+
+func (x *StreamVideoRequest) GetAdaptiveFramerate() bool {
+	if x != nil {
+		return x.AdaptiveFramerate
+	}
+	return false
 }
 
 // Credentials for a network camera. Stored on the device, never returned by any
@@ -2212,14 +2225,15 @@ const file_wendy_agent_services_v1_wendy_agent_v1_video_service_proto_rawDesc = 
 	"\x0ecapture_height\x18\x03 \x01(\rR\rcaptureHeight\"\x19\n" +
 	"\x17ListVideoDevicesRequest\"Z\n" +
 	"\x18ListVideoDevicesResponse\x12>\n" +
-	"\adevices\x18\x01 \x03(\v2$.wendy.agent.services.v1.VideoDeviceR\adevices\"\xd5\x01\n" +
+	"\adevices\x18\x01 \x03(\v2$.wendy.agent.services.v1.VideoDeviceR\adevices\"\x84\x02\n" +
 	"\x12StreamVideoRequest\x12\x1b\n" +
 	"\tdevice_id\x18\x01 \x01(\rR\bdeviceId\x12\x14\n" +
 	"\x05width\x18\x02 \x01(\rR\x05width\x12\x16\n" +
 	"\x06height\x18\x03 \x01(\rR\x06height\x12\x1c\n" +
 	"\tframerate\x18\x04 \x01(\rR\tframerate\x129\n" +
 	"\x05codec\x18\x05 \x01(\x0e2#.wendy.agent.services.v1.VideoCodecR\x05codec\x12\x1b\n" +
-	"\tstable_id\x18\x06 \x01(\tR\bstableId\"r\n" +
+	"\tstable_id\x18\x06 \x01(\tR\bstableId\x12-\n" +
+	"\x12adaptive_framerate\x18\a \x01(\bR\x11adaptiveFramerate\"r\n" +
 	"\x1bSetCameraCredentialsRequest\x12\x1b\n" +
 	"\tdevice_id\x18\x01 \x01(\rR\bdeviceId\x12\x1a\n" +
 	"\busername\x18\x02 \x01(\tR\busername\x12\x1a\n" +

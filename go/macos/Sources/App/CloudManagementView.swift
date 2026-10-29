@@ -223,10 +223,24 @@ struct CloudManagementView: View {
             ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
             Form {
-                if model.accounts.isEmpty {
+                if let error = app.mobileCloudSelectionError {
+                    FailureView(title: "Could not load organization", error: error) {
+                        actions.submit { await app.refreshMobileCloudSelection() }
+                    }
+                } else if app.mobileCloudSelectionLoading && app.mobileCloudAccounts.isEmpty {
+                    ProgressView("Loading accounts…").frame(maxWidth: .infinity)
+                } else if app.mobileCloudAccounts.isEmpty {
                     ContentUnavailableView { Label("Connect to Wendy Cloud", systemImage: "cloud") }
                         description: { Text("Sign in to manage your organization.") }
-                        actions: { Button("Sign in") { actions.submit { await app.signIn() } } }
+                        actions: {
+                            Button(app.signingIn ? "Signing in…" : "Sign in") {
+                                actions.submit { await app.signIn() }
+                            }.disabled(app.signingIn)
+                            if app.signingIn {
+                                ProgressView()
+                                Button("Cancel sign-in") { actions.submit { await app.cancelLogin() } }
+                            }
+                        }
                 } else {
                     if let error = model.error { FailureNote(message: error) }
                     if let snapshot = model.snapshot {
@@ -247,11 +261,14 @@ struct CloudManagementView: View {
                                 }
                             } header: { Text("Teammates") }
                         }
-                    } else if model.loading { ProgressView().frame(maxWidth: .infinity) }
+                    } else if model.loading || app.mobileCloudSelectionLoading { ProgressView().frame(maxWidth: .infinity) }
                     else if model.error == nil { Text("No organizations").foregroundStyle(.secondary) }
                 }
             }
-            .refreshable { await model.refresh() }
+            .refreshable {
+                await app.refreshMobileCloudSelection()
+                await model.refresh()
+            }
             .toolbar { ToolbarItem(placement: .topBarTrailing) { teammateMenu.labelStyle(.iconOnly).disabled(model.snapshot == nil) } }
             .navigationDestination(for: String.self) { id in
                 if let snapshot = model.snapshot, let member = snapshot.members.first(where: { $0.id == id }) {

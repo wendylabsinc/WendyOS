@@ -108,6 +108,7 @@
 		6475BF2FB6CB0A19AF740E66 /* PushNotifications.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4FD4712852B6F400373343C3 /* PushNotifications.swift */; };
 		64F6D8F0370577700BDA8FF8 /* VPNConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA6AB0A619B578B06B3173D9 /* VPNConfiguration.swift */; };
 		67BB10C89FBFFB29C73A96A3 /* DeviceViewfinderController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6601B40FC3BD51AE9C42CB5B /* DeviceViewfinderController.swift */; };
+		68D083942019941E4F042347 /* NetworkTrafficView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E29D1E80A8CC5F01C5E2250D /* NetworkTrafficView.swift */; };
 		690FE17CF9867B47C0F4E8FE /* PaneRefresh.swift in Sources */ = {isa = PBXBuildFile; fileRef = 586213F4C9CD3726515B5EBF /* PaneRefresh.swift */; };
 		6B4230D162D2856CCBD26053 /* SiteFogRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 08EBBD001E30821573005D77 /* SiteFogRenderer.swift */; };
 		6B944D6249927EBACCE40FEF /* Security.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 5D8FCECB47D77D65A8AD29C6 /* Security.framework */; };
@@ -129,6 +130,7 @@
 		7CFAF9F525687ACC94CA637A /* SiteCameraPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = E4B8A9451F3CCE3202F92697 /* SiteCameraPicker.swift */; };
 		7E4317BA630E69F764675067 /* ThermalCameraView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD8B3A78D6205C63AD446D63 /* ThermalCameraView.swift */; };
 		8455994379C39B9DCB041A54 /* LogsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C9EDEC6A2D47804FCD2A19F /* LogsView.swift */; };
+		86AFBD2BAE00A99C77D170D4 /* NetworkTrafficView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E29D1E80A8CC5F01C5E2250D /* NetworkTrafficView.swift */; };
 		8829846641717B1154A66533 /* SiteRobotLocalizationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFA098E992CF9B04070ED0F /* SiteRobotLocalizationTests.swift */; };
 		89AD3C60B440A6C2C1488871 /* CampaignModelPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9DAD4BBD7CAD336DE563C175 /* CampaignModelPicker.swift */; };
 		89F17A976941AEB3F0B188DA /* UnitreeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 648A9EBBA886E50CBE873C88 /* UnitreeTests.swift */; };
@@ -174,6 +176,7 @@
 		ABA5D81B189D6224182726FF /* ChatDeviceCardView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4263F7B880A586994FB72A3D /* ChatDeviceCardView.swift */; };
 		AC77C91B900101B45CE51169 /* PacketTunnelProvider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00BC44983830F926484A6FE9 /* PacketTunnelProvider.swift */; };
 		ACCBF6B3442BD1604F1DA83C /* SiteArchive.swift in Sources */ = {isa = PBXBuildFile; fileRef = ECAA28D11C8E08FA5A802CB4 /* SiteArchive.swift */; };
+		AE632E07D7E1F86F196D97D7 /* NetworkTrafficTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7B10FC85047A5E2FEDBDDE41 /* NetworkTrafficTests.swift */; };
 		AEC62CE279318FE73303E500 /* DeviceViewfinder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8F2C391C97D1BB19C1786EB2 /* DeviceViewfinder.swift */; };
 		AF28993980F7F75714350D0A /* AsyncActions.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7BB8F41D151BA6EEF15734B2 /* AsyncActions.swift */; };
 		AF7E4000003DC6763697795B /* SiteTwinTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C8C3E32837C8B119C15C3627 /* SiteTwinTests.swift */; };
@@ -373,6 +376,7 @@
 		7657AD677FD62BAD21CB002E /* SiteReferenceCapture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SiteReferenceCapture.swift; sourceTree = "<group>"; };
 		7669EC933A46EBA4067A3592 /* MobileAssets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = MobileAssets.xcassets; sourceTree = "<group>"; };
 		78EF1B380CC110B5531DD514 /* SimulatorClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimulatorClient.swift; sourceTree = "<group>"; };
+		7B10FC85047A5E2FEDBDDE41 /* NetworkTrafficTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NetworkTrafficTests.swift; sourceTree = "<group>"; };
 		7BB8F41D151BA6EEF15734B2 /* AsyncActions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AsyncActions.swift; sourceTree = "<group>"; };
 		7DEAEE88B9129990D3810958 /* SimulatorsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SimulatorsView.swift; sourceTree = "<group>"; };
 		830BF31D5054ED12AE4A2499 /* MobileVideoPlayer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileVideoPlayer.swift; sourceTree = "<group>"; };
@@ -434,6 +438,7 @@
 		DD0EBD1A032792BDF75E472D /* InstallView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InstallView.swift; sourceTree = "<group>"; };
 		DD1FE3F2E1DB38F68D72019A /* AudioToolbox.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AudioToolbox.framework; path = System/Library/Frameworks/AudioToolbox.framework; sourceTree = SDKROOT; };
 		E16E0AECED1D3AFC9D949296 /* CoreMedia.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreMedia.framework; path = System/Library/Frameworks/CoreMedia.framework; sourceTree = SDKROOT; };
+		E29D1E80A8CC5F01C5E2250D /* NetworkTrafficView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NetworkTrafficView.swift; sourceTree = "<group>"; };
 		E4B8A9451F3CCE3202F92697 /* SiteCameraPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SiteCameraPicker.swift; sourceTree = "<group>"; };
 		E539BE71A9E784220ACB1D8A /* DeviceEnrollmentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceEnrollmentView.swift; sourceTree = "<group>"; };
 		E75A157CBBD32C6A883151B3 /* NearbySetupClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NearbySetupClient.swift; sourceTree = "<group>"; };
@@ -563,6 +568,7 @@
 				F2572A9746D687639FDA728A /* ModelLibraryView.swift */,
 				E75A157CBBD32C6A883151B3 /* NearbySetupClient.swift */,
 				A59A57EA9A8FAF4CB85087DB /* NearbySetupView.swift */,
+				E29D1E80A8CC5F01C5E2250D /* NetworkTrafficView.swift */,
 				BE9A9C8F45E321960D15CEF8 /* PairingView.swift */,
 				586213F4C9CD3726515B5EBF /* PaneRefresh.swift */,
 				40A7543FFAE45034DB228D85 /* PlatformServices.swift */,
@@ -621,6 +627,7 @@
 				4E6F80B62D0A9F10FC7A6702 /* Go2ModelTests.swift */,
 				CA670484662408F515B9C200 /* InstallTests.swift */,
 				9B40B4FDD87C60533F0559A6 /* ModelHardwareTests.swift */,
+				7B10FC85047A5E2FEDBDDE41 /* NetworkTrafficTests.swift */,
 				F77E3BE596D894B863D41817 /* RobotLensCalibrationTests.swift */,
 				AA96AC91DE1B6D4C296226BF /* SimulatorTests.swift */,
 				29731A268C7EA376952C0151 /* SiteAutomaticAlignmentTests.swift */,
@@ -1178,6 +1185,7 @@
 				E29173B899C80C6895AF7BE3 /* Go2ModelTests.swift in Sources */,
 				F3A827934F6DC5A50FFCD1BB /* InstallTests.swift in Sources */,
 				08287DD3EFF2E24E9258CFA7 /* ModelHardwareTests.swift in Sources */,
+				AE632E07D7E1F86F196D97D7 /* NetworkTrafficTests.swift in Sources */,
 				C38A105CA2B62B3F487DA22E /* RobotLensCalibrationTests.swift in Sources */,
 				9F1B78165E6F7A5B6190BAF1 /* SimulatorTests.swift in Sources */,
 				2A7D6511A3DE1DC959ED96CA /* SiteAutomaticAlignmentTests.swift in Sources */,
@@ -1248,6 +1256,7 @@
 				4AC6D04388FF681238CF9E50 /* NativeSiteView.swift in Sources */,
 				4B82905690EA5FC17220BE45 /* NearbySetupClient.swift in Sources */,
 				5239EE4DFFA71FA8A3B47F9E /* NearbySetupView.swift in Sources */,
+				86AFBD2BAE00A99C77D170D4 /* NetworkTrafficView.swift in Sources */,
 				2FD819F5EEB474D4FF9E0C1F /* PairingView.swift in Sources */,
 				690FE17CF9867B47C0F4E8FE /* PaneRefresh.swift in Sources */,
 				31F0F9AD132888F47A6B72D7 /* PhoneLensCalibrationView.swift in Sources */,
@@ -1370,6 +1379,7 @@
 				A2D8CADA2405E028E4EB1208 /* NativeSiteView.swift in Sources */,
 				A789A504088C208FE124EBF3 /* NearbySetupClient.swift in Sources */,
 				57947AB4924735E657C857C4 /* NearbySetupView.swift in Sources */,
+				68D083942019941E4F042347 /* NetworkTrafficView.swift in Sources */,
 				BDEF450DB9F50B282F0713CD /* PairingView.swift in Sources */,
 				A640420891322DEAC7DA2208 /* PaneRefresh.swift in Sources */,
 				C3B9202FADD6F7B7462C64ED /* PlatformServices.swift in Sources */,

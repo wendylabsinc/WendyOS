@@ -580,6 +580,15 @@ the agent's raw capture stream. The agent identifies adapters using the camera's
 USB identity and supported modes. Generic USB camera names and Y16 alone do not
 establish thermal or temperature capabilities.
 
+Thermal viewers request adaptive delivery from the agent. Each viewer starts at
+5 frames per second, slows when its connection backs up, and gradually increases
+when writes remain fast. Queued frames are replaced with the newest complete
+frame. This changes that viewer's delivery rate; shared camera capture and
+full-rate recording or analytics consumers continue independently. Older agents
+ignore the opt-in field. Interrupted streams retry after one, two and four
+seconds; a stream without valid frames for 15 seconds is reopened. Temperature
+freshness remains independent of these retries.
+
 | Adapter | Capture | Measurement plane | Temperature support |
 | --- | --- | --- | --- |
 | PureThermal | Y16, 160×120 or 80×60 | Entire picture | Counts by default; explicit operator TLinear scale remains available |
@@ -605,7 +614,11 @@ The heatmap uses the sensor frame. On HIK hardware, markers and Celsius labels
 use the camera's separate temperature summary and its reported positions. The
 summary updates at roughly 2.5 Hz, independently of video. The app waits for a
 changed summary after connection, preserves its age across repeated metadata,
-and hides temperatures after three seconds without a changed summary. It never
+and hides temperatures after three seconds without a changed summary. While
+temperatures are unavailable, the live image keeps MIN/MAX markers without
+numeric sensor counts. This includes startup, invalid summary metadata, and
+unchanged summaries that reach the freshness limit. A new valid, changed summary
+restores the Celsius labels. The app never
 applies the summary's conversion to sensor pixels. Markers account for
 letterboxing. Stopping or switching cameras clears readings; three seconds
 without a new frame dims the image and hides extrema. The bridge carries the

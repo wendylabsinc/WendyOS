@@ -817,7 +817,7 @@ func TestPlanDragonwingFlashResolvesBeforeAnyWrite(t *testing.T) {
 	// Every write is resolved up front, so a bundle the flash cannot take
 	// fails while the board is still untouched rather than after 12 GiB.
 	_, err := planDragonwingFlash(t.TempDir(), t.TempDir(), "", nil, "", nil,
-		io.Discard, func(string) {}, func(string) {})
+		io.Discard, func(string) {}, func(string) {}, nil)
 	if err == nil {
 		t.Fatal("want an error for an empty bundle dir")
 	}

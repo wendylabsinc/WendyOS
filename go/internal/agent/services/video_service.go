@@ -2503,14 +2503,16 @@ func (s *VideoService) StreamVideo(req *agentpb.StreamVideoRequest, stream grpc.
 	}
 	defer h.unsubscribe(id)
 
-	return s.pumpFrames(stream, h, id, ch)
+	return s.pumpFrames(stream, h, id, ch, req.GetAdaptiveFramerate())
 }
 
 // pumpFrames forwards hub frames to a gRPC stream until the stream or the
 // producer ends. Local and network cameras share it, so subscriber teardown and
 // terminal-error reporting behave identically for both.
-func (s *VideoService) pumpFrames(stream grpc.ServerStreamingServer[agentpb.VideoFrame], h *deviceHub, id int, ch chan *videoFrame) error {
+func (s *VideoService) pumpFrames(stream grpc.ServerStreamingServer[agentpb.VideoFrame], h *deviceHub, id int, ch chan *videoFrame, adaptive ...bool) error {
 	ctx := stream.Context()
+	var pacer rawFramePacer
+	adapt := len(adaptive) > 0 && adaptive[0]
 	for {
 		select {
 		case <-ctx.Done():
@@ -2544,6 +2546,19 @@ func (s *VideoService) pumpFrames(stream grpc.ServerStreamingServer[agentpb.Vide
 				}
 				return status.Errorf(codes.Internal, "video producer stopped unexpectedly")
 			}
+			if adapt && frame.codec == agentpb.VideoCodec_VIDEO_CODEC_RAW {
+				// Drain only the existing bounded queue. A slow live viewer wants
+				// the newest complete frame, not a backlog of stale temperatures.
+				for remaining := len(ch); remaining > 0; remaining-- {
+					if newer, open := <-ch; open {
+						frame = newer
+					}
+				}
+				if !pacer.allow(time.Now()) {
+					continue
+				}
+			}
+			started := time.Now()
 			// frame.data is an immutable, per-frame allocation produced by the
 			// capture loop and never modified after broadcast(). stream.Send()
 			// serialises the proto synchronously (marshal → TLS write) before
@@ -2557,6 +2572,9 @@ func (s *VideoService) pumpFrames(stream grpc.ServerStreamingServer[agentpb.Vide
 				RawExtrema:  rawFrameExtrema(frame),
 			}); err != nil {
 				return err
+			}
+			if adapt && frame.codec == agentpb.VideoCodec_VIDEO_CODEC_RAW {
+				pacer.sent(started, time.Now())
 			}
 		}
 	}

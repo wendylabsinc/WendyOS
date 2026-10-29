@@ -18,6 +18,9 @@ wendy install --nightly
 # Linux: non-interactive with all flags
 wendy install --device-type raspberry-pi-5 --version 0.10.4 --drive /dev/disk4 --force
 
+# Use a locally built Linux agent instead of downloading the latest release
+wendy install --device-type raspberry-pi-5 --binary ./wendy-agent-linux-arm64
+
 # Direct install from a local image (Linux only)
 wendy install path/to/image.img /dev/disk4 --force
 

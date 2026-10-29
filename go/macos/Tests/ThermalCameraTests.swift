@@ -40,6 +40,19 @@ final class ThermalCameraTests: XCTestCase {
         XCTAssertEqual(tall.y, 547.5)
     }
 
+    func testNearbyExtremaKeepBothLabelsVisible() {
+        for size in [CGSize(width: 320, height: 240), CGSize(width: 800, height: 600)] {
+            for point in [CGPoint.zero, CGPoint(x: size.width / 2, y: size.height / 2), CGPoint(x: size.width, y: size.height)] {
+                let other = CGPoint(x: point.x + 1, y: point.y)
+                let cold = ThermalCameraFrame.markerLabelPosition(point, avoiding: other, isMinimum: true, in: size)
+                let hot = ThermalCameraFrame.markerLabelPosition(other, avoiding: point, isMinimum: false, in: size)
+                XCTAssertGreaterThanOrEqual(hot.y - cold.y, 28)
+                XCTAssertGreaterThanOrEqual(cold.y, 36)
+                XCTAssertLessThanOrEqual(hot.y, size.height - 36)
+            }
+        }
+    }
+
     func testFrameCopiesBytesAndRejectsInvalidGeometry() throws {
         let copied = try frame()
         XCTAssertEqual(copied.width, 80)
@@ -63,12 +76,19 @@ final class ThermalCameraTests: XCTestCase {
         XCTAssertEqual(counts.width, 256)
         XCTAssertEqual(counts.height, 192)
         XCTAssertFalse(counts.allowScaleOverride)
+        XCTAssertNil(counts.temperatureLabel(counts.coldest, scale: .counts))
         // A stale PureThermal preference must not turn HIK counts into degrees.
-        XCTAssertEqual(counts.label(19200, scale: .kelvin100), "19200 counts")
+        XCTAssertNil(counts.temperatureLabel(19200, scale: .kelvin100))
         metadata.has_temperature = 1
         metadata.kelvin_per_count = 1.0 / 64.0
         let measured = try decode()
-        XCTAssertEqual(measured.label(19200, scale: .counts), "26.9°C")
+        XCTAssertEqual(measured.temperatureLabel(19200, scale: .counts), "26.9°C")
+        metadata.has_temperature = 0
+        metadata.allow_scale_override = 1
+        let manual = try decode()
+        XCTAssertNil(manual.temperatureLabel(30000, scale: .counts))
+        XCTAssertEqual(manual.temperatureLabel(30000, scale: .kelvin100), "26.9°C")
+        metadata.has_temperature = 1
         metadata.kelvin_per_count = .nan
         XCTAssertThrowsError(try decode())
         metadata.has_temperature = 0
@@ -89,9 +109,9 @@ final class ThermalCameraTests: XCTestCase {
             try bytes.withUnsafeBufferPointer { try ThermalCameraFrame(metadata, bytes: $0.baseAddress, count: $0.count) }
         }
         let frame = try decode()
-        XCTAssertEqual(frame.label(try XCTUnwrap(frame.summaryHottest), scale: .counts), "33.5°C")
-        XCTAssertEqual(frame.label(try XCTUnwrap(frame.summaryColdest), scale: .counts), "19.9°C")
-        XCTAssertEqual(frame.label(frame.hottest, scale: .counts), "5400 counts")
+        XCTAssertEqual(frame.temperatureLabel(try XCTUnwrap(frame.summaryHottest), scale: .counts), "33.5°C")
+        XCTAssertEqual(frame.temperatureLabel(try XCTUnwrap(frame.summaryColdest), scale: .counts), "19.9°C")
+        XCTAssertNil(frame.temperatureLabel(frame.hottest, scale: .counts))
         XCTAssertTrue(frame.summaryIsFresh(at: Date(timeIntervalSince1970: 102)))
         XCTAssertFalse(frame.summaryIsFresh(at: Date(timeIntervalSince1970: 103)))
         metadata.summary_hot_celsius = .nan

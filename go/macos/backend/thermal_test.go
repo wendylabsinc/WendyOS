@@ -168,7 +168,7 @@ func TestThermalStreamUsesRawStableIdentityAndCancels(t *testing.T) {
 	}
 	select {
 	case req := <-agent.requests:
-		if req.Codec != pb.VideoCodec_VIDEO_CODEC_RAW || req.StableId != "by-id:thermal-fixture" {
+		if req.Codec != pb.VideoCodec_VIDEO_CODEC_RAW || req.StableId != "by-id:thermal-fixture" || !req.AdaptiveFramerate {
 			t.Fatalf("wrong request: %v", req)
 		}
 	case <-time.After(time.Second):

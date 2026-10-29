@@ -81,8 +81,8 @@ func (a *Agent) presencePathReachable(ctx context.Context, endpoint string) bool
 }
 
 // Run probes outside the presence receive loop so DNS/TLS delays do not hold
-// up offers or lease expiry. A stable new source needs a successful authenticated
-// broker transport before replacing a still-assigned source. Failed probes back
+// up offers or lease expiry. A stable new source needs five successful authenticated
+// broker transports before replacing a still-assigned source. Failed probes back
 // off to five minutes; a removed source bypasses that delay.
 func (a *Agent) watchPresencePath(ctx context.Context, p *peer.Peer, endpoint string) error {
 	interval := a.sourceCheckInterval
@@ -100,7 +100,7 @@ func (a *Agent) watchPresencePath(ctx context.Context, p *peer.Peer, endpoint st
 		reachable = a.presencePathReachable
 	}
 	var candidate net.IP
-	stable, wait, penalty := 0, 0, 0
+	stable, wait, penalty, successes := 0, 0, 0, 0
 	for {
 		select {
 		case <-ctx.Done():
@@ -120,11 +120,11 @@ func (a *Agent) watchPresencePath(ctx context.Context, p *peer.Peer, endpoint st
 		}
 		source, err := preferred(remote)
 		if err != nil || source == nil || source.IsUnspecified() || source.Equal(local.IP) {
-			candidate, stable, wait, penalty = nil, 0, 0, 0
+			candidate, stable, wait, penalty, successes = nil, 0, 0, 0, 0
 			continue
 		}
 		if !source.Equal(candidate) {
-			candidate, stable, wait, penalty = append(net.IP(nil), source...), 0, 0, 0
+			candidate, stable, wait, penalty, successes = append(net.IP(nil), source...), 0, 0, 0, 0
 		}
 		stable++
 		if wait > 0 {
@@ -148,11 +148,19 @@ func (a *Agent) watchPresencePath(ctx context.Context, p *peer.Peer, endpoint st
 				return ctx.Err()
 			}
 			if err == nil && source.Equal(candidate) {
-				return errPresencePathMoved
+				// Five independent successful probes over at least 40 seconds
+				// keep an intermittently working primary from reclaiming a
+				// healthy fallback after a single lucky TLS handshake.
+				successes++
+				if successes >= 5 {
+					return errPresencePathMoved
+				}
+				continue
 			}
-			candidate, stable, wait, penalty = nil, 0, 0, 0
+			candidate, stable, wait, penalty, successes = nil, 0, 0, 0, 0
 			continue
 		}
+		successes = 0
 		penalty = min(max(2*penalty, 1), 30)
 		wait = penalty
 	}

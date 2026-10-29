@@ -352,7 +352,10 @@ func downloadAndExtractDragonwingBundle(plan dragonwingPlan, detail func(string)
 
 // installDragonwing flashes a Dragonwing board over EDL.
 func installDragonwing(ctx context.Context, board dragonwingBoard, version string, nightly, force bool, prNumber int,
-	wifi wifiCLIOptions, deviceName string, preOpts preEnrollOptions) error {
+	wifi wifiCLIOptions, deviceName string, preOpts preEnrollOptions, agent *localInstallAgent) error {
+	if err := agent.checkArchitecture("arm64"); err != nil {
+		return err
+	}
 	if !qdl.Supported() {
 		return fmt.Errorf("flashing %s over EDL is not supported on this platform",
 			withArticle(humanReadableDeviceType(board.deviceType)))
@@ -448,7 +451,7 @@ func installDragonwing(ctx context.Context, board dragonwingBoard, version strin
 	run := &dragonwingFlashRun{
 		plan: plan, dev: dev, board: board,
 		seedDir: seedDir, zerosPath: zerosPath,
-		creds: creds, name: name, provJSON: provJSON,
+		creds: creds, name: name, provJSON: provJSON, agent: agent,
 	}
 	failedID, err := runFlashSteps(fmt.Sprintf("Flashing WendyOS %s", plan.version),
 		run.steps(flashCtx), cancelFlash, logW)
@@ -467,6 +470,7 @@ type dragonwingFlashRun struct {
 	creds     []wendyconf.WifiCredential
 	name      string
 	provJSON  []byte
+	agent     *localInstallAgent
 
 	bundleDir string
 	flash     *qdl.FlashPlan
@@ -508,7 +512,7 @@ func (r *dragonwingFlashRun) steps(ctx context.Context) []flashStep {
 			// first write command: a failure discovered mid-flash leaves the
 			// board half-written with the GPT still unpatched.
 			flash, err := planDragonwingFlash(r.seedDir, r.bundleDir, r.zerosPath,
-				r.creds, r.name, r.provJSON, out, detail, r.warn)
+				r.creds, r.name, r.provJSON, out, detail, r.warn, r.agent)
 			if err != nil {
 				return false, errors.Join(err, errDragonwingNothingWritten)
 			}
@@ -569,13 +573,16 @@ func openDragonwingFlashLog(board dragonwingBoard, version string) (io.Writer, f
 // config image, and the zeros that blank /data. Non-fatal problems go to warn,
 // which the caller surfaces once the steps UI has released the terminal.
 func planDragonwingFlash(seedDir, bundleDir, zerosPath string, creds []wendyconf.WifiCredential, deviceName string, provJSON []byte,
-	out io.Writer, detail func(string), warn func(string)) (*qdl.FlashPlan, error) {
+	out io.Writer, detail func(string), warn func(string), local *localInstallAgent) (*qdl.FlashPlan, error) {
+	if err := local.checkArchitecture("arm64"); err != nil {
+		return nil, err
+	}
 	plan, err := qdl.LoadFlashPlan(bundleDir)
 	if err != nil {
 		return nil, err
 	}
 
-	agent, agentWarning := resolveSeedAgent(out, detail)
+	agent, agentWarning := resolveSeedAgent(out, detail, local)
 	if agentWarning != "" {
 		warn(agentWarning)
 	}
@@ -587,7 +594,7 @@ func planDragonwingFlash(seedDir, bundleDir, zerosPath string, creds []wendyconf
 	// factory reset, and a surviving provisioning.json would re-enrol the fresh
 	// install as the previous device.
 	if err != nil {
-		if provisioningRequired(creds, deviceName, provJSON) {
+		if local != nil || provisioningRequired(creds, deviceName, provJSON) {
 			return nil, err
 		}
 		// Worded for both outcomes: the warning is printed whether or not the

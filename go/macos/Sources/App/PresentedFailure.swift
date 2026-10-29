@@ -8,7 +8,9 @@ struct PresentedFailure {
 
     init(_ raw: String) {
         let lower = raw.lowercased()
-        if lower.contains("valid app_id is required") {
+        if lower.contains("agent does not support network traffic statistics") {
+            message = "This device’s agent does not report network traffic. Update the agent to see these statistics."
+        } else if lower.contains("valid app_id is required") {
             message = "Cloud rejected this campaign’s notification identity. Update the device agent, then enable campaign notifications again."
         } else if lower.contains("does not support direct online updates yet") {
             message = "This agent needs a newer version before it can download updates directly."

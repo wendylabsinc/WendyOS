@@ -358,26 +358,39 @@ private struct MobileAccountsView: View {
 }
 
 extension AppModel {
-    func refreshMobileCloudSelection() async {
+    func refreshMobileCloudSelection(
+        loadAccounts: () async throws -> [SavedAccount] = { try await GoClient.shared.accounts() },
+        loadOrganizations: (String) async throws -> [CloudOrganization] = { try await CloudManagementClient().organizations(account: $0) }
+    ) async {
         mobileCloudSelectionGeneration += 1
         let request = mobileCloudSelectionGeneration
         mobileCloudSelectionLoading = true
         mobileCloudSelectionError = nil
         defer { if request == mobileCloudSelectionGeneration { mobileCloudSelectionLoading = false } }
         do {
-            let accounts = try await client.accounts()
+            let accounts = try await loadAccounts()
             guard request == mobileCloudSelectionGeneration else { return }
             let account = accounts.contains(where: { $0.id == mobileCloudAccount }) ? mobileCloudAccount
                 : accounts.first(where: { $0.active })?.id ?? accounts.first?.id ?? ""
-            let organizations = account.isEmpty ? [] : try await CloudManagementClient().organizations(account: account)
-            guard request == mobileCloudSelectionGeneration else { return }
+            // Account availability is independent of the organization request.
+            // A failed Cloud read must not make a saved account look signed out.
             mobileCloudAccounts = accounts
+            if account != mobileCloudAccount || account.isEmpty {
+                mobileCloudOrganizations = []
+                mobileCloudOrganization = ""
+            }
             mobileCloudAccount = account
+            let organizations = account.isEmpty ? [] : try await loadOrganizations(account)
+            guard request == mobileCloudSelectionGeneration else { return }
             mobileCloudOrganizations = organizations
             if !organizations.contains(where: { $0.id == mobileCloudOrganization }) {
                 mobileCloudOrganization = organizations.first?.id ?? ""
             }
-        } catch { if request == mobileCloudSelectionGeneration { mobileCloudSelectionError = error.localizedDescription } }
+        } catch {
+            if request == mobileCloudSelectionGeneration && !Task.isCancelled {
+                mobileCloudSelectionError = error.localizedDescription
+            }
+        }
     }
     func selectMobileCloudAccount(_ id: String) async {
         guard id != mobileCloudAccount else { return }

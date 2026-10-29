@@ -1,6 +1,21 @@
 #ifndef WENDY_SETTINGS_TYPES_H
 #define WENDY_SETTINGS_TYPES_H
 typedef struct {
+    char *name;
+    uint32_t index;
+    uint64_t received_bytes, sent_bytes;
+    int32_t virtual_interface, loopback, agent;
+    WDOptionalDouble receive_rate, send_rate;
+} WDNetworkTrafficRow;
+typedef struct {
+    WDStatus status;
+    char *interfaces_error, *agent_error;
+    WDNetworkTrafficRow *rows;
+    size_t count;
+} WDNetworkTrafficResult;
+WDNetworkTrafficResult *WDNetworkTraffic(uint64_t session);
+void WDNetworkTrafficFree(WDNetworkTrafficResult *value);
+typedef struct {
     char *ssid;
     int32_t security, signal, has_signal, known, connected, priority;
 } WDWiFiNetwork;

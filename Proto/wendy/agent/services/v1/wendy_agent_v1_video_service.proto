@@ -133,6 +133,12 @@ message StreamVideoRequest {
     // stream whatever the kernel happened to put at that number, which is the
     // silent-wrong-camera failure this field exists to remove.
     string stable_id  = 6; // empty = address by device_id, as before
+    // Adapt RAW delivery to this subscriber's transport capacity. Starts at
+    // 5 fps, reduces the rate under backpressure and probes upward gradually.
+    // Frames are skipped before transmission; capture and other subscribers
+    // are unaffected. Intended for live viewers, not full-rate recording or
+    // analytics. Ignored for encoded video and by older agents.
+    bool adaptive_framerate = 7;
 }
 
 // Credentials for a network camera. Stored on the device, never returned by any

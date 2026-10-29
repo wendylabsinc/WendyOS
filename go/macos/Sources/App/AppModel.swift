@@ -123,6 +123,11 @@ final class AppModel: ObservableObject {
         async let polling: Void = pollEvents(refreshes.continuation)
         for await _ in refreshes.stream {
             await refreshAccount()
+            #if os(iOS)
+            // Signing in again can keep identical account display metadata.
+            // Refresh organizations even when the account task's ID is unchanged.
+            await refreshMobileCloudSelection()
+            #endif
             await refreshCloud()
             await refreshNearby()
         }

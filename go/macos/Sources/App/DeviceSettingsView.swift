@@ -287,6 +287,7 @@ struct DeviceSettingsView: View {
                     }
                 }
             }
+            NetworkTrafficSection(session: session)
         }.formStyle(.grouped).navigationTitle("Wi-Fi")
             .mobileRefreshable { await refresh() }
             #if os(macOS)

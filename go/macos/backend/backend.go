@@ -51,6 +51,9 @@ type Backend struct {
 	connectSequence         uint64
 	connectCancel           context.CancelFunc
 	top                     commands.DesktopTopSampler
+	networkPrevious         *pb.NetworkStats
+	networkSession          uint64
+	networkSampleAt         time.Time
 	pinSelector, pinTarget  string
 	connectTarget           func(context.Context, string) (*grpcclient.AgentConnection, liteConnection, error)
 	lite                    liteConnection
@@ -589,12 +592,21 @@ func (b *Backend) StartCamera(camera uint32, streamID, sessionID uint64, expecte
 	request := &pb.StreamVideoRequest{DeviceId: camera, StableId: device.GetStableId(), Codec: pb.VideoCodec_VIDEO_CODEC_H264}
 	if isThermal {
 		request.Codec = pb.VideoCodec_VIDEO_CODEC_RAW
+		request.AdaptiveFramerate = true
 		// Capable agents choose the adapter's mode as their default. Joining
 		// without explicit dimensions shares an existing viewer's capture.
 		// Older agents need the legacy adapter's explicit mode request.
 		if device.GetThermal() == nil {
 			request.Width, request.Height = thermalProfile.CaptureWidth, thermalProfile.CaptureHeight
 		}
+	}
+	if isThermal {
+		session, timeout := b.session, b.cameraFirstFrameTimeout
+		go func() {
+			defer stop()
+			b.runThermalCamera(streamCtx, conn.VideoService, request, thermalProfile, session, streamID, timeout)
+		}()
+		return nil
 	}
 	stream, err := conn.VideoService.StreamVideo(streamCtx, request)
 	if err != nil {
@@ -610,7 +622,6 @@ func (b *Backend) StartCamera(camera uint32, streamID, sessionID uint64, expecte
 			stop()
 		})
 		defer firstFrame.Stop()
-		var summaryTracker thermalSummaryTracker
 		for {
 			v, err := stream.Recv()
 			if err != nil {
@@ -620,17 +631,6 @@ func (b *Backend) StartCamera(camera uint32, streamID, sessionID uint64, expecte
 				return
 			}
 			if len(v.Data) == 0 {
-				continue
-			}
-			if isThermal {
-				measured, err := decodeThermalFrame(v, thermalProfile)
-				if err != nil {
-					b.emitText(streamCtx, EventCameraError, session, streamID, err.Error())
-					return
-				}
-				summaryTracker.apply(measured, time.Now())
-				firstFrame.Reset(5 * time.Second)
-				b.emit(streamCtx, Event{Kind: EventThermal, Session: session, Stream: streamID, Bytes: measured.RGBA, Thermal: measured})
 				continue
 			}
 			firstFrame.Stop()
