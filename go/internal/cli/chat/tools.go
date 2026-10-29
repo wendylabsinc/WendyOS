@@ -60,6 +60,11 @@ var localTools = append([]Tool{
 }, backgroundTools...)
 
 func NewTools(ctx context.Context, executable, workspace, device string) (*Tools, error) {
+	return newTools(ctx, executable, workspace, device, nil)
+}
+
+// newTools is NewTools with a watch inbox. Only a top-level session has one.
+func newTools(ctx context.Context, executable, workspace, device string, inbox *watchInbox) (*Tools, error) {
 	t, err := newWorkspaceTools(workspace)
 	if err != nil {
 		return nil, err
@@ -83,7 +88,7 @@ func NewTools(ctx context.Context, executable, workspace, device string) (*Tools
 	}
 	t.background = &backgroundProcesses{executable: executable, workspace: t.workspace}
 	t.stopBackgroundContext = context.AfterFunc(ctx, func() { _ = t.background.Close() })
-	if err := t.startMCP(ctx, executable, device); err != nil {
+	if err := t.startMCP(ctx, executable, device, inbox); err != nil {
 		_ = t.Close()
 		return nil, err
 	}

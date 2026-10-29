@@ -17,6 +17,16 @@ import (
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 )
 
+// appToolSeparator joins an app's name and its tool's in the name the Wendy
+// MCP server registers: <app>__<tool> (internal/cli/mcp/container_mcp.go).
+const appToolSeparator = "__"
+
+// ReadOnlyCallMeta is the _meta key that marks a call read-only for the Wendy
+// MCP server (internal/cli/mcp/readonly_call.go). The server then runs only
+// read-only tools for it, and refuses any agent RPC that could change the
+// device. Chat sets it on every call of an unattended turn.
+const ReadOnlyCallMeta = "wendy.dev/read-only"
+
 type mcpToolClient interface {
 	ListTools(context.Context, mcpgo.ListToolsRequest) (*mcpgo.ListToolsResult, error)
 	CallTool(context.Context, mcpgo.CallToolRequest) (*mcpgo.CallToolResult, error)
@@ -61,7 +71,7 @@ func (s *cancelingStdio) SendRequest(ctx context.Context, request transport.JSON
 	return response, err
 }
 
-func (t *Tools) startMCP(ctx context.Context, executable, device string) error {
+func (t *Tools) startMCP(ctx context.Context, executable, device string, inbox *watchInbox) error {
 	// Chat only executes tools the server lists, and its prompt directs the model
 	// to specialist tools (camera, cloud, ...) outside the default core group.
 	args := []string{"mcp", "serve", "--tool-groups", "all"}
@@ -78,6 +88,10 @@ func (t *Tools) startMCP(ctx context.Context, executable, device string) error {
 		}),
 	)
 	client := mcpclient.NewClient(&cancelingStdio{Stdio: stdio})
+	if inbox != nil {
+		// Registered before the client starts, so no notification is missed.
+		client.OnNotification(inbox.handle)
+	}
 	t.mcp = client
 	if err := client.Start(ctx); err != nil {
 		return fmt.Errorf("starting Wendy MCP server: %w", err)
@@ -138,6 +152,9 @@ func (t *Tools) ListTools(ctx context.Context) ([]Tool, error) {
 			tool := Tool{
 				Name: remote.Name, Description: remote.Description, Parameters: parameters,
 				RequiresApproval: remote.Annotations.ReadOnlyHint == nil || !*remote.Annotations.ReadOnlyHint,
+				// Built-in tool names never contain the separator (pinned by
+				// a test in the mcp package).
+				AppProvided: strings.Contains(remote.Name, appToolSeparator),
 			}
 			available = append(available, tool)
 			known[tool.Name] = tool
@@ -161,6 +178,9 @@ func (t *Tools) callMCPResult(ctx context.Context, call ToolCall) (ToolResult, e
 	request := mcpgo.CallToolRequest{}
 	request.Params.Name = call.Name
 	request.Params.Arguments = arguments
+	if unattendedTurn(ctx) {
+		request.Params.Meta = &mcpgo.Meta{AdditionalFields: map[string]any{ReadOnlyCallMeta: true}}
+	}
 	result, err := t.mcp.CallTool(ctx, request)
 	if err != nil {
 		return ToolResult{}, err

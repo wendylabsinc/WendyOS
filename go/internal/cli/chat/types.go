@@ -50,6 +50,10 @@ type Tool struct {
 	Description      string
 	Parameters       json.RawMessage
 	RequiresApproval bool
+	// AppProvided marks a tool a device app registers through the Wendy MCP
+	// server, named <app>__<tool>. The app sets its own read-only hint, so the
+	// hint cannot be trusted to mean the tool is safe to run unattended.
+	AppProvided bool
 }
 
 // Provider streams assistant text and returns the complete assistant message,

@@ -295,7 +295,7 @@ func (s *mcpServer) newProtocolServer() (*server.MCPServer, error) {
 		server.WithInstructions(instructions),
 		server.WithToolFilter(s.filterManifestTools),
 	)
-	srv.Use(s.relayManifestMiddleware, s.bindingMiddleware(srv))
+	srv.Use(s.relayManifestMiddleware, s.bindingMiddleware(srv), readOnlyCallMiddleware(srv))
 	catalog, err := s.skillCatalog()
 	if err != nil {
 		return nil, fmt.Errorf("loading MCP skills: %w", err)

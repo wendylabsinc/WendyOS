@@ -229,7 +229,7 @@ func (s *mcpServer) handleROS2Topics(ctx context.Context, req mcpgo.CallToolRequ
 	defer cancel()
 	ctx = opts.rpcContext(ctx)
 	var headers metadata.MD
-	resp, err := agentpbv2.NewROS2ServiceClient(conn.Conn).ListTopics(ctx, &agentpbv2.ListROS2TopicsRequest{DomainId: opts.domain}, grpc.MaxCallRecvMsgSize(ros2MaxReceiveBytes), grpc.Header(&headers))
+	resp, err := agentpbv2.NewROS2ServiceClient(conn.Client()).ListTopics(ctx, &agentpbv2.ListROS2TopicsRequest{DomainId: opts.domain}, grpc.MaxCallRecvMsgSize(ros2MaxReceiveBytes), grpc.Header(&headers))
 	if err != nil {
 		return ros2Error(err), nil
 	}
@@ -270,7 +270,7 @@ func (s *mcpServer) handleROS2TopicInfo(ctx context.Context, req mcpgo.CallToolR
 	defer cancel()
 	ctx = opts.rpcContext(ctx)
 	var headers metadata.MD
-	resp, err := agentpbv2.NewROS2ServiceClient(conn.Conn).GetTopicInfo(ctx, &agentpbv2.GetROS2TopicInfoRequest{DomainId: opts.domain, Topic: opts.topic}, grpc.MaxCallRecvMsgSize(ros2MaxReceiveBytes), grpc.Header(&headers))
+	resp, err := agentpbv2.NewROS2ServiceClient(conn.Client()).GetTopicInfo(ctx, &agentpbv2.GetROS2TopicInfoRequest{DomainId: opts.domain, Topic: opts.topic}, grpc.MaxCallRecvMsgSize(ros2MaxReceiveBytes), grpc.Header(&headers))
 	if err != nil {
 		return ros2Error(err), nil
 	}
@@ -310,7 +310,7 @@ func (s *mcpServer) handleROS2Stream(parent context.Context, req mcpgo.CallToolR
 	ctx, cancel := context.WithTimeout(parent, opts.duration)
 	defer cancel() // Release the device subscription on every exit, including count/byte limits.
 	ctx = opts.rpcContext(ctx)
-	client := agentpbv2.NewROS2ServiceClient(conn.Conn)
+	client := agentpbv2.NewROS2ServiceClient(conn.Client())
 	var recv func() (map[string]any, error)
 	if hz {
 		stream, streamErr := client.MonitorHz(ctx, &agentpbv2.MonitorROS2HzRequest{DomainId: opts.domain, Topic: opts.topic}, grpc.MaxCallRecvMsgSize(ros2MaxReceiveBytes))
