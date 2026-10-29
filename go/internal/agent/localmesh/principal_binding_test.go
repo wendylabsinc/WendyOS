@@ -6,6 +6,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/ed25519"
 	"crypto/elliptic"
+	"crypto/mldsa"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
@@ -59,11 +60,15 @@ func principalBoundDirectory(t *testing.T, credentials *Credentials, now time.Ti
 }
 
 func TestManifestBindsPrincipalWhenTenantsTrustSameKeyAndDeviceUUID(t *testing.T) {
-	for _, algorithm := range []string{"P256", "Ed25519", "RSA"} {
+	for _, algorithm := range []string{"P256", "Ed25519", "RSA", "MLDSA65", "MLDSA87"} {
 		t.Run(algorithm, func(t *testing.T) {
 			var key crypto.Signer
 			var err error
 			switch algorithm {
+			case "MLDSA65":
+				key, err = mldsa.GenerateKey(mldsa.MLDSA65())
+			case "MLDSA87":
+				key, err = mldsa.GenerateKey(mldsa.MLDSA87())
 			case "P256":
 				key, err = ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 			case "Ed25519":

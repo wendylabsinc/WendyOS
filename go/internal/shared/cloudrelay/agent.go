@@ -41,6 +41,13 @@ type Agent struct {
 	signing, encryption *ecdsa.PrivateKey
 	lease               *pb.IssuePresenceLeaseResponse
 	leaseClaims         claims
+	// leases holds each unexpired lease Cloud issued to these keys, by jti.
+	// Cloud binds a session grant to the newest lease it issued, whether or
+	// not a broker admitted it, and the broker redelivers an unacknowledged
+	// offer on the next presence stream for the route. An offer can therefore
+	// name a lease this agent has already replaced, by renewal or by
+	// reconnecting.
+	leases              map[string]claims
 	slots               chan struct{}
 	sourceAddresses     func() ([]net.Addr, error)
 	sourceCheckInterval time.Duration
@@ -164,6 +171,20 @@ func (a *Agent) validateLease(ctx context.Context, l *pb.IssuePresenceLeaseRespo
 	}
 	return c, nil
 }
+
+// remember keeps a lease Cloud issued to these keys until it expires.
+func (a *Agent) remember(c claims) {
+	if a.leases == nil {
+		a.leases = map[string]claims{}
+	}
+	now := time.Now().Unix()
+	for id, l := range a.leases {
+		if l.Exp <= now {
+			delete(a.leases, id)
+		}
+	}
+	a.leases[c.JTI] = c
+}
 func (a *Agent) issue(ctx context.Context) (*pb.IssuePresenceLeaseResponse, claims, error) {
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
@@ -186,6 +207,8 @@ func (a *Agent) issue(ctx context.Context) (*pb.IssuePresenceLeaseResponse, clai
 	if err != nil {
 		return nil, c, err
 	}
+	// Cloud already binds new grants to this lease, whatever happens to it next.
+	a.remember(c)
 	raw, err := proto.Marshal(l)
 	if err != nil {
 		return nil, c, err
@@ -216,6 +239,7 @@ func (a *Agent) runOnce(parent context.Context) error {
 				if c, e := a.validateLease(ctx, &l); e == nil {
 					a.lease = &l
 					a.leaseClaims = c
+					a.remember(c)
 				}
 			}
 		}
@@ -314,16 +338,9 @@ func (a *Agent) runOnce(parent context.Context) error {
 			}
 		}
 	}()
-	type offerState struct {
-		o       *pb.SessionOffer
-		c       claims
-		d       *pb.DialInstruction
-		started bool
-	}
 	pending := map[string]*offerState{}
-	// Keep earlier lease bindings until they expire, so in-flight offers remain
-	// verifiable when a renewal changes the presence jti.
-	leases := map[string]claims{c.JTI: c}
+	// Offers refused on this stream, until the broker stops redelivering them.
+	rejected := map[string]int64{}
 	var renewing *pb.IssuePresenceLeaseResponse
 	var renewedClaims claims
 	for {
@@ -370,7 +387,6 @@ func (a *Agent) runOnce(parent context.Context) error {
 				c = renewedClaims
 				a.lease = lease
 				a.leaseClaims = c
-				leases[c.JTI] = c
 				renewing = nil
 				renewal.Reset(renewalDelay(lease, c))
 				expiry.Reset(time.Until(time.Unix(c.Exp, 0)))
@@ -386,9 +402,14 @@ func (a *Agent) runOnce(parent context.Context) error {
 						_ = os.Remove(filepath.Join(a.StateDir, "offer-"+binding([]byte(id))+".pb"))
 					}
 				}
-				for id, l := range leases {
+				for id, l := range a.leases {
 					if l.Exp <= now.Unix() {
-						delete(leases, id)
+						delete(a.leases, id)
+					}
+				}
+				for id, until := range rejected {
+					if until <= now.Unix() {
+						delete(rejected, id)
 					}
 				}
 				if prior := pending[o.OfferId]; prior != nil {
@@ -396,41 +417,24 @@ func (a *Agent) runOnce(parent context.Context) error {
 						return fmt.Errorf("conflicting relay offer")
 					}
 				} else {
-					if len(pending) >= 64 {
-						return status.Error(codes.ResourceExhausted, "too many relay offers")
+					if _, refused := rejected[o.OfferId]; refused {
+						continue
 					}
-					g, e := a.Verifier.verify(ctx, o.SessionGrantJws, grantType, c.Aud, now)
+					s, e := a.admitOffer(ctx, o, c, a.leases, pending, now)
 					if e != nil {
-						return e
-					}
-					bound, ok := leases[g.Presence]
-					if !ok || g.Route != c.Route || g.Session != o.SessionId || g.Agent != binding(publicDER(a.signing)) {
-						return fmt.Errorf("relay offer presence binding mismatch")
-					}
-					d, e := decryptInstruction(o.EncryptedDialInstruction, g, bound, a.encryption)
-					if e == nil {
-						e = validateService(d)
-					}
-					if e != nil {
-						return e
-					}
-					for _, prior := range pending {
-						if prior.c.Session == g.Session {
-							return fmt.Errorf("duplicate relay session offer")
+						// tunnel/v2 refuses a bad offer with no decryption and
+						// no dial. Ending presence instead would drop the lease
+						// and every other offer for one bad grant or service.
+						// Unacknowledged, it is redelivered until its grant
+						// expires, at most a minute away; remember up to 64
+						// such offers that long so a redelivery is skipped.
+						a.Logger.Warn("refused cloud relay offer", zap.String("offer_id", o.OfferId), zap.Error(e))
+						if len(rejected) < 64 {
+							rejected[o.OfferId] = now.Add(time.Minute + cloudClockSkew).Unix()
 						}
+						continue
 					}
-					raw, e := proto.Marshal(o)
-					if e != nil {
-						return e
-					}
-					path := filepath.Join(a.StateDir, "offer-"+binding([]byte(o.OfferId))+".pb")
-					if prev, e := os.ReadFile(path); e == nil && !bytes.Equal(prev, raw) {
-						return fmt.Errorf("conflicting persisted relay offer")
-					}
-					if e = writeState(path, raw); e != nil {
-						return e
-					}
-					pending[o.OfferId] = &offerState{o: o, c: g, d: d}
+					pending[o.OfferId] = s
 				}
 				if err = stream.Send(&pb.RegisterPresenceRequest{Message: &pb.RegisterPresenceRequest_OfferAcknowledgement{OfferAcknowledgement: &pb.PresenceOfferAcknowledgement{OfferId: o.OfferId, SessionId: o.SessionId}}}); err != nil {
 					return err
@@ -444,7 +448,10 @@ func (a *Agent) runOnce(parent context.Context) error {
 					select {
 					case a.slots <- struct{}{}:
 					default:
-						return status.Error(codes.ResourceExhausted, "too many active relay sessions")
+						// Only this session waits out its grant; presence and
+						// the sessions already running are unaffected.
+						a.Logger.Warn("refused cloud relay session", zap.String("offer_id", s.o.OfferId), zap.String("reason", "too many active relay sessions"))
+						continue
 					}
 					s.started = true
 					broker := lease.Broker
@@ -463,6 +470,56 @@ func (a *Agent) runOnce(parent context.Context) error {
 		}
 	}
 }
+
+// offerState is an offer the agent retained and acknowledged.
+type offerState struct {
+	o       *pb.SessionOffer
+	c       claims
+	d       *pb.DialInstruction
+	started bool
+}
+
+// admitOffer verifies an offer's grant against the presence lease, decrypts and
+// checks its dial instruction, and retains it durably, as tunnel/v2 requires
+// before an acknowledgement. An error refuses this offer only.
+func (a *Agent) admitOffer(ctx context.Context, o *pb.SessionOffer, lease claims, leases map[string]claims, pending map[string]*offerState, now time.Time) (*offerState, error) {
+	if len(pending) >= 64 {
+		return nil, status.Error(codes.ResourceExhausted, "too many relay offers")
+	}
+	g, err := a.Verifier.verify(ctx, o.SessionGrantJws, grantType, lease.Aud, now)
+	if err != nil {
+		return nil, err
+	}
+	bound, ok := leases[g.Presence]
+	if !ok || g.Route != lease.Route || g.Session != o.SessionId || g.Agent != binding(publicDER(a.signing)) {
+		return nil, fmt.Errorf("relay offer presence binding mismatch")
+	}
+	d, err := decryptInstruction(o.EncryptedDialInstruction, g, bound, a.encryption)
+	if err == nil {
+		err = validateService(d)
+	}
+	if err != nil {
+		return nil, err
+	}
+	for _, prior := range pending {
+		if prior.c.Session == g.Session {
+			return nil, fmt.Errorf("duplicate relay session offer")
+		}
+	}
+	raw, err := proto.Marshal(o)
+	if err != nil {
+		return nil, err
+	}
+	path := filepath.Join(a.StateDir, "offer-"+binding([]byte(o.OfferId))+".pb")
+	if prev, err := os.ReadFile(path); err == nil && !bytes.Equal(prev, raw) {
+		return nil, fmt.Errorf("conflicting persisted relay offer")
+	}
+	if err = writeState(path, raw); err != nil {
+		return nil, err
+	}
+	return &offerState{o: o, c: g, d: d}, nil
+}
+
 func (a *Agent) serve(ctx context.Context, broker *pb.BrokerInstance, o *pb.SessionOffer, c claims, d *pb.DialInstruction) error {
 	session, err := join(ctx, broker, o.SessionGrantJws, c, a.signing, pb.JoinRole_JOIN_ROLE_AGENT, a.Verifier.dialRelay)
 	if err != nil {

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -981,9 +982,17 @@ func TestLoadNetworkCamerasCleanup(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			s := &VideoService{logger: zap.NewNop(), registry: ipcam.NewRegistry(registryPath), credentials: ipcam.NewCredentialStore(credentialPath)}
+			core, logs := observer.New(zap.InfoLevel)
+			s := &VideoService{logger: zap.New(core), registry: ipcam.NewRegistry(registryPath), credentials: ipcam.NewCredentialStore(credentialPath)}
 			s.loadNetworkCameras()
 			wantKept := credentialFile != "missing"
+			cleanupLogs := logs.FilterMessage("removed unconfirmed DHCP camera observations").All()
+			if wantKept && len(cleanupLogs) != 0 {
+				t.Fatalf("logged removals despite keeping the camera: %+v", cleanupLogs)
+			}
+			if !wantKept && (len(cleanupLogs) != 1 || cleanupLogs[0].ContextMap()["count"] != int64(1)) {
+				t.Fatalf("cleanup logs = %+v, want count 1", cleanupLogs)
+			}
 			if _, ok := s.registry.Get(cam.ID); ok != wantKept {
 				t.Fatalf("kept = %v, want %v", ok, wantKept)
 			}

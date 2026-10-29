@@ -482,10 +482,11 @@ delete it to give a device a fresh chance at uncompressed uploads.
 | `WENDY_BROKER_URL` | Cloud tunnel broker WebSocket URL. |
 | `WENDY_MTLS_ORG_ENFORCEMENT` | `off` / `grace` / `strict` client-org enforcement on the mTLS gate. |
 | `WENDY_COLLECT_DMESG` | `true` to enable kernel dmesg collection. |
+| `WENDY_DATA_DIR` | Wendy Data episode store, for a custom location only. Unset, it is `/var/lib/wendy/wendy-data/episodes` when `/var/lib/wendy` is a separate filesystem larger than the one holding `/var/lib/wendy-agent` (WendyOS `/data`), else `/var/lib/wendy-agent/data/episodes`. |
 | `WENDY_BT_ADAPTER` | Pin a specific BlueZ adapter path. |
 
 > **Two things the docs get wrong, so you don't burn time on them:**
-> - `WENDY_NETWORK_MANAGER` is a **Swift-agent** feature. The Go `wendy-agent`
+> - `WENDY_NETWORK_MANAGER` was read only by the earlier Swift agent for Linux. The Go `wendy-agent`
 >   ignores it and always uses `nmcli`.
 > - There is **no `WENDY_ADB_LOCK`**. The variable for pinning a Thor/Tegra USB
 >   device is `WENDY_ADB_PATH`.

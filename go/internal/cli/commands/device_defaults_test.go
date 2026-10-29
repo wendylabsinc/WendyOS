@@ -250,6 +250,10 @@ func TestMCPDeviceConnectDialsBareHostsAsHostPort(t *testing.T) {
 		"robot.local":       "robot.local:50051",
 		"fe80::1":           "[fe80::1]:50051",
 		"robot.local:50052": "robot.local:50052",
+		// install verify passes a USB link-local address with its zone; the
+		// dial must keep it (WDY-3974).
+		"fe80::1%en31":         "[fe80::1%en31]:50051",
+		"[fe80::1%en31]:50051": "[fe80::1%en31]:50051",
 	} {
 		var dialed string
 		connectMCPDirectFn = func(_ context.Context, address string) (*grpcclient.AgentConnection, error) {

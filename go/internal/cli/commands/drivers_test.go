@@ -102,7 +102,7 @@ func TestDriverInstalledFor(t *testing.T) {
 // mTLS-only, so the CLI's generic "update the agent" hint would misdirect.
 func TestDriverServiceErr(t *testing.T) {
 	got := driverServiceErr(status.Error(codes.Unimplemented, "unknown service"))
-	for _, want := range []string{"enrolled device", "wendy cloud enroll-device"} {
+	for _, want := range []string{"enrolled device", "wendy device enroll"} {
 		if !strings.Contains(got.Error(), want) {
 			t.Errorf("message %q missing %q", got, want)
 		}

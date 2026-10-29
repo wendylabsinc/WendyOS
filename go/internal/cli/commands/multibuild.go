@@ -1126,7 +1126,7 @@ var serviceLogStyle = lipgloss.NewStyle().Foreground(tui.ColorInfo)
 // forwards the active step as a MultiSpinner detail line and accumulates the
 // cached/rebuilt tally for the service's done row.
 func newServiceProgressEmitter(prog *tea.Program, name string) (func(tui.BuildStepEvent), func() tui.BuildTally) {
-	var t tui.BuildTally
+	var t tui.BuildTallyCounter
 	emit := func(e tui.BuildStepEvent) {
 		switch e.Status {
 		case tui.BuildStepRunning:
@@ -1138,17 +1138,11 @@ func newServiceProgressEmitter(prog *tea.Program, name string) (func(tui.BuildSt
 				detail = e.Display + " · " + p
 			}
 			prog.Send(tui.MultiSpinnerDetailMsg{Name: name, Detail: detail})
-		case tui.BuildStepCached:
-			if e.Kind == tui.BuildVertexStep {
-				t.Cached++
-			}
-		case tui.BuildStepDone:
-			if e.Kind == tui.BuildVertexStep {
-				t.Rebuilt++
-			}
+		case tui.BuildStepCached, tui.BuildStepDone:
+			t.Observe(e)
 		}
 	}
-	return emit, func() tui.BuildTally { return t }
+	return emit, func() tui.BuildTally { return t.Tally() }
 }
 
 // multiServiceCreateConfig builds the per-service AppConfig transmitted to

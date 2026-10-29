@@ -90,6 +90,11 @@ func RunWriter(opts WriterOptions) error {
 	return nil
 }
 
+// BlockDeviceSize returns the capacity in bytes of an open raw device, or the
+// size of a regular file. The CLI's disk-image writer sizes a drive this way
+// too, so both writers agree on where a drive ends.
+func BlockDeviceSize(dev *os.File) (int64, error) { return blockDeviceSize(dev) }
+
 // writeBlob writes a single file verbatim at offset 0 (the flashpkg LUN).
 func writeBlob(opts WriterOptions) error {
 	// Open read/write for Windows disk IOCTLs and filesystem writers. On Linux,

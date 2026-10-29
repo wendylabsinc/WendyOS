@@ -5,6 +5,7 @@ import (
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/ed25519"
+	"crypto/mldsa"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
@@ -88,7 +89,8 @@ func signingInput(key crypto.PublicKey, principal string, body []byte) ([]byte, 
 	input = binary.BigEndian.AppendUint32(input, uint32(len(principal)))
 	input = append(input, principal...)
 	input = append(input, body...)
-	if _, ok := key.(ed25519.PublicKey); ok {
+	switch key.(type) {
+	case ed25519.PublicKey, *mldsa.PublicKey:
 		return input, crypto.Hash(0)
 	}
 	h := sha256.Sum256(input)
@@ -216,7 +218,8 @@ func NewDirectory(tenant meshid.Tenant, limit int, cache *IdentityCache) (*Direc
 // true for a new version or a replacement of an invalid old signature by a
 // current key. Duplicate delivery and re-signing never renew the signed expiry.
 func (d *Directory) Accept(w SignedManifest, now time.Time) (bool, error) {
-	if len(w.Body) > MaxManifestBytes || len(w.Signature) > 1024 || w.Principal == "" || len(w.Principal) > maxPrincipalBytes {
+	// ML-DSA-65 and ML-DSA-87 signatures are 3309 and 4627 bytes respectively.
+	if len(w.Body) > MaxManifestBytes || len(w.Signature) > 8192 || w.Principal == "" || len(w.Principal) > maxPrincipalBytes {
 		return false, errors.New("oversized manifest envelope")
 	}
 	device, err := meshid.DeviceFromPrincipal(w.Principal)
@@ -347,6 +350,8 @@ func (d *Directory) Accept(w SignedManifest, now time.Time) (bool, error) {
 func validManifestSignature(w SignedManifest, leaf *x509.Certificate) bool {
 	input, _ := signingInput(leaf.PublicKey, w.Principal, w.Body)
 	switch key := leaf.PublicKey.(type) {
+	case *mldsa.PublicKey:
+		return mldsa.Verify(key, input, w.Signature, nil) == nil
 	case ed25519.PublicKey:
 		return ed25519.Verify(key, input, w.Signature)
 	case *ecdsa.PublicKey:

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 )
 
 func TestHostFromXAddrs(t *testing.T) {
@@ -428,5 +429,36 @@ func TestOnceIgnoresNonCameraDiscoveryResponse(t *testing.T) {
 	}
 	if len(found) != 0 || len(reg.List()) != 0 {
 		t.Fatalf("non-camera registered: %+v", found)
+	}
+}
+
+func TestOnceRegistersCameraWithoutTypes(t *testing.T) {
+	payload := strings.Replace(reolinkProbeMatch, "<d:Types>dn:NetworkVideoTransmitter tds:Device</d:Types>", "", 1)
+	d, reg := newTestDiscoverer(t, [][]byte{[]byte(payload)}, procNetARP)
+	d.resolveStreams = nil
+	found, err := d.Once(context.Background())
+	if err != nil || len(found) != 1 || len(reg.List()) != 1 {
+		t.Fatalf("Types-less reply: found = %v, registry = %v, error = %v", found, reg.List(), err)
+	}
+}
+
+func TestOnceLogsTypeMismatchSeparately(t *testing.T) {
+	wrongType := strings.Replace(reolinkProbeMatch, "dn:NetworkVideoTransmitter tds:Device", "tds:Device", 1)
+	d, reg := newTestDiscoverer(t, [][]byte{[]byte(wrongType), []byte("<Envelope><broken></Envelope>")}, procNetARP)
+	core, logs := observer.New(zap.DebugLevel)
+	d.logger = zap.New(core)
+	found, err := d.Once(context.Background())
+	if err != nil || len(found) != 0 || len(reg.List()) != 0 {
+		t.Fatalf("rejected replies: found = %v, registry = %v, error = %v", found, reg.List(), err)
+	}
+	typeLogs := logs.FilterMessage("ignoring discovery response with non-camera types").All()
+	if len(typeLogs) != 1 || typeLogs[0].Level != zap.DebugLevel ||
+		typeLogs[0].ContextMap()["error"] != ErrProbeMatchTypeMismatch.Error() {
+		t.Fatalf("type mismatch logs = %+v", typeLogs)
+	}
+	malformedLogs := logs.FilterMessage("ignoring discovery response").All()
+	if len(malformedLogs) != 1 || malformedLogs[0].Level != zap.DebugLevel ||
+		!strings.Contains(malformedLogs[0].ContextMap()["error"].(string), "parsing probe response") {
+		t.Fatalf("malformed XML logs = %+v", malformedLogs)
 	}
 }

@@ -29,6 +29,7 @@ func (s *mcpServer) registerAppInspectTools(srv *server.MCPServer) {
 		mcpgo.WithDescription("Inspect app and service states, recorded exit, resource usage, and recent warning/error logs. Optional project_path checks declared TCP readiness; missing or unsupported checks stay unknown."),
 		mcpgo.WithString("app_name", mcpgo.Required(), mcpgo.MinLength(1), mcpgo.MaxLength(256), mcpgo.Description("App ID from container_list")),
 		mcpgo.WithString("project_path", mcpgo.Description("Local directory containing this app's wendy.json readiness declarations")),
+		mcpgo.WithArray("fields", mcpgo.WithStringItems(mcpgo.Enum("state", "usage", "recent_logs", "readiness")), mcpgo.Description("Sections to fetch; state is always included. Omit for all. Use [state, readiness] for a compact health check.")),
 		mcpgo.WithInteger("timeout_seconds", mcpgo.Min(1), mcpgo.Max(15), mcpgo.DefaultNumber(3), mcpgo.Description("Total inspection and probe deadline")),
 		mcpgo.WithInteger("max_logs", mcpgo.Min(0), mcpgo.Max(200), mcpgo.DefaultNumber(20), mcpgo.Description("Recent warning/error records; zero skips logs")),
 		mcpgo.WithInteger("max_bytes", mcpgo.Min(1024), mcpgo.Max(1000000), mcpgo.DefaultNumber(16384), mcpgo.Description("JSON response budget; logs are dropped before app state")),
@@ -62,14 +63,21 @@ func (s *mcpServer) handleAppInspect(ctx context.Context, req mcpgo.CallToolRequ
 		return errResult(errCodeInvalidArgument, err.Error()), nil
 	}
 	project := stringParam(req, "project_path")
+	fields, err := appInspectFields(req)
+	if err != nil {
+		return errResult(errCodeInvalidArgument, err.Error()), nil
+	}
 	if value, exists := req.GetArguments()["project_path"]; exists {
 		if _, ok := value.(string); !ok {
 			return errResult(errCodeInvalidArgument, "project_path must be a string"), nil
 		}
 	}
-	probes, err := appInspectDeclarations(project, app)
-	if err != nil {
-		return errResult(errCodeInvalidArgument, err.Error()), nil
+	var probes []appInspectProbe
+	if fields["readiness"] {
+		probes, err = appInspectDeclarations(project, app)
+		if err != nil {
+			return errResult(errCodeInvalidArgument, err.Error()), nil
+		}
 	}
 	conn, transport, target := s.connectionSnapshot()
 	if conn == nil {
@@ -101,16 +109,50 @@ func (s *mcpServer) handleAppInspect(ctx context.Context, req mcpgo.CallToolRequ
 	state, members := appInspectState(appContainer)
 	var usage, logs, readiness map[string]any
 	var wg sync.WaitGroup
-	wg.Add(3)
-	go func() { defer wg.Done(); usage = appInspectUsage(ctx, conn, members) }()
-	go func() { defer wg.Done(); logs = appInspectLogs(ctx, conn, app, maxLogs, maxBytes/2) }()
-	go func() {
-		defer wg.Done()
-		readiness = appInspectReadiness(ctx, conn, transport, target, project, probes, members, appInspectSimulatorAddress)
-	}()
+	if fields["usage"] {
+		wg.Add(1)
+		go func() { defer wg.Done(); usage = appInspectUsage(ctx, conn, members) }()
+	}
+	if fields["recent_logs"] {
+		wg.Add(1)
+		go func() { defer wg.Done(); logs = appInspectLogs(ctx, conn, app, maxLogs, maxBytes/2) }()
+	}
+	if fields["readiness"] {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			readiness = appInspectReadiness(ctx, conn, transport, target, project, probes, members, appInspectSimulatorAddress)
+		}()
+	}
 	wg.Wait()
-	out := map[string]any{"app_name": app, "state": state, "usage": usage, "recent_logs": logs, "readiness": readiness}
+	out := map[string]any{"app_name": app, "state": state}
+	for name, value := range map[string]map[string]any{"usage": usage, "recent_logs": logs, "readiness": readiness} {
+		if fields[name] {
+			out[name] = value
+		}
+	}
 	return appInspectBounded(out, maxBytes), nil
+}
+
+func appInspectFields(req mcpgo.CallToolRequest) (map[string]bool, error) {
+	allowed := map[string]bool{"state": true, "usage": true, "recent_logs": true, "readiness": true}
+	value, exists := req.GetArguments()["fields"]
+	if !exists {
+		return allowed, nil
+	}
+	encoded, err := json.Marshal(value)
+	var names []string
+	if err != nil || json.Unmarshal(encoded, &names) != nil || names == nil {
+		return nil, fmt.Errorf("fields must be an array of section names")
+	}
+	fields := map[string]bool{"state": true}
+	for _, name := range names {
+		if !allowed[name] {
+			return nil, fmt.Errorf("unknown app_inspect field %q", name)
+		}
+		fields[name] = true
+	}
+	return fields, nil
 }
 
 func appInspectState(c *agentpb.AppContainer) (map[string]any, map[string]bool) {
@@ -244,19 +286,19 @@ func appInspectLogs(ctx context.Context, conn *grpcclient.AgentConnection, app s
 		collected += len(events)
 		for _, event := range events {
 			event["is_history"] = response.GetIsHistory()
-			rows = append(rows, event)
+			rows = appendAppInspectLog(rows, event)
 		}
 		for len(rows) > maxRows {
+			omitted += appInspectLogCount(rows[0])
 			rows = rows[1:]
-			omitted++
 		}
 		for len(rows) > 0 {
 			encoded, _ := json.Marshal(rows)
 			if len(encoded) <= maxBytes {
 				break
 			}
+			omitted += appInspectLogCount(rows[0])
 			rows = rows[1:]
-			omitted++
 		}
 	}
 	if batches >= 20 {
@@ -269,6 +311,47 @@ func appInspectLogs(ctx context.Context, conn *grpcclient.AgentConnection, app s
 	}
 	out["records"], out["collected"], out["omitted"], out["batches_collected"] = rows, collected, omitted, batches
 	return out
+}
+
+// Collapse consecutive repeated diagnostics, preserving identity/attributes
+// and the observed time range. Distinct traces, resources and bodies stay apart.
+func appendAppInspectLog(rows []map[string]any, event map[string]any) []map[string]any {
+	key := func(row map[string]any) string {
+		copy := make(map[string]any, len(row))
+		for k, v := range row {
+			switch k {
+			case "timeUnixNano", "observedTimeUnixNano", "repeat_count", "first_time_unix_nano", "last_time_unix_nano":
+				continue
+			}
+			copy[k] = v
+		}
+		data, _ := json.Marshal(copy)
+		return string(data)
+	}
+	if len(rows) == 0 || key(rows[len(rows)-1]) != key(event) {
+		return append(rows, event)
+	}
+	last := rows[len(rows)-1]
+	count, _ := last["repeat_count"].(int)
+	if count == 0 {
+		count = 1
+		last["first_time_unix_nano"] = last["timeUnixNano"]
+	}
+	last["repeat_count"] = count + 1
+	last["last_time_unix_nano"] = event["timeUnixNano"]
+	for _, k := range []string{"timeUnixNano", "observedTimeUnixNano"} {
+		if value, ok := event[k]; ok {
+			last[k] = value
+		}
+	}
+	return rows
+}
+
+func appInspectLogCount(row map[string]any) int {
+	if count, ok := row["repeat_count"].(int); ok && count > 0 {
+		return count
+	}
+	return 1
 }
 
 func appInspectDeclarations(project, app string) ([]appInspectProbe, error) {
@@ -463,13 +546,14 @@ func appInspectBounded(out map[string]any, maxBytes int) *mcpgo.CallToolResult {
 		return okResult(out)
 	}
 	out["truncated"] = true
-	logs := out["recent_logs"].(map[string]any)
-	rows := logs["records"].([]map[string]any)
+	logs, _ := out["recent_logs"].(map[string]any)
+	rows, _ := logs["records"].([]map[string]any)
 	for len(rows) > 0 && !fits() {
+		count := appInspectLogCount(rows[0])
 		rows = rows[1:]
 		logs["records"] = rows
 		omitted, _ := logs["omitted"].(int)
-		logs["omitted"] = omitted + 1
+		logs["omitted"] = omitted + count
 	}
 	if fits() {
 		return okResult(out)

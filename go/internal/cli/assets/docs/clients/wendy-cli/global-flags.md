@@ -95,9 +95,10 @@ Commands that connect to a device this way print `Using device <name> from WENDY
 Ordinary commands check for a newer release in the background. A successful check
 is cached for 24 hours; a failed or cancelled check can retry after one hour.
 
-In an interactive terminal, the CLI prompts `Update now?` with Yes selected.
-Declining snoozes that release's prompt for 24 hours. Non-interactive and `--json`
-invocations print notices to stderr without prompting.
+After a successful command in an interactive terminal, a popup offers
+**Download now** or **Ask again later...**. Asking later snoozes all update
+prompts for 24 hours. Non-interactive and `--json` invocations print notices to
+stderr without prompting.
 
 Accepted updates use the installation's owning package manager. For Homebrew
 stable, the commands are `brew update` and `brew upgrade wendylabsinc/tap/wendy`.

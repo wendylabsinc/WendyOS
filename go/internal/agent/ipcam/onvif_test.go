@@ -1,6 +1,7 @@
 package ipcam
 
 import (
+	"encoding/xml"
 	"errors"
 	"strings"
 	"testing"
@@ -114,7 +115,7 @@ func TestBuildProbeIsWellFormed(t *testing.T) {
 	}
 }
 
-func TestParseProbeMatchRequiresVideoTransmitter(t *testing.T) {
+func TestParseProbeMatchTypes(t *testing.T) {
 	for _, tc := range []struct {
 		types string
 		want  bool
@@ -127,7 +128,8 @@ func TestParseProbeMatchRequiresVideoTransmitter(t *testing.T) {
 		{"wprt:PrintDeviceType", false},
 		{"dn:NetworkVideoTransmitterExtra", false},
 		{"dn:NotNetworkVideoTransmitter", false},
-		{"", false},
+		{"", true},
+		{" \t\n ", true},
 	} {
 		t.Run(tc.types, func(t *testing.T) {
 			payload := strings.Replace(reolinkProbeMatch, "dn:NetworkVideoTransmitter tds:Device", tc.types, 1)
@@ -135,14 +137,15 @@ func TestParseProbeMatchRequiresVideoTransmitter(t *testing.T) {
 			if tc.want && err != nil {
 				t.Fatal(err)
 			}
-			if !tc.want && !errors.Is(err, ErrNoProbeMatch) {
-				t.Fatalf("error = %v, want ErrNoProbeMatch", err)
+			if !tc.want && !errors.Is(err, ErrProbeMatchTypeMismatch) {
+				t.Fatalf("error = %v, want ErrProbeMatchTypeMismatch", err)
 			}
 		})
 	}
 	payload := strings.Replace(reolinkProbeMatch, "<d:Types>dn:NetworkVideoTransmitter tds:Device</d:Types>", "", 1)
-	if _, err := ParseProbeMatch([]byte(payload)); !errors.Is(err, ErrNoProbeMatch) {
-		t.Fatalf("missing Types: %v", err)
+	got, err := ParseProbeMatch([]byte(payload))
+	if err != nil || len(got.XAddrs) != 1 || got.Model != "RLC-520A" {
+		t.Fatalf("missing Types: match = %+v, error = %v", got, err)
 	}
 }
 
@@ -155,5 +158,30 @@ func TestParseProbeMatchSkipsNonCameraMatch(t *testing.T) {
 	}
 	if got.Model != "RLC-520A" {
 		t.Fatalf("matched wrong device: %+v", got)
+	}
+}
+
+func TestParseProbeMatchErrorKinds(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		payload string
+		want    error
+	}{
+		{"no matches", "<Envelope/>", ErrNoProbeMatch},
+		{"no address", "<Envelope><Body><ProbeMatches><ProbeMatch/></ProbeMatches></Body></Envelope>", ErrNoProbeMatch},
+		{"wrong type", strings.Replace(reolinkProbeMatch, "dn:NetworkVideoTransmitter tds:Device", "tds:Device", 1), ErrProbeMatchTypeMismatch},
+		{"compatible type without address", strings.Replace(reolinkProbeMatch,
+			"<d:XAddrs>http://10.98.0.50/onvif/device_service</d:XAddrs>", "", 1), ErrNoProbeMatch},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := ParseProbeMatch([]byte(tc.payload)); !errors.Is(err, tc.want) {
+				t.Fatalf("error = %v, want %v", err, tc.want)
+			}
+		})
+	}
+	_, err := ParseProbeMatch([]byte("<Envelope><broken></Envelope>"))
+	var syntaxErr *xml.SyntaxError
+	if !errors.As(err, &syntaxErr) || errors.Is(err, ErrNoProbeMatch) || errors.Is(err, ErrProbeMatchTypeMismatch) {
+		t.Fatalf("malformed XML error = %v, want a separate XML syntax error", err)
 	}
 }

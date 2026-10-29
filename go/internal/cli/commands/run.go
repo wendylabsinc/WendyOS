@@ -2022,7 +2022,7 @@ func providerBuild(ctx context.Context, p providers.DeviceProvider, device model
 	if !errors.As(err, &missingCore) {
 		return app, err
 	}
-	if err := setupLiteProject(ctx, projectPath, opts.yes); err != nil {
+	if err := setupLiteProject(ctx, projectPath, missingCore.Toolchain, opts.yes); err != nil {
 		return nil, err
 	}
 	return p.Build(ctx, device, projectPath, projectType, product, opts.debug)
@@ -3070,11 +3070,22 @@ func readinessProbeTimeout(cfg *appconfig.ReadinessConfig, override time.Duratio
 
 // waitForReadinessWithin is waitForReadiness with an explicit deadline.
 func waitForReadinessWithin(ctx context.Context, cfg *appconfig.ReadinessConfig, hostname string, httpPort int, timeout time.Duration) error {
+	return waitForReadinessProbe(ctx, cfg, hostname, httpPort, timeout, makeReadinessProbe)
+}
+
+// readinessProbeFactory builds one readiness probe: the address it reports, a
+// single attempt, and cleanup. makeReadinessProbe dials the app directly;
+// tunnelReadinessProbe goes through a cloud app tunnel.
+type readinessProbeFactory func(hostname string, port int, useHTTP bool) (string, func(context.Context) error, func())
+
+// waitForReadinessProbe is waitForReadinessWithin with the probe built by
+// newProbe.
+func waitForReadinessProbe(ctx context.Context, cfg *appconfig.ReadinessConfig, hostname string, httpPort int, timeout time.Duration, newProbe readinessProbeFactory) error {
 	if cfg == nil || cfg.TCPSocket == nil {
 		return nil
 	}
 
-	addr, probe, closeProbe := makeReadinessProbe(
+	addr, probe, closeProbe := newProbe(
 		hostname,
 		cfg.TCPSocket.Port,
 		httpPort != 0 && httpPort == cfg.TCPSocket.Port,
@@ -3330,7 +3341,9 @@ var lanAddressReachable = func(ctx context.Context, ip string) bool {
 // address (lanAddressReachable): if it can, the address is used as on a LAN
 // connection (WDY-2440). Otherwise — or when the agent reports no IP —
 // ok=false: probing that address, printing it as "App reachable at", or
-// opening it would mislead, so callers skip host-side probes and hooks with
+// opening it would mislead. The attached hook paths then forward the app's
+// port through Wendy Cloud instead (resolveHookRoute); other callers skip
+// host-side probes, and resolveHookRoute too when it cannot forward, with
 // cloudHostSkipNotice (readiness is not checked from this machine).
 func hostSideAppAddress(ctx context.Context, conn *grpcclient.AgentConnection, appCfg *appconfig.AppConfig) (host, url string, ok bool) {
 	if meshHost := activeMeshHost(ctx, conn); meshHost != "" {
@@ -3351,8 +3364,9 @@ func hostSideAppAddress(ctx context.Context, conn *grpcclient.AgentConnection, a
 
 // resolveHookHost returns the host the developer-side readiness probe and
 // postStart hook should target, announcing the app URL on the way (see
-// hostSideAppAddress). ok=false means host-side lifecycle work must be skipped
-// with cloudHostSkipNotice.
+// hostSideAppAddress). ok=false means this machine has no route to the
+// device: resolveHookRoute then forwards through Wendy Cloud or skips the
+// host-side lifecycle with cloudHostSkipNotice.
 func resolveHookHost(ctx context.Context, conn *grpcclient.AgentConnection, appCfg *appconfig.AppConfig) (host string, ok bool) {
 	host, url, ok := hostSideAppAddress(ctx, conn, appCfg)
 	if url != "" {
@@ -3435,25 +3449,29 @@ func runPostStartIfReady(ctx, hookCtx context.Context, conn *grpcclient.AgentCon
 		return nil
 	}
 
-	// Resolve the host BEFORE probing readiness: the probe and the hook must
+	// Resolve the route BEFORE probing readiness: the probe and the hook must
 	// target the same address, and a cloud connection may have none this
-	// machine can reach. The "App reachable at ..." line (printed inside
-	// resolveHookHost) therefore prints before readiness is confirmed rather
-	// than after — acceptable since it is the same URL the user watches for
-	// regardless of when the probe finishes.
-	hookHost, hostOK := resolveHookHost(ctx, conn, appCfg)
+	// machine can reach, in which case resolveHookRoute forwards the app's
+	// port through Wendy Cloud. The "App reachable at ..." line (printed
+	// inside resolveHookRoute) therefore prints before readiness is confirmed
+	// rather than after — acceptable since it is the same URL the user
+	// watches for regardless of when the probe finishes. In watch mode the
+	// tunnel belongs to the session (hookCtx), so later deploys reuse it.
+	route, hostOK := resolveHookRoute(ctx, hookCtx, conn, appCfg, opts.watchState.appTunnels(), opts.isWatch())
 	if !hostOK {
-		if ctx.Err() == nil {
-			cliNotice("%s", cloudHostSkipNotice(appCfg))
-		}
 		return nil
 	}
 
 	if readiness != nil && readiness.TCPSocket != nil {
 		activationStep(ctx, "readiness", nil)
 	}
-	err := waitForAttachedReadiness(ctx, conn, appCfg, hookHost, opts.readinessTimeout)
+	err := route.waitForReadiness(ctx, conn, appCfg, opts.readinessTimeout)
 	rp("  ↳ runcontainer: readiness wait")
+	if errors.Is(err, errCloudRelayRefused) {
+		// Not a readiness failure: Wendy Cloud would not forward the port,
+		// and waitForReadiness has said what is skipped.
+		return nil
+	}
 	if err != nil {
 		if readiness != nil && readiness.TCPSocket != nil && !opts.managedRobot {
 			class, outcome := ExecutionErrorClass(err), "failed"
@@ -3488,7 +3506,7 @@ func runPostStartIfReady(ctx, hookCtx context.Context, conn *grpcclient.AgentCon
 	}
 	opts.completeHostLifecycle(containerName)
 	completed = true
-	cmd := startPostStartHook(hookCtx, effectiveCfg, hookHost, appCfg.ServiceName)
+	cmd := startRoutedPostStartHook(hookCtx, effectiveCfg, route, appCfg.ServiceName)
 	rp("  ↳ runcontainer: announce + postStart hook")
 	return cmd
 }
@@ -3506,6 +3524,16 @@ func runPostStartIfReady(ctx, hookCtx context.Context, conn *grpcclient.AgentCon
 // wait on or kill. Returns nil when no cli command is configured (regardless
 // of whether openURL was fired).
 func startPostStartHook(ctx context.Context, appCfg *appconfig.AppConfig, hostname, serviceName string) *exec.Cmd {
+	return startRoutedPostStartHook(ctx, appCfg, hookRoute{host: hostname}, serviceName)
+}
+
+// startRoutedPostStartHook is startPostStartHook on a hookRoute. On a cloud
+// app tunnel the openURL is pointed at the tunnel's local port
+// (cloudAppTunnel.localURL). A cli hook that uses WENDY_HOSTNAME runs with
+// it expanded to localhost when the tunnel kept the device's port number;
+// when it did not, the hook is skipped and the local URL printed instead,
+// since rewriting a port inside a shell command would be guesswork.
+func startRoutedPostStartHook(ctx context.Context, appCfg *appconfig.AppConfig, route hookRoute, serviceName string) *exec.Cmd {
 	if ctx.Err() != nil {
 		return nil
 	}
@@ -3513,11 +3541,15 @@ func startPostStartHook(ctx context.Context, appCfg *appconfig.AppConfig, hostna
 		return nil
 	}
 	hook := appCfg.Hooks.PostStart
+	hostname := route.host
 
 	if hook.OpenURL != "" {
 		// openURL is a URL by definition, so an IPv6 hostname must be
 		// bracketed; the CLI hook below stays raw for shell contexts.
 		url := expandHookEnv(hook.OpenURL, urlSafeHost(hostname), appCfg.AppID, serviceName)
+		if route.tunnel != nil {
+			url, _ = route.tunnel.localURL(url)
+		}
 		if !postStartBrowserAllowed() {
 			cliLogln("Hook postStart: not opening a browser without an interactive terminal; open %s", tui.Path(url))
 		} else if err := browserOpen(url); err != nil {
@@ -3531,6 +3563,10 @@ func startPostStartHook(ctx context.Context, appCfg *appconfig.AppConfig, hostna
 		return nil
 	}
 	if ctx.Err() != nil {
+		return nil
+	}
+	if t := route.tunnel; t != nil && t.LocalPort != t.RemotePort && strings.Contains(hook.CLI, "WENDY_HOSTNAME") {
+		cliNotice("Skipping the postStart cli hook for %s: it addresses the device as WENDY_HOSTNAME, but port %d is forwarded to localhost:%d on this machine. Open %s instead.", containerDisplayName(appCfg), t.RemotePort, t.LocalPort, tui.Value(route.appURL(appCfg)))
 		return nil
 	}
 

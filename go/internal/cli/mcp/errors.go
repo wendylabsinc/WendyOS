@@ -57,6 +57,10 @@ func codeFromGRPC(err error) errorCode {
 		return errCodeInvalidArgument
 	case codes.Unimplemented:
 		return errCodeUnsupported
+	case codes.Unauthenticated:
+		// Cloud rejected the session's token, or an agent wants an operator
+		// certificate: both are fixed by signing in.
+		return errCodeAuthRequired
 	default:
 		return errCodeInternal
 	}

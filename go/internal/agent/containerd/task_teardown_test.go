@@ -55,7 +55,10 @@ func newFakeTeardownTask() *fakeTeardownTask {
 }
 
 func (f *fakeTeardownTask) exit() {
-	f.exitOnce.Do(func() { close(f.waitCh) })
+	f.exitOnce.Do(func() {
+		f.waitCh <- *containerd.NewExitStatus(0, time.Now(), nil)
+		close(f.waitCh)
+	})
 }
 
 func (f *fakeTeardownTask) Kill(ctx context.Context, sig syscall.Signal, opts ...containerd.KillOpts) error {
@@ -184,7 +187,7 @@ func TestTerminateTaskGracefulExitDoesNotEscalate(t *testing.T) {
 	}
 }
 
-func TestTerminateReplacedTaskGivesOnlyNANAppGrace(t *testing.T) {
+func TestTerminateReplacedTaskGivesNANAppGrace(t *testing.T) {
 	oldGrace := nanReplacementGracePeriod
 	nanReplacementGracePeriod = 5 * time.Millisecond
 	t.Cleanup(func() { nanReplacementGracePeriod = oldGrace })
@@ -201,7 +204,7 @@ func TestTerminateReplacedTaskGivesOnlyNANAppGrace(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			task := newFakeTeardownTask()
 			task.exitOnSignal = tc.exitOn
-			if err := newTeardownTestClient().terminateReplacedTask(context.Background(), task, "camera", tc.hadNAN); err != nil {
+			if err := newTeardownTestClient().terminateReplacedTask(context.Background(), task, "camera", tc.hadNAN, false); err != nil {
 				t.Fatal(err)
 			}
 			kills := task.recordedKills()
@@ -217,6 +220,68 @@ func TestTerminateReplacedTaskGivesOnlyNANAppGrace(t *testing.T) {
 				t.Fatal("old task was not deleted")
 			}
 		})
+	}
+}
+
+func TestNPUReplacementNeverForceKills(t *testing.T) {
+	oldGrace := npuStopGracePeriod
+	npuStopGracePeriod = 5 * time.Millisecond
+	t.Cleanup(func() { npuStopGracePeriod = oldGrace })
+	for _, exits := range []bool{true, false} {
+		task := newFakeTeardownTask()
+		if exits {
+			task.exitOnSignal = syscall.SIGTERM
+		}
+		err := newTeardownTestClient().terminateReplacedTask(context.Background(), task, "npu", false, true)
+		if (err == nil) != exits {
+			t.Fatalf("exits=%v: err=%v", exits, err)
+		}
+		kills := task.recordedKills()
+		if len(kills) != 1 || kills[0] != (recordedKill{syscall.SIGTERM, false}) {
+			t.Fatalf("exits=%v: unexpected signals: %v", exits, kills)
+		}
+		if task.deleted != exits {
+			t.Fatalf("exits=%v: deleted=%v", exits, task.deleted)
+		}
+	}
+}
+
+func TestNPUWaitFailureRetainsTask(t *testing.T) {
+	task := newFakeTeardownTask()
+	task.waitErr = errors.New("cannot observe exit")
+	if err := newTeardownTestClient().terminateNPUTask(context.Background(), task, "npu"); err == nil {
+		t.Fatal("expected fail-closed error")
+	}
+	if len(task.recordedKills()) != 0 || task.deleted {
+		t.Fatal("unobservable NPU task was killed or deleted")
+	}
+}
+
+func TestNPUAsyncWaitFailureRetainsTask(t *testing.T) {
+	for _, closed := range []bool{false, true} {
+		task := newFakeTeardownTask()
+		if !closed {
+			task.waitCh <- *containerd.NewExitStatus(255, time.Time{}, errors.New("wait RPC failed"))
+		}
+		close(task.waitCh)
+		if err := newTeardownTestClient().terminateNPUTask(context.Background(), task, "npu"); err == nil {
+			t.Fatal("unconfirmed exit was accepted")
+		}
+		if task.deleted {
+			t.Fatal("task deleted after failed exit observation")
+		}
+	}
+}
+
+func TestNPUTaskLookupNeverForcesRecovery(t *testing.T) {
+	// No runtime client is installed: any attempt to force-delete would
+	// panic. Exercise the exact fallback used by container replacement.
+	c := newTeardownTestClient()
+	if err := c.recoverReplacedTaskLookup(context.Background(), "npu", true, errors.New("shim unavailable")); err == nil {
+		t.Fatal("expected unobservable NPU owner to be retained")
+	}
+	if err := c.recoverReplacedTaskLookup(context.Background(), "npu", true, errdefs.ErrNotFound); err != nil {
+		t.Fatalf("absent task should allow non-forced metadata deletion: %v", err)
 	}
 }
 

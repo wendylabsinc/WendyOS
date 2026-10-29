@@ -708,8 +708,25 @@ type DataEpisode struct {
 	StartedUnixNanos int64                  `protobuf:"varint,4,opt,name=started_unix_nanos,json=startedUnixNanos,proto3" json:"started_unix_nanos,omitempty"`
 	SizeBytes        int64                  `protobuf:"varint,5,opt,name=size_bytes,json=sizeBytes,proto3" json:"size_bytes,omitempty"`
 	BootId           string                 `protobuf:"bytes,6,opt,name=boot_id,json=bootId,proto3" json:"boot_id,omitempty"`
-	unknownFields    protoimpl.UnknownFields
-	sizeCache        protoimpl.SizeCache
+	// The fields below are set only on an episode listed in in_progress (see
+	// DataStatusResponse). There, state is "recording", "draining" (capture has
+	// stopped and the episode still accepts late application records) or
+	// "sealing" (its files are being remuxed and checksummed), and size_bytes is
+	// what the episode holds on disk so far.
+	//
+	// What started it: "manual" for `wendy data record`, otherwise the campaign
+	// trigger's reason, such as "event:person_detected".
+	TriggerReason string `protobuf:"bytes,7,opt,name=trigger_reason,json=triggerReason,proto3" json:"trigger_reason,omitempty"`
+	// The campaign that started it; empty for `wendy data record`.
+	CampaignName string `protobuf:"bytes,8,opt,name=campaign_name,json=campaignName,proto3" json:"campaign_name,omitempty"`
+	// IDs of the sources it records. A campaign source that did not resolve at
+	// trigger is left out, because nothing of it is being recorded.
+	Sources []string `protobuf:"bytes,9,rep,name=sources,proto3" json:"sources,omitempty"`
+	// How long it has captured, measured on the device's CLOCK_BOOTTIME so a
+	// wrong wall clock cannot distort it. It stops growing when capture stops.
+	DurationNanos int64 `protobuf:"varint,10,opt,name=duration_nanos,json=durationNanos,proto3" json:"duration_nanos,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *DataEpisode) Reset() {
@@ -784,11 +801,48 @@ func (x *DataEpisode) GetBootId() string {
 	return ""
 }
 
+func (x *DataEpisode) GetTriggerReason() string {
+	if x != nil {
+		return x.TriggerReason
+	}
+	return ""
+}
+
+func (x *DataEpisode) GetCampaignName() string {
+	if x != nil {
+		return x.CampaignName
+	}
+	return ""
+}
+
+func (x *DataEpisode) GetSources() []string {
+	if x != nil {
+		return x.Sources
+	}
+	return nil
+}
+
+func (x *DataEpisode) GetDurationNanos() int64 {
+	if x != nil {
+		return x.DurationNanos
+	}
+	return 0
+}
+
 type DataStatusResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Active        *DataEpisode           `protobuf:"bytes,1,opt,name=active,proto3" json:"active,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// One open episode: the ad-hoc one, else the earliest-started campaign
+	// episode, else a draining one. Kept for clients that predate in_progress.
+	Active *DataEpisode `protobuf:"bytes,1,opt,name=active,proto3" json:"active,omitempty"`
+	// Every episode that has not been finalized yet, newest first: recording,
+	// draining or sealing. Episodes lists only finalized episodes, so without
+	// this a recording is invisible until it ends.
+	InProgress []*DataEpisode `protobuf:"bytes,2,rep,name=in_progress,json=inProgress,proto3" json:"in_progress,omitempty"`
+	// True from agents that fill in_progress. An older agent reports at most
+	// one open episode, in active, and none of the in-progress fields.
+	ReportsInProgress bool `protobuf:"varint,3,opt,name=reports_in_progress,json=reportsInProgress,proto3" json:"reports_in_progress,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *DataStatusResponse) Reset() {
@@ -828,11 +882,33 @@ func (x *DataStatusResponse) GetActive() *DataEpisode {
 	return nil
 }
 
+func (x *DataStatusResponse) GetInProgress() []*DataEpisode {
+	if x != nil {
+		return x.InProgress
+	}
+	return nil
+}
+
+func (x *DataStatusResponse) GetReportsInProgress() bool {
+	if x != nil {
+		return x.ReportsInProgress
+	}
+	return false
+}
+
 type DataEpisodesResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Episodes      []*DataEpisode         `protobuf:"bytes,1,rep,name=episodes,proto3" json:"episodes,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Finalized episodes only, newest first, exactly as before in_progress
+	// existed, so a script that downloads every entry keeps working.
+	Episodes []*DataEpisode `protobuf:"bytes,1,rep,name=episodes,proto3" json:"episodes,omitempty"`
+	// The same list as DataStatusResponse.in_progress, without any episode that
+	// finalized while this response was built. Empty from older agents.
+	InProgress []*DataEpisode `protobuf:"bytes,2,rep,name=in_progress,json=inProgress,proto3" json:"in_progress,omitempty"`
+	// True from agents that fill in_progress, so an empty in_progress means
+	// nothing is in progress and a client need not also ask Status.
+	ReportsInProgress bool `protobuf:"varint,3,opt,name=reports_in_progress,json=reportsInProgress,proto3" json:"reports_in_progress,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *DataEpisodesResponse) Reset() {
@@ -870,6 +946,20 @@ func (x *DataEpisodesResponse) GetEpisodes() []*DataEpisode {
 		return x.Episodes
 	}
 	return nil
+}
+
+func (x *DataEpisodesResponse) GetInProgress() []*DataEpisode {
+	if x != nil {
+		return x.InProgress
+	}
+	return nil
+}
+
+func (x *DataEpisodesResponse) GetReportsInProgress() bool {
+	if x != nil {
+		return x.ReportsInProgress
+	}
+	return false
 }
 
 type DataInspectResponse struct {
@@ -2075,7 +2165,7 @@ const file_wendy_agent_services_v2_data_service_proto_rawDesc = "" +
 	"\x13DataDownloadRequest\x12\x18\n" +
 	"\aepisode\x18\x01 \x01(\tR\aepisode\x12\x12\n" +
 	"\x04path\x18\x02 \x01(\tR\x04path\x12\x16\n" +
-	"\x06offset\x18\x03 \x01(\x03R\x06offset\"\xad\x01\n" +
+	"\x06offset\x18\x03 \x01(\x03R\x06offset\"\xba\x02\n" +
 	"\vDataEpisode\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x14\n" +
@@ -2083,11 +2173,22 @@ const file_wendy_agent_services_v2_data_service_proto_rawDesc = "" +
 	"\x12started_unix_nanos\x18\x04 \x01(\x03R\x10startedUnixNanos\x12\x1d\n" +
 	"\n" +
 	"size_bytes\x18\x05 \x01(\x03R\tsizeBytes\x12\x17\n" +
-	"\aboot_id\x18\x06 \x01(\tR\x06bootId\"R\n" +
+	"\aboot_id\x18\x06 \x01(\tR\x06bootId\x12%\n" +
+	"\x0etrigger_reason\x18\a \x01(\tR\rtriggerReason\x12#\n" +
+	"\rcampaign_name\x18\b \x01(\tR\fcampaignName\x12\x18\n" +
+	"\asources\x18\t \x03(\tR\asources\x12%\n" +
+	"\x0eduration_nanos\x18\n" +
+	" \x01(\x03R\rdurationNanos\"\xc9\x01\n" +
 	"\x12DataStatusResponse\x12<\n" +
-	"\x06active\x18\x01 \x01(\v2$.wendy.agent.services.v2.DataEpisodeR\x06active\"X\n" +
+	"\x06active\x18\x01 \x01(\v2$.wendy.agent.services.v2.DataEpisodeR\x06active\x12E\n" +
+	"\vin_progress\x18\x02 \x03(\v2$.wendy.agent.services.v2.DataEpisodeR\n" +
+	"inProgress\x12.\n" +
+	"\x13reports_in_progress\x18\x03 \x01(\bR\x11reportsInProgress\"\xcf\x01\n" +
 	"\x14DataEpisodesResponse\x12@\n" +
-	"\bepisodes\x18\x01 \x03(\v2$.wendy.agent.services.v2.DataEpisodeR\bepisodes\"k\n" +
+	"\bepisodes\x18\x01 \x03(\v2$.wendy.agent.services.v2.DataEpisodeR\bepisodes\x12E\n" +
+	"\vin_progress\x18\x02 \x03(\v2$.wendy.agent.services.v2.DataEpisodeR\n" +
+	"inProgress\x12.\n" +
+	"\x13reports_in_progress\x18\x03 \x01(\bR\x11reportsInProgress\"k\n" +
 	"\x13DataInspectResponse\x12#\n" +
 	"\rmanifest_json\x18\x01 \x01(\fR\fmanifestJson\x12/\n" +
 	"\x13verification_errors\x18\x02 \x03(\tR\x12verificationErrors\"\x91\x01\n" +
@@ -2240,51 +2341,53 @@ var file_wendy_agent_services_v2_data_service_proto_depIdxs = []int32{
 	2,  // 0: wendy.agent.services.v2.DataSourcesResponse.sources:type_name -> wendy.agent.services.v2.DataSource
 	5,  // 1: wendy.agent.services.v2.DataStartRequest.calibrations:type_name -> wendy.agent.services.v2.DataCalibration
 	12, // 2: wendy.agent.services.v2.DataStatusResponse.active:type_name -> wendy.agent.services.v2.DataEpisode
-	12, // 3: wendy.agent.services.v2.DataEpisodesResponse.episodes:type_name -> wendy.agent.services.v2.DataEpisode
-	21, // 4: wendy.agent.services.v2.DataCampaignsResponse.campaigns:type_name -> wendy.agent.services.v2.DataCampaign
-	31, // 5: wendy.agent.services.v2.DataDocumentApplyResponse.document:type_name -> wendy.agent.services.v2.DataDocument
-	31, // 6: wendy.agent.services.v2.DataDocumentsResponse.documents:type_name -> wendy.agent.services.v2.DataDocument
-	0,  // 7: wendy.agent.services.v2.DataService.Events:input_type -> wendy.agent.services.v2.DataEventsRequest
-	32, // 8: wendy.agent.services.v2.DataService.ExportRecording:input_type -> wendy.agent.services.v2.DataRecordingExportRequest
-	33, // 9: wendy.agent.services.v2.DataService.AcknowledgeRecordingExport:input_type -> wendy.agent.services.v2.DataRecordingExportAckRequest
-	3,  // 10: wendy.agent.services.v2.DataService.Sources:input_type -> wendy.agent.services.v2.DataSourcesRequest
-	6,  // 11: wendy.agent.services.v2.DataService.Start:input_type -> wendy.agent.services.v2.DataStartRequest
-	7,  // 12: wendy.agent.services.v2.DataService.Stop:input_type -> wendy.agent.services.v2.DataStopRequest
-	8,  // 13: wendy.agent.services.v2.DataService.Status:input_type -> wendy.agent.services.v2.DataStatusRequest
-	9,  // 14: wendy.agent.services.v2.DataService.Episodes:input_type -> wendy.agent.services.v2.DataEpisodesRequest
-	10, // 15: wendy.agent.services.v2.DataService.Inspect:input_type -> wendy.agent.services.v2.DataInspectRequest
-	11, // 16: wendy.agent.services.v2.DataService.Download:input_type -> wendy.agent.services.v2.DataDownloadRequest
-	17, // 17: wendy.agent.services.v2.DataService.CampaignDeploy:input_type -> wendy.agent.services.v2.DataCampaignDeployRequest
-	18, // 18: wendy.agent.services.v2.DataService.Campaigns:input_type -> wendy.agent.services.v2.DataCampaignsRequest
-	19, // 19: wendy.agent.services.v2.DataService.CampaignInspect:input_type -> wendy.agent.services.v2.DataCampaignInspectRequest
-	20, // 20: wendy.agent.services.v2.DataService.CampaignTrigger:input_type -> wendy.agent.services.v2.DataCampaignTriggerRequest
-	23, // 21: wendy.agent.services.v2.DataService.DocumentApply:input_type -> wendy.agent.services.v2.DataDocumentApplyRequest
-	25, // 22: wendy.agent.services.v2.DataService.DocumentRemove:input_type -> wendy.agent.services.v2.DataDocumentRemoveRequest
-	27, // 23: wendy.agent.services.v2.DataService.DocumentRenew:input_type -> wendy.agent.services.v2.DataDocumentRenewRequest
-	29, // 24: wendy.agent.services.v2.DataService.Documents:input_type -> wendy.agent.services.v2.DataDocumentsRequest
-	1,  // 25: wendy.agent.services.v2.DataService.Events:output_type -> wendy.agent.services.v2.DataEventsResponse
-	35, // 26: wendy.agent.services.v2.DataService.ExportRecording:output_type -> wendy.agent.apps.v1.StoredRecord
-	34, // 27: wendy.agent.services.v2.DataService.AcknowledgeRecordingExport:output_type -> wendy.agent.services.v2.DataRecordingExportAckResponse
-	4,  // 28: wendy.agent.services.v2.DataService.Sources:output_type -> wendy.agent.services.v2.DataSourcesResponse
-	12, // 29: wendy.agent.services.v2.DataService.Start:output_type -> wendy.agent.services.v2.DataEpisode
-	12, // 30: wendy.agent.services.v2.DataService.Stop:output_type -> wendy.agent.services.v2.DataEpisode
-	13, // 31: wendy.agent.services.v2.DataService.Status:output_type -> wendy.agent.services.v2.DataStatusResponse
-	14, // 32: wendy.agent.services.v2.DataService.Episodes:output_type -> wendy.agent.services.v2.DataEpisodesResponse
-	15, // 33: wendy.agent.services.v2.DataService.Inspect:output_type -> wendy.agent.services.v2.DataInspectResponse
-	16, // 34: wendy.agent.services.v2.DataService.Download:output_type -> wendy.agent.services.v2.DataDownloadChunk
-	21, // 35: wendy.agent.services.v2.DataService.CampaignDeploy:output_type -> wendy.agent.services.v2.DataCampaign
-	22, // 36: wendy.agent.services.v2.DataService.Campaigns:output_type -> wendy.agent.services.v2.DataCampaignsResponse
-	21, // 37: wendy.agent.services.v2.DataService.CampaignInspect:output_type -> wendy.agent.services.v2.DataCampaign
-	12, // 38: wendy.agent.services.v2.DataService.CampaignTrigger:output_type -> wendy.agent.services.v2.DataEpisode
-	24, // 39: wendy.agent.services.v2.DataService.DocumentApply:output_type -> wendy.agent.services.v2.DataDocumentApplyResponse
-	26, // 40: wendy.agent.services.v2.DataService.DocumentRemove:output_type -> wendy.agent.services.v2.DataDocumentRemoveResponse
-	28, // 41: wendy.agent.services.v2.DataService.DocumentRenew:output_type -> wendy.agent.services.v2.DataDocumentRenewResponse
-	30, // 42: wendy.agent.services.v2.DataService.Documents:output_type -> wendy.agent.services.v2.DataDocumentsResponse
-	25, // [25:43] is the sub-list for method output_type
-	7,  // [7:25] is the sub-list for method input_type
-	7,  // [7:7] is the sub-list for extension type_name
-	7,  // [7:7] is the sub-list for extension extendee
-	0,  // [0:7] is the sub-list for field type_name
+	12, // 3: wendy.agent.services.v2.DataStatusResponse.in_progress:type_name -> wendy.agent.services.v2.DataEpisode
+	12, // 4: wendy.agent.services.v2.DataEpisodesResponse.episodes:type_name -> wendy.agent.services.v2.DataEpisode
+	12, // 5: wendy.agent.services.v2.DataEpisodesResponse.in_progress:type_name -> wendy.agent.services.v2.DataEpisode
+	21, // 6: wendy.agent.services.v2.DataCampaignsResponse.campaigns:type_name -> wendy.agent.services.v2.DataCampaign
+	31, // 7: wendy.agent.services.v2.DataDocumentApplyResponse.document:type_name -> wendy.agent.services.v2.DataDocument
+	31, // 8: wendy.agent.services.v2.DataDocumentsResponse.documents:type_name -> wendy.agent.services.v2.DataDocument
+	0,  // 9: wendy.agent.services.v2.DataService.Events:input_type -> wendy.agent.services.v2.DataEventsRequest
+	32, // 10: wendy.agent.services.v2.DataService.ExportRecording:input_type -> wendy.agent.services.v2.DataRecordingExportRequest
+	33, // 11: wendy.agent.services.v2.DataService.AcknowledgeRecordingExport:input_type -> wendy.agent.services.v2.DataRecordingExportAckRequest
+	3,  // 12: wendy.agent.services.v2.DataService.Sources:input_type -> wendy.agent.services.v2.DataSourcesRequest
+	6,  // 13: wendy.agent.services.v2.DataService.Start:input_type -> wendy.agent.services.v2.DataStartRequest
+	7,  // 14: wendy.agent.services.v2.DataService.Stop:input_type -> wendy.agent.services.v2.DataStopRequest
+	8,  // 15: wendy.agent.services.v2.DataService.Status:input_type -> wendy.agent.services.v2.DataStatusRequest
+	9,  // 16: wendy.agent.services.v2.DataService.Episodes:input_type -> wendy.agent.services.v2.DataEpisodesRequest
+	10, // 17: wendy.agent.services.v2.DataService.Inspect:input_type -> wendy.agent.services.v2.DataInspectRequest
+	11, // 18: wendy.agent.services.v2.DataService.Download:input_type -> wendy.agent.services.v2.DataDownloadRequest
+	17, // 19: wendy.agent.services.v2.DataService.CampaignDeploy:input_type -> wendy.agent.services.v2.DataCampaignDeployRequest
+	18, // 20: wendy.agent.services.v2.DataService.Campaigns:input_type -> wendy.agent.services.v2.DataCampaignsRequest
+	19, // 21: wendy.agent.services.v2.DataService.CampaignInspect:input_type -> wendy.agent.services.v2.DataCampaignInspectRequest
+	20, // 22: wendy.agent.services.v2.DataService.CampaignTrigger:input_type -> wendy.agent.services.v2.DataCampaignTriggerRequest
+	23, // 23: wendy.agent.services.v2.DataService.DocumentApply:input_type -> wendy.agent.services.v2.DataDocumentApplyRequest
+	25, // 24: wendy.agent.services.v2.DataService.DocumentRemove:input_type -> wendy.agent.services.v2.DataDocumentRemoveRequest
+	27, // 25: wendy.agent.services.v2.DataService.DocumentRenew:input_type -> wendy.agent.services.v2.DataDocumentRenewRequest
+	29, // 26: wendy.agent.services.v2.DataService.Documents:input_type -> wendy.agent.services.v2.DataDocumentsRequest
+	1,  // 27: wendy.agent.services.v2.DataService.Events:output_type -> wendy.agent.services.v2.DataEventsResponse
+	35, // 28: wendy.agent.services.v2.DataService.ExportRecording:output_type -> wendy.agent.apps.v1.StoredRecord
+	34, // 29: wendy.agent.services.v2.DataService.AcknowledgeRecordingExport:output_type -> wendy.agent.services.v2.DataRecordingExportAckResponse
+	4,  // 30: wendy.agent.services.v2.DataService.Sources:output_type -> wendy.agent.services.v2.DataSourcesResponse
+	12, // 31: wendy.agent.services.v2.DataService.Start:output_type -> wendy.agent.services.v2.DataEpisode
+	12, // 32: wendy.agent.services.v2.DataService.Stop:output_type -> wendy.agent.services.v2.DataEpisode
+	13, // 33: wendy.agent.services.v2.DataService.Status:output_type -> wendy.agent.services.v2.DataStatusResponse
+	14, // 34: wendy.agent.services.v2.DataService.Episodes:output_type -> wendy.agent.services.v2.DataEpisodesResponse
+	15, // 35: wendy.agent.services.v2.DataService.Inspect:output_type -> wendy.agent.services.v2.DataInspectResponse
+	16, // 36: wendy.agent.services.v2.DataService.Download:output_type -> wendy.agent.services.v2.DataDownloadChunk
+	21, // 37: wendy.agent.services.v2.DataService.CampaignDeploy:output_type -> wendy.agent.services.v2.DataCampaign
+	22, // 38: wendy.agent.services.v2.DataService.Campaigns:output_type -> wendy.agent.services.v2.DataCampaignsResponse
+	21, // 39: wendy.agent.services.v2.DataService.CampaignInspect:output_type -> wendy.agent.services.v2.DataCampaign
+	12, // 40: wendy.agent.services.v2.DataService.CampaignTrigger:output_type -> wendy.agent.services.v2.DataEpisode
+	24, // 41: wendy.agent.services.v2.DataService.DocumentApply:output_type -> wendy.agent.services.v2.DataDocumentApplyResponse
+	26, // 42: wendy.agent.services.v2.DataService.DocumentRemove:output_type -> wendy.agent.services.v2.DataDocumentRemoveResponse
+	28, // 43: wendy.agent.services.v2.DataService.DocumentRenew:output_type -> wendy.agent.services.v2.DataDocumentRenewResponse
+	30, // 44: wendy.agent.services.v2.DataService.Documents:output_type -> wendy.agent.services.v2.DataDocumentsResponse
+	27, // [27:45] is the sub-list for method output_type
+	9,  // [9:27] is the sub-list for method input_type
+	9,  // [9:9] is the sub-list for extension type_name
+	9,  // [9:9] is the sub-list for extension extendee
+	0,  // [0:9] is the sub-list for field type_name
 }
 
 func init() { file_wendy_agent_services_v2_data_service_proto_init() }

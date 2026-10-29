@@ -8,6 +8,7 @@ The agent must translate these into cgroup limits on the container. We read the
 container's own cgroup (cgroup v2 preferred, with a cgroup v1 fallback) and
 verify each ceiling was applied end-to-end:
     memory -> 128 MiB  = 134217728 bytes
+    swap   -> 0 additional bytes (combined memory+swap equals memory)
     cpus   -> 0.5 core = quota 50000 / period 100000 us
     pids   -> 64
 """
@@ -68,6 +69,10 @@ print(f"cgroup version: {'v2' if cgroup_v2 else 'v1'}")
 try:
     if cgroup_v2:
         check("memory.max", int(read(cgroup_v2_path("memory.max"))), EXPECTED_MEM_BYTES)
+        swap_max = cgroup_v2_path("memory.swap.max")
+        # Kernels built without swap accounting have no swap controller file.
+        if os.path.exists(swap_max):
+            check("memory.swap.max", read(swap_max), "0")
         check("pids.max", int(read(cgroup_v2_path("pids.max"))), EXPECTED_PIDS)
         # cpu.max is "<quota> <period>" (quota may be "max" when unset).
         quota_s, period_s = read(cgroup_v2_path("cpu.max")).split()
@@ -76,6 +81,9 @@ try:
     else:
         check("memory.limit_in_bytes",
               int(read(f"{CGROUP_ROOT}/memory/memory.limit_in_bytes")), EXPECTED_MEM_BYTES)
+        memsw = f"{CGROUP_ROOT}/memory/memory.memsw.limit_in_bytes"
+        if os.path.exists(memsw):
+            check("memory.memsw.limit_in_bytes", int(read(memsw)), EXPECTED_MEM_BYTES)
         check("pids.max", int(read(f"{CGROUP_ROOT}/pids/pids.max")), EXPECTED_PIDS)
         check("cpu.cfs_quota_us",
               int(read(f"{CGROUP_ROOT}/cpu/cpu.cfs_quota_us")), EXPECTED_CPU_QUOTA)

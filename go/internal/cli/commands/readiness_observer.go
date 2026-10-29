@@ -110,11 +110,19 @@ func continueReadiness(ctx context.Context, tick, deadline <-chan time.Time, pro
 // when set; otherwise a probe that times out while the app is still running
 // keeps being observed for up to readinessObserveFactor probe timeouts.
 func waitForAttachedReadiness(ctx context.Context, conn *grpcclient.AgentConnection, cfg *appconfig.AppConfig, hostname string, timeoutOverride time.Duration) error {
-	started := time.Now()
 	readiness := effectiveReadiness(cfg)
 	httpPort := cloudHTTPReadinessPort(conn, cfg, readiness, hostname)
+	return waitForAttachedReadinessWith(ctx, conn, cfg, readiness, hostname, httpPort, makeReadinessProbe, timeoutOverride)
+}
+
+// waitForAttachedReadinessWith is waitForAttachedReadiness with the probed
+// readiness config, host, HTTP port and probe factory chosen by the caller
+// (waitForTunneledReadiness probes an app through a cloud app tunnel). cfg still
+// names the app whose running state the slow-start observation checks.
+func waitForAttachedReadinessWith(ctx context.Context, conn *grpcclient.AgentConnection, cfg *appconfig.AppConfig, readiness *appconfig.ReadinessConfig, hostname string, httpPort int, newProbe readinessProbeFactory, timeoutOverride time.Duration) error {
+	started := time.Now()
 	timeout := readinessProbeTimeout(readiness, timeoutOverride)
-	err := waitForReadinessWithin(ctx, readiness, hostname, httpPort, timeout)
+	err := waitForReadinessProbe(ctx, readiness, hostname, httpPort, timeout, newProbe)
 	if err == nil || ctx.Err() != nil || timeoutOverride > 0 {
 		return err
 	}
@@ -135,7 +143,7 @@ func waitForAttachedReadiness(ctx context.Context, conn *grpcclient.AgentConnect
 	defer ticker.Stop()
 	deadline := time.NewTimer(limit - time.Since(started))
 	defer deadline.Stop()
-	_, probeOnce, closeProbe := makeReadinessProbe(
+	_, probeOnce, closeProbe := newProbe(
 		hostname,
 		readiness.TCPSocket.Port,
 		httpPort != 0 && httpPort == readiness.TCPSocket.Port,
