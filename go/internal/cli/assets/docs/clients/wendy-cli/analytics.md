@@ -139,6 +139,7 @@ categories across commands, including `run`, `watch`, `build`, and device comman
 | `device_auth_required` | A provisioned agent requires authentication that the CLI could not satisfy. |
 | `auth_required`, `auth_session_ambiguous` | Cloud login is missing, or multiple sessions require an explicit choice. |
 | `auth_certificate_failed` | Cloud certificate issuance/renewal returned a structured failure. |
+| `auth_login_expired` | The device refused this computer's login because it has expired, and it could not be renewed. |
 | `registry_auth`, `registry_unavailable` | Required registry credentials/transport are unavailable, or the Mac agent has no reachable registry. |
 | `transfer_failed` | Chunk upload, file sync, or a separate image push failed. |
 | `container_start_failed` | The agent's create/start stream ended before confirming completion. |

@@ -114,6 +114,12 @@ and names the next step: give the device internet access so it sets its own
 clock, or, when no time server answered and the CLI sent a saved proof, give
 this computer internet access.
 
+A device's certificate names the organization it belongs to. If your login for
+that organization has expired, the CLI says so and does not send a time proof:
+the device clock is not the problem. A login from `wendy auth login` renews
+itself and the CLI retries the connection once. If it cannot renew, run
+`wendy auth login` and sign in to that organization, then retry.
+
 The CLI offers to refresh certificates when it has evidence that the client
 credentials need renewal. A timeout or generic TLS rejection alone does not
 trigger that offer.

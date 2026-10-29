@@ -365,6 +365,7 @@ func (s *mcpServer) run(ctx context.Context, serve func(*server.MCPServer) error
 	defer stopContainerMCP()
 	go s.runStartupConnect(startupCtx)
 	go s.runCLIUpdateChecks(startupCtx, time.Hour)
+	go s.runDeviceCertificateWatch(startupCtx, deviceCertificateCheckInterval)
 
 	return serve(srv)
 }
