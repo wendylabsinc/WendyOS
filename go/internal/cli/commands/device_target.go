@@ -21,7 +21,7 @@ const deviceEnvVar = "WENDY_DEVICE"
 // It must keep the exact prefix "no device specified; use --device flag"
 // verbatim: two enabled Swift E2E tests match on that substring —
 // swift/WendyE2ETests/Tests/WendyE2ETests/WendyDeviceVersionTests.swift:59 and
-// swift/WendyE2ETests/Tests/WendyE2ETests/WendyDeviceInfoTests.swift:266-268 —
+// swift/WendyE2ETests/Tests/WendyE2ETests/WendyDeviceInfoTests.swift:246-250 —
 // reached through the JSON-mode branches at helpers.go's resolveDeviceAddress,
 // connectToAgentInner and resolveTargetInner. Do not shorten or reword that
 // prefix; extend the message after it instead.
