@@ -148,7 +148,10 @@ func runNetTLSListener(parent context.Context, node *Node, listener net.Listener
 						}
 					}
 				}
-				return config.GetConfigForClient(hello)
+				if config.GetConfigForClient != nil {
+					return config.GetConfigForClient(hello)
+				}
+				return config, nil
 			}
 			secure := tls.Server(raw, handshakeConfig)
 			setup, done := context.WithTimeout(ctx, 8*time.Second)

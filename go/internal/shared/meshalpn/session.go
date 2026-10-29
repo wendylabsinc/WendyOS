@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"crypto/tls"
 	"crypto/x509"
+	"strings"
 )
 
 const ticketIssuers = "wendy-known-ca/1\x00"
+const ticketProtocol = "wendy-known-ca-alpn/1\x00"
 
 // Tickets retain only fingerprints of omitted path candidates. If a later
 // handshake no longer has one, decline resumption and exchange certificates
@@ -14,6 +16,7 @@ const ticketIssuers = "wendy-known-ca/1\x00"
 type handshakeIssuers struct {
 	available    []*x509.Certificate
 	dependencies []Fingerprint
+	protocol     string
 }
 
 func (h *handshakeIssuers) accepts(state *tls.SessionState) bool {
@@ -46,13 +49,23 @@ func (h *handshakeIssuers) accepts(state *tls.SessionState) bool {
 func (h *handshakeIssuers) stamp(state *tls.SessionState) *tls.SessionState {
 	result := *state
 	result.Extra = append([][]byte(nil), state.Extra...)
+	if h.protocol != "" {
+		kept := result.Extra[:0]
+		for _, entry := range result.Extra {
+			if !bytes.HasPrefix(entry, []byte(ticketProtocol)) {
+				kept = append(kept, entry)
+			}
+		}
+		result.Extra = append(kept, []byte(ticketProtocol+h.protocol))
+	}
 	// An inner first-contact collector may have been configured after the
 	// handshake. Preserve the dependencies already supplied by its outer wrapper.
 	if len(h.dependencies) == 0 {
 		return &result
 	}
+	entries := result.Extra
 	result.Extra = nil
-	for _, entry := range state.Extra {
+	for _, entry := range entries {
 		if !bytes.HasPrefix(entry, []byte(ticketIssuers)) {
 			result.Extra = append(result.Extra, entry)
 		}
@@ -115,4 +128,48 @@ func (c *issuerSessionCache) Put(key string, session *tls.ClientSessionState) {
 	if err == nil {
 		c.next.Put(key, next)
 	}
+}
+
+// Keep a reusable ticket's negotiated alias stable as the CA cache warms.
+// Offering a newly available longer prefix would make TLS reject that ticket
+// solely because its ALPN changed. Missing dependencies or a changed local path
+// instead use the normal full set of offers and a fresh handshake.
+func resumptionProtocols(config *tls.Config, offered []string, available []*x509.Certificate) []string {
+	if config.ClientSessionCache == nil || config.ServerName == "" {
+		return offered
+	}
+	session, ok := config.ClientSessionCache.Get(config.ServerName)
+	if !ok || session == nil {
+		return offered
+	}
+	_, state, err := session.ResumptionState()
+	if err != nil || state == nil || !(&handshakeIssuers{available: available}).accepts(state) {
+		return offered
+	}
+	protocol := ""
+	for _, entry := range state.Extra {
+		if bytes.HasPrefix(entry, []byte(ticketProtocol)) {
+			protocol = string(entry[len(ticketProtocol):])
+		}
+	}
+	if protocol == "" {
+		return offered
+	}
+	present := false
+	for _, candidate := range offered {
+		if candidate == protocol {
+			present = true
+		}
+	}
+	if !present {
+		return offered
+	}
+	base := Application(protocol)
+	result := make([]string, 0, len(offered))
+	for _, candidate := range offered {
+		if strings.HasPrefix(candidate, inventory) || Application(candidate) != base || candidate == protocol || candidate == base {
+			result = append(result, candidate)
+		}
+	}
+	return result
 }

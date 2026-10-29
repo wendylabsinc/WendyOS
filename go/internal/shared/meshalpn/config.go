@@ -71,7 +71,8 @@ func (c *Certificates) bindIssuerSnapshot(config *tls.Config, available []*x509.
 		for _, der := range complete[len(raw):] {
 			loan.dependencies = append(loan.dependencies, Hash(der))
 		}
-		c.Remember(raw, time.Now())
+		loan.protocol = state.NegotiatedProtocol
+		c.Remember(complete, time.Now())
 		return nil
 	}
 }
@@ -92,7 +93,7 @@ func omitKnownCertificates(certificate tls.Certificate, known map[Fingerprint]bo
 func (c *Certificates) ConfigureClient(config *tls.Config, protocols ...string) {
 	if c != nil {
 		available := c.snapshot(time.Now())
-		config.NextProtos = c.clientProtocols(available, protocols...)
+		config.NextProtos = resumptionProtocols(config, c.clientProtocols(available, protocols...), available)
 		c.bindIssuerSnapshot(config, available)
 	} else {
 		config.NextProtos = append([]string(nil), protocols...)
@@ -112,6 +113,9 @@ func (c *Certificates) ConfigureClient(config *tls.Config, protocols ...string) 
 	selectCertificate := config.GetClientCertificate
 	config.GetClientCertificate = func(request *tls.CertificateRequestInfo) (*tls.Certificate, error) {
 		certificate := c.certificate
+		if len(config.Certificates) > 0 {
+			certificate = config.Certificates[0]
+		}
 		if selectCertificate != nil {
 			selected, err := selectCertificate(request)
 			if err != nil || selected == nil {

@@ -131,10 +131,10 @@ func TestLeafOnlyIdentityNeedsLocalIssuer(t *testing.T) {
 	otherIssuers := issuedCredentials(t, c, c.pem, other.pem+top.pem+root.pem)
 	leaf := sender.LeafCertificate().Certificate
 
-	if identity, err := sameIssuers.Verify(leaf, time.Now()); err != nil || identity.Device != sender.Device {
+	if identity, err := sameIssuers.VerifyTLS(leaf, time.Now()); err != nil || identity.Device != sender.Device {
 		t.Fatalf("receiver with the sender's issuers: %v %v", identity.Device, err)
 	}
-	if identity, err := otherIssuers.Verify(leaf, time.Now()); err == nil {
+	if identity, err := otherIssuers.VerifyTLS(leaf, time.Now()); err == nil {
 		t.Fatalf("receiver without the sender's issuer accepted the bare leaf as %v", identity.Device)
 	}
 	if identity, err := otherIssuers.Verify(sender.Certificate.Certificate, time.Now()); err != nil || identity.Device != sender.Device {
@@ -160,7 +160,7 @@ func TestSharedIntermediatesWithRootOnlyTrust(t *testing.T) {
 	}
 	for _, pair := range [][2]*Credentials{{ca, cb}, {cb, ca}} {
 		leaf := pair[0].LeafCertificate()
-		identity, err := pair[1].Verify(leaf.Certificate, time.Now())
+		identity, err := pair[1].VerifyTLS(leaf.Certificate, time.Now())
 		if err != nil || identity.Device != pair[0].Device {
 			t.Fatalf("known intermediates were not used as path candidates: %v %v", identity, err)
 		}

@@ -374,7 +374,7 @@ func acceptedPeer(server *localmesh.Credentials, state tls.ConnectionState) (mes
 	for _, cert := range state.PeerCertificates {
 		chain = append(chain, cert.Raw)
 	}
-	identity, err := server.Verify(chain, time.Now())
+	identity, err := server.VerifyTLS(chain, time.Now())
 	return identity.Device, err
 }
 

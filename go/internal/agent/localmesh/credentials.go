@@ -148,13 +148,13 @@ func newCredentials(certPEM, chainPEM, keyPEM string, instance uuid.UUID, operat
 		}
 		var expires time.Time
 		if device.IsOperator() {
-			verified, err := meshoperator.VerifyPrimary(material.Candidates(chain, now), primaryRoots, self.Tenant(), now)
+			verified, err := meshoperator.VerifyPrimary(chain, primaryRoots, self.Tenant(), now)
 			if err != nil {
 				return Identity{}, err
 			}
 			expires = verified.NotAfter()
 		} else {
-			expires, err = verifyChain(material.Candidates(chain, now), now)
+			expires, err = verifyChain(chain, now)
 			if err != nil {
 				return Identity{}, err
 			}
