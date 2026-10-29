@@ -62,6 +62,7 @@ type inferenceTestSession struct {
 	inputs  chan inference.Input
 	closed  chan struct{}
 	stopped bool
+	err     error
 }
 
 func (s *inferenceTestSession) Send(input inference.Input) error {
@@ -76,6 +77,11 @@ func (s *inferenceTestSession) Send(input inference.Input) error {
 	return nil
 }
 func (s *inferenceTestSession) Results() <-chan inference.Result { return s.results }
+func (s *inferenceTestSession) Err() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.err
+}
 func (s *inferenceTestSession) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -128,9 +134,21 @@ func receiveInference[T any](t *testing.T, channel <-chan T) T {
 
 func newInferenceTestService(t *testing.T, restore bool) (*DataService, *inferenceTestFactory, *inferenceTestSender, *inferenceTestAdapter) {
 	t.Helper()
+	factory := &inferenceTestFactory{sessions: make(chan *inferenceTestSession, 8)}
+	service, sender, adapter := startInferenceTestService(t, factory, nil, restore)
+	return service, factory, sender, adapter
+}
+
+// startInferenceTestService starts campaign inference on factory, with warn,
+// when set, receiving the data manager's warnings from the start.
+func startInferenceTestService(t *testing.T, factory inference.Factory, warn func(string), restore bool) (*DataService, *inferenceTestSender, *inferenceTestAdapter) {
+	t.Helper()
 	manager, err := data.NewManager(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
+	}
+	if warn != nil {
+		manager.SetWarnLogger(warn)
 	}
 	service := NewDataService(manager)
 	adapter := &inferenceTestAdapter{sources: []data.Source{
@@ -140,7 +158,6 @@ func newInferenceTestService(t *testing.T, restore bool) (*DataService, *inferen
 	}}
 	service.addAdapter(adapter)
 	service.video = inferenceTestVideo{}
-	factory := &inferenceTestFactory{sessions: make(chan *inferenceTestSession, 8)}
 	sender := &inferenceTestSender{requests: make(chan DetectionNotification, 8)}
 	if restore {
 		if _, err := manager.DeployCampaign(inferenceTestYAML(t)); err != nil {
@@ -159,7 +176,7 @@ func newInferenceTestService(t *testing.T, restore bool) (*DataService, *inferen
 			t.Fatal(err)
 		}
 	}
-	return service, factory, sender, adapter
+	return service, sender, adapter
 }
 
 func TestAgentInferenceAllCamerasRecordAndNotify(t *testing.T) {

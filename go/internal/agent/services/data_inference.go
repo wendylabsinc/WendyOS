@@ -167,6 +167,7 @@ func (m *campaignInferenceManager) snapshot(name, revision string) *data.Inferen
 	for source, state := range job.status.Sources {
 		snapshot.Sources[source] = state
 	}
+	snapshot.Accelerator = acceleratorSnapshot(job.status.Accelerator, time.Now())
 	return &snapshot
 }
 
@@ -196,21 +197,47 @@ func (j *campaignInferenceJob) supervise(ctx context.Context) {
 		<-ctx.Done()
 		return
 	}
+	// The last reason a worker could not start. A worker that cannot start
+	// fails the same way at every retry, such as a tensorrt campaign on a
+	// device without TensorRT, so the reason is logged when it changes.
+	lastStartFailure := ""
 	for ctx.Err() == nil {
 		j.setState("loading", nil)
+		// A new process reports its own accelerator; the last one's is stale.
+		j.mu.Lock()
+		j.status.Accelerator, j.status.Stats = nil, nil
+		j.mu.Unlock()
 		err := j.run(ctx)
 		if ctx.Err() != nil {
 			return
 		}
 		j.setState("error", err)
-		j.owner.service.manager.Warnf("campaign %q inference: %v; retrying in 5s", j.campaign.Name, err)
+		var startFailure inferenceStartError
+		switch {
+		case !errors.As(err, &startFailure):
+			lastStartFailure = ""
+			j.owner.service.manager.Warnf("campaign %q inference: %v; retrying in %s", j.campaign.Name, err, inferenceRetryDelay)
+		case err.Error() != lastStartFailure:
+			lastStartFailure = err.Error()
+			j.owner.service.manager.Warnf("campaign %q inference: %v; retrying every %s, logged again when the reason changes", j.campaign.Name, err, inferenceRetryDelay)
+		}
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(5 * time.Second):
+		case <-time.After(inferenceRetryDelay):
 		}
 	}
 }
+
+// inferenceRetryDelay is how long a failed worker waits to be started again.
+// Behind a var for tests.
+var inferenceRetryDelay = 5 * time.Second
+
+// inferenceStartError is a worker that did not start, as opposed to one that
+// started and then failed.
+type inferenceStartError struct{ error }
+
+func (e inferenceStartError) Unwrap() error { return e.error }
 
 type inferenceSource struct {
 	cancel context.CancelFunc
@@ -221,11 +248,11 @@ func (j *campaignInferenceJob) run(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	if j.owner.factory == nil {
-		return errors.New("model runtime is unavailable")
+		return inferenceStartError{errors.New("model runtime is unavailable")}
 	}
 	session, err := j.owner.factory.Start(ctx, *j.campaign.Inference)
 	if err != nil {
-		return err
+		return inferenceStartError{err}
 	}
 	sources := map[string]inferenceSource{}
 	defer func() {
@@ -305,10 +332,18 @@ func (j *campaignInferenceJob) run(ctx context.Context) error {
 			reconcile()
 		case result, ok := <-session.Results():
 			if !ok {
+				// Why, with the tail of the worker's stderr.
+				if err := session.Err(); err != nil {
+					return err
+				}
 				return errors.New("model process exited")
 			}
 			if result.Type == "error" {
 				return errors.New(result.Error)
+			}
+			if result.Type == "accelerator" {
+				j.acceleratorState(result.Accelerator, result.Stats)
+				continue
 			}
 			j.mu.Lock()
 			generation, active := j.generations[result.SourceID]
@@ -330,6 +365,10 @@ func (j *campaignInferenceJob) run(ctx context.Context) error {
 			j.sourceState(result.SourceID, "detecting")
 			attributes := map[string]any{"campaign": j.campaign.Name, "source_id": result.SourceID, "model_version": j.campaign.Inference.Revision, "detections": detections,
 				"input_reference_status": "encoded_stream_decode_does_not_preserve_sample_ids", "runtime_results_dropped": result.DroppedResults}
+			addPicture(attributes, detections, result.Width, result.Height)
+			// What scored the frame: FP16 TensorRT scores differ slightly from
+			// FP32 CPU scores, so a dataset has to be able to tell them apart.
+			j.predictionProvenance(attributes, result)
 			record := data.ApplicationRecord{Version: 1, Type: "prediction", Model: j.campaign.Inference.Model, Attributes: attributes}
 			if _, err := j.owner.service.manager.RecordCampaignApplication(campaignAppPrefix+j.campaign.Name, record); err != nil {
 				j.owner.service.manager.Warnf("recording campaign prediction: %v", err)
