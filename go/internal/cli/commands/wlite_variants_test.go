@@ -28,8 +28,8 @@ func TestWendyLiteBoards(t *testing.T) {
 		seen[b.Board] = true
 	}
 
-	if !seen["esp32c6_generic"] {
-		t.Error("expected board esp32c6_generic in the catalog")
+	if !seen["esp32c6_generic_native"] {
+		t.Error("expected board esp32c6_generic_native in the catalog")
 	}
 }
 
@@ -64,10 +64,10 @@ func TestWendyLiteFirmwareID(t *testing.T) {
 		board string
 		want  string
 	}{
-		{"esp32c6_generic", "esp32c6"},
+		{"esp32c5_generic_native", "esp32c5_native"},
 		{"esp32s31_mosaico_native", "esp32s31_mosaico_native"},
 		{"esp32c6_generic_native", "esp32c6_native"},
-		{"esp32p4_waveshare_lcd_4b", "esp32p4_waveshare_lcd_4b"},
+		{"esp32p4_dfr1172_firebeetle_native", "esp32p4_dfr1172_firebeetle_native"},
 	}
 	for _, tc := range cases {
 		got, err := WendyLiteFirmwareID(tc.board)
@@ -87,11 +87,11 @@ func TestWendyLiteFirmwareID(t *testing.T) {
 
 func TestWendyLiteTargetForBoard(t *testing.T) {
 	tests := map[string]string{
-		"esp32c5_generic":           "esp32c5",
-		"esp32c6_generic":           "esp32c6",
-		"esp32c61_generic_native":   "esp32c61",
-		"esp32p4_waveshare_lcd_4b":  "esp32p4",
-		"esp32s3_seeed_xiao_native": "esp32s3",
+		"esp32c5_generic_native":            "esp32c5",
+		"esp32c6_generic_native":            "esp32c6",
+		"esp32c61_generic_native":           "esp32c61",
+		"esp32p4_dfr1172_firebeetle_native": "esp32p4",
+		"esp32s3_seeed_xiao_native":         "esp32s3",
 	}
 	for board, want := range tests {
 		t.Run(board, func(t *testing.T) {
@@ -111,33 +111,33 @@ func TestWendyLiteTargetForBoard(t *testing.T) {
 // whose flash attempt would fail right after selection.
 func TestWendyLiteBoardsWithFirmwareFilter(t *testing.T) {
 	boards := []WendyLiteBoard{
-		{Board: "esp32c6_generic", Target: "esp32c6", DisplayName: "no manifest entry"},
+		{Board: "esp32c61_generic_native", Target: "esp32c61", DisplayName: "no manifest entry"},
 		{Board: "esp32c6_generic_native", Target: "esp32c6", DisplayName: "empty manifest path"},
-		{Board: "esp32s3_generic", Target: "esp32s3", DisplayName: "stable only"},
-		{Board: "esp32s3_generic_native", Target: "esp32s3", DisplayName: "nightly only"},
+		{Board: "esp32s3_generic_native", Target: "esp32s3", DisplayName: "stable only"},
+		{Board: "esp32p4_dfr1172_firebeetle_native", Target: "esp32p4", DisplayName: "nightly only"},
 		{Board: "no_such_board", Target: "esp32c6", DisplayName: "not in catalog"},
 	}
 	firmware := map[string]manifestDevice{
-		// esp32c6: no entry at all.
-		"esp32c6_native": {ManifestPath: ""}, // entry present but unpublished.
-		"esp32s3":        {ManifestPath: "firmware/esp32s3.json", Latest: "0.2.0"},
-		"esp32s3_native": {ManifestPath: "firmware/esp32s3_native.json", LatestNightly: "0.3.0-nightly"},
+		// esp32c61_native: no entry at all.
+		"esp32c6_native":                    {ManifestPath: ""}, // entry present but unpublished.
+		"esp32s3_native":                    {ManifestPath: "firmware/esp32s3_native.json", Latest: "0.2.0"},
+		"esp32p4_dfr1172_firebeetle_native": {ManifestPath: "firmware/esp32p4_dfr1172_firebeetle_native.json", LatestNightly: "0.3.0-nightly"},
 	}
 
 	stable := wendyLiteBoardsWithFirmware(boards, firmware, false)
-	if len(stable) != 1 || stable[0].Board != "esp32s3_generic" {
-		t.Errorf("nightly=false: got %+v, want only esp32s3_generic", stable)
+	if len(stable) != 1 || stable[0].Board != "esp32s3_generic_native" {
+		t.Errorf("nightly=false: got %+v, want only esp32s3_generic_native", stable)
 	}
 
 	nightly := wendyLiteBoardsWithFirmware(boards, firmware, true)
 	if len(nightly) != 2 {
-		t.Fatalf("nightly=true: got %+v, want esp32s3_generic and esp32s3_generic_native", nightly)
+		t.Fatalf("nightly=true: got %+v, want esp32s3_generic_native and esp32p4_dfr1172_firebeetle_native", nightly)
 	}
 	seen := make(map[string]bool)
 	for _, b := range nightly {
 		seen[b.Board] = true
 	}
-	if !seen["esp32s3_generic"] || !seen["esp32s3_generic_native"] {
-		t.Errorf("nightly=true: got %+v, want esp32s3_generic and esp32s3_generic_native", nightly)
+	if !seen["esp32s3_generic_native"] || !seen["esp32p4_dfr1172_firebeetle_native"] {
+		t.Errorf("nightly=true: got %+v, want esp32s3_generic_native and esp32p4_dfr1172_firebeetle_native", nightly)
 	}
 }
