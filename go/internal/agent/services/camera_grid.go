@@ -22,11 +22,15 @@ package services
 //
 // Decoding costs CPU, and a thermal grid needs the camera running with a raw
 // subscriber, so a decoder runs only while a viewer asks for one of its
-// camera's streams by id, prefix or schema (live.Hub.Wanted). A viewer that
-// takes every stream gets grids while someone else's request runs the
-// decoder, but does not start one. The streams are in the live catalog, idle,
-// for as long as the camera is present, so a viewer finds them without
-// starting anything.
+// camera's streams by id, prefix or schema (live.Hub.Wanted), or a deployed
+// campaign has a rule on its grid (grid_rules.go). A viewer that takes every
+// stream gets grids while someone else's request runs the decoder, but does
+// not start one. The streams are in the live catalog, idle, for as long as the
+// camera is present, so a viewer finds them without starting anything.
+//
+// A rule gets every grid the decoder makes, synchronously, before the decoder
+// reads the next frame: rules never read the live stream, where a slow
+// reader skips records.
 //
 // Frames come from the agent's own camera pipeline, never from the device
 // node. A thermal camera's frames are the camera hub's raw tap
@@ -222,15 +226,28 @@ type gridCamera struct {
 type gridJob struct {
 	cancel context.CancelFunc
 	done   chan struct{}
-	// err and published are written before done closes.
+	// err and published are written before done closes. published is set
+	// once the job made a grid a viewer or a rule took.
 	err       error
 	published bool
+}
+
+// gridRules is what the publisher needs of the campaign grid rules
+// (gridRuleRuntime): whether a rule reads a grid stream, a channel closed
+// when the rules change, the frames, and word that a camera went away.
+type gridRules interface {
+	wants(streamID string) bool
+	changes() <-chan struct{}
+	observe(streamID string, grid *datapb.Grid, unixNanos int64)
+	detach(sourceID string)
 }
 
 // cameraGrids publishes the camera grid streams.
 type cameraGrids struct {
 	manager *data.Manager
 	video   *VideoService
+	// rules are the campaign grid rules, nil for none.
+	rules gridRules
 	// wake is signalled when a job ends.
 	wake chan struct{}
 	// scanEvery, retryAfter and retryMax are cameraGridScanEvery,
@@ -252,6 +269,12 @@ func (s *DataService) StartCameraGrids(ctx context.Context, video *VideoService)
 		return func() {}
 	}
 	g := newCameraGrids(s.manager, video)
+	if s.rules != nil {
+		g.rules = s.rules
+		// Campaigns deployed in an earlier agent lifetime run their rules
+		// again.
+		s.rules.reconcile()
+	}
 	ctx, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})
 	go func() {
@@ -280,9 +303,13 @@ func (g *cameraGrids) run(ctx context.Context) {
 	defer ticker.Stop()
 	g.scan()
 	for {
-		// Taken before reconciling, so a viewer that arrives meanwhile is not
-		// missed.
+		// Taken before reconciling, so a viewer or a rule that arrives
+		// meanwhile is not missed.
 		changed := g.manager.Live().SubscribersChanged()
+		var rulesChanged <-chan struct{}
+		if g.rules != nil {
+			rulesChanged = g.rules.changes()
+		}
 		g.reconcile(ctx)
 		select {
 		case <-ctx.Done():
@@ -290,6 +317,7 @@ func (g *cameraGrids) run(ctx context.Context) {
 		case <-ticker.C:
 			g.scan()
 		case <-changed:
+		case <-rulesChanged:
 		case <-g.wake:
 		}
 	}
@@ -308,6 +336,7 @@ func (g *cameraGrids) scan() {
 			for _, stream := range cam.streams() {
 				g.manager.UnadvertiseAgentStream(stream.name)
 			}
+			g.detachRules(id)
 			delete(g.cameras, id)
 		}
 	}
@@ -398,13 +427,33 @@ func (c *gridCamera) streams() []gridStream {
 	return streams
 }
 
+// wanted reports whether a viewer asks for one of the camera's streams, or a
+// rule reads its grid.
 func (g *cameraGrids) wanted(cam *gridCamera) bool {
 	for _, stream := range cam.streams() {
 		if g.manager.AgentStreamWanted(stream.name, stream.descriptor) {
 			return true
 		}
 	}
-	return false
+	return g.ruled(cameraGridStream(cam.sourceID))
+}
+
+// ruled reports whether a campaign rule reads the grid stream, named below
+// "agent/".
+func (g *cameraGrids) ruled(stream string) bool {
+	return g.rules != nil && g.rules.wants("agent/"+stream)
+}
+
+// observeRules hands one grid to the rules that read it.
+func (g *cameraGrids) observeRules(stream string, grid *datapb.Grid, unixNanos int64, job *gridJob) {
+	g.rules.observe("agent/"+stream, grid, unixNanos)
+	job.published = true
+}
+
+func (g *cameraGrids) detachRules(sourceID string) {
+	if g.rules != nil {
+		g.rules.detach(sourceID)
+	}
 }
 
 // reconcile starts the decoder of every camera a viewer asks for, unless it
@@ -497,6 +546,7 @@ func (g *cameraGrids) stopAll() {
 		for _, stream := range cam.streams() {
 			g.manager.UnadvertiseAgentStream(stream.name)
 		}
+		g.detachRules(id)
 		delete(g.cameras, id)
 	}
 }
@@ -522,8 +572,9 @@ func (g *cameraGrids) publish(stream string, descriptor *recordingpb.StreamDescr
 }
 
 // runThermal publishes a TC001's grid and hot and cold markers from its raw
-// frames while a viewer asks for either. The records carry each raw frame's
-// timestamp_ns, the time a raw StreamVideo subscriber sees on it.
+// frames while a viewer asks for either, and hands the grid to the campaign
+// rules that read it. The records carry each raw frame's timestamp_ns, the
+// time a raw StreamVideo subscriber sees on it, and so do the rules' frames.
 //
 // Temperatures carry the camera's correction, if it has one, and a new one
 // from the next frame after it is set. A store that cannot be read stops the
@@ -564,7 +615,8 @@ func (g *cameraGrids) runThermal(ctx context.Context, sourceID, path string, job
 		}
 		wantGrid := g.manager.AgentStreamWanted(grid, gridDescriptor)
 		wantMarkers := g.manager.AgentStreamWanted(markers, markersDescriptor)
-		if !wantGrid && !wantMarkers {
+		ruled := g.ruled(grid)
+		if !wantGrid && !wantMarkers && !ruled {
 			continue // the loop stops this job
 		}
 		st, ok := computeThermalStats(frame.data, frame.format, frame.pictureTop, corr)
@@ -575,9 +627,17 @@ func (g *cameraGrids) runThermal(ctx context.Context, sourceID, path string, job
 					sourceID, st.meanCelsius, correctionNote(corr), float64(thermalMinMeanCelsius), float64(thermalMaxMeanCelsius))
 			}
 		}
-		if ok && wantGrid {
-			if err := g.publish(grid, gridDescriptor, sourceID, frame.unixNanos, thermalGrid(frame.data, camera, corr), job); err != nil {
-				return err
+		// A frame the guard refused has no temperatures: the rules see a gap,
+		// not a frame of wrong values.
+		if ok && (wantGrid || ruled) {
+			temperatures := thermalGrid(frame.data, camera, corr)
+			if ruled {
+				g.observeRules(grid, temperatures, frame.unixNanos, job)
+			}
+			if wantGrid {
+				if err := g.publish(grid, gridDescriptor, sourceID, frame.unixNanos, temperatures, job); err != nil {
+					return err
+				}
 			}
 		}
 		if wantMarkers {
@@ -610,8 +670,9 @@ func correctionNote(corr thermalCorrection) string {
 }
 
 // runLuma publishes a SensorLink camera's brightness grid from its JPEG frames
-// while a viewer asks for it. A frame has no capture time, so the record
-// carries the time the agent received it.
+// while a viewer asks for it, and hands it to the campaign rules that read it.
+// A frame has no capture time, so the record carries the time the agent
+// received it.
 func (g *cameraGrids) runLuma(ctx context.Context, sourceID, path string, job *gridJob) error {
 	frames, unsubscribe, ok := g.video.sensorLinkFrames(path)
 	if !ok {
@@ -636,7 +697,8 @@ func (g *cameraGrids) runLuma(ctx context.Context, sourceID, path string, job *g
 		if frame.Codec != ros2camera.CodecMJPEG {
 			return errSensorFeedNotJPEG
 		}
-		if !g.manager.AgentStreamWanted(grid, gridDescriptor) {
+		wantGrid, ruled := g.manager.AgentStreamWanted(grid, gridDescriptor), g.ruled(grid)
+		if !wantGrid && !ruled {
 			continue // the loop stops this job
 		}
 		decoded, err := lumaGrid(frame.Data, camera)
@@ -648,8 +710,13 @@ func (g *cameraGrids) runLuma(ctx context.Context, sourceID, path string, job *g
 			continue
 		}
 		failure = ""
-		if err := g.publish(grid, gridDescriptor, sourceID, received.UnixNano(), decoded, job); err != nil {
-			return err
+		if ruled {
+			g.observeRules(grid, decoded, received.UnixNano(), job)
+		}
+		if wantGrid {
+			if err := g.publish(grid, gridDescriptor, sourceID, received.UnixNano(), decoded, job); err != nil {
+				return err
+			}
 		}
 	}
 }

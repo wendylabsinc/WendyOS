@@ -35,7 +35,11 @@ type CampaignNotification struct {
 	// Detections holds up to five of the detections behind a detection
 	// notification, highest score first. Older clients ignore it.
 	Detections []NotificationDetection `json:"detections,omitempty"`
-	Sequence   uint64                  `json:"sequence,omitempty"`
+	// Message is the notification's text when its producer has one, such
+	// as a campaign rule's "thermal_alarm on /dev/video2: 63.1 °C area".
+	// Older clients ignore it.
+	Message  string `json:"message,omitempty"`
+	Sequence uint64 `json:"sequence,omitempty"`
 }
 
 type notificationJournal struct {

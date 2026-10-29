@@ -169,6 +169,52 @@ notification block does not establish delivery. Check
 `inference_status.notification_error`, agent logs, and delivery evidence for
 the intended endpoint when a notification test is requested.
 
+## Grid rules
+
+`rules` thresholds the agent's own camera grids with no app: a TC001's
+temperatures in °C (corrected by its thermal calibration) or a SensorLink
+camera's brightness in %. Steps never mention the unit; a value is the grid's
+count × scale + offset. The repository's `Examples/WendyDataThermalRules`
+campaign holds this rule:
+
+```yaml
+rules:
+  - name: hotspot-alarm
+    input: agent/camera/grid/v4l2:/dev/video2
+    steps:
+      - region: {x: 0, y: 0, width: 1, height: 1}
+      - bands:
+          - {name: warm, min: 40, max: 50, color: yellow}
+          - {name: hot,  min: 50,          color: red}
+      - areas: {min_cells: 4}
+    outputs:
+      markers: areas
+      events:
+        - {name: thermal_warning, when: area.band == warm, for: 3s}
+        - {name: thermal_alarm,   when: area.band == hot,  for: 2s, clear_below: 48, cooldown: 2m}
+```
+
+- `input` must be an `agent/camera/grid/<source>` id from `wendy data streams`;
+  rules cannot read app streams yet. Use the camera's own node in `sources` too,
+  so a recording holds its video.
+- Steps run in the order `region` (0..1, top-left corner), `bands` (required,
+  `min` <= value < `max`, no overlap), `areas` (diagonal neighbours touch,
+  `min_cells` drops small areas).
+- `when` is `area.band == <band>`, or `area.max`, `area.mean` or `area.cells`
+  compared with a number. `for` and `cooldown` run on frame timestamps.
+  `clear_below`/`clear_above` is hysteresis on every value in the region and
+  must sit at or beyond the band's edge. An event fires at most once a second.
+- Markers go to `agent/campaign/<campaign>/rules/<rule>/markers/<source>`, live
+  only. Events are durable application events of `sh.wendy.campaign.<name>`:
+  the Events journal, pre-roll and a recording's `events.jsonl`. A matching
+  `capture.triggers` event records; `notify.on: event` sends text such as
+  "thermal_alarm on /dev/video2: 63.1 °C area". Events reach only their own
+  campaign.
+- An active rule keeps its camera decoding with no viewer, so the camera and
+  encoder stay on. Check `rules_status` in `campaign inspect` (`running`,
+  `waiting_for_frames`, `error`, `pending`) and real events before claiming the
+  rule works. Mac agents refuse rules.
+
 ## Upload and retention
 
 `upload.when` accepts `always`, `wifi`, and `manual`; `wifi` currently behaves

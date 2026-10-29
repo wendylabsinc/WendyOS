@@ -215,6 +215,21 @@ Use the [inference reference](/docs/advanced/clients/wendy-cli/commands/data#inf
 and [all-camera people example](https://github.com/wendylabsinc/WendyOS/tree/main/Examples/WendyDataPeople)
 when you are ready to enable model downloads and automatic capture.
 
+## Alarm on a thermal camera without an app
+
+A campaign's optional `rules` block turns a camera grid into coloured areas and
+events: for a TOPDON TC001, "40 to 50 °C is yellow, above 50 °C is red, alert on
+red". Each rule names the grid it reads, `agent/camera/grid/<source>`, a region,
+value bands and a minimum area size, and its events with `for`, `clear_below`
+and `cooldown`. The agent runs the rules on every frame, draws the areas as live
+markers, and records each event like an application event, so a matching
+`capture.triggers` entry records the moment with its pre-roll and
+`notify.on: event` sends a notification. Check `rules_status` in
+`campaign inspect` after deploying.
+
+Use the [rules reference](/docs/advanced/clients/wendy-cli/commands/data#rules)
+and the [thermal rules example](https://github.com/wendylabsinc/WendyOS/tree/main/Examples/WendyDataThermalRules).
+
 ## Current limits
 
 - Camera snapshots and capture-rate caps require a transport that supplies

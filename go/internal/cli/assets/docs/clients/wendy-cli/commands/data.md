@@ -167,6 +167,7 @@ and are ignored when `notify.on` is `episode_committed`. The immediate modes
 | `privacy` | no | List of declared transforms with optional revisions. |
 | `inference` | no | Agent-managed object detection from pinned Hugging Face models, using Transformers or YOLO ONNX; see below. |
 | `notify` | no | Episode-commit notification intent or immediate event/detection delivery; see below. |
+| `rules` | no | Grid rules the agent runs on its camera grids, with live markers and events; see below. |
 
 Each `sources` item selects exactly one source:
 
@@ -285,7 +286,7 @@ condition:
 
 | Trigger | Description |
 |---|---|
-| `event: <name>` | Matches an entitled application's event name. |
+| `event: <name>` | Matches an entitled application's event name, or an event of the campaign's inference or rules. |
 | `model.uncertainty: "> 0.65"` | Compares prediction uncertainty with `<`, `<=`, `==`, `>=`, or `>` and a value in `[0, 1]`. |
 
 Prediction uncertainty is read from the structured `uncertainty` attribute
@@ -333,6 +334,99 @@ for a complete campaign. Campaign revision hashing now uses revision schema 2,
 which includes inference and notification settings. Existing plans receive new
 revision hashes when redeployed; the YAML `version` remains `1`.
 
+### Rules
+
+A `rules` block runs simple rules on the agent's camera grids, with no
+application: "40 to 50 °C is a yellow area, 50 °C and above a red one, alert on
+red". [The thermal rules example](https://github.com/wendylabsinc/WendyOS/tree/main/Examples/WendyDataThermalRules)
+is a complete campaign.
+
+```yaml
+rules:
+  - name: hotspot-alarm
+    input: agent/camera/grid/v4l2:/dev/video2
+    steps:
+      - region: {x: 0, y: 0, width: 1, height: 1}
+      - bands:
+          - {name: warm, min: 40, max: 50, color: yellow}
+          - {name: hot,  min: 50,          color: red}
+      - areas: {min_cells: 4}
+    outputs:
+      markers: areas
+      events:
+        - {name: thermal_warning, when: area.band == warm, for: 3s}
+        - {name: thermal_alarm,   when: area.band == hot,  for: 2s, clear_below: 48, cooldown: 2m}
+```
+
+Nothing in a rule is about temperature. A cell's value is the grid's own count ×
+`scale` + `offset`, in the grid's `unit`, so the same steps read a TOPDON TC001's
+temperatures in °C, corrected when the camera has a thermal calibration, or a
+SensorLink camera's brightness in %.
+
+| Field | Required | Description |
+|---|---|---|
+| `name` | yes | 1–64 letters, numbers, `.`, `-`, or `_`, unique within the campaign. |
+| `input` | yes | One of the agent's camera grids, `agent/camera/grid/<source>`, as `wendy data streams` lists it. |
+| `steps` | yes | `region`, `bands` and `areas`, in that order, each at most once, each a list item of its own. `bands` is required. |
+| `outputs.markers` | no | `areas` publishes a box per area; see below. |
+| `outputs.events` | no | Up to 8 named events. A rule needs markers, events, or both. |
+
+| Step | Description |
+|---|---|
+| `region: {x, y, width, height}` | The part of the grid the rule reads, from 0 to 1, with its top-left corner at (x, y). A cell counts when its centre lies inside. Without it, the whole grid. |
+| `bands: [{name, min, max, color}]` | 1–8 named value ranges, `min` ≤ value < `max`. Either bound may be left out, not both, and bands may not overlap. `color` is a CSS colour name or `#RRGGBB`, the default viewers draw the band in. |
+| `areas: {min_cells: N}` | Cells of one band that touch form an area, diagonal neighbours included, so a thin object at an angle stays one area. Areas of fewer than `min_cells` cells are ignored. Without it, every area counts, down to one cell. |
+
+| Event field | Required | Description |
+|---|---|---|
+| `name` | yes | 1–128 letters, numbers, `.`, `-`, or `_`. |
+| `when` | yes | `area.band == <band>`, `area.max <op> <number>`, `area.mean <op> <number>`, or `area.cells <op> <whole number>`, with `<op>` one of `<`, `<=`, `==`, `>=`, `>`. It holds on a frame when any area matches. |
+| `for` | no | How long `when` must hold before the event is raised. Default `0s`. |
+| `clear_below`, `clear_above` | no | Hysteresis. A raised event clears only once every value in the region is below (or above) this value, so a reading that hovers around the band's edge raises one event, not one per crossing. It must be at or below the band's `min` (at or above its `max`), or the `when` threshold. Without it, the event clears on the first frame `when` does not hold. One of the two at most. |
+| `cooldown` | no | The least time between two events of this name on this camera. Default `0s`. |
+
+Timing runs on the frames' own timestamps, the `timestamp_ns` of the camera's raw
+frame, not on when the agent got round to them. A gap of more than 5 seconds
+between frames, or a timestamp that goes backwards, starts `for` over and clears
+a raised event, so a condition still holding after the camera comes back raises
+it again, cooldown permitting. Whatever its cooldown, an event is raised at most
+once a second. A redeploy of an unchanged plan keeps the rules' timing; a changed
+plan starts it over.
+
+What a rule produces:
+
+- **Markers.** With `markers: areas`, every frame publishes
+  `agent/campaign/<campaign>/rules/<rule>/markers/<source>`, a
+  `wendy.data.v1.VideoMarkers` with a box per area in its band's colour, labelled
+  with the band and the area's highest value in the grid's unit, for example `hot`
+  with 52.3 °C. At most 64 boxes, highest values first; a frame without areas
+  clears them, and viewers hide them 2 seconds after the last frame. They are live
+  only, newest-wins like every live stream: no Episode records them.
+- **Events.** Each event is an application event of `sh.wendy.campaign.<name>`
+  that names `campaign`, `rule`, `source_id`, `camera`, `band`, `max`, `mean`,
+  `unit`, `cells`, `box` (centred on `x`, `y`, as `VideoMarkers` boxes are, with
+  `width` and `height`, normalised 0 to 1), `frame_time`, and `correction` for a
+  corrected camera. It goes where application events go: the device's Events
+  journal, the application pre-roll, and `events.jsonl` of a recording Episode. A
+  `capture.triggers` entry `event: <name>` starts the campaign's recording, with
+  its pre-roll, and `notify: {on: event, event: <name>}` sends a notification
+  reading, for example, "thermal_alarm on /dev/video2: 63.1 °C area". A rule's
+  events reach only its own campaign.
+
+The rules run inside the agent, on every grid the camera's decoder makes, before
+it reads the next frame. They never read the live stream, so a slow viewer may
+skip markers, but it never costs an event. A rule is demand: while a deployed
+campaign has a rule on a camera's grid, the agent decodes that camera with no
+viewer connected, which keeps the camera and its video encoder running. A TC001
+makes about 25 grids a second.
+
+`campaign inspect` reports `rules_status` for each rule: `running` while it gets
+frames, `waiting_for_frames` while its camera is absent or cannot be decoded,
+`error` when this agent cannot run it, and `pending` until it starts, with the
+time of its last frame, how many events it raised, and its last event. Deployment
+refuses a campaign with rules on an agent without camera grids, such as Wendy
+Agent for Mac.
+
 ### Notifications
 
 | Field | Required | Description |
@@ -344,8 +438,10 @@ revision hashes when redeployed; the YAML `version` remains `1`.
 `episode_committed` is cloud-side intent carried in the committed manifest;
 it does not open a device-side notification connection. `detection` requires
 an inference block and sends an immediate notification when presence is detected.
-`event` also works for matching application events, independently of episode
-capture triggers. Immediate notifications use a bounded queue and retries;
+`event` also works for matching application events and rule events,
+independently of episode capture triggers; a rule event's notification carries
+its text, such as "thermal_alarm on /dev/video2: 63.1 °C area", as the
+notification's body. Immediate notifications use a bounded queue and retries;
 delivery failures appear in `inference_status.notification_error` and agent logs.
 For Cloud delivery, enroll the device and enable the campaign's notification
 grant in Cloud Apps. Deployment registers `campaign:<name>` but never grants
@@ -644,6 +740,8 @@ detections as boxes, labelled with the class and the score in percent. A frame w
 nothing detected clears the boxes. They are live whether or not an Episode is
 recording, and an Episode that captures `applications` records the same records.
 A record names the camera frame it describes in `source_id` and `sample_id`.
+A campaign's [rules](#rules) publish their areas on
+`agent/campaign/<campaign>/rules/<rule>/markers/<source>`.
 
 The agent also measures its cameras, so an app needs neither raw frames nor
 `admin` to read them, only `data-read` beside the `camera` entitlement for that
@@ -770,7 +868,8 @@ wendy data streams --json
 An app's recording streams (`apps/...`) are listed while the app runs, and the
 agent's own streams (`agent/...`) while their producer runs: a campaign's markers
 stream for a camera is listed while the campaign's inference streams that camera,
-and a camera's grid streams while the camera is present. A stream is `active` when
+a campaign rule's markers stream while the rule gets frames, and a camera's grid
+streams while the camera is present. A stream is `active` when
 it had a record in the last 10 seconds, and `idle` otherwise.
 
 The list comes from a catalog on the live stream itself, so it reaches any viewer

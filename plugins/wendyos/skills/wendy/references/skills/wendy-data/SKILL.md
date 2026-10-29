@@ -41,15 +41,17 @@ requested measurements; preserve returned IDs.
 | Device health | On Linux, `telemetry: true` captures uptime, 1/5/15-minute system load, and total/free RAM at 1 Hz. It does not supply arbitrary hardware measurements. |
 | Application data | Campaigns automatically include application records. Apps with `episode-write` can contribute events, predictions, images, custom bytes, and time series. |
 
-Temperature, vibration, current, production counts, or other measurements need
-a ROS publisher or an application stream. Naming a measurement in YAML does
-not add a sensor adapter. Use actual sample timestamps and declare their clock
+A TOPDON TC001's temperatures and a SensorLink camera's brightness are agent
+camera grids; campaign `rules` threshold them into areas, markers and events
+without an app. Other measurements, such as vibration, current, production
+counts, or other temperatures, need a ROS publisher or an application stream. Naming a
+measurement in YAML does not add a sensor adapter. Use actual sample timestamps and declare their clock
 and units; receipt time alone does not establish when a measurement occurred.
 
 ## Follow the requested workflow
 
-- For campaign YAML, one-off recording, deployment, inference, notifications,
-  and episode retrieval, read [campaigns.md](references/campaigns.md).
+- For campaign YAML, one-off recording, deployment, inference, grid rules,
+  notifications, and episode retrieval, read [campaigns.md](references/campaigns.md).
 - For application events, model input references, durable records, custom
   measurements, and `export-stream`, read [application-streams.md](references/application-streams.md).
 - If an app must be built or deployed, use the available `wendy-app-lifecycle`

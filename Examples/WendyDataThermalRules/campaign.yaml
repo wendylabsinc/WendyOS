@@ -1,0 +1,47 @@
+version: 1
+name: thermal-watch
+
+sources:
+  # The thermal camera, so a recording holds its video. Change /dev/video2 here
+  # and in the rule's input to your TC001's node (`wendy data streams` lists
+  # its grid).
+  - camera: /dev/video2
+
+rules:
+  # 40 to 50 °C is a yellow area, 50 °C and above a red one. Areas of fewer
+  # than 4 cells are ignored. Nothing here is thermal: the same steps read any
+  # wendy.data.v1.Grid in its own unit.
+  - name: hotspot-alarm
+    input: agent/camera/grid/v4l2:/dev/video2
+    steps:
+      - region: {x: 0, y: 0, width: 1, height: 1}
+      - bands:
+          - {name: warm, min: 40, max: 50, color: yellow}
+          - {name: hot,  min: 50,          color: red}
+      - areas: {min_cells: 4}
+    outputs:
+      # Live boxes on agent/campaign/thermal-watch/rules/hotspot-alarm/markers/v4l2:/dev/video2
+      markers: areas
+      events:
+        - {name: thermal_warning, when: area.band == warm, for: 3s}
+        # Raised after 2 s of red, cleared once everything is below 48 °C,
+        # and raised at most every 2 minutes.
+        - {name: thermal_alarm,   when: area.band == hot,  for: 2s, clear_below: 48, cooldown: 2m}
+
+capture:
+  # A thermal_alarm records 10 s before it and 30 s after it.
+  buffer: 10s
+  after_trigger: 30s
+  triggers:
+    - event: thermal_alarm
+
+upload:
+  when: manual
+export:
+  annotation: none
+
+notify:
+  # "thermal_alarm on /dev/video2: 63.1 °C area" through Wendy Cloud. Enable
+  # the campaign's notification grant in Cloud Apps before it can deliver.
+  on: event
+  event: thermal_alarm
