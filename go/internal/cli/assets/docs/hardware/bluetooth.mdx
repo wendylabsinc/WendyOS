@@ -37,6 +37,10 @@ when a faster connection is unavailable. Devices must be enrolled in the same
 organization and use a WendyOS image with full Wendy Net support. Bluetooth
 pairing is automatic; your apps need no Bluetooth entitlement for these links.
 
+Devices automatically avoid retransmitting certificate authorities they already
+have. Initial connections or connections after a certificate change may take
+longer. No manual certificate configuration is needed.
+
 ### Enable Bluetooth networking
 
 Run this for each participating device:

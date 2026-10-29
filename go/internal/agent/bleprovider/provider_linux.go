@@ -5,7 +5,6 @@ package bleprovider
 import (
 	"context"
 	"crypto/tls"
-	"crypto/x509"
 	"errors"
 	"fmt"
 	"net"
@@ -484,19 +483,14 @@ func (r *runtime) makeServerTLS() *tls.Config {
 		// the whole TLS flight. BLE uses classical X25519 key exchange while the
 		// enrolled mTLS certificate and signature verification remain unchanged.
 		CurvePreferences: []tls.CurveID{tls.X25519},
-		// Present only the leaf to a client that named our issuer set (see
-		// tls_issuers_linux.go). Without SNI, crypto/tls consults
-		// GetCertificate only when Certificates is empty.
-		GetCertificate: func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
-			return serverCertificate(r.cfg.Credentials, hello), nil
-		},
+
 		ClientAuth: tls.RequireAnyClientCert, NextProtos: []string{ALPN},
 		VerifyConnection: func(state tls.ConnectionState) error {
 			chain := make([][]byte, 0, len(state.PeerCertificates))
 			for _, cert := range state.PeerCertificates {
 				chain = append(chain, cert.Raw)
 			}
-			if state.NegotiatedProtocol == meshoperatorlink.RouterALPN {
+			if localmesh.ApplicationProtocol(state.NegotiatedProtocol) == meshoperatorlink.RouterALPN {
 				_, err := r.cfg.Credentials.VerifyPrimaryOperator(chain, time.Now())
 				return err
 			}
@@ -517,6 +511,7 @@ func (r *runtime) makeServerTLS() *tls.Config {
 	if _, ok := r.cfg.Node.(operatorStreamNode); ok && r.cfg.Credentials.SupportsPrimaryOperators() {
 		config.NextProtos = append(config.NextProtos, meshoperatorlink.RouterALPN)
 	}
+	r.cfg.Credentials.ConfigureTLSServer(config)
 	return config
 }
 
@@ -577,7 +572,11 @@ func (r *runtime) acceptLink(ctx context.Context, raw net.Conn) {
 					return nil, errors.New("BLE operator attachment capacity reached")
 				}
 			}
-			operatorConfig := r.serverTLS.Clone()
+			selectedConfig, err := r.serverTLS.GetConfigForClient(hello)
+			if err != nil {
+				return nil, err
+			}
+			operatorConfig := selectedConfig.Clone()
 			// Device ticket admission is deliberately separate from primary operators.
 			operatorConfig.SessionTicketsDisabled = true
 			operatorConfig.WrapSession, operatorConfig.UnwrapSession = nil, nil
@@ -590,14 +589,14 @@ func (r *runtime) acceptLink(ctx context.Context, raw net.Conn) {
 			}
 			roleConn.target.Store(&incomingConnectionTarget{conn: lease.TrackIncoming(raw)})
 		}
-		return r.serverTLS, nil
+		return r.serverTLS.GetConfigForClient(hello)
 	}
 	secure := tls.Server(measured, handshakeConfig)
 	meter.start()
 	wait, elapsed, err := r.tlsGate.run(ctx, meshTLSAdmissionWait, meshTLSHandshakeTimeout, secure.HandshakeContext)
 	measurement := meter.finish()
 	state := secure.ConnectionState()
-	if err == nil && state.NegotiatedProtocol == meshoperatorlink.RouterALPN && operatorSlot {
+	if err == nil && localmesh.ApplicationProtocol(state.NegotiatedProtocol) == meshoperatorlink.RouterALPN && operatorSlot {
 		authenticated = true
 		measurement.log(r.cfg.Logger, "inbound-operator", meshid.Device{}, state, true)
 		defer secure.Close()
@@ -607,7 +606,7 @@ func (r *runtime) acceptLink(ctx context.Context, raw net.Conn) {
 		return
 	}
 	var peer meshid.Device
-	if err == nil && state.NegotiatedProtocol == ALPN {
+	if err == nil && localmesh.ApplicationProtocol(state.NegotiatedProtocol) == ALPN {
 		chain := make([][]byte, 0, len(state.PeerCertificates))
 		for _, cert := range state.PeerCertificates {
 			chain = append(chain, cert.Raw)
@@ -616,8 +615,8 @@ func (r *runtime) acceptLink(ctx context.Context, raw net.Conn) {
 			peer = id.Device
 		}
 	}
-	measurement.log(r.cfg.Logger, "inbound", peer, state, err == nil && state.NegotiatedProtocol == ALPN && peer != (meshid.Device{}))
-	if err != nil || state.NegotiatedProtocol != ALPN || peer == (meshid.Device{}) {
+	measurement.log(r.cfg.Logger, "inbound", peer, state, err == nil && localmesh.ApplicationProtocol(state.NegotiatedProtocol) == ALPN && peer != (meshid.Device{}))
+	if err != nil || localmesh.ApplicationProtocol(state.NegotiatedProtocol) != ALPN || peer == (meshid.Device{}) {
 		r.cfg.Logger.Warn("BLE inbound TLS rejected", zap.Duration("admission_wait", wait), zap.Duration("handshake_time", elapsed), zap.Error(err))
 		_ = secure.Close()
 		return
@@ -1000,8 +999,8 @@ func (r *runtime) dialLink(ctx context.Context, peer candidate) (skipped bool) {
 	elapsed, err := r.handshakeOutbound(ctx, secure)
 	wait := slotWait
 	measurement := meter.finish()
-	measurement.log(r.cfg.Logger, "outbound", *authenticated, secure.ConnectionState(), err == nil && secure.ConnectionState().NegotiatedProtocol == ALPN)
-	if err != nil || secure.ConnectionState().NegotiatedProtocol != ALPN {
+	measurement.log(r.cfg.Logger, "outbound", *authenticated, secure.ConnectionState(), err == nil && localmesh.ApplicationProtocol(secure.ConnectionState().NegotiatedProtocol) == ALPN)
+	if err != nil || localmesh.ApplicationProtocol(secure.ConnectionState().NegotiatedProtocol) != ALPN {
 		r.mu.Lock()
 		delete(r.known, peer.key()) // Address reuse or reenrollment requires fresh discovery authentication.
 		r.mu.Unlock()
@@ -1118,7 +1117,6 @@ func (r *runtime) clientTLS(peer candidate) (*tls.Config, *meshid.Device, error)
 			return nil, nil, err
 		}
 	}
-	var server []*x509.Certificate
 	previous := config.VerifyConnection
 	config.VerifyConnection = func(state tls.ConnectionState) error {
 		if previous != nil {
@@ -1141,7 +1139,7 @@ func (r *runtime) clientTLS(peer candidate) (*tls.Config, *meshid.Device, error)
 		if deviceHint(device.UUID()) != peer.hint {
 			return errors.New("BLE certificate does not match discovery hint")
 		}
-		if firstContact != nil && state.NegotiatedProtocol == ALPN {
+		if firstContact != nil && localmesh.ApplicationProtocol(state.NegotiatedProtocol) == ALPN {
 			// The verified principal, not the radio address or truncated hint,
 			// selects the cache scope and canonical key for post-handshake tickets.
 			// Cache setup failure only loses this optimization; TLS remains fully
@@ -1151,16 +1149,8 @@ func (r *runtime) clientTLS(peer candidate) (*tls.Config, *meshid.Device, error)
 			}
 		}
 		authenticated = device
-		server = state.PeerCertificates
 		return nil
 	}
-	if digest := r.cfg.Credentials.IssuerDigest(); digest != "" {
-		config.NextProtos = []string{ALPN, issuerHintPrefix + digest}
-		// crypto/tls runs VerifyConnection on the server's certificate
-		// before it calls GetClientCertificate.
-		config.GetClientCertificate = func(*tls.CertificateRequestInfo) (*tls.Certificate, error) {
-			return clientCertificate(r.cfg.Credentials, server), nil
-		}
-	}
+	r.cfg.Credentials.ConfigureTLSClient(config, ALPN)
 	return config, &authenticated, nil
 }
