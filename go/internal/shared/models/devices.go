@@ -262,9 +262,9 @@ func (d *DiscoveredDevice) ConnectionTypes() string {
 	var types []string
 	if d.Mesh != nil {
 		if d.Mesh.Platform == "Lite" {
-			types = append(types, "Mesh (Lite)")
+			types = append(types, "WendyNet (Lite)")
 		} else {
-			types = append(types, "Mesh")
+			types = append(types, "WendyNet")
 		}
 	}
 	if d.LAN != nil {
@@ -279,6 +279,9 @@ func (d *DiscoveredDevice) ConnectionTypes() string {
 	}
 	for _, ext := range d.Externals {
 		if ct := ext.ConnectionType(); ct != "" {
+			if ct == "Mesh" {
+				ct = "WendyNet"
+			}
 			if ext.ProviderKey == "wendy-lite" {
 				types = append(types, ct+" (Lite)")
 			} else {
@@ -307,7 +310,7 @@ func (d *DiscoveredDevice) Address() string {
 		}
 	}
 	if d.Mesh != nil {
-		return d.Mesh.Selector
+		return "-"
 	}
 	if d.Bluetooth != nil {
 		return d.Bluetooth.Address

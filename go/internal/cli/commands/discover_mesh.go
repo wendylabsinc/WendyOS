@@ -36,12 +36,18 @@ func meshCollection(snapshot sessionbroker.OperatorDirectory) ([]models.MeshDevi
 		}
 		return nil, state
 	}
+	names := make(map[string]string, len(snapshot.Devices))
+	for _, d := range snapshot.Devices {
+		if d.Expires > time.Now().UnixMilli() {
+			names[d.Principal] = discovery.SanitiseDisplayName(d.Name)
+		}
+	}
 	rows := make([]models.MeshDevice, 0, len(snapshot.Devices))
 	for _, d := range snapshot.Devices {
 		if d.Expires <= time.Now().UnixMilli() {
 			continue
 		}
-		rows = append(rows, models.MeshDevice{Selector: d.Selector, Principal: d.Principal, Tenant: d.Tenant, Device: d.Device, Name: d.Name, Platform: d.Platform, Transport: d.Transport, Address: d.Address, Caps: append([]string(nil), d.Caps...), Expires: d.Expires, Revision: d.Revision, Metric: d.Metric, NextHop: d.NextHop})
+		rows = append(rows, models.MeshDevice{Selector: d.Selector, Principal: d.Principal, Tenant: d.Tenant, Device: d.Device, Name: d.Name, Platform: d.Platform, Transport: d.Transport, Address: d.Address, Caps: append([]string(nil), d.Caps...), Expires: d.Expires, Revision: d.Revision, Metric: d.Metric, NextHop: d.NextHop, NextHopName: names[d.NextHop]})
 	}
 	return rows, state
 }
@@ -85,7 +91,7 @@ func meshPickerItem(mesh *models.MeshDevice) tui.PickerItem {
 		name = mesh.Device
 	}
 	d := &models.DiscoveredDevice{DisplayName: name, PrincipalURI: mesh.Principal, TenantUUID: mesh.Tenant, Mesh: mesh}
-	return tui.PickerItem{Name: discovery.SanitiseDisplayName(name), IdentityKey: mesh.Principal, DedupKey: mesh.Principal, SortKey: deviceSortKey(name, ""), Type: d.ConnectionTypes(), Address: mesh.Selector, Hint: meshPathHint(mesh), Value: &pickerEntry{mergedDevice: d}}
+	return tui.PickerItem{Name: discovery.SanitiseDisplayName(name), IdentityKey: mesh.Principal, DedupKey: mesh.Principal, SortKey: deviceSortKey(name, ""), Type: d.ConnectionTypes(), Address: "-", Hint: meshPathHint(mesh), Value: &pickerEntry{mergedDevice: d}}
 }
 
 // Strip only the old mesh path; unrelated physical/provider rows remain owned
@@ -171,5 +177,8 @@ func meshPathHint(mesh *models.MeshDevice) string {
 	if mesh.NextHop == "" {
 		return "Attached Wendy Net router"
 	}
-	return fmt.Sprintf("Wendy Net via %s; route metric %d", mesh.NextHop, mesh.Metric)
+	if mesh.NextHopName == "" {
+		return fmt.Sprintf("Wendy Net; route metric %d", mesh.Metric)
+	}
+	return fmt.Sprintf("Wendy Net via %s; route metric %d", mesh.NextHopName, mesh.Metric)
 }
