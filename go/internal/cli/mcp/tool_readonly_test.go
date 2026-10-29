@@ -22,14 +22,17 @@ import (
 // Two listed tools have effects that are not changes to the user's things:
 // wendy_tools changes which tools this session advertises (in memory only), and
 // the ros2_* tools' host scope may pull an inspector image onto the device.
+// job_inspect and compute_status run a fixed read-only script through
+// HostShell, a write RPC to the device guard, so they fail in those turns.
 //
 // The list covers built-in tools only. A tool a device app provides
 // (<app>__<tool>) carries the app's own hint, which nothing here vouches for,
 // so chat refuses those in turns a watch event starts.
 var readOnlyTools = []string{
 	"app_inspect", "bluetooth_scan", "camera_controls", "camera_list", "cloud_discover", "cloud_ping",
-	"cloud_tunnel_list", "container_list", "container_stats", "device_info", "device_list", "device_os_logs",
-	"hardware_capabilities", "os_install_plan", "os_install_status", "os_install_verify", "os_list_drives",
+	"cloud_tunnel_list", "compute_status", "container_list", "container_stats", "device_info", "device_list",
+	"device_os_logs", "hardware_capabilities", "job_inspect", "os_install_plan", "os_install_status",
+	"os_install_verify", "os_list_drives",
 	"os_update_status", "project_validate", "provisioning_status", "ros2_lidar_summary", "ros2_topic_hz",
 	"ros2_topic_info", "ros2_topic_sample", "ros2_topics", "simulator_list", "telemetry_logs", "telemetry_metrics",
 	"telemetry_traces", "watch_events", "watch_list", "watch_sources", "wendy_status", "wendy_tools",
