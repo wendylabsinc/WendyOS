@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"runtime"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -31,7 +32,7 @@ type cliUpdaterDeps struct {
 
 func defaultCLIUpdaterDeps() cliUpdaterDeps {
 	return cliUpdaterDeps{
-		check: checkLatestReleaseContext, detect: cliupdate.Detect, apply: cliupdate.Apply,
+		check: checkLatestReleaseContext, detect: pluginAwareDetect(cliupdate.Detect), apply: cliupdate.Apply,
 		interactive: isInteractiveTerminal,
 		isCI:        env.IsCI,
 		initialize: func(cmd *cobra.Command) {
@@ -48,6 +49,21 @@ func defaultCLIUpdaterDeps() cliUpdaterDeps {
 			return tui.ConfirmDefaultYes("Update now?", tea.WithInput(cmd.InOrStdin()), tea.WithOutput(cmd.ErrOrStderr()))
 		},
 		track: trackCLIUpdate, record: recordVerifiedCLIUpdate,
+	}
+}
+
+// pluginAwareDetect wraps detect so that a CLI the Wendy plugin's launcher
+// installed gets the plugin's advice. No updater that cliupdate.Detect
+// recognizes owns that copy, so Detect would call it a direct install.
+func pluginAwareDetect(detect func(context.Context) (cliupdate.Plan, error)) func(context.Context) (cliupdate.Plan, error) {
+	return func(ctx context.Context) (cliupdate.Plan, error) {
+		p, err := detect(ctx)
+		if err != nil || !pluginManagedCLI() {
+			return p, err
+		}
+		p.Method, p.Supported, p.Commands = "plugin", false, nil
+		p.Guidance = cliupdate.PluginAdvice(runtime.GOOS)
+		return p, nil
 	}
 }
 

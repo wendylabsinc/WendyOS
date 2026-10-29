@@ -182,6 +182,7 @@ func ros2Error(err error) *mcpgo.CallToolResult {
 	} else if status.Code(err) == codes.DeadlineExceeded || err == context.DeadlineExceeded {
 		code = errCodeTimeout
 	}
+	message = rewriteCLIHints(message)
 	// Error details can contain unbounded device command output.
 	if len(message) > 400 {
 		// Python tracebacks put the missing message/typesupport cause at the end.

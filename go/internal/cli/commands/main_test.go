@@ -52,6 +52,9 @@ func TestMain(m *testing.M) {
 	// have it copied into deviceFlag by every test that executes the root
 	// command, and leak from there into later tests.
 	os.Unsetenv("WENDY_DEVICE")
+	// A shell inside a plugin-launched Claude/Codex session exports
+	// WENDY_PLUGIN, which switches the CLI into plugin-managed behavior.
+	os.Unsetenv("WENDY_PLUGIN")
 	// The fake clouds these tests start are plaintext gRPC servers, so the
 	// package opts in to plaintext the same way a developer would against a
 	// local dev cloud. The TLS default itself is pinned in clouddefaults.
