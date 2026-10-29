@@ -547,6 +547,13 @@ type inspectionManifest struct {
 		CampaignName string `json:"campaign_name"`
 		Expression   string `json:"expression"`
 	} `json:"trigger"`
+	Extension struct {
+		Part             int    `json:"part"`
+		PreviousEpisode  string `json:"previous_episode"`
+		NextEpisode      string `json:"next_episode"`
+		MaxDurationNanos int64  `json:"max_duration_nanos"`
+		EndReason        string `json:"end_reason"`
+	} `json:"extension"`
 	Upload struct {
 		State       string `json:"state"`
 		Destination string `json:"destination"`
@@ -596,6 +603,19 @@ func printInspection(cmd *cobra.Command, b []byte) error {
 			fmt.Fprintf(w, "; %s", m.Trigger.Expression)
 		}
 		fmt.Fprint(w, ")")
+	}
+	// capture.extend: which part of a recording this is, and its neighbours.
+	if e := m.Extension; e.Part > 0 {
+		fmt.Fprintf(w, "\nRecording part: %d (max_duration %s)", e.Part, time.Duration(e.MaxDurationNanos))
+		if e.EndReason != "" {
+			fmt.Fprintf(w, "; ended by %s", e.EndReason)
+		}
+		if e.PreviousEpisode != "" {
+			fmt.Fprintf(w, "\nContinues episode: %s", e.PreviousEpisode)
+		}
+		if e.NextEpisode != "" {
+			fmt.Fprintf(w, "\nContinued in episode: %s", e.NextEpisode)
+		}
 	}
 	fmt.Fprintf(w, "\nUpload: %s", m.Upload.State)
 	if m.Upload.Destination != "" {

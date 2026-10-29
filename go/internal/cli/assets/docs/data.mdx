@@ -153,6 +153,13 @@ continuous camera streams support pre-trigger history. Audio, ROS 2, and
 telemetry begin at the trigger; snapshot cameras do not keep a video pre-buffer.
 The manifest reports the history each source actually retained.
 
+To record for as long as the event lasts, add `capture.extend: true`. A
+matching event, a manual trigger, or a detection that has not cleared then
+keeps the episode recording, and it ends `after_trigger` after the last of
+them. `capture.max_duration`, one minute unless set, splits a longer event
+into linked episodes; see
+[recording for as long as the event lasts](/docs/advanced/clients/wendy-cli/commands/data#recording-for-as-long-as-the-event-lasts).
+
 See the [campaign YAML reference](/docs/advanced/clients/wendy-cli/commands/data#campaign-yaml-reference)
 for selectors, capture policies, and all fields.
 

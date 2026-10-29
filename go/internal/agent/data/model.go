@@ -418,6 +418,10 @@ type Manifest struct {
 	PreRollLost       uint64  `json:"pre_roll_lost"`
 	PreRollAccounting string  `json:"pre_roll_accounting"`
 	ModelIO           ModelIO `json:"model_io"`
+	// Extension is present only on an episode of a campaign with
+	// capture.extend: which part of the recording it is, the parts before
+	// and after it, and why it ended (see extend.go).
+	Extension EpisodeExtension `json:"extension,omitzero"`
 }
 
 type StartOptions struct {
@@ -451,6 +455,9 @@ type StartOptions struct {
 	Privacy           []PrivacyTransformation
 	Upload            WorkflowState
 	Labeling          WorkflowState
+	// Extension is copied into the manifest of an episode of a campaign with
+	// capture.extend; zero for every other episode.
+	Extension EpisodeExtension
 }
 
 type EpisodeInfo struct {
