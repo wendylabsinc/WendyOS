@@ -1,8 +1,8 @@
 # Lite management through an operator attachment
 
 A `mesh://<tenant UUID>/<device UUID>` target is described by the existing
-operator broker. Its authenticated adjacent WendyOS router must report a fresh
-verified manifest and a live authorized route with the exact same principal,
+operator broker. The broker's own routing node must hold a fresh verified
+manifest and a live authorized route with the exact same principal,
 IPv6 prefix, origin router, sequence and signed expiry. `platform=Lite` plus
 `agentTransport=mtls-v1` selects native WendyCom at the signed `agentPort`.
 WendyOS targets retain their gRPC adapter. No Cloud inventory, LAN address, or
@@ -44,15 +44,12 @@ selection metadata, including unknown optional values; `caps=sensors` describes
 the native WendyCom subfeature, not a second mesh service or a permission grant.
 Actual sensor definitions still come from the authenticated SensorLink manifest.
 Agent-only registry/deploy/MCP commands continue to report that they require a
-WendyOS agent. USB installation/enrollment remains physical. Direct first-hop
-operator attachment to Lite remains separate work. Mesh Nearby uses the retained
+WendyOS agent. USB installation/enrollment remains physical. The CLI currently
+requires a WendyOS first hop; direct first-hop attachment to Lite is not supported. Mesh Nearby uses the retained
 broker directory and route-filtered signed capabilities.
 
-Positive host checks cover fresh Lite descriptions, a signed port change,
-route disappearance/return, one real device/operator TLS connection (including
-Lite-CA fallback and persisted pin) carrying WendyCom handshake/Ping/device info,
-setup cancellation, finite slow-reader pressure, request half-close, blocked
-read close, and pending-dial cancellation. Existing WendyOS remote resolution
-and explicit/default command paths remain covered. These are host fixtures;
-this change has not yet been tested on lab hardware. Windows broker IPC remains
-explicitly unsupported, as before.
+The local broker supports Unix sockets on macOS/Linux and per-user named pipes
+on Windows. Host BLE support is available on macOS and Linux; Windows TCP code
+builds, but physical Windows device interoperability is not established.
+For user commands, see the
+[CLI mesh guide](../assets/docs/development/local-mesh-radio.md).

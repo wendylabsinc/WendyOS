@@ -34,7 +34,7 @@ func TestMeshNearbyJSONOnceContinuousAndWithdrawal(t *testing.T) {
 		t.Fatal(collection, err)
 	}
 	item := discoverTableItems(collection)[0]
-	if item.defaultDevice != snapshot.Devices[0].Selector || !strings.Contains(item.picker.Type, "Mesh") {
+	if item.defaultDevice != snapshot.Devices[0].Selector || !strings.Contains(item.picker.Type, "WendyNet") || item.picker.Address != "-" {
 		t.Fatal(item)
 	}
 	model := newDiscoverModel(context.Background(), opts, false)
@@ -140,5 +140,29 @@ func TestMeshNearbyPickerJoinsIdentityLearnedAfterPhysicalSighting(t *testing.T)
 	}})
 	if count != 1 {
 		t.Fatalf("device acquired %d picker rows after identity enrichment; want 1", count)
+	}
+}
+
+func TestMeshNearbyDisplayUsesNextHopName(t *testing.T) {
+	snapshot := nearbyMeshFixture()
+	hop := snapshot.Devices[0]
+	hop.Principal = "spiffe://wendy.sh/tenant/" + hop.Tenant + "/device/44444444-4444-4444-8444-444444444444"
+	hop.Name = "Lab Thor"
+	snapshot.Devices[0].NextHop = hop.Principal
+	snapshot.Devices = append(snapshot.Devices, hop)
+	rows, _ := meshCollection(snapshot)
+	for _, item := range []tui.PickerItem{meshPickerItem(&rows[0]), discoverTableItems(&models.DevicesCollection{MeshDevices: rows})[0].picker} {
+		if item.Address != "-" || !strings.Contains(item.Type, "WendyNet") || item.Hint != "Wendy Net via Lab Thor; route metric 8256" {
+			t.Fatalf("unexpected mesh display: %#v", item)
+		}
+	}
+	// An expired or missing name must not expose the principal as a label.
+	snapshot.Devices[1].Expires = time.Now().Add(-time.Second).UnixMilli()
+	rows, _ = meshCollection(snapshot)
+	if hint := meshPathHint(&rows[0]); hint != "Wendy Net; route metric 8256" {
+		t.Fatal(hint)
+	}
+	if meshPickerItem(&rows[0]).Value.(*pickerEntry).mergedDevice.Mesh.Selector != snapshot.Devices[0].Selector {
+		t.Fatal("display address changed the selectable target")
 	}
 }

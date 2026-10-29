@@ -142,7 +142,7 @@ func newNode(parent context.Context, dir string, credentials *Credentials, name 
 		return nil, err
 	}
 	now := time.Now()
-	derived, err := instanceRouterID()
+	derived, err := routerIDCandidate(credentials.Device)
 	if err != nil {
 		return nil, err
 	}
@@ -764,7 +764,7 @@ func (n *Node) verifyPeerCertificates(peer meshid.Device, certs []*x509.Certific
 	for i, cert := range certs {
 		chain[i] = cert.Raw
 	}
-	id, err := n.Credentials.Verify(chain, time.Now())
+	id, err := n.Credentials.VerifyTLS(chain, time.Now())
 	if err != nil {
 		return err
 	}

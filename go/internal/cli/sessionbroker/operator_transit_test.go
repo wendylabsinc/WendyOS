@@ -10,6 +10,7 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/tls"
+	"crypto/x509"
 	"io"
 	"net"
 	"path/filepath"
@@ -17,7 +18,7 @@ import (
 	"testing"
 	"time"
 
-	"crypto/x509"
+	"github.com/wendylabsinc/WendyOS/go/babel"
 	"github.com/wendylabsinc/wendy/go/internal/agent/localmesh"
 	"github.com/wendylabsinc/wendy/go/internal/cli/netmesh"
 	"github.com/wendylabsinc/wendy/go/internal/cli/netmesh/carriers"
@@ -76,7 +77,20 @@ func newBrokerTransitFixture(t *testing.T, parent context.Context, tenant meshid
 			t.Fatal(err)
 		}
 		f.networks[i] = network
-		node, err := localmesh.NewNodeWithNetwork(ctx, filepath.Join(stateDirectory, id, "node"), credentials, "transit fixture", 50052, network)
+		// These represent separate physical devices. On a permanent-NIC host,
+		// deriving all simulated Nodes from this runner's MAC gives them the
+		// same Babel ID and correctly makes each reject the others as itself.
+		// Seed independent durable identities through the normal state API.
+		nodeDirectory := filepath.Join(stateDirectory, id, "node")
+		routerID := babel.RouterIDFromRandom([6]byte{0x62, 0x72, 0x6f, 0x6b, 0x65, byte(i + 1)})
+		store, state, err := localmesh.OpenDeviceStateStore(filepath.Join(nodeDirectory, "routing-state.json"), device, routerID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := store.Save(state); err != nil {
+			t.Fatal(err)
+		}
+		node, err := localmesh.NewNodeWithNetwork(ctx, nodeDirectory, credentials, "transit fixture", 50052, network)
 		if err != nil {
 			network.Close()
 			t.Fatal(err)
@@ -122,7 +136,37 @@ func (f *brokerTransitFixture) source(ctx context.Context, emit func([]carriers.
 func (f *brokerTransitFixture) roundTrip(t *testing.T) {
 	t.Helper()
 	if f.connection == nil {
-		until := time.NewTimer(8 * time.Second)
+		// Assert the simulated remote routers have separate signed identities,
+		// rather than treating a local-ID collision as slow convergence.
+		seen := map[babel.RouterID]bool{}
+		for i, node := range f.nodes {
+			view := node.Snapshot()
+			found := false
+			for _, manifest := range view.Devices {
+				if manifest.Device != node.Credentials.Device.UUID() || manifest.Owner != nil {
+					continue
+				}
+				if manifest.Route == nil || !view.RouteAuthorizations[*manifest.Route] {
+					t.Fatal("simulated remote router lacks an authenticated own origin")
+				}
+				id := manifest.Route.RouterID
+				if id == 0 || seen[id] {
+					t.Fatalf("simulated remote routers share invalid Babel identity %x", id)
+				}
+				seen[id], found = true, true
+				t.Logf("simulated remote router %d signed identity %x", i, id)
+			}
+			if !found {
+				t.Fatalf("simulated remote router %d has no signed own origin", i)
+			}
+		}
+		// A new framed link can send its initial IHU before receiving a Hello,
+		// advertising Infinity until the next IHU at 2 * DefaultHelloInterval.
+		// Allow that full cycle plus one Hello interval for attachment, triggered
+		// route propagation and race-detector scheduling; do not race the 8s IHU.
+		const convergenceTimeout = 3 * babel.DefaultHelloInterval
+		started := time.Now()
+		until := time.NewTimer(convergenceTimeout)
 		defer until.Stop()
 		for {
 			ready := false
@@ -132,13 +176,18 @@ func (f *brokerTransitFixture) roundTrip(t *testing.T) {
 				}
 			}
 			if ready {
+				t.Logf("broker transit route ready after %s (budget %s)", time.Since(started), convergenceTimeout)
 				break
 			}
 			select {
 			case <-f.ctx.Done():
 				t.Fatal(f.ctx.Err())
 			case <-until.C:
-				t.Fatal("broker did not become the remote routers' transit path")
+				for i, node := range f.nodes {
+					snapshot := node.Snapshot()
+					t.Logf("remote node %d: self=%s peers=%d routes=%+v forwarding=%+v", i, snapshot.Self.Principal(), snapshot.Peers, snapshot.Routes, snapshot.ForwardingRoutes)
+				}
+				t.Fatalf("broker did not become the remote routers' transit path within %s", convergenceTimeout)
 			case <-time.After(20 * time.Millisecond):
 			}
 		}

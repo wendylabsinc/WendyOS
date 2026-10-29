@@ -102,7 +102,7 @@ func dialTLSWithDialer(ctx context.Context, credentials *localmesh.Credentials, 
 	if err != nil {
 		return nil, err
 	}
-	config.NextProtos = []string{TLSALPN}
+	credentials.ConfigureTLSClient(config, TLSALPN)
 	config.ClientSessionCache = nil
 	config.SessionTicketsDisabled = true
 	bounded, cancel := context.WithTimeout(ctx, TLSAppSessionSetupTimeout)
@@ -129,7 +129,7 @@ func dialTLSWithDialer(ctx context.Context, credentials *localmesh.Credentials, 
 		return nil, err
 	}
 	state := secure.ConnectionState()
-	if state.Version != tls.VersionTLS13 || state.DidResume || state.NegotiatedProtocol != TLSALPN {
+	if state.Version != tls.VersionTLS13 || state.DidResume || localmesh.ApplicationProtocol(state.NegotiatedProtocol) != TLSALPN {
 		return nil, errors.New("invalid TLS app protocol")
 	}
 	expires, err := verifiedSessionExpiry(credentials, state)
@@ -375,7 +375,7 @@ func (s *Server) ServeTLS(ctx context.Context, listener net.Listener, ready ...f
 				return
 			}
 			state := secure.ConnectionState()
-			if state.Version != tls.VersionTLS13 || state.DidResume || state.NegotiatedProtocol != TLSALPN {
+			if state.Version != tls.VersionTLS13 || state.DidResume || localmesh.ApplicationProtocol(state.NegotiatedProtocol) != TLSALPN {
 				return
 			}
 			expires, err := verifiedSessionExpiry(s.credentials, state)

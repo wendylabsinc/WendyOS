@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/wendylabsinc/wendy/go/internal/agent/netwire"
+	"github.com/wendylabsinc/wendy/go/internal/shared/meshalpn"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshoperator"
 )
@@ -40,7 +41,7 @@ func routerBegin(ctx context.Context, c *tls.Conn) (func(), error) {
 		return nil, errors.New("missing operator router TLS")
 	}
 	s := c.ConnectionState()
-	if !s.HandshakeComplete || s.Version != tls.VersionTLS13 || s.NegotiatedProtocol != RouterALPN {
+	if !s.HandshakeComplete || s.Version != tls.VersionTLS13 || meshalpn.Application(s.NegotiatedProtocol) != RouterALPN {
 		return nil, errors.New("full operator router requires its negotiated TLS role")
 	}
 	deadline := time.Now().Add(10 * time.Second)

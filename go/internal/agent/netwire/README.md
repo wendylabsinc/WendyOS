@@ -2,25 +2,30 @@
 
 This package supplies the canonical CBOR codec, bounded extensible-artifact
 decoder, SHA-256 text/byte conversion and semantic field-key lookup. It is a
-standalone foundation: it does not change existing transports or implement the
-manifest, carrier, Lite, or WASM integrations described below. Those layers must
-adopt this wire contract together.
+shared codec used by manifests, carriers and Lite integrations. It does not own
+network connections or application lifecycles; their callers apply this wire
+contract and the message-specific validation described below.
 
 `Marshal` emits canonical CBOR for ordinary Go values. Schema structs must declare
 their compact names with `cbor` tags, and dynamically built maps must call `Key`
 explicitly; the codec does not rewrite map keys or text values. `Unmarshal` permits
-unknown fields, while `UnmarshalSigned` rejects unknown struct fields.
+unknown fields, while `UnmarshalSigned` rejects unknown struct fields. Nil Go
+slices and maps encode as empty containers, including an empty byte string for
+`[]byte`, rather than CBOR null. Use `omitempty` for optional fields that should
+be absent.
 `UnmarshalExtensibleArtifact` also validates skipped metadata against the bounded
 artifact value grammar. Callers enforce their schema's required fields, types,
 null restrictions and version rules, and supply message-specific byte bounds.
+Extensible artifacts require nonempty input and a positive `maxBytes` limit.
 `RawMessage` embeds its existing encoding verbatim, including in a canonical
 envelope, so callers must retain and validate foreign signed bytes rather than
 expecting `Marshal` to normalize them.
 
-This prototype format is a breaking change. Update peers together: there is no
+This format is a breaking change. Update peers together: there is no
 JSON/base64 fallback, old service-catalogue protocol or compatibility decoder.
-Carrier ALPNs remain `wendy-local-mesh-ble/2`, `wendy-net-endpoint/2` and
-`wendy-net-router/3`. Application TLS is independent of carrier TLS.
+Device carriers use `wendy-local-mesh-ble/2` for reliable TLS streams and
+`wendy-net-router/3` for QUIC. The former `wendy-net-endpoint/2` leaf protocol is
+removed. Application TLS is independent of carrier TLS.
 
 The wire uses definite CBOR maps, arrays, text, raw byte strings, integers and
 booleans. Defined map fields have single-letter names; no positional tuples.
@@ -84,3 +89,8 @@ The local WASM publication/browse ABI still uses JSON. The host converts a guest
 definition once to compact binary intent and renders verified lookup metadata
 back to JSON. Cloud HTTP, management protobufs and host JSON diagnostics retain
 their existing formats; none is a mesh wire fallback.
+
+`HashText` converts exactly 32 digest bytes to lowercase hexadecimal; `HashBytes`
+accepts exactly 64 lowercase hex characters and returns those 32 bytes. Both
+return an error for other lengths, and `HashBytes` also rejects invalid or
+uppercase hexadecimal. These helpers convert identifiers; they do not hash input.

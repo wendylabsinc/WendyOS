@@ -127,14 +127,14 @@ func (s *leaseServer) Close() error {
 }
 
 func controlPeer(creds *localmesh.Credentials, state tls.ConnectionState) (localmesh.Identity, error) {
-	if state.Version != tls.VersionTLS13 || state.NegotiatedProtocol != leaseControlALPN {
+	if state.Version != tls.VersionTLS13 || localmesh.ApplicationProtocol(state.NegotiatedProtocol) != leaseControlALPN {
 		return localmesh.Identity{}, errors.New("invalid gateway control TLS protocol")
 	}
 	chain := make([][]byte, len(state.PeerCertificates))
 	for i, cert := range state.PeerCertificates {
 		chain[i] = cert.Raw
 	}
-	peer, err := creds.Verify(chain, time.Now())
+	peer, err := creds.VerifyTLS(chain, time.Now())
 	if err != nil {
 		return localmesh.Identity{}, err
 	}
@@ -145,13 +145,15 @@ func controlPeer(creds *localmesh.Credentials, state tls.ConnectionState) (local
 }
 
 func controlTLS(creds *localmesh.Credentials) *tls.Config {
-	return &tls.Config{
+	config := &tls.Config{
 		MinVersion: tls.VersionTLS13, MaxVersion: tls.VersionTLS13,
 		Certificates: []tls.Certificate{creds.Certificate},
 		ClientAuth:   tls.RequireAnyClientCert, SessionTicketsDisabled: true,
 		NextProtos:       []string{leaseControlALPN},
 		VerifyConnection: func(state tls.ConnectionState) error { _, err := controlPeer(creds, state); return err },
 	}
+	creds.ConfigureTLSServer(config)
+	return config
 }
 
 func controlExpiry(creds *localmesh.Credentials, peer localmesh.Identity) (time.Time, error) {
@@ -283,7 +285,7 @@ func negotiateGatewayLease(ctx context.Context, creds *localmesh.Credentials, ga
 	if err != nil {
 		return nil, lease, err
 	}
-	config.NextProtos = []string{leaseControlALPN}
+	creds.ConfigureTLSClient(config, leaseControlALPN)
 	secure := tls.Client(raw, config)
 	if err = secure.HandshakeContext(ctx); err != nil {
 		return nil, lease, err

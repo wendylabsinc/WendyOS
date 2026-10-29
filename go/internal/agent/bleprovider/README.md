@@ -130,22 +130,23 @@ provider aliases `localmesh.StreamALPN` so TLS and stream admission cannot drift
 
 TLS negotiates `wendy-local-mesh-ble/2`, followed by router hello version 1.
 `bleprovider.ALPN` aliases the common `localmesh.StreamALPN` constant. This
-version includes shared HAVE/WANT service and presence/router announcements;
-there is no full-record-push fallback. BLE advertisements keep their independent
-discovery format/version. Endpoint-only leaf ALPN and hello remain separate.
+version exchanges bounded HAVE/WANT inventories for certificates and signed
+router manifests, including their services. BLE advertisements keep their own
+discovery format. Lite devices use the same peer protocol; the special leaf
+protocol is removed.
 
 ## Certificate issuers
 
-Enrolled ML-DSA issuers are about 20 KB per direction, five times the 3.9 KB
-leaf. At the ~1 KB/s a busy CoC carries, two full chains (about 50 KB) need
-more than the 30-second inbound handshake budget. A client whose presented
-issuers are all its own trust anchors also offers the ALPN value
-`wendy-net-issuers/<digest>`, where the digest is the first 16 bytes of SHA-256
-over the sorted SHA-256 of each issuer, in unpadded base64url. Servers never
-select it. A server whose own issuers have the same digest presents only its
-leaf. The client then presents only its leaf if the server's leaf names the
-client's issuer. Every other pair exchanges full chains, so a peer without this
-value interoperates unchanged. Each side still verifies the received leaf
-against its own trust anchors: an issuer the receiver lacks fails verification,
-it is never skipped. The digest travels in the clear ClientHello and names only
-the issuer set; advertisements already carry the tenant service UUID.
+Large certificate chains can dominate connection setup on a slow BLE link.
+Peers [negotiate individual known CA certificates](../../shared/meshalpn/README.md)
+and transmit only the leaf and any missing intermediates. This works with common
+ancestors, different issuing authorities and retained CA cache entries. Every
+connection still verifies its chain against the original trust anchors and
+checks identity, tenant and validity.
+
+The availability fingerprints are binary ALPN protocol variants. A selected
+root-first prefix acknowledges which client CAs the server possesses; auxiliary
+inventories advertise other cached CAs. Each handshake retains immutable copies
+or loans of the material it advertised until verification finishes. A cache miss
+uses a normal certificate exchange; it never skips validation. Session tickets
+also fall back to a full handshake when an omitted CA is no longer available.
