@@ -520,7 +520,18 @@ func (m *Manager) Start(opts StartOptions) (Manifest, error) {
 	if err := os.Mkdir(dir, 0o750); err != nil {
 		return Manifest{}, err
 	}
-	selected, err := selectSources(discovered, opts.Sources, opts.ExcludeSources)
+	// An old-style microphone ID still selects its microphone, with a warning
+	// in the agent log; the episode records the stable ID it resolved to. See
+	// resolveSourceAliases.
+	include, includeNotes := resolveSourceAliases(discovered, opts.Sources)
+	exclude, excludeNotes := resolveSourceAliases(discovered, opts.ExcludeSources)
+	calibrations, calibrationNotes := resolveCalibrationAliases(discovered, opts.Calibrations)
+	for _, notes := range [][]string{includeNotes, excludeNotes, calibrationNotes} {
+		for _, note := range notes {
+			m.warnf("%s", note)
+		}
+	}
+	selected, err := selectSources(discovered, include, exclude)
 	if err != nil {
 		_ = os.Remove(dir)
 		return Manifest{}, err
@@ -579,7 +590,7 @@ func (m *Manager) Start(opts StartOptions) (Manifest, error) {
 	for _, s := range opts.UnresolvedSources {
 		manifest.Sources = append(manifest.Sources, SourceStats{Source: s, DropAccounting: DropAccountingSourceAbsent})
 	}
-	for source, contents := range opts.Calibrations {
+	for source, contents := range calibrations {
 		name := safeName(source) + ".calibration"
 		p := filepath.Join(dir, name)
 		if err := os.WriteFile(p, contents, 0o640); err != nil {
@@ -590,7 +601,7 @@ func (m *Manager) Start(opts StartOptions) (Manifest, error) {
 		manifest.Calibrations = append(manifest.Calibrations, Calibration{Source: source, Revision: opts.CalibrationRevisions[source], Path: name, SHA256: hex.EncodeToString(h[:])})
 	}
 	for source, revision := range opts.CalibrationRevisions {
-		if _, attached := opts.Calibrations[source]; !attached {
+		if _, attached := calibrations[source]; !attached {
 			manifest.Calibrations = append(manifest.Calibrations, Calibration{Source: source, Revision: revision})
 		}
 	}
@@ -2022,6 +2033,15 @@ func (m *Manager) recoverPartial(dir string) error {
 	return os.Rename(dir, strings.TrimSuffix(dir, ".partial"))
 }
 
+// RecordedByDefault reports whether an episode started with no source list
+// records s: `wendy data record` without --source records every source this
+// accepts and --exclude-source does not name. It is the rule selectSources
+// applies, exported so `wendy data sources` marks the same sources it would
+// record rather than restating the rule and drifting from it.
+func RecordedByDefault(s Source) bool {
+	return s.Healthy
+}
+
 func selectSources(all []Source, include, exclude []string) ([]Source, error) {
 	ex := map[string]bool{}
 	for _, id := range exclude {
@@ -2033,7 +2053,7 @@ func selectSources(all []Source, include, exclude []string) ([]Source, error) {
 	}
 	var out []Source
 	for _, s := range all {
-		if ex[s.ID] || (!s.Healthy && len(include) == 0) {
+		if ex[s.ID] || (len(include) == 0 && !RecordedByDefault(s)) {
 			continue
 		}
 		if len(include) == 0 || inc[s.ID] {
@@ -2042,18 +2062,30 @@ func selectSources(all []Source, include, exclude []string) ([]Source, error) {
 		}
 	}
 	if len(inc) > 0 {
-		var ids []string
+		var ids, hints []string
 		for id := range inc {
 			ids = append(ids, id)
 		}
 		sort.Strings(ids)
-		return nil, fmt.Errorf("unknown or unhealthy source(s): %s", strings.Join(ids, ", "))
+		for _, id := range ids {
+			if IsLegacyAudioSourceID(id) {
+				hints = append(hints, legacyAudioIDHint(id))
+			}
+		}
+		message := fmt.Sprintf("unknown or unhealthy source(s): %s", strings.Join(ids, ", "))
+		if len(hints) > 0 {
+			message += " (" + strings.Join(hints, "; ") + ")"
+		}
+		return nil, errors.New(message)
 	}
 	return out, nil
 }
 
 func DiscoverSources() []Source {
-	return []Source{{ID: "applications", Kind: "application", ClockDomain: "CLOCK_BOOTTIME", Healthy: true}, {ID: "telemetry", Kind: "telemetry", ClockDomain: "CLOCK_BOOTTIME", Healthy: true}}
+	return []Source{
+		{ID: "applications", Kind: "application", ClockDomain: "CLOCK_BOOTTIME", Healthy: true, Name: "Application records"},
+		{ID: "telemetry", Kind: "telemetry", ClockDomain: "CLOCK_BOOTTIME", Healthy: true, Name: "Device telemetry"},
+	}
 }
 
 func safeName(s string) string {

@@ -261,7 +261,18 @@ func (s *DataService) cameraSourcesFor(campaign data.Campaign) []data.Source {
 func (s *DataService) Sources(ctx context.Context, _ *agentpbv2.DataSourcesRequest) (*agentpbv2.DataSourcesResponse, error) {
 	r := &agentpbv2.DataSourcesResponse{}
 	for _, source := range s.manager.Sources(ctx) {
-		r.Sources = append(r.Sources, &agentpbv2.DataSource{Id: source.ID, Kind: source.Kind, ClockDomain: source.ClockDomain, Healthy: source.Healthy, Detail: source.Detail})
+		// Every source carries a name, so a client can tell this agent from one
+		// that predates the field by its absence alone; an adapter that has
+		// nothing better is named by its ID.
+		name := source.Name
+		if name == "" {
+			name = source.ID
+		}
+		reason := ""
+		if !source.Healthy {
+			reason = source.UnusableReason
+		}
+		r.Sources = append(r.Sources, &agentpbv2.DataSource{Id: source.ID, Kind: source.Kind, ClockDomain: source.ClockDomain, Healthy: source.Healthy, Detail: source.Detail, Name: name, UnusableReason: reason})
 	}
 	return r, nil
 }
