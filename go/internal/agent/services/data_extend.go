@@ -433,6 +433,16 @@ func (s *DataService) armHandover(r *extendedRecording) {
 	}
 	arming.Disarm(campaign.Name)
 	arming.Arm(campaign.Name, extendHandoverOverlap, cameras)
+	// A stop can land while the cameras resolve: releaseHandover then ran
+	// before this Arm and found nothing to release. Release the ring here,
+	// and put back the campaign's own pre-roll, which this Arm replaced.
+	r.mu.Lock()
+	released := r.ended || !r.handover
+	r.mu.Unlock()
+	if released {
+		arming.Disarm(campaign.Name)
+		go s.rearmByName(campaign.Name)
+	}
 }
 
 // releaseHandover disarms a handover ring r armed and no part used, so a

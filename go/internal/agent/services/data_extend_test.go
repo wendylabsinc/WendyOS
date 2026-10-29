@@ -5,6 +5,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -447,5 +448,65 @@ export: {annotation: cvat}
 				t.Fatalf("after the recording the campaign has a %s ring armed, want its %s buffer", armed, buffer)
 			}
 		})
+	}
+}
+
+// slowDiscoverCamera is a handoverTestCamera whose source discovery takes a
+// while once slow is set, the way adapter discovery can on a device.
+type slowDiscoverCamera struct {
+	handoverTestCamera
+	slow atomic.Bool
+}
+
+func (c *slowDiscoverCamera) Discover(ctx context.Context) []data.Source {
+	if c.slow.Load() {
+		time.Sleep(300 * time.Millisecond)
+	}
+	return c.handoverTestCamera.Discover(ctx)
+}
+
+// A stop that lands while the handover ring's cameras are still resolving
+// must not leave the ring armed after the recording ended. With no buffer of
+// its own nothing re-arms over it, so the camera stayed subscribed.
+func TestStopWhileTheHandoverRingArmsLeavesNoRing(t *testing.T) {
+	manager, err := data.NewManager(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := NewDataService(manager)
+	camera := &slowDiscoverCamera{handoverTestCamera: handoverTestCamera{armed: map[string]time.Duration{}}}
+	service.addAdapter(camera)
+	service.armingAdapter = camera
+	// max_duration is under extendHandoverLead, so the handover ring arms as
+	// soon as the recording starts.
+	yaml := []byte(`version: 1
+name: fire-watch
+sources:
+  - camera: front
+capture:
+  buffer: 0s
+  drain: 0s
+  after_trigger: 500ms
+  extend: true
+  max_duration: 5s
+  triggers:
+    - event: fire
+upload: {when: wifi}
+export: {annotation: cvat}
+`)
+	if _, err := service.CampaignDeploy(context.Background(), &agentpbv2.DataCampaignDeployRequest{CampaignYaml: yaml}); err != nil {
+		t.Fatal(err)
+	}
+	camera.slow.Store(true)
+	if _, err := service.CampaignTrigger(context.Background(), &agentpbv2.DataCampaignTriggerRequest{Name: "fire-watch"}); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(50 * time.Millisecond)
+	if _, err := service.Stop(context.Background(), &agentpbv2.DataStopRequest{}); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(time.Second)
+	if armed, _ := camera.state("fire-watch"); armed != 0 {
+		t.Fatalf("a %s ring is still armed after the recording was stopped", armed)
 	}
 }
