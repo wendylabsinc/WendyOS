@@ -468,6 +468,41 @@ func TestClockRecoveryNamesASavedProofAndItsRemedy(t *testing.T) {
 	}
 }
 
+// Ctrl-C during the picker's clock recovery ends the command. Before, the
+// cancelled wait was not a refusal, so the row's Bluetooth half was handed
+// back and the cancelled command went on to a BLE connect.
+func TestPickedDeviceCancelledDuringClockRecoveryDoesNotFallBackToBluetooth(t *testing.T) {
+	isolateConnectionRecovery(t)
+	stubNonInteractive(t)
+	lan := &models.LANDevice{
+		DisplayName: "Mesh 1",
+		Hostname:    "wendyos-mesh-1.local",
+		IPAddress:   "10.0.0.9",
+		Port:        50051,
+		IsMTLS:      true,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	broadcastTimeFn = func(context.Context) error { cancel(); return nil }
+	origLadder := dialAgentLadderFn
+	dialAgentLadderFn = func(context.Context, dialTarget) (*grpcclient.AgentConnection, error, error) {
+		return nil, nil, newTLSHandshakeRejectedError(errors.New("remote error: tls: bad certificate"))
+	}
+	t.Cleanup(func() { dialAgentLadderFn = origLadder })
+
+	picked := &models.DiscoveredDevice{
+		DisplayName: lan.DisplayName,
+		LAN:         lan,
+		Bluetooth:   &models.BluetoothDevice{DisplayName: "Mesh 1"},
+	}
+	var sel *SelectedDevice
+	var err error
+	captureStderr(t, func() { sel, err = connectPickedLANDevice(ctx, picked, preferredLANAddress(*lan), true) })
+	if sel != nil || !errors.Is(err, context.Canceled) {
+		t.Fatalf("sel=%+v err=%v, want no selection and context.Canceled", sel, err)
+	}
+}
+
 // Q4 of the mesh-1 report: after `wendy device unset-default` the picker chose
 // the device, and the rejection went straight to "TLS authentication failed"
 // without any time proof. A picked device now gets the same clock recovery, on
