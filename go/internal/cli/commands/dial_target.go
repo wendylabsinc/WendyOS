@@ -610,6 +610,10 @@ type noAuthenticatedEndpointError struct {
 	pinnedKey  string
 	candidates []string
 	certSeen   bool
+	// diagnostic is set only when the device answered without TLS — the
+	// unprovisioned case, which is told how to unpin. Unwrap exposes it, styled
+	// like the identity refusals it then reads as.
+	diagnostic *devicePinDiagnostic
 }
 
 func (e *noAuthenticatedEndpointError) Error() string { return e.msg }
@@ -617,6 +621,31 @@ func (e *noAuthenticatedEndpointError) Error() string { return e.msg }
 func (e *noAuthenticatedEndpointError) Is(target error) bool {
 	return target == errNoAuthenticatedEndpoint
 }
+
+// Unwrap yields the styled rendering of an unprovisioned refusal, and nothing
+// for the others. The CLI entry point restyles any error in the chain with a
+// CLIMessage, splicing it into the surrounding text, so a reachability refusal
+// carrying one would lose the plain rendering every other error gets: an
+// unstyled wrapper with the error marker mid-line, and no gRPC rewriting.
+func (e *noAuthenticatedEndpointError) Unwrap() error {
+	if e.diagnostic == nil {
+		return nil
+	}
+	return &unprovisionedRefusal{msg: e.msg, diagnostic: e.diagnostic}
+}
+
+// unprovisionedRefusal is the CLI rendering of a pinned device that answered
+// unprovisioned; see noAuthenticatedEndpointError.Unwrap.
+type unprovisionedRefusal struct {
+	msg        string
+	diagnostic *devicePinDiagnostic
+}
+
+func (e *unprovisionedRefusal) Error() string { return e.msg }
+
+// CLIMessage renders the refusal like the identity refusals, whose recovery
+// steps it shares.
+func (e *unprovisionedRefusal) CLIMessage() string { return e.diagnostic.message(true) }
 
 // blocksUnauthenticatedFallback reports whether err forbids reaching this device
 // over a transport that enforces nothing — today the picker's Bluetooth
@@ -638,9 +667,10 @@ func (e *noAuthenticatedEndpointError) Is(target error) bool {
 //     not answer still gets its fallback — which is what that fallback is for.
 //
 // Splitting the sentinels is about what the user is TOLD (an unreachable device
-// must not be told its identity is suspect, nor handed an `unpin` command) and
-// about letting a caller tell the two facts apart. It is not licence to route a
-// pinned device onto an unauthenticated transport.
+// must not be told its identity is suspect, nor handed an `unpin` command — only
+// one that answered without TLS is) and about letting a caller tell the two
+// facts apart. It is not licence to route a pinned device onto an
+// unauthenticated transport.
 func blocksUnauthenticatedFallback(err error) bool {
 	return errors.Is(err, errDeviceIdentityRefused) || errors.Is(err, errNoAuthenticatedEndpoint)
 }
@@ -664,9 +694,45 @@ func blocksUnauthenticatedFallback(err error) bool {
 // fact that made the original report take hours to diagnose.
 // certSeen must be true when ANY address rejected our certificate, so the
 // message never claims nothing was compared when something was.
+//
+// One outcome is not about reachability: an address that answered the TLS
+// probe in plaintext. That is what an agent reset to unprovisioned looks like —
+// plaintext port open, mTLS port closed — after `wendy device unenroll`, a
+// reflash or a factory reset (WDY-3974). Calling that "not the fix" sent users
+// away from the one command that resolves it, so that case gets the identity
+// refusals' guidance instead: unpin if the reset was intentional, otherwise keep
+// the pin and verify the device. It is diagnosis only, from evidence the
+// authenticated ladder already gathered — nothing is dialled in plaintext to
+// produce it, and nothing is unpinned.
 func pinnedHostNoAuthenticatedEndpointError(pinKey string, candidates []string, attempts []mtlsAttemptError, certSeen bool) *noAuthenticatedEndpointError {
+	failure := &noAuthenticatedEndpointError{
+		pinKey: pinKey, pinnedKey: pinKey,
+		candidates: append([]string(nil), candidates...), certSeen: certSeen,
+	}
+	tried := describeDialAttempts(attempts)
+	if plaintext := addrsAnsweredWithoutTLS(attempts); len(plaintext) > 0 && !certSeen {
+		details := fmt.Sprintf("Now:   %s answered without TLS, as an unprovisioned agent does; no mTLS endpoint answered\nTried: %s",
+			strings.Join(plaintext, ", "), strings.Join(tried, ", "))
+		// The answering address is not proof it is still this device's: a stale
+		// DNS or mDNS record can point at a neighbour's freshly flashed board
+		// while the device itself is silent. Keep the reachability caution when
+		// some address had no agent at all, so an unpin there is a choice made
+		// knowing that.
+		if silent := hostsWithoutAgent(candidates, plaintext); len(silent) > 0 {
+			details += fmt.Sprintf("\nNote:  no agent answered at %s. If %s is no longer this device's address (a stale DNS or mDNS record), the agent answering there is another machine: keep the pin.",
+				strings.Join(silent, ", "), strings.Join(hostsOf(plaintext), ", "))
+		}
+		diagnostic := devicePinDiagnostic{
+			hostname: pinKey,
+			heading:  fmt.Sprintf("Connection blocked: device %q is pinned to an enrolled identity but now answers unprovisioned.", pinKey),
+			details:  details,
+		}
+		failure.msg = diagnostic.message(false)
+		failure.diagnostic = &diagnostic
+		return failure
+	}
 	var where string
-	if tried := describeDialAttempts(attempts); len(tried) > 0 {
+	if len(tried) > 0 {
 		where = fmt.Sprintf("at any address it resolves to: %s (each tried on both its plaintext and mTLS port)",
 			strings.Join(tried, ", "))
 	} else {
@@ -683,45 +749,132 @@ func pinnedHostNoAuthenticatedEndpointError(pinKey string, candidates []string, 
 		diagnosis = "The pin is intact; one address did present a certificate that was refused, so check the certificate diagnostics above as well as reachability"
 	}
 	v4, v6 := addrFamilyCounts(candidates)
-	return &noAuthenticatedEndpointError{
-		pinKey: pinKey, pinnedKey: pinKey,
-		candidates: append([]string(nil), candidates...), certSeen: certSeen,
-		msg: fmt.Sprintf(
-			"device %q is pinned to an enrolled identity and no authenticated endpoint answered %s. "+
-				"%s — unpinning the device is not the fix. "+
-				"Tried %s; if the device is only reachable over one address family, check that its agent is listening and that stale DNS/mDNS records are not holding the CLI to an address the device no longer has.",
-			pinKey, where, diagnosis, describeAddrFamilies(v4, v6)),
-	}
+	failure.msg = fmt.Sprintf(
+		"device %q is pinned to an enrolled identity and no authenticated endpoint answered %s. "+
+			"%s — unpinning the device is not the fix. "+
+			"Tried %s; if the device is only reachable over one address family, check that its agent is listening and that stale DNS/mDNS records are not holding the CLI to an address the device no longer has.",
+		pinKey, where, diagnosis, describeAddrFamilies(v4, v6))
+	return failure
 }
 
-// describeDialAttempts renders one entry per ADDRESS tried, in the order tried,
-// carrying that address's last failure. Attempts arrive per address *and port*
-// (the ladder tries the plaintext port and the mTLS port), so they are folded by
-// host: six entries for three addresses would read as though the CLI had tried
-// twice as many places as it did, and the count would then disagree with the
-// family summary the user is being asked to act on.
+// notTLSEndpointSignal is how crypto/tls reports a peer that replied in
+// something other than TLS. On an agent's plaintext port that is the agent
+// itself, serving unprovisioned.
+const notTLSEndpointSignal = "first record does not look like a TLS handshake"
+
+// addrsAnsweredWithoutTLS lists, once each and in the order tried, the
+// endpoints whose TLS probe was answered in plaintext. Only the ladder's own
+// TLS probes are read: the plaintext rung is never offered a pinned host.
+func addrsAnsweredWithoutTLS(attempts []mtlsAttemptError) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, a := range attempts {
+		if a.err == nil || seen[a.addr] || !strings.Contains(a.err.Error(), notTLSEndpointSignal) {
+			continue
+		}
+		seen[a.addr] = true
+		out = append(out, a.addr)
+	}
+	return out
+}
+
+// hostsWithoutAgent lists, once each and in candidate order, the candidate
+// hosts that are not among answered's. In the unprovisioned branch nothing
+// presented a certificate, so these are the addresses where no agent answered
+// on either port.
+func hostsWithoutAgent(candidates, answered []string) []string {
+	answeredHost := map[string]bool{}
+	for _, host := range hostsOf(answered) {
+		answeredHost[host] = true
+	}
+	var out []string
+	for _, host := range hostsOf(candidates) {
+		if !answeredHost[host] {
+			out = append(out, host)
+		}
+	}
+	return out
+}
+
+// hostsOf is the host of each host:port in addrs, once each and in order.
+func hostsOf(addrs []string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, addr := range addrs {
+		host := hostOnly(addr)
+		if host == "" || seen[host] {
+			continue
+		}
+		seen[host] = true
+		out = append(out, host)
+	}
+	return out
+}
+
+// describeDialAttempts renders one entry per ADDRESS tried, in the order tried.
+// Attempts arrive per address *and port* (the ladder tries the plaintext port
+// and the mTLS port), so they are folded by host: six entries for three
+// addresses would read as though the CLI had tried twice as many places as it
+// did, and the count would then disagree with the family summary the user is
+// being asked to act on.
+//
+// Folding must not merge the ports' outcomes, though. When an address's ports
+// failed differently each port is listed with its own last failure; keeping
+// only the address's last failure made an unprovisioned device — plaintext
+// port answering, mTLS port refusing — read as "connection refused" on both
+// (WDY-3974).
 func describeDialAttempts(attempts []mtlsAttemptError) []string {
+	type portReason struct{ port, reason string }
 	var order []string
-	lastReason := map[string]string{}
+	reasons := map[string][]portReason{}
 	for _, a := range attempts {
 		host := hostOnly(a.addr)
 		if host == "" {
 			continue
 		}
-		if _, seen := lastReason[host]; !seen {
+		if _, seen := reasons[host]; !seen {
 			order = append(order, host)
+			reasons[host] = nil
 		}
-		if a.err != nil {
-			lastReason[host] = condenseDialReason(a.err.Error())
+		if a.err == nil {
+			continue
+		}
+		_, port, _ := net.SplitHostPort(a.addr)
+		reason := condenseDialReason(a.err.Error())
+		found := false
+		for i := range reasons[host] {
+			if reasons[host][i].port == port {
+				reasons[host][i].reason, found = reason, true
+			}
+		}
+		if !found {
+			reasons[host] = append(reasons[host], portReason{port: port, reason: reason})
 		}
 	}
 	out := make([]string, 0, len(order))
 	for _, host := range order {
-		if reason := lastReason[host]; reason != "" {
-			out = append(out, fmt.Sprintf("%s (%s)", host, reason))
-		} else {
+		byPort := reasons[host]
+		if len(byPort) == 0 {
 			out = append(out, host)
+			continue
 		}
+		same := true
+		for _, r := range byPort[1:] {
+			same = same && r.reason == byPort[0].reason
+		}
+		if same {
+			out = append(out, fmt.Sprintf("%s (%s)", host, byPort[0].reason))
+			continue
+		}
+		parts := make([]string, 0, len(byPort))
+		for _, r := range byPort {
+			if r.port == "" {
+				parts = append(parts, r.reason)
+			} else {
+				parts = append(parts, fmt.Sprintf("port %s: %s", r.port, r.reason))
+			}
+		}
+		out = append(out, fmt.Sprintf("%s (%s)", host, strings.Join(parts, "; ")))
 	}
 	return out
 }
@@ -749,6 +902,12 @@ func condenseDialReason(reason string) string {
 		if strings.Contains(flat, timeout) {
 			return "no response before the handshake budget elapsed"
 		}
+	}
+	// Quoted, crypto/tls's wording reads like a certificate problem. What it
+	// says is that something answered and does not speak TLS — the opposite of
+	// unreachable.
+	if strings.Contains(flat, notTLSEndpointSignal) {
+		return "answered without TLS"
 	}
 	// Ordered so a more specific phrase wins over one it contains.
 	for _, phrase := range []string{

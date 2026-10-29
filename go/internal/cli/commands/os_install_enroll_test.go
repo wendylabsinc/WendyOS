@@ -6,11 +6,15 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
+	cloudpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
 )
 
 // stubEnrollPrompts replaces the interactive hooks used by the enrollment
@@ -44,6 +48,11 @@ func stubEnrollPrompts(t *testing.T) {
 		t.Fatal("unexpected ACME enrollment call")
 		return nil, nil
 	}
+	origName := promptDeviceName
+	promptDeviceName = func(string, string, tui.ValidateFunc) (string, error) {
+		t.Fatal("unexpected device-name prompt")
+		return "", nil
+	}
 	// Default org resolver returns a stable test org so tests that reach
 	// preEnrollDeviceFn don't need a live cloud connection.
 	resolveOrgFn = func(_ context.Context, _ *config.AuthConfig, _ bool) (OrgResolution, error) {
@@ -55,6 +64,7 @@ func stubEnrollPrompts(t *testing.T) {
 		confirmContinueUnenrolled = origContinue
 		preEnrollDeviceFn = origEnroll
 		preEnrollACMEFn = origACME
+		promptDeviceName = origName
 		resolveOrgFn = origResolveOrg
 	})
 }
@@ -384,16 +394,17 @@ func TestACMEPreEnrollmentBakesEABMaterial(t *testing.T) {
 		gotAuth, gotName = auth, name
 		return want, nil
 	}
+	name := "dev"
 	got, err := resolveACMEPreEnrollment(context.Background(), twoSessionConfig(),
-		preEnrollOptions{mode: preEnrollForced, cloudGRPC: "prod.example.com:443"}, false, "dev")
+		preEnrollOptions{mode: preEnrollForced, cloudGRPC: "prod.example.com:443"}, false, &name)
 	if err != nil {
 		t.Fatalf("resolveACMEPreEnrollment: %v", err)
 	}
 	if got != want {
 		t.Fatalf("bake = %#v, want %#v", got, want)
 	}
-	if gotName != "dev" || gotAuth == nil || gotAuth.CloudGRPC != "prod.example.com:443" {
-		t.Fatalf("mint got auth=%v name=%q", gotAuth, gotName)
+	if gotName != "dev" || name != "dev" || gotAuth == nil || gotAuth.CloudGRPC != "prod.example.com:443" {
+		t.Fatalf("mint got auth=%v name=%q (install name %q)", gotAuth, gotName, name)
 	}
 	// The baked JSON is the on-disk contract the device consumes on first boot:
 	// the first four keys must match acmeenroll.Config's tags, plus cloudHost.
@@ -414,10 +425,103 @@ func TestACMEPreEnrollmentBakesEABMaterial(t *testing.T) {
 	}
 }
 
+// cloudAcceptsDeviceName is EnrollDeviceRequest.name's rule (WDY-3016):
+// lowercase, letter-led, at most 63 characters, no trailing hyphen.
+func cloudAcceptsDeviceName(name string) bool {
+	return regexp.MustCompile(`^[a-z][a-z0-9-]{0,62}$`).MatchString(name) && !strings.HasSuffix(name, "-")
+}
+
+// A blank device name ("empty = auto-generate") used to reach Cloud's
+// EnrollDevice as "", which Cloud refuses (WDY-3939 #13). Pre-enrolling has to
+// settle on a name first, and the device has to be given that same name, so
+// its hostname and its Cloud row agree.
+func TestProvisioningJSONBlankNameReservesTheNameItBakes(t *testing.T) {
+	stubEnrollPrompts(t)
+	t.Setenv("WENDY_CONFIG_DIR", t.TempDir())
+	t.Setenv("WENDY_SECRET_STORE", "file")
+	cloud := &oidcEnrollmentServer{response: &cloudpbv2.EnrollDeviceResponse{CredentialKind: "eab", EabKeyId: "eab-id", EabHmacKey: strings.Repeat("ab", 32)}}
+	_, host := enrollmentServers(t, cloud, &acmeProvisioningServer{})
+	auth := oidcEnrollmentAuth(t)
+	auth.CloudGRPC = host
+	if err := config.Save(&config.Config{Auth: []config.AuthConfig{*auth}}); err != nil {
+		t.Fatal(err)
+	}
+	origInteractive := isInteractiveTerminalFn
+	t.Cleanup(func() { isInteractiveTerminalFn = origInteractive })
+	isInteractiveTerminalFn = func() bool { return true }
+	// The default interactive path: Enter at "Pre-enroll this device?".
+	confirmPreEnroll = func() (bool, error) { return true, nil }
+	preEnrollACMEFn = preEnrollDeviceACME
+	promptDeviceName = func(_, _ string, validate tui.ValidateFunc) (string, error) {
+		if validate("") == nil {
+			t.Error("the pre-enroll name prompt accepts an empty name")
+		}
+		return "lab-box", nil
+	}
+
+	name := ""
+	provJSON, err := resolveProvisioningJSON(context.Background(), preEnrollOptions{mode: preEnrollAuto}, &name)
+	if err != nil {
+		t.Fatalf("resolveProvisioningJSON: %v", err)
+	}
+	if cloud.req == nil {
+		t.Fatal("no EnrollDevice request reached Cloud")
+	}
+	sent := cloud.req.GetName()
+	if sent != "lab-box" || !cloudAcceptsDeviceName(sent) {
+		t.Fatalf("EnrollDevice name = %q, want the prompted %q", sent, "lab-box")
+	}
+	if name != sent {
+		t.Fatalf("the install would bake device name %q, but Cloud reserved %q", name, sent)
+	}
+
+	// The callers write that same name to the config partition.
+	dir := t.TempDir()
+	if err := writeConfigFiles(dir, nil, nil, name, provJSON); err != nil {
+		t.Fatal(err)
+	}
+	conf, err := os.ReadFile(filepath.Join(dir, "wendy.conf"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(conf), "[device]\nname = "+sent+"\n") {
+		t.Fatalf("wendy.conf does not name the device %q:\n%s", sent, conf)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "acme-enrollment.json")); err != nil {
+		t.Fatalf("the EAB credential was not baked: %v", err)
+	}
+}
+
+// Without a terminal there is no one to ask, so --pre-enroll needs
+// --device-name before any credential is minted.
+func TestACMEPreEnrollmentForcedNonInteractiveBlankNameNeedsDeviceName(t *testing.T) {
+	stubEnrollPrompts(t) // preEnrollACMEFn and promptDeviceName fail the test if called
+	name := ""
+	_, err := resolveACMEPreEnrollment(context.Background(), twoSessionConfig(),
+		preEnrollOptions{mode: preEnrollForced, cloudGRPC: "prod.example.com:443"}, false, &name)
+	if err == nil || !strings.Contains(err.Error(), "--device-name") {
+		t.Fatalf("err = %v, want one naming --device-name", err)
+	}
+}
+
+// Declining pre-enrollment keeps the blank name: the device names itself on
+// first boot, as the prompt promised.
+func TestACMEPreEnrollmentDeclinedKeepsBlankName(t *testing.T) {
+	stubEnrollPrompts(t)
+	confirmPreEnroll = func() (bool, error) { return false, nil }
+	name := ""
+	got, err := resolveACMEPreEnrollment(context.Background(), twoSessionConfig(),
+		preEnrollOptions{mode: preEnrollAuto}, true, &name)
+	if err != nil || got != nil || name != "" {
+		t.Fatalf("bake=%v err=%v name=%q; want nil, nil and a blank name", got, err, name)
+	}
+}
+
 func TestACMEPreEnrollmentSkips(t *testing.T) {
 	stubEnrollPrompts(t)
+	name := "dev"
 	got, err := resolveACMEPreEnrollment(context.Background(), twoSessionConfig(),
-		preEnrollOptions{mode: preEnrollSkip}, true, "dev")
+		preEnrollOptions{mode: preEnrollSkip}, true, &name)
 	if err != nil || got != nil {
 		t.Fatalf("skip: bake=%v err=%v; want nil,nil", got, err)
 	}

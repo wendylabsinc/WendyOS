@@ -44,6 +44,12 @@ Events are posted to:
 https://wendy-cli-telemetry-114319063177.us-central1.run.app/v1/telemetry/events
 ```
 
+The anonymous ID always lives in `~/.wendy/analytics_id`. `WENDY_CONFIG_DIR`
+continues to select device settings, analytics preferences, and milestone state,
+but does not select a separate identity. If the shared ID does not exist yet,
+the CLI preserves an existing ID from the active config directory. Once a shared
+ID exists, it takes precedence over IDs in other config directories.
+
 ## Event payload
 
 Every event is an anonymous JSON object. The fields sent are:
@@ -54,7 +60,7 @@ Every event is an anonymous JSON object. The fields sent are:
 | `event_id` | string | Random event UUID, allowing the receiver to discard duplicate delivery |
 | `occurred_at` | string | UTC event time recorded by the CLI, independent of delivery time |
 | `attempt_id` | string | Random UUID shared by one invocation or tour and its child operations |
-| `anonymous_id` | string | Stable random UUID stored in `~/.wendy/` — never tied to a real identity |
+| `anonymous_id` | string | Stable random UUID stored in `~/.wendy/analytics_id`, shared by CLI and MCP even with different `WENDY_CONFIG_DIR` settings |
 | `event` | string | Event name, e.g. `"command_executed"` |
 | `command_name` | string | Canonical command path, e.g. `"wendy device wifi connect"` |
 | `command_root` | string | Top-level command token |
@@ -159,7 +165,7 @@ These categories apply to events sent by updated clients. Historical events that
 only stored `other` or `grpc_other` cannot be reclassified without additional
 failure data.
 
-The CLI stores a private, timestamp-only `activation-state.json` beside `analytics_id` after a successful install operation. A later `run_started` clears the waiting window. On a subsequent CLI launch, it emits `next_launch_no_run_24h` and `next_launch_no_run_7d` when each threshold has elapsed. Each threshold is acknowledged only after successful HTTP delivery, so failed sends can retry on later launches. These are observations of returning installations; they do not classify absent users as abandoned. The check follows analytics opt-out and creates no state when disabled. Delivery remains best-effort, and concurrent CLI processes can duplicate a threshold observation.
+The CLI stores a private, timestamp-only `activation-state.json` in the active config directory after a successful install operation. A later `run_started` clears the waiting window. On a subsequent CLI launch, it emits `next_launch_no_run_24h` and `next_launch_no_run_7d` when each threshold has elapsed. Each threshold is acknowledged only after successful HTTP delivery, so failed sends can retry on later launches. These are observations of returning installations; they do not classify absent users as abandoned. The check follows analytics opt-out and creates no state when disabled. Delivery remains best-effort, and concurrent CLI processes can duplicate a threshold observation.
 
 ## Opting out
 

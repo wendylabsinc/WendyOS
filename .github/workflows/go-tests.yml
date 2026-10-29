@@ -5,6 +5,7 @@ on:
   push:
     branches: [main]
     paths:
+      - '.gitattributes'
       - 'go/**'
       - 'web-client/public/**'
       - 'web-client/package.json'
@@ -28,6 +29,7 @@ on:
       - 'packaging/linux/fpm/**'
   pull_request:
     paths:
+      - '.gitattributes'
       - 'go/**'
       - 'web-client/public/**'
       - 'web-client/package.json'
@@ -202,13 +204,18 @@ jobs:
           go-version-file: go.mod
           cache-dependency-path: go.sum
 
-      # Native execution covers Windows identity files and process shutdown.
+      # Native execution covers Windows identity files and process shutdown,
+      # including CLI/MCP identity sharing across WENDY_CONFIG_DIR overrides.
       # Delivery tests redirect requests to local HTTP receivers.
       - name: Test analytics
         working-directory: go
         run: go test ./internal/cli/analytics -count=1 -timeout 120s
 
-      - name: Test CLI telemetry delivery
+      - name: Test analytics preferences with shared identity
+        working-directory: go
+        run: go test ./internal/cli/commands -run '^TestAnalytics' -count=1 -timeout 120s
+
+      - name: Test CLI and MCP telemetry delivery and shared identity
         working-directory: go
         run: go test ./cmd/wendy -run '^(TestInvocationAnalytics|TestEnablingAnalyticsReportsTheCurrentInvocation|TestHelpDoesNotCountAsProductUse)' -v -count=1 -timeout 120s
 
