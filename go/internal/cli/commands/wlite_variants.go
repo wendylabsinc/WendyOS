@@ -14,21 +14,9 @@ const wendyLiteCatalogJSON = `
     "version": 2,
     "binaries": [
         {
-            "name": "esp32c5",
-            "target": "esp32c5",
-            "board_cfg": "esp32c5_generic",
-            "flash_size": "4MB"
-        },
-        {
             "name": "esp32c5_native",
             "target": "esp32c5",
             "board_cfg": "esp32c5_generic_native",
-            "flash_size": "4MB"
-        },
-        {
-            "name": "esp32c6",
-            "target": "esp32c6",
-            "board_cfg": "esp32c6_generic",
             "flash_size": "4MB"
         },
         {
@@ -44,28 +32,26 @@ const wendyLiteCatalogJSON = `
             "flash_size": "4MB"
         },
         {
-            "name": "esp32p4_waveshare_lcd_4b",
-            "target": "esp32p4",
-            "board_cfg": "waveshare_lcd_4b",
-            "flash_size": "32MB"
-        },
-        {
-            "name": "esp32p4_dfr1172_firebeetle",
-            "target": "esp32p4",
-            "board_cfg": "dfr1172_firebeetle",
-            "flash_size": "16MB"
-        },
-        {
-            "name": "esp32s3",
-            "target": "esp32s3",
-            "board_cfg": "esp32s3_generic",
-            "flash_size": "4MB"
-        },
-        {
             "name": "esp32s3_native",
             "target": "esp32s3",
             "board_cfg": "esp32s3_generic_native",
             "flash_size": "4MB"
+        },
+        {
+            "name": "esp32s31_native",
+            "target": "esp32s31",
+            "board_cfg": "esp32s31_generic_native",
+            "flash_size": "4MB",
+            "idf_version": "v6.1",
+            "preview": true
+        },
+        {
+            "name": "esp32s31_korvo_1_native",
+            "target": "esp32s31",
+            "board_cfg": "esp32s31_korvo_1_native",
+            "flash_size": "16MB",
+            "idf_version": "v6.1",
+            "preview": true
         },
         {
             "name": "esp32s3_seeed_xiao_native",
@@ -78,6 +64,12 @@ const wendyLiteCatalogJSON = `
             "target": "esp32s3",
             "board_cfg": "m5_stamp_s3_native",
             "flash_size": "8MB"
+        },
+        {
+            "name": "esp32p4_dfr1172_firebeetle_native",
+            "target": "esp32p4",
+            "board_cfg": "dfr1172_firebeetle_native",
+            "flash_size": "16MB"
         },
         {
             "name": "esp32s31_mosaico_native",
@@ -117,70 +109,58 @@ const wendyLiteCatalogJSON = `
     ],
     "boards": [
         {
-            "name": "esp32c5_generic",
-            "display_name": "Generic ESP32-C5 board, 4MB flash",
-            "binary": "esp32c5",
-            "target": "esp32c5"
-        },
-        {
             "name": "esp32c5_generic_native",
-            "display_name": "Generic ESP32-C5 board, 4MB flash, native app support",
+            "display_name": "Generic ESP32-C5 board, 4MB flash",
             "binary": "esp32c5_native",
             "target": "esp32c5"
         },
         {
-            "name": "esp32c6_generic",
-            "display_name": "Generic ESP32-C6 board, 4MB flash",
-            "binary": "esp32c6",
-            "target": "esp32c6"
-        },
-        {
             "name": "esp32c6_generic_native",
-            "display_name": "Generic ESP32-C6 board, 4MB flash, native app support",
+            "display_name": "Generic ESP32-C6 board, 4MB flash",
             "binary": "esp32c6_native",
             "target": "esp32c6"
         },
         {
             "name": "esp32c61_generic_native",
-            "display_name": "Generic ESP32-C61 board, 4MB flash, native app support",
+            "display_name": "Generic ESP32-C61 board, 4MB flash",
             "binary": "esp32c61_native",
             "target": "esp32c61"
         },
         {
-            "name": "esp32p4_waveshare_lcd_4b",
-            "display_name": "Waveshare ESP32-P4-WIFI6-Touch-LCD-4B, 32MB flash",
-            "binary": "esp32p4_waveshare_lcd_4b",
-            "target": "esp32p4"
-        },
-        {
-            "name": "esp32p4_dfr1172_firebeetle",
-            "display_name": "DFRobot FireBeetle 2 ESP32-P4 (DFR1172), 16MB flash",
-            "binary": "esp32p4_dfr1172_firebeetle",
-            "target": "esp32p4"
-        },
-        {
-            "name": "esp32s3_generic",
-            "display_name": "Generic ESP32-S3 board, 4MB flash",
-            "binary": "esp32s3",
-            "target": "esp32s3"
-        },
-        {
             "name": "esp32s3_generic_native",
-            "display_name": "Generic ESP32-S3 board, 4MB flash, native app support",
+            "display_name": "Generic ESP32-S3 board, 4MB flash",
             "binary": "esp32s3_native",
             "target": "esp32s3"
         },
         {
+            "name": "esp32s31_generic_native",
+            "display_name": "Generic ESP32-S31 board, 4MB flash, preview",
+            "binary": "esp32s31_native",
+            "target": "esp32s31"
+        },
+        {
+            "name": "esp32s31_korvo_1_native",
+            "display_name": "ESP32-S31-Korvo-1 V1.1, 16MB flash, 16MB PSRAM, camera/microphone SensorLink, preview",
+            "binary": "esp32s31_korvo_1_native",
+            "target": "esp32s31"
+        },
+        {
             "name": "esp32s3_seeed_xiao_native",
-            "display_name": "Seeed Studio XIAO ESP32S3, 8MB flash, 8MB PSRAM, native app support",
+            "display_name": "Seeed Studio XIAO ESP32S3, 8MB flash, 8MB PSRAM, Sense camera/mic SensorLink",
             "binary": "esp32s3_seeed_xiao_native",
             "target": "esp32s3"
         },
         {
             "name": "esp32s3_m5_stamp_s3_native",
-            "display_name": "M5Stack StampS3, 8MB flash, native app support",
+            "display_name": "M5Stack StampS3, 8MB flash",
             "binary": "esp32s3_m5_stamp_s3_native",
             "target": "esp32s3"
+        },
+        {
+            "name": "esp32p4_dfr1172_firebeetle_native",
+            "display_name": "DFRobot FireBeetle 2 ESP32-P4 (DFR1172), 16MB flash, 32MB PSRAM",
+            "binary": "esp32p4_dfr1172_firebeetle_native",
+            "target": "esp32p4"
         },
         {
             "name": "esp32s31_mosaico_native",
