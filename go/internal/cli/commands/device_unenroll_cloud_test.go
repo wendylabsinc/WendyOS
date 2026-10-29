@@ -138,9 +138,9 @@ func TestUnenrollCommandDispatchesSelectedLite(t *testing.T) {
 		return &fakeLiteUnenrollmentDevice{identity: &liteclient.DeviceIdentity{ID: "441bf6804824"}}, nil
 	}
 	called := false
-	unenrollLiteCloudFn = func(_ *cobra.Command, _, deviceID string, assumeYes bool, reset func() error) error {
+	unenrollLiteCloudFn = func(_ *cobra.Command, _, deviceID, tenantID, hardwareID string, assumeYes bool, reset func() error) error {
 		called = true
-		if deviceID != "lite-441bf6804824" || !assumeYes {
+		if deviceID != liteUnenrollDeviceID || !assumeYes {
 			t.Fatalf("Lite dispatch lost identity or confirmation: %q %v", deviceID, assumeYes)
 		}
 		return nil
@@ -208,27 +208,27 @@ func TestUnenrollResolutionUsesExactIdentity(t *testing.T) {
 		{name: "PKI ID fallback", selector: "lite-other", want: second.key},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := resolveUnenrollDevice(devices, tc.selector, tc.deviceID)
+			got, err := resolveUnenrollDevice(devices, tc.selector, tc.deviceID, "")
 			if err != nil || got.key != tc.want {
 				t.Fatalf("resolved %q err=%v, want %q", got.key, err, tc.want)
 			}
 		})
 	}
-	if _, err := resolveUnenrollDevice(devices, second.GetName(), ""); err == nil {
+	if _, err := resolveUnenrollDevice(devices, second.GetName(), "", ""); err == nil {
 		t.Fatal("cloud name matching another device's identity was accepted")
 	}
-	if _, err := resolveUnenrollDevice(devices, first.GetName(), "lite-missing"); err == nil {
+	if _, err := resolveUnenrollDevice(devices, first.GetName(), "lite-missing", ""); err == nil {
 		t.Fatal("missing local hardware identity fell back to a cloud name")
 	}
-	if _, err := resolveUnenrollDevice(devices, "", "LITE-441BF6804824"); err == nil {
+	if _, err := resolveUnenrollDevice(devices, "", "LITE-441BF6804824", ""); err == nil {
 		t.Fatal("hardware identity match ignored case")
 	}
 	duplicateIdentity := unenrollTestCloudDevice("other-id", "other-name", "lite-441bf6804824")
-	if _, err := resolveUnenrollDevice(append(devices, duplicateIdentity), "", "lite-441bf6804824"); err == nil || !strings.Contains(err.Error(), "multiple cloud enrollments") {
+	if _, err := resolveUnenrollDevice(append(devices, duplicateIdentity), "", "lite-441bf6804824", ""); err == nil || !strings.Contains(err.Error(), "multiple cloud enrollments") {
 		t.Fatalf("ambiguous identity accepted: %v", err)
 	}
 	duplicateName := unenrollTestCloudDevice("other-id", "renamed-board", "lite-third")
-	if _, err := resolveUnenrollDevice(append(devices, duplicateName), "renamed-board", ""); err == nil {
+	if _, err := resolveUnenrollDevice(append(devices, duplicateName), "renamed-board", "", ""); err == nil {
 		t.Fatal("ambiguous cloud name accepted")
 	}
 }
@@ -326,6 +326,7 @@ func (s *unenrollConfirmationServer) RevokePrincipalCertificates(context.Context
 
 func TestCloudUnenrollConfirmsBeforeMutation(t *testing.T) {
 	preserveCloudUnenrollmentHooks(t)
+	t.Setenv("WENDY_CONFIG_DIR", t.TempDir())
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -369,6 +370,10 @@ func TestCloudUnenrollConfirmsBeforeMutation(t *testing.T) {
 	}
 	if server.lists.Load() != 2 || server.gets.Load() != 1 || server.online.Load() {
 		t.Fatalf("wrong offline asset lookup: lists=%d gets=%d online=%v", server.lists.Load(), server.gets.Load(), server.online.Load())
+	}
+	// Finding the asset to delete must not pin its name.
+	if cfg, err := config.Load(); err != nil || len(cfg.DevicePins) != 0 {
+		t.Fatalf("unenroll lookup pinned devices: err=%v cfg=%+v", err, cfg)
 	}
 }
 
@@ -573,18 +578,60 @@ func TestCloudUnenrollWithResetStopsOnCloudFailure(t *testing.T) {
 	}
 }
 
-func TestCloudOnlyLiteUnenrollExplainsUSBRecovery(t *testing.T) {
-	preserveCloudUnenrollmentHooks(t)
-	service := &unenrollConfirmationServer{asset: unenrollTestCloudDevice(liteTestAssetID, "desk", "lite-441bf6804824").v2}
-	startUnenrollResetServer(t, service)
-	cmd := &cobra.Command{}
-	cmd.SetContext(context.Background())
-	var output bytes.Buffer
-	cmd.SetOut(&output)
-	if err := runCloudDeviceUnenroll(cmd, "", liteTestAssetID, "", true); err != nil {
-		t.Fatal(err)
+func TestUnenrollResolutionFindsLiteBoardBySerial(t *testing.T) {
+	lite := func(id, serial string) cloudDiscoveryDevice {
+		device := unenrollTestCloudDevice(id, "desk", "")
+		device.v2.OsType, device.v2.SerialNumber = proto.String(liteCloudOSType), proto.String(serial)
+		return device
 	}
-	if !strings.Contains(output.String(), "Connect this Lite board over USB and run 'wendy device unenroll'") {
-		t.Fatalf("missing Lite recovery instructions: %q", output.String())
+	board := lite(liteTestAssetID, "441bf6804824")
+	other := lite("fc741e8b-4098-4830-bfa5-3f35c1aa0e60", "80456b2d29b4")
+	// A compute asset with the same serial is never a Lite board's enrollment.
+	compute := unenrollTestCloudDevice("0d3f61c6-4c1e-4f0e-9b7a-2d1c3b4a5e6f", "441bf6804824", "")
+	compute.v2.SerialNumber = proto.String("441bf6804824")
+	got, err := resolveUnenrollDevice([]cloudDiscoveryDevice{board, other, compute}, "", "", "441bf6804824")
+	if err != nil || got.key != board.key {
+		t.Fatalf("serial match: %v %v", got.key, err)
+	}
+	if _, err := resolveUnenrollDevice([]cloudDiscoveryDevice{other, compute}, "", "", "441bf6804824"); !errors.Is(err, errCloudEnrollmentNotFound) {
+		t.Fatalf("no match must read as absent, got %v", err)
+	}
+	stale := lite("2b6e0f53-7a8d-4c1b-9e2f-3a4b5c6d7e8f", "441bf6804824")
+	_, err = resolveUnenrollDevice([]cloudDiscoveryDevice{board, stale}, "", "", "441bf6804824")
+	if err == nil || errors.Is(err, errCloudEnrollmentNotFound) || !strings.Contains(err.Error(), board.key) || !strings.Contains(err.Error(), stale.key) {
+		t.Fatalf("several serial matches must refuse and name each asset, got %v", err)
+	}
+}
+
+func TestCloudOnlyLiteUnenrollExplainsUSBRecovery(t *testing.T) {
+	const usbHint = "Connect this Lite board over USB and run 'wendy device unenroll'"
+	// The hint keys on the asset's OS type, never on a lite- device id.
+	for _, tc := range []struct {
+		name, osType, pkiName string
+		wantUSB               bool
+	}{
+		{"Lite, post-873 asset", liteCloudOSType, "", true},
+		{"Lite, UUID pki name", liteCloudOSType, "44444444-4444-4444-8444-444444444444", true},
+		{"compute asset with a lite- pki name", "wendyos", "lite-441bf6804824", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			preserveCloudUnenrollmentHooks(t)
+			asset := unenrollTestCloudDevice(liteTestAssetID, "desk", tc.pkiName).v2
+			asset.OsType = proto.String(tc.osType)
+			startUnenrollResetServer(t, &unenrollConfirmationServer{asset: asset})
+			cmd := &cobra.Command{}
+			cmd.SetContext(context.Background())
+			var output bytes.Buffer
+			cmd.SetOut(&output)
+			if err := runCloudDeviceUnenroll(cmd, "", liteTestAssetID, "", true); err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(output.String(), usbHint) != tc.wantUSB {
+				t.Fatalf("USB recovery hint shown = %v, want %v: %q", !tc.wantUSB, tc.wantUSB, output.String())
+			}
+			if !tc.wantUSB && !strings.Contains(output.String(), "clear it through device recovery") {
+				t.Fatalf("missing generic recovery hint: %q", output.String())
+			}
+		})
 	}
 }

@@ -1,4 +1,5 @@
 import type { DeviceLogsAPI } from "./log-types";
+import type { MeshDevice, MeshResult } from "@/lib/mesh-topology";
 
 export type Runtime = "docker" | "apple-container";
 export type SimulatorKind = "go2" | "g1" | "so101" | "raspberry-pi";
@@ -92,6 +93,8 @@ export type DeviceSnapshot = {
 };
 export type DiscoveredDevice = { name: string; target: string; address: string; transport: string; version?: string };
 export interface DesktopAPI extends DeviceLogsAPI {
+  meshDiscover(): Promise<{ devices: MeshDevice[]; warnings: string[] }>;
+  meshTopology(args: { target: string }): Promise<MeshResult>;
   status(): Promise<HostStatus>;
   containers(runtime: Runtime): Promise<Container[]>;
   virtualMachines(): Promise<VirtualMachine[]>;

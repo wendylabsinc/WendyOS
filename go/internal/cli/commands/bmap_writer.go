@@ -134,8 +134,10 @@ func validateDeviceTarget(path string) error {
 // emitting cumulative bytes written on stdout (one decimal per line) so the
 // parent can drive the progress bar. Runs as root; no stdin pipe. writers > 0
 // overrides the writer concurrency (the parent picks it from the storage type);
-// 0 keeps the sequential default that is correct for SD/USB media.
-func runBmapWriteSeekable(devicePath, bmapPath, sourcePath string, writers int, stdout io.Writer) (retErr error) {
+// 0 keeps the sequential default that is correct for SD/USB media. writeLimit,
+// when positive, is the end of a drive smaller than the image (see imageFit):
+// mapped bytes past it are read and verified but not written.
+func runBmapWriteSeekable(devicePath, bmapPath, sourcePath string, writers int, writeLimit int64, stdout io.Writer) (retErr error) {
 	if writers > 0 {
 		bmapWriteConcurrency = writers
 	}
@@ -172,7 +174,7 @@ func runBmapWriteSeekable(devicePath, bmapPath, sourcePath string, writers int, 
 		}
 	}()
 	emit := func(n int64) { fmt.Fprintf(stdout, "%d\n", n) }
-	if err := applyBmapSeekable(si, dev, b, emit); err != nil {
+	if err := applyBmapSeekable(si, clipWrites(dev, writeLimit), b, emit); err != nil {
 		return err
 	}
 	if err := dev.Sync(); err != nil && !errors.Is(err, syscall.ENOTTY) {
@@ -202,7 +204,8 @@ func scanBmapProgress(r io.Reader, progressFn func(int64)) {
 // the supplied reader (stdin in production), and applies the bmap. It runs as
 // root (re-exec'd under sudo by the parent), so it does not prompt or print
 // TUI — progress is tracked by the parent counting bytes fed to stdin.
-func runBmapWrite(devicePath, bmapPath string, image io.Reader) (retErr error) {
+// writeLimit is as for runBmapWriteSeekable.
+func runBmapWrite(devicePath, bmapPath string, image io.Reader, writeLimit int64) (retErr error) {
 	data, err := readHelperInput(bmapPath)
 	if err != nil {
 		return fmt.Errorf("reading bmap: %w", err)
@@ -220,7 +223,7 @@ func runBmapWrite(devicePath, bmapPath string, image io.Reader) (retErr error) {
 			retErr = fmt.Errorf("closing device %s: %w", devicePath, closeErr)
 		}
 	}()
-	if err := applyBmap(image, dev, b, func(int64) {}); err != nil {
+	if err := applyBmap(image, clipWrites(dev, writeLimit), b, func(int64) {}); err != nil {
 		return err
 	}
 	// Flush to media. fsync works on Linux block devices, but macOS raw

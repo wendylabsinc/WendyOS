@@ -172,7 +172,7 @@ func TestMintEABCollisionRetryIsBoundedAndNeverReuses(t *testing.T) {
 
 	fake := &fakeEnrollment{collide: func(string) string { return "device_id" }}
 	_, _, err := MintEAB(context.Background(), dialFake(t, fake), auth, cfg, "edge-one", nil)
-	if !errors.Is(err, errDeviceUUIDTaken) {
+	if !errors.Is(err, ErrDeviceUUIDTaken) {
 		t.Fatalf("exhausted retries must surface the collision, got %v", err)
 	}
 	if len(fake.seen) != maxMintAttempts {
@@ -196,7 +196,7 @@ func TestMintEABDoesNotRegenerateOnOtherRefusals(t *testing.T) {
 			cfg := testEnrollmentConfig(t, auth, uuid.NewString())
 			fake := &fakeEnrollment{collide: func(string) string { return field }}
 			_, _, err := MintEAB(context.Background(), dialFake(t, fake), auth, cfg, "edge-one", nil)
-			if errors.Is(err, errDeviceUUIDTaken) {
+			if errors.Is(err, ErrDeviceUUIDTaken) {
 				t.Fatal("name refusal mistyped as a UUID collision")
 			}
 			if status.Code(err) != codes.AlreadyExists {

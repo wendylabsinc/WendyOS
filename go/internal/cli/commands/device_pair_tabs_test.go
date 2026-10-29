@@ -23,6 +23,7 @@ type pairTestClient struct {
 	agentpbv2.WendySensorPairingServiceClient
 	pairings          []*agentpbv2.SensorPairing
 	added             *agentpbv2.AddSensorPairingRequest
+	adds, removes     int
 	removed           int32
 	removedPrincipal  string
 	supportsPrincipal bool
@@ -62,12 +63,17 @@ func (c *pairTestClient) ListSensorPairings(context.Context, *agentpbv2.ListSens
 
 func (c *pairTestClient) AddSensorPairing(_ context.Context, req *agentpbv2.AddSensorPairingRequest, _ ...grpc.CallOption) (*agentpbv2.AddSensorPairingResponse, error) {
 	c.added = req
-	return &agentpbv2.AddSensorPairingResponse{Pairing: &agentpbv2.SensorPairing{SourceAssetId: req.SourceAssetId, SourcePrincipalUri: req.SourcePrincipalUri, Name: req.Name}}, c.err
+	c.adds++
+	return &agentpbv2.AddSensorPairingResponse{Pairing: &agentpbv2.SensorPairing{
+		SourceAssetId: req.SourceAssetId, SourcePrincipalUri: req.SourcePrincipalUri, Name: req.Name,
+		SensorAllowlist: req.SensorAllowlist, Transport: req.Transport,
+	}}, c.err
 }
 
 func (c *pairTestClient) RemoveSensorPairing(_ context.Context, req *agentpbv2.RemoveSensorPairingRequest, _ ...grpc.CallOption) (*agentpbv2.RemoveSensorPairingResponse, error) {
 	c.removed = req.SourceAssetId
 	c.removedPrincipal = req.SourcePrincipalUri
+	c.removes++
 	return &agentpbv2.RemoveSensorPairingResponse{}, c.err
 }
 
@@ -289,10 +295,11 @@ func TestSensorPairShowsUnenrolledWendyLite(t *testing.T) {
 
 func TestSensorPairPKIEnrollmentPairAndForget(t *testing.T) {
 	const tenant = "11111111-2222-4333-8444-555555555555"
-	principal := "spiffe://wendy.sh/tenant/" + tenant + "/device/lite-441bf6804824"
+	const device = "44444444-4444-4444-8444-444444444444"
+	principal := "spiffe://wendy.sh/tenant/" + tenant + "/device/" + device
 	source := discovery.LANDeviceFromWendyLiteService(discovery.MDNSService{
 		InstanceName: "joannis-home", IPAddress: "192.168.0.125", Port: 5054,
-		TXTRecords: map[string]string{"id": "441bf6804824", "tenant": tenant, "caps": "sensors", "mtls": "true"},
+		TXTRecords: map[string]string{"id": device, "tenant": tenant, "principal": principal, "caps": "sensors", "mtls": "true"},
 	})
 	client := &pairTestClient{}
 	h := pairTestHandler(client)

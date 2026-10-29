@@ -75,3 +75,5 @@ web-client/desktop-resources/
 web-client/.desktop-package/
 web-client/release/
 
+# Agent-generated design specs; keep out of git
+/specs/

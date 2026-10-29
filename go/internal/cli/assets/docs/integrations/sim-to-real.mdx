@@ -126,7 +126,7 @@ sample's Start action explicitly selects and claims app control for a new run.
 The simulator does not emulate a USB depth camera's firmware or the STM32 serial
 protocol used by `Rosmaster_Lib`. A service that uses those hardware drivers must
 implement a simulator backend and declare a matching
-[`simulation` override](/docs/apps/wendy-services#simulation-backends). Wendy
+[`simulation` override](/docs/advanced/apps/wendy-services#simulation-backends). Wendy
 selects that override only for the managed VM and keeps the hardware configuration
 for physical targets. Removing a missing USB mount lets a container start; it
 does not create a camera or translate its SDK calls.
@@ -210,17 +210,9 @@ clients can use `simulator_create` with `profile: "wendy-lite"`, followed by
 Start verifies a WendyCom handshake and ping. Deploy apps through the local CLI;
 WendyOS gRPC tools and robot scene viewers do not apply to this profile.
 
-The initial target is ESP32-C6, with user networking and a loopback-only forward
-to the firmware's port 5054. It requires a firmware build that accepts
-unenrolled WendyCom clients. Other ESP32 chips, physical radio behavior, and
-hardware timing are not validated. The real-firmware integration test was run
-with `esp-emu` v0.48.0 on Apple Silicon. To repeat it with your own firmware:
-
-```sh
-WENDY_TEST_LITE_FIRMWARE=/absolute/path/merged-binary.bin \
-  go test ./go/internal/cli/commands -run '^TestLiteSimulatorFirmware$' -count=1 -v
-```
-
+This profile emulates an ESP32-C6 for application development. It does not
+simulate physical radio behavior or hardware timing. It runs an unenrolled
+firmware connection available only through your computer's local forwarding.
 
 ### Native ESP-IDF apps
 

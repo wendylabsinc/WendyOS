@@ -34,9 +34,11 @@ type Config struct {
 	// CLIUpdateNoticeShown is the AvailableCLIUpdate tag whose non-interactive
 	// update notice has already been printed, so scripts and agents see it
 	// once per release instead of after every command.
-	CLIUpdateNoticeShown   string `json:"cliUpdateNoticeShown,omitempty"`
+	CLIUpdateNoticeShown string `json:"cliUpdateNoticeShown,omitempty"`
+	// CLIUpdatePromptVersion is no longer read; it is still written so older
+	// CLIs, whose snooze applied to this release only, honor a deferral.
 	CLIUpdatePromptVersion string `json:"cliUpdatePromptVersion,omitempty"`
-	CLIUpdatePromptedAt    string `json:"cliUpdatePromptedAt,omitempty"` // interactive reminder snooze, RFC3339
+	CLIUpdatePromptedAt    string `json:"cliUpdatePromptedAt,omitempty"` // snoozes all interactive update prompts for 24h, RFC3339
 	// LastMCPSetupVersion records the CLI version that last ran `wendy mcp
 	// setup`. It lets the root command detect when an upgrade should refresh
 	// the MCP server config and bundled skills. Empty means the user has never
@@ -110,6 +112,14 @@ type AuthConfig struct {
 	// lane. LitePrivateKey is its key.
 	LiteCertificate string `json:"liteCertificate,omitempty"`
 	LitePrivateKey  string `json:"litePrivateKey,omitempty"`
+	// RegistryPrivateKey is this machine's registry encryption key for the
+	// session's operator (base64 of the ML-KEM-768 + X25519 private key): one
+	// key per operator device (sem 2026-10-20 21:29). Wraps to it open on this
+	// machine only.
+	RegistryPrivateKey string `json:"registryPrivateKey,omitempty"`
+	// RegistryKeyID is the key_id Cloud acknowledged for RegistryPrivateKey.
+	// Empty or different means the key is unbound and registration is retried.
+	RegistryKeyID string `json:"registryKeyId,omitempty"`
 	// ServiceAccount is the wendy-auth service-account sub of a headless
 	// session. Its token is re-minted from DPoPPrivateKey; there is no
 	// refresh token.

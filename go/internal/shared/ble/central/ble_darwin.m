@@ -14,6 +14,20 @@ static const NSUInteger kWendyBLEMaxGATTValue = 512;
 // both platforms cap a chunk at the same size.
 static const NSUInteger kWendyBLEMaxL2CAPChunk = 65536;
 
+// A stalled output stream must not hold a TLS write or Close indefinitely.
+static const NSTimeInterval kWendyBLEWriteTimeout = 10.0;
+
+@interface WendyBLEWriteRequest : NSObject
+@property (strong) NSData *data;
+@property NSTimeInterval deadline;
+@property (strong) dispatch_semaphore_t completed;
+@property BOOL cancelled;
+@property WendyBLEError error;
+@end
+
+@implementation WendyBLEWriteRequest
+@end
+
 // Copies n bytes into a fresh malloc'd buffer for the Go side to take over.
 //
 // Result lengths cross into Go as a 32-bit signed int while the sources are
@@ -93,12 +107,11 @@ static BOOL wendyBLECopyOut(const void *bytes, NSUInteger n, uint8_t **outData, 
 @property BOOL l2capIORunning;
 @property BOOL l2capOutputReady; // YES once outputStream fires NSStreamEventHasSpaceAvailable
 
-// Write dispatch: wendy_ble_l2cap_send uses performSelector:onThread:waitUntilDone:YES
-// so writes always happen on the I/O thread that owns the stream's run loop.
-@property NSInteger l2capWriteResult;
-
 // Target peripheral UUID for scanning
 @property (strong) NSString *targetUUID;
+
+// Marks the L2CAP channel dead, stops the I/O thread and wakes a blocked reader.
+- (void)failL2CAP;
 
 @end
 
@@ -300,8 +313,7 @@ didOpenL2CAPChannel:(CBL2CAPChannel *)channel
 // Schedules and opens BOTH streams so all NSStreamDelegate events are delivered
 // here. Waits for NSStreamEventHasSpaceAvailable on the output stream before
 // signalling l2capSema — that event confirms the BLE stack is ready for writes.
-// All subsequent writes from wendy_ble_l2cap_send are dispatched here via
-// performSelector:onThread:withObject:waitUntilDone:YES.
+// All subsequent writes from wendy_ble_l2cap_send are dispatched here.
 - (void)l2capIOThreadMain {
     @autoreleasepool {
         NSRunLoop *rl = [NSRunLoop currentRunLoop];
@@ -333,9 +345,54 @@ didOpenL2CAPChannel:(CBL2CAPChannel *)channel
     }
 }
 
-// Performs a single write on the I/O thread, called via performSelector:onThread:waitUntilDone:YES.
-- (void)performL2CAPWrite:(NSData *)data {
-    self.l2capWriteResult = [self.l2capChannel.outputStream write:data.bytes maxLength:data.length];
+// NSOutputStream may accept only a prefix, including zero bytes under
+// backpressure. Keep the remaining bytes until the stream accepts them all.
+// Pump this thread's run loop while waiting so stream and disconnect events
+// can still arrive. The caller owns a separate bounded wait in case the I/O
+// thread exits before it receives this request.
+- (void)performL2CAPWrite:(WendyBLEWriteRequest *)request {
+    NSUInteger offset = 0;
+    NSOutputStream *output = self.l2capChannel.outputStream;
+    request.error = WENDY_BLE_OK;
+    while (offset < request.data.length) {
+        NSTimeInterval remaining = request.deadline - NSProcessInfo.processInfo.systemUptime;
+        if (request.cancelled || remaining <= 0) {
+            request.error = WENDY_BLE_ERR_TIMEOUT;
+            break;
+        }
+        if (!self.connected || !self.l2capIORunning || self.l2capError || !output) {
+            request.error = WENDY_BLE_ERR_DISCONNECTED;
+            break;
+        }
+        if (output.hasSpaceAvailable) {
+            NSInteger n = [output write:(const uint8_t *)request.data.bytes + offset
+                              maxLength:request.data.length - offset];
+            if (n < 0 || (NSUInteger)n > request.data.length - offset) {
+                request.error = WENDY_BLE_ERR_WRITE_FAILED;
+                break;
+            }
+            if (n > 0) {
+                offset += (NSUInteger)n;
+                continue;
+            }
+        }
+        NSDate *until = [NSDate dateWithTimeIntervalSinceNow:MIN(remaining, 0.01)];
+        if (![[NSRunLoop currentRunLoop] runMode:NSDefaultRunLoopMode beforeDate:until]) {
+            [NSThread sleepUntilDate:until];
+        }
+    }
+    if (request.error != WENDY_BLE_OK) {
+        // A prefix may already be on the wire. No later write may reuse this
+        // stream as if the failed record had never been sent.
+        [self failL2CAP];
+    }
+    dispatch_semaphore_signal(request.completed);
+}
+
+- (void)failL2CAP {
+    self.l2capError = YES;
+    self.l2capIORunning = NO;
+    dispatch_semaphore_signal(self.l2capRecvSema);
 }
 
 // ── NSStreamDelegate (both L2CAP streams) ───────────────────────────
@@ -345,9 +402,7 @@ didOpenL2CAPChannel:(CBL2CAPChannel *)channel
         if (eventCode == NSStreamEventHasSpaceAvailable) {
             self.l2capOutputReady = YES;
         } else if (eventCode == NSStreamEventErrorOccurred || eventCode == NSStreamEventEndEncountered) {
-            self.l2capError = YES;
-            self.l2capIORunning = NO;
-            dispatch_semaphore_signal(self.l2capRecvSema);
+            [self failL2CAP];
         }
         return;
     }
@@ -595,21 +650,51 @@ WendyBLEError wendy_ble_open_l2cap(WendyBLEConn handle, uint16_t psm, int timeou
     return WENDY_BLE_OK;
 }
 
-WendyBLEError wendy_ble_l2cap_send(WendyBLEConn handle, const uint8_t *data, int length) {
+static WendyBLEError wendyBLEL2CAPSend(WendyBLEConn handle, const uint8_t *data, int length,
+                                     NSTimeInterval timeout) {
     WendyBLEConnection *conn = (__bridge WendyBLEConnection *)handle;
     if (!conn.connected || !conn.l2capChannel || !conn.l2capIORunning) return WENDY_BLE_ERR_DISCONNECTED;
 
-    // Dispatch the write to the I/O thread that owns the output stream's run loop.
-    // CBL2CAP NSOutputStream writes must come from the owning run loop thread;
-    // calling write:maxLength: from any other thread returns -1.
-    NSData *writeData = [NSData dataWithBytes:data length:length];
+    // CBL2CAP writes must run on the thread that owns the output stream.
+    // Do not synchronously dispatch: that thread may exit after the check
+    // above, leaving performSelector's unbounded wait blocked forever.
+    WendyBLEWriteRequest *request = [WendyBLEWriteRequest new];
+    request.data = [NSData dataWithBytes:data length:length];
+    request.deadline = NSProcessInfo.processInfo.systemUptime + timeout;
+    request.completed = dispatch_semaphore_create(0);
     [conn performSelector:@selector(performL2CAPWrite:)
                  onThread:conn.l2capIOThread
-               withObject:writeData
-            waitUntilDone:YES];
+               withObject:request
+            waitUntilDone:NO];
+    // Wait in short slices. The I/O thread can exit between the check above
+    // and the perform being queued; the request then never runs, and waiting
+    // out the whole timeout would hold Close for as long.
+    for (;;) {
+        NSTimeInterval remaining = request.deadline - NSProcessInfo.processInfo.systemUptime;
+        NSTimeInterval slice = MAX(0.0, MIN(remaining, 0.05));
+        if (dispatch_semaphore_wait(request.completed,
+            dispatch_time(DISPATCH_TIME_NOW, (int64_t)(slice * NSEC_PER_SEC))) == 0) {
+            return request.error;
+        }
+        BOOL stranded = [conn.l2capIOThread isFinished];
+        if (stranded && dispatch_semaphore_wait(request.completed, DISPATCH_TIME_NOW) == 0) {
+            return request.error; // the thread ran the request just before it exited
+        }
+        if (stranded || remaining <= slice) {
+            request.cancelled = YES;
+            [conn failL2CAP];
+            return stranded ? WENDY_BLE_ERR_DISCONNECTED : WENDY_BLE_ERR_TIMEOUT;
+        }
+    }
+}
 
-    if (conn.l2capWriteResult < 0) return WENDY_BLE_ERR_WRITE_FAILED;
-    return WENDY_BLE_OK;
+WendyBLEError wendy_ble_l2cap_send(WendyBLEConn handle, const uint8_t *data, int length) {
+    return wendyBLEL2CAPSend(handle, data, length, kWendyBLEWriteTimeout);
+}
+
+void wendy_ble_l2cap_abort(WendyBLEConn handle) {
+    if (!handle) return;
+    [(__bridge WendyBLEConnection *)handle failL2CAP];
 }
 
 WendyBLEL2CAPRecvResult wendy_ble_l2cap_recv(WendyBLEConn handle, int timeout_seconds) {

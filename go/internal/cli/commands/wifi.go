@@ -42,6 +42,7 @@ func newWifiCmd() *cobra.Command {
 		newWifiDisconnectCmd(),
 		newWifiRankCmd(),
 		newWifiForgetCmd(),
+		newWifiRegulatoryCmd(),
 	)
 
 	return cmd
@@ -762,12 +763,13 @@ func pickWifiNetwork(ctx context.Context, target *SelectedDevice) (string, error
 		}()
 
 		// While the rescan runs, poll the device's scan cache so SSIDs stream
-		// into the picker as they are found. Each poll returns quickly: the
-		// in-progress scan rejects new rescan requests and the list call reads
-		// the cache. Only over gRPC — the BLE transport can't multiplex
-		// concurrent calls. The deadline caps RPC traffic if the
-		// authoritative scan wedges; its result still lands whenever it
-		// finishes.
+		// into the picker as they are found. Older agents answer each poll at
+		// once from the cache. Agents that scan at most once per 30 s hold a
+		// poll that arrives during their scan until it ends, so there the
+		// picker fills in when the scan does. Only over gRPC — the BLE
+		// transport can't multiplex concurrent calls. The deadline caps RPC
+		// traffic if the authoritative scan wedges; its result still lands
+		// whenever it finishes.
 		if client.agent != nil {
 			go func() {
 				ticker := time.NewTicker(1500 * time.Millisecond)

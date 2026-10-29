@@ -1,6 +1,8 @@
 package containerd
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -15,6 +17,71 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 )
 
+// verifiedMeshResultIP accepts only one IPv4 address in this app's allocated
+// subnet. CNI CHECK subsequently proves the corresponding host-local lease,
+// bridge attachment, and namespace state before this IP is used for ingress.
+func verifiedMeshResultIP(result, subnet string) (string, error) {
+	var parsed cniResult
+	if err := json.Unmarshal([]byte(result), &parsed); err != nil || len(parsed.IPs) != 1 {
+		return "", fmt.Errorf("wendy net CNI proof has invalid IP list")
+	}
+	ip, resultNet, err := net.ParseCIDR(parsed.IPs[0].Address)
+	if err != nil || ip.To4() == nil {
+		return "", fmt.Errorf("wendy net CNI proof has invalid IPv4 address")
+	}
+	_, assignedNet, err := net.ParseCIDR(subnet)
+	if err != nil || !assignedNet.Contains(ip) || !networkMasksEqual(resultNet.Mask, assignedNet.Mask) {
+		return "", fmt.Errorf("wendy net CNI proof IP is outside assigned subnet")
+	}
+	return ip.String(), nil
+}
+
+func networkMasksEqual(a, b net.IPMask) bool {
+	return a.String() == b.String()
+}
+
+// meshCheckResultForTask maps the original CNI ADD namespace path to the
+// surviving task's procfs namespace path. The bridge CHECK plugin compares
+// these strings before performing its live bridge, veth, address, route, and
+// host-local IPAM checks. Mesh tasks do not retain the original bind mount.
+// Refuse any stored result whose original eth0 sandbox was not our canonical
+// CNI path; only that one expected-state field may be translated.
+func meshCheckResultForTask(result, originalPath, taskPath string) (string, error) {
+	var doc map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(result), &doc); err != nil {
+		return "", err
+	}
+	var interfaces []map[string]json.RawMessage
+	if err := json.Unmarshal(doc["interfaces"], &interfaces); err != nil {
+		return "", err
+	}
+	var matched int
+	for _, iface := range interfaces {
+		var name, sandbox string
+		if err := json.Unmarshal(iface["name"], &name); err != nil || name != "eth0" {
+			continue
+		}
+		if err := json.Unmarshal(iface["sandbox"], &sandbox); err != nil || sandbox != originalPath {
+			return "", fmt.Errorf("wendy net CNI proof has unexpected eth0 sandbox")
+		}
+		matched++
+		iface["sandbox"], _ = json.Marshal(taskPath)
+	}
+	if matched != 1 {
+		return "", fmt.Errorf("wendy net CNI proof must have exactly one eth0 interface")
+	}
+	updated, err := json.Marshal(interfaces)
+	if err != nil {
+		return "", err
+	}
+	doc["interfaces"] = updated
+	updated, err = json.Marshal(doc)
+	if err != nil {
+		return "", err
+	}
+	return string(updated), nil
+}
+
 // meshResolvConfDir holds per-app resolv.conf files pointing meshed
 // containers at the mesh DNS server on their bridge gateway.
 const meshResolvConfDir = "/run/wendy/mesh"
@@ -28,6 +95,23 @@ type meshDNSService interface {
 	EnsureListener(gatewayIP string) error
 	ReleaseListener(gatewayIP string)
 }
+
+// meshMDNSService owns a per-app multicast bridge. It is injected by the
+// local-mesh runtime; containerd supplies trusted CNI and port-map state.
+type meshMDNSService interface {
+	StartMeshApp(containerName, appID, ip, bridge, netnsPath, gateway string, ports []appconfig.PortMapping) error
+	StopMeshApp(containerName string)
+}
+
+// Narrow network seams let ingress authorization tests exercise the real
+// lifecycle without requiring root privileges or mutating host iptables.
+var (
+	addMeshIngressPortForward       = hostnetwork.AddIngressPortForward
+	removeMeshIngressPortForward    = hostnetwork.RemoveIngressPortForward
+	addMeshUDPIngressPortForward    = hostnetwork.AddIngressUDPPortForward
+	removeMeshUDPIngressPortForward = hostnetwork.RemoveIngressUDPPortForward
+	flushOrphanMeshPort             = hostnetwork.FlushOrphanMeshPort
+)
 
 // Compile-time check that the real DNS server satisfies the seam.
 var _ meshDNSService = (*mesh.DNSServer)(nil)
@@ -61,7 +145,7 @@ func (c *Client) ensureMeshDNS(containerName, gateway string) bool {
 		return true
 	}
 	if err := c.meshDNS.EnsureListener(gateway); err != nil {
-		c.logger.Warn("mesh: DNS listener unavailable; device-N hostnames will not resolve",
+		c.logger.Warn("wendy net: DNS listener unavailable; device-N hostnames will not resolve",
 			zap.String("container", containerName), zap.String("gateway", gateway), zap.Error(err))
 		return false
 	}
@@ -95,7 +179,7 @@ func (c *Client) releaseMeshDNS(containerName, appID string) {
 	// the same value ensureMeshDNS used to acquire the listener.
 	gw, err := meshGateway(appID)
 	if err != nil {
-		c.logger.Warn("mesh: could not derive gateway to release DNS listener (non-fatal, listener may leak until agent restart)",
+		c.logger.Warn("wendy net: could not derive gateway to release DNS listener (non-fatal, listener may leak until agent restart)",
 			zap.String("container", containerName), zap.String("app_id", appID), zap.Error(err))
 		return
 	}
@@ -139,7 +223,7 @@ func normalizeCIDR(s string) (string, error) {
 func meshGateway(appID string) (string, error) {
 	subnet, err := allocateSubnet(appID)
 	if err != nil {
-		return "", fmt.Errorf("resolving mesh gateway subnet: %w", err)
+		return "", fmt.Errorf("resolving wendy net gateway subnet: %w", err)
 	}
 	_, ipNet, err := net.ParseCIDR(subnet)
 	if err != nil {
@@ -291,7 +375,7 @@ func recreateMeshResolvConfIn(baseDir string, mounts []specs.Mount) (ok bool, er
 // resolv.conf) and never blocks a non-mesh container's start.
 func (c *Client) recreateMeshResolvConfForStart(mounts []specs.Mount) {
 	if _, err := recreateMeshResolvConfIn(meshResolvConfDir, mounts); err != nil {
-		c.logger.Warn("mesh: could not recreate resolv.conf before container start", zap.Error(err))
+		c.logger.Warn("wendy net: could not recreate resolv.conf before container start", zap.Error(err))
 	}
 }
 
@@ -306,11 +390,11 @@ func resolveMeshEgress(entitlements []appconfig.Entitlement, appID string) (para
 	}
 	cidr, err := normalizeCIDR(ent.ServiceCIDR)
 	if err != nil {
-		return meshEgressParams{}, true, fmt.Errorf("mesh entitlement has invalid serviceCIDR: %w", err)
+		return meshEgressParams{}, true, fmt.Errorf("wendy net entitlement has invalid serviceCIDR: %w", err)
 	}
 	gateway, err := meshGateway(appID)
 	if err != nil {
-		return meshEgressParams{}, true, fmt.Errorf("deriving mesh gateway: %w", err)
+		return meshEgressParams{}, true, fmt.Errorf("deriving wendy net gateway: %w", err)
 	}
 	return meshEgressParams{gateway: gateway, cidr: cidr, ports: ent.Ports}, true, nil
 }
@@ -331,17 +415,20 @@ func resolveMeshEgress(entitlements []appconfig.Entitlement, appID string) (para
 // containerName is the containerd container ID ({appID}_{serviceName}); it
 // keys the DNS-listener held map so teardown releases exactly the refcounts
 // this container took (see ensureMeshDNS/releaseMeshDNS).
-func (c *Client) applyMeshEgress(entitlements []appconfig.Entitlement, containerName, appID, netnsPath, ip string) error {
+func (c *Client) applyMeshEgress(entitlements []appconfig.Entitlement, containerName, appID, netnsPath, projectionNetnsPath, ip string) error {
 	params, ok, err := resolveMeshEgress(entitlements, appID)
 	if err != nil {
-		return fmt.Errorf("mesh egress: %w", err)
+		return fmt.Errorf("wendy net egress: %w", err)
 	}
 	if !ok {
 		return nil
 	}
 
 	if err := hostnetwork.SetMeshRoute(netnsPath, params.cidr, params.gateway); err != nil {
-		return fmt.Errorf("mesh egress: setting route for app %q: %w", appID, err)
+		return fmt.Errorf("wendy net egress: setting route for app %q: %w", appID, err)
+	}
+	if err := hostnetwork.SetMeshMDNSRoute(netnsPath, "eth0"); err != nil {
+		return fmt.Errorf("wendy net egress: setting mDNS route for app %q: %w", appID, err)
 	}
 
 	if err := hostnetwork.AddMeshRule(ip, params.cidr); err != nil {
@@ -353,10 +440,10 @@ func (c *Client) applyMeshEgress(entitlements []appconfig.Entitlement, container
 		// future change to what AddMeshRule partially applies on error does
 		// not silently skip cleanup.
 		if rmErr := hostnetwork.RemoveMeshRule(ip, params.cidr); rmErr != nil {
-			c.logger.Warn("mesh egress: best-effort rule cleanup after failed AddMeshRule also failed",
+			c.logger.Warn("wendy net egress: best-effort rule cleanup after failed AddMeshRule also failed",
 				zap.String("app_id", appID), zap.String("ip", ip), zap.Error(rmErr))
 		}
-		return fmt.Errorf("mesh egress: adding iptables rule for app %q: %w", appID, err)
+		return fmt.Errorf("wendy net egress: adding iptables rule for app %q: %w", appID, err)
 	}
 
 	if err := hostnetwork.AddMeshRedirect(ip, params.cidr, mesh.ProxyPort); err != nil {
@@ -364,10 +451,15 @@ func (c *Client) applyMeshEgress(entitlements []appconfig.Entitlement, container
 		// DNS listener has not been touched yet at this point (EnsureListener
 		// runs after this check succeeds), so there is nothing to release here.
 		if rmErr := hostnetwork.RemoveMeshRule(ip, params.cidr); rmErr != nil {
-			c.logger.Warn("mesh egress: rollback of ACCEPT rule after failed REDIRECT rule also failed",
+			c.logger.Warn("wendy net egress: rollback of ACCEPT rule after failed REDIRECT rule also failed",
 				zap.String("app_id", appID), zap.String("ip", ip), zap.Error(rmErr))
 		}
-		return fmt.Errorf("mesh egress: adding REDIRECT rule for app %q: %w", appID, err)
+		return fmt.Errorf("wendy net egress: adding REDIRECT rule for app %q: %w", appID, err)
+	}
+	if err := hostnetwork.AddMeshUDPIntercept(ip, params.cidr, containerName, mesh.UDPProxyPort); err != nil {
+		_ = hostnetwork.RemoveMeshRedirect(ip, params.cidr, mesh.ProxyPort)
+		_ = hostnetwork.RemoveMeshRule(ip, params.cidr)
+		return fmt.Errorf("net egress: adding UDP TPROXY rule for app %q: %w", appID, err)
 	}
 
 	// DNS is best-effort: without it, device-N.cloud.wendy.dev hostnames fail
@@ -380,42 +472,188 @@ func (c *Client) applyMeshEgress(entitlements []appconfig.Entitlement, container
 	// for containers whose acquisition actually succeeded (held map).
 	c.ensureMeshDNS(containerName, params.gateway)
 
-	// Ingress port forwards are also best-effort, same rationale as DNS
-	// above: without one, a peer-initiated MeshDial for that port fails with
-	// "connection refused" (see MeshService.MeshDial), but every other mesh
-	// egress capability wired above still works, so a single iptables
-	// failure must not fail container start.
-	if len(params.ports) > 0 {
-		if err := hostnetwork.EnableRouteLocalnet(bridgeName(appID)); err != nil {
-			c.logger.Warn("mesh egress: could not enable route_localnet on bridge, ingress port forwards may silently drop replies",
-				zap.String("app_id", appID), zap.Error(err))
-		}
+	// CNI's bind mount is released after app startup. The mDNS bridge remains
+	// alive for the task and must use that task's live namespace path when it
+	// later installs a newly discovered physical-LAN service route.
+	if err := c.applyMeshIngressPorts(containerName, appID, projectionNetnsPath, ip, params.ports); err != nil {
+		return err
 	}
-	for _, pm := range params.ports {
-		if err := hostnetwork.AddIngressPortForward(pm.Host, ip, pm.Container); err != nil {
-			c.logger.Warn("mesh egress: could not install ingress port forward, peer MeshDial to this port will fail",
-				zap.String("app_id", appID), zap.String("ip", ip),
-				zap.Uint16("host_port", pm.Host), zap.Uint16("container_port", pm.Container), zap.Error(err))
-		} else {
-			c.logger.Info("mesh egress: ingress port forward installed",
-				zap.String("app_id", appID), zap.String("ip", ip),
-				zap.Uint16("host_port", pm.Host), zap.Uint16("container_port", pm.Container))
-		}
+	if err := c.claimMeshSource(containerName, appID, ip, params.cidr); err != nil {
+		return fmt.Errorf("net egress: claiming app source: %w", err)
 	}
 
-	c.logger.Info("mesh egress applied",
+	c.logger.Info("wendy net egress applied",
 		zap.String("app_id", appID), zap.String("ip", ip), zap.String("service_cidr", params.cidr))
 	return nil
 }
 
-// teardownMeshEgress removes the host iptables rules (ACCEPT + REDIRECT)
+func (c *Client) claimMeshSource(containerName, appID, ip, cidr string) error {
+	bridge, err := net.InterfaceByName(bridgeName(appID))
+	if err != nil {
+		return fmt.Errorf("locating app bridge: %w", err)
+	}
+	return c.meshIngress.ClaimSource(containerName, appID, ip, cidr, bridge.Index)
+}
+
+// applyMeshIngressPorts publishes only declared host ports for an isolated
+// mesh task whose CNI setup has completed. It also runs when StartContainer
+// reuses a validated network sandbox, because that path skips applyMeshEgress.
+// A failed individual iptables forward remains unavailable to remote peers;
+// a conflicting host port fails the second task's start before iptables can
+// replace the first task's rule.
+func (c *Client) applyMeshIngressPorts(containerName, appID, netnsPath, ip string, ports []appconfig.PortMapping) error {
+	if ip == "" {
+		return fmt.Errorf("wendy net ingress: container %q has no CNI IP", containerName)
+	}
+	if c.meshIngress == nil {
+		return fmt.Errorf("wendy net ingress: authorization registry is unavailable")
+	}
+	c.meshIngressMu.Lock()
+	defer c.meshIngressMu.Unlock()
+	if len(ports) == 0 {
+		return c.startMeshMDNS(containerName, appID, netnsPath, ip, nil)
+	}
+
+	seen := make(map[string]struct{}, len(ports))
+	for _, pm := range ports {
+		if pm.Host == 0 || pm.Container == 0 {
+			return fmt.Errorf("wendy net ingress: container %q declares a zero port", containerName)
+		}
+		protocol := pm.Protocol
+		if protocol == "" {
+			protocol = "tcp"
+		}
+		if protocol != "tcp" && protocol != "udp" {
+			return fmt.Errorf("wendy net ingress: invalid protocol %q", protocol)
+		}
+		key := fmt.Sprintf("%s/%d", protocol, pm.Host)
+		if _, duplicate := seen[key]; duplicate {
+			return fmt.Errorf("wendy net ingress: container %q declares host port %d more than once", containerName, pm.Host)
+		}
+		seen[key] = struct{}{}
+		var err error
+		if protocol == "udp" {
+			err = c.meshIngress.CheckUDPAvailable(containerName, pm.Host)
+		} else {
+			err = c.meshIngress.CheckAvailable(containerName, pm.Host)
+		}
+		if err != nil {
+			return err
+		}
+	}
+	if err := hostnetwork.EnableRouteLocalnet(bridgeName(appID)); err != nil {
+		c.logger.Warn("wendy net ingress: could not enable route_localnet on bridge; ingress replies may fail",
+			zap.String("app_id", appID), zap.Error(err))
+	}
+	forwarded := make([]appconfig.PortMapping, 0, len(ports))
+	for _, pm := range ports {
+		add, remove := addMeshIngressPortForward, removeMeshIngressPortForward
+		if pm.Protocol == "udp" {
+			add, remove = addMeshUDPIngressPortForward, removeMeshUDPIngressPortForward
+			if !c.meshIngress.Allowed(pm.Host) {
+				if err := flushOrphanMeshPort(pm.Host, "tcp"); err != nil {
+					return err
+				}
+			}
+		} else if !c.meshIngress.AllowedUDP(pm.Host) {
+			if err := flushOrphanMeshPort(pm.Host, "udp"); err != nil {
+				return err
+			}
+		}
+		if err := add(pm.Host, ip, pm.Container); err != nil {
+			c.logger.Warn("wendy net ingress: could not install port forward; remote peers cannot open this port",
+				zap.String("app_id", appID), zap.String("ip", ip),
+				zap.Uint16("host_port", pm.Host), zap.Uint16("container_port", pm.Container), zap.Error(err))
+			continue
+		}
+		var err error
+		if pm.Protocol == "udp" {
+			err = c.meshIngress.ClaimUDPForApp(containerName, appID, pm.Host, ip, pm.Container)
+		} else {
+			err = c.meshIngress.ClaimForApp(containerName, appID, pm.Host, ip, pm.Container)
+		}
+		if err != nil {
+			_ = remove(pm.Host, ip, pm.Container)
+			return fmt.Errorf("wendy net ingress: claiming host port %d: %w", pm.Host, err)
+		}
+		forwarded = append(forwarded, pm)
+		c.logger.Info("wendy net ingress: port forward authorized",
+			zap.String("app_id", appID), zap.String("ip", ip),
+			zap.Uint16("host_port", pm.Host), zap.Uint16("container_port", pm.Container))
+	}
+	// The collector must see only live forwards. Otherwise an app announcing
+	// an unforwarded declared port causes authorization to fail and tears down
+	// the bridge, including unrelated services that did forward successfully.
+	return c.startMeshMDNS(containerName, appID, netnsPath, ip, forwarded)
+}
+
+func (c *Client) startMeshMDNS(containerName, appID, netnsPath, ip string, ports []appconfig.PortMapping) error {
+	if c.meshMDNS == nil {
+		return nil
+	}
+	address := net.ParseIP(ip).To4()
+	if address == nil {
+		return errors.New("net app has no IPv4 address")
+	}
+	gatewayIP := append(net.IP(nil), address...)
+	gatewayIP[3] = gatewayIP[3]&0xf0 | 1 // CNI bridge uses a /28 and its first address.
+	gateway := gatewayIP.String()
+	if err := c.meshMDNS.StartMeshApp(containerName, appID, ip, bridgeName(appID), netnsPath, gateway, ports); err != nil {
+		// Direct VIP traffic remains usable if an app multicast bridge cannot
+		// start. The catalog never publishes this app without its bridge.
+		c.logger.Warn("wendy net app mDNS bridge unavailable", zap.String("app_id", appID), zap.Error(err))
+	}
+	return nil
+}
+
+// beginMeshIngressRun revokes any claim from the previous task before its
+// replacement starts. The returned generation ties task-exit revocation to
+// this run, so a delayed exit event cannot revoke a newer replacement.
+func (c *Client) beginMeshIngressRun(containerName string) uint64 {
+	c.meshIngressMu.Lock()
+	defer c.meshIngressMu.Unlock()
+	if c.meshMDNS != nil {
+		c.meshMDNS.StopMeshApp(containerName)
+	}
+	c.meshIngress.Release(containerName)
+	c.meshIngressNext++
+	if c.meshIngressRuns == nil {
+		c.meshIngressRuns = make(map[string]uint64)
+	}
+	c.meshIngressRuns[containerName] = c.meshIngressNext
+	return c.meshIngressNext
+}
+
+func (c *Client) releaseMeshIngressRun(containerName string, generation uint64) {
+	c.meshIngressMu.Lock()
+	defer c.meshIngressMu.Unlock()
+	if generation == 0 || c.meshIngressRuns[containerName] != generation {
+		return
+	}
+	if c.meshMDNS != nil {
+		c.meshMDNS.StopMeshApp(containerName)
+	}
+	c.meshIngress.Release(containerName)
+	delete(c.meshIngressRuns, containerName)
+}
+
+func (c *Client) releaseMeshIngress(containerName string) {
+	c.meshIngressMu.Lock()
+	defer c.meshIngressMu.Unlock()
+	if c.meshMDNS != nil {
+		c.meshMDNS.StopMeshApp(containerName)
+	}
+	c.meshIngress.Release(containerName)
+	delete(c.meshIngressRuns, containerName)
+}
+
+// teardownMeshEgress removes the exact owner's TCP, UDP and ingress rules
 // installed by applyMeshEgress and releases the container's DNS-listener
 // reference. It is a complete no-op for apps without the mesh entitlement.
-// The iptables removals are skipped if ip is empty (the container's IP could
-// not be recovered — see stopOne for how it is normally recovered from
-// c.serviceIPs), but the DNS release still runs: it is keyed by
-// containerName via the held map, not by IP, so a lost IP must not strand a
-// listener refcount. The netns route needs no explicit cleanup: it is
+// The iptables removals are skipped when ip is empty. Lifecycle callers use
+// retireMeshNetwork to prove ownership before reaching this function. The
+// DNS release is keyed by containerName, so an already-released IP cannot
+// strand a listener reference. The netns route needs no explicit cleanup: it is
 // destroyed automatically when the network namespace is torn down with the
 // container.
 //
@@ -423,39 +661,45 @@ func (c *Client) applyMeshEgress(entitlements []appconfig.Entitlement, container
 // release consumes the held-map entry on first call, so running stopOne and
 // then deleteOne for the same container releases exactly once.
 //
-// Errors are logged but not returned — mirroring CNIDel's best-effort
-// contract, so a host-side iptables failure never blocks a container stop.
-func (c *Client) teardownMeshEgress(entitlements []appconfig.Entitlement, containerName, appID, ip string) {
+// Failure keeps the CNI proof and allocation owned so the caller can retry
+// before releasing an address that may still have security-sensitive rules.
+func (c *Client) teardownMeshEgress(entitlements []appconfig.Entitlement, containerName, appID, ip string) error {
+	c.releaseMeshIngress(containerName)
 	ent, found := findMeshEntitlement(entitlements)
 	if !found {
-		return
+		return nil
 	}
+	var errs []error
 	if ip != "" {
 		cidr, err := normalizeCIDR(ent.ServiceCIDR)
 		if err != nil {
-			c.logger.Warn("mesh egress teardown: invalid serviceCIDR in entitlement, skipping rule removal",
-				zap.String("app_id", appID), zap.Error(err))
-		} else {
-			if err := hostnetwork.RemoveMeshRule(ip, cidr); err != nil {
-				c.logger.Warn("mesh egress teardown: RemoveMeshRule failed (non-fatal)",
-					zap.String("app_id", appID), zap.String("ip", ip), zap.Error(err))
-			}
-			if err := hostnetwork.RemoveMeshRedirect(ip, cidr, mesh.ProxyPort); err != nil {
-				c.logger.Warn("mesh egress teardown: RemoveMeshRedirect failed (non-fatal)",
-					zap.String("app_id", appID), zap.String("ip", ip), zap.Error(err))
-			}
+			return err
 		}
+		errs = append(errs,
+			removeMeshEgressRule(ip, cidr),
+			removeMeshEgressRedirect(ip, cidr, mesh.ProxyPort),
+			removeMeshUDPEgressIntercept(ip, cidr, containerName, mesh.UDPProxyPort),
+		)
 		for _, pm := range ent.Ports {
-			if err := hostnetwork.RemoveIngressPortForward(pm.Host, ip, pm.Container); err != nil {
-				c.logger.Warn("mesh egress teardown: RemoveIngressPortForward failed (non-fatal)",
-					zap.String("app_id", appID), zap.String("ip", ip),
-					zap.Uint16("host_port", pm.Host), zap.Uint16("container_port", pm.Container), zap.Error(err))
+			remove := removeMeshIngressPortForward
+			if pm.Protocol == "udp" {
+				remove = removeMeshUDPIngressPortForward
 			}
+			errs = append(errs, remove(pm.Host, ip, pm.Container))
 		}
 	}
-	// Pairs with ensureMeshDNS in applyMeshEgress: releases exactly the
-	// refcount this container acquired, or nothing if it never acquired one
-	// (held-map guard — see releaseMeshDNS for the sibling-imbalance and
-	// double-teardown rationale).
+	if err := errors.Join(errs...); err != nil {
+		return fmt.Errorf("retiring net rules for %q: %w", containerName, err)
+	}
+	if err := os.Remove(networkSandboxResultPath(containerName)); err != nil && !os.IsNotExist(err) {
+		return err
+	}
 	c.releaseMeshDNS(containerName, appID)
+	return nil
 }
+
+var (
+	removeMeshEgressRule         = hostnetwork.RemoveMeshRule
+	removeMeshEgressRedirect     = hostnetwork.RemoveMeshRedirect
+	removeMeshUDPEgressIntercept = hostnetwork.RemoveMeshUDPIntercept
+)

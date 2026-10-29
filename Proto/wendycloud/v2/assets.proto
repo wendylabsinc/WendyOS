@@ -92,12 +92,13 @@ message Asset {
   optional double connection_latitude = 33;
   optional double connection_longitude = 34;
 
-  // Device binding: the name pki-core stamped into the device's
-  // /device/<name> SPIFFE identity at enrollment. Operator-set, never learned
-  // from a presented certificate — cloud resolves an mTLS device identity by
-  // looking this up, so a device that could set it could claim another's row
-  // (WDY-2902).
-  optional string pki_device_name = 35;
+  // Device binding: the UUID pki-core stamped into the device's
+  // /device/<uuid> SPIFFE identity at enrollment. Since WDY-3919 a device has
+  // ONE id: this equals `id` for every compute device, and cloud resolves an
+  // mTLS device identity by `id`. Deprecated: equals the asset id; removed
+  // after the cloud release that ships WDY-3919 (expand -> migrate ->
+  // contract). New readers use `id`.
+  optional string pki_device_name = 35 [deprecated = true];
 
   // Hardware facts the device reports about itself (WDY-3544), beside the
   // older columns above (device_type = board model, architecture, cpu_cores,
@@ -120,6 +121,10 @@ message Asset {
   optional string site = 45;
   // ID of that site (SiteService, WDY-3590); absent only from an older cloud.
   optional string site_id = 46;
+
+  // Optional cosmetic label (WDY-3919): any characters, not unique, shown in
+  // lists. `name` stays the tenant-unique DNS label that selects the device.
+  optional string display_name = 47;
 
   google.protobuf.Timestamp created_at = 21;
   google.protobuf.Timestamp updated_at = 22;
@@ -154,8 +159,12 @@ message CreateAssetRequest {
   optional double altitude = 23;
   optional double heading  = 24;
 
-  // See Asset.pki_device_name.
+  // See Asset.pki_device_name. When set it becomes the asset `id` (a canonical
+  // lowercase UUID); a UUID already in use is ALREADY_EXISTS.
   optional string pki_device_name = 25;
+
+  // See Asset.display_name.
+  optional string display_name = 26;
 }
 
 message GetAssetRequest {
@@ -192,7 +201,9 @@ message UpdateAssetRequest {
   optional string asset_type = 21;
   optional double heading = 22;
 
-  // See Asset.pki_device_name.
+  // See Asset.pki_device_name. The device UUID is the asset id and never
+  // changes: only the asset's own id is accepted, anything else (including
+  // empty) is FAILED_PRECONDITION. Unenroll by deleting the asset.
   optional string pki_device_name = 23;
 
   // Site NAME, see Asset.site. Absent leaves it unchanged; empty string moves
@@ -205,6 +216,8 @@ message UpdateAssetRequest {
   // leaves them unchanged. Same convention as
   // SetOrgPublicRoutingRequest.update_port_denylist (WDY-3581).
   bool update_tags = 25;
+  // See Asset.display_name. Absent leaves it unchanged; empty clears it.
+  optional string display_name = 26;
 }
 
 message DeleteAssetRequest {

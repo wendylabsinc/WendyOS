@@ -32,7 +32,7 @@ Supply-chain and CI/CD incidents are always treated as **Critical** regardless o
 
 ### Mitigate
 
-1. Use a private repo, or private pull request via GitHub advisory reporting to generate a patch. 
+1. Use a private repo, or private pull request via GitHub advisory reporting to generate a patch.
 2. Ask the reporter to verify patch.
 3. Alert important and trusted adopters.
 4. Prepare advisory
@@ -40,22 +40,22 @@ Supply-chain and CI/CD incidents are always treated as **Critical** regardless o
     - Summary: Summary of vulnerability, severity.
     - Details: More detailed description of vulnerability.
     - Impact: How does this issue impact users of WendyOS.
-    - Mitigations: Are there ways to mitigate against this issue without updating. 
+    - Mitigations: Are there ways to mitigate against this issue without updating.
     - Timeline: When reported, patch written, CVE request, received and published.
     - Patches: Details of patched versions and patch.
     - Credit: Add credit to reporter
     - Select CWE.
-5. Request CVE       
+5. Request CVE
 6. We aim to resolve any issue within 30 days, but this may not always be possible.
 
 ### Remediation and Disclosure
 
-- Merge pull request and release versions of affected library with fix included. Security fixes are only applied to the **latest** stable releases of WendyOS. End users will be required to upgrade to latest once a release is made. 
+- Merge pull request and release versions of affected library with fix included. Security fixes are only applied to the **latest** stable releases of WendyOS. End users will be required to upgrade to latest once a release is made.
 - Release CVE advisory.
 
 ## Learn
 
-- How was the vulnerability introduced? 
+- How was the vulnerability introduced?
 - What could we have done to prevent it?
 - Is there anything we can to ensure it doesn't happen again.
 - What did we do well during the process?

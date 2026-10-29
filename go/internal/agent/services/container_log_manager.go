@@ -130,6 +130,12 @@ func (m *ContainerLogManager) Unsubscribe(appName string, subID string) {
 }
 
 func (m *ContainerLogManager) Publish(appName string, output ContainerOutput) {
+	if output.PublishIfCurrent != nil {
+		guard := output.PublishIfCurrent
+		output.PublishIfCurrent = nil
+		guard(func() { m.Publish(appName, output) })
+		return
+	}
 	m.publishToTelemetry(appName, output)
 
 	// Fan out to all subscribers.

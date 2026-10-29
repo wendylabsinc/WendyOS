@@ -717,7 +717,7 @@ type RunContainerLayersRequest struct {
 	Cmd string `protobuf:"bytes,3,opt,name=cmd,proto3" json:"cmd,omitempty"`
 	// The layers that will be uploaded to the agent.
 	Layers []*RunContainerLayerHeader `protobuf:"bytes,4,rep,name=layers,proto3" json:"layers,omitempty"`
-	// / The `wendy.json` file as found in the project
+	/// The `wendy.json` file as found in the project
 	AppConfig []byte `protobuf:"bytes,5,opt,name=app_config,json=appConfig,proto3" json:"app_config,omitempty"`
 	// Optional restart policy override for Docker runtime.
 	RestartPolicy *RestartPolicy `protobuf:"bytes,6,opt,name=restart_policy,json=restartPolicy,proto3,oneof" json:"restart_policy,omitempty"`
@@ -733,7 +733,9 @@ type RunContainerLayersRequest struct {
 	// Additional environment variables to inject. Format: "KEY=VALUE".
 	// Same semantics as CreateContainerRequest.env, which this path forwards to.
 	// Agents predating this field ignore it and start the container without it.
-	Env           []string `protobuf:"bytes,11,rep,name=env,proto3" json:"env,omitempty"`
+	Env []string `protobuf:"bytes,11,rep,name=env,proto3" json:"env,omitempty"`
+	// See CreateContainerRequest.release_id.
+	ReleaseId     *string `protobuf:"bytes,12,opt,name=release_id,json=releaseId,proto3,oneof" json:"release_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -845,6 +847,13 @@ func (x *RunContainerLayersRequest) GetEnv() []string {
 	return nil
 }
 
+func (x *RunContainerLayersRequest) GetReleaseId() string {
+	if x != nil && x.ReleaseId != nil {
+		return *x.ReleaseId
+	}
+	return ""
+}
+
 type CreateContainerRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	ImageName     string                 `protobuf:"bytes,1,opt,name=image_name,json=imageName,proto3" json:"image_name,omitempty"`
@@ -857,7 +866,13 @@ type CreateContainerRequest struct {
 	// Additional environment variables to inject. Format: "KEY=VALUE".
 	// Applied after the image's built-in env and before Wendy system env vars,
 	// so Wendy vars always win.
-	Env           []string `protobuf:"bytes,8,rep,name=env,proto3" json:"env,omitempty"`
+	Env []string `protobuf:"bytes,8,rep,name=env,proto3" json:"env,omitempty"`
+	// Cloud AppRelease id (a UUID) this deploy was recorded as, set only when
+	// the operator opted into recording (`wendy run --record-release`). The
+	// agent labels the container with it and reports it as the running
+	// release. Unset: the deploy is not a recorded release. Agents predating
+	// this field ignore it.
+	ReleaseId     *string `protobuf:"bytes,9,opt,name=release_id,json=releaseId,proto3,oneof" json:"release_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -948,8 +963,18 @@ func (x *CreateContainerRequest) GetEnv() []string {
 	return nil
 }
 
+func (x *CreateContainerRequest) GetReleaseId() string {
+	if x != nil && x.ReleaseId != nil {
+		return *x.ReleaseId
+	}
+	return ""
+}
+
 type CreateContainerResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Digest of the image manifest the container was created from, as the
+	// device holds it. The CLI records it on the release it created.
+	ImageDigest   *string `protobuf:"bytes,1,opt,name=image_digest,json=imageDigest,proto3,oneof" json:"image_digest,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -982,6 +1007,13 @@ func (x *CreateContainerResponse) ProtoReflect() protoreflect.Message {
 // Deprecated: Use CreateContainerResponse.ProtoReflect.Descriptor instead.
 func (*CreateContainerResponse) Descriptor() ([]byte, []int) {
 	return file_wendy_agent_services_v1_wendy_agent_v1_container_service_proto_rawDescGZIP(), []int{15}
+}
+
+func (x *CreateContainerResponse) GetImageDigest() string {
+	if x != nil && x.ImageDigest != nil {
+		return *x.ImageDigest
+	}
+	return ""
 }
 
 type ValidateContainerResponse struct {
@@ -3009,7 +3041,9 @@ func (x *ExecContainerRequest_ExecStart) GetTermSize() *WindowSize {
 }
 
 type RunContainerLayersResponse_Started struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// See CreateContainerResponse.image_digest.
+	ImageDigest   *string `protobuf:"bytes,1,opt,name=image_digest,json=imageDigest,proto3,oneof" json:"image_digest,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3042,6 +3076,13 @@ func (x *RunContainerLayersResponse_Started) ProtoReflect() protoreflect.Message
 // Deprecated: Use RunContainerLayersResponse_Started.ProtoReflect.Descriptor instead.
 func (*RunContainerLayersResponse_Started) Descriptor() ([]byte, []int) {
 	return file_wendy_agent_services_v1_wendy_agent_v1_container_service_proto_rawDescGZIP(), []int{25, 0}
+}
+
+func (x *RunContainerLayersResponse_Started) GetImageDigest() string {
+	if x != nil && x.ImageDigest != nil {
+		return *x.ImageDigest
+	}
+	return ""
 }
 
 type RunContainerLayersResponse_ConsoleOutput struct {
@@ -3118,7 +3159,7 @@ const file_wendy_agent_services_v1_wendy_agent_v1_container_service_proto_rawDes
 	"\x04size\x18\x02 \x01(\x03R\x04size\"9\n" +
 	"\vLayerHeader\x12\x16\n" +
 	"\x06digest\x18\x01 \x01(\tR\x06digest\x12\x12\n" +
-	"\x04size\x18\x02 \x01(\x03R\x04size\"\xbb\x03\n" +
+	"\x04size\x18\x02 \x01(\x03R\x04size\"\xee\x03\n" +
 	"\x19RunContainerLayersRequest\x12\x1d\n" +
 	"\n" +
 	"image_name\x18\x01 \x01(\tR\timageName\x12\x19\n" +
@@ -3134,8 +3175,11 @@ const file_wendy_agent_services_v1_wendy_agent_v1_container_service_proto_rawDes
 	"\fimage_config\x18\t \x01(\fR\vimageConfig\x12'\n" +
 	"\x0fimage_signature\x18\n" +
 	" \x01(\fR\x0eimageSignature\x12\x10\n" +
-	"\x03env\x18\v \x03(\tR\x03envB\x11\n" +
-	"\x0f_restart_policy\"\xa2\x02\n" +
+	"\x03env\x18\v \x03(\tR\x03env\x12\"\n" +
+	"\n" +
+	"release_id\x18\f \x01(\tH\x01R\treleaseId\x88\x01\x01B\x11\n" +
+	"\x0f_restart_policyB\r\n" +
+	"\v_release_id\"\xd5\x02\n" +
 	"\x16CreateContainerRequest\x12\x1d\n" +
 	"\n" +
 	"image_name\x18\x01 \x01(\tR\timageName\x12\x19\n" +
@@ -3147,9 +3191,14 @@ const file_wendy_agent_services_v1_wendy_agent_v1_container_service_proto_rawDes
 	"workingDir\x12:\n" +
 	"\x0erestart_policy\x18\x06 \x01(\v2\x0e.RestartPolicyH\x00R\rrestartPolicy\x88\x01\x01\x12\x1b\n" +
 	"\tuser_args\x18\a \x03(\tR\buserArgs\x12\x10\n" +
-	"\x03env\x18\b \x03(\tR\x03envB\x11\n" +
-	"\x0f_restart_policy\"\x19\n" +
-	"\x17CreateContainerResponse\"\x1b\n" +
+	"\x03env\x18\b \x03(\tR\x03env\x12\"\n" +
+	"\n" +
+	"release_id\x18\t \x01(\tH\x01R\treleaseId\x88\x01\x01B\x11\n" +
+	"\x0f_restart_policyB\r\n" +
+	"\v_release_id\"R\n" +
+	"\x17CreateContainerResponse\x12&\n" +
+	"\fimage_digest\x18\x01 \x01(\tH\x00R\vimageDigest\x88\x01\x01B\x0f\n" +
+	"\r_image_digest\"\x1b\n" +
 	"\x19ValidateContainerResponse\"\xdc\x02\n" +
 	"\x17CreateContainerProgress\x12L\n" +
 	"\x05phase\x18\x01 \x01(\x0e26.wendy.agent.services.v1.CreateContainerProgress.PhaseR\x05phase\x12\x1f\n" +
@@ -3210,12 +3259,14 @@ const file_wendy_agent_services_v1_wendy_agent_v1_container_service_proto_rawDes
 	"\x0fCompressionType\x12\x14\n" +
 	"\x10COMPRESSION_GZIP\x10\x00\x12\x14\n" +
 	"\x10COMPRESSION_ZSTD\x10\x01\x12\x14\n" +
-	"\x10COMPRESSION_NONE\x10\x02\"\x8a\x03\n" +
+	"\x10COMPRESSION_NONE\x10\x02\"\xc3\x03\n" +
 	"\x1aRunContainerLayersResponse\x12W\n" +
 	"\astarted\x18\x01 \x01(\v2;.wendy.agent.services.v1.RunContainerLayersResponse.StartedH\x00R\astarted\x12h\n" +
 	"\rstdout_output\x18\x02 \x01(\v2A.wendy.agent.services.v1.RunContainerLayersResponse.ConsoleOutputH\x00R\fstdoutOutput\x12h\n" +
-	"\rstderr_output\x18\x03 \x01(\v2A.wendy.agent.services.v1.RunContainerLayersResponse.ConsoleOutputH\x00R\fstderrOutput\x1a\t\n" +
-	"\aStarted\x1a#\n" +
+	"\rstderr_output\x18\x03 \x01(\v2A.wendy.agent.services.v1.RunContainerLayersResponse.ConsoleOutputH\x00R\fstderrOutput\x1aB\n" +
+	"\aStarted\x12&\n" +
+	"\fimage_digest\x18\x01 \x01(\tH\x00R\vimageDigest\x88\x01\x01B\x0f\n" +
+	"\r_image_digest\x1a#\n" +
 	"\rConsoleOutput\x12\x12\n" +
 	"\x04data\x18\x01 \x01(\fR\x04dataB\x0f\n" +
 	"\rresponse_type\"1\n" +
@@ -3478,6 +3529,7 @@ func file_wendy_agent_services_v1_wendy_agent_v1_container_service_proto_init() 
 	file_wendy_agent_services_v1_shared_proto_init()
 	file_wendy_agent_services_v1_wendy_agent_v1_container_service_proto_msgTypes[13].OneofWrappers = []any{}
 	file_wendy_agent_services_v1_wendy_agent_v1_container_service_proto_msgTypes[14].OneofWrappers = []any{}
+	file_wendy_agent_services_v1_wendy_agent_v1_container_service_proto_msgTypes[15].OneofWrappers = []any{}
 	file_wendy_agent_services_v1_wendy_agent_v1_container_service_proto_msgTypes[18].OneofWrappers = []any{
 		(*CreateContainerProgressResponse_Progress)(nil),
 		(*CreateContainerProgressResponse_Completed)(nil),
@@ -3504,6 +3556,7 @@ func file_wendy_agent_services_v1_wendy_agent_v1_container_service_proto_init() 
 	}
 	file_wendy_agent_services_v1_wendy_agent_v1_container_service_proto_msgTypes[40].OneofWrappers = []any{}
 	file_wendy_agent_services_v1_wendy_agent_v1_container_service_proto_msgTypes[42].OneofWrappers = []any{}
+	file_wendy_agent_services_v1_wendy_agent_v1_container_service_proto_msgTypes[50].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{

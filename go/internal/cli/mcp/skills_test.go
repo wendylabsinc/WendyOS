@@ -278,6 +278,21 @@ func verifySkillImport(t *testing.T, exchange skillExchange) {
 	}
 }
 
+func TestSkillFrontmatterWindowsLineEndings(t *testing.T) {
+	for _, opening := range []string{"\n", "\r\n"} {
+		for _, closing := range []string{"\n", "\r\n"} {
+			data := []byte("---" + opening + "name: example\r\ndescription: Windows checkout\r\n---" + closing + "\r\nBody\r\n")
+			fm, offset, err := skillFrontmatter(data)
+			if err != nil {
+				t.Fatalf("opening %q, closing %q: %v", opening, closing, err)
+			}
+			if fm["name"] != "example" || fm["description"] != "Windows checkout" || string(data[offset:]) != "\r\nBody\r\n" {
+				t.Fatalf("incorrect metadata or original-byte offset: %+v, %d", fm, offset)
+			}
+		}
+	}
+}
+
 func TestSkillFrontmatterPreservesAllFields(t *testing.T) {
 	data := []byte("---\nname: example\ndescription: |\n  Multiple lines\n  preserved here.\nlicense: MIT\ndisable-model-invocation: true\nmetadata:\n  version: 2\nallowed-tools:\n  - resources/read\n---\n\nBody\n")
 	fm, offset, err := skillFrontmatter(data)
@@ -293,14 +308,19 @@ func TestSkillFrontmatterPreservesAllFields(t *testing.T) {
 }
 
 // Assistants that import the bundle (Codex, ChatGPT, Claude Code) learn tools
-// from its entry point. A tool added to a group must be listed
-// there, or the skill silently falls behind the server.
+// from the MCP reference its entry point links to. A tool added to a group must
+// be listed there, or the skill silently falls behind the server. The tool list
+// stays out of SKILL.md itself so CLI-only agents do not load it.
 func TestBundledSkillListsEveryAdvertisedTool(t *testing.T) {
 	catalog, err := embeddedSkillCatalog()
 	if err != nil {
 		t.Fatal(err)
 	}
-	main := string(catalog.files[skillBaseURI+"SKILL.md"])
+	const reference = "references/mcp.md"
+	if main := string(catalog.files[skillBaseURI+"SKILL.md"]); !strings.Contains(main, "]("+reference+")") {
+		t.Fatalf("SKILL.md must link to %s, which lists the MCP tools", reference)
+	}
+	tools := string(catalog.files[skillBaseURI+reference])
 	names := map[string]bool{}
 	for _, group := range toolGroups {
 		for _, name := range group {
@@ -309,8 +329,8 @@ func TestBundledSkillListsEveryAdvertisedTool(t *testing.T) {
 	}
 	sorted := slices.Sorted(maps.Keys(names))
 	for _, name := range sorted {
-		if !strings.Contains(main, "`"+name+"`") && !strings.Contains(main, "`"+name+"(") {
-			t.Errorf("SKILL.md does not list MCP tool %s; add it to plugins/wendy-agentic-coding/skills/wendy/SKILL.md and run scripts/sync-agent-skills.py", name)
+		if !strings.Contains(tools, "`"+name+"`") && !strings.Contains(tools, "`"+name+"(") {
+			t.Errorf("%s does not list MCP tool %s; add it to plugins/wendy-agentic-coding/skills/wendy/%s and run scripts/sync-agent-skills.py", reference, name, reference)
 		}
 	}
 }

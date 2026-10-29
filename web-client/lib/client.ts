@@ -1,5 +1,5 @@
 export type View =
-  "Overview" | "Devices" | "Applications" | "Logs" | "Metrics" | "Traces";
+  "Overview" | "Devices" | "Networks" | "Applications" | "Logs" | "Metrics" | "Traces";
 export type App = {
   id: string;
   deviceId: string;

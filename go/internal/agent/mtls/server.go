@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/wendylabsinc/wendy/go/internal/agent/interceptor"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
@@ -189,29 +188,23 @@ func NewClientTLSConfig(certPEM, chainPEM, keyPEM string, logger *zap.Logger) (*
 	return cfg, nil
 }
 
-// NewClientTLSConfigExpectingPeer is like NewClientTLSConfig but additionally
+// NewClientTLSConfigExpectingDevice is like NewClientTLSConfig but additionally
 // pins the expected peer identity, closing the mesh LAN-dial spoofing gap:
-// mDNS advertises a device's cloud asset ID over an unauthenticated TXT
+// mDNS advertises a device's SPIFFE principal over an unauthenticated TXT
 // record (discoverOnLAN), so chain validity alone — what NewClientTLSConfig
 // checks — only proves the peer holds a cert signed by a trusted CA, not that
 // it is the specific device the caller intended to reach. Any other
-// same-CA-issued cert (a different asset in the same org, or a user cert)
-// could otherwise impersonate the mDNS-advertised target and MITM the
-// connection. The returned config's VerifyPeerCertificate runs the normal
-// chain check first, then pins the peer: when wantPeer is a device UUID it
-// applies VerifyPeerDevice (the device-to-device rule); otherwise wantPeer is a
-// legacy int32 asset id and the leaf must be that asset in this device's own
-// tenant.
+// same-CA-issued cert could otherwise impersonate the mDNS-advertised target
+// and MITM the connection. The returned config's VerifyPeerCertificate runs
+// the normal chain check first, then requires the peer leaf to carry a tenant
+// SPIFFE device principal equal to want.
 //
-// The tenant is read off certPEM — this device's own leaf — rather than passed
-// in: the invariant a mesh dial enforces is "the same tenant I am in", and both
-// callers were already passing their own org. Deriving it here means a device
-// whose certificate has moved from a urn:wendy org to a pki-core tenant SPIFFE
-// principal compares like with like without either caller learning about it.
-// On the legacy pin, a device that cannot determine its own tenant skips the
-// tenant half of the check (the asset id still pins); the device rule has no
-// such grace.
-func NewClientTLSConfigExpectingPeer(certPEM, chainPEM, keyPEM string, logger *zap.Logger, wantPeer string) (*tls.Config, error) {
+// The caller's tenant is read off certPEM rather than passed in. The
+// invariant is "a device in the tenant I am in", so a
+// want naming a foreign tenant is rejected even if some CA-signed leaf
+// somewhere matches it. A caller without a tenant identity is refused;
+// a valid operator credential can establish the same tenant boundary.
+func NewClientTLSConfigExpectingDevice(certPEM, chainPEM, keyPEM string, logger *zap.Logger, want meshid.Device) (*tls.Config, error) {
 	base, err := NewClientTLSConfig(certPEM, chainPEM, keyPEM, logger)
 	if err != nil {
 		return nil, err
@@ -229,48 +222,89 @@ func NewClientTLSConfigExpectingPeer(certPEM, chainPEM, keyPEM string, logger *z
 		if err != nil {
 			return fmt.Errorf("mtls: parsing peer certificate: %w", err)
 		}
-		if _, err := uuid.Parse(wantPeer); err == nil {
-			return VerifyPeerDevice(leaf, ownScope.TenantUUID, wantPeer)
+		if !haveOwnScope || ownScope.TenantUUID == "" {
+			return errors.New("mtls: caller has no tenant identity")
 		}
-		// Legacy pin: wantPeer is the int32 cloud asset id the v1 mesh data
-		// plane addresses peers by (mDNS TXT "assetid" → meshDialLAN). It goes
-		// with the mesh data-plane cutover to the device UUID (WDY-3919).
-		ident, found, err := certs.IdentityFromCert(leaf)
+		if want.Tenant().String() != ownScope.TenantUUID {
+			return fmt.Errorf("mtls: expected peer %s outside own tenant %s", want.Principal(), ownScope.TenantUUID)
+		}
+		if err := VerifyPeerDevice(leaf, ownScope.TenantUUID, want.UUID().String()); err != nil {
+			return err
+		}
+		return nil
+	}
+	applyPeerPin(base, pinnedVerify)
+	return base, nil
+}
+
+// NewClientTLSConfigExpectingIdentity is the non-mesh sibling of
+// NewClientTLSConfigExpectingDevice for dials whose identity contract is a
+// certs.WendyIdentity rather than a mesh device principal — sensor pairing
+// reaches source agents and Wendy Lite boards, which may still carry legacy
+// urn:wendy asset identities or transitional dual-SAN leaves. The peer leaf
+// must name exactly `want` (SameEntity: principals compared when both sides
+// have one, legacy scope+type+id otherwise) and live in this device's own
+// tenant when that tenant is knowable.
+func NewClientTLSConfigExpectingIdentity(certPEM, chainPEM, keyPEM string, logger *zap.Logger, want certs.WendyIdentity) (*tls.Config, error) {
+	base, err := NewClientTLSConfig(certPEM, chainPEM, keyPEM, logger)
+	if err != nil {
+		return nil, err
+	}
+	ownScope, haveOwnScope := certs.ScopeFromCertPEM(certPEM)
+	chainVerify := base.VerifyPeerCertificate
+	pinnedVerify := func(rawCerts [][]byte, verifiedChains [][]*x509.Certificate) error {
+		if err := chainVerify(rawCerts, verifiedChains); err != nil {
+			return err
+		}
+		if len(rawCerts) == 0 {
+			return errors.New("mtls: no peer certificate presented")
+		}
+		leaf, err := x509.ParseCertificate(rawCerts[0])
+		if err != nil {
+			return fmt.Errorf("mtls: parsing peer certificate: %w", err)
+		}
+		peer, found, err := certs.IdentityFromCert(leaf)
 		if err != nil {
 			return fmt.Errorf("mtls: parsing peer wendy identity: %w", err)
 		}
 		if !found {
 			return errors.New("mtls: peer certificate carries no wendy identity")
 		}
-		if ident.EntityType != certs.EntityAsset || ident.EntityID != wantPeer ||
-			(haveOwnScope && !ident.Scope().Matches(ownScope)) {
-			return fmt.Errorf("mtls: expected peer asset %s in %s, got %s %s in %s",
-				wantPeer, ownScope, ident.EntityType, ident.EntityID, ident.Scope())
+		if !peer.SameEntity(want) {
+			return fmt.Errorf("mtls: expected peer %s, got %s (%s)", want.IdentityKey(), peer.IdentityKey(), peer.Scope())
+		}
+		if haveOwnScope && !peer.Scope().Matches(ownScope) {
+			return fmt.Errorf("mtls: peer %s is outside own tenant %s", peer.IdentityKey(), ownScope)
 		}
 		return nil
 	}
+	applyPeerPin(base, pinnedVerify)
+	return base, nil
+}
+
+// applyPeerPin installs pinnedVerify on both handshake paths of a client
+// config. CRITICAL: a resumed TLS 1.3 handshake skips VerifyPeerCertificate
+// entirely — Go only calls VerifyConnection, with ConnectionState.
+// PeerCertificates restored from the cached session ticket. All mesh dials
+// share one process-wide meshSessionCache AND one constant gRPC authority
+// (passthrough:///mesh-peer), so without the VerifyConnection hook a ticket
+// cached while dialing device A could be resumed while "expecting" device B,
+// silently bypassing the anti-MITM pin (see meshDialLAN's doc in
+// mesh_dialer.go). The hook re-runs the SAME pinned verify closure against
+// the resumed connection's restored peer certs; on a full handshake
+// VerifyPeerCertificate already ran it, so there is nothing to redo. A pin
+// mismatch hard-fails rather than silently declining to resume: a full
+// handshake to the wrong peer would fail this same pin check, so there is no
+// decline-vs-fail asymmetry to preserve.
+//
+// With this in place, every resumed connection re-verifies the full chain +
+// identity pin, so a client that let session tickets chain indefinitely
+// across resumptions (extending trust well past a single handshake's ML-DSA
+// verification — see tlscache.Cache.SetResumed's doc for why the CLI↔agent
+// path guards against exactly that) is harmless here: the in-memory
+// meshSessionCache needs no equivalent guard.
+func applyPeerPin(base *tls.Config, pinnedVerify func(rawCerts [][]byte, verifiedChains [][]*x509.Certificate) error) {
 	base.VerifyPeerCertificate = pinnedVerify
-	// CRITICAL: a resumed TLS 1.3 handshake skips VerifyPeerCertificate
-	// entirely — Go only calls VerifyConnection, with
-	// ConnectionState.PeerCertificates restored from the cached session
-	// ticket. All mesh dials share one process-wide meshSessionCache AND one
-	// constant gRPC authority (passthrough:///mesh-peer), so without this,
-	// a ticket cached while dialing asset A could be resumed while
-	// "expecting" asset B, silently bypassing the anti-MITM pin above (see
-	// meshDialLAN's doc in mesh_dialer.go). Re-run the SAME pinned verify
-	// closure against the resumed connection's restored peer certs; on a
-	// full handshake (DidResume false) VerifyPeerCertificate already ran
-	// this check, so there is nothing to redo. A pin mismatch here hard-fails
-	// the connection rather than silently declining to resume: a full
-	// handshake to the wrong peer would fail this same pin check, so there
-	// is no decline-vs-fail asymmetry to preserve.
-	//
-	// With this fix in place, every resumed mesh connection re-verifies the
-	// full chain + identity pin, so a client that let session tickets chain
-	// indefinitely across resumptions (extending trust well past a single
-	// handshake's ML-DSA verification — see tlscache.Cache.SetResumed's doc
-	// for why the CLI↔agent path guards against exactly that) is harmless
-	// here: the in-memory meshSessionCache needs no equivalent guard.
 	base.VerifyConnection = func(cs tls.ConnectionState) error {
 		if !cs.DidResume {
 			return nil
@@ -281,7 +315,6 @@ func NewClientTLSConfigExpectingPeer(certPEM, chainPEM, keyPEM string, logger *z
 		}
 		return pinnedVerify(rawCerts, nil)
 	}
-	return base, nil
 }
 
 // VerifyPeerDevice is the device-to-device rule, applied after the chain check

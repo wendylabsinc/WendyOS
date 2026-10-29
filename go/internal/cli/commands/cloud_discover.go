@@ -582,7 +582,26 @@ func cloudDiscoverJSON(ctx context.Context, auth *config.AuthConfig, all bool) e
 	}
 	infos := make([]any, 0, len(devices))
 	for _, d := range devices {
-		infos = append(infos, d.info(nil))
+		// Consumers must retain the discovery session's endpoint and tenant,
+		// rather than resolve an asset ID against whichever login is current.
+		selector, err := cloudDiscoveryDeviceDefault(auth, d)
+		if err != nil {
+			return fmt.Errorf("creating Cloud device selector: %w", err)
+		}
+		switch info := d.info(nil).(type) {
+		case discoverDeviceInfo:
+			infos = append(infos, struct {
+				discoverDeviceInfo
+				Selector string `json:"selector"`
+			}{info, selector})
+		case cloudDiscoverV2Info:
+			infos = append(infos, struct {
+				cloudDiscoverV2Info
+				Selector string `json:"selector"`
+			}{info, selector})
+		default:
+			return fmt.Errorf("unsupported Cloud device inventory type %T", info)
+		}
 	}
 	encoder := json.NewEncoder(os.Stdout)
 	encoder.SetIndent("", "  ")

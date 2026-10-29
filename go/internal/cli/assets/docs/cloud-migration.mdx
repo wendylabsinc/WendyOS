@@ -1,0 +1,117 @@
+---
+title: Moving to Cloud v2
+description: Compare Cloud v2 with legacy Cloud, keep existing devices reachable, and validate your migration before changing enrollment.
+---
+
+Cloud v2 uses organization and device UUIDs, browser sign-in through Wendy Auth,
+and an authorized service catalog for remote connections. Cloud v1 uses the
+legacy dashboard and numeric asset identities. They are separate enrollments.
+Updating the CLI or signing into v2 does not migrate a device, its applications,
+stored data, or access grants.
+
+Start with the [Cloud v2 guide](/docs/cloud) for a new deployment. If you already
+operate devices on v1, keep their legacy context while you validate v2 on a spare
+device.
+
+## Compare the workflows
+
+| Capability | Cloud v2 | Legacy Cloud v1 |
+| --- | --- | --- |
+| Sign-in with the current CLI | `wendy cloud login` | `wendy cloud login --legacy` |
+| Dashboard | [cloud.wendy.dev](https://cloud.wendy.dev/login) | [cloud.wendy.sh](https://cloud.wendy.sh) |
+| Device selector | Name or UUID from discovery | Name or numeric asset ID |
+| Remote Agent operations | Through the authorized Wendy Agent service | Through the legacy broker |
+| Raw TCP tunnels | Any device port with updated Cloud, CLI, and Agent; older v2 versions allow only ports 22 and 50052 | Application ports supported by the legacy broker |
+| UDP forwarding | Any device port with updated Cloud, CLI, and Agent; not available on older v2 versions | Available on compatible legacy broker and Agent versions |
+| Service-account sign-in | Available for authorized API operations; no operator certificate | Not the v2 service-account flow |
+| App notifications | Requires app registration, assignment, entitlement, and Cloud grant | Existing integrations must be checked separately during migration |
+
+See [tunnel limitations](/docs/advanced/cloud/tunnel) and
+[service-account authentication](/docs/advanced/clients/wendy-cli/commands/auth/login#service-account-login).
+Do not assume a service account can replace a human operator for remote device
+access merely because its API sign-in succeeds.
+
+## Keep both contexts available
+
+Update to the current CLI, then inspect your saved sessions:
+
+```sh
+wendy cloud status
+```
+
+If your legacy session is missing or expired, restore it with
+`wendy cloud login --legacy`. Add a v2 session with `wendy cloud login` and
+choose the intended organization in the browser. Use the context names shown by
+`status` to select each one:
+
+```sh
+wendy auth use <legacy-context-name>
+wendy cloud discover --all
+
+wendy auth use <v2-context-name>
+wendy cloud discover --all
+```
+
+When multiple contexts exist, signing in does not necessarily change the active
+one. Verify the selected context before each operation. A saved default device
+also retains its Cloud and organization binding; switching context does not
+retarget that device. Select the new target explicitly when validating v2.
+
+## Inventory what the deployment depends on
+
+Record the current device names and IDs, app manifests and image versions,
+persistent data locations, users, and access requirements. Include the exact
+ports and protocols used by dashboards, cameras, collectors, and external APIs.
+Check which scripts run unattended and how they authenticate.
+
+If a workflow needs a custom application port or UDP tunnel, v2 requires the
+updated Cloud service and CLI and Wendy Agent 2026.10.22-211023 or newer. Test
+that exact port and protocol on the spare device, and keep the workflow on v1
+until it passes. Check Companion's v2 support for the features
+your operators use, including cameras, app controls, logs, and notifications.
+App Store availability alone does not establish v1/v2 feature parity.
+
+## Validate a spare device
+
+1. Sign into v2 with an owner or admin account and enroll a spare device using
+   the [Cloud guide](/docs/cloud). Confirm it appears in the correct organization.
+2. Select that Cloud device explicitly, deploy the application, and check app
+   state, logs, and expected output through the connection you intend to use.
+3. Check every required external connection. Include custom ports, service
+   accounts, notification recipients, and the intended Companion build.
+4. For Data, verify capture, upload if required, and access to the resulting
+   episode. For BI, verify the actual data connection and query result separately.
+5. Restart the test device and confirm it reconnects and resumes the expected
+   application behavior before scheduling the production change.
+
+## Move an existing device
+
+Arrange a maintenance window and retain physical or local access. Back up
+required application data and configuration before changing enrollment. Confirm
+with the Wendy team how existing Cloud records, grants, and stored data will be
+handled for your deployment; this guide does not provide an automatic transfer.
+
+Use the [device unenrollment guide](/docs/device/unenrollment) for your device's
+identity and installed versions, then enroll it in the intended v2 organization.
+Unenrollment changes credentials and can remove remote access. Flashing is not
+a substitute for revoking the previous Cloud identity.
+
+After enrollment, update scripts and saved defaults to the new device identity,
+restore the required app assignments and grants, and repeat the checks from the
+spare-device validation. Keep the deployment's previous configuration and a
+local recovery path until the new setup is accepted. Switching CLI context alone
+does not restore a device's old enrollment.
+
+## If something does not work
+
+| Symptom | What to check |
+| --- | --- |
+| The fleet is empty after sign-in | Check the active context, organization, and `discover --all`. V1 devices do not appear automatically in v2. |
+| A numeric device ID no longer resolves | Select the v2 device by its name or UUID from discovery. |
+| The service catalog has no entry for a port | The Cloud service, CLI, or Agent predates arbitrary v2 ports. Older v2 versions forward only TCP ports 22 and 50052. |
+| UDP forwarding is refused | Older v2 versions do not forward UDP. Update the Cloud service, CLI, and Agent, or use a legacy session. |
+| API login works but remote device access fails | Check the account's permissions and principal type. Service accounts do not receive operator certificates. |
+| The app runs but a notification does not arrive | Check registration, assignment, entitlement, Cloud grant, recipient organization, and Companion push registration in the [notification guide](/docs/guides/device-notifications). |
+
+See [deployment troubleshooting](/docs/errors) for build, device, and application
+readiness failures.

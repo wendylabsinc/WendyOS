@@ -1,6 +1,6 @@
 ---
 name: wendy-device-ops
-description: "Use for Wendy CLI or MCP device operations on WendyOS and Wendy Lite: discover devices, inspect hardware and software, configure WiFi, update the agent or OS, use cameras, Bluetooth or Cloud tunnels, or gather evidence before debugging."
+description: "Use for Wendy CLI or MCP device operations on WendyOS and Wendy Lite: discover devices, inspect hardware and software, configure WiFi, pair SensorLink sources, update the agent or OS, use cameras, Bluetooth or Cloud tunnels, or gather evidence before debugging."
 ---
 
 # Wendy Device Ops Workflow
@@ -24,6 +24,12 @@ Bound discovery so agents do not hang:
 ```bash
 wendy discover --json --type all --timeout 5s
 ```
+
+The CLI reaches a device's agent over gRPC on TCP port 50051, through USB or
+LAN. On Linux, a USB-C tethered device needs a one-time host setup: ask the user
+to run `wendy discover` in a terminal and accept its USB-C setup prompt (it
+needs sudo). An empty scan can also mean a board without WendyOS; use
+`wendy-device-install` for that.
 
 Use explicit hostnames when possible:
 
@@ -74,6 +80,18 @@ wendy device wifi rank --order "Home,Office,Cafe" --device <hostname>
 ```
 
 Do not echo or store WiFi passwords in issues, PRs, reusable docs, or final summaries. If a password was passed on the command line, avoid copying the full command into shared output.
+
+## SensorLink pairing
+
+Pair a SensorLink source, such as an ESP32 camera, with the consuming device only when the user asks:
+
+```bash
+wendy --json device pair --device <hostname> --list
+wendy --json device pair --device <hostname> --sensorlink "<source>"
+wendy --json device pair --device <hostname> --forget "<source>"
+```
+
+Name the source by its name, asset ID or principal URI; `--forget` takes the pairing name `--list` shows. When none or several match, the error lists candidates; ask the user instead of guessing.
 
 ## Agent update
 

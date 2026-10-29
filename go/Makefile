@@ -42,10 +42,10 @@ build: build-cli build-agent
 # Build the wendy CLI
 build-cli:
 ifeq ($(HOST_ENV),windows)
-	powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "New-Item -ItemType Directory -Force -Path bin | Out-Null; go build -o bin/wendy.exe ./cmd/wendy; if ($$LASTEXITCODE -ne 0) { exit $$LASTEXITCODE }"
+	powershell.exe -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "New-Item -ItemType Directory -Force -Path bin | Out-Null; go build -ldflags '$(LDFLAGS)' -o bin/wendy.exe ./cmd/wendy; if ($$LASTEXITCODE -ne 0) { exit $$LASTEXITCODE }"
 else
 	mkdir -p bin
-	go build -o bin/wendy ./cmd/wendy
+	go build -ldflags "$(LDFLAGS)" -o bin/wendy ./cmd/wendy
 endif
 
 # Build the wendy-agent

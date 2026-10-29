@@ -1,0 +1,152 @@
+---
+title: Connect devices with Wendy Net
+description: Enable local connections between enrolled devices and check that they can reach their neighbors.
+---
+
+Wendy Net connects nearby WendyOS devices so applications can communicate across
+several devices, including through an intermediate device. Start with Ethernet or
+ordinary Wi-Fi; Bluetooth is useful when a faster connection is unavailable.
+
+## 1. Prepare your devices
+
+Use current WendyOS images with Wendy Net support and enroll each device in the
+same Wendy Cloud organization. Sign in with `wendy cloud login`. Keep a working
+management connection while changing network settings.
+
+## 2. Enable the connections you want
+
+For devices on the same Ethernet or ordinary Wi-Fi network, run this for each one:
+
+```sh
+wendy device wendy-net configure --device <device> \
+  --participate=true --ethernet=true --infrastructure-wifi=true
+```
+
+Replace `<device>` with its name or address. For Bluetooth, add `--ble=true`.
+For supported Wi-Fi Aware hardware, add `--nan=true`.
+You can enable more than one connection type. Only the options you supply change;
+other saved settings are preserved.
+
+`configure` confirms saved settings, including when you repeat the same command.
+It reports `pending-runtime` when participation is enabled and `disabled` when
+it is off, with no runtime observations. Use `status` to check runtime state
+after the agent has had time to apply the settings.
+
+Changing settings restarts local routing and may interrupt existing connections.
+To disable one connection type, set its option to `false`. To stop all Wendy Net
+participation while retaining the saved connection choices, use
+`--participate=false --roam=false --share-uplink=false`. Sharing and roaming
+require participation, so disable them in the same command if they were enabled.
+
+## 3. Check the result
+
+```sh
+wendy device wendy-net status --device <device>
+wendy device wendy-net topology --device <device>
+```
+
+`status` shows saved settings and current runtime state. `topology` shows the
+selected device's observed peers and routes. Check each device you are testing;
+one local view does not prove that every device is reachable.
+
+If no peer appears, confirm that both devices participate, belong to the same
+organization, and share an enabled connection type. On Ethernet or ordinary
+Wi-Fi, allow local multicast discovery and peer traffic. See the
+[LAN requirements](/docs/advanced/wendyos/networking/mdns#network-requirements-and-privacy).
+For slow or missing Bluetooth connections, see
+[Bluetooth setup and recovery](/docs/hardware/bluetooth#wendy-net-over-bluetooth).
+
+## 4. Share an Internet connection
+
+Choose a device with its own working Internet connection as the gateway. Allow
+it to offer that connection to other enrolled devices:
+
+```sh
+wendy device wendy-net configure --device <gateway> \
+  --participate=true --share-uplink=true
+```
+
+On a device that should use the gateway when its own Internet connection is
+unavailable:
+
+```sh
+wendy device wendy-net configure --device <travelling-device> \
+  --participate=true --roam=true
+wendy device wendy-net status --device <travelling-device>
+```
+
+Both devices still need enabled Wendy Net connection types and a working route
+between them; the route can pass through other participating devices. A healthy
+Internet connection on the travelling device takes priority. It uses a shared
+gateway only when no healthy independent uplink is available.
+
+Sharing and roaming are independent opt-ins. Enabling a Bluetooth or Wi-Fi link
+does not share Internet access. A device cannot offer an Internet connection it
+is itself borrowing from Wendy Net. The selected gateway carries Internet traffic
+and DNS, so choose one you trust to provide that service.
+
+Check `State` and `Gateway principal` in status. Allow time for connectivity checks
+and route recovery after a change; a saved setting is not a connectivity test.
+
+| State | What it means |
+| --- | --- |
+| `local` | The device has a healthy Internet connection of its own. It offers it if sharing is enabled. |
+| `relay` | It participates in Wendy Net, but Internet roaming is off. |
+| `roaming` | It is using an authenticated shared gateway. |
+| `offline` | Roaming is enabled but no usable shared gateway was found. If the detail says it is negotiating a lease, a gateway is selected and the device is still connecting to it; over Bluetooth this can take about a minute. |
+| `pending-runtime` or `error` | Read the accompanying detail; configuration is not yet active or needs attention. |
+
+Test an actual Internet request from the device or intended app before depending
+on it. A connected peer alone does not prove the gateway's Internet access.
+
+To stop offering access, set `--share-uplink=false` on the gateway. To stop
+borrowing, set `--roam=false` on the travelling device. Changes are saved across
+agent restarts. Existing Internet sessions may be interrupted when a gateway or
+uplink changes.
+
+### Give an app outbound Internet access
+
+Use this entitlement in the app's `wendy.json`, then redeploy with `wendy run`:
+
+```json
+{ "type": "network", "mode": "bridge" }
+```
+
+This gives the app outbound connections and DNS through the device's available
+Internet path, including a borrowed gateway. It does not publish the app's ports.
+Wendy Net service mode is separate and does not grant an Internet default route.
+Host-networked apps share the host's network access and expose ports they bind;
+use host mode only when the app needs that access.
+
+## 5. Connect your applications
+
+Applications opt into Wendy Net in `wendy.json` and explicitly publish the ports
+that other devices may access. See the
+[service sharing guide](/docs/guides/wendy-net-services), then the
+[network configuration reference](/docs/advanced/apps/wendy.json#network).
+Device connectivity alone does not publish every app port.
+
+Ordinary Wendy Net apps do not need direct Bluetooth or Wi-Fi Aware control
+entitlements; the agent manages those connections. Grant direct radio access
+only to applications that manage the hardware themselves.
+
+## Settings reference
+
+Use `wendy device wendy-net configure` with just the options you want to change.
+Every boolean accepts `true` or `false`; omitted options retain their saved values.
+
+| Option | Purpose |
+| --- | --- |
+| `--participate` | Join and relay Wendy Net. Required for roaming or sharing. |
+| `--ethernet` | Find and connect to peers on Ethernet. |
+| `--infrastructure-wifi` | Find and connect to peers on ordinary Wi-Fi networks. |
+| `--nan` | Connect through supported Wi-Fi Aware radios, without an access point. |
+| `--ble` | Connect through Bluetooth Low Energy. |
+| `--share-uplink` | Offer a healthy independent Internet connection. |
+| `--roam` | Use a shared gateway when an independent Internet connection is unavailable. |
+
+`status --json` returns saved choices separately from current runtime state.
+`topology --json` returns the selected device's observed links and routes.
+Changing settings requires an authenticated user in the device's organization.
+An app on the device that holds the [`admin` entitlement](/docs/advanced/apps/wendy.json#admin)
+can read status and topology through the local agent socket, but cannot change settings.

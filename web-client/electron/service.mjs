@@ -27,6 +27,26 @@ import {
 
 const execute = promisify(execFile);
 
+function cloudDiscoverySelector(device) {
+  const selector = device?.selector;
+  if (typeof selector !== "string") return null;
+  try {
+    if (deviceTarget(selector) !== selector) return null;
+    const url = new URL(selector);
+    if (url.protocol !== "cloud:" || !url.hostname || url.username || url.password ||
+        selector !== `cloud://${url.host}${url.pathname}`) return null;
+    const parts = url.pathname.split("/");
+    if (parts.length !== 5 || parts[0] !== "" || parts[3] !== "asset" ||
+        parts[4] !== String(device.id ?? "")) return null;
+    const uuid = (value) => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value) &&
+      value !== "00000000-0000-0000-0000-000000000000";
+    const positiveInt32 = (value) => /^[1-9][0-9]*$/.test(value) && Number(value) <= 2147483647;
+    if (parts[1] === "tenant" && uuid(parts[2]) && uuid(parts[4])) return selector;
+    if (parts[1] === "org" && positiveInt32(parts[2]) && positiveInt32(parts[4])) return selector;
+  } catch { /* An invalid inventory row must not discard other discovery results. */ }
+  return null;
+}
+
 export class DesktopService {
   constructor({
     resources,
@@ -55,6 +75,7 @@ export class DesktopService {
     this.viewerLeases = new Map();
     this.viewerChecks = new Map();
     this.deviceSnapshots = new Map();
+    this.meshSnapshots = new Map();
     this.monitorLogs = new DeviceLogs({ cli: this.cli, env });
     this.monitorGeneration = 0;
   }
@@ -286,6 +307,90 @@ export class DesktopService {
     }).finally(() => this.deviceSnapshots.delete(target));
     this.deviceSnapshots.set(target, request);
     return request;
+  }
+
+  meshTopology({ target }) {
+    target = deviceTarget(target);
+    const pending = this.meshSnapshots.get(target);
+    if (pending) return pending;
+    if (this.meshSnapshots.size >= 4)
+      throw new Error("Four local observations are already in progress. Try again shortly.");
+    const generation = this.monitorGeneration;
+    const request = this.monitorTarget(target).then((address) => this.run(
+      this.cli,
+      ["device", "wendy-net", "topology", "--device", address, "--json", "--observation"],
+      { timeout: 15_000, maxBuffer: 2 * 1024 * 1024 },
+    )).then((output) => {
+      if (generation !== this.monitorGeneration) throw new Error("This local network view is no longer open.");
+      const observation = JSON.parse(output);
+      if (!observation || !["ok", "unsupported", "unavailable", "unauthorized", "error"].includes(observation.status) ||
+          (observation.status === "ok" && (!observation.topology || typeof observation.topology.selfPrincipal !== "string")))
+        throw new Error("The CLI returned an invalid local observation.");
+      return observation;
+    }).finally(() => this.meshSnapshots.delete(target));
+    this.meshSnapshots.set(target, request);
+    return request;
+  }
+
+  async meshDiscover() {
+    const sources = await Promise.allSettled([
+      this.run(this.cli, ["discover", "--json", "--type", "all", "--timeout", "5s"], { timeout: 20_000 }).then(JSON.parse),
+      this.run(this.cli, ["cloud", "discover", "--all", "--json"], { timeout: 25_000 }).then(JSON.parse),
+    ]);
+    const devices = new Map();
+    const warnings = [];
+    const add = (target, name, deviceType) => {
+      target = deviceTarget(target);
+      if (!devices.has(target)) devices.set(target, { id: target, name: name || target, deviceType });
+    };
+    if (sources.every((source) => source.status === "rejected")) {
+      // Preserve the view's last inventory and let its observations age stale.
+      // An unavailable inventory does not establish that every device is gone.
+      throw new Error(sources.map((source, index) =>
+        `${index === 0 ? "Local" : "Cloud"} discovery: ${source.reason.message}`,
+      ).join("; "));
+    }
+    if (sources[0].status === "fulfilled") {
+      const collection = sources[0].value;
+      let invalidAddress = false;
+      if (!collection || typeof collection !== "object" || Array.isArray(collection))
+        warnings.push("Local discovery returned an invalid inventory.");
+      else for (const key of ["lanDevices", "ethernetDevices", "usbDevices"]) {
+        if (collection[key] != null && !Array.isArray(collection[key])) {
+          invalidAddress = true;
+          continue;
+        }
+        for (const device of collection[key] || []) {
+          // Local advertisements are untrusted. An invalid row must not hide
+          // other local devices or the independent Cloud inventory.
+          if (!device?.isWendyDevice) continue;
+          try {
+            const host = device.hostname || device.ipAddress;
+            if (!host) continue;
+            const address = device.port ? `${host.includes(":") ? `[${host}]` : host}:${device.port}` : host;
+            // Discovery names are labels only. Tenant grouping waits for a
+            // snapshot tied to the independently verified device certificate.
+            add(address, device.displayName || device.name, device.deviceType);
+          } catch { invalidAddress = true; }
+        }
+      }
+      if (invalidAddress) warnings.push("Local discovery omitted devices with invalid addresses.");
+    } else warnings.push("Local discovery: " + sources[0].reason.message);
+    if (sources[1].status === "fulfilled") {
+      if (!Array.isArray(sources[1].value)) warnings.push("Cloud discovery returned an invalid inventory.");
+      else {
+        let invalidSelector = false;
+        for (const device of sources[1].value) {
+          // The CLI supplies the complete selector from its authenticated
+          // session. An asset ID alone cannot identify a Cloud login.
+          const selector = cloudDiscoverySelector(device);
+          if (!selector) { invalidSelector = true; continue; }
+          add(selector, device.name, device.type);
+        }
+        if (invalidSelector) warnings.push("Cloud discovery omitted devices without a valid scoped selector. Update the Wendy CLI and retry.");
+      }
+    } else warnings.push("Cloud discovery: " + sources[1].reason.message);
+    return { devices: [...devices.values()], warnings };
   }
 
   deviceLogsSnapshot(id) {

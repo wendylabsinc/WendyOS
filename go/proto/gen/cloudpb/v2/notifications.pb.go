@@ -2200,8 +2200,13 @@ func (x *DeleteNotificationsThroughRequest) GetThroughNotificationId() string {
 }
 
 type DeleteNotificationsThroughResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	DeletedCount  int32                  `protobuf:"varint,1,opt,name=deleted_count,json=deletedCount,proto3" json:"deleted_count,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// At most 1000 active recipient rows per call, newest-first by
+	// (created_at, notification_id). Previously deleted rows do not count.
+	DeletedCount int32 `protobuf:"varint,1,opt,name=deleted_count,json=deletedCount,proto3" json:"deleted_count,omitempty"`
+	// More matching rows remain at or before the same anchor. Repeat the same
+	// request until false; the anchor remains valid after its recipient row is deleted.
+	MoreAvailable bool `protobuf:"varint,2,opt,name=more_available,json=moreAvailable,proto3" json:"more_available,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2241,6 +2246,13 @@ func (x *DeleteNotificationsThroughResponse) GetDeletedCount() int32 {
 		return x.DeletedCount
 	}
 	return 0
+}
+
+func (x *DeleteNotificationsThroughResponse) GetMoreAvailable() bool {
+	if x != nil {
+		return x.MoreAvailable
+	}
+	return false
 }
 
 type MarkAsReadRequest struct {
@@ -2518,8 +2530,13 @@ func (x *SetNotificationReadStatusThroughRequest) GetThroughNotificationId() str
 }
 
 type SetNotificationReadStatusThroughResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	UpdatedCount  int32                  `protobuf:"varint,1,opt,name=updated_count,json=updatedCount,proto3" json:"updated_count,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// At most 1000 changed recipient rows per call, newest-first by
+	// (created_at, notification_id). Rows already in the requested state do not count.
+	UpdatedCount int32 `protobuf:"varint,1,opt,name=updated_count,json=updatedCount,proto3" json:"updated_count,omitempty"`
+	// More matching rows still need the requested read state at or before the same
+	// anchor. Repeat the same request until false.
+	MoreAvailable bool `protobuf:"varint,2,opt,name=more_available,json=moreAvailable,proto3" json:"more_available,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2559,6 +2576,13 @@ func (x *SetNotificationReadStatusThroughResponse) GetUpdatedCount() int32 {
 		return x.UpdatedCount
 	}
 	return 0
+}
+
+func (x *SetNotificationReadStatusThroughResponse) GetMoreAvailable() bool {
+	if x != nil {
+		return x.MoreAvailable
+	}
+	return false
 }
 
 type CountNotificationsRequest struct {
@@ -2951,9 +2975,10 @@ const file_wendycloud_v2_notifications_proto_rawDesc = "" +
 	"\x0forganization_id\x18\x01 \x01(\tR\x0eorganizationId\x12Q\n" +
 	"\x0fseverity_filter\x18\x02 \x01(\x0e2#.wendycloud.v2.NotificationSeverityH\x00R\x0eseverityFilter\x88\x01\x01\x126\n" +
 	"\x17through_notification_id\x18\x03 \x01(\tR\x15throughNotificationIdB\x12\n" +
-	"\x10_severity_filter\"I\n" +
+	"\x10_severity_filter\"p\n" +
 	"\"DeleteNotificationsThroughResponse\x12#\n" +
-	"\rdeleted_count\x18\x01 \x01(\x05R\fdeletedCount\"|\n" +
+	"\rdeleted_count\x18\x01 \x01(\x05R\fdeletedCount\x12%\n" +
+	"\x0emore_available\x18\x02 \x01(\bR\rmoreAvailable\"|\n" +
 	"\x11MarkAsReadRequest\x12)\n" +
 	"\x10notification_ids\x18\x01 \x03(\tR\x0fnotificationIds\x12<\n" +
 	"\x1acanonical_notification_ids\x18\x02 \x03(\tR\x18canonicalNotificationIds\"Q\n" +
@@ -2972,9 +2997,10 @@ const file_wendycloud_v2_notifications_proto_rawDesc = "" +
 	"\vread_status\x18\x03 \x01(\x0e2%.wendycloud.v2.NotificationReadStatusR\n" +
 	"readStatus\x126\n" +
 	"\x17through_notification_id\x18\x04 \x01(\tR\x15throughNotificationIdB\x12\n" +
-	"\x10_severity_filter\"O\n" +
+	"\x10_severity_filter\"v\n" +
 	"(SetNotificationReadStatusThroughResponse\x12#\n" +
-	"\rupdated_count\x18\x01 \x01(\x05R\fupdatedCount\"\x88\x02\n" +
+	"\rupdated_count\x18\x01 \x01(\x05R\fupdatedCount\x12%\n" +
+	"\x0emore_available\x18\x02 \x01(\bR\rmoreAvailable\"\x88\x02\n" +
 	"\x19CountNotificationsRequest\x12'\n" +
 	"\x0forganization_id\x18\x01 \x01(\tR\x0eorganizationId\x12Q\n" +
 	"\x0fseverity_filter\x18\x02 \x01(\x0e2#.wendycloud.v2.NotificationSeverityH\x00R\x0eseverityFilter\x88\x01\x01\x12K\n" +

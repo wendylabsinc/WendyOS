@@ -157,7 +157,7 @@ Flags can be provided progressively — omitted values trigger interactive picke
 	cmd.Flags().StringArrayVar(&wifiEntries, "wifi", nil, "Pre-configure a WiFi network. Repeatable. Format: ssid=X[,password=Y][,priority=N][,hidden=true][,security=wpa2]")
 	cmd.Flags().BoolVar(&noWifi, "no-wifi", false, "Skip WiFi setup entirely (no interactive prompt, no pre-seeded networks)")
 	cmd.Flags().StringVar(&deviceName, "device-name", "", "Set device name on first boot (e.g. brave-dolphin)")
-	cmd.Flags().BoolVar(&preEnroll, "pre-enroll", false, "Pre-enroll this device with Wendy Cloud during imaging (requires 'wendy auth login')")
+	cmd.Flags().BoolVar(&preEnroll, "pre-enroll", false, "Enroll with Wendy Cloud during imaging, or after reboot for ESP32 (requires 'wendy auth login')")
 	cmd.Flags().StringVar(&enrollCloudGRPC, "cloud-grpc", "", "Cloud gRPC endpoint of the auth session to use for pre-enrollment (optional when a default is set via 'wendy auth use')")
 	cmd.Flags().IntVar(&prNumber, "pr", 0, "Install the image built by wendyos-builder PR #N (debug build; mutually exclusive with --nightly, --version, and positional [image] [drive])")
 	cmd.AddCommand(newOSInstallPlanCmd(), newOSInstallVerifyCmd(), newOSInstallJobsCmd())
@@ -227,9 +227,12 @@ func runOSInstallDirect(ctx context.Context, imagePath string, driveID string, f
 			fmt.Printf("Could not determine image size: %v\n", err)
 		}
 	}
-	if err := checkImageFitsDrive(stream.uncompressedSize, *targetDrive); err != nil {
+	layout := stream.peekGPT()
+	fit, err := fitImageToDrive(stream.uncompressedSize, layout, *targetDrive)
+	if err != nil {
 		return err
 	}
+	noteImageFit(fit, layout, *targetDrive)
 
 	activationStep(ctx, "flash", map[string]string{"target_selected": "true"})
 	fmt.Printf("Writing image to %s...\n", targetDrive.DevicePath)
@@ -237,7 +240,7 @@ func runOSInstallDirect(ctx context.Context, imagePath string, driveID string, f
 	if err := unmountBeforeWrite(*targetDrive); err != nil {
 		return err
 	}
-	if err := writeImageToDisk(stream, stream.uncompressedSize, *targetDrive, nil); err != nil {
+	if err := writeImageToDisk(stream, stream.uncompressedSize, *targetDrive, fit, nil); err != nil {
 		return fmt.Errorf("writing image: %w", err)
 	}
 	markFATVolumes(*targetDrive)
@@ -736,14 +739,20 @@ func shouldPromptFlashMode(deviceType, installMode string, rootfsOnlyExplicit bo
 // a full flash needs the device jumpered into recovery mode. A cancelled picker
 // surfaces ErrUserCancelled, which the top-level command maps to a clean exit.
 func chooseT234FlashMode() (rootfsOnly bool, err error) {
-	choice, err := pickFromItems("Select flash mode", []tui.PickerItem{
-		{Name: "OS image only (no firmware update)", Description: "Write to an NVMe/SD drive attached to this computer", Value: "rootfs"},
-		{Name: "Full flash over UART", Description: "Updates boot firmware + OS (device in recovery mode)", Value: "full"},
-	})
+	choice, err := pickFromItems("Select flash mode", t234FlashModeItems())
 	if err != nil {
 		return false, err // ErrUserCancelled propagates unchanged
 	}
 	return choice == "rootfs", nil
+}
+
+// t234FlashModeItems are chooseT234FlashMode's rows. The full flash runs over
+// the Jetson's recovery USB-C port, not a UART.
+func t234FlashModeItems() []tui.PickerItem {
+	return []tui.PickerItem{
+		{Name: "OS image only (no firmware update)", Description: "Write to an NVMe/SD drive attached to this computer", Value: "rootfs"},
+		{Name: "Full flash over USB-C", Description: "Updates boot firmware + OS (device in recovery mode)", Value: "full"},
+	}
 }
 
 func chooseT234RecoveryStorage(device, override string) (string, error) {
@@ -925,7 +934,7 @@ func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevic
 
 	// Resolve pre-enrollment before provisioning — the config partition is mounted
 	// and unmounted inside provisionConfigWithRetry below.
-	provisioningJSON, err := resolveProvisioningJSON(ctx, preOpts, provDeviceName)
+	provisioningJSON, err := resolveProvisioningJSON(ctx, preOpts, &provDeviceName)
 	if err != nil {
 		return err
 	}
@@ -1000,10 +1009,20 @@ func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevic
 		}
 	}
 
-	// Step 5c: Refuse a drive too small for the image before anything is written.
-	if err := checkImageFitsDrive(imageSize, targetDrive); err != nil {
+	// Step 5c: Refuse a drive too small for the image before anything is
+	// written. A GPT image is measured by its partitions, not by the disk its
+	// header declares, and may then go onto a smaller drive (WDY-3974).
+	var layout *imageGPT
+	if seekableZst != "" {
+		layout = readImageGPTFrom(func() (io.ReadCloser, error) { return openSeekableZstd(seekableZst) })
+	} else {
+		layout = stream.peekGPT()
+	}
+	fit, err := fitImageToDrive(imageSize, layout, targetDrive)
+	if err != nil {
 		return err
 	}
+	noteImageFit(fit, layout, targetDrive)
 
 	if err := unmountBeforeWrite(targetDrive); err != nil {
 		return err
@@ -1030,7 +1049,7 @@ func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevic
 	case bmapPath != "":
 		writeTotal, fastPathLabel = stream.uncompressedSize, "block-map write"
 	default:
-		writeTotal, fastPathLabel = stream.uncompressedSize, "image write"
+		writeTotal, fastPathLabel = fit.sequentialTotal(stream.uncompressedSize), "image write"
 	}
 
 	go func() {
@@ -1046,6 +1065,13 @@ func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevic
 					Written: written,
 					Total:   seekableTotal,
 				})
+			} else if bmapPath == "" && writeTotal < stream.uncompressedSize {
+				// The sequential write stops at the drive's end.
+				wp.Send(tui.ProgressUpdateMsg{
+					Percent: float64(written) / float64(writeTotal),
+					Written: written,
+					Total:   writeTotal,
+				})
 			} else if msg, ok := stream.writeProgressMsg(written); ok {
 				wp.Send(msg)
 			}
@@ -1054,12 +1080,12 @@ func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevic
 		switch {
 		case seekableZst != "":
 			fmt.Println("Using seekable block map for faster flashing.")
-			writeErr = writeImageWithBmapSeekable(seekableZst, seekableBmap, targetDrive, progress)
+			writeErr = writeImageWithBmapSeekable(seekableZst, seekableBmap, targetDrive, fit, progress)
 		case bmapPath != "":
 			fmt.Println("Using block map for faster flashing.")
-			writeErr = writeImageWithBmap(stream, stream.uncompressedSize, targetDrive, bmapPath, progress)
+			writeErr = writeImageWithBmap(stream, stream.uncompressedSize, targetDrive, bmapPath, fit, progress)
 		default:
-			writeErr = writeImageToDisk(stream, stream.uncompressedSize, targetDrive, progress)
+			writeErr = writeImageToDisk(stream, stream.uncompressedSize, targetDrive, fit, progress)
 		}
 		wp.Send(tui.ProgressDoneMsg{Err: writeErr})
 	}()
@@ -1082,6 +1108,13 @@ func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevic
 		// error is never discarded again below — it is the real failure, and
 		// WDY-1841 was caused by dropping it in favor of the fallback's error.
 		primary := framePrimaryFlashError(fastPathLabel, lastWritten.Load(), writeTotal, primaryErr)
+
+		// The image landed but its GPT could not be rewritten for the drive:
+		// writing the image again would end the same way.
+		var relocErr *gptRelocationError
+		if errors.As(primaryErr, &relocErr) {
+			return primary
+		}
 
 		// A device-level failure (permissions, a read-only card lock, no space,
 		// the device vanished, an I/O error, a short write) means the dd fallback
@@ -1119,19 +1152,21 @@ func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevic
 			return primary
 		}
 		defer fallbackCloser.Close()
-		if err := checkImageFitsDrive(fallbackSize, targetDrive); err != nil {
+		fallbackFit, err := fitImageToDrive(fallbackSize, layout, targetDrive)
+		if err != nil {
 			return fmt.Errorf("%w; full-image fallback skipped: %v", primary, err)
 		}
 		announceFastWriteFallback(os.Stdout, primary)
+		fallbackTotal := fallbackFit.sequentialTotal(fallbackSize)
 		fallbackProg := tui.NewProgress(fmt.Sprintf("Writing to %s...", targetDrive.DevicePath))
 		fp := tui.NewProgressProgram(fallbackProg)
 		go func() {
-			fp.Send(tui.ProgressDoneMsg{Err: writeImageToDisk(fallbackReader, fallbackSize, targetDrive, func(written int64) {
-				if fallbackSize > 0 {
+			fp.Send(tui.ProgressDoneMsg{Err: writeImageToDisk(fallbackReader, fallbackSize, targetDrive, fallbackFit, func(written int64) {
+				if fallbackTotal > 0 {
 					fp.Send(tui.ProgressUpdateMsg{
-						Percent: float64(written) / float64(fallbackSize),
+						Percent: float64(written) / float64(fallbackTotal),
 						Written: written,
-						Total:   fallbackSize,
+						Total:   fallbackTotal,
 					})
 				}
 			})})
@@ -1151,6 +1186,10 @@ func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevic
 	activationStep(ctx, "provision", nil)
 	hasProvisioningData := provisioningRequired(provCreds, provDeviceName, provisioningJSON)
 	var provisionErr error
+	// The drive can drop off the bus during provisioning and come back under a
+	// new device path; provisionConfigWithRetry reports where it is now, or
+	// that it never came back — then its old path may name another disk.
+	attached := true
 
 	if !configPartitionSupported {
 		// writeConfigPartition is not supported on this platform. Skip the
@@ -1169,11 +1208,13 @@ func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevic
 		// device still boots. It returns an error only when the user asked for
 		// provisioning and it was not applied — reported below, after the eject,
 		// so the drive is still safe to remove.
-		provisionErr = provisionConfigWithRetry(targetDrive, provCreds, provDeviceName, provisioningJSON, hasProvisioningData)
+		targetDrive, attached, provisionErr = provisionConfigWithRetry(ctx, targetDrive, provCreds, provDeviceName, provisioningJSON, hasProvisioningData)
 	}
 
-	markFATVolumes(targetDrive)
-	ejectDisk(targetDrive)
+	if attached {
+		markFATVolumes(targetDrive)
+		ejectDisk(targetDrive)
+	}
 
 	// Requested provisioning that never reached the card is a failed install:
 	// the device would boot with none of the configuration the user asked for,
@@ -1765,7 +1806,7 @@ func streamZipImageEntry(zipPath string) (*imageStream, error) {
 			continue
 		}
 		ext := strings.ToLower(filepath.Ext(f.Name))
-		// .sdimg is the A/B disk image RPi targets now produce.
+		// .sdimg is the disk image older Raspberry Pi releases shipped.
 		if ext != ".img" && ext != ".raw" && ext != ".wic" && ext != ".sdimg" {
 			continue
 		}
@@ -2444,6 +2485,9 @@ func validateDeviceName(name string) error {
 			return fmt.Errorf("device name may only contain lowercase letters, digits, and hyphens")
 		}
 	}
+	if name[len(name)-1] == '-' {
+		return fmt.Errorf("device name must not end with a hyphen")
+	}
 	return nil
 }
 
@@ -2488,8 +2532,10 @@ func resolveDeviceName(flagName string) (string, error) {
 // resolveProvisioningJSON runs EAB pre-enrollment per preOpts and returns the
 // marshaled acme-enrollment.json, or nil when enrollment is skipped or not
 // available. Full-OS images (disk/Orin/Thor) bake this; the ESP32 path uses
-// resolvePreEnrollment directly.
-func resolveProvisioningJSON(ctx context.Context, preOpts preEnrollOptions, deviceName string) ([]byte, error) {
+// resolveLiteInstallEnrollment and enrolls over USB after reboot. A blank
+// *deviceName is filled in when the device is pre-enrolled, so the caller
+// writes the name Cloud reserved.
+func resolveProvisioningJSON(ctx context.Context, preOpts preEnrollOptions, deviceName *string) ([]byte, error) {
 	if preOpts.mode == preEnrollSkip {
 		return nil, nil
 	}
@@ -2535,20 +2581,26 @@ func confirmOverwriteInternalDrive(d drive, force bool, yesOverwriteInternal boo
 	return nil
 }
 
-// checkImageFitsDrive refuses a write the drive cannot hold: the image's
-// partition table spans its full size, so a truncated copy never boots.
+// checkImageFitsDrive refuses a write the drive cannot hold, for an image
+// without a GPT that fitImageToDrive can rewrite: such an image's partitions
+// are only known to end within it, so a truncated copy may never boot.
 // An unknown size on either side skips the check.
 func checkImageFitsDrive(imageSize int64, d drive) error {
 	if imageSize <= 0 || d.SizeBytes <= 0 || imageSize <= d.SizeBytes {
 		return nil
 	}
-	return fmt.Errorf("%s (%s) is too small for this image: it holds %s but the image needs %s; use a larger SD card or drive",
-		d.Name, d.DevicePath, formatBytes(d.SizeBytes), formatBytes(imageSize))
+	return driveTooSmallError(d, formatBytes(imageSize))
 }
 
-// preflightImageFits checks the drive against the published bmap's image size,
-// which is known before the image is downloaded. Any fetch or parse failure is
-// ignored; the check before the write still applies.
+func driveTooSmallError(d drive, need string) error {
+	return fmt.Errorf("%s (%s) is too small for this image: it holds %s but the image needs %s; use a larger SD card or drive",
+		d.Name, d.DevicePath, formatBytes(d.SizeBytes), need)
+}
+
+// preflightImageFits checks the drive against the published bmap, which is
+// known before the image is downloaded. Any fetch or parse failure is ignored;
+// the check before the write, against the image's partition table, still
+// applies.
 func preflightImageFits(deviceKey, version, storage string, img *imageInfo, d drive, noBmap bool) error {
 	if noBmap || img.BmapURL == "" || d.SizeBytes <= 0 {
 		return nil
@@ -2561,7 +2613,35 @@ func preflightImageFits(deviceKey, version, storage string, img *imageInfo, d dr
 	if err != nil {
 		return nil
 	}
+	if dataEnd, ok := bmapDataEndBeforeBackupGPT(parsed); ok {
+		if dataEnd > d.SizeBytes {
+			return driveTooSmallError(d, "at least "+formatBytes(dataEnd))
+		}
+		return nil
+	}
 	return checkImageFitsDrive(parsed.ImageSize, d)
+}
+
+// gptBackupMaxBytes bounds a backup GPT: 32 sectors of entries plus the
+// header, at 4096-byte sectors.
+const gptBackupMaxBytes = 33 * 4096
+
+// bmapDataEndBeforeBackupGPT reports where an image's mapped data ends when
+// its last mapped range looks like a backup GPT: a short range that ends the
+// image. The drive need not reach that range (fitImageToDrive rewrites it at
+// the drive's end), so this is a lower bound for what the drive must hold;
+// the partition table, read once the image is local, gives the exact size.
+func bmapDataEndBeforeBackupGPT(b *Bmap) (int64, bool) {
+	n := len(b.Ranges)
+	if n < 2 {
+		return 0, false
+	}
+	last := b.Ranges[n-1]
+	start := last.First * b.BlockSize
+	if (last.Last+1)*b.BlockSize < b.ImageSize || b.ImageSize-start > gptBackupMaxBytes {
+		return 0, false
+	}
+	return min((b.Ranges[n-2].Last+1)*b.BlockSize, b.ImageSize), true
 }
 
 // provisionConfigPartitionFn is the provisioning entry point used by
@@ -2595,13 +2675,41 @@ var confirmProvisioningRetry = func() (bool, error) {
 // card, and the install still reported success — which read as the device
 // ignoring its configuration rather than never receiving it). When provisioning
 // was not requested it stays advisory and returns nil.
-func provisionConfigWithRetry(d drive, creds []wendyconf.WifiCredential, deviceName string, provisioningJSON []byte, requested bool) error {
-	for {
-		err := provisionConfigPartitionFn(d, creds, deviceName, provisioningJSON)
-		if err == nil {
-			return nil
-		}
+//
+// If the drive drops off the bus mid-write (WDY-3974: a USB NVMe enclosure
+// reset and every retry hit the same vanished /dev/disk8), retrying its old
+// device path cannot work, and after a replug that path may name another disk.
+// So the user is told to unplug and replug it, and a retry first waits for the
+// drive to reappear and re-resolves it by the identity recorded before the
+// first attempt — refusing to write when that identity is unknown or matches
+// more than one drive. It returns the drive where it is now attached, and
+// attached=false when it disconnected and was not found again: its old path
+// must not be touched (marked, ejected) then.
+func provisionConfigWithRetry(ctx context.Context, d drive, creds []wendyconf.WifiCredential, deviceName string, provisioningJSON []byte, requested bool) (_ drive, attached bool, _ error) {
+	// Fingerprint the drive while it is certainly the one just imaged. Only an
+	// interactive run retries, so only it needs this.
+	var id driveIdentity
+	var idErr error
+	if isInteractiveTerminal() {
+		// Right after the image write the OS can still describe the drive's
+		// previous partition table; fingerprint the one just written.
+		rescanPartitionTableFn(d)
+		id, idErr = readDriveIdentityFn(d)
+	}
+	// relocate is set once d has disconnected and cleared once it is found
+	// again by identity: while set, d's device path is not known to be ours.
+	relocate := false
 
+	err := provisionConfigPartitionFn(d, creds, deviceName, provisioningJSON)
+	// skip ends the loop when the user declines a retry.
+	skip := func() (drive, bool, error) {
+		if requested {
+			fmt.Println("Skipping provisioning. Re-run 'wendy os install' to apply it, or configure the device after it boots.")
+			return d, !relocate, err
+		}
+		return d, !relocate, nil
+	}
+	for err != nil {
 		if requested {
 			fmt.Printf("\nWarning: could not apply provisioning data — --wifi / --device-name / --pre-enroll were requested but not written: %v\n", err)
 		} else {
@@ -2609,23 +2717,61 @@ func provisionConfigWithRetry(d drive, creds []wendyconf.WifiCredential, deviceN
 		}
 		fmt.Println("The OS image itself was written successfully — the device will still boot, run the agent baked into the image, and fetch updates after first boot.")
 
+		relocate = relocate || driveDisconnected(d, err)
+
 		if !isInteractiveTerminal() {
 			if requested {
 				fmt.Println("Re-run 'wendy os install' to apply WiFi / device-name / pre-enrollment, or configure the device after it boots.")
-				return err
+				return d, !relocate, err
 			}
-			return nil
+			return d, !relocate, nil
+		}
+
+		if relocate {
+			if !id.usable() {
+				reason := "no size or GPT GUID was readable"
+				if idErr != nil {
+					reason = idErr.Error()
+				}
+				fmt.Printf("\nThe drive %s disconnected, and wendy could not record its identity before it did (%s), so it cannot confirm that a reconnected drive is the one it just imaged. Not retrying, so provisioning data cannot land on the wrong drive.\n", d.DevicePath, reason)
+				if requested {
+					fmt.Println("Re-run 'wendy os install' to apply WiFi / device-name / pre-enrollment, or configure the device after it boots.")
+					return d, false, err
+				}
+				return d, false, nil
+			}
+			switch {
+			case errors.Is(err, errDriveAmbiguous):
+				// The error already names the matching drives and what to do.
+			case errors.Is(err, errDriveNotReconnected):
+				fmt.Println("\n" + replugGuidance)
+			default:
+				fmt.Printf("\nThe drive %s disconnected — it no longer shows up as a disk, so retrying right away would fail the same way.\n", d.DevicePath)
+				fmt.Println(replugGuidance)
+			}
 		}
 
 		retry, confirmErr := confirmProvisioningRetry()
 		if confirmErr != nil || !retry {
-			if requested {
-				fmt.Println("Skipping provisioning. Re-run 'wendy os install' to apply it, or configure the device after it boots.")
-				return err
-			}
-			return nil
+			return skip()
 		}
+
+		if relocate {
+			found, findErr := awaitReconnectedDrive(ctx, id)
+			if ctx.Err() != nil {
+				// Ctrl-C while waiting counts as declining the retry.
+				return skip()
+			}
+			if findErr != nil {
+				// Back to the prompt without touching any disk.
+				err = findErr
+				continue
+			}
+			d, relocate = found, false
+		}
+		err = provisionConfigPartitionFn(d, creds, deviceName, provisioningJSON)
 	}
+	return d, true, nil
 }
 
 // provisionConfigPartition downloads the latest stable arm64 wendy-agent binary
@@ -2695,7 +2841,7 @@ func installESP32Firmware(ctx context.Context, nightly bool, board string, seria
 		return err
 	}
 
-	var enrolledState *PreProvisionedState
+	var enrollmentAuth *config.AuthConfig
 	if preOpts.mode != preEnrollSkip {
 		cfg, cfgErr := config.Load()
 		if cfgErr != nil {
@@ -2705,13 +2851,13 @@ func installESP32Firmware(ctx context.Context, nightly bool, board string, seria
 			cfg = &config.Config{} // auto mode: treat an unreadable config as not logged in
 		}
 		var resolveErr error
-		enrolledState, resolveErr = resolvePreEnrollment(ctx, cfg, preOpts, isInteractiveTerminal(), provDeviceName)
+		enrollmentAuth, resolveErr = resolveLiteInstallEnrollment(cfg, preOpts, isInteractiveTerminal())
 		if resolveErr != nil {
 			return resolveErr
 		}
 	}
 
-	wendyConf, err := buildWendyConf(provCreds, provDeviceName, enrolledState)
+	wendyConf, err := buildWendyConf(provCreds, provDeviceName, nil)
 	if err != nil {
 		return fmt.Errorf("building Wendy config: %w", err)
 	}
@@ -2755,6 +2901,9 @@ func installESP32Firmware(ctx context.Context, nightly bool, board string, seria
 		}
 	}
 
+	if enrollmentAuth != nil && serialDevice.Transport != discovery.SerialTransportNativeUSB {
+		return fmt.Errorf("ESP32 enrollment requires native USB after flashing; connect the board's native USB port, or install with --pre-enroll=false and run 'wendy device enroll' over native USB later")
+	}
 	fmt.Println(esp32InstallCandidateMessage(serialDevice))
 
 	fmt.Println("Fetching latest Wendy Lite firmware...")
@@ -2819,6 +2968,9 @@ func installESP32Firmware(ctx context.Context, nightly bool, board string, seria
 			}
 		}
 
+		if enrollmentAuth != nil && serialDevice.Transport != discovery.SerialTransportNativeUSB {
+			return fmt.Errorf("ESP32 enrollment requires native USB; select the board's native USB port, or install with --pre-enroll=false")
+		}
 		if serialDevice.Transport == discovery.SerialTransportUARTBridge {
 			fmt.Fprintln(os.Stderr, tui.WarningMessage(esp32UARTBridgeInstallWarning(len(provCreds) > 0)))
 			if requiresESP32UARTConfirmation(serialDevice, len(provCreds) > 0, interactive) &&
@@ -2872,6 +3024,9 @@ func installESP32Firmware(ctx context.Context, nightly bool, board string, seria
 
 	fmt.Printf("\nSuccessfully flashed Wendy Lite %s!\n", asset.Version)
 	fmt.Println("The device will reboot automatically.")
+	if enrollmentAuth != nil {
+		return enrollInstalledLite(ctx, serialDevice, enrollmentAuth, provDeviceName, asset.Version, interactive)
+	}
 	return nil
 }
 

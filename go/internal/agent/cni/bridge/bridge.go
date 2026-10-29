@@ -57,6 +57,7 @@ import (
 	"github.com/containernetworking/plugins/pkg/utils/sysctl"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/cni/hostlocal"
+	"github.com/wendylabsinc/wendy/go/internal/agent/hostnetwork"
 )
 
 // For testcases to force an error after IPAM has been performed
@@ -553,6 +554,7 @@ func enableIPForward(family int) error {
 
 func CmdAdd(args *skel.CmdArgs) error {
 	success := false
+	releaseIPAM := true
 
 	n, cniVersion, err := loadNetConf(args.StdinData, args.Args)
 	if err != nil {
@@ -636,7 +638,7 @@ func CmdAdd(args *skel.CmdArgs) error {
 
 		// release IP in case of failure
 		defer func() {
-			if !success {
+			if !success && releaseIPAM {
 				_ = hostlocal.CmdDel(args)
 			}
 		}()
@@ -783,9 +785,28 @@ func CmdAdd(args *skel.CmdArgs) error {
 		result.DNS = n.DNS
 	}
 
+	if n.IsDefaultGW {
+		var ips []net.IP
+		for _, ipc := range result.IPs {
+			ips = append(ips, ipc.Address.IP)
+		}
+		owner := n.Name + "/" + args.ContainerID + "/" + args.IfName
+		defer func() {
+			if !success {
+				// Keep the lease quarantined if firewall cleanup fails. A new
+				// app must never inherit a stale grant for this bridge and IP.
+				releaseIPAM = hostnetwork.RevokeBridgeInternetAccess(owner) == nil
+			}
+		}()
+		if err := hostnetwork.EnsureBridgeInternetAccess(owner, n.BrName, ips); err != nil {
+			return err
+		}
+	}
+	if err := types.PrintResult(result, cniVersion); err != nil {
+		return err
+	}
 	success = true
-
-	return types.PrintResult(result, cniVersion)
+	return nil
 }
 
 func dnsConfSet(dnsConf types.DNS) bool {
@@ -795,16 +816,20 @@ func dnsConfSet(dnsConf types.DNS) bool {
 		dnsConf.Domain != ""
 }
 
-func CmdDel(args *skel.CmdArgs) error {
+func CmdDel(args *skel.CmdArgs) (resultErr error) {
 	n, _, err := loadNetConf(args.StdinData, args.Args)
 	if err != nil {
 		return err
 	}
 
+	// Continue veth/NAT cleanup on a grant-revocation error, but retain the
+	// IPAM lease until retry succeeds so another app cannot inherit its grant.
+	grantErr := hostnetwork.RevokeBridgeInternetAccess(n.Name + "/" + args.ContainerID + "/" + args.IfName)
+	defer func() { resultErr = errors.Join(resultErr, grantErr) }()
 	isLayer3 := n.IPAM.Type != ""
 
 	ipamDel := func() error {
-		if isLayer3 {
+		if isLayer3 && grantErr == nil {
 			// In-process call (see the Allocate doc-comment in
 			// internal/agent/cni/hostlocal for why: exec'ing host-local as a
 			// second self-exec here had the same stdout-misinterpretation
@@ -1037,6 +1062,15 @@ func CmdCheck(args *skel.CmdArgs) error {
 		return err
 	}
 
+	if n.IsDefaultGW {
+		var ips []net.IP
+		for _, ipc := range result.IPs {
+			ips = append(ips, ipc.Address.IP)
+		}
+		if err := hostnetwork.CheckBridgeInternetAccess(n.Name+"/"+args.ContainerID+"/"+args.IfName, n.BrName, ips); err != nil {
+			return err
+		}
+	}
 	var errLink error
 	var contCNI, vethCNI cniBridgeIf
 	var brMap, contMap current.Interface

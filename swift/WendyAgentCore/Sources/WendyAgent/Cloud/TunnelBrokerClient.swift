@@ -35,6 +35,9 @@ struct TunnelBrokerClient: Sendable {
     /// Heartbeat cadence on the presence stream.
     static let heartbeatInterval: Duration = .seconds(30)
 
+    /// The longest wait between reconnect attempts.
+    static let maxBackoff: Duration = .seconds(90)
+
     struct Config: Sendable {
         var brokerURL: String
         var orgID: Int32
@@ -83,12 +86,15 @@ struct TunnelBrokerClient: Sendable {
     func runForever(config: Config, logger: Logger) async {
         var attempt = 0
         while !Task.isCancelled {
+            let started = ContinuousClock.now
             do {
                 try await self.runSession(config)
                 // Clean end (broker closed the stream) — reconnect promptly.
                 attempt = 0
             } catch {
                 if Task.isCancelled { return }
+                // A session that outlived the longest backoff was healthy.
+                if ContinuousClock.now - started >= Self.maxBackoff { attempt = 0 }
                 let delay = Self.backoff(attempt: attempt)
                 attempt += 1
                 logger.warning(
@@ -152,7 +158,7 @@ struct TunnelBrokerClient: Sendable {
 
     /// Exponential backoff: `min(1s * 2^attempt, 90s)`.
     static func backoff(attempt: Int) -> Duration {
-        let seconds = min(pow(2.0, Double(max(0, attempt))), 90.0)
+        let seconds = min(pow(2.0, Double(max(0, attempt))), Self.maxBackoff / .seconds(1))
         return .seconds(seconds)
     }
 

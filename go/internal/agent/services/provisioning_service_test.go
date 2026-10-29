@@ -220,12 +220,13 @@ func TestUnprovision_ClearsStateAndFiles(t *testing.T) {
 	// BeforeUnprovisioned must finish before success is reported, after
 	// enrollment state is cleared and without holding the service lock.
 	beforeRan := false
-	svc.BeforeUnprovisioned = func() {
+	svc.BeforeUnprovisioned = func() error {
 		if _, _, _, enrolled := svc.ProvisioningInfo(); enrolled {
 			t.Error("BeforeUnprovisioned ran while still enrolled")
 		}
 		time.Sleep(50 * time.Millisecond) // an asynchronous hook would lose this race
 		beforeRan = true
+		return nil
 	}
 
 	if _, err := svc.Unprovision(context.Background(), &agentpb.UnprovisionRequest{}); err != nil {

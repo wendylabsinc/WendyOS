@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Box,
   Activity,
@@ -10,6 +10,7 @@ import {
   HardDrive,
   Loader2,
   MessageSquare,
+  Network,
   Play,
   Plus,
   RefreshCw,
@@ -26,6 +27,7 @@ import SimulatorView from "./SimulatorView";
 import RobotGallery from "./RobotGallery";
 import DeviceDashboard from "./components/DeviceDashboard";
 import DeviceLogs from "./components/DeviceLogs";
+import MeshNetwork, { type MeshDataSource } from "@/components/mesh-network";
 import type { DeviceLogSource } from "./log-types";
 import type {
   Container,
@@ -56,7 +58,7 @@ const simulatorName = (kind: SimulatorKind) =>
       : kind === "so101" ? "SO-101" : "Go2";
 const errorMessage = (error: unknown) =>
   error instanceof Error ? error.message : String(error);
-type View = "workspace" | "devices" | "containers" | "flash";
+type View = "workspace" | "devices" | "networks" | "containers" | "flash";
 type Monitor = { target: string; tab: "dashboard" | "logs"; app?: string };
 
 export default function App() {
@@ -77,6 +79,10 @@ export default function App() {
 }
 
 function Workspace({ api }: { api: DesktopAPI }) {
+  const meshSource = useMemo<MeshDataSource>(() => ({
+    discover: () => api.meshDiscover(),
+    read: (target) => api.meshTopology({ target }),
+  }), [api]);
   const [view, setView] = useState<View>("workspace");
   const [monitor, setMonitor] = useState<Monitor>();
   const [simLogs, setSimLogs] = useState<{ id: string; name: string }>();
@@ -208,6 +214,7 @@ function Workspace({ api }: { api: DesktopAPI }) {
             [
               { id: "workspace", label: "Workspace", icon: Cpu },
               { id: "devices", label: "Devices & monitoring", icon: Activity },
+              { id: "networks", label: "Networks", icon: Network },
               { id: "containers", label: "Containers", icon: Box },
               { id: "flash", label: "Flash device", icon: Download },
             ] as const
@@ -321,7 +328,7 @@ function Workspace({ api }: { api: DesktopAPI }) {
         </div>
       </aside>
       <main className="desktop-main">
-        <header className="desktop-header">
+        {view !== "networks" && <header className="desktop-header">
           <div>
             <span className="desktop-eyebrow">LOCAL WORKSPACE</span>
             <h1>
@@ -340,7 +347,7 @@ function Workspace({ api }: { api: DesktopAPI }) {
             </span>
             {busy && <Loader2 className="animate-spin" size={17} />}
           </div>
-        </header>
+        </header>}
         {error && (
           <div className="desktop-error" role="alert">
             <span>{error}</span>
@@ -639,6 +646,7 @@ function Workspace({ api }: { api: DesktopAPI }) {
           {view === "containers" && (
             <Containers key={runtime} api={api} runtime={runtime} />
           )}
+          {view === "networks" && <MeshNetwork source={meshSource} />}
           {view === "flash" && <Flash api={api} onSession={openSession} />}
           {view !== "devices" && view !== "containers" && <section
             className={`desktop-sessions ${showTerminal ? "expanded" : ""}`}

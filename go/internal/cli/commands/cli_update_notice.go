@@ -18,8 +18,8 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/version"
 )
 
-var confirmCLIUpdate = func(cmd *cobra.Command) (bool, error) {
-	return tui.ConfirmDefaultYes("Update now?", tea.WithOutput(cmd.ErrOrStderr()))
+var confirmCLIUpdate = func(cmd *cobra.Command, latest string) (bool, error) {
+	return tui.PromptCLIUpdate(version.Version, latest, tea.WithContext(cmd.Context()), tea.WithInput(cmd.InOrStdin()), tea.WithOutput(cmd.ErrOrStderr()))
 }
 var applyCLIUpdate = performCLIUpdate
 var detectCLIUpdate = cliupdate.Detect
@@ -91,10 +91,10 @@ func showCLIUpdateNotice(cmd *cobra.Command, allowPrompt bool) (bool, error) {
 
 	// wendy update recognizes no updater for a CLI the Wendy plugin's
 	// launcher installed, so that CLI gets advice once per release and no
-	// "Update now?" prompt (see cliupdate.PluginAdvice).
+	// update popup (see cliupdate.PluginAdvice).
 	managed := pluginManagedCLI()
 	interactive := allowPrompt && !jsonOutput && isInteractiveTerminal() && !managed
-	if interactive && cfg.CLIUpdatePromptVersion == latest && timestampWithin(cfg.CLIUpdatePromptedAt, cliUpdateCheckInterval, time.Now()) {
+	if interactive && timestampWithin(cfg.CLIUpdatePromptedAt, cliUpdateCheckInterval, time.Now()) {
 		return false, nil
 	}
 	if !interactive && cfg.CLIUpdateNoticeShown == latest {
@@ -128,24 +128,41 @@ func showCLIUpdateNotice(cmd *cobra.Command, allowPrompt bool) (bool, error) {
 	}
 	cmd.PrintErrf("\nA new version of the Wendy CLI is available: %s (you have %s)\n%s\n", latest, version.Version, advice)
 	trackCLIUpdate(cmd, "cli_update_offered", "completed", "", method)
-	_ = updateCLIState(cmd.Context(), func(current *config.Config) {
-		if interactive {
-			current.CLIUpdatePromptVersion = latest
-			current.CLIUpdatePromptedAt = time.Now().UTC().Format(time.RFC3339)
-		} else {
-			current.CLIUpdateNoticeShown = latest
-		}
-	})
 	if !interactive {
+		_ = updateCLIState(cmd.Context(), func(current *config.Config) {
+			current.CLIUpdateNoticeShown = latest
+		})
 		return true, nil
 	}
-	confirmed, promptErr := confirmCLIUpdate(cmd)
+	confirmed, promptErr := confirmCLIUpdate(cmd, latest)
+	if promptDismissed(promptErr) {
+		// Closing or interrupting the dialog is not an answer. Offer it again
+		// next time rather than snoozing for a day.
+		trackCLIUpdate(cmd, "cli_update_dismissed", "cancelled", "user_cancelled", method)
+		return true, nil
+	}
 	if promptErr != nil || !confirmed {
+		// A dialog that cannot open would fail again after every command, so
+		// snooze it like a deferral: the notice above already showed the command.
+		_ = updateCLIState(cmd.Context(), func(current *config.Config) {
+			current.CLIUpdatePromptVersion = latest
+			current.CLIUpdatePromptedAt = time.Now().UTC().Format(time.RFC3339)
+		})
+		if promptErr != nil {
+			trackCLIUpdate(cmd, "cli_update_dismissed", "failed", "other", method)
+			return true, nil
+		}
 		trackCLIUpdate(cmd, "cli_update_deferred", "cancelled", "user_cancelled", method)
 		cmd.PrintErrln("Remind you tomorrow. Run `wendy update` whenever you are ready.")
 		return true, nil
 	}
 	return true, applyCLIUpdate(cmd, latest)
+}
+
+// promptDismissed reports a user who closed or interrupted the update dialog,
+// as opposed to a dialog that could not run.
+func promptDismissed(err error) bool {
+	return errors.Is(err, tui.ErrCancelled) || errors.Is(err, tea.ErrInterrupted) || errors.Is(err, context.Canceled)
 }
 
 // Failed commands do not run Cobra's post-run hook. Give them the same cached

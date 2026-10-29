@@ -5,6 +5,7 @@ on:
   push:
     branches: [main]
     paths:
+      - '.gitattributes'
       - 'go/**'
       - 'web-client/public/**'
       - 'web-client/package.json'
@@ -28,6 +29,7 @@ on:
       - 'packaging/linux/fpm/**'
   pull_request:
     paths:
+      - '.gitattributes'
       - 'go/**'
       - 'web-client/public/**'
       - 'web-client/package.json'
@@ -58,6 +60,31 @@ permissions:
   contents: read
 
 jobs:
+  babel:
+    name: Babel tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: go/babel
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          # Use the repository's maintained compiler; Babel's module keeps its
+          # own minimum language version for library consumers.
+          go-version-file: go.mod
+          cache: false
+
+      # Babel is a nested module, so the parent module's ./... skips it.
+      - name: Run Babel race tests
+        run: go test -race -count=1 -timeout 300s ./...
+
+      - name: Vet Babel
+        run: go vet ./...
+
   unit-tests:
     name: Race tests
     runs-on: runs-on,runner=2cpu-linux-x64
@@ -140,7 +167,7 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: '24'
+          node-version: '24.22.1'
           cache: npm
           cache-dependency-path: web-client/package-lock.json
 
@@ -177,13 +204,18 @@ jobs:
           go-version-file: go.mod
           cache-dependency-path: go.sum
 
-      # Native execution covers Windows identity files and process shutdown.
+      # Native execution covers Windows identity files and process shutdown,
+      # including CLI/MCP identity sharing across WENDY_CONFIG_DIR overrides.
       # Delivery tests redirect requests to local HTTP receivers.
       - name: Test analytics
         working-directory: go
         run: go test ./internal/cli/analytics -count=1 -timeout 120s
 
-      - name: Test CLI telemetry delivery
+      - name: Test analytics preferences with shared identity
+        working-directory: go
+        run: go test ./internal/cli/commands -run '^TestAnalytics' -count=1 -timeout 120s
+
+      - name: Test CLI and MCP telemetry delivery and shared identity
         working-directory: go
         run: go test ./cmd/wendy -run '^(TestInvocationAnalytics|TestEnablingAnalyticsReportsTheCurrentInvocation|TestHelpDoesNotCountAsProductUse)' -v -count=1 -timeout 120s
 
@@ -200,11 +232,12 @@ jobs:
   test:
     name: Test
     if: ${{ always() }}
-    needs: [unit-tests, windows, windows-telemetry, wasm, vet, agent-startup]
+    needs: [babel, unit-tests, windows, windows-telemetry, wasm, vet, agent-startup]
     runs-on: ubuntu-latest
     steps:
       - name: Check test results
         env:
+          BABEL_RESULT: ${{ needs.babel.result }}
           RACE_RESULT: ${{ needs.unit-tests.result }}
           WINDOWS_RESULT: ${{ needs.windows.result }}
           WINDOWS_TELEMETRY_RESULT: ${{ needs.windows-telemetry.result }}
@@ -212,6 +245,7 @@ jobs:
           VET_RESULT: ${{ needs.vet.result }}
           STARTUP_RESULT: ${{ needs.agent-startup.result }}
         run: |
+          test "$BABEL_RESULT" = success
           test "$RACE_RESULT" = success
           test "$WINDOWS_RESULT" = success
           test "$WINDOWS_TELEMETRY_RESULT" = success

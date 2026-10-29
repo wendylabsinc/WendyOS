@@ -76,6 +76,8 @@ func (o runOptions) reportDetachedRun(ctx context.Context, conn *grpcclient.Agen
 	if name != "" {
 		result.Device = "vm:" + name
 	}
+	// cloudNoRoute: a cloud device this machine has no Wendy Mesh route to.
+	cloudNoRoute := false
 	if err != nil {
 		cliNotice("App started, but its URL could not be determined: %v", err)
 	} else {
@@ -85,6 +87,7 @@ func (o runOptions) reportDetachedRun(ctx context.Context, conn *grpcclient.Agen
 		} else if conn.Reconnect != nil {
 			// A cloud tunnel's name or private interface IP is not a host route.
 			host = activeMeshHost(ctx, conn)
+			cloudNoRoute = host == ""
 		}
 		seen := map[string]bool{}
 		for _, cfg := range configs {
@@ -114,7 +117,31 @@ func (o runOptions) reportDetachedRun(ctx context.Context, conn *grpcclient.Agen
 	for _, endpoint := range result.Endpoints {
 		cliLogln("App URL (%s): %s", endpoint.App, endpoint.URL)
 	}
+	if cloudNoRoute {
+		for _, hint := range detachedCloudTunnelHints(conn, configs) {
+			cliLogln("%s", hint)
+		}
+	}
 	return nil
+}
+
+// detachedCloudTunnelHints tells the developer how to open a detached app on
+// a cloud device this machine has no route to. An attached run forwards the
+// port itself (resolveHookRoute), but nothing would keep a tunnel open after
+// a detached run exits, so it prints the `wendy cloud tunnel` command instead:
+// one per device port, chosen like the attached run's (cloudAppTunnelPort).
+func detachedCloudTunnelHints(conn *grpcclient.AgentConnection, configs []*appconfig.AppConfig) []string {
+	seen := map[int]bool{}
+	var hints []string
+	for _, cfg := range configs {
+		port := cloudAppTunnelPort(cfg)
+		if port == 0 || seen[port] {
+			continue
+		}
+		seen[port] = true
+		hints = append(hints, manualCloudTunnelHint(conn, cfg, port))
+	}
+	return hints
 }
 
 // HTTP entitlements and an explicit hostname-based openURL describe web

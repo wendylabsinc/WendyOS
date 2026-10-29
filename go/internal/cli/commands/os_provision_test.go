@@ -489,18 +489,40 @@ func TestWriteConfigFiles_NewlineInDeviceName(t *testing.T) {
 }
 
 // withStubbedProvisioning swaps the injectable provisioning hooks for the
-// duration of fn and restores them afterwards.
+// duration of fn and restores them afterwards. The disk lookups behind the
+// reconnect flow are faked too: the drive stays attached, has a usable
+// identity, and no other drive is listed — tests of that flow override them.
 func withStubbedProvisioning(t *testing.T, provision func(drive, []wendyconf.WifiCredential, string, []byte) error, interactive bool, confirms []bool) (provisionCalls *int) {
 	t.Helper()
 
 	origProvision := provisionConfigPartitionFn
 	origConfirm := confirmProvisioningRetry
 	origInteractive := isInteractiveTerminalFn
+	origRescan := rescanPartitionTableFn
+	origReadIdentity := readDriveIdentityFn
+	origListIdentified := listIdentifiedDrivesFn
+	origPresent := drivePresentFn
+	origSleep := reconnectSleep
+	origTimeout := reconnectTimeout
 	t.Cleanup(func() {
 		provisionConfigPartitionFn = origProvision
 		confirmProvisioningRetry = origConfirm
 		isInteractiveTerminalFn = origInteractive
+		rescanPartitionTableFn = origRescan
+		readDriveIdentityFn = origReadIdentity
+		listIdentifiedDrivesFn = origListIdentified
+		drivePresentFn = origPresent
+		reconnectSleep = origSleep
+		reconnectTimeout = origTimeout
 	})
+	rescanPartitionTableFn = func(drive) {}
+	readDriveIdentityFn = func(drive) (driveIdentity, error) {
+		return driveIdentity{SizeBytes: 1 << 30, ConfigPartitionGUID: "stub-config-guid"}, nil
+	}
+	listIdentifiedDrivesFn = func() ([]identifiedDrive, error) { return nil, nil }
+	drivePresentFn = func(drive) bool { return true }
+	reconnectSleep = func(context.Context, time.Duration) error { return nil }
+	reconnectTimeout = 0
 
 	calls := 0
 	provisionConfigPartitionFn = func(d drive, c []wendyconf.WifiCredential, name string, j []byte) error {
@@ -527,7 +549,7 @@ func TestProvisionConfigWithRetry_SuccessFirstTry(t *testing.T) {
 	}, true, nil)
 
 	out, _ := captureCommandStdout(t, func() error {
-		provisionConfigWithRetry(drive{}, nil, "", nil, true)
+		provisionConfigWithRetry(context.Background(), drive{}, nil, "", nil, true)
 		return nil
 	})
 
@@ -545,7 +567,7 @@ func TestProvisionConfigWithRetry_FailureIsNotFatalAndExplainsBoot(t *testing.T)
 	}, false, nil) // non-interactive: no retry prompt
 
 	out, _ := captureCommandStdout(t, func() error {
-		provisionConfigWithRetry(drive{}, []wendyconf.WifiCredential{{SSID: "Home"}}, "", nil, true)
+		provisionConfigWithRetry(context.Background(), drive{}, []wendyconf.WifiCredential{{SSID: "Home"}}, "", nil, true)
 		return nil
 	})
 
@@ -577,7 +599,7 @@ func TestProvisionConfigWithRetry_InteractiveRetryThenSuccess(t *testing.T) {
 	}, true, []bool{true}) // user agrees to retry once
 
 	_, _ = captureCommandStdout(t, func() error {
-		provisionConfigWithRetry(drive{}, nil, "device-x", nil, true)
+		provisionConfigWithRetry(context.Background(), drive{}, nil, "device-x", nil, true)
 		return nil
 	})
 
@@ -592,7 +614,7 @@ func TestProvisionConfigWithRetry_InteractiveDeclineStops(t *testing.T) {
 	}, true, []bool{false}) // user declines retry
 
 	_, _ = captureCommandStdout(t, func() error {
-		provisionConfigWithRetry(drive{}, nil, "", nil, false)
+		provisionConfigWithRetry(context.Background(), drive{}, nil, "", nil, false)
 		return nil
 	})
 
@@ -624,7 +646,7 @@ func TestProvisionConfigWithRetry_RequestedFailureReturnsError(t *testing.T) {
 
 			var got error
 			_, _ = captureCommandStdout(t, func() error {
-				got = provisionConfigWithRetry(drive{}, nil, "brave-dolphin", nil, true)
+				_, _, got = provisionConfigWithRetry(context.Background(), drive{}, nil, "brave-dolphin", nil, true)
 				return nil
 			})
 
@@ -647,7 +669,7 @@ func TestProvisionConfigWithRetry_UnrequestedFailureReturnsNil(t *testing.T) {
 
 	var got error
 	_, _ = captureCommandStdout(t, func() error {
-		got = provisionConfigWithRetry(drive{}, nil, "", nil, false)
+		_, _, got = provisionConfigWithRetry(context.Background(), drive{}, nil, "", nil, false)
 		return nil
 	})
 

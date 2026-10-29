@@ -194,9 +194,11 @@ func ackContinueUnenrolled() error {
 // abort UX but mints an EAB credential via DeviceEnrollmentService.EnrollDevice
 // instead of the retired v1 token+certificate path, and drops the org lookup:
 // the tenant rides in the operator session's signed identity. The ESP32/litepb
-// install keeps resolvePreEnrollment unchanged (it is a different device class
-// that does not run the ACME agent). Returns nil to bake nothing.
-func resolveACMEPreEnrollment(ctx context.Context, cfg *config.Config, opts preEnrollOptions, interactive bool, deviceName string) (*acmeEnrollmentBake, error) {
+// install uses resolveLiteInstallEnrollment and enrolls over USB after reboot
+// with a device challenge. Returns nil to bake nothing. A blank *deviceName is
+// settled before the mint and written back, so the device is given the name
+// Cloud reserved.
+func resolveACMEPreEnrollment(ctx context.Context, cfg *config.Config, opts preEnrollOptions, interactive bool, deviceName *string) (*acmeEnrollmentBake, error) {
 	switch opts.mode {
 	case preEnrollSkip:
 		return nil, nil
@@ -229,8 +231,30 @@ func resolveACMEPreEnrollment(ctx context.Context, cfg *config.Config, opts preE
 		return nil, nil
 	}
 
+	// Cloud reserves the device under its name and refuses a blank one
+	// (WDY-3016), so a blank name cannot wait for the device to name itself on
+	// first boot. The caller writes the name settled here to the config
+	// partition, so the device's hostname and its Cloud row agree.
+	if *deviceName == "" {
+		if !interactive {
+			return nil, fmt.Errorf("--pre-enroll requires --device-name: Wendy Cloud registers the device under that name")
+		}
+		name, err := promptDeviceName(
+			"Device name",
+			fmt.Sprintf("(required to pre-enroll; a-z, 0-9 and hyphens, starts with a letter, 3–%d chars)", maxDeviceNameLen),
+			validateDeviceName,
+		)
+		if err != nil {
+			if errors.Is(err, tui.ErrCancelled) {
+				return nil, ErrUserCancelled
+			}
+			return nil, fmt.Errorf("device-name prompt: %w", err)
+		}
+		*deviceName = name
+	}
+
 	fmt.Println("Pre-enrolling device with Wendy Cloud...")
-	state, enrollErr := preEnrollACMEFn(ctx, auth, deviceName)
+	state, enrollErr := preEnrollACMEFn(ctx, auth, *deviceName)
 	if enrollErr == nil {
 		fmt.Println("Cloud enrollment reserved; credential staged for first boot. Automatic ACME enrollment requires an image with a compatible agent; device enrollment and Cloud presence are not yet verified.")
 		return state, nil

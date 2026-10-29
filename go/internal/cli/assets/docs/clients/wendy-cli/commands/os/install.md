@@ -114,13 +114,15 @@ For Raspberry Pi devices—and Orin with `--rootfs-only`, the interactive flash-
 1. **Resolve version** — `--version` if provided, otherwise latest (or nightly with `--nightly`).
 2. **Resolve drive** — `--drive` if provided, otherwise an interactive picker of external drives. Internal drives require `--yes-overwrite-internal` in non-interactive mode; in interactive mode the user must type the device path to confirm.
 3. **Download image** — fetched from GCS with a progress bar. Downloaded to `~/Library/Caches/wendy/os-images/` (macOS) or `~/.cache/wendy/os-images/` (Linux). Zip archives are streamed through to the first `.img`, `.raw`, `.wic`, or `.sdimg` entry; gzip-compressed images (`.img.gz`, detected by magic bytes regardless of extension) are decompressed and streamed on the fly. Seekable-zstd images (`.img.zst`) are downloaded and cached directly; when a block map is present, only mapped ranges are decoded during the write step, skipping hole frames entirely. Parallel download is used when the server supports HTTP range requests.
-4. **Write image** — `dd`-equivalent write with elevated privileges (`sudo` on Unix, UAC on Windows), progress bar. When a block map is used and the bmap write fails (e.g. checksum mismatch or a stale/incorrect published bmap), the CLI automatically falls back to a full sequential write using the already-cached `.img.zst` or `.zip` — no re-download is required. A failure *during* the fallback write is fatal.
+4. **Write image** — `dd`-equivalent write with elevated privileges (`sudo` on Unix, UAC on Windows), progress bar. A drive too small for the image is refused before anything is written. An image with a GPT partition table (such as the Orin NVMe image) only needs a drive that holds its partitions, and its partition table is rewritten for the drive's real size after the write; see [Drive-size check](/docs/wendyos/flashing#drive-size-check). When a block map is used and the bmap write fails (e.g. checksum mismatch or a stale/incorrect published bmap), the CLI automatically falls back to a full sequential write using the already-cached `.img.zst` or `.zip` — no re-download is required. A failure *during* the fallback write is fatal.
 5. **Write config partition** — downloads the latest stable `wendy-agent-linux-arm64` binary from GitHub, writes it along with any pre-seeded WiFi credentials and device name to the config partition on the newly written drive. Skipped silently on platforms that don't support config-partition writes. The OS image is already on the drive by this point, and the device boots regardless of this step — it runs the agent baked into the image and fetches updates and configuration after first boot. When provisioning was **not** explicitly requested, a failure here is advisory: a warning is printed and the install is still reported as successful. When `--wifi`, `--device-name`, or `--pre-enroll` **was** requested and could not be applied, the install exits non-zero (see the exit-code note below). On an interactive terminal the CLI offers to retry the write after each failed attempt (useful after, e.g., re-seating an SD card whose config partition couldn't be located); non-interactively it prints guidance and does not retry.
 6. **Eject** — the drive is ejected automatically after writing.
 
 > **Exit code:** `wendy install` exits `0` when the OS image was written to the drive and any explicitly requested provisioning (`--wifi`, `--device-name`, `--pre-enroll`) was applied. It exits non-zero when the image itself could not be written, or when provisioning was explicitly requested but could not be applied — in the latter case the drive is still ejected first and the OS image is already safely on it, and the error names the image, version, and drive to make that clear, so the values can be re-applied with another `wendy install` or configured after the device boots. Unrequested provisioning (e.g. a failed agent-binary download when none of those flags were given) remains advisory: a warning is printed and the command exits `0`.
 
 > **Provisioning retry:** When the config-partition write fails on an interactive terminal, the CLI asks `Retry writing provisioning data to the config partition?` after each attempt. Answering yes re-attempts the write (download + config-partition write); answering no, or running non-interactively, prints guidance and stops retrying — the command then exits non-zero if provisioning was explicitly requested (`--wifi`, `--device-name`, `--pre-enroll`), and successfully otherwise. The OS image is already on the drive either way.
+>
+> If the drive drops off the bus during the write (a USB enclosure resetting shows up as `device not configured` on macOS, or the disk node disappearing), retrying the same device path cannot work, so the CLI says the drive disconnected and asks you to unplug it and plug it back in before answering the prompt. A retry then waits up to two minutes for the drive to reappear and finds it again by the identity it recorded right after imaging: its size, the GPT GUIDs of the image just written (the config partition's GUID on macOS and Linux, the disk GUID on Linux and Windows), and its serial number and model where the OS reports them. The drive may come back under a different device path (for example `/dev/disk9` instead of `/dev/disk8`). Provisioning data is written only when exactly one attached drive matches; if none does, the prompt is shown again, and if several do (two drives written from the same image and of the same size), the CLI names them and writes to none. If the identity could not be recorded before the disconnect, the CLI does not offer a retry at all. A drive that disconnected and was not found again is not ejected, since its old device path may by then belong to another disk.
 
 ## Jetson Orin full recovery path
 
@@ -236,7 +238,7 @@ The `--wifi` flag accepts `key=value` pairs separated by commas. Keys: `ssid` (r
 wendy install --pre-enroll
 ```
 
-Requires an active `wendy auth login` session. The CLI creates an enrollment token via Wendy Cloud and writes provisioning JSON to the config partition so the device enrolls and receives mTLS certificates on first boot. Without `--pre-enroll`, the device boots unenrolled and can be enrolled later with `wendy device enroll`.
+Requires an active `wendy auth login` session. The CLI creates an enrollment token via Wendy Cloud and writes provisioning JSON to the config partition so the device enrolls and receives mTLS certificates on first boot. Without `--pre-enroll`, the device boots unenrolled and can be enrolled later with `wendy device enroll`. For WendyOS images, Wendy Cloud registers the device under its name, so a blank name is not auto-generated when pre-enrolling: pass `--device-name` or enter a name when prompted. The device is given that same name. Without a terminal, `--pre-enroll` without `--device-name` fails before anything is written.
 
 ### Flags reference
 
@@ -260,7 +262,10 @@ Requires an active `wendy auth login` session. The CLI creates an enrollment tok
 | `--storage` | auto | Storage variant: `nvme`/`sd` for raw imaging; AGX Orin recovery requires `nvme` or `emmc` non-interactively |
 | `--no-bmap` | false | Disable bmap-accelerated flashing even when a block map is available |
 
-> **TODO**: Post-flashing Linux devices still need certificate provisioning and Wendy Cloud enrollment if `--pre-enroll` was not used. See [`wendy device setup`](../device/setup.md), [PKI](../../../../pki/), and [Wendy Cloud](https://cloud.wendy.dev/login).
+To manage the device through Wendy Cloud later, [enroll it](../device/enroll.md)
+if you did not choose `--pre-enroll` during installation. Local app development
+does not require Cloud enrollment.
+
 ## Agent-driven installation
 
 `wendy install plan` and `wendy install verify` also work under the `wendy os install`
@@ -286,6 +291,11 @@ requested, and `--timeout` for a deadline of at most one minute (default 15s).
 It exits nonzero for an unreachable target or unmet expectation and reports
 `application: "not_checked"`; application health needs a separate check.
 For agent-only targets, omit WendyOS version/type expectations.
+
+`--address` takes a hostname, an IP address or `host:port`. For a device on USB,
+pass the link-local address `wendy discover` prints, zone included
+(`fe80::…%en31`). `--expected-os-version` matches both the bare release the
+installer prints (`0.19.5`) and the `WendyOS-0.19.5` form the device reports.
 
 See [agent-assisted setup](/docs/installation/agent-assisted-setup) for the MCP
 tools and the complete sequence from hardware identification to first application.

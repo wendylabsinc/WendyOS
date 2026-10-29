@@ -37,8 +37,9 @@ func TestDiscoverSensorSourcesMergesBothServicesAndKeepsOnlySensors(t *testing.T
 	plainAgent := wendyService("plain", "Plain", "plain.local", "192.0.2.12", 50051)
 	useStreamSeams(t, scriptedBackend(sensorAgent, legacyAgent, plainAgent), nil)
 
-	board := map[string]string{"id": "441bf6804824", "tenant": tenant, "caps": "sensors", "mtls": "true"}
-	spoof := map[string]string{"id": "441bf6804824", "tenant": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", "caps": "sensors", "mtls": "true"}
+	const device = "44444444-4444-4444-8444-444444444444"
+	board := map[string]string{"id": device, "tenant": tenant, "principal": "spiffe://wendy.sh/tenant/" + tenant + "/device/" + device, "caps": "sensors", "mtls": "true"}
+	spoof := map[string]string{"id": device, "tenant": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee", "caps": "sensors", "mtls": "true"}
 	useBrowseBackend(t, scriptedBackend(
 		liteService("cam", "192.0.2.20", "en0", board),
 		liteService("cam", "192.0.2.20", "en0", board), // re-announcement
@@ -74,8 +75,8 @@ func TestDiscoverSensorSourcesMergesBothServicesAndKeepsOnlySensors(t *testing.T
 			if d.IPAddress != "192.0.2.20" || !slices.Equal(d.Addresses, []string{"192.0.2.20", "198.51.100.20"}) {
 				t.Fatalf("multi-homed board not merged by address: %+v", d)
 			}
-			if d.PrincipalURI != "spiffe://wendy.sh/tenant/"+tenant+"/device/lite-441bf6804824" {
-				t.Fatalf("principal hint not derived: %q", d.PrincipalURI)
+			if d.PrincipalURI != "spiffe://wendy.sh/tenant/"+tenant+"/device/"+device {
+				t.Fatalf("advertised principal lost: %q", d.PrincipalURI)
 			}
 		}
 		if d.ID == "hub" && (d.AssetID != 7 || !d.IsMTLS || d.Port != 50052) {

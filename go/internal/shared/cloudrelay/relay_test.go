@@ -33,11 +33,13 @@ import (
 )
 
 type testRelay struct {
+	instruction    *pb.DialInstruction
 	refusePresence bool
 	rotateRoute    bool
 	renewLease     <-chan struct{}
 	reconnected    chan struct{}
 	registrations  int
+	issues         int
 	renewOnly      bool
 	renewed        chan struct{}
 	pb.UnimplementedTunnelAuthorizationServiceServer
@@ -99,6 +101,7 @@ func (r *testRelay) IssuePresenceLease(ctx context.Context, req *pb.IssuePresenc
 		r.mu.Lock()
 	}
 	defer r.mu.Unlock()
+	r.issues++
 	r.signing = bytes.Clone(req.AgentSigningPublicKeySpkiDer)
 	r.encryption = bytes.Clone(req.AgentKeyAgreementPublicKeySpkiDer)
 	now := time.Now().Unix()
@@ -254,12 +257,12 @@ func (r *testRelay) RequestTunnel(ctx context.Context, req *pb.RequestTunnelRequ
 	}
 	body, _ := proto.MarshalOptions{Deterministic: true}.Marshal(req.RequestBody)
 	target := descriptor["target"].(map[string]any)
-	if req.RequestBody.TargetAssetId != "00000000-0000-4000-8000-000000000042" || target["asset_id"] != req.RequestBody.TargetAssetId || descriptor["body_sha256"] != binding(body) || target["service"] != "wendy-agent" {
+	if req.RequestBody.TargetAssetId != "00000000-0000-4000-8000-000000000042" || target["asset_id"] != req.RequestBody.TargetAssetId || descriptor["body_sha256"] != binding(body) || target["service"] != req.RequestBody.Service {
 		return nil, fmt.Errorf("UUID or signed request body mismatch")
 	}
 	now := time.Now().Unix()
 	g := claims{Iss: r.verifier.Issuer, Aud: r.broker().Audience, Iat: now, Exp: now + 60, JTI: uuid.NewString(), Correlation: "opaque-correlation", Route: r.lease.Route, Session: "opaque-session", Presence: r.lease.JTI, Request: binding(req.PrincipalRequest.Value), Attestation: binding([]byte("attestation")), Caller: binding(req.RequestBody.CallerSigningPublicKeySpkiDer), Agent: r.lease.Signing, RelayExp: now + 300}
-	envelope, e := sealTestInstruction(r.encryption, g)
+	envelope, e := sealTestInstruction(r.encryption, g, r.instruction)
 	if e != nil {
 		return nil, e
 	}
@@ -272,9 +275,18 @@ func (r *testRelay) RequestTunnel(ctx context.Context, req *pb.RequestTunnelRequ
 	}
 	r.callerPub = pub.(*ecdsa.PublicKey)
 	r.offers <- &pb.SessionOffer{SessionGrantJws: r.grantJWS, EncryptedDialInstruction: envelope, OfferId: "opaque-offer", SessionId: g.Session}
-	return &pb.RequestTunnelResponse{SessionGrantJws: r.grantJWS, Broker: r.broker()}, nil
+	response := &pb.RequestTunnelResponse{SessionGrantJws: r.grantJWS, Broker: r.broker()}
+	if r.instruction != nil {
+		if string(r.instruction.ServiceDescriptor) != req.RequestBody.Service {
+			return nil, fmt.Errorf("wrong requested service")
+		}
+		for _, dst := range r.instruction.AuthorizedDatagramDestinations {
+			response.AuthorizedDatagramDestinations = append(response.AuthorizedDatagramDestinations, &pb.CallerDatagramDestination{DestinationId: dst.DestinationId})
+		}
+	}
+	return response, nil
 }
-func sealTestInstruction(spki []byte, g claims) (*pb.EncryptedDialInstructionEnvelope, error) {
+func sealTestInstruction(spki []byte, g claims, target *pb.DialInstruction) (*pb.EncryptedDialInstructionEnvelope, error) {
 	pub, e := x509.ParsePKIXPublicKey(spki)
 	if e != nil {
 		return nil, e
@@ -288,6 +300,11 @@ func sealTestInstruction(spki []byte, g claims) (*pb.EncryptedDialInstructionEnv
 	request, _ := decode64(g.Request)
 	aad := canonical([]byte("wendycloud.tunnel.v1/hpke-aad/1"), []byte(g.Session), request)
 	d := &pb.DialInstruction{SessionId: g.Session, Transport: pb.DialTransport_DIAL_TRANSPORT_TCP, Host: "127.0.0.1", Port: 50052, RelayExpiresAtUnixSeconds: g.RelayExp, ServiceDescriptor: []byte("wendy-agent")}
+	if target != nil {
+		d = proto.Clone(target).(*pb.DialInstruction)
+		d.SessionId = g.Session
+		d.RelayExpiresAtUnixSeconds = g.RelayExp
+	}
 	raw, _ := proto.Marshal(d)
 	d.Padding = make([]byte, 4096-len(raw)-3)
 	_, _ = rand.Read(d.Padding)
@@ -412,14 +429,16 @@ func (r *testRelay) JoinSession(s grpc.BidiStreamingServer[pb.JoinSessionRequest
 	}
 }
 func TestAuthorizedRelayEndToEnd(t *testing.T) {
-	testAuthorizedRelayEndToEnd(t, false)
+	for _, protocol := range []string{"agent", "tcp", "udp"} {
+		t.Run(protocol, func(t *testing.T) { testAuthorizedRelay(t, protocol, false) })
+	}
 }
 
 func TestAgentSessionSurvivesPresenceReconnect(t *testing.T) {
-	testAuthorizedRelayEndToEnd(t, true)
+	testAuthorizedRelay(t, "agent", true)
 }
 
-func testAuthorizedRelayEndToEnd(t *testing.T, reconnect bool) {
+func testAuthorizedRelay(t *testing.T, protocol string, reconnect bool) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -446,22 +465,56 @@ func testAuthorizedRelayEndToEnd(t *testing.T, reconnect bool) {
 		return grpc.NewClient(endpoint, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	}
 	verifier.relayDial = dial
-	echo, e := net.Listen("tcp", "127.0.0.1:0")
-	if e != nil {
-		t.Fatal(e)
-	}
-	defer echo.Close()
+	var echoPort int
+	service := "wendy-agent"
 	echoDone := make(chan struct{})
-	go func() {
-		defer close(echoDone)
-		c, e := echo.Accept()
-		if e != nil {
-			return
+	if protocol == "udp" {
+		echo, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+		if err != nil {
+			t.Fatal(err)
 		}
-		defer c.Close()
-		_, _ = io.Copy(c, c)
-	}()
-	agent := &Agent{Endpoint: r.endpoint, Verifier: verifier, StateDir: t.TempDir(), Credentials: func() (string, string, []byte) { return "", "", nil }, Logger: zap.NewNop(), MTLSPort: echo.Addr().(*net.TCPAddr).Port, dialCloud: func(endpoint, _, _ string, _ []byte) (*grpc.ClientConn, error) { return dial(endpoint) }}
+		defer func() { _ = echo.Close() }()
+		if err := echo.SetWriteBuffer(65507); err != nil {
+			t.Fatal(err)
+		}
+		echoPort = echo.LocalAddr().(*net.UDPAddr).Port
+		service = fmt.Sprintf("udp-%d", echoPort)
+		close(echoDone) // a UDP echo has no relay session to see closed
+		r.instruction = &pb.DialInstruction{Transport: pb.DialTransport_DIAL_TRANSPORT_DATAGRAM, ServiceDescriptor: []byte(service), AuthorizedDatagramDestinations: []*pb.AuthorizedDatagramDestination{{DestinationId: 1, LoopbackPort: uint32(echoPort)}}}
+		go func() {
+			buf := make([]byte, 65535)
+			for {
+				n, peer, err := echo.ReadFromUDP(buf)
+				if err != nil {
+					return
+				}
+				if _, err := echo.WriteToUDP(buf[:n], peer); err != nil {
+					return
+				}
+			}
+		}()
+	} else {
+		echo, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = echo.Close() }()
+		echoPort = echo.Addr().(*net.TCPAddr).Port
+		if protocol == "tcp" {
+			service = fmt.Sprintf("tcp-%d", echoPort)
+			r.instruction = &pb.DialInstruction{Transport: pb.DialTransport_DIAL_TRANSPORT_TCP, Host: "127.0.0.1", Port: uint32(echoPort), ServiceDescriptor: []byte(service)}
+		}
+		go func() {
+			defer close(echoDone)
+			c, err := echo.Accept()
+			if err != nil {
+				return
+			}
+			defer func() { _ = c.Close() }()
+			_, _ = io.Copy(c, c)
+		}()
+	}
+	agent := &Agent{Endpoint: r.endpoint, Verifier: verifier, StateDir: t.TempDir(), Credentials: func() (string, string, []byte) { return "", "", nil }, Logger: zap.NewNop(), MTLSPort: echoPort, dialCloud: func(endpoint, _, _ string, _ []byte) (*grpc.ClientConn, error) { return dial(endpoint) }}
 	agentDone := make(chan error, 1)
 	go func() {
 		agentCtx := metadata.NewOutgoingContext(ctx, metadata.Pairs("authorization", "Bearer device-test"))
@@ -487,46 +540,66 @@ func testAuthorizedRelayEndToEnd(t *testing.T, reconnect bool) {
 	authCtx := metadata.NewOutgoingContext(ctx, metadata.Pairs("authorization", "Bearer operator-test"))
 	// Signing is covered separately. This seam lets the test Cloud inspect the
 	// exact descriptor/body while exercising actual gRPC admission and relay.
-	conn, e := OpenTCP(authCtx, authCtx, cloudConn, verifier, "00000000-0000-4000-8000-000000000042", "wendy-agent", func(b []byte) ([]byte, error) { return b, nil })
-	if e != nil {
-		select {
-		case err := <-agentDone:
-			t.Fatalf("tunnel: %v; agent: %v", e, err)
-		default:
-			t.Fatal(e)
+	if protocol == "udp" {
+		session, err := OpenUDP(ctx, authCtx, cloudConn, verifier, "00000000-0000-4000-8000-000000000042", uint32(echoPort), func(b []byte) ([]byte, error) { return b, nil })
+		if err != nil {
+			t.Fatal(err)
 		}
-	}
-	defer conn.Close()
-	exchange := func(phase string) {
-		t.Helper()
-		_ = conn.SetDeadline(time.Now().Add(3 * time.Second))
-		payload := bytes.Repeat([]byte("relay"), 30000)
-		sent := make(chan error, 1)
-		go func() { _, err := conn.Write(payload); sent <- err }()
-		got := make([]byte, len(payload))
-		if _, err := io.ReadFull(conn, got); err != nil {
-			t.Fatalf("%s: %v", phase, err)
+		defer func() { _ = session.Close() }()
+		for i, payload := range [][]byte{nil, []byte("UDP echo"), bytes.Repeat([]byte("x"), 65507)} {
+			if err := session.Send(uint32(i+1), payload); err != nil {
+				t.Fatal(err)
+			}
+			reply, err := session.Recv()
+			if err != nil {
+				t.Fatalf("UDP payload length %d: %v", len(payload), err)
+			}
+			if reply.FlowId != uint32(i+1) || reply.DestinationId != 1 || !bytes.Equal(reply.Payload, payload) {
+				t.Fatal("UDP relay changed the datagram or flow")
+			}
 		}
-		if !bytes.Equal(got, payload) {
-			t.Fatal("relay corrupted payload")
+	} else {
+		conn, e := OpenTCP(authCtx, authCtx, cloudConn, verifier, "00000000-0000-4000-8000-000000000042", service, func(b []byte) ([]byte, error) { return b, nil })
+		if e != nil {
+			select {
+			case err := <-agentDone:
+				t.Fatalf("tunnel: %v; agent: %v", e, err)
+			default:
+				t.Fatal(e)
+			}
 		}
-		if err := <-sent; err != nil {
-			t.Fatalf("%s: %v", phase, err)
+		defer func() { _ = conn.Close() }()
+		exchange := func(phase string) {
+			t.Helper()
+			_ = conn.SetDeadline(time.Now().Add(3 * time.Second))
+			payload := bytes.Repeat([]byte("relay"), 30000)
+			sent := make(chan error, 1)
+			go func() { _, err := conn.Write(payload); sent <- err }()
+			got := make([]byte, len(payload))
+			if _, err := io.ReadFull(conn, got); err != nil {
+				t.Fatalf("%s: %v", phase, err)
+			}
+			if !bytes.Equal(got, payload) {
+				t.Fatal("relay corrupted payload")
+			}
+			if err := <-sent; err != nil {
+				t.Fatalf("%s: %v", phase, err)
+			}
 		}
-	}
-	exchange("before renewal")
-	if reconnect {
-		// The session has carried bytes before Cloud issues a new route. Wait
-		// for the new presence admission before exercising the same session.
-		close(renewLease)
-		select {
-		case <-r.reconnected:
-		case <-agentDone:
-			t.Fatal("agent stopped before presence reconnected")
-		case <-ctx.Done():
-			t.Fatal("presence did not reconnect after route renewal")
+		exchange("before renewal")
+		if reconnect {
+			// The session has carried bytes before Cloud issues a new route. Wait
+			// for the new presence admission before exercising the same session.
+			close(renewLease)
+			select {
+			case <-r.reconnected:
+			case <-agentDone:
+				t.Fatal("agent stopped before presence reconnected")
+			case <-ctx.Done():
+				t.Fatal("presence did not reconnect after route renewal")
+			}
+			exchange("after presence reconnect")
 		}
-		exchange("after presence reconnect")
 	}
 	// The offer was persisted before its receipt acknowledgement permitted join.
 	entries, e := os.ReadDir(agent.StateDir)

@@ -318,7 +318,7 @@ func TestAuthLoginTargetFlagsStayHidden(t *testing.T) {
 			t.Errorf("user-facing help exposes transitional flag %s", hidden)
 		}
 	}
-	for _, want := range []string{"production Wendy Cloud", "OIDC flow by default", "Pass --email"} {
+	for _, want := range []string{"Wendy Cloud in your browser", "saves the sign-in", "Pass --email"} {
 		if !strings.Contains(cmd.Long, want) {
 			t.Errorf("long help does not mention %q: %s", want, cmd.Long)
 		}

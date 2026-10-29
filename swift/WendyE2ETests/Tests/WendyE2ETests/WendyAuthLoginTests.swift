@@ -18,7 +18,7 @@ struct `'wendy auth login'` {
             try await cli.sh("wendy auth login --help") { result in
                 let stdout = result.stdout
                 #expect(result.status.isSuccess)
-                #expect(stdout.contains("browser-based OIDC flow by default"))
+                #expect(stdout.contains("Sign in to Wendy Cloud in your browser"))
                 #expect(stdout.contains("wendy auth login [flags]"))
                 #expect(stdout.contains("--api-key"))
                 #expect(stdout.contains("--cloud"))

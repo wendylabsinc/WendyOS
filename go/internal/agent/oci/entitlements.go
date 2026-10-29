@@ -37,6 +37,8 @@ const (
 	// appSystemAPIGroupGID is reserved by WendyOS for private app System API
 	// sockets, allowing non-root workloads to connect without world access.
 	appSystemAPIGroupGID uint32 = 2000
+	// NANControlGroupGID is reserved for direct app access to nan0 only.
+	NANControlGroupGID uint32 = 2001
 	// v4l2Major is the standard Video4Linux character device major.
 	v4l2Major int64 = 81
 )
@@ -54,6 +56,13 @@ type ApplyOptions struct {
 	// DBUS_SYSTEM_BUS_ADDRESS — mounting the raw host D-Bus socket directly
 	// would expose every system service, so it is never done.
 	DBusProxySocketDir string
+	// AvahiProxySocketDir is the host directory holding the filtered Avahi
+	// proxy socket for this container. A caller may plan this path during
+	// validation, but must prepare that exact directory before container create. Same
+	// mount convention as DBusProxySocketDir (/var/run/dbus). Bluetooth and
+	// avahi mounts are mutually exclusive (one /var/run/dbus); declaring
+	// both entitlements refuses container start.
+	AvahiProxySocketDir string
 	// SystemAPISocketDir is the app-specific host directory prepared by
 	// AppSystemAPISocketManager. It contains only the narrow System API socket.
 	SystemAPISocketDir string
@@ -64,6 +73,12 @@ type ApplyOptions struct {
 	// resolver in the host network namespace. When empty, host networking keeps
 	// the compatibility fallback of bind-mounting the host resolver file.
 	HostResolvConfPath string
+	// NANDataInterface is the app-specific NDI prepared before OCI creation.
+	NANDataInterface string
+	// NANClientDirectory is a host directory mounted at the same absolute
+	// path inside the container, so wpa_supplicant can reply to AF_UNIX
+	// datagram clients bound there from its own mount namespace.
+	NANClientDirectory string
 }
 
 // ApplyEntitlements modifies an OCI spec in-place based on app config entitlements.
@@ -101,7 +116,22 @@ func ApplyEntitlements(spec *Spec, cfg *appconfig.AppConfig, opts ApplyOptions) 
 		case appconfig.EntitlementPersist:
 			applyPersist(spec, ent, cfg.AppID)
 		case appconfig.EntitlementBluetooth:
+			if opts.AvahiProxySocketDir != "" {
+				return fmt.Errorf("entitlements bluetooth and avahi both mount /var/run/dbus; declare at most one")
+			}
 			applyBluetooth(spec, opts.DBusProxySocketDir)
+		case appconfig.EntitlementAvahi:
+			if opts.AvahiProxySocketDir == "" {
+				return fmt.Errorf("avahi entitlement requires a prepared private D-Bus proxy")
+			}
+			if opts.DBusProxySocketDir != "" {
+				return fmt.Errorf("entitlements bluetooth and avahi both mount /var/run/dbus; declare at most one")
+			}
+			applyAvahi(spec, opts.AvahiProxySocketDir)
+		case appconfig.EntitlementNAN:
+			if err := applyNAN(spec, opts.NANDataInterface, opts.NANClientDirectory); err != nil {
+				return err
+			}
 		case appconfig.EntitlementUSB:
 			applyUSB(spec)
 		case appconfig.EntitlementI2C:
@@ -761,6 +791,58 @@ func applyAdmin(spec *Spec) {
 	spec.Process.Env = append(spec.Process.Env, "WENDY_AGENT_SOCKET="+ctrAgentSocketPath)
 }
 
+// NANControlSocketHostPath is the wpa_supplicant control socket for nan0.
+// Bind the socket file rather than its parent directory: the latter also
+// contains the global and station Wi-Fi control sockets. The app must be
+// restarted if wpa_supplicant replaces this socket inode.
+var NANControlSocketHostPath = "/run/wpa_supplicant/nan0"
+
+// NANControlSocketContainerPath is the fixed bind-mount target inspected by
+// the agent's restart monitor when wpa_supplicant replaces its host socket.
+const NANControlSocketContainerPath = "/run/wendy/nan/nan0"
+const ctrNANControlSocketPath = NANControlSocketContainerPath
+
+func applyNAN(spec *Spec, ndi, clientDir string) error {
+	fi, err := os.Lstat(NANControlSocketHostPath)
+	if err != nil {
+		return fmt.Errorf("nan entitlement requires %s: %w", NANControlSocketHostPath, err)
+	}
+	if fi.Mode()&os.ModeSocket == 0 {
+		return fmt.Errorf("nan entitlement: %s is not a Unix socket", NANControlSocketHostPath)
+	}
+	if ndi == "" {
+		return fmt.Errorf("nan entitlement: app NDI was not prepared")
+	}
+	if clientDir == "" {
+		return fmt.Errorf("nan entitlement: client socket directory was not prepared")
+	}
+	if fi, err := os.Lstat(clientDir); err != nil || !fi.IsDir() {
+		return fmt.Errorf("nan entitlement: client socket directory %s is unavailable", clientDir)
+	}
+	// SECURITY: nan is a device-trusted direct radio-control grant. A read-only
+	// bind protects this inode but does not filter Unix datagram commands:
+	// entitled apps can disrupt the shared cluster, including Wendy Net. The
+	// separate file mount keeps global/station control sockets inaccessible.
+	spec.Mounts = append(spec.Mounts, Mount{
+		Destination: ctrNANControlSocketPath,
+		Source:      NANControlSocketHostPath,
+		Type:        "bind",
+		Options:     []string{"bind", "nosuid", "noexec", "ro"},
+	})
+	spec.Mounts = append(spec.Mounts, Mount{
+		Destination: clientDir,
+		Source:      clientDir,
+		Type:        "bind",
+		Options:     []string{"rbind", "nosuid", "noexec", "nodev", "rw"},
+	})
+	spec.Process.User.AdditionalGids = appendUnique(spec.Process.User.AdditionalGids, NANControlGroupGID)
+	spec.Process.Env = append(spec.Process.Env,
+		"WENDY_NAN_SOCKET="+ctrNANControlSocketPath,
+		"WENDY_NAN_NDI="+ndi,
+		"WENDY_NAN_CLIENT_DIR="+clientDir)
+	return nil
+}
+
 // applyNetwork configures the network namespace.
 //
 // DEPRECATION (specs/2026-07-05-network-bridge-default-design.md): an omitted
@@ -1338,6 +1420,25 @@ func mountDBusProxy(spec *Spec, proxySocketDir string) {
 // usbDeviceDir is the host USB device tree. Tests redirect it to a temporary
 // directory to cover hosts with and without a USB bus.
 var usbDeviceDir = "/dev/bus/usb"
+
+// applyAvahi mounts a filtered Avahi proxy socket directory (only
+// org.freedesktop.Avahi visible) at /var/run/dbus. The directory is supplied
+// by the caller (the value the avahi bridge returned for this container).
+// When empty, no mount is added and the raw host D-Bus sockets are never
+// mounted as a fallback.
+func applyAvahi(spec *Spec, proxySocketDir string) {
+	if proxySocketDir != "" {
+		spec.Mounts = append(spec.Mounts, Mount{
+			Destination: "/var/run/dbus",
+			Source:      proxySocketDir,
+			Type:        "bind",
+			Options:     []string{"rbind", "nosuid", "noexec", "nodev", "ro"},
+		})
+	}
+	spec.Process.Env = append(spec.Process.Env,
+		"DBUS_SYSTEM_BUS_ADDRESS=unix:path=/var/run/dbus/system_bus_socket",
+	)
+}
 
 // applyUSB adds USB device access.
 func applyUSB(spec *Spec) {

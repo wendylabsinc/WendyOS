@@ -287,7 +287,7 @@ loopback address, and readiness checks use it too. This works with background
 VMs and detached applications; forwards last until the VM stops and are
 recreated on the next run.
 
-For an app with a declared [`http` endpoint](../apps/wendy.json.md#http), capture
+For an app with a declared [`http` endpoint](/docs/advanced/apps/wendy.json#http), capture
 the detached result and fetch the reported host URL:
 
 ```sh
@@ -299,7 +299,7 @@ curl --fail --retry 10 --retry-connrefused --retry-delay 1 --max-time 5 "$url"
 `vm:dev` selects the device; it is not a DNS hostname. The result's
 `readiness: "not_checked"` means start was acknowledged, so check the response
 against your app's expected behavior. If `url` is absent, inspect the declared
-HTTP endpoints, forwarding and logs. See the [detached result reference](../clients/wendy-cli/commands/run.md#detached-output)
+HTTP endpoints, forwarding and logs. See the [detached result reference](/docs/advanced/clients/wendy-cli/commands/run#detached-output)
 for fields and multi-service output.
 
 If another application or VM owns the host port, deployment reports a forwarding
@@ -408,7 +408,7 @@ terminal. Leave it out to choose a VM from a list; scripts should continue to
 pass the name explicitly.
 
 `vm stop` waits up to five minutes for the guest to stop its apps, shut down and
-flush its filesystems, which covers any ordinary shutdown. If QMP is unavailable
+flush its filesystems. If QMP is unavailable
 or the guest is still shutting down after that, it reports an error without
 killing the VM. Shut down inside an older guest without QMP, or
 use `wendy vm stop dev --force` only when an immediate power cut is intended.
@@ -562,38 +562,18 @@ using `vm start --port` where necessary).
 Normal stop, QEMU exit and startup failures release the port and listener. A
 serial I/O error or cable disconnect that the host driver reports stops QEMU
 and prints an actionable error; reconnect the device and restart the VM. There
-is no silent reconnect. On Windows the launcher attaches serial-enabled QEMU to
-a kill-on-job-close job, so abrupt launcher termination also terminates QEMU
-after job assignment. There is a small launch-to-assignment window because Go's
-process launcher cannot atomically assign that job. If the launcher is forcibly
-killed at that instant, check Task Manager for an orphaned QEMU before
-restarting. On macOS and Linux a launcher killed outright leaves QEMU running
-without its serial link; stop it with `wendy vm stop my-vm`.
+is no silent reconnect. If the launcher is forcibly terminated, check for a
+remaining QEMU process before starting again. On macOS and Linux, use
+`wendy vm stop my-vm`; on Windows, check Task Manager.
 
-### Hardware verification
+### Check your serial connection
 
-Automated tests cover configuration, QEMU arguments, binary forwarding and
-lifecycle cleanup with fake serial endpoints, and on macOS and Linux the real
-port opener against a pseudo-terminal. None of them validates driver behavior.
-Verify the new CLI on the intended host:
+After starting the VM, confirm that your app can open the guest serial device
+and exchange the data it expects. Saving a mapping does not verify the adapter,
+its baud rate, or the attached hardware. Start with your device's documented
+read-only checks before enabling any physical controls.
 
-1. Record CLI, QEMU, host driver and guest versions. Configure the actual port
-   and required baud; confirm `vm serial` reports them after a fresh CLI invocation.
-2. Start the VM and verify the guest serial node. Use a loopback plug or the device's
-   documented read-only protocol to compare binary requests and replies, including
-   zero bytes and bytes above `0x7f`. Do not enable actuators for this check.
-3. Stop and start again without configuring serial. Confirm the same mapping and
-   successful traffic. Confirm another program can open the port after stopping.
-4. Try an unavailable port, a port held by another program, and a driver-rejected
-   baud. Expect explicit startup errors and no leftover QEMU, listener or port handle.
-5. Unplug the adapter during traffic and while idle; confirm a reported driver
-   failure stops QEMU and frees resources. Reconnect and restart successfully.
-6. Test Ctrl-C, QEMU console exit and `vm stop` (`--force` on Windows), and
-   killing the launcher (Task Manager on Windows, `kill -9` on macOS and Linux).
-   Verify QEMU stops or can be stopped and the port can be reopened each time.
-7. If two adapters are available, run two VMs with different ports and agent
-   ports; verify isolation. A second VM using the first port must fail clearly.
-
-This scope is one serial device per VM. Cameras, general USB capture, multiple
-serial mappings within one VM, and physical motor control validation are outside
-this feature.
+If the cable disconnects or a serial I/O error stops the VM, reconnect the device
+and start the VM again. If another program reports the port busy, stop the VM
+before using the port elsewhere. One serial device can be mapped per VM;
+this does not provide general USB, camera, or GPU passthrough.

@@ -6,6 +6,7 @@ package main
 
 import (
 	"context"
+	"crypto/hpke"
 	"crypto/mldsa"
 	"crypto/rand"
 	"crypto/x509"
@@ -29,8 +30,12 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/shared/cloudrelay"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
+	"github.com/wendylabsinc/wendy/go/internal/shared/headack"
+	"github.com/wendylabsinc/wendy/go/internal/shared/registrycrypto"
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
+	cloudpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
 	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
 )
 
 type request struct {
@@ -65,7 +70,7 @@ func event(kind string, data any) { send(map[string]any{"event": kind, "data": d
 
 func main() {
 	_ = os.Setenv("WENDY_TLS_SESSION_STORE", "off")
-	b := &bridge{auth: &browserauth.Session{Client: &http.Client{Transport: authProxyTransport{}}, Store: browserCredentialStore{}}}
+	b := &bridge{auth: &browserauth.Session{Client: &http.Client{Transport: authProxyTransport{}}, Store: browserCredentialStore{}, Pending: browserPendingStore{}}}
 	callback := js.FuncOf(func(_ js.Value, args []js.Value) any {
 		if len(args) < 1 || len(args) > 2 {
 			return nil
@@ -115,8 +120,30 @@ func (b *bridge) handle(r request) (any, error) {
 			return nil, errors.New("The Wendy client is already initialized")
 		}
 		b.initialized = true
-		b.auth = &browserauth.Session{Settings: &settings, Client: &http.Client{}, Store: browserCredentialStore{}}
+		b.auth = &browserauth.Session{Settings: &settings, Client: &http.Client{}, Store: browserCredentialStore{}, Pending: browserPendingStore{}}
 		return true, nil
+	}
+	// The console builds postbox-relayed payloads itself; this gives it the
+	// CLI's validity rule (default 60 days, at most 365) for their valid_until.
+	if r.Method == "valid-until" {
+		var p struct {
+			ValidForSeconds int64 `json:"validForSeconds"`
+		}
+		if len(r.Params) > 0 {
+			if err := json.Unmarshal(r.Params, &p); err != nil {
+				return nil, err
+			}
+		}
+		// Bounded before the multiply, which would wrap; a non-integer fails
+		// to decode into int64.
+		if p.ValidForSeconds < 0 || p.ValidForSeconds > int64(cloudrequest.MaxValidity/time.Second) {
+			return nil, fmt.Errorf("validForSeconds %d is outside 0 to 365 days", p.ValidForSeconds)
+		}
+		until, err := cloudrequest.ValidUntil(time.Now(), time.Duration(p.ValidForSeconds)*time.Second)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"seconds": until.Unix()}, nil
 	}
 	// SECURITY: signing raw bytes is the approved console design (sem, 2026-10-19 22:55): the console builds its JWS, DPoP and management-request inputs, which verifiers check byte for byte, so no prefix can be added. Only same-origin script reaches this worker; it can use the key, never export it.
 	if r.Method == "credential" || r.Method == "sign" {
@@ -159,8 +186,47 @@ func (b *bridge) handle(r request) (any, error) {
 		}
 		return map[string]any{"profile": saved.Profile, "algorithm": alg, "chainDER": chain, "accessToken": saved.Tokens.Access, "publicJWK": jwk}, nil
 	}
+	if strings.HasPrefix(r.Method, "registry-") {
+		return b.registry(r)
+	}
+	// The console's signed-ack staleness alarm (WDY-3999): the page pins the
+	// platform root and keeps the returned ack per device, passing it back as
+	// kept on the next read.
+	if r.Method == "head-ack-verify" {
+		var p struct {
+			Response       []byte      `json:"response"`
+			RootDER        []byte      `json:"rootDER"`
+			Device         string      `json:"device"`
+			OrganizationID string      `json:"organizationId"`
+			Kept           headack.Ack `json:"kept"`
+		}
+		if err := json.Unmarshal(r.Params, &p); err != nil {
+			return nil, err
+		}
+		root, err := x509.ParseCertificate(p.RootDER)
+		if err != nil {
+			return nil, err
+		}
+		var resp cloudpbv2.GetLastHeadAckResponse
+		if err := proto.Unmarshal(p.Response, &resp); err != nil {
+			return nil, err
+		}
+		return headack.Verify(&resp, root, p.Device, p.OrganizationID, p.Kept)
+	}
 	if strings.HasPrefix(r.Method, "shell-") {
 		return nil, errors.New("Shell access is disabled in the browser client")
+	}
+	if r.Method == "mesh-topology" {
+		if js.Global().Get("location").Get("origin").String() != "http://localhost:5173" {
+			return nil, errors.New("Local observations require the local browser relay")
+		}
+		var p struct {
+			ID string `json:"id"`
+		}
+		if err := json.Unmarshal(r.Params, &p); err != nil {
+			return nil, err
+		}
+		return b.auth.MeshTopology(context.Background(), p.ID, browserCloudDial, &http.Client{Transport: authProxyTransport{}, Timeout: 12 * time.Second}), nil
 	}
 	if r.Method == "cloud-connect" {
 		if js.Global().Get("location").Get("origin").String() != "http://localhost:5173" {
@@ -198,7 +264,7 @@ func (b *bridge) handle(r request) (any, error) {
 		b.conn, b.life, b.close = conn, life, stop
 		return true, nil
 	}
-	if r.Method == "cloud-discover" {
+	if r.Method == "cloud-discover" || r.Method == "mesh-discover" {
 		// The local relay has a fixed TLS-verified upstream. Never send the session
 		// token to a caller-supplied relay URL.
 		if js.Global().Get("location").Get("origin").String() != "http://localhost:5173" {
@@ -206,13 +272,13 @@ func (b *bridge) handle(r request) (any, error) {
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
-		assets, err := b.auth.Discover(ctx, func(ctx context.Context, _ string) (net.Conn, error) {
+		assets, err := b.auth.DiscoverFiltered(ctx, func(ctx context.Context, _ string) (net.Conn, error) {
 			ws, _, err := websocket.Dial(ctx, "ws://127.0.0.1:8788/cloud", nil)
 			if err != nil {
 				return nil, fmt.Errorf("Browser relay connection failed; check the npm run dev terminal: %w", err)
 			}
 			return websocket.NetConn(ctx, ws, websocket.MessageBinary), nil
-		})
+		}, r.Method == "cloud-discover")
 		profile := b.auth.Profile()
 		if profile.Subject != "" {
 			event("auth-profile", profile)
@@ -234,6 +300,8 @@ func (b *bridge) handle(r request) (any, error) {
 			State    string `json:"state"`
 			Issuer   string `json:"issuer"`
 			Refresh  bool   `json:"refresh"`
+			Pending  string `json:"pending"`
+			Error    string `json:"error"`
 			org
 		}
 		if err := json.Unmarshal(r.Params, &p); err != nil {
@@ -263,6 +331,12 @@ func (b *bridge) handle(r request) (any, error) {
 				return nil, fmt.Errorf("Could not remove saved sign-in: %w", err)
 			}
 			return true, nil
+		case "auth-redirect-begin":
+			return b.auth.BeginRedirect(ctx, p.Email, p.Issuer, p.Redirect)
+		case "auth-redirect-complete":
+			return b.auth.CompleteRedirect(ctx, browserauth.RedirectCallback{Pending: p.Pending, Redirect: p.Redirect, Code: p.Code, State: p.State, Issuer: p.Issuer, Error: p.Error})
+		case "auth-redirect-cancel":
+			return true, b.auth.CancelRedirect(p.Pending)
 		case "auth-begin":
 			return b.auth.Begin(ctx, p.Email, p.Issuer, p.Redirect)
 		case "auth-complete":
@@ -573,9 +647,15 @@ func (authProxyTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 type browserCredentialStore struct{}
 
 func storageCall(method string, args ...any) (js.Value, error) {
-	store := js.Global().Get("wendyCredentials")
-	if store.IsUndefined() {
-		return js.Undefined(), errors.New("Browser credential storage is unavailable")
+	return browserStorageCall("wendyCredentials", "credential storage", method, args...)
+}
+
+// label names the store in errors: a stale wendy-credentials.js can lack
+// wendyPending while saved credentials still work.
+func browserStorageCall(name, label, method string, args ...any) (js.Value, error) {
+	store := js.Global().Get(name)
+	if store.IsUndefined() || store.IsNull() {
+		return js.Undefined(), errors.New("Browser " + label + " is unavailable")
 	}
 	type result struct {
 		value js.Value
@@ -591,7 +671,13 @@ func storageCall(method string, args ...any) (js.Value, error) {
 		return nil
 	})
 	failure := js.FuncOf(func(_ js.Value, args []js.Value) any {
-		done <- result{err: errors.New("Browser could not access saved credentials")}
+		message := "Browser could not access " + label
+		if len(args) > 0 && args[0].Type() == js.TypeObject {
+			if cause := args[0].Get("message"); cause.Type() == js.TypeString {
+				message += ": " + cause.String()
+			}
+		}
+		done <- result{err: errors.New(message)}
 		return nil
 	})
 	store.Call(method, args...).Call("then", success, failure)
@@ -600,6 +686,38 @@ func storageCall(method string, args ...any) (js.Value, error) {
 	failure.Release()
 	return r.value, r.err
 }
+
+// Pending bytes never cross postMessage or become a JS string.
+type browserPendingStore struct{}
+
+func (browserPendingStore) Put(handle string, record []byte) error {
+	buf := js.Global().Get("Uint8Array").New(len(record))
+	js.CopyBytesToJS(buf, record)
+	defer buf.Call("fill", 0)
+	_, err := browserStorageCall("wendyPending", "pending sign-in storage", "put", handle, buf)
+	return err
+}
+func (browserPendingStore) Take(handle string) ([]byte, error) {
+	value, err := browserStorageCall("wendyPending", "pending sign-in storage", "take", handle)
+	if err != nil || value.IsUndefined() {
+		return nil, err
+	}
+	if !value.InstanceOf(js.Global().Get("Uint8Array")) {
+		return nil, errors.New("Invalid pending sign-in storage result")
+	}
+	defer value.Call("fill", 0)
+	if value.Length() > browserauth.MaxRedirectRecord {
+		return nil, errors.New("Pending sign-in record is too large")
+	}
+	record := make([]byte, value.Length())
+	js.CopyBytesToGo(record, value)
+	return record, nil
+}
+func (browserPendingStore) Delete(handle string) error {
+	_, err := browserStorageCall("wendyPending", "pending sign-in storage", "delete", handle)
+	return err
+}
+
 func (browserCredentialStore) Load() ([]byte, error) {
 	value, err := storageCall("load")
 	if err != nil || value.Type() != js.TypeString {
@@ -723,6 +841,101 @@ func (b *bridge) operator(ctx context.Context, o org, fresh bool) (savedRecord, 
 		return savedRecord{}, nil, errors.New("Saved certificate has expired or is not yet valid. Sign in again")
 	}
 	return saved, key, nil
+}
+
+// registry runs the encrypted-registry operations for the console (T8) with
+// the registrycrypto calls the CLI makes. This browser's registry key never
+// leaves the worker; the content and deployment keys are the page's.
+// registry-key returns the RegisterEncryptionKeyRequest payload for the page
+// to sign (x5c) and send, as the CLI does; rotate replaces the key.
+func (b *bridge) registry(r request) (any, error) {
+	var p struct {
+		org
+		Rotate             bool                     `json:"rotate"`
+		Wrap               registrycrypto.Wrap      `json:"wrap"`
+		Sealed             registrycrypto.SealedKey `json:"sealed"`
+		RecipientPublicKey []byte                   `json:"recipientPublicKey"`
+		Key                []byte                   `json:"key"`
+		DeploymentKey      []byte                   `json:"deploymentKey"`
+		Enc                []byte                   `json:"enc"`
+		Nonce              []byte                   `json:"nonce"`
+		Ciphertext         []byte                   `json:"ciphertext"`
+	}
+	if len(r.Params) > 0 {
+		if err := json.Unmarshal(r.Params, &p); err != nil {
+			return nil, err
+		}
+	}
+	switch r.Method {
+	case "registry-wrap":
+		enc, ciphertext, err := p.Wrap.Seal(p.RecipientPublicKey, p.Key)
+		return map[string]any{"enc": enc, "ciphertext": ciphertext}, err
+	case "registry-seal":
+		nonce, ciphertext, err := p.Sealed.Seal(p.DeploymentKey, p.Key)
+		return map[string]any{"nonce": nonce, "ciphertext": ciphertext}, err
+	case "registry-open":
+		key, err := p.Sealed.Open(p.DeploymentKey, p.Nonce, p.Ciphertext)
+		return map[string]any{"key": key}, err
+	case "registry-key", "registry-unwrap":
+	default:
+		return nil, fmt.Errorf("Unknown operation %q", r.Method)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 35*time.Second)
+	defer cancel()
+	saved, _, err := b.operator(ctx, p.org, false)
+	if err != nil {
+		return nil, err
+	}
+	// Only registry-key rotates: an unwrap needs the registered key.
+	priv, err := browserRegistryKey(saved.Profile, r.Method == "registry-key", r.Method == "registry-key" && p.Rotate)
+	if err != nil {
+		return nil, err
+	}
+	if r.Method == "registry-unwrap" {
+		key, err := p.Wrap.Open(priv, p.Enc, p.Ciphertext)
+		return map[string]any{"key": key}, err
+	}
+	payload, err := proto.Marshal(registrycrypto.Registration(saved.Profile.Tenant, priv.PublicKey()))
+	return map[string]any{"keyId": registrycrypto.KeyID(priv.PublicKey().Bytes()), "payload": payload}, err
+}
+
+// browserRegistryKey loads this browser's registry key for the signed-in
+// operator, wrapped like the operator seed. create generates one when none is
+// saved; rotate always does.
+func browserRegistryKey(p browserauth.Profile, create, rotate bool) (hpke.PrivateKey, error) {
+	aad := "operator-key:" + p.Tenant + ":" + p.Subject
+	if !rotate {
+		value, err := storageCall("loadRegistryKey", aad)
+		if err != nil {
+			return nil, err
+		}
+		if value.InstanceOf(js.Global().Get("Uint8Array")) {
+			defer value.Call("fill", 0)
+			raw := make([]byte, value.Length())
+			js.CopyBytesToGo(raw, value)
+			defer clear(raw)
+			return registrycrypto.KEM.NewPrivateKey(raw)
+		}
+		if !create {
+			return nil, errors.New("This browser has no registry key yet")
+		}
+	}
+	priv, err := registrycrypto.KEM.GenerateKey()
+	if err != nil {
+		return nil, err
+	}
+	raw, err := priv.Bytes()
+	if err != nil {
+		return nil, err
+	}
+	defer clear(raw)
+	buf := js.Global().Get("Uint8Array").New(len(raw))
+	js.CopyBytesToJS(buf, raw)
+	defer buf.Call("fill", 0)
+	if _, err := storageCall("saveRegistryKey", aad, buf); err != nil {
+		return nil, err
+	}
+	return priv, nil
 }
 
 // Only Wendy public HTTPS endpoints are eligible for the broker relay.

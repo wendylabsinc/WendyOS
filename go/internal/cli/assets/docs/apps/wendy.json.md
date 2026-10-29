@@ -282,7 +282,7 @@ Optional URI pointing to the JSON Schema for editor autocompletion and validatio
 
 Entitlements grant the app access to hardware and system capabilities. Any capability not listed is unavailable to the app. They are code signed, preventing privilege escalation.
 
-Use `wendy project entitlements add` / `remove` to manage them, or edit `wendy.json` directly.
+Run `wendy project` for a guided editor, or use `wendy project add`, `edit`, and `remove` with explicit flags. `wendy project validate` checks the result. Direct editing of `wendy.json` is also supported. See the [project editor](../clients/wendy-cli/commands/project/index.md).
 
 ### `network`
 
@@ -300,12 +300,44 @@ IP networking access.
 | `"host"` | Shares the host network stack (visibility: bind host ports, see interfaces). Does **not** grant the ability to reconfigure host networking. |
 | `"host-admin"` | Host networking **plus** `CAP_NET_ADMIN` — allows reconfiguring interfaces, routes, and netfilter. Only request this if your app genuinely manages the network; it is a high-privilege capability. |
 | `"none"` | Networking fully disabled — no namespace connectivity of any kind. |
-| `"bridge"` | Isolated network namespace with a private IP, outbound internet via NAT, and working DNS — but **no** host/LAN-published ports. Use this for apps that need to reach the internet without exposing anything locally. Cross-device access to a bridge app is via a `mesh` entitlement, not this one. |
-| `"mesh"` | Isolated network namespace chained into the wendy-mesh CNI, with a route to a `serviceCIDR` (required for this mode — a valid CIDR string) so the app can reach other meshed devices/services. Optionally set `ports` (host→container mappings) so mesh peers can dial in. |
+| `"bridge"` | Isolated network namespace with a private IP, outbound internet via NAT, and working DNS — but **no** host/LAN-published ports. Use this for apps that need to reach the internet without exposing anything locally. Use Wendy Net networking for cross-device app access. |
+| `"mesh"` | Private app networking through Wendy Net. Set `serviceCIDR` to `10.99.0.0/16`, the currently supported service address range. Publish incoming ports with `ports` to let apps on other devices connect. |
 
 > **Security note:** `CAP_NET_ADMIN` (host network reconfiguration) is granted only by `"host-admin"`, never by plain `"host"`. Apps that previously relied on `CAP_NET_ADMIN` under `"host"` must switch to `"host-admin"`.
 
 > **Deprecation notice:** an omitted `mode` maps to host networking today, and the agent logs a `WARN` at container create for any `network` entitlement without an explicit `mode`, flagging that its ports are publicly reachable. This default will change to isolated `"bridge"` networking in a future major release. If you want to keep host networking going forward, set `"mode": "host"` explicitly now; if you want isolated networking with outbound internet, opt in early with `"mode": "bridge"`.
+
+Wendy Net UDP services declare `protocol: "udp"` on each published port:
+
+```json
+{
+  "type": "network",
+  "mode": "mesh",
+  "serviceCIDR": "10.99.0.0/16",
+  "ports": [{ "host": 47777, "container": 7777, "protocol": "udp" }]
+}
+```
+
+The service listens on its container address (or `0.0.0.0:7777`). Other
+Wendy Net apps send to this device's service address on UDP port `47777`. TCP remains
+the default when `protocol` is omitted; TCP and UDP mappings with the same
+host port are independent. Only a running app's explicitly published UDP
+ports accept peer traffic. UDP DNS-SD announcements require a matching UDP
+mapping and use service types ending in `._udp`.
+
+#### UDP delivery limits
+
+UDP messages can contain zero through 65,507 bytes. Delivery is unreliable:
+applications must handle missing messages and retries. Large messages need more
+bandwidth and are delivered only when complete; loss or congestion can drop the
+whole message.
+Large local messages may require the application to allow IPv4 fragmentation
+on its own socket. Wendy Net does not change application DF policy or lower
+the container interface MTU. Devices must support the same UDP message
+protocol version; incompatible peers are rejected explicitly.
+A source/destination tuple expires after 30 seconds without an app request;
+its next request establishes a fresh authenticated flow. The first request after an idle period may take longer, especially over Bluetooth.
+Use a WendyOS image with Wendy Net UDP support.
 
 ### `gpu`
 
@@ -390,6 +422,84 @@ Bluetooth access.
 ```json
 { "type": "bluetooth" }
 ```
+
+### `avahi`
+
+For complete publication and browsing examples, see
+[share and discover app services](/docs/guides/wendy-net-services).
+
+Provides a private Avahi DNS-SD service for an app with a private network
+namespace. For example, a single-container app with outbound networking can use:
+
+```json
+{
+  "entitlements": [
+    { "type": "network", "mode": "bridge" },
+    { "type": "avahi" }
+  ]
+}
+```
+
+Install the native Avahi or `avahi-compat` (`dns_sd.h`) client libraries in the
+app image. The agent mounts a filtered D-Bus endpoint at `/var/run/dbus` and sets
+`DBUS_SYSTEM_BUS_ADDRESS`; it prepares networking and waits for the private
+daemon before releasing the application entrypoint. Missing host binaries,
+missing IPv4 networking or a daemon readiness failure prevents startup. Host
+networking is refused. Net apps also need their usual `mesh` network entitlement
+and isolated network configuration.
+
+Avahi and Bluetooth entitlements cannot be combined in one container because
+both use `/var/run/dbus`. The current bridge supports root D-Bus clients, matching
+Wendy's application OCI identity. Applications that drop to a different UID must
+keep their Avahi client in a root process; non-root client authentication through
+this proxy is not supported.
+
+A daemon that exits during an app run is retried with a bounded restart budget.
+If that budget is exhausted, or its private bus/proxy exits, the app continues
+running with DNS-SD unavailable and the agent logs the failure. Restart the app
+to recreate its private service.
+
+After an agent restart, private discovery is rebuilt for surviving app containers;
+clients must reconnect to D-Bus. A redeploy rejected during validation preserves
+the running app's discovery. For an accepted replacement, the agent retires the
+old private service and prepares the new one before releasing the new entrypoint.
+
+DNS-SD hostnames and service names are discovery metadata, not authenticated device
+identities.
+
+### `nan`
+
+Let a trusted app manage its own Wi-Fi Aware discovery and direct connections.
+Ordinary Wendy Net networking does not need this entitlement. For direct control
+and IP traffic, include both grants:
+
+```json
+{
+  "entitlements": [
+    { "type": "nan" },
+    { "type": "network", "mode": "host" }
+  ]
+}
+```
+
+The agent prepares a separate Wi-Fi Aware data interface for the app. Your app
+must create and manage its own discovery and connection sessions.
+
+| Environment variable | Use |
+| --- | --- |
+| `WENDY_NAN_SOCKET` | Wi-Fi Aware control socket for commands and events. |
+| `WENDY_NAN_NDI` | App-specific data interface for IP traffic. |
+| `WENDY_NAN_CLIENT_DIR` | Shared directory where your control client must bind its reply socket. A private `/tmp` socket cannot receive replies from the host. |
+
+Only the Wi-Fi Aware socket is exposed, not the host's ordinary Wi-Fi controls.
+However, the grant does not filter commands: a read-only mount still allows radio
+control. Grant it only to trusted apps. Do not issue radio-wide start, stop, or
+reset commands while other apps or Wendy Net use the radio.
+
+If the Wi-Fi service restarts, the agent restarts monitored apps to refresh their
+socket access. Redeploy apps with restart policy `no` yourself. Stopping or deleting
+the app removes its private data interface while leaving shared Wi-Fi Aware
+available to other users.
 
 ### `persist`
 
@@ -483,7 +593,7 @@ Registers the container as a [Model Context Protocol (MCP)](https://modelcontext
 |-------|------|-------------|
 | `port` | integer | TCP port on which the container's MCP server listens (required). |
 
-The container must serve the [MCP Streamable HTTP](https://modelcontextprotocol.io/specification) transport on `0.0.0.0:<port>`. See the [MCPExample](../Examples/MCPExample/README.md) for a complete Python reference implementation.
+The container must serve the [MCP Streamable HTTP](https://modelcontextprotocol.io/specification) transport on `0.0.0.0:<port>`. See the [MCPExample](/docs/advanced/Examples/MCPExample/) for a complete Python reference implementation.
 
 > **Note:** The `mcp` entitlement is typically combined with `{ "type": "network", "mode": "host" }` so that the agent can reach the container's MCP port over loopback.
 

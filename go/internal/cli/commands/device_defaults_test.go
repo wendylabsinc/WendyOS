@@ -250,6 +250,10 @@ func TestMCPDeviceConnectDialsBareHostsAsHostPort(t *testing.T) {
 		"robot.local":       "robot.local:50051",
 		"fe80::1":           "[fe80::1]:50051",
 		"robot.local:50052": "robot.local:50052",
+		// install verify passes a USB link-local address with its zone; the
+		// dial must keep it (WDY-3974).
+		"fe80::1%en31":         "[fe80::1%en31]:50051",
+		"[fe80::1%en31]:50051": "[fe80::1%en31]:50051",
 	} {
 		var dialed string
 		connectMCPDirectFn = func(_ context.Context, address string) (*grpcclient.AgentConnection, error) {
@@ -480,6 +484,45 @@ func TestCloudSelectorKeepsValidCertificateWhenRenewalRefused(t *testing.T) {
 // Two agent sessions setting defaults while a third process updates another
 // field: without the config lock, saveDefaultDevice writes back the snapshot it
 // loaded and reverts the other writers.
+// Saved defaults and device pins select sessions with the same organization
+// rule: a numeric organization belongs to legacy sessions on its endpoint.
+func TestCloudSelectorUsesPinOrganizationMatching(t *testing.T) {
+	const tenant = "8a53be77-2a69-464f-8f73-83643fe0beaa"
+	legacy := config.AuthConfig{CloudGRPC: "cloud.example:443", Certificates: []config.CertificateInfo{{OrganizationID: 7}}}
+	tenantSession := config.AuthConfig{CloudGRPC: legacy.CloudGRPC, Certificates: []config.CertificateInfo{{
+		OrganizationID: 7, PrincipalURI: "spiffe://wendy.sh/tenant/" + tenant + "/operator/test",
+	}}}
+	selector := cloudDeviceSelector{Endpoint: legacy.CloudGRPC, OrgID: 7, AssetID: 42}
+	if _, err := selector.auth(&config.Config{Auth: []config.AuthConfig{tenantSession}}); err == nil {
+		t.Fatal("tenant session served a legacy organization selector")
+	}
+	if auth, err := selector.auth(&config.Config{Auth: []config.AuthConfig{tenantSession, legacy}}); err != nil || auth.Certificates[0].TenantUUID() != "" {
+		t.Fatalf("selector session = %+v, %v; want the legacy session", auth, err)
+	}
+}
+
+// Renewal can reissue the selected session in another organization. The
+// selector re-checks it before discovery, as device pins do.
+func TestCloudSelectorRechecksSessionAfterRenewal(t *testing.T) {
+	const tenant = "8a53be77-2a69-464f-8f73-83643fe0beaa"
+	auth := config.AuthConfig{CloudGRPC: "cloud.example:443", Certificates: []config.CertificateInfo{{OrganizationID: 7}}}
+	setTempConfig(t, &config.Config{Auth: []config.AuthConfig{auth}})
+	oldFresh, oldFetch := ensureFreshCertificateFn, fetchDefaultCloudAssetsFn
+	t.Cleanup(func() { ensureFreshCertificateFn, fetchDefaultCloudAssetsFn = oldFresh, oldFetch })
+	ensureFreshCertificateFn = func(_ context.Context, selected *config.AuthConfig) error {
+		selected.Certificates[0].PrincipalURI = "spiffe://wendy.sh/tenant/" + tenant + "/operator/test"
+		return nil
+	}
+	fetchDefaultCloudAssetsFn = func(context.Context, *config.AuthConfig) ([]*cloudpb.Asset, error) {
+		t.Fatal("discovered assets with a session outside the saved organization")
+		return nil, nil
+	}
+	_, err := connectCloudDeviceSelector(context.Background(), cloudDeviceSelector{Endpoint: auth.CloudGRPC, OrgID: 7, AssetID: 42})
+	if err == nil || !strings.Contains(err.Error(), "no login for cloud") {
+		t.Fatalf("connect = %v; want the missing-login error", err)
+	}
+}
+
 func TestSaveDefaultDeviceKeepsConcurrentConfigWrites(t *testing.T) {
 	setTempConfig(t, &config.Config{})
 	const n = 20

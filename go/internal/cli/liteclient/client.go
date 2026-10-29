@@ -20,6 +20,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/seriallock"
 	wendypb "github.com/wendylabsinc/wendy/go/proto/gen/litepb"
@@ -45,6 +46,9 @@ type DeviceIdentity struct {
 	ID          string
 	Name        string
 	DisplayName string
+	// EnrolledDeviceID is the enrolled device UUID; empty when the board is
+	// unenrolled or its firmware predates the field.
+	EnrolledDeviceID string
 }
 
 type DeviceInfo struct {
@@ -286,7 +290,9 @@ func (c *WendyLiteClient) ConnectViaRelay(ctx context.Context, cc *grpc.ClientCo
 	if err != nil {
 		return err
 	}
-	handshakeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	// The opaque relay can cross a BLE mesh uplink. Bound setup without
+	// assuming a direct Internet path; the caller can still cancel sooner.
+	handshakeCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 	conn := tls.Client(raw, cfg)
 	if err := conn.HandshakeContext(handshakeCtx); err != nil {
@@ -386,6 +392,28 @@ func (c *WendyLiteClient) ResetTargetDevice(appAutoStart bool, delay time.Durati
 			},
 		}},
 	})
+}
+
+// rebootDrainTimeout bounds WaitReboot when a serial peer keeps the port
+// open while it restarts, as a USB-to-UART bridge does.
+const rebootDrainTimeout = 5 * time.Second
+
+// WaitReboot follows ResetTargetDevice before Close. Serial Close sends the
+// leave-protocol escape, and sending it right after REBOOT can discard that
+// command before the device handles it. On a serial link, WaitReboot returns
+// once the peer drops the link, after rebootDrainTimeout, or when ctx ends.
+// Other transports send no escape, so it returns at once.
+func (c *WendyLiteClient) WaitReboot(ctx context.Context) {
+	if link, ok := c.link.(*directLink); !ok || !link.isSerial {
+		return
+	}
+	timer := time.NewTimer(rebootDrainTimeout)
+	defer timer.Stop()
+	select {
+	case <-c.done:
+	case <-timer.C:
+	case <-ctx.Done():
+	}
 }
 
 func (c *WendyLiteClient) PushApp(path string, appType AppType, onProgress func(written, total uint32)) error {
@@ -598,7 +626,12 @@ func (c *WendyLiteClient) GetDeviceIdentity(timeout time.Duration) (*DeviceIdent
 	if di == nil {
 		return nil, fmt.Errorf("device returned no identity")
 	}
-	return &DeviceIdentity{ID: di.GetId(), Name: di.GetName(), DisplayName: di.GetDisplayName()}, nil
+	return &DeviceIdentity{
+		ID:               di.GetId(),
+		Name:             di.GetName(),
+		DisplayName:      di.GetDisplayName(),
+		EnrolledDeviceID: di.GetEnrolledDeviceId(),
+	}, nil
 }
 
 func (c *WendyLiteClient) GetDeviceInfo(timeout time.Duration) (*DeviceInfo, error) {
@@ -1072,7 +1105,7 @@ func (c *WendyLiteClient) handshake() error {
 		},
 	}, 3*time.Second)
 	if err != nil {
-		return fmt.Errorf("device may not support protocol v%d: %w", versionMajor, err)
+		return fmt.Errorf("WendyCom protocol exchange: %w", err)
 	}
 	hs := reply.GetHandshake()
 	switch {
@@ -1166,7 +1199,11 @@ func deviceTLSConfig(ctx context.Context, cert tls.Certificate, chain, deviceID 
 	if deviceID == "" {
 		return nil, fmt.Errorf("missing Wendy Lite device identity")
 	}
-	deviceID = enrollmentDeviceID(deviceID)
+	// A Lite board's one id is a canonical device UUID. Any other pin, such as
+	// a pre-UUID lite- identity, is refused rather than used verbatim.
+	if id, err := uuid.Parse(deviceID); err != nil || id.String() != deviceID {
+		return nil, fmt.Errorf("Wendy Lite device identity %q is not a device UUID; update the board's firmware, then unenroll and re-enroll it over USB", deviceID)
+	}
 	opts.ExpectedIdentity = &certs.WendyIdentity{
 		EntityType: certs.EntityAsset, EntityID: deviceID, TenantUUID: identity.TenantUUID,
 		Principal: "spiffe://wendy.sh/tenant/" + identity.TenantUUID + "/device/" + deviceID,

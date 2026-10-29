@@ -224,7 +224,7 @@ uses Swift string storage, which cannot be reliably zeroed after use.
 ## What Works
 
 - Apple Silicon Mac targets running macOS 15 or later
-- Enrolling the Mac with Wendy Cloud and PKI (`wendy device enroll` after `wendy auth login --development`, `--production` or `--email`) on **macOS 26 or later**. Wendy's device certificates chain to ML-DSA (post-quantum) CAs, which the agent can verify only from macOS 26. On macOS 15 the agent reports this before anything is reserved in Cloud, and `wendy device enroll` stops with a message naming macOS 26.
+- Enrolling the Mac in Wendy Cloud on **macOS 26 or later**. Sign in with `wendy cloud login`, then run `wendy device enroll`. On macOS 15 you can run local apps, but must update macOS before enrolling.
 - Installing Headless Mac with Homebrew or the release zip
 - Deploying native SwiftPM macOS apps with `wendy run`
 - Discovering Mac targets over Bonjour/mDNS

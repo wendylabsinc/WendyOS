@@ -7,6 +7,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
+	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
 	"io"
 	"net"
 	"net/url"
@@ -46,7 +47,7 @@ func tarWith(t *testing.T, name string) []byte {
 }
 
 func TestContextDir_StableAcrossCalls(t *testing.T) {
-	svc := NewBuildService(zap.NewNop(), BuildServiceOptions{
+	svc := NewBuildService(zap.NewNop(), BuildServiceOptions{ResolveTarget: testResolveTarget,
 		ConfigPath: enabledConfigDir(t),
 		StateDir:   t.TempDir(),
 	})
@@ -68,7 +69,7 @@ func TestContextDir_StableAcrossCalls(t *testing.T) {
 // Two unrelated apps sharing one context directory would clear and re-extract
 // over each other.
 func TestContextDir_DistinctAppIDsDoNotCollide(t *testing.T) {
-	svc := NewBuildService(zap.NewNop(), BuildServiceOptions{
+	svc := NewBuildService(zap.NewNop(), BuildServiceOptions{ResolveTarget: testResolveTarget,
 		ConfigPath: enabledConfigDir(t),
 		StateDir:   t.TempDir(),
 	})
@@ -88,7 +89,7 @@ func TestContextDir_DistinctAppIDsDoNotCollide(t *testing.T) {
 }
 
 func TestContextDir_RejectsTraversalInAppID(t *testing.T) {
-	svc := NewBuildService(zap.NewNop(), BuildServiceOptions{
+	svc := NewBuildService(zap.NewNop(), BuildServiceOptions{ResolveTarget: testResolveTarget,
 		ConfigPath: enabledConfigDir(t),
 		StateDir:   t.TempDir(),
 	})
@@ -265,7 +266,7 @@ func TestRedactBuildctlArgs_MasksValuesKeepsKeys(t *testing.T) {
 
 func enabledService(t *testing.T) *BuildService {
 	t.Helper()
-	return NewBuildService(zap.NewNop(), BuildServiceOptions{
+	return NewBuildService(zap.NewNop(), BuildServiceOptions{ResolveTarget: testResolveTarget,
 		ConfigPath: enabledConfigDir(t),
 		StateDir:   t.TempDir(),
 		// A dialer that never gets used by these tests, but must be present:
@@ -293,14 +294,14 @@ func presentBuildkitAddress(t *testing.T) string {
 // A build host with no way to reach peers must say so rather than build first
 // and discover it at push time.
 func TestBuildImage_RejectsWhenNoPeerDialer(t *testing.T) {
-	svc := NewBuildService(zap.NewNop(), BuildServiceOptions{
+	svc := NewBuildService(zap.NewNop(), BuildServiceOptions{ResolveTarget: testResolveTarget,
 		ConfigPath: enabledConfigDir(t),
 		StateDir:   t.TempDir(),
 	})
 	err := svc.BuildImage(&stubBuildStream{spec: &agentpbv2.BuildSpec{
 		AppId:      "app",
 		Platform:   "linux/arm64",
-		PushTarget: &agentpbv2.PushTarget{AssetId: 214, RegistryPort: 5000, Repository: "app:latest"},
+		PushTarget: &agentpbv2.PushTarget{AssetUuid: testAssetUUID, RegistryPort: 5000, Repository: "app:latest"},
 		Definition: &agentpbv2.BuildSpec_DockerfileBuild{
 			DockerfileBuild: &agentpbv2.DockerfileBuild{Dockerfile: "Dockerfile"},
 		},
@@ -314,7 +315,7 @@ func TestBuildImage_RejectsSpecWithoutDefinition(t *testing.T) {
 	err := enabledService(t).BuildImage(&stubBuildStream{spec: &agentpbv2.BuildSpec{
 		AppId:      "app",
 		Platform:   "linux/arm64",
-		PushTarget: &agentpbv2.PushTarget{AssetId: 214, RegistryPort: 5000, Repository: "app:latest"},
+		PushTarget: &agentpbv2.PushTarget{AssetUuid: testAssetUUID, RegistryPort: 5000, Repository: "app:latest"},
 	}})
 	if status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("got %v, want InvalidArgument for a spec with no build definition", err)
@@ -334,7 +335,7 @@ func TestBuildImage_RejectsBadPushDestinationBeforeBuilding(t *testing.T) {
 	err := enabledService(t).BuildImage(&stubBuildStream{spec: &agentpbv2.BuildSpec{
 		AppId:      "app",
 		Platform:   "linux/arm64",
-		PushTarget: &agentpbv2.PushTarget{AssetId: 214, RegistryPort: 5000, Repository: "evil.example.com/exfil:latest"},
+		PushTarget: &agentpbv2.PushTarget{AssetUuid: testAssetUUID, RegistryPort: 5000, Repository: "evil.example.com/exfil:latest"},
 		Definition: &agentpbv2.BuildSpec_DockerfileBuild{
 			DockerfileBuild: &agentpbv2.DockerfileBuild{Dockerfile: "Dockerfile"},
 		},
@@ -362,7 +363,7 @@ func ctxWithIdentity(t *testing.T, urn string) context.Context {
 
 func TestSetBuildHostEnabled_UserCertMayEnable(t *testing.T) {
 	dir := t.TempDir()
-	svc := NewBuildService(zap.NewNop(), BuildServiceOptions{ConfigPath: dir, StateDir: t.TempDir()})
+	svc := NewBuildService(zap.NewNop(), BuildServiceOptions{ResolveTarget: testResolveTarget, ConfigPath: dir, StateDir: t.TempDir()})
 
 	resp, err := svc.SetBuildHostEnabled(ctxWithIdentity(t, "urn:wendy:org:2:user:alice"),
 		&agentpbv2.SetBuildHostEnabledRequest{Enabled: true})
@@ -379,7 +380,7 @@ func TestSetBuildHostEnabled_UserCertMayEnable(t *testing.T) {
 
 func TestSetBuildHostEnabled_TakesEffectWithoutRestart(t *testing.T) {
 	dir := t.TempDir()
-	svc := NewBuildService(zap.NewNop(), BuildServiceOptions{ConfigPath: dir, StateDir: t.TempDir()})
+	svc := NewBuildService(zap.NewNop(), BuildServiceOptions{ResolveTarget: testResolveTarget, ConfigPath: dir, StateDir: t.TempDir()})
 	ctx := ctxWithIdentity(t, "urn:wendy:org:2:user:alice")
 
 	if _, err := svc.SetBuildHostEnabled(ctx, &agentpbv2.SetBuildHostEnabledRequest{Enabled: true}); err != nil {
@@ -405,7 +406,7 @@ func TestSetBuildHostEnabled_TakesEffectWithoutRestart(t *testing.T) {
 // call BuildImage could simply call this first.
 func TestSetBuildHostEnabled_RefusesDeviceCert(t *testing.T) {
 	dir := t.TempDir()
-	svc := NewBuildService(zap.NewNop(), BuildServiceOptions{ConfigPath: dir, StateDir: t.TempDir()})
+	svc := NewBuildService(zap.NewNop(), BuildServiceOptions{ResolveTarget: testResolveTarget, ConfigPath: dir, StateDir: t.TempDir()})
 
 	_, err := svc.SetBuildHostEnabled(ctxWithIdentity(t, "urn:wendy:org:2:asset:345"),
 		&agentpbv2.SetBuildHostEnabledRequest{Enabled: true})
@@ -419,7 +420,7 @@ func TestSetBuildHostEnabled_RefusesDeviceCert(t *testing.T) {
 
 func TestSetBuildHostEnabled_RefusesNoIdentity(t *testing.T) {
 	dir := t.TempDir()
-	svc := NewBuildService(zap.NewNop(), BuildServiceOptions{ConfigPath: dir, StateDir: t.TempDir()})
+	svc := NewBuildService(zap.NewNop(), BuildServiceOptions{ResolveTarget: testResolveTarget, ConfigPath: dir, StateDir: t.TempDir()})
 
 	_, err := svc.SetBuildHostEnabled(context.Background(),
 		&agentpbv2.SetBuildHostEnabledRequest{Enabled: true})
@@ -430,7 +431,7 @@ func TestSetBuildHostEnabled_RefusesNoIdentity(t *testing.T) {
 
 func TestSetBuildHostEnabled_DisableIsIdempotent(t *testing.T) {
 	dir := t.TempDir()
-	svc := NewBuildService(zap.NewNop(), BuildServiceOptions{ConfigPath: dir, StateDir: t.TempDir()})
+	svc := NewBuildService(zap.NewNop(), BuildServiceOptions{ResolveTarget: testResolveTarget, ConfigPath: dir, StateDir: t.TempDir()})
 	ctx := ctxWithIdentity(t, "urn:wendy:org:2:user:alice")
 
 	// Disabling something already disabled must not error.
@@ -443,7 +444,7 @@ func TestBuildImage_RejectsEmptyContext(t *testing.T) {
 	err := enabledService(t).BuildImage(&stubBuildStream{spec: &agentpbv2.BuildSpec{
 		AppId:      "app",
 		Platform:   "linux/arm64",
-		PushTarget: &agentpbv2.PushTarget{AssetId: 214, RegistryPort: 5000, Repository: "app:latest"},
+		PushTarget: &agentpbv2.PushTarget{AssetUuid: testAssetUUID, RegistryPort: 5000, Repository: "app:latest"},
 		Definition: &agentpbv2.BuildSpec_DockerfileBuild{
 			DockerfileBuild: &agentpbv2.DockerfileBuild{Dockerfile: "Dockerfile"},
 		},
@@ -478,7 +479,7 @@ const testMaxContextBytes = 1 << 20
 // have only a few GiB of it, so an unbounded read is an OOM the client chooses.
 func TestReassembleContext_BoundsMemoryAgainstUndeclaredSize(t *testing.T) {
 	var read int64
-	svc := NewBuildService(zap.NewNop(), BuildServiceOptions{
+	svc := NewBuildService(zap.NewNop(), BuildServiceOptions{ResolveTarget: testResolveTarget,
 		ConfigPath:      enabledConfigDir(t),
 		StateDir:        t.TempDir(),
 		MaxContextBytes: testMaxContextBytes,
@@ -504,7 +505,7 @@ func TestReassembleContext_BoundsMemoryAgainstUndeclaredSize(t *testing.T) {
 // The default must be the real ceiling, not whatever a test injected — the
 // option exists for tests, and a zero value must not disable the bound.
 func TestNewBuildService_DefaultsToRealContextCeiling(t *testing.T) {
-	svc := NewBuildService(zap.NewNop(), BuildServiceOptions{ConfigPath: t.TempDir()})
+	svc := NewBuildService(zap.NewNop(), BuildServiceOptions{ResolveTarget: testResolveTarget, ConfigPath: t.TempDir()})
 	if svc.maxContextBytes != maxContextBytes {
 		t.Fatalf("maxContextBytes = %d, want the %d-byte default", svc.maxContextBytes, int64(maxContextBytes))
 	}
@@ -514,7 +515,7 @@ func TestNewBuildService_DefaultsToRealContextCeiling(t *testing.T) {
 // cheap rather than merely survivable.
 func TestReassembleContext_RejectsDeclaredOversizeWithoutReading(t *testing.T) {
 	var read int64
-	svc := NewBuildService(zap.NewNop(), BuildServiceOptions{
+	svc := NewBuildService(zap.NewNop(), BuildServiceOptions{ResolveTarget: testResolveTarget,
 		ConfigPath:      enabledConfigDir(t),
 		StateDir:        t.TempDir(),
 		MaxContextBytes: testMaxContextBytes,
@@ -537,7 +538,7 @@ func TestReassembleContext_RejectsDeclaredOversizeWithoutReading(t *testing.T) {
 // and re-extracts that directory while buildctl reads it for the whole build,
 // so an interleaving hands one developer's sources to another's image.
 func TestLockContextDir_SerialisesSameDirectory(t *testing.T) {
-	svc := NewBuildService(zap.NewNop(), BuildServiceOptions{
+	svc := NewBuildService(zap.NewNop(), BuildServiceOptions{ResolveTarget: testResolveTarget,
 		ConfigPath: enabledConfigDir(t),
 		StateDir:   t.TempDir(),
 	})
@@ -565,12 +566,12 @@ func TestLockContextDir_SerialisesSameDirectory(t *testing.T) {
 
 func TestLockContextDir_SerialisesSameDirectoryAcrossServices(t *testing.T) {
 	locks := NewBuildContextLockSet()
-	first := NewBuildService(zap.NewNop(), BuildServiceOptions{
+	first := NewBuildService(zap.NewNop(), BuildServiceOptions{ResolveTarget: testResolveTarget,
 		ConfigPath:   enabledConfigDir(t),
 		StateDir:     t.TempDir(),
 		ContextLocks: locks,
 	})
-	second := NewBuildService(zap.NewNop(), BuildServiceOptions{
+	second := NewBuildService(zap.NewNop(), BuildServiceOptions{ResolveTarget: testResolveTarget,
 		ConfigPath:   enabledConfigDir(t),
 		StateDir:     t.TempDir(),
 		ContextLocks: locks,
@@ -600,7 +601,7 @@ func TestLockContextDir_SerialisesSameDirectoryAcrossServices(t *testing.T) {
 // Different apps must still build concurrently; the lock is per context
 // directory, not a global build queue.
 func TestLockContextDir_DoesNotSerialiseDifferentDirectories(t *testing.T) {
-	svc := NewBuildService(zap.NewNop(), BuildServiceOptions{
+	svc := NewBuildService(zap.NewNop(), BuildServiceOptions{ResolveTarget: testResolveTarget,
 		ConfigPath: enabledConfigDir(t),
 		StateDir:   t.TempDir(),
 	})
@@ -623,8 +624,8 @@ func TestLockContextDir_DoesNotSerialiseDifferentDirectories(t *testing.T) {
 // terminate it, and the mesh LAN path picks its peer from an unauthenticated
 // mDNS record — so the target's asset id has to reach the TLS config.
 func TestBuildImage_PinsPushCredentialsToTheTargetAsset(t *testing.T) {
-	var gotAssetID int32 = -1
-	svc := NewBuildService(zap.NewNop(), BuildServiceOptions{
+	var gotDevice meshid.Device
+	svc := NewBuildService(zap.NewNop(), BuildServiceOptions{ResolveTarget: testResolveTarget,
 		ConfigPath:      enabledConfigDir(t),
 		StateDir:        t.TempDir(),
 		Peers:           stubPeerDialer{err: errors.New("not dialed in this test")},
@@ -632,8 +633,8 @@ func TestBuildImage_PinsPushCredentialsToTheTargetAsset(t *testing.T) {
 		// A real tar: extraction runs before the push credentials are loaded, so
 		// a bogus context would fail earlier and the assertion would never run.
 		Chunks: staticChunkSource{data: tarWith(t, "Dockerfile")},
-		PushTLS: func(targetAssetID int32) (*tls.Config, error) {
-			gotAssetID = targetAssetID
+		PushTLS: func(targetDevice meshid.Device) (*tls.Config, error) {
+			gotDevice = targetDevice
 			// Failing here stops the build before it shells out to buildctl; the
 			// assertion under test is the argument, not what follows.
 			return nil, errors.New("stop here")
@@ -643,15 +644,15 @@ func TestBuildImage_PinsPushCredentialsToTheTargetAsset(t *testing.T) {
 	_ = svc.BuildImage(&stubBuildStream{spec: &agentpbv2.BuildSpec{
 		AppId:      "app",
 		Platform:   "linux/arm64",
-		PushTarget: &agentpbv2.PushTarget{AssetId: 214, RegistryPort: 5000, Repository: "app:latest"},
+		PushTarget: &agentpbv2.PushTarget{AssetUuid: testAssetUUID, RegistryPort: 5000, Repository: "app:latest"},
 		Context:    &agentpbv2.ChunkManifest{ChunkHashes: [][]byte{make([]byte, 32)}},
 		Definition: &agentpbv2.BuildSpec_DockerfileBuild{
 			DockerfileBuild: &agentpbv2.DockerfileBuild{Dockerfile: "Dockerfile"},
 		},
 	}})
 
-	if gotAssetID != 214 {
-		t.Fatalf("push credentials were requested for asset %d, want the push target's 214: an unpinned config lets any org-issued cert receive the image", gotAssetID)
+	if gotDevice != testMeshDevice {
+		t.Fatalf("push credentials requested for %v, want %v", gotDevice, testMeshDevice)
 	}
 }
 
@@ -661,7 +662,7 @@ func TestBuildImage_PinsPushCredentialsToTheTargetAsset(t *testing.T) {
 // where it surfaces as a bare "exit status 1" naming nothing.
 func TestBuildImage_RefusesWhenBuildkitIsAbsent(t *testing.T) {
 	var read int64
-	svc := NewBuildService(zap.NewNop(), BuildServiceOptions{
+	svc := NewBuildService(zap.NewNop(), BuildServiceOptions{ResolveTarget: testResolveTarget,
 		ConfigPath:      enabledConfigDir(t),
 		StateDir:        t.TempDir(),
 		Peers:           stubPeerDialer{err: errors.New("not dialed in this test")},
@@ -672,7 +673,7 @@ func TestBuildImage_RefusesWhenBuildkitIsAbsent(t *testing.T) {
 	err := svc.BuildImage(&stubBuildStream{spec: &agentpbv2.BuildSpec{
 		AppId:      "app",
 		Platform:   "linux/arm64",
-		PushTarget: &agentpbv2.PushTarget{AssetId: 214, RegistryPort: 5000, Repository: "app:latest"},
+		PushTarget: &agentpbv2.PushTarget{AssetUuid: testAssetUUID, RegistryPort: 5000, Repository: "app:latest"},
 		Context:    &agentpbv2.ChunkManifest{ChunkHashes: [][]byte{make([]byte, 32)}},
 		Definition: &agentpbv2.BuildSpec_DockerfileBuild{
 			DockerfileBuild: &agentpbv2.DockerfileBuild{Dockerfile: "Dockerfile"},
@@ -703,7 +704,7 @@ func (e errReader) Read([]byte) (int, error) { return 0, e.err }
 // fail the read itself — otherwise a build runs, and pushes, from a truncated
 // source tree.
 func TestReassembleContext_FailsClosedOnMissingChunkWithUndeclaredSize(t *testing.T) {
-	svc := NewBuildService(zap.NewNop(), BuildServiceOptions{
+	svc := NewBuildService(zap.NewNop(), BuildServiceOptions{ResolveTarget: testResolveTarget,
 		ConfigPath: enabledConfigDir(t),
 		StateDir:   t.TempDir(),
 		Chunks:     missingChunkSource{},
@@ -735,7 +736,7 @@ func buildSpecForAuthTest() *agentpbv2.BuildSpec {
 	return &agentpbv2.BuildSpec{
 		AppId:      "app",
 		Platform:   "linux/arm64",
-		PushTarget: &agentpbv2.PushTarget{AssetId: 214, RegistryPort: 5000, Repository: "app:latest"},
+		PushTarget: &agentpbv2.PushTarget{AssetUuid: testAssetUUID, RegistryPort: 5000, Repository: "app:latest"},
 		Context:    &agentpbv2.ChunkManifest{ChunkHashes: [][]byte{make([]byte, 32)}},
 		Definition: &agentpbv2.BuildSpec_DockerfileBuild{
 			DockerfileBuild: &agentpbv2.DockerfileBuild{Dockerfile: "Dockerfile"},
@@ -797,7 +798,7 @@ func TestBuildImage_AllowsUserCertificate(t *testing.T) {
 // Authorization runs before the opt-in check, so an unauthorized caller cannot
 // use this RPC to discover whether a device is a build host.
 func TestBuildImage_AuthorizesBeforeDisclosingBuilderRole(t *testing.T) {
-	notABuilder := NewBuildService(zap.NewNop(), BuildServiceOptions{ConfigPath: t.TempDir()})
+	notABuilder := NewBuildService(zap.NewNop(), BuildServiceOptions{ResolveTarget: testResolveTarget, ConfigPath: t.TempDir()})
 	err := notABuilder.BuildImage(&stubBuildStream{
 		ctx:  ctxWithURN("urn:wendy:org:2:asset:345"),
 		spec: buildSpecForAuthTest(),
@@ -901,7 +902,7 @@ func TestBuildAndDeliver_RecoveryCannotBecomeAFalseFailure(t *testing.T) {
 
 func TestClassifyBuildAndDeliveryResult(t *testing.T) {
 	buildFailure := errors.New("Dockerfile failed")
-	proxyFailure := errors.New("mesh connection failed")
+	proxyFailure := errors.New("wendy net connection failed")
 
 	buildErr, deliveryErr := classifyBuildAndDeliveryResult(buildFailure, nil)
 	if !errors.Is(buildErr, buildFailure) || deliveryErr != nil {
@@ -943,7 +944,7 @@ func enabledConfigDir(t *testing.T) string {
 }
 
 func TestGetBuildCapabilities_DisabledByDefault(t *testing.T) {
-	svc := NewBuildService(zap.NewNop(), BuildServiceOptions{ConfigPath: t.TempDir()})
+	svc := NewBuildService(zap.NewNop(), BuildServiceOptions{ResolveTarget: testResolveTarget, ConfigPath: t.TempDir()})
 
 	resp, err := svc.GetBuildCapabilities(context.Background(), &agentpbv2.GetBuildCapabilitiesRequest{})
 	if err != nil {
@@ -955,7 +956,7 @@ func TestGetBuildCapabilities_DisabledByDefault(t *testing.T) {
 }
 
 func TestGetBuildCapabilities_EnabledByMarkerFile(t *testing.T) {
-	svc := NewBuildService(zap.NewNop(), BuildServiceOptions{ConfigPath: enabledConfigDir(t)})
+	svc := NewBuildService(zap.NewNop(), BuildServiceOptions{ResolveTarget: testResolveTarget, ConfigPath: enabledConfigDir(t)})
 
 	resp, err := svc.GetBuildCapabilities(context.Background(), &agentpbv2.GetBuildCapabilitiesRequest{})
 	if err != nil {
@@ -967,7 +968,7 @@ func TestGetBuildCapabilities_EnabledByMarkerFile(t *testing.T) {
 }
 
 func TestGetBuildCapabilities_ReportsNoBuildkitWhenSocketAbsent(t *testing.T) {
-	svc := NewBuildService(zap.NewNop(), BuildServiceOptions{
+	svc := NewBuildService(zap.NewNop(), BuildServiceOptions{ResolveTarget: testResolveTarget,
 		ConfigPath:      enabledConfigDir(t),
 		BuildkitAddress: "unix:///nonexistent/buildkitd.sock",
 	})
@@ -992,7 +993,7 @@ func TestGetBuildCapabilities_ReportsPlatformsWhenBuildkitPresent(t *testing.T) 
 	if err := os.WriteFile(sock, nil, 0o600); err != nil {
 		t.Fatalf("creating fake socket: %v", err)
 	}
-	svc := NewBuildService(zap.NewNop(), BuildServiceOptions{
+	svc := NewBuildService(zap.NewNop(), BuildServiceOptions{ResolveTarget: testResolveTarget,
 		ConfigPath:      enabledConfigDir(t),
 		BuildkitAddress: "unix://" + sock,
 	})
@@ -1025,7 +1026,7 @@ func TestGetBuildCapabilities_ReportsSelectedDaemonRootAndFilesystem(t *testing.
 	proc := newFakeProc(t)
 	proc.add(t, "42", "/", "buildkitd", "--addr", address, "--root", root)
 
-	svc := NewBuildService(zap.NewNop(), BuildServiceOptions{
+	svc := NewBuildService(zap.NewNop(), BuildServiceOptions{ResolveTarget: testResolveTarget,
 		ConfigPath:      enabledConfigDir(t),
 		BuildkitAddress: address,
 	})
@@ -1046,7 +1047,7 @@ func TestGetBuildCapabilities_ReportsSelectedDaemonRootAndFilesystem(t *testing.
 }
 
 func TestBuildImage_RejectedWhenNotEnabled(t *testing.T) {
-	svc := NewBuildService(zap.NewNop(), BuildServiceOptions{ConfigPath: t.TempDir()})
+	svc := NewBuildService(zap.NewNop(), BuildServiceOptions{ResolveTarget: testResolveTarget, ConfigPath: t.TempDir()})
 
 	err := svc.BuildImage(&stubBuildStream{
 		spec: &agentpbv2.BuildSpec{AppId: "app", Platform: "linux/arm64"},
@@ -1061,12 +1062,12 @@ func TestBuildImage_RejectedWhenNotEnabled(t *testing.T) {
 // single device.
 func TestDeliveryTargets_PrefersFleetField(t *testing.T) {
 	got, err := deliveryTargets(&agentpbv2.BuildSpec{
-		PushTargets: []*agentpbv2.PushTarget{{AssetId: 11}, {AssetId: 22}},
+		PushTargets: []*agentpbv2.PushTarget{{AssetUuid: testAssetUUID}, {AssetUuid: testAssetUUIDB}},
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(got) != 2 || got[0].GetAssetId() != 11 || got[1].GetAssetId() != 22 {
+	if len(got) != 2 || got[0].GetAssetUuid() != testAssetUUID || got[1].GetAssetUuid() != testAssetUUIDB {
 		t.Fatalf("got %v, want both targets in order", got)
 	}
 }
@@ -1074,12 +1075,12 @@ func TestDeliveryTargets_PrefersFleetField(t *testing.T) {
 // A client built before fleet delivery sends only push_target.
 func TestDeliveryTargets_FallsBackToSingleTarget(t *testing.T) {
 	got, err := deliveryTargets(&agentpbv2.BuildSpec{
-		PushTarget: &agentpbv2.PushTarget{AssetId: 7},
+		PushTarget: &agentpbv2.PushTarget{AssetUuid: testAssetUUID},
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(got) != 1 || got[0].GetAssetId() != 7 {
+	if len(got) != 1 || got[0].GetAssetUuid() != testAssetUUID {
 		t.Fatalf("got %v, want the single target", got)
 	}
 }
@@ -1089,8 +1090,8 @@ func TestDeliveryTargets_FallsBackToSingleTarget(t *testing.T) {
 // for.
 func TestDeliveryTargets_RefusesBothFields(t *testing.T) {
 	_, err := deliveryTargets(&agentpbv2.BuildSpec{
-		PushTarget:  &agentpbv2.PushTarget{AssetId: 7},
-		PushTargets: []*agentpbv2.PushTarget{{AssetId: 11}},
+		PushTarget:  &agentpbv2.PushTarget{AssetUuid: testAssetUUID},
+		PushTargets: []*agentpbv2.PushTarget{{AssetUuid: testAssetUUID}},
 	})
 	if status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("got %v, want InvalidArgument when both fields are set", err)
@@ -1107,7 +1108,7 @@ func TestDeliveryTargets_RefusesNoTarget(t *testing.T) {
 // before sending push_targets. Without it a newer CLI cannot tell that an older
 // agent discarded its fleet, and would report a deploy that went nowhere.
 func TestGetBuildCapabilities_AdvertisesMultiTarget(t *testing.T) {
-	svc := NewBuildService(zap.NewNop(), BuildServiceOptions{BuildkitAddress: "unix:///definitely/not/here.sock"})
+	svc := NewBuildService(zap.NewNop(), BuildServiceOptions{ResolveTarget: testResolveTarget, BuildkitAddress: "unix:///definitely/not/here.sock"})
 	resp, err := svc.GetBuildCapabilities(context.Background(), &agentpbv2.GetBuildCapabilitiesRequest{})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

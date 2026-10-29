@@ -40,6 +40,13 @@ type AssetServiceClient interface {
 	// Signed; payload_type "wendycloud.v2.UpdateAssetRequest".
 	UpdateAsset(ctx context.Context, in *SignedRequest, opts ...grpc.CallOption) (*Asset, error)
 	// Signed; payload_type "wendycloud.v2.DeleteAssetRequest".
+	// For a PKI-bound device, SignedRequest.pki_management_request carries the
+	// operator's management-request+jws (op revoke_principal) for exactly
+	// spiffe://wendy.sh/tenant/<organization_id>/device/<device_id>, signed by
+	// the same operator leaf as this request. Cloud relays revocation before
+	// retaining deletion evidence; device:delete suffices (no global cert-revoke).
+	// Assets without a device binding do not require the management request.
+	// See docs/contract-ledger.md for rollout and compatibility requirements.
 	DeleteAsset(ctx context.Context, in *SignedRequest, opts ...grpc.CallOption) (*DeleteAssetResponse, error)
 	// Server-streamed pagination using offset/limit (matches OrganizationService)
 	ListAssets(ctx context.Context, in *ListAssetsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ListAssetsResponse], error)
@@ -194,6 +201,13 @@ type AssetServiceServer interface {
 	// Signed; payload_type "wendycloud.v2.UpdateAssetRequest".
 	UpdateAsset(context.Context, *SignedRequest) (*Asset, error)
 	// Signed; payload_type "wendycloud.v2.DeleteAssetRequest".
+	// For a PKI-bound device, SignedRequest.pki_management_request carries the
+	// operator's management-request+jws (op revoke_principal) for exactly
+	// spiffe://wendy.sh/tenant/<organization_id>/device/<device_id>, signed by
+	// the same operator leaf as this request. Cloud relays revocation before
+	// retaining deletion evidence; device:delete suffices (no global cert-revoke).
+	// Assets without a device binding do not require the management request.
+	// See docs/contract-ledger.md for rollout and compatibility requirements.
 	DeleteAsset(context.Context, *SignedRequest) (*DeleteAssetResponse, error)
 	// Server-streamed pagination using offset/limit (matches OrganizationService)
 	ListAssets(*ListAssetsRequest, grpc.ServerStreamingServer[ListAssetsResponse]) error

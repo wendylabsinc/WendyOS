@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -56,7 +57,13 @@ func findSupportedESP32SerialUSBID(start, root string) (serialUSBID, bool) {
 		return serialUSBID{}, false
 	}
 
+	interfaceNumber := -1
 	for current := start; ; current = filepath.Dir(current) {
+		if data, err := os.ReadFile(filepath.Join(current, "bInterfaceNumber")); err == nil && interfaceNumber < 0 {
+			if n, err := strconv.ParseInt(strings.TrimSpace(string(data)), 16, 32); err == nil {
+				interfaceNumber = int(n)
+			}
+		}
 		vid, vidErr := os.ReadFile(filepath.Join(current, "idVendor"))
 		pid, pidErr := os.ReadFile(filepath.Join(current, "idProduct"))
 		if vidErr == nil && pidErr == nil {
@@ -64,7 +71,7 @@ func findSupportedESP32SerialUSBID(start, root string) (serialUSBID, bool) {
 			productID, parsePIDErr := parseUSBID(string(pid))
 			if parseVIDErr == nil && parsePIDErr == nil {
 				if id, ok := supportedESP32SerialUSBID(vendorID, productID); ok {
-					return id, true
+					return id, serialUSBInterfaceAllowed(id, interfaceNumber)
 				}
 			}
 		}

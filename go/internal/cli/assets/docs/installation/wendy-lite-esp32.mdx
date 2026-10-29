@@ -26,7 +26,7 @@ Swift and other WebAssembly apps remain available through the optional Wendy Lit
 - The Wendy CLI ([install it](/docs/#1-install-the-wendy-cli))
 - An existing ESP-IDF project, or a new project created with the standard ESP-IDF tooling
 
-Wendy uses the [ESP-IDF Installation Manager (`eim`)](https://dl.espressif.com/dl/eim/) to run ESP-IDF 5.5.4. If `eim` is missing, `wendy run` offers to install it with Homebrew (`brew install espressif/eim/eim`); without Homebrew, install it yourself. If ESP-IDF 5.5.4 is not installed, the first `wendy run` installs it for you.
+Wendy uses the [ESP-IDF Installation Manager (`eim`)](https://dl.espressif.com/dl/eim/) to run ESP-IDF 6.0.3. If `eim` is missing, `wendy run` offers to install it with Homebrew (`brew install espressif/eim/eim`); without Homebrew, install it yourself. If ESP-IDF 6.0.3 is not installed, the first `wendy run` installs it for you.
 
 ## Install the Wendy Firmware
 
@@ -69,6 +69,31 @@ Wendy uses the [ESP-IDF Installation Manager (`eim`)](https://dl.espressif.com/d
     The ESP32 can be discovered over its native USB connection or over the network after Wi-Fi provisioning.
   </Step>
 </Steps>
+
+## ESP-Mosaico
+
+Mosaico uses an ESP32-S31 and a dedicated 16 MB firmware layout. Select
+**ESP-Mosaico** in the `wendy install` picker once that firmware has
+been published. From the powered-off state, hold BOOT, briefly press POWER, then
+release BOOT with USB connected. The installer resets the S31 through its
+watchdog after the flash completes.
+
+The running dashboard exposes two USB CDC ports. Use the first for Wendy
+management and native deployment; the second carries independent diagnostics.
+From `samples/mosaico_dashboard` in the firmware checkout:
+
+```sh
+wendy run --device wendy-lite:PORT --yes --detach
+```
+
+The sample's `wendy-idf.json` selects a digest-pinned ESP-IDF container, target
+`esp32s31`, `preview: true`, and `workspaceRoot: "../.."` so the build can access
+shared firmware components. Docker must be running. The workspace root is
+relative to the project and must contain it. The CLI mounts that workspace at
+`/project`, builds, uploads the app into the inactive OTA slot, and reboots.
+Projects without this file continue to use the EIM toolchain. Native app uploads
+require an existing compatible partition layout; use `wendy install` for the
+first installation.
 
 ## Use a Regular ESP-IDF Project
 
@@ -165,9 +190,16 @@ Wendy:
 1. Detects the project as ESP-IDF.
 2. Reads the target from the connected device.
 3. Runs `idf.py set-target` when the project is configured for a different chip.
-4. Builds the project with ESP-IDF 5.5.4.
+4. Builds the project with ESP-IDF 6.0.3.
 5. Uploads the native application firmware, reboots the ESP32, and reconnects.
 6. Streams the ESP-IDF console output back to your terminal.
+
+## Optional: manage the board through Wendy Cloud
+
+For remote access, connect the board over USB, configure its Wi-Fi, and
+[enroll it in Wendy Cloud](/docs/advanced/cli/lite-enrollment). The enrollment
+guide walks through sign-in, board selection, and checking that it comes online.
+You can keep developing locally without Cloud enrollment.
 
 ## Optional WASM Apps
 

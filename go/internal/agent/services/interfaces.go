@@ -104,6 +104,13 @@ type ContainerdClient interface {
 	GetContainerRestartPolicyLabel(ctx context.Context, appName string) (string, error)
 }
 
+// NANSocketStalenessDetector is an optional monitor capability. A running
+// NAN-entitled app can retain a bind-mounted wpa_supplicant socket inode after
+// the host socket is replaced; the monitor restarts only the affected tasks.
+type NANSocketStalenessDetector interface {
+	StaleNANSocketContainers(ctx context.Context) ([]string, error)
+}
+
 // ImagePreparer is the optional fast-deploy capability that assembles
 // chunk-backed image layers and unpacks their snapshots before RunContainer.
 // It stays separate from ContainerdClient so older test doubles and alternate
@@ -180,6 +187,19 @@ type BootContainer struct {
 	Name          string
 	RestartPolicy string
 	MaxRetries    int
+}
+
+// RunningTaskOutputRecoverer reconnects stdout/stderr for tasks that survive an
+// agent restart, including tasks whose policy disables automatic restart.
+// Publish must consume output without waiting for a remote log subscriber.
+type RunningTaskOutputRecoverer interface {
+	RecoverRunningTaskOutput(context.Context, func(string, ContainerOutput)) error
+}
+
+// InterruptedTaskStartRecoverer cleans held tasks left by an agent crash,
+// including apps whose policy deliberately prevents automatic restart.
+type InterruptedTaskStartRecoverer interface {
+	RecoverInterruptedTaskStarts(context.Context) error
 }
 
 // GroupRestarter is the optional capability a ContainerdClient may provide to
@@ -289,9 +309,13 @@ type RestartStatusProvider interface {
 }
 
 type ContainerOutput struct {
-	Stdout []byte
-	Stderr []byte
-	Done   bool
+	// PublishIfCurrent orders a terminal marker against task replacement at
+	// the producer. Log pumps must preserve it; ContainerLogManager invokes it
+	// around nonblocking publication so a delayed old run cannot end new logs.
+	PublishIfCurrent func(func()) `json:"-"`
+	Stdout           []byte
+	Stderr           []byte
+	Done             bool
 }
 
 type ContainerMetrics struct {

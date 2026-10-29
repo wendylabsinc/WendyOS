@@ -276,17 +276,17 @@ type isRunContainerRequest_RequestType interface {
 }
 
 type RunContainerRequest_Header_ struct {
-	/// The first message in the stream MUST be the header.
+	// / The first message in the stream MUST be the header.
 	Header *RunContainerRequest_Header `protobuf:"bytes,1,opt,name=header,proto3,oneof"`
 }
 
 type RunContainerRequest_Chunk_ struct {
-	/// A chunk of the container tarball.
+	// / A chunk of the container tarball.
 	Chunk *RunContainerRequest_Chunk `protobuf:"bytes,2,opt,name=chunk,proto3,oneof"`
 }
 
 type RunContainerRequest_Control struct {
-	/// After uploading the container, control messages can be sent to the agent.
+	// / After uploading the container, control messages can be sent to the agent.
 	Control *ControlCommand `protobuf:"bytes,3,opt,name=control,proto3,oneof"`
 }
 

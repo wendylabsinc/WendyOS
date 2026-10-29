@@ -197,6 +197,32 @@ Sign-out is local; it does not log you out of other Wendy applications.
 
 ## Cloud workspace
 
+Choose **Networks** to inspect local net membership, direct peer links, and selected
+routes. The browser reads snapshots from the signed-in Cloud inventory. The
+desktop combines LAN discovery with the current CLI Cloud inventory. Each
+snapshot uses an independent authenticated connection, so viewing networks does
+not replace the device dashboard connection.
+
+Devices are grouped by their verified tenant and device identity. A device seen
+only through another peer remains visible without claiming that it is reachable
+from this client. Selecting a node shows its reported next hops, carrier types,
+route costs, and signed announcement expiry. A signed route authorizes its
+origin and prefix; it does not prove that an intermediary forwards traffic.
+
+The view polls at most four devices concurrently, then waits ten seconds before
+the next batch. **Pause** stops new reads. Snapshots older than thirty seconds
+are marked stale. An active local network also needs a valid, recent device capture time.
+Failed reads retain the last snapshot visibly as stale. Older agents
+appear as unsupported until updated. Offline, denied, and unverified devices
+remain explicit rather than becoming empty healthy networks.
+
+The underlying read-only API is
+`WendyLocalMeshAdminService.GetLocalMeshTopology`, with the same tenant-scoped
+operator authorization as the existing net administration API. The CLI exposes
+it as `wendy --device HOST:PORT --json device wendy-net topology`.
+`--observation` adds a typed result envelope for clients handling partial
+failures. Neither the API nor this view enables the net or changes its policy.
+
 The sidebar shows the signed-in email from OIDC UserInfo and the organization
 name from Cloud's v2 OrganizationService. UserInfo must match the authenticated
 subject, and organization responses must match the authenticated tenant UUID.
@@ -256,9 +282,14 @@ release commit reproduces the pin.
 | `init` | `browserauth.Settings` JSON | `true`; once, before sign-in. Services are then called directly, not through `/api/wendy-auth` |
 | `auth-begin` | `{redirect, email?, issuer?}`; `issuer` pins an organization's realm | authorize URL |
 | `auth-complete` | `{code, state, issuer}` | profile |
+| `auth-redirect-begin` | `{redirect, email?, issuer?}` | `{url, pending}`; pending is an opaque handle |
+| `auth-redirect-complete` | `{pending, redirect, code, state, issuer, error?}` | profile |
+| `auth-redirect-cancel` | `{pending}` | `true`; removes this attempt |
 | `auth-restore` | `{tenant?, subject?, refresh?}` | that organization's profile, or `null`; `refresh: true` always rotates the refresh token once and fails the restore if that exchange fails |
 | `credential` | `{tenant?}` | `{profile, algorithm, chainDER, accessToken, publicJWK}`; refreshes a token with under a minute left |
 | `sign` | `{tenant?, bytes: Uint8Array}` | `{signature: Uint8Array}` with the operator key |
+| `valid-until` | `{validForSeconds?}` | `{seconds}`: Unix time to sign as a postbox-relayed payload's `valid_until` (`expires_at` on `DeviceAssignment`) |
+| `head-ack-verify` | `{response, rootDER, device, organizationId, kept?}` | `{entryId, entryHash, observedAt}`: the device's verified signed head ack, or an error naming the refused check |
 | `auth-signout` | `{tenant?}` | `true`; no tenant signs out of every organization |
 
 Call `init` once, first, before any sign-in, `credential` or `sign` call; a
@@ -269,6 +300,22 @@ design: the page owns this worker's origin and its saved sign-ins, and a
 self-hosted deployment names its own services. Saved sign-ins from another
 auth host do not restore.
 
+Every payload cloud relays to a device postbox (`CreateDeploymentRequest`,
+`ControlContainerRequest`, `UnassignDeviceRequest`, `DeviceAssignment`) must
+carry its validity under the operator signature: a device refuses one without
+it. Get it from `valid-until` before serializing the payload. Without
+`validForSeconds` it is 60 days from now; more than 365 days (31536000 s) is
+refused, and cloud may refuse less under the organization's own limit. This is
+the time a device may still apply the instruction, not the 30-second expiry of
+the request signature.
+
+`head-ack-verify` checks a `GetLastHeadAck` response (`response`, the
+serialized `GetLastHeadAckResponse`) for one device against the platform root
+the page pins (`rootDER`, DER; never one cloud serves), both base64. Keep the
+result per device and pass it back as `kept` on the next read: an older or
+forked ack is then refused. Run the staleness alarm on the returned
+`observedAt` only; every refusal reads the same to the user.
+
 `sign` takes the bytes as the request's second argument, a non-empty
 `Uint8Array`; anything else fails with `Nothing to sign`. The bytes are signed
 as given, with no prefix.
@@ -277,6 +324,53 @@ An `issuer` for `auth-begin` must be a Wendy auth realm,
 `<auth_base>/realms/<name>` on the configured auth host. The system realm is
 rejected, compared without case. The callback must return from that same realm;
 `auth-complete` with a different `issuer` fails, and sign-in must start again.
+
+For same-tab sign-in, call `auth-redirect-begin`, save only `pending` in
+**tab-scoped sessionStorage**, and navigate to `url` only after both succeed.
+Pass `redirect: location.origin + "/auth/callback"`: the callback compares it
+exactly, so a host with upper-case letters or a default port such as `:443` is
+refused at begin, as with `auth-begin`.
+If sessionStorage fails, call `auth-redirect-cancel` and stay on the page.
+Cancel an abandoned handle before replacing it. The worker stores the PKCE
+verifier/state, expected issuer (empty for universal login), exact redirect,
+start time and complete environment settings in the separate
+`wendy-auth-pending` IndexedDB database. Records are AES-GCM wrapped under a
+non-extractable WebCrypto wrapping key, limited to 8 KiB, and expire after ten
+minutes. An origin keeps at most 32 live attempts; beyond that a new attempt
+replaces the oldest, whose callback then fails as missing and must start
+again. Subsequent pending operations remove expired, future-dated or abandoned
+expired records. There is no credential schema upgrade, and pending attempts
+never appear as organization slots.
+
+After navigation, start a new worker with the same `init` settings. Read the
+handle from sessionStorage and pass it to `auth-redirect-complete` along with
+`redirect: location.origin + location.pathname` and the callback's `code`,
+`state`, `iss` (as `issuer`) and optional OAuth `error`. Use empty strings for
+absent callback fields. Remove the tab handle when the attempt finishes; strip
+OAuth parameters from browser history after capturing them. Do not pass a
+stored redirect as the current callback location. The worker atomically takes
+and deletes the record before checking its version, size, time, state, issuer,
+redirect and settings. Missing, malformed, changed or replayed transactions
+fail before any token/certificate request; storage failure refuses navigation.
+An error callback validates state/settings/redirect/expiry and validates `iss`
+if present, then reports the bounded OAuth error code without generating a key
+or contacting Auth/PKI. A successful callback always requires a trusted issuer.
+
+The redirect flow creates the ML-DSA-65 operator/DPoP key **after callback
+validation and before token exchange**. Authorization is not pre-bound with
+`dpop_jkt`; Auth binds the token to the token-endpoint proof key. That same key
+signs the CSR, PKI proof and later Cloud requests. No signing key or seed is
+persisted in the pending record or returned to the page. The existing wrapped
+successful-session store, refresh and restore stay unchanged. The Go ML-DSA
+signing key is software-held; **only the AES-GCM wrapping key is a WebCrypto
+non-extractable key**. This preserves the existing custody model, including its
+same-origin script/XSS limitations. The legacy `auth-begin`/`auth-complete`
+in-memory API remains available to existing callers.
+
+Embedding clients must adopt a published release containing these additive
+operations before relying on them. A local bundle can verify integration;
+it is not a published release pin. No popup fallback or weaker isolation
+headers are needed for this redirect protocol.
 
 Each organization keeps its own saved sign-in, keyed by tenant and operator.
 The operator key never leaves the worker. Cloud device sessions still require
@@ -295,6 +389,11 @@ go test -race ./go/internal/cli/browserauth
 node go/experiments/wasmgrpc/auth-worker.mjs
 node web-client/tests/credential-store.test.mjs
 node web-client/tests/wendy-web-bridge.test.mjs   # after npm run build:wasm
+# Optional: installed Playwright + browsers (PLAYWRIGHT_MODULE may name its path;
+# WEBKIT_EXECUTABLE may select an existing WebKit installation).
+node web-client/tests/redirect-navigation.mjs chromium
+node web-client/tests/redirect-navigation.mjs webkit
+node web-client/tests/redirect-navigation.mjs webkit --mobile
 GOOS=js GOARCH=wasm go test -exec "$(go env GOROOT)/lib/wasm/go_js_wasm_exec" ./go/cmd/wendy-web ./go/internal/cli/browserauth
 node --experimental-strip-types web-client/tests/telemetry.test.mjs
 node --experimental-strip-types --test web-client/tests/auth-proxy.test.mjs
@@ -314,3 +413,12 @@ The agent worker integration fixture lives in `go/experiments/wasmgrpc`.
 
 Browser UI automation has not been run. Optional WebMCP read-only workspace and
 navigation tools are feature-detected; credentials are never exposed to them.
+
+The redirect navigation probe serves the exact raw gzip bundle and synthetic
+OAuth pages through browser-local HTTPS routing. It tests full top-level
+navigation, destruction of the old document/worker, wrapped storage and the
+tab handle surviving, error completion and replay refusal at Dev/Production
+origins. It performs no real sign-in, token exchange or certificate issuance;
+those protocol and same-key checks run in the Go fixture. Physical iOS and a
+real federated account login remain separate integration QA. Embedding clients
+also need to verify their actual static-host delivery and published asset pin.
