@@ -228,11 +228,37 @@ jobs:
           go test ./internal/cli/commands -run '^(TestEnsureQEMUOnWindows|TestSimulatorWithoutDetachedSupport|TestDiscoverKeepsScanningWhenSimulatorNeedsForegroundStart|TestDiscoverSimulatorGuidanceFitsPopulatedTerminal|TestVMStorage|TestVMImageSpace|TestVMCreate)' -v -count=1 -timeout 120s
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+  # The agent embeds this Python worker and runs it on devices for campaign
+  # inference. Its unit tests need no GPU: TensorRT and CUDA are faked.
+  inference-worker:
+    name: Inference worker tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: go/internal/agent/inference
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          # The uv the agent installs on devices (uvVersion in runtime.go).
+          version: "0.10.9"
+          enable-cache: true
+          cache-dependency-glob: go/internal/agent/inference/uv.lock
+
+      # The same locked environment the agent builds on a device.
+      - name: Run worker unit tests
+        run: uv run --frozen --no-dev --managed-python --python 3.12 python -m unittest -v
+
   # Preserve the existing required "Test" check after splitting its work.
   test:
     name: Test
     if: ${{ always() }}
-    needs: [babel, unit-tests, windows, windows-telemetry, wasm, vet, agent-startup]
+    needs: [babel, unit-tests, windows, windows-telemetry, wasm, vet, agent-startup, inference-worker]
     runs-on: ubuntu-latest
     steps:
       - name: Check test results
@@ -244,6 +270,7 @@ jobs:
           WASM_RESULT: ${{ needs.wasm.result }}
           VET_RESULT: ${{ needs.vet.result }}
           STARTUP_RESULT: ${{ needs.agent-startup.result }}
+          INFERENCE_WORKER_RESULT: ${{ needs.inference-worker.result }}
         run: |
           test "$BABEL_RESULT" = success
           test "$RACE_RESULT" = success
@@ -252,6 +279,7 @@ jobs:
           test "$WASM_RESULT" = success
           test "$VET_RESULT" = success
           test "$STARTUP_RESULT" = success
+          test "$INFERENCE_WORKER_RESULT" = success
 
   agent-startup:
     name: Agent setup startup
