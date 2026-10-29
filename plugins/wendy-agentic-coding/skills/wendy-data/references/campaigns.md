@@ -95,7 +95,8 @@ Apps, using the matching operator session. Registration failures stop deployment
 
 Keep the ID returned by `trigger`. Allow `after_trigger` plus `drain` to finish,
 then inspect that episode instead of assuming the newest episode belongs to
-the test. `inspect` verifies sealed payload checksums. `download` resumes per
+the test. Until it is finalized, `wendy --json data status --device <selector>`
+lists it in `in_progress` as `recording`, `draining` or `sealing`. `inspect` verifies sealed payload checksums. `download` resumes per
 file, verifies checksums, and publishes the completed local directory atomically.
 Use a destination that preserves existing local data.
 
@@ -104,8 +105,14 @@ is wanted. With no source flags, `record` selects every healthy source.
 
 ```sh
 wendy --json data record --name commissioning --source <source-id> --device <selector>
+wendy --json data status --device <selector>
 wendy --json data stop --device <selector>
 ```
+
+`status` reports every episode not yet finalized, with its duration, trigger,
+sources, and size so far. `episodes` lists those in its separate `in_progress`
+array and keeps `episodes` finalized-only. An agent without `reports_in_progress`
+in its `status` response reports at most one, in `active`.
 
 `stop` finalizes the ad-hoc episode when present, otherwise the single active
 campaign episode. It does not disarm a campaign. Do not use it as general
@@ -208,3 +215,10 @@ enforced instead, and deployment warns. It is the smaller of 20% of the store's
 filesystem and `WENDY_DATA_MAX_BYTES`, default 50 GiB, while reserving
 `WENDY_DATA_RESERVE_BYTES`, default 5 GiB. Unuploaded episodes can be evicted as
 a last resort. `export.annotation: cvat` records labeling intent only.
+
+On WendyOS the store is `/var/lib/wendy/wendy-data/episodes`, on the `/data`
+partition; it stays on the root disk only where `/var/lib/wendy` is not a
+separate, larger filesystem. Do not tell users to set `WENDY_DATA_DIR` unless
+they want a custom location. A "Wendy Data can't record" error names the disk,
+its free space and the reserve; read the agent's `Wendy Data episode store` log
+line before changing anything.

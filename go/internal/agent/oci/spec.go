@@ -142,6 +142,8 @@ type LinuxDeviceCgroup struct {
 // LinuxMemory contains memory resource constraints.
 type LinuxMemory struct {
 	Limit *int64 `json:"limit,omitempty"`
+	// Swap is the OCI combined memory+swap ceiling, not swap alone.
+	Swap *int64 `json:"swap,omitempty"`
 }
 
 // LinuxCPU contains CPU resource constraints.

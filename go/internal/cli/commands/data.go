@@ -19,7 +19,9 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/wendylabsinc/wendy/go/internal/agent/data"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
+	"github.com/wendylabsinc/wendy/go/internal/shared/datadoc"
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 )
@@ -62,7 +64,7 @@ func encodeProtoJSON(out io.Writer, message proto.Message) error {
 
 func newDataCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "data", Short: "Record and retrieve synchronized device data"}
-	cmd.AddCommand(newDataExportStreamCmd(), newDataSourcesCmd(), newDataRecordCmd(), newDataStopCmd(), newDataEpisodesCmd(), newDataInspectCmd(), newDataDownloadCmd(), newDataCampaignCmd())
+	cmd.AddCommand(newDataExportStreamCmd(), newDataSourcesCmd(), newDataRecordCmd(), newDataStopCmd(), newDataStatusCmd(), newDataEpisodesCmd(), newDataInspectCmd(), newDataDownloadCmd(), newDataCampaignCmd())
 	return cmd
 }
 
@@ -74,7 +76,7 @@ func newDataCampaignCmd() *cobra.Command {
 
 func newDataCampaignDeployCmd() *cobra.Command {
 	var skipCloudRegistration bool
-	command := &cobra.Command{Use: "deploy [campaign.yaml]", Short: "Validate, persist, and arm a campaign on the connected device", Long: "Deploy a campaign YAML file. Without a path, select a .yaml or .yml file from the current directory.\nNon-interactive and --json invocations require an explicit path.", Args: cobra.MaximumNArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+	command := &cobra.Command{Use: "deploy [campaign.yaml]", Short: "Validate, persist, and arm a campaign on the connected device", Long: "Deploy a campaign YAML file. Without a path, select a campaign file from the current directory (a YAML file whose header is a campaign's).\nNon-interactive and --json invocations require an explicit path.", Args: cobra.MaximumNArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
 		path, err := resolveCampaignDeployFile(args, !jsonOutput && isInteractiveTerminal(), pickFromItems)
 		if err != nil {
 			return err
@@ -83,9 +85,13 @@ func newDataCampaignDeployCmd() *cobra.Command {
 		if err != nil {
 			return fmt.Errorf("reading campaign %q: %w", path, err)
 		}
-		plan, err := data.ParseCampaign(contents)
+		document, err := data.ParseDocument(contents)
 		if err != nil {
 			return err
+		}
+		plan, ok := document.Body.(data.Campaign)
+		if !ok {
+			return fmt.Errorf("%s is a %s document, not a campaign", path, document.Header.Kind)
 		}
 		conn, err := connectToAgent(cmd.Context())
 		if err != nil {
@@ -97,7 +103,7 @@ func newDataCampaignDeployCmd() *cobra.Command {
 		}
 		campaign, err := conn.DataService.CampaignDeploy(cmd.Context(), &agentpbv2.DataCampaignDeployRequest{CampaignYaml: contents})
 		if err != nil {
-			return err
+			return campaignDeployError(err)
 		}
 		if jsonOutput {
 			_, err = cmd.OutOrStdout().Write(campaign.GetPlanJson())
@@ -113,6 +119,16 @@ func newDataCampaignDeployCmd() *cobra.Command {
 	return command
 }
 
+// campaignDeployError explains the one refusal a new CLI can get from an
+// older agent: a campaign file that starts with kind: collection, which the
+// agent's strict parser does not know. The gRPC status is kept.
+func campaignDeployError(err error) error {
+	if err == nil || !strings.Contains(status.Convert(err).Message(), "field kind not found in type data.Campaign") {
+		return err
+	}
+	return status.Errorf(status.Code(err), "%s\nThis device's agent predates the kind field: update it with `wendy device update`, or remove the kind line from the campaign file.", status.Convert(err).Message())
+}
+
 func resolveCampaignDeployFile(args []string, interactive bool, pick func(string, []tui.PickerItem) (string, error)) (string, error) {
 	if len(args) > 0 {
 		return args[0], nil
@@ -123,7 +139,7 @@ func resolveCampaignDeployFile(args []string, interactive bool, pick func(string
 		return "", fmt.Errorf("listing campaign files in the current directory: %w; %s", err, usage)
 	}
 	var items []tui.PickerItem
-	var names []string
+	var names, skipped []string
 	for _, entry := range entries {
 		ext := strings.ToLower(filepath.Ext(entry.Name()))
 		if ext != ".yaml" && ext != ".yml" {
@@ -133,16 +149,50 @@ func resolveCampaignDeployFile(args []string, interactive bool, pick func(string
 		if err != nil || !info.Mode().IsRegular() {
 			continue
 		}
+		// Offer only files whose header is a campaign's, not every YAML file:
+		// a project folder also holds compose files, stagefiles and, with data
+		// documents, inference and watch files.
+		if reason := campaignFileSkipReason(entry.Name(), info.Size()); reason != "" {
+			skipped = append(skipped, fmt.Sprintf("%s (%s)", entry.Name(), reason))
+			continue
+		}
 		names = append(names, entry.Name())
 		items = append(items, tui.PickerItem{Name: entry.Name(), Value: entry.Name()})
 	}
 	if len(items) == 0 {
+		if len(skipped) > 0 {
+			return "", fmt.Errorf("no campaign files in the current directory (these YAML files are not campaigns: %s); %s", strings.Join(skipped, ", "), usage)
+		}
 		return "", fmt.Errorf("no .yaml or .yml files found in the current directory; %s", usage)
 	}
 	if !interactive {
-		return "", fmt.Errorf("a campaign YAML path is required in non-interactive or --json mode; %s\nYAML files in the current directory: %s", usage, strings.Join(names, ", "))
+		return "", fmt.Errorf("a campaign YAML path is required in non-interactive or --json mode; %s\nCampaign files in the current directory: %s", usage, strings.Join(names, ", "))
 	}
 	return pick("Select a campaign YAML file", items)
+}
+
+// maxCampaignFileBytes bounds what the picker reads per file. Campaigns are a
+// few kilobytes; anything far larger is not one.
+const maxCampaignFileBytes = 1 << 20
+
+// campaignFileSkipReason returns "" when the file is a campaign, otherwise why
+// the picker leaves it out.
+func campaignFileSkipReason(name string, size int64) string {
+	if size > maxCampaignFileBytes {
+		return "file too large"
+	}
+	contents, err := os.ReadFile(name)
+	if err != nil {
+		return err.Error()
+	}
+	header, err := data.DocumentHeader(contents)
+	if err != nil {
+		return err.Error()
+	}
+	if header.Kind != datadoc.DefaultKind {
+		return "kind " + header.Kind
+	}
+	return ""
 }
 
 func newDataCampaignListCmd() *cobra.Command {
@@ -199,8 +249,8 @@ func shortRevision(revision string) string {
 	return revision
 }
 
-func withDataClient(ctx context.Context, fn func(agentpbv2.DataServiceClient) error) error {
-	conn, err := connectToAgent(ctx)
+func withDataClient(ctx context.Context, fn func(agentpbv2.DataServiceClient) error, opts ...resolveOption) error {
+	conn, err := connectToAgent(ctx, opts...)
 	if err != nil {
 		return err
 	}
@@ -415,7 +465,11 @@ func newDataRecordCmd() *cobra.Command {
 			if e2 != nil {
 				return e2
 			}
-			return printEpisode(cmd, e)
+			if e2 = printEpisode(cmd, e); e2 != nil || jsonOutput {
+				return e2
+			}
+			printRecordNextSteps(cmd.OutOrStdout(), deviceFlag)
+			return nil
 		})
 	}}
 	c.Flags().StringVar(&name, "name", "", "Human-readable episode name")
@@ -439,28 +493,25 @@ func newDataStopCmd() *cobra.Command {
 }
 
 func newDataEpisodesCmd() *cobra.Command {
-	return &cobra.Command{Use: "episodes", Short: "List finalized episodes", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+	return &cobra.Command{Use: "episodes", Short: "List episodes, with recordings in progress first", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
 		return withDataClient(cmd.Context(), func(c agentpbv2.DataServiceClient) error {
-			r, e := c.Episodes(cmd.Context(), &agentpbv2.DataEpisodesRequest{})
-			if e != nil {
-				return e
-			}
-			if jsonOutput {
-				return encodeProtoJSON(cmd.OutOrStdout(), r)
-			}
-			fmt.Fprintln(cmd.OutOrStdout(), "EPISODE\tSTATE\tSIZE\tNAME")
-			for _, x := range r.GetEpisodes() {
-				fmt.Fprintf(cmd.OutOrStdout(), "%s\t%s\t%d\t%s\n", x.GetId(), x.GetState(), x.GetSizeBytes(), x.GetName())
-			}
-			return nil
+			return runDataEpisodes(cmd.Context(), c, cmd.OutOrStdout(), cmd.ErrOrStderr(), jsonOutput, time.Now())
 		})
 	}}
 }
 
 func newDataInspectCmd() *cobra.Command {
-	return &cobra.Command{Use: "inspect <episode>", Short: "Inspect and verify an episode manifest", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+	var nonInteractive bool
+	c := &cobra.Command{Use: "inspect [episode]", Short: "Inspect and verify an episode manifest", Long: "Print an episode's manifest and verify its checksums. Without an episode ID, select one of the device's episodes, newest first.\nNon-interactive and --json invocations require an explicit episode ID.", Args: cobra.MaximumNArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		if e := requireEpisodeArg(args, episodePickerAllowed(nonInteractive), "inspect"); e != nil {
+			return e
+		}
 		return withDataClient(cmd.Context(), func(c agentpbv2.DataServiceClient) error {
-			r, e := c.Inspect(cmd.Context(), &agentpbv2.DataInspectRequest{Episode: args[0], Verify: true})
+			id, ok, e := resolveEpisodeArg(cmd.Context(), c, args, cmd.OutOrStdout(), "Select an episode to inspect")
+			if e != nil || !ok {
+				return e
+			}
+			r, e := c.Inspect(cmd.Context(), &agentpbv2.DataInspectRequest{Episode: id, Verify: true})
 			if e != nil {
 				return e
 			}
@@ -477,8 +528,10 @@ func newDataInspectCmd() *cobra.Command {
 				return fmt.Errorf("episode verification failed: %s", strings.Join(r.GetVerificationErrors(), "; "))
 			}
 			return nil
-		})
+		}, dataDialOptions(nonInteractive)...)
 	}}
+	c.Flags().BoolVar(&nonInteractive, "non-interactive", false, "Disable terminal prompts; pass the episode ID instead of picking one")
+	return c
 }
 
 type inspectionManifest struct {
@@ -605,12 +658,33 @@ type downloadManifest struct {
 // destination as a side effect of creating the staging directory, the final
 // rename failed with ENOTEMPTY because the destination then held the staging
 // directory, and every re-run refused with "destination already exists".
-func downloadDestination(id, output string) (destination, stage string) {
+//
+// Without --output the episode ID names a new directory in the working
+// directory, so it must be a single local path element. A picked ID comes from
+// the device's episode list, and one such as "../x" or "/abs" would otherwise
+// place the download wherever the device chose.
+func downloadDestination(id, output string) (destination, stage string, err error) {
 	if output == "" {
+		if !filepath.IsLocal(id) || filepath.Base(id) != id {
+			return "", "", withNextSteps(
+				fmt.Errorf("episode ID %q is not a plain directory name", id),
+				"Choose the destination directory with --output.")
+		}
 		output = id
 	}
 	destination = filepath.Clean(output)
-	return destination, destination + ".partial"
+	return destination, destination + ".partial", nil
+}
+
+// absDisplayPath is how a data command names a local path it wrote. The
+// default download destination is the episode ID itself, so a relative path
+// printed "Downloaded <id> to <id>" and never said where that was. The path is
+// returned unchanged when the working directory cannot be read.
+func absDisplayPath(path string) string {
+	if abs, err := filepath.Abs(path); err == nil {
+		return abs
+	}
+	return path
 }
 
 // dataDownloadResult is the --json payload of "wendy data download". Unlike
@@ -627,13 +701,36 @@ type dataDownloadResult struct {
 
 func newDataDownloadCmd() *cobra.Command {
 	var output string
-	c := &cobra.Command{Use: "download <episode>", Short: "Resume and verify an episode download", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
-		id := args[0]
-		destination, stage := downloadDestination(id, output)
-		if _, e := os.Stat(destination); e == nil {
-			return fmt.Errorf("destination already exists: %s", destination)
+	var nonInteractive bool
+	c := &cobra.Command{Use: "download [episode]", Short: "Resume and verify an episode download", Long: "Download an episode into a new local directory, resuming an interrupted transfer and verifying every file. Without an episode ID, select one of the device's episodes, newest first.\nNon-interactive and --json invocations require an explicit episode ID.", Args: cobra.MaximumNArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		if e := requireEpisodeArg(args, episodePickerAllowed(nonInteractive), "download"); e != nil {
+			return e
+		}
+		freeDestination := func(id string) (destination, stage string, err error) {
+			destination, stage, err = downloadDestination(id, output)
+			if err != nil {
+				return "", "", err
+			}
+			if _, e := os.Stat(destination); e == nil {
+				return "", "", fmt.Errorf("destination already exists: %s", absDisplayPath(destination))
+			}
+			return destination, stage, nil
+		}
+		// A named episode is still refused before the device is dialed.
+		if len(args) > 0 {
+			if _, _, e := freeDestination(args[0]); e != nil {
+				return e
+			}
 		}
 		return withDataClient(cmd.Context(), func(client agentpbv2.DataServiceClient) error {
+			id, ok, e := resolveEpisodeArg(cmd.Context(), client, args, cmd.OutOrStdout(), "Select an episode to download")
+			if e != nil || !ok {
+				return e
+			}
+			destination, stage, e := freeDestination(id)
+			if e != nil {
+				return e
+			}
 			inspect, e := client.Inspect(cmd.Context(), &agentpbv2.DataInspectRequest{Episode: id})
 			if e != nil {
 				return e
@@ -664,11 +761,12 @@ func newDataDownloadCmd() *cobra.Command {
 			if jsonOutput {
 				return json.NewEncoder(cmd.OutOrStdout()).Encode(result)
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "Downloaded %s to %s\n", id, destination)
+			fmt.Fprintf(cmd.OutOrStdout(), "Downloaded %s to %s\n", id, absDisplayPath(destination))
 			return nil
-		})
+		}, dataDialOptions(nonInteractive)...)
 	}}
 	c.Flags().StringVarP(&output, "output", "o", "", "Destination directory (default episode ID)")
+	c.Flags().BoolVar(&nonInteractive, "non-interactive", false, "Disable terminal prompts; pass the episode ID instead of picking one")
 	return c
 }
 

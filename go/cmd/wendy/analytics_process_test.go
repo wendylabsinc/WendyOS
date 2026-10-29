@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -47,7 +48,7 @@ func TestInvocationAnalyticsProcessHelper(t *testing.T) {
 	t.Fatal("main returned without exiting")
 }
 
-func analyticsProcessEnv(configDir, receiver string, args []string) []string {
+func analyticsProcessEnv(home, configDir, receiver string, args []string) []string {
 	ciVars := make(map[string]bool, len(env.CIEnvVars))
 	for _, key := range env.CIEnvVars {
 		ciVars[strings.ToUpper(key)] = true
@@ -56,7 +57,7 @@ func analyticsProcessEnv(configDir, receiver string, args []string) []string {
 	for _, entry := range os.Environ() {
 		key, _, _ := strings.Cut(entry, "=")
 		key = strings.ToUpper(key)
-		if ciVars[key] || strings.HasPrefix(key, "WENDY_") || strings.HasPrefix(key, "HOMEBREW_") || strings.HasPrefix(key, "SUDO_") {
+		if key == "HOME" || key == "USERPROFILE" || ciVars[key] || strings.HasPrefix(key, "WENDY_") || strings.HasPrefix(key, "HOMEBREW_") || strings.HasPrefix(key, "SUDO_") {
 			continue
 		}
 		result = append(result, entry)
@@ -67,6 +68,8 @@ func analyticsProcessEnv(configDir, receiver string, args []string) []string {
 		"WENDY_ANALYTICS_PROCESS_RECEIVER="+receiver,
 		"WENDY_ANALYTICS_PROCESS_ARGS="+string(encoded),
 		"WENDY_CONFIG_DIR="+configDir,
+		"HOME="+home,
+		"USERPROFILE="+home,
 		"WENDY_ANALYTICS=true",
 		"WENDY_NO_UPDATE_CHECK=1",
 		"WENDY_SECRET_STORE=file")
@@ -114,7 +117,7 @@ func TestInvocationAnalyticsProcessDelivery(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 			defer cancel()
 			cmd := exec.CommandContext(ctx, exe, "-test.run=^TestInvocationAnalyticsProcessHelper$")
-			cmd.Env = analyticsProcessEnv(t.TempDir(), srv.URL, tc.args)
+			cmd.Env = analyticsProcessEnv(t.TempDir(), t.TempDir(), srv.URL, tc.args)
 			// Pipe stdin prevents Windows from pausing for a sole console owner.
 			cmd.Stdin = strings.NewReader("")
 			output, err := cmd.CombinedOutput()
@@ -154,6 +157,79 @@ func TestInvocationAnalyticsProcessDelivery(t *testing.T) {
 			}
 			if seen != 1 || finished != 1 {
 				t.Fatalf("received %d launches and %d completions, want one each; events = %+v", seen, finished, events)
+			}
+		})
+	}
+}
+
+// Run the CLI and the real stdio MCP server in separate processes with different
+// device configurations. Both must send the same identity over HTTP, including
+// when MCP is the first process to create it.
+func TestInvocationAnalyticsSharedIdentityAcrossCLIAndMCP(t *testing.T) {
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, mcpFirst := range []bool{false, true} {
+		t.Run(fmt.Sprintf("mcp_first_%t", mcpFirst), func(t *testing.T) {
+			home := t.TempDir()
+			type identityEvent struct {
+				Event       string `json:"event"`
+				CommandName string `json:"command_name"`
+				AnonymousID string `json:"anonymous_id"`
+			}
+			var mu sync.Mutex
+			var events []identityEvent
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var event identityEvent
+				if err := json.NewDecoder(r.Body).Decode(&event); err != nil {
+					t.Error(err)
+					w.WriteHeader(http.StatusBadRequest)
+					return
+				}
+				mu.Lock()
+				events = append(events, event)
+				mu.Unlock()
+				w.WriteHeader(http.StatusNoContent)
+			}))
+			defer srv.Close()
+			invocations := [][]string{{"analytics", "status"}, {"mcp", "serve"}}
+			if mcpFirst {
+				invocations[0], invocations[1] = invocations[1], invocations[0]
+			}
+			for _, args := range invocations {
+				configDir := t.TempDir()
+				ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+				cmd := exec.CommandContext(ctx, exe, "-test.run=^TestInvocationAnalyticsProcessHelper$")
+				cmd.Env = analyticsProcessEnv(home, configDir, srv.URL, args)
+				// EOF shuts the stdio server down without connecting to a device.
+				cmd.Stdin = strings.NewReader("")
+				output, err := cmd.CombinedOutput()
+				cancel()
+				if err != nil {
+					t.Fatalf("%v: %v; output = %s", args, err, output)
+				}
+				if _, err := os.Stat(filepath.Join(configDir, "analytics_id")); !os.IsNotExist(err) {
+					t.Fatalf("%v created a config-specific identity: %v", args, err)
+				}
+			}
+			stored, err := os.ReadFile(filepath.Join(home, ".wendy", "analytics_id"))
+			if err != nil || len(stored) == 0 {
+				t.Fatalf("shared identity = %q, %v", stored, err)
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			seen := make(map[string]bool)
+			for _, event := range events {
+				if event.AnonymousID != string(stored) {
+					t.Errorf("%s sent identity %q, want %q", event.CommandName, event.AnonymousID, stored)
+				}
+				if event.Event == "cli_seen" {
+					seen[event.CommandName] = true
+				}
+			}
+			if !seen["wendy analytics status"] || !seen["wendy mcp serve"] {
+				t.Fatalf("missing CLI or MCP launch telemetry: %v", seen)
 			}
 		})
 	}

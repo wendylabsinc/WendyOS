@@ -924,6 +924,8 @@ func TestResolveDeviceNameFlagValidation(t *testing.T) {
 		{"starts with number", "1device", "start with a lowercase letter"},
 		{"uppercase", "Wendy", "lowercase letters, digits, and hyphens"},
 		{"underscore", "wendy_pi", "lowercase letters, digits, and hyphens"},
+		// Cloud (WDY-3016) and the agent both refuse a trailing hyphen.
+		{"trailing hyphen", "wendy-", "must not end with a hyphen"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

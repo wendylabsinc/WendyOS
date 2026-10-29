@@ -93,7 +93,7 @@ func installThor(ctx context.Context, version string, nightly, force bool, wifi 
 	if err != nil {
 		return err
 	}
-	provJSON, err := resolveProvisioningJSON(ctx, preOpts, name)
+	provJSON, err := resolveProvisioningJSON(ctx, preOpts, &name)
 	if err != nil {
 		return err
 	}

@@ -169,8 +169,13 @@ func TestOldCloudRefusesPortService(t *testing.T) {
 	ctx := context.Background()
 	sign := func(b []byte) ([]byte, error) { return b, nil }
 	asset := "00000000-0000-4000-8000-000000000042"
-	if _, err := OpenTCP(ctx, ctx, conn, nil, asset, "tcp-3000", sign); err == nil || !strings.Contains(err.Error(), `Cloud does not offer tunnel service "tcp-3000"`) {
+	_, err = OpenTCP(ctx, ctx, conn, nil, asset, "tcp-3000", sign)
+	if err == nil || !strings.Contains(err.Error(), `Cloud does not offer tunnel service "tcp-3000"`) {
 		t.Fatalf("TCP: %v", err)
+	}
+	// Callers tell a refusal no retry can fix by its status.
+	if status.Code(err) != codes.NotFound {
+		t.Fatalf("TCP: status %v, want NotFound", status.Code(err))
 	}
 	if _, err := OpenUDP(ctx, ctx, conn, nil, asset, 5353, sign); err == nil || !strings.Contains(err.Error(), `Cloud does not offer tunnel service "udp-5353"`) {
 		t.Fatalf("UDP: %v", err)
