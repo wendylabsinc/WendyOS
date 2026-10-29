@@ -44,7 +44,7 @@ Unprovisioning still removes copies left by older agents. Agent services,
 including the embedded container registry, receive credentials in memory;
 these persistence files are internal agent state, not an app credential API.
 
-The Swift agent follows the same layout for software-backed keys. With a
+The macOS agent (Swift) follows the same layout for software-backed keys. With a
 Secure Enclave key, there is no `device-key.pem`; the wrapped key is held in
 the Keychain.
 

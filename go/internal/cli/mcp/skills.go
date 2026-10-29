@@ -123,25 +123,25 @@ func buildSkillCatalogFromRoot(root string) (*skillCatalog, error) {
 // Decode the whole YAML mapping, not just name/description. The importer checks
 // that the catalog contains every frontmatter field from the returned SKILL.md.
 func skillFrontmatter(data []byte) (map[string]any, int, error) {
-	headerLen := len("---\n")
+	start := 4
 	if bytes.HasPrefix(data, []byte("---\r\n")) {
-		headerLen = len("---\r\n")
+		start = 5
 	} else if !bytes.HasPrefix(data, []byte("---\n")) {
 		return nil, 0, fmt.Errorf("missing YAML frontmatter")
 	}
-	content := data[headerLen:]
-	closingLen := len("\n---\n")
-	end := bytes.Index(content, []byte("\n---\n"))
-	if end < 0 {
-		closingLen = len("\r\n---\r\n")
-		end = bytes.Index(content, []byte("\r\n---\r\n"))
+	// Windows checkouts may embed CRLF. Keep offsets in the original bytes so
+	// callers can read the body without changing resource contents or digests.
+	end := bytes.Index(data[start:], []byte("\n---\n"))
+	delimiterLen := len("\n---\n")
+	if crlfEnd := bytes.Index(data[start:], []byte("\n---\r\n")); crlfEnd >= 0 && (end < 0 || crlfEnd < end) {
+		end = crlfEnd
+		delimiterLen = len("\n---\r\n")
 	}
 	if end < 0 {
 		return nil, 0, fmt.Errorf("unterminated YAML frontmatter")
 	}
 	var fm map[string]any
-	frontmatter := bytes.ReplaceAll(content[:end], []byte("\r\n"), []byte("\n"))
-	if err := yaml.Unmarshal(frontmatter, &fm); err != nil {
+	if err := yaml.Unmarshal(data[start:start+end], &fm); err != nil {
 		return nil, 0, err
 	}
 	for _, key := range []string{"name", "description"} {
@@ -158,7 +158,7 @@ func skillFrontmatter(data []byte) (map[string]any, int, error) {
 	if err := json.Unmarshal(raw, &fm); err != nil {
 		return nil, 0, err
 	}
-	return fm, headerLen + end + closingLen, nil
+	return fm, start + end + delimiterLen, nil
 }
 
 func registerSkillCatalog(srv *server.MCPServer, catalog *skillCatalog) error {

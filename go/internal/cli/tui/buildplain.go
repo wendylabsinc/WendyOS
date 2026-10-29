@@ -13,6 +13,38 @@ type BuildTally struct {
 	Rebuilt int
 }
 
+// BuildTallyCounter counts each Dockerfile step once, by the last cached/done
+// status it reported. BuildKit can finish a step more than once (a lazily
+// pulled base image reports DONE, pulls its layers, then reports DONE again),
+// and it is still one step in the summary.
+type BuildTallyCounter struct {
+	last map[string]BuildStepStatus
+}
+
+// Observe records e when it finishes a Dockerfile step.
+func (c *BuildTallyCounter) Observe(e BuildStepEvent) {
+	if e.Kind != BuildVertexStep || (e.Status != BuildStepCached && e.Status != BuildStepDone) {
+		return
+	}
+	if c.last == nil {
+		c.last = map[string]BuildStepStatus{}
+	}
+	c.last[e.ID] = e.Status
+}
+
+// Tally returns the counts observed so far.
+func (c *BuildTallyCounter) Tally() BuildTally {
+	var t BuildTally
+	for _, s := range c.last {
+		if s == BuildStepCached {
+			t.Cached++
+		} else {
+			t.Rebuilt++
+		}
+	}
+	return t
+}
+
 // PlainHeartbeatInterval is how often the non-interactive renderer reports on
 // steps that are still running. Without it a ten-minute compile is a silent gap
 // in CI logs, which reads as a hang.
@@ -45,9 +77,10 @@ func NewBuildPlainRenderer(w io.Writer) (emit func(BuildStepEvent), tally func()
 func newBuildPlainRenderer(w io.Writer, heartbeat time.Duration) (func(BuildStepEvent), func() BuildTally, func()) {
 	var (
 		mu      sync.Mutex
-		t       BuildTally
+		t       BuildTallyCounter
 		running = map[string]*plainRunningStep{}
 		order   []string
+		listed  = map[string]bool{}
 	)
 
 	emitFn := func(e BuildStepEvent) {
@@ -55,26 +88,27 @@ func newBuildPlainRenderer(w io.Writer, heartbeat time.Duration) (func(BuildStep
 		defer mu.Unlock()
 		switch e.Status {
 		case BuildStepRunning:
+			// A step that finished and was reopened starts a fresh entry, so its
+			// heartbeat counts from the reopen.
 			s := running[e.ID]
 			if s == nil {
 				s = &plainRunningStep{display: e.Display, started: time.Now(), lastPrint: time.Now()}
 				running[e.ID] = s
-				order = append(order, e.ID)
+				if !listed[e.ID] {
+					listed[e.ID] = true
+					order = append(order, e.ID)
+				}
 			}
 			if d := progressDetailOf(e); d != "" {
 				s.detail = d
 			}
 		case BuildStepCached:
 			delete(running, e.ID)
-			if e.Kind == BuildVertexStep {
-				t.Cached++
-			}
+			t.Observe(e)
 			fmt.Fprintf(w, "  cached  %s\n", e.Display)
 		case BuildStepDone:
 			delete(running, e.ID)
-			if e.Kind == BuildVertexStep {
-				t.Rebuilt++
-			}
+			t.Observe(e)
 			fmt.Fprintf(w, "  done    %s  %s\n", e.Display, formatDuration(e.Dur))
 		case BuildStepFailed:
 			delete(running, e.ID)
@@ -115,7 +149,7 @@ func newBuildPlainRenderer(w io.Writer, heartbeat time.Duration) (func(BuildStep
 		}()
 	}
 
-	return emitFn, func() BuildTally { mu.Lock(); defer mu.Unlock(); return t }, stopFn
+	return emitFn, func() BuildTally { mu.Lock(); defer mu.Unlock(); return t.Tally() }, stopFn
 }
 
 // ProgressDetail renders an event's tool progress and byte counters as one
