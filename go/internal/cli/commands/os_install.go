@@ -2818,7 +2818,7 @@ func flashRetryAction(flashErr error, interactive bool) (retry bool, fatal error
 }
 
 // installESP32Firmware handles the ESP32 path: detect device → download → flash.
-// board is a Wendy Lite catalog board name, e.g. "esp32c6_generic". An empty
+// board is a Wendy Lite catalog board name, e.g. "esp32c6_generic_native". An empty
 // serialDevice means the device should be located by scanning install-capable
 // serial ports. A supplied device carries its already-known transport.
 func installESP32Firmware(ctx context.Context, nightly bool, board string, serialDevice discovery.SerialPortInfo, wifi wifiCLIOptions, deviceName string, preOpts preEnrollOptions) error {
