@@ -129,32 +129,74 @@ Some streams cannot produce a playable MP4; `playable_notes` records why.
 
 ## Managed inference and notifications
 
-Use `inference` for agent-managed object detection when the user wants detection
-without a separate model app. Preserve or obtain a real pinned model revision;
-do not invent a SHA. This block uses the repository's people-detection example:
+For agent-managed object detection without a separate model app, write an
+inference document, plus a watch document when the user wants notifications.
+Each is its own YAML file, applied with
+`wendy --json data apply <file> --device <selector>`. Preserve or obtain a real
+pinned model revision; do not invent a SHA. This uses the repository's
+WendyDataWatch example:
 
 ```yaml
-inference:
-  model: facebook/detr-resnet-50
-  revision: 1d5f47bd3bdd2c4bbfa585418ffe6da5028b4c0b
-  labels: [person]
-  threshold: 0.9
-  rate: 1
-  event: person_detected
-  clear_after: 5s
-  cooldown: 30s
-  enabled: true
+kind: inference
+version: 1
+name: front-door
+sources:
+  - camera: "*"
+model: ustc-community/dfine-nano-coco
+revision: 066438d3d8f0da137a37b38fdf3368fd4afceced
+labels: [person]
+threshold: 0.5
+rate: 2
+clear_after: 5s
+cooldown: 30s
 ```
 
-Inference requires camera sources and a `capture.triggers` event matching
-`inference.event`, here `event: person_detected`. The default backend is `transformers`.
+Every document starts with `kind`, `version`, and `name`; a file without `kind`
+is a campaign. An optional `owner: <kind>/<name>` names an existing document
+whose removal removes this one. An inference takes camera `sources` and a
+campaign inference block's model fields. Its `event` defaults to its name, and
+event names are device-wide: a campaign whose `capture.triggers` include
+`event: front-door` records around each arrival. An inference that no campaign
+triggers on stores nothing. The default backend is `transformers`.
 `backend: yolo_onnx` instead requires `model_file` to name a relative `.onnx`
 file in the pinned Hugging Face repository. First use installs a managed runtime
 and downloads model files, requiring network access and storage outside the
-episode quota. Remote model code is disabled. Check `inference_status`, its
-per-camera states, and actual events after deployment.
+episode quota. Remote model code is disabled.
 
-`notify` chooses one delivery condition:
+A watch delivers one inference's arrivals and stores nothing:
+
+```yaml
+kind: watch
+version: 1
+name: front-door
+on:
+  inference: front-door
+notify:
+  - cloud
+```
+
+Every arrival goes to the device's notification journal. `- cloud` adds Wendy
+Cloud and `- webhook: <url>` adds an HTTP(S) endpoint, each at most once.
+Applying a watch with `cloud` registers `watch:<name>` in Cloud Apps. `lease`
+(15s to 10m) is for clients that renew the watch; the device removes a leased
+watch, and what it owns, when renewals stop and at agent restart. Do not add a
+lease to a watch a person deploys.
+
+`wendy --json data documents [<kind>[/<name>]] --device <selector>` lists
+documents or inspects one. An inference reports its runtime and per-camera
+state; a watch is `waiting` (its inference is missing, disabled, or starting),
+`active`, or `error`, with `delivery_error` in its status.
+`wendy data remove <kind>/<name>` removes an inference or watch and what it
+owns; campaigns cannot be removed. An agent without data document support
+rejects inference and watch documents; `wendy device update` installs one.
+Check actual events after applying.
+
+Existing campaigns can carry an inline `inference` block, as in the
+WendyDataPeople example and the gateway's YOLO detectors. It remains supported:
+it requires camera sources and a `capture.triggers` event matching
+`inference.event`, and campaign inspect reports `inference_status`. Prefer
+separate documents for new work. A campaign's `notify` chooses one delivery
+condition:
 
 ```yaml
 notify:

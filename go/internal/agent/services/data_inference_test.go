@@ -308,7 +308,7 @@ func TestInferenceDisabledWaitsForRetiredWorker(t *testing.T) {
 	canceled, done := make(chan struct{}), make(chan struct{})
 	service := NewDataService(manager)
 	service.inference = &campaignInferenceManager{service: service, jobs: map[string]*campaignInferenceJob{
-		old.Name: {campaign: old, cancel: func() { close(canceled) }, done: done, status: data.InferenceStatus{State: "running"}},
+		campaignJobKey(old.Name): {key: campaignJobKey(old.Name), campaign: old, cancel: func() { close(canceled) }, done: done, status: data.InferenceStatus{State: "running"}},
 	}}
 	state := func() string {
 		t.Helper()
@@ -483,7 +483,7 @@ func TestAgentInferenceNamedEventFiltersModelDetections(t *testing.T) {
 		default:
 		}
 		service.inference.mu.Lock()
-		job := service.inference.jobs["people-all-cameras"]
+		job := service.inference.jobs[campaignJobKey("people-all-cameras")]
 		ready := job != nil && job.campaign.Notify.Event == "other_event"
 		service.inference.mu.Unlock()
 		if ready {
@@ -545,7 +545,7 @@ func TestAgentInferenceEventNotificationWithoutModelOrUpload(t *testing.T) {
 	deadline := time.Now().Add(3 * time.Second)
 	for {
 		service.inference.mu.Lock()
-		ready := service.inference.jobs[campaign.Name] != nil
+		ready := service.inference.jobs[campaignJobKey(campaign.Name)] != nil
 		service.inference.mu.Unlock()
 		if ready {
 			break
@@ -579,7 +579,7 @@ func TestModelFreeCampaignInspectIncludesNotificationError(t *testing.T) {
 	campaign.Notify.On = data.NotifyOnEvent
 	service := &DataService{}
 	service.inference = &campaignInferenceManager{jobs: map[string]*campaignInferenceJob{
-		campaign.Name: {campaign: campaign, status: data.InferenceStatus{State: "running", NotificationError: "delivery failed"}},
+		campaignJobKey(campaign.Name): {key: campaignJobKey(campaign.Name), campaign: campaign, status: data.InferenceStatus{State: "running", NotificationError: "delivery failed"}},
 	}}
 	message, err := service.campaignMessage(campaign)
 	if err != nil {

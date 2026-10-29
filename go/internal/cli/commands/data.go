@@ -64,7 +64,7 @@ func encodeProtoJSON(out io.Writer, message proto.Message) error {
 
 func newDataCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "data", Short: "Record and retrieve synchronized device data"}
-	cmd.AddCommand(newDataExportStreamCmd(), newDataSourcesCmd(), newDataRecordCmd(), newDataStopCmd(), newDataStatusCmd(), newDataEpisodesCmd(), newDataInspectCmd(), newDataDownloadCmd(), newDataCampaignCmd())
+	cmd.AddCommand(newDataExportStreamCmd(), newDataSourcesCmd(), newDataRecordCmd(), newDataStopCmd(), newDataStatusCmd(), newDataEpisodesCmd(), newDataInspectCmd(), newDataDownloadCmd(), newDataCampaignCmd(), newDataApplyCmd(), newDataDocumentsCmd(), newDataRemoveCmd())
 	return cmd
 }
 
@@ -76,7 +76,7 @@ func newDataCampaignCmd() *cobra.Command {
 
 func newDataCampaignDeployCmd() *cobra.Command {
 	var skipCloudRegistration bool
-	command := &cobra.Command{Use: "deploy [campaign.yaml]", Short: "Validate, persist, and arm a campaign on the connected device", Long: "Deploy a campaign YAML file. Without a path, select a campaign file from the current directory (a YAML file whose header is a campaign's).\nNon-interactive and --json invocations require an explicit path.", Args: cobra.MaximumNArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+	command := &cobra.Command{Use: "deploy [campaign.yaml]", Short: "Validate, persist, and arm a campaign on the connected device", Long: "Deploy a campaign YAML file. Without a path, select a campaign file from the current directory.\nNon-interactive and --json invocations require an explicit path.", Args: cobra.MaximumNArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
 		path, err := resolveCampaignDeployFile(args, !jsonOutput && isInteractiveTerminal(), pickFromItems)
 		if err != nil {
 			return err
@@ -91,7 +91,7 @@ func newDataCampaignDeployCmd() *cobra.Command {
 		}
 		plan, ok := document.Body.(data.Campaign)
 		if !ok {
-			return fmt.Errorf("%s is a %s document, not a campaign", path, document.Header.Kind)
+			return fmt.Errorf("%s is a %s document, not a campaign; deploy it with `wendy data apply %s`", path, document.Header.Kind, path)
 		}
 		conn, err := connectToAgent(cmd.Context())
 		if err != nil {
@@ -129,17 +129,55 @@ func campaignDeployError(err error) error {
 	return status.Errorf(status.Code(err), "%s\nThis device's agent predates the kind field: update it with `wendy device update`, or remove the kind line from the campaign file.", status.Convert(err).Message())
 }
 
+// dataFilePicker resolves a path argument or, without one, offers the YAML
+// files in the current directory whose data document header it accepts.
+type dataFilePicker struct {
+	usage  string // how to pass a path, e.g. "pass a file path, for example: …"
+	noun   string // "campaign", "data document"
+	plural string // "campaigns", "data documents"
+	// skip says why a file with this valid header is not offered, or "".
+	skip  func(datadoc.Header) string
+	label func(file string, header datadoc.Header) string
+}
+
+var campaignFilePicker = dataFilePicker{
+	usage:  "pass a file path, for example: wendy data campaign deploy campaign.yaml",
+	noun:   "campaign",
+	plural: "campaigns",
+	skip: func(header datadoc.Header) string {
+		if header.Kind != datadoc.DefaultKind {
+			return "kind " + header.Kind
+		}
+		return ""
+	},
+	label: func(file string, _ datadoc.Header) string { return file },
+}
+
+var documentFilePicker = dataFilePicker{
+	usage:  "pass a file path, for example: wendy data apply front-door.watch.yaml",
+	noun:   "data document",
+	plural: "data documents",
+	skip:   func(datadoc.Header) string { return "" },
+	label: func(file string, header datadoc.Header) string {
+		return fmt.Sprintf("%s (%s %s)", file, header.Kind, header.Name)
+	},
+}
+
 func resolveCampaignDeployFile(args []string, interactive bool, pick func(string, []tui.PickerItem) (string, error)) (string, error) {
+	return campaignFilePicker.resolve(args, interactive, pick)
+}
+
+func (p dataFilePicker) resolve(args []string, interactive bool, pick func(string, []tui.PickerItem) (string, error)) (string, error) {
 	if len(args) > 0 {
 		return args[0], nil
 	}
-	const usage = "pass a file path, for example: wendy data campaign deploy campaign.yaml"
 	entries, err := os.ReadDir(".")
 	if err != nil {
-		return "", fmt.Errorf("listing campaign files in the current directory: %w; %s", err, usage)
+		return "", fmt.Errorf("listing %s files in the current directory: %w; %s", p.noun, err, p.usage)
 	}
 	var items []tui.PickerItem
 	var names, skipped []string
+	sawYAML := false
 	for _, entry := range entries {
 		ext := strings.ToLower(filepath.Ext(entry.Name()))
 		if ext != ".yaml" && ext != ".yml" {
@@ -149,50 +187,52 @@ func resolveCampaignDeployFile(args []string, interactive bool, pick func(string
 		if err != nil || !info.Mode().IsRegular() {
 			continue
 		}
-		// Offer only files whose header is a campaign's, not every YAML file:
-		// a project folder also holds compose files, stagefiles and, with data
-		// documents, inference and watch files.
-		if reason := campaignFileSkipReason(entry.Name(), info.Size()); reason != "" {
+		sawYAML = true
+		// Offer only files whose header fits, not every YAML file: a project
+		// folder also holds compose files and stagefiles. Say why a file was
+		// left out, so a broken document is not silently missing.
+		header, reason := readDataHeader(entry.Name(), info.Size())
+		if reason == "" {
+			reason = p.skip(header)
+		}
+		if reason != "" {
 			skipped = append(skipped, fmt.Sprintf("%s (%s)", entry.Name(), reason))
 			continue
 		}
 		names = append(names, entry.Name())
-		items = append(items, tui.PickerItem{Name: entry.Name(), Value: entry.Name()})
+		items = append(items, tui.PickerItem{Name: p.label(entry.Name(), header), Value: entry.Name()})
 	}
 	if len(items) == 0 {
-		if len(skipped) > 0 {
-			return "", fmt.Errorf("no campaign files in the current directory (these YAML files are not campaigns: %s); %s", strings.Join(skipped, ", "), usage)
+		if sawYAML {
+			return "", fmt.Errorf("no %s files in the current directory (these YAML files are not %s: %s); %s", p.noun, p.plural, strings.Join(skipped, ", "), p.usage)
 		}
-		return "", fmt.Errorf("no .yaml or .yml files found in the current directory; %s", usage)
+		return "", fmt.Errorf("no .yaml or .yml files found in the current directory; %s", p.usage)
 	}
 	if !interactive {
-		return "", fmt.Errorf("a campaign YAML path is required in non-interactive or --json mode; %s\nCampaign files in the current directory: %s", usage, strings.Join(names, ", "))
+		return "", fmt.Errorf("a %s YAML path is required in non-interactive or --json mode; %s\n%s files in the current directory: %s", p.noun, p.usage, strings.ToUpper(p.noun[:1])+p.noun[1:], strings.Join(names, ", "))
 	}
-	return pick("Select a campaign YAML file", items)
+	return pick("Select a "+p.noun+" YAML file", items)
 }
 
-// maxCampaignFileBytes bounds what the picker reads per file. Campaigns are a
+// maxDataFileBytes bounds what the picker reads per file. Documents are a
 // few kilobytes; anything far larger is not one.
-const maxCampaignFileBytes = 1 << 20
+const maxDataFileBytes = 1 << 20
 
-// campaignFileSkipReason returns "" when the file is a campaign, otherwise why
-// the picker leaves it out.
-func campaignFileSkipReason(name string, size int64) string {
-	if size > maxCampaignFileBytes {
-		return "file too large"
+// readDataHeader reads a file's data document header, or says why it has
+// none.
+func readDataHeader(name string, size int64) (datadoc.Header, string) {
+	if size > maxDataFileBytes {
+		return datadoc.Header{}, "file too large"
 	}
 	contents, err := os.ReadFile(name)
 	if err != nil {
-		return err.Error()
+		return datadoc.Header{}, err.Error()
 	}
 	header, err := data.DocumentHeader(contents)
 	if err != nil {
-		return err.Error()
+		return datadoc.Header{}, err.Error()
 	}
-	if header.Kind != datadoc.DefaultKind {
-		return "kind " + header.Kind
-	}
-	return ""
+	return header, ""
 }
 
 func newDataCampaignListCmd() *cobra.Command {

@@ -1,12 +1,14 @@
 ---
 name: wendy-data
-description: Create, deploy, inspect, and troubleshoot Wendy Data campaigns and episodes, or add application recording streams, event triggers, model predictions, and campaign notifications. Use for Wendy data capture and retrieval; use app lifecycle guidance for ordinary logs and OpenTelemetry.
+description: Create, deploy, inspect, and troubleshoot Wendy Data campaigns, inference and watch documents, and episodes, or add application recording streams, event triggers, model predictions, and notifications. Use for Wendy data capture and retrieval; use app lifecycle guidance for ordinary logs and OpenTelemetry.
 ---
 
 # Wendy Data
 
 Wendy Data collects device-local episodes on a shared `CLOCK_BOOTTIME` timeline.
 Campaigns arm event or model-uncertainty triggers and record a bounded window.
+Inference documents run agent-managed detectors that emit events, and watch
+documents deliver those events as notifications.
 Application streams can also retain durable records outside episodes.
 
 ## Choose the available interface
@@ -48,8 +50,9 @@ and units; receipt time alone does not establish when a measurement occurred.
 
 ## Follow the requested workflow
 
-- For campaign YAML, one-off recording, deployment, inference, notifications,
-  and episode retrieval, read [campaigns.md](references/campaigns.md).
+- For campaign YAML, inference and watch documents, one-off recording,
+  deployment, notifications, and episode retrieval, read
+  [campaigns.md](references/campaigns.md).
 - For application events, model input references, durable records, custom
   measurements, and `export-stream`, read [application-streams.md](references/application-streams.md).
 - If an app must be built or deployed, use the available `wendy-app-lifecycle`

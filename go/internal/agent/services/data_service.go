@@ -41,7 +41,9 @@ func dataStatusError(err error) error {
 		errors.Is(err, data.ErrInvalidDownloadOffset),
 		errors.Is(err, data.ErrInvalidEpisodePath),
 		errors.Is(err, data.ErrEpisodePathEscapes),
-		errors.Is(err, data.ErrInvalidCampaignName):
+		errors.Is(err, data.ErrInvalidCampaignName),
+		errors.Is(err, data.ErrInvalidDocumentName),
+		errors.Is(err, data.ErrNotStoredKind):
 		return status.Error(codes.InvalidArgument, err.Error())
 	case errors.Is(err, os.ErrNotExist):
 		return status.Error(codes.NotFound, err.Error())
@@ -57,6 +59,13 @@ type DataService struct {
 	inference    *campaignInferenceManager
 	video        inferenceVideo
 	deploymentMu sync.Mutex
+	// leases holds leased watches' deadlines. Apply, expiry and removal change
+	// them under deploymentMu with the documents they belong to, and expiry
+	// decides under deploymentMu too, after re-reading the watch; renew and the
+	// check before each notification take only the table's own lock.
+	leases documentLeases
+	// watches is the watch runner, set by StartCampaignInference.
+	watches *watchRunner
 	agentpbv2.UnimplementedDataServiceServer
 	manager   *data.Manager
 	adapterMu sync.RWMutex

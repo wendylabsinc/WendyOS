@@ -124,3 +124,63 @@ func TestNotificationDropsDetectionsToFitLimit(t *testing.T) {
 		t.Fatalf("stored entry is %d bytes", len(raw))
 	}
 }
+
+func recordTestNotification(t *testing.T, m *Manager, n CampaignNotification) {
+	t.Helper()
+	n.ID = uuid.NewString()
+	n.Event = "front-door"
+	n.OccurredAt = time.Now().UTC().Format(time.RFC3339Nano)
+	if err := m.RecordNotification(n); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestNotificationsHideLeasedWatchesFromOtherReaders(t *testing.T) {
+	m, err := NewManager(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	recordTestNotification(t, m, CampaignNotification{Campaign: "people"})
+	recordTestNotification(t, m, CampaignNotification{Watch: "porch", Inference: "front-door"})
+	recordTestNotification(t, m, CampaignNotification{Watch: "chat-1", Inference: "chat-1", Leased: true})
+	recordTestNotification(t, m, CampaignNotification{Watch: "chat-2", Inference: "chat-2", Leased: true})
+
+	names := func(items []CampaignNotification) string {
+		var out []string
+		for _, item := range items {
+			out = append(out, item.Campaign+item.Watch)
+		}
+		return strings.Join(out, ",")
+	}
+	all, _, _, err := m.Notifications("", "", "", true)
+	if err != nil || names(all) != "people,porch" {
+		t.Fatalf("unfiltered read = %s, %v", names(all), err)
+	}
+	mine, _, _, err := m.NotificationsFor("", "", "", true, []string{"chat-1"})
+	if err != nil || names(mine) != "chat-1" {
+		t.Fatalf("read naming chat-1 = %s, %v", names(mine), err)
+	}
+	both, _, _, err := m.NotificationsFor("", "", "", true, []string{"porch", "chat-2"})
+	if err != nil || names(both) != "porch,chat-2" {
+		t.Fatalf("read naming porch and chat-2 = %s, %v", names(both), err)
+	}
+	byApp, _, _, err := m.Notifications("sh.wendy.watch.porch", "", "", true)
+	if err != nil || names(byApp) != "porch" {
+		t.Fatalf("read by watch app id = %s, %v", names(byApp), err)
+	}
+}
+
+func TestRecordNotificationNeedsACampaignOrAWatch(t *testing.T) {
+	m, err := NewManager(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = m.RecordNotification(CampaignNotification{ID: uuid.NewString(), Event: "e", OccurredAt: time.Now().UTC().Format(time.RFC3339Nano)})
+	if err == nil || !strings.Contains(err.Error(), "invalid notification identity") {
+		t.Fatalf("anonymous notification error = %v", err)
+	}
+	raw, _ := json.Marshal(CampaignNotification{Watch: "porch"})
+	if strings.Contains(string(raw), `"campaign"`) {
+		t.Fatalf("a watch entry carries an empty campaign: %s", raw)
+	}
+}

@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/data"
 
@@ -39,27 +40,35 @@ func (s *CampaignCloudSender) Send(ctx context.Context, endpoint string, notific
 	if s.Cloud == nil {
 		return status.Error(codes.Unavailable, "Cloud campaign notification delivery is unavailable")
 	}
-	metadata, err := structpb.NewStruct(map[string]any{
+	fields := map[string]any{
 		"event":          notification.Event,
-		"campaign":       notification.Campaign,
 		"source_id":      notification.SourceID,
 		"model":          notification.Model,
 		"model_revision": notification.Revision,
 		"count":          notification.Count,
 		"occurred_at":    notification.OccurredAt,
-	})
+	}
+	appID := "campaign:" + notification.Campaign
+	title, body := "Campaign event", fmt.Sprintf("Campaign %s emitted %s.", notification.Campaign, notification.Event)
+	if notification.Watch != "" {
+		fields["watch"], fields["inference"] = notification.Watch, notification.Inference
+		appID = "watch:" + notification.Watch
+		title, body = "Watch event", fmt.Sprintf("Watch %s saw %s.", notification.Watch, notification.Event)
+	} else {
+		fields["campaign"] = notification.Campaign
+	}
+	metadata, err := structpb.NewStruct(fields)
 	if err != nil {
 		return err
 	}
-	appID := "campaign:" + notification.Campaign
 	response, err := s.Cloud.CreateNotificationV2(ctx, &cloudpb.CreateNotificationV2Request{
 		AppId: &appID,
 		Audience: &cloudpb.NotificationAudience{Roles: []cloudpb.OrganizationRole{
 			cloudpb.OrganizationRole_ORGANIZATION_ROLE_OWNER,
 			cloudpb.OrganizationRole_ORGANIZATION_ROLE_ADMIN,
 		}},
-		Title:          "Campaign event",
-		Body:           fmt.Sprintf("Campaign %s emitted %s.", notification.Campaign, notification.Event),
+		Title:          title,
+		Body:           body,
 		Severity:       cloudpb.NotificationSeverity_NOTIFICATION_SEVERITY_INFO,
 		DeepLink:       "wendy://live",
 		NotificationId: notification.ID,
@@ -105,4 +114,39 @@ func (*CampaignWebhookSender) Send(ctx context.Context, endpoint string, notific
 		return fmt.Errorf("notification webhook returned HTTP %d", response.StatusCode)
 	}
 	return nil
+}
+
+// deliverNotification sends one notification to Wendy Cloud (empty endpoint)
+// or a webhook: at most three attempts, each with a 10 s timeout, stopping at
+// once on errors Cloud reports as permanent.
+func deliverNotification(ctx context.Context, sender CampaignNotificationSender, endpoint string, request DetectionNotification) error {
+	if sender == nil {
+		return errors.New("campaign notification delivery is unavailable")
+	}
+	var err error
+	for attempt := 0; attempt < 3 && ctx.Err() == nil; attempt++ {
+		forward, cancel := context.WithTimeout(ctx, 10*time.Second)
+		err = sender.Send(forward, endpoint, request)
+		cancel()
+		if err == nil {
+			return nil
+		}
+		// Cloud rejects unauthorized identities and duplicate UUIDs permanently.
+		// Retrying those responses cannot deliver this notification.
+		if endpoint == "" {
+			switch status.Code(err) {
+			case codes.InvalidArgument, codes.Unauthenticated, codes.PermissionDenied,
+				codes.FailedPrecondition, codes.AlreadyExists, codes.Unimplemented, codes.DataLoss:
+				return err
+			}
+		}
+		if attempt < 2 {
+			select {
+			case <-ctx.Done():
+				return err
+			case <-time.After(time.Duration(1<<attempt) * time.Second):
+			}
+		}
+	}
+	return err
 }

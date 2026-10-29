@@ -190,25 +190,66 @@ include configuration, senders, and an export reader.
 
 ## Detect objects without a model app
 
-A campaign's optional `inference` block runs object detection on its selected
-cameras. Choose a Hugging Face model pinned to a 40-character commit SHA,
-labels, a confidence threshold, and an inference rate. The agent supports
-Transformers models and compatible YOLO ONNX exports through `backend: yolo_onnx`.
+An inference document runs object detection on cameras. Save this as
+`front-door.inference.yaml`:
 
-Set an event such as `person_detected` and include the same event in
-`capture.triggers`. On first use, the agent installs its managed Python runtime
-and downloads the pinned model. This needs network access and storage outside
-the episode quota. Check `inference_status` in `campaign inspect` to verify
-the runtime and each camera.
+```yaml
+kind: inference
+version: 1
+name: front-door
+sources:
+  - camera: "*"
+model: ustc-community/dfine-nano-coco
+revision: 066438d3d8f0da137a37b38fdf3368fd4afceced
+labels: [person]
+threshold: 0.5
+rate: 2
+clear_after: 5s
+cooldown: 30s
+```
 
-`notify.on: event` can deliver a named event immediately; `notify.on: detection`
-requires inference. Delivery can use a configured webhook or Wendy Cloud.
-Cloud delivery requires a separately enabled notification grant for the campaign.
-`notify.on: episode_committed` records cloud-side notification intent instead
-of sending an immediate device notification.
+```sh
+wendy data apply front-door.inference.yaml --device workshop.local
+wendy data documents inference/front-door --device workshop.local
+```
 
-Use the [inference reference](/docs/advanced/clients/wendy-cli/commands/data#inference)
-and [all-camera people example](https://github.com/wendylabsinc/WendyOS/tree/main/Examples/WendyDataPeople)
+Choose a Hugging Face model pinned to a 40-character commit SHA, labels, a
+confidence threshold, and an inference rate. The agent supports Transformers
+models and compatible YOLO ONNX exports through `backend: yolo_onnx`. On first
+use, the agent installs its managed Python runtime and downloads the pinned
+model. This needs network access and storage outside the episode quota.
+`wendy data documents` reports the runtime and each camera.
+
+The inference emits its name, here `front-door`, when a person arrives. Event
+names are shared across the device. To record each arrival, add
+`- event: front-door` to a campaign's `capture.triggers`. An inference that no
+campaign triggers on stores nothing.
+
+To be notified, apply a watch document:
+
+```yaml
+kind: watch
+version: 1
+name: front-door
+on:
+  inference: front-door
+notify:
+  - cloud
+```
+
+`- cloud` delivers through Wendy Cloud, and `- webhook: <url>` to your own
+endpoint. Applying a watch with `cloud` registers `watch:front-door` in Cloud
+Apps.
+Remove the documents with `wendy data remove watch/front-door` and
+`wendy data remove inference/front-door`. Inference and watch documents need an
+agent with data document support; `wendy device update` installs one.
+
+A campaign's inline `inference` and `notify` blocks remain supported, including
+`notify.on: episode_committed` for cloud-side notification intent.
+
+Use the [data documents reference](/docs/advanced/clients/wendy-cli/commands/data#data-documents),
+the [inference reference](/docs/advanced/clients/wendy-cli/commands/data#inference),
+and the [front door example](https://github.com/wendylabsinc/WendyOS/tree/main/Examples/WendyDataWatch)
 when you are ready to enable model downloads and automatic capture.
 
 ## Current limits

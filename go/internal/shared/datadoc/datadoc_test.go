@@ -1,6 +1,7 @@
 package datadoc
 
 import (
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -60,7 +61,7 @@ func TestParseHeaderErrors(t *testing.T) {
 	cases := []struct{ name, doc, want string }{
 		{"empty", "", "document is empty"},
 		{"comment only", "# nothing\n", "document is empty"},
-		{"not a mapping", "- a\n- b\n", "parsing document header"},
+		{"not a mapping", "- a\n- b\n", "a data document is a YAML mapping"},
 		{"unknown kind", "kind: wach\nversion: 1\nname: x\n", `unknown kind "wach"; known kinds: collection, inference, watch`},
 		{"version missing", "kind: watch\nname: x\n", "version is required (watch documents support version 1, 2)"},
 		{"version zero", "version: 0\nname: x\n", "version is required (collection documents support version 1)"},
@@ -131,5 +132,57 @@ func TestNewRegistryRefusesBadKinds(t *testing.T) {
 func TestKindsAreSorted(t *testing.T) {
 	if got := strings.Join(testRegistry(nil).Kinds(), ","); got != "collection,inference,watch" {
 		t.Fatalf("Kinds() = %s", got)
+	}
+}
+
+func TestHeaderTypeErrorsNameTheField(t *testing.T) {
+	registry := testRegistry(nil)
+	for doc, want := range map[string]string{
+		"kind: [a]\nversion: 1\nname: x\n":                   "kind must be a string",
+		"version: 1\nname: {a: b}\n":                         "name must be a string",
+		"kind: inference\nversion: 1\nname: x\nowner: [w]\n": "owner must be a string",
+		"version: [1]\nname: x\n":                            "version must be a whole number",
+		"- a\n- b\n":                                         "a data document is a YAML mapping",
+	} {
+		if _, err := registry.ParseHeader([]byte(doc)); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%q: error = %v, want %q", doc, err, want)
+		}
+	}
+}
+
+func TestNewRegistryRefusesUnnameableKinds(t *testing.T) {
+	decode := func(Header, []byte) (any, string, []string, error) { return nil, "", nil, nil }
+	for _, name := range []string{"a/b", "has space", strings.Repeat("k", 129)} {
+		func() {
+			defer func() {
+				if recover() == nil {
+					t.Errorf("NewRegistry accepted kind %q", name)
+				}
+			}()
+			NewRegistry(Kind{Name: name, Versions: []int{1}, Decode: decode})
+		}()
+	}
+}
+
+func TestDecodeStrictReadsHeaderFieldsAndRejectsUnknownKeys(t *testing.T) {
+	type body struct {
+		HeaderFields `yaml:",inline"`
+		Lease        string `json:"lease" yaml:"lease"`
+	}
+	var got body
+	if err := DecodeStrict([]byte("kind: watch\nversion: 1\nname: w\nowner: inference/i\nlease: 15s\n"), &got); err != nil {
+		t.Fatal(err)
+	}
+	want := body{HeaderFields{Kind: "watch", Version: 1, Name: "w", Owner: "inference/i"}, "15s"}
+	if got != want {
+		t.Fatalf("decoded %+v, want %+v", got, want)
+	}
+	// Embedded, the header stays four top-level keys in the stored JSON.
+	if b, _ := json.Marshal(got); string(b) != `{"kind":"watch","version":1,"name":"w","owner":"inference/i","lease":"15s"}` {
+		t.Fatalf("json = %s", b)
+	}
+	err := DecodeStrict([]byte("kind: watch\nversion: 1\nname: w\ncolour: red\n"), &body{})
+	if err == nil || !strings.Contains(err.Error(), "line 4: field colour not found") {
+		t.Fatalf("unknown key: %v", err)
 	}
 }
