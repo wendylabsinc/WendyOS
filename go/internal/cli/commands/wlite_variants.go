@@ -78,6 +78,12 @@ const wendyLiteCatalogJSON = `
             "flash_size": "8MB"
         },
         {
+            "name": "esp32p4_dfr1172_firebeetle_native",
+            "target": "esp32p4",
+            "board_cfg": "dfr1172_firebeetle_native",
+            "flash_size": "16MB"
+        },
+        {
             "name": "esp32s31_mosaico_native",
             "target": "esp32s31",
             "board_cfg": "esp32s31_mosaico_native",
@@ -99,6 +105,10 @@ const wendyLiteCatalogJSON = `
         {
             "name": "esp32c61",
             "display_name": "ESP32-C61"
+        },
+        {
+            "name": "esp32p4",
+            "display_name": "ESP32-P4"
         },
         {
             "name": "esp32s3",
@@ -169,6 +179,12 @@ const wendyLiteCatalogJSON = `
             "display_name": "M5Stack StampS3, 8MB flash",
             "binary": "esp32s3_m5_stamp_s3_native",
             "target": "esp32s3"
+        },
+        {
+            "name": "esp32p4_dfr1172_firebeetle_native",
+            "display_name": "DFRobot FireBeetle 2 ESP32-P4 (DFR1172), 16MB flash, 32MB PSRAM",
+            "binary": "esp32p4_dfr1172_firebeetle_native",
+            "target": "esp32p4"
         },
         {
             "name": "esp32s31_mosaico_native",

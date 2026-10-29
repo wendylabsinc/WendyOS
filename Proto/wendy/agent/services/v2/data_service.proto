@@ -63,6 +63,15 @@ message DataSource {
   string clock_domain = 3;
   bool healthy = 4;
   string detail = 5;
+  // A short name for people, such as "HD Pro Webcam C920", without the driver
+  // strings detail carries (ALSA and PipeWire node names, transport enums). It
+  // is a label, not an identifier: select a source by id. Empty from agents
+  // that predate it, where detail is the only description.
+  string name = 6;
+  // Why the source is not healthy, in a few words a person can act on, such as
+  // "no login stored", "camera offline" or "silent audio-hub channel". Set only
+  // when healthy is false. Empty from agents that predate it.
+  string unusable_reason = 7;
 }
 message DataSourcesRequest {}
 message DataSourcesResponse { repeated DataSource sources = 1; }
