@@ -18,7 +18,9 @@ the pinned Hugging Face checkpoint on first use. This requires internet access,
 several GB of free space and enough RAM for the model. Subsequent starts reuse
 the cache in the agent's data partition. This initial backend supports CPU
 inference on 64-bit Linux (x86_64 and aarch64) and Apple Silicon macOS; its Linux
-wheels require glibc 2.28 or newer. GPU execution is not enabled by this example.
+wheels require glibc 2.28 or newer. GPU execution is not enabled by this example:
+`inference.accelerator` runs `yolo_onnx` models through TensorRT on a Jetson,
+and Transformers models always run on the CPU.
 
 `inference_status` in campaign inspect (or the plan JSON from list) reports `pending`, `loading`,
 `running`, `waiting_for_cameras`, `error` or `disabled`, with per-camera health and
@@ -161,7 +163,11 @@ Cloud delivery uses the same bounded queue and event UUID. Permission failures a
 registration never grants notification permission automatically.
 
 Episodes contain prediction and detection records in `events.jsonl` and the
-model revision in the manifest. The input ledger records the encoded samples
+model revision in the manifest. Each detection carries `box`, `[x1, y1, x2, y2]`
+in pixels of the scored picture, and `box_norm`, the same corners clamped to
+the picture and normalised to `[0, 1]` from its top-left corner. The record's
+`width` and `height` give the picture's size, so a viewer can draw `box_norm`
+on the picture at any size. The input ledger records the encoded samples
 delivered to the model process. The first backend decodes opaque H.264/WebM
 streams without an exact decoded-frame-to-sample mapping, so prediction records
 explicitly report `input_reference_status` and do not invent input sample IDs.
