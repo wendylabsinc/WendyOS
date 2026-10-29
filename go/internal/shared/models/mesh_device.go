@@ -6,19 +6,20 @@ import "github.com/wendylabsinc/wendy/go/internal/shared/meshid"
 // route from the selected operator's authenticated adjacent router. It is a
 // separate path, never a synthetic physical LAN sighting.
 type MeshDevice struct {
-	Selector  string   `json:"selector"`
-	Principal string   `json:"principal"`
-	Tenant    string   `json:"tenant"`
-	Device    string   `json:"device"`
-	Name      string   `json:"name"`
-	Platform  string   `json:"platform"`
-	Transport string   `json:"transport"`
-	Address   string   `json:"address"`
-	Caps      []string `json:"caps,omitempty"`
-	Expires   int64    `json:"expiresAtUnixMs"`
-	Revision  uint64   `json:"revision,string"`
-	Metric    uint32   `json:"metric,omitempty"`
-	NextHop   string   `json:"nextHopPrincipal,omitempty"`
+	Selector    string   `json:"selector"`
+	Principal   string   `json:"principal"`
+	Tenant      string   `json:"tenant"`
+	Device      string   `json:"device"`
+	Name        string   `json:"name"`
+	Platform    string   `json:"platform"`
+	Transport   string   `json:"transport"`
+	Address     string   `json:"address"`
+	Caps        []string `json:"caps,omitempty"`
+	Expires     int64    `json:"expiresAtUnixMs"`
+	Revision    uint64   `json:"revision,string"`
+	Metric      uint32   `json:"metric,omitempty"`
+	NextHop     string   `json:"nextHopPrincipal,omitempty"`
+	NextHopName string   `json:"-"` // Display name resolved from the current directory.
 }
 type MeshDiscoveryState struct {
 	SourceResponseBytes int    `json:"sourceResponseBytes,omitempty"`
