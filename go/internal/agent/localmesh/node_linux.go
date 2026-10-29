@@ -111,9 +111,18 @@ type Node struct {
 	routeOrigins     map[RouteOrigin]bool
 }
 
-func NewNode(parent context.Context, dir string, credentials *Credentials, name string, agentPort uint16) (*Node, error) {
+func NewNode(parent context.Context, dir string, credentials *Credentials, name string, agentPort uint16, appEndpoints ...[]AppEndpoint) (*Node, error) {
 	if credentials == nil || agentPort == 0 {
 		return nil, errors.New("missing wendy net credentials or agent port")
+	}
+	// A node alone does not own an app listener. The host supplies the
+	// endpoints that have actually bound before starting carrier admission.
+	endpoints := []AppEndpoint{}
+	if len(appEndpoints) != 0 {
+		endpoints = append(endpoints, appEndpoints[0]...)
+	}
+	if err := validateAppEndpoints(endpoints); err != nil {
+		return nil, err
 	}
 	now := time.Now()
 	derived, err := instanceRouterID()
@@ -141,7 +150,7 @@ func NewNode(parent context.Context, dir string, credentials *Credentials, name 
 	}
 	ctx, cancel := context.WithCancel(parent)
 	n := &Node{controlHub: NewControlHub(cache.Certificates()), Credentials: credentials, kernel: kernel, cache: cache, directory: directory, bundleHints: newBundleHintCache(), store: store, state: state, peers: map[babel.LinkID]*nodePeer{}, events: make(chan nodeEvent, 256), ctx: ctx, cancel: cancel, started: now,
-		advertisement: Manifest{Version: ManifestVersionRoute, Device: credentials.Device.UUID(), Name: name, AgentPort: agentPort, AgentTransport: AgentMTLS, Platform: PlatformWendyOS, AppEndpoints: []AppEndpoint{{Transport: AppQUIC, Port: AppSessionPort}}},
+		advertisement: Manifest{Version: ManifestVersionRoute, Device: credentials.Device.UUID(), Name: name, AgentPort: agentPort, AgentTransport: AgentMTLS, Platform: PlatformWendyOS, AppEndpoints: endpoints},
 		diagnostics:   carrierDiagnostics{enabled: os.Getenv("WENDY_NET_CARRIER_DIAGNOSTICS") == "1"}}
 	ok := false
 	defer func() {

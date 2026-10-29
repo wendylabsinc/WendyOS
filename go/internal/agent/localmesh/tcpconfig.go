@@ -38,6 +38,7 @@ type TCPPeer struct {
 type TCPIdentity struct {
 	Name                    string
 	AgentPort               uint16
+	AppEndpoints            []AppEndpoint // supplied only for ready local listeners
 	Certificate, Chain, Key string
 }
 
