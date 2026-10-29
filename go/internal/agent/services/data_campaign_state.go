@@ -222,6 +222,10 @@ func (s *DataService) awaitCampaignInferenceStopped(ctx context.Context, pending
 	case <-done:
 		return nil
 	case <-ctx.Done():
+		// A client that gave up is Canceled, not DeadlineExceeded.
+		if errors.Is(ctx.Err(), context.Canceled) {
+			return status.Error(codes.Canceled, pending)
+		}
 		return status.Error(codes.DeadlineExceeded, pending)
 	}
 }

@@ -556,3 +556,19 @@ func TestDeployDuringForcedRemoveIsKept(t *testing.T) {
 		t.Fatalf("kept plan = revision %s state %s, want revision %s disarmed", kept.Revision, kept.State, deployed.GetRevision())
 	}
 }
+
+// A client that cancels while disarm waits for inference to stop gets
+// Canceled, not a deadline it never set.
+func TestAwaitCampaignInferenceStoppedReportsACancelAsCanceled(t *testing.T) {
+	service, _, _ := newCampaignStateService(t, t.TempDir())
+	if service.inference == nil {
+		t.Skip("no inference supervisor in this service")
+	}
+	service.inference.reconcileMu.Lock()
+	defer service.inference.reconcileMu.Unlock()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := service.awaitCampaignInferenceStopped(ctx, "still stopping"); status.Code(err) != codes.Canceled {
+		t.Fatalf("cancelled wait: %v, want Canceled", err)
+	}
+}
