@@ -36,7 +36,7 @@ requested measurements; preserve returned IDs.
 | Data | Campaign selection and limits |
 | --- | --- |
 | Video | `camera: <selector>` for a USB, CSI, or registered IP camera. A stable ID is preferable to an ambiguous name. `camera: "*"` includes all healthy cameras and cameras discovered later. |
-| Audio | `audio: <selector>` for a discovered capture device. Select the real microphone rather than an internal audio-routing channel. |
+| Audio | `audio: <selector>` for a discovered capture device. Select the real microphone rather than an internal audio-routing channel. Copy its stable ID, such as `audio:alsa_input.usb-…`; the old `audio:<number>` form is deprecated and can change after a reboot or replug. |
 | ROS 2 | `ros2: /topic` for data already published as ROS messages, such as LiDAR, odometry, IMU, GPS, or joint state. A full per-topic source ID selects one graph; a domain source ID captures the whole domain. |
 | Device health | On Linux, `telemetry: true` captures uptime, 1/5/15-minute system load, and total/free RAM at 1 Hz. It does not supply arbitrary hardware measurements. |
 | Application data | Campaigns automatically include application records. Apps with `episode-write` can contribute events, predictions, images, custom bytes, and time series. |
