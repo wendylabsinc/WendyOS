@@ -183,7 +183,7 @@ func (s *mcpServer) registerCloudTools(srv *server.MCPServer) {
 		mcpgo.WithString("service", mcpgo.Description("Build and deploy the named service and its dependencies")),
 		mcpgo.WithBoolean("debug", mcpgo.Description("Start under a debugger")),
 		mcpgo.WithBoolean("start", mcpgo.DefaultBool(true), mcpgo.Description("Start after deployment; false only creates the container")),
-		mcpgo.WithBoolean("wait_ready", mcpgo.Description("Wait for configured TCP readiness or process stability on WendyOS targets. Omitted: true when starting, false for create-only requests. Set false to skip readiness or deploy to local Docker/Podman, which do not support the wait.")),
+		mcpgo.WithBoolean("wait_ready", mcpgo.Description("Wait for configured TCP readiness or process stability on WendyOS targets. Omitted: true when starting, except where run cannot wait (local Docker/Podman, device_name deploys, and Compose, multi-service, Xcode, native-command, host-built Swift or build-host projects); false for create-only requests. Set false to skip readiness.")),
 		mcpgo.WithInteger("readiness_timeout_seconds", mcpgo.Min(1), mcpgo.Max(3600), mcpgo.Description("Readiness deadline within timeout_seconds; requires wait_ready")),
 		mcpgo.WithBoolean("include_output", mcpgo.Description("Include the bounded build-log tail on success; failures always include it. Omitted: false.")),
 		mcpgo.WithInteger("timeout_seconds", mcpgo.Min(1), mcpgo.Max(3600), mcpgo.DefaultNumber(300), mcpgo.Description("Command timeout")),
