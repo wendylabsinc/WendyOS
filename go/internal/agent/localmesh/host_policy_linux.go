@@ -124,8 +124,8 @@ func syncResolverDirectory(path string) error {
 }
 
 type resolverJournal struct {
-	Version  int    `json:"version"`
-	Previous string `json:"previous"`
+	Version  int    `json:"version" cbor:"v"`
+	Previous string `json:"previous" cbor:"p"`
 }
 
 // CleanupStaleResolver restores only a symlink recorded before mesh changed it.
