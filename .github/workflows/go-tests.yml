@@ -5,6 +5,7 @@ on:
   push:
     branches: [main]
     paths:
+      - '.gitattributes'
       - 'go/**'
       - 'web-client/public/**'
       - 'web-client/package.json'
@@ -28,6 +29,7 @@ on:
       - 'packaging/linux/fpm/**'
   pull_request:
     paths:
+      - '.gitattributes'
       - 'go/**'
       - 'web-client/public/**'
       - 'web-client/package.json'

@@ -36,8 +36,42 @@ forget while offline. If an older agent falls back to discovery on the CLI's
 network, the list says so; update that agent to scan from the device instead.
 
 `--name` gives the pairing a friendly name; `--sensors` limits it to selected
-sensor names. Either flag opens the SensorLink tab. Use `--list` to print saved
-SensorLink pairings.
+sensor names. Either flag opens the SensorLink tab, unless `--sensorlink` names
+a source to pair (see below). Use `--list` to print saved SensorLink pairings.
+
+### SensorLink scripting
+
+Scripts and agents pair without the tabs. Name one source by its name (case is
+ignored), source asset ID, or principal URI:
+
+```sh
+wendy --json device pair --device <target> --sensorlink garage-cam --name "Garage camera"
+wendy --json device pair --device <target> --list
+wendy --json device pair --device <target> --forget "Garage camera"
+```
+
+`--sensorlink` searches only the selected device's scan and pairs at most one
+source. When no source matches, or several do, it pairs nothing and lists the
+sources found with their asset IDs or principal URIs. An exact asset ID or
+principal URI selects its source even when another source has that name. It also refuses a source
+that needs enrollment, one already paired, and one outside your signed-in
+organizations. If the device's agent is too old to scan, update it with
+`wendy device update`, or pair in the tabs, which then scan the CLI computer's
+network.
+
+Pairing returns `{ "pairing": {...} }`. Listing returns
+`{ "pairings": [...], "supports_principal_pairing": true }`. Forgetting returns
+`{ "forgotten": {...} }` with the removed pairing. Each pairing has
+`source_asset_id`, `org_id`, `name`, `sensor_allowlist`, `connected`,
+`transport`, and `source_principal_uri`; `sensor_allowlist` is `[]` for all
+sensors. A new pairing reports `connected: false`; check `--list` later.
+
+`--forget` matches saved pairings, including offline ones, by the pairing name
+that `--list` shows (the `--name` given when pairing, not the source's
+discovered name), source asset ID, or principal URI.
+To rename a pairing or change its sensors, forget it and pair it again. Without
+a terminal, or with `--json`, `wendy device pair` needs `--list`, `--sensorlink`,
+`--forget`, or `--usb-arms`.
 
 ## IP cameras
 
@@ -126,12 +160,14 @@ scanning the CLI computer instead.
 | Flag | Purpose |
 | --- | --- |
 | `--list` | List SensorLink pairings, or USB inventory with `--usb-arms`. |
+| `--sensorlink` | Pair one SensorLink source by name, asset ID, or principal URI. |
 | `--name`, `--sensors` | Name or filter a SensorLink pairing. |
 | `--unitree` | Open the Unitree tab. |
 | `--ip` | Supply a Go2's IPv4 address. Opens the Unitree tab. |
 | `--unitree-region` | Unitree account region, `global` or `cn`. |
 | `--usb-arms` | Open or script USB arm setup. |
-| `--bind`, `--forget` | Save or remove an exact USB inventory ID. |
+| `--bind` | Save an exact USB inventory ID. |
+| `--forget` | Remove a SensorLink pairing, or a USB binding with `--usb-arms`. |
 | `--arm-name` | Friendly USB arm name, up to 128 UTF-8 bytes. |
 | `--allow-location-binding` | Accept a USB-port-based identity in scripts. |
 

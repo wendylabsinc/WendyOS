@@ -49,12 +49,15 @@ type mcpServer struct {
 	cloudTunnels         map[string]*mcpCloudTunnel
 	tunnelsClosed        bool
 	toolGroups           []string
+	toolProfile          string
 	discoverLANFn        func(ctx context.Context, timeout time.Duration) ([]models.LANDevice, error)
 	usbSetupNoticeFn     func() string
 	mu                   sync.RWMutex
 	proxyDiag            []proxyDiagEntry
 	containerMCP         *containerMCPManager
 	runCommandFn         func(context.Context, []string, commandTarget, int) (string, bool, error)
+	runLogs              map[string]runLogRecord
+	runLogOrder          []string
 	updateAgentCommandFn func(context.Context, []string, commandTarget, int) (string, bool, error)
 	agentUpdateMu        sync.Mutex
 	installation         onboarding.Backend
@@ -300,6 +303,7 @@ func (s *mcpServer) newProtocolServer() (*server.MCPServer, error) {
 	s.registerAuthTools(srv)
 	s.registerGuideResource(srv)
 	s.registerDiagnosticsResource(srv)
+	s.registerRunLogResource(srv)
 	s.registerPrompts(srv)
 	s.registerDeviceTools(srv)
 	s.registerContainerTools(srv)
@@ -313,6 +317,7 @@ func (s *mcpServer) newProtocolServer() (*server.MCPServer, error) {
 	s.registerOSTools(srv)
 	s.registerInstallationTools(srv)
 	s.registerSimulatorTools(srv)
+	s.registerJobTools(srv)
 	s.registerAppInspectTools(srv)
 	s.registerDeviceMaintenanceTools(srv)
 	s.registerProjectTools(srv)
