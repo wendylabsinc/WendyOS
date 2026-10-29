@@ -436,3 +436,123 @@ func TestCampaignStateCallsNameAMissingCampaign(t *testing.T) {
 		t.Fatalf("disarming a fleet campaign: warnings %q", warnings)
 	}
 }
+
+// blockingStopAdapter records a source whose capture Stop blocks until
+// released, which holds a forced remove inside its stop window.
+type blockingStopAdapter struct {
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func newBlockingStopAdapter() *blockingStopAdapter {
+	return &blockingStopAdapter{entered: make(chan struct{}), release: make(chan struct{})}
+}
+
+func (a *blockingStopAdapter) Discover(context.Context) []data.Source { return nil }
+
+func (a *blockingStopAdapter) Start(context.Context, data.CaptureSession, []data.Source) (runningDataCapture, error) {
+	return blockingStopCapture{a}, nil
+}
+
+type blockingStopCapture struct{ a *blockingStopAdapter }
+
+func (c blockingStopCapture) Stop(context.Context) ([]data.CaptureResult, error) {
+	c.a.once.Do(func() { close(c.a.entered) })
+	<-c.a.release
+	return nil, nil
+}
+
+const ringCampaignYAML = `version: 1
+name: ring-cam
+sources:
+  - camera: "*"
+capture:
+  buffer: 2s
+  drain: 0s
+  after_trigger: 1h
+  triggers:
+    - event: door_open
+upload:
+  when: manual
+export:
+  annotation: cvat
+`
+
+// An arm that lands while a forced remove is stopping the recording must not
+// bring the campaign back: it used to flip the state to armed, the ring was
+// armed again, and the plan was then deleted with the camera still held for
+// a campaign that no longer existed.
+func TestArmDuringForcedRemoveLeavesNoRingBehind(t *testing.T) {
+	service, _, arming := newCampaignStateService(t, t.TempDir())
+	blocker := newBlockingStopAdapter()
+	service.addAdapter(blocker)
+	ctx := context.Background()
+	mustDeploy(t, service, ringCampaignYAML)
+	waitForCampaignState(t, "armed ring", func() bool { return arming.holding("ring-cam") })
+	if _, err := service.CampaignTrigger(ctx, &agentpbv2.DataCampaignTriggerRequest{Name: "ring-cam"}); err != nil {
+		t.Fatal(err)
+	}
+	removed := make(chan error, 1)
+	go func() {
+		_, err := service.CampaignRemove(ctx, &agentpbv2.DataCampaignRemoveRequest{Name: "ring-cam", Force: true})
+		removed <- err
+	}()
+	<-blocker.entered
+	armed := make(chan error, 1)
+	go func() {
+		_, err := service.CampaignArm(ctx, &agentpbv2.DataCampaignArmRequest{Name: "ring-cam"})
+		armed <- err
+	}()
+	time.Sleep(100 * time.Millisecond)
+	close(blocker.release)
+	if err := <-removed; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-armed; status.Code(err) != codes.NotFound {
+		t.Fatalf("arm during remove: %v, want NotFound once the remove completed", err)
+	}
+	if _, err := service.manager.Campaign("ring-cam"); err == nil {
+		t.Fatal("campaign still deployed")
+	}
+	time.Sleep(200 * time.Millisecond)
+	if arming.holding("ring-cam") {
+		t.Fatal("pre-roll ring still held for a removed campaign")
+	}
+}
+
+// A deploy that lands while a forced remove is stopping the recording reports
+// that the new plan is stored. The remove must then keep that plan, disarmed,
+// rather than delete it.
+func TestDeployDuringForcedRemoveIsKept(t *testing.T) {
+	service, _, _ := newCampaignStateService(t, t.TempDir())
+	blocker := newBlockingStopAdapter()
+	service.addAdapter(blocker)
+	ctx := context.Background()
+	mustDeploy(t, service, ringCampaignYAML)
+	if _, err := service.CampaignTrigger(ctx, &agentpbv2.DataCampaignTriggerRequest{Name: "ring-cam"}); err != nil {
+		t.Fatal(err)
+	}
+	removed := make(chan error, 1)
+	go func() {
+		_, err := service.CampaignRemove(ctx, &agentpbv2.DataCampaignRemoveRequest{Name: "ring-cam", Force: true})
+		removed <- err
+	}()
+	<-blocker.entered
+	edited := []byte(strings.Replace(ringCampaignYAML, "buffer: 2s", "buffer: 3s", 1))
+	deployed, err := service.CampaignDeploy(ctx, &agentpbv2.DataCampaignDeployRequest{CampaignYaml: edited})
+	if err != nil {
+		t.Fatal(err)
+	}
+	close(blocker.release)
+	if err := <-removed; status.Code(err) != codes.FailedPrecondition || !strings.Contains(err.Error(), "deployed again") {
+		t.Fatalf("remove after a concurrent deploy: %v, want FailedPrecondition naming the deploy", err)
+	}
+	kept, err := service.manager.Campaign("ring-cam")
+	if err != nil {
+		t.Fatalf("the plan deployed during the remove is gone: %v", err)
+	}
+	if kept.Revision != deployed.GetRevision() || kept.State != data.CampaignStateDisarmed {
+		t.Fatalf("kept plan = revision %s state %s, want revision %s disarmed", kept.Revision, kept.State, deployed.GetRevision())
+	}
+}

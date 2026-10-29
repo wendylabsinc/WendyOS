@@ -65,6 +65,10 @@ func (m *Manager) SetCampaignState(name, state string) (Campaign, bool, error) {
 	return campaign, true, nil
 }
 
+// ErrCampaignRedeployed is RemoveCampaign's refusal to delete a plan deployed
+// after the caller read the revision it meant to remove.
+var ErrCampaignRedeployed = errors.New("campaign was deployed again")
+
 // removedCampaign is what RemoveCampaign keeps of a plan: the policy the
 // episodes it recorded are still uploaded under.
 type removedCampaign struct {
@@ -92,12 +96,17 @@ func (m *Manager) removedCampaignPath(name string) string {
 // had recorded. CampaignForUpload reads the record.
 //
 // The caller stops the campaign first. This only changes what is stored.
-func (m *Manager) RemoveCampaign(name string) (Campaign, error) {
+// A non-empty revision must match the stored plan's: a plan deployed since the
+// caller read it is kept, and ErrCampaignRedeployed is returned.
+func (m *Manager) RemoveCampaign(name, revision string) (Campaign, error) {
 	m.campaignMu.Lock()
 	defer m.campaignMu.Unlock()
 	campaign, err := m.Campaign(name)
 	if err != nil {
 		return Campaign{}, err
+	}
+	if revision != "" && campaign.Revision != revision {
+		return Campaign{}, ErrCampaignRedeployed
 	}
 	record, err := json.MarshalIndent(removedCampaign{Name: campaign.Name, Revision: campaign.Revision, Fleet: campaign.Fleet, Upload: campaign.Upload, RemovedUnixNanos: time.Now().UnixNano()}, "", "  ")
 	if err != nil {

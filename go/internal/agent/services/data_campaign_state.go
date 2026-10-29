@@ -20,9 +20,21 @@ const campaignStopWait = 10 * time.Second
 // CampaignArm switches a disarmed campaign back on: its triggers fire again,
 // its inference restarts and its camera pre-roll is re-armed.
 func (s *DataService) CampaignArm(_ context.Context, req *agentpbv2.DataCampaignArmRequest) (*agentpbv2.DataCampaignArmResponse, error) {
-	campaign, changed, err := s.manager.SetCampaignState(req.GetName(), data.CampaignStateArmed)
+	name := req.GetName()
+	// Resolve the name before taking its lock, as disarmCampaign does.
+	if _, err := s.manager.Campaign(name); err != nil {
+		return nil, campaignLookupError(name, err)
+	}
+	// The key lock orders this after a disarm or a remove in progress. A
+	// remove holds it while a forced recording stops; arming without it let
+	// the state flip back to armed in that window, the ring was armed again,
+	// and the plan was then deleted with the camera still held for it.
+	lock := s.keyLock(name)
+	lock.Lock()
+	campaign, changed, err := s.manager.SetCampaignState(name, data.CampaignStateArmed)
+	lock.Unlock()
 	if err != nil {
-		return nil, campaignLookupError(req.GetName(), err)
+		return nil, campaignLookupError(name, err)
 	}
 	if changed {
 		// Both subscribe to cameras, so they run off the request path, exactly
@@ -130,7 +142,8 @@ func (s *DataService) removeCampaign(ctx context.Context, name string, force boo
 	if recording && !force {
 		return data.Campaign{}, nil, status.Errorf(codes.FailedPrecondition, "campaign %s is recording episode %s; wait for it to be sealed, or remove the campaign with --force to stop and seal that recording first", name, session.ID)
 	}
-	if _, _, err := s.manager.SetCampaignState(name, data.CampaignStateDisarmed); err != nil {
+	disarmed, _, err := s.manager.SetCampaignState(name, data.CampaignStateDisarmed)
+	if err != nil {
 		return data.Campaign{}, nil, campaignLookupError(name, err)
 	}
 	if arming := s.arming(); arming != nil {
@@ -144,9 +157,21 @@ func (s *DataService) removeCampaign(ctx context.Context, name string, force boo
 		}
 		sealed = episode
 	}
-	removed, err := s.manager.RemoveCampaign(name)
+	// Remove only the plan that was disarmed above. A deploy doesn't take
+	// this lock, so one that landed while a forced recording stopped has
+	// stored a new plan and told its caller so; deleting that plan would
+	// lose a deploy that reported success.
+	removed, err := s.manager.RemoveCampaign(name, disarmed.Revision)
+	if errors.Is(err, data.ErrCampaignRedeployed) {
+		return data.Campaign{}, nil, status.Errorf(codes.FailedPrecondition, "campaign %s was deployed again while it was being removed, so it is left deployed and disarmed with the new plan; run remove again to remove it", name)
+	}
 	if err != nil {
 		return data.Campaign{}, nil, campaignLookupError(name, err)
+	}
+	// Release the ring once more, for a re-arm that was already in flight
+	// when the plan went.
+	if arming := s.arming(); arming != nil {
+		arming.Disarm(name)
 	}
 	return removed, sealed, nil
 }

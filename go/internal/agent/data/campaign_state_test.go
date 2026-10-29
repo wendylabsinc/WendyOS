@@ -173,7 +173,7 @@ func TestRemoveCampaignDeletesThePlanAndKeepsItsUploadPolicy(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	removed, err := m.RemoveCampaign("dock-door")
+	removed, err := m.RemoveCampaign("dock-door", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -198,7 +198,7 @@ func TestRemoveCampaignDeletesThePlanAndKeepsItsUploadPolicy(t *testing.T) {
 	if policy.Upload.When != "manual" || policy.UploadMaxRateBytes() != 1_000_000 || policy.Revision != deployed.Revision {
 		t.Fatalf("upload policy kept for the removed campaign = %+v", policy)
 	}
-	if _, err := restarted.RemoveCampaign("dock-door"); !errors.Is(err, os.ErrNotExist) {
+	if _, err := restarted.RemoveCampaign("dock-door", ""); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("removing twice: %v, want os.ErrNotExist", err)
 	}
 	if _, err := restarted.CampaignForUpload("never-deployed"); !errors.Is(err, os.ErrNotExist) {
