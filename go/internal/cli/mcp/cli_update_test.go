@@ -141,9 +141,9 @@ func TestCLIUpdateStatusPrefersLatestReleaseOverLegacyPendingValue(t *testing.T)
 }
 
 // A CLI the Wendy plugin's launcher installed gets the plugin advice and the
-// CLI installer as its command in the notice the assistant sees, matching the
-// terminal notice. wendy update recognizes no updater for that copy, so any
-// other install keeps "Update with: wendy update".
+// CLI installer as its command in wendy_status and in the daily tool-result
+// notice, matching the terminal notice. wendy update recognizes no updater for
+// that copy, so any other install keeps "Update with: wendy update".
 func TestCLIUpdatePluginManagedAdvice(t *testing.T) {
 	releasedCLI(t)
 	for _, managed := range []bool{true, false} {
@@ -159,6 +159,9 @@ func TestCLIUpdatePluginManagedAdvice(t *testing.T) {
 		if !info.Available || info.UpdateCommand != command ||
 			!strings.Contains(info.Message, advice) || !strings.Contains(info.Message, "restart the Wendy MCP server") {
 			t.Errorf("managed=%v: update guidance %+v, want command %q and message with %q", managed, info, command, advice)
+		}
+		if notice := cliUpdateNotice(info); !strings.Contains(notice, advice) || (managed && strings.Contains(notice, "Update with:")) {
+			t.Errorf("managed=%v: tool-result notice %q, want it to give %q", managed, notice, advice)
 		}
 	}
 }

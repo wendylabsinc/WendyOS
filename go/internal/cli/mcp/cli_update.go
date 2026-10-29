@@ -24,6 +24,9 @@ type cliUpdateInfo struct {
 	UpdateCommand   string `json:"update_command,omitempty"`
 	RestartRequired bool   `json:"restart_required,omitempty"`
 	Message         string `json:"message,omitempty"`
+
+	// advice is how to update, shared by Message and cliUpdateNotice.
+	advice string
 }
 
 // pluginManagedCLI is pluginmode.ManagedCLI; a variable so tests can pose as
@@ -54,20 +57,20 @@ func (s *mcpServer) cliUpdateStatus() cliUpdateInfo {
 	info.LatestVersion = latest
 	info.UpdateCommand = cliupdate.Command(runtime.GOOS)
 	info.RestartRequired = true
-	advice := "Update with: " + info.UpdateCommand
+	info.advice = "Update with: " + info.UpdateCommand
 	if pluginManagedCLI() {
 		// wendy update recognizes no updater for the launcher's copy.
 		info.UpdateCommand = cliupdate.InstallCommand(runtime.GOOS)
-		advice = cliupdate.PluginAdvice(runtime.GOOS)
+		info.advice = cliupdate.PluginAdvice(runtime.GOOS)
 	}
-	info.Message = fmt.Sprintf("A new Wendy CLI version is available: %s (running %s). %s. Then restart the Wendy MCP server to load the new version and tools.", info.LatestVersion, version.Version, advice)
+	info.Message = fmt.Sprintf("A new Wendy CLI version is available: %s (running %s). %s. Then restart the Wendy MCP server to load the new version and tools.", info.LatestVersion, version.Version, info.advice)
 	return info
 }
 
 // cliUpdateNotice asks the assistant to raise the update. Only the daily tool
 // result notice carries it; wendy_status returns the plain Message on every call.
 func cliUpdateNotice(info cliUpdateInfo) string {
-	return fmt.Sprintf("**WENDY CLI UPDATE AVAILABLE**: %s (running %s). Tell the user about this update now and offer to download it. Update with: %s. Then restart the Wendy MCP server to load the new version and tools. If they defer, remind them tomorrow.", info.LatestVersion, version.Version, info.UpdateCommand)
+	return fmt.Sprintf("**WENDY CLI UPDATE AVAILABLE**: %s (running %s). Tell the user about this update now and offer to download it. %s. Then restart the Wendy MCP server to load the new version and tools. If they defer, remind them tomorrow.", info.LatestVersion, version.Version, info.advice)
 }
 
 // wallClock drops the monotonic reading, which stops while the computer
