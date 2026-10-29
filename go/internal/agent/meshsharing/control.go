@@ -134,7 +134,7 @@ func controlPeer(creds *localmesh.Credentials, state tls.ConnectionState) (local
 	for i, cert := range state.PeerCertificates {
 		chain[i] = cert.Raw
 	}
-	peer, err := creds.Verify(chain, time.Now())
+	peer, err := creds.VerifyTLS(chain, time.Now())
 	if err != nil {
 		return localmesh.Identity{}, err
 	}
