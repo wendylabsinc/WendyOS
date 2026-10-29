@@ -9,7 +9,7 @@ import "golang.org/x/sys/unix"
 func defaultDataRoot() (string, error) {
 	var system, persistent unix.Stat_t
 	if unix.Stat("/", &system) != nil || unix.Stat("/data", &persistent) != nil || system.Dev == persistent.Dev {
-		return DefaultRoot, nil
+		return LegacyRoot, nil
 	}
-	return migrateDataRoot(DefaultRoot, "/data/wendy-agent/data/episodes")
+	return migrateDataRoot(LegacyRoot, "/data/wendy-agent/data/episodes")
 }

@@ -2193,6 +2193,9 @@ const gstInspectTimeout = 10 * time.Second
 // clear the whole cold start: element listing, PipeWire lookup, camera and encoder warm-up.
 const firstFrameTimeout = 20 * time.Second
 
+// cameraIdleTimeout also covers a USB capture that stalls after startup.
+const cameraIdleTimeout = 10 * time.Second
+
 // pipeWireProbeTimeout bounds the format probe below. A raw node yields nothing
 // to a JPEG request, so the probe ends by deadline rather than by error.
 const pipeWireProbeTimeout = 2 * time.Second
@@ -3244,40 +3247,58 @@ func (s *VideoService) runCameraPipeline(ctx context.Context, broadcast func([]b
 		}
 	}()
 
-	// A mismatched pipeline stalls rather than fails: gst stays alive producing nothing and
-	// the read blocks on a pipe with no deadline, so `camera view` hung with no frame and no
-	// error. Kept under the dashboard player's 25s budget so this error wins that race.
-	var timedOut atomic.Bool
-	firstChunk := time.AfterFunc(firstFrameTimeout, func() {
-		timedOut.Store(true)
-		if cmd.Process != nil {
-			cmd.Process.Kill() //nolint:errcheck
-		}
-	})
-	defer firstChunk.Stop()
-
-	// Plain bool, not atomic: the callback runs on this goroutine's read loop.
+	// StdoutPipe is an os.Pipe. Bound every read, including after startup:
+	// a UVC transfer failure can leave gst alive with both output pipes silent.
+	// Returning on timeout runs the teardown above and releases the camera so
+	// subscribers can reconnect, including an app holding a raw subscription.
+	pipe, ok := stdout.(*os.File)
+	if !ok {
+		return status.Error(codes.Internal, "GStreamer output does not support read deadlines")
+	}
+	reader := &cameraPipeReader{pipe: pipe, timeout: firstFrameTimeout, idleTimeout: cameraIdleTimeout}
 	sawChunk := false
-	readErr := pumpEncodedStream(ctx, stdout, enc.codec, broadcast, func() {
+	readErr := pumpEncodedStream(ctx, reader, enc.codec, broadcast, func() {
 		sawChunk = true
-		firstChunk.Stop()
 	})
-	return gstStreamEnd(readErr, timedOut.Load(), sawChunk, ctx.Err())
+	return gstStreamEnd(readErr, errors.Is(readErr, os.ErrDeadlineExceeded), sawChunk, ctx.Err())
 }
 
-// gstStreamEnd maps a finished read loop to a gRPC status. The timeout is
-// checked before the read outcome because enforcing it kills the producer, which
-// ends the read in EOF and so looks identical to a clean exit.
+// cameraPipeReader gives startup a longer budget, then bounds each gap in
+// output. Deadlines belong to the blocking read, so a stale timer callback
+// cannot kill a pipeline that has just delivered another chunk.
+type cameraPipeReader struct {
+	pipe        *os.File
+	timeout     time.Duration
+	idleTimeout time.Duration
+}
+
+func (r *cameraPipeReader) Read(p []byte) (int, error) {
+	if err := r.pipe.SetReadDeadline(time.Now().Add(r.timeout)); err != nil {
+		return 0, err
+	}
+	n, err := r.pipe.Read(p)
+	if n > 0 {
+		r.timeout = r.idleTimeout
+	}
+	return n, err
+}
+
+// gstStreamEnd distinguishes startup failure from a capture that stopped
+// delivering video. Cancellation takes precedence over either timeout.
 func gstStreamEnd(readErr error, timedOut, sawChunk bool, ctxErr error) error {
-	if timedOut && !sawChunk {
+	if ctxErr != nil {
+		return ctxErr
+	}
+	if timedOut {
+		if sawChunk {
+			return status.Errorf(codes.DeadlineExceeded,
+				"camera stopped producing video for %s; reconnect to restart capture", cameraIdleTimeout)
+		}
 		return status.Errorf(codes.DeadlineExceeded,
 			"camera produced no video within %s", firstFrameTimeout)
 	}
 	if readErr == nil {
 		return nil
-	}
-	if ctxErr != nil {
-		return ctxErr
 	}
 	return status.Errorf(codes.Internal, "failed to read GStreamer output: %v", readErr)
 }

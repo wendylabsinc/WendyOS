@@ -42,6 +42,7 @@ cannot grant access or add tools missing from the server.
 - [wendy-project-setup](references/skills/wendy-project-setup/SKILL.md)
 - [wendy-robot-deploy](references/skills/wendy-robot-deploy/SKILL.md)
 - [wendy-template-app](references/skills/wendy-template-app/SKILL.md)
+- [wendy-training](references/skills/wendy-training/SKILL.md)
 
 
 # WendyOS
@@ -66,6 +67,8 @@ and the local Docker provider (`docker`).
   result and logs do not explain: `wendy-device-debug`.
 - No CLI yet: `wendy-install`. First-time user: `wendy-onboarding`. New board
   or empty discovery: `wendy-device-install`.
+- Host training jobs, compute checks, bounded progress and verified artifact
+  retrieval: `wendy-training`.
 - ESP32 boards run Wendy Lite: `wendy docs wendy-lite/getting-started`.
 
 ## CLI commands

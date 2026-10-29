@@ -5,7 +5,6 @@ import (
 	"math"
 	"net/url"
 	"path"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -114,7 +113,9 @@ type InferenceStatus struct {
 	NotificationError string            `json:"notification_error,omitempty"`
 }
 
-// InferenceDirectory is outside the episode quota and upload tree.
+// InferenceDirectory is outside the episode quota and upload tree. It is
+// beside the store, or where an earlier agent downloaded the runtime when the
+// store moved to the data disk; see StoreLocation.InferenceDir.
 func (m *Manager) InferenceDirectory() string {
-	return filepath.Join(filepath.Dir(m.root), "inference")
+	return m.location.InferenceDir
 }

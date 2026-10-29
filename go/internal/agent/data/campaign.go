@@ -632,7 +632,7 @@ func preRollParameterConflicts(c Campaign) []string {
 	return conflicts
 }
 
-func (m *Manager) campaignDir() string { return filepath.Join(filepath.Dir(m.root), "campaigns") }
+func (m *Manager) campaignDir() string { return m.location.CampaignDir }
 
 func (m *Manager) DeployCampaign(contents []byte) (Campaign, error) {
 	campaign, err := ParseCampaign(contents)

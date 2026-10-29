@@ -2,4 +2,4 @@
 
 package data
 
-func defaultDataRoot() (string, error) { return DefaultRoot, nil }
+func defaultDataRoot() (string, error) { return LegacyRoot, nil }
