@@ -177,6 +177,9 @@ func meshPathHint(mesh *models.MeshDevice) string {
 	if mesh.NextHop == "" {
 		return "Attached Wendy Net router"
 	}
+	if mesh.NextHop == mesh.Principal {
+		return fmt.Sprintf("Wendy Net via direct connection; route metric %d", mesh.Metric)
+	}
 	if mesh.NextHopName == "" {
 		return fmt.Sprintf("Wendy Net; route metric %d", mesh.Metric)
 	}
