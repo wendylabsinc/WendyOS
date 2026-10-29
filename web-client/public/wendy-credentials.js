@@ -220,3 +220,121 @@ self.wendyCredentials = (() => {
     },
   };
 })();
+
+/* Pending redirects use their own database: no credential schema upgrade,
+   organization slot, token or signing key is involved. Only Go sees plaintext. */
+self.wendyPending = (() => {
+  const LIFETIME = 10 * 60 * 1000;
+  const MAX_RECORDS = 32;
+  const MAX_BYTES = 8192; // browserauth.MaxRedirectRecord
+  const validHandle = (handle) => /^[A-Za-z0-9_-]{43}$/.test(handle);
+  const live = (record, now) =>
+    Number.isSafeInteger(record?.created) &&
+    record.created <= now && now < record.created + LIFETIME;
+  const aad = (handle, created) =>
+    new TextEncoder().encode(`wendy-pending-v1:${handle}:${created}`);
+  function open() {
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      const request = indexedDB.open("wendy-auth-pending", 1);
+      const fail = (error) => {
+        settled = true;
+        clearTimeout(timer);
+        reject(error);
+      };
+      const timer = setTimeout(() => fail(new Error("Pending sign-in storage timed out")), 5000);
+      request.onupgradeneeded = () => {
+        if (settled) { request.transaction.abort(); return; }
+        request.result.createObjectStore("pending");
+      };
+      request.onsuccess = () => {
+        clearTimeout(timer);
+        const db = request.result;
+        if (settled) { db.close(); return; }
+        settled = true;
+        db.onversionchange = () => db.close();
+        resolve(db);
+      };
+      request.onerror = () => fail(request.error);
+      request.onblocked = () => fail(new Error("Pending sign-in storage is blocked"));
+    });
+  }
+  async function transact(operation) {
+    const db = await open();
+    try {
+      return await new Promise((resolve, reject) => {
+        const tx = db.transaction("pending", "readwrite");
+        let result;
+        let failure;
+        tx.oncomplete = () => resolve(result);
+        tx.onerror = tx.onabort = () => reject(failure || tx.error || new Error("Pending sign-in storage was interrupted"));
+        const store = tx.objectStore("pending");
+        const now = Date.now();
+        const kept = [];
+        const cursor = store.openCursor();
+        cursor.onsuccess = () => {
+          const item = cursor.result;
+          if (item) {
+            if (!live(item.value, now)) item.delete();
+            else kept.push({ handle: item.primaryKey, created: item.value.created });
+            item.continue();
+          } else {
+            try { operation(store, kept, (value) => { result = value; }); }
+            catch (error) { failure = error; tx.abort(); }
+          }
+        };
+      });
+    } finally { db.close(); }
+  }
+  function checkHandle(handle) {
+    if (typeof handle !== "string" || !validHandle(handle))
+      throw new Error("Invalid pending sign-in handle");
+  }
+  return {
+    put: async (handle, bytes) => {
+      checkHandle(handle);
+      if (!(bytes instanceof Uint8Array) || bytes.length === 0 || bytes.length > MAX_BYTES)
+        throw new Error("Invalid pending sign-in size");
+      const created = Date.now();
+      const wrappingKey = await crypto.subtle.generateKey(
+        { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"],
+      );
+      const iv = crypto.getRandomValues(new Uint8Array(12));
+      const wrapped = await crypto.subtle.encrypt(
+        { name: "AES-GCM", iv, additionalData: aad(handle, created) }, wrappingKey, bytes,
+      );
+      await transact((store, kept) => {
+        // The oldest attempts make room rather than locking out every tab: one
+        // whose tab closed at the IdP has no handle left to cancel it with.
+        kept.sort((a, b) => a.created - b.created);
+        for (const { handle } of kept.slice(0, Math.max(0, kept.length - MAX_RECORDS + 1)))
+          store.delete(handle);
+        // add refuses accidental handle reuse instead of replacing an attempt.
+        store.add({ created, wrappingKey, iv, wrapped }, handle);
+      });
+    },
+    take: async (handle) => {
+      checkHandle(handle);
+      const record = await transact((store, _kept, done) => {
+        const request = store.get(handle);
+        request.onsuccess = () => {
+          done(request.result);
+          store.delete(handle);
+        };
+      });
+      if (!record) return undefined;
+      // Decrypt only after deletion commits; two workers cannot consume it.
+      if (!live(record, Date.now()) || record.wrappingKey?.extractable !== false ||
+          !(record.wrapped instanceof ArrayBuffer) || record.wrapped.byteLength > MAX_BYTES + 16)
+        throw new Error("Invalid pending sign-in record");
+      return new Uint8Array(await crypto.subtle.decrypt(
+        { name: "AES-GCM", iv: record.iv, additionalData: aad(handle, record.created) },
+        record.wrappingKey, record.wrapped,
+      ));
+    },
+    delete: async (handle) => {
+      checkHandle(handle);
+      await transact((store) => store.delete(handle));
+    },
+  };
+})();
