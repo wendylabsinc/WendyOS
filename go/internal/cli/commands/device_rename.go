@@ -7,10 +7,18 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+	"github.com/wendylabsinc/wendy/go/internal/cli/cloudrequest"
+	"github.com/wendylabsinc/wendy/go/internal/cli/cloudunenroll"
+	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
+	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
+	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	"github.com/wendylabsinc/wendy/go/proto/gen/cloudpb"
+	cloudpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // maxHostnameLen is the RFC 1035 limit for a single DNS label. Kept in sync with
@@ -28,6 +36,8 @@ func newDeviceRenameCmd() *cobra.Command {
 			"applied to both. The hostname is set literally — no 'wendyos-' prefix is " +
 			"added — though the interactive prompt is prepopulated with 'wendyos-' as a " +
 			"starting point.\n\n" +
+			"Wendy Cloud is renamed first, so a name Cloud refuses (for example, one " +
+			"another device in the organization already uses) leaves the device unchanged.\n\n" +
 			"The name must be a valid DNS label: it starts with a lowercase letter, " +
 			"contains only lowercase letters, digits, and hyphens, does not end with a " +
 			"hyphen, and is at most 63 characters.",
@@ -53,18 +63,28 @@ func newDeviceRenameCmd() *cobra.Command {
 				return err
 			}
 
-			// Step 1: set the hostname on the device (applied live and persisted
-			// across reboots). Done first: if this fails we leave the cloud untouched.
-			if _, err := conn.AgentService.SetHostname(ctx, &agentpb.SetHostnameRequest{Hostname: name}); err != nil {
-				return fmt.Errorf("setting device hostname: %w", err)
+			// Step 1: rename the cloud asset, when the device is enrolled. Done
+			// first: Cloud refuses a name another device in the organization
+			// holds, and that refusal must leave the hostname unchanged too.
+			var assetID any
+			if prov != nil {
+				if isLegacyCloudEnrollment(prov.GetOrganizationId(), prov.GetAssetId()) {
+					assetID, err = prov.GetAssetId(), cloudRenameAsset(ctx, cloudGRPC, prov.GetCloudHost(), prov.GetAssetId(), name)
+				} else {
+					assetID, err = cloudRenameAssetV2(ctx, conn, cloudGRPC, prov.GetCloudHost(), name)
+				}
+				if err != nil {
+					return fmt.Errorf("the Wendy Cloud rename failed, so the device's hostname was not changed: %w", err)
+				}
 			}
 
-			// Step 2: rename the cloud asset, when the device is enrolled.
-			var cloudErr error
-			cloudRenamed := false
-			if prov != nil {
-				cloudErr = cloudRenameAsset(ctx, cloudGRPC, prov.GetCloudHost(), prov.GetAssetId(), name)
-				cloudRenamed = cloudErr == nil
+			// Step 2: set the hostname on the device (applied live and persisted
+			// across reboots).
+			if _, err := conn.AgentService.SetHostname(ctx, &agentpb.SetHostnameRequest{Hostname: name}); err != nil {
+				if prov != nil {
+					return fmt.Errorf("renamed the device to %s in Wendy Cloud, but setting its hostname failed; run 'wendy device rename %s' again to finish: %w", name, name, err)
+				}
+				return fmt.Errorf("setting device hostname: %w", err)
 			}
 
 			// Keep the configured default device pointing at the new hostname.
@@ -74,15 +94,12 @@ func newDeviceRenameCmd() *cobra.Command {
 				out := map[string]any{
 					"hostname":     name,
 					"hostnameSet":  true,
-					"cloudRenamed": cloudRenamed,
+					"cloudRenamed": prov != nil,
 				}
 				if prov == nil {
 					out["cloudSkipped"] = "device not enrolled"
 				} else {
-					out["assetId"] = prov.GetAssetId()
-				}
-				if cloudErr != nil {
-					out["cloudError"] = cloudErr.Error()
+					out["assetId"] = assetID
 				}
 				data, marshalErr := json.MarshalIndent(out, "", "  ")
 				if marshalErr != nil {
@@ -91,18 +108,11 @@ func newDeviceRenameCmd() *cobra.Command {
 				fmt.Println(string(data))
 			} else {
 				fmt.Printf("Hostname set to %s (mDNS: %s.local)\n", tui.Device(name), name)
-				switch {
-				case prov == nil:
+				if prov == nil {
 					fmt.Println(tui.WarningMessage("Device is not enrolled in Wendy Cloud; skipped cloud rename."))
-				case cloudErr != nil:
-					fmt.Println(tui.WarningMessage(fmt.Sprintf("Hostname updated, but the Wendy Cloud rename failed: %v", cloudErr)))
-				default:
-					fmt.Printf("Renamed asset %d in Wendy Cloud.\n", prov.GetAssetId())
+				} else {
+					fmt.Printf("Renamed asset %v in Wendy Cloud.\n", assetID)
 				}
-			}
-
-			if cloudErr != nil {
-				return cloudErr
 			}
 			return nil
 		},
@@ -137,7 +147,57 @@ func resolveRenameName(args []string) (string, error) {
 	return strings.TrimSpace(entered), nil
 }
 
-// cloudRenameAsset renames the device's asset in Wendy Cloud to name.
+// cloudRenameAssetV2 renames a v2 (PKI) enrollment's asset in Wendy Cloud to
+// name with the operator-signed wendycloud.v2 UpdateAsset, and returns the
+// asset UUID. The agent reports only the device principal; Cloud resolves it.
+func cloudRenameAssetV2(ctx context.Context, conn *grpcclient.AgentConnection, cloudGRPC, deviceCloudHost, name string) (string, error) {
+	state, err := agentpbv2.NewWendyProvisioningServiceClient(conn.Conn).IsProvisioned(ctx, &agentpbv2.IsProvisionedRequest{})
+	if err != nil && status.Code(err) != codes.Unimplemented {
+		return "", fmt.Errorf("reading the device's Cloud enrollment: %w", err)
+	}
+	principal, err := certs.ParsePrincipal(state.GetProvisioned().GetPrincipalUri())
+	if err != nil || principal.EntityType != certs.EntityAsset {
+		return "", fmt.Errorf("cannot identify this device's Cloud enrollment; update the Agent with 'wendy device update' and retry")
+	}
+	if deviceCloudHost == "" {
+		return "", fmt.Errorf("the device reports no enrolled Cloud host")
+	}
+	if cloudGRPC != "" && cloudGRPC != deviceCloudHost {
+		return "", fmt.Errorf("--cloud-grpc %s is not the device's enrolled Cloud host %s", cloudGRPC, deviceCloudHost)
+	}
+	auth, err := pickAuthEntry(deviceCloudHost)
+	if err != nil {
+		return "", fmt.Errorf("selecting cloud auth session: %w", err)
+	}
+	if len(auth.Certificates) == 0 || auth.Certificates[0].TenantUUID() != principal.TenantUUID {
+		return "", fmt.Errorf("the selected Wendy Cloud session is not in the device's organization %s; select one with 'wendy auth default' or sign in with 'wendy auth login'", principal.TenantUUID)
+	}
+	cloudConn, err := dialCloudGRPC(auth)
+	if err != nil {
+		return "", err
+	}
+	defer cloudConn.Close()
+	rpcctx, err := cloudContext(ctx, auth)
+	if err != nil {
+		return "", err
+	}
+	tenant, device := principal.TenantUUID, principal.EntityID
+	asset, err := cloudpbv2.NewAssetServiceClient(cloudConn).GetAsset(rpcctx, &cloudpbv2.GetAssetRequest{OrganizationId: &tenant, DeviceId: &device})
+	if err != nil {
+		return "", fmt.Errorf("looking up the device's Cloud asset: %w", err)
+	}
+	if asset.GetOrganizationId() != tenant || cloudunenroll.DeviceID(asset) != device {
+		return "", fmt.Errorf("Wendy Cloud returned a different asset for %s", principal.Principal)
+	}
+	if err := cloudrequest.Invoke(rpcctx, cloudConn, auth, cloudpbv2.AssetService_UpdateAsset_FullMethodName,
+		&cloudpbv2.UpdateAssetRequest{Id: asset.GetId(), Name: &name}, &cloudpbv2.Asset{}); err != nil {
+		return "", fmt.Errorf("renaming asset %s: %w", asset.GetId(), err)
+	}
+	return asset.GetId(), nil
+}
+
+// cloudRenameAsset renames a legacy (numeric) enrollment's asset in Wendy
+// Cloud to name.
 func cloudRenameAsset(ctx context.Context, cloudGRPC, deviceCloudHost string, assetID int32, name string) error {
 	cloudConn, tokenCtx, _, err := dialCloud(ctx, cloudGRPC, deviceCloudHost)
 	if err != nil {

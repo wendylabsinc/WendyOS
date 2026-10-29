@@ -38,7 +38,7 @@ func DeviceEndpoint(cloud, override string) (string, error) {
 		return "", err
 	}
 	host, port, _ := net.SplitHostPort(t)
-	switch host {
+	switch CanonicalAPIHost(host) {
 	case "api.dev.wendy.sh":
 		host = "devices.dev.wendy.sh"
 	case "api.wendy.sh":
@@ -49,6 +49,18 @@ func DeviceEndpoint(cloud, override string) (string, error) {
 	return net.JoinHostPort(host, port), nil
 }
 
+// CanonicalAPIHost maps a Cloud API mirror hostname to its stack's primary
+// hostname. Dev Cloud also serves its API as api.dev.wendy.dev (same listeners
+// and certificate), but its device listener is devices.dev.wendy.sh and it
+// signs every grant with the one issuer https://api.dev.wendy.sh. Anything
+// derived from a Cloud API host must canonicalise it first.
+func CanonicalAPIHost(host string) string {
+	if host == "api.dev.wendy.dev" {
+		return "api.dev.wendy.sh"
+	}
+	return host
+}
+
 // LiteBrokerHost selects the Lite device relay hostname for a Cloud endpoint.
 // Its TLS port is configured independently from the Cloud API port.
 func LiteBrokerHost(cloud string) (string, error) {
@@ -57,10 +69,10 @@ func LiteBrokerHost(cloud string) (string, error) {
 		return "", err
 	}
 	host, _, _ := net.SplitHostPort(t)
-	switch host {
+	switch CanonicalAPIHost(host) {
 	case "api.wendy.sh", "api.wendy.dev":
 		return "tunnel.wendy.dev", nil
-	case "api.dev.wendy.sh", "api.dev.wendy.dev":
+	case "api.dev.wendy.sh":
 		return "tunnel.dev.wendy.dev", nil
 	default:
 		return host, nil
@@ -80,10 +92,11 @@ func Issuer(cloud, override string) (string, error) {
 		return "", err
 	}
 	host, port, _ := net.SplitHostPort(t)
+	host = CanonicalAPIHost(host)
 	if port == "443" {
 		return "https://" + host, nil
 	}
-	return "https://" + t, nil
+	return "https://" + net.JoinHostPort(host, port), nil
 }
 func target(endpoint string) (string, error) {
 	if strings.Contains(endpoint, "://") {

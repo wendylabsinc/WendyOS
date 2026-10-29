@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"net/netip"
 	"strconv"
 	"strings"
 	"time"
@@ -66,7 +67,7 @@ func Verify(ctx context.Context, opts VerifyOptions, connect func(context.Contex
 	out.Reachable = true
 	out.AgentVersion, out.OSVersion, out.DeviceType, out.PublicKey = v.GetVersion(), v.GetOsVersion(), v.GetDeviceType(), v.GetPublicKey()
 	for _, check := range []struct{ name, want, got string }{
-		{"OS version", opts.OSVersion, out.OSVersion},
+		{"OS version", osVersionNumber(opts.OSVersion), osVersionNumber(out.OSVersion)},
 		{"device type", opts.DeviceType, out.DeviceType},
 		{"public key", opts.PublicKey, out.PublicKey},
 	} {
@@ -109,13 +110,41 @@ func verificationAddress(address string) (string, error) {
 	}
 	if host, port, err := net.SplitHostPort(address); err == nil {
 		n, err := strconv.Atoi(port)
-		if host == "" || err != nil || n < 1 || n > 65535 {
+		if host == "" || err != nil || n < 1 || n > 65535 || (strings.Contains(host, ":") && !ipv6Literal(host)) {
 			return "", fmt.Errorf("invalid device host or port")
 		}
 		return address, nil
 	}
-	if strings.Contains(address, ":") && net.ParseIP(address) == nil {
+	host := address
+	bracketed := strings.HasPrefix(host, "[") && strings.HasSuffix(host, "]")
+	if bracketed {
+		host = host[1 : len(host)-1]
+	}
+	if (bracketed || strings.Contains(host, ":")) && !ipv6Literal(host) {
 		return "", fmt.Errorf("invalid device address; use hostname, IP or host:port")
 	}
-	return net.JoinHostPort(address, "50051"), nil
+	return net.JoinHostPort(host, "50051"), nil
+}
+
+// ipv6Literal reports whether host is an IPv6 address, including the zone
+// wendy discover prints for a USB link-local address (fe80::…%en31), which
+// net.ParseIP rejects. Interface names never contain a colon or bracket, so a
+// zone with one is a mangled host:port, not an address.
+func ipv6Literal(host string) bool {
+	ip, err := netip.ParseAddr(host)
+	return err == nil && ip.Is6() && !strings.ContainsAny(ip.Zone(), ":[]")
+}
+
+// osVersionPrefix is the display prefix the agent puts on os_version
+// (WendyOS-0.19.5); the installer and release manifest name the bare release.
+const osVersionPrefix = "WendyOS-"
+
+// osVersionNumber strips osVersionPrefix, in any case, so the version the
+// installer prints and the one the agent reports compare equal. A bare prefix
+// is left alone so it can never become an empty, unchecked expectation.
+func osVersionNumber(v string) string {
+	if len(v) > len(osVersionPrefix) && strings.EqualFold(v[:len(osVersionPrefix)], osVersionPrefix) {
+		return v[len(osVersionPrefix):]
+	}
+	return v
 }

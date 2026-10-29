@@ -31,6 +31,7 @@ type liteEnrollmentDevice interface {
 	SyncTimeChallenge(context.Context, string) (time.Time, error)
 	PushConf(*litepb.WendyConf, liteclient.ConfPushMode, func(uint32, uint32)) error
 	ResetTargetDevice(bool, time.Duration) error
+	WaitReboot(context.Context)
 	Close() error
 }
 
@@ -193,6 +194,7 @@ func runEnrollLiteDevice(cmd *cobra.Command, target models.ExternalDevice, auth 
 	if err = device.ResetTargetDevice(true, 0); err != nil {
 		return fmt.Errorf("configuration stored; reboot the board to enroll: %w", err)
 	}
+	device.WaitReboot(ctx)
 	device.Close()
 	fmt.Fprintln(cmd.OutOrStdout(), "Waiting for the board to obtain and verify its certificate from pki-core...")
 	if err = waitLiteEnrollment(ctx, target); err != nil {

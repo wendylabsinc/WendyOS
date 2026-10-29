@@ -81,10 +81,15 @@ app-provided tools remain visible. Restart the MCP process after upgrading the C
 Cloud devices, and LAN devices enrolled in Wendy Cloud, need a signed-in Wendy
 Cloud session; local simulators and unenrolled LAN devices do not. `wendy_status` reports `auth`
 as `logged_in`, `pending`, `expired`, or `logged_out`. Call `auth_login` to sign
-in without a terminal: it returns a link to show the user, opens it in the
-browser on a desktop session, and finishes in the background (up to five
-minutes). Calling it again while a sign-in is pending returns the same link.
-Cloud tools return `AUTH_REQUIRED` until a session exists.
+in without a terminal: it starts the same Wendy Cloud sign-in as `wendy auth
+login`, returns a link to show the user, opens it in the browser on a desktop
+session, and finishes in the background (up to five minutes). Calling it again
+while a sign-in is pending returns the same link. If the current session can no
+longer be used, the new one becomes current.
+
+The server renews the session's short-lived access token by itself. Cloud tools
+return `AUTH_REQUIRED` when no session exists or Wendy Cloud no longer accepts
+the stored one; call `auth_login` to sign in again.
 
 The link must be opened in a browser on the machine running Wendy; from another
 machine, forward the port in the link's `redirect_uri` over SSH first. If the

@@ -58,8 +58,14 @@ func isolateAnalyticsPreference(t *testing.T, cfg *config.Config) string {
 		t.Setenv(key, "")
 	}
 	t.Setenv("WENDY_ANALYTICS", "")
-	dir := t.TempDir()
-	t.Setenv("WENDY_CONFIG_DIR", dir)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	dir := filepath.Join(home, ".wendy")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("WENDY_CONFIG_DIR", t.TempDir())
 	t.Setenv("WENDY_SECRET_STORE", "file")
 	analytics.Disable()
 	t.Cleanup(analytics.Disable)

@@ -5,10 +5,15 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 
+	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
+	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
+	grpcpeer "google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 )
 
@@ -16,6 +21,53 @@ type legacyUnenrollResult struct {
 	DeviceReset         bool
 	CertificatesRevoked int
 	AssetDeleted        bool
+}
+
+// dialLegacyUnenrollCloudFn is a seam over dialCloud for the numeric legacy
+// unenroll path, so its post-reset handling can be tested against a fake Cloud.
+var dialLegacyUnenrollCloudFn = dialCloud
+
+// legacyResetIdentityKeys names every key this CLI can have filed a reset
+// numeric legacy device's pins under: the urn:wendy:org:<org>:asset:<asset> URN
+// of the enrollment it reported, and the identity key of the certificate it
+// presented on this connection.
+//
+// The two differ whenever that certificate carries a tenant SPIFFE principal —
+// the dual-SAN leaf Cloud mints for an organization with a pki tenant, or one
+// pki-core renewed. The SPKI store then files the device under the principal,
+// and enforceDeviceIdentity backfills it into the config pin, so clearing by
+// the URN alone would leave both pins refusing the unprovisioned device
+// (WDY-3974). The reset erased the certificate, so both names go.
+//
+// Only a direct mTLS connection's peer is the device itself; anything else
+// contributes just the URN.
+func legacyResetIdentityKeys(conn *grpcclient.AgentConnection, verifiedPeer *grpcpeer.Peer, orgID, assetID int32) []string {
+	keys := []string{certs.AssetURN(orgID, assetID)}
+	if conn == nil || !conn.IsMTLS || conn.IsSessionProxy || verifiedPeer == nil {
+		return keys
+	}
+	tlsInfo, ok := verifiedPeer.AuthInfo.(credentials.TLSInfo)
+	if !ok || !tlsInfo.State.HandshakeComplete || len(tlsInfo.State.PeerCertificates) == 0 {
+		return keys
+	}
+	identity, ok, err := certs.IdentityFromCert(tlsInfo.State.PeerCertificates[0])
+	if err != nil || !ok || identity.EntityType != certs.EntityAsset {
+		return keys
+	}
+	if key := identity.IdentityKey(); key != keys[0] {
+		keys = append(keys, key)
+	}
+	return keys
+}
+
+// unpinCommandsFor renders the unpin commands that clear every key in
+// identityKeys, for a message telling the user to finish a clear by hand.
+func unpinCommandsFor(identityKeys []string) string {
+	commands := make([]string, len(identityKeys))
+	for i, key := range identityKeys {
+		commands[i] = "'wendy device unpin " + shellQuoteArg(key) + "'"
+	}
+	return strings.Join(commands, " and ")
 }
 
 // Check Cloud before erasing the only local record of the enrollment. Keep

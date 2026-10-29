@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"context"
 	"encoding/hex"
 	"fmt"
 	"strings"
@@ -19,6 +20,7 @@ type liteUnenrollmentDevice interface {
 	EnrollmentChallenge(bool) (*litepb.WendyComEnrollmentChallenge, error)
 	ResetEnrollment(string, string) error
 	ResetTargetDevice(bool, time.Duration) error
+	WaitReboot(context.Context)
 	Close() error
 }
 
@@ -108,6 +110,7 @@ func runLiteDeviceUnenroll(cmd *cobra.Command, target models.ExternalDevice, clo
 		if err := device.ResetTargetDevice(true, 0); err != nil {
 			return fmt.Errorf("the enrollment identity was cleared but reboot failed; reboot the board before enrolling again: %w", err)
 		}
+		device.WaitReboot(cmd.Context())
 		return nil
 	})
 }

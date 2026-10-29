@@ -75,7 +75,7 @@ func installOrin(ctx context.Context, opts t234InstallOptions) error {
 	if err != nil {
 		return err
 	}
-	provJSON, err := resolveProvisioningJSON(ctx, opts.PreEnroll, name)
+	provJSON, err := resolveProvisioningJSON(ctx, opts.PreEnroll, &name)
 	if err != nil {
 		return err
 	}

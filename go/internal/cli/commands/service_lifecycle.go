@@ -2,6 +2,7 @@ package commands
 
 import (
 	"context"
+	"errors"
 	"os/exec"
 	"sync"
 
@@ -28,6 +29,10 @@ type serviceHookRunner struct {
 	wg   sync.WaitGroup
 	mu   sync.Mutex
 	cmds []*exec.Cmd // cli-hook children to reap in attached mode
+	// tunnels holds the cloud app tunnels this run's services opened (see
+	// resolveHookRoute); reap closes them. A watch session keeps its own set
+	// in watchState so its tunnels outlive one deploy cycle.
+	tunnels appTunnelSet
 }
 
 // runOne runs the readiness→announce→postStart sequence for a single service
@@ -58,11 +63,12 @@ type serviceHookRunner struct {
 // address, so it prefers the agent-reported IP when one is available; and a
 // cloud-tunnel connection's Host is the unresolvable asset name, so without
 // the mesh it uses the agent-reported LAN address only when that answers from
-// this machine; otherwise readiness and the hook are skipped with
-// cloudHostSkipNotice. resolveHookHost's announcement runs before the
-// readiness wait (not after a successful one), mirroring run.go's documented
-// tradeoff: the "App reachable at" line prints regardless of whether this
-// service's probe later fails.
+// this machine; otherwise resolveHookRoute forwards the service's presented
+// port through Wendy Cloud (a tunnel tied to hookCtx), and readiness and the
+// hook are skipped with cloudHostSkipNotice only when it cannot.
+// resolveHookRoute's announcement runs before the readiness wait (not after a
+// successful one), mirroring run.go's documented tradeoff: the "App reachable
+// at" line prints regardless of whether this service's probe later fails.
 func (r *serviceHookRunner) runOne(ctx, hookCtx context.Context, cfg *appconfig.AppConfig) {
 	if cfg == nil {
 		return
@@ -83,20 +89,24 @@ func (r *serviceHookRunner) runOne(ctx, hookCtx context.Context, cfg *appconfig.
 		}
 	}()
 
-	hookHost, hostOK := resolveHookHost(ctx, r.conn, cfg)
+	// cfg.ServiceName is "" for the app-level fallback config (see
+	// appLevelLifecycleConfig); containerDisplayName falls back to the bare
+	// AppID in resolveHookRoute's notices rather than printing a dangling
+	// "for :".
+	tunnels := r.opts.watchState.appTunnels()
+	if tunnels == nil {
+		tunnels = &r.tunnels
+	}
+	route, hostOK := resolveHookRoute(ctx, hookCtx, r.conn, cfg, tunnels, r.opts.isWatch())
 	if !hostOK {
-		// cfg.ServiceName is "" for the app-level fallback config (see
-		// appLevelLifecycleConfig); containerDisplayName falls back to the
-		// bare AppID in that case rather than printing a dangling "for :".
-		if ctx.Err() == nil {
-			cliNotice("%s", cloudHostSkipNotice(cfg))
-		}
 		return
 	}
 
 	if !r.opts.hostReadinessConfirmed {
-		if err := waitForAttachedReadiness(ctx, r.conn, cfg, hookHost, r.opts.readinessTimeout); err != nil {
-			if ctx.Err() == nil {
+		if err := route.waitForReadiness(ctx, r.conn, cfg, r.opts.readinessTimeout); err != nil {
+			// A relay Wendy Cloud refused is no readiness failure;
+			// waitForReadiness has said what is skipped.
+			if ctx.Err() == nil && !errors.Is(err, errCloudRelayRefused) {
 				warnReadiness(ctx, r.conn, cfg.AppID, err)
 			}
 			return
@@ -117,7 +127,7 @@ func (r *serviceHookRunner) runOne(ctx, hookCtx context.Context, cfg *appconfig.
 	r.opts.completeHostLifecycle(containerName)
 	completed = true
 
-	cmd := startPostStartHook(hookCtx, effectiveCfg, hookHost, cfg.ServiceName)
+	cmd := startRoutedPostStartHook(hookCtx, effectiveCfg, route, cfg.ServiceName)
 	if cmd != nil {
 		if r.opts.isWatch() {
 			r.opts.watchState.reapCommand(cmd)
@@ -166,7 +176,8 @@ func (r *serviceHookRunner) spawn(fn func()) {
 
 // reap waits for every startAsync'd runOne to finish, then waits on each
 // tracked cli-hook child so its exit status is collected and no zombie is
-// left behind. Callers invoke it after canceling runCtx, mirroring run.go's
+// left behind, then closes the run's cloud app tunnels. Callers invoke it
+// after canceling runCtx, mirroring run.go's
 // `runCancel(); postStartCmd.Wait()`. Wait errors are ignored — the caller
 // only needs the process reaped, not its exit status.
 func (r *serviceHookRunner) reap() {
@@ -177,6 +188,7 @@ func (r *serviceHookRunner) reap() {
 	for _, cmd := range cmds {
 		_ = cmd.Wait()
 	}
+	r.tunnels.closeAll()
 }
 
 // lifecycleConfig returns a private synthetic AppConfig for CLI-side lifecycle

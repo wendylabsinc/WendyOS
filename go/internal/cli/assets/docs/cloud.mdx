@@ -55,11 +55,12 @@ using the selector returned by discovery:
 
 ```sh
 wendy discover
-wendy cloud enroll-device --device <local-device-selector> --name shop-floor-01
+wendy device enroll --device <local-device-selector> --name shop-floor-01
 wendy cloud discover --all
 ```
 
-The device receives its own identity and Cloud binding. Wait for it to appear
+`wendy cloud enroll-device` is an alias for `wendy device enroll`. The device
+receives its own identity and Cloud binding. Wait for it to appear
 online before trying remote commands. A successful sign-in alone does not
 enroll a device. For an already enrolled v1 device, use the
 [migration guide](/docs/cloud-migration) instead of repeating enrollment.

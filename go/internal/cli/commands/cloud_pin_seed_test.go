@@ -1,12 +1,222 @@
 package commands
 
 import (
+	"context"
+	"fmt"
 	"os"
+	"path/filepath"
 	"testing"
 
+	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
+	"github.com/wendylabsinc/wendy/go/internal/shared/flock"
 	"github.com/wendylabsinc/wendy/go/proto/gen/cloudpb"
+	cloudpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
 )
+
+func TestUUIDCloudDiscoveryReplacesLegacyHostnamePin(t *testing.T) {
+	for _, fail := range []bool{false, true} {
+		t.Run(map[bool]string{false: "complete roster", true: "failed roster"}[fail], func(t *testing.T) {
+			auth := discoveryV2Auth(t, 1, fail)
+			cfg := &config.Config{Auth: []config.AuthConfig{*auth}}
+			cfg.SetDevicePinFrom("online-device", 77, "old-cloud.test:443", "625", "", config.PinSourceCloud)
+			before, _ := cfg.DevicePinFor("online-device")
+			if err := config.Save(cfg); err != nil {
+				t.Fatal(err)
+			}
+			_, fetchErr := fetchCloudDiscoveryDevices(context.Background(), auth, true)
+			cfg, err := config.Load()
+			if err != nil {
+				t.Fatal(err)
+			}
+			pin, _ := cfg.DevicePinFor("online-device.local")
+			if fail {
+				if fetchErr == nil || pin != before {
+					t.Fatalf("failed roster changed trust: err=%v pin=%+v", fetchErr, pin)
+				}
+				return
+			}
+			if fetchErr != nil {
+				t.Fatal(fetchErr)
+			}
+			id := "00000000-0000-4000-8000-000000000001"
+			principal := certs.DeviceSPIFFEURI(testOperatorTenant, id)
+			if pin.Principal != principal || pin.AssetID != id || pin.OrgID != 0 || pin.CloudGRPC != auth.CloudGRPC || pin.Source != config.PinSourceCloud {
+				t.Fatalf("legacy hostname pin not refreshed: %+v", pin)
+			}
+			obs := observedDeviceIdentity{mTLS: true, assetID: id, principal: principal}
+			if _, err := applyDeviceIdentity(cfg, "online-device.local", "", obs); err != nil {
+				t.Fatalf("refreshed hostname rejected: %v", err)
+			}
+			obs.principal = certs.DeviceSPIFFEURI(pinUUIDOtherTenant, id)
+			if _, err := applyDeviceIdentity(cfg, "online-device.local", "", obs); err == nil {
+				t.Fatal("accepted a different tenant after refreshing")
+			}
+		})
+	}
+}
+
+func TestUUIDCloudPinsIgnoreUnboundAssets(t *testing.T) {
+	t.Setenv("WENDY_CONFIG_DIR", t.TempDir())
+	auth := &config.AuthConfig{CloudGRPC: "cloud.test:443", Certificates: []config.CertificateInfo{{PrincipalURI: "spiffe://wendy.sh/tenant/" + pinUUIDTenant + "/operator/test"}}}
+	assets := []*cloudpbv2.Asset{
+		nil,
+		{Id: pinUUIDDevice, Name: "missing-tenant"},
+		{Id: pinUUIDDevice, Name: "other-tenant", OrganizationId: pinUUIDOtherTenant},
+		{Id: pinUUIDDevice, OrganizationId: pinUUIDTenant},
+		{Name: "missing-id", OrganizationId: pinUUIDTenant},
+	}
+	if err := seedPinsFromCloudAssetsV2(auth, assets); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cfg.DevicePins) != 0 {
+		t.Fatalf("unbound assets created pins: %+v", cfg.DevicePins)
+	}
+}
+
+func TestUUIDCloudPinsUsePKIBinding(t *testing.T) {
+	t.Setenv("WENDY_CONFIG_DIR", t.TempDir())
+	auth := &config.AuthConfig{CloudGRPC: "cloud.test:443", Certificates: []config.CertificateInfo{{PrincipalURI: "spiffe://wendy.sh/tenant/" + pinUUIDTenant + "/operator/test"}}}
+	deviceName := pinUUIDDevice
+	asset := &cloudpbv2.Asset{Id: "different-cloud-row-id", Name: "bound-device", OrganizationId: pinUUIDTenant, PkiDeviceName: &deviceName}
+	if err := seedPinsFromCloudAssetsV2(auth, []*cloudpbv2.Asset{asset}); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pin, ok := cfg.DevicePinFor(asset.Name)
+	if !ok || pin.AssetID != deviceName || pin.Principal != certs.DeviceSPIFFEURI(pinUUIDTenant, deviceName) {
+		t.Fatalf("pin used the Cloud row ID instead of its PKI binding: %+v", pin)
+	}
+}
+
+// A pinned name that Cloud now gives to another device must stay refused.
+// Every Cloud lookup seeds, so a seed that replaced the pinned principal would
+// let the retry of a refused connection reach the name's new holder.
+func TestUUIDCloudLookupKeepsPinnedNameRefused(t *testing.T) {
+	auth := discoveryV2Auth(t, 1, false)
+	removed := "00000000-0000-4000-8000-000000000099"
+	cfg := &config.Config{Auth: []config.AuthConfig{*auth}}
+	cfg.SetDevicePin("online-device", 0, auth.CloudGRPC, removed, certs.DeviceSPIFFEURI(testOperatorTenant, removed))
+	before, _ := cfg.DevicePinFor("online-device")
+	if err := config.Save(cfg); err != nil {
+		t.Fatal(err)
+	}
+	for attempt := 1; attempt <= 2; attempt++ {
+		cfg, err := config.Load()
+		if err != nil {
+			t.Fatal(err)
+		}
+		pin, _ := cfg.DevicePinFor("online-device")
+		if pin != before {
+			t.Fatalf("attempt %d: a Cloud lookup replaced the pinned identity: %+v", attempt, pin)
+		}
+		selector := cloudDefaultSelector("online-device", expectedIdentityForPin(pin))
+		if _, err := pickCloudDiscoveryDevice(context.Background(), auth, selector, ""); err == nil {
+			t.Fatalf("attempt %d reached the name's new holder", attempt)
+		}
+	}
+}
+
+func TestUUIDCloudPinsKeepOtherPrincipals(t *testing.T) {
+	t.Setenv("WENDY_CONFIG_DIR", t.TempDir())
+	auth := &config.AuthConfig{CloudGRPC: "cloud.test:443", Certificates: []config.CertificateInfo{{PrincipalURI: "spiffe://wendy.sh/tenant/" + pinUUIDTenant + "/operator/test"}}}
+	id := func(n int) string { return fmt.Sprintf("00000000-0000-4000-8000-%012d", n) }
+	cfg := &config.Config{}
+	cfg.SetDevicePin("renamed", 0, auth.CloudGRPC, pinUUIDDevice, certs.DeviceSPIFFEURI(pinUUIDTenant, pinUUIDDevice))
+	cfg.SetDevicePin("gateway", 0, "other-cloud.test:443", id(2), certs.DeviceSPIFFEURI(pinUUIDOtherTenant, id(2)))
+	cfg.SetDevicePin("same-device", 0, "old-cloud.test:443", id(3), certs.DeviceSPIFFEURI(pinUUIDTenant, id(3)))
+	renamed, _ := cfg.DevicePinFor("renamed")
+	gateway, _ := cfg.DevicePinFor("gateway")
+	if err := config.Save(cfg); err != nil {
+		t.Fatal(err)
+	}
+	assets := []*cloudpbv2.Asset{
+		{Id: id(1), Name: "renamed", OrganizationId: pinUUIDTenant},
+		{Id: id(2), Name: "gateway", OrganizationId: pinUUIDTenant},
+		{Id: id(3), Name: "same-device", OrganizationId: pinUUIDTenant},
+	}
+	if err := seedPinsFromCloudAssetsV2(auth, assets); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pin, _ := cfg.DevicePinFor("renamed"); pin != renamed {
+		t.Fatalf("roster moved a pinned name to another device: %+v", pin)
+	}
+	if pin, _ := cfg.DevicePinFor("gateway"); pin != gateway {
+		t.Fatalf("roster replaced another tenant's pin: %+v", pin)
+	}
+	want := config.DevicePin{CloudGRPC: auth.CloudGRPC, AssetID: id(3), Principal: certs.DeviceSPIFFEURI(pinUUIDTenant, id(3)), Source: config.PinSourceCloud}
+	if pin, _ := cfg.DevicePinFor("same-device"); pin != want {
+		t.Fatalf("pin for the same principal not refreshed: %+v", pin)
+	}
+}
+
+// resolveCloudDiscoveryDevice refuses a name two assets share. Pinning either
+// asset would refuse the other one on the LAN.
+func TestUUIDCloudPinsSkipSharedNames(t *testing.T) {
+	t.Setenv("WENDY_CONFIG_DIR", t.TempDir())
+	auth := &config.AuthConfig{CloudGRPC: "cloud.test:443", Certificates: []config.CertificateInfo{{PrincipalURI: "spiffe://wendy.sh/tenant/" + pinUUIDTenant + "/operator/test"}}}
+	id := func(n int) string { return fmt.Sprintf("00000000-0000-4000-8000-%012d", n) }
+	cfg := &config.Config{}
+	cfg.SetDevicePinFrom("gateway", 77, "old-cloud.test:443", "625", "", config.PinSourceCloud)
+	before, _ := cfg.DevicePinFor("gateway")
+	if err := config.Save(cfg); err != nil {
+		t.Fatal(err)
+	}
+	assets := []*cloudpbv2.Asset{
+		{Id: id(1), Name: "Robot", OrganizationId: pinUUIDTenant},
+		{Id: id(2), Name: "robot.local", OrganizationId: pinUUIDTenant},
+		{Id: id(3), Name: "gateway", OrganizationId: pinUUIDTenant},
+		{Id: id(4), Name: "gateway", OrganizationId: pinUUIDTenant},
+		{Id: id(5), Name: "solo", OrganizationId: pinUUIDTenant},
+	}
+	if err := seedPinsFromCloudAssetsV2(auth, assets); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pin, ok := cfg.DevicePinFor("robot"); ok {
+		t.Fatalf("pinned a name two assets share: %+v", pin)
+	}
+	if pin, _ := cfg.DevicePinFor("gateway"); pin != before {
+		t.Fatalf("shared name replaced its existing pin: %+v", pin)
+	}
+	if pin, ok := cfg.DevicePinFor("solo"); !ok || pin.AssetID != id(5) {
+		t.Fatalf("unique name not pinned: %+v", pin)
+	}
+}
+
+// Discovery refreshes every 10s in the TUI and runs on every Cloud connect. A
+// roster whose pins already match must not wait on another process's lock.
+func TestUUIDCloudPinsSkipLockWhenUnchanged(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("WENDY_CONFIG_DIR", dir)
+	auth := &config.AuthConfig{CloudGRPC: "cloud.test:443", Certificates: []config.CertificateInfo{{PrincipalURI: "spiffe://wendy.sh/tenant/" + pinUUIDTenant + "/operator/test"}}}
+	assets := []*cloudpbv2.Asset{{Id: pinUUIDDevice, Name: "bound-device", OrganizationId: pinUUIDTenant}}
+	if err := seedPinsFromCloudAssetsV2(auth, assets); err != nil {
+		t.Fatal(err)
+	}
+	release, err := flock.Acquire(filepath.Join(dir, "config.lock"), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	if err := seedPinsFromCloudAssetsV2(auth, assets); err != nil {
+		t.Fatalf("unchanged roster waited on the config lock: %v", err)
+	}
+}
 
 // stubLoadConfigForPin points the loadConfigForPinFn seam at cfg for the
 // duration of a test.

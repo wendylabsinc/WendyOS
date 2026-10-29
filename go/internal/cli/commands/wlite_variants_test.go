@@ -65,6 +65,7 @@ func TestWendyLiteFirmwareID(t *testing.T) {
 		want  string
 	}{
 		{"esp32c6_generic", "esp32c6"},
+		{"esp32s31_mosaico_native", "esp32s31_mosaico_native"},
 		{"esp32c6_generic_native", "esp32c6_native"},
 		{"esp32p4_waveshare_lcd_4b", "esp32p4_waveshare_lcd_4b"},
 	}
