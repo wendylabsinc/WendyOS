@@ -764,7 +764,7 @@ func (n *Node) verifyPeerCertificates(peer meshid.Device, certs []*x509.Certific
 	for i, cert := range certs {
 		chain[i] = cert.Raw
 	}
-	id, err := n.Credentials.Verify(chain, time.Now())
+	id, err := n.Credentials.VerifyTLS(chain, time.Now())
 	if err != nil {
 		return err
 	}

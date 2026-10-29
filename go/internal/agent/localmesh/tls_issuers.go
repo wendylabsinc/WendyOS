@@ -29,6 +29,8 @@ func (c *Credentials) ServerCertificate(hello *tls.ClientHelloInfo) (*tls.Certif
 func (c *Credentials) ConfigureTLSServer(config *tls.Config) {
 	if c.issuerMaterial != nil {
 		c.issuerMaterial.ConfigureServer(config)
+	} else if len(config.Certificates) == 0 && config.GetCertificate == nil {
+		config.Certificates = []tls.Certificate{c.Certificate}
 	}
 }
 func (c *Credentials) knownIssuerCandidates(chain [][]byte, now time.Time) [][]byte {
@@ -40,3 +42,10 @@ func (c *Credentials) knownIssuerCandidates(chain [][]byte, now time.Time) [][]b
 
 // ApplicationProtocol returns the actual service carried by a known variant.
 func ApplicationProtocol(protocol string) string { return meshalpn.Application(protocol) }
+
+// VerifyTLS completes only a TLS presentation from locally available issuers.
+// Signed-record verification uses Verify with its exact advertised chain, so a
+// different cached certificate for the same issuer key cannot change its expiry.
+func (c *Credentials) VerifyTLS(chain [][]byte, now time.Time) (Identity, error) {
+	return c.Verify(c.knownIssuerCandidates(chain, now), now)
+}

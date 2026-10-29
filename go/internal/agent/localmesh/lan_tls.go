@@ -17,7 +17,7 @@ func lanAuthenticatedPeer(c *Credentials, state tls.ConnectionState) (meshid.Dev
 	for i, cert := range state.PeerCertificates {
 		chain[i] = cert.Raw
 	}
-	id, err := c.Verify(chain, time.Now())
+	id, err := c.VerifyTLS(chain, time.Now())
 	if err != nil {
 		return meshid.Device{}, err
 	}

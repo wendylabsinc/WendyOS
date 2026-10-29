@@ -223,7 +223,7 @@ func (s *Server) TLSConfig() *tls.Config {
 			for _, cert := range state.PeerCertificates {
 				chain = append(chain, cert.Raw)
 			}
-			identity, err := s.credentials.Verify(chain, time.Now())
+			identity, err := s.credentials.VerifyTLS(chain, time.Now())
 			if err != nil {
 				return err
 			}

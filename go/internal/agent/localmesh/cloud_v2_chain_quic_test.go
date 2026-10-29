@@ -147,6 +147,7 @@ func TestCloudV2LargeChainQUIC(t *testing.T) {
 		}
 	})
 	t.Run("missing-required-intermediate", func(t *testing.T) {
+		a.issuerMaterial.Clear()
 		server := config(b, a.Device)
 		cert := server.Certificates[0]
 		cert.Certificate = cert.Certificate[:1]

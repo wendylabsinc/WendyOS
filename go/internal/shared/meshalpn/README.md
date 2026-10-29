@@ -38,4 +38,11 @@ WendyOS session tickets record the fingerprints of omitted path candidates.
 If a later handshake no longer holds those candidates, it declines resumption
 and performs a fresh certificate exchange. A cache eviction or process restart
 therefore loses an optimisation rather than breaking an otherwise valid dial.
+A reusable ticket also retains its negotiated protocol alias. The client keeps
+that alias stable while its CA cache warms, so learning additional issuers does
+not needlessly turn the next connection into another full handshake.
 Lite session resumption remains disabled; fresh Lite handshakes send the leaf.
+
+Issuer completion applies to TLS presentations. Signed mesh records continue
+to verify against their exact advertised certificate chain, independently of
+other versions of an issuer that happen to be cached for TLS.

@@ -494,7 +494,7 @@ func (r *runtime) makeServerTLS() *tls.Config {
 				_, err := r.cfg.Credentials.VerifyPrimaryOperator(chain, time.Now())
 				return err
 			}
-			id, err := r.cfg.Credentials.Verify(chain, time.Now())
+			id, err := r.cfg.Credentials.VerifyTLS(chain, time.Now())
 			if err != nil {
 				return err
 			}
@@ -551,6 +551,15 @@ func (r *runtime) acceptLink(ctx context.Context, raw net.Conn) {
 	measured, meter := meterHandshake(roleConn, r.cfg.Logger)
 	handshakeConfig := r.serverTLS.Clone()
 	handshakeConfig.GetConfigForClient = func(hello *tls.ClientHelloInfo) (*tls.Config, error) {
+		selectConfig := func() (*tls.Config, error) {
+			if r.serverTLS.GetConfigForClient != nil {
+				selected, err := r.serverTLS.GetConfigForClient(hello)
+				if err != nil || selected != nil {
+					return selected, err
+				}
+			}
+			return r.serverTLS, nil
+		}
 		selected := ""
 		for _, protocol := range r.serverTLS.NextProtos {
 			for _, offered := range hello.SupportedProtos {
@@ -572,7 +581,7 @@ func (r *runtime) acceptLink(ctx context.Context, raw net.Conn) {
 					return nil, errors.New("BLE operator attachment capacity reached")
 				}
 			}
-			selectedConfig, err := r.serverTLS.GetConfigForClient(hello)
+			selectedConfig, err := selectConfig()
 			if err != nil {
 				return nil, err
 			}
@@ -589,7 +598,7 @@ func (r *runtime) acceptLink(ctx context.Context, raw net.Conn) {
 			}
 			roleConn.target.Store(&incomingConnectionTarget{conn: lease.TrackIncoming(raw)})
 		}
-		return r.serverTLS.GetConfigForClient(hello)
+		return selectConfig()
 	}
 	secure := tls.Server(measured, handshakeConfig)
 	meter.start()
@@ -611,7 +620,7 @@ func (r *runtime) acceptLink(ctx context.Context, raw net.Conn) {
 		for _, cert := range state.PeerCertificates {
 			chain = append(chain, cert.Raw)
 		}
-		if id, verifyErr := r.cfg.Credentials.Verify(chain, time.Now()); verifyErr == nil && !id.Device.IsOperator() && id.Device.Tenant() == r.cfg.Credentials.Device.Tenant() && id.Device != r.cfg.Credentials.Device {
+		if id, verifyErr := r.cfg.Credentials.VerifyTLS(chain, time.Now()); verifyErr == nil && !id.Device.IsOperator() && id.Device.Tenant() == r.cfg.Credentials.Device.Tenant() && id.Device != r.cfg.Credentials.Device {
 			peer = id.Device
 		}
 	}
@@ -1128,7 +1137,7 @@ func (r *runtime) clientTLS(peer candidate) (*tls.Config, *meshid.Device, error)
 		for i, cert := range state.PeerCertificates {
 			raw[i] = cert.Raw
 		}
-		identity, err := r.cfg.Credentials.Verify(raw, time.Now())
+		identity, err := r.cfg.Credentials.VerifyTLS(raw, time.Now())
 		if err != nil {
 			return err
 		}
