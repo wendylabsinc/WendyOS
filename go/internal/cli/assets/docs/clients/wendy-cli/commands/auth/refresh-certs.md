@@ -28,6 +28,13 @@ wendy auth refresh-certs --all
 With `--all`, each result is reported separately. The command exits with an
 error if any renewal fails, even when others succeed.
 
+**Unattended and multi-organization jobs:** A saved selector for a non-current
+context works only until its certificate expires, then needs explicit recovery.
+Before starting jobs, select and refresh each intended context with
+`wendy auth use <context>` and `wendy auth refresh-certs` in a serial setup step,
+or deliberately run `wendy auth refresh-certs --all` and check its exit status.
+Do not let concurrent jobs switch a shared current context.
+
 ## Automatic renewal through your sign-in
 
 The renewal margin is the smaller of 15 minutes and one third of the
