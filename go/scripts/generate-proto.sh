@@ -7,8 +7,8 @@ PROTO_DIR="$(cd "$GO_DIR/../Proto" && pwd)"
 GEN_DIR="$GO_DIR/proto/gen"
 
 case "${1:-}" in
-    ""|--shared-grpc-only|--check-shared-grpc) ;;
-    *) echo "usage: $0 [--shared-grpc-only|--check-shared-grpc]" >&2; exit 1 ;;
+    ""|--shared-grpc-api-contracts-only|--check-shared-grpc-api-contracts) ;;
+    *) echo "usage: $0 [--shared-grpc-api-contracts-only|--check-shared-grpc-api-contracts]" >&2; exit 1 ;;
 esac
 
 export PATH="$PATH:$(go env GOPATH)/bin"
@@ -67,24 +67,24 @@ if [ "${WENDY_PROTO_SKIP_VERSION_CHECK:-0}" != "1" ]; then
 fi
 
 # Migrated gRPC APIs share one source pin and currently generate into cloudpb/v2.
-SHARED_GRPC_PROTOS=(
+SHARED_GRPC_API_CONTRACTS_PROTOS=(
     "wendycloud/v2/mesh.proto"
     "wendycloud/v2/users.proto"
     "wendycloud/v2/tunnel.proto"
 )
-SHARED_GRPC_PATH_ARGS=()
-for proto in "${SHARED_GRPC_PROTOS[@]}"; do
+SHARED_GRPC_API_CONTRACTS_PATH_ARGS=()
+for proto in "${SHARED_GRPC_API_CONTRACTS_PROTOS[@]}"; do
     if [ -e "$PROTO_DIR/$proto" ] || [ -L "$PROTO_DIR/$proto" ]; then
         echo "error: remove Proto/$proto; it is generated from service-protos" >&2
         exit 1
     fi
-    SHARED_GRPC_PATH_ARGS+=(--path "$proto")
+    SHARED_GRPC_API_CONTRACTS_PATH_ARGS+=(--path "$proto")
 done
-SHARED_GRPC_DIR="$(mktemp -d)"
-trap 'rm -rf "$SHARED_GRPC_DIR"' EXIT
+SHARED_GRPC_API_CONTRACTS_DIR="$(mktemp -d)"
+trap 'rm -rf "$SHARED_GRPC_API_CONTRACTS_DIR"' EXIT
 buf export \
     "https://github.com/wendylabsinc/service-protos.git#ref=3f29f59fc72f692a52b91a03a14d465d5e8dbfc7" \
-    "${SHARED_GRPC_PATH_ARGS[@]}" --output "$SHARED_GRPC_DIR"
+    "${SHARED_GRPC_API_CONTRACTS_PATH_ARGS[@]}" --output "$SHARED_GRPC_API_CONTRACTS_DIR"
 
 MODULE="github.com/wendylabsinc/wendy"
 
@@ -241,7 +241,7 @@ CLOUD_V2_PROTOS=(
     "wendycloud/v2/assets.proto"
     "wendycloud/v2/certificates.proto"
     "wendycloud/v2/deployments.proto"
-    "${SHARED_GRPC_PROTOS[@]}"
+    "${SHARED_GRPC_API_CONTRACTS_PROTOS[@]}"
     "wendycloud/v2/notifications.proto"
     "wendycloud/v2/organizations.proto"
     "wendycloud/v2/postbox.proto"
@@ -256,21 +256,21 @@ for p in "${CLOUD_V2_PROTOS[@]}"; do
 done
 
 # CI regenerates the migrated gRPC APIs temporarily and compares their outputs.
-if [ "${1:-}" = --shared-grpc-only ] || [ "${1:-}" = --check-shared-grpc ]; then
-    SHARED_GRPC_OUT="$GEN_DIR/cloudpb/v2"
-    if [ "$1" = --check-shared-grpc ]; then
-        SHARED_GRPC_OUT="$SHARED_GRPC_DIR/generated"
+if [ "${1:-}" = --shared-grpc-api-contracts-only ] || [ "${1:-}" = --check-shared-grpc-api-contracts ]; then
+    SHARED_GRPC_API_CONTRACTS_OUT="$GEN_DIR/cloudpb/v2"
+    if [ "$1" = --check-shared-grpc-api-contracts ]; then
+        SHARED_GRPC_API_CONTRACTS_OUT="$SHARED_GRPC_API_CONTRACTS_DIR/generated"
     fi
-    mkdir -p "$SHARED_GRPC_OUT"
-    protoc --proto_path="$SHARED_GRPC_DIR" \
-        --go_out="$SHARED_GRPC_OUT" --go_opt=module="$CLOUD_V2_PKG" \
-        --go-grpc_out="$SHARED_GRPC_OUT" --go-grpc_opt=module="$CLOUD_V2_PKG" \
-        $CLOUD_V2_M_OPTS "${SHARED_GRPC_PROTOS[@]}"
-    if [ "$1" = --check-shared-grpc ]; then
-        for proto in "${SHARED_GRPC_PROTOS[@]}"; do
+    mkdir -p "$SHARED_GRPC_API_CONTRACTS_OUT"
+    protoc --proto_path="$SHARED_GRPC_API_CONTRACTS_DIR" \
+        --go_out="$SHARED_GRPC_API_CONTRACTS_OUT" --go_opt=module="$CLOUD_V2_PKG" \
+        --go-grpc_out="$SHARED_GRPC_API_CONTRACTS_OUT" --go-grpc_opt=module="$CLOUD_V2_PKG" \
+        $CLOUD_V2_M_OPTS "${SHARED_GRPC_API_CONTRACTS_PROTOS[@]}"
+    if [ "$1" = --check-shared-grpc-api-contracts ]; then
+        for proto in "${SHARED_GRPC_API_CONTRACTS_PROTOS[@]}"; do
             name="${proto##*/}"
             for file in "${name%.proto}.pb.go" "${name%.proto}_grpc.pb.go"; do
-                diff -u "$GEN_DIR/cloudpb/v2/$file" "$SHARED_GRPC_OUT/$file"
+                diff -u "$GEN_DIR/cloudpb/v2/$file" "$SHARED_GRPC_API_CONTRACTS_OUT/$file"
             done
         done
     fi
@@ -351,7 +351,7 @@ echo "Generating Wendy Cloud v2 protos..."
 mkdir -p "$GEN_DIR/cloudpb/v2"
 protoc \
     --proto_path="$PROTO_DIR" \
-    --proto_path="$SHARED_GRPC_DIR" \
+    --proto_path="$SHARED_GRPC_API_CONTRACTS_DIR" \
     --go_out="$GEN_DIR/cloudpb/v2" \
     --go_opt=module="$CLOUD_V2_PKG" \
     $ALL_M_OPTS \
