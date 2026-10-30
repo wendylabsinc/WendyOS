@@ -38,7 +38,9 @@ struct UnitreePairingView: View {
                     }
                     HStack {
                         Button("Enter IP address") { editing = .manual }
-                        Button("Scan again") { actions.submit { await refresh() } }.disabled(loading)
+                        Button("Scan again") { actions.submit { await refresh() } }
+                            .keyboardShortcut("r", modifiers: .command)
+                            .disabled(loading)
                         if loading { ProgressView().controlSize(.small) }
                     }
                 }
@@ -70,7 +72,8 @@ struct UnitreePairingView: View {
         .padding(24)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .task(id: session) { if let initialRobot { robots = [initialRobot]; editing = initialRobot }; await refresh() }
-        .focusedSceneValue(\.devicePaneRefresh, PaneRefreshAction(enabled: !loading && control == nil && editing == nil, perform: { actions.submit { await refresh() } }))
+        // Keep refresh in this view. Publishing a new scene action from the
+        // control sheet can make the parent toolbar invalidate its own layout.
         .alert("Forget Unitree pairing?", isPresented: Binding(get: { forgetting != nil }, set: { if !$0 { forgetting = nil } }), presenting: forgetting) { robot in
             Button("Cancel", role: .cancel) {}
             Button("Forget", role: .destructive) {
