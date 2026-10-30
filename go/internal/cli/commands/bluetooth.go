@@ -30,13 +30,15 @@ func newBluetoothCmd() *cobra.Command {
 		Use:     "bluetooth",
 		Aliases: []string{"bt"},
 		Short:   "Manage Bluetooth on the target device",
-		Hidden:  true,
+		Hidden:  false,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return runBluetoothInteractive(cmd)
 		},
 	}
 
 	cmd.AddCommand(
+		newBluetoothPowerCmd(),
+		newBluetoothModeCmd(),
 		newBluetoothListCmd(),
 		newBluetoothConnectCmd(),
 		newBluetoothDisconnectCmd(),

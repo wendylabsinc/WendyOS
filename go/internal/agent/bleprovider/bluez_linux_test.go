@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/godbus/dbus/v5"
-	"github.com/godbus/dbus/v5/prop"
 	"github.com/wendylabsinc/wendy/go/internal/agent/localmesh"
 	"go.uber.org/zap"
 )
@@ -142,127 +141,11 @@ func TestRuntimeClaimsTargetAndSuppressesDuplicate(t *testing.T) {
 	}
 }
 
-func TestAdvertisementTxPowerCapabilities(t *testing.T) {
-	manager := func(features []string, capability any) map[string]dbus.Variant {
-		return map[string]dbus.Variant{
-			"SupportedFeatures": dbus.MakeVariant(features),
-			"SupportedCapabilities": dbus.MakeVariant(map[string]dbus.Variant{
-				"MaxTxPower": dbus.MakeVariant(capability),
-			}),
-		}
-	}
-	tests := []struct {
-		name    string
-		props   map[string]dbus.Variant
-		want    int16
-		present bool
-	}{
-		{"manager lookup failed", nil, 0, false},
-		{"jetson", manager([]string{"CanSetTxPower"}, int16(8)), 8, true},
-		{"pi without feature", manager([]string{"Other"}, int16(8)), 0, false},
-		{"malformed features", map[string]dbus.Variant{"SupportedFeatures": dbus.MakeVariant("CanSetTxPower")}, 0, false},
-		{"missing features", map[string]dbus.Variant{"SupportedCapabilities": manager(nil, int16(8))["SupportedCapabilities"]}, 0, false},
-		{"missing capabilities", map[string]dbus.Variant{"SupportedFeatures": dbus.MakeVariant([]string{"CanSetTxPower"})}, 0, false},
-		{"wrong capability type", manager([]string{"CanSetTxPower"}, int32(8)), 0, false},
-		{"zero is valid", manager([]string{"CanSetTxPower"}, int16(0)), 0, true},
-		{"clamp bluez upper limit", manager([]string{"CanSetTxPower"}, int16(30)), 20, true},
-		{"bluez lower limit", manager([]string{"CanSetTxPower"}, int16(-127)), -127, true},
-		{"invalid controller maximum", manager([]string{"CanSetTxPower"}, int16(-128)), 0, false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, present := advertisementTxPower(tt.props)
-			if got != tt.want || present != tt.present {
-				t.Fatalf("power=(%d,%v), want (%d,%v)", got, present, tt.want, tt.present)
-			}
-			properties := advertisementProperties("uuid", []byte{1}, tt.props)
-			power, exists := properties["TxPower"]
-			if exists != tt.present {
-				t.Fatalf("TxPower exists=%v, want %v", exists, tt.present)
-			}
-			if exists {
-				value, ok := power.Value.(int16)
-				if !ok || value != tt.want {
-					t.Fatalf("TxPower=%T(%v), want int16(%d)", power.Value, power.Value, tt.want)
-				}
-			}
-			if _, ok := properties["ServiceData"]; !ok {
-				t.Fatal("advertising payload removed")
-			}
-		})
-	}
-}
-
-func TestAdvertisementRegistrationFallsBackToDefaultPower(t *testing.T) {
-	properties := advertisementProperties("uuid", []byte{1}, map[string]dbus.Variant{
-		"SupportedFeatures": dbus.MakeVariant([]string{"CanSetTxPower"}),
-		"SupportedCapabilities": dbus.MakeVariant(map[string]dbus.Variant{
-			"MaxTxPower": dbus.MakeVariant(int16(8)),
-		}),
-	})
-	var exported []bool
-	registrations := 0
-	err := registerAdvertisementWithFallback(properties, func(p map[string]*prop.Prop) error {
-		_, requested := p["TxPower"]
-		exported = append(exported, requested)
-		return nil
-	}, func() error {
-		registrations++
-		if registrations == 1 {
-			return errors.New("BlueZ rejected TxPower")
-		}
-		return nil
-	})
-	if err != nil || registrations != 2 || len(exported) != 2 || !exported[0] || exported[1] {
-		t.Fatalf("fallback err=%v registrations=%d exported=%v", err, registrations, exported)
-	}
-	if _, ok := properties["ServiceData"]; !ok {
-		t.Fatal("fallback removed service advertisement")
-	}
-
-	// A failure without the optional property must not be retried.
-	registrations = 0
-	err = registerAdvertisementWithFallback(advertisementProperties("uuid", []byte{1}, nil), func(map[string]*prop.Prop) error {
-		return nil
-	}, func() error {
-		registrations++
-		return errors.New("adapter unavailable")
-	})
-	if err == nil || registrations != 1 {
-		t.Fatalf("ordinary failure err=%v registrations=%d", err, registrations)
-	}
-
-	// A failure with interval props (e.g. a future re-introduction) must
-	// also fall back to defaults: strip intervals and retry once.
-	withIntervals := advertisementProperties("uuid", []byte{1}, nil)
-	withIntervals["MinInterval"] = &prop.Prop{Value: uint16(160)}
-	withIntervals["MaxInterval"] = &prop.Prop{Value: uint16(320)}
-	registrations = 0
-	err = registerAdvertisementWithFallback(withIntervals, func(map[string]*prop.Prop) error {
-		return nil
-	}, func() error {
-		registrations++
-		if registrations == 1 {
-			return errors.New("BlueZ rejected intervals")
-		}
-		return nil
-	})
-	if err != nil || registrations != 2 {
-		t.Fatalf("interval fallback err=%v registrations=%d", err, registrations)
-	}
-	if _, ok := withIntervals["MinInterval"]; ok {
-		t.Fatal("fallback left MinInterval in place")
-	}
-	if _, ok := withIntervals["MaxInterval"]; ok {
-		t.Fatal("fallback left MaxInterval in place")
-	}
-}
-
 func TestAdvertisementRelaxedIntervalsPresent(t *testing.T) {
 	// golden16: intervals reverted — BlueZ 5.87 rejects them outright.
-	// Advertisement must carry only required props; fallback must strip
-	// any optional interval/power props on registration failure.
-	properties := advertisementProperties("uuid", []byte{1}, nil)
+	// Advertisement must carry only required props; shared radio policy adds
+	// an explicit TX power request when configured.
+	properties := advertisementProperties("uuid", []byte{1})
 	if _, ok := properties["MinInterval"]; ok {
 		t.Fatal("MinInterval present (reverted in golden16)")
 	}
@@ -292,7 +175,7 @@ func TestVersionedBinaryAdvertisementHasNoNameOrUUIDList(t *testing.T) {
 		t.Fatal(err)
 	}
 	raw, _ := a.MarshalBinary()
-	props := advertisementProperties(ServiceUUID(testTenant), raw, nil)
+	props := advertisementProperties(ServiceUUID(testTenant), raw)
 	if len(props) != 2 || props["Type"].Value != "peripheral" {
 		t.Fatalf("unexpected advertised properties: %+v", props)
 	}

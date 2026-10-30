@@ -480,6 +480,383 @@ func (*ForgetBluetoothPeripheralResponse) Descriptor() ([]byte, []int) {
 	return file_wendy_agent_services_v2_bluetooth_service_proto_rawDescGZIP(), []int{8}
 }
 
+// Radio policy applies to every Bluetooth advertisement owned by the agent.
+type BluetoothPowerSetting struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// default, maximum, or dbm. dbm is meaningful only in dbm mode.
+	Mode          string `protobuf:"bytes,1,opt,name=mode,proto3" json:"mode,omitempty"`
+	Dbm           int32  `protobuf:"zigzag32,2,opt,name=dbm,proto3" json:"dbm,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BluetoothPowerSetting) Reset() {
+	*x = BluetoothPowerSetting{}
+	mi := &file_wendy_agent_services_v2_bluetooth_service_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BluetoothPowerSetting) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BluetoothPowerSetting) ProtoMessage() {}
+
+func (x *BluetoothPowerSetting) ProtoReflect() protoreflect.Message {
+	mi := &file_wendy_agent_services_v2_bluetooth_service_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BluetoothPowerSetting.ProtoReflect.Descriptor instead.
+func (*BluetoothPowerSetting) Descriptor() ([]byte, []int) {
+	return file_wendy_agent_services_v2_bluetooth_service_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *BluetoothPowerSetting) GetMode() string {
+	if x != nil {
+		return x.Mode
+	}
+	return ""
+}
+
+func (x *BluetoothPowerSetting) GetDbm() int32 {
+	if x != nil {
+		return x.Dbm
+	}
+	return 0
+}
+
+type GetBluetoothRadioRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetBluetoothRadioRequest) Reset() {
+	*x = GetBluetoothRadioRequest{}
+	mi := &file_wendy_agent_services_v2_bluetooth_service_proto_msgTypes[10]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetBluetoothRadioRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetBluetoothRadioRequest) ProtoMessage() {}
+
+func (x *GetBluetoothRadioRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_wendy_agent_services_v2_bluetooth_service_proto_msgTypes[10]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetBluetoothRadioRequest.ProtoReflect.Descriptor instead.
+func (*GetBluetoothRadioRequest) Descriptor() ([]byte, []int) {
+	return file_wendy_agent_services_v2_bluetooth_service_proto_rawDescGZIP(), []int{10}
+}
+
+type ConfigureBluetoothRadioRequest struct {
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	Advertising *BluetoothPowerSetting `protobuf:"bytes,1,opt,name=advertising,proto3" json:"advertising,omitempty"`
+	Connections *BluetoothPowerSetting `protobuf:"bytes,2,opt,name=connections,proto3" json:"connections,omitempty"`
+	// Empty preserves the mode. A supported mode includes advertising and data.
+	MeshMode      string `protobuf:"bytes,3,opt,name=mesh_mode,json=meshMode,proto3" json:"mesh_mode,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ConfigureBluetoothRadioRequest) Reset() {
+	*x = ConfigureBluetoothRadioRequest{}
+	mi := &file_wendy_agent_services_v2_bluetooth_service_proto_msgTypes[11]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ConfigureBluetoothRadioRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ConfigureBluetoothRadioRequest) ProtoMessage() {}
+
+func (x *ConfigureBluetoothRadioRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_wendy_agent_services_v2_bluetooth_service_proto_msgTypes[11]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ConfigureBluetoothRadioRequest.ProtoReflect.Descriptor instead.
+func (*ConfigureBluetoothRadioRequest) Descriptor() ([]byte, []int) {
+	return file_wendy_agent_services_v2_bluetooth_service_proto_rawDescGZIP(), []int{11}
+}
+
+func (x *ConfigureBluetoothRadioRequest) GetAdvertising() *BluetoothPowerSetting {
+	if x != nil {
+		return x.Advertising
+	}
+	return nil
+}
+
+func (x *ConfigureBluetoothRadioRequest) GetConnections() *BluetoothPowerSetting {
+	if x != nil {
+		return x.Connections
+	}
+	return nil
+}
+
+func (x *ConfigureBluetoothRadioRequest) GetMeshMode() string {
+	if x != nil {
+		return x.MeshMode
+	}
+	return ""
+}
+
+type BluetoothAdvertisingPowerStatus struct {
+	state        protoimpl.MessageState `protogen:"open.v1"`
+	Name         string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	RequestedDbm *int32                 `protobuf:"zigzag32,2,opt,name=requested_dbm,json=requestedDbm,proto3,oneof" json:"requested_dbm,omitempty"`
+	Registered   bool                   `protobuf:"varint,3,opt,name=registered,proto3" json:"registered,omitempty"`
+	Error        string                 `protobuf:"bytes,4,opt,name=error,proto3" json:"error,omitempty"`
+	// Absent when the controller cannot report its selected advertising power.
+	SelectedDbm   *int32 `protobuf:"zigzag32,5,opt,name=selected_dbm,json=selectedDbm,proto3,oneof" json:"selected_dbm,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BluetoothAdvertisingPowerStatus) Reset() {
+	*x = BluetoothAdvertisingPowerStatus{}
+	mi := &file_wendy_agent_services_v2_bluetooth_service_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BluetoothAdvertisingPowerStatus) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BluetoothAdvertisingPowerStatus) ProtoMessage() {}
+
+func (x *BluetoothAdvertisingPowerStatus) ProtoReflect() protoreflect.Message {
+	mi := &file_wendy_agent_services_v2_bluetooth_service_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BluetoothAdvertisingPowerStatus.ProtoReflect.Descriptor instead.
+func (*BluetoothAdvertisingPowerStatus) Descriptor() ([]byte, []int) {
+	return file_wendy_agent_services_v2_bluetooth_service_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *BluetoothAdvertisingPowerStatus) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *BluetoothAdvertisingPowerStatus) GetRequestedDbm() int32 {
+	if x != nil && x.RequestedDbm != nil {
+		return *x.RequestedDbm
+	}
+	return 0
+}
+
+func (x *BluetoothAdvertisingPowerStatus) GetRegistered() bool {
+	if x != nil {
+		return x.Registered
+	}
+	return false
+}
+
+func (x *BluetoothAdvertisingPowerStatus) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
+func (x *BluetoothAdvertisingPowerStatus) GetSelectedDbm() int32 {
+	if x != nil && x.SelectedDbm != nil {
+		return *x.SelectedDbm
+	}
+	return 0
+}
+
+type BluetoothRadioStatus struct {
+	state                        protoimpl.MessageState             `protogen:"open.v1"`
+	Adapter                      string                             `protobuf:"bytes,1,opt,name=adapter,proto3" json:"adapter,omitempty"`
+	Available                    bool                               `protobuf:"varint,2,opt,name=available,proto3" json:"available,omitempty"`
+	SupportedMeshModes           []string                           `protobuf:"bytes,3,rep,name=supported_mesh_modes,json=supportedMeshModes,proto3" json:"supported_mesh_modes,omitempty"`
+	CodedUnavailableReason       string                             `protobuf:"bytes,4,opt,name=coded_unavailable_reason,json=codedUnavailableReason,proto3" json:"coded_unavailable_reason,omitempty"`
+	AdvertisingSetSupported      bool                               `protobuf:"varint,5,opt,name=advertising_set_supported,json=advertisingSetSupported,proto3" json:"advertising_set_supported,omitempty"`
+	AdvertisingMinDbm            *int32                             `protobuf:"zigzag32,6,opt,name=advertising_min_dbm,json=advertisingMinDbm,proto3,oneof" json:"advertising_min_dbm,omitempty"`
+	AdvertisingMaxDbm            *int32                             `protobuf:"zigzag32,7,opt,name=advertising_max_dbm,json=advertisingMaxDbm,proto3,oneof" json:"advertising_max_dbm,omitempty"`
+	ConnectionsSetSupported      bool                               `protobuf:"varint,8,opt,name=connections_set_supported,json=connectionsSetSupported,proto3" json:"connections_set_supported,omitempty"`
+	ConnectionsUnavailableReason string                             `protobuf:"bytes,9,opt,name=connections_unavailable_reason,json=connectionsUnavailableReason,proto3" json:"connections_unavailable_reason,omitempty"`
+	Advertising                  *BluetoothPowerSetting             `protobuf:"bytes,10,opt,name=advertising,proto3" json:"advertising,omitempty"`
+	Connections                  *BluetoothPowerSetting             `protobuf:"bytes,11,opt,name=connections,proto3" json:"connections,omitempty"`
+	Advertisements               []*BluetoothAdvertisingPowerStatus `protobuf:"bytes,12,rep,name=advertisements,proto3" json:"advertisements,omitempty"`
+	MeshMode                     string                             `protobuf:"bytes,13,opt,name=mesh_mode,json=meshMode,proto3" json:"mesh_mode,omitempty"`
+	// Configuration accepted by BlueZ is distinct from measured TX power.
+	Error         string `protobuf:"bytes,14,opt,name=error,proto3" json:"error,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *BluetoothRadioStatus) Reset() {
+	*x = BluetoothRadioStatus{}
+	mi := &file_wendy_agent_services_v2_bluetooth_service_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *BluetoothRadioStatus) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*BluetoothRadioStatus) ProtoMessage() {}
+
+func (x *BluetoothRadioStatus) ProtoReflect() protoreflect.Message {
+	mi := &file_wendy_agent_services_v2_bluetooth_service_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use BluetoothRadioStatus.ProtoReflect.Descriptor instead.
+func (*BluetoothRadioStatus) Descriptor() ([]byte, []int) {
+	return file_wendy_agent_services_v2_bluetooth_service_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *BluetoothRadioStatus) GetAdapter() string {
+	if x != nil {
+		return x.Adapter
+	}
+	return ""
+}
+
+func (x *BluetoothRadioStatus) GetAvailable() bool {
+	if x != nil {
+		return x.Available
+	}
+	return false
+}
+
+func (x *BluetoothRadioStatus) GetSupportedMeshModes() []string {
+	if x != nil {
+		return x.SupportedMeshModes
+	}
+	return nil
+}
+
+func (x *BluetoothRadioStatus) GetCodedUnavailableReason() string {
+	if x != nil {
+		return x.CodedUnavailableReason
+	}
+	return ""
+}
+
+func (x *BluetoothRadioStatus) GetAdvertisingSetSupported() bool {
+	if x != nil {
+		return x.AdvertisingSetSupported
+	}
+	return false
+}
+
+func (x *BluetoothRadioStatus) GetAdvertisingMinDbm() int32 {
+	if x != nil && x.AdvertisingMinDbm != nil {
+		return *x.AdvertisingMinDbm
+	}
+	return 0
+}
+
+func (x *BluetoothRadioStatus) GetAdvertisingMaxDbm() int32 {
+	if x != nil && x.AdvertisingMaxDbm != nil {
+		return *x.AdvertisingMaxDbm
+	}
+	return 0
+}
+
+func (x *BluetoothRadioStatus) GetConnectionsSetSupported() bool {
+	if x != nil {
+		return x.ConnectionsSetSupported
+	}
+	return false
+}
+
+func (x *BluetoothRadioStatus) GetConnectionsUnavailableReason() string {
+	if x != nil {
+		return x.ConnectionsUnavailableReason
+	}
+	return ""
+}
+
+func (x *BluetoothRadioStatus) GetAdvertising() *BluetoothPowerSetting {
+	if x != nil {
+		return x.Advertising
+	}
+	return nil
+}
+
+func (x *BluetoothRadioStatus) GetConnections() *BluetoothPowerSetting {
+	if x != nil {
+		return x.Connections
+	}
+	return nil
+}
+
+func (x *BluetoothRadioStatus) GetAdvertisements() []*BluetoothAdvertisingPowerStatus {
+	if x != nil {
+		return x.Advertisements
+	}
+	return nil
+}
+
+func (x *BluetoothRadioStatus) GetMeshMode() string {
+	if x != nil {
+		return x.MeshMode
+	}
+	return ""
+}
+
+func (x *BluetoothRadioStatus) GetError() string {
+	if x != nil {
+		return x.Error
+	}
+	return ""
+}
+
 var File_wendy_agent_services_v2_bluetooth_service_proto protoreflect.FileDescriptor
 
 const file_wendy_agent_services_v2_bluetooth_service_proto_rawDesc = "" +
@@ -513,8 +890,46 @@ const file_wendy_agent_services_v2_bluetooth_service_proto_rawDesc = "" +
 	"%DisconnectBluetoothPeripheralResponse\"<\n" +
 	" ForgetBluetoothPeripheralRequest\x12\x18\n" +
 	"\aaddress\x18\x01 \x01(\tR\aaddress\"#\n" +
-	"!ForgetBluetoothPeripheralResponse2\xfb\x04\n" +
-	"\x15WendyBluetoothService\x12\x93\x01\n" +
+	"!ForgetBluetoothPeripheralResponse\"=\n" +
+	"\x15BluetoothPowerSetting\x12\x12\n" +
+	"\x04mode\x18\x01 \x01(\tR\x04mode\x12\x10\n" +
+	"\x03dbm\x18\x02 \x01(\x11R\x03dbm\"\x1a\n" +
+	"\x18GetBluetoothRadioRequest\"\xe1\x01\n" +
+	"\x1eConfigureBluetoothRadioRequest\x12P\n" +
+	"\vadvertising\x18\x01 \x01(\v2..wendy.agent.services.v2.BluetoothPowerSettingR\vadvertising\x12P\n" +
+	"\vconnections\x18\x02 \x01(\v2..wendy.agent.services.v2.BluetoothPowerSettingR\vconnections\x12\x1b\n" +
+	"\tmesh_mode\x18\x03 \x01(\tR\bmeshMode\"\xe0\x01\n" +
+	"\x1fBluetoothAdvertisingPowerStatus\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12(\n" +
+	"\rrequested_dbm\x18\x02 \x01(\x11H\x00R\frequestedDbm\x88\x01\x01\x12\x1e\n" +
+	"\n" +
+	"registered\x18\x03 \x01(\bR\n" +
+	"registered\x12\x14\n" +
+	"\x05error\x18\x04 \x01(\tR\x05error\x12&\n" +
+	"\fselected_dbm\x18\x05 \x01(\x11H\x01R\vselectedDbm\x88\x01\x01B\x10\n" +
+	"\x0e_requested_dbmB\x0f\n" +
+	"\r_selected_dbm\"\xcb\x06\n" +
+	"\x14BluetoothRadioStatus\x12\x18\n" +
+	"\aadapter\x18\x01 \x01(\tR\aadapter\x12\x1c\n" +
+	"\tavailable\x18\x02 \x01(\bR\tavailable\x120\n" +
+	"\x14supported_mesh_modes\x18\x03 \x03(\tR\x12supportedMeshModes\x128\n" +
+	"\x18coded_unavailable_reason\x18\x04 \x01(\tR\x16codedUnavailableReason\x12:\n" +
+	"\x19advertising_set_supported\x18\x05 \x01(\bR\x17advertisingSetSupported\x123\n" +
+	"\x13advertising_min_dbm\x18\x06 \x01(\x11H\x00R\x11advertisingMinDbm\x88\x01\x01\x123\n" +
+	"\x13advertising_max_dbm\x18\a \x01(\x11H\x01R\x11advertisingMaxDbm\x88\x01\x01\x12:\n" +
+	"\x19connections_set_supported\x18\b \x01(\bR\x17connectionsSetSupported\x12D\n" +
+	"\x1econnections_unavailable_reason\x18\t \x01(\tR\x1cconnectionsUnavailableReason\x12P\n" +
+	"\vadvertising\x18\n" +
+	" \x01(\v2..wendy.agent.services.v2.BluetoothPowerSettingR\vadvertising\x12P\n" +
+	"\vconnections\x18\v \x01(\v2..wendy.agent.services.v2.BluetoothPowerSettingR\vconnections\x12`\n" +
+	"\x0eadvertisements\x18\f \x03(\v28.wendy.agent.services.v2.BluetoothAdvertisingPowerStatusR\x0eadvertisements\x12\x1b\n" +
+	"\tmesh_mode\x18\r \x01(\tR\bmeshMode\x12\x14\n" +
+	"\x05error\x18\x0e \x01(\tR\x05errorB\x16\n" +
+	"\x14_advertising_min_dbmB\x16\n" +
+	"\x14_advertising_max_dbm2\xf6\x06\n" +
+	"\x15WendyBluetoothService\x12u\n" +
+	"\x11GetBluetoothRadio\x121.wendy.agent.services.v2.GetBluetoothRadioRequest\x1a-.wendy.agent.services.v2.BluetoothRadioStatus\x12\x81\x01\n" +
+	"\x17ConfigureBluetoothRadio\x127.wendy.agent.services.v2.ConfigureBluetoothRadioRequest\x1a-.wendy.agent.services.v2.BluetoothRadioStatus\x12\x93\x01\n" +
 	"\x18ScanBluetoothPeripherals\x128.wendy.agent.services.v2.ScanBluetoothPeripheralsRequest\x1a9.wendy.agent.services.v2.ScanBluetoothPeripheralsResponse(\x010\x01\x12\x95\x01\n" +
 	"\x1aConnectBluetoothPeripheral\x12:.wendy.agent.services.v2.ConnectBluetoothPeripheralRequest\x1a;.wendy.agent.services.v2.ConnectBluetoothPeripheralResponse\x12\x9e\x01\n" +
 	"\x1dDisconnectBluetoothPeripheral\x12=.wendy.agent.services.v2.DisconnectBluetoothPeripheralRequest\x1a>.wendy.agent.services.v2.DisconnectBluetoothPeripheralResponse\x12\x92\x01\n" +
@@ -532,7 +947,7 @@ func file_wendy_agent_services_v2_bluetooth_service_proto_rawDescGZIP() []byte {
 	return file_wendy_agent_services_v2_bluetooth_service_proto_rawDescData
 }
 
-var file_wendy_agent_services_v2_bluetooth_service_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
+var file_wendy_agent_services_v2_bluetooth_service_proto_msgTypes = make([]protoimpl.MessageInfo, 14)
 var file_wendy_agent_services_v2_bluetooth_service_proto_goTypes = []any{
 	(*DiscoveredBluetoothPeripheral)(nil),         // 0: wendy.agent.services.v2.DiscoveredBluetoothPeripheral
 	(*ScanBluetoothPeripheralsRequest)(nil),       // 1: wendy.agent.services.v2.ScanBluetoothPeripheralsRequest
@@ -543,22 +958,36 @@ var file_wendy_agent_services_v2_bluetooth_service_proto_goTypes = []any{
 	(*DisconnectBluetoothPeripheralResponse)(nil), // 6: wendy.agent.services.v2.DisconnectBluetoothPeripheralResponse
 	(*ForgetBluetoothPeripheralRequest)(nil),      // 7: wendy.agent.services.v2.ForgetBluetoothPeripheralRequest
 	(*ForgetBluetoothPeripheralResponse)(nil),     // 8: wendy.agent.services.v2.ForgetBluetoothPeripheralResponse
+	(*BluetoothPowerSetting)(nil),                 // 9: wendy.agent.services.v2.BluetoothPowerSetting
+	(*GetBluetoothRadioRequest)(nil),              // 10: wendy.agent.services.v2.GetBluetoothRadioRequest
+	(*ConfigureBluetoothRadioRequest)(nil),        // 11: wendy.agent.services.v2.ConfigureBluetoothRadioRequest
+	(*BluetoothAdvertisingPowerStatus)(nil),       // 12: wendy.agent.services.v2.BluetoothAdvertisingPowerStatus
+	(*BluetoothRadioStatus)(nil),                  // 13: wendy.agent.services.v2.BluetoothRadioStatus
 }
 var file_wendy_agent_services_v2_bluetooth_service_proto_depIdxs = []int32{
-	0, // 0: wendy.agent.services.v2.ScanBluetoothPeripheralsResponse.discovered_devices:type_name -> wendy.agent.services.v2.DiscoveredBluetoothPeripheral
-	1, // 1: wendy.agent.services.v2.WendyBluetoothService.ScanBluetoothPeripherals:input_type -> wendy.agent.services.v2.ScanBluetoothPeripheralsRequest
-	3, // 2: wendy.agent.services.v2.WendyBluetoothService.ConnectBluetoothPeripheral:input_type -> wendy.agent.services.v2.ConnectBluetoothPeripheralRequest
-	5, // 3: wendy.agent.services.v2.WendyBluetoothService.DisconnectBluetoothPeripheral:input_type -> wendy.agent.services.v2.DisconnectBluetoothPeripheralRequest
-	7, // 4: wendy.agent.services.v2.WendyBluetoothService.ForgetBluetoothPeripheral:input_type -> wendy.agent.services.v2.ForgetBluetoothPeripheralRequest
-	2, // 5: wendy.agent.services.v2.WendyBluetoothService.ScanBluetoothPeripherals:output_type -> wendy.agent.services.v2.ScanBluetoothPeripheralsResponse
-	4, // 6: wendy.agent.services.v2.WendyBluetoothService.ConnectBluetoothPeripheral:output_type -> wendy.agent.services.v2.ConnectBluetoothPeripheralResponse
-	6, // 7: wendy.agent.services.v2.WendyBluetoothService.DisconnectBluetoothPeripheral:output_type -> wendy.agent.services.v2.DisconnectBluetoothPeripheralResponse
-	8, // 8: wendy.agent.services.v2.WendyBluetoothService.ForgetBluetoothPeripheral:output_type -> wendy.agent.services.v2.ForgetBluetoothPeripheralResponse
-	5, // [5:9] is the sub-list for method output_type
-	1, // [1:5] is the sub-list for method input_type
-	1, // [1:1] is the sub-list for extension type_name
-	1, // [1:1] is the sub-list for extension extendee
-	0, // [0:1] is the sub-list for field type_name
+	0,  // 0: wendy.agent.services.v2.ScanBluetoothPeripheralsResponse.discovered_devices:type_name -> wendy.agent.services.v2.DiscoveredBluetoothPeripheral
+	9,  // 1: wendy.agent.services.v2.ConfigureBluetoothRadioRequest.advertising:type_name -> wendy.agent.services.v2.BluetoothPowerSetting
+	9,  // 2: wendy.agent.services.v2.ConfigureBluetoothRadioRequest.connections:type_name -> wendy.agent.services.v2.BluetoothPowerSetting
+	9,  // 3: wendy.agent.services.v2.BluetoothRadioStatus.advertising:type_name -> wendy.agent.services.v2.BluetoothPowerSetting
+	9,  // 4: wendy.agent.services.v2.BluetoothRadioStatus.connections:type_name -> wendy.agent.services.v2.BluetoothPowerSetting
+	12, // 5: wendy.agent.services.v2.BluetoothRadioStatus.advertisements:type_name -> wendy.agent.services.v2.BluetoothAdvertisingPowerStatus
+	10, // 6: wendy.agent.services.v2.WendyBluetoothService.GetBluetoothRadio:input_type -> wendy.agent.services.v2.GetBluetoothRadioRequest
+	11, // 7: wendy.agent.services.v2.WendyBluetoothService.ConfigureBluetoothRadio:input_type -> wendy.agent.services.v2.ConfigureBluetoothRadioRequest
+	1,  // 8: wendy.agent.services.v2.WendyBluetoothService.ScanBluetoothPeripherals:input_type -> wendy.agent.services.v2.ScanBluetoothPeripheralsRequest
+	3,  // 9: wendy.agent.services.v2.WendyBluetoothService.ConnectBluetoothPeripheral:input_type -> wendy.agent.services.v2.ConnectBluetoothPeripheralRequest
+	5,  // 10: wendy.agent.services.v2.WendyBluetoothService.DisconnectBluetoothPeripheral:input_type -> wendy.agent.services.v2.DisconnectBluetoothPeripheralRequest
+	7,  // 11: wendy.agent.services.v2.WendyBluetoothService.ForgetBluetoothPeripheral:input_type -> wendy.agent.services.v2.ForgetBluetoothPeripheralRequest
+	13, // 12: wendy.agent.services.v2.WendyBluetoothService.GetBluetoothRadio:output_type -> wendy.agent.services.v2.BluetoothRadioStatus
+	13, // 13: wendy.agent.services.v2.WendyBluetoothService.ConfigureBluetoothRadio:output_type -> wendy.agent.services.v2.BluetoothRadioStatus
+	2,  // 14: wendy.agent.services.v2.WendyBluetoothService.ScanBluetoothPeripherals:output_type -> wendy.agent.services.v2.ScanBluetoothPeripheralsResponse
+	4,  // 15: wendy.agent.services.v2.WendyBluetoothService.ConnectBluetoothPeripheral:output_type -> wendy.agent.services.v2.ConnectBluetoothPeripheralResponse
+	6,  // 16: wendy.agent.services.v2.WendyBluetoothService.DisconnectBluetoothPeripheral:output_type -> wendy.agent.services.v2.DisconnectBluetoothPeripheralResponse
+	8,  // 17: wendy.agent.services.v2.WendyBluetoothService.ForgetBluetoothPeripheral:output_type -> wendy.agent.services.v2.ForgetBluetoothPeripheralResponse
+	12, // [12:18] is the sub-list for method output_type
+	6,  // [6:12] is the sub-list for method input_type
+	6,  // [6:6] is the sub-list for extension type_name
+	6,  // [6:6] is the sub-list for extension extendee
+	0,  // [0:6] is the sub-list for field type_name
 }
 
 func init() { file_wendy_agent_services_v2_bluetooth_service_proto_init() }
@@ -568,13 +997,15 @@ func file_wendy_agent_services_v2_bluetooth_service_proto_init() {
 	}
 	file_wendy_agent_services_v2_bluetooth_service_proto_msgTypes[0].OneofWrappers = []any{}
 	file_wendy_agent_services_v2_bluetooth_service_proto_msgTypes[4].OneofWrappers = []any{}
+	file_wendy_agent_services_v2_bluetooth_service_proto_msgTypes[12].OneofWrappers = []any{}
+	file_wendy_agent_services_v2_bluetooth_service_proto_msgTypes[13].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_wendy_agent_services_v2_bluetooth_service_proto_rawDesc), len(file_wendy_agent_services_v2_bluetooth_service_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   9,
+			NumMessages:   14,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
