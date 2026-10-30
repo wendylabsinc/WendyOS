@@ -143,3 +143,57 @@ func TestNearbyStaleSessionCannotActOrCloseReplacement(t *testing.T) {
 		t.Fatal("active session did not close")
 	}
 }
+
+func TestNearbyCloudRejectionAllowsExplicitCorrection(t *testing.T) {
+	nearbyTestHooks(t)
+	b := new(Backend)
+	f := new(nearbyFake)
+	nearbyConnectFn = func(context.Context, string) (nearbyConnection, error) { return f, nil }
+	calls := 0
+	nearbyPrepareFn = func(_ context.Context, _, _, _ string, _ *pb.SetupStatusResponse, before func()) (*commands.DesktopNearbyCredential, error) {
+		calls++
+		before()
+		return nil, &commands.NearbyEnrollmentRejectedError{Message: "That device name is already in use. Choose another name."}
+	}
+	s, _ := b.NearbyOpen("board")
+	s, err := b.NearbyAction(s.Session, 3, "", "", "account", "org", "taken-name")
+	if err == nil || s.Attempted || s.Pending || !s.Connected {
+		t.Fatalf("refusal blocked correction: %+v %v", s, err)
+	}
+	_, _ = b.NearbyAction(s.Session, 3, "", "", "account", "org", "new-name")
+	if calls != 2 || f.writes != 0 {
+		t.Fatal("explicit correction did not reach Cloud, or wrote to device")
+	}
+}
+func TestNearbyUnknownMintReplyKeepsCheckingWithoutSendingEnrollment(t *testing.T) {
+	nearbyTestHooks(t)
+	b := new(Backend)
+	f := new(nearbyFake)
+	nearbyConnectFn = func(context.Context, string) (nearbyConnection, error) { return f, nil }
+	c := &commands.DesktopNearbyCredential{DeviceID: "requested-id", Organization: "org"}
+	calls := 0
+	nearbyPrepareFn = func(_ context.Context, _, _, _ string, _ *pb.SetupStatusResponse, before func()) (*commands.DesktopNearbyCredential, error) {
+		calls++
+		before()
+		return c, errors.New("Cloud reply lost")
+	}
+	s, _ := b.NearbyOpen("board")
+	s, err := b.NearbyAction(s.Session, 3, "", "", "account", "org", "board")
+	if err == nil || !s.Attempted || !s.Pending || s.DeviceID != c.DeviceID {
+		t.Fatalf("lost pending identity: %+v %v", s, err)
+	}
+	nearbyCheckFn = func(_ context.Context, got *commands.DesktopNearbyCredential) (bool, error) {
+		if got != c {
+			t.Fatal("checking a different identity")
+		}
+		return false, nil
+	}
+	s, err = b.NearbyAction(s.Session, 4, "", "", "", "", "")
+	if err != nil || !s.Pending || s.Completed {
+		t.Fatalf("check lost pending state: %+v %v", s, err)
+	}
+	_, _ = b.NearbyAction(s.Session, 3, "", "", "account", "org", "board")
+	if calls != 1 || f.writes != 0 {
+		t.Fatal("repeated uncertain mint or sent missing credentials")
+	}
+}

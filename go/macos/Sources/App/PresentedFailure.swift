@@ -9,7 +9,15 @@ struct PresentedFailure {
 
     init(_ raw: String) {
         let lower = raw.lowercased()
-        if lower.contains("local network access denied") {
+        if lower.contains("device name is already in use") {
+            message = "That device name is already in use. Choose another name."
+        } else if lower.contains("cloud rejected the enrollment details") {
+            message = "Check the device name and organization."
+        } else if lower.contains("does not have permission to add devices") {
+            message = "Your account cannot add devices to this organization. Choose another organization or ask an administrator for access."
+        } else if lower.contains("enrollment is not available for this organization") {
+            message = "Enrollment is not available for this organization. Contact your administrator."
+        } else if lower.contains("local network access denied") {
             title = "Allow local network access"
             message = "macOS is blocking Wendy from reaching this device. Allow Wendy in Local Network settings, then find the device again."
         } else if lower.contains("agent does not support network traffic statistics") {

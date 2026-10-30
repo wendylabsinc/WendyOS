@@ -231,10 +231,14 @@ func (b *Backend) NearbyAction(session uint64, action int, ssid, password, accou
 		}
 		n.state.Enrolled = state.GetEnrolled()
 		credential, err := nearbyPrepareFn(ctx, account, organization, name, state, func() { a.attempted = true })
+		a.credential = credential
 		if err != nil {
+			var rejected *commands.NearbyEnrollmentRejectedError
+			if errors.As(err, &rejected) {
+				a.attempted = false
+			}
 			return n.snapshot(), err
 		}
-		a.credential = credential
 		r, err := n.client.Call(ctx, &pb.BluetoothCommand{Command: &pb.BluetoothCommand_SetupEnroll{SetupEnroll: credential.Request}})
 		clear(credential.Request.LiteConfig)
 		credential.Request = nil

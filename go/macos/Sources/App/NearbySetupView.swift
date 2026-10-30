@@ -148,7 +148,7 @@ struct NearbySetupView: View {
         case "connecting": return "Connecting to your Wendy…"
         case "working":
             if !state.attempted && !state.pending { return progress }
-            return state.attempted && !state.pending && !editingLocked ? "Let’s check one thing." : "Making it yours…"
+            return state.attempted && !editingLocked ? "Checking enrollment…" : "Making it yours…"
         default: return "Make it yours."
         }
     }
@@ -161,7 +161,7 @@ struct NearbySetupView: View {
         case "working":
             if !state.attempted && !state.pending && progress == "Connecting to Wi-Fi…" { return "We’ll continue when your device is connected." }
             if state.attempted && !state.pending && !editingLocked {
-                return "Enrollment was requested, but we couldn’t confirm the result. Check your organization’s devices before starting again."
+                return "We haven’t received confirmation yet. Your enrollment won’t be sent twice."
             }
             return "Your device is joining your organization. We’ll continue as soon as it’s ready."
         default:
@@ -292,7 +292,10 @@ struct NearbySetupView: View {
                 account: choice?.account ?? "", organization: choice?.organizationID ?? "", name: name)
             if automatically || state.pending { observationError = state.error }
             else if let detail = state.error, ConnectionRecovery.canRetry(detail) { observationError = detail }
-            else { error = state.error }
+            else {
+                error = state.error
+                if state.error?.contains("name is already in use") == true { customizing = true }
+            }
             if state.completed { error = nil; observationError = nil }
         } catch {
             if !Task.isCancelled {
