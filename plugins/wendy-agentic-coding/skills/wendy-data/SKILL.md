@@ -11,8 +11,22 @@ Application streams can also retain durable records outside episodes.
 
 ## Choose the available interface
 
-Check the installed CLI's `wendy data --help` and relevant subcommand help when
-a terminal is available. Use explicit `--device <selector>` on device commands.
+In native Wendy chat, use `device_campaign_sources` and `device_campaign_list`
+when offered. `create_person_detection_campaign` proposes a person-detection
+rule with local clips and automatically prompts for its Cloud notification grant
+when requested. For existing campaigns, `enable_campaign_notifications` requests
+approval across devices using that campaign in the organization. Read the result;
+do not redirect to Cloud Apps or repeat a denied prompt.
+Never retry a denied call through another interface. These are app-specific
+tools, not general MCP tools. Use the Campaigns editor or CLI for other models.
+
+"Let me know when someone walks into frame" maps to managed detection and
+notifications, without a depth camera or custom app. Check source health,
+inference readiness, and notification permission. Deployment or a grant alone
+does not verify detection or delivery.
+
+With a terminal, check `wendy data --help` and relevant subcommand help.
+Use explicit `--device <selector>` on device commands.
 Local CLI commands reconnect independently of an MCP session, so preserve the
 connected target and transport instead of relying on the default device.
 

@@ -1,0 +1,10 @@
+{
+    "appId": "sh.wendy.examples.thermalnotify",
+    "platform": "linux",
+    "version": "1.0.0",
+    "language": "swift",
+    "entitlements": [
+        { "type": "notifications" },
+        { "type": "admin" }
+    ]
+}
