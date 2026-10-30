@@ -1,5 +1,3 @@
-//go:build linux
-
 package localmesh
 
 import "github.com/wendylabsinc/wendy/go/internal/agent/netwire"
