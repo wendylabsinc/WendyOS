@@ -1569,6 +1569,9 @@ func ensureOCIExportBuilder(ctx context.Context, w io.Writer) (string, error) {
 			"--driver-opt", "network=host",
 		)
 		if out, err := cmd.CombinedOutput(); err != nil {
+			if missing := buildxMissingError(ctx); missing != nil {
+				return "", missing
+			}
 			return "", fmt.Errorf("creating buildx builder %q: %s: %w", builderName, string(out), err)
 		}
 	}
@@ -1684,18 +1687,33 @@ func buildkitRegistryConfig(registryAddr string, plainHTTP bool, keypair *[2]str
 // here: callers update the existing container in place so its BuildKit state
 // volume survives dynamic proxy-port and certificate changes.
 func ensureRegistryBuilderInstance(ctx context.Context, builderName string) (created bool, err error) {
-	if exec.CommandContext(ctx, "docker", "buildx", "inspect", builderName).Run() == nil {
+	if imageBuilderCommandContext(ctx, "docker", "buildx", "inspect", builderName).Run() == nil {
 		return false, nil
 	}
-	cmd := exec.CommandContext(ctx, "docker", "buildx", "create",
+	cmd := imageBuilderCommandContext(ctx, "docker", "buildx", "create",
 		"--name", builderName,
 		"--driver", "docker-container",
 		"--driver-opt", "network=host",
 	)
 	if out, err := cmd.CombinedOutput(); err != nil {
+		if missing := buildxMissingError(ctx); missing != nil {
+			return false, missing
+		}
 		return false, fmt.Errorf("creating buildx builder %q: %s: %w", builderName, string(out), err)
 	}
 	return true, nil
+}
+
+// buildxMissingError explains a failed buildx command whose cause is that
+// Docker has no Buildx plugin, and returns nil for any other cause. It runs
+// only after a buildx command failed, so a working install never pays for it.
+func buildxMissingError(ctx context.Context) error {
+	if imageBuilderCommandContext(ctx, "docker", "buildx", "version").Run() == nil {
+		return nil
+	}
+	return withNextSteps(commandErrorf(errBuilderUnavailable, "%w; wendy builds images with it", errBuildxMissing),
+		"Install the Docker Buildx plugin: https://docs.docker.com/go/buildx/ (Docker Desktop, OrbStack and Rancher Desktop include it).",
+		"Check it with `docker buildx version`, then run again.")
 }
 
 // ensurePlaintextBuilder ensures the "wendy" buildx builder exists with plain
