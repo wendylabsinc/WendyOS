@@ -157,28 +157,6 @@ func TestDeviceUnpinClearsSPKIPinWithNoConfigPin(t *testing.T) {
 	}
 }
 
-// TestClearDevicePinForRepinClearsSPKIStore holds set-default to the claim
-// pki/README.md already makes for it — that naming a device has "the same
-// clearing effect" as unpin. Leaving the SPKI half behind made that false for
-// the one refusal that has no other way out: set-default would clear the config
-// pin, reconnect, and be rejected again by the pin store it never touched.
-func TestClearDevicePinForRepinClearsSPKIStore(t *testing.T) {
-	readPins := writePinTestConfig(t, map[string]config.DevicePin{
-		"wendy-thor": {OrgID: 7, CloudGRPC: "grpc.a.sh:443", AssetID: "42"},
-	})
-	setPinCache(t) // empty cache: exactly the single-key legacy shape
-	seedSPKIPin(t, "urn:wendy:org:7:asset:42")
-
-	clearDevicePinForRepin("wendy-thor.local")
-
-	if pin, ok := readPins()["wendy-thor"]; ok {
-		t.Errorf("config pin survived clearDevicePinForRepin: %+v", pin)
-	}
-	if _, ok := readSPKIPins(t)["urn:wendy:org:7:asset:42"]; ok {
-		t.Error("SPKI pin survived clearDevicePinForRepin: set-default cannot re-pin a device whose key rotated, though the docs say it can")
-	}
-}
-
 // TestDeviceUnpinUnknownHostIsNotAnError is the ambiguity ruling from the
 // design: the command's contract is "this host ends up unpinned", which is
 // already true for a host that was never pinned, so there is nothing to
@@ -192,8 +170,7 @@ func TestDeviceUnpinUnknownHostIsNotAnError(t *testing.T) {
 	}
 }
 
-// TestDeviceUnpinAcceptsHostPortAddress covers the exact bug fixed in
-// set-default during Task 6: a pin recorded for a `--device
+// TestDeviceUnpinAcceptsHostPortAddress: a pin recorded for a `--device
 // wendy-thor.local:50051` connection files under "wendy-thor.local" (the port
 // stripped by pinKeyForAddr), so unpinning must strip the port the same way —
 // passing the raw argument through would clear a key nothing was ever filed

@@ -154,7 +154,15 @@ wendy run
 
 If only one device is found, some commands will automatically select it. If multiple devices are found, you'll be prompted to choose.
 
-<SetDefaultDeviceSection />
+## Skipping the Prompt
+
+To skip the prompt, name the device with `--device` for one command, or set
+`WENDY_DEVICE` to target it from every command in the current terminal:
+
+```sh
+wendy run --device wendyos-other-device.local
+export WENDY_DEVICE=wendyos-other-device.local
+```
 
 ## Next Steps
 

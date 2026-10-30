@@ -77,7 +77,7 @@ type Server = mcpServer
 
 // SetStartupConnect configures the optional device connection attempted after
 // the MCP stdio server starts accepting requests. Keeping this work off the
-// protocol startup path prevents an offline default device from delaying the
+// protocol startup path prevents an offline startup device from delaying the
 // initialize handshake until the MCP host times out.
 func (s *mcpServer) SetStartupConnect(fn func(context.Context)) {
 	s.mu.Lock()
@@ -231,7 +231,7 @@ func (s *mcpServer) ConnectTo(ctx context.Context, address string) error {
 // ConnectToOnStartup connects only if no explicit connection change occurred
 // while the attempt was in flight. Once stdio is serving, a device_connect,
 // cloud_connect, or device_disconnect request must take precedence over the
-// automatic default-device connection.
+// automatic startup connection.
 func (s *mcpServer) ConnectToOnStartup(ctx context.Context, address string) error {
 	if s.connectFn == nil {
 		return fmt.Errorf("no connect function configured")

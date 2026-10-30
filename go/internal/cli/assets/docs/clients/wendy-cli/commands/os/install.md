@@ -285,7 +285,7 @@ vendor guide. Raw-media plans require a drive from `wendy os list-drives --all -
 before returning a write command. `--rootfs-only` leaves Orin QSPI unchanged.
 The write still runs through the regular installer in a terminal.
 
-Verification never selects a default device. Use `--expected-public-key` to pin
+Verification never picks a device for you. Use `--expected-public-key` to pin
 a previously observed identity, `--require-enrollment` when Cloud enrollment was
 requested, and `--timeout` for a deadline of at most one minute (default 15s).
 It exits nonzero for an unreachable target or unmet expectation and reports

@@ -7,14 +7,13 @@ import (
 )
 
 func TestBuildStopsAfterUserRejectsReplacementTarget(t *testing.T) {
-	connectionFailure := errors.New("default device unreachable")
+	connectionFailure := errors.New("device unreachable")
 	for _, tc := range []struct {
 		name string
 		err  error
 		stop bool
 	}{
 		{"ordinary unreachable device", connectionFailure, false},
-		{"recovery declined", &defaultDeviceRecoveryStoppedError{cause: connectionFailure}, true},
 		{"picker cancelled", ErrUserCancelled, true},
 		{"command interrupted", context.Canceled, true},
 	} {

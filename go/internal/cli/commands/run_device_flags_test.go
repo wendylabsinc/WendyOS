@@ -117,7 +117,7 @@ func TestSelectedBuildHostRetainsReconnectIdentity(t *testing.T) {
 		selected SelectedDevice
 		want     string
 	}{
-		{"cloud", SelectedDevice{Agent: &grpcclient.AgentConnection{Addr: "127.0.0.1:1234"}, DefaultSelector: "cloud://example.com/org/1/asset/42"}, "cloud://example.com/org/1/asset/42"},
+		{"cloud", SelectedDevice{Agent: &grpcclient.AgentConnection{Addr: "127.0.0.1:1234"}, Selector: "cloud://example.com/org/1/asset/42"}, "cloud://example.com/org/1/asset/42"},
 		{"LAN hostname", SelectedDevice{Agent: &grpcclient.AgentConnection{Addr: "192.0.2.1:50052"}, PinKey: "spark.local"}, "spark.local:50052"},
 		{"direct address", SelectedDevice{Agent: &grpcclient.AgentConnection{Addr: "192.0.2.1:50051"}}, "192.0.2.1:50051"},
 		{"simulator", SelectedDevice{Agent: &grpcclient.AgentConnection{SimulatorName: "sim"}}, ""},
@@ -151,7 +151,7 @@ func TestRunBuildHostPickerSelectionAndExplicitBypass(t *testing.T) {
 			t.Fatal("build host picker lost its purpose")
 		}
 		calls++
-		return &SelectedDevice{Agent: &grpcclient.AgentConnection{Addr: "127.0.0.1:1234", ExtraClosers: []io.Closer{closer}}, DefaultSelector: "cloud://example.com/org/1/asset/42"}, nil
+		return &SelectedDevice{Agent: &grpcclient.AgentConnection{Addr: "127.0.0.1:1234", ExtraClosers: []io.Closer{closer}}, Selector: "cloud://example.com/org/1/asset/42"}, nil
 	}
 	for _, tt := range []struct {
 		args      []string

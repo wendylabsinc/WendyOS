@@ -547,7 +547,7 @@ func TestRejectUnsupportedBuildHostProject(t *testing.T) {
 // build there, putting the image on the machine the developer meant to deploy
 // to while reporting success.
 func TestCloudFallbackDeviceName_ExplicitWinsOverDeviceFlag(t *testing.T) {
-	got := cloudFallbackDeviceName("spark-office", "ccr2", "some-default")
+	got := cloudFallbackDeviceName("spark-office", "ccr2")
 	if got != "spark-office" {
 		t.Fatalf("got %q, want the explicit build host to win over --device", got)
 	}
@@ -555,14 +555,11 @@ func TestCloudFallbackDeviceName_ExplicitWinsOverDeviceFlag(t *testing.T) {
 
 // A caller with no explicit name is resolving the deploy target itself, where
 // --device IS the device being resolved.
-func TestCloudFallbackDeviceName_FallsBackToFlagThenDefault(t *testing.T) {
-	if got := cloudFallbackDeviceName("", "ccr2", "some-default"); got != "ccr2" {
+func TestCloudFallbackDeviceName_FallsBackToFlag(t *testing.T) {
+	if got := cloudFallbackDeviceName("", "ccr2"); got != "ccr2" {
 		t.Fatalf("got %q, want the --device flag", got)
 	}
-	if got := cloudFallbackDeviceName("", "", "some-default"); got != "some-default" {
-		t.Fatalf("got %q, want the configured default", got)
-	}
-	if got := cloudFallbackDeviceName("", "", ""); got != "" {
+	if got := cloudFallbackDeviceName("", ""); got != "" {
 		t.Fatalf("got %q, want empty so the caller reports the original error", got)
 	}
 }

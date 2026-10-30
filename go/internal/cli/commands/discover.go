@@ -521,8 +521,7 @@ type discoverTableItem struct {
 	// DisplayName change or a DisplayName collision between two different
 	// device IDs can never orphan or cross-wire a probe state. Empty for
 	// non-LAN rows.
-	lanKey        string
-	defaultDevice string
+	lanKey string
 }
 
 // flashClearMsg is sent after a delay to clear the flash message.
@@ -778,25 +777,6 @@ func (m discoverModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.flashMessage = "Checking " + item.info.Name + "..."
 			m.flashIsError = false
 			return m, m.startDeviceUpdateCmd(addr, item.info.Name)
-		case "d":
-			items := m.tableItems
-			cursor := m.table.Cursor()
-			if len(items) > 0 && cursor >= 0 && cursor < len(items) {
-				// A toggle, as on the Simulator and Cloud tabs: 'd' on the
-				// row the ✦ is already on clears it.
-				if discoverItemIsDefault(items[cursor], discoverDefaultKey()) {
-					_ = saveDefaultDevice("")
-					m.flashMessage = "Default device cleared."
-				} else {
-					deviceID := items[cursor].defaultDevice
-					_ = saveDefaultDevice(deviceID)
-					m.flashMessage = "Default device set to: " + deviceID
-				}
-				m.flashIsError = false
-				m.refreshTable()
-				return m, clearFlashAfter(3 * time.Second)
-			}
-			return m, nil
 		}
 		var cmd tea.Cmd
 		m.table, cmd = m.table.Update(msg)
@@ -967,7 +947,7 @@ func (m discoverModel) View() string {
 		if m.canScrollTable() {
 			scrollHint = ", ←/→ scroll"
 		}
-		sb.WriteString(m.viewLine(dimStyle.Render("  ↑/↓ navigate"+scrollHint+", enter copy, a copy all, u update, d toggle default, q quit")) + "\n")
+		sb.WriteString(m.viewLine(dimStyle.Render("  ↑/↓ navigate"+scrollHint+", enter copy, a copy all, u update, q quit")) + "\n")
 	}
 
 	if warning := m.bleWarningLine(); warning != "" {
@@ -1121,7 +1101,12 @@ func (m *discoverModel) refreshTable() {
 		}
 	}
 	pickerItems := discoverPickerItems(m.tableItems)
-	cols, rows := tui.PickerDeviceTableData(pickerItems, discoverDefaultKey(), true)
+	cols, rows := tui.PickerDeviceTableData(pickerItems, "", false)
+	// The marker column comes and goes with the provisioned glyphs, and bubbles
+	// re-renders the current rows against new columns: clear them first.
+	if len(cols) != len(m.table.Columns()) {
+		m.table.SetRows(nil)
+	}
 	m.table.SetColumns(cols)
 	m.table.SetRows(rows)
 	if len(rows) > 0 && m.table.Cursor() < 0 {
@@ -1237,7 +1222,7 @@ func (m discoverModel) startDeviceUpdateCmd(addr, name string) tea.Cmd {
 func renderDeviceTable(collection *models.DevicesCollection) string {
 	items := discoverTableItems(collection)
 	pickerItems := discoverPickerItems(items)
-	cols, rows := tui.PickerDeviceTableData(pickerItems, discoverDefaultKey(), true)
+	cols, rows := tui.PickerDeviceTableData(pickerItems, "", false)
 	if len(rows) == 0 {
 		return ""
 	}
@@ -1266,9 +1251,9 @@ func newDiscoverTable(interactive bool) tui.BubbleTable {
 // noise. (The interactive `wendy discover` table uses tui.PickerDeviceTableData,
 // not these.) The full address is still available in the clipboard JSON.
 var (
-	discoverTableHeaders   = []string{"", "Name", "Type", "Version"}
-	discoverTableMinWidths = []int{3, 12, 10, 10}
-	discoverTableMaxWidths = []int{3, 33, 20, 16}
+	discoverTableHeaders   = []string{"Name", "Type", "Version"}
+	discoverTableMinWidths = []int{12, 10, 10}
+	discoverTableMaxWidths = []int{33, 20, 16}
 )
 
 var deviceTypeNames = map[string]string{
@@ -1493,13 +1478,6 @@ func ethernetInterfaceUSBSummary(iface models.EthernetInterface) string {
 	return label
 }
 
-func discoverDefaultKey() string {
-	if cfg, err := config.Load(); err == nil {
-		return strings.ToLower(cfg.DefaultDevice)
-	}
-	return ""
-}
-
 func discoverTableItems(collection *models.DevicesCollection) []discoverTableItem {
 	var items []discoverTableItem
 	if collection == nil {
@@ -1527,7 +1505,6 @@ func discoverTableItems(collection *models.DevicesCollection) []discoverTableIte
 				Address: d.Hostname,
 				Version: d.AgentVersion,
 			},
-			defaultDevice: firstNonEmpty(d.Hostname, d.DisplayName),
 		})
 	}
 	for _, d := range collection.MergedDevices() {
@@ -1537,14 +1514,12 @@ func discoverTableItems(collection *models.DevicesCollection) []discoverTableIte
 			usb = d.LAN.USB
 		}
 		address := d.Address()
-		defaultDevice := d.DisplayName
 		lanName := ""
 		lanKey := ""
 		if d.LAN != nil {
 			lanName = d.LAN.DisplayName
 			lanKey = discoverycache.Key(d.LAN.ID, d.LAN.DisplayName)
 			address = preferredLANAddress(*d.LAN)
-			defaultDevice = firstNonEmpty(d.LAN.Hostname, d.LAN.IPAddress, d.LAN.DisplayName)
 		}
 		provisioned := lanProvisionedDisplay(d.LAN)
 		var failure *models.ProbeFailure
@@ -1580,9 +1555,8 @@ func discoverTableItems(collection *models.DevicesCollection) []discoverTableIte
 				Provisioned:  provisioned,
 				ProbeFailure: failure,
 			},
-			lanName:       lanName,
-			lanKey:        lanKey,
-			defaultDevice: defaultDevice,
+			lanName: lanName,
+			lanKey:  lanKey,
 		})
 	}
 	for _, d := range collection.Simulators {
@@ -1608,7 +1582,6 @@ func discoverTableItems(collection *models.DevicesCollection) []discoverTableIte
 				Address: address,
 				Version: d.AgentVersion,
 			},
-			defaultDevice: d.ID,
 		})
 	}
 	for _, d := range collection.ExternalDevices {
@@ -1637,7 +1610,6 @@ func discoverTableItems(collection *models.DevicesCollection) []discoverTableIte
 				Address: addr,
 				Version: d.AgentVersion,
 			},
-			defaultDevice: firstNonEmpty(d.ID, d.DisplayName),
 		})
 	}
 
@@ -1651,23 +1623,9 @@ func discoverTableItems(collection *models.DevicesCollection) []discoverTableIte
 func discoverPickerItems(items []discoverTableItem) []tui.PickerItem {
 	pickerItems := make([]tui.PickerItem, 0, len(items))
 	for _, item := range items {
-		pickerItems = append(pickerItems, discoverPickerItem(item))
+		pickerItems = append(pickerItems, item.picker)
 	}
 	return pickerItems
-}
-
-func discoverPickerItem(item discoverTableItem) tui.PickerItem {
-	pickerItem := item.picker
-	if item.defaultDevice != "" {
-		pickerItem.DefaultKeys = append(pickerItem.DefaultKeys, item.defaultDevice)
-	}
-	return pickerItem
-}
-
-// discoverItemIsDefault reports whether item is the row the ✦ marks, matching
-// it the same way the table does.
-func discoverItemIsDefault(item discoverTableItem, defaultKey string) bool {
-	return tui.PickerItemIsDefault(discoverPickerItem(item), defaultKey)
 }
 
 func discoverSortKey(item tui.PickerItem) string {

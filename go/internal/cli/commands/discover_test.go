@@ -14,7 +14,6 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
-	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/internal/shared/discovery"
 	"github.com/wendylabsinc/wendy/go/internal/shared/env"
 	"github.com/wendylabsinc/wendy/go/internal/shared/models"
@@ -249,45 +248,6 @@ func TestDiscoverModel_LeftRightScrollsWithoutBreakingVerticalNavigation(t *test
 
 	if m.table.ScrollOffset() != 0 {
 		t.Fatalf("expected left arrow to return to zero offset, got %d", m.table.ScrollOffset())
-	}
-}
-
-func TestDiscoverModel_DKeySetsDefaultAndMarksSelectedDevice(t *testing.T) {
-	setTempConfig(t, &config.Config{})
-
-	m := newDiscoverModel(context.Background(), defaultOpts(), true)
-	updated, _ := m.Update(lanFoundEvent(models.LANDevice{
-		DisplayName: "ubuntu",
-		Hostname:    "ubuntu.local",
-		Port:        defaultAgentPort,
-	}))
-	m = updated.(discoverModel)
-
-	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
-	um := updated.(discoverModel)
-
-	if um.flashMessage != "Default device set to: ubuntu.local" {
-		t.Fatalf("flash message = %q, want default device confirmation", um.flashMessage)
-	}
-	if cmd == nil {
-		t.Fatal("expected clearFlashAfter cmd")
-	}
-	if !strings.Contains(um.table.View(), "✦") {
-		t.Fatalf("expected selected default device to show marker, got %q", um.table.View())
-	}
-
-	// 'd' toggles: on the default row it clears the default, as on the
-	// Simulator and Cloud tabs. There is no separate 'x' any more.
-	updated, _ = um.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'d'}})
-	um = updated.(discoverModel)
-	if got := defaultKey(t); got != "" {
-		t.Fatalf("second d left default %q, want it cleared", got)
-	}
-	if um.flashMessage != "Default device cleared." || strings.Contains(um.table.View(), "✦") {
-		t.Fatalf("second d: flash=%q table=%q", um.flashMessage, um.table.View())
-	}
-	if view := um.View(); !strings.Contains(view, "d toggle default") || strings.Contains(view, "x unset default") {
-		t.Fatalf("hint does not describe the toggle: %q", view)
 	}
 }
 

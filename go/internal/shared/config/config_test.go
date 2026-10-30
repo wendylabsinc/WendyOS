@@ -34,7 +34,7 @@ func TestSave_And_Load(t *testing.T) {
 	overrideHome(t)
 
 	original := &Config{
-		DefaultDevice: "wendy-test.local",
+		DefaultBuildHost: "wendy-test.local",
 		Auth: []AuthConfig{
 			{
 				CloudDashboard: "https://dashboard.example.com",
@@ -60,8 +60,8 @@ func TestSave_And_Load(t *testing.T) {
 		t.Fatalf("Load() error = %v", err)
 	}
 
-	if loaded.DefaultDevice != original.DefaultDevice {
-		t.Errorf("DefaultDevice = %q, want %q", loaded.DefaultDevice, original.DefaultDevice)
+	if loaded.DefaultBuildHost != original.DefaultBuildHost {
+		t.Errorf("DefaultBuildHost = %q, want %q", loaded.DefaultBuildHost, original.DefaultBuildHost)
 	}
 	if len(loaded.Auth) != 1 {
 		t.Fatalf("Auth length = %d, want 1", len(loaded.Auth))

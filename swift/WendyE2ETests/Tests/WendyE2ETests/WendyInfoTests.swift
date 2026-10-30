@@ -82,8 +82,8 @@ struct `'wendy info'` {
     }
 
     /**
-     Runs successfully outside a Wendy project, with no default device, and
-     with no auth session. Device configuration is not contacted by this local
+     Runs successfully outside a Wendy project, with no device, and with no
+     auth session. Device configuration is not contacted by this local
      diagnostic command.
      */
     @Test
@@ -92,12 +92,12 @@ struct `'wendy info'` {
             try await cli.sh(
                 posix: """
                     mkdir -p "$HOME/.wendy"
-                    printf '{"defaultDevice":"do-not-contact.invalid"}\n' > "$HOME/.wendy/config.json"
+                    printf '{"defaultBuildHost":"do-not-contact.invalid"}\n' > "$HOME/.wendy/config.json"
                     wendy --json=false info
                     """,
                 power: """
                     New-Item -ItemType Directory -Force -Path (Join-Path $env:HOME '.wendy') | Out-Null
-                    Set-Content -LiteralPath (Join-Path $env:HOME '.wendy/config.json') -Value '{"defaultDevice":"do-not-contact.invalid"}'
+                    Set-Content -LiteralPath (Join-Path $env:HOME '.wendy/config.json') -Value '{"defaultBuildHost":"do-not-contact.invalid"}'
                     wendy --json=false info
                     """
             ) { result in

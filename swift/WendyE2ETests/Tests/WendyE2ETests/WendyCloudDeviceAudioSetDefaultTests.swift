@@ -28,8 +28,6 @@ struct `'wendy cloud device audio set-default'` {
 
     /**
      `--device` selects the cloud device and skips local discovery and pickers.
-     The command does not read or change the saved default device when an
-     explicit target is supplied.
      */
     @Test(
         .disabled(

@@ -53,9 +53,9 @@ wendy cloud discover --all
 ```
 
 When multiple contexts exist, signing in does not necessarily change the active
-one. Verify the selected context before each operation. A saved default device
-also retains its Cloud and organization binding; switching context does not
-retarget that device. Select the new target explicitly when validating v2.
+one. Verify the selected context before each operation. A `cloud://` device
+selector also retains its Cloud and organization binding; switching context
+does not retarget it. Select the new target explicitly when validating v2.
 
 ## Inventory what the deployment depends on
 
@@ -96,7 +96,7 @@ identity and installed versions, then enroll it in the intended v2 organization.
 Unenrollment changes credentials and can remove remote access. Flashing is not
 a substitute for revoking the previous Cloud identity.
 
-After enrollment, update scripts and saved defaults to the new device identity,
+After enrollment, update scripts and `WENDY_DEVICE` values to the new device identity,
 restore the required app assignments and grants, and repeat the checks from the
 spare-device validation. Keep the deployment's previous configuration and a
 local recovery path until the new setup is accepted. Switching CLI context alone

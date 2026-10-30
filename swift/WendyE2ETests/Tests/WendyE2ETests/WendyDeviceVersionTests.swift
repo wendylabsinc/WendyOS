@@ -56,7 +56,7 @@ struct `'wendy device version'` {
                 let stderr = result.stderr
                 #expect(result.status.isFailure)
                 #expect(result.stdout == "")
-                #expect(stderr.contains("no device specified; use --device flag or set a default"))
+                #expect(stderr.contains("no device specified; use --device flag"))
                 #expect(!stderr.lowercased().contains("deprecated"))
                 #expect(!stderr.contains("Select a device"))
             }

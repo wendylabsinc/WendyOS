@@ -109,11 +109,6 @@ func TestVMSelectionKeepsAliasAcrossEveryFrontDoor(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = config.Save(original) })
-	cfg := *original
-	cfg.DefaultDevice = "vm:second"
-	if err := config.Save(&cfg); err != nil {
-		t.Fatal(err)
-	}
 	oldFlag, oldConnect := deviceFlag, connectSimulatorChoiceFn
 	t.Cleanup(func() { deviceFlag, connectSimulatorChoiceFn = oldFlag, oldConnect })
 	var names []string
@@ -121,29 +116,26 @@ func TestVMSelectionKeepsAliasAcrossEveryFrontDoor(t *testing.T) {
 		names = append(names, choice.Name)
 		return &SelectedDevice{PinKey: "vm:" + choice.Name, Agent: &grpcclient.AgentConnection{Host: "127.0.0.1", Addr: "127.0.0.1:50053"}}, nil
 	}
-	for _, flag := range []string{"vm:second", ""} {
-		deviceFlag = flag
-		if _, err := connectToAgent(context.Background()); err != nil {
-			t.Fatal(err)
-		}
-		if deviceFlag != flag {
-			t.Fatal("connect mutated global device selection")
-		}
-		selected, err := resolveTargetInner(context.Background())
-		if err != nil {
-			t.Fatal(err)
-		}
-		name, err := defaultDeviceNameFor(selected)
-		if err != nil || name != "vm:second" {
-			t.Fatalf("default lost alias/port: %q, %v", name, err)
-		}
+	deviceFlag = "vm:second"
+	if _, err := connectToAgent(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if deviceFlag != "vm:second" {
+		t.Fatal("connect mutated global device selection")
+	}
+	selected, err := resolveTargetInner(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selected.PinKey != "vm:second" {
+		t.Fatalf("selection lost alias/port: %q", selected.PinKey)
 	}
 	_, err = connectPickedLANDevice(context.Background(), &models.DiscoveredDevice{LAN: &models.LANDevice{ID: "vm:second"}}, "127.0.0.1:50051", true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(names) != 5 {
-		t.Fatalf("got %d VM selections, want 5", len(names))
+	if len(names) != 3 {
+		t.Fatalf("got %d VM selections, want 3", len(names))
 	}
 	for _, name := range names {
 		if name != "second" {

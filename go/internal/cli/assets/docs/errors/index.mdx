@@ -13,7 +13,7 @@ If you know the address, try `wendy device info --device <address>`. If this wor
 
 ## Wrong target selected
 
-A saved default bypasses the picker. Use `wendy run --device <name-or-address>` to select a target explicitly, or `wendy device unset-default` to restore interactive selection.
+`WENDY_DEVICE` bypasses the picker. Check whether it is set in this terminal (`echo $WENDY_DEVICE`) and unset it to restore interactive selection, or use `wendy run --device <name-or-address>` to select a target explicitly.
 
 ## No ARM64 UEFI firmware found
 

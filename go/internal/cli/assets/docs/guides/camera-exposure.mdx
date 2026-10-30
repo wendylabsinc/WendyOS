@@ -20,10 +20,10 @@ The same commands work with local CSI cameras that expose V4L2 controls. Network
 
 ## 1. Select the camera
 
-Choose your WendyOS device, then list its cameras:
+Point this terminal at your WendyOS device, then list its cameras:
 
 ```bash
-wendy device set-default
+export WENDY_DEVICE=<hostname>
 wendy device camera list
 ```
 

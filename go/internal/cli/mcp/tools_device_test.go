@@ -258,11 +258,8 @@ func TestDeviceInfo_NPU(t *testing.T) {
 	}
 }
 
-func TestDeviceList_ReturnsConfiguredDevices(t *testing.T) {
-	cfg := &config.Config{
-		DefaultDevice: "mydevice.local:50051",
-	}
-	srv := New(cfg, nil)
+func TestDeviceList_LocalOnlyNeedsNoCloudLogin(t *testing.T) {
+	srv := New(&config.Config{}, nil)
 	result, err := srv.callTool(context.Background(), "device_list", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -270,32 +267,11 @@ func TestDeviceList_ReturnsConfiguredDevices(t *testing.T) {
 	if result.IsError {
 		t.Fatalf("unexpected error result")
 	}
-	devices := listPayload(t, result, "devices")
-	if len(devices) != 1 || devices[0]["address"] != cfg.DefaultDevice {
-		t.Fatalf("configured device missing: %v", devices)
+	if devices := listPayload(t, result, "devices"); len(devices) != 0 {
+		t.Fatalf("expected no devices without a scan or login, got %v", devices)
 	}
 	if warnings := structuredMap(t, result)["warnings"]; warnings != nil {
 		t.Fatalf("local-only discovery should not require cloud login: %v", warnings)
-	}
-}
-
-func TestDeviceList_SourceFieldOnConfigEntries(t *testing.T) {
-	cfg := &config.Config{
-		DefaultDevice: "mydevice.local:50051",
-	}
-	srv := New(cfg, nil)
-	result, err := srv.callTool(context.Background(), "device_list", nil)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if result.IsError {
-		t.Fatalf("unexpected error result")
-	}
-	devices := listPayload(t, result, "devices")
-	for _, d := range devices {
-		if d["source"] != "config" {
-			t.Errorf("expected source=config, got %v (device: %v)", d["source"], d)
-		}
 	}
 }
 
@@ -366,7 +342,7 @@ func TestDeviceList_NoUSBWarningWhenLinkNeedsNoSetup(t *testing.T) {
 // vm:NAME selector boots a stopped VM on connect; the forwarded loopback
 // address would bypass that.
 func TestDeviceList_IncludesLocalSimulators(t *testing.T) {
-	srv := New(&config.Config{DefaultDevice: "pi.local:50051"}, nil)
+	srv := New(&config.Config{}, nil)
 	srv.SetSimulatorBackend(SimulatorBackend{List: func(context.Context) ([]SimulatorInfo, error) {
 		return []SimulatorInfo{
 			{Name: "dev", Device: "vm:dev", State: "stopped", Profile: "generic"},
@@ -382,14 +358,14 @@ func TestDeviceList_IncludesLocalSimulators(t *testing.T) {
 		t.Fatalf("unexpected error result: %v", result.Content)
 	}
 	devices := listPayload(t, result, "devices")
-	if len(devices) != 3 || devices[0]["device"] != "pi.local:50051" {
-		t.Fatalf("expected the configured device then two simulators, got %v", devices)
+	if len(devices) != 2 {
+		t.Fatalf("expected two simulators, got %v", devices)
 	}
 	for i, want := range []map[string]any{
 		{"device": "vm:dev", "address": "vm:dev", "name": "dev", "type": "simulator", "source": "simulator", "state": "stopped", "profile": "generic"},
 		{"device": "vm:go2", "address": "vm:go2", "name": "go2", "type": "simulator", "source": "simulator", "state": "running", "profile": "go2"},
 	} {
-		got := devices[i+1]
+		got := devices[i]
 		for key, value := range want {
 			if got[key] != value {
 				t.Errorf("simulator row %d: %s = %v, want %v (row %v)", i, key, got[key], value, got)
@@ -399,12 +375,15 @@ func TestDeviceList_IncludesLocalSimulators(t *testing.T) {
 }
 
 func TestDeviceList_SimulatorListFailureIsAWarning(t *testing.T) {
-	srv := New(&config.Config{DefaultDevice: "pi.local:50051"}, nil)
+	srv := New(&config.Config{}, nil)
+	srv.discoverLANFn = func(context.Context, time.Duration) ([]models.LANDevice, error) {
+		return []models.LANDevice{{DisplayName: "pi", Hostname: "pi.local", Port: 50051}}, nil
+	}
 	srv.SetSimulatorBackend(SimulatorBackend{List: func(context.Context) ([]SimulatorInfo, error) {
 		return nil, fmt.Errorf("vm store unreadable")
 	}})
 
-	result, err := srv.callTool(context.Background(), "device_list", nil)
+	result, err := srv.callTool(context.Background(), "device_list", map[string]any{"scan": true})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -412,7 +391,7 @@ func TestDeviceList_SimulatorListFailureIsAWarning(t *testing.T) {
 		t.Fatalf("a simulator failure must not hide other devices: %v", result.Content)
 	}
 	if devices := listPayload(t, result, "devices"); len(devices) != 1 {
-		t.Fatalf("expected the configured device only, got %v", devices)
+		t.Fatalf("expected the LAN device only, got %v", devices)
 	}
 	warnings := listPayload(t, result, "warnings")
 	if len(warnings) != 1 || warnings[0]["source"] != "simulator" || !strings.Contains(fmt.Sprint(warnings[0]["message"]), "vm store unreadable") {
@@ -480,7 +459,10 @@ func TestNotConnectedPointsToDeviceList(t *testing.T) {
 }
 
 func TestDeviceList_MaxBytesTruncates(t *testing.T) {
-	srv := New(&config.Config{DefaultDevice: "some-long-device-hostname-for-padding.local:50051"}, nil)
+	srv := New(&config.Config{}, nil)
+	srv.SetSimulatorBackend(SimulatorBackend{List: func(context.Context) ([]SimulatorInfo, error) {
+		return []SimulatorInfo{{Name: "some-long-simulator-name-for-padding", Device: "vm:some-long-simulator-name-for-padding", State: "stopped"}}, nil
+	}})
 
 	result, err := srv.callTool(context.Background(), "device_list", map[string]any{"max_bytes": 50})
 	if err != nil {
@@ -505,8 +487,7 @@ func TestDeviceList_IncludesCloudDevicesByDefault(t *testing.T) {
 	}
 	addr := startFakeCloudAssetServer(t, fake)
 	srv := New(&config.Config{
-		DefaultDevice: "local-device:50051",
-		Auth:          []config.AuthConfig{{CloudGRPC: addr, Certificates: []config.CertificateInfo{{OrganizationID: 7}}}},
+		Auth: []config.AuthConfig{{CloudGRPC: addr, Certificates: []config.CertificateInfo{{OrganizationID: 7}}}},
 	}, nil)
 	srv.discoverLANFn = func(context.Context, time.Duration) ([]models.LANDevice, error) {
 		t.Error("default device_list must not scan the LAN")
@@ -517,10 +498,10 @@ func TestDeviceList_IncludesCloudDevicesByDefault(t *testing.T) {
 		t.Fatalf("device_list failed: %v, %v", result, err)
 	}
 	devices := listPayload(t, result, "devices")
-	if len(devices) != 3 || devices[0]["address"] != "local-device:50051" {
-		t.Fatalf("expected configured device and both cloud pages: %v", devices)
+	if len(devices) != 2 {
+		t.Fatalf("expected both cloud pages: %v", devices)
 	}
-	for i, device := range devices[1:] {
+	for i, device := range devices {
 		if device["id"] != float64(42+i) || device["name"] != fake.assets[i].GetName() ||
 			device["type"] != "cloud" || device["source"] != "cloud" || device["online"] != true ||
 			device["cloud_grpc"] != addr || device["organization_id"] != float64(7) {
@@ -586,7 +567,7 @@ func TestDeviceList_CloudAuthFailurePreservesLocalDevices(t *testing.T) {
 		}, want: "cloud_grpc"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			srv := New(&config.Config{DefaultDevice: "local-device:50051", Auth: tc.auth}, nil)
+			srv := New(&config.Config{Auth: tc.auth}, nil)
 			srv.discoverLANFn = func(context.Context, time.Duration) ([]models.LANDevice, error) {
 				return []models.LANDevice{{DisplayName: "lan-device", IPAddress: "192.0.2.1", Port: 50051}}, nil
 			}
@@ -595,8 +576,8 @@ func TestDeviceList_CloudAuthFailurePreservesLocalDevices(t *testing.T) {
 				t.Fatalf("cloud auth failure must not fail local discovery: %v, %v", result, err)
 			}
 			devices := listPayload(t, result, "devices")
-			if len(devices) != 2 || devices[0]["address"] != "local-device:50051" || devices[1]["address"] != "192.0.2.1:50051" {
-				t.Fatalf("expected configured and LAN devices without cloud endpoint placeholders: %v", devices)
+			if len(devices) != 1 || devices[0]["address"] != "192.0.2.1:50051" {
+				t.Fatalf("expected the LAN device without cloud endpoint placeholders: %v", devices)
 			}
 			warnings := listPayload(t, result, "warnings")
 			if len(warnings) != 1 || warnings[0]["source"] != "cloud" || !strings.Contains(warnings[0]["message"].(string), tc.want) {
@@ -636,8 +617,7 @@ func TestDeviceList_CloudFailureIsBoundedAndConcurrentWithLAN(t *testing.T) {
 	go func() { _ = g.Serve(ln) }()
 	t.Cleanup(g.Stop)
 	srv := New(&config.Config{
-		DefaultDevice: "local-device:50051",
-		Auth:          []config.AuthConfig{{CloudGRPC: ln.Addr().String(), Certificates: []config.CertificateInfo{{OrganizationID: 7}}}},
+		Auth: []config.AuthConfig{{CloudGRPC: ln.Addr().String(), Certificates: []config.CertificateInfo{{OrganizationID: 7}}}},
 	}, nil)
 	srv.discoverLANFn = func(ctx context.Context, _ time.Duration) ([]models.LANDevice, error) {
 		select {
@@ -657,8 +637,8 @@ func TestDeviceList_CloudFailureIsBoundedAndConcurrentWithLAN(t *testing.T) {
 	if err != nil || result.IsError {
 		t.Fatalf("cloud failure must not fail device discovery: %v, %v", result, err)
 	}
-	if devices := listPayload(t, result, "devices"); len(devices) != 2 {
-		t.Fatalf("expected configured and LAN devices: %v", devices)
+	if devices := listPayload(t, result, "devices"); len(devices) != 1 {
+		t.Fatalf("expected the LAN device: %v", devices)
 	}
 	warnings := listPayload(t, result, "warnings")
 	if len(warnings) != 1 || warnings[0]["source"] != "cloud" || !strings.Contains(warnings[0]["message"].(string), "cloud temporarily unavailable") {
