@@ -2440,9 +2440,6 @@ func buildAndPrepareComposeImage(ctx context.Context, conn *grpcclient.AgentConn
 		return err
 	}
 	if normalized != imageBuilderDocker {
-		if conn.IsCloudV2 {
-			return withNextSteps(commandErrorf(errBuilderUnavailable, "Cloud uploads for Compose and multi-service apps require the Docker builder."), "Use '--builder docker', then retry.")
-		}
 		return buildAndPushImageForAgent(ctx, conn, regPort, agentOS, builder, dir, repo, platform, dockerfile, buildArgs, cacheKey, streamOutput, logOutput)
 	}
 
