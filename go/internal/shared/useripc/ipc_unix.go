@@ -54,6 +54,9 @@ func ValidateFile(path string, socket bool) error {
 	expected := info.Mode().IsRegular()
 	if socket {
 		expected = info.Mode()&os.ModeSocket != 0
+		if inProcess.Load() {
+			expected = info.Mode().IsRegular() && memoryExists(path)
+		}
 	}
 	if !expected || info.Mode().Perm()&0077 != 0 {
 		return fmt.Errorf("unsafe session broker file %s", path)
@@ -61,6 +64,9 @@ func ValidateFile(path string, socket bool) error {
 	return owner(info)
 }
 func Listen(path string) (net.Listener, error) {
+	if inProcess.Load() {
+		return memoryListen(path)
+	}
 	listener, err := net.Listen("unix", path)
 	if err != nil {
 		return nil, err
@@ -72,5 +78,8 @@ func Listen(path string) (net.Listener, error) {
 	return listener, nil
 }
 func Dial(ctx context.Context, path string) (net.Conn, error) {
+	if inProcess.Load() {
+		return memoryDial(ctx, path)
+	}
 	return (&net.Dialer{}).DialContext(ctx, "unix", path)
 }

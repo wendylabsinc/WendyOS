@@ -115,6 +115,37 @@ func TestOperatorBrokerNormalColdDiscoveryKeepsFirstRecipeAcrossPaths(t *testing
 func TestOperatorBrokerNormalExplicitDisconnectJoins(t *testing.T) {
 	operatorBrokerNormal(t, "P256", true)
 }
+
+// A separate process isolates the application's in-memory transport selection
+// from the existing desktop socket tests, while exercising the same full router,
+// TLS admission, management RPCs, directory and profile pinning.
+func TestOperatorBrokerEmbeddedHost(t *testing.T) {
+	if mode := os.Getenv("WENDY_EMBEDDED_BROKER_TEST"); mode != "" {
+		if mode == "renew" {
+			operatorBrokerNormal(t, "P256-embedded-renew", false)
+			return
+		}
+		if mode == "transit" {
+			operatorBrokerNormal(t, "P256-embedded-transit", false)
+			return
+		}
+		operatorBrokerNormal(t, "P256-embedded", true)
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, mode := range []string{"control", "transit", "renew"} {
+		cmd := exec.CommandContext(ctx, exe, "-test.run=^TestOperatorBrokerEmbeddedHost$", "-test.timeout=50s")
+		cmd.Env = append(os.Environ(), "WENDY_EMBEDDED_BROKER_TEST="+mode)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("embedded broker %s: %v\n%s", mode, err, out)
+		}
+	}
+}
 func TestOperatorBrokerNormalCredentialRenewalRejoins(t *testing.T) {
 	operatorBrokerNormal(t, "P256-renew", false)
 }
@@ -188,6 +219,12 @@ func operatorBrokerNormal(t *testing.T, algorithm string, disconnect bool) {
 	rootPEM := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: rootDER}))
 	certificate := config.CertificateInfo{PemCertificate: operatorPEM, PemCertificateChain: rootPEM, PemPrivateKey: operatorPrivate, PrincipalURI: principal}
 	directory := shortTempDir(t)
+	if strings.HasPrefix(algorithm, "P256-embedded") {
+		directory = filepath.Join(t.TempDir(), strings.Repeat("ipad-container-", 10))
+		if err := os.MkdirAll(directory, 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if algorithm == "P256-process" {
 		t.Setenv("WENDY_CONFIG_DIR", directory)
 	}
@@ -233,7 +270,7 @@ func operatorBrokerNormal(t *testing.T, algorithm string, disconnect bool) {
 		listeners = append(listeners, alternate)
 	}
 	var transit *brokerTransitFixture
-	if algorithm == "P256-transit" {
+	if algorithm == "P256-transit" || algorithm == "P256-embedded-transit" {
 		transit = newBrokerTransitFixture(t, ctx, tenant, rootPEM, issue)
 		extraSources = []carriers.Source{transit.source}
 	}
@@ -346,6 +383,11 @@ func operatorBrokerNormal(t *testing.T, algorithm string, disconnect bool) {
 		leaseMu.Unlock()
 		helpers.Wait()
 	})
+	if strings.HasPrefix(algorithm, "P256-embedded") {
+		EnableEmbeddedHost()
+		launchOperatorBroker = func(spec Spec) error { starts.Add(1); return startSpec(spec) }
+		t.Cleanup(func() { _ = SetEmbeddedActive(context.Background(), false) })
+	}
 	if algorithm == "P256-enable" || algorithm == "P256-auto" || algorithm == "P256-roam" || algorithm == "P256-nearby" || algorithm == "P256-nearby-paths" {
 		previousBrowse := browseOperatorLAN
 		t.Cleanup(func() { browseOperatorLAN = previousBrowse })
@@ -444,6 +486,29 @@ func operatorBrokerNormal(t *testing.T, algorithm string, disconnect bool) {
 		t.Fatalf("profile SPKI pin not retained: %v", err)
 	}
 	expectedWithdrawals := int32(1)
+	if algorithm == "P256-embedded" {
+		if err := SetEmbeddedActive(ctx, false); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := ConnectOperator(ctx, MeshSelector(router)); !errors.Is(err, ErrEmbeddedSuspended) {
+			t.Fatalf("background admitted a new connection: %v", err)
+		}
+		warm.Close()
+		if err := SetEmbeddedActive(ctx, true); err != nil {
+			t.Fatal(err)
+		}
+		warm, err = ConnectOperator(ctx, MeshSelector(router))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := warm.AgentService.GetAgentVersion(ctx, &agentpb.GetAgentVersionRequest{}); err != nil {
+			t.Fatal(err)
+		}
+		if starts.Load() != 2 || admitted.Load() != 2 {
+			t.Fatal("resume did not rejoin through the embedded broker")
+		}
+		expectedWithdrawals++
+	}
 	if algorithm == "P256-reconnect" || algorithm == "P256-roam" {
 		original := <-proofs
 		firstSocket := <-carrierSockets
@@ -503,7 +568,7 @@ func operatorBrokerNormal(t *testing.T, algorithm string, disconnect bool) {
 		}
 		expectedWithdrawals = 2
 	}
-	if algorithm == "P256-renew" {
+	if algorithm == "P256-renew" || algorithm == "P256-embedded-renew" {
 		// Normal issuance renews the same canonical operator without changing the
 		// installation's endpoint identity or silently retaining an old credential.
 		_, renewedPEM, renewedPrivate := issue(4, principal, operatorKey, x509.ExtKeyUsageClientAuth)

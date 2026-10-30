@@ -29,3 +29,29 @@ func WDInitializeMobile(directory *C.char) *C.WDStatus {
 	}
 	return statusResult(desktop.Initialize(""))
 }
+
+//export WDSetMobileState
+func WDSetMobileState(active C.int32_t, account, organization *C.char) *C.WDStatus {
+	if runtime.GOOS != "ios" {
+		return statusResult(errors.New("mobile lifecycle requires iOS"))
+	}
+	return statusResult(desktop.SetMobileState(active != 0, C.GoString(account), C.GoString(organization)))
+}
+
+//export WDMobileMeshSummary
+func WDMobileMeshSummary() *C.WDMeshSummary {
+	state, detail := desktop.MobileMeshSummary()
+	p := alloc[C.WDMeshSummary](1)
+	p.state, p.detail = C.CString(state), C.CString(detail)
+	return p
+}
+
+//export WDMeshSummaryFree
+func WDMeshSummaryFree(p *C.WDMeshSummary) {
+	if p == nil {
+		return
+	}
+	free(p.state)
+	free(p.detail)
+	free(p)
+}

@@ -13,6 +13,7 @@ final class GoClient: Sendable {
     private let requests = DispatchQueue(label: "dev.wendy.desktop.requests", qos: .userInitiated)
     private let connections = DispatchQueue(label: "dev.wendy.desktop.connections", qos: .userInitiated)
     private let events = DispatchQueue(label: "dev.wendy.desktop.events", qos: .userInitiated)
+    private let mobileLifecycle = DispatchQueue(label: "dev.wendy.mobile.lifecycle", qos: .userInitiated)
 
     func perform<T: Sendable>(unlessCancelled: Bool = true, _ work: @escaping @Sendable () throws -> T) async throws -> T {
         try await BlockingWork.run(on: requests, unlessCancelled: unlessCancelled, work)
@@ -59,10 +60,37 @@ final class GoClient: Sendable {
     }
 
     #if os(iOS)
-    func initializeMobile() async throws {
-        let directory = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true).appendingPathComponent("Wendy", isDirectory: true)
-        try await perform { try Self.withCString(directory.path) { try Self.finish(WDInitializeMobile($0)) } }
-    }
+        func initializeMobile(directory override: URL? = nil) async throws {
+            let directory =
+                try override
+                ?? FileManager.default.url(
+                    for: .applicationSupportDirectory,
+                    in: .userDomainMask,
+                    appropriateFor: nil,
+                    create: true
+                ).appendingPathComponent("Wendy", isDirectory: true)
+            try await perform {
+                try Self.withCString(directory.path) { try Self.finish(WDInitializeMobile($0)) }
+            }
+        }
+        func setMobileState(active: Bool, account: String, organization: String) async throws {
+            try await BlockingWork.run(on: mobileLifecycle, unlessCancelled: false) {
+                try Self.withCString(account) { account in
+                    try Self.withCString(organization) { organization in
+                        try Self.finish(WDSetMobileState(active ? 1 : 0, account, organization))
+                    }
+                }
+            }
+        }
+        func mobileMeshSummary() async throws -> (String, String) {
+            try await perform {
+                guard let result = WDMobileMeshSummary() else {
+                    throw WendyError(message: "Missing mesh status.")
+                }
+                defer { WDMeshSummaryFree(result) }
+                return (Self.string(result.pointee.state), Self.string(result.pointee.detail))
+            }
+        }
     #endif
 
     func initialize(cliPath: String) async throws {

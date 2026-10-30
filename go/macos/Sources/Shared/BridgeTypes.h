@@ -15,6 +15,7 @@ typedef enum {
 // Nested pointers live until that call; clients must copy anything they retain.
 // Input strings/arrays are borrowed for the duration of the call, never mutated.
 typedef struct { char *message; int32_t can_forget_identity; } WDStatus;
+typedef struct { char *state; char *detail; } WDMeshSummary;
 typedef struct { char *id, *name, *selector, *address; WDTransport transport; int32_t lite; } WDDevice;
 typedef struct { char *name; WDAppState state; } WDService;
 typedef struct {

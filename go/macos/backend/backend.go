@@ -11,6 +11,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/agent/data/thermal"
 	"github.com/wendylabsinc/wendy/go/internal/cli/commands"
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
+	"github.com/wendylabsinc/wendy/go/internal/cli/sessionbroker"
 	"github.com/wendylabsinc/wendy/go/macos/vpn"
 	pb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 )
@@ -39,6 +40,10 @@ type Event struct {
 	Thermal         *ThermalFrame
 }
 type Backend struct {
+	operationMu             sync.Mutex
+	operationCancel         context.CancelFunc
+	mobileMu                sync.Mutex
+	mobileScope             string
 	nearby                  nearbySetup
 	UnitreeControl          UnitreeController
 	modelRun                *ModelRun
@@ -168,7 +173,24 @@ func (b *Backend) disconnect() {
 func (b *Backend) begin() (context.Context, func()) {
 	b.mu.Lock()
 	ctx, cancel := context.WithTimeout(context.Background(), 65*time.Second)
-	return ctx, func() { cancel(); b.mu.Unlock() }
+	b.operationMu.Lock()
+	b.operationCancel = cancel
+	b.operationMu.Unlock()
+	return ctx, func() {
+		cancel()
+		b.operationMu.Lock()
+		b.operationCancel = nil
+		b.operationMu.Unlock()
+		b.mu.Unlock()
+	}
+}
+
+func (b *Backend) cancelOperation() {
+	b.operationMu.Lock()
+	defer b.operationMu.Unlock()
+	if b.operationCancel != nil {
+		b.operationCancel()
+	}
 }
 func (b *Backend) connection(session uint64) (*grpcclient.AgentConnection, error) {
 	if err := b.validSession(session); err != nil {
@@ -413,17 +435,22 @@ func (b *Backend) stopVPN() {
 	}
 }
 func (b *Backend) Shutdown() error {
+	b.cancelOperation()
+	b.ReserveConnection()
 	b.NearbyClose(0)
 	b.UnitreeControl.Shutdown()
 	b.ReserveConnection()
 	_, done := b.begin()
 	defer done()
 	b.disconnect()
+	drain, stopDrain := context.WithTimeout(context.Background(), 15*time.Second)
+	defer stopDrain()
+	meshErr := sessionbroker.SetEmbeddedActive(drain, false)
 	if b.loginStop != nil {
 		b.loginStop()
 	}
 	b.stopVPN()
-	return nil
+	return meshErr
 }
 func (b *Backend) Apps() ([]*pb.AppContainer, error) {
 	ctx, done := b.begin()

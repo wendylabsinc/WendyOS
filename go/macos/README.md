@@ -304,11 +304,57 @@ Chat runs the Wendy MCP server in-process, with bundled skills, tool approvals,
 and context-scoped MCP request attribution. Models still run on the selected edge
 device, not on the phone. The iOS app does not expose host shell execution.
 
-LAN and authenticated Cloud transports are supported. The detached mesh worker,
-system-wide VPN extension, USB flashing, and host simulator management are not
-ported to iOS. Tools requiring those desktop facilities cannot run there. Keep
-the app in the foreground for device operations; camera subscriptions stop when
-it enters the background and resume when the camera screen becomes active.
+LAN, authenticated Cloud, and Wendy Net transports are supported. While the app
+is active, its Go backend hosts the same operator broker, full Babel router and
+userspace IP stack as the CLI. It discovers authenticated WendyOS first hops over
+LAN TLS and CoreBluetooth L2CAP, then projects reachable WendyOS and Lite targets
+into Nearby. Those canonical mesh selections use the broker for management,
+SensorLink cameras, logs, chat and application streams. Web apps use the existing
+app-owned loopback forwarder; there is no system-wide mesh route or DNS change.
+
+The embedded broker uses bounded in-memory local streams, so it does not launch
+an executable or depend on Unix socket path lengths inside the iOS sandbox. It
+retains installation identity and routing history in Application Support. Account
+or organization changes drain the old router and invalidate device connections
+before selecting the replacement profile. Mesh routes and device listings are
+revalidated after reconnects; an advertisement alone does not authorize a target.
+Foreground discovery also uses the CLI's certificate renewal and serialized OAuth
+token rotation, without delaying direct LAN discovery when Cloud is offline.
+
+The shared operator carrier uses its ordinary full-chain TLS role. Deployed
+router-role binding independently rechecks the wire certificate chain after the
+TLS handshake, so eliding a cached issuer there can fail even after TLS verified
+it. General mesh TLS retains known-issuer negotiation. This compatibility choice
+preserves certificate validation and costs extra certificate bytes over BLE.
+`WENDY_MESH_DEBUG=1` logs carrier authentication and failures without credentials.
+
+The root scene owns the participant independently of individual screens. Entering
+the background stops its connections and joins shutdown; returning to the app
+restarts discovery, waits for the selected mesh target's fresh signed route, and
+reconnects. Abrupt app termination is
+handled by ordinary peer/manifest expiry. Continuous background routing is not
+provided. Keep the app in the foreground for device operations.
+
+BLE mesh matches the CLI's current central role: the phone connects to a WendyOS
+router advertising the primary operator-router service. A constrained C6 is
+reachable through that router. The phone does not advertise an incoming mesh
+carrier or serve as the C6's direct BLE gateway. The separate nearby BLE setup
+and WendyCom management protocols keep their existing roles.
+
+On Linux first hops, BlueZ's battery plugin can read protected iOS Battery Level
+characteristics and trigger pairing followed by disconnection of an unpaired
+mesh link. Run `bluetoothd --noplugin=battery` on affected routers; reverse GATT
+discovery can stay enabled. [WendyOS-Builder PR #329](https://github.com/wendylabsinc/WendyOS-Builder/pull/329)
+adds this policy for new images.
+
+Lite firmware also needs TCP keepalive on native management sockets so an
+abruptly lost operator does not occupy a scarce connection slot until certificate
+expiry. [wendy-lite PR #120](https://github.com/wendylabsinc/wendy-lite/pull/120)
+adds dead-peer detection after approximately 30 seconds while retaining healthy
+idle sessions. This does not remove a constrained device's application RAM limits.
+
+The system-wide VPN extension, USB flashing, and host simulator management remain
+unavailable on iOS. Tools requiring those desktop facilities cannot run there.
 
 Run the mobile runtime tests using an installed simulator destination:
 
@@ -320,8 +366,36 @@ xcodebuild -project go/macos/WendyDesktop.xcodeproj \
 ```
 
 The tests initialize and call the embedded Go bridge in the iOS sandbox, exercise
-the H.264 parser, and check recorded-frame timestamp lookup. Network operations
-still require a reachable device or a Cloud account.
+foreground/background lifecycle calls, the H.264 parser and recorded-frame timestamp
+lookup. Host race tests exercise the real embedded broker with authenticated
+management, persistent pins, full-router topology, suspend/resume, and transit
+between remote participants. A long-container-path test covers the in-memory
+transport and unpublication. Physical LAN/BLE qualification requires a signed
+build, an operator account and reachable hardware; simulator success does not
+establish Bluetooth interoperability.
+
+The test scheme sets `WENDY_MOBILE_TEST_HOST=1`, keeping ordinary UI startup from
+competing with tests for backend lifecycle and account ownership.
+The optional `testLiveMeshDiscoveryManagementAndResume` uses the normal app's
+saved account, discovers a mesh target, connects and reads device info (and lists
+applications on WendyOS), then pauses/resumes the embedded participant and repeats
+management. It is skipped unless the
+test runner has `WENDY_LIVE_MESH_TENANT` set to the expected tenant UUID. Set
+`WENDY_LIVE_MESH_CLOUD` to assert the Cloud endpoint and optionally
+`WENDY_LIVE_MESH_SELECTOR` to require one canonical target. Sign in using the normal
+app first. Ordinary tests use disposable config directories and do not alter that
+login. Qualify BLE separately with Wi-Fi disabled and a reachable BLE router;
+the same test otherwise allows the broker to choose LAN or BLE automatically.
+If iOS requires online development-certificate verification, launch with
+`WENDY_LIVE_MESH_WAIT_FOR_READY=1` while online. After the waiting message, isolate
+the radios, return to the running app, and copy a file to
+`tmp/wendy-live-mesh-ready` in its app data container over USB to release discovery.
+
+Signing-team selection is local: pass `DEVELOPMENT_TEAM=YOUR_TEAM` to `xcodebuild`.
+For a Personal Team without APNs, a local development-only empty entitlement file
+can be supplied with `CODE_SIGN_ENTITLEMENTS=/absolute/path/to/Local.entitlements`;
+notification registration will remain unavailable. Do not commit personal signing
+teams, profiles, credentials, or local entitlement overrides.
 
 ## Fleet, pairing, campaigns, chat, and recorded data
 

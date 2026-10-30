@@ -360,6 +360,9 @@ func ConnectOperator(ctx context.Context, selector string) (*grpcclient.AgentCon
 var launchOperatorBroker = startSpec
 
 func connectOrStartOperator(ctx context.Context, spec Spec, certificate *config.CertificateInfo) (*grpcclient.AgentConnection, error) {
+	if host := embeddedHost.Load(); host != nil && !host.active.Load() {
+		return nil, ErrEmbeddedSuspended
+	}
 	if !configDirOwnershipSafe() {
 		return nil, errors.New("operator profile is not owned by the current user")
 	}
@@ -612,6 +615,9 @@ func runOperator(ctx context.Context, dir string, spec Spec, idleTTL time.Durati
 	remotes.appDial = attachment.DialAppTLS
 	defer remotes.Close()
 	return serveResolvedLocal(owner, dir, spec, initial.upstream.Conn, idleTTL, func() bool {
+		if host := embeddedHost.Load(); host != nil && host.active.Load() {
+			return true // The foreground app owns the routing lease.
+		}
 		if !spec.Operator.Automatic {
 			return true
 		}

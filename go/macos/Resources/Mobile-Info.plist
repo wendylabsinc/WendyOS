@@ -30,7 +30,10 @@
 	<key>NSBonjourServices</key>
 	<array>
 		<string>_wendyos._udp</string>
+		<string>_wendyos._tcp</string>
 		<string>_wendy-lite._tcp</string>
+		<string>_wendy-net._tcp</string>
+		<string>_wendy-net._udp</string>
 	</array>
 	<key>NSCameraUsageDescription</key>
 	<string>Wendy uses the camera to recognize devices and scan your site into a 3D model.</string>

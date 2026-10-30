@@ -109,6 +109,9 @@ func Start(key string, conn *grpcclient.AgentConnection) error {
 var HelperExecutable = os.Executable
 
 func startSpec(spec Spec) error {
+	if host := embeddedHost.Load(); host != nil {
+		return host.start(spec)
+	}
 	b, err := json.Marshal(spec)
 	if err != nil {
 		return err
