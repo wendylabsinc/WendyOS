@@ -227,7 +227,7 @@ func connectCloudDiscoveryDevice(ctx context.Context, auth *config.AuthConfig, a
 		return asset.reconnect(rctx, auth, brokerURL)
 	}
 	if brokerConn != nil {
-		agentConn.ExtraClosers = append(agentConn.ExtraClosers, brokerConn)
+		agentConn.AddCloser(brokerConn)
 	}
 	cleanupBroker = false
 	return agentConn, nil

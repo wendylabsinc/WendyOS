@@ -293,8 +293,9 @@ func urlPort(u *url.URL) int {
 // an app: a device address (host), or the loopback end of a cloud app tunnel
 // (host is cloudAppTunnelHost and tunnel is set).
 type hookRoute struct {
-	host   string
-	tunnel *cloudAppTunnel
+	host       string
+	tunnel     *cloudAppTunnel
+	browserURL string // selected operator viewer; empty for physical/Cloud paths
 }
 
 // appURL is the URL to show for appCfg on this route: reachableAppURLForHost

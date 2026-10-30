@@ -16,6 +16,7 @@ import (
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/cli/onboarding"
+	"github.com/wendylabsinc/wendy/go/internal/cli/sessionbroker"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/internal/shared/discovery"
 	"github.com/wendylabsinc/wendy/go/internal/shared/models"
@@ -51,6 +52,7 @@ type mcpServer struct {
 	toolGroups           []string
 	toolProfile          string
 	discoverLANFn        func(ctx context.Context, timeout time.Duration) ([]models.LANDevice, error)
+	meshDirectoryFn      func(context.Context) (sessionbroker.OperatorDirectory, error)
 	usbSetupNoticeFn     func() string
 	mu                   sync.RWMutex
 	proxyDiag            []proxyDiagEntry
@@ -87,10 +89,11 @@ func (s *mcpServer) SetStartupConnect(fn func(context.Context)) {
 
 func New(cfg *config.Config, connectFn ConnectFunc) *mcpServer {
 	return &mcpServer{
-		cfg:           cfg,
-		connectFn:     connectFn,
-		cloudTunnels:  make(map[string]*mcpCloudTunnel),
-		discoverLANFn: discovery.DiscoverLAN,
+		cfg:             cfg,
+		connectFn:       connectFn,
+		cloudTunnels:    make(map[string]*mcpCloudTunnel),
+		discoverLANFn:   discovery.DiscoverLAN,
+		meshDirectoryFn: sessionbroker.ReadOperatorDirectoryAutomatic,
 	}
 }
 

@@ -25,7 +25,8 @@ const localMeshTopologyTimeout = 15 * time.Second
 
 // Register this constructor under the device command's manage group.
 func newDeviceLocalMeshCmd() *cobra.Command {
-	root := &cobra.Command{Use: "wendy-net", Aliases: []string{"local-mesh", "nan-mesh"}, Short: "Configure Wendy Net carriers and Internet sharing"}
+	root := &cobra.Command{Use: "wendy-net", Aliases: []string{"local-mesh", "nan-mesh"}, Short: "Configure Wendy Net carriers and Internet sharing",
+		Long: "Configure Wendy Net carriers. For physical Wendy Lite BLE without USB discovery, use --device wendy-lite:ble:<address> (CoreBluetooth UUID on macOS, BLE MAC on Linux). Omitted settings are preserved; status never enables mesh participation."}
 	configure := &cobra.Command{Use: "configure", Short: "Update selected Wendy Net settings", Args: cobra.NoArgs}
 	configure.Flags().Bool("participate", false, "Join and relay Wendy Net (false stops all carriers; saved carrier choices are retained)")
 	configure.Flags().Bool("roam", false, "Use Wendy Net Internet when an independent uplink is unavailable")
@@ -92,7 +93,7 @@ func newDeviceLocalMeshCmd() *cobra.Command {
 		}
 		return printLocalMeshStatus(cmd, response)
 	}}
-	root.AddCommand(configure, inspect, newDeviceLocalMeshTopologyCmd())
+	root.AddCommand(configure, inspect, newDeviceLocalMeshTopologyCmd(), newDeviceOperatorMeshConnectCmd(), newDeviceOperatorMeshDisconnectCmd(), newDeviceMeshForwardCmd(), newDeviceMeshServicesCmd())
 	return root
 }
 

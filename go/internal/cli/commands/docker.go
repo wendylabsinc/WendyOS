@@ -2984,7 +2984,7 @@ func resolveRegistryForAgent(ctx context.Context, conn *grpcclient.AgentConnecti
 	}
 
 	dockerRegistryProxyAddrs[conn] = registryProxyEntry{addr: addr, dialErr: dialErr}
-	conn.ExtraClosers = append(conn.ExtraClosers, closeFunc(func() {
+	conn.AddCloser(closeFunc(func() {
 		dockerRegistryProxyCacheMu.Lock()
 		delete(dockerRegistryProxyAddrs, conn)
 		dockerRegistryProxyCacheMu.Unlock()

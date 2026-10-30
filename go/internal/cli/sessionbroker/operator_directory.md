@@ -6,11 +6,11 @@ carry public descriptions, not binary certificate/signature material. Topology
 is independently available through binary protobuf `TopologyV1/Get`. These are
 local IPC APIs, with no additional mesh publication or service record.
 
-Production rows come from the broker's own full participant. Each joins a fresh,
+Rows come from the broker's own full participant. Each joins a fresh,
 verified signed device manifest to its exact authorized Babel origin, prefix,
-sequence and expiry. Explicit host fixtures can inject coherent observer views.
-Only supported signed WendyOS/Lite management endpoints are selectable. Cloud
-inventory, physical advertisement hints and expired records do not substitute
+sequence and expiry. Only supported signed WendyOS/Lite management endpoints
+are selectable. Cloud inventory, physical advertisement hints and expired records
+do not substitute
 for a verified route. Destination connections still authenticate their exact
 remote TLS identity, tenant chain and profile pins.
 
@@ -39,8 +39,8 @@ List, Watch and topology reads connect only to an existing matching broker.
 They do not start a participant, discover radios, log in to Cloud or renew
 credentials. The separately named `ReadOperatorDirectoryAutomatic` and
 `WatchOperatorDirectoryAutomatic` helpers permit preparation only as part of an
-explicitly requested discovery action. Public CLI/UI integrations are built on
-these APIs in a separate delivery unit.
+explicitly requested discovery action. The CLI discovery, service browser and
+desktop Networks view consume these APIs.
 
 Service browsing projects inherited entries from the same manifests, filtered
 by optional mesh/type, with at most 512 rows and 256 KiB. Unreachable or expired
@@ -49,6 +49,5 @@ empty list. Native application lookup filters to its exact verified target befor
 applying the public inventory budget, so unrelated services cannot hide a
 retained target's declared port.
 
-Positive host tests cover endpoint replacement, route loss, maximum-length
-operator identities, bounded large-mesh projections, shared/coalesced polling,
-watch cancellation and lease release. Hardware qualification is separate.
+For user commands, see the
+[CLI mesh guide](../assets/docs/development/local-mesh-radio.md).
