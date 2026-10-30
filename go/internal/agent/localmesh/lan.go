@@ -26,9 +26,6 @@ import (
 )
 
 const (
-	LANPort             = 43023
-	EthernetLinkCost    = uint16(64)
-	WiFiLinkCost        = uint16(128)
 	lanService          = "_wendy-net._udp"
 	lanDiscoveryVersion = "1"
 	lanProtocol         = "quic-v1"
