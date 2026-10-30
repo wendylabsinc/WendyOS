@@ -1567,6 +1567,9 @@ func runSwiftWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cw
 
 	regPort := registryPort(agentOS)
 
+	if err := checkLocalBuildSpace(toolchainBuildSpaceDirs(cwd), []string{wendyCacheClearStep}); err != nil {
+		return err
+	}
 	if err := swifttoolchain.EnsureSwiftVersion(ctx, &dimWriter{}, os.Stderr); err != nil {
 		return classifyCommandError(errBuilderUnavailable, err)
 	}
@@ -1667,6 +1670,9 @@ func runMacOSSwiftPMWithAgent(ctx context.Context, conn *grpcclient.AgentConnect
 	}
 	if deviceArch != runtime.GOARCH {
 		return commandErrorf(errProjectTargetMismatch, "architecture mismatch: device is %s but host is %s", deviceArch, runtime.GOARCH)
+	}
+	if err := checkLocalBuildSpace(toolchainBuildSpaceDirs(cwd), []string{wendyCacheClearStep}); err != nil {
+		return err
 	}
 
 	product, err := swifttoolchain.FindSwiftProductWithActiveSwiftOptions(cwd, opts.product, !opts.yes && isInteractiveTerminal())
@@ -2467,8 +2473,13 @@ func runWithAgentRecorded(ctx context.Context, conn *grpcclient.AgentConnection,
 		metrics.transport = ""
 	}
 
-	// A build will run below (the no-build fast path returned above), so make
-	// sure the Apple Container system is up when --builder apple-container is
+	// A build will run below (the no-build fast path returned above). Refuse it
+	// now if this computer's disk is too full to hold it.
+	if err := checkLocalBuildSpace(imageBuildSpaceDirs(), imageBuildSpaceSteps(opts.builder, true)); err != nil {
+		return err
+	}
+
+	// Make sure the Apple Container system is up when --builder apple-container is
 	// explicit. This covers both the chunk-diff and the registry-push build.
 	// The emulation notice goes out now, before the build UI owns the terminal.
 	noteEmulatedBuild(platform, true)
@@ -2540,6 +2551,10 @@ func runWithAgentRecorded(ctx context.Context, conn *grpcclient.AgentConnection,
 			// same Dockerfile, so it would fail identically — and can even mask the
 			// real error behind an unrelated builder-setup failure. Surface the
 			// actionable build error directly instead of falling back. (#1166)
+			return err
+		} else if errors.Is(err, errBuildxMissing) && registryPushWouldUseDocker(opts.builder) {
+			// The registry push would build with Docker too, and stop at the
+			// same missing plugin.
 			return err
 		} else if shouldUseBuildkitOnDevice() {
 			// On-device (inside the agent container: WENDY_AGENT_SOCKET set, no

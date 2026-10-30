@@ -522,6 +522,9 @@ func runMultiServiceWithAgent(ctx context.Context, conn *grpcclient.AgentConnect
 		invalidateRemoteServiceDeployFingerprints(appCfg.AppID, deviceKey, services, skip)
 	} else {
 		if len(skip) < len(services) {
+			if err := checkLocalBuildSpace(imageBuildSpaceDirs(), imageBuildSpaceSteps(opts.builder, true)); err != nil {
+				return err
+			}
 			noteEmulatedBuild(platform, true)
 		}
 		failed, preparedContent, buildErr = buildServicesParallelWithContent(ctx, conn, regPort, agentOS, cwd, appCfg.AppID, services, platform, buildArgs, opts.builder, opts.chunking, skip, dockerfiles, opts.maxConcurrency, opts.quietBuild, sfOpts...)

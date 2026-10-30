@@ -230,13 +230,17 @@ func (s *mcpServer) handleRun(ctx context.Context, req mcpgo.CallToolRequest) (*
 			result["status"] = "failed"
 			result["readiness"] = "not_checked"
 		}
-		if result["message"] == nil {
+		refusedForSpace := runRefusedForDiskSpace(output)
+		if refusedForSpace {
+			result["message"] = "Nothing was built or deployed: this computer has too little free disk space for the build. The output names the disk and ways to free space."
+			result["suggested_next_step"] = "Show the user the ways to free disk space in the output and ask before deleting anything, then run again."
+		} else if result["message"] == nil {
 			result["message"] = "Deployment or readiness verification did not complete. Inspect device state before retrying; the command may already have created or started the container."
 		}
 		if output == "" && runErr != nil {
 			result["output"] = runErr.Error()
 		}
-		if next := runFailureNextStep(target, code); next != "" {
+		if next := runFailureNextStep(target, code); next != "" && !refusedForSpace {
 			result["suggested_next_step"] = next
 		}
 		r := okResult(result)

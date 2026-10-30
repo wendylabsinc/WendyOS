@@ -470,3 +470,17 @@ func TestBuildFailureErrorSkipsGenericTrailers(t *testing.T) {
 		})
 	}
 }
+
+// Recovery steps print with the final error. The details box's one-line
+// cause must not run them into the message.
+func TestRenderBuildFailureCauseLeavesOutNextSteps(t *testing.T) {
+	original := persistBuildFailureLog
+	defer func() { persistBuildFailureLog = original }()
+	persistBuildFailureLog = func(string, string) (string, error) { return "/tmp/build.log", nil }
+
+	var out strings.Builder
+	renderBuildFailure(&out, "", "", withNextSteps(errors.New("Docker Buildx is not installed"), "Install the Docker Buildx plugin."))
+	if !strings.Contains(out.String(), "Cause: Docker Buildx is not installed\n") || strings.Contains(out.String(), "Install the Docker Buildx plugin") {
+		t.Fatalf("cause line includes the next steps:\n%s", out.String())
+	}
+}

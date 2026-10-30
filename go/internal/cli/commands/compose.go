@@ -1215,6 +1215,10 @@ func runComposeWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, 
 
 	regPort := registryPort(agentOS)
 
+	// Compose projects cannot use --build-host, so it is not offered.
+	if err := checkLocalBuildSpace(imageBuildSpaceDirs(), imageBuildSpaceSteps(opts.builder, false)); err != nil {
+		return err
+	}
 	if err := ensureAppleContainerSystemForBuilder(ctx, opts.builder, opts.yes); err != nil {
 		return err
 	}

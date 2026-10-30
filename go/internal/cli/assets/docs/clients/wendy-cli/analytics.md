@@ -145,7 +145,7 @@ categories across commands, including `run`, `watch`, `build`, and device comman
 | `readiness_timeout` | The application's TCP readiness probe did not succeed in time. |
 | `user_cancelled`, `context_canceled`, `context_deadline` | A picker or operation was cancelled, or its context deadline expired. |
 | `network_dns`, `network_timeout`, `network_refused`, `network_unreachable`, `connection_closed` | A typed network error identifies DNS, timeout, refused connection, unreachable network/host, or reset/broken pipe. |
-| `permission_denied`, `file_not_found`, `disk_full` | An underlying OS error identifies a local resource failure. |
+| `permission_denied`, `file_not_found`, `disk_full` | An underlying OS error identifies a local resource failure. `disk_full` also covers `wendy run` refusing to start a build on a disk with too little free space. |
 | `unexpected_eof`, `process_failed` | An unclassified operation ended with a truncated stream or a subprocess exit failure. |
 | `other` | The error has no recognized category or typed cause. Its message is still never sent. |
 
