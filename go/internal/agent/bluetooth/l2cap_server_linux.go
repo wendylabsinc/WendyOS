@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -34,7 +35,7 @@ func (c *l2capStreamConn) Read(b []byte) (int, error) {
 		return n, nil
 	}
 	msg := make([]byte, 65536)
-	n, err := unix.Read(c.fd, msg)
+	n, err := retryL2CAPInterrupted(func() (int, error) { return unix.Read(c.fd, msg) })
 	if err != nil {
 		if err == unix.EAGAIN || err == unix.EWOULDBLOCK {
 			return 0, &net.OpError{Op: "read", Net: "l2cap", Err: &l2capTimeoutError{}}
@@ -53,11 +54,22 @@ func (c *l2capStreamConn) Read(b []byte) (int, error) {
 }
 
 func (c *l2capStreamConn) Write(b []byte) (int, error) {
-	n, err := unix.Write(c.fd, b)
+	n, err := retryL2CAPInterrupted(func() (int, error) { return unix.Write(c.fd, b) })
 	if err != nil {
 		return n, &net.OpError{Op: "write", Net: "l2cap", Err: err}
 	}
 	return n, nil
+}
+
+// Go's async preemption can interrupt these raw socket syscalls. A signal is
+// not a peer disconnect: retry it without discarding the encrypted session.
+func retryL2CAPInterrupted(operation func() (int, error)) (int, error) {
+	for {
+		n, err := operation()
+		if !errors.Is(err, unix.EINTR) {
+			return n, err
+		}
+	}
 }
 
 func (c *l2capStreamConn) Close() error { return unix.Close(c.fd) }
