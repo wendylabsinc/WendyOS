@@ -9,6 +9,8 @@ import (
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 func (s *mcpServer) registerOSTools(srv *server.MCPServer) {
@@ -80,6 +82,9 @@ func (s *mcpServer) handleOSUpdate(ctx context.Context, req mcpgo.CallToolReques
 	if conn == nil {
 		return errNotConnected(), nil
 	}
+	// Cancelling the stream once Completed arrives tells the agent it can reboot.
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	stream, err := conn.AgentService.UpdateOS(ctx, &agentpb.UpdateOSRequest{
 		ArtifactUrl:    stringParam(req, "artifact_url"),
 		UpdaterBackend: "",
@@ -90,12 +95,18 @@ func (s *mcpServer) handleOSUpdate(ctx context.Context, req mcpgo.CallToolReques
 
 	tok := progressToken(req)
 	var sb strings.Builder
-	for {
+	installed := false
+	for done := false; !done; {
 		resp, err := stream.Recv()
 		if err == io.EOF {
 			break
 		}
 		if err != nil {
+			// Agents that reboot straight after the last frames can lose them.
+			if installed && status.Code(err) == codes.Unavailable {
+				sb.WriteString("connection lost after the install finished — the device is rebooting; check os_update_status once it is back\n")
+				break
+			}
 			return errResult(codeFromGRPC(err), grpcErrString(err)), nil
 		}
 		switch resp.ResponseType.(type) {
@@ -103,6 +114,9 @@ func (s *mcpServer) handleOSUpdate(ctx context.Context, req mcpgo.CallToolReques
 			p := resp.GetProgress()
 			sb.WriteString(fmt.Sprintf("[%s] %d%%\n", p.GetPhase(), p.GetPercent()))
 			reportProgress(ctx, tok, float64(p.GetPercent()), 100, fmt.Sprintf("[%s] %d%%", p.GetPhase(), p.GetPercent()))
+			if p.GetPhase() == "done" || p.GetPhase() == "finalizing" {
+				installed = true
+			}
 		case *agentpb.UpdateOSResponse_Completed_:
 			c := resp.GetCompleted()
 			if c.GetRebootRequired() {
@@ -110,6 +124,8 @@ func (s *mcpServer) handleOSUpdate(ctx context.Context, req mcpgo.CallToolReques
 			} else {
 				sb.WriteString("update complete\n")
 			}
+			// The agent reboots instead of ending the stream.
+			done = true
 		case *agentpb.UpdateOSResponse_Failed_:
 			return errResultf(errCodeInternal, "update failed: %s", resp.GetFailed().GetErrorMessage()), nil
 		}

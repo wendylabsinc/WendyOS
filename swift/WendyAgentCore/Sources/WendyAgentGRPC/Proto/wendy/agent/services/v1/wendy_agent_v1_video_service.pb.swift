@@ -474,11 +474,25 @@ public nonisolated struct Wendy_Agent_Services_V1_VideoFrame: Sendable {
   /// Clears the value of `rawFormat`. Subsequent reads from it will return its default value.
   public mutating func clearRawFormat() {self._rawFormat = nil}
 
+  /// Wendy Data's extrema for a supported picture-only Y16 frame. Values are
+  /// sensor counts, NOT temperatures: the camera's radiometric mode and scale
+  /// must be known before converting them. Absent on older agents or layouts
+  /// the decoder cannot interpret. Computed from this exact raw payload.
+  public var rawExtrema: Wendy_Agent_Services_V1_RawFrameExtrema {
+    get {_rawExtrema ?? Wendy_Agent_Services_V1_RawFrameExtrema()}
+    set {_rawExtrema = newValue}
+  }
+  /// Returns true if `rawExtrema` has been explicitly set.
+  public var hasRawExtrema: Bool {self._rawExtrema != nil}
+  /// Clears the value of `rawExtrema`. Subsequent reads from it will return its default value.
+  public mutating func clearRawExtrema() {self._rawExtrema = nil}
+
   public var unknownFields = SwiftProtobuf.UnknownStorage()
 
   public init() {}
 
   fileprivate var _rawFormat: Wendy_Agent_Services_V1_RawFormat? = nil
+  fileprivate var _rawExtrema: Wendy_Agent_Services_V1_RawFrameExtrema? = nil
 }
 
 /// A tunable V4L2 control on a local camera -- exposure, gain, white balance and
@@ -715,6 +729,30 @@ public nonisolated struct Wendy_Agent_Services_V1_CameraDHCPInterfaceStatus: Sen
   public var state: String = String()
 
   public var detail: String = String()
+
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public init() {}
+}
+
+/// Coordinates are zero-based sensor pixels, before display scaling or rotation.
+/// Zero and 65535 are excluded as invalid Y16 samples; ties use row-major order.
+public nonisolated struct Wendy_Agent_Services_V1_RawFrameExtrema: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  public var coldX: UInt32 = 0
+
+  public var coldY: UInt32 = 0
+
+  public var coldRaw: UInt32 = 0
+
+  public var hotX: UInt32 = 0
+
+  public var hotY: UInt32 = 0
+
+  public var hotRaw: UInt32 = 0
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
 
@@ -1210,7 +1248,7 @@ nonisolated extension Wendy_Agent_Services_V1_RawFormat: SwiftProtobuf.Message, 
 
 nonisolated extension Wendy_Agent_Services_V1_VideoFrame: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   public static let protoMessageName: String = _protobuf_package + ".VideoFrame"
-  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}data\0\u{3}timestamp_ns\0\u{1}codec\0\u{3}raw_format\0")
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}data\0\u{3}timestamp_ns\0\u{1}codec\0\u{3}raw_format\0\u{3}raw_extrema\0")
 
   public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -1222,6 +1260,7 @@ nonisolated extension Wendy_Agent_Services_V1_VideoFrame: SwiftProtobuf.Message,
       case 2: try { try decoder.decodeSingularUInt64Field(value: &self.timestampNs) }()
       case 3: try { try decoder.decodeSingularEnumField(value: &self.codec) }()
       case 4: try { try decoder.decodeSingularMessageField(value: &self._rawFormat) }()
+      case 5: try { try decoder.decodeSingularMessageField(value: &self._rawExtrema) }()
       default: break
       }
     }
@@ -1244,6 +1283,9 @@ nonisolated extension Wendy_Agent_Services_V1_VideoFrame: SwiftProtobuf.Message,
     try { if let v = self._rawFormat {
       try visitor.visitSingularMessageField(value: v, fieldNumber: 4)
     } }()
+    try { if let v = self._rawExtrema {
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 5)
+    } }()
     try unknownFields.traverse(visitor: &visitor)
   }
 
@@ -1252,6 +1294,7 @@ nonisolated extension Wendy_Agent_Services_V1_VideoFrame: SwiftProtobuf.Message,
     if lhs.timestampNs != rhs.timestampNs {return false}
     if lhs.codec != rhs.codec {return false}
     if lhs._rawFormat != rhs._rawFormat {return false}
+    if lhs._rawExtrema != rhs._rawExtrema {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }
@@ -1746,6 +1789,61 @@ nonisolated extension Wendy_Agent_Services_V1_CameraDHCPInterfaceStatus: SwiftPr
     if lhs.ipv4Addresses != rhs.ipv4Addresses {return false}
     if lhs.state != rhs.state {return false}
     if lhs.detail != rhs.detail {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Wendy_Agent_Services_V1_RawFrameExtrema: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".RawFrameExtrema"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}cold_x\0\u{3}cold_y\0\u{3}cold_raw\0\u{3}hot_x\0\u{3}hot_y\0\u{3}hot_raw\0")
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularUInt32Field(value: &self.coldX) }()
+      case 2: try { try decoder.decodeSingularUInt32Field(value: &self.coldY) }()
+      case 3: try { try decoder.decodeSingularUInt32Field(value: &self.coldRaw) }()
+      case 4: try { try decoder.decodeSingularUInt32Field(value: &self.hotX) }()
+      case 5: try { try decoder.decodeSingularUInt32Field(value: &self.hotY) }()
+      case 6: try { try decoder.decodeSingularUInt32Field(value: &self.hotRaw) }()
+      default: break
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    if self.coldX != 0 {
+      try visitor.visitSingularUInt32Field(value: self.coldX, fieldNumber: 1)
+    }
+    if self.coldY != 0 {
+      try visitor.visitSingularUInt32Field(value: self.coldY, fieldNumber: 2)
+    }
+    if self.coldRaw != 0 {
+      try visitor.visitSingularUInt32Field(value: self.coldRaw, fieldNumber: 3)
+    }
+    if self.hotX != 0 {
+      try visitor.visitSingularUInt32Field(value: self.hotX, fieldNumber: 4)
+    }
+    if self.hotY != 0 {
+      try visitor.visitSingularUInt32Field(value: self.hotY, fieldNumber: 5)
+    }
+    if self.hotRaw != 0 {
+      try visitor.visitSingularUInt32Field(value: self.hotRaw, fieldNumber: 6)
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Wendy_Agent_Services_V1_RawFrameExtrema, rhs: Wendy_Agent_Services_V1_RawFrameExtrema) -> Bool {
+    if lhs.coldX != rhs.coldX {return false}
+    if lhs.coldY != rhs.coldY {return false}
+    if lhs.coldRaw != rhs.coldRaw {return false}
+    if lhs.hotX != rhs.hotX {return false}
+    if lhs.hotY != rhs.hotY {return false}
+    if lhs.hotRaw != rhs.hotRaw {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }

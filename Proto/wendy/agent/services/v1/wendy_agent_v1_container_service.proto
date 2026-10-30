@@ -24,6 +24,8 @@ service WendyContainerService {
     rpc RemoveVolume(RemoveVolumeRequest) returns (RemoveVolumeResponse);
     rpc ListContainerStats(ListContainerStatsRequest) returns (ListContainerStatsResponse);
     rpc GetResourceStats(GetResourceStatsRequest) returns (GetResourceStatsResponse);
+    // Lightweight network-only sample; does not scan containers or GPUs.
+    rpc GetNetworkStats(GetNetworkStatsRequest) returns (NetworkStats);
     rpc GetContainerPorts(GetContainerPortsRequest) returns (GetContainerPortsResponse);
     rpc StreamMCP(stream MCPChunk) returns (stream MCPChunk);
     rpc QueryChunks(QueryChunksRequest) returns (QueryChunksResponse);
@@ -372,6 +374,42 @@ message HostStats {
     // Aggregate system-battery state, from /sys/class/power_supply. Absent on
     // mains-powered devices, which is the overwhelming majority of them.
     optional BatteryStats battery = 8;
+    // Absent on older agents. Missing counters mean unavailable, never zero.
+    NetworkStats network = 9;
+}
+
+message GetNetworkStatsRequest {}
+
+message NetworkStats {
+    string boot_id = 1;
+    // CLOCK_BOOTTIME on the device, for rates unaffected by clock adjustments
+    // or client/relay latency. Compare samples only within the same boot.
+    uint64 sampled_at_boottime_ns = 2;
+    repeated NetworkInterfaceStats interfaces = 3;
+    // The agent's systemd service, including helper processes and IP loopback,
+    // but excluding app containers. IP bytes, not Ethernet/wire bytes.
+    AgentNetworkStats agent = 4;
+    string interfaces_unavailable_reason = 5;
+    string agent_unavailable_reason = 6;
+}
+
+message NetworkInterfaceStats {
+    string name = 1;
+    uint32 index = 2;
+    uint64 received_bytes = 3;
+    uint64 sent_bytes = 4;
+    // Virtual interfaces are listed but must not be summed with physical links.
+    bool virtual = 5;
+    bool loopback = 6;
+    // Interface counters cover all traffic since interface creation/reset.
+}
+
+message AgentNetworkStats {
+    uint64 received_bytes = 1;
+    uint64 sent_bytes = 2;
+    // Changes when service accounting restarts. Totals are since accounting
+    // was enabled, and do not represent historical daily/monthly usage.
+    string accounting_id = 3;
 }
 
 // ThermalZone is one temperature sensor read from /sys/class/thermal.

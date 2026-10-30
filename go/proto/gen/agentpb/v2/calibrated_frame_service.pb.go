@@ -87,6 +87,55 @@ func (FrameRequirement) EnumDescriptor() ([]byte, []int) {
 	return file_wendy_agent_services_v2_calibrated_frame_service_proto_rawDescGZIP(), []int{0}
 }
 
+type SiteCameraPose_Method int32
+
+const (
+	SiteCameraPose_METHOD_UNSPECIFIED         SiteCameraPose_Method = 0
+	SiteCameraPose_METHOD_REPORTED            SiteCameraPose_Method = 1 // source knows its transform into this exact model
+	SiteCameraPose_METHOD_VISUAL_LOCALIZATION SiteCameraPose_Method = 2
+)
+
+// Enum value maps for SiteCameraPose_Method.
+var (
+	SiteCameraPose_Method_name = map[int32]string{
+		0: "METHOD_UNSPECIFIED",
+		1: "METHOD_REPORTED",
+		2: "METHOD_VISUAL_LOCALIZATION",
+	}
+	SiteCameraPose_Method_value = map[string]int32{
+		"METHOD_UNSPECIFIED":         0,
+		"METHOD_REPORTED":            1,
+		"METHOD_VISUAL_LOCALIZATION": 2,
+	}
+)
+
+func (x SiteCameraPose_Method) Enum() *SiteCameraPose_Method {
+	p := new(SiteCameraPose_Method)
+	*p = x
+	return p
+}
+
+func (x SiteCameraPose_Method) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (SiteCameraPose_Method) Descriptor() protoreflect.EnumDescriptor {
+	return file_wendy_agent_services_v2_calibrated_frame_service_proto_enumTypes[1].Descriptor()
+}
+
+func (SiteCameraPose_Method) Type() protoreflect.EnumType {
+	return &file_wendy_agent_services_v2_calibrated_frame_service_proto_enumTypes[1]
+}
+
+func (x SiteCameraPose_Method) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use SiteCameraPose_Method.Descriptor instead.
+func (SiteCameraPose_Method) EnumDescriptor() ([]byte, []int) {
+	return file_wendy_agent_services_v2_calibrated_frame_service_proto_rawDescGZIP(), []int{1, 0}
+}
+
 type CameraIntrinsics_Provenance int32
 
 const (
@@ -123,11 +172,11 @@ func (x CameraIntrinsics_Provenance) String() string {
 }
 
 func (CameraIntrinsics_Provenance) Descriptor() protoreflect.EnumDescriptor {
-	return file_wendy_agent_services_v2_calibrated_frame_service_proto_enumTypes[1].Descriptor()
+	return file_wendy_agent_services_v2_calibrated_frame_service_proto_enumTypes[2].Descriptor()
 }
 
 func (CameraIntrinsics_Provenance) Type() protoreflect.EnumType {
-	return &file_wendy_agent_services_v2_calibrated_frame_service_proto_enumTypes[1]
+	return &file_wendy_agent_services_v2_calibrated_frame_service_proto_enumTypes[2]
 }
 
 func (x CameraIntrinsics_Provenance) Number() protoreflect.EnumNumber {
@@ -136,7 +185,7 @@ func (x CameraIntrinsics_Provenance) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use CameraIntrinsics_Provenance.Descriptor instead.
 func (CameraIntrinsics_Provenance) EnumDescriptor() ([]byte, []int) {
-	return file_wendy_agent_services_v2_calibrated_frame_service_proto_rawDescGZIP(), []int{0, 0}
+	return file_wendy_agent_services_v2_calibrated_frame_service_proto_rawDescGZIP(), []int{6, 0}
 }
 
 type DepthPlane_Alignment int32
@@ -178,11 +227,11 @@ func (x DepthPlane_Alignment) String() string {
 }
 
 func (DepthPlane_Alignment) Descriptor() protoreflect.EnumDescriptor {
-	return file_wendy_agent_services_v2_calibrated_frame_service_proto_enumTypes[2].Descriptor()
+	return file_wendy_agent_services_v2_calibrated_frame_service_proto_enumTypes[3].Descriptor()
 }
 
 func (DepthPlane_Alignment) Type() protoreflect.EnumType {
-	return &file_wendy_agent_services_v2_calibrated_frame_service_proto_enumTypes[2]
+	return &file_wendy_agent_services_v2_calibrated_frame_service_proto_enumTypes[3]
 }
 
 func (x DepthPlane_Alignment) Number() protoreflect.EnumNumber {
@@ -191,7 +240,418 @@ func (x DepthPlane_Alignment) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use DepthPlane_Alignment.Descriptor instead.
 func (DepthPlane_Alignment) EnumDescriptor() ([]byte, []int) {
-	return file_wendy_agent_services_v2_calibrated_frame_service_proto_rawDescGZIP(), []int{1, 0}
+	return file_wendy_agent_services_v2_calibrated_frame_service_proto_rawDescGZIP(), []int{7, 0}
+}
+
+type CameraMetadata struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Exact VideoDevice.stable_id on this gateway, never a numeric device ID.
+	StableId   string            `protobuf:"bytes,1,opt,name=stable_id,json=stableId,proto3" json:"stable_id,omitempty"`
+	Revision   uint64            `protobuf:"varint,2,opt,name=revision,proto3" json:"revision,omitempty"` // server assigned
+	Intrinsics *CameraIntrinsics `protobuf:"bytes,3,opt,name=intrinsics,proto3" json:"intrinsics,omitempty"`
+	// "none" or "brown_conrady". Brown order: k1,k2,p1,p2,k3.
+	DistortionModel string    `protobuf:"bytes,4,opt,name=distortion_model,json=distortionModel,proto3" json:"distortion_model,omitempty"`
+	Distortion      []float64 `protobuf:"fixed64,5,rep,packed,name=distortion,proto3" json:"distortion,omitempty"`
+	// Identifies the active calibrated crop/zoom/mode. The publisher must clear
+	// or replace intrinsics when zoom, crop, focus or lens changes invalidate
+	// them. Consumers must not apply these to a different capture mode.
+	CaptureMode        string            `protobuf:"bytes,6,opt,name=capture_mode,json=captureMode,proto3" json:"capture_mode,omitempty"`
+	CalibratedAtUnixMs int64             `protobuf:"varint,7,opt,name=calibrated_at_unix_ms,json=calibratedAtUnixMs,proto3" json:"calibrated_at_unix_ms,omitempty"`
+	SitePoses          []*SiteCameraPose `protobuf:"bytes,8,rep,name=site_poses,json=sitePoses,proto3" json:"site_poses,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
+}
+
+func (x *CameraMetadata) Reset() {
+	*x = CameraMetadata{}
+	mi := &file_wendy_agent_services_v2_calibrated_frame_service_proto_msgTypes[0]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CameraMetadata) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CameraMetadata) ProtoMessage() {}
+
+func (x *CameraMetadata) ProtoReflect() protoreflect.Message {
+	mi := &file_wendy_agent_services_v2_calibrated_frame_service_proto_msgTypes[0]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CameraMetadata.ProtoReflect.Descriptor instead.
+func (*CameraMetadata) Descriptor() ([]byte, []int) {
+	return file_wendy_agent_services_v2_calibrated_frame_service_proto_rawDescGZIP(), []int{0}
+}
+
+func (x *CameraMetadata) GetStableId() string {
+	if x != nil {
+		return x.StableId
+	}
+	return ""
+}
+
+func (x *CameraMetadata) GetRevision() uint64 {
+	if x != nil {
+		return x.Revision
+	}
+	return 0
+}
+
+func (x *CameraMetadata) GetIntrinsics() *CameraIntrinsics {
+	if x != nil {
+		return x.Intrinsics
+	}
+	return nil
+}
+
+func (x *CameraMetadata) GetDistortionModel() string {
+	if x != nil {
+		return x.DistortionModel
+	}
+	return ""
+}
+
+func (x *CameraMetadata) GetDistortion() []float64 {
+	if x != nil {
+		return x.Distortion
+	}
+	return nil
+}
+
+func (x *CameraMetadata) GetCaptureMode() string {
+	if x != nil {
+		return x.CaptureMode
+	}
+	return ""
+}
+
+func (x *CameraMetadata) GetCalibratedAtUnixMs() int64 {
+	if x != nil {
+		return x.CalibratedAtUnixMs
+	}
+	return 0
+}
+
+func (x *CameraMetadata) GetSitePoses() []*SiteCameraPose {
+	if x != nil {
+		return x.SitePoses
+	}
+	return nil
+}
+
+type SiteCameraPose struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// UUID of the immutable model revision. A robot's map frame, gravity or
+	// compass heading alone is NOT a transform into this coordinate frame.
+	ModelRevision string `protobuf:"bytes,1,opt,name=model_revision,json=modelRevision,proto3" json:"model_revision,omitempty"`
+	// Metres, right-handed Y-up site coordinates.
+	Position []float64 `protobuf:"fixed64,2,rep,packed,name=position,proto3" json:"position,omitempty"` // x,y,z
+	// Unit quaternion x,y,z,w mapping optical right/down/forward into the site.
+	Rotation         []float64             `protobuf:"fixed64,3,rep,packed,name=rotation,proto3" json:"rotation,omitempty"`
+	Method           SiteCameraPose_Method `protobuf:"varint,4,opt,name=method,proto3,enum=wendy.agent.services.v2.SiteCameraPose_Method" json:"method,omitempty"`
+	Provenance       string                `protobuf:"bytes,5,opt,name=provenance,proto3" json:"provenance,omitempty"`
+	ObservedAtUnixMs int64                 `protobuf:"varint,6,opt,name=observed_at_unix_ms,json=observedAtUnixMs,proto3" json:"observed_at_unix_ms,omitempty"`
+	// Required expiry. Consumers must hide expired poses until refreshed.
+	ValidUntilUnixMs int64 `protobuf:"varint,7,opt,name=valid_until_unix_ms,json=validUntilUnixMs,proto3" json:"valid_until_unix_ms,omitempty"`
+	// For visual localization only; diagnostic, not a claimed accuracy bound.
+	ReprojectionRmsPixels *float64 `protobuf:"fixed64,8,opt,name=reprojection_rms_pixels,json=reprojectionRmsPixels,proto3,oneof" json:"reprojection_rms_pixels,omitempty"`
+	InlierCount           uint32   `protobuf:"varint,9,opt,name=inlier_count,json=inlierCount,proto3" json:"inlier_count,omitempty"`
+	unknownFields         protoimpl.UnknownFields
+	sizeCache             protoimpl.SizeCache
+}
+
+func (x *SiteCameraPose) Reset() {
+	*x = SiteCameraPose{}
+	mi := &file_wendy_agent_services_v2_calibrated_frame_service_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SiteCameraPose) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SiteCameraPose) ProtoMessage() {}
+
+func (x *SiteCameraPose) ProtoReflect() protoreflect.Message {
+	mi := &file_wendy_agent_services_v2_calibrated_frame_service_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SiteCameraPose.ProtoReflect.Descriptor instead.
+func (*SiteCameraPose) Descriptor() ([]byte, []int) {
+	return file_wendy_agent_services_v2_calibrated_frame_service_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *SiteCameraPose) GetModelRevision() string {
+	if x != nil {
+		return x.ModelRevision
+	}
+	return ""
+}
+
+func (x *SiteCameraPose) GetPosition() []float64 {
+	if x != nil {
+		return x.Position
+	}
+	return nil
+}
+
+func (x *SiteCameraPose) GetRotation() []float64 {
+	if x != nil {
+		return x.Rotation
+	}
+	return nil
+}
+
+func (x *SiteCameraPose) GetMethod() SiteCameraPose_Method {
+	if x != nil {
+		return x.Method
+	}
+	return SiteCameraPose_METHOD_UNSPECIFIED
+}
+
+func (x *SiteCameraPose) GetProvenance() string {
+	if x != nil {
+		return x.Provenance
+	}
+	return ""
+}
+
+func (x *SiteCameraPose) GetObservedAtUnixMs() int64 {
+	if x != nil {
+		return x.ObservedAtUnixMs
+	}
+	return 0
+}
+
+func (x *SiteCameraPose) GetValidUntilUnixMs() int64 {
+	if x != nil {
+		return x.ValidUntilUnixMs
+	}
+	return 0
+}
+
+func (x *SiteCameraPose) GetReprojectionRmsPixels() float64 {
+	if x != nil && x.ReprojectionRmsPixels != nil {
+		return *x.ReprojectionRmsPixels
+	}
+	return 0
+}
+
+func (x *SiteCameraPose) GetInlierCount() uint32 {
+	if x != nil {
+		return x.InlierCount
+	}
+	return 0
+}
+
+type ListCameraMetadataRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	StableIds     []string               `protobuf:"bytes,1,rep,name=stable_ids,json=stableIds,proto3" json:"stable_ids,omitempty"` // empty lists all; otherwise exact matches
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListCameraMetadataRequest) Reset() {
+	*x = ListCameraMetadataRequest{}
+	mi := &file_wendy_agent_services_v2_calibrated_frame_service_proto_msgTypes[2]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListCameraMetadataRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListCameraMetadataRequest) ProtoMessage() {}
+
+func (x *ListCameraMetadataRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_wendy_agent_services_v2_calibrated_frame_service_proto_msgTypes[2]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListCameraMetadataRequest.ProtoReflect.Descriptor instead.
+func (*ListCameraMetadataRequest) Descriptor() ([]byte, []int) {
+	return file_wendy_agent_services_v2_calibrated_frame_service_proto_rawDescGZIP(), []int{2}
+}
+
+func (x *ListCameraMetadataRequest) GetStableIds() []string {
+	if x != nil {
+		return x.StableIds
+	}
+	return nil
+}
+
+type ListCameraMetadataResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Cameras       []*CameraMetadata      `protobuf:"bytes,1,rep,name=cameras,proto3" json:"cameras,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListCameraMetadataResponse) Reset() {
+	*x = ListCameraMetadataResponse{}
+	mi := &file_wendy_agent_services_v2_calibrated_frame_service_proto_msgTypes[3]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListCameraMetadataResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListCameraMetadataResponse) ProtoMessage() {}
+
+func (x *ListCameraMetadataResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_wendy_agent_services_v2_calibrated_frame_service_proto_msgTypes[3]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListCameraMetadataResponse.ProtoReflect.Descriptor instead.
+func (*ListCameraMetadataResponse) Descriptor() ([]byte, []int) {
+	return file_wendy_agent_services_v2_calibrated_frame_service_proto_rawDescGZIP(), []int{3}
+}
+
+func (x *ListCameraMetadataResponse) GetCameras() []*CameraMetadata {
+	if x != nil {
+		return x.Cameras
+	}
+	return nil
+}
+
+type SetCameraMetadataRequest struct {
+	state            protoimpl.MessageState `protogen:"open.v1"`
+	StableId         string                 `protobuf:"bytes,1,opt,name=stable_id,json=stableId,proto3" json:"stable_id,omitempty"`
+	ExpectedRevision uint64                 `protobuf:"varint,2,opt,name=expected_revision,json=expectedRevision,proto3" json:"expected_revision,omitempty"`
+	Metadata         *CameraMetadata        `protobuf:"bytes,3,opt,name=metadata,proto3" json:"metadata,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
+}
+
+func (x *SetCameraMetadataRequest) Reset() {
+	*x = SetCameraMetadataRequest{}
+	mi := &file_wendy_agent_services_v2_calibrated_frame_service_proto_msgTypes[4]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SetCameraMetadataRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SetCameraMetadataRequest) ProtoMessage() {}
+
+func (x *SetCameraMetadataRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_wendy_agent_services_v2_calibrated_frame_service_proto_msgTypes[4]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SetCameraMetadataRequest.ProtoReflect.Descriptor instead.
+func (*SetCameraMetadataRequest) Descriptor() ([]byte, []int) {
+	return file_wendy_agent_services_v2_calibrated_frame_service_proto_rawDescGZIP(), []int{4}
+}
+
+func (x *SetCameraMetadataRequest) GetStableId() string {
+	if x != nil {
+		return x.StableId
+	}
+	return ""
+}
+
+func (x *SetCameraMetadataRequest) GetExpectedRevision() uint64 {
+	if x != nil {
+		return x.ExpectedRevision
+	}
+	return 0
+}
+
+func (x *SetCameraMetadataRequest) GetMetadata() *CameraMetadata {
+	if x != nil {
+		return x.Metadata
+	}
+	return nil
+}
+
+type SetCameraMetadataResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Metadata      *CameraMetadata        `protobuf:"bytes,1,opt,name=metadata,proto3" json:"metadata,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SetCameraMetadataResponse) Reset() {
+	*x = SetCameraMetadataResponse{}
+	mi := &file_wendy_agent_services_v2_calibrated_frame_service_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SetCameraMetadataResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SetCameraMetadataResponse) ProtoMessage() {}
+
+func (x *SetCameraMetadataResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_wendy_agent_services_v2_calibrated_frame_service_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SetCameraMetadataResponse.ProtoReflect.Descriptor instead.
+func (*SetCameraMetadataResponse) Descriptor() ([]byte, []int) {
+	return file_wendy_agent_services_v2_calibrated_frame_service_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *SetCameraMetadataResponse) GetMetadata() *CameraMetadata {
+	if x != nil {
+		return x.Metadata
+	}
+	return nil
 }
 
 // CameraIntrinsics is the pinhole model of the COLOUR plane, at the resolution
@@ -214,7 +674,7 @@ type CameraIntrinsics struct {
 
 func (x *CameraIntrinsics) Reset() {
 	*x = CameraIntrinsics{}
-	mi := &file_wendy_agent_services_v2_calibrated_frame_service_proto_msgTypes[0]
+	mi := &file_wendy_agent_services_v2_calibrated_frame_service_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -226,7 +686,7 @@ func (x *CameraIntrinsics) String() string {
 func (*CameraIntrinsics) ProtoMessage() {}
 
 func (x *CameraIntrinsics) ProtoReflect() protoreflect.Message {
-	mi := &file_wendy_agent_services_v2_calibrated_frame_service_proto_msgTypes[0]
+	mi := &file_wendy_agent_services_v2_calibrated_frame_service_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -239,7 +699,7 @@ func (x *CameraIntrinsics) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CameraIntrinsics.ProtoReflect.Descriptor instead.
 func (*CameraIntrinsics) Descriptor() ([]byte, []int) {
-	return file_wendy_agent_services_v2_calibrated_frame_service_proto_rawDescGZIP(), []int{0}
+	return file_wendy_agent_services_v2_calibrated_frame_service_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *CameraIntrinsics) GetFx() float32 {
@@ -318,7 +778,7 @@ type DepthPlane struct {
 
 func (x *DepthPlane) Reset() {
 	*x = DepthPlane{}
-	mi := &file_wendy_agent_services_v2_calibrated_frame_service_proto_msgTypes[1]
+	mi := &file_wendy_agent_services_v2_calibrated_frame_service_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -330,7 +790,7 @@ func (x *DepthPlane) String() string {
 func (*DepthPlane) ProtoMessage() {}
 
 func (x *DepthPlane) ProtoReflect() protoreflect.Message {
-	mi := &file_wendy_agent_services_v2_calibrated_frame_service_proto_msgTypes[1]
+	mi := &file_wendy_agent_services_v2_calibrated_frame_service_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -343,7 +803,7 @@ func (x *DepthPlane) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DepthPlane.ProtoReflect.Descriptor instead.
 func (*DepthPlane) Descriptor() ([]byte, []int) {
-	return file_wendy_agent_services_v2_calibrated_frame_service_proto_rawDescGZIP(), []int{1}
+	return file_wendy_agent_services_v2_calibrated_frame_service_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *DepthPlane) GetData() []byte {
@@ -404,7 +864,7 @@ type CaptureSettings struct {
 
 func (x *CaptureSettings) Reset() {
 	*x = CaptureSettings{}
-	mi := &file_wendy_agent_services_v2_calibrated_frame_service_proto_msgTypes[2]
+	mi := &file_wendy_agent_services_v2_calibrated_frame_service_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -416,7 +876,7 @@ func (x *CaptureSettings) String() string {
 func (*CaptureSettings) ProtoMessage() {}
 
 func (x *CaptureSettings) ProtoReflect() protoreflect.Message {
-	mi := &file_wendy_agent_services_v2_calibrated_frame_service_proto_msgTypes[2]
+	mi := &file_wendy_agent_services_v2_calibrated_frame_service_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -429,7 +889,7 @@ func (x *CaptureSettings) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CaptureSettings.ProtoReflect.Descriptor instead.
 func (*CaptureSettings) Descriptor() ([]byte, []int) {
-	return file_wendy_agent_services_v2_calibrated_frame_service_proto_rawDescGZIP(), []int{2}
+	return file_wendy_agent_services_v2_calibrated_frame_service_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *CaptureSettings) GetExposureRaw() uint32 {
@@ -489,7 +949,7 @@ type CalibratedFrame struct {
 
 func (x *CalibratedFrame) Reset() {
 	*x = CalibratedFrame{}
-	mi := &file_wendy_agent_services_v2_calibrated_frame_service_proto_msgTypes[3]
+	mi := &file_wendy_agent_services_v2_calibrated_frame_service_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -501,7 +961,7 @@ func (x *CalibratedFrame) String() string {
 func (*CalibratedFrame) ProtoMessage() {}
 
 func (x *CalibratedFrame) ProtoReflect() protoreflect.Message {
-	mi := &file_wendy_agent_services_v2_calibrated_frame_service_proto_msgTypes[3]
+	mi := &file_wendy_agent_services_v2_calibrated_frame_service_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -514,7 +974,7 @@ func (x *CalibratedFrame) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CalibratedFrame.ProtoReflect.Descriptor instead.
 func (*CalibratedFrame) Descriptor() ([]byte, []int) {
-	return file_wendy_agent_services_v2_calibrated_frame_service_proto_rawDescGZIP(), []int{3}
+	return file_wendy_agent_services_v2_calibrated_frame_service_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *CalibratedFrame) GetFrameId() uint64 {
@@ -609,7 +1069,7 @@ type CalibratedSource struct {
 
 func (x *CalibratedSource) Reset() {
 	*x = CalibratedSource{}
-	mi := &file_wendy_agent_services_v2_calibrated_frame_service_proto_msgTypes[4]
+	mi := &file_wendy_agent_services_v2_calibrated_frame_service_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -621,7 +1081,7 @@ func (x *CalibratedSource) String() string {
 func (*CalibratedSource) ProtoMessage() {}
 
 func (x *CalibratedSource) ProtoReflect() protoreflect.Message {
-	mi := &file_wendy_agent_services_v2_calibrated_frame_service_proto_msgTypes[4]
+	mi := &file_wendy_agent_services_v2_calibrated_frame_service_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -634,7 +1094,7 @@ func (x *CalibratedSource) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CalibratedSource.ProtoReflect.Descriptor instead.
 func (*CalibratedSource) Descriptor() ([]byte, []int) {
-	return file_wendy_agent_services_v2_calibrated_frame_service_proto_rawDescGZIP(), []int{4}
+	return file_wendy_agent_services_v2_calibrated_frame_service_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *CalibratedSource) GetSource() string {
@@ -729,7 +1189,7 @@ type ListCalibratedSourcesRequest struct {
 
 func (x *ListCalibratedSourcesRequest) Reset() {
 	*x = ListCalibratedSourcesRequest{}
-	mi := &file_wendy_agent_services_v2_calibrated_frame_service_proto_msgTypes[5]
+	mi := &file_wendy_agent_services_v2_calibrated_frame_service_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -741,7 +1201,7 @@ func (x *ListCalibratedSourcesRequest) String() string {
 func (*ListCalibratedSourcesRequest) ProtoMessage() {}
 
 func (x *ListCalibratedSourcesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_wendy_agent_services_v2_calibrated_frame_service_proto_msgTypes[5]
+	mi := &file_wendy_agent_services_v2_calibrated_frame_service_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -754,7 +1214,7 @@ func (x *ListCalibratedSourcesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListCalibratedSourcesRequest.ProtoReflect.Descriptor instead.
 func (*ListCalibratedSourcesRequest) Descriptor() ([]byte, []int) {
-	return file_wendy_agent_services_v2_calibrated_frame_service_proto_rawDescGZIP(), []int{5}
+	return file_wendy_agent_services_v2_calibrated_frame_service_proto_rawDescGZIP(), []int{11}
 }
 
 type ListCalibratedSourcesResponse struct {
@@ -766,7 +1226,7 @@ type ListCalibratedSourcesResponse struct {
 
 func (x *ListCalibratedSourcesResponse) Reset() {
 	*x = ListCalibratedSourcesResponse{}
-	mi := &file_wendy_agent_services_v2_calibrated_frame_service_proto_msgTypes[6]
+	mi := &file_wendy_agent_services_v2_calibrated_frame_service_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -778,7 +1238,7 @@ func (x *ListCalibratedSourcesResponse) String() string {
 func (*ListCalibratedSourcesResponse) ProtoMessage() {}
 
 func (x *ListCalibratedSourcesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_wendy_agent_services_v2_calibrated_frame_service_proto_msgTypes[6]
+	mi := &file_wendy_agent_services_v2_calibrated_frame_service_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -791,7 +1251,7 @@ func (x *ListCalibratedSourcesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListCalibratedSourcesResponse.ProtoReflect.Descriptor instead.
 func (*ListCalibratedSourcesResponse) Descriptor() ([]byte, []int) {
-	return file_wendy_agent_services_v2_calibrated_frame_service_proto_rawDescGZIP(), []int{6}
+	return file_wendy_agent_services_v2_calibrated_frame_service_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *ListCalibratedSourcesResponse) GetSources() []*CalibratedSource {
@@ -824,7 +1284,7 @@ type StreamCalibratedFramesRequest struct {
 
 func (x *StreamCalibratedFramesRequest) Reset() {
 	*x = StreamCalibratedFramesRequest{}
-	mi := &file_wendy_agent_services_v2_calibrated_frame_service_proto_msgTypes[7]
+	mi := &file_wendy_agent_services_v2_calibrated_frame_service_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -836,7 +1296,7 @@ func (x *StreamCalibratedFramesRequest) String() string {
 func (*StreamCalibratedFramesRequest) ProtoMessage() {}
 
 func (x *StreamCalibratedFramesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_wendy_agent_services_v2_calibrated_frame_service_proto_msgTypes[7]
+	mi := &file_wendy_agent_services_v2_calibrated_frame_service_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -849,7 +1309,7 @@ func (x *StreamCalibratedFramesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StreamCalibratedFramesRequest.ProtoReflect.Descriptor instead.
 func (*StreamCalibratedFramesRequest) Descriptor() ([]byte, []int) {
-	return file_wendy_agent_services_v2_calibrated_frame_service_proto_rawDescGZIP(), []int{7}
+	return file_wendy_agent_services_v2_calibrated_frame_service_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *StreamCalibratedFramesRequest) GetSource() string {
@@ -898,7 +1358,49 @@ var File_wendy_agent_services_v2_calibrated_frame_service_proto protoreflect.Fil
 
 const file_wendy_agent_services_v2_calibrated_frame_service_proto_rawDesc = "" +
 	"\n" +
-	"6wendy/agent/services/v2/calibrated_frame_service.proto\x12\x17wendy.agent.services.v2\x1a:wendy/agent/services/v1/wendy_agent_v1_video_service.proto\"\xc5\x02\n" +
+	"6wendy/agent/services/v2/calibrated_frame_service.proto\x12\x17wendy.agent.services.v2\x1a:wendy/agent/services/v1/wendy_agent_v1_video_service.proto\"\xfd\x02\n" +
+	"\x0eCameraMetadata\x12\x1b\n" +
+	"\tstable_id\x18\x01 \x01(\tR\bstableId\x12\x1a\n" +
+	"\brevision\x18\x02 \x01(\x04R\brevision\x12I\n" +
+	"\n" +
+	"intrinsics\x18\x03 \x01(\v2).wendy.agent.services.v2.CameraIntrinsicsR\n" +
+	"intrinsics\x12)\n" +
+	"\x10distortion_model\x18\x04 \x01(\tR\x0fdistortionModel\x12\x1e\n" +
+	"\n" +
+	"distortion\x18\x05 \x03(\x01R\n" +
+	"distortion\x12!\n" +
+	"\fcapture_mode\x18\x06 \x01(\tR\vcaptureMode\x121\n" +
+	"\x15calibrated_at_unix_ms\x18\a \x01(\x03R\x12calibratedAtUnixMs\x12F\n" +
+	"\n" +
+	"site_poses\x18\b \x03(\v2'.wendy.agent.services.v2.SiteCameraPoseR\tsitePoses\"\x88\x04\n" +
+	"\x0eSiteCameraPose\x12%\n" +
+	"\x0emodel_revision\x18\x01 \x01(\tR\rmodelRevision\x12\x1a\n" +
+	"\bposition\x18\x02 \x03(\x01R\bposition\x12\x1a\n" +
+	"\brotation\x18\x03 \x03(\x01R\brotation\x12F\n" +
+	"\x06method\x18\x04 \x01(\x0e2..wendy.agent.services.v2.SiteCameraPose.MethodR\x06method\x12\x1e\n" +
+	"\n" +
+	"provenance\x18\x05 \x01(\tR\n" +
+	"provenance\x12-\n" +
+	"\x13observed_at_unix_ms\x18\x06 \x01(\x03R\x10observedAtUnixMs\x12-\n" +
+	"\x13valid_until_unix_ms\x18\a \x01(\x03R\x10validUntilUnixMs\x12;\n" +
+	"\x17reprojection_rms_pixels\x18\b \x01(\x01H\x00R\x15reprojectionRmsPixels\x88\x01\x01\x12!\n" +
+	"\finlier_count\x18\t \x01(\rR\vinlierCount\"U\n" +
+	"\x06Method\x12\x16\n" +
+	"\x12METHOD_UNSPECIFIED\x10\x00\x12\x13\n" +
+	"\x0fMETHOD_REPORTED\x10\x01\x12\x1e\n" +
+	"\x1aMETHOD_VISUAL_LOCALIZATION\x10\x02B\x1a\n" +
+	"\x18_reprojection_rms_pixels\":\n" +
+	"\x19ListCameraMetadataRequest\x12\x1d\n" +
+	"\n" +
+	"stable_ids\x18\x01 \x03(\tR\tstableIds\"_\n" +
+	"\x1aListCameraMetadataResponse\x12A\n" +
+	"\acameras\x18\x01 \x03(\v2'.wendy.agent.services.v2.CameraMetadataR\acameras\"\xa9\x01\n" +
+	"\x18SetCameraMetadataRequest\x12\x1b\n" +
+	"\tstable_id\x18\x01 \x01(\tR\bstableId\x12+\n" +
+	"\x11expected_revision\x18\x02 \x01(\x04R\x10expectedRevision\x12C\n" +
+	"\bmetadata\x18\x03 \x01(\v2'.wendy.agent.services.v2.CameraMetadataR\bmetadata\"`\n" +
+	"\x19SetCameraMetadataResponse\x12C\n" +
+	"\bmetadata\x18\x01 \x01(\v2'.wendy.agent.services.v2.CameraMetadataR\bmetadata\"\xc5\x02\n" +
 	"\x10CameraIntrinsics\x12\x0e\n" +
 	"\x02fx\x18\x01 \x01(\x02R\x02fx\x12\x0e\n" +
 	"\x02fy\x18\x02 \x01(\x02R\x02fy\x12\x0e\n" +
@@ -974,8 +1476,10 @@ const file_wendy_agent_services_v2_calibrated_frame_service_proto_rawDesc = "" +
 	"\x1dFRAME_REQUIREMENT_UNSPECIFIED\x10\x00\x12#\n" +
 	"\x1fFRAME_REQUIREMENT_ALIGNED_DEPTH\x10\x01\x12)\n" +
 	"%FRAME_REQUIREMENT_MEASURED_INTRINSICS\x10\x02\x12&\n" +
-	"\"FRAME_REQUIREMENT_CAPTURE_SETTINGS\x10\x032\xa4\x02\n" +
-	"\x1bWendyCalibratedFrameService\x12\x86\x01\n" +
+	"\"FRAME_REQUIREMENT_CAPTURE_SETTINGS\x10\x032\x9f\x04\n" +
+	"\x1bWendyCalibratedFrameService\x12}\n" +
+	"\x12ListCameraMetadata\x122.wendy.agent.services.v2.ListCameraMetadataRequest\x1a3.wendy.agent.services.v2.ListCameraMetadataResponse\x12z\n" +
+	"\x11SetCameraMetadata\x121.wendy.agent.services.v2.SetCameraMetadataRequest\x1a2.wendy.agent.services.v2.SetCameraMetadataResponse\x12\x86\x01\n" +
 	"\x15ListCalibratedSources\x125.wendy.agent.services.v2.ListCalibratedSourcesRequest\x1a6.wendy.agent.services.v2.ListCalibratedSourcesResponse\x12|\n" +
 	"\x16StreamCalibratedFrames\x126.wendy.agent.services.v2.StreamCalibratedFramesRequest\x1a(.wendy.agent.services.v2.CalibratedFrame0\x01BAZ?github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2;agentpbv2b\x06proto3"
 
@@ -991,41 +1495,58 @@ func file_wendy_agent_services_v2_calibrated_frame_service_proto_rawDescGZIP() [
 	return file_wendy_agent_services_v2_calibrated_frame_service_proto_rawDescData
 }
 
-var file_wendy_agent_services_v2_calibrated_frame_service_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
-var file_wendy_agent_services_v2_calibrated_frame_service_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
+var file_wendy_agent_services_v2_calibrated_frame_service_proto_enumTypes = make([]protoimpl.EnumInfo, 4)
+var file_wendy_agent_services_v2_calibrated_frame_service_proto_msgTypes = make([]protoimpl.MessageInfo, 14)
 var file_wendy_agent_services_v2_calibrated_frame_service_proto_goTypes = []any{
 	(FrameRequirement)(0),                 // 0: wendy.agent.services.v2.FrameRequirement
-	(CameraIntrinsics_Provenance)(0),      // 1: wendy.agent.services.v2.CameraIntrinsics.Provenance
-	(DepthPlane_Alignment)(0),             // 2: wendy.agent.services.v2.DepthPlane.Alignment
-	(*CameraIntrinsics)(nil),              // 3: wendy.agent.services.v2.CameraIntrinsics
-	(*DepthPlane)(nil),                    // 4: wendy.agent.services.v2.DepthPlane
-	(*CaptureSettings)(nil),               // 5: wendy.agent.services.v2.CaptureSettings
-	(*CalibratedFrame)(nil),               // 6: wendy.agent.services.v2.CalibratedFrame
-	(*CalibratedSource)(nil),              // 7: wendy.agent.services.v2.CalibratedSource
-	(*ListCalibratedSourcesRequest)(nil),  // 8: wendy.agent.services.v2.ListCalibratedSourcesRequest
-	(*ListCalibratedSourcesResponse)(nil), // 9: wendy.agent.services.v2.ListCalibratedSourcesResponse
-	(*StreamCalibratedFramesRequest)(nil), // 10: wendy.agent.services.v2.StreamCalibratedFramesRequest
-	(*agentpb.RawFormat)(nil),             // 11: wendy.agent.services.v1.RawFormat
+	(SiteCameraPose_Method)(0),            // 1: wendy.agent.services.v2.SiteCameraPose.Method
+	(CameraIntrinsics_Provenance)(0),      // 2: wendy.agent.services.v2.CameraIntrinsics.Provenance
+	(DepthPlane_Alignment)(0),             // 3: wendy.agent.services.v2.DepthPlane.Alignment
+	(*CameraMetadata)(nil),                // 4: wendy.agent.services.v2.CameraMetadata
+	(*SiteCameraPose)(nil),                // 5: wendy.agent.services.v2.SiteCameraPose
+	(*ListCameraMetadataRequest)(nil),     // 6: wendy.agent.services.v2.ListCameraMetadataRequest
+	(*ListCameraMetadataResponse)(nil),    // 7: wendy.agent.services.v2.ListCameraMetadataResponse
+	(*SetCameraMetadataRequest)(nil),      // 8: wendy.agent.services.v2.SetCameraMetadataRequest
+	(*SetCameraMetadataResponse)(nil),     // 9: wendy.agent.services.v2.SetCameraMetadataResponse
+	(*CameraIntrinsics)(nil),              // 10: wendy.agent.services.v2.CameraIntrinsics
+	(*DepthPlane)(nil),                    // 11: wendy.agent.services.v2.DepthPlane
+	(*CaptureSettings)(nil),               // 12: wendy.agent.services.v2.CaptureSettings
+	(*CalibratedFrame)(nil),               // 13: wendy.agent.services.v2.CalibratedFrame
+	(*CalibratedSource)(nil),              // 14: wendy.agent.services.v2.CalibratedSource
+	(*ListCalibratedSourcesRequest)(nil),  // 15: wendy.agent.services.v2.ListCalibratedSourcesRequest
+	(*ListCalibratedSourcesResponse)(nil), // 16: wendy.agent.services.v2.ListCalibratedSourcesResponse
+	(*StreamCalibratedFramesRequest)(nil), // 17: wendy.agent.services.v2.StreamCalibratedFramesRequest
+	(*agentpb.RawFormat)(nil),             // 18: wendy.agent.services.v1.RawFormat
 }
 var file_wendy_agent_services_v2_calibrated_frame_service_proto_depIdxs = []int32{
-	1,  // 0: wendy.agent.services.v2.CameraIntrinsics.provenance:type_name -> wendy.agent.services.v2.CameraIntrinsics.Provenance
-	2,  // 1: wendy.agent.services.v2.DepthPlane.alignment:type_name -> wendy.agent.services.v2.DepthPlane.Alignment
-	11, // 2: wendy.agent.services.v2.CalibratedFrame.colour_format:type_name -> wendy.agent.services.v1.RawFormat
-	4,  // 3: wendy.agent.services.v2.CalibratedFrame.depth:type_name -> wendy.agent.services.v2.DepthPlane
-	3,  // 4: wendy.agent.services.v2.CalibratedFrame.intrinsics:type_name -> wendy.agent.services.v2.CameraIntrinsics
-	5,  // 5: wendy.agent.services.v2.CalibratedFrame.settings:type_name -> wendy.agent.services.v2.CaptureSettings
-	0,  // 6: wendy.agent.services.v2.CalibratedSource.provides:type_name -> wendy.agent.services.v2.FrameRequirement
-	7,  // 7: wendy.agent.services.v2.ListCalibratedSourcesResponse.sources:type_name -> wendy.agent.services.v2.CalibratedSource
-	0,  // 8: wendy.agent.services.v2.StreamCalibratedFramesRequest.require:type_name -> wendy.agent.services.v2.FrameRequirement
-	8,  // 9: wendy.agent.services.v2.WendyCalibratedFrameService.ListCalibratedSources:input_type -> wendy.agent.services.v2.ListCalibratedSourcesRequest
-	10, // 10: wendy.agent.services.v2.WendyCalibratedFrameService.StreamCalibratedFrames:input_type -> wendy.agent.services.v2.StreamCalibratedFramesRequest
-	9,  // 11: wendy.agent.services.v2.WendyCalibratedFrameService.ListCalibratedSources:output_type -> wendy.agent.services.v2.ListCalibratedSourcesResponse
-	6,  // 12: wendy.agent.services.v2.WendyCalibratedFrameService.StreamCalibratedFrames:output_type -> wendy.agent.services.v2.CalibratedFrame
-	11, // [11:13] is the sub-list for method output_type
-	9,  // [9:11] is the sub-list for method input_type
-	9,  // [9:9] is the sub-list for extension type_name
-	9,  // [9:9] is the sub-list for extension extendee
-	0,  // [0:9] is the sub-list for field type_name
+	10, // 0: wendy.agent.services.v2.CameraMetadata.intrinsics:type_name -> wendy.agent.services.v2.CameraIntrinsics
+	5,  // 1: wendy.agent.services.v2.CameraMetadata.site_poses:type_name -> wendy.agent.services.v2.SiteCameraPose
+	1,  // 2: wendy.agent.services.v2.SiteCameraPose.method:type_name -> wendy.agent.services.v2.SiteCameraPose.Method
+	4,  // 3: wendy.agent.services.v2.ListCameraMetadataResponse.cameras:type_name -> wendy.agent.services.v2.CameraMetadata
+	4,  // 4: wendy.agent.services.v2.SetCameraMetadataRequest.metadata:type_name -> wendy.agent.services.v2.CameraMetadata
+	4,  // 5: wendy.agent.services.v2.SetCameraMetadataResponse.metadata:type_name -> wendy.agent.services.v2.CameraMetadata
+	2,  // 6: wendy.agent.services.v2.CameraIntrinsics.provenance:type_name -> wendy.agent.services.v2.CameraIntrinsics.Provenance
+	3,  // 7: wendy.agent.services.v2.DepthPlane.alignment:type_name -> wendy.agent.services.v2.DepthPlane.Alignment
+	18, // 8: wendy.agent.services.v2.CalibratedFrame.colour_format:type_name -> wendy.agent.services.v1.RawFormat
+	11, // 9: wendy.agent.services.v2.CalibratedFrame.depth:type_name -> wendy.agent.services.v2.DepthPlane
+	10, // 10: wendy.agent.services.v2.CalibratedFrame.intrinsics:type_name -> wendy.agent.services.v2.CameraIntrinsics
+	12, // 11: wendy.agent.services.v2.CalibratedFrame.settings:type_name -> wendy.agent.services.v2.CaptureSettings
+	0,  // 12: wendy.agent.services.v2.CalibratedSource.provides:type_name -> wendy.agent.services.v2.FrameRequirement
+	14, // 13: wendy.agent.services.v2.ListCalibratedSourcesResponse.sources:type_name -> wendy.agent.services.v2.CalibratedSource
+	0,  // 14: wendy.agent.services.v2.StreamCalibratedFramesRequest.require:type_name -> wendy.agent.services.v2.FrameRequirement
+	6,  // 15: wendy.agent.services.v2.WendyCalibratedFrameService.ListCameraMetadata:input_type -> wendy.agent.services.v2.ListCameraMetadataRequest
+	8,  // 16: wendy.agent.services.v2.WendyCalibratedFrameService.SetCameraMetadata:input_type -> wendy.agent.services.v2.SetCameraMetadataRequest
+	15, // 17: wendy.agent.services.v2.WendyCalibratedFrameService.ListCalibratedSources:input_type -> wendy.agent.services.v2.ListCalibratedSourcesRequest
+	17, // 18: wendy.agent.services.v2.WendyCalibratedFrameService.StreamCalibratedFrames:input_type -> wendy.agent.services.v2.StreamCalibratedFramesRequest
+	7,  // 19: wendy.agent.services.v2.WendyCalibratedFrameService.ListCameraMetadata:output_type -> wendy.agent.services.v2.ListCameraMetadataResponse
+	9,  // 20: wendy.agent.services.v2.WendyCalibratedFrameService.SetCameraMetadata:output_type -> wendy.agent.services.v2.SetCameraMetadataResponse
+	16, // 21: wendy.agent.services.v2.WendyCalibratedFrameService.ListCalibratedSources:output_type -> wendy.agent.services.v2.ListCalibratedSourcesResponse
+	13, // 22: wendy.agent.services.v2.WendyCalibratedFrameService.StreamCalibratedFrames:output_type -> wendy.agent.services.v2.CalibratedFrame
+	19, // [19:23] is the sub-list for method output_type
+	15, // [15:19] is the sub-list for method input_type
+	15, // [15:15] is the sub-list for extension type_name
+	15, // [15:15] is the sub-list for extension extendee
+	0,  // [0:15] is the sub-list for field type_name
 }
 
 func init() { file_wendy_agent_services_v2_calibrated_frame_service_proto_init() }
@@ -1033,13 +1554,14 @@ func file_wendy_agent_services_v2_calibrated_frame_service_proto_init() {
 	if File_wendy_agent_services_v2_calibrated_frame_service_proto != nil {
 		return
 	}
+	file_wendy_agent_services_v2_calibrated_frame_service_proto_msgTypes[1].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_wendy_agent_services_v2_calibrated_frame_service_proto_rawDesc), len(file_wendy_agent_services_v2_calibrated_frame_service_proto_rawDesc)),
-			NumEnums:      3,
-			NumMessages:   8,
+			NumEnums:      4,
+			NumMessages:   14,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
