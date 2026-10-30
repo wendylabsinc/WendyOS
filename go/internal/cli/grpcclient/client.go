@@ -83,8 +83,8 @@ type AgentConnection struct {
 	IsSessionProxy bool                    // true when Conn reaches a local session broker retaining the mTLS transport
 	CertInfo       *config.CertificateInfo // cert used to establish mTLS; nil for plaintext
 	RegistryDialer func(context.Context, int) (net.Conn, error)
-	// IsCloudV2 identifies Cloud v2 connections, where the CLI surfaces chunk
-	// failures without an automatic registry fallback. LAN and legacy Cloud
+	// IsCloudV2 identifies Cloud v2 connections, where the CLI surfaces
+	// transport drops without an automatic registry fallback. LAN and legacy Cloud
 	// connections leave it false.
 	IsCloudV2    bool
 	ExtraClosers []io.Closer

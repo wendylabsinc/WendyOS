@@ -7,6 +7,8 @@ import (
 )
 
 const cloudUploadRetryHint = "Check that the device is online with 'wendy cloud discover', then retry."
+const cloudRegistryRetryHint = "Use '--chunking=off' to upload through the registry with the usual registry authorization."
+const cloudRegistryFallbackNote = "Automatic registry fallback is off after this failure."
 
 // Keep transport diagnostics inspectable without putting raw server text in
 // the user-facing message.
@@ -29,20 +31,20 @@ func cloudChunkTransferError(host string, snap chunkPushSnapshot, uploadErr, rec
 	if reconnectErr != nil {
 		message += " Could not reconnect."
 	}
-	message += "\nThe registry fallback isn't available over Cloud."
+	message += "\n" + cloudRegistryFallbackNote
 	cause := errors.Join(uploadErr, reconnectErr)
 	if os.Getenv("WENDY_TLS_DEBUG") != "" {
 		fmt.Fprintf(os.Stderr, "[chunk-upload] %v\n", cause)
 	}
-	return withNextSteps(classifyCommandError(errDeviceUnreachable, &cloudDeployError{message: message, cause: cause}), cloudUploadRetryHint)
+	return withNextSteps(classifyCommandError(errDeviceUnreachable, &cloudDeployError{message: message, cause: cause}), cloudUploadRetryHint, cloudRegistryRetryHint)
 }
 
 func cloudRunStartConnectionError(host string, cause error) error {
 	if os.Getenv("WENDY_TLS_DEBUG") != "" {
 		fmt.Fprintf(os.Stderr, "[chunk-deploy] %v\n", cause)
 	}
-	message := fmt.Sprintf("The Cloud connection to %s was lost while starting the app.\nThe registry fallback isn't available over Cloud.", host)
-	return withNextSteps(classifyCommandError(errDeviceUnreachable, &cloudDeployError{message: message, cause: cause}), cloudUploadRetryHint)
+	message := fmt.Sprintf("The Cloud connection to %s was lost while starting the app.\n%s", host, cloudRegistryFallbackNote)
+	return withNextSteps(classifyCommandError(errDeviceUnreachable, &cloudDeployError{message: message, cause: cause}), cloudUploadRetryHint, cloudRegistryRetryHint)
 }
 
 func cloudChunkDeployFailure(err error) error {

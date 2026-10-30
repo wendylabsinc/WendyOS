@@ -16,11 +16,18 @@ A compose file takes precedence over a `Dockerfile` in the same directory. To fo
 
 ## Cloud v2 uploads
 
-Compose and multi-service `wendy.json` uploads over Cloud v2 require the Docker
-builder (`--builder docker`). If an upload drops, the CLI reports the connection
-loss and bytes sent without attempting a registry fallback. Check that the
-device is online with `wendy cloud discover`, then retry. Old Agents get an
-update hint; other image preparation failures are reported separately.
+The Compose and multi-service `wendy.json` chunk-upload path requires the Docker
+builder (`--builder docker`). If an upload drops over Cloud v2, the CLI reports
+the connection loss and bytes sent; automatic registry fallback is off after
+that failure. Check that the device is online with `wendy cloud discover`, then
+retry, or select `--chunking=off` to upload through the registry with the usual
+authorization.
+
+In `auto`, old Agents missing the chunk RPCs keep the existing authorized
+registry fallback. Apple Container keeps its direct registry route; existing
+setups can use `--builder apple-container --chunking=off` explicitly. BuildKit
+Compose registry uploads remain unsupported. Other image preparation failures
+are reported separately.
 See [Cloud v2 upload behavior](../clients/wendy-cli/commands/run.md#uploads-over-cloud-v2)
 for exit status and diagnostics.
 

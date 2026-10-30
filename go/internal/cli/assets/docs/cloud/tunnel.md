@@ -77,8 +77,10 @@ a lost connection reports the device and upload progress across resume attempts.
 Devices without a display name are identified by their Cloud ID. A failed upload
 reconnect, or a connection loss while waiting for the app's start acknowledgement,
 reports a retryable `device_unreachable` failure (exit 5). Check that the device
-is online with `wendy cloud discover`, then retry. `wendy run` skips automatic
-registry fallback over Cloud v2.
+is online with `wendy cloud discover`, then retry. Automatic registry fallback
+is off after that transport failure. `--chunking=off` selects an explicit registry
+upload with the usual authorization. In `auto`, old Agents without the chunk
+RPCs retain their existing registry fallback.
 
 Device updates and legacy Cloud resume keep their existing restart-wait messages.
 
