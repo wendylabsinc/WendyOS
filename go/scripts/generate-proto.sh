@@ -78,6 +78,7 @@ SHARED_GRPC_API_CONTRACTS_PROTOS=(
     "wendycloud/v2/signed_request.proto"
     "wendycloud/v2/relay_mcp.proto"
     "wendycloud/v2/postbox.proto"
+    "wendycloud/v2/registry.proto"
     "wendy/options.proto"
 )
 SHARED_GRPC_API_CONTRACTS_PATH_ARGS=()
@@ -228,9 +229,7 @@ done
 # though it is.
 #
 # Pin: the remaining local wendycloud/v2/*.proto are service-protos master
-# cfa7f45d (merged #145, registry vectors), except registry.proto:
-# master 65830a0a (merged #151,
-# WDY-4015 operator CA and instruction validity). device_enrollment.proto is not in
+# cfa7f45d (merged #145, registry vectors). device_enrollment.proto is not in
 # service-protos: it is cloud #757 head 5e3003e4
 # (cloud-proto/device_enrollment.proto), including enrollment hardware.
 # Re-pin: copy those files from
@@ -241,7 +240,6 @@ CLOUD_V2_PKG="$MODULE/go/proto/gen/cloudpb/v2"
 CLOUD_V2_PROTOS=(
     "wendycloud/v2/device_enrollment.proto"
     "wendycloud/v2/pki_admin.proto"
-    "wendycloud/v2/registry.proto"
     "${SHARED_GRPC_API_CONTRACTS_PROTOS[@]}"
     "wendycloud/v2/notifications.proto"
     "wendycloud/v2/organizations.proto"
