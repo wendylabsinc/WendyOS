@@ -34,7 +34,7 @@ An `[app-id]` argument (or `--app-id`) always creates a new subdirectory of that
 3. Picks the **language**. Skipped with a notice when the chosen template offers exactly one language.
 4. Collects **entitlements** — the capabilities the app needs. See [Entitlements](../../../apps/wendy.json.md#entitlements-1).
 5. Collects **framework** configuration — currently ROS 2. See [Frameworks](#frameworks).
-6. Writes `wendy.json` and scaffolds the project files.
+6. Writes `wendy.json` and scaffolds the project files, plus an `AGENTS.md` that gives coding agents the project's `wendy` commands and a docs index, and a `CLAUDE.md` containing `@AGENTS.md` so Claude Code loads it too. Neither replaces an existing file, and `CLAUDE.md` is only written alongside a new `AGENTS.md`.
 7. Optionally launches an AI assistant (`--assistant`).
 
 ## Targets

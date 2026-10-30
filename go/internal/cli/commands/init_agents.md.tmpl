@@ -1,0 +1,81 @@
+# {{.AppID}}
+
+This is a [Wendy](https://docs.wendy.dev/latest/) app. Wendy is an open source operating system and developer toolchain for robots, drones, and edge AI devices; the `wendy` CLI builds this project and deploys it to a device over USB-C, the local network, or Wendy Cloud.
+
+{{if .Lite -}}
+It targets Wendy Lite on an ESP32 microcontroller and is written in {{.LanguageName}}. Wendy Lite supports only the `network` entitlement.
+{{- else if .Mac -}}
+It targets Wendy Agent for Mac as a native macOS process, not a Linux container, and is written in {{.LanguageName}}. Native macOS apps do not use WendyOS container entitlements.
+{{- else -}}
+It targets WendyOS, running as a container on a Linux edge device such as an NVIDIA Jetson or Raspberry Pi, and is written in {{.LanguageName}}.
+{{- end}}
+`wendy.json` is the app manifest (app ID `{{.AppID}}`); `wendy json schema` prints its JSON Schema.
+
+## Commands
+
+Run these in this directory. `wendy <command> --help` is the authority on flags. Output is JSON when stdout is not a terminal; `--json` forces it.
+
+- Deploy: `wendy run` builds the app, deploys it to the selected device, and streams its logs. From a non-interactive shell, {{if .Linux}}`wendy run --detach --wait-ready` returns once the app is ready and fails if it crashes{{else}}`wendy run --detach` returns after deploying{{end}}.{{if not .Lite}} `wendy run --watch` redeploys on every save.{{end}}
+{{- if .Linux}}
+- Build only: `wendy build`
+{{- end}}
+- Find devices: `wendy discover --json` scans nearby devices once. For Wendy Cloud devices, sign in with `wendy auth login`, then run `wendy cloud discover`.
+- Choose the device: pass `--device <host[:port]>` to any command, set `WENDY_DEVICE` for one shell, or save a default with `wendy device set-default <device>` (`wendy device get-default` shows it). Non-interactive shells get no device picker, so choose one before deploying.
+{{- if .Lite}}
+- Logs: `wendy device logs` streams the firmware console.
+{{- else if .Linux}}
+- Logs: `wendy device logs --app {{.AppID}} --tail 20 --no-follow` prints recent logs and exits; without `--no-follow` it keeps streaming.
+- Apps on the device: `wendy device apps list`, then `wendy device apps stop|start|remove {{.AppID}}`.
+- Device details: `wendy device info` (OS, architecture, GPU, NPU).
+{{- end}}
+- Offline docs: `wendy docs` lists topics and `wendy docs <topic>` prints one.
+{{- if .Linux}}
+
+## Entitlements
+
+The app can use only the hardware and network access that `wendy.json` grants. Change entitlements with the CLI, which validates them:
+
+- `wendy project add gpu` (also `camera`, `audio`, `usb`, `bluetooth`, `gpio`, `i2c`, `serial`, and more; `wendy project add --help` lists them all)
+- `wendy project add persist --name data --path /data` for storage that survives restarts
+- `wendy project remove <name>`, `wendy project show`, and `wendy project validate` (run it before deploying)
+{{- end}}
+
+## MCP server
+
+`wendy mcp setup` adds the Wendy MCP server and Wendy skills to Claude Code, Claude Desktop, Codex, Cursor, and Windsurf; restart the tool afterwards. Call `wendy_status` first, find a target with `device_list`, connect with `device_connect`, then deploy with `run`, passing this directory's absolute path as `project_path`. A started app is not a working app: check `container_list` and `telemetry_logs`, then test the app itself.
+
+## Docs
+
+https://docs.wendy.dev/latest/llms.txt lists every page. Each page has a Markdown copy under `/latest/markdown/`, e.g. https://docs.wendy.dev/latest/markdown/device/entitlements.md for https://docs.wendy.dev/latest/device/entitlements/.
+
+- Quickstart: https://docs.wendy.dev/latest/
+- How Wendy works: https://docs.wendy.dev/latest/concepts/
+- Troubleshoot a deployment: https://docs.wendy.dev/latest/errors/
+- `wendy run` reference: https://docs.wendy.dev/latest/advanced/clients/wendy-cli/commands/run/
+- Device selection: https://docs.wendy.dev/latest/advanced/clients/wendy-cli/device-selection/
+- wendy.json reference: https://docs.wendy.dev/latest/advanced/apps/wendy.json/
+{{- if .Lite}}
+- ESP32 setup: https://docs.wendy.dev/latest/installation/wendy-lite-esp32/
+- Wendy Lite getting started: https://docs.wendy.dev/latest/advanced/wendy-lite/getting-started/
+- Swift WASM apps: https://docs.wendy.dev/latest/advanced/wendy-lite/wasm-apps/
+- Host API: https://docs.wendy.dev/latest/advanced/wendy-lite/host-api/
+{{- else if .Mac}}
+- Wendy Agent for Mac: https://docs.wendy.dev/latest/installation/wendy-agent-macos/
+{{- else}}
+- App entitlements: https://docs.wendy.dev/latest/device/entitlements/
+- Hardware access (GPU, camera, audio, Bluetooth): https://docs.wendy.dev/latest/hardware/
+- Discovering devices: https://docs.wendy.dev/latest/device/discovering-devices/
+- Managing apps: https://docs.wendy.dev/latest/device/managing-apps/
+- Device logs: https://docs.wendy.dev/latest/advanced/clients/wendy-cli/commands/device/logs/
+- Multi-service apps: https://docs.wendy.dev/latest/advanced/apps/wendy-services/
+- Simulator (no hardware needed): https://docs.wendy.dev/latest/installation/wendyos-virtual-machine/
+- ROS 2: https://docs.wendy.dev/latest/integrations/ros2/
+- Wendy Cloud: https://docs.wendy.dev/latest/cloud/
+- App tutorials: https://docs.wendy.dev/latest/guides/tutorials/
+{{- end}}
+{{- with .Tutorial}}
+- {{$.LanguageName}} hello world: https://docs.wendy.dev/latest/{{.}}
+{{- end}}
+- AI coding agent setup: https://docs.wendy.dev/latest/guides/llm-integration/
+- MCP tools: https://docs.wendy.dev/latest/integrations/mcp/
+- FAQ: https://docs.wendy.dev/latest/faq/
