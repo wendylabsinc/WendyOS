@@ -940,60 +940,18 @@ func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevic
 	}
 
 	activationStep(ctx, "download", map[string]string{"target_selected": "true"})
-	// Step 5a: Prefer the seekable-zstd fast path. When the manifest advertises a
-	// .zst for this storage plus a usable bmap (and --no-bmap wasn't passed), we
-	// download only the .zst + bmap and write mapped ranges, skipping holes —
-	// and crucially we do NOT download the full .zip image at all.
-	var seekableZst, seekableBmap string
-	var seekableTotal, imageSize int64
-	if !noBmap && imgInfo.ZstURL != "" && imgInfo.BmapURL != "" {
-		zstPath, zerr := resolveSeekableZst(deviceKey, selectedVersion, storage, imgInfo.ZstURL)
-		bmapCandidate, berr := osCachedBmapPath(deviceKey, selectedVersion, storage)
-		switch {
-		case zerr != nil:
-			fmt.Printf("Note: could not fetch seekable image (%v); flashing the full image.\n", zerr)
-		case berr != nil:
-			fmt.Printf("Note: cannot resolve block-map cache path (%v); flashing the full image.\n", berr)
-		default:
-			if derr := downloadBmap(imgInfo.BmapURL, bmapCandidate); derr != nil {
-				fmt.Printf("Note: could not fetch block map (%v); flashing the full image.\n", derr)
-			} else if parsed, perr := parseBmap(readFileOrNil(bmapCandidate)); perr != nil {
-				fmt.Printf("Note: block map unusable (%v); flashing the full image.\n", perr)
-			} else {
-				seekableZst, seekableBmap, seekableTotal = zstPath, bmapCandidate, mappedBytes(parsed)
-				imageSize = parsed.ImageSize
-			}
-		}
+	// Step 5a/5b: Settle the image and block map to write (resolveFlashSource).
+	// A stream is only opened when the seekable path is not used; for a
+	// compressed stream, measure the size when no bmap is used (a usable bmap's
+	// ImageSize is the exact total).
+	src, err := resolveFlashSource(deviceKey, selectedVersion, storage, imgInfo, noBmap)
+	if err != nil {
+		return err
 	}
-
-	// Step 5b: Fallback path — resolve the .zip/.img stream only when NOT using
-	// the seekable path (so the seekable path never downloads the .zip). For
-	// compressed images, prepare the legacy block map and measure the size when
-	// no bmap is used (a usable bmap's ImageSize is the exact total).
-	var stream *imageStream
-	var bmapPath string
-	if seekableZst == "" {
-		stream, err = openOSImageStream(deviceKey, imgInfo)
-		if err != nil {
-			return fmt.Errorf("opening OS image: %w", err)
-		}
+	seekableZst, seekableBmap, seekableTotal := src.seekableZst, src.seekableBmap, src.seekableTotal
+	stream, bmapPath, imageSize := src.stream, src.bmapPath, src.imageSize
+	if stream != nil {
 		defer stream.Close()
-
-		if !noBmap && imgInfo.BmapURL != "" {
-			candidate, derr := osCachedBmapPath(deviceKey, selectedVersion, storage)
-			if derr != nil {
-				fmt.Printf("Note: cannot resolve block-map cache path (%v); flashing the full image.\n", derr)
-			} else if derr := downloadBmap(imgInfo.BmapURL, candidate); derr != nil {
-				fmt.Printf("Note: could not fetch block map (%v); flashing the full image.\n", derr)
-			} else if parsed, perr := parseBmap(readFileOrNil(candidate)); perr != nil {
-				fmt.Printf("Note: block map unusable (%v); flashing the full image.\n", perr)
-			} else if stream.uncompressedSize > 0 && parsed.ImageSize != stream.uncompressedSize {
-				fmt.Printf("Note: block map is for a %d-byte image but this image is %d bytes; flashing the full image.\n", parsed.ImageSize, stream.uncompressedSize)
-			} else {
-				bmapPath = candidate
-				imageSize = parsed.ImageSize
-			}
-		}
 
 		// Without a usable bmap the full image is written, so its size must be known.
 		if bmapPath == "" && stream.uncompressedSize == 0 && stream.sourcePath != "" {
@@ -1229,6 +1187,75 @@ func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevic
 	fmt.Println("You can now insert the drive into your device and power it on.")
 	printFirstBootVerification(deviceKey, imgInfo.Version)
 	return nil
+}
+
+// flashSource is what installLinuxImage writes: the seekable .zst and its
+// block map, or else a sequential stream, written through the block map at
+// bmapPath when one is usable.
+type flashSource struct {
+	seekableZst, seekableBmap string
+	seekableTotal             int64
+	stream                    *imageStream
+	bmapPath                  string
+	// imageSize is the block map's image size when one is used, else 0.
+	imageSize int64
+}
+
+// resolveFlashSource resolves the image and block map for img from the cache,
+// downloading what is missing. The caller closes the returned stream.
+func resolveFlashSource(deviceKey, version, storage string, img *imageInfo, noBmap bool) (*flashSource, error) {
+	src := &flashSource{}
+	// Step 5a: Prefer the seekable-zstd fast path. When the manifest advertises a
+	// .zst for this storage plus a usable bmap (and --no-bmap wasn't passed), we
+	// download only the .zst + bmap and write mapped ranges, skipping holes —
+	// and crucially we do NOT download the full .zip image at all.
+	if !noBmap && img.ZstURL != "" && img.BmapURL != "" {
+		zstPath, zerr := resolveSeekableZst(deviceKey, version, storage, img.ZstURL)
+		bmapCandidate, berr := osCachedBmapPath(deviceKey, version, storage)
+		switch {
+		case zerr != nil:
+			fmt.Printf("Note: could not fetch seekable image (%v); flashing the full image.\n", zerr)
+		case berr != nil:
+			fmt.Printf("Note: cannot resolve block-map cache path (%v); flashing the full image.\n", berr)
+		default:
+			if derr := downloadBmap(img.BmapURL, bmapCandidate); derr != nil {
+				fmt.Printf("Note: could not fetch block map (%v); flashing the full image.\n", derr)
+			} else if parsed, perr := parseBmap(readFileOrNil(bmapCandidate)); perr != nil {
+				fmt.Printf("Note: block map unusable (%v); flashing the full image.\n", perr)
+			} else {
+				src.seekableZst, src.seekableBmap, src.seekableTotal = zstPath, bmapCandidate, mappedBytes(parsed)
+				src.imageSize = parsed.ImageSize
+			}
+		}
+	}
+
+	// Step 5b: Fallback path — resolve the .zip/.img stream only when NOT using
+	// the seekable path (so the seekable path never downloads the .zip), and
+	// prepare the legacy block map for it.
+	if src.seekableZst != "" {
+		return src, nil
+	}
+	stream, err := openOSImageStream(deviceKey, img)
+	if err != nil {
+		return nil, fmt.Errorf("opening OS image: %w", err)
+	}
+	src.stream = stream
+	if !noBmap && img.BmapURL != "" {
+		candidate, derr := osCachedBmapPath(deviceKey, version, storage)
+		if derr != nil {
+			fmt.Printf("Note: cannot resolve block-map cache path (%v); flashing the full image.\n", derr)
+		} else if derr := downloadBmap(img.BmapURL, candidate); derr != nil {
+			fmt.Printf("Note: could not fetch block map (%v); flashing the full image.\n", derr)
+		} else if parsed, perr := parseBmap(readFileOrNil(candidate)); perr != nil {
+			fmt.Printf("Note: block map unusable (%v); flashing the full image.\n", perr)
+		} else if stream.uncompressedSize > 0 && parsed.ImageSize != stream.uncompressedSize {
+			fmt.Printf("Note: block map is for a %d-byte image but this image is %d bytes; flashing the full image.\n", parsed.ImageSize, stream.uncompressedSize)
+		} else {
+			src.bmapPath = candidate
+			src.imageSize = parsed.ImageSize
+		}
+	}
+	return src, nil
 }
 
 // pickManifestVersion presents an interactive picker for available versions in a
@@ -1752,6 +1779,10 @@ func osCachedZstPath(deviceKey, version, storage string) (string, error) {
 	return osCachedPath(deviceKey, version, storage, ".img.zst")
 }
 
+// downloadOSImage is downloadImage, the download behind resolveSeekableZst and
+// resolveOSImage; a variable so tests can download without its progress TUI.
+var downloadOSImage = downloadImage
+
 // resolveSeekableZst downloads (or cache-hits) the seekable .img.zst for
 // deviceKey+version from zstURL, returning the cached path. Reuses downloadImage
 // (streams to a temp file with progress) then renames into the cache.
@@ -1764,7 +1795,7 @@ func resolveSeekableZst(deviceKey, version, storage, zstURL string) (string, err
 		fmt.Printf("Using cached seekable image (%s)\n", cached)
 		return cached, nil
 	}
-	downloadPath, err := downloadImage(&imageInfo{DownloadURL: zstURL, Version: version})
+	downloadPath, err := downloadOSImage(&imageInfo{DownloadURL: zstURL, Version: version})
 	if err != nil {
 		return "", fmt.Errorf("downloading seekable image: %w", err)
 	}
@@ -1861,7 +1892,7 @@ func resolveOSImage(deviceKey string, img *imageInfo) (string, error) {
 			return zipCached, nil
 		}
 		// Cache miss: download zip, rename to zip cache path.
-		downloadPath, dlErr := downloadImage(img)
+		downloadPath, dlErr := downloadOSImage(img)
 		if dlErr != nil {
 			return "", fmt.Errorf("downloading image: %w", dlErr)
 		}
@@ -1874,7 +1905,7 @@ func resolveOSImage(deviceKey string, img *imageInfo) (string, error) {
 	}
 
 	// Non-zip URL: download img directly and cache as .img.
-	downloadPath, err := downloadImage(img)
+	downloadPath, err := downloadOSImage(img)
 	if err != nil {
 		return "", fmt.Errorf("downloading image: %w", err)
 	}
