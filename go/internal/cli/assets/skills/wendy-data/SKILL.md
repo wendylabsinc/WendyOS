@@ -25,8 +25,8 @@ notifications, without a depth camera or custom app. Check source health,
 inference readiness, and notification permission. Deployment or a grant alone
 does not verify detection or delivery.
 
-Check the installed CLI's `wendy data --help` and relevant subcommand help when
-a terminal is available. Use explicit `--device <selector>` on device commands.
+With a terminal, check `wendy data --help` and relevant subcommand help.
+Use explicit `--device <selector>` on device commands.
 Local CLI commands reconnect independently of an MCP session, so preserve the
 connected target and transport instead of relying on the default device.
 
