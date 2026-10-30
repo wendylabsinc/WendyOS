@@ -56,6 +56,11 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
     @State private var fog = SiteFogConfiguration()
     @State private var fogSummary = SiteFogSummary()
     @State private var cameraColorEnabled = false
+    @State private var peopleEnabled = false
+    @State private var peopleFloorY: Double?
+    @State private var selectingPeopleFloor = false
+    @State private var people: [SitePersonTrack] = []
+    @State private var peopleStatuses: [UUID: String] = [:]
     @State private var cameraColorStatuses: [UUID: String] = [:]
     #if os(iOS)
     @State private var showingRobotControls = false
@@ -178,14 +183,32 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
             }
         }
         .background {
-            if cameraColorEnabled, let current, let colorCapture {
+            if cameraColorEnabled || peopleEnabled, let current, let colorCapture {
                 colorCapture(current.site.cameras.filter { onGateway($0) }.map(\.sourceID))
+            }
+            if peopleEnabled, !selectingPeopleFloor, placingCamera == nil,
+               let floorY = peopleFloorY, let current {
+                SitePeopleCapture(site: current.site, sources: videoSources(current.site),
+                    geometry: cameraGeometry(current.site), floorY: floorY) { tracks, statuses in
+                        people = tracks; peopleStatuses = statuses
+                    }
             }
             if let current, let automaticAlignment {
                 automaticAlignment(current, placingCamera != nil || scanning || busy || choosingCamera || importing)
             }
         }
+        .onChange(of: current?.site) { old, new in
+            if old?.id != new?.id || old?.modelRevision != new?.modelRevision
+                || old?.metresPerModelUnit != new?.metresPerModelUnit {
+                people = []; peopleStatuses = [:]; peopleFloorY = nil; selectingPeopleFloor = peopleEnabled
+            }
+        }
+        .onChange(of: peopleEnabled) { _, enabled in
+            people = []; peopleStatuses = [:]
+            selectingPeopleFloor = enabled && peopleFloorY == nil
+        }
         .onChange(of: gatewayID) { _, _ in
+            people = []; peopleStatuses = [:]
             setupPreviewID = nil; selectedCamera = nil; placingCamera = nil; pendingCamera = nil
             cameraToAdd = nil
         }
@@ -442,6 +465,10 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
 
     private func colorSources(_ site: Site) -> [UUID: SiteCameraColorSource] {
         guard cameraColorEnabled, placingCamera == nil else { return [:] }
+        return videoSources(site)
+    }
+
+    private func videoSources(_ site: Site) -> [UUID: SiteCameraColorSource] {
         var result: [UUID: SiteCameraColorSource] = [:]
         for camera in site.cameras where onGateway(camera) {
             if let source = feeds.first(where: { $0.id == camera.sourceID })?.colorSource { result[camera.id] = source }
@@ -451,6 +478,24 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
 
     private var cameraColorControls: some View {
         VStack(alignment: .leading, spacing: 5) {
+            #if os(macOS)
+            Toggle("Track people", isOn: $peopleEnabled).toggleStyle(.switch).fixedSize()
+            if peopleEnabled {
+                if selectingPeopleFloor {
+                    Text("Click the room floor in the model.").font(.caption)
+                } else if peopleFloorY != nil {
+                    Text("Estimated positions · Visible feet required").font(.caption).foregroundStyle(.secondary)
+                    Button("Choose floor again") { people = []; selectingPeopleFloor = true }
+                }
+                if let current {
+                    ForEach(current.site.cameras) { camera in
+                        Text("\(SiteCameraLabel(name: camera.name, sourceID: camera.sourceID).title): \(peopleStatus(camera))")
+                            .font(.caption2).foregroundStyle(.secondary)
+                    }
+                    if current.site.cameras.isEmpty { Text("Add and align cameras to track people.").font(.caption) }
+                }
+            }
+            #endif
             Toggle("Camera color", isOn: $cameraColorEnabled).toggleStyle(.switch).fixedSize()
             if cameraColorEnabled, let current {
                 let cameras = current.site.cameras
@@ -463,6 +508,13 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
                 if cameras.isEmpty { Text("Add cameras to this twin to color the model.").font(.caption) }
             }
         }
+    }
+
+    private func peopleStatus(_ camera: SiteCamera) -> String {
+        guard onGateway(camera) else { return "Connect to this camera's gateway." }
+        guard feeds.first(where: { $0.id == camera.sourceID })?.colorSource != nil else { return "Visual camera unavailable." }
+        guard peopleFloorY != nil, !selectingPeopleFloor else { return "Choose the room floor." }
+        return peopleStatuses[camera.id] ?? "Waiting for camera…"
     }
 
     private func colorStatus(_ camera: SiteCamera) -> String {
@@ -481,6 +533,11 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
                     cameraGeometry: cameraGeometry(current.site),
                     colorSources: colorSources(current.site),
                     colorStatus: { cameraColorStatuses = $0 },
+                    people: peopleEnabled && !selectingPeopleFloor && placingCamera == nil ? people : [],
+                    selectingPeopleFloor: peopleEnabled && selectingPeopleFloor,
+                    selectPeopleFloor: { point in
+                        peopleFloorY = point.y; selectingPeopleFloor = false; people = []
+                    },
                     placingCamera: placingCamera,
                     select: { selectedCamera = $0; camerasExpanded = false
                         robots.selected = false; showingRobotControls = false

@@ -10,6 +10,9 @@ public struct SiteScene: View {
     let cameraGeometry: [UUID: SiteCameraGeometry]
     let colorSources: [UUID: SiteCameraColorSource]
     let colorStatus: ([UUID: String]) -> Void
+    let people: [SitePersonTrack]
+    let selectingPeopleFloor: Bool
+    let selectPeopleFloor: (SitePoint) -> Void
     let placingCamera: UUID?
     let select: (UUID) -> Void
     let place: (UUID, SitePoint) -> Void
@@ -25,6 +28,9 @@ public struct SiteScene: View {
         cameraGeometry: [UUID: SiteCameraGeometry] = [:],
         colorSources: [UUID: SiteCameraColorSource] = [:],
         colorStatus: @escaping ([UUID: String]) -> Void = { _ in },
+        people: [SitePersonTrack] = [],
+        selectingPeopleFloor: Bool = false,
+        selectPeopleFloor: @escaping (SitePoint) -> Void = { _ in },
         placingCamera: UUID?,
         select: @escaping (UUID) -> Void,
         place: @escaping (UUID, SitePoint) -> Void,
@@ -39,6 +45,9 @@ public struct SiteScene: View {
         self.cameraGeometry = cameraGeometry
         self.colorSources = colorSources
         self.colorStatus = colorStatus
+        self.people = people
+        self.selectingPeopleFloor = selectingPeopleFloor
+        self.selectPeopleFloor = selectPeopleFloor
         self.placingCamera = placingCamera
         self.select = select
         self.place = place
@@ -50,13 +59,16 @@ public struct SiteScene: View {
     }
 
     public var body: some View {
-        TimelineView(.animation(minimumInterval: 0.25, paused: !fog.enabled && colorSources.isEmpty)) { context in
+        TimelineView(.animation(minimumInterval: 0.25, paused: !fog.enabled && colorSources.isEmpty && people.isEmpty)) { context in
             SceneSurface(
                 modelURL: modelURL,
                 site: site,
                 cameraGeometry: cameraGeometry,
                 colorSources: colorSources,
                 colorStatus: colorStatus,
+                people: people,
+                selectingPeopleFloor: selectingPeopleFloor,
+                selectPeopleFloor: selectPeopleFloor,
                 placingCamera: placingCamera,
                 select: select,
                 place: place,
@@ -85,6 +97,9 @@ private struct SceneSurface {
     var cameraGeometry: [UUID: SiteCameraGeometry]
     var colorSources: [UUID: SiteCameraColorSource]
     var colorStatus: ([UUID: String]) -> Void
+    var people: [SitePersonTrack]
+    var selectingPeopleFloor: Bool
+    var selectPeopleFloor: (SitePoint) -> Void
     var placingCamera: UUID?
     var select: (UUID) -> Void
     var place: (UUID, SitePoint) -> Void
@@ -100,6 +115,7 @@ private struct SceneSurface {
         var parent: SceneSurface
         var loadedURL: URL?
         var markers = SCNNode()
+        var peopleRoot = SCNNode()
         var model = SCNNode()
         weak var view: SCNView?
         var needsFraming = true
@@ -136,6 +152,8 @@ private struct SceneSurface {
                     scene.rootNode.addChildNode(model)
                     markers = SCNNode()
                     scene.rootNode.addChildNode(markers)
+                    peopleRoot = SCNNode()
+                    scene.rootNode.addChildNode(peopleRoot)
                     robotRoot = SCNNode()
                     robotRoot.name = "robot:go2"
                     robotModel = Go2Model.make()
@@ -171,6 +189,7 @@ private struct SceneSurface {
             model.scale = SCNVector3(scale, scale, scale)
             frameOverviewIfNeeded()
             updateRobot()
+            updatePeople()
             colorRenderers = colorRenderers.filter { parent.colorSources[$0.key] != nil }
             var activeColors: [SiteCameraColorRenderer] = []
             var statuses: [UUID: String] = [:]
@@ -354,6 +373,45 @@ private struct SceneSurface {
             lastRobot = state
         }
 
+        private func updatePeople() {
+            let now = Date()
+            let visible = parent.people.filter {
+                (0...SitePeopleTracker.lifetime).contains(now.timeIntervalSince($0.observedAt))
+            }
+            let ids = Set(visible.map { $0.id.uuidString })
+            peopleRoot.childNodes.filter { !ids.contains($0.name ?? "") }.forEach { $0.removeFromParentNode() }
+            SCNTransaction.begin()
+            SCNTransaction.animationDuration = 0.2
+            for person in visible {
+                let node: SCNNode
+                if let existing = peopleRoot.childNode(withName: person.id.uuidString, recursively: false) {
+                    node = existing
+                } else {
+                    node = SCNNode()
+                    node.name = person.id.uuidString
+                    // A compact human blob with a floor halo remains visible
+                    // in both the overview and an oblique room view.
+                    let body = SCNNode(geometry: SCNCapsule(capRadius: 0.19, height: 0.85))
+                    body.position.y = 0.6
+                    let head = SCNNode(geometry: SCNSphere(radius: 0.15))
+                    head.position.y = 1.18
+                    let halo = SCNNode(geometry: SCNCylinder(radius: 0.32, height: 0.025))
+                    halo.position.y = 0.04
+                    for part in [body, head, halo] {
+                        part.categoryBitMask = 1 << 30
+                        part.geometry?.firstMaterial?.diffuse.contents = platformAccent
+                        part.geometry?.firstMaterial?.lightingModel = .constant
+                        part.opacity = part === halo ? 0.35 : 0.8
+                        node.addChildNode(part)
+                    }
+                    peopleRoot.addChildNode(node)
+                }
+                node.simdPosition = SIMD3<Float>(person.position)
+                node.opacity = max(0.2, 1 - now.timeIntervalSince(person.observedAt) / SitePeopleTracker.lifetime)
+            }
+            SCNTransaction.commit()
+        }
+
         func tap(at point: CGPoint, immediate: Bool = false) {
             guard let view else { return }
             let hits = view.hitTest(
@@ -361,7 +419,12 @@ private struct SceneSurface {
                 options: [.searchMode: SCNHitTestSearchMode.all.rawValue,
                           .categoryBitMask: ~(1 << 30)]
             )
-            if let camera = parent.placingCamera,
+            if parent.selectingPeopleFloor {
+                guard let hit = hits.first(where: { isDescendant($0.node, of: model) }),
+                      abs(hit.worldNormal.y) > 0.95 else { return }
+                let p = hit.worldCoordinates
+                parent.selectPeopleFloor(SitePoint(x: Double(p.x), y: Double(p.y), z: Double(p.z)))
+            } else if let camera = parent.placingCamera,
                 let hit = hits.first(where: { isDescendant($0.node, of: model) })
             {
                 let p = hit.worldCoordinates

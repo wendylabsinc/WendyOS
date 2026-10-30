@@ -1127,3 +1127,35 @@ the pattern. The options menu contains Help and Save checkerboard. Opening Help
 pauses sample collection. Lens validation also pauses collection while checking
 the saved views. Failed checks distinguish insufficient tilt, uncertain lens
 parameters, disagreement between view groups, and validation-view errors.
+
+### People in the digital twin
+
+On macOS, open a site, add its visual cameras, and calibrate and align them to the
+room model. Turn on **Track people**, then click the room floor in the model.
+Walk where the cameras can see both ankles. The twin draws an anonymous human
+blob and floor halo at each estimated position. **Choose floor again** changes
+the reference height. Floor selection lasts for the current workspace session;
+switching models or changing model scale clears it.
+
+Apple Vision runs locally on decoded camera frames. The existing lens calibration
+undistorts the ankle midpoint, and the aligned camera pose projects its ray onto
+the selected horizontal floor. Nearby observations from different cameras within
+350 ms merge before short-lived tracks smooth the motion. Tracks fade and expire
+1.25 seconds after the last observation. Turning tracking off or leaving the view
+releases its decoding leases. Camera color can run at the same time.
+
+Positions are estimates, and track IDs do not identify people. This version needs
+a level floor and visible feet, rejects nearly horizontal rays and projections
+beyond 12 metres, and cannot track behind furniture or across different floor
+heights. Lifted feet, inaccurate calibration, and people standing close together
+can produce errors. It uses the cameras on the connected gateway. Thermal feeds
+are excluded. There is no person recording or face recognition, and these blobs
+do not feed robot navigation or collision avoidance.
+
+Possible extensions include synchronized multi-camera triangulation for hidden
+feet, appearance-assisted matching for crowded rooms, or depth-camera observations.
+The current floor projection reuses the twin's calibrated RGB cameras and needs
+no additional model download or hardware. Apple documents the detector in
+[Detecting human body poses in images](https://developer.apple.com/documentation/vision/detecting-human-body-poses-in-images).
+OpenCV documents triangulation in
+[Camera calibration and 3D reconstruction](https://docs.opencv.org/4.x/d9/d0c/group__calib3d.html).
