@@ -153,7 +153,7 @@ final class ThermalCameraTests: XCTestCase {
         feed.allowAutoplay()
         XCTAssertTrue(feed.shouldAutoStart(at: Date().addingTimeInterval(60)))
         let ordinary = CameraFeed(camera: Camera(id: 0, name: "Webcam"))
-        XCTAssertFalse(ordinary.shouldAutoStart(at: Date()))
+        XCTAssertTrue(ordinary.shouldAutoStart(at: Date()), "Ordinary cameras now recover alongside thermal cameras")
     }
 
     @MainActor

@@ -3,7 +3,7 @@ import Foundation
 struct NearbySetupDevice: Identifiable, Sendable {
     let id, name: String
     var rssi: Int = 0
-    var title: String { name.isEmpty ? "Wendy device" : name }
+    var title: String { name.isEmpty ? "Wendy device" : DeviceDisplayName.title(name) }
 }
 
 struct NearbySetupSnapshot: Sendable {

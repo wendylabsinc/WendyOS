@@ -236,11 +236,11 @@ final class DesktopTests: XCTestCase {
     }
 
     func testDevicePageKeyboardNavigationWrapsAndHandlesUnknownPage() {
-        XCTAssertEqual(DesktopDevicePage.adjacent(to: "apps", forward: false), .settings)
-        XCTAssertEqual(DesktopDevicePage.adjacent(to: "settings", forward: true), .apps)
+        XCTAssertEqual(DesktopDevicePage.adjacent(to: "overview", forward: false), .settings)
+        XCTAssertEqual(DesktopDevicePage.adjacent(to: "settings", forward: true), .overview)
         XCTAssertEqual(DesktopDevicePage.adjacent(to: "chat", forward: true), .data)
         XCTAssertEqual(DesktopDevicePage.adjacent(to: "chat", forward: false), .campaigns)
-        XCTAssertEqual(DesktopDevicePage.adjacent(to: "removed-page", forward: true), .apps)
+        XCTAssertEqual(DesktopDevicePage.adjacent(to: "removed-page", forward: true), .overview)
     }
 
     func testKeyboardSelectionFollowsVisibleOrderAndStopsAtEdges() {

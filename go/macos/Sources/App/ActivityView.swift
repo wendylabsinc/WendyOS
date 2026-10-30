@@ -69,7 +69,7 @@ struct ActivityView: View {
     @ObservedObject var model: AppModel
     @State private var snapshot: ResourceSnapshot?
     @State private var error: String?
-    @State private var live = true
+    @Environment(\.scenePhase) private var scenePhase
     @State private var visible = true
     @State private var sortOrder = [KeyPathComparator(\ResourceSnapshot.Row.name, comparator: .localizedStandard)]
     @State private var selection: String?
@@ -100,8 +100,8 @@ struct ActivityView: View {
             #endif
         }
         .onAppear { visible = true }.onDisappear { visible = false }
-        .task(id: live && visible) {
-            guard live && visible else { return }
+        .task(id: visible && scenePhase == .active) {
+            guard visible && scenePhase == .active else { return }
             while !Task.isCancelled {
                 await refresh()
                 do { try await Task.sleep(for: .seconds(1)) } catch { return }
@@ -166,7 +166,6 @@ struct ActivityView: View {
                         }
                     }.scrollIndicators(.hidden)
                     VStack(alignment: .trailing, spacing: 6) {
-                        Toggle("Live", isOn: $live).toggleStyle(.switch).controlSize(.small).fixedSize()
                         if let lastUpdated { Text(lastUpdated, style: .time).font(.caption2.monospacedDigit()).foregroundStyle(.secondary) }
                     }
                     }
@@ -277,7 +276,7 @@ struct ActivityView: View {
                 #endif
                 Text("CPU percentages use the whole machine, across all cores.").font(.caption).foregroundStyle(.secondary).padding(.vertical, 8)
             } else if let error {
-                FailureView(title: "Could not load activity", error: error) { live = false; actions.submit { await refresh() } }
+                FailureView(title: "Could not load activity", error: error) { actions.submit { await refresh() } }
             } else {
                 ProgressView("Sampling device activity…").frame(maxWidth: .infinity, maxHeight: .infinity)
             }

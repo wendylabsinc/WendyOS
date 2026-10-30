@@ -246,55 +246,48 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
         .sheet(isPresented: $showingRemoved) { removedCaptures }
 
         .overlay(alignment: .topLeading) {
-            #if os(iOS)
+            VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 12) {
+                if sites.count > 1 {
+                    Button { switchSite(-1) } label: { Image(systemName: "chevron.left") }
+                        .accessibilityLabel("Previous site").disabled(busy)
+                }
                 Text(current?.site.name ?? "Digital Twin").font(.headline).lineLimit(1)
+                if sites.count > 1 {
+                    Button { switchSite(1) } label: { Image(systemName: "chevron.right") }
+                        .accessibilityLabel("Next site").disabled(busy)
+                }
                 Spacer(minLength: 8)
                 siteMenu.labelStyle(.iconOnly)
                 Menu {
                     controls()
                     if current != nil {
                         Divider()
-                        Toggle("Camera color", isOn: $cameraColorEnabled)
-                        Toggle("Fog of war", isOn: $fog.enabled)
-                        if fog.enabled {
-                            Button("Reset exploration", systemImage: "arrow.counterclockwise") { fog.reset = UUID() }
+                        #if os(macOS)
+                        Button(peopleEnabled ? "Hide people" : "Show people") { peopleEnabled.toggle() }
+                        if peopleEnabled {
+                            Button("Choose floor again") { people = []; selectingPeopleFloor = true }
                         }
+                        #endif
+                        Button(cameraColorEnabled ? "Hide camera color" : "Show camera color") { cameraColorEnabled.toggle() }
+                        Button(fog.enabled ? "Hide exploration" : "Show exploration") { fog.enabled.toggle() }
+                        if fog.enabled { Button("Reset exploration") { fog.reset = UUID() } }
                     }
                     if !notices.isEmpty {
                         Divider()
-                        ForEach(notices, id: \.self) { notice in Text(notice) }
+                        ForEach(notices, id: \.self) { Text($0) }
                     }
-                } label: {
-                    Image(systemName: notices.isEmpty ? "slider.horizontal.3" : "exclamationmark.triangle")
-                        .frame(minWidth: 44, minHeight: 44)
-                }.accessibilityLabel("Twin settings")
+                } label: { Image(systemName: "ellipsis") }
+                    .accessibilityLabel("View options")
             }
-            .padding(.leading, 16).padding(.trailing, 4)
-            .background(.regularMaterial, in: Capsule())
-            .padding(12)
-            #else
-            VStack(alignment: .leading, spacing: 10) {
-                HStack {
-                    Text(current?.site.name ?? "Digital Twin").font(.title3.bold())
-                    Spacer()
-                    siteMenu
-                }
-                controls()
-                if current != nil {
-                    cameraColorControls
-                    SiteFogControls(configuration: $fog, summary: fogSummary)
-                }
-                ForEach(notices, id: \.self) { notice in
-                    Label(notice, systemImage: "exclamationmark.triangle")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
+            .buttonStyle(.plain)
+            if peopleEnabled && selectingPeopleFloor {
+                Text("Click the room floor to show people.").font(.caption).foregroundStyle(.secondary)
             }
-            .padding(14)
-            .frame(maxWidth: 500, alignment: .leading)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
+            }
+            .padding(16).frame(maxWidth: 380)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 20))
             .padding(16)
-            #endif
         }
         .fileImporter(
             isPresented: $importing,
@@ -398,6 +391,14 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
         #endif
     }
 
+    private func switchSite(_ offset: Int) {
+        guard sites.count > 1 else { return }
+        let index = sites.firstIndex(where: { $0.id == current?.id }) ?? 0
+        robots.stop()
+        selectedSite = sites[(index + offset + sites.count) % sites.count].id
+        selectedCamera = nil; placingCamera = nil; pendingCamera = nil
+    }
+
     private var siteMenu: some View {
         Menu {
             ForEach(sites) { item in
@@ -445,7 +446,7 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
                 Button("Recently Removed", systemImage: "clock.arrow.circlepath") { showingRemoved = true }
             }
         } label: {
-            Label("Sites", systemImage: "building.2")
+            Label("Site actions", systemImage: "folder")
         }
         .disabled(busy)
         .accessibilityLabel("Site Actions")
@@ -474,47 +475,6 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
             if let source = feeds.first(where: { $0.id == camera.sourceID })?.colorSource { result[camera.id] = source }
         }
         return result
-    }
-
-    private var cameraColorControls: some View {
-        VStack(alignment: .leading, spacing: 5) {
-            #if os(macOS)
-            Toggle("Track people", isOn: $peopleEnabled).toggleStyle(.switch).fixedSize()
-            if peopleEnabled {
-                if selectingPeopleFloor {
-                    Text("Click the room floor in the model.").font(.caption)
-                } else if peopleFloorY != nil {
-                    Text("Estimated positions · Visible feet required").font(.caption).foregroundStyle(.secondary)
-                    Button("Choose floor again") { people = []; selectingPeopleFloor = true }
-                }
-                if let current {
-                    ForEach(current.site.cameras) { camera in
-                        Text("\(SiteCameraLabel(name: camera.name, sourceID: camera.sourceID).title): \(peopleStatus(camera))")
-                            .font(.caption2).foregroundStyle(.secondary)
-                    }
-                    if current.site.cameras.isEmpty { Text("Add and align cameras to track people.").font(.caption) }
-                }
-            }
-            #endif
-            Toggle("Camera color", isOn: $cameraColorEnabled).toggleStyle(.switch).fixedSize()
-            if cameraColorEnabled, let current {
-                let cameras = current.site.cameras
-                let contributing = cameraColorStatuses.values.filter { $0.hasPrefix("Live camera color") }.count
-                Text("\(contributing) of \(cameras.count) cameras contributing").font(.caption)
-                ForEach(cameras) { camera in
-                    Text("\(SiteCameraLabel(name: camera.name, sourceID: camera.sourceID).title): \(colorStatus(camera))")
-                        .font(.caption2).foregroundStyle(.secondary)
-                }
-                if cameras.isEmpty { Text("Add cameras to this twin to color the model.").font(.caption) }
-            }
-        }
-    }
-
-    private func peopleStatus(_ camera: SiteCamera) -> String {
-        guard onGateway(camera) else { return "Connect to this camera's gateway." }
-        guard feeds.first(where: { $0.id == camera.sourceID })?.colorSource != nil else { return "Visual camera unavailable." }
-        guard peopleFloorY != nil, !selectingPeopleFloor else { return "Choose the room floor." }
-        return peopleStatuses[camera.id] ?? "Waiting for camera…"
     }
 
     private func colorStatus(_ camera: SiteCamera) -> String {
@@ -638,9 +598,6 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
 
     private func cameraPanel(_ current: StoredSite, size: CGSize) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            #if os(iOS)
-            cameraColorControls
-            #endif
             #if os(macOS)
             if selectedCamera == nil {
                 SiteRobotCameraHost(model: robots, height: min(210, size.height * 0.3))
@@ -663,6 +620,7 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
                     preview(camera.sourceID)
                         .frame(height: min(200, size.height * 0.3))
                         .clipShape(RoundedRectangle(cornerRadius: 10))
+                    DisclosureGroup("Alignment details") {
                     Text(geometryDescription(camera, now: Date())).font(.caption)
                         .fixedSize(horizontal: false, vertical: true)
                     if cameraColorEnabled {
@@ -671,6 +629,7 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
                     if let status = alignmentStatuses[camera.sourceID] {
                         Text(status).font(.caption).foregroundStyle(.secondary)
                     }
+                    }.font(.caption)
                     if calibrate != nil {
                         Button("Calibrate and Align", systemImage: "viewfinder") { beginAlignment(camera) }
                             .buttonStyle(.borderedProminent)
@@ -712,8 +671,6 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
                                        max(75, min(240, size.height * 0.3))))
                     .transition(.opacity)
                 }
-                Text("Cones show viewing direction, not measured coverage.")
-                    .font(.caption2).foregroundStyle(.secondary)
             }
         }
         #if os(macOS)
@@ -762,12 +719,6 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
                     VStack(alignment: .leading, spacing: 4) {
                         Text(label.title).font(.subheadline.weight(.medium)).lineLimit(2)
                         Text(status).font(.caption).foregroundStyle(.secondary)
-                        if let alignmentStatus = alignmentStatuses[camera.sourceID] {
-                            Text(alignmentStatus).font(.caption).foregroundStyle(.secondary)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                        Text(geometryDescription(camera, now: now)).font(.caption).foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
                     }.frame(maxWidth: .infinity, alignment: .leading)
                 }.contentShape(Rectangle())
             }.buttonStyle(.plain).disabled(feed == nil)

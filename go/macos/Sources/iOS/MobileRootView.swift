@@ -1,63 +1,61 @@
 import SwiftUI
 
+private enum MobileHome: Hashable { case devices, sites, activity }
 private enum MobileDestination: Hashable { case organization, sites, device(String) }
 struct MobileRootView: View {
     @State private var actions = AsyncActions()
     @EnvironmentObject private var model: AppModel
     @Environment(\.scenePhase) private var scenePhase
     @State private var destination: MobileDestination?
+    @State private var homeTab = MobileHome.devices
     @State private var preferredColumn = NavigationSplitViewColumn.sidebar
     @State private var source = "nearby"
     @State private var search = ""
     @State private var address = ""
     @State private var adding = false
+    @State private var showingNearbySetup = false
+    @State private var setupSignInAfterDismiss = false
     @State private var recognizing = false
     @State private var accounts = false
-    @State private var showingVPN = false
     @State private var details: String?
     private var devices: [Device] {
         (source == "nearby" ? model.nearby : model.cloud).filter { search.isEmpty || $0.title.localizedCaseInsensitiveContains(search) }
     }
     var body: some View {
-        actionContent.task { await actions.run() }
-            .modifier(NearbySetupPrompt())
+        TabView(selection: $homeTab) {
+            deviceBrowser.tabItem { Label("Devices", systemImage: "square.grid.2x2") }.tag(MobileHome.devices)
+            NavigationStack {
+                SitesView { select($0) }.navigationTitle("Sites").navigationBarTitleDisplayMode(.inline)
+            }.tabItem { Label("Sites", systemImage: "building.2") }.tag(MobileHome.sites)
+            NavigationStack {
+                ExperienceActivityView(model: model) { select($0) }
+            }.tabItem { Label("Activity", systemImage: "clock") }.tag(MobileHome.activity)
+        }
+        .task { await model.start() }
+        .task(id: model.account) { await model.refreshMobileCloudSelection() }
+        .task(
+            id: "\(model.initialized)/\(scenePhase == .background)/\(model.mobileCloudSelectionKey)"
+        ) {
+            await model.runMobileMesh(active: scenePhase != .background)
+        }
+        .task { await actions.run() }
+        .task(id: "\(model.initialized)/\(scenePhase == .active)") {
+            if model.initialized && scenePhase == .active { await model.maintainExperience() }
+        }
+        .onChange(of: model.requestedDevice) { _, device in
+            if let device { select(device); model.requestedDevice = nil }
+        }
+        .modifier(NearbySetupPrompt())
     }
 
-    @ViewBuilder private var actionContent: some View {
+    @ViewBuilder private var deviceBrowser: some View {
         NavigationSplitView(preferredCompactColumn: $preferredColumn) {
             List(selection: $destination) {
-                if model.account?.signedIn == true {
-                    Section {
-                        HStack(spacing: 16) {
-                            Button {
-                                destination = .organization; preferredColumn = .detail
-                            } label: {
-                                Label("Organization", systemImage: "person.2").frame(maxWidth: .infinity)
-                            }
-                            Divider()
-                            Button {
-                                destination = .sites; preferredColumn = .detail
-                            } label: {
-                                Label("Sites", systemImage: "building.2").frame(maxWidth: .infinity)
-                            }
-                        }.font(.subheadline).lineLimit(1).buttonStyle(.borderless)
-                            .padding(.vertical, 4)
-                    }
-                }
-                if source == "nearby" {
-                    Section {
-                        NearbySetupButton()
-                    }
-                }
                 Section {
                     ForEach(devices) { device in
                         NavigationLink(value: MobileDestination.device(device.id)) {
-                            HStack {
-                                Label(device.title, systemImage: "cpu")
-                                Spacer()
-                                if model.connectingDevice?.id == device.id { ProgressView() }
-                                else if model.connected?.id == device.id { Image(systemName: "checkmark.circle.fill").foregroundStyle(.green) }
-                            }.padding(.vertical, 4)
+                            DeviceIdentityRow(device: device, connected: model.connected?.id == device.id,
+                                              connecting: model.connectingDevice?.id == device.id)
                         }
                     }
                     if devices.isEmpty && !model.discovering {
@@ -81,10 +79,14 @@ struct MobileRootView: View {
             .searchable(text: $search, prompt: "Find a device")
             .refreshable { await refresh() }
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) { Button { showingVPN = true } label: { Image(systemName: "network") }.accessibilityLabel("VPN") }
                 ToolbarItem(placement: .topBarLeading) { Button { accounts = true } label: { Image(systemName: "person.crop.circle") }.accessibilityLabel("Accounts") }
                 ToolbarItem(placement: .topBarTrailing) { Button { recognizing = true } label: { Image(systemName: "viewfinder") }.accessibilityLabel("Recognize a device") }
-                ToolbarItem(placement: .topBarTrailing) { Button { adding = true } label: { Image(systemName: "plus") }.accessibilityLabel("Connect by address") }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Menu {
+                        Button("Set up a device", systemImage: "cpu") { showingNearbySetup = true }
+                        Button("Connect by address", systemImage: "link") { adding = true }
+                    } label: { Image(systemName: "plus") }.accessibilityLabel("Add device")
+                }
             }
         } detail: {
             NavigationStack {
@@ -92,18 +94,11 @@ struct MobileRootView: View {
                 case .organization: CloudManagementView().navigationTitle("Organization").navigationBarTitleDisplayMode(.inline)
                 case .sites: SitesView { select($0) }.navigationTitle("Sites").navigationBarTitleDisplayMode(.inline)
                 case .device:
-                    if let device = model.selection { MobileDeviceView(device: device) }
+                    if let device = model.selection { MobileDeviceView(device: device).id(device.id) }
                     else { ContentUnavailableView("Choose a device", systemImage: "network") }
                 case nil: ContentUnavailableView("Your devices", systemImage: "network", description: Text("Choose a nearby or cloud device."))
                 }
             }
-        }
-        .task { await model.start() }
-        .task(id: model.account) { await model.refreshMobileCloudSelection() }
-        .task(
-            id: "\(model.initialized)/\(scenePhase == .background)/\(model.mobileCloudSelectionKey)"
-        ) {
-            await model.runMobileMesh(active: scenePhase != .background)
         }
         .onChange(of: model.account?.signedIn) { _, signedIn in
             if signedIn != true, destination == .organization || destination == .sites {
@@ -127,7 +122,12 @@ struct MobileRootView: View {
             if scenePhase == .active { await model.refreshAccount() }
         }
         .fullScreenCover(isPresented: $recognizing) { DeviceViewfinder() }
-        .sheet(isPresented: $showingVPN) { NavigationStack { MobileVPNView(model: model, vpn: model.vpn) } }
+        .sheet(isPresented: $showingNearbySetup, onDismiss: {
+            actions.submit {
+                if setupSignInAfterDismiss { setupSignInAfterDismiss = false; await model.signIn() }
+                await model.refreshNearby()
+            }
+        }) { NearbySetupView { setupSignInAfterDismiss = true } }
         .sheet(isPresented: $accounts) {
             MobileAccountsView(model: model) { development in
                 accounts = false
@@ -161,6 +161,7 @@ struct MobileRootView: View {
         } message: { Text("The app will be removed from the device.") }
     }
     private func select(_ device: Device) {
+        homeTab = .devices
         model.selection = device
         destination = .device(device.id)
         preferredColumn = .detail
@@ -171,14 +172,14 @@ struct MobileRootView: View {
 }
 
 private enum MobilePane: String, CaseIterable, Identifiable {
-    case apps = "Apps", cameras = "Cameras", siteModel = "Digital Twin", campaigns = "Campaigns", chat = "Chat"
+    case overview = "Overview", apps = "Apps", cameras = "Cameras", siteModel = "Digital Twin", campaigns = "Campaigns", chat = "Chat"
     var id: String { rawValue }
 }
 private struct MobileDeviceView: View {
     @State private var actions = AsyncActions()
     @EnvironmentObject private var model: AppModel
     let device: Device
-    @State private var pane = MobilePane.chat
+    @State private var pane = MobilePane.overview
     @State private var showingEventLog = false
     var body: some View {
         actionContent.task { await actions.run() }
@@ -186,20 +187,23 @@ private struct MobileDeviceView: View {
 
     @ViewBuilder private var actionContent: some View {
         VStack(spacing: 0) {
-            if !model.connectedLite { ScrollView(.horizontal) {
-                HStack(spacing: 8) {
-                    ForEach(MobilePane.allCases) { item in
-                        Button { pane = item } label: {
-                            Text(item.rawValue).font(.subheadline.weight(.medium)).padding(.horizontal, 14).padding(.vertical, 10)
-                                .background(pane == item ? Color.accentColor : Color.secondary.opacity(0.1), in: Capsule())
-                                .foregroundStyle(pane == item ? Color.white : Color.primary)
-                        }.buttonStyle(.plain)
-                    }
-                }.padding(.horizontal).padding(.vertical, 8)
-            }.scrollIndicators(.hidden) }
+            if !model.connectedLite {
+                HStack(spacing: 12) {
+                    Picker("Device", selection: $pane) {
+                        ForEach([MobilePane.overview, .cameras, .apps]) { Text($0.rawValue).tag($0) }
+                    }.pickerStyle(.segmented)
+                    Menu {
+                        ForEach([MobilePane.siteModel, .campaigns, .chat]) { item in
+                            Button(item.rawValue) { pane = item }
+                        }
+                    } label: { Image(systemName: "ellipsis.circle").font(.title3) }
+                    .accessibilityLabel("More device tools")
+                }.padding(.horizontal).padding(.vertical, 10)
+            }
             Divider()
-            if model.connectingDevice != nil { ProgressView("Connecting to \(device.title)…").frame(maxWidth: .infinity, maxHeight: .infinity) }
-            else if let error = model.detailError { FailureView(title: "Could not connect", error: error) { actions.submit { await model.connect(device) } } }
+            if model.connectingDevice != nil || model.detailError != nil {
+                DeviceConnectionView(model: model, device: device)
+            }
             else if model.selectedDeviceReady {
                 if model.connectedLite { LiteDeviceView(model: model).id(model.deviceSession) }
                 else { content.id(model.deviceSession) }
@@ -227,6 +231,15 @@ private struct MobileDeviceView: View {
     }
     @ViewBuilder private var content: some View {
         switch pane {
+        case .overview: DeviceOverview(model: model, device: device) { page in
+            switch page {
+            case "apps": pane = .apps
+            case "cameras": pane = .cameras
+            case "siteModel": pane = .siteModel
+            case "chat": pane = .chat
+            default: pane = .overview
+            }
+        }
         case .apps: ActivityView(model: model)
         case .cameras: CameraWallView(model: model)
         case .siteModel: NativeSiteView(model: model)
@@ -317,6 +330,10 @@ private struct MobileAccountsView: View {
     @ViewBuilder private var actionContent: some View {
         NavigationStack {
             List {
+                Section {
+                    NavigationLink { CloudManagementView().navigationTitle("Organization") } label: { Label("Manage organization", systemImage: "person.2") }
+                    NavigationLink { MobileVPNView(model: model, vpn: model.vpn) } label: { Label("Connection settings", systemImage: "network") }
+                }
                 if accounts.isEmpty && model.account?.signedIn != true {
                     Text("Add an account to access your fleet and organization.")
                         .font(.subheadline).foregroundStyle(.secondary)
