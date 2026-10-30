@@ -219,7 +219,18 @@ func TestServeRelaysTerminalStatusWhenUpstreamEndsWhileSending(t *testing.T) {
 	}
 }
 
-func TestServeProxiesUnaryAndStreamingRPCsAndExpires(t *testing.T) {
+func TestServeProxiesUnaryAndStreamingRPCsAndExpires(t *testing.T) { serveNormalRPCAndExpiry(t) }
+
+// Named pipes stop admission by closing their listener, rather than unlinking
+// an inode. Exercise that owner/drain path with normal real RPCs on the host.
+func TestServeNormalListenerCloseDrainContract(t *testing.T) {
+	previous := localIPCRequiresListenerClose
+	localIPCRequiresListenerClose = true
+	t.Cleanup(func() { localIPCRequiresListenerClose = previous })
+	serveNormalRPCAndExpiry(t)
+}
+
+func serveNormalRPCAndExpiry(t *testing.T) {
 	dir := shortTempDir(t)
 	if err := os.Chmod(dir, 0o700); err != nil {
 		t.Fatal(err)
