@@ -4,6 +4,10 @@ option go_package = "github.com/wendylabsinc/wendy/proto/gen/agentpb/v2;agentpbv
 
 service WendyAgentUpdateService {
     rpc UpdateAgent(stream UpdateAgentRequest) returns (stream UpdateAgentResponse);
+    // Metadata checks and artifact downloads run on the device, never the client.
+    rpc CheckOnlineUpdate(CheckOnlineUpdateRequest) returns (OnlineUpdateStatus);
+    rpc StartOnlineUpdate(StartOnlineUpdateRequest) returns (OnlineUpdateStatus);
+    rpc GetOnlineUpdateStatus(GetOnlineUpdateStatusRequest) returns (OnlineUpdateStatus);
 }
 
 message UpdateAgentRequest {
@@ -34,4 +38,21 @@ message UpdateAgentResponse {
     }
 
     message Updated {}
+}
+
+message CheckOnlineUpdateRequest {}
+message GetOnlineUpdateStatusRequest {}
+message StartOnlineUpdateRequest {
+    // Version displayed to the user. Reject if the release changed since checking.
+    string version = 1;
+}
+message OnlineUpdateStatus {
+    string installed_version = 1;
+    string latest_version = 2;
+    bool update_available = 3;
+    // idle, checking, available, current, downloading, installing, restarting, failed
+    string phase = 4;
+    string detail = 5;
+    int64 downloaded_bytes = 6;
+    int64 total_bytes = 7;
 }

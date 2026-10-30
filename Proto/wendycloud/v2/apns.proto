@@ -1,0 +1,34 @@
+syntax = "proto3";
+
+package wendycloud.v2;
+
+service APNSService {
+  rpc RegisterDeviceToken(APNSRegisterDeviceTokenRequest) returns (APNSRegisterDeviceTokenResponse);
+  rpc UnregisterDeviceToken(APNSUnregisterDeviceTokenRequest) returns (APNSUnregisterDeviceTokenResponse);
+}
+
+enum APNSEnvironment {
+  APNS_ENVIRONMENT_UNSPECIFIED = 0;
+  APNS_ENVIRONMENT_DEVELOPMENT = 1;
+  APNS_ENVIRONMENT_PRODUCTION = 2;
+}
+
+message APNSRegisterDeviceTokenRequest {
+  bytes device_token = 1;
+  APNSEnvironment environment = 2;
+  string topic = 3;
+}
+
+message APNSRegisterDeviceTokenResponse {
+  bool success = 1;
+}
+
+message APNSUnregisterDeviceTokenRequest {
+  bytes device_token = 1;
+  APNSEnvironment environment = 2;
+  string topic = 3;
+}
+
+message APNSUnregisterDeviceTokenResponse {
+  bool success = 1;
+}
