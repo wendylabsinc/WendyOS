@@ -84,6 +84,12 @@ final class MobileTests: XCTestCase {
         )
         let info = try await client.deviceInfo(session: connection.session)
         print("Live mesh management: \(info.board), \(info.architecture), \(info.osVersion)")
+        if !connection.lite && environment["WENDY_LIVE_MESH_NETWORK_SETTINGS"] == "1" {
+            let settings = try await client.networkSettings(session: connection.session)
+            print("Live mesh settings: mesh=\(settings.meshAvailable) runtime=\(settings.runtimeAvailable) topology=\(settings.topology.available) error=\(settings.meshError)")
+            XCTAssertTrue(settings.meshAvailable, settings.meshError)
+            XCTAssertTrue(settings.topology.available, settings.topology.error)
+        }
         if !connection.lite { _ = try await client.apps() }
         try await client.setMobileState(
             active: false,

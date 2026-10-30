@@ -54,12 +54,14 @@
 		3141DBA5B6180F2B57181663 /* Security.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 5D8FCECB47D77D65A8AD29C6 /* Security.framework */; };
 		31B01C3E3FA348CA565A4FDF /* Go2 in Resources */ = {isa = PBXBuildFile; fileRef = F89DC02C7622D70102441A63 /* Go2 */; };
 		31F0F9AD132888F47A6B72D7 /* PhoneLensCalibrationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 91E03E29F774A31822696188 /* PhoneLensCalibrationView.swift */; };
+		3328E3ADBD51C86460BC5F8B /* LiteTemperatureView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BBC0B11A4A7AAAF5F0758714 /* LiteTemperatureView.swift */; };
 		3329EDF5CE8BF76ABB9C58D0 /* CampaignEventTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 83ADC08CA4A40489983BE485 /* CampaignEventTests.swift */; };
 		349726133520742C203814D7 /* InstallGuide.swift in Sources */ = {isa = PBXBuildFile; fileRef = 671BA86D948522533FE7CC9D /* InstallGuide.swift */; };
 		36ABCD2BDD34D7B61468F7C2 /* CampaignRecordingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2CB41B67FAE017DE765E2F8 /* CampaignRecordingsView.swift */; };
 		37CD9AD08E158AFD5D0A1BF1 /* UnitreePairingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EE99209CE4290965133EBC3F /* UnitreePairingView.swift */; };
 		383ECC2E48DFADB704DB2FA9 /* ScreenLensCalibration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6A0B565A410E3EAD5C517D6C /* ScreenLensCalibration.swift */; };
 		39ED22314913B8343406C332 /* DataVisualizerClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF29F18E69E8D50DFC51DA94 /* DataVisualizerClient.swift */; };
+		3B87ABB219114036F71CAEEB /* DeviceSettingsRead.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2D87C37A4E1EEEA08AC4E951 /* DeviceSettingsRead.swift */; };
 		3CBC4BB7DBC20478491ED268 /* CoreBluetooth.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 9E2EF35E68D5CA5FA24980A4 /* CoreBluetooth.framework */; };
 		3CC2DACD1B923CC396BF6602 /* SiteFogRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 08EBBD001E30821573005D77 /* SiteFogRenderer.swift */; };
 		3DDFC907A8890ADC5C590545 /* SiteRobotLocalization.swift in Sources */ = {isa = PBXBuildFile; fileRef = 557F8A0DEA867210FC8AADCE /* SiteRobotLocalization.swift */; };
@@ -195,6 +197,7 @@
 		C0AE509A4FD404191F002C8A /* SiteRobotGeometry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6CCAC50FFBAA2CB3C6E7B4EF /* SiteRobotGeometry.swift */; };
 		C22F6C5DB72DEA503FA54640 /* PushNotifications.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4FD4712852B6F400373343C3 /* PushNotifications.swift */; };
 		C2BE74D5495048FCF105EDA3 /* SiteReferenceCapture.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7657AD677FD62BAD21CB002E /* SiteReferenceCapture.swift */; };
+		C30F5E187BE8FE155793277F /* DeviceSettingsRead.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2D87C37A4E1EEEA08AC4E951 /* DeviceSettingsRead.swift */; };
 		C338E33307B39FD9944B5890 /* DesktopTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C5BF09CEEE5F40635961B572 /* DesktopTests.swift */; };
 		C38A105CA2B62B3F487DA22E /* RobotLensCalibrationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F77E3BE596D894B863D41817 /* RobotLensCalibrationTests.swift */; };
 		C3B9202FADD6F7B7462C64ED /* PlatformServices.swift in Sources */ = {isa = PBXBuildFile; fileRef = 40A7543FFAE45034DB228D85 /* PlatformServices.swift */; };
@@ -226,6 +229,7 @@
 		E3A0BD21E2437238113545E0 /* CoreMedia.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = E16E0AECED1D3AFC9D949296 /* CoreMedia.framework */; };
 		E54F34FCA4D2C425D1D646CE /* NetworkExtension.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = D12072D59326B47F07A71F81 /* NetworkExtension.framework */; };
 		E5567126A684A2624D1EEDDB /* MobileVideoPlayer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 830BF31D5054ED12AE4A2499 /* MobileVideoPlayer.swift */; };
+		E579923407BEABBBAD39BE70 /* LiteTemperatureView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BBC0B11A4A7AAAF5F0758714 /* LiteTemperatureView.swift */; };
 		E5C3F53A4CFF34739C539614 /* DataVisualizerMediaTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9E04EE381C6CDD0530830A0B /* DataVisualizerMediaTests.swift */; };
 		E5D917C5F9CB012DDC2D8F42 /* PlatformServices.swift in Sources */ = {isa = PBXBuildFile; fileRef = 40A7543FFAE45034DB228D85 /* PlatformServices.swift */; };
 		E69CD4973C9D92085016270C /* VPNController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6F559A36FB62C81768A4EC94 /* VPNController.swift */; };
@@ -323,6 +327,7 @@
 		283DE4ACABB5F31B90C062E0 /* UserNotifications.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = UserNotifications.framework; path = System/Library/Frameworks/UserNotifications.framework; sourceTree = SDKROOT; };
 		29731A268C7EA376952C0151 /* SiteAutomaticAlignmentTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SiteAutomaticAlignmentTests.swift; sourceTree = "<group>"; };
 		2C93776C64F09D31D72C65AD /* H264VideoDecoder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = H264VideoDecoder.swift; sourceTree = "<group>"; };
+		2D87C37A4E1EEEA08AC4E951 /* DeviceSettingsRead.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceSettingsRead.swift; sourceTree = "<group>"; };
 		2DD8002D524E68CA3DE04823 /* CoreFoundation.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreFoundation.framework; path = System/Library/Frameworks/CoreFoundation.framework; sourceTree = SDKROOT; };
 		2E1689D6E0F336E711BDEDA8 /* CampaignSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CampaignSettingsView.swift; sourceTree = "<group>"; };
 		3123CE49AF22AD71C953CCE2 /* AppsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppsView.swift; sourceTree = "<group>"; };
@@ -408,6 +413,7 @@
 		B51F4E867CC0B70E8A1C6FE0 /* DataVisualizerTimeline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DataVisualizerTimeline.swift; sourceTree = "<group>"; };
 		B5EEDDF6B4AA3E5169763239 /* InstallSession.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InstallSession.swift; sourceTree = "<group>"; };
 		B709AF3886D5AA315D17DFD6 /* GoClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GoClient.swift; sourceTree = "<group>"; };
+		BBC0B11A4A7AAAF5F0758714 /* LiteTemperatureView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LiteTemperatureView.swift; sourceTree = "<group>"; };
 		BC83B56E9C49F34DD5113A9E /* DataVisualVideoController.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DataVisualVideoController.swift; sourceTree = "<group>"; };
 		BCB84175F336A9BF4A9505CB /* InstallGuidanceView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = InstallGuidanceView.swift; sourceTree = "<group>"; };
 		BD12126A6ACB334462BB3EA1 /* AVKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AVKit.framework; path = System/Library/Frameworks/AVKit.framework; sourceTree = SDKROOT; };
@@ -548,6 +554,7 @@
 				E539BE71A9E784220ACB1D8A /* DeviceEnrollmentView.swift */,
 				25413B13DA07596067522B8C /* DeviceInfoView.swift */,
 				A08F325BB22813193B75ED5F /* DeviceRecognition.swift */,
+				2D87C37A4E1EEEA08AC4E951 /* DeviceSettingsRead.swift */,
 				7648529217A2937BE2590CE6 /* DeviceSettingsView.swift */,
 				B709AF3886D5AA315D17DFD6 /* GoClient.swift */,
 				2C93776C64F09D31D72C65AD /* H264VideoDecoder.swift */,
@@ -557,6 +564,7 @@
 				B5EEDDF6B4AA3E5169763239 /* InstallSession.swift */,
 				DD0EBD1A032792BDF75E472D /* InstallView.swift */,
 				E9769FE92218D369CAE4C7B1 /* LiteDeviceView.swift */,
+				BBC0B11A4A7AAAF5F0758714 /* LiteTemperatureView.swift */,
 				6C9EDEC6A2D47804FCD2A19F /* LogsView.swift */,
 				73D7C90E8A6DFBFEBCBDC415 /* MeshGraphView.swift */,
 				DBDFC9A8D0ACA603DCD08924 /* ModelLibraryClient.swift */,
@@ -955,10 +963,10 @@
 			projectRoot = "";
 			targets = (
 				061A3B38F40254E591224986 /* WendyDesktop */,
+				C6BA34DDD78D5B0FE18B873F /* WendyNetwork */,
 				66549B7B32DEF8896208E2C0 /* WendyDesktopTests */,
 				4660FE6CC78F07FE7C2A1CD9 /* WendyMobile */,
 				9F296B433343571747FBC234 /* WendyMobileTests */,
-				C6BA34DDD78D5B0FE18B873F /* WendyNetwork */,
 			);
 		};
 /* End PBXProject section */
@@ -1224,6 +1232,7 @@
 				43966E081AEC9A376A15FAB9 /* DeviceEnrollmentView.swift in Sources */,
 				5CDC206FDA8042791A158245 /* DeviceInfoView.swift in Sources */,
 				7B3D2969B8AB9C1D3A789DF3 /* DeviceRecognition.swift in Sources */,
+				3B87ABB219114036F71CAEEB /* DeviceSettingsRead.swift in Sources */,
 				10B131E8F39984EDA6802FF1 /* DeviceSettingsView.swift in Sources */,
 				AEC62CE279318FE73303E500 /* DeviceViewfinder.swift in Sources */,
 				67BB10C89FBFFB29C73A96A3 /* DeviceViewfinderController.swift in Sources */,
@@ -1236,6 +1245,7 @@
 				8EA9C1E889E7A5B253882865 /* InstallSession.swift in Sources */,
 				EBDA62DB23BF39D278567570 /* InstallView.swift in Sources */,
 				B3C201CCC4860577D45AF3C7 /* LiteDeviceView.swift in Sources */,
+				E579923407BEABBBAD39BE70 /* LiteTemperatureView.swift in Sources */,
 				8455994379C39B9DCB041A54 /* LogsView.swift in Sources */,
 				5AB57DEAEE38F64FA12A8E29 /* MeshGraphView.swift in Sources */,
 				E0A29452C11060654C08FD00 /* MobileDataView.swift in Sources */,
@@ -1353,6 +1363,7 @@
 				A854B9C8B11F9F6B55D88B81 /* DeviceEnrollmentView.swift in Sources */,
 				F362388A1C4DF544789B3D0B /* DeviceInfoView.swift in Sources */,
 				E7359C63C25197BB2F7EA6FC /* DeviceRecognition.swift in Sources */,
+				C30F5E187BE8FE155793277F /* DeviceSettingsRead.swift in Sources */,
 				CB95B7C465AB92F998A08000 /* DeviceSettingsView.swift in Sources */,
 				4A1345EEAED9C6E0EBB65FB1 /* Go2Model.swift in Sources */,
 				454187A52A88D86692831D21 /* GoClient.swift in Sources */,
@@ -1363,6 +1374,7 @@
 				2A9AE663651AA823593B45CC /* InstallSession.swift in Sources */,
 				029B7B146468C1CD6FCCC18B /* InstallView.swift in Sources */,
 				CEE58765B62B95A1902EE62E /* LiteDeviceView.swift in Sources */,
+				3328E3ADBD51C86460BC5F8B /* LiteTemperatureView.swift in Sources */,
 				1DD72D639F28C7AEAF4A7D64 /* LogsView.swift in Sources */,
 				61783CD803B9FF9CE23FBA27 /* MeshGraphView.swift in Sources */,
 				7BA6756557B370948A3FE8A8 /* ModelLibraryClient.swift in Sources */,

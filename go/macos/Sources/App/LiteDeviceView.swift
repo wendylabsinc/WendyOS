@@ -19,10 +19,11 @@ struct LiteDeviceView: View {
     @ViewBuilder private var actionContent: some View {
         VStack(spacing: 16) {
             Picker("Wendy Lite view", selection: $page) {
-                ForEach(["Cameras", "Device", "Wi-Fi", "Logs", "Settings"], id: \.self) { Text($0) }
+                ForEach(["Cameras", "Sensors", "Device", "Wi-Fi", "Logs", "Settings"], id: \.self) { Text($0) }
             }.pickerStyle(.segmented).padding(.horizontal)
             switch page {
             case "Cameras": CameraWallView(model: model)
+            case "Sensors": LiteTemperatureView(session: model.deviceSession)
             case "Logs": DeviceLogsPage(model: model)
             case "Wi-Fi": wifi
             case "Settings":

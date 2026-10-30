@@ -8,6 +8,26 @@ import Synchronization
 
 @MainActor
 final class ConcurrencyTests: XCTestCase {
+    func testSettingsDetailLoadsAfterCancelledMenuReadDrains() async {
+        let probe = SettingsNavigationProbe()
+        await withTaskGroup(of: Void.self) { group in
+            group.addTask {
+                await withTaskGroup(of: Void.self) { menu in
+                    menu.addTask { await probe.loadMenu() }
+                    _ = try? await probe.started.value()
+                    menu.cancelAll()
+                    probe.cancelled.finish(.success(()))
+                }
+            }
+            _ = try? await probe.cancelled.value()
+            group.addTask { await probe.loadDetail() }
+            _ = try? await probe.detailStarted.value()
+            probe.release.signal()
+        }
+        XCTAssertFalse(probe.menuPublished)
+        XCTAssertTrue(probe.detailPublished)
+    }
+
     func testCancelledQueuedWorkDoesNotCallTheBridge() async {
         let queue = DispatchQueue(label: "test.cancelled-bridge")
         queue.suspend()
@@ -148,5 +168,39 @@ final class ConcurrencyTests: XCTestCase {
         actions.submit { completed = true }
         await actions.finishAndWait()
         XCTAssertTrue(completed)
+    }
+}
+
+@MainActor
+private final class SettingsNavigationProbe {
+    private let read = DeviceSettingsRead()
+    nonisolated let started = AsyncCallback<Void>()
+    nonisolated let cancelled = AsyncCallback<Void>()
+    nonisolated let detailStarted = AsyncCallback<Void>()
+    nonisolated let release = DispatchSemaphore(value: 0)
+    private let queue = DispatchQueue(label: "test.settings-navigation")
+    private var activeReads = 0
+    private(set) var menuPublished = false
+    private(set) var detailPublished = false
+
+    func loadMenu() async {
+        await read.run { [self] in
+            activeReads += 1
+            defer { activeReads -= 1 }
+            do {
+                _ = try await BlockingWork.run(on: queue) { [started, release] in
+                    started.finish(.success(()))
+                    release.wait()
+                }
+                menuPublished = true
+            } catch {}
+        }
+    }
+    func loadDetail() async {
+        detailStarted.finish(.success(()))
+        await read.run { [self] in
+            XCTAssertEqual(activeReads, 0)
+            detailPublished = true
+        }
     }
 }
