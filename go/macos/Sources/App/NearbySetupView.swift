@@ -39,6 +39,7 @@ struct NearbySetupView: View {
     @State private var customizing = false
     @State private var organizationsLoaded = false
     @State private var busy = false
+    @State private var opening = false
     @State private var progress = ""
     @State private var error: String?
     @State private var lastStatus = Date.distantPast
@@ -51,9 +52,10 @@ struct NearbySetupView: View {
     private var choice: EnrollmentOrganization? { organizations.first { $0.id == organization } }
     private var nameValid: Bool { name.range(of: "^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$", options: .regularExpression) != nil }
 
-    private var finished: Bool { state.completed || state.enrolled && !state.pending }
+    private var finished: Bool { state.completed || state.enrolled && !state.attempted }
     private var stage: String {
         if finished { return "done" }
+        if !state.failure.isEmpty && !editingLocked { return "attention" }
         if state.pending || state.attempted || editingLocked { return "working" }
         if selected == nil { return "discovering" }
         return state.connected && organizationsLoaded ? "ready" : "connecting"
@@ -77,7 +79,11 @@ struct NearbySetupView: View {
                     Group {
                         switch stage {
                         case "done":
-                            primaryButton("Open device", symbol: "arrow.right") { actions.submit { await finish() } }
+                            if opening {
+                                ProgressView("Opening device…").controlSize(.large)
+                            } else {
+                                primaryButton("Open device", symbol: "arrow.right") { actions.submit { await finish() } }
+                            }
                         case "discovering":
                             ProgressView().controlSize(.large)
                             ForEach(devices) { device in
@@ -91,13 +97,25 @@ struct NearbySetupView: View {
                                 }.buttonStyle(.plain)
                             }
                         case "connecting": ProgressView().controlSize(.large)
+                        case "attention":
+                            if state.canResume {
+                                primaryButton("Continue setup", symbol: "arrow.right") { submit(.enroll) }
+                                    .disabled(!state.connected || editingLocked)
+                            } else {
+                                if opening {
+                                    ProgressView("Opening device…").controlSize(.large)
+                                } else {
+                                    primaryButton("View device", symbol: "arrow.right") { actions.submit { await finish() } }
+                                }
+                            }
+                            wifiControls
                         case "working":
                             ProgressView().controlSize(.large)
                             if !editingLocked { wifiControls }
                         default: confirmation
                         }
                     }
-                    if let error, stage == "ready" {
+                    if let error, stage == "ready" || stage == "done" || stage == "attention" {
                         Text(PresentedFailure(error).message).font(.callout).foregroundStyle(.secondary)
                             .multilineTextAlignment(.center)
                     }
@@ -144,6 +162,7 @@ struct NearbySetupView: View {
 
     private var headline: String {
         switch stage {
+        case "attention": return "Setup needs attention."
         case "done": return state.completed ? "You’re all set." : "Already part of Wendy."
         case "discovering": return "Find your Wendy."
         case "connecting": return "Connecting to your Wendy…"
@@ -156,6 +175,7 @@ struct NearbySetupView: View {
 
     private var explanation: String {
         switch stage {
+        case "attention": return state.failure
         case "done": return "Your device is enrolled and ready to open."
         case "discovering": return "Power on your device and keep it nearby. We’ll find it automatically."
         case "connecting": return "Keep your device nearby. We’re taking care of the connection."
@@ -227,18 +247,33 @@ struct NearbySetupView: View {
     }
 
     private func finish() async {
-        guard !busy else { return }
+        guard !opening else { return }
+        opening = true
+        error = nil
+        defer { opening = false }
+        // Show feedback before waiting for a background observation to finish.
+        while busy {
+            do { try await Task.sleep(for: .milliseconds(100)) } catch { return }
+        }
+        guard !Task.isCancelled else { return }
         busy = true; automatic = true
         defer { busy = false; automatic = false }
+        // Match the identifier, never a potentially duplicated display name.
+        if openKnownDevice() { return }
         await app.refreshCloud()
+        if openKnownDevice() { return }
         await app.refreshNearby()
-        // Match the Cloud device identifier, never a potentially duplicated name.
-        if !state.deviceID.isEmpty, let device = (app.cloud + app.nearby).first(where: {
+        if openKnownDevice() { return }
+        error = "Your device is not in the device list yet. Keep it online, then open it again."
+    }
+
+    private func openKnownDevice() -> Bool {
+        guard !state.deviceID.isEmpty, let device = (app.cloud + app.nearby).first(where: {
             $0.id == state.deviceID || ($0.selector.hasPrefix("cloud://") && URL(string: $0.selector)?.lastPathComponent == state.deviceID)
-        }) {
-            app.requestedDevice = device
-        }
+        }) else { return false }
+        app.requestedDevice = device
         dismiss()
+        return true
     }
 
     private func discover() async {
@@ -303,7 +338,7 @@ struct NearbySetupView: View {
                 error = state.error
                 if state.error?.contains("name is already in use") == true { customizing = true }
             }
-            if state.pending && !state.wifiConnected && action == .enroll { wifiExpanded = true }
+            if (state.pending || state.canResume) && !state.wifiConnected && action == .enroll { wifiExpanded = true }
             if state.completed { error = nil; observationError = nil }
         } catch {
             if !Task.isCancelled {

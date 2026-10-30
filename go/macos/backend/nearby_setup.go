@@ -20,6 +20,8 @@ type NearbyDevice struct {
 type NearbySetupState struct {
 	Session                                                                 uint64
 	Connected, Lite, Enrolled, Attempted, Pending, Completed, WiFiConnected bool
+	Failure                                                                 string
+	CanResume                                                               bool
 	SSID, DeviceID                                                          string
 	Networks                                                                []string
 }
@@ -27,6 +29,9 @@ type nearbyAttempt struct {
 	attempted  bool
 	credential *commands.DesktopNearbyCredential
 	completed  bool
+	failure    string
+	canResume  bool
+	deadline   time.Time
 }
 type nearbyConnection interface {
 	Status(context.Context, bool) (*pb.SetupStatusResponse, error)
@@ -88,10 +93,12 @@ func (n *nearbySetup) snapshot() NearbySetupState {
 	s := n.state
 	s.Networks = append([]string(nil), s.Networks...)
 	if a := n.attempts[n.address]; a != nil {
+		a.expire(time.Now())
+		s.Failure, s.CanResume = a.failure, a.canResume
 		s.Attempted = a.attempted
 		s.Completed = a.completed
 		if a.credential != nil {
-			s.Pending = !a.completed
+			s.Pending = !a.completed && a.failure == ""
 			s.DeviceID = a.credential.DeviceID
 		}
 	}
@@ -168,7 +175,13 @@ func (b *Backend) NearbyAction(session uint64, action int, ssid, password, accou
 		if a == nil || a.credential == nil {
 			return n.snapshot(), errors.New("Check your Cloud device list before starting enrollment again")
 		}
-		ok, err := nearbyCheckFn(ctx, a.credential)
+		a.expire(time.Now())
+		if a.failure != "" {
+			return n.snapshot(), errors.New(a.failure)
+		}
+		checkCtx, checkCancel := context.WithTimeout(ctx, 15*time.Second)
+		defer checkCancel()
+		ok, err := nearbyCheckFn(checkCtx, a.credential)
 		if ok {
 			a.completed = true
 		}
@@ -226,39 +239,46 @@ func (b *Backend) NearbyAction(session uint64, action int, ssid, password, accou
 			return n.snapshot(), errors.New("The requested Wi-Fi connection was not confirmed")
 		}
 	case 3:
-		if a.attempted {
-			return n.snapshot(), errors.New("Enrollment was already requested. Check its status before trying again")
+		a.expire(time.Now())
+		resume := a.canResume && a.credential != nil && a.credential.Request != nil && !a.credential.Lite
+		if a.attempted && !resume {
+			return n.snapshot(), errors.New("This enrollment cannot be sent again without recovery")
 		}
 		state, err := n.client.Status(ctx, n.state.Lite)
 		if err != nil {
 			return fail(err)
 		}
 		n.state.Enrolled = state.GetEnrolled()
-		credential, err := nearbyPrepareFn(ctx, account, organization, name, state, func() { a.attempted = true })
-		a.credential = credential
-		if err != nil {
-			var rejected *commands.NearbyEnrollmentRejectedError
-			if errors.As(err, &rejected) {
-				a.attempted = false
+		if resume {
+			if state.GetEnrolled() {
+				if state.GetPrincipalUri() == a.credential.Principal {
+					a.completed = true
+					a.failure = ""
+					a.clearRequest()
+					return n.snapshot(), nil
+				}
+				a.clearRequest()
+				a.failure = "The device has a different enrolled identity. Open its organization to check it."
+				return n.snapshot(), errors.New(a.failure)
 			}
-			return n.snapshot(), err
-		}
-		r, err := n.client.Call(ctx, &pb.BluetoothCommand{Command: &pb.BluetoothCommand_SetupEnroll{SetupEnroll: credential.Request}})
-		clear(credential.Request.LiteConfig)
-		credential.Request = nil
-		if err != nil {
-			return fail(errors.New("Enrollment was sent but its reply was lost. Check enrollment status"))
-		}
-		reply := r.GetSetupEnroll()
-		if reply == nil || reply.GetPrincipalUri() != credential.Principal || reply.GetPending() != credential.Lite {
-			return n.snapshot(), errors.New("Enrollment was not confirmed by the device. Check enrollment status")
-		}
-		if credential.Lite {
-			n.client.Close()
-			n.state.Connected = false
 		} else {
-			a.completed = true
+			credential, err := nearbyPrepareFn(ctx, account, organization, name, state, func() {
+				a.attempted = true
+				a.deadline = time.Now().Add(2 * time.Minute)
+			})
+			a.credential = credential
+			if err != nil {
+				var rejected *commands.NearbyEnrollmentRejectedError
+				if errors.As(err, &rejected) {
+					a.attempted = false
+				}
+				if a.attempted && credential == nil {
+					a.failure = "The enrollment result is unknown. Open your organization's devices to recover it."
+				}
+				return n.snapshot(), err
+			}
 		}
+		return n.sendEnrollment(ctx, a)
 	default:
 		return n.snapshot(), errors.New("Unknown setup action")
 	}
@@ -281,4 +301,67 @@ func (n *nearbySetup) refreshWiFi(ctx context.Context) {
 		n.state.WiFiConnected = wifi.GetConnected()
 		n.state.SSID = wifi.GetSsid()
 	}
+}
+
+func (a *nearbyAttempt) clearRequest() {
+	if a.credential != nil && a.credential.Request != nil {
+		clear(a.credential.Request.LiteConfig)
+		a.credential.Request = nil
+	}
+	a.canResume = false
+}
+
+func (a *nearbyAttempt) expire(now time.Time) {
+	if a.completed {
+		return
+	}
+	if a.canResume && a.credential != nil && now.Sub(a.credential.RequestedAt) >= 15*time.Minute {
+		a.clearRequest()
+		a.failure = "This setup attempt expired. Open your organization's devices to recover it."
+	}
+	if a.failure == "" && !a.deadline.IsZero() && !now.Before(a.deadline) {
+		a.clearRequest()
+		a.failure = "Enrollment could not be confirmed. Open your organization's devices to check this attempt before starting another."
+	}
+}
+
+func (n *nearbySetup) sendEnrollment(ctx context.Context, a *nearbyAttempt) (NearbySetupState, error) {
+	a.failure = ""
+	a.canResume = false
+	a.deadline = time.Now().Add(2 * time.Minute)
+	credential := a.credential
+	reply, err := n.client.Call(ctx, &pb.BluetoothCommand{Command: &pb.BluetoothCommand_SetupEnroll{SetupEnroll: credential.Request}})
+	if err != nil {
+		// A lost reply is ambiguous. Never replay this write or mint a replacement.
+		a.clearRequest()
+		n.state.Connected = false
+		n.client.Close()
+		return n.snapshot(), errors.New("Enrollment reply was lost. Checking its result for up to two minutes")
+	}
+	if reply.GetError() != nil {
+		// A device explicitly reported failure. WendyOS persists its ACME account
+		// key, so an explicit continuation uses this exact identity and credential.
+		// Lite tokens do not have that contract and must not be replayed.
+		if !credential.Lite {
+			a.canResume = true
+			a.failure = "Your device could not finish enrollment. Check its internet connection, then continue setup."
+		} else {
+			a.clearRequest()
+			a.failure = "Your device declined enrollment. Open your organization's devices to recover this attempt."
+		}
+		return n.snapshot(), errors.New(a.failure)
+	}
+	a.clearRequest()
+	enrolled := reply.GetSetupEnroll()
+	if enrolled == nil || enrolled.GetPrincipalUri() != credential.Principal || enrolled.GetPending() != credential.Lite {
+		a.failure = "The device returned an unexpected enrollment result. Open your organization's devices to check it."
+		return n.snapshot(), errors.New(a.failure)
+	}
+	if credential.Lite {
+		n.client.Close()
+		n.state.Connected = false
+	} else {
+		a.completed = true
+	}
+	return n.snapshot(), nil
 }

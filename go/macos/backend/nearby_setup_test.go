@@ -3,6 +3,7 @@ package backend
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -11,13 +12,19 @@ import (
 )
 
 type nearbyFake struct {
-	closed, writes int
-	nonce          []bool
-	loseReply      bool
+	closed, writes   int
+	nonce            []bool
+	loseReply        bool
+	wendyOS          bool
+	rejectEnrollment bool
+	lastRequest      *pb.SetupEnrollCommand
 }
 
 func (f *nearbyFake) Status(_ context.Context, nonce bool) (*pb.SetupStatusResponse, error) {
 	f.nonce = append(f.nonce, nonce)
+	if f.wendyOS {
+		return &pb.SetupStatusResponse{AcmeSupported: true}, nil
+	}
 	return &pb.SetupStatusResponse{DeviceClass: "C", LiteSupported: true}, nil
 }
 func (f *nearbyFake) Call(_ context.Context, c *pb.BluetoothCommand) (*pb.BluetoothResponse, error) {
@@ -31,10 +38,14 @@ func (f *nearbyFake) Call(_ context.Context, c *pb.BluetoothCommand) (*pb.Blueto
 		return nil, errors.New("unexpected command")
 	}
 	f.writes++
+	f.lastRequest = c.GetSetupEnroll()
+	if f.rejectEnrollment {
+		return &pb.BluetoothResponse{Response: &pb.BluetoothResponse_Error{Error: &pb.ErrorResponse{Message: "private upstream credential error"}}}, nil
+	}
 	if f.loseReply {
 		return nil, errors.New("link dropped")
 	}
-	return &pb.BluetoothResponse{Response: &pb.BluetoothResponse_SetupEnroll{SetupEnroll: &pb.SetupEnrollResponse{Pending: true, PrincipalUri: "principal"}}}, nil
+	return &pb.BluetoothResponse{Response: &pb.BluetoothResponse_SetupEnroll{SetupEnroll: &pb.SetupEnrollResponse{Pending: !f.wendyOS, PrincipalUri: "principal"}}}, nil
 }
 func (f *nearbyFake) Close() { f.closed++ }
 func nearbyTestHooks(t *testing.T) {
@@ -217,5 +228,73 @@ func TestNearbyPendingEnrollmentStillAllowsWiFiDiscovery(t *testing.T) {
 	s, err = b.NearbyAction(s.Session, 1, "", "", "", "", "")
 	if err != nil || !s.Pending || len(s.Networks) != 1 || s.Networks[0] != "test-network" || f.writes != 0 {
 		t.Fatalf("pending enrollment blocked Wi-Fi scan or repeated enrollment: %+v %v", s, err)
+	}
+}
+
+func TestNearbyDeviceFailureResumesSameCredentialOnlyAfterExplicitAction(t *testing.T) {
+	nearbyTestHooks(t)
+	b := new(Backend)
+	f := &nearbyFake{wendyOS: true, rejectEnrollment: true}
+	nearbyConnectFn = func(context.Context, string) (nearbyConnection, error) { return f, nil }
+	request := &pb.SetupEnrollCommand{DeviceId: "same-device", EabKeyId: "fixture", EabHmacKey: "fixture"}
+	credential := &commands.DesktopNearbyCredential{Request: request, DeviceID: "same-device", Principal: "principal", RequestedAt: time.Now()}
+	mints := 0
+	nearbyPrepareFn = func(_ context.Context, _, _, _ string, _ *pb.SetupStatusResponse, before func()) (*commands.DesktopNearbyCredential, error) {
+		mints++
+		before()
+		return credential, nil
+	}
+	s, _ := b.NearbyOpen("board")
+	s, err := b.NearbyAction(s.Session, 3, "", "", "account", "org", "device")
+	if err == nil || s.Pending || !s.CanResume || s.Failure == "" || strings.Contains(s.Failure, "private") {
+		t.Fatalf("failure was treated as pending: %+v %v", s, err)
+	}
+	nearbyCheckFn = func(context.Context, *commands.DesktopNearbyCredential) (bool, error) {
+		t.Fatal("polled a known failed enrollment")
+		return false, nil
+	}
+	_, _ = b.NearbyAction(s.Session, 4, "", "", "", "", "")
+	s, _ = b.NearbyAction(s.Session, 0, "", "", "", "", "")
+	if f.writes != 1 || !s.CanResume || s.Failure == "" {
+		t.Fatal("background reads replayed or forgot failed enrollment")
+	}
+	s, _ = b.NearbyOpen("board")
+	f.rejectEnrollment = false
+	s, err = b.NearbyAction(s.Session, 3, "", "", "other-account", "other-org", "changed-name")
+	if err != nil || !s.Completed || s.Pending || s.CanResume || s.Failure != "" || mints != 1 || f.writes != 2 || f.lastRequest != request {
+		t.Fatalf("continuation did not use the original credential: %+v %v, mints=%d writes=%d", s, err, mints, f.writes)
+	}
+	if credential.Request != nil {
+		t.Fatal("retained credential after success")
+	}
+}
+
+func TestNearbyUncertainEnrollmentStopsPollingAtDeadline(t *testing.T) {
+	nearbyTestHooks(t)
+	b := new(Backend)
+	f := new(nearbyFake)
+	nearbyConnectFn = func(context.Context, string) (nearbyConnection, error) { return f, nil }
+	s, _ := b.NearbyOpen("board")
+	b.nearby.attempts["board"] = &nearbyAttempt{attempted: true, credential: &commands.DesktopNearbyCredential{DeviceID: "id"}, deadline: time.Now().Add(-time.Second)}
+	nearbyCheckFn = func(context.Context, *commands.DesktopNearbyCredential) (bool, error) {
+		t.Fatal("kept polling after deadline")
+		return false, nil
+	}
+	s, err := b.NearbyAction(s.Session, 4, "", "", "", "", "")
+	if err == nil || s.Pending || s.CanResume || s.Completed || s.Failure == "" {
+		t.Fatalf("deadline left a spinner: %+v %v", s, err)
+	}
+	_, _ = b.NearbyAction(s.Session, 3, "", "", "account", "org", "name")
+	if f.writes != 0 {
+		t.Fatal("replayed ambiguous enrollment after timeout")
+	}
+}
+
+func TestNearbyExpiredContinuationClearsCredential(t *testing.T) {
+	c := &commands.DesktopNearbyCredential{Request: &pb.SetupEnrollCommand{EabHmacKey: "fixture"}, RequestedAt: time.Now().Add(-16 * time.Minute)}
+	a := &nearbyAttempt{attempted: true, credential: c, canResume: true, failure: "offline"}
+	a.expire(time.Now())
+	if a.canResume || c.Request != nil || a.failure == "offline" {
+		t.Fatal("expired credential remained usable")
 	}
 }

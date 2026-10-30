@@ -14,8 +14,8 @@ typedef struct { WDStatus status; WDNearbyDevice *items; size_t count; } WDNearb
 typedef struct {
     WDStatus status;
     uint64_t session;
-    int32_t connected, lite, enrolled, attempted, pending, completed, wifi_connected;
-    char *ssid, *device_id;
+    int32_t connected, lite, enrolled, attempted, pending, completed, wifi_connected, can_resume;
+    char *ssid, *device_id, *failure;
     char **networks;
     size_t network_count;
 } WDNearbySetupResult;

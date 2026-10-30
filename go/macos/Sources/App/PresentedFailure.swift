@@ -9,7 +9,9 @@ struct PresentedFailure {
 
     init(_ raw: String) {
         let lower = raw.lowercased()
-        if lower.contains("device name is already in use") {
+        if lower.contains("device is not in the device list yet") {
+            message = "Your device has not appeared in the device list yet. Keep it online, then open it again."
+        } else if lower.contains("device name is already in use") {
             message = "That device name is already in use. Choose another name."
         } else if lower.contains("cloud rejected the enrollment details") {
             message = "Check the device name and organization."

@@ -59,6 +59,15 @@ final class NearbySetupObservationTests: XCTestCase {
         XCTAssertEqual(next(state), .checkEnrollment)
     }
 
+    func testFailedOrExpiredEnrollmentDoesNotKeepPollingCloud() {
+        var state = NearbySetupSnapshot(attempted: true, canResume: true, failure: "Could not enroll")
+        XCTAssertEqual(next(state), .reconnect)
+        state.connected = true
+        XCTAssertEqual(next(state, statusAge: 1, scanAge: 1), .idle)
+        state.canResume = false
+        XCTAssertEqual(next(state, statusAge: 1, scanAge: 1), .idle)
+    }
+
     func testWiFiDiscoveryOnlyRunsWhileVisibleAndThrottlesReads() {
         let state = NearbySetupSnapshot(connected: true)
         XCTAssertEqual(next(state, statusAge: 1), .idle)
