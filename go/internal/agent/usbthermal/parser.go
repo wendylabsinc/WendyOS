@@ -38,10 +38,41 @@ import (
 // after a block happen to begin with the same pair, the shorter candidates in
 // the run are tried as well; only the true end passes the picture check.
 //
-// Headers are still parsed, at packet boundaries in the phase the last block
-// established, and counted (Stats.Headers): two thermal frames per composite
-// frame is the healthy ratio, and the header is where reassembly of the visible
-// picture will start when that is added.
+// A block can also straddle two composite frames, and then the next frame's
+// 12-byte header sits INSIDE it: the camera inserts the header into the stream
+// wherever its payload boundary falls, and everything after it moves 12 bytes
+// along. Measured on exxon-01 (2026-10-30, 14:53 UTC): 10 of 150 frames the raw
+// tap served had a header in their temperature rows, at a different place each
+// time (temperature row 126 column 0, row 33 column 26, row 168 column 124,
+// ...), and the rest of the plane shifted by exactly six pixels. Read as
+// temperatures, the header's bytes are 0x8C0C (287.04 degC), two zero words,
+// the 32-bit source clock (two words that climb with time, up to 750 degC
+// before they wrap) and the USB frame number. Such a block is 12 bytes longer
+// than BlockBytes, which the shorter-candidate rule above used to accept, 12
+// bytes short of its true end: that put the header into the delivered
+// temperatures, and a fire alarm on exxon-01 fired every ten seconds in a
+// 24 degC room. So every candidate is checked for a header inside it:
+//
+//   - a candidate exactly BlockBytes long must contain no header at all;
+//   - a candidate BlockBytes+12 long must contain exactly one, and is accepted
+//     when the block WITHOUT those 12 bytes passes the picture check. The
+//     header is removed and the block delivered byte for byte as the camera
+//     built it (Stats.Spliced).
+//
+// The header is recognised with ParseHeader at any offset. In a valid block it
+// cannot be mistaken for data: in the grey picture every other byte is 0x80;
+// in the temperatures its frame number reads below 32 K, and a header off the
+// word grid needs a word whose high byte is 0x0C (about 50 K). A header that
+// lands in the last 512 bytes of the end-of-block run breaks the run itself;
+// that block is not found at all, and nothing wrong is delivered.
+//
+// Headers are also parsed at packet boundaries between blocks and counted
+// (Stats.Headers): two thermal frames per composite frame is the healthy ratio,
+// and the header is where reassembly of the visible picture will start when
+// that is added. Blocks do not always start on a packet boundary (the straddling
+// headers above sat 52, 200 and 248 bytes into a packet of their block), so the
+// packet phase is taken from a header whenever one has been seen, and from the
+// last block's end only until then.
 //
 // Resync is implicit: whatever happens to the stream (a lost packet, a camera
 // restart, the agent joining mid-frame), the next intact block is found by its
@@ -57,9 +88,13 @@ type Parser struct {
 	base     int64
 	scan     int   // index into buf where the next end-row search starts
 	nextHead int64 // stream offset of the next packet boundary to check for a header; -1 = phase unknown
-	haveSeq  bool
-	lastSeq  uint16
-	stats    Stats
+	// phase is the stream offset of the last header seen, which is a packet
+	// boundary; -1 until one has been seen.
+	phase   int64
+	picture []byte // scratch: a candidate's picture with a header removed
+	haveSeq bool
+	lastSeq uint16
+	stats   Stats
 }
 
 // Stats counts what a Parser has seen. Everything here is diagnostics: none of
@@ -77,9 +112,14 @@ type Stats struct {
 	// Lost counts frames the camera's own counter says were sent but never
 	// arrived whole (gaps in RawFrame.Sequence).
 	Lost uint64
-	// Headers counts composite-frame headers seen at packet boundaries.
+	// Headers counts composite-frame headers seen, at packet boundaries
+	// between blocks and inside blocks (Spliced) alike.
 	Headers    uint64
 	LastHeader Header
+	// Spliced counts blocks that straddled two composite frames and so arrived
+	// with a composite-frame header inside them. The header was removed and the
+	// block delivered whole; each is also in Frames and Headers.
+	Spliced uint64
 }
 
 // Header is the 12-byte payload header that starts each composite frame. Its
@@ -117,8 +157,10 @@ const (
 //
 // The signature is short (two fixed bytes), so the 11-bit frame number is
 // checked too: picture and temperature bytes almost never have both its top
-// five bits clear and the right two leading bytes. It is still only safe at a
-// packet boundary, which is the only place the parser looks.
+// five bits clear and the right two leading bytes. Between blocks, in the
+// visible camera's bytes, the parser therefore looks only at packet boundaries;
+// inside a block candidate it looks everywhere, because there a match cannot be
+// data (see Parser).
 func ParseHeader(b []byte) (Header, bool) {
 	if len(b) < headerLength || b[0] != headerLength || b[1]&0xFC != 0x8C {
 		return Header{}, false
@@ -146,6 +188,8 @@ func NewParser(layout Layout) *Parser {
 		endRow:   endRow,
 		maxRun:   4 * layout.RowBytes(),
 		nextHead: -1,
+		phase:    -1,
+		picture:  make([]byte, layout.PictureBytes()),
 	}
 }
 
@@ -183,20 +227,24 @@ func (p *Parser) Feed(chunk []byte, emit func(block []byte)) {
 			p.scan = m
 			break
 		}
-		start, ok := p.findBlock(m, e)
+		start, hdr, ok := p.findBlock(m, e)
 		if !ok {
 			p.scan = e
 			continue
 		}
 		end := start + blockBytes
+		if hdr >= 0 {
+			end += headerLength
+		}
 		p.countHeaders(p.base + int64(start))
 		block := make([]byte, blockBytes)
-		copy(block, p.buf[start:end])
+		p.assemble(block, start, hdr)
+		if hdr >= 0 {
+			p.noteSplicedHeader(hdr)
+		}
 		p.noteSequence(block)
 		p.stats.Frames++
-		// The block ends on a packet boundary, so the next one fixes the phase
-		// headers are looked for at.
-		p.nextHead = p.base + int64(end)
+		p.nextHead = p.nextBoundary(p.base + int64(end))
 		p.scan = end
 		emit(block)
 	}
@@ -205,9 +253,11 @@ func (p *Parser) Feed(chunk []byte, emit func(block []byte)) {
 }
 
 // findBlock tries each place the block could end within the run [m, e), the
-// run's own end first, and returns the start of the first candidate that
-// validates.
-func (p *Parser) findBlock(m, e int) (int, bool) {
+// run's own end first. At each, it tries a block exactly BlockBytes long with
+// no composite-frame header inside, then one BlockBytes+12 long with exactly one
+// (see the Parser comment). It returns the start of the first candidate that
+// validates, and the index of the header inside it, or -1.
+func (p *Parser) findBlock(m, e int) (int, int, bool) {
 	rowBytes, blockBytes := p.layout.RowBytes(), p.layout.BlockBytes()
 	for end := e; end >= m+rowBytes; end -= 2 {
 		start := end - blockBytes
@@ -215,14 +265,79 @@ func (p *Parser) findBlock(m, e int) (int, bool) {
 			// Only possible before the first compaction: the stream was joined
 			// partway through this block.
 			p.stats.Partial++
-			return 0, false
+			return 0, -1, false
 		}
-		if p.pictureIsGrey(p.buf[start : start+p.layout.PictureBytes()]) {
-			return start, true
+		if p.pictureIsGrey(p.buf[start:start+p.layout.PictureBytes()]) && p.findHeader(start, end) < 0 {
+			return start, -1, true
+		}
+		// The same block with a composite-frame header inside it.
+		if start -= headerLength; start < 0 {
+			continue
+		}
+		hdr := p.findHeader(start, end)
+		if hdr < 0 || p.findHeader(hdr+headerLength, end) >= 0 {
+			continue
+		}
+		p.assemble(p.picture, start, hdr)
+		if p.pictureIsGrey(p.picture) {
+			return start, hdr, true
 		}
 	}
 	p.stats.Rejected++
-	return 0, false
+	return 0, -1, false
+}
+
+// findHeader returns the index in buf of the first composite-frame header
+// wholly inside buf[from:to], at any offset, or -1.
+func (p *Parser) findHeader(from, to int) int {
+	for i := from; i+headerLength <= to; {
+		j := bytes.IndexByte(p.buf[i:to-headerLength+1], headerLength)
+		if j < 0 {
+			return -1
+		}
+		if _, ok := ParseHeader(p.buf[i+j:]); ok {
+			return i + j
+		}
+		i += j + 1
+	}
+	return -1
+}
+
+// assemble fills dst with the block that starts at buf[start], leaving out the
+// 12-byte header at buf[hdr] (hdr < 0: there is none).
+func (p *Parser) assemble(dst []byte, start, hdr int) {
+	if hdr < 0 || hdr >= start+len(dst) {
+		copy(dst, p.buf[start:])
+		return
+	}
+	n := copy(dst, p.buf[start:hdr])
+	copy(dst[n:], p.buf[hdr+headerLength:])
+}
+
+// noteSplicedHeader counts the header found inside a block, unless countHeaders
+// already met it at a packet boundary while the block was still arriving. Its
+// position is a packet boundary, so it also fixes the phase headers are looked
+// for at.
+func (p *Parser) noteSplicedHeader(hdr int) {
+	p.stats.Spliced++
+	if at := p.base + int64(hdr); at != p.phase {
+		h, _ := ParseHeader(p.buf[hdr:])
+		p.stats.Headers++
+		p.stats.LastHeader = h
+		p.phase = at
+	}
+}
+
+// nextBoundary is the first packet boundary at or after stream offset off: in
+// the phase of the last header seen, or, before any, at off itself.
+func (p *Parser) nextBoundary(off int64) int64 {
+	if p.phase < 0 {
+		return off
+	}
+	if r := (off - p.phase) % usbPacketBytes; r != 0 {
+		return off + usbPacketBytes - r
+	}
+	return off
 }
 
 // pictureIsGrey reports whether every chroma byte of a picture is 0x80.
@@ -259,7 +374,7 @@ func blockSequence(layout Layout, block []byte) uint16 {
 const metadataSequenceWord = 64
 
 // countHeaders checks every packet boundary from the current phase up to (not
-// including) stream offset upto for a composite-frame header.
+// including) stream offset upto for a composite-frame header between blocks.
 func (p *Parser) countHeaders(upto int64) {
 	if p.nextHead < 0 {
 		return
@@ -272,6 +387,7 @@ func (p *Parser) countHeaders(upto int64) {
 		if h, ok := ParseHeader(p.buf[idx:]); ok {
 			p.stats.Headers++
 			p.stats.LastHeader = h
+			p.phase = p.nextHead
 		}
 	}
 }
