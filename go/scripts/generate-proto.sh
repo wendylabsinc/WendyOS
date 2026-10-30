@@ -7,8 +7,8 @@ PROTO_DIR="$(cd "$GO_DIR/../Proto" && pwd)"
 GEN_DIR="$GO_DIR/proto/gen"
 
 case "${1:-}" in
-    ""|--mesh-only|--check-mesh) ;;
-    *) echo "usage: $0 [--mesh-only|--check-mesh]" >&2; exit 1 ;;
+    ""|--shared-grpc-only|--check-shared-grpc) ;;
+    *) echo "usage: $0 [--shared-grpc-only|--check-shared-grpc]" >&2; exit 1 ;;
 esac
 
 export PATH="$PATH:$(go env GOPATH)/bin"
@@ -66,17 +66,23 @@ if [ "${WENDY_PROTO_SKIP_VERSION_CHECK:-0}" != "1" ]; then
     fi
 fi
 
-# This one shared API comes from service-protos, never a maintained local copy.
-MESH_PROTO="wendycloud/v2/mesh.proto"
-if [ -e "$PROTO_DIR/$MESH_PROTO" ] || [ -L "$PROTO_DIR/$MESH_PROTO" ]; then
-    echo "error: remove Proto/$MESH_PROTO; it is generated from service-protos" >&2
-    exit 1
-fi
-SHARED_PROTO_DIR="$(mktemp -d)"
-trap 'rm -rf "$SHARED_PROTO_DIR"' EXIT
+# Migrated gRPC APIs share one source pin and currently generate into cloudpb/v2.
+SHARED_GRPC_PROTOS=(
+    "wendycloud/v2/mesh.proto"
+)
+SHARED_GRPC_PATH_ARGS=()
+for proto in "${SHARED_GRPC_PROTOS[@]}"; do
+    if [ -e "$PROTO_DIR/$proto" ] || [ -L "$PROTO_DIR/$proto" ]; then
+        echo "error: remove Proto/$proto; it is generated from service-protos" >&2
+        exit 1
+    fi
+    SHARED_GRPC_PATH_ARGS+=(--path "$proto")
+done
+SHARED_GRPC_DIR="$(mktemp -d)"
+trap 'rm -rf "$SHARED_GRPC_DIR"' EXIT
 buf export \
     "https://github.com/wendylabsinc/service-protos.git#ref=3f29f59fc72f692a52b91a03a14d465d5e8dbfc7" \
-    --path "$MESH_PROTO" --output "$SHARED_PROTO_DIR"
+    "${SHARED_GRPC_PATH_ARGS[@]}" --output "$SHARED_GRPC_DIR"
 
 MODULE="github.com/wendylabsinc/wendy"
 
@@ -233,7 +239,7 @@ CLOUD_V2_PROTOS=(
     "wendycloud/v2/assets.proto"
     "wendycloud/v2/certificates.proto"
     "wendycloud/v2/deployments.proto"
-    "wendycloud/v2/mesh.proto"
+    "${SHARED_GRPC_PROTOS[@]}"
     "wendycloud/v2/notifications.proto"
     "wendycloud/v2/organizations.proto"
     "wendycloud/v2/tunnel.proto"
@@ -249,20 +255,23 @@ for p in "${CLOUD_V2_PROTOS[@]}"; do
     CLOUD_V2_M_OPTS="$CLOUD_V2_M_OPTS --go-grpc_opt=M${p}=${CLOUD_V2_PKG};cloudpbv2"
 done
 
-# CI regenerates only mesh into a temporary directory and compares both outputs.
-if [ "${1:-}" = --mesh-only ] || [ "${1:-}" = --check-mesh ]; then
-    MESH_OUT="$GEN_DIR/cloudpb/v2"
-    if [ "$1" = --check-mesh ]; then
-        MESH_OUT="$SHARED_PROTO_DIR/generated"
+# CI regenerates the migrated gRPC APIs temporarily and compares their outputs.
+if [ "${1:-}" = --shared-grpc-only ] || [ "${1:-}" = --check-shared-grpc ]; then
+    SHARED_GRPC_OUT="$GEN_DIR/cloudpb/v2"
+    if [ "$1" = --check-shared-grpc ]; then
+        SHARED_GRPC_OUT="$SHARED_GRPC_DIR/generated"
     fi
-    mkdir -p "$MESH_OUT"
-    protoc --proto_path="$SHARED_PROTO_DIR" \
-        --go_out="$MESH_OUT" --go_opt=module="$CLOUD_V2_PKG" \
-        --go-grpc_out="$MESH_OUT" --go-grpc_opt=module="$CLOUD_V2_PKG" \
-        $CLOUD_V2_M_OPTS "$MESH_PROTO"
-    if [ "$1" = --check-mesh ]; then
-        for file in mesh.pb.go mesh_grpc.pb.go; do
-            diff -u "$GEN_DIR/cloudpb/v2/$file" "$MESH_OUT/$file"
+    mkdir -p "$SHARED_GRPC_OUT"
+    protoc --proto_path="$SHARED_GRPC_DIR" \
+        --go_out="$SHARED_GRPC_OUT" --go_opt=module="$CLOUD_V2_PKG" \
+        --go-grpc_out="$SHARED_GRPC_OUT" --go-grpc_opt=module="$CLOUD_V2_PKG" \
+        $CLOUD_V2_M_OPTS "${SHARED_GRPC_PROTOS[@]}"
+    if [ "$1" = --check-shared-grpc ]; then
+        for proto in "${SHARED_GRPC_PROTOS[@]}"; do
+            name="${proto##*/}"
+            for file in "${name%.proto}.pb.go" "${name%.proto}_grpc.pb.go"; do
+                diff -u "$GEN_DIR/cloudpb/v2/$file" "$SHARED_GRPC_OUT/$file"
+            done
         done
     fi
     exit 0
@@ -342,7 +351,7 @@ echo "Generating Wendy Cloud v2 protos..."
 mkdir -p "$GEN_DIR/cloudpb/v2"
 protoc \
     --proto_path="$PROTO_DIR" \
-    --proto_path="$SHARED_PROTO_DIR" \
+    --proto_path="$SHARED_GRPC_DIR" \
     --go_out="$GEN_DIR/cloudpb/v2" \
     --go_opt=module="$CLOUD_V2_PKG" \
     $ALL_M_OPTS \
