@@ -131,17 +131,12 @@ func (n *NMCLINetworkManager) listKnownProfiles(ctx context.Context) ([]knownPro
 	}
 
 	// Second pass: fetch ssid + key-mgmt for every wifi profile in a single
-	// `nmcli connection show UUID1 UUID2 ...` call. With `-g`, nmcli prints
-	// one field value per line per connection in the order it received the
-	// UUIDs, so 2 lines per profile (ssid, key-mgmt).
-	args := []string{"-t", "-g",
-		"802-11-wireless.ssid,802-11-wireless-security.key-mgmt",
-		"connection", "show"}
-	for _, p := range result {
-		args = append(args, p.UUID)
+	// `nmcli connection show UUID1 UUID2 ...` call.
+	uuids := make([]string, len(result))
+	for i, p := range result {
+		uuids[i] = p.UUID
 	}
-	dcmd := nmcli.Command(ctx, n.nmcliPath, args...)
-	dout, derr := dcmd.Output()
+	details, derr := wifiProfileDetails(ctx, n.nmcliPath, uuids)
 	if derr != nil {
 		// Fall back to name-as-ssid if the detail fetch fails so callers
 		// still get a usable list.
@@ -152,20 +147,73 @@ func (n *NMCLINetworkManager) listKnownProfiles(ctx context.Context) ([]knownPro
 		}
 		return result, nil
 	}
-	lines := strings.Split(strings.TrimRight(string(dout), "\n"), "\n")
 	for i := range result {
-		base := i * 2
-		if base < len(lines) {
-			result[i].SSID = unescapeNMCLI(lines[base])
-		}
-		if base+1 < len(lines) {
-			result[i].Security = classifyKeyMgmt(lines[base+1])
+		if d, ok := details[result[i].UUID]; ok {
+			result[i].SSID = d.SSID
+			result[i].Security = classifyKeyMgmt(d.KeyMgmt)
 		}
 		if result[i].SSID == "" {
 			result[i].SSID = result[i].Name
 		}
 	}
 	return result, nil
+}
+
+// wifiProfileFields are the values wifiProfileDetails asks nmcli for. Each
+// comes from a different setting, so nmcli prints each on its own line, in
+// this order. Two properties of the same setting would share a line.
+const wifiProfileFields = "connection.uuid,802-11-wireless.ssid,802-11-wireless-security.key-mgmt"
+
+// wifiProfileDetail is what wifiProfileDetails reads for one saved profile.
+type wifiProfileDetail struct {
+	SSID string
+	// KeyMgmt is "" when the profile has no 802-11-wireless-security
+	// setting, which is how NetworkManager saves an open network.
+	KeyMgmt string
+}
+
+// wifiProfileDetails returns the SSID and key-mgmt of the given wifi
+// profiles, keyed by UUID, from one `nmcli connection show` call.
+func wifiProfileDetails(ctx context.Context, nmcliPath string, uuids []string) (map[string]wifiProfileDetail, error) {
+	args := append([]string{"-t", "-g", wifiProfileFields, "connection", "show"}, uuids...)
+	out, err := nmcli.Command(ctx, nmcliPath, args...).Output()
+	if err != nil {
+		return nil, err
+	}
+	return parseWiFiProfileDetails(string(out)), nil
+}
+
+// parseWiFiProfileDetails parses `nmcli -t -g <wifiProfileFields> connection
+// show UUID...` output. nmcli prints one block per profile with an empty
+// line between blocks, and prints nothing for a setting the profile doesn't
+// have: an open network's block has no key-mgmt line. So blocks differ in
+// length, and a profile's lines can't be found by counting. Each block
+// starts with its profile's UUID instead.
+//
+// A block that isn't uuid, ssid and an optional key-mgmt is skipped: its
+// profile gets no details rather than another profile's.
+func parseWiFiProfileDetails(out string) map[string]wifiProfileDetail {
+	details := make(map[string]wifiProfileDetail)
+	var block []string
+	flush := func() {
+		if len(block) == 2 || len(block) == 3 {
+			d := wifiProfileDetail{SSID: unescapeNMCLI(block[1])}
+			if len(block) == 3 {
+				d.KeyMgmt = unescapeNMCLI(block[2])
+			}
+			details[unescapeNMCLI(block[0])] = d
+		}
+		block = block[:0]
+	}
+	for _, line := range strings.Split(out, "\n") {
+		if line == "" {
+			flush()
+			continue
+		}
+		block = append(block, line)
+	}
+	flush()
+	return details
 }
 
 func unescapeNMCLI(s string) string {
@@ -495,14 +543,12 @@ func existingProfileUUID(ctx context.Context, nmcliPath, ssid string) (string, e
 	if len(uuids) == 0 {
 		return "", nil
 	}
-	args := append([]string{"-t", "-g", "802-11-wireless.ssid", "connection", "show"}, uuids...)
-	dout, derr := nmcli.Command(ctx, nmcliPath, args...).Output()
+	details, derr := wifiProfileDetails(ctx, nmcliPath, uuids)
 	if derr != nil {
 		return "", fmt.Errorf("nmcli connection show (ssids): %w", derr)
 	}
-	lines := strings.Split(strings.TrimRight(string(dout), "\n"), "\n")
-	for i, uuid := range uuids {
-		if i < len(lines) && unescapeNMCLI(lines[i]) == ssid {
+	for _, uuid := range uuids {
+		if d, ok := details[uuid]; ok && d.SSID == ssid {
 			return uuid, nil
 		}
 	}

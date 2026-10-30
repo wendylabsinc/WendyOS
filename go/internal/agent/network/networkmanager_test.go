@@ -215,3 +215,58 @@ func splitFields(s string, n int) []string {
 	result = append(result, s)
 	return result
 }
+
+// TestParseWiFiProfileDetails reads nmcli's output for five profiles, one of
+// them open and one hidden (profileDetailsOutput, in profiles_test.go).
+func TestParseWiFiProfileDetails(t *testing.T) {
+	want := map[string]wifiProfileDetail{
+		"5b7e3a0c-1d2f-4e6a-9b8c-0d1e2f3a4b5c": {SSID: "Alpha", KeyMgmt: "wpa-psk"},
+		"8c2d4f6a-3b5e-4c7d-8e9f-1a2b3c4d5e6f": {SSID: "Bravo", KeyMgmt: "wpa-psk"},
+		"1e3f5a7c-9b2d-4f6e-8a1c-3e5f7a9b2d4f": {SSID: "Charlie", KeyMgmt: "sae"},
+		"d4c3b2a1-6f5e-4d8c-9b0a-7e6f5d4c3b2a": {SSID: "Delta Guest"},
+		"3a9f1c2e-7d4b-4e8a-b6c5-2f1e0d9c8b7a": {SSID: "HomeNet", KeyMgmt: "wpa-psk"},
+	}
+	got := parseWiFiProfileDetails(profileDetailsOutput)
+	if len(got) != len(want) {
+		t.Fatalf("parsed %d profiles; want %d (got=%+v)", len(got), len(want), got)
+	}
+	for u, w := range want {
+		if got[u] != w {
+			t.Errorf("profile %s = %+v; want %+v", u, got[u], w)
+		}
+	}
+}
+
+// TestParseWiFiProfileDetailsEdgeCases: escaped SSIDs are unescaped, and a
+// block that isn't uuid + ssid (+ key-mgmt) is dropped rather than read
+// across a profile boundary.
+func TestParseWiFiProfileDetailsEdgeCases(t *testing.T) {
+	out := strings.Join([]string{
+		"11111111-1111-4111-8111-111111111111",
+		`Cafe\:5G`,
+		"wpa-psk",
+		"",
+		"22222222-2222-4222-8222-222222222222", // block with no SSID line
+		"",
+		"33333333-3333-4333-8333-333333333333",
+		"Hidden Lab",
+		"sae",
+		"unexpected",
+		"",
+		"44444444-4444-4444-8444-444444444444",
+		"Open Cafe",
+	}, "\n")
+	got := parseWiFiProfileDetails(out)
+	want := map[string]wifiProfileDetail{
+		"11111111-1111-4111-8111-111111111111": {SSID: "Cafe:5G", KeyMgmt: "wpa-psk"},
+		"44444444-4444-4444-8444-444444444444": {SSID: "Open Cafe"},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("parsed %+v; want %+v", got, want)
+	}
+	for u, w := range want {
+		if got[u] != w {
+			t.Errorf("profile %s = %+v; want %+v", u, got[u], w)
+		}
+	}
+}
