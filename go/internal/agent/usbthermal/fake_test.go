@@ -138,6 +138,11 @@ func (f *fakeDevice) isClosed() bool {
 // each copy carrying the next frame counter, in 16 KiB reads.
 func replay(t *testing.T, firstSeq uint16) func([]byte) (int, error) {
 	window := blockWindow(t)
+	return replayFrames(firstSeq, func(seq uint16) []byte { return withCounter(window, seq) })
+}
+
+// replayFrames is replay with each frame's stream bytes made by frame.
+func replayFrames(firstSeq uint16, frame func(seq uint16) []byte) func([]byte) (int, error) {
 	var mu sync.Mutex
 	seq := firstSeq
 	var pending []byte
@@ -145,7 +150,7 @@ func replay(t *testing.T, firstSeq uint16) func([]byte) (int, error) {
 		mu.Lock()
 		defer mu.Unlock()
 		if len(pending) == 0 {
-			pending = withCounter(window, seq)
+			pending = frame(seq)
 			seq++
 		}
 		n := copy(buf, pending)

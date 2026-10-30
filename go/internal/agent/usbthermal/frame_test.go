@@ -3,6 +3,7 @@ package usbthermal
 import (
 	"bytes"
 	"encoding/binary"
+	"errors"
 	"math"
 	"slices"
 	"testing"
@@ -139,6 +140,70 @@ func TestRawFrameTemperature(t *testing.T) {
 	for _, p := range [][2]int{{-1, 0}, {256, 0}, {0, 192}, {0, -1}} {
 		if _, ok := f.Temperature(p[0], p[1]); ok {
 			t.Errorf("Temperature(%d, %d) answered for a pixel outside the frame", p[0], p[1])
+		}
+	}
+}
+
+// TestCheckTemperatures: what a frame's temperature rows may hold before a raw
+// subscriber is allowed to read them as degrees. A real scene passes, a real
+// fire included; bytes that are not temperatures do not.
+func TestCheckTemperatures(t *testing.T) {
+	l := tc001Max
+	room := realBlock(t)[:l.RawBytes()]
+	set := func(data []byte, x, y int, v uint16) {
+		binary.LittleEndian.PutUint16(data[l.PictureBytes()+y*l.RowBytes()+2*x:], v)
+	}
+	fill := func(c float64) []byte {
+		d := bytes.Clone(room)
+		for y := range l.Height {
+			for x := range l.Width {
+				set(d, x, y, celsiusToCounts(c))
+			}
+		}
+		return d
+	}
+	pass := map[string][]byte{
+		"the fixture's room (24.5 degC)": room,
+		"a fire: 2,000 pixels at 550 degC": func() []byte {
+			d := bytes.Clone(room)
+			for y := 50; y < 90; y++ {
+				for x := 100; x < 150; x++ {
+					set(d, x, y, celsiusToCounts(550))
+				}
+			}
+			return d
+		}(),
+		"dead pixels reading 0 and 0xFFFF": func() []byte {
+			d := bytes.Clone(room)
+			set(d, 0, 0, 0)
+			set(d, 255, 191, 0xFFFF)
+			return d
+		}(),
+		"a cold store at -30 degC":     fill(-30),
+		"a hot plant room at 140 degC": fill(140),
+	}
+	for name, d := range pass {
+		if err := rawFrameOf(d).CheckTemperatures(); err != nil {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	fail := map[string][]byte{
+		"one word colder than -100 degC (a header's frame number)": func() []byte {
+			d := bytes.Clone(room)
+			set(d, 5, 126, 981)
+			return d
+		}(),
+		"the picture rows read as temperatures": slices.Concat(room[:l.PictureBytes()], room[:l.PictureBytes()]),
+		"the end-of-block row read as temperatures": slices.Concat(room[:l.PictureBytes()],
+			bytes.Repeat([]byte{0xFF, 0x00}, l.PictureBytes()/2)),
+		"no pixel with a reading": slices.Concat(room[:l.PictureBytes()], make([]byte, l.PictureBytes())),
+		"median -50 degC":         fill(-50),
+		"median 200 degC":         fill(200),
+		"a short frame":           room[:l.RawBytes()-2],
+	}
+	for name, d := range fail {
+		if err := rawFrameOf(d).CheckTemperatures(); !errors.Is(err, ErrNotTemperatures) {
+			t.Errorf("%s: CheckTemperatures = %v, want ErrNotTemperatures", name, err)
 		}
 	}
 }
