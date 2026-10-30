@@ -37,6 +37,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/wendylabsinc/wendy/go/internal/agent/data/thermal"
 	"github.com/wendylabsinc/wendy/go/internal/agent/usbthermal"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 )
@@ -97,6 +98,10 @@ func (s *VideoService) usbThermalDevices() []*agentpb.VideoDevice {
 			Model:    l.Model,
 			StableId: l.StableID,
 			Online:   true,
+			// Declares the camera thermal and names the adapter its raw
+			// frames' thermal_plane uses, as probeThermalCamera does for a
+			// V4L2 thermal camera.
+			Thermal: usbThermalProfile(l.Layout),
 		})
 	}
 	return out
@@ -176,6 +181,18 @@ func usbThermalRawFormat(l usbthermal.Layout) *agentpb.RawFormat {
 	}
 }
 
+// usbThermalProfile is the thermal capability of a USB thermal camera, or
+// nil for a layout no thermal adapter describes. The TC001 Max is the only
+// model usbthermal drives today; a model added there needs its own adapter in
+// data/thermal before it is declared here.
+func usbThermalProfile(l usbthermal.Layout) *agentpb.ThermalCamera {
+	format := usbThermalRawFormat(l)
+	if _, err := thermal.Plane(thermal.TOPDONTC001Max, format); err != nil {
+		return nil
+	}
+	return &agentpb.ThermalCamera{Adapter: thermal.TOPDONTC001Max, CaptureWidth: format.GetWidth(), CaptureHeight: format.GetHeight()}
+}
+
 // streamUSBThermal serves one StreamVideo call for a USB thermal camera.
 func (s *VideoService) streamUSBThermal(stream grpc.ServerStreamingServer[agentpb.VideoFrame], src videoSource, req *agentpb.StreamVideoRequest) error {
 	stableID := strings.TrimPrefix(src.key, usbThermalHubKeyPrefix)
@@ -207,7 +224,8 @@ func (s *VideoService) streamUSBThermal(stream grpc.ServerStreamingServer[agentp
 		return err
 	}
 	defer h.unsubscribe(id)
-	return s.pumpFrames(stream, h, id, ch)
+	// Adaptive pacing is per subscriber, as for a V4L2 thermal camera.
+	return s.pumpFrames(stream, h, id, ch, req.GetAdaptiveFramerate())
 }
 
 // runUSBThermalProducer feeds a hub from a USB thermal camera until the hub's
@@ -225,7 +243,11 @@ func (s *VideoService) runUSBThermalProducer(ctx context.Context, h *deviceHub, 
 		h.rawNotOffered(fixedReason(err.Error()))
 		return status.Errorf(codes.Unavailable, "%s: %v", l.Name, err)
 	}
-	format := usbThermalRawFormat(l.Layout)
+	// Every frame carries the thermal_plane that says where the temperatures
+	// are and how to convert them (data/thermal), as publishRaw adds for a
+	// V4L2 thermal camera.
+	h.thermalProfile = usbThermalProfile(l.Layout)
+	format := describeThermalCapture(h.thermalProfile, usbThermalRawFormat(l.Layout))
 	h.rawOffered(format)
 	s.logger.Info("streaming USB thermal camera", zap.String("camera", stableID),
 		zap.Uint32("id", l.ID), zap.String("raw_format", describeRawFormat(format)))

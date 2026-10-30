@@ -11,6 +11,12 @@ const (
 	PureThermal    = "purethermal-y16-v1"
 	TOPDONTC001    = "topdon-tc001-v1"
 	TOPDONTC001HIK = "topdon-tc001-hik-v1"
+	// TOPDONTC001Max is the TC001 Max (USB 3474:4962, an InfiRay AC020
+	// core). It has no UVC interface: the agent drives it from userspace
+	// (go/internal/agent/usbthermal) and its raw tap re-stacks each thermal
+	// block into the original TC001's 256x384 layout. Its own adapter, not
+	// TOPDONTC001, because the evidence for the scale is its own.
+	TOPDONTC001Max = "topdon-tc001-max-v1"
 )
 
 // Identify is a legacy name-based fallback. New agents also probe USB identity
@@ -74,6 +80,19 @@ func Plane(adapter string, layout *pb.RawFormat) (*pb.ThermalPlane, error) {
 			p.Height, p.OffsetBytes = 192, 192*stride
 			p.Temperature = &pb.ThermalLinearTemperature{KelvinPerCount: 1.0 / 64,
 				Provenance: "TC001 UVC 256x384 temperature plane, 1/64 K"}
+			return p, nil
+		}
+	case TOPDONTC001Max:
+		// The agent's raw tap for the TC001 Max: 192 YUYV picture rows, then
+		// 192 rows of little-endian uint16 temperatures in 1/64 kelvin, the
+		// block's metadata rows dropped. Evidence: usbthermal.KelvinPerCount
+		// (a room read 24.2-28.2 degC and the plane correlated 0.995 with the
+		// picture on exxon-01; the Thermal Master P3, same vendor and
+		// protocol, documents 1/64 K).
+		if layout.GetFourcc() == "YUYV" && w == 256 && h == 384 && stride <= 65536 {
+			p.Height, p.OffsetBytes = 192, 192*stride
+			p.Temperature = &pb.ThermalLinearTemperature{KelvinPerCount: 1.0 / 64,
+				Provenance: "TC001 Max (AC020) userspace 256x384 temperature plane, 1/64 K"}
 			return p, nil
 		}
 	case TOPDONTC001HIK:

@@ -15,7 +15,7 @@ func TestTC001VariantsDecodeOnlySensorPlane(t *testing.T) {
 		height, start uint32
 		temperature   bool
 	}{
-		{TOPDONTC001, 384, 192, true}, {TOPDONTC001HIK, 392, 0, false},
+		{TOPDONTC001, 384, 192, true}, {TOPDONTC001HIK, 392, 0, false}, {TOPDONTC001Max, 384, 192, true},
 	} {
 		t.Run(tc.adapter, func(t *testing.T) {
 			// Padded capture rows and poison preview/header bytes must not
@@ -85,7 +85,7 @@ func TestThermalPlaneRejectsMalformedAndUnknownContracts(t *testing.T) {
 			t.Fatalf("accepted malformed descriptor %v", l)
 		}
 	}
-	for _, adapter := range []string{TOPDONTC001, TOPDONTC001HIK, PureThermal, "unknown"} {
+	for _, adapter := range []string{TOPDONTC001, TOPDONTC001HIK, TOPDONTC001Max, PureThermal, "unknown"} {
 		if _, err := Plane(adapter, &pb.RawFormat{Width: 512, Height: 384, Fourcc: "YUYV", BytesPerLine: 1024}); err == nil {
 			t.Fatal("accepted preview-only mode")
 		}
