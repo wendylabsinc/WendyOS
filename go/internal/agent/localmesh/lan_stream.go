@@ -16,7 +16,6 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
 )
 
-const TLSLANPort = 43024
 const tlsLANService = "_wendy-net._tcp"
 const tlsLANProtocol = "tls-v1"
 
