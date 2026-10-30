@@ -1331,53 +1331,26 @@ const parallelDownloadWorkers = 8
 
 // downloadChunk fetches the byte range [start, end] from url, writes it to dst
 // at the correct offset via WriteAt, and atomically increments *downloaded.
+// A dropped or stalled connection resumes from the last byte written.
 func downloadChunk(client *http.Client, url string, start, end int64, dst *os.File, downloaded *int64, total int64, sendProgress func(int64, int64)) error {
 	return downloadChunkContext(context.Background(), client, url, start, end, dst, downloaded, total, sendProgress)
 }
 
 func downloadChunkContext(ctx context.Context, client *http.Client, url string, start, end int64, dst *os.File, downloaded *int64, total int64, sendProgress func(int64, int64)) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	last := start
+	err := fetchResumable(ctx, client, url, dst, start, end, total, func(offset, _ int64) {
+		sendProgress(atomic.AddInt64(downloaded, offset-last), total)
+		last = offset
+	})
 	if err != nil {
-		return err
+		return fmt.Errorf("range %d-%d: %w", start, end, err)
 	}
-	req.Header.Set("Range", fmt.Sprintf("bytes=%d-%d", start, end))
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return fmt.Errorf("range request %d-%d: %w", start, end, err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusPartialContent {
-		return fmt.Errorf("range request %d-%d: expected 206, got %d", start, end, resp.StatusCode)
-	}
-
-	buf := make([]byte, 1*1024*1024)
-	offset := start
-	for {
-		n, readErr := resp.Body.Read(buf)
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		if n > 0 {
-			if _, writeErr := dst.WriteAt(buf[:n], offset); writeErr != nil {
-				return fmt.Errorf("writing at offset %d: %w", offset, writeErr)
-			}
-			offset += int64(n)
-			newTotal := atomic.AddInt64(downloaded, int64(n))
-			sendProgress(newTotal, total)
-		}
-		if readErr == io.EOF {
-			return nil
-		}
-		if readErr != nil {
-			return fmt.Errorf("reading chunk %d-%d: %w", start, end, readErr)
-		}
-	}
+	return nil
 }
 
 // downloadParallel downloads url into dst using parallelDownloadWorkers concurrent
-// range requests. dst must already be truncated to contentLength bytes.
+// range requests. dst must already be truncated to contentLength bytes. The
+// first failing range stops the others, and its error is the one returned.
 func downloadParallel(client *http.Client, url string, contentLength int64, dst *os.File, sendProgress func(int64, int64)) error {
 	return downloadParallelContext(context.Background(), client, url, contentLength, dst, sendProgress)
 }
@@ -1385,8 +1358,9 @@ func downloadParallel(client *http.Client, url string, contentLength int64, dst 
 func downloadParallelContext(ctx context.Context, client *http.Client, url string, contentLength int64, dst *os.File, sendProgress func(int64, int64)) error {
 	chunkSize := (contentLength + parallelDownloadWorkers - 1) / parallelDownloadWorkers
 
+	ctx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
 	var wg sync.WaitGroup
-	errCh := make(chan error, parallelDownloadWorkers)
 	var downloaded int64
 
 	for i := 0; i < parallelDownloadWorkers; i++ {
@@ -1403,28 +1377,28 @@ func downloadParallelContext(ctx context.Context, client *http.Client, url strin
 		go func(start, end int64) {
 			defer wg.Done()
 			if err := downloadChunkContext(ctx, client, url, start, end, dst, &downloaded, contentLength, sendProgress); err != nil {
-				errCh <- err
+				cancel(err) // the first cause sticks
 			}
 		}(start, end)
 	}
 
 	wg.Wait()
-	close(errCh)
-	for err := range errCh {
-		return err
-	}
-	return nil
+	return context.Cause(ctx)
 }
 
 // probeRangeSupport issues a HEAD request to check whether the server
 // supports HTTP range requests. Returns the content length and true on
 // success. Falls back to img.ImageSize if Content-Length is absent.
 // Returns 0, false if ranges are unsupported or content length is unknown.
+// A false result only costs parallelism: the single-stream download still
+// resumes, using its own GET responses as the range probe.
 func probeRangeSupport(client *http.Client, img *imageInfo) (contentLength int64, ok bool) {
 	return probeRangeSupportContext(context.Background(), client, img)
 }
 
 func probeRangeSupportContext(ctx context.Context, client *http.Client, img *imageInfo) (contentLength int64, ok bool) {
+	ctx, cancel := context.WithTimeout(ctx, imageDownloadPolicy.idleTimeout)
+	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodHead, img.DownloadURL, nil)
 	if err != nil {
 		return 0, false
@@ -1507,6 +1481,7 @@ func downloadImageContext(ctx context.Context, img *imageInfo, opts ...tea.Progr
 // nil-effect callback). On any error it removes the partial file. If the server
 // supports HTTP range requests it downloads in parallel across
 // parallelDownloadWorkers connections; otherwise it streams sequentially.
+// Either way a dropped or stalled connection resumes rather than restarting.
 func downloadImageInto(img *imageInfo, onProgress func(downloaded, total int64)) (string, error) {
 	return downloadImageIntoContext(context.Background(), img, onProgress)
 }
@@ -1518,7 +1493,6 @@ func downloadImageIntoContext(ctx context.Context, img *imageInfo, onProgress fu
 	if onProgress == nil {
 		onProgress = func(int64, int64) {}
 	}
-	client := &http.Client{Timeout: 30 * time.Minute}
 
 	// Write directly into the OS cache directory so we never land in /tmp
 	// (which is often a size-limited tmpfs on Linux).
@@ -1531,20 +1505,7 @@ func downloadImageIntoContext(ctx context.Context, img *imageInfo, onProgress fu
 		return "", fmt.Errorf("creating temp file: %w", err)
 	}
 
-	contentLength, supportsRanges := probeRangeSupportContext(ctx, client, img)
-	var dlErr error
-	if ctx.Err() != nil {
-		dlErr = ctx.Err()
-	} else if supportsRanges {
-		if err := tmpFile.Truncate(contentLength); err != nil {
-			tmpFile.Close()
-			os.Remove(tmpFile.Name())
-			return "", fmt.Errorf("pre-allocating: %w", err)
-		}
-		dlErr = downloadParallelContext(ctx, client, img.DownloadURL, contentLength, tmpFile, onProgress)
-	} else {
-		dlErr = downloadSequentialContext(ctx, client, img, tmpFile, onProgress)
-	}
+	dlErr := downloadToFile(ctx, img, tmpFile, onProgress)
 	if dlErr == nil {
 		dlErr = ctx.Err()
 	}
@@ -1560,50 +1521,46 @@ func downloadImageIntoContext(ctx context.Context, img *imageInfo, onProgress fu
 	return tmpFile.Name(), nil
 }
 
+// downloadToFile downloads img.DownloadURL into the empty file dst: across
+// parallel ranges when a HEAD shows range support, else on one stream. A
+// server that advertises ranges but then ignores them gets the single stream.
+func downloadToFile(ctx context.Context, img *imageInfo, dst *os.File, onProgress func(downloaded, total int64)) error {
+	// No Timeout: a large image on a slow link legitimately takes hours.
+	// Every request is bounded by imageDownloadPolicy.idleTimeout instead.
+	client := &http.Client{}
+	if contentLength, ok := probeRangeSupportContext(ctx, client, img); ok && ctx.Err() == nil {
+		if err := dst.Truncate(contentLength); err != nil {
+			return fmt.Errorf("pre-allocating: %w", err)
+		}
+		err := downloadParallelContext(ctx, client, img.DownloadURL, contentLength, dst, onProgress)
+		if !errors.Is(err, errRangesUnsupported) {
+			return err
+		}
+		if err := dst.Truncate(0); err != nil {
+			return err
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return downloadSequentialContext(ctx, client, img, dst, onProgress)
+}
+
 // downloadSequential streams img into dst over a single connection, reporting
-// progress via onProgress. Used when the server does not support range requests.
+// progress via onProgress. Used when the server does not support range
+// requests, or a HEAD probe could not tell; after a dropped connection it
+// still resumes with a Range request, and restarts if the server ignores it.
 func downloadSequential(client *http.Client, img *imageInfo, dst *os.File, onProgress func(downloaded, total int64)) error {
 	return downloadSequentialContext(context.Background(), client, img, dst, onProgress)
 }
 
 func downloadSequentialContext(ctx context.Context, client *http.Client, img *imageInfo, dst *os.File, onProgress func(downloaded, total int64)) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, img.DownloadURL, nil)
-	if err != nil {
-		return err
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return fmt.Errorf("downloading: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("download returned status %d", resp.StatusCode)
-	}
-	total := resp.ContentLength
-	if img.ImageSize > 0 {
-		total = img.ImageSize
-	}
-	buf := make([]byte, 1*1024*1024)
-	var downloaded int64
-	for {
-		n, readErr := resp.Body.Read(buf)
-		if err := ctx.Err(); err != nil {
-			return err
+	return fetchResumable(ctx, client, img.DownloadURL, dst, 0, -1, -1, func(downloaded, total int64) {
+		if img.ImageSize > 0 {
+			total = img.ImageSize
 		}
-		if n > 0 {
-			if _, writeErr := dst.Write(buf[:n]); writeErr != nil {
-				return writeErr
-			}
-			downloaded += int64(n)
-			onProgress(downloaded, total)
-		}
-		if readErr == io.EOF {
-			return nil
-		}
-		if readErr != nil {
-			return readErr
-		}
-	}
+		onProgress(downloaded, total)
+	})
 }
 
 func osCacheDir() (string, error) {
