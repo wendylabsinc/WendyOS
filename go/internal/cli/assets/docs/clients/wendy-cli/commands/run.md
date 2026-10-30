@@ -84,6 +84,8 @@ The device needs room for the image too. Before the build, the run stops with `d
 
 If Docker has no Buildx plugin, the run stops when it first sets up its builder, with the error class `builder_unavailable` and a link to install Buildx.
 
+An agent ignores an entitlement type it does not know and starts the app without that access. When the device's agent reports the entitlement types it supports, the run checks every entitlement in `wendy.json` (each service's, for multi-service and Compose projects) against that list before building, including when the app's image is already on the device. On a type the agent does not support it stops with `project_target_mismatch` (exit status 4), names the type, and suggests `wendy device update`. Agents that predate this report are not checked.
+
 ## Detached output
 
 For an ordinary single-device deployment to a Wendy agent, `--json --detach`

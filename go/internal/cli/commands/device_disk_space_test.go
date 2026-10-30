@@ -95,7 +95,7 @@ func TestEveryDiskSpaceRefusalStartsWithThePhraseMCPMatches(t *testing.T) {
 		"image":  deviceImageSpaceError(deviceStorage{free: 1 << 20, mount: "/data"}, 2<<20),
 	} {
 		// The MCP run tool recognizes these refusals by this phrase
-		// (diskSpaceRefusal in package mcp).
+		// (runRefusals in package mcp).
 		if err == nil || !strings.HasPrefix(err.Error(), "not enough free disk space") {
 			t.Errorf("%s refusal = %v; want it to start with the phrase the MCP run tool matches", name, err)
 		}
