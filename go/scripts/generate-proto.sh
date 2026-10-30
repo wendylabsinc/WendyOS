@@ -6,6 +6,11 @@ GO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 PROTO_DIR="$(cd "$GO_DIR/../Proto" && pwd)"
 GEN_DIR="$GO_DIR/proto/gen"
 
+case "${1:-}" in
+    ""|--mesh-only|--check-mesh) ;;
+    *) echo "usage: $0 [--mesh-only|--check-mesh]" >&2; exit 1 ;;
+esac
+
 export PATH="$PATH:$(go env GOPATH)/bin"
 
 # ---- Pinned generator versions ----
@@ -18,6 +23,7 @@ export PATH="$PATH:$(go env GOPATH)/bin"
 #
 # To upgrade deliberately: change these pins, regenerate everything, and commit the
 # result on its own. WENDY_PROTO_SKIP_VERSION_CHECK=1 bypasses this for a one-off.
+REQUIRED_BUF="1.75.0"
 REQUIRED_PROTOC="34.0"
 REQUIRED_PROTOC_GEN_GO="v1.36.11"
 REQUIRED_PROTOC_GEN_GO_GRPC="1.6.2"
@@ -41,6 +47,8 @@ check_version() {
 if [ "${WENDY_PROTO_SKIP_VERSION_CHECK:-0}" != "1" ]; then
     echo "Checking generator versions..."
     failed=0
+    check_version buf "$REQUIRED_BUF" "$(buf --version 2>/dev/null)" \
+        "https://github.com/bufbuild/buf/releases/tag/v$REQUIRED_BUF" || failed=1
     check_version protoc "$REQUIRED_PROTOC" \
         "$(protoc --version 2>/dev/null | awk '{print $2}')" \
         "https://github.com/protocolbuffers/protobuf/releases/tag/v$REQUIRED_PROTOC (no brew formula for this version)" || failed=1
@@ -58,8 +66,17 @@ if [ "${WENDY_PROTO_SKIP_VERSION_CHECK:-0}" != "1" ]; then
     fi
 fi
 
-# Clean previous generated code
-rm -rf "$GEN_DIR"
+# This one shared API comes from service-protos, never a maintained local copy.
+MESH_PROTO="wendycloud/v2/mesh.proto"
+if [ -e "$PROTO_DIR/$MESH_PROTO" ] || [ -L "$PROTO_DIR/$MESH_PROTO" ]; then
+    echo "error: remove Proto/$MESH_PROTO; it is generated from service-protos" >&2
+    exit 1
+fi
+SHARED_PROTO_DIR="$(mktemp -d)"
+trap 'rm -rf "$SHARED_PROTO_DIR"' EXIT
+buf export \
+    "https://github.com/wendylabsinc/service-protos.git#ref=3f29f59fc72f692a52b91a03a14d465d5e8dbfc7" \
+    --path "$MESH_PROTO" --output "$SHARED_PROTO_DIR"
 
 MODULE="github.com/wendylabsinc/wendy"
 
@@ -190,12 +207,11 @@ for p in "${CLOUD_PROTOS[@]}"; do
 done
 
 # ---- Cloud v2 protos ----
-# wendycloud.v2 is vendored beside v1, not instead of it: v1 stays the shipping
-# wire contract until the fleet has crossed over (WDY-2824). Paths match
-# service-protos exactly so a re-copy is a plain cp and the imports need no
-# rewriting -- DeviceEnrollmentService included, Cloud-owned though it is.
+# Except for mesh.proto (exported above), wendycloud.v2 is vendored beside v1.
+# Paths match service-protos, including DeviceEnrollmentService, Cloud-owned
+# though it is.
 #
-# Pin: wendycloud/v2/*.proto and wendy/options.proto are service-protos master
+# Pin: the local wendycloud/v2/*.proto and wendy/options.proto are service-protos master
 # cfa7f45d (merged #145, registry vectors), except postbox.proto,
 # deployments.proto and registry.proto: master 65830a0a (merged #151,
 # WDY-4015 operator CA and instruction validity). device_enrollment.proto is not in
@@ -233,6 +249,25 @@ for p in "${CLOUD_V2_PROTOS[@]}"; do
     CLOUD_V2_M_OPTS="$CLOUD_V2_M_OPTS --go-grpc_opt=M${p}=${CLOUD_V2_PKG};cloudpbv2"
 done
 
+# CI regenerates only mesh into a temporary directory and compares both outputs.
+if [ "${1:-}" = --mesh-only ] || [ "${1:-}" = --check-mesh ]; then
+    MESH_OUT="$GEN_DIR/cloudpb/v2"
+    if [ "$1" = --check-mesh ]; then
+        MESH_OUT="$SHARED_PROTO_DIR/generated"
+    fi
+    mkdir -p "$MESH_OUT"
+    protoc --proto_path="$SHARED_PROTO_DIR" \
+        --go_out="$MESH_OUT" --go_opt=module="$CLOUD_V2_PKG" \
+        --go-grpc_out="$MESH_OUT" --go-grpc_opt=module="$CLOUD_V2_PKG" \
+        $CLOUD_V2_M_OPTS "$MESH_PROTO"
+    if [ "$1" = --check-mesh ]; then
+        for file in mesh.pb.go mesh_grpc.pb.go; do
+            diff -u "$GEN_DIR/cloudpb/v2/$file" "$MESH_OUT/$file"
+        done
+    fi
+    exit 0
+fi
+
 # PKIAdminService returns the PKI ledger's own response messages. These four
 # complete contracts are vendored from service-protos
 # 6ad12f11bc3359ff902d586fd601a5530792febe, the Cloud API's protocol pin.
@@ -266,6 +301,9 @@ done
 
 # All M opts combined for cross-package imports
 ALL_M_OPTS="$AGENT_M_OPTS $V2_AGENT_M_OPTS $OTEL_M_OPTS $CLOUD_M_OPTS $CLOUD_V2_M_OPTS $PKI_M_OPTS $SYSTEM_M_OPTS"
+
+# Clean previous generated code only for a full regeneration.
+rm -rf "$GEN_DIR"
 
 echo "Generating Wendy Agent protos..."
 mkdir -p "$GEN_DIR/agentpb"
@@ -304,6 +342,7 @@ echo "Generating Wendy Cloud v2 protos..."
 mkdir -p "$GEN_DIR/cloudpb/v2"
 protoc \
     --proto_path="$PROTO_DIR" \
+    --proto_path="$SHARED_PROTO_DIR" \
     --go_out="$GEN_DIR/cloudpb/v2" \
     --go_opt=module="$CLOUD_V2_PKG" \
     $ALL_M_OPTS \
