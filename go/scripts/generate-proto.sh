@@ -69,6 +69,8 @@ fi
 # Migrated gRPC APIs share one source pin and currently generate into cloudpb/v2.
 SHARED_GRPC_PROTOS=(
     "wendycloud/v2/mesh.proto"
+    "wendycloud/v2/users.proto"
+    "wendycloud/v2/tunnel.proto"
 )
 SHARED_GRPC_PATH_ARGS=()
 for proto in "${SHARED_GRPC_PROTOS[@]}"; do
@@ -213,7 +215,7 @@ for p in "${CLOUD_PROTOS[@]}"; do
 done
 
 # ---- Cloud v2 protos ----
-# Except for mesh.proto (exported above), wendycloud.v2 is vendored beside v1.
+# Except for the shared gRPC APIs above, wendycloud.v2 is vendored beside v1.
 # Paths match service-protos, including DeviceEnrollmentService, Cloud-owned
 # though it is.
 #
@@ -242,8 +244,6 @@ CLOUD_V2_PROTOS=(
     "${SHARED_GRPC_PROTOS[@]}"
     "wendycloud/v2/notifications.proto"
     "wendycloud/v2/organizations.proto"
-    "wendycloud/v2/tunnel.proto"
-    "wendycloud/v2/users.proto"
     "wendycloud/v2/postbox.proto"
 )
 
