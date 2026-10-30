@@ -56,18 +56,20 @@ func (b *Backend) NearbyDiscover() ([]NearbyDevice, error) {
 	if err != nil {
 		return nil, errors.New("Bluetooth is unavailable. Enable Bluetooth and allow Wendy access in Settings")
 	}
-	found := map[string]NearbyDevice{}
+	found := map[string]scan.BLEDeviceInfo{}
 	for snapshot := range stream {
 		for _, d := range snapshot {
-			if d.RSSI < -80 || d.RSSI >= 0 || (!d.LastSeen.IsZero() && time.Since(d.LastSeen) > 20*time.Second) {
+			if !nearbySetupSighting(d, time.Now()) {
 				continue
 			}
-			found[d.Address] = NearbyDevice{Address: d.Address, Name: d.Name, RSSI: d.RSSI}
+			found[d.Address] = d
 		}
 	}
 	out := make([]NearbyDevice, 0, len(found))
 	for _, d := range found {
-		out = append(out, d)
+		if nearbySetupSighting(d, time.Now()) {
+			out = append(out, NearbyDevice{Address: d.Address, Name: d.Name, RSSI: d.RSSI})
+		}
 	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].Name == out[j].Name {
@@ -76,6 +78,11 @@ func (b *Backend) NearbyDiscover() ([]NearbyDevice, error) {
 		return out[i].Name < out[j].Name
 	})
 	return out, nil
+}
+
+func nearbySetupSighting(d scan.BLEDeviceInfo, now time.Time) bool {
+	age := now.Sub(d.LastSeen)
+	return d.Address != "" && d.RSSI >= -80 && d.RSSI < 0 && !d.LastSeen.IsZero() && age >= 0 && age < 20*time.Second
 }
 func (n *nearbySetup) snapshot() NearbySetupState {
 	s := n.state

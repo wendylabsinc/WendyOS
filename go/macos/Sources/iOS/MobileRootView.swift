@@ -20,6 +20,7 @@ struct MobileRootView: View {
     }
     var body: some View {
         actionContent.task { await actions.run() }
+            .modifier(NearbySetupPrompt())
     }
 
     @ViewBuilder private var actionContent: some View {

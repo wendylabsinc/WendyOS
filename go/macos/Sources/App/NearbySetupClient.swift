@@ -2,6 +2,7 @@ import Foundation
 
 struct NearbySetupDevice: Identifiable, Sendable {
     let id, name: String
+    var rssi: Int = 0
     var title: String { name.isEmpty ? "Wendy device" : name }
 }
 
@@ -31,7 +32,7 @@ extension GoClient {
             defer { WDNearbyDevicesFree(p) }
             try Self.check(p.pointee.status)
             return UnsafeBufferPointer(start: p.pointee.items, count: p.pointee.count).map {
-                NearbySetupDevice(id: Self.string($0.address), name: Self.string($0.name))
+                NearbySetupDevice(id: Self.string($0.address), name: Self.string($0.name), rssi: Int($0.rssi))
             }
         }
     }

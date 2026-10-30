@@ -23,6 +23,7 @@ struct NearbySetupView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.scenePhase) private var scenePhase
     let signIn: () -> Void
+    var initialDevice: NearbySetupDevice? = nil
     @State private var actions = AsyncActions()
     @State private var devices: [NearbySetupDevice] = []
     @State private var selected: NearbySetupDevice?
@@ -185,7 +186,12 @@ struct NearbySetupView: View {
     }
 
     private func watch() async {
-        await discover()
+        if let initialDevice {
+            name = DeviceEnrollmentForm.suggestedName(initialDevice.title)
+            await connect(initialDevice)
+        } else {
+            await discover()
+        }
         do { organizations = try await GoClient.shared.enrollmentOrganizations() }
         catch { if !Task.isCancelled { self.error = error.localizedDescription } }
         while !Task.isCancelled {

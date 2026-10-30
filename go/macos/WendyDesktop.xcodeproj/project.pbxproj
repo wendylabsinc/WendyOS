@@ -144,6 +144,7 @@
 		864D2DC52CAFC6D56CD6ACE9 /* Security.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 5D8FCECB47D77D65A8AD29C6 /* Security.framework */; };
 		86AFBD2BAE00A99C77D170D4 /* NetworkTrafficView.swift in Sources */ = {isa = PBXBuildFile; fileRef = E29D1E80A8CC5F01C5E2250D /* NetworkTrafficView.swift */; };
 		8829846641717B1154A66533 /* SiteRobotLocalizationTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4CFA098E992CF9B04070ED0F /* SiteRobotLocalizationTests.swift */; };
+		884C9FE18B33102B92099E6C /* NearbySetupPromptTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8BAB3A815C395E9C07C56795 /* NearbySetupPromptTests.swift */; };
 		89AD3C60B440A6C2C1488871 /* CampaignModelPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9DAD4BBD7CAD336DE563C175 /* CampaignModelPicker.swift */; };
 		89F17A976941AEB3F0B188DA /* UnitreeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 648A9EBBA886E50CBE873C88 /* UnitreeTests.swift */; };
 		8A383E29682E8FC64CC4DC3E /* CoreBluetooth.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 9E2EF35E68D5CA5FA24980A4 /* CoreBluetooth.framework */; };
@@ -168,6 +169,7 @@
 		98527A2346F2A8FDCB3F3423 /* DataVisualizerTimeline.swift in Sources */ = {isa = PBXBuildFile; fileRef = B51F4E867CC0B70E8A1C6FE0 /* DataVisualizerTimeline.swift */; };
 		98D7934A4DAC98D428BE5EA9 /* SiteLocalization.cpp in Sources */ = {isa = PBXBuildFile; fileRef = 27E95AD68FE5636D8B587BC5 /* SiteLocalization.cpp */; };
 		99918F76AF4F87C55CA2A39F /* Go2Model.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5053B8DBCF5201A242050865 /* Go2Model.swift */; };
+		9A954B12571210EF2B8837E9 /* NearbySetupPrompt.swift in Sources */ = {isa = PBXBuildFile; fileRef = 74B07768E5B406DF7B749C81 /* NearbySetupPrompt.swift */; };
 		9AD7934EF2A0226FF211A2B3 /* SiteWorkspace.swift in Sources */ = {isa = PBXBuildFile; fileRef = 10A956DDF27C46E379646AA3 /* SiteWorkspace.swift */; };
 		9F1B78165E6F7A5B6190BAF1 /* SimulatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA96AC91DE1B6D4C296226BF /* SimulatorTests.swift */; };
 		A0816368E809449ABE7348D1 /* VisualRecognition.cpp in Sources */ = {isa = PBXBuildFile; fileRef = D63AE3C5E01CE28F9A89C0EE /* VisualRecognition.cpp */; };
@@ -223,6 +225,7 @@
 		C5D54F7374C28325E87A6880 /* DeviceRecognition in Resources */ = {isa = PBXBuildFile; fileRef = 67DC08FC4BD812ADD9916DC3 /* DeviceRecognition */; };
 		C664ADA4169CB1C307FD26A2 /* InstallGuide.swift in Sources */ = {isa = PBXBuildFile; fileRef = 671BA86D948522533FE7CC9D /* InstallGuide.swift */; };
 		C68163BD2DFAA408828CAE13 /* SiteCameraColor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3FFC744729F358EB031585D5 /* SiteCameraColor.swift */; };
+		C7ADFC1823E822B835BAF008 /* NearbySetupPrompt.swift in Sources */ = {isa = PBXBuildFile; fileRef = 74B07768E5B406DF7B749C81 /* NearbySetupPrompt.swift */; };
 		C7B60DB501FFCF266A403AC0 /* CoreFoundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 2DD8002D524E68CA3DE04823 /* CoreFoundation.framework */; };
 		CAD5B2B85F11FD7F6FD25A86 /* DataVisualizerView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1ACFB977D993156FC29A021C /* DataVisualizerView.swift */; };
 		CB95B7C465AB92F998A08000 /* DeviceSettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7648529217A2937BE2590CE6 /* DeviceSettingsView.swift */; };
@@ -419,6 +422,7 @@
 		72B368A49DE636D3D5AD9E35 /* MobileTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileTests.swift; sourceTree = "<group>"; };
 		73D7C90E8A6DFBFEBCBDC415 /* MeshGraphView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MeshGraphView.swift; sourceTree = "<group>"; };
 		73F8A73277DE33706D2B45EA /* ThermalCameraTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThermalCameraTests.swift; sourceTree = "<group>"; };
+		74B07768E5B406DF7B749C81 /* NearbySetupPrompt.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NearbySetupPrompt.swift; sourceTree = "<group>"; };
 		7593BCF528C7CEB2093DEB3D /* AsyncCallback.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AsyncCallback.swift; sourceTree = "<group>"; };
 		7648529217A2937BE2590CE6 /* DeviceSettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceSettingsView.swift; sourceTree = "<group>"; };
 		7657AD677FD62BAD21CB002E /* SiteReferenceCapture.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SiteReferenceCapture.swift; sourceTree = "<group>"; };
@@ -433,6 +437,7 @@
 		86688E5547A234D7615F2455 /* SiteFogTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SiteFogTests.swift; sourceTree = "<group>"; };
 		86C9324008F7F9FD0C92E45A /* UnitreeExtras.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UnitreeExtras.swift; sourceTree = "<group>"; };
 		88980115DE513BF1DED28B61 /* RobotLensCalibrationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RobotLensCalibrationView.swift; sourceTree = "<group>"; };
+		8BAB3A815C395E9C07C56795 /* NearbySetupPromptTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NearbySetupPromptTests.swift; sourceTree = "<group>"; };
 		8F2C391C97D1BB19C1786EB2 /* DeviceViewfinder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DeviceViewfinder.swift; sourceTree = "<group>"; };
 		91E03E29F774A31822696188 /* PhoneLensCalibrationView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhoneLensCalibrationView.swift; sourceTree = "<group>"; };
 		956D04288AC871766E33F388 /* IOKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = IOKit.framework; path = System/Library/Frameworks/IOKit.framework; sourceTree = SDKROOT; };
@@ -635,6 +640,7 @@
 				DBDFC9A8D0ACA603DCD08924 /* ModelLibraryClient.swift */,
 				F2572A9746D687639FDA728A /* ModelLibraryView.swift */,
 				E75A157CBBD32C6A883151B3 /* NearbySetupClient.swift */,
+				74B07768E5B406DF7B749C81 /* NearbySetupPrompt.swift */,
 				A59A57EA9A8FAF4CB85087DB /* NearbySetupView.swift */,
 				E29D1E80A8CC5F01C5E2250D /* NetworkTrafficView.swift */,
 				BE9A9C8F45E321960D15CEF8 /* PairingView.swift */,
@@ -696,6 +702,7 @@
 				4E6F80B62D0A9F10FC7A6702 /* Go2ModelTests.swift */,
 				CA670484662408F515B9C200 /* InstallTests.swift */,
 				9B40B4FDD87C60533F0559A6 /* ModelHardwareTests.swift */,
+				8BAB3A815C395E9C07C56795 /* NearbySetupPromptTests.swift */,
 				7B10FC85047A5E2FEDBDDE41 /* NetworkTrafficTests.swift */,
 				F77E3BE596D894B863D41817 /* RobotLensCalibrationTests.swift */,
 				AA96AC91DE1B6D4C296226BF /* SimulatorTests.swift */,
@@ -1307,6 +1314,7 @@
 				E29173B899C80C6895AF7BE3 /* Go2ModelTests.swift in Sources */,
 				F3A827934F6DC5A50FFCD1BB /* InstallTests.swift in Sources */,
 				08287DD3EFF2E24E9258CFA7 /* ModelHardwareTests.swift in Sources */,
+				884C9FE18B33102B92099E6C /* NearbySetupPromptTests.swift in Sources */,
 				AE632E07D7E1F86F196D97D7 /* NetworkTrafficTests.swift in Sources */,
 				C38A105CA2B62B3F487DA22E /* RobotLensCalibrationTests.swift in Sources */,
 				9F1B78165E6F7A5B6190BAF1 /* SimulatorTests.swift in Sources */,
@@ -1384,6 +1392,7 @@
 				1C7D0AABFC28A6E85775CBC9 /* ModelLibraryView.swift in Sources */,
 				4AC6D04388FF681238CF9E50 /* NativeSiteView.swift in Sources */,
 				4B82905690EA5FC17220BE45 /* NearbySetupClient.swift in Sources */,
+				C7ADFC1823E822B835BAF008 /* NearbySetupPrompt.swift in Sources */,
 				5239EE4DFFA71FA8A3B47F9E /* NearbySetupView.swift in Sources */,
 				86AFBD2BAE00A99C77D170D4 /* NetworkTrafficView.swift in Sources */,
 				2FD819F5EEB474D4FF9E0C1F /* PairingView.swift in Sources */,
@@ -1521,6 +1530,7 @@
 				AB6CF01A4FF1564B74CBB462 /* ModelLibraryView.swift in Sources */,
 				A2D8CADA2405E028E4EB1208 /* NativeSiteView.swift in Sources */,
 				A789A504088C208FE124EBF3 /* NearbySetupClient.swift in Sources */,
+				9A954B12571210EF2B8837E9 /* NearbySetupPrompt.swift in Sources */,
 				57947AB4924735E657C857C4 /* NearbySetupView.swift in Sources */,
 				68D083942019941E4F042347 /* NetworkTrafficView.swift in Sources */,
 				BDEF450DB9F50B282F0713CD /* PairingView.swift in Sources */,

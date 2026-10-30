@@ -4,6 +4,7 @@ package bluetooth
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/godbus/dbus/v5"
@@ -16,15 +17,17 @@ import (
 // StartBLESetup advertises only while enrollment is available. The distinct
 // service/PSM cannot reach management operations or alter an enrolled device.
 func StartBLESetup(ctx context.Context, logger *zap.Logger, d *SetupDispatcher) {
-	if !d.Available(ctx) {
-		return
-	}
+	maintainBLESetup(ctx, 5*time.Second, d.Available, func(ctx context.Context) error {
+		return serveBLESetup(ctx, logger, d)
+	}, func(err error) { logger.Debug("BLE setup unavailable; will retry", zap.Error(err)) })
+}
+
+func serveBLESetup(ctx context.Context, logger *zap.Logger, d *SetupDispatcher) error {
 	setupCtx, cancel := context.WithCancel(ctx)
 	fd, err := unix.Socket(unix.AF_BLUETOOTH, unix.SOCK_SEQPACKET|unix.SOCK_CLOEXEC, unix.BTPROTO_L2CAP)
 	if err != nil {
 		cancel()
-		logger.Warn("BLE setup socket unavailable", zap.Error(err))
-		return
+		return fmt.Errorf("BLE setup socket: %w", err)
 	}
 	if err = unix.Bind(fd, &unix.SockaddrL2{PSM: SetupPSM, AddrType: unix.BDADDR_LE_PUBLIC}); err == nil {
 		err = unix.Listen(fd, 4)
@@ -32,43 +35,40 @@ func StartBLESetup(ctx context.Context, logger *zap.Logger, d *SetupDispatcher) 
 	if err != nil {
 		unix.Close(fd)
 		cancel()
-		logger.Warn("BLE setup listener unavailable", zap.Error(err))
-		return
+		return fmt.Errorf("BLE setup listener: %w", err)
 	}
 	if err = startServiceAdvertising(setupCtx, logger, SetupServiceUUID, dbus.ObjectPath("/org/wendy/setupAdvertisement")); err != nil {
 		unix.Close(fd)
 		cancel()
-		logger.Warn("BLE setup advertisement unavailable", zap.Error(err))
-		return
+		return fmt.Errorf("BLE setup advertisement: %w", err)
 	}
-	go func() {
-		defer cancel()
-		defer unix.Close(fd)
-		slots := make(chan struct{}, 4)
-		for setupCtx.Err() == nil && d.Available(setupCtx) {
-			poll := []unix.PollFd{{Fd: int32(fd), Events: unix.POLLIN}}
-			n, err := unix.Poll(poll, 1000)
-			if err == unix.EINTR {
-				continue
-			}
-			if err != nil {
-				return
-			}
-			if n == 0 {
-				continue
-			}
-			client, _, err := unix.Accept4(fd, unix.SOCK_CLOEXEC)
-			if err != nil {
-				continue
-			}
-			select {
-			case slots <- struct{}{}:
-				go func() { defer func() { <-slots }(); serveSetupConn(ctx, client, d) }()
-			default:
-				unix.Close(client)
-			}
+	defer cancel()
+	defer unix.Close(fd)
+	slots := make(chan struct{}, 4)
+	for setupCtx.Err() == nil && d.Available(setupCtx) {
+		poll := []unix.PollFd{{Fd: int32(fd), Events: unix.POLLIN}}
+		n, err := unix.Poll(poll, 1000)
+		if err == unix.EINTR {
+			continue
 		}
-	}()
+		if err != nil {
+			return err
+		}
+		if n == 0 {
+			continue
+		}
+		client, _, err := unix.Accept4(fd, unix.SOCK_CLOEXEC)
+		if err != nil {
+			continue
+		}
+		select {
+		case slots <- struct{}{}:
+			go func() { defer func() { <-slots }(); serveSetupConn(ctx, client, d) }()
+		default:
+			unix.Close(client)
+		}
+	}
+	return nil
 }
 
 func serveSetupConn(ctx context.Context, fd int, d *SetupDispatcher) {

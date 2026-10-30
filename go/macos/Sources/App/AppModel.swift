@@ -7,6 +7,7 @@ import SwiftUI
 
 @MainActor
 final class AppModel: ObservableObject {
+    var nearbySetupPromptHistory = NearbySetupPromptHistory()
     @Published var nearby: [Device] = []
     #if os(macOS)
     @Published var nearbyUnitree: [UnitreeRobot] = UnitreeSavedDevices.load()
