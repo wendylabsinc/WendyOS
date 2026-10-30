@@ -2530,7 +2530,7 @@ func runWithAgentRecorded(ctx context.Context, conn *grpcclient.AgentConnection,
 			// which is often a BIGGER upload than the one just cancelled — just
 			// surface the cancellation.
 			return err
-		} else if conn.IsCloudV2 {
+		} else if conn.IsCloudV2 && (opts.chunking == chunkingForce || !isUnimplementedRPCError(err)) {
 			if stats.pushCompleted && retryableTunnelError(err) {
 				return cloudRunStartConnectionError(conn.Host, err)
 			}

@@ -37,31 +37,7 @@ func (c *composePrepareClient) PrepareImage(ctx context.Context, _ *agentpb.RunC
 // Exercise the shared Compose/multi-service helper with a real OCI fixture,
 // without Docker or a device. Only the export subprocess is replaced.
 func TestComposeCloudV2DoesNotFallBackToTheRegistry(t *testing.T) {
-	oldEnsure, oldRun := ensureOCIExportBuilderForBuild, runBuildxOCIExportCommand
-	t.Cleanup(func() { ensureOCIExportBuilderForBuild, runBuildxOCIExportCommand = oldEnsure, oldRun })
-	ensureOCIExportBuilderForBuild = func(context.Context, io.Writer) (string, error) { return "fixture", nil }
-	layer := variedChunkTestData(200_000)
-	runBuildxOCIExportCommand = func(_ context.Context, _ string, args, _ []string, _, _ io.Writer) error {
-		for i := 0; i+1 < len(args); i++ {
-			if args[i] == "--output" {
-				for _, field := range strings.Split(args[i+1], ",") {
-					if dir, ok := strings.CutPrefix(field, "dest="); ok {
-						writeOCILayoutDir(t, dir, minimalOCILayoutEntries(t, layer, "application/vnd.oci.image.layer.v1.tar", layer))
-						return nil
-					}
-				}
-			}
-		}
-		return errors.New("fixture export destination missing")
-	}
-	manifestCacheTestDir = t.TempDir()
-	t.Cleanup(func() { manifestCacheTestDir = "" })
-	t.Setenv(imageSignaturePathEnv, "")
-	t.Setenv("WENDY_CHUNK_COMPRESSION", "gzip")
-	userCache, err := os.UserCacheDir()
-	if err != nil {
-		t.Fatal(err)
-	}
+	userCache := setupComposeCloudUploadFixture(t)
 	for _, tc := range []struct {
 		name            string
 		code            codes.Code
@@ -71,7 +47,6 @@ func TestComposeCloudV2DoesNotFallBackToTheRegistry(t *testing.T) {
 		{"upload drop cancels preparation", codes.Unavailable, true, codes.Canceled},
 		{"upload drop makes preparation unavailable", codes.Unavailable, true, codes.Unavailable},
 		{"preparation unavailable", codes.Unavailable, false, codes.OK},
-		{"old Agent", codes.Unimplemented, false, codes.OK},
 		{"preparation refused", codes.PermissionDenied, false, codes.OK},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -145,5 +120,72 @@ func TestExplicitDeviceReachabilityOutranksReconnectDeadline(t *testing.T) {
 	}
 	if got := ExecutionErrorClass(classifyCommandError(errDeviceUnreachable, context.Canceled)); got != "context_canceled" {
 		t.Fatalf("cancellation class=%s", got)
+	}
+}
+
+func setupComposeCloudUploadFixture(t *testing.T) string {
+	t.Helper()
+
+	oldEnsure, oldRun := ensureOCIExportBuilderForBuild, runBuildxOCIExportCommand
+	t.Cleanup(func() { ensureOCIExportBuilderForBuild, runBuildxOCIExportCommand = oldEnsure, oldRun })
+	ensureOCIExportBuilderForBuild = func(context.Context, io.Writer) (string, error) { return "fixture", nil }
+	layer := variedChunkTestData(200_000)
+	runBuildxOCIExportCommand = func(_ context.Context, _ string, args, _ []string, _, _ io.Writer) error {
+		for i := 0; i+1 < len(args); i++ {
+			if args[i] == "--output" {
+				for _, field := range strings.Split(args[i+1], ",") {
+					if dir, ok := strings.CutPrefix(field, "dest="); ok {
+						writeOCILayoutDir(t, dir, minimalOCILayoutEntries(t, layer, "application/vnd.oci.image.layer.v1.tar", layer))
+						return nil
+					}
+				}
+			}
+		}
+		return errors.New("fixture export destination missing")
+	}
+	manifestCacheTestDir = t.TempDir()
+	t.Cleanup(func() { manifestCacheTestDir = "" })
+	t.Setenv(imageSignaturePathEnv, "")
+	t.Setenv("WENDY_CHUNK_COMPRESSION", "gzip")
+	userCache, err := os.UserCacheDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("WENDY_CONFIG_DIR", t.TempDir())
+	return userCache
+}
+
+func TestComposeCloudV2MissingChunkCapabilitiesKeepRegistryAuth(t *testing.T) {
+	userCache := setupComposeCloudUploadFixture(t)
+	for _, stage := range []string{"QueryChunks", "PrepareImage"} {
+		for _, force := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/force=%v", stage, force), func(t *testing.T) {
+				repo := "cloud-capability-test-" + sha256Hex([]byte(t.TempDir()))[:16]
+				layout := chunkLayoutDir(userCache, repo, "linux/arm64")
+				t.Cleanup(func() { os.RemoveAll(layout); os.Remove(layout + ".lock") })
+				cause := status.Error(codes.Unimplemented, "old Agent capability missing")
+				var cs agentpb.WendyContainerServiceClient = &composePrepareClient{
+					fakeContainerClient: &fakeContainerClient{queryFn: func(*agentpb.QueryChunksRequest) *agentpb.QueryChunksResponse { return &agentpb.QueryChunksResponse{} }},
+					prepareErr:          cause,
+				}
+				if stage == "QueryChunks" {
+					cs = &unavailableContainerClient{err: cause}
+				}
+				conn := &grpcclient.AgentConnection{Host: "jetson", IsCloudV2: true, IsMTLS: true, ContainerService: cs, RegistryDialer: func(context.Context, int) (net.Conn, error) {
+					t.Fatal("registry auth must be checked before opening a tunnel")
+					return nil, nil
+				}}
+				conn.CacheAgentVersion(&agentpb.GetAgentVersionResponse{Os: "linux", Version: "test"})
+				var logs bytes.Buffer
+				err := buildAndPrepareComposeImage(t.Context(), conn, 5000, "linux", imageBuilderDocker, t.TempDir(), repo, "linux/arm64", "", nil, repo, io.Discard, &logs, !force)
+				if force {
+					if !errors.Is(err, cause) || errors.Is(err, errRegistryAuth) {
+						t.Fatalf("force error=%v, want missing capability without fallback", err)
+					}
+				} else if !errors.Is(err, errRegistryAuth) || !strings.Contains(logs.String(), "falling back to registry push") {
+					t.Fatalf("auto error=%v logs=%s, want existing registry auth checks", err, &logs)
+				}
+			})
+		}
 	}
 }

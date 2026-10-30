@@ -2423,9 +2423,9 @@ func noteComposeChunkStall(logOutput io.Writer, chunkErr error, cfg chunkUploadC
 // prepared image is registered under repo:latest, so Compose's existing
 // CreateContainer orchestration can consume it without a registry round-trip.
 //
-// Agents that predate PrepareImage (or any other non-build chunk-path failure)
-// fall back to pushing this exact already-built layout to the device registry;
-// the image is never rebuilt for the fallback.
+// In auto mode, missing chunk RPCs fall back to pushing this exact already-
+// built layout through the existing registry route. Cloud v2 stops on other
+// chunk failures; LAN and legacy Cloud keep their broader fallback behavior.
 func buildAndPrepareComposeImageForAgent(ctx context.Context, conn *grpcclient.AgentConnection, regPort int, agentOS, builder, dir, repo, platform, dockerfile string, buildArgs map[string]string, cacheKey string, streamOutput, logOutput io.Writer) error {
 	return buildAndPrepareComposeImage(ctx, conn, regPort, agentOS, builder, dir, repo, platform, dockerfile, buildArgs, cacheKey, streamOutput, logOutput, true)
 }
@@ -2523,7 +2523,7 @@ func buildAndPrepareComposeImage(ctx context.Context, conn *grpcclient.AgentConn
 		return nil
 	} else if ctx.Err() != nil {
 		return chunkErr
-	} else if conn.IsCloudV2 {
+	} else if conn.IsCloudV2 && (!allowRegistryFallback || !isUnimplementedRPCError(chunkErr)) {
 		fmt.Fprintf(logOutput, "[chunks] image preparation failed: %v\n", chunkErr)
 		if retryableTunnelError(chunkErr) {
 			return cloudChunkTransferError(conn.Host, progress.Snapshot(), chunkErr, nil)
