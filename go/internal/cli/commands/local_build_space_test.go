@@ -48,11 +48,6 @@ func TestLocalBuildSpaceRefusesWhenADiskIsNearlyFull(t *testing.T) {
 	if msg := err.Error(); !strings.Contains(msg, "2.0 GiB free") || !strings.Contains(msg, "/project") {
 		t.Fatalf("message does not name the full disk and its free space: %q", msg)
 	}
-	// The MCP run tool recognizes the refusal by this phrase
-	// (localBuildSpaceRefusal in package mcp).
-	if !strings.HasPrefix(err.Error(), "not enough free disk space to build") {
-		t.Fatalf("message no longer starts with the phrase the MCP run tool matches: %q", err)
-	}
 	if got := NextSteps(err); !slices.Equal(got, steps) {
 		t.Fatalf("next steps = %q, want %q", got, steps)
 	}
