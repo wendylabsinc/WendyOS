@@ -64,6 +64,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/cloudrelay"
 	"github.com/wendylabsinc/wendy/go/internal/shared/discovery"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
+	"github.com/wendylabsinc/wendy/go/internal/shared/meshoperatorlink"
 	"github.com/wendylabsinc/wendy/go/internal/shared/models"
 	"github.com/wendylabsinc/wendy/go/internal/shared/unitree"
 	"github.com/wendylabsinc/wendy/go/internal/shared/version"
@@ -864,6 +865,9 @@ func main() {
 		}
 	}
 
+	meshAgentListener := meshoperatorlink.NewAgentListener()
+	defer meshAgentListener.Close()
+
 	startMTLSServer := func(certPEM, chainPEM, keyPEM string) {
 		mtlsMu.Lock()
 		defer mtlsMu.Unlock()
@@ -962,6 +966,13 @@ func main() {
 		}
 
 		mtlsServer = srv
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := srv.Serve(meshAgentListener); err != nil && !errors.Is(err, grpc.ErrServerStopped) {
+				logger.Error("authenticated mesh gRPC ingress stopped", zap.Error(err))
+			}
+		}()
 
 		wg.Add(1)
 		go func() {
@@ -1106,7 +1117,7 @@ func main() {
 						localMeshMu.Lock()
 						localMeshSnapshot = snapshot
 						localMeshMu.Unlock()
-					})
+					}, meshAgentListener.Deliver)
 				}, func(err error) {
 					logger.Error("configured wendy net stopped", zap.Error(err))
 				})

@@ -3,6 +3,7 @@ package localmesh
 import (
 	"bytes"
 	"encoding/binary"
+	"encoding/hex"
 	"errors"
 	"github.com/wendylabsinc/wendy/go/internal/agent/netwire"
 	"io"
@@ -177,7 +178,7 @@ func ReadControl(r io.Reader) (ControlMessage, error) {
 		}
 	case "identity-request", "manifest-request", "identity-missing", "manifest-missing":
 		// Only a full device principal addresses an identity: no hash, no number.
-		if _, err := meshid.DeviceFromPrincipal(m.Principal); err != nil {
+		if _, err := meshid.PeerFromPrincipal(m.Principal); err != nil {
 			return m, errors.New("invalid identity request")
 		}
 		if m.Manifest != nil || len(m.Bundle) != 0 {
@@ -247,7 +248,7 @@ func (s *Synchronizer) SeedKnownBundles(fingerprints []string) {
 // continues after this principal and omits its already queued announcement.
 func (s *Synchronizer) bootstrapOwn(principal string, now time.Time, slots int) []ControlMessage {
 	for _, w := range s.directory.Records(now) {
-		if w.Principal != principal {
+		if w.ownerKey() != principal {
 			continue
 		}
 		messages, fits := s.recordBounded(w, now, slots)
@@ -323,7 +324,7 @@ func (s *Synchronizer) ReconcileBounded(now time.Time, slots int) []ControlMessa
 	s.reconcileRemaining = len(records)
 	if s.bootstrapAfter != "" {
 		for _, w := range records {
-			if w.Principal == s.bootstrapAfter {
+			if w.ownerKey() == s.bootstrapAfter {
 				s.reconcileAfter = s.bootstrapAfter
 				s.reconcileRemaining--
 				break
@@ -346,7 +347,7 @@ func (s *Synchronizer) reconcileBatch(records []SignedManifest, now time.Time, s
 	if s.reconcileRemaining == 0 || slots <= 0 {
 		return nil
 	}
-	start := sort.Search(len(records), func(i int) bool { return records[i].Principal > s.reconcileAfter })
+	start := sort.Search(len(records), func(i int) bool { return records[i].ownerKey() > s.reconcileAfter })
 	var out []ControlMessage
 	for i := 0; s.reconcileRemaining > 0 && slots > 0; i++ {
 		w := records[(start+i)%len(records)]
@@ -357,14 +358,14 @@ func (s *Synchronizer) reconcileBatch(records []SignedManifest, now time.Time, s
 		out = append(out, messages...)
 		slots -= len(messages)
 		s.reconcileRemaining--
-		s.reconcileAfter = w.Principal
+		s.reconcileAfter = w.ownerKey()
 	}
 	return out
 }
 
 // Availability is only reported for device principals in this directory's tenant.
 func (s *Synchronizer) localDevicePrincipal(principal string) bool {
-	device, err := meshid.DeviceFromPrincipal(principal)
+	device, err := meshid.PeerFromPrincipal(principal)
 	return err == nil && device.Tenant() == s.directory.tenant
 }
 
@@ -387,7 +388,7 @@ func (s *Synchronizer) receive(m ControlMessage, now time.Time, slots ...int) (r
 		replies, completed, err := s.certificates.Receive(*m.Certificate, now, slots...)
 		if err == nil {
 			for _, principal := range missing {
-				s.dropPendingManifest(principal)
+				s.dropPendingPrincipal(principal)
 			}
 		}
 		return s.certificateResult(replies, completed, err, now)
@@ -395,7 +396,7 @@ func (s *Synchronizer) receive(m ControlMessage, now time.Time, slots ...int) (r
 		// This synchronizer owns only this neighbour's outstanding claims.
 		// Forget its unverified download without creating a shared receipt,
 		// allowing a different announcing supplier to take over immediately.
-		s.dropPendingManifest(m.Principal)
+		s.dropPendingPrincipal(m.Principal)
 		s.certificates.forgetPrincipal(m.Principal, now)
 	case "manifest-missing":
 		// Go does not originate principal-based manifest lookups. There is no
@@ -472,13 +473,21 @@ func (s *Synchronizer) receive(m ControlMessage, now time.Time, slots ...int) (r
 			// Do not disconnect a valid neighbour if many hints are stale after
 			// a receiver restart. The request repairs its identity cache, and
 			// the periodic reconciliation repeats any manifest we cannot hold.
-			if _, exists := s.pending[m.Manifest.Principal]; exists || len(s.pending) < 128 {
-				if old, exists := s.pending[m.Manifest.Principal]; exists && !sameManifestWire(old, *m.Manifest) {
+			if _, exists := s.pending[m.Manifest.ownerKey()]; exists || len(s.pending) < 128 {
+				if old, exists := s.pending[m.Manifest.ownerKey()]; exists && !sameManifestWire(old, *m.Manifest) {
 					s.discardManifest(old)
 				}
-				s.pending[m.Manifest.Principal] = cloneSignedManifest(*m.Manifest)
+				s.pending[m.Manifest.ownerKey()] = cloneSignedManifest(*m.Manifest)
 			} else {
 				s.discardManifest(*m.Manifest)
+			}
+			if body, err := DecodeManifest(m.Manifest.Body); err == nil && body.Owner != nil {
+				description := CertificateChain{Principal: m.Manifest.Principal, Hashes: make([]string, len(body.Owner.Hashes))}
+				for i, hash := range body.Owner.Hashes {
+					description.Hashes[i] = hex.EncodeToString(hash)
+				}
+				messages, completed, fetchErr := s.certificates.Receive(CertificateMessage{Chain: &description}, now, slots...)
+				return s.certificateResult(messages, completed, fetchErr, now)
 			}
 			if s.gossip != nil {
 				if _, _, active := s.certificates.PendingChain(m.Manifest.Principal, now); active {
@@ -513,16 +522,19 @@ func (s *Synchronizer) certificateResult(messages []*CertificateMessage, complet
 	// complete several principals at once and removes all their active hints.
 	var retry []SignedManifest
 	for _, principal := range completed {
-		if pending, ok := s.pendingRenewals[principal]; ok {
-			delete(s.pendingRenewals, principal)
-			chain, _, valid := s.cache.Get(principal, now)
-			if !pending.fetchUntil.After(now) || !pending.expires.After(now) || !valid || !matchesCertificateDescription(chain, pending.chain) {
-				s.dropPendingManifest(principal)
+		for key, w := range s.pending {
+			if w.Principal != principal {
 				continue
 			}
-		}
-		if w, ok := s.pending[principal]; ok {
-			delete(s.pending, principal)
+			if pending, ok := s.pendingRenewals[key]; ok {
+				delete(s.pendingRenewals, key)
+				chain, _, valid := s.cache.Get(principal, now)
+				if !pending.fetchUntil.After(now) || !pending.expires.After(now) || !valid || !matchesCertificateDescription(chain, pending.chain) {
+					s.dropPendingManifest(key)
+					continue
+				}
+			}
+			delete(s.pending, key)
 			retry = append(retry, w)
 		}
 	}
@@ -576,6 +588,9 @@ func (s *Synchronizer) ContinueCertificates(now time.Time, slots ...int) ([]Cont
 // the same leaf. Both require this link's active exact changed descriptor and
 // must verify normally after completion.
 func (s *Synchronizer) deferPendingRenewal(w SignedManifest, now time.Time, lifetimeMismatch bool) bool {
+	if identity, err := meshid.PeerFromPrincipal(w.Principal); err == nil && identity.IsOperator() {
+		return false
+	}
 	description, deadline, ok := s.certificates.PendingChain(w.Principal, now)
 	if !ok {
 		return false
@@ -640,4 +655,12 @@ func (s *Synchronizer) dropPendingManifest(principal string) {
 	}
 	delete(s.pending, principal)
 	delete(s.pendingRenewals, principal)
+}
+
+func (s *Synchronizer) dropPendingPrincipal(principal string) {
+	for key, w := range s.pending {
+		if w.Principal == principal {
+			s.dropPendingManifest(key)
+		}
+	}
 }
