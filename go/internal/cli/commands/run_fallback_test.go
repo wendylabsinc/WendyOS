@@ -136,15 +136,24 @@ func TestIsChunkDeployCancellation(t *testing.T) {
 
 // Drive the actual deploy ladder with a local image fixture. A provisioned
 // registry with no local credentials stops the allowed fallback before any
-// network access, letting us assert LAN and v1 still reach it and v2 does not.
-func TestRunRegistryFallbackRespectsCloudV2Catalog(t *testing.T) {
+// network access. Missing capabilities retain this route in auto mode;
+// Cloud v2 transport drops, refusal, and force mode must stop first.
+func TestRunRegistryFallbackPreservesMissingChunkCapability(t *testing.T) {
 	defer forceBuildProgressInteractive(false)()
 	setupCloudRunFixture(t)
 	for _, tc := range []struct {
 		name               string
 		cloudV2, reconnect bool
+		code               codes.Code
+		mode               string
+		wantRegistry       bool
 	}{
-		{name: "LAN"}, {name: "Cloud v1", reconnect: true}, {name: "Cloud v2", cloudV2: true, reconnect: true},
+		{name: "LAN", code: codes.Unimplemented, mode: chunkingAuto, wantRegistry: true},
+		{name: "Cloud v1", reconnect: true, code: codes.Unimplemented, mode: chunkingAuto, wantRegistry: true},
+		{name: "Cloud v2 missing capability", cloudV2: true, reconnect: true, code: codes.Unimplemented, mode: chunkingAuto, wantRegistry: true},
+		{name: "Cloud v2 force missing capability", cloudV2: true, code: codes.Unimplemented, mode: chunkingForce},
+		{name: "Cloud v2 drop", cloudV2: true, reconnect: true, code: codes.Unavailable, mode: chunkingAuto},
+		{name: "Cloud v2 refused", cloudV2: true, code: codes.PermissionDenied, mode: chunkingAuto},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
@@ -152,27 +161,33 @@ func TestRunRegistryFallbackRespectsCloudV2Catalog(t *testing.T) {
 				t.Fatal(err)
 			}
 			registry := &fallbackProvisioningClient{}
-			conn := &grpcclient.AgentConnection{Host: "fixture", IsCloudV2: tc.cloudV2, ContainerService: &probeUnsupportedClient{}, ProvisioningService: registry}
+			cause := status.Error(tc.code, "fixture chunk capability response")
+			conn := &grpcclient.AgentConnection{Host: "fixture", IsCloudV2: tc.cloudV2, ContainerService: &unavailableContainerClient{err: cause}, ProvisioningService: registry}
 			conn.CacheAgentVersion(&agentpb.GetAgentVersionResponse{Os: "linux", CpuArchitecture: "arm64"})
 			if tc.reconnect {
 				conn.Reconnect = func(context.Context) (*grpcclient.AgentConnection, error) {
-					t.Fatal("Unimplemented must not reconnect")
-					return nil, nil
+					if tc.code != codes.Unavailable {
+						t.Fatal("only transport drops should reconnect")
+					}
+					return nil, context.DeadlineExceeded
 				}
 			}
 			cfg := &appconfig.AppConfig{AppID: "fallback-fixture"}
-			opts := runOptions{builder: imageBuilderAppleContainer, chunking: chunkingAuto, managedRobot: true, yes: true}
+			opts := runOptions{builder: imageBuilderAppleContainer, chunking: tc.mode, managedRobot: true, yes: true}
 			err := runWithAgentRecorded(t.Context(), conn, dir, cfg, opts, newDeployMetrics(opts))
-			if tc.cloudV2 {
-				if err == nil || !isUnimplementedRPCError(err) || !strings.Contains(err.Error(), "Update the Agent, then retry.") || strings.Contains(err.Error(), "registry") {
-					t.Fatalf("error = %v, want chunk error with unsupported-registry explanation", err)
-				}
-				if registry.calls != 0 {
-					t.Fatalf("v2 attempted the registry fallback %d times", registry.calls)
-				}
-			} else {
+			if tc.wantRegistry {
 				if registry.calls != 1 || !errors.Is(err, errRegistryAuth) {
 					t.Fatalf("registry calls=%d err=%v, want the registry auth gate", registry.calls, err)
+				}
+			} else {
+				if registry.calls != 0 || !errors.Is(err, cause) {
+					t.Fatalf("registry calls=%d err=%v, want the original cause without fallback", registry.calls, err)
+				}
+				if tc.code == codes.Unavailable && ExecutionErrorClass(err) != "device_unreachable" {
+					t.Fatalf("drop class=%s", ExecutionErrorClass(err))
+				}
+				if tc.code == codes.Unimplemented && !strings.Contains(err.Error(), "Update the Agent") {
+					t.Fatalf("force mode must retain its Agent update hint: %v", err)
 				}
 			}
 		})
