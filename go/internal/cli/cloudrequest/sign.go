@@ -21,7 +21,6 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	cloudpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
-	"github.com/wendylabsinc/wendy/go/proto/gen/pkicorepb"
 	"google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -86,43 +85,17 @@ type Signer struct {
 const CollidingFieldMetadataKey = "wendy-colliding-field"
 
 func Invoke(ctx context.Context, conn grpc.ClientConnInterface, auth *config.AuthConfig, method string, req, reply proto.Message) error {
-	return invoke(ctx, conn, auth, method, req, reply, "", nil)
+	return invoke(ctx, conn, auth, method, req, reply, nil)
 }
 
 // InvokeWithTrailer is Invoke, additionally collecting the call's trailing
 // metadata into *trailer. Callers that branch on a refusal -- enrollment's
 // mesh-address collision retry -- need the trailer; everyone else uses Invoke.
 func InvokeWithTrailer(ctx context.Context, conn grpc.ClientConnInterface, auth *config.AuthConfig, method string, req, reply proto.Message, trailer *metadata.MD) error {
-	return invoke(ctx, conn, auth, method, req, reply, "", trailer)
+	return invoke(ctx, conn, auth, method, req, reply, trailer)
 }
 
-// RevokePrincipalCertificates revokes the selected tenant's live device
-// certificates through Cloud's PKI relay. Both request signatures use the
-// same operator leaf. Each retry carries fresh PKI replay authority.
-func RevokePrincipalCertificates(ctx context.Context, conn grpc.ClientConnInterface, auth *config.AuthConfig, deviceID string) (int, error) {
-	if deviceID == "" || len(deviceID) > 64 || strings.Trim(deviceID, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_.") != "" {
-		return 0, fmt.Errorf("device ID must contain 1–64 letters, digits, dots, underscores or hyphens")
-	}
-	if auth == nil || len(auth.Certificates) == 0 {
-		return 0, fmt.Errorf("device revocation requires an operator certificate")
-	}
-	tenant, err := operatorTenant(auth.Certificates[0].PrincipalURI)
-	if err != nil {
-		return 0, err
-	}
-	reply := new(pkicorepb.RevokeByPrincipalResponse)
-	err = invoke(ctx, conn, auth, cloudpbv2.PKIAdminService_RevokePrincipalCertificates_FullMethodName,
-		&cloudpbv2.RevokePrincipalCertificatesRequest{OrganizationId: tenant}, reply, deviceID, nil)
-	if err != nil {
-		return 0, err
-	}
-	if reply.GetRevokedCount() < 0 {
-		return 0, fmt.Errorf("Cloud returned an invalid revoked-certificate count")
-	}
-	return int(reply.GetRevokedCount()), nil
-}
-
-func invoke(ctx context.Context, conn grpc.ClientConnInterface, auth *config.AuthConfig, method string, req, reply proto.Message, revokeDeviceID string, trailer *metadata.MD) error {
+func invoke(ctx context.Context, conn grpc.ClientConnInterface, auth *config.AuthConfig, method string, req, reply proto.Message, trailer *metadata.MD) error {
 	s, err := newSigner(auth)
 	if err != nil {
 		return err
@@ -139,13 +112,6 @@ func invoke(ctx context.Context, conn grpc.ClientConnInterface, auth *config.Aut
 		signed, err := s.signRequest(method, req, byKID, correlationID)
 		if err != nil {
 			return err
-		}
-		if revokeDeviceID != "" {
-			management, err := s.principalRevocationManagementRequest(revokeDeviceID)
-			if err != nil {
-				return err
-			}
-			signed.PkiManagementRequest = management
 		}
 		var opts []grpc.CallOption
 		if trailer != nil {
@@ -415,7 +381,7 @@ func (s *Signer) unenrollManagementRequest(deviceID string) ([]byte, error) {
 }
 
 // Principal revocation also supports Lite identities that are not UUIDs.
-// RevokePrincipalCertificates validates those IDs before issuing an RPC.
+// unenrollManagementRequest validates those IDs before signing.
 func (s *Signer) principalRevocationManagementRequest(deviceID string) ([]byte, error) {
 	tenant, err := uuid.Parse(s.tenantUUID)
 	if err != nil || tenant.String() != s.tenantUUID {
@@ -507,10 +473,6 @@ var signedResources = map[string]func(tenant string, req proto.Message) (string,
 	cloudpbv2.KeyDirectoryService_RegisterUserEncryptionKey_FullMethodName: func(tenant string, req proto.Message) (string, bool) {
 		in, ok := req.(*cloudpbv2.RegisterEncryptionKeyRequest)
 		return "org/" + tenant + "/encryption-key", ok && in.GetOrganizationId() == tenant
-	},
-	cloudpbv2.PKIAdminService_RevokePrincipalCertificates_FullMethodName: func(tenant string, req proto.Message) (string, bool) {
-		in, ok := req.(*cloudpbv2.RevokePrincipalCertificatesRequest)
-		return "org/" + tenant + "/pki", ok && in.GetOrganizationId() == tenant
 	},
 	cloudpbv2.PKIAdminService_RevokeEnrollmentToken_FullMethodName: func(tenant string, req proto.Message) (string, bool) {
 		in, ok := req.(*cloudpbv2.RevokeEnrollmentTokenRequest)
