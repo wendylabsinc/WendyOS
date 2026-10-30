@@ -60,7 +60,7 @@ permissions:
   contents: read
 
 jobs:
-  shared-grpc:
+  shared-grpc-api-contracts:
     name: Shared gRPC API contracts
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -86,7 +86,7 @@ jobs:
           go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.11
           go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.6.2
       - name: Check shared gRPC API contracts
-        run: bash go/scripts/generate-proto.sh --check-shared-grpc
+        run: bash go/scripts/generate-proto.sh --check-shared-grpc-api-contracts
 
   babel:
     name: Babel tests
@@ -286,12 +286,12 @@ jobs:
   test:
     name: Test
     if: ${{ always() }}
-    needs: [shared-grpc, babel, unit-tests, windows, windows-telemetry, wasm, vet, agent-startup, inference-worker]
+    needs: [shared-grpc-api-contracts, babel, unit-tests, windows, windows-telemetry, wasm, vet, agent-startup, inference-worker]
     runs-on: ubuntu-latest
     steps:
       - name: Check test results
         env:
-          SHARED_GRPC_RESULT: ${{ needs.shared-grpc.result }}
+          SHARED_GRPC_API_CONTRACTS_RESULT: ${{ needs.shared-grpc-api-contracts.result }}
           BABEL_RESULT: ${{ needs.babel.result }}
           RACE_RESULT: ${{ needs.unit-tests.result }}
           WINDOWS_RESULT: ${{ needs.windows.result }}
@@ -301,7 +301,7 @@ jobs:
           STARTUP_RESULT: ${{ needs.agent-startup.result }}
           INFERENCE_WORKER_RESULT: ${{ needs.inference-worker.result }}
         run: |
-          test "$SHARED_GRPC_RESULT" = success
+          test "$SHARED_GRPC_API_CONTRACTS_RESULT" = success
           test "$BABEL_RESULT" = success
           test "$RACE_RESULT" = success
           test "$WINDOWS_RESULT" = success
