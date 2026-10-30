@@ -48,6 +48,17 @@ final class NearbySetupObservationTests: XCTestCase {
                        "An ambiguous enrollment without saved credentials must never be repeated")
     }
 
+    func testPendingEnrollmentKeepsWiFiAndKeepaliveAvailable() {
+        var state = NearbySetupSnapshot(connected: true, attempted: true, pending: true)
+        XCTAssertEqual(next(state), .status)
+        XCTAssertEqual(next(state, wifi: true, statusAge: 1), .scanWiFi)
+        XCTAssertEqual(next(state, wifi: true, statusAge: 1, scanAge: 1), .checkEnrollment)
+        state.connected = false
+        XCTAssertEqual(next(state, wifi: true), .reconnect)
+        XCTAssertEqual(next(state, wifi: true, statusAge: 1), .checkEnrollment)
+        XCTAssertEqual(next(state), .checkEnrollment)
+    }
+
     func testWiFiDiscoveryOnlyRunsWhileVisibleAndThrottlesReads() {
         let state = NearbySetupSnapshot(connected: true)
         XCTAssertEqual(next(state, statusAge: 1), .idle)

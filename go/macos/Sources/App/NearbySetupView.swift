@@ -92,7 +92,8 @@ struct NearbySetupView: View {
                             }
                         case "connecting": ProgressView().controlSize(.large)
                         case "working":
-                            if state.pending || editingLocked { ProgressView().controlSize(.large) }
+                            ProgressView().controlSize(.large)
+                            if !editingLocked { wifiControls }
                         default: confirmation
                         }
                     }
@@ -163,7 +164,9 @@ struct NearbySetupView: View {
             if state.attempted && !state.pending && !editingLocked {
                 return "We haven’t received confirmation yet. Your enrollment won’t be sent twice."
             }
-            return "Your device is joining your organization. We’ll continue as soon as it’s ready."
+            return state.wifiConnected
+                ? "Your device is joining your organization. We’ll keep checking automatically."
+                : "Your device needs internet to finish. Connect it to Wi-Fi below, or plug in Ethernet. We’ll keep checking automatically."
         default:
             if let choice { return "Add this device to \(choice.name)." }
             return organizations.isEmpty ? "Sign in to add this device to your organization." : "Choose the organization this device belongs to."
@@ -186,23 +189,27 @@ struct NearbySetupView: View {
                     }.padding(.top, 12)
                 }
             }
-            DisclosureGroup(state.wifiConnected ? "Wi-Fi connected" : "Connect to Wi-Fi", isExpanded: $wifiExpanded) {
-                VStack(alignment: .leading, spacing: 14) {
-                    if state.wifiConnected { Label(state.ssid, systemImage: "wifi").foregroundStyle(.secondary) }
-                    if !state.networks.isEmpty {
-                        Picker("Network", selection: $ssid) {
-                            Text("Choose network").tag("")
-                            if !ssid.isEmpty && !state.networks.contains(ssid) { Text(ssid).tag(ssid) }
-                            ForEach(Array(Set(state.networks)).sorted(), id: \.self) { Text($0).tag($0) }
-                        }
-                    } else { ProgressView("Finding networks…") }
-                    TextField("Network name", text: $ssid).textFieldStyle(.roundedBorder).autocorrectionDisabled()
-                    SecureField("Password", text: $password).textFieldStyle(.roundedBorder)
-                    Button("Connect") { submit(.connectWiFi) }.buttonStyle(.borderedProminent).disabled(ssid.isEmpty || editingLocked)
-                }.padding(.top, 12)
-            }
-            .font(.subheadline).disabled(editingLocked)
+            wifiControls
         }.tint(.accentColor)
+    }
+
+    private var wifiControls: some View {
+        DisclosureGroup(state.wifiConnected ? "Wi-Fi connected" : "Connect to Wi-Fi", isExpanded: $wifiExpanded) {
+            VStack(alignment: .leading, spacing: 14) {
+                if state.wifiConnected { Label(state.ssid, systemImage: "wifi").foregroundStyle(.secondary) }
+                if !state.networks.isEmpty {
+                    Picker("Network", selection: $ssid) {
+                        Text("Choose network").tag("")
+                        if !ssid.isEmpty && !state.networks.contains(ssid) { Text(ssid).tag(ssid) }
+                        ForEach(Array(Set(state.networks)).sorted(), id: \.self) { Text($0).tag($0) }
+                    }
+                } else { ProgressView("Finding networks…") }
+                TextField("Network name", text: $ssid).textFieldStyle(.roundedBorder).autocorrectionDisabled()
+                SecureField("Password", text: $password).textFieldStyle(.roundedBorder)
+                Button("Connect") { submit(.connectWiFi) }.buttonStyle(.borderedProminent).disabled(ssid.isEmpty || editingLocked)
+            }.padding(.top, 12)
+        }
+        .font(.subheadline).disabled(editingLocked)
     }
 
     private var organizationPicker: some View {
@@ -296,6 +303,7 @@ struct NearbySetupView: View {
                 error = state.error
                 if state.error?.contains("name is already in use") == true { customizing = true }
             }
+            if state.pending && !state.wifiConnected && action == .enroll { wifiExpanded = true }
             if state.completed { error = nil; observationError = nil }
         } catch {
             if !Task.isCancelled {

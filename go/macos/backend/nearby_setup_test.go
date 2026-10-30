@@ -21,6 +21,12 @@ func (f *nearbyFake) Status(_ context.Context, nonce bool) (*pb.SetupStatusRespo
 	return &pb.SetupStatusResponse{DeviceClass: "C", LiteSupported: true}, nil
 }
 func (f *nearbyFake) Call(_ context.Context, c *pb.BluetoothCommand) (*pb.BluetoothResponse, error) {
+	if c.GetWifiStatus() != nil {
+		return &pb.BluetoothResponse{Response: &pb.BluetoothResponse_WifiStatus{WifiStatus: &pb.WifiStatusResponse{}}}, nil
+	}
+	if c.GetWifiList() != nil {
+		return &pb.BluetoothResponse{Response: &pb.BluetoothResponse_WifiList{WifiList: &pb.WifiListResponse{Networks: []*pb.WifiNetworkInfo{{Ssid: "test-network"}}}}}, nil
+	}
 	if c.GetSetupEnroll() == nil {
 		return nil, errors.New("unexpected command")
 	}
@@ -195,5 +201,21 @@ func TestNearbyUnknownMintReplyKeepsCheckingWithoutSendingEnrollment(t *testing.
 	_, _ = b.NearbyAction(s.Session, 3, "", "", "account", "org", "board")
 	if calls != 1 || f.writes != 0 {
 		t.Fatal("repeated uncertain mint or sent missing credentials")
+	}
+}
+
+func TestNearbyPendingEnrollmentStillAllowsWiFiDiscovery(t *testing.T) {
+	nearbyTestHooks(t)
+	b := new(Backend)
+	f := new(nearbyFake)
+	nearbyConnectFn = func(context.Context, string) (nearbyConnection, error) { return f, nil }
+	s, err := b.NearbyOpen("board")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.nearby.attempts["board"] = &nearbyAttempt{attempted: true, credential: &commands.DesktopNearbyCredential{DeviceID: "pending-device"}}
+	s, err = b.NearbyAction(s.Session, 1, "", "", "", "", "")
+	if err != nil || !s.Pending || len(s.Networks) != 1 || s.Networks[0] != "test-network" || f.writes != 0 {
+		t.Fatalf("pending enrollment blocked Wi-Fi scan or repeated enrollment: %+v %v", s, err)
 	}
 }

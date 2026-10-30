@@ -136,6 +136,7 @@ func (b *Backend) NearbyOpen(address string) (NearbySetupState, error) {
 		n.state.Connected = false
 		return n.snapshot(), errors.New("Update this device to support nearby enrollment")
 	}
+	n.refreshWiFi(ctx)
 	return n.snapshot(), nil
 }
 func (b *Backend) NearbyClose(session uint64) {
@@ -188,6 +189,9 @@ func (b *Backend) NearbyAction(session uint64, action int, ssid, password, accou
 			return fail(err)
 		}
 		n.state.Enrolled = state.GetEnrolled()
+		if !n.state.Enrolled {
+			n.refreshWiFi(ctx)
+		}
 	case 1:
 		r, err := n.client.Call(ctx, &pb.BluetoothCommand{Command: &pb.BluetoothCommand_WifiList{WifiList: &pb.WifiListCommand{}}})
 		if err != nil {
@@ -259,4 +263,22 @@ func (b *Backend) NearbyAction(session uint64, action int, ssid, password, accou
 		return n.snapshot(), errors.New("Unknown setup action")
 	}
 	return n.snapshot(), nil
+}
+
+// Wi-Fi status is an observation, not an enrollment prerequisite: Ethernet
+// devices can enroll without Wi-Fi. Missing status must not undo a valid link.
+func (n *nearbySetup) refreshWiFi(ctx context.Context) {
+	if n.client == nil || !n.state.Connected || n.state.Enrolled {
+		return
+	}
+	reply, err := n.client.Call(ctx, &pb.BluetoothCommand{Command: &pb.BluetoothCommand_WifiStatus{WifiStatus: &pb.WifiStatusCommand{}}})
+	if err != nil {
+		n.state.Connected = false
+		n.client.Close()
+		return
+	}
+	if wifi := reply.GetWifiStatus(); wifi != nil {
+		n.state.WiFiConnected = wifi.GetConnected()
+		n.state.SSID = wifi.GetSsid()
+	}
 }

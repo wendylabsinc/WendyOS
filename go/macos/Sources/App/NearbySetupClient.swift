@@ -87,7 +87,16 @@ extension NearbySetupSnapshot {
     func observation(hasSelection: Bool, wifiExpanded: Bool, statusAge: TimeInterval,
                      scanAge: TimeInterval) -> NearbySetupObservation {
         if completed { return .idle }
-        if pending { return .checkEnrollment }
+        if pending {
+            // Keep setup usable while Cloud is pending. In particular, an offline
+            // board must still accept Wi-Fi configuration without re-enrollment.
+            if !enrolled {
+                if wifiExpanded && !connected && statusAge >= 25 { return .reconnect }
+                if connected && statusAge >= 25 { return .status }
+                if connected && wifiExpanded && scanAge >= 20 { return .scanWiFi }
+            }
+            return .checkEnrollment
+        }
         if enrolled || attempted { return .idle }
         if !hasSelection { return .discover }
         if !connected { return .reconnect }
