@@ -43,6 +43,10 @@ func validateAppEndpoints(endpoints []AppEndpoint) error {
 	return nil
 }
 func cloneManifest(m Manifest) Manifest {
+	if m.Agent != nil {
+		agent := *m.Agent
+		m.Agent = &agent
+	}
 	if m.Owner != nil {
 		owner := *m.Owner
 		owner.Hashes = make([][]byte, len(m.Owner.Hashes))

@@ -88,6 +88,10 @@ func runConfiguredWithNode(parent context.Context, configDir string, id TCPIdent
 	if err != nil {
 		return err
 	}
+	if id.Agent != nil {
+		metadata := *id.Agent
+		node.advertisement.Agent = &metadata
+	}
 	if listener != nil {
 		go func() { <-ctx.Done(); listener.Close() }()
 	}

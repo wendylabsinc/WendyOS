@@ -741,3 +741,39 @@ print("python print while importing")
 
 if __name__ == "__main__":
     unittest.main()
+
+class ClassificationTests(unittest.TestCase):
+    def test_whole_image_labels_threshold_and_no_boxes(self):
+        from worker import classification_predictions
+        result = classification_predictions([.7, .95, .2, float('nan')],
+                                            {0: 'cat, tabby', 1: 'dog', 2: 'bird', 3: 'bad'},
+                                            {'cat, tabby', 'dog', 'bird', 'bad'}, .5)
+        self.assertEqual(result, [{'label': 'dog', 'score': .95}, {'label': 'cat, tabby', 'score': .7}])
+        self.assertTrue(all('box' not in item for item in result))
+
+    def test_classifier_uses_safe_loader_and_probability_output(self):
+        import contextlib
+        import types
+        from unittest.mock import MagicMock, patch
+        from worker import Detector
+        model = MagicMock()
+        model.eval.return_value = model
+        model.config = types.SimpleNamespace(id2label={0: 'cat', 1: 'dog'}, problem_type=None)
+        model.return_value.logits.__getitem__.return_value.softmax.return_value.tolist.return_value = [.9, .1]
+        processor = MagicMock(return_value={'pixels': object()})
+        transformers = types.SimpleNamespace(
+            AutoConfig=MagicMock(), AutoImageProcessor=MagicMock(),
+            AutoModelForObjectDetection=MagicMock(), AutoModelForImageClassification=MagicMock())
+        transformers.AutoConfig.from_pretrained.return_value = model.config
+        transformers.AutoImageProcessor.from_pretrained.return_value = processor
+        transformers.AutoModelForImageClassification.from_pretrained.return_value = model
+        torch = types.SimpleNamespace(inference_mode=contextlib.nullcontext, __version__="test")
+        with patch.dict('sys.modules', {'torch': torch, 'transformers': transformers}):
+            detector = Detector({'task': 'image-classification', 'model': 'google/test',
+                                 'revision': 'a' * 40, 'labels': ['cat'], 'threshold': .5})
+            self.assertEqual(detector(MagicMock()), [{'label': 'cat', 'score': .9}])
+        transformers.AutoModelForObjectDetection.from_pretrained.assert_not_called()
+        args = transformers.AutoModelForImageClassification.from_pretrained.call_args.kwargs
+        self.assertEqual(args['revision'], 'a' * 40)
+        self.assertTrue(args['use_safetensors'])
+        self.assertFalse(args['trust_remote_code'])

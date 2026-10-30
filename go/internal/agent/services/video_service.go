@@ -528,6 +528,8 @@ type deviceHub struct {
 	rawState  rawTapState
 	rawReason func() string // memoised; see rawNotOffered
 	rawFormat *agentpb.RawFormat
+	// Set before capture starts; immutable for this producer's lifetime.
+	thermalProfile *agentpb.ThermalCamera
 }
 
 // maxSubscribersPerHub caps the number of concurrent gRPC streams sharing one
@@ -820,6 +822,7 @@ func (h *deviceHub) wantRaw() bool {
 
 // publishRaw hands one raw capture frame to the hub's raw subscribers.
 func (h *deviceHub) publishRaw(data []byte, tsNs uint64, format *agentpb.RawFormat) bool {
+	format = describeThermalCapture(h.thermalProfile, format)
 	return h.broadcast(&videoFrame{data: data, tsNs: tsNs, codec: agentpb.VideoCodec_VIDEO_CODEC_RAW, rawFmt: format})
 }
 
@@ -952,7 +955,8 @@ type VideoService struct {
 	// sensorFrames carries SensorLink camera frames to the hub in-process, so
 	// the hub never opens an MCU-band node (see sensorlink_camera_feed.go). Nil
 	// in tests and builds without sensor pairing, which read the node as before.
-	sensorFrames *SensorFrameFeed
+	sensorFrames           *SensorFrameFeed
+	sensorCameraIdentities func() map[uint32]string
 
 	// twoPlaneState holds the two-plane camera data path's nodes and pumps.
 	twoPlaneState
@@ -1244,6 +1248,10 @@ func (s *VideoService) listCameras(ctx context.Context) ([]*agentpb.VideoDevice,
 	if s.readStableNames != nil {
 		stable = s.readStableNames()
 	}
+	var sensorIdentities map[uint32]string
+	if s.sensorCameraIdentities != nil {
+		sensorIdentities = s.sensorCameraIdentities()
+	}
 	var (
 		devices       []*agentpb.VideoDevice
 		csiDeviceIdxs []int
@@ -1294,6 +1302,10 @@ func (s *VideoService) listCameras(ctx context.Context) ([]*agentpb.VideoDevice,
 		// the numeric id still addresses it, it is just not stable across a
 		// reboot.
 		dev.StableId = stable[path].stableID()
+		dev.Thermal = probeThermalCamera(path, name)
+		if identity := sensorIdentities[uint32(id)]; identity != "" {
+			dev.StableId = identity
+		}
 		if transport == camera.TransportCSI {
 			csiDeviceIdxs = append(csiDeviceIdxs, len(devices))
 		}
@@ -1319,9 +1331,17 @@ func (s *VideoService) listROS2Cameras() []*agentpb.VideoDevice {
 	}
 	cameras := s.ros2Cameras.List()
 	out := make([]*agentpb.VideoDevice, 0, len(cameras))
+	names := make(map[string]int)
 	for _, cam := range cameras {
+		names[cam.Name]++
+	}
+	for _, cam := range cameras {
+		name := cam.Name
+		if names[name] > 1 {
+			name = fmt.Sprintf("%s (%s, domain %d)", name, cam.Graph, cam.DomainID)
+		}
 		out = append(out, &agentpb.VideoDevice{
-			Id: cam.ID, Name: cam.Name, Path: cam.Path,
+			Id: cam.ID, Name: name, Path: cam.Path, StableId: cam.StableID,
 			Transport: agentpb.VideoTransport_VIDEO_TRANSPORT_ROS2,
 			Topic:     cam.Topic, Online: true,
 		})
@@ -1352,6 +1372,9 @@ func (s *VideoService) listIPCameras() []*agentpb.VideoDevice {
 			Mac:            c.MAC,
 			HasCredentials: s.credentials != nil && s.credentials.Has(c.MAC),
 			Online:         c.Online,
+		}
+		if c.MAC != "" {
+			dev.StableId = "ip-mac:" + c.MAC
 		}
 		if s.loopback != nil {
 			if path, ok := s.loopback.NodePath(c.ID); ok {
@@ -2077,6 +2100,8 @@ func (s *VideoService) runProducer(ctx context.Context, h *deviceHub, path strin
 // captureNode captures a camera by opening its /dev/video node.
 func (s *VideoService) captureNode(ctx context.Context, broadcast func([]byte, frameTimestamp, agentpb.VideoCodec) bool, path string, req *agentpb.StreamVideoRequest, h *deviceHub) error {
 	transport, _ := s.classifyTransport(filepath.Base(path))
+	name, _ := s.readDeviceName(filepath.Base(path))
+	h.thermalProfile = probeThermalCamera(path, name)
 	libcameraID := s.lookupLibcameraID(ctx, transport)
 
 	// Re-assert any persisted exposure/gain before the pipeline opens the
@@ -2167,6 +2192,9 @@ const gstInspectTimeout = 10 * time.Second
 // firstFrameTimeout bounds the wait for a pipeline's first chunk. Generous because it must
 // clear the whole cold start: element listing, PipeWire lookup, camera and encoder warm-up.
 const firstFrameTimeout = 20 * time.Second
+
+// cameraIdleTimeout also covers a USB capture that stalls after startup.
+const cameraIdleTimeout = 10 * time.Second
 
 // pipeWireProbeTimeout bounds the format probe below. A raw node yields nothing
 // to a JPEG request, so the probe ends by deadline rather than by error.
@@ -2333,6 +2361,43 @@ func (s *VideoService) streamDeviceID(req *agentpb.StreamVideoRequest) (uint32, 
 	if stableID == "" {
 		return req.GetDeviceId(), nil
 	}
+	if strings.HasPrefix(stableID, "ros2:") {
+		if s.ros2Cameras == nil {
+			return 0, status.Error(codes.Unimplemented, "ROS 2 camera identities are unavailable on this agent")
+		}
+		return resolveROSCameraID(s.ros2Cameras.List(), stableID)
+	}
+	if strings.HasPrefix(stableID, "ip-mac:") {
+		if s.registry == nil {
+			return 0, status.Error(codes.Unimplemented, "network camera identities are unavailable on this agent")
+		}
+		for _, camera := range s.registry.List() {
+			if camera.MAC != "" && "ip-mac:"+camera.MAC == stableID {
+				return camera.ID, nil
+			}
+		}
+		return 0, status.Error(codes.NotFound, "network camera identity is not registered")
+	}
+	if strings.HasPrefix(stableID, "sensorlink:") {
+		if s.sensorCameraIdentities == nil {
+			return 0, status.Error(codes.Unimplemented, "SensorLink camera identities are unavailable on this agent")
+		}
+		var matched uint32
+		found := false
+		for id, identity := range s.sensorCameraIdentities() {
+			if identity != stableID {
+				continue
+			}
+			if found {
+				return 0, status.Error(codes.FailedPrecondition, "SensorLink camera identity is ambiguous")
+			}
+			matched, found = id, true
+		}
+		if !found {
+			return 0, status.Error(codes.NotFound, "SensorLink camera is not mounted; reconnect its source")
+		}
+		return matched, nil
+	}
 	if s.readStableNames == nil {
 		return 0, status.Errorf(codes.Unimplemented,
 			"stable_id is not supported on this agent")
@@ -2438,14 +2503,16 @@ func (s *VideoService) StreamVideo(req *agentpb.StreamVideoRequest, stream grpc.
 	}
 	defer h.unsubscribe(id)
 
-	return s.pumpFrames(stream, h, id, ch)
+	return s.pumpFrames(stream, h, id, ch, req.GetAdaptiveFramerate())
 }
 
 // pumpFrames forwards hub frames to a gRPC stream until the stream or the
 // producer ends. Local and network cameras share it, so subscriber teardown and
 // terminal-error reporting behave identically for both.
-func (s *VideoService) pumpFrames(stream grpc.ServerStreamingServer[agentpb.VideoFrame], h *deviceHub, id int, ch chan *videoFrame) error {
+func (s *VideoService) pumpFrames(stream grpc.ServerStreamingServer[agentpb.VideoFrame], h *deviceHub, id int, ch chan *videoFrame, adaptive ...bool) error {
 	ctx := stream.Context()
+	var pacer rawFramePacer
+	adapt := len(adaptive) > 0 && adaptive[0]
 	for {
 		select {
 		case <-ctx.Done():
@@ -2479,6 +2546,19 @@ func (s *VideoService) pumpFrames(stream grpc.ServerStreamingServer[agentpb.Vide
 				}
 				return status.Errorf(codes.Internal, "video producer stopped unexpectedly")
 			}
+			if adapt && frame.codec == agentpb.VideoCodec_VIDEO_CODEC_RAW {
+				// Drain only the existing bounded queue. A slow live viewer wants
+				// the newest complete frame, not a backlog of stale temperatures.
+				for remaining := len(ch); remaining > 0; remaining-- {
+					if newer, open := <-ch; open {
+						frame = newer
+					}
+				}
+				if !pacer.allow(time.Now()) {
+					continue
+				}
+			}
+			started := time.Now()
 			// frame.data is an immutable, per-frame allocation produced by the
 			// capture loop and never modified after broadcast(). stream.Send()
 			// serialises the proto synchronously (marshal → TLS write) before
@@ -2489,8 +2569,12 @@ func (s *VideoService) pumpFrames(stream grpc.ServerStreamingServer[agentpb.Vide
 				TimestampNs: frame.tsNs,
 				Codec:       frame.codec,
 				RawFormat:   frame.rawFmt,
+				RawExtrema:  rawFrameExtrema(frame),
 			}); err != nil {
 				return err
+			}
+			if adapt && frame.codec == agentpb.VideoCodec_VIDEO_CODEC_RAW {
+				pacer.sent(started, time.Now())
 			}
 		}
 	}
@@ -3181,40 +3265,58 @@ func (s *VideoService) runCameraPipeline(ctx context.Context, broadcast func([]b
 		}
 	}()
 
-	// A mismatched pipeline stalls rather than fails: gst stays alive producing nothing and
-	// the read blocks on a pipe with no deadline, so `camera view` hung with no frame and no
-	// error. Kept under the dashboard player's 25s budget so this error wins that race.
-	var timedOut atomic.Bool
-	firstChunk := time.AfterFunc(firstFrameTimeout, func() {
-		timedOut.Store(true)
-		if cmd.Process != nil {
-			cmd.Process.Kill() //nolint:errcheck
-		}
-	})
-	defer firstChunk.Stop()
-
-	// Plain bool, not atomic: the callback runs on this goroutine's read loop.
+	// StdoutPipe is an os.Pipe. Bound every read, including after startup:
+	// a UVC transfer failure can leave gst alive with both output pipes silent.
+	// Returning on timeout runs the teardown above and releases the camera so
+	// subscribers can reconnect, including an app holding a raw subscription.
+	pipe, ok := stdout.(*os.File)
+	if !ok {
+		return status.Error(codes.Internal, "GStreamer output does not support read deadlines")
+	}
+	reader := &cameraPipeReader{pipe: pipe, timeout: firstFrameTimeout, idleTimeout: cameraIdleTimeout}
 	sawChunk := false
-	readErr := pumpEncodedStream(ctx, stdout, enc.codec, broadcast, func() {
+	readErr := pumpEncodedStream(ctx, reader, enc.codec, broadcast, func() {
 		sawChunk = true
-		firstChunk.Stop()
 	})
-	return gstStreamEnd(readErr, timedOut.Load(), sawChunk, ctx.Err())
+	return gstStreamEnd(readErr, errors.Is(readErr, os.ErrDeadlineExceeded), sawChunk, ctx.Err())
 }
 
-// gstStreamEnd maps a finished read loop to a gRPC status. The timeout is
-// checked before the read outcome because enforcing it kills the producer, which
-// ends the read in EOF and so looks identical to a clean exit.
+// cameraPipeReader gives startup a longer budget, then bounds each gap in
+// output. Deadlines belong to the blocking read, so a stale timer callback
+// cannot kill a pipeline that has just delivered another chunk.
+type cameraPipeReader struct {
+	pipe        *os.File
+	timeout     time.Duration
+	idleTimeout time.Duration
+}
+
+func (r *cameraPipeReader) Read(p []byte) (int, error) {
+	if err := r.pipe.SetReadDeadline(time.Now().Add(r.timeout)); err != nil {
+		return 0, err
+	}
+	n, err := r.pipe.Read(p)
+	if n > 0 {
+		r.timeout = r.idleTimeout
+	}
+	return n, err
+}
+
+// gstStreamEnd distinguishes startup failure from a capture that stopped
+// delivering video. Cancellation takes precedence over either timeout.
 func gstStreamEnd(readErr error, timedOut, sawChunk bool, ctxErr error) error {
-	if timedOut && !sawChunk {
+	if ctxErr != nil {
+		return ctxErr
+	}
+	if timedOut {
+		if sawChunk {
+			return status.Errorf(codes.DeadlineExceeded,
+				"camera stopped producing video for %s; reconnect to restart capture", cameraIdleTimeout)
+		}
 		return status.Errorf(codes.DeadlineExceeded,
 			"camera produced no video within %s", firstFrameTimeout)
 	}
 	if readErr == nil {
 		return nil
-	}
-	if ctxErr != nil {
-		return ctxErr
 	}
 	return status.Errorf(codes.Internal, "failed to read GStreamer output: %v", readErr)
 }
@@ -3507,6 +3609,10 @@ func planGStreamerPipeline(gstPath, devicePath string, req *agentpb.StreamVideoR
 	// buildSourceElement, so it is not subject to the devicePath/encoder check above.
 	src := buildSourceElement(devicePath, transport, libcameraID, pw, available)
 	usingPipeWire := strings.HasPrefix(src, "pipewiresrc")
+	var thermalCapture *agentpb.ThermalCamera
+	if strings.HasPrefix(src, "v4l2src") {
+		thermalCapture = thermalCaptureProfile(devicePath)
+	}
 	// GOP is in frames. On the PipeWire path videorate only caps the rate, so a
 	// graph running slower than requested spaces keyframes further apart in time.
 	gop := keyframeIntervalFrames(req.GetFramerate())
@@ -3558,7 +3664,9 @@ func planGStreamerPipeline(gstPath, devicePath string, req *agentpb.StreamVideoR
 				// instead of being refused because a viewer already pinned the plain
 				// mode. Only for a true default: a caller naming a size gets that size.
 				if req.GetWidth() == 0 && req.GetHeight() == 0 && available["videocrop"] {
-					if sw, sh := stackedModeAbove(devicePath, capW, capH); sh > 0 {
+					if thermalCapture != nil {
+						capW, capH = thermalCapture.CaptureWidth, thermalCapture.CaptureHeight
+					} else if sw, sh := stackedModeAbove(devicePath, capW, capH); sh > 0 {
 						capW, capH = sw, sh
 					}
 				}
@@ -3649,7 +3757,9 @@ func planGStreamerPipeline(gstPath, devicePath string, req *agentpb.StreamVideoR
 	// render as a stripe of noise). Encoded subscribers get the picture rows; the
 	// raw tap, branched off above, keeps the whole frame for analytic readers.
 	if rawCapture && capW > 0 && capH > 0 && available["videocrop"] {
-		if rows := stackedMetadataRows(devicePath, capW, capH); rows > 0 {
+		if top, bottom, ok := thermalPreviewCrop(thermalCapture, capW, capH); ok {
+			stages = append(stages, fmt.Sprintf("videocrop top=%d bottom=%d", top, bottom))
+		} else if rows := stackedMetadataRows(devicePath, capW, capH); rows > 0 {
 			edge := "bottom"
 			if thermalMetadataRowsOnTop {
 				edge = "top"

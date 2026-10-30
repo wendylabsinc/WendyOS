@@ -43,6 +43,7 @@ type TCPIdentity struct {
 	AgentPort               uint16
 	AppEndpoints            []AppEndpoint // supplied only for ready local listeners
 	Certificate, Chain, Key string
+	Agent                   *AgentMetadata
 }
 
 // Devices returns the parsed peers of a config loaded for self.
@@ -77,13 +78,26 @@ func LoadTCPConfig(path string, self meshid.Device) (*TCPConfig, error) {
 	}
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()
-	var cfg TCPConfig
-	if err := dec.Decode(&cfg); err != nil {
+	// Accept retired fields from pre-upgrade files only at the disk boundary.
+	// They no longer enable a carrier and are omitted when settings are saved.
+	var stored struct {
+		TCPConfig
+		LeafListen   json.RawMessage `json:"leafListen"`
+		LeafBLEPeers json.RawMessage `json:"leafBLEPeers"`
+		LeafTimeURL  json.RawMessage `json:"leafTimeURL"`
+	}
+	if err := dec.Decode(&stored); err != nil {
 		return nil, fmt.Errorf("wendy net config: %w", err)
 	}
 	var extra any
 	if err := dec.Decode(&extra); !errors.Is(err, io.EOF) {
 		return nil, errors.New("wendy net config has trailing data")
+	}
+	cfg := stored.TCPConfig
+	retired := len(stored.LeafListen) != 0 || len(stored.LeafBLEPeers) != 0 || len(stored.LeafTimeURL) != 0
+	if retired && cfg.Listen == "" && len(cfg.Peers) == 0 && !cfg.NAN && !cfg.BLE && !cfg.Ethernet && !cfg.InfrastructureWiFi && cfg.TLSListen == "" {
+		// A file containing only retired carriers is equivalent to no config.
+		return nil, nil
 	}
 	if cfg.Listen == "" {
 		if (!cfg.NAN && !cfg.BLE && !cfg.Ethernet && !cfg.InfrastructureWiFi && cfg.TLSListen == "") || len(cfg.Peers) != 0 {
