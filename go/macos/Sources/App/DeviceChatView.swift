@@ -265,9 +265,26 @@ struct DeviceChatView: View {
     @ObservedObject var chat: DeviceChatModel
     @State private var showingLibrary = false
     @State private var showingConnection = false
+    @State private var showingConnectionDetails = false
     private var modelName: String { chat.models.first { $0.id == chat.model }?.displayName ?? ChatModelOption.readableName(chat.model) }
     var body: some View {
-        actionContent.task { await actions.run() }
+        // The transcript and multiline composer must use the detail pane's
+        // viewport. Letting their ideal sizes drive the hosting window can
+        // repeatedly grow and remeasure the window when this tab appears.
+        GeometryReader { viewport in
+            actionContent.frame(width: viewport.size.width, height: viewport.size.height)
+        }.task { await actions.run() }
+            .sheet(isPresented: $showingConnectionDetails) {
+                VStack(alignment: .leading, spacing: 16) {
+                    Text("Connection details").font(.title2)
+                    ScrollView {
+                        Text(PresentedFailure(chat.error ?? chat.unavailableReason).details)
+                            .font(.caption.monospaced()).textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }.frame(height: 260)
+                    HStack { Spacer(); Button("Done") { showingConnectionDetails = false }.keyboardShortcut(.defaultAction) }
+                }.padding(24).frame(width: 560)
+            }
     }
 
     @ViewBuilder private var actionContent: some View {
@@ -428,7 +445,6 @@ struct DeviceChatView: View {
 
     private var connectionNotice: some View {
         let unavailable = !chat.unavailableReason.isEmpty
-        let details = chat.error ?? chat.unavailableReason
         let title = unavailable ? "Model server unavailable" : chat.messages.isEmpty ? "Could not load models" : "Chat request failed"
         return HStack(alignment: .top, spacing: 12) {
             Image(systemName: "exclamationmark.triangle.fill")
@@ -445,13 +461,8 @@ struct DeviceChatView: View {
                     Button("Connection settings") { showingConnection = true }
                         .buttonStyle(.borderless).disabled(chat.streaming)
                 }
-                DisclosureGroup("Technical details") {
-                    ScrollView {
-                        Text(details).font(.caption.monospaced()).textSelection(.enabled)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }.frame(maxHeight: 140).padding(.top, 6)
-                }.font(.callout)
+                Button("Technical details") { showingConnectionDetails = true }
+                    .font(.callout)
             }.frame(maxWidth: .infinity, alignment: .leading)
         }
         .padding(16)

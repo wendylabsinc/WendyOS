@@ -69,7 +69,6 @@ final class AppModel: ObservableObject {
     @Published var logError: String?
     @Published var vpnUpdating = false
     @Published var vpnError: String?
-    @Published var selectedRoutes: Set<String> = []
     @Published var loginURL: URL?
     #if os(iOS)
     @Published var webpageURL: URL?
@@ -219,6 +218,26 @@ final class AppModel: ObservableObject {
             canForgetIdentity = (error as? WendyError)?.canForgetIdentity ?? false
             if connected?.id == device.id { connected = nil; connectedLite = false }
             failedConnection = device
+            let raw = error.localizedDescription
+            let denied = raw.lowercased().contains("no route to host") ? await LocalNetworkAccess.denied(selector: device.selector) : false
+            guard connectionAttempt == attempt, !Task.isCancelled else { return }
+            detailError = denied ? "Local network access denied by macOS. " + raw : raw
+        }
+    }
+
+    func retryConnection(_ device: Device) async {
+        let previous = connectionAttempt
+        connectingDevice = device
+        detailError = nil
+        do {
+            let refreshed = try await client.nearby()
+            guard connectionAttempt == previous, !Task.isCancelled else { return }
+            nearby = refreshed
+            let current = refreshed.first { $0.id == device.id } ?? device
+            await connect(current, force: true)
+        } catch {
+            guard connectionAttempt == previous, !Task.isCancelled else { return }
+            connectingDevice = nil
             detailError = error.localizedDescription
         }
     }
@@ -438,13 +457,11 @@ final class AppModel: ObservableObject {
         vpnError = nil
         // Check prerequisites before stopping a working tunnel or opening Go relays.
         if let issue = vpn.setupIssue { vpnError = issue; return }
-        let routes = (nearby + cloud).filter { selectedRoutes.contains($0.id) && $0.routable }
-        guard !routes.isEmpty else { vpnError = "Select at least one device, then turn on VPN."; return }
         vpnUpdating = true
         defer { vpnUpdating = false }
         do {
             try await vpn.stop()
-            let config = try await client.startVPN(routes: routes.map { VPNRouteSelection(selector: $0.selector, name: $0.title) })
+            let config = try await client.startVPN(routes: [], gateway: "auto")
             do { try await vpn.start(config) }
             catch { try? await client.stopVPN(); throw error }
         } catch {

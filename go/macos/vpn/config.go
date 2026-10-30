@@ -6,9 +6,12 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"github.com/wendylabsinc/wendy/go/internal/agent/meshsharing"
+	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
 	"net"
 	"net/netip"
 	"net/url"
+	"sort"
 	"strings"
 )
 
@@ -24,23 +27,50 @@ type Route struct {
 	Host     string `json:"host"`
 }
 type Config struct {
-	Endpoint string  `json:"endpoint"`
-	Token    string  `json:"token"`
-	Routes   []Route `json:"routes"`
+	BootstrapDirectory string                      `json:"bootstrapDirectory,omitempty"`
+	Gateway            string                      `json:"gateway,omitempty"`
+	Endpoint           string                      `json:"endpoint"`
+	Token              string                      `json:"token"`
+	Routes             []Route                     `json:"routes"`
+	Internet           *meshsharing.InternetConfig `json:"internet,omitempty"`
 }
 
 func BuildRoutes(input []Route) ([]Route, error) {
 	if len(input) == 0 || len(input) > 1024 {
 		return nil, errors.New("select between 1 and 1024 mesh or cloud devices")
 	}
-	out := make([]Route, 0, len(input))
+	out := make([]Route, len(input))
+	order := make([]int, len(input))
+	for i := range input {
+		order[i] = i
+	}
+	sort.Slice(order, func(i, j int) bool { return input[order[i]].Selector < input[order[j]].Selector })
 	used := map[uint16]bool{}
 	hosts := map[string]bool{}
 	seen := map[string]bool{}
-	for _, r := range input {
+	for _, index := range order {
+		r := input[index]
 		var key, zone string
 		if strings.HasPrefix(r.Selector, "mesh:") {
 			key = strings.TrimPrefix(r.Selector, "mesh:")
+			if strings.HasPrefix(r.Selector, "mesh://") {
+				u, err := url.Parse(r.Selector)
+				if err != nil || u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.RawPath != "" || u.ForceQuery {
+					return nil, errors.New("invalid mesh selector")
+				}
+				tenant, err := meshid.ParseTenant(u.Host)
+				if err != nil {
+					return nil, err
+				}
+				device, err := meshid.ParseDevice(tenant, strings.TrimPrefix(u.Path, "/"))
+				if err != nil {
+					return nil, err
+				}
+				if r.Selector != "mesh://"+tenant.String()+"/"+device.UUID().String() {
+					return nil, errors.New("invalid mesh selector")
+				}
+				key = device.UUID().String()
+			}
 			zone = "mesh.wendy.dev"
 		} else if strings.HasPrefix(r.Selector, "cloud://") {
 			u, err := url.Parse(r.Selector)
@@ -73,9 +103,13 @@ func BuildRoutes(input []Route) ([]Route, error) {
 		if id == 0 || id == 65535 {
 			id = 1
 		}
-		// Never silently change a previously advertised address on a collision.
-		if used[id] {
-			return nil, errors.New("device address collision; select fewer devices")
+		// Allocate colliding hashes in selector order so discovery ordering
+		// cannot change their addresses, and every device can be included.
+		for used[id] {
+			id++
+			if id == 65535 || id == 0 {
+				id = 1
+			}
 		}
 		used[id] = true
 		r.Address = fmt.Sprintf("10.99.%d.%d", id>>8, id&255)
@@ -84,7 +118,7 @@ func BuildRoutes(input []Route) ([]Route, error) {
 			return nil, errors.New("DNS name collision across cloud organizations")
 		}
 		hosts[r.Host] = true
-		out = append(out, r)
+		out[index] = r
 	}
 	return out, nil
 }
@@ -95,6 +129,12 @@ func (c Config) Validate() error {
 	}
 	if len(c.Token) != 64 {
 		return errors.New("missing relay credential")
+	}
+	if c.Internet != nil && !c.Internet.Valid() {
+		return errors.New("invalid internet lease")
+	}
+	if len(c.Routes) == 0 {
+		return nil
 	}
 	routes, err := BuildRoutes(c.Routes)
 	if err != nil {

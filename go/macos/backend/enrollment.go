@@ -33,7 +33,7 @@ func (b *Backend) DeviceEnrollment(session uint64) (*commands.DesktopEnrollment,
 		if !state.Enrolled && (state.GetDeviceId() != "" || state.GetTenantId() != "") {
 			return nil, errors.New("this device has a pending enrollment; allow it to finish before checking again")
 		}
-		return &commands.DesktopEnrollment{Enrolled: state.Enrolled, OrganizationID: state.GetTenantId()}, nil
+		return &commands.DesktopEnrollment{Enrolled: state.Enrolled, OrganizationID: state.GetTenantId(), DeviceID: state.GetDeviceId()}, nil
 	}
 	conn, err := b.connection(session)
 	if err != nil {

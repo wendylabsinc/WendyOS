@@ -93,7 +93,7 @@ func TestTypedEntryPointsRejectInvalidState(t *testing.T) {
 		t.Fatal("apps without connection succeeded")
 	}
 	WDAppsFree(apps)
-	vpn := WDStartVPN(nil, 0)
+	vpn := WDStartVPN(nil, 0, nil)
 	if vpn.status.message == nil {
 		t.Fatal("empty routes accepted")
 	}

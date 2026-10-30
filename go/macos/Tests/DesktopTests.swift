@@ -375,6 +375,13 @@ final class DesktopTests: XCTestCase {
         XCTAssertEqual(failure.details, cause)
         XCTAssertFalse(failure.message.contains("pinned"))
     }
+    func testLocalNetworkDenialOffersPermissionRecovery() {
+        let failure = PresentedFailure("Local network access denied by macOS. no route to host")
+        XCTAssertEqual(failure.title, "Allow local network access")
+        XCTAssertTrue(failure.message.contains("Local Network settings"))
+        XCTAssertFalse(failure.message.contains("identity"))
+    }
+
     func testChangedIdentityHasActionableExplanation() {
         let failure = PresentedFailure("Connection blocked: device ci-iq8.local identity changed.")
         XCTAssertTrue(failure.message.contains("forget its saved identity"))

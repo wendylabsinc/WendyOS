@@ -50,7 +50,7 @@ typedef struct {
 } WDCameraAlignmentInput;
 typedef struct { char *selector, *name; } WDRouteInput;
 typedef struct { char *selector, *name, *address, *host; } WDRoute;
-typedef struct { char *endpoint, *token; WDRoute *routes; size_t route_count; } WDVPNConfig;
+typedef struct { char *endpoint, *token; WDRoute *routes; size_t route_count; char *internet_address4, *internet_address6; int internet_mtu; char *bootstrap_directory, *gateway; } WDVPNConfig;
 typedef enum { WD_LOG_UNKNOWN, WD_LOG_TRACE, WD_LOG_DEBUG, WD_LOG_INFO, WD_LOG_WARN, WD_LOG_ERROR, WD_LOG_FATAL } WDLogLevel;
 typedef struct { uint64_t timestamp_ns; WDLogLevel level; char *body, *app, *service; } WDLogRecord;
 // Thermal image bytes are packed RGBA8 from the same frame as these extrema.

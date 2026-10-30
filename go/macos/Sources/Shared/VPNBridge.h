@@ -3,6 +3,8 @@
 #include "BridgeTypes.h"
 char *WVPNStart(WDVPNConfig *config);
 void WVPNStop(void);
+char *WVPNConfiguration(void);
+char *WVPNRefresh(void);
 int WVPNHealthy(void);
 void WVPNWrite(void *bytes, int length);
 int WVPNRead(void *bytes, int capacity);

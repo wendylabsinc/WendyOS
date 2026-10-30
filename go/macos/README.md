@@ -10,7 +10,7 @@ On macOS, choose **+ → Set up nearby device** in the toolbar. On iOS, choose *
 
 The setup sheet remains open when advertisements disappear. **Retry connection** opens a fresh encrypted session. Once a Cloud mint may have happened, the app retains that attempt for the same Bluetooth address until the app exits and prevents another mint. **Check enrollment status** verifies the expected device UUID and organization using fresh Cloud presence; a saved Lite configuration alone is not success. A device may start enrollment without Wi-Fi, but it needs a supported network path to complete issuance and appear online. If the app quits during an uncertain attempt, inspect the organization's Cloud device list before starting again.
 
-The app embeds a packet-tunnel Network Extension. Select mesh or cloud devices in the toolbar VPN popover or the macOS menu bar, then enable the VPN to resolve their Wendy DNS names and route TCP connections from other Mac apps.
+The macOS and iOS apps embed packet-tunnel Network Extensions. Select mesh or cloud devices in the VPN controls to resolve their Wendy DNS names and route TCP connections from other apps. To use a device's shared internet connection, choose it under **Internet via mesh**. The donor must advertise an enabled uplink and run an agent with operator lease protocol `wendy-mesh-internet/2`. Device-only routing remains the default.
 
 ## Build and open
 
@@ -304,9 +304,16 @@ Chat runs the Wendy MCP server in-process, with bundled skills, tool approvals,
 and context-scoped MCP request attribution. Models still run on the selected edge
 device, not on the phone. The iOS app does not expose host shell execution.
 
-LAN and authenticated Cloud transports are supported. The detached mesh worker,
-system-wide VPN extension, USB flashing, and host simulator management are not
-ported to iOS. Tools requiring those desktop facilities cannot run there. Keep
+LAN, authenticated Cloud, and mesh transports are supported. On iOS the mesh
+broker runs in-process. App-to-extension broker IPC uses mutually authenticated
+loopback TLS, with an ephemeral identity in the private App Group container;
+this avoids iOS Unix socket path limits. When VPN starts, the app drains its broker and the packet
+tunnel extension owns the shared profile and transport until VPN stops. The
+extension can continue while the app is suspended. Both targets require the
+`group.dev.wendy.mobile` App Group and `packet-tunnel-provider` entitlement in
+their provisioning profiles. Existing local configuration is copied into the
+shared container on first launch with these entitlements. USB flashing and host
+simulator management remain desktop-only. Keep
 the app in the foreground for device operations; camera subscriptions stop when
 it enters the background and resume when the camera screen becomes active.
 
@@ -375,17 +382,24 @@ The sidebar has Nearby and Cloud navigator tabs, a local search field and an ema
 
 ## Network behavior
 
-- The extension installs a `/32` route for each selected synthetic address in `10.99.0.0/16`, plus the DNS resolver `100.64.0.53`.
-- Split DNS applies only to `mesh.wendy.dev` and `cloud.wendy.dev`. Names are `device-<device-id>.mesh.wendy.dev` or `device-<device-id>.cloud.wendy.dev`. Right-click a device in the VPN popover to copy its hostname or address.
-- The address is a deterministic hash of the full selector. Unlike the older companion's numeric mapping, this supports UUID devices and cloud endpoint/organization identity. Conflicting addresses or names are rejected instead of silently reassigned.
-- DNS supports UDP and TCP. A queries for selected devices receive their address, AAAA queries receive no data, and unselected names receive NXDOMAIN. Public names in the matched zones, including the cloud dashboard apex, are refused by this resolver. macOS 26 DNS failover lets them use the system resolver. Other zones are not selected by the split-DNS settings.
-- TCP flows terminate in gVisor, then pass through an authenticated loopback relay to the existing mesh or cloud port dialer. Routes pin a transport; selecting Cloud does not silently switch to LAN.
+- The extension installs a `/32` route for each discovered device address in `10.99.0.0/16`, plus the DNS resolver `100.64.0.53`.
+- Split DNS applies only to `mesh.wendy.dev` and `cloud.wendy.dev`. Names are `device-<device-id>.mesh.wendy.dev` or `device-<device-id>.cloud.wendy.dev`. The VPN popover lists mesh devices without selection controls.
+- The address is a deterministic hash of the full selector. Unlike the older companion's numeric mapping, this supports UUID devices and cloud endpoint/organization identity. Hash collisions are allocated in selector order so all discovered devices can be included. Conflicting DNS names are rejected.
+- DNS supports UDP and TCP. A queries for available devices receive their address, AAAA queries receive no data, and unknown device names receive NXDOMAIN. Public names in the matched zones, including the cloud dashboard apex, are refused by this resolver. macOS 26 DNS failover lets them use the system resolver. Other zones are not selected by the split-DNS settings.
+- TCP flows terminate in gVisor, then pass through an authenticated loopback relay to the existing mesh or cloud port dialer. Automatic device routes use the authenticated mesh directory. The internal relay also supports explicit cloud routes for existing callers.
 - Cloud app ports require Cloud's signed `tcp-<port>` tunnel services. Older Cloud servers return an unsupported-service error, which appears in the VPN popover. Rebuilding the desktop cannot add a missing Cloud service, and authorization failures never trigger a fallback.
-- IPv4 ICMP echo requests to selected device addresses trigger an authenticated agent version RPC over the pinned mesh/cloud connection, as in `wendy cloud ping`. An echo reply is emitted only after that device responds. The VPN reuses one probe connection per selected device, but every echo requires a new RPC response. The first echo includes connection establishment; later echoes measure the RPC over that connection. A failed probe discards the connection so the next echo reconnects. Stopping the VPN, applying a new selection, or quitting the app closes these connections. Identifier, sequence and payload are preserved. This checks agent reachability, not an application port or raw ICMP forwarding on the remote OS. Probes time out after five seconds, with eight workers and a bounded queue. Invalid checksums, unselected destinations, fragmented echoes and packets larger than the 1400-byte tunnel MTU are dropped.
-- A fresh random relay credential travels in the ephemeral VPN start options. It is not saved in the VPN profile. The extension never receives the cloud access token or operator private key.
+- IPv4 ICMP echo requests to selected device addresses trigger an authenticated agent version RPC over the pinned mesh/cloud connection, as in `wendy cloud ping`. An echo reply is emitted only after that device responds. The VPN reuses one probe connection per selected device, but every echo requires a new RPC response. The first echo includes connection establishment; later echoes measure the RPC over that connection. A failed probe discards the connection so the next echo reconnects. Stopping the VPN, updating routes, or quitting the app closes these connections. Identifier, sequence and payload are preserved. This checks agent reachability, not an application port or raw ICMP forwarding on the remote OS. Probes time out after five seconds, with eight workers and a bounded queue. Invalid checksums, unselected destinations, fragmented echoes and packets larger than the 1400-byte tunnel MTU are dropped.
+- On macOS, a fresh random relay credential travels in the ephemeral VPN start options and is not saved in the VPN profile. The macOS extension never receives the cloud access token or operator private key. On iOS, the extension reads the app profile from the provisioned App Group container and owns its broker and relay.
 - The relay accepts only selected addresses, valid ports, and its current credential. It limits concurrent flows. Stopping the VPN closes active relay connections. A heartbeat removes the tunnel if the app exits or crashes.
-- UDP application traffic, ICMP types other than echo requests, IPv6 application routing, and automatic mesh/cloud failover are not implemented. TCP half-close is retained when the underlying CLI transport supports it; the existing cloud byte-pipe transport closes the connection when half-closed.
-- Keep the app open while the VPN runs. Route selection changes take effect when **Apply selection** is clicked. Normal internet traffic remains on the Mac's existing network.
+- For selected device addresses, UDP application traffic, ICMP types other than echo requests, IPv6 application routing, and automatic mesh/cloud failover are not implemented. TCP half-close is retained when the underlying CLI transport supports it; the existing cloud byte-pipe transport closes the connection when half-closed.
+- The VPN includes all devices in the authenticated mesh directory, without device or gateway selection. New devices are picked up automatically. Keep the macOS app open while the VPN runs. The iOS extension owns its transport independently of the app.
+- USB gadget links join automatically through the device's scoped IPv6 endpoint, `[fe80::5741:1%interface]:43024`, using the same authenticated mesh protocol. This requires an agent with USB mesh support, Ethernet mesh participation enabled on the device, and the mesh kernel prerequisites. The USB donor must have an independent internet connection and internet sharing enabled. Device-side USB listeners bind only the well-known gadget address on `usbN`; they do not depend on DHCP or mDNS.
+
+- Normal internet stays on the normal connection. Every five seconds the extension checks authenticated TLS reachability to independent Cloudflare and Google endpoints over the provider's underlying network, using literal IPv4 and IPv6 addresses to avoid the VPN DNS resolver. Two consecutive failures enable mesh internet backup; two consecutive successes restore normal internet. One blocked probe endpoint does not trigger failover if another works.
+- Backup chooses the lowest mesh route metric among devices advertising a live signed internet-sharing offer and authorized route. It retains a working gateway until recovery or failure, tries another donor on failure, and backs off failed donors for 30 seconds. Metric is a mesh path cost, not a measured internet speed. If no donor works, device routing stays active and discovery keeps retrying.
+- During backup the extension installs default IPv4/IPv6 routes using the donor's leased addresses and forwards complete IP packets, including TCP, UDP and ICMP, inside the mesh IPv6 tunnel. A donor without IPv6 captures and drops IPv6 internet packets. The inner MTU is 1280 bytes and the outer mesh MTU is 1320.
+- Backup sends public DNS through the donor's mesh DNS proxy while device names retain local answers. System DNS failover is disabled during backup and restored with the split routes when normal internet recovers. The donor's NAT and destination restrictions apply. The authenticated v2 lease binds an operator installation UUID to its mesh source address.
+- Switching internet paths changes the source address, so existing internet connections may need to reconnect. This is automatic backup, not a kill switch. Device directory changes rebuild the data relay and may also reconnect active device flows.
 
 The two companion repositories informed the split-DNS and system-extension design. `H264VideoDecoder.swift` and `CameraDisplayView.swift` were adapted from `wendy-sandbox/desktop-native`; their Annex-B decoder also derives from the iOS companion. This app has no build dependency on either checkout.
 
@@ -436,7 +450,10 @@ The bundled CLI executable remains the worker for persistent mesh sessions.
 
 The sidebar shows saved cloud account status and the selected context, refreshes on app activation, and shows browser sign-in progress. Successful login refreshes account metadata and the cloud roster.
 
-Cloud authentication does not activate the VPN. Select at least one routable device, then enable the VPN. The Network view explains an empty selection, an unsigned build, or pending macOS approval. The default unsigned build cannot install its Network Extension; use an Apple-signed and provisioned build as described above.
+Cloud authentication does not activate the VPN. Enable the VPN to include all mesh devices and automatic internet backup. The Network view shows devices, signing requirements, and pending macOS approval. The default unsigned build cannot install its Network Extension; use an Apple-signed and provisioned build as described above.
+
+The app's VPN switch is on only when Network Extension reports `connected`. Installation, connecting, reconnecting, and disconnected states do not light the switch. Startup waits for the OS result, with a 60-second timeout, and displays the last disconnect error. Status and profile-change notifications also refresh changes made in System Settings. A visible Bluetooth mesh directory does not establish that the system VPN is connected. Wi-Fi-off startup needs a separate signed-device check: macOS has rejected the tunnel with “No network available” while Bluetooth mesh traffic still worked. The VPN profile now names the actual local relay host, `127.0.0.1`, rather than a display label; that change alone does not verify Bluetooth-only system routing.
+
 
 ### Activity and app controls
 

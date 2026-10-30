@@ -19,6 +19,7 @@ import (
 type DesktopEnrollment struct {
 	Enrolled                         bool
 	OrganizationID, OrganizationName string
+	DeviceID                         string
 }
 
 type DesktopEnrollmentOrganization struct {
@@ -44,6 +45,9 @@ func DesktopDeviceEnrollment(ctx context.Context, conn *grpcclient.AgentConnecti
 	if principal := provisioned.GetPrincipalUri(); principal != "" {
 		if identity, err := certs.ParsePrincipal(principal); err == nil {
 			result.OrganizationID = identity.TenantUUID
+			if identity.EntityType == certs.EntityAsset {
+				result.DeviceID = identity.EntityID
+			}
 		}
 	} else if provisioned.GetOrganizationId() > 0 {
 		result.OrganizationID = strconv.FormatInt(int64(provisioned.GetOrganizationId()), 10)

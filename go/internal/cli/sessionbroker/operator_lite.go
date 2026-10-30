@@ -30,7 +30,7 @@ const (
 
 // OperatorTargetInfo describes the authenticated adjacent router's current
 // observation. Destination TLS still authenticates the exact selected device.
-const operatorIPCVersion = 2
+const operatorIPCVersion = 6
 
 // Both principal fields can contain a complete valid operator URI.
 const operatorContextBytes = 2*operatorJSONPrincipalBytes + 256
@@ -43,6 +43,7 @@ type operatorContextStatus struct {
 }
 
 type OperatorTargetInfo struct {
+	InternetSharing   bool     `json:"internetSharing,omitempty"`
 	Selector          string   `json:"selector"`
 	Principal         string   `json:"principal"`
 	Tenant            string   `json:"tenant"`
@@ -95,6 +96,9 @@ func (r *operatorTargets) managementInfo(ctx context.Context) (OperatorTargetInf
 }
 
 func (r *operatorTargets) localManagement(stream grpc.ServerStream, a *activity) (bool, error) {
+	if handled, err := r.localInternet(stream, a); handled {
+		return true, err
+	}
 	if handled, err := r.localApp(stream, a); handled {
 		return true, err
 	}

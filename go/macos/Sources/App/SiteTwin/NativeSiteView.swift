@@ -5,7 +5,8 @@ import SwiftUI
 struct NativeSiteView: View {
     @ObservedObject var model: AppModel
     @State private var actions = AsyncActions()
-    @State private var gatewayID = ""
+    @State private var gateway = SiteGatewayIdentity()
+    private var gatewayID: String { gateway.id }
     @State private var identityError: String?
     @State private var pairing = false
     @State private var alignment: SiteAlignmentRequest?
@@ -17,7 +18,7 @@ struct NativeSiteView: View {
     @State private var cameraResolutions: [String: CGSize] = [:]
 
     var body: some View {
-        SiteWorkspace(gatewayID: gatewayID, feeds: feeds, metadata: displayMetadata, notices: notices,
+        SiteWorkspace(gatewayID: gatewayID, gatewayAliases: gateway.aliases, feeds: feeds, metadata: displayMetadata, notices: notices,
                       robotSession: model.deviceSession, robotGatewayName: model.connected?.title ?? "this gateway", controls: {
             #if os(iOS)
             Toggle("Auto-align cameras", isOn: $automaticAlignmentEnabled)
@@ -36,9 +37,9 @@ struct NativeSiteView: View {
             }
             #endif
         }, onFailure: { error, _ in model.alert = error.localizedDescription }, calibrate: { site, camera in
-            alignment = SiteAlignmentRequest(site: site, camera: camera, gatewayID: gatewayID, session: model.deviceSession)
+            alignment = SiteAlignmentRequest(site: site, camera: camera, gatewayID: gatewayID, session: model.deviceSession, gatewayAliases: gateway.aliases)
         }, automaticAlignment: { site, editing in
-            AnyView(SiteAutomaticAlignmentView(model: model, site: site, gatewayID: gatewayID,
+            AnyView(SiteAutomaticAlignmentView(model: model, site: site, gatewayID: gatewayID, gatewayAliases: gateway.aliases,
                 enabled: automaticAlignmentEnabled && scenePhase == .active && alignment == nil && !pairing && !editing,
                 worker: automaticAlignment))
         }, alignmentStatuses: automaticAlignmentEnabled && scenePhase == .active && alignment == nil ? automaticAlignment.statuses : [:], colorCapture: { sourceIDs in
@@ -50,7 +51,7 @@ struct NativeSiteView: View {
         }
         .task { await actions.run() }
         .task(id: model.deviceSession) {
-            gatewayID = ""
+            gateway = SiteGatewayIdentity()
             await identifyGateway()
         }
         .task(id: model.deviceSession) {
@@ -148,30 +149,52 @@ struct NativeSiteView: View {
         guard let device = model.connected else { return }
         let session = model.deviceSession
         do {
-            let identity: String
-            if let cloud = SiteGatewayIdentity.cloud(selector: device.selector) {
-                identity = cloud
-            } else {
-                async let info = GoClient.shared.deviceInfo(session: session)
-                async let enrollment = GoClient.shared.deviceEnrollment(session: session)
-                let (hardware, account) = try await (info, enrollment)
-                guard !hardware.serial.isEmpty, !account.enrolled || !account.organizationID.isEmpty else {
-                    throw WendyError(message: "This gateway has no persistent hardware identity. Connect through its Cloud entry to save camera placements.")
-                }
-                identity = "hardware-v1/\(account.organizationID)/\(hardware.serial)"
-            }
+            // Enrollment supplies the same tenant/device identity over LAN and Cloud.
+            // Hardware identity remains an alias for placements saved by older apps.
+            let cloud = SiteGatewayIdentity.cloud(selector: device.selector)
+            async let info = GoClient.shared.deviceInfo(session: session)
+            async let enrollment = GoClient.shared.deviceEnrollment(session: session)
+            let hardware = try? await info
+            let account = try? await enrollment
+            let identity = try SiteGatewayIdentity.resolve(cloud: cloud, enrollment: account, serial: hardware?.serial)
             guard !Task.isCancelled, model.deviceSession == session else { return }
-            gatewayID = identity
+            gateway = identity
             identityError = nil
         } catch {
             guard !Task.isCancelled, model.deviceSession == session else { return }
-            gatewayID = ""
+            gateway = SiteGatewayIdentity()
             identityError = error.localizedDescription
         }
     }
 }
 
-enum SiteGatewayIdentity {
+struct SiteGatewayIdentity: Equatable {
+    var id = ""
+    var aliases: Set<String> = []
+
+    static func matches(_ saved: String, current: String, aliases: Set<String> = []) -> Bool {
+        !current.isEmpty && !saved.isEmpty && (saved == current || aliases.contains(saved))
+    }
+
+    static func resolve(cloud: String?, enrollment: DeviceEnrollmentSnapshot?, serial: String?) throws -> Self {
+        let enrolled = enrollment.flatMap { account -> String? in
+            guard account.enrolled, let tenant = UUID(uuidString: account.organizationID),
+                  let device = UUID(uuidString: account.deviceID) else { return nil }
+            return "cloud-v2/\(tenant.uuidString.lowercased())/\(device.uuidString.lowercased())"
+        }
+        if let cloud, let enrolled, cloud != enrolled {
+            throw WendyError(message: "The connected gateway's enrollment does not match its Cloud identity. Reconnect to the gateway.")
+        }
+        let hardware = enrollment.flatMap { account -> String? in
+            guard let serial, !serial.isEmpty, !account.enrolled || !account.organizationID.isEmpty else { return nil }
+            return "hardware-v1/\(account.organizationID)/\(serial)"
+        }
+        guard let id = cloud ?? enrolled ?? hardware else {
+            throw WendyError(message: "This gateway has no persistent identity. Connect through its Cloud entry to save camera placements.")
+        }
+        return Self(id: id, aliases: Set([id, hardware].compactMap { $0 }))
+    }
+
     static func cloud(selector: String) -> String? {
         guard let url = URLComponents(string: selector), url.scheme == "cloud",
               url.user == nil, url.password == nil, url.query == nil, url.fragment == nil,

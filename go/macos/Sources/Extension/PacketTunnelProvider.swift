@@ -5,6 +5,8 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     private let lock = NSLock()
     private var generation: UInt64 = 0
     private var running = false
+    private var refreshTimer: DispatchSourceTimer?
+    private let refreshQueue = DispatchQueue(label: "dev.wendy.network.refresh")
     private let outputQueue = DispatchQueue(label: "dev.wendy.desktop.packets", qos: .userInitiated)
 
     override func startTunnel(options: [String: NSObject]?, completionHandler: @escaping (Error?) -> Void) {
@@ -12,26 +14,24 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
               let config = try? PropertyListDecoder().decode(VPNConfiguration.self, from: data) else {
             completionHandler(failure("Open Wendy and enable the VPN again.")); return
         }
+        #if os(iOS)
+        let shared = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: "group.dev.wendy.mobile")?.appendingPathComponent("Wendy", isDirectory: true).path
+        guard let shared, config.bootstrapDirectory == shared else {
+            completionHandler(failure("VPN requires Wendy's shared app profile.")); return
+        }
+        #endif
         if let error = config.withCValue({ WVPNStart($0) }) {
             let message = String(cString: error)
             WVPNFree(error)
             completionHandler(failure(message)); return
         }
-        let settings = NEPacketTunnelNetworkSettings(tunnelRemoteAddress: "127.0.0.1")
-        let ipv4 = NEIPv4Settings(addresses: ["100.64.0.54"], subnetMasks: ["255.255.255.255"])
-        // /32 routes claim only selected devices, plus the split DNS resolver.
-        ipv4.includedRoutes = (config.routes.map(\.address) + ["100.64.0.53"]).map {
-            NEIPv4Route(destinationAddress: $0, subnetMask: "255.255.255.255")
+        guard let pointer = WVPNConfiguration() else { WVPNStop(); completionHandler(failure("Missing VPN settings.")); return }
+        let actualData = Data(String(cString: pointer).utf8)
+        WVPNFree(pointer)
+        guard let actual = try? JSONDecoder().decode(VPNConfiguration.self, from: actualData) else {
+            WVPNStop(); completionHandler(failure("Invalid VPN settings.")); return
         }
-        settings.ipv4Settings = ipv4
-        settings.mtu = 1400
-        let dns = NEDNSSettings(servers: ["100.64.0.53"])
-        dns.matchDomains = ["mesh.wendy.dev", "cloud.wendy.dev"]
-        dns.matchDomainsNoSearch = true
-        // The cloud dashboard shares this zone. Public names refused by our
-        // device resolver must still resolve through the system DNS service.
-        dns.allowFailover = true
-        settings.dnsSettings = dns
+        let settings = actual.networkSettings()
         setTunnelNetworkSettings(settings) { [weak self] error in
             guard let self else { WVPNStop(); completionHandler(error); return }
             if let error { WVPNStop(); completionHandler(error); return }
@@ -42,14 +42,34 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             self.lock.unlock()
             self.readPackets(generation)
             self.outputQueue.async { self.writePackets(generation) }
+            self.startRefresh(generation)
             completionHandler(nil)
         }
     }
 
     override func stopTunnel(with reason: NEProviderStopReason, completionHandler: @escaping () -> Void) {
-        lock.lock(); running = false; generation &+= 1; lock.unlock()
+        lock.lock(); running = false; generation &+= 1; refreshTimer?.cancel(); refreshTimer = nil; lock.unlock()
         WVPNStop()
         completionHandler()
+    }
+
+    private func startRefresh(_ generation: UInt64) {
+        let timer = DispatchSource.makeTimerSource(queue: refreshQueue)
+        timer.schedule(deadline: .now() + 5, repeating: 5)
+        timer.setEventHandler { [weak self] in
+            guard let self, self.isRunning(generation), let pointer = WVPNRefresh() else { return }
+            let data = Data(String(cString: pointer).utf8)
+            WVPNFree(pointer)
+            guard self.isRunning(generation), let config = try? JSONDecoder().decode(VPNConfiguration.self, from: data) else { return }
+            self.setTunnelNetworkSettings(config.networkSettings()) { [weak self] error in
+                guard let self, self.isRunning(generation) else { return }
+                if let error { self.cancelTunnelWithError(error) }
+            }
+        }
+        lock.lock()
+        if running && self.generation == generation { refreshTimer = timer } else { timer.cancel() }
+        timer.resume()
+        lock.unlock()
     }
 
     private func isRunning(_ expected: UInt64) -> Bool {
@@ -60,7 +80,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     private func readPackets(_ generation: UInt64) {
         packetFlow.readPackets { [weak self] packets, protocols in
             guard let self, self.isRunning(generation) else { return }
-            for (packet, family) in zip(packets, protocols) where family.int32Value == AF_INET {
+            for (packet, family) in zip(packets, protocols) where family.int32Value == AF_INET || family.int32Value == AF_INET6 {
                 packet.withUnsafeBytes { bytes in
                     guard let base = bytes.baseAddress else { return }
                     WVPNWrite(UnsafeMutableRawPointer(mutating: base), Int32(bytes.count))
@@ -77,7 +97,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         while isRunning(generation) {
             let count = WVPNRead(buffer, 65535)
             if count > 0 && isRunning(generation) {
-                packetFlow.writePackets([Data(bytes: buffer, count: Int(count))], withProtocols: [NSNumber(value: AF_INET)])
+                packetFlow.writePackets([Data(bytes: buffer, count: Int(count))], withProtocols: [NSNumber(value: buffer.load(as: UInt8.self) >> 4 == 6 ? AF_INET6 : AF_INET)])
             }
             if count < 0 { break }
             if Date() >= nextHealthCheck {
@@ -85,7 +105,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                 if WVPNHealthy() == 0 {
                     lock.lock(); running = false; lock.unlock()
                     WVPNStop()
-                    cancelTunnelWithError(failure("Wendy closed or its device relay stopped. Open Wendy and reconnect."))
+                    cancelTunnelWithError(failure("Wendy lost its device relay. Open Wendy and reconnect."))
                     break
                 }
             }

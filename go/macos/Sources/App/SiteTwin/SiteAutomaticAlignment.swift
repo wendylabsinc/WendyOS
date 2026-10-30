@@ -23,6 +23,7 @@ struct SiteAutomaticAlignmentContext: Equatable {
     var gatewayID: String
     var session: UInt64
     var enabled: Bool
+    var gatewayAliases: Set<String> = []
 }
 
 @MainActor @Observable
@@ -43,7 +44,7 @@ final class SiteAutomaticAlignment {
         guard context.enabled, context.session != 0, !context.gatewayID.isEmpty, !Task.isCancelled else { return }
         running = true
         defer { running = false }
-        let cameras = context.site.cameras.filter { $0.gatewayID == context.gatewayID && $0.position == nil }
+        let cameras = context.site.cameras.filter { SiteGatewayIdentity.matches($0.gatewayID, current: context.gatewayID, aliases: context.gatewayAliases) && $0.position == nil }
         guard !cameras.isEmpty else { return }
         let site = StoredSite(site: context.site, modelURL: context.modelURL, visualMapURL: context.mapURL)
         guard site.visualMapURL != nil else {
@@ -100,7 +101,7 @@ final class SiteAutomaticAlignment {
             if ownedStream != 0, feed.stream == ownedStream { model.pauseCamera(feed, manually: false) }
         }
         if !feed.running { ownedStream = await model.playOwnedCamera(feed, inline: true) }
-        let request = SiteAlignmentRequest(site: site, camera: camera, gatewayID: context.gatewayID, session: context.session)
+        let request = SiteAlignmentRequest(site: site, camera: camera, gatewayID: context.gatewayID, session: context.session, gatewayAliases: context.gatewayAliases)
         return try await SiteCameraAlignment.align(model: model, request: request, feed: feed, engine: engine,
             automatic: true, isCurrent: { self.generation == token })
     }
@@ -110,12 +111,13 @@ struct SiteAutomaticAlignmentView: View {
     @ObservedObject var model: AppModel
     let site: StoredSite
     let gatewayID: String
+    var gatewayAliases: Set<String> = []
     let enabled: Bool
     let worker: SiteAutomaticAlignment
 
     private var context: SiteAutomaticAlignmentContext {
         .init(site: site.site, modelURL: site.modelURL, mapURL: site.visualMapURL,
-              gatewayID: gatewayID, session: model.deviceSession, enabled: enabled)
+              gatewayID: gatewayID, session: model.deviceSession, enabled: enabled, gatewayAliases: gatewayAliases)
     }
     var body: some View {
         Color.clear.frame(width: 0, height: 0)

@@ -131,7 +131,10 @@ func (s *Session) connectCandidate(ctx context.Context, candidate carriers.Candi
 				peer = actual
 				return nil
 			}}
-		s.Node.Credentials.ConfigureTLSClient(config, meshoperatorlink.RouterALPN)
+		// Router admission verifies the complete primary certificate chain again
+		// after TLS. Keep the plain router ALPN and full chain, as the initial
+		// explicit connection does; issuer-omission negotiation is not supported
+		// by that second verifier.
 		options := s.options
 		options.Transport = candidate.Transport
 		options.RouterAddress = candidate.Address

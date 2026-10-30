@@ -29,7 +29,7 @@ func TestDesktopEnrollmentSessionAndLiteState(t *testing.T) {
 		enrolled, wantError bool
 	}{
 		{name: "unenrolled", state: &litepb.WendyComEnrollmentChallenge{}},
-		{name: "enrolled", state: &litepb.WendyComEnrollmentChallenge{Enrolled: true, TenantId: "tenant"}, enrolled: true},
+		{name: "enrolled", state: &litepb.WendyComEnrollmentChallenge{Enrolled: true, TenantId: "tenant", DeviceId: "device"}, enrolled: true},
 		{name: "pending", state: &litepb.WendyComEnrollmentChallenge{DeviceId: "reserved-device"}, wantError: true},
 		{name: "missing", wantError: true},
 		{name: "unreachable", err: errors.New("offline"), wantError: true},
@@ -54,7 +54,7 @@ func TestDesktopEnrollmentSessionAndLiteState(t *testing.T) {
 			if (err != nil) != tc.wantError {
 				t.Fatalf("status = %+v, %v", value, err)
 			}
-			if err == nil && value.Enrolled != tc.enrolled {
+			if err == nil && (value.Enrolled != tc.enrolled || value.DeviceID != tc.state.GetDeviceId() || value.OrganizationID != tc.state.GetTenantId()) {
 				t.Fatalf("status = %+v", value)
 			}
 		})

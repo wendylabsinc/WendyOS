@@ -42,8 +42,7 @@ enum SiteCameraAlignment {
         let session = request.session, stream = feed.stream, source = request.camera.sourceID
         func check() throws {
             try Task.checkCancellation()
-            guard isCurrent(), session != 0, model.deviceSession == session,
-                  request.gatewayID == request.camera.gatewayID, !request.gatewayID.isEmpty,
+            guard isCurrent(), request.isCurrent(session: model.deviceSession),
                   model.cameraFeeds.filter({ $0.camera.stableID == source }).count == 1,
                   model.cameraFeeds.contains(where: { $0 === feed }),
                   feed.camera.stableID == source, feed.running, stream != 0, feed.stream == stream else {

@@ -60,7 +60,11 @@ final class GoClient: Sendable {
 
     #if os(iOS)
     func initializeMobile() async throws {
-        let directory = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true).appendingPathComponent("Wendy", isDirectory: true)
+        let legacy = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true).appendingPathComponent("Wendy", isDirectory: true)
+        let directory = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: "group.dev.wendy.mobile")?.appendingPathComponent("Wendy", isDirectory: true) ?? legacy
+        if directory != legacy && !FileManager.default.fileExists(atPath: directory.path) && FileManager.default.fileExists(atPath: legacy.path) {
+            try FileManager.default.copyItem(at: legacy, to: directory)
+        }
         try await perform { try Self.withCString(directory.path) { try Self.finish(WDInitializeMobile($0)) } }
     }
     #endif
@@ -117,12 +121,12 @@ final class GoClient: Sendable {
         try await perform(unlessCancelled: false) { try Self.finish(WDStopCamera(id, stream, session)) }
     }
     func stopCameras(session: UInt64) async throws { try await perform(unlessCancelled: false) { try Self.finish(WDStopCameras(session)) } }
-    func startVPN(routes: [VPNRouteSelection]) async throws -> VPNConfiguration {
+    func startVPN(routes: [VPNRouteSelection], gateway: String = "") async throws -> VPNConfiguration {
         try await perform {
             let strings = CStringStorage()
             defer { withExtendedLifetime(strings) {} }
             var inputs = routes.map { WDRouteInput(selector: strings.add($0.selector), name: strings.add($0.name)) }
-            return try inputs.withUnsafeMutableBufferPointer { try Self.readVPN(WDStartVPN($0.baseAddress, $0.count)) }
+            return try inputs.withUnsafeMutableBufferPointer { try Self.readVPN(WDStartVPN($0.baseAddress, $0.count, strings.add(gateway))) }
         }
     }
     func stopVPN() async throws { try await perform(unlessCancelled: false) { try Self.finish(WDStopVPN()) } }
@@ -196,7 +200,9 @@ final class GoClient: Sendable {
         return VPNConfiguration(endpoint: string(config.endpoint), token: string(config.token),
                                 routes: UnsafeBufferPointer(start: config.routes, count: config.route_count).map {
             VPNRoute(selector: string($0.selector), name: string($0.name), address: string($0.address), host: string($0.host))
-        })
+        }, internet: string(config.internet_address4).isEmpty ? nil : VPNInternetConfiguration(
+            address4: string(config.internet_address4), address6: string(config.internet_address6), mtu: Int(config.internet_mtu)),
+           bootstrapDirectory: string(config.bootstrap_directory), gateway: string(config.gateway))
     }
     static func readEvents(_ pointer: UnsafeMutablePointer<WDEvents>?) throws -> [BridgeEvent] {
         guard let pointer else { throw WendyError(message: "Missing events result.") }

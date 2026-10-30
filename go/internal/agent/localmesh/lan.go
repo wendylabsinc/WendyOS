@@ -199,6 +199,9 @@ func runLANWithScan(ctx context.Context, cfg LANConfig, scan func() ([]lanInterf
 }
 
 func runLANInterface(parent context.Context, cfg LANConfig, selected lanInterface, claims *lanClaims) error {
+	if selected.transport == "usb" {
+		return runUSBInterface(parent, cfg, selected, claims)
+	}
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
 	address := net.JoinHostPort(selected.ip.String(), strconv.Itoa(LANPort))

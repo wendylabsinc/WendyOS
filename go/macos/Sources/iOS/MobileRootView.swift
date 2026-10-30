@@ -13,6 +13,7 @@ struct MobileRootView: View {
     @State private var adding = false
     @State private var recognizing = false
     @State private var accounts = false
+    @State private var showingVPN = false
     @State private var details: String?
     private var devices: [Device] {
         (source == "nearby" ? model.nearby : model.cloud).filter { search.isEmpty || $0.title.localizedCaseInsensitiveContains(search) }
@@ -75,6 +76,7 @@ struct MobileRootView: View {
             .searchable(text: $search, prompt: "Find a device")
             .refreshable { await refresh() }
             .toolbar {
+                ToolbarItem(placement: .topBarTrailing) { Button { showingVPN = true } label: { Image(systemName: "network") }.accessibilityLabel("VPN") }
                 ToolbarItem(placement: .topBarLeading) { Button { accounts = true } label: { Image(systemName: "person.crop.circle") }.accessibilityLabel("Accounts") }
                 ToolbarItem(placement: .topBarTrailing) { Button { recognizing = true } label: { Image(systemName: "viewfinder") }.accessibilityLabel("Recognize a device") }
                 ToolbarItem(placement: .topBarTrailing) { Button { adding = true } label: { Image(systemName: "plus") }.accessibilityLabel("Connect by address") }
@@ -115,6 +117,7 @@ struct MobileRootView: View {
             if scenePhase == .active { await model.refreshAccount() }
         }
         .fullScreenCover(isPresented: $recognizing) { DeviceViewfinder() }
+        .sheet(isPresented: $showingVPN) { NavigationStack { MobileVPNView(model: model, vpn: model.vpn) } }
         .sheet(isPresented: $accounts) {
             MobileAccountsView(model: model) { development in
                 accounts = false

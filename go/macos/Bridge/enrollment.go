@@ -14,6 +14,7 @@ func WDDeviceEnrollment(session C.uint64_t) *C.WDEnrollmentResult {
 	if value != nil {
 		p.enrolled = boolInt(value.Enrolled)
 		p.organization_id, p.organization_name = C.CString(value.OrganizationID), C.CString(value.OrganizationName)
+		p.device_id = C.CString(value.DeviceID)
 	}
 	return p
 }
@@ -26,6 +27,7 @@ func WDEnrollmentFree(p *C.WDEnrollmentResult) {
 	free(p.status.message)
 	free(p.organization_id)
 	free(p.organization_name)
+	free(p.device_id)
 	free(p)
 }
 

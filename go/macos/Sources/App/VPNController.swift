@@ -11,6 +11,7 @@ final class VPNController: NSObject, ObservableObject, OSSystemExtensionRequestD
     @Published var active = false
     @Published var enabled = false
     @Published var changing = false
+    @Published var connectionError: String?
     @Published var routes: [VPNRoute] = []
     @Published var setupIssue: String?
     private var manager: NETunnelProviderManager?
@@ -34,11 +35,16 @@ final class VPNController: NSObject, ObservableObject, OSSystemExtensionRequestD
 
     /// The root view owns observation, including removal of the notification observer.
     func observeStatus() async {
-        let changes = AsyncStream<Void>.makeStream(bufferingPolicy: .bufferingNewest(1))
-        let observer = NotificationCenter.default.addObserver(forName: .NEVPNStatusDidChange, object: nil, queue: .main) { _ in
-            changes.continuation.yield(())
+        let changes = AsyncStream<Notification.Name>.makeStream(bufferingPolicy: .bufferingNewest(1))
+        let observers = [Notification.Name.NEVPNStatusDidChange, .NEVPNConfigurationChange].map { name in
+            NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { _ in
+                changes.continuation.yield(name)
+            }
         }
-        defer { NotificationCenter.default.removeObserver(observer); changes.continuation.finish() }
+        defer {
+            observers.forEach(NotificationCenter.default.removeObserver)
+            changes.continuation.finish()
+        }
         do {
             manager = try await Self.loadManager()
             try Task.checkCancellation()
@@ -47,17 +53,30 @@ final class VPNController: NSObject, ObservableObject, OSSystemExtensionRequestD
             if manager?.connection.status == .connected { try await stop() }
         } catch {
             if Task.isCancelled { return }
-            status = "VPN requires a signed build"
+            connectionError = error.localizedDescription
         }
-        for await _ in changes.stream { refreshStatus() }
+        for await change in changes.stream {
+            if change == .NEVPNConfigurationChange && !changing {
+                do { manager = try await Self.loadManager() }
+                catch { connectionError = error.localizedDescription }
+            }
+            refreshStatus()
+            if let connection = manager?.connection, connection.status == .disconnected {
+                let error = await VPNConnectionLifecycle.disconnectError(connection)
+                // A delayed error from an old session must not overwrite a new one.
+                if manager?.connection === connection, connection.status == .disconnected, !changing {
+                    connectionError = error
+                }
+            }
+        }
     }
 
     func start(_ configuration: VPNConfiguration) async throws {
         if let setupIssue { throw WendyError(message: setupIssue) }
         guard !changing else { throw WendyError(message: "A VPN change is already in progress.") }
         changing = true
-        enabled = true
-        defer { changing = false }
+        connectionError = nil
+        defer { changing = false; refreshStatus() }
         status = "Installing network extension"
         do {
             try Task.checkCancellation()
@@ -73,7 +92,7 @@ final class VPNController: NSObject, ObservableObject, OSSystemExtensionRequestD
             let manager = try await Self.loadManager() ?? NETunnelProviderManager()
             let proto = NETunnelProviderProtocol()
             proto.providerBundleIdentifier = Self.extensionID
-            proto.serverAddress = "Wendy mesh and cloud"
+            proto.serverAddress = "127.0.0.1"
             proto.disconnectOnSleep = true
             // Only non-secret metadata is saved to the system VPN profile.
             manager.protocolConfiguration = proto
@@ -87,10 +106,10 @@ final class VPNController: NSObject, ObservableObject, OSSystemExtensionRequestD
             encoder.outputFormat = .binary
             let config = try encoder.encode(configuration)
             try Task.checkCancellation()
-            try manager.connection.startVPNTunnel(options: ["configuration": config as NSData])
+            try await VPNConnectionLifecycle.start(manager.connection, options: ["configuration": config as NSData])
             routes = configuration.routes
             refreshStatus()
-        } catch { enabled = false; status = "Could not start"; throw error }
+        } catch { connectionError = error.localizedDescription; throw error }
     }
 
     func stop() async throws {
@@ -115,18 +134,25 @@ final class VPNController: NSObject, ObservableObject, OSSystemExtensionRequestD
     }
 
     private func refreshStatus() {
-        active = manager?.connection.status == .connected
-        switch manager?.connection.status {
-        case .connected, .connecting, .reasserting: enabled = true
-        default: enabled = changing
+        updateStatus(manager?.connection.status ?? .invalid)
+    }
+
+    // Keep the toggle independent of requested state, provisioning, and pending
+    // start/stop work. Only a connected OS tunnel can turn it on.
+    func updateStatus(_ connectionStatus: NEVPNStatus) {
+        let connected = connectionStatus == .connected
+        if active != connected { active = connected }
+        if enabled != connected { enabled = connected }
+        let next: String
+        switch connectionStatus {
+        case .connected: next = "Connected"
+        case .connecting: next = "Connecting"
+        case .reasserting: next = "Reconnecting"
+        case .disconnecting: next = "Disconnecting"
+        default: next = "Disconnected"
         }
-        switch manager?.connection.status {
-        case .connected: status = "Connected"
-        case .connecting: status = "Connecting"
-        case .reasserting: status = "Reconnecting"
-        case .disconnecting: status = "Disconnecting"
-        default: if activation == nil { status = "Off" }
-        }
+        if status != next { status = next }
+        if connected && connectionError != nil { connectionError = nil }
     }
 
     // Requests are submitted on DispatchQueue.main, so delegate callbacks are

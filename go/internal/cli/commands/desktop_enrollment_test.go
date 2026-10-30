@@ -24,10 +24,12 @@ func TestDesktopEnrollmentStatus(t *testing.T) {
 		response            *pb.IsProvisionedResponse
 		err                 error
 		enrolled, wantError bool
-		org                 string
+		org, device         string
 	}{
 		{name: "unenrolled", response: &pb.IsProvisionedResponse{ResponseType: &pb.IsProvisionedResponse_NotProvisioned{NotProvisioned: &pb.NotProvisionedResponse{}}}},
 		{name: "enrolled", enrolled: true, org: "42", response: &pb.IsProvisionedResponse{ResponseType: &pb.IsProvisionedResponse_Provisioned{Provisioned: &pb.ProvisionedResponse{OrganizationId: 42}}}},
+		{name: "device principal supplies transport-independent identity", enrolled: true, org: testOperatorTenant, device: "fad6089a-06e8-4c7b-8c09-4bcbef67f387", response: &pb.IsProvisionedResponse{ResponseType: &pb.IsProvisionedResponse_Provisioned{Provisioned: &pb.ProvisionedResponse{PrincipalUri: "spiffe://wendy.sh/tenant/" + testOperatorTenant + "/device/fad6089a-06e8-4c7b-8c09-4bcbef67f387"}}}},
+		{name: "operator principal is not a device", enrolled: true, org: testOperatorTenant, response: &pb.IsProvisionedResponse{ResponseType: &pb.IsProvisionedResponse_Provisioned{Provisioned: &pb.ProvisionedResponse{PrincipalUri: "spiffe://wendy.sh/tenant/" + testOperatorTenant + "/operator/alice"}}}},
 		{name: "missing organization is still enrolled", enrolled: true, response: &pb.IsProvisionedResponse{ResponseType: &pb.IsProvisionedResponse_Provisioned{Provisioned: &pb.ProvisionedResponse{}}}},
 		{name: "empty is unknown", response: &pb.IsProvisionedResponse{}, wantError: true},
 		{name: "unreachable is unknown", err: status.Error(codes.Unavailable, "offline"), wantError: true},
@@ -47,7 +49,7 @@ func TestDesktopEnrollmentStatus(t *testing.T) {
 			if (err != nil) != tc.wantError {
 				t.Fatalf("status = %+v, %v", value, err)
 			}
-			if err == nil && (value.Enrolled != tc.enrolled || value.OrganizationID != tc.org) {
+			if err == nil && (value.Enrolled != tc.enrolled || value.OrganizationID != tc.org || value.DeviceID != tc.device) {
 				t.Fatalf("status = %+v", value)
 			}
 		})

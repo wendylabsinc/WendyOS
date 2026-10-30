@@ -10,10 +10,13 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"errors"
+	"fmt"
+	"github.com/google/uuid"
 	"io"
 	"math/big"
 	"net"
 	"net/url"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -66,7 +69,11 @@ func controlTestCredentialsWithChain(t *testing.T, intermediate bool) (func(stri
 		if err != nil {
 			t.Fatal(err)
 		}
-		uri, _ := url.Parse("spiffe://wendy.sh/tenant/" + tenant + "/device/" + device)
+		role := "device/" + device
+		if strings.HasPrefix(device, "operator/") {
+			role = device
+		}
+		uri, _ := url.Parse("spiffe://wendy.sh/tenant/" + tenant + "/" + role)
 		leaf := &x509.Certificate{SerialNumber: big.NewInt(2), NotBefore: ca.NotBefore, NotAfter: ca.NotAfter, URIs: []*url.URL{uri}, KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth}}
 		der, err := x509.CreateCertificate(rand.Reader, leaf, ca, &leafKey.PublicKey, key)
 		if err != nil {
@@ -76,7 +83,14 @@ func controlTestCredentialsWithChain(t *testing.T, intermediate bool) (func(stri
 		if err != nil {
 			t.Fatal(err)
 		}
-		creds, err := localmesh.NewCredentials(string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))+issuerPEM, root, string(pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})))
+		certPEM := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})) + issuerPEM
+		keyPEM := string(pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER}))
+		var creds *localmesh.Credentials
+		if strings.HasPrefix(device, "operator/") {
+			creds, err = localmesh.NewOperatorCredentials(certPEM, root, keyPEM, uuid.MustParse(controlTestClient))
+		} else {
+			creds, err = localmesh.NewCredentials(certPEM, root, keyPEM)
+		}
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -341,5 +355,52 @@ func TestGatewayLeaseSlowRadioHandshake(t *testing.T) {
 	}
 	if <-backend.revoked != client.Device {
 		t.Fatal("wrong revoked identity")
+	}
+}
+
+func TestOperatorInternetLeaseBindsInstallationAndSource(t *testing.T) {
+	for _, wrongSource := range []bool{false, true} {
+		t.Run(fmt.Sprint(wrongSource), func(t *testing.T) {
+			factory := controlTestCredentials(t)
+			client := factory(controlTestTenant, "operator/alice")
+			gateway := factory(controlTestTenant, controlTestGateway)
+			source := client.Device
+			if wrongSource {
+				source, _ = source.WithInstance(uuid.New())
+			}
+			backend := newControlBackend()
+			_, raw, done := controlPipe(t, gateway, client, backend, source)
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+			conn, config, err := Borrow(ctx, client, gateway.Device, raw)
+			if wrongSource {
+				if err == nil {
+					conn.Close()
+					t.Fatal("accepted mismatched installation")
+				}
+				if backend.grants.Load() != 0 {
+					t.Fatal("granted spoofed source")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !config.Valid() {
+				t.Fatal("invalid lease", config)
+			}
+			if got := <-backend.granted; got != client.Device {
+				t.Fatal("lost operator instance", got)
+			}
+			conn.Close()
+			select {
+			case <-done:
+			case <-time.After(time.Second):
+				t.Fatal("lease not revoked")
+			}
+			if got := <-backend.revoked; got != client.Device {
+				t.Fatal("revoked wrong operator")
+			}
+		})
 	}
 }

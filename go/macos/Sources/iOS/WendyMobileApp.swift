@@ -9,6 +9,7 @@ struct WendyMobileApp: App {
         WindowGroup {
             MobileRootView().environmentObject(model)
                 .task { await model.cleanup.run() }
+                .task { await model.vpn.observeStatus() }
                 .task(id: model.initialized) { await model.observeEvents() }
                 .task(id: model.account) { await PushNotifications.shared.useAccount(model.account) }
         }

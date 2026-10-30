@@ -106,24 +106,7 @@ func DesktopNearby(ctx context.Context) ([]DesktopDevice, error) {
 	wg.Wait()
 	result := make([]DesktopDevice, 0, len(devices))
 	for _, d := range devices {
-		host := strings.TrimSuffix(d.Hostname, ".")
-		if host == "" {
-			host = d.IPAddress
-		}
-		selector := net.JoinHostPort(host, strconv.Itoa(d.Port))
-		transport := "LAN"
-		if d.WendyLite {
-			selector = "wendy-lite:" + d.Hostname
-		}
-		if d.Mesh {
-			selector = d.Hostname
-			transport = "Mesh"
-		}
-		name := d.DisplayName
-		if name == "" {
-			name = d.Hostname
-		}
-		result = append(result, DesktopDevice{ID: selector, Name: name, Selector: selector, Transport: transport, Address: d.IPAddress, Lite: d.WendyLite})
+		result = append(result, desktopNearbyDevice(d))
 	}
 	for _, d := range lite {
 		if d.ConnectionInfo["needsInstall"] == "true" {
@@ -136,9 +119,9 @@ func DesktopNearby(ctx context.Context) ([]DesktopDevice, error) {
 		result = append(result, DesktopDevice{ID: d.ID, Name: d.DisplayName, Selector: d.ID, Transport: d.ConnectionType(), Address: address, Lite: true})
 	}
 	if len(result) == 0 {
-		return result, errors.Join(err, liteErr)
+		return mergeDesktopDevices(result), errors.Join(err, liteErr)
 	}
-	return result, nil
+	return mergeDesktopDevices(result), nil
 }
 
 func DesktopCloud(ctx context.Context) ([]DesktopDevice, error) {
@@ -241,4 +224,68 @@ func desktopAccountInfo(auth config.AuthConfig) DesktopAccountInfo {
 		}
 	}
 	return DesktopAccountInfo{State: state, Context: auth.Name, Cloud: authStatusEndpoint(auth), Email: email}
+}
+
+func desktopNearbyDevice(d models.LANDevice) DesktopDevice {
+	host := strings.TrimSuffix(d.Hostname, ".")
+	if host == "" {
+		host = d.IPAddress
+	}
+	transport := "LAN"
+	if d.USB != "" && d.IPAddress != "" {
+		// Preserve the cable endpoint and its IPv6 zone. Resolving the mDNS
+		// hostname again can select Wi-Fi even when discovery found USB.
+		host = d.IPAddress
+		if ip := net.ParseIP(host); ip != nil && ip.To4() == nil && ip.IsLinkLocalUnicast() && d.NetworkInterface != "" {
+			host += "%" + d.NetworkInterface
+		}
+		if d.NetworkInterface != "" && strings.EqualFold(d.OS, "wendyos") {
+			host = discovery.WellKnownUSBAddr + "%" + d.NetworkInterface
+		}
+		transport = "USB"
+	}
+	selector := net.JoinHostPort(host, strconv.Itoa(d.Port))
+	if d.WendyLite {
+		selector = "wendy-lite:" + d.Hostname
+	}
+	if d.Mesh {
+		selector = d.Hostname
+		transport = "Mesh"
+	}
+	name := d.DisplayName
+	if name == "" {
+		name = d.Hostname
+	}
+	id := selector
+	if d.PrincipalURI != "" {
+		id = d.PrincipalURI
+	}
+	return DesktopDevice{ID: id, Name: name, Selector: selector, Transport: transport, Address: d.IPAddress, Lite: d.WendyLite}
+}
+
+// Addresses and transports may change while the enrolled identity stays the same.
+func mergeDesktopDevices(devices []DesktopDevice) []DesktopDevice {
+	out := make([]DesktopDevice, 0, len(devices))
+	indices := map[string]int{}
+	priority := func(transport string) int {
+		switch transport {
+		case "Mesh":
+			return 3
+		case "USB":
+			return 2
+		default:
+			return 1
+		}
+	}
+	for _, device := range devices {
+		if i, ok := indices[device.ID]; ok {
+			if priority(device.Transport) > priority(out[i].Transport) {
+				out[i] = device
+			}
+			continue
+		}
+		indices[device.ID] = len(out)
+		out = append(out, device)
+	}
+	return out
 }

@@ -610,6 +610,7 @@ func runOperator(ctx context.Context, dir string, spec Spec, idleTTL time.Durati
 	}
 	remotes.packetDial = attachment.DialContext
 	remotes.appDial = attachment.DialAppTLS
+	remotes.internetOpen = attachment.OpenInternet
 	defer remotes.Close()
 	return serveResolvedLocal(owner, dir, spec, initial.upstream.Conn, idleTTL, func() bool {
 		if !spec.Operator.Automatic {

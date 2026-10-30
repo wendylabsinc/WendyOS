@@ -25,14 +25,18 @@ import (
 // authenticated mesh/cloud transport. Only the DNS service accepts UDP.
 // ICMP echo replies require a successful remote agent probe.
 type Engine struct {
-	cfg    Config
-	stack  *stack.Stack
-	link   *channel.Endpoint
-	ctx    context.Context
-	cancel context.CancelFunc
-	once   sync.Once
-	echoes chan echoRequest
-	echoWG sync.WaitGroup
+	cfg            Config
+	stack          *stack.Stack
+	link           *channel.Endpoint
+	ctx            context.Context
+	cancel         context.CancelFunc
+	once           sync.Once
+	echoes         chan echoRequest
+	echoWG         sync.WaitGroup
+	pumpWG         sync.WaitGroup
+	packets        chan []byte
+	internet       net.Conn
+	internetWrites chan []byte
 }
 
 func NewEngine(cfg Config) (*Engine, error) {
@@ -40,7 +44,7 @@ func NewEngine(cfg Config) (*Engine, error) {
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	e := &Engine{cfg: cfg, ctx: ctx, cancel: cancel}
+	e := &Engine{cfg: cfg, ctx: ctx, cancel: cancel, packets: make(chan []byte, 256), internetWrites: make(chan []byte, 128)}
 	e.stack = stack.New(stack.Options{NetworkProtocols: []stack.NetworkProtocolFactory{ipv4.NewProtocol}, TransportProtocols: []stack.TransportProtocolFactory{tcp.NewProtocol, udp.NewProtocol}})
 	e.link = channel.New(256, 1400, "")
 	fail := func(err tcpip.Error) (*Engine, error) { e.Close(); return nil, errors.New(err.String()) }
@@ -119,7 +123,11 @@ func NewEngine(cfg Config) (*Engine, error) {
 		go func() {
 			defer func() { <-udpSlots }()
 			defer conn.Close()
-			conn.SetDeadline(time.Now().Add(3 * time.Second))
+			timeout := 3 * time.Second
+			if cfg.Internet != nil {
+				timeout = 12 * time.Second
+			}
+			conn.SetDeadline(time.Now().Add(timeout))
 			stop := context.AfterFunc(ctx, func() { conn.Close() })
 			defer stop()
 			buf := make([]byte, 4096)
@@ -127,7 +135,7 @@ func NewEngine(cfg Config) (*Engine, error) {
 			if err != nil {
 				return
 			}
-			answer, err := AnswerDNS(buf[:n], cfg.Routes)
+			answer, err := e.answerDNS(buf[:n])
 			if err == nil {
 				conn.Write(answer)
 			}
@@ -136,6 +144,37 @@ func NewEngine(cfg Config) (*Engine, error) {
 	})
 	e.stack.SetTransportProtocolHandler(udp.ProtocolNumber, udpForward.HandlePacket)
 	e.startEchoWorkers()
+	e.pumpWG.Add(1)
+	go func() {
+		defer e.pumpWG.Done()
+		for {
+			p := e.link.ReadContext(ctx)
+			if p == nil {
+				return
+			}
+			view := p.ToView()
+			data := append([]byte(nil), view.AsSlice()...)
+			view.Release()
+			p.DecRef()
+			select {
+			case e.packets <- data:
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+	if cfg.Internet != nil {
+		if err := e.startInternet(); err != nil {
+			e.Close()
+			return nil, err
+		}
+	}
+	context.AfterFunc(ctx, func() {
+		if e.internet != nil {
+			e.internet.Close()
+		}
+	})
+
 	return e, nil
 }
 func (e *Engine) allowed(ip string) bool {
@@ -161,7 +200,7 @@ func (e *Engine) serveTCPDNS(conn net.Conn) {
 		if _, err := io.ReadFull(conn, wire); err != nil {
 			return
 		}
-		reply, err := AnswerDNS(wire, e.cfg.Routes)
+		reply, err := e.answerDNS(wire)
 		if err != nil {
 			return
 		}
@@ -172,6 +211,9 @@ func (e *Engine) serveTCPDNS(conn net.Conn) {
 	}
 }
 func (e *Engine) Write(packet []byte) {
+	if e.writeInternet(packet) {
+		return
+	}
 	if len(packet) < 20 || packet[0]>>4 != 4 || len(packet) > 65535 {
 		return
 	}
@@ -184,18 +226,22 @@ func (e *Engine) Write(packet []byte) {
 	e.link.InjectInbound(ipv4.ProtocolNumber, p)
 }
 func (e *Engine) Read(ctx context.Context) []byte {
-	p := e.link.ReadContext(ctx)
-	if p == nil {
+	select {
+	case <-ctx.Done():
 		return nil
+	case <-e.ctx.Done():
+		return nil
+	case p := <-e.packets:
+		return p
 	}
-	defer p.DecRef()
-	view := p.ToView()
-	defer view.Release()
-	return append([]byte(nil), view.AsSlice()...)
 }
 func (e *Engine) Close() {
 	e.once.Do(func() {
 		e.cancel()
+		if e.internet != nil {
+			e.internet.Close()
+		}
+		e.pumpWG.Wait()
 		e.echoWG.Wait()
 		if e.stack != nil {
 			e.stack.Close()
@@ -212,5 +258,5 @@ func (e *Engine) Close() {
 func (e *Engine) Healthy() bool {
 	ctx, cancel := context.WithTimeout(e.ctx, 2*time.Second)
 	defer cancel()
-	return Healthy(ctx, e.cfg)
+	return e.ctx.Err() == nil && Healthy(ctx, e.cfg)
 }

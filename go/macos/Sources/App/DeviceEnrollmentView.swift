@@ -37,6 +37,7 @@ enum DeviceEnrollmentForm {
 struct DeviceEnrollmentSnapshot {
     let enrolled: Bool
     let organizationID, organizationName: String
+    var deviceID: String = ""
     var title: String {
         guard enrolled else { return "Not enrolled in Wendy Cloud" }
         let organization = organizationName.isEmpty ? organizationID : organizationName
@@ -57,7 +58,8 @@ extension GoClient {
             defer { WDEnrollmentFree(p) }
             try Self.check(p.pointee.status)
             return DeviceEnrollmentSnapshot(enrolled: p.pointee.enrolled != 0,
-                organizationID: Self.string(p.pointee.organization_id), organizationName: Self.string(p.pointee.organization_name))
+                organizationID: Self.string(p.pointee.organization_id), organizationName: Self.string(p.pointee.organization_name),
+                deviceID: Self.string(p.pointee.device_id))
         }
     }
     func enrollmentOrganizations() async throws -> [EnrollmentOrganization] {

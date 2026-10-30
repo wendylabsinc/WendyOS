@@ -1,7 +1,31 @@
 import XCTest
+import SwiftUI
 @testable import WendyDesktop
 
 final class DownloadedModelTests: XCTestCase {
+    @MainActor
+    func testChatLayoutStaysWithinWindowAfterConnectionFailure() async throws {
+        let chat = DeviceChatModel(session: 0) { _, _ in
+            throw WendyError(message: String(repeating: "Device connection failed: no route to host. ", count: 100))
+        }
+        let host = NSHostingView(rootView: DeviceChatView(deviceName: "USB device", chat: chat))
+        let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 620),
+                              styleMask: [.titled, .resizable], backing: .buffered, defer: false)
+        window.contentView = host
+        window.orderFront(nil)
+        defer { window.orderOut(nil); window.contentView = nil }
+        await chat.discover()
+        for size in [NSSize(width: 900, height: 620), NSSize(width: 1200, height: 800), NSSize(width: 720, height: 500)] {
+            window.setContentSize(size)
+            try await Task.sleep(for: .milliseconds(100))
+            host.layoutSubtreeIfNeeded()
+            XCTAssertLessThanOrEqual(host.fittingSize.width, size.width)
+            XCTAssertLessThanOrEqual(host.fittingSize.height, size.height)
+            XCTAssertEqual(host.frame.size, size)
+        }
+        XCTAssertNotNil(chat.error)
+    }
+
     @MainActor
     func testDiscoverySelectsDownloadedModelAndItsPort() async {
         let chat = DeviceChatModel(session: 3) { _, _ in

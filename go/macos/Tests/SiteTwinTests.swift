@@ -363,3 +363,59 @@ private func visualMapFixture(site: Site, model: Data) -> SiteVisualMap {
     #expect(decoder.calibrationFrames.latest == nil)
     decoder.detach(layer: layer)
 }
+
+@Suite struct SiteGatewayConnectionTests {
+    let tenant = "5c9e14bb-49c0-4178-9cc5-493a151f9885"
+    let device = "fad6089a-06e8-4c7b-8c09-4bcbef67f387"
+
+    private var account: DeviceEnrollmentSnapshot {
+        .init(enrolled: true, organizationID: tenant, organizationName: "", deviceID: device)
+    }
+
+    @Test func lanAndCloudRecognizeBothOldAndNewPlacements() throws {
+        let cloud = "cloud-v2/\(tenant)/\(device)"
+        let lan = try SiteGatewayIdentity.resolve(cloud: nil, enrollment: account, serial: "serial-1")
+        let remote = try SiteGatewayIdentity.resolve(cloud: cloud, enrollment: account, serial: "serial-1")
+        #expect(lan == remote)
+        #expect(lan.id == cloud)
+        for saved in [cloud, "hardware-v1/\(tenant)/serial-1"] {
+            #expect(SiteGatewayIdentity.matches(saved, current: lan.id, aliases: lan.aliases))
+        }
+        for saved in ["", "hardware-v1/other/serial-1", "hardware-v1/\(tenant)/serial-2", "cloud-v2/\(tenant)/other"] {
+            #expect(!SiteGatewayIdentity.matches(saved, current: lan.id, aliases: lan.aliases))
+        }
+        #expect(!SiteGatewayIdentity.matches(cloud, current: "", aliases: lan.aliases))
+    }
+
+    @Test func unavailableHardwareDoesNotHideEnrolledGateway() throws {
+        let gateway = try SiteGatewayIdentity.resolve(cloud: nil, enrollment: account, serial: nil)
+        #expect(gateway.id == "cloud-v2/\(tenant)/\(device)")
+        #expect(gateway.aliases == [gateway.id])
+        #expect(try SiteGatewayIdentity.resolve(cloud: gateway.id, enrollment: nil, serial: nil) == gateway)
+        #expect(throws: WendyError.self) {
+            try SiteGatewayIdentity.resolve(cloud: nil, enrollment: nil, serial: "serial-1")
+        }
+    }
+
+    @Test func legacyAndUnenrolledGatewaysRetainHardwareIdentity() throws {
+        let legacy = DeviceEnrollmentSnapshot(enrolled: true, organizationID: "42", organizationName: "")
+        #expect(try SiteGatewayIdentity.resolve(cloud: nil, enrollment: legacy, serial: "serial-1").id == "hardware-v1/42/serial-1")
+        let unenrolled = DeviceEnrollmentSnapshot(enrolled: false, organizationID: "", organizationName: "")
+        #expect(try SiteGatewayIdentity.resolve(cloud: nil, enrollment: unenrolled, serial: "serial-1").id == "hardware-v1//serial-1")
+        #expect(throws: WendyError.self) {
+            try SiteGatewayIdentity.resolve(cloud: "cloud-v2/\(tenant)/other", enrollment: account, serial: "serial-1")
+        }
+    }
+
+    @Test func alignmentAcceptsVerifiedAliasButRejectsChangedSession() throws {
+        let gateway = try SiteGatewayIdentity.resolve(cloud: nil, enrollment: account, serial: "serial-1")
+        let camera = SiteCamera(gatewayID: "hardware-v1/\(tenant)/serial-1", sourceID: "camera", name: "Door")
+        let site = StoredSite(site: Site(name: "Room", cameras: [camera]), modelURL: URL(fileURLWithPath: "/room.usdz"))
+        let request = SiteAlignmentRequest(site: site, camera: camera, gatewayID: gateway.id, session: 42, gatewayAliases: gateway.aliases)
+        #expect(request.isCurrent(session: 42))
+        #expect(!request.isCurrent(session: 43))
+        #expect(!request.isCurrent(session: 0))
+        let unrelated = SiteAlignmentRequest(site: site, camera: camera, gatewayID: "other", session: 42)
+        #expect(!unrelated.isCurrent(session: 42))
+    }
+}

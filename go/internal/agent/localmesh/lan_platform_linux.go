@@ -24,6 +24,17 @@ func scanLANInterfaces(ethernet, wifi bool) ([]lanInterface, error) {
 		if iface.Flags&(net.FlagUp|net.FlagRunning|net.FlagMulticast) != net.FlagUp|net.FlagRunning|net.FlagMulticast {
 			continue
 		}
+		if ethernet {
+			if addresses, err := iface.Addrs(); err == nil {
+				for _, address := range addresses {
+					if ipnet, ok := address.(*net.IPNet); ok {
+						if usb, ok := usbLANInterface(iface, ipnet); ok {
+							result = append(result, usb)
+						}
+					}
+				}
+			}
+		}
 		cost, transport, ok := classifyLANCarrier(iface.Name, "/sys/class/net", ethernet, wifi, managedWiFi)
 		if !ok {
 			continue

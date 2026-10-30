@@ -71,6 +71,7 @@ type Backend struct {
 	videoStops          map[uint32]cameraSubscription
 	session             uint64
 	events              chan Event
+	automaticVPN        *automaticVPN
 	relay               *vpn.Relay
 	vpnProbes           *vpnProbes
 }
@@ -377,10 +378,17 @@ func (b *Backend) Disconnect() error {
 	b.disconnect()
 	return nil
 }
-func (b *Backend) StartVPN(routes []vpn.Route) (vpn.Config, error) {
-	_, done := b.begin()
-	defer done()
+func (b *Backend) StartVPN(routes []vpn.Route, gateway ...string) (vpn.Config, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
 	b.stopVPN()
+	if len(gateway) > 0 && gateway[0] == "auto" {
+		automatic, cfg, err := newAutomaticVPN()
+		b.automaticVPN = automatic
+		return cfg, err
+	}
 	dial := reportVPNDialFailures(desktopDial, func(message string) {
 		// A full UI event queue must not stall a failed network flow.
 		select {
@@ -388,9 +396,20 @@ func (b *Backend) StartVPN(routes []vpn.Route) (vpn.Config, error) {
 		default:
 		}
 	})
+	var internet *vpn.Internet
+	if len(gateway) > 0 && gateway[0] != "" {
+		var err error
+		internet, err = openVPNInternet(ctx, gateway[0])
+		if err != nil {
+			return vpn.Config{}, err
+		}
+	}
 	probes := newVPNProbes(routes, commands.DesktopConnect)
-	relay, config, err := vpn.NewRelay(routes, dial, probes.Probe)
+	relay, config, err := vpn.NewRelayWithInternet(routes, dial, probes.Probe, internet)
 	if err != nil {
+		if internet != nil {
+			internet.Close()
+		}
 		probes.Close()
 		return vpn.Config{}, err
 	}
@@ -406,6 +425,10 @@ func (b *Backend) StopVPN() error {
 
 // Caller holds b.mu, including when replacing routes or shutting down the app.
 func (b *Backend) stopVPN() {
+	if b.automaticVPN != nil {
+		b.automaticVPN.Close()
+		b.automaticVPN = nil
+	}
 	if b.vpnProbes != nil {
 		b.vpnProbes.Close()
 		b.vpnProbes = nil

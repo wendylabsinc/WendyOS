@@ -46,7 +46,7 @@ struct AccountsSettingsView: View {
                             }
                             .buttonStyle(.plain)
                             .disabled(busy || entry.active)
-                            .accessibilityLabel("Use account " + entry.account.context)
+                            .accessibilityLabel("Use account " + accountTitle(entry) + ", " + (organizationTitle(entry) ?? "Saved organization"))
                             .accessibilityAddTraits(entry.active ? [.isSelected] : [])
                             #else
                             accountRow(entry)
@@ -78,9 +78,12 @@ struct AccountsSettingsView: View {
         HStack(alignment: .top, spacing: 12) {
             Image(systemName: "person.crop.circle").font(.title2).foregroundStyle(.secondary)
             VStack(alignment: .leading, spacing: 6) {
-                Text(entry.account.email.isEmpty ? entry.account.context : entry.account.email).font(.headline)
+                Text(accountTitle(entry)).font(.headline)
+                if let organization = organizationTitle(entry) {
+                    Text(organization).font(.callout)
+                }
                 Text(entry.account.cloud).font(.callout).foregroundStyle(.secondary)
-                Text(entry.account.title + " · Context: " + entry.account.context).font(.caption).foregroundStyle(.secondary)
+                Text(entry.account.title).font(.caption).foregroundStyle(.secondary)
             }
             Spacer()
             if entry.active {
@@ -100,6 +103,16 @@ struct AccountsSettingsView: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
     }
+    private func accountTitle(_ entry: SavedAccount) -> String {
+        entry.account.email.isEmpty ? "Saved account" : entry.account.email
+    }
+    private func organizationTitle(_ entry: SavedAccount) -> String? {
+        #if os(macOS)
+        return picker.choices.first { $0.id == entry.id }?.organizationTitle
+        #else
+        return nil
+        #endif
+    }
     #if os(macOS)
     private func select(_ entry: SavedAccount) async {
         guard !busy, !entry.active else { return }
@@ -116,7 +129,13 @@ struct AccountsSettingsView: View {
     private func refresh() async {
         loading = true
         defer { loading = false }
-        do { accounts = try await model.client.accounts(); error = nil }
+        do {
+            accounts = try await model.client.accounts()
+            error = nil
+            #if os(macOS)
+            await picker.load()
+            #endif
+        }
         catch { if !Task.isCancelled { self.error = error.localizedDescription } }
     }
 }

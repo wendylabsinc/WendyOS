@@ -36,7 +36,7 @@ WDStatus *WDStopLogs(void);
 WDStatus *WDStartCamera(uint32_t camera, uint64_t stream, uint64_t session, char *stable_id);
 WDStatus *WDStopCamera(uint32_t camera, uint64_t stream, uint64_t session);
 WDStatus *WDStopCameras(uint64_t session);
-WDVPNResult *WDStartVPN(WDRouteInput *routes, size_t count);
+WDVPNResult *WDStartVPN(WDRouteInput *routes, size_t count, char *gateway);
 WDStatus *WDStopVPN(void);
 WDStatus *WDShutdown(void);
 WDEvents *WDPollEvents(void);

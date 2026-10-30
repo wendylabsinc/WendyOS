@@ -54,7 +54,7 @@ func WDCancelLogin() *C.WDStatus { return statusResult(desktop.CancelLogin()) }
 func WDDisconnect() *C.WDStatus { return statusResult(desktop.Disconnect()) }
 
 //export WDStopVPN
-func WDStopVPN() *C.WDStatus { return statusResult(desktop.StopVPN()) }
+func WDStopVPN() *C.WDStatus { return statusResult(stopPlatformVPN()) }
 
 //export WDShutdown
 func WDShutdown() *C.WDStatus { return statusResult(desktop.Shutdown()) }
@@ -175,22 +175,29 @@ func cameras(items []*pb.VideoDevice, err error) *C.WDCamerasResult {
 func WDCameras() *C.WDCamerasResult { return cameras(desktop.Cameras()) }
 
 //export WDStartVPN
-func WDStartVPN(input *C.WDRouteInput, count C.size_t) *C.WDVPNResult {
+func WDStartVPN(input *C.WDRouteInput, count C.size_t, gateway *C.char) *C.WDVPNResult {
 	p := alloc[C.WDVPNResult](1)
-	if count == 0 || count > 1024 || input == nil {
-		p.status = status(errors.New("select between 1 and 1024 routes"))
+	if count > 1024 || (count > 0 && input == nil) || (count == 0 && C.GoString(gateway) == "") {
+		p.status = status(errors.New("select devices or an internet gateway"))
 		return p
 	}
 	routes := make([]vpn.Route, int(count))
 	for i, r := range unsafe.Slice(input, int(count)) {
 		routes[i] = vpn.Route{Selector: C.GoString(r.selector), Name: C.GoString(r.name)}
 	}
-	config, err := desktop.StartVPN(routes)
+	config, err := startPlatformVPN(routes, C.GoString(gateway))
 	p.status = status(err)
 	if err != nil {
 		return p
 	}
 	p.config.endpoint, p.config.token = C.CString(config.Endpoint), C.CString(config.Token)
+	p.config.bootstrap_directory = C.CString(config.BootstrapDirectory)
+	p.config.gateway = C.CString(config.Gateway)
+	if config.Internet != nil {
+		p.config.internet_address4 = C.CString(config.Internet.Address4)
+		p.config.internet_address6 = C.CString(config.Internet.Address6)
+		p.config.internet_mtu = C.int(config.Internet.MTU)
+	}
 	p.config.routes, p.config.route_count = alloc[C.WDRoute](len(config.Routes)), C.size_t(len(config.Routes))
 	for i, r := range config.Routes {
 		unsafe.Slice(p.config.routes, len(config.Routes))[i] = C.WDRoute{selector: C.CString(r.Selector), name: C.CString(r.Name), address: C.CString(r.Address), host: C.CString(r.Host)}
@@ -324,6 +331,10 @@ func WDVPNFree(p *C.WDVPNResult) {
 	free(p.config.routes)
 	free(p.config.endpoint)
 	free(p.config.token)
+	free(p.config.bootstrap_directory)
+	free(p.config.gateway)
+	free(p.config.internet_address4)
+	free(p.config.internet_address6)
 	free(p.status.message)
 	free(p)
 }

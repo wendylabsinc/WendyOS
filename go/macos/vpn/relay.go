@@ -22,21 +22,36 @@ type ProbeFunc func(context.Context, string) error
 
 const echoTimeout = 5 * time.Second
 
+// BLE lease setup can take several seconds per candidate. Keep control RPCs
+// bounded while allowing two candidate handshakes and directory convergence.
+const RefreshTimeout = 40 * time.Second
+
 type Relay struct {
-	listener net.Listener
-	cancel   context.CancelFunc
-	done     chan struct{}
-	wg       sync.WaitGroup
+	listener  net.Listener
+	cancel    context.CancelFunc
+	done      chan struct{}
+	wg        sync.WaitGroup
+	internet  *Internet
+	refreshMu sync.RWMutex
+	refresh   func(context.Context, bool) (Config, error)
 }
 type flowRequest struct {
 	Token   string `json:"token"`
 	Address string `json:"address"`
 	Port    uint16 `json:"port"`
 	Kind    string `json:"kind,omitempty"`
+	Online  bool   `json:"online,omitempty"`
 }
 
 func NewRelay(routes []Route, dial DialFunc, probe ProbeFunc) (*Relay, Config, error) {
-	routes, err := BuildRoutes(routes)
+	return NewRelayWithInternet(routes, dial, probe, nil)
+}
+
+func NewRelayWithInternet(routes []Route, dial DialFunc, probe ProbeFunc, internet *Internet) (*Relay, Config, error) {
+	var err error
+	if len(routes) > 0 {
+		routes, err = BuildRoutes(routes)
+	}
 	if err != nil {
 		return nil, Config{}, err
 	}
@@ -49,9 +64,19 @@ func NewRelay(routes []Route, dial DialFunc, probe ProbeFunc) (*Relay, Config, e
 		ln.Close()
 		return nil, Config{}, err
 	}
+	if routes == nil {
+		routes = []Route{}
+	}
 	cfg := Config{Endpoint: ln.Addr().String(), Token: hex.EncodeToString(token), Routes: routes}
+	if internet != nil {
+		if internet.Stream == nil || internet.DNS == nil || !internet.Config.Valid() {
+			ln.Close()
+			return nil, Config{}, errors.New("invalid internet relay")
+		}
+		cfg.Internet = &internet.Config
+	}
 	ctx, cancel := context.WithCancel(context.Background())
-	relay := &Relay{listener: ln, cancel: cancel, done: make(chan struct{})}
+	relay := &Relay{listener: ln, cancel: cancel, done: make(chan struct{}), internet: internet}
 	byIP := map[string]Route{}
 	for _, r := range routes {
 		byIP[r.Address] = r
@@ -88,8 +113,61 @@ func NewRelay(routes []Route, dial DialFunc, probe ProbeFunc) (*Relay, Config, e
 				if json.Unmarshal(line, &req) != nil || subtle.ConstantTimeCompare([]byte(req.Token), []byte(cfg.Token)) != 1 {
 					return
 				}
+				if req.Kind == "refresh" {
+					relay.refreshMu.RLock()
+					refresh := relay.refresh
+					relay.refreshMu.RUnlock()
+					if refresh == nil {
+						return
+					}
+					update, cancelUpdate := context.WithTimeout(ctx, RefreshTimeout)
+					defer cancelUpdate()
+					conn.SetDeadline(time.Now().Add(22 * time.Second))
+					next, err := refresh(update, req.Online)
+					if err != nil {
+						return
+					}
+					if _, err = io.WriteString(conn, "OK\n"); err == nil {
+						_ = json.NewEncoder(conn).Encode(next)
+					}
+					return
+				}
 				if req.Kind == "" && req.Port == 0 && req.Address == "ping" {
-					io.WriteString(conn, "PONG\n")
+					if internet == nil || !internet.closed.Load() {
+						io.WriteString(conn, "PONG\n")
+					}
+					return
+				}
+				if req.Kind == "internet" || req.Kind == "internet-dns" {
+					if internet == nil || internet.closed.Load() || req.Address != "" || req.Port != 0 {
+						return
+					}
+					var upstream net.Conn
+					if req.Kind == "internet" {
+						if !internet.claimed.CompareAndSwap(false, true) {
+							return
+						}
+						upstream = internet.Stream
+						defer internet.Close()
+					} else {
+						dnsCtx, cancelDNS := context.WithTimeout(ctx, 10*time.Second)
+						upstream, err = internet.DNS(dnsCtx)
+						cancelDNS()
+						if err == nil {
+							upstream.SetDeadline(time.Now().Add(10 * time.Second))
+						}
+						if err != nil {
+							return
+						}
+					}
+					defer upstream.Close()
+					stop := context.AfterFunc(ctx, func() { upstream.Close() })
+					defer stop()
+					conn.SetDeadline(time.Time{})
+					if _, err = io.WriteString(conn, "OK\n"); err != nil {
+						return
+					}
+					Pipe(&bufferedConn{Conn: conn, reader: reader}, upstream)
 					return
 				}
 				if req.Kind != "" && req.Kind != "echo" {
@@ -143,7 +221,15 @@ func NewRelay(routes []Route, dial DialFunc, probe ProbeFunc) (*Relay, Config, e
 	}()
 	return relay, cfg, nil
 }
-func (r *Relay) Close() { r.cancel(); r.listener.Close(); <-r.done; r.wg.Wait() }
+func (r *Relay) Close() {
+	r.cancel()
+	r.listener.Close()
+	if r.internet != nil {
+		r.internet.Close()
+	}
+	<-r.done
+	r.wg.Wait()
+}
 func readLine(r *bufio.Reader) ([]byte, error) {
 	line, prefix, err := r.ReadLine()
 	if prefix {
@@ -254,4 +340,28 @@ func Healthy(ctx context.Context, c Config) bool {
 	}
 	line, err := readLine(bufio.NewReaderSize(conn, 4096))
 	return err == nil && string(line) == "PONG"
+}
+
+// SetRefresh installs the authenticated automatic routing control operation.
+func (r *Relay) SetRefresh(refresh func(context.Context, bool) (Config, error)) {
+	r.refreshMu.Lock()
+	defer r.refreshMu.Unlock()
+	r.refresh = refresh
+}
+
+func Refresh(ctx context.Context, controller Config, online bool) (Config, error) {
+	conn, err := requestRelay(ctx, controller, flowRequest{Token: controller.Token, Kind: "refresh", Online: online}, RefreshTimeout+5*time.Second)
+	if err != nil {
+		return Config{}, err
+	}
+	defer conn.Close()
+	conn.SetReadDeadline(time.Now().Add(RefreshTimeout + 5*time.Second))
+	stop := context.AfterFunc(ctx, func() { conn.Close() })
+	defer stop()
+	var cfg Config
+	err = json.NewDecoder(io.LimitReader(conn, 1024*1024)).Decode(&cfg)
+	if err == nil {
+		err = cfg.Validate()
+	}
+	return cfg, err
 }

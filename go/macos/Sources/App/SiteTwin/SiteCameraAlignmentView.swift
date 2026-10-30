@@ -8,6 +8,12 @@ struct SiteAlignmentRequest: Identifiable {
     let camera: SiteCamera
     let gatewayID: String
     let session: UInt64
+    var gatewayAliases: Set<String> = []
+
+    func isCurrent(session: UInt64) -> Bool {
+        self.session != 0 && self.session == session
+            && SiteGatewayIdentity.matches(camera.gatewayID, current: gatewayID, aliases: gatewayAliases)
+    }
 }
 
 struct SiteCameraAlignmentView: View {
@@ -29,8 +35,7 @@ struct SiteCameraAlignmentView: View {
     @State private var refreshingCamera = false
 
     private var onCameraGateway: Bool {
-        !request.gatewayID.isEmpty && request.gatewayID == request.camera.gatewayID
-            && request.session != 0 && request.session == model.deviceSession
+        request.isCurrent(session: model.deviceSession)
     }
 
     private var feed: CameraFeed? {

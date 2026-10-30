@@ -39,9 +39,8 @@ struct VPNPopover: View {
     @Environment(\.openWindow) private var openWindow
 
     private var devices: [Device] {
-        (model.nearby + model.cloud).filter(\.routable).sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
+        model.nearby.filter { $0.transport == .mesh }.sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
     }
-    private let selectionHint = "Select at least one device, then turn on VPN."
     private var deviceListHeight: CGFloat {
         devices.isEmpty ? 72 : min(320, CGFloat(devices.count) * 64 - 6)
     }
@@ -54,7 +53,7 @@ struct VPNPopover: View {
             HStack {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Wendy VPN").font(.headline)
-                    Text(model.vpnUpdating ? "Updating…" : vpn.status).font(.caption).foregroundStyle(.secondary)
+                    Text(vpn.status).font(.caption).foregroundStyle(.secondary)
                 }
                 Spacer()
                 Toggle("VPN", isOn: Binding(get: { vpn.enabled }, set: { enabled in
@@ -68,70 +67,37 @@ struct VPNPopover: View {
                     .padding(12).frame(maxWidth: .infinity, alignment: .leading)
                     .background(Color.primary.opacity(0.04), in: RoundedRectangle(cornerRadius: 10))
             }
-            if let error = model.vpnError, error != vpn.setupIssue {
+            if let error = model.vpnError ?? vpn.connectionError, error != vpn.setupIssue {
                 FailureNote(message: error)
             }
-            if !vpn.enabled && model.selectedRoutes.isEmpty && model.vpnError != selectionHint && vpn.setupIssue != selectionHint {
-                Text(selectionHint)
-                    .font(.callout).foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
             Divider()
-            HStack {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Devices").font(.subheadline.weight(.semibold))
-                    Text("\(model.selectedRoutes.count) selected").font(.caption).foregroundStyle(.secondary)
-                }
-                Spacer()
-                HStack(spacing: 12) {
-                    Button("Select all") { model.selectedRoutes = Set(devices.map(\.id)) }
-                        .disabled(devices.isEmpty || Set(devices.map(\.id)).isSubset(of: model.selectedRoutes))
-                    Button("Select none") { model.selectedRoutes.removeAll() }
-                        .disabled(model.selectedRoutes.isEmpty)
-                }.buttonStyle(.link).font(.callout)
-            }
+            Label("All devices over mesh", systemImage: "network")
+                .font(.subheadline.weight(.semibold))
+            Text("Devices join automatically. If your normal internet goes down, Wendy uses an available mesh uplink and switches back when it recovers.")
+                .font(.callout).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
             ScrollView {
                 LazyVStack(spacing: 6) {
                     ForEach(devices) { device in
-                        let selected = model.selectedRoutes.contains(device.id)
-                        let route = vpn.routes.first { $0.selector == device.selector }
-                        Button {
-                            if selected { model.selectedRoutes.remove(device.id) }
-                            else { model.selectedRoutes.insert(device.id) }
-                        } label: {
                             HStack(spacing: 12) {
-                                Image(systemName: device.transport == .cloud ? "cloud" : "network")
+                                Image(systemName: "network")
                                     .foregroundStyle(.secondary).frame(width: 20)
                                 VStack(alignment: .leading, spacing: 3) {
                                     Text(device.title).font(.callout.weight(.medium)).lineLimit(1)
                                     Text(device.transport.rawValue).font(.caption).foregroundStyle(.secondary)
                                 }
                                 Spacer(minLength: 8)
-                                Image(systemName: selected ? "checkmark.circle.fill" : "circle")
-                                    .foregroundStyle(selected ? Color.accentColor : .secondary)
                             }.padding(.horizontal, 12).frame(height: 58).frame(maxWidth: .infinity, alignment: .leading)
-                                .background(selected ? Color.accentColor.opacity(0.1) : Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 10))
-                                .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(selected ? Color.accentColor.opacity(0.5) : Color.primary.opacity(0.08)))
+                                .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 10))
+                                .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color.primary.opacity(0.08)))
                                 .contentShape(RoundedRectangle(cornerRadius: 10))
-                        }.buttonStyle(.plain).help(device.title)
-                            .accessibilityLabel(device.title).accessibilityValue(selected ? "Selected" : "Not selected")
-                            .contextMenu {
-                                Button("Copy address", systemImage: "doc.on.doc") { copy(route?.address) }
-                                    .disabled(route?.address.isEmpty != false)
-                                Button("Copy hostname", systemImage: "doc.on.doc") { copy(route?.host) }
-                                    .disabled(route?.host.isEmpty != false)
-                            }
+                            .help(device.title)
+                            .accessibilityLabel(device.title)
+
                     }
                 }
-                if devices.isEmpty { Text("Sign in and refresh your devices to add a route.").foregroundStyle(.secondary).font(.callout).padding(.vertical) }
+                if devices.isEmpty { Text("Mesh devices appear here automatically.").foregroundStyle(.secondary).font(.callout).padding(.vertical) }
             }.frame(height: deviceListHeight)
-            if vpn.active {
-                Button("Apply Selection") { actions.submit { await model.enableVPN() } }
-                    .disabled(model.vpnUpdating || model.selectedRoutes.isEmpty)
-            }
-            Text("Routes selected devices over mesh or cloud. Other internet traffic uses your normal connection.")
-                .font(.caption).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
             if showsWindowActions {
                 Divider()
                 HStack {
@@ -142,14 +108,7 @@ struct VPNPopover: View {
                 }
             }
         }.padding(20).frame(width: 420).fixedSize(horizontal: false, vertical: true)
-            .onChange(of: model.selectedRoutes) { _, selection in
-                if !selection.isEmpty && model.vpnError == selectionHint { model.vpnError = nil }
-            }
+
     }
 
-    private func copy(_ value: String?) {
-        guard let value, !value.isEmpty else { return }
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(value, forType: .string)
-    }
 }

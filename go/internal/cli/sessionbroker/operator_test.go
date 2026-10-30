@@ -38,6 +38,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/internal/shared/discovery"
+	"github.com/wendylabsinc/wendy/go/internal/shared/meshalpn"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshoperator"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshoperatorlink"
@@ -112,6 +113,10 @@ func TestOperatorBrokerNormalColdNearbyPreparation(t *testing.T) {
 func TestOperatorBrokerNormalColdDiscoveryKeepsFirstRecipeAcrossPaths(t *testing.T) {
 	operatorBrokerNormal(t, "P256-nearby-paths", false)
 }
+func TestEmbeddedOperatorBrokerDisconnectJoins(t *testing.T) {
+	operatorBrokerNormal(t, "P256-embedded", true)
+}
+
 func TestOperatorBrokerNormalExplicitDisconnectJoins(t *testing.T) {
 	operatorBrokerNormal(t, "P256", true)
 }
@@ -154,13 +159,36 @@ func operatorBrokerNormal(t *testing.T, algorithm string, disconnect bool) {
 		}
 		principal = prefix + strings.Repeat(subjectByte, meshoperator.MaxPrincipalBytes-len(prefix))
 	}
+	issuer, issuerKey := root, rootKey
+	issuerChain := [][]byte{rootDER}
+	if algorithm == "P256-auto" {
+		// Current native listeners can omit shared issuers during TLS. Router
+		// admission still verifies the wire chain, so automatic attachments
+		// must retain the intermediate rather than negotiate its omission.
+		issuerKey, err = ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		intermediate := *tmpl
+		intermediate.SerialNumber = big.NewInt(20)
+		intermediate.Subject = pkix.Name{CommonName: "operator broker intermediate"}
+		der, e := x509.CreateCertificate(rand.Reader, &intermediate, root, issuerKey.Public(), rootKey)
+		if e != nil {
+			t.Fatal(e)
+		}
+		issuer, err = x509.ParseCertificate(der)
+		if err != nil {
+			t.Fatal(err)
+		}
+		issuerChain = [][]byte{der, rootDER}
+	}
 	issue := func(serial int64, principal string, key crypto.Signer, usage x509.ExtKeyUsage) (tls.Certificate, string, string) {
 		uri, _ := url.Parse(principal)
 		leaf := &x509.Certificate{SerialNumber: big.NewInt(serial), Subject: pkix.Name{CommonName: "operator broker normal leaf"}, NotBefore: now.Add(-time.Minute), NotAfter: now.Add(time.Hour), URIs: []*url.URL{uri}, KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{usage}}
 		if strings.Contains(principal, "/device/") {
 			leaf.ExtKeyUsage = []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth}
 		}
-		der, err := x509.CreateCertificate(rand.Reader, leaf, root, key.Public(), rootKey)
+		der, err := x509.CreateCertificate(rand.Reader, leaf, issuer, key.Public(), issuerKey)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -168,7 +196,7 @@ func operatorBrokerNormal(t *testing.T, algorithm string, disconnect bool) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		return tls.Certificate{Certificate: [][]byte{der, rootDER}, PrivateKey: key}, string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})), string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: pk}))
+		return tls.Certificate{Certificate: append([][]byte{der}, issuerChain...), PrivateKey: key}, string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})), string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: pk}))
 	}
 	var operatorKey crypto.Signer
 	if algorithm == "MLDSA65" {
@@ -185,7 +213,10 @@ func operatorBrokerNormal(t *testing.T, algorithm string, disconnect bool) {
 		t.Fatal(err)
 	}
 	presentation, routerPEM, routerPrivate := issue(3, router.Principal(), routerKey, x509.ExtKeyUsageServerAuth)
-	rootPEM := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: rootDER}))
+	rootPEM := ""
+	for _, der := range issuerChain {
+		rootPEM += string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))
+	}
 	certificate := config.CertificateInfo{PemCertificate: operatorPEM, PemCertificateChain: rootPEM, PemPrivateKey: operatorPrivate, PrincipalURI: principal}
 	directory := shortTempDir(t)
 	if algorithm == "P256-process" {
@@ -241,6 +272,9 @@ func operatorBrokerNormal(t *testing.T, algorithm string, disconnect bool) {
 	carrierSockets := make(chan net.Conn, 8)
 	proofs := make(chan meshid.Device, 8)
 	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS13, MaxVersion: tls.VersionTLS13, Certificates: []tls.Certificate{presentation}, ClientAuth: tls.RequireAnyClientCert, NextProtos: []string{meshoperatorlink.RouterALPN}, GetConfigForClient: func(*tls.ClientHelloInfo) (*tls.Config, error) { handshakes.Add(1); return nil, nil }}
+	if algorithm == "P256-auto" {
+		meshalpn.NewCertificates(presentation, []*x509.Certificate{root}).ConfigureServer(tlsConfig)
+	}
 	var routes sync.WaitGroup
 	acceptDone := make(chan struct{})
 	serveListener := func(listener net.Listener) {
@@ -296,8 +330,15 @@ func operatorBrokerNormal(t *testing.T, algorithm string, disconnect bool) {
 	var helpers sync.WaitGroup
 	var leaseMu sync.Mutex
 	var leases []*os.File
+	if algorithm == "P256-embedded" {
+		ResumeEmbedded()
+		t.Cleanup(func() { SuspendEmbedded(); ResumeEmbedded() })
+	}
 	launchOperatorBroker = func(spec Spec) error {
 		starts.Add(1)
+		if algorithm == "P256-embedded" {
+			return startEmbedded(spec)
+		}
 		b, _ := json.Marshal(spec)
 		r, w, err := os.Pipe()
 		if err != nil {

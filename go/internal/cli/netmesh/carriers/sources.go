@@ -19,7 +19,7 @@ const quicService = "_wendy-net._udp"
 var browseMDNS = discovery.BrowseMDNSServicesContinuous
 
 func defaultSources(cfg Config) []Source {
-	sources := []Source{lanSource(cfg.Credentials.Device, TCP), lanSource(cfg.Credentials.Device, QUIC)}
+	sources := []Source{usbSource(), lanSource(cfg.Credentials.Device, TCP), lanSource(cfg.Credentials.Device, QUIC)}
 	if source := nativeBLESource(cfg.Credentials.Device); source != nil {
 		sources = append(sources, source)
 	}

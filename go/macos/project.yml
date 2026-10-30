@@ -175,6 +175,8 @@ targets:
         type: folder
         buildPhase: resources
     dependencies:
+      - target: WendyMobileNetwork
+        embed: true
       - sdk: UserNotifications.framework
       - sdk: AVFoundation.framework
       - sdk: CoreMedia.framework
@@ -214,6 +216,45 @@ targets:
         basedOnDependencyAnalysis: false
       - path: Scripts/build-ios-go.sh
         name: Build embedded Go backend for iOS
+        basedOnDependencyAnalysis: false
+  WendyMobileNetwork:
+    type: app-extension
+    platform: iOS
+    deploymentTarget: "26.0"
+    sources:
+      - path: Sources/Shared/VPNConfiguration.swift
+      - path: Sources/Extension/PacketTunnelProvider.swift
+    dependencies:
+      - sdk: NetworkExtension.framework
+      - sdk: AVFoundation.framework
+      - sdk: AudioToolbox.framework
+      - sdk: CoreBluetooth.framework
+      - sdk: Security.framework
+      - sdk: CoreFoundation.framework
+    info:
+      path: Resources/MobileNetwork-Info.plist
+      properties:
+        CFBundleDisplayName: Wendy network
+        NSLocalNetworkUsageDescription: Wendy connects to your mesh internet gateway.
+        NSBonjourServices: ["_wendyos._udp", "_wendy-lite._tcp"]
+        NSBluetoothAlwaysUsageDescription: Wendy connects to nearby mesh devices.
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.networkextension.packet-tunnel
+          NSExtensionPrincipalClass: "$(PRODUCT_MODULE_NAME).PacketTunnelProvider"
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.wendy.mobile.network
+        PRODUCT_MODULE_NAME: WendyMobileNetwork
+        CODE_SIGN_ENTITLEMENTS: Resources/MobileNetwork.entitlements
+        SWIFT_OBJC_BRIDGING_HEADER: Sources/Shared/VPNBridge.h
+        LIBRARY_SEARCH_PATHS: "$(SRCROOT)/Build/$(PLATFORM_NAME)"
+        OTHER_LDFLAGS: ["$(inherited)", "-lwendyvpn"]
+        ARCHS: arm64
+        ENABLE_HARDENED_RUNTIME: NO
+        APPLICATION_EXTENSION_API_ONLY: YES
+    preBuildScripts:
+      - path: Scripts/build-ios-vpn.sh
+        name: Build mobile VPN backend
         basedOnDependencyAnalysis: false
   WendyMobileTests:
     type: bundle.unit-test

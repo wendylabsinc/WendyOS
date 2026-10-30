@@ -109,6 +109,9 @@ func Start(key string, conn *grpcclient.AgentConnection) error {
 var HelperExecutable = os.Executable
 
 func startSpec(spec Spec) error {
+	if runtime.GOOS == "ios" {
+		return startEmbedded(spec)
+	}
 	b, err := json.Marshal(spec)
 	if err != nil {
 		return err
@@ -837,7 +840,7 @@ func serveResolved(ctx context.Context, dir string, spec Spec, upstream *grpc.Cl
 
 type localStreamHandler func(grpc.ServerStream, *activity) (bool, error)
 
-var localIPCRequiresListenerClose = runtime.GOOS == "windows"
+var localIPCRequiresListenerClose = runtime.GOOS == "windows" || runtime.GOOS == "ios"
 
 func serveResolvedLocal(ctx context.Context, dir string, spec Spec, upstream *grpc.ClientConn, idleTTL time.Duration, parentAlive func() bool, resolve upstreamResolver, local localStreamHandler, verified ...bool) (err error) {
 	// Capture before publishing the state file. Run supplies its successful

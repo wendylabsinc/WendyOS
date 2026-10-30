@@ -10,7 +10,10 @@ struct AccountChoice: Identifiable {
     let state: WDAccountState
     let active: Bool
     var accountKey: String { cloud + "\n" + (email.isEmpty ? id : email) }
-    var organizationTitle: String { organizationName.isEmpty ? id : organizationName }
+    var organizationTitle: String {
+        let name = organizationName.trimmingCharacters(in: .whitespacesAndNewlines)
+        return name.isEmpty ? "Saved organization" : name
+    }
     var accountTitle: String { email.isEmpty ? "Saved account" : email }
 }
 
@@ -73,7 +76,7 @@ extension GoClient {
                             choices[i].organizationName = organization.name
                         }
                     }
-                } catch { /* Local context names remain usable when Cloud is offline. */ }
+                } catch { /* Saved accounts remain selectable when Cloud is offline. */ }
             }
         } catch { if request == generation { self.error = error.localizedDescription } }
     }

@@ -377,9 +377,9 @@ struct ContentView: View {
                 .padding(.horizontal, 20).padding(.vertical, 12)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
             } else if let error = model.detailError {
-                FailureView(title: "Could not connect", error: error,
+                FailureView(title: "Could not connect", error: error, retryLabel: "Find device again",
                             forgetIdentity: model.canForgetIdentity ? { actions.submit { await model.connect(device, forgetIdentity: true) } } : nil) {
-                    actions.submit { await model.connect(device) }
+                    actions.submit { await model.retryConnection(device) }
                 }
             } else if model.selectedDeviceReady {
                 if model.connectedLite { LiteDeviceView(model: model).id(model.deviceSession) } else {

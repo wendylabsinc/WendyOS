@@ -34,6 +34,11 @@ public struct SiteFeed: Identifiable {
 @MainActor
 public struct SiteWorkspace<Preview: View, Controls: View>: View {
     let gatewayID: String
+    let gatewayAliases: Set<String>
+
+    private func onGateway(_ camera: SiteCamera) -> Bool {
+        SiteGatewayIdentity.matches(camera.gatewayID, current: gatewayID, aliases: gatewayAliases)
+    }
     let feeds: [SiteFeed]
     let metadata: [SiteCameraMetadata]
     let notices: [String]
@@ -94,6 +99,7 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
 
     public init(
         gatewayID: String,
+        gatewayAliases: Set<String> = [],
         feeds: [SiteFeed],
         metadata: [SiteCameraMetadata] = [],
         notices: [String] = [],
@@ -108,6 +114,7 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
         @ViewBuilder preview: @escaping (String) -> Preview
     ) {
         self.gatewayID = gatewayID
+        self.gatewayAliases = gatewayAliases
         self.feeds = feeds
         self.metadata = metadata
         self.notices = notices
@@ -172,7 +179,7 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
         }
         .background {
             if cameraColorEnabled, let current, let colorCapture {
-                colorCapture(current.site.cameras.filter { $0.gatewayID == gatewayID }.map(\.sourceID))
+                colorCapture(current.site.cameras.filter { onGateway($0) }.map(\.sourceID))
             }
             if let current, let automaticAlignment {
                 automaticAlignment(current, placingCamera != nil || scanning || busy || choosingCamera || importing)
@@ -187,9 +194,9 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
             cameraToAdd = nil
             actions.submit {
                 let camera = pending.camera
-                guard camera.gatewayID == gatewayID, current?.id == pending.siteID,
+                guard onGateway(camera), current?.id == pending.siteID,
                       await edit({ $0.cameras.append(camera) }), let current,
-                      current.id == pending.siteID, camera.gatewayID == gatewayID else { return }
+                      current.id == pending.siteID, onGateway(camera) else { return }
                 selectedCamera = camera.id
                 camerasExpanded = false
                 if cameraMetadata(camera)?.pose(in: current.site, now: Date()) == nil,
@@ -436,7 +443,7 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
     private func colorSources(_ site: Site) -> [UUID: SiteCameraColorSource] {
         guard cameraColorEnabled, placingCamera == nil else { return [:] }
         var result: [UUID: SiteCameraColorSource] = [:]
-        for camera in site.cameras where camera.gatewayID == gatewayID {
+        for camera in site.cameras where onGateway(camera) {
             if let source = feeds.first(where: { $0.id == camera.sourceID })?.colorSource { result[camera.id] = source }
         }
         return result
@@ -459,7 +466,7 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
     }
 
     private func colorStatus(_ camera: SiteCamera) -> String {
-        guard camera.gatewayID == gatewayID else { return "Connect to this camera's gateway." }
+        guard onGateway(camera) else { return "Connect to this camera's gateway." }
         guard let feed = feeds.first(where: { $0.id == camera.sourceID }) else { return "Camera unavailable on this gateway." }
         guard feed.colorSource != nil else { return "This feed does not provide visual color." }
         return cameraColorStatuses[camera.id] ?? "Waiting for camera…"
@@ -588,7 +595,7 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
                 Button("Cancel Placement") { placingCamera = nil; pendingCamera = nil }
             } else {
                 if let camera = current.site.cameras.first(where: { $0.id == selectedCamera }),
-                   camera.gatewayID == gatewayID,
+                   onGateway(camera),
                    feeds.contains(where: { $0.id == camera.sourceID }) {
                     HStack {
                         Text(SiteCameraLabel(name: camera.name, sourceID: camera.sourceID).title).font(.headline).lineLimit(2)
@@ -665,7 +672,7 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
 
     private var availableFeeds: [SiteFeed] {
         feeds.filter { feed in
-            !(current?.site.cameras.contains { $0.gatewayID == gatewayID && $0.sourceID == feed.id } ?? false)
+            !(current?.site.cameras.contains { onGateway($0) && $0.sourceID == feed.id } ?? false)
         }
     }
 
@@ -687,7 +694,7 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
     }
 
     private func cameraRow(_ camera: SiteCamera, now: Date) -> some View {
-        let feed = camera.gatewayID == gatewayID ? feeds.first { $0.id == camera.sourceID } : nil
+        let feed = onGateway(camera) ? feeds.first { $0.id == camera.sourceID } : nil
         let label = SiteCameraLabel(name: camera.name, sourceID: camera.sourceID)
         let hasPose = current.map { cameraMetadata(camera)?.pose(in: $0.site, now: now) != nil } ?? false
         let status = camera.position == nil && !hasPose ? "Not positioned" : (feed == nil ? "Unavailable on this gateway" : (feed?.isReceiving(at: now) == true ? "Receiving video" : "Ready to preview"))
@@ -739,7 +746,7 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
             showingMobileCameras = false
             return
         }
-        if camera.gatewayID == gatewayID, current.visualMapURL == nil, SiteRoomCapture.isSupported {
+        if onGateway(camera), current.visualMapURL == nil, SiteRoomCapture.isSupported {
             alignmentScanCamera = camera
             scanning = true
             return
@@ -749,7 +756,7 @@ public struct SiteWorkspace<Preview: View, Controls: View>: View {
     }
 
     private func cameraMetadata(_ camera: SiteCamera) -> SiteCameraMetadata? {
-        guard camera.gatewayID == gatewayID else { return nil }
+        guard onGateway(camera) else { return nil }
         let matches = metadata.filter { $0.sourceID == camera.sourceID }
         return matches.count == 1 ? matches.first : nil
     }
