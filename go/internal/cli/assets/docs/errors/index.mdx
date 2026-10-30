@@ -35,12 +35,15 @@ Check that the device is online with `wendy cloud discover`, then retry the
 upload. The CLI identifies unnamed devices by their Cloud ID and reports bytes
 sent across resume attempts. A lost connection during upload or while waiting
 for the app's start acknowledgement exits with status 5
-(`device_unreachable`, retryable). `wendy run` skips automatic registry fallback
-over Cloud v2.
+(`device_unreachable`, retryable). Automatic registry fallback is off after that
+transport failure. Use `--chunking=off` to upload through the registry, subject to
+the usual authorization. Old Agents without the chunk RPCs keep their registry
+fallback in `auto`.
 Set `WENDY_TLS_DEBUG=1` to print the underlying upload and reconnect diagnostics
-to stderr. For Compose and multi-service uploads over Cloud v2, use
-`--builder docker`. If the CLI asks you to update the Agent, update it before
-retrying instead. See [Cloud v2 uploads](/docs/advanced/clients/wendy-cli/commands/run#uploads-over-cloud-v2).
+to stderr. The Compose and multi-service chunk-upload path uses `--builder docker`.
+Apple Container keeps its direct registry route; use
+`--builder apple-container --chunking=off` to select it explicitly. In `force`,
+a missing capability requires an Agent update. See [Cloud v2 uploads](/docs/advanced/clients/wendy-cli/commands/run#uploads-over-cloud-v2).
 
 ## Host port already in use
 

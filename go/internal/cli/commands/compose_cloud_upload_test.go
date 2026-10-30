@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"os/exec"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -84,7 +85,7 @@ func TestComposeCloudV2DoesNotFallBackToTheRegistry(t *testing.T) {
 				t.Fatalf("raw cause exposed: %v", err)
 			}
 			if tc.drop {
-				if ExecutionErrorClass(err) != "device_unreachable" || !strings.Contains(err.Error(), "registry fallback isn't available") {
+				if ExecutionErrorClass(err) != "device_unreachable" || !strings.Contains(err.Error(), cloudRegistryFallbackNote) || !strings.Contains(err.Error(), cloudRegistryRetryHint) {
 					t.Fatalf("drop message/class: %v", err)
 				}
 			} else {
@@ -102,17 +103,33 @@ func TestComposeCloudV2DoesNotFallBackToTheRegistry(t *testing.T) {
 // Use the scheduler's real auto/off dispatch and the actual registry resolver.
 // Missing credentials must stop Apple Container before a tunnel or build starts.
 func TestComposeCloudV2AppleContainerKeepsRegistryRoute(t *testing.T) {
-	t.Setenv("WENDY_CONFIG_DIR", t.TempDir())
-	for _, mode := range []string{chunkingAuto, chunkingOff} {
-		t.Run(mode, func(t *testing.T) {
+	setupCloudRunFixture(t)
+	command := imageBuilderCommandContext
+	var statusCalls atomic.Int32
+	imageBuilderCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		if len(args) >= 2 && args[0] == "system" && args[1] == "status" {
+			statusCalls.Add(1)
+		}
+		return command(ctx, name, args...)
+	}
+	for _, tc := range []struct{ name, mode, builder string }{
+		{"auto with explicit Apple", chunkingAuto, imageBuilderAppleContainer},
+		{"off with explicit Apple", chunkingOff, imageBuilderAppleContainer},
+		{"off with automatic Apple selection", chunkingOff, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			before := statusCalls.Load()
 			conn := &grpcclient.AgentConnection{Host: "jetson", IsCloudV2: true, IsMTLS: true, RegistryDialer: func(context.Context, int) (net.Conn, error) {
 				t.Fatal("registry auth must be checked before opening a tunnel")
 				return nil, nil
 			}}
 			jobs := map[string]composeBuildJob{"app": {contextDir: t.TempDir(), repo: "apple-compose", dockerfile: "Dockerfile"}}
-			failed, _, err := buildComposeServicesParallel(t.Context(), conn, 5000, "linux", imageBuilderAppleContainer, "linux/arm64", mode, jobs, 1, true)
+			failed, _, err := buildComposeServicesParallel(t.Context(), conn, 5000, "linux", tc.builder, "linux/arm64", tc.mode, jobs, 1, true)
 			if err != nil || len(failed) != 1 || !errors.Is(failed["app"], errRegistryAuth) || errors.Is(failed["app"], errBuilderUnavailable) {
 				t.Fatalf("scheduler err=%v failed=%v; want the existing registry auth gate", err, failed)
+			}
+			if tc.builder == "" && statusCalls.Load() == before {
+				t.Fatal("automatic Apple Container route was not attempted")
 			}
 		})
 	}
