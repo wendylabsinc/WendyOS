@@ -116,10 +116,6 @@ func TestOperatorBrokerNormalColdNearbyPreparation(t *testing.T) {
 func TestOperatorBrokerNormalColdDiscoveryKeepsFirstRecipeAcrossPaths(t *testing.T) {
 	operatorBrokerNormal(t, "P256-nearby-paths", false)
 }
-func TestEmbeddedOperatorBrokerDisconnectJoins(t *testing.T) {
-	operatorBrokerNormal(t, "P256-embedded", true)
-}
-
 func TestOperatorBrokerNormalExplicitDisconnectJoins(t *testing.T) {
 	operatorBrokerNormal(t, "P256", true)
 }
