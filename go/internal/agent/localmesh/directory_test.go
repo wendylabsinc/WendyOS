@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/x509"
+	"errors"
 	"github.com/wendylabsinc/wendy/go/internal/agent/netwire"
 	"math/big"
 	"net/url"
@@ -55,6 +56,7 @@ func TestDirectoryOriginSignatureLeaseAndReplay(t *testing.T) {
 	d, chain, key, device, now := directoryFixture(t)
 	m := routeManifest(device, now)
 	m.Name = "Orin"
+	m.Agent = &AgentMetadata{Version: "agent-build", OS: "wendyos", OSVersion: "WendyOS-0.19.5"}
 	sign := func(m Manifest) SignedManifest {
 		t.Helper()
 		w, err := SignManifest(m, chain, key, now)
@@ -71,6 +73,18 @@ func TestDirectoryOriginSignatureLeaseAndReplay(t *testing.T) {
 		t.Fatalf("duplicate: %v %v", changed, err)
 	}
 	got := d.Snapshot(now)
+	if got[0].Agent == nil || *got[0].Agent != *m.Agent {
+		t.Fatal("lost signed metadata")
+	}
+	got[0].Agent.Version = "mutation"
+	if d.Snapshot(now)[0].Agent.Version != "agent-build" {
+		t.Fatal("metadata snapshot aliases directory")
+	}
+	tampered := w
+	tampered.Body = bytes.Replace(w.Body, []byte("agent-build"), []byte("other-build"), 1)
+	if _, err := d.Accept(tampered, now); !errors.Is(err, ErrInvalidManifestSignature) {
+		t.Fatalf("unsigned metadata change accepted: %v", err)
+	}
 	got[0].Name = "mutation"
 	if d.Snapshot(now)[0].Name != "Orin" {
 		t.Fatal("snapshot aliases directory")
@@ -138,6 +152,8 @@ func TestManifestTransportAndLimits(t *testing.T) {
 	manifest(func(m *Manifest) { m.Expires = now.Add(MaxLease + time.Second).UnixMilli() })
 	manifest(func(m *Manifest) { m.Expires = now.Add(-time.Second).UnixMilli() })
 	manifest(func(m *Manifest) { m.Name = string(bytes.Repeat([]byte("n"), 256)) })
+	manifest(func(m *Manifest) { m.Agent = &AgentMetadata{} })
+	manifest(func(m *Manifest) { m.Agent = &AgentMetadata{Version: string(bytes.Repeat([]byte("v"), 256))} })
 }
 
 func TestManifestAllowsExplicitNilUUID(t *testing.T) {

@@ -19,6 +19,7 @@ type AgentUpdateService struct {
 	agentpbv2.UnimplementedWendyAgentUpdateServiceServer
 	logger    *zap.Logger
 	installer *AgentInstaller
+	online    *onlineUpdater
 
 	// verifier checks the update binary's signature before install. Defaults
 	// to sigverify.DefaultVerifier (disabled until a real pinned key is
@@ -40,6 +41,7 @@ func NewAgentUpdateService(logger *zap.Logger, installer *AgentInstaller) *Agent
 	return &AgentUpdateService{
 		logger:    logger,
 		installer: installer,
+		online:    newOnlineUpdater(),
 		verifier:  sigverify.DefaultVerifier,
 		restartFn: scheduleAgentRestartExit,
 	}

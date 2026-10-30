@@ -129,7 +129,7 @@ func (v *Verifier) key(ctx context.Context, kid string) (jwk, error) {
 	}
 	client := v.HTTP
 	if client == nil {
-		client = &http.Client{Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+		client = &http.Client{Transport: grantKeyTransport, Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	}
 	req, err := http.NewRequestWithContext(ctx, "GET", strings.TrimSuffix(v.Issuer, "/")+"/.well-known/wendy-cloud-grants/jwks.json", nil)
 	if err != nil {

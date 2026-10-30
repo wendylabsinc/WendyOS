@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wendylabsinc/wendy/go/internal/agent/data"
 	"github.com/wendylabsinc/wendy/go/internal/agent/inference"
 )
 
@@ -164,7 +165,7 @@ func TestAgentInferenceRecordsNormalisedBoxesAndPictureSize(t *testing.T) {
 	// The person arrives: an event, an episode and a notification.
 	session.results <- frame
 	receiveInference(t, sender.requests)
-	events, _, _, err := service.manager.DeviceEvents(campaignAppPrefix+"people-all-cameras", "person_detected", "", true)
+	events, _, _, err := service.manager.DeviceEvents(data.CampaignAppID("people-all-cameras"), "person_detected", "", true)
 	if err != nil || len(events) != 1 {
 		t.Fatalf("device events %v, %v", events, err)
 	}

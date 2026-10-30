@@ -78,6 +78,21 @@ func (s *Supervisor) IsPairingConnected(p SensorPairing) bool {
 	return s.connected[p.Key()]
 }
 
+// CameraIdentities maps mounted nodes to their source principal and channel.
+// Node numbers are allocated in connection order and can change after restart;
+// consumers such as site models must persist this identity instead.
+func (s *Supervisor) CameraIdentities() map[uint32]string {
+	s.nodeIDsMu.Lock()
+	defer s.nodeIDsMu.Unlock()
+	out := make(map[uint32]string, len(s.nodeIDs))
+	for key, id := range s.nodeIDs {
+		if _, exists := s.lb.NodePath(id); exists {
+			out[id] = "sensorlink:" + key
+		}
+	}
+	return out
+}
+
 func (s *Supervisor) setConnected(p SensorPairing, connected bool) {
 	s.statusMu.Lock()
 	defer s.statusMu.Unlock()

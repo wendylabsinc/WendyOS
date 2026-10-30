@@ -16,8 +16,10 @@ func TestStreamRetiresCachedBootUUIDAfterEnrollment(t *testing.T) {
 	for _, tc := range []struct {
 		name                 string
 		probe, currentCached bool
+		renamed              bool
 	}{
 		{name: "cached only"}, {name: "old address answers", probe: true}, {name: "both IDs already cached", probe: true, currentCached: true},
+		{name: "enrollment renames hostname", probe: true, renamed: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "devices.json")
@@ -43,7 +45,11 @@ func TestStreamRetiresCachedBootUUIDAfterEnrollment(t *testing.T) {
 				initial *= 2
 			}
 			collectEvents(t, events, initial, 5*time.Second)
-			fb.emit(t, wendyService(newID, "Pi 4", "pi4.local", "10.0.0.42", 50052))
+			host := "pi4.local"
+			if tc.renamed {
+				host = "enrolled-pi4.local"
+			}
+			fb.emit(t, wendyService(newID, "Pi 4", host, "10.0.0.42", 50052))
 			n := 2
 			if tc.probe && !tc.currentCached {
 				n++

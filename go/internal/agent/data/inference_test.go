@@ -276,6 +276,31 @@ func TestCampaignImmediateNotificationDefaultsToCloud(t *testing.T) {
 	}
 }
 
+func TestClassificationTaskValidationAndRevision(t *testing.T) {
+	c, err := ParseCampaign(peopleCampaign(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldRevision := c.Revision
+	c.Inference.Task = "image-classification"
+	raw, _ := yaml.Marshal(c)
+	p, err := ParseCampaign(raw)
+	if err != nil || p.Revision == oldRevision {
+		t.Fatal("task must change campaign identity", err)
+	}
+	c.Inference.Backend = "yolo_onnx"
+	c.Inference.ModelFile = "model.onnx"
+	raw, _ = yaml.Marshal(c)
+	if _, err = ParseCampaign(raw); err == nil {
+		t.Fatal("YOLO detection backend accepted classification")
+	}
+	c.Inference.Task = "arbitrary-code"
+	raw, _ = yaml.Marshal(c)
+	if _, err = ParseCampaign(raw); err == nil {
+		t.Fatal("unknown task accepted")
+	}
+}
+
 func TestInferenceAcceleratorValidation(t *testing.T) {
 	raw := string(peopleCampaign(t))
 	yolo := strings.Replace(raw, "  model: facebook/detr-resnet-50", "  backend: yolo_onnx\n  model_file: onnx/model.onnx\n  model: facebook/detr-resnet-50", 1)

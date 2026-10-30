@@ -36,6 +36,7 @@ const (
 // Manifest is a device's own signed advertisement. Version 4 authorizes one exact
 // route origin for its lease and includes the full principal in the signed input.
 type Manifest struct {
+	Agent   *AgentMetadata `json:"agent,omitempty" cbor:"agent,omitempty"`
 	Version int            `json:"version" cbor:"v"`
 	Device  uuid.UUID      `json:"device" cbor:"d"`
 	Owner   *OperatorOwner `json:"owner,omitempty" cbor:"o,omitempty"`
@@ -78,6 +79,11 @@ var ErrInvalidManifestSignature = errors.New("invalid manifest signature")
 var ErrManifestOutlivesCertificate = errors.New("manifest outlives certificate")
 
 func (m Manifest) validate(now time.Time) error {
+	if a := m.Agent; a != nil {
+		if m.AgentPort == 0 || a.Version == "" || len(a.Version) > 255 || len(a.OS) > 128 || len(a.OSVersion) > 255 || len(a.DeviceType) > 128 || len(a.CPUArchitecture) > 32 {
+			return errors.New("invalid mesh agent metadata")
+		}
+	}
 	if m.Version != ManifestVersionRoute {
 		return &UnsupportedManifestError{Version: m.Version}
 	}

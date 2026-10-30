@@ -21,6 +21,7 @@ const NANLinkCost uint16 = 512
 type Provider struct {
 	Credentials *localmesh.Credentials
 	Node        LinkNode
+	Selection   *localmesh.PeerSelection
 	Logger      *zap.Logger
 	// Status receives local setup readiness/failure, not peer reachability.
 	// The optional callback must return promptly.

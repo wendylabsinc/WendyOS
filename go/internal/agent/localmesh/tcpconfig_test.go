@@ -56,7 +56,11 @@ func TestTCPConfigRequiresReciprocalConcretePeers(t *testing.T) {
 		{`{"infrastructureWifi":true}`, true},
 		{`{"ethernet":true,"infrastructureWifi":true}`, true},
 		{`{"tls_listen":"0.0.0.0:43024"}`, true},
-		{`{"leafListen":"0.0.0.0:43024"}`, false},
+		{`{"ethernet":true,"leafListen":"0.0.0.0:43024"}`, true},
+		{`{"ethernet":true,"leafListen":"0.0.0.0:43024","unknown":true}`, false},
+		{`{"leafListen":"0.0.0.0:43024","peers":[{"device":"` + peer.UUID().String() + `","address":"127.0.0.1:7002"}]}`, false},
+		{`{"leafListen":"0.0.0.0:43024","tls_listen":"missing-port"}`, false},
+		{`{"leafListen":"0.0.0.0:43024"} {}`, false},
 		{`{"tls_listen":"[::]:43024","ethernet":true}`, true},
 		{`{"tls_listen":"0.0.0.0:0"}`, false},
 		{`{"tls_listen":"missing-port"}`, false},
@@ -94,6 +98,44 @@ func TestTCPConfigRejectsOversizedFile(t *testing.T) {
 	self := testDevice(t, testPrincipal(testTenantUUID, testDeviceAID))
 	if _, err := LoadTCPConfig(path, self); err == nil {
 		t.Fatal("oversized configuration accepted")
+	}
+}
+
+func TestTCPConfigIgnoresRetiredCarriers(t *testing.T) {
+	self := testDevice(t, testPrincipal(testTenantUUID, testDeviceAID))
+	path := filepath.Join(t.TempDir(), "local-mesh.json")
+	for _, fields := range []string{
+		`"leafListen":"0.0.0.0:43024"`,
+		`"leafBLEPeers":[{"device":"old-device","address":"00:11:22:33:44:55"}],"leafTimeURL":"https://old.example/time"`,
+		`"leafListen":null,"leafBLEPeers":[],"leafTimeURL":""`,
+	} {
+		for _, current := range []string{"", `,"ethernet":true,"tls_listen":"[::]:43024"`} {
+			body := []byte("{" + fields + current + "}")
+			if err := os.WriteFile(path, body, 0600); err != nil {
+				t.Fatal(err)
+			}
+			cfg, err := LoadTCPConfig(path, self)
+			if err != nil {
+				t.Fatalf("load %s: %v", body, err)
+			}
+			if current == "" {
+				if cfg != nil {
+					t.Fatalf("retired carriers enabled networking: %+v", cfg)
+				}
+			} else {
+				if cfg == nil || !cfg.Ethernet || cfg.TLSListen != "[::]:43024" {
+					t.Fatalf("current carriers were lost: %+v", cfg)
+				}
+				encoded, err := json.Marshal(cfg)
+				if err != nil || bytes.Contains(encoded, []byte("leaf")) {
+					t.Fatalf("retired fields persisted: %s %v", encoded, err)
+				}
+			}
+			after, err := os.ReadFile(path)
+			if err != nil || !bytes.Equal(after, body) {
+				t.Fatalf("loading modified the file: %s %v", after, err)
+			}
+		}
 	}
 }
 
