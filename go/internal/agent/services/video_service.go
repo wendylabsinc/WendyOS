@@ -874,6 +874,7 @@ const (
 	sourceV4L2 videoSourceKind = iota
 	sourceIP
 	sourceROS2
+	sourceUSBThermal // a userspace USB thermal camera; see video_usbthermal.go
 )
 
 // videoSource is what a device ID resolves to. Introducing it removes the
@@ -953,9 +954,20 @@ type VideoService struct {
 	// the hub never opens an MCU-band node (see sensorlink_camera_feed.go). Nil
 	// in tests and builds without sensor pairing, which read the node as before.
 	sensorFrames *SensorFrameFeed
+	// usbThermal drives USB thermal cameras that have no kernel driver (the
+	// TOPDON TC001 Max). Nil-safe; see video_usbthermal.go.
+	usbThermal usbThermalDriver
+	// usbThermalLive registers each attached USB thermal camera as an
+	// in-process camera, for its encoded live view. Nil-safe; see
+	// video_usbthermal_live.go.
+	usbThermalLive *usbThermalLiveView
 
 	// twoPlaneState holds the two-plane camera data path's nodes and pumps.
 	twoPlaneState
+
+	// inProcessCameras holds cameras whose frames come from an in-process
+	// driver rather than a device node (see video_inprocess.go).
+	inProcessCameras
 
 	// runGStreamer is the injection seam for the network capture subprocess.
 	runGStreamer func(ctx context.Context, args []string, onFrame func([]byte)) error
@@ -1133,6 +1145,8 @@ func NewVideoService(ctx context.Context, logger *zap.Logger, pool *rtps.Pool, r
 		}
 	}
 	svc.ros2Cameras = ros2camera.NewManager(svcCtx, logger, svc.loopback, ros2CameraRegistryPath, graphs, pool)
+	svc.usbThermal = newUSBThermalDriver(svcCtx, logger)
+	svc.usbThermalLive = svc.startUSBThermalLiveView()
 	return svc
 }
 
@@ -1223,6 +1237,12 @@ func (s *VideoService) Shutdown() {
 	}
 	s.cancel()
 	s.wg.Wait()
+	if s.usbThermalLive != nil {
+		s.usbThermalLive.stop() // drops the live view's picture subscriptions
+	}
+	if s.usbThermal != nil {
+		s.usbThermal.Close() // waits until each camera is idle and released
+	}
 }
 
 // listCameras enumerates every camera the device can offer: local V4L2 nodes
@@ -1368,12 +1388,16 @@ func (s *VideoService) ListVideoDevices(ctx context.Context, _ *agentpb.ListVide
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to enumerate video devices: %v", err)
 	}
+	devices = append(devices, s.usbThermalDevices()...)
 	return &agentpb.ListVideoDevicesResponse{Devices: devices}, nil
 }
 
 // resolveSource maps a device ID onto the thing it names. IDs in the network
 // camera band resolve through the registry; everything else is a V4L2 node.
 func (s *VideoService) resolveSource(devID uint32) (videoSource, error) {
+	if src, ok := s.resolveUSBThermal(devID); ok {
+		return src, nil
+	}
 	if devID >= ros2camera.IDBandStart && devID <= ros2camera.IDBandEnd {
 		if s.ros2Cameras == nil {
 			return videoSource{}, status.Errorf(codes.NotFound, "camera %d not found", devID)
@@ -1526,6 +1550,7 @@ func (s *VideoService) RefreshCameras(ctx context.Context, _ *agentpb.RefreshCam
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "listing cameras: %v", err)
 	}
+	devices = append(devices, s.usbThermalDevices()...)
 	return &agentpb.RefreshCamerasResponse{Devices: devices}, nil
 }
 
@@ -2032,6 +2057,10 @@ func (s *VideoService) runProducer(ctx context.Context, h *deviceHub, path strin
 		// holding a decoded frame, so there is nothing raw to offer.
 		h.rawNotOffered(fixedReason("network cameras deliver encoded video only"))
 		err = s.runIPProducer(ctx, broadcast, path, req)
+	} else if strings.HasPrefix(path, usbThermalHubKeyPrefix) {
+		err = s.runUSBThermalProducer(ctx, h, strings.TrimPrefix(path, usbThermalHubKeyPrefix))
+	} else if strings.HasPrefix(path, inProcessHubKeyPrefix) {
+		err = s.runInProcessProducer(ctx, broadcast, path, req, h)
 	} else if s.sensorFrames != nil && isSensorLinkCameraPath(path) {
 		err = s.streamSensorLinkCamera(ctx, broadcast, path, req, h)
 		if errors.Is(err, errSensorFeedNotJPEG) {
@@ -2333,6 +2362,10 @@ func (s *VideoService) streamDeviceID(req *agentpb.StreamVideoRequest) (uint32, 
 	if stableID == "" {
 		return req.GetDeviceId(), nil
 	}
+	// A USB thermal camera has no /dev/v4l entry; its stable id is the driver's.
+	if devID, ok := s.resolveUSBThermalStableID(stableID); ok {
+		return devID, nil
+	}
 	if s.readStableNames == nil {
 		return 0, status.Errorf(codes.Unimplemented,
 			"stable_id is not supported on this agent")
@@ -2340,9 +2373,10 @@ func (s *VideoService) streamDeviceID(req *agentpb.StreamVideoRequest) (uint32, 
 	names := s.readStableNames()
 	devID, ok := resolveStableID(names, stableID)
 	if !ok {
+		known := append(knownStableIDs(names), s.usbThermalStableIDs()...)
 		return 0, status.Errorf(codes.NotFound,
 			"no camera with stable id %q; ListVideoDevices reports %v",
-			stableID, knownStableIDs(names))
+			stableID, known)
 	}
 	return devID, nil
 }
@@ -2372,11 +2406,22 @@ func (s *VideoService) StreamVideo(req *agentpb.StreamVideoRequest, stream grpc.
 	if devID > maxVideoDeviceID {
 		return status.Errorf(codes.InvalidArgument, "device ID out of range")
 	}
+	// A camera registered by an in-process driver has no node to resolve; it
+	// takes precedence over every other source for its ID. A USB thermal
+	// camera is registered as one, for its encoded live view; its raw frames
+	// still come from its raw tap, through resolveSource below.
+	s.syncUSBThermalLiveView(devID)
+	if handled, err := s.streamInProcessCamera(stream, devID, req); handled {
+		return err
+	}
 	src, err := s.resolveSource(devID)
 	if err != nil {
 		return err
 	}
 
+	if src.kind == sourceUSBThermal {
+		return s.streamUSBThermal(stream, src, req)
+	}
 	if src.kind == sourceIP {
 		if req.GetCodec() == agentpb.VideoCodec_VIDEO_CODEC_RAW {
 			// Refused before a hub exists: the producer would only say the same
