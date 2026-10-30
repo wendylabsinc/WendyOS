@@ -3,10 +3,12 @@ package usbthermal
 import (
 	"bytes"
 	"compress/gzip"
+	"encoding/base64"
 	"encoding/binary"
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -18,6 +20,9 @@ import (
 //     stream. The block is the first of its composite frame (counter 21901).
 //   - tc001max-header-window.bin: 2 KiB centred on a composite-frame header
 //     (the header is at offset 1024), with visible bytes around it.
+//
+// Both are stored base64-encoded (".b64") so that the change stays reviewable
+// as text; the bytes themselves are untouched.
 const (
 	windowMargin   = 4096 // visible bytes before and after the block in the window
 	headerAt       = 1024 // offset of the header in the header window
@@ -28,9 +33,13 @@ var tc001Max = models[0].Layout
 
 func readFixture(t *testing.T, name string) []byte {
 	t.Helper()
-	b, err := os.ReadFile(filepath.Join("testdata", name))
+	text, err := os.ReadFile(filepath.Join("testdata", name+".b64"))
 	if err != nil {
 		t.Fatalf("reading fixture: %v", err)
+	}
+	b, err := base64.StdEncoding.DecodeString(strings.Join(strings.Fields(string(text)), ""))
+	if err != nil {
+		t.Fatalf("decoding fixture %s: %v", name, err)
 	}
 	if filepath.Ext(name) != ".gz" {
 		return b
