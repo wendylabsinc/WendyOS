@@ -300,3 +300,71 @@ func TestClassificationTaskValidationAndRevision(t *testing.T) {
 		t.Fatal("unknown task accepted")
 	}
 }
+
+func TestInferenceAcceleratorValidation(t *testing.T) {
+	raw := string(peopleCampaign(t))
+	yolo := strings.Replace(raw, "  model: facebook/detr-resnet-50", "  backend: yolo_onnx\n  model_file: onnx/model.onnx\n  model: facebook/detr-resnet-50", 1)
+	for _, test := range []struct {
+		yaml, accelerator, want string
+		ok                      bool
+	}{
+		{raw, "", AcceleratorAuto, true},
+		{raw, "auto", AcceleratorAuto, true},
+		{raw, "cpu", AcceleratorCPU, true},
+		{yolo, "tensorrt", AcceleratorTensorRT, true},
+		// Only the YOLO ONNX backend has a TensorRT engine.
+		{raw, "tensorrt", "", false},
+		// Closed: no aliases, no other accelerators yet, no case folding.
+		{yolo, "gpu", "", false},
+		{yolo, "cuda", "", false},
+		{yolo, "qnn", "", false},
+		{yolo, "TensorRT", "", false},
+	} {
+		yaml := test.yaml
+		if test.accelerator != "" {
+			yaml = strings.Replace(yaml, "  model: facebook/detr-resnet-50", "  accelerator: "+test.accelerator+"\n  model: facebook/detr-resnet-50", 1)
+		}
+		campaign, err := ParseCampaign([]byte(yaml))
+		if (err == nil) != test.ok {
+			t.Fatalf("accelerator %q: %v", test.accelerator, err)
+		}
+		if err == nil && campaign.Inference.EffectiveAccelerator() != test.want {
+			t.Fatalf("accelerator %q became %q", test.accelerator, campaign.Inference.EffectiveAccelerator())
+		}
+	}
+}
+
+// Campaigns deployed before accelerators existed must keep their revisions: a
+// new revision would re-arm every deployed campaign on agent update. These are
+// the example's revisions before the field was added.
+func TestInferenceAcceleratorKeepsExistingRevisions(t *testing.T) {
+	raw := string(peopleCampaign(t))
+	yolo := strings.Replace(raw, "  model: facebook/detr-resnet-50", "  backend: yolo_onnx\n  model_file: onnx/model.onnx\n  model: facebook/detr-resnet-50", 1)
+	for yaml, want := range map[string]string{
+		raw:  "5bdd06fff93d5871fd29b77c85a8a9f17d28486b06c2a4af4d21fa610f1ca625",
+		yolo: "b9c856a7a288e1217372382f1481e0d29abbc7666da832326ee4427687afca2c",
+	} {
+		campaign, err := ParseCampaign([]byte(yaml))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if campaign.Revision != want {
+			t.Fatalf("revision changed: %s, want %s", campaign.Revision, want)
+		}
+	}
+	revisions := map[string]bool{}
+	for _, accelerator := range []string{"", "auto", "cpu", "tensorrt"} {
+		yaml := yolo
+		if accelerator != "" {
+			yaml = strings.Replace(yolo, "  backend: yolo_onnx", "  backend: yolo_onnx\n  accelerator: "+accelerator, 1)
+		}
+		campaign, err := ParseCampaign([]byte(yaml))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if revisions[campaign.Revision] {
+			t.Fatalf("accelerator %q did not change the revision", accelerator)
+		}
+		revisions[campaign.Revision] = true
+	}
+}

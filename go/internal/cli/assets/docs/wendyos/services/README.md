@@ -122,21 +122,51 @@ remains available locally within the buffer's retention limits. Set a collector
 host, host:port, or HTTPS URL without a path, then restart the agent.
 
 `WENDY_DATA_DIR` sets the root directory for the device-local Episode store.
-On Linux with a separately mounted `/data` partition, the default is
-`/data/wendy-agent/data/episodes`. At first startup, the agent copies an existing
-default store from `/var/lib/wendy-agent/data`, including campaigns and inference
-state, into the persistent partition before using it. The original is retained
-for rollback. Other hosts keep `/var/lib/wendy-agent/data/episodes` as the default.
-Set an explicit path in the agent service environment to override this selection:
+It is only needed for a custom location. Without it, the agent uses
+`/var/lib/wendy/wendy-data/episodes` when `/var/lib/wendy` is on a separate
+filesystem larger than the one holding `/var/lib/wendy-agent`, which on WendyOS
+is the persistent `/data` partition beside the root slot, and
+`/var/lib/wendy-agent/data/episodes` otherwise. It logs `Wendy Data episode store` once at startup with the path, the
+campaign plan directory, the inference folder and why it chose them.
+
+The campaign inference runtime and model files live beside the store, in
+`inference/`, with one exception. On a device where an earlier agent already
+downloaded them to `/var/lib/wendy-agent/data/inference` and the store moved to
+the data partition by default, the agent keeps using them there, so the update
+downloads nothing (about 1.1 GB of Python packages and models on a Jetson).
+To put them on the data partition, stop the agent, move that folder to
+`/var/lib/wendy/wendy-data/inference` and start it again: the first campaign
+inference rebuilds its Python environment from the moved files without
+downloading them. An OS update starts the other root slot without the old
+folder, so the runtime it downloads then goes to the data partition.
+
+Campaign plans live beside the store in `campaigns/`, so on WendyOS they
+survive an OS update together with the episodes they record. When the store
+moves to the data partition, the agent copies the plans an earlier agent
+deployed in `/var/lib/wendy-agent/data/campaigns` there once, so every deployed
+campaign stays armed, and leaves the originals in place. If they cannot be
+copied, that folder stays in use and the startup line says why.
+
+Point `WENDY_DATA_DIR` at a dedicated folder, never at a mount point such as
+`/data` itself:
 
 ```sh
-WENDY_DATA_DIR=/data/wendy-agent/data/episodes wendy-agent
+WENDY_DATA_DIR=/data/wendy-data/episodes wendy-agent
 ```
 
+An existing `/data/wendy-agent/data/episodes` store from an earlier native-app
+build remains in use, together with its campaign plans and inference cache.
+
+Episodes an earlier agent recorded in `/var/lib/wendy-agent/data/episodes` stay
+there when the default moves to the data partition. They are no longer listed
+or uploaded, and the agent logs at each startup how many there are and how many
+had not been uploaded. Move them into the new store while the agent is stopped
+to list them again and upload the rest, or delete them.
+
 The agent creates the directory on startup. Unprivileged developer agents that
-cannot create the production default fall back to their platform user
-configuration directory. An explicit `WENDY_DATA_DIR` is used unchanged and is
-not migrated automatically.
+cannot create the default fall back to their platform user configuration
+directory.
+An explicit `WENDY_DATA_DIR` is used unchanged and is not migrated automatically.
 
 ## Agent shutdown
 

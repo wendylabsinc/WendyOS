@@ -297,7 +297,7 @@ func (s *Server) serveTLSDatagrams(ctx context.Context, secure *tlsRecordConn, p
 	for _, cert := range secure.ConnectionState().PeerCertificates {
 		chain = append(chain, cert.Raw)
 	}
-	identity, err := s.credentials.Verify(chain, time.Now())
+	identity, err := s.credentials.VerifyTLS(chain, time.Now())
 	if err != nil {
 		return
 	}

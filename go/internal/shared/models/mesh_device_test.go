@@ -9,7 +9,7 @@ func TestMeshMergeUsesFullPrincipalAndPreservesPhysicalPaths(t *testing.T) {
 	mesh := MeshDevice{Selector: "mesh://" + tenant + "/" + device, Principal: principal, Tenant: tenant, Device: device, Name: "same name", Platform: "Lite", Caps: []string{"sensors", "future-optional"}}
 	c := &DevicesCollection{LANDevices: []LANDevice{{DisplayName: "physical", Hostname: "physical.local", PrincipalURI: principal, TenantUUID: tenant}}, MeshDevices: []MeshDevice{mesh}}
 	rows := c.MergedDevices()
-	if len(rows) != 1 || rows[0].Mesh == nil || rows[0].LAN == nil || rows[0].ConnectionTypes() != "Mesh (Lite), LAN" {
+	if len(rows) != 1 || rows[0].Mesh == nil || rows[0].LAN == nil || rows[0].ConnectionTypes() != "WendyNet (Lite), LAN" {
 		t.Fatal(rows)
 	}
 	if !rows[0].Sensorlink || len(rows[0].Caps) != 2 || rows[0].Caps[1] != "future-optional" {
@@ -35,7 +35,7 @@ func TestMeshMergeUsesFullPrincipalAndPreservesPhysicalPaths(t *testing.T) {
 	c.LANDevices = nil
 	c.MeshDevices = []MeshDevice{mesh}
 	rows = c.MergedDevices()
-	if rows[0].Address() != mesh.Selector || c.IsEmpty() {
+	if rows[0].Address() != "-" || c.IsEmpty() {
 		t.Fatal(rows)
 	}
 }

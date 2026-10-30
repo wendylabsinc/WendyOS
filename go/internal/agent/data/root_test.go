@@ -1,6 +1,7 @@
 package data
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -109,7 +110,8 @@ func TestStorageErrorReportsFilesystemAndFreeSpace(t *testing.T) {
 	}
 	m.SetQuota(DefaultMaxQuotaBytes, 1<<62)
 	_, err = m.Start(StartOptions{Name: "quota-check", Sources: []string{"applications"}})
-	if err == nil || !strings.Contains(err.Error(), m.root) || !strings.Contains(err.Error(), "GiB free") {
+	var space *StoreSpaceError
+	if !errors.As(err, &space) || !strings.Contains(err.Error(), m.root) || !strings.Contains(err.Error(), "free") {
 		t.Fatalf("not an actionable storage error: %v", err)
 	}
 }

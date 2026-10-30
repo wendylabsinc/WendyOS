@@ -28,8 +28,10 @@ func TestWendyLiteBoards(t *testing.T) {
 		seen[b.Board] = true
 	}
 
-	if !seen["esp32c6_net"] {
-		t.Error("expected board esp32c6_net in the catalog")
+	for _, board := range []string{"esp32c5_net_psram", "esp32c6_net", "esp32p4_dfr1172_firebeetle_native"} {
+		if !seen[board] {
+			t.Errorf("expected board %s in the catalog", board)
+		}
 	}
 }
 
@@ -68,6 +70,7 @@ func TestWendyLiteFirmwareID(t *testing.T) {
 		{"esp32s31_mosaico_native", "esp32s31_mosaico_native"},
 		{"esp32c6_generic_native", "esp32c6_native"},
 		{"esp32c5_net_psram", "esp32c5_net_psram"},
+		{"esp32p4_dfr1172_firebeetle_native", "esp32p4_dfr1172_firebeetle_native"},
 	}
 	for _, tc := range cases {
 		got, err := WendyLiteFirmwareID(tc.board)
@@ -87,11 +90,12 @@ func TestWendyLiteFirmwareID(t *testing.T) {
 
 func TestWendyLiteTargetForBoard(t *testing.T) {
 	tests := map[string]string{
-		"esp32c5_net_psram":         "esp32c5",
-		"esp32c6_net":               "esp32c6",
-		"esp32c61_generic_native":   "esp32c61",
-		"esp32s31_generic_native":   "esp32s31",
-		"esp32s3_seeed_xiao_native": "esp32s3",
+		"esp32c5_net_psram":                 "esp32c5",
+		"esp32p4_dfr1172_firebeetle_native": "esp32p4",
+		"esp32c6_net":                       "esp32c6",
+		"esp32c61_generic_native":           "esp32c61",
+		"esp32s31_generic_native":           "esp32s31",
+		"esp32s3_seeed_xiao_native":         "esp32s3",
 	}
 	for board, want := range tests {
 		t.Run(board, func(t *testing.T) {

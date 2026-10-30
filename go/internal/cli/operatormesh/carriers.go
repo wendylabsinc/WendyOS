@@ -131,6 +131,7 @@ func (s *Session) connectCandidate(ctx context.Context, candidate carriers.Candi
 				peer = actual
 				return nil
 			}}
+		s.Node.Credentials.ConfigureTLSClient(config, meshoperatorlink.RouterALPN)
 		options := s.options
 		options.Transport = candidate.Transport
 		options.RouterAddress = candidate.Address

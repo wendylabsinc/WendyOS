@@ -313,6 +313,7 @@ func NewRootCmd() *cobra.Command {
 		netCmd,
 		newVMCmd(),
 		dataCmd,
+		newJobCmd(),
 		// Cloud
 		cloudCmd,
 		appCmd,

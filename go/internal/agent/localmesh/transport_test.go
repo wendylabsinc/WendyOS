@@ -423,7 +423,7 @@ func TestLinkQUICResumesAcrossCarriers(t *testing.T) {
 		}
 		defer conn.CloseWithError(0, "done")
 		state := conn.ConnectionState()
-		if state.TLS.NegotiatedProtocol != alpn {
+		if ApplicationProtocol(state.TLS.NegotiatedProtocol) != alpn {
 			return result{}, fmt.Errorf("unexpected QUIC ALPN %q", state.TLS.NegotiatedProtocol)
 		}
 		stream, err := conn.OpenStreamSync(ctx)
@@ -566,7 +566,7 @@ func TestScopedPeerTLSResumesOnlyWithinCredentialALPNAndTransport(t *testing.T) 
 		if err := <-serverErr; err != nil {
 			return measuredHandshake{}, err
 		}
-		if state := <-serverState; state.NegotiatedProtocol != alpn || !state.HandshakeComplete {
+		if state := <-serverState; ApplicationProtocol(state.NegotiatedProtocol) != alpn || !state.HandshakeComplete {
 			t.Fatalf("server TLS state = %+v", state)
 		}
 		sizes := <-serverBytes

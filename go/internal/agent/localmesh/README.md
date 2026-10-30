@@ -194,7 +194,7 @@ The original leaf protocol, leaf listener, radio peer configuration and delegate
 `wendy-net-endpoint/2` strategy are retired. No endpoint route offer/ready exchange
 or delegated route origin is accepted. Each ordinary peer supplies its own
 signed Babel origin; the node passes Babel's selected routes to the kernel.
-Native Lite carrier discovery and listeners are a separate integration layer.
+Lite carrier discovery and listeners use the host radio and TCP runtime.
 
 The stream writer gives directory/Babel the first turn, then alternates with
 waiting IP packets. A proof backlog cannot monopolize the writer, and fragments
@@ -406,7 +406,8 @@ An edit publishes immediately when idle; edits within one second coalesce into
 the latest complete state. Five quiet minutes after a successful publication
 trigger refresh. Reconciliation runs every five minutes, with bounded repair
 continuation on the one-second maintenance tick. These intervals are separate
-from Babel's one-second Hello and 16-second Update intervals. Durable revisions
+from Babel's one-second datagram Hello and 16-second Update intervals;
+reliable stream links can use a longer per-link Hello interval. Durable revisions
 and bounded replay receipts prevent restart from resurrecting superseded state.
 
 The payload path is IPv6 through peer TUNs and the selected Babel next hop. A
@@ -542,17 +543,18 @@ from verified, live device manifests. Catalog projection requires a selected
 reachable Babel route for remote devices; it has no second synchronization gate,
 identity cache, signature owner, inventory or network transport.
 
-The native WendyOS manifest advertises only its installed QUIC app listener.
-The schema accepts explicit TLS app endpoints, but TLS advertisement is added
-only alongside listener startup in the native VIP integration layer.
+The WendyOS manifest advertises the application listeners that actually started:
+QUIC and, when available, TCP with TLS. Lite can use the TLS endpoint without
+QUIC. These signed destination endpoints are independent of the carrier used
+by any particular hop; clients still authenticate the destination end to end.
 
 ## Application service discovery
 
 Applications with the mesh network entitlement can browse signed Wendy Net
 services over their private DNS-SD bridge. Remote services appear while the
-origin has a live host route, a current device announcement and a reconciled
-service inventory. Route loss withdraws their DNS records without renewing the
-signed service lease; recovery projects only services still present and live.
+origin has a live host route and a current verified device manifest containing
+those services. Route loss withdraws their DNS records without renewing the
+manifest lease; recovery projects only services still present and live.
 
 When Ethernet or infrastructure Wi-Fi is enabled for Wendy Net, the same app
 bridge also exposes services observed directly on those physical links. These
