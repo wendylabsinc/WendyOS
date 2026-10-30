@@ -12,6 +12,7 @@ import (
 
 	"github.com/godbus/dbus/v5"
 	"github.com/godbus/dbus/v5/prop"
+	"github.com/wendylabsinc/wendy/go/internal/agent/btradio"
 	"go.uber.org/zap"
 
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
@@ -179,38 +180,7 @@ type advertisement struct{}
 
 func (*advertisement) Release() *dbus.Error { return nil }
 
-// BlueZ accepts a requested advertising-set power only when the manager
-// advertises CanSetTxPower. This setting does not control connected LE links.
-func advertisementTxPower(manager map[string]dbus.Variant) (int16, bool) {
-	features, ok := manager["SupportedFeatures"].Value().([]string)
-	if !ok {
-		return 0, false
-	}
-	canSet := false
-	for _, feature := range features {
-		if feature == "CanSetTxPower" {
-			canSet = true
-			break
-		}
-	}
-	if !canSet {
-		return 0, false
-	}
-	capabilities, ok := manager["SupportedCapabilities"].Value().(map[string]dbus.Variant)
-	if !ok {
-		return 0, false
-	}
-	maximum, ok := capabilities["MaxTxPower"].Value().(int16)
-	if !ok || maximum < -127 {
-		return 0, false
-	}
-	if maximum > 20 {
-		maximum = 20
-	}
-	return maximum, true
-}
-
-func advertisementProperties(uuid string, payload []byte, manager map[string]dbus.Variant) map[string]*prop.Prop {
+func advertisementProperties(uuid string, payload []byte) map[string]*prop.Prop {
 	properties := map[string]*prop.Prop{
 		"Type":        {Value: "peripheral", Writable: false, Emit: prop.EmitFalse},
 		"ServiceData": {Value: map[string]dbus.Variant{uuid: dbus.MakeVariant(payload)}, Writable: false, Emit: prop.EmitFalse},
@@ -219,38 +189,7 @@ func advertisementProperties(uuid string, payload []byte, manager map[string]dbu
 		// ("Failed to parse advertisement", carrier down fleet-wide on
 		// golden15). Scan governor in provider_linux.go is retained.
 	}
-	if power, ok := advertisementTxPower(manager); ok {
-		properties["TxPower"] = &prop.Prop{Value: power, Writable: false, Emit: prop.EmitFalse}
-	}
 	return properties
-}
-
-func registerAdvertisementWithFallback(properties map[string]*prop.Prop, export func(map[string]*prop.Prop) error, register func() error) error {
-	if err := export(properties); err != nil {
-		return fmt.Errorf("exporting BLE advertisement: %w", err)
-	}
-	if err := register(); err != nil {
-		_, hasPower := properties["TxPower"]
-		_, hasMin := properties["MinInterval"]
-		_, hasMax := properties["MaxInterval"]
-		if !hasPower && !hasMin && !hasMax {
-			return fmt.Errorf("registering BLE advertisement: %w", err)
-		}
-		// A controller or BlueZ version may report support yet reject an
-		// optional request (TxPower and/or Min/MaxInterval — golden15
-		// proved intervals alone break BlueZ 5.87 registration). Retry
-		// at the controller's defaults.
-		delete(properties, "TxPower")
-		delete(properties, "MinInterval")
-		delete(properties, "MaxInterval")
-		if exportErr := export(properties); exportErr != nil {
-			return fmt.Errorf("registering BLE advertisement with TxPower: %w; fallback export: %v", err, exportErr)
-		}
-		if retryErr := register(); retryErr != nil {
-			return fmt.Errorf("registering BLE advertisement with TxPower: %w; fallback: %v", err, retryErr)
-		}
-	}
-	return nil
 }
 
 func setupBlueZ(ctx context.Context, bus *dbus.Conn, adapter dbus.ObjectPath, uuid string, payload []byte) error {
@@ -258,22 +197,14 @@ func setupBlueZ(ctx context.Context, bus *dbus.Conn, adapter dbus.ObjectPath, uu
 	if err := obj.CallWithContext(ctx, "org.freedesktop.DBus.Properties.Set", 0, adapterInterface, "Powered", dbus.MakeVariant(true)).Err; err != nil {
 		return fmt.Errorf("powering BLE adapter: %w", err)
 	}
-	// These optional manager properties are absent on some BlueZ versions and
-	// controllers. A failed lookup must not prevent ordinary BLE advertising.
-	var manager map[string]dbus.Variant
-	_ = obj.CallWithContext(ctx, "org.freedesktop.DBus.Properties.GetAll", 0, advertManagerInterface).Store(&manager)
 	if err := bus.Export(&advertisement{}, advertPath, advertInterface); err != nil {
 		return err
 	}
-	properties := advertisementProperties(uuid, payload, manager)
-	if err := registerAdvertisementWithFallback(properties, func(p map[string]*prop.Prop) error {
-		_, err := prop.Export(bus, advertPath, map[string]map[string]*prop.Prop{advertInterface: p})
-		return err
-	}, func() error {
-		return obj.CallWithContext(ctx, advertManagerInterface+".RegisterAdvertisement", 0, advertPath, map[string]dbus.Variant{}).Err
-	}); err != nil {
+	properties := advertisementProperties(uuid, payload)
+	if err := btradio.ApplyAdvertisement(ctx, bus, adapter, advertPath, advertInterface, "wendy-net", properties); err != nil {
 		return err
 	}
+
 	if err := obj.CallWithContext(ctx, adapterInterface+".SetDiscoveryFilter", 0, meshDiscoveryFilter()).Err; err != nil {
 		_ = obj.CallWithContext(ctx, advertManagerInterface+".UnregisterAdvertisement", 0, advertPath).Err
 		return fmt.Errorf("setting BLE discovery filter: %w", err)

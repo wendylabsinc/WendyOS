@@ -12,9 +12,10 @@ import (
 )
 
 type netSettingsFixture struct {
-	calls  []string
-	config *pb.WendyComNetConfig
-	closed int
+	calls    []string
+	config   *pb.WendyComNetConfig
+	profiles uint32
+	closed   int
 }
 
 func (f *netSettingsFixture) GetNetStatus(timeout time.Duration) (*pb.WendyComNetStatus, error) {
@@ -23,7 +24,7 @@ func (f *netSettingsFixture) GetNetStatus(timeout time.Duration) (*pb.WendyComNe
 	if f.config != nil {
 		desired = proto.Clone(f.config).(*pb.WendyComNetConfig)
 	}
-	return &pb.WendyComNetStatus{Desired: desired, BleSupported: true}, nil
+	return &pb.WendyComNetStatus{Desired: desired, BleSupported: true, BleProfilesSupported: f.profiles}, nil
 }
 func (f *netSettingsFixture) SetNetConfig(config *pb.WendyComNetConfig, timeout time.Duration) (*pb.WendyComNetStatus, error) {
 	f.calls = append(f.calls, "set")
@@ -101,5 +102,28 @@ func TestLiteNetProviderRefusesUpdateWithoutSavedSettings(t *testing.T) {
 	_, err := (&MicroWendyProvider{}).ConfigureNet(context.Background(), models.ExternalDevice{}, func(*pb.WendyComNetConfig) error { t.Fatal("invoked update without saved settings"); return nil })
 	if err == nil || !strings.Contains(err.Error(), "no saved") || len(fixture.calls) != 1 || fixture.closed != 1 {
 		t.Fatalf("missing policy update = %v, %+v", err, fixture)
+	}
+}
+
+func TestLiteNetProfileRequiresAdvertisedFirmwareSupport(t *testing.T) {
+	old := connectLiteNetClient
+	t.Cleanup(func() { connectLiteNetClient = old })
+	for _, mask := range []uint32{0, 1, 7} {
+		fixture := &netSettingsFixture{config: &pb.WendyComNetConfig{}, profiles: mask}
+		connectLiteNetClient = func(context.Context, *MicroWendyProvider, models.ExternalDevice) (liteNetClient, error) {
+			return fixture, nil
+		}
+		_, err := (&MicroWendyProvider{}).ConfigureNet(context.Background(), models.ExternalDevice{}, func(c *pb.WendyComNetConfig) error {
+			c.Ble = true
+			c.BleProfile = pb.WendyComBleProfile_WENDY_COM_BLE_CODED_S8
+			return nil
+		})
+		if mask != 7 {
+			if err == nil || len(fixture.calls) != 1 {
+				t.Fatalf("old/unsupported firmware received a coded profile: mask=%d calls=%v err=%v", mask, fixture.calls, err)
+			}
+		} else if err != nil || len(fixture.calls) != 2 {
+			t.Fatalf("supported profile rejected: %v calls=%v", err, fixture.calls)
+		}
 	}
 }

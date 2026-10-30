@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/godbus/dbus/v5"
+	"github.com/godbus/dbus/v5/prop"
+	"github.com/wendylabsinc/wendy/go/internal/agent/btradio"
 	"github.com/wendylabsinc/wendy/go/internal/agent/localmesh"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
 	"go.uber.org/zap"
@@ -41,6 +43,7 @@ type runtime struct {
 	dialCoC              func(context.Context, string, string, uint16) (net.Conn, error)
 	serverTLS            *tls.Config
 	advertisementRefresh chan struct{}
+	advertisement        Advertisement
 	tlsGate              tlsHandshakeAdmission
 	discovery            discoveryRecovery
 	reportErrors         <-chan error
@@ -321,6 +324,26 @@ func Run(ctx context.Context, cfg Config) error {
 		return err
 	}
 	r := &runtime{cfg: cfg, uuid: uuid, owner: owner, hciIndex: hciIndex, local: local, ownerLookup: bluezOwner, bus: bus, freshness: freshness, reportErrors: reportErrors, reportErr: reportErr, dialSlot: make(chan struct{}, 1), tlsGate: newTLSHandshakeAdmission()}
+	r.advertisement = adv
+	unsubscribeRadio, err := btradio.Register(runCtx, "wendy-net", func(ctx context.Context) error {
+		return btradio.ApplyAdvertisementSnapshot(ctx, bus, adapter, advertPath, advertInterface, "wendy-net", func() (map[string]*prop.Prop, error) {
+			r.mu.Lock()
+			current := r.advertisement
+			r.mu.Unlock()
+			latest, err := current.MarshalBinary()
+			if err != nil {
+				return nil, err
+			}
+			return advertisementProperties(uuid, latest), nil
+		})
+	})
+	if err != nil {
+		if unsubscribeRadio != nil {
+			unsubscribeRadio()
+		}
+		return err
+	}
+	defer unsubscribeRadio()
 	r.serverTLS = r.makeServerTLS()
 	r.advertisementRefresh = make(chan struct{}, 1)
 	var loops sync.WaitGroup
@@ -337,7 +360,12 @@ func Run(ctx context.Context, cfg Config) error {
 	go func() {
 		defer loops.Done()
 		loopErrors <- runAdvertisementRefresh(runCtx, r.advertisementRefresh, advertisementRefreshInterval, func(ctx context.Context) error {
-			return refreshOwnedAdvertisement(ctx, bus, closeTransport, owner, uuid, payload)
+			return refreshOwnedAdvertisement(ctx, bus, closeTransport, owner, uuid, func() ([]byte, error) {
+				r.mu.Lock()
+				current := r.advertisement
+				r.mu.Unlock()
+				return current.MarshalBinary()
+			})
 		})
 	}()
 	var loopErr error

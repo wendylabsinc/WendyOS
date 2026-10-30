@@ -3,6 +3,8 @@ package wendy.agent.services.v2;
 option go_package = "github.com/wendylabsinc/wendy/proto/gen/agentpb/v2;agentpbv2";
 
 service WendyBluetoothService {
+    rpc GetBluetoothRadio(GetBluetoothRadioRequest) returns (BluetoothRadioStatus);
+    rpc ConfigureBluetoothRadio(ConfigureBluetoothRadioRequest) returns (BluetoothRadioStatus);
     rpc ScanBluetoothPeripherals(stream ScanBluetoothPeripheralsRequest) returns (stream ScanBluetoothPeripheralsResponse);
     rpc ConnectBluetoothPeripheral(ConnectBluetoothPeripheralRequest) returns (ConnectBluetoothPeripheralResponse);
     rpc DisconnectBluetoothPeripheral(DisconnectBluetoothPeripheralRequest) returns (DisconnectBluetoothPeripheralResponse);
@@ -55,3 +57,42 @@ message ForgetBluetoothPeripheralRequest {
 }
 
 message ForgetBluetoothPeripheralResponse {}
+
+// Radio policy applies to every Bluetooth advertisement owned by the agent.
+message BluetoothPowerSetting {
+    // default, maximum, or dbm. dbm is meaningful only in dbm mode.
+    string mode = 1;
+    sint32 dbm = 2;
+}
+message GetBluetoothRadioRequest {}
+message ConfigureBluetoothRadioRequest {
+    BluetoothPowerSetting advertising = 1;
+    BluetoothPowerSetting connections = 2;
+    // Empty preserves the mode. A supported mode includes advertising and data.
+    string mesh_mode = 3;
+}
+message BluetoothAdvertisingPowerStatus {
+    string name = 1;
+    optional sint32 requested_dbm = 2;
+    bool registered = 3;
+    string error = 4;
+    // Absent when the controller cannot report its selected advertising power.
+    optional sint32 selected_dbm = 5;
+}
+message BluetoothRadioStatus {
+    string adapter = 1;
+    bool available = 2;
+    repeated string supported_mesh_modes = 3;
+    string coded_unavailable_reason = 4;
+    bool advertising_set_supported = 5;
+    optional sint32 advertising_min_dbm = 6;
+    optional sint32 advertising_max_dbm = 7;
+    bool connections_set_supported = 8;
+    string connections_unavailable_reason = 9;
+    BluetoothPowerSetting advertising = 10;
+    BluetoothPowerSetting connections = 11;
+    repeated BluetoothAdvertisingPowerStatus advertisements = 12;
+    string mesh_mode = 13;
+    // Configuration accepted by BlueZ is distinct from measured TX power.
+    string error = 14;
+}

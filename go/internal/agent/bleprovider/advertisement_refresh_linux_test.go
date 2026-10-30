@@ -196,7 +196,7 @@ func TestAdvertisementRefreshRealDBusExactOwnedSignalAndProperties(t *testing.T)
 	uuid := ServiceUUID(testTenant)
 	adv, _ := NewAdvertisement(testDevice, "field", DefaultPSM)
 	payload, _ := adv.MarshalBinary()
-	properties := advertisementProperties(uuid, payload, nil)
+	properties := advertisementProperties(uuid, payload)
 	if _, err = prop.Export(app, advertPath, map[string]map[string]*prop.Prop{advertInterface: properties}); err != nil {
 		t.Fatal(err)
 	}
@@ -210,7 +210,7 @@ func TestAdvertisementRefreshRealDBusExactOwnedSignalAndProperties(t *testing.T)
 		t.Fatal(err)
 	}
 	for i := 0; i < 2; i++ {
-		if err = refreshOwnedAdvertisement(ctx, app, closeTransport, owner, uuid, payload); err != nil {
+		if err = refreshOwnedAdvertisement(ctx, app, closeTransport, owner, uuid, func() ([]byte, error) { return payload, nil }); err != nil {
 			t.Fatal(err)
 		}
 		select {
@@ -233,7 +233,7 @@ func TestAdvertisementRefreshRealDBusExactOwnedSignalAndProperties(t *testing.T)
 	if err = bluez.Object(app.Names()[0], advertPath).Call("org.freedesktop.DBus.Properties.GetAll", 0, advertInterface).Store(&after); err != nil || !reflect.DeepEqual(before, after) {
 		t.Fatal("export changed", err)
 	}
-	if err = refreshOwnedAdvertisement(ctx, app, closeTransport, ":999.999", uuid, payload); !errors.Is(err, errBlueZOwnerChanged) {
+	if err = refreshOwnedAdvertisement(ctx, app, closeTransport, ":999.999", uuid, func() ([]byte, error) { return payload, nil }); !errors.Is(err, errBlueZOwnerChanged) {
 		t.Fatal(err)
 	}
 	select {
@@ -247,7 +247,7 @@ func TestAdvertisementRefreshRealDBusExactOwnedSignalAndProperties(t *testing.T)
 	if _, err = foreign.RequestName(bluezName, dbus.NameFlagDoNotQueue); err != nil {
 		t.Fatal(err)
 	}
-	if err = refreshOwnedAdvertisement(ctx, app, closeTransport, owner, uuid, payload); !errors.Is(err, errBlueZOwnerChanged) {
+	if err = refreshOwnedAdvertisement(ctx, app, closeTransport, owner, uuid, func() ([]byte, error) { return payload, nil }); !errors.Is(err, errBlueZOwnerChanged) {
 		t.Fatal("old registration used after owner change", err)
 	}
 }
