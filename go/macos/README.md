@@ -1140,8 +1140,10 @@ switching models or changing model scale clears it.
 Apple Vision runs locally on decoded camera frames. The existing lens calibration
 undistorts the ankle midpoint, and the aligned camera pose projects its ray onto
 the selected horizontal floor. Nearby observations from different cameras within
-350 ms merge before short-lived tracks smooth the motion. Tracks fade and expire
-1.25 seconds after the last observation. Turning tracking off or leaving the view
+350 ms merge before short-lived tracks smooth the motion. The marker preserves
+its position and velocity across camera updates, with animation driven by the
+render clock. It stays opaque for 650 ms without an observation, then fades out
+by 1.25 seconds. Reduce Motion disables position animation. Turning tracking off or leaving the view
 releases its decoding leases. Camera color can run at the same time.
 
 Positions are estimates, and track IDs do not identify people. This version needs

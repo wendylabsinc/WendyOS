@@ -66,6 +66,7 @@
 		3CBC4BB7DBC20478491ED268 /* CoreBluetooth.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 9E2EF35E68D5CA5FA24980A4 /* CoreBluetooth.framework */; };
 		3CC2DACD1B923CC396BF6602 /* SiteFogRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 08EBBD001E30821573005D77 /* SiteFogRenderer.swift */; };
 		3DDFC907A8890ADC5C590545 /* SiteRobotLocalization.swift in Sources */ = {isa = PBXBuildFile; fileRef = 557F8A0DEA867210FC8AADCE /* SiteRobotLocalization.swift */; };
+		3EBD385C7331F64C21F71B83 /* SitePersonMarker.swift in Sources */ = {isa = PBXBuildFile; fileRef = D21E701A6DA5340AAC173A75 /* SitePersonMarker.swift */; };
 		3F1F63B6FFECB4A9A2005738 /* ConcurrencyTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2D3B6424879FD4924BE05FA /* ConcurrencyTests.swift */; };
 		400926B616D5EF6945353B69 /* SiteCameraAlignment.swift in Sources */ = {isa = PBXBuildFile; fileRef = 06B7248B98936E44D52F71A1 /* SiteCameraAlignment.swift */; };
 		40453FFA0762B7E46BA8837F /* AppsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3123CE49AF22AD71C953CCE2 /* AppsView.swift */; };
@@ -94,6 +95,7 @@
 		52800BAC5FAB02C40F4B0EC7 /* CoreFoundation.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 2DD8002D524E68CA3DE04823 /* CoreFoundation.framework */; };
 		53DA6E2111D927FDF6647CCE /* SitePeopleTracking.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6FA84112CE73CAEC643E214E /* SitePeopleTracking.swift */; };
 		53E84E62DA9798E5250E2898 /* RobotLensCalibrationView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 88980115DE513BF1DED28B61 /* RobotLensCalibrationView.swift */; };
+		5409000F6D381382BA9D61B2 /* SitePersonMarker.swift in Sources */ = {isa = PBXBuildFile; fileRef = D21E701A6DA5340AAC173A75 /* SitePersonMarker.swift */; };
 		54123095897A4D53B9E302DD /* DownloadedModelTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 71946209397441773DE68E8B /* DownloadedModelTests.swift */; };
 		54BD54EF3306A476483C5238 /* DataVisualizerTimelineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49A41BF0F5377D89682F1080 /* DataVisualizerTimelineTests.swift */; };
 		5668338BD2BA340E14E5AE56 /* RobotLensCalibration.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0E245D3AB2FE090DD5A1D0D4 /* RobotLensCalibration.swift */; };
@@ -169,6 +171,7 @@
 		9AD7934EF2A0226FF211A2B3 /* SiteWorkspace.swift in Sources */ = {isa = PBXBuildFile; fileRef = 10A956DDF27C46E379646AA3 /* SiteWorkspace.swift */; };
 		9F1B78165E6F7A5B6190BAF1 /* SimulatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA96AC91DE1B6D4C296226BF /* SimulatorTests.swift */; };
 		A0816368E809449ABE7348D1 /* VisualRecognition.cpp in Sources */ = {isa = PBXBuildFile; fileRef = D63AE3C5E01CE28F9A89C0EE /* VisualRecognition.cpp */; };
+		A1029715689BE1AA8B1537D6 /* SitePersonMarkerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 99B2A869864F58FBEBFD1692 /* SitePersonMarkerTests.swift */; };
 		A13C1FEA6CDC52F709271853 /* CloudManagementClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7D780434FF5B2190F955252 /* CloudManagementClient.swift */; };
 		A145DCEDD3D2194650AFCD76 /* SiteScanCoordinates.swift in Sources */ = {isa = PBXBuildFile; fileRef = C38BD757A6ABC31AF0C8562C /* SiteScanCoordinates.swift */; };
 		A1D1E4CE1B7BA33DCD9B45DB /* VPNConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA6AB0A619B578B06B3173D9 /* VPNConfiguration.swift */; };
@@ -436,6 +439,7 @@
 		972AA28D77CF54F9EBCDDA77 /* CloudManagementView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CloudManagementView.swift; sourceTree = "<group>"; };
 		97B878F9B8525136814A1077 /* WendyMobileApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WendyMobileApp.swift; sourceTree = "<group>"; };
 		997174D2436A34109AF1823C /* MobileRootView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = MobileRootView.swift; sourceTree = "<group>"; };
+		99B2A869864F58FBEBFD1692 /* SitePersonMarkerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SitePersonMarkerTests.swift; sourceTree = "<group>"; };
 		9B2C1C2097478D8363CB556C /* WendyDesktop.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = WendyDesktop.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		9B40B4FDD87C60533F0559A6 /* ModelHardwareTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModelHardwareTests.swift; sourceTree = "<group>"; };
 		9C1822E9898ED00F382F90EF /* SiteFogOfWar.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SiteFogOfWar.swift; sourceTree = "<group>"; };
@@ -477,6 +481,7 @@
 		D0496B46C3F9CD5C1B14E23F /* Site.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Site.swift; sourceTree = "<group>"; };
 		D12072D59326B47F07A71F81 /* NetworkExtension.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = NetworkExtension.framework; path = System/Library/Frameworks/NetworkExtension.framework; sourceTree = SDKROOT; };
 		D1F0FE01F434594987BCB7D5 /* DataTimelineViewport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DataTimelineViewport.swift; sourceTree = "<group>"; };
+		D21E701A6DA5340AAC173A75 /* SitePersonMarker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SitePersonMarker.swift; sourceTree = "<group>"; };
 		D387BA11A6E8345C67EC3A1C /* SiteFogControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SiteFogControls.swift; sourceTree = "<group>"; };
 		D63AE3C5E01CE28F9A89C0EE /* VisualRecognition.cpp */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.cpp.cpp; path = VisualRecognition.cpp; sourceTree = "<group>"; };
 		D80556F17991D76C5790CE15 /* CoreAudio.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = CoreAudio.framework; path = System/Library/Frameworks/CoreAudio.framework; sourceTree = SDKROOT; };
@@ -698,6 +703,7 @@
 				37814D56A945DF55B3199567 /* SiteCameraColorTests.swift */,
 				86688E5547A234D7615F2455 /* SiteFogTests.swift */,
 				5958890C690A885A313B8C83 /* SitePeopleTrackingTests.swift */,
+				99B2A869864F58FBEBFD1692 /* SitePersonMarkerTests.swift */,
 				4CFA098E992CF9B04070ED0F /* SiteRobotLocalizationTests.swift */,
 				C8C3E32837C8B119C15C3627 /* SiteTwinTests.swift */,
 				73F8A73277DE33706D2B45EA /* ThermalCameraTests.swift */,
@@ -767,6 +773,7 @@
 				9C1822E9898ED00F382F90EF /* SiteFogOfWar.swift */,
 				08EBBD001E30821573005D77 /* SiteFogRenderer.swift */,
 				6FA84112CE73CAEC643E214E /* SitePeopleTracking.swift */,
+				D21E701A6DA5340AAC173A75 /* SitePersonMarker.swift */,
 				F2B8E82B3B1B4139C89D7CAF /* SitePhotoReconstruction.swift */,
 				02EB82B6FACB20593A314081 /* SiteRobotClient.swift */,
 				6CCAC50FFBAA2CB3C6E7B4EF /* SiteRobotGeometry.swift */,
@@ -1307,6 +1314,7 @@
 				F11E1744956905F3C08BEB7F /* SiteCameraColorTests.swift in Sources */,
 				02D7725C91B17BB9DA8CC191 /* SiteFogTests.swift in Sources */,
 				DA56924A4C743A950A9768A5 /* SitePeopleTrackingTests.swift in Sources */,
+				A1029715689BE1AA8B1537D6 /* SitePersonMarkerTests.swift in Sources */,
 				8829846641717B1154A66533 /* SiteRobotLocalizationTests.swift in Sources */,
 				418E98B787B336FCB956DFD5 /* SiteTwinTests.swift in Sources */,
 				94CB09115FCB6B4AFCB6F0C5 /* ThermalCameraTests.swift in Sources */,
@@ -1400,6 +1408,7 @@
 				6B4230D162D2856CCBD26053 /* SiteFogRenderer.swift in Sources */,
 				908036124B3D7F37724EC799 /* SiteLocalization.cpp in Sources */,
 				1B53F015DC6B13E598DEFF50 /* SitePeopleTracking.swift in Sources */,
+				3EBD385C7331F64C21F71B83 /* SitePersonMarker.swift in Sources */,
 				DC5AD69A563392B97B0DF866 /* SitePhotoReconstruction.swift in Sources */,
 				C2BE74D5495048FCF105EDA3 /* SiteReferenceCapture.swift in Sources */,
 				D6032CBE6D896CD6A5BB9C99 /* SiteRobotClient.swift in Sources */,
@@ -1538,6 +1547,7 @@
 				3CC2DACD1B923CC396BF6602 /* SiteFogRenderer.swift in Sources */,
 				98D7934A4DAC98D428BE5EA9 /* SiteLocalization.cpp in Sources */,
 				53DA6E2111D927FDF6647CCE /* SitePeopleTracking.swift in Sources */,
+				5409000F6D381382BA9D61B2 /* SitePersonMarker.swift in Sources */,
 				0241B66CD1765EBCC8719BE3 /* SitePhotoReconstruction.swift in Sources */,
 				F7A2875A123CFD53A077310A /* SiteRobotClient.swift in Sources */,
 				D2D83E7D232E0FD0DC79BDD6 /* SiteRobotGeometry.swift in Sources */,

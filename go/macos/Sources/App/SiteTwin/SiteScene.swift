@@ -5,6 +5,7 @@ import SwiftUI
 /// Lens cones require calibration; they do not imply measured coverage.
 @MainActor
 public struct SiteScene: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let modelURL: URL
     let site: Site
     let cameraGeometry: [UUID: SiteCameraGeometry]
@@ -67,6 +68,7 @@ public struct SiteScene: View {
                 colorSources: colorSources,
                 colorStatus: colorStatus,
                 people: people,
+                reduceMotion: reduceMotion,
                 selectingPeopleFloor: selectingPeopleFloor,
                 selectPeopleFloor: selectPeopleFloor,
                 placingCamera: placingCamera,
@@ -98,6 +100,7 @@ private struct SceneSurface {
     var colorSources: [UUID: SiteCameraColorSource]
     var colorStatus: ([UUID: String]) -> Void
     var people: [SitePersonTrack]
+    var reduceMotion: Bool
     var selectingPeopleFloor: Bool
     var selectPeopleFloor: (SitePoint) -> Void
     var placingCamera: UUID?
@@ -116,6 +119,7 @@ private struct SceneSurface {
         var loadedURL: URL?
         var markers = SCNNode()
         var peopleRoot = SCNNode()
+        var personMarkers: [UUID: SitePersonMarker] = [:]
         var model = SCNNode()
         weak var view: SCNView?
         var needsFraming = true
@@ -152,6 +156,7 @@ private struct SceneSurface {
                     scene.rootNode.addChildNode(model)
                     markers = SCNNode()
                     scene.rootNode.addChildNode(markers)
+                    personMarkers = [:]
                     peopleRoot = SCNNode()
                     scene.rootNode.addChildNode(peopleRoot)
                     robotRoot = SCNNode()
@@ -378,38 +383,19 @@ private struct SceneSurface {
             let visible = parent.people.filter {
                 (0...SitePeopleTracker.lifetime).contains(now.timeIntervalSince($0.observedAt))
             }
-            let ids = Set(visible.map { $0.id.uuidString })
-            peopleRoot.childNodes.filter { !ids.contains($0.name ?? "") }.forEach { $0.removeFromParentNode() }
-            SCNTransaction.begin()
-            SCNTransaction.animationDuration = 0.2
-            for person in visible {
-                let node: SCNNode
-                if let existing = peopleRoot.childNode(withName: person.id.uuidString, recursively: false) {
-                    node = existing
-                } else {
-                    node = SCNNode()
-                    node.name = person.id.uuidString
-                    // A compact human blob with a floor halo remains visible
-                    // in both the overview and an oblique room view.
-                    let body = SCNNode(geometry: SCNCapsule(capRadius: 0.19, height: 0.85))
-                    body.position.y = 0.6
-                    let head = SCNNode(geometry: SCNSphere(radius: 0.15))
-                    head.position.y = 1.18
-                    let halo = SCNNode(geometry: SCNCylinder(radius: 0.32, height: 0.025))
-                    halo.position.y = 0.04
-                    for part in [body, head, halo] {
-                        part.categoryBitMask = 1 << 30
-                        part.geometry?.firstMaterial?.diffuse.contents = platformAccent
-                        part.geometry?.firstMaterial?.lightingModel = .constant
-                        part.opacity = part === halo ? 0.35 : 0.8
-                        node.addChildNode(part)
-                    }
-                    peopleRoot.addChildNode(node)
-                }
-                node.simdPosition = SIMD3<Float>(person.position)
-                node.opacity = max(0.2, 1 - now.timeIntervalSince(person.observedAt) / SitePeopleTracker.lifetime)
+            let ids = Set(visible.map(\.id))
+            for id in Array(personMarkers.keys) where !ids.contains(id) {
+                personMarkers.removeValue(forKey: id)?.node.removeFromParentNode()
             }
-            SCNTransaction.commit()
+            for person in visible {
+                if let marker = personMarkers[person.id] {
+                    marker.update(person, now: now, reduceMotion: parent.reduceMotion)
+                } else {
+                    let marker = SitePersonMarker(person: person, now: now, reduceMotion: parent.reduceMotion)
+                    personMarkers[person.id] = marker
+                    peopleRoot.addChildNode(marker.node)
+                }
+            }
         }
 
         func tap(at point: CGPoint, immediate: Bool = false) {
