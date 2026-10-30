@@ -71,6 +71,12 @@ SHARED_GRPC_API_CONTRACTS_PROTOS=(
     "wendycloud/v2/mesh.proto"
     "wendycloud/v2/users.proto"
     "wendycloud/v2/tunnel.proto"
+    "wendycloud/v2/apps.proto"
+    "wendycloud/v2/assets.proto"
+    "wendycloud/v2/certificates.proto"
+    "wendycloud/v2/deployments.proto"
+    "wendycloud/v2/signed_request.proto"
+    "wendy/options.proto"
 )
 SHARED_GRPC_API_CONTRACTS_PATH_ARGS=()
 for proto in "${SHARED_GRPC_API_CONTRACTS_PROTOS[@]}"; do
@@ -219,28 +225,22 @@ done
 # Paths match service-protos, including DeviceEnrollmentService, Cloud-owned
 # though it is.
 #
-# Pin: the local wendycloud/v2/*.proto and wendy/options.proto are service-protos master
-# cfa7f45d (merged #145, registry vectors), except postbox.proto,
-# deployments.proto and registry.proto: master 65830a0a (merged #151,
+# Pin: the remaining local wendycloud/v2/*.proto are service-protos master
+# cfa7f45d (merged #145, registry vectors), except postbox.proto and
+# registry.proto: master 65830a0a (merged #151,
 # WDY-4015 operator CA and instruction validity). device_enrollment.proto is not in
 # service-protos: it is cloud #757 head 5e3003e4
 # (cloud-proto/device_enrollment.proto), including enrollment hardware.
 # Re-pin: copy those files from
 # the new heads with `git show <sha>:<path>`, run `make proto`, and update the
-# SHAs here. wendy/options.proto (the signed_request method option) generates
+# SHAs here. Shared wendy/options.proto (the signed_request method option) generates
 # into cloudpbv2 too, so the option and SignedRequest live in one Go package.
 CLOUD_V2_PKG="$MODULE/go/proto/gen/cloudpb/v2"
 CLOUD_V2_PROTOS=(
-    "wendy/options.proto"
-    "wendycloud/v2/signed_request.proto"
     "wendycloud/v2/relay_mcp.proto"
     "wendycloud/v2/device_enrollment.proto"
     "wendycloud/v2/pki_admin.proto"
     "wendycloud/v2/registry.proto"
-    "wendycloud/v2/apps.proto"
-    "wendycloud/v2/assets.proto"
-    "wendycloud/v2/certificates.proto"
-    "wendycloud/v2/deployments.proto"
     "${SHARED_GRPC_API_CONTRACTS_PROTOS[@]}"
     "wendycloud/v2/notifications.proto"
     "wendycloud/v2/organizations.proto"
@@ -269,9 +269,14 @@ if [ "${1:-}" = --shared-grpc-api-contracts-only ] || [ "${1:-}" = --check-share
     if [ "$1" = --check-shared-grpc-api-contracts ]; then
         for proto in "${SHARED_GRPC_API_CONTRACTS_PROTOS[@]}"; do
             name="${proto##*/}"
-            for file in "${name%.proto}.pb.go" "${name%.proto}_grpc.pb.go"; do
+            file="${name%.proto}.pb.go"
+            diff -u "$GEN_DIR/cloudpb/v2/$file" "$SHARED_GRPC_API_CONTRACTS_OUT/$file"
+            # Protos without services have no gRPC output. Compare either side
+            # when present so missing or stale committed outputs still fail.
+            file="${name%.proto}_grpc.pb.go"
+            if [ -e "$GEN_DIR/cloudpb/v2/$file" ] || [ -e "$SHARED_GRPC_API_CONTRACTS_OUT/$file" ]; then
                 diff -u "$GEN_DIR/cloudpb/v2/$file" "$SHARED_GRPC_API_CONTRACTS_OUT/$file"
-            done
+            fi
         done
     fi
     exit 0
