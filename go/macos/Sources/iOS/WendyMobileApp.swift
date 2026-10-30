@@ -1,0 +1,33 @@
+import SwiftUI
+import UIKit
+
+@main
+struct WendyMobileApp: App {
+    @UIApplicationDelegateAdaptor(MobileAppDelegate.self) private var delegate
+    @StateObject private var model = AppModel()
+    var body: some Scene {
+        WindowGroup {
+            if ProcessInfo.processInfo.environment["WENDY_MOBILE_TEST_HOST"] == "1" {
+                // The tests own the embedded backend and its lifecycle. Starting
+                // the ordinary UI here would race their sandbox/account changes.
+                Color.clear
+            } else {
+                MobileRootView().environmentObject(model)
+                    .task { await model.cleanup.run() }
+                    .task { await model.vpn.observeStatus() }
+                    .task(id: model.initialized) { await model.observeEvents() }
+                    .task(id: model.account) { await PushNotifications.shared.useAccount(model.account) }
+            }
+        }
+    }
+}
+
+@MainActor
+final class MobileAppDelegate: NSObject, UIApplicationDelegate {
+    func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
+        PushNotifications.shared.didRegister(deviceToken)
+    }
+    func application(_ application: UIApplication, didFailToRegisterForRemoteNotificationsWithError error: Error) {
+        PushNotifications.shared.didFail(error.localizedDescription)
+    }
+}
