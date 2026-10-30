@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"bytes"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -8,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestDownloadArtifactToTempNoninteractive(t *testing.T) {
@@ -85,6 +87,28 @@ func TestDownloadArtifactToTempFailureCleanup(t *testing.T) {
 	}
 }
 
+// The OTA artifact shares the image downloader: a connection dropped mid-body
+// resumes from the last byte instead of failing the update.
+func TestDownloadArtifactToTempResumesAfterDrop(t *testing.T) {
+	isolateArtifactDownload(t, false, false)
+	s := &flakyImageServer{payload: testImagePayload(8 << 10), ranges: true, headStatus: http.StatusOK, failAt: 5000}
+	server := httptest.NewServer(s)
+	defer server.Close()
+
+	path, err := downloadArtifactToTemp(server.URL + "/image.wendy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.Remove(path)
+	data, err := os.ReadFile(path)
+	if err != nil || !bytes.Equal(data, s.payload) {
+		t.Fatalf("artifact differs from the served bytes (%d of %d), err = %v", len(data), len(s.payload), err)
+	}
+	if !s.sawRange("bytes=5000-") {
+		t.Fatalf("artifact download restarted instead of resuming; saw %q", s.seen)
+	}
+}
+
 func isolateArtifactDownload(t *testing.T, interactive, json bool) {
 	t.Helper()
 	// Isolate UserCacheDir on macOS, Linux and Windows. Never use the
@@ -92,6 +116,7 @@ func isolateArtifactDownload(t *testing.T, interactive, json bool) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("XDG_CACHE_HOME", t.TempDir())
 	t.Setenv("LocalAppData", t.TempDir())
+	useTestDownloadPolicy(t, 200*time.Millisecond)
 	originalTerminal, originalJSON := isInteractiveTerminalFn, jsonOutput
 	t.Cleanup(func() {
 		isInteractiveTerminalFn, jsonOutput = originalTerminal, originalJSON

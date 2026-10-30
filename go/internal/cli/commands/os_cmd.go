@@ -1647,18 +1647,13 @@ func serveLocalArtifact(localPath, localIP string) (string, func(), error) {
 
 // downloadArtifactToTemp downloads a remote artifact URL to a temporary file,
 // showing a progress bar only on an interactive terminal outside JSON mode.
-// The caller is responsible for removing the file.
+// The caller is responsible for removing the file. Like OS images, the
+// multi-gigabyte artifact has no whole-transfer deadline and resumes after a
+// dropped or stalled connection (see downloadToFile).
 func downloadArtifactToTemp(artifactURL string) (string, error) {
-	client := &http.Client{Timeout: 30 * time.Minute}
-	resp, err := client.Get(artifactURL) //nolint:noctx
-	if err != nil {
-		return "", fmt.Errorf("downloading: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("download returned status %d", resp.StatusCode)
-	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	img := &imageInfo{DownloadURL: artifactURL}
 
 	cacheDir, err := osCacheDir()
 	if err != nil {
@@ -1676,7 +1671,7 @@ func downloadArtifactToTemp(artifactURL string) (string, error) {
 	// transfer errors are returned directly and no background writer outlives
 	// cleanup of a failed download.
 	if jsonOutput || !isInteractiveTerminal() {
-		if _, err := io.Copy(tmpFile, resp.Body); err != nil {
+		if err := downloadToFile(ctx, img, tmpFile, func(int64, int64) {}); err != nil {
 			tmpFile.Close()
 			os.Remove(tmpFile.Name())
 			return "", fmt.Errorf("downloading: %w", err)
@@ -1688,38 +1683,12 @@ func downloadArtifactToTemp(artifactURL string) (string, error) {
 		return tmpFile.Name(), nil
 	}
 
-	total := resp.ContentLength
 	prog := tui.NewProgress("Downloading artifact...")
 	p := tui.NewProgressProgram(prog)
+	sendProgress := throttledProgress(p, 33*time.Millisecond)
 
 	go func() {
-		var downloaded int64
-		buf := make([]byte, 64*1024)
-		for {
-			n, readErr := resp.Body.Read(buf)
-			if n > 0 {
-				if _, writeErr := tmpFile.Write(buf[:n]); writeErr != nil {
-					p.Send(tui.ProgressDoneMsg{Err: writeErr})
-					return
-				}
-				downloaded += int64(n)
-				if total > 0 {
-					p.Send(tui.ProgressUpdateMsg{
-						Percent: float64(downloaded) / float64(total),
-						Written: downloaded,
-						Total:   total,
-					})
-				}
-			}
-			if readErr == io.EOF {
-				p.Send(tui.ProgressDoneMsg{})
-				return
-			}
-			if readErr != nil {
-				p.Send(tui.ProgressDoneMsg{Err: readErr})
-				return
-			}
-		}
+		p.Send(tui.ProgressDoneMsg{Err: downloadToFile(ctx, img, tmpFile, sendProgress)})
 	}()
 
 	finalModel, err := p.Run()
