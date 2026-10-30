@@ -22,6 +22,7 @@ import (
 
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/literelay"
+	"github.com/wendylabsinc/wendy/go/internal/shared/meshalpn"
 	"github.com/wendylabsinc/wendy/go/internal/shared/seriallock"
 	wendypb "github.com/wendylabsinc/wendy/go/proto/gen/litepb"
 	"github.com/wendylabsinc/wendy/go/proto/gen/sensorlinkpb"
@@ -1304,6 +1305,11 @@ func (c *WendyLiteClient) connectSensorSourceWithBudgets(ctx context.Context, ad
 	cfg := &tls.Config{MinVersion: tls.VersionTLS13, Certificates: []tls.Certificate{cert},
 		InsecureSkipVerify: true, // VerifyConnection authenticates the full chain and exact device principal.
 		VerifyConnection:   verify}
+	known, err := certs.ParseCertsFromPEM([]byte(chain))
+	if err != nil {
+		return err
+	}
+	meshalpn.NewCertificates(cert, known).ConfigureClient(cfg, meshalpn.WendyCom)
 	dialCtx, cancelDial := context.WithTimeout(ctx, tcpBudget)
 	raw, err := (&net.Dialer{}).DialContext(dialCtx, "tcp", address)
 	cancelDial()

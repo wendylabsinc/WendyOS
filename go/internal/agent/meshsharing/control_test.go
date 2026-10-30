@@ -30,6 +30,11 @@ func controlTestCredentials(t *testing.T) func(string, string) *localmesh.Creden
 
 func controlTestCredentialsWithRoot(t *testing.T) (func(string, string) *localmesh.Credentials, string) {
 	t.Helper()
+	return controlTestCredentialsWithChain(t, false)
+}
+
+func controlTestCredentialsWithChain(t *testing.T, intermediate bool) (func(string, string) *localmesh.Credentials, string) {
+	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatal(err)
@@ -41,6 +46,20 @@ func controlTestCredentialsWithRoot(t *testing.T) (func(string, string) *localme
 		t.Fatal(err)
 	}
 	root := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))
+	issuerPEM := ""
+	if intermediate {
+		issuerKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		issuer := &x509.Certificate{SerialNumber: big.NewInt(3), Subject: pkix.Name{CommonName: "lease test intermediate"}, NotBefore: ca.NotBefore, NotAfter: ca.NotAfter, IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign}
+		der, err := x509.CreateCertificate(rand.Reader, issuer, ca, &issuerKey.PublicKey, key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		issuerPEM = string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))
+		ca, key = issuer, issuerKey
+	}
 	return func(tenant, device string) *localmesh.Credentials {
 		t.Helper()
 		leafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -57,7 +76,7 @@ func controlTestCredentialsWithRoot(t *testing.T) (func(string, string) *localme
 		if err != nil {
 			t.Fatal(err)
 		}
-		creds, err := localmesh.NewCredentials(string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})), root, string(pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})))
+		creds, err := localmesh.NewCredentials(string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))+issuerPEM, root, string(pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -128,40 +147,48 @@ func newControlBackend() *controlTestBackend {
 }
 
 func TestGatewayLeaseMutualTLSHeartbeatAndWithdrawal(t *testing.T) {
-	makeCreds := controlTestCredentials(t)
-	client := makeCreds(controlTestTenant, controlTestClient)
-	gateway := makeCreds(controlTestTenant, controlTestGateway)
-	backend := newControlBackend()
-	stopServer, raw, done := controlPipe(t, gateway, client, backend, client.Device)
-	dialCtx, cancelDial := context.WithCancel(context.Background())
-	conn, lease, err := negotiateGatewayLease(dialCtx, client, gateway.Device, raw)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer conn.Close()
-	cancelDial() // A short reconcile context must not own the returned lease.
-	if !lease.IPv6 || lease.Slot != 257 || <-backend.granted != client.Device {
-		t.Fatal("wrong lease identity or addresses")
-	}
-	conn.SetDeadline(time.Now().Add(time.Second))
-	if err := writeControl(conn, []byte{leaseHeartbeat}); err != nil {
-		t.Fatal(err)
-	}
-	var ack [1]byte
-	if _, err := io.ReadFull(conn, ack[:]); err != nil || ack[0] != leaseHeartbeat {
-		t.Fatalf("heartbeat: %v %v", ack, err)
-	}
-	stopServer()
-	select {
-	case peer := <-backend.revoked:
-		if peer != client.Device {
-			t.Fatal("wrong revoked peer")
-		}
-	case <-time.After(time.Second):
-		t.Fatal("cancelled server retained lease")
-	}
-	if err := <-done; err != nil {
-		t.Fatal(err)
+	for name, intermediate := range map[string]bool{"direct-root": false, "shared-intermediate": true} {
+		t.Run(name, func(t *testing.T) {
+			makeCreds, _ := controlTestCredentialsWithChain(t, intermediate)
+			client := makeCreds(controlTestTenant, controlTestClient)
+			gateway := makeCreds(controlTestTenant, controlTestGateway)
+			backend := newControlBackend()
+			stopServer, raw, done := controlPipe(t, gateway, client, backend, client.Device)
+			dialCtx, cancelDial := context.WithCancel(context.Background())
+			conn, lease, err := negotiateGatewayLease(dialCtx, client, gateway.Device, raw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer conn.Close()
+			state := conn.(*expiryConn).Conn.(*tls.Conn).ConnectionState()
+			if len(state.PeerCertificates) != 1 {
+				t.Fatal("gateway sent a shared issuer instead of only its leaf")
+			}
+			cancelDial() // A short reconcile context must not own the returned lease.
+			if !lease.IPv6 || lease.Slot != 257 || <-backend.granted != client.Device {
+				t.Fatal("wrong lease identity or addresses")
+			}
+			conn.SetDeadline(time.Now().Add(time.Second))
+			if err := writeControl(conn, []byte{leaseHeartbeat}); err != nil {
+				t.Fatal(err)
+			}
+			var ack [1]byte
+			if _, err := io.ReadFull(conn, ack[:]); err != nil || ack[0] != leaseHeartbeat {
+				t.Fatalf("heartbeat: %v %v", ack, err)
+			}
+			stopServer()
+			select {
+			case peer := <-backend.revoked:
+				if peer != client.Device {
+					t.Fatal("wrong revoked peer")
+				}
+			case <-time.After(time.Second):
+				t.Fatal("cancelled server retained lease")
+			}
+			if err := <-done; err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }
 
