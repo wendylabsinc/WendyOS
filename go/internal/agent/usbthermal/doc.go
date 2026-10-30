@@ -45,6 +45,13 @@
 // their temperatures correlating 0.995 with the picture's grey level; the
 // frame counter advanced 21901, 21902, 21903, 21904.
 //
+// A block that straddles two composite frames arrives with the next frame's
+// 12-byte header inserted inside it, about one frame in fifteen. The parser
+// removes the header and delivers the block whole; before it did, the header's
+// clock words reached apps as 300-750 degC pixels. As a second line of defence
+// the camera withholds from raw subscribers any frame whose temperature rows
+// cannot be a measurement (RawFrame.CheckTemperatures).
+//
 // The first 384 rows are exactly the 256x384 stacked layout of the original
 // TC001's UVC mode (picture on top, 1/64 K temperatures below), so the raw tap
 // serves them unchanged and existing TC001 consumers decode them as they are.

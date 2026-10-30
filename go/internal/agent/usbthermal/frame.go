@@ -2,6 +2,9 @@ package usbthermal
 
 import (
 	"encoding/binary"
+	"errors"
+	"fmt"
+	"slices"
 	"time"
 )
 
@@ -82,3 +85,92 @@ func (f RawFrame) Temperature(x, y int) (uint16, bool) {
 	}
 	return binary.LittleEndian.Uint16(f.Data[off:]), true
 }
+
+// ErrNotTemperatures is wrapped by CheckTemperatures' errors.
+var ErrNotTemperatures = errors.New("the temperature rows do not hold a measurement")
+
+// Limits on what a frame's temperatures can be. They are not the camera's
+// measuring range; they bound what no scene can produce, so a frame outside them
+// holds bytes that are not temperatures (a framing error, which is how the
+// composite-frame header once reached the plane, see Parser) and must never
+// reach an app as degrees.
+const (
+	// floorCounts: no pixel reads colder than -100 degC, far below anything the
+	// camera measures. The composite-frame header's frame number, read as a
+	// temperature, is below 32 K; the end-of-block row's words are 4 K.
+	floorCounts = 11081 // 173.14 K, -100.01 degC
+	// The median must lie between -40 degC and 150 degC: a room, a freezer, a
+	// furnace door all fit, while the camera's own picture rows read as
+	// temperatures (words 0x80LL) decode to 239-243 degC.
+	minMedianCelsius = -40.0
+	maxMedianCelsius = 150.0
+)
+
+// noReading reports the values that mean "no reading" for a pixel rather than a
+// temperature. The raw tap declares the same two as the thermal plane's invalid
+// values, and an app skips them.
+func noReading(raw uint16) bool { return raw == 0 || raw == 0xFFFF }
+
+// CheckTemperatures returns an error wrapping ErrNotTemperatures when f's
+// temperature rows cannot be a measurement: a pixel colder than -100 degC, no
+// pixel with a reading, or a median outside -40..150 degC. A nil error does not
+// make every pixel right; it rules out the framing errors that have produced
+// impossible frames (see the limits above).
+//
+// The camera withholds a frame that fails it from raw subscribers (see
+// Camera.deliver), so a raw frame that reaches an app has passed it.
+func (f RawFrame) CheckTemperatures() error {
+	rows := f.Height / 2
+	if f.Width <= 0 || rows <= 0 || f.BytesPerLine < 2*f.Width || len(f.Data) < f.BytesPerLine*f.Height {
+		return fmt.Errorf("%w: %dx%d frame, %d bytes per line, %d bytes", ErrNotTemperatures, f.Width, f.Height, f.BytesPerLine, len(f.Data))
+	}
+	lo, hi := celsiusToCounts(minMedianCelsius), celsiusToCounts(maxMedianCelsius)
+	valid, below, above := 0, 0, 0
+	for y := range rows {
+		row := f.Data[f.BytesPerLine*(rows+y):]
+		for x := range f.Width {
+			v := binary.LittleEndian.Uint16(row[2*x:])
+			switch {
+			case noReading(v):
+				continue
+			case v < floorCounts:
+				return fmt.Errorf("%w: pixel (%d, %d) reads %.2f degC, colder than any scene", ErrNotTemperatures, x, y, CountsToCelsius(v))
+			case v < lo:
+				below++
+			case v > hi:
+				above++
+			}
+			valid++
+		}
+	}
+	if valid == 0 {
+		return fmt.Errorf("%w: no pixel has a reading", ErrNotTemperatures)
+	}
+	if 2*below > valid || 2*above > valid {
+		return fmt.Errorf("%w: median %.2f degC is outside %.0f..%.0f degC", ErrNotTemperatures,
+			CountsToCelsius(f.medianCounts()), minMedianCelsius, maxMedianCelsius)
+	}
+	return nil
+}
+
+// medianCounts is the median of the pixels with a reading. Only for messages:
+// it sorts a copy of the plane.
+func (f RawFrame) medianCounts() uint16 {
+	rows := f.Height / 2
+	vals := make([]uint16, 0, f.Width*rows)
+	for y := range rows {
+		for x := range f.Width {
+			if v, ok := f.Temperature(x, y); ok && !noReading(v) {
+				vals = append(vals, v)
+			}
+		}
+	}
+	if len(vals) == 0 {
+		return 0
+	}
+	slices.Sort(vals)
+	return vals[len(vals)/2]
+}
+
+// celsiusToCounts is the temperature-plane value nearest to c degrees Celsius.
+func celsiusToCounts(c float64) uint16 { return uint16((c+273.15)/KelvinPerCount + 0.5) }

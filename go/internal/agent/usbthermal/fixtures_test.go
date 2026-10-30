@@ -20,6 +20,8 @@ import (
 //     stream. The block is the first of its composite frame (counter 21901).
 //   - tc001max-header-window.bin: 2 KiB centred on a composite-frame header
 //     (the header is at offset 1024), with visible bytes around it.
+//   - tc001max-straddled-frame.bin.gz: a raw frame the agent served with a
+//     composite-frame header inside its temperatures (straddle_test.go).
 //
 // Both are stored base64-encoded (".b64") so that the change stays reviewable
 // as text; the bytes themselves are untouched.

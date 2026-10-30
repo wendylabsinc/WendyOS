@@ -28,6 +28,10 @@ const (
 	// process, or stopped streaming.
 	minBackoff = time.Second
 	maxBackoff = 10 * time.Second
+
+	// withheldLogEvery: a session logs its first withheld frame and then every
+	// this many, so a camera stuck producing them cannot flood the log.
+	withheldLogEvery = 1000
 )
 
 // Camera is one thermal camera, identified by its stable id. It captures only
@@ -99,8 +103,9 @@ func (c *Camera) SubscribePictures(ctx context.Context) (<-chan Frame, error) {
 }
 
 // SubscribeRaw delivers every complete thermal frame (picture and temperatures,
-// see RawFrame) on the returned channel until ctx ends, then closes it. Same
-// buffering and sharing rules as SubscribePictures.
+// see RawFrame) whose temperatures pass RawFrame.CheckTemperatures on the
+// returned channel until ctx ends, then closes it. Same buffering and sharing
+// rules as SubscribePictures.
 func (c *Camera) SubscribeRaw(ctx context.Context) (<-chan RawFrame, error) {
 	ch := make(chan RawFrame, subscriberBuffer)
 	if err := c.subscribe(ctx, &subscriber{raw: ch}); err != nil {
@@ -257,7 +262,7 @@ func (c *Camera) session(ctx context.Context) (uint64, error) {
 func (c *Camera) read(ctx context.Context, dev Device) (uint64, error) {
 	parser := NewParser(c.model.Layout)
 	buf := make([]byte, bulkReadBytes)
-	var delivered uint64
+	var delivered, withheld uint64
 	lastFrame := c.now()
 	timeouts := 0
 	defer func() {
@@ -265,7 +270,8 @@ func (c *Camera) read(ctx context.Context, dev Device) (uint64, error) {
 		c.logger.Info("thermal camera stream ended",
 			zap.String("camera", c.stableID), zap.Uint64("bytes", st.Bytes),
 			zap.Uint64("frames", st.Frames), zap.Uint64("rejected", st.Rejected),
-			zap.Uint64("lost", st.Lost), zap.Uint64("composite_frames", st.Headers))
+			zap.Uint64("lost", st.Lost), zap.Uint64("composite_frames", st.Headers),
+			zap.Uint64("spliced", st.Spliced), zap.Uint64("withheld", withheld))
 	}()
 	for ctx.Err() == nil {
 		n, err := dev.Bulk(streamEndpoint, buf, readTimeout)
@@ -282,7 +288,12 @@ func (c *Camera) read(ctx context.Context, dev Device) (uint64, error) {
 		parser.Feed(buf[:n], func(block []byte) {
 			delivered++
 			lastFrame = c.now()
-			c.deliver(block, lastFrame)
+			if err := c.deliver(block, lastFrame); err != nil {
+				if withheld++; withheld == 1 || withheld%withheldLogEvery == 0 {
+					c.logger.Warn("thermal frame withheld from raw subscribers",
+						zap.String("camera", c.stableID), zap.Uint64("withheld", withheld), zap.Error(err))
+				}
+			}
 		})
 		if c.now().Sub(lastFrame) > noFrameTimeout {
 			return delivered, noFramesError(parser.Stats())
@@ -303,7 +314,14 @@ func noFramesError(st Stats) error {
 
 // deliver hands one block to every subscriber. The picture and the raw frame
 // are both views of the block's single allocation.
-func (c *Camera) deliver(block []byte, at time.Time) {
+//
+// The raw frame goes only to raw subscribers, and only when its temperatures
+// pass RawFrame.CheckTemperatures: a frame that fails is withheld, LastError
+// says why until the next good one, and the error is returned. Raw subscribers
+// read the bottom rows as degrees, and a frame the parser framed wrongly is how
+// a 24 degC room once raised fire alarms. The picture is the camera's own grey
+// image and is delivered either way.
+func (c *Camera) deliver(block []byte, at time.Time) error {
 	l := c.model.Layout
 	raw := RawFrame{
 		Data:         block[:l.RawBytes():l.RawBytes()],
@@ -320,16 +338,22 @@ func (c *Camera) deliver(block []byte, at time.Time) {
 		Format:    FormatYUY2,
 		Timestamp: at,
 	}
+	rawErr := raw.CheckTemperatures()
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.lastErr = nil
+	if rawErr != nil {
+		c.lastErr = fmt.Errorf("thermal frame withheld: %w", rawErr)
+	}
 	for _, s := range c.subs {
-		if s.raw != nil {
-			offer(s.raw, raw)
-		} else {
+		switch {
+		case s.raw == nil:
 			offer(s.pic, pic)
+		case rawErr == nil:
+			offer(s.raw, raw)
 		}
 	}
+	return rawErr
 }
 
 // offer sends v without blocking, dropping the oldest queued value to make
