@@ -270,3 +270,32 @@ func TestParseWiFiProfileDetailsEdgeCases(t *testing.T) {
 		}
 	}
 }
+
+func TestOffersPSKAndSAE(t *testing.T) {
+	cases := []struct {
+		name string
+		scan []string
+		want bool
+	}{
+		{"transition network", []string{"*:Home:80:WPA2", ":Mixed:70:WPA2 WPA3"}, true},
+		{"WPA1 and WPA3", []string{":Mixed:70:WPA1 WPA3"}, true},
+		{"PSK and SAE on separate access points", []string{":Mixed:70:WPA2", ":Mixed:40:WPA3"}, true},
+		{"WPA2 only", []string{":Mixed:70:WPA2", ":Mixed:40:WPA1 WPA2"}, false},
+		{"WPA3 only", []string{":Mixed:70:WPA3"}, false},
+		{"open", []string{":Mixed:70:"}, false},
+		{"enterprise", []string{":Mixed:70:WPA2 WPA3 802.1X"}, false},
+		{"another SSID offers both", []string{":Mixed:70:WPA2", ":Other:60:WPA2 WPA3"}, false},
+		{"not in range", []string{":Other:60:WPA2 WPA3"}, false},
+		{"escaped SSID", []string{`:Mixed\:5G:70:WPA2 WPA3`}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := offersPSKAndSAE(strings.Join(tc.scan, "\n"), "Mixed"); got != tc.want {
+				t.Errorf("offersPSKAndSAE = %v; want %v", got, tc.want)
+			}
+		})
+	}
+	if !offersPSKAndSAE(`:Mixed\:5G:70:WPA2 WPA3`, "Mixed:5G") {
+		t.Error("offersPSKAndSAE missed an escaped SSID")
+	}
+}

@@ -27,6 +27,8 @@ import (
 //   - aps: one `ssid|key-mgmt|psk` line per combination an access point
 //     accepts. Activating anything else fails the way NetworkManager reports
 //     a bad or missing key: "Secrets were required, but not provided".
+//   - error: while it exists, every activation fails with its content
+//     instead.
 //   - log: every command line it was run with.
 //
 // Like nmcli 1.56, `connection show` lists profiles by name, and `-g` prints
@@ -69,6 +71,10 @@ new_profile() {
 }
 
 activate() {
+	if [ -e error ]; then
+		cat error >&2
+		exit 4
+	fi
 	if grep -Fxq "$(cat "$1/ssid")|$(cat "$1/key-mgmt" 2>/dev/null)|$(cat "$1/psk" 2>/dev/null)" aps; then
 		echo "Connection successfully activated (D-Bus active path: /org/freedesktop/NetworkManager/ActiveConnection/7)"
 		exit 0
@@ -572,5 +578,141 @@ func TestExistingProfileUUID(t *testing.T) {
 		if got != want {
 			t.Errorf("existingProfileUUID(%q) = %q; want %q", ssid, got, want)
 		}
+	}
+}
+
+// transitionSSID is a WPA2/WPA3 transition network that refuses wpa-psk
+// from this radio, like the one that answered "Secrets were required, but
+// not provided" until it was joined with a WPA3-SAE hint.
+const transitionSSID = "TMNL-E2B01D"
+
+// newTransitionNetwork returns a fake with transitionSSID, a WPA2-only
+// network (Bistro) and a WPA3-only one (Lab6E) in range. Each accepts
+// right-pass, and transitionSSID only over sae.
+func newTransitionNetwork(t *testing.T) *fakeProfiles {
+	t.Helper()
+	f := newFakeProfiles(t)
+	f.setScan(":"+transitionSSID+":72:WPA2 WPA3", ":Bistro:70:WPA2", ":Lab6E:65:WPA3")
+	f.accept(transitionSSID+"|sae|right-pass", "Bistro|wpa-psk|right-pass", "Lab6E|sae|right-pass")
+	return f
+}
+
+// UUIDs the fake gives the first and second profiles a test adds.
+const (
+	firstAdded  = "a0000000-0000-4000-8000-000000000001"
+	secondAdded = "a0000000-0000-4000-8000-000000000002"
+)
+
+// TestConnectToWiFiRetriesTransitionNetworkAsSAE: NetworkManager joins a
+// WPA2/WPA3 transition network with wpa-psk when given no hint. When that
+// fails for missing secrets, the agent deletes the profile it left and
+// retries once with an sae profile.
+func TestConnectToWiFiRetriesTransitionNetworkAsSAE(t *testing.T) {
+	f := newTransitionNetwork(t)
+	err := f.manager.ConnectToWiFi(context.Background(), &agentpb.ConnectToWiFiRequest{Ssid: transitionSSID, Password: "right-pass"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.requireCalls(
+		"device wifi connect "+transitionSSID+" password right-pass",
+		"connection delete "+firstAdded,
+		"connection add type wifi con-name "+transitionSSID+" ssid "+transitionSSID+" autoconnect yes 802-11-wireless-security.key-mgmt sae 802-11-wireless-security.psk right-pass",
+		"connection up "+secondAdded,
+	)
+	f.requireProfiles(fakeProfile{UUID: secondAdded, Name: transitionSSID, SSID: transitionSSID, KeyMgmt: "sae", PSK: "right-pass"})
+}
+
+// TestConnectToWiFiSAERetryCleansUpWhenBothAttemptsFail: when the sae retry
+// fails too, neither attempt leaves a profile behind, every other saved
+// network stays, and the error reports both attempts.
+func TestConnectToWiFiSAERetryCleansUpWhenBothAttemptsFail(t *testing.T) {
+	f := newTransitionNetwork(t)
+	err := f.manager.ConnectToWiFi(context.Background(), &agentpb.ConnectToWiFiRequest{Ssid: transitionSSID, Password: "wrong-pass"})
+	if err == nil {
+		t.Fatal("connect with a wrong password succeeded")
+	}
+	if !strings.Contains(err.Error(), "nmcli connect: Error: Connection activation failed: Secrets were required") ||
+		!strings.Contains(err.Error(), "retrying as WPA3-SAE also failed: nmcli connection up "+transitionSSID) {
+		t.Errorf("err = %v; want both attempts' failures", err)
+	}
+	f.requireCalls(
+		"device wifi connect "+transitionSSID+" password wrong-pass",
+		"connection delete "+firstAdded,
+		"connection add type wifi con-name "+transitionSSID+" ssid "+transitionSSID+" autoconnect yes 802-11-wireless-security.key-mgmt sae 802-11-wireless-security.psk wrong-pass",
+		"connection up "+secondAdded,
+		"connection delete "+secondAdded,
+	)
+	f.requireProfiles()
+}
+
+// TestConnectToWiFiDoesNotRetryAsSAE: every other connect without a hint
+// behaves as before: one attempt, and its own error.
+func TestConnectToWiFiDoesNotRetryAsSAE(t *testing.T) {
+	savedTransition := fakeProfile{
+		UUID: "7c1b9e2d-4a6f-4b8c-9d0e-1f2a3b4c5d6e", Name: transitionSSID, SSID: transitionSSID,
+		KeyMgmt: "wpa-psk", PSK: "old-pass", Priority: 5,
+	}
+	reused := savedTransition
+	reused.PSK = "right-pass" // nmcli writes the password into the profile it reuses
+	cases := []struct {
+		name     string
+		ssid     string
+		password string
+		setup    func(f *fakeProfiles)
+		wantErr  bool
+		calls    []string
+		changes  []any
+	}{
+		{
+			name: "WPA2-only network, wrong password", ssid: "Bistro", password: "wrong-pass", wantErr: true,
+			calls: []string{"device wifi connect Bistro password wrong-pass", "connection delete " + firstAdded},
+		},
+		{
+			name: "WPA2-only network, right password", ssid: "Bistro", password: "right-pass",
+			calls:   []string{"device wifi connect Bistro password right-pass"},
+			changes: []any{fakeProfile{UUID: firstAdded, Name: "Bistro", SSID: "Bistro", KeyMgmt: "wpa-psk", PSK: "right-pass"}},
+		},
+		{
+			name: "WPA3-only network, wrong password", ssid: "Lab6E", password: "wrong-pass", wantErr: true,
+			calls: []string{"device wifi connect Lab6E password wrong-pass", "connection delete " + firstAdded},
+		},
+		{
+			name: "transition network, failure other than missing secrets", ssid: transitionSSID, password: "right-pass", wantErr: true,
+			setup: func(f *fakeProfiles) {
+				f.write("error", "Error: Connection activation failed: IP configuration could not be reserved (no available address, timeout, etc.).\n")
+			},
+			calls: []string{"device wifi connect " + transitionSSID + " password right-pass", "connection delete " + firstAdded},
+		},
+		{
+			name: "transition network, profile already saved", ssid: transitionSSID, password: "right-pass", wantErr: true,
+			setup:   func(f *fakeProfiles) { f.save(savedTransition) },
+			calls:   []string{"device wifi connect " + transitionSSID + " password right-pass"},
+			changes: []any{reused},
+		},
+		{
+			name: "transition network, no password", ssid: transitionSSID, wantErr: true,
+			calls: []string{"device wifi connect " + transitionSSID, "connection delete " + firstAdded},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newTransitionNetwork(t)
+			if tc.setup != nil {
+				tc.setup(f)
+			}
+			err := f.manager.ConnectToWiFi(context.Background(), &agentpb.ConnectToWiFiRequest{Ssid: tc.ssid, Password: tc.password})
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("connect succeeded")
+				}
+				if strings.Contains(err.Error(), "WPA3-SAE") {
+					t.Errorf("err = %v; want only the first attempt's error", err)
+				}
+			} else if err != nil {
+				t.Fatal(err)
+			}
+			f.requireCalls(tc.calls...)
+			f.requireProfiles(tc.changes...)
+		})
 	}
 }

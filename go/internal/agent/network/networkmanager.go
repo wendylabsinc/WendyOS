@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -661,7 +662,9 @@ func keyMgmtFromHint(hint, password string) string {
 // security from the scan. For hidden networks or when the caller supplied an
 // explicit security hint (both are cases where autodetection can't be trusted
 // — `device wifi connect` has no way to express key-mgmt), we create/update a
-// profile with the requested key-mgmt and activate it.
+// profile with the requested key-mgmt and activate it. When auto-detection
+// fails on a WPA2/WPA3 transition network, we retry once with an sae profile
+// (see shouldRetryAsSAE).
 func (n *NMCLINetworkManager) ConnectToWiFi(ctx context.Context, req *agentpb.ConnectToWiFiRequest) error {
 	ssid := req.GetSsid()
 	hidden := req.GetHidden()
@@ -681,32 +684,114 @@ func (n *NMCLINetworkManager) ConnectToWiFi(ctx context.Context, req *agentpb.Co
 	}
 
 	if hidden || secHint != "" {
-		cred := SavedCredential{
+		return n.connectWithProfile(ctx, SavedCredential{
 			SSID:     ssid,
 			Password: req.GetPassword(),
 			Hidden:   hidden,
 			Security: secHint,
-		}
-		if err := addOrUpdateProfile(ctx, n.nmcliPath, cred); err != nil {
-			return fmt.Errorf("preparing WiFi profile: %w", err)
-		}
-		if err := activateProfile(ctx, n.nmcliPath, ssid); err != nil {
-			n.cleanupTransientProfile(ctx, ssid, preExistingUUID)
-			return err
-		}
-		n.logger.Info("Connected to WiFi via profile",
-			zap.String("ssid", ssid),
-			zap.Bool("hidden", hidden),
-			zap.String("security", secHint))
-		return nil
+		}, preExistingUUID)
 	}
 
 	if err := runNMCLIConnect(ctx, n.nmcliPath, ssid, req.GetPassword(), hidden); err != nil {
+		// Delete the wpa-psk profile the failed attempt saved first, so a
+		// retry starts from a new profile, as a connect with the hint does.
 		n.cleanupTransientProfile(ctx, ssid, preExistingUUID)
-		return err
+		if !n.shouldRetryAsSAE(ctx, ssid, req.GetPassword(), preExistingUUID, err) {
+			return err
+		}
+		n.logger.Info("WiFi connect without a security hint failed; retrying as WPA3-SAE",
+			zap.String("ssid", ssid), zap.Error(err))
+		if saeErr := n.connectWithProfile(ctx, SavedCredential{
+			SSID:     ssid,
+			Password: req.GetPassword(),
+			Security: "sae",
+		}, preExistingUUID); saeErr != nil {
+			return fmt.Errorf("%w; retrying as WPA3-SAE also failed: %v", err, saeErr)
+		}
+		return nil
 	}
 	n.logger.Info("Connected to WiFi", zap.String("ssid", ssid))
 	return nil
+}
+
+// connectWithProfile saves c as a profile, updating the SSID's saved one if
+// there is one, and brings it up. If activation fails it deletes the profile,
+// unless it was saved before the connect attempt (preExistingUUID).
+func (n *NMCLINetworkManager) connectWithProfile(ctx context.Context, c SavedCredential, preExistingUUID string) error {
+	if err := addOrUpdateProfile(ctx, n.nmcliPath, c); err != nil {
+		return fmt.Errorf("preparing WiFi profile: %w", err)
+	}
+	if err := activateProfile(ctx, n.nmcliPath, c.SSID); err != nil {
+		n.cleanupTransientProfile(ctx, c.SSID, preExistingUUID)
+		return err
+	}
+	n.logger.Info("Connected to WiFi via profile",
+		zap.String("ssid", c.SSID),
+		zap.Bool("hidden", c.Hidden),
+		zap.String("security", c.Security))
+	return nil
+}
+
+// shouldRetryAsSAE reports whether a connect without a security hint that
+// failed with connectErr should be tried once more as WPA3-SAE.
+//
+// Without a hint, NetworkManager picks key-mgmt from the scan, and for a
+// WPA2/WPA3 transition network it picks wpa-psk. Some of those networks
+// refuse wpa-psk from some radios, and NetworkManager reports that as
+// missing secrets, the same as a wrong password. So retry only when:
+//
+//   - the attempt failed with missing secrets;
+//   - the scan shows the SSID offering both WPA-PSK and SAE.
+//     NetworkManager already picks sae for a WPA3-only network, and a
+//     WPA2-only network has no SAE to try;
+//   - no profile was saved for the SSID before the attempt. The retry
+//     rewrites the profile's key-mgmt, and on a radio without SAE a
+//     mistyped password would turn a working saved profile into one that
+//     can't connect;
+//   - there is a password.
+func (n *NMCLINetworkManager) shouldRetryAsSAE(ctx context.Context, ssid, password, preExistingUUID string, connectErr error) bool {
+	if password == "" || preExistingUUID != "" || !isMissingSecretsError(connectErr) {
+		return false
+	}
+	output, err := n.listWiFi(ctx, "no")
+	if err != nil {
+		n.logger.Warn("Failed to list WiFi networks; not retrying as WPA3-SAE", zap.Error(err))
+		return false
+	}
+	return offersPSKAndSAE(string(output), ssid)
+}
+
+// isMissingSecretsError reports whether nmcli failed with NetworkManager's
+// "Secrets were required, but not provided": the access point refused the
+// key, or the key-mgmt it was offered with.
+func isMissingSecretsError(err error) bool {
+	return strings.Contains(strings.ToLower(err.Error()), "secrets were required")
+}
+
+// offersPSKAndSAE reports whether `nmcli -t -f IN-USE,SSID,SIGNAL,SECURITY
+// device wifi list` output shows ssid offering both WPA-PSK and SAE, on one
+// access point or across several. nmcli shows SAE as WPA3 and PSK as WPA1 or
+// WPA2. An 802.1X (enterprise) access point offers neither.
+func offersPSKAndSAE(scanOutput, ssid string) bool {
+	var psk, sae bool
+	scanner := bufio.NewScanner(strings.NewReader(scanOutput))
+	for scanner.Scan() {
+		fields := splitNMCLI(scanner.Text(), 4)
+		if len(fields) < 4 || fields[1] != ssid {
+			continue
+		}
+		sec := strings.Fields(strings.ToUpper(fields[3]))
+		if slices.Contains(sec, "802.1X") {
+			continue
+		}
+		if slices.Contains(sec, "WPA3") {
+			sae = true
+		}
+		if slices.Contains(sec, "WPA1") || slices.Contains(sec, "WPA2") {
+			psk = true
+		}
+	}
+	return psk && sae
 }
 
 // cleanupTransientProfile removes a saved nmcli profile for ssid if and only
