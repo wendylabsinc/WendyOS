@@ -558,8 +558,9 @@ func TestInProcessCameraStalledEncoderNeverBlocksTheDriver(t *testing.T) {
 	go func() {
 		defer close(done)
 		for i := 0; i < 200; i++ {
-			frame.Timestamp = time.Now()
-			feed.Publish(frame)
+			f := frame // the background publisher reads frame too
+			f.Timestamp = time.Now()
+			feed.Publish(f)
 		}
 	}()
 	select {
