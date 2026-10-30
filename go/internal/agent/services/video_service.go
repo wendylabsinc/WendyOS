@@ -957,6 +957,10 @@ type VideoService struct {
 	// twoPlaneState holds the two-plane camera data path's nodes and pumps.
 	twoPlaneState
 
+	// inProcessCameras holds cameras whose frames come from an in-process
+	// driver rather than a device node (see video_inprocess.go).
+	inProcessCameras
+
 	// runGStreamer is the injection seam for the network capture subprocess.
 	runGStreamer func(ctx context.Context, args []string, onFrame func([]byte)) error
 
@@ -2032,6 +2036,8 @@ func (s *VideoService) runProducer(ctx context.Context, h *deviceHub, path strin
 		// holding a decoded frame, so there is nothing raw to offer.
 		h.rawNotOffered(fixedReason("network cameras deliver encoded video only"))
 		err = s.runIPProducer(ctx, broadcast, path, req)
+	} else if strings.HasPrefix(path, inProcessHubKeyPrefix) {
+		err = s.runInProcessProducer(ctx, broadcast, path, req, h)
 	} else if s.sensorFrames != nil && isSensorLinkCameraPath(path) {
 		err = s.streamSensorLinkCamera(ctx, broadcast, path, req, h)
 		if errors.Is(err, errSensorFeedNotJPEG) {
@@ -2371,6 +2377,11 @@ func (s *VideoService) StreamVideo(req *agentpb.StreamVideoRequest, stream grpc.
 	}
 	if devID > maxVideoDeviceID {
 		return status.Errorf(codes.InvalidArgument, "device ID out of range")
+	}
+	// A camera registered by an in-process driver has no node to resolve; it
+	// takes precedence over every other source for its ID.
+	if handled, err := s.streamInProcessCamera(stream, devID, req); handled {
+		return err
 	}
 	src, err := s.resolveSource(devID)
 	if err != nil {
