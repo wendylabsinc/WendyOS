@@ -103,3 +103,30 @@ func TestSensorTemperatureLostUnsubscribeClosesProducerOwner(t *testing.T) {
 		t.Fatal("uncertain stop retained a data listener")
 	}
 }
+
+// Simulate a slow mesh request which only returns once its transport closes.
+// Foreground cancellation must not wait for its longer control timeout.
+type blockedTemperatureManifest struct{ *temperatureLite }
+
+func (f *blockedTemperatureManifest) GetSensorManifest(time.Duration) (*sensorlinkpb.SensorManifest, error) {
+	<-f.Done()
+	return nil, errors.New("transport closed")
+}
+func TestSensorTemperatureCancellationInterruptsBlockedControlRequest(t *testing.T) {
+	f := &blockedTemperatureManifest{temperatureFixture()}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	finished := make(chan error, 1)
+	go func() { _, err := readSensorTemperature(ctx, f); finished <- err }()
+	select {
+	case err := <-finished:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("cancellation error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("cancelled read remained blocked in the control request")
+	}
+	if f.unsubscribed || f.listener != nil {
+		t.Fatal("cancelled manifest request created a subscription")
+	}
+}

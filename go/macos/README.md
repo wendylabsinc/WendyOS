@@ -390,6 +390,8 @@ test runner has `WENDY_LIVE_MESH_TENANT` set to the expected tenant UUID. Set
 `WENDY_LIVE_MESH_SELECTOR` to require one canonical target. Sign in using the normal
 app first. For a Lite temperature source, set
 `WENDY_LIVE_SENSORLINK_TEMPERATURE=1` to read real samples before and after resume.
+SensorLink controls allow ten seconds per exchange within a fifteen-second read,
+and foreground cancellation interrupts a blocked exchange and retires its client.
 `WENDY_LIVE_SENSORLINK_SAMPLES` selects 1–60 samples per phase (default three),
 allowing a longer signed-time renewal soak. Ordinary tests use disposable config
 directories and do not alter that login. Qualify BLE separately with Wi-Fi disabled and a reachable BLE router;

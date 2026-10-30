@@ -33,7 +33,7 @@ func (b *Backend) SensorTemperature(session uint64) (SensorTemperature, error) {
 	if b.lite == nil {
 		return SensorTemperature{}, errors.New("select a Wendy Lite SensorLink source")
 	}
-	ctx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	return readSensorTemperature(ctx, b.lite)
 }
@@ -42,9 +42,28 @@ func readSensorTemperature(ctx context.Context, client liteConnection) (sample S
 	if err := ctx.Err(); err != nil {
 		return sample, err
 	}
-	manifest, err := client.GetSensorManifest(3 * time.Second)
+	// Three-hop BLE can queue a control exchange behind routing and TLS work.
+	// Keep the ordinary management budget while cancellation still interrupts
+	// the blocking SDK request promptly and retires any uncertain producer.
+	cancelled := make(chan struct{})
+	stopCancel := context.AfterFunc(ctx, func() {
+		defer close(cancelled)
+		_ = client.Close()
+	})
+	defer func() {
+		if !stopCancel() {
+			<-cancelled
+		}
+	}()
+	manifest, err := client.GetSensorManifest(10 * time.Second)
 	if err != nil {
+		if ctx.Err() != nil {
+			return sample, ctx.Err()
+		}
 		return sample, fmt.Errorf("SensorLink manifest: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return sample, err
 	}
 	var selected *sensorlinkpb.SensorDescriptor
 	for _, channel := range manifest.GetSensors() {
@@ -75,7 +94,7 @@ func readSensorTemperature(ctx context.Context, client liteConnection) (sample S
 	// An acknowledgement may be lost after the source accepted Subscribe.
 	// Retire the subscription even on an uncertain setup/cancellation result.
 	defer func() {
-		if cleanup := client.SensorLinkUnsubscribe(channels, 2*time.Second); cleanup != nil {
+		if cleanup := client.SensorLinkUnsubscribe(channels, 5*time.Second); cleanup != nil {
 			// A lost stop acknowledgement leaves producer ownership uncertain.
 			// Closing WendyCom retires that subscription at the source and
 			// lets normal connection monitoring report the lost session.
@@ -83,7 +102,7 @@ func readSensorTemperature(ctx context.Context, client liteConnection) (sample S
 			err = errors.Join(err, fmt.Errorf("SensorLink unsubscribe: %w", cleanup))
 		}
 	}()
-	if err := client.SensorLinkSubscribe(channels, 3*time.Second); err != nil {
+	if err := client.SensorLinkSubscribe(channels, 10*time.Second); err != nil {
 		return sample, fmt.Errorf("SensorLink subscribe: %w", err)
 	}
 	select {
