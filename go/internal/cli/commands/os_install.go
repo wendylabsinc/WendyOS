@@ -47,6 +47,7 @@ type t234InstallOptions struct {
 	WiFi          wifiCLIOptions
 	RequestedName string
 	PreEnroll     preEnrollOptions
+	Agent         *localInstallAgent
 }
 
 const (
@@ -73,6 +74,7 @@ func newOSInstallCmd() *cobra.Command {
 	var deviceName string
 	var enrollCloudGRPC string
 	var prNumber int
+	var binaryPath string
 
 	cmd := &cobra.Command{
 		Use:   "install [image] [drive]",
@@ -120,6 +122,18 @@ Flags can be provided progressively — omitted values trigger interactive picke
 				return usageErrorf("--nightly and --version are mutually exclusive")
 			}
 
+			var agent *localInstallAgent
+			if cmd.Flags().Changed("binary") {
+				if binaryPath == "" {
+					return usageErrorf("--binary requires a path to a local wendy-agent ELF executable")
+				}
+				var err error
+				agent, err = readInstallAgent(binaryPath)
+				if err != nil {
+					return err
+				}
+			}
+
 			opts := wifiCLIOptions{
 				SSID:     wifiSSID,
 				Password: wifiPassword,
@@ -128,7 +142,7 @@ Flags can be provided progressively — omitted values trigger interactive picke
 			}
 
 			if len(args) == 2 {
-				return runOSInstallDirect(cmd.Context(), args[0], args[1], force, yesOverwriteInternal)
+				return runOSInstallDirect(cmd.Context(), args[0], args[1], force, yesOverwriteInternal, agent)
 			}
 			mode := preEnrollAuto
 			if cmd.Flags().Changed("pre-enroll") {
@@ -139,7 +153,7 @@ Flags can be provided progressively — omitted values trigger interactive picke
 				}
 			}
 			rootfsOnlyExplicit := cmd.Flags().Changed("rootfs-only")
-			return runOSInstall(cmd.Context(), nightly, deviceType, versionFlag, driveFlag, force, yesOverwriteInternal, noBmap, rootfsOnly, rootfsOnlyExplicit, storageOverride, opts, deviceName, preEnrollOptions{mode: mode, cloudGRPC: enrollCloudGRPC}, prNumber)
+			return runOSInstall(cmd.Context(), nightly, deviceType, versionFlag, driveFlag, force, yesOverwriteInternal, noBmap, rootfsOnly, rootfsOnlyExplicit, storageOverride, opts, deviceName, preEnrollOptions{mode: mode, cloudGRPC: enrollCloudGRPC}, prNumber, agent)
 		},
 	}
 
@@ -160,12 +174,13 @@ Flags can be provided progressively — omitted values trigger interactive picke
 	cmd.Flags().BoolVar(&preEnroll, "pre-enroll", false, "Enroll with Wendy Cloud during imaging, or after reboot for ESP32 (requires 'wendy auth login')")
 	cmd.Flags().StringVar(&enrollCloudGRPC, "cloud-grpc", "", "Cloud gRPC endpoint of the auth session to use for pre-enrollment (optional when a default is set via 'wendy auth use')")
 	cmd.Flags().IntVar(&prNumber, "pr", 0, "Install the image built by wendyos-builder PR #N (debug build; mutually exclusive with --nightly, --version, and positional [image] [drive])")
+	cmd.Flags().StringVar(&binaryPath, "binary", "", "Path to a local Linux ELF wendy-agent binary to install instead of downloading the latest release; must match the image architecture")
 	cmd.AddCommand(newOSInstallPlanCmd(), newOSInstallVerifyCmd(), newOSInstallJobsCmd())
 
 	return cmd
 }
 
-func runOSInstallDirect(ctx context.Context, imagePath string, driveID string, force bool, yesOverwriteInternal bool) (retErr error) {
+func runOSInstallDirect(ctx context.Context, imagePath string, driveID string, force bool, yesOverwriteInternal bool, agent *localInstallAgent) (retErr error) {
 	ctx, finish := startActivationOperation(ctx, "install", "wendy install")
 	defer func() { finish(retErr) }()
 	// Verify the image file exists.
@@ -228,6 +243,9 @@ func runOSInstallDirect(ctx context.Context, imagePath string, driveID string, f
 		}
 	}
 	layout := stream.peekGPT()
+	if err := agent.checkImage(layout, ""); err != nil {
+		return err
+	}
 	fit, err := fitImageToDrive(stream.uncompressedSize, layout, *targetDrive)
 	if err != nil {
 		return err
@@ -243,7 +261,18 @@ func runOSInstallDirect(ctx context.Context, imagePath string, driveID string, f
 	if err := writeImageToDisk(stream, stream.uncompressedSize, *targetDrive, fit, nil); err != nil {
 		return fmt.Errorf("writing image: %w", err)
 	}
-	markFATVolumes(*targetDrive)
+	if agent != nil {
+		updated, attached, err := provisionConfigWithRetry(ctx, *targetDrive, nil, "", nil, true, agent)
+		if attached {
+			markFATVolumes(updated)
+			ejectDisk(updated)
+		}
+		if err != nil {
+			return fmt.Errorf("the OS image was written, but --binary could not be installed: %w", err)
+		}
+	} else {
+		markFATVolumes(*targetDrive)
+	}
 
 	analytics.TrackStage(ctx, "image_written", "wendy install", "completed", "", nil)
 	fmt.Printf("\nSuccessfully installed image on %s.\n", targetDrive.Name)
@@ -358,9 +387,19 @@ func pickWendyLiteBoard(target string, nightly bool) (string, error) {
 	return pickFromItems("Select your board model", items)
 }
 
-func runOSInstall(ctx context.Context, nightly bool, flagDeviceType, flagVersion, flagDrive string, force bool, yesOverwriteInternal bool, noBmap, rootfsOnly, rootfsOnlyExplicit bool, storageOverride string, wifi wifiCLIOptions, deviceName string, preOpts preEnrollOptions, prNumber int) (retErr error) {
+func runOSInstall(ctx context.Context, nightly bool, flagDeviceType, flagVersion, flagDrive string, force bool, yesOverwriteInternal bool, noBmap, rootfsOnly, rootfsOnlyExplicit bool, storageOverride string, wifi wifiCLIOptions, deviceName string, preOpts preEnrollOptions, prNumber int, agent *localInstallAgent) (retErr error) {
 	ctx, finish := startActivationOperation(ctx, "install", "wendy install")
 	defer func() { finish(retErr) }()
+	if agent != nil {
+		if flagDeviceType == linuxDesktopValue || flagDeviceType == headlessMacValue {
+			return usageErrorf("--binary is supported only when installing a WendyOS image")
+		}
+		if arch := installDeviceArchitecture(flagDeviceType); arch != "" {
+			if err := agent.checkArchitecture(arch); err != nil {
+				return err
+			}
+		}
+	}
 	// --device-type is only supported for Linux devices, not ESP32/Wendy Lite.
 	// Rejected before any manifest fetch: the answer never depends on it.
 	switch flagDeviceType {
@@ -394,7 +433,7 @@ func runOSInstall(ctx context.Context, nightly bool, flagDeviceType, flagVersion
 		if storageOverride != "" {
 			return fmt.Errorf("--storage does not apply to Jetson AGX Thor recovery")
 		}
-		return installThor(ctx, flagVersion, nightly, force, wifi, deviceName, preOpts, prNumber)
+		return installThor(ctx, flagVersion, nightly, force, wifi, deviceName, preOpts, prNumber, agent)
 	}
 
 	// The Dragonwing flashes over EDL from a qcomflash bundle, not to a drive.
@@ -402,7 +441,7 @@ func runOSInstall(ctx context.Context, nightly bool, flagDeviceType, flagVersion
 		if err := checkDragonwingFlags(board, rootfsOnly, flagDrive, noBmap, yesOverwriteInternal, storageOverride); err != nil {
 			return err
 		}
-		return installDragonwing(ctx, board, flagVersion, nightly, force, prNumber, wifi, deviceName, preOpts)
+		return installDragonwing(ctx, board, flagVersion, nightly, force, prNumber, wifi, deviceName, preOpts, agent)
 	}
 	fmt.Println("Fetching available devices...")
 
@@ -553,6 +592,17 @@ func runOSInstall(ctx context.Context, nightly bool, flagDeviceType, flagVersion
 		}
 	}
 
+	if agent != nil {
+		if selected == linuxDesktopValue || selected == headlessMacValue || deviceMap[selected].IsESP32 || strings.HasPrefix(selected, "wlite_") {
+			return usageErrorf("--binary is supported only when installing a WendyOS image")
+		}
+		if arch := installDeviceArchitecture(selected); arch != "" {
+			if err := agent.checkArchitecture(arch); err != nil {
+				return err
+			}
+		}
+	}
+
 	// Thor flashes over USB recovery via its flashpack, never to a drive. The
 	// interactive picker reaches here too (the flag is empty), so route it to
 	// installThor here as well — otherwise it falls through to the disk-image
@@ -567,7 +617,7 @@ func runOSInstall(ctx context.Context, nightly bool, flagDeviceType, flagVersion
 		if storageOverride != "" {
 			return fmt.Errorf("--storage does not apply to Jetson AGX Thor recovery")
 		}
-		return installThor(ctx, flagVersion, nightly, force, wifi, deviceName, preOpts, prNumber)
+		return installThor(ctx, flagVersion, nightly, force, wifi, deviceName, preOpts, prNumber, agent)
 	}
 
 	// Same for the Dragonwing: the picker reaches here with the flag empty, so
@@ -576,7 +626,7 @@ func runOSInstall(ctx context.Context, nightly bool, flagDeviceType, flagVersion
 		if err := checkDragonwingFlags(board, rootfsOnly, flagDrive, noBmap, yesOverwriteInternal, storageOverride); err != nil {
 			return err
 		}
-		return installDragonwing(ctx, board, flagVersion, nightly, force, prNumber, wifi, deviceName, preOpts)
+		return installDragonwing(ctx, board, flagVersion, nightly, force, prNumber, wifi, deviceName, preOpts, agent)
 	}
 	// A flash-bundle board with no registry entry has no install path here, and
 	// falling through would write its bundle to a drive. A version that declares
@@ -683,7 +733,7 @@ func runOSInstall(ctx context.Context, nightly bool, flagDeviceType, flagVersion
 		return installOrin(ctx, t234InstallOptions{
 			DeviceType: selected, DeviceName: device.Name, Version: selectedVersion,
 			Storage: storage, Artifact: artifact, Force: force, WiFi: wifi,
-			RequestedName: deviceName, PreEnroll: preOpts,
+			RequestedName: deviceName, PreEnroll: preOpts, Agent: agent,
 		})
 	}
 	if isT234RecoveryDevice(selected) && rootfsOnly {
@@ -698,7 +748,7 @@ func runOSInstall(ctx context.Context, nightly bool, flagDeviceType, flagVersion
 			return err
 		}
 	}
-	return installLinuxImage(ctx, selected, device, nightly, flagVersion, flagDrive, force, yesOverwriteInternal, noBmap, rootfsOnly, storageOverride, wifi, deviceName, preOpts)
+	return installLinuxImage(ctx, selected, device, nightly, flagVersion, flagDrive, force, yesOverwriteInternal, noBmap, rootfsOnly, storageOverride, wifi, deviceName, preOpts, agent)
 }
 
 func rejectRecoveryDriveFlags(drive string, noBmap, overwriteInternal bool) error {
@@ -802,7 +852,7 @@ func chooseT234RootfsOnlyStorage(device, override string) (string, error) {
 
 // installLinuxImage handles the Linux device path: pick version → pick drive → download → write.
 // nightly, flagVersion, flagDrive, and force allow skipping the corresponding interactive prompts.
-func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevice, nightly bool, flagVersion, flagDrive string, force bool, yesOverwriteInternal bool, noBmap, rootfsOnly bool, storageOverride string, wifi wifiCLIOptions, deviceName string, preOpts preEnrollOptions) error {
+func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevice, nightly bool, flagVersion, flagDrive string, force bool, yesOverwriteInternal bool, noBmap, rootfsOnly bool, storageOverride string, wifi wifiCLIOptions, deviceName string, preOpts preEnrollOptions, agent *localInstallAgent) error {
 	// Authenticate elevation up front so we don't pay for the multi-hundred-MB
 	// image download just to discover the user can't write to a raw disk. On
 	// Windows this offers a UAC re-launch when not elevated; on Unix it
@@ -1018,6 +1068,9 @@ func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevic
 	} else {
 		layout = stream.peekGPT()
 	}
+	if err := agent.checkImage(layout, deviceKey); err != nil {
+		return err
+	}
 	fit, err := fitImageToDrive(imageSize, layout, targetDrive)
 	if err != nil {
 		return err
@@ -1184,7 +1237,7 @@ func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevic
 
 	analytics.TrackStage(ctx, "image_written", "wendy install", "completed", "", nil)
 	activationStep(ctx, "provision", nil)
-	hasProvisioningData := provisioningRequired(provCreds, provDeviceName, provisioningJSON)
+	hasProvisioningData := agent != nil || provisioningRequired(provCreds, provDeviceName, provisioningJSON)
 	var provisionErr error
 	// The drive can drop off the bus during provisioning and come back under a
 	// new device path; provisionConfigWithRetry reports where it is now, or
@@ -1197,7 +1250,7 @@ func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevic
 		// step is the bug from WDY-1118.
 		if hasProvisioningData {
 			ejectDisk(targetDrive)
-			return fmt.Errorf("the OS image was written to %s, but --wifi, --device-name, and --pre-enroll cannot be applied on this platform: writing to the device's config partition is not supported here. Re-run on a platform that supports config-partition provisioning to apply provisioning, or omit those flags to image without provisioning", targetDrive.Name)
+			return fmt.Errorf("the OS image was written to %s, but --binary, --wifi, --device-name, and --pre-enroll cannot be applied on this platform: writing to the device's config partition is not supported here. Re-run on a platform that supports config-partition provisioning to apply provisioning, or omit those flags to image without provisioning", targetDrive.Name)
 		}
 		fmt.Println("\nNote: config-partition provisioning is not yet supported on this platform; skipping. The device will run the agent baked into the image and fetch updates after first boot.")
 	} else {
@@ -1208,7 +1261,7 @@ func installLinuxImage(ctx context.Context, deviceKey string, device pickerDevic
 		// device still boots. It returns an error only when the user asked for
 		// provisioning and it was not applied — reported below, after the eject,
 		// so the drive is still safe to remove.
-		targetDrive, attached, provisionErr = provisionConfigWithRetry(ctx, targetDrive, provCreds, provDeviceName, provisioningJSON, hasProvisioningData)
+		targetDrive, attached, provisionErr = provisionConfigWithRetry(ctx, targetDrive, provCreds, provDeviceName, provisioningJSON, hasProvisioningData, agent)
 	}
 
 	if attached {
@@ -2685,7 +2738,7 @@ var confirmProvisioningRetry = func() (bool, error) {
 // more than one drive. It returns the drive where it is now attached, and
 // attached=false when it disconnected and was not found again: its old path
 // must not be touched (marked, ejected) then.
-func provisionConfigWithRetry(ctx context.Context, d drive, creds []wendyconf.WifiCredential, deviceName string, provisioningJSON []byte, requested bool) (_ drive, attached bool, _ error) {
+func provisionConfigWithRetry(ctx context.Context, d drive, creds []wendyconf.WifiCredential, deviceName string, provisioningJSON []byte, requested bool, agent *localInstallAgent) (_ drive, attached bool, _ error) {
 	// Fingerprint the drive while it is certainly the one just imaged. Only an
 	// interactive run retries, so only it needs this.
 	var id driveIdentity
@@ -2700,7 +2753,7 @@ func provisionConfigWithRetry(ctx context.Context, d drive, creds []wendyconf.Wi
 	// again by identity: while set, d's device path is not known to be ours.
 	relocate := false
 
-	err := provisionConfigPartitionFn(d, creds, deviceName, provisioningJSON)
+	err := provisionConfigPartitionFn(d, creds, deviceName, provisioningJSON, agent)
 	// skip ends the loop when the user declines a retry.
 	skip := func() (drive, bool, error) {
 		if requested {
@@ -2711,7 +2764,7 @@ func provisionConfigWithRetry(ctx context.Context, d drive, creds []wendyconf.Wi
 	}
 	for err != nil {
 		if requested {
-			fmt.Printf("\nWarning: could not apply provisioning data — --wifi / --device-name / --pre-enroll were requested but not written: %v\n", err)
+			fmt.Printf("\nWarning: could not apply provisioning data — --binary / --wifi / --device-name / --pre-enroll were requested but not written: %v\n", err)
 		} else {
 			fmt.Printf("\nWarning: could not pre-configure the agent on the config partition: %v\n", err)
 		}
@@ -2721,7 +2774,7 @@ func provisionConfigWithRetry(ctx context.Context, d drive, creds []wendyconf.Wi
 
 		if !isInteractiveTerminal() {
 			if requested {
-				fmt.Println("Re-run 'wendy os install' to apply WiFi / device-name / pre-enrollment, or configure the device after it boots.")
+				fmt.Println("Re-run 'wendy os install' to apply the requested provisioning, or configure the device after it boots.")
 				return d, !relocate, err
 			}
 			return d, !relocate, nil
@@ -2735,7 +2788,7 @@ func provisionConfigWithRetry(ctx context.Context, d drive, creds []wendyconf.Wi
 				}
 				fmt.Printf("\nThe drive %s disconnected, and wendy could not record its identity before it did (%s), so it cannot confirm that a reconnected drive is the one it just imaged. Not retrying, so provisioning data cannot land on the wrong drive.\n", d.DevicePath, reason)
 				if requested {
-					fmt.Println("Re-run 'wendy os install' to apply WiFi / device-name / pre-enrollment, or configure the device after it boots.")
+					fmt.Println("Re-run 'wendy os install' to apply the requested provisioning, or configure the device after it boots.")
 					return d, false, err
 				}
 				return d, false, nil
@@ -2769,13 +2822,17 @@ func provisionConfigWithRetry(ctx context.Context, d drive, creds []wendyconf.Wi
 			}
 			d, relocate = found, false
 		}
-		err = provisionConfigPartitionFn(d, creds, deviceName, provisioningJSON)
+		err = provisionConfigPartitionFn(d, creds, deviceName, provisioningJSON, agent)
 	}
 	return d, true, nil
 }
 
-// provisionConfigPartition downloads the latest stable arm64 wendy-agent binary
-func provisionConfigPartition(d drive, creds []wendyconf.WifiCredential, deviceName string, provisioningJSON []byte) error {
+// provisionConfigPartition seeds the local agent or downloads the latest stable agent.
+func provisionConfigPartition(d drive, creds []wendyconf.WifiCredential, deviceName string, provisioningJSON []byte, agent *localInstallAgent) error {
+	if agent != nil {
+		fmt.Printf("Using local wendy-agent %s (%s)\n", agent.path, agent.arch)
+		return writeConfigPartition(d, agent.data, creds, deviceName, provisioningJSON)
+	}
 	fmt.Printf("Downloading wendy-agent for device...\n")
 	agentBinary, agentVer, _, err := resolveAgentArtifact("linux", "arm64", false)
 	if err != nil {

@@ -4,6 +4,7 @@ package models
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -12,6 +13,7 @@ import (
 type InterfaceType string
 
 const (
+	InterfaceMesh      InterfaceType = "mesh"
 	InterfaceUSB       InterfaceType = "usb"
 	InterfaceEthernet  InterfaceType = "ethernet"
 	InterfaceLAN       InterfaceType = "lan"
@@ -58,6 +60,7 @@ type ProbeFailure struct {
 
 // LANDevice represents a device discovered via mDNS on the local network.
 type LANDevice struct {
+	Mesh         bool          `json:"mesh,omitempty"`
 	ProbeFailure *ProbeFailure `json:"probeFailure,omitempty"`
 	ID           string        `json:"id"`
 	DisplayName  string        `json:"displayName"`
@@ -198,6 +201,8 @@ func (d EthernetInterface) HumanReadable() string {
 
 // DevicesCollection holds all discovered devices across interface types.
 type DevicesCollection struct {
+	MeshDevices        []MeshDevice        `json:"meshDevices,omitempty"`
+	MeshDiscovery      *MeshDiscoveryState `json:"meshDiscovery,omitempty"`
 	USBDevices         []USBDevice         `json:"usbDevices"`
 	LANDevices         []LANDevice         `json:"lanDevices"`
 	BluetoothDevices   []BluetoothDevice   `json:"bluetoothDevices"`
@@ -246,6 +251,7 @@ type DiscoveredDevice struct {
 	// may try.
 	Addresses []string
 
+	Mesh      *MeshDevice
 	LAN       *LANDevice
 	Bluetooth *BluetoothDevice
 	Externals []*ExternalDevice
@@ -255,18 +261,28 @@ type DiscoveredDevice struct {
 // e.g. "LAN", "BLE", "USB", "LAN, BLE", "LAN, USB", ...
 func (d *DiscoveredDevice) ConnectionTypes() string {
 	var types []string
+	if d.Mesh != nil {
+		if d.Mesh.Platform == "Lite" {
+			types = append(types, "WendyNet (Lite)")
+		} else {
+			types = append(types, "WendyNet")
+		}
+	}
 	if d.LAN != nil {
-		types = append(types, "LAN")
+		if d.LAN.Mesh {
+			types = append(types, "Mesh")
+		} else {
+			types = append(types, "LAN")
+		}
 	}
 	if d.Bluetooth != nil {
-		if d.Bluetooth.IsWendyAgent() {
-			types = append(types, "BLE")
-		} else {
-			types = append(types, "BLE (Lite)")
-		}
+		types = append(types, "BLE")
 	}
 	for _, ext := range d.Externals {
 		if ct := ext.ConnectionType(); ct != "" {
+			if ct == "Mesh" {
+				ct = "WendyNet"
+			}
 			if ext.ProviderKey == "wendy-lite" {
 				types = append(types, ct+" (Lite)")
 			} else {
@@ -277,10 +293,26 @@ func (d *DiscoveredDevice) ConnectionTypes() string {
 	return strings.Join(types, ", ")
 }
 
+// DisplayOS identifies Lite devices even when discovery supplies no OS metadata.
+func (d *DiscoveredDevice) DisplayOS() string {
+	if d.WendyLite || (d.LAN != nil && d.LAN.WendyLite) || (d.Bluetooth != nil && !d.Bluetooth.IsWendyAgent()) {
+		return "Wendy Lite"
+	}
+	for _, ext := range d.Externals {
+		if ext.ProviderKey == "wendy-lite" {
+			return "Wendy Lite"
+		}
+	}
+	return d.OS
+}
+
 // Address returns the best available address for display purposes.
 // Prefers the LAN IP/hostname over the BLE address.
 func (d *DiscoveredDevice) Address() string {
 	if d.LAN != nil {
+		if d.LAN.Mesh {
+			return d.LAN.Hostname
+		}
 		if d.LAN.IPAddress != "" {
 			return d.LAN.IPAddress
 		}
@@ -293,6 +325,9 @@ func (d *DiscoveredDevice) Address() string {
 		if ip := ext.ConnectionInfo["ip"]; ip != "" {
 			return ip
 		}
+	}
+	if d.Mesh != nil {
+		return "-"
 	}
 	if d.Bluetooth != nil {
 		return d.Bluetooth.Address
@@ -445,6 +480,44 @@ func (c *DevicesCollection) MergedDevices() []DiscoveredDevice {
 		order = append(order, merged)
 	}
 
+	// Mesh never matches an unsigned display name, hostname, or bare UUID.
+	for i := range c.MeshDevices {
+		mesh := &c.MeshDevices[i]
+		principal := CanonicalDevicePrincipal(mesh.Principal)
+		if principal == "" {
+			continue
+		}
+		var existing *DiscoveredDevice
+		for _, d := range order {
+			if CanonicalDevicePrincipal(d.PrincipalURI) == principal {
+				existing = d
+				break
+			}
+			for _, ext := range d.Externals {
+				if ext.ConnectionInfo["tenantId"] == mesh.Tenant && ext.LiteDedupID() == mesh.Device {
+					existing = d
+					break
+				}
+			}
+			if existing != nil {
+				break
+			}
+		}
+		if existing == nil {
+			existing = &DiscoveredDevice{DisplayName: mesh.Name, PrincipalURI: principal, TenantUUID: mesh.Tenant}
+			if existing.DisplayName == "" {
+				existing.DisplayName = mesh.Device
+			}
+			order = append(order, existing)
+		}
+		existing.Mesh = mesh
+		existing.Caps = append([]string(nil), mesh.Caps...)
+		existing.Sensorlink = slices.Contains(mesh.Caps, "sensors")
+		if existing.LAN == nil {
+			existing.WendyLite = mesh.Platform == "Lite"
+			existing.IsMTLS = mesh.Transport == "mtls-v1"
+		}
+	}
 	result := make([]DiscoveredDevice, 0, len(order))
 	for _, d := range order {
 		result = append(result, *d)
@@ -454,7 +527,7 @@ func (c *DevicesCollection) MergedDevices() []DiscoveredDevice {
 
 // IsEmpty returns true if no devices were found across any interface.
 func (c *DevicesCollection) IsEmpty() bool {
-	return len(c.USBDevices) == 0 &&
+	return len(c.MeshDevices) == 0 && len(c.USBDevices) == 0 &&
 		len(c.LANDevices) == 0 &&
 		len(c.BluetoothDevices) == 0 &&
 		len(c.EthernetInterfaces) == 0 &&

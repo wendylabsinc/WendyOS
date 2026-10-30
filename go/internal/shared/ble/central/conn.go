@@ -70,11 +70,20 @@ func NewL2CAPStream(c *Connection) net.Conn {
 	return &l2capNetConn{conn: c}
 }
 
+type l2capIO interface {
+	L2CAPRecv(int) ([]byte, error)
+	L2CAPSend([]byte) error
+	Close()
+}
+
 type l2capNetConn struct {
-	conn         *Connection
-	buf          []byte     // leftover from a previous L2CAPRecv
-	readDeadline time.Time  // zero means no deadline; owned by the single reader
-	recvMu       sync.Mutex // held across L2CAPRecv so Close can't free under it
+	conn         l2capIO
+	readMu       sync.Mutex
+	sendMu       sync.Mutex
+	buf          []byte       // leftover from a previous L2CAPRecv
+	deadlineMu   sync.RWMutex // guards readDeadline while a Read is in flight
+	readDeadline time.Time    // zero means no deadline
+	recvMu       sync.Mutex   // held across L2CAPRecv so Close can't free under it
 	closed       atomic.Bool
 }
 
@@ -83,6 +92,11 @@ type l2capNetConn struct {
 // platform recv is polled in recvChunkSeconds slices and a slice that expires
 // with nothing to show is retried rather than reported.
 func (c *l2capNetConn) Read(b []byte) (int, error) {
+	c.readMu.Lock()
+	defer c.readMu.Unlock()
+	if len(b) == 0 {
+		return 0, nil
+	}
 	if len(c.buf) > 0 {
 		n := copy(b, c.buf)
 		c.buf = c.buf[n:]
@@ -91,8 +105,11 @@ func (c *l2capNetConn) Read(b []byte) (int, error) {
 
 	for {
 		chunk := recvChunkSeconds
-		if !c.readDeadline.IsZero() {
-			remaining := time.Until(c.readDeadline)
+		c.deadlineMu.RLock()
+		deadline := c.readDeadline
+		c.deadlineMu.RUnlock()
+		if !deadline.IsZero() {
+			remaining := time.Until(deadline)
 			if remaining <= 0 {
 				return 0, &timeoutErr{}
 			}
@@ -138,17 +155,20 @@ func (c *l2capNetConn) recv(chunkSeconds int) ([]byte, error) {
 }
 
 func (c *l2capNetConn) Write(b []byte) (int, error) {
+	c.sendMu.Lock()
+	defer c.sendMu.Unlock()
+	if c.closed.Load() {
+		return 0, net.ErrClosed
+	}
 	if err := c.conn.L2CAPSend(b); err != nil {
 		return 0, err
 	}
 	return len(b), nil
 }
 
-// Close waits out an in-flight Read so the platform connection cannot be torn
-// down while a reader is still inside it. Reads poll in recvChunkSeconds
-// slices. A write can still be in flight: Connection.Close interrupts it
-// first, then waits for it to return before freeing anything (on darwin,
-// before releasing the CoreBluetooth wrapper to ARC).
+// Close waits for an in-flight Read, which polls in recvChunkSeconds slices.
+// Connection.Close interrupts any in-flight write and waits for it to return
+// before releasing the native connection.
 //
 // Its idempotency is belt and braces these days — Connection.Close is
 // idempotent on both backends — but it costs a bool and keeps this type's own
@@ -166,18 +186,27 @@ func (c *l2capNetConn) Close() error {
 func (c *l2capNetConn) LocalAddr() net.Addr  { return bleNetAddr{} }
 func (c *l2capNetConn) RemoteAddr() net.Addr { return bleNetAddr{} }
 
-// WARNING: SetDeadline only ever bounds reads — see SetWriteDeadline.
 func (c *l2capNetConn) SetDeadline(t time.Time) error {
-	c.readDeadline = t
-	return nil
+	if err := c.SetReadDeadline(t); err != nil {
+		return err
+	}
+	return c.SetWriteDeadline(t)
 }
 func (c *l2capNetConn) SetReadDeadline(t time.Time) error {
+	c.deadlineMu.Lock()
 	c.readDeadline = t
+	c.deadlineMu.Unlock()
 	return nil
 }
 
-// WARNING: SetWriteDeadline is currently not implemented and is a no-op.
-func (c *l2capNetConn) SetWriteDeadline(_ time.Time) error { return nil }
+// Darwin supports changing the native deadline during a write. Other platform
+// backends retain their existing behavior of ignoring write deadlines.
+func (c *l2capNetConn) SetWriteDeadline(t time.Time) error {
+	if setter, ok := any(c.conn).(interface{ SetL2CAPWriteDeadline(time.Time) error }); ok {
+		return setter.SetL2CAPWriteDeadline(t)
+	}
+	return nil
+}
 
 // bleNetAddr is a minimal net.Addr for the BLE transport.
 type bleNetAddr struct{}
@@ -185,7 +214,7 @@ type bleNetAddr struct{}
 func (bleNetAddr) Network() string { return "ble-l2cap" }
 func (bleNetAddr) String() string  { return "ble" }
 
-// timeoutErr is returned when a read deadline is exceeded.
+// timeoutErr is returned when an I/O deadline is exceeded.
 type timeoutErr struct{}
 
 func (e *timeoutErr) Error() string   { return "BLE L2CAP: i/o timeout" }

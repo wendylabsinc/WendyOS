@@ -1,8 +1,11 @@
 package services
 
 import (
+	"bytes"
 	"context"
 	"net/netip"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -27,10 +30,46 @@ func topologyFixture(t *testing.T) (meshid.Device, localmesh.NodeSnapshot, time.
 	return self, localmesh.NodeSnapshot{
 		Self: self, CapturedAt: now, Peers: 2,
 		Links:               []localmesh.PeerLink{{ID: 2, Device: peer, Cost: 4096, Transport: "ble"}, {ID: 1, Device: peer, Cost: 64, Transport: "ethernet"}},
-		Devices:             []localmesh.Manifest{{Version: localmesh.ManifestVersionRoute, Device: peer.UUID(), Revision: 42, Name: "peer", Issued: now.Add(-time.Second).UnixMilli(), Expires: now.Add(time.Minute).UnixMilli(), Route: &origin}},
+		Devices:             []localmesh.Manifest{{Version: localmesh.ManifestVersionRoute, Device: peer.UUID(), Revision: 42, Name: "peer", AgentPort: 50052, AgentTransport: localmesh.AgentMTLS, Platform: localmesh.PlatformWendyOS, Caps: []string{"sensors"}, Issued: now.Add(-time.Second).UnixMilli(), Expires: now.Add(time.Minute).UnixMilli(), Route: &origin}},
 		Routes:              []babel.Route{{Prefix: origin.Prefix, RouterID: origin.RouterID, Seqno: origin.Seqno, Metric: 128, Link: 1, NextHop: netip.MustParseAddr("fe80::2")}, {Prefix: netip.PrefixFrom(self.MeshAddress(), 128), Local: true}},
 		RouteAuthorizations: map[localmesh.RouteOrigin]bool{origin: true},
 	}, now
+}
+
+func TestLocalMeshTopologyWithRetiredCarrierConfig(t *testing.T) {
+	self, snapshot, _ := topologyFixture(t)
+	for _, body := range []string{
+		`{"ethernet":true,"leafListen":"0.0.0.0:43024","leafBLEPeers":[],"leafTimeURL":""}`,
+		`{"leafListen":"0.0.0.0:43024"}`,
+	} {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "local-mesh.json")
+		if err := os.WriteFile(path, []byte(body), 0600); err != nil {
+			t.Fatal(err)
+		}
+		svc := NewLocalMeshAdminService(nil, dir, func() (meshid.Tenant, meshid.Device) { return self.Tenant(), self })
+		svc.SetTopologySource(func() localmesh.NodeSnapshot { return snapshot })
+		ctx := ctxWithIdentity(t, userPrincipal(adminTenantID, "alice"))
+		got, err := svc.GetLocalMeshTopology(ctx, &pb.GetLocalMeshTopologyRequest{})
+		if err != nil || !got.GetRuntimeAvailable() || len(got.GetPeers()) != 2 || got.GetStatus() == nil {
+			t.Fatalf("topology with retired config: %v %v", got, err)
+		}
+		if _, err := svc.GetLocalMeshStatus(ctx, &pb.GetLocalMeshStatusRequest{}); err != nil {
+			t.Fatalf("status with retired config: %v", err)
+		}
+		enabled := true
+		if _, err := svc.ConfigureLocalMesh(ctx, &pb.ConfigureLocalMeshRequest{Ethernet: &enabled}); err != nil {
+			t.Fatalf("configure with retired config: %v", err)
+		}
+		saved, err := os.ReadFile(path)
+		if err != nil || bytes.Contains(saved, []byte("leaf")) {
+			t.Fatalf("retired fields persisted: %s %v", saved, err)
+		}
+		cfg, err := localmesh.LoadTCPConfig(path, self)
+		if err != nil || cfg == nil || !cfg.Ethernet || cfg.TLSListen != "" {
+			t.Fatalf("saved carriers: %+v %v", cfg, err)
+		}
+	}
 }
 
 func TestLocalMeshTopologyAuthorizationAndIdentityChange(t *testing.T) {
@@ -87,6 +126,10 @@ func TestLocalMeshTopologySeparatesLinksRoutesAndLeaseTrust(t *testing.T) {
 	}
 	if len(got.Routes) != 2 || len(got.Announcements) != 1 {
 		t.Fatalf("route/announcement projection: %v", got)
+	}
+	hint := got.Announcements[0]
+	if hint.AgentPort != 50052 || hint.AgentTransport != localmesh.AgentMTLS || hint.Platform != localmesh.PlatformWendyOS || len(hint.Caps) != 1 || hint.Caps[0] != "sensors" {
+		t.Fatalf("verified agent hints lost: %v", hint)
 	}
 	var remote *pb.LocalMeshRoute
 	for _, route := range got.Routes {

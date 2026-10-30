@@ -2217,8 +2217,8 @@ func TestExternalProviderPickerItem(t *testing.T) {
 		}
 		item := externalProviderPickerItem(prov, &dev)
 
-		if item.Type != "LAN (Lite)" {
-			t.Errorf("Type = %q, want %q", item.Type, "LAN (Lite)")
+		if item.Type != "LAN" {
+			t.Errorf("Type = %q, want %q", item.Type, "LAN")
 		}
 		if item.Address != "10.0.0.9" {
 			t.Errorf("Address = %q, want %q", item.Address, "10.0.0.9")

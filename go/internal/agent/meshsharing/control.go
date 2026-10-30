@@ -11,14 +11,17 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/wendylabsinc/wendy/go/internal/agent/localmesh"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
 )
 
 const (
-	leaseControlPort = 18867
-	leaseControlALPN = "wendy-mesh-internet/1"
-	leaseHeartbeat   = byte(1)
+	leaseControlPort  = 18867
+	leaseControlALPN  = "wendy-mesh-internet/1"
+	leaseOperatorALPN = "wendy-mesh-internet/2"
+	leaseHeartbeat    = byte(1)
 	// Certificate chains can take tens of seconds over a BLE mesh leaf.
 	// Bound unauthenticated work while allowing the radio and TCP retries.
 	leaseHandshakeTimeout = 60 * time.Second
@@ -127,16 +130,20 @@ func (s *leaseServer) Close() error {
 }
 
 func controlPeer(creds *localmesh.Credentials, state tls.ConnectionState) (localmesh.Identity, error) {
-	if state.Version != tls.VersionTLS13 || state.NegotiatedProtocol != leaseControlALPN {
+	protocol := localmesh.ApplicationProtocol(state.NegotiatedProtocol)
+	if state.Version != tls.VersionTLS13 || (protocol != leaseControlALPN && protocol != leaseOperatorALPN) {
 		return localmesh.Identity{}, errors.New("invalid gateway control TLS protocol")
 	}
 	chain := make([][]byte, len(state.PeerCertificates))
 	for i, cert := range state.PeerCertificates {
 		chain[i] = cert.Raw
 	}
-	peer, err := creds.Verify(chain, time.Now())
+	peer, err := creds.VerifyTLS(chain, time.Now())
 	if err != nil {
 		return localmesh.Identity{}, err
+	}
+	if peer.Device.IsOperator() && protocol != leaseOperatorALPN {
+		return localmesh.Identity{}, errors.New("operator gateway control requires an instance exchange")
 	}
 	if peer.Device == creds.Device || peer.Device.Tenant() != creds.Device.Tenant() {
 		return localmesh.Identity{}, errors.New("gateway control requires another device in the same tenant")
@@ -145,13 +152,15 @@ func controlPeer(creds *localmesh.Credentials, state tls.ConnectionState) (local
 }
 
 func controlTLS(creds *localmesh.Credentials) *tls.Config {
-	return &tls.Config{
+	config := &tls.Config{
 		MinVersion: tls.VersionTLS13, MaxVersion: tls.VersionTLS13,
 		Certificates: []tls.Certificate{creds.Certificate},
 		ClientAuth:   tls.RequireAnyClientCert, SessionTicketsDisabled: true,
-		NextProtos:       []string{leaseControlALPN},
+		NextProtos:       []string{leaseOperatorALPN, leaseControlALPN},
 		VerifyConnection: func(state tls.ConnectionState) error { _, err := controlPeer(creds, state); return err },
 	}
+	creds.ConfigureTLSServer(config)
+	return config
 }
 
 func controlExpiry(creds *localmesh.Credentials, peer localmesh.Identity) (time.Time, error) {
@@ -180,6 +189,17 @@ func serveGatewayLease(ctx context.Context, creds *localmesh.Credentials, backen
 	peer, err := controlPeer(creds, conn.ConnectionState())
 	if err != nil {
 		return nil
+	}
+	if localmesh.ApplicationProtocol(conn.ConnectionState().NegotiatedProtocol) == leaseOperatorALPN {
+		conn.SetDeadline(time.Now().Add(leaseReplyTimeout))
+		var instance uuid.UUID
+		if _, err := io.ReadFull(conn, instance[:]); err != nil || !peer.Device.IsOperator() {
+			return nil
+		}
+		peer.Device, err = peer.Device.WithInstance(instance)
+		if err != nil {
+			return nil
+		}
 	}
 	endpoint, err := netip.ParseAddrPort(raw.RemoteAddr().String())
 	if err != nil || endpoint.Addr().Unmap() != peer.Device.MeshAddress() {
@@ -283,7 +303,11 @@ func negotiateGatewayLease(ctx context.Context, creds *localmesh.Credentials, ga
 	if err != nil {
 		return nil, lease, err
 	}
-	config.NextProtos = []string{leaseControlALPN}
+	protocol := leaseControlALPN
+	if creds.Device.IsOperator() {
+		protocol = leaseOperatorALPN
+	}
+	creds.ConfigureTLSClient(config, protocol)
 	secure := tls.Client(raw, config)
 	if err = secure.HandshakeContext(ctx); err != nil {
 		return nil, lease, err
@@ -305,6 +329,12 @@ func negotiateGatewayLease(ctx context.Context, creds *localmesh.Credentials, ga
 		deadline = bound
 	}
 	conn.SetDeadline(deadline)
+	if creds.Device.IsOperator() {
+		instance := creds.Device.UUID()
+		if err = writeControl(conn, instance[:]); err != nil {
+			return nil, lease, err
+		}
+	}
 	var response [3]byte
 	if _, err = io.ReadFull(conn, response[:]); err != nil {
 		return nil, lease, err

@@ -14,6 +14,7 @@ import (
 	"github.com/vishvananda/netlink"
 	"github.com/wendylabsinc/WendyOS/go/babel"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
+	"github.com/wendylabsinc/wendy/go/internal/shared/meshoperator"
 	"golang.org/x/sys/unix"
 )
 
@@ -37,14 +38,15 @@ type kernelPeer struct {
 // UUIDs, and Babel routes are installed as ULA destinations with link-local next
 // hops on the interface they arrived on.
 type Kernel struct {
-	link        *netlink.Dummy
-	peers       map[babel.LinkID]kernelPeer
-	routes      []netlink.Route
-	rule        *netlink.Rule
-	device      meshid.Device
-	address     net.IP
-	forwarding  bool
-	forwardRule bool
+	link         *netlink.Dummy
+	peers        map[babel.LinkID]kernelPeer
+	routes       []netlink.Route
+	rule         *netlink.Rule
+	operatorRule *netlink.Rule
+	device       meshid.Device
+	address      net.IP
+	forwarding   bool
+	forwardRule  bool
 }
 
 // ReconcileBase restores only this kernel's invariant host address, policy
@@ -80,27 +82,37 @@ func (k *Kernel) ReconcileBase() error {
 			return fmt.Errorf("restore wendy net policy rule: %w", err)
 		}
 	}
+	if !state.operatorRule && k.operatorRule != nil {
+		if err := netlink.RuleAdd(k.operatorRule); err != nil && !errors.Is(err, unix.EEXIST) {
+			return fmt.Errorf("restore operator net policy rule: %w", err)
+		}
+	}
 	// EEXIST can mean a competing writer installed different state. Confirm
 	// all invariants after repair rather than treating that error as success.
 	state, err = k.inspectBase()
 	if err != nil {
 		return err
 	}
-	if !state.address || !state.up || !state.guard || !state.rule {
+	if !state.address || !state.up || !state.guard || !state.rule || (k.operatorRule != nil && !state.operatorRule) {
 		return errors.New("wendy net base state changed during reconciliation")
 	}
 	return nil
 }
 
 type baseState struct {
-	link    netlink.Link
-	address bool
-	up      bool
-	rule    bool
-	guard   bool
+	operatorRule bool
+	link         netlink.Link
+	address      bool
+	up           bool
+	rule         bool
+	guard        bool
 }
 
 func (k *Kernel) inspectBase() (baseState, error) {
+	return readConsistentBase(k.inspectBaseOnce)
+}
+
+func (k *Kernel) inspectBaseOnce() (baseState, error) {
 	var state baseState
 	if k.link == nil || k.rule == nil || len(k.routes) == 0 {
 		return state, errors.New("wendy net kernel is not initialized")
@@ -137,7 +149,11 @@ func (k *Kernel) inspectBase() (baseState, error) {
 			if !baseRuleMatches(rule) {
 				return state, errors.New("wendy net policy rule ownership conflict")
 			}
-			state.rule = true
+			if rule.Dst.String() == meshid.MeshPrefix.String() {
+				state.rule = true
+			} else {
+				state.operatorRule = true
+			}
 		} else if rule.Table == RouteTable {
 			ownedPeer := false
 			for _, peer := range k.peers {
@@ -208,7 +224,7 @@ func plainRuleSelectors(rule netlink.Rule) bool {
 
 func baseRuleMatches(rule netlink.Rule) bool {
 	return plainRuleSelectors(rule) && rule.Priority == RouteTable &&
-		rule.Dst != nil && rule.Dst.String() == meshid.MeshPrefix.String() && rule.IifName == ""
+		rule.Dst != nil && (rule.Dst.String() == meshid.MeshPrefix.String() || rule.Dst.String() == meshoperator.Prefix.String()) && rule.IifName == ""
 }
 
 func peerRuleMatches(rule netlink.Rule, peer *netlink.Rule) bool {
@@ -300,6 +316,15 @@ func NewKernel(device meshid.Device) (*Kernel, error) {
 		return nil, kernelOperationError("install IPv6 net policy rule", kernelPolicyRequirement, err)
 	}
 	k.rule = rule
+	operatorRule := netlink.NewRule()
+	operatorRule.Family = netlink.FAMILY_V6
+	operatorRule.Priority = RouteTable
+	operatorRule.Table = RouteTable
+	operatorRule.Dst = ipNet(meshoperator.Prefix)
+	if err = netlink.RuleAdd(operatorRule); err != nil {
+		return nil, kernelOperationError("install operator IPv6 policy rule", kernelPolicyRequirement, err)
+	}
+	k.operatorRule = operatorRule
 	if err = k.enableForwarding(); err != nil {
 		return nil, kernelOperationError("enable net forwarding", "", err)
 	}
@@ -489,6 +514,11 @@ func (k *Kernel) Apply(routes []babel.Route) error {
 			return err
 		}
 	}
+	if k.operatorRule != nil {
+		if err := netlink.RuleAdd(k.operatorRule); err != nil && !errors.Is(err, unix.EEXIST) {
+			return err
+		}
+	}
 	var desired []netlink.Route
 	for _, r := range routes {
 		if r.Local {
@@ -571,6 +601,10 @@ func (k *Kernel) Close() error {
 	errs = append(errs, k.closeForwarding())
 	for id := range k.peers {
 		errs = append(errs, k.RemovePeer(id))
+	}
+	if k.operatorRule != nil {
+		errs = append(errs, netlink.RuleDel(k.operatorRule))
+		k.operatorRule = nil
 	}
 	if k.rule != nil {
 		errs = append(errs, netlink.RuleDel(k.rule))

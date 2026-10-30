@@ -1,73 +1,118 @@
-# Connect Wendy Lite to Wendy Net over Bluetooth
+# Connect to Wendy Net from your computer
 
-Connect an enrolled Wendy Lite board to a nearby WendyOS device without joining
-a Wi-Fi access point. The WendyOS device carries the board's Wendy Net traffic
-onward. The Lite board is an endpoint: it does not relay traffic for other devices.
+The Wendy CLI can join a mesh as a background router, discover devices and
+services, and connect to them without a shared physical LAN. It uses the active
+operator profile and the same tenant authentication as ordinary device commands.
+Its routing identity belongs to this CLI installation; it is not an enrolled
+device.
 
-This is an advanced setup that requires compatible Lite firmware and explicit
-peer configuration. For ordinary WendyOS-to-WendyOS Bluetooth links, use
-[Wendy Net over Bluetooth](/docs/hardware/bluetooth#wendy-net-over-bluetooth).
+## Join and discover
 
-## Before you start
-
-- Enroll both devices in the same Wendy Cloud organization.
-- Use a WendyOS device with Bluetooth and full Wendy Net support.
-- Ask your firmware administrator for the board's enrolled device UUID,
-  Bluetooth address, address type, and signed-time service URL.
-- The Lite firmware must enable Bluetooth networking, trust the time service,
-  and be configured with the WendyOS device's enrolled UUID.
-
-Automatic Lite peer discovery and rotating Bluetooth addresses are not supported.
-
-## Configure the WendyOS device
-
-Merge the following fields into its existing
-`/etc/wendy-agent/local-mesh.json`, preserving the other settings:
-
-```json
-{
-  "leafBLEPeers": [{
-    "device": "12345678-9abc-4def-8123-000000000002",
-    "address": "80:45:6b:00:00:01",
-    "addressType": "public",
-    "psm": 129
-  }],
-  "leafTimeURL": "https://your-time-service.example/timestamp"
-}
-```
-
-Replace all example values. `device` is the Lite board's enrolled UUID, not its
-hardware ID. Use a different UUID for each board. Keep the file and its directory
-owned by the agent's system user and unwritable by other users. Restart
-`wendyos-agent.service` after editing.
-
-## Check the connection
+Sign in, then explicitly enable your computer's router:
 
 ```sh
-wendy device wendy-net status --device <wendyos-device>
-wendy device wendy-net topology --device <wendyos-device>
+wendy auth login
+wendy device wendy-net connect
+wendy discover --type mesh
+wendy device wendy-net services
 ```
 
-Check for an authenticated link to the Lite board. A running Bluetooth provider
-alone does not mean the board connected. On a cold boot, allow at least two
-minutes for the board's replay protection before expecting normal traffic.
-If it does not connect, check the configured identities, Bluetooth address,
-firmware, and access to the signed-time service.
+The CLI finds available WendyOS and supported PSRAM Lite routers on LAN and BLE and retries suitable
+candidates when a connection fails. LAN connections use TCP with TLS; supported
+macOS and Linux hosts can also make outgoing BLE connections. Direct Lite first
+hops require native operator-router support from wendy-lite PR #121. A PSRAM C5
+can route to other devices; C6 remains a leaf. Broker readiness waits for a usable
+signed first-hop route, without requiring a WendyOS gRPC agent on that router.
 
-Lite connections share the adapter's capacity with other Wendy Net Bluetooth
-links. Bluetooth is intended for low-bandwidth traffic; use Ethernet or Wi-Fi
-where available.
+Commands share one background router for the selected operator profile. It stays
+running when a command exits and can forward traffic between peers. Reading its
+status or opening the Wendy Client Networks view does not enable it. Stop it
+explicitly when finished:
 
-## Advanced configuration reference
+```sh
+wendy device wendy-net disconnect
+```
 
-| Field | Meaning |
-| --- | --- |
-| `leafBLEPeers` | Up to eight explicitly configured Lite boards; physical Bluetooth connection limits still apply. |
-| `addressType` | `public` (default) or `random`. Each address/type pair must be unique. |
-| `psm` | Bluetooth service port, 128–255; defaults to 129. Keep 128 free if WendyCom management uses it. The firmware must use the same value. |
-| `leafTimeURL` | Required HTTPS signed-time URL when Lite peers are configured. Credentials, query strings and fragments are not accepted. |
+Disconnecting ends mesh connections and forwarding. The installation's routing
+identity and reconnect settings remain available for a later explicit join.
 
-For custom firmware, enable `WENDY_MESH_BLE`, reserve at least two NimBLE
-connection-oriented channels, and set `WENDY_MESH_ROUTER_DEVICE` to the WendyOS
-device UUID. These are firmware settings, not Wendy CLI options. A Bluetooth
-address locates a board; enrollment authenticates it.
+## Select a device or application service
+
+Use the `mesh://TENANT_UUID/DEVICE_UUID` selector returned by discovery with
+ordinary device commands:
+
+```sh
+wendy --device mesh://TENANT_UUID/DEVICE_UUID device info
+wendy --device mesh://TENANT_UUID/DEVICE_UUID device wendy-net status
+wendy --device mesh://TENANT_UUID/DEVICE_UUID device wendy-net topology
+wendy device wendy-net services --type _http._tcp
+```
+
+Discovery and service browsing require a current signed device manifest and a
+usable route. Disconnected or expired owners disappear from the available list.
+Mesh connections authenticate the destination independently of intermediate
+routers. Lite management, app upload/start, logs and supported SensorLink commands
+use WendyCom. Container registry, deployment and other agent-only commands still
+require WendyOS.
+
+For Lite topology, use matching CLI and firmware versions with WendyCom
+topology support.
+
+To use a Lite guest's advertised TCP service from a local program, forward a
+local port to its published port:
+
+```sh
+wendy --device mesh://TENANT_UUID/DEVICE_UUID device wendy-net forward 8080:80
+```
+
+The target must currently advertise port 80 as a TCP service. The command binds
+`127.0.0.1:8080` and runs until Ctrl-C. The application may still require its own
+authorization. UDP forwarding is not supported. Devices with small connection
+budgets can reject additional streams; close unused connections and retry.
+
+## Select an explicit first neighbour
+
+Automatic discovery is normally enough. To connect to a known WendyOS router,
+supply its enrolled device UUID and TLS carrier address together:
+
+```sh
+wendy device wendy-net connect --transport tcp \
+  --address ROUTER_IP:TLS_CARRIER_PORT --router ROUTER_DEVICE_UUID
+```
+
+For BLE, use `--transport ble` with the host's discovered peripheral identifier
+or Bluetooth address. The selected identity is authenticated before use; an
+address alone does not establish trust. Slow BLE setup or several mesh hops can
+make cold connections take longer than ordinary LAN connections.
+
+## Configure a Lite device
+
+Wendy Net is off by default on Lite. Select its existing management connection
+and enable supported carriers, for example over USB:
+
+```sh
+wendy --device wendy-lite:PORT device wendy-net configure \
+  --participate=true --ble=true --infrastructure-wifi=true --nan=false
+wendy --device wendy-lite:PORT device wendy-net status
+```
+
+C5 devices with PSRAM can route across several peers. The constrained C6 profile
+allows only one BLE or Wi-Fi carrier; enabling both returns an error. Select
+one explicitly, for example `--ble=false --infrastructure-wifi=true` for Wi-Fi.
+Changing C6 between those carriers saves settings and restarts it; the CLI
+reports that restart before the connection closes. Unsupported carriers return
+an explicit error. NAN and Internet sharing are not available in these Lite
+profiles. C6's constrained profile also disables Cloud connectivity.
+
+Omitted options preserve existing settings. Disable participation with
+`--participate=false`; mesh tasks and their allocations are released. For
+Bluetooth configuration on WendyOS, see
+[Wendy Net over Bluetooth](/docs/hardware/bluetooth#wendy-net-over-bluetooth).
+
+## Upgrade from the old Lite protocol
+
+Upgrade participating firmware together. Lite uses the same complete signed
+binary manifests and routing protocol as WendyOS; the old special leaf protocol
+is removed. The former `leafBLEPeers`, `leafListen` and `leafTimeURL` settings
+are ignored when loading existing files and removed when settings are saved. They do not enable a carrier; configure `tls_listen` explicitly for native TLS. Neighbours are
+discovered automatically rather than entered in a separate leaf list.

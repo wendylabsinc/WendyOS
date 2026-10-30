@@ -1,9 +1,10 @@
-// Package sessionbroker keeps an authenticated agent gRPC transport alive for
-// a short period between CLI invocations and exposes it through a user-owned
-// Unix socket. It is deliberately limited to pinned, direct-LAN mTLS devices:
-// plaintext targets have no identity to bind a broker to, while cloud sessions
-// also need a persistent registry/tunnel dialer and remain outside this bounded
-// first implementation.
+// Package sessionbroker retains authenticated device transports between CLI
+// invocations behind private per-user IPC. Direct LAN connections retain their
+// existing exact-device policy. Typed operator contexts additionally own the
+// portable mesh endpoint and adjacent management stream, sharing one existing
+// operator TLS attachment across commands. Signed remote WendyOS targets use
+// gRPC; Lite targets use a bounded routed WendyCom byte stream. Cloud sessions
+// still require their separate tunnel/registry owner.
 package sessionbroker
 
 import (
@@ -15,7 +16,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -29,6 +29,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/internal/shared/devicepin"
+	"github.com/wendylabsinc/wendy/go/internal/shared/useripc"
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/connectivity"
@@ -44,7 +45,7 @@ import (
 )
 
 const (
-	DefaultIdleTTL = 2 * time.Minute
+	DefaultIdleTTL = 5 * time.Minute
 	healthTimeout  = 750 * time.Millisecond
 	// The helper's first probe includes the device's post-quantum mTLS
 	// handshake, which can take a few seconds on constrained boards. Broker-hit
@@ -61,6 +62,7 @@ const (
 var ErrUnavailable = errors.New("session broker unavailable")
 
 type Spec struct {
+	Operator        *OperatorSpec       `json:"operator,omitempty"`
 	Key             string              `json:"key"`
 	Host            string              `json:"host"`
 	Addr            string              `json:"addr"`
@@ -70,7 +72,8 @@ type Spec struct {
 }
 
 type stateFile struct {
-	Spec Spec `json:"spec"`
+	IPCVersion int  `json:"ipcVersion,omitempty"`
+	Spec       Spec `json:"spec"`
 }
 
 var (
@@ -99,40 +102,73 @@ func Start(key string, conn *grpcclient.AgentConnection) error {
 	if !ok {
 		return nil
 	}
+	return startSpec(spec)
+}
+
+// HelperExecutable is set once by native embedders to their bundled CLI.
+var HelperExecutable = os.Executable
+
+func startSpec(spec Spec) error {
+	if host := embeddedHost.Load(); host != nil {
+		return host.start(spec)
+	}
 	b, err := json.Marshal(spec)
 	if err != nil {
 		return err
 	}
-	exe, err := os.Executable()
+	exe, err := HelperExecutable()
 	if err != nil {
 		return err
 	}
-	// The helper inherits the pipe's read end as fd 3 and treats its EOF as
-	// "the parent invocation exited" — exact where PID polling is a heuristic
-	// (PID reuse fakes liveness; a hard cap breaks builds longer than it).
-	leaseR, leaseW, err := os.Pipe()
-	if err != nil {
-		return err
+	args := []string{"__session-broker", "--spec", base64.RawURLEncoding.EncodeToString(b)}
+	var leaseR, leaseW *os.File
+	if spec.Operator == nil {
+		// The legacy preparing invocation keeps its separate direct connection.
+		// Operator callers instead use their IPC channel as the sole user lease;
+		// retaining their process would pin an unused context in a long-lived MCP.
+		leaseR, leaseW, err = os.Pipe()
+		if err != nil {
+			return err
+		}
+		args = append(args, "--parent-lease")
 	}
-	cmd := exec.Command(exe, "__session-broker", "--spec", base64.RawURLEncoding.EncodeToString(b), "--parent-lease")
+	cmd := exec.Command(exe, args...)
 	cmd.Stdin = nil
 	cmd.Stdout = nil
 	cmd.Stderr = nil
-	cmd.ExtraFiles = []*os.File{leaseR}
+	if leaseR != nil {
+		cmd.ExtraFiles = []*os.File{leaseR}
+	}
 	cmd.SysProcAttr = detachedProcessAttributes()
-	if err := cmd.Start(); err != nil {
-		_ = leaseR.Close()
-		_ = leaseW.Close()
+	if err = cmd.Start(); err != nil {
+		if leaseR != nil {
+			leaseR.Close()
+			leaseW.Close()
+		}
 		return err
 	}
-	_ = leaseR.Close()
-	parentLeasesMu.Lock()
-	parentLeases = append(parentLeases, leaseW)
-	parentLeasesMu.Unlock()
-	// Reap instead of Release: a helper that exits while this process still
-	// runs (it lost the flock seconds from now, or expired first) would
-	// otherwise sit as a zombie in the process table until this process exits.
-	go func() { _ = cmd.Wait() }()
+	if leaseR != nil {
+		leaseR.Close()
+		parentLeasesMu.Lock()
+		parentLeases = append(parentLeases, leaseW)
+		parentLeasesMu.Unlock()
+	}
+	// Retain the exact legacy parent lease only while its helper exists, and
+	// reap every child. Repeated cold contexts in an MCP must not leak pipe FDs.
+	go func() {
+		_ = cmd.Wait()
+		if leaseW != nil {
+			parentLeasesMu.Lock()
+			for i, file := range parentLeases {
+				if file == leaseW {
+					parentLeases = append(parentLeases[:i], parentLeases[i+1:]...)
+					break
+				}
+			}
+			leaseW.Close()
+			parentLeasesMu.Unlock()
+		}
+	}()
 	return nil
 }
 
@@ -166,9 +202,6 @@ func specForConnection(key string, conn *grpcclient.AgentConnection) (Spec, bool
 // and exits promptly (see serve), releasing the retained mTLS session. Lock
 // files are deliberately left in place — see acquireIdentityLock.
 func InvalidateAll() error {
-	if runtime.GOOS == "windows" {
-		return nil
-	}
 	dir, err := brokerDir()
 	if err != nil {
 		return err
@@ -228,7 +261,9 @@ func Connect(ctx context.Context, key string, expected certs.WendyIdentity) (*gr
 	// under the identity lock, so a starting or serving broker's freshly bound
 	// socket is never the thing swept — sparing every later invocation this
 	// walk until a new broker publishes.
-	probe, dialErr := net.DialTimeout("unix", socketPath, healthTimeout)
+	probeContext, stopProbe := context.WithTimeout(ctx, healthTimeout)
+	probe, dialErr := useripc.Dial(probeContext, socketPath)
+	stopProbe()
 	if dialErr != nil {
 		sweepStaleSession(socketPath, statePath)
 		return nil, errors.Join(ErrUnavailable, dialErr)
@@ -258,6 +293,9 @@ func Connect(ctx context.Context, key string, expected certs.WendyIdentity) (*gr
 // read end of the launching invocation's lease pipe (nil when launched
 // without one); its EOF is the exact "parent exited" signal.
 func Run(ctx context.Context, encoded string, idleTTL time.Duration, parentLease *os.File) error {
+	if parentLease != nil {
+		defer parentLease.Close()
+	}
 	b, err := base64.RawURLEncoding.DecodeString(encoded)
 	if err != nil {
 		return fmt.Errorf("decoding session broker spec: %w", err)
@@ -284,7 +322,7 @@ func Run(ctx context.Context, encoded string, idleTTL time.Duration, parentLease
 	// work on constrained boards, imposed at exactly the moment the device is
 	// already busy — only to exit at the flock. The lock is local and
 	// microsecond-cheap; take it first so a doomed helper costs nothing.
-	socketPath, _ := paths(dir, spec.Key, spec.Expected)
+	socketPath, _ := spec.paths(dir)
 	lock, locked, err := acquireIdentityLock(socketPath)
 	if err != nil {
 		return err
@@ -296,6 +334,9 @@ func Run(ctx context.Context, encoded string, idleTTL time.Duration, parentLease
 		releaseLock(lock)
 		_ = lock.Close()
 	}()
+	if spec.Operator != nil {
+		return runOperator(ctx, dir, spec, idleTTL)
+	}
 	certInfo, err := findCertificate(spec.CertFingerprint, spec.Expected.OrgID)
 	if err != nil {
 		return err
@@ -393,6 +434,9 @@ func acquireIdentityLock(socketPath string) (*os.File, bool, error) {
 }
 
 func (s Spec) validate() error {
+	if s.Operator != nil {
+		return s.validateOperator()
+	}
 	if strings.TrimSpace(s.Key) == "" || s.Host == "" || s.Addr == "" || s.CertFingerprint == "" {
 		return fmt.Errorf("invalid session broker spec")
 	}
@@ -564,8 +608,28 @@ func requestCompression(ctx context.Context) string {
 	return ""
 }
 
+type upstreamResolver func(context.Context) (*grpc.ClientConn, func(), error)
+
 func proxyHandler(upstream *grpc.ClientConn, activity *activity) grpc.StreamHandler {
+	return proxyHandlerResolved(upstream, activity, nil)
+}
+func proxyHandlerResolved(adjacent *grpc.ClientConn, activity *activity, resolve upstreamResolver) grpc.StreamHandler {
 	return func(_ any, downstream grpc.ServerStream) error {
+		upstream := adjacent
+		if resolve != nil {
+			selected, release, err := resolve(downstream.Context())
+			if err != nil {
+				return err
+			}
+			upstream = selected
+			defer release()
+		}
+		isAdjacent := upstream == adjacent
+		noteError := func(err error) {
+			if isAdjacent {
+				activity.noteUpstreamError(upstream, err)
+			}
+		}
 		method, ok := grpc.MethodFromServerStream(downstream)
 		if !ok {
 			return fmt.Errorf("session broker: missing gRPC method")
@@ -575,7 +639,9 @@ func proxyHandler(upstream *grpc.ClientConn, activity *activity) grpc.StreamHand
 		answered := false
 		locallyCanceled := false
 		defer func() {
-			if answered {
+			if !isAdjacent {
+				// A remote outage does not invalidate the retained first hop.
+			} else if answered {
 				activity.rpcAnswered()
 			} else if !locallyCanceled {
 				// A caller may cancel several parallel RPCs after another part of
@@ -590,7 +656,9 @@ func proxyHandler(upstream *grpc.ClientConn, activity *activity) grpc.StreamHand
 
 		ctx := downstream.Context()
 		if md, ok := metadata.FromIncomingContext(ctx); ok {
-			ctx = metadata.NewOutgoingContext(ctx, md.Copy())
+			clean := md.Copy()
+			clean.Delete(operatorTargetHeader)
+			ctx = metadata.NewOutgoingContext(ctx, clean)
 		}
 		callOpts := []grpc.CallOption{grpc.ForceCodec(rawCodec{})}
 		if comp := requestCompression(ctx); comp != "" && comp != "identity" {
@@ -599,7 +667,7 @@ func proxyHandler(upstream *grpc.ClientConn, activity *activity) grpc.StreamHand
 		upstreamStream, err := upstream.NewStream(ctx, &grpc.StreamDesc{ServerStreams: true, ClientStreams: true}, method, callOpts...)
 		if err != nil {
 			locallyCanceled = isLocalCancellation(ctx, err)
-			activity.noteUpstreamError(upstream, err)
+			noteError(err)
 			return err
 		}
 
@@ -610,7 +678,7 @@ func proxyHandler(upstream *grpc.ClientConn, activity *activity) grpc.StreamHand
 				err := downstream.RecvMsg(&msg)
 				if errors.Is(err, io.EOF) {
 					closeErr := upstreamStream.CloseSend()
-					activity.noteUpstreamError(upstream, closeErr)
+					noteError(closeErr)
 					requestDone <- closeErr
 					return
 				}
@@ -629,7 +697,7 @@ func proxyHandler(upstream *grpc.ClientConn, activity *activity) grpc.StreamHand
 						requestDone <- nil
 						return
 					}
-					activity.noteUpstreamError(upstream, err)
+					noteError(err)
 					requestDone <- err
 					return
 				}
@@ -664,7 +732,7 @@ func proxyHandler(upstream *grpc.ClientConn, activity *activity) grpc.StreamHand
 					answered = true
 				}
 				downstream.SetTrailer(upstreamStream.Trailer())
-				activity.noteUpstreamError(upstream, err)
+				noteError(err)
 				return err
 			}
 			answered = true
@@ -764,12 +832,28 @@ func (h connectionActivity) HandleConn(_ context.Context, event stats.ConnStats)
 // whole call: holding it is what entitles serve to clobber and later remove
 // the socket and state files.
 func serve(ctx context.Context, dir string, spec Spec, upstream *grpc.ClientConn, idleTTL time.Duration, parentAlive func() bool, verified ...bool) (err error) {
+	return serveResolved(ctx, dir, spec, upstream, idleTTL, parentAlive, nil, verified...)
+}
+func serveResolved(ctx context.Context, dir string, spec Spec, upstream *grpc.ClientConn, idleTTL time.Duration, parentAlive func() bool, resolve upstreamResolver, verified ...bool) (err error) {
+	return serveResolvedLocal(ctx, dir, spec, upstream, idleTTL, parentAlive, resolve, nil, verified...)
+}
+
+type localStreamHandler func(grpc.ServerStream, *activity) (bool, error)
+
+var localIPCRequiresListenerClose = runtime.GOOS == "windows" || runtime.GOOS == "ios"
+
+func serveResolvedLocal(ctx context.Context, dir string, spec Spec, upstream *grpc.ClientConn, idleTTL time.Duration, parentAlive func() bool, resolve upstreamResolver, local localStreamHandler, verified ...bool) (err error) {
 	// Capture before publishing the state file. Run supplies its successful
 	// probe explicitly, covering loss even before serve begins; unprobed test
 	// connections retain the initial-establishment behavior.
-	initialState := upstream.GetState()
+	initialState := connectivity.Idle
+	if upstream != nil {
+		initialState = upstream.GetState()
+	} else if spec.Operator == nil {
+		return errors.New("device broker requires an upstream connection")
+	}
 	alreadyVerified := initialState == connectivity.Ready || (len(verified) > 0 && verified[0])
-	if alreadyVerified && initialState != connectivity.Ready {
+	if spec.Operator == nil && alreadyVerified && initialState != connectivity.Ready {
 		return nil // retire before publishing a transport that already lost trust
 	}
 	if idleTTL <= 0 {
@@ -778,21 +862,22 @@ func serve(ctx context.Context, dir string, spec Spec, upstream *grpc.ClientConn
 	if parentAlive == nil {
 		parentAlive = parentLeaseSignal(nil, spec.ParentPID)
 	}
-	socketPath, statePath := paths(dir, spec.Key, spec.Expected)
+	socketPath, statePath := spec.paths(dir)
 
 	_ = os.Remove(socketPath)
 	_ = os.Remove(statePath)
-	lis, err := net.Listen("unix", socketPath)
+	lis, err := useripc.Listen(socketPath)
 	if err != nil {
 		return err
 	}
 	defer lis.Close()
 	defer os.Remove(socketPath)
 	defer os.Remove(statePath)
-	if err := os.Chmod(socketPath, 0o600); err != nil {
-		return err
+	published := stateFile{Spec: spec}
+	if spec.Operator != nil {
+		published.IPCVersion = operatorIPCVersion
 	}
-	state, err := json.Marshal(stateFile{Spec: spec})
+	state, err := json.Marshal(published)
 	if err != nil {
 		return err
 	}
@@ -801,14 +886,32 @@ func serve(ctx context.Context, dir string, spec Spec, upstream *grpc.ClientConn
 	}
 
 	activity := newActivity()
+	var localDraining atomic.Bool
+	proxyAdjacent := upstream
+	if spec.Operator != nil {
+		// Operator contexts supervise their transport generation and reload pins
+		// on reconnect. A normal carrier outage must retain IPC/watch leases.
+		proxyAdjacent = nil
+	}
+	proxy := proxyHandlerResolved(proxyAdjacent, activity, resolve)
+	dispatch := func(service any, downstream grpc.ServerStream) error {
+		if local != nil {
+			if handled, err := local(downstream, activity); handled {
+				return err
+			}
+		}
+		return proxy(service, downstream)
+	}
 	server := grpc.NewServer(
 		grpc.ForceServerCodec(rawCodec{}),
-		grpc.UnknownServiceHandler(proxyHandler(upstream, activity)),
+		grpc.UnknownServiceHandler(dispatch),
 		grpc.StatsHandler(connectionActivity{activity: activity}),
 	)
 	serveCtx, cancelServe := context.WithCancel(ctx)
 	defer cancelServe()
-	go watchUpstreamState(serveCtx, upstream, activity, alreadyVerified)
+	if spec.Operator == nil {
+		go watchUpstreamState(serveCtx, upstream, activity, alreadyVerified)
+	}
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -855,13 +958,23 @@ func serve(ctx context.Context, dir string, spec Spec, upstream *grpc.ClientConn
 				}
 				last := time.Unix(0, activity.last.Load())
 				if activity.connections.Load() == 0 && activity.activeRPCs.Load() == 0 && time.Since(last) >= idleTTL {
-					drainThenStop(serveCtx, server, activity, socketPath, statePath)
+					drainThenStop(serveCtx, server, activity, socketPath, statePath, func() {
+						if localIPCRequiresListenerClose {
+							localDraining.Store(true)
+							_ = lis.Close()
+						}
+					})
 					return
 				}
 			}
 		}
 	}()
 	err = server.Serve(lis)
+	if localDraining.Load() {
+		<-done
+		cancelServe()
+		return nil
+	}
 	cancelServe()
 	<-done
 	if errors.Is(err, grpc.ErrServerStopped) {
@@ -878,7 +991,10 @@ func serve(ctx context.Context, dir string, spec Spec, upstream *grpc.ClientConn
 // arrive; any straggler that made it in is then served until it releases its
 // channel (which, with the proxy channel pinned non-idle client-side, is when
 // its invocation finishes).
-func drainThenStop(ctx context.Context, server *grpc.Server, activity *activity, socketPath, statePath string) {
+func drainThenStop(ctx context.Context, server *grpc.Server, activity *activity, socketPath, statePath string, stopAdmission ...func()) {
+	for _, stop := range stopAdmission {
+		stop()
+	}
 	_ = os.Remove(socketPath)
 	_ = os.Remove(statePath)
 	for activity.connections.Load() > 0 || activity.activeRPCs.Load() > 0 {
@@ -916,38 +1032,6 @@ func writePrivateFile(path string, data []byte) error {
 	return os.Rename(tmpName, path)
 }
 
-func ensurePrivateDir(dir string) error {
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return err
-	}
-	if err := os.Chmod(dir, 0o700); err != nil {
-		return err
-	}
-	return validatePrivateDir(dir)
-}
-
-func validatePrivateDir(dir string) error {
-	info, err := os.Stat(dir)
-	if err != nil {
-		return err
-	}
-	if !info.IsDir() || info.Mode().Perm()&0o077 != 0 {
-		return fmt.Errorf("session directory is not private")
-	}
-	return validateOwner(info)
-}
-
-func validatePrivateFile(path string, socket bool) error {
-	info, err := os.Lstat(path)
-	if err != nil {
-		return err
-	}
-	isExpectedType := info.Mode().IsRegular()
-	if socket {
-		isExpectedType = info.Mode()&os.ModeSocket != 0
-	}
-	if !isExpectedType || info.Mode().Perm()&0o077 != 0 {
-		return fmt.Errorf("unsafe session broker file %s", path)
-	}
-	return validateOwner(info)
-}
+func ensurePrivateDir(dir string) error                  { return useripc.EnsureDirectory(dir) }
+func validatePrivateDir(dir string) error                { return useripc.ValidateDirectory(dir) }
+func validatePrivateFile(path string, socket bool) error { return useripc.ValidateFile(path, socket) }

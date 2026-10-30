@@ -316,3 +316,41 @@ wendy run
 ```
 
 <CliShot flow="run" step="deploy" alt="The Wendy CLI deploying a camera app to a WendyOS device" />
+
+## Camera identities in site models
+
+Persist `stable_id` from the camera inventory when associating a camera with a
+site marker. Pass that exact value to `StreamVideoRequest.stable_id` or
+`wendy device camera view --stable-id <value>`. The agent resolves it when the
+stream opens and rejects a missing identity instead of falling back to a reused
+`/dev/videoN` number.
+
+USB cameras use the existing `by-id:` or `by-path:` names. Paired SensorLink
+cameras use `sensorlink:<pairing-key>:<channel-id>` and registered IP cameras use
+`ip-mac:<mac>`. ROS cameras use `ros2:<key>`, scoped to their graph, domain and
+topic so identical topic names in isolated apps stay distinct. A blank stable ID means the source cannot yet be saved safely as
+a site camera. Marker placement is manual and does not calibrate the camera.
+
+Native clients can discover enrolled SensorLink sources through the selected
+gateway without a terminal UI:
+
+```bash
+wendy --device <gateway> --json device sensors list
+wendy --device <gateway> --json device sensors add --source <principal_uri>
+wendy --device <gateway> --json device sensors status
+```
+
+`add` chooses one exact enrolled principal from a new gateway-side discovery,
+checks organization access, and lets the gateway verify the source certificate.
+The returned pairing can have `connected: false`; saving a pairing is not proof
+of arriving sensor data. These commands do not enroll a blank board or update
+its firmware. Initial Wendy Lite enrollment remains USB-only.
+
+For a USB-connected Wendy Lite board, use `wendy discover --json --type external
+--timeout 5s`; the `usb` discovery filter alone scans WendyOS USB connections.
+The external result includes the exact `wendy-lite:/dev/cu...` selector.
+`wendy --device <selector> --json device enrollment-status` reads its hardware
+ID, enrolled device UUID and tenant over USB without changing enrollment. Use
+that UUID to match the source's gateway pairing instead of relying on its name.
+A direct USB camera subscription can report `device busy` while a gateway owns
+the source. In that case, view the gateway's shared feed.

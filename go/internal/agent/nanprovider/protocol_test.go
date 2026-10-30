@@ -204,3 +204,24 @@ func TestNDPEventParsing(t *testing.T) {
 		t.Fatalf("%s %+v", kind, values)
 	}
 }
+
+func TestOperatorPresencePreservesPrincipal(t *testing.T) {
+	peer, err := meshid.PeerFromPrincipal("spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/operator/alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	hint := meshdiscovery.DefaultHint(peer.Tenant())
+	encoded, err := encodePresence(presence{Device: peer, Mesh: &hint})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := decodePresence(peer.Tenant(), hint, encoded)
+	if err != nil || decoded != peer {
+		t.Fatalf("operator identity lost: %+v %v", decoded, err)
+	}
+	raw, _ := (presence{Device: peer, Mesh: &hint}).marshalBinary()
+	raw[22] ^= 1
+	if _, err := parsePresence(raw); err == nil {
+		t.Fatal("operator UUID binding not checked")
+	}
+}

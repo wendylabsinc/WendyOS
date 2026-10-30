@@ -87,6 +87,81 @@ message WendyComDeviceIdentity {
     string enrolled_device_id = 4;
 }
 
+// Native Wendy Net policy. Disabled by default; carrier choices are retained
+// independently. Limits are local resource policy, never a special leaf role.
+message WendyComNetConfig {
+    bool enabled = 1;
+    bool ble = 2;
+    bool infrastructure_wifi = 3;
+    bool nan = 4;
+    uint32 max_links = 5;
+    uint32 ble_links = 6;
+    uint32 wifi_links = 7;
+    uint32 nan_links = 8;
+}
+message WendyComNetGetParams {}
+message WendyComNetSetParams { WendyComNetConfig config = 1; }
+enum WendyComNetState {
+    WENDY_COM_NET_OFF = 0;
+    WENDY_COM_NET_STARTING = 1;
+    WENDY_COM_NET_RUNNING = 2;
+    WENDY_COM_NET_STOPPING = 3;
+    WENDY_COM_NET_FAILED = 4;
+}
+message WendyComNetStatus {
+    WendyComNetConfig desired = 1;
+    WendyComNetConfig applied = 2;
+    WendyComNetState state = 3;
+    bool ble_supported = 4;
+    bool wifi_supported = 5;
+    bool nan_supported = 6;
+    bool psram = 7;
+    uint32 memory_limit_bytes = 8;
+    optional uint32 allocated_bytes = 9;
+    optional uint32 internal_bytes = 10;
+    uint32 active_links = 11;
+    uint32 error_code = 12;
+    bool restarting = 13; // saved carrier change; reboot is pending
+}
+
+// Read-only, bounded live projection. One record per page; cursors are opaque.
+// generation binds all pages to the same routing/directory view. Restart at
+// cursor zero if it changes. An endpoint gateway intentionally has a partial
+// directory and never claims a complete remote routing table.
+message WendyComNetTopologyParams { uint32 cursor = 1; uint64 generation = 2; }
+message WendyComNetTopologyRecord {
+    uint32 kind = 1; // 1 authenticated link, 2 selected route, 3 verified announcement
+    bytes device = 2; // UUID, sixteen bytes; absent when origin is unknown
+    bytes address = 3; // IPv6 address (route prefix is always /128)
+    uint64 link_id = 4;
+    uint64 router_id = 5;
+    uint32 sequence = 6;
+    uint32 metric = 7;
+    bool local = 8;
+    bool unreachable = 9;
+    bool authorized = 10;
+    int64 expires_at_unix_ms = 11;
+    uint64 revision = 12;
+    int64 issued_at_unix_ms = 13;
+    uint32 transport = 14; // 1 infrastructure Wi-Fi, 2 BLE, 3 NAN
+    bytes next_hop_device = 15;
+    uint32 owner_role = 16; // 0 legacy device, 1 device, 2 operator
+    string owner_principal = 17; // exact public operator principal, at most 1024 UTF-8 bytes
+    bytes owner_instance = 18; // operator routing installation UUID, sixteen bytes, never a device ID
+}
+message WendyComNetTopologyPage {
+    bytes tenant = 1;
+    bytes device = 2;
+    int64 captured_at_unix_ms = 3;
+    uint64 generation = 4;
+    uint32 next_cursor = 5; // zero means complete
+    bool runtime_available = 6;
+    bool partial = 7;
+    bool truncated = 8;
+    WendyComNetStatus status = 9;
+    WendyComNetTopologyRecord record = 10;
+}
+
 message WendyComGetDeviceInfoParams {}
 
 // USB-only bootstrap challenge. The nonce is generated and retained on-device.
@@ -199,6 +274,9 @@ message WendyComCommand {
         WendyComEnrollmentChallengeParams enrollment_challenge = 19;
         WendyComSyncTimeParams sync_time = 20;
         WendyComEnrollmentResetParams enrollment_reset = 21;
+        WendyComNetGetParams net_get = 22;
+        WendyComNetSetParams net_set = 23;
+        WendyComNetTopologyParams net_topology = 24;
     }
 }
 
@@ -211,6 +289,11 @@ enum WendyComResult {
     WENDY_COM_RESULT_BAD_APP_TYPE         = 5;
     WENDY_COM_RESULT_BAD_APP_SIZE         = 6;
     WENDY_COM_RESULT_BAD_CONF_SIZE        = 7;
+    WENDY_COM_RESULT_APPLIED_RESTARTING   = 8;
+    WENDY_COM_RESULT_NET_NO_WIFI          = 9;
+    WENDY_COM_RESULT_NET_NO_BLE           = 10;
+    WENDY_COM_RESULT_NET_NO_NAN           = 11;
+    WENDY_COM_RESULT_NET_ONE_CARRIER_ONLY = 12;
 }
 
 // Response to a WendyComCommand — request_id matches the request.
@@ -223,6 +306,8 @@ message WendyComResponse {
         wendy.lite.sensorlink.SensorManifest sensor_link_manifest = 5;
         WendyComEnrollmentChallenge enrollment_challenge = 6;
         WendyComSyncTimeResult sync_time = 7;
+        WendyComNetStatus net_status = 8;
+        WendyComNetTopologyPage net_topology = 9;
     }
 }
 

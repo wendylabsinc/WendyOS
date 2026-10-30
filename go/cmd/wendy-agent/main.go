@@ -39,6 +39,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/agent/hardware"
 	"github.com/wendylabsinc/wendy/go/internal/agent/hostexec"
 	"github.com/wendylabsinc/wendy/go/internal/agent/hostnetwork"
+	"github.com/wendylabsinc/wendy/go/internal/agent/hoststats"
 	"github.com/wendylabsinc/wendy/go/internal/agent/inference"
 	"github.com/wendylabsinc/wendy/go/internal/agent/interceptor"
 	"github.com/wendylabsinc/wendy/go/internal/agent/localmesh"
@@ -64,6 +65,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/cloudrelay"
 	"github.com/wendylabsinc/wendy/go/internal/shared/discovery"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
+	"github.com/wendylabsinc/wendy/go/internal/shared/meshoperatorlink"
 	"github.com/wendylabsinc/wendy/go/internal/shared/models"
 	"github.com/wendylabsinc/wendy/go/internal/shared/unitree"
 	"github.com/wendylabsinc/wendy/go/internal/shared/version"
@@ -150,6 +152,9 @@ func main() {
 	logger = zap.New(zapcore.NewTee(logger.Core(), telemetryCore))
 
 	logger.Info("Starting wendy-agent", zap.String("version", version.Version))
+	if err := hoststats.EnableAgentNetworkAccounting(context.Background()); err != nil {
+		logger.Info("Agent network accounting unavailable", zap.Error(err))
+	}
 
 	configPath := "/etc/wendy-agent"
 	if envPath := os.Getenv("WENDY_CONFIG_PATH"); envPath != "" {
@@ -471,6 +476,11 @@ func main() {
 	calibratedFrameSvc := services.NewCalibratedFrameService(ctx, logger,
 		framesource.NewRegistry(services.NewRealSenseProvider(logger, videoSvc, "")))
 	defer calibratedFrameSvc.Shutdown()
+	if metadataStore, err := services.OpenCameraMetadataStore("/var/lib/wendy/camera-metadata.json"); err != nil {
+		logger.Error("camera metadata unavailable", zap.Error(err))
+	} else {
+		calibratedFrameSvc.SetMetadataStore(metadataStore)
+	}
 	// Network cameras have to be found before they can be listed, so probe
 	// periodically rather than only when a client asks.
 	videoSvc.StartDiscovery()
@@ -541,6 +551,8 @@ func main() {
 	sensorFrames := services.NewSensorFrameFeed()
 	videoSvc.SetSensorFrameFeed(sensorFrames)
 	sensorSup := mcusource.NewSupervisor(logger, videoSvc.Loopback(), sensorTransportFor, sensorFrames.WrapWriters(ros2camera.NewFrameWriter), audioLoop)
+	videoSvc.SetSensorCameraIdentities(sensorSup.CameraIdentities)
+	sensorSup.SetSourceResolver(mcusource.NewSourceResolver(meshCatalog.SensorSources))
 	sensorRunner := mcusource.NewRunner(logger, sensorSup)
 	sensorAgentScope := func() certs.Scope {
 		certPEM, _, _ := mcuIdentity()
@@ -548,18 +560,18 @@ func main() {
 		_, scope.OrgID, _, _ = provisioningSvc.ProvisioningInfo()
 		return scope
 	}
-	sensorSvc := services.NewSensorPairingService(logger, sensorStore, sensorAgentScope, sensorRunner.Start, sensorRunner.StopPairing, sensorSup.IsPairingConnected)
+	sensorSvc := services.NewSensorPairingService(logger, sensorStore, sensorAgentScope, sensorRunner.StartDiscovered, sensorRunner.StopPairing, sensorSup.IsPairingConnected)
 	// `device pair` lists sources from this device's network, so this device
 	// must not offer itself. Its asset ID is read per request because
 	// enrollment can assign one while the agent runs.
-	sensorSvc.SetSourceDiscovery(nil, func() services.SensorSourceSelf {
+	sensorSvc.SetSourceDiscovery(browseSensorSources(meshCatalog.SensorSources), func() services.SensorSourceSelf {
 		_, _, assetID, _ := provisioningSvc.ProvisioningInfo()
 		return services.LocalSensorSourceSelf(assetID)
 	})
 	_, _, _, unitreeEnrolled := provisioningSvc.ProvisioningInfo()
 	unitreeSvc := services.NewUnitreeService(ctx, filepath.Join(configPath, "unitree-pairings.json"), unitreePairingOwner(deviceScope(provisioningSvc), unitreeEnrolled))
 	defer unitreeSvc.Close()
-	unitreeRobotSvc := services.NewUnitreeRobotService(unitreeSvc)
+	unitreeRobotSvc := services.NewUnitreeRobotService(unitreeSvc, logger)
 	if err := unitreeSvc.Restore(); err != nil {
 		logger.Warn("loading Unitree pairings failed", zap.Error(err))
 	}
@@ -863,6 +875,9 @@ func main() {
 		}
 	}
 
+	meshAgentListener := meshoperatorlink.NewAgentListener()
+	defer meshAgentListener.Close()
+
 	startMTLSServer := func(certPEM, chainPEM, keyPEM string) {
 		mtlsMu.Lock()
 		defer mtlsMu.Unlock()
@@ -961,6 +976,13 @@ func main() {
 		}
 
 		mtlsServer = srv
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := srv.Serve(meshAgentListener); err != nil && !errors.Is(err, grpc.ErrServerStopped) {
+				logger.Error("authenticated mesh gRPC ingress stopped", zap.Error(err))
+			}
+		}()
 
 		wg.Add(1)
 		go func() {
@@ -1019,6 +1041,7 @@ func main() {
 		stats := meshVIPs.Stats()
 		logger.Info("wendy net: VIP table loaded", zap.Int("allocated", stats.Allocated), zap.Int("retired", stats.Retired), zap.Int("capacity", stats.Capacity))
 	}
+	sessionIngress := meshsession.WithAgentService(meshIngress, uint16(mtlsPortNum))
 	startConfiguredLocalMesh := func(certPEM, chainPEM, keyPEM string) {
 		if runtime.GOOS != "linux" {
 			return
@@ -1031,9 +1054,11 @@ func main() {
 			return
 		}
 		localMeshLife.Start(ctx, func(meshCtx context.Context, launch func(func())) {
+			meshCtx, stopSessions := context.WithCancel(meshCtx)
 			appClient, err := meshsession.NewClient(credentials, appUDPMessages)
 			if err != nil {
 				logger.Error("wendy net app client unavailable", zap.Error(err))
+				stopSessions()
 				return
 			}
 			localMeshMu.Lock()
@@ -1059,27 +1084,51 @@ func main() {
 					}
 				}
 			})
-			sessionServer, err := meshsession.NewServer(credentials, meshIngress, appUDPMessages)
+			sessionServer, err := meshsession.NewServer(credentials, sessionIngress, appUDPMessages)
 			if err != nil {
 				logger.Error("wendy net app session unavailable", zap.Error(err))
-			} else {
-				launch(func() {
-					if err := sessionServer.Run(meshCtx, fmt.Sprintf(":%d", meshsession.Port)); err != nil && meshCtx.Err() == nil {
-						logger.Error("wendy net app session stopped", zap.Error(err))
-					}
-				})
+				stopSessions()
+				return
+			}
+			// Publish app capabilities only after both sockets have bound. A
+			// listener failure ends the carriers and their signed advertisement.
+			ready := make(chan struct{}, 2)
+			onReady := func() { ready <- struct{}{} }
+			launch(func() {
+				defer stopSessions()
+				if err := sessionServer.RunTLS(meshCtx, fmt.Sprintf(":%d", meshsession.TLSPort), onReady); err != nil && meshCtx.Err() == nil {
+					logger.Error("wendy net TLS app session stopped", zap.Error(err))
+				}
+			})
+			launch(func() {
+				defer stopSessions()
+				if err := sessionServer.Run(meshCtx, fmt.Sprintf(":%d", meshsession.Port), onReady); err != nil && meshCtx.Err() == nil {
+					logger.Error("wendy net app session stopped", zap.Error(err))
+				}
+			})
+			for range 2 {
+				select {
+				case <-ready:
+				case <-meshCtx.Done():
+					return
+				}
+			}
+			if meshCtx.Err() != nil {
+				return
 			}
 			name, _ := os.Hostname()
 			launch(func() {
 				runMeshSupervisor(meshCtx, 5*time.Second, func(ctx context.Context) error {
 					return runConfiguredNetCarriers(ctx, configPath, localmesh.TCPIdentity{
 						Name: name, AgentPort: uint16(mtlsPortNum),
-						Certificate: certPEM, Chain: chainPEM, Key: keyPEM,
+						Agent:        services.MeshAgentMetadata(),
+						AppEndpoints: []localmesh.AppEndpoint{{Transport: localmesh.AppQUIC, Port: meshsession.Port}, {Transport: localmesh.AppTLS, Port: meshsession.TLSPort}},
+						Certificate:  certPEM, Chain: chainPEM, Key: keyPEM,
 					}, logger, meshCatalog, meshVIPs, meshSharing, func(snapshot func() localmesh.NodeSnapshot) {
 						localMeshMu.Lock()
 						localMeshSnapshot = snapshot
 						localMeshMu.Unlock()
-					})
+					}, meshAgentListener.Deliver)
 				}, func(err error) {
 					logger.Error("configured wendy net stopped", zap.Error(err))
 				})
@@ -1110,7 +1159,7 @@ func main() {
 	meshDialer.SetSelfDialer(func(dialCtx context.Context, port uint16) (net.Conn, error) {
 		bounded, cancel := context.WithTimeout(dialCtx, 5*time.Second)
 		defer cancel()
-		return meshIngress.DialAuthorized(port, func(address string) (net.Conn, error) {
+		return sessionIngress.DialAuthorized(port, func(address string) (net.Conn, error) {
 			return (&net.Dialer{}).DialContext(bounded, "tcp4", address)
 		})
 	})
@@ -1122,19 +1171,29 @@ func main() {
 		if snapshot == nil || appClient == nil {
 			return nil, meshsession.ErrNoRoute
 		}
-		address, err := meshsession.Resolve(snapshot(), peer)
+		view := snapshot()
+		if address, native, err := meshsession.ResolveAgentMTLS(view, peer, port); native {
+			if err != nil {
+				return nil, err
+			}
+			return (&net.Dialer{}).DialContext(dialCtx, "tcp6", address.String())
+		}
+		address, err := meshsession.ResolveApp(view, peer)
 		if err != nil {
 			appClient.WithdrawRoute(peer)
 			return nil, err
 		}
-		return appClient.DialWithRetryCheck(dialCtx, peer, address, port, func() error {
+		if address.Transport == localmesh.AppTLS {
+			return appClient.DialTLS(dialCtx, peer, address.Address, port)
+		}
+		return appClient.DialWithRetryCheck(dialCtx, peer, address.Address, port, func() error {
 			localMeshMu.RLock()
 			currentSnapshot := localMeshSnapshot
 			localMeshMu.RUnlock()
 			if currentSnapshot == nil {
 				return meshsession.ErrNoRoute
 			}
-			currentAddress, err := meshsession.Resolve(currentSnapshot(), peer)
+			currentAddress, err := meshsession.ResolveApp(currentSnapshot(), peer)
 			if err != nil {
 				return err
 			}
@@ -1184,12 +1243,18 @@ func main() {
 		if snapshot == nil || appClient == nil {
 			return nil, meshsession.ErrNoRoute
 		}
-		address, err := meshsession.Resolve(snapshot(), peer)
+		address, err := meshsession.ResolveApp(snapshot(), peer)
 		if err != nil {
 			appClient.WithdrawRoute(peer)
 			return nil, err
 		}
-		return appClient.DialUDP(dialCtx, peer, address, port, options)
+		if address.Transport == localmesh.AppTLS {
+			return appClient.DialUDPTLS(dialCtx, peer, address.Address, port, options)
+		}
+		if address.Transport != localmesh.AppQUIC {
+			return nil, meshsession.ErrUDPUnsupported
+		}
+		return appClient.DialUDP(dialCtx, peer, address.Address, port, options)
 	}), meshIngress, meshVIPs, appUDPMessages)
 	if udpErr == nil {
 		udpErr = udpProxy.Start(fmt.Sprintf(":%d", mesh.UDPProxyPort))
@@ -1491,6 +1556,10 @@ func main() {
 		logger.Info("Device certificate renewed — restarting agent to load the new identity")
 		os.Exit(0)
 	})
+
+	if accessPolicy.AllowsNetwork {
+		go bluetooth.StartBLESetup(ctx, logger, bluetooth.NewSetupDispatcher(provisioningSvcV2, networkMgr))
+	}
 
 	// Enrollment is non-blocking and begins only after callbacks are installed.
 	// A baked ACME credential must not fall through to legacy enrollment when

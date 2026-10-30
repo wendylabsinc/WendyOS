@@ -525,7 +525,7 @@ func withStubbedProvisioning(t *testing.T, provision func(drive, []wendyconf.Wif
 	reconnectTimeout = 0
 
 	calls := 0
-	provisionConfigPartitionFn = func(d drive, c []wendyconf.WifiCredential, name string, j []byte) error {
+	provisionConfigPartitionFn = func(d drive, c []wendyconf.WifiCredential, name string, j []byte, agent *localInstallAgent) error {
 		calls++
 		return provision(d, c, name, j)
 	}
@@ -549,7 +549,7 @@ func TestProvisionConfigWithRetry_SuccessFirstTry(t *testing.T) {
 	}, true, nil)
 
 	out, _ := captureCommandStdout(t, func() error {
-		provisionConfigWithRetry(context.Background(), drive{}, nil, "", nil, true)
+		provisionConfigWithRetry(context.Background(), drive{}, nil, "", nil, true, nil)
 		return nil
 	})
 
@@ -567,7 +567,7 @@ func TestProvisionConfigWithRetry_FailureIsNotFatalAndExplainsBoot(t *testing.T)
 	}, false, nil) // non-interactive: no retry prompt
 
 	out, _ := captureCommandStdout(t, func() error {
-		provisionConfigWithRetry(context.Background(), drive{}, []wendyconf.WifiCredential{{SSID: "Home"}}, "", nil, true)
+		provisionConfigWithRetry(context.Background(), drive{}, []wendyconf.WifiCredential{{SSID: "Home"}}, "", nil, true, nil)
 		return nil
 	})
 
@@ -599,7 +599,7 @@ func TestProvisionConfigWithRetry_InteractiveRetryThenSuccess(t *testing.T) {
 	}, true, []bool{true}) // user agrees to retry once
 
 	_, _ = captureCommandStdout(t, func() error {
-		provisionConfigWithRetry(context.Background(), drive{}, nil, "device-x", nil, true)
+		provisionConfigWithRetry(context.Background(), drive{}, nil, "device-x", nil, true, nil)
 		return nil
 	})
 
@@ -614,7 +614,7 @@ func TestProvisionConfigWithRetry_InteractiveDeclineStops(t *testing.T) {
 	}, true, []bool{false}) // user declines retry
 
 	_, _ = captureCommandStdout(t, func() error {
-		provisionConfigWithRetry(context.Background(), drive{}, nil, "", nil, false)
+		provisionConfigWithRetry(context.Background(), drive{}, nil, "", nil, false, nil)
 		return nil
 	})
 
@@ -646,7 +646,7 @@ func TestProvisionConfigWithRetry_RequestedFailureReturnsError(t *testing.T) {
 
 			var got error
 			_, _ = captureCommandStdout(t, func() error {
-				_, _, got = provisionConfigWithRetry(context.Background(), drive{}, nil, "brave-dolphin", nil, true)
+				_, _, got = provisionConfigWithRetry(context.Background(), drive{}, nil, "brave-dolphin", nil, true, nil)
 				return nil
 			})
 
@@ -669,7 +669,7 @@ func TestProvisionConfigWithRetry_UnrequestedFailureReturnsNil(t *testing.T) {
 
 	var got error
 	_, _ = captureCommandStdout(t, func() error {
-		_, _, got = provisionConfigWithRetry(context.Background(), drive{}, nil, "", nil, false)
+		_, _, got = provisionConfigWithRetry(context.Background(), drive{}, nil, "", nil, false, nil)
 		return nil
 	})
 

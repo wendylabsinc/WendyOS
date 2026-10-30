@@ -254,6 +254,7 @@ func TestAdvertisementRefreshRealDBusExactOwnedSignalAndProperties(t *testing.T)
 
 type refreshTestNode struct {
 	attached chan struct{}
+	finish   <-chan struct{}
 	cheaper  bool
 }
 
@@ -263,10 +264,14 @@ func (n *refreshTestNode) AttachStream(ctx context.Context, peer meshid.Device, 
 		return nil
 	}
 	close(n.attached)
-	<-ctx.Done()
-	return ctx.Err()
+	select {
+	case <-n.finish:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
-func TestAdvertisementRefreshOnlyAfterAuthenticatedInboundAdmission(t *testing.T) {
+func TestAdvertisementRefreshAfterAuthenticatedInbound(t *testing.T) {
 	for _, kind := range []string{"admitted", "untrusted", "full", "cheaper"} {
 		t.Run(kind, func(t *testing.T) {
 			server, client := metricsTLSConfigs(t)
@@ -276,7 +281,8 @@ func TestAdvertisementRefreshOnlyAfterAuthenticatedInboundAdmission(t *testing.T
 				}
 				return localmesh.Identity{Device: peerFixture}, nil
 			}}
-			node := &refreshTestNode{attached: make(chan struct{}), cheaper: kind == "cheaper"}
+			finish := make(chan struct{})
+			node := &refreshTestNode{attached: make(chan struct{}), finish: finish, cheaper: kind == "cheaper"}
 			r := &runtime{cfg: Config{Credentials: credentials, Node: node, Logger: zap.NewNop()}, advertisementRefresh: make(chan struct{}, 1)}
 			if kind == "full" {
 				for i := 0; i < localmesh.BLEMaxConnections; i++ {
@@ -286,7 +292,11 @@ func TestAdvertisementRefreshOnlyAfterAuthenticatedInboundAdmission(t *testing.T
 				}
 			}
 			r.serverTLS = r.makeServerTLS()
-			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			budget := 2 * time.Second
+			if kind == "cheaper" {
+				budget += cheaperLinkReverify
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), budget)
 			defer cancel()
 			a, b := net.Pipe()
 			defer a.Close()
@@ -306,16 +316,25 @@ func TestAdvertisementRefreshOnlyAfterAuthenticatedInboundAdmission(t *testing.T
 				if len(r.advertisementRefresh) != 1 {
 					t.Fatal("admitted inbound did not request refresh")
 				}
-				cancel()
+				// Consume the admission pulse as the refresh worker would. A
+				// normal later close must issue a fresh pulse of its own.
+				<-r.advertisementRefresh
+				close(finish)
 			}
 			select {
 			case <-done:
-			case <-time.After(3 * time.Second):
+			case <-time.After(cheaperLinkReverify + time.Second):
 				t.Fatal("inbound worker leaked")
+			}
+			if kind == "cheaper" && ctx.Err() != nil {
+				t.Fatal("cheaper-path rejection depended on context cancellation")
 			}
 			_ = b.Close()
 			<-clientDone
-			if kind != "admitted" && len(r.advertisementRefresh) != 0 {
+			if (kind == "admitted" || kind == "cheaper") && len(r.advertisementRefresh) != 1 {
+				t.Fatal("authenticated inbound disconnect did not restore advertising")
+			}
+			if kind != "admitted" && kind != "cheaper" && len(r.advertisementRefresh) != 0 {
 				t.Fatal("rejected inbound requested refresh")
 			}
 		})

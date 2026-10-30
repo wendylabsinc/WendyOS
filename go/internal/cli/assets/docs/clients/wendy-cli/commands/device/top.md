@@ -1,6 +1,6 @@
 # `wendy device top`
 
-Live CPU, memory, disk, GPU, and temperature telemetry for the device and its containers — an `htop`-style monitor for a WendyOS device.
+Live CPU, memory, disk, GPU, temperature, and network telemetry for the device and its containers.
 
 ## Usage
 
@@ -9,6 +9,31 @@ wendy device top [flags]
 ```
 
 ## Description
+
+Network rows show receive/send rates in bytes per second and cumulative byte
+totals for each physical interface. These include all device traffic and count
+since the interface was created or its counters reset, usually at boot. The
+separate **Wendy agent service** row counts IPv4/IPv6 traffic belonging to the
+agent's systemd service, including helper processes, relayed traffic and IP
+loopback, but excluding app containers. These are IP bytes, not Ethernet wire
+bytes, and start when service accounting is enabled. They are not daily/monthly
+totals or a measure of cellular/internet-only usage.
+
+The agent enables systemd `IPAccounting` for its own service at startup with a
+runtime-only setting. No network access rules change. Unsupported kernels or
+agents report unavailable counters, not zero usage. Rates require two samples
+from the same device boot, interface identity and service accounting session;
+a reset starts a new measurement. Sampling uses the device's monotonic clock.
+
+JSON includes `host.network.interfaces` and, when available,
+`host.network.agent`, with `receivedBytes`, `sentBytes`, and optional
+`receiveBytesPerSecond`/`sendBytesPerSecond`. Virtual and loopback interfaces are
+included in JSON and marked accordingly; do not add them to physical interface
+totals because the same packet may appear on both. An older agent omits
+`host.network`. Individual unavailable sources include a reason.
+
+The macOS and iPhone apps show the same statistics under **Settings → Wi-Fi →
+Network traffic**, refreshing every two seconds while that screen is active.
 
 `wendy device top` opens a full-screen, auto-refreshing dashboard showing whole-machine CPU and memory utilization, the hottest current device temperature, per-GPU utilization/memory (and temperature/power where reported), and a per-app/per-container table of CPU% and memory. CPU percentages are computed from deltas between refreshes, so the first frame may read low until a second sample is taken.
 

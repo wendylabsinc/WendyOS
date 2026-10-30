@@ -11,6 +11,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/agent/meshcatalog"
 	"github.com/wendylabsinc/wendy/go/internal/agent/meshingress"
 	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
+	"github.com/wendylabsinc/wendy/go/internal/shared/models"
 	"go.uber.org/zap"
 )
 
@@ -35,3 +36,5 @@ func (*meshCatalogManager) SetGatewayOffer(enabled bool) error {
 	return nil
 }
 func (*meshCatalogManager) GatewayOffers() []meshcatalog.Record { return nil }
+
+func (*meshCatalogManager) SensorSources() []models.LANDevice { return nil }

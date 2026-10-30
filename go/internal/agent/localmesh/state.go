@@ -21,9 +21,9 @@ import (
 // history is only meaningful for the router ID that produced it.
 type PersistentState struct {
 	Version  int
-	Device   string `json:"device"`
-	RouterID uint64 `json:"routerID"`
-	Revision uint64 `json:"revision"`
+	Device   string `json:"device" cbor:"d"`
+	RouterID uint64 `json:"routerID" cbor:"r"`
+	Revision uint64 `json:"revision" cbor:"R"`
 	Babel    *babel.Checkpoint
 	Receipts []DirectoryReceipt
 }
@@ -54,7 +54,7 @@ func OpenDeviceStateStore(path string, device meshid.Device, routerID babel.Rout
 	if err != nil {
 		return nil, PersistentState{}, err
 	}
-	if old.Device == device.Principal() {
+	if old.Device == device.Key() {
 		store, state, err := OpenStateStore(path, device, routerID)
 		if err != nil {
 			return nil, state, err
@@ -70,7 +70,7 @@ func OpenDeviceStateStore(path string, device meshid.Device, routerID babel.Rout
 	// the current credentials: that would relabel another router's history.
 	var legacy struct{ Org, Asset int32 }
 	_ = json.Unmarshal(data, &legacy)
-	_, principalErr := meshid.DeviceFromPrincipal(old.Device)
+	_, principalErr := meshid.PeerFromKey(old.Device)
 	if old.Version != 1 || (principalErr != nil && !(old.Device == "" && legacy.Org > 0 && legacy.Asset > 0)) {
 		return nil, old, errors.New("wendy net safety state identity mismatch")
 	}
@@ -85,8 +85,8 @@ func OpenDeviceStateStore(path string, device meshid.Device, routerID babel.Rout
 // State for another principal or an inconsistent checkpoint is rejected.
 func OpenStateStore(path string, device meshid.Device, routerID babel.RouterID) (*StateStore, PersistentState, error) {
 	s := &StateStore{path: path}
-	principal := device.Principal()
-	if principal == "" || len(principal) > maxPrincipalBytes || routerID == 0 || routerID == babel.RouterID(^uint64(0)) {
+	principal := device.Key()
+	if principal == "" || len(principal) > maxPrincipalBytes+37 || routerID == 0 || routerID == babel.RouterID(^uint64(0)) {
 		return nil, PersistentState{}, errors.New("invalid wendy net instance identity")
 	}
 	state := PersistentState{Version: 1, Device: principal, RouterID: uint64(routerID)}
@@ -101,7 +101,7 @@ func OpenStateStore(path string, device meshid.Device, routerID babel.RouterID) 
 	if state.Version != 1 || state.Device != principal {
 		return nil, state, errors.New("wendy net safety state identity mismatch")
 	}
-	if _, err := meshid.DeviceFromPrincipal(state.Device); err != nil {
+	if _, err := meshid.PeerFromKey(state.Device); err != nil {
 		return nil, state, errors.New("wendy net safety state identity mismatch")
 	}
 	if state.RouterID == 0 || state.RouterID == uint64(babel.RouterID(^uint64(0))) {

@@ -5,20 +5,23 @@ package bleprovider
 import (
 	"context"
 	"crypto/tls"
-	"crypto/x509"
 	"errors"
 	"fmt"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/godbus/dbus/v5"
 	"github.com/wendylabsinc/wendy/go/internal/agent/localmesh"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
+	"github.com/wendylabsinc/wendy/go/internal/shared/meshoperatorlink"
+	"github.com/wendylabsinc/wendy/go/internal/shared/tsarelay"
 	"go.uber.org/zap"
 )
 
 type runtime struct {
+	operatorSlots        chan struct{}
 	policy               *localmesh.ConnectionPolicy
 	candidates           localmesh.CandidateQueue
 	nextDial             time.Time
@@ -41,6 +44,8 @@ type runtime struct {
 	dialCoC              func(context.Context, string, string, uint16) (net.Conn, error)
 	serverTLS            *tls.Config
 	advertisementRefresh chan struct{}
+	advertisement        Advertisement
+	timeSlots            chan struct{}
 	tlsGate              tlsHandshakeAdmission
 	discovery            discoveryRecovery
 	reportErrors         <-chan error
@@ -266,6 +271,9 @@ func Run(ctx context.Context, cfg Config) error {
 	if err != nil {
 		return err
 	}
+	if cfg.Policy != nil && !cfg.Policy.IncomingAvailable() {
+		adv.Capabilities = CapabilityTimeRelay
+	}
 	payload, _ := adv.MarshalBinary()
 	bus, closeTransport, err := connectProviderBus(runCtx)
 	if err != nil {
@@ -290,6 +298,13 @@ func Run(ctx context.Context, cfg Config) error {
 		return err
 	}
 	defer listener.Close()
+	timeLocal := local
+	timeLocal.PSM = tsarelay.BLETimePSM
+	timeListener, err := listenL2CAP(timeLocal)
+	if err != nil {
+		return fmt.Errorf("BLE timestamp HTTPS listener: %w", err)
+	}
+	defer timeListener.Close()
 	hciIndex, parseErr := adapterHCIIndex(adapter)
 	if parseErr != nil {
 		return parseErr
@@ -321,23 +336,33 @@ func Run(ctx context.Context, cfg Config) error {
 		return err
 	}
 	r := &runtime{cfg: cfg, uuid: uuid, owner: owner, hciIndex: hciIndex, local: local, ownerLookup: bluezOwner, bus: bus, freshness: freshness, reportErrors: reportErrors, reportErr: reportErr, dialSlot: make(chan struct{}, 1), tlsGate: newTLSHandshakeAdmission()}
+	r.advertisement = adv
+	r.timeSlots = make(chan struct{}, 2)
 	r.serverTLS = r.makeServerTLS()
 	r.advertisementRefresh = make(chan struct{}, 1)
 	var loops sync.WaitGroup
-	loopErrors := make(chan error, 4)
+	loopErrors := make(chan error, 5)
 	// Publish setup completion before the loops can report a discovery failure.
 	r.publishDiscoveryHealth(runCtx)
-	loops.Add(4)
+	loops.Add(5)
 	go func() {
 		defer loops.Done()
 		loopErrors <- runManagementReports(runCtx, hciIndex, freshness, reportSource, openManagementReports, reportErrors)
 	}()
 	go func() { defer loops.Done(); loopErrors <- r.acceptLoop(runCtx, listener) }()
+	go func() { defer loops.Done(); loopErrors <- r.acceptTimeLoop(runCtx, timeListener) }()
 	go func() { defer loops.Done(); loopErrors <- r.scanLoop(runCtx, bus, adapter) }()
 	go func() {
 		defer loops.Done()
 		loopErrors <- runAdvertisementRefresh(runCtx, r.advertisementRefresh, advertisementRefreshInterval, func(ctx context.Context) error {
-			return refreshOwnedAdvertisement(ctx, bus, closeTransport, owner, uuid, payload)
+			r.mu.Lock()
+			current := r.advertisement
+			r.mu.Unlock()
+			latest, err := current.MarshalBinary()
+			if err != nil {
+				return err
+			}
+			return refreshOwnedAdvertisement(ctx, bus, closeTransport, owner, uuid, latest)
 		})
 	}()
 	var loopErr error
@@ -350,9 +375,43 @@ func Run(ctx context.Context, cfg Config) error {
 	}
 	cancelRun()
 	_ = listener.Close()
+	_ = timeListener.Close()
 	loops.Wait()
 	r.links.Wait()
 	return loopErr
+}
+
+// The fixed-destination time relay has a separate small admission bound and
+// never consumes a router-link slot or changes the shared adapter's state.
+func (r *runtime) acceptTimeLoop(ctx context.Context, listener *l2Listener) error {
+	sem := r.timeSlots
+	if sem == nil {
+		return errors.New("BLE timestamp relay admission unavailable")
+	}
+	for ctx.Err() == nil {
+		conn, err := listener.Accept(ctx)
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
+			return fmt.Errorf("BLE timestamp HTTPS accept: %w", err)
+		}
+		select {
+		case sem <- struct{}{}:
+			r.updateAdvertisementAdmission()
+			r.links.Add(1)
+			go func() {
+				defer r.links.Done()
+				defer func() { <-sem; r.updateAdvertisementAdmission() }()
+				if err := tsarelay.TunnelConnection(ctx, conn); err != nil && ctx.Err() == nil {
+					r.cfg.Logger.Debug("BLE timestamp HTTPS relay ended", zap.Error(err))
+				}
+			}()
+		default:
+			_ = conn.Close()
+		}
+	}
+	return nil
 }
 
 func (r *runtime) acceptLoop(ctx context.Context, listener *l2Listener) error {
@@ -369,14 +428,52 @@ func (r *runtime) acceptLoop(ctx context.Context, listener *l2Listener) error {
 		}
 		select {
 		case sem <- struct{}{}:
+			r.updateAdvertisementAdmission()
 			r.links.Add(1)
-			go func() { defer r.links.Done(); defer func() { <-sem }(); r.acceptLink(ctx, conn) }()
+			go func() {
+				defer r.links.Done()
+				defer func() { <-sem; r.updateAdvertisementAdmission() }()
+				r.acceptLink(ctx, conn)
+			}()
 		default:
 			_ = conn.Close()
 		}
 	}
 	return nil
 }
+
+const maxBLEOperatorAttachments = 1
+
+type operatorStreamNode interface {
+	AttachOperatorStream(context.Context, *tls.Conn, uint16) error
+}
+
+// Operator attachments have a distinct, bounded role. They share the physical
+// radio and TLS admission gate, but never occupy a router-neighbour lease.
+func (r *runtime) operatorAdmission() chan struct{} {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.operatorSlots == nil {
+		r.operatorSlots = make(chan struct{}, maxBLEOperatorAttachments)
+	}
+	return r.operatorSlots
+}
+
+type incomingConnectionTarget struct{ conn net.Conn }
+type incomingRoleConn struct {
+	net.Conn
+	target atomic.Pointer[incomingConnectionTarget]
+}
+
+func (c *incomingRoleConn) selected() net.Conn {
+	if target := c.target.Load(); target != nil {
+		return target.conn
+	}
+	return c.Conn
+}
+func (c *incomingRoleConn) Read(b []byte) (int, error)  { return c.selected().Read(b) }
+func (c *incomingRoleConn) Write(b []byte) (int, error) { return c.selected().Write(b) }
+func (c *incomingRoleConn) NetConn() net.Conn           { return c.Conn }
 
 func (r *runtime) makeServerTLS() *tls.Config {
 	config := &tls.Config{
@@ -386,23 +483,22 @@ func (r *runtime) makeServerTLS() *tls.Config {
 		// the whole TLS flight. BLE uses classical X25519 key exchange while the
 		// enrolled mTLS certificate and signature verification remain unchanged.
 		CurvePreferences: []tls.CurveID{tls.X25519},
-		// Present only the leaf to a client that named our issuer set (see
-		// tls_issuers_linux.go). Without SNI, crypto/tls consults
-		// GetCertificate only when Certificates is empty.
-		GetCertificate: func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
-			return serverCertificate(r.cfg.Credentials, hello), nil
-		},
+
 		ClientAuth: tls.RequireAnyClientCert, NextProtos: []string{ALPN},
 		VerifyConnection: func(state tls.ConnectionState) error {
 			chain := make([][]byte, 0, len(state.PeerCertificates))
 			for _, cert := range state.PeerCertificates {
 				chain = append(chain, cert.Raw)
 			}
-			id, err := r.cfg.Credentials.Verify(chain, time.Now())
+			if localmesh.ApplicationProtocol(state.NegotiatedProtocol) == meshoperatorlink.RouterALPN {
+				_, err := r.cfg.Credentials.VerifyPrimaryOperator(chain, time.Now())
+				return err
+			}
+			id, err := r.cfg.Credentials.VerifyTLS(chain, time.Now())
 			if err != nil {
 				return err
 			}
-			if id.Device.Tenant() != r.cfg.Credentials.Device.Tenant() {
+			if id.Device.IsOperator() || id.Device.Tenant() != r.cfg.Credentials.Device.Tenant() {
 				return errors.New("BLE inbound peer is outside the tenant")
 			}
 			if id.Device == r.cfg.Credentials.Device {
@@ -412,11 +508,23 @@ func (r *runtime) makeServerTLS() *tls.Config {
 		},
 	}
 	r.cfg.Credentials.ServerTicketStore(ALPN, "ble-tls").Configure(config)
+	if _, ok := r.cfg.Node.(operatorStreamNode); ok && r.cfg.Credentials.SupportsPrimaryOperators() {
+		config.NextProtos = append(config.NextProtos, meshoperatorlink.RouterALPN)
+	}
+	r.cfg.Credentials.ConfigureTLSServer(config)
 	return config
 }
 
 func (r *runtime) acceptLink(ctx context.Context, raw net.Conn) {
-	defer raw.Close()
+	authenticated := false
+	defer func() {
+		_ = raw.Close()
+		if authenticated {
+			// A connect can consume the controller's advertising set even
+			// when LAN preference rejects the authenticated BLE stream.
+			r.requestAdvertisementRefresh()
+		}
+	}()
 	key := fmt.Sprintf("incoming:%p", raw)
 	var incomingCandidate *candidate
 	if radio, ok := raw.RemoteAddr().(l2addr); ok {
@@ -427,37 +535,104 @@ func (r *runtime) acceptLink(ctx context.Context, raw net.Conn) {
 			key = c.key()
 		}
 	}
-	lease := r.connectionPolicy().Reserve(key, meshid.Device{}, false)
-	if lease == nil {
-		return
-	}
-	defer lease.Release()
-	ctx = localmesh.WithConnectionLease(ctx, lease)
+	var lease *localmesh.ConnectionLease
+	operatorSlot := false
+	defer func() {
+		if lease != nil {
+			lease.Release()
+		}
+		if operatorSlot {
+			<-r.operatorAdmission()
+		}
+	}()
 	stopWatch := watchLinkContext(ctx, raw)
 	defer stopWatch()
-	measured, meter := meterHandshake(lease.TrackIncoming(raw), r.cfg.Logger)
-	secure := tls.Server(measured, r.serverTLS)
+	roleConn := &incomingRoleConn{Conn: raw}
+	measured, meter := meterHandshake(roleConn, r.cfg.Logger)
+	handshakeConfig := r.serverTLS.Clone()
+	handshakeConfig.GetConfigForClient = func(hello *tls.ClientHelloInfo) (*tls.Config, error) {
+		selectConfig := func() (*tls.Config, error) {
+			if r.serverTLS.GetConfigForClient != nil {
+				selected, err := r.serverTLS.GetConfigForClient(hello)
+				if err != nil || selected != nil {
+					return selected, err
+				}
+			}
+			return r.serverTLS, nil
+		}
+		selected := ""
+		for _, protocol := range r.serverTLS.NextProtos {
+			for _, offered := range hello.SupportedProtos {
+				if protocol == offered {
+					selected = protocol
+					break
+				}
+			}
+			if selected != "" {
+				break
+			}
+		}
+		if selected == meshoperatorlink.RouterALPN {
+			if !operatorSlot {
+				select {
+				case r.operatorAdmission() <- struct{}{}:
+					operatorSlot = true
+				default:
+					return nil, errors.New("BLE operator attachment capacity reached")
+				}
+			}
+			selectedConfig, err := selectConfig()
+			if err != nil {
+				return nil, err
+			}
+			operatorConfig := selectedConfig.Clone()
+			// Device ticket admission is deliberately separate from primary operators.
+			operatorConfig.SessionTicketsDisabled = true
+			operatorConfig.WrapSession, operatorConfig.UnwrapSession = nil, nil
+			return operatorConfig, nil
+		}
+		if selected == ALPN && lease == nil {
+			lease = r.connectionPolicy().Reserve(key, meshid.Device{}, false)
+			if lease == nil {
+				return nil, errors.New("BLE neighbour capacity reached")
+			}
+			roleConn.target.Store(&incomingConnectionTarget{conn: lease.TrackIncoming(raw)})
+		}
+		return selectConfig()
+	}
+	secure := tls.Server(measured, handshakeConfig)
 	meter.start()
 	wait, elapsed, err := r.tlsGate.run(ctx, meshTLSAdmissionWait, meshTLSHandshakeTimeout, secure.HandshakeContext)
 	measurement := meter.finish()
 	state := secure.ConnectionState()
+	if err == nil && localmesh.ApplicationProtocol(state.NegotiatedProtocol) == meshoperatorlink.RouterALPN && operatorSlot {
+		authenticated = true
+		measurement.log(r.cfg.Logger, "inbound-operator", meshid.Device{}, state, true)
+		defer secure.Close()
+		attached := time.Now()
+		err = r.cfg.Node.(operatorStreamNode).AttachOperatorStream(localmesh.WithCarrier(ctx, "ble"), secure, LinkCost)
+		r.cfg.Logger.Info("BLE operator attachment ended", zap.Duration("lifetime", time.Since(attached)), zap.Bool("cancelled", ctx.Err() != nil), zap.Error(err))
+		return
+	}
 	var peer meshid.Device
-	if err == nil && state.NegotiatedProtocol == ALPN {
+	if err == nil && localmesh.ApplicationProtocol(state.NegotiatedProtocol) == ALPN {
 		chain := make([][]byte, 0, len(state.PeerCertificates))
 		for _, cert := range state.PeerCertificates {
 			chain = append(chain, cert.Raw)
 		}
-		if id, verifyErr := r.cfg.Credentials.Verify(chain, time.Now()); verifyErr == nil && id.Device.Tenant() == r.cfg.Credentials.Device.Tenant() && id.Device != r.cfg.Credentials.Device {
+		if id, verifyErr := r.cfg.Credentials.VerifyTLS(chain, time.Now()); verifyErr == nil && !id.Device.IsOperator() && id.Device.Tenant() == r.cfg.Credentials.Device.Tenant() && id.Device != r.cfg.Credentials.Device {
 			peer = id.Device
 		}
 	}
-	measurement.log(r.cfg.Logger, "inbound", peer, state, err == nil && state.NegotiatedProtocol == ALPN && peer != (meshid.Device{}))
-	if err != nil || state.NegotiatedProtocol != ALPN || peer == (meshid.Device{}) {
+	measurement.log(r.cfg.Logger, "inbound", peer, state, err == nil && localmesh.ApplicationProtocol(state.NegotiatedProtocol) == ALPN && peer != (meshid.Device{}))
+	if err != nil || localmesh.ApplicationProtocol(state.NegotiatedProtocol) != ALPN || peer == (meshid.Device{}) {
 		r.cfg.Logger.Warn("BLE inbound TLS rejected", zap.Duration("admission_wait", wait), zap.Duration("handshake_time", elapsed), zap.Error(err))
 		_ = secure.Close()
 		return
 	}
+	ctx = localmesh.WithConnectionLease(ctx, lease)
 	lease.Identify(peer)
+	authenticated = true
 	if incomingCandidate != nil {
 		lease.ObserveReady(func() { r.candidateQueue().Succeeded(key) })
 		defer func() {
@@ -514,6 +689,7 @@ func (r *runtime) scanLoop(ctx context.Context, bus *dbus.Conn, adapter dbus.Obj
 	defer ticker.Stop()
 	consecutiveErrors := 0
 	for {
+		r.updateAdvertisementAdmission()
 		r.governDiscovery(ctx, bus, adapter)
 		if err := r.scanOnce(ctx, bus, adapter); err != nil {
 			if ctx.Err() != nil {
@@ -538,6 +714,26 @@ func (r *runtime) scanLoop(ctx context.Context, bus *dbus.Conn, adapter dbus.Obj
 			r.publishDiscoveryHealth(ctx)
 		case <-ticker.C:
 		}
+	}
+}
+
+// Existing scan-loop cadence observes reservations, not only authenticated
+// peers. A coalesced request updates this provider's advertisement instance;
+// time relay stays independently advertised while native admission is full.
+func (r *runtime) updateAdvertisementAdmission() {
+	caps := byte(0)
+	if r.timeSlots != nil && len(r.timeSlots) < cap(r.timeSlots) {
+		caps |= CapabilityTimeRelay
+	}
+	if r.connectionPolicy().IncomingAvailable() {
+		caps |= CapabilityNativeAccepting
+	}
+	r.mu.Lock()
+	changed := r.advertisement.Capabilities != caps
+	r.advertisement.Capabilities = caps
+	r.mu.Unlock()
+	if changed {
+		r.requestAdvertisementRefresh()
 	}
 }
 
@@ -638,6 +834,9 @@ func (r *runtime) startCandidates(ctx context.Context, peers []candidate, now ti
 	}
 	for _, key := range r.candidateQueue().Order(keys, now) {
 		peer := byKey[key]
+		if r.freshness != nil && !r.freshness.nativeReady(peer, now) {
+			continue
+		}
 		lease := r.reserveCandidate(peer)
 		if lease == nil {
 			continue
@@ -651,9 +850,9 @@ func (r *runtime) startCandidates(ctx context.Context, peers []candidate, now ti
 		go func() {
 			defer r.links.Done()
 			defer lease.Release()
-			r.dialLink(localmesh.WithConnectionLease(ctx, lease), peer)
+			skipped := r.dialLink(localmesh.WithConnectionLease(ctx, lease), peer)
 			known, _ := r.knownCandidate(peer)
-			if ctx.Err() == nil && !lease.Retired() && (known == (meshid.Device{}) || !r.hasCheaperLink(known)) {
+			if !skipped && ctx.Err() == nil && !lease.Retired() && (known == (meshid.Device{}) || !r.hasCheaperLink(known)) {
 				r.failedCandidate(peer)
 			}
 		}()
@@ -716,7 +915,7 @@ func (r *runtime) maybeRestartDiscovery(ctx context.Context, bus *dbus.Conn, ada
 	r.cfg.Logger.Info("BLE discovery restarted after wendy net advertisement silence", zap.Duration("wendy_net_advert_silence", now.Sub(r.discovery.lastMeshSignal)))
 }
 
-func (r *runtime) dialLink(ctx context.Context, peer candidate) {
+func (r *runtime) dialLink(ctx context.Context, peer candidate) (skipped bool) {
 	if known, ok := r.knownCandidate(peer); ok && r.hasCheaperLink(known) {
 		r.cfg.Logger.Debug("BLE closing outbound CoC on cheaper-link decision", zap.String("radio", peer.address))
 		return
@@ -740,6 +939,9 @@ func (r *runtime) dialLink(ctx context.Context, peer candidate) {
 	}()
 	if ctx.Err() != nil {
 		return
+	}
+	if r.freshness != nil && !r.freshness.nativeReady(peer, time.Now()) {
+		return true
 	}
 	// Multiple BlueZ advertisements share the controller's advertising time.
 	// A BLE CoC connect can wait for the peer's next connectable advertisement
@@ -806,8 +1008,8 @@ func (r *runtime) dialLink(ctx context.Context, peer candidate) {
 	elapsed, err := r.handshakeOutbound(ctx, secure)
 	wait := slotWait
 	measurement := meter.finish()
-	measurement.log(r.cfg.Logger, "outbound", *authenticated, secure.ConnectionState(), err == nil && secure.ConnectionState().NegotiatedProtocol == ALPN)
-	if err != nil || secure.ConnectionState().NegotiatedProtocol != ALPN {
+	measurement.log(r.cfg.Logger, "outbound", *authenticated, secure.ConnectionState(), err == nil && localmesh.ApplicationProtocol(secure.ConnectionState().NegotiatedProtocol) == ALPN)
+	if err != nil || localmesh.ApplicationProtocol(secure.ConnectionState().NegotiatedProtocol) != ALPN {
 		r.mu.Lock()
 		delete(r.known, peer.key()) // Address reuse or reenrollment requires fresh discovery authentication.
 		r.mu.Unlock()
@@ -857,17 +1059,14 @@ func (r *runtime) dialLink(ctx context.Context, peer candidate) {
 	if err != nil && ctx.Err() == nil {
 		r.cfg.Logger.Debug("BLE link ended", zap.String("radio", peer.address), zap.Error(err))
 	}
+	return
 }
 
 func (r *runtime) handshakeOutbound(ctx context.Context, secure *tls.Conn) (time.Duration, error) {
 	// dialSlot already serializes outgoing setup, starting before CoC creation.
 	// Sharing inbound admission here deadlocks crossed discovery: each device
 	// can hold an outgoing slot while its peer waits for that slot to accept.
-	handshakeCtx, cancel := context.WithTimeout(ctx, meshTLSOutboundTimeout)
-	defer cancel()
-	started := time.Now()
-	err := secure.HandshakeContext(handshakeCtx)
-	return time.Since(started), err
+	return handshakeMeshOutbound(ctx, secure)
 }
 
 // Bound initial tuning before TLS firstflight so controller procedures cannot
@@ -923,7 +1122,6 @@ func (r *runtime) clientTLS(peer candidate) (*tls.Config, *meshid.Device, error)
 			return nil, nil, err
 		}
 	}
-	var server []*x509.Certificate
 	previous := config.VerifyConnection
 	config.VerifyConnection = func(state tls.ConnectionState) error {
 		if previous != nil {
@@ -935,7 +1133,7 @@ func (r *runtime) clientTLS(peer candidate) (*tls.Config, *meshid.Device, error)
 		for i, cert := range state.PeerCertificates {
 			raw[i] = cert.Raw
 		}
-		identity, err := r.cfg.Credentials.Verify(raw, time.Now())
+		identity, err := r.cfg.Credentials.VerifyTLS(raw, time.Now())
 		if err != nil {
 			return err
 		}
@@ -946,7 +1144,7 @@ func (r *runtime) clientTLS(peer candidate) (*tls.Config, *meshid.Device, error)
 		if deviceHint(device.UUID()) != peer.hint {
 			return errors.New("BLE certificate does not match discovery hint")
 		}
-		if firstContact != nil && state.NegotiatedProtocol == ALPN {
+		if firstContact != nil && localmesh.ApplicationProtocol(state.NegotiatedProtocol) == ALPN {
 			// The verified principal, not the radio address or truncated hint,
 			// selects the cache scope and canonical key for post-handshake tickets.
 			// Cache setup failure only loses this optimization; TLS remains fully
@@ -956,16 +1154,8 @@ func (r *runtime) clientTLS(peer candidate) (*tls.Config, *meshid.Device, error)
 			}
 		}
 		authenticated = device
-		server = state.PeerCertificates
 		return nil
 	}
-	if digest := r.cfg.Credentials.IssuerDigest(); digest != "" {
-		config.NextProtos = []string{ALPN, issuerHintPrefix + digest}
-		// crypto/tls runs VerifyConnection on the server's certificate
-		// before it calls GetClientCertificate.
-		config.GetClientCertificate = func(*tls.CertificateRequestInfo) (*tls.Certificate, error) {
-			return clientCertificate(r.cfg.Credentials, server), nil
-		}
-	}
+	r.cfg.Credentials.ConfigureTLSClient(config, ALPN)
 	return config, &authenticated, nil
 }

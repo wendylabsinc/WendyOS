@@ -180,6 +180,7 @@ func (f *DatagramFlow) Send(payload []byte) error {
 	}
 	return f.endpoint.Send(payload)
 }
+func (f *DatagramFlow) Done() <-chan struct{} { return f.conn.Context().Done() }
 func (f *DatagramFlow) Receive(ctx context.Context) (*udpmessage.Message, error) {
 	if f == nil || f.conn == nil {
 		return nil, net.ErrClosed
@@ -243,7 +244,7 @@ func (s *Server) serveDatagrams(parent context.Context, conn *quic.Conn, port ui
 	for _, cert := range conn.ConnectionState().TLS.PeerCertificates {
 		chain = append(chain, cert.Raw)
 	}
-	identity, err := s.credentials.Verify(chain, time.Now())
+	identity, err := s.credentials.VerifyTLS(chain, time.Now())
 	if err != nil {
 		return
 	}

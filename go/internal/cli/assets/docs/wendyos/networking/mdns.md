@@ -198,9 +198,9 @@ Devices enrolled in the same organization can find one another on a local
 Ethernet or ordinary Wi-Fi network. Run this on each device you want to connect:
 
 ```sh
-wendy device wendy-net configure --participate=true --ethernet=true --infrastructure-wifi=true
-wendy device wendy-net status
-wendy device wendy-net topology
+wendy net configure --participate=true --ethernet=true --infrastructure-wifi=true
+wendy net status
+wendy net topology
 ```
 
 Add `--device <device>` to select a particular device. Check topology for

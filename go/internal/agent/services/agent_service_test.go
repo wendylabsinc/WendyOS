@@ -148,6 +148,10 @@ func TestGetAgentVersion(t *testing.T) {
 	if resp.CpuArchitecture != runtime.GOARCH {
 		t.Errorf("arch = %q; want %q", resp.CpuArchitecture, runtime.GOARCH)
 	}
+	metadata := MeshAgentMetadata()
+	if metadata.Version != resp.GetVersion() || metadata.OS != resp.GetOs() || metadata.OSVersion != resp.GetOsVersion() || metadata.DeviceType != resp.GetDeviceType() || metadata.CPUArchitecture != resp.GetCpuArchitecture() {
+		t.Fatalf("signed discovery metadata differs from the agent RPC: %+v", metadata)
+	}
 	// RAM size and CPU core count come from /proc, so they are only
 	// guaranteed on Linux hosts (WDY-1809). Zero means "unknown".
 	if runtime.GOOS == "linux" {

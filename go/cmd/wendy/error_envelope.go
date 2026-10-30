@@ -32,11 +32,11 @@ type errorBody struct {
 
 // reportFailure reports err the way the invocation asked for (a JSON envelope
 // or styled text, both on stderr) and returns the process exit status.
-// User cancellations print nothing. Tour children exit 130 so the parent
-// can distinguish declining an install from completing it.
+// User cancellations print nothing. Tour and desktop installer children exit
+// 130 so their parent can distinguish declining an install from completing it.
 func reportFailure(stderr io.Writer, err error, executed *cobra.Command, args []string) int {
 	if errors.Is(err, commands.ErrUserCancelled) {
-		if os.Getenv("WENDY_TELEMETRY_ENTRYPOINT") == "tour" {
+		if os.Getenv("WENDY_TELEMETRY_ENTRYPOINT") == "tour" || os.Getenv("WENDY_DESKTOP_INSTALLER") == "1" {
 			return 130
 		}
 		return 0

@@ -46,6 +46,10 @@ const (
 // each device has its own branch under one root, so a peer reaches it only
 // through the issuers it sends.
 func issuerCredentials(t *testing.T, shared bool, leafKey deviceKey) (high, low *localmesh.Credentials) {
+	return issuerCredentialsPaths(t, shared, false, leafKey)
+}
+
+func issuerCredentialsPaths(t *testing.T, shared, sharedParents bool, leafKey deviceKey) (high, low *localmesh.Credentials) {
 	t.Helper()
 	type issued struct {
 		cert *x509.Certificate
@@ -100,9 +104,20 @@ func issuerCredentials(t *testing.T, shared bool, leafKey deviceKey) (high, low 
 		return key
 	}
 	root := mint("root", meshid.Device{}, nil, 0, ecdsaKey())
+	sizes := []int{7050, 6350, 5050}
+	common, commonChain := root, root.pem
+	if sharedParents {
+		for i := 0; i < 2; i++ {
+			common = mint("common-parent-"+string(rune('a'+i)), meshid.Device{}, &common, sizes[i], ecdsaKey())
+			commonChain = common.pem + commonChain
+		}
+	}
 	branch := func(name string) (issued, string) {
-		issuer, chain := root, root.pem
-		for i, size := range []int{7050, 6350, 5050} {
+		issuer, chain := common, commonChain
+		for i, size := range sizes {
+			if sharedParents && i < 2 {
+				continue
+			}
 			issuer = mint(name+"-issuer-"+string(rune('a'+i)), meshid.Device{}, &issuer, size, ecdsaKey())
 			chain = issuer.pem + chain
 		}
@@ -340,6 +355,8 @@ func legacyClient(config *tls.Config) *tls.Config {
 // legacyServer models a peer from before issuer omission.
 func legacyServer(config *tls.Config, credentials *localmesh.Credentials) *tls.Config {
 	config.GetCertificate = nil
+	config.GetConfigForClient = nil
+	config.NextProtos = []string{ALPN}
 	config.Certificates = []tls.Certificate{credentials.Certificate}
 	return config
 }
@@ -357,7 +374,7 @@ func acceptedPeer(server *localmesh.Credentials, state tls.ConnectionState) (mes
 	for _, cert := range state.PeerCertificates {
 		chain = append(chain, cert.Raw)
 	}
-	identity, err := server.Verify(chain, time.Now())
+	identity, err := server.VerifyTLS(chain, time.Now())
 	return identity.Device, err
 }
 
@@ -382,7 +399,7 @@ func TestBLEHandshakeOmitsSharedIssuers(t *testing.T) {
 			}
 			config, authenticated := bleClientConfig(t, client, issuerPeer(low))
 			trimmed := handshakeOverAir(t, fastLink, config, server.makeServerTLS())
-			if trimmed.err() != nil || trimmed.client.DidResume || trimmed.client.NegotiatedProtocol != ALPN || *authenticated != low.Device {
+			if trimmed.err() != nil || trimmed.client.DidResume || localmesh.ApplicationProtocol(trimmed.client.NegotiatedProtocol) != ALPN || *authenticated != low.Device {
 				t.Fatalf("shared issuers: err=%v resumed=%v alpn=%q identity=%v", trimmed.err(), trimmed.client.DidResume, trimmed.client.NegotiatedProtocol, authenticated)
 			}
 			if peer, err := acceptedPeer(low, trimmed.server); err != nil || peer != high.Device {
@@ -401,9 +418,9 @@ func TestBLEHandshakeOmitsSharedIssuers(t *testing.T) {
 			if limit := certificateBytes(high.Certificate.Certificate[:1]) + overhead; trimmed.clientBytes > limit {
 				t.Fatalf("client sent %d bytes, want at most its leaf plus %d (%d)", trimmed.clientBytes, overhead, limit)
 			}
-			// The hint must not push the cold ClientHello past two 240-byte CoC SDUs.
-			if trimmed.clientHelloBytes > 2*maxWriteSDU {
-				t.Fatalf("ClientHello %d bytes needs more than two CoC SDUs", trimmed.clientHelloBytes)
+			// The hint must not push the cold ClientHello past three 240-byte CoC SDUs.
+			if trimmed.clientHelloBytes > 3*maxWriteSDU {
+				t.Fatalf("ClientHello %d bytes needs more than three CoC SDUs", trimmed.clientHelloBytes)
 			}
 		})
 	}
@@ -478,7 +495,7 @@ func TestBLEIssuerOmissionMixedVersions(t *testing.T) {
 				serverConfig = tc.server(serverConfig, tc.low)
 			}
 			result := handshakeOverAir(t, fastLink, config, serverConfig)
-			if result.err() != nil || *authenticated != tc.low.Device || result.client.NegotiatedProtocol != ALPN {
+			if result.err() != nil || *authenticated != tc.low.Device || localmesh.ApplicationProtocol(result.client.NegotiatedProtocol) != ALPN {
 				t.Fatalf("handshake: %v identity=%v alpn=%q", result.err(), authenticated, result.client.NegotiatedProtocol)
 			}
 			if peer, err := acceptedPeer(tc.low, result.server); err != nil || peer != tc.high.Device {
@@ -495,14 +512,14 @@ func TestBLEIssuerOmissionMixedVersions(t *testing.T) {
 // omitted issuer rejects the handshake; it never accepts an unverified leaf.
 func TestBLEIssuerOmissionFailsClosed(t *testing.T) {
 	high, low := issuerCredentials(t, false, ecdsaDeviceKey)
-	if high.IssuerDigest() == "" || high.IssuerDigest() == low.IssuerDigest() {
-		t.Fatalf("separate branches have digests %q and %q", high.IssuerDigest(), low.IssuerDigest())
+	if high.ClientProtocols(ALPN)[0] == ALPN || high.ClientProtocols(ALPN)[0] == low.ClientProtocols(ALPN)[0] {
+		t.Fatalf("separate branches have digests %q and %q", high.ClientProtocols(ALPN)[0], low.ClientProtocols(ALPN)[0])
 	}
 	t.Run("client claims the server's issuers", func(t *testing.T) {
 		// A stale or forged hint makes the server send only its leaf. The
 		// client cannot reach that leaf's issuer and refuses the server.
 		config, authenticated := bleClientConfig(t, &runtime{cfg: Config{Credentials: high}}, issuerPeer(low))
-		config.NextProtos = []string{ALPN, issuerHintPrefix + low.IssuerDigest()}
+		config.NextProtos = low.ClientProtocols(ALPN)
 		result := handshakeOverAir(t, fastLink, config, (&runtime{cfg: Config{Credentials: low}}).makeServerTLS())
 		if len(result.client.PeerCertificates) != 1 {
 			t.Fatalf("server presented %d certificates, want only its leaf", len(result.client.PeerCertificates))

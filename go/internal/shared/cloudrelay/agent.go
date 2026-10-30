@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -53,7 +54,10 @@ type Agent struct {
 	sourceCheckInterval time.Duration
 	preferredSource     func(*net.TCPAddr) (net.IP, error)
 	pathReachable       func(context.Context, string) bool
+	presenceMaxAge      time.Duration
 }
+
+var errPresenceRefresh = errors.New("refreshing Cloud presence before transport timeout")
 
 func (a *Agent) Run(ctx context.Context) {
 	backoff := time.Second
@@ -63,11 +67,16 @@ func (a *Agent) Run(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		}
-		if err != nil {
-			a.Logger.Warn("cloud relay connection failed, reconnecting", zap.Error(err), zap.Duration("backoff", backoff))
+		if errors.Is(err, errPresenceRefresh) || errors.Is(err, errPresencePathMoved) || errors.Is(err, errPresenceSourceRemoved) {
+			a.Logger.Info("reconnecting cloud presence", zap.Error(err))
+			backoff = time.Second
+			continue
 		}
 		if time.Since(started) > time.Minute {
 			backoff = time.Second
+		}
+		if err != nil {
+			a.Logger.Warn("cloud relay connection failed, reconnecting", zap.Error(err), zap.Duration("backoff", backoff))
 		}
 		select {
 		case <-ctx.Done():
@@ -313,9 +322,20 @@ func (a *Agent) runOnce(parent context.Context) error {
 		return fmt.Errorf("invalid presence acceptance")
 	}
 	a.Logger.Info("registered presence with cloud relay", zap.String("endpoint", lease.Broker.Endpoint))
+	// Cloud Run closes even active streaming requests at one hour. Rotate
+	// presence deliberately before that deadline, keeping its lease and the
+	// independently owned data sessions rather than treating it as a failure.
+	maxAge := a.presenceMaxAge
+	if maxAge <= 0 {
+		maxAge = 55 * time.Minute
+	}
+	refresh := time.NewTimer(maxAge)
+	defer refresh.Stop()
 	presencePeer, _ := peer.FromContext(stream.Context())
 	pathChanged := make(chan error, 1)
-	go func() { pathChanged <- a.watchPresencePath(ctx, presencePeer, lease.Broker.Endpoint) }()
+	go func(endpoint string) {
+		pathChanged <- a.watchPresencePath(ctx, presencePeer, endpoint)
+	}(lease.Broker.Endpoint)
 	renewal := time.NewTimer(renewalDelay(lease, c))
 	defer renewal.Stop()
 	expiry := time.NewTimer(time.Until(time.Unix(c.Exp, 0)))
@@ -349,6 +369,9 @@ func (a *Agent) runOnce(parent context.Context) error {
 			return ctx.Err()
 		case <-expiry.C:
 			return fmt.Errorf("Cloud presence lease expired")
+		case <-refresh.C:
+			keepLease = true
+			return errPresenceRefresh
 		case err := <-pathChanged:
 			// A local network change, not a broker refusal: the lease binds
 			// no source address, so the same broker still admits it over the

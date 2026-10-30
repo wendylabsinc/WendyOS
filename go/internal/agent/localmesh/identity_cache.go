@@ -3,9 +3,11 @@ package localmesh
 
 import (
 	"bytes"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -13,11 +15,12 @@ import (
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
+	"github.com/wendylabsinc/wendy/go/internal/shared/meshoperator"
 )
 
-// maxPrincipalBytes bounds a device principal carried in a key, a file, or a
-// control message. A canonical SPIFFE device principal is far shorter.
-const maxPrincipalBytes = 512
+// maxPrincipalBytes bounds an authenticated routing principal carried in a key,
+// file or control message. Operator subjects may be longer than device UUIDs.
+const maxPrincipalBytes = meshoperator.MaxPrincipalBytes
 
 // IdentityVerifier must validate the complete chain against CURRENT trust and
 // return the authorized device identity and earliest certificate expiry. It is
@@ -41,9 +44,9 @@ func DefaultCacheLimits() CacheLimits {
 }
 
 type cachedIdentity struct {
-	Chain [][]byte  `json:"chain"`
-	Added time.Time `json:"added"`
-	Used  time.Time `json:"used"`
+	Chain [][]byte  `json:"chain" cbor:"c"`
+	Added time.Time `json:"added" cbor:"a"`
+	Used  time.Time `json:"used" cbor:"u"`
 }
 
 // IdentityCache persists public certificate bundles only; presence and service
@@ -64,12 +67,12 @@ type IdentityCache struct {
 	pendingSave bool
 }
 
-// principalOf returns the cache key a chain authorizes, rejecting chains whose
-// leaf is not a device principal.
+// principalOf returns the bounded device or operator principal authorized by
+// the independently verified leaf.
 func principalOf(id Identity) (string, error) {
 	principal := id.Device.Principal()
 	if principal == "" || len(principal) > maxPrincipalBytes {
-		return "", errors.New("identity has no device principal")
+		return "", errors.New("identity has no routing principal")
 	}
 	return principal, nil
 }
@@ -122,7 +125,7 @@ func OpenIdentityCacheWithCertificates(path string, limits CacheLimits, verify I
 			continue
 		}
 		// A key that is not a device principal cannot be addressed by any peer.
-		if _, err := meshid.DeviceFromPrincipal(principal); err != nil {
+		if _, err := meshid.PeerFromPrincipal(principal); err != nil {
 			continue
 		}
 		if entry.Used.After(now) {
@@ -141,17 +144,21 @@ func OpenIdentityCacheWithCertificates(path string, limits CacheLimits, verify I
 // is never a hit, whatever the file claimed.
 func (c *IdentityCache) valid(principal string, e cachedIdentity, now time.Time) (Identity, bool) {
 	if len(e.Chain) == 0 || len(e.Chain) > 16 || e.Added.IsZero() || now.Before(e.Added) || now.Sub(e.Added) >= c.limits.Age || e.Used.Before(e.Added) {
+		log.Printf("wendy net identity cache unavailable: principal=%q stage=retention parts=%d added=%s used=%s now=%s", principal, len(e.Chain), e.Added.Format(time.RFC3339Nano), e.Used.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano))
 		return Identity{}, false
 	}
 	id, err := c.verify(e.Chain, now)
 	if err != nil {
+		log.Printf("wendy net identity cache unavailable: principal=%q stage=verification reason=%q", principal, err)
 		return Identity{}, false
 	}
 	key, err := principalOf(id)
 	if err != nil || key != principal {
+		log.Printf("wendy net identity cache unavailable: principal=%q stage=principal verified=%q reason=%v", principal, key, err)
 		return Identity{}, false
 	}
 	if !now.Before(id.NotAfter) {
+		log.Printf("wendy net identity cache unavailable: principal=%q stage=expiry expires=%s now=%s", principal, id.NotAfter.Format(time.RFC3339Nano), now.Format(time.RFC3339Nano))
 		return Identity{}, false
 	}
 	return id, true
@@ -257,6 +264,10 @@ func (c *IdentityCache) put(chain [][]byte, expected string, now time.Time) (str
 		// expires no earlier, so a replayed older bundle cannot displace it.
 		// An entry that is already expired or untrusted is simply replaced.
 		if previous, valid := c.valid(principal, old, now); valid && previous.NotAfter.After(id.NotAfter) {
+			if id.Device.IsOperator() {
+				c.rememberCertificates(chain, id.NotAfter, now)
+				return principal, nil
+			}
 			return "", errors.New("identity bundle is not a renewal")
 		}
 	}
@@ -420,4 +431,49 @@ func (c *IdentityCache) save() error {
 	}
 	c.pendingSave = false
 	return nil
+}
+
+// manifestIdentity preserves independent live primary keys for installations of
+// one operator. Exact immutable chain hashes use the existing bounded DER pool;
+// a principal's most recently selected leaf cannot relabel another owner's wire.
+func (c *IdentityCache) manifestIdentity(principal string, m Manifest, now time.Time) ([][]byte, Identity, bool) {
+	if m.Owner == nil {
+		return c.Get(principal, now)
+	}
+	if m.Owner.Principal != principal || len(m.Owner.Hashes) == 0 || len(m.Owner.Hashes) > 16 {
+		return nil, Identity{}, false
+	}
+	chain := make([][]byte, len(m.Owner.Hashes))
+	for i, hash := range m.Owner.Hashes {
+		if len(hash) != 32 {
+			return nil, Identity{}, false
+		}
+		chain[i] = c.parts.get(hex.EncodeToString(hash), now)
+		if len(chain[i]) == 0 {
+			return nil, Identity{}, false
+		}
+	}
+	identity, err := c.verify(chain, now)
+	if err != nil || !identity.Device.IsOperator() || identity.Device.Principal() != principal || !now.Before(identity.NotAfter) {
+		return nil, Identity{}, false
+	}
+	return chain, identity, true
+}
+
+func (c *IdentityCache) verifiedDescription(description CertificateChain, now time.Time) ([][]byte, Identity, bool) {
+	if len(description.Hashes) == 0 || len(description.Hashes) > 16 {
+		return nil, Identity{}, false
+	}
+	chain := make([][]byte, len(description.Hashes))
+	for i, hash := range description.Hashes {
+		chain[i] = c.parts.get(hash, now)
+		if len(chain[i]) == 0 {
+			return nil, Identity{}, false
+		}
+	}
+	identity, err := c.verify(chain, now)
+	if err != nil || identity.Device.Principal() != description.Principal || !now.Before(identity.NotAfter) {
+		return nil, Identity{}, false
+	}
+	return chain, identity, true
 }
