@@ -9,10 +9,12 @@ import (
 	"testing"
 	"time"
 
+	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/wendylabsinc/wendy/go/internal/agent/rawvideo"
 	"github.com/wendylabsinc/wendy/go/internal/agent/usbthermal"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 )
@@ -22,13 +24,15 @@ const testThermalStableID = "by-id:usb-TOPDON_TECHNOLOGY_Co.__Ltd._TC001_Max_YFD
 // fakeUSBThermal stands in for usbthermal.Manager: one attached TC001 Max
 // whose frames the test pushes.
 type fakeUSBThermal struct {
-	listed []usbthermal.Listing
+	listed []usbthermal.Listing // guarded by mu once the service runs; see plug
 	feed   chan usbthermal.RawFrame
+	pics   chan usbthermal.Frame
 	err    error
 
-	mu     sync.Mutex
-	active int // live raw subscriptions
-	closed bool
+	mu         sync.Mutex
+	active     int // live raw subscriptions
+	activePics int // live picture subscriptions
+	closed     bool
 }
 
 func newFakeUSBThermal() *fakeUSBThermal {
@@ -39,10 +43,59 @@ func newFakeUSBThermal() *fakeUSBThermal {
 			Layout: usbthermal.Layout{Width: 256, Height: 192},
 		}},
 		feed: make(chan usbthermal.RawFrame),
+		pics: make(chan usbthermal.Frame),
 	}
 }
 
-func (f *fakeUSBThermal) List() []usbthermal.Listing { return f.listed }
+func (f *fakeUSBThermal) List() []usbthermal.Listing {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]usbthermal.Listing(nil), f.listed...)
+}
+
+// plug sets which cameras are attached.
+func (f *fakeUSBThermal) plug(listed ...usbthermal.Listing) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.listed = listed
+}
+
+func (f *fakeUSBThermal) SubscribePictures(ctx context.Context, stableID string) (<-chan usbthermal.Frame, error) {
+	if stableID != testThermalStableID {
+		return nil, errors.New("no such camera")
+	}
+	out := make(chan usbthermal.Frame, 2)
+	f.mu.Lock()
+	f.activePics++
+	f.mu.Unlock()
+	go func() {
+		defer func() {
+			f.mu.Lock()
+			f.activePics--
+			f.mu.Unlock()
+			close(out)
+		}()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case p := <-f.pics:
+				select {
+				case out <- p:
+				case <-ctx.Done():
+					return
+				}
+			}
+		}
+	}()
+	return out, nil
+}
+
+func (f *fakeUSBThermal) pictureSubscriptions() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.activePics
+}
 
 func (f *fakeUSBThermal) SubscribeRaw(ctx context.Context, stableID string) (<-chan usbthermal.RawFrame, error) {
 	if stableID != testThermalStableID {
@@ -111,9 +164,23 @@ func newUSBThermalTestService(t *testing.T) (*VideoService, *fakeUSBThermal) {
 	t.Helper()
 	svc := newTestVideoService(func() ([]string, error) { return []string{"/dev/video0"}, nil }, nil)
 	fake := newFakeUSBThermal()
-	svc.usbThermal = fake
+	useFakeUSBThermal(svc, fake)
 	t.Cleanup(svc.Shutdown)
 	return svc, fake
+}
+
+// useFakeUSBThermal swaps the service's driver for fake, and its live view for
+// one on fake with no plug poll: StreamVideo's own sync is what registers the
+// camera, so every stream test also runs with the camera registered for its
+// encoded live view, as on a device.
+func useFakeUSBThermal(svc *VideoService, fake *fakeUSBThermal) {
+	if svc.usbThermalLive != nil {
+		svc.usbThermalLive.stop() // the real driver's; it has nothing attached
+	}
+	svc.usbThermal = fake
+	svc.usbThermalLive = newUSBThermalLiveView(svc.ctx, zap.NewNop(), fake, func(id uint32, feed *rawvideo.Feed) (func(), error) {
+		return svc.registerInProcessCamera(id, feed, true)
+	})
 }
 
 func testRawFrame(fill byte) usbthermal.RawFrame {
@@ -222,8 +289,6 @@ func TestStreamVideoRefusesWhatUSBThermalCannotDo(t *testing.T) {
 		code codes.Code
 		says string
 	}{
-		{"encoded", &agentpb.StreamVideoRequest{DeviceId: usbthermal.IDBandStart}, codes.FailedPrecondition, "VIDEO_CODEC_RAW"},
-		{"vp8", &agentpb.StreamVideoRequest{DeviceId: usbthermal.IDBandStart, Codec: agentpb.VideoCodec_VIDEO_CODEC_VP8}, codes.FailedPrecondition, "raw"},
 		{"another size", &agentpb.StreamVideoRequest{DeviceId: usbthermal.IDBandStart, Codec: agentpb.VideoCodec_VIDEO_CODEC_RAW, Width: 640, Height: 480}, codes.InvalidArgument, "256x384"},
 		{"a frame rate", &agentpb.StreamVideoRequest{DeviceId: usbthermal.IDBandStart, Codec: agentpb.VideoCodec_VIDEO_CODEC_RAW, Framerate: 25}, codes.InvalidArgument, "framerate 0"},
 	}
@@ -232,6 +297,18 @@ func TestStreamVideoRefusesWhatUSBThermalCannotDo(t *testing.T) {
 		err := svc.StreamVideo(c.req, stream)
 		if status.Code(err) != c.code || !strings.Contains(err.Error(), c.says) {
 			t.Errorf("%s: %v, want %v mentioning %q", c.name, err, c.code, c.says)
+		}
+	}
+
+	// Encoded video is the live view's. Without one (the camera could not be
+	// registered for it), an encoded request is refused with the way out.
+	svc.usbThermalLive.stop()
+	svc.usbThermalLive = nil
+	for _, codec := range []agentpb.VideoCodec{agentpb.VideoCodec_VIDEO_CODEC_H264, agentpb.VideoCodec_VIDEO_CODEC_VP8} {
+		stream := &thermalStream{ctx: context.Background(), frames: make(chan *agentpb.VideoFrame, 1)}
+		err := svc.StreamVideo(&agentpb.StreamVideoRequest{DeviceId: usbthermal.IDBandStart, Codec: codec}, stream)
+		if status.Code(err) != codes.FailedPrecondition || !strings.Contains(err.Error(), "VIDEO_CODEC_RAW") {
+			t.Errorf("%v with no live view: %v, want FailedPrecondition naming VIDEO_CODEC_RAW", codec, err)
 		}
 	}
 }

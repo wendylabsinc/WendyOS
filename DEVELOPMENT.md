@@ -401,15 +401,20 @@ serial-based stable ID such as
 
 ```sh
 wendy device camera list
+wendy device camera view --id 88                          # live view (H.264)
 wendy device camera view --id 88 --raw --stdout > thermal.raw
 ```
 
-It serves raw frames only for now: 256x384 `YUYV`, 512 bytes per line, the
-same stacked layout as the original TC001's UVC mode. The top 192 rows are the
-grey picture. The bottom 192 rows hold one little-endian `uint16` per pixel in
-1/64 K, so `°C = raw / 64 - 273.15`. An H.264 request is refused with a reason.
-The camera streams only while someone is subscribed. The agent owns its USB
-interfaces, so no other process can open the camera at the same time.
+Raw frames are 256x384 `YUYV`, 512 bytes per line, the same stacked layout as
+the original TC001's UVC mode. The top 192 rows are the grey picture. The
+bottom 192 rows hold one little-endian `uint16` per pixel in 1/64 K, so
+`°C = raw / 64 - 273.15`. The live view (the default, encoded request) is the
+256x192 grey picture, encoded by the in-process camera path
+(`services/video_inprocess.go`): the agent registers the camera there when it
+is plugged in and unregisters it when it is unplugged. Raw and encoded viewers
+share one capture. The camera streams only while someone is subscribed. The
+agent owns its USB interfaces, so no other process can open the camera at the
+same time.
 
 ### Network cameras
 

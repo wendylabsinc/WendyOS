@@ -14,10 +14,11 @@ package services
 //     the same as for every other camera, and the hub's last subscriber leaving
 //     is what stops the camera.
 //
-// Encoded video for it is not offered yet: an H.264 request is refused with a
-// reason rather than left waiting. The encoded live view for in-process frame
-// sources is separate work; it will consume usbthermal's picture frames
-// (Camera.SubscribePictures) and plug in at runUSBThermalProducer.
+// Encoded video (the default codec) is the in-process live view's: the camera
+// is registered as an in-process camera under the same id, fed from
+// usbthermal's picture frames (video_usbthermal_live.go), and StreamVideo
+// sends an encoded request there before it resolves the id. Only a raw request
+// reaches streamUSBThermal, unless the live view could not register the camera.
 //
 // Deliberately NOT in listCameras: that listing also feeds episode capture
 // (data_camera_adapter.go) and the two-plane loopback path, and both address a
@@ -60,6 +61,8 @@ var (
 type usbThermalDriver interface {
 	List() []usbthermal.Listing
 	SubscribeRaw(ctx context.Context, stableID string) (<-chan usbthermal.RawFrame, error)
+	// SubscribePictures feeds the encoded live view (video_usbthermal_live.go).
+	SubscribePictures(ctx context.Context, stableID string) (<-chan usbthermal.Frame, error)
 	LastError(stableID string) error
 	Close()
 }
@@ -181,8 +184,11 @@ func (s *VideoService) streamUSBThermal(stream grpc.ServerStreamingServer[agentp
 		return status.Errorf(codes.NotFound, "camera %s is no longer connected", stableID)
 	}
 	if req.GetCodec() != agentpb.VideoCodec_VIDEO_CODEC_RAW {
+		// An encoded request is the live view's (StreamVideo routes it there
+		// first); reaching here means the camera could not be registered for
+		// it, and the agent log says why.
 		return status.Errorf(codes.FailedPrecondition,
-			"%s: encoded video is not available for this camera yet; request raw frames "+
+			"%s: its encoded live view is not available (see the agent log); request raw frames "+
 				"(VIDEO_CODEC_RAW, e.g. `wendy device camera view --id %d --raw --stdout`)", l.Name, l.ID)
 	}
 	format := usbThermalRawFormat(l.Layout)

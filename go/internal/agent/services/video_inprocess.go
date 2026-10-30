@@ -77,6 +77,11 @@ type inProcessCamera struct {
 	feed *rawvideo.Feed
 	// gone is closed when the camera is unregistered, ending its stream.
 	gone chan struct{}
+	// rawElsewhere is set when the camera's driver serves VIDEO_CODEC_RAW
+	// itself, through StreamVideo's ordinary source resolution (the TC001 Max's
+	// raw tap, video_usbthermal.go). A raw request then passes this path by
+	// instead of being refused here.
+	rawElsewhere bool
 }
 
 // inProcessCameras is the registry, embedded in VideoService. Its own lock, so
@@ -103,13 +108,21 @@ type inProcessCameras struct {
 // extend. Nor does it offer raw frames: a VIDEO_CODEC_RAW request for id is
 // refused with RAW_UNAVAILABLE (see inProcessRawWhy).
 func (s *VideoService) RegisterInProcessCamera(id uint32, feed *rawvideo.Feed) (unregister func(), err error) {
+	return s.registerInProcessCamera(id, feed, false)
+}
+
+// registerInProcessCamera is RegisterInProcessCamera. With rawElsewhere set, a
+// VIDEO_CODEC_RAW request for id is not refused but left to the rest of
+// StreamVideo, for a driver that already serves its raw frames there (the USB
+// thermal raw tap): encoded requests come here, raw ones go to the driver.
+func (s *VideoService) registerInProcessCamera(id uint32, feed *rawvideo.Feed, rawElsewhere bool) (unregister func(), err error) {
 	if feed == nil {
 		return nil, errors.New("in-process camera needs a feed")
 	}
 	if id > maxVideoDeviceID {
 		return nil, fmt.Errorf("camera id %d is out of range (0..%d)", id, maxVideoDeviceID)
 	}
-	cam := &inProcessCamera{feed: feed, gone: make(chan struct{})}
+	cam := &inProcessCamera{feed: feed, gone: make(chan struct{}), rawElsewhere: rawElsewhere}
 	s.inProcessMu.Lock()
 	defer s.inProcessMu.Unlock()
 	if s.inProcessByID == nil {
@@ -155,15 +168,21 @@ func (s *VideoService) inProcessCameraForKey(key string) (*inProcessCamera, bool
 }
 
 // streamInProcessCamera is StreamVideo for a registered in-process camera.
-// handled is false when devID names no such camera, and StreamVideo goes on to
+// handled is false when devID names no such camera, or when it asks for raw
+// frames the camera's driver serves elsewhere, and StreamVideo goes on to
 // resolve it as before.
 func (s *VideoService) streamInProcessCamera(stream grpc.ServerStreamingServer[agentpb.VideoFrame], devID uint32, req *agentpb.StreamVideoRequest) (handled bool, err error) {
-	if _, ok := s.inProcessCameraByID(devID); !ok {
+	cam, ok := s.inProcessCameraByID(devID)
+	if !ok {
 		return false, nil
 	}
 	// Refused before a hub exists, as for a network camera: a codec this path
-	// cannot produce is refused rather than downgraded (see the proto).
+	// cannot produce is refused rather than downgraded (see the proto). Unless
+	// the driver serves raw frames itself: then the request is its business.
 	if req.GetCodec() == agentpb.VideoCodec_VIDEO_CODEC_RAW {
+		if cam.rawElsewhere {
+			return false, nil
+		}
 		return true, errRawUnavailable(inProcessRawWhy)
 	}
 	if err := checkInProcessRequest(req); err != nil {

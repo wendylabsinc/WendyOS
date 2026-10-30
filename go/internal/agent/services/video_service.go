@@ -957,6 +957,10 @@ type VideoService struct {
 	// usbThermal drives USB thermal cameras that have no kernel driver (the
 	// TOPDON TC001 Max). Nil-safe; see video_usbthermal.go.
 	usbThermal usbThermalDriver
+	// usbThermalLive registers each attached USB thermal camera as an
+	// in-process camera, for its encoded live view. Nil-safe; see
+	// video_usbthermal_live.go.
+	usbThermalLive *usbThermalLiveView
 
 	// twoPlaneState holds the two-plane camera data path's nodes and pumps.
 	twoPlaneState
@@ -1142,6 +1146,7 @@ func NewVideoService(ctx context.Context, logger *zap.Logger, pool *rtps.Pool, r
 	}
 	svc.ros2Cameras = ros2camera.NewManager(svcCtx, logger, svc.loopback, ros2CameraRegistryPath, graphs, pool)
 	svc.usbThermal = newUSBThermalDriver(svcCtx, logger)
+	svc.usbThermalLive = svc.startUSBThermalLiveView()
 	return svc
 }
 
@@ -1232,6 +1237,9 @@ func (s *VideoService) Shutdown() {
 	}
 	s.cancel()
 	s.wg.Wait()
+	if s.usbThermalLive != nil {
+		s.usbThermalLive.stop() // drops the live view's picture subscriptions
+	}
 	if s.usbThermal != nil {
 		s.usbThermal.Close() // waits until each camera is idle and released
 	}
@@ -2399,7 +2407,10 @@ func (s *VideoService) StreamVideo(req *agentpb.StreamVideoRequest, stream grpc.
 		return status.Errorf(codes.InvalidArgument, "device ID out of range")
 	}
 	// A camera registered by an in-process driver has no node to resolve; it
-	// takes precedence over every other source for its ID.
+	// takes precedence over every other source for its ID. A USB thermal
+	// camera is registered as one, for its encoded live view; its raw frames
+	// still come from its raw tap, through resolveSource below.
+	s.syncUSBThermalLiveView(devID)
 	if handled, err := s.streamInProcessCamera(stream, devID, req); handled {
 		return err
 	}
