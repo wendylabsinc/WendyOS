@@ -906,6 +906,8 @@ func resultToError(result wendypb.WendyComResult) error {
 		return errors.New("BLE is not supported by this device")
 	case wendypb.WendyComResult_WENDY_COM_RESULT_NET_NO_NAN:
 		return errors.New("NAN is not supported by this device")
+	case wendypb.WendyComResult_WENDY_COM_RESULT_NET_BLE_PROFILE_UNSUPPORTED:
+		return fmt.Errorf("the requested BLE radio profile is not supported by this device")
 	case wendypb.WendyComResult_WENDY_COM_RESULT_NET_ONE_CARRIER_ONLY:
 		return errors.New("only one carrier is supported at a time")
 	case wendypb.WendyComResult_WENDY_COM_RESULT_BAD_CONF_SIZE:

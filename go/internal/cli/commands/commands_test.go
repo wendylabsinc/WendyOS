@@ -536,7 +536,7 @@ func TestPsAliasIsHiddenButRunnable(t *testing.T) {
 	}
 }
 
-func TestBluetoothBtAliasRemainsAccessibleWhenHidden(t *testing.T) {
+func TestBluetoothBtAliasExposesRadioControls(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		cmd  *cobra.Command
@@ -549,8 +549,13 @@ func TestBluetoothBtAliasRemainsAccessibleWhenHidden(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Find(bt): %v", err)
 			}
-			if bluetoothCmd.Name() != "bluetooth" || !bluetoothCmd.Hidden {
-				t.Fatalf("bt should resolve to hidden compatibility bluetooth command; cmd=%v hidden=%v", bluetoothCmd.Name(), bluetoothCmd.Hidden)
+			if bluetoothCmd.Name() != "bluetooth" || bluetoothCmd.Hidden {
+				t.Fatalf("bt should resolve to the visible Bluetooth management command; cmd=%v hidden=%v", bluetoothCmd.Name(), bluetoothCmd.Hidden)
+			}
+			for _, child := range []string{"power", "mode"} {
+				if found, _, err := bluetoothCmd.Find([]string{child}); err != nil || found == bluetoothCmd {
+					t.Fatalf("missing radio command %s", child)
+				}
 			}
 			if !slices.Contains(bluetoothCmd.Aliases, "bt") {
 				t.Fatalf("bluetooth aliases = %v; want bt", bluetoothCmd.Aliases)

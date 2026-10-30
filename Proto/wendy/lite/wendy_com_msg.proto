@@ -87,8 +87,54 @@ message WendyComDeviceIdentity {
     string enrolled_device_id = 4;
 }
 
+// Device-wide LE transmit policy, independent of Wendy Net participation.
+enum WendyComBluetoothPowerMode {
+    WENDY_COM_BT_POWER_DEFAULT = 0;
+    WENDY_COM_BT_POWER_MAXIMUM = 1;
+    WENDY_COM_BT_POWER_DBM = 2;
+}
+message WendyComBluetoothPowerSetting {
+    WendyComBluetoothPowerMode mode = 1;
+    sint32 dbm = 2;
+}
+message WendyComBluetoothPowerConfig {
+    WendyComBluetoothPowerSetting advertising = 1;
+    // Also applies to controller-default, scan-request and initiation traffic.
+    WendyComBluetoothPowerSetting connections = 2;
+}
+message WendyComBluetoothConnectionPower {
+    uint32 handle = 1;
+    bool current_known = 2;
+    sint32 current_dbm = 3;
+    uint32 tx_phy = 4;
+    uint32 rx_phy = 5;
+}
+message WendyComBluetoothPowerStatus {
+    WendyComBluetoothPowerConfig desired = 1;
+    WendyComBluetoothPowerConfig applied = 2;
+    bool available = 3;
+    bool pending = 4;
+    bool advertising_set_supported = 5;
+    bool connections_set_supported = 6;
+    repeated sint32 supported_levels_dbm = 7;
+    bool advertising_known = 8;
+    sint32 advertising_dbm = 9;
+    bool connection_default_known = 10;
+    sint32 connection_default_dbm = 11;
+    repeated WendyComBluetoothConnectionPower connections = 12;
+    string error = 13;
+}
+message WendyComBluetoothPowerGetParams {}
+message WendyComBluetoothPowerSetParams { WendyComBluetoothPowerConfig config = 1; }
+
 // Native Wendy Net policy. Disabled by default; carrier choices are retained
 // independently. Limits are local resource policy, never a special leaf role.
+// A single radio profile covers advertising, discovery and connected data.
+enum WendyComBleProfile {
+    WENDY_COM_BLE_NORMAL = 0;
+    WENDY_COM_BLE_CODED_S2 = 1;
+    WENDY_COM_BLE_CODED_S8 = 2;
+}
 message WendyComNetConfig {
     bool enabled = 1;
     bool ble = 2;
@@ -98,6 +144,7 @@ message WendyComNetConfig {
     uint32 ble_links = 6;
     uint32 wifi_links = 7;
     uint32 nan_links = 8;
+    WendyComBleProfile ble_profile = 9;
 }
 message WendyComNetGetParams {}
 message WendyComNetSetParams { WendyComNetConfig config = 1; }
@@ -121,7 +168,8 @@ message WendyComNetStatus {
     optional uint32 internal_bytes = 10;
     uint32 active_links = 11;
     uint32 error_code = 12;
-    bool restarting = 13; // saved carrier change; reboot is pending
+    bool restarting = 13; // saved carrier/profile change; reboot is pending
+    uint32 ble_profiles_supported = 14; // bit N corresponds to WendyComBleProfile N
 }
 
 message WendyComGetDeviceInfoParams {}
@@ -238,6 +286,8 @@ message WendyComCommand {
         WendyComEnrollmentResetParams enrollment_reset = 21;
         WendyComNetGetParams net_get = 22;
         WendyComNetSetParams net_set = 23;
+        WendyComBluetoothPowerGetParams bluetooth_power_get = 25;
+        WendyComBluetoothPowerSetParams bluetooth_power_set = 26;
     }
 }
 
@@ -255,6 +305,7 @@ enum WendyComResult {
     WENDY_COM_RESULT_NET_NO_BLE           = 10;
     WENDY_COM_RESULT_NET_NO_NAN           = 11;
     WENDY_COM_RESULT_NET_ONE_CARRIER_ONLY = 12;
+    WENDY_COM_RESULT_NET_BLE_PROFILE_UNSUPPORTED = 13;
 }
 
 // Response to a WendyComCommand — request_id matches the request.
@@ -268,6 +319,7 @@ message WendyComResponse {
         WendyComEnrollmentChallenge enrollment_challenge = 6;
         WendyComSyncTimeResult sync_time = 7;
         WendyComNetStatus net_status = 8;
+        WendyComBluetoothPowerStatus bluetooth_power = 10;
     }
 }
 
