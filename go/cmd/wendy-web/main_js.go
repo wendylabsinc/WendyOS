@@ -217,14 +217,17 @@ func (b *bridge) handle(r request) (any, error) {
 		return nil, errors.New("Shell access is disabled in the browser client")
 	}
 	if r.Method == "mesh-topology" {
-		if js.Global().Get("location").Get("origin").String() != "http://localhost:5173" {
-			return nil, errors.New("Local observations require the local browser relay")
-		}
 		var p struct {
 			ID string `json:"id"`
 		}
 		if err := json.Unmarshal(r.Params, &p); err != nil {
 			return nil, err
+		}
+		if p.ID == "cli://local" {
+			return browserauth.LocalCLIUnavailable(), nil
+		}
+		if js.Global().Get("location").Get("origin").String() != "http://localhost:5173" {
+			return nil, errors.New("Local observations require the local browser relay")
 		}
 		return b.auth.MeshTopology(context.Background(), p.ID, browserCloudDial, &http.Client{Transport: authProxyTransport{}, Timeout: 12 * time.Second}), nil
 	}

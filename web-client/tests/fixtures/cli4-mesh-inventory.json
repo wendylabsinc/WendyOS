@@ -1,0 +1,70 @@
+{
+  "collection": {
+    "meshDevices": [
+      {
+        "selector": "mesh://11111111-1111-4111-8111-111111111111/dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+        "principal": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+        "tenant": "11111111-1111-4111-8111-111111111111",
+        "device": "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+        "name": "C6 mesh only",
+        "platform": "Lite",
+        "transport": "mtls-v1",
+        "address": "[fd45:b891:567f:4ddd:8ddd:dddd:dddd:dddd]:5054",
+        "caps": [
+          "sensors"
+        ],
+        "expiresAtUnixMs": 1800000300123,
+        "revision": "18446744073709551615",
+        "metric": 128
+      },
+      {
+        "selector": "mesh://11111111-1111-4111-8111-111111111111/bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        "principal": "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        "tenant": "11111111-1111-4111-8111-111111111111",
+        "device": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        "name": "C5 mesh alias",
+        "platform": "Lite",
+        "transport": "mtls-v1",
+        "address": "[fd45:b891:567f:4bbb:8bbb:bbbb:bbbb:bbbb]:5054",
+        "caps": [
+          "sensors"
+        ],
+        "expiresAtUnixMs": 1800000300123,
+        "revision": "18446744073709551614",
+        "metric": 128
+      }
+    ],
+    "meshDiscovery": {
+      "state": "ready",
+      "source": "local-cli",
+      "capturedAtUnixMs": 1800000000123
+    },
+    "usbDevices": null,
+    "lanDevices": null,
+    "bluetoothDevices": null,
+    "ethernetDevices": null,
+    "externalDevices": [
+      {
+        "id": "wendy-lite:/dev/cu.usbmodemC5",
+        "displayName": "C5 physical",
+        "providerKey": "wendy-lite",
+        "connectionInfo": {
+          "deviceId": "hardware-c5",
+          "enrolledDeviceId": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+          "serialPort": "/dev/cu.usbmodemC5",
+          "type": "USB"
+        },
+        "isWendyDevice": true
+      }
+    ]
+  },
+  "cloud": [
+    {
+      "id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+      "name": "C5 Cloud",
+      "type": "ESP32-C5",
+      "address": "cloud",
+      "selector": "cloud://cloud.example:443/tenant/11111111-1111-4111-8111-111111111111/asset/bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+    }
+  ]
+}
