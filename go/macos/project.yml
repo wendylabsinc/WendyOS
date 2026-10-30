@@ -143,7 +143,7 @@ targets:
       properties:
         CFBundleDisplayName: Wendy
         NSCameraUsageDescription: Wendy uses the camera to recognize devices and scan your site into a 3D model.
-        NSBonjourServices: ["_wendyos._udp", "_wendy-lite._tcp"]
+        NSBonjourServices: ["_wendyos._udp", "_wendyos._tcp", "_wendy-lite._tcp", "_wendy-net._tcp", "_wendy-net._udp"]
         NSLocalNetworkUsageDescription: Wendy discovers and connects to your nearby devices.
         NSBluetoothAlwaysUsageDescription: Wendy uses Bluetooth to discover nearby Wendy devices.
         NSAppTransportSecurity:
@@ -284,3 +284,5 @@ schemes:
         WendyMobile: all
     test:
       targets: [WendyMobileTests]
+      environmentVariables:
+        WENDY_MOBILE_TEST_HOST: "1"

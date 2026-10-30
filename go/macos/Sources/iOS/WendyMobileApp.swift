@@ -7,11 +7,17 @@ struct WendyMobileApp: App {
     @StateObject private var model = AppModel()
     var body: some Scene {
         WindowGroup {
-            MobileRootView().environmentObject(model)
-                .task { await model.cleanup.run() }
-                .task { await model.vpn.observeStatus() }
-                .task(id: model.initialized) { await model.observeEvents() }
-                .task(id: model.account) { await PushNotifications.shared.useAccount(model.account) }
+            if ProcessInfo.processInfo.environment["WENDY_MOBILE_TEST_HOST"] == "1" {
+                // The tests own the embedded backend and its lifecycle. Starting
+                // the ordinary UI here would race their sandbox/account changes.
+                Color.clear
+            } else {
+                MobileRootView().environmentObject(model)
+                    .task { await model.cleanup.run() }
+                    .task { await model.vpn.observeStatus() }
+                    .task(id: model.initialized) { await model.observeEvents() }
+                    .task(id: model.account) { await PushNotifications.shared.useAccount(model.account) }
+            }
         }
     }
 }

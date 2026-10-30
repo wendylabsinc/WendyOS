@@ -1,10 +1,11 @@
 import XCTest
+
 @testable import WendyMobile
 
 final class MobileTests: XCTestCase {
     func testEmbeddedSignInProducesBrowserURL() async throws {
         let client = GoClient.shared
-        try await client.initializeMobile()
+        try await initializeIsolatedSandbox()
         try await client.login(development: false)
         do {
             var loginURL: URL?
@@ -93,13 +94,160 @@ final class MobileTests: XCTestCase {
         XCTAssertNil(model.mobileCloudSelectionError)
     }
 
+    private func initializeIsolatedSandbox() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("WendyTests-\(UUID().uuidString)", isDirectory: true)
+        addTeardownBlock {
+            try await GoClient.shared.setMobileState(active: false, account: "", organization: "")
+            try FileManager.default.removeItem(at: directory)
+        }
+        try await GoClient.shared.setMobileState(active: false, account: "", organization: "")
+        try await GoClient.shared.initializeMobile(directory: directory)
+    }
+
     func testEmbeddedGoInitializesInAppSandbox() async throws {
-        try await GoClient.shared.initializeMobile()
+        try await initializeIsolatedSandbox()
         let account = try await GoClient.shared.account()
         XCTAssertNotNil(account.title)
         // Polling crosses the C archive without a CLI process or device connection.
         let events = try await GoClient.shared.poll()
         XCTAssertTrue(events.isEmpty)
+    }
+
+    func testEmbeddedMeshLifecycleWithoutSavedAccount() async throws {
+        try await initializeIsolatedSandbox()
+        try await GoClient.shared.setMobileState(active: false, account: "", organization: "")
+        try await GoClient.shared.setMobileState(active: true, account: "", organization: "")
+        let summary = try await GoClient.shared.mobileMeshSummary()
+        XCTAssertEqual(summary.0, "signed-out")
+        XCTAssertFalse(summary.1.isEmpty)
+        try await GoClient.shared.setMobileState(active: false, account: "", organization: "")
+    }
+
+    // Explicit opt-in: uses the real app account and performs read-only management.
+    // Ordinary test runs use disposable sandboxes and never join a production mesh.
+    func testLiveMeshDiscoveryManagementAndResume() async throws {
+        let environment = ProcessInfo.processInfo.environment
+        guard let tenant = environment["WENDY_LIVE_MESH_TENANT"], !tenant.isEmpty else {
+            throw XCTSkip("Set WENDY_LIVE_MESH_TENANT after signing in on the test device.")
+        }
+        if environment["WENDY_LIVE_MESH_WAIT_FOR_READY"] == "1" {
+            // Launch online for development-certificate validation, then let
+            // the hardware harness signal over USB after isolating radios.
+            let ready = FileManager.default.temporaryDirectory
+                .appendingPathComponent("wendy-live-mesh-ready")
+            try? FileManager.default.removeItem(at: ready)
+            print("Live mesh waiting for USB ready marker before starting discovery.")
+            let deadline = ContinuousClock.now + .seconds(180)
+            while !FileManager.default.fileExists(atPath: ready.path) {
+                guard ContinuousClock.now < deadline else {
+                    XCTFail("Timed out waiting for hardware isolation.")
+                    return
+                }
+                try await Task.sleep(for: .seconds(1))
+            }
+            try FileManager.default.removeItem(at: ready)
+        }
+        let client = GoClient.shared
+        try await initializeIsolatedSandbox()
+        let account = try await client.account()
+        XCTAssertTrue(account.signedIn, "Sign in using the normal app before running live tests.")
+        guard account.signedIn else { return }
+        if let endpoint = environment["WENDY_LIVE_MESH_CLOUD"] {
+            XCTAssertEqual(account.cloud, endpoint)
+            guard account.cloud == endpoint else { return }
+        }
+        addTeardownBlock {
+            try await client.setMobileState(active: false, account: "", organization: "")
+        }
+        try await client.setMobileState(
+            active: true,
+            account: account.context,
+            organization: tenant
+        )
+        let device = try await discoverMeshTarget(
+            tenant: tenant,
+            selector: environment["WENDY_LIVE_MESH_SELECTOR"]
+        )
+        let connection = try await client.connect(
+            selector: device.selector,
+            request: client.beginConnection()
+        )
+        let info = try await client.deviceInfo(session: connection.session)
+        print("Live mesh management: \(info.board), \(info.architecture), \(info.osVersion)")
+        if !connection.lite && environment["WENDY_LIVE_MESH_NETWORK_SETTINGS"] == "1" {
+            let settings = try await client.networkSettings(session: connection.session)
+            print("Live mesh settings: mesh=\(settings.meshAvailable) runtime=\(settings.runtimeAvailable) topology=\(settings.topology.available) error=\(settings.meshError)")
+            XCTAssertTrue(settings.meshAvailable, settings.meshError)
+            XCTAssertTrue(settings.topology.available, settings.topology.error)
+        }
+        if connection.lite && environment["WENDY_LIVE_SENSORLINK_TEMPERATURE"] == "1" {
+            try await verifyTemperature(session: connection.session)
+        }
+        if !connection.lite { _ = try await client.apps() }
+        try await client.setMobileState(
+            active: false,
+            account: account.context,
+            organization: tenant
+        )
+        let paused = try await client.mobileMeshSummary()
+        XCTAssertEqual(paused.0, "paused")
+        try await client.setMobileState(
+            active: true,
+            account: account.context,
+            organization: tenant
+        )
+        _ = try await discoverMeshTarget(tenant: tenant, selector: device.selector)
+        let resumed = try await client.connect(
+            selector: device.selector,
+            request: client.beginConnection()
+        )
+        _ = try await client.deviceInfo(session: resumed.session)
+        if resumed.lite && environment["WENDY_LIVE_SENSORLINK_TEMPERATURE"] == "1" {
+            try await verifyTemperature(session: resumed.session)
+        }
+        if !resumed.lite { _ = try await client.apps() }
+        try await client.disconnect()
+    }
+
+    private func verifyTemperature(session: UInt64) async throws {
+        var previous: UInt64 = 0
+        let requested = Int(ProcessInfo.processInfo.environment["WENDY_LIVE_SENSORLINK_SAMPLES"] ?? "3") ?? 3
+        let count = min(60, max(1, requested))
+        for _ in 0..<count {
+            let sample = try await GoClient.shared.sensorTemperature(session: session)
+            XCTAssertTrue(sample.celsius.isFinite)
+            XCTAssertGreaterThan(sample.timestampMicroseconds, previous)
+            XCTAssertFalse(sample.name.isEmpty)
+            print("Live SensorLink temperature: \(sample.celsius) C, source=\(sample.name), timestamp=\(sample.timestampMicroseconds)")
+            previous = sample.timestampMicroseconds
+            try await Task.sleep(for: .seconds(2))
+        }
+    }
+
+    private func discoverMeshTarget(tenant: String, selector: String?) async throws -> Device {
+        let requestedSelector = selector
+        var selected: Device?
+        var lastStatus = "Discovery has not run."
+        let deadline = ContinuousClock.now + .seconds(90)
+        while selected == nil, ContinuousClock.now < deadline {
+            let nearby = try await GoClient.shared.nearby()
+            let summary = try await GoClient.shared.mobileMeshSummary()
+            lastStatus =
+                "\(summary.0): \(summary.1); nearby: \(nearby.map { $0.transport.rawValue })"
+            print("Live mesh status: \(lastStatus)")
+            selected = nearby.first {
+                $0.transport == .mesh && $0.selector.hasPrefix("mesh://\(tenant)/")
+                    && (requestedSelector == nil || $0.selector == requestedSelector)
+            }
+            if selected == nil { try await Task.sleep(for: .seconds(2)) }
+        }
+        let device = try XCTUnwrap(
+            selected,
+            "No authenticated mesh target became reachable. \(lastStatus)"
+        )
+        print("Live mesh target: \(device.title) \(device.selector)")
+        return device
     }
 
     func testLocalVideoParserAcceptsSplitStartCodes() {

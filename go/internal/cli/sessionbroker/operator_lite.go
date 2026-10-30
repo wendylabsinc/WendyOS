@@ -73,13 +73,13 @@ func (r *operatorTargets) managementInfo(ctx context.Context) (OperatorTargetInf
 	if err != nil || target.Tenant() != operator.Tenant() {
 		return OperatorTargetInfo{}, status.Error(codes.InvalidArgument, "mesh target differs from the selected operator tenant")
 	}
-	// First attachment currently requires WendyOS. Its existing pinned management
-	// stream identifies the adjacent target without requiring a routed hop.
+	// Legacy fixtures can identify their WendyOS neighbour directly. A local
+	// routing participant always resolves capabilities from signed manifests.
 	_, adjacent, err := r.adjacentPeer()
 	if err != nil && r.localSnapshot == nil {
 		return OperatorTargetInfo{}, err
 	}
-	if err == nil && target == adjacent {
+	if err == nil && target == adjacent && r.localSnapshot == nil {
 		return OperatorTargetInfo{Selector: MeshSelector(target), Principal: target.Principal(), Tenant: target.Tenant().String(), Device: target.UUID().String(), Platform: "WendyOS", Transport: "mtls-v1", OperatorPrincipal: operator.Principal()}, nil
 	}
 	view, err := r.lookupTopology(ctx, target)

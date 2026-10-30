@@ -1,8 +1,10 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"runtime"
+	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/sessionbroker"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
@@ -30,13 +32,19 @@ func startPlatformVPN(routes []vpn.Route, gateway string) (vpn.Config, error) {
 	if err = desktop.StopVPN(); err != nil {
 		return vpn.Config{}, err
 	}
-	sessionbroker.SuspendEmbedded()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	if err := sessionbroker.SetEmbeddedVPNOwned(ctx, true); err != nil {
+		return vpn.Config{}, err
+	}
 	return vpn.Config{Routes: routes, Gateway: gateway, BootstrapDirectory: directory}, nil
 }
 func stopPlatformVPN() error {
 	err := desktop.StopVPN()
 	if runtime.GOOS == "ios" {
-		sessionbroker.ResumeEmbedded()
+		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+		defer cancel()
+		err = errors.Join(err, sessionbroker.SetEmbeddedVPNOwned(ctx, false))
 	}
 	return err
 }

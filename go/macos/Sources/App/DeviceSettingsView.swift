@@ -101,6 +101,7 @@ private struct WiFiJoinTarget: Identifiable {
 }
 struct DeviceSettingsView: View {
     @State private var actions = AsyncActions()
+    @State private var settingsRead = DeviceSettingsRead()
     @EnvironmentObject private var model: AppModel
     let session: UInt64
     let deviceName: String
@@ -217,6 +218,9 @@ struct DeviceSettingsView: View {
             }
             #if os(iOS)
             .navigationBarTitleDisplayMode(.inline)
+            .task(id: session) {
+                if (page == .mesh || page == .wifi), snapshot == nil { await refresh() }
+            }
             #endif
     }
     @ViewBuilder private var settingsLoading: some View {
@@ -348,11 +352,14 @@ struct DeviceSettingsView: View {
         })
     }
     private func refresh() async {
+        await settingsRead.run { await loadSettings() }
+    }
+    private func loadSettings() async {
         guard !loading else { return }
         loading = true; defer { loading = false }
         do {
             let value = try await GoClient.shared.networkSettings(session: session)
-            guard !Task.isCancelled else { return }
+            guard !Task.isCancelled, model.deviceSession == session else { return }
             if !dirty { draft = value.meshConfig }
             snapshot = value; error = nil
             if notice != nil, value.wifiAvailable { notice = value.wifiConnected ? "Connected to \(value.ssid)." : nil }

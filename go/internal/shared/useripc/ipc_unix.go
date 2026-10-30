@@ -51,8 +51,12 @@ func ValidateFile(path string, socket bool) error {
 		return err
 	}
 	expected := info.Mode().IsRegular()
-	if socket && runtime.GOOS != "ios" {
-		expected = info.Mode()&os.ModeSocket != 0
+	if socket {
+		if inProcess.Load() {
+			expected = info.Mode().IsRegular() && memoryExists(path)
+		} else if runtime.GOOS != "ios" {
+			expected = info.Mode()&os.ModeSocket != 0
+		}
 	}
 	if !expected || info.Mode().Perm()&0077 != 0 {
 		return fmt.Errorf("unsafe session broker file %s", path)

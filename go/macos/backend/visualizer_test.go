@@ -221,7 +221,7 @@ func TestVisualVideoScheduleRetainsSignedCameraOrigin(t *testing.T) {
 	for name, movie := range map[string][]byte{
 		"wrong count":    visualTestMovie(3, []uint32{500000, 750000}),
 		"wrong schedule": visualTestMovie(3, []uint32{500000, 500000, 500000}),
-		"truncated atom": []byte{0, 0, 0, 64, 'm', 'o', 'o', 'v'},
+		"truncated atom": {0, 0, 0, 64, 'm', 'o', 'o', 'v'},
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := visualVideoTimes(index, movie); err == nil {

@@ -15,6 +15,9 @@ WDAccountsResult *WDAccounts(void);
 void WDAccountsFree(WDAccountsResult *value);
 void WDAccountFree(WDAccountResult *value);
 WDStatus *WDInitializeMobile(char *directory);
+WDStatus *WDSetMobileState(int32_t active, char *account, char *organization);
+WDMeshSummary *WDMobileMeshSummary(void);
+void WDMeshSummaryFree(WDMeshSummary *value);
 WDStatus *WDInitialize(char *cli_path);
 WDDevicesResult *WDNearby(void);
 WDDevicesResult *WDCloud(void);
@@ -72,6 +75,7 @@ WDStatus *WDDeleteAccess(char *account, char *org, char *id);
 #include "ModelLibraryTypes.h"
 #include "FleetTypes.h"
 #include "SettingsTypes.h"
+#include "SensorTypes.h"
 #include "EnrollmentTypes.h"
 #ifdef __APPLE__
 #include <TargetConditionals.h>

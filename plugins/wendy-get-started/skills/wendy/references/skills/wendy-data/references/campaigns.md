@@ -101,7 +101,15 @@ file, verifies checksums, and publishes the completed local directory atomically
 Use a destination that preserves existing local data.
 
 For one-off capture, select returned source IDs explicitly when only a subset
-is wanted. With no source flags, `record` selects every healthy source.
+is wanted. With no source flags, `record` selects every healthy source: the
+table marks them `*`, and in `--json` an unhealthy source's `unusable_reason`
+says why it is left out.
+
+Microphone IDs are stable: `audio:<PipeWire node name>`, or
+`audio:alsa:<card>:<device>` without PipeWire. The old `audio:<number>` form
+still resolves, with a deprecation warning, in `--source`, `--exclude-source`,
+`--calibration` and campaign `audio:` selectors. It can name a different
+microphone after a reboot or replug, so do not write it into a plan.
 
 ```sh
 wendy --json data record --name commissioning --source <source-id> --device <selector>
@@ -153,6 +161,29 @@ file in the pinned Hugging Face repository. First use installs a managed runtime
 and downloads model files, requiring network access and storage outside the
 episode quota. Remote model code is disabled. Check `inference_status`, its
 per-camera states, and actual events after deployment.
+
+Each scored frame produces a `prediction` record for `events.jsonl`. Its
+`detections[].box` is `[x1, y1, x2, y2]` in pixels of the scored picture, and
+`detections[].box_norm` is the same corners clamped to the picture and
+normalised to `[0, 1]`. The record's `width` and `height` give the picture's
+size. Draw from `box_norm` when the picture is shown at another size. Older
+records have only `box` and no picture size.
+
+`accelerator` chooses the hardware: `auto` (the default), `cpu`, or `tensorrt`.
+On a Jetson, `auto` runs a `yolo_onnx` model through TensorRT on the GPU, and
+every other device or backend runs on the CPU. The first TensorRT start builds
+an engine in the background, which takes minutes and about 2.2 GB of memory;
+`auto` keeps detecting on the CPU meanwhile and switches once the engine
+matches the CPU's detections. Under `auto` the build first waits a random
+delay of up to 20 minutes, and every build waits for free memory and for 2
+idle CPUs, so `engine.state` may read `scheduled`, `waiting_for_memory` or
+`waiting_for_cpu` for a while. A busy CPU delays the build by at most 30
+minutes (`engine.build_by`); then it builds at the lowest priority.
+`waiting_for_cpu` is not degraded. `tensorrt` never runs on the CPU and requires
+`backend: yolo_onnx`. Check `inference_status.accelerator`: `active` is what
+runs, `engine.state` is the build, and `degraded: true` with a `reason` means a
+usable GPU is not being used. Do not promise GPU speed until `active` is
+`tensorrt`.
 
 `notify` chooses one delivery condition:
 

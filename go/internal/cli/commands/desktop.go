@@ -62,6 +62,7 @@ type DesktopDevice struct {
 // InitializeDesktop must run once, before any other desktop operation.
 func InitializeDesktop(cliPath string) error {
 	if runtime.GOOS == "ios" {
+		sessionbroker.EnableEmbeddedHost()
 		jsonOutput = true
 		return nil
 	}
@@ -100,6 +101,9 @@ func DesktopNearby(ctx context.Context) ([]DesktopDevice, error) {
 		defer wg.Done()
 		options := cliLANStreamOptions(ctx)
 		options.Supplemental = meshDiscoveryStream
+		if runtime.GOOS == "ios" {
+			options.Supplemental = mobileMeshDiscoveryStream
+		}
 		devices, err = discovery.CollectLAN(ctx, options, 5*time.Second)
 	}()
 	go func() { defer wg.Done(); lite, liteErr = (&providers.MicroWendyProvider{}).DiscoverDevices(ctx) }()
@@ -117,6 +121,22 @@ func DesktopNearby(ctx context.Context) ([]DesktopDevice, error) {
 			address = d.ConnectionInfo["serialPort"]
 		}
 		result = append(result, DesktopDevice{ID: d.ID, Name: d.DisplayName, Selector: d.ID, Transport: d.ConnectionType(), Address: address, Lite: true})
+	}
+	// The legacy LAN projection cannot represent native Lite management. Merge
+	// the current broker directory as canonical mesh selectors for both platforms.
+	probe, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	if snapshot, readErr := sessionbroker.ReadOperatorDirectory(probe); readErr == nil {
+		seen := make(map[string]bool, len(result))
+		for _, d := range result {
+			seen[d.Selector] = true
+		}
+		for _, d := range DesktopMeshDevices(snapshot) {
+			if !seen[d.Selector] {
+				result = append(result, d)
+				seen[d.Selector] = true
+			}
+		}
 	}
 	if len(result) == 0 {
 		return mergeDesktopDevices(result), errors.Join(err, liteErr)

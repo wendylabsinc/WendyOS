@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -21,10 +22,15 @@ func platformConfig(cfg vpn.Config) (vpn.Config, error) {
 	if err := os.Setenv("WENDY_CONFIG_DIR", cfg.BootstrapDirectory); err != nil {
 		return vpn.Config{}, err
 	}
-	sessionbroker.ResumeEmbedded()
 	if err := mobileBackend.Initialize(""); err != nil {
+		return vpn.Config{}, err
+	}
+	if err := sessionbroker.SetEmbeddedActive(context.Background(), true); err != nil {
 		return vpn.Config{}, err
 	}
 	return mobileBackend.StartVPN(cfg.Routes, cfg.Gateway)
 }
-func stopPlatform() { _ = mobileBackend.StopVPN(); sessionbroker.SuspendEmbedded() }
+func stopPlatform() {
+	_ = mobileBackend.StopVPN()
+	_ = sessionbroker.SetEmbeddedActive(context.Background(), false)
+}

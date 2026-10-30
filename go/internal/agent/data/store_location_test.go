@@ -679,3 +679,19 @@ func TestHumanBytes(t *testing.T) {
 		}
 	}
 }
+
+func TestDefaultStoreRetainsNativeAppMigration(t *testing.T) {
+	l := testLayout(t)
+	meshFilesystems(t, l)
+	l.previousDataDisk = filepath.Join(l.dataPartition, "wendy-agent/data/episodes")
+	if err := os.MkdirAll(l.previousDataDisk, 0750); err != nil {
+		t.Fatal(err)
+	}
+	got := l.choose()
+	if got.Path != l.previousDataDisk || got.CampaignDir != filepath.Join(filepath.Dir(l.previousDataDisk), "campaigns") || got.InferenceDir != filepath.Join(filepath.Dir(l.previousDataDisk), "inference") {
+		t.Fatalf("lost migrated store: %+v", got)
+	}
+	if _, err := os.Stat(l.dataDisk); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("created replacement store: %v", err)
+	}
+}

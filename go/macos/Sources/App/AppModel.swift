@@ -78,6 +78,11 @@ final class AppModel: ObservableObject {
     @Published var mobileCloudOrganization = ""
     @Published var mobileCloudSelectionLoading = false
     @Published var mobileCloudSelectionError: String?
+    @Published var mobileMeshState = "searching"
+    @Published var mobileMeshDetail = "Searching for Wendy Net peers…"
+    private var mobileRuntimeScope = ""
+    private var mobileLifecycleGeneration = 0
+    private var mobileWasBackgrounded = false
     var mobileCloudSelectionKey: String { mobileCloudAccount + "|" + mobileCloudOrganization }
     var mobileCloudSelectionGeneration = 0
     #endif
@@ -102,6 +107,7 @@ final class AppModel: ObservableObject {
         do {
             #if os(iOS)
             try await client.initializeMobile()
+            try await client.setMobileState(active: false, account: "", organization: "")
             #else
             guard let cli = Bundle.main.url(forAuxiliaryExecutable: "wendy") else {
                 throw WendyError(message: "The bundled Wendy CLI is missing. Rebuild the app with Scripts/build.sh.")
@@ -163,7 +169,17 @@ final class AppModel: ObservableObject {
         #if os(macOS)
         async let robots = UnitreeClient.shared.robots()
         #endif
-        do { nearby = try await client.nearby(); nearbyError = nil }
+        do {
+            #if os(iOS)
+                let scope = mobileCloudSelectionKey
+                let devices = try await client.nearby()
+                guard scope == mobileCloudSelectionKey, !Task.isCancelled else { return }
+                nearby = devices
+            #else
+                nearby = try await client.nearby()
+            #endif
+            nearbyError = nil
+        }
         catch { if !Task.isCancelled { nearbyError = error.localizedDescription } }
         #if os(macOS)
         do {
@@ -179,7 +195,17 @@ final class AppModel: ObservableObject {
         guard initialized, !discovering else { return }
         discovering = true
         defer { discovering = false }
-        do { cloud = try await client.cloud(); cloudError = nil }
+        do {
+            #if os(iOS)
+                let scope = mobileCloudSelectionKey
+                let devices = try await client.cloud()
+                guard scope == mobileCloudSelectionKey, !Task.isCancelled else { return }
+                cloud = devices
+            #else
+                cloud = try await client.cloud()
+            #endif
+            cloudError = nil
+        }
         catch { if !Task.isCancelled { cloudError = error.localizedDescription } }
     }
 
@@ -524,6 +550,87 @@ final class AppModel: ObservableObject {
         }
     }
 }
+
+#if os(iOS)
+    extension AppModel {
+        // Owned by the root scene, independently of the selected device pane.
+        func runMobileMesh(active: Bool) async {
+            guard initialized else { return }
+            mobileLifecycleGeneration += 1
+            let generation = mobileLifecycleGeneration
+            let scope = mobileCloudSelectionKey
+            let changed = scope != mobileRuntimeScope
+            let reconnect = !changed && mobileWasBackgrounded ? selection : nil
+            if !active || changed {
+                deviceChat.stop()
+                hideCameraWall()
+                connectionAttempt = client.beginConnection()
+                connected = nil
+                connectedLite = false
+                connectingDevice = nil
+                apps = []
+                cameraFeeds = []
+                if changed {
+                    selection = nil
+                    nearby = []
+                    cloud = []
+                }
+            }
+            do {
+                try await client.setMobileState(
+                    active: active,
+                    account: mobileCloudAccount,
+                    organization: mobileCloudOrganization
+                )
+                guard generation == mobileLifecycleGeneration, !Task.isCancelled else { return }
+                mobileRuntimeScope = scope
+                mobileWasBackgrounded = !active
+                if !active {
+                    mobileMeshState = "paused"
+                    mobileMeshDetail = "Wendy Net paused in the background."
+                    return
+                }
+                await refreshAccount()
+                if changed { await refreshCloud() }
+                if let reconnect {
+                    if reconnect.transport == .mesh {
+                        // A restarted router must obtain new signed routes before
+                        // reconnecting. A saved selection is not reachability proof.
+                        let deadline = ContinuousClock.now + .seconds(90)
+                        while ContinuousClock.now < deadline {
+                            try Task.checkCancellation()
+                            guard generation == mobileLifecycleGeneration,
+                                selection?.id == reconnect.id else { return }
+                            await refreshNearby()
+                            if nearby.contains(where: { $0.selector == reconnect.selector }) {
+                                await connect(reconnect, force: true)
+                                break
+                            }
+                            try await Task.sleep(for: .seconds(2))
+                        }
+                    } else {
+                        await connect(reconnect, force: true)
+                    }
+                }
+                while !Task.isCancelled {
+                    let summary = try await client.mobileMeshSummary()
+                    try Task.checkCancellation()
+                    guard generation == mobileLifecycleGeneration else { return }
+                    mobileMeshState = summary.0
+                    mobileMeshDetail = summary.1
+                    await refreshNearby()
+                    try await Task.sleep(for: .seconds(5))
+                }
+            } catch {
+                if !Task.isCancelled && generation == mobileLifecycleGeneration {
+                    mobileMeshState = "unavailable"
+                    mobileMeshDetail = error.localizedDescription
+                    nearbyError = error.localizedDescription
+                }
+            }
+        }
+    }
+#endif
 
 struct AppDeletion {
     let app: String

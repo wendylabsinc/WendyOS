@@ -141,14 +141,16 @@ type storeLayout struct {
 	legacy string
 	// dataPartition is named in the advice of a space error, and only when
 	// it really is a separate filesystem larger than the store's.
-	dataPartition string
+	dataPartition    string
+	previousDataDisk string // Earlier native-app builds used this complete store.
 }
 
 var defaultStoreLayout = storeLayout{
-	dataMount:     "/var/lib/wendy",
-	dataDisk:      DataDiskRoot,
-	legacy:        LegacyRoot,
-	dataPartition: "/data",
+	dataMount:        "/var/lib/wendy",
+	dataDisk:         DataDiskRoot,
+	legacy:           LegacyRoot,
+	dataPartition:    "/data",
+	previousDataDisk: "/data/wendy-agent/data/episodes",
 }
 
 // choose picks the default store. DataDiskRoot wins only when it is really on
@@ -174,6 +176,13 @@ func (l storeLayout) choose() StoreLocation {
 	}
 	if data.size <= legacy.size {
 		return keep(fmt.Sprintf("%s is on its own filesystem, but it (%s) is not larger than the one holding %s (%s)", l.dataMount, humanBytes(data.size), l.legacy, humanBytes(legacy.size)))
+	}
+	// Preserve a store already migrated by the native-app branch. Do not hide
+	// its episodes, plans or inference state by choosing another empty folder.
+	if l.previousDataDisk != "" {
+		if info, err := os.Stat(l.previousDataDisk); err == nil && info.IsDir() {
+			return besideStore(StoreLocation{Path: l.previousDataDisk, Reason: "retained the native app's existing data-partition store"})
+		}
 	}
 	if err := os.MkdirAll(l.dataDisk, 0o750); err != nil {
 		return keep(fmt.Sprintf("could not create %s: %v", l.dataDisk, err))

@@ -147,13 +147,13 @@ func legacyLiteTestPKI(t *testing.T, orgID int32, serverURN string) (*config.Aut
 	pool := x509.NewCertPool()
 	pool.AddCert(root)
 	return &config.AuthConfig{Name: fmt.Sprintf("legacy-org-%d", orgID), Certificates: []config.CertificateInfo{{
-			OrganizationID: int(orgID), UserID: "test-user",
-			PemCertificate:      string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: operator.Raw})),
-			PemCertificateChain: string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: root.Raw})),
-			PemPrivateKey:       operatorKeyPEM,
-		}}}, &tls.Config{
-			MinVersion: tls.VersionTLS12, MaxVersion: tls.VersionTLS12,
-			Certificates: []tls.Certificate{{Certificate: [][]byte{device.Raw}, PrivateKey: deviceKey}},
-			ClientCAs:    pool, ClientAuth: tls.RequireAndVerifyClientCert,
-		}
+		OrganizationID: int(orgID), UserID: "test-user",
+		PemCertificate:      string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: operator.Raw})),
+		PemCertificateChain: string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: root.Raw})),
+		PemPrivateKey:       operatorKeyPEM,
+	}}}, &tls.Config{
+		MinVersion: tls.VersionTLS12, MaxVersion: tls.VersionTLS12,
+		Certificates: []tls.Certificate{{Certificate: [][]byte{device.Raw}, PrivateKey: deviceKey}},
+		ClientCAs:    pool, ClientAuth: tls.RequireAndVerifyClientCert,
+	}
 }
