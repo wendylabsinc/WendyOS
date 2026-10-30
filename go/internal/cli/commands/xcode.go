@@ -454,6 +454,9 @@ func runMacOSXcodeWithAgent(ctx context.Context, conn *grpcclient.AgentConnectio
 	if err := checkLocalBuildSpace(toolchainBuildSpaceDirs(cwd), []string{wendyCacheClearStep}); err != nil {
 		return err
 	}
+	if err := checkDeviceDiskSpace(versionResp); err != nil {
+		return err
+	}
 
 	// Find the .xcodeproj directory.
 	xp, err := findXcodeProj(cwd)

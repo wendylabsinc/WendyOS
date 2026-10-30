@@ -505,6 +505,15 @@ func runMultiServiceWithAgent(ctx context.Context, conn *grpcclient.AgentConnect
 		}
 	}
 
+	// Images that will be sent need room on the device, whichever machine
+	// builds them.
+	if len(skip) < len(services) {
+		if err := checkDeviceDiskSpace(versionResp); err != nil {
+			return err
+		}
+		ctx = withDeviceStorage(ctx, versionResp)
+	}
+
 	// Build all service images in parallel, then create and start containers.
 	// With --build-host the builds happen on that device instead and it
 	// delivers each image here; everything from this point on is identical,
