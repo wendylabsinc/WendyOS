@@ -5,11 +5,15 @@ import SwiftUI
 /// Lens cones require calibration; they do not imply measured coverage.
 @MainActor
 public struct SiteScene: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let modelURL: URL
     let site: Site
     let cameraGeometry: [UUID: SiteCameraGeometry]
     let colorSources: [UUID: SiteCameraColorSource]
     let colorStatus: ([UUID: String]) -> Void
+    let people: [SitePersonTrack]
+    let selectingPeopleFloor: Bool
+    let selectPeopleFloor: (SitePoint) -> Void
     let placingCamera: UUID?
     let select: (UUID) -> Void
     let place: (UUID, SitePoint) -> Void
@@ -25,6 +29,9 @@ public struct SiteScene: View {
         cameraGeometry: [UUID: SiteCameraGeometry] = [:],
         colorSources: [UUID: SiteCameraColorSource] = [:],
         colorStatus: @escaping ([UUID: String]) -> Void = { _ in },
+        people: [SitePersonTrack] = [],
+        selectingPeopleFloor: Bool = false,
+        selectPeopleFloor: @escaping (SitePoint) -> Void = { _ in },
         placingCamera: UUID?,
         select: @escaping (UUID) -> Void,
         place: @escaping (UUID, SitePoint) -> Void,
@@ -39,6 +46,9 @@ public struct SiteScene: View {
         self.cameraGeometry = cameraGeometry
         self.colorSources = colorSources
         self.colorStatus = colorStatus
+        self.people = people
+        self.selectingPeopleFloor = selectingPeopleFloor
+        self.selectPeopleFloor = selectPeopleFloor
         self.placingCamera = placingCamera
         self.select = select
         self.place = place
@@ -50,13 +60,17 @@ public struct SiteScene: View {
     }
 
     public var body: some View {
-        TimelineView(.animation(minimumInterval: 0.25, paused: !fog.enabled && colorSources.isEmpty)) { context in
+        TimelineView(.animation(minimumInterval: 0.25, paused: !fog.enabled && colorSources.isEmpty && people.isEmpty)) { context in
             SceneSurface(
                 modelURL: modelURL,
                 site: site,
                 cameraGeometry: cameraGeometry,
                 colorSources: colorSources,
                 colorStatus: colorStatus,
+                people: people,
+                reduceMotion: reduceMotion,
+                selectingPeopleFloor: selectingPeopleFloor,
+                selectPeopleFloor: selectPeopleFloor,
                 placingCamera: placingCamera,
                 select: select,
                 place: place,
@@ -85,6 +99,10 @@ private struct SceneSurface {
     var cameraGeometry: [UUID: SiteCameraGeometry]
     var colorSources: [UUID: SiteCameraColorSource]
     var colorStatus: ([UUID: String]) -> Void
+    var people: [SitePersonTrack]
+    var reduceMotion: Bool
+    var selectingPeopleFloor: Bool
+    var selectPeopleFloor: (SitePoint) -> Void
     var placingCamera: UUID?
     var select: (UUID) -> Void
     var place: (UUID, SitePoint) -> Void
@@ -100,6 +118,8 @@ private struct SceneSurface {
         var parent: SceneSurface
         var loadedURL: URL?
         var markers = SCNNode()
+        var peopleRoot = SCNNode()
+        var personMarkers: [UUID: SitePersonMarker] = [:]
         var model = SCNNode()
         weak var view: SCNView?
         var needsFraming = true
@@ -136,6 +156,9 @@ private struct SceneSurface {
                     scene.rootNode.addChildNode(model)
                     markers = SCNNode()
                     scene.rootNode.addChildNode(markers)
+                    personMarkers = [:]
+                    peopleRoot = SCNNode()
+                    scene.rootNode.addChildNode(peopleRoot)
                     robotRoot = SCNNode()
                     robotRoot.name = "robot:go2"
                     robotModel = Go2Model.make()
@@ -171,6 +194,7 @@ private struct SceneSurface {
             model.scale = SCNVector3(scale, scale, scale)
             frameOverviewIfNeeded()
             updateRobot()
+            updatePeople()
             colorRenderers = colorRenderers.filter { parent.colorSources[$0.key] != nil }
             var activeColors: [SiteCameraColorRenderer] = []
             var statuses: [UUID: String] = [:]
@@ -354,6 +378,26 @@ private struct SceneSurface {
             lastRobot = state
         }
 
+        private func updatePeople() {
+            let now = Date()
+            let visible = parent.people.filter {
+                (0...SitePeopleTracker.lifetime).contains(now.timeIntervalSince($0.observedAt))
+            }
+            let ids = Set(visible.map(\.id))
+            for id in Array(personMarkers.keys) where !ids.contains(id) {
+                personMarkers.removeValue(forKey: id)?.node.removeFromParentNode()
+            }
+            for person in visible {
+                if let marker = personMarkers[person.id] {
+                    marker.update(person, now: now, reduceMotion: parent.reduceMotion)
+                } else {
+                    let marker = SitePersonMarker(person: person, now: now, reduceMotion: parent.reduceMotion)
+                    personMarkers[person.id] = marker
+                    peopleRoot.addChildNode(marker.node)
+                }
+            }
+        }
+
         func tap(at point: CGPoint, immediate: Bool = false) {
             guard let view else { return }
             let hits = view.hitTest(
@@ -361,7 +405,12 @@ private struct SceneSurface {
                 options: [.searchMode: SCNHitTestSearchMode.all.rawValue,
                           .categoryBitMask: ~(1 << 30)]
             )
-            if let camera = parent.placingCamera,
+            if parent.selectingPeopleFloor {
+                guard let hit = hits.first(where: { isDescendant($0.node, of: model) }),
+                      abs(hit.worldNormal.y) > 0.95 else { return }
+                let p = hit.worldCoordinates
+                parent.selectPeopleFloor(SitePoint(x: Double(p.x), y: Double(p.y), z: Double(p.z)))
+            } else if let camera = parent.placingCamera,
                 let hit = hits.first(where: { isDescendant($0.node, of: model) })
             {
                 let p = hit.worldCoordinates
