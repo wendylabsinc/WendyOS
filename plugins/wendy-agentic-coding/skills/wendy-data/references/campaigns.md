@@ -89,7 +89,7 @@ wendy data download <episode-id> --output ./incident-episode --device <selector>
 `deploy` strictly validates, persists, and arms the plan. It is not a dry-run
 validator. Use a filename to avoid the interactive picker. Capture the returned
 revision and any warnings. Inspect returns the canonical plan even without
-`--json`. An enrolled device's deployment registers `campaign:<name>` in Cloud
+`--json`. An enrolled device's deployment registers `sh.wendy.campaign.<name>` in Cloud
 Apps, using the matching operator session. Registration failures stop deployment;
 `--skip-cloud-registration` supports an intended offline deployment.
 
