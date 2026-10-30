@@ -1205,6 +1205,10 @@ type flashSource struct {
 // downloading what is missing. The caller closes the returned stream.
 func resolveFlashSource(deviceKey, version, storage string, img *imageInfo, noBmap bool) (*flashSource, error) {
 	src := &flashSource{}
+	// localZst is the seekable .zst once it is on disk. It decompresses to the
+	// full image (current manifests publish the same file as the image), so a
+	// full write streams it rather than downloading the image again (WDY-4088).
+	var localZst string
 	// Step 5a: Prefer the seekable-zstd fast path. When the manifest advertises a
 	// .zst for this storage plus a usable bmap (and --no-bmap wasn't passed), we
 	// download only the .zst + bmap and write mapped ranges, skipping holes —
@@ -1212,28 +1216,57 @@ func resolveFlashSource(deviceKey, version, storage string, img *imageInfo, noBm
 	if !noBmap && img.ZstURL != "" && img.BmapURL != "" {
 		zstPath, zerr := resolveSeekableZst(deviceKey, version, storage, img.ZstURL)
 		bmapCandidate, berr := osCachedBmapPath(deviceKey, version, storage)
+		if zerr == nil {
+			localZst = zstPath
+		}
 		switch {
 		case zerr != nil:
 			fmt.Printf("Note: could not fetch seekable image (%v); flashing the full image.\n", zerr)
 		case berr != nil:
 			fmt.Printf("Note: cannot resolve block-map cache path (%v); flashing the full image.\n", berr)
 		default:
+			var parsed *Bmap
 			if derr := downloadBmap(img.BmapURL, bmapCandidate); derr != nil {
-				fmt.Printf("Note: could not fetch block map (%v); flashing the full image.\n", derr)
-			} else if parsed, perr := parseBmap(readFileOrNil(bmapCandidate)); perr != nil {
+				// A block map an earlier run cached will do if it is for an image
+				// of this size; the write still checks every range's checksum.
+				if parsed = cachedBmapFor(bmapCandidate, zstPath); parsed != nil {
+					fmt.Printf("Note: could not fetch block map (%v); using the cached copy.\n", derr)
+				} else {
+					fmt.Printf("Note: could not fetch block map (%v); flashing the full image.\n", derr)
+				}
+			} else if b, perr := parseBmap(readFileOrNil(bmapCandidate)); perr != nil {
 				fmt.Printf("Note: block map unusable (%v); flashing the full image.\n", perr)
 			} else {
+				parsed = b
+			}
+			if parsed != nil {
 				src.seekableZst, src.seekableBmap, src.seekableTotal = zstPath, bmapCandidate, mappedBytes(parsed)
 				src.imageSize = parsed.ImageSize
 			}
 		}
+	} else if img.ZstURL != "" {
+		// --no-bmap, or no block map published: a cached .zst is still the image.
+		if cached, err := osCachedZstPath(deviceKey, version, storage); err == nil {
+			if info, err := os.Stat(cached); err == nil && info.Size() > 0 {
+				fmt.Printf("Using cached seekable image (%s)\n", cached)
+				localZst = cached
+			}
+		}
 	}
 
-	// Step 5b: Fallback path — resolve the .zip/.img stream only when NOT using
-	// the seekable path (so the seekable path never downloads the .zip), and
-	// prepare the legacy block map for it.
+	// Step 5b: Fallback path — write the full image, resolving the .zip/.img
+	// stream only when NOT using the seekable path (so the seekable path never
+	// downloads the .zip), and prepare the legacy block map for it.
 	if src.seekableZst != "" {
 		return src, nil
+	}
+	if localZst != "" {
+		stream, err := streamZstdImage(localZst)
+		if err == nil {
+			src.stream = stream
+			return src, nil
+		}
+		fmt.Printf("Note: could not open %s (%v); flashing the full image.\n", localZst, err)
 	}
 	stream, err := openOSImageStream(deviceKey, img)
 	if err != nil {
@@ -1256,6 +1289,24 @@ func resolveFlashSource(deviceKey, version, storage string, img *imageInfo, noBm
 		}
 	}
 	return src, nil
+}
+
+// cachedBmapFor returns the block map cached at bmapPath when it parses and is
+// for an image the size of the seekable image at zstPath, else nil.
+func cachedBmapFor(bmapPath, zstPath string) *Bmap {
+	b, err := parseBmap(readFileOrNil(bmapPath))
+	if err != nil {
+		return nil
+	}
+	si, err := openSeekableZstd(zstPath)
+	if err != nil {
+		return nil
+	}
+	defer si.Close()
+	if si.Size() != b.ImageSize {
+		return nil
+	}
+	return b
 }
 
 // pickManifestVersion presents an interactive picker for available versions in a
