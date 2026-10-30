@@ -38,6 +38,9 @@ const (
 // Per-OS seams: pickOrinRecoveryDevice, orinStageOne, and runT234Helper
 // (os_install_orin_unix.go / os_install_orin_windows.go).
 func installOrin(ctx context.Context, opts t234InstallOptions) error {
+	if err := opts.Agent.checkArchitecture("arm64"); err != nil {
+		return err
+	}
 	cacheDir, err := osCacheDir()
 	if err != nil {
 		return fmt.Errorf("resolving cache dir: %w", err)
@@ -161,7 +164,7 @@ func installOrin(ctx context.Context, opts t234InstallOptions) error {
 			if err != nil {
 				return false, err
 			}
-			if err := injectRecoveryConfig(filepath.Join(workspace, configRel), creds, name, provJSON, out, detail); err != nil {
+			if err := injectRecoveryConfig(filepath.Join(workspace, configRel), creds, name, provJSON, out, detail, opts.Agent); err != nil {
 				return false, err
 			}
 			flashPlan, err = t234.LoadXMLPlan(layoutPath, workspace, fp.Manifest.RootfsDevice)
@@ -365,14 +368,12 @@ func prepareT234Workspace(fp *flashpack.Flashpack) (workspace, layoutPath string
 	return workspace, filepath.Join(workspace, layoutRel), nil
 }
 
-func injectRecoveryConfig(imagePath string, creds []wendyconf.WifiCredential, deviceName string, provJSON []byte, out io.Writer, detail func(string)) error {
-	detail("downloading agent")
-	agentBinary, agentVer, _, err := resolveAgentArtifact("linux", "arm64", false)
-	if err != nil {
-		fmt.Fprintf(out, "warning: could not download wendy-agent (%v); using the agent baked into the image\n", err)
-	} else {
-		detail("agent " + agentVer)
+func injectRecoveryConfig(imagePath string, creds []wendyconf.WifiCredential, deviceName string, provJSON []byte, out io.Writer, detail func(string), agent *localInstallAgent) error {
+	if err := agent.checkArchitecture("arm64"); err != nil {
+		return err
 	}
+	agentBinary, _ := resolveSeedAgent(out, detail, agent)
+
 	d, err := diskfs.Open(imagePath)
 	if err != nil {
 		return fmt.Errorf("opening per-run config image: %w", err)

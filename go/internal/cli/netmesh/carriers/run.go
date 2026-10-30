@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -150,10 +151,9 @@ func Run(parent context.Context, cfg Config) error {
 				keys = append(keys, key)
 			}
 		}
-		for _, key := range queue.Order(keys, now) {
-			if len(active) >= cfg.Limits.Connections {
-				break
-			}
+		ordered := queue.Order(keys, now)
+		sort.SliceStable(ordered, func(i, j int) bool { return table[ordered[i]].candidate.Cost < table[ordered[j]].candidate.Cost })
+		for _, key := range ordered {
 			e := table[key]
 			c := e.candidate
 			if active[key] != nil || now.Before(e.retry) || !supported[c.Transport] {
@@ -166,6 +166,26 @@ func Run(parent context.Context, cfg Config) error {
 			}
 			peer := cache.peer(c, now, cfg.Limits.AuthenticatedTTL)
 			if hasLink(view, peer, c.Cost, false) {
+				continue
+			}
+			if len(active) >= cfg.Limits.Connections {
+				// A newly attached cable must get a chance even when LAN peers
+				// filled every slot. Drain one more expensive link before dialing
+				// so the existing connection bound remains strict.
+				var worst *attempt
+				for _, a := range active {
+					if a.canceled {
+						return
+					}
+					if a.verified && a.candidate.Cost > c.Cost && (worst == nil || a.candidate.Cost > worst.candidate.Cost) {
+						worst = a
+					}
+				}
+				if worst != nil {
+					worst.canceled = true
+					worst.cancel()
+					return
+				}
 				continue
 			}
 			pending, bleCount := 0, 0

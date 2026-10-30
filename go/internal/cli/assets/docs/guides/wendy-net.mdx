@@ -18,7 +18,7 @@ management connection while changing network settings.
 For devices on the same Ethernet or ordinary Wi-Fi network, run this for each one:
 
 ```sh
-wendy device wendy-net configure --device <device> \
+wendy net configure --device <device> \
   --participate=true --ethernet=true --infrastructure-wifi=true
 ```
 
@@ -41,8 +41,8 @@ require participation, so disable them in the same command if they were enabled.
 ## 3. Check the result
 
 ```sh
-wendy device wendy-net status --device <device>
-wendy device wendy-net topology --device <device>
+wendy net status --device <device>
+wendy net topology --device <device>
 ```
 
 `status` shows saved settings and current runtime state. `topology` shows the
@@ -62,7 +62,7 @@ Choose a device with its own working Internet connection as the gateway. Allow
 it to offer that connection to other enrolled devices:
 
 ```sh
-wendy device wendy-net configure --device <gateway> \
+wendy net configure --device <gateway> \
   --participate=true --share-uplink=true
 ```
 
@@ -70,9 +70,9 @@ On a device that should use the gateway when its own Internet connection is
 unavailable:
 
 ```sh
-wendy device wendy-net configure --device <travelling-device> \
+wendy net configure --device <travelling-device> \
   --participate=true --roam=true
-wendy device wendy-net status --device <travelling-device>
+wendy net status --device <travelling-device>
 ```
 
 Both devices still need enabled Wendy Net connection types and a working route
@@ -132,7 +132,7 @@ only to applications that manage the hardware themselves.
 
 ## Settings reference
 
-Use `wendy device wendy-net configure` with just the options you want to change.
+Use `wendy net configure` with just the options you want to change.
 Every boolean accepts `true` or `false`; omitted options retain their saved values.
 
 | Option | Purpose |

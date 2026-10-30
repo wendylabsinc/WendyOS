@@ -339,3 +339,46 @@ func TestRunUnsupportedRoleWaitsForChangedAdvertisement(t *testing.T) {
 	cancel()
 	wait(t, done)
 }
+
+func TestRunCableReplacesLANWhenAllConnectionSlotsAreFull(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	updates := make(chan []Candidate, 2)
+	entered := make(chan Candidate, 8)
+	done := make(chan error, 1)
+	var mu sync.Mutex
+	running, peak := 0, 0
+	cfg := testConfig(func(ctx context.Context, c Candidate) error {
+		mu.Lock()
+		running++
+		if running > peak {
+			peak = running
+		}
+		mu.Unlock()
+		c.Authenticated(c.Device)
+		entered <- c
+		<-ctx.Done()
+		mu.Lock()
+		running--
+		mu.Unlock()
+		return ctx.Err()
+	}, sourceChannel(updates))
+	cfg.Limits.Connections = 2
+	lan := []Candidate{{Device: testDevice(2), Transport: TCP, Address: "192.0.2.2:43024", Cost: 128}, {Device: testDevice(3), Transport: TCP, Address: "192.0.2.3:43024", Cost: 128}}
+	go func() { done <- Run(ctx, cfg) }()
+	updates <- lan
+	wait(t, entered)
+	wait(t, entered)
+	cable := Candidate{Device: testDevice(4), Transport: TCP, Address: "[fe80::5741:1%en77]:43024", Cost: 64}
+	updates <- append(lan, cable)
+	if got := wait(t, entered); got.Address != cable.Address {
+		t.Fatalf("cable was starved: %+v", got)
+	}
+	cancel()
+	wait(t, done)
+	mu.Lock()
+	defer mu.Unlock()
+	if peak > cfg.Limits.Connections || running != 0 {
+		t.Fatalf("connection bound or drain failed: peak=%d running=%d", peak, running)
+	}
+}

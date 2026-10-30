@@ -32,6 +32,13 @@ func TestCloudLoginFetchesBoundGo2Keys(t *testing.T) {
 		}
 		switch r.URL.Path {
 		case "/login/email":
+			// The live endpoint serves a JavaScript challenge to the copied
+			// Android WebView identity, even with a 200 response status.
+			if strings.Contains(r.UserAgent(), "; wv)") {
+				w.Header().Set("Content-Type", "text/html")
+				fmt.Fprint(w, `<script>document.cookie="EO_Bot_Ssid=fixture";document.cookie="__tst_status=fixture";</script>`)
+				return
+			}
 			if r.Method != http.MethodPost || r.Header.Get("Token") != "" {
 				t.Error("login must POST without token")
 			}
@@ -156,5 +163,69 @@ func TestCloudTransportErrorCannotLeakCredentials(t *testing.T) {
 	_, err := c.Login(context.Background(), "me@example.com", "password-secret")
 	if err == nil || strings.Contains(err.Error(), "secret") {
 		t.Fatalf("transport error was not redacted: %v", err)
+	}
+}
+
+func TestLoginFailureMessagePreservesStageAndCodes(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		status     int
+		body, want string
+		afterLogin bool
+	}{
+		{"login rejected", 200, `{"code":1003,"errorMsg":"password-secret token-secret"}`, "Unitree sign-in failed: Unitree returned code 1003", false},
+		{"robot lookup rejected", 200, `{"code":1001,"errorMsg":"password-secret token-secret"}`, "Unitree sign-in succeeded, but loading your robots failed: Unitree returned code 1001", true},
+		{"service unavailable", 503, `password-secret token-secret`, "the service returned HTTP 503", false},
+		{"rate limited", 429, `password-secret token-secret`, "Wait before retrying", false},
+		{"invalid response", 200, `password-secret token-secret`, "the service returned an invalid response", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if tc.afterLogin && r.URL.Path == "/login/email" {
+					fmt.Fprint(w, `{"code":100,"data":{"accessToken":"token-secret"}}`)
+					return
+				}
+				w.WriteHeader(tc.status)
+				fmt.Fprint(w, tc.body)
+			}))
+			defer server.Close()
+			c, err := NewClient("global")
+			if err != nil {
+				t.Fatal(err)
+			}
+			c.baseURL = server.URL + "/"
+			_, err = c.Login(context.Background(), "robot@example.com", "password-secret")
+			if err == nil {
+				t.Fatal("expected login error")
+			}
+			message := LoginFailureMessage(err)
+			if !strings.Contains(message, tc.want) || strings.Contains(message, "secret") {
+				t.Fatalf("unsafe or incomplete diagnostic: %s", message)
+			}
+		})
+	}
+}
+func TestLoginFailureMessageRedactsUnknownErrors(t *testing.T) {
+	message := LoginFailureMessage(errors.New("password-secret token-secret"))
+	if strings.Contains(message, "secret") || !strings.Contains(message, "Unitree") {
+		t.Fatalf("unsafe fallback: %s", message)
+	}
+}
+
+func TestCloudBrowserChallengeIsNotReportedAsBadPassword(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		fmt.Fprint(w, `<script>document.cookie="EO_Bot_Ssid=server-secret";document.cookie="__tst_status=server-secret";</script>`)
+	}))
+	defer server.Close()
+	c, err := NewClient("global")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.baseURL = server.URL + "/"
+	_, err = c.Login(context.Background(), "robot@example.com", "password-secret")
+	message := LoginFailureMessage(err)
+	if !strings.Contains(message, "browser-verification page") || !strings.Contains(message, "password has not been verified") || strings.Contains(message, "secret") {
+		t.Fatalf("unsafe or misleading challenge message: %s", message)
 	}
 }

@@ -24,8 +24,19 @@ func TestNativeLANUsesBothDeclaredServiceTypesAndPorts(t *testing.T) {
 	}
 	service.TXTRecords["platform"] = "Lite"
 	if len(lanCandidates([]discovery.MDNSService{service}, self, QUIC)) != 0 {
-		t.Fatal("Lite-only role offered to operator TLS before routing through WendyOS")
+		t.Fatal("Lite advertisement without operator capability accepted")
 	}
+	service.TXTRecords["role"] = "embedded-router"
+	service.TXTRecords["protocol"] = "tls-v1"
+	service.TXTRecords["operator_router"] = "1"
+	if got := lanCandidates([]discovery.MDNSService{service}, self, TCP); len(got) != 1 || got[0].Device != peer {
+		t.Fatalf("PSRAM Lite router hints=%+v", got)
+	}
+	service.TXTRecords["operator_router"] = "0"
+	if len(lanCandidates([]discovery.MDNSService{service}, self, TCP)) != 0 {
+		t.Fatal("leaf Lite offered as operator router")
+	}
+
 	service.TXTRecords["platform"] = "WendyOS"
 	service.TXTRecords["role"] = "endpoint"
 	if len(lanCandidates([]discovery.MDNSService{service}, self, QUIC)) != 0 {
