@@ -1573,6 +1573,9 @@ func runSwiftWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cw
 	if err := checkDeviceDiskSpace(versionResp); err != nil {
 		return err
 	}
+	if err := checkAgentEntitlements(versionResp, appCfg); err != nil {
+		return err
+	}
 	if err := swifttoolchain.EnsureSwiftVersion(ctx, &dimWriter{}, os.Stderr); err != nil {
 		return classifyCommandError(errBuilderUnavailable, err)
 	}
@@ -2302,6 +2305,9 @@ func runWithAgentRecorded(ctx context.Context, conn *grpcclient.AgentConnection,
 		return fmt.Errorf("querying device version: %w", err)
 	}
 	printRunDiskUsageWarning(versionResp)
+	if err := checkAgentEntitlements(versionResp, appCfg); err != nil {
+		return err
+	}
 	mark("agent version metadata (in runWithAgent)")
 	activationStep(ctx, "build", map[string]string{"device_reachable": "true"})
 	metrics.deviceType = versionResp.GetDeviceType()

@@ -33,20 +33,38 @@ func runHasExplicitTarget(req mcpgo.CallToolRequest) bool {
 // whole tail would let a build log that merely mentions a phrase decide the code.
 const runDiagnosticWindow = 1024
 
-// diskSpaceRefusal begins every message the CLI prints when it refuses a run
-// for lack of disk space, on this computer or on the device
-// (checkLocalBuildSpace, checkDeviceDiskSpace and deviceImageSpaceError in
-// package commands).
-const diskSpaceRefusal = "not enough free disk space"
+// runRefusals are the failures the CLI reports before it sends anything to
+// the device, by the phrase that begins each message, with what the tool says
+// instead of its generic failure text: unlike other failures, there is no
+// device state to inspect afterwards.
+var runRefusals = []struct{ phrase, message, nextStep string }{
+	{
+		// checkLocalBuildSpace, checkDeviceDiskSpace and deviceImageSpaceError
+		// in package commands.
+		phrase:   "not enough free disk space",
+		message:  "Nothing was deployed: there is too little free disk space for this run, on this computer or on the device. The output names the disk and ways to free space.",
+		nextStep: "Show the user the ways to free disk space in the output and ask before deleting anything, then run again.",
+	},
+	{
+		// checkAgentEntitlements in package commands.
+		phrase:   "the device's agent does not support",
+		message:  "Nothing was deployed: the device's agent does not support an entitlement in wendy.json and would start the app without that access. The output names the entitlement.",
+		nextStep: "Ask the user whether to update the device (wendy device update) or remove the entitlement from wendy.json, then run again.",
+	},
+}
 
-// runRefusedForDiskSpace reports whether a failed `wendy run` child stopped at
-// such a refusal. Each comes before anything is sent to the device, so unlike
-// other failures there is no device state to inspect.
-func runRefusedForDiskSpace(output string) bool {
+// runRefusal returns what the tool reports when a failed `wendy run` child
+// stopped at one of runRefusals, and ok=false for any other failure.
+func runRefusal(output string) (message, nextStep string, ok bool) {
 	if len(output) > runDiagnosticWindow {
 		output = output[len(output)-runDiagnosticWindow:]
 	}
-	return strings.Contains(output, diskSpaceRefusal)
+	for _, r := range runRefusals {
+		if strings.Contains(output, r.phrase) {
+			return r.message, r.nextStep, true
+		}
+	}
+	return "", "", false
 }
 
 // runFailureCode classifies a failed `wendy run` child from its final

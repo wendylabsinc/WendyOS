@@ -430,3 +430,25 @@ func TestRunDiskSpaceRefusalSaysNothingWasDeployed(t *testing.T) {
 		}
 	}
 }
+
+// An entitlement the device's agent does not support stops the run before
+// the build: the result must say nothing was deployed and point at updating
+// the device or the project, with the user's agreement.
+func TestRunEntitlementRefusalSaysNothingWasDeployed(t *testing.T) {
+	s := New(&config.Config{}, nil)
+	s.runCommandFn = func(context.Context, []string, commandTarget, int) (string, bool, error) {
+		return `{"error":{"code":"project_target_mismatch","exit":4,"message":"the device's agent does not support the \"camera\" entitlement in wendy.json (agent version 2026.10.01-120000); it would start the app without that access","retryable":false,"next_steps":["Update the device: wendy device update"]}}` + "\n", false, errors.New("exit status 4")
+	}
+	r, err := s.handleRun(context.Background(), callToolReq("run", map[string]any{"project_path": runProject(t), "device": "robot.local:50051"}))
+	if err != nil || !r.IsError {
+		t.Fatalf("want tool error: %v %v", r, err)
+	}
+	out := structuredMap(t, r)
+	message, _ := out["message"].(string)
+	if strings.Contains(message, "may already have created") || !strings.Contains(message, "entitlement") {
+		t.Fatalf("message = %q; want one saying an unsupported entitlement stopped the run before anything was deployed", message)
+	}
+	if next, _ := out["suggested_next_step"].(string); !strings.Contains(next, "wendy device update") {
+		t.Fatalf("suggested_next_step = %q; want updating the device", next)
+	}
+}
