@@ -699,8 +699,26 @@ func (m *Manager) DeployCampaign(contents []byte) (Campaign, error) {
 	// power cut cannot leave an empty plan behind.
 	m.campaignMu.Lock()
 	defer m.campaignMu.Unlock()
+	// A disarmed campaign stays disarmed when it is deployed again. Disarming
+	// is an operator's decision to switch the campaign off on this device, and
+	// a redeploy (an edited threshold, a teammate's push, a fleet sending the
+	// plan again) must not quietly switch recording back on. Arming is one
+	// explicit command, and the deploy output says the campaign is disarmed.
+	keptDisarmed := false
+	if previous, err := m.Campaign(campaign.Name); err == nil && previous.State == CampaignStateDisarmed {
+		campaign.State, keptDisarmed = CampaignStateDisarmed, true
+		if b, err = json.MarshalIndent(campaign, "", "  "); err != nil {
+			return Campaign{}, err
+		}
+		b = append(b, '\n')
+	}
 	if err := atomicfile.Write(filepath.Join(dir, campaign.Name+".json"), b, 0o640); err != nil {
 		return Campaign{}, err
+	}
+	if keptDisarmed {
+		// Said to this deploy only, not stored with the plan, where it would
+		// outlive the next arm.
+		campaign.Warnings = append(campaign.Warnings, "campaign "+campaign.Name+" is disarmed on this device and stays disarmed: the new plan is stored, but nothing runs until it is armed with `wendy data campaign arm "+campaign.Name+"`")
 	}
 	return campaign, nil
 }

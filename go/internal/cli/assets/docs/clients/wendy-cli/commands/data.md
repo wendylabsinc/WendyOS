@@ -171,8 +171,8 @@ names a microphone is refused with a pointer to `wendy data sources --kind audio
 Every `data` subcommand whose payload is a protocol buffer message prints it as
 canonical protobuf JSON on one compact line, with protocol buffer field names
 exactly as the `.proto` declares them, and unpopulated fields omitted. That
-covers `sources`, `episodes`, `record`, `stop`, `status`, `campaign list`
-and `campaign trigger`.
+covers `sources`, `episodes`, `record`, `stop`, `status`, `campaign list`,
+`campaign trigger`, `campaign arm`, `campaign disarm` and `campaign remove`.
 
 Some payloads are already a JSON document the device produced, and those bytes
 are written through untouched so they stay checkable against the device:
@@ -247,9 +247,74 @@ note.
 | `wendy data campaign list` | List deployed campaigns and revisions. |
 | `wendy data campaign inspect <name>` | Print the canonical deployed plan and state. |
 | `wendy data campaign trigger <name>` | Trigger a campaign manually; `--reason` is stored in the Episode. |
+| `wendy data campaign disarm <name>` | Switch a campaign off without removing it. |
+| `wendy data campaign arm <name>` | Switch a disarmed campaign back on. |
+| `wendy data campaign remove <name>` | Stop a campaign and delete its plan, keeping its Episodes. `--force` stops and seals a recording in progress first. Alias `rm`. |
 
 Event and model-uncertainty triggers are armed immediately after deployment.
 A complete plan is in `Examples/WendyDataCampaign` in the WendyOS repository.
+
+### Switching a campaign off, and removing it
+
+`wendy data campaign disarm <name>` switches a campaign off on the connected
+device. Its triggers stop firing, its agent inference stops, and its camera
+pre-roll is released, so the camera is no longer held for it. The plan, its
+revision and every Episode it recorded are kept, and `campaign list` and
+`campaign inspect` show it as `disarmed`; a campaign with `inference` or event
+notifications reports `inference_status.state: disarmed`. The command returns
+once the inference has stopped (at most 10 seconds). A manual
+`campaign trigger` of a disarmed campaign is refused.
+
+The disarmed state is stored with the plan, so it survives agent restarts and
+reboots. Redeploying a disarmed campaign stores the new plan but keeps the
+campaign disarmed, and the deploy output says so: switching a campaign off is
+an operator's decision on that device, and an edited plan, a teammate's
+deployment or a fleet sending the plan again must not quietly switch recording
+back on. `wendy data campaign arm <name>` reverses it: triggers fire again,
+inference restarts and camera pre-roll is re-armed. Both commands are
+idempotent.
+
+Disarming does not cut short a recording in progress. It finishes its
+`after_trigger` window and is sealed normally; the command names it.
+
+```console
+$ wendy data campaign disarm c920-yolo-live
+Campaign c920-yolo-live: disarmed (revision 1a2b3c4d5e6f)
+Its triggers and inference are stopped and its camera pre-roll is released. The plan and its episodes are kept.
+Arm it again with: wendy data campaign arm c920-yolo-live
+
+$ wendy data campaign list
+CAMPAIGN	STATE	REVISION	FLEET
+c920-yolo-live	disarmed	1a2b3c4d5e6f
+```
+
+`wendy data campaign remove <name>` stops the campaign the same way, then
+deletes its stored plan, so it is no longer listed, triggered or restored at
+boot. Every Episode it recorded is kept: they stay inspectable and
+downloadable, and Episodes still waiting to upload follow the removed plan's
+`upload.when` and `upload.max_rate`, which the device keeps for that purpose.
+The Cloud app registration is also left in place for those uploads. A
+campaign that is recording is refused, naming the Episode; `--force` stops and
+seals that recording first, then removes the campaign. Deploying the same name
+again starts a new, armed campaign.
+
+```console
+$ wendy data campaign remove c920-yolo-live
+Error: campaign c920-yolo-live is recording episode 20261027T101500Z-6c1f; wait for it to be sealed, or remove the campaign with --force to stop and seal that recording first
+$ wendy data campaign remove c920-yolo-live --force
+Stopped and sealed its recording first: episode 20261027T101500Z-6c1f (complete).
+Removed campaign c920-yolo-live (revision 1a2b3c4d5e6f).
+Its episodes are kept; list them with: wendy data episodes
+```
+
+A campaign whose plan names a `fleet` is still switched off or removed on the
+connected device only. Disarming is the durable choice for one device in a
+fleet, because a disarmed campaign stays disarmed when the plan is deployed
+again; a removed one comes back armed. Both commands print a warning for a
+fleet campaign.
+
+An agent that predates these commands is reported as needing
+`wendy device update`.
 
 ### Deployment and Cloud registration
 
@@ -276,7 +341,7 @@ and are ignored when `notify.on` is `episode_committed`. The immediate modes
 |---|---|---|
 | `version` | yes | Campaign schema version the author wrote the file against. This release supports version `1`; higher versions are a deploy-time error. |
 | `name` | yes | Unique device-local name using letters, numbers, `.`, `-`, or `_`; maximum 128 characters. |
-| `fleet` | no | Fleet selector retained with the plan. A direct device deployment applies to the connected device. |
+| `fleet` | no | Fleet selector retained with the plan. A direct device deployment applies to the connected device, and so do `campaign disarm` and `campaign remove`. |
 | `sources` | yes | One or more source entries. |
 | `capture` | yes | Buffer, post-trigger duration, and triggers. |
 | `upload` | yes | Upload condition, optional logical destination, and optional rate cap. |

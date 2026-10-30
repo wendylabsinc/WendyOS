@@ -68,7 +68,7 @@ func newDataCmd() *cobra.Command {
 
 func newDataCampaignCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "campaign", Short: "Deploy and run flight-recorder campaign plans"}
-	cmd.AddCommand(newDataCampaignDeployCmd(), newDataCampaignListCmd(), newDataCampaignInspectCmd(), newDataCampaignTriggerCmd())
+	cmd.AddCommand(newDataCampaignDeployCmd(), newDataCampaignListCmd(), newDataCampaignInspectCmd(), newDataCampaignTriggerCmd(), newDataCampaignArmCmd(), newDataCampaignDisarmCmd(), newDataCampaignRemoveCmd())
 	return cmd
 }
 
