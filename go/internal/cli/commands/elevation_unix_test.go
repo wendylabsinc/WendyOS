@@ -152,7 +152,7 @@ func TestBuildSudoReexecArgs(t *testing.T) {
 // WENDY_CONFIG_DIR sent its writes to $HOME/.wendy instead.
 func TestThorSudoPreserveEnvKeepsWendySettings(t *testing.T) {
 	kept := strings.Split(strings.TrimPrefix(thorSudoPreserveEnv, "--preserve-env="), ",")
-	for _, want := range []string{"WENDY_ANALYTICS", "WENDY_CONFIG_DIR", "WENDY_TELEMETRY_ATTEMPT_ID", "WENDY_TELEMETRY_ENTRYPOINT"} {
+	for _, want := range []string{"WENDY_ANALYTICS", "WENDY_CONFIG_DIR", "WENDY_TELEMETRY_ATTEMPT_ID", "WENDY_TELEMETRY_ENTRYPOINT", "WENDY_DESKTOP_INSTALLER"} {
 		found := false
 		for _, k := range kept {
 			if k == want {

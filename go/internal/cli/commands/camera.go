@@ -41,6 +41,7 @@ func newCameraCmd() *cobra.Command {
 		// plus depth aligned to it, with a declared-requirement refusal. See
 		// camera_frames.go.
 		newCameraFramesCmd(),
+		newCameraMetadataCmd(),
 		newCameraLoginCmd(),
 		newCameraForgetCmd(),
 		newCameraTestCmd(),

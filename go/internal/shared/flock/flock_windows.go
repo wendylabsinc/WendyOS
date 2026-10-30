@@ -9,6 +9,11 @@ import (
 	"golang.org/x/sys/windows"
 )
 
+// Lock waits until an exclusive file lock is available.
+func Lock(f *os.File) error {
+	return windows.LockFileEx(windows.Handle(f.Fd()), windows.LOCKFILE_EXCLUSIVE_LOCK, 0, 1, 0, new(windows.Overlapped))
+}
+
 // TryLock attempts a non-blocking exclusive lock on f via LockFileEx. It
 // returns (true, nil) when the lock was acquired, (false, nil) when another
 // process holds it, and a non-nil error for any other failure.

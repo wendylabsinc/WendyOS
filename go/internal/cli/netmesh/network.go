@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/wendylabsinc/WendyOS/go/babel"
+	"github.com/wendylabsinc/wendy/go/internal/agent/localmesh"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshoperator"
 	"gvisor.dev/gvisor/pkg/buffer"
@@ -40,6 +41,7 @@ type Network struct {
 	routes      map[netip.Addr]babel.LinkID
 	once        sync.Once
 	operations  sync.WaitGroup
+	internet    *InternetTunnel
 }
 
 func NewNetwork(self meshid.Device) (*Network, error) {
@@ -48,8 +50,8 @@ func NewNetwork(self meshid.Device) (*Network, error) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	n := &Network{self: self.MeshAddress(), ctx: ctx, cancel: cancel, done: make(chan struct{}), ports: map[babel.LinkID]*packetPort{}, routes: map[netip.Addr]babel.LinkID{}}
-	n.stack = stack.New(stack.Options{NetworkProtocols: []stack.NetworkProtocolFactory{ipv6.NewProtocol}, TransportProtocols: []stack.TransportProtocolFactory{tcp.NewProtocol, udp.NewProtocol, icmp.NewProtocol6}})
-	n.endpoint = channel.New(128, 1280, "")
+	n.stack = stack.New(stack.Options{NetworkProtocols: []stack.NetworkProtocolFactory{ipv6.NewProtocol}, TransportProtocols: []stack.TransportProtocolFactory{tcp.NewProtocol, udp.NewProtocol, icmp.NewProtocol6, ipInIPv6(4), ipInIPv6(41)}})
+	n.endpoint = channel.New(128, localmesh.TunnelMTU, "")
 	if err := n.stack.CreateNIC(1, n.endpoint); err != nil {
 		cancel()
 		n.stack.Close()
@@ -64,6 +66,8 @@ func NewNetwork(self meshid.Device) (*Network, error) {
 	subnet, _ := tcpip.NewSubnet(tcpip.AddrFrom16(meshid.MeshPrefix.Addr().As16()), tcpip.MaskFromBytes(net.CIDRMask(48, 128)))
 	operatorSubnet, _ := tcpip.NewSubnet(tcpip.AddrFrom16(meshoperator.Prefix.Addr().As16()), tcpip.MaskFromBytes(net.CIDRMask(48, 128)))
 	n.stack.SetRouteTable([]tcpip.Route{{Destination: subnet, NIC: 1}, {Destination: operatorSubnet, NIC: 1}})
+	n.stack.SetTransportProtocolHandler(4, n.receiveInternet)
+	n.stack.SetTransportProtocolHandler(41, n.receiveInternet)
 	go func() {
 		defer close(n.done)
 		for {

@@ -9,9 +9,9 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/pem"
 	"fmt"
-	"github.com/wendylabsinc/wendy/go/internal/agent/bleprovider"
 	"io"
 	"math/big"
 	"net"
@@ -20,8 +20,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wendylabsinc/wendy/go/internal/agent/bleprovider"
 	"github.com/wendylabsinc/wendy/go/internal/cli/netmesh/carriers"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
+	"github.com/wendylabsinc/wendy/go/internal/shared/meshalpn"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshoperatorlink"
 )
@@ -37,7 +39,7 @@ func (idleBLEPacketEndpoint) Inject([]byte) error { return nil }
 // The native radio is substituted by a stream. TLS, primary identity, signed
 // operator proof, userspace endpoint and same-TLS management are production.
 func TestOperatorBLEAttachmentUsesPrimaryProofAndSharedTLS(t *testing.T) {
-	for _, algorithm := range []string{"P256", "MLDSA65", "P256-auto", "MLDSA65-auto"} {
+	for _, algorithm := range []string{"P256", "MLDSA65", "P256-auto", "MLDSA65-auto", "P256-auto-known-issuer"} {
 		t.Run(algorithm, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
@@ -82,12 +84,39 @@ func TestOperatorBLEAttachmentUsesPrimaryProofAndSharedTLS(t *testing.T) {
 				}
 			}
 			certificate := issue(2, principal, signer)
+			chainPEM := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: rootDER}))
+			knownIssuer := strings.Contains(algorithm, "known-issuer")
+			if knownIssuer {
+				// A deployed router can have cached this operator's intermediate
+				// from an earlier installation. Its TLS verifier supports omission,
+				// but its router-role verifier still needs the full wire chain.
+				caKey := key()
+				ca := &x509.Certificate{SerialNumber: big.NewInt(4), Subject: pkix.Name{CommonName: "Operator Authority"}, NotBefore: now.Add(-time.Hour), NotAfter: now.Add(time.Hour), IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign}
+				caDER, err := x509.CreateCertificate(rand.Reader, ca, root, caKey.Public(), rootKey)
+				if err != nil {
+					t.Fatal(err)
+				}
+				ca, err = x509.ParseCertificate(caDER)
+				if err != nil {
+					t.Fatal(err)
+				}
+				leaf, err := x509.ParseCertificate(certificate.Certificate[0])
+				if err != nil {
+					t.Fatal(err)
+				}
+				leafDER, err := x509.CreateCertificate(rand.Reader, leaf, ca, signer.Public(), caKey)
+				if err != nil {
+					t.Fatal(err)
+				}
+				certificate.Certificate = [][]byte{leafDER, caDER, rootDER}
+				chainPEM = string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caDER})) + chainPEM
+			}
 			serverCertificate := issue(3, router.Principal(), key())
 			privateDER, err := x509.MarshalPKCS8PrivateKey(signer)
 			if err != nil {
 				t.Fatal(err)
 			}
-			certificateInfo := config.CertificateInfo{PrincipalURI: principal, PemCertificate: string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certificate.Certificate[0]})), PemCertificateChain: string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: rootDER})), PemPrivateKey: string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: privateDER}))}
+			certificateInfo := config.CertificateInfo{PrincipalURI: principal, PemCertificate: string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certificate.Certificate[0]})), PemCertificateChain: chainPEM, PemPrivateKey: string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: privateDER}))}
 			left, right := net.Pipe()
 			defer left.Close()
 			defer right.Close()
@@ -102,7 +131,13 @@ func TestOperatorBLEAttachmentUsesPrimaryProofAndSharedTLS(t *testing.T) {
 			serverDone := make(chan error, 1)
 			admitted := make(chan *meshoperatorlink.RouterLink, 1)
 			go func() {
-				secure := tls.Server(right, &tls.Config{MinVersion: tls.VersionTLS13, MaxVersion: tls.VersionTLS13, Certificates: []tls.Certificate{serverCertificate}, ClientAuth: tls.RequireAnyClientCert, NextProtos: []string{meshoperatorlink.RouterALPN}, CurvePreferences: []tls.CurveID{tls.X25519}, SessionTicketsDisabled: true})
+				serverConfig := &tls.Config{MinVersion: tls.VersionTLS13, MaxVersion: tls.VersionTLS13, Certificates: []tls.Certificate{serverCertificate}, ClientAuth: tls.RequireAnyClientCert, NextProtos: []string{meshoperatorlink.RouterALPN}, CurvePreferences: []tls.CurveID{tls.X25519}, SessionTicketsDisabled: true}
+				if knownIssuer {
+					material := meshalpn.NewCertificates(serverCertificate, []*x509.Certificate{root})
+					material.Remember(certificate.Certificate, now)
+					material.ConfigureServer(serverConfig)
+				}
+				secure := tls.Server(right, serverConfig)
 				if err := secure.HandshakeContext(ctx); err != nil {
 					serverDone <- err
 					return
@@ -129,7 +164,7 @@ func TestOperatorBLEAttachmentUsesPrimaryProofAndSharedTLS(t *testing.T) {
 				}
 			}()
 			options := Options{CarrierSources: []carriers.Source{}, Certificate: certificateInfo, StateDirectory: t.TempDir(), RouterAddress: "peripheral.fixture", RouterUUID: router.UUID().String(), Transport: "ble"}
-			if strings.HasSuffix(algorithm, "-auto") {
+			if strings.Contains(algorithm, "-auto") {
 				id := router.UUID()
 				options.Automatic = true
 				options.RouterAddress = ""

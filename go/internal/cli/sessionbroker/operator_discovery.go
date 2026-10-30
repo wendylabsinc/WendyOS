@@ -28,7 +28,7 @@ var browseOperatorLAN func(context.Context, string) (<-chan discovery.MDNSServic
 // Open still proves the exact advertised device and selected operator tenant.
 func operatorLANCandidate(service discovery.MDNSService, operator meshoperator.Operator) (OperatorSpec, bool) {
 	txt := service.TXTRecords
-	if txt["platform"] != "WendyOS" || txt["protocol"] != "tls-v1" || txt["version"] != "1" || txt["role"] != "router" {
+	if !((txt["platform"] == "WendyOS" && txt["role"] == "router") || (txt["platform"] == "Lite" && txt["role"] == "embedded-router" && txt["operator_router"] == "1")) || txt["protocol"] != "tls-v1" || txt["version"] != "1" {
 		return OperatorSpec{}, false
 	}
 	peer, err := meshid.DeviceFromPrincipal(txt["principal"])

@@ -361,3 +361,20 @@ func TestPullOllamaModelCancellation(t *testing.T) {
 		t.Fatalf("error = %v", err)
 	}
 }
+
+func TestDevicePullModelReportsByteProgress(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/pull" {
+			t.Errorf("unexpected path %s", r.URL.Path)
+		}
+		fmt.Fprintln(w, `{"status":"pulling file","completed":25,"total":100}`)
+		fmt.Fprintln(w, `{"status":"success"}`)
+	}))
+	defer server.Close()
+	p := &httpProvider{config: Config{Provider: "ollama", BaseURL: server.URL + "/v1"}, client: server.Client()}
+	var updates []ModelPullProgress
+	err := pullOllamaModelProgress(context.Background(), p, "qwen3:4b", func(update ModelPullProgress) { updates = append(updates, update) })
+	if err != nil || len(updates) != 2 || updates[0].Completed != 25 || updates[0].Total != 100 || updates[1].Total != 0 {
+		t.Fatalf("byte progress: %+v, %v", updates, err)
+	}
+}

@@ -667,6 +667,9 @@ func lanAgentPort(dev models.LANDevice) int {
 }
 
 func lanAgentAddresses(dev models.LANDevice) []string {
+	if dev.Mesh {
+		return []string{dev.Hostname}
+	}
 	port := lanAgentPort(dev)
 
 	ip, hostname := strings.TrimSpace(dev.IPAddress), strings.TrimSpace(dev.Hostname)
@@ -745,6 +748,24 @@ func lanDialCandidates(ctx context.Context, dev models.LANDevice) []string {
 // returns the first one that answers GetAgentVersion, along with whether that
 // connection used mTLS.
 func resolveLANAgentVersion(ctx context.Context, dev models.LANDevice) (string, bool, *agentpb.GetAgentVersionResponse, error) {
+	if dev.Mesh {
+		// Never send mesh ULAs through the host network or probe another identity.
+		picked, err := connectMeshSelector(ctx, dev.Hostname)
+		if err != nil {
+			return "", false, nil, err
+		}
+		defer picked.Close()
+		version, ok := picked.Agent.CachedAgentVersion()
+		if !ok {
+			version, err = picked.Agent.AgentService.GetAgentVersion(ctx, &agentpb.GetAgentVersionRequest{})
+			if err != nil {
+				return "", false, nil, err
+			}
+			picked.Agent.CacheAgentVersion(version)
+		}
+		return dev.Hostname, true, version, nil
+	}
+
 	// connectWithAutoTLSDiagnostics tries every stored org cert in turn, so the
 	// per-address budget must cover all of them — otherwise a device whose org
 	// isn't the user's first cert is cancelled before its cert is reached, even
@@ -1533,6 +1554,9 @@ func pinKeyForLANDevice(d *models.LANDevice) string {
 // pin first) or `wendy device unpin <host>` is the way back — a re-pin has to be
 // an act aimed at a specific device, not a row in a list mDNS filled in.
 func connectPickedLANDevice(ctx context.Context, d *models.DiscoveredDevice, addr string, suppressUpdateCheck bool) (*SelectedDevice, error) {
+	if d.LAN != nil && d.LAN.Mesh {
+		return connectMeshSelector(ctx, d.LAN.Hostname)
+	}
 	if name, matched, err := simulatorName(d.LAN.ID); err != nil {
 		return nil, err
 	} else if matched {
@@ -3929,6 +3953,7 @@ func mergePickerItem(existing *tui.PickerItem, incoming tui.PickerItem) {
 
 	// Rebuild the type string from the merged transports.
 	existing.Type = md.ConnectionTypes()
+	existing.OS = md.DisplayOS()
 
 	// Propagate security status: LAN probes determine mTLS, BLE doesn't. Once
 	// we know a device is insecure (or secure), update the existing item.
@@ -4019,11 +4044,11 @@ func externalProviderPickerItem(prov providers.DeviceProvider, dev *models.Exter
 			IdentityKey:  models.CanonicalDevicePrincipal("spiffe://wendy.sh/tenant/" + dev.ConnectionInfo["tenantId"] + "/device/" + dev.LiteDedupID()),
 			Name:         dev.DisplayName,
 			DedupKey:     dev.LiteDedupID(),
-			Type:         dev.ConnectionType() + " (Lite)",
+			Type:         dev.ConnectionType(),
 			Address:      dev.ConnectionInfo["ip"],
 			Insecure:     liteExternalInsecure(dev),
 			AgentVersion: dev.AgentVersion,
-			OS:           dev.OS,
+			OS:           "Wendy Lite",
 			OSVersion:    dev.OSVersion,
 			Value: &pickerEntry{mergedDevice: &models.DiscoveredDevice{
 				DisplayName:     dev.DisplayName,
@@ -4290,20 +4315,20 @@ func pickDeviceWithCloudAuth(ctx context.Context, excludeProviders map[string]bo
 				if err == nil && len(bleDevices) > 0 {
 					var items []tui.PickerItem
 					for i := range bleDevices {
-						connType := "BLE"
+						os := bleDevices[i].OS
 						if !bleDevices[i].IsWendyAgent() {
-							connType = "BLE (Lite)"
+							os = "Wendy Lite"
 						}
 						items = append(items, tui.PickerItem{
 							Name:     bleDevices[i].DisplayName,
 							DedupKey: deviceDedupKey(bleDevices[i].HostKey(), bleDevices[i].DisplayName),
 							SortKey:  deviceSortKey(bleDevices[i].DisplayName, ""),
-							Type:     connType,
+							Type:     "BLE",
 							Address:  bleDevices[i].Address,
 							// A Lite device reports firmware here, not an agent version.
 							AgentVersion:  bleDevices[i].AgentVersion,
 							AgentOutdated: bleDevices[i].IsWendyAgent() && agentBehindCLI(version.Version, bleDevices[i].AgentVersion),
-							OS:            bleDevices[i].OS,
+							OS:            os,
 							OSVersion:     bleDevices[i].OSVersion,
 							Value: &pickerEntry{mergedDevice: &models.DiscoveredDevice{
 								DisplayName:     bleDevices[i].DisplayName,
@@ -4414,15 +4439,23 @@ func lanPickerItem(dev models.LANDevice, insecure bool, probe tui.ProbeState) tu
 	if probe != tui.ProbePending {
 		hint = lanProbeHint(&devCopy)
 	}
+	kind := "LAN"
+	if dev.Mesh {
+		kind = "Mesh"
+	}
+	os := dev.OS
+	if dev.WendyLite {
+		os = "Wendy Lite"
+	}
 	return tui.PickerItem{
 		IdentityKey:   models.CanonicalDevicePrincipal(dev.PrincipalURI),
 		Name:          dev.DisplayName,
-		Type:          "LAN",
+		Type:          kind,
 		USB:           dev.USB,
 		Address:       preferredLANAddress(dev),
 		AgentVersion:  dev.AgentVersion,
 		AgentOutdated: agentBehindCLI(version.Version, dev.AgentVersion),
-		OS:            dev.OS,
+		OS:            os,
 		OSVersion:     dev.OSVersion,
 		Provisioned:   lanProvisionedDisplay(&devCopy),
 		Hint:          hint,

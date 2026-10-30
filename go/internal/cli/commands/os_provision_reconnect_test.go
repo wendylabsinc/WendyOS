@@ -131,7 +131,7 @@ func TestProvisionConfigWithRetry_DisconnectedDriveIsFoundAgainByIdentity(t *tes
 	var attached bool
 	var err error
 	out, _ := captureCommandStdout(t, func() error {
-		got, attached, err = provisionConfigWithRetry(context.Background(), original, nil, "brave-dolphin", nil, true)
+		got, attached, err = provisionConfigWithRetry(context.Background(), original, nil, "brave-dolphin", nil, true, nil)
 		return nil
 	})
 
@@ -168,7 +168,7 @@ func TestProvisionConfigWithRetry_DisconnectedDriveNotFoundIsNeverWritten(t *tes
 	var attached bool
 	var err error
 	out, _ := captureCommandStdout(t, func() error {
-		_, attached, err = provisionConfigWithRetry(context.Background(), drive{DevicePath: "/dev/disk8"}, nil, "brave-dolphin", nil, true)
+		_, attached, err = provisionConfigWithRetry(context.Background(), drive{DevicePath: "/dev/disk8"}, nil, "brave-dolphin", nil, true, nil)
 		return nil
 	})
 
@@ -203,7 +203,7 @@ func TestProvisionConfigWithRetry_AmbiguousMatchIsNeverWritten(t *testing.T) {
 
 	var err error
 	out, _ := captureCommandStdout(t, func() error {
-		_, _, err = provisionConfigWithRetry(context.Background(), drive{DevicePath: "/dev/disk8"}, nil, "brave-dolphin", nil, true)
+		_, _, err = provisionConfigWithRetry(context.Background(), drive{DevicePath: "/dev/disk8"}, nil, "brave-dolphin", nil, true, nil)
 		return nil
 	})
 
@@ -237,7 +237,7 @@ func TestProvisionConfigWithRetry_CancelWhileWaitingStops(t *testing.T) {
 	var attached bool
 	var err error
 	out, _ := captureCommandStdout(t, func() error {
-		_, attached, err = provisionConfigWithRetry(ctx, drive{DevicePath: "/dev/disk8"}, nil, "brave-dolphin", nil, true)
+		_, attached, err = provisionConfigWithRetry(ctx, drive{DevicePath: "/dev/disk8"}, nil, "brave-dolphin", nil, true, nil)
 		return nil
 	})
 
@@ -271,7 +271,7 @@ func TestProvisionConfigWithRetry_DisconnectWithoutIdentityStops(t *testing.T) {
 	var attached bool
 	var err error
 	out, _ := captureCommandStdout(t, func() error {
-		_, attached, err = provisionConfigWithRetry(context.Background(), drive{DevicePath: "/dev/disk8"}, nil, "brave-dolphin", nil, true)
+		_, attached, err = provisionConfigWithRetry(context.Background(), drive{DevicePath: "/dev/disk8"}, nil, "brave-dolphin", nil, true, nil)
 		return nil
 	})
 
@@ -301,7 +301,7 @@ func TestProvisionConfigWithRetry_RescansBeforeFingerprinting(t *testing.T) {
 	}
 
 	_, _ = captureCommandStdout(t, func() error {
-		provisionConfigWithRetry(context.Background(), drive{DevicePath: "/dev/sdc"}, nil, "brave-dolphin", nil, true)
+		provisionConfigWithRetry(context.Background(), drive{DevicePath: "/dev/sdc"}, nil, "brave-dolphin", nil, true, nil)
 		return nil
 	})
 
@@ -324,7 +324,7 @@ func TestProvisionConfigWithRetry_NonInteractiveDisconnect(t *testing.T) {
 	var attached bool
 	var err error
 	out, _ := captureCommandStdout(t, func() error {
-		_, attached, err = provisionConfigWithRetry(context.Background(), drive{DevicePath: "/dev/disk8"}, nil, "brave-dolphin", nil, true)
+		_, attached, err = provisionConfigWithRetry(context.Background(), drive{DevicePath: "/dev/disk8"}, nil, "brave-dolphin", nil, true, nil)
 		return nil
 	})
 

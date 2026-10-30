@@ -105,12 +105,18 @@ func Start(key string, conn *grpcclient.AgentConnection) error {
 	return startSpec(spec)
 }
 
+// HelperExecutable is set once by native embedders to their bundled CLI.
+var HelperExecutable = os.Executable
+
 func startSpec(spec Spec) error {
+	if host := embeddedHost.Load(); host != nil {
+		return host.start(spec)
+	}
 	b, err := json.Marshal(spec)
 	if err != nil {
 		return err
 	}
-	exe, err := os.Executable()
+	exe, err := HelperExecutable()
 	if err != nil {
 		return err
 	}
@@ -834,15 +840,20 @@ func serveResolved(ctx context.Context, dir string, spec Spec, upstream *grpc.Cl
 
 type localStreamHandler func(grpc.ServerStream, *activity) (bool, error)
 
-var localIPCRequiresListenerClose = runtime.GOOS == "windows"
+var localIPCRequiresListenerClose = runtime.GOOS == "windows" || runtime.GOOS == "ios"
 
 func serveResolvedLocal(ctx context.Context, dir string, spec Spec, upstream *grpc.ClientConn, idleTTL time.Duration, parentAlive func() bool, resolve upstreamResolver, local localStreamHandler, verified ...bool) (err error) {
 	// Capture before publishing the state file. Run supplies its successful
 	// probe explicitly, covering loss even before serve begins; unprobed test
 	// connections retain the initial-establishment behavior.
-	initialState := upstream.GetState()
+	initialState := connectivity.Idle
+	if upstream != nil {
+		initialState = upstream.GetState()
+	} else if spec.Operator == nil {
+		return errors.New("device broker requires an upstream connection")
+	}
 	alreadyVerified := initialState == connectivity.Ready || (len(verified) > 0 && verified[0])
-	if alreadyVerified && initialState != connectivity.Ready {
+	if spec.Operator == nil && alreadyVerified && initialState != connectivity.Ready {
 		return nil // retire before publishing a transport that already lost trust
 	}
 	if idleTTL <= 0 {
