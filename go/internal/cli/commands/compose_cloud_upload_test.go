@@ -99,15 +99,30 @@ func TestComposeCloudV2DoesNotFallBackToTheRegistry(t *testing.T) {
 	}
 }
 
-func TestComposeCloudV2OtherBuildersStopBeforeRegistryUpload(t *testing.T) {
-	for _, builder := range []string{imageBuilderAppleContainer, imageBuilderBuildkit} {
-		t.Run(builder, func(t *testing.T) {
-			conn := &grpcclient.AgentConnection{IsCloudV2: true}
-			err := buildAndPrepareComposeImageForAgent(t.Context(), conn, 5000, "linux", builder, t.TempDir(), "app", "linux/arm64", "", nil, "", io.Discard, io.Discard)
-			if !errors.Is(err, errBuilderUnavailable) || !strings.Contains(err.Error(), "--builder docker") {
-				t.Fatalf("error=%v", err)
+// Use the scheduler's real auto/off dispatch and the actual registry resolver.
+// Missing credentials must stop Apple Container before a tunnel or build starts.
+func TestComposeCloudV2AppleContainerKeepsRegistryRoute(t *testing.T) {
+	t.Setenv("WENDY_CONFIG_DIR", t.TempDir())
+	for _, mode := range []string{chunkingAuto, chunkingOff} {
+		t.Run(mode, func(t *testing.T) {
+			conn := &grpcclient.AgentConnection{Host: "jetson", IsCloudV2: true, IsMTLS: true, RegistryDialer: func(context.Context, int) (net.Conn, error) {
+				t.Fatal("registry auth must be checked before opening a tunnel")
+				return nil, nil
+			}}
+			jobs := map[string]composeBuildJob{"app": {contextDir: t.TempDir(), repo: "apple-compose", dockerfile: "Dockerfile"}}
+			failed, _, err := buildComposeServicesParallel(t.Context(), conn, 5000, "linux", imageBuilderAppleContainer, "linux/arm64", mode, jobs, 1, true)
+			if err != nil || len(failed) != 1 || !errors.Is(failed["app"], errRegistryAuth) || errors.Is(failed["app"], errBuilderUnavailable) {
+				t.Fatalf("scheduler err=%v failed=%v; want the existing registry auth gate", err, failed)
 			}
 		})
+	}
+}
+
+func TestComposeCloudV2BuildkitRemainsUnsupported(t *testing.T) {
+	conn := &grpcclient.AgentConnection{Host: "jetson", IsCloudV2: true}
+	err := buildAndPrepareComposeImageForAgent(t.Context(), conn, 5000, "linux", imageBuilderBuildkit, t.TempDir(), "app", "linux/arm64", "", nil, "", io.Discard, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), `unsupported image builder "buildkit"`) {
+		t.Fatalf("error=%v", err)
 	}
 }
 
