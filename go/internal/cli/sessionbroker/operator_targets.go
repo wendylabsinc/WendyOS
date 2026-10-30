@@ -212,7 +212,7 @@ func (r *operatorTargets) Resolve(ctx context.Context) (*grpc.ClientConn, func()
 	if err != nil && r.localSnapshot == nil {
 		return nil, nil, err
 	}
-	if err == nil && target == adjacent {
+	if err == nil && target == adjacent && adjacentConn != nil {
 		return adjacentConn, func() {}, nil
 	}
 	address, err := r.endpoint(ctx, target)

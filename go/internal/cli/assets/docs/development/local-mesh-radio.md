@@ -17,11 +17,12 @@ wendy discover --type mesh
 wendy device wendy-net services
 ```
 
-The CLI finds available WendyOS neighbours on LAN and BLE and retries suitable
+The CLI finds available WendyOS and supported PSRAM Lite routers on LAN and BLE and retries suitable
 candidates when a connection fails. LAN connections use TCP with TLS; supported
-macOS and Linux hosts can also make outgoing BLE connections. The CLI's first
-neighbour must currently be WendyOS. Lite devices can be reached through that
-router, but cannot be the CLI's direct first hop.
+macOS and Linux hosts can also make outgoing BLE connections. Direct Lite first
+hops require native operator-router support from wendy-lite PR #121. A PSRAM C5
+can route to other devices; C6 remains a leaf. Broker readiness waits for a usable
+signed first-hop route, without requiring a WendyOS gRPC agent on that router.
 
 Commands share one background router for the selected operator profile. It stays
 running when a command exits and can forward traffic between peers. Reading its

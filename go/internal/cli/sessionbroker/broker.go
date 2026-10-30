@@ -846,9 +846,14 @@ func serveResolvedLocal(ctx context.Context, dir string, spec Spec, upstream *gr
 	// Capture before publishing the state file. Run supplies its successful
 	// probe explicitly, covering loss even before serve begins; unprobed test
 	// connections retain the initial-establishment behavior.
-	initialState := upstream.GetState()
+	initialState := connectivity.Idle
+	if upstream != nil {
+		initialState = upstream.GetState()
+	} else if spec.Operator == nil {
+		return errors.New("device broker requires an upstream connection")
+	}
 	alreadyVerified := initialState == connectivity.Ready || (len(verified) > 0 && verified[0])
-	if alreadyVerified && initialState != connectivity.Ready {
+	if spec.Operator == nil && alreadyVerified && initialState != connectivity.Ready {
 		return nil // retire before publishing a transport that already lost trust
 	}
 	if idleTTL <= 0 {

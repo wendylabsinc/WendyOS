@@ -76,6 +76,10 @@ func readSensorTemperature(ctx context.Context, client liteConnection) (sample S
 	// Retire the subscription even on an uncertain setup/cancellation result.
 	defer func() {
 		if cleanup := client.SensorLinkUnsubscribe(channels, 2*time.Second); cleanup != nil {
+			// A lost stop acknowledgement leaves producer ownership uncertain.
+			// Closing WendyCom retires that subscription at the source and
+			// lets normal connection monitoring report the lost session.
+			_ = client.Close()
 			err = errors.Join(err, fmt.Errorf("SensorLink unsubscribe: %w", cleanup))
 		}
 	}()

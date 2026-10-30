@@ -306,7 +306,7 @@ device, not on the phone. The iOS app does not expose host shell execution.
 
 LAN, authenticated Cloud, and Wendy Net transports are supported. While the app
 is active, its Go backend hosts the same operator broker, full Babel router and
-userspace IP stack as the CLI. It discovers authenticated WendyOS first hops over
+userspace IP stack as the CLI. It discovers authenticated WendyOS and supported PSRAM Lite first hops over
 LAN TLS and CoreBluetooth L2CAP, then projects reachable WendyOS and Lite targets
 into Nearby. Those canonical mesh selections use the broker for management,
 SensorLink cameras, logs, chat and application streams. Web apps use the existing
@@ -336,7 +336,7 @@ handled by ordinary peer/manifest expiry. Continuous background routing is not
 provided. Keep the app in the foreground for device operations.
 
 BLE mesh matches the CLI's current central role: the phone connects to a WendyOS
-router advertising the primary operator-router service. A constrained C6 is
+or PSRAM Lite router advertising the primary operator-router service. A constrained C6 is
 reachable through that router. The phone does not advertise an incoming mesh
 carrier or serve as the C6's direct BLE gateway. The separate nearby BLE setup
 and WendyCom management protocols keep their existing roles.
@@ -352,6 +352,11 @@ abruptly lost operator does not occupy a scarce connection slot until certificat
 expiry. [wendy-lite PR #120](https://github.com/wendylabsinc/wendy-lite/pull/120)
 adds dead-peer detection after approximately 30 seconds while retaining healthy
 idle sessions. This does not remove a constrained device's application RAM limits.
+
+Direct C5 router attachment requires [wendy-lite PR #121](https://github.com/wendylabsinc/wendy-lite/pull/121).
+It uses the same operator protocol over LAN and BLE, with eight total connections
+on the PSRAM profile. Broker startup waits for a usable signed first-hop route;
+it does not require a WendyOS gRPC agent on the neighbour. C6 remains a leaf.
 
 The system-wide VPN extension, USB flashing, and host simulator management remain
 unavailable on iOS. Tools requiring those desktop facilities cannot run there.
@@ -383,8 +388,11 @@ management. It is skipped unless the
 test runner has `WENDY_LIVE_MESH_TENANT` set to the expected tenant UUID. Set
 `WENDY_LIVE_MESH_CLOUD` to assert the Cloud endpoint and optionally
 `WENDY_LIVE_MESH_SELECTOR` to require one canonical target. Sign in using the normal
-app first. Ordinary tests use disposable config directories and do not alter that
-login. Qualify BLE separately with Wi-Fi disabled and a reachable BLE router;
+app first. For a Lite temperature source, set
+`WENDY_LIVE_SENSORLINK_TEMPERATURE=1` to read real samples before and after resume.
+`WENDY_LIVE_SENSORLINK_SAMPLES` selects 1–60 samples per phase (default three),
+allowing a longer signed-time renewal soak. Ordinary tests use disposable config
+directories and do not alter that login. Qualify BLE separately with Wi-Fi disabled and a reachable BLE router;
 the same test otherwise allows the broker to choose LAN or BLE automatically.
 If iOS requires online development-certificate verification, launch with
 `WENDY_LIVE_MESH_WAIT_FOR_READY=1` while online. After the waiting message, isolate
@@ -638,7 +646,10 @@ specific simulator and refuses a running VM. This pane is excluded from iOS.
 
 Nearby discovery includes Wendy Lite boards over LAN and USB. Cloud Lite devices
 connect through the authenticated WendyCom relay. Selecting a Lite device opens
-Cameras, Device, Wi-Fi, and Logs. SensorLink cameras support MJPEG and H.264;
+Cameras, Sensors, Device, Wi-Fi, and Logs. The Sensors pane displays live
+temperature channels from the authenticated SensorLink manifest, including the
+source name and reading age. Each read releases its subscription; leaving the
+pane stops polling. SensorLink cameras support MJPEG and H.264;
 the device page shows firmware, board, and architecture. Logs stream the Lite
 console. Wi-Fi configuration replaces the saved network list and restarts the
 board after confirmation. Use Reconnect after the restart.

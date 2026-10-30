@@ -23,14 +23,18 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wendylabsinc/wendy/go/internal/agent/localmesh"
 	"github.com/wendylabsinc/wendy/go/internal/cli/liteclient"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/internal/shared/devicepin"
+	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
 	pb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	litepb "github.com/wendylabsinc/wendy/go/proto/gen/litepb"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -408,4 +412,24 @@ func TestOperatorLiteDialCancellationReleasesAdmission(t *testing.T) {
 		time.Sleep(time.Millisecond)
 	}
 	t.Fatal("canceled dial retained stream admission or broker lease")
+}
+
+func TestOperatorAdjacentLiteUsesSignedNativeEndpoint(t *testing.T) {
+	r, _, _, mutate := liteManagementFixture(t)
+	_, reporter, target := remoteTopologyFixture(t)
+	r.localSnapshot = func() localmesh.NodeSnapshot { return localmesh.NodeSnapshot{Self: reporter} }
+	r.currentAdjacent = func() (*grpc.ClientConn, meshid.Device, error) { return nil, target, nil }
+	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs(operatorTargetHeader, MeshSelector(target)))
+	info, err := r.managementInfo(ctx)
+	if err != nil || info.Platform != "Lite" || info.Address != net.JoinHostPort(target.MeshAddress().String(), "5054") {
+		t.Fatalf("adjacent native info=%+v err=%v", info, err)
+	}
+	conn, release, err := r.Resolve(ctx)
+	if conn != nil || release != nil || status.Code(err) != codes.Unimplemented {
+		t.Fatalf("Lite offered as a gRPC first hop: %v %v", conn, err)
+	}
+	mutate(func(v *pb.LocalMeshTopology) { v.Routes = nil })
+	if _, err = r.managementInfo(ctx); status.Code(err) != codes.Unavailable {
+		t.Fatalf("adjacent native target bypassed signed routing: %v", err)
+	}
 }

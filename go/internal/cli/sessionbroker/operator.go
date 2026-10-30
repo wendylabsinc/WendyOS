@@ -602,7 +602,7 @@ func runOperator(ctx context.Context, dir string, spec Spec, idleTTL time.Durati
 	finished := make(chan struct{})
 	go func() { defer close(finished); defer cancel(); _ = attachment.run(owner) }()
 	defer func() { cancel(); <-finished }()
-	remotes := newOperatorTargets(initial.session, initial.upstream.Conn, selected, directory, spec)
+	remotes := newOperatorTargets(initial.session, nil, selected, directory, spec)
 	remotes.currentAdjacent = attachment.adjacent
 	remotes.localSnapshot = func() localmesh.NodeSnapshot {
 		current, err := attachment.snapshot()
@@ -614,7 +614,7 @@ func runOperator(ctx context.Context, dir string, spec Spec, idleTTL time.Durati
 	remotes.packetDial = attachment.DialContext
 	remotes.appDial = attachment.DialAppTLS
 	defer remotes.Close()
-	return serveResolvedLocal(owner, dir, spec, initial.upstream.Conn, idleTTL, func() bool {
+	return serveResolvedLocal(owner, dir, spec, nil, idleTTL, func() bool {
 		if host := embeddedHost.Load(); host != nil && host.active.Load() {
 			return true // The foreground app owns the routing lease.
 		}

@@ -30,9 +30,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wendylabsinc/WendyOS/go/babel"
 	"github.com/wendylabsinc/wendy/go/internal/agent/interceptor"
+	"github.com/wendylabsinc/wendy/go/internal/agent/localmesh"
 	"github.com/wendylabsinc/wendy/go/internal/agent/mtls"
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
+	"github.com/wendylabsinc/wendy/go/internal/cli/netmesh"
 	"github.com/wendylabsinc/wendy/go/internal/cli/netmesh/carriers"
 	"github.com/wendylabsinc/wendy/go/internal/cli/operatormesh"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
@@ -132,16 +135,17 @@ func TestOperatorBrokerEmbeddedHost(t *testing.T) {
 		operatorBrokerNormal(t, "P256-embedded", true)
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
-	defer cancel()
 	exe, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, mode := range []string{"control", "transit", "renew"} {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 		cmd := exec.CommandContext(ctx, exe, "-test.run=^TestOperatorBrokerEmbeddedHost$", "-test.timeout=50s")
 		cmd.Env = append(os.Environ(), "WENDY_EMBEDDED_BROKER_TEST="+mode)
-		if out, err := cmd.CombinedOutput(); err != nil {
+		out, err := cmd.CombinedOutput()
+		cancel()
+		if err != nil {
 			t.Fatalf("embedded broker %s: %v\n%s", mode, err, out)
 		}
 	}
@@ -274,6 +278,31 @@ func operatorBrokerNormal(t *testing.T, algorithm string, disconnect bool) {
 		transit = newBrokerTransitFixture(t, ctx, tenant, rootPEM, issue)
 		extraSources = []carriers.Source{transit.source}
 	}
+	// The first hop is a real routing participant. Joining now waits for its
+	// signed route instead of probing its optional gRPC multiplexed service.
+	peerCredentials, err := localmesh.NewCredentials(routerPEM, rootPEM, routerPrivate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	peerNetwork, err := netmesh.NewNetwork(router)
+	if err != nil {
+		t.Fatal(err)
+	}
+	peerDirectory := t.TempDir()
+	peerStore, peerState, err := localmesh.OpenDeviceStateStore(filepath.Join(peerDirectory, "routing-state.json"), router, babel.RouterIDFromRandom([6]byte{0x62, 0x72, 0x6f, 0x6b, 0x65, 0x70}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = peerStore.Save(peerState); err != nil {
+		t.Fatal(err)
+	}
+	peerNode, err := localmesh.NewNodeWithNetwork(ctx, peerDirectory, peerCredentials, "first-hop fixture", 50052, peerNetwork)
+	if err != nil {
+		t.Fatal(err)
+	}
+	peerDone := make(chan struct{})
+	go func() { defer close(peerDone); _ = peerNode.Run() }()
+	t.Cleanup(func() { cancel(); <-peerDone; _ = peerNetwork.Close() })
 	var handshakes, admitted, withdrawn atomic.Int32
 	carrierSockets := make(chan net.Conn, 8)
 	proofs := make(chan meshid.Device, 8)
@@ -303,10 +332,7 @@ func operatorBrokerNormal(t *testing.T, algorithm string, disconnect bool) {
 				admitted.Add(1)
 				proofs <- link.Peer()
 				defer func() { _ = link.Close(); link.Wait(); withdrawn.Add(1) }()
-				select {
-				case <-ctx.Done():
-				case <-link.Done():
-				}
+				_ = peerNode.AttachOperatorRouterLink(ctx, link, 128)
 			}()
 		}
 	}
@@ -651,7 +677,7 @@ func TestOperatorBrokerChildProcess(t *testing.T) {
 	if encoded == "" {
 		return
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	if err := Run(ctx, encoded, time.Second, os.NewFile(3, "parent-lease")); err != nil {
 		t.Fatal(err)

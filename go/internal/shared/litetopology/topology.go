@@ -90,6 +90,21 @@ func collect(ctx context.Context, read ReadPage) (*pb.LocalMeshTopology, bool, e
 			}
 		}
 		if page.NextCursor == 0 {
+			// A native operator next hop has no device UUID on the wire.
+			// Resolve its typed identity through this same generation's link.
+			peers := make(map[uint64]*pb.LocalMeshPeerLink, len(out.Peers))
+			for _, peer := range out.Peers {
+				peers[peer.LinkId] = peer
+			}
+			for _, route := range out.Routes {
+				if route.Local || route.NextHopPrincipal != "" {
+					continue
+				}
+				if peer := peers[route.LinkId]; peer != nil {
+					route.NextHopPrincipal = peer.Principal
+					route.NextHopAddress = peer.MeshAddress
+				}
+			}
 			return out, false, nil
 		}
 		if page.Generation == 0 || page.NextCursor <= request.Cursor || page.NextCursor > 1024 {

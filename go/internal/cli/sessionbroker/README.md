@@ -22,14 +22,14 @@ not a process-wide collection of unrelated operator identities.
 
 ## Carriers and reconnect
 
-Explicit TCP and BLE first-hop recipes authenticate the exact selected WendyOS
-peer with the primary operator certificate, tenant chain and profile pins. The
+Explicit TCP and BLE first-hop recipes authenticate the exact selected
+router with the primary operator certificate, tenant chain and profile pins. The
 same shared node can own additional authenticated carriers. The bounded scheduler
 holds at most 256 candidates, eight connections, two BLE connections and two
 concurrent setup attempts. Automatic discovery supplies LAN TLS and host BLE
 candidates to the same scheduler. macOS and Linux support outgoing BLE; explicit TCP recipes do not
-require radio discovery. The direct first hop must currently be a WendyOS peer;
-Lite targets are reached through its routed connections.
+require radio discovery. The direct first hop may be WendyOS or a PSRAM Lite router with operator-router support;
+Native Lite management uses the signed WendyCom endpoint, including on a Lite first hop.
 
 A first-hop failure retains the broker's IPC endpoint and installation identity.
 The carrier scheduler reconnects while the node remains alive; if the participant

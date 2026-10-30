@@ -176,3 +176,27 @@ func TestTypedOperatorNormalMaximumOpaqueSubject(t *testing.T) {
 		t.Fatal(snapshot, err)
 	}
 }
+
+func TestOperatorNeighbourResolvesRouteNextHopByLink(t *testing.T) {
+	pages := typedOperatorPages(t)
+	// The first typed operator announcement also describes its direct carrier.
+	peer := proto.Clone(pages[0].Record).(*lite.WendyComNetTopologyRecord)
+	peer.Kind = 1
+	peer.LinkId = 91
+	peer.Transport = 1
+	peer.Metric = 128
+	pages[4].Record = peer
+	pages[2].Record.LinkId = 91
+	pages[2].Record.NextHopDevice = nil
+	snapshot, err := Read(context.Background(), func(_ context.Context, p *lite.WendyComNetTopologyParams) (*lite.WendyComNetTopologyPage, error) {
+		return proto.Clone(pages[p.Cursor]).(*lite.WendyComNetTopologyPage), nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	route := snapshot.Routes[0]
+	addr, _ := address(peer.Address)
+	if route.NextHopPrincipal != peer.OwnerPrincipal || route.NextHopAddress != addr {
+		t.Fatalf("typed operator next hop lost: %+v", route)
+	}
+}

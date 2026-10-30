@@ -90,6 +90,9 @@ final class MobileTests: XCTestCase {
             XCTAssertTrue(settings.meshAvailable, settings.meshError)
             XCTAssertTrue(settings.topology.available, settings.topology.error)
         }
+        if connection.lite && environment["WENDY_LIVE_SENSORLINK_TEMPERATURE"] == "1" {
+            try await verifyTemperature(session: connection.session)
+        }
         if !connection.lite { _ = try await client.apps() }
         try await client.setMobileState(
             active: false,
@@ -109,8 +112,26 @@ final class MobileTests: XCTestCase {
             request: client.beginConnection()
         )
         _ = try await client.deviceInfo(session: resumed.session)
+        if resumed.lite && environment["WENDY_LIVE_SENSORLINK_TEMPERATURE"] == "1" {
+            try await verifyTemperature(session: resumed.session)
+        }
         if !resumed.lite { _ = try await client.apps() }
         try await client.disconnect()
+    }
+
+    private func verifyTemperature(session: UInt64) async throws {
+        var previous: UInt64 = 0
+        let requested = Int(ProcessInfo.processInfo.environment["WENDY_LIVE_SENSORLINK_SAMPLES"] ?? "3") ?? 3
+        let count = min(60, max(1, requested))
+        for _ in 0..<count {
+            let sample = try await GoClient.shared.sensorTemperature(session: session)
+            XCTAssertTrue(sample.celsius.isFinite)
+            XCTAssertGreaterThan(sample.timestampMicroseconds, previous)
+            XCTAssertFalse(sample.name.isEmpty)
+            print("Live SensorLink temperature: \(sample.celsius) C, source=\(sample.name), timestamp=\(sample.timestampMicroseconds)")
+            previous = sample.timestampMicroseconds
+            try await Task.sleep(for: .seconds(2))
+        }
     }
 
     private func discoverMeshTarget(tenant: String, selector: String?) async throws -> Device {

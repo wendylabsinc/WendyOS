@@ -12,9 +12,10 @@ import (
 
 type temperatureLite struct {
 	*fakeDesktopLite
-	frame        *sensorlinkpb.SensorData
-	subscribeErr error
-	unsubscribed bool
+	frame          *sensorlinkpb.SensorData
+	subscribeErr   error
+	unsubscribeErr error
+	unsubscribed   bool
 }
 
 func (f *temperatureLite) GetSensorManifest(time.Duration) (*sensorlinkpb.SensorManifest, error) {
@@ -31,7 +32,7 @@ func (f *temperatureLite) SensorLinkSubscribe(ids []uint32, _ time.Duration) err
 }
 func (f *temperatureLite) SensorLinkUnsubscribe([]uint32, time.Duration) error {
 	f.unsubscribed = true
-	return nil
+	return f.unsubscribeErr
 }
 func temperatureFixture() *temperatureLite {
 	payload := make([]byte, 4)
@@ -85,4 +86,20 @@ func TestSensorTemperatureRequiresExactLiveDeviceSession(t *testing.T) {
 		}
 	}
 	b.Shutdown()
+}
+
+func TestSensorTemperatureLostUnsubscribeClosesProducerOwner(t *testing.T) {
+	f := temperatureFixture()
+	f.unsubscribeErr = errors.New("stop acknowledgement lost")
+	if _, err := readSensorTemperature(context.Background(), f); err == nil {
+		t.Fatal("uncertain subscription reported as retired")
+	}
+	select {
+	case <-f.Done():
+	default:
+		t.Fatal("uncertain source producer retained its client")
+	}
+	if f.listener != nil {
+		t.Fatal("uncertain stop retained a data listener")
+	}
 }
