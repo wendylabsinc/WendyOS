@@ -9,6 +9,7 @@ import (
 )
 
 const SetupServiceUUID = "7565e9eb-4c20-4b67-9272-d708b397b632"
+
 // 128 is management; 129 is mesh. Setup must never accept mesh traffic.
 const SetupPSM = 130
 
