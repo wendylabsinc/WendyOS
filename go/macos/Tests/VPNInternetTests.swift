@@ -65,6 +65,8 @@ final class VPNInternetTests: XCTestCase {
         XCTAssertEqual(settings.dnsSettings?.matchDomains, [""])
         XCTAssertEqual(settings.dnsSettings?.allowFailover, false)
         XCTAssertEqual(settings.mtu, 1280)
+        XCTAssertTrue(settings.ipv4Settings?.excludedRoutes?.isEmpty ?? true)
+        XCTAssertTrue(settings.ipv6Settings?.excludedRoutes?.isEmpty ?? true)
     }
     func testIPv4OnlyDonorStillCapturesIPv6() {
         var configuration = deviceOnly
@@ -72,5 +74,23 @@ final class VPNInternetTests: XCTestCase {
         let settings = configuration.networkSettings()
         XCTAssertEqual(settings.ipv6Settings?.addresses, ["fd2b:677a:9d11::ffff"])
         XCTAssertEqual(settings.ipv6Settings?.includedRoutes?.first?.destinationNetworkPrefixLength, 0)
+    }
+
+    func testSystemRestartKeepsIntentWithoutPersistingRelayCredentials() throws {
+        var configuration = deviceOnly
+        configuration.gateway = "auto"
+        configuration.bootstrapDirectory = "/old-container/Wendy"
+        configuration.internet = VPNInternetConfiguration(address4: "10.88.1.1", address6: nil, mtu: 1280)
+        let data = try PropertyListEncoder().encode(MobileVPNBootstrap(configuration))
+        let keys = try XCTUnwrap(PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any])
+        XCTAssertEqual(Set(keys.keys), ["routes", "gateway"])
+        let bootstrap = try PropertyListDecoder().decode(MobileVPNBootstrap.self, from: data)
+        let restarted = bootstrap.configuration(directory: "/current-container/Wendy")
+        XCTAssertEqual(restarted.gateway, "auto")
+        XCTAssertEqual(restarted.routes.map(\.selector), configuration.routes.map(\.selector))
+        XCTAssertEqual(restarted.bootstrapDirectory, "/current-container/Wendy")
+        XCTAssertEqual(restarted.endpoint, "")
+        XCTAssertEqual(restarted.token, "")
+        XCTAssertNil(restarted.internet)
     }
 }

@@ -13,6 +13,22 @@ struct VPNInternetConfiguration: Codable {
     let address6: String?
     let mtu: Int
 }
+// Persist routing intent only. The extension recreates its relay and reads
+// credentials from the shared container when iOS starts it without app options.
+struct MobileVPNBootstrap: Codable {
+    let routes: [VPNRoute]
+    let gateway: String?
+
+    init(_ configuration: VPNConfiguration) {
+        routes = configuration.routes
+        gateway = configuration.gateway
+    }
+
+    func configuration(directory: String) -> VPNConfiguration {
+        VPNConfiguration(endpoint: "", token: "", routes: routes,
+                         bootstrapDirectory: directory, gateway: gateway)
+    }
+}
 struct VPNConfiguration: Codable {
     let endpoint: String
     let token: String
@@ -30,13 +46,13 @@ struct VPNConfiguration: Codable {
         }
         if internet != nil {
             ipv4.includedRoutes = [NEIPv4Route.default()] + (ipv4.includedRoutes ?? [])
-            ipv4.excludedRoutes = [NEIPv4Route(destinationAddress: "127.0.0.0", subnetMask: "255.0.0.0")]
+            // Loopback already has a system route. iOS rejects explicit
+            // loopback exclusions, preventing the internet routes from applying.
             // Capture IPv6 even on an IPv4-only donor, so it cannot bypass the
             // selected uplink over the phone's cellular or the Mac's WAN.
             let address6 = internet?.address6.flatMap { $0.isEmpty ? nil : $0 } ?? "fd2b:677a:9d11::ffff"
             let ipv6 = NEIPv6Settings(addresses: [address6], networkPrefixLengths: [128])
             ipv6.includedRoutes = [NEIPv6Route.default()]
-            ipv6.excludedRoutes = [NEIPv6Route(destinationAddress: "::1", networkPrefixLength: 128)]
             settings.ipv6Settings = ipv6
         }
         settings.ipv4Settings = ipv4
