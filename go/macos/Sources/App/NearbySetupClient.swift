@@ -76,3 +76,23 @@ extension GoClient {
             error: s.status.message.map { String(cString: $0) })
     }
 }
+
+/// Only repeat reads and connection establishment. Enrollment and Wi-Fi writes
+/// always require an explicit action, even after a lost reply.
+enum NearbySetupObservation: Equatable {
+    case idle, discover, reconnect, checkEnrollment, status, scanWiFi
+}
+
+extension NearbySetupSnapshot {
+    func observation(hasSelection: Bool, wifiExpanded: Bool, statusAge: TimeInterval,
+                     scanAge: TimeInterval) -> NearbySetupObservation {
+        if completed { return .idle }
+        if pending { return .checkEnrollment }
+        if enrolled || attempted { return .idle }
+        if !hasSelection { return .discover }
+        if !connected { return .reconnect }
+        if statusAge >= 25 { return .status }
+        if wifiExpanded && scanAge >= 20 { return .scanWiFi }
+        return .idle
+    }
+}

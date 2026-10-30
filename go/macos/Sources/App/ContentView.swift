@@ -344,7 +344,7 @@ struct ContentView: View {
     @ViewBuilder private var deviceRows: some View {
         ForEach(visibleDevices) { device in
             HStack(spacing: 10) {
-                Image(systemName: device.transport == .cloud ? "cloud" : "network")
+                Image(systemName: "cpu")
                     .foregroundStyle(.secondary).frame(width: 20)
                 Text(device.title).lineLimit(1)
                 Spacer(minLength: 0)
@@ -427,7 +427,7 @@ struct ContentView: View {
 
     private func deviceIdentity(_ device: Device) -> some View {
         HStack(spacing: 8) {
-            Image(systemName: device.transport == .cloud ? "cloud" : "network").foregroundStyle(.secondary)
+            Image(systemName: "cpu").foregroundStyle(.secondary)
             Text(device.title).font(.headline).lineLimit(1).help(device.title)
         }.frame(minWidth: 100, maxWidth: 220, alignment: .leading)
     }

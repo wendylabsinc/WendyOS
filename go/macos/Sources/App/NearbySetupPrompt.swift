@@ -67,6 +67,7 @@ struct NearbySetupPrompt: ViewModifier {
 
 private struct NearbySetupInvitation: View {
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.dynamicTypeSize) private var typeSize
     let device: NearbySetupDevice
     let signIn: () -> Void
     @State private var configuring = false
@@ -74,21 +75,50 @@ private struct NearbySetupInvitation: View {
     var body: some View {
         if configuring {
             NearbySetupView(signIn: signIn, initialDevice: device)
+                #if os(iOS)
+                .presentationDetents([.large])
+                #endif
         } else {
-            VStack(spacing: 20) {
-                Image(systemName: "antenna.radiowaves.left.and.right").font(.system(size: 44)).foregroundStyle(.tint)
-                Text("Enroll this device?").font(.title2.bold())
-                Text(device.title).font(.headline)
-                Text("An unenrolled Wendy device is nearby. Set it up to add it to your organization.")
-                    .foregroundStyle(.secondary).multilineTextAlignment(.center)
-                Button("Set up device") { configuring = true }.buttonStyle(.borderedProminent)
-                Button("Not now", role: .cancel) { dismiss() }
+            ScrollView {
+                VStack(spacing: 24) {
+                    ZStack {
+                        Circle().fill(Color.accentColor.opacity(0.04)).frame(width: 164, height: 164)
+                        Circle().strokeBorder(Color.accentColor.opacity(0.10), lineWidth: 1).frame(width: 142, height: 142)
+                        RoundedRectangle(cornerRadius: 28, style: .continuous)
+                            .fill(Color.accentColor.gradient).frame(width: 100, height: 100)
+                            .shadow(color: Color.accentColor.opacity(0.2), radius: 18, y: 8)
+                        Image(systemName: "cpu").font(.system(size: 46, weight: .light)).foregroundStyle(.white)
+                    }.accessibilityHidden(true)
+                    VStack(spacing: 8) {
+                        Text("A Wendy is nearby").font(.title2.weight(.semibold))
+                        Text(device.title).font(.subheadline).foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center).textSelection(.enabled)
+                        Text("Add it to your organization to make it yours.")
+                            .font(.callout).foregroundStyle(.secondary)
+                            .multilineTextAlignment(.center).padding(.top, 4)
+                    }
+                    VStack(spacing: 8) {
+                        Button { configuring = true } label: {
+                            HStack {
+                                Spacer()
+                                Text("Set up device").fontWeight(.semibold)
+                                Image(systemName: "arrow.right").font(.callout.weight(.semibold))
+                                Spacer()
+                            }.padding(.vertical, 8)
+                        }.buttonStyle(.borderedProminent).controlSize(.large)
+                        Button("Not now", role: .cancel) { dismiss() }
+                            .buttonStyle(.plain).foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, minHeight: 44)
+                    }
+                }.padding(.horizontal, 28).padding(.top, 20).padding(.bottom, 12)
             }
-            .padding(32)
+            .scrollBounceBehavior(.basedOnSize)
             #if os(macOS)
-            .frame(width: 380)
+            .frame(width: 400, height: 470)
             #else
-            .presentationDetents([.medium])
+            .presentationDetents(typeSize.isAccessibilitySize ? [.large] : [.height(470)])
+            .presentationDragIndicator(.visible)
+            .presentationCornerRadius(36)
             #endif
         }
     }

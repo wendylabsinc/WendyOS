@@ -47,29 +47,13 @@ struct MobileRootView: View {
                 if source == "nearby" {
                     Section {
                         NearbySetupButton()
-                        Label(
-                            model.mobileMeshDetail,
-                            systemImage: model.mobileMeshState == "ready"
-                                ? "network" : "antenna.radiowaves.left.and.right"
-                        )
-                        .font(.caption).foregroundStyle(.secondary)
                     }
                 }
                 Section {
                     ForEach(devices) { device in
                         NavigationLink(value: MobileDestination.device(device.id)) {
                             HStack {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Label(
-                                        device.title,
-                                        systemImage: device.transport == .cloud
-                                            ? "cloud" : "network"
-                                    )
-                                    Text(
-                                        device.transport == .mesh
-                                            ? "Wendy Net" : device.transport.rawValue
-                                    ).font(.caption).foregroundStyle(.secondary)
-                                }
+                                Label(device.title, systemImage: "cpu")
                                 Spacer()
                                 if model.connectingDevice?.id == device.id { ProgressView() }
                                 else if model.connected?.id == device.id { Image(systemName: "checkmark.circle.fill").foregroundStyle(.green) }

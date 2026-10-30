@@ -38,7 +38,12 @@ struct NearbySetupView: View {
     @State private var progress = ""
     @State private var error: String?
     @State private var lastStatus = Date.distantPast
-    @State private var checkingUntil = Date.distantPast
+    @State private var lastWiFiScan = Date.distantPast
+    @State private var automatic = false
+    @State private var observationError: String?
+    @State private var nextReconnect = Date.distantPast
+    @State private var reconnectDelay: TimeInterval = 3
+    private var editingLocked: Bool { busy && !automatic }
     private var choice: EnrollmentOrganization? { organizations.first { $0.id == organization } }
     private var nameValid: Bool { name.range(of: "^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$", options: .regularExpression) != nil }
 
@@ -51,10 +56,9 @@ struct NearbySetupView: View {
                         if state.completed {
                             Label("Enrolled in Wendy Cloud", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
                         } else if state.pending {
-                            Label("Waiting for cloud confirmation", systemImage: "clock")
-                            Text("The device needs a working network connection to finish. You can check again without restarting enrollment.")
+                            ProgressView("Finishing setup…")
+                            Text("We’ll confirm automatically when your device comes online. Keep it powered on and connected to the internet.")
                                 .font(.callout).foregroundStyle(.secondary)
-                            Button("Check enrollment status") { submit(.checkEnrollment) }.disabled(busy)
                         } else if state.attempted {
                             Text("Cloud enrollment could not be confirmed. Check the selected organization's device list before starting another enrollment.")
                                 .foregroundStyle(.secondary)
@@ -62,18 +66,17 @@ struct NearbySetupView: View {
                             Label("This device is already enrolled", systemImage: "checkmark.shield")
                         } else if state.connected {
                             Label("Ready to set up", systemImage: "checkmark.circle").foregroundStyle(.secondary)
-                        } else if !busy {
-                            Label("Bluetooth disconnected", systemImage: "antenna.radiowaves.left.and.right.slash")
-                        }
-                        if !state.connected && !state.completed && !state.enrolled {
-                            Button("Retry connection") { actions.submit { await connect(selected) } }.disabled(busy)
+                        } else {
+                            ProgressView("Connecting to your device…")
+                            Text("Keep your device nearby. We’ll reconnect automatically.")
+                                .font(.callout).foregroundStyle(.secondary)
                         }
                     }
                     if !state.completed && !state.enrolled && !state.attempted {
                         Section("Add to Wendy Cloud") {
                             if organizations.isEmpty {
                                 Text("Sign in to choose an organization.").foregroundStyle(.secondary)
-                                Button("Sign in…") { signIn(); dismiss() }.disabled(busy)
+                                Button("Sign in…") { signIn(); dismiss() }.disabled(editingLocked)
                             } else {
                                 Picker("Organization", selection: $organization) {
                                     Text("Choose an organization").tag("")
@@ -83,9 +86,9 @@ struct NearbySetupView: View {
                                 Text("Start with a lowercase letter. Use letters, numbers and hyphens.").font(.caption).foregroundStyle(.secondary)
                                 Button("Add device") { submit(.enroll) }
                                     .buttonStyle(.borderedProminent)
-                                    .disabled(!state.connected || choice == nil || !nameValid || busy)
+                                    .disabled(!state.connected || choice == nil || !nameValid || editingLocked)
                             }
-                        }.disabled(busy)
+                        }.disabled(editingLocked)
                     }
                     if !state.completed && !state.enrolled && !state.attempted {
                         Section {
@@ -101,8 +104,8 @@ struct NearbySetupView: View {
                                 TextField("Network name", text: $ssid).autocorrectionDisabled()
                                 SecureField("Password, if required", text: $password)
                                 Button("Connect to Wi-Fi") { submit(.connectWiFi) }.disabled(ssid.isEmpty)
-                                Button("Find networks") { submit(.scanWiFi) }
-                            }.disabled(busy || !state.connected)
+                                if automatic && progress == "Finding networks…" { ProgressView("Finding networks…") }
+                            }.disabled(editingLocked || !state.connected)
                         } footer: {
                             Text("Wi-Fi is optional. Enrollment can start over Bluetooth; cloud confirmation needs a working network connection.")
                         }
@@ -111,29 +114,41 @@ struct NearbySetupView: View {
                     Section {
                         Text("Keep your unregistered Wendy device nearby and powered on.").foregroundStyle(.secondary)
                         ForEach(devices) { device in
-                            Button { actions.submit { name = DeviceEnrollmentForm.suggestedName(device.title); await connect(device) } } label: {
+                            Button { actions.submit { await choose(device) } } label: {
                                 Label(device.title, systemImage: "server.rack")
-                            }.disabled(busy)
+                            }.disabled(editingLocked)
                         }
-                        if devices.isEmpty && !busy { Text("No setup devices found. Check that Bluetooth is enabled and the device is ready for setup.").foregroundStyle(.secondary) }
-                        Button("Scan again") { actions.submit { await discover() } }.disabled(busy)
+                        ProgressView("Looking for nearby devices…")
+                        if devices.isEmpty {
+                            Text("Devices will appear here automatically. Keep Bluetooth on and your device nearby.").font(.callout).foregroundStyle(.secondary)
+                        }
                     }
                 }
-                if busy || error != nil {
+                if editingLocked || error != nil {
                     Section {
-                        if busy { ProgressView(progress) }
+                        if editingLocked { ProgressView(progress) }
                         if let error { Text(error).foregroundStyle(.orange).textSelection(.enabled) }
+                    }
+                }
+                if let observationError, !state.completed {
+                    Section {
+                        DisclosureGroup("Connection details") {
+                            Text(observationError).font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+                        }
                     }
                 }
             }
             .formStyle(.grouped)
-            .navigationTitle("Set up nearby device")
-            .toolbar { ToolbarItem(placement: .cancellationAction) { Button(state.completed ? "Done" : "Close") { dismiss() }.disabled(busy) } }
+            .navigationTitle(state.completed ? "You’re all set" : "Set up device")
+            #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+            #endif
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button(state.completed ? "Done" : "Close") { dismiss() }.disabled(editingLocked) } }
         }
         #if os(macOS)
         .frame(width: 520, height: 620)
         #endif
-        .interactiveDismissDisabled(busy)
+        .interactiveDismissDisabled(editingLocked)
         .task {
             // Join all started C calls before closing the exact session they own.
             await withTaskGroup(of: Void.self) { group in
@@ -148,26 +163,44 @@ struct NearbySetupView: View {
 
     private func discover() async {
         guard !busy else { return }
-        busy = true; progress = "Looking for devices…"; error = nil
-        defer { busy = false }
-        do { devices = try await GoClient.shared.discoverSetupDevices() }
-        catch { if !Task.isCancelled { self.error = error.localizedDescription } }
+        busy = true; automatic = true
+        defer { busy = false; automatic = false }
+        do {
+            devices = try await GoClient.shared.discoverSetupDevices()
+            observationError = nil
+        } catch { if !Task.isCancelled { observationError = error.localizedDescription } }
+    }
+
+    private func choose(_ device: NearbySetupDevice) async {
+        while busy {
+            do { try await Task.sleep(for: .milliseconds(100)) } catch { return }
+        }
+        guard selected == nil, !Task.isCancelled else { return }
+        name = DeviceEnrollmentForm.suggestedName(device.title)
+        await connect(device)
     }
 
     private func connect(_ device: NearbySetupDevice) async {
         guard !busy else { return }
-        busy = true; progress = "Connecting…"; error = nil; selected = device
-        defer { busy = false }
+        busy = true; automatic = true; selected = device
+        defer { busy = false; automatic = false }
         do {
             state = try await GoClient.shared.openNearbySetup(device.id)
-            error = state.error; lastStatus = .now
-        } catch { if !Task.isCancelled { self.error = error.localizedDescription } }
+            observationError = state.error; lastStatus = .now
+        } catch { if !Task.isCancelled { observationError = error.localizedDescription } }
+        nextReconnect = .now.addingTimeInterval(reconnectDelay)
+        reconnectDelay = state.connected ? 3 : min(reconnectDelay * 2, 30)
     }
 
     private func submit(_ action: NearbySetupAction) { actions.submit { await perform(action) } }
-    private func perform(_ action: NearbySetupAction) async {
-        guard !busy, state.session != 0 else { return }
-        busy = true; error = nil
+    private func perform(_ action: NearbySetupAction, automatically: Bool = false) async {
+        // A tap during a background read must not be silently discarded.
+        while busy && !automatically {
+            do { try await Task.sleep(for: .milliseconds(100)) } catch { return }
+        }
+        guard !busy, !Task.isCancelled, state.session != 0 else { return }
+        busy = true; automatic = automatically
+        if !automatically { error = nil }
         switch action {
         case .status: progress = "Checking connection…"
         case .scanWiFi: progress = "Finding networks…"
@@ -175,34 +208,52 @@ struct NearbySetupView: View {
         case .enroll: progress = "Preparing enrollment…"
         case .checkEnrollment: progress = "Checking enrollment…"
         }
-        defer { busy = false; if action == .connectWiFi { password = "" } }
+        defer {
+            busy = false; automatic = false
+            if action == .connectWiFi { password = "" }
+            if action == .scanWiFi { lastWiFiScan = .now }
+            if action == .status { lastStatus = .now }
+        }
         do {
             state = try await GoClient.shared.nearbySetupAction(action, session: state.session, ssid: ssid, password: password,
                 account: choice?.account ?? "", organization: choice?.organizationID ?? "", name: name)
-            error = state.error; lastStatus = .now
-            if action == .enroll && state.pending { checkingUntil = .now.addingTimeInterval(180) }
-            if action == .checkEnrollment && !state.completed && state.error == nil { error = "Still waiting for the device to appear online in Wendy Cloud." }
-        } catch { if !Task.isCancelled { self.error = error.localizedDescription } }
+            if automatically || state.pending { observationError = state.error }
+            else { error = state.error }
+            if state.completed { error = nil; observationError = nil }
+        } catch {
+            if !Task.isCancelled {
+                if automatically { observationError = error.localizedDescription }
+                else { self.error = error.localizedDescription }
+            }
+        }
     }
 
     private func watch() async {
         if let initialDevice {
             name = DeviceEnrollmentForm.suggestedName(initialDevice.title)
-            await connect(initialDevice)
-        } else {
-            await discover()
+            selected = initialDevice
         }
         do { organizations = try await GoClient.shared.enrollmentOrganizations() }
         catch { if !Task.isCancelled { self.error = error.localizedDescription } }
         while !Task.isCancelled {
-            do { try await Task.sleep(for: .seconds(3)) } catch { break }
-            guard !busy else { continue }
-            if scenePhase != .active {
-                if state.connected { await GoClient.shared.closeNearbySetup(state.session); state.connected = false }
-                continue
+            if !busy {
+                if scenePhase != .active {
+                    if state.connected { await GoClient.shared.closeNearbySetup(state.session); state.connected = false }
+                } else {
+                    switch state.observation(hasSelection: selected != nil, wifiExpanded: wifiExpanded,
+                                             statusAge: Date.now.timeIntervalSince(lastStatus),
+                                             scanAge: Date.now.timeIntervalSince(lastWiFiScan)) {
+                    case .discover: await discover()
+                    case .reconnect:
+                        if let selected, Date.now >= nextReconnect { await connect(selected) }
+                    case .checkEnrollment: await perform(.checkEnrollment, automatically: true)
+                    case .status: await perform(.status, automatically: true)
+                    case .scanWiFi: await perform(.scanWiFi, automatically: true)
+                    case .idle: break
+                    }
+                }
             }
-            if state.pending && !state.completed && Date.now < checkingUntil { await perform(.checkEnrollment) }
-            else if state.connected && !state.completed && Date.now.timeIntervalSince(lastStatus) > 25 { await perform(.status) }
+            do { try await Task.sleep(for: .seconds(5)) } catch { break }
         }
     }
 }
