@@ -141,7 +141,7 @@ targets:
     info:
       path: Resources/Mobile-Info.plist
       properties:
-        ITSAppUsesNonExemptEncryption: true
+        ITSAppUsesNonExemptEncryption: false
         CFBundleShortVersionString: "$(MARKETING_VERSION)"
         CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         CFBundleDisplayName: Wendy
