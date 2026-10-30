@@ -6,7 +6,6 @@
 WDCameraMetadataResult *WDCameraMetadataList(uint64_t session);
 WDStatus *WDCameraAlignmentSave(uint64_t session, WDCameraAlignmentInput *input);
 void WDCameraMetadataFree(WDCameraMetadataResult *value);
-#include <TargetConditionals.h>
 #include "UnitreeTypes.h"
 #include "SiteRobotTypes.h"
 
