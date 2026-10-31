@@ -4,6 +4,9 @@ on:
   pull_request:
     paths:
       - 'swift/**'
+      - 'go/**'
+      - 'go.mod'
+      - 'go.sum'
       - 'Proto/**'
       - '.github/actions/swift-e2e-run/**'
       - '.github/workflows/swift-e2e-tests.yml'
