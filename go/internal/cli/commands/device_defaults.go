@@ -2,6 +2,7 @@ package commands
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -131,9 +132,9 @@ var fetchDefaultCloudAssetsV2Fn = fetchCloudAssetsV2
 var connectDefaultCloudAssetV2Fn = connectCloudAssetV2
 var refreshDefaultCloudCertificateFn = refreshCertsForAuth
 
-// A saved cloud selector resolves its own tenant session instead of going
-// through pickAuthEntry. Prepare that session before discovery or the lazy
-// tunnel dial can turn an expired certificate into an opaque PKI refusal.
+// Prepare the selected session before discovery or dialing. Shared by the
+// auth picker, saved Cloud selectors and direct-device connection recovery.
+// X.509 renewal remains first; sign-in re-issuance is current-context only.
 func prepareDefaultCloudCertificate(ctx context.Context, auth *config.AuthConfig) error {
 	if auth == nil || len(auth.Certificates) == 0 {
 		return nil
@@ -148,37 +149,54 @@ func prepareDefaultCloudCertificate(ctx context.Context, auth *config.AuthConfig
 	if err := reloadOAuthSession(auth); err != nil {
 		return err
 	}
+	if len(auth.Certificates) == 0 {
+		return nil
+	}
+	// A future held leaf is a clock problem, not issuance authority. Refuse
+	// before either renewal path can spend. Malformed leaves are diagnosed
+	// by the connection as before.
+	if auth.OAuthIssuer != "" {
+		if leaf, parseErr := storedLeaf(auth.Certificates[0].PemCertificate); parseErr == nil && leaf.NotBefore.After(timeNowFn().Add(certificateIssuanceSkew)) {
+			return fmt.Errorf("operator certificate is not yet valid; check this computer's clock")
+		}
+	}
+	previous := auth.Certificates[0].PemCertificate
 	err = ensureFreshCertificateFn(ctx, auth)
 	if len(auth.Certificates) == 0 {
 		return err
 	}
-	// Preflight suppresses transport failures. The certificate can expire
-	// during that request, so check its current expiry even when err is nil.
+	// Preserve successful X.509 renewal, even if PKI deliberately returns a
+	// short lifetime. Never immediately follow it with another issuance.
+	if auth.Certificates[0].PemCertificate != previous {
+		return err
+	}
 	notAfter, expiryErr := leafNotAfterFn(auth.Certificates[0].PemCertificate)
 	if expiryErr != nil {
 		return err
 	}
+	now := timeNowFn()
+	if !certNeedsRenewal(notAfter, now, certificateRenewalMargin(auth.Certificates[0].PemCertificate)) {
+		return err
+	}
+	if auth.OAuthIssuer != "" && auth.ServiceAccount == "" {
+		err = reissueCurrentCertificate(ctx, auth)
+		var persistence certificatePersistenceError
+		if err == nil || isOIDCSignInRefused(err) || errors.As(err, &persistence) || ctx.Err() != nil {
+			return err
+		}
+	}
 	if timeNowFn().Before(notAfter) {
-		// Like pickAuthEntry, a refused renewal must not block a certificate
-		// that can still authorize the connection.
 		if err != nil {
-			reportStaleCertificate(err)
+			if auth.OAuthIssuer == "" {
+				reportStaleCertificate(err)
+			} else {
+				plainNotice("Certificate replacement failed; using the still-valid certificate: %v", err)
+			}
 		}
 		return nil
 	}
 	if err == nil {
 		err = errCertExpired
-	}
-	if auth.OAuthIssuer == "" || auth.ServiceAccount != "" {
-		return err
-	}
-	// Keep the lock while an OAuth refresh token obtains a new certificate
-	// after expiry, through persistence of any rotated token.
-	err = refreshDefaultCloudCertificateFn(ctx, auth)
-	// Issuance can fail after the refresh token rotates. Persist that token
-	// even on failure so the next attempt can still use the selected session.
-	if saveErr := persistOAuthSession(auth); err == nil {
-		err = saveErr
 	}
 	return err
 }

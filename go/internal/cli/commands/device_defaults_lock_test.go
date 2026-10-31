@@ -122,6 +122,7 @@ func TestPrepareDefaultCloudCertificateLocksRenewalPersistence(t *testing.T) {
 }
 
 func TestPrepareDefaultCloudCertificateKeepsLockForOAuthRecovery(t *testing.T) {
+	resetAutomaticCertReissue(t)
 	t.Setenv("WENDY_SECRET_STORE", "file")
 	auth := pickerAuth(7)
 	auth.OAuthIssuer = "https://auth.example"

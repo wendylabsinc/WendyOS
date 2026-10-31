@@ -464,7 +464,7 @@ func exchangeDPoPToken(
 			defer func() { _ = retry.Body.Close() }()
 			return parseTokenResponse(retry)
 		}
-		return nil, fmt.Errorf("token endpoint returned 400: %s", strings.TrimSpace(string(body)))
+		return nil, oidcTokenFailure(http.StatusBadRequest, body)
 	}
 
 	return parseTokenResponse(resp)
@@ -473,7 +473,7 @@ func exchangeDPoPToken(
 func parseTokenResponse(resp *http.Response) (*oidcTokenResponse, error) {
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return nil, fmt.Errorf("token endpoint returned %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		return nil, oidcTokenFailure(resp.StatusCode, body)
 	}
 	var out oidcTokenResponse
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
@@ -483,4 +483,28 @@ func parseTokenResponse(resp *http.Response) (*oidcTokenResponse, error) {
 		return nil, fmt.Errorf("token response contained no access_token")
 	}
 	return &out, nil
+}
+
+// Only Auth's session refusal warrants signing in again. PKI denials,
+// discovery failures, rate limits and token configuration errors do not.
+func oidcTokenFailure(status int, body []byte) error {
+	var failure struct {
+		Error string `json:"error"`
+	}
+	_ = json.Unmarshal(body, &failure)
+	// Provider descriptions and non-JSON bodies can contain credentials or
+	// terminal controls. Report only recognized OAuth error codes.
+	detail := ""
+	switch failure.Error {
+	case "invalid_request", "invalid_client", "invalid_grant", "unauthorized_client",
+		"unsupported_grant_type", "invalid_scope", "invalid_target", "invalid_resource",
+		"access_denied", "temporarily_unavailable", "server_error", "use_dpop_nonce", "invalid_dpop_proof":
+		detail = ": " + failure.Error
+	}
+	err := fmt.Errorf("token endpoint returned %d%s", status, detail)
+	if status == http.StatusUnauthorized || status == http.StatusForbidden ||
+		(status == http.StatusBadRequest && (failure.Error == "invalid_grant" || failure.Error == "access_denied")) {
+		return oidcSignInRefusedError{err}
+	}
+	return err
 }

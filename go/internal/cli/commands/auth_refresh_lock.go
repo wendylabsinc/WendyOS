@@ -14,6 +14,8 @@ import (
 // they replace the same config.json. Hold it across reload, token rotation and
 // persistence so the update check cannot restore a consumed refresh token.
 // Opening a separate file handle for each acquisition also serializes goroutines.
+// Lock order is auth-refresh.lock, then config.lock inside config.Update.
+// Config update callbacks must not acquire this auth lock.
 func acquireAuthRefreshLock(ctx context.Context) (func(), error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err

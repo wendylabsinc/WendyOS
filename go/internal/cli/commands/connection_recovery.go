@@ -118,7 +118,7 @@ func offerCertRefreshAndRetry(ctx context.Context, nonInteractive bool, cause er
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
 	}
-	if stopConnectionRecovery(cause) || nonInteractive || jsonOutput || !isInteractiveTerminal() {
+	if stopConnectionRecovery(cause) {
 		return nil, cause
 	}
 	reason := certificateRefreshReason(cause)
@@ -132,6 +132,39 @@ func offerCertRefreshAndRetry(ctx context.Context, nonInteractive bool, cause er
 	var rejection tlsHandshakeRejectedError
 	if errors.As(cause, &rejection) && rejection.switchStep != "" {
 		fmt.Fprintln(os.Stderr, rejection.switchStep)
+		return nil, cause
+	}
+	// An OIDC sign-in supplies issuance authority independently of the old
+	// leaf. This path also works in scripts; diagnostics stay on stderr.
+	// SECURITY: Silent recovery, including scripts, is authorized by the
+	// scoped AAA exception recorded in organization docs/aaa.md (2026-10-21).
+	// PKI owns certificate issuance and its authority-event audit (AAA
+	// sections 5.2 and 12); optional CLI telemetry adds no issuance authority.
+	cfg, loadErr := config.Load()
+	if loadErr != nil {
+		return nil, errors.Join(cause, loadErr)
+	}
+	current, resolveErr := config.ResolveAuth(cfg, "", nil)
+	if resolveErr == nil && current.OAuthIssuer != "" && current.ServiceAccount == "" {
+		previous := ""
+		if len(current.Certificates) > 0 {
+			previous = current.Certificates[0].PemCertificate
+		}
+		if err := prepareDefaultCloudCertificate(ctx, current); err != nil {
+			return nil, errors.Join(cause, err)
+		}
+		if len(current.Certificates) == 0 || current.Certificates[0].PemCertificate == previous {
+			return nil, cause
+		}
+		conn, err := retry()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "Certificates refreshed, but the connection retry failed.")
+			return nil, err
+		}
+		fmt.Fprintln(os.Stderr, "Connected after refreshing client certificates.")
+		return conn, nil
+	}
+	if nonInteractive || jsonOutput || !isInteractiveTerminal() {
 		return nil, cause
 	}
 	if !confirmFn("Refresh certificates and retry?") {

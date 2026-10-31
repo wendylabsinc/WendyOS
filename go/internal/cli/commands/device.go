@@ -1113,14 +1113,18 @@ func pickAuthEntry(cloudGRPC string) (*config.AuthConfig, error) {
 	if err != nil {
 		return nil, err
 	}
-	// Renew while the certificate is still valid. This shared picker has no
-	// caller context; renewal applies its own request timeout. Enrollment uses
-	// prepareEnrollmentAuth instead so expiry can trigger login before work.
+	// Keep pre-expiry renewal first; OIDC operators can then re-issue through
+	// their current sign-in session. This picker has no caller context, so
+	// both network paths impose their own timeout.
 	var before string
 	if len(auth.Certificates) > 0 {
 		before = auth.Certificates[0].PemCertificate
 	}
-	if rerr := ensureFreshCertificateFn(context.Background(), auth); rerr != nil {
+	if auth.OAuthIssuer != "" && auth.ServiceAccount == "" {
+		if err := prepareDefaultCloudCertificate(context.Background(), auth); err != nil {
+			return nil, err
+		}
+	} else if rerr := ensureFreshCertificateFn(context.Background(), auth); rerr != nil {
 		reportStaleCertificate(rerr)
 	}
 	// A renewal is a certificate refresh: retry an unbound registry key, as
