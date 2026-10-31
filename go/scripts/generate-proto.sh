@@ -81,6 +81,7 @@ SHARED_GRPC_API_CONTRACTS_PROTOS=(
     "wendycloud/v2/registry.proto"
     "wendycloud/v2/organizations.proto"
     "wendycloud/v2/notifications.proto"
+    "wendycloud/v2/device_enrollment.proto"
     "wendy/options.proto"
 )
 SHARED_GRPC_API_CONTRACTS_PATH_ARGS=()
@@ -94,7 +95,7 @@ done
 SHARED_GRPC_API_CONTRACTS_DIR="$(mktemp -d)"
 trap 'rm -rf "$SHARED_GRPC_API_CONTRACTS_DIR"' EXIT
 buf export \
-    "https://github.com/wendylabsinc/service-protos.git#ref=3f29f59fc72f692a52b91a03a14d465d5e8dbfc7" \
+    "https://github.com/wendylabsinc/service-protos.git#ref=066e8012d10058020dc01d7963d938afd32c6321" \
     "${SHARED_GRPC_API_CONTRACTS_PATH_ARGS[@]}" --output "$SHARED_GRPC_API_CONTRACTS_DIR"
 
 MODULE="github.com/wendylabsinc/wendy"
@@ -226,21 +227,12 @@ for p in "${CLOUD_PROTOS[@]}"; do
 done
 
 # ---- Cloud v2 protos ----
-# Except for the shared gRPC APIs above, wendycloud.v2 is vendored beside v1.
-# Paths match service-protos, including DeviceEnrollmentService, Cloud-owned
-# though it is.
-#
-# Pin: the remaining local wendycloud/v2/*.proto are service-protos master
-# cfa7f45d (merged #145, registry vectors). device_enrollment.proto is not in
-# service-protos: it is cloud #757 head 5e3003e4
-# (cloud-proto/device_enrollment.proto), including enrollment hardware.
-# Re-pin: copy those files from
-# the new heads with `git show <sha>:<path>`, run `make proto`, and update the
-# SHAs here. Shared wendy/options.proto (the signed_request method option) generates
-# into cloudpbv2 too, so the option and SignedRequest live in one Go package.
+# Except for the Shared gRPC API contracts above, wendycloud.v2 is vendored beside v1.
+# The remaining local pki_admin.proto is from service-protos cfa7f45d.
+# Shared wendy/options.proto (the signed_request method option) generates into
+# cloudpbv2 too, so the option and SignedRequest live in one Go package.
 CLOUD_V2_PKG="$MODULE/go/proto/gen/cloudpb/v2"
 CLOUD_V2_PROTOS=(
-    "wendycloud/v2/device_enrollment.proto"
     "wendycloud/v2/pki_admin.proto"
     "${SHARED_GRPC_API_CONTRACTS_PROTOS[@]}"
 )
