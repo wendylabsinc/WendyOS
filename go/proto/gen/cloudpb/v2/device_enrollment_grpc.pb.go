@@ -19,7 +19,8 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	DeviceEnrollmentService_EnrollDevice_FullMethodName = "/wendycloud.v2.DeviceEnrollmentService/EnrollDevice"
+	DeviceEnrollmentService_EnrollDevice_FullMethodName          = "/wendycloud.v2.DeviceEnrollmentService/EnrollDevice"
+	DeviceEnrollmentService_ListUnmigratedDevices_FullMethodName = "/wendycloud.v2.DeviceEnrollmentService/ListUnmigratedDevices"
 )
 
 // DeviceEnrollmentServiceClient is the client API for DeviceEnrollmentService service.
@@ -35,13 +36,6 @@ const (
 // FabricManagementService) or a hand-built operator-signed RelayEnrollment. Sem's ruling of
 // 2026-09-06 is that no credential is hand-minted -- the automatic flow must work.
 //
-// Downstream of that, this is also the missing writer migration 000059 named. That migration
-// added assets.pki_device_name and said in its own comment that "device enrollment against
-// pki-core is not built ... Every row is NULL today, and the image-assignment query therefore
-// DENIES every pull". Enrolling through this RPC is the first thing in the system that learns
-// a device's pki-core name and records it, so it closes an authorization path that currently
-// fails closed for the whole fleet.
-//
 // CLOUD IS A PURE RELAY, NEVER THE ISSUER (AAA D7). The authority is the operator's own
 // signature on the enrollment request, verified by pki-core against the tenant's Operator
 // Authority pool with a live revocation check. Cloud cannot sign one: its signing key is the
@@ -54,14 +48,17 @@ const (
 // signature into an enrollment authority or narrow the enrollment artifact into a transport
 // detail.
 //
-// Cloud-owned and outside the shared service-protos submodule, for the reason
-// OrganizationInviteService and OrganizationProvisioningService give in their own headers:
-// what crosses the fabric is pki-core's contract and lives there; this RPC is the shape of
-// cloud's OWN add-device surface, which no other service participates in.
+// Cloud's own add-device surface, collected here as the shared source of truth.
+// What crosses the fabric remains pki-core's contract.
 type DeviceEnrollmentServiceClient interface {
 	// Registers a device and returns its enrollment credential, once.
 	// Signed; payload_type "wendycloud.v2.EnrollDeviceRequest".
 	EnrollDevice(ctx context.Context, in *SignedRequest, opts ...grpc.CallOption) (*EnrollDeviceResponse, error)
+	// The caller's organization's devices the WDY-3919 re-key (migration 000112) could not move
+	// onto their certificate UUID: no device name, a name that is not a lowercase UUID, or a
+	// UUID that collided. Their certificates no longer resolve, so each re-enrolls with a new
+	// UUID. Read-only; needs device:enroll; lists only devices the caller can access.
+	ListUnmigratedDevices(ctx context.Context, in *ListUnmigratedDevicesRequest, opts ...grpc.CallOption) (*ListUnmigratedDevicesResponse, error)
 }
 
 type deviceEnrollmentServiceClient struct {
@@ -82,6 +79,16 @@ func (c *deviceEnrollmentServiceClient) EnrollDevice(ctx context.Context, in *Si
 	return out, nil
 }
 
+func (c *deviceEnrollmentServiceClient) ListUnmigratedDevices(ctx context.Context, in *ListUnmigratedDevicesRequest, opts ...grpc.CallOption) (*ListUnmigratedDevicesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListUnmigratedDevicesResponse)
+	err := c.cc.Invoke(ctx, DeviceEnrollmentService_ListUnmigratedDevices_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // DeviceEnrollmentServiceServer is the server API for DeviceEnrollmentService service.
 // All implementations must embed UnimplementedDeviceEnrollmentServiceServer
 // for forward compatibility.
@@ -95,13 +102,6 @@ func (c *deviceEnrollmentServiceClient) EnrollDevice(ctx context.Context, in *Si
 // FabricManagementService) or a hand-built operator-signed RelayEnrollment. Sem's ruling of
 // 2026-09-06 is that no credential is hand-minted -- the automatic flow must work.
 //
-// Downstream of that, this is also the missing writer migration 000059 named. That migration
-// added assets.pki_device_name and said in its own comment that "device enrollment against
-// pki-core is not built ... Every row is NULL today, and the image-assignment query therefore
-// DENIES every pull". Enrolling through this RPC is the first thing in the system that learns
-// a device's pki-core name and records it, so it closes an authorization path that currently
-// fails closed for the whole fleet.
-//
 // CLOUD IS A PURE RELAY, NEVER THE ISSUER (AAA D7). The authority is the operator's own
 // signature on the enrollment request, verified by pki-core against the tenant's Operator
 // Authority pool with a live revocation check. Cloud cannot sign one: its signing key is the
@@ -114,14 +114,17 @@ func (c *deviceEnrollmentServiceClient) EnrollDevice(ctx context.Context, in *Si
 // signature into an enrollment authority or narrow the enrollment artifact into a transport
 // detail.
 //
-// Cloud-owned and outside the shared service-protos submodule, for the reason
-// OrganizationInviteService and OrganizationProvisioningService give in their own headers:
-// what crosses the fabric is pki-core's contract and lives there; this RPC is the shape of
-// cloud's OWN add-device surface, which no other service participates in.
+// Cloud's own add-device surface, collected here as the shared source of truth.
+// What crosses the fabric remains pki-core's contract.
 type DeviceEnrollmentServiceServer interface {
 	// Registers a device and returns its enrollment credential, once.
 	// Signed; payload_type "wendycloud.v2.EnrollDeviceRequest".
 	EnrollDevice(context.Context, *SignedRequest) (*EnrollDeviceResponse, error)
+	// The caller's organization's devices the WDY-3919 re-key (migration 000112) could not move
+	// onto their certificate UUID: no device name, a name that is not a lowercase UUID, or a
+	// UUID that collided. Their certificates no longer resolve, so each re-enrolls with a new
+	// UUID. Read-only; needs device:enroll; lists only devices the caller can access.
+	ListUnmigratedDevices(context.Context, *ListUnmigratedDevicesRequest) (*ListUnmigratedDevicesResponse, error)
 	mustEmbedUnimplementedDeviceEnrollmentServiceServer()
 }
 
@@ -134,6 +137,9 @@ type UnimplementedDeviceEnrollmentServiceServer struct{}
 
 func (UnimplementedDeviceEnrollmentServiceServer) EnrollDevice(context.Context, *SignedRequest) (*EnrollDeviceResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method EnrollDevice not implemented")
+}
+func (UnimplementedDeviceEnrollmentServiceServer) ListUnmigratedDevices(context.Context, *ListUnmigratedDevicesRequest) (*ListUnmigratedDevicesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListUnmigratedDevices not implemented")
 }
 func (UnimplementedDeviceEnrollmentServiceServer) mustEmbedUnimplementedDeviceEnrollmentServiceServer() {
 }
@@ -175,6 +181,24 @@ func _DeviceEnrollmentService_EnrollDevice_Handler(srv interface{}, ctx context.
 	return interceptor(ctx, in, info, handler)
 }
 
+func _DeviceEnrollmentService_ListUnmigratedDevices_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListUnmigratedDevicesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DeviceEnrollmentServiceServer).ListUnmigratedDevices(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DeviceEnrollmentService_ListUnmigratedDevices_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DeviceEnrollmentServiceServer).ListUnmigratedDevices(ctx, req.(*ListUnmigratedDevicesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // DeviceEnrollmentService_ServiceDesc is the grpc.ServiceDesc for DeviceEnrollmentService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -185,6 +209,10 @@ var DeviceEnrollmentService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "EnrollDevice",
 			Handler:    _DeviceEnrollmentService_EnrollDevice_Handler,
+		},
+		{
+			MethodName: "ListUnmigratedDevices",
+			Handler:    _DeviceEnrollmentService_ListUnmigratedDevices_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
