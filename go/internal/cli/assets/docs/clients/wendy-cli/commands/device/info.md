@@ -49,6 +49,8 @@ The field is omitted on devices that are not a Jetson, when the mode cannot be r
 
 ### Storage output fields
 
+`Storage:` (`storageMedium` in JSON) is the medium the device booted from: the disk that holds `/`. It is one of `nvme`, `emmc`, `sd`, `ufs` or `usb`. When the agent does not recognise the disk, it shows the image's own value instead (for example `disk` on a VM, or on x86 booted from SATA). The field is omitted on hosts that are not WendyOS. Older agents report the value the image was built with, which can be wrong when the image boots from more than one kind of disk.
+
 When the agent can identify the filesystem that holds `/var/lib/containerd`, it is reported alongside the mounted partitions. The field is omitted from the JSON map when inspection fails or the agent predates it.
 
 | Field (JSON) | Human-readable label | Description |
