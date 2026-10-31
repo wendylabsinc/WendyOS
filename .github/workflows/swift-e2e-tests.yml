@@ -469,14 +469,18 @@ jobs:
 
   swift-e2e-analyze:
     name: Analyze E2E Results
-    if: ${{ always() && !cancelled() }}
+    if: >-
+      ${{ always() && !cancelled() &&
+          (needs.swift-e2e-local-macos.result == 'failure' ||
+           needs.swift-e2e-local-ubuntu.result == 'failure') }}
     needs:
       - swift-e2e-local-macos
       - swift-e2e-local-ubuntu
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
-      CLAUDE_CODE_VERSION: '2.1.199'
+      CLAUDE_CODE_VERSION: '2.1.316'
+      WENDY_E2E_REVIEW_CLAUDE_MODEL: claude-sonnet-5-5
       # Slack posts go through the Wendy CI Slack app to the channel (ID or
       # #name) in FEED_E2E_SLACK_CHANNEL. Only this flag, never the bot token, is
       # in the job environment.
