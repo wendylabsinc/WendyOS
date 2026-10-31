@@ -75,6 +75,12 @@ type AgentService struct {
 	// process was started from; see binarySHA256.
 	binaryHashOnce sync.Once
 	binaryHash     string
+
+	// Settable within-package so tests need neither a WendyOS image nor its disks.
+	deviceTypePath string
+	rootMedium     func() (medium, disk string, err error)
+	rootMediumOnce sync.Once
+	rootMediumName string
 }
 
 func NewAgentService(
@@ -126,12 +132,12 @@ func (s *AgentService) GetAgentVersion(ctx context.Context, _ *agentpb.GetAgentV
 		resp.OsVersion = &distroVer
 	}
 
-	if data, err := os.ReadFile("/etc/wendyos/device-type"); err == nil {
-		deviceType, storageMedium := parseDeviceType(string(data))
+	if data, err := os.ReadFile(s.deviceTypeFile()); err == nil {
+		deviceType, imageMedium := parseDeviceType(string(data))
 		if deviceType != "" {
 			resp.DeviceType = &deviceType
 		}
-		if storageMedium != "" {
+		if storageMedium := pickStorageMedium(s.bootMedium(), imageMedium); storageMedium != "" {
 			resp.StorageMedium = &storageMedium
 		}
 	}
