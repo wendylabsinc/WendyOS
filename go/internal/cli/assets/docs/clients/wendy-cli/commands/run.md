@@ -80,6 +80,8 @@ Before it builds on this computer, `wendy run` checks the free space on the disk
 
 Runs that build nothing, because the app's image is already on the device, skip the check, and so do `--build-host` runs, which check the build host's disk instead. On macOS and Windows, Docker Desktop keeps its data in a virtual disk with a size limit of its own, which the check does not read.
 
+The device needs room for the image too. Before the build, the run stops with `disk_full` when the disk that holds the device's container images has less than 512 MiB free, and suggests `wendy device cache prune` and removing apps the device no longer needs. Above that, a device disk more than 85% full only prints a warning, since a re-deploy sends only the layers that changed. `--build-host` runs check the device too, because the build host delivers the image to it. After the build, the default chunked deploy asks the device which layers it lacks before sending any. It stops with `disk_full` when those layers' compressed size alone is more than the device's free space, and warns when their unpacked size, estimated at three times the compressed size, may be more. Registry pushes (Mac agents, `--chunking off`, `--deploy`) get only the check before the build. These checks need an agent that reports where it keeps container images (`containerStorage` in `wendy device info`); older agents are not checked.
+
 If Docker has no Buildx plugin, the run stops when it first sets up its builder, with the error class `builder_unavailable` and a link to install Buildx.
 
 ## Detached output

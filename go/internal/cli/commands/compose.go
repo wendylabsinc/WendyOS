@@ -1219,6 +1219,10 @@ func runComposeWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, 
 	if err := checkLocalBuildSpace(imageBuildSpaceDirs(), imageBuildSpaceSteps(opts.builder, false)); err != nil {
 		return err
 	}
+	if err := checkDeviceDiskSpace(versionResp); err != nil {
+		return err
+	}
+	ctx = withDeviceStorage(ctx, versionResp)
 	if err := ensureAppleContainerSystemForBuilder(ctx, opts.builder, opts.yes); err != nil {
 		return err
 	}

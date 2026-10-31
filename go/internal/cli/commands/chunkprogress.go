@@ -34,6 +34,10 @@ type chunkPushProgress struct {
 	// a device time: a failed preparation prepared nothing.
 	firstSent, uploadDone, prepareDone time.Time
 	prepareFailed                      bool
+
+	// warning is a note for after the push, such as the device being short of
+	// space for the unpacked image (Warn).
+	warning string
 }
 
 // newChunkPushProgress returns a ready-to-use aggregator with its clock
@@ -132,6 +136,17 @@ func (p *chunkPushProgress) PrepareFailed() {
 	}
 }
 
+// Warn records a note to print once the push is done, when a live progress
+// display no longer owns the terminal.
+func (p *chunkPushProgress) Warn(text string) {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.warning = text
+}
+
 // Snapshot copies the current counters under lock and stamps Elapsed, giving
 // the caller an immutable point-in-time view it can format without racing the
 // push goroutines still mutating p. Safe to call on a nil *chunkPushProgress,
@@ -153,6 +168,7 @@ func (p *chunkPushProgress) Snapshot() chunkPushSnapshot {
 		SentBytes:     p.sentBytes,
 		PlannedBytes:  p.plannedBytes,
 		Elapsed:       now.Sub(p.start),
+		Warning:       p.warning,
 	}
 	if !p.uploadDone.IsZero() {
 		s.Uploaded = true
@@ -208,6 +224,8 @@ type chunkPushSnapshot struct {
 	// the upload (PrepareFinished); false while Preparing and after
 	// PrepareFailed.
 	Prepared bool
+	// Warning is a note to print once the push is done; "" when there is none.
+	Warning string
 }
 
 // alreadyHasChunks is the chunk count the device reported already having,

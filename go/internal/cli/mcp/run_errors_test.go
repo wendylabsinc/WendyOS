@@ -403,24 +403,30 @@ func TestRunNextStepComparesNormalizedTargets(t *testing.T) {
 	}
 }
 
-// A run the CLI refused before building, for lack of disk space, created
-// nothing on the device: the result must say so and point at freeing space
+// A run the CLI refused for lack of disk space, on this computer or on the
+// device, deployed nothing: the result must say so and point at freeing space
 // rather than at inspecting the device.
 func TestRunDiskSpaceRefusalSaysNothingWasDeployed(t *testing.T) {
-	s := New(&config.Config{}, nil)
-	s.runCommandFn = func(context.Context, []string, commandTarget, int) (string, bool, error) {
-		return `{"error":{"code":"disk_full","exit":1,"message":"not enough free disk space to build: 1.0 GiB free on the disk holding /Users/me/Library/Caches, and a build needs at least 3.0 GiB","retryable":false,"next_steps":["Run ` + "`wendy cache clear`" + ` to delete Wendy's cached builds and downloads."]}}` + "\n", false, errors.New("exit status 1")
-	}
-	r, err := s.handleRun(context.Background(), callToolReq("run", map[string]any{"project_path": runProject(t), "device": "robot.local:50051"}))
-	if err != nil || !r.IsError {
-		t.Fatalf("want tool error: %v %v", r, err)
-	}
-	out := structuredMap(t, r)
-	message, _ := out["message"].(string)
-	if strings.Contains(message, "may already have created") || !strings.Contains(message, "disk space") {
-		t.Fatalf("message = %q; want one saying the build was refused for disk space before anything was deployed", message)
-	}
-	if next, _ := out["suggested_next_step"].(string); !strings.Contains(next, "free") {
-		t.Fatalf("suggested_next_step = %q; want freeing disk space", next)
+	for _, message := range []string{
+		"not enough free disk space to build: 1.0 GiB free on the disk holding /Users/me/Library/Caches, and a build needs at least 3.0 GiB",
+		"not enough free disk space on the device: 300 MiB free on /data, where it keeps container images, and a deploy needs at least 512 MiB",
+		"not enough free disk space on the device for this image: the layers it lacks are 2.1 GiB compressed, and 1.5 GiB is free on /data",
+	} {
+		s := New(&config.Config{}, nil)
+		s.runCommandFn = func(context.Context, []string, commandTarget, int) (string, bool, error) {
+			return `{"error":{"code":"disk_full","exit":1,"message":"` + message + `","retryable":false,"next_steps":["Run ` + "`wendy device cache prune`" + ` to delete container data the device no longer uses."]}}` + "\n", false, errors.New("exit status 1")
+		}
+		r, err := s.handleRun(context.Background(), callToolReq("run", map[string]any{"project_path": runProject(t), "device": "robot.local:50051"}))
+		if err != nil || !r.IsError {
+			t.Fatalf("want tool error: %v %v", r, err)
+		}
+		out := structuredMap(t, r)
+		got, _ := out["message"].(string)
+		if strings.Contains(got, "may already have created") || !strings.Contains(got, "disk space") {
+			t.Fatalf("%.50s: message = %q; want one saying the run was refused for disk space before anything was deployed", message, got)
+		}
+		if next, _ := out["suggested_next_step"].(string); !strings.Contains(next, "free") {
+			t.Fatalf("%.50s: suggested_next_step = %q; want freeing disk space", message, next)
+		}
 	}
 }

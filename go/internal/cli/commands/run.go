@@ -1570,6 +1570,9 @@ func runSwiftWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, cw
 	if err := checkLocalBuildSpace(toolchainBuildSpaceDirs(cwd), []string{wendyCacheClearStep}); err != nil {
 		return err
 	}
+	if err := checkDeviceDiskSpace(versionResp); err != nil {
+		return err
+	}
 	if err := swifttoolchain.EnsureSwiftVersion(ctx, &dimWriter{}, os.Stderr); err != nil {
 		return classifyCommandError(errBuilderUnavailable, err)
 	}
@@ -1672,6 +1675,9 @@ func runMacOSSwiftPMWithAgent(ctx context.Context, conn *grpcclient.AgentConnect
 		return commandErrorf(errProjectTargetMismatch, "architecture mismatch: device is %s but host is %s", deviceArch, runtime.GOARCH)
 	}
 	if err := checkLocalBuildSpace(toolchainBuildSpaceDirs(cwd), []string{wendyCacheClearStep}); err != nil {
+		return err
+	}
+	if err := checkDeviceDiskSpace(versionResp); err != nil {
 		return err
 	}
 
@@ -2425,6 +2431,11 @@ func runWithAgentRecorded(ctx context.Context, conn *grpcclient.AgentConnection,
 	// ahead of every local path because those exist to optimise a local build
 	// that is not going to happen.
 	if opts.buildHost != "" {
+		// The build host delivers the image to this device, so the device
+		// still needs room for it.
+		if err := checkDeviceDiskSpace(versionResp); err != nil {
+			return err
+		}
 		metrics.transport = "buildhost"
 		if len(opts.fleetDevices) > 0 {
 			// A fleet build starts one container per device: the first device's
@@ -2474,10 +2485,14 @@ func runWithAgentRecorded(ctx context.Context, conn *grpcclient.AgentConnection,
 	}
 
 	// A build will run below (the no-build fast path returned above). Refuse it
-	// now if this computer's disk is too full to hold it.
+	// now if this computer's disk, or the device's, is too full to hold it.
 	if err := checkLocalBuildSpace(imageBuildSpaceDirs(), imageBuildSpaceSteps(opts.builder, true)); err != nil {
 		return err
 	}
+	if err := checkDeviceDiskSpace(versionResp); err != nil {
+		return err
+	}
+	ctx = withDeviceStorage(ctx, versionResp)
 
 	// Make sure the Apple Container system is up when --builder apple-container is
 	// explicit. This covers both the chunk-diff and the registry-push build.
@@ -2552,9 +2567,8 @@ func runWithAgentRecorded(ctx context.Context, conn *grpcclient.AgentConnection,
 			// real error behind an unrelated builder-setup failure. Surface the
 			// actionable build error directly instead of falling back. (#1166)
 			return err
-		} else if errors.Is(err, errBuildxMissing) && registryPushWouldUseDocker(opts.builder) {
-			// The registry push would build with Docker too, and stop at the
-			// same missing plugin.
+		} else if chunkFailureRepeatsOnRegistryPush(err, opts.builder) {
+			// A registry push would stop at the same missing space or plugin.
 			return err
 		} else if shouldUseBuildkitOnDevice() {
 			// On-device (inside the agent container: WENDY_AGENT_SOCKET set, no

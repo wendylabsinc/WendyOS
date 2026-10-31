@@ -59,6 +59,7 @@ func pushLayersWithProgress(ctx context.Context, cs agentpb.WendyContainerServic
 		stop := startChunkPushHeartbeatForTour(prog, out, chunkPushPlainHeartbeatInterval, isRobotTour(ctx))
 		headers, err := pushLayersByChunksWithPrepareMode(ctx, cs, layers, prepare, nil, false, prog, cfg)
 		stop()
+		printChunkPushWarning(prog)
 		if err != nil {
 			return nil, err
 		}
@@ -128,6 +129,7 @@ func pushLayersWithProgress(ctx context.Context, cs agentpb.WendyContainerServic
 	}
 
 	<-done
+	printChunkPushWarning(prog)
 	if pushErr != nil {
 		return nil, pushErr
 	}
@@ -135,6 +137,14 @@ func pushLayersWithProgress(ctx context.Context, cs agentpb.WendyContainerServic
 		cliLogln("%s", prog.Snapshot().Summary())
 	}
 	return headers, nil
+}
+
+// printChunkPushWarning prints the note the push recorded (chunkPushProgress.Warn)
+// after it, on success or failure: a failure may be the one it warned about.
+func printChunkPushWarning(prog *chunkPushProgress) {
+	if warning := prog.Snapshot().Warning; warning != "" {
+		cliNotice("Warning: %s", warning)
+	}
 }
 
 // startChunkPushHeartbeat starts a background goroutine that writes a
