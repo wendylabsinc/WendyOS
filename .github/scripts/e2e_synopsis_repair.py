@@ -108,6 +108,12 @@ def identity(case):
     return {"suite": case.get("classname"), "test": case.get("name")}
 
 
+def verify_results(change, xml):
+    results = cases({"test-results.xml": xml})
+    require(len(results) == 1 and identity(results[0]) == {k: change[k] for k in ('suite', 'test')} and
+            not list(results[0]), "Verification did not pass exactly the failed test")
+
+
 def candidate(files, source):
     failures = [(c, f) for c in cases(files) for f in c.findall("failure") + c.findall("error")]
     require(len(failures) == 1, "Expected exactly one failing assertion")
@@ -143,13 +149,6 @@ def candidate(files, source):
     usage = re.findall(r"^Usage:\n  ([^\n]+)\n", stdout[0], re.MULTILINE)
     require(len(usage) == 1 and old not in stdout[0], "No unique changed synopsis")
     new = usage[0]
-    # Preserve all words, flags and argument names; only bracket/spacing drift.
-    for literal in (old, new):
-        require(0 < len(literal) <= 240 and
-                re.fullmatch(r"[A-Za-z0-9 <>:/._|()\[\]-]+", literal) and
-                literal.startswith(command + " ") and literal.endswith(" [flags]"), "Disallowed synopsis literal")
-    require(old != new and re.sub(r"[\[\] ]", "", old) == re.sub(r"[\[\] ]", "", new),
-            "Synopsis changes words/arguments, not just brackets/spacing")
     text = source(source_path)
     start, end = meta["sourceStartLine"], meta["sourceEndLine"]
     require(type(start) is int and type(end) is int and 1 <= start <= end <= len(text.splitlines()), "Invalid source range")
@@ -171,7 +170,8 @@ def replace_literal(text, change):
                 literal.startswith(change["command"] + " ") and literal.endswith(" [flags]"), "Disallowed literal")
     require(re.fullmatch(r"wendy(?: [a-z][a-z0-9-]*)+", change["command"]) and
             change["old"] != change["new"] and
-            re.sub(r"[\[\] ]", "", change["old"]) == re.sub(r"[\[\] ]", "", change["new"]), "Disallowed edit")
+            re.sub(r"[\[\]]", "", change["old"]).split() ==
+            re.sub(r"[\[\]]", "", change["new"]).split(), "Disallowed edit")
     require(text.count('"' + change["old"] + '"') == 1, "Stale/ambiguous source literal")
     return text.replace('"' + change["old"] + '"', '"' + change["new"] + '"', 1)
 
@@ -253,7 +253,7 @@ def prepare(api, run_id):
     pr = linked[0]
     require(pr["user"]["type"] == "User" and
             re.fullmatch(r"[A-Za-z0-9-]{1,39}", pr["user"]["login"]) and
-            pr["head"].get("repo", {}).get("full_name") == api.repo and
+            (pr["head"].get("repo") or {}).get("full_name") == api.repo and
             not pr["head"]["ref"].startswith(("ai/", "dependabot/", "renovate/")), "Bot/fork repair attribution excluded")
     duplicate = existing(api, breaking)
     require(duplicate is None, duplicate)
@@ -397,9 +397,7 @@ def main():
                 require(path.read_text() == replace_literal(original, change) and
                         git("diff", "HEAD", "--name-only").splitlines() == [change["path"]],
                         "Verification source differs from exact candidate")
-                results = cases({"test-results.xml": Path(args.results).read_text()})
-                require(len(results) == 1 and identity(results[0]) == {k: change[k] for k in ('suite', 'test')} and
-                        not list(results[0]), "Verification did not pass exactly the failed test")
+                verify_results(change, Path(args.results).read_text())
                 Path(args.proof).write_text(json.dumps(verification(proposal, int(os.environ["GITHUB_RUN_ID"]),
                                                                   int(os.environ["GITHUB_RUN_ATTEMPT"]))))
             else:

@@ -9,6 +9,7 @@ import sys
 import tempfile
 import unittest
 import urllib.error
+import xml.etree.ElementTree as ET
 import zipfile
 from pathlib import Path
 from unittest.mock import patch
@@ -172,6 +173,41 @@ class RepairTests(unittest.TestCase):
         with self.assertRaises(r.Skip):
             r.replace_literal(SOURCE.replace(OLD, NEW), change)
 
+    def test_spacing_cannot_join_or_split_words(self):
+        change = r.candidate(evidence(), lambda p: SOURCE)
+        for old, new in ((OLD, NEW.replace("local-port", "local -port")),
+                         (OLD.replace("local-port", "local -port"), NEW)):
+            with self.subTest(old=old, new=new), self.assertRaises(r.Skip):
+                r.replace_literal(SOURCE.replace(OLD, old), {**change, "old": old, "new": new})
+        self.assertEqual(r.replace_literal(SOURCE, {**change, "new": NEW.replace(" [flags]", "  [flags]")}),
+                         SOURCE.replace(OLD, NEW.replace(" [flags]", "  [flags]")))
+
+    def test_real_result_guard_rejects_zero_extra_skipped_and_failed(self):
+        change = r.candidate(evidence(), lambda p: SOURCE)
+        r.verify_results(change, evidence(False)["test-results.xml"])
+        skipped = ET.fromstring(evidence(False)["test-results.xml"])
+        ET.SubElement(next(skipped.iter("testcase")), "skipped")
+        for xml in ("<testsuites/>", evidence()["test-results.xml"], ET.tostring(skipped, encoding="unicode"),
+                    evidence(False)["test-results.xml"].replace("</testsuite>", "<testcase/></testsuite>")):
+            with self.subTest(xml=xml), self.assertRaises(r.Skip):
+                r.verify_results(change, xml)
+
+    @unittest.skipUnless(os.environ.get("E2E_SYNOPSIS_REAL_RESULTS"), "Real Swift output supplied by integration step")
+    def test_actual_swift_output_and_count_guards(self):
+        xml = Path(os.environ["E2E_SYNOPSIS_REAL_RESULTS"]).read_text()
+        change = r.candidate(evidence(), lambda p: SOURCE)
+        r.verify_results(change, xml)
+        root = ET.fromstring(xml)
+        test = next(root.iter("testcase"))
+        parent = next(node for node in root.iter() if test in list(node))
+        parent.append(copy.deepcopy(test))
+        with self.assertRaises(r.Skip):
+            r.verify_results(change, ET.tostring(root, encoding="unicode"))
+        parent.remove(test)
+        parent.clear()
+        with self.assertRaises(r.Skip):
+            r.verify_results(change, ET.tostring(root, encoding="unicode"))
+
     def test_chain_finds_first_bad_not_latest_merge(self):
         proposal = r.prepare(API(), 3)
         self.assertEqual(proposal["breaking"], BREAKING)
@@ -237,6 +273,33 @@ class RepairTests(unittest.TestCase):
             r.prepare(api, 3)
         self.assertFalse(api.writes)
 
+    def test_bot_fork_deleted_head_and_ambiguous_prs_skip(self):
+        for mutate in (lambda p: p["user"].update(type="Bot"),
+                       lambda p: p["head"].update(ref="ai/e2e-synopsis/old"),
+                       lambda p: p["head"].update(ref="dependabot/go_modules/example"),
+                       lambda p: p["head"].update(ref="renovate/example"),
+                       lambda p: p["head"].update(repo={"full_name": "fork/WendyOS"}),
+                       lambda p: p["head"].update(repo=None),
+                       lambda p: p.update(merge_commit_sha=GREEN)):
+            api = API()
+            original = api.get
+
+            def get(path, original=original, mutate=mutate):
+                value = original(path)
+                if path == f"commits/{BREAKING}/pulls?per_page=100":
+                    mutate(value[0])
+                return value
+
+            api.get = get
+            with self.subTest(mutate=mutate), self.assertRaises(r.Skip):
+                r.prepare(api, 3)
+            self.assertFalse(api.writes)
+        api = API()
+        original = api.get
+        api.get = lambda path: original(path) * 2 if path == f"commits/{BREAKING}/pulls?per_page=100" else original(path)
+        with self.assertRaises(r.Skip):
+            r.prepare(api, 3)
+
     def publish(self, api, proposal=None, mapping=None, slack=True):
         proposal = proposal or r.prepare(api, 3)
         return r.publish(api, proposal, r.verification(proposal, 99, 1), 99, 1,
@@ -282,6 +345,24 @@ class RepairTests(unittest.TestCase):
             self.publish(api, proposal)
         with self.assertRaisesRegex(r.Skip, "Existing repair branch"):
             self.publish(api, proposal)
+
+    def test_main_advances_during_publication_never_updates_a_ref(self):
+        for stage in ("git/commits", "git/refs"):
+            api = API()
+            proposal = r.prepare(api, 3)
+            original = api.post
+
+            def post(path, body, original=original, stage=stage, api=api):
+                value = original(path, body)
+                if path == stage:
+                    api.main = GREEN
+                return value
+
+            api.post = post
+            with self.subTest(stage=stage), self.assertRaisesRegex(r.Skip, "Main advanced"):
+                self.publish(api, proposal)
+            self.assertNotIn("pulls", dict(api.writes))
+            self.assertTrue(all(path in ("git/blobs", "git/trees", "git/commits", "git/refs") for path, _ in api.writes))
 
     def test_missing_mapping_reports_no_ping(self):
         api = API()

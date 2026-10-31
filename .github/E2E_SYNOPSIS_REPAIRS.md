@@ -3,13 +3,13 @@
 `e2e-synopsis-repair.yml` is prospective automation for completed **push-to-main**
 Swift E2E runs. It keeps the existing Sonnet analysis unchanged. It never asks a
 model to generate a patch. PR/fork/manual runs cannot enter the repair jobs;
-the PR trigger only runs offline fixture tests.
+the PR trigger runs mocked fixture tests and one credential-free CLI help test.
 
 The supported edit is one positive `stdout.contains("complete synopsis")`
 assertion in `swift/WendyE2ETests/Tests/WendyE2ETests/Wendy*Tests.swift`, inside
 `prints command help`, correlated with that test's metadata and its single
 successful, unauthenticated `wendy … --help` recording. Only brackets and spacing
-may differ. Every word, argument name and flag stays identical. Other failures,
+may differ, without joining or splitting words. Every word, argument name and flag stays identical. Other failures,
 multiple failing assertions, changed test source across the green/red boundary,
 or ambiguous evidence produce a reason in the workflow summary and no writes.
 
@@ -29,6 +29,8 @@ has no publication, Slack or model credentials; checkout authentication is not
 persisted. It checks the checkout SHA, exact file change and exactly one passing
 XUnit case, so a zero-test run cannot authorize publication. A proof artifact
 binds the complete proposal digest, source SHA/run and repair run/attempt.
+The help test only launches local shells and the CLI; verification does not
+start an agent daemon or use device/cloud credentials.
 
 The fresh publisher rechecks the verification job's success, proof, original
 artifacts, history, PR attribution and current main. It only runs trusted
@@ -37,6 +39,8 @@ hooks, model output or generated code. If main advances, the repair is skipped
 rather than rebased automatically. An update racing *after* the final main
 check can leave a draft behind main; it still contains only the verified edit
 against its original parent, never a write to main.
+Downloaded proposal and proof files stay under separate evidence directories;
+they cannot overwrite the publisher checkout's script.
 
 ## Required configuration (not installed by this PR)
 
@@ -88,7 +92,11 @@ missing steps; no guaranteed-delivery reconciliation is provided.
 
 `python3 -m unittest discover -s .github/scripts/tests -p test_e2e_synopsis_repair.py -v`
 uses only mocked APIs/artifacts and temporary local Git fixtures. Tests do not
-publish repairs or send notifications. The fixture's original failure/literals
+publish repairs or send notifications. Set `E2E_SYNOPSIS_REAL_RESULTS` to the
+actual filtered test's XUnit file to also exercise the passing, zero-test and
+duplicate-test guards against real Swift output. The PR workflow performs this
+integration check on Ubuntu through `E2ETest.sh`; it requires exactly the
+`wendy cloud tunnel` help test and starts no agent daemon. The fixture's original failure/literals
 come from the Ubuntu artifact for [Swift E2E Tests run 41095365784 — Merge pull
 request #2628 from wendylabsinc/fix/drivers-usb-install](https://github.com/wendylabsinc/WendyOS/actions/runs/41095365784).
 That run is evidence of the assertion failure, **not** attribution to that PR.
