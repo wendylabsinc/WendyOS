@@ -270,6 +270,11 @@ message GetAgentVersionResponse {
     // Current Jetson power mode (nvpmodel). Absent on devices that are not a
     // Jetson, when the mode cannot be read, and on agents predating this field.
     optional PowerMode power_mode = 28;
+    // Entitlement types (wendy.json "entitlements[].type") this agent
+    // understands. An agent ignores a type it does not know and starts the app
+    // without that access, so a CLI can refuse such a project before building
+    // it. Empty on agents predating this field, which are not checked.
+    repeated string entitlement_types = 29;
 }
 
 // A network interface on the device and the IP addresses assigned to it.

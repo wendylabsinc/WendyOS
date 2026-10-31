@@ -1237,6 +1237,13 @@ func runComposeWithAgent(ctx context.Context, conn *grpcclient.AgentConnection, 
 	if err != nil {
 		return err
 	}
+	entitlementCfgs := make([]*appconfig.AppConfig, 0, len(svcCfgs))
+	for _, svcCfg := range svcCfgs {
+		entitlementCfgs = append(entitlementCfgs, svcCfg)
+	}
+	if err := checkAgentEntitlements(versionResp, entitlementCfgs...); err != nil {
+		return err
+	}
 	for _, w := range xWendyWarnings {
 		cliLogln("warning: %s", w)
 	}

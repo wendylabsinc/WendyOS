@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -1178,5 +1179,26 @@ func TestGetAgentVersionBinarySHA256EmptyWhenUnreadable(t *testing.T) {
 	}
 	if resp.GetBinarySha256() != "" {
 		t.Errorf("binarySha256 = %q; want empty when the executable cannot be hashed", resp.GetBinarySha256())
+	}
+}
+
+// The CLI refuses a project whose entitlement types the agent does not list,
+// so the agent must list every type it applies.
+func TestGetAgentVersionReportsEntitlementTypes(t *testing.T) {
+	client, cleanup := startAgentServer(t,
+		&mockNetworkManager{},
+		&mockHardwareDiscoverer{},
+		&mockBluetoothManager{},
+	)
+	defer cleanup()
+
+	resp, err := client.GetAgentVersion(context.Background(), &agentpb.GetAgentVersionRequest{})
+	if err != nil {
+		t.Fatalf("GetAgentVersion: %v", err)
+	}
+	for _, want := range []string{"network", "camera", "gpu", "episode-write", "http"} {
+		if !slices.Contains(resp.GetEntitlementTypes(), want) {
+			t.Errorf("entitlement types %v lack %q", resp.GetEntitlementTypes(), want)
+		}
 	}
 }
