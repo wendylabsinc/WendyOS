@@ -91,12 +91,16 @@ still accepted.
 
 ## Network
 
-The network entitlement allows the container to access the device's network. If the device is connected to WiFi, Ethernet or otherwise, the container will have access to make TCP and UDP connections to the internet.
+The network entitlement selects the container's network access. Host and bridge
+modes can use the device's Internet connection. Mesh mode grants Wendy Net
+service access without an Internet default route.
 
 A "network" type entitlement can have the following values:
 
 - **mode**: `host` shares the device's network for LAN access; `bridge` provides
-  outbound DNS/downloads through NAT without LAN port publishing; `none` provides
+  outbound DNS/downloads through NAT without LAN port publishing; `mesh` provides
+  isolated Wendy Net service access; `host-admin` adds host network administration;
+  `none` provides
   only loopback. Declare a mode explicitly. Omitting the entire entitlement gives
   an ordinary container only loopback, and `wendy run` warns before building.
   In a shared-network group, secondaries inherit the primary service's namespace.
