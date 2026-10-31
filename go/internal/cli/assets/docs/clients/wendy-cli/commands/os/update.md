@@ -154,7 +154,7 @@ wendy os update-status --json
 
 ## Artifact auto-selection
 
-When no artifact path or `--artifact-url` is given, the CLI uses the device's `device_type` field to look up the latest OTA artifact from the WendyOS release manifest. If the device type is missing or not recognized in the update catalog, the CLI shows a warning and falls back to an interactive device-type picker. The latest version (stable or nightly) is then chosen automatically.
+When no artifact path or `--artifact-url` is given, the CLI uses the device's `device_type` field to look up the latest OTA artifact from the WendyOS release manifest. A device that reports `nvme` as its storage medium (see [`wendy device info`](../device/info.md)) gets the NVMe artifact when the release publishes one; every other device gets the default artifact. If the device type is missing or not recognized in the update catalog, the CLI shows a warning and falls back to an interactive device-type picker. The latest version (stable or nightly) is then chosen automatically.
 
 Use `--nightly` to select nightly (pre-release) artifacts instead of stable ones.
 
