@@ -209,7 +209,7 @@ private struct RunReviewAttemptArtifact {
     }
 }
 
-private struct ShellReviewHarness: Sendable {
+struct ShellReviewHarness: Sendable {
     var harnessName: String
     var modelName: String
     var shellCommand: String
@@ -217,8 +217,14 @@ private struct ShellReviewHarness: Sendable {
     var invocationSummary: String
     var authSummary: String
     var modelSource: String
+    var capturesClaudeJSON = false
 
-    func review(prompt: String, repoURL: URL, runURL: URL) throws {
+    func review(
+        prompt: String,
+        repoURL: URL,
+        runURL: URL,
+        output: FileHandle = .standardOutput
+    ) throws {
         let promptURL = runURL.appendingPathComponent(
             ".review-harness-prompt-\(UUID().uuidString).md"
         )
@@ -236,9 +242,50 @@ private struct ShellReviewHarness: Sendable {
         process.currentDirectoryURL = repoURL
         process.environment = environment
         process.standardInput = FileHandle.nullDevice
+        process.standardOutput = output
+
+        // Keep raw responses outside the uploaded run directory. A file avoids
+        // blocking the child on a full stdout pipe while waiting for it to exit.
+        let captureDirectory = FileManager.default.temporaryDirectory.appendingPathComponent(
+            "wendy-e2e-review-\(UUID().uuidString)",
+            isDirectory: true
+        )
+        let captureURL = captureDirectory.appendingPathComponent("stdout.json")
+        var capture: FileHandle?
+        defer {
+            try? capture?.close()
+            if capturesClaudeJSON { try? FileManager.default.removeItem(at: captureDirectory) }
+        }
+        if capturesClaudeJSON {
+            try FileManager.default.createDirectory(
+                at: captureDirectory,
+                withIntermediateDirectories: false,
+                attributes: [.posixPermissions: 0o700]
+            )
+            FileManager.default.createFile(
+                atPath: captureURL.path,
+                contents: nil,
+                attributes: [.posixPermissions: 0o600]
+            )
+            capture = try FileHandle(forWritingTo: captureURL)
+            process.standardOutput = capture
+            output.write(
+                Data("==> Claude review-only usage: pending (unavailable if interrupted)\n".utf8)
+            )
+        }
 
         try process.run()
         process.waitUntilExit()
+
+        if capturesClaudeJSON {
+            try? capture?.close()
+            let data = (try? Data(contentsOf: captureURL)) ?? Data()
+            let result = try? JSONDecoder().decode(ClaudeReviewResult.self, from: data)
+            if let text = result?.result {
+                output.write(Data((text + "\n").utf8))
+            }
+            output.write(Data(claudeReviewUsageSummary(result, authSummary: authSummary).utf8))
+        }
 
         guard process.terminationStatus == 0 else {
             throw ValidationError(
@@ -246,6 +293,67 @@ private struct ShellReviewHarness: Sendable {
             )
         }
     }
+}
+
+private struct ClaudeReviewResult: Decodable {
+    struct Usage: Decodable {
+        var input_tokens: Int?
+        var output_tokens: Int?
+        var cache_creation_input_tokens: Int?
+        var cache_read_input_tokens: Int?
+    }
+
+    // Decode only the allowlisted fields. Bad or absent accounting must not
+    // discard the ordinary result text or turn unknown usage into zero.
+    var result: String?
+    var usage: Usage?
+    var totalCostUSD: Double?
+    var models: [String]?
+
+    private enum CodingKeys: String, CodingKey {
+        case result, usage, total_cost_usd, modelUsage
+    }
+
+    private struct ModelMetadata: Decodable {}
+
+    init(from decoder: any Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        result = try? values.decode(String.self, forKey: .result)
+        usage = try? values.decode(Usage.self, forKey: .usage)
+        totalCostUSD = try? values.decode(Double.self, forKey: .total_cost_usd)
+        models = (try? values.decode([String: ModelMetadata].self, forKey: .modelUsage))?
+            .keys.sorted()
+    }
+}
+
+private func claudeReviewUsageSummary(
+    _ result: ClaudeReviewResult?,
+    authSummary: String
+) -> String {
+    func tokens(_ value: Int?) -> String {
+        guard let value, value >= 0 else { return "unavailable" }
+        return String(value)
+    }
+    let cost: String
+    if let value = result?.totalCostUSD, value.isFinite, value >= 0 {
+        cost = String(value)
+    } else {
+        cost = "unavailable"
+    }
+    let models =
+        result?.models?.map { promptSafeInline($0, maxLength: 160) }
+        .joined(separator: ", ") ?? ""
+    return """
+        ==> Claude review-only usage (excludes authentication probe)
+            Selected auth: \(authSummary)
+            Reported models: \(models.isEmpty ? "unavailable" : models)
+            input_tokens: \(tokens(result?.usage?.input_tokens))
+            output_tokens: \(tokens(result?.usage?.output_tokens))
+            cache_creation_input_tokens: \(tokens(result?.usage?.cache_creation_input_tokens))
+            cache_read_input_tokens: \(tokens(result?.usage?.cache_read_input_tokens))
+            total_cost_usd: \(cost) (Claude-reported estimate, not actual billed dollars)
+
+        """
 }
 
 enum ReviewHarnessPreference: String, ExpressibleByArgument {
@@ -396,13 +504,14 @@ private func claudeHarness(
         harnessName: "claude",
         modelName: model.name,
         shellCommand: apiKeyOnly
-            ? #"prompt="Read and follow the E2E review instructions in $WENDY_E2E_REVIEW_PROMPT."; claude --bare --model \#(shellQuoted(model.name)) --effort high --dangerously-skip-permissions --print "$prompt""#
-            : #"prompt="Read and follow the E2E review instructions in $WENDY_E2E_REVIEW_PROMPT."; claude --model \#(shellQuoted(model.name)) --effort high --dangerously-skip-permissions --print "$prompt""#,
+            ? #"prompt="Read and follow the E2E review instructions in $WENDY_E2E_REVIEW_PROMPT."; claude --bare --model \#(shellQuoted(model.name)) --effort high --dangerously-skip-permissions --output-format json --print "$prompt""#
+            : #"prompt="Read and follow the E2E review instructions in $WENDY_E2E_REVIEW_PROMPT."; claude --model \#(shellQuoted(model.name)) --effort high --dangerously-skip-permissions --output-format json --print "$prompt""#,
         commandSource: "Claude Code CLI",
         invocationSummary:
-            "claude\(bareFlag) --model \(model.name) --effort high --dangerously-skip-permissions --print <generated prompt>",
+            "claude\(bareFlag) --model \(model.name) --effort high --dangerously-skip-permissions --output-format json --print <generated prompt>",
         authSummary: authSummary,
-        modelSource: model.source
+        modelSource: model.source,
+        capturesClaudeJSON: true
     )
 }
 
