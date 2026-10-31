@@ -79,6 +79,8 @@ SHARED_GRPC_API_CONTRACTS_PROTOS=(
     "wendycloud/v2/relay_mcp.proto"
     "wendycloud/v2/postbox.proto"
     "wendycloud/v2/registry.proto"
+    "wendycloud/v2/organizations.proto"
+    "wendycloud/v2/notifications.proto"
     "wendy/options.proto"
 )
 SHARED_GRPC_API_CONTRACTS_PATH_ARGS=()
@@ -241,8 +243,6 @@ CLOUD_V2_PROTOS=(
     "wendycloud/v2/device_enrollment.proto"
     "wendycloud/v2/pki_admin.proto"
     "${SHARED_GRPC_API_CONTRACTS_PROTOS[@]}"
-    "wendycloud/v2/notifications.proto"
-    "wendycloud/v2/organizations.proto"
 )
 
 # The import path ends in "/v2", which would name the Go package "v2"; the
