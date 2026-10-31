@@ -46,8 +46,9 @@ on:
         required: false
 
 concurrency:
-  group: swift-e2e-tests-${{ github.ref }}
-  cancel-in-progress: true
+  # Keep every main run, including pending runs. Hosted jobs serialize below.
+  group: swift-e2e-tests-${{ github.ref == 'refs/heads/main' && github.run_id || github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 permissions:
   contents: read
