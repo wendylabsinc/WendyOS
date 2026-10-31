@@ -490,6 +490,13 @@ func pushLayersByChunksWithPrepareModeAndCache(ctx context.Context, cs agentpb.W
 			// reports its own cancellation as a bare Canceled status, which
 			// must not stand in for — and hide — the real ErrStalled cause.
 			if prepareErr := <-prepareDone; strictPrepare && prepareErr != nil && !errors.Is(uploadErr, chunkupload.ErrStalled) {
+				var cloudPrepare *cloudImagePrepareError
+				if errors.As(prepareErr, &cloudPrepare) &&
+					(errors.Is(prepareErr, context.Canceled) || status.Code(prepareErr) == codes.Canceled || status.Code(prepareErr) == codes.Unavailable) && retryableTunnelError(uploadErr) {
+					// A dropped connection can also cancel preparation or make
+					// it unavailable. Keep the independently failed upload's cause.
+					return nil, uploadErr
+				}
 				return nil, prepareErr
 			}
 		}

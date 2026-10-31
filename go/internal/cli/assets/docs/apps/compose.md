@@ -4,7 +4,7 @@ Wendy supports running multi-service applications defined in a standard `docker-
 
 ## How it works
 
-When you run `wendy run` in a directory that contains a compose file, Wendy automatically detects it as a compose project. Each service is built, pushed to the device's embedded container registry, and started in dependency order. No `wendy.json` is required; each service carries its own configuration, and an optional companion `wendy.json` in the same directory is merged in when present (see [Readiness probes and postStart hooks](#readiness-probes-and-poststart-hooks)).
+When you run `wendy run` in a directory that contains a compose file, Wendy automatically detects it as a compose project. Each service is built, transferred to the device, and started in dependency order. No `wendy.json` is required; each service carries its own configuration, and an optional companion `wendy.json` in the same directory is merged in when present (see [Readiness probes and postStart hooks](#readiness-probes-and-poststart-hooks)).
 
 Supported compose file names (checked in order, first found wins):
 - `docker-compose.yml`
@@ -13,6 +13,23 @@ Supported compose file names (checked in order, first found wins):
 - `compose.yaml`
 
 A compose file takes precedence over a `Dockerfile` in the same directory. To force the single-container Docker path instead, pass `--build-type docker` or `--dockerfile <path>`.
+
+## Cloud v2 uploads
+
+The Compose and multi-service `wendy.json` chunk-upload path requires the Docker
+builder (`--builder docker`). If an upload drops over Cloud v2, the CLI reports
+the connection loss and bytes sent; automatic registry fallback is off after
+that failure. Check that the device is online with `wendy cloud discover`, then
+retry, or select `--chunking=off` to upload through the registry with the usual
+authorization.
+
+In `auto`, old Agents missing the chunk RPCs keep the existing authorized
+registry fallback. Apple Container keeps its direct registry route; existing
+setups can use `--builder apple-container --chunking=off` explicitly. BuildKit
+Compose registry uploads remain unsupported. Other image preparation failures
+are reported separately.
+See [Cloud v2 upload behavior](../clients/wendy-cli/commands/run.md#uploads-over-cloud-v2)
+for exit status and diagnostics.
 
 ## Quickstart
 
