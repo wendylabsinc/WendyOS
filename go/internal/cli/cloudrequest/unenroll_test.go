@@ -43,7 +43,7 @@ func TestPrincipalRevocationReadsOldAndAdditiveResponses(t *testing.T) {
 	for _, tt := range []struct {
 		name  string
 		wire  string
-		count int32
+		count int
 	}{
 		{"old", "0807", 7},
 		{"with-fencing", "080910011a07626c6f636b6564", 9},
