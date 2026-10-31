@@ -467,6 +467,10 @@ class RepairTests(unittest.TestCase):
             with patch.object(sys, "argv", argv), patch.dict(os.environ, {"GITHUB_RUN_ID": "99", "GITHUB_RUN_ATTEMPT": "1"}):
                 r.main()
                 self.assertEqual(json.loads(proof_path.read_text()), r.verification(proposal, 99, 1))
+                path.chmod(0o755)
+                with self.assertRaises(SystemExit):
+                    r.main()
+                path.chmod(0o644)
                 for xml in ("<testsuite/>", evidence()["test-results.xml"],
                             evidence(False)["test-results.xml"].replace("</testsuite>", "<testcase/></testsuite>")):
                     result_path.write_text(xml)

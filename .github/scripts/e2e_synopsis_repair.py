@@ -305,6 +305,8 @@ def checked_source(proposal, root):
     def git(*args):
         return subprocess.check_output(["git", "-C", root, *args], text=True)
     require(git("rev-parse", "HEAD").strip() == proposal["sha"], "Verification checkout SHA mismatch")
+    require(git("ls-tree", proposal["sha"], "--", change["path"]).startswith("100644 blob "),
+            "Verification source must be a regular non-executable file")
     original = git("show", proposal["sha"] + ":" + change["path"])
     return path, original, git
 
@@ -395,7 +397,8 @@ def main():
             elif args.mode == "check":
                 path, original, git = checked_source(proposal, args.source)
                 require(path.read_text() == replace_literal(original, change) and
-                        git("diff", "HEAD", "--name-only").splitlines() == [change["path"]],
+                        git("diff", "HEAD", "--name-only").splitlines() == [change["path"]] and
+                        not git("diff", "HEAD", "--summary"),
                         "Verification source differs from exact candidate")
                 verify_results(change, Path(args.results).read_text())
                 Path(args.proof).write_text(json.dumps(verification(proposal, int(os.environ["GITHUB_RUN_ID"]),
