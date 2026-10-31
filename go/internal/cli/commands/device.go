@@ -2602,8 +2602,8 @@ func ensureDeviceWiFiForOSUpdate(ctx context.Context, conn *grpcclient.AgentConn
 // user-provided --binary agent after the OS update. It re-applies only when the
 // user explicitly passed --binary (a deliberate dev-agent override) AND an OS
 // update was actually applied AND the device came back online in this run. The
-// auto-download path is intentionally excluded: re-pushing a downloaded release
-// over the new image's bundled agent could silently downgrade it. The cloud
+// auto-download path is excluded: restoreAgentAfterOSUpdate brings it to its
+// channel's agent instead. The cloud
 // path (applied but not online here) is excluded too — there is no reboot to
 // wait on inline — and the caller prints guidance to re-run instead.
 func shouldReapplyBinary(binaryProvided bool, outcome osUpdateOutcome) bool {
@@ -2871,6 +2871,17 @@ func newDeviceUpdateCmd() *cobra.Command {
 				// `device update` on a Mac only ever updates the agent binary.
 				outcome, err = maybeCheckOSUpdate(ctx, preUpdateVersion, conn, nightly, assumeYes, artifactURL, prNumber)
 				if err != nil {
+					return err
+				}
+			}
+
+			// The new slot boots the agent its image was built with.
+			if binaryPath == "" && outcome.applied {
+				if !outcome.online {
+					fmt.Println(tui.InfoMessage(fmt.Sprintf(
+						"The OS update is rebooting the device; re-run '%s' once it is back online to bring the agent current.",
+						agentRerunCommand(nightly))))
+				} else if err := restoreAgentAfterOSUpdate(ctx, conn, nightly); err != nil {
 					return err
 				}
 			}
