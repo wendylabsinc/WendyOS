@@ -40,16 +40,23 @@ func (f *principalCloud) Invoke(ctx context.Context, method string, args, reply 
 func TestPrincipalRevocationReadsOldAndAdditiveResponses(t *testing.T) {
 	// The caller returns the existing count. Fencing annotations are server
 	// metadata, not a new client-side success requirement.
-	for _, wire := range []string{"0803", "080310011a07626c6f636b6564"} {
-		t.Run(wire, func(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		wire  string
+		count int32
+	}{
+		{"old", "0807", 7},
+		{"with-fencing", "080910011a07626c6f636b6564", 9},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
 			auth, _, _ := testAuth(t)
-			response, err := hex.DecodeString(wire)
+			response, err := hex.DecodeString(tt.wire)
 			if err != nil {
 				t.Fatal(err)
 			}
 			conn := &principalCloud{fakeCloud: &fakeCloud{t: t}, responseWire: response}
 			count, err := RevokePrincipalCertificates(context.Background(), conn, auth, "lite-441bf6804824")
-			if err != nil || count != 3 || len(conn.requests) != 1 {
+			if err != nil || count != tt.count || len(conn.requests) != 1 {
 				t.Fatalf("revocation = %d, %v, %d attempts", count, err, len(conn.requests))
 			}
 		})
