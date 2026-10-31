@@ -14,6 +14,18 @@ const wendyLiteCatalogJSON = `
     "version": 2,
     "binaries": [
         {
+            "name": "esp32c5_net_psram",
+            "target": "esp32c5",
+            "board_cfg": "esp32c5_net_psram",
+            "flash_size": "8MB"
+        },
+        {
+            "name": "esp32c6_net",
+            "target": "esp32c6",
+            "board_cfg": "esp32c6_net",
+            "flash_size": "8MB"
+        },
+        {
             "name": "esp32c5_native",
             "target": "esp32c5",
             "board_cfg": "esp32c5_generic_native",
@@ -108,6 +120,18 @@ const wendyLiteCatalogJSON = `
         }
     ],
     "boards": [
+        {
+            "name": "esp32c5_net_psram",
+            "display_name": "ESP32-C5, 8MB flash + 8MiB PSRAM, Wendy Net router + WASM",
+            "binary": "esp32c5_net_psram",
+            "target": "esp32c5"
+        },
+        {
+            "name": "esp32c6_net",
+            "display_name": "ESP32-C6, 8MB flash, single-carrier Wendy Net + small WASM guest",
+            "binary": "esp32c6_net",
+            "target": "esp32c6"
+        },
         {
             "name": "esp32c5_generic_native",
             "display_name": "Generic ESP32-C5 board, 4MB flash",
