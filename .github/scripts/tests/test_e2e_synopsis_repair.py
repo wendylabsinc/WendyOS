@@ -129,7 +129,7 @@ class API:
         if path == "git/refs":
             self.refs.append({"ref": body["ref"]})
         if path == "pulls":
-            self.prs.append({"number": 100, "body": body["body"]})
+            self.prs.append({"number": 100, "title": body["title"], "body": body["body"]})
             return self.prs[-1]
         return {"sha": "f" * 40}
 
@@ -257,7 +257,7 @@ class RepairTests(unittest.TestCase):
     def test_existing_open_closed_pr_and_orphan_branch_skip(self):
         for state in ("open", "closed"):
             api = API()
-            api.prs = [{"number": 100, "state": state}]
+            api.prs = [{"number": 100, "title": "Verified synopsis fix", "state": state}]
             with self.subTest(state=state), self.assertRaisesRegex(r.Skip, "Existing fix PR"):
                 r.prepare(api, 3)
             self.assertFalse(api.writes)
