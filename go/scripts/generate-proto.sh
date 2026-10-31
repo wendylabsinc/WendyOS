@@ -66,8 +66,10 @@ if [ "${WENDY_PROTO_SKIP_VERSION_CHECK:-0}" != "1" ]; then
     fi
 fi
 
-# Migrated gRPC APIs share one source pin and currently generate into cloudpb/v2.
-SHARED_GRPC_API_CONTRACTS_PROTOS=(
+MODULE="github.com/wendylabsinc/wendy"
+
+# Migrated gRPC APIs share one source pin.
+SHARED_GRPC_API_CONTRACTS_CLOUD_PROTOS=(
     "wendycloud/v2/mesh.proto"
     "wendycloud/v2/users.proto"
     "wendycloud/v2/tunnel.proto"
@@ -83,6 +85,28 @@ SHARED_GRPC_API_CONTRACTS_PROTOS=(
     "wendycloud/v2/notifications.proto"
     "wendy/options.proto"
 )
+# PKIAdminService returns the PKI ledger's own response messages.
+# Preserve the existing Go package and message-only generation.
+PKI_PKG="$MODULE/go/proto/gen/pkicorepb"
+AUTH_PKG="$MODULE/go/proto/gen/wendyauthpb"
+PKI_PROTOS=(
+    "pkicore/v1/types.proto"
+    "pkicore/v1/engine.proto"
+    "pkicore/v1/fabric_management.proto"
+    "pkicore/v1/fabric_relay.proto"
+)
+PKI_M_OPTS="--go_opt=Mwendyauth/v1/envelope.proto=${AUTH_PKG} --go-grpc_opt=Mwendyauth/v1/envelope.proto=${AUTH_PKG}"
+PKI_GO_M_OPTS="--go_opt=Mwendyauth/v1/envelope.proto=${AUTH_PKG}"
+for p in "${PKI_PROTOS[@]}"; do
+    PKI_M_OPTS="$PKI_M_OPTS --go_opt=M${p}=${PKI_PKG};pkicorepb"
+    PKI_M_OPTS="$PKI_M_OPTS --go-grpc_opt=M${p}=${PKI_PKG};pkicorepb"
+    PKI_GO_M_OPTS="$PKI_GO_M_OPTS --go_opt=M${p}=${PKI_PKG};pkicorepb"
+done
+
+SHARED_GRPC_API_CONTRACTS_PROTOS=(
+    "${SHARED_GRPC_API_CONTRACTS_CLOUD_PROTOS[@]}"
+    "${PKI_PROTOS[@]}"
+)
 SHARED_GRPC_API_CONTRACTS_PATH_ARGS=()
 for proto in "${SHARED_GRPC_API_CONTRACTS_PROTOS[@]}"; do
     if [ -e "$PROTO_DIR/$proto" ] || [ -L "$PROTO_DIR/$proto" ]; then
@@ -96,8 +120,6 @@ trap 'rm -rf "$SHARED_GRPC_API_CONTRACTS_DIR"' EXIT
 buf export \
     "https://github.com/wendylabsinc/service-protos.git#ref=3f29f59fc72f692a52b91a03a14d465d5e8dbfc7" \
     "${SHARED_GRPC_API_CONTRACTS_PATH_ARGS[@]}" --output "$SHARED_GRPC_API_CONTRACTS_DIR"
-
-MODULE="github.com/wendylabsinc/wendy"
 
 # ---- Wendy Agent protos ----
 AGENT_PKG="$MODULE/go/proto/gen/agentpb"
@@ -242,7 +264,7 @@ CLOUD_V2_PKG="$MODULE/go/proto/gen/cloudpb/v2"
 CLOUD_V2_PROTOS=(
     "wendycloud/v2/device_enrollment.proto"
     "wendycloud/v2/pki_admin.proto"
-    "${SHARED_GRPC_API_CONTRACTS_PROTOS[@]}"
+    "${SHARED_GRPC_API_CONTRACTS_CLOUD_PROTOS[@]}"
 )
 
 # The import path ends in "/v2", which would name the Go package "v2"; the
@@ -255,49 +277,38 @@ done
 
 # CI regenerates the migrated gRPC APIs temporarily and compares their outputs.
 if [ "${1:-}" = --shared-grpc-api-contracts-only ] || [ "${1:-}" = --check-shared-grpc-api-contracts ]; then
-    SHARED_GRPC_API_CONTRACTS_OUT="$GEN_DIR/cloudpb/v2"
+    SHARED_GRPC_API_CONTRACTS_OUT="$GEN_DIR"
     if [ "$1" = --check-shared-grpc-api-contracts ]; then
         SHARED_GRPC_API_CONTRACTS_OUT="$SHARED_GRPC_API_CONTRACTS_DIR/generated"
     fi
     mkdir -p "$SHARED_GRPC_API_CONTRACTS_OUT"
     protoc --proto_path="$SHARED_GRPC_API_CONTRACTS_DIR" \
-        --go_out="$SHARED_GRPC_API_CONTRACTS_OUT" --go_opt=module="$CLOUD_V2_PKG" \
-        --go-grpc_out="$SHARED_GRPC_API_CONTRACTS_OUT" --go-grpc_opt=module="$CLOUD_V2_PKG" \
-        $CLOUD_V2_M_OPTS "${SHARED_GRPC_API_CONTRACTS_PROTOS[@]}"
+        --go_out="$SHARED_GRPC_API_CONTRACTS_OUT" --go_opt=module="$MODULE/go/proto/gen" \
+        --go-grpc_out="$SHARED_GRPC_API_CONTRACTS_OUT" --go-grpc_opt=module="$MODULE/go/proto/gen" \
+        $CLOUD_V2_M_OPTS $PKI_M_OPTS "${SHARED_GRPC_API_CONTRACTS_CLOUD_PROTOS[@]}"
+    # Cloud is the client transport. PKI supplies messages, not direct clients.
+    protoc --proto_path="$SHARED_GRPC_API_CONTRACTS_DIR" \
+        --go_out="$SHARED_GRPC_API_CONTRACTS_OUT" --go_opt=module="$MODULE/go/proto/gen" \
+        $PKI_GO_M_OPTS "${PKI_PROTOS[@]}"
     if [ "$1" = --check-shared-grpc-api-contracts ]; then
         for proto in "${SHARED_GRPC_API_CONTRACTS_PROTOS[@]}"; do
+            case "$proto" in
+                pkicore/*) package="pkicorepb" ;;
+                *) package="cloudpb/v2" ;;
+            esac
             name="${proto##*/}"
             file="${name%.proto}.pb.go"
-            diff -u "$GEN_DIR/cloudpb/v2/$file" "$SHARED_GRPC_API_CONTRACTS_OUT/$file"
+            diff -u "$GEN_DIR/$package/$file" "$SHARED_GRPC_API_CONTRACTS_OUT/$package/$file"
             # Protos without services have no gRPC output. Compare either side
             # when present so missing or stale committed outputs still fail.
             file="${name%.proto}_grpc.pb.go"
-            if [ -e "$GEN_DIR/cloudpb/v2/$file" ] || [ -e "$SHARED_GRPC_API_CONTRACTS_OUT/$file" ]; then
-                diff -u "$GEN_DIR/cloudpb/v2/$file" "$SHARED_GRPC_API_CONTRACTS_OUT/$file"
+            if [ -e "$GEN_DIR/$package/$file" ] || [ -e "$SHARED_GRPC_API_CONTRACTS_OUT/$package/$file" ]; then
+                diff -u "$GEN_DIR/$package/$file" "$SHARED_GRPC_API_CONTRACTS_OUT/$package/$file"
             fi
         done
     fi
     exit 0
 fi
-
-# PKIAdminService returns the PKI ledger's own response messages. These four
-# complete contracts are vendored from service-protos
-# 6ad12f11bc3359ff902d586fd601a5530792febe, the Cloud API's protocol pin.
-PKI_PKG="$MODULE/go/proto/gen/pkicorepb"
-AUTH_PKG="$MODULE/go/proto/gen/wendyauthpb"
-PKI_PROTOS=(
-    "pkicore/v1/types.proto"
-    "pkicore/v1/engine.proto"
-    "pkicore/v1/fabric_management.proto"
-    "pkicore/v1/fabric_relay.proto"
-)
-PKI_M_OPTS="--go_opt=Mwendyauth/v1/envelope.proto=${AUTH_PKG} --go-grpc_opt=Mwendyauth/v1/envelope.proto=${AUTH_PKG}"
-PKI_GO_M_OPTS="--go_opt=Mwendyauth/v1/envelope.proto=${AUTH_PKG}"
-for p in "${PKI_PROTOS[@]}"; do
-    PKI_M_OPTS="$PKI_M_OPTS --go_opt=M${p}=${PKI_PKG};pkicorepb"
-    PKI_M_OPTS="$PKI_M_OPTS --go-grpc_opt=M${p}=${PKI_PKG};pkicorepb"
-    PKI_GO_M_OPTS="$PKI_GO_M_OPTS --go_opt=M${p}=${PKI_PKG};pkicorepb"
-done
 
 # ---- Wendy System API protos ----
 SYSTEM_PKG="$MODULE/go/proto/gen/systempb"
@@ -368,6 +379,7 @@ mkdir -p "$GEN_DIR/pkicorepb"
 # not direct engine or fabric clients.
 protoc \
     --proto_path="$PROTO_DIR" \
+    --proto_path="$SHARED_GRPC_API_CONTRACTS_DIR" \
     --go_out="$GEN_DIR/pkicorepb" \
     --go_opt=module="$PKI_PKG" \
     $PKI_GO_M_OPTS \
