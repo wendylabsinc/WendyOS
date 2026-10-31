@@ -2,15 +2,6 @@ name: Swift E2E Tests
 
 on:
   pull_request:
-    paths:
-      - 'swift/**'
-      - 'go/**'
-      - 'go.mod'
-      - 'go.sum'
-      - 'Proto/**'
-      - '.github/actions/swift-e2e-run/**'
-      - '.github/workflows/swift-e2e-tests.yml'
-      - '.github/scripts/restore-trusted-build-cache.sh'
   push:
     branches:
       - main
@@ -67,7 +58,8 @@ permissions:
 jobs:
   swift-e2e-local-macos:
     name: 'Local: macOS 26'
-    if: ${{ inputs.target_group == '' || inputs.target_group == 'all' || inputs.target_group == 'local' }}
+    # Re-enable once Joannis sets up self-hosted Mac runners.
+    if: false
     runs-on: macos-26
     concurrency:
       group: device-local-macos-hosted
