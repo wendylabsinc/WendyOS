@@ -171,6 +171,8 @@ wendy install --device-type dragonwing-iq-9075
 
 Connect the USB0 (USB-C) port, power off, set DIP switch 3 ON, and power on. Wendy downloads and verifies the bundle, then reads the board's chip id before writing anything and refuses the flash if it belongs to a different Dragonwing. A board that does not answer, or reports an id Wendy does not know, is flashed anyway after a caution — verification only happens when the board answers. Set DIP switch 3 OFF and power-cycle after success.
 
+On the IQ8, after WendyOS boots, move the computer cable from USB0 (USB-C) to USB2 (micro-USB) for normal USB networking and CLI access. USB0 remains the EDL/recovery port. The IQ9 gadget port is unchanged.
+
 **An EDL flash is a factory reset.** Both OS slots, the config partition and `/data` are rewritten, so device identity, cloud enrollment, saved Wi-Fi and application data are discarded and the board comes back as a new device.
 
 `/data` is blanked rather than overwritten: the flash clears the head of the filesystem and the device recreates it on first boot. That makes the old contents unreachable, but it is not a secure erase — blocks behind the superblock are only overwritten as they are reused. Do not rely on it before handing a board to someone else.
