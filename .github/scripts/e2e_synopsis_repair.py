@@ -210,7 +210,9 @@ def existing(api, sha):
     prs = api.get("pulls?" + query)
     require(len(prs) < 100, "Ambiguous existing repair lookup")
     if prs:
-        return f"Existing fix PR {prs[0]['number']}; no new draft or notifications"
+        pr = prs[0]
+        return (f"Existing fix PR [{api.repo} #{pr['number']} — {title(pr['title'])}]"
+                f"(https://github.com/{api.repo}/pull/{pr['number']}); no new draft or notifications")
     refs = api.get("git/matching-refs/heads/" + branch(sha))
     if any(r["ref"] == "refs/heads/" + branch(sha) for r in refs):
         return "Existing repair branch; manual follow-up, never rewrite"
