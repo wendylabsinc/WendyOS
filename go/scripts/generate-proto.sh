@@ -6,6 +6,11 @@ GO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 PROTO_DIR="$(cd "$GO_DIR/../Proto" && pwd)"
 GEN_DIR="$GO_DIR/proto/gen"
 
+case "${1:-}" in
+    ""|--shared-grpc-api-contracts-only|--check-shared-grpc-api-contracts) ;;
+    *) echo "usage: $0 [--shared-grpc-api-contracts-only|--check-shared-grpc-api-contracts]" >&2; exit 1 ;;
+esac
+
 export PATH="$PATH:$(go env GOPATH)/bin"
 
 # ---- Pinned generator versions ----
@@ -18,6 +23,7 @@ export PATH="$PATH:$(go env GOPATH)/bin"
 #
 # To upgrade deliberately: change these pins, regenerate everything, and commit the
 # result on its own. WENDY_PROTO_SKIP_VERSION_CHECK=1 bypasses this for a one-off.
+REQUIRED_BUF="1.75.0"
 REQUIRED_PROTOC="34.0"
 REQUIRED_PROTOC_GEN_GO="v1.36.11"
 REQUIRED_PROTOC_GEN_GO_GRPC="1.6.2"
@@ -41,6 +47,8 @@ check_version() {
 if [ "${WENDY_PROTO_SKIP_VERSION_CHECK:-0}" != "1" ]; then
     echo "Checking generator versions..."
     failed=0
+    check_version buf "$REQUIRED_BUF" "$(buf --version 2>/dev/null)" \
+        "https://github.com/bufbuild/buf/releases/tag/v$REQUIRED_BUF" || failed=1
     check_version protoc "$REQUIRED_PROTOC" \
         "$(protoc --version 2>/dev/null | awk '{print $2}')" \
         "https://github.com/protocolbuffers/protobuf/releases/tag/v$REQUIRED_PROTOC (no brew formula for this version)" || failed=1
@@ -58,8 +66,25 @@ if [ "${WENDY_PROTO_SKIP_VERSION_CHECK:-0}" != "1" ]; then
     fi
 fi
 
-# Clean previous generated code
-rm -rf "$GEN_DIR"
+# Migrated gRPC APIs share one source pin and currently generate into cloudpb/v2.
+SHARED_GRPC_API_CONTRACTS_PROTOS=(
+    "wendycloud/v2/mesh.proto"
+    "wendycloud/v2/users.proto"
+    "wendycloud/v2/tunnel.proto"
+)
+SHARED_GRPC_API_CONTRACTS_PATH_ARGS=()
+for proto in "${SHARED_GRPC_API_CONTRACTS_PROTOS[@]}"; do
+    if [ -e "$PROTO_DIR/$proto" ] || [ -L "$PROTO_DIR/$proto" ]; then
+        echo "error: remove Proto/$proto; it is generated from service-protos" >&2
+        exit 1
+    fi
+    SHARED_GRPC_API_CONTRACTS_PATH_ARGS+=(--path "$proto")
+done
+SHARED_GRPC_API_CONTRACTS_DIR="$(mktemp -d)"
+trap 'rm -rf "$SHARED_GRPC_API_CONTRACTS_DIR"' EXIT
+buf export \
+    "https://github.com/wendylabsinc/service-protos.git#ref=3f29f59fc72f692a52b91a03a14d465d5e8dbfc7" \
+    "${SHARED_GRPC_API_CONTRACTS_PATH_ARGS[@]}" --output "$SHARED_GRPC_API_CONTRACTS_DIR"
 
 MODULE="github.com/wendylabsinc/wendy"
 
@@ -190,12 +215,11 @@ for p in "${CLOUD_PROTOS[@]}"; do
 done
 
 # ---- Cloud v2 protos ----
-# wendycloud.v2 is vendored beside v1, not instead of it: v1 stays the shipping
-# wire contract until the fleet has crossed over (WDY-2824). Paths match
-# service-protos exactly so a re-copy is a plain cp and the imports need no
-# rewriting -- DeviceEnrollmentService included, Cloud-owned though it is.
+# Except for the shared gRPC APIs above, wendycloud.v2 is vendored beside v1.
+# Paths match service-protos, including DeviceEnrollmentService, Cloud-owned
+# though it is.
 #
-# Pin: wendycloud/v2/*.proto and wendy/options.proto are service-protos master
+# Pin: the local wendycloud/v2/*.proto and wendy/options.proto are service-protos master
 # cfa7f45d (merged #145, registry vectors), except postbox.proto,
 # deployments.proto and registry.proto: master 65830a0a (merged #151,
 # WDY-4015 operator CA and instruction validity). device_enrollment.proto is not in
@@ -217,11 +241,9 @@ CLOUD_V2_PROTOS=(
     "wendycloud/v2/assets.proto"
     "wendycloud/v2/certificates.proto"
     "wendycloud/v2/deployments.proto"
-    "wendycloud/v2/mesh.proto"
+    "${SHARED_GRPC_API_CONTRACTS_PROTOS[@]}"
     "wendycloud/v2/notifications.proto"
     "wendycloud/v2/organizations.proto"
-    "wendycloud/v2/tunnel.proto"
-    "wendycloud/v2/users.proto"
     "wendycloud/v2/postbox.proto"
 )
 
@@ -232,6 +254,28 @@ for p in "${CLOUD_V2_PROTOS[@]}"; do
     CLOUD_V2_M_OPTS="$CLOUD_V2_M_OPTS --go_opt=M${p}=${CLOUD_V2_PKG};cloudpbv2"
     CLOUD_V2_M_OPTS="$CLOUD_V2_M_OPTS --go-grpc_opt=M${p}=${CLOUD_V2_PKG};cloudpbv2"
 done
+
+# CI regenerates the migrated gRPC APIs temporarily and compares their outputs.
+if [ "${1:-}" = --shared-grpc-api-contracts-only ] || [ "${1:-}" = --check-shared-grpc-api-contracts ]; then
+    SHARED_GRPC_API_CONTRACTS_OUT="$GEN_DIR/cloudpb/v2"
+    if [ "$1" = --check-shared-grpc-api-contracts ]; then
+        SHARED_GRPC_API_CONTRACTS_OUT="$SHARED_GRPC_API_CONTRACTS_DIR/generated"
+    fi
+    mkdir -p "$SHARED_GRPC_API_CONTRACTS_OUT"
+    protoc --proto_path="$SHARED_GRPC_API_CONTRACTS_DIR" \
+        --go_out="$SHARED_GRPC_API_CONTRACTS_OUT" --go_opt=module="$CLOUD_V2_PKG" \
+        --go-grpc_out="$SHARED_GRPC_API_CONTRACTS_OUT" --go-grpc_opt=module="$CLOUD_V2_PKG" \
+        $CLOUD_V2_M_OPTS "${SHARED_GRPC_API_CONTRACTS_PROTOS[@]}"
+    if [ "$1" = --check-shared-grpc-api-contracts ]; then
+        for proto in "${SHARED_GRPC_API_CONTRACTS_PROTOS[@]}"; do
+            name="${proto##*/}"
+            for file in "${name%.proto}.pb.go" "${name%.proto}_grpc.pb.go"; do
+                diff -u "$GEN_DIR/cloudpb/v2/$file" "$SHARED_GRPC_API_CONTRACTS_OUT/$file"
+            done
+        done
+    fi
+    exit 0
+fi
 
 # PKIAdminService returns the PKI ledger's own response messages. These four
 # complete contracts are vendored from service-protos
@@ -266,6 +310,9 @@ done
 
 # All M opts combined for cross-package imports
 ALL_M_OPTS="$AGENT_M_OPTS $V2_AGENT_M_OPTS $OTEL_M_OPTS $CLOUD_M_OPTS $CLOUD_V2_M_OPTS $PKI_M_OPTS $SYSTEM_M_OPTS"
+
+# Clean previous generated code only for a full regeneration.
+rm -rf "$GEN_DIR"
 
 echo "Generating Wendy Agent protos..."
 mkdir -p "$GEN_DIR/agentpb"
@@ -304,6 +351,7 @@ echo "Generating Wendy Cloud v2 protos..."
 mkdir -p "$GEN_DIR/cloudpb/v2"
 protoc \
     --proto_path="$PROTO_DIR" \
+    --proto_path="$SHARED_GRPC_API_CONTRACTS_DIR" \
     --go_out="$GEN_DIR/cloudpb/v2" \
     --go_opt=module="$CLOUD_V2_PKG" \
     $ALL_M_OPTS \
