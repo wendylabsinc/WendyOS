@@ -2,7 +2,8 @@ import Foundation
 
 struct NearbySetupDevice: Identifiable, Sendable {
     let id, name: String
-    var title: String { name.isEmpty ? "Wendy device" : name }
+    var rssi: Int = 0
+    var title: String { name.isEmpty ? "Wendy device" : DeviceDisplayName.title(name) }
 }
 
 struct NearbySetupSnapshot: Sendable {
@@ -12,6 +13,8 @@ struct NearbySetupSnapshot: Sendable {
     var enrolled = false
     var attempted = false
     var pending = false
+    var canResume = false
+    var failure = ""
     var completed = false
     var wifiConnected = false
     var ssid = ""
@@ -31,7 +34,7 @@ extension GoClient {
             defer { WDNearbyDevicesFree(p) }
             try Self.check(p.pointee.status)
             return UnsafeBufferPointer(start: p.pointee.items, count: p.pointee.count).map {
-                NearbySetupDevice(id: Self.string($0.address), name: Self.string($0.name))
+                NearbySetupDevice(id: Self.string($0.address), name: Self.string($0.name), rssi: Int($0.rssi))
             }
         }
     }
@@ -68,10 +71,39 @@ extension GoClient {
         let s = p.pointee
         // Preserve attempted/pending even when the operation reports an error.
         return NearbySetupSnapshot(session: s.session, connected: s.connected != 0, lite: s.lite != 0,
-            enrolled: s.enrolled != 0, attempted: s.attempted != 0, pending: s.pending != 0,
+            enrolled: s.enrolled != 0, attempted: s.attempted != 0, pending: s.pending != 0, canResume: s.can_resume != 0, failure: Self.string(s.failure),
             completed: s.completed != 0, wifiConnected: s.wifi_connected != 0, ssid: Self.string(s.ssid),
             deviceID: Self.string(s.device_id),
             networks: UnsafeBufferPointer(start: s.networks, count: s.network_count).map { Self.string($0) },
             error: s.status.message.map { String(cString: $0) })
+    }
+}
+
+/// Only repeat reads and connection establishment. Enrollment and Wi-Fi writes
+/// always require an explicit action, even after a lost reply.
+enum NearbySetupObservation: Equatable {
+    case idle, discover, reconnect, checkEnrollment, status, scanWiFi
+}
+
+extension NearbySetupSnapshot {
+    func observation(hasSelection: Bool, wifiExpanded: Bool, statusAge: TimeInterval,
+                     scanAge: TimeInterval) -> NearbySetupObservation {
+        if completed { return .idle }
+        if pending || attempted {
+            // Keep setup usable while Cloud is pending. In particular, an offline
+            // board must still accept Wi-Fi configuration without re-enrollment.
+            if !enrolled {
+                if (wifiExpanded || canResume) && !connected && statusAge >= 25 { return .reconnect }
+                if connected && statusAge >= 25 { return .status }
+                if connected && wifiExpanded && scanAge >= 20 { return .scanWiFi }
+            }
+            return pending ? .checkEnrollment : .idle
+        }
+        if enrolled || attempted { return .idle }
+        if !hasSelection { return .discover }
+        if !connected { return .reconnect }
+        if statusAge >= 25 { return .status }
+        if wifiExpanded && scanAge >= 20 { return .scanWiFi }
+        return .idle
     }
 }

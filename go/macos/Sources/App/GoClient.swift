@@ -311,7 +311,7 @@ struct Device: Identifiable, Hashable {
     let address: String
     var lite = false
     var routable: Bool { !lite && (transport == .mesh || transport == .cloud) }
-    var title: String { name.isEmpty ? selector : name }
+    var title: String { name.isEmpty ? selector : DeviceDisplayName.title(name) }
 }
 struct DeviceApp: Identifiable, Equatable {
     let appName: String
@@ -335,6 +335,7 @@ struct Camera: Identifiable, Hashable {
     var path: String?
     var thermal = false
     var stableID = ""
+    var orderKey: String { !stableID.isEmpty ? stableID : path ?? String(id) }
 }
 struct VPNRouteSelection { let selector: String; let name: String }
 

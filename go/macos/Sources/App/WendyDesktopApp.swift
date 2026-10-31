@@ -32,13 +32,13 @@ struct WendyDesktopApp: App {
 }
 
 enum DesktopDevicePage: String, CaseIterable {
-    case apps, cameras, siteModel, activity, campaigns, chat, data, settings
+    case overview, apps, cameras, siteModel, campaigns, chat, data, settings
 
     var title: String { self == .siteModel ? "Digital Twin" : rawValue.capitalized }
     var shortcut: KeyEquivalent { KeyEquivalent(Character(String(Self.allCases.firstIndex(of: self)! + 1))) }
 
     static func adjacent(to current: String, forward: Bool) -> Self {
-        guard let index = allCases.firstIndex(where: { $0.rawValue == current }) else { return .apps }
+        guard let index = allCases.firstIndex(where: { $0.rawValue == current }) else { return .overview }
         return allCases[(index + (forward ? 1 : allCases.count - 1)) % allCases.count]
     }
 }

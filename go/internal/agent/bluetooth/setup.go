@@ -3,6 +3,7 @@ package bluetooth
 import (
 	"context"
 	"sync"
+	"time"
 
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
@@ -12,6 +13,23 @@ const SetupServiceUUID = "7565e9eb-4c20-4b67-9272-d708b397b632"
 
 // 128 is management; 129 is mesh. Setup must never accept mesh traffic.
 const SetupPSM = 130
+
+// Keep looking for a usable radio while first enrollment is available. An
+// adapter can appear after startup when an operator installs its driver.
+func maintainBLESetup(ctx context.Context, interval time.Duration, available func(context.Context) bool, serve func(context.Context) error, failed func(error)) {
+	for ctx.Err() == nil {
+		if available(ctx) {
+			if err := serve(ctx); err != nil && ctx.Err() == nil {
+				failed(err)
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(interval):
+		}
+	}
+}
 
 type setupProvisioner interface {
 	IsProvisioned(context.Context, *agentpbv2.IsProvisionedRequest) (*agentpbv2.IsProvisionedResponse, error)

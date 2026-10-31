@@ -42,6 +42,8 @@ func nearbySetupResult(s backend.NearbySetupState, err error) *C.WDNearbySetupRe
 	p.connected, p.lite, p.enrolled = boolInt(s.Connected), boolInt(s.Lite), boolInt(s.Enrolled)
 	p.attempted, p.pending, p.completed = boolInt(s.Attempted), boolInt(s.Pending), boolInt(s.Completed)
 	p.wifi_connected = boolInt(s.WiFiConnected)
+	p.can_resume = boolInt(s.CanResume)
+	p.failure = C.CString(s.Failure)
 	p.ssid, p.device_id = C.CString(s.SSID), C.CString(s.DeviceID)
 	p.networks, p.network_count = alloc[*C.char](len(s.Networks)), C.size_t(len(s.Networks))
 	for i, v := range s.Networks {
@@ -74,6 +76,7 @@ func WDNearbySetupFree(p *C.WDNearbySetupResult) {
 	free(p.networks)
 	free(p.ssid)
 	free(p.device_id)
+	free(p.failure)
 	free(p.status.message)
 	free(p)
 }

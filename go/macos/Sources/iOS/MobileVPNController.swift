@@ -66,6 +66,9 @@ final class VPNController: ObservableObject {
         proto.providerBundleIdentifier = Self.extensionID
         proto.serverAddress = "127.0.0.1"
         proto.disconnectOnSleep = false
+        let encoder = PropertyListEncoder()
+        encoder.outputFormat = .binary
+        proto.providerConfiguration = ["bootstrap": try encoder.encode(MobileVPNBootstrap(configuration))]
         manager.protocolConfiguration = proto
         manager.localizedDescription = "Wendy"
         manager.isEnabled = true
@@ -73,8 +76,6 @@ final class VPNController: ObservableObject {
         try await manager.saveToPreferences()
         try await manager.loadFromPreferences()
         self.manager = manager
-        let encoder = PropertyListEncoder()
-        encoder.outputFormat = .binary
         try Task.checkCancellation()
         try await VPNConnectionLifecycle.start(manager.connection, options: ["configuration": try encoder.encode(configuration) as NSData])
         routes = configuration.routes

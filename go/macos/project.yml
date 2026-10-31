@@ -141,6 +141,9 @@ targets:
     info:
       path: Resources/Mobile-Info.plist
       properties:
+        ITSAppUsesNonExemptEncryption: false
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         CFBundleDisplayName: Wendy
         NSCameraUsageDescription: Wendy uses the camera to recognize devices and scan your site into a 3D model.
         NSBonjourServices: ["_wendyos._udp", "_wendyos._tcp", "_wendy-lite._tcp", "_wendy-net._tcp", "_wendy-net._udp"]
@@ -234,6 +237,8 @@ targets:
     info:
       path: Resources/MobileNetwork-Info.plist
       properties:
+        CFBundleShortVersionString: "$(MARKETING_VERSION)"
+        CFBundleVersion: "$(CURRENT_PROJECT_VERSION)"
         CFBundleDisplayName: Wendy network
         NSLocalNetworkUsageDescription: Wendy connects to your mesh internet gateway.
         NSBonjourServices: ["_wendyos._udp", "_wendy-lite._tcp"]

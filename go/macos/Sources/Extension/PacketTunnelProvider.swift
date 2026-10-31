@@ -1,7 +1,9 @@
 import Foundation
 import NetworkExtension
+import OSLog
 
 final class PacketTunnelProvider: NEPacketTunnelProvider {
+    private let logger = Logger(subsystem: "dev.wendy.network", category: "tunnel")
     private let lock = NSLock()
     private var generation: UInt64 = 0
     private var running = false
@@ -10,16 +12,26 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     private let outputQueue = DispatchQueue(label: "dev.wendy.desktop.packets", qos: .userInitiated)
 
     override func startTunnel(options: [String: NSObject]?, completionHandler: @escaping (Error?) -> Void) {
-        guard let data = options?["configuration"] as? Data,
-              let config = try? PropertyListDecoder().decode(VPNConfiguration.self, from: data) else {
-            completionHandler(failure("Open Wendy and enable the VPN again.")); return
+        var config = (options?["configuration"] as? Data).flatMap {
+            try? PropertyListDecoder().decode(VPNConfiguration.self, from: $0)
         }
         #if os(iOS)
         let shared = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: "group.dev.wendy.mobile")?.appendingPathComponent("Wendy", isDirectory: true).path
-        guard let shared, config.bootstrapDirectory == shared else {
+        guard let shared else {
+            completionHandler(failure("VPN requires Wendy's shared app profile.")); return
+        }
+        if config == nil,
+           let data = (protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration?["bootstrap"] as? Data,
+           let bootstrap = try? PropertyListDecoder().decode(MobileVPNBootstrap.self, from: data) {
+            config = bootstrap.configuration(directory: shared)
+        }
+        if let config, config.bootstrapDirectory != shared {
             completionHandler(failure("VPN requires Wendy's shared app profile.")); return
         }
         #endif
+        guard let config else {
+            completionHandler(failure("Open Wendy and enable the VPN again.")); return
+        }
         if let error = config.withCValue({ WVPNStart($0) }) {
             let message = String(cString: error)
             WVPNFree(error)
@@ -34,7 +46,11 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         let settings = actual.networkSettings()
         setTunnelNetworkSettings(settings) { [weak self] error in
             guard let self else { WVPNStop(); completionHandler(error); return }
-            if let error { WVPNStop(); completionHandler(error); return }
+            if let error {
+                self.logger.error("Initial VPN routes rejected: \(error.localizedDescription, privacy: .public)")
+                WVPNStop(); completionHandler(error); return
+            }
+            self.logger.notice("VPN routes installed: internet=\(actual.internet != nil), devices=\(actual.routes.count)")
             self.lock.lock()
             self.generation &+= 1
             let generation = self.generation
@@ -63,7 +79,12 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             guard self.isRunning(generation), let config = try? JSONDecoder().decode(VPNConfiguration.self, from: data) else { return }
             self.setTunnelNetworkSettings(config.networkSettings()) { [weak self] error in
                 guard let self, self.isRunning(generation) else { return }
-                if let error { self.cancelTunnelWithError(error) }
+                if let error {
+                    self.logger.error("Updated VPN routes rejected: \(error.localizedDescription, privacy: .public)")
+                    self.cancelTunnelWithError(error)
+                } else {
+                    self.logger.notice("VPN routes updated: internet=\(config.internet != nil), devices=\(config.routes.count)")
+                }
             }
         }
         lock.lock()

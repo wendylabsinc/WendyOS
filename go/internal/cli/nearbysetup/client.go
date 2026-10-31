@@ -13,6 +13,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"sync"
@@ -40,11 +41,11 @@ func Connect(ctx context.Context, address string) (*Client, error) {
 	}
 	conn, err := central.Connect(address, 15)
 	if err != nil {
-		return nil, errors.New("Bluetooth connection failed; keep the device nearby and retry")
+		return nil, fmt.Errorf("Bluetooth setup connection failed: %w", err)
 	}
 	if err = conn.OpenL2CAP(PSM, 15); err != nil {
 		conn.Close()
-		return nil, errors.New("Could not open Bluetooth setup; check the device firmware and retry")
+		return nil, fmt.Errorf("Opening Bluetooth setup channel: %w", err)
 	}
 	return Open(ctx, central.NewL2CAPStream(conn))
 }
@@ -173,11 +174,11 @@ func (c *Client) exchange(ctx context.Context, command *pb.BluetoothCommand) (*p
 	frame = append(frame, body...)
 	defer clear(frame)
 	if _, err = io.Copy(c.wire, bytes.NewReader(frame)); err != nil {
-		return nil, errors.New("Bluetooth connection ended; retry setup")
+		return nil, fmt.Errorf("Bluetooth setup write failed: %w", err)
 	}
 	var length [2]byte
 	if _, err = io.ReadFull(c.wire, length[:]); err != nil {
-		return nil, errors.New("Bluetooth connection ended; retry setup")
+		return nil, fmt.Errorf("Bluetooth setup response header: %w", err)
 	}
 	n := binary.BigEndian.Uint16(length[:])
 	if n == 0 {
@@ -185,7 +186,7 @@ func (c *Client) exchange(ctx context.Context, command *pb.BluetoothCommand) (*p
 	}
 	data := make([]byte, n)
 	if _, err = io.ReadFull(c.wire, data); err != nil {
-		return nil, errors.New("Bluetooth connection ended; retry setup")
+		return nil, fmt.Errorf("Bluetooth setup response body: %w", err)
 	}
 	defer clear(data)
 	r := new(pb.BluetoothResponse)

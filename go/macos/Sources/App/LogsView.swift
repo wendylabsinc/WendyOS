@@ -56,6 +56,7 @@ struct LogEntry: Identifiable {
 }
 
 struct LogsView: View {
+    @Environment(\.scenePhase) private var scenePhase
     @State private var actions = AsyncActions()
     @ObservedObject var model: AppModel
     @State private var search = ""
@@ -70,6 +71,9 @@ struct LogsView: View {
     }
     var body: some View {
         actionContent.task { await actions.run() }
+            .task(id: "\(model.deviceSession)/\(model.logApp)/\(scenePhase == .active)") {
+                if scenePhase == .active { await model.observeLogs() }
+            }
     }
 
     @ViewBuilder private var actionContent: some View {
@@ -91,7 +95,10 @@ struct LogsView: View {
                 } label: { Image(systemName: "doc.on.doc") }.help("Copy visible logs")
             }
             if let error = model.logError {
-                HStack { FailureNote(message: error); Button("Retry") { actions.submit { await model.streamLogs() } } }
+                HStack {
+                    if ConnectionRecovery.canRetry(error) { ProgressView("Reconnecting logs…") }
+                    else { FailureNote(message: error) }
+                }
             }
             VStack(spacing: 0) {
                 #if os(macOS)
@@ -139,7 +146,6 @@ struct LogsView: View {
         #else
         .padding(.horizontal, 28).padding(.bottom, 20)
         #endif
-        .task(id: model.logApp) { await model.streamLogs() }
         #endif
     }
     #if os(iOS)
@@ -149,8 +155,8 @@ struct LogsView: View {
             List {
                 if let error = model.logError {
                     Section {
-                        FailureNote(message: error)
-                        Button("Retry") { actions.submit { await model.streamLogs() } }
+                        if ConnectionRecovery.canRetry(error) { ProgressView("Reconnecting logs…") }
+                        else { FailureNote(message: error) }
                     }
                 }
                 ForEach(visibleLogs) { entry in
@@ -220,8 +226,7 @@ struct LogsView: View {
             }
             .onChange(of: model.logs.last?.id) { _, _ in if follow { proxy.scrollTo("bottom", anchor: .bottom) } }
             .onChange(of: follow) { _, value in if value { proxy.scrollTo("bottom", anchor: .bottom) } }
-            .task(id: model.logApp) { await model.streamLogs() }
-            .sheet(item: $inspectedLog) { entry in
+                .sheet(item: $inspectedLog) { entry in
                 NavigationStack {
                     Form {
                         Section {
@@ -290,7 +295,5 @@ struct DeviceLogsPage: View {
     @ViewBuilder private var actionContent: some View {
         LogsView(model: model)
             .navigationTitle("Logs")
-            .task(id: model.deviceSession) { await model.streamLogs() }
-            .onDisappear { model.cleanup.submit { try? await model.client.stopLogs() } }
     }
 }

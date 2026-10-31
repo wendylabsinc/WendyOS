@@ -7,6 +7,7 @@ import SwiftUI
 
 @MainActor
 final class AppModel: ObservableObject {
+    var nearbySetupPromptHistory = NearbySetupPromptHistory()
     @Published var nearby: [Device] = []
     #if os(macOS)
     @Published var nearbyUnitree: [UnitreeRobot] = UnitreeSavedDevices.load()
@@ -14,6 +15,10 @@ final class AppModel: ObservableObject {
     #endif
     @Published var cloud: [Device] = []
     @Published var selection: Device?
+    @Published var requestedDevice: Device?
+    var setupSessions = 0
+    private var experienceObserver: UUID?
+    @Published private(set) var experienceEvents: [ExperienceEvent] = []
     @Published var connected: Device?
     @Published private(set) var connectedLite = false
     @Published var appActions: Set<String> = []
@@ -35,6 +40,7 @@ final class AppModel: ObservableObject {
         hiddenAppsByDevice[id] = names.sorted()
         UserDefaults.standard.set(hiddenAppsByDevice, forKey: "hiddenAppsByDevice")
     }
+    private var cameraOrder = UserDefaults.standard.dictionary(forKey: "cameraOrderByDevice") as? [String: [String]] ?? [:]
     @Published var cameras: [Camera] = []
     @Published var logs: [LogEntry] = []
     @Published var cameraFeeds: [CameraFeed] = []
@@ -94,6 +100,7 @@ final class AppModel: ObservableObject {
     private var logStream: UInt64 = 0
     private var cameraStream: UInt64 = 0
     private var cameraWallVisible = false
+    private var cameraPreviewLimit: Int?
     private var cameraBatch: UInt64 = 0
     private var cameraRecoveryGeneration: UInt64 = 0
     private var starting = false
@@ -234,6 +241,7 @@ final class AppModel: ObservableObject {
             var resolvedDevice = device
             resolvedDevice.lite = connection.lite
             selection = resolvedDevice; connected = resolvedDevice
+            recordExperience("Connected", symbol: "checkmark.circle", device: resolvedDevice)
             detailError = nil; appsError = nil; camerasError = nil; logError = nil
             connectingDevice = nil
             await refreshDetails()
@@ -265,6 +273,49 @@ final class AppModel: ObservableObject {
             guard connectionAttempt == previous, !Task.isCancelled else { return }
             connectingDevice = nil
             detailError = error.localizedDescription
+        }
+    }
+
+    private func recordExperience(_ title: String, symbol: String, device: Device) {
+        if let recent = experienceEvents.first,
+           recent.deviceID == device.id && recent.title == title && Date.now.timeIntervalSince(recent.date) < 60 { return }
+        experienceEvents.insert(ExperienceEvent(deviceID: device.id, deviceName: device.title, title: title, symbol: symbol), at: 0)
+        experienceEvents = Array(experienceEvents.prefix(100))
+    }
+
+    /// The visible app owns this loop; backgrounding cancels reads and retries.
+    /// Trust, sign-in, and permission failures always remain explicit decisions.
+    func maintainExperience() async {
+        let observer = UUID()
+        experienceObserver = observer
+        defer { if experienceObserver == observer { experienceObserver = nil } }
+        var failures = 0
+        var lastDiscovery = Date.distantPast
+        while !Task.isCancelled && initialized && experienceObserver == observer {
+            do { try await Task.sleep(for: .seconds(failures == 0 ? 15 : min(30, pow(2, Double(min(failures, 5)))))) } catch { return }
+            guard !Task.isCancelled, experienceObserver == observer else { return }
+            guard setupSessions == 0 else { continue }
+            if let device = selection, connectingDevice == nil,
+               let error = detailError, ConnectionRecovery.canRetry(error) {
+                await retryConnection(device)
+                failures = detailError == nil ? 0 : failures + 1
+            } else if selectedDeviceReady {
+                let capturedSession = session
+                let capturedSelection = selection?.id
+                await refreshDetails()
+                guard !Task.isCancelled, experienceObserver == observer, setupSessions == 0,
+                      session == capturedSession, selection?.id == capturedSelection else { continue }
+                if let device = selection, let appError = appsError, let cameraError = camerasError,
+                   ConnectionRecovery.canRetry(appError), ConnectionRecovery.canRetry(cameraError) {
+                    await connect(device, force: true)
+                }
+            }
+            guard !Task.isCancelled else { return }
+            if Date.now.timeIntervalSince(lastDiscovery) >= 30 {
+                await refreshNearby()
+                if account?.signedIn == true { await refreshCloud() }
+                lastDiscovery = .now
+            }
         }
     }
 
@@ -356,6 +407,12 @@ final class AppModel: ObservableObject {
         do {
             let result = connectedLite ? [] : try await client.apps()
             guard session == capturedSession, !Task.isCancelled else { return }
+            let previous = Dictionary(uniqueKeysWithValues: apps.map { ($0.id, $0.runningState) })
+            if let connected {
+                for app in result where previous[app.id] != nil && previous[app.id] != app.runningState {
+                    recordExperience("\(app.appName) · \(app.state)", symbol: "square.stack.3d.up", device: connected)
+                }
+            }
             apps = result; appsError = nil
         } catch {
             guard session == capturedSession, !Task.isCancelled else { return }
@@ -373,26 +430,71 @@ final class AppModel: ObservableObject {
                 if let feed = previous[camera.id], feed.camera == camera { return feed }
                 return CameraFeed(camera: camera)
             }
+            applyCameraOrder()
             camerasError = nil
             if cameraWallVisible { await playCameras() }
         }
         catch { if session == capturedSession && !Task.isCancelled { camerasError = error.localizedDescription } }
     }
 
+    func moveCamera(_ source: String, before target: String) {
+        guard let device = connected, source != target,
+              let from = cameraFeeds.firstIndex(where: { $0.camera.orderKey == source }),
+              cameraFeeds.contains(where: { $0.camera.orderKey == target }) else { return }
+        let moving = cameraFeeds.remove(at: from)
+        let to = cameraFeeds.firstIndex(where: { $0.camera.orderKey == target }) ?? cameraFeeds.endIndex
+        cameraFeeds.insert(moving, at: to)
+        cameraOrder[device.id] = cameraFeeds.map { $0.camera.orderKey }
+        UserDefaults.standard.set(cameraOrder, forKey: "cameraOrderByDevice")
+    }
+
+    private func applyCameraOrder() {
+        guard let device = connected, let order = cameraOrder[device.id] else { return }
+        cameraFeeds = cameraFeeds.enumerated().sorted { a, b in
+            let ai = order.firstIndex(of: a.element.camera.orderKey) ?? order.count + a.offset
+            let bi = order.firstIndex(of: b.element.camera.orderKey) ?? order.count + b.offset
+            return ai < bi
+        }.map(\.element)
+    }
+
     func resources() async throws -> ResourceSnapshot { try await client.resources(session: session) }
     func ports(app: String) async throws -> [ResourcePort] { try await client.ports(app: app, session: session) }
 
-    func streamLogs() async {
-        logs = []; logError = nil
+    func streamLogs(clear: Bool = true) async {
+        guard !Task.isCancelled else { return }
+        if clear { logs = [] }
+        logError = nil
         logStream &+= 1
         let stream = logStream
         do { try await client.startLogs(app: logApp, stream: stream) }
         catch { if logStream == stream && !Task.isCancelled { logError = error.localizedDescription } }
     }
 
-    func showCameraWall() async {
+    func observeLogs() async {
+        await streamLogs()
+        var ownedStream = logStream
+        let capturedSession = session
+        defer {
+            let closingStream = ownedStream
+            cleanup.submit { [weak self] in
+                guard let self, self.logStream == closingStream else { return }
+                try? await self.client.stopLogs()
+            }
+        }
+        while !Task.isCancelled && session == capturedSession && logStream == ownedStream {
+            do { try await Task.sleep(for: .seconds(5)) } catch { return }
+            guard !Task.isCancelled, session == capturedSession, logStream == ownedStream else { return }
+            if let error = logError, ConnectionRecovery.canRetry(error) {
+                await streamLogs(clear: false)
+                ownedStream = logStream
+            }
+        }
+    }
+
+    func showCameraWall(limit: Int? = nil) async {
         cameraWallVisible = true
-        for feed in cameraFeeds { feed.allowAutoplay() }
+        cameraPreviewLimit = limit
+        for feed in cameraFeeds.prefix(limit ?? cameraFeeds.count) { feed.allowAutoplay() }
         cameraRecoveryGeneration &+= 1
         let generation = cameraRecoveryGeneration
         await playCameras()
@@ -401,7 +503,7 @@ final class AppModel: ObservableObject {
             do { try await Task.sleep(for: .seconds(2)) } catch { return }
             guard cameraWallVisible, cameraRecoveryGeneration == generation else { return }
             let expectedSession = session
-            for feed in cameraFeeds where feed.shouldAutoStart(at: Date()) {
+            for feed in cameraFeeds.prefix(cameraPreviewLimit ?? cameraFeeds.count) where feed.shouldAutoStart(at: Date()) {
                 guard cameraWallVisible, cameraRecoveryGeneration == generation,
                       session == expectedSession, !Task.isCancelled else { return }
                 await playCamera(feed)
@@ -419,7 +521,7 @@ final class AppModel: ObservableObject {
         cameraBatch &+= 1
         let batch = cameraBatch
         let currentSession = session
-        for feed in cameraFeeds {
+        for feed in cameraFeeds.prefix(cameraPreviewLimit ?? cameraFeeds.count) {
             guard cameraWallVisible, cameraBatch == batch, session == currentSession, !Task.isCancelled else { return }
             if !feed.running && !feed.manuallyPaused { await playCamera(feed) }
         }

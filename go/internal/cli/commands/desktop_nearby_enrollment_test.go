@@ -2,8 +2,12 @@ package commands
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	pb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"strings"
@@ -60,6 +64,25 @@ func TestNearbyPreparationRejectsInvalidInputBeforeMint(t *testing.T) {
 	for _, state := range []*pb.SetupStatusResponse{nil, {}, {Enrolled: true, AcmeSupported: true}} {
 		if _, err := DesktopPrepareNearbyEnrollment(context.Background(), "account", "org", "valid", state, func() { t.Fatal("minted unavailable device") }); err == nil {
 			t.Fatal("accepted unavailable device")
+		}
+	}
+}
+
+func TestNearbyMintFailurePreservesUncertainIdentityAndHidesSecrets(t *testing.T) {
+	for _, code := range []codes.Code{codes.Unavailable, codes.DeadlineExceeded, codes.Canceled, codes.Internal, codes.Unknown} {
+		c := &DesktopNearbyCredential{DeviceID: "requested-device", Organization: "org"}
+		got, err := nearbyEnrollmentFailure(c, fmt.Errorf("mint: %w", status.Error(code, "private credential material")))
+		if got != c || got.DeviceID != "requested-device" || err == nil || strings.Contains(err.Error(), "private") {
+			t.Fatalf("%v: lost reconciliation identity or exposed remote error: %+v %v", code, got, err)
+		}
+	}
+}
+func TestNearbyDefinitiveCloudRefusalAllowsCorrection(t *testing.T) {
+	for _, code := range []codes.Code{codes.AlreadyExists, codes.InvalidArgument, codes.PermissionDenied, codes.Unauthenticated, codes.FailedPrecondition, codes.NotFound, codes.Unimplemented} {
+		got, err := nearbyEnrollmentFailure(&DesktopNearbyCredential{}, fmt.Errorf("mint: %w", status.Error(code, "private credential material")))
+		var rejected *NearbyEnrollmentRejectedError
+		if got != nil || !errors.As(err, &rejected) || strings.Contains(err.Error(), "private") {
+			t.Fatalf("%v: refusal not safely classified: %+v %v", code, got, err)
 		}
 	}
 }

@@ -38,7 +38,8 @@ final class CameraFeed: ObservableObject, Identifiable {
     })
 
     func shouldAutoStart(at now: Date) -> Bool {
-        guard camera.thermal, !manuallyPaused else { return false }
+        guard !manuallyPaused else { return false }
+        if let error, !ConnectionRecovery.canRetry(error) { return false }
         if running {
             return now.timeIntervalSince(lastVideoReceivedAt ?? startedAt) >= 15
         }
@@ -142,6 +143,7 @@ struct CameraFeedDisplay: View {
 
 #if os(macOS)
 struct CameraWallView: View {
+    @AppStorage("cameraWallTileWidth") private var tileWidth = 360.0
     @State private var actions = AsyncActions()
     @ObservedObject var model: AppModel
 
@@ -155,6 +157,8 @@ struct CameraWallView: View {
                 Label("Camera wall", systemImage: "rectangle.grid.2x2").font(.headline)
                 Text(String(model.cameraFeeds.count) + " cameras").foregroundStyle(.secondary)
                 Spacer()
+                Slider(value: $tileWidth, in: 240...640) { Text("Camera size") }.frame(width: 120)
+                    .help("Resize camera tiles. Drag a camera onto another to reorder.")
             }
             if let error = model.camerasError {
                 FailureView(title: "Could not load cameras", error: error) { actions.submit { await model.refreshDetails() } }
@@ -163,11 +167,22 @@ struct CameraWallView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ScrollView {
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 360), spacing: 16)], spacing: 16) {
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: tileWidth), spacing: 16)], spacing: 16) {
                         ForEach(model.cameraFeeds) { feed in
                             CameraTile(feed: feed,
                                        play: { actions.submit { await model.playCamera(feed) } },
                                        pause: { model.pauseCamera(feed) })
+                                .draggable(feed.camera.orderKey)
+                                .dropDestination(for: String.self) { items, _ in
+                                    guard let source = items.first else { return false }
+                                    model.moveCamera(source, before: feed.camera.orderKey)
+                                    return true
+                                }
+                                .contextMenu {
+                                    if let first = model.cameraFeeds.first, first.id != feed.id {
+                                        Button("Move to first") { model.moveCamera(feed.camera.orderKey, before: first.camera.orderKey) }
+                                    }
+                                }
                         }
                     }.padding(.bottom, 16)
                 }

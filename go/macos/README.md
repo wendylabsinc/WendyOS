@@ -6,9 +6,11 @@ Connected devices show their Wendy Cloud enrollment status in device Settings. A
 
 When Cloud explicitly rejects a duplicate or invalid name before issuing credentials, you can edit the name and press **Enroll** again. Editing the name or organization clears that rejected attempt's error. Timeouts, device-side failures, and other uncertain outcomes still require checking enrollment status before another attempt.
 
-On macOS, choose **+ → Set up nearby device** in the toolbar. On iOS, choose **Nearby → Set up nearby device** to discover unregistered devices advertising the setup service. Select a device, choose a saved organization account, and enter a device name. Wi-Fi configuration is optional and collapsed by default. Setup uses encrypted BLE L2CAP on PSM 130, separate from management and mesh connections. It supports WendyOS ACME enrollment and Wendy Lite enrollment with provisioned trust roots and device-bound signed time.
+While the app is active, a nearby unenrolled WendyOS or Wendy Lite device automatically offers **A Wendy is nearby**. The prompt requires a recent Bluetooth setup advertisement with RSSI of at least −80 dBm and appears once per device per app session. It waits until other sheets and sign-in finish. Enrollment starts only after you confirm adding the device. Setup defaults to your selected organization or the sole saved organization; multiple unmatched organizations require a choice. WendyOS retries setup advertising when its Bluetooth adapter becomes available after startup, and stops advertising after enrollment.
 
-The setup sheet remains open when advertisements disappear. **Retry connection** opens a fresh encrypted session. Once a Cloud mint may have happened, the app retains that attempt for the same Bluetooth address until the app exits and prevents another mint. **Check enrollment status** verifies the expected device UUID and organization using fresh Cloud presence; a saved Lite configuration alone is not success. A device may start enrollment without Wi-Fi, but it needs a supported network path to complete issuance and appear online. If the app quits during an uncertain attempt, inspect the organization's Cloud device list before starting again.
+The automatic nearby invitation opens setup. The **+** menu also offers manual discovery on macOS and iOS. Setup presents one stage at a time, with name and organization changes under an optional disclosure. Wi-Fi configuration is optional and collapsed by default. Setup uses encrypted BLE L2CAP on PSM 130, separate from management and mesh connections. It supports WendyOS ACME enrollment and Wendy Lite enrollment with provisioned trust roots and device-bound signed time. While setup is visible and the app is active, discovery, connection recovery, Wi-Fi scans, and pending enrollment checks run automatically. Connection retries back off to 30 seconds; enrollment checks continue until confirmed or the sheet closes. Enrollment and Wi-Fi changes still require an explicit action. Routine waiting is a progress state, with connection errors available under **Connection details**.
+
+The setup sheet remains open when advertisements disappear and automatically opens a fresh encrypted session after a disconnect. Once a Cloud mint may have happened, the app retains that attempt for the same Bluetooth address until the app exits and prevents another mint. Automatic enrollment checks verify the expected device UUID and organization using fresh Cloud presence; a saved Lite configuration alone is not success. A device may start enrollment without Wi-Fi, but it needs a supported network path to complete issuance and appear online. If the app quits during an uncertain attempt, inspect the organization's Cloud device list before starting again.
 
 The macOS and iOS apps embed packet-tunnel Network Extensions. Select mesh or cloud devices in the VPN controls to resolve their Wendy DNS names and route TCP connections from other apps. To use a device's shared internet connection, choose it under **Internet via mesh**. The donor must advertise an enabled uplink and run an agent with operator lease protocol `wendy-mesh-internet/2`. Device-only routing remains the default.
 
@@ -37,12 +39,12 @@ The build produces native binaries for the build Mac. It links `libwendydesktop.
 
 ### Automatic camera alignment
 
-**Auto-align cameras** is enabled by default in Digital Twin. While the view is
+Digital Twin aligns cameras automatically. While the view is
 open and the app is active, it locates saved cameras using fresh video and the
 selected room's visual reference map. It checks one camera at a time, rechecks
 successful automatic positions after a minute, and backs off failed attempts
-from 30 seconds to five minutes. Each camera shows its alignment status.
-The toggle pauses the work; closing Digital Twin, changing gateways or models,
+from 30 seconds to five minutes. Detailed alignment status is available when selecting a camera.
+Closing Digital Twin, changing gateways or models,
 opening manual calibration, and putting the app in the background cancel it.
 Manual placements and manually paused camera feeds are preserved.
 
@@ -60,11 +62,10 @@ not reconstruct missing cabinet surfaces or infer obstacle-free space there.
 
 ### Camera color
 
-Enable **Camera color** in the twin settings menu or Cameras sheet on iPhone,
-or beside **Fog of war** on macOS. Up to eight aligned visual cameras can color
+Choose **Show camera color** from the twin view options menu. Up to eight aligned visual cameras can color
 the model together, independently of the selected preview. Per-camera status
 explains missing calibration, stale frames, resolution changes, and unavailable
-feeds. Turning the switch off stops subscriptions owned by the color overlay.
+feeds. Choosing **Hide camera color** stops subscriptions owned by the color overlay.
 
 This remains an experimental view-only projection. It uses the saved geometry,
 handles RoomPlan meshes without texture coordinates and nearby mounting-wall
@@ -73,7 +74,7 @@ projection artifacts. Source models and site exports are unchanged.
 
 ### Fog of war exploration
 
-Open an existing **Site Model** and enable **Fog of war** below the site title.
+Open an existing **Digital Twin** and choose **Show exploration** from view options.
 The imported house starts dark. Once Go2 has a confirmed, live position in that
 model, nearby areas become bright. Areas it leaves remain dim, retaining the
 exploration history. The counter shows approximate explored map area in square
@@ -82,7 +83,7 @@ controls as before. Fog does not start a search, issue orders, or change any
 navigation checks. Rotation search still requires accepting its popup;
 enabling fog does not invoke it.
 
-**Reset** clears exploration and immediately reveals the current valid position.
+**Reset exploration** clears exploration and immediately reveals the current valid position.
 Turning fog off restores the original model materials and pauses recording;
 turning it back on retains history in the same view. History is local to the
 current view and resets on a different site, model revision, scale, gateway,
@@ -460,7 +461,7 @@ Cloud permissions determine which controls are available. The server independent
 
 ## Device interface
 
-The sidebar has Nearby and Cloud navigator tabs, a local search field and an email account footer. Selecting a device immediately switches its detail panel to a connecting state, with progress on the selected row. Failed connections remain on that device with retry controls; late connection results cannot replace a newer selection. Activity defaults to name order; click its table headers to sort by name, CPU or memory. Listening ports appear beside the table. Apps and Activity offer Start, Stop, and a destructive Delete App action in their context menus. Deletion confirms the app and device, retains images and persistent volumes, and refuses a stale device session. Open appears only for apps with an HTTP entitlement. Camera tiles expose circular playback and full-screen controls on hover.
+The main destinations are Devices, Sites, and Activity. Organization management lives with account controls. Each device opens an overview with up to four live camera previews and running apps. Transient connection failures reconnect automatically while the app is active; trust and sign-in errors remain explicit. Activity records connection and app changes observed during this app session. The device Apps page combines app controls and resource activity, updating automatically while visible. Click its table headers to sort by name, CPU or memory. Listening ports appear beside the table. App context menus offer Start, Stop, and Delete App. Deletion confirms the app and device, retains images and persistent volumes, and refuses a stale device session. Open appears only for apps with an HTTP entitlement. Camera tiles expose circular playback and full-screen controls on hover.
 
 ## Network behavior
 
@@ -502,7 +503,7 @@ A real macOS VPN activation still needs the signed provisioning setup above. Pas
 
 ### Camera wall
 
-Open a device’s Cameras tab to play its feeds together in a grid. Tiles fit the window automatically. Hover over a player for circular pause and full-screen controls. Paused players keep their play control visible. Each camera has its own decoder, error state, retry action, and stream generation. Leaving the wall or switching devices stops its subscriptions.
+Open a device’s Cameras tab to play its feeds together in a grid. Tiles fit the window automatically. Hover over a player for circular pause and full-screen controls. Paused players keep their play control visible. Each camera has its own decoder, error state, automatic recovery, and stream generation. Manual pauses remain paused. On Mac, the tile size is adjustable and dragging tiles changes their saved order. Leaving the wall or switching devices stops its subscriptions.
 
 ### Typed C FFI
 
@@ -1131,7 +1132,7 @@ parameters, disagreement between view groups, and validation-view errors.
 ### People in the digital twin
 
 On macOS, open a site, add its visual cameras, and calibrate and align them to the
-room model. Turn on **Track people**, then click the room floor in the model.
+room model. Choose **Show people** from view options, then click the room floor in the model.
 Walk where the cameras can see both ankles. The twin draws an anonymous human
 blob and floor halo at each estimated position. **Choose floor again** changes
 the reference height. Floor selection lasts for the current workspace session;

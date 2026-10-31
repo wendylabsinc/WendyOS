@@ -1,6 +1,11 @@
 import SwiftUI
 
 enum DeviceEnrollmentForm {
+    static func defaultOrganization(_ organizations: [EnrollmentOrganization], currentAccount: String) -> String {
+        organizations.first(where: { $0.account == currentAccount })?.id
+            ?? (organizations.count == 1 ? organizations[0].id : "")
+    }
+
     static func suggestedName(_ displayName: String) -> String {
         let folded = displayName.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: Locale(identifier: "en_US_POSIX")).lowercased()
         var name = folded.components(separatedBy: CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyz0123456789").inverted)

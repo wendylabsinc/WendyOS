@@ -13,36 +13,20 @@ struct NativeSiteView: View {
     @State private var metadata: [SiteCameraMetadata] = []
     @State private var metadataError: String?
     @Environment(\.scenePhase) private var scenePhase
-    @AppStorage("siteAutomaticCameraAlignment") private var automaticAlignmentEnabled = true
     @State private var automaticAlignment = SiteAutomaticAlignment()
     @State private var cameraResolutions: [String: CGSize] = [:]
 
     var body: some View {
         SiteWorkspace(gatewayID: gatewayID, gatewayAliases: gateway.aliases, feeds: feeds, metadata: displayMetadata, notices: notices,
                       robotSession: model.deviceSession, robotGatewayName: model.connected?.title ?? "this gateway", controls: {
-            #if os(iOS)
-            Toggle("Auto-align cameras", isOn: $automaticAlignmentEnabled)
-            Button("Pair Cameras", systemImage: "plus") { pairing = true }
-            Button("Refresh", systemImage: "arrow.clockwise") { actions.submit { await refresh() } }
-            #else
-            VStack(alignment: .leading, spacing: 8) {
-                Toggle("Auto-align cameras", isOn: $automaticAlignmentEnabled)
-                    .toggleStyle(.switch).fixedSize()
-                HStack {
-                    Button("Pair Cameras", systemImage: "plus") { pairing = true }
-                    Button("Refresh", systemImage: "arrow.clockwise") {
-                        actions.submit { await refresh() }
-                    }
-                }.buttonStyle(.bordered)
-            }
-            #endif
+            Button("Pair cameras", systemImage: "plus") { pairing = true }
         }, onFailure: { error, _ in model.alert = error.localizedDescription }, calibrate: { site, camera in
             alignment = SiteAlignmentRequest(site: site, camera: camera, gatewayID: gatewayID, session: model.deviceSession, gatewayAliases: gateway.aliases)
         }, automaticAlignment: { site, editing in
             AnyView(SiteAutomaticAlignmentView(model: model, site: site, gatewayID: gatewayID, gatewayAliases: gateway.aliases,
-                enabled: automaticAlignmentEnabled && scenePhase == .active && alignment == nil && !pairing && !editing,
+                enabled: scenePhase == .active && alignment == nil && !pairing && !editing,
                 worker: automaticAlignment))
-        }, alignmentStatuses: automaticAlignmentEnabled && scenePhase == .active && alignment == nil ? automaticAlignment.statuses : [:], colorCapture: { sourceIDs in
+        }, alignmentStatuses: scenePhase == .active && alignment == nil ? automaticAlignment.statuses : [:], colorCapture: { sourceIDs in
             AnyView(SiteCameraColorCapture(model: model, sourceIDs: sourceIDs))
         }) { sourceID in
             if let feed = model.cameraFeeds.first(where: { $0.camera.stableID == sourceID }) {

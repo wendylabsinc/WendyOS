@@ -657,7 +657,8 @@ struct SiteRobotPanel: View {
                             ForEach(model.robots) { Text($0.name.isEmpty ? $0.serial : $0.name).tag($0.serial) }
                         }.labelsHidden()
                     }
-                    SiteRobotStatus(model: model)
+                    SiteRobotStatus(model: model, showsDetails: false)
+                    if model.handle != 0 && model.reading?.disconnected != true {
                     if model.placing {
                         Text(model.anchor == nil ? "Click the floor beneath Go2." : "Click directly ahead of Go2 to set its heading.")
                             .font(.callout)
@@ -673,16 +674,21 @@ struct SiteRobotPanel: View {
                         }.buttonStyle(.bordered)
                     }
                     SiteRobotLocalizationControls(model: model)
-                    RobotLocalizationDiagnostics(model: model)
                     if model.destination != nil {
                         Button("Move here", systemImage: "arrow.up.right") { model.command(move: true) }
                             .buttonStyle(.borderedProminent).tint(.green)
                             .disabled(model.reading?.ready != true || model.reading?.route.isEmpty != false)
                     }
-                    SiteRobotSupervisionSummary(model: model)
-                    DisclosureGroup("Settings and help", isExpanded: $settingsExpanded) {
+                    if model.reading?.moving == true || model.destination != nil {
+                        SiteRobotSupervisionSummary(model: model)
+                    }
+                    }
+                    DisclosureGroup("Details", isExpanded: $settingsExpanded) {
                         VStack(alignment: .leading, spacing: 12) {
-                            Go2Preview().frame(height: 100).clipShape(RoundedRectangle(cornerRadius: 10))
+                            RobotLocalizationDiagnostics(model: model)
+                            if let error = model.error, error != model.reading?.message {
+                                Text(error).font(.caption).foregroundStyle(.secondary)
+                            }
                             SiteRobotTimingControls(model: model)
                             Text("Click to preview · Right-click to move · Esc to stop")
                                 .font(.caption2).foregroundStyle(.secondary)
@@ -690,15 +696,9 @@ struct SiteRobotPanel: View {
                                 .font(.caption2).foregroundStyle(.secondary)
                             HStack {
                                 Button("Manage pairing") { model.stop(); pairing = true }
-                                Spacer()
-                                Button("Reconnect") { model.reconnectGeneration += 1 }
-                                    .disabled(model.connecting || model.reading?.moving == true)
                             }.font(.caption)
                         }.padding(.top, 8)
                     }.font(.caption)
-                }
-                if let error = model.error, error != model.reading?.message {
-                    Text(error).font(.caption).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)
                 }
             }
         }

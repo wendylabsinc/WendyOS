@@ -13,6 +13,8 @@ import (
 	pb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
 	litepb "github.com/wendylabsinc/wendy/go/proto/gen/litepb"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -97,11 +99,11 @@ func DesktopPrepareNearbyEnrollment(ctx context.Context, account, organization, 
 		mintCtx, cancel := context.WithTimeout(cloudCtx, 30*time.Second)
 		defer cancel()
 		_, err = liteenroll.Mint(mintCtx, cloud, auth, cfg, name, &cloudpb.DeviceHardware{SerialNumber: proto.String(state.GetHardwareId())}, liteenroll.TrustProfile{})
+		out.DeviceID = cfg.DeviceId
 		if err != nil {
-			return nil, errors.New("Cloud enrollment could not be confirmed. Check the selected organization's device list before trying again")
+			return nearbyEnrollmentFailure(out, err)
 		}
 		defer func() { cfg.Token = "" }()
-		out.DeviceID = cfg.DeviceId
 		raw, err := proto.Marshal(conf)
 		if err != nil {
 			return nil, err
@@ -116,10 +118,10 @@ func DesktopPrepareNearbyEnrollment(ctx context.Context, account, organization, 
 		mintCtx, cancel := context.WithTimeout(cloudCtx, 30*time.Second)
 		defer cancel()
 		cfg, _, err = cloudenroll.MintEAB(mintCtx, cloud, auth, cfg, name, nil)
-		if err != nil {
-			return nil, errors.New("Cloud enrollment could not be confirmed. Check the selected organization's device list before trying again")
-		}
 		out.DeviceID = cfg.DeviceID
+		if err != nil {
+			return nearbyEnrollmentFailure(out, err)
+		}
 		out.Request = &pb.SetupEnrollCommand{CloudHost: auth.CloudGRPC, DirectoryUrl: cfg.DirectoryURL, DeviceId: cfg.DeviceID, EabKeyId: cfg.EABKeyID, EabHmacKey: cfg.EABHMACKey}
 	}
 	out.Principal = "spiffe://wendy.sh/tenant/" + organization + "/device/" + out.DeviceID
@@ -152,4 +154,34 @@ func nearbyEnrollmentPresent(device *cloudpb.Asset, c *DesktopNearbyCredential) 
 		!stamp.AsTime().Before(c.RequestedAt.Add(-5*time.Second)) &&
 		!stamp.AsTime().Before(time.Now().Add(-2*time.Minute)) && stamp.AsTime().Before(time.Now().Add(time.Minute)) &&
 		(device.GetPkiDeviceName() == "" || device.GetPkiDeviceName() == c.DeviceID)
+}
+
+// NearbyEnrollmentRejectedError means Cloud refused before issuing a credential.
+// Only these replies permit another explicit enrollment attempt.
+type NearbyEnrollmentRejectedError struct{ Message string }
+
+func (e *NearbyEnrollmentRejectedError) Error() string { return e.Message }
+
+func nearbyEnrollmentFailure(c *DesktopNearbyCredential, err error) (*DesktopNearbyCredential, error) {
+	var message string
+	switch status.Code(err) {
+	case codes.AlreadyExists:
+		message = "That device name is already in use. Choose another name."
+	case codes.InvalidArgument:
+		message = "Cloud rejected the enrollment details. Check the device name and organization."
+	case codes.Unauthenticated:
+		message = "Sign in to the selected organization again."
+	case codes.PermissionDenied:
+		message = "Your account does not have permission to add devices to this organization."
+	case codes.FailedPrecondition, codes.NotFound, codes.Unimplemented:
+		message = "Enrollment is not available for this organization. Contact your administrator."
+	}
+	if message != "" {
+		return nil, &NearbyEnrollmentRejectedError{Message: message}
+	}
+	// Retain only the identity needed for read-only reconciliation. Never repeat
+	// a mint after a timeout or a lost reply, and never expose remote error text
+	// which may contain credential material.
+	c.Request = nil
+	return c, fmt.Errorf("Cloud enrollment reply was not received (%s). Checking the device automatically", status.Code(err))
 }
