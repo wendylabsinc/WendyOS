@@ -74,6 +74,14 @@ When another deployment replaces the app (for example `wendy run --detach` from 
 
 When the image build fails, `wendy run` prints the build failure details, including the builder's own error and the path of the full build log, and the error line below them names the step that failed and the cause when the log shows them (the last informative line of the step's output, skipping generic closing lines such as make's `make: *** [...] Error 1` or pip's closing notes, or the error the builder reported), for example `build failed at [build 4/4] RUN go build -o /out/app .: ./main.go:6:14: undefined: foo`.
 
+## Checks before the build
+
+Before it builds on this computer, `wendy run` checks the free space on the disks the build writes to: the one holding your user cache directory, where Wendy keeps the exported image and its build cache; on Linux, the one holding Docker's data directory (`/var/lib/docker`); and for Swift and Xcode projects, the one holding the project. With less than 3 GiB free on any of them, the run stops before building with the error class `disk_full`, names the disk, and lists ways to free space, such as `docker system prune`, `wendy cache clear` or `--build-host`. With less than 10 GiB free it warns and builds. A disk whose free space cannot be read is skipped.
+
+Runs that build nothing, because the app's image is already on the device, skip the check, and so do `--build-host` runs, which check the build host's disk instead. On macOS and Windows, Docker Desktop keeps its data in a virtual disk with a size limit of its own, which the check does not read.
+
+If Docker has no Buildx plugin, the run stops when it first sets up its builder, with the error class `builder_unavailable` and a link to install Buildx.
+
 ## Detached output
 
 For an ordinary single-device deployment to a Wendy agent, `--json --detach`

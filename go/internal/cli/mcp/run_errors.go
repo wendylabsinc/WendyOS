@@ -33,6 +33,20 @@ func runHasExplicitTarget(req mcpgo.CallToolRequest) bool {
 // whole tail would let a build log that merely mentions a phrase decide the code.
 const runDiagnosticWindow = 1024
 
+// localBuildSpaceRefusal begins the message the CLI prints when it refuses to
+// build on a nearly full disk (checkLocalBuildSpace in package commands).
+const localBuildSpaceRefusal = "not enough free disk space to build"
+
+// runRefusedForDiskSpace reports whether a failed `wendy run` child stopped at
+// that refusal. It comes before any build or deploy, so unlike other failures
+// there is no device state to inspect.
+func runRefusedForDiskSpace(output string) bool {
+	if len(output) > runDiagnosticWindow {
+		output = output[len(output)-runDiagnosticWindow:]
+	}
+	return strings.Contains(output, localBuildSpaceRefusal)
+}
+
 // runFailureCode classifies a failed `wendy run` child from its final
 // diagnostic. The CLI reports errors as text on stderr, so match the stable
 // messages it prints for credential problems; anything else stays INTERNAL.

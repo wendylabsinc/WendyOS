@@ -171,7 +171,7 @@ func summarizeBuildFailure(raw string, buildErr error) buildFailureSummary {
 	}
 
 	if buildErr != nil {
-		summary.fallback = compactBuildFailureText(buildErr.Error())
+		summary.fallback = compactBuildFailureText(messageWithoutNextSteps(buildErr))
 	}
 	return summary
 }

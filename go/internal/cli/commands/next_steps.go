@@ -75,6 +75,17 @@ func StripNextSteps(text string, err error) string {
 	return text
 }
 
+// messageWithoutNextSteps is err's message with the steps attached anywhere in
+// its chain left out, for a summary line that leaves the steps to the error
+// printed after it.
+func messageWithoutNextSteps(err error) string {
+	text := StripNextSteps(err.Error(), err)
+	for _, step := range NextSteps(err) {
+		text = strings.Replace(text, "\n  "+step, "", 1)
+	}
+	return text
+}
+
 // walkErrorChain calls visit on err and every error it wraps, outermost
 // first, following both branches of errors.Join.
 func walkErrorChain(err error, visit func(error)) {
