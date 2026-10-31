@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/mldsa"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -19,15 +20,47 @@ import (
 
 type principalCloud struct {
 	*fakeCloud
-	requests []*cloudpbv2.SignedRequest
+	requests     []*cloudpbv2.SignedRequest
+	responseWire []byte
 }
 
 func (f *principalCloud) Invoke(ctx context.Context, method string, args, reply any, opts ...grpc.CallOption) error {
 	if method == cloudpbv2.PKIAdminService_RevokePrincipalCertificates_FullMethodName {
 		f.requests = append(f.requests, proto.Clone(args.(*cloudpbv2.SignedRequest)).(*cloudpbv2.SignedRequest))
 		reply.(*pkicorepb.RevokeByPrincipalResponse).RevokedCount = 3
+		if f.responseWire != nil {
+			if err := proto.Unmarshal(f.responseWire, reply.(*pkicorepb.RevokeByPrincipalResponse)); err != nil {
+				return err
+			}
+		}
 	}
 	return f.fakeCloud.Invoke(ctx, method, args, reply, opts...)
+}
+
+func TestPrincipalRevocationReadsOldAndAdditiveResponses(t *testing.T) {
+	// The caller returns the existing count. Fencing annotations are server
+	// metadata, not a new client-side success requirement.
+	for _, tt := range []struct {
+		name  string
+		wire  string
+		count int
+	}{
+		{"old", "0807", 7},
+		{"with-fencing", "080910011a07626c6f636b6564", 9},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			auth, _, _ := testAuth(t)
+			response, err := hex.DecodeString(tt.wire)
+			if err != nil {
+				t.Fatal(err)
+			}
+			conn := &principalCloud{fakeCloud: &fakeCloud{t: t}, responseWire: response}
+			count, err := RevokePrincipalCertificates(context.Background(), conn, auth, "lite-441bf6804824")
+			if err != nil || count != tt.count || len(conn.requests) != 1 {
+				t.Fatalf("revocation = %d, %v, %d attempts", count, err, len(conn.requests))
+			}
+		})
+	}
 }
 
 func TestPrincipalRevocationSignsExactLiteIdentityAndFreshRetry(t *testing.T) {
