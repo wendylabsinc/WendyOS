@@ -4,7 +4,10 @@ import (
 	"encoding/xml"
 	"errors"
 	"fmt"
+	"net/url"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
 // ONVIF WS-Discovery constants. Cameras join this multicast group and answer a
@@ -67,14 +70,20 @@ type probeMatchEnvelope struct {
 // ProbeMatch, which happens for unrelated multicast traffic on port 3702.
 var ErrNoProbeMatch = errors.New("payload contains no ProbeMatch")
 
-// ErrProbeMatchTypeMismatch is returned when every ProbeMatch explicitly
-// advertises types without the exact NetworkVideoTransmitter local name.
+// ErrProbeMatchTypeMismatch is returned when no ProbeMatch identifies itself as
+// a video transmitter: typed matches lack the exact NetworkVideoTransmitter
+// local name, and untyped ones carry no ONVIF scope.
 var ErrProbeMatchTypeMismatch = errors.New("ProbeMatch types do not include NetworkVideoTransmitter")
+
+// onvifScopePrefix starts every scope the ONVIF Core specification defines.
+const onvifScopePrefix = "onvif://www.onvif.org/"
 
 // ParseProbeMatch extracts the first usable video-transmitter match from a
 // discovery response. Explicit non-camera types are rejected. Omitted or empty
-// Types are accepted: WS-Discovery allows a target to omit them even when
-// answering our NetworkVideoTransmitter-filtered probe.
+// Types are accepted only alongside an ONVIF scope: WS-Discovery allows a target
+// to omit types even when answering our NetworkVideoTransmitter-filtered probe,
+// and every ONVIF device publishes those scopes, while a printer or computer
+// that answers any probe without types does not.
 func ParseProbeMatch(payload []byte) (ProbeMatch, error) {
 	var env probeMatchEnvelope
 	if err := xml.Unmarshal(payload, &env); err != nil {
@@ -83,13 +92,18 @@ func ParseProbeMatch(payload []byte) (ProbeMatch, error) {
 	matches := env.Body.ProbeMatches.ProbeMatch
 	hasCompatibleType := false
 	for _, match := range matches {
-		if strings.TrimSpace(match.Types) != "" && !hasVideoTransmitterType(match.Types) {
+		scopes := strings.Fields(match.Scopes)
+		if strings.TrimSpace(match.Types) == "" {
+			if !hasONVIFScope(scopes) {
+				continue
+			}
+		} else if !hasVideoTransmitterType(match.Types) {
 			continue
 		}
 		hasCompatibleType = true
 		out := ProbeMatch{
 			XAddrs: strings.Fields(match.XAddrs),
-			Scopes: strings.Fields(match.Scopes),
+			Scopes: scopes,
 		}
 		// A match with no service address tells us nothing we can act on.
 		if len(out.XAddrs) == 0 {
@@ -119,6 +133,15 @@ func hasVideoTransmitterType(types string) bool {
 	return false
 }
 
+func hasONVIFScope(scopes []string) bool {
+	for _, scope := range scopes {
+		if strings.HasPrefix(scope, onvifScopePrefix) && len(scope) > len(onvifScopePrefix) {
+			return true
+		}
+	}
+	return false
+}
+
 // modelFromScopes prefers the ONVIF name scope, falling back to hardware so a
 // camera that omits a friendly name still lists as something recognisable.
 func modelFromScopes(scopes []string) string {
@@ -127,13 +150,31 @@ func modelFromScopes(scopes []string) string {
 		switch {
 		case strings.HasPrefix(scope, scopeNamePrefix):
 			if name := strings.TrimPrefix(scope, scopeNamePrefix); name != "" {
-				return name
+				return decodeScopeValue(name)
 			}
 		case strings.HasPrefix(scope, scopeHardwarePrefix):
 			if hardware == "" {
-				hardware = strings.TrimPrefix(scope, scopeHardwarePrefix)
+				hardware = decodeScopeValue(strings.TrimPrefix(scope, scopeHardwarePrefix))
 			}
 		}
 	}
 	return hardware
+}
+
+// decodeScopeValue undoes the percent-encoding a scope URI needs for spaces and
+// other reserved characters, so "Tapo%20C200" lists as "Tapo C200". A value that
+// is not valid percent-encoding, or that decodes to invalid UTF-8 or a control
+// character, is returned as sent: `camera list` prints names verbatim, and a
+// decoded escape sequence would reach the user's terminal.
+func decodeScopeValue(raw string) string {
+	decoded, err := url.PathUnescape(raw)
+	if err != nil || !utf8.ValidString(decoded) {
+		return raw
+	}
+	for _, r := range decoded {
+		if unicode.IsControl(r) {
+			return raw
+		}
+	}
+	return decoded
 }
