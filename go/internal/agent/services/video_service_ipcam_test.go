@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -226,13 +227,106 @@ func registerTestCamera(t *testing.T, s *VideoService) ipcam.Camera {
 	return cam
 }
 
-// A registered camera appears in the listing with the IP transport and its
-// address, and reports that it has no credentials yet.
+// pairTestCamera stores a login for cam, which is what pairs a network camera.
+func pairTestCamera(t *testing.T, s *VideoService, cam ipcam.Camera) {
+	t.Helper()
+	if err := s.credentials.Set(cam.MAC, ipcam.Credential{Username: "admin", Password: "p"}); err != nil {
+		t.Fatalf("store login: %v", err)
+	}
+}
+
+// A network camera nobody has stored a login for may be a neighbour's camera on
+// a shared network (a Tapo C200 on a home LAN was the report). It is left out of
+// every listing an app, the Companion app, MCP or the data and two-plane camera
+// paths see, and only a pairing flow that asks for unpaired cameras sees it.
+func TestListHidesUnpairedIPCameras(t *testing.T) {
+	s := newIPTestService(t)
+	stranger, err := s.registry.Upsert(ipcam.Camera{MAC: "3c:52:a1:11:22:33", Address: "192.168.0.42", Model: "Tapo C200"})
+	if err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	paired := registerTestCamera(t, s)
+	pairTestCamera(t, s, paired)
+
+	ids := func(devices []*agentpb.VideoDevice) []uint32 {
+		var out []uint32
+		for _, d := range devices {
+			out = append(out, d.GetId())
+		}
+		return out
+	}
+	list, err := s.ListVideoDevices(context.Background(), &agentpb.ListVideoDevicesRequest{})
+	if err != nil {
+		t.Fatalf("ListVideoDevices: %v", err)
+	}
+	if got := ids(list.GetDevices()); !reflect.DeepEqual(got, []uint32{paired.ID}) {
+		t.Fatalf("default listing = %v, want only the paired camera %d", got, paired.ID)
+	}
+	internal, err := s.listCameras(context.Background())
+	if err != nil {
+		t.Fatalf("listCameras: %v", err)
+	}
+	if got := ids(internal); !reflect.DeepEqual(got, []uint32{paired.ID}) {
+		t.Fatalf("listCameras = %v, want only the paired camera %d", got, paired.ID)
+	}
+	s.discoverer = nil // RefreshCameras would otherwise probe the real network.
+	refreshed, err := s.RefreshCameras(context.Background(), &agentpb.RefreshCamerasRequest{})
+	if err != nil {
+		t.Fatalf("RefreshCameras: %v", err)
+	}
+	if got := ids(refreshed.GetDevices()); !reflect.DeepEqual(got, []uint32{paired.ID}) {
+		t.Fatalf("default refresh = %v, want only the paired camera %d", got, paired.ID)
+	}
+
+	want := []uint32{stranger.ID, paired.ID}
+	list, err = s.ListVideoDevices(context.Background(), &agentpb.ListVideoDevicesRequest{IncludeUnpaired: true})
+	if err != nil {
+		t.Fatalf("ListVideoDevices: %v", err)
+	}
+	if got := ids(list.GetDevices()); !reflect.DeepEqual(got, want) {
+		t.Fatalf("listing with unpaired = %v, want %v", got, want)
+	}
+	refreshed, err = s.RefreshCameras(context.Background(), &agentpb.RefreshCamerasRequest{IncludeUnpaired: true})
+	if err != nil {
+		t.Fatalf("RefreshCameras: %v", err)
+	}
+	if got := ids(refreshed.GetDevices()); !reflect.DeepEqual(got, want) {
+		t.Fatalf("refresh with unpaired = %v, want %v", got, want)
+	}
+}
+
+// Storing a login asks the camera for its stream paths straight away, with the
+// login already stored, so a stream started right after `camera login` (or the
+// login prompt in `camera view`) does not fall back to guessing paths until the
+// next discovery round.
+func TestSetCameraCredentialsLearnsStreamPaths(t *testing.T) {
+	s := newIPTestService(t)
+	cam := registerTestCamera(t, s)
+	var learned []ipcam.Camera
+	s.learnStreamPaths = func(_ context.Context, c ipcam.Camera) ipcam.Camera {
+		if !s.credentials.Has(c.MAC) {
+			t.Fatal("stream paths requested before the login was stored")
+		}
+		learned = append(learned, c)
+		return c
+	}
+	if _, err := s.SetCameraCredentials(context.Background(), &agentpb.SetCameraCredentialsRequest{
+		DeviceId: cam.ID, Username: "admin", Password: "hunter2",
+	}); err != nil {
+		t.Fatalf("SetCameraCredentials: %v", err)
+	}
+	if len(learned) != 1 || learned[0].MAC != cam.MAC {
+		t.Fatalf("learned stream paths for %+v, want camera %d once", learned, cam.ID)
+	}
+}
+
+// A registered camera appears in a listing that asks for unpaired cameras, with
+// the IP transport and its address, and reports that it has no credentials yet.
 func TestListIncludesIPCameras(t *testing.T) {
 	s := newIPTestService(t)
 	cam := registerTestCamera(t, s)
 
-	resp, err := s.ListVideoDevices(context.Background(), &agentpb.ListVideoDevicesRequest{})
+	resp, err := s.ListVideoDevices(context.Background(), &agentpb.ListVideoDevicesRequest{IncludeUnpaired: true})
 	if err != nil {
 		t.Fatalf("ListVideoDevices: %v", err)
 	}
@@ -268,7 +362,7 @@ func TestListIPCameraWithoutModel(t *testing.T) {
 	if _, err := s.registry.Upsert(ipcam.Camera{MAC: "aa:bb:cc:dd:ee:ff", Address: "10.98.0.7"}); err != nil {
 		t.Fatalf("upsert: %v", err)
 	}
-	resp, err := s.ListVideoDevices(context.Background(), &agentpb.ListVideoDevicesRequest{})
+	resp, err := s.ListVideoDevices(context.Background(), &agentpb.ListVideoDevicesRequest{IncludeUnpaired: true})
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
@@ -533,7 +627,7 @@ func TestStreamVideoIPForwardsFrames(t *testing.T) {
 func TestRefreshCamerasSurvivesProbeFailure(t *testing.T) {
 	s := newIPTestService(t)
 	registerTestCamera(t, s)
-	resp, err := s.RefreshCameras(context.Background(), &agentpb.RefreshCamerasRequest{})
+	resp, err := s.RefreshCameras(context.Background(), &agentpb.RefreshCamerasRequest{IncludeUnpaired: true})
 	if err != nil {
 		t.Fatalf("RefreshCameras: %v", err)
 	}
@@ -654,6 +748,7 @@ func TestStreamVideoStreamsOfflineButReachableCamera(t *testing.T) {
 func TestListCameras_SkipsGlobNodesInIPCameraBand(t *testing.T) {
 	s := newIPTestService(t)
 	cam := registerTestCamera(t, s)
+	pairTestCamera(t, s, cam)
 	nodePath := fmt.Sprintf("/dev/video%d", cam.ID)
 	s.globDevices = func() ([]string, error) { return []string{nodePath}, nil }
 	// The loopback node itself opens and reports VIDEO_CAPTURE like any other
@@ -701,6 +796,7 @@ func TestListCameras_ListsGlobNodesInMCUBand(t *testing.T) {
 func TestListIPCameras_PathFilledWhenLoopbackNodeExists(t *testing.T) {
 	s := newIPTestService(t)
 	cam := registerTestCamera(t, s)
+	pairTestCamera(t, s, cam)
 	fake := s.loopback.(*fakeLoopback)
 	wantPath := fmt.Sprintf("/dev/video%d", cam.ID)
 	fake.nodePaths[cam.ID] = wantPath
@@ -718,7 +814,7 @@ func TestListIPCameras_PathFilledWhenLoopbackNodeExists(t *testing.T) {
 // node that does not exist yet.
 func TestListIPCameras_PathEmptyWithoutNode(t *testing.T) {
 	s := newIPTestService(t)
-	registerTestCamera(t, s)
+	pairTestCamera(t, s, registerTestCamera(t, s))
 	// s.loopback is the harness's default fakeLoopback, with no node recorded.
 
 	resp, err := s.ListVideoDevices(context.Background(), &agentpb.ListVideoDevicesRequest{})
@@ -984,9 +1080,12 @@ func TestLoadNetworkCamerasCleanup(t *testing.T) {
 			}
 			core, logs := observer.New(zap.InfoLevel)
 			s := &VideoService{logger: zap.New(core), registry: ipcam.NewRegistry(registryPath), credentials: ipcam.NewCredentialStore(credentialPath)}
-			s.loadNetworkCameras()
+			pruned := s.loadNetworkCameras()
 			wantKept := credentialFile != "missing"
-			cleanupLogs := logs.FilterMessage("removed unconfirmed DHCP camera observations").All()
+			if wantPruned := !wantKept; wantPruned != reflect.DeepEqual(pruned, []uint32{cam.ID}) || (wantKept && len(pruned) != 0) {
+				t.Fatalf("pruned IDs = %v, want camera %d pruned: %v", pruned, cam.ID, !wantKept)
+			}
+			cleanupLogs := logs.FilterMessage("removed unconfirmed network camera records").All()
 			if wantKept && len(cleanupLogs) != 0 {
 				t.Fatalf("logged removals despite keeping the camera: %+v", cleanupLogs)
 			}

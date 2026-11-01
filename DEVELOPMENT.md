@@ -397,6 +397,15 @@ keyed by Media Access Control (MAC) address, and allocates each one a device ID
 from the reserved 200-255 band. That band is also where the camera's future
 v4l2loopback node number comes from, so the ID does not change later.
 
+The probe goes out of every interface, so it also finds other people's cameras
+on a shared LAN. A camera counts as paired once a login is stored for it, and
+only paired cameras are listed (`ListVideoDevices` and `RefreshCameras` take
+`include_unpaired` for pairing flows), get a loopback node, or are contacted
+beyond the probe: the agent neither asks unpaired cameras for stream paths nor
+dials them for liveness. On startup the agent drops discovered records that have
+no login and no lease from a camera link, with any loopback node an older agent
+made for them; a real camera is found again next round.
+
 ```sh
 wendy device camera login 200 --user admin   # prompts without echo
 wendy device camera forget 200
@@ -434,9 +443,9 @@ serving DHCP on camera link     {"address": "10.98.0.1/24", "pool": "10.98.0.50+
 camera leased an address        {"address": "10.98.0.50", "cameraId": "200"}
 ```
 
-Diagnostics live behind the same command. `camera list` reports `needs login` for
-a camera with no stored credentials and `offline` for one the last probe could not
-reach, so both are visible before a stream fails.
+Diagnostics live behind the same command. `camera list` reports `offline` for a
+paired camera the last check could not reach, and counts the cameras it hid for
+having no login; `camera list --all` shows those with `needs login`.
 
 ---
 

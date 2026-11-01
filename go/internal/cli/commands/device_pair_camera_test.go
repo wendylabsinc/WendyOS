@@ -15,25 +15,29 @@ import (
 )
 
 type cameraPairTestClient struct {
-	devices    []*agentpb.VideoDevice
-	scans      int
-	saved      *agentpb.SetCameraCredentialsRequest
-	forgot     uint32
-	err        error
-	refreshErr error
-	lists      int
+	devices         []*agentpb.VideoDevice
+	scans           int
+	saved           *agentpb.SetCameraCredentialsRequest
+	forgot          uint32
+	err             error
+	refreshErr      error
+	lists           int
+	refreshUnpaired bool
+	listUnpaired    bool
 }
 
-func (c *cameraPairTestClient) RefreshCameras(context.Context, *agentpb.RefreshCamerasRequest, ...grpc.CallOption) (*agentpb.RefreshCamerasResponse, error) {
+func (c *cameraPairTestClient) RefreshCameras(_ context.Context, req *agentpb.RefreshCamerasRequest, _ ...grpc.CallOption) (*agentpb.RefreshCamerasResponse, error) {
 	c.scans++
+	c.refreshUnpaired = req.GetIncludeUnpaired()
 	if c.refreshErr != nil {
 		return nil, c.refreshErr
 	}
 	return &agentpb.RefreshCamerasResponse{Devices: c.devices}, c.err
 }
 
-func (c *cameraPairTestClient) ListVideoDevices(context.Context, *agentpb.ListVideoDevicesRequest, ...grpc.CallOption) (*agentpb.ListVideoDevicesResponse, error) {
+func (c *cameraPairTestClient) ListVideoDevices(_ context.Context, req *agentpb.ListVideoDevicesRequest, _ ...grpc.CallOption) (*agentpb.ListVideoDevicesResponse, error) {
 	c.lists++
+	c.listUnpaired = req.GetIncludeUnpaired()
 	return &agentpb.ListVideoDevicesResponse{Devices: c.devices}, c.err
 }
 
@@ -43,6 +47,22 @@ func TestCameraPairDiscoveryFallsBackForOlderAgents(t *testing.T) {
 	msg := h.scan()().(cameraPairScanMsg)
 	if msg.err != nil || len(msg.devices) != 1 || c.scans != 1 || c.lists != 1 {
 		t.Fatalf("discovery fallback failed: %+v", msg)
+	}
+	if !c.refreshUnpaired || !c.listUnpaired {
+		t.Fatalf("pairing scan asked for unpaired cameras: refresh %v, list %v; want both", c.refreshUnpaired, c.listUnpaired)
+	}
+}
+
+// Pairing is where a camera without a login gets one, so the scan must list the
+// cameras the agent otherwise hides.
+func TestCameraPairScanAsksForUnpairedCameras(t *testing.T) {
+	c := &cameraPairTestClient{devices: []*agentpb.VideoDevice{{Id: 201, Transport: agentpb.VideoTransport_VIDEO_TRANSPORT_IP}}}
+	h := &cameraPairHandler{ctx: context.Background(), client: c}
+	if msg := h.scan()().(cameraPairScanMsg); msg.err != nil || len(msg.devices) != 1 {
+		t.Fatalf("scan = %+v", msg)
+	}
+	if !c.refreshUnpaired {
+		t.Fatal("pairing scan did not ask for unpaired cameras")
 	}
 }
 

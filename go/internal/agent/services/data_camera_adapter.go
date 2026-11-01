@@ -51,13 +51,12 @@ func (a *cameraDataAdapter) Discover(ctx context.Context) []data.Source {
 	out := make([]data.Source, 0, len(devices))
 	for _, dev := range devices {
 		if dev.GetTransport() == agentpb.VideoTransport_VIDEO_TRANSPORT_IP {
-			healthy := dev.GetOnline() && dev.GetHasCredentials()
+			// listCameras lists only paired network cameras, which have a
+			// stored login, so being offline is the one reason left to report.
+			healthy := dev.GetOnline()
 			detail := strings.TrimSpace(dev.GetName() + " " + dev.GetAddress())
 			reason := ""
-			if !dev.GetHasCredentials() {
-				detail += " (credentials required)"
-				reason = "no login stored"
-			} else if !dev.GetOnline() {
+			if !healthy {
 				detail += " (offline)"
 				reason = "camera offline"
 			}

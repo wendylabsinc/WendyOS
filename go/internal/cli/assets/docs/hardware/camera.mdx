@@ -29,7 +29,7 @@ Use the device camera commands to see which cameras WendyOS can see:
 wendy device camera list
 ```
 
-The output includes a device ID, transport type (`usb`, `csi`, `ip`, or `ros2`), name, and — for local cameras — a path such as `/dev/video0`. Network cameras show their address, while ROS 2 cameras show their topic. Use the ID with view commands:
+The output includes a device ID, transport type (`usb`, `csi`, `ip`, or `ros2`), name, and — for local cameras — a path such as `/dev/video0`. Network cameras show their address, while ROS 2 cameras show their topic. Network cameras without a stored login are hidden; see [IP Cameras](#ip-cameras). Use the ID with view commands:
 
 ```bash
 wendy device camera view --id 0
@@ -159,7 +159,9 @@ for up to the agent's 15-second first-frame window.
 
 ## IP Cameras
 
-WendyOS also manages network (RTSP/ONVIF) cameras alongside local USB and CSI ones. A discovered camera is registered by its MAC address — the one identity that survives a DHCP address change — and given a stable device ID from a reserved band, `200`–`255`. That ID never changes for the life of the camera, even if its address does.
+WendyOS also manages network (RTSP/ONVIF) cameras alongside local USB and CSI ones. A discovered camera is registered by its MAC address — the one identity that survives a DHCP address change — and given a device ID from a reserved band, `200`–`255`.
+
+Discovery finds every ONVIF camera on the networks the device is connected to, including other people's cameras on a shared home or office LAN. So a network camera is used only once you store a login for it, which pairs it. Until then it is hidden from `camera list`, apps, and other clients, and WendyOS sends it nothing beyond the periodic discovery probe. A paired camera's ID never changes, even if its address does. An unpaired camera's ID can change when the agent restarts.
 
 ### Connect a camera directly to Ethernet
 
@@ -180,8 +182,10 @@ uplink, where another DHCP server normally assigns addresses.
    wendy device camera dhcp status
    ```
 
-3. Wait for `serving`, then discover the camera with
-   `wendy device camera list --refresh`.
+3. Wait for `serving`, then pair the camera in the **IP Cameras** tab of
+   `wendy device pair`, or find its ID with
+   `wendy device camera list --refresh --all` and store its login as described
+   under [Credentials](#credentials).
 
 `waiting` means the port is not ready yet. `blocked` or `degraded` includes a
 reason, such as a competing DHCP server or an address conflict. The agent checks
@@ -223,17 +227,23 @@ Cameras are picked up automatically as the agent's periodic discovery runs. To f
 wendy device camera list --refresh
 ```
 
-Network cameras appear in the same `camera list` table as local ones, with `ip` in the Type column, the camera's address in the Where column, and a Status of `needs login`, `offline`, or `ready`.
+Paired network cameras appear in the same `camera list` table as local ones, with `ip` in the Type column, the camera's address in the Where column, and a Status of `offline` or `ready`. The table ends with the number of cameras it hid for having no login. To pair one, use the **IP Cameras** tab of [`wendy device pair`](/docs/clients/wendy-cli/commands/device/pair), or find its ID with:
+
+```bash
+wendy device camera list --all
+```
+
+`--all` adds the unpaired cameras with a Status of `needs login`.
 
 ### Credentials
 
-Most IP cameras require a login before they will stream. Store one with:
+Most IP cameras require a login before they will stream, and storing one is also what pairs a camera. Store one with:
 
 ```bash
 wendy device camera login <id>
 ```
 
-This prompts for the password without echoing it, or reads it from the `WENDY_CAMERA_PASSWORD` environment variable when there is no terminal to prompt on (for example, in CI). The username defaults to `admin`; pass `--user` to override it. Credentials are stored on the device and are never returned by any command.
+This prompts for the password without echoing it, or reads it from the `WENDY_CAMERA_PASSWORD` environment variable when there is no terminal to prompt on (for example, in CI). The username defaults to `admin`; pass `--user` to override it. A camera that needs no login can be paired by pressing Enter at the password prompt. Credentials are stored on the device and are never returned by any command.
 
 Remove a camera and its stored credentials with:
 
@@ -253,7 +263,7 @@ wendy device camera test <id>
 
 ### Container Access
 
-Apps with the `camera` entitlement (see [Camera Entitlement](/docs/device/entitlements#camera-entitlement)) see network cameras exactly like local ones: each registered camera is mirrored into a `/dev/video2xx` loopback node numbered to match its own device ID — camera `212` is always `/dev/video212` — and mounted into the container the same way USB and CSI devices are.
+Apps with the `camera` entitlement (see [Camera Entitlement](/docs/device/entitlements#camera-entitlement)) see network cameras exactly like local ones: each paired camera is mirrored into a `/dev/video2xx` loopback node numbered to match its own device ID — camera `212` is always `/dev/video212` — and mounted into the container the same way USB and CSI devices are. Pairing a camera while such an app runs adds its node without restarting the app.
 
 <Callout type="info">
   The loopback node always carries the camera's **sub-stream** — the same lower-resolution feed `camera view` chooses automatically for anything ≤1024px wide. There is currently no way for a container to request the camera's main/high-resolution stream instead.

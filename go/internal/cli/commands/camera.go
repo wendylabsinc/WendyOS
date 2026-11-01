@@ -94,7 +94,7 @@ func cameraServicePreflight(ctx context.Context, conn *grpcclient.AgentConnectio
 }
 
 func newCameraListCmd() *cobra.Command {
-	var refresh bool
+	var refresh, all bool
 	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List cameras",
@@ -121,7 +121,10 @@ func newCameraListCmd() *cobra.Command {
 				// --refresh runs a discovery round on the device before listing, so a
 				// camera that just came online shows up without waiting for the
 				// agent's own periodic discovery loop.
-				resp, err := conn.VideoService.RefreshCameras(ctx, &agentpb.RefreshCamerasRequest{})
+				// Unpaired cameras are always fetched and filtered here, so the
+				// listing can say how many it hid, and an older agent that lists
+				// them regardless is shown the same way.
+				resp, err := conn.VideoService.RefreshCameras(ctx, &agentpb.RefreshCamerasRequest{IncludeUnpaired: true})
 				if err != nil {
 					if macErr := macOSBetaUnsupportedFeatureError(ctx, conn.AgentService, err, "Camera listing"); macErr != nil {
 						return fmt.Errorf("refreshing cameras: %w", macErr)
@@ -130,7 +133,7 @@ func newCameraListCmd() *cobra.Command {
 				}
 				devices = resp.GetDevices()
 			} else {
-				resp, err := conn.VideoService.ListVideoDevices(ctx, &agentpb.ListVideoDevicesRequest{})
+				resp, err := conn.VideoService.ListVideoDevices(ctx, &agentpb.ListVideoDevicesRequest{IncludeUnpaired: true})
 				if err != nil {
 					if macErr := macOSBetaUnsupportedFeatureError(ctx, conn.AgentService, err, "Camera listing"); macErr != nil {
 						return fmt.Errorf("listing cameras: %w", macErr)
@@ -140,28 +143,38 @@ func newCameraListCmd() *cobra.Command {
 				devices = resp.GetDevices()
 			}
 
-			return renderCameraList(devices)
+			return renderCameraList(cmd.OutOrStdout(), devices, all)
 		},
 	}
 	cmd.Flags().BoolVar(&refresh, "refresh", false, "Run a discovery round on the device before listing")
+	cmd.Flags().BoolVar(&all, "all", false, "Also list network cameras that have no login yet")
 	return cmd
 }
 
 // renderCameraList prints a camera listing as JSON or a table. Factored out of
 // newCameraListCmd's RunE so `camera list` and `camera list --refresh` render
 // through identical code no matter which RPC produced the devices.
-func renderCameraList(devices []*agentpb.VideoDevice) error {
+//
+// Network cameras without a login are left out unless all is set: discovery
+// finds every ONVIF camera on the networks the device is on, and on a shared
+// LAN most belong to someone else. The table says how many it hid.
+func renderCameraList(w io.Writer, devices []*agentpb.VideoDevice, all bool) error {
+	hidden := 0
+	if !all {
+		devices, hidden = withoutUnpairedCameras(devices)
+	}
 	if jsonOutput {
 		data, err := json.MarshalIndent(devices, "", "  ")
 		if err != nil {
 			return err
 		}
-		fmt.Println(string(data))
+		fmt.Fprintln(w, string(data))
 		return nil
 	}
 
 	if len(devices) == 0 {
-		fmt.Println("No cameras found.")
+		fmt.Fprintln(w, "No cameras found.")
+		printHiddenCamerasHint(w, hidden)
 		return nil
 	}
 
@@ -176,8 +189,34 @@ func renderCameraList(devices []*agentpb.VideoDevice) error {
 			cameraStatus(d),
 		})
 	}
-	fmt.Print(tui.RenderTable(headers, rows))
+	fmt.Fprint(w, tui.RenderTable(headers, rows))
+	printHiddenCamerasHint(w, hidden)
 	return nil
+}
+
+// withoutUnpairedCameras drops network cameras that have no stored login and
+// reports how many it dropped.
+func withoutUnpairedCameras(devices []*agentpb.VideoDevice) ([]*agentpb.VideoDevice, int) {
+	kept := make([]*agentpb.VideoDevice, 0, len(devices))
+	for _, d := range devices {
+		if d.GetTransport() == agentpb.VideoTransport_VIDEO_TRANSPORT_IP && !d.GetHasCredentials() {
+			continue
+		}
+		kept = append(kept, d)
+	}
+	return kept, len(devices) - len(kept)
+}
+
+func printHiddenCamerasHint(w io.Writer, hidden int) {
+	switch {
+	case hidden == 1:
+		fmt.Fprintln(w, "1 network camera without a login is hidden.")
+	case hidden > 1:
+		fmt.Fprintf(w, "%d network cameras without a login are hidden.\n", hidden)
+	default:
+		return
+	}
+	fmt.Fprintln(w, "Pair one with `wendy device pair`, or list them with `wendy device camera list --all`.")
 }
 
 // transportLabel returns a short label for the camera transport column.

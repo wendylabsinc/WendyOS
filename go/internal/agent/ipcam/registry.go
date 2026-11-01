@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -115,39 +116,57 @@ func (r *Registry) Load() error {
 	return nil
 }
 
-// PruneUnconfirmedDHCP removes legacy, addressless DHCP observations after both
-// state files have loaded successfully. A served lease always has an address;
-// ONVIF discovery and manually supplied connection details also leave evidence.
-// Preserve all connection details and every stored login, even an empty login.
-// Old addressless observations carry no record of whether their link was served.
+// PruneUnconfirmed removes records nobody has confirmed as a camera of
+// theirs, after both state files have loaded successfully. A camera with a
+// stored login (even an empty one) or one leased an address on a served camera
+// link is always kept. Two kinds of record go:
+//
+//   - WS-Discovery records, which carry no link, without a login. Before
+//     2026-10-21 any WS-Discovery responder was recorded, printers and
+//     computers included, and a camera on a shared LAN belongs to whoever
+//     stored a login for it. A real camera answers the next probe and is
+//     recorded again, so nothing a user set up is lost.
+//   - Legacy, addressless DHCP observations from links that were never served.
+//     A served lease always has an address, and ONVIF or stream details are
+//     evidence of a camera, so those records stay: old observations carry no
+//     record of whether their link was served.
+//
 // A nil credential lookup means protection is unavailable, so nothing is removed.
-// The count includes only removals successfully persisted to disk; a failed save
-// restores the records and returns zero.
-func (r *Registry) PruneUnconfirmedDHCP(hasCredentials func(string) bool) (int, error) {
+// It returns the IDs of the removed records in ascending order, so their
+// loopback nodes can be removed too. Only removals successfully persisted to
+// disk are returned; a failed save restores the records and returns none.
+func (r *Registry) PruneUnconfirmed(hasCredentials func(string) bool) ([]uint32, error) {
 	if hasCredentials == nil {
-		return 0, nil
+		return nil, nil
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	removed := make(map[string]Camera)
 	for mac, c := range r.by {
-		if c.Link == "" || c.DHCPServed || c.Address != "" || c.ONVIFAddr != "" ||
-			c.StreamSub != "" || c.StreamMain != "" || hasCredentials(mac) {
+		if c.DHCPServed || hasCredentials(mac) {
+			continue
+		}
+		if c.Link != "" && (c.Address != "" || c.ONVIFAddr != "" || c.StreamSub != "" || c.StreamMain != "") {
 			continue
 		}
 		removed[mac] = c
 		delete(r.by, mac)
 	}
 	if len(removed) == 0 {
-		return 0, nil
+		return nil, nil
 	}
 	if err := r.save(); err != nil {
 		for mac, c := range removed {
 			r.by[mac] = c
 		}
-		return 0, err
+		return nil, err
 	}
-	return len(removed), nil
+	ids := make([]uint32, 0, len(removed))
+	for _, c := range removed {
+		ids = append(ids, c.ID)
+	}
+	slices.Sort(ids)
+	return ids, nil
 }
 
 // save writes the registry atomically. Callers hold r.mu.

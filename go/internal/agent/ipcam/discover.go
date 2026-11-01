@@ -43,10 +43,20 @@ type Discoverer struct {
 	// call a round and not a stall.
 	resolveStreams func(ctx context.Context, cam Camera, cred Credential) (StreamPaths, error)
 
-	// Credentials, when set, supplies the stored login for a camera by MAC so
-	// ONVIF calls can authenticate. Nil means every call goes out without one,
-	// which is enough for cameras that serve ONVIF open.
+	// Credentials supplies the stored login for a camera by MAC so ONVIF calls
+	// can authenticate. A camera without one is unpaired: on a shared network
+	// it is someone else's, so it is recorded when it answers a probe but never
+	// contacted otherwise, neither for stream paths nor for liveness. Nil means
+	// no camera is paired.
 	Credentials func(mac string) (Credential, bool)
+}
+
+// login returns the stored login for mac and whether the camera is paired.
+func (d *Discoverer) login(mac string) (Credential, bool) {
+	if d.Credentials == nil {
+		return Credential{}, false
+	}
+	return d.Credentials(mac)
 }
 
 // NewDiscoverer returns a discoverer writing into reg.
@@ -138,32 +148,36 @@ func (d *Discoverer) Once(ctx context.Context) ([]Camera, error) {
 				zap.String("mac", mac), zap.Error(err))
 			continue
 		}
-		cam = d.learnStreamPaths(ctx, cam)
+		cam = d.LearnStreamPaths(ctx, cam)
 		found = append(found, cam)
 	}
 
 	// Cameras that answered no probe may still be there, so check the ones we
 	// already know about directly.
-	d.refreshLiveness()
+	d.refreshLiveness(seen)
 	return found, nil
 }
 
-// learnStreamPaths fills a camera's RTSP paths from ONVIF the first time it is
-// seen without them. Until 2026-09-13 nothing did, so every camera that was
-// not a Reolink was streamed at the Reolink default paths and answered 404;
+// LearnStreamPaths fills a paired camera's RTSP paths from ONVIF the first time
+// it is seen without them. Until 2026-09-13 nothing did, so every camera that
+// was not a Reolink was streamed at the Reolink default paths and answered 404;
 // `camera test` said "the stream path may be wrong" and `camera view` failed
 // its pipeline. A failure here is logged and leaves the entry as it was: the
 // camera is still registered, and the next round asks again.
-func (d *Discoverer) learnStreamPaths(ctx context.Context, cam Camera) Camera {
+//
+// An unpaired camera is not asked. Storing its login is what pairs it, so the
+// video service calls this right after `camera login` instead of leaving the
+// first stream to guess paths until the next round.
+func (d *Discoverer) LearnStreamPaths(ctx context.Context, cam Camera) Camera {
 	if cam.StreamSub != "" && cam.StreamMain != "" {
 		return cam
 	}
 	if cam.ONVIFAddr == "" || d.resolveStreams == nil {
 		return cam
 	}
-	var cred Credential
-	if d.Credentials != nil {
-		cred, _ = d.Credentials(cam.MAC)
+	cred, paired := d.login(cam.MAC)
+	if !paired {
+		return cam
 	}
 	paths, err := d.resolveStreams(ctx, cam, cred)
 	if err != nil {
@@ -297,14 +311,23 @@ func listLocalIPv4s() []string {
 	return out
 }
 
-// refreshLiveness updates the online flag for cameras already known.
+// refreshLiveness updates the online flag for cameras already known. seen holds
+// the MACs that answered this round's probe.
 //
 // Discovery alone cannot do this: a camera still holding a lease from an earlier
 // session answers no probe, because it needs nothing. Without this a known camera
-// would sit at online=false forever.
-func (d *Discoverer) refreshLiveness() {
+// would sit at online=false forever. Paired cameras and cameras leased an
+// address on a camera link are dialed. Any other camera is someone else's until
+// it is paired, so its online flag only reports whether it answered the probe.
+func (d *Discoverer) refreshLiveness(seen map[string]bool) {
 	for _, cam := range d.reg.List() {
 		if cam.Address == "" {
+			continue
+		}
+		if _, paired := d.login(cam.MAC); !paired && !cam.DHCPServed {
+			if !seen[cam.MAC] {
+				d.reg.MarkSeen(cam.MAC, "", false)
+			}
 			continue
 		}
 		d.reg.MarkSeen(cam.MAC, "", d.reachable(cam.Address))

@@ -970,6 +970,11 @@ type VideoService struct {
 	// socket, the same way cameraReachable is for StreamVideo's preflight.
 	probeCamera func(ctx context.Context, cam ipcam.Camera, cred ipcam.Credential) (ipcam.ProbeResult, string)
 
+	// learnStreamPaths asks a newly paired camera for its RTSP paths over ONVIF
+	// (ipcam.Discoverer.LearnStreamPaths). Injectable so SetCameraCredentials is
+	// testable without a camera.
+	learnStreamPaths func(ctx context.Context, cam ipcam.Camera) ipcam.Camera
+
 	// CSI/ribbon-camera seams (injectable for tests). classifyTransport maps a
 	// /dev/videoN base to its transport (USB/CSI/Unknown); enumerateLibcamera
 	// lists libcamera-visible cameras; isJetson selects the Argus capture path.
@@ -1066,7 +1071,7 @@ func NewVideoService(ctx context.Context, logger *zap.Logger, pool *rtps.Pool, r
 
 	// Load persisted network cameras. A failure here must not stop the video
 	// service: local cameras still work without it.
-	svc.loadNetworkCameras()
+	prunedCameras := svc.loadNetworkCameras()
 	svc.controls = newCameraControlStore(cameraControlsPath)
 	svc.applyLocalControls = applyCameraControlsV4L2
 	svc.controlDefaultsFor = cameraControlDefaults
@@ -1079,6 +1084,7 @@ func NewVideoService(ctx context.Context, logger *zap.Logger, pool *rtps.Pool, r
 	// ONVIF stream-path lookups use the same login `camera login` stored, so a
 	// camera that protects ONVIF still tells us its paths once it has one.
 	svc.discoverer.Credentials = svc.credentials.Get
+	svc.learnStreamPaths = svc.discoverer.LearnStreamPaths
 	svc.links = ipcam.NewLinkManager(svc.registry, logger)
 	svc.runGStreamer = svc.gstreamerFrames
 	svc.cameraReachable = ipcam.Reachable
@@ -1092,10 +1098,12 @@ func NewVideoService(ctx context.Context, logger *zap.Logger, pool *rtps.Pool, r
 	// s.runGStreamer after NewVideoService returns (the usual pattern; see
 	// captureIPPipelineArgs) still reaches its stub when the loopback
 	// supervisor starts a pump.
-	svc.loopback = ipcam.NewLoopback(svcCtx, logger, svc.registry, svc.credentials,
+	loopback := ipcam.NewLoopback(svcCtx, logger, svc.registry, svc.credentials,
 		func(ctx context.Context, args []string) error {
 			return svc.runGStreamer(ctx, args, func([]byte) {})
 		})
+	loopback.RemoveLeftoverNodes(prunedCameras)
+	svc.loopback = loopback
 	var graphs ros2camera.GraphSource
 	if len(rosRuntime) != 0 && rosRuntime[0] != nil {
 		graphs = func(ctx context.Context) ([]ros2camera.Graph, error) {
@@ -1226,8 +1234,15 @@ func (s *VideoService) Shutdown() {
 }
 
 // listCameras enumerates every camera the device can offer: local V4L2 nodes
-// first, then registered network cameras.
+// first, then paired network cameras. It is the listing apps, the data service
+// and the two-plane path see.
 func (s *VideoService) listCameras(ctx context.Context) ([]*agentpb.VideoDevice, error) {
+	return s.listCamerasWithUnpaired(ctx, false)
+}
+
+// listCamerasWithUnpaired is listCameras, plus unpaired network cameras when
+// includeUnpaired is set, for a pairing flow that stores their login.
+func (s *VideoService) listCamerasWithUnpaired(ctx context.Context, includeUnpaired bool) ([]*agentpb.VideoDevice, error) {
 	paths, err := s.globDevices()
 	if err != nil {
 		return nil, err
@@ -1309,7 +1324,7 @@ func (s *VideoService) listCameras(ctx context.Context) ([]*agentpb.VideoDevice,
 		}
 	}
 	devices = append(devices, s.listROS2Cameras()...)
-	devices = append(devices, s.listIPCameras()...)
+	devices = append(devices, s.listIPCameras(includeUnpaired)...)
 	return devices, nil
 }
 
@@ -1332,13 +1347,23 @@ func (s *VideoService) listROS2Cameras() []*agentpb.VideoDevice {
 // listIPCameras renders registered network cameras as VideoDevices. Path stays
 // empty until a loopback node exists, so the listing never names a node the
 // caller cannot open.
-func (s *VideoService) listIPCameras() []*agentpb.VideoDevice {
+//
+// Only paired cameras, those with a stored login, are listed unless
+// includeUnpaired is set. Discovery records every ONVIF camera that answers on
+// any network the device is on, and on a shared LAN most of those belong to
+// someone else: a neighbour's Tapo C200 showed up in the Companion app as a tile
+// that could never play.
+func (s *VideoService) listIPCameras(includeUnpaired bool) []*agentpb.VideoDevice {
 	if s.registry == nil {
 		return nil
 	}
 	cameras := s.registry.List()
 	out := make([]*agentpb.VideoDevice, 0, len(cameras))
 	for _, c := range cameras {
+		hasCredentials := s.credentials != nil && s.credentials.Has(c.MAC)
+		if !hasCredentials && !includeUnpaired {
+			continue
+		}
 		name := c.Model
 		if name == "" {
 			name = "network camera"
@@ -1350,7 +1375,7 @@ func (s *VideoService) listIPCameras() []*agentpb.VideoDevice {
 			Address:        c.Address,
 			Model:          c.Model,
 			Mac:            c.MAC,
-			HasCredentials: s.credentials != nil && s.credentials.Has(c.MAC),
+			HasCredentials: hasCredentials,
 			Online:         c.Online,
 		}
 		if s.loopback != nil {
@@ -1363,8 +1388,8 @@ func (s *VideoService) listIPCameras() []*agentpb.VideoDevice {
 	return out
 }
 
-func (s *VideoService) ListVideoDevices(ctx context.Context, _ *agentpb.ListVideoDevicesRequest) (*agentpb.ListVideoDevicesResponse, error) {
-	devices, err := s.listCameras(ctx)
+func (s *VideoService) ListVideoDevices(ctx context.Context, req *agentpb.ListVideoDevicesRequest) (*agentpb.ListVideoDevicesResponse, error) {
+	devices, err := s.listCamerasWithUnpaired(ctx, req.GetIncludeUnpaired())
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to enumerate video devices: %v", err)
 	}
@@ -1404,10 +1429,11 @@ func (s *VideoService) resolveSource(devID uint32) (videoSource, error) {
 	return videoSource{kind: sourceV4L2, key: path, path: path}, nil
 }
 
-// loadNetworkCameras cleans old passive DHCP observations before discovery and
-// loopback creation. If either file cannot be read, keep all records: absence of
-// credentials has not been established safely.
-func (s *VideoService) loadNetworkCameras() {
+// loadNetworkCameras drops unconfirmed camera records before discovery and
+// loopback creation, and returns the dropped IDs so their leftover loopback
+// nodes can be removed. If either file cannot be read, keep all records: absence
+// of credentials has not been established safely.
+func (s *VideoService) loadNetworkCameras() []uint32 {
 	registryErr := s.registry.Load()
 	if registryErr != nil {
 		s.logger.Warn("loading network camera registry failed", zap.Error(registryErr))
@@ -1416,18 +1442,28 @@ func (s *VideoService) loadNetworkCameras() {
 	if credentialsErr != nil {
 		s.logger.Warn("loading network camera credentials failed", zap.Error(credentialsErr))
 	}
-	if registryErr == nil && credentialsErr == nil {
-		if removed, err := s.registry.PruneUnconfirmedDHCP(s.credentials.Has); err != nil {
-			s.logger.Warn("cleaning legacy DHCP camera observations failed", zap.Error(err))
-		} else if removed > 0 {
-			s.logger.Info("removed unconfirmed DHCP camera observations", zap.Int("count", removed))
-		}
+	if registryErr != nil || credentialsErr != nil {
+		return nil
 	}
+	removed, err := s.registry.PruneUnconfirmed(s.credentials.Has)
+	if err != nil {
+		s.logger.Warn("cleaning unconfirmed network camera records failed", zap.Error(err))
+		return nil
+	}
+	if len(removed) > 0 {
+		s.logger.Info("removed unconfirmed network camera records", zap.Int("count", len(removed)))
+	}
+	return removed
 }
 
-// SetCameraCredentials stores the login for a network camera. The secret is
+// pairedStreamPathTimeout bounds the ONVIF stream-path lookup SetCameraCredentials
+// makes for a newly paired camera.
+const pairedStreamPathTimeout = 10 * time.Second
+
+// SetCameraCredentials stores the login for a network camera, which pairs it: a
+// camera without one is left out of the default listing. The secret is
 // write-only: no RPC returns it.
-func (s *VideoService) SetCameraCredentials(_ context.Context, req *agentpb.SetCameraCredentialsRequest) (*agentpb.SetCameraCredentialsResponse, error) {
+func (s *VideoService) SetCameraCredentials(ctx context.Context, req *agentpb.SetCameraCredentialsRequest) (*agentpb.SetCameraCredentialsResponse, error) {
 	if s.registry == nil || s.credentials == nil {
 		return nil, status.Error(codes.Unavailable, "network camera support unavailable")
 	}
@@ -1443,6 +1479,16 @@ func (s *VideoService) SetCameraCredentials(_ context.Context, req *agentpb.SetC
 		Password: req.GetPassword(),
 	}); err != nil {
 		return nil, status.Errorf(codes.Internal, "storing credentials: %v", err)
+	}
+	// Storing a login pairs the camera, and discovery only asks paired cameras
+	// for their stream paths. Ask now rather than at the next round, so a stream
+	// started right after this call (`camera view` retries straight after its
+	// login prompt) does not guess paths. Best-effort and bounded: a camera that
+	// does not answer is asked again each round.
+	if s.learnStreamPaths != nil {
+		learnCtx, cancel := context.WithTimeout(ctx, pairedStreamPathTimeout)
+		s.learnStreamPaths(learnCtx, cam)
+		cancel()
 	}
 	// Nudge the loopback supervisor: a pump already demanded but blocked on
 	// missing credentials can start now, and a running one picks up changed
@@ -1511,8 +1557,9 @@ func (s *VideoService) SetCameraContainerConsumers(ctx context.Context, containe
 	}
 }
 
-// RefreshCameras runs one discovery round and returns the full camera listing.
-func (s *VideoService) RefreshCameras(ctx context.Context, _ *agentpb.RefreshCamerasRequest) (*agentpb.RefreshCamerasResponse, error) {
+// RefreshCameras runs one discovery round and returns the camera listing, with
+// unpaired network cameras only when the request asks for them.
+func (s *VideoService) RefreshCameras(ctx context.Context, req *agentpb.RefreshCamerasRequest) (*agentpb.RefreshCamerasResponse, error) {
 	if s.discoverer != nil {
 		if _, err := s.discoverer.Once(ctx); err != nil {
 			// A failed probe still leaves previously discovered cameras listable.
@@ -1522,7 +1569,7 @@ func (s *VideoService) RefreshCameras(ctx context.Context, _ *agentpb.RefreshCam
 	if s.ros2Cameras != nil {
 		s.ros2Cameras.Refresh(ctx)
 	}
-	devices, err := s.listCameras(ctx)
+	devices, err := s.listCamerasWithUnpaired(ctx, req.GetIncludeUnpaired())
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "listing cameras: %v", err)
 	}

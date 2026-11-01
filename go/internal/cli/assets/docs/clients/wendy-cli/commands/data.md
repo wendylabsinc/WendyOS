@@ -110,16 +110,16 @@ The status says what the agent actually checked, which differs by kind:
 | Status | Source | What was checked |
 |---|---|---|
 | `connected` | Local camera (USB, CSI, or a ROS 2 image topic's loopback) | The camera answered a capture query when it was listed. Nothing tests that it delivers a picture. |
-| `online` | Network camera | It answered the last discovery probe and has a stored login. The login itself is not tried. |
+| `online` | Network camera | It answered the agent's last check. Only network cameras with a stored login are sources; pair one with `wendy device pair`. The login itself is not tried. |
 | `detected` | Microphone | PipeWire, or ALSA where no PipeWire session runs, lists it as a capture device. Nothing tests that it hears anything. |
 | `reachable` | ROS 2 domain | `ros2 topic list` answered on the domain. Recording the domain records all of its topics. |
 | `listed` | ROS 2 topic | `ros2 topic list` lists the topic. |
 | `built in` | Application records, telemetry | Nothing; they need no hardware. |
 
-A source that is not usable shows why instead, for example `no login stored`
-or `camera offline` for a network camera, `silent audio-hub channel` for an
-NVIDIA Jetson audio-DMA endpoint that records digital silence, or
-`topic listing failed` for a ROS 2 domain. It has no `*`: `record` leaves it out
+A source that is not usable shows why instead, for example `camera offline`
+for a network camera, `silent audio-hub channel` for an NVIDIA Jetson
+audio-DMA endpoint that records digital silence, or `topic listing failed` for
+a ROS 2 domain. It has no `*`: `record` leaves it out
 unless `--source` names it. In `--json`, `healthy` is the same verdict and
 `unusable_reason` carries the reason. An agent that predates these fields is
 shown by its raw description, with `healthy` or `unhealthy` as its status.

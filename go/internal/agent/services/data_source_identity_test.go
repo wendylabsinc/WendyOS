@@ -228,8 +228,9 @@ func TestCameraSourceName(t *testing.T) {
 	}
 }
 
-// TestNetworkCameraSourcesSayWhyTheyAreNotUsable keeps today's health rule
-// (online and a stored login) and checks each failing half has its own reason.
+// TestNetworkCameraSourcesSayWhyTheyAreNotUsable checks that a paired camera
+// that is offline says so, and that a camera without a stored login is not a
+// source at all: on a shared network it is someone else's camera.
 func TestNetworkCameraSourcesSayWhyTheyAreNotUsable(t *testing.T) {
 	video := newIPTestService(t)
 	ready, err := video.registry.Upsert(ipcam.Camera{MAC: "aa:00:00:00:00:01", Model: "RLC-520A", Address: "10.98.0.50"})
@@ -260,7 +261,6 @@ func TestNetworkCameraSourcesSayWhyTheyAreNotUsable(t *testing.T) {
 		reason  string
 	}{
 		{ready, true, "RLC-520A", ""},
-		{noLogin, false, "Network camera", "no login stored"},
 		{offline, false, "RLC-810A", "camera offline"},
 	} {
 		id := fmt.Sprintf("ipcamera:%d", tc.camera.ID)
@@ -271,6 +271,9 @@ func TestNetworkCameraSourcesSayWhyTheyAreNotUsable(t *testing.T) {
 		if source.Healthy != tc.healthy || source.Name != tc.name || source.UnusableReason != tc.reason {
 			t.Errorf("%s = healthy %v, name %q, reason %q; want %v, %q, %q", id, source.Healthy, source.Name, source.UnusableReason, tc.healthy, tc.name, tc.reason)
 		}
+	}
+	if source, ok := sourceByID(sources, fmt.Sprintf("ipcamera:%d", noLogin.ID)); ok {
+		t.Fatalf("unpaired camera listed as a data source: %+v", source)
 	}
 }
 
