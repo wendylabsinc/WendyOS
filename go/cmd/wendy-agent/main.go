@@ -770,6 +770,7 @@ func main() {
 	}
 
 	var mtlsServer *grpc.Server
+	var meshNativeServer *grpc.Server
 	var mtlsMu sync.Mutex
 
 	// Declared here, assigned further down once the provisioning identity is
@@ -887,8 +888,63 @@ func main() {
 		}
 	}
 
+	registerAuthenticatedServices := func(srv *grpc.Server) {
+		// Both authenticated listeners retain the same service and interceptor policy.
+		registerAllServices(srv)
+		// Robot pairing transfers keys and initiates LAN connections. Keep the
+		// service off the plaintext provisioning listener, even though its
+		// handlers also reject unauthenticated transports.
+		agentpbv2.RegisterWendyUnitreeServiceServer(srv, unitreeSvc)
+		agentpbv2.RegisterWendyUnitreeRobotServiceServer(srv, unitreeRobotSvc)
+
+		// WendyShellService opens an interactive *host* root shell. It is
+		// deliberately registered only on authenticated servers, so it is
+		// reachable only on a provisioned device over an authenticated,
+		// org-checked connection. It is intentionally not part of
+		// registerAllServices: that would also expose it on the unauthenticated
+		// plaintext pre-provisioning server (handing anyone on the LAN a host
+		// root shell) and on the local admin socket.
+		agentpb.RegisterWendyShellServiceServer(srv, shellSvc)
+
+		// WendyTunnelService can reach arbitrary valid UDP ports on agent
+		// loopback. Register it only on the authenticated, org-checked server,
+		// never on the plaintext provisioning listener or local admin socket.
+		agentpbv2.RegisterWendyTunnelServiceServer(srv, services.NewTunnelService(logger))
+	}
+
 	meshAgentListener := meshoperatorlink.NewAgentListener()
 	defer meshAgentListener.Close()
+	// Raw inner TLS from an already authenticated mesh app session is isolated
+	// from the legacy physical and primary-operator listener's clock policy.
+	meshNativeListener := meshoperatorlink.NewMeshTLSListener()
+	defer meshNativeListener.Close()
+	startMeshNativeServer := func(certPEM, chainPEM, keyPEM string, policy certs.CertificateTimePolicy) error {
+		mtlsMu.Lock()
+		defer mtlsMu.Unlock()
+		if meshNativeServer != nil {
+			return nil
+		}
+		expectedScope, haveScope := certs.ScopeFromCertPEM(certPEM)
+		if orgMode != interceptor.OrgModeOff && !haveScope {
+			return errors.New("cannot determine mesh native agent identity scope")
+		}
+		srv, err := mtls.NewServerWithTimePolicy(certPEM, chainPEM, keyPEM, logger, policy, expectedScope, orgMode,
+			grpc.ChainUnaryInterceptor(interceptor.UnaryErrorInterceptor(logger)),
+			grpc.ChainStreamInterceptor(interceptor.StreamErrorInterceptor(logger)))
+		if err != nil {
+			return err
+		}
+		registerAuthenticatedServices(srv)
+		meshNativeServer = srv
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := srv.Serve(meshNativeListener); err != nil && !errors.Is(err, grpc.ErrServerStopped) {
+				logger.Error("mesh native agent TLS ingress stopped", zap.Error(err))
+			}
+		}()
+		return nil
+	}
 
 	startMTLSServer := func(certPEM, chainPEM, keyPEM string) {
 		mtlsMu.Lock()
@@ -940,27 +996,7 @@ func main() {
 			return
 		}
 
-		// Register all services on the mTLS server.
-		registerAllServices(srv)
-		// Robot pairing transfers keys and initiates LAN connections. Keep the
-		// service off the plaintext provisioning listener, even though its
-		// handlers also reject unauthenticated transports.
-		agentpbv2.RegisterWendyUnitreeServiceServer(srv, unitreeSvc)
-		agentpbv2.RegisterWendyUnitreeRobotServiceServer(srv, unitreeRobotSvc)
-
-		// WendyShellService opens an interactive *host* root shell. It is
-		// deliberately registered ONLY here, on the mTLS server, so it is
-		// reachable only on a provisioned device over an authenticated,
-		// org-checked connection. It is intentionally NOT part of
-		// registerAllServices: that would also expose it on the unauthenticated
-		// plaintext pre-provisioning server (handing anyone on the LAN a host
-		// root shell) and on the local admin socket.
-		agentpb.RegisterWendyShellServiceServer(srv, shellSvc)
-
-		// WendyTunnelService can reach arbitrary valid UDP ports on agent
-		// loopback. Register it only on the authenticated, org-checked server,
-		// never on the plaintext provisioning listener or local admin socket.
-		agentpbv2.RegisterWendyTunnelServiceServer(srv, services.NewTunnelService(logger))
+		registerAuthenticatedServices(srv)
 
 		// Compute mTLS port = agentPort + 1.
 		portNum, err := strconv.Atoi(agentPort)
@@ -1042,7 +1078,9 @@ func main() {
 		stats := meshVIPs.Stats()
 		logger.Info("wendy net: VIP table loaded", zap.Int("allocated", stats.Allocated), zap.Int("retired", stats.Retired), zap.Int("capacity", stats.Capacity))
 	}
-	sessionIngress := meshsession.WithAgentService(meshIngress, uint16(mtlsPortNum))
+	sessionIngress := meshsession.WithAgentServiceDial(meshIngress, uint16(mtlsPortNum), func() (net.Conn, error) {
+		return meshNativeListener.DialContext(ctx)
+	})
 	startConfiguredLocalMesh := func(certPEM, chainPEM, keyPEM string) {
 		if runtime.GOOS != "linux" {
 			return
@@ -1063,6 +1101,10 @@ func main() {
 		credentials, err := localmesh.NewCredentialsWithTimePolicy(certPEM, chainPEM, keyPEM, meshTimePolicy)
 		if err != nil {
 			logger.Error("wendy net identity unavailable", zap.Error(err))
+			return
+		}
+		if err := startMeshNativeServer(certPEM, chainPEM, keyPEM, meshTimePolicy); err != nil {
+			logger.Error("wendy net native agent TLS ingress unavailable", zap.Error(err))
 			return
 		}
 		localMeshLife.Start(ctx, func(meshCtx context.Context, launch func(func())) {
@@ -1733,6 +1775,9 @@ func main() {
 	mtlsMu.Lock()
 	if mtlsServer != nil {
 		shutdown.servers = append(shutdown.servers, namedGRPCServer{"mTLS", mtlsServer})
+	}
+	if meshNativeServer != nil {
+		shutdown.servers = append(shutdown.servers, namedGRPCServer{"mesh native mTLS", meshNativeServer})
 	}
 	mtlsMu.Unlock()
 	shutdown.run()
