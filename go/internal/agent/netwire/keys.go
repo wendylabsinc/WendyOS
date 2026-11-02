@@ -49,7 +49,7 @@ func Key(name string) string {
 		return "d"
 	case "digest":
 		return "h"
-	case "endpointListen":
+	case "tls_listen":
 		return "e"
 	case "error":
 		return "e"
@@ -115,6 +115,8 @@ func Key(name string) string {
 		return "n"
 	case "offset":
 		return "f"
+	case "owner":
+		return "o"
 	case "op":
 		return "o"
 	case "operator":

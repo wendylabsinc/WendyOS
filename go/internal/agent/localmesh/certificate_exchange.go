@@ -46,7 +46,7 @@ func (m CertificateMessage) validate() error {
 		if len(c.Principal) > maxPrincipalBytes || len(c.Hashes) == 0 || len(c.Hashes) > 16 {
 			return errors.New("invalid certificate chain description")
 		}
-		if _, err := meshid.DeviceFromPrincipal(c.Principal); err != nil {
+		if _, err := meshid.PeerFromPrincipal(c.Principal); err != nil {
 			return err
 		}
 		seen := make(map[string]bool)
@@ -112,6 +112,13 @@ func (e *CertificateExchange) Close() {
 // identity-missing can follow a descriptor/partial body already in flight.
 // Release its partial claim now so another supplier need not await timeout.
 func (e *CertificateExchange) forgetPrincipal(principal string, now time.Time) {
+	for key, p := range e.pending {
+		if p.chain.Principal == principal {
+			e.forgetChain(key, now)
+		}
+	}
+}
+func (e *CertificateExchange) forgetChain(principal string, now time.Time) {
 	pending, ok := e.pending[principal]
 	if !ok {
 		return
@@ -151,6 +158,14 @@ func (e *CertificateExchange) Pending() bool { return len(e.pending) != 0 }
 // deadline even if repeated descriptions later refresh the exchange's hint.
 func (e *CertificateExchange) PendingChain(principal string, now time.Time) (CertificateChain, time.Time, bool) {
 	p, ok := e.pending[principal]
+	if !ok {
+		for _, candidate := range e.pending {
+			if candidate.chain.Principal == principal {
+				p, ok = candidate, true
+				break
+			}
+		}
+	}
 	if e.closed || !ok || !p.expires.After(now) {
 		return CertificateChain{}, time.Time{}, false
 	}
@@ -218,12 +233,16 @@ func (e *CertificateExchange) Receive(m CertificateMessage, now time.Time, slots
 		return nil, nil, err
 	}
 	if c := m.Chain; c != nil {
-		device, _ := meshid.DeviceFromPrincipal(c.Principal)
+		device, _ := meshid.PeerFromPrincipal(c.Principal)
 		if device.Tenant() != e.tenant {
 			return nil, nil, errors.New("foreign certificate chain description")
 		}
-		if _, found := e.pending[c.Principal]; found || len(e.pending) < 128 {
-			e.pending[c.Principal] = pendingCertificateChain{chain: CertificateChain{Principal: c.Principal, Hashes: append([]string(nil), c.Hashes...)}, expires: now.Add(MaxLease)}
+		key := c.Principal
+		if device.IsOperator() {
+			key += "#" + c.Hashes[0]
+		}
+		if _, found := e.pending[key]; found || len(e.pending) < 128 {
+			e.pending[key] = pendingCertificateChain{chain: CertificateChain{Principal: c.Principal, Hashes: append([]string(nil), c.Hashes...)}, expires: now.Add(MaxLease)}
 		}
 	}
 	if q := m.Request; q != nil {
@@ -241,7 +260,7 @@ func (e *CertificateExchange) Receive(m CertificateMessage, now time.Time, slots
 		e.cache.parts.unavailable(m.Missing.Hash, e.owner, now)
 		e.waiting = nil
 		for _, principal := range missing {
-			delete(e.pending, principal)
+			e.forgetPrincipal(principal, now)
 		}
 	}
 	if c := m.Chunk; c != nil && e.waiting != nil && e.waiting.Hash == c.Hash {
@@ -312,12 +331,12 @@ func (e *CertificateExchange) Poll(now time.Time, slots ...int) (replies []*Cert
 		if len(chain) != len(pending.chain.Hashes) {
 			continue
 		}
-		_, err := e.cache.put(chain, principal, now)
+		_, err := e.cache.put(chain, pending.chain.Principal, now)
 		if err != nil {
 			return nil, nil, err
 		}
 		delete(e.pending, principal)
-		completed = append(completed, principal)
+		completed = append(completed, pending.chain.Principal)
 		budget--
 	}
 	return replies, completed, nil
@@ -396,10 +415,10 @@ func (e *CertificateExchange) MissingPrincipals(q *CertificateRequest) []string 
 		return nil
 	}
 	var principals []string
-	for principal, p := range e.pending {
+	for _, p := range e.pending {
 		for _, hash := range p.chain.Hashes {
 			if hash == q.Hash {
-				principals = append(principals, principal)
+				principals = append(principals, p.chain.Principal)
 				break
 			}
 		}

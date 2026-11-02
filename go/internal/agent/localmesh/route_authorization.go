@@ -69,11 +69,11 @@ func authorizedOrigins(verified []Manifest, tenant meshid.Tenant) map[RouteOrigi
 		if m.Withdraw || m.Version != ManifestVersionRoute || m.Route == nil {
 			continue
 		}
-		device := meshid.NewDevice(tenant, m.Device)
-		if !device.IsValid() || m.validateRoute(device) != nil {
+		device, err := m.Peer(tenant)
+		if err != nil || !device.IsValid() || m.validateRoute(device) != nil {
 			continue
 		}
-		principal := device.Principal()
+		principal := device.Key()
 		route := *m.Route
 		if owner, ok := prefixOwners[route.Prefix]; ok && owner != principal {
 			conflicts[owner], conflicts[principal] = true, true

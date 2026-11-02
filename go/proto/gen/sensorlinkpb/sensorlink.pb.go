@@ -725,7 +725,9 @@ func (x *Ping) GetTsUs() uint64 {
 	return 0
 }
 
-// Every message on the wire is an Envelope, so framing needs only one type.
+// Legacy standalone SensorLink envelope schema. Current WendyCom transports
+// SensorManifest and SensorData in its own negotiated messages/framing and does
+// not send this Envelope.
 type Envelope struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Types that are valid to be assigned to Msg:

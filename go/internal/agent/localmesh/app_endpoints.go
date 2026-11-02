@@ -43,6 +43,14 @@ func validateAppEndpoints(endpoints []AppEndpoint) error {
 	return nil
 }
 func cloneManifest(m Manifest) Manifest {
+	if m.Owner != nil {
+		owner := *m.Owner
+		owner.Hashes = make([][]byte, len(m.Owner.Hashes))
+		for i, hash := range m.Owner.Hashes {
+			owner.Hashes[i] = append([]byte(nil), hash...)
+		}
+		m.Owner = &owner
+	}
 	m.Services = cloneServices(m.Services)
 	if m.Caps != nil {
 		m.Caps = append([]string{}, m.Caps...)

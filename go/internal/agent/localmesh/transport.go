@@ -14,12 +14,13 @@ import (
 // full principal, so the hello only has to prove the peer read the pinned
 // identity correctly - there is no numeric identity to announce.
 type LinkHello struct {
-	Version  int       `json:"version" cbor:"v"`
-	Role     string    `json:"role,omitempty" cbor:"r,omitempty"`
-	Device   uuid.UUID `json:"device" cbor:"d"`
-	Peer     uuid.UUID `json:"peer" cbor:"p"`
-	MTU      int       `json:"mtu" cbor:"m"`
-	Datagram int       `json:"datagram" cbor:"g"`
+	Owner    *OperatorOwner `json:"owner,omitempty" cbor:"o,omitempty"`
+	Version  int            `json:"version" cbor:"v"`
+	Role     string         `json:"role,omitempty" cbor:"r,omitempty"`
+	Device   uuid.UUID      `json:"device" cbor:"d"`
+	Peer     uuid.UUID      `json:"peer" cbor:"p"`
+	MTU      int            `json:"mtu" cbor:"m"`
+	Datagram int            `json:"datagram" cbor:"g"`
 	// IPDatagram is router-QUIC-only. Stream peers must leave it zero.
 	IPDatagram int `json:"ipDatagram,omitempty" cbor:"i,omitempty"`
 }
@@ -58,7 +59,7 @@ func openRouterControl(ctx context.Context, conn *quic.Conn, self, peer meshid.D
 		return nil, 0, errors.New("wendy net peer is outside the tenant")
 	}
 	state := conn.ConnectionState()
-	if state.TLS.NegotiatedProtocol != LinkALPN || !state.SupportsDatagrams.Local || !state.SupportsDatagrams.Remote {
+	if ApplicationProtocol(state.TLS.NegotiatedProtocol) != LinkALPN || !state.SupportsDatagrams.Local || !state.SupportsDatagrams.Remote {
 		return nil, 0, errors.New("incompatible wendy net transport")
 	}
 	capacity, err := conn.CurrentMaxDatagramPayloadSize()

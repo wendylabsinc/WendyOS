@@ -1,6 +1,7 @@
 package meshsession
 
 import (
+	"crypto/tls"
 	"errors"
 	quic "github.com/quic-go/quic-go"
 	"github.com/wendylabsinc/wendy/go/internal/agent/localmesh"
@@ -12,28 +13,9 @@ import (
 // verified chain lifetimes. Credentials are immutable; replacing trust creates
 // a new client/server and closes the old ones.
 func limitSessionLifetime(credentials *localmesh.Credentials, conn *quic.Conn) (time.Time, error) {
-	now := time.Now()
-	local, err := credentials.Verify(credentials.Certificate.Certificate, now)
+	expires, err := verifiedSessionExpiry(credentials, conn.ConnectionState().TLS)
 	if err != nil {
 		return time.Time{}, err
-	}
-	var chain [][]byte
-	for _, cert := range conn.ConnectionState().TLS.PeerCertificates {
-		chain = append(chain, cert.Raw)
-	}
-	peer, err := credentials.Verify(chain, now)
-	if err != nil {
-		return time.Time{}, err
-	}
-	if local.Device != credentials.Device || peer.Device.Tenant() != local.Device.Tenant() || peer.Device == local.Device {
-		return time.Time{}, errors.New("net app session identity changed")
-	}
-	expires := local.NotAfter
-	if peer.NotAfter.Before(expires) {
-		expires = peer.NotAfter
-	}
-	if !expires.After(time.Now()) {
-		return time.Time{}, errors.New("net app credentials expired")
 	}
 	go func() {
 		timer := time.NewTimer(time.Until(expires))
@@ -44,5 +26,32 @@ func limitSessionLifetime(credentials *localmesh.Credentials, conn *quic.Conn) (
 		case <-conn.Context().Done():
 		}
 	}()
+	return expires, nil
+}
+
+func verifiedSessionExpiry(credentials *localmesh.Credentials, state tls.ConnectionState) (time.Time, error) {
+	now := time.Now()
+	local, err := credentials.Verify(credentials.Certificate.Certificate, now)
+	if err != nil {
+		return time.Time{}, err
+	}
+	var chain [][]byte
+	for _, cert := range state.PeerCertificates {
+		chain = append(chain, cert.Raw)
+	}
+	peer, err := credentials.VerifyTLS(chain, now)
+	if err != nil {
+		return time.Time{}, err
+	}
+	if local.Device.Principal() != credentials.Device.Principal() || peer.Device.Tenant() != local.Device.Tenant() || peer.Device.Principal() == local.Device.Principal() {
+		return time.Time{}, errors.New("net app session identity changed")
+	}
+	expires := local.NotAfter
+	if peer.NotAfter.Before(expires) {
+		expires = peer.NotAfter
+	}
+	if !expires.After(time.Now()) {
+		return time.Time{}, errors.New("net app credentials expired")
+	}
 	return expires, nil
 }

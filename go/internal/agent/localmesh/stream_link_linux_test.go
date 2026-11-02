@@ -210,7 +210,7 @@ func TestSmallStreamFrameUsesOneTLS13Record(t *testing.T) {
 	if err := <-serverDone; err != nil {
 		t.Fatal(err)
 	}
-	if len(client.ConnectionState().PeerCertificates) == 0 || client.ConnectionState().NegotiatedProtocol != StreamALPN {
+	if len(client.ConnectionState().PeerCertificates) == 0 || ApplicationProtocol(client.ConnectionState().NegotiatedProtocol) != StreamALPN {
 		t.Fatal("mutual TLS/ALPN not established")
 	}
 	clientLink, serverLink := newStreamNodeLink(client), newStreamNodeLink(server)

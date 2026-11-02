@@ -160,8 +160,10 @@ returned conn closes the underlying BLE connection.
 * **With no read deadline set, `Read` blocks indefinitely**, as `net.Conn` requires. The 2 s slice is
   polling granularity, not a timeout callers see. With a deadline it returns a `net.Error` whose
   `Timeout()` is true, which is what stops `crypto/tls` treating a deadline as a broken connection.
-  On macOS, write deadlines can be set, changed, or cleared during a pending write; Linux and
-  Windows still ignore write deadlines. `SetDeadline` applies to both directions on macOS.
+* On macOS, `SetWriteDeadline` can set, change, or clear a deadline during a pending write.
+  Direct `Connection` callers can use `SetL2CAPWriteDeadline` for the same control.
+  `SetDeadline` sets both read and write deadlines; on Linux and Windows, only its read
+  deadline has an effect.
 * `Close` takes the same lock `Read` holds across `L2CAPRecv`, so it waits out an in-flight read (at
   most 2 s). That matters on macOS, where `wendy_ble_disconnect` hands the CoreBluetooth wrapper to
   ARC while a blocked reader still holds a bare pointer to it. A write may still be in flight:
@@ -298,10 +300,9 @@ CoreBluetooth normally assumes exists.
   `wendy_blescan_*` / `WendyBLEScanSession` there.
 * Error codes are a small C enum (`timeout`, `not found`, `connect failed`, `discover failed`,
   `write failed`, `read failed`, `L2CAP failed`, `disconnected`) mapped to Go `error` strings by
-  `bleError`. `L2CAPRecv` returns the `ErrRecvTimeout` sentinel instead
-  of routing a timeout through `bleError`, so a caller can tell an idle channel from a dead one and
-  retry. `L2CAPSend` timeouts return a `net.Error` with `Timeout()` true. Other errors surface as
-  opaque strings.
+  `bleError`, with two exceptions: an idle `L2CAPRecv` returns `ErrRecvTimeout`, so callers can
+  retry without treating the channel as dead; `L2CAPSend` timeouts return a `net.Error` with
+  `Timeout()` true. Other errors surface as opaque strings.
 
 ### Linux (`central/ble_linux.go`, `bluez_linux.go`, `gatt_linux.go`)
 
