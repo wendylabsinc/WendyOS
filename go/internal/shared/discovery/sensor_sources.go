@@ -125,3 +125,41 @@ func sensorSourceIdentity(d models.LANDevice) string {
 		d.WendyLite, d.ID, d.DisplayName, d.Hostname, d.Port, d.IsMTLS,
 		d.AssetID, d.OrgID, d.TenantUUID, d.PrincipalURI, strings.Join(d.Caps, ","))
 }
+
+// MergeSensorSources combines ordinary LAN and authenticated mesh sightings
+// using the existing source identity rules. Addresses with different ports or
+// identity metadata remain distinct so each endpoint keeps its own identity.
+func MergeSensorSources(sightings []models.LANDevice) []models.LANDevice {
+	return mergeSensorSources(sightings)
+}
+
+// MergeSensorSourcesWithMesh keeps signed mesh metadata authoritative for a
+// canonical device principal. LAN sightings contribute address hints only;
+// endpoint authentication still pins that principal when the consumer connects.
+// Legacy and LAN-only sightings keep the existing conservative merge rules.
+func MergeSensorSourcesWithMesh(lan, mesh []models.LANDevice) []models.LANDevice {
+	out := MergeSensorSources(lan)
+	for _, source := range mesh {
+		if !source.Sensorlink || !DevicePrincipalInTenant(source.PrincipalURI, source.TenantUUID) {
+			continue
+		}
+		addresses := unionAddresses([]string{source.IPAddress}, source.Addresses...)
+		kept := out[:0]
+		for _, hint := range out {
+			if hint.PrincipalURI != source.PrincipalURI || hint.TenantUUID != source.TenantUUID {
+				kept = append(kept, hint)
+				continue
+			}
+			// A signed source supersedes unsigned descriptions, capabilities
+			// and port claims. Its one signed port applies to these hints.
+			if hint.WendyLite == source.WendyLite && hint.IsMTLS {
+				addresses = unionAddresses(addresses, append([]string{hint.IPAddress}, hint.Addresses...)...)
+			}
+		}
+		out = kept
+		source.Addresses = addresses
+		source.Caps = append([]string(nil), source.Caps...)
+		out = append(out, source)
+	}
+	return out
+}

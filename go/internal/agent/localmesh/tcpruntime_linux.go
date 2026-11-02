@@ -84,7 +84,7 @@ func runConfiguredWithNode(parent context.Context, configDir string, id TCPIdent
 		}
 		defer tlsListener.Close()
 	}
-	node, err := NewNode(ctx, stateDir, credentials, id.Name, id.AgentPort)
+	node, err := NewNode(ctx, stateDir, credentials, id.Name, id.AgentPort, id.AppEndpoints)
 	if err != nil {
 		return err
 	}

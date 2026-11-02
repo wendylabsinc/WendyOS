@@ -59,7 +59,11 @@ func quicConfig() *quic.Config {
 func Resolve(snapshot localmesh.NodeSnapshot, target meshid.Device) (netip.AddrPort, error) {
 	address := target.MeshAddress()
 	prefix := netip.PrefixFrom(address, 128)
-	for _, r := range snapshot.Routes {
+	routes := snapshot.ForwardingRoutes
+	if routes == nil {
+		routes = snapshot.Routes
+	} // Older/synthetic snapshot producers.
+	for _, r := range routes {
 		if r.Prefix == prefix && !r.Unreachable && !r.Local {
 			return netip.AddrPortFrom(address, Port), nil
 		}
@@ -188,6 +192,8 @@ type Server struct {
 	authorizer     Authorizer
 	tickets        *localmesh.TicketStore
 	listener       *quic.Listener
+	tlsListener    net.Listener
+	tlsConnections map[*tls.Conn]struct{}
 	packets        net.PacketConn
 	mu             sync.Mutex
 	closed         bool
@@ -233,7 +239,8 @@ func (s *Server) TLSConfig() *tls.Config {
 	return config
 }
 
-func (s *Server) Run(ctx context.Context, addr string) error {
+// Run calls ready, when supplied, after binding the QUIC listener.
+func (s *Server) Run(ctx context.Context, addr string, ready ...func()) error {
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	packets, err := listenAppPackets(runCtx, s.credentials, addr)
@@ -255,6 +262,9 @@ func (s *Server) Run(ctx context.Context, addr string) error {
 	s.packets = packets
 	s.listener = listener
 	s.mu.Unlock()
+	if len(ready) != 0 && ready[0] != nil {
+		ready[0]()
+	}
 	sem := make(chan struct{}, 64)
 	var wg sync.WaitGroup
 	defer func() { cancel(); _ = s.Close(); wg.Wait() }()
@@ -289,7 +299,18 @@ func (s *Server) Close() error {
 	}
 	s.closed = true
 	listener, packets := s.listener, s.packets
+	tlsListener := s.tlsListener
+	tlsConnections := make([]*tls.Conn, 0, len(s.tlsConnections))
+	for conn := range s.tlsConnections {
+		tlsConnections = append(tlsConnections, conn)
+	}
 	s.mu.Unlock()
+	if tlsListener != nil {
+		_ = tlsListener.Close()
+	}
+	for _, conn := range tlsConnections {
+		_ = conn.Close()
+	}
 	var err error
 	if listener != nil {
 		err = errors.Join(listener.Close(), packets.Close())
