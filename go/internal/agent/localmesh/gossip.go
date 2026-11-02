@@ -140,11 +140,11 @@ func (s *Synchronizer) Receive(m ControlMessage, now time.Time, slots ...int) ([
 	if err = netwire.Unmarshal(data, &w); err != nil {
 		return nil, nil, err
 	}
-	// Require the exact deterministic envelope used for hashing, including no
-	// unknown fields. Otherwise re-marshalling could leave a claim unresolved.
-	canonical, _ := netwire.Marshal(w)
-	if string(canonical) != string(data) {
-		return nil, nil, errors.New("noncanonical manifest artifact")
+	// Retain the exact envelope used for hashing, including optional metadata,
+	// so subsequent admission resolves this artifact's original claim.
+	encoded, _ := netwire.Marshal(w)
+	if string(encoded) != string(data) {
+		return nil, nil, errors.New("manifest artifact encoding changed")
 	}
 	out, changed, err := s.receive(ControlMessage{Kind: "manifest", Manifest: &w}, now)
 	return append(replies, out...), changed, err
