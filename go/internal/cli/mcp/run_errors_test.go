@@ -452,3 +452,72 @@ func TestRunEntitlementRefusalSaysNothingWasDeployed(t *testing.T) {
 		t.Fatalf("suggested_next_step = %q; want updating the device", next)
 	}
 }
+
+// With wait_ready the CLI also prints a "failed" receipt for a refusal. It
+// comes on stdout, a separate pipe from the error on stderr, so either can
+// arrive last.
+func TestRunWaitReadyRefusalSaysNothingWasDeployed(t *testing.T) {
+	const refusal = `the device's agent does not support the \"camera\" entitlement in wendy.json (agent version 2026.10.01-120000); it would start the app without that access`
+	receipt := `{"status":"failed","app":"test","device":"robot.local:50051","readiness":"not_checked","message":"` + refusal + `"}` + "\n"
+	envelope := `{"error":{"code":"project_target_mismatch","exit":4,"message":"` + refusal + `","retryable":false,"next_steps":["Update the device: wendy device update"]}}` + "\n"
+	for name, output := range map[string]string{"receipt first": receipt + envelope, "error first": envelope + receipt} {
+		s := New(&config.Config{}, nil)
+		s.runCommandFn = func(context.Context, []string, commandTarget, int) (string, bool, error) {
+			return encodeRunReceipt([]byte(receipt), output), false, errors.New("exit status 4")
+		}
+		r, err := s.handleRun(context.Background(), callToolReq("run", map[string]any{"project_path": runProject(t), "device": "robot.local:50051", "wait_ready": true}))
+		if err != nil || !r.IsError {
+			t.Fatalf("%s: want tool error: %v %v", name, r, err)
+		}
+		out := structuredMap(t, r)
+		if message, _ := out["message"].(string); !strings.HasPrefix(message, "Nothing was deployed") || !strings.Contains(message, "entitlement") {
+			t.Fatalf("%s: message = %q; want the entitlement refusal", name, message)
+		}
+		if out["status"] != "failed" {
+			t.Fatalf("%s: status = %v, want failed", name, out["status"])
+		}
+	}
+}
+
+// Only the CLI's own error decides a refusal. A run that got past the checks
+// and then failed keeps its own report even when its output mentions a
+// refusal phrase, for example in a build step's log.
+func TestRunFailureThatMentionsARefusalIsNotOne(t *testing.T) {
+	const crash = "app test exited before becoming ready (exit code 1); see its logs with `wendy device logs --app test`"
+	for _, phrase := range []string{"not enough free disk space", "the device's agent does not support"} {
+		buildLog := "#7 0.214 warning: " + phrase + " here\n#7 DONE 0.3s\n"
+		crashed := `{"status":"crashed","app":"test","device":"robot.local:50051","readiness":"failed","exit_code":1,"termination_reason":"crashed","message":"` + crash + `"}` + "\n"
+		cases := []struct {
+			name, stdout, output string
+			waitReady            bool
+			wantStatus           string
+			wantMessage          string
+		}{
+			{
+				name: "crashed", stdout: crashed, waitReady: true, wantStatus: "crashed", wantMessage: crash,
+				output: buildLog + crashed + `{"error":{"code":"app_crashed","exit":1,"message":"` + crash + `","retryable":false,"next_steps":[]}}` + "\n",
+			},
+			{
+				name: "start failed", wantStatus: "failed", wantMessage: "Deployment or readiness verification did not complete",
+				output: buildLog + `{"error":{"code":"error","exit":1,"message":"starting app test: container exited during start","retryable":false,"next_steps":[]}}` + "\n",
+			},
+		}
+		for _, tc := range cases {
+			s := New(&config.Config{}, nil)
+			s.runCommandFn = func(context.Context, []string, commandTarget, int) (string, bool, error) {
+				return encodeRunReceipt([]byte(tc.stdout), tc.output), false, errors.New("exit status 1")
+			}
+			r, err := s.handleRun(context.Background(), callToolReq("run", map[string]any{"project_path": runProject(t), "device": "robot.local:50051", "wait_ready": tc.waitReady}))
+			if err != nil || !r.IsError {
+				t.Fatalf("%s, %q: want tool error: %v %v", tc.name, phrase, r, err)
+			}
+			out := structuredMap(t, r)
+			if message, _ := out["message"].(string); !strings.HasPrefix(message, tc.wantMessage) {
+				t.Fatalf("%s, %q: message = %q; want it to start %q", tc.name, phrase, message, tc.wantMessage)
+			}
+			if out["status"] != tc.wantStatus {
+				t.Fatalf("%s, %q: status = %v, want %s", tc.name, phrase, out["status"], tc.wantStatus)
+			}
+		}
+	}
+}
