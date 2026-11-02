@@ -579,3 +579,79 @@ func TestPickedDeviceGetsClockRecovery(t *testing.T) {
 		})
 	}
 }
+
+// A rejection the CLI already explains with its own credentials (a certificate
+// expired by this computer's clock, or one without clientAuth) is not a device
+// clock problem, and a time proof cannot fix it. The named path never sent one;
+// the picker called the clock recovery directly and sent three, waited about
+// 10 s, and blamed the device clock ahead of the refresh-certs step.
+func TestClockRecoverySkipsRejectionsTheCLIAttributesToItsOwnCertificate(t *testing.T) {
+	expired := config.CertificateInfo{OrganizationID: 2, PemCertificate: certPEM(t, time.Now().Add(-time.Hour))}
+	bad := errors.New("remote error: tls: bad certificate")
+	for name, cause := range map[string]error{
+		"expired local certificate": chooseRejectionError(context.Background(), 2, []config.CertificateInfo{expired}, bad),
+		"clientAuth EKU":            newTLSHandshakeRejectedError(errors.New("certificate is not valid for client authentication")),
+	} {
+		if !isCertRefreshableError(cause) {
+			t.Fatalf("%s: fixture is not a refreshable rejection: %v", name, cause)
+		}
+		t.Run(name+"/named", func(t *testing.T) {
+			isolateConnectionRecovery(t)
+			broadcasts := 0
+			broadcastTimeFn = func(context.Context) error { broadcasts++; return nil }
+			_, err := recoverAgentConnection(context.Background(), true, cause, func() (*grpcclient.AgentConnection, error) {
+				t.Fatal("retried a refreshable rejection without a refresh")
+				return nil, nil
+			})
+			if broadcasts != 0 || !errors.Is(err, cause) {
+				t.Fatalf("broadcasts=%d err=%v", broadcasts, err)
+			}
+		})
+		t.Run(name+"/picker", func(t *testing.T) {
+			isolateConnectionRecovery(t)
+			stubNonInteractive(t)
+			broadcasts, dials := 0, 0
+			broadcastTimeFn = func(context.Context) error { broadcasts++; return nil }
+			origLadder := dialAgentLadderFn
+			dialAgentLadderFn = func(context.Context, dialTarget) (*grpcclient.AgentConnection, error, error) {
+				dials++
+				return nil, nil, cause
+			}
+			t.Cleanup(func() { dialAgentLadderFn = origLadder })
+			lan := &models.LANDevice{DisplayName: "Mesh 1", Hostname: "wendyos-mesh-1.local", IPAddress: "10.0.0.9", Port: 50051, IsMTLS: true}
+			picked := &models.DiscoveredDevice{DisplayName: lan.DisplayName, LAN: lan}
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			var err error
+			stderr := captureStderr(t, func() { _, err = connectPickedLANDevice(ctx, picked, preferredLANAddress(*lan), true) })
+			if broadcasts != 0 || dials != 1 || !errors.Is(err, cause) {
+				t.Fatalf("broadcasts=%d dials=%d err=%v, want no time proof and the original rejection", broadcasts, dials, err)
+			}
+			if strings.Contains(stderr, "clock") {
+				t.Fatalf("blamed the device clock for the CLI's own certificate: %s", stderr)
+			}
+		})
+	}
+
+	// A retry that turns up such a rejection ends recovery there, rather than
+	// sending more proofs and calling the device clock wrong.
+	t.Run("retry reveals an expired certificate", func(t *testing.T) {
+		isolateConnectionRecovery(t)
+		broadcasts, retries := 0, 0
+		broadcastTimeFn = func(context.Context) error { broadcasts++; return nil }
+		refreshable := chooseRejectionError(context.Background(), 2, []config.CertificateInfo{expired}, bad)
+		var err error
+		stderr := captureStderr(t, func() {
+			_, err = recoverAgentConnection(context.Background(), true, newTLSHandshakeRejectedError(bad), func() (*grpcclient.AgentConnection, error) {
+				retries++
+				return nil, refreshable
+			})
+		})
+		if broadcasts != 1 || retries != 1 || !errors.Is(err, refreshable) {
+			t.Fatalf("broadcasts=%d retries=%d err=%v", broadcasts, retries, err)
+		}
+		if strings.Contains(stderr, "still rejected") {
+			t.Fatalf("called the device clock wrong: %s", stderr)
+		}
+	})
+}
