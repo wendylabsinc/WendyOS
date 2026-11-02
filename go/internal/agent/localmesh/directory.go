@@ -220,21 +220,27 @@ type directoryEntry struct {
 	retainUntil time.Time
 	// activeUntil retains now's monotonic clock reading when Accept receives one.
 	// A wall-clock rollback must not extend a lease already accepted in-process.
-	activeUntil time.Time
-	expired     bool
+	activeUntil         time.Time
+	certificateDeadline time.Time // Original selected certificate-path cap in the receiver lease clock.
+	certificateNotAfter time.Time // Original selected path, never replaced by a renewed path.
+	signingNotBefore    time.Time
+	expired             bool
 }
 
 type Directory struct {
-	mu      sync.Mutex
-	tenant  meshid.Tenant
-	limit   int
-	cache   *IdentityCache
-	entries map[string]directoryEntry
-	history map[string]DirectoryReceipt
-	persist func([]DirectoryReceipt) error
+	mu       sync.Mutex
+	tenant   meshid.Tenant
+	limit    int
+	cache    *IdentityCache
+	entries  map[string]directoryEntry
+	handoffs map[string]routeHandoff
+	history  map[string]DirectoryReceipt
+	persist  func([]DirectoryReceipt) error
 	// Runtime Nodes provide a monotonic clock independently of certificate UTC.
 	// nil preserves the explicit time argument used by synthetic legacy callers.
-	monotonicNow func() time.Time
+	monotonicNow        func() time.Time
+	certificateNow      func() time.Time // Local certificate BaseTime; nil preserves the verifier's supplied-now contract.
+	certificateLeafTime func(time.Time, time.Time) time.Time
 	// Keep observed wall time after replay tombstones are pruned. Otherwise a
 	// later clock rollback could make a discarded signed lease appear current.
 	wallHighWater time.Time
@@ -387,8 +393,11 @@ func (d *Directory) Accept(w SignedManifest, now time.Time) (bool, error) {
 			// an old signature that no longer verifies with the current leaf;
 			// do not renew the lease, retention or durable replay receipt.
 			if !old.signature.matches(binding.leafHash, func() bool { return validManifestSignature(old.wire, leaf) }) {
+				delete(d.handoffs, owner)
 				old.wire = cloneSignedManifest(w)
 				old.signature = binding
+				old = d.restrictEntryCertificate(old, id, now)
+				old.signingNotBefore = leaf.NotBefore
 				d.entries[owner] = old
 				return true, nil
 			}
@@ -404,14 +413,16 @@ func (d *Directory) Accept(w SignedManifest, now time.Time) (bool, error) {
 	// retention is exactly ten times this newly admitted signed duration.
 	duration := time.UnixMilli(m.Expires).Sub(time.UnixMilli(m.Issued))
 	admittedAt := d.leaseNow(now)
+	certificateDeadline := admittedAt.Add(id.NotAfter.Sub(d.certificateTime(now)))
 	receipt := DirectoryReceipt{Device: owner, Revision: m.Revision, Hash: hash, Until: admittedAt.Add(10 * duration)}
+	d.replaceRouteHandoff(owner, m, leaf, now)
 	d.history[owner] = receipt
 	// Do not force dynamic RAM watermarks into the legacy bounded persistent
 	// state schema. Origin publishers retain their own durable revisions.
 	d.entries[owner] = directoryEntry{
 		manifest: m, wire: w, hash: hash, signature: binding,
 		retainUntil: receipt.Until,
-		activeUntil: admittedAt.Add(duration),
+		activeUntil: admittedAt.Add(duration), certificateDeadline: certificateDeadline, certificateNotAfter: id.NotAfter, signingNotBefore: leaf.NotBefore,
 	}
 	return true, nil
 }
@@ -475,25 +486,33 @@ func (d *Directory) CurrentRecordChain(w SignedManifest, now time.Time) ([][]byt
 // currentEntryChain requires d.mu and updates only the entry's signature memo.
 // It never removes a replay floor, extends a lease, or renews retention.
 func (d *Directory) currentEntryChain(principal string, e directoryEntry, now time.Time) ([][]byte, bool) {
+	chain, _, ok := d.currentEntryIdentity(principal, e, now)
+	return chain, ok
+}
+
+func (d *Directory) currentEntryIdentity(principal string, e directoryEntry, now time.Time) ([][]byte, Identity, bool) {
 	if !e.activeUntil.After(d.leaseNow(now)) {
-		return nil, false
+		return nil, Identity{}, false
 	}
 	chain, id, ok := d.cache.manifestIdentity(e.wire.Principal, e.manifest, now)
 	if !ok || id.Device.Principal() != e.wire.Principal || time.UnixMilli(e.manifest.Expires).After(id.NotAfter) {
-		return nil, false
+		return nil, Identity{}, false
 	}
 	leaf, err := x509.ParseCertificate(chain[0])
 	if err != nil || time.UnixMilli(e.manifest.Issued).Before(leaf.NotBefore) || time.UnixMilli(e.manifest.Expires).After(leaf.NotAfter) {
-		return nil, false
+		return nil, Identity{}, false
 	}
 	valid := e.signature.matches(certificateHash(chain[0]), func() bool {
 		return validManifestSignature(e.wire, leaf)
 	})
+	if valid {
+		e = d.restrictEntryCertificate(e, id, now)
+	}
 	d.entries[principal] = e
 	if !valid {
-		return nil, false
+		return nil, Identity{}, false
 	}
-	return chain, true
+	return chain, id, true
 }
 
 // expireLocked physically drops expired wire bodies and signatures. Only the
@@ -509,6 +528,13 @@ func (d *Directory) expireLocked(now time.Time) bool {
 	for principal, e := range d.entries {
 		if !e.activeUntil.After(instant) {
 			delete(d.entries, principal)
+			delete(d.handoffs, principal)
+			changed = true
+		}
+	}
+	for owner, held := range d.handoffs {
+		if !held.deadline.After(instant) {
+			delete(d.handoffs, owner)
 			changed = true
 		}
 	}
@@ -572,29 +598,8 @@ func manifestHash(body []byte) string {
 // filter at the consumer, never inferred from having a directory entry. now is
 // the receiver scheduling clock, never certificate BaseTime or a signed date.
 func (d *Directory) Snapshot(now time.Time) []Manifest {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-	d.expireLocked(now)
-	out := []Manifest{}
-	for principal, e := range d.entries {
-		m := e.manifest
-		if m.Withdraw {
-			continue
-		}
-		if _, ok := d.currentEntryChain(principal, e, now); !ok {
-			continue
-		}
-		m = cloneManifest(m)
-		m.AdmittedUntil = now.Add(e.activeUntil.Sub(d.leaseNow(now)))
-		if m.AgentTransport != "" && m.AgentTransport != AgentMTLS {
-			// Preserve the opaque transport for reporting, but never expose its
-			// port to legacy consumers that understand only the old agent path.
-			m.AgentPort = 0
-		}
-		out = append(out, m)
-	}
-	sort.Slice(out, func(i, j int) bool { return bytes.Compare(out[i].Device[:], out[j].Device[:]) < 0 })
-	return out
+	manifests, _ := d.SnapshotWithRoutes(now)
+	return manifests
 }
 
 // Records includes signed withdrawals for anti-entropy. Expired records are not

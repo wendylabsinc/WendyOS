@@ -20,6 +20,7 @@ type NodeSnapshot struct {
 	// ForwardingRoutes contains the selected routes installed in the kernel.
 	ForwardingRoutes    []babel.Route
 	RouteAuthorizations map[RouteOrigin]bool
+	RouteProofs         map[RouteOrigin]RouteProof // Exact current/compact-handoff receiver lease metadata.
 }
 
 // PeerLink identifies an authenticated direct carrier and its Babel cost.
