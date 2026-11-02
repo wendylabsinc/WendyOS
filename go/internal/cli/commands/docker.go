@@ -2925,6 +2925,22 @@ var ensureBuildxBuilderMu sync.Mutex
 type registryProxyEntry struct {
 	addr    string
 	dialErr func() error
+	ready   chan struct{} // Closed after connection-lifetime registration completes.
+	err     error         // Protected by dockerRegistryProxyCacheMu.
+}
+
+func (e *registryProxyEntry) result(ctx context.Context) (string, func(), func() error, error) {
+	select {
+	case <-e.ready:
+	case <-ctx.Done():
+		return "", nil, nil, ctx.Err()
+	}
+	dockerRegistryProxyCacheMu.Lock()
+	defer dockerRegistryProxyCacheMu.Unlock()
+	if e.err != nil {
+		return "", nil, nil, e.err
+	}
+	return e.addr, func() {}, e.dialErr, nil
 }
 
 // dockerRegistryProxyAddrs caches one proxy entry per AgentConnection. The
@@ -2933,7 +2949,7 @@ type registryProxyEntry struct {
 // builds and no builder teardown races can kill an in-flight push.
 var (
 	dockerRegistryProxyCacheMu sync.Mutex
-	dockerRegistryProxyAddrs   = map[*grpcclient.AgentConnection]registryProxyEntry{}
+	dockerRegistryProxyAddrs   = map[*grpcclient.AgentConnection]*registryProxyEntry{}
 )
 
 // resolveRegistryForAgent determines how Docker buildx should reach the
@@ -2946,14 +2962,14 @@ func resolveRegistryForAgent(ctx context.Context, conn *grpcclient.AgentConnecti
 	if err != nil {
 		return "", nil, nil, err
 	}
-	// Hold the lock for the entire operation so concurrent callers block rather
-	// than each starting their own proxy. Proxy creation is just a local
+	// Hold the lock during cache lookup and proxy creation so concurrent callers
+	// share one proxy. Proxy creation is just a local
 	// net.Listen call, so the lock is held only briefly.
 	dockerRegistryProxyCacheMu.Lock()
-	defer dockerRegistryProxyCacheMu.Unlock()
 
 	if entry, ok := dockerRegistryProxyAddrs[conn]; ok {
-		return entry.addr, func() {}, entry.dialErr, nil
+		dockerRegistryProxyCacheMu.Unlock()
+		return entry.result(ctx)
 	}
 
 	// Start a proxy tied to context.Background so it outlives this push and is
@@ -2964,6 +2980,7 @@ func resolveRegistryForAgent(ctx context.Context, conn *grpcclient.AgentConnecti
 	if conn.RegistryDialer == nil {
 		addr, stopProxy, dialErr, err = resolveRegistry(context.Background(), conn.Host, port)
 		if err != nil {
+			dockerRegistryProxyCacheMu.Unlock()
 			return "", nil, nil, err
 		}
 	} else {
@@ -2972,6 +2989,7 @@ func resolveRegistryForAgent(ctx context.Context, conn *grpcclient.AgentConnecti
 			return conn.RegistryDialer(ctx, port)
 		})
 		if proxyErr != nil {
+			dockerRegistryProxyCacheMu.Unlock()
 			return "", nil, nil, fmt.Errorf("starting cloud registry proxy: %w", proxyErr)
 		}
 		stopProxy = proxy.Close
@@ -2983,15 +3001,24 @@ func resolveRegistryForAgent(ctx context.Context, conn *grpcclient.AgentConnecti
 		}
 	}
 
-	dockerRegistryProxyAddrs[conn] = registryProxyEntry{addr: addr, dialErr: dialErr}
+	entry := &registryProxyEntry{addr: addr, dialErr: dialErr, ready: make(chan struct{})}
+	dockerRegistryProxyAddrs[conn] = entry
+	// AddCloser closes a late helper synchronously if shutdown has begun.
+	// Release the cache lock before registration because cleanup takes it too.
+	// Cache hits wait for registration so they cannot return a rejected proxy.
+	dockerRegistryProxyCacheMu.Unlock()
 	conn.AddCloser(closeFunc(func() {
 		dockerRegistryProxyCacheMu.Lock()
-		delete(dockerRegistryProxyAddrs, conn)
+		entry.err = errors.New("selected device connection has closed")
+		if dockerRegistryProxyAddrs[conn] == entry {
+			delete(dockerRegistryProxyAddrs, conn)
+		}
 		dockerRegistryProxyCacheMu.Unlock()
 		stopProxy()
 	}))
+	close(entry.ready)
 
-	return addr, func() {}, dialErr, nil
+	return entry.result(ctx)
 }
 
 // resolveRegistryForSwift is like resolveRegistry but for the Swift container
