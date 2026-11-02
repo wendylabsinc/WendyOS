@@ -222,6 +222,7 @@ def coverage_text(manifest: dict[str, Any], *, reviewed: bool) -> str:
         generated = (
             f" {excluded} generated file(s) excluded (not AI-reviewed) "
             f"({manifest.get('generated_bytes_excluded', 0):,} bytes);"
+            " upstream source bodies are not fetched; exclusions do not establish API or behavior coverage;"
         )
     return (
         f"**Input coverage:** {reviewed_files}/{manifest['changed_files']} changed files; "

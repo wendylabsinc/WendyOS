@@ -81,8 +81,6 @@ jobs:
                   return False
               SOURCE_ONLY_RULE = ''
 
-          client = None
-
           with open('pr.diff', encoding='utf-8') as f:
               diff = f.read()
 

@@ -67,6 +67,8 @@ jobs:
           sparse-checkout: |
             .github/scripts
             .github/workflows/api-review.yml
+            .github/workflows/docs-review.yml
+            .github/workflows/integration-test-review.yml
           persist-credentials: false
 
       - name: Bootstrap batched review automation when absent from base

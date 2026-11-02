@@ -3,7 +3,6 @@
 import argparse
 from contextlib import contextmanager
 import hashlib
-import io
 import json
 import os
 from pathlib import Path
