@@ -15,14 +15,32 @@ jobs:
       pull-requests: write
     steps:
       - name: Check out repository
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          fetch-depth: 0
+          persist-credentials: false
 
       - name: Get PR diff
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           REPO: ${{ github.repository }}
-        run: gh pr diff "$PR_NUMBER" --repo "$REPO" > pr.diff 2>/dev/null || touch pr.diff
+          EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          EXPECTED_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          gh api "repos/$REPO/pulls/$PR_NUMBER" > pr_meta.json
+          jq -e --arg head "$EXPECTED_HEAD_SHA" --arg base "$EXPECTED_BASE_SHA" \
+            '.head.sha == $head and .base.sha == $base' pr_meta.json > /dev/null
+          for revision in "$EXPECTED_HEAD_SHA" "$EXPECTED_BASE_SHA"; do
+            [[ "$revision" =~ ^[0-9a-f]{40}$ ]]
+            if ! git cat-file -e "$revision^{commit}" 2>/dev/null; then
+              git -c core.hooksPath=/dev/null fetch --no-tags origin "$revision"
+            fi
+          done
+          diff_base="$(git merge-base "$EXPECTED_BASE_SHA" "$EXPECTED_HEAD_SHA")"
+          git diff --no-ext-diff --no-textconv --find-renames "$diff_base" "$EXPECTED_HEAD_SHA" -- > pr.diff
 
       - name: Set up Python
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
@@ -35,6 +53,7 @@ jobs:
       - name: Review integration test coverage with Claude
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           PR_TITLE: ${{ github.event.pull_request.title || '' }}
           PR_BODY: ${{ github.event.pull_request.body || '' }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
@@ -47,8 +66,22 @@ jobs:
           import os
           import pathlib
           import re
+          import sys
+          import subprocess
 
-          client = anthropic.Anthropic()
+          sys.path.insert(0, str(pathlib.Path('.github/scripts').resolve()))
+          # Automation stays on the immutable trusted base. The introducing PR
+          # continues the base policy until the source filter lands there.
+          source_filter = pathlib.Path('.github/scripts/review_sources.py').is_file()
+          if source_filter:
+              from review_sources import source_diff, parse_diff, is_generated_path, SOURCE_ONLY_RULE
+          else:
+              print('::notice::Source-only review activates when trusted base contains review_sources.py')
+              def is_generated_path(path):
+                  return False
+              SOURCE_ONLY_RULE = ''
+
+          client = None
 
           with open('pr.diff', encoding='utf-8') as f:
               diff = f.read()
@@ -57,40 +90,48 @@ jobs:
               print('Empty diff — skipping')
               raise SystemExit(0)
 
-          tests_root = pathlib.Path('.github/ci-tests').resolve()
+          if source_filter:
+              parsed = parse_diff(diff, allow_binary=True)
+              meta = json.loads(pathlib.Path('pr_meta.json').read_text())
+              if any(parsed[field] != meta[field] for field in ('changed_files', 'additions', 'deletions')):
+                  raise RuntimeError('Full PR diff disagrees with metadata; no review performed')
+              diff, coverage = source_diff(diff, allow_binary=True)
+              pathlib.Path('integration-input-manifest.json').write_text(json.dumps(coverage, indent=2))
+              print(json.dumps(coverage))
+              if not diff:
+                  with open(os.environ['GITHUB_ENV'], 'a') as output:
+                      output.write('SOURCE_ONLY_REVIEW=true\n')
+                  print('Only generated protocol output changed; no AI review was performed')
+                  raise SystemExit(0)
+          # Keep the existing input limit, but reject rather than silently
+          # truncate source. A failed review cannot delete previous blockers.
+          if source_filter and len(diff.encode('utf-8')) > 30000:
+              raise RuntimeError('Source diff exceeds the 30,000-byte integration review limit; no partial review performed')
+          client = anthropic.Anthropic()
 
-          # Every existing test name is always listed (cheap, and it is what makes
-          # "do not duplicate an existing test" enforceable). File contents are
-          # included only until the budget runs out.
-          existing_names = sorted(d.name for d in tests_root.iterdir() if d.is_dir())
-
-          TESTS_BUDGET = 20000
-          existing_tests = []
-          total_bytes = 0
-          for test_dir in sorted(tests_root.iterdir()):
-              if not test_dir.is_dir() or total_bytes >= TESTS_BUDGET:
+          # Context is data from the immutable event head, never executed code
+          # or filesystem symlinks. Filter paths before reading blob payloads.
+          revision = os.environ['EXPECTED_HEAD_SHA']
+          listing = subprocess.check_output(['git', 'ls-tree', '-rz', revision])
+          test_paths = []
+          for record in listing.split(b'\0'):
+              if not record:
                   continue
-              test_info = {'name': test_dir.name, 'files': {}}
-              for f in sorted(test_dir.iterdir()):
-                  if f.is_file():
-                      try:
-                          content = f.read_text(encoding='utf-8')
-                      except Exception:
-                          continue
-                      if total_bytes + len(content) <= TESTS_BUDGET:
-                          test_info['files'][f.name] = content
-                          total_bytes += len(content)
-              if test_info['files']:
-                  existing_tests.append(test_info)
-
-          test_script = pathlib.Path('go/scripts/test-ci.sh').read_text(encoding='utf-8')
-          integration_yml = pathlib.Path('.github/workflows/integration-tests.yml').read_text(encoding='utf-8')
-
+              info, raw_path = record.split(b'\t', 1)
+              mode, kind, _ = info.decode('ascii').split()
+              path = raw_path.decode('utf-8')
+              if path.startswith('.github/ci-tests/') and mode in {'100644', '100755'} and kind == 'blob' and not is_generated_path(path):
+                  test_paths.append(path)
+          existing_names = sorted({path.split('/')[2] for path in test_paths})
           tests_context = ''
-          for t in existing_tests:
-              tests_context += f'\n### {t["name"]}/\n'
-              for fname, content in t['files'].items():
-                  tests_context += f'#### {fname}\n```\n{content}\n```\n'
+          total_bytes = 0
+          for path in sorted(test_paths):
+              content = subprocess.check_output(['git', 'show', f'{revision}:{path}']).decode('utf-8')
+              if total_bytes + len(content.encode()) <= 20000:
+                  tests_context += f'\n### {path}\n```\n{content}\n```\n'
+                  total_bytes += len(content.encode())
+          test_script = subprocess.check_output(['git', 'show', f'{revision}:go/scripts/test-ci.sh']).decode('utf-8')
+          integration_yml = subprocess.check_output(['git', 'show', f'{revision}:.github/workflows/integration-tests.yml']).decode('utf-8')
 
           # ── Prompt hygiene (mirrors docs-review.yml) ────────────────────────────
           # This job can now fail the build, so untrusted PR content gets the same
@@ -120,7 +161,7 @@ jobs:
                       {
                           'type': 'text',
                           'text': (
-                              'You are a QA engineer for WendyOS, an embedded/edge OS that deploys '
+                              SOURCE_ONLY_RULE + '\n\n' + 'You are a QA engineer for WendyOS, an embedded/edge OS that deploys '
                               'containerized apps to IoT devices via the Wendy CLI.\n\n'
                               'Given a PR diff, decide whether it introduces a device capability that a '
                               'container-side integration test could cover and currently does not.\n\n'
@@ -199,12 +240,11 @@ jobs:
                           f'PR #{os.environ["PR_NUMBER"]}: {_clean_prompt_content(os.environ["PR_TITLE"], 500)}\n\n'
                           f'{_clean_prompt_content(os.environ["PR_BODY"], 5000)}\n\n'
                           f'## Diff\n```diff\n{_clean_prompt_content(diff, 30000)}\n```\n'
-                          '</untrusted_pr_content>\n'
-                          'End of untrusted pull request content.\n\n'
                           f'## Existing integration test names\n{", ".join(existing_names)}\n\n'
-                          f'## Existing integration tests (contents)\n{tests_context}\n\n'
-                          f'## go/scripts/test-ci.sh\n```bash\n{test_script[:8000]}\n```\n\n'
-                          f'## .github/workflows/integration-tests.yml\n```yaml\n{integration_yml[:8000]}\n```'
+                          f'## Existing integration tests (contents)\n{_clean_prompt_content(tests_context, len(tests_context))}\n\n'
+                          f'## go/scripts/test-ci.sh\n```bash\n{_clean_prompt_content(test_script, 8000)}\n```\n\n'
+                          f'## .github/workflows/integration-tests.yml\n```yaml\n{_clean_prompt_content(integration_yml, 8000)}\n```\n'
+                          '</untrusted_pr_content>\n'
                       ),
                   }],
               )
@@ -214,6 +254,8 @@ jobs:
                   raise SystemExit(0)
               raise
 
+          if message.stop_reason != 'end_turn':
+              raise RuntimeError('Integration test review did not complete; prior findings preserved')
           response_text = message.content[0].text.strip()
 
           if response_text == 'NO_CHANGES_NEEDED':
@@ -541,6 +583,12 @@ jobs:
                   raise RuntimeError(f'Failed to delete integration test review comments: {failed}')
 
           existing = [comment for comment in list_comments() if is_review_comment(comment)]
+
+          if os.environ.get('SOURCE_ONLY_REVIEW') == 'true':
+              if any('#### 🛑 Error' in (comment.get('body') or '') for comment in existing):
+                  raise RuntimeError('Generated-only review skipped; prior integration test blockers remain open')
+              print('Generated-only review skipped; prior comments preserved')
+              raise SystemExit(0)
 
           if not comment_path.exists():
               for comment in existing:

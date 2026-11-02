@@ -15,10 +15,12 @@ jobs:
       pull-requests: write
     steps:
       - name: Check out repository
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
         with:
+          ref: ${{ github.event.pull_request.base.sha }}
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Get PR diff
         env:
@@ -52,6 +54,9 @@ jobs:
         run: |
           python3 .github/scripts/review_diff_test.py
           python3 .github/scripts/docs_review_test.py
+          if [[ -f .github/scripts/review_sources_test.py ]]; then
+            python3 .github/scripts/review_sources_test.py
+          fi
 
       - name: Review docs with Claude
         env:
@@ -92,6 +97,12 @@ jobs:
                   print('WARNING: Cannot run docs review — API credit balance too low')
                   raise SystemExit(0)
               raise
+          manifest = pathlib.Path('docs-input-manifest.json')
+          if manifest.is_file() and json.loads(manifest.read_text()).get('skipped_generated_only'):
+              with open(os.environ['GITHUB_ENV'], 'a') as output:
+                  output.write('SOURCE_ONLY_REVIEW=true\n')
+              print('Only generated protocol output changed; no AI review was performed')
+              raise SystemExit(0)
           response_text = json.dumps(payload)
 
           def _is_no_changes_response(text):
@@ -430,6 +441,12 @@ jobs:
                   raise RuntimeError(f'Failed to delete docs review comments: {failed}')
 
           existing = [comment for comment in list_comments() if is_docs_review_comment(comment)]
+
+          if os.environ.get('SOURCE_ONLY_REVIEW') == 'true':
+              if any('#### 🛑 Error' in (comment.get('body') or '') for comment in existing):
+                  raise RuntimeError('Generated-only review skipped; prior documentation blockers remain open')
+              print('Generated-only review skipped; prior comments preserved')
+              raise SystemExit(0)
 
           if not comment_path.exists():
               for comment in existing:
