@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"sync"
@@ -30,7 +31,7 @@ var recoverNetCarrierState = func(ctx context.Context) error {
 
 // runConfiguredNetCarriers runs one Babel node for every enabled carrier.
 // Its observer is cleared only after the radio provider has drained its links.
-func runConfiguredNetCarriers(ctx context.Context, configDir string, id localmesh.TCPIdentity, logger *zap.Logger, catalog *meshCatalogManager, vips *mesh.VIPTable, sharing *meshSharingManager, observe func(func() localmesh.NodeSnapshot)) (runErr error) {
+func runConfiguredNetCarriers(ctx context.Context, configDir string, id localmesh.TCPIdentity, logger *zap.Logger, catalog *meshCatalogManager, vips *mesh.VIPTable, sharing *meshSharingManager, observe func(func() localmesh.NodeSnapshot), agent ...func(context.Context, net.Conn) error) (runErr error) {
 	if err := sharing.Deactivate(); err != nil {
 		return err
 	}
@@ -38,7 +39,7 @@ func runConfiguredNetCarriers(ctx context.Context, configDir string, id localmes
 		return fmt.Errorf("recover Wendy Net Internet sharing: %w", err)
 	}
 	participating, err := runWhileMeshParticipating(ctx, filepath.Join(configDir, "nan-mesh.json"), 2*time.Second, func(active context.Context) error {
-		return runEnabledMeshCarriers(active, configDir, id, logger, catalog, vips, sharing, observe)
+		return runEnabledMeshCarriers(active, configDir, id, logger, catalog, vips, sharing, observe, agent...)
 	})
 	if !participating {
 		// The active runner has drained providers, sharing, catalog and Babel
@@ -53,7 +54,7 @@ func runConfiguredNetCarriers(ctx context.Context, configDir string, id localmes
 	return err
 }
 
-func runEnabledMeshCarriers(ctx context.Context, configDir string, id localmesh.TCPIdentity, logger *zap.Logger, catalog *meshCatalogManager, vips *mesh.VIPTable, sharing *meshSharingManager, observe func(func() localmesh.NodeSnapshot)) (runErr error) {
+func runEnabledMeshCarriers(ctx context.Context, configDir string, id localmesh.TCPIdentity, logger *zap.Logger, catalog *meshCatalogManager, vips *mesh.VIPTable, sharing *meshSharingManager, observe func(func() localmesh.NodeSnapshot), agent ...func(context.Context, net.Conn) error) (runErr error) {
 	path := filepath.Join(configDir, "local-mesh.json")
 	initial, err := localmesh.ReadTCPConfigFile(path)
 	if errors.Is(err, os.ErrNotExist) {
@@ -147,6 +148,9 @@ func runEnabledMeshCarriers(ctx context.Context, configDir string, id localmesh.
 			}
 			observe(nil)
 			return
+		}
+		if len(agent) != 0 {
+			node.SetOperatorAgent(agent[0])
 		}
 		observe(node.Snapshot)
 		if cfg.Listen != "" || len(cfg.Peers) != 0 {

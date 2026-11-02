@@ -14,11 +14,20 @@ import (
 	"github.com/vishvananda/netlink"
 	"github.com/wendylabsinc/WendyOS/go/babel"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
+	"github.com/wendylabsinc/wendy/go/internal/shared/meshoperator"
 	"golang.org/x/sys/unix"
 )
 
 const interfaceOwner = "wendy:local-mesh:2"
 const RouteTable = 18865
+
+// Keep operator policy outside older agents' reserved table and priorities
+// (18865/18866). Those agents must be able to restart or reset after a warm
+// rollback without mistaking operator policy for foreign device policy.
+// 18867 is the UDP VIP table; 18868/18869 belong to Internet sharing.
+const operatorRouteTable = 18870
+const operatorRulePriority = 18870
+const kernelGuardCount = 2
 const routeProtocol = 186
 
 type kernelPeer struct {
@@ -37,14 +46,15 @@ type kernelPeer struct {
 // UUIDs, and Babel routes are installed as ULA destinations with link-local next
 // hops on the interface they arrived on.
 type Kernel struct {
-	link        *netlink.Dummy
-	peers       map[babel.LinkID]kernelPeer
-	routes      []netlink.Route
-	rule        *netlink.Rule
-	device      meshid.Device
-	address     net.IP
-	forwarding  bool
-	forwardRule bool
+	link         *netlink.Dummy
+	peers        map[babel.LinkID]kernelPeer
+	routes       []netlink.Route
+	rule         *netlink.Rule
+	operatorRule *netlink.Rule
+	device       meshid.Device
+	address      net.IP
+	forwarding   bool
+	forwardRule  bool
 }
 
 // ReconcileBase restores only this kernel's invariant host address, policy
@@ -58,10 +68,12 @@ func (k *Kernel) ReconcileBase() error {
 	}
 	// Restore the guard first so a surviving policy rule cannot fall through
 	// to the ordinary uplink while the other base state is being repaired.
-	if !state.guard {
-		guard := k.routes[0]
-		if err := netlink.RouteAdd(&guard); err != nil && !errors.Is(err, unix.EEXIST) {
-			return fmt.Errorf("restore wendy net guard route: %w", err)
+	for i, present := range []bool{state.guard, state.operatorGuard} {
+		if !present {
+			guard := k.routes[i]
+			if err := netlink.RouteAdd(&guard); err != nil && !errors.Is(err, unix.EEXIST) {
+				return fmt.Errorf("restore wendy net guard route in table %d: %w", guard.Table, err)
+			}
 		}
 	}
 	if !state.address {
@@ -80,24 +92,31 @@ func (k *Kernel) ReconcileBase() error {
 			return fmt.Errorf("restore wendy net policy rule: %w", err)
 		}
 	}
+	if !state.operatorRule && k.operatorRule != nil {
+		if err := netlink.RuleAdd(k.operatorRule); err != nil && !errors.Is(err, unix.EEXIST) {
+			return fmt.Errorf("restore operator net policy rule: %w", err)
+		}
+	}
 	// EEXIST can mean a competing writer installed different state. Confirm
 	// all invariants after repair rather than treating that error as success.
 	state, err = k.inspectBase()
 	if err != nil {
 		return err
 	}
-	if !state.address || !state.up || !state.guard || !state.rule {
+	if !state.address || !state.up || !state.guard || !state.operatorGuard || !state.rule || (k.operatorRule != nil && !state.operatorRule) {
 		return errors.New("wendy net base state changed during reconciliation")
 	}
 	return nil
 }
 
 type baseState struct {
-	link    netlink.Link
-	address bool
-	up      bool
-	rule    bool
-	guard   bool
+	operatorRule  bool
+	operatorGuard bool
+	link          netlink.Link
+	address       bool
+	up            bool
+	rule          bool
+	guard         bool
 }
 
 func (k *Kernel) inspectBase() (baseState, error) {
@@ -106,7 +125,7 @@ func (k *Kernel) inspectBase() (baseState, error) {
 
 func (k *Kernel) inspectBaseOnce() (baseState, error) {
 	var state baseState
-	if k.link == nil || k.rule == nil || len(k.routes) == 0 {
+	if k.link == nil || k.rule == nil || len(k.routes) < kernelGuardCount {
 		return state, errors.New("wendy net kernel is not initialized")
 	}
 	live, err := netlink.LinkByName(InterfaceName)
@@ -137,12 +156,18 @@ func (k *Kernel) inspectBaseOnce() (baseState, error) {
 		return state, fmt.Errorf("inspect wendy net policy rule: %w", err)
 	}
 	for _, rule := range rules {
-		if rule.Priority == RouteTable {
+		switch {
+		case rule.Priority == RouteTable:
 			if !baseRuleMatches(rule) {
-				return state, errors.New("wendy net policy rule ownership conflict")
+				return state, policyRuleConflict("during reconciliation", rule)
 			}
 			state.rule = true
-		} else if rule.Table == RouteTable {
+		case rule.Priority == operatorRulePriority:
+			if !operatorRuleMatches(rule) {
+				return state, policyRuleConflict("during reconciliation", rule)
+			}
+			state.operatorRule = true
+		case rule.Table == RouteTable:
 			ownedPeer := false
 			for _, peer := range k.peers {
 				if peerRuleMatches(rule, peer.rule) {
@@ -151,37 +176,40 @@ func (k *Kernel) inspectBaseOnce() (baseState, error) {
 				}
 			}
 			if !ownedPeer {
-				return state, errors.New("wendy net route table rule ownership conflict")
+				return state, policyRuleConflict("during reconciliation", rule)
+			}
+		case rule.Table == operatorRouteTable:
+			return state, policyRuleConflict("during reconciliation", rule)
+		}
+	}
+
+	for _, table := range []int{RouteTable, operatorRouteTable} {
+		routes, err := netlink.RouteListFiltered(netlink.FAMILY_V6, &netlink.Route{Table: table}, netlink.RT_FILTER_TABLE)
+		if err != nil {
+			return state, fmt.Errorf("inspect wendy net guard route in table %d: %w", table, err)
+		}
+		for _, route := range routes {
+			if !defaultIPv6Route(route.Dst) || k.ownsLearnedDefault(route) {
+				continue
+			}
+			// The kernel binds device-less error routes to loopback. The
+			// protocol, metric, type and absent gateway identify our guard.
+			if route.Priority != 32767 || route.Protocol != routeProtocol || route.Type != unix.RTN_UNREACHABLE || route.Gw != nil {
+				return state, fmt.Errorf("wendy net guard route ownership conflict in table %d: %v", table, route)
+			}
+			if table == RouteTable {
+				state.guard = true
+			} else {
+				state.operatorGuard = true
 			}
 		}
-	}
-	routes, err := netlink.RouteListFiltered(netlink.FAMILY_V6, &netlink.Route{Table: RouteTable}, netlink.RT_FILTER_TABLE)
-	if err != nil {
-		return state, fmt.Errorf("inspect wendy net guard route: %w", err)
-	}
-	for _, route := range routes {
-		if !defaultIPv6Route(route.Dst) {
-			continue
-		}
-		// A signed peer's Babel default is also installed in this table. It is
-		// an owned route, tracked by Apply, even when this host is not roaming.
-		if k.ownsLearnedDefault(route) {
-			continue
-		}
-		// The kernel binds device-less error routes to the loopback interface,
-		// so a reclaimed guard reports RTA_OIF=lo rather than no device. The
-		// protocol, metric, type and absent gateway are the ownership signature.
-		if route.Priority != 32767 || route.Protocol != routeProtocol || route.Type != unix.RTN_UNREACHABLE || route.Gw != nil {
-			return state, errors.New("wendy net guard route ownership conflict")
-		}
-		state.guard = true
 	}
 	return state, nil
 }
 
 func (k *Kernel) ownsLearnedDefault(route netlink.Route) bool {
 	for _, expected := range k.routes {
-		if expected.Priority != 100 || !defaultIPv6Route(expected.Dst) ||
+		if route.Table != expected.Table || expected.Priority != 100 || !defaultIPv6Route(expected.Dst) ||
 			route.Priority != expected.Priority || route.Protocol != expected.Protocol ||
 			route.Type != expected.Type || route.LinkIndex != expected.LinkIndex ||
 			!route.Src.Equal(expected.Src) || !route.Gw.Equal(expected.Gw) {
@@ -202,7 +230,7 @@ func (k *Kernel) ownsLearnedDefault(route netlink.Route) bool {
 // Unspecified selectors must remain unspecified: an extra suppression, mark or
 // input constraint changes the rule even if it selects our reserved table.
 func plainRuleSelectors(rule netlink.Rule) bool {
-	return rule.Family == netlink.FAMILY_V6 && rule.Table == RouteTable &&
+	return rule.Family == netlink.FAMILY_V6 &&
 		rule.Src == nil && rule.OifName == "" && rule.Mark == 0 && rule.Mask == nil &&
 		rule.Tos == 0 && !rule.Invert && rule.Dport == nil && rule.Sport == nil &&
 		rule.UIDRange == nil && rule.IPProto == 0 && rule.TunID == 0 &&
@@ -211,13 +239,38 @@ func plainRuleSelectors(rule netlink.Rule) bool {
 }
 
 func baseRuleMatches(rule netlink.Rule) bool {
-	return plainRuleSelectors(rule) && rule.Priority == RouteTable &&
+	return plainRuleSelectors(rule) && rule.Table == RouteTable && rule.Priority == RouteTable &&
 		rule.Dst != nil && rule.Dst.String() == meshid.MeshPrefix.String() && rule.IifName == ""
 }
 
+func operatorRuleMatches(rule netlink.Rule) bool {
+	return plainRuleSelectors(rule) && rule.Table == operatorRouteTable && rule.Priority == operatorRulePriority &&
+		rule.Protocol == routeProtocol && rule.Dst != nil && rule.Dst.String() == meshoperator.Prefix.String() && rule.IifName == ""
+}
+
+// Earlier WN5/rehearsal agents used the device rule slot for operators. Accept
+// that exact signature only for stale cleanup, never as a live base invariant.
+func legacyOperatorRuleMatches(rule netlink.Rule) bool {
+	return plainRuleSelectors(rule) && rule.Table == RouteTable && rule.Priority == RouteTable && rule.Protocol == 0 &&
+		rule.Dst != nil && rule.Dst.String() == meshoperator.Prefix.String() && rule.IifName == ""
+}
+
 func peerRuleMatches(rule netlink.Rule, peer *netlink.Rule) bool {
-	return plainRuleSelectors(rule) && rule.Priority == peer.Priority &&
+	return plainRuleSelectors(rule) && rule.Table == RouteTable && rule.Priority == peer.Priority &&
 		rule.IifName == peer.IifName && rule.Dst == nil
+}
+
+func reservedKernelRule(rule netlink.Rule) bool {
+	return rule.Table == RouteTable || rule.Table == operatorRouteTable ||
+		rule.Priority == RouteTable || rule.Priority == RouteTable+1 || rule.Priority == operatorRulePriority
+}
+
+func policyRuleConflict(when string, rule netlink.Rule) error {
+	// Rule.String omits marks, interface selectors and suppressions. Include
+	// the complete fields so two visually identical rules are diagnosable.
+	type ruleDetails netlink.Rule
+	return fmt.Errorf("wendy-net policy rule ownership conflict %s: family=%d priority=%d table=%d: %v; selectors=%+v",
+		when, rule.Family, rule.Priority, rule.Table, rule, ruleDetails(rule))
 }
 
 func ownedPeerInterfaceName(name string) bool {
@@ -288,11 +341,13 @@ func NewKernel(device meshid.Device) (*Kernel, error) {
 	}
 	// A permanent unreachable default prevents this table from falling through
 	// to the host's ordinary uplink. A learnt route has a lower priority.
-	guard := netlink.Route{Table: RouteTable, Protocol: routeProtocol, Family: netlink.FAMILY_V6, Type: unix.RTN_UNREACHABLE, Priority: 32767, Dst: ipNet(netip.MustParsePrefix("::/0"))}
-	if err = netlink.RouteAdd(&guard); err != nil {
-		return nil, kernelOperationError("install IPv6 guard route in net table", kernelPolicyRequirement, err)
+	for _, table := range []int{RouteTable, operatorRouteTable} {
+		guard := netlink.Route{Table: table, Protocol: routeProtocol, Family: netlink.FAMILY_V6, Type: unix.RTN_UNREACHABLE, Priority: 32767, Dst: ipNet(netip.MustParsePrefix("::/0"))}
+		if err = netlink.RouteAdd(&guard); err != nil {
+			return nil, kernelOperationError(fmt.Sprintf("install IPv6 guard route in table %d", table), kernelPolicyRequirement, err)
+		}
+		k.routes = append(k.routes, guard)
 	}
-	k.routes = append(k.routes, guard)
 	// Mesh traffic is looked up in this table only. Everything else keeps the
 	// host's ordinary routing.
 	rule := netlink.NewRule()
@@ -304,6 +359,16 @@ func NewKernel(device meshid.Device) (*Kernel, error) {
 		return nil, kernelOperationError("install IPv6 net policy rule", kernelPolicyRequirement, err)
 	}
 	k.rule = rule
+	operatorRule := netlink.NewRule()
+	operatorRule.Family = netlink.FAMILY_V6
+	operatorRule.Priority = operatorRulePriority
+	operatorRule.Table = operatorRouteTable
+	operatorRule.Protocol = routeProtocol
+	operatorRule.Dst = ipNet(meshoperator.Prefix)
+	if err = netlink.RuleAdd(operatorRule); err != nil {
+		return nil, kernelOperationError("install operator IPv6 policy rule", kernelPolicyRequirement, err)
+	}
+	k.operatorRule = operatorRule
 	if err = k.enableForwarding(); err != nil {
 		return nil, kernelOperationError("enable net forwarding", "", err)
 	}
@@ -352,27 +417,29 @@ func validateStaleKernelOwnershipWith(listLinks func() ([]netlink.Link, error), 
 		return err
 	}
 	for _, rule := range rules {
-		if rule.Table != RouteTable && rule.Priority != RouteTable && rule.Priority != RouteTable+1 {
+		if !reservedKernelRule(rule) {
 			continue
 		}
 		if !ownedKernelRule(rule) {
-			return errors.New("wendy-net policy rule ownership conflict during reset cleanup")
+			return policyRuleConflict("during reset cleanup", rule)
 		}
 	}
-	for _, family := range []int{netlink.FAMILY_V4, netlink.FAMILY_V6} {
-		routes, err := listRoutes(family, &netlink.Route{Table: RouteTable}, netlink.RT_FILTER_TABLE)
-		if errors.Is(err, unix.EAFNOSUPPORT) || errors.Is(err, unix.EOPNOTSUPP) {
-			if ownedLinks {
+	for _, table := range []int{RouteTable, operatorRouteTable} {
+		for _, family := range []int{netlink.FAMILY_V4, netlink.FAMILY_V6} {
+			routes, err := listRoutes(family, &netlink.Route{Table: table}, netlink.RT_FILTER_TABLE)
+			if errors.Is(err, unix.EAFNOSUPPORT) || errors.Is(err, unix.EOPNOTSUPP) {
+				if ownedLinks {
+					return err
+				}
+				continue
+			}
+			if err != nil {
 				return err
 			}
-			continue
-		}
-		if err != nil {
-			return err
-		}
-		for _, route := range routes {
-			if route.Protocol != routeProtocol {
-				return errors.New("wendy-net route table holds a foreign route during reset cleanup")
+			for _, route := range routes {
+				if route.Protocol != routeProtocol {
+					return fmt.Errorf("wendy-net route table %d holds a foreign route during reset cleanup: %v", table, route)
+				}
 			}
 		}
 	}
@@ -380,12 +447,8 @@ func validateStaleKernelOwnershipWith(listLinks func() ([]netlink.Link, error), 
 }
 
 func ownedKernelRule(rule netlink.Rule) bool {
-	if rule.Family != netlink.FAMILY_V6 || rule.Table != RouteTable {
-		return false
-	}
-	base := rule.Priority == RouteTable && baseRuleMatches(rule)
 	peer := rule.Priority == RouteTable+1 && ownedPeerInterfaceName(rule.IifName) && peerRuleMatches(rule, &netlink.Rule{Priority: RouteTable + 1, IifName: rule.IifName})
-	return base || peer
+	return baseRuleMatches(rule) || operatorRuleMatches(rule) || legacyOperatorRuleMatches(rule) || peer
 }
 
 func ipNet(p netip.Prefix) *net.IPNet {
@@ -482,14 +545,21 @@ func (k *Kernel) Apply(routes []babel.Route) error {
 	// anything. If either was removed out from under this instance, a pool
 	// address with no mesh route would fall through to the host's ordinary
 	// uplink instead of failing closed.
-	if len(k.routes) == 0 || k.routes[0].Priority != 32767 {
+	if len(k.routes) < kernelGuardCount || k.routes[0].Priority != 32767 || k.routes[1].Priority != 32767 {
 		return errors.New("wendy net fallback guard is missing")
 	}
-	if err := netlink.RouteReplace(&k.routes[0]); err != nil {
-		return err
+	for i := range kernelGuardCount {
+		if err := netlink.RouteReplace(&k.routes[i]); err != nil {
+			return err
+		}
 	}
 	if k.rule != nil {
 		if err := netlink.RuleAdd(k.rule); err != nil && !errors.Is(err, unix.EEXIST) {
+			return err
+		}
+	}
+	if k.operatorRule != nil {
+		if err := netlink.RuleAdd(k.operatorRule); err != nil && !errors.Is(err, unix.EEXIST) {
 			return err
 		}
 	}
@@ -519,6 +589,13 @@ func (k *Kernel) Apply(routes []babel.Route) error {
 			n.Gw = net.IP(r.NextHop.AsSlice())
 		}
 		desired = append(desired, n)
+		// Local operator traffic uses its own table; ingress peer rules keep
+		// using the shared device table. Mirror routes that can match the
+		// operator pool, including a signed peer's default route.
+		if r.Prefix.Overlaps(meshoperator.Prefix) {
+			n.Table = operatorRouteTable
+			desired = append(desired, n)
+		}
 	}
 	// Keep the permanent guard. Add/replace before deleting old prefixes, so
 	// neither a withdrawal nor a route change creates a default fallback gap.
@@ -530,7 +607,7 @@ func (k *Kernel) Apply(routes []babel.Route) error {
 		// netlink operation fails. Replace the prior entry for this prefix.
 		found := false
 		for j := range k.routes {
-			if k.routes[j].Priority != 32767 && k.routes[j].Dst.String() == desired[i].Dst.String() {
+			if k.routes[j].Priority != 32767 && k.routes[j].Table == desired[i].Table && k.routes[j].Dst.String() == desired[i].Dst.String() {
 				k.routes[j] = desired[i]
 				found = true
 				break
@@ -546,7 +623,7 @@ func (k *Kernel) Apply(routes []babel.Route) error {
 		}
 		keep := false
 		for _, n := range desired {
-			if n.Dst.String() == old.Dst.String() {
+			if n.Table == old.Table && n.Dst.String() == old.Dst.String() {
 				keep = true
 				break
 			}
@@ -557,7 +634,7 @@ func (k *Kernel) Apply(routes []babel.Route) error {
 			}
 		}
 	}
-	k.routes = append(k.routes[:1], desired...)
+	k.routes = append(k.routes[:kernelGuardCount], desired...)
 	return nil
 }
 
@@ -575,6 +652,10 @@ func (k *Kernel) Close() error {
 	errs = append(errs, k.closeForwarding())
 	for id := range k.peers {
 		errs = append(errs, k.RemovePeer(id))
+	}
+	if k.operatorRule != nil {
+		errs = append(errs, netlink.RuleDel(k.operatorRule))
+		k.operatorRule = nil
 	}
 	if k.rule != nil {
 		errs = append(errs, netlink.RuleDel(k.rule))
@@ -675,29 +756,30 @@ func reclaimReservedStateWith(ops kernelCleanupOps, allowUnavailableQueries bool
 	}
 	var ownedRules []netlink.Rule
 	for _, r := range rules {
-		if r.Table == RouteTable {
-			if !ownedKernelRule(r) {
-				return fmt.Errorf("wendy net route table %d holds a foreign policy rule", RouteTable)
-			}
-			ownedRules = append(ownedRules, r)
-		} else if r.Priority == RouteTable || r.Priority == RouteTable+1 {
-			return fmt.Errorf("wendy net rule priority %d is already in use", r.Priority)
-		}
-	}
-	var ownedRoutes []netlink.Route
-	for _, family := range []int{netlink.FAMILY_V4, netlink.FAMILY_V6} {
-		routes, err := ops.routes(family, &netlink.Route{Table: RouteTable}, netlink.RT_FILTER_TABLE)
-		if allowUnavailableQueries && (errors.Is(err, unix.EAFNOSUPPORT) || errors.Is(err, unix.EOPNOTSUPP)) {
+		if !reservedKernelRule(r) {
 			continue
 		}
-		if err != nil {
-			return kernelOperationError(fmt.Sprintf("inspect route table %d for address family %d", RouteTable, family), "", err)
+		if !ownedKernelRule(r) {
+			return policyRuleConflict("during startup cleanup", r)
 		}
-		for _, r := range routes {
-			if r.Protocol != routeProtocol {
-				return fmt.Errorf("wendy net route table %d holds a foreign route", RouteTable)
+		ownedRules = append(ownedRules, r)
+	}
+	var ownedRoutes []netlink.Route
+	for _, table := range []int{RouteTable, operatorRouteTable} {
+		for _, family := range []int{netlink.FAMILY_V4, netlink.FAMILY_V6} {
+			routes, err := ops.routes(family, &netlink.Route{Table: table}, netlink.RT_FILTER_TABLE)
+			if allowUnavailableQueries && (errors.Is(err, unix.EAFNOSUPPORT) || errors.Is(err, unix.EOPNOTSUPP)) {
+				continue
 			}
-			ownedRoutes = append(ownedRoutes, r)
+			if err != nil {
+				return kernelOperationError(fmt.Sprintf("inspect route table %d for address family %d", table, family), "", err)
+			}
+			for _, r := range routes {
+				if r.Protocol != routeProtocol {
+					return fmt.Errorf("wendy net route table %d holds a foreign route: %v", table, r)
+				}
+				ownedRoutes = append(ownedRoutes, r)
+			}
 		}
 	}
 	for _, r := range ownedRules {

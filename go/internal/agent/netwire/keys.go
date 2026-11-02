@@ -115,6 +115,8 @@ func Key(name string) string {
 		return "n"
 	case "offset":
 		return "f"
+	case "owner":
+		return "o"
 	case "op":
 		return "o"
 	case "operator":

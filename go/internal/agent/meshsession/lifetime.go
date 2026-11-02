@@ -43,7 +43,7 @@ func verifiedSessionExpiry(credentials *localmesh.Credentials, state tls.Connect
 	if err != nil {
 		return time.Time{}, err
 	}
-	if local.Device != credentials.Device || peer.Device.Tenant() != local.Device.Tenant() || peer.Device == local.Device {
+	if local.Device.Principal() != credentials.Device.Principal() || peer.Device.Tenant() != local.Device.Tenant() || peer.Device.Principal() == local.Device.Principal() {
 		return time.Time{}, errors.New("net app session identity changed")
 	}
 	expires := local.NotAfter

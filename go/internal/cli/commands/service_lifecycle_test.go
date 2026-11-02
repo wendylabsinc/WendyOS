@@ -621,8 +621,21 @@ func TestServiceHookRunner_ReapWaitsCliHook(t *testing.T) {
 
 	runCtx, runCancel := context.WithCancel(context.Background())
 	r.startAsync(runCtx, cfg)
+	done := make(chan struct{})
+	go func() {
+		<-runCtx.Done()
+		r.reap()
+		close(done)
+	}()
+	defer func() {
+		runCancel()
+		<-done
+	}()
 
 	waitForFile(t, sentinel, 3*time.Second)
+	// The child can touch the file before Start returns and runOne registers
+	// its command. Wait for registration before inspecting the tracked list.
+	r.wg.Wait()
 	r.mu.Lock()
 	tracked := len(r.cmds)
 	r.mu.Unlock()
@@ -631,12 +644,6 @@ func TestServiceHookRunner_ReapWaitsCliHook(t *testing.T) {
 	}
 
 	runCancel()
-
-	done := make(chan struct{})
-	go func() {
-		r.reap()
-		close(done)
-	}()
 
 	select {
 	case <-done:

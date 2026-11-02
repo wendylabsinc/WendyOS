@@ -76,7 +76,25 @@ func dialTLS(ctx context.Context, credentials *localmesh.Credentials, peer meshi
 	return dialTLSRequest(ctx, credentials, peer, address, port, nil)
 }
 
+// DialTLSWithDialer uses the ordinary end-to-end TLS and WAS1 app authorization
+// over a caller-owned packet network. The dialer must preserve that network's
+// authenticated local address; it does not replace peer or port authorization.
+func DialTLSWithDialer(ctx context.Context, credentials *localmesh.Credentials, peer meshid.Device, address netip.AddrPort, port uint16, dial func(context.Context, string, string) (net.Conn, error)) (net.Conn, error) {
+	if dial == nil {
+		return nil, errors.New("missing app network dialer")
+	}
+	return dialTLSWithDialer(ctx, credentials, peer, address, port, nil, dial)
+}
+
 func dialTLSRequest(ctx context.Context, credentials *localmesh.Credentials, peer meshid.Device, address netip.AddrPort, port uint16, datagrams *uint16) (*tlsAppConn, error) {
+	dialer := net.Dialer{}
+	if credentials != nil && meshid.MeshPrefix.Contains(address.Addr()) {
+		dialer.LocalAddr = &net.TCPAddr{IP: net.IP(credentials.Device.MeshAddress().AsSlice())}
+	}
+	return dialTLSWithDialer(ctx, credentials, peer, address, port, datagrams, dialer.DialContext)
+}
+
+func dialTLSWithDialer(ctx context.Context, credentials *localmesh.Credentials, peer meshid.Device, address netip.AddrPort, port uint16, datagrams *uint16, dial func(context.Context, string, string) (net.Conn, error)) (*tlsAppConn, error) {
 	if credentials == nil || port == 0 || !address.IsValid() || address.Port() == 0 {
 		return nil, errors.New("invalid TLS app dial")
 	}
@@ -89,11 +107,7 @@ func dialTLSRequest(ctx context.Context, credentials *localmesh.Credentials, pee
 	config.SessionTicketsDisabled = true
 	bounded, cancel := context.WithTimeout(ctx, TLSAppSessionSetupTimeout)
 	defer cancel()
-	dialer := net.Dialer{}
-	if meshid.MeshPrefix.Contains(address.Addr()) {
-		dialer.LocalAddr = &net.TCPAddr{IP: net.IP(credentials.Device.MeshAddress().AsSlice())}
-	}
-	raw, err := dialer.DialContext(bounded, "tcp", address.String())
+	raw, err := dial(bounded, "tcp", address.String())
 	if err != nil {
 		return nil, err
 	}
@@ -243,12 +257,21 @@ func (s *Server) TLSAddr() net.Addr {
 
 // RunTLS calls ready, when supplied, after binding the TLS listener.
 func (s *Server) RunTLS(ctx context.Context, addr string, ready ...func()) error {
-	run, cancel := context.WithCancel(ctx)
-	defer cancel()
-	listener, err := listenAppTCP(run, s.credentials, addr)
+	listener, err := listenAppTCP(ctx, s.credentials, addr)
 	if err != nil {
 		return err
 	}
+	return s.ServeTLS(ctx, listener, ready...)
+}
+
+// ServeTLS owns a packet-network listener and applies the same bounded TLS and
+// running-app port authorization as the native listener.
+func (s *Server) ServeTLS(ctx context.Context, listener net.Listener, ready ...func()) error {
+	if listener == nil {
+		return errors.New("missing app TLS listener")
+	}
+	run, cancel := context.WithCancel(ctx)
+	defer cancel()
 	s.mu.Lock()
 	if s.closed || s.tlsListener != nil {
 		s.mu.Unlock()

@@ -81,13 +81,14 @@ func (t Tenant) String() string {
 // IsValid distinguishes a parsed tenant UUID (including nil) from the zero value.
 func (t Tenant) IsValid() bool { return t.valid }
 
-// Device is the stable device component of a certificate principal: the wendy net
-// identity used for addressing, peer pinning, and link ordering. Renewal
-// preserves the principal and wendy net address; a newly enrolled identity has a
-// newly derived address.
+// Device is the routing API identity. Enrolled devices retain their exact UUID
+// address contract; an explicit operator peer retains its actual certificate
+// principal and binds a separate installation UUID/address through PeerFromPrincipal
+// and WithInstance. DeviceFromPrincipal and DeviceFromCert remain device-only.
 type Device struct {
-	tenant Tenant
-	id     uuid.UUID
+	tenant   Tenant
+	id       uuid.UUID
+	operator string
 }
 
 // NewDevice combines an already authenticated tenant scope with a device
@@ -113,7 +114,7 @@ func ParseDevice(tenant Tenant, text string) (Device, error) {
 	if err != nil {
 		return Device{}, fmt.Errorf("device UUID: %w", err)
 	}
-	return Device{tenant, id}, nil
+	return Device{tenant: tenant, id: id}, nil
 }
 
 // DeviceFromPrincipal parses a complete device principal. The complete device
@@ -133,7 +134,7 @@ func DeviceFromPrincipal(principal string) (Device, error) {
 	if err != nil {
 		return Device{}, fmt.Errorf("device component %q of %s is not a canonical UUID: unsupported for wendy net", identity.EntityID, principal)
 	}
-	return Device{tenant, id}, nil
+	return Device{tenant: tenant, id: id}, nil
 }
 
 // DeviceFromCert extracts the wendy net device identity from a leaf certificate.
@@ -161,6 +162,9 @@ func (d Device) IsValid() bool { return d.tenant.IsValid() }
 func (d Device) Principal() string {
 	if !d.IsValid() {
 		return ""
+	}
+	if d.IsOperator() {
+		return d.operator
 	}
 	return certs.DeviceSPIFFEURI(d.tenant.String(), d.id.String())
 }
@@ -190,6 +194,9 @@ func (d Device) MeshAddress() netip.Addr {
 	if !d.IsValid() {
 		return netip.Addr{}
 	}
+	if d.IsOperator() {
+		return d.operatorAddress()
+	}
 	return MeshAddressFor(d.id)
 }
 
@@ -201,7 +208,14 @@ func InMesh(a netip.Addr) bool {
 // Compare orders devices by their complete 16-byte UUID as unsigned values in
 // standard network byte order. Any pre-handshake connection-selection
 // heuristic must converge on this ordering once the full identity is known.
-func Compare(a, b Device) int { return bytes.Compare(a.id[:], b.id[:]) }
+func Compare(a, b Device) int {
+	if a.IsOperator() || b.IsOperator() {
+		if c := bytes.Compare([]byte(a.Principal()), []byte(b.Principal())); c != 0 {
+			return c
+		}
+	}
+	return bytes.Compare(a.id[:], b.id[:])
+}
 
 // LinkLocalAddresses assigns complementary link-local addresses for a
 // point-to-point TUN from the full device UUIDs: lower UUID fe80::1, higher

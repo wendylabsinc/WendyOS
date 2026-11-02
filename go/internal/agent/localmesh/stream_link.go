@@ -72,47 +72,71 @@ func OpenStreamHello(ctx context.Context, conn net.Conn, self, peer meshid.Devic
 // OpenStreamHelloWithALPN binds the hello to one explicit carrier protocol.
 // Ordinary router streams require StreamALPN before node admission.
 func OpenStreamHelloWithALPN(ctx context.Context, conn net.Conn, self, peer meshid.Device, alpn string) error {
+	_, err := openStreamHelloPeer(ctx, conn, self, peer, alpn)
+	return err
+}
+
+func openStreamHelloPeer(ctx context.Context, conn net.Conn, self, peer meshid.Device, alpn string) (meshid.Device, error) {
 	if alpn != StreamALPN {
-		return errors.New("unsupported net stream protocol")
+		return peer, errors.New("unsupported net stream protocol")
 	}
 	tlsConn, ok := conn.(*tls.Conn)
 	if !ok {
-		return errors.New("wendy net stream requires TLS")
+		return peer, errors.New("wendy net stream requires TLS")
 	}
 	state := tlsConn.ConnectionState()
 	if !state.HandshakeComplete || state.Version != tls.VersionTLS13 || state.NegotiatedProtocol != alpn || len(state.PeerCertificates) == 0 {
-		return errors.New("wendy net stream TLS is not authenticated")
+		return peer, errors.New("wendy net stream TLS is not authenticated")
 	}
-	if self.Principal() == peer.Principal() {
-		return errors.New("self wendy net stream")
+	if self == peer {
+		return peer, errors.New("self wendy net stream")
 	}
 	if self.Tenant() != peer.Tenant() {
-		return errors.New("wendy net peer is outside the tenant")
+		return peer, errors.New("wendy net peer is outside the tenant")
 	}
 	deadline := time.Now().Add(5 * time.Second)
 	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
 		deadline = d
 	}
 	if err := conn.SetDeadline(deadline); err != nil {
-		return err
+		return peer, err
 	}
 	defer conn.SetDeadline(time.Time{})
 	version := StreamProtocolVersion
-	if err := WriteControl(conn, ControlMessage{Kind: "hello", Hello: &LinkHello{Version: version, Device: self.UUID(), Peer: peer.UUID(), MTU: TunnelMTU, Datagram: DatagramLimit}}); err != nil {
-		return err
+	hello := &LinkHello{Version: version, Device: self.UUID(), Peer: peer.UUID(), MTU: TunnelMTU, Datagram: DatagramLimit}
+	if self.IsOperator() {
+		hello.Owner = &OperatorOwner{Principal: self.Principal(), Instance: self.UUID()}
+	}
+	if err := WriteControl(conn, ControlMessage{Kind: "hello", Hello: hello}); err != nil {
+		return peer, err
 	}
 	m, err := ReadControl(conn)
 	if err != nil {
-		return err
+		return peer, err
 	}
 	if m.Kind != "hello" || m.Hello == nil {
-		return errors.New("missing wendy net stream hello")
+		return peer, errors.New("missing wendy net stream hello")
 	}
 	h := m.Hello
-	if !validStreamHelloVersion(h, self, peer, version) {
-		return errors.New("invalid wendy net stream hello")
+	if peer.IsOperator() {
+		if h.Owner == nil || h.Owner.Principal != peer.Principal() {
+			return peer, errors.New("operator hello owner mismatch")
+		}
+		bound, err := peer.WithInstance(h.Owner.Instance)
+		if err != nil {
+			return peer, err
+		}
+		if peer.UUID() != ([16]byte{}) && peer != bound {
+			return peer, errors.New("operator hello instance mismatch")
+		}
+		peer = bound
+	} else if h.Owner != nil {
+		return peer, errors.New("device hello has operator owner")
 	}
-	return nil
+	if !validStreamHelloVersion(h, self, peer, version) {
+		return peer, errors.New("invalid wendy net stream hello")
+	}
+	return peer, nil
 }
 
 // streamNodeLink multiplexes directory control and Babel/IP packets on one

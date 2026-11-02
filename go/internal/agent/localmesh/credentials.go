@@ -14,8 +14,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/wendylabsinc/wendy/go/internal/agent/mtls"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
+	"github.com/wendylabsinc/wendy/go/internal/shared/meshoperator"
 )
 
 // Credentials reuses the agent's provisioned signer and ML-DSA-aware trust
@@ -28,6 +30,7 @@ import (
 // uses the same device UUID for asset_id; certificate and tenant verification
 // still establish the complete authenticated principal.
 type Credentials struct {
+	primaryRoots   []*x509.Certificate
 	Device         meshid.Device
 	Certificate    tls.Certificate
 	Signer         crypto.Signer
@@ -39,11 +42,34 @@ type Credentials struct {
 	issuerDigest   string
 }
 
+// SupportsPrimaryOperators reports whether this enrolled identity has locally
+// selected primary trust anchors. Discovery does not supply these anchors.
+func (c *Credentials) SupportsPrimaryOperators() bool { return c != nil && len(c.primaryRoots) > 0 }
+
+// VerifyPrimaryOperator preserves the separate operator role and primary trust
+// policy when another carrier accepts the ordinary operator attachment ALPN.
+func (c *Credentials) VerifyPrimaryOperator(chain [][]byte, now time.Time) (meshoperator.VerifiedOperator, error) {
+	if c == nil {
+		return meshoperator.VerifiedOperator{}, errors.New("missing enrolled credentials")
+	}
+	return meshoperator.VerifyPrimary(chain, c.primaryRoots, c.Device.Tenant(), now)
+}
+
 // NewCredentials loads the provisioned identity and derives the local-mesh
 // identity from its leaf. Certificates without a device principal — asset, user,
 // service, or legacy numeric principals — are refused outright; there is no
 // fallback identity.
 func NewCredentials(certPEM, chainPEM, keyPEM string) (*Credentials, error) {
+	return newCredentials(certPEM, chainPEM, keyPEM, uuid.Nil, false)
+}
+
+// NewOperatorCredentials is an explicit primary operator role. It never enrolls
+// the host or changes the principal into a device. The instance survives renewal.
+func NewOperatorCredentials(certPEM, chainPEM, keyPEM string, instance uuid.UUID) (*Credentials, error) {
+	return newCredentials(certPEM, chainPEM, keyPEM, instance, true)
+}
+
+func newCredentials(certPEM, chainPEM, keyPEM string, instance uuid.UUID, operator bool) (*Credentials, error) {
 	base, err := mtls.NewClientTLSConfig(certPEM, chainPEM, keyPEM, nil)
 	if err != nil {
 		return nil, err
@@ -59,9 +85,18 @@ func NewCredentials(certPEM, chainPEM, keyPEM string) (*Credentials, error) {
 	if err != nil {
 		return nil, err
 	}
-	self, err := meshid.DeviceFromCert(leaf)
+	self, err := meshid.PeerFromCert(leaf)
 	if err != nil {
 		return nil, err
+	}
+	if self.IsOperator() != operator {
+		return nil, errors.New("mesh credential role does not match constructor")
+	}
+	if operator {
+		self, err = self.WithInstance(instance)
+		if err != nil {
+			return nil, err
+		}
 	}
 	signer, ok := cert.PrivateKey.(crypto.Signer)
 	if !ok {
@@ -73,12 +108,20 @@ func NewCredentials(certPEM, chainPEM, keyPEM string) (*Credentials, error) {
 	}
 	// Mesh requires a verified issuer path for its own identity too. The
 	// general mTLS loopback shortcut must not extend an expired local issuer.
-	if _, err := verifyChain(cert.Certificate, time.Now()); err != nil {
+	if _, err := verifyChain(cert.Certificate, time.Now()); err != nil && !operator {
 		return nil, err
 	}
 	anchors, err := mtls.PeerTrustAnchors(chainPEM)
 	if err != nil {
 		return nil, err
+	}
+	primaryRoots := make([]*x509.Certificate, 0, len(anchors))
+	for _, der := range anchors {
+		root, err := x509.ParseCertificate(der)
+		if err != nil {
+			return nil, err
+		}
+		primaryRoots = append(primaryRoots, root)
 	}
 	verify := func(chain [][]byte, now time.Time) (Identity, error) {
 		if len(chain) == 0 || len(chain) > 16 {
@@ -91,15 +134,11 @@ func NewCredentials(certPEM, chainPEM, keyPEM string) (*Credentials, error) {
 				return Identity{}, err
 			}
 		}
-		expires, err := verifyChain(chain, now)
-		if err != nil {
-			return Identity{}, err
-		}
 		peerLeaf, err := x509.ParseCertificate(chain[0])
 		if err != nil {
 			return Identity{}, err
 		}
-		device, err := meshid.DeviceFromCert(peerLeaf)
+		device, err := meshid.PeerFromCert(peerLeaf)
 		if err != nil {
 			return Identity{}, err
 		}
@@ -109,7 +148,23 @@ func NewCredentials(certPEM, chainPEM, keyPEM string) (*Credentials, error) {
 		if now.Before(peerLeaf.NotBefore) || !now.Before(peerLeaf.NotAfter) {
 			return Identity{}, errors.New("wendy net identity is not currently valid")
 		}
+		var expires time.Time
+		if device.IsOperator() {
+			verified, err := meshoperator.VerifyPrimary(chain, primaryRoots, self.Tenant(), now)
+			if err != nil {
+				return Identity{}, err
+			}
+			expires = verified.NotAfter()
+		} else {
+			expires, err = verifyChain(chain, now)
+			if err != nil {
+				return Identity{}, err
+			}
+		}
 		return Identity{Device: device, NotAfter: expires}, nil
+	}
+	if _, err := verify(cert.Certificate, time.Now()); err != nil {
+		return nil, err
 	}
 	// The enrolled PEM material and ML-DSA-aware trust chain are immutable for
 	// this Credentials incarnation. Parse each peer's pinned TLS config once;
@@ -124,7 +179,7 @@ func NewCredentials(certPEM, chainPEM, keyPEM string) (*Credentials, error) {
 	peerConfigs := make(map[meshid.Device]*list.Element)
 	var peerRecency list.List
 
-	credentials := &Credentials{Device: self, Certificate: cert, Signer: signer, Verify: verify, issuerDigest: anchoredIssuerDigest(cert.Certificate[1:], anchors), peerTLS: func(peer meshid.Device) (*tls.Config, error) {
+	credentials := &Credentials{primaryRoots: primaryRoots, Device: self, Certificate: cert, Signer: signer, Verify: verify, issuerDigest: anchoredIssuerDigest(cert.Certificate[1:], anchors), peerTLS: func(peer meshid.Device) (*tls.Config, error) {
 		peerMu.Lock()
 		defer peerMu.Unlock()
 		if cached := peerConfigs[peer]; cached != nil {
@@ -185,7 +240,7 @@ func pinPeer(config *tls.Config, peer meshid.Device) {
 		if err != nil {
 			return err
 		}
-		device, err := meshid.DeviceFromCert(leaf)
+		device, err := meshid.PeerFromCert(leaf)
 		if err != nil {
 			return err
 		}
@@ -218,7 +273,7 @@ func pinPeer(config *tls.Config, peer meshid.Device) {
 // PeerTLS builds the client configuration for one configured peer, pinned to
 // that peer's full device principal.
 func (c *Credentials) PeerTLS(peer meshid.Device) (*tls.Config, error) {
-	if peer.Principal() == c.Device.Principal() {
+	if peer == c.Device {
 		return nil, errors.New("self link")
 	}
 	if peer.Tenant() != c.Device.Tenant() {

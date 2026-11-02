@@ -50,7 +50,7 @@ func DecodeManifest(body []byte) (Manifest, error) {
 	types := map[string]byte{
 		"version": 0, "device": 3, "revision": 0, "Issued": 0, "Expires": 0,
 		"name": 3, "agentPort": 0, "agentTransport": 3, "platform": 3,
-		"caps": 4, "requires": 4, "withdraw": 7, "route": 5, "appEndpoints": 4, "s": 4,
+		"owner": 5, "caps": 4, "requires": 4, "withdraw": 7, "route": 5, "appEndpoints": 4, "s": 4,
 	}
 	if err := manifestFieldTypes(fields, types, "version", "device", "revision", "Issued", "Expires", "agentPort", "route"); err != nil {
 		return m, err
@@ -73,6 +73,7 @@ func DecodeManifest(body []byte) (Manifest, error) {
 	// Decode only the supported optional entries into today's typed view.
 	// This local map is not the signed body: all verification and forwarding
 	// continue using the caller's exact immutable body and envelope bytes.
+	optionalDeviceEntries := manifestHasEntries(fields[netwire.Key("appEndpoints")]) || manifestHasEntries(fields["s"])
 	delete(fields, netwire.Key("appEndpoints"))
 	delete(fields, "s")
 	projection, err := netwire.Marshal(fields)
@@ -81,6 +82,9 @@ func DecodeManifest(body []byte) (Manifest, error) {
 	}
 	if err := netwire.UnmarshalExtensibleArtifact(projection, &m, MaxManifestBytes); err != nil {
 		return m, err
+	}
+	if m.Owner != nil && optionalDeviceEntries {
+		return m, errors.New("operator origin does not advertise device capabilities")
 	}
 	m.AppEndpoints, m.Services = endpoints, services
 	if err := validateNativeAgentMetadata(m.Platform, m.Caps); err != nil {
