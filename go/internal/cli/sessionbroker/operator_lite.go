@@ -30,7 +30,7 @@ const (
 
 // OperatorTargetInfo describes the authenticated adjacent router's current
 // observation. Destination TLS still authenticates the exact selected device.
-const operatorIPCVersion = 2
+const operatorIPCVersion = 6
 
 // Both principal fields can contain a complete valid operator URI.
 const operatorContextBytes = 2*operatorJSONPrincipalBytes + 256
@@ -43,6 +43,7 @@ type operatorContextStatus struct {
 }
 
 type OperatorTargetInfo struct {
+	InternetSharing   bool     `json:"internetSharing,omitempty"`
 	Selector          string   `json:"selector"`
 	Principal         string   `json:"principal"`
 	Tenant            string   `json:"tenant"`
@@ -72,13 +73,13 @@ func (r *operatorTargets) managementInfo(ctx context.Context) (OperatorTargetInf
 	if err != nil || target.Tenant() != operator.Tenant() {
 		return OperatorTargetInfo{}, status.Error(codes.InvalidArgument, "mesh target differs from the selected operator tenant")
 	}
-	// First attachment currently requires WendyOS. Its existing pinned management
-	// stream identifies the adjacent target without requiring a routed hop.
+	// Legacy fixtures can identify their WendyOS neighbour directly. A local
+	// routing participant always resolves capabilities from signed manifests.
 	_, adjacent, err := r.adjacentPeer()
 	if err != nil && r.localSnapshot == nil {
 		return OperatorTargetInfo{}, err
 	}
-	if err == nil && target == adjacent {
+	if err == nil && target == adjacent && r.localSnapshot == nil {
 		return OperatorTargetInfo{Selector: MeshSelector(target), Principal: target.Principal(), Tenant: target.Tenant().String(), Device: target.UUID().String(), Platform: "WendyOS", Transport: "mtls-v1", OperatorPrincipal: operator.Principal()}, nil
 	}
 	view, err := r.lookupTopology(ctx, target)
@@ -95,6 +96,9 @@ func (r *operatorTargets) managementInfo(ctx context.Context) (OperatorTargetInf
 }
 
 func (r *operatorTargets) localManagement(stream grpc.ServerStream, a *activity) (bool, error) {
+	if handled, err := r.localInternet(stream, a); handled {
+		return true, err
+	}
 	if handled, err := r.localApp(stream, a); handled {
 		return true, err
 	}
