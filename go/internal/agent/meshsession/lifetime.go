@@ -39,7 +39,7 @@ func verifiedSessionExpiry(credentials *localmesh.Credentials, state tls.Connect
 	for _, cert := range state.PeerCertificates {
 		chain = append(chain, cert.Raw)
 	}
-	peer, err := credentials.Verify(chain, now)
+	peer, err := credentials.VerifyTLS(chain, now)
 	if err != nil {
 		return time.Time{}, err
 	}

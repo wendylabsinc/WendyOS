@@ -59,7 +59,7 @@ func openRouterControl(ctx context.Context, conn *quic.Conn, self, peer meshid.D
 		return nil, 0, errors.New("wendy net peer is outside the tenant")
 	}
 	state := conn.ConnectionState()
-	if state.TLS.NegotiatedProtocol != LinkALPN || !state.SupportsDatagrams.Local || !state.SupportsDatagrams.Remote {
+	if ApplicationProtocol(state.TLS.NegotiatedProtocol) != LinkALPN || !state.SupportsDatagrams.Local || !state.SupportsDatagrams.Remote {
 		return nil, 0, errors.New("incompatible wendy net transport")
 	}
 	capacity, err := conn.CurrentMaxDatagramPayloadSize()

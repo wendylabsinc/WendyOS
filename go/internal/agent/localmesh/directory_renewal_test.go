@@ -59,7 +59,7 @@ func (a manifestTestAuthority) issue(t testing.TB, now time.Time, key *ecdsa.Pri
 	if err != nil {
 		t.Fatal(err)
 	}
-	creds, err := NewCredentials(string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})), a.pem, string(pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})))
+	creds, err := newTestCredentials(string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})), a.pem, string(pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -11,6 +11,7 @@ import (
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/interceptor"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
+	"github.com/wendylabsinc/wendy/go/internal/shared/meshalpn"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshoperatorlink"
 	"go.uber.org/zap"
@@ -115,6 +116,13 @@ func NewServer(certPEM, chainPEM, keyPEM string, logger *zap.Logger, notBeforeFl
 	if err != nil {
 		return nil, fmt.Errorf("creating TLS config: %w", err)
 	}
+
+	known, err := parseCertsFromPEM([]byte(chainPEM))
+	if err != nil {
+		return nil, fmt.Errorf("parsing agent issuer material: %w", err)
+	}
+	tlsConfig.NextProtos = []string{"h2"}
+	meshalpn.NewCertificates(tlsConfig.Certificates[0], known).ConfigureServer(tlsConfig)
 
 	creds := meshoperatorlink.AgentTransportCredentials(credentials.NewTLS(tlsConfig))
 	opts := []grpc.ServerOption{

@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"time"
 )
@@ -79,7 +80,7 @@ func VerifyPeerCertificateChainExpiry(leaf *x509.Certificate, peers, roots []*x5
 		}
 		seen[string(child.Raw)] = true
 		defer delete(seen, string(child.Raw))
-		lastErr := fmt.Errorf("peer certificate issuer not found in trusted CA chain")
+		var lastErr error = &IssuerPathError{Err: fmt.Errorf("peer certificate issuer not found in trusted CA chain")}
 		for _, ca := range candidates {
 			if !bytes.Equal(ca.RawSubject, child.RawIssuer) {
 				continue
@@ -100,6 +101,9 @@ func VerifyPeerCertificateChainExpiry(leaf *x509.Certificate, peers, roots []*x5
 			}
 			if err != nil {
 				lastErr = err
+				if !errors.Is(err, x509.ErrUnsupportedAlgorithm) {
+					lastErr = &IssuerPathError{Err: err}
+				}
 				continue
 			}
 			for _, root := range roots {
@@ -122,7 +126,8 @@ func VerifyPeerCertificateChainExpiry(leaf *x509.Certificate, peers, roots []*x5
 		}
 		return time.Time{}, lastErr
 	}
-	return walk(leaf, 0)
+	expires, err := walk(leaf, 0)
+	return expires, ClassifyIssuerFailure(err, leaf, peers, roots, usage, now, leafNow)
 }
 
 func permitsUsage(cert *x509.Certificate, usage x509.ExtKeyUsage) bool {

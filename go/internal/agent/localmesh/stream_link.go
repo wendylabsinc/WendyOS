@@ -85,7 +85,7 @@ func openStreamHelloPeer(ctx context.Context, conn net.Conn, self, peer meshid.D
 		return peer, errors.New("wendy net stream requires TLS")
 	}
 	state := tlsConn.ConnectionState()
-	if !state.HandshakeComplete || state.Version != tls.VersionTLS13 || state.NegotiatedProtocol != alpn || len(state.PeerCertificates) == 0 {
+	if !state.HandshakeComplete || state.Version != tls.VersionTLS13 || ApplicationProtocol(state.NegotiatedProtocol) != alpn || len(state.PeerCertificates) == 0 {
 		return peer, errors.New("wendy net stream TLS is not authenticated")
 	}
 	if self == peer {

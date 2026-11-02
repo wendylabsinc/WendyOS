@@ -26,7 +26,6 @@ import (
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/keepalive"
 )
@@ -525,8 +524,12 @@ func ConnectWithTLSExpecting(ctx context.Context, address string, certInfo *conf
 		return nil, err
 	}
 
+	transport, err := newIssuerTransport(tlsCfg, certInfo.PemCertificateChain)
+	if err != nil {
+		return nil, err
+	}
 	opts := []grpc.DialOption{
-		grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)),
+		grpc.WithTransportCredentials(transport),
 		grpc.WithInitialWindowSize(grpcInitialStreamWindow),
 		grpc.WithInitialConnWindowSize(grpcInitialConnWindow),
 		grpc.WithReadBufferSize(grpcReadBufferSize),

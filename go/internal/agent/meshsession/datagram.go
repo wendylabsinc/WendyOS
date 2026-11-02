@@ -244,7 +244,7 @@ func (s *Server) serveDatagrams(parent context.Context, conn *quic.Conn, port ui
 	for _, cert := range conn.ConnectionState().TLS.PeerCertificates {
 		chain = append(chain, cert.Raw)
 	}
-	identity, err := s.credentials.Verify(chain, time.Now())
+	identity, err := s.credentials.VerifyTLS(chain, time.Now())
 	if err != nil {
 		return
 	}

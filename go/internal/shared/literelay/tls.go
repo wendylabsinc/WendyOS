@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
+	"github.com/wendylabsinc/wendy/go/internal/shared/meshalpn"
 )
 
 func DeviceTLSConfig(ctx context.Context, cert tls.Certificate, chain, deviceID string, lite LiteDeviceCAChain) (*tls.Config, error) {
@@ -64,5 +65,10 @@ func DeviceTLSConfig(ctx context.Context, cert tls.Certificate, chain, deviceID 
 			return r.chain, r.err
 		}))
 	}
+	known, err := certs.ParseCertsFromPEM([]byte(chain))
+	if err != nil {
+		return nil, err
+	}
+	meshalpn.NewCertificates(cert, known).ConfigureClient(cfg, meshalpn.WendyCom)
 	return cfg, nil
 }

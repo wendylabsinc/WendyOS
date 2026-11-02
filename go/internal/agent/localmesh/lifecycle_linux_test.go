@@ -72,7 +72,7 @@ func TestMeshLifecyclePeerProcess(t *testing.T) {
 	if err = json.Unmarshal(data, &config); err != nil {
 		t.Fatal(err)
 	}
-	credentials, err := NewCredentials(config.Cert, config.Chain, config.Key)
+	credentials, err := newTestCredentials(config.Cert, config.Chain, config.Key)
 	if err != nil {
 		t.Fatal(err)
 	}

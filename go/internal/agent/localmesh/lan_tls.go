@@ -17,7 +17,7 @@ func lanAuthenticatedPeer(c *Credentials, state tls.ConnectionState) (meshid.Dev
 	for i, cert := range state.PeerCertificates {
 		chain[i] = cert.Raw
 	}
-	id, err := c.Verify(chain, time.Now())
+	id, err := c.VerifyTLS(chain, time.Now())
 	if err != nil {
 		return meshid.Device{}, err
 	}
@@ -45,6 +45,7 @@ func lanServerTLS(c *Credentials) (*tls.Config, error) {
 	}
 	// Unknown-peer listeners have a separate, bounded server ticket domain.
 	// Pinned outbound QUIC still uses the existing per-peer link client cache.
+	c.ConfigureTLSServer(config)
 	c.ServerTicketStore(LinkALPN, "lan-udp").Configure(config)
 	return config, nil
 }
