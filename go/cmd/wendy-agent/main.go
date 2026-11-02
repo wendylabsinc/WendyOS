@@ -1079,7 +1079,9 @@ func main() {
 		logger.Info("wendy net: VIP table loaded", zap.Int("allocated", stats.Allocated), zap.Int("retired", stats.Retired), zap.Int("capacity", stats.Capacity))
 	}
 	sessionIngress := meshsession.WithAgentServiceDial(meshIngress, uint16(mtlsPortNum), func() (net.Conn, error) {
-		return meshNativeListener.DialContext(ctx)
+		dialCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		return meshNativeListener.DialContext(dialCtx)
 	})
 	startConfiguredLocalMesh := func(certPEM, chainPEM, keyPEM string) {
 		if runtime.GOOS != "linux" {
