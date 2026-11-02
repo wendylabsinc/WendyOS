@@ -30,6 +30,36 @@ import (
 // certs remain valid when the device clock has not yet been synchronised via NTP. Pass a
 // zero time.Time to disable the floor.
 func NewTLSConfig(certPEM, chainPEM, keyPEM string, logger *zap.Logger, notBeforeFloor time.Time) (*tls.Config, error) {
+	return newTLSConfig(certPEM, chainPEM, keyPEM, logger, func(now, nb time.Time) time.Time { return effectiveVerificationTime(now, notBeforeFloor, nb) }, time.Now)
+}
+
+// NewTLSConfigWithTimePolicy selects an explicit local boot-clock policy.
+// It never uses an announcement timestamp to establish certificate trust.
+func NewTLSConfigWithTimePolicy(certPEM, chainPEM, keyPEM string, logger *zap.Logger, policy certs.CertificateTimePolicy) (*tls.Config, error) {
+	cfg, err := newTLSConfig(certPEM, chainPEM, keyPEM, logger, policy.LeafTime, policy.WallTime)
+	if err != nil {
+		return nil, err
+	}
+	previous := cfg.VerifyConnection
+	cfg.VerifyConnection = func(state tls.ConnectionState) error {
+		if previous != nil {
+			if err := previous(state); err != nil {
+				return err
+			}
+		}
+		if !state.DidResume {
+			return nil
+		}
+		raw := make([][]byte, len(state.PeerCertificates))
+		for i, c := range state.PeerCertificates {
+			raw[i] = c.Raw
+		}
+		return cfg.VerifyPeerCertificate(raw, nil)
+	}
+	return cfg, nil
+}
+
+func newTLSConfig(certPEM, chainPEM, keyPEM string, logger *zap.Logger, leafTime func(time.Time, time.Time) time.Time, now func() time.Time) (*tls.Config, error) {
 	if chainPEM == "" {
 		return nil, fmt.Errorf("CA chain PEM is required to verify client certificates; device may need to be re-provisioned")
 	}
@@ -62,13 +92,15 @@ func NewTLSConfig(certPEM, chainPEM, keyPEM string, logger *zap.Logger, notBefor
 		// list it sends nothing and the handshake fails with "certificate required".
 		// An empty ClientCAs list signals "accept any CA" — VerifyPeerCertificate
 		// performs the actual ML-DSA-aware chain verification instead.
-		ClientCAs:             nil,
-		MinVersion:            tls.VersionTLS12,
-		VerifyPeerCertificate: buildVerifyPeerCertificate(caPool, caCerts, logger, notBeforeFloor),
+		ClientCAs:  nil,
+		MinVersion: tls.VersionTLS12,
 	}
+	verify := buildPeerCertificateWindowVerifier(caPool, caCerts, logger, leafTime, nil)
+	cfg.VerifyPeerCertificate = func(raw [][]byte, _ [][]*x509.Certificate) error { _, err := verify(raw, now()); return err }
+	cfg.Time = now
 	// Session resumption: stamp the client cert window into tickets and
 	// decline stale ones (see session_ticket.go for the security rationale).
-	wireSessionTicketChecks(cfg, notBeforeFloor, time.Now)
+	wireSessionTicketChecksWithClock(cfg, now, leafTime)
 	// Direct PKI device certificates carry a tenant SPIFFE identity instead
 	// of a legacy numeric org. Keep tenant enforcement active even when the
 	// legacy org interceptor has no numeric identity to compare. VerifyConnection
@@ -117,6 +149,19 @@ func NewServer(certPEM, chainPEM, keyPEM string, logger *zap.Logger, notBeforeFl
 		return nil, fmt.Errorf("creating TLS config: %w", err)
 	}
 
+	return newServerWithTLSConfig(tlsConfig, chainPEM, logger, expected, orgMode, extraOpts...)
+}
+
+func NewServerWithTimePolicy(certPEM, chainPEM, keyPEM string, logger *zap.Logger, policy certs.CertificateTimePolicy, expected certs.Scope, orgMode interceptor.OrgMode, extraOpts ...grpc.ServerOption) (*grpc.Server, error) {
+	cfg, err := NewTLSConfigWithTimePolicy(certPEM, chainPEM, keyPEM, logger, policy)
+	if err != nil {
+		return nil, fmt.Errorf("creating TLS config: %w", err)
+	}
+	return newServerWithTLSConfig(cfg, chainPEM, logger, expected, orgMode, extraOpts...)
+}
+
+func newServerWithTLSConfig(tlsConfig *tls.Config, chainPEM string, logger *zap.Logger, expected certs.Scope, orgMode interceptor.OrgMode, extraOpts ...grpc.ServerOption) (*grpc.Server, error) {
+
 	known, err := parseCertsFromPEM([]byte(chainPEM))
 	if err != nil {
 		return nil, fmt.Errorf("parsing agent issuer material: %w", err)
@@ -163,6 +208,18 @@ func NewClientTLSConfig(certPEM, chainPEM, keyPEM string, logger *zap.Logger) (*
 	if err != nil {
 		return nil, err
 	}
+	return newClientTLSConfig(base)
+}
+
+func NewClientTLSConfigWithTimePolicy(certPEM, chainPEM, keyPEM string, logger *zap.Logger, policy certs.CertificateTimePolicy) (*tls.Config, error) {
+	base, err := NewTLSConfigWithTimePolicy(certPEM, chainPEM, keyPEM, logger, policy)
+	if err != nil {
+		return nil, err
+	}
+	return newClientTLSConfig(base)
+}
+
+func newClientTLSConfig(base *tls.Config) (*tls.Config, error) {
 	if base.VerifyPeerCertificate == nil {
 		// InsecureSkipVerify below is only safe because the custom verifier
 		// replaces Go's built-in one; never hand out a config without it.
@@ -171,6 +228,7 @@ func NewClientTLSConfig(certPEM, chainPEM, keyPEM string, logger *zap.Logger) (*
 	chainVerify := base.VerifyPeerCertificate
 	cfg := &tls.Config{
 		Certificates:          base.Certificates,
+		Time:                  base.Time,
 		MinVersion:            base.MinVersion,
 		InsecureSkipVerify:    true, // verification is NOT disabled: VerifyPeerCertificate below performs the full (ML-DSA-aware) chain check
 		VerifyPeerCertificate: chainVerify,
@@ -218,6 +276,18 @@ func NewClientTLSConfigExpectingDevice(certPEM, chainPEM, keyPEM string, logger 
 	if err != nil {
 		return nil, err
 	}
+	return pinClientDevice(base, certPEM, want), nil
+}
+
+func NewClientTLSConfigExpectingDeviceWithTimePolicy(certPEM, chainPEM, keyPEM string, logger *zap.Logger, want meshid.Device, policy certs.CertificateTimePolicy) (*tls.Config, error) {
+	base, err := NewClientTLSConfigWithTimePolicy(certPEM, chainPEM, keyPEM, logger, policy)
+	if err != nil {
+		return nil, err
+	}
+	return pinClientDevice(base, certPEM, want), nil
+}
+
+func pinClientDevice(base *tls.Config, certPEM string, want meshid.Device) *tls.Config {
 	ownScope, haveOwnScope := certs.ScopeFromCertPEM(certPEM)
 	chainVerify := base.VerifyPeerCertificate
 	pinnedVerify := func(rawCerts [][]byte, verifiedChains [][]*x509.Certificate) error {
@@ -243,7 +313,7 @@ func NewClientTLSConfigExpectingDevice(certPEM, chainPEM, keyPEM string, logger 
 		return nil
 	}
 	applyPeerPin(base, pinnedVerify)
-	return base, nil
+	return base
 }
 
 // NewClientTLSConfigExpectingIdentity is the non-mesh sibling of
@@ -259,6 +329,18 @@ func NewClientTLSConfigExpectingIdentity(certPEM, chainPEM, keyPEM string, logge
 	if err != nil {
 		return nil, err
 	}
+	return pinClientIdentity(base, certPEM, want), nil
+}
+
+func NewClientTLSConfigExpectingIdentityWithTimePolicy(certPEM, chainPEM, keyPEM string, logger *zap.Logger, want certs.WendyIdentity, policy certs.CertificateTimePolicy) (*tls.Config, error) {
+	base, err := NewClientTLSConfigWithTimePolicy(certPEM, chainPEM, keyPEM, logger, policy)
+	if err != nil {
+		return nil, err
+	}
+	return pinClientIdentity(base, certPEM, want), nil
+}
+
+func pinClientIdentity(base *tls.Config, certPEM string, want certs.WendyIdentity) *tls.Config {
 	ownScope, haveOwnScope := certs.ScopeFromCertPEM(certPEM)
 	chainVerify := base.VerifyPeerCertificate
 	pinnedVerify := func(rawCerts [][]byte, verifiedChains [][]*x509.Certificate) error {
@@ -288,7 +370,7 @@ func NewClientTLSConfigExpectingIdentity(certPEM, chainPEM, keyPEM string, logge
 		return nil
 	}
 	applyPeerPin(base, pinnedVerify)
-	return base, nil
+	return base
 }
 
 // applyPeerPin installs pinnedVerify on both handshake paths of a client

@@ -62,21 +62,28 @@ func VerifyPeerCertificateChain(leaf *x509.Certificate, peers, roots []*x509.Cer
 // VerifyPeerCertificateChain and returns the earliest expiry on its successful
 // path. Unused issuers and trust anchors do not affect that path's lifetime.
 func VerifyPeerCertificateChainExpiry(leaf *x509.Certificate, peers, roots []*x509.Certificate, usage x509.ExtKeyUsage, now, leafNow time.Time) (time.Time, error) {
+	window, err := VerifyPeerCertificateChainWindow(leaf, peers, roots, usage, now, leafNow)
+	return window.NotAfter, err
+}
+
+// VerifyPeerCertificateChainWindow additionally returns the latest NotBefore
+// on the exact successful path, for signed claim validity-window checks.
+func VerifyPeerCertificateChainWindow(leaf *x509.Certificate, peers, roots []*x509.Certificate, usage x509.ExtKeyUsage, now, leafNow time.Time) (CertificateWindow, error) {
 	if len(peers) > 32 {
-		return time.Time{}, fmt.Errorf("too many peer certificates")
+		return CertificateWindow{}, fmt.Errorf("too many peer certificates")
 	}
 	if leafNow.Before(leaf.NotBefore) || now.After(leaf.NotAfter) {
-		return time.Time{}, fmt.Errorf("peer certificate not valid at current time")
+		return CertificateWindow{}, fmt.Errorf("peer certificate not valid at current time")
 	}
 	if len(leaf.UnhandledCriticalExtensions) != 0 || !permitsUsage(leaf, usage) {
-		return time.Time{}, fmt.Errorf("peer certificate has unsupported extensions or authentication usage")
+		return CertificateWindow{}, fmt.Errorf("peer certificate has unsupported extensions or authentication usage")
 	}
 	candidates := append(append([]*x509.Certificate(nil), roots...), peers...)
 	seen := map[string]bool{}
-	var walk func(*x509.Certificate, int) (time.Time, error)
-	walk = func(child *x509.Certificate, depth int) (time.Time, error) {
+	var walk func(*x509.Certificate, int) (CertificateWindow, error)
+	walk = func(child *x509.Certificate, depth int) (CertificateWindow, error) {
 		if depth >= 8 || seen[string(child.Raw)] {
-			return time.Time{}, fmt.Errorf("certificate chain is cyclic or too deep")
+			return CertificateWindow{}, fmt.Errorf("certificate chain is cyclic or too deep")
 		}
 		seen[string(child.Raw)] = true
 		defer delete(seen, string(child.Raw))
@@ -108,25 +115,21 @@ func VerifyPeerCertificateChainExpiry(leaf *x509.Certificate, peers, roots []*x5
 			}
 			for _, root := range roots {
 				if bytes.Equal(root.Raw, ca.Raw) {
-					expires := child.NotAfter
-					if ca.NotAfter.Before(expires) {
-						expires = ca.NotAfter
-					}
-					return expires, nil
+					return (CertificateWindow{child.NotBefore, child.NotAfter}).Intersect(CertificateWindow{ca.NotBefore, ca.NotAfter}), nil
 				}
 			}
-			if expires, err := walk(ca, depth+1); err == nil {
-				if child.NotAfter.Before(expires) {
-					expires = child.NotAfter
-				}
-				return expires, nil
+			if window, err := walk(ca, depth+1); err == nil {
+				return window.Intersect(CertificateWindow{child.NotBefore, child.NotAfter}), nil
 			} else {
 				lastErr = err
 			}
 		}
-		return time.Time{}, lastErr
+		return CertificateWindow{}, lastErr
 	}
 	expires, err := walk(leaf, 0)
+	if err == nil && !expires.NotAfter.After(expires.NotBefore) {
+		err = fmt.Errorf("certificate path has no common validity window")
+	}
 	return expires, ClassifyIssuerFailure(err, leaf, peers, roots, usage, now, leafNow)
 }
 
