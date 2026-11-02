@@ -31,7 +31,45 @@ type ClientConfig struct {
 	Instance meshoperator.InstanceID
 	Router   meshid.Device
 	Roots    []*x509.Certificate
+	// IssuerCandidates supplies locally known, untrusted CA candidates when
+	// known-CA TLS omitted them. It must retain every wire certificate first;
+	// the original primary roots, peer pin, role and validity checks still apply.
+	IssuerCandidates IssuerCandidates
 }
+
+// IssuerCandidates completes only missing issuer material; it supplies path
+// candidates to the original verifier, never additional trust anchors.
+type IssuerCandidates func(wire [][]byte, now time.Time) [][]byte
+
+func completePeerCertificates(chain []*x509.Certificate, candidates IssuerCandidates, now time.Time) ([]*x509.Certificate, error) {
+	if candidates == nil {
+		return chain, nil
+	}
+	wire := make([][]byte, len(chain))
+	for i, certificate := range chain {
+		wire[i] = bytes.Clone(certificate.Raw)
+	}
+	complete := candidates(wire, now)
+	if len(complete) < len(wire) || len(complete) > 16 {
+		return nil, errors.New("invalid completed operator peer certificate bundle")
+	}
+	result := append([]*x509.Certificate(nil), chain...)
+	for i, der := range complete {
+		if i < len(wire) {
+			if !bytes.Equal(der, chain[i].Raw) {
+				return nil, errors.New("completed operator peer certificates changed the TLS presentation")
+			}
+			continue
+		}
+		certificate, err := x509.ParseCertificate(der)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, certificate)
+	}
+	return result, nil
+}
+
 type control struct {
 	Stream   uint32                  `cbor:"s,omitempty"`
 	Credit   uint32                  `cbor:"c,omitempty"`
@@ -110,6 +148,10 @@ func verifyRouterState(state tls.ConnectionState, cfg ClientConfig, now time.Tim
 	chain := state.PeerCertificates
 	if !cfg.Router.IsValid() || cfg.Router.Tenant() != cfg.Identity.Operator().Tenant() || len(chain) == 0 || len(chain) > 16 || len(cfg.Roots) == 0 {
 		return time.Time{}, errors.New("missing pinned router or primary trust")
+	}
+	chain, err := completePeerCertificates(chain, cfg.IssuerCandidates, now)
+	if err != nil {
+		return time.Time{}, err
 	}
 	peer, err := meshid.DeviceFromCert(chain[0])
 	if err != nil {
