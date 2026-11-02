@@ -13,17 +13,21 @@ import (
 // Manager coordinates all time-sync sources and applies the best verified time.
 // All sources call Apply; the clock is only ever advanced.
 type Manager struct {
-	logger     *zap.Logger
-	configPath string
-	mu         sync.RWMutex
-	clockMu    sync.Mutex
-	latest     *Consensus
+	logger         *zap.Logger
+	configPath     string
+	mu             sync.RWMutex
+	clockMu        sync.Mutex
+	latest         *Consensus
+	directObserver func(DirectSyncObservation)
 
 	// Injection points for tests of time-sync loops. Nil means use the real
 	// network, clock write and retry timer, so a zero-value Manager still behaves.
-	query func(context.Context, []roughtime.Server) (Consensus, error)
-	apply func(time.Time)
-	sleep func(time.Duration) <-chan time.Time
+	query       func(context.Context, []roughtime.Server) (Consensus, error)
+	apply       func(time.Time)
+	applyResult func(time.Time) error
+	now         func() time.Time
+	boot        func() (int64, error)
+	sleep       func(time.Duration) <-chan time.Time
 
 	multicastListen     func() (multicastPacketConn, error)
 	multicastInterfaces func() ([]net.Interface, error)
@@ -107,5 +111,18 @@ func (m *Manager) Apply(t time.Time) {
 func (m *Manager) advance(t time.Time) error {
 	m.clockMu.Lock()
 	defer m.clockMu.Unlock()
+	return m.applyClock(t)
+}
+
+// applyClock requires clockMu. All production clock writes still use the same
+// advance-only operation; the other branches are isolated test injections.
+func (m *Manager) applyClock(t time.Time) error {
+	if m.applyResult != nil {
+		return m.applyResult(t)
+	}
+	if m.apply != nil {
+		m.apply(t)
+		return nil
+	}
 	return AdvanceTo(t, m.logger)
 }
