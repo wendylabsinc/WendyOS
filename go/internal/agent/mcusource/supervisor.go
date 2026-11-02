@@ -378,7 +378,11 @@ func (s *Supervisor) streamOnce(ctx context.Context, p SensorPairing, addr strin
 	}()
 	for f := range frames {
 		if w := writers[f.ChannelID]; w != nil {
-			if err := w.WriteFrame(frameToCamera(f, cams)); err != nil {
+			frame, ok := frameToCamera(f, cams)
+			if !ok {
+				continue
+			}
+			if err := w.WriteFrame(frame); err != nil {
 				return delivered, err
 			}
 			if !delivered {
@@ -398,12 +402,12 @@ func (s *Supervisor) streamOnce(ctx context.Context, p SensorPairing, addr strin
 	return delivered, nil
 }
 
-// cameraChannels returns the manifest's video channels. The descriptor's
-// format says what kind of sensor it is.
+// cameraChannels returns only video formats the loopback writer supports.
+// Future codecs must not be subscribed to and interpreted as an existing codec.
 func cameraChannels(m *sensorlinkpb.SensorManifest, allow []string) []*sensorlinkpb.SensorDescriptor {
 	var out []*sensorlinkpb.SensorDescriptor
 	for _, d := range m.GetSensors() {
-		if d.GetVideo() == nil {
+		if _, ok := cameraCodec(d.GetVideo()); !ok {
 			continue
 		}
 		if len(allow) > 0 && !contains(allow, d.Name) {
@@ -414,11 +418,12 @@ func cameraChannels(m *sensorlinkpb.SensorManifest, allow []string) []*sensorlin
 	return out
 }
 
-// microphoneChannels returns the manifest's audio channels.
+// microphoneChannels returns only signed 16-bit little-endian PCM channels.
+// The audio loopback writes PCM directly; compressed and future codecs need a decoder.
 func microphoneChannels(m *sensorlinkpb.SensorManifest, allow []string) []*sensorlinkpb.SensorDescriptor {
 	var out []*sensorlinkpb.SensorDescriptor
 	for _, d := range m.GetSensors() {
-		if d.GetAudio() == nil {
+		if a := d.GetAudio(); a == nil || a.Codec != sensorlinkpb.AudioFormat_PCM_S16LE {
 			continue
 		}
 		if len(allow) > 0 && !contains(allow, d.Name) {
@@ -429,20 +434,33 @@ func microphoneChannels(m *sensorlinkpb.SensorManifest, allow []string) []*senso
 	return out
 }
 
-func frameToCamera(f *sensorlink.SensorFrame, cams []*sensorlinkpb.SensorDescriptor) ros2camera.Frame {
-	codec := ros2camera.CodecMJPEG
-	w, h := 0, 0
-	for _, c := range cams {
-		if c.ChannelId == f.ChannelID {
-			if v := c.GetVideo(); v != nil {
-				if v.Codec == sensorlinkpb.VideoFormat_H264 {
-					codec = ros2camera.CodecH264
-				}
-				w, h = int(v.Width), int(v.Height)
-			}
-		}
+func cameraCodec(v *sensorlinkpb.VideoFormat) (ros2camera.Codec, bool) {
+	if v == nil {
+		return 0, false
 	}
-	return ros2camera.Frame{Data: f.Payload, Width: w, Height: h, Codec: codec}
+	switch v.Codec {
+	case sensorlinkpb.VideoFormat_MJPEG:
+		return ros2camera.CodecMJPEG, true
+	case sensorlinkpb.VideoFormat_H264:
+		return ros2camera.CodecH264, true
+	default:
+		return 0, false
+	}
+}
+
+func frameToCamera(f *sensorlink.SensorFrame, cams []*sensorlinkpb.SensorDescriptor) (ros2camera.Frame, bool) {
+	for _, c := range cams {
+		if c.GetChannelId() != f.ChannelID {
+			continue
+		}
+		v := c.GetVideo()
+		codec, ok := cameraCodec(v)
+		if !ok {
+			return ros2camera.Frame{}, false
+		}
+		return ros2camera.Frame{Data: f.Payload, Width: int(v.Width), Height: int(v.Height), Codec: codec}, true
+	}
+	return ros2camera.Frame{}, false
 }
 
 func nodeLabel(p SensorPairing, d *sensorlinkpb.SensorDescriptor) string {
