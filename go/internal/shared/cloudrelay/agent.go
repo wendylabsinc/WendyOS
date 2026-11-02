@@ -184,6 +184,18 @@ func (a *Agent) remember(c claims) {
 		}
 	}
 	a.leases[c.JTI] = c
+	for len(a.leases) > presenceLeaseHistoryLimit {
+		var oldest claims
+		for id, candidate := range a.leases {
+			if id == c.JTI {
+				continue
+			}
+			if oldest.JTI == "" || candidate.Iat < oldest.Iat || candidate.Iat == oldest.Iat && candidate.JTI < oldest.JTI {
+				oldest = candidate
+			}
+		}
+		delete(a.leases, oldest.JTI)
+	}
 }
 func (a *Agent) issue(ctx context.Context) (*pb.IssuePresenceLeaseResponse, claims, error) {
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
@@ -209,6 +221,9 @@ func (a *Agent) issue(ctx context.Context) (*pb.IssuePresenceLeaseResponse, clai
 	}
 	// Cloud already binds new grants to this lease, whatever happens to it next.
 	a.remember(c)
+	if err = a.archivePresenceLease(l, c); err != nil {
+		return nil, c, err
+	}
 	raw, err := proto.Marshal(l)
 	if err != nil {
 		return nil, c, err
@@ -237,6 +252,9 @@ func (a *Agent) runOnce(parent context.Context) error {
 			var l pb.IssuePresenceLeaseResponse
 			if proto.Unmarshal(raw, &l) == nil {
 				if c, e := a.validateLease(ctx, &l); e == nil {
+					if e = a.archivePresenceLease(&l, c); e != nil {
+						return e
+					}
 					a.lease = &l
 					a.leaseClaims = c
 					a.remember(c)
@@ -253,6 +271,9 @@ func (a *Agent) runOnce(parent context.Context) error {
 		a.leaseClaims = c
 	}
 	lease, c := a.lease, a.leaseClaims
+	if err := a.restorePresenceLeases(ctx, c); err != nil {
+		return err
+	}
 	conn, err := a.Verifier.dialRelay(lease.Broker.Endpoint)
 	if err != nil {
 		return err
