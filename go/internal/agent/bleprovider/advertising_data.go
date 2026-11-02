@@ -59,6 +59,14 @@ func parseAdvertisingData(data []byte, tenant string) (advertisingFields, error)
 				return out, ErrInvalidAdvertisement
 			}
 			if bytes.Equal(value[:16], wire[:]) {
+				if len(value) == 16 {
+					return out, ErrInvalidAdvertisement
+				}
+				// Another discovery version can be advertised alongside v1.
+				// Its AD length already delimits it; don't replace a known hint.
+				if value[16] != AdvertisementVersion {
+					continue
+				}
 				if out.servicePresent {
 					return out, ErrInvalidAdvertisement
 				}
