@@ -560,11 +560,17 @@ func (r *runtime) acceptLink(ctx context.Context, raw net.Conn) {
 			}
 			return r.serverTLS, nil
 		}
+		selectedConfig, err := selectConfig()
+		if err != nil {
+			return nil, err
+		}
 		selected := ""
-		for _, protocol := range r.serverTLS.NextProtos {
+		// Reserve the role selected by the alias-aware TLS configuration.
+		// A recognized alias need not be accompanied by its ordinary name.
+		for _, protocol := range selectedConfig.NextProtos {
 			for _, offered := range hello.SupportedProtos {
 				if protocol == offered {
-					selected = protocol
+					selected = localmesh.ApplicationProtocol(protocol)
 					break
 				}
 			}
@@ -581,10 +587,6 @@ func (r *runtime) acceptLink(ctx context.Context, raw net.Conn) {
 					return nil, errors.New("BLE operator attachment capacity reached")
 				}
 			}
-			selectedConfig, err := selectConfig()
-			if err != nil {
-				return nil, err
-			}
 			operatorConfig := selectedConfig.Clone()
 			// Device ticket admission is deliberately separate from primary operators.
 			operatorConfig.SessionTicketsDisabled = true
@@ -598,7 +600,7 @@ func (r *runtime) acceptLink(ctx context.Context, raw net.Conn) {
 			}
 			roleConn.target.Store(&incomingConnectionTarget{conn: lease.TrackIncoming(raw)})
 		}
-		return selectConfig()
+		return selectedConfig, nil
 	}
 	secure := tls.Server(measured, handshakeConfig)
 	meter.start()
