@@ -44,17 +44,36 @@ func OpenStream(ctx context.Context, conn net.Conn) (ReadPage, error) {
 		return nil, err
 	}
 	id := binary.BigEndian.Uint32(random[:])
-	wire := &stream{conn: conn}
+	wire := &stream{conn: conn, limitDiscards: true, discardRemaining: streamDiscardBytes}
 	if err := wire.send(&lite.WendyComMessage{Msg: &lite.WendyComMessage_Handshake{Handshake: &lite.WendyComHandshake{HandshakeId: id, Version: &lite.WendyComProtocolVersion{Major: 2}}}}); err != nil {
 		return nil, err
 	}
-	reply, err := wire.receive()
-	if err != nil {
-		return nil, err
+	matched := false
+	for skipped := 0; skipped < streamReplyFrames; skipped++ {
+		reply, err := wire.receive()
+		if err != nil {
+			return nil, err
+		}
+		switch reply.GetMsg().(type) {
+		case nil, *lite.WendyComMessage_Event:
+			// Unknown oneofs and unsolicited events carry no admission result.
+			if err := wire.discardFrame(); err != nil {
+				return nil, err
+			}
+			continue
+		case *lite.WendyComMessage_Handshake:
+		default:
+			return nil, status.Error(codes.Unimplemented, "unexpected WendyCom message before handshake")
+		}
+		handshake := reply.GetHandshake()
+		if handshake.HandshakeId != id || handshake.GetVersion().GetMajor() != 2 {
+			return nil, status.Error(codes.Unimplemented, "unsupported WendyCom protocol")
+		}
+		matched = true
+		break
 	}
-	handshake := reply.GetHandshake()
-	if handshake == nil || handshake.HandshakeId != id || handshake.GetVersion().GetMajor() != 2 {
-		return nil, status.Error(codes.Unimplemented, "unsupported WendyCom protocol")
+	if !matched {
+		return nil, status.Error(codes.Unavailable, "no matching WendyCom handshake")
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -72,16 +91,20 @@ func OpenStream(ctx context.Context, conn net.Conn) (ReadPage, error) {
 			return nil, err
 		}
 		id++
+		wire.discardRemaining = streamDiscardBytes
 		if err := wire.send(&lite.WendyComMessage{Msg: &lite.WendyComMessage_Command{Command: &lite.WendyComCommand{RequestId: id, Params: &lite.WendyComCommand_NetTopology{NetTopology: params}}}}); err != nil {
 			return nil, err
 		}
-		for skipped := 0; skipped < 32; skipped++ {
+		for skipped := 0; skipped < streamReplyFrames; skipped++ {
 			reply, err := wire.receive()
 			if err != nil {
 				return nil, err
 			}
 			response := reply.GetResponse()
 			if response == nil || response.RequestId != id {
+				if err := wire.discardFrame(); err != nil {
+					return nil, err
+				}
 				continue
 			}
 			if response.Result == lite.WendyComResult_WENDY_COM_RESULT_BUSY {
@@ -96,7 +119,34 @@ func OpenStream(ctx context.Context, conn net.Conn) (ReadPage, error) {
 	}, nil
 }
 
-type stream struct{ conn net.Conn }
+const (
+	streamReplyFrames = 32
+	// Only discarded extensions/unmatched messages consume this budget.
+	// Matching topology pages retain collect's independent 512 KiB limit.
+	streamDiscardBytes = 128 << 10
+)
+
+type stream struct {
+	conn             net.Conn
+	limitDiscards    bool
+	discardRemaining int
+	frameBytes       int
+	frameDiscarded   bool
+}
+
+func (s *stream) discardFrame() error {
+	if s.frameDiscarded {
+		return nil
+	}
+	if s.limitDiscards {
+		if s.frameBytes > s.discardRemaining {
+			return status.Error(codes.ResourceExhausted, "WendyCom extensions exceed discard byte budget")
+		}
+		s.discardRemaining -= s.frameBytes
+	}
+	s.frameDiscarded = true
+	return nil
+}
 
 func (s *stream) send(message *lite.WendyComMessage) error {
 	body, err := proto.Marshal(message)
@@ -125,7 +175,22 @@ func (s *stream) receive() (*lite.WendyComMessage, error) {
 		return nil, err
 	}
 	size := int(binary.BigEndian.Uint16(header[6:]))
-	if header[0] != 0xa5 || header[1] != 2 || header[2] != 0 || header[3] != 0 || size == 0 || size > 4096 {
+	if header[0] != 0xa5 || header[1] != 2 {
+		return nil, fmt.Errorf("invalid WendyCom topology frame")
+	}
+	s.frameBytes, s.frameDiscarded = len(header)+size, false
+	if header[2] != 0 || header[3] != 0 {
+		// The u16 body length delimits a future category/channel even when
+		// its bytes are not protobuf. Keep the original phase deadline.
+		if err := s.discardFrame(); err != nil {
+			return nil, err
+		}
+		if _, err := io.CopyN(io.Discard, s.conn, int64(size)); err != nil {
+			return nil, err
+		}
+		return nil, nil
+	}
+	if size == 0 || size > 4096 {
 		return nil, fmt.Errorf("invalid WendyCom topology frame")
 	}
 	body := make([]byte, size)
