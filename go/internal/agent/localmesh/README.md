@@ -133,18 +133,20 @@ TLS session tickets are disabled; device session-ticket admission is separate.
 
 ## Linux operator policy and warm rollback
 
-Device destinations use IPv6 table/rule priority 18865 and peer ingress uses
-priority 18866. Operator destinations (`fd45:b891:5680::/48`) use their own table
-and priority 18870, with rule protocol 186. UDP VIP and Internet sharing slots
-18867–18869 are separate. Both mesh tables have permanent unreachable defaults;
-operator routes, including applicable learned defaults, are installed in both
-tables so host traffic and peer transit use the same paths.
+Device destinations still use IPv6 table 18865 with rule priority 18865; peer
+ingress retains rule priority 18866. Operator destinations
+(`fd45:b891:5680::/48`) use their own table and priority 18870, with rule
+protocol 186. UDP VIP and Internet sharing slots 18867–18869 are separate.
+Both mesh tables have permanent unreachable defaults; operator routes,
+including applicable learned defaults, are installed in both tables so host
+traffic and peer transit use the same paths.
 
 The separate operator table and priority let pre-operator agents restart and
-complete reset cleanup after a WN5 crash or binary replacement without a reboot.
-Those agents leave the operator rule and unreachable fallback untouched; a later
-WN5 startup/reset reclaims them. Earlier WN5/rehearsal builds placed the operator
-rule at priority 18865 in table 18865. WN5 migrates that exact legacy signature
+complete reset cleanup after a WN5 crash or binary replacement without a
+reboot. Those agents leave the operator rule and unreachable fallback
+untouched; a later WN5 startup/reset reclaims them. Earlier WN5/rehearsal
+builds also placed the operator rule in table 18865 at priority 18865, reusing
+the existing device-policy slot. WN5 migrates that exact legacy signature
 before installing current policy. A device already rolled back to an older
 agent with the legacy rule still needs a reboot, removal of that exact stale
 rule while mesh workers are stopped, or one run of the updated WN5 agent.
@@ -166,9 +168,15 @@ WENDY_LOCALMESH_ROLLBACK_BINARY=/tests/pre-operator-main.test \
 /tests/wn5.test -test.v -test.run '^TestKernelOperator.*IsolatedNamespace$'
 ```
 
-Use main commit `581bff3a8aeb368680f346a9785934eef14848d7` for the pre-operator
-baseline. The rollback test exercises both its real kernel restart and its
-unenrolled reset cleanup, then verifies that WN5 can clean the remaining policy.
+The rollback regression uses fixed pre-operator main commit
+`581bff3a8aeb368680f346a9785934eef14848d7`. It exercises that version's kernel
+restart and unenrolled reset cleanup, then verifies that WN5 can clean the
+remaining policy.
+
+These tests qualify kernel-state cleanup only. Full mesh-service rollback to a
+pre-operator agent remains unqualified; read the
+[version compatibility limits](../../cli/assets/docs/development/local-mesh-radio.md#version-compatibility)
+before downgrading.
 
 ## LAN and Wi-Fi Aware discovery
 
