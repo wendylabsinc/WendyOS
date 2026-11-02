@@ -8,6 +8,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -28,10 +29,14 @@ const MaxRouterControl = (64 << 10) + 4
 // validated by the shared localmesh Node. No delegated route is installed.
 type RouterLink struct {
 	*Link
-	peer     meshid.Device
-	packets  chan []byte
-	controls chan []byte
-	transmit chan []byte
+	peer                meshid.Device
+	packets             chan []byte
+	controls            chan []byte
+	transmit            chan []byte
+	routing             chan []byte
+	receivedRouting     chan []byte
+	transmitWake        chan struct{}
+	lastReceivedRouting atomic.Bool
 }
 
 func (l *RouterLink) Peer() meshid.Device                  { return l.peer }
@@ -208,7 +213,7 @@ func routerReadyWithClock(ctx context.Context, c *tls.Conn, peer, self meshid.De
 		return nil, err
 	}
 	base.agentHandler, base.agentContext = agent, ctx
-	l := &RouterLink{Link: base, peer: peer, packets: make(chan []byte, 32), controls: make(chan []byte, 8), transmit: make(chan []byte, 32)}
+	l := &RouterLink{Link: base, peer: peer, packets: make(chan []byte, 32), controls: make(chan []byte, 8), transmit: make(chan []byte, 32), routing: make(chan []byte, 32), receivedRouting: make(chan []byte, 32), transmitWake: make(chan struct{}, 1)}
 	base.workers.Add(2)
 	go func() { defer base.workers.Done(); defer base.Close(); _ = l.readRouter() }()
 	go func() { defer base.workers.Done(); defer base.Close(); l.writeDatagrams() }()
@@ -238,10 +243,15 @@ func (l *RouterLink) readRouter() error {
 			if len(data) > 1100 {
 				return errors.New("oversized router datagram")
 			}
+			queue := l.packets
+			if routerBabel(data) {
+				queue = l.receivedRouting
+			}
 			select {
-			case l.packets <- data:
 			case <-l.done:
 				return io.EOF
+			case queue <- data:
+			default: // Datagram overload must not stop parsing routing/management.
 			}
 		case 5:
 			select {
@@ -266,18 +276,43 @@ func (l *RouterLink) SendDatagram(data []byte) error {
 	default:
 	}
 	copyData := bytes.Clone(data)
+	queue := l.transmit
+	if routerBabel(data) {
+		queue = l.routing
+	}
 	select {
 	case <-l.done:
 		return net.ErrClosed
-	case l.transmit <- copyData:
+	case queue <- copyData:
+		wake(l.transmitWake)
 		return nil
 	default:
 		return nil
 	}
 }
 func (l *RouterLink) ReceiveDatagram(ctx context.Context) ([]byte, error) {
+	// Give Babel its reserved lane, but still service a waiting IP packet
+	// after each routing packet. Concurrent readers remain race-free.
+	if l.lastReceivedRouting.Load() {
+		select {
+		case data := <-l.packets:
+			l.lastReceivedRouting.Store(false)
+			return data, nil
+		default:
+		}
+	}
 	select {
+	case data := <-l.receivedRouting:
+		l.lastReceivedRouting.Store(true)
+		return data, nil
+	default:
+	}
+	select {
+	case data := <-l.receivedRouting:
+		l.lastReceivedRouting.Store(true)
+		return data, nil
 	case data := <-l.packets:
+		l.lastReceivedRouting.Store(false)
 		return data, nil
 	case <-ctx.Done():
 		return nil, ctx.Err()
@@ -285,6 +320,7 @@ func (l *RouterLink) ReceiveDatagram(ctx context.Context) ([]byte, error) {
 		return nil, io.EOF
 	}
 }
+
 func (l *RouterLink) WriteControlBytes(data []byte) error {
 	if len(data) == 0 || len(data) > MaxRouterControl {
 		return errors.New("invalid router control size")
@@ -313,14 +349,74 @@ func (l *RouterLink) routerWrite(kind byte, data []byte) error {
 }
 
 func (l *RouterLink) writeDatagrams() {
+	lastRouting := false
 	for {
 		select {
 		case <-l.done:
 			return
-		case data := <-l.transmit:
-			if err := l.routerWrite(4, data); err != nil {
+		case <-l.transmitWake:
+		}
+		for len(l.routing)+len(l.transmit) > 0 {
+			// Select only after acquiring the physical writer. Babel arriving
+			// while an earlier metadata frame drains can take this boundary.
+			// The lock alternates with already waiting management/control,
+			// and nextDatagram alternates Babel with waiting IP.
+			l.writeMu.lockRouting()
+			if !l.Live() {
+				l.writeMu.Unlock()
+				return
+			}
+			data, ok := l.nextDatagram(&lastRouting)
+			if !ok {
+				l.writeMu.Unlock()
+				return
+			}
+			err := l.Link.writeFrame(4, data)
+			l.writeMu.Unlock()
+			if err != nil {
+				_ = l.Close()
 				return
 			}
 		}
 	}
 }
+
+func (l *RouterLink) nextDatagram(lastRouting *bool) ([]byte, bool) {
+	select {
+	case <-l.done:
+		return nil, false
+	default:
+	}
+	// Alternate under saturation, beginning with Babel. An ordinary IP
+	// backlog never consumes the routing reserve or puts 32 frames ahead of it.
+	first, second := l.routing, l.transmit
+	if *lastRouting {
+		first, second = second, first
+	}
+	select {
+	case data := <-first:
+		*lastRouting = routerBabel(data)
+		return data, true
+	default:
+	}
+	select {
+	case data := <-second:
+		*lastRouting = routerBabel(data)
+		return data, true
+	default:
+	}
+	select {
+	case <-l.done:
+		return nil, false
+	case data := <-l.routing:
+		*lastRouting = true
+		return data, true
+	case data := <-l.transmit:
+		*lastRouting = false
+		return data, true
+	}
+}
+
+// This byte is the existing net packet discriminator (IP=1, Babel=2), not
+// an operator framing extension. Payload validation remains in the Node.
+func routerBabel(data []byte) bool { return len(data) > 0 && data[0] == 2 }
