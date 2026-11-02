@@ -97,8 +97,8 @@ func (m Manifest) validate(now time.Time) error {
 	if m.Route == nil {
 		return errors.New("manifest version does not match route authorization")
 	}
-	if m.AgentTransport != "" && m.AgentTransport != AgentMTLS {
-		return &UnsupportedManifestError{Version: m.Version, Transport: m.AgentTransport}
+	if len(m.AgentTransport) > 64 {
+		return errors.New("agent transport exceeds bound")
 	}
 	if m.AgentTransport != "" && m.AgentPort == 0 {
 		return errors.New("invalid agent service transport")
@@ -135,6 +135,10 @@ func signingInput(key crypto.PublicKey, principal string, body []byte) ([]byte, 
 func SignManifest(m Manifest, chain [][]byte, signer crypto.Signer, now time.Time) (SignedManifest, error) {
 	var out SignedManifest
 	m = cloneManifest(m)
+	// Local publishers advertise only transports this implementation serves.
+	if m.AgentTransport != "" && m.AgentTransport != AgentMTLS {
+		return out, &UnsupportedManifestError{Version: m.Version, Transport: m.AgentTransport}
+	}
 	sort.Strings(m.Caps)
 	sort.Strings(m.Requires)
 	if err := m.validate(now); err != nil {
@@ -490,7 +494,13 @@ func (d *Directory) Snapshot(now time.Time) []Manifest {
 		if _, ok := d.currentEntryChain(principal, e, now); !ok {
 			continue
 		}
-		out = append(out, cloneManifest(m))
+		m = cloneManifest(m)
+		if m.AgentTransport != "" && m.AgentTransport != AgentMTLS {
+			// Preserve the opaque transport for reporting, but never expose its
+			// port to legacy consumers that understand only the old agent path.
+			m.AgentPort = 0
+		}
+		out = append(out, m)
 	}
 	sort.Slice(out, func(i, j int) bool { return bytes.Compare(out[i].Device[:], out[j].Device[:]) < 0 })
 	return out
