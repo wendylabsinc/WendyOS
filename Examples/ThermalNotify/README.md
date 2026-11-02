@@ -1,13 +1,13 @@
 # ThermalNotify
 
-Monitors all thermal cameras attached to the device. When any valid sensor pixel
-is strictly above **80°C**, it sends a **CRITICAL** Wendy notification to every
+Monitors supported thermal cameras attached to the device. When valid temperature
+data reports a maximum strictly above **80°C**, it sends a **CRITICAL** Wendy notification to every
 organization role: owner, admin, billing manager, member, and viewer. Cloud uses
 the sending device's organization. No recipient IDs or Cloud credentials are
 stored in the app.
 
-Run one instance on CCR3 and one on mesh-1 to monitor cameras on both devices.
-Use each device's exact selector from `wendy cloud discover`:
+From this example's directory, deploy to each device whose cameras you want to
+monitor. Use the exact selector from `wendy cloud discover`:
 
 ```sh
 wendy run --device <cloud-device-selector> --detach --yes
@@ -36,7 +36,8 @@ at zero to share the current capture without conflicting with existing viewers.
   after a slow connection. Events queue independently of camera capture, so a
   brief excursion still sends even if the camera cools before its turn. Repeated
   excursions on a camera with an unsent alert coalesce into that pending alert.
-- Failed sends retain their UUID and retry after at least 60 seconds. Rate-limit refusals wait at least 15 minutes, or longer
+- Failed sends retain their UUID and retry after at least 60 seconds. Rate-limit
+  refusals wait at least 15 minutes, or longer
   if the server asks. `ALREADY_EXISTS` means the earlier request was accepted.
 - State and queued alerts are held in memory. Restarting loses pending alerts
   and rearms all cameras.
@@ -52,7 +53,7 @@ version 1 thermal measurement plane. Two temperature paths are supported:
 
 - A declared per-pixel temperature conversion, such as the original TC001
   256×384 mode. The decoder honors the plane offset, stride and invalid values.
-- The HIK-based TC001 256×392 default mode used on CCR3 and mesh-1. The camera
+- The HIK-based TC001 256×392 default mode. The camera
   reports maximum and minimum temperatures in a separate metadata block.
   ThermalNotify uses its maximum, with the same decoder as Wendy's desktop
   viewer. It validates the layout, signatures, codes, and coordinates before

@@ -1,8 +1,20 @@
-# Wendy for macOS
+# Wendy for macOS and iOS
 
-A SwiftUI app linked to this repository's Go CLI packages through a C archive. It lists nearby LAN and authenticated mesh devices, connects to Wendy Cloud, displays running apps and service states, streams logs, and displays a camera wall of simultaneous H.264 feeds using each camera’s native resolution and frame rate.
+This README covers building the native apps, using their main workflows, and
+maintaining the Go/Swift integration. Start with [Build and open](#build-and-open)
+or [iPhone and iPad](#iphone-and-ipad). For networking, see
+[Sign and enable the VPN](#sign-and-enable-the-vpn) and
+[Network behavior](#network-behavior). Camera, site-model and robot sections
+include their operational limits and engineering reference details.
 
-The macOS and iOS apps embed packet-tunnel Network Extensions. Select mesh or cloud devices in the VPN controls to resolve their Wendy DNS names and route TCP connections from other apps. To use a device's shared internet connection, choose it under **Internet via mesh**. The donor must advertise an enabled uplink and run an agent with operator lease protocol `wendy-mesh-internet/2`. Device-only routing remains the default.
+The native apps discover devices over LAN and Wendy Net, connect through Wendy Cloud, and provide app controls, logs and live cameras. Camera feeds retain their native resolution and frame rate.
+
+The optional VPN lets other apps reach discovered mesh devices by Wendy DNS name
+and TCP port. It includes the authenticated mesh directory automatically and can
+use an eligible device's shared Internet connection when the computer or phone
+loses its own access. The donor must advertise an enabled uplink and support
+operator lease protocol `wendy-mesh-internet/2`. See [Network behavior](#network-behavior)
+for routing, DNS and failover limits.
 
 ## Build and open
 
@@ -291,8 +303,9 @@ xcodebuild -project go/macos/WendyDesktop.xcodeproj \
 
 For a physical device, select your Apple development team for `WendyMobile` in
 Xcode and use an iPhone or iPad run destination. The bundle ID is `dev.wendy.mobile`.
-The device build can also be compile-checked with `-destination 'generic/platform=iOS'
-`CODE_SIGNING_ALLOWED=NO`; that unsigned output cannot be installed on a phone.
+The device build can also be compile-checked with
+`-destination 'generic/platform=iOS' CODE_SIGNING_ALLOWED=NO`; that unsigned
+output cannot be installed on a phone.
 
 The mobile interface includes nearby/Cloud discovery, manual connections, accounts,
 Sites, organization management, apps, activity, logs, live cameras, pairing,
@@ -419,7 +432,7 @@ teams, profiles, credentials, or local entitlement overrides.
 
 - **Sites** is a fleet-wide sidebar destination. Select a saved account and organization to see all enrolled devices grouped by their Cloud site, including offline devices. Online state comes from broker presence; failed presence reads remain unknown. Filter by device, site, or hardware, and connect from a tile. Refresh uses the window toolbar.
 - **Pairing** on a connected device discovers Wendy Lite/SensorLink sources and ONVIF IP cameras on that device's network. Lite pairing reuses CLI tenant checks and stable device identities. Unenrolled sources are shown but cannot be paired. Older Agents may fall back to discovery on this Mac, with an explicit notice. IP camera credentials go to the selected Agent, and the password field clears after submission. Forgetting a pairing requires confirmation.
-- **Campaigns** provides a visual When / On / Then editor. Choose object detection, image classification, or an existing application event, any camera or one actual source, and notification plus recording or recording alone. Review the capture window, confidence, cooldown, and upload policy before deploying. Deployment immediately arms a new campaign and refuses to overwrite an existing name. Clips stay local by default. The default detector is DETR ResNet 50 with the person label; model revisions are pinned and the device downloads the runtime/model on first use. Wildcard cameras apply to the selected device, including cameras added later, not the entire fleet. Cloud notification grants still need to be enabled for the campaign by an owner/admin in Cloud Apps. Deployment does not prove notification delivery or successful capture.
+- **Campaigns** provides a visual When / On / Then editor. Choose object detection, image classification, or an existing application event, any camera or one actual source, and notification plus recording or recording alone. Review the capture window, confidence, cooldown, and upload policy before deploying. Deployment immediately arms a new campaign and refuses to overwrite an existing name. Clips stay local by default. The default detector is DETR ResNet 50 with the person label; model revisions are pinned and the device downloads the runtime/model on first use. Wildcard cameras apply to the selected device, including cameras added later, not the entire fleet. Cloud notifications require a campaign grant from an owner/admin account. Native chat offers a separate approval prompt after notification-enabled creation. Deployment does not prove notification delivery or successful capture.
 - **Chat** uses Wendy Chat's model discovery and streaming provider with a transport fixed to the selected device. The picker discovers downloaded models across running managed Ollama runtimes and retains the selected model’s port. When Cloud does not yet offer the model TCP port, Chat streams HTTP through non-TTY exec in the selected device’s running managed Ollama container. This fallback uses the authenticated Agent connection, preserves request cancellation, and does not retry access denials. Custom servers still require Cloud port forwarding. If both routes fail, downloaded models remain visible with a warning beside the message box, a Retry connection button, and expandable technical details; chat stays disabled until an endpoint is reachable. Custom OpenAI-compatible server ports remain available in connection settings. Downloads show a progress bar with bytes and percentage for the current file, and an indeterminate bar during preparation and inference checks. Mesh/Cloud uses the authenticated tunnel; LAN uses the selected device's address and requires a reachable server port. Common ports are Ollama 11434, llama.cpp 8080, and LM Studio 1234. Environment API keys and hosted-provider settings are never inherited. Stop cancels the generation; changing devices cancels the request. Assistant replies render Markdown and hide model thinking blocks, including Qwen GGUF templates that omit the opening tag. Conversations are held in memory. Each device session starts the bundled Wendy MCP with all tool groups and bundled skills. Read-only tools run directly; changes require approval of the displayed function and arguments. Ollama uses a per-request 32,768-token context for the tool catalog.
 - **Data** opens recorded Wendy Data episodes with a shared cursor, a custom pannable and zoomable timestamp ruler, channel timeline, numerical plot, events, and sample inspector. Camera playback is available for checksummed sealed MP4 clips whose frame schedule matches the capture index; JPEG/PNG application frames also follow the cursor. Samples align on the episode's CLOCK_BOOTTIME timeline, including negative pre-roll. Unknown clocks, other boot IDs, unsupported payloads, and download limits are reported rather than assigned invented timestamps. The **Record** dialog selects actual camera, microphone, ROS 2 topic/domain, and telemetry sources for an immediate device-local capture; it also stops and seals the active recording. Campaigns offer these additional sources alongside camera selection. Audio and ROS 2 start at the trigger, without pre-roll.
 
@@ -441,7 +454,7 @@ WENDY_DEVELOPMENT_TEAM=YOUR_TEAM_ID go/macos/Scripts/build.sh
 
 You can also select the team and provisioning profiles in Xcode. Developer ID distribution requires the corresponding profiles and notarization.
 
-Place the signed app in `/Applications`, open it, sign in if needed, and select devices in the VPN popover. Turn on the **VPN** toggle, then approve the system's extension and VPN prompts. The app reports when macOS is awaiting approval or requires a restart. Disable the VPN before replacing the installed build.
+Place the signed app in `/Applications`, open it, sign in if needed, and turn on the **VPN** toggle, then approve the system's extension and VPN prompts. The app reports when macOS is awaiting approval or requires a restart. Disable the VPN before replacing the installed build.
 
 ## Authentication and device selection
 
@@ -700,10 +713,10 @@ freshness remains independent of these retries.
 | Original TOPDON TC001 | YUYV, 256×384 | Bottom 256×192 plane | Camera temperature codes in 1/64 kelvin |
 | HIK-based TOPDON TC001, USB 2bdf:0102 | YUYV, 256×392 | First 256×192 plane | Sensor pixels remain counts; separate camera summary provides minimum/maximum °C |
 
-The HIK-based revision is the variant inspected on mesh-1. Its four rows after
+For the HIK-based revision, the four rows after
 the sensor plane and four rows after the preview contain metadata, not image
 pixels. The encoded viewer receives only the preview at rows 196–387. Raw readers
-receive the entire original capture. The draft deliberately rejects other HIK
+receive the entire original capture. The decoder rejects other HIK
 layouts, including 512×484, for thermal decoding; default capture selects the
 supported 256×392 mode. An explicit request for another layout remains raw data.
 
@@ -730,7 +743,7 @@ without a new frame dims the image and hides extrema. The bridge carries the
 conversion to Swift, and TC001 frames cannot inherit a PureThermal scale override.
 The existing raw stream and original payload remain available for recording.
 
-This draft does not enable the HIK vendor's separate calibrated USB stream mode,
+The thermal decoder does not enable the HIK vendor's separate calibrated USB stream mode,
 apply emissivity corrections, or provide calibrated temperatures at arbitrary
 pixels. Temperature accuracy has not
 been checked against a reference instrument. New agent capabilities are needed
@@ -747,7 +760,7 @@ Protocol evidence:
 
 Site Model has a searchable camera picker with a live preview. Selecting a
 camera with a current pose for this model adds it at its reported position.
-Otherwise the user can place a location marker. A location marker alone has no
+Otherwise choose **Place Manually** to add a location marker. A location marker alone has no
 inferred viewing angle. Sites > Remove Capture moves a model and its placements
 to Recently Removed; Restore returns it to the site list.
 
@@ -786,14 +799,14 @@ frame. Poses require an observation time and expiry no more than seven days
 later. A publisher must renew its evidence; clients hide expired poses. Visual
 localization records also require an inlier count and reprojection RMS.
 
-This API accepts pose evidence. The iOS device viewfinder and RoomPlan scanning
-now share a local appearance recognizer, described below. Appearance recognition
-does not supply a calibrated camera-body-to-optical-axis transform or an enrolled
-hardware identity. These remain necessary for fully automatic camera placement.
-The RoomPlan export contains geometry without reference images. Automatic
-image-based registration cannot be recovered from that export alone. Older
-gateways and cameras without calibration continue to provide video and location
-markers, with direction/FOV shown as unknown.
+This API stores pose evidence; it does not derive it from a device appearance
+match. The viewfinder and RoomPlan scanning share the local appearance recognizer
+described below. Those matches do not establish enrolled identity or a calibrated
+camera pose. Automatic alignment needs the separately captured visual reference
+map described under [Importing and viewing sites](#importing-and-viewing-sites);
+a geometry-only RoomPlan export is insufficient. Older gateways and cameras
+without calibration continue to provide video and location markers, with
+direction/FOV shown as unknown.
 
 ### Device viewfinder
 
@@ -888,8 +901,8 @@ and new samples from only one plane do not count. Saved visual and LiDAR
 references in possible door swing regions are excluded from localization because
 the scanned door position can change. Live door obstacles still block navigation.
 Weak fits are labeled and still require operator verification. Suggestions expire
-after 30 seconds or robot motion; confirmation cannot command movement. **Locate Go2**
-retries the search. **Place Manually** remains available for unsupported geometry
+after 30 seconds or robot motion; confirmation cannot command movement. Passive
+matching continues while the view is open. **Place Manually** remains available for unsupported geometry
 or a poor scan. Select the robot and click a floor destination
 to preview the route; **Move here** or a right-click sends the order. **Escape**
 or **Stop** cancels it. A green selection ring, destination rings and route show
@@ -1157,10 +1170,6 @@ can produce errors. It uses the cameras on the connected gateway. Thermal feeds
 are excluded. There is no person recording or face recognition, and these blobs
 do not feed robot navigation or collision avoidance.
 
-Possible extensions include synchronized multi-camera triangulation for hidden
-feet, appearance-assisted matching for crowded rooms, or depth-camera observations.
-The current floor projection reuses the twin's calibrated RGB cameras and needs
-no additional model download or hardware. Apple documents the detector in
+Tracking uses the twin's calibrated RGB cameras and needs no additional model
+download or hardware. For the underlying detector, see Apple's
 [Detecting human body poses in images](https://developer.apple.com/documentation/vision/detecting-human-body-poses-in-images).
-OpenCV documents triangulation in
-[Camera calibration and 3D reconstruction](https://docs.opencv.org/4.x/d9/d0c/group__calib3d.html).

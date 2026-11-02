@@ -31,57 +31,61 @@ Local discovery combines these mechanisms and merges their results:
 
 ## Wendy Net mesh discovery
 
-With a selected organization and a valid operator certificate, `wendy discover`
-automatically joins that organization's Wendy Net from this computer. Mesh devices
-appear in Nearby and in `lanDevices` in JSON output with `"mesh": true`. Without an
-organization operator identity, discovery does not start mesh carriers or prompt
-for enrollment. Select an existing organization with `wendy auth use` if needed.
+With a selected organization and a valid cached operator certificate,
+`wendy discover` can automatically join that organization's Wendy Net from this
+computer. It does not enroll the computer as a device or start a Cloud login or
+credential renewal. Select an existing organization with `wendy auth use` if
+needed. Mesh devices appear in Nearby; JSON output lists them under `meshDevices`
+and reports discovery state under `meshDiscovery`.
 
-Select a mesh row to connect or make it the default. Its address is a stable
-`mesh:<device-UUID>` selector, usable with existing commands:
+Highlight a mesh row and press Enter to copy its details. Use its
+`mesh://TENANT_UUID/DEVICE_UUID` selector with device commands:
 
 ```sh
-wendy discover
-wendy device info --device mesh:<device-UUID>
-wendy run --device mesh:<device-UUID>
+wendy discover --type mesh
+wendy device info --device mesh://TENANT_UUID/DEVICE_UUID
+wendy run --device mesh://TENANT_UUID/DEVICE_UUID
 ```
 
-`mesh:<name>` also works when the name is unique. While the discovery session is
-active, ordinary `--device <name>` resolves names in its authenticated mesh roster.
-Connections retain end-to-end operator mTLS and pin the target's device identity.
-Signed device announcements and their currently authorized routes determine the
-roster. A signed announcement does not prove the target's application is ready.
+A unique device name also works with `--device <name>`. Use the full selector if
+names are ambiguous. Connections authenticate the exact destination device and
+organization end to end, independently of intermediate routers. Devices appear
+only while they have a current signed announcement and an authorized route.
+An announcement does not prove that the target's application is ready.
 
-The CLI shares one private background mesh session across commands. It stops
-when idle for two minutes, when the selected organization or certificate changes,
-or when its certificate chain expires. It reuses the existing operator key and
-never enrolls the computer as a device. The IPv6 stack stays inside the session;
-it does not install host routes, change DNS, or expose local services. The
-operator endpoint is stable per operator principal, so use only one computer's
-mesh session at a time for the same operator in the same organization.
+Commands share a private background router. An automatic session can stop after
+five minutes without command activity or transit traffic. To keep your computer
+available as a router between commands, enable it explicitly:
 
-Ethernet, infrastructure Wi-Fi, BLE, and Wi-Fi Aware providers run independently.
-The router uses carrier costs and can forward across multiple hops and switch
-paths when links fail. It does not combine link bandwidth. USB Ethernet is
-included when the operating system exposes it as an eligible network interface.
-LAN mesh discovery currently requires an IPv4 interface and multicast access.
-Operator connections also work across routed LAN subnets when ordinary device
-discovery supplies the addresses, for example through a DNS-SD reflector between
-VLANs. Devices must run an agent that supports routed operator links. Every link
-still verifies the exact same-organization device identity before joining.
+```sh
+wendy device wendy-net connect
+```
 
-On Linux, Wi-Fi Aware requires compatible hardware, the existing Wendy NAN
-helper, and the permissions needed to manage the interface. BLE requires BlueZ
-and LE L2CAP support. On macOS, BLE uses CoreBluetooth as a central and requires
-Bluetooth permission. [macOS does not support Wi-Fi Aware](https://developer.apple.com/forums/thread/827887).
-Windows retains ordinary discovery but does not join Wendy Net. A carrier that
-cannot start does not prevent other carriers from connecting.
+Stop the current router and its connections with `wendy device wendy-net disconnect`.
+Later requested discovery can start it again. Credential changes or expiry also
+end a session. Each installation has an independent, persistent router identity,
+so multiple computers can participate with the same operator account. Routing
+stays inside the private session; it does not install host routes or change DNS.
 
-Mesh peers must run an agent version that admits operator mesh identities.
-Older agents continue to accept devices but reject operator joins. Before joining,
-the CLI uses the existing auth renewal and refresh workflow for the selected
-operator session. If it cannot obtain a current certificate, it reports the auth
-recovery command and leaves ordinary discovery running.
+The CLI discovers first-hop routers over LAN and Bluetooth, then follows routes
+across the mesh. LAN mesh discovery requires an IPv4 interface and multicast
+access. Routed LAN subnets can work when ordinary device discovery supplies
+addresses, for example through a DNS-SD reflector between VLANs, and the agents
+support routed operator links. USB Ethernet is included when the operating
+system exposes an eligible interface. The router can switch paths and forward
+across several hops; it does not combine link bandwidth.
+
+On Linux, Bluetooth requires BlueZ and LE L2CAP support. On macOS it uses
+CoreBluetooth and requires Bluetooth permission. The CLI does not discover
+first hops through Wi-Fi Aware. A failed carrier does not prevent another from
+connecting. Windows mesh code builds, but device interoperability has not been
+qualified; ordinary discovery remains available.
+
+First-hop routers need operator-capable agents or supported PSRAM Lite firmware;
+older agents reject operator joins. If mesh discovery is unavailable, check the
+selected organization, certificate and router version. Ordinary discovery
+continues. See [Connect from your computer](/docs/advanced/development/local-mesh-radio)
+for Lite limits, service forwarding and explicit first-hop selection.
 
 ## Platform support
 
@@ -119,7 +123,7 @@ WENDY_SHOW_LOCAL_DEVICES=1 wendy discover
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--type` | `all` | Local discovery type: `usb`, `lan`, `bluetooth`, `external`, or `all`. Does not affect the Cloud tab. |
+| `--type` | `all` | Local discovery type: `usb`, `lan`, `bluetooth`, `external`, `mesh`, or `all`. Does not affect the Cloud tab. |
 | `--timeout` | `5s` | Scan local devices once for this duration, print the results, and exit. When omitted, the live tabbed TUI runs until quit. |
 | `--json` | `false` | Output discovery results as JSON instead of a table |
 
