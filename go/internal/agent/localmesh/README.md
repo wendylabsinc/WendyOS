@@ -470,7 +470,7 @@ identity caches still persist verified full chains with their own 1,024-entry,
 are never persisted.
 
 Certificate exchange uses raw DER on the existing reliable control stream.
-TLS handshake certificates and their verification remain unchanged. Unknown
+TLS uses the same provisioned identities and trust anchors. Unknown
 optional control kinds and gossip operations are consumed within their frame;
 unknown optional manifest fields remain in the exact signed body. Unsupported
 manifest versions and required extensions do not advance replay state.
