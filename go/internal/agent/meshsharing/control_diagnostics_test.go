@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"net"
+	"net/netip"
 	"testing"
 	"time"
 
@@ -16,6 +17,51 @@ import (
 type reportingControlBackend struct {
 	*controlTestBackend
 	ended chan controlEnd
+}
+
+type delayedGatewayProbe struct {
+	*fakeProbe
+	delay time.Duration
+}
+
+func (p *delayedGatewayProbe) Gateway(context.Context, netip.Addr, netip.Addr) bool {
+	time.Sleep(p.delay)
+	return true
+}
+
+func TestGatewayDiagnosticsDistinguishExpiryDuringProbe(t *testing.T) {
+	now := time.Now()
+	self, donor := policySelf(t), policyDonorDevice(t)
+	var events []string
+	node := &fakeNode{view: gatewayView(donor, now), offers: []meshcatalog.Record{gatewayOffer(donor, now)}, events: &events}
+	probe := &delayedGatewayProbe{fakeProbe: &fakeProbe{gateway: true}}
+	controller, err := NewWithDeps(self, node, &fakePolicy{events: &events}, probe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	core, logs := observer.New(zap.InfoLevel)
+	controller.SetLogger(zap.New(core))
+	config := Config{Participate: true, Roam: true}
+	for range 2 {
+		if _, err := controller.Step(context.Background(), config); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cutoff := time.Now().Add(250 * time.Millisecond).UnixMilli()
+	node.view.Devices[0].Expires, node.offers[0].Expires = cutoff, cutoff
+	probe.delay = 300 * time.Millisecond
+	decision, err := controller.Step(context.Background(), config)
+	if err != nil || decision.Mode != "offline" {
+		t.Fatalf("expired decision: %+v %v", decision, err)
+	}
+	ended := logs.FilterMessage("Wendy Net gateway selection ended").All()
+	if len(ended) != 1 {
+		t.Fatalf("selection changes: %+v", ended)
+	}
+	fields := ended[0].ContextMap()
+	if fields["reason"] != "signed-candidates-expired" || fields["eligible_candidates"] != int64(0) || fields["observed_candidates"] != int64(1) {
+		t.Fatalf("expiry was mislabeled as failed reachability: %+v", fields)
+	}
 }
 
 func (b *reportingControlBackend) reportControlEnd(event controlEnd) { b.ended <- event }

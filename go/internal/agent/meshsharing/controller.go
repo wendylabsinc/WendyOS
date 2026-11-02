@@ -262,6 +262,12 @@ func (c *Controller) reachableGateway(ctx context.Context) Gateway {
 	// Completion order never influences preference. Recheck expiry after the
 	// probes so a lease expiring during observation cannot be selected.
 	now := time.Now()
+	eligible := 0
+	for _, candidate := range candidates {
+		if now.Before(candidate.Expires) {
+			eligible++
+		}
+	}
 	// Once a donor is carrying traffic, advertisement lease refreshes must not
 	// move borrowers to another equally healthy donor. Keep the current donor
 	// until it disappears, expires, or its debounced health turns bad. Candidate
@@ -289,10 +295,13 @@ func (c *Controller) reachableGateway(ctx context.Context) Gateway {
 		reason := "no-reachable-candidate"
 		if len(candidates) == 0 {
 			reason = "no-eligible-signed-candidate"
+		} else if eligible == 0 {
+			reason = "signed-candidates-expired"
 		}
 		c.logger.Info("Wendy Net gateway selection ended",
 			append([]zap.Field{zap.String("gateway_principal", c.gatewayDevice.Principal()), zap.String("reason", reason),
-				zap.Time("previous_signed_expires_at", c.gatewayLastExpiry), zap.Int("eligible_candidates", len(candidates))}, gatewayEvidence(c.gatewayDevice, view, offers)...)...)
+				zap.Time("previous_signed_expires_at", c.gatewayLastExpiry), zap.Int("eligible_candidates", eligible),
+				zap.Int("observed_candidates", len(candidates))}, gatewayEvidence(c.gatewayDevice, view, offers)...)...)
 	}
 	c.gatewayDevice = meshid.Device{}
 	return Gateway{}
