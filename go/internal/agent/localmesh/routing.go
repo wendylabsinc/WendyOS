@@ -86,3 +86,9 @@ func (r *Routing) fail(err error) error {
 func (r *Routing) NextDeadline() (time.Duration, bool) { return r.engine.NextDeadline() }
 func (r *Routing) Snapshot() babel.Snapshot            { return r.engine.Snapshot() }
 func (r *Routing) Checkpoint() babel.Checkpoint        { return r.engine.Checkpoint() }
+
+// HasUsableOrigin requires a received, live and feasible Babel candidate for
+// the exact independently authorized tuple before retiring an older proof.
+func (r *Routing) HasUsableOrigin(origin RouteOrigin) bool {
+	return !r.stopped && r.engine.HasUsableOrigin(origin.RouterID, origin.Prefix, origin.Seqno)
+}

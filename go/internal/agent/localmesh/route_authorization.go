@@ -40,20 +40,12 @@ func (d *Directory) RouteAuthorizations(now time.Time) map[RouteOrigin]bool {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.expireLocked(now)
-	verified := make([]Manifest, 0, len(d.entries))
-	for principal, e := range d.entries {
-		m := e.manifest
-		if m.Withdraw || m.Version != ManifestVersionRoute || m.Route == nil {
-			continue
-		}
-		// A renewed principal cannot lend its new key's authority to an old
-		// signature, including when collecting conflicting address claims.
-		if _, ok := d.currentEntryChain(principal, e, now); !ok {
-			continue
-		}
-		verified = append(verified, m)
+	_, proofs := d.routeViewLocked(now, false)
+	routes := make(map[RouteOrigin]bool, len(proofs))
+	for origin := range proofs {
+		routes[origin] = true
 	}
-	return authorizedOrigins(verified, d.tenant)
+	return routes
 }
 
 // authorizedOrigins derives route ownership from a freshly verified Directory

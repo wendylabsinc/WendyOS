@@ -17,6 +17,8 @@ type routeInput struct {
 
 func describeRouteInput(event babel.Event) routeInput {
 	switch e := event.(type) {
+	case babel.RefreshRoute:
+		return routeInput{Kind: "route-refresh"}
 	case babel.Tick:
 		return routeInput{Kind: "tick"}
 	case babel.Receive:
