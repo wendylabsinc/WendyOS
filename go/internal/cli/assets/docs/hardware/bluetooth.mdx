@@ -71,6 +71,18 @@ These links are separate from the device picker's Bluetooth discovery and from
 sensor or peripheral access below. Apps that use Bluetooth peripherals still
 need the appropriate entitlement.
 
+### Operator connections
+
+An operator-capable WendyOS node with primary operator trust anchors can also
+accept an authenticated CLI operator router over bluetooth. It reserves one
+separate operator admission slot, so that connection does not consume a
+device-neighbor admission slot. Both roles still share the physical adapter's
+bandwidth and hardware connection limits. Operator sessions authenticate the
+operator certificate separately from enrolled device certificates.
+
+The admission support alone does not start a CLI router or enable automatic
+CLI discovery; those require the matching CLI broker and carrier integration.
+
 ## Scan for Devices
 
 Run the Bluetooth command without subcommands to open an interactive table for browsing and managing peripherals:
