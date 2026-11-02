@@ -74,6 +74,11 @@ func knownControlKind(kind string) bool {
 }
 
 func WriteControl(w io.Writer, m ControlMessage) error {
+	if m.Kind == "time" && m.Time != nil && m.Time.Version == 0 {
+		timestamp := *m.Time
+		timestamp.Version = timestampControlVersion
+		m.Time = &timestamp
+	}
 	data, err := netwire.Marshal(m)
 	if err != nil {
 		return err
@@ -118,13 +123,37 @@ func ReadControl(r io.Reader) (ControlMessage, error) {
 		return m, err
 	}
 	var head struct {
-		Kind string `json:"kind" cbor:"k"`
+		Kind string             `json:"kind" cbor:"k"`
+		Time netwire.RawMessage `json:"time" cbor:"t"`
 	}
 	if err := netwire.Unmarshal(data, &head); err != nil {
 		return m, err
 	}
 	if head.Kind != "" && !knownControlKind(head.Kind) {
 		return ControlMessage{Kind: head.Kind}, nil
+	}
+	if head.Kind == "time" && len(head.Time) != 0 {
+		var timestampVersion struct {
+			Version uint32 `json:"v" cbor:"v"`
+		}
+		if err := netwire.Unmarshal(head.Time, &timestampVersion); err != nil {
+			return m, err
+		}
+		// A future timestamp version owns even the operation's schema.
+		if timestampVersion.Version > timestampControlVersion {
+			return ControlMessage{Kind: "time", Time: &TimestampControl{Version: timestampVersion.Version}}, nil
+		}
+		var timestampOp struct {
+			Op string `json:"op" cbor:"o"`
+		}
+		if err := netwire.Unmarshal(head.Time, &timestampOp); err != nil {
+			return m, err
+		}
+		// Unknown operations own their payload schema. Consume this bounded
+		// frame without decoding their operation-specific fields.
+		if timestampOp.Op != "" && !knownTimestampOp(timestampOp.Op) {
+			return ControlMessage{Kind: "time", Time: &TimestampControl{Version: timestampVersion.Version, Op: timestampOp.Op}}, nil
+		}
 	}
 	if err := netwire.Unmarshal(data, &m); err != nil {
 		return m, err
