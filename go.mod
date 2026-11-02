@@ -66,7 +66,7 @@ require (
 	github.com/vishvananda/netlink v1.3.1
 	github.com/vishvananda/netns v0.0.5
 	github.com/wendylabsinc/WendyOS/go/babel v0.0.0
-	go.bug.st/serial v1.6.4
+	go.bug.st/serial v1.8.0
 	go.etcd.io/bbolt v1.5.0
 	go.opentelemetry.io/proto/otlp v1.11.1
 	go.uber.org/zap v1.28.0
@@ -110,7 +110,6 @@ require (
 	github.com/containerd/plugin v1.1.0 // indirect
 	github.com/containerd/ttrpc v1.2.9 // indirect
 	github.com/coreos/go-iptables v0.8.0 // indirect
-	github.com/creack/goselect v0.1.3 // indirect
 	github.com/djherbis/times v1.6.0 // indirect
 	github.com/docker/docker-credential-helpers v0.9.8 // indirect
 	github.com/docker/go-units v0.5.0 // indirect
