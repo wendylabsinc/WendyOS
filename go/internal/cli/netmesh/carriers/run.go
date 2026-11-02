@@ -129,6 +129,27 @@ func Run(parent context.Context, cfg Config) error {
 		}
 		return false
 	}
+	hasSameCarrier := func(view localmesh.NodeSnapshot, peer meshid.Device, candidate Candidate) bool {
+		if peer == (meshid.Device{}) {
+			return false
+		}
+		// A verified attachment owns this carrier while Babel is still priming.
+		// Readiness is required for cheaper-carrier replacement, not for keeping
+		// another address for the same carrier from duplicating the connection.
+		for _, link := range view.Links {
+			if link.Device == peer && link.Transport == candidate.Transport && link.Cost == candidate.Cost {
+				return true
+			}
+		}
+		// Authentication precedes publishing the Node attachment. Use only the
+		// authenticated peer here, never the active attempt's discovery hint.
+		for _, a := range active {
+			if a.verified && !a.canceled && a.peer == peer && a.candidate.Transport == candidate.Transport && a.candidate.Cost == candidate.Cost {
+				return true
+			}
+		}
+		return false
+	}
 	plan := func(now time.Time) {
 		view := snapshot()
 		for _, a := range active {
@@ -165,7 +186,7 @@ func Run(parent context.Context, cfg Config) error {
 				continue
 			}
 			peer := cache.peer(c, now, cfg.Limits.AuthenticatedTTL)
-			if hasLink(view, peer, c.Cost, false) {
+			if hasSameCarrier(view, peer, c) || hasLink(view, peer, c.Cost, false) {
 				continue
 			}
 			pending, bleCount := 0, 0
