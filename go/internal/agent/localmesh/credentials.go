@@ -216,7 +216,13 @@ func newCredentials(certPEM, chainPEM, keyPEM string, instance uuid.UUID, operat
 			peerRecency.MoveToFront(cached)
 			return cached.Value.(peerConfigEntry).config.Clone(), nil
 		}
-		c, err := mtls.NewClientTLSConfig(certPEM, chainPEM, keyPEM, nil)
+		var c *tls.Config
+		var err error
+		if policy == nil {
+			c, err = mtls.NewClientTLSConfig(certPEM, chainPEM, keyPEM, nil)
+		} else {
+			c, err = mtls.NewClientTLSConfigWithTimePolicy(certPEM, chainPEM, keyPEM, nil, clockPolicy)
+		}
 		if err != nil {
 			return nil, err
 		}

@@ -89,6 +89,9 @@ func TestCertificatePolicyOwnDeviceAndOperatorPaths(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
+				if outbound.Time == nil || !outbound.Time().Equal(floor) {
+					t.Fatal("outbound TLS internal clock lost local base")
+				}
 				if err = outbound.VerifyPeerCertificate(peer.Certificate.Certificate, nil); err != nil {
 					t.Fatal("outbound TLS lost local policy", err)
 				}
