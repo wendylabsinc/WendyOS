@@ -2,6 +2,9 @@ package localmesh
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/x509"
+	"encoding/pem"
 	"path/filepath"
 	"testing"
 	"time"
@@ -112,6 +115,78 @@ func publishedNodeIdentity(t *testing.T, dir string, credentials *Credentials) (
 		select {
 		case <-deadline.C:
 			t.Fatal("Node did not publish its own signed origin")
+		case <-time.After(time.Millisecond):
+		}
+	}
+}
+
+// Another installation's certificate can be the principal cache's preferred
+// chain. Local publication must still use this installation's signing lease.
+func TestOperatorPublicationUsesOwnCertificateExpiry(t *testing.T) {
+	principal := "spiffe://wendy.sh/tenant/" + testTenantUUID + "/operator/shared-expiry"
+	cert, key := testIssue(t, principal)
+	block, _ := pem.Decode([]byte(cert))
+	leaf, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leaf.NotAfter = time.Now().Add(2 * time.Minute).Truncate(time.Second)
+	keyBlock, _ := pem.Decode([]byte(key))
+	private, err := x509.ParseECPrivateKey(keyBlock.Bytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pki := testPKI()
+	der, err := x509.CreateCertificate(rand.Reader, leaf, pki.certificate, private.Public(), pki.key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert = string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))
+	own, err := NewOperatorCredentials(cert, pki.chainPEM, key, uuid.MustParse("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherCert, otherKey := testIssue(t, principal)
+	other, err := NewOperatorCredentials(otherCert, pki.chainPEM, otherKey, uuid.MustParse("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	node, err := NewNodeWithNetwork(ctx, t.TempDir(), own, "expiry fixture", 0, &lifecyclePacketNetwork{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := node.cache.Put(other.Certificate.Certificate, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- node.Run() }()
+	defer func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Error("operator node did not join shutdown")
+		}
+	}()
+	for {
+		view := node.Snapshot()
+		if len(view.Devices) == 1 {
+			if got := view.Devices[0].Expires; got != leaf.NotAfter.UnixMilli() {
+				t.Fatalf("local lease expiry=%d want signer expiry=%d", got, leaf.NotAfter.UnixMilli())
+			}
+			if !view.RouteAuthorizations[*view.Devices[0].Route] {
+				t.Fatal("local signed origin was not authorized")
+			}
+			return
+		}
+		select {
+		case err := <-done:
+			done <- err
+			t.Fatalf("another installation's longer lease stopped the operator node: %v", err)
+		case <-ctx.Done():
+			t.Fatal("operator node did not publish its own signed origin")
 		case <-time.After(time.Millisecond):
 		}
 	}

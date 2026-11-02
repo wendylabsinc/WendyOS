@@ -166,7 +166,38 @@ func runNetTLSListener(parent context.Context, node *Node, listener net.Listener
 			}
 			lease.Identify(peer)
 			lease.Progress()
-			_ = node.AttachStream(WithConnectionLease(ctx, lease), peer, secure, cost)
+			_ = attachNativeTLS(WithConnectionLease(ctx, lease), node, peer, secure, cost)
 		}()
 	}
+}
+
+// Native LAN streams follow the same cheaper-carrier replacement policy as
+// QUIC LAN links. Releasing the old attachment also releases its shared lease.
+func attachNativeTLS(ctx context.Context, node *Node, peer meshid.Device, conn net.Conn, cost uint16) error {
+	defer conn.Close()
+	if node.HasCheaperLink(peer, cost) {
+		return nil
+	}
+	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	defer stop()
+	done := make(chan struct{})
+	defer close(done)
+	go func() {
+		ticker := time.NewTicker(time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if node.HasCheaperLink(peer, cost) {
+					_ = conn.Close()
+					return
+				}
+			}
+		}
+	}()
+	return node.AttachStream(ctx, peer, conn, cost)
 }
