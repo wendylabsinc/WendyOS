@@ -27,7 +27,7 @@ Choose a network and enter its password when prompted.
 ## 2. Enroll the board
 
 ```sh
-wendy cloud enroll-device \
+wendy device enroll \
   --device wendy-lite:/dev/cu.usbmodemXXXX \
   --name lite-desk
 ```

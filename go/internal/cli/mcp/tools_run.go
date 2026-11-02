@@ -15,6 +15,7 @@ import (
 
 	mcpgo "github.com/mark3labs/mcp-go/mcp"
 	"github.com/wendylabsinc/wendy/go/internal/cli/analytics"
+	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
 )
 
 // Explicit selectors override the session. Never let a child choose a different
@@ -91,6 +92,35 @@ func (s *mcpServer) handleRun(ctx context.Context, req mcpgo.CallToolRequest) (*
 	} else {
 		start = !req.GetBool("deploy", false)
 	}
+	// Started deployments wait by default where the CLI can (see
+	// waitReadyByDefault); create-only requests have no running process to
+	// check. An explicit true still rejects a create-only request.
+	_, waitRequested := req.GetArguments()["wait_ready"]
+	_, deadlineRequested := req.GetArguments()["readiness_timeout_seconds"]
+	waitReady, err := runBoolean(req, "wait_ready", start)
+	if err != nil {
+		return errResult(errCodeInvalidArgument, err.Error()), nil
+	}
+	includeOutput, err := runBoolean(req, "include_output", false)
+	if err != nil {
+		return errResult(errCodeInvalidArgument, err.Error()), nil
+	}
+	service := stringParam(req, "service")
+	if value, exists := req.GetArguments()["service"]; exists {
+		if _, ok := value.(string); !ok || appconfig.ValidateServiceName(service) != nil {
+			return errResult(errCodeInvalidArgument, "service must be a valid service name"), nil
+		}
+	}
+	readinessTimeout := 0
+	if _, exists := req.GetArguments()["readiness_timeout_seconds"]; exists {
+		readinessTimeout, err = ros2Int(req, "readiness_timeout_seconds", 0, 1, 3600)
+		if err != nil || !waitReady || readinessTimeout > timeout {
+			return errResult(errCodeInvalidArgument, "readiness_timeout_seconds requires wait_ready and must be 1..timeout_seconds"), nil
+		}
+	}
+	if waitReady && !start {
+		return errResult(errCodeInvalidArgument, "wait_ready requires start=true"), nil
+	}
 	// An attached run waits for readiness, opens a browser on this host, runs
 	// postStart hooks and streams logs until stopped, so it could only time
 	// out here. run always detaches; telemetry_logs reads the app's output.
@@ -101,8 +131,18 @@ func (s *mcpServer) handleRun(ctx context.Context, req mcpgo.CallToolRequest) (*
 	if target.Selector != "" {
 		selector = target.Selector
 	}
+	cloudRun := target.Transport == "cloud" && target.Selector == ""
+	if waitReady && !waitRequested && !deadlineRequested {
+		waitReady = s.waitReadyByDefault(projectPath, stringParam(req, "build_type"), selector, cloudRun)
+	}
+	if waitReady && (selector == "docker" || selector == "podman") {
+		return errResult(errCodeUnsupported, "wait_ready requires a WendyOS target; set wait_ready=false for local Docker/Podman and check application readiness separately"), nil
+	}
+	if waitReady && cloudRun {
+		return errResult(errCodeUnsupported, "wait_ready is not supported for device_name deployments; set wait_ready=false, or connect with cloud_connect and run without device_name"), nil
+	}
 	args := []string{"run", "--prefix", projectPath, "--device", selector, "--yes"}
-	if target.Transport == "cloud" && target.Selector == "" {
+	if cloudRun {
 		args = append([]string{"cloud"}, args...)
 		if target.CloudGRPC != "" {
 			args = append(args, "--cloud-grpc", target.CloudGRPC)
@@ -122,7 +162,16 @@ func (s *mcpServer) handleRun(ctx context.Context, req mcpgo.CallToolRequest) (*
 	if req.GetBool("debug", false) {
 		args = append(args, "--debug")
 	}
-	args = append(args, "--detach")
+	if service != "" {
+		args = append(args, "--service", service)
+	}
+	args = append(args, "--detach", "--json")
+	if waitReady {
+		args = append(args, "--wait-ready")
+	}
+	if readinessTimeout != 0 {
+		args = append(args, "--readiness-timeout", fmt.Sprintf("%ds", readinessTimeout))
+	}
 	runCtx, cancel := context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
 	defer cancel()
 	runner := s.runCommandFn
@@ -135,12 +184,41 @@ func (s *mcpServer) handleRun(ctx context.Context, req mcpgo.CallToolRequest) (*
 		runCtx = withRunProgress(runCtx, newRunProgress(func(progress float64, message string) { reportProgress(ctx, tok, progress, 0, message) }))
 	}
 	output, truncated, runErr := runner(runCtx, args, target, maxBytes)
+	receipt, output := decodeRunReceipt(output)
+	if receipt != nil && !waitReady {
+		receipt.Readiness = "not_checked"
+		if receipt.Status == "ready" {
+			receipt.Status = "started"
+		}
+	}
 	s.refreshContainerMCPTools()
 	result := map[string]any{
-		"target": target, "output": strings.TrimSpace(output), "truncated": truncated,
+		"target":    target,
 		"readiness": "not_checked",
 	}
+	if output != "" {
+		result["build_log_uri"] = s.saveRunLog(target, output, truncated)
+	}
+	if service != "" {
+		result["requested_service"] = service
+	}
+	if includeOutput || runErr != nil || runCtx.Err() != nil {
+		result["output"] = strings.TrimSpace(output)
+		result["truncated"] = truncated
+	}
+	if receipt != nil {
+		copyRunReceipt(result, receipt)
+	}
+	if receipt != nil && runErr == nil && (receipt.Status == "crashed" || receipt.Status == "not_ready" || receipt.Status == "failed") {
+		runErr = errors.New("deployment or readiness verification failed")
+		result["output"] = strings.TrimSpace(output)
+	}
+	if waitReady && (receipt == nil || receipt.Status == "started" || receipt.Status == "created") && runErr == nil && runCtx.Err() == nil {
+		runErr = errors.New("deployment returned no structured readiness result")
+		result["output"] = runErr.Error()
+	}
 	if runErr != nil || runCtx.Err() != nil {
+		result["truncated"] = truncated
 		code := runFailureCode(output)
 		if errors.Is(runCtx.Err(), context.DeadlineExceeded) {
 			code = errCodeTimeout
@@ -148,8 +226,13 @@ func (s *mcpServer) handleRun(ctx context.Context, req mcpgo.CallToolRequest) (*
 			code = errCodeCancelled
 		}
 		result["error_code"] = string(code)
-		result["status"] = "failed"
-		result["message"] = "Deployment did not complete. Inspect the output and device state before retrying; a timed-out or cancelled command may already have created or started the container."
+		if receipt == nil || (receipt.Status != "crashed" && receipt.Status != "not_ready") {
+			result["status"] = "failed"
+			result["readiness"] = "not_checked"
+		}
+		if result["message"] == nil {
+			result["message"] = "Deployment or readiness verification did not complete. Inspect device state before retrying; the command may already have created or started the container."
+		}
 		if output == "" && runErr != nil {
 			result["output"] = runErr.Error()
 		}
@@ -160,7 +243,9 @@ func (s *mcpServer) handleRun(ctx context.Context, req mcpgo.CallToolRequest) (*
 		r.IsError = true
 		return r, nil
 	}
-	result["status"] = "started"
+	if receipt == nil {
+		result["status"] = "started"
+	}
 	if !start {
 		result["status"] = "created"
 	}
@@ -168,8 +253,26 @@ func (s *mcpServer) handleRun(ctx context.Context, req mcpgo.CallToolRequest) (*
 	if next := s.runNextStep(target); next != "" {
 		result["suggested_next_step"] = next
 	}
+	if receipt != nil && receipt.Readiness == "passed" {
+		result["suggested_next_step"] = "Configured TCP readiness passed. Verify application-specific behavior separately."
+	}
 	reportProgress(ctx, tok, 1, 1, "deployment command completed")
 	return okResult(result), nil
+}
+
+// waitReadyByDefault reports whether a started run that leaves wait_ready out
+// should wait. `wendy cloud run` has no --wait-ready, local Docker/Podman have
+// no readiness wait, and `wendy run` refuses the wait for some projects
+// (Compose, multi-service, Xcode, native commands, host-built Swift, a build
+// host); the project backend reports those with the CLI's own checks.
+func (s *mcpServer) waitReadyByDefault(projectPath, buildType, selector string, cloudRun bool) bool {
+	if cloudRun || selector == "docker" || selector == "podman" {
+		return false
+	}
+	s.mu.RLock()
+	unsupported := s.project.WaitReadyUnsupported
+	s.mu.RUnlock()
+	return unsupported == nil || unsupported(projectPath, buildType) == nil
 }
 
 // Keep the tail while the process runs, including on failure. A large compiler
@@ -213,11 +316,12 @@ func executeRunCommand(ctx context.Context, args []string, target commandTarget,
 	// Bound pipe cleanup if a descendant build process outlives the CLI.
 	cmd.WaitDelay = 2 * time.Second
 	tail := &runTail{limit: limit}
+	stdout := &runTail{limit: 65536}
 	var out io.Writer = tail
 	if progress := runProgressFrom(ctx); progress != nil {
 		out = io.MultiWriter(tail, progress)
 	}
-	cmd.Stdout, cmd.Stderr = out, out
+	cmd.Stdout, cmd.Stderr = io.MultiWriter(out, stdout), out
 	if err = cmd.Start(); err != nil {
 		return "", false, err
 	}
@@ -237,7 +341,8 @@ func executeRunCommand(ctx context.Context, args []string, target commandTarget,
 	for len(data) > 0 && !utf8.RuneStart(data[0]) {
 		data = data[1:]
 	}
-	return strings.ToValidUTF8(string(data), "�"), tail.truncated, err
+	output := strings.ToValidUTF8(string(data), "�")
+	return encodeRunReceipt(stdout.data, output), tail.truncated, err
 }
 
 func runEnvironment(env []string, target commandTarget) []string {

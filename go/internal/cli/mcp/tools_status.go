@@ -101,6 +101,16 @@ func (s *mcpServer) handleWendyStatus(_ context.Context, _ mcpgo.CallToolRequest
 // statusResult drops what a hosted chat has no use for: CLI upgrade details,
 // the local command target, group state and app-proxy diagnostics.
 func (s *mcpServer) statusResult(out map[string]any) *mcpgo.CallToolResult {
+	s.mu.RLock()
+	v1 := s.toolProfile == "workflow-v1"
+	s.mu.RUnlock()
+	if v1 && !s.relay {
+		if out["connected"] == true {
+			out["suggested_next_step"] = "Use the saved workflow with job_submit; batch dependent calls in the client. Keep terminal waits and read-only recovery outside repeated model decisions."
+		} else {
+			out["suggested_next_step"] = "Wendy MCP V1 requires an explicitly configured startup target (--device). Use the standard profile for discovery/sign-in, then restart with the selected target. No target or execution permission is inferred."
+		}
+	}
 	if s.relay {
 		for _, k := range []string{"cli_update", "command_target", "tool_groups", "proxy_diagnostics"} {
 			delete(out, k)

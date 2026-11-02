@@ -13,12 +13,14 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/shared/atomicfile"
+	"github.com/wendylabsinc/wendy/go/internal/shared/datadoc"
 	"gopkg.in/yaml.v3"
 )
 
@@ -240,6 +242,10 @@ func (n *CampaignNotify) UnmarshalYAML(node *yaml.Node) error {
 // triggers; it does not require the configured sensors or network destination
 // to be online at deployment time.
 type Campaign struct {
+	// Kind is the data document header's kind. A campaign is a collection;
+	// the field exists so ParseCampaign's strict decoding accepts
+	// "kind: collection", and it is never stored or hashed.
+	Kind              string             `json:"-" yaml:"kind,omitempty"`
 	Inference         *CampaignInference `json:"inference,omitempty" yaml:"inference,omitempty"`
 	InferenceStatus   *InferenceStatus   `json:"inference_status,omitempty" yaml:"-"`
 	Version           int                `json:"version" yaml:"version"`
@@ -282,6 +288,10 @@ func ParseCampaign(contents []byte) (Campaign, error) {
 	if err := campaign.validate(); err != nil {
 		return Campaign{}, err
 	}
+	// Kind is only the header's spelling; clearing it keeps a parsed campaign
+	// identical with or without "kind: collection", so re-marshalling never
+	// sends the line to an older agent.
+	campaign.Kind = ""
 	campaign.State = "armed"
 	if campaign.Models == nil {
 		campaign.Models = map[string]string{}
@@ -401,11 +411,20 @@ func (c Campaign) planDigestInput() map[string]any {
 		if i.ModelFile != "" {
 			plan["inference"].(map[string]any)["model_file"] = i.ModelFile
 		}
+		// Only when set, so campaigns that predate accelerators keep their
+		// revisions. An explicit auto is a different revision from an absent
+		// field, as an explicit transformers backend is.
+		if i.Accelerator != "" {
+			plan["inference"].(map[string]any)["accelerator"] = i.Accelerator
+		}
 	}
 	return plan
 }
 
 func (c Campaign) validate() error {
+	if c.Kind != "" && c.Kind != datadoc.DefaultKind {
+		return fmt.Errorf("kind %q is not a campaign; a campaign has kind collection or no kind", c.Kind)
+	}
 	if c.Version == 0 {
 		return fmt.Errorf("version is required; this agent supports campaign version %d", CampaignVersion)
 	}
@@ -617,7 +636,7 @@ func preRollParameterConflicts(c Campaign) []string {
 	return conflicts
 }
 
-func (m *Manager) campaignDir() string { return filepath.Join(filepath.Dir(m.root), "campaigns") }
+func (m *Manager) campaignDir() string { return m.location.CampaignDir }
 
 func (m *Manager) DeployCampaign(contents []byte) (Campaign, error) {
 	campaign, err := ParseCampaign(contents)
@@ -628,6 +647,7 @@ func (m *Manager) DeployCampaign(contents []byte) (Campaign, error) {
 		return Campaign{}, err
 	}
 	campaign.DeployedUnixNanos = time.Now().UnixNano()
+	campaign.Warnings = append(campaign.Warnings, m.legacyAudioSelectorWarnings(campaign)...)
 	if absent := m.unpublishedROS2Selectors(campaign); len(absent) > 0 {
 		campaign.Warnings = append(campaign.Warnings, "no healthy ROS 2 graph currently publishes these selectors; the campaign still deploys, and a trigger records its other sources and marks the absent one in the episode manifest: "+strings.Join(absent, ", "))
 	}
@@ -811,6 +831,9 @@ func (m *Manager) resolveCampaignSources(campaign Campaign, degradeROS2 bool) ([
 			if err != nil {
 				return nil, nil, nil, nil, err
 			}
+			if id != requested.Audio && IsLegacyAudioSourceID(strings.TrimSpace(requested.Audio)) {
+				m.Warnf("campaign %q: audio selector %q is a deprecated microphone ID and resolved to %s; it can change after a reboot or a replug, so deploy the plan with audio: %s", campaign.Name, requested.Audio, id, id)
+			}
 			selected[id] = true
 			if requested.Capture != nil {
 				captures[id] = requested.Capture
@@ -984,9 +1007,38 @@ func (m *Manager) checkDeployableAudioSources(campaign Campaign) error {
 			return fmt.Errorf("audio source %q resolves to %s, which is unhealthy and would record silence: %s",
 				requested.Audio, unhealthy.ID, unhealthy.Detail)
 		}
+		if selector := strings.TrimSpace(requested.Audio); IsLegacyAudioSourceID(selector) {
+			return fmt.Errorf("audio source %q does not name a healthy capture source on this device: %s", requested.Audio, legacyAudioIDHint(selector))
+		}
 		return fmt.Errorf("audio source %q does not name a healthy capture source on this device", requested.Audio)
 	}
 	return nil
+}
+
+// legacyAudioSelectorWarnings names every audio selector written as an
+// old-style microphone ID ("audio:<n>"). The plan still deploys and the
+// selector still resolves, through the microphone's alias, but only for as long
+// as the number keeps meaning that microphone; the warning says which stable ID
+// it means today, so the operator can write that instead.
+func (m *Manager) legacyAudioSelectorWarnings(campaign Campaign) []string {
+	var warnings []string
+	var all []Source
+	loaded := false
+	for i, requested := range campaign.Sources {
+		selector := strings.TrimSpace(requested.Audio)
+		if !IsLegacyAudioSourceID(selector) {
+			continue
+		}
+		if !loaded {
+			all, loaded = m.Sources(context.Background()), true
+		}
+		id, err := resolveKindSelector(all, "audio", selector)
+		if err != nil || id == selector {
+			continue
+		}
+		warnings = append(warnings, fmt.Sprintf("sources[%d] audio: %q is a deprecated microphone ID, a session-local number that can change after a reboot or a replug; it resolves to %s on this device now, so write audio: %s instead", i, requested.Audio, id, id))
+	}
+	return warnings
 }
 
 // unpublishedROS2Selectors names the campaign's ROS 2 selectors that no healthy
@@ -1027,7 +1079,7 @@ func matchUnhealthySource(all []Source, kind, selector string) (Source, bool) {
 		if source.Kind != kind || source.Healthy {
 			continue
 		}
-		if source.ID == selector || strings.EqualFold(source.ID, selector) {
+		if source.ID == selector || strings.EqualFold(source.ID, selector) || slices.Contains(source.Aliases, selector) {
 			return source, true
 		}
 		if selector != "" && strings.Contains(strings.ToLower(source.Detail), strings.ToLower(selector)) {
@@ -1074,7 +1126,8 @@ func resolveCameraSelector(all []Source, selector string) (string, error) {
 }
 
 // resolveKindSelector maps a campaign selector onto a healthy source of the
-// given kind by exact ID, then by a case-insensitive substring of the source
+// given kind by exact ID, then by one of the source's Aliases (a microphone's
+// old-style "audio:<n>" ID), then by a case-insensitive substring of the source
 // detail, and finally accepts "default" when exactly one healthy source of the
 // kind exists. It mirrors resolveCameraSelector for non-camera kinds such as
 // audio, which have no /dev alias.
@@ -1087,6 +1140,12 @@ func resolveKindSelector(all []Source, kind, selector string) (string, error) {
 		}
 		healthy = append(healthy, source)
 		if source.ID == selector || strings.EqualFold(source.ID, selector) {
+			return source.ID, nil
+		}
+	}
+	// After every exact ID, so an alias can never shadow a source's own ID.
+	for _, source := range healthy {
+		if slices.Contains(source.Aliases, selector) {
 			return source.ID, nil
 		}
 	}

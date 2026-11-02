@@ -125,6 +125,10 @@ func TestParseDump(t *testing.T) {
 	if src.IsSink {
 		t.Error("Audio/Source marked as a sink")
 	}
+	// node.name is the stable identity; the object id is a reused slot.
+	if src.StableName != "bluez_input.78:2B:64:76:F3:CE" {
+		t.Errorf("stable name = %q, want node.name", src.StableName)
+	}
 
 	// PipeWire's ALSA monitor exposes sound cards as nodes, which is why
 	// enumerating PipeWire alone still covers everything ALSA would.

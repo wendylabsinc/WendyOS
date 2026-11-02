@@ -7,10 +7,15 @@ sessions use the legacy broker.
 ## Usage
 
 ```sh
-wendy cloud tunnel <local-port>:<remote-port>[/udp] [flags]
+wendy cloud tunnel [<local-port>:<remote-port>[/udp]] [flags]
 ```
 
 ## Description
+
+Run `wendy cloud tunnel` without a port mapping to enter one interactively.
+The prompt accepts a single port, `local:remote`, or either form with `/udp`.
+Invalid input shows an error so you can correct it. Press Ctrl+C to cancel.
+Non-interactive and `--json` invocations require an explicit port mapping.
 
 `wendy cloud tunnel` fetches the list of **online** compute devices from Wendy Cloud and either connects directly when only one device is available, selects the device named or identified by `--device`, or prompts you to choose one interactively.
 

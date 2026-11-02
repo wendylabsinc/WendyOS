@@ -24,6 +24,8 @@ type buildRow struct {
 	dur     time.Duration
 	detail  string
 	bytes   ByteProgress
+	// started is when the row last began running; it drives the elapsed time.
+	started time.Time
 }
 
 // BuildStepsModel renders a live, collapsing list of buildx steps for a single
@@ -35,9 +37,10 @@ type BuildStepsModel struct {
 	spinner spinner.Model
 	hints   hintRotator
 	width   int
-	tally   BuildTally
+	tally   BuildTallyCounter
 	done    bool
 	err     error
+	now     func() time.Time
 }
 
 // NewBuildStepsModel returns a model with the given title (e.g. the
@@ -51,6 +54,7 @@ func NewBuildStepsModel(title string) BuildStepsModel {
 		byID:    map[string]int{},
 		spinner: s,
 		hints:   newHintRotator(),
+		now:     time.Now,
 	}
 }
 
@@ -95,14 +99,21 @@ func (m BuildStepsModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *BuildStepsModel) applyEvent(e BuildStepEvent) {
+	m.tally.Observe(e)
 	i, ok := m.byID[e.ID]
 	if !ok {
 		m.rows = append(m.rows, buildRow{
 			id: e.ID, kind: e.Kind, display: e.Display,
 			status: e.Status, detail: e.Detail, bytes: e.Bytes,
+			started: m.now(),
 		})
 		m.byID[e.ID] = len(m.rows) - 1
 		return
+	}
+	if e.Status == BuildStepRunning && m.rows[i].status != BuildStepRunning {
+		// A finished step BuildKit reopened (a lazily pulled base image) times
+		// its new run from now.
+		m.rows[i].started = m.now()
 	}
 	m.rows[i].status = e.Status
 	m.rows[i].dur = e.Dur
@@ -114,16 +125,6 @@ func (m *BuildStepsModel) applyEvent(e BuildStepEvent) {
 	} else {
 		m.rows[i].detail = ""
 		m.rows[i].bytes = ByteProgress{}
-	}
-	switch e.Status {
-	case BuildStepCached:
-		if e.Kind == BuildVertexStep {
-			m.tally.Cached++
-		}
-	case BuildStepDone:
-		if e.Kind == BuildVertexStep {
-			m.tally.Rebuilt++
-		}
 	}
 }
 
@@ -155,11 +156,16 @@ func (m BuildStepsModel) View() string {
 	if elided > 0 {
 		sb.WriteString(fmt.Sprintf("  %s\n", bsDim.Render(fmt.Sprintf("… %d earlier steps", elided))))
 	}
+	now := m.now()
 	for _, r := range visible {
 		label := truncateDetail(r.display, labelWidth)
 		switch r.status {
 		case BuildStepRunning:
-			sb.WriteString(fmt.Sprintf("  %s %s\n", m.spinner.View(), label))
+			if el := runningElapsed(r.started, now); el != "" {
+				sb.WriteString(fmt.Sprintf("  %s %s %s\n", m.spinner.View(), label, bsDim.Render(el)))
+			} else {
+				sb.WriteString(fmt.Sprintf("  %s %s\n", m.spinner.View(), label))
+			}
 			if d := r.progressLine(); d != "" {
 				sb.WriteString(fmt.Sprintf("      %s\n", bsDim.Render(d)))
 			}
@@ -221,6 +227,21 @@ func (m BuildStepsModel) visibleRows() ([]buildRow, int) {
 	return out, dropped
 }
 
+// runningElapsed is how long a running row has been going, in the same
+// Duration format a finished row shows but whole seconds: the view redraws on
+// every spinner frame, and ticking milliseconds would be noise. It stays empty
+// for the first second so quick steps do not flash "0s".
+func runningElapsed(started, now time.Time) string {
+	if started.IsZero() {
+		return ""
+	}
+	d := now.Sub(started).Truncate(time.Second)
+	if d < time.Second {
+		return ""
+	}
+	return d.String()
+}
+
 // progressLine is the dim sub-line under a running step: the tool's own progress
 // ("[525/1027] 51% Compiling WendyKit") and/or BuildKit's transfer counters.
 func (r buildRow) progressLine() string { return joinProgress(r.detail, r.bytes) }
@@ -230,4 +251,4 @@ func (r buildRow) progressLine() string { return joinProgress(r.detail, r.bytes)
 func (m BuildStepsModel) Err() error { return m.err }
 
 // Tally returns the cached/rebuilt counts accumulated from step events.
-func (m BuildStepsModel) Tally() BuildTally { return m.tally }
+func (m BuildStepsModel) Tally() BuildTally { return m.tally.Tally() }

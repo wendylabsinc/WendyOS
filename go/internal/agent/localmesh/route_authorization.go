@@ -13,9 +13,9 @@ import (
 // manifest. The router ID and sequence number are origin fields; a relay's next
 // hop and metric remain path-dependent and are not claims by the destination.
 type RouteOrigin struct {
-	Prefix   netip.Prefix   `json:"prefix"`
-	RouterID babel.RouterID `json:"routerId"`
-	Seqno    uint16         `json:"seqno"`
+	Prefix   netip.Prefix   `json:"prefix" cbor:"p"`
+	RouterID babel.RouterID `json:"routerId" cbor:"r"`
+	Seqno    uint16         `json:"seqno" cbor:"s"`
 }
 
 func (m Manifest) validateRoute(device meshid.Device) error {
@@ -33,7 +33,7 @@ func (m Manifest) validateRoute(device meshid.Device) error {
 
 // RouteAuthorizations returns a detached snapshot for route admission. It checks
 // current trust and the exact record's signature against the current key, and
-// requires a live version-3 lease. Conflicting address claims by different
+// requires a live version-4 lease. Conflicting address claims by different
 // principals authorize neither origin. A signed origin proves address ownership,
 // not the honesty or reachability of its relays.
 func (d *Directory) RouteAuthorizations(now time.Time) map[RouteOrigin]bool {

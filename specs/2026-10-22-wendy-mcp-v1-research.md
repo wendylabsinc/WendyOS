@@ -1,0 +1,37 @@
+# Wendy MCP V1: research and experimental design
+
+Primary sources checked October 22, 2026. **Wendy MCP V1** is the next experimental candidate, not a performance claim. This note separates documented patterns from proposed Wendy behavior; it contains no private benchmark traces or device identifiers.
+
+## What the sources support
+
+| Primary source and exact section | Documented pattern | Limitation relevant to Wendy |
+| --- | --- | --- |
+| [Cloudflare, Single code tool](https://developers.cloudflare.com/agents/model-context-protocol/codemode/#single-code-tool) and [Search and execute](https://developers.cloudflare.com/agents/model-context-protocol/codemode/#search-and-execute) | One outer code call can compose dependent operations and filter intermediate data. Search/execute separates schema discovery from authenticated execution. | The single-code-tool description still contains every upstream TypeScript definition. Fewer tool names alone do not imply fewer schema tokens. Search/execute instead keeps the full API document inside the sandbox. |
+| [Anthropic, Tool Search Tool](https://www.anthropic.com/research/advanced-tool-use#tool-search-tool), especially “When to use the Tool Search Tool” | Deferred definitions enter context when discovered; frequently used tools can remain loaded. | Discovery adds latency and can be less useful for small, compact catalogs. Anthropic's API flags are provider-specific, not guaranteed MCP-client features. |
+| [Anthropic, Programmatic Tool Calling](https://www.anthropic.com/research/advanced-tool-use#programmatic-tool-calling), especially “How Programmatic Tool Calling works” and “When to use” | Code orchestrates calls and transforms intermediate results; the model receives the chosen final output. Independent calls can run in parallel. | Code execution adds overhead. Simple single calls and tasks needing model reasoning over intermediate results can benefit less. |
+| [GitHub, Tool Configuration](https://github.com/github/github-mcp-server#tool-configuration), especially “Specifying Toolsets” and “Specifying Individual Tools” | Explicit toolset and individual-tool allowlists reduce the advertised catalog. Read-only mode takes precedence over requested write tools. | Toolsets plus individual tools are additive. A catalog choice is not a replacement for access control or a guarantee that a client's existing session reloads definitions. |
+| [Notion, Today: all-in-one remote MCP solution](https://www.notion.com/blog/notions-hosted-mcp-server-an-inside-look#today-all-in-one-remote-mcp-solution) and “Highlight: Notion-flavored Markdown” | Notion replaced some one-to-one REST wrappers with agent-oriented operations and denser content representations, while retaining existing API tools where useful. | This supports task-shaped interfaces, not blindly converting all machine-verifiable reports to prose. Notion's article does not prescribe our receipt/hash protocol. |
+
+[Cloudflare's “Sandbox and authorization boundary”](https://developers.cloudflare.com/agents/model-context-protocol/codemode/#sandbox-and-authorization-boundary) explicitly keeps credentials in host callbacks, blocks direct sandbox network access by default, and requires upstream authorization before side effects. [Anthropic's “Best practices”](https://www.anthropic.com/research/advanced-tool-use#best-practices) favors selective layering and identifies idempotent operations as good programmatic candidates.
+
+These sources support batching and compact interfaces. They do **not** establish our particular durable job wait/reconnect algorithm, evidence format, CUDA correctness, or performance. Their published reductions are their own measurements and must not become Wendy estimates.
+
+## Proposed Wendy MCP V1 behavior
+
+The following are Wendy design recommendations, not claims of implementation or measured savings.
+
+1. **Focused catalog:** start with the smallest workflow-specific set. Keep needed execution/observation operations directly discoverable; expose specialist schemas on demand. Record actual advertised bytes and model-input tokens. Compare a fixed compact catalog against dynamic discovery before adding a search round trip.
+2. **Programmatic batching:** execute a validated saved workflow through the existing permissioned tool. Keep step orchestration, metric projections and selected artifact verification outside model context. A bounded declarative plan is sufficient for V1; arbitrary JavaScript execution is not required to apply the pattern.
+3. **Client-managed waiting/recovery:** use one client controller to await completion within the existing deadline, handle bounded observation retries, and collect selected evidence. Persist the same job identity across reconnects. An interrupted observation must never imply permission to submit replacement training. If the host exposes an outer wait, count it; do not hide it in accounting.
+4. **Concise verified result:** return terminal state, required scalar answers, failed steps/timeouts, explicit unknowns and evidence references. Put full steps, logs, provenance and verified artifact inventory in a separate receipt. Retain requested digests or one clearly scoped verification reference so the agent need not reopen several files merely to answer the task. A digest confirms bytes, not semantic correctness.
+5. **Authorization stays at the operation boundary:** batching, reconnects and focused catalogs must preserve existing tool approvals, target/path constraints and budgets. Never treat approval for one workflow as blanket approval for a code interpreter or new tools. Keep credentials and raw private traces out of results and public repository files.
+
+## Matched comparison and failure accounting
+
+Compare **previous implementation**, **Wendy MCP V1**, and the **strong reusable regular helper** under the same task contract, input hashes, model/settings, execution budgets, runtime and sealed grader. Preserve earlier results as historical observations; do not pool them into a newly matched cohort without labeling differences. The regular helper's use of Wendy Cloud transport must remain explicit.
+
+Measure cold setup separately from warm execution and also report the combined total. Cold includes any installation/configuration, schema discovery, authentication/connection work, source/workflow preparation and evidence setup actually needed. Record pre-existing authenticated/cache state rather than claiming a completely fresh machine. Separate infrastructure time requiring no model request from agent token cost.
+
+For every attempted arm retain every model request, tool discovery, outer wait, retry, setup error and correctness failure. Report input/output/cached tokens, request counts and waits; end-to-end wall time, remote execution time and clearly defined orchestration time; and independent correctness results separately. Overlapping remote steps require critical-path/interval accounting rather than subtracting summed durations from elapsed wall time.
+
+Include bounded disconnect/reconnect and lost-response cases without duplicate submission, plus missing/corrupt evidence, failed steps and authorization denial. A shorter answer that omits required evidence is a correctness failure. Randomize/interleave paired attempts; retain all attempts and task-specific regressions. Do not infer dollar savings without recorded applicable rates, or 10× from source bytes, one successful pair or a selected task.

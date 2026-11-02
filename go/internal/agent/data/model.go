@@ -80,6 +80,19 @@ type Source struct {
 	ClockDomain string `json:"clock_domain"`
 	Healthy     bool   `json:"healthy"`
 	Detail      string `json:"detail,omitempty"`
+	// Name is a short label for people, such as "HD Pro Webcam C920", free of
+	// the driver strings Detail carries. UnusableReason says in a few words why
+	// Healthy is false, such as "no login stored". Both are listing-only: they
+	// travel on DataSource and are kept out of the manifest, whose source
+	// entries stay exactly what earlier agents sealed.
+	Name           string `json:"-"`
+	UnusableReason string `json:"-"`
+	// Aliases are other identifiers that select this source, so a selector
+	// written before its ID changed still resolves (see resolveSourceAliases).
+	// Today only a microphone carries one: the session-local "audio:<n>" it was
+	// listed under before microphones had stable IDs. Never in the manifest: an
+	// episode records the ID it selected.
+	Aliases []string `json:"-"`
 	// Capture is the per-episode capture policy a campaign attached to this
 	// source, nil when none applies. It is deliberately excluded from the
 	// manifest: the policy lives in the campaign plan, while the manifest
@@ -112,6 +125,11 @@ type SourceStats struct {
 	// consumed.
 	ModelInputs *SourceModelInputs `json:"model_inputs,omitempty"`
 }
+
+// DropAccountingSourceAbsent is the DropAccounting of a source a campaign
+// named that did not resolve when the episode was triggered. The manifest keeps
+// the source to show it was asked for, but nothing of it is recorded.
+const DropAccountingSourceAbsent = "source_absent_at_trigger"
 
 // Payload retention classes for samples a source handed to a model. They say
 // what the episode holds for those samples; they never claim more than the

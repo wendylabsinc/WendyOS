@@ -197,6 +197,7 @@ func newDevicePairCmd() *cobra.Command {
 		listOnly                    bool
 		name                        string
 		sensors                     []string
+		sensorSource                string
 		unitreeTab                  bool
 		unitreeIP                   string
 		unitreeRegion               string
@@ -207,13 +208,32 @@ func newDevicePairCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "pair",
 		Short: "Pair or forget Bluetooth, SensorLink, IP cameras, USB arms, and Unitree robots",
-		Long:  "Discover, pair, and forget devices in the Bluetooth, SensorLink, IP Cameras, USB Arms, and Unitree tabs. Bluetooth, SensorLink sources, IP cameras, and Unitree Go2 robots are discovered on the selected WendyOS device's network, so you can pair from anywhere; if the device's agent is too old to scan for SensorLink sources, that tab scans your local network instead and says so. Unitree login retrieves your robot's key, which the selected WendyOS device stores and uses to connect. Use --ip to enter a robot's IPv4 address. USB arm pairing saves an unverified host-local binding on the target Agent; it does not bond Bluetooth or start telemetry/control. SensorLink devices must be in an organization you belong to.",
-		Args:  cobra.NoArgs,
+		Long:  "Discover, pair, and forget devices in the Bluetooth, SensorLink, IP Cameras, USB Arms, and Unitree tabs. Bluetooth, SensorLink sources, IP cameras, and Unitree Go2 robots are discovered on the selected WendyOS device's network, so you can pair from anywhere; if the device's agent is too old to scan for SensorLink sources, that tab scans your local network instead and says so. Unitree login retrieves your robot's key, which the selected WendyOS device stores and uses to connect. Use --ip to enter a robot's IPv4 address. USB arm pairing saves an unverified host-local binding on the target Agent; it does not bond Bluetooth or start telemetry/control. SensorLink devices must be in an organization you belong to.\n\nTo pair one SensorLink source without the tabs, name it with --sensorlink: its name, source asset ID, or principal URI. An exact asset ID or principal URI wins over a name. Only the device's own scan is searched. --list prints saved pairings, --forget removes one by the pairing name --list shows, its source asset ID, or principal URI, and --json prints each result as JSON. Without a terminal, or with --json, use these or --usb-arms; the tabs need a terminal.",
+		Example: "  wendy device pair --device my-wendy\n" +
+			"  wendy --json device pair --device my-wendy --list\n" +
+			"  wendy --json device pair --device my-wendy --sensorlink garage-cam --name \"Garage camera\"\n" +
+			"  wendy --json device pair --device my-wendy --forget \"Garage camera\"\n" +
+			"  wendy --json device pair --device my-wendy --usb-arms --list",
+		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := validateArmPairFlags(usbArms, listOnly, bindArm, forgetArm, armName, allowLocation, cmd.Flags().Changed("name") || cmd.Flags().Changed("sensors"), jsonOutput); err != nil {
+			sensorOptions := cmd.Flags().Changed("name") || cmd.Flags().Changed("sensors")
+			unitreeFlags := unitreeTab || cmd.Flags().Changed("ip") || cmd.Flags().Changed("unitree-region")
+			pairSensor := cmd.Flags().Changed("sensorlink")
+			// Without --usb-arms, --forget removes a SensorLink pairing.
+			forgetSensor := !usbArms && cmd.Flags().Changed("forget")
+			armFlags := usbArms || bindArm != "" || armName != "" || allowLocation
+			sensorQuery := sensorSource
+			if forgetSensor {
+				sensorQuery = forgetArm
+			}
+			// Before the USB checks, so a --sensorlink conflict is a usage error.
+			if err := validateSensorPairFlags(pairSensor, forgetSensor, sensorQuery, listOnly, armFlags, unitreeFlags, sensorOptions); err != nil {
 				return err
 			}
-			if usbArms && (unitreeTab || cmd.Flags().Changed("ip") || cmd.Flags().Changed("unitree-region")) {
+			if err := validateArmPairFlags(usbArms, listOnly, bindArm, forgetArm, armName, allowLocation, sensorOptions, jsonOutput); err != nil {
+				return err
+			}
+			if usbArms && unitreeFlags {
 				return fmt.Errorf("--usb-arms cannot be combined with Unitree flags")
 			}
 			if cmd.Flags().Changed("ip") {
@@ -226,8 +246,12 @@ func newDevicePairCmd() *cobra.Command {
 			if unitreeRegion != "global" && unitreeRegion != "cn" {
 				return fmt.Errorf("--unitree-region must be global or cn")
 			}
-			if listOnly && (unitreeTab || cmd.Flags().Changed("ip") || cmd.Flags().Changed("unitree-region")) {
+			if listOnly && unitreeFlags {
 				return fmt.Errorf("--list prints SensorLink pairings and cannot be combined with Unitree flags")
+			}
+			armScript := usbArms && (listOnly || bindArm != "" || forgetArm != "" || jsonOutput)
+			if !armScript && !listOnly && !pairSensor && !forgetSensor && (jsonOutput || !isInteractiveTerminal()) {
+				return usageErrorf("the pairing tabs need an interactive terminal; with --json or without one, use --list, --sensorlink <source> or --forget <source> for SensorLink, or --usb-arms")
 			}
 			ctx := cmd.Context()
 			conn, err := connectToAgent(ctx, SuppressProvisioningHint())
@@ -236,22 +260,22 @@ func newDevicePairCmd() *cobra.Command {
 			}
 			defer conn.Close()
 
-			if usbArms && (listOnly || bindArm != "" || forgetArm != "" || jsonOutput) {
+			if armScript {
 				return runArmPair(ctx, conn.RobotArmService, bindArm, forgetArm, armName, allowLocation, jsonOutput, cmd.OutOrStdout())
 			}
 			if listOnly {
-				resp, err := conn.SensorPairingService.ListSensorPairings(ctx, &agentpbv2.ListSensorPairingsRequest{})
-				if err != nil {
-					return cleanRPCError(err) // maps codes to human text, never raw "rpc error: code ="
+				return runSensorList(ctx, conn.SensorPairingService, jsonOutput, cmd.OutOrStdout())
+			}
+			if pairSensor || forgetSensor {
+				sensor := &sensorPairHandler{
+					ctx: ctx, client: conn.SensorPairingService,
+					orgIDs: cliOrgIDs, tenantIDs: cliTenantIDs,
+					name: name, sensors: sensors,
 				}
-				for _, p := range resp.Pairings {
-					state := "disconnected"
-					if p.Connected {
-						state = "connected"
-					}
-					cliLogln("%-20s %s  %s", p.Name, sensorPairLabel(p.SourceAssetId, p.SourcePrincipalUri), state)
+				if forgetSensor {
+					return runSensorForget(ctx, sensor, forgetArm, jsonOutput, cmd.OutOrStdout())
 				}
-				return nil
+				return runSensorPair(ctx, sensor, sensorSource, jsonOutput, cmd.OutOrStdout())
 			}
 
 			pairCtx, cancel := context.WithCancel(ctx)
@@ -272,10 +296,10 @@ func newDevicePairCmd() *cobra.Command {
 			if usbArms {
 				model.active = pairArmTab
 			}
-			if cmd.Flags().Changed("name") || cmd.Flags().Changed("sensors") {
+			if sensorOptions {
 				model.active = pairSensorLinkTab
 			}
-			if unitreeTab || cmd.Flags().Changed("ip") || cmd.Flags().Changed("unitree-region") {
+			if unitreeFlags {
 				model.active = pairUnitreeTab
 			}
 			if _, err := tea.NewProgram(model, tea.WithContext(pairCtx)).Run(); err != nil {
@@ -287,19 +311,21 @@ func newDevicePairCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&listOnly, "list", false, "list current SensorLink pairings (or USB inventory/bindings with --usb-arms)")
 	cmd.Flags().StringVar(&name, "name", "", "friendly name for a SensorLink pairing")
 	cmd.Flags().StringSliceVar(&sensors, "sensors", nil, "limit a SensorLink pairing to these sensor names (default: all)")
+	cmd.Flags().StringVar(&sensorSource, "sensorlink", "", "pair this SensorLink source without the tabs: its name, source asset ID, or principal URI")
 	cmd.Flags().BoolVar(&unitreeTab, "unitree", false, "open the Unitree Go2 pairing tab")
 	cmd.Flags().StringVar(&unitreeIP, "ip", "", "Unitree Go2 IPv4 address on the selected WendyOS device's network")
 	cmd.Flags().StringVar(&unitreeRegion, "unitree-region", "global", "Unitree account region: global or cn")
 	cmd.Flags().BoolVar(&usbArms, "usb-arms", false, "select USB arm bindings on the target Agent")
 	cmd.Flags().StringVar(&bindArm, "bind", "", "with --usb-arms, bind this inventory ID as an unverified SO-101")
-	cmd.Flags().StringVar(&forgetArm, "forget", "", "with --usb-arms, forget this saved binding ID")
+	cmd.Flags().StringVar(&forgetArm, "forget", "", "forget this saved SensorLink pairing by its pairing name, source asset ID, or principal URI (or a USB binding ID with --usb-arms)")
 	cmd.Flags().StringVar(&armName, "arm-name", "", "friendly name for a USB arm binding")
 	cmd.Flags().BoolVar(&allowLocation, "allow-location-binding", false, "acknowledge a USB binding without serial ID follows its port, including replacements")
 	return cmd
 }
 
 func validateArmPairFlags(usb, list bool, bind, forget, name string, allowLocation, sensorFlags, jsonOut bool) error {
-	if !usb && (bind != "" || forget != "" || name != "" || allowLocation) {
+	// Without --usb-arms, --forget removes a SensorLink pairing.
+	if !usb && (bind != "" || name != "" || allowLocation) {
 		return fmt.Errorf("USB arm options require --usb-arms")
 	}
 	if !usb {

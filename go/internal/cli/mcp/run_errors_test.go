@@ -112,7 +112,7 @@ func TestRunExplicitDeviceOverridesSessionAndSaysToConnect(t *testing.T) {
 		args = a
 		return "ok", false, nil
 	}
-	r, err := s.handleRun(context.Background(), callToolReq("run", map[string]any{"project_path": runProject(t), "device": "robot-b.local:50051"}))
+	r, err := s.handleRun(context.Background(), callToolReq("run", map[string]any{"wait_ready": false, "project_path": runProject(t), "device": "robot-b.local:50051"}))
 	if err != nil || r.IsError {
 		t.Fatalf("run: %v %v", r, err)
 	}
@@ -133,13 +133,13 @@ func TestRunExplicitDeviceOverridesSessionAndSaysToConnect(t *testing.T) {
 	// Deploying to the connected target itself needs no reconnect, and a
 	// deploy with no session names the connect call for the deployed device.
 	s.runCommandFn = func(context.Context, []string, commandTarget, int) (string, bool, error) { return "ok", false, nil }
-	same, _ := s.handleRun(context.Background(), callToolReq("run", map[string]any{"project_path": runProject(t)}))
+	same, _ := s.handleRun(context.Background(), callToolReq("run", map[string]any{"wait_ready": false, "project_path": runProject(t)}))
 	if next := structuredMap(t, same)["suggested_next_step"].(string); strings.Contains(next, "device_connect") {
 		t.Fatalf("session target run asks to reconnect: %s", next)
 	}
 	fresh := New(&config.Config{}, nil)
 	fresh.runCommandFn = s.runCommandFn
-	cloud, _ := fresh.handleRun(context.Background(), callToolReq("run", map[string]any{"project_path": runProject(t), "device_name": "robot-c"}))
+	cloud, _ := fresh.handleRun(context.Background(), callToolReq("run", map[string]any{"wait_ready": false, "project_path": runProject(t), "device_name": "robot-c"}))
 	// cloud_connect is outside the core tool group, so the hint enables it first.
 	next = structuredMap(t, cloud)["suggested_next_step"].(string)
 	for _, want := range []string{`wendy_tools(groups=["cloud"])`, `cloud_connect(device_name="robot-c")`} {
@@ -164,7 +164,7 @@ func TestRunResolvesRelativeProjectPath(t *testing.T) {
 		args = a
 		return "ok", false, nil
 	}
-	if r, err := s.handleRun(context.Background(), callToolReq("run", map[string]any{"project_path": ".", "device": "vm:test"})); err != nil || r.IsError {
+	if r, err := s.handleRun(context.Background(), callToolReq("run", map[string]any{"wait_ready": false, "project_path": ".", "device": "vm:test"})); err != nil || r.IsError {
 		t.Fatalf("run: %v %v", r, err)
 	}
 	if !strings.Contains(strings.Join(args, " "), "--prefix "+want+" ") {
@@ -186,14 +186,14 @@ func TestRunLeavesProjectValidationToTheCLI(t *testing.T) {
 		args = a
 		return "ok", false, nil
 	}
-	r, err := s.handleRun(context.Background(), callToolReq("run", map[string]any{"project_path": compose, "device": "vm:test", "build_type": "compose"}))
+	r, err := s.handleRun(context.Background(), callToolReq("run", map[string]any{"wait_ready": false, "project_path": compose, "device": "vm:test", "build_type": "compose"}))
 	if err != nil || r.IsError || !strings.Contains(strings.Join(args, " "), "--prefix "+compose+" ") {
 		t.Fatalf("compose project without wendy.json was not deployed: %v %v %v", r, err, args)
 	}
 	file := filepath.Join(compose, "compose.yaml")
 	for _, path := range []string{filepath.Join(compose, "missing"), file} {
 		args = nil
-		r, _ := s.handleRun(context.Background(), callToolReq("run", map[string]any{"project_path": path, "device": "vm:test"}))
+		r, _ := s.handleRun(context.Background(), callToolReq("run", map[string]any{"wait_ready": false, "project_path": path, "device": "vm:test"}))
 		if !r.IsError || args != nil || structuredMap(t, r)["error_code"] != string(errCodeInvalidArgument) || !strings.Contains(structuredMap(t, r)["message"].(string), "directory") {
 			t.Fatalf("project_path %s must be rejected as not a directory: %v", path, r)
 		}
@@ -308,7 +308,7 @@ func TestRunAlwaysDetaches(t *testing.T) {
 			got = a
 			return "ok", false, nil
 		}
-		args := map[string]any{"project_path": project, "device": "vm:test"}
+		args := map[string]any{"wait_ready": false, "project_path": project, "device": "vm:test"}
 		for k, v := range tc.args {
 			args[k] = v
 		}
@@ -387,7 +387,7 @@ func TestRunNextStepComparesNormalizedTargets(t *testing.T) {
 			s := New(&config.Config{}, nil)
 			s.commandTarget = tc.session
 			s.runCommandFn = func(context.Context, []string, commandTarget, int) (string, bool, error) { return "ok", false, nil }
-			args := map[string]any{"project_path": runProject(t)}
+			args := map[string]any{"wait_ready": false, "project_path": runProject(t)}
 			for k, v := range tc.args {
 				args[k] = v
 			}

@@ -278,6 +278,21 @@ func verifySkillImport(t *testing.T, exchange skillExchange) {
 	}
 }
 
+func TestSkillFrontmatterWindowsLineEndings(t *testing.T) {
+	for _, opening := range []string{"\n", "\r\n"} {
+		for _, closing := range []string{"\n", "\r\n"} {
+			data := []byte("---" + opening + "name: example\r\ndescription: Windows checkout\r\n---" + closing + "\r\nBody\r\n")
+			fm, offset, err := skillFrontmatter(data)
+			if err != nil {
+				t.Fatalf("opening %q, closing %q: %v", opening, closing, err)
+			}
+			if fm["name"] != "example" || fm["description"] != "Windows checkout" || string(data[offset:]) != "\r\nBody\r\n" {
+				t.Fatalf("incorrect metadata or original-byte offset: %+v, %d", fm, offset)
+			}
+		}
+	}
+}
+
 func TestSkillFrontmatterPreservesAllFields(t *testing.T) {
 	data := []byte("---\nname: example\ndescription: |\n  Multiple lines\n  preserved here.\nlicense: MIT\ndisable-model-invocation: true\nmetadata:\n  version: 2\nallowed-tools:\n  - resources/read\n---\n\nBody\n")
 	fm, offset, err := skillFrontmatter(data)
@@ -289,6 +304,36 @@ func TestSkillFrontmatterPreservesAllFields(t *testing.T) {
 	}
 	if fm["metadata"].(map[string]any)["version"] != float64(2) {
 		t.Fatal("lost nested metadata")
+	}
+}
+
+func TestSkillFrontmatterLineEndingsPreserveResourceBytes(t *testing.T) {
+	frontmatter := "name: example\ndescription: |\n  Multiple lines\n  preserved here.\nmetadata:\n  version: 2\n"
+	for _, tc := range []struct {
+		name, opening, content, closing, body string
+	}{
+		{"LF", "---\n", frontmatter, "---\n", "\nBody café\n"},
+		{"CRLF", "---\r\n", strings.ReplaceAll(frontmatter, "\n", "\r\n"), "---\r\n", "\r\nBody café\r\n"},
+		{"mixed checkout", "---\r\n", frontmatter, "---\n", "\r\nBody café\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			data := []byte(tc.opening + tc.content + tc.closing + tc.body)
+			original := bytes.Clone(data)
+			fm, offset, err := skillFrontmatter(data)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if fm["name"] != "example" || fm["description"] != "Multiple lines\npreserved here.\n" || fm["metadata"].(map[string]any)["version"] != float64(2) {
+				t.Fatalf("frontmatter differs: %+v", fm)
+			}
+			wantOffset := len(tc.opening + tc.content + tc.closing)
+			if offset != wantOffset || string(data[offset:]) != tc.body {
+				t.Fatalf("body offset = %d, want %d; body = %q", offset, wantOffset, data[offset:])
+			}
+			if !bytes.Equal(data, original) {
+				t.Fatal("parsing changed the original resource bytes")
+			}
+		})
 	}
 }
 

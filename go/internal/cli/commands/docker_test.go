@@ -653,6 +653,42 @@ func (s *signalingWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
+// The builder container lives on the Docker daemon, shared by every account
+// using it, but buildx registers builders per user. Another account's running
+// container must not take the fast path: this user's `--builder` would fail
+// with `no builder "<name>" found` (seen with root and wendy sharing a daemon).
+func TestOCIBuilderFastPathNeedsThisUsersRegistration(t *testing.T) {
+	oldCommand := imageBuilderCommandContext
+	t.Cleanup(func() { imageBuilderCommandContext = oldCommand })
+	inspects := 0
+	imageBuilderCommandContext = func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		inspects++
+		return exec.CommandContext(ctx, "echo", "true") // the container is running
+	}
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("DOCKER_CONFIG", "")
+	t.Setenv("BUILDX_CONFIG", "")
+
+	if ociBuilderRunningForUser(context.Background(), "wendy-oci") {
+		t.Fatal("took the fast path for a builder this user never created")
+	}
+	if inspects != 0 {
+		t.Fatalf("inspected the container %d times before checking this user's registration", inspects)
+	}
+
+	instances := filepath.Join(home, ".docker", "buildx", "instances")
+	if err := os.MkdirAll(instances, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(instances, "wendy-oci"), []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if !ociBuilderRunningForUser(context.Background(), "wendy-oci") {
+		t.Fatal("a registered, running builder missed the fast path")
+	}
+}
+
 // TestBootstrapOCIBuilderTimesOut proves bootstrapOCIBuilder bounds the
 // `docker buildx inspect --bootstrap` call: a helper process that outlives a
 // deliberately shrunk ociBuilderBootstrapTimeout must be killed, and the

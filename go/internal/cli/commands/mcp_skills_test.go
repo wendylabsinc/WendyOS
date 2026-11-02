@@ -66,7 +66,7 @@ func TestHostInstallersUseSameEndUserGroup(t *testing.T) {
 		"wendy", "wendy-app-lifecycle", "wendy-data", "wendy-device-debug", "wendy-device-install",
 		"wendy-device-ops", "wendy-entitlements", "wendy-install", "wendy-mcp-setup",
 		"wendy-onboarding",
-		"wendy-project-setup", "wendy-robot-deploy", "wendy-template-app",
+		"wendy-project-setup", "wendy-robot-deploy", "wendy-template-app", "wendy-training",
 	}
 	for i := 0; i < 2; i++ {
 		results := installSkillsForAllTools()

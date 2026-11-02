@@ -70,6 +70,7 @@ func newDeviceCmd() *cobra.Command {
 		newDeviceOSLogsCmd(),
 		newDeviceDashboardCmd(),
 		newTopCmd(),
+		newComputeStatusCmd(),
 	)
 	addToGroup("apps",
 		newAppsCmd(),
@@ -860,10 +861,9 @@ func newDeviceEnrollCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:         "enroll",
-		Annotations: map[string]string{"wendy.local-enrollment": "true"},
+		Annotations: map[string]string{localEnrollmentAnnotation: "true"},
 		Short:       "Enroll this device in Wendy Cloud",
 		Long:        "Add the selected device to your organization using your saved sign-in. Run 'wendy cloud login' first. For Wendy Lite, connect over USB and keep it connected while the board reboots and completes enrollment.",
-		Hidden:      true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 

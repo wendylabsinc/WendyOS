@@ -62,6 +62,7 @@ github.com/rivo/uniseg,https://github.com/rivo/uniseg/blob/v0.4.7/LICENSE.txt,MI
 github.com/sirupsen/logrus,https://github.com/sirupsen/logrus/blob/v1.9.4/LICENSE,MIT
 github.com/spf13/cobra,https://github.com/spf13/cobra/blob/v1.10.2/LICENSE.txt,Apache-2.0
 github.com/spf13/pflag,https://github.com/spf13/pflag/blob/v1.0.10/LICENSE,BSD-3-Clause
+github.com/ulikunitz/xz,https://github.com/ulikunitz/xz/blob/v0.5.15/LICENSE,BSD-3-Clause
 github.com/xo/terminfo,https://github.com/xo/terminfo/blob/abceb7e1c41e/LICENSE,MIT
 go.bug.st/serial,https://github.com/bugst/go-serial.git/blob/v1.6.4/LICENSE,BSD-3-Clause
 go.opentelemetry.io/auto/sdk,https://github.com/open-telemetry/opentelemetry-go-instrumentation/blob/sdk/v1.2.1/sdk/LICENSE,Apache-2.0

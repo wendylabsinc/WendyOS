@@ -56,6 +56,10 @@ type ProjectValidation struct {
 
 type ProjectBackend struct {
 	Validate func(context.Context, ProjectValidationOptions) (*ProjectValidation, error)
+	// WaitReadyUnsupported reports why `wendy run --wait-ready` would refuse
+	// the project, or nil when it can wait. run consults it only when the
+	// caller leaves wait_ready out.
+	WaitReadyUnsupported func(projectPath, buildType string) error
 }
 
 func (s *mcpServer) SetProjectBackend(backend ProjectBackend) {

@@ -101,6 +101,28 @@ message GetBuildCapabilitiesResponse {
   // store and honours BuildSpec.chunking. A client MUST check this before
   // sending CHUNKING_MODE_FORCE — see that field.
   bool chunk_delivery = 13;
+
+  // Whether this host can reach the internet a build needs.
+  //
+  // A build pulls its base images from a registry, and installing BuildKit in
+  // the first place is a download. A device plugged in over USB alone has only
+  // a link-local route, so it answers every RPC yet fails partway through the
+  // first build that is not fully cached. The agent checks on each call by
+  // resolving and TCP-dialling registry-1.docker.io:443 (Docker Hub, the
+  // default base-image source), bounded to a couple of seconds.
+  //
+  // An agent that runs the check sets internet_check_supported. An older agent
+  // leaves it false, and a client must then say nothing rather than read the
+  // zero internet_reachable as "offline".
+  //
+  // Advisory, not a gate: a build whose layers are all cached, or whose base
+  // images come from a registry on the local network, can succeed without it,
+  // so a client warns rather than refuses.
+  bool internet_check_supported = 14;
+  bool internet_reachable = 15;
+  // Empty when reachable. Otherwise a short reason phrased for a developer,
+  // e.g. "cannot resolve registry-1.docker.io", which the CLI prints as-is.
+  string internet_detail = 16;
 }
 
 // ChunkManifest reconstructs a byte stream from chunks already written through

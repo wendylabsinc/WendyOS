@@ -38,6 +38,13 @@ const testIssuer = AuthBase + "/realms/acme"
 
 func setup(t *testing.T, alter func(map[string]any)) (*Session, *int) {
 	t.Helper()
+	return setupLogin(t, alter, func(s *Session) (string, error) {
+		return s.Begin(context.Background(), "", "", "http://localhost:5173/auth/callback")
+	})
+}
+
+func setupLogin(t *testing.T, alter func(map[string]any), begin func(*Session) (string, error)) (*Session, *int) {
+	t.Helper()
 	authority, e := mldsa.GenerateKey(mldsa.MLDSA65())
 	if e != nil {
 		t.Fatal(e)
@@ -47,6 +54,7 @@ func setup(t *testing.T, alter func(map[string]any)) (*Session, *int) {
 	nonceSent := false
 	lastRefresh := ""
 	var state, challenge string
+	var operatorPublic []byte
 	s := &Session{}
 	s.Client = doerFunc(func(r *http.Request) (*http.Response, error) {
 		switch r.URL.String() {
@@ -79,6 +87,12 @@ func setup(t *testing.T, alter func(map[string]any)) (*Session, *int) {
 			}
 			_ = json.Unmarshal(hdr, &h)
 			pub, _ := decode(h.JWK["pub"])
+			if operatorPublic == nil {
+				operatorPublic = pub
+			}
+			if !bytes.Equal(pub, operatorPublic) {
+				t.Fatal("operator key changed between token proofs")
+			}
 			key, e := mldsa.NewPublicKey(mldsa.MLDSA65(), pub)
 			if e != nil {
 				t.Fatal(e)
@@ -139,6 +153,25 @@ func setup(t *testing.T, alter func(map[string]any)) (*Session, *int) {
 			if e = csr.CheckSignature(); e != nil {
 				t.Fatal(e)
 			}
+			pub, ok := csr.PublicKey.(*mldsa.PublicKey)
+			if !ok || !bytes.Equal(pub.Bytes(), operatorPublic) {
+				t.Fatal("CSR key differs from token-bound key")
+			}
+			pieces := strings.Split(r.Header.Get("DPoP"), ".")
+			if len(pieces) != 3 {
+				t.Fatal("missing PKI proof")
+			}
+			payload, _ := base64.RawURLEncoding.DecodeString(pieces[1])
+			signature, _ := base64.RawURLEncoding.DecodeString(pieces[2])
+			if err := mldsa.Verify(pub, []byte(pieces[0]+"."+pieces[1]), signature, nil); err != nil {
+				t.Fatal("PKI proof differs from CSR key", err)
+			}
+			var proof map[string]any
+			_ = json.Unmarshal(payload, &proof)
+			hash := sha256.Sum256([]byte(strings.TrimPrefix(r.Header.Get("Authorization"), "DPoP ")))
+			if proof["htu"] != IdentityEndpoint || proof["htm"] != "POST" || proof["ath"] != base64.RawURLEncoding.EncodeToString(hash[:]) {
+				t.Fatal("PKI proof not bound to token and endpoint")
+			}
 			uri, _ := url.Parse("spiffe://wendy.sh/tenant/12345678-1234-1234-1234-123456789abc/operator/operator-test")
 			leaf := &x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "operator-test"}, NotBefore: time.Now().Add(-time.Minute), NotAfter: time.Now().Add(time.Hour), URIs: []*url.URL{uri}, KeyUsage: x509.KeyUsageDigitalSignature}
 			der, e := x509.CreateCertificate(rand.Reader, leaf, leaf, csr.PublicKey, authority)
@@ -150,7 +183,7 @@ func setup(t *testing.T, alter func(map[string]any)) (*Session, *int) {
 		t.Fatalf("unexpected outbound endpoint %s", r.URL)
 		return nil, nil
 	})
-	auth, e := s.Begin(context.Background(), "", "", "http://localhost:5173/auth/callback")
+	auth, e := begin(s)
 	if e != nil {
 		t.Fatal(e)
 	}

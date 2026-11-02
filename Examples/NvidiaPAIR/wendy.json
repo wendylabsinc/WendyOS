@@ -1,0 +1,63 @@
+{
+  "appId": "sh.wendy.examples.nvidia-pair",
+  "version": "1.1.0",
+  "platform": "linux",
+  "isolation": "isolated",
+  "entitlements": [
+    {
+      "type": "network",
+      "mode": "mesh",
+      "serviceCIDR": "10.99.0.0/16",
+      "ports": [
+        {
+          "host": 11434,
+          "container": 11434,
+          "protocol": "tcp"
+        },
+        {
+          "host": 1234,
+          "container": 1234,
+          "protocol": "tcp"
+        },
+        {
+          "host": 14318,
+          "container": 14318,
+          "protocol": "tcp"
+        },
+        {
+          "host": 14319,
+          "container": 14319,
+          "protocol": "tcp"
+        },
+        {
+          "host": 14320,
+          "container": 14320,
+          "protocol": "tcp"
+        },
+        {
+          "host": 14321,
+          "container": 14321,
+          "protocol": "tcp"
+        },
+        {
+          "host": 14322,
+          "container": 14322,
+          "protocol": "tcp"
+        },
+        {
+          "host": 14323,
+          "container": 14323,
+          "protocol": "tcp"
+        }
+      ]
+    },
+    {
+      "type": "gpu"
+    },
+    {
+      "type": "persist",
+      "name": "nvidia-pair-state",
+      "path": "/data"
+    }
+  ]
+}

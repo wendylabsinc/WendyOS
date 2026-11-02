@@ -454,7 +454,7 @@ reach, so both are visible before a stream fails.
 | `WENDY_TIMING` | Print build/run sub-phase timing to stderr. |
 | `WENDY_CHUNK_UPLOAD_STREAMS` | Concurrent WriteChunks streams per layer upload (1–8, default 4). |
 | `WENDY_CHUNK_UPLOAD_BATCH` | Chunks per stream (1–4096, default 256). |
-| `WENDY_CHUNK_COMPRESSION` | `auto` (default), `gzip` or `none`: compression of chunk uploads. `auto` sends chunks uncompressed only to a device reached at a link-local (USB-C / direct-cable) address, running WendyOS 0.19.0+, with no stall recorded in the last 30 days, with a 30 s stall watchdog that falls back to gzip; a routable LAN/Wi-Fi address, a cloud tunnel, an older or unknown WendyOS version, or a recent stall all keep gzip. |
+| `WENDY_CHUNK_COMPRESSION` | `auto` (default), `gzip` or `none`: compression of chunk uploads. `auto` sends chunks uncompressed only to a device reached at a link-local USB gadget/direct-cable address, running WendyOS 0.19.0+, with no stall recorded in the last 30 days, with a 30 s stall watchdog that falls back to gzip; a routable LAN/Wi-Fi address, a cloud tunnel, an older or unknown WendyOS version, or a recent stall all keep gzip. |
 | `WENDY_DISCOVER_USB_INTERVAL` / `_ETHERNET_INTERVAL` / `_EXTERNAL_INTERVAL` | Discovery poll intervals (defaults 3s/3s/5s). |
 | `WENDY_BUILDX_BUILDER` | Override the buildx builder name. |
 | `WENDY_REGISTRY_CHAOS` / `WENDY_PUSH_SKIP` | Fault injection for the push/registry path (testing). |
@@ -482,10 +482,11 @@ delete it to give a device a fresh chance at uncompressed uploads.
 | `WENDY_BROKER_URL` | Cloud tunnel broker WebSocket URL. |
 | `WENDY_MTLS_ORG_ENFORCEMENT` | `off` / `grace` / `strict` client-org enforcement on the mTLS gate. |
 | `WENDY_COLLECT_DMESG` | `true` to enable kernel dmesg collection. |
+| `WENDY_DATA_DIR` | Wendy Data episode store, for a custom location only. Unset, it is `/var/lib/wendy/wendy-data/episodes` when `/var/lib/wendy` is a separate filesystem larger than the one holding `/var/lib/wendy-agent` (WendyOS `/data`), else `/var/lib/wendy-agent/data/episodes`. |
 | `WENDY_BT_ADAPTER` | Pin a specific BlueZ adapter path. |
 
 > **Two things the docs get wrong, so you don't burn time on them:**
-> - `WENDY_NETWORK_MANAGER` is a **Swift-agent** feature. The Go `wendy-agent`
+> - `WENDY_NETWORK_MANAGER` was read only by the earlier Swift agent for Linux. The Go `wendy-agent`
 >   ignores it and always uses `nmcli`.
 > - There is **no `WENDY_ADB_LOCK`**. The variable for pinning a Thor/Tegra USB
 >   device is `WENDY_ADB_PATH`.

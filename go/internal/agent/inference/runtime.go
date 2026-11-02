@@ -20,13 +20,16 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/data"
 )
 
-//go:embed worker.py pyproject.toml uv.lock
+//go:embed worker.py accelerator.py pyproject.toml uv.lock
 var assets embed.FS
 
 const uvVersion = "0.10.9"
@@ -50,9 +53,11 @@ type Input struct {
 }
 
 type Detection struct {
-	Label string     `json:"label"`
-	Score float64    `json:"score"`
-	Box   [4]float64 `json:"box"`
+	Label string  `json:"label"`
+	Score float64 `json:"score"`
+	// Box is x1, y1, x2, y2: the top-left and bottom-right corners, in pixels
+	// of the scored picture (Result.Width by Result.Height).
+	Box [4]float64 `json:"box"`
 }
 
 type Result struct {
@@ -61,12 +66,36 @@ type Result struct {
 	SourceID       string      `json:"source_id"`
 	Generation     uint64      `json:"generation"`
 	Detections     []Detection `json:"detections,omitempty"`
-	Error          string      `json:"error,omitempty"`
+	// Width and Height are the scored picture's size in pixels, the frame of
+	// the detection boxes.
+	Width  int    `json:"width,omitempty"`
+	Height int    `json:"height,omitempty"`
+	Error  string `json:"error,omitempty"`
+	// Engine, Precision and InferMs say what scored a prediction: cpu or
+	// tensorrt, at fp32 or fp16, taking this long.
+	Engine    string  `json:"engine,omitempty"`
+	Precision string  `json:"precision,omitempty"`
+	InferMs   float64 `json:"infer_ms,omitempty"`
+	// Accelerator and Stats are the process's own report of what it runs on,
+	// on ready and on accelerator results. A ready result reaches Results as
+	// an accelerator result.
+	Accelerator *data.AcceleratorStatus `json:"accelerator,omitempty"`
+	Stats       *data.InferenceStats    `json:"stats,omitempty"`
+}
+
+// workerConfig is the process's config line: the campaign's inference block
+// and the accelerators the agent offers.
+type workerConfig struct {
+	data.CampaignInference
+	AcceleratorPlan AcceleratorPlan `json:"accelerator_plan"`
 }
 
 type Session interface {
 	Send(Input) error
 	Results() <-chan Result
+	// Err says why the process ended, with the tail of its stderr. It is
+	// set once Results is closed, and nil when the process was asked to stop.
+	Err() error
 	Close() error
 }
 
@@ -75,10 +104,22 @@ type Factory interface {
 }
 
 // ManagedFactory installs a checksum-pinned uv and a locked, isolated CPU
-// runtime into the agent's writable data partition on first use.
+// runtime into the agent's writable data partition on first use. On a device
+// whose Hardware reports an NVIDIA GPU with CUDA and that has the TensorRT
+// libraries, it also fetches the pinned TensorRT Python bindings once.
 type ManagedFactory struct {
 	Root string
-	mu   sync.Mutex
+	// Hardware probes the device's accelerators; nil means none.
+	Hardware func() Hardware
+	mu       sync.Mutex
+
+	bindingsFailure  error
+	bindingsFailedAt time.Time
+
+	// crashes are the recent unasked exits of workers offered TensorRT, by
+	// model. Separate from mu, which a download can hold for minutes.
+	crashMu sync.Mutex
+	crashes map[string]*tensorRTCrashes
 }
 
 func (f *ManagedFactory) prepare(ctx context.Context) (string, string, error) {
@@ -108,7 +149,7 @@ func (f *ManagedFactory) prepare(ctx context.Context) (string, string, error) {
 	}
 
 	hash := sha256.New()
-	files := []string{"worker.py", "pyproject.toml", "uv.lock"}
+	files := []string{"worker.py", "accelerator.py", "pyproject.toml", "uv.lock"}
 	for _, name := range files {
 		b, _ := assets.ReadFile(name)
 		hash.Write(b)
@@ -234,14 +275,42 @@ func (f *ManagedFactory) Start(ctx context.Context, config data.CampaignInferenc
 	if err != nil {
 		return nil, err
 	}
-	childCtx, cancel := context.WithCancel(ctx)
-	command := exec.CommandContext(childCtx, uv, "run", "--project", dir, "--frozen", "--no-dev", "--no-build", "--managed-python", "--python", "3.12", "python", "-u", filepath.Join(dir, "worker.py"))
-	command.Dir = dir
-	if err := os.MkdirAll(filepath.Join(f.Root, "home"), 0700); err != nil {
-		cancel()
+	root, err := filepath.Abs(f.Root)
+	if err != nil {
+		return nil, err
+	}
+	plan, err := f.acceleratorPlan(ctx, root, config)
+	if err != nil {
+		return nil, err
+	}
+	if err := os.MkdirAll(filepath.Join(root, "home"), 0700); err != nil {
 		return nil, fmt.Errorf("creating model runtime home: %w", err)
 	}
-	command.Env = runtimeEnvironment(f.Root)
+	var crashed func(string)
+	if plan.TensorRT != nil {
+		// A worker offered TensorRT that keeps dying loses it (accelerator.go).
+		key := tensorRTCrashKey(config)
+		crashed = func(reason string) { f.workerCrashed(key, reason) }
+	}
+	argv := []string{uv, "run", "--project", dir, "--frozen", "--no-dev", "--no-build", "--managed-python", "--python", "3.12", "python", "-u", filepath.Join(dir, "worker.py")}
+	return startWorker(ctx, argv, dir, runtimeEnvironment(root), workerConfig{config, plan}, crashed)
+}
+
+// The end of a worker's stderr that a status reason and a log line carry: a
+// Python traceback's last lines name the exception.
+const (
+	stderrTailLines = 8
+	stderrTailBytes = 1024
+)
+
+// startWorker runs the model process, sends it its config line and waits for
+// it to be ready. crashed, when set, is told why the process ended if it ended
+// without being asked to and without reporting an error of its own.
+func startWorker(ctx context.Context, argv []string, dir string, env []string, config workerConfig, crashed func(reason string)) (Session, error) {
+	childCtx, cancel := context.WithCancel(ctx)
+	command := exec.CommandContext(childCtx, argv[0], argv[1:]...)
+	command.Dir = dir
+	command.Env = env
 	configureProcess(command)
 	stderr := &tailBuffer{}
 	command.Stderr = stderr
@@ -270,20 +339,42 @@ func (f *ManagedFactory) Start(ctx context.Context, config data.CampaignInferenc
 		scanner := bufio.NewScanner(stdout)
 		scanner.Buffer(make([]byte, 4096), 1<<20)
 		initialized := false
+		// loadError is the worker's own reason it could not load the model,
+		// such as a model that is not on the device while the network is down.
+		loadError := ""
+		// reported is set when the worker sent an error of its own, which
+		// explains its exit. violation describes a line that broke the
+		// protocol, which ends the worker.
+		reported, violation := false, ""
 		var dropped uint64
 		for scanner.Scan() {
 			var result Result
 			if err := json.Unmarshal(scanner.Bytes(), &result); err != nil {
+				violation = fmt.Sprintf("it wrote a line to stdout that is not protocol JSON: %q", truncate(scanner.Text(), 300))
 				cancel()
 				break
 			}
+			if result.Type == "error" {
+				reported = true
+			}
 			if !initialized {
 				if result.Type != "ready" {
+					if result.Type == "error" {
+						loadError = result.Error
+					}
 					cancel()
 					break
 				}
 				initialized = true
 				ready <- nil
+				if result.Accelerator != nil {
+					// The results channel is empty here, so this never blocks.
+					result.Type = "accelerator"
+					select {
+					case session.results <- result:
+					case <-childCtx.Done():
+					}
+				}
 				continue
 			}
 			result.DroppedResults = dropped
@@ -305,10 +396,40 @@ func (f *ManagedFactory) Start(ctx context.Context, config data.CampaignInferenc
 				}
 			}
 		}
+		if violation == "" && scanner.Err() != nil {
+			violation = fmt.Sprintf("its stdout failed: %v", scanner.Err())
+		}
+		// Whether the process was asked to stop, by its campaign or by Close.
+		// The cancel below, or one for a protocol violation, is not a request.
+		asked := ctx.Err() != nil || session.closing.Load()
 		cancel()
 		waitErr := command.Wait()
+		// What ended the process. After a protocol violation the agent killed
+		// it, so the violation is the reason, not the signal.
+		exit := violation
+		if exit == "" && waitErr != nil {
+			exit = waitErr.Error()
+		} else if exit == "" {
+			exit = "exit status 0"
+		}
+		if tail := stderr.Tail(stderrTailLines, stderrTailBytes); tail != "" {
+			exit += "; stderr: " + tail
+		}
 		if !initialized {
-			ready <- fmt.Errorf("loading campaign model: %v: %s", waitErr, stderr.String())
+			if loadError != "" {
+				ready <- fmt.Errorf("loading campaign model: %s", loadError)
+			} else if violation != "" {
+				ready <- fmt.Errorf("loading campaign model: %s", exit)
+			} else {
+				ready <- fmt.Errorf("loading campaign model: %v: %s", waitErr, stderr.String())
+			}
+		} else if !asked {
+			// Before, an exit after ready said only "model process exited",
+			// and its stderr was lost.
+			session.setErr(fmt.Errorf("model process exited: %s", exit))
+		}
+		if crashed != nil && !asked && !reported {
+			crashed(exit)
 		}
 	}()
 	if err := json.NewEncoder(stdin).Encode(config); err != nil {
@@ -339,6 +460,10 @@ type processSession struct {
 	cancel  context.CancelFunc
 	results chan Result
 	done    chan struct{}
+	closing atomic.Bool
+
+	errMu sync.Mutex
+	err   error
 }
 
 func (s *processSession) Send(input Input) error {
@@ -347,7 +472,14 @@ func (s *processSession) Send(input Input) error {
 	return json.NewEncoder(s.stdin).Encode(input)
 }
 func (s *processSession) Results() <-chan Result { return s.results }
-func (s *processSession) Close() error           { s.cancel(); <-s.done; return s.stdin.Close() }
+func (s *processSession) Err() error             { s.errMu.Lock(); defer s.errMu.Unlock(); return s.err }
+func (s *processSession) setErr(err error)       { s.errMu.Lock(); s.err = err; s.errMu.Unlock() }
+func (s *processSession) Close() error {
+	s.closing.Store(true)
+	s.cancel()
+	<-s.done
+	return s.stdin.Close()
+}
 
 type tailBuffer struct {
 	mu sync.Mutex
@@ -365,6 +497,33 @@ func (b *tailBuffer) Write(p []byte) (int, error) {
 }
 func (b *tailBuffer) String() string { b.mu.Lock(); defer b.mu.Unlock(); return string(b.b) }
 
+// Tail is the end of what the process wrote, on one line for a status reason
+// or a log line: its last nonblank lines, joined by " | ", at most maxBytes.
+func (b *tailBuffer) Tail(maxLines, maxBytes int) string {
+	var lines []string
+	for _, line := range strings.Split(b.String(), "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			lines = append(lines, line)
+		}
+	}
+	tail := strings.Join(lines[max(0, len(lines)-maxLines):], " | ")
+	if len(tail) > maxBytes {
+		tail = "..." + tail[len(tail)-maxBytes:]
+	}
+	return strings.ToValidUTF8(tail, "")
+}
+
+func truncate(text string, limit int) string {
+	if len(text) <= limit {
+		return text
+	}
+	return strings.ToValidUTF8(text[:limit], "") + "..."
+}
+
+// cudaCacheMaxBytes bounds CUDA's compile cache in the inference directory:
+// three times what TensorRT used on a Jetson Orin Nano.
+const cudaCacheMaxBytes = 512 << 20
+
 // runtimeEnvironment deliberately excludes agent tokens, cloud credentials,
 // Python injection settings and the agent's home/configuration directories.
 func runtimeEnvironment(root string) []string {
@@ -374,6 +533,16 @@ func runtimeEnvironment(root string) []string {
 		"UV_PYTHON_INSTALL_DIR=" + filepath.Join(root, "python"),
 		"HF_HOME=" + filepath.Join(root, "models"),
 		"UV_NO_PROGRESS=1", "TOKENIZERS_PARALLELISM=false", "OMP_NUM_THREADS=2",
+		// CUDA loads kernels when first used rather than all at start, which
+		// keeps a TensorRT context small. Inert without CUDA.
+		"CUDA_MODULE_LOADING=LAZY",
+		// CUDA compiles the GPU code it has no binary for and caches what it
+		// compiled, so that the next start does not compile it again: about
+		// 172 MB with TensorRT on a Jetson Orin Nano. Without these it went to
+		// HOME/.nv/ComputeCache, unbounded. Past the bound CUDA evicts the
+		// oldest entries. Inert without CUDA.
+		"CUDA_CACHE_PATH=" + filepath.Join(root, "cuda-cache"),
+		"CUDA_CACHE_MAXSIZE=" + strconv.Itoa(cudaCacheMaxBytes),
 	}
 	for _, key := range []string{"PATH", "LANG", "LC_ALL", "TMPDIR", "SSL_CERT_FILE", "SSL_CERT_DIR"} {
 		if value, ok := os.LookupEnv(key); ok {

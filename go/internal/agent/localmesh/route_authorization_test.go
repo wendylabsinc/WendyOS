@@ -4,8 +4,8 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/x509"
-	"encoding/json"
 	"errors"
+	"github.com/wendylabsinc/wendy/go/internal/agent/netwire"
 	"math/big"
 	"net/netip"
 	"net/url"
@@ -38,7 +38,7 @@ func signRouteTestManifest(t *testing.T, m Manifest, chain [][]byte, key ed25519
 // a valid signature produced by a malicious enrolled origin.
 func rawRouteManifest(t *testing.T, m Manifest, device meshid.Device, key ed25519.PrivateKey) SignedManifest {
 	t.Helper()
-	body, err := json.Marshal(m)
+	body, err := netwire.Marshal(m)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,7 +124,7 @@ func TestRouteAuthorizationBindsOriginAndSequence(t *testing.T) {
 				forged.Signature[0] ^= 1
 			}
 			var err error
-			forged.Body, err = json.Marshal(body)
+			forged.Body, err = netwire.Marshal(body)
 			if err != nil {
 				t.Fatal(err)
 			}

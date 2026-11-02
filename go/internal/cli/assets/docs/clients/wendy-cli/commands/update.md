@@ -85,11 +85,22 @@ reminder waits at most one second for a background release request, with separat
 bounded installation and cache lookups, so an unavailable release service does
 not hold up your command.
 
-In an interactive terminal, you can accept an update immediately. Declining
-snoozes that release's prompt for 24 hours. JSON output and automated invocations
-never open a prompt. A command that failed can show a short, noninteractive
+After a successful command in an interactive terminal, a bold popup shows the
+installed and available versions for supported stable installations. Choose
+**Download now** to install with the detected package manager, or **Ask again
+later...** to snooze all update prompts for 24 hours, even if another release
+arrives. Use the arrow keys or Tab to choose, then Enter to confirm. Closing the
+popup with Escape or Ctrl+C does not snooze it. Unsupported installations receive
+manual update instructions. JSON output and automated invocations never open a
+prompt. A command that failed can show a short, noninteractive
 reminder while preserving its original error and exit status. An update failure
 after a successful command also preserves the original command's success.
+
+Local MCP servers also check for releases daily while running. Tool responses
+include a prominent update notice once per release per session, repeated after
+24 hours if the server is still outdated. The notice asks the assistant to tell
+you about the update and includes the update command and server restart step.
+`wendy_status` retains the update details between reminders.
 
 CI, read-only checks, and completion helpers skip background reminders. Set
 `WENDY_NO_UPDATE_CHECK=1` to disable background checks and notices; an explicit

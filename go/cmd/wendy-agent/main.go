@@ -194,6 +194,11 @@ func main() {
 	var networkMgr services.NetworkManager
 	if nm := agentnet.NewNMCLINetworkManager(logger); nm != nil {
 		networkMgr = nm
+		go func() {
+			rctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			defer cancel()
+			nm.RepairForcedOpenAuthOnce(rctx)
+		}()
 	}
 	hwDiscoverer := hardware.NewSystemHardwareDiscoverer(logger)
 	linkWatcher := bluetooth.NewWatcher(logger)
@@ -346,10 +351,26 @@ func main() {
 	provisioningSvcV2 := services.NewProvisioningServiceV2(provisioningSvc)
 	audioSvcV2 := services.NewAudioServiceV2(audioSvc)
 	telemetrySvcV2 := services.NewTelemetryServiceV2(logger, broadcaster, telemetryBuf)
+	// WENDY_DATA_DIR wins outright. Without it the store goes on the data
+	// partition when /var/lib/wendy is a separate, larger filesystem than the
+	// one holding /var/lib/wendy-agent, and stays there otherwise; the log says
+	// which and why.
 	dataRoot := os.Getenv("WENDY_DATA_DIR")
 	dataManager, err := agentdata.NewManager(dataRoot)
 	if err != nil {
 		logger.Fatal("Failed to initialize episode data manager", zap.Error(err))
+	}
+	dataStore := dataManager.StoreLocation()
+	logger.Info("Wendy Data episode store",
+		zap.String("path", dataStore.Path),
+		zap.String("campaigns", dataStore.CampaignDir),
+		zap.String("inference", dataStore.InferenceDir),
+		zap.String("reason", dataStore.Reason),
+		zap.String("campaignsReason", dataStore.CampaignReason),
+		zap.String("inferenceReason", dataStore.InferenceReason))
+	if msg := dataStore.LeftBehindMessage(); msg != "" {
+		logger.Warn(msg, zap.Int("episodes", dataStore.LeftBehind), zap.Int64("bytes", dataStore.LeftBehindBytes),
+			zap.Int("notUploaded", dataStore.LeftBehindNotUploaded))
 	}
 	dataManager.SetConsensusProvider(func(ctx context.Context) (timesync.Consensus, error) {
 		return timesync.QueryConsensus(ctx, timesync.Servers)
@@ -428,7 +449,7 @@ func main() {
 	defer videoSvc.Shutdown()
 
 	notificationSender := services.NewCloudNotificationSender(logger, provisioningSvc)
-	stopInference := dataSvc.StartCampaignInference(ctx, &inference.ManagedFactory{Root: dataManager.InferenceDirectory()}, &services.CampaignCloudSender{Cloud: notificationSender})
+	stopInference := dataSvc.StartCampaignInference(ctx, &inference.ManagedFactory{Root: dataManager.InferenceDirectory(), Hardware: services.InferenceHardware}, &services.CampaignCloudSender{Cloud: notificationSender})
 	defer stopInference()
 	systemAPISocketManager := services.NewAppSystemAPISocketManager(ctx, logger, notificationSender)
 	appDataSocketManager := services.NewAppDataSocketManager(ctx, logger, dataManager)
@@ -784,6 +805,9 @@ func main() {
 			// Legacy fallback for a CLI that does not put each target's actual
 			// mTLS agent port in PushTarget.
 			TargetAgentPort: uint16(mtlsPortNum),
+			// Reported with the build capabilities, so a device reachable only
+			// over USB says it has no internet before a build fails on it.
+			CheckInternet: services.CheckRegistryReachable,
 			// The Cloud asset UUID is the device UUID. Still require membership
 			// in this tenant's roster before delivery. Read fresh per build:
 			// roster sync and enrollment can change membership while running.
@@ -828,6 +852,12 @@ func main() {
 		agentpbv2.RegisterWendyBluetoothServiceServer(srv, bluetoothSvc)
 		agentpbv2.RegisterWendyAgentUpdateServiceServer(srv, agentUpdateSvc)
 		agentpbv2.RegisterWendyOSUpdateServiceServer(srv, osUpdateSvc)
+		// Driver management follows the same access policy as OS updates:
+		// available before enrollment, over mTLS afterward, and through the
+		// local admin socket. The store and apply path require Linux.
+		if runtime.GOOS == "linux" {
+			agentpbv2.RegisterWendyDriverServiceServer(srv, driverSvc)
+		}
 		agentpbv2.RegisterWendyContainerServiceServer(srv, containerSvcV2)
 		agentpbv2.RegisterWendyProvisioningServiceServer(srv, provisioningSvcV2)
 		agentpbv2.RegisterWendyAudioServiceServer(srv, audioSvcV2)
@@ -915,17 +945,6 @@ func main() {
 		// loopback. Register it only on the authenticated, org-checked server,
 		// never on the plaintext provisioning listener or local admin socket.
 		agentpbv2.RegisterWendyTunnelServiceServer(srv, services.NewTunnelService(logger))
-
-		// WendyDriverService installs kernel driver add-ons — loading a module is
-		// ring-0 code execution, as privileged as the root shell above. So it is
-		// registered ONLY here on the mTLS server (authenticated, org-checked),
-		// never via registerAllServices: signature verification guards WHAT runs,
-		// but the transport must still guard WHO may install or remove a driver.
-		// Linux only: the store is systemd-sysext and modprobe. Elsewhere the
-		// client sees Unimplemented and treats the device as having no add-ons.
-		if runtime.GOOS == "linux" {
-			agentpbv2.RegisterWendyDriverServiceServer(srv, driverSvc)
-		}
 
 		// Compute mTLS port = agentPort + 1.
 		portNum, err := strconv.Atoi(agentPort)

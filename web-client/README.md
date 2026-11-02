@@ -282,6 +282,9 @@ release commit reproduces the pin.
 | `init` | `browserauth.Settings` JSON | `true`; once, before sign-in. Services are then called directly, not through `/api/wendy-auth` |
 | `auth-begin` | `{redirect, email?, issuer?}`; `issuer` pins an organization's realm | authorize URL |
 | `auth-complete` | `{code, state, issuer}` | profile |
+| `auth-redirect-begin` | `{redirect, email?, issuer?}` | `{url, pending}`; pending is an opaque handle |
+| `auth-redirect-complete` | `{pending, redirect, code, state, issuer, error?}` | profile |
+| `auth-redirect-cancel` | `{pending}` | `true`; removes this attempt |
 | `auth-restore` | `{tenant?, subject?, refresh?}` | that organization's profile, or `null`; `refresh: true` always rotates the refresh token once and fails the restore if that exchange fails |
 | `credential` | `{tenant?}` | `{profile, algorithm, chainDER, accessToken, publicJWK}`; refreshes a token with under a minute left |
 | `sign` | `{tenant?, bytes: Uint8Array}` | `{signature: Uint8Array}` with the operator key |
@@ -322,6 +325,53 @@ An `issuer` for `auth-begin` must be a Wendy auth realm,
 rejected, compared without case. The callback must return from that same realm;
 `auth-complete` with a different `issuer` fails, and sign-in must start again.
 
+For same-tab sign-in, call `auth-redirect-begin`, save only `pending` in
+**tab-scoped sessionStorage**, and navigate to `url` only after both succeed.
+Pass `redirect: location.origin + "/auth/callback"`: the callback compares it
+exactly, so a host with upper-case letters or a default port such as `:443` is
+refused at begin, as with `auth-begin`.
+If sessionStorage fails, call `auth-redirect-cancel` and stay on the page.
+Cancel an abandoned handle before replacing it. The worker stores the PKCE
+verifier/state, expected issuer (empty for universal login), exact redirect,
+start time and complete environment settings in the separate
+`wendy-auth-pending` IndexedDB database. Records are AES-GCM wrapped under a
+non-extractable WebCrypto wrapping key, limited to 8 KiB, and expire after ten
+minutes. An origin keeps at most 32 live attempts; beyond that a new attempt
+replaces the oldest, whose callback then fails as missing and must start
+again. Subsequent pending operations remove expired, future-dated or abandoned
+expired records. There is no credential schema upgrade, and pending attempts
+never appear as organization slots.
+
+After navigation, start a new worker with the same `init` settings. Read the
+handle from sessionStorage and pass it to `auth-redirect-complete` along with
+`redirect: location.origin + location.pathname` and the callback's `code`,
+`state`, `iss` (as `issuer`) and optional OAuth `error`. Use empty strings for
+absent callback fields. Remove the tab handle when the attempt finishes; strip
+OAuth parameters from browser history after capturing them. Do not pass a
+stored redirect as the current callback location. The worker atomically takes
+and deletes the record before checking its version, size, time, state, issuer,
+redirect and settings. Missing, malformed, changed or replayed transactions
+fail before any token/certificate request; storage failure refuses navigation.
+An error callback validates state/settings/redirect/expiry and validates `iss`
+if present, then reports the bounded OAuth error code without generating a key
+or contacting Auth/PKI. A successful callback always requires a trusted issuer.
+
+The redirect flow creates the ML-DSA-65 operator/DPoP key **after callback
+validation and before token exchange**. Authorization is not pre-bound with
+`dpop_jkt`; Auth binds the token to the token-endpoint proof key. That same key
+signs the CSR, PKI proof and later Cloud requests. No signing key or seed is
+persisted in the pending record or returned to the page. The existing wrapped
+successful-session store, refresh and restore stay unchanged. The Go ML-DSA
+signing key is software-held; **only the AES-GCM wrapping key is a WebCrypto
+non-extractable key**. This preserves the existing custody model, including its
+same-origin script/XSS limitations. The legacy `auth-begin`/`auth-complete`
+in-memory API remains available to existing callers.
+
+Embedding clients must adopt a published release containing these additive
+operations before relying on them. A local bundle can verify integration;
+it is not a published release pin. No popup fallback or weaker isolation
+headers are needed for this redirect protocol.
+
 Each organization keeps its own saved sign-in, keyed by tenant and operator.
 The operator key never leaves the worker. Cloud device sessions still require
 the local browser relay.
@@ -339,6 +389,11 @@ go test -race ./go/internal/cli/browserauth
 node go/experiments/wasmgrpc/auth-worker.mjs
 node web-client/tests/credential-store.test.mjs
 node web-client/tests/wendy-web-bridge.test.mjs   # after npm run build:wasm
+# Optional: installed Playwright + browsers (PLAYWRIGHT_MODULE may name its path;
+# WEBKIT_EXECUTABLE may select an existing WebKit installation).
+node web-client/tests/redirect-navigation.mjs chromium
+node web-client/tests/redirect-navigation.mjs webkit
+node web-client/tests/redirect-navigation.mjs webkit --mobile
 GOOS=js GOARCH=wasm go test -exec "$(go env GOROOT)/lib/wasm/go_js_wasm_exec" ./go/cmd/wendy-web ./go/internal/cli/browserauth
 node --experimental-strip-types web-client/tests/telemetry.test.mjs
 node --experimental-strip-types --test web-client/tests/auth-proxy.test.mjs
@@ -358,3 +413,12 @@ The agent worker integration fixture lives in `go/experiments/wasmgrpc`.
 
 Browser UI automation has not been run. Optional WebMCP read-only workspace and
 navigation tools are feature-detected; credentials are never exposed to them.
+
+The redirect navigation probe serves the exact raw gzip bundle and synthetic
+OAuth pages through browser-local HTTPS routing. It tests full top-level
+navigation, destruction of the old document/worker, wrapped storage and the
+tab handle surviving, error completion and replay refusal at Dev/Production
+origins. It performs no real sign-in, token exchange or certificate issuance;
+those protocol and same-key checks run in the Go fixture. Physical iOS and a
+real federated account login remain separate integration QA. Embedding clients
+also need to verify their actual static-host delivery and published asset pin.

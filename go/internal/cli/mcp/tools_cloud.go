@@ -175,13 +175,17 @@ func (s *mcpServer) registerCloudTools(srv *server.MCPServer) {
 	srv.AddTool(mcpgo.NewTool("cloud_ping", pingOpts...), s.handleCloudPing)
 
 	runOpts := []mcpgo.ToolOption{
-		mcpgo.WithDescription("Build and deploy a local project to device or the connected target, replacing a running app of the same name. Returns status and build-log tail. Check container_list and telemetry_logs for application readiness."),
+		mcpgo.WithDescription("Build and deploy a local project to the explicit or connected target. Returns a compact deployment result. wait_ready checks configured TCP readiness or process stability, not application behavior. Set include_output for build logs."),
 		mcpgo.WithString("project_path", mcpgo.Required(), mcpgo.Description("Project directory to build and deploy")),
 		mcpgo.WithString("device", mcpgo.Description("device selector from device_list (host:port, vm:NAME, or a cloud:// selector); omit to reuse the connection")),
 		mcpgo.WithString("build_type", mcpgo.Enum("docker", "compose", "swift", "python"), mcpgo.Description("Build system; omit for automatic detection")),
 		mcpgo.WithString("product", mcpgo.Description("Swift package product")),
+		mcpgo.WithString("service", mcpgo.Description("Build and deploy the named service and its dependencies")),
 		mcpgo.WithBoolean("debug", mcpgo.Description("Start under a debugger")),
 		mcpgo.WithBoolean("start", mcpgo.DefaultBool(true), mcpgo.Description("Start after deployment; false only creates the container")),
+		mcpgo.WithBoolean("wait_ready", mcpgo.Description("Wait for configured TCP readiness or process stability on WendyOS targets. Omitted: true when starting, except where run cannot wait (local Docker/Podman, device_name deploys, and Compose, multi-service, Xcode, native-command, host-built Swift or build-host projects); false for create-only requests. Set false to skip readiness.")),
+		mcpgo.WithInteger("readiness_timeout_seconds", mcpgo.Min(1), mcpgo.Max(3600), mcpgo.Description("Readiness deadline within timeout_seconds; requires wait_ready")),
+		mcpgo.WithBoolean("include_output", mcpgo.Description("Include the bounded build-log tail on success; failures always include it. Omitted: false.")),
 		mcpgo.WithInteger("timeout_seconds", mcpgo.Min(1), mcpgo.Max(3600), mcpgo.DefaultNumber(300), mcpgo.Description("Command timeout")),
 		mcpgo.WithInteger("max_bytes", mcpgo.Min(1), mcpgo.Max(1000000), mcpgo.DefaultNumber(16384), mcpgo.Description("Build-log tail byte limit")),
 	}

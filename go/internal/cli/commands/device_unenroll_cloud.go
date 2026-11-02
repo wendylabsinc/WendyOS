@@ -240,7 +240,8 @@ func runCloudDeviceUnenrollAndReset(cmd *cobra.Command, cloudGRPC, selector, dev
 		}
 		device = cloudDiscoveryDevice{cloudAssetMetadata: asset, v2: asset, key: asset.GetId()}
 	} else {
-		devices, err := fetchCloudDiscoveryDevices(ctx, auth, false)
+		// Seeding here would pin the name of the asset this deletes.
+		devices, err := listCloudDiscoveryDevices(ctx, auth, false)
 		if err != nil {
 			return err
 		}

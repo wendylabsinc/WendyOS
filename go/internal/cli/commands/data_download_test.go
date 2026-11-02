@@ -101,10 +101,14 @@ func TestDownloadDestinationCleansTrailingSeparator(t *testing.T) {
 		{"dot slash", "ep1", "." + sep + "ep", filepath.Join(".", "ep"), filepath.Join(".", "ep") + ".partial"},
 		{"default is the episode id", "ep1", "", "ep1", "ep1.partial"},
 		{"redundant separators", "ep1", "out" + sep + sep + "ep" + sep, filepath.Join("out", "ep"), filepath.Join("out", "ep") + ".partial"},
+		{"output overrides an id that is not a directory name", ".." + sep + "x", "ep", "ep", "ep.partial"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			dest, stage := downloadDestination(tc.id, tc.output)
+			dest, stage, err := downloadDestination(tc.id, tc.output)
+			if err != nil {
+				t.Fatalf("downloadDestination(%q, %q): %v", tc.id, tc.output, err)
+			}
 			if dest != tc.wantDest {
 				t.Fatalf("downloadDestination(%q, %q) destination = %q, want %q", tc.id, tc.output, dest, tc.wantDest)
 			}
@@ -117,6 +121,23 @@ func TestDownloadDestinationCleansTrailingSeparator(t *testing.T) {
 				t.Fatalf("stage %q is inside destination %q", stage, dest)
 			}
 		})
+	}
+}
+
+// TestDownloadDestinationRefusesEpisodeIDThatIsNotADirectoryName covers the
+// default destination, which is the episode ID itself. A picked ID comes from
+// the device, so one that is not a single local path element must not decide
+// where the download lands.
+func TestDownloadDestinationRefusesEpisodeIDThatIsNotADirectoryName(t *testing.T) {
+	sep := string(os.PathSeparator)
+	abs, err := filepath.Abs("ep")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"", "..", ".." + sep + "x", "a" + sep + "b", "ep" + sep, abs} {
+		if dest, stage, err := downloadDestination(id, ""); err == nil {
+			t.Errorf("downloadDestination(%q, \"\") = %q, %q; want an error", id, dest, stage)
+		}
 	}
 }
 

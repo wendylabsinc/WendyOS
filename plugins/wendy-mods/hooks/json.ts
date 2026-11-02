@@ -32,7 +32,7 @@ export function parseJson(text: string): Obj | undefined {
 /**
  * The JSON object a text starts with, and the text after it; undefined when the
  * text starts with anything else. Wendy MCP results can carry more text after
- * their JSON, such as the CLI's one-time update notice.
+ * their JSON, such as the CLI's daily update notice.
  */
 export function leadingJson(text: string): { readonly value: Obj; readonly rest: string } | undefined {
   const source = text.replace(/^\uFEFF/, '')

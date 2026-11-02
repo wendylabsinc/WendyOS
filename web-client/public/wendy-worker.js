@@ -71,6 +71,7 @@ self.onmessage = ({ data }) => {
       try {
         const shared = [
           "auth-complete",
+          "auth-redirect-complete",
           "auth-restore",
           "auth-signout",
           "cloud-discover",

@@ -1,10 +1,14 @@
 package commands
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 
 	"github.com/spf13/cobra"
+	"google.golang.org/protobuf/encoding/protojson"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
@@ -132,42 +136,89 @@ func newDeviceBuildHostStatusCmd() *cobra.Command {
 				return err
 			}
 
-			if caps.GetBuilderEnabled() {
-				cliLogln("Builder role: %s", tui.Value("enabled"))
-			} else {
-				cliLogln("Builder role: %s (run `wendy device build-host enable`)", tui.Value("disabled"))
+			if jsonOutput {
+				return writeBuildCapabilitiesJSON(cmd.OutOrStdout(), caps)
 			}
-			if caps.GetBuildkitAvailable() {
-				if v := caps.GetBuildkitVersion(); v != "" {
-					cliLogln("BuildKit:     %s (%s)", tui.Value("available"), v)
-				} else {
-					cliLogln("BuildKit:     %s", tui.Value("available"))
-				}
-			} else {
-				// Say why on darwin: a bare "unavailable" on a Mac reads as a bug
-				// rather than a property of how the Mac agent runs containers.
-				if caps.GetOs() == "darwin" {
-					cliLogln("BuildKit:     %s (macOS runs containers through Apple Container, which has none)", tui.Value("unavailable"))
-				} else {
-					cliLogln("BuildKit:     %s", tui.Value("unavailable"))
-				}
-			}
-			// Where the cache lands is worth seeing before a build, not after
-			// the disk fills. Silent on an older agent, which reports nothing.
-			if root := caps.GetBuildkitRoot(); root != "" && caps.GetBuildkitRootTotalBytes() > 0 {
-				cliLogln("Cache:        %s (%s free of %s)", tui.Value(root),
-					humanBytes(caps.GetBuildkitRootFreeBytes()), humanBytes(caps.GetBuildkitRootTotalBytes()))
-			} else if caps.GetBuildkitAvailable() && caps.GetBuildkitRootInspectionSupported() {
-				cliLogln("Cache:        %s", tui.Value("inspection failed"))
-			}
-			cliLogln("Platform:     %s/%s", caps.GetOs(), caps.GetCpuArchitecture())
-			if len(caps.GetNativePlatforms()) > 0 {
-				cliLogln("Builds:       %s natively", formatPlatformList(caps.GetNativePlatforms()))
-			}
-			if len(caps.GetEmulatedPlatforms()) > 0 {
-				cliLogln("Emulates:     %s", formatPlatformList(caps.GetEmulatedPlatforms()))
+			for _, line := range buildHostStatusLines(caps, deviceFlag) {
+				cliLogln("%s", line)
 			}
 			return nil
 		},
 	}
+}
+
+// buildHostStatusLines renders `build-host status`. device is the selector the
+// developer used, so the fix it suggests can be pasted back as-is.
+func buildHostStatusLines(caps *agentpbv2.GetBuildCapabilitiesResponse, device string) []string {
+	var lines []string
+	if caps.GetBuilderEnabled() {
+		lines = append(lines, "Builder role: "+tui.Value("enabled"))
+	} else {
+		lines = append(lines, fmt.Sprintf("Builder role: %s (run `wendy device build-host enable`)", tui.Value("disabled")))
+	}
+	switch {
+	case caps.GetBuildkitAvailable() && caps.GetBuildkitVersion() != "":
+		lines = append(lines, fmt.Sprintf("BuildKit:     %s (%s)", tui.Value("available"), caps.GetBuildkitVersion()))
+	case caps.GetBuildkitAvailable():
+		lines = append(lines, "BuildKit:     "+tui.Value("available"))
+	case caps.GetOs() == "darwin":
+		// Say why on darwin: a bare "unavailable" on a Mac reads as a bug
+		// rather than a property of how the Mac agent runs containers.
+		lines = append(lines, fmt.Sprintf("BuildKit:     %s (macOS runs containers through Apple Container, which has none)", tui.Value("unavailable")))
+	default:
+		// A bare "unavailable" left the developer guessing what the agent
+		// looks for; name the daemon and the socket, as the run preflight does.
+		lines = append(lines, fmt.Sprintf("BuildKit:     %s (%s)", tui.Value("unavailable"), buildkitdInstallHint))
+	}
+	// Where the cache lands is worth seeing before a build, not after
+	// the disk fills. Silent on an older agent, which reports nothing.
+	if root := caps.GetBuildkitRoot(); root != "" && caps.GetBuildkitRootTotalBytes() > 0 {
+		lines = append(lines, fmt.Sprintf("Cache:        %s (%s free of %s)", tui.Value(root),
+			humanBytes(caps.GetBuildkitRootFreeBytes()), humanBytes(caps.GetBuildkitRootTotalBytes())))
+	} else if caps.GetBuildkitAvailable() && caps.GetBuildkitRootInspectionSupported() {
+		lines = append(lines, "Cache:        "+tui.Value("inspection failed"))
+	}
+	// Silent on an older agent: its zero internet_reachable means "did not
+	// check", not "offline".
+	if caps.GetInternetCheckSupported() {
+		if caps.GetInternetReachable() {
+			lines = append(lines, "Internet:     "+tui.Value("reachable"))
+		} else {
+			state := "Internet:     " + tui.Value("not reachable")
+			if detail := caps.GetInternetDetail(); detail != "" {
+				state += " (" + detail + ")"
+			}
+			lines = append(lines, state,
+				"              Builds pull base images from the internet; "+buildHostInternetRemedy(device)+".")
+		}
+	}
+	lines = append(lines, fmt.Sprintf("Platform:     %s/%s", caps.GetOs(), caps.GetCpuArchitecture()))
+	if len(caps.GetNativePlatforms()) > 0 {
+		lines = append(lines, fmt.Sprintf("Builds:       %s natively", formatPlatformList(caps.GetNativePlatforms())))
+	}
+	if len(caps.GetEmulatedPlatforms()) > 0 {
+		lines = append(lines, fmt.Sprintf("Emulates:     %s", formatPlatformList(caps.GetEmulatedPlatforms())))
+	}
+	return lines
+}
+
+// writeBuildCapabilitiesJSON is `build-host status --json`: the agent's whole
+// answer under its proto field names, so a field added to the response shows
+// up here without a second schema to keep in step. Unpopulated fields are
+// emitted, so internet_reachable: false is stated rather than left for a
+// script to infer, and internet_check_supported says whether to believe it.
+func writeBuildCapabilitiesJSON(out io.Writer, caps *agentpbv2.GetBuildCapabilitiesResponse) error {
+	raw, err := protojson.MarshalOptions{UseProtoNames: true, EmitUnpopulated: true}.Marshal(caps)
+	if err != nil {
+		return err
+	}
+	// Re-indented by encoding/json: protojson varies its whitespace between
+	// runs on purpose, and this makes the output stable.
+	var buf bytes.Buffer
+	if err := json.Indent(&buf, raw, "", "  "); err != nil {
+		return err
+	}
+	buf.WriteByte('\n')
+	_, err = out.Write(buf.Bytes())
+	return err
 }

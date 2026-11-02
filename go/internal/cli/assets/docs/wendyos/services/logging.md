@@ -4,7 +4,7 @@ WendyOS uses systemd-journald for log management. All services write to the jour
 
 ## Default behaviour
 
-By default, journal logs are stored in volatile memory (`/run/log/journal`) and lost on reboot. The default for a given board tracks `WENDYOS_MENDER`: targets without a Mender-managed `/data` partition (QEMU, RPi, Thor Phase 1) use volatile logs; Orin (tegra234) uses persistent logs.
+Whether journal logs survive a reboot depends on `WENDYOS_PERSIST_JOURNAL_LOGS`, whose default tracks `WENDYOS_OTA`. Boards built with the `wendyos-update` OTA stack (`WENDYOS_OTA = "wendy"`) have a `/data` partition and keep persistent logs there. QEMU builds (`WENDYOS_OTA = "none"`) and Raspberry Pi, which sets the option to `0` for now, store logs in volatile memory (`/run/log/journal`), where they are lost on reboot.
 
 ## Persistent journal option
 
@@ -25,7 +25,7 @@ ForwardToSyslog=yes
 
 **`/lib/systemd/system/var-log.mount`**
 
-Bind-mounts `/data/log` onto `/var/log` before `systemd-journald.service` starts:
+Bind-mounts `/data/log` onto `/var/log`:
 
 ```ini
 [Mount]
@@ -35,7 +35,7 @@ Type=none
 Options=bind,x-systemd.mkdir
 ```
 
-The `x-systemd.mkdir` option automatically creates `/data/log` if it does not exist. The unit runs after `data.mount` and `mender-systemd-growfs-data.service` (if present) to ensure the data partition is fully expanded before the bind mount is established.
+The `x-systemd.mkdir` option automatically creates `/data/log` if it does not exist. The unit requires `/data` and runs after `data.mount`; `wendyos-data.service` prepares the data partition (first-boot format and grow) before `data.mount`. journald starts early with the volatile runtime journal, and `systemd-journal-flush.service` moves it to `/var/log/journal` once this mount is in place.
 
 When `Storage=persistent` is set, journald creates `/var/log/journal/<machine-id>/` and writes binary journal files there. These survive reboots and OTA updates (the `/data` partition is outside the update boundary on Tegra machines).
 
@@ -111,7 +111,7 @@ journalctl --vacuum-size=200M
 
 | Configuration | Location | Survives reboot |
 |---------------|----------|-----------------|
-| Default (volatile) | `/run/log/journal/` | No |
+| `WENDYOS_PERSIST_JOURNAL_LOGS=0` | `/run/log/journal/` | No |
 | `WENDYOS_PERSIST_JOURNAL_LOGS=1` | `/var/log/journal/` (→ `/data/log/journal/`) | Yes |
 
 ## Individual service log identifiers

@@ -54,8 +54,8 @@ Find answers to common questions about WendyOS.
     WendyOS is a lightweight operating system designed for edge computing devices like NVIDIA Jetson and Raspberry Pi. It provides a simple, containerized platform for deploying applications written in Swift, Python, Rust, C++, and other languages.
 
     **Technical Details:**
-    - **Base**: Debian-based Linux distribution
-    - **Architecture**: Targets ARM64 architecture
+    - **Base**: Yocto-based Linux distribution, built with [WendyOS-Builder](https://github.com/wendylabsinc/WendyOS-Builder)
+    - **Architecture**: ARM64 (NVIDIA Jetson, Raspberry Pi, Qualcomm Dragonwing, and Arduino UNO Q) and x86-64 (generic x86-64 PCs); the WendyOS VM image is built for both
     - **Purpose-built**: Optimized for robotics, IoT, and physical AI applications
   </Accordion>
 
@@ -125,15 +125,16 @@ Find answers to common questions about WendyOS.
   </Accordion>
 
   <Accordion title="What programming languages can I use with WendyOS?">
-    WendyOS supports multiple programming languages:
-    - **Swift** (native support, no container build required) - Our recommended language
-    - **TypeScript/JavaScript** (via containers)
-    - **Python** (via containers)
-    - **Rust** (via containers)
+    WendyOS supports multiple programming languages, each with `wendy init` templates and [tutorials](/docs/guides/tutorials):
+    - **Python** (via containers; Wendy generates a Dockerfile for a project with only `requirements.txt`)
+    - **Swift** (via containers, or without a Dockerfile: Wendy cross-compiles a Swift package on your Mac or Linux computer)
     - **C++** (via containers)
+    - **Rust** (via containers)
+    - **TypeScript/JavaScript** (via containers)
+    - **Mojo** (via containers)
     - And other languages via containers
 
-    Container builds run through Docker or, on Apple Silicon, [Apple Container](https://github.com/apple/container) — Docker is not strictly required. While we support multiple languages through containerization, we highly recommend Swift for the most reliable experience with our frameworks.
+    Container builds run through Docker or, on Apple Silicon, [Apple Container](https://github.com/apple/container) — Docker is not strictly required.
   </Accordion>
 
   <Accordion title="Which language should I use for physical AI projects?">
@@ -163,28 +164,13 @@ Find answers to common questions about WendyOS.
     Think of it this way: you wouldn't want a garbage collector deciding to pause your robot's control loop while its arm is mid-motion. Use the right tool for the job, and for physical AI, that means languages with predictable, deterministic memory management.
   </Accordion>
 
-  <Accordion title="Why did you choose Swift as the core language for WendyOS?">
-    We chose Swift as WendyOS's flagship language to solve a fundamental problem in edge development: **fragmentation**.
+  <Accordion title="Do I have to use Swift?">
+    No. Swift is one of several supported languages, alongside Python, C++, Rust, TypeScript/JavaScript, and Mojo. Each has `wendy init` templates and tutorials, and each deploys with the same `wendy run`. Choose the language that fits your project and team.
 
-    Modern edge development is incredibly fragmented. Each company reinvents the wheel with overly complicated stacks, using multiple programming languages for tasks that should be straightforward. This creates unnecessary complexity and increases the barrier to entry for developers who must learn multiple languages and tools just to get started.
-
-    **Swift unifies this fragmented ecosystem:**
-    - **Single language for everything**: Eliminates the common but inefficient dual-language workflow (prototype in Python, rewrite in C++ for production)
-    - **Memory safe and performant**: Uses Automatic Reference Counting (ARC), not garbage collection, making it deterministic and suitable for real-time systems
-    - **Modern and readable**: Production-ready from the start, no need to rewrite code
-    - **Excellent C/C++ interoperability**: Swift's "escape hatch" allows seamless integration with existing system libraries
-    - **Community building**: One language means unified documentation, blog posts, libraries, and packages instead of fragmented solutions
-
-    **Why not other languages?**
-    - **Rust**: Excellent language but slow compile times, cumbersome syntax, and painful FFI work with C/C++ headers
-    - **C++**: While extremely powerful, it can be complex to get something simple going. The common workflow of prototyping in Python and rewriting in C++ for production reveals that if C++ was truly productive for rapid development, companies would start with it, not end with it
-    - **Python**: Great for prototyping but too slow for production, non-deterministic garbage collection, and no explicit type system. Industry consensus: "garbage collected languages are dead on arrival" for controlling actuators or dangerous equipment
-    - **Zig**: Too early and unstable; not yet production-ready for mission-critical systems
-    - **Java/Kotlin**: Require garbage collection and poor C interoperability story
-
-    We looked to mobile development's success: Apple's decision to unify development under Swift is one of their greatest contributions to software development. WendyOS brings this same unification to edge computing, creating a common ecosystem where Swift becomes the lingua franca—just as JavaScript is for web developers and Kotlin is for Android developers.
-
-    **Note**: We do support Python, Rust, C++, and other languages through containers and containerd (built with Docker or Apple Container). However, for the most reliable experience with our frameworks, we highly recommend Swift.
+    Swift has a few practical advantages on Wendy:
+    - **No Dockerfile needed**: For a Swift package without a Dockerfile, `wendy run` cross-compiles the app on your Mac or Linux computer and pushes the image to the device without Docker.
+    - **Deterministic memory management**: Swift uses Automatic Reference Counting (ARC), not garbage collection, so it suits control loops that drive moving parts.
+    - **C and C++ interoperability**: Swift can call existing C libraries directly; see [Wrapping a C Library in Swift](/docs/guides/tutorials/swift/wrapping-c-library).
   </Accordion>
 </Accordions>
 

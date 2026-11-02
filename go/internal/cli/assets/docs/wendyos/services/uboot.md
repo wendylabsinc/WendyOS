@@ -1,6 +1,8 @@
 # U-Boot and Boot Configuration
 
-WendyOS on Raspberry Pi does not use U-Boot. The RPi firmware chain (`bootcode.bin` / EEPROM on RPi 5, `bootcode.bin` on RPi 4) loads the kernel directly from the FAT32 `/boot` partition using `config.txt` and `cmdline.txt`.
+WendyOS on Raspberry Pi 3, 4 and 5 boots through U-Boot by default: the shared Raspberry Pi machine settings set `WENDYOS_RPI_UBOOT ?= "1"`. The RPi firmware reads `config.txt` and `cmdline.txt` from the FAT32 `/boot` partition and starts U-Boot instead of the kernel. U-Boot runs `boot.scr`, which on the default `wendyos-update` stack (`WENDYOS_OTA = "wendy"`) picks the A/B rootfs slot from `uboot.env`, loads the kernel from that slot's `/boot` directory, and adds `root=` for the slot to the kernel command line.
+
+The default is the same on every Raspberry Pi board but depends on the build configuration. Set `WENDYOS_RPI_UBOOT = "0"` to build without U-Boot; the firmware then loads the kernel directly from the `/boot` partition. With a `WENDYOS_OTA` value other than `"wendy"`, `boot.scr` is the stock meta-raspberrypi single-rootfs script.
 
 This document covers that boot configuration: where the files live, what WendyOS sets, and how to customise them.
 
@@ -9,10 +11,12 @@ This document covers that boot configuration: where the files live, what WendyOS
 | File | Purpose |
 |------|---------|
 | `config.txt` | RPi firmware configuration (hardware init, overlays, UART, PCIe, GPU) |
-| `cmdline.txt` | Linux kernel command line (root device, consoles, init parameters) |
+| `cmdline.txt` | Linux kernel command line (consoles, init parameters); with U-Boot, `boot.scr` adds the root device |
 | `bcm*.dtb` | Device Tree Blob for the SoC |
 | `overlays/` | Device Tree overlays referenced by `config.txt` |
-| `kernel8.img` (or `kernel_2712.img`) | Kernel image |
+| `kernel8.img` (or `kernel_2712.img` on RPi 5) | U-Boot (`u-boot.bin`), stored under the file name the firmware loads as its kernel. Without U-Boot, the kernel image itself |
+| `boot.scr` | U-Boot boot script: selects the A/B rootfs slot and loads its kernel |
+| `uboot.env` | U-Boot environment, including the selected slot (`wendyos_boot_slot`) |
 | `initrd.img` | Initramfs (if present) |
 
 ## `config.txt`
@@ -62,29 +66,20 @@ The kernel command line is assembled by meta-raspberrypi from several sources. W
 console=tty1
 ```
 
-The root partition is identified differently depending on the board:
+With U-Boot (the default), `boot.scr` takes the firmware's command line and appends `root=` for the selected A/B slot, followed by `rootwait rw`. Because it comes last, it overrides any `root=` in `cmdline.txt`. The root device depends on the board:
 
-- **RPi 4 and 5** (GPT layout): `root=PARTUUID=<uuid>` — a stable UUIDv4 assigned at build time.
-- **RPi 3** (MBR layout): `root=LABEL=root` — the filesystem label set in `rpi-mbr.wks`. Under MBR, the kernel exposes PARTUUIDs as `<disk-signature>-<partno>`, not as UUIDv4, so PARTUUID references would not resolve.
+- **RPi 4 and 5** (GPT layout): slot A is partition 3 and slot B is partition 4, for example `root=/dev/mmcblk0p3` on an SD card or `root=/dev/nvme0n1p3` on the RPi 5 NVMe image. When an RPi 4 boots the image from another disk, such as USB, `boot.scr` passes the slot's `root=PARTUUID=<uuid>` instead.
+- **RPi 3** (MBR layout): slot A is partition 2 and slot B is partition 3, for example `root=/dev/mmcblk0p2`.
 
-The full command line on a typical RPi 5 WendyOS device looks like:
-
-```
-console=serial0,115200 console=tty1 root=PARTUUID=<uuid> rootfstype=ext4 rootwait
-```
-
-On RPi 3:
-
-```
-console=serial0,115200 console=tty1 root=LABEL=root rootfstype=ext4 rootwait
-```
+Run `cat /proc/cmdline` on the device to see the full command line it booted with.
 
 | Parameter | Description |
 |-----------|-------------|
 | `console=serial0,115200` | Hardware UART console (alias for the model-appropriate UART device). See [uart.md](uart.md). |
 | `console=tty1` | HDMI framebuffer console added by WendyOS |
-| `root=PARTUUID=<uuid>` | Root partition identified by GPT PARTUUID (RPi 4/5) |
-| `root=LABEL=root` | Root partition identified by filesystem label (RPi 3) |
+| `root=/dev/mmcblk0p<N>` | Selected A/B slot, appended by `boot.scr` (`/dev/nvme0n1p<N>` on the RPi 5 NVMe image) |
+| `root=PARTUUID=<uuid>` | Selected A/B slot when an RPi 4 boots the image from a disk other than the one it was built for |
+| `rw` | Mount the root filesystem read-write; the A/B `fstab` has no `/` entry |
 | `rootfstype=ext4` | Root filesystem type |
 | `rootwait` | Wait for the block device to become available |
 
@@ -138,4 +133,4 @@ nano /boot/config.txt
 sync && reboot
 ```
 
-> Note: OTA updates on Jetson/Tegra machines use Mender and replace the entire rootfs, but the `/boot` partition and `/config` partition sit outside the update boundary and are not affected by updates.
+> Note: OTA updates use `wendyos-update`, which writes the new rootfs to the inactive A/B slot. On Raspberry Pi, the `/boot` and `/config` partitions sit outside the A/B slots, so an update does not replace your edits to them.

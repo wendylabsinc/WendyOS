@@ -44,7 +44,7 @@ Unprovisioning still removes copies left by older agents. Agent services,
 including the embedded container registry, receive credentials in memory;
 these persistence files are internal agent state, not an app credential API.
 
-The Swift agent follows the same layout for software-backed keys. With a
+The macOS agent (Swift) follows the same layout for software-backed keys. With a
 Secure Enclave key, there is no `device-key.pem`; the wrapped key is held in
 the Keychain.
 
@@ -189,7 +189,7 @@ A pin's `source` field records how the CLI learned it:
 
 Pins written before sources were tracked carry an empty `source` and are treated as `lan`.
 
-A `cloud` write is authoritative and overwrites whatever was pinned for that name, `lan`-sourced or not — that is how cloud-known devices get their trust-on-first-use window closed before the CLI ever meets them on the network (see below). The reverse never holds: a LAN sighting cannot upgrade or override a `cloud` pin, and specifically:
+A `cloud` write is authoritative and overwrites whatever was pinned for that name, `lan`-sourced or not — that is how cloud-known devices get their trust-on-first-use window closed before the CLI ever meets them on the network (see below). The one exception is a tenant session's roster meeting a pin that already holds a different tenant principal, which it leaves alone (see [Cloud pin seeding](#cloud-pin-seeding)). The reverse never holds: a LAN sighting cannot upgrade or override a `cloud` pin, and specifically:
 
 - A `lan`-sourced pin that predates asset ids (no asset recorded) is backfilled with the observed asset id on the first connection whose org and cloud still match — org and cloud already vouch for the connection, so this is a one-time upgrade, not a challenge. A `cloud`-sourced pin with no asset id is **not** backfilled this way: the cloud already spoke for this name, and a LAN sighting is not evidence to the contrary, so it is treated as a plain match instead.
 - An asset-less `cloud` pin is never displaced by a `lan` pin in a way that would erase an existing exact-identity constraint on that name — cloud authority decides *which* binding to believe, and applying it is worthless if the result is a name constrained to no asset at all.
@@ -209,6 +209,8 @@ Consulting an alias can only ever *find* a pin, never discard one: an attacker-c
 ## Cloud pin seeding
 
 A hostname the CLI has never connected to has no pin, so its first connection is trust-on-first-use — the one moment this scheme cannot, by construction, distinguish the real device from an impostor answering first. Seeding pins from the cloud closes that window for every device the org's cloud already knows about: whenever the CLI fetches the org's asset roster over an authenticated session, each named asset is recorded as a `cloud`-sourced pin (org, asset id) before the CLI has ever reached it on the network. An impostor answering an mDNS query for that name is then rejected on the very first LAN connection attempt, not just the second.
+
+A tenant (UUID) session's roster records each asset's device principal, taken from its PKI device binding when it has one. It replaces pins that hold no principal, such as the numeric pins an earlier Cloud session left behind, but never a pin that holds a different principal. That pin names a device the CLI already verified, or a binding an earlier roster made, and a Cloud name that now belongs to another asset stays refused until `wendy device unpin`. Cloud connections fetch the roster too, so replacing the pin would let the retry of a refused connection reach the name's new holder. A name that two assets share is not seeded, because Cloud lookups refuse it as ambiguous. Two lookups do not seed at all: the offline re-query that explains why a name was not found, and unenrollment, which deletes the asset it finds.
 
 ## CA key rollover
 

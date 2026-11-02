@@ -53,21 +53,52 @@ func (a *cameraDataAdapter) Discover(ctx context.Context) []data.Source {
 		if dev.GetTransport() == agentpb.VideoTransport_VIDEO_TRANSPORT_IP {
 			healthy := dev.GetOnline() && dev.GetHasCredentials()
 			detail := strings.TrimSpace(dev.GetName() + " " + dev.GetAddress())
+			reason := ""
 			if !dev.GetHasCredentials() {
 				detail += " (credentials required)"
+				reason = "no login stored"
 			} else if !dev.GetOnline() {
 				detail += " (offline)"
+				reason = "camera offline"
 			}
-			out = append(out, data.Source{ID: fmt.Sprintf("ipcamera:%d", dev.GetId()), Kind: "camera", ClockDomain: "IP_CAMERA_STREAM/AGENT_RECEIPT", Healthy: healthy, Detail: detail})
+			out = append(out, data.Source{ID: fmt.Sprintf("ipcamera:%d", dev.GetId()), Kind: "camera", ClockDomain: "IP_CAMERA_STREAM/AGENT_RECEIPT", Healthy: healthy, Detail: detail, Name: ipCameraSourceName(dev.GetName()), UnusableReason: reason})
 			continue
 		}
 		domain := "V4L2_BUFFER_TIMESTAMP"
 		if dev.GetTransport() == agentpb.VideoTransport_VIDEO_TRANSPORT_CSI {
 			domain = "GSTREAMER_PIPELINE/AGENT_RECEIPT"
 		}
-		out = append(out, data.Source{ID: "v4l2:" + dev.GetPath(), Kind: "camera", ClockDomain: domain, Healthy: true, Detail: strings.TrimSpace(dev.GetName() + " " + dev.GetTransport().String())})
+		// Healthy is not a check here: listCameras lists a local camera only
+		// after it answers a V4L2 capture query, so a listed camera is present,
+		// and nothing tests whether it delivers a picture.
+		out = append(out, data.Source{ID: "v4l2:" + dev.GetPath(), Kind: "camera", ClockDomain: domain, Healthy: true, Detail: strings.TrimSpace(dev.GetName() + " " + dev.GetTransport().String()), Name: cameraSourceName(dev.GetName(), dev.GetPath())})
 	}
 	return out
+}
+
+// cameraSourceName is the friendly name of a local camera. V4L2 card names are
+// capped at 31 bytes, and uvcvideo fills them as "<product>: <product>", so a
+// C920 reads "HD Pro Webcam C920: HD Pro Webc"; the truncated repeat after the
+// colon is dropped.
+func cameraSourceName(name, path string) string {
+	name = strings.TrimSpace(name)
+	if head, tail, ok := strings.Cut(name, ": "); ok && tail != "" && strings.HasPrefix(head, tail) {
+		name = head
+	}
+	if name == "" {
+		return path
+	}
+	return name
+}
+
+// ipCameraSourceName is the friendly name of a network camera: its model, or
+// "Network camera" when it reported none.
+func ipCameraSourceName(model string) string {
+	model = strings.TrimSpace(model)
+	if model == "" || model == "network camera" {
+		return "Network camera"
+	}
+	return model
 }
 
 func cameraDeviceID(sourceID string) (uint32, bool) {

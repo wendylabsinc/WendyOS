@@ -278,7 +278,7 @@ func relocateGPT(dev backend.WritableFile, size int64) error {
 	// refuse and truncates its size past 2 TiB; resizeProtectiveMBR does it.
 	g.table.ProtectiveMBR = false
 	g.table.Resize(uint64(newSize))
-	if err := g.table.Write(dev, newSize); err != nil {
+	if err := g.table.Write(rawDeviceSync{dev}, newSize); err != nil {
 		return err
 	}
 	if err := resizeProtectiveMBR(dev, g.sectorSize, g.declaredSize/g.sectorSize, sectors); err != nil {
@@ -290,6 +290,25 @@ func relocateGPT(dev backend.WritableFile, size int64) error {
 	}
 	if err := after.table.Verify(dev, uint64(newSize)); err != nil {
 		return fmt.Errorf("verifying the rewritten GPT: %w", err)
+	}
+	return nil
+}
+
+// rawDeviceSync is the drive as go-diskfs writes the GPT to it. go-diskfs
+// flushes the drive after each GPT write, but on macOS os.File.Sync is
+// fcntl(F_FULLFSYNC), which raw devices (/dev/rdiskN) reject with ENOTTY.
+// Their writes are unbuffered and have already reached the device, so ENOTTY
+// counts as success, as for the flush after the image write; any other error
+// is real, so a Linux block device is still flushed after every write.
+type rawDeviceSync struct{ backend.WritableFile }
+
+func (d rawDeviceSync) Sync() error {
+	s, ok := d.WritableFile.(interface{ Sync() error })
+	if !ok {
+		return nil
+	}
+	if err := s.Sync(); err != nil && !errors.Is(err, syscall.ENOTTY) {
+		return err
 	}
 	return nil
 }

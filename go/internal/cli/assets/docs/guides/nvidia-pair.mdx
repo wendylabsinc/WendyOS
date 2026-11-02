@@ -1,0 +1,129 @@
+---
+title: Run NVIDIA PAIR over Wendy Net
+description: Run NVIDIA PAIR with Ollama, retain mDNS discovery, and distribute inference across Wendy Net devices.
+---
+
+The [NvidiaPAIR example](https://github.com/wendylabsinc/wendyos/tree/main/Examples/NvidiaPAIR)
+runs NVIDIA Personal AI Router in a Wendy container. It retains PAIR's normal
+`_nvpair-node._tcp.local.` advertisements. Wendy Net transports the admitted
+service records and makes them available to PAIR's browser on another device.
+
+The image bundles Ollama 0.40.13 and `qwen2.5:0.5b`, with pinned image and model
+digests. PAIR owns the engine and routes independent requests across paired
+workers that advertise the model. Each worker holds its own copy; this does
+not pool GPU memory or split one model across machines.
+
+## Prepare and deploy
+
+Use Linux WendyOS devices enrolled in the same organization, with current
+Wendy Net app discovery support and NVIDIA GPU access. The supplied manifest
+targets GPU inference; the example is tested on Jetson Orin Nano with JetPack
+7.2. First follow
+[Connect devices with Wendy Net](/docs/guides/wendy-net) and verify peers with
+`wendy net status` and `wendy net topology` on both devices.
+
+```sh
+git clone https://github.com/wendylabsinc/wendyos.git
+cd wendyos/Examples/NvidiaPAIR
+wendy json validate
+wendy run --device DEVICE_A --detach --yes
+wendy run --device DEVICE_B --detach --yes
+```
+
+Replace the device placeholders with your selectors. For a test device that has
+local mesh credentials but no deployment registration in Cloud, add
+`--skip-cloud-registration`. This skips deployment recording, not mesh
+authentication or enrollment requirements.
+
+Allow time for model warmup, then verify readiness and discovery on each node:
+
+```sh
+wendy device attach --device DEVICE_A sh.wendy.examples.nvidia-pair -- pairctl health
+wendy device attach --device DEVICE_A sh.wendy.examples.nvidia-pair -- pairctl rpc discovery:get-nodes
+```
+
+Find the other node's UUID and `ipAddress` in the result. Wendy Net addresses
+are allocated locally to each observer; use the address returned on the node
+that initiates the connection. Follow the example README to invite the peer,
+accept the PIN on the other node, and confirm `state: "paired"`.
+
+`pairctl health` checks the local proxy, engine health, and successful initial
+model warmup. It does not prove remote inference.
+
+## Verify fleet inference
+
+After pairing, send a request through the local PAIR endpoint:
+
+```sh
+wendy device attach --device DEVICE_A sh.wendy.examples.nvidia-pair -- curl -fsS \
+  http://127.0.0.1:11434/api/generate -H 'Content-Type: application/json' \
+  -d '{"model":"qwen2.5:0.5b","prompt":"Explain mesh networking in one sentence.","stream":false}'
+```
+
+A single successful response may be served locally. To prove that both nodes
+execute inference, run the supplied check on an idle app:
+
+```sh
+wendy device attach --device DEVICE_A sh.wendy.examples.nvidia-pair -- \
+  python3 /opt/wendy/fleet_check.py --requests 4 --min-nodes 2
+```
+
+The check requires automatic routing, two advertised model inventories, and
+completed model loading on every eligible worker. It
+submits concurrent requests, verifies completed text, and checks PAIR's workload
+records for the actual serving UUIDs. Its `served_by` result reports the number
+of requests executed on each worker. Repeat from `DEVICE_B` to check the other
+direction. Clear any manual routing pin with `pairctl rpc proxy:node/select
+'{"id":""}'` before testing.
+
+Add workers by deploying the image, pairing them into the cluster, and checking
+their model inventory. Each worker needs enough memory for its own model. The
+small bundled model demonstrates scheduling; choose and validate a model for
+your workload before using the example in production.
+
+The client commands run inside the container. PAIR uses authenticated cluster
+traffic between peers; published ports do not provide a public client API.
+
+## Why this configuration works
+
+The app uses `isolation: "isolated"`, network mode `mesh`, and
+`serviceCIDR: "10.99.0.0/16"`. Its TCP port mappings include PAIR's proxy
+facades and peer services. It does not publish UDP 5353 or request host
+networking. PAIR owns its mDNS sockets, so private Avahi is unnecessary.
+
+PAIR advertises one SRV port and encodes several other service ports in TXT.
+Wendy rewrites DNS addresses and the SRV port, but preserves application TXT
+data. The example therefore publishes each service on the same port number.
+It also patches the pinned PAIR source to prefer resolved Wendy Net addresses
+over private container IPs carried in TXT, and resolves pairing callbacks by
+node UUID through local discovery. PIN verification and certificate pinning
+remain unchanged. The Docker build tests that behavior
+and checks that ordinary LAN selection remains unchanged.
+
+The example keeps PAIR's cluster identity and settings in a persistent volume.
+Each device must retain its own identity. Wendy Net membership does not replace
+PAIR's PIN pairing or cluster authentication.
+
+## Engines, models, and LAN peers
+
+Mesh service networking has no Internet default route. Package executable
+engines and model data before deployment. This example keeps Ollama in the
+image and its model under `/opt/ollama-models`, so startup needs no downloads.
+Do not install an engine executable into a Wendy `persist` volume, which is
+mounted `noexec`. The GPU entitlement gives Ollama access to the device GPU.
+PAIR identity, trust pins, and settings persist independently under `/data`.
+
+To change the bundled model, rebuild with matching `OLLAMA_MODEL` and
+`MODEL_SHA256` arguments; see the example README for the manifest format.
+Diagnose engine startup with `pairctl rpc engine:status '{"engine":"ollama"}'`
+and `pairctl rpc engine:logs '{"engine":"ollama"}'`.
+
+Physical-LAN projection grants access to the advertised endpoint and port. It
+does not interpret PAIR's extra TXT ports, so discovering an ordinary PAIR
+desktop on the LAN does not prove full interoperability. The example targets
+PAIR nodes running as Wendy Net apps.
+
+See [Share and discover app services](/docs/guides/wendy-net-services) for the
+general discovery rules and the
+[upstream PAIR broker contract](https://github.com/NVIDIA/Personal-AI-Router/blob/v0.1.1/services/nvpair-ui-broker/README.md)
+for the pinned version's RPC methods.

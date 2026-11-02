@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -113,6 +114,26 @@ func rejectWaitReadyBuildHost(opts runOptions) error {
 		return errWaitReadyUnsupported("remote builds (--build-host)")
 	}
 	return nil
+}
+
+// waitReadyUnsupportedForMCP reports why `wendy run --wait-ready` would refuse
+// the project at dir, using the checks runCommand applies before it resolves a
+// device, so the MCP run tool waits by default only where the CLI can. MCP
+// never passes --build-host, so only a configured default build host counts.
+// Unreadable configuration is left for the run itself to report.
+func waitReadyUnsupportedForMCP(dir, buildType string) error {
+	opts := runOptions{waitReady: true, buildType: buildType}
+	if host, err := resolveBuildHostName(""); err == nil {
+		opts.buildHost = host
+	}
+	if err := rejectWaitReadyBuildHost(opts); err != nil {
+		return err
+	}
+	var appCfg *appconfig.AppConfig
+	if cfg, err := appconfig.LoadFromFile(filepath.Join(dir, "wendy.json")); err == nil {
+		appCfg = cfg
+	}
+	return rejectUnsupportedWaitReady(dir, appCfg, opts)
 }
 
 // waitReadyJSONStdoutGuard keeps stdout for the one JSON object a
