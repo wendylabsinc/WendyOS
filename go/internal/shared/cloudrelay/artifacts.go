@@ -117,6 +117,12 @@ type Verifier struct {
 	fetched   time.Time
 }
 
+// A lookup failure says nothing about a saved artifact's validity. Keep its
+// original message and cause while allowing cache owners to defer eviction.
+type grantKeyLookupError struct{ error }
+
+func (e *grantKeyLookupError) Unwrap() error { return e.error }
+
 func (v *Verifier) key(ctx context.Context, kid string) (jwk, error) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
@@ -206,7 +212,7 @@ func (v *Verifier) verify(ctx context.Context, compact, typ, audience string, no
 	}
 	k, err := v.key(ctx, hdr["kid"])
 	if err != nil {
-		return c, err
+		return c, &grantKeyLookupError{err}
 	}
 	input := []byte(p[0] + "." + p[1])
 	valid := false

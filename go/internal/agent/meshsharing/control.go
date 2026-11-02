@@ -33,10 +33,11 @@ const (
 	// A step waits long enough for a LAN negotiation and leaves the rest of
 	// its budget for probes and tunnel setup. A slower negotiation continues
 	// in the background and a later step collects it.
-	leaseStepWait          = 5 * time.Second
-	leaseHeartbeatInterval = 10 * time.Second
-	leaseHeartbeatTimeout  = 30 * time.Second
-	maxLeaseConnections    = 128
+	leaseStepWait             = 5 * time.Second
+	leaseHeartbeatInterval    = 10 * time.Second
+	leaseHeartbeatMinInterval = time.Second
+	leaseHeartbeatTimeout     = 30 * time.Second
+	maxLeaseConnections       = 128
 )
 
 type leaseBackend interface {
@@ -243,7 +244,7 @@ func serveGatewayLease(ctx context.Context, creds *localmesh.Credentials, backen
 			return nil
 		}
 		now := time.Now()
-		if !last.IsZero() && now.Sub(last) < time.Second {
+		if !last.IsZero() && now.Sub(last) < leaseHeartbeatMinInterval {
 			return nil
 		}
 		last = now
