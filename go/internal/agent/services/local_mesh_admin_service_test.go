@@ -360,6 +360,12 @@ func TestLocalMeshAdminConfigureDoesNotReportPreChangeRuntimeState(t *testing.T)
 	if got.GetState() != "pending-runtime" || got.GetRuntimeAvailable() || got.GetAuthenticatedPeers() != 0 {
 		t.Fatalf("enable reported the pre-change runtime state: %+v", got)
 	}
+	// Status can race the runtime's next configuration poll. Saved opt-in must
+	// remain pending instead of reverting to the previous disabled snapshot.
+	pending, err := svc.GetLocalMeshStatus(ctx, &pb.GetLocalMeshStatusRequest{})
+	if err != nil || !proto.Equal(pending, got) {
+		t.Fatalf("status reverted to disabled before the runtime applied enable: %+v %v", pending, err)
+	}
 
 	// Retrying before the runtime polls must return the same saved intent.
 	retry, err := svc.ConfigureLocalMesh(ctx, enable)
@@ -368,6 +374,19 @@ func TestLocalMeshAdminConfigureDoesNotReportPreChangeRuntimeState(t *testing.T)
 	}
 	if !proto.Equal(got, retry) {
 		t.Fatalf("retry attached stale runtime: first=%+v retry=%+v", got, retry)
+	}
+	// Pending opt-in must not suppress a genuine failure to apply it, or an
+	// unavailable runtime's explanation, while waiting for the next poll.
+	for _, observed := range []LocalMeshRuntimeStatus{
+		{Available: true, State: "failed", Detail: "BLE adapter setup failed"},
+		{Available: true, State: "error", Detail: "Internet sharing cleanup failed"},
+		{State: "unavailable", Detail: "Runtime is unavailable on this platform"},
+	} {
+		runtime = observed
+		status, err := svc.GetLocalMeshStatus(ctx, &pb.GetLocalMeshStatusRequest{})
+		if err != nil || status.GetState() != observed.State || status.GetDetail() != observed.Detail || status.GetRuntimeAvailable() != observed.Available {
+			t.Fatalf("pending opt-in hid a runtime failure/unavailability: %+v %v", status, err)
+		}
 	}
 
 	// Configure always acknowledges saved intent; status reports observations

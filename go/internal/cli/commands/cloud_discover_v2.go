@@ -19,11 +19,12 @@ import (
 // v2 uses UUIDs. Keep them intact in JSON instead of converting them into the
 // numeric identifiers used by legacy sessions.
 type cloudDiscoverV2Info struct {
-	ID      string `json:"id"`
-	Name    string `json:"name"`
-	Type    string `json:"type"`
-	Address string `json:"address"`
-	Version string `json:"version,omitempty"`
+	ID            string `json:"id"`
+	Name          string `json:"name"`
+	Type          string `json:"type"`
+	Address       string `json:"address"`
+	Version       string `json:"version,omitempty"`
+	PKIDeviceName string `json:"pkiDeviceName,omitempty"`
 }
 
 func fetchCloudAssetsV2(ctx context.Context, auth *config.AuthConfig, onlineOnly bool) ([]*cloudpbv2.Asset, error) {
@@ -151,7 +152,7 @@ func (d cloudDiscoveryDevice) info(ver *agentpb.GetAgentVersionResponse) any {
 	if deviceType == "" {
 		deviceType = humanReadableOSType(d.GetOsType(), d.GetArchitecture())
 	}
-	info := cloudDiscoverV2Info{ID: d.key, Name: d.GetName(), Type: deviceType, Address: d.GetIpAddress()}
+	info := cloudDiscoverV2Info{ID: d.key, Name: d.GetName(), Type: deviceType, Address: d.GetIpAddress(), PKIDeviceName: d.v2.GetPkiDeviceName()}
 	if d.isLite() {
 		info.Type = liteDeviceType(info.Type)
 		info.Version = d.v2.GetOsVersion()
