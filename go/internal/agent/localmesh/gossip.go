@@ -51,7 +51,7 @@ func (s *Synchronizer) Receive(m ControlMessage, now time.Time, slots ...int) ([
 		}
 		return s.receive(m, now, slots...)
 	}
-	if m.Gossip != nil && m.Gossip.Op != "" && !m.Gossip.Known() {
+	if m.Gossip != nil && (m.Gossip.FutureType() || m.Gossip.Op != "" && !m.Gossip.Known()) {
 		return nil, nil, nil
 	}
 	if s.gossip == nil || m.Gossip == nil {
