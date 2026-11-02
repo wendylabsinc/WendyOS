@@ -1,5 +1,3 @@
-//go:build linux
-
 package localmesh
 
 import (
@@ -19,6 +17,9 @@ type timestampReply struct {
 }
 
 func (n *Node) timestampControl(p *nodePeer, m *TimestampControl) {
+	if !m.supported() {
+		return
+	}
 	now := time.Now()
 	if p.timestamp != nil && !p.timestamp.expires.After(now) {
 		p.timestamp = nil
@@ -75,7 +76,7 @@ func (n *Node) pumpTimestamp(p *nodePeer) {
 	if !x.pending {
 		return
 	}
-	m := &TimestampControl{ID: x.id, Op: "error"}
+	m := &TimestampControl{Version: timestampControlVersion, ID: x.id, Op: "error"}
 	end := x.offset
 	if x.err == nil {
 		end = min(len(x.data), x.offset+1024)
