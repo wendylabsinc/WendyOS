@@ -23,6 +23,15 @@ import (
 // can take well over 10s to read the ACK.
 var brokerKeepalive = keepalive.ClientParameters{Time: 30 * time.Second, Timeout: 20 * time.Second, PermitWithoutStream: true}
 
+// Public broker TLS carries no client identity. These dials share the same
+// standard hostname/system-root policy, so a bounded process-local cache can
+// resume their certificate exchange. Device mTLS must not use this cache.
+var brokerSessionCache = tls.NewLRUClientSessionCache(64)
+
+func publicBrokerTLSConfig() *tls.Config {
+	return &tls.Config{MinVersion: tls.VersionTLS13, ClientSessionCache: brokerSessionCache}
+}
+
 // withKeepalive is grpc.WithKeepaliveParams; tests swap it to observe the
 // parameters each dial passes, since gRPC dial options are opaque.
 var withKeepalive = grpc.WithKeepaliveParams
@@ -171,5 +180,5 @@ func DialBroker(endpoint string) (*grpc.ClientConn, error) {
 	if err != nil {
 		return nil, err
 	}
-	return grpc.NewClient(t, grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{MinVersion: tls.VersionTLS13})), withKeepalive(brokerKeepalive))
+	return grpc.NewClient(t, grpc.WithTransportCredentials(credentials.NewTLS(publicBrokerTLSConfig())), withKeepalive(brokerKeepalive))
 }
