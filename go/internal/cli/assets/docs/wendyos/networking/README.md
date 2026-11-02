@@ -1,10 +1,28 @@
-# WendyOS Networking Overview
+# WendyOS networking overview
 
-WendyOS provides a self-contained networking stack designed for USB-tethered connectivity between a device (Raspberry Pi, Jetson, Dragonwing, or other supported hardware) and a host computer. When you connect a WendyOS device to a host over USB, the device presents a composite USB gadget that includes both a network interface and a serial console. No drivers, no pairing — the device advertises itself over mDNS and the wendy-agent can discover and connect to it immediately. On Linux hosts, `wendy discover` offers to configure the USB link the first time it finds the device.
+WendyOS supports device management over USB, Ethernet, and Wi-Fi, plus
+application communication through Wendy Net. Choose the workflow you need:
 
-On the Dragonwing IQ8, use USB2 (micro-USB) for this connection after WendyOS boots. USB0 (USB-C) is reserved for EDL/recovery flashing. The port assignment is the same with the stock Qualcomm or a replacement Intel M.2 card.
+- [Wendy Net](/docs/guides/wendy-net) connects enrolled devices over enabled
+  local transports, including routes through intermediate devices. Internet
+  sharing and roaming are separate opt-ins.
+- [App service discovery](/docs/guides/wendy-net-services) lets isolated apps
+  advertise and browse ordinary mDNS services across Wendy Net. TCP and UDP
+  access requires explicit port mappings.
+- [USB NCM](./usb-ncm.md) provides a direct management connection. On Linux,
+  `wendy discover` offers the one-time host link setup when needed.
+- [mDNS and authentication](./mdns.md) explains LAN discovery. Advertisements
+  are routing hints; enrolled devices authenticate with mTLS on port 50052.
 
-## Architecture
+The USB-specific sections below describe the gadget network, not the entire
+Wendy Net address space. Wendy Net service apps use `10.99.0.0/16`; applications
+must use locally resolved addresses rather than infer addresses from device IDs.
+
+## USB gadget architecture
+
+On the Dragonwing IQ8, use USB2 (micro-USB) for this connection after WendyOS boots.
+USB0 (USB-C) is reserved for EDL/recovery flashing. The port assignment is the
+same with the stock Qualcomm or a replacement Intel M.2 card.
 
 ```
 WendyOS device                          Host computer
@@ -37,14 +55,14 @@ WendyOS device                          Host computer
 - [mDNS / Avahi](./mdns.md) — Service broadcasting, hostname generation, and host-side discovery
 - [Troubleshooting](./troubleshooting.md) — Diagnosing common networking problems
 
-## Key Addresses
+## USB management addresses
 
 | What | Value |
 |---|---|
 | Device `usb0` IPv4 (DHCP client mode) | Assigned by host (typically `10.42.0.2`–`10.42.0.5`) |
 | Host IPv4 when using NetworkManager shared | `10.42.0.1/24` |
 | dnsmasq pool (on-device DHCP server mode) | `10.42.0.2`–`10.42.0.5` |
-| IPv6 | Link-local only (`fe80::/64`, derived from MAC via EUI-64) |
+| USB IPv6 | Link-local (`fe80::/64`, derived from MAC via EUI-64) |
 | mDNS service | `_wendyos._udp`, port `50051` pre-provisioning / `50052` post-provisioning |
 | mDNS hostname | `wendyos-<device-name>.local` or `wendyos-<short-uuid>.local` |
 
@@ -61,10 +79,15 @@ WendyOS runs on multiple hardware platforms. Networking behaviour is identical a
 
 The virtual machine boards (`vm-arm64-wendyos`, `vm-x86-64-wendyos`) do not use USB NCM gadget networking. They emulate a standard virtio network device instead.
 
-## Planned changes (not yet shipped)
+## Current control paths
 
-> The items below describe behaviour that is **not implemented today**. Current builds still rely exclusively on NetworkManager via its `nmcli` CLI for WiFi configuration, and have no built-in mTLS termination on the device side.
+The CLI uses the agent's gRPC service for management, including mTLS for enrolled
+devices. Wendy Net has its own authenticated peer connections and app service
+publication. Device discovery, management authentication, and app discovery are
+separate; finding a device does not publish every container port.
 
-- **Network Manager and IWD coexistence via auto-detect** ([WDY-1236](https://linear.app/wendylabsinc/issue/WDY-1236)) — _planned, not yet implemented_. Today the agent talks to NetworkManager (`nmcli`) only. The planned change adds IWD (Internet Wireless Daemon) as an alternative. The agent will detect which CLI is present on the running OS and select the matching backend, so devices on older OS builds that ship NetworkManager keep working unchanged. The OS-side change to ship `iwd` lands first; the agent-side switchover is gated on the OS PR.
-- **Unified TCP-based socket protocol for CLI and cloud** ([WDY-1246](https://linear.app/wendylabsinc/issue/WDY-1246)) — _planned, not yet implemented_. The same low-level TCP socket protocol — messages standardised by size, type, and payload — will back both cloud-to-device and CLI-to-device sessions, with the `wendy` CLI behaving as a local cloud instance. The existing flow (CLI emits a UDP broadcast, the device opens an HTTP connection back) becomes one of the supported transports under that unified surface.
-- **Mutual TLS for device communication** ([WDY-1245](https://linear.app/wendylabsinc/issue/WDY-1245) covers the Wendy Light provisioning slice) — _planned, not yet implemented_. Sample mTLS socket plumbing exists in a development branch and will be merged once the unified protocol above is in place. The accompanying provisioning improvements (generating private keys and CSRs directly on-device, mDNS-based discovery) follow.
+Wi-Fi configuration currently uses NetworkManager through `nmcli`. Wendy Net
+participation and transport settings use `wendy net configure`; they do not
+replace `wendy device wifi connect` for joining an ordinary Wi-Fi network.
+See [Wi-Fi setup](/docs/device/connecting-to-wifi) and the
+[Wendy Net settings reference](/docs/guides/wendy-net#settings-reference).
