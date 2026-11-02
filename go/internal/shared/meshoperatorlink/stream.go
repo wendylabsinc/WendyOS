@@ -89,20 +89,22 @@ type Link struct {
 	agentHandler func(context.Context, net.Conn) error
 	agentContext context.Context
 
-	workers    sync.WaitGroup
-	outControl chan control
-	expiryMu   sync.Mutex
-	expires    time.Time
-	certNow    func() time.Time
-	maxExpiry  time.Time // Fixed monotonic resource bound for an explicit policy.
-	closed     bool
-	conn       *tls.Conn
-	address    netip.Addr
-	server     bool
-	once       sync.Once
-	done       chan struct{}
-	stop       func() bool
-	timer      *time.Timer
+	workers      sync.WaitGroup
+	outControl   chan control
+	expiryMu     sync.Mutex
+	expires      time.Time
+	certNow      func() time.Time
+	maxExpiry    time.Time // Earliest observed monotonic bound; never extended.
+	verifyExpiry func() (time.Time, error)
+	invalid      error
+	closed       bool
+	conn         *tls.Conn
+	address      netip.Addr
+	server       bool
+	once         sync.Once
+	done         chan struct{}
+	stop         func() bool
+	timer        *time.Timer
 }
 
 func (l *Link) Address() netip.Addr   { return l.address }
@@ -135,15 +137,24 @@ func ready(ctx context.Context, c *tls.Conn, address netip.Addr, server bool, ex
 }
 
 func readyWithClock(ctx context.Context, c *tls.Conn, address netip.Addr, server bool, expires time.Time, certNow func() time.Time) (*Link, error) {
-	l := &Link{conn: c, address: address, server: server, done: make(chan struct{}), expires: expires, certNow: certNow, outControl: make(chan control, 4), agentWake: make(chan struct{}, 1)}
+	return readyWithValidity(ctx, c, address, server, expires, certNow, nil)
+}
+
+func readyWithValidity(ctx context.Context, c *tls.Conn, address netip.Addr, server bool, expires time.Time, certNow func() time.Time, verifyExpiry func() (time.Time, error)) (*Link, error) {
+	started := time.Now()
+	l := &Link{conn: c, address: address, server: server, done: make(chan struct{}), expires: expires, certNow: certNow, verifyExpiry: verifyExpiry, outControl: make(chan control, 4), agentWake: make(chan struct{}, 1)}
 	if certNow != nil {
 		remaining := expires.Sub(certNow())
 		if remaining <= 0 {
 			return nil, errors.New("operator credential expired")
 		}
-		l.maxExpiry = time.Now().Add(remaining)
+		l.maxExpiry = started.Add(remaining)
 	}
-	if err := c.SetDeadline(l.transportExpiryLocked()); err != nil {
+	deadline := l.transportExpiryLocked()
+	if l.invalid != nil {
+		return nil, l.invalid
+	}
+	if err := c.SetDeadline(deadline); err != nil {
 		return nil, err
 	}
 	// Install callbacks before returning; their functions cannot access partially

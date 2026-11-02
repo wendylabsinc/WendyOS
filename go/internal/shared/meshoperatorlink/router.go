@@ -116,16 +116,26 @@ func RouterClient(ctx context.Context, c *tls.Conn, cfg ClientConfig) (_ *Router
 // An optional issuer completer supports known-CA TLS presentations while
 // retaining the original primary trust, role, tenant and validity checks.
 func AcceptRouter(ctx context.Context, c *tls.Conn, tenant meshid.Tenant, roots []*x509.Certificate, agent func(context.Context, net.Conn) error, candidates ...IssuerCandidates) (_ *RouterLink, err error) {
-	return acceptRouter(ctx, c, tenant, roots, nil, agent, candidates...)
+	return acceptRouter(ctx, c, tenant, roots, nil, nil, agent, candidates...)
 }
 
 // AcceptRouterWithTimePolicy applies the explicitly selected mesh clock policy
 // to the primary credential and its lifetime, without changing IO budgets.
 func AcceptRouterWithTimePolicy(ctx context.Context, c *tls.Conn, tenant meshid.Tenant, roots []*x509.Certificate, policy certs.CertificateTimePolicy, agent func(context.Context, net.Conn) error, candidates ...IssuerCandidates) (*RouterLink, error) {
-	return acceptRouter(ctx, c, tenant, roots, &policy, agent, candidates...)
+	return acceptRouter(ctx, c, tenant, roots, &policy, nil, agent, candidates...)
 }
 
-func acceptRouter(ctx context.Context, c *tls.Conn, tenant meshid.Tenant, roots []*x509.Certificate, policy *certs.CertificateTimePolicy, agent func(context.Context, net.Conn) error, candidates ...IssuerCandidates) (_ *RouterLink, err error) {
+// AcceptRouterWithTimePolicyAndOwn also requires the receiver's current,
+// independently verified own credential path. The callback returns selected
+// path expiry in certificate time, never a socket or resource deadline.
+func AcceptRouterWithTimePolicyAndOwn(ctx context.Context, c *tls.Conn, tenant meshid.Tenant, roots []*x509.Certificate, policy certs.CertificateTimePolicy, own func() (time.Time, error), agent func(context.Context, net.Conn) error, candidates ...IssuerCandidates) (*RouterLink, error) {
+	if own == nil {
+		return nil, errors.New("missing own operator receiver credential verifier")
+	}
+	return acceptRouter(ctx, c, tenant, roots, &policy, own, agent, candidates...)
+}
+
+func acceptRouter(ctx context.Context, c *tls.Conn, tenant meshid.Tenant, roots []*x509.Certificate, policy *certs.CertificateTimePolicy, own func() (time.Time, error), agent func(context.Context, net.Conn) error, candidates ...IssuerCandidates) (_ *RouterLink, err error) {
 	stop, err := routerBegin(ctx, c)
 	if err != nil {
 		return nil, err
@@ -166,6 +176,41 @@ func acceptRouter(ctx context.Context, c *tls.Conn, tenant meshid.Tenant, roots 
 	if err != nil {
 		return nil, err
 	}
+	var verifyExpiry func() (time.Time, error)
+	if policy != nil {
+		// Freeze exact peer bytes, completed untrusted candidates and original
+		// primary anchors before any management handler can receive the link.
+		frozenChain := make([][]byte, len(chain))
+		for i, der := range chain {
+			frozenChain[i] = bytes.Clone(der)
+		}
+		frozenRoots := make([]*x509.Certificate, len(roots))
+		for i, root := range roots {
+			frozenRoots[i], err = x509.ParseCertificate(bytes.Clone(root.Raw))
+			if err != nil {
+				return nil, err
+			}
+		}
+		principal := identity.Operator().Principal()
+		verifyExpiry = func() (time.Time, error) {
+			current, err := meshoperator.VerifyPrimaryWithPolicy(frozenChain, frozenRoots, tenant, policy.WallTime(), *policy)
+			if err != nil {
+				return time.Time{}, err
+			}
+			if current.Operator().Principal() != principal {
+				return time.Time{}, errors.New("operator credential identity changed")
+			}
+			expires := current.NotAfter()
+			if own != nil {
+				localExpiry, err := own()
+				if err != nil {
+					return time.Time{}, err
+				}
+				expires = minTime(expires, localExpiry)
+			}
+			return expires, nil
+		}
+	}
 	hello, err := readControl(c)
 	if err != nil {
 		return nil, err
@@ -188,7 +233,7 @@ func acceptRouter(ctx context.Context, c *tls.Conn, tenant meshid.Tenant, roots 
 	if policy != nil {
 		clock = func() time.Time { return policy.BaseTime(policy.WallTime()) }
 	}
-	l, err := routerReadyWithClock(ctx, c, peer, peer, true, identity.NotAfter(), clock, agent)
+	l, err := routerReadyWithValidity(ctx, c, peer, peer, true, identity.NotAfter(), clock, verifyExpiry, agent)
 	if err != nil {
 		return nil, err
 	}
@@ -208,7 +253,11 @@ func routerReady(ctx context.Context, c *tls.Conn, peer, self meshid.Device, ser
 }
 
 func routerReadyWithClock(ctx context.Context, c *tls.Conn, peer, self meshid.Device, server bool, expires time.Time, clock func() time.Time, agent func(context.Context, net.Conn) error) (*RouterLink, error) {
-	base, err := readyWithClock(ctx, c, self.MeshAddress(), server, expires, clock)
+	return routerReadyWithValidity(ctx, c, peer, self, server, expires, clock, nil, agent)
+}
+
+func routerReadyWithValidity(ctx context.Context, c *tls.Conn, peer, self meshid.Device, server bool, expires time.Time, clock func() time.Time, verifyExpiry func() (time.Time, error), agent func(context.Context, net.Conn) error) (*RouterLink, error) {
+	base, err := readyWithValidity(ctx, c, self.MeshAddress(), server, expires, clock, verifyExpiry)
 	if err != nil {
 		return nil, err
 	}
@@ -222,9 +271,15 @@ func routerReadyWithClock(ctx context.Context, c *tls.Conn, peer, self meshid.De
 
 func (l *RouterLink) readRouter() error {
 	for {
+		if !l.policyLive() {
+			return net.ErrClosed
+		}
 		kind, data, err := readFrame(l.conn)
 		if err != nil {
 			return err
+		}
+		if !l.policyLive() {
+			return net.ErrClosed
 		}
 		switch kind {
 		case 1:
@@ -265,6 +320,9 @@ func (l *RouterLink) readRouter() error {
 }
 
 func (l *RouterLink) SendDatagram(data []byte) error {
+	if !l.policyLive() {
+		return net.ErrClosed
+	}
 	if len(data) == 0 || len(data) > 1100 {
 		return errors.New("invalid router datagram size")
 	}
@@ -291,11 +349,17 @@ func (l *RouterLink) SendDatagram(data []byte) error {
 	}
 }
 func (l *RouterLink) ReceiveDatagram(ctx context.Context) ([]byte, error) {
+	if !l.policyLive() {
+		return nil, net.ErrClosed
+	}
 	// Give Babel its reserved lane, but still service a waiting IP packet
 	// after each routing packet. Concurrent readers remain race-free.
 	if l.lastReceivedRouting.Load() {
 		select {
 		case data := <-l.packets:
+			if !l.policyLive() {
+				return nil, net.ErrClosed
+			}
 			l.lastReceivedRouting.Store(false)
 			return data, nil
 		default:
@@ -303,15 +367,24 @@ func (l *RouterLink) ReceiveDatagram(ctx context.Context) ([]byte, error) {
 	}
 	select {
 	case data := <-l.receivedRouting:
+		if !l.policyLive() {
+			return nil, net.ErrClosed
+		}
 		l.lastReceivedRouting.Store(true)
 		return data, nil
 	default:
 	}
 	select {
 	case data := <-l.receivedRouting:
+		if !l.policyLive() {
+			return nil, net.ErrClosed
+		}
 		l.lastReceivedRouting.Store(true)
 		return data, nil
 	case data := <-l.packets:
+		if !l.policyLive() {
+			return nil, net.ErrClosed
+		}
 		l.lastReceivedRouting.Store(false)
 		return data, nil
 	case <-ctx.Done():
@@ -328,8 +401,14 @@ func (l *RouterLink) WriteControlBytes(data []byte) error {
 	return l.routerWrite(5, data)
 }
 func (l *RouterLink) ReadControlBytes() ([]byte, error) {
+	if !l.policyLive() {
+		return nil, net.ErrClosed
+	}
 	select {
 	case data := <-l.controls:
+		if !l.policyLive() {
+			return nil, net.ErrClosed
+		}
 		return data, nil
 	case <-l.done:
 		return nil, io.EOF

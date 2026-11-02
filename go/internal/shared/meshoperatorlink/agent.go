@@ -56,8 +56,11 @@ func (l *Link) OpenAgent(ctx context.Context) (net.Conn, error) {
 	if l.server {
 		return nil, errors.New("only an operator opens management")
 	}
+	if !l.Live() {
+		return nil, io.ErrClosedPipe
+	}
 	l.agentMu.Lock()
-	if l.agentClosing || !l.Live() {
+	if l.agentClosing {
 		l.agentMu.Unlock()
 		return nil, io.ErrClosedPipe
 	}
@@ -280,6 +283,9 @@ func (c *agentStream) Read(out []byte) (int, error) {
 		return 0, nil
 	}
 	for {
+		if !c.link.policyLive() {
+			return 0, io.ErrClosedPipe
+		}
 		c.mu.Lock()
 		if !c.readDeadline.IsZero() && !time.Now().Before(c.readDeadline) {
 			c.mu.Unlock()
@@ -321,6 +327,9 @@ func (c *agentStream) Write(data []byte) (int, error) {
 	defer c.writeMu.Unlock()
 	total := 0
 	for len(data) > 0 {
+		if !c.link.policyLive() {
+			return total, io.ErrClosedPipe
+		}
 		c.mu.Lock()
 		closed, deadline := c.closed, c.writeDeadline
 		past := !deadline.IsZero() && !time.Now().Before(deadline)
