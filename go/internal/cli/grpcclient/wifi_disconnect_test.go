@@ -243,3 +243,38 @@ func TestWiFiDisconnectClientDefiniteRejectionAfterReadyIsError(t *testing.T) {
 		t.Fatalf("definite rejection = %+v, %v", result, err)
 	}
 }
+
+func TestWiFiDisconnectClientRejectsOutOfOrderEvents(t *testing.T) {
+	for _, mode := range []string{"early success", "early error", "early missing completion", "duplicate ready"} {
+		t.Run(mode, func(t *testing.T) {
+			connection, legacy := startWiFiDisconnectClients(t, func(stream grpc.BidiStreamingServer[agentpbv2.DisconnectWiFiControl, agentpbv2.DisconnectWiFiEvent]) error {
+				if mode == "duplicate ready" {
+					if err := acceptWiFiDisconnectClient(stream); err != nil {
+						return err
+					}
+					return stream.Send(&agentpbv2.DisconnectWiFiEvent{Event: &agentpbv2.DisconnectWiFiEvent_Ready{Ready: &emptypb.Empty{}}})
+				}
+				if begin, err := stream.Recv(); err != nil || begin.GetBegin() == nil {
+					return status.Errorf(codes.InvalidArgument, "missing begin: %v", err)
+				}
+				response := &agentpbv2.DisconnectWiFiResponse{Success: mode == "early success"}
+				if mode == "early error" {
+					message := "nmcli failed"
+					response.ErrorMessage = &message
+				} else if mode == "early missing completion" {
+					response = nil
+				}
+				return stream.Send(&agentpbv2.DisconnectWiFiEvent{Event: &agentpbv2.DisconnectWiFiEvent_Completed{Completed: response}})
+			}, func(context.Context) (*agentpb.DisconnectWiFiResponse, error) {
+				return &agentpb.DisconnectWiFiResponse{Success: true}, nil
+			})
+			result, err := connection.DisconnectWiFi(context.Background())
+			if err == nil || result.CompletionConfirmed || result.Success != nil || result.Legacy || legacy.calls.Load() != 0 {
+				t.Fatalf("out-of-order event became completion or fallback: result = %+v, error = %v, legacy calls = %d", result, err, legacy.calls.Load())
+			}
+			if result.Acknowledged != (mode == "duplicate ready") {
+				t.Fatalf("out-of-order event fabricated acknowledgement: %+v", result)
+			}
+		})
+	}
+}

@@ -120,7 +120,9 @@ func disconnectWiFi(ctx context.Context, acknowledged agentpbv2.WendyWiFiService
 		case *agentpbv2.DisconnectWiFiEvent_Ready:
 			ready = message.Ready != nil
 		case *agentpbv2.DisconnectWiFiEvent_Completed:
-			return completedWiFiDisconnectResult(false, message.Completed)
+			// Completion is authoritative only after this client acknowledges
+			// Ready with Confirm. Never report an unrequested effect as complete.
+			return unknownWiFiDisconnectResult(), errors.New("WiFi disconnect completion arrived before acknowledgement and confirmation")
 		case nil:
 			if len(event.ProtoReflect().GetUnknown()) != 0 {
 				continue
