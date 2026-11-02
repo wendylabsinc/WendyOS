@@ -396,6 +396,7 @@ func (n *Node) Run() error {
 					continue
 				}
 				for _, record := range changed {
+					n.logAdmission(record, "certificate-repair", time.Now())
 					for id, dest := range n.peers {
 						if id != p.id && dest.sync != nil {
 							n.queue(dest, dest.sync.Record(record, time.Now()))
@@ -527,6 +528,7 @@ func (n *Node) handleControl(p *nodePeer, control *ControlMessage) error {
 		return nil
 	}
 	for _, record := range changed {
+		n.logAdmission(record, "carrier", time.Now())
 		for id, dest := range n.peers {
 			if id != p.id && dest.sync != nil {
 				n.queue(dest, dest.sync.Record(record, time.Now()))
@@ -728,6 +730,7 @@ func (n *Node) publish() error {
 		m.AdmittedUntil = deadline
 	}
 	n.advertisement = m
+	n.logAdmission(w, "local-publication", now)
 	n.publicationDirty = false
 	n.nextPublication = time.Now().Add(time.Second)
 	for _, p := range n.peers {
