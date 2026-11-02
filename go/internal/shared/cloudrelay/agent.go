@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -197,7 +198,25 @@ func (a *Agent) remember(c claims) {
 		delete(a.leases, oldest.JTI)
 	}
 }
-func (a *Agent) issue(ctx context.Context) (*pb.IssuePresenceLeaseResponse, claims, error) {
+
+// presenceLeaseRequestError marks only failures of the issuance RPC. Validation,
+// credentials and saved-state errors must not be mistaken for transient RPCs.
+type presenceLeaseRequestError struct{ error }
+
+func (e *presenceLeaseRequestError) Unwrap() error { return e.error }
+
+func presenceDeadline(err error) bool {
+	return errors.Is(err, context.DeadlineExceeded) || status.Code(err) == codes.DeadlineExceeded
+}
+
+func retryPresenceLease(err error) bool {
+	var request *presenceLeaseRequestError
+	return errors.As(err, &request) && presenceDeadline(request.error)
+}
+
+// requestLease reads immutable agent keys and verifies Cloud's response. Only
+// the presence loop may remember, archive or apply the returned lease.
+func (a *Agent) requestLease(ctx context.Context) (*pb.IssuePresenceLeaseResponse, claims, error) {
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	cert, chain, key := a.Credentials()
@@ -213,25 +232,38 @@ func (a *Agent) issue(ctx context.Context) (*pb.IssuePresenceLeaseResponse, clai
 	defer conn.Close()
 	l, err := pb.NewTunnelAuthorizationServiceClient(conn).IssuePresenceLease(ctx, &pb.IssuePresenceLeaseRequest{AgentSigningPublicKeySpkiDer: publicDER(a.signing), AgentKeyAgreementPublicKeySpkiDer: publicDER(a.encryption), CorrelationId: uuid.NewString()})
 	if err != nil {
-		return nil, claims{}, fmt.Errorf("requesting presence lease from %s (%s): %w", a.Endpoint, pb.TunnelAuthorizationService_IssuePresenceLease_FullMethodName, err)
+		return nil, claims{}, &presenceLeaseRequestError{fmt.Errorf("requesting presence lease from %s (%s): %w", a.Endpoint, pb.TunnelAuthorizationService_IssuePresenceLease_FullMethodName, err)}
 	}
 	c, err := a.validateLease(ctx, l)
 	if err != nil {
 		return nil, c, err
 	}
+	return l, c, nil
+}
+
+func (a *Agent) recordIssuedLease(l *pb.IssuePresenceLeaseResponse, c claims) error {
 	// Cloud already binds new grants to this lease, whatever happens to it next.
 	a.remember(c)
-	if err = a.archivePresenceLease(l, c); err != nil {
-		return nil, c, err
-	}
+	return a.archivePresenceLease(l, c)
+}
+
+func (a *Agent) saveResumeLease(l *pb.IssuePresenceLeaseResponse) error {
 	raw, err := proto.Marshal(l)
 	if err != nil {
-		return nil, c, err
+		return err
 	}
-	if err = writeState(filepath.Join(a.StateDir, "lease.pb"), raw); err != nil {
-		return nil, c, err
+	return writeState(filepath.Join(a.StateDir, "lease.pb"), raw)
+}
+
+func (a *Agent) issue(ctx context.Context) (*pb.IssuePresenceLeaseResponse, claims, error) {
+	l, c, err := a.requestLease(ctx)
+	if err == nil {
+		err = a.recordIssuedLease(l, c)
 	}
-	return l, c, nil
+	if err == nil {
+		err = a.saveResumeLease(l)
+	}
+	return l, c, err
 }
 func renewalDelay(l *pb.IssuePresenceLeaseResponse, c claims) time.Duration {
 	when := time.Unix(c.Exp, 0).Add(-30 * time.Second)
@@ -279,14 +311,8 @@ func (a *Agent) runOnce(parent context.Context) error {
 		return err
 	}
 	defer conn.Close()
-	// Past this point the lease is committed to one broker process, and a lease
-	// outlives that process by nothing: every boot mints a fresh 256-bit
-	// audience, so a restart invalidates every lease Cloud signed against the
-	// old one. The broker then refuses admission, and re-presenting the same
-	// lease can never start working -- it has to be replaced. Dropping it here
-	// costs one extra IssuePresenceLease on reconnect; keeping it costs
-	// presence until the lease expires, up to a quarter of an hour, on every
-	// ordinary broker deploy.
+	// A broker refusal invalidates this resume lease (a restart changes the
+	// broker audience). An explicit deadline says nothing about its validity.
 	keepLease := false
 	defer func() {
 		// A cancelled parent is the agent shutting down, not the broker
@@ -301,18 +327,22 @@ func (a *Agent) runOnce(parent context.Context) error {
 		// carries, not whether the broker still knows it.
 		_ = os.Remove(filepath.Join(a.StateDir, "lease.pb"))
 	}()
-	stream, err := pb.NewTunnelBrokerV2ServiceClient(conn).RegisterPresence(metadata.NewOutgoingContext(ctx, metadata.MD{}))
-	if err != nil {
+	brokerError := func(err error) error {
+		keepLease = presenceDeadline(err) && time.Now().Before(time.Unix(a.leaseClaims.Exp, 0))
 		return err
 	}
+	stream, err := pb.NewTunnelBrokerV2ServiceClient(conn).RegisterPresence(metadata.NewOutgoingContext(ctx, metadata.MD{}))
+	if err != nil {
+		return brokerError(err)
+	}
 	if err = stream.Send(&pb.RegisterPresenceRequest{Message: &pb.RegisterPresenceRequest_Open{Open: &pb.PresenceOpen{PresenceLeaseJws: lease.PresenceLeaseJws, AgentSigningPublicKeySpkiDer: publicDER(a.signing)}}}); err != nil {
-		return err
+		return brokerError(err)
 	}
 	admission := time.AfterFunc(30*time.Second, cancel)
 	msg, err := stream.Recv()
 	if err != nil {
 		admission.Stop()
-		return fmt.Errorf("opening v2 presence: %w", err)
+		return brokerError(fmt.Errorf("opening v2 presence: %w", err))
 	}
 	sig, err := proof(a.signing, "presence", c.Aud, c.Route, c.JTI, lease.PresenceLeaseJws, "agent-presence", msg.GetChallenge())
 	if err != nil {
@@ -322,7 +352,7 @@ func (a *Agent) runOnce(parent context.Context) error {
 	err = stream.Send(&pb.RegisterPresenceRequest{Message: &pb.RegisterPresenceRequest_Proof{Proof: &pb.PresenceProof{ChallengeId: msg.GetChallenge().ChallengeId, Signature: sig}}})
 	if err != nil {
 		admission.Stop()
-		return err
+		return brokerError(err)
 	}
 	msg, err = stream.Recv()
 	admission.Stop()
@@ -331,7 +361,8 @@ func (a *Agent) runOnce(parent context.Context) error {
 		// this lease and its fresh holder proof. A stale old stream must
 		// drain; another lease cannot release it and would repeat the Cloud
 		// mTLS exchange over a potentially slow borrowed path.
-		keepLease = status.Code(err) == codes.AlreadyExists
+		brokerError(err)
+		keepLease = keepLease || status.Code(err) == codes.AlreadyExists
 		return err
 	}
 	accepted := msg.GetAccepted()
@@ -371,7 +402,111 @@ func (a *Agent) runOnce(parent context.Context) error {
 	rejected := map[string]int64{}
 	var renewing *pb.IssuePresenceLeaseResponse
 	var renewedClaims claims
+	type renewalResult struct {
+		lease  *pb.IssuePresenceLeaseResponse
+		claims claims
+		err    error
+	}
+	results := make(chan renewalResult, 1)
+	var workerDone chan struct{}
+	deferred := map[string]*pb.SessionOffer{}
+	handleOffer := func(o *pb.SessionOffer) error {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if !time.Now().Before(time.Unix(c.Exp, 0)) {
+			return fmt.Errorf("Cloud presence lease expired")
+		}
+		if !bounded(o.OfferId, 128) || !bounded(o.SessionId, 128) {
+			return fmt.Errorf("invalid relay offer")
+		}
+		if prior := deferred[o.OfferId]; prior != nil {
+			if !proto.Equal(prior, o) {
+				return fmt.Errorf("conflicting relay offer")
+			}
+			return nil
+		}
+		now := time.Now()
+		for id, s := range pending {
+			if s.c.Exp <= now.Unix() {
+				delete(pending, id)
+				_ = os.Remove(filepath.Join(a.StateDir, "offer-"+binding([]byte(id))+".pb"))
+			}
+		}
+		for id, l := range a.leases {
+			if l.Exp <= now.Unix() {
+				delete(a.leases, id)
+			}
+		}
+		for id, until := range rejected {
+			if until <= now.Unix() {
+				delete(rejected, id)
+			}
+		}
+		if prior := pending[o.OfferId]; prior != nil {
+			if !proto.Equal(prior.o, o) {
+				return fmt.Errorf("conflicting relay offer")
+			}
+		} else {
+			if _, refused := rejected[o.OfferId]; refused {
+				return nil
+			}
+			s, e := a.admitOffer(ctx, o, c, a.leases, pending, now)
+			if e != nil {
+				// Cloud can send a grant bound to its new lease before the
+				// issuance RPC reaches us. Retain only small, already-verified
+				// grants until that one worker finishes; no decryption or ack
+				// happens until the exact lease binding is known.
+				if errors.Is(e, errUnknownPresenceLease) && workerDone != nil && len(deferred) < 64 && proto.Size(o) <= presenceLeaseBytesLimit {
+					deferred[o.OfferId] = o
+					return nil
+				}
+				// tunnel/v2 refuses a bad offer with no decryption and
+				// no dial. Ending presence instead would drop the lease
+				// and every other offer for one bad grant or service.
+				// Unacknowledged, it is redelivered until its grant
+				// expires, at most a minute away; remember up to 64
+				// such offers that long so a redelivery is skipped.
+				a.Logger.Warn("refused cloud relay offer", zap.String("offer_id", o.OfferId), zap.Error(e))
+				if len(rejected) < 64 {
+					rejected[o.OfferId] = now.Add(time.Minute + cloudClockSkew).Unix()
+				}
+				return nil
+			}
+			pending[o.OfferId] = s
+		}
+		if err = stream.Send(&pb.RegisterPresenceRequest{Message: &pb.RegisterPresenceRequest_OfferAcknowledgement{OfferAcknowledgement: &pb.PresenceOfferAcknowledgement{OfferId: o.OfferId, SessionId: o.SessionId}}}); err != nil {
+			return brokerError(err)
+		}
+		return nil
+	}
+	retryDeferred := func() error {
+		for id, o := range deferred {
+			delete(deferred, id)
+			if e := handleOffer(o); e != nil {
+				return e
+			}
+		}
+		return nil
+	}
+	// A worker has no agent-state writes and cannot outlive this attempt,
+	// including cancellation or signed expiry while its RPC is outstanding.
+	defer func() {
+		cancel()
+		if workerDone != nil {
+			<-workerDone
+		}
+	}()
+	retryDelay := time.Second
 	for {
+		// Cancellation and the current signed expiry win over ready offers,
+		// issuance results and renewal acknowledgements alike.
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if !time.Now().Before(time.Unix(c.Exp, 0)) {
+			return fmt.Errorf("Cloud presence lease expired")
+		}
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -385,13 +520,49 @@ func (a *Agent) runOnce(parent context.Context) error {
 			keepLease = true
 			return err
 		case <-renewal.C:
-			l, n, e := a.issue(ctx)
-			if e != nil {
+			if workerDone != nil || renewing != nil {
+				return fmt.Errorf("presence renewal already pending")
+			}
+			workerDone = make(chan struct{})
+			go func(done chan struct{}) {
+				defer close(done)
+				l, n, e := a.requestLease(ctx)
+				results <- renewalResult{l, n, e}
+			}(workerDone)
+		case result := <-results:
+			<-workerDone
+			workerDone = nil
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			if !time.Now().Before(time.Unix(c.Exp, 0)) {
+				return fmt.Errorf("Cloud presence lease expired")
+			}
+			if result.err != nil {
+				if !retryPresenceLease(result.err) {
+					return result.err
+				}
+				if e := retryDeferred(); e != nil {
+					return e
+				}
+				a.Logger.Warn("cloud presence renewal deadline; retaining valid presence", zap.Error(result.err), zap.Duration("retry", retryDelay))
+				renewal.Reset(retryDelay)
+				retryDelay = min(retryDelay*2, 15*time.Second)
+				continue
+			}
+			l, n := result.lease, result.claims
+			if !time.Now().Before(time.Unix(n.Exp, 0)) {
+				return fmt.Errorf("Cloud returned an expired presence renewal")
+			}
+			if e := a.recordIssuedLease(l, n); e != nil {
 				return e
 			}
 			if n.Aud != c.Aud || n.Route != c.Route || l.Broker.Endpoint != lease.Broker.Endpoint {
 				// Freshly issued against the broker Cloud now names, so it is
 				// the one lease that survives this attempt.
+				if e := a.saveResumeLease(l); e != nil {
+					return e
+				}
 				a.lease = l
 				a.leaseClaims = n
 				keepLease = true
@@ -399,73 +570,44 @@ func (a *Agent) runOnce(parent context.Context) error {
 			}
 			renewing = l
 			renewedClaims = n
-			if e = stream.Send(&pb.RegisterPresenceRequest{Message: &pb.RegisterPresenceRequest_Renewal{Renewal: &pb.PresenceRenewal{PresenceLeaseJws: l.PresenceLeaseJws}}}); e != nil {
+			if e := stream.Send(&pb.RegisterPresenceRequest{Message: &pb.RegisterPresenceRequest_Renewal{Renewal: &pb.PresenceRenewal{PresenceLeaseJws: l.PresenceLeaseJws}}}); e != nil {
+				return brokerError(e)
+			}
+			if e := retryDeferred(); e != nil {
 				return e
 			}
 		case r := <-ch:
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			if !time.Now().Before(time.Unix(c.Exp, 0)) {
+				return fmt.Errorf("Cloud presence lease expired")
+			}
 			if r.e != nil {
-				return r.e
+				return brokerError(r.e)
 			}
 			switch m := r.m.Message.(type) {
 			case *pb.RegisterPresenceResponse_Renewed:
-				if renewing == nil || m.Renewed.LeaseExpiresAt == nil || m.Renewed.LeaseExpiresAt.AsTime().Unix() != renewedClaims.Exp {
+				if renewing == nil || m.Renewed.LeaseExpiresAt == nil || m.Renewed.LeaseExpiresAt.CheckValid() != nil || m.Renewed.LeaseExpiresAt.AsTime().Unix() != renewedClaims.Exp {
 					return fmt.Errorf("invalid presence renewal acceptance")
+				}
+				if !time.Now().Before(time.Unix(c.Exp, 0)) || !time.Now().Before(time.Unix(renewedClaims.Exp, 0)) {
+					return fmt.Errorf("Cloud presence lease expired")
+				}
+				if e := a.saveResumeLease(renewing); e != nil {
+					return e
 				}
 				lease = renewing
 				c = renewedClaims
 				a.lease = lease
 				a.leaseClaims = c
 				renewing = nil
+				retryDelay = time.Second
 				renewal.Reset(renewalDelay(lease, c))
 				expiry.Reset(time.Until(time.Unix(c.Exp, 0)))
 			case *pb.RegisterPresenceResponse_SessionOffer:
-				o := m.SessionOffer
-				if !bounded(o.OfferId, 128) || !bounded(o.SessionId, 128) {
-					return fmt.Errorf("invalid relay offer")
-				}
-				now := time.Now()
-				for id, s := range pending {
-					if s.c.Exp <= now.Unix() {
-						delete(pending, id)
-						_ = os.Remove(filepath.Join(a.StateDir, "offer-"+binding([]byte(id))+".pb"))
-					}
-				}
-				for id, l := range a.leases {
-					if l.Exp <= now.Unix() {
-						delete(a.leases, id)
-					}
-				}
-				for id, until := range rejected {
-					if until <= now.Unix() {
-						delete(rejected, id)
-					}
-				}
-				if prior := pending[o.OfferId]; prior != nil {
-					if !proto.Equal(prior.o, o) {
-						return fmt.Errorf("conflicting relay offer")
-					}
-				} else {
-					if _, refused := rejected[o.OfferId]; refused {
-						continue
-					}
-					s, e := a.admitOffer(ctx, o, c, a.leases, pending, now)
-					if e != nil {
-						// tunnel/v2 refuses a bad offer with no decryption and
-						// no dial. Ending presence instead would drop the lease
-						// and every other offer for one bad grant or service.
-						// Unacknowledged, it is redelivered until its grant
-						// expires, at most a minute away; remember up to 64
-						// such offers that long so a redelivery is skipped.
-						a.Logger.Warn("refused cloud relay offer", zap.String("offer_id", o.OfferId), zap.Error(e))
-						if len(rejected) < 64 {
-							rejected[o.OfferId] = now.Add(time.Minute + cloudClockSkew).Unix()
-						}
-						continue
-					}
-					pending[o.OfferId] = s
-				}
-				if err = stream.Send(&pb.RegisterPresenceRequest{Message: &pb.RegisterPresenceRequest_OfferAcknowledgement{OfferAcknowledgement: &pb.PresenceOfferAcknowledgement{OfferId: o.OfferId, SessionId: o.SessionId}}}); err != nil {
-					return err
+				if e := handleOffer(m.SessionOffer); e != nil {
+					return e
 				}
 			case *pb.RegisterPresenceResponse_OfferAcknowledged:
 				s := pending[m.OfferAcknowledged.OfferId]
@@ -507,6 +649,8 @@ type offerState struct {
 	started bool
 }
 
+var errUnknownPresenceLease = errors.New("relay offer presence lease is not yet known")
+
 // admitOffer verifies an offer's grant against the presence lease, decrypts and
 // checks its dial instruction, and retains it durably, as tunnel/v2 requires
 // before an acknowledgement. An error refuses this offer only.
@@ -518,9 +662,12 @@ func (a *Agent) admitOffer(ctx context.Context, o *pb.SessionOffer, lease claims
 	if err != nil {
 		return nil, err
 	}
-	bound, ok := leases[g.Presence]
-	if !ok || g.Route != lease.Route || g.Session != o.SessionId || g.Agent != binding(publicDER(a.signing)) {
+	if g.Route != lease.Route || g.Session != o.SessionId || g.Agent != binding(publicDER(a.signing)) {
 		return nil, fmt.Errorf("relay offer presence binding mismatch")
+	}
+	bound, ok := leases[g.Presence]
+	if !ok {
+		return nil, errUnknownPresenceLease
 	}
 	d, err := decryptInstruction(o.EncryptedDialInstruction, g, bound, a.encryption)
 	if err == nil {
