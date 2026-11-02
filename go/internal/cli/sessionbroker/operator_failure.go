@@ -82,15 +82,17 @@ func (d *operatorDiagnostics) record(transport string, err error, terminal bool)
 		return
 	}
 	now := d.now()
-	if d.last != nil && now.Sub(time.UnixMilli(d.last.At)) < time.Second {
-		return
-	}
 	switch transport {
 	case carriers.TCP, carriers.BLE, carriers.QUIC:
 	default:
 		transport = ""
 	}
 	failure := &operatorFailure{Version: 1, Fingerprint: d.spec.CertFingerprint, Generation: d.spec.DiagnosticGeneration, Kind: operatorFailureKind(err), Transport: transport, At: now.UnixMilli()}
+	// Suppress only equivalent repeats. A new certificate/pin failure must
+	// replace a preceding timeout immediately so recovery advice stays accurate.
+	if d.last != nil && failure.Kind == d.last.Kind && failure.Transport == d.last.Transport && now.Sub(time.UnixMilli(d.last.At)) < time.Second {
+		return
+	}
 	data, marshalErr := json.Marshal(failure)
 	if marshalErr != nil || len(data) > operatorFailureBytes {
 		return

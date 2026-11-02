@@ -2,12 +2,12 @@ package localmesh
 
 import (
 	"encoding/json"
-	"log"
 	"net/netip"
 	"slices"
 	"time"
 
 	"github.com/wendylabsinc/WendyOS/go/babel"
+	"github.com/wendylabsinc/wendy/go/internal/shared/asyncdiag"
 )
 
 type routeInput struct {
@@ -45,6 +45,7 @@ type routeTransition struct {
 	Current                  babel.Route   `json:"current"`
 	PreviousOriginAuthorized bool          `json:"previous_origin_authorized"`
 	CurrentOrigins           []RouteOrigin `json:"current_origins"`
+	CurrentOriginsTruncated  bool          `json:"current_origins_truncated,omitempty"`
 	Candidates               int           `json:"babel_candidates"`
 	PendingRequests          int           `json:"babel_pending_requests"`
 	Rejected                 uint64        `json:"babel_rejected"`
@@ -118,7 +119,12 @@ func matchingRouteOrigins(prefix netip.Prefix, origins map[RouteOrigin]bool) []R
 }
 
 func logRouteTransition(event routeTransition) {
+	// This diagnostic is a compact snapshot, never an unbounded queued origin set.
+	if len(event.CurrentOrigins) > 8 {
+		event.CurrentOrigins = event.CurrentOrigins[:8]
+		event.CurrentOriginsTruncated = true
+	}
 	if row, err := json.Marshal(event); err == nil {
-		log.Printf("wendy net route transition=%s", row)
+		asyncdiag.Print("wendy net route transition=" + string(row))
 	}
 }
