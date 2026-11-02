@@ -277,7 +277,8 @@ type Synchronizer struct {
 	pending map[string]SignedManifest
 	// Clock retries share the existing pending storage, with a smaller bound
 	// and an independent monotonic recovery deadline. They grant no presence.
-	pendingClock map[string]time.Time
+	pendingClock       map[string]time.Time
+	clockRecoveryUntil time.Time // Monotonic, actor-owned bounded local recovery hint.
 	// Warm-cache retries are bound to the exact advertised chain and deadline.
 	pendingRenewals map[string]pendingManifestRenewal
 	certificates    *CertificateExchange
@@ -524,6 +525,17 @@ func (s *Synchronizer) receive(m ControlMessage, now time.Time, slots ...int) (r
 			// Discard their fetch slot without installing routes/replay state.
 			s.discardManifest(*m.Manifest)
 			return nil, nil, nil
+		}
+		if s.gossip != nil && errors.Is(e, ErrStaleManifest) && s.clockRecoveryUntil.After(time.Now()) {
+			// Accept authenticates the signature before returning ErrStale.
+			// During this local recovery window, a future-time replay remains
+			// stale and grants no authority or recovery trigger. Release only
+			// its transient fetch: a negative gossip receipt could otherwise
+			// suppress ordinary refetch after a small verified clock advance.
+			if manifest, err := DecodeManifest(m.Manifest.Body); err == nil && time.UnixMilli(manifest.Issued).After(now.Add(5*time.Second)) {
+				s.discardManifest(*m.Manifest)
+				return nil, nil, nil
+			}
 		}
 		if s.gossip != nil && (e == nil || errors.Is(e, ErrStaleManifest)) {
 			s.resolveManifest(*m.Manifest, now, e == nil)

@@ -121,8 +121,9 @@ func clockAttachPair(t *testing.T, ctx context.Context, a, b *Node) <-chan error
 // the stale end sees a future lease. Ordinary expiry rules stay unchanged.
 func TestClockRecoveryColdBootTwoNodes(t *testing.T) {
 	for _, skew := range []time.Duration{598 * time.Second, 1200 * time.Second} {
-		for _, recoverClock := range []bool{false, true} {
-			t.Run(fmt.Sprintf("skew=%s/recovery=%t", skew, recoverClock), func(t *testing.T) {
+		for _, mode := range []struct{ recoverClock, noAdvance bool }{{false, false}, {true, false}, {true, true}} {
+			recoverClock := mode.recoverClock
+			t.Run(fmt.Sprintf("skew=%s/recovery=%t/noAdvance=%t", skew, recoverClock, mode.noAdvance), func(t *testing.T) {
 				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 				defer cancel()
 				staleCredentials, healthyCredentials := testCredentials(t)
@@ -149,7 +150,7 @@ func TestClockRecoveryColdBootTwoNodes(t *testing.T) {
 					}
 					healthy.clockQuery = func(ctx context.Context, index uint8, nonce []byte) ([]byte, error) {
 						requests.Add(1)
-						return authorities[index].Reply(nonce), nil
+						return authorities[index].ReplyAt(nonce, time.Now()), nil
 					}
 					healthy.clockSync = func(context.Context, roughtime.RelayQuery) error {
 						return errors.New("healthy node must not recover from an expired lease")
@@ -170,7 +171,14 @@ func TestClockRecoveryColdBootTwoNodes(t *testing.T) {
 						}
 						// Manager.SyncVia's real advance-only apply is tested separately.
 						// Here advance only this Node's fake UTC after verified quorum.
-						offset.Store(0)
+						if !mode.noAdvance {
+							boot, err := timesync.BootTime()
+							if err != nil {
+								return err
+							}
+							target := time.Unix(0, boot+consensus.LowerOffsetNanos+(consensus.UpperOffsetNanos-consensus.LowerOffsetNanos)/2)
+							offset.Store(int64(target.Sub(time.Now())))
+						}
 						return nil
 					}
 				}
@@ -222,6 +230,20 @@ func TestClockRecoveryColdBootTwoNodes(t *testing.T) {
 				default:
 				}
 				close(release)
+				if mode.noAdvance {
+					clockWait(t, "no-op callback completion", func() bool {
+						for _, m := range stale.Snapshot().Devices {
+							if m.Device == staleCredentials.Device.UUID() {
+								return m.Revision >= 2
+							}
+						}
+						return false
+					})
+					if len(stale.Snapshot().Devices) != 1 || offset.Load() == 0 {
+						t.Fatal("successful callback without UTC correction admitted future claim")
+					}
+					return
+				}
 				clockWait(t, "mutual ordinary manifest admission after correction", func() bool { return len(stale.Snapshot().Devices) == 2 && len(healthy.Snapshot().Devices) == 2 })
 				if staleNetwork.added.Load() != 1 || healthyNetwork.added.Load() != 1 {
 					t.Fatal("clock recovery recreated the carrier interface")

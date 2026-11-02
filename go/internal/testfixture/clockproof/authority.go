@@ -28,8 +28,13 @@ func New(t testing.TB, name string, at time.Time) Authority {
 }
 
 func (a Authority) Reply(nonce []byte) []byte {
+	return a.ReplyAt(nonce, a.at)
+}
+
+// ReplyAt lets multi-round integration fixtures model a live UTC authority.
+func (a Authority) ReplyAt(nonce []byte, at time.Time) []byte {
 	mid := make([]byte, 8)
-	binary.LittleEndian.PutUint64(mid, uint64(a.at.Unix()))
+	binary.LittleEndian.PutUint64(mid, uint64(at.Unix()))
 	radius := make([]byte, 4)
 	binary.LittleEndian.PutUint32(radius, 1)
 	leaf := sha512.Sum512(append([]byte{0}, nonce...))

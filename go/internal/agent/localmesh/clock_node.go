@@ -13,6 +13,24 @@ import (
 
 const maxClockRelays = 4
 
+// Directory.Accept persists Until = local wallHighWater + MaxLease + 5s.
+// Inverting that exact expression detects a local clock rollback on restart.
+// The result ONLY requests fresh public authority proofs over an authenticated
+// carrier; it never advances UTC, weakens admission or changes a replay floor.
+func clockRollbackHint(receipts []DirectoryReceipt, now time.Time) time.Time {
+	var latest time.Time
+	for _, receipt := range receipts {
+		at := receipt.Until.Add(-MaxLease - 5*time.Second)
+		if at.After(latest) {
+			latest = at
+		}
+	}
+	if latest.After(now.Add(5 * time.Second)) {
+		return latest
+	}
+	return time.Time{}
+}
+
 type clockResult struct {
 	data []byte
 	err  error
@@ -49,26 +67,43 @@ func (n *Node) clockBlocked(p *nodePeer) bool {
 		p.clockWaitingUntil = time.Now().Add(clockRecoveryWindow)
 		log.Printf("wendy net clock recovery required peer=%q; waiting for authenticated authority proof", p.device.Principal())
 	}
+	if p.sync != nil {
+		p.sync.clockRecoveryUntil = p.clockWaitingUntil
+	}
 	n.startClockRecovery()
 	return true
 }
 
 func (n *Node) startClockRecovery() {
-	if n.clockSync == nil || n.clockRunning || time.Now().Before(n.clockNext) {
+	now := time.Now()
+	if n.clockSync == nil || n.clockRunning || now.Before(n.clockNext) {
 		return
 	}
 	blocked, relay := false, false
 	for _, p := range n.peers {
-		blocked = blocked || !p.clockWaitingUntil.IsZero()
+		blocked = blocked || p.clockWaitingUntil.After(now)
 		relay = relay || p.clockRelay
 	}
 	if !blocked || !relay {
 		return
 	}
+	if !n.clockWindowEnd.After(now) {
+		n.clockWindowEnd = now.Add(clockRecoveryWindow)
+		n.clockAttempts = 0
+	}
+	if n.clockAttempts >= 2 {
+		return
+	}
+	n.clockAttempts++
 	n.clockRunning = true
-	n.clockNext = time.Now().Add(time.Minute)
+	if n.clockAttempts == 1 {
+		n.clockNext = now.Add(10 * time.Second)
+	} else {
+		n.clockNext = n.clockWindowEnd.Add(time.Minute)
+	}
+	deadline := n.clockWindowEnd
 	go func() {
-		ctx, cancel := context.WithTimeout(n.ctx, clockRecoveryWindow)
+		ctx, cancel := context.WithDeadline(n.ctx, deadline)
 		defer cancel()
 		err := n.clockSync(ctx, n.relayClock)
 		select {
@@ -119,6 +154,9 @@ func (n *Node) handleClockEvent(event *clockEvent) error {
 			log.Printf("wendy net clock recovery unavailable: %s", diagnosticText(event.err.Error(), 256))
 			return nil
 		}
+		// A verified authority quorum resolves this ephemeral query hint,
+		// including a corrupt local timestamp. It does not replace receipts.
+		n.clockBootFloor = time.Time{}
 		// A forward step can expire our previous local lease. Publish a new
 		// ordinary signed lease and retry pending peer proofs at current UTC.
 		n.nextPublication = time.Time{}
@@ -205,6 +243,9 @@ func (n *Node) clockControl(p *nodePeer, m *ClockControl) error {
 	if m.Op == "hello" {
 		p.clockRelay = true
 		n.reconcilePeer(p, n.wallTime())
+		if !n.clockBootFloor.IsZero() {
+			n.clockBlocked(p)
+		}
 		n.startClockRecovery()
 		return nil
 	}
@@ -301,9 +342,11 @@ func (n *Node) maintainClockPeer(p *nodePeer) error {
 		n.closePeer(p, "clock-recovery-queue", errors.New("directory reply reserve full"))
 		return nil
 	}
-	if len(p.sync.pendingClock) == 0 {
+	if len(p.sync.pendingClock) == 0 && n.clockBootFloor.IsZero() {
 		p.clockWaitingUntil = time.Time{}
+		p.sync.clockRecoveryUntil = time.Time{}
 	}
+	n.startClockRecovery()
 	for _, record := range changed {
 		for id, dest := range n.peers {
 			if id != p.id && dest.sync != nil {

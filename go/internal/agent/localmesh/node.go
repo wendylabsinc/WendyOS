@@ -122,10 +122,13 @@ type Node struct {
 	clockSync        func(context.Context, roughtime.RelayQuery) error
 	clockRunning     bool
 	clockNext        time.Time
+	clockWindowEnd   time.Time
+	clockAttempts    int
 	clockSequence    atomic.Uint64
 	clockCalls       map[uint64]*clockCall
 	clockWorkers     chan struct{}
 	clockQuery       roughtime.RelayQuery
+	clockBootFloor   time.Time // Query hint only; never applied as time or admission authority.
 }
 
 func NewNode(parent context.Context, dir string, credentials *Credentials, name string, agentPort uint16, appEndpoints ...[]AppEndpoint) (*Node, error) {
@@ -216,6 +219,7 @@ func newNodeWithClock(parent context.Context, dir string, credentials *Credentia
 	}, now); err != nil {
 		return nil, err
 	}
+	n.clockBootFloor = clockRollbackHint(state.Receipts, now)
 	// Neighbor authentication admits a link, not its routing claims. Every
 	// finite remote route needs the origin's current signed address/ID/sequence
 	// binding. step snapshots that policy before entering the Babel engine.
