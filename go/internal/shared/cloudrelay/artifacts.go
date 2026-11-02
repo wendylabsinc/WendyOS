@@ -115,6 +115,7 @@ type Verifier struct {
 	mu        sync.Mutex
 	keys      map[string]jwk
 	fetched   time.Time
+	refresh   *grantKeyRefresh
 }
 
 // A lookup failure says nothing about a saved artifact's validity. Keep its
@@ -123,41 +124,92 @@ type grantKeyLookupError struct{ error }
 
 func (e *grantKeyLookupError) Unwrap() error { return e.error }
 
+// One caller owns each refresh. Other callers can wait with their own
+// cancellation budget, while valid cached keys never wait for network I/O.
+// A single owner also serializes cache publication without stale generations.
+type grantKeyRefresh struct {
+	done chan struct{}
+	err  error
+}
+
 func (v *Verifier) key(ctx context.Context, kid string) (jwk, error) {
-	v.mu.Lock()
-	defer v.mu.Unlock()
-	if k, ok := v.keys[kid]; ok && time.Since(v.fetched) < 5*time.Minute {
-		return k, nil
+	for {
+		if err := ctx.Err(); err != nil {
+			return jwk{}, err
+		}
+		v.mu.Lock()
+		if k, ok := v.keys[kid]; ok && time.Since(v.fetched) < 5*time.Minute {
+			v.mu.Unlock()
+			return k, nil
+		}
+		// Preserve the refresh-frequency and freshness policy, including
+		// unknown kids after a successful refresh. Never serve expired keys.
+		if time.Since(v.fetched) < 5*time.Second {
+			v.mu.Unlock()
+			return jwk{}, fmt.Errorf("unknown Cloud grant signing key")
+		}
+		if running := v.refresh; running != nil {
+			v.mu.Unlock()
+			select {
+			case <-ctx.Done():
+				return jwk{}, ctx.Err()
+			case <-running.done:
+				if running.err != nil {
+					return jwk{}, running.err
+				}
+				continue
+			}
+		}
+		running := &grantKeyRefresh{done: make(chan struct{})}
+		v.refresh = running
+		v.mu.Unlock()
+
+		keys, err := v.fetchKeys(ctx)
+		if err == nil {
+			err = ctx.Err()
+		}
+		v.mu.Lock()
+		if err == nil {
+			v.keys = keys
+			v.fetched = time.Now()
+		}
+		running.err = err
+		v.refresh = nil
+		close(running.done)
+		v.mu.Unlock()
+		if err != nil {
+			return jwk{}, err
+		}
 	}
-	// Bound refresh frequency, including unknown-kid failures from the broker.
-	if time.Since(v.fetched) < 5*time.Second {
-		return jwk{}, fmt.Errorf("unknown Cloud grant signing key")
-	}
+}
+
+// fetchKeys does no cache reads or writes and never holds the verifier mutex.
+func (v *Verifier) fetchKeys(ctx context.Context) (map[string]jwk, error) {
 	client := v.HTTP
 	if client == nil {
 		client = &http.Client{Timeout: 10 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	}
 	req, err := http.NewRequestWithContext(ctx, "GET", strings.TrimSuffix(v.Issuer, "/")+"/.well-known/wendy-cloud-grants/jwks.json", nil)
 	if err != nil {
-		return jwk{}, err
+		return nil, err
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return jwk{}, fmt.Errorf("fetching Cloud grant keys: %w", err)
+		return nil, fmt.Errorf("fetching Cloud grant keys: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
-		return jwk{}, fmt.Errorf("Cloud grant JWKS returned HTTP %d", resp.StatusCode)
+		return nil, fmt.Errorf("Cloud grant JWKS returned HTTP %d", resp.StatusCode)
 	}
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 128*1024+1))
 	if err != nil || len(raw) > 128*1024 {
-		return jwk{}, fmt.Errorf("invalid Cloud grant JWKS")
+		return nil, fmt.Errorf("invalid Cloud grant JWKS")
 	}
 	var doc struct {
 		Keys []jwk `json:"keys"`
 	}
 	if json.Unmarshal(raw, &doc) != nil || len(doc.Keys) > 32 {
-		return jwk{}, fmt.Errorf("invalid Cloud grant JWKS")
+		return nil, fmt.Errorf("invalid Cloud grant JWKS")
 	}
 	keys := map[string]jwk{}
 	for _, k := range doc.Keys {
@@ -165,18 +217,13 @@ func (v *Verifier) key(ctx context.Context, kid string) (jwk, error) {
 			continue
 		}
 		if _, ok := keys[k.Kid]; ok {
-			return jwk{}, fmt.Errorf("duplicate Cloud grant key ID")
+			return nil, fmt.Errorf("duplicate Cloud grant key ID")
 		}
 		keys[k.Kid] = k
 	}
-	v.keys = keys
-	v.fetched = time.Now()
-	k, ok := keys[kid]
-	if !ok {
-		return jwk{}, fmt.Errorf("unknown Cloud grant signing key")
-	}
-	return k, nil
+	return keys, nil
 }
+
 func (v *Verifier) verify(ctx context.Context, compact, typ, audience string, now time.Time) (claims, error) {
 	var c claims
 	max := 16384
