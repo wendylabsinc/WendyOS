@@ -322,7 +322,7 @@ test("physical Cloud and mesh aliases share one reporter and one in-flight read"
     if (args.includes("--local-cli")) return JSON.stringify({ status: "unavailable", platform: "wendy-cli" });
     reads++;
     await waiting;
-    return JSON.stringify({ status: "unavailable", platform: "wendy-lite" });
+    return JSON.stringify({ status: "ok", platform: "wendy-lite", topology: { selfPrincipal: cli4Inventory.meshDevices[1].principal } });
   };
   const first = service.meshTopology({ target: physical });
   assert.equal(first, service.meshTopology({ target: mesh }));
@@ -357,4 +357,62 @@ test("a delayed but live signed mesh candidate stays selectable with an explicit
   assert.equal(result.retainPrevious, true);
   assert.match(result.warnings[0], /stale signed inventory/);
   assert.ok(result.devices.some(device => device.id === inventory.meshDevices[0].selector));
+});
+
+
+test("an unavailable physical alias falls back serially to another enrolled reporter path", async () => {
+  const service = fixture();
+  const inventory = await discoverCLI4(service);
+  const physical = cli4Inventory.externalDevices[0].id;
+  const mesh = cli4Inventory.meshDevices[1].selector;
+  const reporter = inventory.devices.find(device => device.id === physical);
+  assert.ok(reporter, "physical path remains the preferred inventory row");
+  const targets = [];
+  const topology = { selfPrincipal: cli4Inventory.meshDevices[1].principal };
+  service.run = async (_file, args) => {
+    const target = args[args.indexOf("--device") + 1];
+    targets.push(target);
+    if (target === physical) return JSON.stringify({ status: "unavailable", error: "Serial port is already in use" });
+    assert.equal(target, mesh);
+    return JSON.stringify({ status: "ok", topology });
+  };
+  const first = service.meshTopology({ target: physical });
+  assert.equal(first, service.meshTopology({ target: c5Cloud }));
+  assert.equal((await first).status, "ok");
+  assert.deepEqual(targets, [physical, mesh]);
+});
+
+
+test("alias fallback reaches Cloud within the original observation deadline", async (t) => {
+  const service = fixture();
+  await discoverCLI4(service);
+  const physical = cli4Inventory.externalDevices[0].id;
+  const mesh = cli4Inventory.meshDevices[1].selector;
+  let now = Date.now();
+  t.mock.method(Date, "now", () => now);
+  const calls = [];
+  service.run = async (_file, args, options) => {
+    const target = args[args.indexOf("--device") + 1];
+    calls.push([target, options.timeout]);
+    now += 30_000;
+    if (target === physical) throw new Error("Serial port is already in use");
+    if (target === mesh) return JSON.stringify({ status: "unavailable" });
+    assert.equal(target, c5Cloud);
+    return JSON.stringify({ status: "ok", topology: { selfPrincipal: cli4Inventory.meshDevices[1].principal } });
+  };
+  assert.equal((await service.meshTopology({ target: physical })).status, "ok");
+  assert.deepEqual(calls, [[physical, 160_000], [mesh, 130_000], [c5Cloud, 100_000]]);
+});
+
+test("closing the view during an unavailable alias prevents fallback", async () => {
+  const service = fixture();
+  await discoverCLI4(service);
+  let calls = 0;
+  service.run = async () => {
+    calls++;
+    service.close();
+    return JSON.stringify({ status: "unavailable" });
+  };
+  await assert.rejects(service.meshTopology({ target: cli4Inventory.externalDevices[0].id }), /no longer open/);
+  assert.equal(calls, 1);
 });
