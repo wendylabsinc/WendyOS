@@ -190,6 +190,7 @@ func (s *AgentService) GetAgentVersion(ctx context.Context, _ *agentpb.GetAgentV
 	}
 
 	resp.NetworkInterfaces = listNetworkInterfaces()
+	addUplinkInfo(ctx, resp.NetworkInterfaces)
 
 	// sysfs when the host has its own pack, else a registered fallback (a
 	// robot's BMS read over DDS). nil on the mains-powered devices that make up
