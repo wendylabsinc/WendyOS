@@ -222,7 +222,10 @@ func autoSyncTimeAndRetry(ctx context.Context, cause error, retry func() (*grpcc
 	if ctx.Err() != nil {
 		return nil, ctx.Err()
 	}
-	if stopConnectionRecovery(cause) || !isClockSkewSuspectError(cause) || clockSkewSyncAttempted {
+	// A rejection with local evidence against our own certificate (expired by
+	// this computer's clock, no clientAuth) is not a device clock problem. The
+	// named path filters it before calling here; the picker does not.
+	if stopConnectionRecovery(cause) || !isClockSkewSuspectError(cause) || isCertRefreshableError(cause) || clockSkewSyncAttempted {
 		return nil, cause
 	}
 	clockSkewSyncAttempted = true
@@ -265,7 +268,7 @@ func autoSyncTimeAndRetry(ctx context.Context, cause error, retry func() (*grpcc
 		if ctx.Err() != nil {
 			return nil, err
 		}
-		if stopConnectionRecovery(err) || !isClockSkewSuspectError(err) {
+		if stopConnectionRecovery(err) || !isClockSkewSuspectError(err) || isCertRefreshableError(err) {
 			// The device now fails for another reason, which its error explains.
 			fmt.Fprintln(os.Stderr, "Connection retry failed after broadcasting the time proof.")
 			return nil, err
