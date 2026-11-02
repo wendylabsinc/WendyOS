@@ -28,6 +28,9 @@ type controlReporter interface {
 }
 
 func controlEndReason(ctx context.Context, expires time.Time, revoked <-chan struct{}, err error) string {
+	if errors.Is(err, errControlCredentialInvalid) {
+		return "identity-recheck-failed"
+	}
 	if ctx != nil && ctx.Err() != nil {
 		return "local-shutdown"
 	}
