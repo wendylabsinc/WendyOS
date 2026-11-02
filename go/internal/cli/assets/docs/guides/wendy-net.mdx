@@ -6,6 +6,8 @@ description: Enable local connections between enrolled devices and check that th
 Wendy Net connects nearby WendyOS devices so applications can communicate across
 several devices, including through an intermediate device. Start with Ethernet or
 ordinary Wi-Fi; Bluetooth is useful when a faster connection is unavailable.
+The numbered setup below is for WendyOS. For Wendy Lite firmware with Wendy Net
+support, use the [Lite configuration instructions](#configure-wendy-net-on-wendy-lite).
 
 ## 1. Prepare your devices
 
@@ -64,6 +66,42 @@ Wi-Fi, allow local multicast discovery and peer traffic. See the
 [LAN requirements](/docs/advanced/wendyos/networking/mdns#network-requirements-and-privacy).
 For slow or missing Bluetooth connections, see
 [Bluetooth setup and recovery](/docs/hardware/bluetooth#wendy-net-over-bluetooth).
+
+## Configure Wendy Net on Wendy Lite
+
+`wendy device wendy-net configure` and `wendy device wendy-net status` also work
+with Wendy Lite devices. Select the board explicitly, for example with
+`--device wendy-lite:<device>`, and read its current status before changing it.
+
+For Lite, `--participate`, `--ble`, `--infrastructure-wifi` and `--nan` update the
+saved configuration. The CLI reads the current desired configuration first and
+changes only the flags you supply. Omitted booleans and link limits retain their
+saved values, including when you explicitly change another option to `false` or
+`0`. Firmware validates the resulting configuration against its capabilities and
+resource limits; accepting a flag in the CLI does not mean that the board
+supports that carrier.
+
+These link-limit options apply only to Lite and are rejected for WendyOS targets:
+
+| Option | Purpose |
+| --- | --- |
+| `--max-links` | Limit the total simultaneous mesh carriers. |
+| `--ble-links` | Limit simultaneous Bluetooth mesh carriers. |
+| `--wifi-links` | Limit simultaneous infrastructure Wi-Fi mesh carriers. |
+| `--nan-links` | Limit simultaneous NAN mesh carriers. |
+
+Lite rejects `--ethernet`, `--roam` and `--share-uplink`, even when explicitly set
+to `false`. To stop Lite participation while retaining its carrier choices, set
+only `--participate=false`. Internet sharing in the next section applies to
+WendyOS.
+
+`status --json` separates the desired policy from the applied policy when
+available, along with the runtime state, active link count, capability flags and
+available memory measurements. Missing optional memory measurements are unknown, rather than
+zero. Some carrier changes require a board restart: the CLI prints a warning and
+reports `restarting: true` in JSON when the firmware accepts such a change.
+Reconnect after the board boots, then recheck status and actual traffic. A saved
+policy or a restart warning does not establish working connectivity.
 
 ## 4. Share an Internet connection
 
@@ -160,6 +198,9 @@ Every boolean accepts `true` or `false`; omitted options retain their saved valu
 | `--ble-mode` | Enable Bluetooth with `normal`, `coded-s2`, or `coded-s8`, or disable it with `off` while retaining the saved profile. Coded profiles require support on both peers; WendyOS reports adapter capabilities and coding-selection limits. Cannot be combined with `--ble`; participation is preserved unless explicitly changed. |
 | `--share-uplink` | Offer a healthy independent Internet connection. |
 | `--roam` | Use a shared gateway when an independent Internet connection is unavailable. |
+
+The `--ethernet`, `--share-uplink` and `--roam` options in this table apply to
+WendyOS. Lite-specific limits and capability checks are described above.
 
 `status --json` returns saved choices separately from current runtime state.
 `topology --json` returns the selected device's observed links and routes.
