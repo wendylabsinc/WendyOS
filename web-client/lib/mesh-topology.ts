@@ -9,6 +9,8 @@ export type MeshDevice = {
   lastHeartbeat?: string;
   organizationId?: string;
   pkiDeviceName?: string;
+  cloudName?: string;
+  cloudNamePrincipal?: string;
 };
 export type MeshPeer = {
   linkId?: string;
@@ -361,6 +363,16 @@ export function buildMeshGroups(
             stale: isStale(node.observation, now),
           });
       }
+    }
+    // Display labels are independent of observation freshness. Prefer the
+    // authenticated Cloud roster name only for an already established exact
+    // principal; these hints cannot create a node or a mesh relationship.
+    for (const device of devices) {
+      const identity = meshIdentity(device.cloudNamePrincipal);
+      if (identity?.role !== "device" || identity.tenant !== tenant ||
+          typeof device.cloudName !== "string" || !device.cloudName.trim()) continue;
+      const node = nodes.get(identity.id);
+      if (node) node.name = device.cloudName;
     }
     group.nodes = [...nodes.values()].sort(
       (a, b) => a.name.localeCompare(b.name) || a.id.localeCompare(b.id),
