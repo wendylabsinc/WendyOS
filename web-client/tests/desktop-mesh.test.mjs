@@ -5,7 +5,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DesktopService } from "../electron/service.mjs";
-import { buildMeshGroups, mergeMeshObservation } from "../lib/mesh-topology.ts";
+import { buildMeshGroups, mergeMeshInventory, mergeMeshObservation } from "../lib/mesh-topology.ts";
 
 const cloudAsset = "00000000-0000-4000-8000-000000000001";
 const cloudTenant = "00000000-0000-4000-8000-000000000002";
@@ -129,6 +129,76 @@ test("an invalid explicit Cloud binding withdraws a retained alias during partia
   assert.equal(service.meshReporterKeys.get(cloudSelector), undefined);
   assert.equal(service.meshReporterTargets.get(physicalKey).includes(cloudSelector), false);
   assert.ok(result.devices.some(device => device.id === cloudSelector));
+});
+
+test("successful Cloud roster changes withdraw copied labels from retained physical reporters", async () => {
+  for (const change of ["rebind", "invalid", "removed"]) {
+    const service = fixture(), physical = "wendy-lite:physical.local";
+    let partial = false;
+    service.run = async (_file, args) => {
+      if (args[0] === "cloud") return JSON.stringify(partial && change === "removed" ? [] : [{
+        id: cloudAsset, selector: cloudSelector, name: "Cloud Thor",
+        ...(partial && change === "rebind" ? { pkiDeviceName: "00000000-0000-4000-8000-000000000099" } : {}),
+        ...(partial && change === "invalid" ? { pkiDeviceName: "unknown-device-format" } : {}),
+      }]);
+      if (partial) throw new Error("Local discovery unavailable");
+      return JSON.stringify({ externalDevices: [{
+        isWendyDevice: true, providerKey: "wendy-lite", id: physical, displayName: "Physical A",
+        connectionInfo: { type: "LAN", enrolledDeviceId: cloudAsset, tenantId: cloudTenant },
+      }] });
+    };
+    const first = await service.meshDiscover();
+    assert.equal(first.devices.find(device => device.id === physical).cloudName, "Cloud Thor");
+    partial = true;
+    const second = await service.meshDiscover();
+    const inventory = mergeMeshInventory(first.devices, second.devices, second.retainPrevious, second.cloudNames);
+    const observation = mergeMeshObservation(undefined, { status: "ok", topology: {
+      selfPrincipal: `spiffe://wendy.sh/tenant/${cloudTenant}/device/${cloudAsset}`,
+      selfTenantId: cloudTenant, selfDeviceId: cloudAsset,
+      capturedAtUnixMs: "1000", runtimeAvailable: true, status: { state: "mesh-active" },
+    } }, 1000);
+    const { groups } = buildMeshGroups(inventory, { [`device:${cloudTenant}/${cloudAsset}`]: observation }, 1200);
+    const node = groups.flatMap(group => group.nodes).find(node => node.deviceId === cloudAsset);
+    assert.equal(node.name, "Physical A", change);
+    assert.equal(node.observation, observation, "label withdrawal must not replace authenticated observations");
+    assert.equal(inventory.find(device => device.id === physical).cloudName, undefined, change);
+  }
+});
+
+test("partial inventories retain unobserved Cloud labels but withdraw observed changed bindings", async () => {
+  for (const mode of ["cloud-unavailable", "invalid-inventory", "unobserved-row", "unobserved-row-local-ready", "observed-rebind"]) {
+    const service = fixture(), physical = "wendy-lite:physical.local";
+    let partial = false;
+    const local = { externalDevices: [{
+      isWendyDevice: true, providerKey: "wendy-lite", id: physical, displayName: "Physical A",
+      connectionInfo: { type: "LAN", enrolledDeviceId: cloudAsset, tenantId: cloudTenant },
+    }] };
+    service.run = async (_file, args) => {
+      if (args[0] !== "cloud") {
+        if (partial && ["unobserved-row", "observed-rebind"].includes(mode)) throw new Error("Local discovery unavailable");
+        return JSON.stringify(local);
+      }
+      if (!partial) return JSON.stringify([{ id: cloudAsset, selector: cloudSelector, name: "Cloud Thor" }]);
+      if (mode === "cloud-unavailable") throw new Error("Cloud offline");
+      if (mode === "invalid-inventory") return "{}";
+      return JSON.stringify([{ id: "uninterpretable", name: "Unobserved row" }, ...(mode === "observed-rebind" ? [{
+        id: cloudAsset, selector: cloudSelector, name: "Cloud Thor", pkiDeviceName: "00000000-0000-4000-8000-000000000099",
+      }] : [])]);
+    };
+    const first = await service.meshDiscover();
+    partial = true;
+    const second = await service.meshDiscover();
+    const inventory = mergeMeshInventory(first.devices, second.devices, second.retainPrevious, second.cloudNames);
+    const observation = mergeMeshObservation(undefined, { status: "ok", topology: {
+      selfPrincipal: `spiffe://wendy.sh/tenant/${cloudTenant}/device/${cloudAsset}`,
+      selfTenantId: cloudTenant, selfDeviceId: cloudAsset,
+      capturedAtUnixMs: "1000", runtimeAvailable: true, status: { state: "mesh-active" },
+    } }, 1000);
+    const { groups } = buildMeshGroups(inventory, { [`device:${cloudTenant}/${cloudAsset}`]: observation }, 1200);
+    assert.equal(groups.flatMap(group => group.nodes).find(node => node.deviceId === cloudAsset).name,
+      mode === "observed-rebind" ? "Physical A" : "Cloud Thor", mode);
+    assert.equal(first.devices.find(device => device.id === physical).cloudName, "Cloud Thor", "merging must not mutate earlier inventory");
+  }
 });
 
 test("Cloud discovery preserves complete selectors across tenants, endpoints and legacy organizations", async () => {
