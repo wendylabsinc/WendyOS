@@ -151,10 +151,30 @@ wendy device wendy-net connect --transport tcp \
   --address ROUTER_IP:TLS_CARRIER_PORT --router ROUTER_DEVICE_UUID
 ```
 
-For Bluetooth, use `--transport ble` with the host's discovered peripheral identifier
-or Bluetooth address. The selected identity is authenticated before use; an
-address alone does not establish trust. Slow Bluetooth setup or several mesh hops can
-make cold connections take longer than ordinary LAN connections.
+For Bluetooth, first list native radio hints without starting a router:
+
+```sh
+wendy device wendy-net discover --transport ble --timeout 5s
+wendy --json device wendy-net discover --transport ble
+wendy device wendy-net connect --transport ble \
+  --address NATIVE_BLE_ADDRESS --psm LISTED_PSM --router ENROLLED_DEVICE_UUID
+```
+
+Use the listed CoreBluetooth peripheral UUID on macOS, or LE address on Linux.
+macOS does not expose the hardware Bluetooth MAC address. The radio identifier is
+different from the enrolled device UUID required by `--router`.
+
+Discovery returns unverified advertisement hints and a dynamic PSM. Its short
+device hint is not a full device UUID or an identity proof; candidates may include
+peers without the WendyOS operator-router role. The selected identity and tenant
+are authenticated during attachment. This command does not connect, create an
+operator recipe or enable a background router. It is separate from the retired
+generic Bluetooth agent-discovery path.
+
+An explicit first hop stays on the selected physical carrier and reconnects that
+peer without starting additional LAN/BLE discovery. Slow Bluetooth setup or
+several mesh hops can make cold connections take longer than ordinary LAN
+connections.
 
 ## Configure a Lite device
 
