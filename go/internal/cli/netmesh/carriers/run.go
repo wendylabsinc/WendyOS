@@ -168,26 +168,6 @@ func Run(parent context.Context, cfg Config) error {
 			if hasLink(view, peer, c.Cost, false) {
 				continue
 			}
-			if len(active) >= cfg.Limits.Connections {
-				// A newly attached cable must get a chance even when LAN peers
-				// filled every slot. Drain one more expensive link before dialing
-				// so the existing connection bound remains strict.
-				var worst *attempt
-				for _, a := range active {
-					if a.canceled {
-						return
-					}
-					if a.verified && a.candidate.Cost > c.Cost && (worst == nil || a.candidate.Cost > worst.candidate.Cost) {
-						worst = a
-					}
-				}
-				if worst != nil {
-					worst.canceled = true
-					worst.cancel()
-					return
-				}
-				continue
-			}
 			pending, bleCount := 0, 0
 			for _, a := range active {
 				if !a.verified {
@@ -198,6 +178,14 @@ func Run(parent context.Context, cfg Config) error {
 				}
 			}
 			if pending >= cfg.Limits.Attempts || (c.Transport == BLE && bleCount >= cfg.Limits.BLEConnections) {
+				continue
+			}
+			if len(active) >= cfg.Limits.Connections {
+				// Discovery cost and identity are unverified hints. A failed or
+				// unsupported candidate must not retire an established carrier just
+				// to make room for its probe. Even a newly discovered cable waits
+				// for a natural slot; authenticated cheaper same-peer replacement
+				// above remains independent of candidate admission.
 				continue
 			}
 			serial++
