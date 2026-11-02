@@ -327,6 +327,11 @@ func (a *Agent) runOnce(parent context.Context) error {
 	msg, err = stream.Recv()
 	admission.Stop()
 	if err != nil {
+		// The broker reports ownership conflict here only after validating
+		// this lease and its fresh holder proof. A stale old stream must
+		// drain; another lease cannot release it and would repeat the Cloud
+		// mTLS exchange over a potentially slow borrowed path.
+		keepLease = status.Code(err) == codes.AlreadyExists
 		return err
 	}
 	accepted := msg.GetAccepted()
