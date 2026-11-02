@@ -22,6 +22,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/internal/shared/devicepin"
+	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	"google.golang.org/grpc"
@@ -83,7 +84,15 @@ type AgentConnection struct {
 	IsSessionProxy bool                    // true when Conn reaches a local session broker retaining the mTLS transport
 	CertInfo       *config.CertificateInfo // cert used to establish mTLS; nil for plaintext
 	RegistryDialer func(context.Context, int) (net.Conn, error)
-	ExtraClosers   []io.Closer
+	// OperatorMeshTarget retains the selected device independently of the first
+	// hop and Cloud's reconnect marker. AppDialer reuses its authenticated agent
+	// stream and running-app admission, rather than dialing a reported LAN IP.
+	OperatorMeshTarget meshid.Device
+	AppDialer          func(context.Context, uint16) (net.Conn, error)
+
+	ExtraClosers []io.Closer
+	extraMu      sync.Mutex
+	extraClosed  bool
 	// Reconnect re-establishes a connection to the SAME device this connection
 	// targets, after the agent restarts. It is set for transports where the
 	// connection identity can't be re-derived from Host alone (e.g. the cloud
@@ -335,6 +344,10 @@ func newUnixClient(socketPath, target string, extra ...grpc.DialOption) (*grpc.C
 		var d net.Dialer
 		return d.DialContext(ctx, "unix", socketPath)
 	}
+	return newLocalStreamClient(dialer, target, extra...)
+}
+
+func newLocalStreamClient(dialer func(context.Context, string) (net.Conn, error), target string, extra ...grpc.DialOption) (*grpc.ClientConn, error) {
 	opts := []grpc.DialOption{
 		grpc.WithContextDialer(dialer),
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
@@ -586,6 +599,28 @@ func hostFromAddress(address string) string {
 	return host
 }
 
+// AddCloser assigns a local helper to this connection's lifetime. Parallel
+// service hooks can register forwards without racing shutdown. A late helper
+// is closed immediately and false is returned.
+func (c *AgentConnection) AddCloser(closer io.Closer) bool {
+	if closer == nil {
+		return true
+	}
+	if c == nil {
+		_ = closer.Close()
+		return false
+	}
+	c.extraMu.Lock()
+	if c.extraClosed {
+		c.extraMu.Unlock()
+		_ = closer.Close()
+		return false
+	}
+	c.ExtraClosers = append(c.ExtraClosers, closer)
+	c.extraMu.Unlock()
+	return true
+}
+
 // Close closes the underlying gRPC connection.
 //
 // Safe on a nil receiver: callers defer Close on a connection variable that a
@@ -595,11 +630,16 @@ func (c *AgentConnection) Close() error {
 	if c == nil {
 		return nil
 	}
+	c.extraMu.Lock()
+	c.extraClosed = true
+	closers := c.ExtraClosers
+	c.ExtraClosers = nil
+	c.extraMu.Unlock()
 	var errs []error
 	if c.Conn != nil {
 		errs = append(errs, c.Conn.Close())
 	}
-	for _, closer := range c.ExtraClosers {
+	for _, closer := range closers {
 		if closer != nil {
 			errs = append(errs, closer.Close())
 		}
