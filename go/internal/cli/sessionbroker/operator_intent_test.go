@@ -12,6 +12,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/wendylabsinc/wendy/go/internal/cli/operatormesh"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 )
@@ -164,5 +165,46 @@ func TestOperatorExplicitConnectResumesAfterDisconnect(t *testing.T) {
 				t.Fatal("selected intent not persisted", err)
 			}
 		})
+	}
+}
+
+func TestOperatorAutomaticFallbackPreservesDiscoveryIntent(t *testing.T) {
+	certificate, directory, _, _, _ := operatorIntentFixture(t, false)
+	operator, err := operatorPrincipal(certificate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recipe := OperatorSpec{Version: 1, Principal: operator.Principal(), Automatic: true, Enabled: true}
+	spec, err := operatorSpec(recipe, certificate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ensurePrivateDir(filepath.Dir(operatorRecipePath(directory, operator.Principal()))); err != nil {
+		t.Fatal(err)
+	}
+	data, err := json.Marshal(recipe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writePrivateFile(operatorRecipePath(directory, operator.Principal()), data); err != nil {
+		t.Fatal(err)
+	}
+	previous := openOperatorSession
+	t.Cleanup(func() { openOperatorSession = previous })
+	var selected operatormesh.Options
+	stopped := errors.New("fixture stops before opening a fallback carrier")
+	openOperatorSession = func(_ context.Context, options operatormesh.Options) (*operatormesh.Session, error) {
+		selected = options
+		return nil, stopped
+	}
+	// Discovery produces a concrete first-hop hint, not the retained context's
+	// automatic/pinned policy. Its next generation must keep automatic sources.
+	candidate := OperatorSpec{Version: 1, Principal: operator.Principal(), RouterAddress: "192.0.2.20:43024", RouterUUID: "33333333-3333-4333-8333-333333333333"}
+	attachment := &operatorAttachment{directory: directory, spec: spec, certificate: certificate}
+	if _, err := attachment.open(context.Background(), candidate); !errors.Is(err, stopped) {
+		t.Fatal(err)
+	}
+	if !selected.Automatic || selected.Discover == nil || selected.RouterAddress != candidate.RouterAddress || selected.RouterUUID != candidate.RouterUUID {
+		t.Fatal("fallback changed automatic policy or selected first hop")
 	}
 }

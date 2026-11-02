@@ -63,7 +63,9 @@ func (a *operatorAttachment) open(ctx context.Context, recipe OperatorSpec) (*op
 	}
 	// Open reloads the profile trust/pin state and persists a new revision before
 	// dialing. Neither an older key snapshot nor an old proof is reused.
-	options := operatormesh.Options{Automatic: recipe.Automatic, StateDirectory: a.directory, Certificate: certificate, RouterAddress: recipe.RouterAddress, RouterUUID: recipe.RouterUUID, Transport: recipe.Transport, BLEPSM: recipe.BLEPSM}
+	// A discovered fallback is a concrete first-hop hint, not a change to the
+	// retained context's discovery policy. It still dials this seed initially.
+	options := operatormesh.Options{Automatic: a.spec.Operator.Automatic, StateDirectory: a.directory, Certificate: certificate, RouterAddress: recipe.RouterAddress, RouterUUID: recipe.RouterUUID, Transport: recipe.Transport, BLEPSM: recipe.BLEPSM}
 	if a.spec.Operator.Automatic {
 		options.Discover = func(ctx context.Context) ([]operatormesh.Options, error) {
 			operator, _ := operatorPrincipal(certificate)
