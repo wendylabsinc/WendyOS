@@ -10,12 +10,31 @@ import (
 func (l *Link) currentExpiry() time.Time {
 	l.expiryMu.Lock()
 	defer l.expiryMu.Unlock()
-	return l.expires
+	return l.transportExpiryLocked()
 }
+
+// An explicit certificate clock never becomes a network deadline. Convert its
+// remaining lease to the actual monotonic clock, capped by the initial lease.
+func (l *Link) transportExpiryLocked() time.Time {
+	if l.certNow == nil {
+		return l.expires
+	}
+	return minTime(l.maxExpiry, time.Now().Add(l.expires.Sub(l.certNow())))
+}
+
+func (l *Link) nextExpiryCheckLocked() time.Duration {
+	remaining := time.Until(l.transportExpiryLocked())
+	if l.certNow != nil {
+		// Direct time correction may shorten a lease while all IO is idle.
+		return min(remaining, time.Second)
+	}
+	return remaining
+}
+
 func (l *Link) Live() bool {
 	l.expiryMu.Lock()
 	defer l.expiryMu.Unlock()
-	return !l.closed && time.Now().Before(l.expires)
+	return !l.closed && time.Now().Before(l.transportExpiryLocked())
 }
 
 func (l *Link) expire() {
@@ -24,7 +43,7 @@ func (l *Link) expire() {
 		l.expiryMu.Unlock()
 		return
 	}
-	remaining := time.Until(l.expires)
+	remaining := l.nextExpiryCheckLocked()
 	if remaining > 0 {
 		l.timer.Reset(remaining)
 		l.expiryMu.Unlock()

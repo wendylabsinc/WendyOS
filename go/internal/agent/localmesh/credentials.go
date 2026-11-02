@@ -64,6 +64,8 @@ func (c *Credentials) CertificateTimePolicy() certs.CertificateTimePolicy {
 	return *c.timePolicy
 }
 
+func (c *Credentials) HasCertificateTimePolicy() bool { return c != nil && c.timePolicy != nil }
+
 // NewCredentials loads the provisioned identity and derives the local-mesh
 // identity from its leaf. Certificates without a device principal — asset, user,
 // service, or legacy numeric principals — are refused outright; there is no
