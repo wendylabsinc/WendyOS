@@ -10,9 +10,9 @@ import (
 )
 
 // RouteProof is detached routing authority, not a transferable announcement.
-// Deadline is bounded by the receiver's original one-duration lease and the
-// original/current selected certificate paths. No signature, payload or
-// certificate is retained or exported with this diagnostic projection.
+// Deadline is the receiver's lease projection. Retained proofs are additionally
+// bounded by their original/current selected certificate paths. No signature,
+// payload or certificate is exported with this diagnostic projection.
 type RouteProof struct {
 	Principal string
 	Deadline  time.Time

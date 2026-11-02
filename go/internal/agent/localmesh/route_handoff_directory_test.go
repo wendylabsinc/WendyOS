@@ -424,7 +424,10 @@ func TestRouteHandoffReplacedSignatureUsesActualSignerNotBefore(t *testing.T) {
 		t.Fatal(err)
 	}
 	initialUntil := d.entries[a.Device.Key()].activeUntil
-	newCert, newKey := issuePolicyLeaf(t, principal, now.Add(-time.Hour), now.Add(2*time.Hour))
+	initialCap := d.entries[a.Device.Key()].certificateDeadline
+	initialNA := d.entries[a.Device.Key()].certificateNotAfter
+	initialWatermark := d.history[a.Device.Key()]
+	newCert, newKey := issuePolicyLeaf(t, principal, now.Add(-time.Hour), now.Add(3*time.Hour))
 	b, err := NewCredentialsWithTimePolicy(newCert, testPKI().chainPEM, newKey, policy)
 	if err != nil {
 		t.Fatal(err)
@@ -441,6 +444,9 @@ func TestRouteHandoffReplacedSignatureUsesActualSignerNotBefore(t *testing.T) {
 	}
 	if d.entries[b.Device.Key()].activeUntil != initialUntil {
 		t.Fatal("same-body replacement extended lease")
+	}
+	if d.entries[b.Device.Key()].certificateDeadline.After(initialCap) || d.entries[b.Device.Key()].certificateNotAfter.After(initialNA) || d.history[b.Device.Key()] != initialWatermark {
+		t.Fatal("same-body signature replacement extended certificate cap or watermark")
 	}
 	uncertain = false
 	if !d.RouteAuthorizations(now)[oldOrigin] {
