@@ -30,13 +30,18 @@ import (
 // certs remain valid when the device clock has not yet been synchronised via NTP. Pass a
 // zero time.Time to disable the floor.
 func NewTLSConfig(certPEM, chainPEM, keyPEM string, logger *zap.Logger, notBeforeFloor time.Time) (*tls.Config, error) {
-	return newTLSConfig(certPEM, chainPEM, keyPEM, logger, func(now, nb time.Time) time.Time { return effectiveVerificationTime(now, notBeforeFloor, nb) }, time.Now)
+	return newTLSConfig(certPEM, chainPEM, keyPEM, logger, func(now, nb time.Time) (time.Time, time.Time) {
+		return now, effectiveVerificationTime(now, notBeforeFloor, nb)
+	}, time.Now, false)
 }
 
 // NewTLSConfigWithTimePolicy selects an explicit local boot-clock policy.
 // It never uses an announcement timestamp to establish certificate trust.
 func NewTLSConfigWithTimePolicy(certPEM, chainPEM, keyPEM string, logger *zap.Logger, policy certs.CertificateTimePolicy) (*tls.Config, error) {
-	cfg, err := newTLSConfig(certPEM, chainPEM, keyPEM, logger, policy.LeafTime, policy.WallTime)
+	cfg, err := newTLSConfig(certPEM, chainPEM, keyPEM, logger, func(wall, nb time.Time) (time.Time, time.Time) {
+		base := policy.BaseTime(wall)
+		return base, policy.LeafTimeAtBase(base, nb)
+	}, policy.WallTime, true)
 	if err != nil {
 		return nil, err
 	}
@@ -59,7 +64,7 @@ func NewTLSConfigWithTimePolicy(certPEM, chainPEM, keyPEM string, logger *zap.Lo
 	return cfg, nil
 }
 
-func newTLSConfig(certPEM, chainPEM, keyPEM string, logger *zap.Logger, leafTime func(time.Time, time.Time) time.Time, now func() time.Time) (*tls.Config, error) {
+func newTLSConfig(certPEM, chainPEM, keyPEM string, logger *zap.Logger, clockTimes func(time.Time, time.Time) (time.Time, time.Time), now func() time.Time, leafOnly bool) (*tls.Config, error) {
 	if chainPEM == "" {
 		return nil, fmt.Errorf("CA chain PEM is required to verify client certificates; device may need to be re-provisioned")
 	}
@@ -95,12 +100,12 @@ func newTLSConfig(certPEM, chainPEM, keyPEM string, logger *zap.Logger, leafTime
 		ClientCAs:  nil,
 		MinVersion: tls.VersionTLS12,
 	}
-	verify := buildPeerCertificateWindowVerifier(caPool, caCerts, logger, leafTime, nil)
+	verify := buildPeerCertificateWindowVerifier(caPool, caCerts, logger, clockTimes, nil, leafOnly)
 	cfg.VerifyPeerCertificate = func(raw [][]byte, _ [][]*x509.Certificate) error { _, err := verify(raw, now()); return err }
-	cfg.Time = now
+	cfg.Time = func() time.Time { base, _ := clockTimes(now(), time.Time{}); return base }
 	// Session resumption: stamp the client cert window into tickets and
 	// decline stale ones (see session_ticket.go for the security rationale).
-	wireSessionTicketChecksWithClock(cfg, now, leafTime)
+	wireSessionTicketChecksWithClock(cfg, now, clockTimes)
 	// Direct PKI device certificates carry a tenant SPIFFE identity instead
 	// of a legacy numeric org. Keep tenant enforcement active even when the
 	// legacy org interceptor has no numeric identity to compare. VerifyConnection

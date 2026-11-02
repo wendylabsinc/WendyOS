@@ -127,9 +127,6 @@ func VerifyPeerCertificateChainWindow(leaf *x509.Certificate, peers, roots []*x5
 		return CertificateWindow{}, lastErr
 	}
 	expires, err := walk(leaf, 0)
-	if err == nil && !expires.NotAfter.After(expires.NotBefore) {
-		err = fmt.Errorf("certificate path has no common validity window")
-	}
 	return expires, ClassifyIssuerFailure(err, leaf, peers, roots, usage, now, leafNow)
 }
 

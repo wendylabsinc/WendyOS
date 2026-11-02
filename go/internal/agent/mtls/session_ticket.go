@@ -52,10 +52,12 @@ const ticketMetaPrefix = "wendy-mtls/1:"
 //
 // now is injectable for handshake-level tests; production passes time.Now.
 func wireSessionTicketChecks(cfg *tls.Config, notBeforeFloor time.Time, now func() time.Time) {
-	wireSessionTicketChecksWithClock(cfg, now, func(wall, nb time.Time) time.Time { return effectiveVerificationTime(wall, notBeforeFloor, nb) })
+	wireSessionTicketChecksWithClock(cfg, now, func(wall, nb time.Time) (time.Time, time.Time) {
+		return wall, effectiveVerificationTime(wall, notBeforeFloor, nb)
+	})
 }
 
-func wireSessionTicketChecksWithClock(cfg *tls.Config, now func() time.Time, leafTime func(time.Time, time.Time) time.Time) {
+func wireSessionTicketChecksWithClock(cfg *tls.Config, now func() time.Time, clockTimes func(time.Time, time.Time) (time.Time, time.Time)) {
 	cfg.WrapSession = func(cs tls.ConnectionState, ss *tls.SessionState) ([]byte, error) {
 		appendClientCertWindow(ss, cs)
 		return cfg.EncryptTicket(cs, ss)
@@ -66,8 +68,8 @@ func wireSessionTicketChecksWithClock(cfg *tls.Config, now func() time.Time, lea
 			return nil, nil // undecryptable (e.g. pre-restart ticket) → full handshake
 		}
 		notBefore, notAfter, ok := clientCertWindowFromExtra(ss)
-		wall := now()
-		if !ok || wall.After(notAfter) || leafTime(wall, notBefore).Before(notBefore) {
+		base, leaf := clockTimes(now(), notBefore)
+		if !ok || base.After(notAfter) || leaf.Before(notBefore) {
 			return nil, nil
 		}
 		return ss, nil

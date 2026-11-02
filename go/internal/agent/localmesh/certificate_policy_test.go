@@ -61,7 +61,8 @@ func TestCertificatePolicyOwnDeviceAndOperatorPaths(t *testing.T) {
 			if role == "operator" {
 				principal = "spiffe://wendy.sh/tenant/" + testTenantUUID + "/operator/time-policy"
 			}
-			peerPEM, peerKey := issuePolicyLeaf(t, principal, now.Add(-4*time.Minute), now.Add(time.Hour))
+			peerNB := floor.Add(12 * time.Hour)
+			peerPEM, peerKey := issuePolicyLeaf(t, principal, peerNB, peerNB.Add(time.Hour))
 			var peer *Credentials
 			if role == "operator" {
 				peer, err = NewOperatorCredentialsWithTimePolicy(peerPEM, testPKI().chainPEM, peerKey, uuid.MustParse("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"), policy)
@@ -72,7 +73,7 @@ func TestCertificatePolicyOwnDeviceAndOperatorPaths(t *testing.T) {
 				t.Fatal(err)
 			}
 			identity, err := self.Verify(peer.Certificate.Certificate, wall)
-			if err != nil || identity.NotBefore.IsZero() || !identity.NotBefore.Equal(now.Add(-4*time.Minute)) {
+			if err != nil || identity.NotBefore.IsZero() || !identity.NotBefore.Equal(peerNB) {
 				t.Fatal("bundle policy/window mismatch", identity, err)
 			}
 			if _, err = self.VerifyTLS(peer.Certificate.Certificate, wall); err != nil {
@@ -130,5 +131,34 @@ func TestCertificatePolicyOwnDeviceAndOperatorPaths(t *testing.T) {
 	}
 	if _, err = self.Verify(foreign.Certificate.Certificate, wall); err == nil {
 		t.Fatal("time policy changed tenant scope")
+	}
+}
+
+func TestExplicitCertificatePolicyLeavesLegacyPrimaryLifetimeUnchanged(t *testing.T) {
+	now := time.Now().Truncate(time.Second)
+	selfPEM, selfKey := issuePolicyLeaf(t, testPrincipal(testTenantUUID, testDeviceAID), now.Add(-time.Hour), now.Add(time.Hour))
+	legacy, err := NewCredentials(selfPEM, testPKI().chainPEM, selfKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy := certs.CertificateTimePolicy{Now: func() time.Time { return now }, Floor: func() time.Time { return now.Add(-time.Minute) }, Uncertain: func() bool { return false }}
+	mesh, err := NewCredentialsWithTimePolicy(selfPEM, testPKI().chainPEM, selfKey, policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	opPEM, opKey := issuePolicyLeaf(t, "spiffe://wendy.sh/tenant/"+testTenantUUID+"/operator/legacy-lifetime", now.Add(-time.Hour), now.Add(800*24*time.Hour))
+	op, err := NewOperatorCredentials(opPEM, testPKI().chainPEM, opKey, uuid.MustParse("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"))
+	if err != nil {
+		t.Fatal("legacy primary lifetime policy changed", err)
+	}
+	if _, err = legacy.VerifyPrimaryOperator(op.Certificate.Certificate, now); err != nil {
+		t.Fatal("legacy primary policy narrowed", err)
+	}
+	if _, err = mesh.VerifyPrimaryOperator(op.Certificate.Certificate, now); err == nil {
+		t.Fatal("explicit mesh primary policy omitted lifetime maximum")
+	}
+	policy.Floor = func() time.Time { return now.Add(2 * time.Hour) }
+	if _, err = NewCredentialsWithTimePolicy(selfPEM, testPKI().chainPEM, selfKey, policy); err == nil {
+		t.Fatal("own credential expiry ignored selected local base")
 	}
 }

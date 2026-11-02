@@ -11,7 +11,8 @@ type CertificateWindow struct {
 
 // CertificateTimePolicy supplies only local observations. Floor is a local
 // boot-time lower bound and must never be selected from a peer announcement.
-// Uncertain distinguishes that boot state from verified current UTC.
+// Uncertain distinguishes that boot state from verified current UTC. Providers
+// must be safe for concurrent calls and cannot come from peer message dates.
 // The zero value uses ordinary wall-time certificate validation.
 type CertificateTimePolicy struct {
 	Now       func() time.Time
@@ -26,15 +27,30 @@ func (p CertificateTimePolicy) WallTime() time.Time {
 	return time.Now()
 }
 
-// LeafTime applies the existing bounded leaf NotBefore accommodation while
-// the explicitly uncertain local clock has not overtaken its local floor.
-// Issuer dates and every NotAfter check still use the original wall time.
-func (p CertificateTimePolicy) LeafTime(wall, notBefore time.Time) time.Time {
-	if p.Floor == nil || p.Uncertain == nil || !p.Uncertain() {
-		return wall
+// BaseTime is the local verification clock for every certificate date and
+// expiry. A selected local anchor is a lower bound, never a peer time claim.
+func (p CertificateTimePolicy) BaseTime(wall time.Time) time.Time {
+	if p.Floor != nil {
+		if floor := p.Floor(); floor.After(wall) {
+			return floor
+		}
 	}
-	floor := p.Floor()
-	return CertificateLeafTime(wall, floor, notBefore, !wall.After(floor))
+	return wall
+}
+
+// LeafTime additionally accommodates at most 24h of leaf NotBefore while boot
+// time is explicitly uncertain. This does not change BaseTime for issuer or
+// expiry checks and never advances the system clock.
+func (p CertificateTimePolicy) LeafTime(wall, notBefore time.Time) time.Time {
+	return p.LeafTimeAtBase(p.BaseTime(wall), notBefore)
+}
+
+// LeafTimeAtBase keeps one sampled local base consistent across every check.
+func (p CertificateTimePolicy) LeafTimeAtBase(base, notBefore time.Time) time.Time {
+	if p.Uncertain == nil || !p.Uncertain() {
+		return base
+	}
+	return CertificateLeafTime(base, base, notBefore, true)
 }
 
 const MaxCertificateClockSkew = 24 * time.Hour
@@ -70,3 +86,5 @@ func (w CertificateWindow) Intersect(other CertificateWindow) CertificateWindow 
 	}
 	return w
 }
+
+func (w CertificateWindow) Valid() bool { return w.NotAfter.After(w.NotBefore) }

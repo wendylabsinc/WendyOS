@@ -54,12 +54,16 @@ func (v VerifiedOperator) Descriptor() CertificateDescriptor {
 // it does not replace this primary route-proof credential merely by sharing a
 // principal. P-256 primary paths remain usable when locally trusted as such.
 func VerifyPrimary(chain [][]byte, roots []*x509.Certificate, tenant meshid.Tenant, now time.Time) (VerifiedOperator, error) {
-	return VerifyPrimaryWithPolicy(chain, roots, tenant, now, certs.CertificateTimePolicy{})
+	return verifyPrimary(chain, roots, tenant, now, nil)
 }
 
 // VerifyPrimaryWithPolicy retains primary trust and operator scope, and uses
 // only the receiver's explicitly local leaf-time policy.
 func VerifyPrimaryWithPolicy(chain [][]byte, roots []*x509.Certificate, tenant meshid.Tenant, now time.Time, policy certs.CertificateTimePolicy) (VerifiedOperator, error) {
+	return verifyPrimary(chain, roots, tenant, now, &policy)
+}
+
+func verifyPrimary(chain [][]byte, roots []*x509.Certificate, tenant meshid.Tenant, now time.Time, policy *certs.CertificateTimePolicy) (VerifiedOperator, error) {
 	var result VerifiedOperator
 	if !tenant.IsValid() || len(chain) == 0 || len(chain) > 16 || len(roots) == 0 {
 		return result, errors.New("missing operator tenant, chain or primary trust")
@@ -78,7 +82,7 @@ func VerifyPrimaryWithPolicy(chain [][]byte, roots []*x509.Certificate, tenant m
 		parsed[i] = certificate
 	}
 	leaf := parsed[0]
-	if leaf.NotAfter.Sub(leaf.NotBefore) > certs.MaxPeerCertificateLifetime {
+	if policy != nil && leaf.NotAfter.Sub(leaf.NotBefore) > certs.MaxPeerCertificateLifetime {
 		return result, errors.New("operator certificate validity window exceeds accepted maximum")
 	}
 	principal, ok := certs.TenantPrincipalFromCert(leaf)
@@ -95,11 +99,16 @@ func VerifyPrimaryWithPolicy(chain [][]byte, roots []*x509.Certificate, tenant m
 	if leaf.KeyUsage&x509.KeyUsageDigitalSignature == 0 {
 		return result, errors.New("operator credential does not permit signing")
 	}
-	window, err := certs.VerifyPeerCertificateChainWindow(leaf, parsed[1:], roots, x509.ExtKeyUsageClientAuth, now, policy.LeafTime(now, leaf.NotBefore))
+	base, leafNow := now, now
+	if policy != nil {
+		base = policy.BaseTime(now)
+		leafNow = policy.LeafTimeAtBase(base, leaf.NotBefore)
+	}
+	window, err := certs.VerifyPeerCertificateChainWindow(leaf, parsed[1:], roots, x509.ExtKeyUsageClientAuth, base, leafNow)
 	if err != nil {
 		return result, err
 	}
-	if !now.Before(window.NotAfter) {
+	if !base.Before(window.NotAfter) || policy != nil && !window.Valid() {
 		return result, errors.New("operator primary path expired")
 	}
 	hashes := make([][]byte, len(parsed))

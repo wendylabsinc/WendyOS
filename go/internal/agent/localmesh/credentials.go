@@ -38,7 +38,7 @@ type Credentials struct {
 	ticketOnce     sync.Once
 	ticketMemory   *meshSessionCache
 	issuerMaterial *meshalpn.Certificates
-	timePolicy     certs.CertificateTimePolicy
+	timePolicy     *certs.CertificateTimePolicy
 }
 
 // SupportsPrimaryOperators reports whether this enrolled identity has locally
@@ -51,34 +51,46 @@ func (c *Credentials) VerifyPrimaryOperator(chain [][]byte, now time.Time) (mesh
 	if c == nil {
 		return meshoperator.VerifiedOperator{}, errors.New("missing enrolled credentials")
 	}
-	return meshoperator.VerifyPrimaryWithPolicy(c.knownIssuerCandidates(chain, now), c.primaryRoots, c.Device.Tenant(), now, c.timePolicy)
+	if c.timePolicy == nil {
+		return meshoperator.VerifyPrimary(c.knownIssuerCandidates(chain, now), c.primaryRoots, c.Device.Tenant(), now)
+	}
+	return meshoperator.VerifyPrimaryWithPolicy(c.knownIssuerCandidates(chain, now), c.primaryRoots, c.Device.Tenant(), now, *c.timePolicy)
 }
 
-func (c *Credentials) CertificateTimePolicy() certs.CertificateTimePolicy { return c.timePolicy }
+func (c *Credentials) CertificateTimePolicy() certs.CertificateTimePolicy {
+	if c == nil || c.timePolicy == nil {
+		return certs.CertificateTimePolicy{}
+	}
+	return *c.timePolicy
+}
 
 // NewCredentials loads the provisioned identity and derives the local-mesh
 // identity from its leaf. Certificates without a device principal — asset, user,
 // service, or legacy numeric principals — are refused outright; there is no
 // fallback identity.
 func NewCredentials(certPEM, chainPEM, keyPEM string) (*Credentials, error) {
-	return NewCredentialsWithTimePolicy(certPEM, chainPEM, keyPEM, certs.CertificateTimePolicy{})
+	return newCredentials(certPEM, chainPEM, keyPEM, uuid.Nil, false, nil)
 }
 
 func NewCredentialsWithTimePolicy(certPEM, chainPEM, keyPEM string, policy certs.CertificateTimePolicy) (*Credentials, error) {
-	return newCredentials(certPEM, chainPEM, keyPEM, uuid.Nil, false, policy)
+	return newCredentials(certPEM, chainPEM, keyPEM, uuid.Nil, false, &policy)
 }
 
 // NewOperatorCredentials is an explicit primary operator role. It never enrolls
 // the host or changes the principal into a device. The instance survives renewal.
 func NewOperatorCredentials(certPEM, chainPEM, keyPEM string, instance uuid.UUID) (*Credentials, error) {
-	return NewOperatorCredentialsWithTimePolicy(certPEM, chainPEM, keyPEM, instance, certs.CertificateTimePolicy{})
+	return newCredentials(certPEM, chainPEM, keyPEM, instance, true, nil)
 }
 
 func NewOperatorCredentialsWithTimePolicy(certPEM, chainPEM, keyPEM string, instance uuid.UUID, policy certs.CertificateTimePolicy) (*Credentials, error) {
-	return newCredentials(certPEM, chainPEM, keyPEM, instance, true, policy)
+	return newCredentials(certPEM, chainPEM, keyPEM, instance, true, &policy)
 }
 
-func newCredentials(certPEM, chainPEM, keyPEM string, instance uuid.UUID, operator bool, policy certs.CertificateTimePolicy) (*Credentials, error) {
+func newCredentials(certPEM, chainPEM, keyPEM string, instance uuid.UUID, operator bool, policy *certs.CertificateTimePolicy) (*Credentials, error) {
+	clockPolicy := certs.CertificateTimePolicy{}
+	if policy != nil {
+		clockPolicy = *policy
+	}
 	base, err := mtls.NewClientTLSConfig(certPEM, chainPEM, keyPEM, nil)
 	if err != nil {
 		return nil, err
@@ -111,13 +123,13 @@ func newCredentials(certPEM, chainPEM, keyPEM string, instance uuid.UUID, operat
 	if !ok {
 		return nil, errors.New("identity key cannot sign")
 	}
-	verifyChain, err := mtls.NewPeerCertificateWindowVerifierWithPolicy(chainPEM, nil, policy)
+	verifyChain, err := mtls.NewPeerCertificateWindowVerifierWithPolicy(chainPEM, nil, clockPolicy)
 	if err != nil {
 		return nil, err
 	}
 	// Mesh requires a verified issuer path for its own identity too. The
 	// general mTLS loopback shortcut must not extend an expired local issuer.
-	if _, err := verifyChain(cert.Certificate, policy.WallTime()); err != nil && !operator {
+	if _, err := verifyChain(cert.Certificate, clockPolicy.WallTime()); err != nil && !operator {
 		return nil, err
 	}
 	anchors, err := mtls.PeerTrustAnchors(chainPEM)
@@ -155,12 +167,19 @@ func newCredentials(certPEM, chainPEM, keyPEM string, instance uuid.UUID, operat
 		if device.Tenant() != self.Tenant() {
 			return Identity{}, errors.New("wendy net peer is outside the tenant")
 		}
-		if policy.LeafTime(now, peerLeaf.NotBefore).Before(peerLeaf.NotBefore) || !now.Before(peerLeaf.NotAfter) {
+		baseNow := clockPolicy.BaseTime(now)
+		if clockPolicy.LeafTimeAtBase(baseNow, peerLeaf.NotBefore).Before(peerLeaf.NotBefore) || !baseNow.Before(peerLeaf.NotAfter) {
 			return Identity{}, errors.New("wendy net identity is not currently valid")
 		}
 		var window certs.CertificateWindow
 		if device.IsOperator() {
-			verified, err := meshoperator.VerifyPrimaryWithPolicy(chain, primaryRoots, self.Tenant(), now, policy)
+			var verified meshoperator.VerifiedOperator
+			var err error
+			if policy == nil {
+				verified, err = meshoperator.VerifyPrimary(chain, primaryRoots, self.Tenant(), now)
+			} else {
+				verified, err = meshoperator.VerifyPrimaryWithPolicy(chain, primaryRoots, self.Tenant(), now, clockPolicy)
+			}
 			if err != nil {
 				return Identity{}, err
 			}
@@ -171,10 +190,10 @@ func newCredentials(certPEM, chainPEM, keyPEM string, instance uuid.UUID, operat
 				return Identity{}, err
 			}
 		}
-		material.Remember(chain, now)
+		material.Remember(chain, baseNow)
 		return Identity{Device: device, NotBefore: window.NotBefore, NotAfter: window.NotAfter}, nil
 	}
-	if _, err := verify(cert.Certificate, policy.WallTime()); err != nil {
+	if _, err := verify(cert.Certificate, clockPolicy.WallTime()); err != nil {
 		return nil, err
 	}
 	// The enrolled PEM material and ML-DSA-aware trust chain are immutable for
@@ -204,7 +223,7 @@ func newCredentials(certPEM, chainPEM, keyPEM string, instance uuid.UUID, operat
 		// Use the same verifier as carrier admission, including locally known
 		// untrusted intermediates. The original anchors remain unchanged.
 		c.VerifyPeerCertificate = func(raw [][]byte, _ [][]*x509.Certificate) error {
-			_, err := verify(raw, policy.WallTime())
+			_, err := verify(raw, clockPolicy.WallTime())
 			return err
 		}
 		c.VerifyConnection = nil // pinPeer rechecks the verifier on resumption.

@@ -16,7 +16,8 @@ func TestCertificateTimePolicyUsesOnlyExplicitLocalUncertainty(t *testing.T) {
 		{"at-floor", floor, floor.Add(12 * time.Hour), true, true},
 		{"past-cap", floor.Add(-598 * time.Second), floor.Add(24*time.Hour + time.Nanosecond), true, false},
 		{"known-utc", floor.Add(-598 * time.Second), floor.Add(time.Minute), false, false},
-		{"overtaken", floor.Add(time.Second), floor.Add(time.Minute), true, false},
+		{"wall-above-anchor", floor.Add(time.Second), floor.Add(time.Minute), true, true},
+		{"known-base", floor.Add(-598 * time.Second), floor.Add(-time.Second), false, true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			policy := CertificateTimePolicy{Floor: func() time.Time { return floor }, Uncertain: func() bool { return test.uncertain }}

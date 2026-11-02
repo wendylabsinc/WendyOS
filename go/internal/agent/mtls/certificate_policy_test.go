@@ -29,12 +29,12 @@ func policyPathFixture(t *testing.T, algorithm string, now, issuerNB, issuerNA, 
 	return leaf, [][]byte{leaf.Raw, issuer.Raw}, string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: root.Raw}))
 }
 
-func TestCertificatePolicyKeepsIssuerWallTimeAndSelectedWindow(t *testing.T) {
+func TestCertificatePolicyUsesBaseTimeAndSelectedWindow(t *testing.T) {
 	now := time.Now().Truncate(time.Second)
 	wall, floor := now.Add(-598*time.Second), now.Add(-30*time.Second)
 	for _, algorithm := range []string{"native", "MLDSA"} {
 		t.Run(algorithm, func(t *testing.T) {
-			for _, mode := range []string{"valid", "issuer-lower-bound", "future-issuer", "expired-issuer", "expired-leaf", "beyond-leaf-grace", "fast-clock", "certainty-off"} {
+			for _, mode := range []string{"valid", "issuer-lower-bound", "issuer-after-wall", "future-leaf", "wall-above-anchor-future-leaf", "future-issuer", "expired-issuer", "expired-leaf", "beyond-leaf-grace", "fast-clock", "certainty-off"} {
 				t.Run(mode, func(t *testing.T) {
 					issuerNB, issuerNA := now.Add(-time.Hour), now.Add(time.Hour)
 					leafNB, leafNA := now.Add(-5*time.Minute), now.Add(2*time.Hour)
@@ -44,14 +44,28 @@ func TestCertificatePolicyKeepsIssuerWallTimeAndSelectedWindow(t *testing.T) {
 						issuerNB = wall.Add(-time.Minute)
 					}
 					if mode == "future-issuer" {
+						issuerNB = floor.Add(time.Second)
+					}
+					if mode == "issuer-after-wall" {
 						issuerNB = wall.Add(time.Second)
 					}
 					if mode == "expired-issuer" {
-						issuerNA = wall.Add(-time.Second)
+						issuerNA = floor.Add(-time.Second)
 					}
 					if mode == "expired-leaf" {
 						leafNB = wall.Add(-time.Hour)
-						leafNA = wall.Add(-time.Second)
+						leafNA = floor.Add(-time.Second)
+					}
+					if mode == "future-leaf" || mode == "certainty-off" {
+						leafNB = floor.Add(12 * time.Hour)
+						leafNA = leafNB.Add(time.Hour)
+						issuerNA = now.Add(48 * time.Hour)
+					}
+					if mode == "wall-above-anchor-future-leaf" {
+						verifyAt = floor.Add(time.Minute)
+						leafNB = verifyAt.Add(12 * time.Hour)
+						leafNA = leafNB.Add(time.Hour)
+						issuerNA = now.Add(48 * time.Hour)
 					}
 					if mode == "beyond-leaf-grace" {
 						leafNB = floor.Add(24*time.Hour + time.Second)
@@ -71,7 +85,7 @@ func TestCertificatePolicyKeepsIssuerWallTimeAndSelectedWindow(t *testing.T) {
 						t.Fatal(err)
 					}
 					window, err := verify(chain, verifyAt)
-					if mode != "valid" && mode != "issuer-lower-bound" {
+					if mode != "valid" && mode != "issuer-lower-bound" && mode != "issuer-after-wall" && mode != "future-leaf" && mode != "wall-above-anchor-future-leaf" {
 						if err == nil {
 							t.Fatal("invalid path accepted", mode, window)
 						}
@@ -81,7 +95,11 @@ func TestCertificatePolicyKeepsIssuerWallTimeAndSelectedWindow(t *testing.T) {
 					if issuerNB.After(wantNB) {
 						wantNB = issuerNB
 					}
-					if err != nil || !window.NotBefore.Equal(wantNB) || !window.NotAfter.Equal(issuerNA) {
+					wantNA := issuerNA
+					if leafNA.Before(wantNA) {
+						wantNA = leafNA
+					}
+					if err != nil || !window.NotBefore.Equal(wantNB) || !window.NotAfter.Equal(wantNA) {
 						t.Fatalf("selected path window=%+v err=%v", window, err)
 					}
 					cached, err := verify(chain, verifyAt.Add(time.Second))
@@ -89,10 +107,44 @@ func TestCertificatePolicyKeepsIssuerWallTimeAndSelectedWindow(t *testing.T) {
 						t.Fatal("cache lost selected lower/upper path bounds", cached, err)
 					}
 					uncertain = false
-					if _, err = verify(chain, verifyAt.Add(2*time.Second)); err == nil && mode == "valid" {
+					if _, err = verify(chain, verifyAt.Add(2*time.Second)); err == nil && (mode == "future-leaf" || mode == "wall-above-anchor-future-leaf") {
 						t.Fatal("certainty transition reused stale leaf-floor proof")
 					}
 				})
+			}
+		})
+	}
+}
+
+func TestLegacyCertificateFloorKeepsOriginalNativeIssuerBehavior(t *testing.T) {
+	now := time.Now().Truncate(time.Second)
+	wall, floor := now.Add(-598*time.Second), now.Add(-30*time.Second)
+	for _, algorithm := range []string{"native", "MLDSA"} {
+		t.Run(algorithm, func(t *testing.T) {
+			leaf, chain, roots := policyPathFixture(t, algorithm, now, wall.Add(time.Second), now.Add(time.Hour), now.Add(-5*time.Minute), now.Add(2*time.Hour))
+			legacy, err := NewPeerCertificateVerifier(roots, nil, floor)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = legacy(chain, wall)
+			pool, _, trustErr := peerCertificateTrust(roots)
+			if trustErr != nil {
+				t.Fatal(trustErr)
+			}
+			intermediates := x509.NewCertPool()
+			for _, der := range chain[1:] {
+				c, parseErr := x509.ParseCertificate(der)
+				if parseErr != nil {
+					t.Fatal(parseErr)
+				}
+				intermediates.AddCert(c)
+			}
+			_, nativeErr := leaf.Verify(x509.VerifyOptions{Roots: pool, Intermediates: intermediates, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}, CurrentTime: floor})
+			// Before this API refactor, a natively supported path used the
+			// legacy effective instant for all dates; unsupported MLDSA fell
+			// back to issuer-wall checks. Preserve both platform outcomes.
+			if (err == nil) != (nativeErr == nil) {
+				t.Fatal("legacy native/fallback issuer semantics changed", err, nativeErr)
 			}
 		})
 	}
