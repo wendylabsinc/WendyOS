@@ -126,7 +126,7 @@ provider aliases `localmesh.StreamALPN` so TLS and stream admission cannot drift
 
 ## Router-hop protocol
 
-TLS negotiates `wendy-local-mesh-ble/1`, followed by router hello version 1.
+TLS negotiates `wendy-local-mesh-ble/2`, followed by router hello version 1.
 `bleprovider.ALPN` aliases the common `localmesh.StreamALPN` constant. This
 version includes shared HAVE/WANT service and presence/router announcements;
 there is no full-record-push fallback. BLE advertisements keep their independent

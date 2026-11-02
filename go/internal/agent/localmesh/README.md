@@ -135,13 +135,14 @@ is binary, with all offsets below measured in bytes:
 | --- | --- | --- |
 | 0 | 4 | ASCII magic `WNAN` |
 | 4 | 1 | Binary payload version `0x01` |
-| 5 | 1 | Flags: bit 0 means mesh hint present; all other bits must be zero |
+| 5 | 1 | Flags: bit 0 means mesh hint present; bit 1 means TLS-only peer; other bits are advisory |
 | 6 | 16 | Tenant UUID, standard network-order UUID bytes |
 | 22 | 16 | Device UUID, standard network-order UUID bytes |
 | 38 | 8, optional | Raw mesh hint bytes, without hex encoding |
 
-The payload is exactly 38 bytes without a mesh or 46 bytes with one. Both UUIDs
-reconstruct `spiffe://wendy.sh/tenant/<tenant-uuid>/device/<device-uuid>`; the
+The required prefix is 38 bytes without a mesh or 46 bytes with one. Version 1
+readers accept up to 255 bytes in total and ignore optional appended fields and
+unknown advisory flag bits. Both UUIDs reconstruct `spiffe://wendy.sh/tenant/<tenant-uuid>/device/<device-uuid>`; the
 URI template is fixed by this protocol version. Explicit nil UUIDs preserve
 the existing identity contract. An all-zero hint is present if its flag is set;
 it is not an absent mesh. Current enabled providers advertise the default mesh.
@@ -151,8 +152,11 @@ Publication, subscription, NDP requests, NDP responses and counter confirmations
 all carry the same SSI. The supplicant control socket uses a hex rendering of
 these bytes; that representation is decoded before transmission on the radio.
 Discovery, incoming NDP requests and counter proposals must pass tenant and mesh
-checks before affecting peer selection or creating/accepting a path. Unsupported
-versions, unknown flags, invalid lengths and trailing bytes are rejected.
+checks before affecting peer selection or creating/accepting a path. TLS-only
+peers are parseable, but this QUIC provider excludes them before peer selection
+or NDP admission because they have no common transport. Unsupported versions,
+payloads shorter than the required prefix and payloads longer than 255 bytes
+are rejected.
 
 This binary v1 replaces the previous textual `wendy-nan:1:<device-uuid>`
 advertisement. There is deliberately no legacy fallback: the old advertisement
