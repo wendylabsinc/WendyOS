@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/wendylabsinc/wendy/go/internal/shared/asyncdiag"
 	pb "github.com/wendylabsinc/wendy/go/proto/gen/relaypb"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
@@ -494,7 +495,7 @@ func (a *Agent) runOnce(parent context.Context) error {
 				// Unacknowledged, it is redelivered until its grant
 				// expires, at most a minute away; remember up to 64
 				// such offers that long so a redelivery is skipped.
-				a.Logger.Warn("refused cloud relay offer", zap.String("offer_id", o.OfferId), zap.Error(e))
+				asyncdiag.Log(a.Logger, zap.WarnLevel, "refused cloud relay offer", zap.String("offer_id", o.OfferId), zap.String("error", e.Error()))
 				if len(rejected) < 64 {
 					rejected[o.OfferId] = now.Add(time.Minute + cloudClockSkew).Unix()
 				}
@@ -578,7 +579,7 @@ func (a *Agent) runOnce(parent context.Context) error {
 				if e := retryDeferred(); e != nil {
 					return e
 				}
-				a.Logger.Warn("cloud presence renewal deadline; retaining valid presence", zap.Error(result.err), zap.Duration("retry", retryDelay))
+				asyncdiag.Log(a.Logger, zap.WarnLevel, "cloud presence renewal deadline; retaining valid presence", zap.String("error", result.err.Error()), zap.Duration("retry", retryDelay))
 				renewal.Reset(retryDelay)
 				retryDelay = min(retryDelay*2, 15*time.Second)
 				continue
