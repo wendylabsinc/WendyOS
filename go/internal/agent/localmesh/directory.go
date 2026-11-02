@@ -519,7 +519,7 @@ func (d *Directory) Snapshot(now time.Time) []Manifest {
 		if m.AgentTransport != "" && m.AgentTransport != AgentMTLS {
 			// Preserve the opaque transport for reporting, but never expose its
 			// port to legacy consumers that understand only the old agent path.
-			m.AgentPort = 0
+			m.AgentPort, m.Agent = 0, nil
 		}
 		out = append(out, m)
 	}

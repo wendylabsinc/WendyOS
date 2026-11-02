@@ -23,6 +23,7 @@ func projectionPeerFixture(t *testing.T, change func(map[string]netwire.RawMessa
 	d, chain, key, dev, now := directoryFixture(t)
 	m := routeManifest(dev, now)
 	m.AgentTransport = AgentMTLS
+	m.Agent = &AgentMetadata{Version: "known-version"}
 	m.Platform = PlatformLite
 	m.AppEndpoints = []AppEndpoint{{Transport: AppTLS, Port: AppSessionTLSPort}}
 	m.Services = []ManifestService{{Mesh: "lab", AppID: "sh.wendy.fixture", ServiceID: "echo", Type: "_echo._tcp", Instance: "Known echo", Port: 28461}}
@@ -215,7 +216,7 @@ func TestManifestFutureAgentTransportRetainsRouteWithoutManagementFallback(t *te
 		t.Fatalf("future agent=%t,%v", changed, e)
 	}
 	view := d.Snapshot(now)
-	if len(view) != 1 || view[0].AgentPort != 0 || !d.RouteAuthorizations(now)[*m.Route] {
+	if len(view) != 1 || view[0].AgentPort != 0 || view[0].Agent != nil || !d.RouteAuthorizations(now)[*m.Route] {
 		t.Fatalf("unsupported management leaked or route lost: %+v", view)
 	}
 	if len(d.Records(now)) != 1 || !bytes.Equal(d.Records(now)[0].Body, w.Body) {
@@ -225,7 +226,7 @@ func TestManifestFutureAgentTransportRetainsRouteWithoutManagementFallback(t *te
 		t.Fatalf("next known agent transport = %t,%v", changed, err)
 	}
 	known := d.Snapshot(now)
-	if len(known) != 1 || known[0].AgentPort == 0 {
+	if len(known) != 1 || known[0].AgentPort == 0 || known[0].Agent == nil || known[0].Agent.Version != "known-version" {
 		t.Fatalf("known management did not recover: %+v", known)
 	}
 	_, chain, key, dev, _ := directoryFixture(t)
