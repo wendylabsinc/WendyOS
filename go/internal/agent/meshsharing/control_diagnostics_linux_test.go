@@ -36,6 +36,7 @@ func TestBorrowerControlEndDiagnostic(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("borrower worker did not stop")
 	}
+	flushDiagnostics(t)
 	entries := logs.FilterMessage("Wendy Net gateway control ended").All()
 	if len(entries) != 1 {
 		t.Fatalf("control events=%d", len(entries))

@@ -11,6 +11,7 @@ import (
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/localmesh"
 	"github.com/wendylabsinc/wendy/go/internal/agent/meshcatalog"
+	"github.com/wendylabsinc/wendy/go/internal/shared/asyncdiag"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
 	"go.uber.org/zap"
 )
@@ -135,10 +136,10 @@ func (c *Controller) auditDNS(next dnsState, err error) error {
 		// SetDNS may have reverted the old resolver before a new apply failed.
 		// Preserve the last successful target for audit, but flag state unknown.
 		c.dnsUncertain = true
-		c.logger.Warn("Wendy Net DNS transition", append(fields, zap.String("outcome", "failed"), zap.Error(err))...)
+		asyncdiag.Log(c.logger, zap.WarnLevel, "Wendy Net DNS transition", append(fields, zap.String("outcome", "failed"), zap.Error(err))...)
 		return err
 	}
-	c.logger.Info("Wendy Net DNS transition", append(fields, zap.String("outcome", "applied"))...)
+	asyncdiag.Log(c.logger, zap.InfoLevel, "Wendy Net DNS transition", append(fields, zap.String("outcome", "applied"))...)
 	c.dns, c.dnsUncertain = next, false
 	return nil
 }
@@ -180,7 +181,7 @@ func (c *Controller) Step(ctx context.Context, config Config) (Decision, error) 
 			wasHealthy := health.Healthy
 			healthy := health.Observe(res.ok)
 			if wasHealthy != healthy {
-				c.logger.Info("Wendy Net independent uplink health changed", zap.String("interface", res.iface),
+				asyncdiag.Log(c.logger, zap.InfoLevel, "Wendy Net independent uplink health changed", zap.String("interface", res.iface),
 					zap.Bool("healthy", healthy), zap.Bool("probe_succeeded", res.ok),
 					zap.Int("consecutive_failures", health.failures), zap.Int("consecutive_successes", health.successes))
 			}
@@ -259,7 +260,7 @@ func (c *Controller) reachableGateway(ctx context.Context) Gateway {
 		wasHealthy := health.Healthy
 		candidate.Reachable = health.Observe(res.ok)
 		if wasHealthy != candidate.Reachable {
-			c.logger.Info("Wendy Net gateway probe health changed",
+			asyncdiag.Log(c.logger, zap.InfoLevel, "Wendy Net gateway probe health changed",
 				zap.String("gateway_principal", candidate.Device.Principal()), zap.Bool("healthy", candidate.Reachable),
 				zap.Bool("probe_succeeded", res.ok), zap.Int("consecutive_failures", health.failures),
 				zap.Int("consecutive_successes", health.successes), zap.Uint64("link_id", uint64(candidate.Link)),
@@ -301,7 +302,7 @@ func (c *Controller) reachableGateway(ctx context.Context) Gateway {
 	for _, candidate := range candidates {
 		if candidate.Reachable && now.Before(candidate.Expires) {
 			if c.gatewayDevice != candidate.Device {
-				c.logger.Info("Wendy Net gateway selected", zap.String("gateway_principal", candidate.Device.Principal()),
+				asyncdiag.Log(c.logger, zap.InfoLevel, "Wendy Net gateway selected", zap.String("gateway_principal", candidate.Device.Principal()),
 					zap.String("previous_gateway_principal", c.gatewayDevice.Principal()), zap.Uint64("link_id", uint64(candidate.Link)),
 					zap.Time("signed_expires_at", candidate.Expires))
 			}
@@ -317,7 +318,7 @@ func (c *Controller) reachableGateway(ctx context.Context) Gateway {
 		} else if eligible == 0 {
 			reason = "signed-candidates-expired"
 		}
-		c.logger.Info("Wendy Net gateway selection ended",
+		asyncdiag.Log(c.logger, zap.InfoLevel, "Wendy Net gateway selection ended",
 			append([]zap.Field{zap.String("gateway_principal", c.gatewayDevice.Principal()), zap.String("reason", reason),
 				zap.Time("previous_signed_expires_at", c.gatewayLastExpiry), zap.Int("eligible_candidates", eligible),
 				zap.Int("observed_candidates", len(candidates))}, gatewayEvidence(c.gatewayDevice, view, offers)...)...)
