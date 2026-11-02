@@ -20,6 +20,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/cli/analytics"
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
+	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 )
 
@@ -757,11 +758,8 @@ func startFakeProvisioningServer(t *testing.T, prov agentpb.WendyProvisioningSer
 // gate that the fakeMacProvisioningServer ("not provisioned") deliberately
 // bypasses in the other Mac run tests.
 func TestRequireRegistryAuth_EnforcesMTLSWhenProvisionedWithoutCert(t *testing.T) {
-	// Point config resolution (loadCLICert -> config.Load -> os.UserHomeDir) at
-	// an empty home so no CLI certificate is present regardless of the machine.
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("USERPROFILE", home)
+	// The fixture has no CLI certificate, including under a config override.
+	setTempConfig(t, &config.Config{})
 
 	conn, cleanup := startFakeProvisioningServer(t, &fakeProvisionedServer{})
 	defer cleanup()
@@ -779,9 +777,7 @@ func TestRequireRegistryAuth_EnforcesMTLSWhenProvisionedWithoutCert(t *testing.T
 // requireRegistryAuth passes through even with no CLI cert. This documents the
 // intended bypass that fakeMacProvisioningServer relies on.
 func TestRequireRegistryAuth_AllowsWhenNotProvisioned(t *testing.T) {
-	home := t.TempDir()
-	t.Setenv("HOME", home)
-	t.Setenv("USERPROFILE", home)
+	setTempConfig(t, &config.Config{})
 
 	conn, cleanup := startFakeProvisioningServer(t, &fakeMacProvisioningServer{})
 	defer cleanup()
