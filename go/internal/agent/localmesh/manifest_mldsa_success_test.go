@@ -49,7 +49,7 @@ func TestManifestNativeMLDSAOriginPositive(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			credentials, err := NewCredentials(string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})),
+			credentials, err := newTestCredentials(string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})),
 				authority.pem, string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: key})))
 			if err != nil {
 				t.Fatal(err)
