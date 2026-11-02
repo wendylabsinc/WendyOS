@@ -34,6 +34,10 @@ func (s *Synchronizer) offerManifest(w SignedManifest, now time.Time) []ControlM
 func (s *Synchronizer) resolveManifest(w SignedManifest, now time.Time, accepted bool) {
 	deadline, current := s.directory.RecordDeadline(w, now)
 	if accepted && !current {
+		// A valid duplicate may use a different signature from the retained
+		// envelope. Admission is complete, but that envelope has no export
+		// lease: release its download without installing a gossip receipt.
+		s.discardManifest(w)
 		return
 	}
 	if accepted {
