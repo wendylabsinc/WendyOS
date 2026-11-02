@@ -273,13 +273,14 @@ func (e *Engine) refreshRoute(prefix netip.Prefix) {
 }
 
 func (e *Engine) cost(l *linkState) uint16 {
-	if l == nil || l.ihuExpires <= e.now || l.tx == Infinity {
-		return Infinity
-	}
-	if l.hellos[0].expires <= e.now && l.hellos[1].expires <= e.now {
+	if l == nil || e.livenessExpired(l) || l.tx == Infinity {
 		return Infinity
 	}
 	return max(l.Cost, max(l.tx, 1))
+}
+
+func (e *Engine) livenessExpired(l *linkState) bool {
+	return l.ihuExpires <= e.now || (l.hellos[0].expires <= e.now && l.hellos[1].expires <= e.now)
 }
 func (e *Engine) feasible(r *candidate) bool {
 	if r.advertised == Infinity {
@@ -784,7 +785,7 @@ func (e *Engine) Snapshot() Snapshot {
 	out := Snapshot{Now: e.now, Seqno: e.seq, Routes: e.routeSnapshot(), Sources: len(e.sources), Candidates: len(e.routes), PendingRequests: len(e.requests), Counters: e.counters}
 	for _, id := range e.linkIDs() {
 		c := e.cost(e.links[id])
-		out.Neighbours = append(out.Neighbours, Neighbour{id, c, c != Infinity})
+		out.Neighbours = append(out.Neighbours, Neighbour{Link: id, Cost: c, Reachable: c != Infinity, LivenessExpired: e.livenessExpired(e.links[id])})
 	}
 	return out
 }

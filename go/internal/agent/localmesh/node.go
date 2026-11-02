@@ -25,6 +25,9 @@ import (
 
 type nodePeer struct {
 	reconcileNeeded bool // Actor-owned: retry a change after bounded queue pressure.
+	babelConfirmed  bool // Actor-owned: this incarnation once had two-way Babel liveness.
+	babelRetiring   bool // Actor-owned: expiry already signalled the existing lifetime owner.
+	retire          chan struct{}
 	closeDiagnostic sync.Once
 	ingress         *nodeEvent // One actor-owned input; its reader awaits acknowledgement.
 
@@ -292,6 +295,7 @@ func (n *Node) refresh() {
 	}
 	devices, proofs := n.directory.SnapshotWithRoutes(now)
 	routing := n.routing.Snapshot()
+	n.retireExpiredBabelPeers(routing)
 	links := make([]PeerLink, 0, len(n.peers))
 	for _, p := range n.peers {
 		link := PeerLink{ID: p.id, Device: p.device, Cost: p.cost, Transport: p.transport, assembler: &p.assembler}
@@ -315,6 +319,13 @@ func (n *Node) refresh() {
 		authorizations[origin] = true
 	}
 	markForwardingReady(links, routing, n.forwardRoutes, authorizations)
+	for i := range links {
+		if p := n.peers[links[i].ID]; p != nil && p.babelRetiring {
+			// Retirement is terminal for this incarnation, even while its owned
+			// transport closer is waiting to finish.
+			links[i].ForwardingReady = false
+		}
+	}
 	n.view.Store(&NodeSnapshot{Self: n.Credentials.Device, CapturedAt: now, Peers: len(n.peers), Links: links, Devices: devices, Routes: routing.Routes, ForwardingRoutes: append([]babel.Route{}, n.forwardRoutes...), RouteAuthorizations: authorizations, RouteProofs: proofs})
 }
 
@@ -527,6 +538,10 @@ func (n *Node) handle(e nodeEvent) error {
 		return nil
 	}
 	if e.packet != nil {
+		if p.babelRetiring {
+			// Packets queued before cancellation cannot revive a closing link.
+			return nil
+		}
 		return n.step(babel.Receive{ID: e.id, Packet: e.packet})
 	}
 	if e.timestamp != nil {
@@ -931,7 +946,7 @@ func (n *Node) attachLink(ctx context.Context, peer meshid.Device, cost uint16, 
 	if cost == 0 || cost == ^uint16(0) {
 		return errors.New("invalid wendy net link cost")
 	}
-	p := &nodePeer{device: peer, cost: cost, transport: carrierName(ctx, "unknown"), link: link, control: make(chan ControlMessage, 128), done: make(chan struct{})}
+	p := &nodePeer{device: peer, cost: cost, transport: carrierName(ctx, "unknown"), link: link, control: make(chan ControlMessage, 128), done: make(chan struct{}), retire: make(chan struct{})}
 	if !ConnectionReady(ctx, peer, func() { _ = link.Close() }) {
 		return nil
 	}
@@ -940,15 +955,12 @@ func (n *Node) attachLink(ctx context.Context, peer meshid.Device, cost uint16, 
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	go func() {
-		select {
-		case <-n.ctx.Done():
-			cancel()
-		case <-ctx.Done():
-		}
-		_ = link.Close()
-	}()
 	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		n.closePeerOnDone(ctx, cancel, p)
+	}()
 	done := make(chan error, 4)
 	worker := func(f func() error) { wg.Add(1); go func() { defer wg.Done(); done <- f() }() }
 	worker(func() error { return n.writeControls(ctx, p) })
