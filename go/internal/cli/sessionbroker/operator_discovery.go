@@ -168,7 +168,7 @@ func prepareOperatorAutomatic(ctx context.Context, certificate config.Certificat
 	if enabled {
 		// An explicit unqualified connect selects automatic discovery. It must
 		// not silently keep a previously pinned first hop or disconnected intent.
-		return prepareOperatorRecipe(ctx, certificate, OperatorSpec{Version: 1, Principal: operator.Principal(), Automatic: true, Enabled: true})
+		return prepareOperatorRecipe(ctx, certificate, OperatorSpec{Version: 1, Principal: operator.Principal(), Automatic: true, Enabled: true}, true)
 	}
 	if recipe, err := readOperatorRecipe(operatorRecipePath(directory, operator.Principal())); err == nil {
 		if recipe.Disconnected {
@@ -184,5 +184,5 @@ func prepareOperatorAutomatic(ctx context.Context, certificate config.Certificat
 	}
 	// The detached broker creates its own signed origin before discovering any
 	// first hop. Ordinary bounded LAN/BLE candidates then establish verified TLS.
-	return prepareOperatorRecipe(ctx, certificate, OperatorSpec{Version: 1, Principal: operator.Principal(), Automatic: true, Enabled: enabled})
+	return prepareOperatorRecipe(ctx, certificate, OperatorSpec{Version: 1, Principal: operator.Principal(), Automatic: true, Enabled: enabled}, false)
 }
