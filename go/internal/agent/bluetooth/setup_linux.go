@@ -38,7 +38,7 @@ func serveBLESetup(ctx context.Context, logger *zap.Logger, d *SetupDispatcher) 
 		cancel()
 		return fmt.Errorf("BLE setup listener: %w", err)
 	}
-	if err = startServiceAdvertising(setupCtx, logger, SetupServiceUUID, dbus.ObjectPath("/org/wendy/setupAdvertisement")); err != nil {
+	if err = startServiceAdvertising(setupCtx, logger, "setup", SetupServiceUUID, dbus.ObjectPath("/org/wendy/setupAdvertisement")); err != nil {
 		unix.Close(fd)
 		cancel()
 		return fmt.Errorf("BLE setup advertisement: %w", err)
