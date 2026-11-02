@@ -112,7 +112,7 @@ func TestTCPConfigIgnoresRetiredCarriers(t *testing.T) {
 		`"leafBLEPeers":[{"device":"old-device","address":"00:11:22:33:44:55"}],"leafTimeURL":"https://old.example/time"`,
 		`"leafListen":null,"leafBLEPeers":[],"leafTimeURL":""`,
 	} {
-		for _, current := range []string{"", `,"ethernet":true,"tls_listen":"[::]:43024"`} {
+		for _, current := range []string{"", `,"ethernet":true,"tls_listen":"[::]:43025"`} {
 			body := []byte("{" + fields + current + "}")
 			if err := os.WriteFile(path, body, 0600); err != nil {
 				t.Fatal(err)
@@ -126,7 +126,7 @@ func TestTCPConfigIgnoresRetiredCarriers(t *testing.T) {
 					t.Fatalf("retired carriers enabled networking: %+v", cfg)
 				}
 			} else {
-				if cfg == nil || !cfg.Ethernet || cfg.TLSListen != "[::]:43024" {
+				if cfg == nil || !cfg.Ethernet || cfg.TLSListen != "[::]:43025" {
 					t.Fatalf("current carriers were lost: %+v", cfg)
 				}
 				encoded, err := json.Marshal(cfg)
