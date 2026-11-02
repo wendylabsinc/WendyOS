@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"net/netip"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -187,6 +188,22 @@ func owner(tenant, addr string, row *lite.WendyComNetTopologyRecord) (string, st
 	}
 }
 func appendRecord(out *pb.LocalMeshTopology, row *lite.WendyComNetTopologyRecord) error {
+	if row.Kind == 0 {
+		return status.Error(codes.DataLoss, "missing Lite topology record kind")
+	}
+	if row.Kind > 3 || row.OwnerRole > 2 {
+		// A future variant owns its identity/address schema. Its raw page has
+		// already consumed the normal observation byte and record budgets.
+		out.Truncated = true
+		const detail = "Unsupported topology record kinds or owner roles were omitted from this local view."
+		if out.Status == nil {
+			out.Status = &pb.LocalMeshStatus{}
+		}
+		if !strings.Contains(out.Status.Detail, detail) {
+			out.Status.Detail += " " + detail
+		}
+		return nil
+	}
 	addr, err := address(row.Address)
 	if err != nil {
 		return err

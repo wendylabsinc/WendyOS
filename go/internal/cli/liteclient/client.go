@@ -747,7 +747,13 @@ func (c *WendyLiteClient) ConsoleAttach(rollingMode bool, blockingMode bool) (<-
 	// Subscribe before attaching so no chunk is lost.
 	sub, err := c.subscribe(func(m *wendypb.WendyComMessage) bool {
 		e := m.GetEvent()
-		return e != nil && e.GetEventId() == eventID && e.GetConsoleData() != nil
+		if e == nil || e.GetEventId() != eventID || e.GetConsoleData() == nil {
+			return false
+		}
+		// STDIN is inbound-only; future output selectors must not be relabeled as stdout.
+		io := e.GetConsoleData().GetIo()
+		return io == wendypb.WendyComConsoleIo_WENDY_COM_CONSOLE_IO_STANDARD_OUTPUT ||
+			io == wendypb.WendyComConsoleIo_WENDY_COM_CONSOLE_IO_STANDARD_ERROR
 	}, 16)
 	if err != nil {
 		return nil, nil, err
