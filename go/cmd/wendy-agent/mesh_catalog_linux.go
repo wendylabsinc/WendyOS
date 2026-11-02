@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -41,10 +40,8 @@ type catalogActivation struct {
 	ctx            context.Context
 	cancel         context.CancelFunc
 	catalog        *meshcatalog.Catalog
-	runtime        *meshcatalog.Runtime
 	lanBrowser     *meshcatalog.LANBrowser
 	lanDone        chan struct{}
-	cache          *localmesh.IdentityCache
 	snapshot       func() localmesh.NodeSnapshot
 	done           chan struct{}
 	retryDone      chan struct{}
@@ -79,23 +76,6 @@ func (m *meshCatalogManager) Activate(ctx context.Context, credentials *localmes
 	if credentials == nil || snapshot == nil || hub == nil {
 		return errors.New("wendy net catalog requires a running node")
 	}
-	stateDir := filepath.Join(m.dir, "local-mesh", "catalog-"+credentials.Device.UUID().String())
-	if err := os.MkdirAll(stateDir, 0700); err != nil {
-		return err
-	}
-	now := time.Now()
-	cache, err := localmesh.OpenIdentityCacheWithCertificates(filepath.Join(stateDir, "identities.json"), localmesh.DefaultCacheLimits(), credentials.Verify, now, hub.Certificates())
-	if err != nil {
-		return err
-	}
-	store, err := meshcatalog.NewReceiptStore(filepath.Join(stateDir, "receipts.json"), 4096)
-	if err != nil {
-		return err
-	}
-	receipts, err := store.Load()
-	if err != nil {
-		return err
-	}
 	authorize := func(appID, serviceType string, hostPort uint16) error {
 		allowed := m.ingress.AllowedApp(appID, hostPort)
 		if strings.HasSuffix(serviceType, "._udp") {
@@ -106,16 +86,12 @@ func (m *meshCatalogManager) Activate(ctx context.Context, credentials *localmes
 		}
 		return nil
 	}
-	catalog, err := meshcatalog.NewCatalog("default", credentials.Device, 4096, credentials, cache, authorize, receipts, store.Save, now)
-	if err != nil {
-		return err
-	}
-	runtime, err := meshcatalog.NewRuntime(catalog, snapshot)
+	catalog, err := meshcatalog.NewManifestCatalog("default", credentials.Device, authorize, hub.ReplaceServices, snapshot)
 	if err != nil {
 		return err
 	}
 	activeCtx, cancel := context.WithCancel(ctx)
-	a := &catalogActivation{device: credentials.Device, vips: vips, ctx: activeCtx, cancel: cancel, catalog: catalog, runtime: runtime, cache: cache, snapshot: snapshot, done: make(chan struct{}), retryDone: make(chan struct{}), gatewayDone: make(chan struct{}), bridges: map[string]catalogBridgeRun{}}
+	a := &catalogActivation{device: credentials.Device, vips: vips, ctx: activeCtx, cancel: cancel, catalog: catalog, snapshot: snapshot, done: make(chan struct{}), retryDone: make(chan struct{}), gatewayDone: make(chan struct{}), bridges: map[string]catalogBridgeRun{}}
 	m.mu.Lock()
 	lanReady := m.lanReady
 	m.mu.Unlock()
@@ -152,12 +128,7 @@ func (m *meshCatalogManager) Activate(ctx context.Context, credentials *localmes
 		}
 	}
 	m.mu.Unlock()
-	go func() {
-		defer close(a.done)
-		if err := runtime.Run(activeCtx, hub); err != nil && activeCtx.Err() == nil {
-			m.logger.Error("wendy net catalog synchronization stopped", zap.Error(err))
-		}
-	}()
+	go func() { defer close(a.done); <-activeCtx.Done() }()
 	go m.retryBridges(a)
 	return nil
 }
@@ -221,9 +192,6 @@ func (m *meshCatalogManager) Deactivate() {
 	}
 	<-a.retryDone
 	<-a.done
-	if err := a.cache.Flush(time.Now()); err != nil {
-		m.logger.Warn("wendy net catalog identity cache flush failed", zap.Error(err))
-	}
 }
 
 // GatewayOffers returns the verified signed gateway offers this mesh sees,
@@ -245,16 +213,10 @@ func (m *meshCatalogManager) SetGatewayOffer(enable bool) error {
 		return errors.New("wendy net catalog is not active")
 	}
 	if enable {
-		w, err := m.active.catalog.PublishGatewayOffer(time.Now())
-		if err == nil {
-			m.active.runtime.Broadcast(w)
-		}
+		_, err := m.active.catalog.PublishGatewayOffer(time.Now())
 		return err
 	}
-	w, err := m.active.catalog.WithdrawGatewayOffer(time.Now())
-	if err == nil && len(w.Body) != 0 {
-		m.active.runtime.Broadcast(w)
-	}
+	_, err := m.active.catalog.WithdrawGatewayOffer(time.Now())
 	return err
 }
 
@@ -329,11 +291,10 @@ func (m *meshCatalogManager) startBridge(a *catalogActivation, app catalogApp) e
 		return record.Key.Mesh == "default" &&
 			(record.Key.Device != a.device.Principal() || record.Key.AppID != app.appID)
 	}
-	bridge, err := meshcatalog.NewMDNSBridge(scope, a.catalog, a.vips, policy, a.runtime.Broadcast, a.snapshot)
+	bridge, err := meshcatalog.NewMDNSBridge(scope, a.catalog, a.vips, policy, func(meshcatalog.Record) {}, a.snapshot)
 	if err != nil {
 		return err
 	}
-	bridge.SetRemoteSync(a.runtime.ProjectionReady, a.runtime.InvalidateProjection)
 	var lanAccess *meshcatalog.LANProjector
 	var bridgeNamespace *os.File
 	if a.lanBrowser != nil {

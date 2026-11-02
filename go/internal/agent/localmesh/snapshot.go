@@ -11,12 +11,14 @@ import (
 // It feeds internal policy and a bounded public diagnostic projection. It is
 // not an app service directory.
 type NodeSnapshot struct {
-	Self                meshid.Device
-	CapturedAt          time.Time
-	Peers               int
-	Links               []PeerLink
-	Devices             []Manifest
-	Routes              []babel.Route
+	Self       meshid.Device
+	CapturedAt time.Time
+	Peers      int
+	Links      []PeerLink
+	Devices    []Manifest
+	Routes     []babel.Route
+	// ForwardingRoutes contains the selected routes installed in the kernel.
+	ForwardingRoutes    []babel.Route
 	RouteAuthorizations map[RouteOrigin]bool
 }
 
@@ -49,7 +51,7 @@ func WithCarrier(ctx context.Context, carrier string) context.Context {
 func carrierName(ctx context.Context, fallback string) string {
 	carrier, _ := ctx.Value(carrierContextKey{}).(string)
 	switch carrier {
-	case "ethernet", "infrastructure-wifi", "tcp", "nan", "ble", "quic", "tls-stream", "leaf":
+	case "ethernet", "infrastructure-wifi", "tcp", "nan", "ble", "quic", "tls-stream":
 		return carrier
 	default:
 		return fallback

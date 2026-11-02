@@ -22,13 +22,13 @@ type carrierDiagnostics struct {
 }
 
 type carrierDiagnostic struct {
-	Version int             `json:"version"`
-	Time    time.Time       `json:"time"`
-	Self    string          `json:"self"`
-	Peer    string          `json:"peer"`
-	Link    babel.LinkID    `json:"link_id"`
-	TX      CarrierIPStats  `json:"tx"`
-	RX      IPAssemblyStats `json:"rx"`
+	Version int             `json:"version" cbor:"v"`
+	Time    time.Time       `json:"time" cbor:"t"`
+	Self    string          `json:"self" cbor:"s"`
+	Peer    string          `json:"peer" cbor:"p"`
+	Link    babel.LinkID    `json:"link_id" cbor:"l"`
+	TX      CarrierIPStats  `json:"tx" cbor:"T"`
+	RX      IPAssemblyStats `json:"rx" cbor:"r"`
 }
 
 func logCarrierDiagnostic(row []byte) { log.Printf("wendy net carrier stats=%s", row) }

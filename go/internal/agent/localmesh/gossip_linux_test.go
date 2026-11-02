@@ -4,6 +4,7 @@ package localmesh
 
 import (
 	"bytes"
+	"errors"
 	"testing"
 	"time"
 
@@ -72,23 +73,27 @@ func TestGossipDescriptorDataPairsFitExistingReplyReserve(t *testing.T) {
 		p.control <- ControlMessage{Kind: "identity-request", Principal: "already queued"}
 	}
 	// Bulk scheduling has used its allowance and must preserve all eight
-	// response slots. Four independently valid WANT responses need two each.
+	// response slots. Eight WANT responses can each retain one descriptor; DATA
+	// waits for bulk credit after the queue drains.
 	for range maxDirectoryReplyFrames - 8 {
 		p.replies = append(p.replies, ControlMessage{Kind: "identity-request", Principal: "already queued"})
 	}
 	if directoryReplySlots(p) != 0 {
 		t.Fatal("fixture left bulk scheduling slots")
 	}
-	for range 4 {
+	for range 8 {
 		f := newGossipManifestRenewal(t, false)
 		have := f.sender.Record(f.wire, f.now)
 		want, _, err := f.receiver.Receive(have[0], f.now)
 		if err != nil || len(want) != 1 {
 			t.Fatal(want, err)
 		}
-		replies, _, err := f.sender.Receive(want[0], f.now, directoryReplySlots(p))
-		if err != nil || len(replies) != 2 || replies[0].Certificate == nil || replies[1].Gossip == nil || replies[1].Gossip.Op != "data" {
-			t.Fatal("zero slots advanced extra DATA or lost descriptor", replies, err)
+		if replies, _, err := f.sender.Receive(want[0], f.now, 0); !errors.Is(err, ErrControlBackpressure) || len(replies) != 0 {
+			t.Fatal("zero credit consumed the request", replies, err)
+		}
+		replies, _, err := f.sender.Receive(want[0], f.now, directoryResponseSlots(p))
+		if err != nil || len(replies) != 1 || replies[0].Certificate == nil {
+			t.Fatal("response credit lost descriptor or advanced bulk DATA", replies, err)
 		}
 		if !n.queueReplies(p, replies) {
 			t.Fatal("ordinary descriptor/DATA responses overflowed reserved queue")
@@ -97,9 +102,9 @@ func TestGossipDescriptorDataPairsFitExistingReplyReserve(t *testing.T) {
 	if len(p.replies) != maxDirectoryReplyFrames || directoryReplySlots(p) != 0 {
 		t.Fatal("response reserve was miscounted")
 	}
-	for i := maxDirectoryReplyFrames - 8; i < len(p.replies); i += 2 {
-		if p.replies[i].Certificate == nil || p.replies[i+1].Gossip == nil {
-			t.Fatal("admitted descriptor/DATA order changed")
+	for i := maxDirectoryReplyFrames - 8; i < len(p.replies); i++ {
+		if p.replies[i].Certificate == nil {
+			t.Fatal("admitted descriptor order changed")
 		}
 	}
 }
