@@ -140,6 +140,8 @@ func (e *Engine) Step(now time.Duration, event Event) (Effects, error) {
 		} else {
 			e.counters.Stale++
 		}
+	case RefreshRoute:
+		e.refreshRoute(v.Prefix)
 	case Originate:
 		e.local[v.Prefix] = v.Metric
 		delete(e.drops, v.Prefix)
@@ -186,6 +188,10 @@ func (e *Engine) Commit(revision uint64, success bool) (Effects, error) {
 func (e *Engine) validate(event Event) error {
 	switch v := event.(type) {
 	case Tick:
+	case RefreshRoute:
+		if !routablePrefix(v.Prefix) {
+			return ErrConfig
+		}
 	case AddLink:
 		l := v.Link
 		if l.ID == 0 || l.ID <= e.lastLink || !l.Local.Is6() || !l.Peer.Is6() || !l.Local.IsLinkLocalUnicast() || !l.Peer.IsLinkLocalUnicast() || l.Local == l.Peer || l.Local.Zone() != "" || l.Peer.Zone() != "" || l.Cost == 0 {
@@ -227,6 +233,43 @@ func (e *Engine) validate(event Event) error {
 		return ErrConfig
 	}
 	return nil
+}
+
+// HasUsableOrigin reports an actual received candidate, rather than a selected
+// placeholder or inferred path. Like Snapshot, callers serialize it with Step;
+// the query never changes candidate, source, sequence or forwarding state.
+func (e *Engine) HasUsableOrigin(id RouterID, prefix netip.Prefix, seq uint16) bool {
+	if e.stopped || e.pending != 0 {
+		return false
+	}
+	if _, local := e.local[prefix]; local {
+		return false
+	}
+	for _, r := range e.routes {
+		if r.prefix == prefix && r.id == id && r.seq == seq && r.expires > e.now &&
+			r.advertised != Infinity && e.metric(r) != Infinity && e.feasible(r) {
+			return true
+		}
+	}
+	return false
+}
+
+// The zero origin is reserved for short-lived Route Request coalescing. Real
+// origin requests always have a nonzero router ID, so both share MaxRequests
+// without changing sequence-recovery semantics or retaining packet payloads.
+func (e *Engine) refreshRoute(prefix netip.Prefix) {
+	sk := sourceKey{prefix: prefix}
+	if _, pending := e.requests[sk]; pending || len(e.links) == 0 {
+		return
+	}
+	if len(e.requests) >= e.cfg.MaxRequests {
+		e.counters.Rejected++
+		return
+	}
+	for _, id := range e.linkIDs() {
+		e.queue(id, wireMessage{Type: wire.Request, Prefix: prefix})
+	}
+	e.requests[sk] = &request{message: wireMessage{Type: wire.Request, Prefix: prefix}, expires: e.now + time.Second}
 }
 
 func (e *Engine) cost(l *linkState) uint16 {
@@ -440,6 +483,9 @@ func (e *Engine) selectRoutes() {
 	}
 	for _, sk := range e.requestKeys() {
 		q := e.requests[sk]
+		if q.message.Type == wire.Request {
+			continue
+		}
 		if r, ok := next[sk.prefix]; ok && !r.Unreachable && (r.RouterID != sk.id || atLeast(r.Seqno, q.message.Seqno)) {
 			if q.from != 0 {
 				e.advertise(q.from, sk.prefix, true)
@@ -531,8 +577,17 @@ func (e *Engine) request(sk sourceKey, seq uint16, targets []LinkID, from LinkID
 	// A newer request for an existing source replaces one entry; it needs no
 	// additional capacity and must still be able to make recovery progress.
 	if q == nil && len(e.requests) >= e.cfg.MaxRequests {
-		e.counters.Rejected++
-		return
+		// Feasibility recovery takes priority over optional refresh coalescing.
+		for _, key := range e.requestKeys() {
+			if e.requests[key].message.Type == wire.Request {
+				delete(e.requests, key)
+				break
+			}
+		}
+		if len(e.requests) >= e.cfg.MaxRequests {
+			e.counters.Rejected++
+			return
+		}
 	}
 	m := wireMessage{Type: wire.SeqRequest, Prefix: sk.prefix, RouterID: uint64(sk.id), Seqno: seq, HopCount: hops}
 	targets = slices.Clone(targets)
@@ -708,6 +763,10 @@ func (e *Engine) NextDeadline() (time.Duration, bool) {
 		add(d)
 	}
 	for _, q := range e.requests {
+		// Coalescing is pruned on the next event; it adds no routing deadline.
+		if q.message.Type == wire.Request {
+			continue
+		}
 		add(q.expires)
 		if q.remaining > 0 {
 			add(q.next)

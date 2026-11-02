@@ -95,6 +95,10 @@ func Topology(self meshid.Device, snapshot localmesh.NodeSnapshot, now time.Time
 			entry.SignedRouteExpiresAtUnixMs = announcement.ExpiresAtUnixMs
 			entry.OriginAuthorized = snapshot.RouteAuthorizations[origin] && announcement.ExpiresAtUnixMs > now.UnixMilli()
 		}
+		if proof, ok := snapshot.RouteProofs[origin]; ok && proof.Principal == principal {
+			entry.SignedRouteExpiresAtUnixMs = now.Add(proof.Deadline.Sub(now)).UnixMilli()
+			entry.OriginAuthorized = snapshot.RouteAuthorizations[origin] && proof.Deadline.After(now)
+		}
 		out.Routes = append(out.Routes, entry)
 	}
 	sort.Slice(out.Routes, func(i, j int) bool { return out.Routes[i].Prefix < out.Routes[j].Prefix })

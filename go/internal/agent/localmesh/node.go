@@ -105,6 +105,7 @@ type Node struct {
 	ctx              context.Context
 	cancel           context.CancelFunc
 	started          time.Time
+	routingClock     func() time.Duration // Internal clock injection; nil uses elapsed monotonic process time.
 	nextLink         babel.LinkID
 	advertisement    Manifest
 	publicationDirty bool
@@ -166,6 +167,9 @@ func newNode(parent context.Context, dir string, credentials *Credentials, name 
 	if err != nil {
 		return nil, err
 	}
+	policy := credentials.CertificateTimePolicy()
+	directory.certificateNow = func() time.Time { return policy.BaseTime(policy.WallTime()) }
+	directory.certificateLeafTime = policy.LeafTimeAtBase
 	kernel, err := createNetwork(credentials.Device)
 	if err != nil {
 		return nil, err
@@ -258,6 +262,10 @@ func (n *Node) Snapshot() NodeSnapshot {
 	if v.ForwardingRoutes != nil {
 		out.ForwardingRoutes = append([]babel.Route{}, v.ForwardingRoutes...)
 	}
+	out.RouteProofs = make(map[RouteOrigin]RouteProof, len(v.RouteProofs))
+	for origin, proof := range v.RouteProofs {
+		out.RouteProofs[origin] = proof
+	}
 	out.RouteAuthorizations = make(map[RouteOrigin]bool, len(v.RouteAuthorizations))
 	for origin, authorized := range v.RouteAuthorizations {
 		out.RouteAuthorizations[origin] = authorized
@@ -282,7 +290,7 @@ func (n *Node) refresh() {
 	if n.diagnostics.enabled {
 		n.diagnostics.emit(now, n.Credentials.Device, n.peers, logCarrierDiagnostic)
 	}
-	devices := n.directory.Snapshot(now)
+	devices, proofs := n.directory.SnapshotWithRoutes(now)
 	routing := n.routing.Snapshot()
 	links := make([]PeerLink, 0, len(n.peers))
 	for _, p := range n.peers {
@@ -302,9 +310,12 @@ func (n *Node) refresh() {
 		}
 		return meshid.Compare(links[i].Device, links[j].Device) < 0
 	})
-	authorizations := authorizedOrigins(devices, n.Credentials.Device.Tenant())
+	authorizations := make(map[RouteOrigin]bool, len(proofs))
+	for origin := range proofs {
+		authorizations[origin] = true
+	}
 	markForwardingReady(links, routing, n.forwardRoutes, authorizations)
-	n.view.Store(&NodeSnapshot{Self: n.Credentials.Device, CapturedAt: now, Peers: len(n.peers), Links: links, Devices: devices, Routes: routing.Routes, ForwardingRoutes: append([]babel.Route{}, n.forwardRoutes...), RouteAuthorizations: authorizations})
+	n.view.Store(&NodeSnapshot{Self: n.Credentials.Device, CapturedAt: now, Peers: len(n.peers), Links: links, Devices: devices, Routes: routing.Routes, ForwardingRoutes: append([]babel.Route{}, n.forwardRoutes...), RouteAuthorizations: authorizations, RouteProofs: proofs})
 }
 
 func (n *Node) Run() error {
@@ -390,22 +401,19 @@ func (n *Node) Run() error {
 				if p.sync == nil {
 					continue
 				}
+				previousOrigins := n.routeOrigins
 				replies, changed, err := p.sync.ContinueCertificates(time.Now(), directoryResponseSlots(p))
 				if err != nil {
 					n.closePeer(p, "directory-maintenance", err)
 					continue
 				}
-				if !n.queueReplies(p, replies) {
+				queued := n.queueReplies(p, replies)
+				if err := n.afterDirectoryChanges(p, changed, previousOrigins, "certificate-repair"); err != nil {
+					return err
+				}
+				if !queued {
 					n.closePeer(p, "directory-maintenance-queue", errors.New("directory reply reserve full"))
 					continue
-				}
-				for _, record := range changed {
-					n.logAdmission(record, "certificate-repair", time.Now())
-					for id, dest := range n.peers {
-						if id != p.id && dest.sync != nil {
-							n.queue(dest, dest.sync.Record(record, time.Now()))
-						}
-					}
 				}
 				n.continueReconcilePeer(p, time.Now())
 			}
@@ -428,18 +436,39 @@ func (n *Node) Run() error {
 	}
 }
 
+func (n *Node) routingElapsed() time.Duration {
+	if n.routingClock != nil {
+		return n.routingClock()
+	}
+	return time.Since(n.started)
+}
+
 func (n *Node) step(event babel.Event) error {
 	previousInput := n.routeInput
 	n.routeInput = describeRouteInput(event)
 	defer func() { n.routeInput = previousInput }()
 	n.routeOrigins = n.directory.RouteAuthorizations(time.Now())
-	if err := n.routing.Step(time.Since(n.started), event); err != nil {
+	if err := n.routing.Step(n.routingElapsed(), event); err != nil {
 		return errors.Join(babel.ErrStopped, err)
+	}
+	// Both exact tuples remain independently authorized until a real usable
+	// replacement candidate exists. Retiring the old proof then cannot publish
+	// an intermediate unreachable route during this same actor transaction.
+	promoted := false
+	for _, origin := range n.directory.PendingRouteHandoffs(time.Now()) {
+		if n.routing.HasUsableOrigin(origin) && n.directory.CompleteRouteHandoff(origin, time.Now()) {
+			promoted = true
+		}
+	}
+	if promoted {
+		n.routeOrigins = n.directory.RouteAuthorizations(time.Now())
+		if err := n.routing.Step(n.routingElapsed(), babel.Tick{}); err != nil {
+			return errors.Join(babel.ErrStopped, err)
+		}
 	}
 	n.refresh()
 	return nil
 }
-
 func (n *Node) handle(e nodeEvent) error {
 	if e.services != nil {
 		previous := n.advertisement.Services
@@ -522,6 +551,7 @@ func (n *Node) handleControl(p *nodePeer, control *ControlMessage) error {
 		return nil
 	}
 
+	previousOrigins := n.routeOrigins
 	replies, changed, err := p.sync.Receive(*control, time.Now(), directoryResponseSlots(p))
 	if err != nil {
 		if errors.Is(err, ErrControlBackpressure) {
@@ -530,25 +560,49 @@ func (n *Node) handleControl(p *nodePeer, control *ControlMessage) error {
 		n.closePeer(p, "directory-control", err)
 		return nil
 	}
-	if !n.queueReplies(p, replies) {
+	queued := n.queueReplies(p, replies)
+	if err := n.afterDirectoryChanges(p, changed, previousOrigins, "carrier"); err != nil {
+		return err
+	}
+	if !queued {
 		n.closePeer(p, "directory-control-queue", errors.New("directory reply reserve full"))
 		return nil
 	}
+	if len(changed) == 0 {
+		n.refresh()
+	}
+	return nil
+}
+
+// Every successful admission path, including deferred certificate completion,
+// uses the same routing handoff and immediate refresh behavior.
+func (n *Node) afterDirectoryChanges(p *nodePeer, changed []SignedManifest, previousOrigins map[RouteOrigin]bool, source string) error {
 	for _, record := range changed {
-		n.logAdmission(record, "carrier", time.Now())
+		n.logAdmission(record, source, time.Now())
 		for id, dest := range n.peers {
 			if id != p.id && dest.sync != nil {
 				n.queue(dest, dest.sync.Record(record, time.Now()))
 			}
 		}
 	}
-	// Reevaluate immediately when a proof arrives or is withdrawn. Routing
-	// updates can precede their reliable control message; periodic Babel
-	// updates repair that ordering without retaining unverified packets.
+	// Reevaluate withdrawal immediately. A new verified route tuple also asks
+	// neighbours for their actual current Babel advertisement, instead of waiting
+	// for a periodic update that may have preceded this reliable proof.
 	if len(changed) != 0 {
-		return n.step(babel.Tick{})
+		if err := n.step(babel.Tick{}); err != nil {
+			return err
+		}
+		for _, record := range changed {
+			manifest, err := DecodeManifest(record.Body)
+			if err != nil || manifest.Withdraw || manifest.Route == nil || previousOrigins[*manifest.Route] || !n.routeOrigins[*manifest.Route] || n.routing.HasUsableOrigin(*manifest.Route) {
+				continue
+			}
+			if err := n.step(babel.RefreshRoute{Prefix: manifest.Route.Prefix}); err != nil {
+				return err
+			}
+		}
+		return nil
 	}
-	n.refresh()
 	return nil
 }
 
@@ -733,6 +787,9 @@ func (n *Node) publish() error {
 	if _, err = n.directory.Accept(w, now); err != nil {
 		return err
 	}
+	// Local publication already owns its durable origin; no received-route
+	// handoff authority is needed for this publisher itself.
+	n.directory.CompleteRouteHandoff(*m.Route, now)
 	if deadline, ok := n.directory.RecordDeadline(w, now); ok {
 		m.AdmittedUntil = deadline
 	}
