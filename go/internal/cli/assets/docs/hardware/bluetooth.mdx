@@ -56,6 +56,26 @@ BLE and Wi-Fi Aware can run together. Add `--nan=true` when your device supports
 Wi-Fi Aware. For Lite boards, follow the
 [explicit peer setup](/docs/advanced/development/local-mesh-radio).
 
+### Radio profile and transmit power
+
+Normal mode is the starting point for connections with WendyOS peers. Supported
+ESP32-C5/C6 Lite firmware also offers coded S2/S8 profiles for trading throughput
+and airtime for range. The current WendyOS Linux/BlueZ backend supports normal
+mode only. A normal ESP scanner cannot discover coded advertisements.
+
+Devices without a saved power policy retain the firmware/controller default;
+maximum power requires an explicit request. Advertising power and connected-link
+power are separate controls. WendyOS can set advertising power only when the
+adapter exposes support, and cannot set non-default connection power through
+this backend.
+
+Use `wendy device bluetooth mode --device <device>` and
+`wendy device bluetooth power --device <device>` to inspect settings. See the
+[radio command reference](/docs/clients/wendy-cli/commands/device/bluetooth#wendy-device-bluetooth-mode)
+for platform support, profile selection, output fields and recovery. Keep a
+working management path while changing profiles; a Lite profile change can
+restart the device.
+
 ### Capacity and recovery
 
 Bluetooth has limited bandwidth and connection capacity. Each device supports

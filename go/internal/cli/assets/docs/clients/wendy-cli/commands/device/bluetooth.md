@@ -1,8 +1,10 @@
 # `wendy device bluetooth`
 
-Manages Bluetooth peripherals on the connected WendyOS device. Aliased as `wendy device bt`.
+Manages Bluetooth peripherals on WendyOS and radio settings on supported WendyOS and Wendy Lite devices. The `bt` alias is also accepted; examples use the full `bluetooth` command name.
 
-Run without a subcommand to open an interactive table for browsing and managing peripherals; the subcommands below remain available for scripting.
+On WendyOS, run without a subcommand to browse and manage peripherals in an interactive table. Use `mode` and `power` for radio settings on WendyOS or supported Lite firmware. These controls affect the selected device, not the computer running the CLI. Add `--device <device>` to select a device explicitly.
+
+For ordinary Wendy Net connections, start with `normal` mode and controller-default power. Choose a coded profile only for supported Lite peers when you need to trade throughput for radio range. Changing transmit power and choosing a coded profile are separate decisions.
 
 ## Interactive TUI
 
@@ -73,65 +75,173 @@ Removes the pairing for a peripheral by address.
 wendy device bluetooth forget <address>
 ```
 
----
+
+### `wendy device bluetooth mode`
+
+Read the current profile and status before making a change:
+
+```sh
+wendy device bluetooth mode --device <device>
+```
+
+| Target | Profiles available in this implementation |
+| --- | --- |
+| Wendy Lite ESP32-C5/C6 with radio-profile firmware | `normal`, `coded-s2`, `coded-s8` |
+| WendyOS using the Linux/BlueZ backend | `normal` only; both coded profiles are rejected, even if the adapter advertises generic Coded PHY support |
+
+Older Lite firmware may support only `normal`; a coded request is rejected unless
+the firmware explicitly reports support. The Lite controls require firmware with
+Bluetooth radio management support.
+
+| Profile | When to use it |
+| --- | --- |
+| `normal` | Start here for ordinary connections and compatibility with WendyOS peers. Uses 1M advertising and data. |
+| `coded-s2` | Use between supported Lite peers to trade throughput for coding and range; coded data runs at 500 kbit/s. |
+| `coded-s8` | Use between supported Lite peers when stronger coding is worth slower transfers and more airtime; coded data runs at 125 kbit/s. |
+
+These are radio rates, not application throughput or a promised distance. Walls,
+interference and shared Wi-Fi airtime still affect results. A Lite profile covers
+mesh advertising, scanning and connected data. Guest BLE advertisements stay on
+1M for compatibility with guest APIs.
+
+To change the profile of an already configured Lite device:
+
+```sh
+wendy device bluetooth mode coded-s2 --device <device>
+```
+
+This preserves whether Wendy Net participates and which carriers are enabled.
+It does not enable a disabled BLE carrier. A changed Lite profile can restart the
+device; the CLI reports the restart. Reconnect after it boots and inspect the
+profile again. Repeating an unchanged setting does not request a new profile
+change.
+
+To enable BLE and select its profile together, use the Wendy Net command:
+
+```sh
+wendy device wendy-net configure --device <device> \
+  --participate=true --ble-mode=normal
+wendy device wendy-net status --device <device>
+```
+
+`--ble-mode` accepts `off`, `normal`, `coded-s2`, or `coded-s8`. A value other than
+`off` enables the BLE carrier and selects the profile; `off` disables that carrier
+while retaining the saved profile. It does not change participation unless you
+also supply `--participate`. Choose `--ble-mode` or `--ble`, never both.
+`bluetooth mode` itself does not accept `off`.
+
+A C6 permits one mesh carrier at a time. If switching it from mesh Wi-Fi to BLE,
+include `--infrastructure-wifi=false` in the configure command. To disable its
+only carrier, also stop participation or select another supported carrier.
+See [Lite peer setup](/docs/advanced/development/local-mesh-radio).
+
+Configure coded peers through USB or another working management path. A normal
+ESP scanner cannot discover coded advertisements, and the current WendyOS
+backend cannot join the coded profile. S2 and S8 peers can discover each other,
+but use the same profile at both ends when comparing range. Allow the reported
+restart to finish, reconnect, and check peer connectivity on each device. A saved
+profile alone does not prove a working connection.
+
+To return a Lite device to normal mode through your working management path:
+
+```sh
+wendy device bluetooth mode normal --device <device>
+```
+
+On Lite, `mode` prints saved network settings and runtime state; `--json` also
+includes the firmware's `bleProfilesSupported` bitmask (bits 0, 1 and 2 mean
+normal, S2 and S8). Its text view shows the saved profile, not a list of supported
+profiles. On WendyOS, `mode` always prints JSON, including `supportedMeshModes`
+and the reason coded profiles are unavailable.
+
+### `wendy device bluetooth power`
+
+Inspect support and current policy first:
+
+```sh
+wendy device bluetooth power --device <device>
+```
+
+Advertising power affects transmissions used to announce the device. Connection
+power affects traffic on established links; on Lite it also covers scan requests
+and connection initiation. Raising advertising power alone does not raise
+connected-link power. These settings are independent of the mesh profile and
+apply even while Wendy Net is disabled. They cover Wendy-owned Bluetooth
+advertisements and supported links, including management and guest Bluetooth on
+Lite. They do not change Wi-Fi power or another program's independent advertising
+instances.
+
+Devices without a saved power policy use the firmware/controller default.
+`default` returns a setting to that default; `maximum` is an explicit opt-in.
+Existing saved choices are retained after a firmware update. Higher transmit
+power does not change the other peer's power or guarantee a usable two-way link.
+
+| Target | Advertising power | Connection power |
+| --- | --- | --- |
+| Supported Lite ESP32-C5/C6 firmware | `default`, `maximum`, or an integer from -15 to +20 dBm | Same choices; applies to existing and future links |
+| WendyOS Linux/BlueZ | `default`; `maximum` or integer dBm only when the selected adapter exposes setting support and a valid range | `default` only; other requests are rejected by this backend |
+
+For a WendyOS adapter that reports advertising-power support:
+
+```sh
+wendy device bluetooth power --device <device> --advertising maximum
+```
+
+For supported Lite firmware, explicitly request maximum power for both settings:
+
+```sh
+wendy device bluetooth power --device <device> \
+  --advertising maximum --connections maximum
+```
+
+To reduce only advertising power, preserving the connection setting:
+
+```sh
+wendy device bluetooth power --device <device> --advertising -6
+```
+
+Use whole numbers without a `dBm` suffix. Lite uses discrete levels from -15 to
++20 dBm and rounds an in-between request down; for example, -5 requests -6 dBm.
+`maximum` requests +20 dBm on C5/C6. WendyOS validates against the selected
+adapter's reported range. Choose values within the target's supported range.
+
+To restore both settings to the firmware/controller default:
+
+```sh
+wendy device bluetooth power --device <device> \
+  --advertising default --connections default
+```
+
+Omitted settings are preserved and explicit changes survive restart. Power
+changes do not require a device reboot. On Lite, changes apply after the command
+reply has drained; use USB or ordinary Wi-Fi management when reducing power could
+make your Bluetooth management link unreachable.
+
+`power` always prints JSON. Read the status again after a change:
+
+```sh
+wendy device bluetooth power --device <device>
+```
+
+| Output | What to check |
+| --- | --- |
+| Lite `desired`, `applied`, `pending`, `error` | Saved intent is separate from application. If `pending` is true, query again; check `error` if application fails. |
+| Lite `advertisingKnown`, `connectionDefaultKnown`, and each connection's `currentKnown` | Treat corresponding dBm values as measured only when their known flag is true. `supportedLevelsDbm` lists supported levels. |
+| WendyOS `advertisingSetSupported`, `connectionsSetSupported` | Check these before requesting non-default power. This backend reports connection setting support as false. |
+| WendyOS `advertising`, `advertisements`, `error` | `advertising` is saved policy; per-advertisement `requestedDbm` and `registered` describe the request and registration. Missing `selectedDbm` means actual power was not measured. |
+
+On WendyOS a policy can be saved even if an active advertisement fails to apply
+it; the command reports that error. Inspect status and correct the policy or
+restore `default`. Registration success alone does not prove measured transmit
+power or improved range.
 
 ## Flags
 
 | Flag | Description |
-|------|-------------|
-| `--pair` | Pair with the device when connecting (default `true`, `connect` only). |
-| `--trust` | Trust the device when connecting (default `true`, `connect` only). |
-| `--json` | Output the scan result as JSON (`list` only). |
-
-### Mesh radio mode
-
-Inspect the available mesh Bluetooth modes, or select one:
-
-```sh
-wendy device bt mode
-wendy device bt mode coded-s8
-```
-
-Wendy Lite on supported ESP32-C5/C6 firmware offers `normal`, `coded-s2`, and
-`coded-s8`. A mode covers advertising, scanning and connected data, rather than
-changing only an established connection. Changing the Lite profile restarts the
-device; the CLI reports that restart. It preserves whether Wendy Net is enabled
-and the other saved carrier choices. Use `wendy device wendy-net configure` to
-turn carriers on or off.
-
-Coded modes require support at both ends. S2 and S8 peers can discover one
-another, but an ESP in normal mode does not scan coded advertisements. Coded
-modes reduce throughput and increase airtime; walls and interference still limit
-range. WendyOS reports the selected adapter's capabilities and rejects a coded
-mode when its controller or BlueZ cannot select the complete advertising and
-data profile. A generic Coded capability alone does not promise S2/S8 selection.
-
-### Transmission power
-
-Inspect capabilities and power settings, or change either setting independently:
-
-```sh
-wendy device bt power
-wendy device bt power --advertising maximum --connections maximum
-wendy device bt power --advertising -6
-wendy device bt power --advertising default --connections default
-```
-
-Power accepts `default`, `maximum`, or a value in dBm. Omitted settings are
-preserved and explicit changes survive restart. The policy covers Wendy-owned
-Bluetooth advertisements and, where supported, connected links. It also applies
-when Wendy Net is disabled. It does not change Wi-Fi power or another program's
-independently managed advertising instances.
-
-ESP32-C5/C6 support independent advertising and connection settings. Their
-controller uses discrete levels from -15 to +20 dBm; a numeric request between
-levels rounds down. Connection settings also cover scanning/initiation and are
-applied to existing and future links. `default` restores the firmware's controller
-default, while `maximum` requests the highest supported level.
-
-WendyOS checks the selected adapter's advertised power range. Advertising power
-can be set only when BlueZ exposes that capability. A connected-link request
-other than `default` is rejected when the backend cannot set it. Requested power,
-registration success and actual controller readback are separate fields: an
-absent selected value means it has not been measured. Lite may briefly report
-`pending` while the change is applied after the command reply is delivered.
+| --- | --- |
+| `--device <device>` | Select the target device explicitly. |
+| `--pair` | Pair with the peripheral when connecting (default `true`, `connect` only). |
+| `--trust` | Trust the peripheral when connecting (default `true`, `connect` only). |
+| `--advertising <setting>` | Change advertising power (`power` only); omitted means preserve. |
+| `--connections <setting>` | Change connection power (`power` only); omitted means preserve. |
+| `--json` | Request JSON for `list` and Lite `mode`. `power` and WendyOS `mode` already print JSON. |
