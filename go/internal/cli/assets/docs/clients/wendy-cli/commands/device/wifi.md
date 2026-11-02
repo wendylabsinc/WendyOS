@@ -35,7 +35,23 @@ Shows the device's current WiFi connection.
 
 ### `wendy device wifi disconnect`
 
-Disconnects the device from its current network.
+Requests disconnection from the current network. With a current WendyOS agent,
+the request is acknowledged before the connection can be removed. The command
+reports confirmed completion when a result arrives, or an acknowledged request
+with completion unknown when its WiFi path disappears. Acknowledgement alone
+is not proof that WiFi disconnected.
+
+JSON output distinguishes these outcomes. For example, a lost completion reply
+can produce:
+
+```json
+{"state":"requested","acknowledged":true,"completion_confirmed":false,"success":null}
+```
+
+Check `wendy device wifi status` through Bluetooth or another connection to
+confirm an unknown outcome. Older agents use the legacy operation: a lost reply
+is reported as unknown and is never inferred successful. Wendy Lite and explicit
+Bluetooth operations keep their existing behavior.
 
 ### `wendy device wifi rank`
 
