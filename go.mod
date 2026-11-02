@@ -34,7 +34,7 @@ require (
 	github.com/fxamacker/cbor/v2 v2.9.0
 	github.com/gen2brain/malgo v0.11.26
 	github.com/godbus/dbus/v5 v5.2.2
-	github.com/gofrs/flock v0.13.0
+	github.com/gofrs/flock v0.13.1
 	github.com/google/go-containerregistry v0.22.1
 	github.com/google/gousb v1.1.3
 	github.com/google/jsonschema-go v0.4.2
@@ -57,7 +57,7 @@ require (
 	github.com/pion/rtp v1.10.5
 	github.com/pion/webrtc/v4 v4.2.23
 	github.com/quic-go/quic-go v0.62.0
-	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2
+	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
 	github.com/sirupsen/logrus v1.10.2
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
 	github.com/spf13/cobra v1.10.2
@@ -81,6 +81,7 @@ require (
 	google.golang.org/grpc v1.84.0
 	google.golang.org/protobuf v1.36.12
 	gopkg.in/yaml.v3 v3.0.1
+	gvisor.dev/gvisor v0.0.0-20261028061103-fb8670e2f5cd
 )
 
 require (
@@ -121,6 +122,7 @@ require (
 	github.com/go-logr/logr v1.4.4 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/golang/groupcache v0.0.0-20241129210726-2c02b8208cf8 // indirect
+	github.com/google/btree v1.1.2 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.31.0 // indirect
 	github.com/hashicorp/go-cleanhttp v0.5.2 // indirect
 	github.com/in-toto/attestation v1.2.0 // indirect
@@ -181,6 +183,7 @@ require (
 	go.opentelemetry.io/otel/sdk v1.46.0 // indirect
 	go.opentelemetry.io/otel/trace v1.46.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
+	golang.org/x/exp v0.0.0-20260908205506-85c1c2202aba // indirect
 	golang.org/x/text v0.42.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260928230214-8a89bd6388cc // indirect
 	gotest.tools/v3 v3.5.2 // indirect

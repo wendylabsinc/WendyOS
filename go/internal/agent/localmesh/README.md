@@ -35,10 +35,13 @@ identity hint, never authorization. The framed TCP carrier simulates graph
 topologies; automatically discovered LAN, NAN and BLE have their own providers.
 
 Ethernet and infrastructure Wi-Fi advertise and scan `_wendy-net._udp`
-(`protocol=quic-v1`, UDP 43023). Both use the existing native QUIC carrier.
-Permit UDP 5353 for mDNS and UDP 43023 for the carrier. Native LAN TLS discovery
-and listeners are integrated separately; understanding a signed TLS app endpoint
-does not start a listener or advertise one.
+(`protocol=quic-v1`, UDP 43023) and `_wendy-net._tcp` (`protocol=tls-v1`, TCP
+43024). WendyOS peers prefer QUIC; native TLS discovery dials Lite peers through
+the same ordinary peer protocol. Both advertisements identify `platform=WendyOS`.
+Permit UDP 5353 for mDNS plus the enabled carrier ports. `tls_listen` optionally
+enables an independent native TLS peer listener alongside the explicit manual
+TCP baseline. Signed app TLS endpoints are advertised only with their own app
+listener in the separate native VIP integration layer.
 
 Either full identity may initiate. Outbound mTLS pins the discovered complete
 tenant/device principal. Inbound mTLS accepts an unknown enrolled same-tenant
@@ -49,7 +52,8 @@ including resumption, rechecks current trust and identity expiry. The unknown
 LAN listener has a separate bounded server ticket domain. QUIC Retry verifies
 source reachability; the shared 64-connection LAN policy bounds incoming
 handshakes and live connections before TLS across all interfaces. Stalled handshakes retain a slot only until the
-existing QUIC handshake timeout. No 0-RTT application data is accepted.
+existing QUIC handshake timeout; native TCP TLS setup uses an eight-second
+budget. No 0-RTT application data is accepted.
 
 Each interface owns a single UDP socket/QUIC transport shared by all its peers.
 Disconnecting or rejecting one peer closes only that QUIC connection. Interface
@@ -194,7 +198,7 @@ The original leaf protocol, leaf listener, radio peer configuration and delegate
 `wendy-net-endpoint/2` strategy are retired. No endpoint route offer/ready exchange
 or delegated route origin is accepted. Each ordinary peer supplies its own
 signed Babel origin; the node passes Babel's selected routes to the kernel.
-Native Lite carrier discovery and listeners are a separate integration layer.
+Lite carrier discovery and listeners use the host radio and TCP runtime.
 
 The stream writer gives directory/Babel the first turn, then alternates with
 waiting IP packets. A proof backlog cannot monopolize the writer, and fragments
@@ -389,8 +393,11 @@ TLS handshake certificates and their verification remain unchanged. Unknown
 optional control kinds and gossip operations are consumed within their frame;
 unknown optional manifest fields remain in the exact signed body. Unsupported
 manifest versions and required extensions do not advance replay state.
-The timestamp-control schema is understood, with active TSA relay effects left
-to native carrier integration.
+Timestamp control relays bounded nonce-bearing requests to the fixed public TSA
+inside authenticated peer streams. Replies are pulled in 1 KiB pieces; pending
+replies share the existing maintenance tick and control queue. LAN also exposes
+the fixed signed-time relay on port 43025 for bootstrap, and BLE advertises a
+separate ciphertext-only HTTPS relay on PSM 130.
 
 Changed records immediately advertise a HAVE digest. Duplicate revisions do not
 renew their expiry. Reconciliation advertises live digests periodically to repair
@@ -403,7 +410,8 @@ An edit publishes immediately when idle; edits within one second coalesce into
 the latest complete state. Five quiet minutes after a successful publication
 trigger refresh. Reconciliation runs every five minutes, with bounded repair
 continuation on the one-second maintenance tick. These intervals are separate
-from Babel's one-second Hello and 16-second Update intervals. Durable revisions
+from Babel's one-second datagram Hello and 16-second Update intervals;
+reliable stream links can use a longer per-link Hello interval. Durable revisions
 and bounded replay receipts prevent restart from resurrecting superseded state.
 
 The payload path is IPv6 through peer TUNs and the selected Babel next hop. A
@@ -539,17 +547,18 @@ from verified, live device manifests. Catalog projection requires a selected
 reachable Babel route for remote devices; it has no second synchronization gate,
 identity cache, signature owner, inventory or network transport.
 
-The native WendyOS manifest advertises only its installed QUIC app listener.
-The schema accepts explicit TLS app endpoints, but TLS advertisement is added
-only alongside listener startup in the native VIP integration layer.
+The WendyOS manifest advertises the application listeners that actually started:
+QUIC and, when available, TCP with TLS. Lite can use the TLS endpoint without
+QUIC. These signed destination endpoints are independent of the carrier used
+by any particular hop; clients still authenticate the destination end to end.
 
 ## Application service discovery
 
 Applications with the mesh network entitlement can browse signed Wendy Net
 services over their private DNS-SD bridge. Remote services appear while the
-origin has a live host route, a current device announcement and a reconciled
-service inventory. Route loss withdraws their DNS records without renewing the
-signed service lease; recovery projects only services still present and live.
+origin has a live host route and a current verified device manifest containing
+those services. Route loss withdraws their DNS records without renewing the
+manifest lease; recovery projects only services still present and live.
 
 When Ethernet or infrastructure Wi-Fi is enabled for Wendy Net, the same app
 bridge also exposes services observed directly on those physical links. These

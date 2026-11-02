@@ -1,5 +1,3 @@
-//go:build linux
-
 package localmesh
 
 import (
@@ -36,13 +34,14 @@ type nodePeer struct {
 	cost           uint16
 	transport      string
 	link           nodeLink
-	tun            *os.File
+	tun            io.ReadWriteCloser
 	pendingBundles sync.Map // fingerprints queued or being written on this link
 	control        chan ControlMessage
 	done           chan struct{}
 	sync           *Synchronizer
 	replies        []ControlMessage
 	replyBytes     int
+	timestamp      *timestampReply
 }
 
 type nodeLink interface {
@@ -79,6 +78,7 @@ type nodeEvent struct {
 	control       *ControlMessage
 	controlResult chan error
 	result        chan error
+	timestamp     *timestampReply
 }
 
 // Node serializes all Babel/directory mutations. Radio providers only establish
@@ -87,7 +87,7 @@ type nodeEvent struct {
 type Node struct {
 	controlHub       *ControlHub
 	Credentials      *Credentials
-	kernel           *Kernel
+	kernel           PacketNetwork
 	cache            *IdentityCache
 	directory        *Directory
 	bundleHints      *bundleHintCache
@@ -109,11 +109,34 @@ type Node struct {
 	forwardRoutes    []babel.Route
 	diagnostics      carrierDiagnostics
 	routeOrigins     map[RouteOrigin]bool
+	timestampWorkers chan struct{}
 }
 
-func NewNode(parent context.Context, dir string, credentials *Credentials, name string, agentPort uint16) (*Node, error) {
+func NewNode(parent context.Context, dir string, credentials *Credentials, name string, agentPort uint16, appEndpoints ...[]AppEndpoint) (*Node, error) {
+	return newNode(parent, dir, credentials, name, agentPort, newHostNetwork, appEndpoints...)
+}
+
+// NewNodeWithNetwork runs the same authenticated router with a caller-owned
+// packet backend. The node closes the backend when Run returns.
+func NewNodeWithNetwork(parent context.Context, dir string, credentials *Credentials, name string, agentPort uint16, network PacketNetwork, appEndpoints ...[]AppEndpoint) (*Node, error) {
+	if network == nil {
+		return nil, errors.New("missing mesh packet network")
+	}
+	return newNode(parent, dir, credentials, name, agentPort, func(meshid.Device) (PacketNetwork, error) { return network, nil }, appEndpoints...)
+}
+
+func newNode(parent context.Context, dir string, credentials *Credentials, name string, agentPort uint16, createNetwork func(meshid.Device) (PacketNetwork, error), appEndpoints ...[]AppEndpoint) (*Node, error) {
 	if credentials == nil || agentPort == 0 {
 		return nil, errors.New("missing wendy net credentials or agent port")
+	}
+	// A node alone does not own an app listener. The host supplies the
+	// endpoints that have actually bound before starting carrier admission.
+	endpoints := []AppEndpoint{}
+	if len(appEndpoints) != 0 {
+		endpoints = append(endpoints, appEndpoints[0]...)
+	}
+	if err := validateAppEndpoints(endpoints); err != nil {
+		return nil, err
 	}
 	now := time.Now()
 	derived, err := instanceRouterID()
@@ -135,13 +158,13 @@ func NewNode(parent context.Context, dir string, credentials *Credentials, name 
 	if err != nil {
 		return nil, err
 	}
-	kernel, err := NewKernel(credentials.Device)
+	kernel, err := createNetwork(credentials.Device)
 	if err != nil {
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(parent)
 	n := &Node{controlHub: NewControlHub(cache.Certificates()), Credentials: credentials, kernel: kernel, cache: cache, directory: directory, bundleHints: newBundleHintCache(), store: store, state: state, peers: map[babel.LinkID]*nodePeer{}, events: make(chan nodeEvent, 256), ctx: ctx, cancel: cancel, started: now,
-		advertisement: Manifest{Version: ManifestVersionRoute, Device: credentials.Device.UUID(), Name: name, AgentPort: agentPort, AgentTransport: AgentMTLS, Platform: PlatformWendyOS, AppEndpoints: []AppEndpoint{{Transport: AppQUIC, Port: AppSessionPort}}},
+		advertisement: Manifest{Version: ManifestVersionRoute, Device: credentials.Device.UUID(), Name: name, AgentPort: agentPort, AgentTransport: AgentMTLS, Platform: PlatformWendyOS, AppEndpoints: endpoints},
 		diagnostics:   carrierDiagnostics{enabled: os.Getenv("WENDY_NET_CARRIER_DIAGNOSTICS") == "1"}}
 	ok := false
 	defer func() {
@@ -335,6 +358,7 @@ func (n *Node) Run() error {
 				if err := n.continueIngress(p); err != nil {
 					return err
 				}
+				n.pumpTimestamp(p)
 				if p.reconcileNeeded {
 					p.reconcileNeeded = false
 					n.reconcilePeer(p, time.Now())
@@ -448,6 +472,13 @@ func (n *Node) handle(e nodeEvent) error {
 	if e.packet != nil {
 		return n.step(babel.Receive{ID: e.id, Packet: e.packet})
 	}
+	if e.timestamp != nil {
+		if p.timestamp != nil && p.timestamp.id == e.timestamp.id {
+			p.timestamp = e.timestamp
+			n.pumpTimestamp(p)
+		}
+		return nil
+	}
 	if e.control != nil {
 		return n.admitIngress(p, e)
 	}
@@ -459,6 +490,7 @@ func (n *Node) handleControl(p *nodePeer, control *ControlMessage) error {
 		return nil
 	}
 	if control.Kind == "time" {
+		n.timestampControl(p, control.Time)
 		return nil
 	}
 
@@ -893,7 +925,9 @@ func (n *Node) readLink(ctx context.Context, p *nodePeer) error {
 				return err
 			}
 		default:
-			return errors.New("unknown wendy net datagram kind")
+			// Datagram boundaries are retained by every carrier. Ignore optional
+			// future kinds without disturbing an in-progress IP assembly.
+			continue
 		}
 	}
 }
