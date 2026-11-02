@@ -16,7 +16,7 @@ import (
 )
 
 func (s *mcpServer) registerDeviceTools(srv *server.MCPServer) {
-	listDesc := "List configured devices, local simulators (vm:NAME; device_connect boots a stopped one) and online cloud devices; scan=true adds LAN discovery. Pass a returned device selector to device_connect or run. Cloud and simulator failures appear as warnings. On Linux, a USB-C-tethered device the host can't reach until a person approves a one-time setup appears as a usb warning: relay its instructions to the user."
+	listDesc := "List configured devices, local simulators (vm:NAME; device_connect boots a stopped one) and online cloud devices, plus fresh routed devices from an already connected operator context; scan=true adds LAN discovery. Pass a returned device selector to device_connect or run. Cloud and simulator failures appear as warnings. On Linux, a USB-C-tethered device the host can't reach until a person approves a one-time setup appears as a usb warning: relay its instructions to the user."
 	if s.relay {
 		listDesc = "List configured and online cloud devices; scan=true adds LAN discovery. Pass a returned device selector to device_connect or run. Cloud failures appear as warnings. On Linux, a USB-C-tethered device the host can't reach until a person approves a one-time setup appears as a usb warning: relay its instructions to the user."
 	}
@@ -117,11 +117,29 @@ func (s *mcpServer) handleDeviceList(ctx context.Context, req mcpgo.CallToolRequ
 		}
 	}
 
+	var meshState any
+	if !s.relay && os.Getenv("WENDY_AGENT_SOCKET") == "" && s.meshDirectoryFn != nil {
+		bounded, cancel := context.WithTimeout(ctx, time.Second)
+		mesh, _ := s.meshDirectoryFn(bounded)
+		cancel()
+		meshState = map[string]any{"sourceResponseBytes": mesh.SourceResponseBytes, "pollIntervalMillis": mesh.PollIntervalMillis, "heartbeatMillis": mesh.HeartbeatMillis, "state": mesh.State, "source": mesh.Source, "capturedAtUnixMs": mesh.Captured, "truncated": mesh.Truncated}
+		if mesh.State == "ready" && time.Now().UnixMilli()-mesh.Captured <= 10000 && mesh.Captured <= time.Now().Add(time.Second).UnixMilli() {
+			for _, d := range mesh.Devices {
+				if d.Expires <= time.Now().UnixMilli() {
+					continue
+				}
+				devices = append(devices, map[string]any{"device": d.Selector, "address": d.Selector, "type": "mesh", "source": "authenticated-router-observation", "name": d.Name, "principal": d.Principal, "tenant": d.Tenant, "platform": d.Platform, "transport": d.Transport, "caps": d.Caps, "metric": d.Metric, "nextHopPrincipal": d.NextHop, "expiresAtUnixMs": d.Expires})
+			}
+		}
+	}
 	simulators, simulatorErr := s.listSimulatorDevices(ctx)
 	cloud := <-cloudResults
 	devices = append(devices, cloud.devices...)
 	devices = append(devices, simulators...)
 	out := map[string]any{}
+	if meshState != nil {
+		out["meshDiscovery"] = meshState
+	}
 	var warnings []map[string]any
 	if cloud.err != nil {
 		warning := map[string]any{

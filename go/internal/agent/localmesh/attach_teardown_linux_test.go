@@ -105,20 +105,20 @@ func TestAttachCancellationKeepsKernelOwnedTUN(t *testing.T) {
 			if err := node.kernel.Apply([]babel.Route{route}); err != nil {
 				t.Fatalf("carrier destroyed the kernel-owned TUN before pending FIB replacement: %v", err)
 			}
-			if _, err := event.add.tun.Stat(); err != nil {
+			if _, err := event.add.tun.(*os.File).Stat(); err != nil {
 				t.Fatalf("kernel still owns a closed TUN: %v", err)
 			}
 			if err := node.kernel.Apply(nil); err != nil {
 				t.Fatal(err)
 			}
-			linkName := node.kernel.peers[event.add.id].link.Name
+			linkName := node.kernel.(*hostNetwork).peers[event.add.id].link.Name
 			if err := node.kernel.RemovePeer(event.add.id); err != nil {
 				t.Fatal(err)
 			}
 			if _, err := netlink.LinkByName(linkName); err == nil {
 				t.Fatal("kernel removal leaked the TUN")
 			}
-			if _, err := event.add.tun.Stat(); !errors.Is(err, os.ErrClosed) {
+			if _, err := event.add.tun.(*os.File).Stat(); !errors.Is(err, os.ErrClosed) {
 				t.Fatalf("kernel removal left the descriptor open: %v", err)
 			}
 			if !returned {

@@ -22,6 +22,7 @@ import (
 	quic "github.com/quic-go/quic-go"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshdiscovery"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
+	"github.com/wendylabsinc/wendy/go/internal/shared/tsarelay"
 	"go.uber.org/zap"
 	"golang.org/x/net/ipv4"
 	"golang.org/x/sys/unix"
@@ -259,7 +260,9 @@ func bindToInterface(name string) func(string, string, syscall.RawConn) error {
 	}
 }
 
-func runLANInterface(ctx context.Context, cfg LANConfig, selected lanInterface, claims *lanClaims) error {
+func runLANInterface(parent context.Context, cfg LANConfig, selected lanInterface, claims *lanClaims) error {
+	ctx, cancel := context.WithCancel(parent)
+	defer cancel()
 	address := net.JoinHostPort(selected.ip.String(), strconv.Itoa(LANPort))
 	socket, err := listenLANQUIC(ctx, selected, address)
 	if err != nil {
@@ -270,12 +273,48 @@ func runLANInterface(ctx context.Context, cfg LANConfig, selected lanInterface, 
 	if err != nil {
 		return err
 	}
+	tcp, err := (&net.ListenConfig{Control: bindToInterface(selected.iface.Name)}).Listen(ctx, "tcp4", net.JoinHostPort(selected.ip.String(), strconv.Itoa(TLSLANPort)))
+	if err != nil {
+		return fmt.Errorf("LAN TLS listen: %w", err)
+	}
+	defer tcp.Close()
+	timeListener, timeListenErr := (&net.ListenConfig{Control: bindToInterface(selected.iface.Name)}).Listen(ctx, "tcp4", net.JoinHostPort(selected.ip.String(), strconv.Itoa(tsarelay.Port)))
+	var timePort uint16
+	if timeListenErr == nil {
+		defer timeListener.Close()
+		timePort = tsarelay.Port
+	} else if cfg.Logger != nil {
+		cfg.Logger.Warn("LAN signed-time relay unavailable", zap.String("interface", selected.iface.Name), zap.Error(timeListenErr))
+	}
+	tlsZone, err := tlsLANMDNSService(cfg.Credentials, selected, "router", timePort)
+	if err != nil {
+		return err
+	}
 	mdnsConn, err := listenLANMDNS(ctx, selected)
 	if err != nil {
 		return fmt.Errorf("LAN %s mDNS: %w", selected.iface.Name, err)
 	}
 	defer mdnsConn.Close()
-	return serveLANInterface(ctx, cfg, selected, claims, socket, mdnsConn, service)
+	tlsDone, scanDone := make(chan error, 1), make(chan struct{})
+	timeDone := make(chan error, 1)
+	if timeListener != nil {
+		go func() { timeDone <- tsarelay.Serve(ctx, timeListener); cancel() }()
+	} else {
+		timeDone <- nil
+	}
+	go func() {
+		err := runNetTLSListener(WithCarrier(ctx, selected.transport), cfg.Node, tcp, selected.cost, claims.policy, strconv.Itoa(int(selected.cost)))
+		tlsDone <- err
+		cancel()
+	}()
+	go func() { defer close(scanDone); scanTLSLAN(ctx, cfg, selected, claims) }()
+	quicErr := serveLANInterface(ctx, cfg, selected, claims, socket, mdnsConn, lanZones{service, tlsZone})
+	cancel()
+	_ = tcp.Close()
+	tlsErr := <-tlsDone
+	timeErr := <-timeDone
+	<-scanDone
+	return errors.Join(quicErr, tlsErr, timeErr)
 }
 
 // listenLANQUIC binds the real UDP endpoint to both the selected address and
@@ -305,7 +344,7 @@ func lanIncomingContext(selected lanInterface, claims *lanClaims) func(context.C
 // One interface owns one UDP socket and QUIC transport for all peer connections.
 // A peer's end must never close that shared endpoint. Every worker exit stops
 // discovery, pending handshakes and attached links before the scanner restarts it.
-func serveLANInterface(parent context.Context, cfg LANConfig, selected lanInterface, claims *lanClaims, socket net.PacketConn, mdnsConn *net.UDPConn, service *mdns.MDNSService) error {
+func serveLANInterface(parent context.Context, cfg LANConfig, selected lanInterface, claims *lanClaims, socket net.PacketConn, mdnsConn *net.UDPConn, service lanMDNSZone) error {
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
 	defer socket.Close()
@@ -488,7 +527,7 @@ func listenLANMDNS(ctx context.Context, selected lanInterface) (*net.UDPConn, er
 	return conn, nil
 }
 
-func serveLANMDNS(ctx context.Context, selected lanInterface, conn *net.UDPConn, zone *mdns.MDNSService) error {
+func serveLANMDNS(ctx context.Context, selected lanInterface, conn *net.UDPConn, zone lanMDNSZone) error {
 	stop := context.AfterFunc(ctx, func() { conn.Close() })
 	defer stop()
 	buf := make([]byte, 4096)
@@ -540,6 +579,9 @@ func serveLANMDNS(ctx context.Context, selected lanInterface, conn *net.UDPConn,
 // mDNS answers. This avoids relying on a default multicast route and avoids
 // accepting responses heard by a wildcard multicast socket on another link.
 func queryLAN(ctx context.Context, selected lanInterface) ([]*mdns.ServiceEntry, error) {
+	return queryLANService(ctx, selected, lanService)
+}
+func queryLANService(ctx context.Context, selected lanInterface, service string) ([]*mdns.ServiceEntry, error) {
 	pc, err := (&net.ListenConfig{Control: bindToInterface(selected.iface.Name)}).ListenPacket(ctx, "udp4", net.JoinHostPort(selected.ip.String(), "0"))
 	if err != nil {
 		return nil, err
@@ -552,7 +594,7 @@ func queryLAN(ctx context.Context, selected lanInterface) ([]*mdns.ServiceEntry,
 		return nil, err
 	}
 	question := new(dns.Msg)
-	question.SetQuestion(lanService+".local.", dns.TypePTR)
+	question.SetQuestion(service+".local.", dns.TypePTR)
 	question.Question[0].Qclass |= 1 << 15 // prefer reply to our ephemeral port
 	question.RecursionDesired = false
 	packet, err := question.Pack()
@@ -586,13 +628,16 @@ func queryLAN(ctx context.Context, selected lanInterface) ([]*mdns.ServiceEntry,
 		if err := message.Unpack(buf[:n]); err != nil || !message.Response || message.Id != question.Id {
 			continue
 		}
-		entries = append(entries, entriesFromLANResponse(&message)...)
+		entries = append(entries, entriesFromLANServiceResponse(&message, service)...)
 	}
 	return entries, nil
 }
 
 func entriesFromLANResponse(message *dns.Msg) []*mdns.ServiceEntry {
-	serviceName := lanService + ".local."
+	return entriesFromLANServiceResponse(message, lanService)
+}
+func entriesFromLANServiceResponse(message *dns.Msg, service string) []*mdns.ServiceEntry {
+	serviceName := service + ".local."
 	instances := map[string]bool{}
 	srv := map[string]*dns.SRV{}
 	txt := map[string]*dns.TXT{}
@@ -658,7 +703,7 @@ func lanMeshHash(tenant meshid.Tenant) string {
 func lanMDNSService(c *Credentials, selected lanInterface) (*mdns.MDNSService, error) {
 	instance := fmt.Sprintf("wendy-net-%s", c.Device.UUID())
 	host := fmt.Sprintf("wendy-net-%s-%d.local.", c.Device.UUID(), selected.iface.Index)
-	txt := []string{"protocol=" + lanProtocol, "principal=" + c.Device.Principal(), "mesh=" + lanMeshHash(c.Device.Tenant()), "version=" + lanDiscoveryVersion}
+	txt := []string{"platform=WendyOS", "protocol=" + lanProtocol, "principal=" + c.Device.Principal(), "mesh=" + lanMeshHash(c.Device.Tenant()), "version=" + lanDiscoveryVersion}
 	return mdns.NewMDNSService(instance, lanService, "local.", host, LANPort, []net.IP{selected.ip}, txt)
 }
 

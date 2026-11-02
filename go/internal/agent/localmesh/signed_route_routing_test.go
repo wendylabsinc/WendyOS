@@ -3,7 +3,7 @@ package localmesh
 import (
 	"crypto/ed25519"
 	"encoding/binary"
-	"encoding/json"
+	"github.com/wendylabsinc/wendy/go/internal/agent/netwire"
 	"net/netip"
 	"testing"
 	"time"
@@ -282,11 +282,11 @@ func TestSignedRouteRoutingRequiresProofAndExpiresWithoutPackets(t *testing.T) {
 	proof := n.sign(1, 6*time.Second, false)
 	forged := proof
 	var manifest Manifest
-	if err := json.Unmarshal(proof.Body, &manifest); err != nil {
+	if err := netwire.Unmarshal(proof.Body, &manifest); err != nil {
 		t.Fatal(err)
 	}
 	manifest.Route.Seqno++
-	forged.Body, _ = json.Marshal(manifest)
+	forged.Body, _ = netwire.Marshal(manifest)
 	if _, err := n.nodes[1].directory.Accept(forged, n.now()); err == nil {
 		t.Fatal("changed sequence retained valid authorization")
 	}
