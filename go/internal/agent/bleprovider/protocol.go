@@ -46,8 +46,9 @@ func ServiceUUID(tenant meshid.Tenant) string {
 }
 
 // Advertisement is an untrusted, tenant-scoped discovery hint. Binary v1 is
-// version/capabilities/native PSM (BE)/network hash/UUID prefix, exactly ten
-// bytes. Capabilities describe independent endpoints, never authentication.
+// version/capabilities/native PSM (BE)/network hash/UUID prefix in a ten-byte
+// prefix. Version one receivers ignore appended optional service-data fields.
+// Capabilities describe independent endpoints, never authentication.
 type Advertisement struct {
 	Version      byte
 	Capabilities byte
@@ -84,7 +85,7 @@ func (a Advertisement) MarshalBinary() ([]byte, error) {
 }
 
 func ParseAdvertisement(data []byte, networkName string) (Advertisement, error) {
-	if len(data) != AdvertisementSize || networkName == "" {
+	if len(data) < AdvertisementSize || networkName == "" {
 		return Advertisement{}, ErrInvalidAdvertisement
 	}
 	a := Advertisement{Version: data[0], Capabilities: data[1], PSM: binary.BigEndian.Uint16(data[2:4])}
@@ -149,13 +150,22 @@ func ParseLocalName(name, networkName string) (Advertisement, error) {
 }
 
 func matchingServiceData(data map[string][]byte, serviceUUID, networkName string) (Advertisement, bool) {
+	var out Advertisement
+	found := false
 	for key, raw := range data {
-		if strings.EqualFold(key, serviceUUID) {
-			a, err := ParseAdvertisement(raw, networkName)
-			return a, err == nil
+		if !strings.EqualFold(key, serviceUUID) {
+			continue
 		}
+		if len(raw) != 0 && raw[0] != AdvertisementVersion {
+			continue
+		}
+		a, err := ParseAdvertisement(raw, networkName)
+		if err != nil || found {
+			return Advertisement{}, false
+		}
+		out, found = a, true
 	}
-	return Advertisement{}, false
+	return out, found
 }
 
 // The prefix is a discovery hint only; complete identity is checked by TLS.
