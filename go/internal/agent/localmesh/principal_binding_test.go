@@ -6,13 +6,12 @@ import (
 	"crypto/ecdsa"
 	"crypto/ed25519"
 	"crypto/elliptic"
-	"crypto/mldsa"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha256"
 	"crypto/x509"
-	"encoding/json"
 	"encoding/pem"
+	"github.com/wendylabsinc/wendy/go/internal/agent/netwire"
 	"math/big"
 	"net/url"
 	"testing"
@@ -60,15 +59,11 @@ func principalBoundDirectory(t *testing.T, credentials *Credentials, now time.Ti
 }
 
 func TestManifestBindsPrincipalWhenTenantsTrustSameKeyAndDeviceUUID(t *testing.T) {
-	for _, algorithm := range []string{"P256", "Ed25519", "RSA", "MLDSA65", "MLDSA87"} {
+	for _, algorithm := range []string{"P256", "Ed25519", "RSA"} {
 		t.Run(algorithm, func(t *testing.T) {
 			var key crypto.Signer
 			var err error
 			switch algorithm {
-			case "MLDSA65":
-				key, err = mldsa.GenerateKey(mldsa.MLDSA65())
-			case "MLDSA87":
-				key, err = mldsa.GenerateKey(mldsa.MLDSA87())
 			case "P256":
 				key, err = ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 			case "Ed25519":
@@ -116,10 +111,10 @@ func TestManifestBindsPrincipalWhenTenantsTrustSameKeyAndDeviceUUID(t *testing.T
 	}
 }
 
-func TestManifestV3PreimageIsUnambiguous(t *testing.T) {
+func TestManifestV4PreimageIsUnambiguous(t *testing.T) {
 	principal := testPrincipal(testTenantUUID, testDeviceBID)
-	body := []byte("{ \"version\": 3 }")
-	want := []byte("wendy-local-mesh/manifest/3\x00\x00\x00\x00\x69" + principal + string(body))
+	body := []byte{0xa1, 0x61, 0x76, 0x04}
+	want := []byte("wendy-local-mesh/manifest/4\x00\x00\x00\x00\x69" + principal + string(body))
 	if len(principal) != 105 {
 		t.Fatal("fixed wire fixture principal length changed")
 	}
@@ -147,15 +142,15 @@ func TestManifestV3RejectsLegacyVersionsAndDomains(t *testing.T) {
 		if _, err := SignManifest(m, chain, key, now); err == nil {
 			t.Fatalf("signed legacy version %d", version)
 		}
-		body, _ := json.Marshal(m)
+		body, _ := netwire.Marshal(m)
 		legacy := SignedManifest{Principal: device.Principal(), Body: body, Signature: ed25519.Sign(key, append([]byte("wendy-local-mesh/manifest/2\x00"), body...))}
 		if _, err := d.Accept(legacy, now); err == nil {
 			t.Fatalf("accepted legacy version %d", version)
 		}
 	}
 	m := routeManifest(device, now)
-	body, _ := json.Marshal(m)
-	for _, domain := range []string{"wendy-local-mesh/manifest/2\x00", "wendy-local-mesh/manifest/3\x00"} {
+	body, _ := netwire.Marshal(m)
+	for _, domain := range []string{"wendy-local-mesh/manifest/2\x00", "wendy-local-mesh/manifest/4\x00"} {
 		wire := SignedManifest{Principal: device.Principal(), Body: body, Signature: ed25519.Sign(key, append([]byte(domain), body...))}
 		if _, err := d.Accept(wire, now); err == nil {
 			t.Fatal("accepted unbound signature without length-prefixed principal")

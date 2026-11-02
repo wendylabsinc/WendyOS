@@ -72,10 +72,9 @@ func OpenStreamHello(ctx context.Context, conn net.Conn, self, peer meshid.Devic
 }
 
 // OpenStreamHelloWithALPN binds the hello to one explicit carrier protocol.
-// Existing stream callers remain restricted to StreamALPN; leaf callers must
-// opt into LeafALPN and enforce their separate receive policy.
+// Ordinary router streams require StreamALPN before node admission.
 func OpenStreamHelloWithALPN(ctx context.Context, conn net.Conn, self, peer meshid.Device, alpn string) error {
-	if alpn != StreamALPN && alpn != LeafALPN {
+	if alpn != StreamALPN {
 		return errors.New("unsupported net stream protocol")
 	}
 	tlsConn, ok := conn.(*tls.Conn)
@@ -101,9 +100,6 @@ func OpenStreamHelloWithALPN(ctx context.Context, conn net.Conn, self, peer mesh
 	}
 	defer conn.SetDeadline(time.Time{})
 	version := StreamProtocolVersion
-	if alpn == LeafALPN {
-		version = LeafProtocolVersion
-	}
 	if err := WriteControl(conn, ControlMessage{Kind: "hello", Hello: &LinkHello{Version: version, Device: self.UUID(), Peer: peer.UUID(), MTU: TunnelMTU, Datagram: DatagramLimit}}); err != nil {
 		return err
 	}

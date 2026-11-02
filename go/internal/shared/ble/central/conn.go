@@ -72,9 +72,10 @@ func NewL2CAPStream(c *Connection) net.Conn {
 
 type l2capNetConn struct {
 	conn         *Connection
-	buf          []byte     // leftover from a previous L2CAPRecv
-	readDeadline time.Time  // zero means no deadline; owned by the single reader
-	recvMu       sync.Mutex // held across L2CAPRecv so Close can't free under it
+	buf          []byte       // leftover from a previous L2CAPRecv
+	deadlineMu   sync.RWMutex // guards readDeadline while a Read is in flight
+	readDeadline time.Time    // zero means no deadline
+	recvMu       sync.Mutex   // held across L2CAPRecv so Close can't free under it
 	closed       atomic.Bool
 }
 
@@ -91,8 +92,11 @@ func (c *l2capNetConn) Read(b []byte) (int, error) {
 
 	for {
 		chunk := recvChunkSeconds
-		if !c.readDeadline.IsZero() {
-			remaining := time.Until(c.readDeadline)
+		c.deadlineMu.RLock()
+		deadline := c.readDeadline
+		c.deadlineMu.RUnlock()
+		if !deadline.IsZero() {
+			remaining := time.Until(deadline)
 			if remaining <= 0 {
 				return 0, &timeoutErr{}
 			}
@@ -166,18 +170,27 @@ func (c *l2capNetConn) Close() error {
 func (c *l2capNetConn) LocalAddr() net.Addr  { return bleNetAddr{} }
 func (c *l2capNetConn) RemoteAddr() net.Addr { return bleNetAddr{} }
 
-// WARNING: SetDeadline only ever bounds reads — see SetWriteDeadline.
 func (c *l2capNetConn) SetDeadline(t time.Time) error {
-	c.readDeadline = t
-	return nil
+	if err := c.SetReadDeadline(t); err != nil {
+		return err
+	}
+	return c.SetWriteDeadline(t)
 }
 func (c *l2capNetConn) SetReadDeadline(t time.Time) error {
+	c.deadlineMu.Lock()
 	c.readDeadline = t
+	c.deadlineMu.Unlock()
 	return nil
 }
 
-// WARNING: SetWriteDeadline is currently not implemented and is a no-op.
-func (c *l2capNetConn) SetWriteDeadline(_ time.Time) error { return nil }
+// Darwin supports changing the native deadline during a write. Other platform
+// backends retain their existing behavior of ignoring write deadlines.
+func (c *l2capNetConn) SetWriteDeadline(t time.Time) error {
+	if setter, ok := any(c.conn).(interface{ SetL2CAPWriteDeadline(time.Time) error }); ok {
+		return setter.SetL2CAPWriteDeadline(t)
+	}
+	return nil
+}
 
 // bleNetAddr is a minimal net.Addr for the BLE transport.
 type bleNetAddr struct{}
@@ -185,7 +198,7 @@ type bleNetAddr struct{}
 func (bleNetAddr) Network() string { return "ble-l2cap" }
 func (bleNetAddr) String() string  { return "ble" }
 
-// timeoutErr is returned when a read deadline is exceeded.
+// timeoutErr is returned when an I/O deadline is exceeded.
 type timeoutErr struct{}
 
 func (e *timeoutErr) Error() string   { return "BLE L2CAP: i/o timeout" }

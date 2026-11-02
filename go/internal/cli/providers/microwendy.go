@@ -716,11 +716,9 @@ func (p *MicroWendyProvider) Run(ctx context.Context, app *BuiltApp, detach bool
 	// a post-reboot connection that this defer must close instead.
 	defer func() { client.Close() }()
 
-	if bc.AppType == liteclient.AppTypeWasm {
-		if err := client.StopApp(); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: app stop: %v\n", err)
-		}
-	}
+	// For WASM, PushBegin stops execution without unloading the old instance.
+	// An explicit StopApp here would prevent firmware from retaining its linear
+	// memory mapping when StartApp installs the replacement.
 
 	if detach {
 		if err := client.PushApp(bc.AppPath, bc.AppType, nil); err != nil {

@@ -82,6 +82,24 @@ Remote browsers receive a Wendy Net service address and port 18080 in this examp
 Use those returned values to connect; do not substitute the publisher's container
 or management address.
 
+### Applications that put endpoints in TXT
+
+Wendy preserves application TXT values. It does not rewrite IP addresses, URLs,
+or extra service ports embedded in them. A client that prefers a TXT address
+over the resolved DNS address can dial the publisher's private container subnet
+instead of its Wendy Net address. Use resolved addresses for mesh connections.
+Private container addresses can be identical on different devices.
+
+If a protocol encodes extra ports in TXT, declare each required incoming port
+and keep the published and container port numbers equal unless the application
+can advertise the translated values. An SRV mapping does not authorize those
+additional ports automatically. See the
+[NVIDIA PAIR example](/docs/guides/nvidia-pair) for this pattern.
+
+Do not add a UDP 5353 port mapping to forward multicast between devices. The
+agent observes app mDNS on its private bridge and projects service records;
+it does not flood raw multicast across the mesh.
+
 ## 3. Browse from a second app
 
 Give the client a private Wendy Net network too. It can omit incoming ports if
@@ -167,6 +185,9 @@ and they are not relayed onward across the net.
 Access is limited to the advertised endpoint and port; discovering one service
 does not give an app unrestricted LAN access. Names are discovery labels rather
 than authentication. Use the service's own authentication where it needs it.
+Extra endpoints encoded only in TXT do not receive LAN access grants. Protocols
+that require them need separate eligible service advertisements or a deployment
+where the peer participates as a Wendy Net app with all required ports published.
 
 ## Choose the right grants
 

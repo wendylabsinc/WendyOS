@@ -126,6 +126,12 @@ that other devices may access. See the
 [network configuration reference](/docs/advanced/apps/wendy.json#network).
 Device connectivity alone does not publish every app port.
 
+Apps with their own mDNS library keep using it on their private interface.
+The agent carries service records across Wendy Net and projects them for peer
+apps. Applications that depend on Avahi's D-Bus API can request a private
+`avahi` service. For an existing application adapted to mesh discovery, see
+[NVIDIA PAIR](/docs/guides/nvidia-pair).
+
 Ordinary Wendy Net apps do not need direct Bluetooth or Wi-Fi Aware control
 entitlements; the agent manages those connections. Grant direct radio access
 only to applications that manage the hardware themselves.
