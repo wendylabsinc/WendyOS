@@ -24,10 +24,8 @@ type TLSDatagramFlow struct {
 	endpoint    *udpmessage.Endpoint
 	maximum     uint16
 	readMu      udpReceiveLock
-	writeMu     sync.Mutex
 	done        chan struct{}
-	failed      chan struct{}
-	failOnce    sync.Once
+	failed      <-chan struct{}
 	cleanup     sync.Once
 	ownsManager bool
 	header      [2]byte
@@ -96,7 +94,7 @@ func DialUDPTLS(ctx context.Context, credentials *localmesh.Credentials, peer me
 			return nil, err
 		}
 	}
-	f := &TLSDatagramFlow{conn: conn, endpoint: endpoint, maximum: maximum, done: make(chan struct{}), failed: make(chan struct{}), ownsManager: owns}
+	f := &TLSDatagramFlow{conn: conn, endpoint: endpoint, maximum: maximum, done: make(chan struct{}), ownsManager: owns}
 	finish := func() {
 		f.cleanup.Do(func() {
 			endpoint.Close()
@@ -110,25 +108,16 @@ func DialUDPTLS(ctx context.Context, credentials *localmesh.Credentials, peer me
 		finish()
 		return nil, net.ErrClosed
 	}
-	// Account for the bounded partial receive buffer before reading frames.
-	if err := endpoint.ReserveSocketBytes(int(maximum) + 2); err != nil {
+	// Account for one partial receive frame and two bounded transmit frames:
+	// one being written and one waiting for the stream writer.
+	if err := endpoint.ReserveSocketBytes(3 * (int(maximum) + 2)); err != nil {
 		conn.Close()
 		return nil, err
 	}
 	// Preserve the endpoint's existing source guard. TLS writes complete
 	// messages directly, so this transport needs no unreliable reassembly.
-	if err := endpoint.SetTransport(MaxUDPTransportChunk, true, func(b []byte) error {
-		select {
-		case <-f.failed:
-			return net.ErrClosed
-		default:
-		}
-		err := writeTLSUDPFrame(conn, &f.writeMu, b, maximum)
-		if err != nil {
-			f.failOnce.Do(func() { close(f.failed) })
-		}
-		return err
-	}); err != nil {
+	f.failed, err = attachTLSUDPTransport(conn, endpoint, maximum)
+	if err != nil {
 		conn.Close()
 		return nil, err
 	}
@@ -142,6 +131,55 @@ func DialUDPTLS(ctx context.Context, credentials *localmesh.Credentials, peer me
 		f.Close()
 	}()
 	return f, nil
+}
+
+// Queue admission must not write to the ordered stream: the UDP manager and
+// source authorization guard are shared with unrelated application flows. As
+// with QUIC's bounded transport queue, ownership is checked when bytes enter
+// this queue; endpoint retirement closes the connection and drops queued data.
+func attachTLSUDPTransport(conn net.Conn, endpoint *udpmessage.Endpoint, maximum uint16) (<-chan struct{}, error) {
+	failed := make(chan struct{})
+	pending := make(chan []byte, 1)
+	err := endpoint.SetTransport(MaxUDPTransportChunk, true, func(b []byte) error {
+		select {
+		case <-failed:
+			return net.ErrClosed
+		case <-endpoint.Done():
+			return net.ErrClosed
+		default:
+		}
+		select {
+		case pending <- b:
+			// The immutable message remains owned by this bounded transport
+			// queue after the manager releases its outgoing reservation.
+			return nil
+		default:
+			return udpmessage.ErrQueueFull
+		}
+	})
+	if err != nil {
+		return nil, err
+	}
+	go func() {
+		var writeMu sync.Mutex
+		for {
+			select {
+			case <-endpoint.Done():
+				return
+			case b := <-pending:
+				select {
+				case <-endpoint.Done():
+					return
+				default:
+				}
+				if err := writeTLSUDPFrame(conn, &writeMu, b, maximum); err != nil {
+					close(failed)
+					return
+				}
+			}
+		}
+	}()
+	return failed, nil
 }
 
 func (f *TLSDatagramFlow) Maximum() int          { return int(f.maximum) }
@@ -327,7 +365,14 @@ func (s *Server) serveTLSDatagrams(ctx context.Context, secure *tlsRecordConn, p
 		return
 	}
 	socketBytes, err := localUDPBuffers(local)
-	if err != nil || endpoint.ReserveSocketBytes(socketBytes+2*int(maximum)+4) != nil {
+	if err != nil || endpoint.ReserveSocketBytes(socketBytes+4*(int(maximum)+2)) != nil {
+		_ = ack(3)
+		return
+	}
+	// Reply admission uses the same bounded ordered writer as the client.
+	// Never hold the app registry's admission lock across a stream write.
+	failed, err := attachTLSUDPTransport(secure, endpoint, maximum)
+	if err != nil {
 		_ = ack(3)
 		return
 	}
@@ -374,7 +419,6 @@ func (s *Server) serveTLSDatagrams(ctx context.Context, secure *tlsRecordConn, p
 	}()
 	go func() {
 		buf := make([]byte, int(maximum)+1)
-		var writeMu sync.Mutex
 		for {
 			_ = local.SetReadDeadline(time.Now().Add(udpIdleTimeout))
 			n, _, flags, _, err := local.ReadMsgUDP(buf, nil)
@@ -385,13 +429,24 @@ func (s *Server) serveTLSDatagrams(ctx context.Context, secure *tlsRecordConn, p
 			if n > int(maximum) || udpReadTruncated(flags) {
 				continue
 			}
-			if err := guard(func() error { return writeTLSUDPFrame(secure, &writeMu, buf[:n], maximum) }); err != nil {
+			if err := endpoint.Send(buf[:n]); err != nil {
+				if errors.Is(err, udpmessage.ErrCapacity) {
+					continue
+				}
 				result <- err
 				return
 			}
 		}
 	}()
-	<-result
+	// A terminal ordered-write error must release both receive workers.
+	select {
+	case <-result:
+	case <-failed:
+		// Both receive workers still need to be joined below.
+		secure.Close()
+		local.Close()
+		<-result
+	}
 	secure.Close()
 	local.Close()
 	<-result

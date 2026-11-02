@@ -7,9 +7,12 @@ role; its persistent installation identity supplies its own 5680 mesh address.
 It is not represented as a synthetic enrolled device or a delegated observer.
 
 The existing direct device TLS broker remains available independently. Its
-parent-process lease and five-minute default idle policy are unchanged. A full
-operator router stays enabled after the last command closes, so peers can still
-use it as a transit hop. Explicit disconnect cancels and joins that participant.
+parent-process lease and five-minute default idle policy are unchanged.
+An explicitly enabled operator router stays running after the last command
+closes, so peers can still use it as a transit hop. An automatic router started
+by discovery can expire after five minutes without command activity or recent
+transit; explicit connect retains it until disconnect or credential invalidation.
+Explicit disconnect cancels and joins that participant.
 The non-secret recipe and installation state remain in the selected persistent
 profile; later explicit preparation can rejoin. Observational reads never start
 or enable a context. Credential replacement drains the old owner before rejoin.
