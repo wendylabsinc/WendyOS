@@ -206,6 +206,9 @@ func serveGatewayLease(ctx context.Context, creds *localmesh.Credentials, backen
 	defer cancel()
 	bounded := newControlExpiryConn(conn, expiry, creds, conn.ConnectionState(), peer, cancel)
 	defer bounded.Close()
+	if err := bounded.checkValidity(); err != nil {
+		return nil
+	}
 	expire := context.AfterFunc(sessionCtx, func() { raw.Close() })
 	defer expire()
 	grantCtx, cancelGrant := context.WithTimeout(sessionCtx, leaseReplyTimeout)
@@ -309,9 +312,14 @@ func dialGatewayLease(ctx context.Context, creds *localmesh.Credentials, gateway
 // It must send heartbeat byte 1 every ten seconds, read the same-byte reply,
 // and withdraw borrowed routes immediately if that exchange fails.
 func negotiateGatewayLease(ctx context.Context, creds *localmesh.Credentials, gateway meshid.Device, raw net.Conn) (conn net.Conn, lease tunnelLease, err error) {
+	var bounded *expiryConn
 	defer func() {
 		if err != nil {
-			raw.Close()
+			if bounded != nil {
+				_ = bounded.Close()
+			} else {
+				_ = raw.Close()
+			}
 		}
 	}()
 	cancelDial := context.AfterFunc(ctx, func() { raw.Close() })
@@ -333,7 +341,8 @@ func negotiateGatewayLease(ctx context.Context, creds *localmesh.Credentials, ga
 	if err != nil {
 		return nil, lease, err
 	}
-	conn = newControlExpiryConn(secure, expiry, creds, secure.ConnectionState(), peer, nil)
+	bounded = newControlExpiryConn(secure, expiry, creds, secure.ConnectionState(), peer, nil)
+	conn = bounded
 	// TLS 1.3 finishes here before the gateway has received this client's
 	// certificate flight. Over a radio that upload, the grant and the reply
 	// share the remaining dial budget rather than a fixed LAN-sized bound.

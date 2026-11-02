@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/url"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -23,11 +24,12 @@ type controlPolicyClock struct {
 	offset    time.Duration
 	floor     time.Time
 	uncertain bool
+	calls     atomic.Int64
 }
 
 func (c *controlPolicyClock) policy() certs.CertificateTimePolicy {
 	return certs.CertificateTimePolicy{
-		Now:       func() time.Time { c.mu.Lock(); defer c.mu.Unlock(); return time.Now().Add(c.offset) },
+		Now:       func() time.Time { c.calls.Add(1); c.mu.Lock(); defer c.mu.Unlock(); return time.Now().Add(c.offset) },
 		Floor:     func() time.Time { c.mu.Lock(); defer c.mu.Unlock(); return c.floor },
 		Uncertain: func() bool { c.mu.Lock(); defer c.mu.Unlock(); return c.uncertain },
 	}

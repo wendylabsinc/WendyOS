@@ -3,9 +3,11 @@ package meshsharing
 import (
 	"context"
 	"crypto/ecdsa"
+	"crypto/tls"
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
+	"net"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -193,5 +195,66 @@ func TestPolicyControlServerGrantCanceledByOwnExpiry(t *testing.T) {
 	}
 	if len(backend.granted) != 0 {
 		t.Fatal("expired policy installed a grant")
+	}
+}
+
+func TestPolicyControlFailedNegotiationJoinsWatcher(t *testing.T) {
+	for _, failure := range []string{"invalid reply", "cancel before handoff"} {
+		t.Run(failure, func(t *testing.T) {
+			now := time.Now().Truncate(time.Second)
+			clock := &controlPolicyClock{floor: now, uncertain: true}
+			client, gateway := policyControlPair(t, clock, now.Add(-time.Hour), now.Add(time.Hour), now.Add(-time.Hour), now.Add(time.Hour))
+			ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+			defer cancel()
+			var serverDone <-chan error
+			var raw net.Conn
+			var stopServer context.CancelFunc
+			if failure == "invalid reply" {
+				left, right := net.Pipe()
+				raw = left
+				t.Cleanup(func() { left.Close(); right.Close() })
+				done := make(chan error, 1)
+				serverDone = done
+				go func() {
+					secure := tls.Server(right, controlTLS(gateway))
+					if err := secure.HandshakeContext(ctx); err != nil {
+						done <- err
+						return
+					}
+					_, err := secure.Write([]byte{0, 0, 0})
+					right.Close()
+					done <- err
+				}()
+			} else {
+				backend := newControlBackend()
+				backend.grantDelay = time.Hour
+				stopServer, raw, serverDone = controlPipe(t, gateway, client, backend, client.Device)
+				defer stopServer()
+				go func() {
+					limit := time.Now().Add(2 * time.Second)
+					for backend.grants.Load() == 0 && time.Now().Before(limit) {
+						time.Sleep(time.Millisecond)
+					}
+					cancel()
+				}()
+			}
+			conn, _, err := negotiateGatewayLease(ctx, client, gateway.Device, raw)
+			if conn != nil || err == nil {
+				t.Fatalf("%s unexpectedly handed off lease: %v", failure, err)
+			}
+			if stopServer != nil {
+				stopServer()
+			}
+			select {
+			case <-serverDone:
+			case <-time.After(2 * time.Second):
+				t.Fatal("server worker did not finish")
+			}
+			before := clock.calls.Load()
+			time.Sleep(1200 * time.Millisecond)
+			if after := clock.calls.Load(); after != before {
+				t.Fatalf("policy watcher survived failed negotiation: calls %d -> %d", before, after)
+			}
+		})
 	}
 }
