@@ -340,11 +340,13 @@ func TestRunUnsupportedRoleWaitsForChangedAdvertisement(t *testing.T) {
 	wait(t, done)
 }
 
-func TestRunCableReplacesLANWhenAllConnectionSlotsAreFull(t *testing.T) {
+func TestRunCableWaitsForNaturalSlotWhenAllConnectionSlotsAreFull(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	updates := make(chan []Candidate, 2)
 	entered := make(chan Candidate, 8)
+	release := make(chan struct{})
+	retired := make(chan string, 8)
 	done := make(chan error, 1)
 	var mu sync.Mutex
 	running, peak := 0, 0
@@ -356,8 +358,21 @@ func TestRunCableReplacesLANWhenAllConnectionSlotsAreFull(t *testing.T) {
 		}
 		mu.Unlock()
 		c.Authenticated(c.Device)
-		entered <- c
-		<-ctx.Done()
+		select {
+		case entered <- c:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+		if c.Address == "192.0.2.2:43024" {
+			select {
+			case <-ctx.Done():
+				retired <- c.Address
+			case <-release:
+			}
+		} else {
+			<-ctx.Done()
+			retired <- c.Address
+		}
 		mu.Lock()
 		running--
 		mu.Unlock()
@@ -371,6 +386,15 @@ func TestRunCableReplacesLANWhenAllConnectionSlotsAreFull(t *testing.T) {
 	wait(t, entered)
 	cable := Candidate{Device: testDevice(4), Transport: TCP, Address: "[fe80::5741:1%en77]:43024", Cost: 64}
 	updates <- append(lan, cable)
+	select {
+	case got := <-entered:
+		t.Fatalf("candidate dialed before a slot was free: %+v", got)
+	case got := <-retired:
+		t.Fatalf("healthy carrier retired for an unverified cable: %s", got)
+	case <-time.After(40 * time.Millisecond):
+	}
+	updates <- []Candidate{lan[1], cable}
+	close(release)
 	if got := wait(t, entered); got.Address != cable.Address {
 		t.Fatalf("cable was starved: %+v", got)
 	}
@@ -380,5 +404,94 @@ func TestRunCableReplacesLANWhenAllConnectionSlotsAreFull(t *testing.T) {
 	defer mu.Unlock()
 	if peak > cfg.Limits.Connections || running != 0 {
 		t.Fatalf("connection bound or drain failed: peak=%d running=%d", peak, running)
+	}
+}
+
+func TestRunUnverifiedCandidateNeverRetiresHealthyCarrierAtCapacity(t *testing.T) {
+	for _, blockedBy := range []string{"physical", "ble", "attempt"} {
+		t.Run(blockedBy, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			updates := make(chan []Candidate, 4)
+			entered := make(chan Candidate, 8)
+			retired := make(chan string, 8)
+			release := make(chan struct{})
+			done := make(chan error, 1)
+			a := Candidate{Transport: TCP, Address: netAddress(2), Device: testDevice(2), Cost: 128}
+			b := Candidate{Transport: TCP, Address: netAddress(3), Device: testDevice(3), Cost: 128}
+			cheap := Candidate{Transport: BLE, Address: "unsupported-role", PSM: 129, Cost: 64}
+			cfg := testConfig(func(ctx context.Context, c Candidate) error {
+				if c.Address == cheap.Address {
+					select {
+					case entered <- c:
+					case <-ctx.Done():
+						return ctx.Err()
+					}
+					return ErrUnsupportedPeer
+				}
+				if blockedBy != "attempt" || c.Address != b.Address {
+					c.Authenticated(c.Device)
+				}
+				select {
+				case entered <- c:
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+				if c.Address == a.Address {
+					select {
+					case <-ctx.Done():
+						retired <- c.Address
+					case <-release:
+					}
+				} else {
+					<-ctx.Done()
+					retired <- c.Address
+				}
+				return ctx.Err()
+			}, sourceChannel(updates))
+			cfg.Limits.Connections = 2
+			if blockedBy == "ble" {
+				b.Transport = BLE
+				b.Address = "healthy-ble"
+				b.PSM = 129
+				b.Cost = 64
+				cfg.Limits.BLEConnections = 1
+			}
+			if blockedBy == "attempt" {
+				cfg.Limits.Attempts = 1
+			}
+			go func() { done <- Run(ctx, cfg) }()
+			// Start the healthy carrier before the pending-only attempt fixture.
+			updates <- []Candidate{a}
+			wait(t, entered)
+			updates <- []Candidate{a, b}
+			wait(t, entered)
+			updates <- []Candidate{a, b, cheap}
+			select {
+			case c := <-entered:
+				t.Fatalf("blocked candidate dialed: %+v", c)
+			case address := <-retired:
+				t.Fatalf("healthy carrier canceled before candidate authentication: %s", address)
+			case <-time.After(40 * time.Millisecond):
+			}
+			if blockedBy == "physical" {
+				// The candidate gets its bounded probe after a natural slot, and its role
+				// mismatch must leave the other healthy carrier running.
+				updates <- []Candidate{b, cheap}
+				close(release)
+				if c := wait(t, entered); c.Address != cheap.Address {
+					t.Fatalf("cheaper probe not admitted after natural release: %+v", c)
+				}
+				select {
+				case address := <-retired:
+					t.Fatalf("unsupported candidate canceled healthy carrier: %s", address)
+				case <-time.After(20 * time.Millisecond):
+				}
+			}
+			cancel()
+			if !errors.Is(wait(t, done), context.Canceled) {
+				t.Fatal("lost cancellation")
+			}
+		})
 	}
 }
