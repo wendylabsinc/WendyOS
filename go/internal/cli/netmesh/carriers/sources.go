@@ -19,7 +19,7 @@ const quicService = "_wendy-net._udp"
 var browseMDNS = discovery.BrowseMDNSServicesContinuous
 
 func defaultSources(cfg Config) []Source {
-	sources := []Source{lanSource(cfg.Credentials.Device, TCP), lanSource(cfg.Credentials.Device, QUIC)}
+	sources := []Source{usbSource(), lanSource(cfg.Credentials.Device, TCP), lanSource(cfg.Credentials.Device, QUIC)}
 	if source := nativeBLESource(cfg.Credentials.Device); source != nil {
 		sources = append(sources, source)
 	}
@@ -40,9 +40,11 @@ func lanCandidates(services []discovery.MDNSService, self meshid.Device, transpo
 		if s.Port < 1 || s.Port > 65535 || s.TXTRecords["version"] != "1" || s.TXTRecords["protocol"] != protocol || s.TXTRecords["mesh"] != meshdiscovery.DefaultHint(self.Tenant()).String() {
 			continue
 		}
-		// Lite device carriers do not implement the primary operator-router
-		// role. They remain reachable through an authenticated WendyOS hop.
-		if role := s.TXTRecords["role"]; role != "router" || s.TXTRecords["platform"] != "WendyOS" {
+		// Untrusted hints select full routers only. TLS still authenticates
+		// the exact tenant/device and negotiates the operator-router role.
+		platform, role := s.TXTRecords["platform"], s.TXTRecords["role"]
+		if !((platform == "WendyOS" && role == "router") ||
+			(platform == "Lite" && role == "embedded-router" && s.TXTRecords["operator_router"] == "1")) {
 			continue
 		}
 		peer, err := meshid.PeerFromPrincipal(s.TXTRecords["principal"])
