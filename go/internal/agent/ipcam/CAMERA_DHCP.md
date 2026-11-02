@@ -1,6 +1,22 @@
 # Direct camera DHCP opt-in
 
-Camera DHCP is disabled by default. Operators configure it through the CLI:
+On upgrade, if no camera DHCP configuration exists, the agent makes a one-time
+permission file from saved cameras with a valid interface name and an address in
+its exact historical lease pool, `10.98.n.50` through `10.98.n.149`. This includes
+old records without `dhcpServed` and cameras left unreachable by intermediate
+agents that required opt-in; no recent sighting or DHCP exchange is needed.
+The usual wired-port, address-conflict, and competing-server checks still apply.
+
+An existing permission file always wins, including an empty file left by disabling
+the last port through the CLI. Migration also writes an empty file when there are
+no candidates, so later discoveries do not grant permission on a future restart.
+A registry read or configuration write failure is reported and leaves migration
+available to retry. The completed file uses the same durable storage as CLI
+settings, so disabling a migrated port stays disabled across agent restarts and
+OS updates.
+
+New installations have camera DHCP disabled by default. Operators configure it
+through the CLI:
 
 ```sh
 wendy device camera dhcp status

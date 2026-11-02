@@ -1148,11 +1148,14 @@ func NewVideoService(ctx context.Context, logger *zap.Logger, pool *rtps.Pool, r
 	return svc
 }
 
-// LoadCameraDHCPAllowlist enables camera DHCP only on explicitly configured
-// interfaces. A missing allowlist leaves serving disabled while camera
-// discovery and probing continue normally. It is reread every link scan.
+// LoadCameraDHCPAllowlist loads saved permissions, migrating legacy camera links
+// once if no configuration exists. The resulting file, even when empty, is
+// authoritative and is reread every link scan. Call before StartDiscovery.
 func (s *VideoService) LoadCameraDHCPAllowlist(path string) error {
-	return s.links.LoadDHCPAllowlist(path)
+	if err := s.links.LoadDHCPAllowlist(path); err != nil {
+		return err
+	}
+	return s.links.MigrateLegacyDHCPAllowlist()
 }
 
 // discoveryInterval is how often the agent re-probes for network cameras. It is
