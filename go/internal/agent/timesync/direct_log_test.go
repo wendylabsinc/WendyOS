@@ -1,6 +1,8 @@
 package timesync
 
 import (
+	"context"
+	"github.com/wendylabsinc/wendy/go/internal/shared/asyncdiag"
 	"testing"
 	"time"
 
@@ -22,6 +24,11 @@ func TestRunDirectNoopApplyDoesNotClaimClockSynchronized(t *testing.T) {
 	h := newDirectHarness(1, directResult{consensus: c})
 	h.manager.logger = zap.New(core)
 	h.run(t)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := asyncdiag.Flush(ctx); err != nil {
+		t.Fatal(err)
+	}
 	if logs.FilterMessage("timesync: synced via Roughtime").Len() != 0 {
 		t.Fatal("query/no-op writer was logged as a successful clock synchronization")
 	}

@@ -1,7 +1,9 @@
 package timesync
 
 import (
+	"context"
 	"errors"
+	"github.com/wendylabsinc/wendy/go/internal/shared/asyncdiag"
 	"testing"
 	"time"
 
@@ -78,6 +80,11 @@ func TestDirectObservationDistinguishesApplyFromVerifiedUTC(t *testing.T) {
 			if len(o.Paths) != 2 || o.Paths[0].LocalAddress != "10.88.0.1:1001" || o.Paths[1].Server != "two" {
 				t.Fatal("included socket path evidence lost", o.Paths)
 			}
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			if err := asyncdiag.Flush(ctx); err != nil {
+				t.Fatal(err)
+			}
+			cancel()
 			complete := logs.FilterMessage("timesync: direct Roughtime apply complete").All()
 			if len(complete) != 1 || complete[0].ContextMap()["outcome"] != test.outcome || complete[0].ContextMap()["utc_within_verified_interval"] != test.within {
 				t.Fatal("apply log claimed wrong result", complete)
