@@ -121,6 +121,10 @@ type Neighbour struct {
 	Link      LinkID
 	Cost      uint16
 	Reachable bool
+	// LivenessExpired reports an elapsed Hello or IHU hold. It is local
+	// snapshot metadata, independent of route authorization and a peer's
+	// explicit Infinity IHU. New, unconfirmed links may also have expired holds.
+	LivenessExpired bool
 }
 type Snapshot struct {
 	Now                                  time.Duration
