@@ -1,6 +1,8 @@
 # WendyOS Networking Overview
 
-WendyOS provides a self-contained networking stack designed for USB-tethered connectivity between a device (Raspberry Pi, Jetson, or other supported hardware) and a host computer. When you plug a WendyOS device into a host via USB-C, the device presents a composite USB gadget that includes both a network interface and a serial console. No drivers, no pairing — the device advertises itself over mDNS and the wendy-agent can discover and connect to it immediately. On Linux hosts, `wendy discover` offers to configure the USB-C link the first time it finds the device.
+WendyOS provides a self-contained networking stack designed for USB-tethered connectivity between a device (Raspberry Pi, Jetson, Dragonwing, or other supported hardware) and a host computer. When you connect a WendyOS device to a host over USB, the device presents a composite USB gadget that includes both a network interface and a serial console. No drivers, no pairing — the device advertises itself over mDNS and the wendy-agent can discover and connect to it immediately. On Linux hosts, `wendy discover` offers to configure the USB link the first time it finds the device.
+
+On the Dragonwing IQ8, use USB2 (micro-USB) for this connection after WendyOS boots. USB0 (USB-C) is reserved for EDL/recovery flashing. The port assignment is the same with the stock Qualcomm or a replacement Intel M.2 card.
 
 ## Architecture
 
@@ -54,6 +56,7 @@ WendyOS runs on multiple hardware platforms. Networking behaviour is identical a
 |---|---|---|
 | Raspberry Pi 5 | `dwc2` | USB 2.0 |
 | Jetson AGX Orin / Orin Nano | `tegra-xudc` | USB 3.2 |
+| Dragonwing IQ8 | `a400000.usb` | USB 2.0 |
 | Other Linux (generic) | Detected at runtime | USB 2.0 fallback |
 
 The virtual machine boards (`vm-arm64-wendyos`, `vm-x86-64-wendyos`) do not use USB NCM gadget networking. They emulate a standard virtio network device instead.

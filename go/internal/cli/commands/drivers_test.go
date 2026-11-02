@@ -98,14 +98,17 @@ func TestDriverInstalledFor(t *testing.T) {
 	}
 }
 
-// An unenrolled device answers Unimplemented because the driver service is
-// mTLS-only, so the CLI's generic "update the agent" hint would misdirect.
+// Unsupported agents should point to the platform and agent requirements,
+// without directing users to enroll their device.
 func TestDriverServiceErr(t *testing.T) {
 	got := driverServiceErr(status.Error(codes.Unimplemented, "unknown service"))
-	for _, want := range []string{"enrolled device", "wendy device enroll"} {
+	for _, want := range []string{"Linux", "update the device's agent", "without enrollment"} {
 		if !strings.Contains(got.Error(), want) {
 			t.Errorf("message %q missing %q", got, want)
 		}
+	}
+	if strings.Contains(got.Error(), "wendy device enroll") {
+		t.Errorf("message %q should not require enrollment", got)
 	}
 	// Every other failure has to reach the user unchanged.
 	orig := status.Error(codes.Unavailable, "device is offline")
