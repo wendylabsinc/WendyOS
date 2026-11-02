@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"net"
 	"sync"
+	"time"
 	"unsafe"
 )
 
@@ -158,9 +159,30 @@ func (c *Connection) L2CAPSend(data []byte) error {
 	}
 	cData := (*C.uint8_t)(unsafe.Pointer(&data[0]))
 	err := C.wendy_ble_l2cap_send(c.handle, cData, C.int(len(data)))
+	if err == C.WENDY_BLE_ERR_TIMEOUT {
+		return &timeoutErr{}
+	}
 	if err != C.WENDY_BLE_OK {
 		return bleError(err, "sending L2CAP data")
 	}
+	return nil
+}
+
+// SetL2CAPWriteDeadline updates both a pending native send and subsequent sends.
+// Close keeps the native handle alive while this call holds ioMu.
+func (c *Connection) SetL2CAPWriteDeadline(t time.Time) error {
+	c.ioMu.RLock()
+	defer c.ioMu.RUnlock()
+	if c.handle == nil {
+		return net.ErrClosed
+	}
+	var enabled C.int
+	var remaining C.double
+	if !t.IsZero() {
+		enabled = 1
+		remaining = C.double(time.Until(t).Seconds())
+	}
+	C.wendy_ble_l2cap_set_write_deadline(c.handle, remaining, enabled)
 	return nil
 }
 
