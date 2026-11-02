@@ -12,6 +12,8 @@ Coverage distinguishes source files and bytes from excluded output. Upstream sou
 
 Generated-only changes make no model call. Security preserves prior findings and enforces earlier blockers. API review records `skipped` and preserves prior decisions, acceptance and risk labels without publishing a replacement checklist. Docs and integration-test review preserve prior comments and still fail for an existing blocker. This policy activates from trusted base automation. Swift E2E analysis has a separate review path and still requires integration.
 
+GitHub-managed Copilot review is guided by `.github/copilot-instructions.md`, separately from workflow input filtering. [GitHub supports these repository instructions](https://docs.github.com/en/copilot/how-tos/copilot-on-github/customize-copilot/add-custom-instructions/add-repository-instructions) and reads them from the PR head when custom instructions are enabled. They are prompt guidance, not an enforced payload filter or proof of adoption. The repository setting has not been verified or changed, and no Copilot review is requested by this change. [Copilot content exclusions](https://github.blog/changelog/2026-06-12-copilot-code-review-new-configurations-and-controls/) require separate administrator configuration; no such exclusion is established here.
+
 ### Integration Test Review (`.github/workflows/integration-test-review.yml`)
 
 The diff is read from immutable base/head Git commits after checking PR metadata. Existing test context is read as data from the event head. The source-only diff has a 30,000-byte limit; exceeding it fails before a partial model call. Generated output is filtered before the diff, file lists or context are sent to the model.
