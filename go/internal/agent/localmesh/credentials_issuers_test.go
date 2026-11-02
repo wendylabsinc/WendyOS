@@ -1,6 +1,7 @@
 package localmesh
 
 import (
+	"bytes"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -164,5 +165,80 @@ func TestSharedIntermediatesWithRootOnlyTrust(t *testing.T) {
 		if err != nil || identity.Device != pair[0].Device {
 			t.Fatalf("known intermediates were not used as path candidates: %v %v", identity, err)
 		}
+	}
+}
+
+// Reissuing one CA key leaves multiple valid DER versions in the bounded cache.
+// A complete, valid presentation must not grow past the identity bundle limit.
+func TestTLSIssuerRenewalsDoNotPadCompletePresentation(t *testing.T) {
+	root := mintIssued(t, "root", "", nil)
+	issuer := mintIssued(t, "issuer", "", &root)
+	ownIssuer := mintIssued(t, "own issuer", "", &root)
+	own := mintIssued(t, "own", testPrincipal(testTenantUUID, testDeviceAID), &ownIssuer)
+	peer := mintIssued(t, "peer", testPrincipal(testTenantUUID, testDeviceBID), &issuer)
+	receiver := issuedCredentials(t, own, own.pem+ownIssuer.pem, root.pem)
+	for i := int64(1); i <= 20; i++ {
+		template := *issuer.cert
+		template.SerialNumber = big.NewInt(i + 100)
+		raw, err := x509.CreateCertificate(rand.Reader, &template, root.cert, &issuer.key.PublicKey, root.key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := receiver.Verify([][]byte{peer.cert.Raw, raw}, time.Now()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for name, chain := range map[string][][]byte{
+		"complete": {peer.cert.Raw, issuer.cert.Raw},
+		"omitted":  {peer.cert.Raw},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := receiver.VerifyTLS(chain, time.Now()); err != nil {
+				t.Fatalf("valid chain rejected after issuer renewals: %v", err)
+			}
+		})
+	}
+}
+
+// Cached issuer reissues must leave room for their omitted ancestors.
+func TestTLSIssuerRenewalsPreserveMissingGrandparent(t *testing.T) {
+	root := mintIssued(t, "root", "", nil)
+	top := mintIssued(t, "top", "", &root)
+	issuer := mintIssued(t, "issuer", "", &top)
+	ownIssuer := mintIssued(t, "own issuer", "", &root)
+	own := mintIssued(t, "own", testPrincipal(testTenantUUID, testDeviceAID), &ownIssuer)
+	peer := mintIssued(t, "peer", testPrincipal(testTenantUUID, testDeviceBID), &issuer)
+	receiver := issuedCredentials(t, own, own.pem+ownIssuer.pem, root.pem)
+	for i := int64(1); i <= 20; i++ {
+		template := *issuer.cert
+		template.SerialNumber = big.NewInt(i + 100)
+		raw, err := x509.CreateCertificate(rand.Reader, &template, top.cert, &issuer.key.PublicKey, top.key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := receiver.Verify([][]byte{peer.cert.Raw, raw, top.cert.Raw}, time.Now()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for name, chain := range map[string][][]byte{
+		"complete":            {peer.cert.Raw, issuer.cert.Raw, top.cert.Raw},
+		"issuer-omitted":      {peer.cert.Raw, top.cert.Raw},
+		"grandparent-omitted": {peer.cert.Raw, issuer.cert.Raw},
+		"all-issuers-omitted": {peer.cert.Raw},
+	} {
+		t.Run(name, func(t *testing.T) {
+			complete := receiver.knownIssuerCandidates(chain, time.Now())
+			if len(complete) > 16 {
+				t.Fatalf("completion produced %d certificates", len(complete))
+			}
+			for i, raw := range chain {
+				if !bytes.Equal(raw, complete[i]) {
+					t.Fatal("completion changed a supplied certificate")
+				}
+			}
+			if _, err := receiver.VerifyTLS(chain, time.Now()); err != nil {
+				t.Fatalf("valid cached chain rejected after renewals: %v", err)
+			}
+		})
 	}
 }

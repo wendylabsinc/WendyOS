@@ -11,6 +11,11 @@ import (
 const cachedIssuerLimit = 64
 const cachedIssuerBytes = 512 << 10
 
+// Local-mesh identity verifiers accept at most 16 certificates, including the
+// leaf. Cache completion must not turn a valid presentation into an oversized
+// bundle merely because several reissued versions of one issuer are retained.
+const maxCandidateCertificates = 16
+
 // Certificates retains CA material as untrusted path candidates. It does not
 // add roots or replace the TLS caller's principal, time or certificate policy.
 type Certificates struct {
@@ -141,24 +146,50 @@ func (m *Certificates) Candidates(wire [][]byte, now time.Time) [][]byte {
 func (m *Certificates) candidatesFrom(wire [][]byte, available []*x509.Certificate) [][]byte {
 	result := append([][]byte(nil), wire...)
 	seen := make(map[Fingerprint]bool, len(wire)+len(available))
+	var supplied []*x509.Certificate
 	for _, raw := range wire {
 		seen[Hash(raw)] = true
+		if cert, err := x509.ParseCertificate(raw); err == nil {
+			supplied = append(supplied, cert)
+		}
 	}
-	for index := 0; index < len(result) && len(result) < 32; index++ {
-		child, err := x509.ParseCertificate(result[index])
-		if err != nil {
-			continue
+	// Finish each ancestor path before spending the remaining slots on other
+	// versions of its issuers. Breadth-first additions can fill the bundle with
+	// reissued intermediates and leave no room for their required grandparent.
+	// Visit supplied parents first so their omitted ancestors get the same
+	// priority. Every wire entry remains unchanged, including malformed entries.
+	expanded := make(map[Fingerprint]bool)
+	var expand func(*x509.Certificate)
+	expand = func(child *x509.Certificate) {
+		hash := Hash(child.Raw)
+		if expanded[hash] || len(result) >= maxCandidateCertificates {
+			return
+		}
+		expanded[hash] = true
+		for _, parent := range supplied {
+			if issuerParent(child, parent) {
+				expand(parent)
+			}
 		}
 		for _, parent := range available {
+			if len(result) >= maxCandidateCertificates {
+				return
+			}
 			hash := Hash(parent.Raw)
 			if !seen[hash] && !m.anchors[hash] && issuerParent(child, parent) {
 				result = append(result, parent.Raw)
 				seen[hash] = true
-				if len(result) == 32 {
-					break
+				expand(parent)
+				if len(result) == maxCandidateCertificates {
+					return
 				}
 			}
 		}
+	}
+	// Fingerprint visitation and the output bound also bound recursive depth;
+	// availability is only a candidate hint, never a signature or trust decision.
+	for _, cert := range supplied {
+		expand(cert)
 	}
 	return result
 }

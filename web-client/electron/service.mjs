@@ -80,6 +80,7 @@ export class DesktopService {
     this.meshActive = new Set();
     this.meshControllers = new Set();
     this.meshReporterKeys = new Map();
+    this.meshReporterTargets = new Map();
     this.monitorLogs = new DeviceLogs({ cli: this.cli, env });
     this.monitorGeneration = 0;
   }
@@ -327,19 +328,35 @@ export class DesktopService {
     const request = new Promise((resolve, reject) => {
       entry = { reporter, generation, controller, resolve, reject, read: async () => {
         if (generation !== this.monitorGeneration) throw new Error("This local network view is no longer open.");
-        const address = target === "cli://local" ? target : await this.monitorTarget(target);
-        if (generation !== this.monitorGeneration) throw new Error("This local network view is no longer open.");
-        const remaining = expiresAt - Date.now();
-        if (remaining <= 0) throw new Error("The topology observation timed out while waiting for admission.");
-        const output = await this.run(this.cli,
-          ["device", "wendy-net", "topology", ...(target === "cli://local" ? ["--local-cli"] : ["--device", address]), "--json", "--observation"],
-          { timeout: target === "cli://local" ? Math.min(remaining, 5_000) : remaining, maxBuffer: 2 * 1024 * 1024, signal: controller.signal });
-        if (generation !== this.monitorGeneration) throw new Error("This local network view is no longer open.");
-        const observation = JSON.parse(output);
-        if (!observation || !["ok", "unsupported", "unavailable", "unauthorized", "error"].includes(observation.status) ||
-            (observation.status === "ok" && (!observation.topology || typeof observation.topology.selfPrincipal !== "string")))
-          throw new Error("The CLI returned an invalid local observation.");
-        return observation;
+        const aliases = this.meshReporterTargets.get(reporter) || [];
+        let failure;
+        // Keep one management session at a time, but do not let a busy USB or
+        // unreachable mesh path suppress a working enrolled Cloud alias.
+        for (const candidate of new Set([target, ...aliases])) {
+          if (generation !== this.monitorGeneration) throw new Error("This local network view is no longer open.");
+          try {
+            const address = candidate === "cli://local" ? candidate : await this.monitorTarget(candidate);
+            if (generation !== this.monitorGeneration) throw new Error("This local network view is no longer open.");
+            const remaining = expiresAt - Date.now();
+            if (remaining <= 0) throw new Error("The topology observation timed out while waiting for admission.");
+            const output = await this.run(this.cli,
+              ["device", "wendy-net", "topology", ...(candidate === "cli://local" ? ["--local-cli"] : ["--device", address]), "--json", "--observation"],
+              { timeout: candidate === "cli://local" ? Math.min(remaining, 5_000) : remaining, maxBuffer: 2 * 1024 * 1024, signal: controller.signal });
+            if (generation !== this.monitorGeneration) throw new Error("This local network view is no longer open.");
+            const observation = JSON.parse(output);
+            if (!observation || !["ok", "unsupported", "unavailable", "unauthorized", "error"].includes(observation.status) ||
+                (observation.status === "ok" && (!observation.topology || typeof observation.topology.selfPrincipal !== "string")))
+              throw new Error("The CLI returned an invalid local observation.");
+            if (!["unavailable", "error"].includes(observation.status)) return observation;
+            failure = observation;
+          } catch (error) {
+            if (generation !== this.monitorGeneration || controller.signal.aborted) throw error;
+            failure = error;
+          }
+          if (Date.now() >= expiresAt) break;
+        }
+        if (failure instanceof Error) throw failure;
+        return failure;
       }};
       entry.timer = setTimeout(() => {
         const index = this.meshQueue.indexOf(entry);
@@ -506,6 +523,11 @@ export class DesktopService {
     // a previous alias disappeared, including while a read is in flight.
     this.meshReporterKeys = retainPrevious
       ? new Map([...this.meshReporterKeys, ...reporterKeys]) : reporterKeys;
+    this.meshReporterTargets = new Map();
+    for (const [target, key] of this.meshReporterKeys) {
+      if (!this.meshReporterTargets.has(key)) this.meshReporterTargets.set(key, []);
+      this.meshReporterTargets.get(key).push(target);
+    }
     const reporters = [], seen = new Set();
     for (const [target, device] of devices) {
       const key = this.meshReporterKeys.get(target);
