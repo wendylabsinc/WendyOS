@@ -17,6 +17,7 @@ import (
 	"github.com/vishvananda/netlink"
 	"github.com/wendylabsinc/wendy/go/internal/agent/hostnetwork"
 	"github.com/wendylabsinc/wendy/go/internal/agent/localmesh"
+	"github.com/wendylabsinc/wendy/go/internal/shared/asyncdiag"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
 	"go.uber.org/zap"
 )
@@ -83,7 +84,7 @@ func (p *linuxTunnelPolicy) reportControlEnd(event controlEnd) {
 	if event.role == "gateway" {
 		fields = append(fields, zap.Uint64("heartbeats", event.heartbeats))
 	}
-	logger.Info("Wendy Net gateway control ended", fields...)
+	asyncdiag.Log(logger, zap.InfoLevel, "Wendy Net gateway control ended", fields...)
 }
 
 // Caller holds p.mu, so old and desired sharing inputs describe one decision.
@@ -97,7 +98,7 @@ func (p *linuxTunnelPolicy) reportSharingChange(reason, iface, upstream string, 
 		if reason == "reconfigure" || reason == "sharing-disabled" {
 			fields = append(fields, zap.Bool("routes_changed", routesChanged))
 		}
-		logger.Info("Wendy Net gateway sharing changed", fields...)
+		asyncdiag.Log(logger, zap.InfoLevel, "Wendy Net gateway sharing changed", fields...)
 	}
 }
 
