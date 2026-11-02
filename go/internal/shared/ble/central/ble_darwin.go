@@ -28,6 +28,11 @@ type Connection struct {
 
 // Connect establishes a BLE connection to the peripheral identified by its UUID.
 func Connect(peripheralUUID string, timeoutSeconds int) (*Connection, error) {
+	var err error
+	peripheralUUID, err = darwinPeripheralAddress(peripheralUUID)
+	if err != nil {
+		return nil, err
+	}
 	cUUID := C.CString(peripheralUUID)
 	defer C.free(unsafe.Pointer(cUUID))
 
