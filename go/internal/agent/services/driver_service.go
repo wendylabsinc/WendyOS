@@ -81,7 +81,7 @@ type DriverService struct {
 	mu sync.Mutex
 
 	// requireSignature makes an install fail closed when no signing key is
-	// embedded. Set for callers that are not already root-equivalent.
+	// embedded. Set for unattended config-partition seeding.
 	requireSignature bool
 
 	// Seams for tests.
@@ -121,7 +121,7 @@ func NewDriverService(logger *zap.Logger) *DriverService {
 // seed. That partition is unauthenticated storage — anyone who can write the
 // FAT32 filesystem gets a module loaded, with no operator in the loop — so this
 // path requires a real signature and fails closed while no key is embedded,
-// unlike the mTLS RPC whose caller is already root-equivalent.
+// unlike operator-initiated installs through the management RPC.
 func NewSeedDriverService(logger *zap.Logger) *DriverService {
 	s := NewDriverService(logger)
 	s.requireSignature = true
@@ -290,9 +290,12 @@ func (s *DriverService) finalize(ctx context.Context, spec DriverInstallSpec, tm
 		return false, fmt.Errorf("sha256 mismatch: expected %s, got %s", spec.SHA256, got)
 	}
 	// SECURITY: with no signing key embedded the verifier is a no-op, so sha256
-	// proves integrity but not origin. Accepted only for the mTLS RPC pre-GA (that
-	// caller already has a root shell on the same server); the unauthenticated
-	// seed sets requireSignature and is refused below.
+	// proves integrity but not origin. The RPC accepts that pre-GA on every
+	// listener serving it: the mTLS server and the admin socket, and before
+	// enrollment the unauthenticated setup listener, which already deploys
+	// privileged-equivalent containers (the build entitlement). The
+	// config-partition seed has no operator in the loop, so it sets
+	// requireSignature and is refused below.
 	if !s.verifier.Enabled() {
 		if s.requireSignature {
 			return false, fmt.Errorf("driver %q cannot be authenticated (no signing key embedded); refusing install from an unauthenticated source", spec.Name)

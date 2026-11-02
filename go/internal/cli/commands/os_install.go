@@ -75,11 +75,14 @@ func newOSInstallCmd() *cobra.Command {
 	var enrollCloudGRPC string
 	var prNumber int
 	var binaryPath string
+	var drivers []string
 
 	cmd := &cobra.Command{
 		Use:   "install [image] [drive]",
 		Short: "Install WendyOS or Wendy Lite firmware on a device",
 		Long: `Interactively select a supported device, download the latest OS image or firmware, and write it to the target.
+
+Connected devices in supported USB flashing modes are offered first.
 
 When called with positional arguments, skips interactive prompts:
   wendy os install <image-path> <drive-id> --force
@@ -105,6 +108,17 @@ Flags can be provided progressively — omitted values trigger interactive picke
 			}
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(drivers) > 0 {
+				if len(args) != 0 || deviceType == "" || deviceName == "" {
+					return usageErrorf("--driver requires --device-type and --device-name, and cannot be combined with positional image/drive arguments")
+				}
+				if err := validateDeviceName(deviceName); err != nil {
+					return err
+				}
+				if os.Getenv("WENDY_AGENT_SOCKET") != "" {
+					return usageErrorf("--driver must run on the host without WENDY_AGENT_SOCKET")
+				}
+			}
 			if rootfsOnly && len(args) > 0 {
 				return usageErrorf("--rootfs-only cannot be combined with positional [image] [drive] arguments")
 			}
@@ -153,7 +167,18 @@ Flags can be provided progressively — omitted values trigger interactive picke
 				}
 			}
 			rootfsOnlyExplicit := cmd.Flags().Changed("rootfs-only")
-			return runOSInstall(cmd.Context(), nightly, deviceType, versionFlag, driveFlag, force, yesOverwriteInternal, noBmap, rootfsOnly, rootfsOnlyExplicit, storageOverride, opts, deviceName, preEnrollOptions{mode: mode, cloudGRPC: enrollCloudGRPC}, prNumber, agent)
+			prepared, err := prepareOSInstallDrivers(cmd.Context(), deviceType, versionFlag, nightly, prNumber, drivers)
+			if err != nil {
+				return err
+			}
+			defer prepared.close()
+			if prepared != nil {
+				versionFlag = prepared.version
+			}
+			if err := runOSInstall(cmd.Context(), nightly, deviceType, versionFlag, driveFlag, force, yesOverwriteInternal, noBmap, rootfsOnly, rootfsOnlyExplicit, storageOverride, opts, deviceName, preEnrollOptions{mode: mode, cloudGRPC: enrollCloudGRPC}, prNumber, agent); err != nil {
+				return err
+			}
+			return prepared.installAfterBoot(cmd.Context(), deviceName)
 		},
 	}
 
@@ -175,6 +200,7 @@ Flags can be provided progressively — omitted values trigger interactive picke
 	cmd.Flags().StringVar(&enrollCloudGRPC, "cloud-grpc", "", "Cloud gRPC endpoint of the auth session to use for pre-enrollment (optional when a default is set via 'wendy auth use')")
 	cmd.Flags().IntVar(&prNumber, "pr", 0, "Install the image built by wendyos-builder PR #N (debug build; mutually exclusive with --nightly, --version, and positional [image] [drive])")
 	cmd.Flags().StringVar(&binaryPath, "binary", "", "Path to a local Linux ELF wendy-agent binary to install instead of downloading the latest release; must match the image architecture")
+	cmd.Flags().StringArrayVar(&drivers, "driver", nil, "Download a driver before flashing and upload it after first boot (repeatable; requires --device-type and --device-name)")
 	cmd.AddCommand(newOSInstallPlanCmd(), newOSInstallVerifyCmd(), newOSInstallJobsCmd())
 
 	return cmd
