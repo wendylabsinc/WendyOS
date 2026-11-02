@@ -20,7 +20,7 @@ The service-data key is the tenant UUID (128 bits). Its ten-byte payload is:
 
 Unknown capability bits are preserved but ignored for selection. The native PSM
 remains the carrier endpoint; it is never repurposed to mean busy. The encrypted
-time relay is a separate endpoint at reserved PSM130, advertised only while
+time relay is a separate endpoint at reserved PSM 130, advertised only while
 its existing bounded admission has room. A full node can
 advertise `02` while retaining time discovery; a node offering both advertises
 `03`. Native candidate selection requires bit0. This is advisory availability,
@@ -32,7 +32,7 @@ normalization/case folding occurs. The device prefix is a short hint, including
 valid zero prefixes. TLS still checks the complete principal and tenant.
 
 Flags (3 bytes), AD framing (2), service UUID (16), and payload (10) occupy
-exactly31 bytes. Linux emits only Service Data, without a local name or redundant
+exactly 31 bytes. Linux emits only Service Data, without a local name or redundant
 UUID-list field. Optional BlueZ TxPower config does not add a TX-power AD field.
 Version zero and the old unversioned format are intentionally unsupported.
 Discovery version is independent of the session ALPN version.
@@ -51,7 +51,7 @@ The receiver supports platforms that publish the tenant UUID plus a complete
 local name. There is currently **no production local-name sender** in this
 repository. Linux advertises binary Service Data. We retain the receive fallback
 without a second packed field layout: interpret the exact canonical ten binary
-bytes as one unsigned80-bit big-endian integer and encode it as exactly thirteen
+bytes as one unsigned 80-bit big-endian integer and encode it as exactly thirteen
 base94 digits, using ASCII `!`..`~`, most significant digit first. Preserve leading
 `!` characters. Decoding reconstructs the same ten bytes and applies the same
 version, capabilities, native PSM, network and device-hint semantics.
@@ -59,8 +59,7 @@ version, capabilities, native PSM, network and device-hint semantics.
 This deliberately replaces the old ten-character representation. Thirteen name
 characters fit in a legacy scan response; complete names may be correlated with
 the tenant UUID in the primary advertisement. `testdata/advertisement-v1.json`
-contains independent Python-produced binary and name vectors. No speculative
-65-bit capability packing or iOS sender implementation is introduced.
+contains independent Python-produced binary and name vectors.
 
 Apple controls placement of the name, including scan response placement and
 truncation. Ordinary background advertising omits the local name. The encoding
