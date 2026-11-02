@@ -9,7 +9,7 @@ import re
 import subprocess
 from typing import Any
 
-from review_diff import split_diff
+from review_diff import DiffBatch, split_diff
 
 DOCS_PREFIX = "go/internal/cli/assets/docs/"
 DOCS_BUDGET_BYTES = 120_000
@@ -17,6 +17,8 @@ MAX_DIFF_BYTES = 512_000
 # Conservative 200k context: reserve 8k output and a further 12k headroom.
 MAX_INPUT_TOKENS = 180_000
 MAX_OUTPUT_TOKENS = 8_000
+MAX_OUTPUT_SPLIT_DEPTH = 2
+MIN_RETRY_SOURCE_BYTES = 1_024
 MODEL = "claude-sonnet-4-6"
 PROTECTED = {"THREAT_MODEL.md", "threat-model.md"}
 FINDING_FIELDS = {"severity", "title", "path", "overview", "details"}
@@ -181,9 +183,60 @@ def _request(title: str, body: str, number: str, batch: str, docs: str,
             "messages": [{"role": "user", "content": content}]}
 
 
+def _response_diagnostic(message: Any) -> dict[str, Any]:
+    # Only fixed provider enums and integer counters leave this boundary. Never
+    # print response content, request bodies or provider exception text.
+    reason = getattr(message, "stop_reason", None)
+    known = {"end_turn", "max_tokens", "stop_sequence", "tool_use", "pause_turn", "refusal", "model_context_window_exceeded"}
+    if not isinstance(reason, str) or reason not in known:
+        reason = "unknown"
+    result = {"stop_reason": reason}
+    usage = getattr(message, "usage", None)
+    for key in ("input_tokens", "output_tokens"):
+        value = getattr(usage, key, None)
+        result[key] = value if type(value) is int and 0 <= value <= (1 << 63) - 1 else None
+    return result
+
+
+def _retry_children(diff: str, parent: DiffBatch) -> list[DiffBatch]:
+    """Bisect original source bytes, retaining real file/hunk context."""
+    raw = diff.encode("utf-8")
+    start, end = parent.source_start, parent.source_end
+    middle = start + (end - start) // 2
+    newline = raw.rfind(b"\n", start + (end - start) // 4, middle)
+    if newline >= 0:
+        middle = newline + 1
+    while middle > start and raw[middle] & 0xC0 == 0x80:
+        middle -= 1
+    if not start < middle < end:
+        raise ReviewError("Cannot split documentation source at a UTF-8 boundary")
+    children = []
+    for first, last in ((start, middle), (middle, end)):
+        prefix = raw[:first].decode("utf-8")
+        # Include the complete current line for metadata lookup: a child can
+        # begin exactly at a new file/hunk header or inside a long header.
+        line_end = raw.find(b"\n", first)
+        context_prefix = raw[:line_end + 1 if line_end >= 0 else len(raw)].decode("utf-8")
+        headers = list(re.finditer(r"^diff --git .*?$", context_prefix, re.MULTILINE))
+        header = headers[-1] if headers else None
+        file_prefix = context_prefix[header.start():] if header else ""
+        hunks = list(re.finditer(r"^@@ .*?$", file_prefix, re.MULTILINE))
+        line = prefix.count("\n")
+        column = first - (raw.rfind(b"\n", 0, first) + 1)
+        context = "Review retry fragment context (untrusted diff metadata): " + json.dumps({
+            "file_header": header.group() if header else "",
+            "hunk_header": hunks[-1].group() if hunks else "",
+            "source_start": first, "source_end": last,
+            "diff_line": line + 1, "line_byte_offset": column,
+        }, ensure_ascii=False, separators=(",", ":")) + "\n"
+        children.append(DiffBatch(raw[first:last].decode("utf-8"), first, last, line, column, context))
+    return children
+
+
 def _payload(message: Any) -> dict[str, Any]:
     if getattr(message, "stop_reason", None) != "end_turn":
-        raise ReviewError("Documentation review response did not complete")
+        raise ReviewError("Documentation review response did not complete: "
+                          + json.dumps(_response_diagnostic(message), sort_keys=True))
     blocks = getattr(message, "content", None)
     if not isinstance(blocks, list) or not blocks or any(
         not isinstance(getattr(block, "text", None), str) for block in blocks
@@ -251,13 +304,68 @@ def review(client: Any, repo: pathlib.Path, revision: str, diff: str, changed_pa
         manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     print(f"Prepared all {manifest['diff_bytes']} diff bytes in {len(batches)} complete docs-review "
           f"batch(es); source {revision}; diff SHA-256 {manifest['diff_sha256']}")
+    manifest.update({"attempts": [], "retry_preflights": [],
+                     "completed_source_ranges": [], "review_complete": False})
+
+    def save_manifest() -> None:
+        if manifest_path:
+            manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+
+    save_manifest()
+
+    def review_batch(batch: DiffBatch, index: int, count: int, depth: int) -> list[dict[str, Any]]:
+        request = _request(title, body, number, batch.rendered, docs, index, count)
+        message = client.messages.create(max_tokens=MAX_OUTPUT_TOKENS, **request)
+        diagnostic = _response_diagnostic(message)
+        manifest["attempts"].append({
+            "source_range": [batch.source_start, batch.source_end], "depth": depth,
+            "sha256": hashlib.sha256(batch.rendered.encode()).hexdigest(), **diagnostic,
+        })
+        save_manifest()
+        print("Documentation review response: " + json.dumps(diagnostic, sort_keys=True))
+        if getattr(message, "stop_reason", None) == "max_tokens":
+            if depth >= MAX_OUTPUT_SPLIT_DEPTH or batch.source_end - batch.source_start <= MIN_RETRY_SOURCE_BYTES:
+                raise ReviewError("Documentation review response did not complete; bounded source splitting exhausted: "
+                                  + json.dumps(diagnostic, sort_keys=True))
+            children = _retry_children(diff, batch)
+            # Preflight both children, including their exact original-source
+            # context and the same complete docs, before either model call.
+            for child_index, child in enumerate(children):
+                child_request = _request(title, body, number, child.rendered, docs, child_index, len(children))
+                child_tokens = getattr(client.messages.count_tokens(**child_request), "input_tokens", None)
+                within_budget = type(child_tokens) is int and 0 < child_tokens <= MAX_INPUT_TOKENS
+                manifest["retry_preflights"].append({
+                    "source_range": [child.source_start, child.source_end], "depth": depth + 1,
+                    "sha256": hashlib.sha256(child.rendered.encode()).hexdigest(),
+                    "input_tokens": child_tokens if type(child_tokens) is int else None,
+                    "within_budget": within_budget,
+                })
+                save_manifest()
+                if not within_budget:
+                    raise ReviewError("Documentation retry fragment exceeds token budget or has invalid token count; no complete review")
+            # The truncated response contributes no findings. Two children per
+            # level and depth2 bound retries to seven calls per original batch.
+            return [result for child_index, child in enumerate(children)
+                    for result in review_batch(child, child_index, len(children), depth + 1)]
+        result = _payload(message)
+        manifest["completed_source_ranges"].append([batch.source_start, batch.source_end])
+        save_manifest()
+        return [result]
+
+    results = [result for i, batch in enumerate(batches)
+               for result in review_batch(batch, i, len(batches), 0)]
+    cursor = 0
+    for start, end in manifest["completed_source_ranges"]:
+        if start != cursor or end <= start:
+            raise ReviewError("Documentation retry fragments do not provide exact source coverage")
+        cursor = end
+    if cursor != len(diff.encode("utf-8")):
+        raise ReviewError("Documentation retry fragments do not cover the complete diff")
+    manifest["review_complete"] = True
+    save_manifest()
     findings = []
     seen = set()
-    results = []
-    for i, batch in enumerate(batches):
-        request = _request(title, body, number, batch.rendered, docs, i, len(batches))
-        result = _payload(client.messages.create(max_tokens=MAX_OUTPUT_TOKENS, **request))
-        results.append(result)
+    for result in results:
         for finding in result["findings"]:
             key = json.dumps(finding, sort_keys=True)
             if key not in seen:
