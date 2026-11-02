@@ -78,7 +78,7 @@ type control struct {
 	Instance meshoperator.InstanceID `cbor:"n,omitempty"`
 }
 type Link struct {
-	writeMu sync.Mutex
+	writeMu frameWriteMutex
 
 	agentMu      sync.Mutex
 	agent        *agentStream
