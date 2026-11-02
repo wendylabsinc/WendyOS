@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
@@ -14,6 +15,23 @@ import (
 // deviceCertificateCheckInterval is how often the server looks for a device
 // connection that can no longer reconnect because its certificate expired.
 const deviceCertificateCheckInterval = 30 * time.Second
+
+// errReconnectNotMTLS is a reconnect that produced only a plaintext
+// connection. An unpinned dial falls back to a lazy plaintext connection when
+// nothing answers on the mTLS port, so for a device this server reached over
+// mTLS it means the device has not come back yet.
+var errReconnectNotMTLS = errors.New("the device did not answer over mTLS")
+
+// SetTransientConnectError tells the device certificate watch which reconnect
+// failures can clear without anyone acting, such as a device that is still
+// rebooting. The watch keeps such a connection and its target and tries again
+// at the next check. Every other failure, and every failure while fn is nil,
+// ends the connection.
+func (s *mcpServer) SetTransientConnectError(fn func(error) bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.transientConnectErrFn = fn
+}
 
 // runDeviceCertificateWatch replaces a device connection whose operator
 // certificate has expired once it has lost its transport.
@@ -43,30 +61,38 @@ func (s *mcpServer) runDeviceCertificateWatch(ctx context.Context, interval time
 // connection's certificate has expired and its channel is not Ready. A Ready
 // connection is left alone: the device accepted that certificate while it was
 // valid, and the established session keeps working. A connection that is not
-// Ready can only redial with the expired certificate. The new connection reads
-// the stored login again. If that fails, the old connection is closed so it
-// stops presenting the expired certificate, and tools report that no device is
-// connected.
+// Ready can only redial with the expired certificate.
+//
+// The reconnect dials the target's address or cloud:// selector through
+// connectFn, as device_connect does, so it reads the stored logins again; for
+// a cloud selector, connectFn also renews an expired OAuth login.
+// conn.Reconnect is the fallback for a target connectFn cannot dial: it reuses
+// the login the connection captured, which is the expired one.
+//
+// A simulator is left alone: connecting to vm:NAME boots it, and the watch
+// must not start a simulator that was stopped outside this server.
+//
+// When nothing answered the reconnect (see SetTransientConnectError), the
+// connection and its target stay and the next check tries again: losing the
+// transport usually means the device is rebooting. Any other failure means the
+// device refused the stored login, or there is none to use. The old connection
+// is then closed, so it stops presenting the expired certificate, and tools
+// report that no device is connected.
 func (s *mcpServer) replaceExpiredDeviceConnection(ctx context.Context, now time.Time) {
 	s.mu.RLock()
 	conn, connType, target, revision := s.conn, s.connType, s.commandTarget, s.connRevision
+	transient := s.transientConnectErrFn
 	s.mu.RUnlock()
 	notAfter, expired := expiredDisconnectedCertificate(conn, now)
-	if !expired {
+	if !expired || isSimulatorConnection(conn, target) {
 		return
 	}
-	var next *grpcclient.AgentConnection
-	var err error
-	switch {
-	case conn.Reconnect != nil:
-		next, err = conn.Reconnect(ctx)
-	case s.connectFn != nil && target.Device != "":
-		next, err = s.connectFn(ctx, target.Device)
-	default:
-		err = errors.New("the connection has no target to reconnect to")
-	}
+	next, err := s.reconnectExpiredDevice(ctx, conn, target)
 	if err == nil && next == nil {
 		err = errors.New("reconnect returned no connection")
+	}
+	if err == nil && !next.IsMTLS {
+		err = errReconnectNotMTLS
 	}
 	if err != nil && next != nil {
 		// A failed reconnect that still handed back a connection must not
@@ -74,6 +100,7 @@ func (s *mcpServer) replaceExpiredDeviceConnection(ctx context.Context, now time
 		_ = next.Close()
 		next = nil
 	}
+	retry := err != nil && (errors.Is(err, errReconnectNotMTLS) || (transient != nil && transient(err)))
 
 	s.mu.Lock()
 	if s.conn != conn || s.connRevision != revision {
@@ -84,15 +111,56 @@ func (s *mcpServer) replaceExpiredDeviceConnection(ctx context.Context, now time
 		}
 		return
 	}
-	if err != nil {
-		s.setConnectionLocked(nil, "", commandTarget{})
-	} else {
+	noted := s.certWatchRetrying == conn
+	switch {
+	case err == nil:
+		s.certWatchRetrying = nil
 		s.setConnectionLocked(next, connType, target)
+	case retry:
+		s.certWatchRetrying = conn
+	default:
+		s.certWatchRetrying = nil
+		s.setConnectionLocked(nil, "", commandTarget{})
 	}
 	s.mu.Unlock()
-	if err != nil {
-		s.recordProxyDiag("", "device-certificate", fmt.Errorf("disconnected: the operator certificate for this connection expired at %s and reconnecting failed: %w", notAfter.UTC().Format(time.RFC3339), err))
+	expiredAt := notAfter.UTC().Format(time.RFC3339)
+	switch {
+	case err == nil:
+	case retry:
+		// Once per connection: the check repeats every interval.
+		if !noted {
+			s.recordProxyDiag("", "device-certificate", fmt.Errorf("the operator certificate for this connection expired at %s and the device did not answer a reconnect; trying again at each check: %w", expiredAt, err))
+		}
+	default:
+		s.recordProxyDiag("", "device-certificate", fmt.Errorf("disconnected: the operator certificate for this connection expired at %s and reconnecting failed: %w", expiredAt, err))
 	}
+}
+
+// reconnectExpiredDevice dials target again for the certificate watch.
+func (s *mcpServer) reconnectExpiredDevice(ctx context.Context, conn *grpcclient.AgentConnection, target commandTarget) (*grpcclient.AgentConnection, error) {
+	if address := watchReconnectAddress(target); s.connectFn != nil && address != "" {
+		return s.connectFn(ctx, address)
+	}
+	if conn.Reconnect != nil {
+		return conn.Reconnect(ctx)
+	}
+	return nil, errors.New("the connection has no target to reconnect to")
+}
+
+// watchReconnectAddress is the address connectFn reconnects target with, or ""
+// when connectFn cannot dial it: a cloud target recorded by device name
+// rather than by its cloud:// selector.
+func watchReconnectAddress(target commandTarget) string {
+	if target.Transport == "cloud" && !strings.HasPrefix(strings.ToLower(target.Device), "cloud:") {
+		return ""
+	}
+	return target.Device
+}
+
+// isSimulatorConnection reports a connection to a local simulator, which a
+// connect to its vm:NAME target would boot.
+func isSimulatorConnection(conn *grpcclient.AgentConnection, target commandTarget) bool {
+	return conn.SimulatorName != "" || strings.HasPrefix(target.Device, "vm:")
 }
 
 // expiredDisconnectedCertificate reports the NotAfter of a direct mTLS

@@ -93,6 +93,146 @@ func TestExpiredDeviceCertificateConnectionIsReplaced(t *testing.T) {
 	}
 }
 
+// A cloud connection captured its login in conn.Reconnect, so reconnecting
+// through it would present the expired certificate again. The watch dials the
+// cloud selector through connectFn instead, which reloads the stored login and
+// renews it. A cloud target recorded only by device name (cloud_connect's)
+// cannot be dialled that way and keeps conn.Reconnect.
+func TestExpiredCloudConnectionReconnectsThroughConnectFn(t *testing.T) {
+	now := time.Now()
+	const selector = "cloud://api.wendy.dev:443/tenant/5c9e14bb-49c0-4178-9cc5-493a151f9885/asset/3701f33a-3617-4317-8f14-cca2e744a8e2"
+	for _, tc := range []struct {
+		name          string
+		target        commandTarget
+		wantConnectFn int
+		wantReconnect int
+	}{
+		{"cloud selector", commandTarget{Device: selector, Selector: selector, Transport: "cloud", CloudGRPC: "api.wendy.dev:443"}, 1, 0},
+		{"cloud device name", commandTarget{Device: "mesh-1", Selector: selector, Transport: "cloud", CloudGRPC: "api.wendy.dev:443"}, 0, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			old := certificateTestConn(t, now.Add(-time.Hour))
+			renewed := certificateTestConn(t, now.Add(24*time.Hour))
+			reconnects := 0
+			old.Reconnect = func(context.Context) (*grpcclient.AgentConnection, error) {
+				reconnects++
+				return renewed, nil
+			}
+			dials := 0
+			s := New(&config.Config{}, func(_ context.Context, address string) (*grpcclient.AgentConnection, error) {
+				dials++
+				if address != selector {
+					t.Fatalf("connectFn(%q), want the cloud selector", address)
+				}
+				return renewed, nil
+			})
+			s.setConnection(old, "cloud", tc.target)
+
+			s.replaceExpiredDeviceConnection(context.Background(), now)
+
+			if dials != tc.wantConnectFn || reconnects != tc.wantReconnect {
+				t.Fatalf("connectFn=%d Reconnect=%d, want %d and %d", dials, reconnects, tc.wantConnectFn, tc.wantReconnect)
+			}
+			if conn, connType, target := s.connectionSnapshot(); conn != renewed || connType != "cloud" || target != tc.target {
+				t.Fatalf("conn=%p type=%q target=%+v, want the new connection to the same target", conn, connType, target)
+			}
+		})
+	}
+}
+
+// Losing the transport usually means the device is rebooting, so a reconnect
+// that nothing answered keeps the connection and its target, and a later
+// check connects once the device is back. A refusal still lets go.
+func TestExpiredDeviceCertificateReconnectRetriesWhileDeviceIsDown(t *testing.T) {
+	now := time.Now()
+	target := commandTarget{Device: "mesh-1.local:50051", Transport: "direct"}
+	refused := errors.New("dial tcp 192.168.1.20:50052: connect: connection refused")
+	old := certificateTestConn(t, now.Add(-time.Hour))
+	renewed := certificateTestConn(t, now.Add(24*time.Hour))
+	plaintext := certificateTestConn(t, now.Add(24*time.Hour))
+	plaintext.IsMTLS = false
+	// Down, then answered only by the lazy plaintext rung an unpinned dial
+	// falls back to, then back.
+	attempts := []func() (*grpcclient.AgentConnection, error){
+		func() (*grpcclient.AgentConnection, error) { return nil, refused },
+		func() (*grpcclient.AgentConnection, error) { return plaintext, nil },
+		func() (*grpcclient.AgentConnection, error) { return renewed, nil },
+	}
+	dials := 0
+	s := New(&config.Config{}, func(_ context.Context, address string) (*grpcclient.AgentConnection, error) {
+		if address != target.Device {
+			t.Fatalf("reconnected to %q, want %q", address, target.Device)
+		}
+		dials++
+		return attempts[dials-1]()
+	})
+	s.SetTransientConnectError(func(err error) bool { return errors.Is(err, refused) })
+	s.setConnection(old, "direct", target)
+
+	for tick := 1; tick <= 2; tick++ {
+		s.replaceExpiredDeviceConnection(context.Background(), now)
+		if conn, _, got := s.connectionSnapshot(); conn != old || got != target {
+			t.Fatalf("tick %d: conn=%p target=%+v, want the connection and target kept", tick, conn, got)
+		}
+	}
+	if plaintext.Conn.GetState() != connectivity.Shutdown {
+		t.Fatal("the plaintext connection was not closed")
+	}
+	if diags := s.proxyDiagnostics(); len(diags) != 1 || !strings.Contains(diags[0].Error, "trying again at each check") {
+		t.Fatalf("diagnostics = %+v, want one note for the retries", diags)
+	}
+
+	s.replaceExpiredDeviceConnection(context.Background(), now)
+	if conn, _, got := s.connectionSnapshot(); conn != renewed || got != target || dials != 3 {
+		t.Fatalf("conn=%p target=%+v dials=%d, want the renewed connection on the third check", conn, got, dials)
+	}
+	if old.Conn.GetState() != connectivity.Shutdown {
+		t.Fatal("the expired connection was not closed")
+	}
+
+	// A refusal is not transient: the connection is let go.
+	expired := certificateTestConn(t, now.Add(-time.Hour))
+	s.setConnection(expired, "direct", target)
+	attempts = append(attempts, func() (*grpcclient.AgentConnection, error) {
+		return nil, errors.New("Your Wendy login for Wendy Labs, Inc. expired at 2026-10-28 11:33 UTC.")
+	})
+	s.replaceExpiredDeviceConnection(context.Background(), now)
+	if conn, _, got := s.connectionSnapshot(); conn != nil || got != (commandTarget{}) {
+		t.Fatalf("conn=%p target=%+v, want the refused connection dropped", conn, got)
+	}
+}
+
+// Connecting to vm:NAME boots the simulator, so the watch never reconnects one:
+// it must not start a simulator that was stopped outside this server.
+func TestExpiredSimulatorConnectionIsNotBooted(t *testing.T) {
+	now := time.Now()
+	for name, setup := range map[string]func(*grpcclient.AgentConnection) commandTarget{
+		"vm target": func(*grpcclient.AgentConnection) commandTarget {
+			return commandTarget{Device: "vm:go2", Transport: "direct"}
+		},
+		"simulator connection": func(conn *grpcclient.AgentConnection) commandTarget {
+			conn.SimulatorName = "go2"
+			return commandTarget{Device: "127.0.0.1:50061", Transport: "direct"}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			old := certificateTestConn(t, now.Add(-time.Hour))
+			target := setup(old)
+			s := New(&config.Config{}, func(context.Context, string) (*grpcclient.AgentConnection, error) {
+				t.Fatal("the watch connected to a simulator target")
+				return nil, nil
+			})
+			s.setConnection(old, "direct", target)
+
+			s.replaceExpiredDeviceConnection(context.Background(), now)
+
+			if conn, _, got := s.connectionSnapshot(); conn != old || got != target {
+				t.Fatalf("conn=%p target=%+v, want the simulator connection left alone", conn, got)
+			}
+		})
+	}
+}
+
 // A connection a tool chose while the reconnect was in flight wins over it.
 func TestExpiredDeviceCertificateReplacementYieldsToNewerConnection(t *testing.T) {
 	now := time.Now()

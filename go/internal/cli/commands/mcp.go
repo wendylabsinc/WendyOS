@@ -3,6 +3,7 @@ package commands
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -91,6 +92,7 @@ func newMCPServer(deviceFlag string, toolGroups []string) (*wendymcp.Server, err
 		return nil, fmt.Errorf("loading config: %w", err)
 	}
 	srv := wendymcp.New(cfg, connectMCPDevice)
+	srv.SetTransientConnectError(isTransientDeviceConnectError)
 	srv.SetCLIUpdateChecker(checkCLIUpdateIfDue)
 	if err := srv.SetToolGroups(toolGroups); err != nil {
 		return nil, err
@@ -125,6 +127,21 @@ func newMCPServer(deviceFlag string, toolGroups []string) (*wendymcp.Server, err
 		})
 	}
 	return srv, nil
+}
+
+// isTransientDeviceConnectError reports a device connection that failed
+// because nothing answered, as while the device reboots: a later attempt can
+// succeed without anyone acting. A device that answered and refused this
+// computer's login or the device's identity cannot, and neither can a missing
+// login. ErrorClass checks those verdicts first, so they win.
+func isTransientDeviceConnectError(err error) bool {
+	switch ErrorClass(err) {
+	case "device_unreachable", "device_offline":
+		return true
+	case "":
+		return errors.Is(err, context.DeadlineExceeded) || isConnectionRefusedError(err) || isReachabilityTimeoutError(err)
+	}
+	return false
 }
 
 // enterLocalMCPChannel refuses a local MCP server when the session's realm

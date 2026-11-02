@@ -69,6 +69,9 @@ type mcpServer struct {
 	binding              *BindingPolicy // set by wendy cloud mcp; nil for the local stdio server
 	relay                bool           // serving a hosted chat through the relay: the published manifest only
 	relayProfile         *relayManifestProfile
+	// The device certificate watch (device_certificate.go), guarded by mu.
+	transientConnectErrFn func(error) bool
+	certWatchRetrying     *grpcclient.AgentConnection // the connection whose failed reconnect is already noted
 }
 
 // Server is the wendy MCP server, named for callers that configure it before

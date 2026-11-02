@@ -335,6 +335,33 @@ func TestRenewExpiredLoginRenewsOnlyThatLogin(t *testing.T) {
 	}
 }
 
+// The MCP certificate watch keeps retrying only a reconnect that nothing
+// answered. A device that refused the login, an expired one included, ends the
+// connection, as does a missing login.
+func TestMCPWatchRetriesOnlyWhenNothingAnswered(t *testing.T) {
+	cfg, _ := meshReportConfig(t, "default")
+	bad := errors.New("remote error: tls: bad certificate")
+	for name, tc := range map[string]struct {
+		err  error
+		want bool
+	}{
+		"pinned device silent":   {&noAuthenticatedEndpointError{msg: "pinned, nothing answered"}, true},
+		"connection refused":     {errors.New("dial tcp 192.168.1.20:50052: connect: connection refused"), true},
+		"deadline":               {context.DeadlineExceeded, true},
+		"i/o timeout":            {errors.New("dial tcp 192.168.1.20:50052: i/o timeout"), true},
+		"expired login":          {chooseRejectionErrorForScope(context.Background(), certs.Scope{TenantUUID: meshTenant}, storedCerts(cfg), bad), false},
+		"pinned, expired login":  {pinnedRefusalError(&noAuthenticatedEndpointError{msg: "pinned", certSeen: true}, meshTenant, storedCerts(cfg), time.Now()), false},
+		"TLS rejection":          {newTLSHandshakeRejectedError(bad), false},
+		"identity refused":       {errDeviceIdentityRefused, false},
+		"not logged in":          {config.ErrNotLoggedIn, false},
+		"unclassified, answered": {errors.New("unexpected agent response"), false},
+	} {
+		if got := isTransientDeviceConnectError(tc.err); got != tc.want {
+			t.Errorf("%s: isTransientDeviceConnectError = %v, want %v (class %q)", name, got, tc.want, ErrorClass(tc.err))
+		}
+	}
+}
+
 // A login the CLI cannot renew silently is never sent to the refresh path.
 func TestRenewExpiredLoginRefusesASessionWithoutRefreshToken(t *testing.T) {
 	cfg, _ := meshReportConfig(t, "default")
