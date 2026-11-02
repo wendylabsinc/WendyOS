@@ -61,9 +61,12 @@ func (f *advertisementFreshness) observe(path dbus.ObjectPath, props map[string]
 	// advertisement. A peer may also advertise another service concurrently;
 	// that signal says nothing about whether its mesh advert has stopped.
 	if !valid {
-		for key := range data {
+		for key, raw := range data {
 			if strings.EqualFold(key, f.uuid) {
-				f.forget(path) // Same UUID now carries a different mesh/payload.
+				if len(raw) != 0 && raw[0] != AdvertisementVersion {
+					continue // Unsupported versions neither refresh nor withdraw v1.
+				}
+				f.forget(path) // Same v1 UUID now carries a different mesh/payload.
 				return
 			}
 		}
@@ -174,6 +177,16 @@ func (f *advertisementFreshness) candidates(objects managedObjects, at time.Time
 		}
 	}
 	return peers, updates
+}
+
+// nativeReady rechecks the newest live endpoint hint immediately before a
+// queued dial. A busy announcement replaces ready without losing time discovery.
+func (f *advertisementFreshness) nativeReady(peer candidate, now time.Time) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	entry, ok := f.seen[peer.path]
+	return ok && !now.Before(entry.seen) && now.Sub(entry.seen) < advertisementFreshnessTTL &&
+		entry.advert.NativeAccepting() && entry.advert.PSM == peer.psm && entry.advert.DeviceHint == peer.hint
 }
 
 // Subscribe before StartDiscovery. InterfacesAdded is deliberately ignored:

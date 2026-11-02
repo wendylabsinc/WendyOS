@@ -72,6 +72,9 @@ func runEnabledMeshCarriers(ctx context.Context, configDir string, id localmesh.
 		if cfg.Listen != "" || len(cfg.Peers) != 0 {
 			names = append(names, "TCP")
 		}
+		if cfg.TLSListen != "" {
+			names = append(names, "TLS")
+		}
 		if cfg.NAN {
 			names = append(names, "NAN")
 		}
@@ -149,6 +152,9 @@ func runEnabledMeshCarriers(ctx context.Context, configDir string, id localmesh.
 		if cfg.Listen != "" || len(cfg.Peers) != 0 {
 			sharing.carriers.report(epoch, "TCP", localmesh.CarrierStatus{Ready: true})
 		}
+		if cfg.TLSListen != "" {
+			sharing.carriers.report(epoch, "TLS", localmesh.CarrierStatus{Ready: true})
+		}
 		if err := catalog.Activate(runCtx, node.Credentials, node.Snapshot, vips, cfg.Ethernet, cfg.InfrastructureWiFi, node.ControlHub()); err != nil {
 			logger.Error("net service catalog unavailable", zap.Error(err))
 		}
@@ -178,7 +184,7 @@ func runEnabledMeshCarriers(ctx context.Context, configDir string, id localmesh.
 				return provider.Run(ctx)
 			})
 		}
-		// Router links on the default physical adapter share its limits.
+		// The BLE runtime owns the physical adapter setup and connection limits.
 		blePolicy := localmesh.NewConnectionPolicy(node.Credentials.Device, false, localmesh.ConnectionLimits{Outgoing: localmesh.BLEMaxOutgoing, Attempts: localmesh.BLEMaxOutgoingAttempts, Total: localmesh.BLEMaxConnections})
 		bleCandidates := &localmesh.CandidateQueue{}
 		blePacer := &bleprovider.DialPacer{}
