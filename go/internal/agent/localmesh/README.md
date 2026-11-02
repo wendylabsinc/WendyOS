@@ -115,6 +115,22 @@ kernel requirements. Linux images need IPv6 policy tables, dummy interfaces and
 TUN support; container UDP interception additionally needs TPROXY support. An
 agent update cannot supply kernel features compiled out of an installed image.
 
+## Operator identity and bluetooth admission
+
+Operator credentials preserve the complete operator principal and bind a
+separate persistent installation UUID. They authorize an operator router, not
+an enrolled device identity. Certificate exchange retains distinct pending
+operator chains by principal and leaf hash, so concurrent certificates for the
+same operator do not overwrite each other's pending material. These fetch hints
+still require independent certificate and signed-origin verification.
+
+The Linux bluetooth provider offers `meshoperatorlink.RouterALPN` only when the
+node supports `AttachOperatorStream` and its credentials have primary operator
+trust anchors. It verifies operator sessions with `VerifyPrimaryOperator` and
+admits at most one through a separate bounded pool. That pool shares the radio
+and TLS admission gate but does not consume device-neighbor leases. Operator
+TLS session tickets are disabled; device session-ticket admission is separate.
+
 ## Linux operator policy and warm rollback
 
 Device destinations use IPv6 table/rule priority 18865 and peer ingress uses
