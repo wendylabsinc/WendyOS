@@ -1,0 +1,95 @@
+package sessionbroker
+
+import (
+	"errors"
+
+	"google.golang.org/genproto/googleapis/rpc/errdetails"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+)
+
+const operatorErrorDomain = "wendy.sessionbroker"
+
+// These bounded reasons describe local route readiness, not peer trust failures.
+const (
+	operatorNoPeers       = "OPERATOR_NO_PEERS"
+	operatorReconnecting  = "OPERATOR_RECONNECTING"
+	operatorTargetPending = "OPERATOR_TARGET_PENDING"
+	operatorViewPartial   = "OPERATOR_OBSERVATION_INCOMPLETE"
+)
+
+func operatorUnavailable(reason, message string) error {
+	st := status.New(codes.Unavailable, message)
+	with, err := st.WithDetails(&errdetails.ErrorInfo{Domain: operatorErrorDomain, Reason: reason})
+	if err != nil {
+		return st.Err()
+	}
+	return with.Err()
+}
+
+// OperatorRecovery recognizes only explicit local-broker readiness errors.
+// Generic Unavailable and authentication/policy failures retain their own class.
+// Details survive the private gRPC proxy boundary without matching error text.
+func OperatorRecovery(err error) (bool, []string) {
+	if operatorPolicyFailure(err) {
+		return false, nil
+	}
+	var startup *operatorStartupFailure
+	if errors.As(err, &startup) {
+		switch startup.failure.Kind {
+		case "timeout", "connection_closed":
+			return true, []string{"Check that the selected first-hop board is reachable and participating, then retry the connection."}
+		case "issuer_chain", "certificate":
+			return false, []string{"Verify the selected tenant, peer certificate chain and device clock; correct the verification failure before reconnecting."}
+		case "device_pin":
+			return false, []string{"Verify the first-hop device identity against its saved pin before reconnecting."}
+		default:
+			return false, []string{"Check the selected first-hop address and transport, then reconnect using automatic discovery or explicit --address and --router."}
+		}
+	}
+	st, ok := status.FromError(err)
+	if !ok || st.Code() != codes.Unavailable {
+		return false, nil
+	}
+	for _, detail := range st.Details() {
+		info, ok := detail.(*errdetails.ErrorInfo)
+		if !ok || info.Domain != operatorErrorDomain {
+			continue
+		}
+		switch info.Reason {
+		case operatorNoPeers, operatorReconnecting:
+			return true, []string{
+				"Check that the first-hop board is reachable and participating in Wendy Net, then retry while the local router reconnects.",
+				"To choose a new first hop, run 'wendy device wendy-net disconnect', then 'wendy device wendy-net connect' or connect with explicit --address and --router.",
+			}
+		case operatorTargetPending:
+			return true, []string{
+				"Wait for the target's authenticated route and agent announcement, then retry.",
+				"Check that the target is running and participating in the same Wendy Net tenant.",
+			}
+		case operatorViewPartial:
+			return false, []string{"Use a direct device selector or obtain a complete mesh observation; a partial snapshot cannot establish the target's availability."}
+		}
+	}
+	return false, nil
+}
+
+func operatorPolicyFailure(err error) bool {
+	if err == nil {
+		return false
+	}
+	if st, ok := status.FromError(err); ok && (st.Code() == codes.Unauthenticated || st.Code() == codes.PermissionDenied) {
+		return true
+	}
+	switch wrapped := err.(type) {
+	case interface{ Unwrap() []error }:
+		for _, inner := range wrapped.Unwrap() {
+			if operatorPolicyFailure(inner) {
+				return true
+			}
+		}
+	case interface{ Unwrap() error }:
+		return operatorPolicyFailure(wrapped.Unwrap())
+	}
+	return false
+}

@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"github.com/google/uuid"
 	"io"
 	"net"
@@ -425,6 +424,11 @@ func connectOrStartOperator(ctx context.Context, spec Spec, certificate *config.
 			if locked {
 				releaseLock(file)
 				file.Close()
+				generation, generationErr := uuid.NewRandom()
+				if generationErr != nil {
+					return nil, generationErr
+				}
+				spec.DiagnosticGeneration = generation.String()
 				if err = launchOperatorBroker(spec); err != nil {
 					return nil, err
 				}
@@ -433,7 +437,7 @@ func connectOrStartOperator(ctx context.Context, spec Spec, certificate *config.
 		}
 		select {
 		case <-wait.Done():
-			return nil, fmt.Errorf("operator broker did not become ready: %w", errors.Join(wait.Err(), last))
+			return nil, operatorStartupError(spec, errors.Join(wait.Err(), last))
 		case <-ticker.C:
 		}
 	}
