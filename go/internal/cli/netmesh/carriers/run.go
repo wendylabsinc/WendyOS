@@ -123,7 +123,7 @@ func Run(parent context.Context, cfg Config) error {
 			return false
 		}
 		for _, link := range view.Links {
-			if link.Device == peer && ((strict && link.Cost < cost) || (!strict && link.Cost <= cost)) {
+			if link.Device == peer && link.ForwardingReady && ((strict && link.Cost < cost) || (!strict && link.Cost <= cost)) {
 				return true
 			}
 		}

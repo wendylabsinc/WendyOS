@@ -101,7 +101,7 @@ func TestRunAuthenticatedBLECacheSuppressesLANRedialAndFallsBack(t *testing.T) {
 			mu.Unlock()
 		}
 		mu.Lock()
-		view.Links = append(view.Links, localmesh.PeerLink{Device: peer, Cost: c.Cost, Transport: c.Transport})
+		view.Links = append(view.Links, localmesh.PeerLink{Device: peer, Cost: c.Cost, Transport: c.Transport, ForwardingReady: true})
 		mu.Unlock()
 		entered <- c.Transport
 		<-linkCtx.Done()
