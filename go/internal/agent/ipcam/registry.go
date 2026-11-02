@@ -28,7 +28,9 @@ import (
 //
 // The band ends where the kernel's device numbers do: VIDEO_NUM_DEVICES is
 // 256, and a node asked for above 255 gets another number instead. Physical
-// /dev/videoN nodes stay well below 96 in practice.
+// /dev/videoN nodes stay well below 96 in practice. Device ids 88-95 are
+// taken by USB cameras the agent drives from userspace, which have no node at
+// all (usbthermal.IDBandStart..IDBandEnd).
 const (
 	// LoopbackBandStart..LoopbackBandEnd spans every Wendy-managed node. A
 	// plain module load can auto-create loopback nodes below it; those are
