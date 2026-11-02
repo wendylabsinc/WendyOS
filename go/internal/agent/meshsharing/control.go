@@ -202,20 +202,31 @@ func serveGatewayLease(ctx context.Context, creds *localmesh.Credentials, backen
 	if err != nil {
 		return nil
 	}
+	started := time.Now()
+	ended := controlEnd{role: "gateway", phase: "reply", peer: peer.Device, lease: lease, expires: expiry}
+	defer func() {
+		ended.cleanupErr = cleanupErr
+		if reporter, ok := backend.(controlReporter); ok {
+			reporter.reportControlEnd(ended)
+		}
+	}()
 	defer func() {
 		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 20*time.Second)
 		defer cancel()
 		cleanupErr = backend.Revoke(cleanup, peer.Device, lease)
 	}()
+	defer func() { ended.endedAt = time.Now(); ended.elapsed = ended.endedAt.Sub(started) }()
 	if !lease.valid() {
+		ended.reason = "invalid-grant"
 		return nil
 	}
 	// Policy withdrawal (including an uplink change) must interrupt an idle
 	// control socket immediately, rather than waiting for the next heartbeat.
+	var revoked <-chan struct{}
 	if watcher, ok := backend.(interface {
 		LeaseDone(meshid.Device, tunnelLease) <-chan struct{}
 	}); ok {
-		revoked := watcher.LeaseDone(peer.Device, lease)
+		revoked = watcher.LeaseDone(peer.Device, lease)
 		stopWatch, watchDone := make(chan struct{}), make(chan struct{})
 		go func() {
 			defer close(watchDone)
@@ -233,25 +244,37 @@ func serveGatewayLease(ctx context.Context, creds *localmesh.Credentials, backen
 	if lease.IPv6 {
 		response[2] = 1
 	}
-	if writeControl(bounded, response) != nil {
+	if err := writeControl(bounded, response); err != nil {
+		ended.err, ended.reason = err, controlEndReason(ctx, expiry, revoked, err)
 		return nil
 	}
 	var last time.Time
 	for {
+		ended.phase = "heartbeat-read"
 		bounded.SetDeadline(time.Now().Add(leaseHeartbeatTimeout))
 		var b [1]byte
-		if _, err := io.ReadFull(bounded, b[:]); err != nil || b[0] != leaseHeartbeat {
+		if _, err := io.ReadFull(bounded, b[:]); err != nil {
+			ended.err, ended.reason = err, controlEndReason(ctx, expiry, revoked, err)
+			return nil
+		}
+		if b[0] != leaseHeartbeat {
+			ended.reason = "invalid-heartbeat"
 			return nil
 		}
 		now := time.Now()
 		if !last.IsZero() && now.Sub(last) < leaseHeartbeatMinInterval {
+			ended.reason = "heartbeat-too-frequent"
 			return nil
 		}
 		last = now
 		if _, err := controlPeer(creds, conn.ConnectionState()); err != nil {
+			ended.err, ended.reason = err, "identity-recheck-failed"
 			return nil
 		}
-		if writeControl(bounded, b[:]) != nil {
+		ended.heartbeats++
+		ended.phase = "heartbeat-reply"
+		if err := writeControl(bounded, b[:]); err != nil {
+			ended.err, ended.reason = err, controlEndReason(ctx, expiry, revoked, err)
 			return nil
 		}
 	}

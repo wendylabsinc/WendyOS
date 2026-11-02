@@ -65,6 +65,7 @@ type Controller struct {
 	uplinkHealth          map[string]*HealthTracker
 	gatewayHealth         map[meshid.Device]*HealthTracker
 	gatewayDevice         meshid.Device
+	gatewayLastExpiry     time.Time // Diagnostic snapshot; never used for eligibility.
 	gatewayProbeAfter     meshid.Device
 	shareKey              string
 	gatewayOfferRefreshed time.Time
@@ -94,7 +95,7 @@ func cleanupController(policy Policy) *Controller {
 	return &Controller{policy: policy, closed: true, offerWithdrawn: true}
 }
 
-// SetLogger enables structured DNS transition audit events. Repeated successful
+// SetLogger enables structured gateway and DNS transition events. Repeated successful
 // reconciliations do not emit events; failures and subsequent recovery do.
 func (c *Controller) SetLogger(logger *zap.Logger) {
 	c.mu.Lock()
@@ -103,6 +104,9 @@ func (c *Controller) SetLogger(logger *zap.Logger) {
 		logger = zap.NewNop()
 	}
 	c.logger = logger
+	if policy, ok := c.policy.(interface{ SetLogger(*zap.Logger) }); ok {
+		policy.SetLogger(logger)
+	}
 }
 
 // setDNS runs with c.mu held, just like all other policy transitions.
@@ -205,7 +209,8 @@ func (c *Controller) Step(ctx context.Context, config Config) (Decision, error) 
 func (c *Controller) reachableGateway(ctx context.Context) Gateway {
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	candidates := signedGateways(c.self, c.node.Snapshot(), c.node.GatewayOffers(), time.Now())
+	view, offers := c.node.Snapshot(), c.node.GatewayOffers()
+	candidates := signedGateways(c.self, view, offers, time.Now())
 	present := make(map[meshid.Device]bool, len(candidates))
 	for _, candidate := range candidates {
 		present[candidate.Device] = true
@@ -244,7 +249,15 @@ func (c *Controller) reachableGateway(ctx context.Context) Gateway {
 			health = &HealthTracker{}
 			c.gatewayHealth[candidate.Device] = health
 		}
+		wasHealthy := health.Healthy
 		candidate.Reachable = health.Observe(res.ok)
+		if wasHealthy != candidate.Reachable {
+			c.logger.Info("Wendy Net gateway probe health changed",
+				zap.String("gateway_principal", candidate.Device.Principal()), zap.Bool("healthy", candidate.Reachable),
+				zap.Bool("probe_succeeded", res.ok), zap.Int("consecutive_failures", health.failures),
+				zap.Int("consecutive_successes", health.successes), zap.Uint64("link_id", uint64(candidate.Link)),
+				zap.Time("signed_expires_at", candidate.Expires))
+		}
 	}
 	// Completion order never influences preference. Recheck expiry after the
 	// probes so a lease expiring during observation cannot be selected.
@@ -256,14 +269,30 @@ func (c *Controller) reachableGateway(ctx context.Context) Gateway {
 	// after the current donor is no longer usable.
 	for _, candidate := range candidates {
 		if candidate.Device == c.gatewayDevice && candidate.Reachable && now.Before(candidate.Expires) {
+			c.gatewayLastExpiry = candidate.Expires
 			return candidate
 		}
 	}
 	for _, candidate := range candidates {
 		if candidate.Reachable && now.Before(candidate.Expires) {
+			if c.gatewayDevice != candidate.Device {
+				c.logger.Info("Wendy Net gateway selected", zap.String("gateway_principal", candidate.Device.Principal()),
+					zap.String("previous_gateway_principal", c.gatewayDevice.Principal()), zap.Uint64("link_id", uint64(candidate.Link)),
+					zap.Time("signed_expires_at", candidate.Expires))
+			}
 			c.gatewayDevice = candidate.Device
+			c.gatewayLastExpiry = candidate.Expires
 			return candidate
 		}
+	}
+	if c.gatewayDevice.IsValid() {
+		reason := "no-reachable-candidate"
+		if len(candidates) == 0 {
+			reason = "no-eligible-signed-candidate"
+		}
+		c.logger.Info("Wendy Net gateway selection ended",
+			append([]zap.Field{zap.String("gateway_principal", c.gatewayDevice.Principal()), zap.String("reason", reason),
+				zap.Time("previous_signed_expires_at", c.gatewayLastExpiry), zap.Int("eligible_candidates", len(candidates))}, gatewayEvidence(c.gatewayDevice, view, offers)...)...)
 	}
 	c.gatewayDevice = meshid.Device{}
 	return Gateway{}
