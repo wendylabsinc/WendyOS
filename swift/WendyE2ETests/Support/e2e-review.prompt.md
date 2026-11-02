@@ -5,11 +5,19 @@ files over low-value files.
 
 Use the context and artifacts available to you, including `overview.json`, xUnit
 results, recordings, shell transcripts, attempt logs, Swift E2E specs, source
-files, targeted Git diffs, and Git history. Start with `overview.json` and the
+files permitted by the prepared source index, and the prepared source patch. Start with `overview.json` and the
 source index when present. In full mode, inspect the extracted E2E test source
 broadly; in diff mode, inspect changed or plausibly related source artifacts.
 Do not perform broad recursive scans of copied sandboxes or large artifact trees
 unless a referenced artifact makes that necessary.
+
+Source-only filtering covers the prepared patch and source index. Provider and
+custom-harness file/shell tools remain unrestricted; this prompt is scope
+guidance, not an enforced filesystem boundary. Do not retrieve or make findings
+about excluded generated implementation through tools. Review source definitions,
+generators, schema/source pins, configuration and generation checks instead.
+State when upstream schema bodies are unavailable. Preserve actual failure,
+test/runtime and prior-finding evidence even for a generated-only diff.
 
 Guidelines:
 
@@ -25,7 +33,7 @@ Guidelines:
 - Avoid `severity: "info"` unless the note is genuinely useful and actionable.
 - Do not write pass/OK reviews, status summaries, or files that only restate
   counts already present in the report.
-- Treat generated `// AI:` review requests from test source as explicit requests
+- Treat extracted `// AI:` review requests from test source as explicit requests
   for qualitative review, even when the matching tests pass. Inspect the
   relevant source and run artifacts, then write an issue only when there is an
   actionable concern.
@@ -52,7 +60,7 @@ Guidelines:
   source/diff paths, artifact paths, and concrete next steps.
 - For every issue, cite concrete evidence: source paths, target/attempt names,
   result details, recording paths, shell script paths, attempt logs, targeted Git
-  diff hunks, or `overview.json` outcome data as appropriate.
+  prepared source diff hunks, or `overview.json` outcome data as appropriate.
 - Use JSON `locations` only when the issue is attributable to source lines. Use
   repo-relative paths and one-based line numbers.
 - Use JSON `evidence` for run-relative artifact paths.

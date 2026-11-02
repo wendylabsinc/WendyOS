@@ -33,6 +33,13 @@ struct ReviewCommand: AsyncParsableCommand {
     )
     var diff: String?
 
+    @Option(
+        name: .long,
+        help:
+            "Trusted automation/base ref for the shared source policy. Defaults to WENDY_E2E_REVIEW_SOURCE_POLICY_REF or origin/main."
+    )
+    var sourcePolicyRef: String?
+
     @Flag(name: .long, help: "Overwrite existing review files.")
     var overwrite = false
 
@@ -68,7 +75,14 @@ extension ReviewCommand {
         repoURL: URL
     ) async throws {
         let reviewMode = try ReviewMode(diff: diff)
-        let context = try reviewMode.prepareContext(runURL: runURL, repoURL: repoURL)
+        let context = try reviewMode.prepareContext(
+            runURL: runURL,
+            repoURL: repoURL,
+            adapterURL: repoURL.appendingPathComponent(".github/scripts/e2e_review_sources.py"),
+            policyRef: sourcePolicyRef
+                ?? ProcessInfo.processInfo.environment["WENDY_E2E_REVIEW_SOURCE_POLICY_REF"]
+                ?? "origin/main"
+        )
         let promptURL = URL(
             fileURLWithPath: reviewPrompt
                 ?? packageURL.appendingPathComponent("Support/e2e-review.prompt.md").path
@@ -91,6 +105,9 @@ extension ReviewCommand {
         print("    Run:            \(runURL.path)")
         print("    Overview:       \(runOverviewURL(in: runURL).path)")
         print("    Mode:           \(reviewMode.name)")
+        print("    Source inputs:  \(context.sources.status)")
+        print("    Source scope:   \(context.sources.manifestURL.path)")
+        print("    Tool reads:     unrestricted; source-only filtering covers prepared inputs")
         print("    Reviewer:       \(reviewer)")
         print("    Review dir:     \(reviewDirectoryName)")
         if let range = reviewMode.diffRange {
@@ -132,7 +149,7 @@ extension ReviewCommand {
     }
 }
 
-private enum ReviewMode {
+enum ReviewMode {
     case full
     case diff(String)
 
@@ -161,39 +178,33 @@ private enum ReviewMode {
         if case .diff(let range) = self { range } else { nil }
     }
 
-    func prepareContext(runURL: URL, repoURL: URL) throws -> ReviewContext {
-        switch self {
-        case .full:
-            return ReviewContext(mode: self, changedFilesURL: nil, diffstatURL: nil)
-        case .diff(let range):
-            let changedFilesURL = runURL.appendingPathComponent("git-diff-name-only.txt")
-            let diffstatURL = runURL.appendingPathComponent("git-diff-stat.txt")
-
-            try runGitDiffContext(
-                arguments: ["diff", "--name-only", range],
-                outputURL: changedFilesURL,
-                repoURL: repoURL,
-                diffRange: range
-            )
-            try runGitDiffContext(
-                arguments: ["diff", "--stat", range],
-                outputURL: diffstatURL,
-                repoURL: repoURL,
-                diffRange: range
-            )
-            return ReviewContext(
-                mode: self,
-                changedFilesURL: changedFilesURL,
-                diffstatURL: diffstatURL
-            )
-        }
+    func prepareContext(
+        runURL: URL,
+        repoURL: URL,
+        adapterURL: URL,
+        policyRef: String
+    ) throws -> ReviewContext {
+        let sources = try prepareReviewSourceInputs(
+            repoURL: repoURL,
+            runURL: runURL,
+            adapterURL: adapterURL,
+            policyRef: policyRef,
+            diff: diffRange
+        )
+        return ReviewContext(
+            mode: self,
+            changedFilesURL: diffRange == nil ? nil : sources.changedFilesURL,
+            diffstatURL: diffRange == nil ? nil : sources.diffstatURL,
+            sources: sources
+        )
     }
 }
 
-private struct ReviewContext {
+struct ReviewContext {
     var mode: ReviewMode
     var changedFilesURL: URL?
     var diffstatURL: URL?
+    var sources: ReviewSourceInputs
 }
 
 private struct RunReviewAttemptArtifact {
@@ -620,50 +631,6 @@ private func isReviewRunDirectory(_ runURL: URL) throws -> Bool {
     )
 }
 
-private func runGitDiffContext(
-    arguments: [String],
-    outputURL: URL,
-    repoURL: URL,
-    diffRange: String
-) throws {
-    try Data().write(to: outputURL, options: .atomic)
-    let output = try FileHandle(forWritingTo: outputURL)
-    defer { try? output.close() }
-
-    let errorPipe = Pipe()
-    let process = Process()
-    process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-    process.arguments = ["git"] + arguments
-    process.currentDirectoryURL = repoURL
-    process.standardOutput = output
-    process.standardError = errorPipe
-
-    do {
-        try process.run()
-    } catch {
-        try? FileManager.default.removeItem(at: outputURL)
-        throw error
-    }
-    process.waitUntilExit()
-
-    let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
-    let errorText = String(decoding: errorData, as: UTF8.self)
-
-    guard process.terminationStatus == 0 else {
-        try? FileManager.default.removeItem(at: outputURL)
-        let command = (["git"] + arguments).joined(separator: " ")
-        var message =
-            "Could not resolve Git diff range `\(diffRange)` while generating Swift E2E review context."
-        message += " Ensure the repository has enough history and the range is fetchable."
-        message += " Command `\(command)` failed with exit status \(process.terminationStatus)."
-        let detail = errorText.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !detail.isEmpty {
-            message += "\n\(detail)"
-        }
-        throw ValidationError(message)
-    }
-}
-
 private func runReviewDirectoryChildren(of url: URL) throws -> [URL] {
     guard FileManager.default.fileExists(atPath: url.path) else { return [] }
     return try FileManager.default.contentsOfDirectory(
@@ -685,7 +652,7 @@ private func runReviewRelativeFilePath(
     return reviewRelativePath(url, base: runURL)
 }
 
-private func runReviewPrompt(
+func runReviewPrompt(
     basePrompt: String,
     repoURL: URL,
     packageURL: URL,
@@ -740,6 +707,11 @@ private func runPromptHeader(
 ) -> [String] {
     var lines = [
         "# \(title)",
+        "",
+        context.sources.toolReadLimitation,
+        "",
+        "The following canonical source policy describes prepared inputs only:",
+        context.sources.policyRule,
         "",
         basePrompt.trimmingCharacters(in: .whitespacesAndNewlines),
         "",
@@ -1083,6 +1055,18 @@ private func appendReviewContext(_ context: ReviewContext, repoURL: URL, to line
     lines.append("## Review mode")
     lines.append("")
     lines.append("- Mode: `\(context.mode.name)`")
+    lines.append("- Prepared source status: `\(context.sources.status)`")
+    lines.append(
+        "- Immutable refs, source coverage and exclusions: `\(context.sources.manifestURL.path)`"
+    )
+    lines.append("- Committed source file index: `\(context.sources.sourceFilesURL.path)`")
+    lines.append("")
+    lines.append(
+        "Use the prepared source index for additional source inspection. Do not read or report excluded generated implementation through file, search, shell, Git, MCP or custom-harness tools. Those tool responses are not automatically filtered. Uncommitted/untracked source and absent upstream schema bodies are not prepared or proven reviewed."
+    )
+    lines.append(
+        "Keep diagnosing actual failures, flakes, infrastructure problems and qualitative test-source AI requests using run/test evidence. A generated-only diff does not erase prior actionable findings or make a failed run pass. Exclusion counts and generation/build checks do not prove API or behavior coverage."
+    )
 
     guard case .diff(let range) = context.mode else {
         lines.append("")
@@ -1100,18 +1084,8 @@ private func appendReviewContext(_ context: ReviewContext, repoURL: URL, to line
     lines.append(
         "Only report findings plausibly related to the supplied Git diff range. Treat unrelated pre-existing failures, flakes, or test quality issues as background unless the diff appears to introduce or worsen them."
     )
-    lines.append(
-        "Do not look for a saved full patch; inspect targeted diffs on demand with commands like:"
-    )
-    lines.append("")
-    lines.append("```bash")
-    let repo = shellQuoted(repoURL.path)
-    let quotedRange = shellQuoted(range)
-    lines.append("git -C \(repo) diff --stat \(quotedRange)")
-    lines.append("git -C \(repo) diff --name-only \(quotedRange)")
-    lines.append("git -C \(repo) diff \(quotedRange) -- <specific-file>")
-    lines.append("git -C \(repo) diff \(quotedRange) -U80 -- <specific-file>")
-    lines.append("```")
+    lines.append("- Prepared source patch: `\(context.sources.patchURL.path)`")
+    lines.append("Read that filtered patch and index instead of issuing unrestricted Git diffs.")
     lines.append("")
 }
 

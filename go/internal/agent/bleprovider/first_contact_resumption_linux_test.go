@@ -272,7 +272,15 @@ func TestBLEFirstContactRejectsIdentityBeforeCaching(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			capture, ok := config.ClientSessionCache.(*firstContactSessionCache)
+			cache := config.ClientSessionCache
+			for {
+				wrapper, ok := cache.(interface{ Underlying() tls.ClientSessionCache })
+				if !ok {
+					break
+				}
+				cache = wrapper.Underlying()
+			}
+			capture, ok := cache.(*firstContactSessionCache)
 			if !ok {
 				t.Fatal("missing first-contact ticket collector")
 			}

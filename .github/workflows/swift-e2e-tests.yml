@@ -788,6 +788,8 @@ jobs:
         shell: bash
         env:
           DIFF_BASE_REF: ${{ inputs.diff_base_ref || '' }}
+          # Policy comes from the immutable automation/base, never PR-head Python.
+          WENDY_E2E_REVIEW_SOURCE_POLICY_REF: ${{ github.event.pull_request.base.sha || github.sha }}
           # Expose exactly one credential, chosen by the auth probe above.
           CLAUDE_CODE_OAUTH_TOKEN: ${{ steps.review-auth.outputs.auth_mode == 'subscription' && secrets.CLAUDE_CODE_OAUTH_TOKEN || '' }}
           ANTHROPIC_API_KEY: ${{ steps.review-auth.outputs.auth_mode == 'api-key' && secrets.ANTHROPIC_API_KEY || '' }}

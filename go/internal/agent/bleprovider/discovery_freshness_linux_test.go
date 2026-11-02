@@ -236,3 +236,31 @@ func TestAdvertisementSignalsAndScansConcurrent(t *testing.T) {
 		t.Fatalf("concurrent advertisement lost: %+v", got)
 	}
 }
+
+func TestUnsupportedServiceVersionsDoNotRefreshOrWithdrawV1(t *testing.T) {
+	serviceUUID := ServiceUUID(testTenant)
+	advert, _ := NewAdvertisement(lowDevice, "field", DefaultPSM)
+	raw, _ := advert.MarshalBinary()
+	path := dbus.ObjectPath("/org/bluez/hci0/dev_AA_BB_CC_DD_EE_01")
+	props := meshDeviceProps(serviceUUID, raw)
+	objects := managedObjects{path: {deviceInterface: props}}
+	for _, rawReport := range []bool{false, true} {
+		tracker := newAdvertisementFreshness("/org/bluez/hci0", serviceUUID, "field", selfFixture)
+		at := time.Unix(1000, 0)
+		tracker.observe(path, props, at)
+		for _, version := range []byte{0, 2, 255} {
+			if rawReport {
+				data := adField(0x21, append(wireUUID(testTenant.UUID()), version))
+				tracker.observeReport("AA:BB:CC:DD:EE:01", "public", data, at.Add(time.Second))
+			} else {
+				tracker.observe(path, meshDeviceProps(serviceUUID, []byte{version}), at.Add(time.Second))
+			}
+		}
+		if got, _ := tracker.candidates(objects, at.Add(2*time.Second)); len(got) != 1 || got[0].hint != deviceHint(lowDevice) {
+			t.Fatalf("unsupported version withdrew v1 (raw=%v): %+v", rawReport, got)
+		}
+		if got, _ := tracker.candidates(objects, at.Add(advertisementFreshnessTTL)); len(got) != 0 {
+			t.Fatalf("unsupported version refreshed v1 (raw=%v): %+v", rawReport, got)
+		}
+	}
+}
