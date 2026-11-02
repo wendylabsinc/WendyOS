@@ -399,22 +399,19 @@ func (n *Node) Run() error {
 				if p.sync == nil {
 					continue
 				}
+				previousOrigins := n.routeOrigins
 				replies, changed, err := p.sync.ContinueCertificates(time.Now(), directoryResponseSlots(p))
 				if err != nil {
 					n.closePeer(p, "directory-maintenance", err)
 					continue
 				}
-				if !n.queueReplies(p, replies) {
+				queued := n.queueReplies(p, replies)
+				if err := n.afterDirectoryChanges(p, changed, previousOrigins, "certificate-repair"); err != nil {
+					return err
+				}
+				if !queued {
 					n.closePeer(p, "directory-maintenance-queue", errors.New("directory reply reserve full"))
 					continue
-				}
-				for _, record := range changed {
-					n.logAdmission(record, "certificate-repair", time.Now())
-					for id, dest := range n.peers {
-						if id != p.id && dest.sync != nil {
-							n.queue(dest, dest.sync.Record(record, time.Now()))
-						}
-					}
 				}
 				n.continueReconcilePeer(p, time.Now())
 			}
@@ -561,12 +558,25 @@ func (n *Node) handleControl(p *nodePeer, control *ControlMessage) error {
 		n.closePeer(p, "directory-control", err)
 		return nil
 	}
-	if !n.queueReplies(p, replies) {
+	queued := n.queueReplies(p, replies)
+	if err := n.afterDirectoryChanges(p, changed, previousOrigins, "carrier"); err != nil {
+		return err
+	}
+	if !queued {
 		n.closePeer(p, "directory-control-queue", errors.New("directory reply reserve full"))
 		return nil
 	}
+	if len(changed) == 0 {
+		n.refresh()
+	}
+	return nil
+}
+
+// Every successful admission path, including deferred certificate completion,
+// uses the same routing handoff and immediate refresh behavior.
+func (n *Node) afterDirectoryChanges(p *nodePeer, changed []SignedManifest, previousOrigins map[RouteOrigin]bool, source string) error {
 	for _, record := range changed {
-		n.logAdmission(record, "carrier", time.Now())
+		n.logAdmission(record, source, time.Now())
 		for id, dest := range n.peers {
 			if id != p.id && dest.sync != nil {
 				n.queue(dest, dest.sync.Record(record, time.Now()))
@@ -591,7 +601,6 @@ func (n *Node) handleControl(p *nodePeer, control *ControlMessage) error {
 		}
 		return nil
 	}
-	n.refresh()
 	return nil
 }
 

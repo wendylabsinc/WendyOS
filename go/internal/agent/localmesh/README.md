@@ -305,7 +305,7 @@ restart; it is not a certificate identity.
 
 ## Route admission
 
-Every finite remote route requires a current version-4 manifest signed by the
+Every finite remote route requires a live version-4 authorization signed by the
 destination device. The manifest binds its full certificate principal to its exact
 Wendy Net /128, Babel origin router ID, and origin sequence number. An authenticated
 neighbour can relay that proof unchanged, but cannot sign for another device,
@@ -328,8 +328,21 @@ duration. The version-4 signed bytes are unchanged; receiver UTC is not a
 manifest freshness gate. The origin's persistent revision orders announcements.
 A Babel sequence change is persisted and signed before its updates are sent.
 Proofs travel over the existing reliable control stream; Babel datagrams remain
-unchanged. If a datagram arrives first, it is dropped and periodic Babel updates
-repair the ordering.
+unchanged. A datagram that arrives before its proof is dropped. On a newly
+verified tuple, the receiver requests the current prefix advertisement using
+Babel's existing Route Request; periodic updates remain a fallback.
+
+For a pure sequence advance, the receiver can retain one compact authorization
+from the preceding independently verified proof until the matching usable finite
+Babel candidate arrives. It retains no old announcement payload and does not
+re-export or persist that authority. Its original one-duration receiver deadline
+and original selected certificate-path cap can only shorten, including after
+clock correction. The replacement authorizes only its own tuple. A change to
+identity, router, signing key or other advertised fields, an explicit withdrawal,
+or loss of either proof's validity ends this handoff immediately. Once the real
+replacement candidate is usable, the old authorization is removed and route
+selection advances without an intermediate unreachable route. No sequence,
+metric or path is inferred from the new proof.
 
 Each receiver starts one monotonic payload deadline from the signed duration.
 A higher verified revision starts new payload and watermark periods; duplicates

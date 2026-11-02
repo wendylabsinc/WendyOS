@@ -10,8 +10,9 @@ import (
 )
 
 // RouteProof is detached routing authority, not a transferable announcement.
-// Deadline is the receiver's original one-duration lease; no signature, payload
-// or certificate is retained or exported with this diagnostic projection.
+// Deadline is bounded by the receiver's original one-duration lease and the
+// original/current selected certificate paths. No signature, payload or
+// certificate is retained or exported with this diagnostic projection.
 type RouteProof struct {
 	Principal string
 	Deadline  time.Time
@@ -37,6 +38,22 @@ func (d *Directory) certificateTime(now time.Time) time.Time {
 		return d.certificateNow()
 	}
 	return now
+}
+
+// Selected-path caps only shrink when the same signed body is repaired or a
+// current chain is renewed. Signer NotBefore belongs to the retained signature.
+func (d *Directory) restrictEntryCertificate(e directoryEntry, id Identity, now time.Time) directoryEntry {
+	if e.certificateDeadline.IsZero() || e.certificateNotAfter.IsZero() {
+		return e
+	}
+	if id.NotAfter.Before(e.certificateNotAfter) {
+		e.certificateNotAfter = id.NotAfter
+	}
+	cap := d.leaseNow(now).Add(e.certificateNotAfter.Sub(d.certificateTime(now)))
+	if cap.Before(e.certificateDeadline) {
+		e.certificateDeadline = cap
+	}
+	return e
 }
 
 func routeContinuity(m Manifest) ([32]byte, bool) {

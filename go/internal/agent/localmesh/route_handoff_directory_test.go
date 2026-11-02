@@ -359,3 +359,105 @@ func TestRouteHandoffOldLeafGraceCannotBorrowRenewedLeafAfterCertainty(t *testin
 		t.Fatalf("current leaf lent old leaf boot grace after certainty:%v", got)
 	}
 }
+
+func TestRouteHandoffObservedPathRestrictionCannotBeForgottenBeforeSupersession(t *testing.T) {
+	d, chain, key, device, now := directoryFixture(t)
+	selectedEnd := now.Add(time.Hour)
+	d.cache.verify = func(_ [][]byte, _ time.Time) (Identity, error) {
+		return Identity{Device: device, NotAfter: selectedEnd}, nil
+	}
+	old := routeManifest(device, now)
+	old.Issued = now.Add(-50 * time.Second).UnixMilli()
+	old.Expires = now.Add(10 * time.Second).UnixMilli()
+	if _, err := d.Accept(signRouteTestManifest(t, old, chain, key, now), now); err != nil {
+		t.Fatal(err)
+	}
+	selectedEnd = now.Add(20 * time.Second)
+	if len(d.Snapshot(now.Add(time.Second))) != 1 {
+		t.Fatal("still-valid shorter selected path rejected")
+	}
+	selectedEnd = now.Add(time.Hour)
+	next := cloneManifest(old)
+	next.Revision++
+	next.Route.Seqno++
+	next.Issued = now.Add(2 * time.Second).UnixMilli()
+	next.Expires = now.Add(62 * time.Second).UnixMilli()
+	if _, err := d.Accept(signRouteTestManifest(t, next, chain, key, now.Add(2*time.Second)), now.Add(2*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	_, proofs := d.SnapshotWithRoutes(now.Add(2 * time.Second))
+	if !proofs[*old.Route].Deadline.Equal(now.Add(20 * time.Second)) {
+		t.Fatalf("observed shorter path was forgotten:%s", proofs[*old.Route].Deadline)
+	}
+}
+
+func TestRouteHandoffReplacedSignatureUsesActualSignerNotBefore(t *testing.T) {
+	now := time.Now().Truncate(time.Second)
+	uncertain := true
+	policy := certs.CertificateTimePolicy{Now: func() time.Time { return now }, Floor: func() time.Time { return now }, Uncertain: func() bool { return uncertain }}
+	principal := testPrincipal(testTenantUUID, testDeviceAID)
+	oldCert, oldKey := issuePolicyLeaf(t, principal, now.Add(time.Hour), now.Add(2*time.Hour))
+	a, err := NewCredentialsWithTimePolicy(oldCert, testPKI().chainPEM, oldKey, policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cache, err := OpenIdentityCache("", DefaultCacheLimits(), a.Verify, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = cache.Put(a.Certificate.Certificate, now); err != nil {
+		t.Fatal(err)
+	}
+	d, err := NewDirectory(a.Device.Tenant(), 10, cache)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.certificateNow = func() time.Time { return policy.BaseTime(policy.WallTime()) }
+	d.certificateLeafTime = policy.LeafTimeAtBase
+	old := routeManifest(a.Device, now.Add(time.Hour))
+	oldOrigin := *old.Route
+	wire, err := SignManifest(old, a.Certificate.Certificate, a.Signer, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = d.Accept(wire, now); err != nil {
+		t.Fatal(err)
+	}
+	initialUntil := d.entries[a.Device.Key()].activeUntil
+	newCert, newKey := issuePolicyLeaf(t, principal, now.Add(-time.Hour), now.Add(2*time.Hour))
+	b, err := NewCredentialsWithTimePolicy(newCert, testPKI().chainPEM, newKey, policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = cache.Put(b.Certificate.Certificate, now); err != nil {
+		t.Fatal(err)
+	}
+	replacement, err := SignManifest(old, b.Certificate.Certificate, b.Signer, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed, err := d.Accept(replacement, now); err != nil || !changed {
+		t.Fatal(changed, err)
+	}
+	if d.entries[b.Device.Key()].activeUntil != initialUntil {
+		t.Fatal("same-body replacement extended lease")
+	}
+	uncertain = false
+	if !d.RouteAuthorizations(now)[oldOrigin] {
+		t.Fatal("fresh currently-valid replacement signature was not independently trusted")
+	}
+	next := cloneManifest(old)
+	next.Revision++
+	next.Route.Seqno++
+	nextWire, err := SignManifest(next, b.Certificate.Certificate, b.Signer, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = d.Accept(nextWire, now); err != nil {
+		t.Fatal(err)
+	}
+	auth := d.RouteAuthorizations(now)
+	if !auth[oldOrigin] || !auth[*next.Route] {
+		t.Fatalf("pure-seq handoff borrowed replaced old leaf metadata instead of actual retained signer: %v", auth)
+	}
+}

@@ -396,6 +396,8 @@ func (d *Directory) Accept(w SignedManifest, now time.Time) (bool, error) {
 				delete(d.handoffs, owner)
 				old.wire = cloneSignedManifest(w)
 				old.signature = binding
+				old = d.restrictEntryCertificate(old, id, now)
+				old.signingNotBefore = leaf.NotBefore
 				d.entries[owner] = old
 				return true, nil
 			}
@@ -503,6 +505,9 @@ func (d *Directory) currentEntryIdentity(principal string, e directoryEntry, now
 	valid := e.signature.matches(certificateHash(chain[0]), func() bool {
 		return validManifestSignature(e.wire, leaf)
 	})
+	if valid {
+		e = d.restrictEntryCertificate(e, id, now)
+	}
 	d.entries[principal] = e
 	if !valid {
 		return nil, Identity{}, false

@@ -15,7 +15,7 @@ import (
 )
 
 func TestSignedRouteTransitionDistinguishesProofAdvanceAndPathLoss(t *testing.T) {
-	for _, cause := range []string{"new proof", "same sequence renewed", "peer removed", "proof expired"} {
+	for _, cause := range []string{"capability change", "same sequence renewed", "peer removed", "proof expired"} {
 		t.Run(cause, func(t *testing.T) {
 			n := newSignedRouteTestNetwork(t, 2, func(c *babel.Config) { c.UpdateInterval = 16 * time.Second })
 			n.connect(0, 1, 1)
@@ -28,12 +28,22 @@ func TestSignedRouteTransitionDistinguishesProofAdvanceAndPathLoss(t *testing.T)
 			input := routeInput{Kind: "tick"}
 			want := "origin-superseded"
 			switch cause {
-			case "new proof":
+			case "capability change":
 				origin := n.nodes[0]
 				n.step(0, babel.Receive{ID: 1, Packet: routeSequenceRequest(origin.device.prefix, origin.device.routerID, 1)})
-				n.accept(1, n.sign(2, time.Minute, false))
-				// Do not deliver the independent Babel packet yet. This is the real
-				// signature-verified proof-before-update gap seen in the lab.
+				proof := n.sign(2, time.Minute, false)
+				manifest, err := DecodeManifest(proof.Body)
+				if err != nil {
+					t.Fatal(err)
+				}
+				manifest.Caps = []string{CapabilitySensors}
+				proof, err = SignManifest(manifest, n.chain, n.key, n.now())
+				if err != nil {
+					t.Fatal(err)
+				}
+				n.accept(1, proof)
+				// A capability change must still revoke the old tuple immediately;
+				// only a pure same-scope sequence handoff preserves the old proof.
 				n.step(1, babel.Tick{})
 			case "same sequence renewed":
 				n.accept(1, n.sign(2, time.Minute, false))
@@ -61,7 +71,7 @@ func TestSignedRouteTransitionDistinguishesProofAdvanceAndPathLoss(t *testing.T)
 				t.Fatalf("transition=%+v want=%s", events, want)
 			}
 			event := events[0]
-			if cause == "new proof" {
+			if cause == "capability change" {
 				if event.PreviousOriginAuthorized || len(event.CurrentOrigins) != 1 || event.CurrentOrigins[0].Seqno != 1 {
 					t.Fatalf("proof transition=%+v", event)
 				}

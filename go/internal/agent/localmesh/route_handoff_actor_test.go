@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"io"
 	"net/netip"
+	"sync"
 	"testing"
 	"time"
 
@@ -453,4 +454,170 @@ func TestNodeRouteHandoffScopeChangesDoNotBorrowOldProof(t *testing.T) {
 			}
 		})
 	}
+}
+
+// The asynchronous carrier case uses the production TLS/HAVE-WANT/control and
+// datagram readers. Recording is independent of immutable Node snapshots so a
+// transient unreachable Apply cannot disappear between observations.
+type handoffTLSWatchBackend struct {
+	staleClockPacketBackend
+	fibMu         sync.Mutex
+	watched       netip.Prefix
+	applies       int
+	interruptions [][]babel.Route
+}
+
+func (b *handoffTLSWatchBackend) Apply(routes []babel.Route) error {
+	b.fibMu.Lock()
+	defer b.fibMu.Unlock()
+	if !b.watched.IsValid() {
+		return nil
+	}
+	b.applies++
+	finite := false
+	for _, r := range routes {
+		if r.Prefix == b.watched && !r.Local && !r.Unreachable {
+			finite = true
+			break
+		}
+	}
+	if !finite {
+		b.interruptions = append(b.interruptions, append([]babel.Route(nil), routes...))
+	}
+	return nil
+}
+func (b *handoffTLSWatchBackend) arm(prefix netip.Prefix) {
+	b.fibMu.Lock()
+	defer b.fibMu.Unlock()
+	b.watched = prefix
+	b.applies = 0
+	b.interruptions = nil
+}
+func (b *handoffTLSWatchBackend) disarm() {
+	b.fibMu.Lock()
+	defer b.fibMu.Unlock()
+	b.watched = netip.Prefix{}
+}
+func (b *handoffTLSWatchBackend) observations() (int, [][]babel.Route) {
+	b.fibMu.Lock()
+	defer b.fibMu.Unlock()
+	bad := make([][]babel.Route, len(b.interruptions))
+	for i, r := range b.interruptions {
+		bad[i] = append([]babel.Route(nil), r...)
+	}
+	return b.applies, bad
+}
+
+func TestNodeRouteHandoffOverAsyncTLSAndGossip(t *testing.T) {
+	a, b := testCredentials(t)
+	origin := runStaleClockNode(t, t.TempDir(), a)
+	backend := &handoffTLSWatchBackend{}
+	// Function defers run before fixture cleanups: intentional final peer removal
+	// must not be mistaken for an interruption during the measured handoff.
+	defer backend.disarm()
+	receiverCtx, receiverCancel := context.WithCancel(context.Background())
+	receiver, err := NewNodeWithNetwork(receiverCtx, t.TempDir(), b, "handoff-async-TLS", 50052, backend)
+	if err != nil {
+		receiverCancel()
+		t.Fatal(err)
+	}
+	receiverRun := &staleClockNodeRun{node: receiver, cancel: receiverCancel, done: make(chan error, 1)}
+	go func() { receiverRun.done <- receiver.Run() }()
+	t.Cleanup(func() { receiverRun.stop(t) })
+	connectStaleClockNodes(t, origin.node, receiver)
+	// Initial proof gossip and stream IHU convergence retain their ordinary
+	// bounded fixture watches; the handoff watch starts only once joined.
+	waitStaleClockSnapshot(t, receiver, 2)
+	deadline := time.Now().Add(8 * time.Second)
+	prefix := netip.PrefixFrom(a.Device.MeshAddress(), 128)
+	finite := func(routes []babel.Route, seq uint16) bool {
+		for _, r := range routes {
+			if r.Prefix == prefix && !r.Local && !r.Unreachable && r.Seqno == seq {
+				return true
+			}
+		}
+		return false
+	}
+	var initial Manifest
+	var originLink babel.LinkID
+	wait := func(label string, ready func() bool) {
+		t.Helper()
+		for time.Now().Before(deadline) {
+			if ready() {
+				return
+			}
+			time.Sleep(time.Millisecond)
+		}
+		t.Fatalf("timed out waiting for %s; origin=%+v receiver=%+v", label, origin.node.Snapshot(), receiver.Snapshot())
+	}
+	wait("initial real TLS gossip proof and finite route", func() bool {
+		view := receiver.Snapshot()
+		for _, m := range view.Devices {
+			if m.Device == a.Device.UUID() && m.Route != nil && view.RouteAuthorizations[*m.Route] && finite(view.Routes, m.Route.Seqno) && finite(view.ForwardingRoutes, m.Route.Seqno) {
+				initial = m
+				break
+			}
+		}
+		if initial.Route == nil {
+			return false
+		}
+		for _, link := range origin.node.Snapshot().Links {
+			if link.Device == b.Device {
+				originLink = link.ID
+				break
+			}
+		}
+		return originLink != 0
+	})
+	backend.arm(prefix)
+	deadline = time.Now().Add(8 * time.Second)
+	ctx, cancel := context.WithDeadline(context.Background(), deadline)
+	defer cancel()
+	next := initial.Route.Seqno + 1
+	// Request is serialized through the actual source actor. Its normal durable
+	// publication gate, HAVE/WANT gossip and independent Babel stream now run;
+	// this fixture neither modifies timers nor injects the replacement proof.
+	if err := origin.node.request(ctx, nodeEvent{id: originLink, packet: handoffActorSequenceRequest(prefix, initial.Route.RouterID, next)}); err != nil {
+		t.Fatal(err)
+	}
+	var settled NodeSnapshot
+	wait("asynchronous handoff and old-proof retirement", func() bool {
+		view := receiver.Snapshot()
+		count := 0
+		for _, m := range view.Devices {
+			if m.Device == a.Device.UUID() {
+				count++
+				if m.Route == nil || m.Route.Seqno != next || m.Revision <= initial.Revision {
+					return false
+				}
+			}
+		}
+		if count != 1 || !finite(view.Routes, next) || !finite(view.ForwardingRoutes, next) {
+			return false
+		}
+		old := *initial.Route
+		if view.RouteAuthorizations[old] {
+			return false
+		}
+		for _, proof := range view.RouteProofs {
+			if proof.Principal == a.Device.Principal() && proof.Retained {
+				return false
+			}
+		}
+		settled = view
+		return true
+	})
+	applies, bad := backend.observations()
+	if applies == 0 {
+		t.Fatal("watch backend did not observe an applied route transition")
+	}
+	if len(bad) != 0 {
+		t.Fatalf("real TLS/gossip handoff applied unreachable FIB:%+v", bad)
+	}
+	current := *initial.Route
+	current.Seqno = next
+	if !settled.RouteAuthorizations[current] {
+		t.Fatal("new real candidate has no current verified proof")
+	}
+	t.Logf("real buffered TLS/HAVE-WANT handoff %d→%d: %d finite Apply calls, latest-only manifest, old proof retired", initial.Route.Seqno, next, applies)
 }

@@ -33,7 +33,9 @@ func (m Manifest) validateRoute(device meshid.Device) error {
 
 // RouteAuthorizations returns a detached snapshot for route admission. It checks
 // current trust and the exact record's signature against the current key, and
-// requires a live version-4 lease. Conflicting address claims by different
+// requires a live version-4 lease. A pure sequence handoff can also retain one
+// independently verified prior tuple within its original, shrink-only bounds.
+// Conflicting address claims by different
 // principals authorize neither origin. A signed origin proves address ownership,
 // not the honesty or reachability of its relays.
 func (d *Directory) RouteAuthorizations(now time.Time) map[RouteOrigin]bool {
