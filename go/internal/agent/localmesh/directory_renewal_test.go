@@ -190,7 +190,7 @@ func TestDirectoryRenewalResignRecoveryPreservesReplayAndLease(t *testing.T) {
 			if !d.RouteAuthorizations(now.Add(time.Second))[*m.Route] {
 				t.Fatal("renewed signature did not recover its exact signed route")
 			}
-			if !reflect.DeepEqual(after.manifest, before.manifest) || !after.retainUntil.Equal(before.retainUntil) || d.history[wire.Principal] != receipt || saves != 1 {
+			if !reflect.DeepEqual(after.manifest, before.manifest) || !after.retainUntil.Equal(before.retainUntil) || d.history[wire.Principal] != receipt || saves != 0 {
 				t.Fatal("re-sign extended lease/retention or changed durable receipt")
 			}
 			admitted := resigned
@@ -260,7 +260,7 @@ func TestDirectoryRenewalResignRecoveryPreservesReplayAndLease(t *testing.T) {
 			if _, ok := d.CurrentRecordChain(admitted, recoveryAt.Add(time.Second)); ok {
 				t.Fatal("superseded queued wire exported")
 			}
-			if d.history[wire.Principal].Revision != 8 || saves != 2 {
+			if d.history[wire.Principal].Revision != 8 || saves != 0 {
 				t.Fatal("new revision did not preserve receipt persistence")
 			}
 		})

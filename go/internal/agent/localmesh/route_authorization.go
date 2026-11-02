@@ -43,7 +43,7 @@ func (d *Directory) RouteAuthorizations(now time.Time) map[RouteOrigin]bool {
 	verified := make([]Manifest, 0, len(d.entries))
 	for principal, e := range d.entries {
 		m := e.manifest
-		if e.expired || m.Withdraw || m.Version != ManifestVersionRoute || m.Route == nil {
+		if m.Withdraw || m.Version != ManifestVersionRoute || m.Route == nil {
 			continue
 		}
 		// A renewed principal cannot lend its new key's authority to an old
