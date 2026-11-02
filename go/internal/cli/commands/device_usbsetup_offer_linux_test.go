@@ -101,7 +101,7 @@ func TestMaybeOfferUSBSetup_WithoutPromptPrintsNotice(t *testing.T) {
 		usbGadgetIfaceNames = func() ([]string, error) { return []string{"enxaa"}, nil }
 		got := captureStderr(t, func() { _ = maybeOfferUSBSetup(context.Background()) })
 		if !strings.Contains(got, "enxaa") || !strings.Contains(got, "wendy discover") {
-			t.Errorf("%s: stderr = %q, want the USB-C setup notice for enxaa", c.name, got)
+			t.Errorf("%s: stderr = %q, want the USB setup notice for enxaa", c.name, got)
 		}
 
 		usbGadgetIfaceNames = func() ([]string, error) { return nil, nil }
