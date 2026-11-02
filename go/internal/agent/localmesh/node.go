@@ -117,6 +117,8 @@ type Node struct {
 	forwardRoutes    []babel.Route
 	diagnostics      carrierDiagnostics
 	routeOrigins     map[RouteOrigin]bool
+	routeInput       routeInput
+	routeDiagnostics []routeTransition
 	timestampWorkers chan struct{}
 	wallNow          func() time.Time
 	clockSync        func(context.Context, roughtime.RelayQuery) error
@@ -446,6 +448,9 @@ func (n *Node) Run() error {
 }
 
 func (n *Node) step(event babel.Event) error {
+	previousInput := n.routeInput
+	n.routeInput = describeRouteInput(event)
+	defer func() { n.routeInput = previousInput }()
 	n.routeOrigins = n.directory.RouteAuthorizations(n.wallTime())
 	if err := n.routing.Step(time.Since(n.started), event); err != nil {
 		return errors.Join(babel.ErrStopped, err)
@@ -1034,6 +1039,16 @@ func (n *Node) Apply(routes []babel.Route) error {
 	if err := n.kernel.Apply(routes); err != nil {
 		return err
 	}
+	var snapshot babel.Snapshot
+	if n.routing != nil {
+		snapshot = n.routing.Snapshot()
+	}
+	// Stage diagnostics under the forwarding barrier, but do not write logs
+	// until persistence and Resume have succeeded and packet forwarding is unpaused.
+	n.routeDiagnostics = nil
+	reportRouteTransitions(n.forwardRoutes, routes, n.routeOrigins, n.routeInput, snapshot, n.wallTime(), func(event routeTransition) {
+		n.routeDiagnostics = append(n.routeDiagnostics, event)
+	})
 	n.forwardRoutes = routes
 	return nil
 }
@@ -1064,9 +1079,14 @@ func (n *Node) Persist(cp babel.Checkpoint) error {
 	return nil
 }
 func (n *Node) Resume() error {
+	diagnostics := n.routeDiagnostics
+	n.routeDiagnostics = nil
 	if n.paused {
 		n.paused = false
 		n.gate.Unlock()
+	}
+	for _, event := range diagnostics {
+		logRouteTransition(event)
 	}
 	return nil
 }
@@ -1075,6 +1095,7 @@ func (n *Node) Stop() error {
 		n.gate.Lock()
 	}
 	n.stopped = true
+	n.routeDiagnostics = nil
 	err := n.kernel.Stop()
 	n.paused = false
 	n.gate.Unlock()
