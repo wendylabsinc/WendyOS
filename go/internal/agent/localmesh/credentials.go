@@ -54,6 +54,7 @@ func (c *Credentials) VerifyPrimaryOperator(chain [][]byte, now time.Time) (mesh
 	if c.timePolicy == nil {
 		return meshoperator.VerifyPrimary(c.knownIssuerCandidates(chain, now), c.primaryRoots, c.Device.Tenant(), now)
 	}
+	now = certificateWallTime(c.timePolicy, now)
 	return meshoperator.VerifyPrimaryWithPolicy(c.knownIssuerCandidates(chain, now), c.primaryRoots, c.Device.Tenant(), now, *c.timePolicy)
 }
 
@@ -65,6 +66,15 @@ func (c *Credentials) CertificateTimePolicy() certs.CertificateTimePolicy {
 }
 
 func (c *Credentials) HasCertificateTimePolicy() bool { return c != nil && c.timePolicy != nil }
+
+// An explicit local clock owns certificate UTC. The caller's clock can remain
+// monotonic scheduling time; legacy and zero-policy callers keep supplied now.
+func certificateWallTime(policy *certs.CertificateTimePolicy, supplied time.Time) time.Time {
+	if policy != nil && policy.Now != nil {
+		return policy.WallTime()
+	}
+	return supplied
+}
 
 // NewCredentials loads the provisioned identity and derives the local-mesh
 // identity from its leaf. Certificates without a device principal — asset, user,
@@ -148,6 +158,7 @@ func newCredentials(certPEM, chainPEM, keyPEM string, instance uuid.UUID, operat
 	}
 	material := meshalpn.NewCertificates(cert, primaryRoots)
 	verify := func(chain [][]byte, now time.Time) (Identity, error) {
+		now = certificateWallTime(policy, now)
 		if len(chain) == 0 || len(chain) > 16 {
 			return Identity{}, errors.New("invalid identity bundle")
 		}

@@ -165,3 +165,55 @@ func TestExplicitCertificatePolicyLeavesLegacyPrimaryLifetimeUnchanged(t *testin
 		t.Fatal("own credential expiry ignored selected local base")
 	}
 }
+
+func TestExplicitCertificateWallClockIsIndependentFromScheduler(t *testing.T) {
+	now := time.Now().Truncate(time.Second)
+	wall := now
+	policy := certs.CertificateTimePolicy{Now: func() time.Time { return wall }, Floor: func() time.Time { return now.Add(-time.Minute) }}
+	selfPEM, selfKey := issuePolicyLeaf(t, testPrincipal(testTenantUUID, testDeviceAID), now.Add(-time.Hour), now.Add(time.Hour))
+	self, err := NewCredentialsWithTimePolicy(selfPEM, testPKI().chainPEM, selfKey, policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, role := range []string{"device", "operator"} {
+		t.Run(role, func(t *testing.T) {
+			principal := testPrincipal(testTenantUUID, testDeviceBID)
+			if role == "operator" {
+				principal = "spiffe://wendy.sh/tenant/" + testTenantUUID + "/operator/clock-domain"
+			}
+			peerPEM, _ := issuePolicyLeaf(t, principal, now.Add(-time.Minute), now.Add(time.Hour))
+			leaf, err := certs.ParseCertsFromPEM([]byte(peerPEM))
+			if err != nil {
+				t.Fatal(err)
+			}
+			chain := [][]byte{leaf[0].Raw}
+			for _, verify := range []IdentityVerifier{self.Verify, self.VerifyTLS} {
+				if _, err := verify(chain, now.Add(24*time.Hour)); err != nil {
+					t.Fatal("scheduler timestamp selected certificate UTC", err)
+				}
+			}
+			if role == "operator" {
+				if _, err := self.VerifyPrimaryOperator(chain, now.Add(24*time.Hour)); err != nil {
+					t.Fatal("primary proof used scheduler timestamp", err)
+				}
+			}
+			wall = now.Add(2 * time.Hour)
+			if _, err := self.Verify(chain, now); err == nil {
+				t.Fatal("expired policy clock replaced by old scheduler timestamp")
+			}
+			if role == "operator" {
+				if _, err := self.VerifyPrimaryOperator(chain, now); err == nil {
+					t.Fatal("primary proof ignored policy expiry")
+				}
+			}
+			wall = now
+		})
+	}
+	legacy, err := NewCredentials(selfPEM, testPKI().chainPEM, selfKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := legacy.Verify(self.Certificate.Certificate, now.Add(24*time.Hour)); err == nil {
+		t.Fatal("legacy supplied certificate clock changed")
+	}
+}

@@ -45,6 +45,9 @@ func (c *Credentials) knownIssuerCandidates(chain [][]byte, now time.Time) [][]b
 	if c.issuerMaterial == nil {
 		return chain
 	}
+	if c.timePolicy != nil {
+		now = c.timePolicy.BaseTime(certificateWallTime(c.timePolicy, now))
+	}
 	return c.issuerMaterial.Candidates(chain, now)
 }
 
