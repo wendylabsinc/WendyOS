@@ -900,6 +900,14 @@ func resultToError(result wendypb.WendyComResult) error {
 		return errors.New("bad app type")
 	case wendypb.WendyComResult_WENDY_COM_RESULT_BAD_APP_SIZE:
 		return errors.New("bad app size")
+	case wendypb.WendyComResult_WENDY_COM_RESULT_NET_NO_WIFI:
+		return errors.New("WiFi is not supported by this device")
+	case wendypb.WendyComResult_WENDY_COM_RESULT_NET_NO_BLE:
+		return errors.New("BLE is not supported by this device")
+	case wendypb.WendyComResult_WENDY_COM_RESULT_NET_NO_NAN:
+		return errors.New("NAN is not supported by this device")
+	case wendypb.WendyComResult_WENDY_COM_RESULT_NET_ONE_CARRIER_ONLY:
+		return errors.New("only one carrier is supported at a time")
 	case wendypb.WendyComResult_WENDY_COM_RESULT_BAD_CONF_SIZE:
 		return errors.New("bad conf size")
 	default: // includes WENDY_COM_RESULT_UNKNOWN_ERROR
