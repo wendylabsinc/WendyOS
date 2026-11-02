@@ -51,5 +51,12 @@ func (p *MicroWendyProvider) ConfigureNet(ctx context.Context, device models.Ext
 	if err := update(config); err != nil {
 		return nil, err
 	}
+	// Old firmware ignores unknown protobuf fields. Never report a coded
+	// profile applied unless the device explicitly advertises that support.
+	profile := config.GetBleProfile()
+	if profile != litepb.WendyComBleProfile_WENDY_COM_BLE_NORMAL &&
+		(profile < 0 || profile > 2 || status.GetBleProfilesSupported()&(1<<uint32(profile)) == 0) {
+		return nil, fmt.Errorf("the requested BLE profile is not supported by this firmware")
+	}
 	return client.SetNetConfig(config, 10*time.Second)
 }
