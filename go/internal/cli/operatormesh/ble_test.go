@@ -113,7 +113,12 @@ func TestOperatorBLEAttachmentUsesPrimaryProofAndSharedTLS(t *testing.T) {
 					if _, err := io.ReadFull(c, b[:]); err != nil {
 						return err
 					}
-					_, err := c.Write(b[:])
+					if _, err := c.Write(b[:]); err != nil {
+						return err
+					}
+					// Let the client finish its ping write and close the stream.
+					// A crossing remote close deliberately aborts in-flight frames.
+					_, err := io.Copy(io.Discard, c)
 					return err
 				})
 				if err != nil {
