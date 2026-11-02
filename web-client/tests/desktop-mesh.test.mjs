@@ -66,6 +66,24 @@ test("local advertisements cannot supply Cloud-name bindings", async () => {
   assert.equal(devices[1].cloudNamePrincipal, undefined);
 });
 
+test("Cloud labels use the PKI binding instead of the asset row ID", async () => {
+  const service = fixture();
+  const deviceID = "00000000-0000-4000-8000-000000000099";
+  service.run = async (_file, args) => JSON.stringify(args[0] === "cloud"
+    ? [{ id: cloudAsset, selector: cloudSelector, name: "Cloud Thor", pkiDeviceName: deviceID }]
+    : {});
+  const { devices } = await service.meshDiscover();
+  const cloud = devices.find(device => device.id === cloudSelector);
+  assert.equal(cloud.cloudNamePrincipal, `spiffe://wendy.sh/tenant/${cloudTenant}/device/${deviceID}`);
+  assert.equal(cloud.id, cloudSelector);
+
+  service.run = async (_file, args) => JSON.stringify(args[0] === "cloud"
+    ? [{ id: cloudAsset, selector: cloudSelector, name: "Cloud Thor", pkiDeviceName: "unknown-device-format" }]
+    : {});
+  const unknown = (await service.meshDiscover()).devices.find(device => device.id === cloudSelector);
+  assert.equal(unknown.cloudNamePrincipal, undefined, "an invalid explicit binding must not fall back to the asset ID");
+});
+
 test("Cloud discovery preserves complete selectors across tenants, endpoints and legacy organizations", async () => {
   const service = fixture();
   const selectors = [

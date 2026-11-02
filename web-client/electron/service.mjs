@@ -507,7 +507,8 @@ export class DesktopService {
           // Cloud inventory can supply a preferred label even when its relay
           // is offline. This is not an authenticated topology observation or
           // permission to group a local advertisement by its claimed UUID.
-          const namedDevice = known || asset;
+          const namedDevice = device.pkiDeviceName == null || device.pkiDeviceName === ""
+            ? asset : canonicalUUID(device.pkiDeviceName);
           if (tenant && namedDevice && typeof device.name === "string" && device.name.trim()) {
             const label = { cloudName: device.name, cloudNamePrincipal: `spiffe://wendy.sh/tenant/${tenant}/device/${namedDevice}` };
             cloudNames.set(`device:${tenant}/${namedDevice}`, label);
