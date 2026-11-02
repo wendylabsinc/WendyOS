@@ -300,6 +300,8 @@ func BuildServerVerifyConnection(opts ServerVerifyOpts) (func(tls.ConnectionStat
 			KeyUsages:     []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		})
 		if stdErr != nil {
+			now := time.Now()
+			stdErr = ClassifyIssuerFailure(stdErr, leaf, cs.PeerCertificates[1:], caCerts, x509.ExtKeyUsageServerAuth, now, now)
 			sigOID, oidErr := mldsaCertSigAlgOID(leaf)
 			if oidErr != nil {
 				return stdErr
@@ -307,7 +309,6 @@ func BuildServerVerifyConnection(opts ServerVerifyOpts) (func(tls.ConnectionStat
 			if _, schemeErr := mldsaScheme(sigOID); schemeErr != nil {
 				return stdErr
 			}
-			now := time.Now()
 			if err := VerifyPeerCertificateChain(leaf, cs.PeerCertificates[1:], caCerts, x509.ExtKeyUsageServerAuth, now, now); err != nil {
 				return err
 			}

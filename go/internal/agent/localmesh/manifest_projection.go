@@ -123,3 +123,10 @@ func projectManifestServices(raw netwire.RawMessage) ([]ManifestService, error) 
 	}
 	return out, nil
 }
+
+// Both projection decoders already checked these arrays and their limits.
+func manifestHasEntries(raw netwire.RawMessage) bool {
+	var entries []netwire.RawMessage
+	_ = netwire.Unmarshal(raw, &entries)
+	return len(entries) != 0
+}

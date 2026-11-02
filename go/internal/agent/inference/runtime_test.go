@@ -339,8 +339,8 @@ exit 3`, crashes.add)
 // the channel (worker.py); if anything does, the reason says what it was.
 func TestWorkerProtocolViolationNamesTheLine(t *testing.T) {
 	crashes := &crashLog{}
-	// Emit the diagnostic before the malformed stdout line: the agent may
-	// kill the worker as soon as it reads that protocol violation.
+	// The invalid stdout line terminates the worker, so write the stderr
+	// that the exit error must retain before triggering that termination.
 	session, err := shWorker(t, context.Background(), `echo '{"type":"ready"}'
 echo 'loading engine' >&2
 echo '[TRT] [W] Using an engine plan file across different models of devices is not supported'

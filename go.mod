@@ -67,7 +67,7 @@ require (
 	github.com/vishvananda/netlink v1.3.1
 	github.com/vishvananda/netns v0.0.5
 	github.com/wendylabsinc/WendyOS/go/babel v0.0.0
-	go.bug.st/serial v1.6.4
+	go.bug.st/serial v1.8.0
 	go.etcd.io/bbolt v1.5.0
 	go.opentelemetry.io/proto/otlp v1.11.1
 	go.uber.org/zap v1.28.0
@@ -81,6 +81,7 @@ require (
 	google.golang.org/grpc v1.84.0
 	google.golang.org/protobuf v1.36.12
 	gopkg.in/yaml.v3 v3.0.1
+	gvisor.dev/gvisor v0.0.0-20261028061103-fb8670e2f5cd
 )
 
 require (
@@ -112,7 +113,6 @@ require (
 	github.com/containerd/plugin v1.1.0 // indirect
 	github.com/containerd/ttrpc v1.2.9 // indirect
 	github.com/coreos/go-iptables v0.8.0 // indirect
-	github.com/creack/goselect v0.1.3 // indirect
 	github.com/djherbis/times v1.6.0 // indirect
 	github.com/docker/docker-credential-helpers v0.9.8 // indirect
 	github.com/docker/go-units v0.5.0 // indirect
@@ -121,6 +121,7 @@ require (
 	github.com/felixge/httpsnoop v1.1.0 // indirect
 	github.com/go-logr/logr v1.4.4 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
+	github.com/google/btree v1.1.2 // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.31.0 // indirect
 	github.com/hashicorp/go-cleanhttp v0.5.2 // indirect
 	github.com/in-toto/attestation v1.2.0 // indirect
@@ -179,6 +180,7 @@ require (
 	go.opentelemetry.io/otel/sdk v1.46.0 // indirect
 	go.opentelemetry.io/otel/trace v1.46.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
+	golang.org/x/exp v0.0.0-20260908205506-85c1c2202aba // indirect
 	golang.org/x/text v0.42.0 // indirect
 	google.golang.org/genproto/googleapis/api v0.0.0-20260928230214-8a89bd6388cc // indirect
 	gotest.tools/v3 v3.5.2 // indirect

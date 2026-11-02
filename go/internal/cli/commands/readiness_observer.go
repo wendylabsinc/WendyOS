@@ -112,7 +112,7 @@ func continueReadiness(ctx context.Context, tick, deadline <-chan time.Time, pro
 func waitForAttachedReadiness(ctx context.Context, conn *grpcclient.AgentConnection, cfg *appconfig.AppConfig, hostname string, timeoutOverride time.Duration) error {
 	readiness := effectiveReadiness(cfg)
 	httpPort := cloudHTTPReadinessPort(conn, cfg, readiness, hostname)
-	return waitForAttachedReadinessWith(ctx, conn, cfg, readiness, hostname, httpPort, makeReadinessProbe, timeoutOverride)
+	return waitForAttachedReadinessWith(ctx, conn, cfg, readiness, hostname, httpPort, agentReadinessProbeFactory(conn), timeoutOverride)
 }
 
 // waitForAttachedReadinessWith is waitForAttachedReadiness with the probed
