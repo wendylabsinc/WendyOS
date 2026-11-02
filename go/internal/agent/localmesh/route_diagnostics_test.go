@@ -2,7 +2,9 @@ package localmesh
 
 import (
 	"bytes"
+	"context"
 	"errors"
+	"github.com/wendylabsinc/wendy/go/internal/shared/asyncdiag"
 	"log"
 	"net/netip"
 	"strings"
@@ -110,6 +112,11 @@ func TestNodeReportsRouteTransitionOnlyAfterSuccessfulApply(t *testing.T) {
 		} else {
 			_ = n.Resume()
 		}
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		if flushErr := asyncdiag.Flush(ctx); flushErr != nil {
+			t.Fatal(flushErr)
+		}
+		cancel()
 		log.SetOutput(loggerOutput)
 		if phase != "resume" {
 			if phase == "failed-apply" && err == nil {
