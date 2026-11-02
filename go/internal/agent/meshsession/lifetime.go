@@ -150,7 +150,9 @@ func sessionDeadline(credentials *localmesh.Credentials, chain [][]byte) (time.T
 	if peer.NotAfter.Before(expires) {
 		expires = peer.NotAfter
 	}
-	deadline := expires
+	// Legacy wall-time validity has the same UTC endpoint, but also retain
+	// its initial monotonic duration as the old one-shot expiry timer did.
+	deadline := started.Add(expires.Sub(started))
 	if credentials.HasCertificateTimePolicy() {
 		policy := credentials.CertificateTimePolicy()
 		base := policy.BaseTime(policy.WallTime())
