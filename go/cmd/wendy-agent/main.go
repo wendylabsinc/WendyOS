@@ -195,6 +195,11 @@ func main() {
 	var networkMgr services.NetworkManager
 	if nm := agentnet.NewNMCLINetworkManager(logger); nm != nil {
 		networkMgr = nm
+		go func() {
+			rctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			defer cancel()
+			nm.RepairForcedOpenAuthOnce(rctx)
+		}()
 	}
 	hwDiscoverer := hardware.NewSystemHardwareDiscoverer(logger)
 	linkWatcher := bluetooth.NewWatcher(logger)
@@ -849,6 +854,12 @@ func main() {
 		agentpbv2.RegisterWendyBluetoothServiceServer(srv, bluetoothSvc)
 		agentpbv2.RegisterWendyAgentUpdateServiceServer(srv, agentUpdateSvc)
 		agentpbv2.RegisterWendyOSUpdateServiceServer(srv, osUpdateSvc)
+		// Driver management follows the same access policy as OS updates:
+		// available before enrollment, over mTLS afterward, and through the
+		// local admin socket. The store and apply path require Linux.
+		if runtime.GOOS == "linux" {
+			agentpbv2.RegisterWendyDriverServiceServer(srv, driverSvc)
+		}
 		agentpbv2.RegisterWendyContainerServiceServer(srv, containerSvcV2)
 		agentpbv2.RegisterWendyProvisioningServiceServer(srv, provisioningSvcV2)
 		agentpbv2.RegisterWendyAudioServiceServer(srv, audioSvcV2)
@@ -939,17 +950,6 @@ func main() {
 		// loopback. Register it only on the authenticated, org-checked server,
 		// never on the plaintext provisioning listener or local admin socket.
 		agentpbv2.RegisterWendyTunnelServiceServer(srv, services.NewTunnelService(logger))
-
-		// WendyDriverService installs kernel driver add-ons — loading a module is
-		// ring-0 code execution, as privileged as the root shell above. So it is
-		// registered ONLY here on the mTLS server (authenticated, org-checked),
-		// never via registerAllServices: signature verification guards WHAT runs,
-		// but the transport must still guard WHO may install or remove a driver.
-		// Linux only: the store is systemd-sysext and modprobe. Elsewhere the
-		// client sees Unimplemented and treats the device as having no add-ons.
-		if runtime.GOOS == "linux" {
-			agentpbv2.RegisterWendyDriverServiceServer(srv, driverSvc)
-		}
 
 		// Compute mTLS port = agentPort + 1.
 		portNum, err := strconv.Atoi(agentPort)

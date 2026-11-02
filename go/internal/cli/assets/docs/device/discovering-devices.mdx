@@ -8,23 +8,25 @@ description: Find WendyOS devices on your network using the Wendy CLI
 <iframe
   className="aspect-video w-full rounded-lg border-0"
   src="https://www.youtube.com/embed/9vZIOcpbkl0"
-  title="Deploying to a WendyOS device over USB-C, Wi-Fi, and Wendy Cloud"
+  title="Deploying to a WendyOS device over USB, Wi-Fi, and Wendy Cloud"
   loading="lazy"
   referrerPolicy="strict-origin-when-cross-origin"
   allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
   allowFullScreen
 />
 
-This walkthrough deploys a YOLOv8 app with `wendy run` over USB-C, connects the device to Wi-Fi with `wendy device wifi connect` and keeps deploying over the LAN, then enrolls the device with `wendy cloud enroll-device` to reach a Unitree Go2 from another location — the CLI picks the fastest available transport each time.
+This walkthrough deploys a YOLOv8 app with `wendy run` over USB, connects the device to Wi-Fi with `wendy device wifi connect` and keeps deploying over the LAN, then enrolls the device with `wendy cloud enroll-device` to reach a Unitree Go2 from another location — the CLI picks the fastest available transport each time.
 
 The Wendy CLI can automatically discover WendyOS devices connected to your development machine. This works over USB connections and over your Local Area Network (LAN).
 
 ### Prerequisites
 
 - Wendy CLI installed on your development machine
-- A WendyOS device (NVIDIA Jetson or Raspberry Pi 3, 4, or 5) either:
-  - Connected via USB cable (Jetson, Pi 5, and Pi 4), or
+- A WendyOS device (NVIDIA Jetson, Raspberry Pi 3, 4, or 5, or Dragonwing IQ8/IQ9) either:
+  - Connected via USB cable (Jetson, Pi 5, Pi 4, and Dragonwing), or
   - Connected to the same network as your development machine (required for the Pi 3, which has no USB connection)
+
+On Dragonwing IQ8, use USB2 (micro-USB) for normal WendyOS access after boot. USB0 (USB-C) is reserved for EDL/recovery flashing.
 
 ## Running Device Discovery
 
@@ -70,7 +72,7 @@ The discovery output shows all available connection methods for each device:
 
 ### USB Connection
 
-USB is the most reliable connection method and works regardless of network configuration. Simply connect your WendyOS device to your development machine using a USB-C cable.
+USB is the most reliable connection method and works regardless of network configuration. Connect your WendyOS device to your development machine using a data-capable USB cable. On Dragonwing IQ8, use USB2 (micro-USB) after WendyOS boots; USB0 (USB-C) is for EDL/recovery flashing.
 
 USB connections are ideal for:
 - Initial device setup
