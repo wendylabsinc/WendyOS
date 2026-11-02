@@ -66,7 +66,7 @@ func (m *Manager) SetCampaignState(name, state string) (Campaign, bool, error) {
 }
 
 // ErrCampaignRedeployed is RemoveCampaign's refusal to delete a plan deployed
-// after the caller read the revision it meant to remove.
+// after the caller read the plan it meant to remove.
 var ErrCampaignRedeployed = errors.New("campaign was deployed again")
 
 // removedCampaign is what RemoveCampaign keeps of a plan: the policy the
@@ -96,16 +96,19 @@ func (m *Manager) removedCampaignPath(name string) string {
 // had recorded. CampaignForUpload reads the record.
 //
 // The caller stops the campaign first. This only changes what is stored.
-// A non-empty revision must match the stored plan's: a plan deployed since the
-// caller read it is kept, and ErrCampaignRedeployed is returned.
-func (m *Manager) RemoveCampaign(name, revision string) (Campaign, error) {
+// A non-nil expected is the plan the caller read: a plan deployed since then is
+// kept, and ErrCampaignRedeployed is returned. The deploy time is compared as
+// well as the revision. The revision is a digest of the plan's contents, so a
+// byte-identical redeploy keeps it, and that deploy has reported the plan
+// stored just the same.
+func (m *Manager) RemoveCampaign(name string, expected *Campaign) (Campaign, error) {
 	m.campaignMu.Lock()
 	defer m.campaignMu.Unlock()
 	campaign, err := m.Campaign(name)
 	if err != nil {
 		return Campaign{}, err
 	}
-	if revision != "" && campaign.Revision != revision {
+	if expected != nil && (campaign.Revision != expected.Revision || campaign.DeployedUnixNanos != expected.DeployedUnixNanos) {
 		return Campaign{}, ErrCampaignRedeployed
 	}
 	record, err := json.MarshalIndent(removedCampaign{Name: campaign.Name, Revision: campaign.Revision, Fleet: campaign.Fleet, Upload: campaign.Upload, RemovedUnixNanos: time.Now().UnixNano()}, "", "  ")

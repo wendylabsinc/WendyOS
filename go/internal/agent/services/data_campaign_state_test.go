@@ -557,6 +557,52 @@ func TestDeployDuringForcedRemoveIsKept(t *testing.T) {
 	}
 }
 
+// The same plan, byte for byte, deployed while a forced remove is stopping
+// the recording keeps the revision, which is a digest of the contents. That
+// deploy still reported the plan stored, so the remove must keep it too: it
+// used to compare only the revision and delete it.
+func TestIdenticalDeployDuringForcedRemoveIsKept(t *testing.T) {
+	service, _, _ := newCampaignStateService(t, t.TempDir())
+	blocker := newBlockingStopAdapter()
+	service.addAdapter(blocker)
+	ctx := context.Background()
+	first := mustDeploy(t, service, ringCampaignYAML)
+	if _, err := service.CampaignTrigger(ctx, &agentpbv2.DataCampaignTriggerRequest{Name: "ring-cam"}); err != nil {
+		t.Fatal(err)
+	}
+	removed := make(chan error, 1)
+	go func() {
+		_, err := service.CampaignRemove(ctx, &agentpbv2.DataCampaignRemoveRequest{Name: "ring-cam", Force: true})
+		removed <- err
+	}()
+	<-blocker.entered
+	deployed, err := service.CampaignDeploy(ctx, &agentpbv2.DataCampaignDeployRequest{CampaignYaml: []byte(ringCampaignYAML)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deployed.GetRevision() != first.GetRevision() {
+		t.Fatalf("an identical plan got revision %s, want %s; this test needs the digest to repeat", deployed.GetRevision(), first.GetRevision())
+	}
+	stored := false
+	for _, warning := range deployed.GetWarnings() {
+		stored = stored || strings.Contains(warning, "the new plan is stored")
+	}
+	if !stored {
+		t.Fatalf("deploy during the remove did not say the plan is stored: %q", deployed.GetWarnings())
+	}
+	close(blocker.release)
+	if err := <-removed; status.Code(err) != codes.FailedPrecondition || !strings.Contains(err.Error(), "deployed again") {
+		t.Fatalf("remove after an identical concurrent deploy: %v, want FailedPrecondition naming the deploy", err)
+	}
+	kept, err := service.manager.Campaign("ring-cam")
+	if err != nil {
+		t.Fatalf("the identical plan deployed during the remove is gone: %v", err)
+	}
+	if kept.DeployedUnixNanos != deployed.GetDeployedUnixNanos() || kept.State != data.CampaignStateDisarmed {
+		t.Fatalf("kept plan = deployed %d state %s, want deployed %d disarmed", kept.DeployedUnixNanos, kept.State, deployed.GetDeployedUnixNanos())
+	}
+}
+
 // A client that cancels while disarm waits for inference to stop gets
 // Canceled, not a deadline it never set.
 func TestAwaitCampaignInferenceStoppedReportsACancelAsCanceled(t *testing.T) {

@@ -160,8 +160,8 @@ func (s *DataService) removeCampaign(ctx context.Context, name string, force boo
 	// Remove only the plan that was disarmed above. A deploy doesn't take
 	// this lock, so one that landed while a forced recording stopped has
 	// stored a new plan and told its caller so; deleting that plan would
-	// lose a deploy that reported success.
-	removed, err := s.manager.RemoveCampaign(name, disarmed.Revision)
+	// lose a deploy that reported success, even one of the same plan.
+	removed, err := s.manager.RemoveCampaign(name, &disarmed)
 	if errors.Is(err, data.ErrCampaignRedeployed) {
 		return data.Campaign{}, nil, status.Errorf(codes.FailedPrecondition, "campaign %s was deployed again while it was being removed, so it is left deployed and disarmed with the new plan; run remove again to remove it", name)
 	}
