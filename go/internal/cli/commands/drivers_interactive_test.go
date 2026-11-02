@@ -160,7 +160,7 @@ func TestDriversScreenInstallPreservesPublishedSpec(t *testing.T) {
 			client := &driverScreenClient{fakeDriverClient: fakeDriverClient{installs: &installs}}
 			dl := &agentpbv2.ListDriversResponse{BaseVersion: "0.20.0", KernelVersion: "6.19.0", Installed: tc.installed}
 			ext := extensionEntry{Name: "acme-nic", Version: "0.20.0-nightly", KernelVersion: "6.19.0", Path: "images/nightly/acme-nic.raw", SHA256: "published-digest", Signature: "AQID", ModulesLoad: []string{"nic", "helper"}}
-			if err := runDriversScreen(context.Background(), client, dl, []extensionEntry{ext}, driverManifestOptions{}); err != nil {
+			if err := runDriversScreen(context.Background(), &grpcclient.AgentConnection{DriverService: client}, dl, []extensionEntry{ext}, driverManifestOptions{}); err != nil {
 				t.Fatal(err)
 			}
 			if len(installs) != 1 || len(installs[0].specs) != 1 || len(client.removals) != 0 {
@@ -220,7 +220,7 @@ func TestDriversScreenRemoveAndCancellation(t *testing.T) {
 			var installs []*fakeInstallStream
 			client := &driverScreenClient{fakeDriverClient: fakeDriverClient{installs: &installs}}
 			dl := &agentpbv2.ListDriversResponse{KernelVersion: "6.19.0", Installed: []*agentpbv2.InstalledDriver{{Name: "local-only", Unreadable: true}}}
-			err := runDriversScreen(context.Background(), client, dl, nil, driverManifestOptions{})
+			err := runDriversScreen(context.Background(), &grpcclient.AgentConnection{DriverService: client}, dl, nil, driverManifestOptions{})
 			if !errors.Is(err, tc.wantErr) {
 				t.Fatalf("runDriversScreen error = %v, want %v", err, tc.wantErr)
 			}
@@ -246,7 +246,7 @@ func TestDriversScreenEmptySkipsPicker(t *testing.T) {
 	var installs []*fakeInstallStream
 	client := &driverScreenClient{fakeDriverClient: fakeDriverClient{installs: &installs}}
 	dl := &agentpbv2.ListDriversResponse{KernelVersion: "6.19.0"}
-	if err := runDriversScreen(context.Background(), client, dl, []extensionEntry{{Name: "wrong-kernel", KernelVersion: "6.20.0"}}, driverManifestOptions{}); err != nil {
+	if err := runDriversScreen(context.Background(), &grpcclient.AgentConnection{DriverService: client}, dl, []extensionEntry{{Name: "wrong-kernel", KernelVersion: "6.20.0"}}, driverManifestOptions{}); err != nil {
 		t.Fatal(err)
 	}
 	if len(installs) != 0 || len(client.removals) != 0 {
