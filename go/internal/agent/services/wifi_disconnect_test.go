@@ -228,6 +228,17 @@ func TestWiFiDisconnectAcknowledgedReportsNetworkManagerError(t *testing.T) {
 	}
 }
 
+func TestWiFiDisconnectAcknowledgedCompletesAfterConfirmation(t *testing.T) {
+	nm := &disconnectAckNetwork{}
+	conn, _ := startDisconnectAckServer(t, nm, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	result, err := grpcclient.NewFromConn(conn).DisconnectWiFi(ctx)
+	if err != nil || result.State != "completed" || !result.Acknowledged || !result.CompletionConfirmed || result.Success == nil || !*result.Success || result.Legacy || nm.calls.Load() != 1 {
+		t.Fatalf("ordered production completion = %+v, error = %v, disconnect calls = %d", result, err, nm.calls.Load())
+	}
+}
+
 func TestWiFiDisconnectAcknowledgedPreflightErrorDoesNotMutate(t *testing.T) {
 	nm := &disconnectAckNetwork{mockNetworkManager: mockNetworkManager{statusErr: errors.New("no WiFi device found")}}
 	conn, _ := startDisconnectAckServer(t, nm, nil)
