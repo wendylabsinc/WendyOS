@@ -266,7 +266,7 @@ func TestConnectionEntryPointsKeepRecoveryFailure(t *testing.T) {
 // the current one, recovery must not renew the current context (that spends its
 // refresh token and cannot fix the dial); it says which context to switch to.
 func TestConnectionRecoveryNeverRefreshesAnotherContextsCert(t *testing.T) {
-	t.Setenv("WENDY_CONFIG_DIR", t.TempDir())
+	isolateConnectionRecovery(t) // fails on any refresh prompt or refresh
 	t.Setenv("WENDY_SECRET_STORE", "file")
 	expired := config.CertificateInfo{OrganizationID: 2, PemCertificate: certPEM(t, time.Now().Add(-time.Hour))}
 	current := config.CertificateInfo{OrganizationID: 1, PemCertificate: certPEM(t, time.Now().Add(time.Hour))}
@@ -279,7 +279,6 @@ func TestConnectionRecoveryNeverRefreshesAnotherContextsCert(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	isolateConnectionRecovery(t) // fails on any refresh prompt or refresh
 	cause := chooseRejectionError(context.Background(), 2, []config.CertificateInfo{current, expired}, errors.New("remote error: tls: bad certificate"))
 	_, err := recoverAgentConnection(context.Background(), false, cause, func() (*grpcclient.AgentConnection, error) {
 		t.Fatal("retry without a usable certificate")
@@ -313,7 +312,7 @@ func TestConnectionRecoveryNeverRefreshesAnotherContextsCert(t *testing.T) {
 // one, and an unknown device org with several contexts names them all instead
 // of renewing the current context.
 func TestConnectionRecoveryNamesTheContextToSwitchTo(t *testing.T) {
-	t.Setenv("WENDY_CONFIG_DIR", t.TempDir())
+	isolateConnectionRecovery(t) // fails on any refresh prompt or refresh
 	t.Setenv("WENDY_SECRET_STORE", "file")
 	expired := func(org int) config.CertificateInfo {
 		return config.CertificateInfo{OrganizationID: org, PemCertificate: certPEM(t, time.Now().Add(-time.Hour))}
@@ -332,7 +331,6 @@ func TestConnectionRecoveryNamesTheContextToSwitchTo(t *testing.T) {
 		t.Fatalf("want the operator session, got %q", got)
 	}
 
-	isolateConnectionRecovery(t) // fails on any refresh prompt or refresh
 	all := []config.CertificateInfo{expired(1), expired(2), expired(2)}
 	cause := chooseRejectionError(context.Background(), 0, all, errors.New("remote error: tls: bad certificate"))
 	_, err := recoverAgentConnection(context.Background(), false, cause, func() (*grpcclient.AgentConnection, error) {
