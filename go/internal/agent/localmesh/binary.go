@@ -1,6 +1,11 @@
 package localmesh
 
-import "github.com/wendylabsinc/wendy/go/internal/agent/netwire"
+import (
+	"bytes"
+	"crypto/sha256"
+
+	"github.com/wendylabsinc/wendy/go/internal/agent/netwire"
+)
 
 type manifestBinary struct {
 	Principal string             `json:"principal" cbor:"p"`
@@ -8,15 +13,41 @@ type manifestBinary struct {
 	Signature []byte             `json:"signature" cbor:"s"`
 }
 
+// manifestEnvelope preserves optional transport metadata for gossip's exact
+// artifact digest. The known-field fingerprint invalidates it if a caller edits
+// any public field, including an in-place body or signature slice mutation.
+// Its bytes are privately owned and immutable, so directory clones may share it.
+type manifestEnvelope struct {
+	data   []byte
+	fields [sha256.Size]byte
+}
+
 func (m SignedManifest) MarshalCBOR() ([]byte, error) {
-	return netwire.Marshal(manifestBinary{m.Principal, netwire.RawMessage(m.Body), m.Signature})
+	known, err := netwire.Marshal(manifestBinary{m.Principal, netwire.RawMessage(m.Body), m.Signature})
+	if err != nil {
+		return nil, err
+	}
+	if m.envelope != nil && sha256.Sum256(known) == m.envelope.fields {
+		return bytes.Clone(m.envelope.data), nil
+	}
+	return known, nil
 }
 func (m *SignedManifest) UnmarshalCBOR(data []byte) error {
 	var wire manifestBinary
-	if err := netwire.UnmarshalSigned(data, &wire); err != nil {
+	// The signed versioned body remains exact RawMessage bytes. The surrounding
+	// envelope carries optional metadata within the existing control-frame cap.
+	if err := netwire.UnmarshalExtensibleArtifact(data, &wire, MaxControlMessage); err != nil {
 		return err
 	}
-	*m = SignedManifest{Principal: wire.Principal, Body: wire.Body, Signature: wire.Signature}
+	known, err := netwire.Marshal(wire)
+	if err != nil {
+		return err
+	}
+	next := SignedManifest{Principal: wire.Principal, Body: wire.Body, Signature: wire.Signature}
+	if !bytes.Equal(data, known) {
+		next.envelope = &manifestEnvelope{data: bytes.Clone(data), fields: sha256.Sum256(known)}
+	}
+	*m = next
 	return nil
 }
 
