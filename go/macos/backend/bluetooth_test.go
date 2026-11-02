@@ -10,6 +10,7 @@ import (
 	pb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
@@ -17,10 +18,12 @@ import (
 
 type bluetoothAgent struct {
 	pb.UnimplementedWendyBluetoothServiceServer
-	calls chan *pb.ConnectBluetoothPeripheralRequest
+	calls       chan *pb.ConnectBluetoothPeripheralRequest
+	scanStopped chan struct{}
 }
 
 func (s *bluetoothAgent) ScanBluetoothPeripherals(stream grpc.BidiStreamingServer[pb.ScanBluetoothPeripheralsRequest, pb.ScanBluetoothPeripheralsResponse]) error {
+	defer func() { s.scanStopped <- struct{}{} }()
 	for _, connected := range []bool{false, true} {
 		if err := stream.Send(&pb.ScanBluetoothPeripheralsResponse{DiscoveredDevices: []*pb.DiscoveredBluetoothPeripheral{{Name: "Sensor", Address: "00:11:22:33:44:55", Connected: connected}}}); err != nil {
 			return err
@@ -37,7 +40,7 @@ func bluetoothBackend(t *testing.T) (*Backend, *bluetoothAgent) {
 	t.Helper()
 	listener := bufconn.Listen(1 << 20)
 	server := grpc.NewServer()
-	fake := &bluetoothAgent{calls: make(chan *pb.ConnectBluetoothPeripheralRequest, 2)}
+	fake := &bluetoothAgent{calls: make(chan *pb.ConnectBluetoothPeripheralRequest, 2), scanStopped: make(chan struct{}, 1)}
 	pb.RegisterWendyBluetoothServiceServer(server, fake)
 	go server.Serve(listener)
 	conn, err := grpc.NewClient("passthrough:///bluetooth", grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) { return listener.DialContext(ctx) }))
@@ -49,16 +52,31 @@ func bluetoothBackend(t *testing.T) (*Backend, *bluetoothAgent) {
 	b.session = 7
 	b.life, b.stop = context.WithCancel(context.Background())
 	t.Cleanup(func() { b.Shutdown(); server.Stop(); listener.Close() })
+	// NewClient dials lazily. Establish the fixture transport before starting
+	// a short scan budget, so runner scheduling/setup does not consume it.
+	setup, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	conn.Connect()
+	for state := conn.GetState(); state != connectivity.Ready; state = conn.GetState() {
+		if !conn.WaitForStateChange(setup, state) {
+			t.Fatalf("Bluetooth fixture transport not ready: %v", setup.Err())
+		}
+	}
 	return b, fake
 }
 func TestBluetoothScanKeepsLatestObservationAndStops(t *testing.T) {
-	b, _ := bluetoothBackend(t)
+	b, fake := bluetoothBackend(t)
 	devices, err := scanBluetooth(context.Background(), pb.NewWendyBluetoothServiceClient(b.conn.Conn), 100*time.Millisecond)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(devices) != 1 || !devices[0].Connected {
 		t.Fatalf("expected latest observation, got %v", devices)
+	}
+	select {
+	case <-fake.scanStopped:
+	case <-time.After(time.Second):
+		t.Fatal("scan stream did not stop after its deadline")
 	}
 }
 func TestBluetoothMutationGuardsAndPairingFailure(t *testing.T) {
