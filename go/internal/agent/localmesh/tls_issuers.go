@@ -7,6 +7,14 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshalpn"
 )
 
+// SetTLSRecovery selects the runtime sharing issuer-hint recovery. Call before
+// using these credentials; nil retains the normal process-wide controller.
+func (c *Credentials) SetTLSRecovery(recovery *meshalpn.Recovery) {
+	if c.issuerMaterial != nil {
+		c.issuerMaterial.SetRecovery(recovery)
+	}
+}
+
 func (c *Credentials) ClientProtocols(protocols ...string) []string {
 	if c == nil || c.issuerMaterial == nil {
 		return append([]string(nil), protocols...)

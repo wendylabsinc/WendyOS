@@ -65,7 +65,7 @@ func issuedCredentials(t *testing.T, leaf issuedCert, certPEM, chainPEM string) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	credentials, err := NewCredentials(certPEM, chainPEM, string(pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: der})))
+	credentials, err := newTestCredentials(certPEM, chainPEM, string(pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: der})))
 	if err != nil {
 		t.Fatal(err)
 	}
