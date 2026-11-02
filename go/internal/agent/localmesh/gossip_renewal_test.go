@@ -117,7 +117,7 @@ func TestManifestGossipWarmRenewalDescriptorPrecedesData(t *testing.T) {
 	if err != nil || len(want) != 1 {
 		t.Fatal(want, err)
 	}
-	replies, _, err := f.sender.Receive(want[0], f.now, 0)
+	replies, _, err := f.sender.Receive(want[0], f.now, 10)
 	if err != nil || len(replies) != 2 || replies[0].Certificate == nil || replies[1].Gossip == nil || replies[1].Gossip.Op != "data" {
 		t.Fatal(replies, err)
 	}
@@ -343,7 +343,7 @@ func TestManifestGossipSameLeafIssuerChangeRefreshesDescriptorImmediately(t *tes
 	if err != nil || len(want) != 1 {
 		t.Fatal(want, err)
 	}
-	out, _, err := sender.Receive(want[0], f.now, 0)
+	out, _, err := sender.Receive(want[0], f.now, 10)
 	if err != nil || len(out) != 2 || out[0].Certificate == nil {
 		t.Fatal("fresh leaf hint suppressed changed issuer descriptor", out, err)
 	}

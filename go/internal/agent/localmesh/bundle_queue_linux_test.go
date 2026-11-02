@@ -46,14 +46,14 @@ func TestPendingIdentityRepairDoesNotFloodSlowLink(t *testing.T) {
 	}
 	n := &Node{cache: cache, bundleHints: newBundleHintCache()}
 	p := &nodePeer{device: peer.Device, link: link, control: make(chan ControlMessage, 4)}
-	p.sync = newLeafSynchronizer(directory, cache)
+	p.sync = NewSynchronizer(directory, cache)
 	defer p.sync.Close()
 	request := func() []ControlMessage {
 		replies, changed, err := p.sync.Receive(ControlMessage{Kind: "identity-request", Principal: self.Device.Principal()}, time.Now())
-		if err != nil || len(changed) != 0 || len(replies) != 1 || replies[0].Kind != "bundle" {
-			t.Fatalf("leaf identity reply: replies=%v changed=%v err=%v", replies, changed, err)
+		if err != nil || len(changed) != 0 || len(replies) != 1 || replies[0].Kind != "certificate" {
+			t.Fatalf("identity descriptor reply: replies=%v changed=%v err=%v", replies, changed, err)
 		}
-		return replies
+		return []ControlMessage{{Kind: "bundle", Bundle: self.Certificate.Certificate}}
 	}
 	bundle := ControlMessage{Kind: "bundle", Bundle: self.Certificate.Certificate}
 	if !n.queueReplies(p, request()) {

@@ -18,7 +18,7 @@ const maxLANRecords = 1024
 // Keep host address records available: a normal app service may share its host.
 func internalLANServiceType(typ string) bool {
 	switch strings.ToLower(typ) {
-	case "_wendy-net._udp", "_wendy-mesh._tcp":
+	case "_wendy-net._udp", "_wendy-net._tcp", "_wendy-mesh._tcp":
 		return true
 	}
 	return false
