@@ -4,11 +4,56 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$SCRIPT_DIR/../WendyAgentCore"
+SWIFT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+cd "$SWIFT_DIR/WendyAgentCore"
 
-# The shared proto definitions live at the repository root, two levels up
-# from WendyAgentCore (the swift/ tree has no Proto directory of its own).
-PROTO_DIR="../../Proto"
+case "${1:-}" in
+  ""|--shared-grpc-api-contracts-only|--check-shared-grpc-api-contracts) ;;
+  *) echo "usage: $0 [--shared-grpc-api-contracts-only|--check-shared-grpc-api-contracts]" >&2; exit 1 ;;
+esac
+
+LOCAL_PROTO_DIR="$(cd "$SWIFT_DIR/../Proto" && pwd)"
+source "$LOCAL_PROTO_DIR/shared-grpc-api-contracts.sh"
+
+# Reject maintained copies before export or any change to committed outputs.
+PATH_ARGS=()
+for proto in "${SHARED_GRPC_API_CONTRACTS_AGENT_PROTOS[@]}"; do
+  if [ -e "$LOCAL_PROTO_DIR/$proto" ] || [ -L "$LOCAL_PROTO_DIR/$proto" ]; then
+    echo "error: remove Proto/$proto; it is generated from service-protos" >&2
+    exit 1
+  fi
+  PATH_ARGS+=(--path "$proto")
+done
+if [ "$(buf --version)" != "1.75.0" ] || [ "$(protoc --version)" != "libprotoc 34.0" ]; then
+  echo "error: install buf 1.75.0 and protoc 34.0 (same versions as Go generation)" >&2
+  exit 1
+fi
+TEMP_DIR="$(mktemp -d)"
+trap 'rm -rf "$TEMP_DIR"' EXIT
+buf export \
+  "https://github.com/wendylabsinc/service-protos.git#ref=$SHARED_GRPC_API_CONTRACTS_REF" \
+  "${PATH_ARGS[@]}" --output "$TEMP_DIR/shared"
+
+# Keep canonical proto names, local imports and module layout in temporary staging.
+PROTO_DIR="$TEMP_DIR/Proto"
+mkdir -p "$PROTO_DIR"
+cp -R "$LOCAL_PROTO_DIR/." "$PROTO_DIR/"
+cp -R "$TEMP_DIR/shared/." "$PROTO_DIR/"
+OUT_DIR="$TEMP_DIR/generated"
+mkdir -p "$OUT_DIR/WendyAgentGRPC"
+SHARED_SWIFT_PROTOS=()
+for proto in "${SHARED_GRPC_API_CONTRACTS_AGENT_PROTOS[@]}"; do
+  case "$proto" in
+    wendy/agent/services/v1/*) SHARED_SWIFT_PROTOS+=("$PROTO_DIR/$proto") ;;
+  esac
+done
+
+generate_grpc() {
+  swift package --package-path "$SCRIPT_DIR/ProtoGeneration" \
+    --scratch-path "$SWIFT_DIR/Build/ProtoGeneration" \
+    --allow-writing-to-package-directory --allow-writing-to-directory "$TEMP_DIR" \
+    generate-grpc-code-from-protos --protoc-path "$(command -v protoc)" "$@"
+}
 
 publicize_generated_imports() {
   find "$@" -name '*.swift' -print0 | xargs -0 perl -0pi -e '
@@ -17,22 +62,42 @@ publicize_generated_imports() {
   '
 }
 
+# Embedded Swift uses only the two migrated v1 services. Do not adopt v2 APIs.
+if [ -n "${1:-}" ]; then
+  generate_grpc --access-level public --output-path "$OUT_DIR/WendyAgentGRPC" \
+    --import-path "$PROTO_DIR" -- "${SHARED_SWIFT_PROTOS[@]}"
+  publicize_generated_imports "$OUT_DIR/WendyAgentGRPC"
+  for input in "${SHARED_SWIFT_PROTOS[@]}"; do
+    proto="${input#"$PROTO_DIR/"}"
+    for suffix in pb.swift grpc.swift; do
+      file="${proto%.proto}.$suffix"
+      committed="Sources/WendyAgentGRPC/Proto/$file"
+      generated="$OUT_DIR/WendyAgentGRPC/$file"
+      if [ "$1" = --check-shared-grpc-api-contracts ]; then
+        diff -u "$committed" "$generated"
+      else
+        mkdir -p "$(dirname "$committed")"
+        cp "$generated" "$committed"
+      fi
+    done
+  done
+  exit 0
+fi
+
 echo "Generating Wendy Agent gRPC code..."
-rm -rf Sources/WendyAgentGRPC/Proto
-mkdir -p Sources/WendyAgentGRPC/Proto
-swift package --allow-writing-to-package-directory generate-grpc-code-from-protos \
+mkdir -p "$OUT_DIR/WendyAgentGRPC"
+generate_grpc \
     --access-level public \
-    --output-path Sources/WendyAgentGRPC/Proto \
+    --output-path "$OUT_DIR/WendyAgentGRPC" \
     --import-path "$PROTO_DIR" \
     -- \
+    "${SHARED_SWIFT_PROTOS[@]}" \
     "$PROTO_DIR/wendy/agent/services/v1/shared.proto" \
     "$PROTO_DIR/wendy/agent/services/v1/wendy_agent_v1_service.proto" \
     "$PROTO_DIR/wendy/agent/services/v1/wendy_agent_v1_container_service.proto" \
-    "$PROTO_DIR/wendy/agent/services/v1/wendy_agent_v1_audio_service.proto" \
     "$PROTO_DIR/wendy/agent/services/v1/wendy_agent_v1_provisioning_service.proto" \
     "$PROTO_DIR/wendy/agent/services/v1/wendy_agent_v1_telemetry_service.proto" \
     "$PROTO_DIR/wendy/agent/services/v1/wendy_agent_v1_bluetooth.proto" \
-    "$PROTO_DIR/wendy/agent/services/v1/wendy_agent_v1_file_sync_service.proto" \
     "$PROTO_DIR/wendy/lite/sensorlink.proto" \
     "$PROTO_DIR/wendy/agent/services/v2/sensor_service.proto" \
     "$PROTO_DIR/wendy/agent/services/v2/provisioning_service.proto" \
@@ -43,21 +108,20 @@ swift package --allow-writing-to-package-directory generate-grpc-code-from-proto
 # The Mac agent is the video server; it doesn't need generated client or
 # multi-layer service adapters for this protocol.
 echo "Generating Wendy Agent video messages..."
-swift package --allow-writing-to-package-directory generate-grpc-code-from-protos \
+generate_grpc \
     --no-clients \
     --no-servers \
     --access-level public \
-    --output-path Sources/WendyAgentGRPC/Proto \
+    --output-path "$OUT_DIR/WendyAgentGRPC" \
     --import-path "$PROTO_DIR" \
     -- \
     "$PROTO_DIR/wendy/agent/services/v1/wendy_agent_v1_video_service.proto"
 
 echo "Generating OpenTelemetry gRPC code..."
-rm -rf Sources/OpenTelemetryGRPC/Proto
-mkdir -p Sources/OpenTelemetryGRPC/Proto
-swift package --allow-writing-to-package-directory generate-grpc-code-from-protos \
+mkdir -p "$OUT_DIR/OpenTelemetryGRPC"
+generate_grpc \
     --access-level public \
-    --output-path Sources/OpenTelemetryGRPC/Proto \
+    --output-path "$OUT_DIR/OpenTelemetryGRPC" \
     --import-path "$PROTO_DIR" \
     -- \
     "$PROTO_DIR/opentelemetry/proto/common/v1/common.proto" \
@@ -70,11 +134,10 @@ swift package --allow-writing-to-package-directory generate-grpc-code-from-proto
     "$PROTO_DIR/opentelemetry/proto/collector/trace/v1/trace_service.proto"
 
 echo "Generating Wendy Cloud gRPC code..."
-rm -rf Sources/WendyCloudGRPC/Proto
-mkdir -p Sources/WendyCloudGRPC/Proto
-swift package --allow-writing-to-package-directory generate-grpc-code-from-protos \
+mkdir -p "$OUT_DIR/WendyCloudGRPC"
+generate_grpc \
     --access-level public \
-    --output-path Sources/WendyCloudGRPC/Proto \
+    --output-path "$OUT_DIR/WendyCloudGRPC" \
     --import-path "$PROTO_DIR" \
     -- \
     "$PROTO_DIR/cloud/apps.proto" \
@@ -88,8 +151,14 @@ swift package --allow-writing-to-package-directory generate-grpc-code-from-proto
 
 echo "Marking generated public API imports..."
 publicize_generated_imports \
-    Sources/WendyAgentGRPC/Proto \
-    Sources/OpenTelemetryGRPC/Proto \
-    Sources/WendyCloudGRPC/Proto
+    "$OUT_DIR/WendyAgentGRPC" \
+    "$OUT_DIR/OpenTelemetryGRPC" \
+    "$OUT_DIR/WendyCloudGRPC"
+
+# Export, generation and postprocessing must all succeed before replacing outputs.
+for module in WendyAgentGRPC OpenTelemetryGRPC WendyCloudGRPC; do
+  rm -rf "Sources/$module/Proto"
+  cp -R "$OUT_DIR/$module" "Sources/$module/Proto"
+done
 
 echo "Proto generation complete."

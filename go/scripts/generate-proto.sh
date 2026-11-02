@@ -68,7 +68,8 @@ fi
 
 MODULE="github.com/wendylabsinc/wendy"
 
-# Migrated gRPC APIs share one source pin.
+# Migrated gRPC APIs share one source pin with embedded Swift.
+source "$PROTO_DIR/shared-grpc-api-contracts.sh"
 SHARED_GRPC_API_CONTRACTS_CLOUD_PROTOS=(
     "wendycloud/v2/mesh.proto"
     "wendycloud/v2/users.proto"
@@ -108,6 +109,7 @@ done
 SHARED_GRPC_API_CONTRACTS_PROTOS=(
     "${SHARED_GRPC_API_CONTRACTS_CLOUD_PROTOS[@]}"
     "${PKI_PROTOS[@]}"
+    "${SHARED_GRPC_API_CONTRACTS_AGENT_PROTOS[@]}"
 )
 SHARED_GRPC_API_CONTRACTS_PATH_ARGS=()
 for proto in "${SHARED_GRPC_API_CONTRACTS_PROTOS[@]}"; do
@@ -120,7 +122,7 @@ done
 SHARED_GRPC_API_CONTRACTS_DIR="$(mktemp -d)"
 trap 'rm -rf "$SHARED_GRPC_API_CONTRACTS_DIR"' EXIT
 buf export \
-    "https://github.com/wendylabsinc/service-protos.git#ref=066e8012d10058020dc01d7963d938afd32c6321" \
+    "https://github.com/wendylabsinc/service-protos.git#ref=$SHARED_GRPC_API_CONTRACTS_REF" \
     "${SHARED_GRPC_API_CONTRACTS_PATH_ARGS[@]}" --output "$SHARED_GRPC_API_CONTRACTS_DIR"
 
 # ---- Wendy Agent protos ----
@@ -281,9 +283,15 @@ if [ "${1:-}" = --shared-grpc-api-contracts-only ] || [ "${1:-}" = --check-share
     protoc --proto_path="$SHARED_GRPC_API_CONTRACTS_DIR" \
         --go_out="$SHARED_GRPC_API_CONTRACTS_OUT" --go_opt=module="$MODULE/go/proto/gen" \
         $PKI_GO_M_OPTS "${PKI_PROTOS[@]}"
+    protoc --proto_path="$SHARED_GRPC_API_CONTRACTS_DIR" \
+        --go_out="$SHARED_GRPC_API_CONTRACTS_OUT" --go_opt=module="$MODULE/go/proto/gen" \
+        --go-grpc_out="$SHARED_GRPC_API_CONTRACTS_OUT" --go-grpc_opt=module="$MODULE/go/proto/gen" \
+        $AGENT_M_OPTS $V2_AGENT_M_OPTS "${SHARED_GRPC_API_CONTRACTS_AGENT_PROTOS[@]}"
     if [ "$1" = --check-shared-grpc-api-contracts ]; then
         for proto in "${SHARED_GRPC_API_CONTRACTS_PROTOS[@]}"; do
             case "$proto" in
+                wendy/agent/services/v1/*) package="agentpb" ;;
+                wendy/agent/services/v2/*) package="agentpb/v2" ;;
                 pkicore/*) package="pkicorepb" ;;
                 *) package="cloudpb/v2" ;;
             esac
@@ -323,6 +331,7 @@ echo "Generating Wendy Agent protos..."
 mkdir -p "$GEN_DIR/agentpb"
 protoc \
     --proto_path="$PROTO_DIR" \
+    --proto_path="$SHARED_GRPC_API_CONTRACTS_DIR" \
     --go_out="$GEN_DIR/agentpb" \
     --go_opt=module="$AGENT_PKG" \
     $ALL_M_OPTS \
@@ -334,6 +343,7 @@ echo "Generating Wendy Agent v2 protos..."
 mkdir -p "$GEN_DIR/agentpb/v2"
 protoc \
     --proto_path="$PROTO_DIR" \
+    --proto_path="$SHARED_GRPC_API_CONTRACTS_DIR" \
     --go_out="$GEN_DIR/agentpb/v2" \
     --go_opt=module="$V2_AGENT_PKG" \
     $ALL_M_OPTS \
