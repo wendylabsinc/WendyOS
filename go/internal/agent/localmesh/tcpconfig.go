@@ -10,6 +10,7 @@ import (
 	"os"
 	"strconv"
 
+	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
 )
 
@@ -42,6 +43,8 @@ type TCPPeer struct {
 }
 
 type TCPIdentity struct {
+	// TimePolicy is runtime-only and applies solely to mesh carrier credentials.
+	TimePolicy              *certs.CertificateTimePolicy `json:"-" cbor:"-"`
 	Name                    string
 	AgentPort               uint16
 	AppEndpoints            []AppEndpoint // supplied only for ready local listeners

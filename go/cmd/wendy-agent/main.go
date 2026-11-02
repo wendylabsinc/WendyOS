@@ -182,7 +182,18 @@ func main() {
 	// Time sync: apply config-partition floor immediately, then start
 	// background Roughtime + multicast sync.
 	timesyncMgr := timesync.NewManager(logger, configPath)
+	meshBootClock, meshBootClockErr := localmesh.NewBootClock(configPath)
+	if meshBootClockErr != nil {
+		logger.Warn("wendy net: local certificate clock unavailable", zap.Error(meshBootClockErr))
+	} else {
+		timesyncMgr.SetDirectSyncObserver(meshBootClock.ObserveDirectSync)
+	}
+	floorWallBefore := time.Now()
 	timesyncMgr.ApplyFloor()
+	if meshBootClock != nil {
+		clock := meshBootClock.Snapshot()
+		logger.Info("wendy net: local certificate boot clock", zap.String("anchorSource", clock.Source), zap.Time("anchor", clock.Anchor), zap.Time("base", clock.Base), zap.Time("wall", clock.Wall), zap.Int64("bootNanos", clock.BootNanos), zap.Bool("uncertain", clock.Uncertain), zap.Time("configFloor", clock.ConfigFloor), zap.Time("wallBeforeFloorApply", floorWallBefore), zap.Bool("floorApplyExpectedNoOp", !clock.ConfigFloor.After(floorWallBefore)))
+	}
 
 	// Run the OS-update gate after the time floor is applied so the marker
 	// staleness check and the persisted result timestamps use a sane clock.
@@ -1038,7 +1049,18 @@ func main() {
 		}
 		// Enrollment starts the supervisor even before the first wendy net configure.
 		// The participation policy keeps its carrier runner inert until opt-in.
-		credentials, err := localmesh.NewCredentials(certPEM, chainPEM, keyPEM)
+		if meshBootClock == nil {
+			logger.Error("wendy net identity unavailable: local certificate clock unavailable")
+			return
+		}
+		if err := meshBootClock.AddProvisionedCertificate(certPEM); err != nil {
+			logger.Error("wendy net certificate boot anchor unavailable", zap.Error(err))
+			return
+		}
+		meshTimePolicy := meshBootClock.Policy()
+		clock := meshBootClock.Snapshot()
+		logger.Info("wendy net: provisioned certificate boot clock", zap.String("anchorSource", clock.Source), zap.Time("anchor", clock.Anchor), zap.Time("base", clock.Base), zap.Time("wall", clock.Wall), zap.Int64("bootNanos", clock.BootNanos), zap.Bool("uncertain", clock.Uncertain))
+		credentials, err := localmesh.NewCredentialsWithTimePolicy(certPEM, chainPEM, keyPEM, meshTimePolicy)
 		if err != nil {
 			logger.Error("wendy net identity unavailable", zap.Error(err))
 			return
@@ -1110,7 +1132,7 @@ func main() {
 			launch(func() {
 				runMeshSupervisor(meshCtx, 5*time.Second, func(ctx context.Context) error {
 					return runConfiguredNetCarriers(ctx, configPath, localmesh.TCPIdentity{
-						Name: name, AgentPort: uint16(mtlsPortNum),
+						Name: name, AgentPort: uint16(mtlsPortNum), TimePolicy: &meshTimePolicy,
 						AppEndpoints: []localmesh.AppEndpoint{{Transport: localmesh.AppQUIC, Port: meshsession.Port}, {Transport: localmesh.AppTLS, Port: meshsession.TLSPort}},
 						Certificate:  certPEM, Chain: chainPEM, Key: keyPEM,
 					}, logger, meshCatalog, meshVIPs, meshSharing, func(snapshot func() localmesh.NodeSnapshot) {

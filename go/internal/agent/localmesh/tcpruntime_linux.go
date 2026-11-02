@@ -52,7 +52,13 @@ func RunConfiguredWithNode(parent context.Context, configDir string, id TCPIdent
 }
 
 func runConfiguredWithNode(parent context.Context, configDir string, id TCPIdentity, observe func(*Node, *TCPConfig), listen func(string, string) (net.Listener, error)) error {
-	credentials, err := NewCredentials(id.Certificate, id.Chain, id.Key)
+	var credentials *Credentials
+	var err error
+	if id.TimePolicy == nil {
+		credentials, err = NewCredentials(id.Certificate, id.Chain, id.Key)
+	} else {
+		credentials, err = NewCredentialsWithTimePolicy(id.Certificate, id.Chain, id.Key, *id.TimePolicy)
+	}
 	if err != nil {
 		return err
 	}
