@@ -75,6 +75,11 @@ wendy device wifi rank --ssid "Home" --priority 10
 wendy device wifi rank --order "Home,Office,Cafe"
 ```
 
+When disconnecting the WiFi path used by the command, a current agent can
+acknowledge the request even if the final result cannot get back. The CLI reports
+that completion is unknown rather than claiming the device disconnected. See
+[WiFi disconnect outcomes](../../clients/wendy-cli/commands/device/wifi.md#wendy-device-wifi-disconnect).
+
 ## Using `nmcli` directly on the device
 
 SSH into the device and run `nmcli`:
