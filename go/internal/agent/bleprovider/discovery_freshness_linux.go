@@ -61,9 +61,12 @@ func (f *advertisementFreshness) observe(path dbus.ObjectPath, props map[string]
 	// advertisement. A peer may also advertise another service concurrently;
 	// that signal says nothing about whether its mesh advert has stopped.
 	if !valid {
-		for key := range data {
+		for key, raw := range data {
 			if strings.EqualFold(key, f.uuid) {
-				f.forget(path) // Same UUID now carries a different mesh/payload.
+				if len(raw) != 0 && raw[0] != AdvertisementVersion {
+					continue // Unsupported versions neither refresh nor withdraw v1.
+				}
+				f.forget(path) // Same v1 UUID now carries a different mesh/payload.
 				return
 			}
 		}
