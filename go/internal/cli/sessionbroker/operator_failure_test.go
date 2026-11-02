@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"io"
 	"math/big"
 	"net/url"
 	"os"
@@ -192,5 +193,96 @@ func TestOperatorFailureRecordRejectsPublicDirectoryAndOversizeInput(t *testing.
 	var startup *operatorStartupFailure
 	if errors.As(operatorStartupError(spec, context.DeadlineExceeded), &startup) {
 		t.Fatal("oversize diagnostic consumed")
+	}
+}
+
+type operatorFailurePinRejection struct{}
+
+func (operatorFailurePinRejection) Error() string         { return "private pin error payload" }
+func (operatorFailurePinRejection) BlockingPinRejection() {}
+
+func TestOperatorFailureChangedVerificationCauseBypassesRepeatThrottle(t *testing.T) {
+	for _, initial := range []struct {
+		name string
+		err  error
+	}{{"timeout", context.DeadlineExceeded}, {"closed", io.EOF}} {
+		for _, rejected := range []struct {
+			name, kind string
+			err        error
+		}{
+			{"issuer", "issuer_chain", &certs.IssuerPathError{Err: errors.New("private issuer payload")}},
+			{"certificate", "certificate", x509.UnknownAuthorityError{}},
+			{"pin", "device_pin", operatorFailurePinRejection{}},
+		} {
+			for _, transport := range []string{"tcp", "ble"} {
+				t.Run(initial.name+"/"+rejected.name+"/"+transport, func(t *testing.T) {
+					dir, spec := operatorDiagnosticsFixture(t)
+					d := newOperatorDiagnostics(dir, spec)
+					at := time.Now().Add(-time.Second)
+					d.now = func() time.Time { return at }
+					d.record("tcp", initial.err, false)
+					at = at.Add(500 * time.Millisecond)
+					d.record(transport, rejected.err, false)
+					d.record("", context.DeadlineExceeded, true)
+					if d.last.Kind != rejected.kind || d.last.Transport != transport || d.last.At != at.UnixMilli() {
+						t.Fatalf("changed verification failure was lost: %+v", d.last)
+					}
+					startup := operatorStartupError(spec, context.DeadlineExceeded)
+					retry, steps := OperatorRecovery(startup)
+					if retry || len(steps) == 0 || strings.Contains(strings.Join(steps, " "), "then retry the connection") {
+						t.Fatalf("verification failure received transient recovery: retry=%v steps=%v error=%v", retry, steps, startup)
+					}
+					if strings.Contains(startup.Error(), "private") {
+						t.Fatalf("raw verification payload leaked: %v", startup)
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestOperatorFailureEquivalentFloodRemainsThrottled(t *testing.T) {
+	dir, spec := operatorDiagnosticsFixture(t)
+	d := newOperatorDiagnostics(dir, spec)
+	at := time.Now().Add(-2 * time.Second)
+	d.now = func() time.Time { return at }
+	d.record("untrusted initial transport", errors.New("private first payload"), false)
+	first, err := os.ReadFile(d.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sentinel := time.Unix(1000000, 0)
+	if err := os.Chtimes(d.path, sentinel, sentinel); err != nil {
+		t.Fatal(err)
+	}
+	at = at.Add(500 * time.Millisecond)
+	var writers sync.WaitGroup
+	for range 64 {
+		writers.Add(1)
+		go func() {
+			defer writers.Done()
+			d.record("untrusted repeated transport", errors.New("private different payload"), false)
+		}()
+	}
+	writers.Wait()
+	data, err := os.ReadFile(d.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(d.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != string(first) || !info.ModTime().Equal(sentinel) || info.Mode().Perm() != 0600 || len(data) > operatorFailureBytes || len(entries) != 1 {
+		t.Fatalf("equivalent failure flood rewrote or expanded private record: mode=%v modified=%v bytes=%d files=%d", info.Mode(), info.ModTime(), len(data), len(entries))
+	}
+	at = at.Add(time.Second)
+	d.record("", errors.New("another private payload"), false)
+	if d.last.At != at.UnixMilli() {
+		t.Fatal("equivalent record was never refreshed after throttle window")
 	}
 }

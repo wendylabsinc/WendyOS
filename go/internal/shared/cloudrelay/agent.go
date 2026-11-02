@@ -468,7 +468,17 @@ func (a *Agent) runOnce(parent context.Context) error {
 			if _, refused := rejected[o.OfferId]; refused {
 				return nil
 			}
-			s, e := a.admitOffer(ctx, o, c, a.leases, pending, now)
+			// An uncached grant may need JWKS I/O. Its own context must not
+			// let that lookup outlive this presence's signed authority.
+			offerCtx, stopOffer := context.WithDeadline(ctx, time.Unix(c.Exp, 0))
+			s, e := a.admitOffer(offerCtx, o, c, a.leases, pending, now)
+			stopOffer()
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			if !time.Now().Before(time.Unix(c.Exp, 0)) {
+				return fmt.Errorf("Cloud presence lease expired")
+			}
 			if e != nil {
 				// Cloud can send a grant bound to its new lease before the
 				// issuance RPC reaches us. Retain only small, already-verified
@@ -491,6 +501,12 @@ func (a *Agent) runOnce(parent context.Context) error {
 				return nil
 			}
 			pending[o.OfferId] = s
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if !time.Now().Before(time.Unix(c.Exp, 0)) {
+			return fmt.Errorf("Cloud presence lease expired")
 		}
 		if err = stream.Send(&pb.RegisterPresenceRequest{Message: &pb.RegisterPresenceRequest_OfferAcknowledgement{OfferAcknowledgement: &pb.PresenceOfferAcknowledgement{OfferId: o.OfferId, SessionId: o.SessionId}}}); err != nil {
 			return brokerError("acknowledging offer", err)
@@ -679,6 +695,14 @@ func (a *Agent) admitOffer(ctx context.Context, o *pb.SessionOffer, lease claims
 	if err != nil {
 		return nil, err
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	// Verification may have waited for a key refresh: recheck both signed
+	// lifetimes before decrypting or retaining this offer.
+	if now := time.Now().Unix(); lease.Exp <= now || g.Exp <= now {
+		return nil, fmt.Errorf("relay offer or presence expired")
+	}
 	if g.Route != lease.Route || g.Session != o.SessionId || g.Agent != binding(publicDER(a.signing)) {
 		return nil, fmt.Errorf("relay offer presence binding mismatch")
 	}
@@ -705,6 +729,12 @@ func (a *Agent) admitOffer(ctx context.Context, o *pb.SessionOffer, lease claims
 	path := filepath.Join(a.StateDir, "offer-"+binding([]byte(o.OfferId))+".pb")
 	if prev, err := os.ReadFile(path); err == nil && !bytes.Equal(prev, raw) {
 		return nil, fmt.Errorf("conflicting persisted relay offer")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if now := time.Now().Unix(); lease.Exp <= now || g.Exp <= now {
+		return nil, fmt.Errorf("relay offer or presence expired")
 	}
 	if err = writeState(path, raw); err != nil {
 		return nil, err

@@ -54,6 +54,7 @@ func TestGatewayDiagnosticsDistinguishExpiryDuringProbe(t *testing.T) {
 	if err != nil || decision.Mode != "offline" {
 		t.Fatalf("expired decision: %+v %v", decision, err)
 	}
+	flushDiagnostics(t)
 	ended := logs.FilterMessage("Wendy Net gateway selection ended").All()
 	if len(ended) != 1 {
 		t.Fatalf("selection changes: %+v", ended)
@@ -163,10 +164,12 @@ func TestGatewayDiagnosticsDistinguishProbeWithdrawal(t *testing.T) {
 			t.Fatalf("health step %d: %+v", i, decision)
 		}
 	}
+	flushDiagnostics(t)
 	changes := logs.FilterMessage("Wendy Net gateway probe health changed").All()
 	if len(changes) != 2 || changes[1].ContextMap()["healthy"] != false || changes[1].ContextMap()["consecutive_failures"] != int64(3) {
 		t.Fatalf("health changes: %+v", changes)
 	}
+	flushDiagnostics(t)
 	ended := logs.FilterMessage("Wendy Net gateway selection ended").All()
 	if len(ended) != 1 {
 		t.Fatalf("selection changes: %+v", ended)
@@ -181,6 +184,7 @@ func TestGatewayDiagnosticsDistinguishProbeWithdrawal(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	flushDiagnostics(t)
 	if logs.FilterMessage("Wendy Net gateway selected").Len() != 2 {
 		t.Fatal("missing health recovery")
 	}
@@ -207,6 +211,7 @@ func TestGatewayDiagnosticsReportIndependentUplinkHealth(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	flushDiagnostics(t)
 	changes := logs.FilterMessage("Wendy Net independent uplink health changed").All()
 	if len(changes) != 2 || changes[0].ContextMap()["healthy"] != true || changes[1].ContextMap()["healthy"] != false || changes[1].ContextMap()["interface"] != "wlan0" || changes[1].ContextMap()["consecutive_failures"] != int64(3) {
 		t.Fatalf("uplink health changes: %+v", changes)

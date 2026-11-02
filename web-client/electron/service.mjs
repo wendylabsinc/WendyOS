@@ -404,6 +404,7 @@ export class DesktopService {
     let retainPrevious = sources.some(source => source.status === "rejected");
     const identities = new Map();
     const cloudNames = new Map();
+    let cloudNameSnapshot;
     const invalidCloudBindings = new Set();
     const canonicalUUID = (id) => typeof id === "string" && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id) && id !== "00000000-0000-0000-0000-000000000000" ? id.toLowerCase() : undefined;
     const add = (target, name, deviceType, platform, key, deviceUUID, tenantUUID) => {
@@ -489,14 +490,17 @@ export class DesktopService {
       if (invalidAddress) warnings.push("Local discovery omitted devices with invalid addresses.");
     } else warnings.push("Local discovery: " + sources[0].reason.message);
     if (sources[1].status === "fulfilled") {
-      if (!Array.isArray(sources[1].value)) warnings.push("Cloud discovery returned an invalid inventory.");
-      else {
+      if (!Array.isArray(sources[1].value)) {
+        retainPrevious = true;
+        warnings.push("Cloud discovery returned an invalid inventory.");
+      } else {
+        cloudNameSnapshot = { complete: true, entries: [] };
         let invalidSelector = false;
         for (const device of sources[1].value) {
           // The CLI supplies the complete selector from its authenticated
           // session. An asset ID alone cannot identify a Cloud login.
           const selector = cloudDiscoverySelector(device);
-          if (!selector) { invalidSelector = true; continue; }
+          if (!selector) { invalidSelector = true; cloudNameSnapshot.complete = false; continue; }
           const parts = new URL(selector).pathname.split("/");
           const tenant = parts[1] === "tenant" ? canonicalUUID(parts[2]) : undefined;
           const asset = canonicalUUID(device.id);
@@ -512,13 +516,19 @@ export class DesktopService {
           // is offline. This is not an authenticated topology observation or
           // permission to group a local advertisement by its claimed UUID.
           const namedDevice = hasBinding ? binding : asset;
+          const entry = { source: selector };
           if (tenant && namedDevice && typeof device.name === "string" && device.name.trim()) {
-            const label = { cloudName: device.name, cloudNamePrincipal: `spiffe://wendy.sh/tenant/${tenant}/device/${namedDevice}` };
+            const label = { cloudName: device.name, cloudNamePrincipal: `spiffe://wendy.sh/tenant/${tenant}/device/${namedDevice}`, cloudNameSource: selector };
+            Object.assign(entry, { name: label.cloudName, principal: label.cloudNamePrincipal });
             cloudNames.set(`device:${tenant}/${namedDevice}`, label);
             Object.assign(devices.get(selector), label);
           }
+          cloudNameSnapshot.entries.push(entry);
         }
-        if (invalidSelector) warnings.push("Cloud discovery omitted devices without a valid scoped selector. Update the Wendy CLI and retry.");
+        if (invalidSelector) {
+          retainPrevious = true;
+          warnings.push("Cloud discovery omitted devices without a valid scoped selector. Update the Wendy CLI and retry.");
+        }
       }
     } else warnings.push("Cloud discovery: " + sources[1].reason.message);
     // A physical USB row may know its enrolled UUID before its tenant. Join
@@ -555,7 +565,8 @@ export class DesktopService {
       if (key && cloudNames.has(key)) Object.assign(device, cloudNames.get(key));
       reporters.push(device);
     }
-    return { devices: reporters, warnings, ...(retainPrevious ? { retainPrevious: true } : {}) };
+    return { devices: reporters, warnings, ...(retainPrevious ? { retainPrevious: true } : {}),
+      ...(cloudNameSnapshot ? { cloudNames: cloudNameSnapshot } : {}) };
   }
 
   deviceLogsSnapshot(id) {
