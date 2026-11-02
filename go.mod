@@ -34,7 +34,7 @@ require (
 	github.com/fxamacker/cbor/v2 v2.9.0
 	github.com/gen2brain/malgo v0.11.26
 	github.com/godbus/dbus/v5 v5.2.2
-	github.com/gofrs/flock v0.13.0
+	github.com/gofrs/flock v0.13.1
 	github.com/google/go-containerregistry v0.22.1
 	github.com/google/gousb v1.1.3
 	github.com/google/jsonschema-go v0.4.2
