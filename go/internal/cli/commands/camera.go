@@ -121,10 +121,9 @@ func newCameraListCmd() *cobra.Command {
 				// --refresh runs a discovery round on the device before listing, so a
 				// camera that just came online shows up without waiting for the
 				// agent's own periodic discovery loop.
-				// Unpaired cameras are always fetched and filtered here, so the
-				// listing can say how many it hid, and an older agent that lists
-				// them regardless is shown the same way.
-				resp, err := conn.VideoService.RefreshCameras(ctx, &agentpb.RefreshCamerasRequest{IncludeUnpaired: true})
+				// Its listing always includes unpaired cameras; they are filtered
+				// here, as for ListVideoDevices below.
+				resp, err := conn.VideoService.RefreshCameras(ctx, &agentpb.RefreshCamerasRequest{})
 				if err != nil {
 					if macErr := macOSBetaUnsupportedFeatureError(ctx, conn.AgentService, err, "Camera listing"); macErr != nil {
 						return fmt.Errorf("refreshing cameras: %w", macErr)
@@ -133,6 +132,9 @@ func newCameraListCmd() *cobra.Command {
 				}
 				devices = resp.GetDevices()
 			} else {
+				// Unpaired cameras are always fetched and filtered here, so the
+				// listing can say how many it hid, and an older agent that lists
+				// them regardless is shown the same way.
 				resp, err := conn.VideoService.ListVideoDevices(ctx, &agentpb.ListVideoDevicesRequest{IncludeUnpaired: true})
 				if err != nil {
 					if macErr := macOSBetaUnsupportedFeatureError(ctx, conn.AgentService, err, "Camera listing"); macErr != nil {

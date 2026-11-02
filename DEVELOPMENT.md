@@ -399,10 +399,11 @@ v4l2loopback node number comes from, so the ID does not change later.
 
 The probe goes out of every interface, so it also finds other people's cameras
 on a shared LAN. A camera counts as paired once a login is stored for it, and
-only paired cameras are listed (`ListVideoDevices` and `RefreshCameras` take
-`include_unpaired` for pairing flows), get a loopback node, or are contacted
-beyond the probe: the agent neither asks unpaired cameras for stream paths nor
-dials them for liveness. On startup the agent drops discovered records that have
+only paired cameras are listed, get a loopback node, or are contacted beyond the
+probe: the agent neither asks unpaired cameras for stream paths nor dials them
+for liveness. `ListVideoDevices` lists unpaired cameras only with
+`include_unpaired`. `RefreshCameras` is the pairing scan and always lists them,
+because a CLI from before that field sends an empty request to pair. On startup the agent drops discovered records that have
 no login and no lease from a camera link, with any loopback node an older agent
 made for them; a real camera is found again next round.
 

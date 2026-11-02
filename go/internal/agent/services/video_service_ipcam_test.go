@@ -238,7 +238,8 @@ func pairTestCamera(t *testing.T, s *VideoService, cam ipcam.Camera) {
 // A network camera nobody has stored a login for may be a neighbour's camera on
 // a shared network (a Tapo C200 on a home LAN was the report). It is left out of
 // every listing an app, the Companion app, MCP or the data and two-plane camera
-// paths see, and only a pairing flow that asks for unpaired cameras sees it.
+// paths see. Only a pairing flow sees it: ListVideoDevices with include_unpaired,
+// or RefreshCameras (TestRefreshCamerasListsUnpairedCamerasForPairing).
 func TestListHidesUnpairedIPCameras(t *testing.T) {
 	s := newIPTestService(t)
 	stranger, err := s.registry.Upsert(ipcam.Camera{MAC: "3c:52:a1:11:22:33", Address: "192.168.0.42", Model: "Tapo C200"})
@@ -269,14 +270,6 @@ func TestListHidesUnpairedIPCameras(t *testing.T) {
 	if got := ids(internal); !reflect.DeepEqual(got, []uint32{paired.ID}) {
 		t.Fatalf("listCameras = %v, want only the paired camera %d", got, paired.ID)
 	}
-	s.discoverer = nil // RefreshCameras would otherwise probe the real network.
-	refreshed, err := s.RefreshCameras(context.Background(), &agentpb.RefreshCamerasRequest{})
-	if err != nil {
-		t.Fatalf("RefreshCameras: %v", err)
-	}
-	if got := ids(refreshed.GetDevices()); !reflect.DeepEqual(got, []uint32{paired.ID}) {
-		t.Fatalf("default refresh = %v, want only the paired camera %d", got, paired.ID)
-	}
 
 	want := []uint32{stranger.ID, paired.ID}
 	list, err = s.ListVideoDevices(context.Background(), &agentpb.ListVideoDevicesRequest{IncludeUnpaired: true})
@@ -286,12 +279,33 @@ func TestListHidesUnpairedIPCameras(t *testing.T) {
 	if got := ids(list.GetDevices()); !reflect.DeepEqual(got, want) {
 		t.Fatalf("listing with unpaired = %v, want %v", got, want)
 	}
-	refreshed, err = s.RefreshCameras(context.Background(), &agentpb.RefreshCamerasRequest{IncludeUnpaired: true})
+}
+
+// RefreshCameras is the pairing scan: `wendy device pair` calls it to find
+// cameras to store a login for. A CLI from before include_unpaired existed sends
+// an empty request, and falls back to ListVideoDevices only when RefreshCameras
+// is unimplemented. So an empty request must still return unpaired cameras, or
+// an older CLI pairing against this agent finds nothing to pair.
+func TestRefreshCamerasListsUnpairedCamerasForPairing(t *testing.T) {
+	s := newIPTestService(t)
+	s.discoverer = nil // RefreshCameras would otherwise probe the real network.
+	stranger, err := s.registry.Upsert(ipcam.Camera{MAC: "3c:52:a1:11:22:33", Address: "192.168.0.42", Model: "Tapo C200"})
+	if err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+	paired := registerTestCamera(t, s)
+	pairTestCamera(t, s, paired)
+
+	refreshed, err := s.RefreshCameras(context.Background(), &agentpb.RefreshCamerasRequest{})
 	if err != nil {
 		t.Fatalf("RefreshCameras: %v", err)
 	}
-	if got := ids(refreshed.GetDevices()); !reflect.DeepEqual(got, want) {
-		t.Fatalf("refresh with unpaired = %v, want %v", got, want)
+	var got []uint32
+	for _, d := range refreshed.GetDevices() {
+		got = append(got, d.GetId())
+	}
+	if want := []uint32{stranger.ID, paired.ID}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("refresh from an older CLI = %v, want unpaired and paired cameras %v", got, want)
 	}
 }
 
@@ -627,7 +641,7 @@ func TestStreamVideoIPForwardsFrames(t *testing.T) {
 func TestRefreshCamerasSurvivesProbeFailure(t *testing.T) {
 	s := newIPTestService(t)
 	registerTestCamera(t, s)
-	resp, err := s.RefreshCameras(context.Background(), &agentpb.RefreshCamerasRequest{IncludeUnpaired: true})
+	resp, err := s.RefreshCameras(context.Background(), &agentpb.RefreshCamerasRequest{})
 	if err != nil {
 		t.Fatalf("RefreshCameras: %v", err)
 	}

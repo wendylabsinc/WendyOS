@@ -1557,9 +1557,12 @@ func (s *VideoService) SetCameraContainerConsumers(ctx context.Context, containe
 	}
 }
 
-// RefreshCameras runs one discovery round and returns the camera listing, with
-// unpaired network cameras only when the request asks for them.
-func (s *VideoService) RefreshCameras(ctx context.Context, req *agentpb.RefreshCamerasRequest) (*agentpb.RefreshCamerasResponse, error) {
+// RefreshCameras runs one discovery round and returns the camera listing,
+// unpaired network cameras included. It is the pairing scan: `wendy device pair`
+// lists what it can store a login for. A CLI from before include_unpaired sends
+// an empty request and has no other way to find those cameras. Apps list
+// cameras with ListVideoDevices, which leaves unpaired ones out by default.
+func (s *VideoService) RefreshCameras(ctx context.Context, _ *agentpb.RefreshCamerasRequest) (*agentpb.RefreshCamerasResponse, error) {
 	if s.discoverer != nil {
 		if _, err := s.discoverer.Once(ctx); err != nil {
 			// A failed probe still leaves previously discovered cameras listable.
@@ -1569,7 +1572,7 @@ func (s *VideoService) RefreshCameras(ctx context.Context, req *agentpb.RefreshC
 	if s.ros2Cameras != nil {
 		s.ros2Cameras.Refresh(ctx)
 	}
-	devices, err := s.listCamerasWithUnpaired(ctx, req.GetIncludeUnpaired())
+	devices, err := s.listCamerasWithUnpaired(ctx, true)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "listing cameras: %v", err)
 	}

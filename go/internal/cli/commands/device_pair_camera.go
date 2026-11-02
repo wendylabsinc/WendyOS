@@ -52,9 +52,9 @@ func (h *cameraPairHandler) scan() tea.Cmd {
 		}
 		ctx, cancel := context.WithTimeout(h.ctx, 15*time.Second)
 		defer cancel()
-		// Pairing is where a camera without a login gets one, so ask for the
-		// cameras the agent leaves out of its default listing.
-		resp, err := h.client.RefreshCameras(ctx, &agentpb.RefreshCamerasRequest{IncludeUnpaired: true})
+		// Pairing is where a camera without a login gets one. RefreshCameras
+		// always lists those, and the ListVideoDevices fallback asks for them.
+		resp, err := h.client.RefreshCameras(ctx, &agentpb.RefreshCamerasRequest{})
 		if status.Code(err) == codes.Unimplemented {
 			listed, listErr := h.client.ListVideoDevices(ctx, &agentpb.ListVideoDevicesRequest{IncludeUnpaired: true})
 			return cameraPairScanMsg{devices: listed.GetDevices(), err: listErr}

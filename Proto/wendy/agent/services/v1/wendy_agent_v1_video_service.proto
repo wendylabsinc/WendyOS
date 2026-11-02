@@ -142,10 +142,9 @@ message ForgetCameraRequest {
 
 message ForgetCameraResponse {}
 
-message RefreshCamerasRequest {
-    // As in ListVideoDevicesRequest.
-    bool include_unpaired = 1;
-}
+// RefreshCameras is the pairing scan, so its listing always includes network
+// cameras that have no login yet. Apps list cameras with ListVideoDevices.
+message RefreshCamerasRequest {}
 
 message RefreshCamerasResponse {
     repeated VideoDevice devices = 1;

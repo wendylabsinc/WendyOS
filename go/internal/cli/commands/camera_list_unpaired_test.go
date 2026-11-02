@@ -115,14 +115,16 @@ func (s *recordingCameraListService) ListVideoDevices(_ context.Context, req *ag
 	return &agentpb.ListVideoDevicesResponse{}, nil
 }
 
-func (s *recordingCameraListService) RefreshCameras(_ context.Context, req *agentpb.RefreshCamerasRequest) (*agentpb.RefreshCamerasResponse, error) {
-	s.refresh <- req.GetIncludeUnpaired()
+// RefreshCameras has no flag: its listing always includes unpaired cameras.
+func (s *recordingCameraListService) RefreshCameras(_ context.Context, _ *agentpb.RefreshCamerasRequest) (*agentpb.RefreshCamerasResponse, error) {
+	s.refresh <- true
 	return &agentpb.RefreshCamerasResponse{}, nil
 }
 
-// `camera list` always asks for unpaired cameras and filters them itself, so it
+// `camera list` always fetches unpaired cameras and filters them itself, so it
 // can count what it hides, and an older agent that ignores the flag (and lists
-// everything) is shown the same way.
+// everything) is shown the same way. With --refresh it gets them from
+// RefreshCameras, which always includes them.
 func TestCameraListAsksForUnpairedCameras(t *testing.T) {
 	svc := &recordingCameraListService{list: make(chan bool, 1), refresh: make(chan bool, 1)}
 	startUDSAgentWithOS(t, "linux", func(s *grpc.Server) {

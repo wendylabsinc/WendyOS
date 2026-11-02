@@ -738,12 +738,12 @@ func (*ForgetCameraResponse) Descriptor() ([]byte, []int) {
 	return file_wendy_agent_services_v1_wendy_agent_v1_video_service_proto_rawDescGZIP(), []int{7}
 }
 
+// RefreshCameras is the pairing scan, so its listing always includes network
+// cameras that have no login yet. Apps list cameras with ListVideoDevices.
 type RefreshCamerasRequest struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// As in ListVideoDevicesRequest.
-	IncludeUnpaired bool `protobuf:"varint,1,opt,name=include_unpaired,json=includeUnpaired,proto3" json:"include_unpaired,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *RefreshCamerasRequest) Reset() {
@@ -774,13 +774,6 @@ func (x *RefreshCamerasRequest) ProtoReflect() protoreflect.Message {
 // Deprecated: Use RefreshCamerasRequest.ProtoReflect.Descriptor instead.
 func (*RefreshCamerasRequest) Descriptor() ([]byte, []int) {
 	return file_wendy_agent_services_v1_wendy_agent_v1_video_service_proto_rawDescGZIP(), []int{8}
-}
-
-func (x *RefreshCamerasRequest) GetIncludeUnpaired() bool {
-	if x != nil {
-		return x.IncludeUnpaired
-	}
-	return false
 }
 
 type RefreshCamerasResponse struct {
@@ -1893,9 +1886,8 @@ const file_wendy_agent_services_v1_wendy_agent_v1_video_service_proto_rawDesc = 
 	"\x1cSetCameraCredentialsResponse\"2\n" +
 	"\x13ForgetCameraRequest\x12\x1b\n" +
 	"\tdevice_id\x18\x01 \x01(\rR\bdeviceId\"\x16\n" +
-	"\x14ForgetCameraResponse\"B\n" +
-	"\x15RefreshCamerasRequest\x12)\n" +
-	"\x10include_unpaired\x18\x01 \x01(\bR\x0fincludeUnpaired\"X\n" +
+	"\x14ForgetCameraResponse\"\x17\n" +
+	"\x15RefreshCamerasRequest\"X\n" +
 	"\x16RefreshCamerasResponse\x12>\n" +
 	"\adevices\x18\x01 \x03(\v2$.wendy.agent.services.v1.VideoDeviceR\adevices\";\n" +
 	"\x1cTestCameraCredentialsRequest\x12\x1b\n" +
