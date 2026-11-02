@@ -26,6 +26,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshalpn"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshoperatorlink"
+	"google.golang.org/grpc/connectivity"
 )
 
 type idleBLEPacketEndpoint struct{}
@@ -39,7 +40,7 @@ func (idleBLEPacketEndpoint) Inject([]byte) error { return nil }
 // The native radio is substituted by a stream. TLS, primary identity, signed
 // operator proof, userspace endpoint and same-TLS management are production.
 func TestOperatorBLEAttachmentUsesPrimaryProofAndSharedTLS(t *testing.T) {
-	for _, algorithm := range []string{"P256", "MLDSA65", "P256-auto", "MLDSA65-auto", "P256-auto-known-issuer"} {
+	for _, algorithm := range []string{"P256", "MLDSA65", "P256-auto", "MLDSA65-auto", "P256-auto-known-issuer", "P256-cleanup"} {
 		t.Run(algorithm, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
@@ -187,13 +188,39 @@ func TestOperatorBLEAttachmentUsesPrimaryProofAndSharedTLS(t *testing.T) {
 			if _, err = session.Start(ctx); err != nil {
 				t.Fatal(err)
 			}
-			if _, err = session.AgentConnection(ctx); err != nil {
+			retained, err := session.AgentConnection(ctx)
+			if err != nil {
 				t.Fatal(err)
 			}
 			admission := <-admitted
 			if admission.Peer().Principal() != principal || admission.Address() != session.Endpoint.Address() {
 				t.Fatal("BLE changed the primary operator or local router address")
 			}
+			if strings.HasSuffix(algorithm, "-cleanup") {
+				// The router may keep running through arbitrarily many peers. Losing
+				// a peer's last carrier must release its idle management client.
+				_ = admission.Close()
+				admission.Wait()
+				until := time.Now().Add(time.Second)
+				for (session.hasDirectPeer(router) || retained.Conn.GetState() != connectivity.Shutdown) && time.Now().Before(until) {
+					time.Sleep(time.Millisecond)
+				}
+				session.agentMu.Lock()
+				retainedCount := len(session.agentClients)
+				session.agentMu.Unlock()
+				if retainedCount != 0 || retained.Conn.GetState() != connectivity.Shutdown {
+					t.Fatalf("departed peer retained management client: count=%d state=%v", retainedCount, retained.Conn.GetState())
+				}
+				session.Close()
+				cancel()
+				select {
+				case <-serverDone:
+				case <-time.After(time.Second):
+					t.Fatal("departed peer did not join")
+				}
+				return
+			}
+
 			setup, stop := context.WithCancel(ctx)
 			agent, err := session.openAgent(setup, "")
 			if err != nil {
@@ -208,6 +235,7 @@ func TestOperatorBLEAttachmentUsesPrimaryProofAndSharedTLS(t *testing.T) {
 				t.Fatalf("same-TLS management %q: %v", reply, err)
 			}
 			agent.Close()
+
 			session.Close()
 			cancel()
 			select {

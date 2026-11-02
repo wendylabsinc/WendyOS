@@ -13,6 +13,7 @@ import (
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/bleprovider"
 	"github.com/wendylabsinc/wendy/go/internal/agent/localmesh"
+	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/cli/netmesh/carriers"
 	"github.com/wendylabsinc/wendy/go/internal/shared/devicepin"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
@@ -177,7 +178,25 @@ func (s *Session) connectCandidate(ctx context.Context, candidate carriers.Candi
 	s.links[link] = managedCarrier{peer: peer, cost: candidate.Cost}
 	s.choosePreferredLocked()
 	s.linkMu.Unlock()
-	defer func() { s.linkMu.Lock(); delete(s.links, link); s.choosePreferredLocked(); s.linkMu.Unlock() }()
+	defer func() {
+		s.linkMu.Lock()
+		delete(s.links, link)
+		s.choosePreferredLocked()
+		// A management stream belongs to this peer's physical carriers. An
+		// indefinite router can encounter many peers over its lifetime; retain
+		// no gRPC reconnect loop after the last usable carrier disappears.
+		var retired *grpcclient.AgentConnection
+		if !s.hasDirectPeerLocked(peer) {
+			s.agentMu.Lock()
+			retired = s.agentClients[peer]
+			delete(s.agentClients, peer)
+			s.agentMu.Unlock()
+		}
+		s.linkMu.Unlock()
+		if retired != nil {
+			_ = retired.Close()
+		}
+	}()
 	return s.Node.AttachOperatorRouterLink(localmesh.WithCarrier(ctx, candidate.Transport), link, candidate.Cost)
 }
 
@@ -211,6 +230,10 @@ func (s *Session) choosePreferredLocked() {
 func (s *Session) hasDirectPeer(peer meshid.Device) bool {
 	s.linkMu.RLock()
 	defer s.linkMu.RUnlock()
+	return s.hasDirectPeerLocked(peer)
+}
+
+func (s *Session) hasDirectPeerLocked(peer meshid.Device) bool {
 	for link, value := range s.links {
 		if value.peer == peer && link.Live() {
 			return true
