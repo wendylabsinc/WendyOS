@@ -16,7 +16,7 @@ import (
 func newDeviceOperatorMeshConnectCmd() *cobra.Command {
 	var address, router, transport string
 	var psm uint16
-	cmd := &cobra.Command{Use: "connect", Short: "Keep an operator mesh attachment ready for ordinary commands", Long: "Prepare the current profile's background operator context through a discovered WendyOS TLS peer, or select one with --address and --router. Subsequent commands may select reachable WendyOS or Lite devices with mesh://TENANT/DEVICE. One background router owns Babel, authenticated carriers and the signed directory across commands. Automatic discovery uses LAN TLS and BLE; Nearby shows signed endpoints with usable routes. An explicit pinned connection remains enabled until disconnect.", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+	cmd := &cobra.Command{Use: "connect", Short: "Keep an operator mesh attachment ready for ordinary commands", Long: "Prepare the current profile's background operator context through a discovered WendyOS or PSRAM Lite TLS router, or select one with --address and --router. Subsequent commands may select reachable WendyOS or Lite devices with mesh://TENANT/DEVICE. One background router owns Babel, authenticated carriers and the signed directory across commands. Automatic discovery uses LAN TLS and BLE; Nearby shows signed endpoints with usable routes. An explicit pinned connection remains enabled until disconnect.", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
 		cfg, err := config.Load()
 		if err != nil {
 			return err
@@ -57,7 +57,7 @@ func newDeviceOperatorMeshConnectCmd() *cobra.Command {
 		_, err = fmt.Fprintf(cmd.OutOrStdout(), "Wendy Net is connected. Use wendy discover to select a reachable device.\n")
 		return err
 	}}
-	cmd.Flags().StringVar(&address, "address", "", "Adjacent WendyOS TLS host:port or BLE peripheral UUID/LE address")
+	cmd.Flags().StringVar(&address, "address", "", "Adjacent router TLS host:port or BLE peripheral UUID/LE address")
 	cmd.Flags().StringVar(&transport, "transport", "tcp", "Explicit first-hop carrier: tcp or ble; discovery uses both when no address is supplied")
 	cmd.Flags().Uint16Var(&psm, "psm", 0, "Explicit BLE dynamic PSM (default 129)")
 	cmd.Flags().StringVar(&router, "router", "", "Exact enrolled device UUID of the adjacent router")

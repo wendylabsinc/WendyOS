@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
 	"strings"
 	"time"
 
@@ -86,7 +87,12 @@ func (s *Session) runCarriers(ctx context.Context) error {
 	return carriers.Run(ctx, carriers.Config{Credentials: s.Node.Credentials, Snapshot: s.Snapshot, Connect: s.connectCandidate, Seeds: seeds, Sources: sources, Limits: carriers.Limits{AuthenticatedTTL: 15 * time.Minute}})
 }
 
-func (s *Session) connectCandidate(ctx context.Context, candidate carriers.Candidate) error {
+func (s *Session) connectCandidate(ctx context.Context, candidate carriers.Candidate) (result error) {
+	if os.Getenv("WENDY_MESH_DEBUG") == "1" {
+		defer func() {
+			fmt.Fprintf(os.Stderr, "wendy: mesh %s candidate %s hint=%x capabilities=%02x finished: %v\n", candidate.Transport, candidate.Address, candidate.Hint, candidate.Capabilities, result)
+		}()
+	}
 	var link *meshoperatorlink.RouterLink
 	seed := s.seedCandidate()
 	if candidate.Address == seed.Address && candidate.Transport == seed.Transport && candidate.PSM == seed.PSM {
@@ -132,7 +138,12 @@ func (s *Session) connectCandidate(ctx context.Context, candidate carriers.Candi
 				peer = actual
 				return nil
 			}}
-		s.Node.Credentials.ConfigureTLSClient(config, meshoperatorlink.RouterALPN)
+		// Router binding independently verifies the TLS wire chain at both ends.
+		// Known-issuer ALPN can omit cached CAs from that chain even though the
+		// handshake's cache-aware verifier passed. Retain the full-chain role
+		// until binding also consumes that exact issuer snapshot. Ordinary mesh
+		// TLS continues to use known-issuer negotiation.
+		config.NextProtos = []string{meshoperatorlink.RouterALPN}
 		options := s.options
 		options.Transport = candidate.Transport
 		options.RouterAddress = candidate.Address
@@ -156,6 +167,9 @@ func (s *Session) connectCandidate(ctx context.Context, candidate carriers.Candi
 	}
 	defer func() { _ = link.Close(); link.Wait() }()
 	peer := link.Peer()
+	if os.Getenv("WENDY_MESH_DEBUG") == "1" {
+		fmt.Fprintf(os.Stderr, "wendy: mesh %s authenticated %s\n", candidate.Transport, peer.Principal())
+	}
 	candidate.Authenticated(peer)
 	if s.Snapshot().HasCheaperLink(peer, candidate.Cost) {
 		return nil

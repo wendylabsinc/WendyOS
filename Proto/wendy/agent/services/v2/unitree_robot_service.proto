@@ -3,7 +3,7 @@ package wendy.agent.services.v2;
 option go_package = "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2;agentpbv2";
 
 // Data and simple commands over an existing paired Go2 connection. Never logs
-// in, changes motion mode or opens another robot connection; the robot key
+// in or opens another robot connection; the robot key
 // stays in the agent. Registered only on the authenticated agent transport and
 // the private admin socket, with the pairing-owner scope check.
 service WendyUnitreeRobotService {
@@ -25,6 +25,8 @@ enum UnitreeCommand {
   UNITREE_COMMAND_STAND_UP = 3;
   UNITREE_COMMAND_LIE_DOWN = 4;
   UNITREE_COMMAND_HELLO = 5;
+  // Stops first, then changes the robot's onboard obstacle-avoidance switch.
+  UNITREE_COMMAND_SET_OBSTACLE_AVOIDANCE = 6;
 }
 
 message UnitreeCommandRequest {
@@ -35,6 +37,8 @@ message UnitreeCommandRequest {
   double forward = 3;
   double yaw = 4;
   double lateral = 5;
+  // SET_OBSTACLE_AVOIDANCE only. False selects direct Sport API movement.
+  bool obstacle_avoidance_enabled = 6;
 }
 
 message UnitreeCommandResponse {}

@@ -111,14 +111,22 @@ type tlsHandshakeRejectedError struct {
 	// switchStep, when set, is the advice to follow instead of renewing the
 	// current auth context, which would not fix this rejection (WDY-3864).
 	switchStep string
+	// expiredLogin is set when the device's own certificate names a tenant
+	// whose stored login has expired by this computer's clock. That, not the
+	// device clock, is why it refused the handshake.
+	expiredLogin *expiredLogin
 }
 
 func newTLSHandshakeRejectedError(cause error) error {
 	return tlsHandshakeRejectedError{cause: cause}
 }
 
+// Is also reports an expired login as the provisioned agent refusing this
+// CLI's credentials: the device is reachable and answered, so neither another
+// address, nor the default-device picker, nor a Cloud name lookup can help.
 func (e tlsHandshakeRejectedError) Is(target error) bool {
-	return target == errTLSHandshakeRejected
+	return target == errTLSHandshakeRejected ||
+		(target == errProvisionedAgentUnauthorized && e.expiredLogin != nil)
 }
 
 func (e tlsHandshakeRejectedError) Unwrap() error {
@@ -279,15 +287,33 @@ func (e orgMismatchWithCause) Unwrap() []error {
 // through to errTLSHandshakeRejected, whose downstream handling offers the
 // clock-skew and refresh-certs remedies.
 func chooseRejectionError(ctx context.Context, observedDeviceOrg int32, allCerts []config.CertificateInfo, cause error) error {
+	return chooseRejectionErrorForScope(ctx, certs.Scope{OrgID: observedDeviceOrg}, allCerts, cause)
+}
+
+// chooseRejectionErrorForScope is chooseRejectionError for a device whose
+// certificate may name a pki-core tenant rather than a numeric org. Such a
+// device has org 0, and an org-0 diagnosis weighs every stored login: one
+// unexpired login for any other tenant hid the device tenant's expired one, and
+// the rejection was then reported as a possible device clock error. A login
+// that has expired is checked first, for that tenant only, and is never
+// treated as a clock problem.
+func chooseRejectionErrorForScope(ctx context.Context, device certs.Scope, allCerts []config.CertificateInfo, cause error) error {
+	observedDeviceOrg := device.OrgID
 	if observedDeviceOrg != 0 && !orgInCerts(observedDeviceOrg, allCerts) {
 		return orgMismatchWithCause{
 			mismatch: newOrgMismatchDeviceError(observedDeviceOrg, allCerts, resolveUserOrgNamesFn(ctx, allCerts)),
 			cause:    cause,
 		}
 	}
+	now := time.Now()
+	if device.TenantUUID != "" {
+		if login := expiredLoginForTenant(device.TenantUUID, allCerts, now); login != nil {
+			return tlsHandshakeRejectedError{cause: cause, expiredLogin: login}
+		}
+	}
 	rejection := tlsHandshakeRejectedError{cause: cause, switchStep: switchContextStep(observedDeviceOrg)}
 	if isTLSCertificateError(cause) {
-		rejection.refreshReason = expiredClientCertificateReason(observedDeviceOrg, allCerts, time.Now())
+		rejection.refreshReason = expiredClientCertificateReason(observedDeviceOrg, allCerts, now)
 	}
 	return rejection
 }
@@ -667,6 +693,9 @@ func lanAgentPort(dev models.LANDevice) int {
 }
 
 func lanAgentAddresses(dev models.LANDevice) []string {
+	if dev.Mesh {
+		return []string{dev.Hostname}
+	}
 	port := lanAgentPort(dev)
 
 	ip, hostname := strings.TrimSpace(dev.IPAddress), strings.TrimSpace(dev.Hostname)
@@ -745,6 +774,24 @@ func lanDialCandidates(ctx context.Context, dev models.LANDevice) []string {
 // returns the first one that answers GetAgentVersion, along with whether that
 // connection used mTLS.
 func resolveLANAgentVersion(ctx context.Context, dev models.LANDevice) (string, bool, *agentpb.GetAgentVersionResponse, error) {
+	if dev.Mesh {
+		// Never send mesh ULAs through the host network or probe another identity.
+		picked, err := connectMeshSelector(ctx, dev.Hostname)
+		if err != nil {
+			return "", false, nil, err
+		}
+		defer picked.Close()
+		version, ok := picked.Agent.CachedAgentVersion()
+		if !ok {
+			version, err = picked.Agent.AgentService.GetAgentVersion(ctx, &agentpb.GetAgentVersionRequest{})
+			if err != nil {
+				return "", false, nil, err
+			}
+			picked.Agent.CacheAgentVersion(version)
+		}
+		return dev.Hostname, true, version, nil
+	}
+
 	// connectWithAutoTLSDiagnostics tries every stored org cert in turn, so the
 	// per-address budget must cover all of them — otherwise a device whose org
 	// isn't the user's first cert is cancelled before its cert is reached, even
@@ -1533,6 +1580,9 @@ func pinKeyForLANDevice(d *models.LANDevice) string {
 // pin first) or `wendy device unpin <host>` is the way back — a re-pin has to be
 // an act aimed at a specific device, not a row in a list mDNS filled in.
 func connectPickedLANDevice(ctx context.Context, d *models.DiscoveredDevice, addr string, suppressUpdateCheck bool) (*SelectedDevice, error) {
+	if d.LAN != nil && d.LAN.Mesh {
+		return connectMeshSelector(ctx, d.LAN.Hostname)
+	}
 	if name, matched, err := simulatorName(d.LAN.ID); err != nil {
 		return nil, err
 	} else if matched {
@@ -1544,7 +1594,24 @@ func connectPickedLANDevice(ctx context.Context, d *models.DiscoveredDevice, add
 	// a device the CLI can reach only over its USB link (WiFi on another net)
 	// advertises both, and dialing addr alone (its unreachable WiFi IP) is what
 	// made `device info/shell/pair` report a reachable device as unreachable.
-	conn, err := connectAgentAtAddressWithProvisionedHint(ctx, addr, func() bool { return mtls }, lanDialCandidates(ctx, *d.LAN)...)
+	candidates := lanDialCandidates(ctx, *d.LAN)
+	dial := func() (*grpcclient.AgentConnection, error) {
+		return connectAgentAtAddressWithProvisionedHint(ctx, addr, func() bool { return mtls }, candidates...)
+	}
+	conn, err := dial()
+	if err != nil {
+		// A picked device that rejects our certificate gets the same clock
+		// recovery as a named one: before this, a device chosen in the picker
+		// went straight to "TLS authentication failed" with no time proof.
+		// An expired login is renewed instead. Same endpoint and candidates;
+		// the picker only runs interactively, so read-only monitoring (always
+		// non-interactive) never reaches here. Recovery declines identity
+		// refusals itself. A pinned device that rejected our certificate
+		// arrives as the pinned refusal, so filtering on
+		// blocksUnauthenticatedFallback here would skip the one picker case
+		// that needs the time proof.
+		conn, err = recoverRejectedHandshake(ctx, err, dial)
+	}
 	if err != nil {
 		// Neither refusal is "the LAN attempt failed", and the BLE half of this
 		// row is named by the same unauthenticated advertisement that named the
@@ -1556,6 +1623,17 @@ func connectPickedLANDevice(ctx context.Context, d *models.DiscoveredDevice, add
 		// must not silently reopen this.
 		if blocksUnauthenticatedFallback(err) {
 			return nil, err
+		}
+		// The device answered and refused an expired login. Bluetooth would
+		// present the same credentials over a path that explains less.
+		if expiredLoginFrom(err) != nil {
+			return nil, err
+		}
+		// A cancelled command isn't a failed LAN attempt either. Clock
+		// recovery can wait ~10 s, and Ctrl-C during it must end the command,
+		// not go on to a Bluetooth connect.
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
 		}
 		// LAN failed — fall back to BLE if available.
 		if d.Bluetooth != nil {
@@ -2484,7 +2562,11 @@ type mtlsWalk struct {
 	// The primary's org and failure evidence are kept separately from the
 	// walk-wide fields, which a later candidate would have overwritten.
 	primaryObservedOrg int32
-	primaryLastErr     error
+	// primaryObservedTenant is the pki-core tenant the primary's certificate
+	// named. A tenant device reports org 0, so without it the diagnosis could
+	// not tell which stored login the device needed.
+	primaryObservedTenant string
+	primaryLastErr        error
 	// Keep explicit certificate failures when a later port is unreachable.
 	// This evidence is diagnostic only; the suppression buckets stay unchanged.
 	primaryCertificateErr error
@@ -2633,6 +2715,9 @@ func (w *mtlsWalk) dialAddr(ctx context.Context, cand string, isPrimary bool) (*
 					w.jumped = true
 				}
 			}
+			if tenant, ok := conn.ObservedServerTenant(); ok && isPrimary {
+				w.primaryObservedTenant = tenant
+			}
 			conn.Close()
 			certRejected := isCertRejectionError(cand, probeErr)
 			if certRejected {
@@ -2736,7 +2821,14 @@ func dialAgentLadderWithCerts(ctx context.Context, target dialTarget, allCerts [
 			if walk.primaryCertificateErr != nil {
 				cause = walk.primaryCertificateErr
 			}
-			return nil, cause, chooseRejectionError(ctx, walk.primaryObservedOrg, allCerts, cause)
+			device := certs.Scope{OrgID: walk.primaryObservedOrg, TenantUUID: walk.primaryObservedTenant}
+			if device.TenantUUID == "" && target.Expected != nil {
+				// The device's own certificate never arrived (or named no
+				// tenant); the pin recorded for this name still says which
+				// tenant it belongs to.
+				device.TenantUUID = target.Expected.TenantUUID
+			}
+			return nil, cause, chooseRejectionErrorForScope(ctx, device, allCerts, cause)
 		}
 	}
 	if err := ctx.Err(); err != nil {
@@ -2756,7 +2848,11 @@ func dialAgentLadderWithCerts(ctx context.Context, target dialTarget, allCerts [
 		// errNoAuthenticatedEndpoint).
 		failure := pinnedHostNoAuthenticatedEndpointError(target.refusalKey(), candidates, walk.attempts, walk.anyCertRejection)
 		failure.pinKey = target.PinKey
-		return nil, walk.lastMTLSErr, failure
+		tenant := ""
+		if target.Expected != nil {
+			tenant = target.Expected.TenantUUID
+		}
+		return nil, walk.lastMTLSErr, pinnedRefusalError(failure, tenant, allCerts, time.Now())
 	}
 	// The plaintext rung stays on the primary address rather than walking the
 	// candidates. grpc.NewClient is lazy, so a plaintext "success" against a dead
@@ -3929,6 +4025,7 @@ func mergePickerItem(existing *tui.PickerItem, incoming tui.PickerItem) {
 
 	// Rebuild the type string from the merged transports.
 	existing.Type = md.ConnectionTypes()
+	existing.OS = md.DisplayOS()
 
 	// Propagate security status: LAN probes determine mTLS, BLE doesn't. Once
 	// we know a device is insecure (or secure), update the existing item.
@@ -4019,11 +4116,11 @@ func externalProviderPickerItem(prov providers.DeviceProvider, dev *models.Exter
 			IdentityKey:  models.CanonicalDevicePrincipal("spiffe://wendy.sh/tenant/" + dev.ConnectionInfo["tenantId"] + "/device/" + dev.LiteDedupID()),
 			Name:         dev.DisplayName,
 			DedupKey:     dev.LiteDedupID(),
-			Type:         dev.ConnectionType() + " (Lite)",
+			Type:         dev.ConnectionType(),
 			Address:      dev.ConnectionInfo["ip"],
 			Insecure:     liteExternalInsecure(dev),
 			AgentVersion: dev.AgentVersion,
-			OS:           dev.OS,
+			OS:           "Wendy Lite",
 			OSVersion:    dev.OSVersion,
 			Value: &pickerEntry{mergedDevice: &models.DiscoveredDevice{
 				DisplayName:     dev.DisplayName,
@@ -4290,20 +4387,20 @@ func pickDeviceWithCloudAuth(ctx context.Context, excludeProviders map[string]bo
 				if err == nil && len(bleDevices) > 0 {
 					var items []tui.PickerItem
 					for i := range bleDevices {
-						connType := "BLE"
+						os := bleDevices[i].OS
 						if !bleDevices[i].IsWendyAgent() {
-							connType = "BLE (Lite)"
+							os = "Wendy Lite"
 						}
 						items = append(items, tui.PickerItem{
 							Name:     bleDevices[i].DisplayName,
 							DedupKey: deviceDedupKey(bleDevices[i].HostKey(), bleDevices[i].DisplayName),
 							SortKey:  deviceSortKey(bleDevices[i].DisplayName, ""),
-							Type:     connType,
+							Type:     "BLE",
 							Address:  bleDevices[i].Address,
 							// A Lite device reports firmware here, not an agent version.
 							AgentVersion:  bleDevices[i].AgentVersion,
 							AgentOutdated: bleDevices[i].IsWendyAgent() && agentBehindCLI(version.Version, bleDevices[i].AgentVersion),
-							OS:            bleDevices[i].OS,
+							OS:            os,
 							OSVersion:     bleDevices[i].OSVersion,
 							Value: &pickerEntry{mergedDevice: &models.DiscoveredDevice{
 								DisplayName:     bleDevices[i].DisplayName,
@@ -4414,15 +4511,23 @@ func lanPickerItem(dev models.LANDevice, insecure bool, probe tui.ProbeState) tu
 	if probe != tui.ProbePending {
 		hint = lanProbeHint(&devCopy)
 	}
+	kind := "LAN"
+	if dev.Mesh {
+		kind = "Mesh"
+	}
+	os := dev.OS
+	if dev.WendyLite {
+		os = "Wendy Lite"
+	}
 	return tui.PickerItem{
 		IdentityKey:   models.CanonicalDevicePrincipal(dev.PrincipalURI),
 		Name:          dev.DisplayName,
-		Type:          "LAN",
+		Type:          kind,
 		USB:           dev.USB,
 		Address:       preferredLANAddress(dev),
 		AgentVersion:  dev.AgentVersion,
 		AgentOutdated: agentBehindCLI(version.Version, dev.AgentVersion),
-		OS:            dev.OS,
+		OS:            os,
 		OSVersion:     dev.OSVersion,
 		Provisioned:   lanProvisionedDisplay(&devCopy),
 		Hint:          hint,

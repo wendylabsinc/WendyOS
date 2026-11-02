@@ -70,8 +70,16 @@ func NewL2CAPStream(c *Connection) net.Conn {
 	return &l2capNetConn{conn: c}
 }
 
+type l2capIO interface {
+	L2CAPRecv(int) ([]byte, error)
+	L2CAPSend([]byte) error
+	Close()
+}
+
 type l2capNetConn struct {
-	conn         *Connection
+	conn         l2capIO
+	readMu       sync.Mutex
+	sendMu       sync.Mutex
 	buf          []byte       // leftover from a previous L2CAPRecv
 	deadlineMu   sync.RWMutex // guards readDeadline while a Read is in flight
 	readDeadline time.Time    // zero means no deadline
@@ -84,6 +92,11 @@ type l2capNetConn struct {
 // platform recv is polled in recvChunkSeconds slices and a slice that expires
 // with nothing to show is retried rather than reported.
 func (c *l2capNetConn) Read(b []byte) (int, error) {
+	c.readMu.Lock()
+	defer c.readMu.Unlock()
+	if len(b) == 0 {
+		return 0, nil
+	}
 	if len(c.buf) > 0 {
 		n := copy(b, c.buf)
 		c.buf = c.buf[n:]
@@ -142,17 +155,20 @@ func (c *l2capNetConn) recv(chunkSeconds int) ([]byte, error) {
 }
 
 func (c *l2capNetConn) Write(b []byte) (int, error) {
+	c.sendMu.Lock()
+	defer c.sendMu.Unlock()
+	if c.closed.Load() {
+		return 0, net.ErrClosed
+	}
 	if err := c.conn.L2CAPSend(b); err != nil {
 		return 0, err
 	}
 	return len(b), nil
 }
 
-// Close waits out an in-flight Read so the platform connection cannot be torn
-// down while a reader is still inside it. Reads poll in recvChunkSeconds
-// slices. A write can still be in flight: Connection.Close interrupts it
-// first, then waits for it to return before freeing anything (on darwin,
-// before releasing the CoreBluetooth wrapper to ARC).
+// Close waits for an in-flight Read, which polls in recvChunkSeconds slices.
+// Connection.Close interrupts any in-flight write and waits for it to return
+// before releasing the native connection.
 //
 // Its idempotency is belt and braces these days — Connection.Close is
 // idempotent on both backends — but it costs a bool and keeps this type's own

@@ -28,6 +28,9 @@ func classifyLANProbeFailure(err error) *models.ProbeFailure {
 	switch {
 	case isLANIdentityFailure(err):
 		return lanIdentityFailure(err)
+	case expiredLoginFrom(err) != nil:
+		login := expiredLoginFrom(err)
+		return probeFailure("login_expired", login.message(), login.loginStep)
 	case errors.As(err, &org):
 		return probeFailure("device_org_mismatch", "The device's certificate belongs to an organization for which this CLI has no credentials.", "Run 'wendy auth login' with an account that can access that organization.")
 	case probeErrorMatches(err, isExplicitTLSRejection):

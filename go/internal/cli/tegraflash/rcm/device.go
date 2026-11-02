@@ -1,4 +1,4 @@
-//go:build darwin || linux
+//go:build (darwin || linux) && !ios
 
 // USB device handling for the RCM stage (bootROM level).
 // USB transfer mechanics translated from NVIDIA tegrarcm usb.c

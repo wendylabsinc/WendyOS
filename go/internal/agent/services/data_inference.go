@@ -23,8 +23,6 @@ type inferenceVideo interface {
 	SubscribeSensor(context.Context, string) (sensorSubscription, error)
 }
 
-const campaignAppPrefix = "sh.wendy.campaign."
-
 type campaignInferenceManager struct {
 	service *DataService
 	factory inference.Factory
@@ -32,6 +30,11 @@ type campaignInferenceManager struct {
 	wake    chan struct{}
 	mu      sync.Mutex
 	jobs    map[string]*campaignInferenceJob
+	ctx     context.Context
+	// reconcileMu runs one pass at a time: a pass that read the plans before
+	// a removal must not restart a job that a later pass, run for that
+	// removal, has just retired.
+	reconcileMu sync.Mutex
 }
 
 type campaignInferenceJob struct {
@@ -51,7 +54,7 @@ type campaignInferenceJob struct {
 // camera subscriptions to exit before the video service is shut down.
 func (s *DataService) StartCampaignInference(ctx context.Context, factory inference.Factory, sender CampaignNotificationSender) func() {
 	ctx, cancel := context.WithCancel(ctx)
-	manager := &campaignInferenceManager{service: s, factory: factory, sender: sender, wake: make(chan struct{}, 1), jobs: map[string]*campaignInferenceJob{}}
+	manager := &campaignInferenceManager{service: s, factory: factory, sender: sender, wake: make(chan struct{}, 1), ctx: ctx, jobs: map[string]*campaignInferenceJob{}}
 	s.inference = manager // Configured once, before registering the RPC server.
 	done := make(chan struct{})
 	go func() {
@@ -93,6 +96,8 @@ func (m *campaignInferenceManager) stopAll() {
 }
 
 func (m *campaignInferenceManager) reconcile(ctx context.Context) {
+	m.reconcileMu.Lock()
+	defer m.reconcileMu.Unlock()
 	campaigns, err := m.service.manager.Campaigns()
 	if err != nil {
 		m.service.manager.Warnf("reading inference campaigns: %v", err)
@@ -135,6 +140,22 @@ func (m *campaignInferenceManager) reconcile(ctx context.Context) {
 		go job.supervise(child)
 	}
 }
+
+// reconcileNow runs one pass in the caller's goroutine; it returns once the
+// jobs it retired have stopped.
+func (m *campaignInferenceManager) reconcileNow() { m.reconcile(m.ctx) }
+
+// wakeNow asks the loop for a pass without waiting for it.
+func (m *campaignInferenceManager) wakeNow() {
+	select {
+	case m.wake <- struct{}{}:
+	default:
+	}
+}
+
+// campaignJobKey is the jobs key of a campaign's inference. Lookups from
+// outside reconcile go through it, so a change of key reaches all of them.
+func campaignJobKey(name string) string { return name }
 
 // Keep retired jobs visible until their process and camera subscriptions exit.
 // Persisting enabled:false only requests shutdown; it does not complete it.
@@ -365,12 +386,20 @@ func (j *campaignInferenceJob) run(ctx context.Context) error {
 			j.sourceState(result.SourceID, "detecting")
 			attributes := map[string]any{"campaign": j.campaign.Name, "source_id": result.SourceID, "model_version": j.campaign.Inference.Revision, "detections": detections,
 				"input_reference_status": "encoded_stream_decode_does_not_preserve_sample_ids", "runtime_results_dropped": result.DroppedResults}
-			addPicture(attributes, detections, result.Width, result.Height)
-			// What scored the frame: FP16 TensorRT scores differ slightly from
-			// FP32 CPU scores, so a dataset has to be able to tell them apart.
+			if j.campaign.Inference.Task == "image-classification" {
+				j.sourceState(result.SourceID, "classifying")
+				classes := make([]map[string]any, 0, len(detections))
+				for _, d := range detections {
+					classes = append(classes, map[string]any{"label": d.Label, "score": d.Score})
+				}
+				attributes["detections"] = classes
+				attributes["task"] = "image-classification"
+			} else {
+				addPicture(attributes, detections, result.Width, result.Height)
+			}
 			j.predictionProvenance(attributes, result)
 			record := data.ApplicationRecord{Version: 1, Type: "prediction", Model: j.campaign.Inference.Model, Attributes: attributes}
-			if _, err := j.owner.service.manager.RecordCampaignApplication(campaignAppPrefix+j.campaign.Name, record); err != nil {
+			if _, err := j.owner.service.manager.RecordCampaignApplication(data.CampaignAppID(j.campaign.Name), record); err != nil {
 				j.owner.service.manager.Warnf("recording campaign prediction: %v", err)
 			}
 			state := presence[result.SourceID]
@@ -419,7 +448,7 @@ func (j *campaignInferenceJob) stream(ctx context.Context, session inference.Ses
 				if err != nil {
 					break
 				}
-				if err := j.owner.service.manager.RecordModelInput(data.ModelInput{AppID: campaignAppPrefix + j.campaign.Name, Model: j.campaign.Inference.Model, SourceID: sourceID, SampleID: sample.SampleID, BootNanos: sample.BootNanos, UncertaintyNanos: sample.UncertaintyNanos, PayloadBytes: len(sample.Payload), Encoding: sample.Encoding, SelfContained: sample.SelfContained, DroppedBefore: sample.DroppedBefore}); err != nil {
+				if err := j.owner.service.manager.RecordModelInput(data.ModelInput{AppID: data.CampaignAppID(j.campaign.Name), Model: j.campaign.Inference.Model, SourceID: sourceID, SampleID: sample.SampleID, BootNanos: sample.BootNanos, UncertaintyNanos: sample.UncertaintyNanos, PayloadBytes: len(sample.Payload), Encoding: sample.Encoding, SelfContained: sample.SelfContained, DroppedBefore: sample.DroppedBefore}); err != nil {
 					j.owner.service.manager.Warnf("recording campaign model input: %v", err)
 				}
 			}
@@ -595,6 +624,15 @@ func (s *DataService) campaignMessage(campaign data.Campaign) (*agentpbv2.DataCa
 			}
 		}
 	}
+	// A disarmed campaign runs nothing, so its inference reports exactly that,
+	// once its worker has stopped, rather than "pending" for a start that is
+	// never coming.
+	if campaign.InferenceStatus != nil && campaign.State == data.CampaignStateDisarmed {
+		campaign.InferenceStatus = &data.InferenceStatus{State: data.CampaignStateDisarmed}
+		if s.inference != nil && s.inference.inferenceActive(campaignJobKey(campaign.Name)) {
+			campaign.InferenceStatus.State = "stopping"
+		}
+	}
 	return campaignMessage(campaign)
 }
 
@@ -605,7 +643,12 @@ func (s *DataService) triggerInference(ctx context.Context, campaign data.Campai
 	if err != nil || current.Revision != campaign.Revision || !current.Inference.IsEnabled() || ctx.Err() != nil {
 		return false, err
 	}
-	if _, err := s.manager.RecordCampaignApplication(campaignAppPrefix+campaign.Name, record); err != nil {
+	// A disarmed campaign's worker is being retired; what it saw last is not
+	// a detection anyone asked for any more.
+	if current.State != data.CampaignStateArmed {
+		return false, nil
+	}
+	if _, err := s.manager.RecordCampaignApplication(data.CampaignAppID(campaign.Name), record); err != nil {
 		return true, err
 	}
 	if _, active := s.manager.ActiveSession(campaign.Name); active {

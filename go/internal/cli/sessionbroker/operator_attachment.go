@@ -7,21 +7,18 @@ import (
 	"sync"
 	"time"
 
-	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/cli/operatormesh"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
-	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
 
 type operatorAttachmentState struct {
-	session  *operatormesh.Session
-	upstream *grpcclient.AgentConnection
-	recipe   OperatorSpec
-	result   <-chan error
+	session *operatormesh.Session
+	recipe  OperatorSpec
+	result  <-chan error
 }
 
 // operatorAttachment retains context ownership, rather than one particular
@@ -95,17 +92,12 @@ func (a *operatorAttachment) open(ctx context.Context, recipe OperatorSpec) (*op
 	}
 	joining, joined := context.WithTimeout(ctx, operatormesh.JoinSetupTimeout)
 	defer joined()
-	upstream, err := session.AgentConnection(joining)
-	if err == nil {
-		probe, stop := context.WithTimeout(joining, 15*time.Second)
-		_, err = upstream.AgentService.GetAgentVersion(probe, &agentpb.GetAgentVersionRequest{})
-		stop()
-	}
+	err = session.WaitForPeer(joining)
 	if err != nil {
 		session.Close()
 		return nil, err
 	}
-	return &operatorAttachmentState{session: session, upstream: upstream, recipe: recipe, result: result}, nil
+	return &operatorAttachmentState{session: session, recipe: recipe, result: result}, nil
 }
 
 func (a *operatorAttachment) snapshot() (*operatorAttachmentState, error) {
@@ -133,6 +125,12 @@ func (a *operatorAttachment) adjacent() (*grpc.ClientConn, meshid.Device, error)
 	peer, live := current.session.AdjacentPeer()
 	if !live {
 		return nil, meshid.Device{}, status.Error(codes.Unavailable, "adjacent carrier is reconnecting")
+	}
+	for _, manifest := range current.session.Snapshot().Devices {
+		owner, parseErr := manifest.Peer(peer.Tenant())
+		if parseErr == nil && owner == peer && manifest.Platform == "Lite" && manifest.Expires > time.Now().UnixMilli() {
+			return nil, peer, nil
+		}
 	}
 	client, err := current.session.AgentConnectionForPeer(context.Background(), peer)
 	if err != nil {
