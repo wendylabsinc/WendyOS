@@ -321,11 +321,11 @@ func TestMeshTrimmedRootRetainsRequiredIntermediateOnWire(t *testing.T) {
 	intermediate, ik, ip, _ := makeCert("intermediate", "", root, rk)
 	_, _, ap, ak := makeCert("a", deviceA, root, rk)
 	_, _, bp, bk := makeCert("b", deviceB, intermediate, ik)
-	a, err := NewCredentials(ap, rp, ak)
+	a, err := newTestCredentials(ap, rp, ak)
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := NewCredentials(bp, ip+rp, bk)
+	b, err := newTestCredentials(bp, ip+rp, bk)
 	if err != nil {
 		t.Fatal(err)
 	}
