@@ -92,6 +92,12 @@ func TestAgentRetainsValidLeaseWhilePriorPresenceOwnerDrains(t *testing.T) {
 	}{
 		{"owned route", codes.AlreadyExists, false, false, 1},
 		{"refused lease", codes.PermissionDenied, false, false, 2},
+		{"unavailable before holder proof", codes.Unavailable, false, true, 1},
+		{"unavailable after holder proof", codes.Unavailable, false, false, 1},
+		{"unauthenticated before holder proof", codes.Unauthenticated, false, true, 2},
+		{"unauthenticated after holder proof", codes.Unauthenticated, false, false, 2},
+		{"policy refusal before holder proof", codes.FailedPrecondition, false, true, 2},
+		{"policy refusal after holder proof", codes.FailedPrecondition, false, false, 2},
 		{"near expiry still refreshes", codes.AlreadyExists, true, false, 2},
 		{"unproven ownership refusal", codes.AlreadyExists, false, true, 2},
 	} {

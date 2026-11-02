@@ -214,6 +214,18 @@ func retryPresenceLease(err error) bool {
 	return errors.As(err, &request) && presenceDeadline(request.error)
 }
 
+// presenceBrokerError identifies only the public presence RPC and its phase.
+// Device-mTLS issuance errors have different authentication semantics.
+type presenceBrokerError struct {
+	phase string
+	err   error
+}
+
+func (e *presenceBrokerError) Error() string {
+	return fmt.Sprintf("public broker presence %s: %v", e.phase, e.err)
+}
+func (e *presenceBrokerError) Unwrap() error { return e.err }
+
 // requestLease reads immutable agent keys and verifies Cloud's response. Only
 // the presence loop may remember, archive or apply the returned lease.
 func (a *Agent) requestLease(ctx context.Context) (*pb.IssuePresenceLeaseResponse, claims, error) {
@@ -312,7 +324,8 @@ func (a *Agent) runOnce(parent context.Context) error {
 	}
 	defer conn.Close()
 	// A broker refusal invalidates this resume lease (a restart changes the
-	// broker audience). An explicit deadline says nothing about its validity.
+	// broker audience). Public transport unavailability says nothing about a
+	// verified lease: reconnect with fresh TLS and holder proof until its expiry.
 	keepLease := false
 	defer func() {
 		// A cancelled parent is the agent shutting down, not the broker
@@ -327,22 +340,26 @@ func (a *Agent) runOnce(parent context.Context) error {
 		// carries, not whether the broker still knows it.
 		_ = os.Remove(filepath.Join(a.StateDir, "lease.pb"))
 	}()
-	brokerError := func(err error) error {
-		keepLease = presenceDeadline(err) && time.Now().Before(time.Unix(a.leaseClaims.Exp, 0))
-		return err
+	brokerError := func(phase string, err error) error {
+		// gRPC can report a failed public TCP/TLS connection as Unavailable.
+		// It cannot reliably distinguish that from a server's Unavailable,
+		// but neither proves this signed lease invalid. Explicit auth/policy
+		// refusals remain terminal. This does not classify Cloud issuance.
+		keepLease = (presenceDeadline(err) || status.Code(err) == codes.Unavailable) && time.Now().Before(time.Unix(a.leaseClaims.Exp, 0))
+		return &presenceBrokerError{phase: phase, err: err}
 	}
 	stream, err := pb.NewTunnelBrokerV2ServiceClient(conn).RegisterPresence(metadata.NewOutgoingContext(ctx, metadata.MD{}))
 	if err != nil {
-		return brokerError(err)
+		return brokerError("opening stream", err)
 	}
 	if err = stream.Send(&pb.RegisterPresenceRequest{Message: &pb.RegisterPresenceRequest_Open{Open: &pb.PresenceOpen{PresenceLeaseJws: lease.PresenceLeaseJws, AgentSigningPublicKeySpkiDer: publicDER(a.signing)}}}); err != nil {
-		return brokerError(err)
+		return brokerError("sending open", err)
 	}
 	admission := time.AfterFunc(30*time.Second, cancel)
 	msg, err := stream.Recv()
 	if err != nil {
 		admission.Stop()
-		return brokerError(fmt.Errorf("opening v2 presence: %w", err))
+		return brokerError("receiving challenge", err)
 	}
 	sig, err := proof(a.signing, "presence", c.Aud, c.Route, c.JTI, lease.PresenceLeaseJws, "agent-presence", msg.GetChallenge())
 	if err != nil {
@@ -352,7 +369,7 @@ func (a *Agent) runOnce(parent context.Context) error {
 	err = stream.Send(&pb.RegisterPresenceRequest{Message: &pb.RegisterPresenceRequest_Proof{Proof: &pb.PresenceProof{ChallengeId: msg.GetChallenge().ChallengeId, Signature: sig}}})
 	if err != nil {
 		admission.Stop()
-		return brokerError(err)
+		return brokerError("sending holder proof", err)
 	}
 	msg, err = stream.Recv()
 	admission.Stop()
@@ -361,9 +378,9 @@ func (a *Agent) runOnce(parent context.Context) error {
 		// this lease and its fresh holder proof. A stale old stream must
 		// drain; another lease cannot release it and would repeat the Cloud
 		// mTLS exchange over a potentially slow borrowed path.
-		brokerError(err)
+		wrapped := brokerError("receiving admission", err)
 		keepLease = keepLease || status.Code(err) == codes.AlreadyExists
-		return err
+		return wrapped
 	}
 	accepted := msg.GetAccepted()
 	if accepted == nil || accepted.LeaseExpiresAt == nil || accepted.LeaseExpiresAt.CheckValid() != nil || accepted.LeaseExpiresAt.AsTime().Unix() != c.Exp {
@@ -476,7 +493,7 @@ func (a *Agent) runOnce(parent context.Context) error {
 			pending[o.OfferId] = s
 		}
 		if err = stream.Send(&pb.RegisterPresenceRequest{Message: &pb.RegisterPresenceRequest_OfferAcknowledgement{OfferAcknowledgement: &pb.PresenceOfferAcknowledgement{OfferId: o.OfferId, SessionId: o.SessionId}}}); err != nil {
-			return brokerError(err)
+			return brokerError("acknowledging offer", err)
 		}
 		return nil
 	}
@@ -571,7 +588,7 @@ func (a *Agent) runOnce(parent context.Context) error {
 			renewing = l
 			renewedClaims = n
 			if e := stream.Send(&pb.RegisterPresenceRequest{Message: &pb.RegisterPresenceRequest_Renewal{Renewal: &pb.PresenceRenewal{PresenceLeaseJws: l.PresenceLeaseJws}}}); e != nil {
-				return brokerError(e)
+				return brokerError("sending renewal", e)
 			}
 			if e := retryDeferred(); e != nil {
 				return e
@@ -584,7 +601,7 @@ func (a *Agent) runOnce(parent context.Context) error {
 				return fmt.Errorf("Cloud presence lease expired")
 			}
 			if r.e != nil {
-				return brokerError(r.e)
+				return brokerError("receiving messages", r.e)
 			}
 			switch m := r.m.Message.(type) {
 			case *pb.RegisterPresenceResponse_Renewed:
