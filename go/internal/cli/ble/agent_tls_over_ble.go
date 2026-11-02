@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
+	"github.com/wendylabsinc/wendy/go/internal/shared/meshalpn"
 )
 
 // NewClientTLSConfig builds the mTLS config for talking to the WendyOS agent
@@ -19,7 +20,7 @@ import (
 // fail to parse; no TLS hostname over L2CAP); opts.PinStore and chain
 // verification are handled by the VerifyConnection callback.
 func NewClientTLSConfig(certPEM, keyPEM string, opts certs.ServerVerifyOpts) (*tls.Config, error) {
-	cert, err := tls.X509KeyPair([]byte(certPEM), []byte(keyPEM))
+	cert, err := certs.TLSKeyPair(certPEM, opts.ChainPEM, keyPEM)
 	if err != nil {
 		return nil, fmt.Errorf("loading BLE client certificate: %w", err)
 	}
@@ -27,10 +28,16 @@ func NewClientTLSConfig(certPEM, keyPEM string, opts certs.ServerVerifyOpts) (*t
 	if err != nil {
 		return nil, fmt.Errorf("building BLE server certificate verifier: %w", err)
 	}
-	return &tls.Config{
+	cfg := &tls.Config{
 		Certificates:       []tls.Certificate{cert},
 		InsecureSkipVerify: true, //nolint:gosec — hostname bypass only; VerifyConnection validates server cert against Wendy PKI
 		VerifyConnection:   verifyConn,
 		MinVersion:         tls.VersionTLS12,
-	}, nil
+	}
+	known, err := certs.ParseCertsFromPEM([]byte(opts.ChainPEM))
+	if err != nil {
+		return nil, err
+	}
+	meshalpn.NewCertificates(cert, known).ConfigureClient(cfg, "h2")
+	return cfg, nil
 }

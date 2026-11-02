@@ -4,6 +4,20 @@ Thank you for contributing to WendyOS! This document covers the development work
 
 ## CI / GitHub Actions
 
+### Source-only AI review
+
+The security, API, docs and integration-test reviews validate the complete diff before excluding generated protocol output. The fixed policy in `.github/scripts/review_sources.py` covers Go protobuf output, the three Swift core Proto output directories and WendyNotify's generated notification stubs. Unknown source files, cross-boundary renames, source definitions, generators, external source pins, configuration and generation/build checks remain reviewed. Generated headers and PR attributes do not define exclusions.
+
+Coverage distinguishes source files and bytes from excluded output. Upstream source bodies are not fetched: a pin change alone does not establish upstream API or behavior compatibility. Generation checks remain independent and do not substitute for source review.
+
+Generated-only changes make no model call. Security preserves prior findings and enforces earlier blockers. API review records `skipped` and preserves prior decisions, acceptance and risk labels without publishing a replacement checklist. Docs and integration-test review preserve prior comments and still fail for an existing blocker. This policy activates from trusted base automation. Swift E2E analysis has a separate review path and still requires integration.
+
+GitHub-managed Copilot uses `.github/copilot-instructions.md` as prompt guidance, not an enforced input filter. [Administrator content exclusions](https://docs.github.com/en/copilot/concepts/security-governance-and-network-settings/content-exclusion) can cover these output paths on Copilot Business/Enterprise; their configuration and instruction adoption are unverified. [Provider defaults](https://docs.github.com/en/copilot/reference/review-excluded-files) also exclude some dependency/configuration files. No Copilot settings or review requests are changed here.
+
+### Integration Test Review (`.github/workflows/integration-test-review.yml`)
+
+The diff is read from immutable base/head Git commits after checking PR metadata. Existing test context is read as data from the event head. The model retains its existing 30,000-character diff excerpt budget. Larger source diffs are explicitly reported as partial input; omitted source remains unreviewed, and an excerpt cannot clear earlier blockers. Generated output is filtered before the diff, file lists or context are sent to the model.
+
 ### Docs Review Workflow (`.github/workflows/docs-review.yml`)
 
 The docs-review workflow runs on every pull request targeting `main` and posts a structured docs coverage review as a PR issue comment when Claude finds documentation gaps.
@@ -16,7 +30,7 @@ The docs-review workflow runs on every pull request targeting `main` and posts a
 - **Collapsible details:** Longer rationale and suggested diffs are placed behind a workflow-owned `<details>` disclosure block.
 - **Output safety:** LLM-provided text is length-limited, angle brackets are rendered as safe Unicode characters, detail text is placed in fenced code blocks, unsafe URI schemes are neutralised, and docs paths are accepted only when they match the strict existing `docs/.../*.md` allowlist.
 - **Edit-in-place comment:** Existing docs-review comments are identified by the `<!-- ai-docs-review:v1 -->` marker and edited instead of posting duplicates. Duplicate marker comments are deleted.
-- **Stale comment cleanup:** When no findings are produced, any existing docs-review comment is deleted.
+- **Stale comment cleanup:** A completed source review with no findings removes the previous comment. A generated-only skip preserves it and enforces any prior blocker.
 - **Body truncation:** The prepared comment is capped at 65,000 characters, with space reserved so the identifying marker remains present after truncation.
 - **GitHub API retries:** Comment list, create, update, and delete requests retry transient `429` and `5xx` responses before failing the step.
 
@@ -37,9 +51,9 @@ Concurrent runs for the same PR are cancelled automatically (`cancel-in-progress
 
 #### What it does
 
-1. **Fetches the PR diff** using the GitHub CLI (`gh pr diff`).
+1. **Reads the complete PR diff** from immutable Git commits, validates it against PR metadata and prepares bounded source-only batches.
 2. **Fetches prior review state** from the existing security-review comment identified by the `<!-- ai-security-review:v1 -->` marker.
-3. **Invokes Claude** (`CLAUDE_MODEL`, currently `claude-opus-4-8`, `max_tokens=16000`) with a detailed system prompt covering security, compliance, prior review state, and explicit `SECURITY:` silencing comments.
+3. **Invokes Claude for source changes** (`CLAUDE_MODEL`, currently `claude-opus-4-8`, `max_tokens=16000`) with a detailed system prompt covering security, compliance, prior review state, and explicit `SECURITY:` silencing comments.
 4. **Renders a structured Markdown comment** from Claude's JSON response: one glanceable line per finding, with full details behind per-finding `<details>` disclosures.
 5. **Posts or updates a PR comment** headed `# AI Security Review`. Existing comments are edited in place via the stable marker; duplicate security-review comments are deleted.
 6. **Blocks merging only on open high-severity findings** — a final step exits non-zero only when an unsilenced `open` finding is `HIGH` or `CRITICAL`.

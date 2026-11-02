@@ -18,6 +18,7 @@ import urllib.request
 from typing import Any
 
 from review_diff import diff_lines, split_diff
+from review_sources import source_diff, SOURCE_ONLY_RULE, ReviewError as SourceError
 
 COMMENT_MARKER = "<!-- ai-security-review:v1 -->"
 BLOCKING_MARKER = "<!-- ai-security-review:has-blocking=true -->"
@@ -65,125 +66,16 @@ class ReviewError(RuntimeError):
     """A deterministic security-review failure that must fail the check."""
 
 
-# Paths whose contents no human wrote and no reviewer can act on. They are
-# excluded from the byte budget and from the diff the model reads.
-#
-# WHY THIS EXISTS. The budget is a guard against a partial review: a diff that
-# does not fit is rejected outright rather than truncated, so that nobody
-# mistakes a review of the first half for a review. Regenerated protobuf stubs
-# defeat that guard from the other side. A single `go/proto/gen/**` refresh runs
-# to tens of thousands of bytes of code that is a mechanical function of the
-# .proto files in the same pull request, so a change with a few hand-written
-# lines exceeded the limit and received no review at all. Excluding them keeps
-# the reviewer on the lines a person actually wrote, which are also the lines
-# the .proto diff itself still shows.
-DEFAULT_GENERATED_GLOBS = (
-    "go/proto/gen/**",
-    "swift/Sources/*/Proto/**/*.pb.swift",
-    "swift/Sources/*/Proto/**/*.grpc.swift",
-)
-DIFF_SECTION_RE = re.compile(r"^diff --git ", re.MULTILINE)
+def partition_generated(diff_text: str) -> tuple[str, list[str]]:
+    try:
+        source, coverage = source_diff(diff_text, allow_binary=True)
+    except SourceError as error:
+        raise ReviewError(str(error)) from error
+    return source, [item["path"] for item in coverage["excluded_generated_files"]]
 
 
-def _glob_to_regex(pattern: str) -> re.Pattern[str]:
-    """Translate one gitattributes/gitignore-style path glob into a regex.
-
-    Git's rules, as far as they matter here: a pattern with no slash matches the
-    basename at any depth, a trailing slash means "everything under it", `**`
-    crosses directory separators and a single `*` does not.
-    """
-    pattern = pattern.strip().lstrip("/")
-    if pattern.endswith("/"):
-        pattern += "**"
-    if "/" not in pattern.rstrip("*"):
-        pattern = "**/" + pattern
-    out: list[str] = []
-    index = 0
-    while index < len(pattern):
-        if pattern.startswith("**/", index):
-            out.append("(?:.*/)?")
-            index += 3
-        elif pattern.startswith("**", index):
-            out.append(".*")
-            index += 2
-        elif pattern[index] == "*":
-            out.append("[^/]*")
-            index += 1
-        elif pattern[index] == "?":
-            out.append("[^/]")
-            index += 1
-        else:
-            out.append(re.escape(pattern[index]))
-            index += 1
-    return re.compile("".join(out) + r"\Z")
-
-
-def generated_globs() -> tuple[str, ...]:
-    """Fixed generated roots only; PR-controlled attributes are not policy."""
-    return DEFAULT_GENERATED_GLOBS
-
-
-def is_generated_path(path: str, globs: tuple[str, ...]) -> bool:
-    path = path.strip().lstrip("/")
-    return any(_glob_to_regex(pattern).match(path) for pattern in globs)
-
-
-def _section_path(section: str) -> str:
-    """The path a single `diff --git` section is about.
-
-    Read off the `+++ b/` line where there is one, because it survives paths
-    containing spaces, which the `diff --git a/x b/x` header does not. A
-    deletion falls back to `--- a/`, and a binary or mode-only change to the
-    header, parsed on the assumption both halves name the same path.
-    """
-    lines = section.split("\n")
-    for line in lines:
-        if line.startswith("+++ b/"):
-            return line[len("+++ b/") :].strip()
-    for line in lines:
-        if line.startswith("--- a/"):
-            return line[len("--- a/") :].strip()
-    header = lines[0][len("diff --git ") :].strip() if lines else ""
-    match = re.fullmatch(r'"?a/(.+?)"? "?b/\1"?', header)
-    if match:
-        return match.group(1)
-    _, _, second = header.partition(" b/")
-    return second.strip().strip('"')
-
-
-def split_diff_sections(diff_text: str) -> list[tuple[str, str]]:
-    """Split a unified diff into (path, section) pairs that rejoin exactly."""
-    starts = [match.start() for match in DIFF_SECTION_RE.finditer(diff_text)]
-    if not starts:
-        return [("", diff_text)] if diff_text else []
-    sections: list[tuple[str, str]] = []
-    if starts[0] > 0:
-        sections.append(("", diff_text[: starts[0]]))
-    for index, start in enumerate(starts):
-        end = starts[index + 1] if index + 1 < len(starts) else len(diff_text)
-        section = diff_text[start:end]
-        sections.append((_section_path(section), section))
-    return sections
-
-
-def partition_generated(
-    diff_text: str, globs: tuple[str, ...] | None = None
-) -> tuple[str, list[str]]:
-    """Return (reviewable diff, paths excluded as generated)."""
-    if globs is None:
-        globs = generated_globs()
-    kept: list[str] = []
-    excluded: list[str] = []
-    for path, section in split_diff_sections(diff_text):
-        if path and is_generated_path(path, globs):
-            excluded.append(path)
-            continue
-        kept.append(section)
-    return "".join(kept), excluded
-
-
-def reviewable_diff(diff_text: str, globs: tuple[str, ...] | None = None) -> str:
-    return partition_generated(diff_text, globs)[0]
+def reviewable_diff(diff_text: str) -> str:
+    return partition_generated(diff_text)[0]
 
 
 def _load_json(path: str | pathlib.Path) -> Any:
@@ -230,7 +122,6 @@ def build_input_manifest(
     expected_pr_number: int,
     expected_head_sha: str,
     max_diff_bytes: int = MAX_DIFF_BYTES,
-    globs: tuple[str, ...] | None = None,
 ) -> dict[str, Any]:
     if not isinstance(metadata, dict):
         raise ReviewError("PR metadata must be a JSON object")
@@ -255,7 +146,7 @@ def build_input_manifest(
     changed_files = metadata.get("changed_files")
     additions = metadata.get("additions")
     deletions = metadata.get("deletions")
-    if not all(isinstance(value, int) and value >= 0 for value in (changed_files, additions, deletions)):
+    if not all(type(value) is int and value >= 0 for value in (changed_files, additions, deletions)):
         raise ReviewError("PR metadata has invalid changed-file or line counts")
     if changed_files == 0:
         raise ReviewError("A pull request review requires at least one changed file")
@@ -276,6 +167,13 @@ def build_input_manifest(
             f"metadata={changed_files}, diff={parsed_files}"
         )
 
+    try:
+        from review_sources import parse_diff
+        parsed = parse_diff(diff_text, allow_binary=True)
+    except SourceError as error:
+        raise ReviewError(str(error)) from error
+    if (parsed["additions"], parsed["deletions"]) != (additions, deletions):
+        raise ReviewError("Changed-line metadata and full diff disagree")
     byte_count = len(diff_bytes)
     # The budget is spent on lines a person wrote. Generated files are dropped
     # from the count and from the reviewed diff, so a protobuf regeneration
@@ -283,10 +181,10 @@ def build_input_manifest(
     # full diff's size and digest are still recorded, so the exclusion is
     # visible rather than silent. What survives the filter is then batched, so
     # a large hand-written change is still reviewed completely.
-    reviewable_text, generated_paths = partition_generated(diff_text, globs)
+    reviewable_text, generated_paths = partition_generated(diff_text)
     reviewable_bytes = len(reviewable_text.encode("utf-8"))
     try:
-        batches = split_diff(reviewable_text, max_diff_bytes)
+        batches = split_diff(reviewable_text, max_diff_bytes) if reviewable_text else []
     except ValueError as error:
         raise ReviewError(f"Cannot prepare complete review; no partial review was performed: {error}") from error
     manifest = {
@@ -322,8 +220,9 @@ def coverage_text(manifest: dict[str, Any], *, reviewed: bool) -> str:
     generated = ""
     if excluded:
         generated = (
-            f" {excluded} generated file(s) excluded "
+            f" {excluded} generated file(s) excluded (not AI-reviewed) "
             f"({manifest.get('generated_bytes_excluded', 0):,} bytes);"
+            " upstream source bodies are not fetched; exclusions do not establish API or behavior coverage;"
         )
     return (
         f"**Input coverage:** {reviewed_files}/{manifest['changed_files']} changed files; "
@@ -460,7 +359,7 @@ def clean_prompt_content(value: Any) -> str:
 
 
 def system_prompt() -> str:
-    return (
+    return SOURCE_ONLY_RULE + "\n\n" + (
         "You are a senior application security engineer and compliance specialist performing a security review of a pull request diff.\n\n"
         "## Security analysis\n"
         "Analyze the diff for security issues including injection vulnerabilities, authentication and authorization flaws, sensitive data exposure, cryptographic weaknesses, input validation and output encoding issues, security misconfiguration, insecure dependencies, race conditions, path traversal, SSRF, and denial-of-service vectors.\n\n"
@@ -963,7 +862,7 @@ def review_batch(client: Any, model: str, metadata: dict[str, Any], diff: str,
                     {
                         "type": "text",
                         "text": (
-                            "Convert an AI security-review response into exactly one of these outputs and nothing else:\n"
+                            SOURCE_ONLY_RULE + "\n\n" + "Convert an AI security-review response into exactly one of these outputs and nothing else:\n"
                             "1. NO_FINDINGS\n"
                             "2. A valid JSON object with exactly the top-level keys summary, findings, and compliance_summary.\n"
                             "Each finding must include exactly the string fields severity, status, standards, title, path, lines, overview, and details.\n"
@@ -999,10 +898,10 @@ def review_batches(client: Any, model: str, metadata: dict[str, Any], diff: str,
         raise ReviewError("Review input no longer matches the prepared input manifest")
     # Filtered with the same rule prepare-input costed, so the model reads
     # exactly the bytes the budget was spent on.
-    batches = [batch.rendered for batch in split_diff(reviewable_diff(diff), manifest["max_diff_bytes"])] or [
-        "(Every changed file in this pull request is a generated file excluded "
-        "from review. There are no hand-written changes to assess.)"
-    ]
+    source = reviewable_diff(diff)
+    if not source:
+        raise ReviewError("Generated-only input must preserve prior state without a model call")
+    batches = [batch.rendered for batch in split_diff(source, manifest["max_diff_bytes"]) ]
 
     def run_batch(item: tuple[int, str]) -> dict[str, Any]:
         index, batch = item
@@ -1057,6 +956,22 @@ def command_review(args: argparse.Namespace) -> None:
     # exactly the bytes the budget was costed on.
     diff = pathlib.Path(args.diff).read_bytes().decode("utf-8")
     previous_review = pathlib.Path(args.previous).read_text(encoding="utf-8")
+    actual = build_input_manifest(metadata, diff.encode("utf-8"), manifest["pr_number"],
+                                  manifest["head_sha"], manifest["max_diff_bytes"])
+    if actual != manifest:
+        raise ReviewError("Review input no longer matches the prepared input manifest")
+    if not manifest["reviewed_files"]:
+        note = "Only generated protocol output changed. No AI review was performed; prior findings are preserved."
+        review = "# AI Security Review\n\n" + note + "\n\n" + coverage_text(manifest, reviewed=False)
+        if previous_review.strip():
+            review += "\n\n" + previous_review
+        pathlib.Path(args.review_output).write_text(review + "\n", encoding="utf-8")
+        _write_json(args.result_output, {
+            "credit_unavailable": False, "has_blocking": previous_review_has_blocking(previous_review),
+            "head_sha": manifest["head_sha"], "sha256": manifest["sha256"],
+        })
+        _append_summary(note)
+        return
     client = anthropic.Anthropic()
 
     try:

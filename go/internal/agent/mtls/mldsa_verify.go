@@ -332,6 +332,7 @@ func verifyPeerCertificatePath(leaf *x509.Certificate, rawCerts [][]byte, caPool
 	paths, stdErr := leaf.Verify(opts)
 	var expires time.Time
 	if stdErr != nil {
+		stdErr = certs.ClassifyIssuerFailure(stdErr, leaf, peerCAs, caCerts, x509.ExtKeyUsageClientAuth, realNow, effectiveNow)
 		// Only fall back to ML-DSA verification when the leaf cert uses an ML-DSA
 		// signature algorithm; for all other failures return the standard error.
 		sigOID, oidErr := certSigAlgOID(leaf)

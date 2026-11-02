@@ -975,6 +975,10 @@ func (p *MicroWendyProvider) connectClient(ctx context.Context, device models.Ex
 	}
 	client := liteclient.NewWendyLiteClient()
 	switch device.ConnectionInfo["type"] {
+	case "Mesh":
+		if err := connectMeshLite(ctx, client, device); err != nil {
+			return nil, fmt.Errorf("connect to mesh Wendy Lite: %w", err)
+		}
 	case "USB":
 		serialPort := device.ConnectionInfo["serialPort"]
 		if serialPort == "" {
@@ -1164,6 +1168,12 @@ func connectWithLegacyCLIIdentities(ctx context.Context, orgID int32, connect fu
 }
 
 func connectWithScopedCLIIdentities(ctx context.Context, advertisedTenant string, legacyOrg int32, connect func(cert tls.Certificate, chain string, lite liteclient.LiteDeviceCAChain) error) error {
+	return connectWithScopedCLIPrincipal(ctx, advertisedTenant, legacyOrg, "", connect)
+}
+
+// A mesh dial uses the selected primary context, rather than trying unrelated
+// saved logins in the same tenant as physical discovery historically permits.
+func connectWithScopedCLIPrincipal(ctx context.Context, advertisedTenant string, legacyOrg int32, primary string, connect func(cert tls.Certificate, chain string, lite liteclient.LiteDeviceCAChain) error) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -1173,6 +1183,13 @@ func connectWithScopedCLIIdentities(ctx context.Context, advertisedTenant string
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("wendy-lite provider: loading operator sessions: %w", err)
+	}
+	if primary != "" {
+		auth, err := config.ResolveAuth(cfg, "", nil)
+		if err != nil {
+			return err
+		}
+		cfg.Auth = []config.AuthConfig{*auth}
 	}
 	var connectErrs []error
 	for i := range cfg.Auth {
@@ -1196,6 +1213,9 @@ func connectWithScopedCLIIdentities(ctx context.Context, advertisedTenant string
 				continue
 			}
 		} else if identity.TenantUUID == "" || !strings.HasPrefix(identity.Principal, "spiffe://wendy.sh/tenant/"+identity.TenantUUID+"/operator/") {
+			continue
+		}
+		if primary != "" && identity.Principal != primary {
 			continue
 		}
 		// Discovery is only a selection hint. The TLS verifier still checks the

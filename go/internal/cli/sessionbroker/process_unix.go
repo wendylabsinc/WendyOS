@@ -3,34 +3,18 @@
 package sessionbroker
 
 import (
-	"fmt"
 	"os"
 	"syscall"
 
 	"github.com/wendylabsinc/wendy/go/internal/shared/flock"
+	"github.com/wendylabsinc/wendy/go/internal/shared/useripc"
 )
 
 func detachedProcessAttributes() *syscall.SysProcAttr {
 	return &syscall.SysProcAttr{Setsid: true}
 }
 
-func validateOwner(info os.FileInfo) error {
-	stat, ok := info.Sys().(*syscall.Stat_t)
-	if !ok || int(stat.Uid) != os.Getuid() {
-		return fmt.Errorf("session broker path is not owned by the current user")
-	}
-	return nil
-}
-
-// pathOwnedByCurrentUser reports whether path belongs to this process's user.
-// A missing path is fine — whoever creates it will own it.
-func pathOwnedByCurrentUser(path string) bool {
-	info, err := os.Stat(path)
-	if os.IsNotExist(err) {
-		return true
-	}
-	return err == nil && validateOwner(info) == nil
-}
+func pathOwnedByCurrentUser(path string) bool { return useripc.OwnedPath(path) }
 
 func acquireLock(file *os.File) (bool, error) {
 	return flock.TryLock(file)
