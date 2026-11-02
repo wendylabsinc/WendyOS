@@ -466,7 +466,11 @@ func (p *linuxTunnelPolicy) activeGatewayLeaseLocked(peer meshid.Device) bool {
 		return false
 	}
 	control, ok := b.control.(*borrowedControlConn)
-	if !ok || control.closed.Load() || control.expires.IsZero() || !time.Now().Before(control.expires) {
+	if !ok || control.closed.Load() {
+		return false
+	}
+	expiry := control.currentExpiry()
+	if expiry.IsZero() || !time.Now().Before(expiry) {
 		return false
 	}
 	select {
@@ -511,7 +515,7 @@ func (p *linuxTunnelPolicy) SetGateway(ctx context.Context, peer meshid.Device) 
 	// Only the authenticated, expiry-bounded production connection can support
 	// active-lease reachability. Reject an unbounded connection before installation.
 	bounded, ok := control.(*expiryConn)
-	if !ok || bounded.expires.IsZero() || !time.Now().Before(bounded.expires) {
+	if !ok || bounded == nil || bounded.currentExpiry().IsZero() || !time.Now().Before(bounded.currentExpiry()) {
 		_ = control.Close()
 		return errors.New("gateway control has no valid credential expiry")
 	}
@@ -585,9 +589,9 @@ func (p *linuxTunnelPolicy) watchBorrowed(b *borrowedTunnel) {
 	}
 	switch bounded := b.control.(type) {
 	case *expiryConn:
-		ended.expires = bounded.expires
+		ended.expires = bounded.currentExpiry()
 	case *borrowedControlConn:
-		ended.expires = bounded.expires
+		ended.expires = bounded.currentExpiry()
 	}
 	select {
 	case <-b.stop:
