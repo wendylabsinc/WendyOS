@@ -41,11 +41,11 @@ func configureLiteNet(cmd *cobra.Command, target *SelectedDevice) error {
 		}
 	}
 	changed := false
-	for _, name := range append([]string{"participate", "ble", "infrastructure-wifi", "nan"}, liteNetLimitFlags...) {
+	for _, name := range append([]string{"participate", "ble", "ble-mode", "infrastructure-wifi", "nan"}, liteNetLimitFlags...) {
 		changed = changed || cmd.Flags().Changed(name)
 	}
 	if !changed {
-		return fmt.Errorf("specify --participate, --ble, --infrastructure-wifi, --nan or a link limit; omitted settings are preserved")
+		return fmt.Errorf("specify --participate, --ble, --ble-mode, --infrastructure-wifi, --nan or a link limit; omitted settings are preserved")
 	}
 	status, err := provider.ConfigureNet(cmd.Context(), *target.External, func(config *litepb.WendyComNetConfig) error {
 		return updateLiteNetConfig(cmd, config)
@@ -57,6 +57,27 @@ func configureLiteNet(cmd *cobra.Command, target *SelectedDevice) error {
 }
 
 func updateLiteNetConfig(cmd *cobra.Command, config *litepb.WendyComNetConfig) error {
+	if cmd.Flags().Changed("ble-mode") {
+		if cmd.Flags().Changed("ble") {
+			return fmt.Errorf("choose --ble-mode or --ble, not both")
+		}
+		mode, _ := cmd.Flags().GetString("ble-mode")
+		switch mode {
+		case "off":
+			config.Ble = false
+		case "normal":
+			config.Ble = true
+			config.BleProfile = litepb.WendyComBleProfile_WENDY_COM_BLE_NORMAL
+		case "coded-s2":
+			config.Ble = true
+			config.BleProfile = litepb.WendyComBleProfile_WENDY_COM_BLE_CODED_S2
+		case "coded-s8":
+			config.Ble = true
+			config.BleProfile = litepb.WendyComBleProfile_WENDY_COM_BLE_CODED_S8
+		default:
+			return fmt.Errorf("--ble-mode must be off, normal, coded-s2 or coded-s8")
+		}
+	}
 	for _, flag := range []struct {
 		name string
 		to   *bool
@@ -89,7 +110,7 @@ func printLiteNetStatus(cmd *cobra.Command, status *litepb.WendyComNetStatus) er
 		return fmt.Errorf("device returned no Wendy Net status")
 	}
 	if status.GetRestarting() {
-		fmt.Fprintln(cmd.ErrOrStderr(), "Wendy Net settings applied; the device is restarting to change its carrier. Reconnect after it boots.")
+		fmt.Fprintln(cmd.ErrOrStderr(), "Wendy Net settings applied; the device is restarting to change its carrier or BLE profile. Reconnect after it boots.")
 	}
 	if jsonOutput {
 		body, err := (protojson.MarshalOptions{Indent: "  ", EmitUnpopulated: true}).Marshal(status)
@@ -100,6 +121,7 @@ func printLiteNetStatus(cmd *cobra.Command, status *litepb.WendyComNetStatus) er
 		return err
 	}
 	config := status.GetDesired()
+	cmd.Printf("BLE profile: %s\n", strings.ToLower(strings.TrimPrefix(config.GetBleProfile().String(), "WENDY_COM_BLE_")))
 	cmd.Printf("Participate: %t\nBLE: %t\nInfrastructure Wi-Fi: %t\nNAN: %t\nCarrier limit: %d\nBLE limit: %d\nWi-Fi limit: %d\nNAN limit: %d\nState: %s\nActive carriers: %d\n",
 		config.GetEnabled(), config.GetBle(), config.GetInfrastructureWifi(), config.GetNan(), config.GetMaxLinks(),
 		config.GetBleLinks(), config.GetWifiLinks(), config.GetNanLinks(),
