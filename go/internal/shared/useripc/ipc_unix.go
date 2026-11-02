@@ -6,10 +6,9 @@
 package useripc
 
 import (
-	"context"
 	"fmt"
-	"net"
 	"os"
+	"runtime"
 	"syscall"
 )
 
@@ -53,24 +52,14 @@ func ValidateFile(path string, socket bool) error {
 	}
 	expected := info.Mode().IsRegular()
 	if socket {
-		expected = info.Mode()&os.ModeSocket != 0
+		if inProcess.Load() {
+			expected = info.Mode().IsRegular() && memoryExists(path)
+		} else if runtime.GOOS != "ios" {
+			expected = info.Mode()&os.ModeSocket != 0
+		}
 	}
 	if !expected || info.Mode().Perm()&0077 != 0 {
 		return fmt.Errorf("unsafe session broker file %s", path)
 	}
 	return owner(info)
-}
-func Listen(path string) (net.Listener, error) {
-	listener, err := net.Listen("unix", path)
-	if err != nil {
-		return nil, err
-	}
-	if err = os.Chmod(path, 0600); err != nil {
-		listener.Close()
-		return nil, err
-	}
-	return listener, nil
-}
-func Dial(ctx context.Context, path string) (net.Conn, error) {
-	return (&net.Dialer{}).DialContext(ctx, "unix", path)
 }

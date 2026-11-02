@@ -49,7 +49,7 @@ func TestTeleopAcknowledgementMatchesIDAPIAndStatus(t *testing.T) {
 	}
 }
 func TestTeleopWireCommandsWithFixturePeer(t *testing.T) {
-	robot, err := webrtc.NewPeerConnection(webrtc.Configuration{})
+	robot, err := loopbackTeleopAPI().NewPeerConnection(webrtc.Configuration{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,7 +70,7 @@ func TestTeleopWireCommandsWithFixturePeer(t *testing.T) {
 				_ = ch.SendText(`{"type":"validation","data":"Validation Ok."}`)
 				return
 			}
-			if msg.Type != "req" {
+			if msg.Type != "req" && msg.Type != "msg" {
 				return
 			}
 			var d struct {
@@ -79,52 +79,75 @@ func TestTeleopWireCommandsWithFixturePeer(t *testing.T) {
 						ID  uint64 `json:"id"`
 						API uint64 `json:"api_id"`
 					} `json:"identity"`
+					Policy struct {
+						NoReply bool `json:"noreply"`
+					} `json:"policy"`
 				} `json:"header"`
 				Parameter string `json:"parameter"`
 			}
 			if json.Unmarshal(msg.Data, &d) != nil {
 				return
 			}
-			if msg.Topic != sportTopic {
-				t.Error("wrong topic")
+			if d.Header.Identity.API == 1001 {
+				if msg.Topic != avoidanceTopic || d.Parameter != `{"enable":false}` {
+					t.Errorf("wrong avoidance request: %s %s", msg.Topic, d.Parameter)
+				}
+			} else if msg.Topic != sportTopic {
+				t.Error("wrong sport topic")
 			}
 			if d.Header.Identity.API == 1008 && d.Parameter != `{"x":0.1,"y":-0.05,"z":0.2}` {
 				t.Errorf("unexpected parameter %s", d.Parameter)
 			}
 			commands <- d.Header.Identity.API
+			if d.Header.Identity.API == 1008 {
+				if msg.Type != "msg" {
+					t.Error("no-reply velocity must use the WebRTC DDS publication path")
+					return
+				}
+				if !d.Header.Policy.NoReply {
+					t.Error("velocity update must request no reply")
+				}
+				return // Match firmware that never acknowledges velocity updates.
+			}
+			if msg.Type != "req" {
+				t.Error("acknowledged command must use the WebRTC request path")
+				return
+			}
+			if d.Header.Policy.NoReply {
+				t.Error("Stop must still request acknowledgement")
+			}
 			_ = ch.SendText(fmt.Sprintf(`{"type":"res","topic":%q,"data":{"header":{"identity":{"id":%d,"api_id":%d},"status":{"code":0}}}}`, sportTopic, d.Header.Identity.ID, d.Header.Identity.API))
 		})
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	c, err := connectWithSignaling(ctx, func(ctx context.Context, offer []byte) ([]byte, error) { return answerOffer(t, ctx, robot, offer) })
+	client, err := loopbackTeleopAPI().NewPeerConnection(webrtc.Configuration{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := connectWithPeer(ctx, client, func(ctx context.Context, offer []byte) ([]byte, error) { return answerOffer(t, ctx, robot, offer) })
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer c.Close()
-	// Validation can finish before SCTP acknowledges the validation response.
-	// Wait for those bytes to drain before exercising Move's backlog guard.
-	drained := make(chan struct{}, 1)
-	c.channel.OnBufferedAmountLow(func() {
-		select {
-		case drained <- struct{}{}:
-		default:
-		}
-	})
-	for c.channel.BufferedAmount() != 0 {
-		select {
-		case <-drained:
-		case <-ctx.Done():
-			t.Fatal("validation response did not drain from command channel")
-		}
-	}
+	// Validation bytes may still await their transport ACK; a small amount
+	// of in-flight data must not prevent the first velocity update.
 	if err = c.Move(ctx, .1, -.05, .2); err != nil {
 		t.Fatal(err)
+	}
+	c.responseMu.Lock()
+	pending := len(c.pending)
+	c.responseMu.Unlock()
+	if pending != 0 {
+		t.Fatal("velocity update left an acknowledgement waiter")
 	}
 	if err = c.Move(ctx, 0, 0, 0); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []uint64{1008, 1003} {
+	if err = c.SetObstacleAvoidance(ctx, false); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []uint64{1008, 1003, 1001} {
 		select {
 		case got := <-commands:
 			if got != want {
@@ -146,7 +169,7 @@ func TestTeleopWireCommandsWithFixturePeer(t *testing.T) {
 
 func TestSlowPostureAcknowledgementDoesNotHoldUpStop(t *testing.T) {
 	helloReceived := make(chan struct{}, 1)
-	robot, err := webrtc.NewPeerConnection(webrtc.Configuration{})
+	robot, err := loopbackTeleopAPI().NewPeerConnection(webrtc.Configuration{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -191,7 +214,11 @@ func TestSlowPostureAcknowledgementDoesNotHoldUpStop(t *testing.T) {
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	c, err := connectWithSignaling(ctx, func(ctx context.Context, offer []byte) ([]byte, error) { return answerOffer(t, ctx, robot, offer) })
+	client, err := loopbackTeleopAPI().NewPeerConnection(webrtc.Configuration{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := connectWithPeer(ctx, client, func(ctx context.Context, offer []byte) ([]byte, error) { return answerOffer(t, ctx, robot, offer) })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -213,4 +240,13 @@ func TestSlowPostureAcknowledgementDoesNotHoldUpStop(t *testing.T) {
 	if err := <-hello; err != nil {
 		t.Fatalf("Hello acknowledged after 600 ms failed: %v", err)
 	}
+}
+
+// Keep fixture traffic on loopback, independent of LAN permissions and VPNs.
+func loopbackTeleopAPI() *webrtc.API {
+	var settings webrtc.SettingEngine
+	settings.SetIncludeLoopbackCandidate(true)
+	settings.SetNetworkTypes([]webrtc.NetworkType{webrtc.NetworkTypeUDP4})
+	settings.SetInterfaceFilter(func(name string) bool { return name == "lo0" || name == "lo" })
+	return webrtc.NewAPI(webrtc.WithSettingEngine(settings))
 }

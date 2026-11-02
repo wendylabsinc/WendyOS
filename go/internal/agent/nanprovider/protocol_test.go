@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshdiscovery"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
 )
@@ -28,6 +29,19 @@ func presenceFixture(t testing.TB, tenantText, deviceText string) presence {
 	}
 	hint := meshdiscovery.DefaultHint(tenant)
 	return presence{Device: device, Mesh: &hint}
+}
+
+func operatorPresenceFixture(t testing.TB) meshid.Device {
+	t.Helper()
+	peer, err := meshid.PeerFromPrincipal("spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/operator/alice")
+	if err != nil {
+		t.Fatal(err)
+	}
+	peer, err = peer.WithInstance(uuid.MustParse("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return peer
 }
 
 func TestPresenceWireVectorAndPrincipal(t *testing.T) {
@@ -174,6 +188,31 @@ func TestPresenceV1OptionalExtensionsAndAdvisoryFlags(t *testing.T) {
 	}
 }
 
+func TestOperatorPresenceOptionalFlagsRetainCompletePrincipalBinding(t *testing.T) {
+	peer := operatorPresenceFixture(t)
+	hint := meshdiscovery.DefaultHint(peer.Tenant())
+	raw, _ := (presence{Device: peer, Mesh: &hint}).marshalBinary()
+	raw[5] |= 0x80
+	decoded, err := decodePresence(peer.Tenant(), hint, hex.EncodeToString(raw))
+	if err != nil || decoded != peer {
+		t.Fatalf("advisory flag lost operator identity: %+v, %v", decoded, err)
+	}
+	if _, err := parsePresence(append(bytes.Clone(raw), 0)); err == nil {
+		t.Fatal("version 2 ignored an invalid principal suffix")
+	}
+	// The v2 suffix is a complete principal, not the v1 optional field area.
+	// A syntactically valid appended entity segment must be consumed as part
+	// of a different identity rather than ignored as an unknown extension.
+	changed, err := parsePresence(append(bytes.Clone(raw), []byte("/extra")...))
+	if err != nil || changed.Device == peer || changed.Device.Principal() != peer.Principal()+"/extra" {
+		t.Fatalf("version 2 ignored part of its principal: %+v, %v", changed, err)
+	}
+	raw[5] |= presenceTLSOnly
+	if _, err := decodePresence(peer.Tenant(), hint, hex.EncodeToString(raw)); err == nil {
+		t.Fatal("TLS-only operator admitted to QUIC provider")
+	}
+}
+
 func FuzzPresence(f *testing.F) {
 	valid, _ := hex.DecodeString(presenceVector)
 	f.Add(valid)
@@ -224,5 +263,53 @@ func TestNDPEventParsing(t *testing.T) {
 	kind, values := parseEvent("IFNAME=nan0 <3>NAN-NDP-CONNECTED peer=aa:bb:cc:dd:ee:ff ndp_id=1 peer_ndi=00:11:22:33:44:55 ssi=\n")
 	if kind != "NAN-NDP-CONNECTED" || values["ndp_id"] != "1" || values["peer_ndi"] != "00:11:22:33:44:55" {
 		t.Fatalf("%s %+v", kind, values)
+	}
+}
+
+func TestOperatorPresencePreservesPrincipal(t *testing.T) {
+	peer := operatorPresenceFixture(t)
+	hint := meshdiscovery.DefaultHint(peer.Tenant())
+	encoded, err := encodePresence(presence{Device: peer, Mesh: &hint})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := decodePresence(peer.Tenant(), hint, encoded)
+	if err != nil || decoded != peer {
+		t.Fatalf("operator identity lost: %+v %v", decoded, err)
+	}
+	raw, _ := (presence{Device: peer, Mesh: &hint}).marshalBinary()
+	if decoded.UUID() != peer.UUID() || decoded.MeshAddress() != peer.MeshAddress() {
+		t.Fatal("operator installation identity or address lost")
+	}
+	other, err := peer.WithInstance(uuid.MustParse("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherRaw, _ := (presence{Device: other, Mesh: &hint}).marshalBinary()
+	otherDecoded, err := parsePresence(otherRaw)
+	if err != nil || otherDecoded.Device != other || otherDecoded.Device.MeshAddress() == decoded.MeshAddress() {
+		t.Fatalf("operator installations aliased: %+v, %v", otherDecoded, err)
+	}
+	// Tenant and principal must agree; the untrusted advertised installation
+	// is subsequently bound by the authenticated hello and signed manifest.
+	raw[6] ^= 1
+	if _, err := parsePresence(raw); err == nil {
+		t.Fatal("operator tenant binding not checked")
+	}
+}
+
+func TestOperatorPresenceRequiresInstallation(t *testing.T) {
+	peer := operatorPresenceFixture(t)
+	principalOnly, err := meshid.PeerFromPrincipal(peer.Principal())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := (presence{Device: principalOnly}).marshalBinary(); err == nil {
+		t.Fatal("operator without an installation was advertised")
+	}
+	raw, _ := (presence{Device: peer}).marshalBinary()
+	clear(raw[22:38])
+	if _, err := parsePresence(raw); err == nil {
+		t.Fatal("operator without an installation was accepted")
 	}
 }

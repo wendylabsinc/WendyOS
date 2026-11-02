@@ -15,6 +15,7 @@ import (
 // Accelerator chooses the hardware that runs the model, which Backend does not:
 // Backend is the kind of model, Accelerator the engine that scores it.
 type CampaignInference struct {
+	Task        string   `json:"task,omitempty" yaml:"task,omitempty"`
 	Backend     string   `json:"backend,omitempty" yaml:"backend,omitempty"`
 	ModelFile   string   `json:"model_file,omitempty" yaml:"model_file,omitempty"`
 	Accelerator string   `json:"accelerator,omitempty" yaml:"accelerator,omitempty"`
@@ -67,6 +68,12 @@ var inferenceEventRE = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,128}$`)
 func (i *CampaignInference) validate() error {
 	if i == nil {
 		return nil
+	}
+	if i.Task != "" && i.Task != "object-detection" && i.Task != "image-classification" {
+		return fmt.Errorf("inference.task must be object-detection or image-classification")
+	}
+	if i.Task == "image-classification" && i.Backend == "yolo_onnx" {
+		return fmt.Errorf("image classification requires the transformers backend")
 	}
 	if strings.HasPrefix(i.Model, "https://huggingface.co/") {
 		u, err := url.Parse(i.Model)

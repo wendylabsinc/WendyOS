@@ -478,8 +478,8 @@ func TestMergedDevices_BLELiteDevice(t *testing.T) {
 	}
 
 	d := merged[0]
-	if d.ConnectionTypes() != "BLE (Lite)" {
-		t.Errorf("ConnectionTypes() = %q, want %q", d.ConnectionTypes(), "BLE (Lite)")
+	if d.ConnectionTypes() != "BLE" {
+		t.Errorf("ConnectionTypes() = %q, want %q", d.ConnectionTypes(), "BLE")
 	}
 	if d.Bluetooth == nil {
 		t.Fatal("Bluetooth should be non-nil")

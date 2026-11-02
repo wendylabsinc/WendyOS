@@ -40,10 +40,13 @@ const (
 
 var errPresence = errors.New("invalid NAN peer presence")
 
+// Version 2 adds the complete operator principal after the fixed fields. Its
+// UUID identifies the operator installation; discovery does not authenticate
+// that binding. Device advertisements retain version 1 for compatibility.
 // presence carries a complete device principal without its fixed SPIFFE URI
 // template. UUIDs use their standard 16-byte network-order representation.
 // Version 1 readers consume the known prefix and ignore optional trailing fields
-// and future advisory flags.
+// and future advisory flags. Version 2 retains its complete principal suffix.
 // Mesh is optional; nil means no mesh participation, not an all-zero hint.
 // No discovery field grants trust before the enrolled certificate is checked.
 type presence struct {
@@ -52,12 +55,18 @@ type presence struct {
 }
 
 func (p presence) marshalBinary() ([]byte, error) {
-	if !p.Device.IsValid() {
+	if !p.Device.IsValid() || (p.Device.IsOperator() && p.Device.UUID() == uuid.Nil) {
 		return nil, errPresence
 	}
 	size := presenceBaseSize
 	if p.Mesh != nil {
 		size = presenceMeshSize
+	}
+	if p.Device.IsOperator() {
+		size += len(p.Device.Principal())
+		if size > maxPresenceSize {
+			return nil, errPresence
+		}
 	}
 	b := make([]byte, size)
 	copy(b[:4], presenceMagic)
@@ -69,6 +78,14 @@ func (p presence) marshalBinary() ([]byte, error) {
 	tenant, device := p.Device.Tenant().UUID(), p.Device.UUID()
 	copy(b[6:22], tenant[:])
 	copy(b[22:38], device[:])
+	if p.Device.IsOperator() {
+		b[4] = 2
+		offset := presenceBaseSize
+		if p.Mesh != nil {
+			offset = presenceMeshSize
+		}
+		copy(b[offset:], p.Device.Principal())
+	}
 	return b, nil
 }
 
@@ -76,7 +93,7 @@ func parsePresence(b []byte) (presence, error) {
 	if len(b) < presenceBaseSize || len(b) > maxPresenceSize {
 		return presence{}, errPresence
 	}
-	if string(b[:4]) != presenceMagic || b[4] != presenceVersion {
+	if string(b[:4]) != presenceMagic || (b[4] != presenceVersion && b[4] != 2) {
 		return presence{}, errPresence
 	}
 	hasMesh := b[5]&presenceMeshPresent != 0
@@ -84,7 +101,7 @@ func parsePresence(b []byte) (presence, error) {
 	if hasMesh {
 		baseSize = presenceMeshSize
 	}
-	if len(b) < baseSize {
+	if len(b) < baseSize || (b[4] == 2 && len(b) == baseSize) {
 		return presence{}, errPresence
 	}
 	// Every 16-byte UUID, including the explicitly present nil UUID, is a valid
@@ -97,6 +114,17 @@ func parsePresence(b []byte) (presence, error) {
 	if hasMesh {
 		hint := meshdiscovery.Hint(b[38:46])
 		p.Mesh = &hint
+	}
+	if b[4] == 2 {
+		peer, err := meshid.PeerFromPrincipal(string(b[baseSize:]))
+		if err != nil || !peer.IsOperator() || peer.Tenant() != tenant {
+			return presence{}, errPresence
+		}
+		peer, err = peer.WithInstance(p.Device.UUID())
+		if err != nil {
+			return presence{}, errPresence
+		}
+		p.Device = peer
 	}
 	return p, nil
 }
