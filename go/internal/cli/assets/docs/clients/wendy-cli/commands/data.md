@@ -110,7 +110,7 @@ The status says what the agent actually checked, which differs by kind:
 | Status | Source | What was checked |
 |---|---|---|
 | `connected` | Local camera (USB, CSI, or a ROS 2 image topic's loopback) | The camera answered a capture query when it was listed. Nothing tests that it delivers a picture. |
-| `online` | Network camera | It answered the agent's last check. Only network cameras with a stored login are sources; pair one with `wendy device pair`. The login itself is not tried. |
+| `online` | Network camera | It answered the agent's last check. Only network cameras with a stored login are sources; pair one with `wendy device pair` or `wendy device camera login <id>`, and see unpaired ones with `wendy device camera list --all`. The login itself is not tried. |
 | `detected` | Microphone | PipeWire, or ALSA where no PipeWire session runs, lists it as a capture device. Nothing tests that it hears anything. |
 | `reachable` | ROS 2 domain | `ros2 topic list` answered on the domain. Recording the domain records all of its topics. |
 | `listed` | ROS 2 topic | `ros2 topic list` lists the topic. |
