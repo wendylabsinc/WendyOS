@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	tea "github.com/charmbracelet/bubbletea"
 	"github.com/spf13/cobra"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -478,6 +479,9 @@ The device uses its in-house wendyos-update engine to apply the update.`,
 // progress: a spinner when interactive, a silent drain otherwise. It does not
 // wait for the post-update reboot.
 func streamOSUpdate(ctx context.Context, conn *grpcclient.AgentConnection, artifactURL, updaterBackend string) error {
+	// Cancelling the stream once Completed arrives tells the agent it can reboot.
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
 	stream, err := conn.AgentService.UpdateOS(ctx, &agentpb.UpdateOSRequest{
 		ArtifactUrl:    artifactURL,
 		UpdaterBackend: updaterBackend,
@@ -487,35 +491,33 @@ func streamOSUpdate(ctx context.Context, conn *grpcclient.AgentConnection, artif
 	}
 
 	if !isInteractiveTerminal() {
-		return drainOSUpdateStream(stream)
+		err = drainOSUpdateStream(stream)
+	} else {
+		err = spinOSUpdateStream(stream)
 	}
+	if errors.Is(err, errOSUpdateLostAfterInstall) {
+		fmt.Fprintln(os.Stderr, tui.WarningMessage("Lost the connection after the update was installed; the device is rebooting to apply it."))
+		return nil
+	}
+	return err
+}
 
+var osUpdateProgressProgram = func(model tea.Model) *tea.Program { return tui.NewProgressProgram(model) }
+
+func spinOSUpdateStream(stream agentpb.WendyAgentService_UpdateOSClient) error {
 	spin := tui.NewSpinner("Downloading update...")
-	p := tui.NewProgressProgram(spin)
+	p := osUpdateProgressProgram(spin)
 
+	result := make(chan error, 1)
 	go func() {
-		for {
-			resp, err := stream.Recv()
-			if err == io.EOF {
-				p.Send(tui.SpinnerDoneMsg{Err: fmt.Errorf("OS update stream ended without completion: %w", io.ErrUnexpectedEOF)})
-				return
-			}
-			if err != nil {
-				p.Send(tui.SpinnerDoneMsg{Err: err})
-				return
-			}
-			if progress := resp.GetProgress(); progress != nil {
-				p.Send(tui.SpinnerUpdateMsg{Label: progressLabel(progress.GetPhase(), progress.GetPercent())})
-			}
-			if completed := resp.GetCompleted(); completed != nil {
-				p.Send(tui.SpinnerDoneMsg{})
-				return
-			}
-			if failed := resp.GetFailed(); failed != nil {
-				p.Send(tui.SpinnerDoneMsg{Err: fmt.Errorf("update failed: %s", failed.GetErrorMessage())})
-				return
-			}
+		err := receiveOSUpdate(stream, func(phase string, percent int32) {
+			p.Send(tui.SpinnerUpdateMsg{Label: progressLabel(phase, percent)})
+		})
+		result <- err
+		if errors.Is(err, errOSUpdateLostAfterInstall) {
+			err = nil
 		}
+		p.Send(tui.SpinnerDoneMsg{Err: err})
 	}()
 
 	finalModel, err := p.Run()
@@ -529,10 +531,7 @@ func streamOSUpdate(ctx context.Context, conn *grpcclient.AgentConnection, artif
 	if !spinModel.Done() {
 		return ErrUserCancelled
 	}
-	if _, spinErr := spinModel.Result(); spinErr != nil {
-		return spinErr
-	}
-	return nil
+	return <-result
 }
 
 // resolveArtifactPath resolves a local file path or directory to an OS update
@@ -1480,23 +1479,43 @@ func ipForURL(ip string) string {
 func drainOSUpdateStream(stream agentpb.WendyAgentService_UpdateOSClient) error {
 	var lastPhase string
 	lastDecile := int32(-1)
+	return receiveOSUpdate(stream, func(phase string, percent int32) {
+		// Print on every phase change, and at each 10% step within a phase,
+		// so non-interactive logs show steady progress without flooding.
+		decile := percent / 10
+		if phase != lastPhase || (percent > 0 && decile != lastDecile) {
+			fmt.Fprintln(os.Stderr, progressLabel(phase, percent))
+			lastPhase = phase
+			lastDecile = decile
+		}
+	})
+}
+
+// errOSUpdateLostAfterInstall reports a stream that broke after the device said
+// the install was done: the update is staged and the device is rebooting.
+var errOSUpdateLostAfterInstall = errors.New("OS update stream lost after the install finished")
+
+// receiveOSUpdate reads an UpdateOS stream until Completed or Failed, passing
+// each progress frame to onProgress.
+func receiveOSUpdate(stream agentpb.WendyAgentService_UpdateOSClient, onProgress func(phase string, percent int32)) error {
+	installed := false
 	for {
 		resp, err := stream.Recv()
 		if err == io.EOF {
 			return fmt.Errorf("OS update stream ended without completion: %w", io.ErrUnexpectedEOF)
 		}
 		if err != nil {
+			// Agents that reboot straight after the last frames can lose them.
+			if installed && status.Code(err) == codes.Unavailable {
+				return fmt.Errorf("%w: %w", errOSUpdateLostAfterInstall, err)
+			}
 			return err
 		}
 		if progress := resp.GetProgress(); progress != nil {
-			phase, percent := progress.GetPhase(), progress.GetPercent()
-			// Print on every phase change, and at each 10% step within a phase,
-			// so non-interactive logs show steady progress without flooding.
-			decile := percent / 10
-			if phase != lastPhase || (percent > 0 && decile != lastDecile) {
-				fmt.Fprintln(os.Stderr, progressLabel(phase, percent))
-				lastPhase = phase
-				lastDecile = decile
+			onProgress(progress.GetPhase(), progress.GetPercent())
+			// wendyos-update reports done only after a successful install.
+			if phase := progress.GetPhase(); phase == "done" || phase == "finalizing" {
+				installed = true
 			}
 		}
 		if resp.GetCompleted() != nil {
