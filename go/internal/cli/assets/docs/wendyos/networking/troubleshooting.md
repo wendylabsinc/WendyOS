@@ -7,7 +7,7 @@ This guide covers common WendyOS USB networking problems, their symptoms, and ho
 Run through this before diving into specific scenarios:
 
 ```
-[ ] USB-C data cable connected (not a charge-only cable)
+[ ] USB data cable connected (not a charge-only cable)
 [ ] Board booted — serial console available: screen /dev/ttyACM0
 [ ] Host sees gadget interface:       ip link show | grep enx
 [ ] Host sharing / link-local active: ip addr show enxXXXXXXXXXXXX
@@ -18,6 +18,8 @@ Run through this before diving into specific scenarios:
 [ ] Ping device from host:            ping -c 3 <device-ip>
 [ ] mDNS visible from host:           avahi-browse -t -p _wendyos._udp
 ```
+
+On a Dragonwing IQ8 running WendyOS, connect the host to USB2 (micro-USB). USB0 (USB-C) is for EDL/recovery flashing.
 
 ---
 
