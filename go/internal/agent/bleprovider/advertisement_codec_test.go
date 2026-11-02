@@ -224,7 +224,7 @@ func TestAdvertisingDataSkipsUnsupportedVersionsAmongV1(t *testing.T) {
 		if err != nil || fields.servicePresent {
 			t.Fatalf("unsupported-only report became v1: %+v %v", fields, err)
 		}
-		mapped := map[string][]byte{ServiceUUID(testTenant): []byte{version}, strings.ToUpper(ServiceUUID(testTenant)): raw}
+		mapped := map[string][]byte{ServiceUUID(testTenant): {version}, strings.ToUpper(ServiceUUID(testTenant)): raw}
 		if got, ok := matchingServiceData(mapped, ServiceUUID(testTenant), "field"); !ok || got != advert {
 			t.Fatalf("unsupported mapped version %d hid v1: %+v %v", version, got, ok)
 		}
