@@ -26,7 +26,28 @@ func (m *BlueZManager) BluetoothRadio(ctx context.Context) (*pb.BluetoothRadioSt
 	if err != nil {
 		return nil, err
 	}
-	return bluetoothRadioStatus(objects)
+	s, err := bluetoothRadioStatus(objects)
+	if err != nil {
+		return nil, err
+	}
+	mode, modeErr := btradio.MeshMode()
+	if modeErr != nil {
+		s.Error = modeErr.Error()
+	}
+	s.MeshMode = mode
+	props := objects[dbus.ObjectPath(s.Adapter)][advManagerIface]
+	secondary, _ := props["SupportedSecondaryChannels"].Value().([]string)
+	if s.Available && slices.Contains(secondary, "Coded") {
+		if e := btradio.CodedPHYAvailable(ctx, s.Adapter); e == nil {
+			s.SupportedMeshModes = []string{"normal", "coded-s2", "coded-s8"}
+			s.CodedUnavailableReason = ""
+		} else {
+			s.CodedUnavailableReason = e.Error()
+		}
+	}
+	s.MeshModeDetail = "S2/S8 select a connected-data coding preference; advertising uses controller-selected Coded coding. PHY readback distinguishes 1M/2M/Coded, not S2/S8."
+	s.Links = btradio.LinkStatus(ctx, s.Adapter)
+	return s, nil
 }
 
 func bluetoothRadioStatus(objects managedObjects) (*pb.BluetoothRadioStatus, error) {
@@ -44,8 +65,8 @@ func bluetoothRadioStatus(objects managedObjects) (*pb.BluetoothRadioStatus, err
 	caps, _ := props["SupportedCapabilities"].Value().(map[string]dbus.Variant)
 	power, policyErr := btradio.Desired()
 	s := &pb.BluetoothRadioStatus{Adapter: adapter, Available: available, SupportedMeshModes: []string{"normal"}, MeshMode: "normal", Advertising: power, Connections: &pb.BluetoothPowerSetting{Mode: "default"}, Advertisements: btradio.Reports(),
-		CodedUnavailableReason:       "BlueZ cannot require S2 or S8 for advertising; complete coded advertising + data profiles are unavailable",
-		ConnectionsUnavailableReason: "BlueZ provides no portable connected-link TX power setter; the controller manages connected-link power"}
+		CodedUnavailableReason:       "Coded transport requires advertising support and configurable scanning/connection PHYs",
+		ConnectionsUnavailableReason: "No verified local connected-link power setter is implemented for this controller; power readbacks are available for Wendy Net links"}
 	if !available {
 		s.SupportedMeshModes = nil
 		s.Error = "Selected Bluetooth adapter does not support LE advertising"
@@ -95,7 +116,9 @@ func (m *BlueZManager) ConfigureBluetoothRadio(ctx context.Context, req *pb.Conf
 	switch req.MeshMode {
 	case "", "normal":
 	case "coded-s2", "coded-s8":
-		return nil, status.Error(codes.FailedPrecondition, s.CodedUnavailableReason)
+		if !slices.Contains(s.SupportedMeshModes, req.MeshMode) {
+			return nil, status.Error(codes.FailedPrecondition, s.CodedUnavailableReason)
+		}
 	default:
 		return nil, status.Error(codes.InvalidArgument, "mesh mode must be normal, coded-s2 or coded-s8")
 	}
@@ -119,12 +142,24 @@ func (m *BlueZManager) ConfigureBluetoothRadio(ctx context.Context, req *pb.Conf
 				return nil, status.Errorf(codes.OutOfRange, "controller advertising TX power range is %d to %d dBm", s.GetAdvertisingMinDbm(), s.GetAdvertisingMaxDbm())
 			}
 		}
-		if err := btradio.Set(ctx, req.Advertising); err != nil {
+	}
+	if req.Advertising != nil || req.MeshMode != "" {
+		if err := btradio.SetRadio(ctx, req.Advertising, req.MeshMode); err != nil {
 			var applied *btradio.ApplyError
 			if errors.As(err, &applied) {
 				return nil, status.Error(codes.Internal, err.Error())
 			}
 			return nil, status.Error(codes.Internal, fmt.Sprintf("Saving Bluetooth policy failed: %v", err))
+		}
+	}
+	if req.MeshMode != "" {
+		if err := btradio.ApplyMeshPHY(ctx, s.Adapter, req.MeshMode); err != nil {
+			return nil, status.Errorf(codes.Internal, "profile saved but PHY application failed: %v", err)
+		}
+		if req.MeshMode != "normal" || slices.Contains(s.SupportedMeshModes, "coded-s2") {
+			if err := btradio.ApplyTrackedMeshPHY(ctx, s.Adapter); err != nil {
+				return nil, status.Errorf(codes.Internal, "profile saved but link PHY application failed: %v", err)
+			}
 		}
 	}
 	return m.BluetoothRadio(ctx)

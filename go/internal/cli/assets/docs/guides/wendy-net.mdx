@@ -27,8 +27,9 @@ For supported Wi-Fi Aware hardware, add `--nan=true`.
 
 Start with the normal Bluetooth profile. Without a saved power policy, devices
 retain firmware/controller-default power. Supported Lite C5/C6 firmware can
-select coded profiles with `--ble-mode`; the current WendyOS backend supports
-`normal` only. See
+select coded profiles with `--ble-mode`. WendyOS also supports Coded advertising
+and mesh links when the adapter passes capability checks; S2/S8 are connected-data
+preferences and advertising coding remains controller-selected. See
 [Bluetooth radio modes and power](/docs/clients/wendy-cli/commands/device/bluetooth#wendy-device-bluetooth-mode)
 before changing a profile. Power settings are independent of Wendy Net
 participation.
@@ -151,7 +152,7 @@ Every boolean accepts `true` or `false`; omitted options retain their saved valu
 | `--infrastructure-wifi` | Find and connect to peers on ordinary Wi-Fi networks. |
 | `--nan` | Connect through supported Wi-Fi Aware radios, without an access point. |
 | `--ble` | Enable or disable Bluetooth Low Energy, preserving its saved profile. |
-| `--ble-mode` | Enable BLE with `normal`, `coded-s2`, or `coded-s8`, or disable it with `off` while retaining the saved profile. Coded profiles require supported Lite firmware. Cannot be combined with `--ble`; participation is preserved unless explicitly changed. |
+| `--ble-mode` | Enable BLE with `normal`, `coded-s2`, or `coded-s8`, or disable it with `off` while retaining the saved profile. Coded profiles require support on both peers; WendyOS reports adapter capabilities and coding-selection limits. Cannot be combined with `--ble`; participation is preserved unless explicitly changed. |
 | `--share-uplink` | Offer a healthy independent Internet connection. |
 | `--roam` | Use a shared gateway when an independent Internet connection is unavailable. |
 

@@ -273,76 +273,154 @@ public nonisolated struct Wendy_Agent_Services_V2_BluetoothAdvertisingPowerStatu
   fileprivate var _selectedDbm: Int32? = nil
 }
 
-public nonisolated struct Wendy_Agent_Services_V2_BluetoothRadioStatus: Sendable {
+public nonisolated struct Wendy_Agent_Services_V2_BluetoothRadioStatus: @unchecked Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  public var adapter: String = String()
+  public var adapter: String {
+    get {_storage._adapter}
+    set {_uniqueStorage()._adapter = newValue}
+  }
 
-  public var available: Bool = false
+  public var available: Bool {
+    get {_storage._available}
+    set {_uniqueStorage()._available = newValue}
+  }
 
-  public var supportedMeshModes: [String] = []
+  public var supportedMeshModes: [String] {
+    get {_storage._supportedMeshModes}
+    set {_uniqueStorage()._supportedMeshModes = newValue}
+  }
 
-  public var codedUnavailableReason: String = String()
+  public var codedUnavailableReason: String {
+    get {_storage._codedUnavailableReason}
+    set {_uniqueStorage()._codedUnavailableReason = newValue}
+  }
 
-  public var advertisingSetSupported: Bool = false
+  public var advertisingSetSupported: Bool {
+    get {_storage._advertisingSetSupported}
+    set {_uniqueStorage()._advertisingSetSupported = newValue}
+  }
 
   public var advertisingMinDbm: Int32 {
-    get {_advertisingMinDbm ?? 0}
-    set {_advertisingMinDbm = newValue}
+    get {_storage._advertisingMinDbm ?? 0}
+    set {_uniqueStorage()._advertisingMinDbm = newValue}
   }
   /// Returns true if `advertisingMinDbm` has been explicitly set.
-  public var hasAdvertisingMinDbm: Bool {self._advertisingMinDbm != nil}
+  public var hasAdvertisingMinDbm: Bool {_storage._advertisingMinDbm != nil}
   /// Clears the value of `advertisingMinDbm`. Subsequent reads from it will return its default value.
-  public mutating func clearAdvertisingMinDbm() {self._advertisingMinDbm = nil}
+  public mutating func clearAdvertisingMinDbm() {_uniqueStorage()._advertisingMinDbm = nil}
 
   public var advertisingMaxDbm: Int32 {
-    get {_advertisingMaxDbm ?? 0}
-    set {_advertisingMaxDbm = newValue}
+    get {_storage._advertisingMaxDbm ?? 0}
+    set {_uniqueStorage()._advertisingMaxDbm = newValue}
   }
   /// Returns true if `advertisingMaxDbm` has been explicitly set.
-  public var hasAdvertisingMaxDbm: Bool {self._advertisingMaxDbm != nil}
+  public var hasAdvertisingMaxDbm: Bool {_storage._advertisingMaxDbm != nil}
   /// Clears the value of `advertisingMaxDbm`. Subsequent reads from it will return its default value.
-  public mutating func clearAdvertisingMaxDbm() {self._advertisingMaxDbm = nil}
+  public mutating func clearAdvertisingMaxDbm() {_uniqueStorage()._advertisingMaxDbm = nil}
 
-  public var connectionsSetSupported: Bool = false
+  public var connectionsSetSupported: Bool {
+    get {_storage._connectionsSetSupported}
+    set {_uniqueStorage()._connectionsSetSupported = newValue}
+  }
 
-  public var connectionsUnavailableReason: String = String()
+  public var connectionsUnavailableReason: String {
+    get {_storage._connectionsUnavailableReason}
+    set {_uniqueStorage()._connectionsUnavailableReason = newValue}
+  }
 
   public var advertising: Wendy_Agent_Services_V2_BluetoothPowerSetting {
-    get {_advertising ?? Wendy_Agent_Services_V2_BluetoothPowerSetting()}
-    set {_advertising = newValue}
+    get {_storage._advertising ?? Wendy_Agent_Services_V2_BluetoothPowerSetting()}
+    set {_uniqueStorage()._advertising = newValue}
   }
   /// Returns true if `advertising` has been explicitly set.
-  public var hasAdvertising: Bool {self._advertising != nil}
+  public var hasAdvertising: Bool {_storage._advertising != nil}
   /// Clears the value of `advertising`. Subsequent reads from it will return its default value.
-  public mutating func clearAdvertising() {self._advertising = nil}
+  public mutating func clearAdvertising() {_uniqueStorage()._advertising = nil}
 
   public var connections: Wendy_Agent_Services_V2_BluetoothPowerSetting {
-    get {_connections ?? Wendy_Agent_Services_V2_BluetoothPowerSetting()}
-    set {_connections = newValue}
+    get {_storage._connections ?? Wendy_Agent_Services_V2_BluetoothPowerSetting()}
+    set {_uniqueStorage()._connections = newValue}
   }
   /// Returns true if `connections` has been explicitly set.
-  public var hasConnections: Bool {self._connections != nil}
+  public var hasConnections: Bool {_storage._connections != nil}
   /// Clears the value of `connections`. Subsequent reads from it will return its default value.
-  public mutating func clearConnections() {self._connections = nil}
+  public mutating func clearConnections() {_uniqueStorage()._connections = nil}
 
-  public var advertisements: [Wendy_Agent_Services_V2_BluetoothAdvertisingPowerStatus] = []
+  public var advertisements: [Wendy_Agent_Services_V2_BluetoothAdvertisingPowerStatus] {
+    get {_storage._advertisements}
+    set {_uniqueStorage()._advertisements = newValue}
+  }
 
-  public var meshMode: String = String()
+  public var meshMode: String {
+    get {_storage._meshMode}
+    set {_uniqueStorage()._meshMode = newValue}
+  }
 
   /// Configuration accepted by BlueZ is distinct from measured TX power.
+  public var error: String {
+    get {_storage._error}
+    set {_uniqueStorage()._error = newValue}
+  }
+
+  /// S2/S8 are connected-data preferences. Advertising coding is controller-selected.
+  public var meshModeDetail: String {
+    get {_storage._meshModeDetail}
+    set {_uniqueStorage()._meshModeDetail = newValue}
+  }
+
+  public var links: [Wendy_Agent_Services_V2_BluetoothLinkRadioStatus] {
+    get {_storage._links}
+    set {_uniqueStorage()._links = newValue}
+  }
+
+  public var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  public init() {}
+
+  fileprivate var _storage = _StorageClass.defaultInstance
+}
+
+public nonisolated struct Wendy_Agent_Services_V2_BluetoothLinkRadioStatus: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  public var handle: UInt32 = 0
+
+  /// HCI values: 1=1M, 2=2M, 3=Coded (does not report S2/S8).
+  public var txPhy: UInt32 = 0
+
+  public var rxPhy: UInt32 = 0
+
+  public var currentDbm: Int32 {
+    get {_currentDbm ?? 0}
+    set {_currentDbm = newValue}
+  }
+  /// Returns true if `currentDbm` has been explicitly set.
+  public var hasCurrentDbm: Bool {self._currentDbm != nil}
+  /// Clears the value of `currentDbm`. Subsequent reads from it will return its default value.
+  public mutating func clearCurrentDbm() {self._currentDbm = nil}
+
+  public var maximumDbm: Int32 {
+    get {_maximumDbm ?? 0}
+    set {_maximumDbm = newValue}
+  }
+  /// Returns true if `maximumDbm` has been explicitly set.
+  public var hasMaximumDbm: Bool {self._maximumDbm != nil}
+  /// Clears the value of `maximumDbm`. Subsequent reads from it will return its default value.
+  public mutating func clearMaximumDbm() {self._maximumDbm = nil}
+
   public var error: String = String()
 
   public var unknownFields = SwiftProtobuf.UnknownStorage()
 
   public init() {}
 
-  fileprivate var _advertisingMinDbm: Int32? = nil
-  fileprivate var _advertisingMaxDbm: Int32? = nil
-  fileprivate var _advertising: Wendy_Agent_Services_V2_BluetoothPowerSetting? = nil
-  fileprivate var _connections: Wendy_Agent_Services_V2_BluetoothPowerSetting? = nil
+  fileprivate var _currentDbm: Int32? = nil
+  fileprivate var _maximumDbm: Int32? = nil
 }
 
 // MARK: - Code below here is support for the SwiftProtobuf runtime.
@@ -798,7 +876,182 @@ nonisolated extension Wendy_Agent_Services_V2_BluetoothAdvertisingPowerStatus: S
 
 nonisolated extension Wendy_Agent_Services_V2_BluetoothRadioStatus: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   public static let protoMessageName: String = _protobuf_package + ".BluetoothRadioStatus"
-  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}adapter\0\u{1}available\0\u{3}supported_mesh_modes\0\u{3}coded_unavailable_reason\0\u{3}advertising_set_supported\0\u{3}advertising_min_dbm\0\u{3}advertising_max_dbm\0\u{3}connections_set_supported\0\u{3}connections_unavailable_reason\0\u{1}advertising\0\u{1}connections\0\u{1}advertisements\0\u{3}mesh_mode\0\u{1}error\0")
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}adapter\0\u{1}available\0\u{3}supported_mesh_modes\0\u{3}coded_unavailable_reason\0\u{3}advertising_set_supported\0\u{3}advertising_min_dbm\0\u{3}advertising_max_dbm\0\u{3}connections_set_supported\0\u{3}connections_unavailable_reason\0\u{1}advertising\0\u{1}connections\0\u{1}advertisements\0\u{3}mesh_mode\0\u{1}error\0\u{3}mesh_mode_detail\0\u{1}links\0")
+
+  fileprivate class _StorageClass {
+    var _adapter: String = String()
+    var _available: Bool = false
+    var _supportedMeshModes: [String] = []
+    var _codedUnavailableReason: String = String()
+    var _advertisingSetSupported: Bool = false
+    var _advertisingMinDbm: Int32? = nil
+    var _advertisingMaxDbm: Int32? = nil
+    var _connectionsSetSupported: Bool = false
+    var _connectionsUnavailableReason: String = String()
+    var _advertising: Wendy_Agent_Services_V2_BluetoothPowerSetting? = nil
+    var _connections: Wendy_Agent_Services_V2_BluetoothPowerSetting? = nil
+    var _advertisements: [Wendy_Agent_Services_V2_BluetoothAdvertisingPowerStatus] = []
+    var _meshMode: String = String()
+    var _error: String = String()
+    var _meshModeDetail: String = String()
+    var _links: [Wendy_Agent_Services_V2_BluetoothLinkRadioStatus] = []
+
+      // This property is used as the initial default value for new instances of the type.
+      // The type itself is protecting the reference to its storage via CoW semantics.
+      // This will force a copy to be made of this reference when the first mutation occurs;
+      // hence, it is safe to mark this as `nonisolated(unsafe)`.
+      static nonisolated(unsafe) let defaultInstance = _StorageClass()
+
+    private init() {}
+
+    init(copying source: _StorageClass) {
+      _adapter = source._adapter
+      _available = source._available
+      _supportedMeshModes = source._supportedMeshModes
+      _codedUnavailableReason = source._codedUnavailableReason
+      _advertisingSetSupported = source._advertisingSetSupported
+      _advertisingMinDbm = source._advertisingMinDbm
+      _advertisingMaxDbm = source._advertisingMaxDbm
+      _connectionsSetSupported = source._connectionsSetSupported
+      _connectionsUnavailableReason = source._connectionsUnavailableReason
+      _advertising = source._advertising
+      _connections = source._connections
+      _advertisements = source._advertisements
+      _meshMode = source._meshMode
+      _error = source._error
+      _meshModeDetail = source._meshModeDetail
+      _links = source._links
+    }
+  }
+
+  fileprivate mutating func _uniqueStorage() -> _StorageClass {
+    if !isKnownUniquelyReferenced(&_storage) {
+      _storage = _StorageClass(copying: _storage)
+    }
+    return _storage
+  }
+
+  public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    _ = _uniqueStorage()
+    try withExtendedLifetime(_storage) { (_storage: _StorageClass) in
+      while let fieldNumber = try decoder.nextFieldNumber() {
+        // The use of inline closures is to circumvent an issue where the compiler
+        // allocates stack space for every case branch when no optimizations are
+        // enabled. https://github.com/apple/swift-protobuf/issues/1034
+        switch fieldNumber {
+        case 1: try { try decoder.decodeSingularStringField(value: &_storage._adapter) }()
+        case 2: try { try decoder.decodeSingularBoolField(value: &_storage._available) }()
+        case 3: try { try decoder.decodeRepeatedStringField(value: &_storage._supportedMeshModes) }()
+        case 4: try { try decoder.decodeSingularStringField(value: &_storage._codedUnavailableReason) }()
+        case 5: try { try decoder.decodeSingularBoolField(value: &_storage._advertisingSetSupported) }()
+        case 6: try { try decoder.decodeSingularSInt32Field(value: &_storage._advertisingMinDbm) }()
+        case 7: try { try decoder.decodeSingularSInt32Field(value: &_storage._advertisingMaxDbm) }()
+        case 8: try { try decoder.decodeSingularBoolField(value: &_storage._connectionsSetSupported) }()
+        case 9: try { try decoder.decodeSingularStringField(value: &_storage._connectionsUnavailableReason) }()
+        case 10: try { try decoder.decodeSingularMessageField(value: &_storage._advertising) }()
+        case 11: try { try decoder.decodeSingularMessageField(value: &_storage._connections) }()
+        case 12: try { try decoder.decodeRepeatedMessageField(value: &_storage._advertisements) }()
+        case 13: try { try decoder.decodeSingularStringField(value: &_storage._meshMode) }()
+        case 14: try { try decoder.decodeSingularStringField(value: &_storage._error) }()
+        case 15: try { try decoder.decodeSingularStringField(value: &_storage._meshModeDetail) }()
+        case 16: try { try decoder.decodeRepeatedMessageField(value: &_storage._links) }()
+        default: break
+        }
+      }
+    }
+  }
+
+  public func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    try withExtendedLifetime(_storage) { (_storage: _StorageClass) in
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every if/case branch local when no optimizations
+      // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+      // https://github.com/apple/swift-protobuf/issues/1182
+      if !_storage._adapter.isEmpty {
+        try visitor.visitSingularStringField(value: _storage._adapter, fieldNumber: 1)
+      }
+      if _storage._available != false {
+        try visitor.visitSingularBoolField(value: _storage._available, fieldNumber: 2)
+      }
+      if !_storage._supportedMeshModes.isEmpty {
+        try visitor.visitRepeatedStringField(value: _storage._supportedMeshModes, fieldNumber: 3)
+      }
+      if !_storage._codedUnavailableReason.isEmpty {
+        try visitor.visitSingularStringField(value: _storage._codedUnavailableReason, fieldNumber: 4)
+      }
+      if _storage._advertisingSetSupported != false {
+        try visitor.visitSingularBoolField(value: _storage._advertisingSetSupported, fieldNumber: 5)
+      }
+      try { if let v = _storage._advertisingMinDbm {
+        try visitor.visitSingularSInt32Field(value: v, fieldNumber: 6)
+      } }()
+      try { if let v = _storage._advertisingMaxDbm {
+        try visitor.visitSingularSInt32Field(value: v, fieldNumber: 7)
+      } }()
+      if _storage._connectionsSetSupported != false {
+        try visitor.visitSingularBoolField(value: _storage._connectionsSetSupported, fieldNumber: 8)
+      }
+      if !_storage._connectionsUnavailableReason.isEmpty {
+        try visitor.visitSingularStringField(value: _storage._connectionsUnavailableReason, fieldNumber: 9)
+      }
+      try { if let v = _storage._advertising {
+        try visitor.visitSingularMessageField(value: v, fieldNumber: 10)
+      } }()
+      try { if let v = _storage._connections {
+        try visitor.visitSingularMessageField(value: v, fieldNumber: 11)
+      } }()
+      if !_storage._advertisements.isEmpty {
+        try visitor.visitRepeatedMessageField(value: _storage._advertisements, fieldNumber: 12)
+      }
+      if !_storage._meshMode.isEmpty {
+        try visitor.visitSingularStringField(value: _storage._meshMode, fieldNumber: 13)
+      }
+      if !_storage._error.isEmpty {
+        try visitor.visitSingularStringField(value: _storage._error, fieldNumber: 14)
+      }
+      if !_storage._meshModeDetail.isEmpty {
+        try visitor.visitSingularStringField(value: _storage._meshModeDetail, fieldNumber: 15)
+      }
+      if !_storage._links.isEmpty {
+        try visitor.visitRepeatedMessageField(value: _storage._links, fieldNumber: 16)
+      }
+    }
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  public static func ==(lhs: Wendy_Agent_Services_V2_BluetoothRadioStatus, rhs: Wendy_Agent_Services_V2_BluetoothRadioStatus) -> Bool {
+    if lhs._storage !== rhs._storage {
+      let storagesAreEqual: Bool = withExtendedLifetime((lhs._storage, rhs._storage)) { (_args: (_StorageClass, _StorageClass)) in
+        let _storage = _args.0
+        let rhs_storage = _args.1
+        if _storage._adapter != rhs_storage._adapter {return false}
+        if _storage._available != rhs_storage._available {return false}
+        if _storage._supportedMeshModes != rhs_storage._supportedMeshModes {return false}
+        if _storage._codedUnavailableReason != rhs_storage._codedUnavailableReason {return false}
+        if _storage._advertisingSetSupported != rhs_storage._advertisingSetSupported {return false}
+        if _storage._advertisingMinDbm != rhs_storage._advertisingMinDbm {return false}
+        if _storage._advertisingMaxDbm != rhs_storage._advertisingMaxDbm {return false}
+        if _storage._connectionsSetSupported != rhs_storage._connectionsSetSupported {return false}
+        if _storage._connectionsUnavailableReason != rhs_storage._connectionsUnavailableReason {return false}
+        if _storage._advertising != rhs_storage._advertising {return false}
+        if _storage._connections != rhs_storage._connections {return false}
+        if _storage._advertisements != rhs_storage._advertisements {return false}
+        if _storage._meshMode != rhs_storage._meshMode {return false}
+        if _storage._error != rhs_storage._error {return false}
+        if _storage._meshModeDetail != rhs_storage._meshModeDetail {return false}
+        if _storage._links != rhs_storage._links {return false}
+        return true
+      }
+      if !storagesAreEqual {return false}
+    }
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension Wendy_Agent_Services_V2_BluetoothLinkRadioStatus: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  public static let protoMessageName: String = _protobuf_package + ".BluetoothLinkRadioStatus"
+  public static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}handle\0\u{3}tx_phy\0\u{3}rx_phy\0\u{3}current_dbm\0\u{3}maximum_dbm\0\u{1}error\0")
 
   public mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -806,20 +1059,12 @@ nonisolated extension Wendy_Agent_Services_V2_BluetoothRadioStatus: SwiftProtobu
       // allocates stack space for every case branch when no optimizations are
       // enabled. https://github.com/apple/swift-protobuf/issues/1034
       switch fieldNumber {
-      case 1: try { try decoder.decodeSingularStringField(value: &self.adapter) }()
-      case 2: try { try decoder.decodeSingularBoolField(value: &self.available) }()
-      case 3: try { try decoder.decodeRepeatedStringField(value: &self.supportedMeshModes) }()
-      case 4: try { try decoder.decodeSingularStringField(value: &self.codedUnavailableReason) }()
-      case 5: try { try decoder.decodeSingularBoolField(value: &self.advertisingSetSupported) }()
-      case 6: try { try decoder.decodeSingularSInt32Field(value: &self._advertisingMinDbm) }()
-      case 7: try { try decoder.decodeSingularSInt32Field(value: &self._advertisingMaxDbm) }()
-      case 8: try { try decoder.decodeSingularBoolField(value: &self.connectionsSetSupported) }()
-      case 9: try { try decoder.decodeSingularStringField(value: &self.connectionsUnavailableReason) }()
-      case 10: try { try decoder.decodeSingularMessageField(value: &self._advertising) }()
-      case 11: try { try decoder.decodeSingularMessageField(value: &self._connections) }()
-      case 12: try { try decoder.decodeRepeatedMessageField(value: &self.advertisements) }()
-      case 13: try { try decoder.decodeSingularStringField(value: &self.meshMode) }()
-      case 14: try { try decoder.decodeSingularStringField(value: &self.error) }()
+      case 1: try { try decoder.decodeSingularUInt32Field(value: &self.handle) }()
+      case 2: try { try decoder.decodeSingularUInt32Field(value: &self.txPhy) }()
+      case 3: try { try decoder.decodeSingularUInt32Field(value: &self.rxPhy) }()
+      case 4: try { try decoder.decodeSingularSInt32Field(value: &self._currentDbm) }()
+      case 5: try { try decoder.decodeSingularSInt32Field(value: &self._maximumDbm) }()
+      case 6: try { try decoder.decodeSingularStringField(value: &self.error) }()
       default: break
       }
     }
@@ -830,65 +1075,33 @@ nonisolated extension Wendy_Agent_Services_V2_BluetoothRadioStatus: SwiftProtobu
     // allocates stack space for every if/case branch local when no optimizations
     // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
     // https://github.com/apple/swift-protobuf/issues/1182
-    if !self.adapter.isEmpty {
-      try visitor.visitSingularStringField(value: self.adapter, fieldNumber: 1)
+    if self.handle != 0 {
+      try visitor.visitSingularUInt32Field(value: self.handle, fieldNumber: 1)
     }
-    if self.available != false {
-      try visitor.visitSingularBoolField(value: self.available, fieldNumber: 2)
+    if self.txPhy != 0 {
+      try visitor.visitSingularUInt32Field(value: self.txPhy, fieldNumber: 2)
     }
-    if !self.supportedMeshModes.isEmpty {
-      try visitor.visitRepeatedStringField(value: self.supportedMeshModes, fieldNumber: 3)
+    if self.rxPhy != 0 {
+      try visitor.visitSingularUInt32Field(value: self.rxPhy, fieldNumber: 3)
     }
-    if !self.codedUnavailableReason.isEmpty {
-      try visitor.visitSingularStringField(value: self.codedUnavailableReason, fieldNumber: 4)
-    }
-    if self.advertisingSetSupported != false {
-      try visitor.visitSingularBoolField(value: self.advertisingSetSupported, fieldNumber: 5)
-    }
-    try { if let v = self._advertisingMinDbm {
-      try visitor.visitSingularSInt32Field(value: v, fieldNumber: 6)
+    try { if let v = self._currentDbm {
+      try visitor.visitSingularSInt32Field(value: v, fieldNumber: 4)
     } }()
-    try { if let v = self._advertisingMaxDbm {
-      try visitor.visitSingularSInt32Field(value: v, fieldNumber: 7)
+    try { if let v = self._maximumDbm {
+      try visitor.visitSingularSInt32Field(value: v, fieldNumber: 5)
     } }()
-    if self.connectionsSetSupported != false {
-      try visitor.visitSingularBoolField(value: self.connectionsSetSupported, fieldNumber: 8)
-    }
-    if !self.connectionsUnavailableReason.isEmpty {
-      try visitor.visitSingularStringField(value: self.connectionsUnavailableReason, fieldNumber: 9)
-    }
-    try { if let v = self._advertising {
-      try visitor.visitSingularMessageField(value: v, fieldNumber: 10)
-    } }()
-    try { if let v = self._connections {
-      try visitor.visitSingularMessageField(value: v, fieldNumber: 11)
-    } }()
-    if !self.advertisements.isEmpty {
-      try visitor.visitRepeatedMessageField(value: self.advertisements, fieldNumber: 12)
-    }
-    if !self.meshMode.isEmpty {
-      try visitor.visitSingularStringField(value: self.meshMode, fieldNumber: 13)
-    }
     if !self.error.isEmpty {
-      try visitor.visitSingularStringField(value: self.error, fieldNumber: 14)
+      try visitor.visitSingularStringField(value: self.error, fieldNumber: 6)
     }
     try unknownFields.traverse(visitor: &visitor)
   }
 
-  public static func ==(lhs: Wendy_Agent_Services_V2_BluetoothRadioStatus, rhs: Wendy_Agent_Services_V2_BluetoothRadioStatus) -> Bool {
-    if lhs.adapter != rhs.adapter {return false}
-    if lhs.available != rhs.available {return false}
-    if lhs.supportedMeshModes != rhs.supportedMeshModes {return false}
-    if lhs.codedUnavailableReason != rhs.codedUnavailableReason {return false}
-    if lhs.advertisingSetSupported != rhs.advertisingSetSupported {return false}
-    if lhs._advertisingMinDbm != rhs._advertisingMinDbm {return false}
-    if lhs._advertisingMaxDbm != rhs._advertisingMaxDbm {return false}
-    if lhs.connectionsSetSupported != rhs.connectionsSetSupported {return false}
-    if lhs.connectionsUnavailableReason != rhs.connectionsUnavailableReason {return false}
-    if lhs._advertising != rhs._advertising {return false}
-    if lhs._connections != rhs._connections {return false}
-    if lhs.advertisements != rhs.advertisements {return false}
-    if lhs.meshMode != rhs.meshMode {return false}
+  public static func ==(lhs: Wendy_Agent_Services_V2_BluetoothLinkRadioStatus, rhs: Wendy_Agent_Services_V2_BluetoothLinkRadioStatus) -> Bool {
+    if lhs.handle != rhs.handle {return false}
+    if lhs.txPhy != rhs.txPhy {return false}
+    if lhs.rxPhy != rhs.rxPhy {return false}
+    if lhs._currentDbm != rhs._currentDbm {return false}
+    if lhs._maximumDbm != rhs._maximumDbm {return false}
     if lhs.error != rhs.error {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true

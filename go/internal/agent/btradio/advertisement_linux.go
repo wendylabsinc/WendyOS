@@ -70,6 +70,22 @@ func applyAdvertisement(ctx context.Context, bus *dbus.Conn, adapter, path dbus.
 	if requested != nil {
 		valuesCopy["TxPower"] = &prop.Prop{Value: *requested, Writable: false, Emit: prop.EmitFalse}
 	}
+	if name == "wendy-net" && MeshModeConfigured() {
+		mode, e := MeshMode()
+		if e != nil {
+			return e
+		}
+		if mode != "normal" {
+			secondary, _ := values["SupportedSecondaryChannels"].Value().([]string)
+			if !slices.Contains(secondary, "Coded") {
+				return fmt.Errorf("selected adapter cannot advertise on Coded PHY")
+			}
+			valuesCopy["SecondaryChannel"] = &prop.Prop{Value: "Coded", Writable: false, Emit: prop.EmitFalse}
+		}
+		if e := ApplyMeshPHY(ctx, string(adapter), mode); e != nil {
+			return e
+		}
+	}
 	call := obj.CallWithContext(ctx, manager+".UnregisterAdvertisement", 0, path)
 	if call.Err != nil {
 		de, ok := call.Err.(dbus.Error)

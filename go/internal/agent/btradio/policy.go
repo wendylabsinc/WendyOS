@@ -21,6 +21,7 @@ var changes sync.Mutex
 var loaded bool
 var desired = &pb.BluetoothPowerSetting{Mode: "default"}
 var loadError error
+var meshMode string
 
 type registration struct {
 	owner context.Context
@@ -52,7 +53,47 @@ func loadLocked() {
 		loadError = err
 		return
 	}
+	var extra struct {
+		MeshMode string `json:"meshMode"`
+	}
+	if err = json.Unmarshal(data, &extra); err != nil {
+		loadError = err
+		return
+	}
+	if extra.MeshMode != "" {
+		err = ValidateMeshMode(extra.MeshMode)
+	}
+	if err != nil {
+		loadError = err
+		return
+	}
 	desired = &value
+	meshMode = extra.MeshMode
+}
+
+func ValidateMeshMode(mode string) error {
+	switch mode {
+	case "normal", "coded-s2", "coded-s8":
+		return nil
+	}
+	return fmt.Errorf("mesh mode must be normal, coded-s2 or coded-s8")
+}
+
+func MeshMode() (string, error) {
+	mu.Lock()
+	defer mu.Unlock()
+	loadLocked()
+	if meshMode == "" {
+		return "normal", loadError
+	}
+	return meshMode, loadError
+}
+
+func MeshModeConfigured() bool {
+	mu.Lock()
+	defer mu.Unlock()
+	loadLocked()
+	return meshMode != ""
 }
 func Validate(p *pb.BluetoothPowerSetting) error {
 	if p == nil {
@@ -202,15 +243,38 @@ func Reports() []*pb.BluetoothAdvertisingPowerStatus {
 // advertising instance. Re-registration never disconnects established links.
 // A partial application is returned as an error, retaining the saved intent.
 func Set(ctx context.Context, p *pb.BluetoothPowerSetting) error {
+	return SetRadio(ctx, p, "")
+}
+
+// SetRadio patches power and mesh profile together, retaining the legacy power
+// file shape so existing saved policies remain readable.
+func SetRadio(ctx context.Context, p *pb.BluetoothPowerSetting, mode string) error {
 	changes.Lock()
 	defer changes.Unlock()
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	mu.Lock()
+	loadLocked()
+	if p == nil {
+		p = proto.Clone(desired).(*pb.BluetoothPowerSetting)
+	}
+	if mode == "" {
+		mode = meshMode
+	}
+	mu.Unlock()
 	if err := Validate(p); err != nil {
 		return err
 	}
-	data, err := json.Marshal(p)
+	if mode != "" {
+		if err := ValidateMeshMode(mode); err != nil {
+			return err
+		}
+	}
+	data, err := json.Marshal(struct {
+		*pb.BluetoothPowerSetting
+		MeshMode string `json:"meshMode,omitempty"`
+	}{p, mode})
 	if err != nil {
 		return err
 	}
@@ -240,6 +304,7 @@ func Set(ctx context.Context, p *pb.BluetoothPowerSetting) error {
 	loaded = true
 	loadError = nil
 	desired = proto.Clone(p).(*pb.BluetoothPowerSetting)
+	meshMode = mode
 	list := make([]*registration, 0, len(handlers))
 	for _, f := range handlers {
 		list = append(list, f)

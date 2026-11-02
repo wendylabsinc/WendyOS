@@ -445,6 +445,22 @@ func (r *runtime) makeServerTLS() *tls.Config {
 
 func (r *runtime) acceptLink(ctx context.Context, raw net.Conn) {
 	defer raw.Close()
+	if mode, _ := btradio.MeshMode(); mode != "normal" {
+		handle, err := meshACLHandle(raw)
+		if err != nil {
+			r.cfg.Logger.Warn("BLE radio handle unavailable", zap.Error(err))
+			return
+		}
+		untrack := btradio.TrackMeshLink(fmt.Sprintf("/org/bluez/hci%d", r.hciIndex), handle)
+		defer untrack()
+		if err := btradio.TuneMeshLink(ctx, fmt.Sprintf("/org/bluez/hci%d", r.hciIndex), handle); err != nil {
+			r.cfg.Logger.Warn("BLE coded PHY setup failed", zap.Error(err))
+			return
+		}
+	} else if handle, err := meshACLHandle(raw); err == nil {
+		untrack := btradio.TrackMeshLink(fmt.Sprintf("/org/bluez/hci%d", r.hciIndex), handle)
+		defer untrack()
+	}
 	key := fmt.Sprintf("incoming:%p", raw)
 	var incomingCandidate *candidate
 	if radio, ok := raw.RemoteAddr().(l2addr); ok {
@@ -797,6 +813,20 @@ func (r *runtime) dialLink(ctx context.Context, peer candidate) {
 	// Capture the ACL identity before the context watcher can close/reuse the
 	// CoC descriptor. The early update is limited to this Wendy CoC's ACL.
 	aclHandle, handleErr := meshACLHandle(raw)
+	if mode, _ := btradio.MeshMode(); mode != "normal" && handleErr != nil {
+		r.cfg.Logger.Warn("BLE radio handle unavailable", zap.Error(handleErr))
+		return
+	}
+	if handleErr == nil {
+		untrack := btradio.TrackMeshLink(fmt.Sprintf("/org/bluez/hci%d", r.hciIndex), aclHandle)
+		defer untrack()
+		if mode, _ := btradio.MeshMode(); mode != "normal" {
+			if err := btradio.TuneMeshLink(ctx, fmt.Sprintf("/org/bluez/hci%d", r.hciIndex), aclHandle); err != nil {
+				r.cfg.Logger.Warn("BLE coded PHY setup failed", zap.Error(err))
+				return
+			}
+		}
+	}
 	stopWatch := watchLinkContext(ctx, raw)
 	defer stopWatch()
 	var secure *tls.Conn

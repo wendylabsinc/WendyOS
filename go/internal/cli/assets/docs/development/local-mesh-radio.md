@@ -5,8 +5,9 @@ firmware with runtime radio management, use the
 [Bluetooth radio command reference](/docs/clients/wendy-cli/commands/device/bluetooth#wendy-device-bluetooth-mode)
 instead of the legacy peer-file configuration below. That reference covers
 normal and coded profiles, enabling BLE, profile restarts, power defaults and
-checking controller readbacks. The current WendyOS Linux/BlueZ backend supports
-normal mode only; coded profiles require supported Lite peers at both ends.
+checking controller readbacks. Coded profiles require support on both peers.
+WendyOS supports Coded mesh transport on capable adapters; S2/S8 select a
+connected-data preference and advertising coding remains controller-selected.
 Power remains at the firmware/controller default unless an explicit policy is
 saved, and maximum power is an opt-in.
 

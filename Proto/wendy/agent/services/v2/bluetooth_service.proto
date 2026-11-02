@@ -95,4 +95,16 @@ message BluetoothRadioStatus {
     string mesh_mode = 13;
     // Configuration accepted by BlueZ is distinct from measured TX power.
     string error = 14;
+    // S2/S8 are connected-data preferences. Advertising coding is controller-selected.
+    string mesh_mode_detail = 15;
+    repeated BluetoothLinkRadioStatus links = 16;
+}
+
+message BluetoothLinkRadioStatus {
+    uint32 handle = 1;
+    uint32 tx_phy = 2; // HCI values: 1=1M, 2=2M, 3=Coded (does not report S2/S8).
+    uint32 rx_phy = 3;
+    optional sint32 current_dbm = 4;
+    optional sint32 maximum_dbm = 5;
+    string error = 6;
 }

@@ -58,10 +58,11 @@ Wi-Fi Aware. For Lite boards, follow the
 
 ### Radio profile and transmit power
 
-Normal mode is the starting point for connections with WendyOS peers. Supported
-ESP32-C5/C6 Lite firmware also offers coded S2/S8 profiles for trading throughput
-and airtime for range. The current WendyOS Linux/BlueZ backend supports normal
-mode only. A normal ESP scanner cannot discover coded advertisements.
+Normal mode is the starting point for compatibility. Supported ESP32-C5/C6 Lite
+firmware and capable WendyOS adapters also offer Coded mesh connections. On
+WendyOS, S2/S8 select a connected-data coding preference; advertising uses
+controller-selected Coded coding. A normal ESP scanner cannot discover coded
+advertisements. Read the selected adapter's capabilities before switching peers.
 
 Devices without a saved power policy retain the firmware/controller default;
 maximum power requires an explicit request. Advertising power and connected-link

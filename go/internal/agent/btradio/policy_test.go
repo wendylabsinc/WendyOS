@@ -16,6 +16,7 @@ func resetPolicy(t *testing.T) {
 	policyPath = filepath.Join(t.TempDir(), "config", "radio.json")
 	mu.Lock()
 	loaded = false
+	meshMode = ""
 	loadError = nil
 	desired = &pb.BluetoothPowerSetting{Mode: "default"}
 	handlers = map[string]*registration{}
@@ -112,5 +113,43 @@ func TestCorruptSavedPolicyIsReported(t *testing.T) {
 	}
 	if _, err := Desired(); err == nil || !strings.Contains(err.Error(), "power") {
 		t.Fatal(err)
+	}
+}
+
+func TestRadioProfileAndPowerPreserveEachOtherOnReload(t *testing.T) {
+	resetPolicy(t)
+	if err := SetRadio(context.Background(), nil, "coded-s2"); err != nil {
+		t.Fatal(err)
+	}
+	if err := Set(context.Background(), &pb.BluetoothPowerSetting{Mode: "dbm", Dbm: -6}); err != nil {
+		t.Fatal(err)
+	}
+	loaded = false
+	meshMode = ""
+	if mode, err := MeshMode(); err != nil || mode != "coded-s2" {
+		t.Fatal(mode, err)
+	}
+	if power, err := Desired(); err != nil || power.Mode != "dbm" || power.Dbm != -6 {
+		t.Fatal(power, err)
+	}
+	if err := SetRadio(context.Background(), nil, "normal"); err != nil {
+		t.Fatal(err)
+	}
+	if power, _ := Desired(); power.Dbm != -6 {
+		t.Fatal(power)
+	}
+}
+
+func TestPowerOnlyPolicyDoesNotSelectMeshPHY(t *testing.T) {
+	resetPolicy(t)
+	if err := Set(context.Background(), &pb.BluetoothPowerSetting{Mode: "maximum"}); err != nil {
+		t.Fatal(err)
+	}
+	loaded = false
+	if MeshModeConfigured() {
+		t.Fatal("advertising power must not change discovery PHY policy")
+	}
+	if mode, _ := MeshMode(); mode != "normal" {
+		t.Fatal(mode)
 	}
 }
