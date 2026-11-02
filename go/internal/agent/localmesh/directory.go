@@ -65,6 +65,8 @@ type SignedManifest struct {
 	Principal string `json:"principal" cbor:"p"`
 	Body      []byte `json:"body" cbor:"b"`
 	Signature []byte `json:"signature" cbor:"s"`
+
+	envelope *manifestEnvelope
 }
 
 var ErrExpiredManifest = errors.New("expired wendy net manifest")

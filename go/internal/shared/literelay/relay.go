@@ -107,17 +107,12 @@ func Open(ctx context.Context, cc *grpc.ClientConn, assetID string, options Rela
 	go func() {
 		defer conn.Close()
 		for {
-			message, err := stream.Recv()
+			payload, err := nextRelayPayload(stream)
 			if err != nil {
 				conn.Fail(err)
 				return
 			}
-			payload := message.GetPayload()
-			if payload == nil || len(payload.Bytes) == 0 || len(payload.Bytes) > 65536 {
-				conn.Fail(fmt.Errorf("invalid relay byte payload"))
-				return
-			}
-			if _, err := remote.Write(payload.Bytes); err != nil {
+			if _, err := remote.Write(payload); err != nil {
 				return
 			}
 		}
@@ -149,6 +144,31 @@ func Open(ctx context.Context, cc *grpc.ClientConn, assetID string, options Rela
 		}
 	}()
 	return conn, nil
+}
+
+type relayReceiver interface {
+	Recv() (*wcomrelaypb.WendyComRelayMessage, error)
+}
+
+// nextRelayPayload is used only after the versioned relay RPC admits a grant.
+// Protobuf retains future oneof arms as unknown fields with no selected Msg;
+// discard those envelopes without interpreting them as inner TLS bytes. Known
+// messages that are invalid in this phase still fail rather than reopening it.
+func nextRelayPayload(stream relayReceiver) ([]byte, error) {
+	for {
+		message, err := stream.Recv()
+		if err != nil {
+			return nil, err
+		}
+		if message.GetMsg() == nil {
+			continue
+		}
+		payload := message.GetPayload()
+		if payload == nil || len(payload.Bytes) == 0 || len(payload.Bytes) > 65536 {
+			return nil, fmt.Errorf("invalid relay byte payload")
+		}
+		return payload.Bytes, nil
+	}
 }
 
 // A Cloud WLG3 record carries timestamps, three UUIDs, five SHA-256 hashes
