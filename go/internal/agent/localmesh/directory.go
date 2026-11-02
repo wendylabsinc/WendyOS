@@ -340,17 +340,13 @@ func (d *Directory) Accept(w SignedManifest, now time.Time) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	// Certificate trust is evaluated independently of announcement dates.
-	// Synthetic/custom verifiers predating selected-window metadata may return
-	// a zero lower bound; even then the authenticating leaf still supplies it.
-	notBefore := id.NotBefore
-	if notBefore.IsZero() {
-		notBefore = leaf.NotBefore
+	// The selected path is independently trusted at the local verification
+	// clock. Static signed dates belong to the signing leaf's window; a newer
+	// issuer's NotBefore does not date an already-signed announcement.
+	if time.UnixMilli(m.Issued).Before(leaf.NotBefore) {
+		return false, errors.New("manifest predates authenticating certificate")
 	}
-	if time.UnixMilli(m.Issued).Before(notBefore) {
-		return false, errors.New("manifest predates authenticating certificate path")
-	}
-	if time.UnixMilli(m.Expires).After(id.NotAfter) {
+	if time.UnixMilli(m.Expires).After(leaf.NotAfter) || time.UnixMilli(m.Expires).After(id.NotAfter) {
 		return false, ErrManifestOutlivesCertificate
 	}
 	if !validManifestSignature(w, leaf) {
@@ -486,20 +482,12 @@ func (d *Directory) currentEntryChain(principal string, e directoryEntry, now ti
 	if !ok || id.Device.Principal() != e.wire.Principal || time.UnixMilli(e.manifest.Expires).After(id.NotAfter) {
 		return nil, false
 	}
-	notBefore := id.NotBefore
-	if notBefore.IsZero() {
-		leaf, err := x509.ParseCertificate(chain[0])
-		if err != nil {
-			return nil, false
-		}
-		notBefore = leaf.NotBefore
-	}
-	if time.UnixMilli(e.manifest.Issued).Before(notBefore) {
+	leaf, err := x509.ParseCertificate(chain[0])
+	if err != nil || time.UnixMilli(e.manifest.Issued).Before(leaf.NotBefore) || time.UnixMilli(e.manifest.Expires).After(leaf.NotAfter) {
 		return nil, false
 	}
 	valid := e.signature.matches(certificateHash(chain[0]), func() bool {
-		leaf, err := x509.ParseCertificate(chain[0])
-		return err == nil && validManifestSignature(e.wire, leaf)
+		return validManifestSignature(e.wire, leaf)
 	})
 	d.entries[principal] = e
 	if !valid {

@@ -285,14 +285,15 @@ func TestIdleShortLeaseCyclesReleaseAllPayloads(t *testing.T) {
 	}
 }
 
-func TestRelativeLeaseRequiresBoundedDurationAndSelectedCertificateWindow(t *testing.T) {
+func TestRelativeLeaseRequiresBoundedDurationAndSigningCertificateWindow(t *testing.T) {
 	for _, tc := range []struct {
 		name                   string
 		issuedOffset, duration time.Duration
 		valid                  bool
 	}{
-		{"inside path", -30 * time.Minute, time.Minute, true},
-		{"before selected path", -30*time.Minute - time.Millisecond, time.Minute, false},
+		{"inside leaf", -time.Hour, time.Minute, true},
+		{"before later issuer but inside leaf", -40 * time.Minute, time.Minute, true},
+		{"before signing leaf", -time.Hour - time.Millisecond, time.Minute, false},
 		{"past selected expiry", time.Hour - time.Second, time.Minute, false},
 		{"zero duration", 0, 0, false},
 		{"negative duration", 0, -time.Second, false},
