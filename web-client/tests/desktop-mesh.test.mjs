@@ -5,6 +5,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DesktopService } from "../electron/service.mjs";
+import { buildMeshGroups, mergeMeshObservation } from "../lib/mesh-topology.ts";
 
 const cloudAsset = "00000000-0000-4000-8000-000000000001";
 const cloudTenant = "00000000-0000-4000-8000-000000000002";
@@ -30,6 +31,39 @@ test("mesh discovery combines independent inventories without trusting advertise
   assert.deepEqual(result.warnings, []);
   assert.ok(calls[0].includes("5s"));
   assert.ok(calls[1].includes("--all"));
+});
+
+test("Cloud roster name labels an authenticated LAN node without requiring Cloud reachability", async () => {
+  const service = fixture();
+  service.run = async (_file, args) => JSON.stringify(args[0] === "cloud"
+    ? [{ id: cloudAsset, selector: cloudSelector, name: "ethan-wn-thor" }]
+    : { lanDevices: [{ isWendyDevice: true, hostname: "thor.local", port: 50051, displayName: "Wn Thor" }] });
+  const { devices } = await service.meshDiscover();
+  const principal = `spiffe://wendy.sh/tenant/${cloudTenant}/device/${cloudAsset}`;
+  const lan = mergeMeshObservation(undefined, { status: "ok", topology: {
+    selfPrincipal: principal, selfTenantId: cloudTenant, selfDeviceId: cloudAsset,
+    capturedAtUnixMs: "1000", runtimeAvailable: true, status: { state: "mesh-active" },
+  } }, 1000);
+  const { groups } = buildMeshGroups(devices, {
+    "thor.local:50051": lan,
+    [cloudSelector]: mergeMeshObservation(undefined, { status: "unavailable", error: "Cloud relay offline" }, 1100),
+  }, 1200);
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0].nodes.length, 1);
+  assert.equal(groups[0].nodes[0].name, "ethan-wn-thor");
+  assert.equal(groups[0].nodes[0].observation, lan);
+  assert.equal(groups[0].nodes[0].inventory.id, "thor.local:50051");
+});
+
+test("local advertisements cannot supply Cloud-name bindings", async () => {
+  const service = fixture();
+  service.run = async (_file, args) => JSON.stringify(args[0] === "cloud" ? [] : { lanDevices: [{
+    isWendyDevice: true, hostname: "thor.local", displayName: "Wn Thor",
+    cloudName: "Spoofed label", cloudNamePrincipal: `spiffe://wendy.sh/tenant/${cloudTenant}/device/${cloudAsset}`,
+  }] });
+  const { devices } = await service.meshDiscover();
+  assert.equal(devices[1].cloudName, undefined);
+  assert.equal(devices[1].cloudNamePrincipal, undefined);
 });
 
 test("Cloud discovery preserves complete selectors across tenants, endpoints and legacy organizations", async () => {
@@ -294,6 +328,8 @@ test("real CLI4 model JSON exposes mesh-only C6 through its exact Lite selector"
   assert.deepEqual(inventory.devices.map(device => device.id), ["cli://local", cli4Inventory.externalDevices[0].id, c6.selector]);
   assert.equal(inventory.devices[2].platform, "wendy-lite");
   assert.equal(inventory.devices[2].reporterKey, `device:${c6.tenant}/${c6.device}`);
+  assert.equal(inventory.devices[1].cloudName, "C5 Cloud");
+  assert.equal(inventory.devices[1].cloudNamePrincipal, cli4Inventory.meshDevices[1].principal);
   assert.deepEqual(inventory.warnings, []);
   let partial = false;
   service.run = async (_file, args) => {

@@ -266,6 +266,24 @@ test("same principal reached by two targets keeps its newest successful snapshot
   assert.equal(group.nodes[0].inventory.id, "cloud");
 });
 
+test("Cloud labels do not replace the newest observation or establish identity", () => {
+  const cloud = { id: "cloud", name: "Cloud Thor", cloudName: "Cloud Thor", cloudNamePrincipal: principal(a) };
+  const lan = { id: "lan", name: "Wn Thor" };
+  const cloudObservation = observe(snapshot(a), 1000);
+  const lanObservation = observe(snapshot(a), 2000);
+  const group = buildMeshGroups([cloud, lan], { cloud: cloudObservation, lan: lanObservation }, 2500).groups[0];
+  assert.equal(group.nodes[0].name, "Cloud Thor");
+  assert.equal(group.nodes[0].observation, lanObservation);
+  assert.equal(group.nodes[0].inventory, lan);
+  const hintsOnly = buildMeshGroups([cloud], {}, 2500);
+  assert.equal(hintsOnly.groups.length, 0);
+  assert.deepEqual(hintsOnly.unknown, [cloud]);
+  const foreign = { ...cloud, cloudNamePrincipal: principal(a, otherTenant) };
+  const { groups } = buildMeshGroups([lan, foreign], { lan: lanObservation }, 2500);
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0].nodes[0].name, "Wn Thor");
+});
+
 test("route proof expiry and unreachable withdrawals override prior authorization", () => {
   assert.equal(
     routeState(
