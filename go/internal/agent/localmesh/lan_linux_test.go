@@ -456,7 +456,7 @@ func lanDevice(t *testing.T, number int) meshid.Device {
 }
 func lanIdentityDevice(t *testing.T, identity TCPIdentity) meshid.Device {
 	t.Helper()
-	c, err := NewCredentials(identity.Certificate, identity.Chain, identity.Key)
+	c, err := newTestCredentials(identity.Certificate, identity.Chain, identity.Key)
 	if err != nil {
 		t.Fatal(err)
 	}

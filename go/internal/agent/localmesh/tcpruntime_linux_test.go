@@ -43,7 +43,7 @@ func TestConfiguredTCPPeerProcess(t *testing.T) {
 	if err = json.Unmarshal(data, &cfg); err != nil {
 		t.Fatal(err)
 	}
-	credentials, err := NewCredentials(cfg.Identity.Certificate, cfg.Identity.Chain, cfg.Identity.Key)
+	credentials, err := newTestCredentials(cfg.Identity.Certificate, cfg.Identity.Chain, cfg.Identity.Key)
 	if err != nil {
 		t.Fatal(err)
 	}
