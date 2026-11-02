@@ -9,6 +9,7 @@ import (
 	"errors"
 	"math/big"
 	"net/url"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
@@ -58,7 +59,7 @@ func (a manifestTestAuthority) issue(t testing.TB, now time.Time, key *ecdsa.Pri
 	if err != nil {
 		t.Fatal(err)
 	}
-	creds, err := NewCredentials(string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})), a.pem, string(pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})))
+	creds, err := newTestCredentials(string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})), a.pem, string(pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -189,7 +190,7 @@ func TestDirectoryRenewalResignRecoveryPreservesReplayAndLease(t *testing.T) {
 			if !d.RouteAuthorizations(now.Add(time.Second))[*m.Route] {
 				t.Fatal("renewed signature did not recover its exact signed route")
 			}
-			if after.manifest != before.manifest || !after.retainUntil.Equal(before.retainUntil) || d.history[wire.Principal] != receipt || saves != 1 {
+			if !reflect.DeepEqual(after.manifest, before.manifest) || !after.retainUntil.Equal(before.retainUntil) || d.history[wire.Principal] != receipt || saves != 1 {
 				t.Fatal("re-sign extended lease/retention or changed durable receipt")
 			}
 			admitted := resigned

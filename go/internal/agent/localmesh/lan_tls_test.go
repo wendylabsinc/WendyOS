@@ -157,6 +157,7 @@ func TestLANUDPRecoversLossAndKeepsSharedTransport(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		t.Logf("trial %d ALPN=%q resumed=%v", trial, conn.ConnectionState().TLS.NegotiatedProtocol, conn.ConnectionState().TLS.DidResume)
 		if trial == 1 && !conn.ConnectionState().TLS.DidResume {
 			conn.CloseWithError(1, "resumption missing")
 			t.Fatal("UDP listener failed to resume authenticated peer")

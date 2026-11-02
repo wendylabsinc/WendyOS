@@ -4,7 +4,13 @@ const authOrigin = "https://auth.dev.wendy.sh";
 const identity = "https://identity.dev.pki.wendy.sh/v1/identity/certificate";
 function allowed(url: URL, method: string) {
   if (method !== "GET" && method !== "POST") return false;
-  if (url.username || url.password || url.search || url.hash) return false;
+  if (url.username || url.password || url.hash) return false;
+  // Lite device CA discovery supplies intermediates only; it uses the fixed
+  // deployment authority and the same exact profile as the native CLI.
+  if (url.origin === "https://est.dev.pki.wendy.sh" &&
+      /^\/\.well-known\/est\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/cacerts$/.test(url.pathname))
+    return method === "GET" && url.search === "?chain_algorithm=ECDSA_P256&full_chain=true";
+  if (url.search) return false;
   if (
     url.href ===
     "https://api.dev.wendy.sh/.well-known/wendy-cloud-grants/jwks.json"

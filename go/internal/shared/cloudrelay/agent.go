@@ -315,7 +315,9 @@ func (a *Agent) runOnce(parent context.Context) error {
 	a.Logger.Info("registered presence with cloud relay", zap.String("endpoint", lease.Broker.Endpoint))
 	presencePeer, _ := peer.FromContext(stream.Context())
 	pathChanged := make(chan error, 1)
-	go func() { pathChanged <- a.watchPresencePath(ctx, presencePeer, lease.Broker.Endpoint) }()
+	go func(endpoint string) {
+		pathChanged <- a.watchPresencePath(ctx, presencePeer, endpoint)
+	}(lease.Broker.Endpoint)
 	renewal := time.NewTimer(renewalDelay(lease, c))
 	defer renewal.Stop()
 	expiry := time.NewTimer(time.Until(time.Unix(c.Exp, 0)))
