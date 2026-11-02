@@ -8,7 +8,7 @@ is future work.
 
 ## Binary Service Data, version one
 
-The service-data key is the tenant UUID (128 bits). Its ten-byte payload is:
+The service-data key is the tenant UUID (128 bits). Its version-one prefix is ten bytes:
 
 | Offset | Bytes | Meaning |
 | --- | ---: | --- |
@@ -35,7 +35,10 @@ Flags (3 bytes), AD framing (2), service UUID (16), and payload (10) occupy
 exactly 31 bytes. Linux emits only Service Data, without a local name or redundant
 UUID-list field. Optional BlueZ TxPower config does not add a TX-power AD field.
 Version zero and the old unversioned format are intentionally unsupported.
-Discovery version is independent of the session ALPN version.
+Discovery version is independent of the session ALPN version. Receivers ignore
+optional bytes appended after the version-one prefix and skip unsupported
+discovery versions, allowing a supported version in the same report to remain
+usable. The emitted legacy payload stays ten bytes.
 
 Incoming capacity includes pending reservations. The existing scan-loop cadence
 coalesces changes onto the existing advertisement refresh worker; the separate
@@ -95,9 +98,10 @@ including when padding separates the streams. A shortened name in a separate
 primary report supplies no payload, but its tenant UUID can be correlated with
 a later complete scan response. Conflicting names are rejected.
 
-Valid binary advertisements take precedence while fresh. Malformed or unknown
-binary data for our service invalidates the observation without falling back
-to text in that report. Unrelated services cannot refresh the Wendy Net observation.
+Valid binary advertisements take precedence while fresh. Unsupported binary
+versions neither refresh nor withdraw a previously valid observation. Malformed
+version-one binary data for our service invalidates the observation without
+falling back to text in that report. Unrelated services cannot refresh the Wendy Net observation.
 State is bounded to 256 complete and 256 partial observations. Live complete
 observations remain in place when full; new radio addresses wait until older
 observations expire. Current BlueZ
