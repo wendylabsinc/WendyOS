@@ -17,6 +17,7 @@ import (
 // assert its side effects, latest error and user-visible account of the result.
 func isolateConnectionRecovery(t *testing.T) {
 	t.Helper()
+	setTempConfig(t, &config.Config{})
 	oldBroadcast, oldWait, oldAttempted := broadcastTimeFn, waitForTimeProofFn, clockSkewSyncAttempted
 	oldInteractive, oldJSON, oldPrompt, oldRefresh := isInteractiveTerminalFn, jsonOutput, confirmFn, refreshCurrentCertsFn
 	t.Cleanup(func() {
@@ -102,6 +103,9 @@ func TestConnectionClockRecoveryOutcomes(t *testing.T) {
 }
 
 func TestConnectionRecoveryOnlyRefreshesProvenClientProblems(t *testing.T) {
+	// chooseRejectionError captures account-switch advice while constructing
+	// these table entries, before the individual recovery subtests run.
+	setTempConfig(t, &config.Config{})
 	now := time.Now()
 	expired := config.CertificateInfo{OrganizationID: 2, PemCertificate: certPEM(t, now.Add(-time.Hour))}
 	valid := config.CertificateInfo{OrganizationID: 2, PemCertificate: certPEM(t, now.Add(time.Hour))}
