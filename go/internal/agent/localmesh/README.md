@@ -115,6 +115,45 @@ kernel requirements. Linux images need IPv6 policy tables, dummy interfaces and
 TUN support; container UDP interception additionally needs TPROXY support. An
 agent update cannot supply kernel features compiled out of an installed image.
 
+## Linux operator policy and warm rollback
+
+Device destinations use IPv6 table/rule priority 18865 and peer ingress uses
+priority 18866. Operator destinations (`fd45:b891:5680::/48`) use their own table
+and priority 18870, with rule protocol 186. UDP VIP and Internet sharing slots
+18867–18869 are separate. Both mesh tables have permanent unreachable defaults;
+operator routes, including applicable learned defaults, are installed in both
+tables so host traffic and peer transit use the same paths.
+
+The separate operator table and priority let pre-operator agents restart and
+complete reset cleanup after a WN5 crash or binary replacement without a reboot.
+Those agents leave the operator rule and unreachable fallback untouched; a later
+WN5 startup/reset reclaims them. Earlier WN5/rehearsal builds placed the operator
+rule at priority 18865 in table 18865. WN5 migrates that exact legacy signature
+before installing current policy. A device already rolled back to an older
+agent with the legacy rule still needs a reboot, removal of that exact stale
+rule while mesh workers are stopped, or one run of the updated WN5 agent.
+
+Startup and reset inspect both tables before deleting kernel objects. Unfamiliar
+rules or routes remain conflicts, with the offending rule's family, priority,
+table and selectors reported. Cleanup failure continues to gate enrollment.
+
+`TestKernelOperatorPolicyIsolatedNamespace` checks migration, real operator route
+lookups, fallback repair and withdrawal. `TestKernelOperatorWarmRollbackIsolatedNamespace`
+also runs a test binary from an unmodified pre-operator checkout after killing
+WN5 with SIGKILL. Build both localmesh test binaries for the test host's Linux
+architecture, then run the WN5 binary in a disposable privileged Linux container
+with `iproute2`, `iptables` and `/dev/net/tun` available:
+
+```sh
+WENDY_LOCALMESH_ISOLATED_TEST=1 \
+WENDY_LOCALMESH_ROLLBACK_BINARY=/tests/pre-operator-main.test \
+/tests/wn5.test -test.v -test.run '^TestKernelOperator.*IsolatedNamespace$'
+```
+
+Use main commit `581bff3a8aeb368680f346a9785934eef14848d7` for the pre-operator
+baseline. The rollback test exercises both its real kernel restart and its
+unenrolled reset cleanup, then verifies that WN5 can clean the remaining policy.
+
 ## LAN and Wi-Fi Aware discovery
 
 Both carriers advertise the same enrolled device principal and tenant-scoped
