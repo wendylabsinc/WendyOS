@@ -409,8 +409,8 @@ func TestPresenceRenewalCancelStopsRPC(t *testing.T) {
 	assertResumeLease(t, a, old)
 }
 
-func TestPresenceRetainsLeaseOnBrokerDeadline(t *testing.T) {
-	for _, code := range []codes.Code{codes.DeadlineExceeded, codes.PermissionDenied, codes.Unavailable} {
+func TestPresenceRetainsLeaseOnPublicBrokerTransportFailure(t *testing.T) {
+	for _, code := range []codes.Code{codes.DeadlineExceeded, codes.Unavailable, codes.PermissionDenied, codes.Unauthenticated, codes.FailedPrecondition} {
 		t.Run(code.String(), func(t *testing.T) {
 			r, a, _, done := startRenewalRelay(t, func(_ context.Context, _ int, l *pb.IssuePresenceLeaseResponse) (*pb.IssuePresenceLeaseResponse, error) {
 				return l, nil
@@ -420,10 +420,11 @@ func TestPresenceRetainsLeaseOnBrokerDeadline(t *testing.T) {
 			if err := renewalWait(t, done); status.Code(err) != code {
 				t.Fatal(err)
 			}
-			if (a.lease != nil) != (code == codes.DeadlineExceeded) {
+			retain := code == codes.DeadlineExceeded || code == codes.Unavailable
+			if (a.lease != nil) != retain {
 				t.Fatal("wrong broker failure lease retention")
 			}
-			if code == codes.DeadlineExceeded {
+			if retain {
 				assertResumeLease(t, a, old)
 			}
 		})
