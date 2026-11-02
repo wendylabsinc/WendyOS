@@ -10,7 +10,7 @@ import (
 func eligibleSnapshot(view localmesh.NodeSnapshot, device meshid.Device, now time.Time) bool {
 	manifestOK := false
 	for _, m := range view.Devices {
-		if m.Device == device.UUID() && !m.Withdraw && time.UnixMilli(m.Expires).After(now) {
+		if m.Device == device.UUID() && !m.Withdraw && m.LeaseRemaining(now) > 0 {
 			manifestOK = true
 			break
 		}

@@ -141,7 +141,7 @@ func signedGateways(self meshid.Device, view localmesh.NodeSnapshot, offers []me
 		if err != nil || device == self || device.Tenant() != self.Tenant() {
 			continue
 		}
-		expires := time.UnixMilli(offer.Expires)
+		expires := offer.LeaseDeadline()
 		if !expires.After(now) {
 			continue
 		}
@@ -150,8 +150,8 @@ func signedGateways(self meshid.Device, view localmesh.NodeSnapshot, offers []me
 			if manifest.Device != device.UUID() || manifest.Withdraw {
 				continue
 			}
-			issued, lease := time.UnixMilli(manifest.Issued), time.UnixMilli(manifest.Expires)
-			if issued.After(now.Add(5*time.Second)) || !lease.After(now) {
+			lease := manifest.LeaseDeadline()
+			if !lease.After(now) {
 				continue
 			}
 			if lease.After(manifestExpiry) {

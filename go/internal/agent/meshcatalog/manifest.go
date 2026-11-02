@@ -47,7 +47,7 @@ func (c *Catalog) manifestRecords(now time.Time) []Record {
 	view := c.manifestSnapshot()
 	var out []Record
 	for _, m := range view.Devices {
-		if m.Withdraw || m.Expires <= now.UnixMilli() {
+		if m.Withdraw || m.LeaseRemaining(now) <= 0 {
 			continue
 		}
 		device := meshid.NewDevice(view.Self.Tenant(), m.Device)
@@ -56,7 +56,7 @@ func (c *Catalog) manifestRecords(now time.Time) []Record {
 				continue
 			}
 			out = append(out, Record{Version: 1, Key: Key{service.Mesh, device.Principal(), service.AppID, service.ServiceID},
-				Generation: m.Revision, Issued: m.Issued, Expires: m.Expires,
+				Generation: m.Revision, Issued: m.Issued, Expires: m.Expires, AdmittedUntil: m.LeaseDeadline(),
 				Type: service.Type, Instance: service.Instance, HostPort: service.Port, TXT: slices.Clone(service.TXT)})
 		}
 	}
