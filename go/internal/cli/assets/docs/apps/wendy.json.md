@@ -325,6 +325,19 @@ host port are independent. Only a running app's explicitly published UDP
 ports accept peer traffic. UDP DNS-SD announcements require a matching UDP
 mapping and use service types ending in `._udp`.
 
+#### mDNS service discovery
+
+With isolated mesh networking, apps advertise their container IPv4 address and
+container port using ordinary DNS-SD. Wendy projects the record with a local
+mesh service address and the mapped host port. Clients must use that resolved
+endpoint. Apps with their own mDNS sockets need no UDP 5353 mapping or `avahi`
+entitlement. Apps using Avahi's D-Bus API can add the private `avahi` entitlement.
+
+TXT values remain application data. IP addresses and extra ports embedded in
+TXT are not rewritten, and each additional incoming port needs its own mapping.
+See [service discovery](/docs/guides/wendy-net-services) and the
+[NVIDIA PAIR example](/docs/guides/nvidia-pair) for a multi-port application.
+
 #### UDP delivery limits
 
 UDP messages can contain zero through 65,507 bytes. Delivery is unreliable:

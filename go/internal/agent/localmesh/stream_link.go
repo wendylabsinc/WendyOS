@@ -1,5 +1,3 @@
-//go:build linux
-
 package localmesh
 
 import (
@@ -544,7 +542,7 @@ func (l *streamNodeLink) readLoop() {
 			return
 		}
 		n := binary.BigEndian.Uint32(header[1:])
-		if n == 0 || n > MaxControlMessage+4 || header[0] == streamPacket && n > DatagramLimit {
+		if n > MaxControlMessage+4 || n == 0 && (header[0] == streamControl || header[0] == streamPacket) || header[0] == streamPacket && n > DatagramLimit {
 			l.recordTerminalError(errors.New("invalid wendy net stream frame"))
 			return
 		}
@@ -574,8 +572,8 @@ func (l *streamNodeLink) readLoop() {
 				return
 			}
 		default:
-			l.recordTerminalError(fmt.Errorf("unknown wendy net stream frame kind %d", header[0]))
-			return
+			// The bounded frame body is already consumed. Optional future kinds
+			// must not close the carrier or be interpreted as another payload.
 		}
 	}
 }
