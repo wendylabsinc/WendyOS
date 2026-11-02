@@ -674,10 +674,13 @@ func (n *Node) publish() error {
 	m.Route = &RouteOrigin{Prefix: netip.PrefixFrom(n.Credentials.Device.MeshAddress(), 128), RouterID: babel.RouterID(n.state.RouterID), Seqno: n.state.Babel.Seqno}
 	m.Revision = n.state.Revision
 	m.Issued = now.UnixMilli()
-	_, identity, ok := n.cache.Get(principal, now)
-	if !ok {
-		return errors.New("route announcement identity expired")
+	// Other operator installations share this principal but may use different
+	// certificates. Only our actual signing chain determines our origin lease.
+	identity, err := n.Credentials.Verify(n.Credentials.Certificate.Certificate, now)
+	if err != nil {
+		return err
 	}
+	n.cache.rememberCertificates(n.Credentials.Certificate.Certificate, identity.NotAfter, now)
 	m.Expires = min(now.Add(MaxLease).UnixMilli(), identity.NotAfter.UnixMilli())
 	w, err := SignManifest(m, n.Credentials.Certificate.Certificate, n.Credentials.Signer, now)
 	if err != nil {
