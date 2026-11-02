@@ -914,8 +914,8 @@ func main() {
 		}
 
 		srv, err := mtls.NewServer(certPEM, chainPEM, keyPEM, logger, floor, expectedScope, effectiveMode,
-			// UnaryMTLSInterceptor and StreamMTLSInterceptor are embedded inside
-			// mtls.NewServer and run before these caller-provided interceptors.
+			// mTLS authentication and the exact-method device RPC allowlist are
+			// embedded inside mtls.NewServer before these error interceptors.
 			grpc.ChainUnaryInterceptor(interceptor.UnaryErrorInterceptor(logger)),
 			grpc.ChainStreamInterceptor(interceptor.StreamErrorInterceptor(logger)),
 		)
@@ -935,7 +935,8 @@ func main() {
 		// WendyShellService opens an interactive *host* root shell. It is
 		// deliberately registered ONLY here, on the mTLS server, so it is
 		// reachable only on a provisioned device over an authenticated,
-		// org-checked connection. It is intentionally NOT part of
+		// org-checked operator connection: the mandatory RPC policy rejects
+		// device credentials before HostShell. It is intentionally NOT part of
 		// registerAllServices: that would also expose it on the unauthenticated
 		// plaintext pre-provisioning server (handing anyone on the LAN a host
 		// root shell) and on the local admin socket.

@@ -103,8 +103,9 @@ func NewTLSConfig(certPEM, chainPEM, keyPEM string, logger *zap.Logger, notBefor
 // NewServer creates a gRPC server with mTLS credentials.
 // The mTLS interceptors are always applied — they cannot be omitted via extraOpts.
 // This ensures no handler can accidentally receive an unauthenticated call regardless
-// of how the caller configures the server. Callers may add further interceptors via
-// extraOpts; those run after the mandatory mTLS check.
+// of how the caller configures the server. Device callers are restricted to the
+// exact RPC allowlist; unknown roles are refused. Callers may append further
+// chained interceptors via extraOpts; those run after authentication and authorization.
 // logger may be nil; when provided, rejected client certificates are logged at WARN level.
 // notBeforeFloor is forwarded to NewTLSConfig; see its documentation for details.
 // expected and orgMode are forwarded to the mandatory mTLS interceptors, which
@@ -118,10 +119,14 @@ func NewServer(certPEM, chainPEM, keyPEM string, logger *zap.Logger, notBeforeFl
 	creds := credentials.NewTLS(tlsConfig)
 	opts := []grpc.ServerOption{
 		grpc.Creds(creds),
-		// mTLS interceptors are mandatory: they run before any caller-provided interceptors
+		// mTLS interceptors are mandatory: they run before caller-provided chained interceptors
 		// so that no handler can be reached without a verified client certificate.
-		grpc.ChainUnaryInterceptor(interceptor.UnaryMTLSInterceptor(logger, expected, orgMode)),
-		grpc.ChainStreamInterceptor(interceptor.StreamMTLSInterceptor(logger, expected, orgMode)),
+		grpc.ChainUnaryInterceptor(
+			interceptor.UnaryMTLSInterceptor(logger, expected, orgMode),
+			interceptor.UnaryRPCIdentityInterceptor(expected)),
+		grpc.ChainStreamInterceptor(
+			interceptor.StreamMTLSInterceptor(logger, expected, orgMode),
+			interceptor.StreamRPCIdentityInterceptor(expected)),
 		grpc.InitialWindowSize(8 * 1024 * 1024),
 		grpc.InitialConnWindowSize(16 * 1024 * 1024),
 		grpc.KeepaliveParams(keepalive.ServerParameters{
