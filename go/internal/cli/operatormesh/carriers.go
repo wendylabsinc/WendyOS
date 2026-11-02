@@ -96,7 +96,12 @@ func (s *Session) runCarriers(ctx context.Context) error {
 	return carriers.Run(ctx, s.carrierConfig())
 }
 
-func (s *Session) connectCandidate(ctx context.Context, candidate carriers.Candidate) error {
+func (s *Session) connectCandidate(ctx context.Context, candidate carriers.Candidate) (result error) {
+	defer func() {
+		if result != nil && ctx.Err() == nil && !errors.Is(result, carriers.ErrUnsupportedPeer) && s.options.ReportCarrierFailure != nil {
+			s.options.ReportCarrierFailure(candidate.Transport, result)
+		}
+	}()
 	var link *meshoperatorlink.RouterLink
 	seed := s.seedCandidate()
 	if candidate.Address == seed.Address && candidate.Transport == seed.Transport && candidate.PSM == seed.PSM {

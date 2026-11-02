@@ -189,7 +189,13 @@ func operatorManagementTarget(view *pb.LocalMeshTopology, adjacent, target meshi
 			Expires: hint.ExpiresAtUnixMs, Revision: hint.Revision, Platform: hint.Platform, Transport: hint.AgentTransport, Caps: append([]string(nil), hint.Caps...),
 			Address: net.JoinHostPort(target.MeshAddress().String(), strconv.Itoa(int(hint.AgentPort)))}, nil
 	}
-	return OperatorTargetInfo{}, status.Error(codes.Unavailable, "mesh target has no live authorized route and agent announcement")
+	if view.Truncated {
+		return OperatorTargetInfo{}, operatorUnavailable(operatorViewPartial, "the mesh observation is incomplete; target route availability is unknown")
+	}
+	if len(view.Peers) == 0 {
+		return OperatorTargetInfo{}, operatorUnavailable(operatorNoPeers, "the attached router has no authenticated peers; waiting for its first hop to reconnect")
+	}
+	return OperatorTargetInfo{}, operatorUnavailable(operatorTargetPending, "mesh target has no live authorized route and agent announcement yet")
 }
 func (r *operatorTargets) Resolve(ctx context.Context) (*grpc.ClientConn, func(), error) {
 	md, _ := metadata.FromIncomingContext(ctx)
@@ -310,7 +316,7 @@ func (r *operatorTargets) reporter() (meshid.Device, error) {
 	if r.localSnapshot != nil {
 		snapshot := r.localSnapshot()
 		if !snapshot.Self.IsValid() {
-			return meshid.Device{}, status.Error(codes.Unavailable, "local mesh participant is starting")
+			return meshid.Device{}, operatorUnavailable(operatorReconnecting, "the local operator router is starting or reconnecting")
 		}
 		return snapshot.Self, nil
 	}
