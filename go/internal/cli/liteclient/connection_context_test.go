@@ -113,6 +113,117 @@ func TestPKILANHandshakeCancellation(t *testing.T) {
 	}
 }
 
+func TestPKITLSFlightCanOutlastTCPBudget(t *testing.T) {
+	const tenant = "11111111-1111-4111-8111-111111111111"
+	root, rootKey := issueRelayCertificate(t, 1, "root", "", true, nil, nil)
+	operator, operatorKey := issueRelayCertificate(t, 2, "operator", "spiffe://wendy.sh/tenant/"+tenant+"/operator/22222222-2222-4222-8222-222222222222", false, root, rootKey)
+	device, deviceKey := issueRelayCertificate(t, 3, "device", "spiffe://wendy.sh/tenant/"+tenant+"/device/"+liteTestDevice, false, root, rootKey)
+	pair := tls.Certificate{Certificate: [][]byte{operator.Raw}, PrivateKey: operatorKey}
+	chain := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: root.Raw}))
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	cfg, err := deviceTLSConfig(ctx, pair, chain, liteTestDevice, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	completed := make(chan error, 1)
+	go func() {
+		raw, err := listener.Accept()
+		if err != nil {
+			completed <- err
+			return
+		}
+		defer raw.Close()
+		// The TCP connection is established immediately; emulate a slower
+		// certificate flight over radio after that separate phase completes.
+		select {
+		case <-time.After(150 * time.Millisecond):
+		case <-ctx.Done():
+			completed <- ctx.Err()
+			return
+		}
+		pool := x509.NewCertPool()
+		pool.AddCert(root)
+		server := tls.Server(raw, &tls.Config{MinVersion: tls.VersionTLS13,
+			Certificates: []tls.Certificate{{Certificate: [][]byte{device.Raw}, PrivateKey: deviceKey}},
+			ClientAuth:   tls.RequireAndVerifyClientCert, ClientCAs: pool})
+		completed <- server.HandshakeContext(ctx)
+	}()
+	conn, err := dialAuthenticatedTLS(ctx, listener.Addr().String(), cfg, 50*time.Millisecond, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if err := <-completed; err != nil {
+		t.Fatal(err)
+	}
+	if got := conn.ConnectionState().PeerCertificates[0]; !got.Equal(device) {
+		t.Fatal("wrong authenticated device")
+	}
+}
+
+// TLS1.3 client completion does not acknowledge that the server has finished
+// receiving and verifying the client's certificate flight over a slow radio.
+func TestPKIWendyComCanOutlastLocalHandshakeBudget(t *testing.T) {
+	const tenant = "11111111-1111-4111-8111-111111111111"
+	root, rootKey := issueRelayCertificate(t, 1, "root", "", true, nil, nil)
+	operator, operatorKey := issueRelayCertificate(t, 2, "operator", "spiffe://wendy.sh/tenant/"+tenant+"/operator/22222222-2222-4222-8222-222222222222", false, root, rootKey)
+	device, deviceKey := issueRelayCertificate(t, 3, "device", "spiffe://wendy.sh/tenant/"+tenant+"/device/"+liteTestDevice, false, root, rootKey)
+	pair := tls.Certificate{Certificate: [][]byte{operator.Raw}, PrivateKey: operatorKey}
+	chain := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: root.Raw}))
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	completed := make(chan error, 1)
+	go func() {
+		raw, err := listener.Accept()
+		if err != nil {
+			completed <- err
+			return
+		}
+		defer raw.Close()
+		pool := x509.NewCertPool()
+		pool.AddCert(root)
+		server := tls.Server(raw, &tls.Config{MinVersion: tls.VersionTLS13,
+			Certificates: []tls.Certificate{{Certificate: [][]byte{device.Raw}, PrivateKey: deviceKey}},
+			ClientAuth:   tls.RequireAndVerifyClientCert, ClientCAs: pool})
+		if err := server.HandshakeContext(ctx); err != nil {
+			completed <- err
+			return
+		}
+		link := newDirectLink(server)
+		request, err := link.recv(time.Second)
+		if err != nil {
+			completed <- err
+			return
+		}
+		select {
+		case <-time.After(3200 * time.Millisecond):
+		case <-ctx.Done():
+			completed <- ctx.Err()
+			return
+		}
+		completed <- link.send(request)
+	}()
+	client := NewWendyLiteClient()
+	defer client.Close()
+	if err := client.ConnectWithPKIAuthenticationContext(ctx, listener.Addr().String(), pair, chain, liteTestDevice, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-completed; err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestSensorTransportSetupContextCancellation(t *testing.T) {
 	const tenant = "11111111-1111-4111-8111-111111111111"
 	base := "spiffe://wendy.sh/tenant/" + tenant + "/device/"

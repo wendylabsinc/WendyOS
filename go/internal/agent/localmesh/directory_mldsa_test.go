@@ -45,7 +45,7 @@ func TestMLDSADeviceManifestAdmission(t *testing.T) {
 				t.Fatal("accepted altered ML-DSA signature")
 			}
 			bad = proof
-			bad.Body = bytes.Replace(proof.Body, []byte("UNO Q"), []byte("forged"), 1)
+			bad.Body = bytes.Replace(proof.Body, []byte("UNO Q"), []byte("WRONG"), 1)
 			if _, err := directory.Accept(bad, now); err == nil {
 				t.Fatal("accepted altered ML-DSA body")
 			}
@@ -60,7 +60,7 @@ func TestMLDSADeviceManifestAdmission(t *testing.T) {
 			if changed, err := directory.Accept(proof, now); err != nil || changed {
 				t.Fatalf("duplicate: changed=%v err=%v", changed, err)
 			}
-			if _, err := directory.Accept(proof, now.Add(3*time.Minute)); err == nil {
+			if _, err := directory.Accept(proof, now.Add(MaxLease+time.Second)); err == nil {
 				t.Fatal("accepted expired ML-DSA manifest")
 			}
 		})

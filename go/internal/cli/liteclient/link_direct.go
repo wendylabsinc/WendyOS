@@ -385,15 +385,45 @@ func (l *directLink) send(req *wendypb.WendyComMessage) error {
 }
 
 func (l *directLink) recv(timeout time.Duration) (*wendypb.WendyComMessage, error) {
-	raw, err := l.readRawMessage(timeout)
-	if err != nil {
-		return nil, err
+	deadline := readDeadline(timeout)
+	for {
+		remaining, err := remainingReadTime(deadline)
+		if err != nil {
+			return nil, err
+		}
+		raw, err := l.readRawMessage(remaining)
+		if err != nil {
+			return nil, err
+		}
+		msg := &wendypb.WendyComMessage{}
+		if err := proto.Unmarshal(raw, msg); err != nil {
+			return nil, fmt.Errorf("unmarshal: %w", err)
+		}
+		// A future oneof variant is an unknown protobuf field, so Msg stays
+		// nil. Discard it before handshake/response matching, without giving
+		// each extension frame a fresh receive deadline.
+		if msg.GetMsg() != nil {
+			return msg, nil
+		}
 	}
-	msg := &wendypb.WendyComMessage{}
-	if err := proto.Unmarshal(raw, msg); err != nil {
-		return nil, fmt.Errorf("unmarshal: %w", err)
+}
+
+func readDeadline(timeout time.Duration) time.Time {
+	if timeout > 0 {
+		return time.Now().Add(timeout)
 	}
-	return msg, nil
+	return time.Time{}
+}
+
+func remainingReadTime(deadline time.Time) (time.Duration, error) {
+	if deadline.IsZero() {
+		return 0, nil
+	}
+	remaining := time.Until(deadline)
+	if remaining <= 0 {
+		return 0, fmt.Errorf("read timeout")
+	}
+	return remaining, nil
 }
 
 func (l *directLink) preferredChunkSize() int {
@@ -493,9 +523,17 @@ func (l *directLink) startCloseWatchdog() (stop func()) {
 // and returns its raw body. Frames on a non-zero category or channel are
 // consumed and discarded. A timeout <= 0 means no deadline.
 func (l *directLink) readRawMessage(timeout time.Duration) ([]byte, error) {
+	deadline := readDeadline(timeout)
+	read := func(data []byte) error {
+		remaining, err := remainingReadTime(deadline)
+		if err != nil {
+			return err
+		}
+		return l.readFull(data, remaining)
+	}
 	for {
 		header := make([]byte, headerSize)
-		if err := l.readFull(header, timeout); err != nil {
+		if err := read(header); err != nil {
 			return nil, fmt.Errorf("reading header: %w", err)
 		}
 		if header[0] != headerMagic {
@@ -505,11 +543,11 @@ func (l *directLink) readRawMessage(timeout time.Duration) ([]byte, error) {
 			return nil, fmt.Errorf("unexpected protocol version: 0x%02X", header[1])
 		}
 		bodyLen := binary.BigEndian.Uint16(header[6:8])
-		if bodyLen == 0 {
+		if bodyLen == 0 && header[2] == 0 && header[3] == 0 {
 			return nil, fmt.Errorf("invalid frame: zero-length body")
 		}
 		body := make([]byte, bodyLen)
-		if err := l.readFull(body, timeout); err != nil {
+		if err := read(body); err != nil {
 			return nil, fmt.Errorf("reading body: %w", err)
 		}
 		if header[2] != 0 || header[3] != 0 {

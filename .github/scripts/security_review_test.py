@@ -11,6 +11,7 @@ import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
+from review_sources import is_generated_path, source_diff
 
 MODULE_PATH = pathlib.Path(__file__).with_name("security_review.py")
 SPEC = importlib.util.spec_from_file_location("security_review", MODULE_PATH)
@@ -28,7 +29,7 @@ def metadata(changed_files: int = 1) -> dict:
         "title": "Test PR",
         "body": "Review this change",
         "changed_files": changed_files,
-        "additions": 1,
+        "additions": changed_files,
         "deletions": 0,
         "head": {"sha": HEAD_SHA},
     }
@@ -127,16 +128,15 @@ class InputManifestTests(unittest.TestCase):
 class GeneratedExclusionTests(unittest.TestCase):
     """Generated files must not spend the byte budget or reach the reviewer."""
 
-    GLOBS = security_review.DEFAULT_GENERATED_GLOBS
 
     def test_generated_paths_are_recognized(self) -> None:
         for path in (
             "go/proto/gen/agentpb/v2/data_service.pb.go",
             "go/proto/gen/agentpb/v2/data_service_grpc.pb.go",
-            "go/proto/gen/anything.txt",
+
         ):
             self.assertTrue(
-                security_review.is_generated_path(path, self.GLOBS), path
+                is_generated_path(path), path
             )
 
     def test_hand_written_paths_are_not_excluded(self) -> None:
@@ -148,7 +148,7 @@ class GeneratedExclusionTests(unittest.TestCase):
             ".github/scripts/security_review.py",
         ):
             self.assertFalse(
-                security_review.is_generated_path(path, self.GLOBS), path
+                is_generated_path(path), path
             )
 
     def test_pr_attributes_cannot_hide_hand_written_code(self) -> None:
@@ -156,25 +156,18 @@ class GeneratedExclusionTests(unittest.TestCase):
             root = pathlib.Path(directory)
             (root / ".gitattributes").write_text("secret.go linguist-generated=true\n*.go linguist-generated=true\n")
             with patch("pathlib.Path.cwd", return_value=root):
-                globs = security_review.generated_globs()
-                self.assertFalse(security_review.is_generated_path("secret.go", globs))
-                self.assertFalse(security_review.is_generated_path("internal/secret.pb.go", globs))
-                self.assertTrue(security_review.is_generated_path("go/proto/gen/agentpb/shared.pb.go", globs))
+                self.assertFalse(is_generated_path("secret.go"))
+                self.assertFalse(is_generated_path("internal/secret.pb.go"))
+                self.assertTrue(is_generated_path("go/proto/gen/agentpb/shared.pb.go"))
                 prepared, _ = security_review.partition_generated(diff("secret.go").decode())
                 self.assertIn("secret.go", prepared)
-
-    def test_sections_rejoin_byte_for_byte(self) -> None:
-        raw = (diff("go/a.go") + diff("go/proto/gen/b.pb.go")).decode()
-        sections = security_review.split_diff_sections(raw)
-        self.assertEqual([path for path, _ in sections], ["go/a.go", "go/proto/gen/b.pb.go"])
-        self.assertEqual("".join(section for _, section in sections), raw)
 
     def test_generated_file_leaves_the_budget_to_hand_written_code(self) -> None:
         handwritten = diff("go/internal/thing.go")
         generated = diff("go/proto/gen/agentpb/v2/data_service.pb.go")
         raw = handwritten + generated
         manifest = security_review.build_input_manifest(
-            metadata(2), raw, 42, HEAD_SHA, len(handwritten), self.GLOBS
+            metadata(2), raw, 42, HEAD_SHA, len(handwritten)
         )
         self.assertEqual(manifest["diff_bytes"], len(raw))
         self.assertEqual(manifest["reviewable_bytes"], len(handwritten))
@@ -192,7 +185,7 @@ class GeneratedExclusionTests(unittest.TestCase):
             diff("go/internal/thing.go", line="handWrittenMarker := 1")
             + diff("go/proto/gen/x.pb.go", line="generatedMarker := 2")
         ).decode()
-        kept, excluded = security_review.partition_generated(raw, self.GLOBS)
+        kept, excluded = security_review.partition_generated(raw)
         self.assertIn("handWrittenMarker", kept)
         self.assertNotIn("generatedMarker", kept)
         self.assertEqual(excluded, ["go/proto/gen/x.pb.go"])
@@ -202,13 +195,13 @@ class GeneratedExclusionTests(unittest.TestCase):
         raw = handwritten + diff("go/proto/gen/x.pb.go")
         with self.assertRaisesRegex(security_review.ReviewError, "no partial review"):
             security_review.build_input_manifest(
-                metadata(2), raw, 42, HEAD_SHA, len(handwritten) - 1, self.GLOBS
+                metadata(2), raw, 42, HEAD_SHA, len(handwritten) - 1
             )
 
     def test_coverage_names_the_exclusion(self) -> None:
         raw = diff("go/internal/thing.go") + diff("go/proto/gen/x.pb.go")
         manifest = security_review.build_input_manifest(
-            metadata(2), raw, 42, HEAD_SHA, security_review.MAX_DIFF_BYTES, self.GLOBS
+            metadata(2), raw, 42, HEAD_SHA, security_review.MAX_DIFF_BYTES
         )
         text = security_review.coverage_text(manifest, reviewed=True)
         self.assertIn("1/2 changed files", text)

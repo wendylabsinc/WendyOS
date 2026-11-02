@@ -9,14 +9,15 @@ import (
 	"time"
 
 	"github.com/godbus/dbus/v5"
+	"github.com/wendylabsinc/wendy/go/internal/agent/btradio"
 )
 
 const advertisementRefreshInterval = time.Second
 
 // Connecting consumes a connectable advertising set on some controllers. BlueZ
 // refreshes its existing client instance on ServiceData PropertiesChanged, even
-// when the value is unchanged. Request only after an inbound peer authenticates
-// and is admitted; failed TLS attempts already close their connection.
+// when the value is unchanged. Refresh admitted links and authenticated inbound
+// disconnects, including links declined because a cheaper LAN path exists.
 func (r *runtime) requestAdvertisementRefresh() {
 	select {
 	case r.advertisementRefresh <- struct{}{}:
@@ -89,23 +90,25 @@ func boundedAdvertisementEmit(ctx context.Context, emit func() error, closeBus f
 	}
 }
 
-func refreshOwnedAdvertisement(ctx context.Context, bus *dbus.Conn, closeTransport func() error, owner, uuid string, payload []byte) error {
+func refreshOwnedAdvertisement(ctx context.Context, bus *dbus.Conn, closeTransport func() error, owner, uuid string, snapshot func() ([]byte, error)) error {
 	query, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 	// No registration, power, interval, or other exported property is changed.
 	// BlueZ watches this exact sender/path; other clients' instances are untouched.
-	changed := map[string]dbus.Variant{"ServiceData": dbus.MakeVariant(map[string]dbus.Variant{uuid: dbus.MakeVariant(payload)})}
-	return boundedAdvertisementEmit(query, func() error {
-		current, err := bluezOwner(query, bus)
-		if err != nil {
-			return err
-		}
-		if err := verifyBlueZOwner(owner, current); err != nil {
-			return err
-		}
-		if err := query.Err(); err != nil {
-			return err
-		}
-		return bus.Emit(advertPath, "org.freedesktop.DBus.Properties.PropertiesChanged", advertInterface, changed, []string{})
-	}, closeTransport)
+	return btradio.WithAdvertisementSnapshot(query, snapshot, func(payload []byte) error {
+		changed := map[string]dbus.Variant{"ServiceData": dbus.MakeVariant(map[string]dbus.Variant{uuid: dbus.MakeVariant(payload)})}
+		return boundedAdvertisementEmit(query, func() error {
+			current, err := bluezOwner(query, bus)
+			if err != nil {
+				return err
+			}
+			if err := verifyBlueZOwner(owner, current); err != nil {
+				return err
+			}
+			if err := query.Err(); err != nil {
+				return err
+			}
+			return bus.Emit(advertPath, "org.freedesktop.DBus.Properties.PropertiesChanged", advertInterface, changed, []string{})
+		}, closeTransport)
+	})
 }
