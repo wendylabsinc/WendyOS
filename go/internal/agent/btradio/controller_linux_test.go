@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"testing"
+	"time"
 )
 
 func complete(op uint16, data ...byte) []byte {
@@ -216,5 +217,192 @@ func TestEnhancedPowerReadbackUsesCodedPreference(t *testing.T) {
 	links := LinkStatus(context.Background(), "/org/bluez/hci0")
 	if len(links) != 1 || links[0].GetCurrentDbm() != 6 || links[0].GetMaximumDbm() != 6 || links[0].Error != "" {
 		t.Fatal(links)
+	}
+}
+
+// Pause controller admission so a newer policy can finish before a queued link
+// submits its first HCI command.
+type controllerAdmissionContext struct {
+	context.Context
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (c controllerAdmissionContext) Deadline() (time.Time, bool) {
+	close(c.entered)
+	<-c.release
+	return c.Context.Deadline()
+}
+
+func TestMeshLinkTuneReadsPolicyAfterControllerAdmission(t *testing.T) {
+	resetPolicy(t)
+	if err := SetRadio(context.Background(), nil, "coded-s2"); err != nil {
+		t.Fatal(err)
+	}
+	var selected byte
+	fakeController(t, func(p []byte) [][]byte {
+		op := binary.LittleEndian.Uint16(p[1:3])
+		if op == 0x2032 {
+			selected = p[7]
+			return [][]byte{{4, 15, 4, 0, 1, 0x32, 0x20}}
+		}
+		if op == 0x2030 {
+			phy := byte(1)
+			if selected == 4 {
+				phy = 3
+			}
+			return [][]byte{complete(op, 7, 0, phy, phy)}
+		}
+		t.Fatal(op)
+		return nil
+	})
+	ctx := controllerAdmissionContext{Context: context.Background(), entered: make(chan struct{}), release: make(chan struct{})}
+	done := make(chan error, 1)
+	go func() { done <- TuneMeshLink(ctx, "/org/bluez/hci0", 7) }()
+	<-ctx.entered
+	if err := SetRadio(context.Background(), nil, "normal"); err != nil {
+		close(ctx.release)
+		<-done
+		t.Fatal(err)
+	}
+	close(ctx.release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if selected != 1 {
+		t.Fatalf("queued link applied superseded policy: TX PHY mask=%d, saved mode=normal", selected)
+	}
+}
+
+// Model the exact incoming/outgoing admission order where raw CoC establishment
+// predates a profile change but TrackMeshLink executes after its tracked pass.
+func TestLateCodedLinkAdmissionObservesCompletedNormalProfile(t *testing.T) {
+	resetPolicy(t)
+	adapter := "/org/bluez/hci0"
+	if err := SetRadio(context.Background(), nil, "coded-s2"); err != nil {
+		t.Fatal(err)
+	}
+	selected := uint32(0x7fff)
+	observed := byte(3) // established raw CoC was Coded before the normal RPC
+	fakeController(t, func(p []byte) [][]byte {
+		mgmt := binary.LittleEndian.Uint16(p)
+		if mgmt == 0x44 {
+			data := make([]byte, 12)
+			binary.LittleEndian.PutUint32(data, 0x7fff)
+			binary.LittleEndian.PutUint32(data[4:], 0x79fe)
+			binary.LittleEndian.PutUint32(data[8:], selected)
+			return [][]byte{managementReply(mgmt, data)}
+		}
+		if mgmt == 0x45 {
+			selected = binary.LittleEndian.Uint32(p[6:])
+			return [][]byte{managementReply(mgmt, nil)}
+		}
+		op := binary.LittleEndian.Uint16(p[1:3])
+		switch op {
+		case 0x2032:
+			if p[7] == 1 {
+				observed = 1
+			} else {
+				observed = 3
+			}
+			return [][]byte{{4, 15, 4, 0, 1, 0x32, 0x20}}
+		case 0x2030:
+			return [][]byte{complete(op, 7, 0, observed, observed)}
+		}
+		t.Fatal(op)
+		return nil
+	})
+	// Set normal has finished its existing-link pass; this raw CoC is not tracked yet.
+	if err := SetRadioAndApply(context.Background(), nil, "normal", func(ctx context.Context) error {
+		if err := ApplyMeshPHY(ctx, adapter, "normal"); err != nil {
+			return err
+		}
+		return ApplyTrackedMeshPHY(ctx, adapter)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if selected&codedPHYMask != 0 {
+		t.Fatal("normal controller PHYs were not applied")
+	}
+	untrack, err := TrackAndTuneMeshLink(context.Background(), adapter, 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer untrack()
+	if observed != 1 {
+		t.Fatalf("late admitted link remains on Coded PHY=%d after completed normal policy", observed)
+	}
+}
+
+func TestNormalLinkAdmissionPreservesDefaultAndLegacyControllers(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		configured bool
+		status     byte
+		wantError  bool
+	}{
+		{name: "fresh default"},
+		{name: "legacy unknown PHY command", configured: true, status: 0x01},
+		{name: "no configurable Coded PHY", configured: true},
+		{name: "capability failure is visible", configured: true, status: 0x0a, wantError: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resetPolicy(t)
+			meshLinks = map[string]map[uint16]int{}
+			if tc.configured {
+				if err := SetRadio(context.Background(), nil, "normal"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			commands := 0
+			fakeController(t, func(p []byte) [][]byte {
+				commands++
+				if !tc.configured || binary.LittleEndian.Uint16(p) != 0x44 {
+					t.Fatalf("normal admission submitted unsupported controller command: %x", p)
+				}
+				data := make([]byte, 12)
+				response := managementReply(0x44, data)
+				response[8] = tc.status
+				return [][]byte{response}
+			})
+			untrack, err := TrackAndTuneMeshLink(context.Background(), "/org/bluez/hci0", 7)
+			if tc.wantError {
+				if err == nil || untrack != nil || len(meshLinks["/org/bluez/hci0"]) != 0 {
+					t.Fatalf("failed admission leaked ownership: untrack=%t err=%v links=%v", untrack != nil, err, meshLinks)
+				}
+				return
+			}
+			if err != nil || untrack == nil {
+				t.Fatalf("normal admission failed: %v", err)
+			}
+			untrack()
+			if !tc.configured && commands != 0 {
+				t.Fatal("fresh default required PHY I/O")
+			}
+		})
+	}
+}
+
+func TestFailedCodedLinkAdmissionReleasesTracking(t *testing.T) {
+	resetPolicy(t)
+	meshLinks = map[string]map[uint16]int{}
+	if err := SetRadio(context.Background(), nil, "coded-s8"); err != nil {
+		t.Fatal(err)
+	}
+	fakeController(t, func(p []byte) [][]byte { return [][]byte{{4, 15, 4, 0x11, 1, 0x32, 0x20}} })
+	untrack, err := TrackAndTuneMeshLink(context.Background(), "/org/bluez/hci0", 7)
+	if err == nil || untrack != nil || len(meshLinks["/org/bluez/hci0"]) != 0 {
+		t.Fatalf("failed coded admission leaked ownership: untrack=%t err=%v links=%v", untrack != nil, err, meshLinks)
+	}
+}
+
+func TestCanceledDefaultLinkAdmissionDoesNotAcquireTracking(t *testing.T) {
+	resetPolicy(t)
+	meshLinks = map[string]map[uint16]int{}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	untrack, err := TrackAndTuneMeshLink(ctx, "/org/bluez/hci0", 7)
+	if !errors.Is(err, context.Canceled) || untrack != nil || len(meshLinks["/org/bluez/hci0"]) != 0 {
+		t.Fatalf("canceled default admission acquired ownership: untrack=%t err=%v links=%v", untrack != nil, err, meshLinks)
 	}
 }

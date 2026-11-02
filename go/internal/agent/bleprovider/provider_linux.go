@@ -445,20 +445,20 @@ func (r *runtime) makeServerTLS() *tls.Config {
 
 func (r *runtime) acceptLink(ctx context.Context, raw net.Conn) {
 	defer raw.Close()
-	if mode, _ := btradio.MeshMode(); mode != "normal" {
-		handle, err := meshACLHandle(raw)
+	// Track before choosing whether to tune: a concurrent profile change must
+	// either include this handle or be observed by this incoming link.
+	handle, handleErr := meshACLHandle(raw)
+	if mode, _ := btradio.MeshMode(); mode != "normal" && handleErr != nil {
+		r.cfg.Logger.Warn("BLE radio handle unavailable", zap.Error(handleErr))
+		return
+	}
+	if handleErr == nil {
+		adapter := fmt.Sprintf("/org/bluez/hci%d", r.hciIndex)
+		untrack, err := btradio.TrackAndTuneMeshLink(ctx, adapter, handle)
 		if err != nil {
-			r.cfg.Logger.Warn("BLE radio handle unavailable", zap.Error(err))
+			r.cfg.Logger.Warn("BLE PHY setup failed", zap.Error(err))
 			return
 		}
-		untrack := btradio.TrackMeshLink(fmt.Sprintf("/org/bluez/hci%d", r.hciIndex), handle)
-		defer untrack()
-		if err := btradio.TuneMeshLink(ctx, fmt.Sprintf("/org/bluez/hci%d", r.hciIndex), handle); err != nil {
-			r.cfg.Logger.Warn("BLE coded PHY setup failed", zap.Error(err))
-			return
-		}
-	} else if handle, err := meshACLHandle(raw); err == nil {
-		untrack := btradio.TrackMeshLink(fmt.Sprintf("/org/bluez/hci%d", r.hciIndex), handle)
 		defer untrack()
 	}
 	key := fmt.Sprintf("incoming:%p", raw)
@@ -818,14 +818,12 @@ func (r *runtime) dialLink(ctx context.Context, peer candidate) {
 		return
 	}
 	if handleErr == nil {
-		untrack := btradio.TrackMeshLink(fmt.Sprintf("/org/bluez/hci%d", r.hciIndex), aclHandle)
-		defer untrack()
-		if mode, _ := btradio.MeshMode(); mode != "normal" {
-			if err := btradio.TuneMeshLink(ctx, fmt.Sprintf("/org/bluez/hci%d", r.hciIndex), aclHandle); err != nil {
-				r.cfg.Logger.Warn("BLE coded PHY setup failed", zap.Error(err))
-				return
-			}
+		untrack, err := btradio.TrackAndTuneMeshLink(ctx, fmt.Sprintf("/org/bluez/hci%d", r.hciIndex), aclHandle)
+		if err != nil {
+			r.cfg.Logger.Warn("BLE PHY setup failed", zap.Error(err))
+			return
 		}
+		defer untrack()
 	}
 	stopWatch := watchLinkContext(ctx, raw)
 	defer stopWatch()

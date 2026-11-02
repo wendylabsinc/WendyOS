@@ -144,22 +144,25 @@ func (m *BlueZManager) ConfigureBluetoothRadio(ctx context.Context, req *pb.Conf
 		}
 	}
 	if req.Advertising != nil || req.MeshMode != "" {
-		if err := btradio.SetRadio(ctx, req.Advertising, req.MeshMode); err != nil {
+		if err := btradio.SetRadioAndApply(ctx, req.Advertising, req.MeshMode, func(ctx context.Context) error {
+			if req.MeshMode == "" {
+				return nil
+			}
+			if err := btradio.ApplyMeshPHY(ctx, s.Adapter, req.MeshMode); err != nil {
+				return fmt.Errorf("profile PHY application failed: %w", err)
+			}
+			if req.MeshMode != "normal" || slices.Contains(s.SupportedMeshModes, "coded-s2") {
+				if err := btradio.ApplyTrackedMeshPHY(ctx, s.Adapter); err != nil {
+					return fmt.Errorf("link PHY application failed: %w", err)
+				}
+			}
+			return nil
+		}); err != nil {
 			var applied *btradio.ApplyError
 			if errors.As(err, &applied) {
 				return nil, status.Error(codes.Internal, err.Error())
 			}
 			return nil, status.Error(codes.Internal, fmt.Sprintf("Saving Bluetooth policy failed: %v", err))
-		}
-	}
-	if req.MeshMode != "" {
-		if err := btradio.ApplyMeshPHY(ctx, s.Adapter, req.MeshMode); err != nil {
-			return nil, status.Errorf(codes.Internal, "profile saved but PHY application failed: %v", err)
-		}
-		if req.MeshMode != "normal" || slices.Contains(s.SupportedMeshModes, "coded-s2") {
-			if err := btradio.ApplyTrackedMeshPHY(ctx, s.Adapter); err != nil {
-				return nil, status.Errorf(codes.Internal, "profile saved but link PHY application failed: %v", err)
-			}
 		}
 	}
 	return m.BluetoothRadio(ctx)

@@ -2,9 +2,11 @@ package btradio
 
 import (
 	"context"
+	"errors"
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	pb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	"path/filepath"
@@ -151,5 +153,64 @@ func TestPowerOnlyPolicyDoesNotSelectMeshPHY(t *testing.T) {
 	}
 	if mode, _ := MeshMode(); mode != "normal" {
 		t.Fatal(mode)
+	}
+}
+
+func TestRadioEffectsCannotBeOvertakenByNewPolicy(t *testing.T) {
+	resetPolicy(t)
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	first := make(chan error, 1)
+	second := make(chan error, 1)
+	var liveMode string
+	go func() {
+		first <- SetRadioAndApply(context.Background(), nil, "coded-s2", func(context.Context) error {
+			close(entered)
+			<-release
+			liveMode = "coded-s2"
+			return nil
+		})
+	}()
+	<-entered
+	started := make(chan struct{})
+	go func() {
+		close(started)
+		second <- SetRadioAndApply(context.Background(), nil, "normal", func(context.Context) error {
+			liveMode = "normal"
+			return nil
+		})
+	}()
+	<-started
+	var overtook bool
+	select {
+	case <-second:
+		overtook = true
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(release)
+	if err := <-first; err != nil {
+		t.Fatal(err)
+	}
+	if !overtook {
+		if err := <-second; err != nil {
+			t.Fatal(err)
+		}
+	}
+	mode, err := MeshMode()
+	if overtook || err != nil || mode != "normal" || liveMode != mode {
+		t.Fatalf("new policy overtook pending effects: overtook=%t saved=%s live=%s err=%v", overtook, mode, liveMode, err)
+	}
+}
+
+func TestRadioEffectFailureRetainsSavedIntent(t *testing.T) {
+	resetPolicy(t)
+	failure := errors.New("controller rejected PHY")
+	err := SetRadioAndApply(context.Background(), nil, "coded-s8", func(context.Context) error { return failure })
+	var applied *ApplyError
+	if !errors.As(err, &applied) || !errors.Is(err, failure) {
+		t.Fatalf("effect failure lost saved-policy semantics: %v", err)
+	}
+	if mode, err := MeshMode(); err != nil || mode != "coded-s8" {
+		t.Fatal(mode, err)
 	}
 }

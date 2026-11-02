@@ -5,6 +5,7 @@ package btradio
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"sort"
 	"strconv"
@@ -221,6 +222,8 @@ func hciCommand(ctx context.Context, io *controllerIO, opcode uint16, data []byt
 
 const codedPHYMask = uint32(1<<13 | 1<<14)
 
+var errCodedPHYUnavailable = errors.New("controller does not expose configurable Coded TX/RX PHYs")
+
 func CodedPHYAvailable(ctx context.Context, adapter string) error {
 	return withController(ctx, adapter, true, func(ctx context.Context, io *controllerIO) error {
 		index, _ := adapterIndex(adapter)
@@ -232,7 +235,7 @@ func CodedPHYAvailable(ctx context.Context, adapter string) error {
 			return fmt.Errorf("invalid PHY capability response")
 		}
 		if binary.LittleEndian.Uint32(data)&binary.LittleEndian.Uint32(data[4:])&codedPHYMask != codedPHYMask {
-			return fmt.Errorf("controller does not expose configurable Coded TX/RX PHYs")
+			return errCodedPHYUnavailable
 		}
 		return nil
 	})
@@ -263,7 +266,7 @@ func ApplyMeshPHY(ctx context.Context, adapter, mode string) error {
 			next &^= codedPHYMask
 		} else {
 			if supported&configurable&codedPHYMask != codedPHYMask {
-				return fmt.Errorf("controller does not expose configurable Coded TX/RX PHYs")
+				return errCodedPHYUnavailable
 			}
 			next |= codedPHYMask
 		}
@@ -285,11 +288,13 @@ func ApplyMeshPHY(ctx context.Context, adapter, mode string) error {
 	})
 }
 func TuneMeshLink(ctx context.Context, adapter string, handle uint16) error {
-	mode, err := MeshMode()
-	if err != nil {
-		return err
-	}
 	return withController(ctx, adapter, false, func(ctx context.Context, io *controllerIO) error {
+		// Read intent only after controller admission. A profile change may
+		// have completed while this new link was queued behind another command.
+		mode, err := MeshMode()
+		if err != nil {
+			return err
+		}
 		phy := byte(1)
 		options := uint16(0)
 		if mode != "normal" {
@@ -353,6 +358,47 @@ func TrackMeshLink(adapter string, handle uint16) func() {
 		})
 	}
 }
+
+// TrackAndTuneMeshLink admits a new CoC into profile reconciliation. Tracking
+// first ensures a concurrent profile update either includes this handle or is
+// observed here. An explicitly selected normal profile also reconciles a CoC
+// established on Coded before the update's tracked-link pass.
+func TrackAndTuneMeshLink(ctx context.Context, adapter string, handle uint16) (func(), error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	untrack := TrackMeshLink(adapter, handle)
+	if err := tuneAdmittedMeshLink(ctx, adapter, handle); err != nil {
+		untrack()
+		return nil, err
+	}
+	return untrack, nil
+}
+
+func tuneAdmittedMeshLink(ctx context.Context, adapter string, handle uint16) error {
+	mode, err := MeshMode()
+	if err != nil {
+		return err
+	}
+	if mode == "normal" {
+		// Fresh default operation must not require PHY controls. Explicit normal
+		// reconciles capable controllers, while legacy/no-Coded adapters retain
+		// their existing operation without submitting unsupported HCI commands.
+		if !MeshModeConfigured() {
+			return nil
+		}
+		if err := CodedPHYAvailable(ctx, adapter); err != nil {
+			var rejected *managementError
+			if errors.Is(err, errCodedPHYUnavailable) ||
+				(errors.As(err, &rejected) && rejected.status == 0x01) {
+				return nil
+			}
+			return err
+		}
+	}
+	return TuneMeshLink(ctx, adapter, handle)
+}
+
 func ApplyTrackedMeshPHY(ctx context.Context, adapter string) error {
 	// Hold the registration through submission so an unregistered owner is not tuned.
 	linksMu.Lock()

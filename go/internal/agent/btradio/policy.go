@@ -249,6 +249,12 @@ func Set(ctx context.Context, p *pb.BluetoothPowerSetting) error {
 // SetRadio patches power and mesh profile together, retaining the legacy power
 // file shape so existing saved policies remain readable.
 func SetRadio(ctx context.Context, p *pb.BluetoothPowerSetting, mode string) error {
+	return SetRadioAndApply(ctx, p, mode, nil)
+}
+
+// SetRadioAndApply keeps controller and link effects in the same transaction as
+// saved intent and advertisement updates. A newer policy cannot overtake apply.
+func SetRadioAndApply(ctx context.Context, p *pb.BluetoothPowerSetting, mode string, apply func(context.Context) error) error {
 	changes.Lock()
 	defer changes.Unlock()
 	if err := ctx.Err(); err != nil {
@@ -329,6 +335,11 @@ func SetRadio(ctx context.Context, p *pb.BluetoothPowerSetting, mode string) err
 	}
 	if err := errors.Join(failures...); err != nil {
 		return &ApplyError{Err: err}
+	}
+	if apply != nil {
+		if err := apply(ctx); err != nil {
+			return &ApplyError{Err: err}
+		}
 	}
 	return nil
 }
