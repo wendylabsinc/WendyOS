@@ -800,7 +800,19 @@ func (s *Synchronizer) pruneSupersededPending(now time.Time) {
 		if !superseded && active && m.Revision <= current.manifest.Revision {
 			// A transient identity-cache miss still needs its existing repair
 			// path. Do not discard that retry merely because bytes are cached.
-			_, superseded = d.currentEntryChain(key, current, now)
+			chain, verified := d.currentEntryChain(key, current, now)
+			superseded = verified
+			if verified && m.Revision == current.manifest.Revision && manifestHash(w.Body) == current.hash {
+				// A current old-key signature does not supersede an exact
+				// same-body re-sign awaiting its advertised replacement chain.
+				// Retain only that original bounded renewal continuation.
+				if renewal, waiting := s.pendingRenewals[key]; waiting && renewal.fetchUntil.After(now) && renewal.expires.After(now) && s.certificates != nil {
+					active, _, fetching := s.certificates.PendingChain(w.Principal, now)
+					if fetching && sameCertificateDescription(renewal.chain, active) && !matchesCertificateDescription(chain, renewal.chain) {
+						superseded = false
+					}
+				}
+			}
 		}
 		if superseded {
 			obsolete = append(obsolete, key)

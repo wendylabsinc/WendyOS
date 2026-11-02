@@ -125,3 +125,53 @@ func TestCompactWatermarkDropsOlderPendingAfterCurrentPayloadExpires(t *testing.
 		t.Fatal("authenticated compact watermark left older payload repair buffered")
 	}
 }
+
+func TestActiveOldSignaturePreservesBoundedSameBodyRenewal(t *testing.T) {
+	for _, action := range []string{"complete", "higher-revision", "expire"} {
+		t.Run(action, func(t *testing.T) {
+			now := time.Now().Truncate(time.Second)
+			d, old, renewed, installRenewed := routeRenewalDirectory(t, now, false)
+			m := routeManifest(old.Device, now)
+			wire := signRenewedRoute(t, m, old, now)
+			if _, err := d.Accept(wire, now); err != nil {
+				t.Fatal(err)
+			}
+			before, receipt := d.entries[wire.ownerKey()], d.history[wire.ownerKey()]
+			s := NewSynchronizer(d, d.cache)
+			defer s.Close()
+			if _, _, err := s.Receive(ControlMessage{Kind: "certificate", Certificate: DescribeCertificates(wire.Principal, renewed.Certificate.Certificate)}, now); err != nil || !s.certificates.Pending() {
+				t.Fatal("fixture did not start advertised replacement chain", err)
+			}
+			resigned := signRenewedRoute(t, m, renewed, now)
+			if _, changed, err := s.Receive(ControlMessage{Kind: "manifest", Manifest: &resigned}, now); err != nil || len(changed) != 0 {
+				t.Fatal("replacement signature did not await its exact chain", err)
+			}
+			s.Sweep(now)
+			if len(s.pending) != 1 || len(s.pendingRenewals) != 1 || !s.certificates.Pending() {
+				t.Fatal("active old signature erased bounded same-body key renewal")
+			}
+			switch action {
+			case "complete":
+				installRenewed(now.Add(time.Second))
+				if _, changed, err := s.ContinueCertificates(now.Add(time.Second)); err != nil || len(changed) != 1 {
+					t.Fatal("preserved replacement signature did not complete", err)
+				}
+				if d.entries[wire.ownerKey()].activeUntil != before.activeUntil || d.history[wire.ownerKey()] != receipt {
+					t.Fatal("same-body renewal extended admitted lease or watermark")
+				}
+			case "higher-revision":
+				m.Revision++
+				current := signRenewedRoute(t, m, old, now)
+				if _, err := d.Accept(current, now); err != nil {
+					t.Fatal(err)
+				}
+				s.Sweep(now)
+			case "expire":
+				s.Sweep(s.pendingDeadlines[wire.ownerKey()])
+			}
+			if len(s.pending) != 0 || len(s.pendingRenewals) != 0 || len(s.pendingDeadlines) != 0 || s.certificates.Pending() {
+				t.Fatal("completed/superseded/expired key renewal retained payload repair")
+			}
+		})
+	}
+}
