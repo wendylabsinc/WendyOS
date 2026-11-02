@@ -11,6 +11,7 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
+	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
@@ -158,7 +159,7 @@ func newDriversInstallCmd() *cobra.Command {
 				}
 			} else {
 				// Manifest: resolve for the device's OS + kernel, pin the resolved
-				// digest + signature, and let the agent fetch the .raw from the URL.
+				// digest + signature. Isolated devices receive the bytes over gRPC.
 				deviceType, dl, err := deviceDriverCoords(ctx, target)
 				if err != nil {
 					return err
@@ -173,7 +174,7 @@ func newDriversInstallCmd() *cobra.Command {
 				}
 				cliLogln("Resolved %s %s for kernel %s", e.Name, e.Version, e.KernelVersion)
 			}
-			return installDriver(ctx, target.Agent.DriverService, spec, filePath)
+			return installDriver(ctx, target.Agent, spec, filePath)
 		},
 	}
 
@@ -203,8 +204,16 @@ func publishedDriverSpec(e extensionEntry) (*agentpbv2.DriverSpec, error) {
 	}, nil
 }
 
-func installDriver(ctx context.Context, client agentpbv2.WendyDriverServiceClient, spec *agentpbv2.DriverSpec, filePath string) error {
-	stream, err := client.InstallDriver(ctx)
+func installDriver(ctx context.Context, conn *grpcclient.AgentConnection, spec *agentpbv2.DriverSpec, filePath string) error {
+	if filePath == "" {
+		prepared, path, cleanup, err := prepareDriverUpload(ctx, conn, spec)
+		if err != nil {
+			return err
+		}
+		defer cleanup()
+		spec, filePath = prepared, path
+	}
+	stream, err := conn.DriverService.InstallDriver(ctx)
 	if err != nil {
 		return fmt.Errorf("starting driver install: %w", driverServiceErr(err))
 	}
@@ -213,7 +222,7 @@ func installDriver(ctx context.Context, client agentpbv2.WendyDriverServiceClien
 	}); err != nil {
 		return fmt.Errorf("sending driver spec: %w", driverServiceErr(err))
 	}
-	// Remote installs are fetched by the agent; only local installs upload bytes.
+	// Local files and registry downloads for isolated devices upload bytes.
 	if filePath != "" {
 		if err := streamDriverChunks(stream, filePath); err != nil {
 			return err

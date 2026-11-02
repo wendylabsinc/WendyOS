@@ -4,7 +4,7 @@ Installs WendyOS onto an NVMe or SD card, fully recovers supported Jetsons over 
 
 > **Tip:** [`wendy install`](../install.md) is the recommended, surfaced entry point for this command. `wendy os install` remains available and behaves identically — it is kept for backward compatibility and for discoverability under the `wendy os` group.
 
-The command presents a device picker with Linux, Mac, and Microcontrollers tabs. Press Tab or Shift+Tab to switch categories, then use the arrow keys and Enter to select a device. Linux includes WendyOS targets and Linux Desktop, Mac offers Headless Mac, and Microcontrollers lists ESP32 targets with published firmware. Empty categories are hidden. Select the device type to take the appropriate path:
+The command presents a device picker with Linux, Mac, and Microcontrollers tabs. Press Tab or Shift+Tab to switch categories, then use the arrow keys and Enter to select a device. Linux includes WendyOS targets and Linux Desktop, Mac offers Headless Mac, and Microcontrollers lists ESP32 targets with published firmware. Empty categories are hidden. When a Jetson in USB recovery mode, a Qualcomm board in EDL mode, or an ESP32-S31 in ROM download mode is connected, a Detected USB tab appears first; see [`wendy install`](../install.md). Select the device type to take the appropriate path:
 
 - **Jetson Orin Nano / AGX Orin** -> download a recovery flashpack -> verify the module/carrier -> update QSPI and NVMe/eMMC together
 - **Raspberry Pi targets** -> download OS image -> write to SD/NVMe -> write config partition
@@ -171,6 +171,8 @@ wendy install --device-type dragonwing-iq-9075
 
 Connect the USB0 (USB-C) port, power off, set DIP switch 3 ON, and power on. Wendy downloads and verifies the bundle, then reads the board's chip id before writing anything and refuses the flash if it belongs to a different Dragonwing. A board that does not answer, or reports an id Wendy does not know, is flashed anyway after a caution — verification only happens when the board answers. Set DIP switch 3 OFF and power-cycle after success.
 
+On the IQ8, after WendyOS boots, move the computer cable from USB0 (USB-C) to USB2 (micro-USB) for normal USB networking and CLI access. USB0 remains the EDL/recovery port. The IQ9 gadget port is unchanged.
+
 **An EDL flash is a factory reset.** Both OS slots, the config partition and `/data` are rewritten, so device identity, cloud enrollment, saved Wi-Fi and application data are discarded and the board comes back as a new device.
 
 `/data` is blanked rather than overwritten: the flash clears the head of the filesystem and the device recreates it on first boot. That makes the old contents unreachable, but it is not a secure erase — blocks behind the superblock are only overwritten as they are reused. Do not rely on it before handing a board to someone else.
@@ -257,6 +259,7 @@ Requires an active `wendy auth login` session. The CLI creates an enrollment tok
 | `--wifi` | — | Pre-configure one WiFi network; repeatable |
 | `--no-wifi` | false | Skip WiFi setup entirely |
 | `--device-name` | interactive | Set device name on first boot (lowercase letters, digits, hyphens; must start with a letter, 3–55 chars) |
+| `--driver` | — | Repeatable driver name. Download before flashing and upload after first boot. Requires `--device-type` and `--device-name`; keep the device connected over USB or LAN. |
 | `--pre-enroll` | auto | Pre-enroll with Wendy Cloud. For WendyOS/Jetson targets, embeds a certificate during imaging. For Linux Desktop / Headless Mac, mints a short-lived token printed with the `agent.sh` one-liner. |
 | `--cloud-grpc` | auto | Cloud gRPC endpoint of the auth session to use for pre-enrollment (applies to both drive imaging and Linux Desktop / Headless Mac); defaults to the session set via `wendy auth use`. |
 | `--storage` | auto | Storage variant: `nvme`/`sd` for raw imaging; AGX Orin recovery requires `nvme` or `emmc` non-interactively |
