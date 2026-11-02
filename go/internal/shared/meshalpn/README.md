@@ -15,8 +15,10 @@ DER. Fingerprints run from the root through the intermediates, excluding the
 leaf. The client offers each prefix, longest first, and the ordinary application
 protocol as fallback. The server selects the longest prefix it possesses. The
 selected name therefore acknowledges which client CA certificates it can omit.
-The server can independently omit its own CA certificates named in the client's
-offers. Application dispatch uses the recognised variant's ordinary protocol.
+When a hash-bearing variant is selected, the server can independently omit its
+own CA certificates named in the client's offers. Selecting an ordinary
+application protocol requests the full leaf-and-intermediate presentation in
+both directions, even if auxiliary inventory names were offered. Application dispatch uses the recognised variant's ordinary protocol.
 
 Additional cached CAs use auxiliary, never-selected names beginning with
 `wendy-net-cached` followed by a zero byte and concatenated fingerprints. A name
@@ -46,3 +48,21 @@ Lite session resumption remains disabled; fresh Lite handshakes send the leaf.
 Issuer completion applies to TLS presentations. Signed mesh records continue
 to verify against their exact advertised certificate chain, independently of
 other versions of an issuer that happen to be cached for TLS.
+
+A locally detected issuer-path failure during a hint-enabled handshake pauses
+this optimization process-wide for 120 seconds. Missing/unusable issuers and
+signature-path failures can indicate a false availability hint, including a
+fingerprint collision, but also an ordinary trust configuration problem. Known
+expiry, not-yet-valid, usage, identity, tenant and other policy failures do not
+start recovery. Remote generic TLS alerts and transport errors do not start it;
+the rejecting verifier owns the decision. Unavailable certificates can leave the
+precise cause unknown, so recovery is not a collision diagnosis.
+
+During recovery clients offer only ordinary application protocols and servers
+select an ordinary protocol and send their full presentation. Session resumption
+is disabled for those connections. Cache contents and trust anchors are retained,
+and verification remains authoritative. Each connection freezes its own mode;
+existing connections are unaffected. The normal reconnect/backoff policy supplies
+the next attempt, failures within the cooldown do not extend it, and new
+handshakes automatically resume hints after the monotonic deadline. No peer
+identity map, flash write or background timer is needed.
