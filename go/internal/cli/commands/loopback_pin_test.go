@@ -368,86 +368,6 @@ func TestUnpinVMLeavesTheBareLoopbackPinAndOtherVMs(t *testing.T) {
 	}
 }
 
-// stubSetDefaultOffline keeps set-default's post-save reachability probe off
-// the network and off the VM store: every dial fails cleanly.
-func stubSetDefaultOffline(t *testing.T) {
-	t.Helper()
-	origConnect := connectSimulatorChoiceFn
-	connectSimulatorChoiceFn = func(context.Context, *simulatorChoice, bool) (*SelectedDevice, error) {
-		return nil, errors.New("VM offline in test")
-	}
-	origLookup, origBrowse, origLadder, origDiscover := osLookupHostFn, lanBrowseFn, dialAgentLadderFn, discoverLANDevices
-	osLookupHostFn = func(context.Context, string) ([]string, error) { return nil, errors.New("no resolver in test") }
-	lanBrowseFn = func(context.Context, time.Duration) ([]models.LANDevice, error) { return nil, nil }
-	dialAgentLadderFn = func(context.Context, dialTarget) (*grpcclient.AgentConnection, error, error) {
-		return nil, nil, errors.New("device offline in test")
-	}
-	// A literal IP skips name resolution, so the connect reaches the
-	// provisioned-mTLS hint's LAN browse and, once the dial fails, the
-	// USB-direct fallback; keep both off the network too.
-	discoverLANDevices = func(context.Context, time.Duration) ([]models.LANDevice, error) { return nil, nil }
-	origUSB := usbDirectCandidatesFn
-	usbDirectCandidatesFn = func() []discovery.USBDirectCandidate { return nil }
-	t.Cleanup(func() {
-		connectSimulatorChoiceFn = origConnect
-		osLookupHostFn, lanBrowseFn, dialAgentLadderFn, discoverLANDevices = origLookup, origBrowse, origLadder, origDiscover
-		usbDirectCandidatesFn = origUSB
-	})
-}
-
-func runSetDefault(t *testing.T, device string) {
-	t.Helper()
-	cmd := newDeviceSetDefaultCmd()
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	cmd.SetContext(ctx)
-	if err := cmd.RunE(cmd, []string{device}); err != nil {
-		t.Fatal(err)
-	}
-}
-
-// set-default of a bare loopback host clears the bare pin its dial is checked
-// under — as main — and never a VM's.
-func TestSetDefaultOnBareLoopbackClearsTheBarePin(t *testing.T) {
-	restoreDeviceGlobals(t)
-	stubNonInteractive(t)
-	stubLoopbackVMs(t, nil)
-	setPinCache(t)
-	stubSetDefaultOffline(t)
-	readPins := writePinTestConfig(t, map[string]config.DevicePin{"127.0.0.1": pinA, "vm:dev": pinB})
-
-	runSetDefault(t, "127.0.0.1")
-	pins := readPins()
-	if _, ok := pins["127.0.0.1"]; ok {
-		t.Error("set-default 127.0.0.1 did not clear the bare pin its dial is checked under")
-	}
-	if _, ok := pins["vm:dev"]; !ok {
-		t.Error("set-default 127.0.0.1 cleared a VM's pin")
-	}
-}
-
-// T-c (set-default): `wendy device set-default vm:<name>` clears the VM's own
-// pin and nothing else — not the bare 127.0.0.1 pin other loopback ports
-// share, and not another VM's.
-func TestSetDefaultOnVMLeavesTheBareLoopbackPin(t *testing.T) {
-	restoreDeviceGlobals(t)
-	stubNonInteractive(t)
-	stubLoopbackVMs(t, nil) // the VMs are stopped
-	setPinCache(t)
-	stubSetDefaultOffline(t)
-	pin77 := config.DevicePin{OrgID: 7, CloudGRPC: "grpc.a.sh:443", AssetID: "77"}
-	readPins := writePinTestConfig(t, map[string]config.DevicePin{"vm:dev": pinA, "vm:dev2": pin77, "127.0.0.1": pinA})
-
-	runSetDefault(t, "vm:dev")
-	pins := readPins()
-	if _, ok := pins["vm:dev"]; ok {
-		t.Error("set-default vm:dev did not clear the VM's own pin")
-	}
-	if pins["127.0.0.1"].AssetID != "42" || pins["vm:dev2"].AssetID != "77" || len(pins) != 2 {
-		t.Fatalf("pins = %+v, want the bare 127.0.0.1 pin and vm:dev2 untouched", pins)
-	}
-}
-
 func TestVMPrintReachabilityNamesTheVMAlias(t *testing.T) {
 	var buf bytes.Buffer
 	vmPrintReachability(&buf, "dev", vm.NetConfig{Mode: vm.NetUser}, 50151)
@@ -844,9 +764,9 @@ func TestUSBFallbackConnectionIsNotTheDialledEndpoint(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	conn, dialled, finished, err := connectToAgentDirect(ctx, resolveConfig{nonInteractive: true}, "wendy-thor", "wendy-thor.local:50051", "wendy-thor.local", false)
-	if err != nil || finished || conn == nil {
-		t.Fatalf("connectToAgentDirect = (%v, finished %v, %v), want the USB connection", conn, finished, err)
+	conn, dialled, err := connectToAgentDirect(ctx, resolveConfig{nonInteractive: true}, "wendy-thor", "wendy-thor.local:50051", "wendy-thor.local")
+	if err != nil || conn == nil {
+		t.Fatalf("connectToAgentDirect = (%v, %v), want the USB connection", conn, err)
 	}
 	conn.Close()
 	if dialled != "" {
@@ -1210,12 +1130,6 @@ func TestDirectDialOfARunningVMsMTLSForwardIsKeyedAsTheVM(t *testing.T) {
 		if got := vmForwardDialAddr(addr); got != addr {
 			t.Errorf("vmForwardDialAddr(%q) = %q, want it unchanged", addr, got)
 		}
-	}
-	if got := dialPinKeyForDevice("127.0.0.1:50052"); got != "vm:dev" {
-		t.Errorf("dialPinKeyForDevice(127.0.0.1:50052) = %q, want vm:dev (the key its dial is checked under)", got)
-	}
-	if got := dialPinKeyForDevice("127.0.0.1:50061"); got != "127.0.0.1" {
-		t.Errorf("dialPinKeyForDevice(127.0.0.1:50061) = %q, want the bare host", got)
 	}
 }
 

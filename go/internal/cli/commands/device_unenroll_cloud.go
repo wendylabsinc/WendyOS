@@ -18,24 +18,13 @@ import (
 
 var resolveUnenrollTargetFn = resolveTarget
 
-// Resolve cloud defaults before ordinary device resolution, which would require
+// Resolve cloud selectors before ordinary device resolution, which would require
 // an online device and open a tunnel. Removing a cloud enrollment needs neither.
 func cloudUnenrollTarget(cmd *cobra.Command, cloudOnly bool) (string, bool, error) {
 	selector := deviceFlag
 	_, cloudCommand := cloudDeviceConfigFromContext(cmd.Context())
 	if cfg, ok := cloudDeviceConfigFromContext(cmd.Context()); ok && cfg.DeviceName != "" {
 		selector = cfg.DeviceName
-	}
-	if selector == "" {
-		cfg, err := config.Load()
-		if err != nil {
-			return "", false, err
-		}
-		// A local default is meaningful for --cloud-only when it is also the
-		// enrolled name. The cloud group uses only cloud-scoped defaults.
-		if !cloudCommand || strings.HasPrefix(cfg.DefaultDevice, "cloud:") {
-			selector = cfg.DefaultDevice
-		}
 	}
 	_, scoped, err := parseCloudDeviceSelector(selector)
 	if err != nil {

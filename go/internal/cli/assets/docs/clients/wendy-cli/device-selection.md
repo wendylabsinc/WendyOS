@@ -20,7 +20,7 @@ A value made only of digits, such as `283`, is rejected: it is not a hostname or
 
 ## 2. `WENDY_DEVICE`
 
-If `--device` is not given and the `WENDY_DEVICE` environment variable is set, the CLI connects to that device exactly as if it had been passed with `--device`. Use it to give one terminal, script or AI session its own target without changing the saved default that every session shares:
+If `--device` is not given and the `WENDY_DEVICE` environment variable is set, the CLI connects to that device exactly as if it had been passed with `--device`. Use it to give one terminal, script or AI session its own target:
 
 ```sh
 WENDY_DEVICE=my-pi.local wendy run
@@ -28,27 +28,7 @@ WENDY_DEVICE=my-pi.local wendy run
 
 `--device` still takes precedence. A blank value is ignored.
 
-## 3. Default Device
-
-If a Default Device is set using [`wendy device set-default`](./commands/device/set-default.md),
-the CLI attempts to connect to it. The saved value may be a hostname, IP
-address, provider key, or explicit `host:port` value.
-
-```sh
-wendy device set-default my-mac.local:50051
-wendy device info --json
-wendy run
-```
-
-Use [`wendy device get-default`](./commands/device/get-default.md) to check
-the current default. If the default device cannot be reached from an
-interactive terminal, the CLI shows the picker so you can select another
-device. In non-interactive shells, the command fails with a clear message
-that the default is set but unreachable instead of opening a picker.
-
-> **TODO (test)**: If the target device is outdated, and `--json` is not specified, a warning will be printed to indicate an update is available.
-
-## 4. Show Picker
+## 3. Show Picker
 
 The picker finds nearby [WendyOS](/docs/#2-set-up-a-device), Wendy Agent and
 [Wendy Lite](/docs/advanced/wendy-lite/) devices using local-network and Bluetooth discovery.
@@ -72,17 +52,46 @@ Network permissions.
 
 The picker table shows the same columns as
 [`wendy discover`](./commands/discover.md#interactive-tui). The leading
-marker column displays provisioned state (`●`/`○`) for LAN devices alongside
-the `✦` default marker. If the CLI cannot verify the highlighted device's agent,
+marker column displays provisioned state (`●`/`○`) for LAN devices. If the CLI cannot verify the highlighted device's agent,
 a footer hint explains what went wrong and what to try next.
 
 In scripts, CI, SSH sessions without a TTY, or any other non-interactive
-context, no picker is shown. Pass `--device`, or configure a default with
-`wendy device set-default` (confirm it with `wendy device get-default`),
-before running commands that need a target.
+context, no picker is shown. Pass `--device` or set `WENDY_DEVICE` before
+running commands that need a target.
 
 > **TODO (test)**: If the target device is outdated, and `--json` is not specified, a warning will be printed to indicate an update is available.
 > If the terminal is interactive, a prompt will be made to update the device right now.
+
+## Device identity pinning
+
+On the first successful connection to a named device, the CLI **pins** the
+device's identity — the organisation and cloud host its TLS certificate belongs
+to. On every later connection under that name, the CLI checks that the device
+still presents that same organisation and cloud host.
+
+A routine certificate **renewal or re-enrollment** keeps the same organisation
+and cloud, so it is accepted silently. A change of organisation or cloud host —
+which can indicate a man-in-the-middle or a swapped device — **refuses the
+connection**. So does a device that was pinned while enrolled but now answers
+with no identity at all, which means it was reflashed, factory reset, or
+replaced by something squatting its name.
+
+Both refusals are **unconditional**: they read identically in interactive,
+`--json`, and non-interactive runs, and there is deliberately **no "trust this
+anyway?" prompt** — a man-in-the-middle warning that can be dismissed gets
+dismissed. Clearing the pin is a separate, deliberate act:
+
+```sh
+wendy device unpin <host>
+```
+
+Loopback addresses share the pin of their bare host, whatever the port:
+`127.0.0.1:50051` and `127.0.0.1:50061` are both checked against the
+`127.0.0.1` pin, and `localhost:50051` against the `localhost` pin. The
+exception is a running local VM: `127.0.0.1` on its forwarded agent port, or on
+the mTLS port after it, is that VM, pinned as `vm:<name>` like
+`--device vm:<name>`, so each VM keeps its own pin. `wendy device unpin
+vm:<name>` clears only that VM's pin, never the shared `127.0.0.1` pin.
 
 ## Simulator startup and authentication failures
 

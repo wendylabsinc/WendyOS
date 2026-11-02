@@ -26,7 +26,7 @@ func ExecutionErrorClass(err error) string {
 	if err == nil {
 		return ""
 	}
-	if errors.Is(err, ErrUserCancelled) || errors.Is(err, ErrDefaultCleared) ||
+	if errors.Is(err, ErrUserCancelled) ||
 		errors.Is(err, swifttoolchain.ErrUserCancelled) || errors.Is(err, tui.ErrCancelled) {
 		return "user_cancelled"
 	}

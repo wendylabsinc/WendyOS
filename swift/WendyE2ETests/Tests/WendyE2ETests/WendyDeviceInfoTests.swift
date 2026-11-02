@@ -17,7 +17,7 @@ import WendyE2ETesting
 ///
 /// Options:
 ///
-/// - `--device DEVICE`: Connects to a specific device instead of using the default device or picker.
+/// - `--device DEVICE`: Connects to a specific device instead of using `WENDY_DEVICE` or the picker.
 /// - `--json`: Emits JSON output and disables interactive prompts.
 /// - `--check-updates`: Checks whether a newer agent version is available.
 /// - `--prerelease`: Includes prerelease agent builds when checking for updates.
@@ -35,11 +35,11 @@ struct `'wendy device info'` {
         try await self.scenario.run { cli, agent in
             let agentAddress = agent.machine.address
 
-            let configScript = Self.setDefaultDeviceConfigScript(
-                "default-device-that-should-not-be-used.invalid"
+            let script = Self.withWendyDevice(
+                "env-device-that-should-not-be-used.invalid",
+                "wendy --device \(agentAddress) device info --json"
             )
-            try await cli.sh(posix: configScript.posix, power: configScript.power)
-            try await cli.sh("wendy --device \(agentAddress) device info --json") { result in
+            try await cli.sh(posix: script.posix, power: script.power) { result in
                 let stdout = result.stdout
                 let stderr = result.stderr
 
@@ -51,23 +51,21 @@ struct `'wendy device info'` {
                 #expect(stderr == "")
                 #expect(!stdout.contains("Select a device"))
                 #expect(!stderr.contains("Select a device"))
-                #expect(!stderr.contains("default-device-that-should-not-be-used"))
+                #expect(!stderr.contains("env-device-that-should-not-be-used"))
             }
         }
     }
 
     /**
-     When no explicit device is passed, the saved default device is the target. The command treats this as a normal selection and leaves the saved default unchanged.
+     When no explicit device is passed, `WENDY_DEVICE` names the target.
      */
     @Test
-    func `uses the configured default device`() async throws {
+    func `uses the device named by WENDY_DEVICE`() async throws {
         try await self.scenario.run { cli, agent in
             let agentAddress = agent.machine.address
 
-            let configScript = Self.setDefaultDeviceConfigScript(agentAddress)
-            try await cli.sh(posix: configScript.posix, power: configScript.power)
-
-            try await cli.sh("wendy device info --json") { result in
+            let script = Self.withWendyDevice(agentAddress, "wendy device info --json")
+            try await cli.sh(posix: script.posix, power: script.power) { result in
                 let stdout = result.stdout
 
                 #expect(result.status.isSuccess)
@@ -77,41 +75,20 @@ struct `'wendy device info'` {
                 #expect(stdout.contains("\"cliVersion\""))
                 // The implicit target is never invisible: JSON mode names it in
                 // one plain stderr line, keeping stdout pure JSON.
-                #expect(result.normalizedStderr == "Using default device \(agentAddress).\n")
+                #expect(
+                    result.normalizedStderr == "Using device \(agentAddress) from WENDY_DEVICE.\n"
+                )
                 #expect(!stdout.contains("Select a device"))
                 #expect(!result.stderr.contains("Select a device"))
-            }
-
-            try await cli.sh(
-                posix: "cat \"$HOME/.wendy/config.json\"",
-                power: "Get-Content -Raw -LiteralPath (Join-Path $env:HOME '.wendy/config.json')"
-            ) { result in
-
-                #expect(result.status.isSuccess)
-                let json = try #require(
-                    try JSONSerialization.jsonObject(with: Data(result.stdout.utf8))
-                        as? [String: Any]
-                )
-
-                #expect(json["defaultDevice"] as? String == agentAddress)
-                #expect(result.stderr == "")
             }
         }
     }
 
     /**
-     If no explicit or default device is available, interactive mode helps the user choose one. The picker discovers LAN, BLE, and provider-backed devices.
+     If neither `--device` nor `WENDY_DEVICE` names a device, interactive mode helps the user choose one. The picker discovers LAN, BLE, and provider-backed devices.
      */
     @Test(.disabled("INTERACTIVE: requires picker harness"))
     func `opens the device picker when no device is selected`() async throws {
-        // TODO: implement.
-    }
-
-    /**
-     A stale default device does not end the workflow. The command explains that the saved target is unreachable and returns the user to device selection.
-     */
-    @Test(.disabled("INTERACTIVE: requires picker harness"))
-    func `recovers from an unreachable default device`() async throws {
         // TODO: implement.
     }
 
@@ -186,22 +163,22 @@ struct `'wendy device info'` {
     }
 
     /**
-     When the CLI is not attached to an interactive terminal, `device info` behaves like `--json`: it avoids prompts and emits machine-readable output. Stderr carries one plain line naming the default device it used.
+     When the CLI is not attached to an interactive terminal, `device info` behaves like `--json`: it avoids prompts and emits machine-readable output. Stderr carries one plain line naming the device it used.
      */
     @Test
     func `non-interactive mode prints JSON device information`() async throws {
         try await self.scenario.run { cli, agent in
             let agentAddress = agent.machine.address
 
-            let configScript = Self.setDefaultDeviceConfigScript(agentAddress)
-            try await cli.sh(posix: configScript.posix, power: configScript.power)
-
-            try await cli.sh("wendy device info") { result in
+            let script = Self.withWendyDevice(agentAddress, "wendy device info")
+            try await cli.sh(posix: script.posix, power: script.power) { result in
 
                 #expect(result.status.isSuccess)
                 // JSON mode keeps stdout pure JSON; the only stderr line is the
-                // notice naming the default device the command acted on.
-                #expect(result.normalizedStderr == "Using default device \(agentAddress).\n")
+                // notice naming the device the command acted on.
+                #expect(
+                    result.normalizedStderr == "Using device \(agentAddress) from WENDY_DEVICE.\n"
+                )
                 #expect(!result.stdout.contains("Select a device"))
 
                 let json = try #require(
@@ -257,7 +234,7 @@ struct `'wendy device info'` {
     // MARK: - Handling Missing or Unreachable Devices
 
     /**
-     JSON mode never opens the interactive picker. If no explicit device or default device is available, the command fails with a configuration diagnostic.
+     JSON mode never opens the interactive picker. If no device is given, the command fails with a configuration diagnostic.
      */
     @Test
     func `'--json' reports a missing device without prompting`() async throws {
@@ -268,7 +245,7 @@ struct `'wendy device info'` {
                 #expect(result.stdout == "")
                 #expect(
                     result.stderr.contains(
-                        "no device specified; use --device flag or set a default"
+                        "no device specified; use --device flag"
                     )
                 )
                 #expect(!result.stderr.contains("Select a device"))
@@ -427,51 +404,23 @@ struct `'wendy device info'` {
         }
     }
 
-    private static func setDefaultDeviceConfigScript(
-        _ device: String
+    /// The command with `WENDY_DEVICE` set to `device` for that command only.
+    private static func withWendyDevice(
+        _ device: String,
+        _ command: String
     ) -> (
         posix: String,
         power: String
     ) {
-        let jsonDevice = Self.jsonStringLiteral(device)
+        let posixDevice = "'" + device.replacingOccurrences(of: "'", with: "'\\''") + "'"
         let powerDevice = "'" + device.replacingOccurrences(of: "'", with: "''") + "'"
         return (
-            posix: """
-            python3 - <<'PY'
-            import json
-            import os
-
-            path = os.path.join(os.environ["HOME"], ".wendy", "config.json")
-            os.makedirs(os.path.dirname(path), exist_ok=True)
-            try:
-                with open(path, encoding="utf-8") as config_file:
-                    config = json.load(config_file)
-            except FileNotFoundError:
-                config = {}
-            config["defaultDevice"] = \(jsonDevice)
-            with open(path, "w", encoding="utf-8") as config_file:
-                json.dump(config, config_file, separators=(",", ":"))
-                config_file.write("\\n")
-            PY
-            """,
+            posix: "WENDY_DEVICE=\(posixDevice) \(command)",
             power: """
-            $configPath = Join-Path $env:HOME '.wendy/config.json'
-            New-Item -ItemType Directory -Force -Path (Split-Path -Parent $configPath) | Out-Null
-            if (Test-Path -LiteralPath $configPath -PathType Leaf) {
-                $config = Get-Content -Raw -LiteralPath $configPath | ConvertFrom-Json
-            } else {
-                $config = [pscustomobject]@{}
-            }
-            $config | Add-Member -NotePropertyName 'defaultDevice' -NotePropertyValue \(powerDevice) -Force
-            $config | ConvertTo-Json -Depth 20 -Compress | Set-Content -LiteralPath $configPath
+            $env:WENDY_DEVICE = \(powerDevice)
+            \(command)
             """
         )
-    }
-
-    private static func jsonStringLiteral(_ value: String) -> String {
-        let data = try! JSONSerialization.data(withJSONObject: [value])
-        let arrayLiteral = String(decoding: data, as: UTF8.self)
-        return String(arrayLiteral.dropFirst().dropLast())
     }
 
     private static func noProxyValue(for agentAddress: String) -> String {

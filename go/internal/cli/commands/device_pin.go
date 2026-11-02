@@ -467,32 +467,6 @@ func challengeUnprovisionedDevice(cfg *config.Config, hostname string) error {
 	})
 }
 
-// clearDevicePinForRepin drops the stored pins for hostname so the next
-// successful connection records a fresh one. `wendy device set-default <host>`
-// calls it because naming a device on the command line is the user asserting
-// they mean that device — without it, set-default's own connect would hit the
-// refusals above and never reach the re-pin. It is the same operation the
-// refusals point at by name (`wendy device unpin <host>`), reached through a
-// different command, so it goes through the same clearPinsGoverning: pki/README
-// already promises set-default has "the same clearing effect", and a version of
-// it that missed the SPKI store would make that promise false for exactly the
-// refusal that has no other way out. Best-effort; a config read/write failure
-// just leaves the old pin in place.
-//
-// It reports what it cleared on stderr for the same reason unpin does on
-// stdout: set-default deleting trust state is a side effect of a command whose
-// name does not mention pins, and the user is the only one who can notice it
-// touched something they did not mean. Stderr keeps it out of any JSON output.
-func clearDevicePinForRepin(hostname string) {
-	var cleared []clearedPin
-	_ = config.Update(func(cfg *config.Config) (bool, error) {
-		cleared = clearPinsGoverning(cfg, hostname)
-		// The SPKI half flushes itself, so only a config-store clear needs a save.
-		return clearedAnyConfigPin(cleared), nil
-	})
-	printClearedPins(os.Stderr, cleared)
-}
-
 // shellQuoteArg renders s so a copy-paste of the recovery command survives a
 // POSIX shell as a single argument. d.hostname can be an mDNS display alias
 // copied verbatim from unauthenticated discovery data, so a name like

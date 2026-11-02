@@ -126,11 +126,10 @@ func TestDueCLIUpdateCheckSkipsDevBuilds(t *testing.T) {
 }
 
 // The background update check used to save the config root loaded at startup,
-// seconds later — reverting a default device, pin or login the command itself
-// had just saved. It must change only its own two fields on the current config.
+// seconds later — reverting a pin or login the command itself had just saved. It must change only its own two fields on the current config.
 func TestPersistCLIUpdateCheckResultKeepsNewerConfig(t *testing.T) {
 	setTempConfig(t, &config.Config{})
-	if err := config.Save(&config.Config{DefaultDevice: "saved-by-the-command.local"}); err != nil {
+	if err := config.Save(&config.Config{DefaultBuildHost: "saved-by-the-command.local"}); err != nil {
 		t.Fatal(err)
 	}
 	now := time.Date(2026, 9, 28, 12, 0, 0, 0, time.UTC)
@@ -141,8 +140,8 @@ func TestPersistCLIUpdateCheckResultKeepsNewerConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.DefaultDevice != "saved-by-the-command.local" {
-		t.Fatalf("the update check reverted DefaultDevice to %q", cfg.DefaultDevice)
+	if cfg.DefaultBuildHost != "saved-by-the-command.local" {
+		t.Fatalf("the update check reverted DefaultBuildHost to %q", cfg.DefaultBuildHost)
 	}
 	if cfg.LastCLIUpdateCheck != "" || cfg.LastCLIUpdateAttempt != "2026-09-28T12:00:00Z" {
 		t.Fatalf("failed check incorrectly recorded success: %+v", cfg)

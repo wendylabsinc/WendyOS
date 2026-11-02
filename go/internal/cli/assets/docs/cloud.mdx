@@ -81,11 +81,10 @@ Discovery shows online devices by default. `--all` includes offline devices;
 `--json` supports scripts. Cloud v2 identifies devices with UUIDs. Use a name
 or UUID returned by discovery, rather than a legacy numeric asset ID.
 
-Run `wendy device set-default`, open its **Cloud** tab, and press **d** on the
-intended device. Press **d** again on the default to clear it; the same key works
-in the live `wendy cloud discover` table. The saved choice keeps its Cloud
-endpoint, organization, and device identity, so renaming the device or switching
-context does not retarget it. Use `--device` to override it for one command.
+Pick the device in the **Cloud** tab of the device picker, or name it with
+`--device`. The `selector` that `wendy cloud discover --json` prints for each
+device keeps its Cloud endpoint, organization, and device identity, so renaming
+the device or switching context does not retarget it.
 From your app's project directory:
 
 ```sh
@@ -183,8 +182,8 @@ wendy cloud device logs --device shop-floor-01
 
 Legacy discovery supports numeric asset IDs as well as device names. Keep
 existing scripts on their matching legacy context until you have validated the
-v2 replacements. To deploy, select the device in the **Cloud** tab of
-`wendy device set-default`, then run `wendy run` from your project.
+v2 replacements. To deploy, run `wendy run` from your project and select the
+device in the picker's **Cloud** tab.
 
 ### Forward an application port or UDP service
 

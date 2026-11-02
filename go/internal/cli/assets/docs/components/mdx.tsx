@@ -16,7 +16,6 @@ import {
 import { CliClip, CliShot } from './docs/cli-shot';
 import { CliToAgentRelationshipDiagram } from './docs/cli-to-agent-relationship-diagram';
 import { TrackedCodeBlock } from './docs/install-copy-tracking';
-import { SetDefaultDeviceSection } from './docs/set-default-device-section';
 import { YouTubeVideo } from './docs/youtube-video';
 
 export function getMDXComponents(components?: MDXComponents) {
@@ -46,7 +45,6 @@ export function getMDXComponents(components?: MDXComponents) {
     CliClip,
     CliShot,
     CliToAgentRelationshipDiagram,
-    SetDefaultDeviceSection,
     YouTubeVideo,
     ...components,
   } satisfies MDXComponents;

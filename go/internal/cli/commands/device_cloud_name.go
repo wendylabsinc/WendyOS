@@ -75,7 +75,7 @@ func connectToPinnedCloudName(ctx context.Context, cfg *config.Config, name stri
 	if err != nil {
 		return nil, err
 	}
-	return connectCloudLookupFn(ctx, auth, cloudDefaultSelector(name, expected), "", expected)
+	return connectCloudLookupFn(ctx, auth, cloudNameSelector(name, expected), "", expected)
 }
 
 // A device identity alone omits the Cloud endpoint and may be absent on older

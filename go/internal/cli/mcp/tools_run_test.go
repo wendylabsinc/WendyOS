@@ -32,7 +32,7 @@ func TestRunPreservesTargetAndReportsReadinessSeparately(t *testing.T) {
 		{"cloud without session", commandTarget{}, map[string]any{"device_name": "robot", "cloud_grpc": "org.example:443"}, []string{"cloud", "run"}, "robot"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			s := New(&config.Config{DefaultDevice: "wrong-default"}, nil)
+			s := New(&config.Config{}, nil)
 			s.commandTarget = tc.target
 			var actual []string
 			s.runCommandFn = func(_ context.Context, args []string, _ commandTarget, _ int) (string, bool, error) {
@@ -65,11 +65,11 @@ func TestRunPreservesTargetAndReportsReadinessSeparately(t *testing.T) {
 	}
 }
 
-func TestRunRejectsAmbiguousTargetsAndNeverUsesDefault(t *testing.T) {
-	s := New(&config.Config{DefaultDevice: "wrong"}, nil)
+func TestRunRejectsAmbiguousTargets(t *testing.T) {
+	s := New(&config.Config{}, nil)
 	for _, args := range []map[string]any{nil, {"device": "local", "device_name": "cloud"}, {"device": "local", "cloud_grpc": "other:443"}, {"cloud_grpc": "other:443"}} {
 		if _, err := s.runTarget(callToolReq("run", args)); err == nil {
-			t.Fatalf("accepted ambiguous/default target %v", args)
+			t.Fatalf("accepted ambiguous target %v", args)
 		}
 	}
 	s.commandTarget = commandTarget{Device: "robot", Transport: "cloud", CloudGRPC: "first:443"}

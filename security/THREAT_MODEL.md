@@ -135,7 +135,7 @@ Severity scale: **CRITICAL > HIGH > MEDIUM > LOW > INFO**
 - **Status:** 📋 Planned (WDY-1086)
 - **Component:** Cloud gRPC dialer, pki-core
 - **Description:** The cloud host is derived from CLI arguments or a config file. An attacker who can influence the config (e.g., via an evil captive portal during initial WiFi setup) could redirect the enrollment request to a rogue CA, causing the device to trust attacker-controlled certificates.
-- **Existing mitigations:** TLS 1.2+ is enforced for cloud connections on standard ports. CLI pins the cloud host on `wendy device set-default` (WDY-1149).
+- **Existing mitigations:** TLS 1.2+ is enforced for cloud connections on standard ports. CLI pins the cloud host on the first connection to a device (WDY-1149).
 - **Recommended controls:**
   - Pin or hard-code the expected cloud CA in the firmware image so it cannot be overridden by config (WDY-1086).
   - Validate the cloud host against an allowlist before dialling.
@@ -145,7 +145,7 @@ Severity scale: **CRITICAL > HIGH > MEDIUM > LOW > INFO**
 - **Status:** 📋 Planned (WDY-1087, WDY-1192)
 - **Component:** CLI / gRPC mTLS (port 50052)
 - **Description:** A stolen or leaked certificate grants authenticated access until the certificate expires (maximum 2 years). Without revocation, the window of exposure is bounded but not eliminated.
-- **Existing mitigations:** Certificates are stored in `~/.wendy/` with user-level permissions. A maximum certificate lifetime of 2 years is enforced at the TLS layer. The 2-year ceiling is a deliberate accommodation for devices that operate without internet connectivity (air-gapped or intermittently connected) and therefore cannot rely on frequent online renewal; connected deployments can use shorter lifetimes. CLI pins device org and cloud host on `set-default` so a cert from another org is rejected (WDY-1149).
+- **Existing mitigations:** Certificates are stored in `~/.wendy/` with user-level permissions. A maximum certificate lifetime of 2 years is enforced at the TLS layer. The 2-year ceiling is a deliberate accommodation for devices that operate without internet connectivity (air-gapped or intermittently connected) and therefore cannot rely on frequent online renewal; connected deployments can use shorter lifetimes. CLI pins device org and cloud host on the first connection to a device so a cert from another org is rejected (WDY-1149).
 - **Recommended controls:**
   - Implement certificate revocation (OCSP or CRL served by Wendy Cloud) (WDY-1087).
   - For connected deployments, shorten certificate lifetime with automatic renewal to reduce the exposure window; retain the longer ceiling for offline devices that cannot renew online.

@@ -19,17 +19,16 @@ import (
 func TestUnenrollRejectsDirectV2FlagsBeforeCloudOrLiteCleanup(t *testing.T) {
 	scoped := cloudDeviceSelector{Endpoint: "cloud.example:443", TenantUUID: liteTestTenant, AssetUUID: liteTestAssetID}.String()
 	for _, route := range []struct {
-		name, selector, defaultDevice string
-		cloudOnly, cloudContext       bool
-		target                        *SelectedDevice
+		name, selector          string
+		cloudOnly, cloudContext bool
+		target                  *SelectedDevice
 	}{
 		{name: "explicit cloud only", selector: "offline-board", cloudOnly: true},
 		{name: "explicit cloud selector", selector: scoped},
-		{name: "saved cloud selector", defaultDevice: scoped},
 		{name: "cloud command", selector: "offline-board", cloudContext: true},
-		{name: "selected cloud", target: &SelectedDevice{DefaultSelector: scoped}},
+		{name: "selected cloud", target: &SelectedDevice{Selector: scoped}},
 		{name: "Lite USB", target: &SelectedDevice{External: &models.ExternalDevice{ProviderKey: "wendy-lite", ConnectionInfo: map[string]string{"type": "USB"}}}},
-		{name: "Lite cloud selector", target: &SelectedDevice{DefaultSelector: scoped, External: &models.ExternalDevice{ProviderKey: "wendy-lite", ConnectionInfo: map[string]string{"type": "Cloud"}}}},
+		{name: "Lite cloud selector", target: &SelectedDevice{Selector: scoped, External: &models.ExternalDevice{ProviderKey: "wendy-lite", ConnectionInfo: map[string]string{"type": "Cloud"}}}},
 		{name: "Lite cloud metadata", target: &SelectedDevice{External: &models.ExternalDevice{ProviderKey: "wendy-lite", ConnectionInfo: map[string]string{"type": "Cloud", "cloud": "cloud.example:443", "tenantId": liteTestTenant, "assetId": liteTestAssetID}}}},
 	} {
 		for _, flag := range []struct{ name, value string }{
@@ -41,7 +40,7 @@ func TestUnenrollRejectsDirectV2FlagsBeforeCloudOrLiteCleanup(t *testing.T) {
 				preserveCloudUnenrollmentHooks(t)
 				preserveLiteUnenrollmentHooks(t)
 				t.Setenv("WENDY_CONFIG_DIR", t.TempDir())
-				if err := config.Save(&config.Config{DefaultDevice: route.defaultDevice}); err != nil {
+				if err := config.Save(&config.Config{}); err != nil {
 					t.Fatal(err)
 				}
 				deviceFlag = route.selector

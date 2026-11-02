@@ -59,13 +59,13 @@ struct `'wendy os cache list'` {
             try await cli.sh(
                 posix: """
                     mkdir -p "$HOME/.wendy"
-                    printf '{"defaultDevice":"do-not-list"}\n' > "$HOME/.wendy/config.json"
+                    printf '{"defaultBuildHost":"do-not-list"}\n' > "$HOME/.wendy/config.json"
                     printf 'project artifact\n' > unrelated-project-file.txt
                     wendy os cache list
                     """,
                 power: """
                     New-Item -ItemType Directory -Force -Path (Join-Path $env:HOME '.wendy') | Out-Null
-                    Set-Content -LiteralPath (Join-Path $env:HOME '.wendy/config.json') -Value '{"defaultDevice":"do-not-list"}'
+                    Set-Content -LiteralPath (Join-Path $env:HOME '.wendy/config.json') -Value '{"defaultBuildHost":"do-not-list"}'
                     Set-Content -LiteralPath 'unrelated-project-file.txt' -Value 'project artifact'
                     wendy os cache list
                     """

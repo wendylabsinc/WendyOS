@@ -101,8 +101,8 @@ func TestCloudLiteSelectorTargetsTheLiteProvider(t *testing.T) {
 			t.Errorf("connection info %s = %q, want %q", key, got, value)
 		}
 	}
-	if selected.DefaultSelector != selector.String() {
-		t.Errorf("default selector = %q, want %q", selected.DefaultSelector, selector.String())
+	if selected.Selector != selector.String() {
+		t.Errorf("default selector = %q, want %q", selected.Selector, selector.String())
 	}
 }
 
@@ -111,11 +111,11 @@ func TestCloudLiteSelectorTargetsTheLiteProvider(t *testing.T) {
 func TestAgentOnlyPathsRefuseACloudLiteDevice(t *testing.T) {
 	auth := liteTestAuth("cloud.example:443")
 	key := cloudDeviceSelector{Endpoint: auth.CloudGRPC, TenantUUID: liteTestTenant, AssetUUID: liteTestAssetID}.String()
-	setTempConfig(t, &config.Config{DefaultDevice: key})
+	setTempConfig(t, &config.Config{})
 	t.Setenv("WENDY_AGENT_SOCKET", "")
 	oldFlag, oldJSON, oldConnect := deviceFlag, jsonOutput, connectCloudDeviceSelectorFn
 	t.Cleanup(func() { deviceFlag, jsonOutput, connectCloudDeviceSelectorFn = oldFlag, oldJSON, oldConnect })
-	deviceFlag, jsonOutput = "", true
+	deviceFlag, jsonOutput = key, true
 	connectCloudDeviceSelectorFn = func(context.Context, cloudDeviceSelector) (*SelectedDevice, error) {
 		return cloudLiteSelectedDevice(auth, liteCloudAsset(), key)
 	}
@@ -440,10 +440,10 @@ func TestCloudTabShowsLiteFirmwareWithoutAnAgentTunnel(t *testing.T) {
 	device := cloudDiscoveryDevice{cloudAssetMetadata: asset, v2: asset, key: asset.GetId()}
 
 	rows := cloudDiscoveryTableRows([]cloudDiscoveryDevice{device}, nil)
-	if got := rows[0][2]; got != "esp32c6 (Lite)" {
+	if got := rows[0][1]; got != "esp32c6 (Lite)" {
 		t.Errorf("type column = %q, want esp32c6 (Lite)", got)
 	}
-	if got := rows[0][3]; got != "0.9.1" {
+	if got := rows[0][2]; got != "0.9.1" {
 		t.Errorf("version column = %q, want the firmware version", got)
 	}
 	info, ok := device.info(nil).(cloudDiscoverV2Info)

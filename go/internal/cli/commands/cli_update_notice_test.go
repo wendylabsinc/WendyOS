@@ -144,7 +144,7 @@ func TestCLIUpdateDeclineSnoozesWithoutLosingReleaseOrConfig(t *testing.T) {
 	confirmCLIUpdate = func(*cobra.Command, string) (bool, error) {
 		prompts++
 		err := config.Update(func(cfg *config.Config) (bool, error) {
-			cfg.DefaultDevice = "chosen-while-prompt-open"
+			cfg.DefaultBuildHost = "chosen-while-prompt-open"
 			return true, nil
 		})
 		if err != nil {
@@ -159,7 +159,7 @@ func TestCLIUpdateDeclineSnoozesWithoutLosingReleaseOrConfig(t *testing.T) {
 		t.Fatal("snoozed prompt repeated")
 	}
 	cfg, _ := config.Load()
-	if cfg.LatestCLIRelease != "2026.10.05-134249" || cfg.DefaultDevice != "chosen-while-prompt-open" {
+	if cfg.LatestCLIRelease != "2026.10.05-134249" || cfg.DefaultBuildHost != "chosen-while-prompt-open" {
 		t.Fatal("prompt lost release or concurrent config")
 	}
 	cfg.CLIUpdatePromptedAt = time.Now().Add(-25 * time.Hour).UTC().Format(time.RFC3339)

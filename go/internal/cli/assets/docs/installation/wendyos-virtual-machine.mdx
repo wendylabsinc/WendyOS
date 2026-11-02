@@ -92,7 +92,7 @@ so first boot can take several minutes.
 ## The short version
 
 On macOS and Linux, you do not have to create or start anything by hand. With no `--device` and no
-default device set, `wendy run` opens a picker with a **Simulator** tab:
+`WENDY_DEVICE` set, `wendy run` opens a picker with a **Simulator** tab:
 
 ```sh
 wendy run
@@ -109,14 +109,9 @@ The tab manages simulators without dropping to `wendy vm`:
 | `s` | Start the highlighted VM and, the first time, build its robot |
 | `x` | Power off the highlighted VM |
 | `r` | Delete it and its disk, once it is stopped (asks first) |
-| `d` | Save the highlighted simulator as the default device; press it again to clear the default |
 
 On Windows, `c` in `wendy discover` displays the foreground VM commands and
 keeps discovery open. Run those commands in a separate terminal.
-
-The default uses the VM's name, so it still works when its forwarded port changes.
-Saving a default does not start the VM. Your next device command starts it when
-needed. The `✦` marker identifies the saved default when you reopen the picker.
 
 `wendy discover` shows the same tab with the same keys. There `enter` copies
 the VM's address instead of selecting it, and `s` returns to the tab once the
@@ -194,10 +189,10 @@ In another terminal:
 wendy --device vm:dev device info
 ```
 
-To avoid repeating it:
+To avoid repeating it in this terminal:
 
 ```sh
-wendy device set-default vm:dev
+export WENDY_DEVICE=vm:dev
 wendy run
 ```
 
@@ -315,8 +310,8 @@ processes running as your user (and root) can connect and have full QEMU control
 
 ### If port 50051 is taken
 
-Prefer `--device vm:<name>` (or save it with `wendy device set-default
-vm:<name>`) over a literal loopback address. The alias follows the VM's current
+Prefer `--device vm:<name>` (or `WENDY_DEVICE=vm:<name>`) over a literal
+loopback address. The alias follows the VM's current
 port and keeps enrolled-device trust pins separate for each VM, so two VMs on
 different ports never share one. While a VM is running, a literal
 `127.0.0.1:<port>` on its forwarded agent port, or on the mTLS port after it,

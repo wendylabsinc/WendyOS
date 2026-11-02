@@ -9,8 +9,6 @@ import (
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
-	"github.com/wendylabsinc/wendy/go/internal/shared/discovery"
-	"github.com/wendylabsinc/wendy/go/internal/shared/models"
 )
 
 // restoreDeviceGlobals snapshots the package globals device resolution reads,
@@ -60,19 +58,19 @@ func TestDeviceChosenByEnvStopsWhenFlagIsRewritten(t *testing.T) {
 	}
 }
 
-func TestResolveDeviceAddressPrefersWENDY_DEVICEOverTheDefault(t *testing.T) {
+func TestResolveDeviceAddressUsesWENDY_DEVICE(t *testing.T) {
 	restoreDeviceGlobals(t)
 	deviceFlag, deviceFlagFromEnv = "", ""
-	setTempConfig(t, &config.Config{DefaultDevice: "saved.local"})
+	setTempConfig(t, &config.Config{})
 	t.Setenv(deviceEnvVar, "env-device.local")
 	applyDeviceEnv()
 
-	addr, pinKey, isDefault, err := resolveDeviceAddress()
+	addr, pinKey, err := resolveDeviceAddress()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if addr != "env-device.local:50051" || pinKey != "env-device.local" || isDefault {
-		t.Fatalf("got (%q, %q, isDefault=%v), want the WENDY_DEVICE target and isDefault=false", addr, pinKey, isDefault)
+	if addr != "env-device.local:50051" || pinKey != "env-device.local" {
+		t.Fatalf("got (%q, %q), want the WENDY_DEVICE target", addr, pinKey)
 	}
 }
 
@@ -81,16 +79,15 @@ func TestNoDeviceErrorMentionsWENDY_DEVICE(t *testing.T) {
 	deviceFlag, deviceFlagFromEnv = "", ""
 	t.Setenv(deviceEnvVar, "")
 	setTempConfig(t, &config.Config{})
-	_, _, _, err := resolveDeviceAddress()
+	_, _, err := resolveDeviceAddress()
 	if !errors.Is(err, errNoDevice) {
 		t.Fatalf("err = %v, want errNoDevice", err)
 	}
 	for _, want := range []string{
 		// The exact prefix two enabled Swift E2E tests match on (see
 		// noDeviceMessage's doc comment) — must never be shortened or reworded.
-		"no device specified; use --device flag or set a default",
+		"no device specified; use --device flag",
 		"WENDY_DEVICE",
-		"wendy device set-default <device>",
 	} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error %q does not mention %q", err, want)
@@ -139,67 +136,16 @@ func TestNoteEnvDeviceOnlyAnnouncesEnvChosenTargets(t *testing.T) {
 }
 
 func TestMCPStartupDevicePrecedence(t *testing.T) {
-	cfg := &config.Config{DefaultDevice: "saved.local"}
 	t.Setenv(deviceEnvVar, "")
-	if got := mcpStartupDevice("", cfg); got != "saved.local" {
-		t.Errorf("no flag, no env: got %q, want the saved default", got)
+	if got := mcpStartupDevice(""); got != "" {
+		t.Errorf("no flag, no env: got %q, want none", got)
 	}
 	t.Setenv(deviceEnvVar, "env.local")
-	if got := mcpStartupDevice("", cfg); got != "env.local" {
+	if got := mcpStartupDevice(""); got != "env.local" {
 		t.Errorf("env set: got %q, want env.local", got)
 	}
-	if got := mcpStartupDevice("flag.local", cfg); got != "flag.local" {
+	if got := mcpStartupDevice("flag.local"); got != "flag.local" {
 		t.Errorf("-d given: got %q, want flag.local", got)
-	}
-	if got := mcpStartupDevice("", nil); got != "env.local" {
-		t.Errorf("nil config: got %q, want env.local", got)
-	}
-}
-
-// set-default's confirming connect must reach the device it just saved, not
-// a --device or WENDY_DEVICE override that happens to be in effect.
-func TestSetDefaultConfirmsTheSavedDeviceNotTheOverride(t *testing.T) {
-	restoreDeviceGlobals(t)
-	stubNonInteractive(t)
-	writePinTestConfig(t, nil)
-	deviceFlag, deviceFlagFromEnv = "other.local", "other.local"
-
-	var dialled []string
-	origLookup, origBrowse, origLadder := osLookupHostFn, lanBrowseFn, dialAgentLadderFn
-	osLookupHostFn = func(context.Context, string) ([]string, error) { return nil, errors.New("no resolver in test") }
-	lanBrowseFn = func(context.Context, time.Duration) ([]models.LANDevice, error) { return nil, nil }
-	dialAgentLadderFn = func(_ context.Context, target dialTarget) (*grpcclient.AgentConnection, error, error) {
-		dialled = append(dialled, target.PinKey)
-		return nil, nil, errors.New("device offline in test")
-	}
-	// The failed connect reaches the provisioned-mTLS hint's LAN browse and
-	// the USB-direct fallback. Keep both off the network: their real probes
-	// outlive this test and land on later tests' fake dialers.
-	origDiscover, origUSB := discoverLANDevices, usbDirectCandidatesFn
-	discoverLANDevices = func(context.Context, time.Duration) ([]models.LANDevice, error) { return nil, nil }
-	usbDirectCandidatesFn = func() []discovery.USBDirectCandidate { return nil }
-	t.Cleanup(func() {
-		osLookupHostFn, lanBrowseFn, dialAgentLadderFn = origLookup, origBrowse, origLadder
-		discoverLANDevices, usbDirectCandidatesFn = origDiscover, origUSB
-	})
-
-	cmd := newDeviceSetDefaultCmd()
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	cmd.SetContext(ctx)
-	if err := cmd.RunE(cmd, []string{"wendy-thor.local:50051"}); err != nil {
-		t.Fatalf("set-default: %v", err)
-	}
-	for _, key := range dialled {
-		if key == "other.local" {
-			t.Fatalf("set-default's confirming connect dialled the override other.local; dialled %v", dialled)
-		}
-	}
-	if len(dialled) == 0 || dialled[0] != "wendy-thor.local" {
-		t.Fatalf("dialled %v, want the saved default wendy-thor.local", dialled)
-	}
-	if deviceFlag != "other.local" || deviceFlagFromEnv != "other.local" {
-		t.Fatalf("override not restored: deviceFlag=%q fromEnv=%q", deviceFlag, deviceFlagFromEnv)
 	}
 }
 
@@ -229,7 +175,6 @@ func TestNumericDeviceErrorNamesTheExactCloudSelector(t *testing.T) {
 	for _, want := range []string{
 		"283:50051",
 		"wendy --device cloud://grpc.a.sh:443/org/7/asset/283 <command>",
-		"wendy device set-default cloud://grpc.a.sh:443/org/7/asset/283",
 		"wendy cloud device <command> --device 283",
 	} {
 		if !strings.Contains(msg, want) {
@@ -254,13 +199,8 @@ func TestResolveDeviceAddressRejectsNumericDevice(t *testing.T) {
 	restoreDeviceGlobals(t)
 	setTempConfig(t, &config.Config{})
 	deviceFlag = "283"
-	if _, _, _, err := resolveDeviceAddress(); !errors.Is(err, errInvalidDeviceName) {
+	if _, _, err := resolveDeviceAddress(); !errors.Is(err, errInvalidDeviceName) {
 		t.Fatalf("err = %v, want errInvalidDeviceName", err)
-	}
-	deviceFlag = ""
-	setTempConfig(t, &config.Config{DefaultDevice: "283"}) // a numeric default saved by an older CLI
-	if _, _, _, err := resolveDeviceAddress(); !errors.Is(err, errInvalidDeviceName) {
-		t.Fatalf("numeric saved default: err = %v, want errInvalidDeviceName", err)
 	}
 }
 
@@ -309,23 +249,5 @@ func TestNumericDeviceIsLeftToTheCloudPath(t *testing.T) {
 	ctx := context.WithValue(context.Background(), cloudDeviceContextKey{}, cloudDeviceConfig{DeviceName: "283"})
 	if _, err := resolveTargetInner(ctx, NonInteractive()); errors.Is(err, errInvalidDeviceName) {
 		t.Fatalf("the cloud path rejected asset ID 283 as a device name: %v", err)
-	}
-}
-
-func TestSetDefaultRejectsNumericDevice(t *testing.T) {
-	restoreDeviceGlobals(t)
-	stubNonInteractive(t)
-	setTempConfig(t, &config.Config{DefaultDevice: "kept.local"})
-	cmd := newDeviceSetDefaultCmd()
-	cmd.SetContext(context.Background())
-	if err := cmd.RunE(cmd, []string{"283"}); !errors.Is(err, errInvalidDeviceName) {
-		t.Fatalf("err = %v, want errInvalidDeviceName", err)
-	}
-	cfg, err := config.Load()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cfg.DefaultDevice != "kept.local" {
-		t.Fatalf("a rejected numeric default was saved: %q", cfg.DefaultDevice)
 	}
 }

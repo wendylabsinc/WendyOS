@@ -37,7 +37,7 @@ wendy vm robot project watch ./my-environment
 `init` requires a new folder; `link` requires an existing scene. Both require
 an explicit, running Go2/G1 VM with the matching runtime. They write local binding
 metadata in `.wendy-simulation.json`. Keep this file local and ignore it in Git;
-share `scene.json` and `assets/` instead. No command falls back to a default device,
+share `scene.json` and `assets/` instead. No command picks a device for you,
 boots a stopped VM, updates its runtime, or deploys to physical hardware.
 
 `link` records the binding; `sync` or `watch` applies it. Watch runs in the foreground.

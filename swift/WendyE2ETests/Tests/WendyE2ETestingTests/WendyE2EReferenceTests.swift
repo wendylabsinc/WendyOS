@@ -40,7 +40,7 @@ struct `reference documentation extraction` {
         #expect(
             selectingDevices.entries.map(\.title) == [
                 "`--device` selects an explicit device",
-                "uses the configured default device",
+                "uses the device named by WENDY_DEVICE",
             ]
         )
         #expect(
@@ -319,10 +319,10 @@ struct `reference documentation extraction` {
             }
 
             /**
-             Uses the configured default device.
+             Uses the device named by WENDY_DEVICE.
              */
             @Test(.disabled("Fixture disabled test"))
-            func `uses the configured default device`() async throws {
+            func `uses the device named by WENDY_DEVICE`() async throws {
                 // TODO: implement.
             }
 

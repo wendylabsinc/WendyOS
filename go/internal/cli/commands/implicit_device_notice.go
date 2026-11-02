@@ -8,24 +8,19 @@ import (
 )
 
 // implicitDeviceReason describes how a device was chosen when the user did not
-// name one. The two cases need different wording: the direct path falls back to
-// the device recorded by `wendy device set-default`, while the cloud path never
-// consults that setting and instead auto-selects when the org has exactly one
-// device online. Calling the latter a "default" would be untrue.
+// name one with --device. The two cases need different wording: WENDY_DEVICE
+// names a device for the whole shell, while the cloud path auto-selects when
+// the org has exactly one device online.
 type implicitDeviceReason int
 
 const (
-	// implicitDefaultDevice is the hostname from config, used because neither
-	// --device nor an interactive pick supplied one.
-	implicitDefaultDevice implicitDeviceReason = iota
 	// implicitSoleCloudDevice is the org's only cloud asset currently online,
 	// selected without asking because there was nothing to choose between.
 	// The cloud roster is online-only, so this says nothing about how many
 	// devices are enrolled.
-	implicitSoleCloudDevice
+	implicitSoleCloudDevice implicitDeviceReason = iota
 	// implicitEnvDevice is the WENDY_DEVICE value, used because --device was not
-	// given. It is not the saved default, and saying so would send the user to
-	// set-default to change a target set-default never chose.
+	// given.
 	implicitEnvDevice
 )
 
@@ -74,20 +69,15 @@ func implicitDeviceLines(name string, reason implicitDeviceReason, withHint bool
 		lines = append(lines, "Using "+name+", the only device currently online in this organisation.")
 	case implicitEnvDevice:
 		lines = append(lines, "Using device "+name+" from WENDY_DEVICE.")
-	default:
-		lines = append(lines, "Using default device "+name+".")
 	}
 	if withHint {
 		switch reason {
 		case implicitSoleCloudDevice:
-			// The cloud path never consults the saved default, so offering
-			// set-default here would mislead; what the user needs to know is
-			// that offline devices are hidden from the roster.
+			// What the user needs to know is that offline devices are hidden
+			// from the roster.
 			lines = append(lines, "Target a different device with --device; offline devices are hidden, 'wendy cloud discover --all' lists every enrolled device.")
 		case implicitEnvDevice:
-			lines = append(lines, "Target a different device for one command with --device, or unset WENDY_DEVICE to use the default device.")
-		default:
-			lines = append(lines, "Target a different device for one command with --device, or change the default with 'wendy device set-default'.")
+			lines = append(lines, "Target a different device for one command with --device, or unset WENDY_DEVICE to choose from the device picker.")
 		}
 	}
 	return lines

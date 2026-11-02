@@ -29,7 +29,7 @@ func (s *mcpServer) registerInstallationTools(srv *server.MCPServer) {
 	srv.AddTool(mcpgo.NewTool("os_list_drives", drives...), s.handleInstallDrives)
 	verify := []mcpgo.ToolOption{
 		mcpgo.WithDescription("Verify first boot at an explicit target without changing the active connection. Checks agent, optional OS/board/public key and enrollment. Application readiness remains unchecked."),
-		mcpgo.WithString("address", mcpgo.Required(), mcpgo.Description("Explicit hostname, IP:port, or cloud selector; never chooses a default device")),
+		mcpgo.WithString("address", mcpgo.Required(), mcpgo.Description("Explicit hostname, IP:port, or cloud selector; never chooses a device for you")),
 		mcpgo.WithString("expected_os_version"), mcpgo.WithString("expected_device_type"), mcpgo.WithString("expected_public_key"),
 		mcpgo.WithBoolean("require_enrollment"),
 		mcpgo.WithInteger("timeout_seconds", mcpgo.Min(1), mcpgo.Max(60), mcpgo.DefaultNumber(15)),

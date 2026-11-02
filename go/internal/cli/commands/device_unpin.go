@@ -91,8 +91,7 @@ func newDeviceUnpinCmd() *cobra.Command {
 					// The pin key, not the raw argument: a pin recorded via
 					// `--device host.local:50051` files under "host.local" (the port
 					// stripped), and a user unpinning must be able to hand back exactly
-					// what they used to connect. This is the same bug fixed in
-					// set-default in Task 6 — do not reintroduce it here.
+					// what they used to connect.
 					cleared = clearPinsGoverning(cfg, pinKey)
 				}
 				return true, nil

@@ -13,9 +13,8 @@ import (
 
 // Config represents the top-level CLI configuration.
 type Config struct {
-	Auth          []AuthConfig     `json:"auth,omitempty"`
-	Analytics     *AnalyticsConfig `json:"analytics,omitempty"`
-	DefaultDevice string           `json:"defaultDevice,omitempty"`
+	Auth      []AuthConfig     `json:"auth,omitempty"`
+	Analytics *AnalyticsConfig `json:"analytics,omitempty"`
 	// DefaultBuildHost is the device `wendy run` delegates the image
 	// build to when --build-host is not passed. Per-developer rather than
 	// per-project: the right build host depends on which network the developer is

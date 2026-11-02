@@ -115,7 +115,7 @@ func connectToCloudAgentWithAuthExpecting(ctx context.Context, auth *config.Auth
 	if err != nil {
 		return nil, err
 	}
-	if err := verifyCloudDefaultIdentity(deviceName, expected, cloudDiscoveryIdentity(auth, asset)); err != nil {
+	if err := verifyCloudPinnedIdentity(deviceName, expected, cloudDiscoveryIdentity(auth, asset)); err != nil {
 		return nil, err
 	}
 	cliLogln("Connecting to %s via cloud tunnel...", asset.GetName())
@@ -123,11 +123,11 @@ func connectToCloudAgentWithAuthExpecting(ctx context.Context, auth *config.Auth
 	return asset.connect(ctx, auth, brokerURL)
 }
 
-func verifyCloudDefaultIdentity(deviceName string, expected *certs.WendyIdentity, actual certs.WendyIdentity) error {
+func verifyCloudPinnedIdentity(deviceName string, expected *certs.WendyIdentity, actual certs.WendyIdentity) error {
 	if expected == nil || expected.SameEntity(actual) {
 		return nil
 	}
-	return refuseIdentity("Cloud device %q has identity %s, which does not match the identity saved for the default device (%s). Choose the device explicitly or update the saved default if it was re-enrolled.", deviceName, actual.IdentityKey(), expected.IdentityKey())
+	return refuseIdentity("Cloud device %q has identity %s, which does not match the identity saved for it (%s). Choose the device explicitly, or clear the saved identity with 'wendy device unpin' if it was re-enrolled.", deviceName, actual.IdentityKey(), expected.IdentityKey())
 }
 
 func cloudDiscoveryIdentity(auth *config.AuthConfig, asset cloudDiscoveryDevice) certs.WendyIdentity {
@@ -684,8 +684,7 @@ func pickCloudDeviceFromRoster(ctx context.Context, auth *config.AuthConfig, dev
 		if asset != nil {
 			// With no --device, resolveCloudAsset picks the org's only online
 			// device without asking (the roster above is online-only). Say so,
-			// rather than leaving the target implicit. Note this is not the configured default device: the
-			// cloud path does not consult that setting.
+			// rather than leaving the target implicit.
 			if deviceName == "" {
 				noteImplicitDevice(asset.GetName(), implicitSoleCloudDevice)
 			}

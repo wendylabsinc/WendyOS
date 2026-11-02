@@ -198,5 +198,5 @@ func connectLiteSimulator(ctx context.Context, name, addr string) (*SelectedDevi
 	return &SelectedDevice{External: &models.ExternalDevice{
 		ID: "vm:" + name, DisplayName: name, ProviderKey: "wendy-lite", IsWendyDevice: true,
 		ConnectionInfo: map[string]string{"type": "LAN", "ip": host, "port": port},
-	}, Provider: &providers.MicroWendyProvider{}, DefaultSelector: "vm:" + name}, nil
+	}, Provider: &providers.MicroWendyProvider{}, Selector: "vm:" + name}, nil
 }

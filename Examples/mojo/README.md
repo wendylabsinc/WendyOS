@@ -11,19 +11,13 @@ Runnable source for the docs' **Mojo and MAX** tutorial group. The tutorial page
 
 Install the Wendy CLI and run Docker on the development machine. Follow the [Mojo CPU requirements](https://mojolang.org/docs/requirements/) and [MAX requirements](https://max.modular.com/stable/packages/). The toolchains stay inside the images.
 
-Set your default device with the discovery picker:
+Find your device's hostname with `wendy discover` (Ctrl+C leaves it), then point this terminal at the device:
 
 ```sh
-wendy discover
+export WENDY_DEVICE=your-device.local
 ```
 
-Select your device with the arrow keys, then press `d` to make it the default. Press Ctrl+C to leave discovery. If you already know its hostname, you can set it directly instead:
-
-```sh
-wendy device set-default your-device.local
-```
-
-From this repository's root, run an example on the default device:
+From this repository's root, run an example on that device:
 
 ```sh
 wendy run --no-restart --prefix Examples/mojo/hello-world

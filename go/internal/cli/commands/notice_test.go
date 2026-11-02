@@ -21,8 +21,8 @@ func swapNoticeOut(t *testing.T, w io.Writer) {
 func TestPlainNoticeIsOneUnstyledLine(t *testing.T) {
 	var out strings.Builder
 	swapNoticeOut(t, &out)
-	plainNotice("%s", "\x1b[1mUsing\x1b[0m  default\n  device x.")
-	if got, want := out.String(), "Using default device x.\n"; got != want {
+	plainNotice("%s", "\x1b[1mUsing\x1b[0m  device\n  x from WENDY_DEVICE.")
+	if got, want := out.String(), "Using device x from WENDY_DEVICE.\n"; got != want {
 		t.Errorf("plainNotice wrote %q, want %q", got, want)
 	}
 	out.Reset()

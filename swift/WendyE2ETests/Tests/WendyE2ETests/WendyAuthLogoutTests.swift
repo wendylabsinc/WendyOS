@@ -37,11 +37,11 @@ struct `'wendy auth logout'` {
             try await cli.sh(
                 posix: """
                     mkdir -p "$HOME/.wendy"
-                    printf '%s\n' '{"auth":[{"cloudDashboard":"https://fixture.invalid","cloudGRPC":"fixture.invalid:443","certificates":[{"organizationId":42,"userId":"fixture-user"}]}],"defaultDevice":"keep-device","lastCLIUpdateCheck":"2026-07-20T12:00:00Z"}' > "$HOME/.wendy/config.json"
+                    printf '%s\n' '{"auth":[{"cloudDashboard":"https://fixture.invalid","cloudGRPC":"fixture.invalid:443","certificates":[{"organizationId":42,"userId":"fixture-user"}]}],"defaultBuildHost":"keep-device","lastCLIUpdateCheck":"2026-07-20T12:00:00Z"}' > "$HOME/.wendy/config.json"
                     """,
                 power: """
                     New-Item -ItemType Directory -Force -Path (Join-Path $env:HOME '.wendy') | Out-Null
-                    Set-Content -LiteralPath (Join-Path $env:HOME '.wendy/config.json') -Value '{"auth":[{"cloudDashboard":"https://fixture.invalid","cloudGRPC":"fixture.invalid:443","certificates":[{"organizationId":42,"userId":"fixture-user"}]}],"defaultDevice":"keep-device","lastCLIUpdateCheck":"2026-07-20T12:00:00Z"}'
+                    Set-Content -LiteralPath (Join-Path $env:HOME '.wendy/config.json') -Value '{"auth":[{"cloudDashboard":"https://fixture.invalid","cloudGRPC":"fixture.invalid:443","certificates":[{"organizationId":42,"userId":"fixture-user"}]}],"defaultBuildHost":"keep-device","lastCLIUpdateCheck":"2026-07-20T12:00:00Z"}'
                     """
             )
             try await cli.sh("wendy auth logout") { result in
@@ -58,7 +58,7 @@ struct `'wendy auth logout'` {
                         as? [String: Any]
                 )
                 #expect(json["auth"] == nil)
-                #expect(json["defaultDevice"] as? String == "keep-device")
+                #expect(json["defaultBuildHost"] as? String == "keep-device")
                 #expect(json["lastCLIUpdateCheck"] as? String == "2026-07-20T12:00:00Z")
             }
         }

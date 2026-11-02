@@ -137,7 +137,7 @@ A legacy asset-ID string selects the older asset pin: the certificate must ident
 
 Wendy Net verifies the exact enrolled device identity when connecting to a peer. Devices must belong to the same organization. Operators in that organization can also verify a target device when delivering builds.
 
-## Device identity pinning (default device)
+## Device identity pinning
 
 On the first successful connection to a hostname, the CLI records that hostname's identity in `~/.wendy/config.json` under `devicePins`: the **organisation**, the **cloud host** that issued its certificate, and the **asset id** from the device certificate's identity SAN (the name of its tenant SPIFFE principal, or the legacy `urn:wendy:org:<org>:asset:<assetID>` URN on an old chain), and that **principal** when it has one. Every later connection to that hostname is checked against the pin — this is what feeds `ServerVerifyOpts.ExpectedIdentity` above, so a wrong device is rejected during the TLS handshake itself, not after.
 
@@ -161,7 +161,7 @@ wendy device unpin spiffe://wendy.sh/tenant/<uuid>/device/<id>
 wendy device unpin urn:wendy:org:<org>:asset:<id>
 ```
 
-This clears the local pin only — it never dials the device, so it works even when the device is offline, wiped, or gone. The next successful connection to that hostname records a fresh pin from scratch. Naming a device explicitly with `wendy device set-default <hostname>` has the same clearing effect, since typing the hostname is itself the user asserting "I mean that device."
+This clears the local pin only — it never dials the device, so it works even when the device is offline, wiped, or gone. The next successful connection to that hostname records a fresh pin from scratch.
 
 Both forms are accepted because the two stores are keyed differently. The identity-change refusals above name a hostname, and the hostname form clears it (a pin records its device's principal on the first connect after the SPIFFE cutover, which is how the hostname form still reaches the SPKI entry). The **SPKI** refusal (point 4 above) can only name the certificate identity, because that is what `known_devices.json` is keyed by — the tenant SPIFFE principal for a Wendy-issued device, the legacy URN for an old chain and there is often no hostname to offer: `wendy device list` and the device picker dial the device's IP, and an agent that never advertises `orgid` in its mDNS records leaves nothing locally that maps a name to an asset. Copy the identity out of the refusal and pass it back — it clears the SPKI entry and any `devicePins` entry naming the same asset.
 
@@ -200,7 +200,7 @@ Agents whose certificates carry no asset identity at all are never treated as sw
 
 One device can answer to more than one name, and different surfaces record its pin under different ones: an ordinary connection records under the mDNS hostname actually dialed, cloud seeding records under the asset's roster name, and a wendy net dial names the device by its wendy net name. Resolving "does this dial have a pin" therefore checks, in order:
 
-1. The name the caller dialed (`--device` value, saved default, or the device picker's name).
+1. The name the caller dialed (`--device` value or the device picker's name).
 2. The wendy net name from the discovery-cache entry whose hostname matches (1), if the cache has one.
 3. That entry's display name.
 

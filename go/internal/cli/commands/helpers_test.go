@@ -501,12 +501,9 @@ func TestResolveDeviceAddress_Flag(t *testing.T) {
 	defer func() { deviceFlag = origFlag }()
 	deviceFlag = "my-device.local"
 
-	addr, pinKey, isDefault, err := resolveDeviceAddress()
+	addr, pinKey, err := resolveDeviceAddress()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
-	}
-	if isDefault {
-		t.Fatal("expected isDefault=false when --device flag is set")
 	}
 	if addr != "my-device.local:50051" {
 		t.Fatalf("addr = %q, want %q", addr, "my-device.local:50051")
@@ -516,61 +513,14 @@ func TestResolveDeviceAddress_Flag(t *testing.T) {
 	}
 }
 
-func TestResolveDeviceAddress_DefaultDevice(t *testing.T) {
-	origFlag := deviceFlag
-	defer func() { deviceFlag = origFlag }()
-	deviceFlag = ""
-
-	setTempConfig(t, &config.Config{DefaultDevice: "wendy-thor.local"})
-
-	addr, pinKey, isDefault, err := resolveDeviceAddress()
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !isDefault {
-		t.Fatal("expected isDefault=true when using default device from config")
-	}
-	if addr != "wendy-thor.local:50051" {
-		t.Fatalf("addr = %q, want %q", addr, "wendy-thor.local:50051")
-	}
-	if pinKey != "wendy-thor.local" {
-		t.Fatalf("pinKey = %q, want %q — the pin must be filed under the name the user typed, not the dialled address", pinKey, "wendy-thor.local")
-	}
-}
-
 func TestResolveDeviceAddress_ExplicitHostPortFlag(t *testing.T) {
 	origFlag := deviceFlag
 	defer func() { deviceFlag = origFlag }()
 	deviceFlag = "my-mac.local:50051"
 
-	addr, pinKey, isDefault, err := resolveDeviceAddress()
+	addr, pinKey, err := resolveDeviceAddress()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
-	}
-	if isDefault {
-		t.Fatal("expected isDefault=false when --device flag is set")
-	}
-	if addr != "my-mac.local:50051" {
-		t.Fatalf("addr = %q, want %q", addr, "my-mac.local:50051")
-	}
-	if pinKey != "my-mac.local" {
-		t.Fatalf("pinKey = %q, want %q — the pin must be filed under the name the user typed, not the dialled address", pinKey, "my-mac.local")
-	}
-}
-
-func TestResolveDeviceAddress_ExplicitHostPortDefault(t *testing.T) {
-	origFlag := deviceFlag
-	defer func() { deviceFlag = origFlag }()
-	deviceFlag = ""
-
-	setTempConfig(t, &config.Config{DefaultDevice: "my-mac.local:50051"})
-
-	addr, pinKey, isDefault, err := resolveDeviceAddress()
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !isDefault {
-		t.Fatal("expected isDefault=true when using default device from config")
 	}
 	if addr != "my-mac.local:50051" {
 		t.Fatalf("addr = %q, want %q", addr, "my-mac.local:50051")
@@ -585,12 +535,9 @@ func TestResolveDeviceAddress_IPv6ZoneFlag(t *testing.T) {
 	defer func() { deviceFlag = origFlag }()
 	deviceFlag = "fe80::8c13:12bf:4df8:b976%en24"
 
-	addr, pinKey, isDefault, err := resolveDeviceAddress()
+	addr, pinKey, err := resolveDeviceAddress()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
-	}
-	if isDefault {
-		t.Fatal("expected isDefault=false when --device flag is set")
 	}
 	if addr != "[fe80::8c13:12bf:4df8:b976%en24]:50051" {
 		t.Fatalf("addr = %q, want %q", addr, "[fe80::8c13:12bf:4df8:b976%en24]:50051")
@@ -600,34 +547,12 @@ func TestResolveDeviceAddress_IPv6ZoneFlag(t *testing.T) {
 	}
 }
 
-func TestResolveDeviceAddress_IPv6DefaultDevice(t *testing.T) {
-	origFlag := deviceFlag
-	defer func() { deviceFlag = origFlag }()
-	deviceFlag = ""
-
-	setTempConfig(t, &config.Config{DefaultDevice: "fe80::1%en0"})
-
-	addr, pinKey, isDefault, err := resolveDeviceAddress()
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if !isDefault {
-		t.Fatal("expected isDefault=true when using default device from config")
-	}
-	if addr != "[fe80::1%en0]:50051" {
-		t.Fatalf("addr = %q, want %q", addr, "[fe80::1%en0]:50051")
-	}
-	if pinKey != "fe80::1%en0" {
-		t.Fatalf("pinKey = %q, want %q — the pin must be filed under the name the user typed, not the dialled address", pinKey, "fe80::1%en0")
-	}
-}
-
 func TestResolveDeviceAddress_IPv6GlobalFlag(t *testing.T) {
 	origFlag := deviceFlag
 	defer func() { deviceFlag = origFlag }()
 	deviceFlag = "2001:db8::1"
 
-	addr, pinKey, _, err := resolveDeviceAddress()
+	addr, pinKey, err := resolveDeviceAddress()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -644,7 +569,7 @@ func TestResolveDeviceAddress_IPv4Flag(t *testing.T) {
 	defer func() { deviceFlag = origFlag }()
 	deviceFlag = "192.168.1.42"
 
-	addr, pinKey, _, err := resolveDeviceAddress()
+	addr, pinKey, err := resolveDeviceAddress()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -663,82 +588,27 @@ func TestResolveDeviceAddress_NoDevice(t *testing.T) {
 
 	setTempConfig(t, &config.Config{})
 
-	_, _, _, err := resolveDeviceAddress()
+	_, _, err := resolveDeviceAddress()
 	if err == nil {
 		t.Fatal("expected error when no device is specified")
 	}
 }
 
-func TestDefaultDeviceSearchLabel(t *testing.T) {
-	got := defaultDeviceSearchLabel("wendyos-daring-razorbill.local")
-	want := `Searching for default device "wendyos-daring-razorbill.local"...`
-	if got != want {
-		t.Fatalf("defaultDeviceSearchLabel() = %q, want %q", got, want)
-	}
-}
+// A config.json written by an older CLI can still name a default device. It is
+// no longer read: without --device or WENDY_DEVICE there is no target.
+func TestResolveDeviceAddress_IgnoresSavedDefaultDevice(t *testing.T) {
+	origFlag := deviceFlag
+	defer func() { deviceFlag = origFlag }()
+	deviceFlag = ""
 
-func TestFormatElapsedSeconds(t *testing.T) {
-	tests := []struct {
-		name    string
-		elapsed time.Duration
-		want    string
-	}{
-		{name: "fractional seconds", elapsed: 3420 * time.Millisecond, want: "3.42 seconds"},
-		{name: "rounding", elapsed: 3449 * time.Millisecond, want: "3.45 seconds"},
-		{name: "singular", elapsed: time.Second, want: "1.00 second"},
-		{name: "rounds to singular", elapsed: 1004 * time.Millisecond, want: "1.00 second"},
+	dir := t.TempDir()
+	t.Setenv("WENDY_CONFIG_DIR", dir)
+	if err := os.WriteFile(filepath.Join(dir, "config.json"), []byte(`{"defaultDevice":"wendy-thor.local"}`), 0o600); err != nil {
+		t.Fatal(err)
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := formatElapsedSeconds(tt.elapsed); got != tt.want {
-				t.Fatalf("formatElapsedSeconds(%v) = %q, want %q", tt.elapsed, got, tt.want)
-			}
-		})
-	}
-}
-
-func TestConnectResolvedAgent_UsesSpinnerForInteractiveDefaultDevice(t *testing.T) {
-	origInteractive := isInteractiveTerminalFn
-	origSpinner := runAgentConnectionSpinner
-	origJSON := jsonOutput
-	defer func() {
-		isInteractiveTerminalFn = origInteractive
-		runAgentConnectionSpinner = origSpinner
-		jsonOutput = origJSON
-	}()
-
-	isInteractiveTerminalFn = func() bool { return true }
-	jsonOutput = false
-
-	wantConn := &grpcclient.AgentConnection{Host: "wendyos-daring-razorbill.local"}
-	var (
-		gotLabel       string
-		spinnerInvoked bool
-	)
-	runAgentConnectionSpinner = func(_ context.Context, label string, _ func(context.Context) (*grpcclient.AgentConnection, error)) (*grpcclient.AgentConnection, error) {
-		spinnerInvoked = true
-		gotLabel = label
-		return wantConn, nil
-	}
-
-	gotConn, err := connectResolvedAgent(
-		context.Background(),
-		"wendyos-daring-razorbill.local",
-		hostPort("wendyos-daring-razorbill.local", defaultAgentPort),
-		true,
-	)
-	if err != nil {
-		t.Fatalf("connectResolvedAgent() error = %v", err)
-	}
-	if !spinnerInvoked {
-		t.Fatal("expected interactive default-device connection to use spinner")
-	}
-	if gotLabel != `Searching for default device "wendyos-daring-razorbill.local"...` {
-		t.Fatalf("spinner label = %q, want %q", gotLabel, `Searching for default device "wendyos-daring-razorbill.local"...`)
-	}
-	if gotConn != wantConn {
-		t.Fatal("connectResolvedAgent() did not return spinner result")
+	if _, _, err := resolveDeviceAddress(); !errors.Is(err, errNoDevice) {
+		t.Fatalf("err = %v, want errNoDevice", err)
 	}
 }
 
@@ -760,7 +630,7 @@ func TestConnectResolvedAgent_NoAuthProvisionedAgentRequiresLogin(t *testing.T) 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	conn, err := connectResolvedAgentWithProvisionedHint(ctx, "127.0.0.1", plaintextAddr, false, func() bool { return knownProvisionedMTLS })
+	conn, err := connectResolvedAgentWithProvisionedHint(ctx, "127.0.0.1", plaintextAddr, func() bool { return knownProvisionedMTLS })
 	if conn != nil {
 		conn.Close()
 		t.Fatal("connectResolvedAgent() returned a connection for an auth-only agent")
@@ -802,7 +672,7 @@ func TestConnectResolvedAgent_ProvisionedAgentPreservesMTLSError(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	conn, err := connectResolvedAgentWithProvisionedHint(ctx, "127.0.0.1", plaintextAddr, false, func() bool { return knownProvisionedMTLS })
+	conn, err := connectResolvedAgentWithProvisionedHint(ctx, "127.0.0.1", plaintextAddr, func() bool { return knownProvisionedMTLS })
 	if conn != nil {
 		conn.Close()
 		t.Fatal("connectResolvedAgent() returned a connection for an auth-only agent")

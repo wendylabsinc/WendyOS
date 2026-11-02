@@ -36,8 +36,7 @@ func NewRootCmd() *cobra.Command {
 		SilenceErrors: true,
 		PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 			// First, before the early returns below, so every command sees one
-			// answer to "which device": --device, else WENDY_DEVICE, else the
-			// saved default.
+			// answer to "which device": --device, else WENDY_DEVICE.
 			applyDeviceEnv()
 			// Progress tips never recommend the command already running.
 			tui.SetRunningCommand(cmd.CommandPath())
@@ -129,7 +128,7 @@ func NewRootCmd() *cobra.Command {
 	//
 	// pflag shows the first `backticked` word of a usage string as the flag's
 	// placeholder ("--device host"), so quote commands here with '...'.
-	root.PersistentFlags().StringVar(&deviceFlag, "device", "", "Target device `host` (hostname, IP, or host:port); 'wendy run' accepts a comma-separated list to deploy one build to several devices (needs a remote build host and --detach). Defaults to $WENDY_DEVICE, then the saved default device")
+	root.PersistentFlags().StringVar(&deviceFlag, "device", "", "Target device `host` (hostname, IP, or host:port); 'wendy run' accepts a comma-separated list to deploy one build to several devices (needs a remote build host and --detach). Defaults to $WENDY_DEVICE")
 
 	// Render the top-level command groups in the deliberate order below rather
 	// than alphabetically, so e.g. "project" lists before "device".

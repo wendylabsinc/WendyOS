@@ -21,7 +21,6 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/cli/providers"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
-	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 )
 
@@ -363,14 +362,6 @@ func runAppsDashboard(ctx context.Context, conn *grpcclient.AgentConnection) err
 	defer cancel()
 
 	m := newAppsDashboardModel(conn, dashCtx)
-
-	// Wire up the 'd' key to set the current device as default (same pattern as picker).
-	m.OnSetDefault = func() {
-		if cfg, err := config.Load(); err == nil {
-			cfg.DefaultDevice = conn.Host
-			_ = config.Save(cfg)
-		}
-	}
 
 	p := tea.NewProgram(m, tea.WithAltScreen())
 	result, err := p.Run()

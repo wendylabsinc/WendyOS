@@ -802,8 +802,7 @@ func runWithInterruptChannel(parent context.Context, sigCh <-chan os.Signal, run
 
 // resolveRunTarget resolves the target device for the run command. It first
 // tries resolveTarget (direct/picker). If that fails and cloud auth entries
-// exist, it retries via the cloud tunnel using the device name from --device
-// or the configured default.
+// exist, it retries via the cloud tunnel using the device name from --device.
 func resolveRunTarget(ctx context.Context, opts ...resolveOption) (*SelectedDevice, error) {
 	return resolveWithCloudFallback(ctx, "", opts...)
 }
@@ -813,24 +812,21 @@ func resolveRunTarget(ctx context.Context, opts ...resolveOption) (*SelectedDevi
 // An explicit name always wins, and must never be silently replaced by
 // deviceFlag: those name two different machines during `wendy run --build-host`,
 // and preferring the flag would build on the deploy target.
-func cloudFallbackDeviceName(explicit, flagValue, configDefault string) string {
+func cloudFallbackDeviceName(explicit, flagValue string) string {
 	if explicit != "" {
 		return explicit
 	}
-	if flagValue != "" {
-		return flagValue
-	}
-	return configDefault
+	return flagValue
 }
 
 // A LAN hostname often differs from the Cloud display name. When the name has
 // a saved asset identity, look up that exact asset through Cloud; the identity
 // check still verifies the selected org and asset before connecting.
-func cloudDefaultSelector(defaultName string, expected *certs.WendyIdentity) string {
+func cloudNameSelector(name string, expected *certs.WendyIdentity) string {
 	if expected != nil && expected.EntityType == certs.EntityAsset && expected.EntityID != "" {
 		return expected.EntityID
 	}
-	return defaultName
+	return name
 }
 
 // resolveWithCloudFallback is resolveRunTarget with the cloud-tunnel device name
@@ -847,46 +843,14 @@ func cloudDefaultSelector(defaultName string, expected *certs.WendyIdentity) str
 // An empty cloudName preserves the original behaviour for the deploy target,
 // where --device IS the device being resolved.
 func resolveWithCloudFallback(ctx context.Context, cloudName string, opts ...resolveOption) (*SelectedDevice, error) {
-	// A saved default that fails on LAN should get its existing Cloud route
-	// before the picker asks to move this run to another device. The hook is
-	// only called for an implicit default, so explicit --device and build-host
-	// selectors retain their normal fallback behavior.
-	cloudCheckedBeforePicker := false
-	resolveOpts := append(append([]resolveOption(nil), opts...), func(c *resolveConfig) {
-		c.sameTargetFallback = func(ctx context.Context, defaultName string) (*SelectedDevice, error) {
-			cloudCheckedBeforePicker = true
-			cfg, err := config.Load()
-			if err != nil {
-				return nil, err
-			}
-			if len(cfg.Auth) == 0 {
-				return nil, fmt.Errorf("no Wendy Cloud session available")
-			}
-			conn, err := connectToPinnedCloudName(ctx, cfg, defaultName)
-			if err != nil {
-				return nil, err
-			}
-			return &SelectedDevice{Agent: conn}, nil
-		}
-	})
-	target, err := resolveTarget(ctx, resolveOpts...)
+	target, err := resolveTarget(ctx, opts...)
 	if err == nil {
 		return target, nil
-	}
-	// If Cloud was already checked, the error came from the ensuing recovery
-	// flow (possibly after the user selected another device). Retrying Cloud
-	// here could silently replace that selection with the saved default.
-	if cloudCheckedBeforePicker {
-		return nil, err
 	}
 	// An MCP-spawned run deploys to the MCP session's device or fails. An
 	// explicit name already checked in Cloud must keep that session's result.
 	var cloudNameErr *cloudNameResolutionError
 	if stopConnectionRecovery(err) || errors.As(err, &cloudNameErr) || cloudFallbackDisabled(cloudName) {
-		return nil, err
-	}
-	var stopped *defaultDeviceRecoveryStoppedError
-	if errors.As(err, &stopped) {
 		return nil, err
 	}
 	// The user picked a local VM. Falling back to a cloud device here would
@@ -900,13 +864,13 @@ func resolveWithCloudFallback(ctx context.Context, cloudName string, opts ...res
 		return nil, err
 	}
 
-	deviceName := cloudFallbackDeviceName(cloudName, deviceFlag, cfg.DefaultDevice)
+	deviceName := cloudFallbackDeviceName(cloudName, deviceFlag)
 	if deviceName == "" {
 		return nil, err
 	}
 
 	// An explicit --device or build host whose dial failed without a DNS miss
-	// is pinned here just as the default is.
+	// is pinned here.
 	cloudConn, cloudErr := cloudFallbackConnectFn(ctx, cfg, deviceName)
 	if cloudErr != nil {
 		if errors.Is(cloudErr, errDeviceIdentityRefused) {

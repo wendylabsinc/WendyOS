@@ -54,7 +54,7 @@ func TestConnectResolvedAgentNamesTheDialedAddress(t *testing.T) {
 	}
 	t.Cleanup(func() { dialAgentLadderFn = prev })
 
-	_, err := connectResolvedAgentWithProvisionedHint(context.Background(), "127.0.0.1", "127.0.0.1:1", false, func() bool { return false })
+	_, err := connectResolvedAgentWithProvisionedHint(context.Background(), "127.0.0.1", "127.0.0.1:1", func() bool { return false })
 	var dial deviceAddresser
 	if !errors.As(err, &dial) || dial.DeviceAddress() != "127.0.0.1:1" {
 		t.Fatalf("err = %v, want it to name 127.0.0.1:1", err)

@@ -40,21 +40,17 @@ func TestCloudUnenrollTargetRoutesBeforeDeviceConnection(t *testing.T) {
 	preserveCloudUnenrollmentHooks(t)
 	scoped := cloudDeviceSelector{Endpoint: "cloud.example:443", TenantUUID: liteTestTenant, AssetUUID: liteTestAssetID}.String()
 	for _, tc := range []struct {
-		name, flag, defaultDevice, contextDevice, want string
-		cloudOnly, cloudCommand, cloudMode             bool
+		name, flag, contextDevice, want    string
+		cloudOnly, cloudCommand, cloudMode bool
 	}{
 		{name: "local name", flag: "desk", want: "desk"},
 		{name: "cloud only name", flag: "desk", cloudOnly: true, want: "desk", cloudMode: true},
 		{name: "cloud group name", flag: "desk", cloudCommand: true, want: "desk", cloudMode: true},
 		{name: "cloud context selector", flag: "ignored", contextDevice: "offline-board", cloudCommand: true, want: "offline-board", cloudMode: true},
 		{name: "explicit cloud selector", flag: scoped, want: scoped, cloudMode: true},
-		{name: "saved cloud selector", defaultDevice: scoped, want: scoped, cloudMode: true},
-		{name: "saved local selector", defaultDevice: "desk", want: "desk"},
-		{name: "cloud group ignores local default", defaultDevice: "desk", cloudCommand: true, cloudMode: true},
-		{name: "cloud only local default", defaultDevice: "desk", cloudOnly: true, want: "desk", cloudMode: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			setTempConfig(t, &config.Config{DefaultDevice: tc.defaultDevice})
+			setTempConfig(t, &config.Config{})
 			deviceFlag = tc.flag
 			ctx := context.Background()
 			if tc.cloudCommand {
@@ -78,18 +74,16 @@ func TestCloudUnenrollTargetRoutesBeforeDeviceConnection(t *testing.T) {
 
 func TestCloudUnenrollCommandDoesNotResolveDevice(t *testing.T) {
 	preserveCloudUnenrollmentHooks(t)
-	scoped := cloudDeviceSelector{Endpoint: "cloud.example:443", TenantUUID: liteTestTenant, AssetUUID: liteTestAssetID}.String()
 	for _, tc := range []struct {
-		name, flag, defaultDevice, endpoint string
-		cloudOnly, cloudCommand             bool
+		name, flag, endpoint    string
+		cloudOnly, cloudCommand bool
 	}{
 		{name: "cloud only offline name", flag: "offline-board", cloudOnly: true},
 		{name: "cloud group offline name", flag: "offline-board", cloudCommand: true},
 		{name: "cloud group endpoint", flag: "offline-board", cloudCommand: true, endpoint: "other.example:443"},
-		{name: "cloud default", defaultDevice: scoped},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			setTempConfig(t, &config.Config{DefaultDevice: tc.defaultDevice})
+			setTempConfig(t, &config.Config{})
 			deviceFlag = tc.flag
 			resolveUnenrollTargetFn = func(context.Context, ...resolveOption) (*SelectedDevice, error) {
 				t.Fatal("cloud removal attempted to resolve or connect to the device")
@@ -99,12 +93,8 @@ func TestCloudUnenrollCommandDoesNotResolveDevice(t *testing.T) {
 			called := false
 			resolveCloudUnenrollAuthFn = func(endpoint, selector string) (*config.AuthConfig, string, error) {
 				called = true
-				wantSelector := tc.flag
-				if wantSelector == "" {
-					wantSelector = tc.defaultDevice
-				}
-				if endpoint != tc.endpoint || selector != wantSelector {
-					t.Fatalf("cloud auth got endpoint=%q selector=%q, want %q %q", endpoint, selector, tc.endpoint, wantSelector)
+				if endpoint != tc.endpoint || selector != tc.flag {
+					t.Fatalf("cloud auth got endpoint=%q selector=%q, want %q %q", endpoint, selector, tc.endpoint, tc.flag)
 				}
 				return nil, "", wantErr
 			}
@@ -164,8 +154,8 @@ func TestUnenrollCommandUsesSelectedCloudAssetWithoutProvisioning(t *testing.T) 
 		name   string
 		target *SelectedDevice
 	}{
-		{name: "agent", target: &SelectedDevice{Agent: &grpcclient.AgentConnection{}, DefaultSelector: scoped}},
-		{name: "Lite selector", target: &SelectedDevice{External: &models.ExternalDevice{ProviderKey: "wendy-lite", ConnectionInfo: map[string]string{"type": "Cloud"}}, DefaultSelector: scoped}},
+		{name: "agent", target: &SelectedDevice{Agent: &grpcclient.AgentConnection{}, Selector: scoped}},
+		{name: "Lite selector", target: &SelectedDevice{External: &models.ExternalDevice{ProviderKey: "wendy-lite", ConnectionInfo: map[string]string{"type": "Cloud"}}, Selector: scoped}},
 		{name: "Lite metadata", target: &SelectedDevice{External: &models.ExternalDevice{ProviderKey: "wendy-lite", ConnectionInfo: map[string]string{"type": "Cloud", "cloud": "cloud.example:443", "tenantId": liteTestTenant, "assetId": liteTestAssetID}}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

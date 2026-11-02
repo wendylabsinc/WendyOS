@@ -8,7 +8,6 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/wendylabsinc/wendy/go/internal/cli/liteclient"
 	clitimesync "github.com/wendylabsinc/wendy/go/internal/cli/timesync"
-	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 )
 
 func newDeviceSyncTimeCmd() *cobra.Command {
@@ -22,11 +21,7 @@ Devices verify the Roughtime signature themselves. For Wendy Lite, select its US
 connection with --device wendy-lite:/dev/cu.usbmodemXXXX. The CLI relays fresh,
 device-nonce-bound replies; the firmware requires two agreeing pinned servers.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := config.Load()
-			if err != nil {
-				return err
-			}
-			selector := mcpStartupDevice(deviceFlag, cfg)
+			selector := mcpStartupDevice(deviceFlag)
 			if strings.HasPrefix(selector, "wendy-lite:") {
 				target, err := resolveTarget(cmd.Context(), SelectDevice(selector), SuppressProvisioningHint(), SuppressPickerEnroll())
 				if err != nil {
