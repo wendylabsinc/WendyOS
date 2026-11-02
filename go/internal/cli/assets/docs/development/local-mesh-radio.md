@@ -8,23 +8,21 @@ device.
 
 ## Operator routers
 
-The operator admission layer lets a CLI installation participate under its
-organization's operator certificate instead of enrolling the computer as a
-device. Each installation has a persistent, independent router identity and
-address. Multiple computers or operator profiles can therefore participate
-without sharing routing state or changing an enrolled device's identity.
-The carrier and destination still authenticate the selected tenant and exact
-operator credentials. Use the explicit connect and disconnect commands below to control
-participation.
+An operator router uses your organization's operator certificate rather than an
+enrolled device identity. Each CLI installation has its own persistent router
+identity and address, so multiple computers can participate independently.
+Connections authenticate both the first router and the destination against the
+selected organization and operator credentials. The CLI also needs router startup
+and discovery support; agent-side admission alone does not start it.
 
-On supported WendyOS nodes, incoming operator connections over bluetooth use
-one separate admission slot rather than a device-neighbor slot. This requires
-the node's primary operator trust anchors and still shares the physical
-adapter's bandwidth and connection limits.
+On supported WendyOS nodes, an incoming operator connection over Bluetooth uses
+one separate slot, in addition to the device-neighbour slots. The node must trust
+your organization's primary operator certificates. All connections still share
+the adapter's bandwidth and hardware connection limits.
 
 ## Join and discover
 
-Sign in, then explicitly enable your computer's router:
+Sign in and enable a persistent background router:
 
 ```sh
 wendy auth login
@@ -39,17 +37,23 @@ macOS and Linux hosts can also make outgoing BLE connections. The CLI's first
 neighbour must currently be WendyOS. Lite devices can be reached through that
 router, but cannot be the CLI's direct first hop.
 
-Commands share one background router for the selected operator profile. It stays
-running when a command exits and can forward traffic between peers. Reading its
-status or opening the Wendy Client Networks view does not enable it. Stop it
-explicitly when finished:
+Commands share one background router for the selected operator profile. After
+`connect`, it stays running when commands exit and can forward traffic between
+peers. Stop it when finished:
 
 ```sh
 wendy device wendy-net disconnect
 ```
 
-Disconnecting ends mesh connections and forwarding. The installation's routing
-identity and reconnect settings remain available for a later explicit join.
+Disconnecting ends the current mesh connections and forwarding while preserving
+the installation's routing identity.
+
+A requested Nearby or mesh discovery can also start a temporary router using the
+selected profile's cached operator certificate. Unless explicitly enabled with
+`connect`, an automatic router can stop after five minutes without command
+activity or transit traffic. Later discovery can start it again. Reading local
+router status or opening the Wendy Client Networks view only observes an
+existing router.
 
 ## Select a device or application service
 
@@ -95,9 +99,9 @@ wendy device wendy-net connect --transport tcp \
   --address ROUTER_IP:TLS_CARRIER_PORT --router ROUTER_DEVICE_UUID
 ```
 
-For BLE, use `--transport ble` with the host's discovered peripheral identifier
+For Bluetooth, use `--transport ble` with the host's discovered peripheral identifier
 or Bluetooth address. The selected identity is authenticated before use; an
-address alone does not establish trust. Slow BLE setup or several mesh hops can
+address alone does not establish trust. Slow Bluetooth setup or several mesh hops can
 make cold connections take longer than ordinary LAN connections.
 
 ## Configure a Lite device
@@ -112,7 +116,7 @@ wendy --device wendy-lite:PORT device wendy-net status
 ```
 
 C5 devices with PSRAM can route across several peers. The constrained C6 profile
-allows only one BLE or Wi-Fi carrier; enabling both returns an error. Select
+allows only one Bluetooth or Wi-Fi carrier; enabling both returns an error. Select
 one explicitly, for example `--ble=false --infrastructure-wifi=true` for Wi-Fi.
 Changing C6 between those carriers saves settings and restarts it; the CLI
 reports that restart before the connection closes. Unsupported carriers return

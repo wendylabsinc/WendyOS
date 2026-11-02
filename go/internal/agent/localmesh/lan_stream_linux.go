@@ -16,7 +16,6 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
 )
 
-const TLSLANPort = 43024
 const tlsLANService = "_wendy-net._tcp"
 const tlsLANProtocol = "tls-v1"
 
@@ -143,7 +142,7 @@ func scanTLSLANWithQuery(ctx context.Context, cfg LANConfig, selected lanInterfa
 					return
 				}
 				linkCtx := WithCarrier(WithConnectionLease(ctx, lease), selected.transport)
-				_ = cfg.Node.AttachStream(linkCtx, peer, secure, selected.cost)
+				_ = attachNativeTLS(linkCtx, cfg.Node, peer, secure, selected.cost)
 			}()
 		}
 		select {
