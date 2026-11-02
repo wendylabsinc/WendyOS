@@ -41,6 +41,7 @@ type OperatorSpec struct {
 	Version       int    `json:"version"`
 	Automatic     bool   `json:"automatic,omitempty"`
 	Enabled       bool   `json:"enabled,omitempty"`
+	Disconnected  bool   `json:"disconnected,omitempty"`
 	Principal     string `json:"principal"`
 	RouterAddress string `json:"routerAddress"`
 	Transport     string `json:"transport,omitempty"`
@@ -193,10 +194,10 @@ func PrepareOperatorTransport(ctx context.Context, certificate config.Certificat
 		transport = ""
 	}
 	recipe := OperatorSpec{Version: 1, Principal: operator.Principal(), RouterAddress: address, RouterUUID: router, Transport: transport, BLEPSM: psm}
-	return prepareOperatorRecipe(ctx, certificate, recipe)
+	return prepareOperatorRecipe(ctx, certificate, recipe, true)
 }
 
-func prepareOperatorRecipe(ctx context.Context, certificate config.CertificateInfo, recipe OperatorSpec) (*grpcclient.AgentConnection, error) {
+func prepareOperatorRecipe(ctx context.Context, certificate config.CertificateInfo, recipe OperatorSpec, explicit bool) (*grpcclient.AgentConnection, error) {
 	spec, err := operatorSpec(recipe, certificate)
 	if err != nil {
 		return nil, err
@@ -212,12 +213,12 @@ func prepareOperatorRecipe(ctx context.Context, certificate config.CertificateIn
 	if err = ensurePrivateDir(filepath.Dir(path)); err != nil {
 		return nil, err
 	}
-	if err = writeOperatorRecipe(ctx, spec, path, recipe); err != nil {
+	if err = writeOperatorRecipe(ctx, spec, path, recipe, explicit); err != nil {
 		return nil, err
 	}
 	return connectOrStartOperator(ctx, spec, &certificate)
 }
-func writeOperatorRecipe(ctx context.Context, spec Spec, path string, recipe OperatorSpec) error {
+func writeOperatorRecipe(ctx context.Context, spec Spec, path string, recipe OperatorSpec, explicit bool) error {
 	if existing, err := readOperatorRecipe(path); err == nil && existing == recipe {
 		return nil
 	}
@@ -229,26 +230,21 @@ func writeOperatorRecipe(ctx context.Context, spec Spec, path string, recipe Ope
 		return err
 	}
 	socket, _ := spec.paths(dir)
-	wait, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-	var startup *os.File
-	for startup == nil {
-		file, locked, err := acquireIdentityLock(socket + ".startup")
-		if err != nil {
-			return err
-		}
-		if locked {
-			startup = file
-			break
-		}
-		select {
-		case <-wait.Done():
-			return wait.Err()
-		case <-time.After(100 * time.Millisecond):
-		}
+	startup, err := lockOperatorStartup(ctx, socket)
+	if err != nil {
+		return err
 	}
 	defer func() { releaseLock(startup); startup.Close() }()
-	if existing, err := readOperatorRecipe(path); err == nil && sameOperatorRecipe(existing, recipe) {
+	intent, err := lockOperatorFile(ctx, socket+".intent")
+	if err != nil {
+		return err
+	}
+	defer func() { releaseLock(intent); _ = intent.Close() }()
+	existing, err := readOperatorRecipe(path)
+	if err == nil && existing.Disconnected && !explicit {
+		return errOperatorDisconnected
+	}
+	if err == nil && sameOperatorRecipe(existing, recipe) {
 		// Enabling retained routing intent changes no identity or carrier.
 		// Publish it atomically without draining existing transit streams.
 		data, e := json.Marshal(recipe)
@@ -273,6 +269,35 @@ func writeOperatorRecipe(ctx context.Context, spec Spec, path string, recipe Ope
 	}
 	return writePrivateFile(path, data)
 }
+
+func lockOperatorStartup(ctx context.Context, socket string) (*os.File, error) {
+	return lockOperatorFile(ctx, socket+".startup")
+}
+
+func lockOperatorFile(ctx context.Context, path string) (*os.File, error) {
+	wait, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	for {
+		if err := wait.Err(); err != nil {
+			return nil, err
+		}
+		file, locked, err := acquireIdentityLock(path)
+		if err != nil {
+			return nil, err
+		}
+		if locked {
+			return file, nil
+		}
+		select {
+		case <-wait.Done():
+			return nil, wait.Err()
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+}
+
+var errOperatorDisconnected = errors.New("operator mesh is disconnected; run 'wendy device wendy-net connect' to rejoin")
+
 func operatorRecipeCurrent(spec Spec) error {
 	directory, err := configDir()
 	if err != nil {
@@ -281,6 +306,9 @@ func operatorRecipeCurrent(spec Spec) error {
 	current, err := readOperatorRecipe(operatorRecipePath(directory, spec.Operator.Principal))
 	if err != nil {
 		return err
+	}
+	if current.Disconnected {
+		return errOperatorDisconnected
 	}
 	if !sameOperatorRecipe(current, *spec.Operator) {
 		return errors.New("configured operator first hop changed; resolve the mesh selector again")
@@ -425,7 +453,20 @@ func connectOrStartOperator(ctx context.Context, spec Spec, certificate *config.
 			if locked {
 				releaseLock(file)
 				file.Close()
-				if err = launchOperatorBroker(spec); err != nil {
+				// Serialize the final recipe check and launch with explicit stop.
+				// Startup may have waited while disconnect published its tombstone.
+				err = func() error {
+					intent, err := lockOperatorFile(wait, socket+".intent")
+					if err != nil {
+						return err
+					}
+					defer func() { releaseLock(intent); _ = intent.Close() }()
+					if err := operatorRecipeCurrent(spec); err != nil {
+						return err
+					}
+					return launchOperatorBroker(spec)
+				}()
+				if err != nil {
 					return nil, err
 				}
 			}
@@ -442,9 +483,9 @@ func connectOrStartOperator(ctx context.Context, spec Spec, certificate *config.
 var errOperatorCredentialsChanged = errors.New("selected operator credential changed")
 var errOperatorProtocolChanged = errors.New("operator broker IPC protocol changed")
 
-// DisconnectOperator withdraws only the current operator's retained context.
-// The exact-owned broker observes unpublication and cancels its attachment;
-// waiting for its lock joins shutdown before a replacement can be prepared.
+// DisconnectOperator withdraws the current operator's retained context and
+// records that only an explicit connect may start it again. The non-secret
+// recipe and installation identity remain available without implicit rejoin.
 func DisconnectOperator(ctx context.Context) error {
 	certificate, operator, err := configuredOperator()
 	if err != nil {
@@ -454,12 +495,46 @@ func DisconnectOperator(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	recipe, err := readOperatorRecipe(operatorRecipePath(directory, operator.Principal()))
+	if !configDirOwnershipSafe() {
+		return errors.New("operator profile is not owned by current user")
+	}
+	brokerDirectory, err := brokerDir()
 	if err != nil {
+		return err
+	}
+	if err := ensurePrivateDir(brokerDirectory); err != nil {
+		return err
+	}
+	socket, _ := paths(brokerDirectory, operatorKey(operator.Principal()), certs.WendyIdentity{})
+	// Do not wait for startup: the connecting command holds that lock while a
+	// first handshake can take a minute. Publish stop intent now; the joining
+	// owner watches it and cancels its handshake. Hold this short intent lock
+	// through shutdown so a concurrent explicit connect linearizes afterward.
+	intent, err := lockOperatorFile(ctx, socket+".intent")
+	if err != nil {
+		return err
+	}
+	defer func() { releaseLock(intent); _ = intent.Close() }()
+	path := operatorRecipePath(directory, operator.Principal())
+	recipe, err := readOperatorRecipe(path)
+	if os.IsNotExist(err) {
+		recipe = OperatorSpec{Version: 1, Principal: operator.Principal(), Automatic: true}
+	} else if err != nil {
 		return err
 	}
 	spec, err := operatorSpec(recipe, certificate)
 	if err != nil {
+		return err
+	}
+	recipe.Disconnected = true
+	if err := ensurePrivateDir(filepath.Dir(path)); err != nil {
+		return err
+	}
+	data, err := json.Marshal(recipe)
+	if err != nil {
+		return err
+	}
+	if err := writePrivateFile(path, data); err != nil {
 		return err
 	}
 	return disconnectOperatorSpec(ctx, spec)
@@ -590,9 +665,18 @@ func runOperator(ctx context.Context, dir string, spec Spec, idleTTL time.Durati
 	}
 	owner, cancel := context.WithCancel(ctx)
 	defer cancel()
+	joining, stopWatching := context.WithCancel(owner)
+	intentDone := watchOperatorRecipe(joining, spec, cancel)
+	defer func() { stopWatching(); <-intentDone }()
 	attachment := &operatorAttachment{directory: directory, spec: spec, certificate: selected}
 	initial, err := attachment.open(owner, *spec.Operator)
+	stopWatching()
+	<-intentDone
 	if err != nil {
+		return err
+	}
+	if err := operatorRecipeCurrent(spec); err != nil {
+		initial.session.Close()
 		return err
 	}
 	attachment.replace(initial)
@@ -621,6 +705,30 @@ func runOperator(ctx context.Context, dir string, spec Spec, idleTTL time.Durati
 		current, err := attachment.snapshot()
 		return err == nil && current.session.HasRecentTransit(DefaultIdleTTL)
 	}, remotes.Resolve, remotes.localManagement, true)
+}
+
+// The initial TLS/agent join happens before IPC publication. Observe explicit
+// stop intent during that phase. After joining, normal IPC unpublication owns
+// shutdown; the extra polling driver is stopped and joined before publication.
+func watchOperatorRecipe(ctx context.Context, spec Spec, cancel context.CancelFunc) <-chan struct{} {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(100 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if err := operatorRecipeCurrent(spec); err != nil {
+					cancel()
+					return
+				}
+			}
+		}
+	}()
+	return done
 }
 
 // Routing intent stays on private local IPC and is removed before forwarding.

@@ -532,6 +532,13 @@ func operatorBrokerNormal(t *testing.T, algorithm string, disconnect bool) {
 		if err := DisconnectOperator(ctx); err != nil {
 			t.Fatal(err)
 		}
+		before := starts.Load()
+		if _, err := ConnectOperator(ctx, MeshSelector(router)); !errors.Is(err, errOperatorDisconnected) {
+			t.Fatalf("ordinary mesh selection undid explicit disconnect: %v", err)
+		}
+		if starts.Load() != before {
+			t.Fatal("ordinary mesh selection restarted the disconnected broker")
+		}
 	}
 	if transit != nil {
 		transit.roundTrip(t)
