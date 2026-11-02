@@ -110,16 +110,16 @@ The status says what the agent actually checked, which differs by kind:
 | Status | Source | What was checked |
 |---|---|---|
 | `connected` | Local camera (USB, CSI, or a ROS 2 image topic's loopback) | The camera answered a capture query when it was listed. Nothing tests that it delivers a picture. |
-| `online` | Network camera | It answered the last discovery probe and has a stored login. The login itself is not tried. |
+| `online` | Network camera | It answered the agent's last check. Only network cameras with a stored login are sources; pair one with `wendy device pair` or `wendy device camera login <id>`, and see unpaired ones with `wendy device camera list --all`. The login itself is not tried. |
 | `detected` | Microphone | PipeWire, or ALSA where no PipeWire session runs, lists it as a capture device. Nothing tests that it hears anything. |
 | `reachable` | ROS 2 domain | `ros2 topic list` answered on the domain. Recording the domain records all of its topics. |
 | `listed` | ROS 2 topic | `ros2 topic list` lists the topic. |
 | `built in` | Application records, telemetry | Nothing; they need no hardware. |
 
-A source that is not usable shows why instead, for example `no login stored`
-or `camera offline` for a network camera, `silent audio-hub channel` for an
-NVIDIA Jetson audio-DMA endpoint that records digital silence, or
-`topic listing failed` for a ROS 2 domain. It has no `*`: `record` leaves it out
+A source that is not usable shows why instead, for example `camera offline`
+for a network camera, `silent audio-hub channel` for an NVIDIA Jetson
+audio-DMA endpoint that records digital silence, or `topic listing failed` for
+a ROS 2 domain. It has no `*`: `record` leaves it out
 unless `--source` names it. In `--json`, `healthy` is the same verdict and
 `unusable_reason` carries the reason. An agent that predates these fields is
 shown by its raw description, with `healthy` or `unhealthy` as its status.
@@ -449,6 +449,34 @@ Inference requires a camera source and a trigger matching its event in
 `inference_status`, including runtime state, per-camera state and notification
 errors. Temporary camera loss retains presence/cooldown state so reconnecting
 does not produce a duplicate detection.
+
+Each scored frame produces a `prediction` record, which an Episode that
+records applications keeps in its `events.jsonl`. A frame that raises the
+inference event also writes an `event` record with the same attributes, which
+the device event journal keeps too.
+
+```json
+{"version":1,"type":"prediction","model":"webnn/yolo11n","attributes":{
+  "campaign":"c920-yolo-live","source_id":"v4l2:/dev/video0","model_version":"<revision>",
+  "width":1280,"height":720,
+  "detections":[{"label":"person","score":0.9225323796272278,
+    "box":[0,184.68881225585938,845.9542236328125,693.4185791015625],
+    "box_norm":[0,0.25651222,0.6609017,0.96308136]}],
+  "input_reference_status":"encoded_stream_decode_does_not_preserve_sample_ids",
+  "runtime_results_dropped":0}, ...}
+```
+
+| Attribute | Description |
+|---|---|
+| `width`, `height` | Size in pixels of the picture the model scored: the decoded camera frame. |
+| `detections[].box` | `[x1, y1, x2, y2]`: the top-left and bottom-right corners, in pixels of that picture. A box may reach past the picture's edges. |
+| `detections[].box_norm` | The same corners clamped to the picture and divided by `width` and `height`, so every value is in `[0, 1]`. `(0, 0)` is the top-left corner of the top-left pixel and `(1, 1)` the bottom-right corner of the bottom-right pixel; x grows to the right and y down. Omitted for a box with no area inside the picture. |
+
+To draw a box on the picture at any other size (a thumbnail, a phone, a
+half-scale stream), multiply `box_norm` by the displayed width and height.
+Records written by agents before `box_norm` existed have no `width`, `height`
+or `box_norm`; `box` there is in pixels of the camera's own resolution, which
+the record does not state. Readers that do not know the new fields ignore them.
 
 #### Accelerators
 

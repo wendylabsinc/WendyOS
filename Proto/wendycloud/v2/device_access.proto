@@ -1,0 +1,126 @@
+syntax = "proto3";
+
+package wendycloud.v2;
+
+import "google/protobuf/timestamp.proto";
+import "wendy/options.proto";
+import "wendycloud/v2/signed_request.proto";
+
+// Device access entries (WDY-3594). An entry gives a principal (user, group or
+// device) access to a target (one device, a site, a tag or all devices), with
+// effect allow or deny; deny wins. Roles say WHAT a principal may do; entries
+// say on WHICH devices. A device-targeted permission (device:*, tunnel:*,
+// deployment:*, container:*, except tenant-wide ones such as device:enroll)
+// needs both. No matching allow means no access, for owners and admins too.
+//
+// Enrolling a device creates an ordinary allow entry for the enrolling user;
+// removing a member removes their entries.
+//
+// Each RPC comment names its gate: the catalog permission the caller must hold
+// in organization_id. Errors use the gRPC status code named in the comment.
+service DeviceAccessService {
+  // Entries of the organization, ordered by created_at, then id. Both filters
+  // are optional and combine with AND. Unpaginated. Gate: `device-access:list`.
+  // INVALID_ARGUMENT for a filter that breaks the AccessEntry id/ref rules.
+  rpc ListAccessEntries(ListAccessEntriesRequest) returns (ListAccessEntriesResponse);
+  // Gate: `device-access:create`. INVALID_ARGUMENT for an UNSPECIFIED type or
+  // effect, or an id/ref that breaks the AccessEntry rules; NOT_FOUND if the
+  // principal or the device/site target is not in the organization;
+  // ALREADY_EXISTS for an entry with the same principal, target and effect.
+  // Signed; payload_type "wendycloud.v2.CreateAccessEntryRequest".
+  rpc CreateAccessEntry(SignedRequest) returns (AccessEntry) {
+    option (wendy.signed_request) = true;
+  }
+  // Gate: `device-access:delete`. NOT_FOUND if the entry is not in the
+  // organization.
+  // Signed; payload_type "wendycloud.v2.DeleteAccessEntryRequest".
+  rpc DeleteAccessEntry(SignedRequest) returns (DeleteAccessEntryResponse) {
+    option (wendy.signed_request) = true;
+  }
+}
+
+enum AccessPrincipalType {
+  ACCESS_PRINCIPAL_TYPE_UNSPECIFIED = 0;
+  // principal_id = user ID, as in organization membership.
+  ACCESS_PRINCIPAL_TYPE_USER = 1;
+  // principal_id = wendy-auth group ID (local or IdP-synced); the entry
+  // applies to every member of the group.
+  ACCESS_PRINCIPAL_TYPE_GROUP = 2;
+  // principal_id = the device's Asset.id.
+  ACCESS_PRINCIPAL_TYPE_DEVICE = 3;
+}
+
+enum AccessTargetType {
+  ACCESS_TARGET_TYPE_UNSPECIFIED = 0;
+  // target_ref = the device's Asset.id.
+  ACCESS_TARGET_TYPE_DEVICE = 1;
+  // target_ref = Site.id; renaming the site keeps the entry.
+  ACCESS_TARGET_TYPE_SITE = 2;
+  // target_ref = the tag name, matched against Asset tags. A tag on no device
+  // yet is allowed.
+  ACCESS_TARGET_TYPE_TAG = 3;
+  // Every device of the organization; target_ref is empty.
+  ACCESS_TARGET_TYPE_ALL = 4;
+}
+
+enum AccessEffect {
+  ACCESS_EFFECT_UNSPECIFIED = 0;
+  ACCESS_EFFECT_ALLOW = 1;
+  // Wins over any allow reaching the same device.
+  ACCESS_EFFECT_DENY = 2;
+}
+
+message AccessEntry {
+  string id = 1;
+  string organization_id = 2;
+  AccessPrincipalType principal_type = 3;
+  // Non-empty; meaning per AccessPrincipalType.
+  string principal_id = 4;
+  // User name or email, group name, or device name, resolved when read.
+  // Empty if it cannot be resolved; show principal_id instead.
+  string principal_display_name = 5;
+  AccessTargetType target_type = 6;
+  // Meaning per AccessTargetType; non-empty except for ALL, where it is empty.
+  string target_ref = 7;
+  // Device name, site name or tag, resolved when read. Empty for ALL and when
+  // it cannot be resolved.
+  string target_display_name = 8;
+  AccessEffect effect = 9;
+  // User ID of the creator; the enrolling user for an enrollment entry.
+  // Empty for entries created by the upgrade backfill.
+  string created_by = 10;
+  google.protobuf.Timestamp created_at = 11;
+}
+
+message ListAccessEntriesRequest {
+  string organization_id = 1;
+  // Principal filter: UNSPECIFIED = none; otherwise principal_id is required
+  // and matches exactly (a user filter does not include the user's groups).
+  AccessPrincipalType principal_type = 2;
+  string principal_id = 3;
+  // Target filter: UNSPECIFIED = none. DEVICE returns every entry that reaches
+  // the device: on the device itself, its site, any of its tags, or ALL.
+  // SITE, TAG and ALL match exactly.
+  AccessTargetType target_type = 4;
+  string target_ref = 5;
+}
+
+message ListAccessEntriesResponse {
+  repeated AccessEntry entries = 1;
+}
+
+message CreateAccessEntryRequest {
+  string organization_id = 1;
+  AccessPrincipalType principal_type = 2;
+  string principal_id = 3;
+  AccessTargetType target_type = 4;
+  string target_ref = 5;
+  AccessEffect effect = 6;
+}
+
+message DeleteAccessEntryRequest {
+  string organization_id = 1;
+  string entry_id = 2;
+}
+
+message DeleteAccessEntryResponse {}

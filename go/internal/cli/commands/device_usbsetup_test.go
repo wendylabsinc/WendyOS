@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-// The hidden "__usb-setup" subcommand is the privileged half of the USB-C
+// The hidden "__usb-setup" subcommand is the privileged half of the USB
 // auto-setup flow, re-executed under sudo by maybeOfferUSBSetup.
 func TestNewUSBSetupHiddenCmd_Flags(t *testing.T) {
 	cmd := newUSBSetupHiddenCmd()
@@ -24,7 +24,7 @@ func TestNewUSBSetupHiddenCmd_Flags(t *testing.T) {
 	}
 }
 
-// An agent or script can't answer the USB-C setup prompt in `wendy discover`,
+// An agent or script can't answer the USB setup prompt in `wendy discover`,
 // so it gets this notice instead. It must name the interface and send a person
 // to that prompt, since there is no setup command to run.
 func TestPendingUSBSetupNotice(t *testing.T) {
@@ -48,14 +48,14 @@ func TestPendingUSBSetupNotice(t *testing.T) {
 	}
 }
 
-// USB-C setup is implicit: `wendy discover` offers it. AGENTS.md, the docs and
+// USB setup is implicit: `wendy discover` offers it. AGENTS.md, the docs and
 // the agent skills once sent people to a `wendy device usb-setup` command that
 // didn't exist; none of them may name a usb-setup command again.
 func TestDocsNameNoUSBSetupCommand(t *testing.T) {
 	re := regexp.MustCompile("`(?:sudo )?wendy [^`]*usb-setup[^`]*`")
 	check := func(name string, data []byte) {
 		for _, m := range re.FindAll(data, -1) {
-			t.Errorf("%s: %s names a usb-setup command; point at `wendy discover`'s USB-C setup prompt instead", name, m)
+			t.Errorf("%s: %s names a usb-setup command; point at `wendy discover`'s USB setup prompt instead", name, m)
 		}
 	}
 	repoRoot := filepath.Join("..", "..", "..", "..")

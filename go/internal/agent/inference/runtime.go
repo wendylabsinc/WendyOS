@@ -53,9 +53,11 @@ type Input struct {
 }
 
 type Detection struct {
-	Label string     `json:"label"`
-	Score float64    `json:"score"`
-	Box   [4]float64 `json:"box"`
+	Label string  `json:"label"`
+	Score float64 `json:"score"`
+	// Box is x1, y1, x2, y2: the top-left and bottom-right corners, in pixels
+	// of the scored picture (Result.Width by Result.Height).
+	Box [4]float64 `json:"box"`
 }
 
 type Result struct {
@@ -64,7 +66,11 @@ type Result struct {
 	SourceID       string      `json:"source_id"`
 	Generation     uint64      `json:"generation"`
 	Detections     []Detection `json:"detections,omitempty"`
-	Error          string      `json:"error,omitempty"`
+	// Width and Height are the scored picture's size in pixels, the frame of
+	// the detection boxes.
+	Width  int    `json:"width,omitempty"`
+	Height int    `json:"height,omitempty"`
+	Error  string `json:"error,omitempty"`
 	// Engine, Precision and InferMs say what scored a prediction: cpu or
 	// tensorrt, at fp32 or fp16, taking this long.
 	Engine    string  `json:"engine,omitempty"`

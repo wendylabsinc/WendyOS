@@ -39,6 +39,25 @@ func TestPresenceSourceRemoval(t *testing.T) {
 	}
 }
 
+func TestPresenceFailbackRequiresConsecutiveHealthyProbes(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	local := net.ParseIP("192.0.2.1")
+	p := &peer.Peer{LocalAddr: &net.TCPAddr{IP: local}, Addr: &net.TCPAddr{IP: net.ParseIP("192.0.2.100"), Port: 443}}
+	probes := 0
+	a := &Agent{sourceCheckInterval: time.Millisecond,
+		sourceAddresses: func() ([]net.Addr, error) { return []net.Addr{&net.IPAddr{IP: local}}, nil },
+		preferredSource: func(*net.TCPAddr) (net.IP, error) { return net.ParseIP("192.0.2.2"), nil },
+		pathReachable:   func(context.Context, string) bool { probes++; return probes > 10 || probes%2 == 1 },
+	}
+	if err := a.watchPresencePath(ctx, p, "unused"); !errors.Is(err, errPresencePathMoved) {
+		t.Fatal(err)
+	}
+	if probes != 15 {
+		t.Fatalf("failed back before five consecutive successes: %d probes", probes)
+	}
+}
+
 func TestPresencePathRequiresStableReachableSource(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
@@ -63,13 +82,13 @@ func TestPresencePathRequiresStableReachableSource(t *testing.T) {
 			if probes == 2 && checks < 6 {
 				t.Fatal("failed probe did not back off")
 			}
-			return probes == 2
+			return probes >= 2
 		},
 	}
 	if err := a.watchPresencePath(ctx, p, "unused"); !errors.Is(err, errPresencePathMoved) {
 		t.Fatalf("path never moved after successful probe: %v", err)
 	}
-	if probes != 2 {
+	if probes != 6 {
 		t.Fatalf("probes = %d", probes)
 	}
 }
@@ -111,7 +130,7 @@ func TestPresencePathRechecksSourceAfterProbe(t *testing.T) {
 				if !errors.Is(err, context.Canceled) || probes != 1 {
 					t.Fatalf("restored route disconnected presence: err=%v probes=%d", err, probes)
 				}
-			} else if !errors.Is(err, errPresencePathMoved) || probes != 2 {
+			} else if !errors.Is(err, errPresencePathMoved) || probes != 6 {
 				t.Fatalf("replacement route was not independently probed: err=%v probes=%d", err, probes)
 			}
 		})
@@ -155,13 +174,14 @@ func TestPresencePathProbeBackoffDoesNotDelaySourceRemoval(t *testing.T) {
 // lease that expires before the reconnect is replaced, not re-presented.
 func TestAgentEndsPresenceWhenPathChanges(t *testing.T) {
 	for _, tc := range []struct {
-		name                   string
-		removedSource, expired bool
+		name                            string
+		removedSource, expired, refresh bool
 	}{
-		{"removed", true, false},
-		{"moved", false, false},
-		{"removed/expired lease", true, true},
-		{"moved/expired lease", false, true},
+		{"removed", true, false, false},
+		{"moved", false, false, false},
+		{"removed/expired lease", true, true, false},
+		{"moved/expired lease", false, true, false},
+		{"planned refresh", false, false, true},
 	} {
 		removedSource := tc.removedSource
 		t.Run(tc.name, func(t *testing.T) {
@@ -202,6 +222,9 @@ func TestAgentEndsPresenceWhenPathChanges(t *testing.T) {
 				return net.ParseIP("127.0.0.1"), nil
 			}
 			// Probe the real gRPC fixture before moving the still-assigned source.
+			if tc.refresh {
+				a.presenceMaxAge = 80 * time.Millisecond
+			}
 			done := make(chan error, 1)
 			go func() { done <- a.runOnce(ctx) }()
 			select {
@@ -218,12 +241,15 @@ func TestAgentEndsPresenceWhenPathChanges(t *testing.T) {
 			case <-ctx.Done():
 				t.Fatal("transport source was not inspected")
 			}
-			removed.Store(true)
+			removed.Store(!tc.refresh)
 			select {
 			case err := <-done:
 				expected := errPresenceSourceRemoved
 				if !removedSource {
 					expected = errPresencePathMoved
+				}
+				if tc.refresh {
+					expected = errPresenceRefresh
 				}
 				if !errors.Is(err, expected) {
 					t.Fatalf("wrong reconnect reason: %v", err)

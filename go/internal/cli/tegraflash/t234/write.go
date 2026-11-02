@@ -164,9 +164,15 @@ func writePlan(opts WriterOptions) error {
 		return err
 	}
 
-	// Total for progress: partition file bytes (the GPT is noise).
+	// Total for progress: partition file bytes (the GPT is noise). Alongside
+	// it, every partition's extent and the part of it its image fills, which
+	// is what the stale-data clear below must leave alone. copyFileAt pads an
+	// image's last sector with zeros, so the image fills whole sectors.
 	var total, done int64
+	var parts, written []Extent
 	for _, p := range resolved.Partitions {
+		start := p.StartSector * sectorSize
+		parts = append(parts, Extent{start, start + p.SizeSectors*sectorSize})
 		if p.File == "" {
 			continue
 		}
@@ -179,6 +185,7 @@ func writePlan(opts WriterOptions) error {
 				p.Name, p.File, st.Size(), p.SizeSectors*sectorSize)
 		}
 		total += st.Size()
+		written = append(written, Extent{start, start + (st.Size()+sectorSize-1)/sectorSize*sectorSize})
 	}
 
 	// Partition images first, GPT last: the disk only presents a valid
@@ -195,6 +202,14 @@ func writePlan(opts WriterOptions) error {
 		}
 		st, _ := os.Stat(filepath.Join(opts.ImagesDir, p.File))
 		done += st.Size()
+	}
+	// Clear what the previous installation left where this layout writes no
+	// image: `data` and UDA have none, so without this the old /data
+	// filesystem, and the device identity on it, survive the flash (see
+	// StaleExtents). Before the blank filesystems below, which then land on
+	// cleared space, and before the GPT, like every other write.
+	if err := ZeroExtents(dev, StaleExtents(parts, written), sectorSize); err != nil {
+		return fmt.Errorf("clearing stale partition data: %w", err)
 	}
 	// Create explicitly-requested blank filesystems directly at their partition
 	// offsets. This uses pure Go filesystem writers and never shells out to mkfs.

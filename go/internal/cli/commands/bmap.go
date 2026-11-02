@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -96,8 +97,11 @@ var bmapWriteConcurrency = 1
 // writes only mapped ranges via WriteAt, discarding bytes that fall in holes.
 // Each mapped range's SHA256 is verified against the bmap; a mismatch aborts.
 // progressFn is called with the cumulative number of uncompressed bytes
-// consumed from src.
+// consumed from src. Once the image is written, the stale data a previous
+// installation left in its empty partitions is cleared (clearStalePartitions).
 func applyBmap(src io.Reader, dst io.WriterAt, b *Bmap, progressFn func(int64)) error {
+	head := &headCapture{}
+	src = io.TeeReader(src, head)
 	buf := make([]byte, bmapChunkSize)
 	var consumed int64
 
@@ -154,7 +158,7 @@ func applyBmap(src io.Reader, dst io.WriterAt, b *Bmap, progressFn func(int64)) 
 			return err
 		}
 	}
-	return nil
+	return clearStalePartitions(dst, readImageGPT(imageHead{bytes.NewReader(head.buf)}), b)
 }
 
 // discard reads exactly n bytes from src and throws them away, updating the
@@ -216,6 +220,9 @@ type bmapWrite struct {
 // drain the pipeline, keeping the write queue deep on media that benefits. The
 // seekable decoder is touched only by the single reader goroutine, honoring its
 // "not safe for concurrent use" contract.
+//
+// Once every writer is done, the stale data a previous installation left in
+// the image's empty partitions is cleared (clearStalePartitions).
 func applyBmapSeekable(src io.ReadSeeker, dst io.WriterAt, b *Bmap, progressFn func(int64)) error {
 	workers := bmapWriteConcurrency
 	if workers < 1 {
@@ -305,7 +312,17 @@ func applyBmapSeekable(src io.ReadSeeker, dst io.WriterAt, b *Bmap, progressFn f
 		return nil
 	})
 
-	return g.Wait()
+	if err := g.Wait(); err != nil {
+		return err
+	}
+	if _, err := src.Seek(0, io.SeekStart); err != nil {
+		return fmt.Errorf("seeking to the image's partition table: %w", err)
+	}
+	_, layout, err := readImageHead(src)
+	if err != nil {
+		return fmt.Errorf("reading the image's partition table: %w", err)
+	}
+	return clearStalePartitions(dst, layout, b)
 }
 
 // parseRange parses a bmap range token: either "N" or "N-M".

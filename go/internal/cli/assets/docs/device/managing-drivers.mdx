@@ -35,6 +35,33 @@ Both still filter drivers by the running kernel. These flags work with the picke
 `list --available`, and registry installs. They cannot be combined with each other or
 with `install --file`.
 
+On devices with no WiFi connection or routable network address, the CLI downloads
+the published add-on and uploads it over the existing device connection, including
+USB. The same transfer supports driver staging before an OS update. The published
+checksum and signature are preserved, and the agent verifies the image before
+applying it.
+
+To include drivers when installing WendyOS, repeat `--driver` for each add-on:
+
+```sh
+wendy os install --device-type dragonwing-iq-9075 --device-name iq9-mesh \
+  --nightly --driver intel-be202
+```
+
+This downloads and checks the add-ons before flashing, pins them to the selected
+image's kernel, then waits up to ten minutes after flashing for the device's hostname,
+`wendyos-iq9-mesh.local`. If this computer cannot resolve that name, the CLI also tries
+the device's USB-C link. Keep the USB network cable connected and follow the board's
+power-cycle instructions. The CLI checks the hostname, board type and running kernel
+before uploading the drivers. Driver installation needs no internet connection on the
+device.
+
+`--driver` requires `--device-type` and `--device-name` so the CLI can reconnect to
+the intended device. It cannot be used with positional image/drive arguments.
+If the wait expires or a driver fails, the command reports that the OS was written
+but driver setup is incomplete. A recent agent with unenrolled driver support is
+required when installing without cloud enrollment.
+
 The examples use `wendyos-hello`, a self-test add-on published with every build, so
 they run as written on any device whose OS version is in the registry.
 
@@ -149,8 +176,13 @@ Once a real key ships, unsigned add-ons and bad signatures are refused everywher
 
 ## Availability
 
-The driver service is Linux-only and is registered on the mTLS port alone — loading a
-kernel module is ring-0 code execution, so the transport must establish *who* is asking
-before signature verification decides *what* runs. Against an agent that does not serve
-it (a non-Linux host, or one predating driver support) the CLI treats the device as
-having no add-ons rather than failing.
+Driver management requires Linux and a recent agent. Enrollment is optional. Before
+enrollment, the service is available on the unauthenticated setup listener, alongside
+OS updates and container management. After enrollment, remote access uses the
+authenticated mTLS listener. The local admin socket also supports driver management.
+
+Older agents may expose drivers only after enrollment or lack driver support entirely.
+If `wendy device drivers` reports that the service is unavailable on a Linux device,
+update the device's agent. Before an OS update, an unavailable driver service means the
+installed add-ons cannot be read, so the update asks before continuing and stops when
+it cannot ask. Pass `--no-drivers` to update anyway.

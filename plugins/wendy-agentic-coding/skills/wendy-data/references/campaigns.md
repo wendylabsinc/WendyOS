@@ -89,7 +89,7 @@ wendy data download <episode-id> --output ./incident-episode --device <selector>
 `deploy` strictly validates, persists, and arms the plan. It is not a dry-run
 validator. Use a filename to avoid the interactive picker. Capture the returned
 revision and any warnings. Inspect returns the canonical plan even without
-`--json`. An enrolled device's deployment registers `campaign:<name>` in Cloud
+`--json`. An enrolled device's deployment registers `sh.wendy.campaign.<name>` in Cloud
 Apps, using the matching operator session. Registration failures stop deployment;
 `--skip-cloud-registration` supports an intended offline deployment.
 
@@ -161,6 +161,13 @@ file in the pinned Hugging Face repository. First use installs a managed runtime
 and downloads model files, requiring network access and storage outside the
 episode quota. Remote model code is disabled. Check `inference_status`, its
 per-camera states, and actual events after deployment.
+
+Each scored frame produces a `prediction` record for `events.jsonl`. Its
+`detections[].box` is `[x1, y1, x2, y2]` in pixels of the scored picture, and
+`detections[].box_norm` is the same corners clamped to the picture and
+normalised to `[0, 1]`. The record's `width` and `height` give the picture's
+size. Draw from `box_norm` when the picture is shown at another size. Older
+records have only `box` and no picture size.
 
 `accelerator` chooses the hardware: `auto` (the default), `cpu`, or `tensorrt`.
 On a Jetson, `auto` runs a `yolo_onnx` model through TensorRT on the GPU, and

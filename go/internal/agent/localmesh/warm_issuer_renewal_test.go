@@ -58,7 +58,7 @@ func sameLeafIssuerRenewalFixture(t *testing.T, renewedLifetime time.Duration) w
 	keyPEM := string(pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER}))
 	var credentials []*Credentials
 	for _, issuerPEM := range issuerPEMs {
-		c, err := NewCredentials(leafPEM, issuerPEM+root.pem, keyPEM)
+		c, err := newTestCredentials(leafPEM, issuerPEM+root.pem, keyPEM)
 		if err != nil {
 			t.Fatal(err)
 		}
