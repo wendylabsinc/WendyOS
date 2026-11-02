@@ -66,6 +66,7 @@ type ControlMessage struct {
 	Time        *TimestampControl   `json:"time,omitempty" cbor:"t,omitempty"`
 	deadline    time.Time           // Local queue ownership only; never serialized.
 	canceled    *atomic.Bool
+	origin      string // Immutable local export principal/instance; never serialized.
 }
 
 // Deadline is local scheduling metadata for this queued payload. Incoming wire
@@ -735,7 +736,7 @@ func (s *Synchronizer) retainPending(w SignedManifest, now time.Time) {
 // work while idle. It starts no transfers and performs no certificate admission.
 func (s *Synchronizer) Sweep(now time.Time) {
 	for owner, artifact := range s.artifacts {
-		if !artifact.deadline.After(now) || !s.directory.hasCurrentOwner(owner, now) {
+		if !artifact.deadline.After(now) {
 			artifact.canceled.Store(true)
 			if s.gossipPool != nil {
 				s.gossipPool.Forget(artifact.id)

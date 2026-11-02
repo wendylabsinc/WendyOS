@@ -20,14 +20,15 @@ func (n *Node) sweepAnnouncements(now time.Time) {
 			p.sync.Sweep(now)
 		}
 		n.pruneReplies(p, now)
-		// This actor is the only producer. A concurrent writer can only consume
-		// this prefix; retained messages are put back in their original order.
+		// This actor is the only producer. Serialize removal/reinsertion with
+		// the writer's dequeue so live controls cannot overtake each other.
+		p.controlMu.Lock()
 		count := len(p.control)
 		retained := make([]ControlMessage, 0, count)
 		for range count {
 			select {
 			case m := <-p.control:
-				if !m.Expired(now) {
+				if n.controlEligible(p, m, now) {
 					retained = append(retained, m)
 				} else if m.Kind == "bundle" {
 					p.pendingBundles.Delete(Fingerprint(m.Bundle))
@@ -38,6 +39,10 @@ func (n *Node) sweepAnnouncements(now time.Time) {
 		for _, m := range retained {
 			p.control <- m
 		}
+		p.controlMu.Unlock()
+		if len(retained) != 0 {
+			p.wakeControl()
+		}
 	}
 }
 
@@ -45,7 +50,7 @@ func (n *Node) pruneReplies(p *nodePeer, now time.Time) {
 	kept := p.replies[:0]
 	p.replyBytes = 0
 	for _, m := range p.replies {
-		if m.Expired(now) {
+		if !n.controlEligible(p, m, now) {
 			if m.Kind == "bundle" {
 				p.pendingBundles.Delete(Fingerprint(m.Bundle))
 			}
@@ -57,4 +62,17 @@ func (n *Node) pruneReplies(p *nodePeer, now time.Time) {
 	}
 	clear(p.replies[len(kept):])
 	p.replies = kept
+}
+
+// Suppressing an untrusted export must not erase a still-bounded cached body:
+// it can be needed for identity-only repair after certificate rotation. The
+// Directory independently revalidates its signing chain before any actual send.
+func (n *Node) controlEligible(p *nodePeer, m ControlMessage, now time.Time) bool {
+	if m.Expired(now) {
+		return false
+	}
+	if p.sync == nil || m.Gossip == nil || (m.Gossip.Op != "have" && m.Gossip.Op != "data") {
+		return true
+	}
+	return m.origin != "" && n.directory != nil && n.directory.hasCurrentOwner(m.origin, now)
 }

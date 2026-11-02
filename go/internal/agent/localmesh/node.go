@@ -37,6 +37,9 @@ type nodePeer struct {
 	tun            io.ReadWriteCloser
 	pendingBundles sync.Map // fingerprints queued or being written on this link
 	control        chan ControlMessage
+	controlMu      sync.Mutex // Serializes dequeue against actor idle pruning.
+	controlOnce    sync.Once
+	controlReady   chan struct{}
 	done           chan struct{}
 	sync           *Synchronizer
 	replies        []ControlMessage
@@ -560,7 +563,7 @@ func (n *Node) continueReconcilePeer(p *nodePeer, now time.Time) {
 }
 
 func (n *Node) writePeerControl(p *nodePeer, m ControlMessage) error {
-	if m.Expired(time.Now()) {
+	if !n.controlEligible(p, m, time.Now()) {
 		return nil
 	}
 	if m.Kind == "bundle" {
@@ -636,7 +639,7 @@ func (n *Node) queue(p *nodePeer, messages []ControlMessage) {
 		return // Periodic reconciliation repairs bulk gossip after replies drain.
 	}
 	for _, m := range messages {
-		if m.Expired(time.Now()) {
+		if !n.controlEligible(p, m, time.Now()) {
 			continue
 		}
 		// A leaf can request an identity again while its large certificate
@@ -649,6 +652,7 @@ func (n *Node) queue(p *nodePeer, messages []ControlMessage) {
 		}
 		select {
 		case p.control <- m:
+			p.wakeControl()
 		default:
 			p.reconcileNeeded = true // Maintenance retries changes without waiting five minutes.
 			if m.Kind == "bundle" {
@@ -821,15 +825,37 @@ func (n *Node) verifyPeerCertificates(peer meshid.Device, certs []*x509.Certific
 // boundary. Renewal or supersession while a previous write blocks must not
 // send an obsolete signature or tear down a healthy neighbour link.
 func (n *Node) writeControls(ctx context.Context, p *nodePeer) error {
+	p.initControlWake()
 	for {
+		p.controlMu.Lock()
 		select {
-		case <-ctx.Done():
-			return ctx.Err()
 		case message := <-p.control:
+			p.controlMu.Unlock()
 			if err := n.writePeerControl(p, message); err != nil {
 				return err
 			}
+			continue
+		default:
+			p.controlMu.Unlock()
 		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-p.done:
+			return io.ErrClosedPipe
+		case <-p.controlReady:
+		}
+	}
+}
+
+func (p *nodePeer) initControlWake() {
+	p.controlOnce.Do(func() { p.controlReady = make(chan struct{}, 1) })
+}
+func (p *nodePeer) wakeControl() {
+	p.initControlWake()
+	select {
+	case p.controlReady <- struct{}{}:
+	default:
 	}
 }
 

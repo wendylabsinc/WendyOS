@@ -22,7 +22,7 @@ func (n *Node) queueReplies(p *nodePeer, messages []ControlMessage) bool {
 	sizes := make([]int, 0, len(messages))
 	bundles := make(map[string]struct{})
 	for _, message := range messages {
-		if message.Expired(time.Now()) {
+		if !n.controlEligible(p, message, time.Now()) {
 			continue
 		}
 		if message.Kind == "bundle" {
@@ -88,6 +88,7 @@ func (n *Node) flushReplies(p *nodePeer) {
 	for len(p.replies) != 0 {
 		select {
 		case p.control <- p.replies[0]:
+			p.wakeControl()
 			wire, _ := netwire.Marshal(p.replies[0])
 			p.replyBytes -= len(wire)
 			p.replies[0] = ControlMessage{}

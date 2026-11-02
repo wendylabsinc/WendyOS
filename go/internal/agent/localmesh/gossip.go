@@ -237,5 +237,12 @@ func (s *Synchronizer) markerFor(id netgossip.ID) *atomic.Bool {
 }
 
 func (s *Synchronizer) gossipControl(m *netgossip.Message) ControlMessage {
-	return ControlMessage{Kind: "gossip", Gossip: m, canceled: s.markerFor(m.ID())}
+	out := ControlMessage{Kind: "gossip", Gossip: m, canceled: s.markerFor(m.ID())}
+	for owner, artifact := range s.artifacts {
+		if artifact.id == m.ID() {
+			out.origin = owner
+			break
+		}
+	}
+	return out
 }
