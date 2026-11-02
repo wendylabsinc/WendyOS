@@ -424,6 +424,20 @@ test("retaining a partial inventory does not duplicate another path to the same 
   assert.deepEqual(mergeMeshInventory([{ id: "physical", reporterKey: key }], [{ id: "mesh", reporterKey: key }], true), [{ id: "mesh", reporterKey: key }]);
 });
 
+test("carrying an unobserved Cloud label requires the same reporter identity", () => {
+  const source = "cloud://cloud.example:443/tenant/" + tenant + "/asset/" + a;
+  const previous = [{ id: "physical", reporterKey: `device:${tenant}/${a}`,
+    cloudName: "Cloud A", cloudNamePrincipal: principal(a), cloudNameSource: source }];
+  const unchanged = mergeMeshInventory(previous, [{ id: "physical", reporterKey: `device:${tenant}/${a}` }], true);
+  assert.equal(unchanged[0].cloudName, "Cloud A");
+  const changed = mergeMeshInventory(previous, [{ id: "physical", reporterKey: `device:${tenant}/${b}` }], true);
+  assert.equal(changed[0].cloudName, undefined);
+  assert.equal(changed[0].cloudNamePrincipal, undefined);
+  const revoked = mergeMeshInventory(previous, unchanged, true, { complete: false, entries: [{ source }] });
+  assert.equal(revoked[0].cloudName, undefined, "an observed row without a usable label revokes its old hint");
+  assert.equal(previous[0].cloudName, "Cloud A");
+});
+
 const liteTopology = JSON.parse(readFileSync(new URL("./fixtures/lite-operator-topology.json", import.meta.url), "utf8"));
 const c5Reporter = { id: "cloud://cloud.example:443/tenant/11111111-1111-4111-8111-111111111111/asset/bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", name: "C5 Cloud", platform: "wendy-lite" };
 
