@@ -24,6 +24,15 @@ wendy device wendy-net configure --device <device> \
 
 Replace `<device>` with its name or address. For Bluetooth, add `--ble=true`.
 For supported Wi-Fi Aware hardware, add `--nan=true`.
+
+Start with the normal Bluetooth profile and firmware/controller-default power.
+Supported WendyOS adapters and Lite C5/C6 firmware also offer coded profiles,
+which trade throughput for range. Before switching, check both peers' support
+and keep a working management connection. See
+[Bluetooth radio modes and power](/docs/advanced/clients/wendy-cli/commands/device/bluetooth#wendy-device-bluetooth-mode)
+for selection, limits and recovery. Power settings are independent of Wendy Net
+participation.
+
 You can enable more than one connection type. Only the options you supply change;
 other saved settings are preserved.
 
@@ -147,7 +156,8 @@ Every boolean accepts `true` or `false`; omitted options retain their saved valu
 | `--ethernet` | Find and connect to peers on Ethernet. |
 | `--infrastructure-wifi` | Find and connect to peers on ordinary Wi-Fi networks. |
 | `--nan` | Connect through supported Wi-Fi Aware radios, without an access point. |
-| `--ble` | Connect through Bluetooth Low Energy. |
+| `--ble` | Enable or disable Bluetooth Low Energy, preserving its saved profile. |
+| `--ble-mode` | Enable Bluetooth with `normal`, `coded-s2`, or `coded-s8`, or disable it with `off` while retaining the saved profile. Coded profiles require support on both peers; WendyOS reports adapter capabilities and coding-selection limits. Cannot be combined with `--ble`; participation is preserved unless explicitly changed. |
 | `--share-uplink` | Offer a healthy independent Internet connection. |
 | `--roam` | Use a shared gateway when an independent Internet connection is unavailable. |
 

@@ -9,5 +9,13 @@ v4 device manifests. Native Lite discovery, radio admission and listener support
 are integrated with the matching firmware and WendyOS carrier runtime. This
 protocol-layer change alone does not activate that runtime.
 
+For native C5/C6 firmware with runtime radio management, follow the
+[Bluetooth radio command reference](/docs/advanced/clients/wendy-cli/commands/device/bluetooth#wendy-device-bluetooth-mode).
+
+Start with normal mode and firmware/controller-default power. The reference
+covers support on both peers, WendyOS coding-selection limits, status fields and
+recovery. A Lite profile change can restart the device; keep a working management
+path. Maximum power requires an explicit request.
+
 For existing WendyOS Bluetooth links, see
 [Wendy Net over Bluetooth](/docs/hardware/bluetooth#wendy-net-over-bluetooth).
