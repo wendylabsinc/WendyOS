@@ -10,6 +10,7 @@ import (
 	"encoding/pem"
 	"math/big"
 	"net"
+	"net/url"
 	"sync"
 	"testing"
 	"time"
@@ -24,6 +25,8 @@ import (
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/peer"
 )
+
+const resumptionTestTenant = "11111111-1111-4111-8111-111111111111"
 
 // versionService records the TLS resumption state of each call's transport.
 type versionService struct {
@@ -45,9 +48,9 @@ func TestConnectWithTLSResumesAcrossConnections(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("WENDY_TLS_SESSION_STORE", "file")
 
-	pki := newIntegrationPKI(t) // same generator as Task 7, PEM for client too
+	pki := newIntegrationPKI(t)
 	srv, err := mtls.NewServer(pki.serverCertPEM, pki.caPEM, pki.serverKeyPEM,
-		zap.NewNop(), time.Time{}, certs.Scope{}, interceptor.OrgModeOff)
+		zap.NewNop(), time.Time{}, certs.Scope{TenantUUID: resumptionTestTenant}, interceptor.OrgModeStrict)
 	if err != nil {
 		t.Fatalf("NewServer: %v", err)
 	}
@@ -133,7 +136,11 @@ func newIntegrationPKI(t *testing.T) integrationPKI {
 		t.Fatalf("parse CA: %v", err)
 	}
 
-	leaf := func(cn string, eku x509.ExtKeyUsage) (certPEM, keyPEM string) {
+	leaf := func(cn, principal string, eku x509.ExtKeyUsage) (certPEM, keyPEM string) {
+		uri, err := url.Parse(principal)
+		if err != nil {
+			t.Fatalf("parse principal: %v", err)
+		}
 		key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 		if err != nil {
 			t.Fatalf("gen key: %v", err)
@@ -145,6 +152,7 @@ func newIntegrationPKI(t *testing.T) integrationPKI {
 			NotAfter:     time.Now().Add(24 * time.Hour),
 			KeyUsage:     x509.KeyUsageDigitalSignature,
 			ExtKeyUsage:  []x509.ExtKeyUsage{eku},
+			URIs:         []*url.URL{uri},
 		}
 		der, err := x509.CreateCertificate(rand.Reader, tmpl, caCert, &key.PublicKey, caKey)
 		if err != nil {
@@ -158,8 +166,10 @@ func newIntegrationPKI(t *testing.T) integrationPKI {
 			string(pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER}))
 	}
 
-	serverCertPEM, serverKeyPEM := leaf("resumption-e2e-server", x509.ExtKeyUsageServerAuth)
-	clientCertPEM, clientKeyPEM := leaf("resumption-e2e-client", x509.ExtKeyUsageClientAuth)
+	serverCertPEM, serverKeyPEM := leaf("resumption-e2e-server", certs.DeviceSPIFFEURI(resumptionTestTenant, "22222222-2222-4222-8222-222222222222"), x509.ExtKeyUsageServerAuth)
+	// The production server requires a recognized operator identity for
+	// GetAgentVersion, on both the full and resumed connections.
+	clientCertPEM, clientKeyPEM := leaf("resumption-e2e-client", "spiffe://wendy.sh/tenant/"+resumptionTestTenant+"/operator/resumption-e2e", x509.ExtKeyUsageClientAuth)
 	return integrationPKI{
 		serverCertPEM: serverCertPEM,
 		serverKeyPEM:  serverKeyPEM,
