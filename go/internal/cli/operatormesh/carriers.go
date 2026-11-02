@@ -149,6 +149,7 @@ func (s *Session) connectCandidate(ctx context.Context, candidate carriers.Candi
 		}
 		cfg := s.routerConfig
 		cfg.Router = peer
+		cfg.IssuerCandidates = s.Node.Credentials.TLSIssuerCandidates
 		link, err = meshoperatorlink.RouterClient(ctx, secure, cfg)
 		if err != nil {
 			return err

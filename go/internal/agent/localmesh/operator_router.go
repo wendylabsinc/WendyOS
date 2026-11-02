@@ -45,7 +45,7 @@ func (n *Node) AttachOperatorRouterStream(ctx context.Context, c *tls.Conn, cost
 	n.gate.RLock()
 	agent := n.operatorAgent
 	n.gate.RUnlock()
-	link, err := meshoperatorlink.AcceptRouter(ctx, c, n.Credentials.Device.Tenant(), n.Credentials.primaryRoots, agent)
+	link, err := meshoperatorlink.AcceptRouter(ctx, c, n.Credentials.Device.Tenant(), n.Credentials.primaryRoots, agent, n.Credentials.TLSIssuerCandidates)
 	if err != nil {
 		return err
 	}
