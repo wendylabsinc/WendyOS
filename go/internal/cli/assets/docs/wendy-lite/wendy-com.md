@@ -250,3 +250,55 @@ Queries the device for information about its hardware and software. The device r
 - `wasm_app_support` — whether the device can run WASM applications.
 - `native_app_support` — whether the device can run native applications.
 - `board` — the board identifier (e.g. `esp32c6_generic` or `esp32s3_seeed_xiao_native`). Empty when the board is not known.
+
+
+### NetGet
+
+Queries the board's saved Wendy Net policy and runtime status. The command's
+`net_get` parameter is field 22; a successful response carries `net_status`
+(field 8 of `WendyComResponse`). These commands require firmware with Wendy Net
+management support.
+
+`WendyComNetStatus` separates `desired`, the saved policy, from `applied`, the
+current runtime policy when available. An absent applied policy is unavailable,
+not an all-false configuration. It also reports:
+
+- `state`: `off`, `starting`, `running`, `stopping` or `failed` (the corresponding
+  `WendyComNetState` enum values).
+- `ble_supported`, `wifi_supported` and `nan_supported`: the board's carrier
+  capabilities, rather than proof that any carrier is connected.
+- `psram` and `memory_limit_bytes`: resource profile information.
+- Optional `allocated_bytes` and `internal_bytes`: current network allocation
+  measurements. An absent measurement is unknown, not zero.
+- `active_links`: the number of active mesh carriers.
+- `error_code`: a firmware diagnostic code, including when a configuration
+  request is rejected.
+- `restarting`: a saved carrier change has scheduled a board restart.
+
+### NetSet
+
+Applies the complete `WendyComNetConfig` supplied in `net_set.config` (command
+field 23). The policy contains `enabled`, `ble`, `infrastructure_wifi` and `nan`,
+plus `max_links`, `ble_links`, `wifi_links` and `nan_links`. Firmware validates
+carrier support and profile limits before saving the policy. The response's
+`net_status` distinguishes the saved policy from the currently applied policy.
+
+A direct protocol client must read the current desired policy with `NetGet` and
+preserve options it is not changing. `NetSet` is a complete configuration, not a
+partial update. The CLI's `wendy device wendy-net configure` command performs
+this read-modify-write step so omitted flags retain their saved values.
+
+`OK` means the request completed. `APPLIED_RESTARTING` also means the settings
+were accepted, but changing the selected carrier requires a board restart. The
+response is sent before the restart; reconnect after boot and check status and
+functional traffic. A restart warning is not a failed write.
+
+The Wendy Net management result codes supplement the general command results:
+
+| Result | Meaning |
+| --- | --- |
+| `WENDY_COM_RESULT_APPLIED_RESTARTING` (8) | Settings accepted; a board restart is scheduled for the carrier change. The response includes `net_status`. |
+| `WENDY_COM_RESULT_NET_NO_WIFI` (9) | The requested Wi-Fi carrier is unsupported. |
+| `WENDY_COM_RESULT_NET_NO_BLE` (10) | The requested Bluetooth carrier is unsupported. |
+| `WENDY_COM_RESULT_NET_NO_NAN` (11) | The requested NAN carrier is unsupported. |
+| `WENDY_COM_RESULT_NET_ONE_CARRIER_ONLY` (12) | The configuration exceeds a single-carrier profile's supported carriers or link limits. |
