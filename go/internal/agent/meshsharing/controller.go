@@ -269,21 +269,33 @@ func (c *Controller) reachableGateway(ctx context.Context) Gateway {
 	// Completion order never influences preference. Recheck expiry after the
 	// probes so a lease expiring during observation cannot be selected.
 	now := time.Now()
+	// Once a donor is carrying traffic, advertisement lease refreshes must not
+	// move borrowers to another equally healthy donor. Keep the current donor
+	// until it disappears, expires, or both its debounced probes and installed
+	// authenticated control lease cease to demonstrate reachability. Candidate
+	// expiry remains the deterministic preference when selecting initially or
+	// after the current donor is no longer usable.
+	for _, candidate := range candidates {
+		if candidate.Device != c.gatewayDevice || !now.Before(candidate.Expires) {
+			continue
+		}
+		if !candidate.Reachable {
+			active, ok := c.policy.(interface{ ActiveGatewayLease(meshid.Device) bool })
+			if !ok || !active.ActiveGatewayLease(candidate.Device) || !time.Now().Before(candidate.Expires) {
+				continue
+			}
+			// Do not reset probe hysteresis: once the control lease ends, failed
+			// probes must withdraw this donor on the very next reconciliation.
+			candidate.Reachable = true
+		}
+		c.gatewayLastExpiry = candidate.Expires
+		return candidate
+	}
+	now = time.Now()
 	eligible := 0
 	for _, candidate := range candidates {
 		if now.Before(candidate.Expires) {
 			eligible++
-		}
-	}
-	// Once a donor is carrying traffic, advertisement lease refreshes must not
-	// move borrowers to another equally healthy donor. Keep the current donor
-	// until it disappears, expires, or its debounced health turns bad. Candidate
-	// expiry remains the deterministic preference when selecting initially or
-	// after the current donor is no longer usable.
-	for _, candidate := range candidates {
-		if candidate.Device == c.gatewayDevice && candidate.Reachable && now.Before(candidate.Expires) {
-			c.gatewayLastExpiry = candidate.Expires
-			return candidate
 		}
 	}
 	for _, candidate := range candidates {

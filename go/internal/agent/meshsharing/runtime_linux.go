@@ -33,11 +33,39 @@ type grantedTunnel struct {
 
 type borrowedTunnel struct {
 	grantedTunnel
-	control  net.Conn
-	done     chan struct{}
-	stop     chan struct{}
-	stopOnce sync.Once
-	started  time.Time
+	control     net.Conn
+	done        chan struct{}
+	stop        chan struct{}
+	stopOnce    sync.Once
+	started     time.Time
+	controlLive atomic.Bool
+}
+
+// borrowedControlConn records locally observed control failure immediately, even
+// while the heartbeat worker is waiting to acquire the policy lock for cleanup.
+// Its expiry comes from the authenticated certificate paths in negotiateGatewayLease.
+type borrowedControlConn struct {
+	*expiryConn
+	closed atomic.Bool
+}
+
+func (c *borrowedControlConn) Close() error {
+	c.closed.Store(true)
+	return c.expiryConn.Close()
+}
+func (c *borrowedControlConn) Read(b []byte) (int, error) {
+	n, err := c.expiryConn.Read(b)
+	if err != nil {
+		c.closed.Store(true)
+	}
+	return n, err
+}
+func (c *borrowedControlConn) Write(b []byte) (int, error) {
+	n, err := c.expiryConn.Write(b)
+	if err != nil {
+		c.closed.Store(true)
+	}
+	return n, err
 }
 
 // linuxTunnelPolicy owns the separate Internet overlay. Babel sees only the
@@ -422,18 +450,46 @@ func (p *linuxTunnelPolicy) LeaseDone(peer meshid.Device, lease tunnelLease) <-c
 	return done
 }
 
+// ActiveGatewayLease is reachability evidence only for the currently installed,
+// authenticated donor. Signed capability and routed identity checks remain the
+// controller's responsibility; this never makes a new donor eligible.
+func (p *linuxTunnelPolicy) ActiveGatewayLease(peer meshid.Device) bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.activeGatewayLeaseLocked(peer)
+}
+
+func (p *linuxTunnelPolicy) activeGatewayLeaseLocked(peer meshid.Device) bool {
+	b := p.borrowed
+	if p.closed || !peer.IsValid() || b == nil || b.peer != peer || !b.lease.valid() ||
+		b.tunnel == nil || b.tunnel.link == nil || b.stop == nil || b.done == nil || !b.controlLive.Load() {
+		return false
+	}
+	control, ok := b.control.(*borrowedControlConn)
+	if !ok || control.closed.Load() || control.expires.IsZero() || !time.Now().Before(control.expires) {
+		return false
+	}
+	select {
+	case <-b.stop:
+		return false
+	default:
+	}
+	select {
+	case <-b.done:
+		return false
+	default:
+	}
+	return true
+}
+
 func (p *linuxTunnelPolicy) SetGateway(ctx context.Context, peer meshid.Device) (err error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.closed {
 		return errors.New("Wendy Net Internet policy closed")
 	}
-	if p.borrowed != nil && p.borrowed.peer == peer {
-		select {
-		case <-p.borrowed.done:
-		default:
-			return nil
-		}
+	if p.activeGatewayLeaseLocked(peer) {
+		return nil
 	}
 	if !peer.IsValid() {
 		// Withdrawal also abandons a negotiation that is still in flight.
@@ -452,6 +508,14 @@ func (p *linuxTunnelPolicy) SetGateway(ctx context.Context, peer meshid.Device) 
 	if err != nil {
 		return err
 	}
+	// Only the authenticated, expiry-bounded production connection can support
+	// active-lease reachability. Reject an unbounded connection before installation.
+	bounded, ok := control.(*expiryConn)
+	if !ok || bounded.expires.IsZero() || !time.Now().Before(bounded.expires) {
+		_ = control.Close()
+		return errors.New("gateway control has no valid credential expiry")
+	}
+	control = &borrowedControlConn{expiryConn: bounded}
 	b := &borrowedTunnel{grantedTunnel: grantedTunnel{peer: peer, lease: lease}, control: control, done: make(chan struct{}), stop: make(chan struct{}), started: time.Now()}
 	p.borrowed = b
 	defer func() {
@@ -499,6 +563,7 @@ func (p *linuxTunnelPolicy) SetGateway(ctx context.Context, peer meshid.Device) 
 			return err
 		}
 	}
+	b.controlLive.Store(true)
 	p.borrowers.Add(1)
 	go p.watchBorrowed(b)
 	return nil
@@ -509,6 +574,7 @@ func (p *linuxTunnelPolicy) watchBorrowed(b *borrowedTunnel) {
 	defer close(b.done)
 	defer func() { b.stopOnce.Do(func() { close(b.stop) }); _ = b.control.Close() }()
 	err := exchangeLeaseHeartbeats(b.control, b.stop, leaseHeartbeatInterval, leaseHeartbeatMinInterval, leaseHeartbeatTimeout)
+	b.controlLive.Store(false)
 	ended := controlEnd{role: "borrower", phase: "heartbeat-exchange", peer: b.peer, lease: b.lease, err: err, endedAt: time.Now()}
 	var failure *heartbeatFailure
 	if errors.As(err, &failure) {
@@ -517,7 +583,10 @@ func (p *linuxTunnelPolicy) watchBorrowed(b *borrowedTunnel) {
 	if !b.started.IsZero() {
 		ended.elapsed = time.Since(b.started)
 	}
-	if bounded, ok := b.control.(*expiryConn); ok {
+	switch bounded := b.control.(type) {
+	case *expiryConn:
+		ended.expires = bounded.expires
+	case *borrowedControlConn:
 		ended.expires = bounded.expires
 	}
 	select {
@@ -541,6 +610,7 @@ func (p *linuxTunnelPolicy) stopBorrowingLocked(ctx context.Context) error {
 	if b == nil {
 		return nil
 	}
+	b.controlLive.Store(false)
 	b.stopOnce.Do(func() { close(b.stop) })
 	_ = b.control.Close()
 	if b.tunnel != nil {
