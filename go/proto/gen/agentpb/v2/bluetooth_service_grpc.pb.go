@@ -19,6 +19,8 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
+	WendyBluetoothService_GetBluetoothRadio_FullMethodName             = "/wendy.agent.services.v2.WendyBluetoothService/GetBluetoothRadio"
+	WendyBluetoothService_ConfigureBluetoothRadio_FullMethodName       = "/wendy.agent.services.v2.WendyBluetoothService/ConfigureBluetoothRadio"
 	WendyBluetoothService_ScanBluetoothPeripherals_FullMethodName      = "/wendy.agent.services.v2.WendyBluetoothService/ScanBluetoothPeripherals"
 	WendyBluetoothService_ConnectBluetoothPeripheral_FullMethodName    = "/wendy.agent.services.v2.WendyBluetoothService/ConnectBluetoothPeripheral"
 	WendyBluetoothService_DisconnectBluetoothPeripheral_FullMethodName = "/wendy.agent.services.v2.WendyBluetoothService/DisconnectBluetoothPeripheral"
@@ -29,6 +31,8 @@ const (
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 type WendyBluetoothServiceClient interface {
+	GetBluetoothRadio(ctx context.Context, in *GetBluetoothRadioRequest, opts ...grpc.CallOption) (*BluetoothRadioStatus, error)
+	ConfigureBluetoothRadio(ctx context.Context, in *ConfigureBluetoothRadioRequest, opts ...grpc.CallOption) (*BluetoothRadioStatus, error)
 	ScanBluetoothPeripherals(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[ScanBluetoothPeripheralsRequest, ScanBluetoothPeripheralsResponse], error)
 	ConnectBluetoothPeripheral(ctx context.Context, in *ConnectBluetoothPeripheralRequest, opts ...grpc.CallOption) (*ConnectBluetoothPeripheralResponse, error)
 	DisconnectBluetoothPeripheral(ctx context.Context, in *DisconnectBluetoothPeripheralRequest, opts ...grpc.CallOption) (*DisconnectBluetoothPeripheralResponse, error)
@@ -41,6 +45,26 @@ type wendyBluetoothServiceClient struct {
 
 func NewWendyBluetoothServiceClient(cc grpc.ClientConnInterface) WendyBluetoothServiceClient {
 	return &wendyBluetoothServiceClient{cc}
+}
+
+func (c *wendyBluetoothServiceClient) GetBluetoothRadio(ctx context.Context, in *GetBluetoothRadioRequest, opts ...grpc.CallOption) (*BluetoothRadioStatus, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(BluetoothRadioStatus)
+	err := c.cc.Invoke(ctx, WendyBluetoothService_GetBluetoothRadio_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *wendyBluetoothServiceClient) ConfigureBluetoothRadio(ctx context.Context, in *ConfigureBluetoothRadioRequest, opts ...grpc.CallOption) (*BluetoothRadioStatus, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(BluetoothRadioStatus)
+	err := c.cc.Invoke(ctx, WendyBluetoothService_ConfigureBluetoothRadio_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 func (c *wendyBluetoothServiceClient) ScanBluetoothPeripherals(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[ScanBluetoothPeripheralsRequest, ScanBluetoothPeripheralsResponse], error) {
@@ -90,6 +114,8 @@ func (c *wendyBluetoothServiceClient) ForgetBluetoothPeripheral(ctx context.Cont
 // All implementations must embed UnimplementedWendyBluetoothServiceServer
 // for forward compatibility.
 type WendyBluetoothServiceServer interface {
+	GetBluetoothRadio(context.Context, *GetBluetoothRadioRequest) (*BluetoothRadioStatus, error)
+	ConfigureBluetoothRadio(context.Context, *ConfigureBluetoothRadioRequest) (*BluetoothRadioStatus, error)
 	ScanBluetoothPeripherals(grpc.BidiStreamingServer[ScanBluetoothPeripheralsRequest, ScanBluetoothPeripheralsResponse]) error
 	ConnectBluetoothPeripheral(context.Context, *ConnectBluetoothPeripheralRequest) (*ConnectBluetoothPeripheralResponse, error)
 	DisconnectBluetoothPeripheral(context.Context, *DisconnectBluetoothPeripheralRequest) (*DisconnectBluetoothPeripheralResponse, error)
@@ -104,6 +130,12 @@ type WendyBluetoothServiceServer interface {
 // pointer dereference when methods are called.
 type UnimplementedWendyBluetoothServiceServer struct{}
 
+func (UnimplementedWendyBluetoothServiceServer) GetBluetoothRadio(context.Context, *GetBluetoothRadioRequest) (*BluetoothRadioStatus, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetBluetoothRadio not implemented")
+}
+func (UnimplementedWendyBluetoothServiceServer) ConfigureBluetoothRadio(context.Context, *ConfigureBluetoothRadioRequest) (*BluetoothRadioStatus, error) {
+	return nil, status.Error(codes.Unimplemented, "method ConfigureBluetoothRadio not implemented")
+}
 func (UnimplementedWendyBluetoothServiceServer) ScanBluetoothPeripherals(grpc.BidiStreamingServer[ScanBluetoothPeripheralsRequest, ScanBluetoothPeripheralsResponse]) error {
 	return status.Error(codes.Unimplemented, "method ScanBluetoothPeripherals not implemented")
 }
@@ -135,6 +167,42 @@ func RegisterWendyBluetoothServiceServer(s grpc.ServiceRegistrar, srv WendyBluet
 		t.testEmbeddedByValue()
 	}
 	s.RegisterService(&WendyBluetoothService_ServiceDesc, srv)
+}
+
+func _WendyBluetoothService_GetBluetoothRadio_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetBluetoothRadioRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WendyBluetoothServiceServer).GetBluetoothRadio(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WendyBluetoothService_GetBluetoothRadio_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WendyBluetoothServiceServer).GetBluetoothRadio(ctx, req.(*GetBluetoothRadioRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _WendyBluetoothService_ConfigureBluetoothRadio_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ConfigureBluetoothRadioRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(WendyBluetoothServiceServer).ConfigureBluetoothRadio(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: WendyBluetoothService_ConfigureBluetoothRadio_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(WendyBluetoothServiceServer).ConfigureBluetoothRadio(ctx, req.(*ConfigureBluetoothRadioRequest))
+	}
+	return interceptor(ctx, in, info, handler)
 }
 
 func _WendyBluetoothService_ScanBluetoothPeripherals_Handler(srv interface{}, stream grpc.ServerStream) error {
@@ -205,6 +273,14 @@ var WendyBluetoothService_ServiceDesc = grpc.ServiceDesc{
 	ServiceName: "wendy.agent.services.v2.WendyBluetoothService",
 	HandlerType: (*WendyBluetoothServiceServer)(nil),
 	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "GetBluetoothRadio",
+			Handler:    _WendyBluetoothService_GetBluetoothRadio_Handler,
+		},
+		{
+			MethodName: "ConfigureBluetoothRadio",
+			Handler:    _WendyBluetoothService_ConfigureBluetoothRadio_Handler,
+		},
 		{
 			MethodName: "ConnectBluetoothPeripheral",
 			Handler:    _WendyBluetoothService_ConnectBluetoothPeripheral_Handler,

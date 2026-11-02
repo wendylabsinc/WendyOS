@@ -120,6 +120,10 @@ type baseState struct {
 }
 
 func (k *Kernel) inspectBase() (baseState, error) {
+	return readConsistentBase(k.inspectBaseOnce)
+}
+
+func (k *Kernel) inspectBaseOnce() (baseState, error) {
 	var state baseState
 	if k.link == nil || k.rule == nil || len(k.routes) < kernelGuardCount {
 		return state, errors.New("wendy net kernel is not initialized")

@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"github.com/godbus/dbus/v5"
+	"github.com/godbus/dbus/v5/prop"
+	"github.com/wendylabsinc/wendy/go/internal/agent/btradio"
 	"github.com/wendylabsinc/wendy/go/internal/agent/localmesh"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshoperatorlink"
@@ -338,6 +340,25 @@ func Run(ctx context.Context, cfg Config) error {
 	}
 	r := &runtime{cfg: cfg, uuid: uuid, owner: owner, hciIndex: hciIndex, local: local, ownerLookup: bluezOwner, bus: bus, freshness: freshness, reportErrors: reportErrors, reportErr: reportErr, dialSlot: make(chan struct{}, 1), tlsGate: newTLSHandshakeAdmission()}
 	r.advertisement = adv
+	unsubscribeRadio, err := btradio.Register(runCtx, "wendy-net", func(ctx context.Context) error {
+		return btradio.ApplyAdvertisementSnapshot(ctx, bus, adapter, advertPath, advertInterface, "wendy-net", func() (map[string]*prop.Prop, error) {
+			r.mu.Lock()
+			current := r.advertisement
+			r.mu.Unlock()
+			latest, err := current.MarshalBinary()
+			if err != nil {
+				return nil, err
+			}
+			return advertisementProperties(uuid, latest), nil
+		})
+	})
+	if err != nil {
+		if unsubscribeRadio != nil {
+			unsubscribeRadio()
+		}
+		return err
+	}
+	defer unsubscribeRadio()
 	r.timeSlots = make(chan struct{}, 2)
 	r.serverTLS = r.makeServerTLS()
 	r.advertisementRefresh = make(chan struct{}, 1)
@@ -356,14 +377,12 @@ func Run(ctx context.Context, cfg Config) error {
 	go func() {
 		defer loops.Done()
 		loopErrors <- runAdvertisementRefresh(runCtx, r.advertisementRefresh, advertisementRefreshInterval, func(ctx context.Context) error {
-			r.mu.Lock()
-			current := r.advertisement
-			r.mu.Unlock()
-			latest, err := current.MarshalBinary()
-			if err != nil {
-				return err
-			}
-			return refreshOwnedAdvertisement(ctx, bus, closeTransport, owner, uuid, latest)
+			return refreshOwnedAdvertisement(ctx, bus, closeTransport, owner, uuid, func() ([]byte, error) {
+				r.mu.Lock()
+				current := r.advertisement
+				r.mu.Unlock()
+				return current.MarshalBinary()
+			})
 		})
 	}()
 	var loopErr error
@@ -530,6 +549,22 @@ func (r *runtime) acceptLink(ctx context.Context, raw net.Conn) {
 			r.requestAdvertisementRefresh()
 		}
 	}()
+	// Track before choosing whether to tune: a concurrent profile change must
+	// either include this handle or be observed by this incoming link.
+	handle, handleErr := meshACLHandle(raw)
+	if mode, _ := btradio.MeshMode(); mode != "normal" && handleErr != nil {
+		r.cfg.Logger.Warn("BLE radio handle unavailable", zap.Error(handleErr))
+		return
+	}
+	if handleErr == nil {
+		adapter := fmt.Sprintf("/org/bluez/hci%d", r.hciIndex)
+		untrack, err := btradio.TrackAndTuneMeshLink(ctx, adapter, handle)
+		if err != nil {
+			r.cfg.Logger.Warn("BLE PHY setup failed", zap.Error(err))
+			return
+		}
+		defer untrack()
+	}
 	key := fmt.Sprintf("incoming:%p", raw)
 	var incomingCandidate *candidate
 	if radio, ok := raw.RemoteAddr().(l2addr); ok {
@@ -963,6 +998,18 @@ func (r *runtime) dialLink(ctx context.Context, peer candidate) (skipped bool) {
 	// Capture the ACL identity before the context watcher can close/reuse the
 	// CoC descriptor. The early update is limited to this Wendy CoC's ACL.
 	aclHandle, handleErr := meshACLHandle(raw)
+	if mode, _ := btradio.MeshMode(); mode != "normal" && handleErr != nil {
+		r.cfg.Logger.Warn("BLE radio handle unavailable", zap.Error(handleErr))
+		return
+	}
+	if handleErr == nil {
+		untrack, err := btradio.TrackAndTuneMeshLink(ctx, fmt.Sprintf("/org/bluez/hci%d", r.hciIndex), aclHandle)
+		if err != nil {
+			r.cfg.Logger.Warn("BLE PHY setup failed", zap.Error(err))
+			return
+		}
+		defer untrack()
+	}
 	stopWatch := watchLinkContext(ctx, raw)
 	defer stopWatch()
 	var secure *tls.Conn

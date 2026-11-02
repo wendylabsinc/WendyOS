@@ -160,7 +160,8 @@ returned conn closes the underlying BLE connection.
 * **With no read deadline set, `Read` blocks indefinitely**, as `net.Conn` requires. The 2 s slice is
   polling granularity, not a timeout callers see. With a deadline it returns a `net.Error` whose
   `Timeout()` is true, which is what stops `crypto/tls` treating a deadline as a broken connection.
-  Write deadlines are ignored.
+  On macOS, write deadlines can be set, changed, or cleared during a pending write; Linux and
+  Windows still ignore write deadlines. `SetDeadline` applies to both directions on macOS.
 * `Close` takes the same lock `Read` holds across `L2CAPRecv`, so it waits out an in-flight read (at
   most 2 s). That matters on macOS, where `wendy_ble_disconnect` hands the CoreBluetooth wrapper to
   ARC while a blocked reader still holds a bare pointer to it. A write may still be in flight:
@@ -280,7 +281,8 @@ CoreBluetooth normally assumes exists.
   when written from a foreign thread (e.g. Go's TLS goroutine), even when the stream reports open.
   The stream may accept only a prefix of a write, or nothing under backpressure, so the I/O thread
   keeps writing until every byte is taken, pumping its run loop while it waits. The sender gives up
-  after 10 s, or at once if the I/O thread has exited. A failed write fails the whole channel,
+  after 10 s without positive progress, after 60 s in total, at the caller's write deadline if set,
+  or at once if the I/O thread has exited. A failed write fails the whole channel,
   because part of the record may already be on the wire. Channel setup waits for
   `NSStreamEventHasSpaceAvailable` (5 s cap) before declaring the channel usable.
 * Incoming L2CAP bytes accumulate in an `NSMutableData` behind a lock; `L2CAPRecv` drains the whole
@@ -296,9 +298,10 @@ CoreBluetooth normally assumes exists.
   `wendy_blescan_*` / `WendyBLEScanSession` there.
 * Error codes are a small C enum (`timeout`, `not found`, `connect failed`, `discover failed`,
   `write failed`, `read failed`, `L2CAP failed`, `disconnected`) mapped to Go `error` strings by
-  `bleError`. The one exception is `L2CAPRecv`, which returns the `ErrRecvTimeout` sentinel instead
+  `bleError`. `L2CAPRecv` returns the `ErrRecvTimeout` sentinel instead
   of routing a timeout through `bleError`, so a caller can tell an idle channel from a dead one and
-  retry. Everything else surfaces as an opaque string.
+  retry. `L2CAPSend` timeouts return a `net.Error` with `Timeout()` true. Other errors surface as
+  opaque strings.
 
 ### Linux (`central/ble_linux.go`, `bluez_linux.go`, `gatt_linux.go`)
 
