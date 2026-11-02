@@ -8,19 +8,17 @@ device.
 
 ## Operator routers
 
-The operator admission layer lets a CLI installation participate under its
-organization's operator certificate instead of enrolling the computer as a
-device. Each installation has a persistent, independent router identity and
-address. Multiple computers or operator profiles can therefore participate
-without sharing routing state or changing an enrolled device's identity.
-The carrier and destination still authenticate the selected tenant and exact
-operator credentials. Use the explicit connect and disconnect commands below to control
-participation.
+An operator router uses your organization's operator certificate rather than an
+enrolled device identity. Each CLI installation has its own persistent router
+identity and address, so multiple computers can participate independently.
+Connections authenticate both the first router and the destination against the
+selected organization and operator credentials. The CLI also needs router startup
+and discovery support; agent-side admission alone does not start it.
 
-On supported WendyOS nodes, incoming operator connections over bluetooth use
-one separate admission slot rather than a device-neighbor slot. This requires
-the node's primary operator trust anchors and still shares the physical
-adapter's bandwidth and connection limits.
+On supported WendyOS nodes, an incoming operator connection over Bluetooth uses
+one separate slot, in addition to the device-neighbour slots. The node must trust
+your organization's primary operator certificates. All connections still share
+the adapter's bandwidth and hardware connection limits.
 
 ## Join and discover
 
