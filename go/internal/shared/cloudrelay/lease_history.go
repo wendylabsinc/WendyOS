@@ -157,6 +157,12 @@ func (a *Agent) restorePresenceLeases(ctx context.Context, current claims) error
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
+		var unavailable *grantKeyLookupError
+		if errors.As(err, &unavailable) {
+			// An unavailable or not-yet-known signing key cannot establish
+			// invalidity. Retain the bounded file without admitting its claims.
+			continue
+		}
 		if err != nil || filepath.Base(s.path) != presenceLeaseName(c.JTI) {
 			// Malformed, expired and other-identity entries cannot contribute
 			// claims; discard them without logging artifacts or credentials.

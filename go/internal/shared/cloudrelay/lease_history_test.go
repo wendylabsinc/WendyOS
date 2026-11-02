@@ -5,7 +5,10 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -159,5 +162,51 @@ func TestPresenceLeaseHistoryIsPrivateBoundedAndKeepsCurrentLease(t *testing.T) 
 	tooLarge.PresenceLeaseJws = strings.Repeat("x", presenceLeaseBytesLimit+1)
 	if err := a.archivePresenceLease(tooLarge, current); err == nil {
 		t.Fatal("oversized lease archived")
+	}
+}
+
+type historyKeyTransport func(*http.Request) (*http.Response, error)
+
+func (f historyKeyTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestPresenceLeaseHistoryRetainsUnverifiedRecordsDuringKeyOutage(t *testing.T) {
+	a, r, current := leaseHistoryFixture(t)
+	prior := current
+	prior.JTI = "prior-during-key-outage"
+	if err := a.archivePresenceLease(historyLease(r, prior), prior); err != nil {
+		t.Fatal(err)
+	}
+	a.remember(current)
+	publicKeys, err := json.Marshal(struct {
+		Keys []jwk `json:"keys"`
+	}{Keys: []jwk{a.Verifier.keys["test"]}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	unavailable := true
+	a.Verifier.fetched = time.Now().Add(-6 * time.Minute)
+	a.Verifier.HTTP = &http.Client{Transport: historyKeyTransport(func(*http.Request) (*http.Response, error) {
+		code, body := http.StatusOK, string(publicKeys)
+		if unavailable {
+			code, body = http.StatusServiceUnavailable, "temporarily unavailable"
+		}
+		return &http.Response{StatusCode: code, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}, nil
+	})}
+	if err := a.restorePresenceLeases(context.Background(), current); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(a.presenceLeaseHistoryDir(), presenceLeaseName(prior.JTI))
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("unavailable keys caused valid signed history to be discarded: %v", err)
+	}
+	if _, ok := a.leases[prior.JTI]; ok || a.leases[current.JTI] != current {
+		t.Fatal("unverified history was admitted, or the current verified lease was lost")
+	}
+	unavailable = false
+	if err := a.restorePresenceLeases(context.Background(), current); err != nil {
+		t.Fatal(err)
+	}
+	if a.leases[prior.JTI] != prior {
+		t.Fatal("preserved history was not verified and restored once keys recovered")
 	}
 }
