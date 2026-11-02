@@ -570,8 +570,9 @@ App-owned names and signed Wendy Net names take precedence over LAN names.
 Goodbyes, lease expiry, interface loss and application shutdown revoke grants;
 agent startup revokes inherited grants before reauthorizing current services.
 
-LAN browsing excludes router discovery services (`_wendy-net._udp` and the
-former `_wendy-mesh._tcp`) from both app records and follow-up type queries.
+LAN browsing excludes router discovery services (`_wendy-net._udp`,
+`_wendy-net._tcp` and the former `_wendy-mesh._tcp`) from both app records and
+follow-up type queries.
 Ordinary app UDP services remain eligible, including those sharing a router host.
 LAN browsing currently supports IPv4 endpoints and excludes Wendy Net carrier,
 underlay and service address ranges. Namespace tests cover scoped forwarding,
