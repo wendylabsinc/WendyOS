@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"net"
+	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshoperatorlink"
 )
@@ -48,7 +49,9 @@ func (n *Node) AttachOperatorRouterStream(ctx context.Context, c *tls.Conn, cost
 	var link *meshoperatorlink.RouterLink
 	var err error
 	if n.Credentials.HasCertificateTimePolicy() {
-		link, err = meshoperatorlink.AcceptRouterWithTimePolicy(ctx, c, n.Credentials.Device.Tenant(), n.Credentials.primaryRoots, n.Credentials.CertificateTimePolicy(), agent)
+		credentials := n.Credentials
+		own := operatorOwnCredentialExpiry(credentials)
+		link, err = meshoperatorlink.AcceptRouterWithTimePolicyAndOwn(ctx, c, credentials.Device.Tenant(), credentials.primaryRoots, credentials.CertificateTimePolicy(), own, agent)
 	} else {
 		link, err = meshoperatorlink.AcceptRouter(ctx, c, n.Credentials.Device.Tenant(), n.Credentials.primaryRoots, agent)
 	}
@@ -57,6 +60,26 @@ func (n *Node) AttachOperatorRouterStream(ctx context.Context, c *tls.Conn, cost
 	}
 	defer func() { _ = link.Close(); link.Wait() }()
 	return n.AttachOperatorRouterLink(ctx, link, cost)
+}
+
+// Freeze own material and expected role before handing the admitted link to
+// management. The credential verifier retains current local policy and trust.
+func operatorOwnCredentialExpiry(credentials *Credentials) func() (time.Time, error) {
+	expected := credentials.Device
+	ownChain := make([][]byte, len(credentials.Certificate.Certificate))
+	for i, der := range credentials.Certificate.Certificate {
+		ownChain[i] = bytes.Clone(der)
+	}
+	return func() (time.Time, error) {
+		identity, err := credentials.Verify(ownChain, time.Now())
+		if err != nil {
+			return time.Time{}, err
+		}
+		if identity.Device != expected || identity.Device.IsOperator() {
+			return time.Time{}, errors.New("operator receiver credential identity changed")
+		}
+		return identity.NotAfter, nil
+	}
 }
 
 // Primary operator routers have their own bounded admission pool, independent
