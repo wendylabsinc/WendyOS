@@ -11,6 +11,28 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
 )
 
+func TestNetworkRejectsForeignTenantBeforeAllocatingPort(t *testing.T) {
+	tenant, _ := meshid.ParseTenant("11111111-1111-4111-8111-111111111111")
+	foreignTenant, _ := meshid.ParseTenant("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
+	self, _ := meshid.ParseDevice(tenant, "22222222-2222-4222-8222-222222222222")
+	peer, _ := meshid.ParseDevice(tenant, "33333333-3333-4333-8333-333333333333")
+	foreign, _ := meshid.ParseDevice(foreignTenant, peer.UUID().String())
+	if peer.MeshAddress() != foreign.MeshAddress() {
+		t.Fatal("test requires the same routing address in different tenant scopes")
+	}
+	network, err := NewNetwork(self)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer network.Close()
+	if port, err := network.AddPeer(1, foreign); err == nil || port != nil {
+		t.Fatal("foreign tenant acquired a packet port")
+	}
+	if _, err := network.AddPeer(1, peer); err != nil {
+		t.Fatalf("rejected foreign peer retained the link slot: %v", err)
+	}
+}
+
 func TestNetworkDropsUnroutedAndExpiredPackets(t *testing.T) {
 	tenant, _ := meshid.ParseTenant("11111111-1111-4111-8111-111111111111")
 	self, _ := meshid.ParseDevice(tenant, "22222222-2222-4222-8222-222222222222")
