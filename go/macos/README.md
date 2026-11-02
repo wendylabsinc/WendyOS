@@ -1154,10 +1154,6 @@ can produce errors. It uses the cameras on the connected gateway. Thermal feeds
 are excluded. There is no person recording or face recognition, and these blobs
 do not feed robot navigation or collision avoidance.
 
-Possible extensions include synchronized multi-camera triangulation for hidden
-feet, appearance-assisted matching for crowded rooms, or depth-camera observations.
-The current floor projection reuses the twin's calibrated RGB cameras and needs
-no additional model download or hardware. Apple documents the detector in
+Tracking uses the twin's calibrated RGB cameras and needs no additional model
+download or hardware. For the underlying detector, see Apple's
 [Detecting human body poses in images](https://developer.apple.com/documentation/vision/detecting-human-body-poses-in-images).
-OpenCV documents triangulation in
-[Camera calibration and 3D reconstruction](https://docs.opencv.org/4.x/d9/d0c/group__calib3d.html).
