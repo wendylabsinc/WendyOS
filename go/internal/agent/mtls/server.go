@@ -74,16 +74,29 @@ func newTLSConfig(certPEM, chainPEM, keyPEM string, logger *zap.Logger, clockTim
 		return nil, fmt.Errorf("loading X509 key pair: %w", err)
 	}
 
-	caPool := x509.NewCertPool()
-	certs.AppendChainToPool(caPool, chainPEM)
-	caCerts, err := parseCertsFromPEM([]byte(chainPEM))
-	if err != nil {
-		return nil, fmt.Errorf("parsing chain PEM: %w", err)
+	var caPool *x509.CertPool
+	var caCerts []*x509.Certificate
+	if leafOnly {
+		// Explicit mesh policy requires a complete selected issuer path even
+		// for our own leaf. A duplicated leaf in either PEM input must not
+		// become an independent anchor and hide its issuer's expiry.
+		caPool, caCerts, err = peerCertificateTrust(chainPEM)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		// Preserve the general mTLS loopback policy for legacy callers.
+		caPool = x509.NewCertPool()
+		certs.AppendChainToPool(caPool, chainPEM)
+		caCerts, err = parseCertsFromPEM([]byte(chainPEM))
+		if err != nil {
+			return nil, fmt.Errorf("parsing chain PEM: %w", err)
+		}
+		if len(caCerts) == 0 {
+			return nil, fmt.Errorf("parsing chain PEM: no certificates found")
+		}
+		caPool.AppendCertsFromPEM([]byte(certPEM))
 	}
-	if len(caCerts) == 0 {
-		return nil, fmt.Errorf("parsing chain PEM: no certificates found")
-	}
-	caPool.AppendCertsFromPEM([]byte(certPEM))
 
 	cfg := &tls.Config{
 		Certificates: []tls.Certificate{cert},

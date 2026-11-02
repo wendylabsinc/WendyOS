@@ -2,6 +2,7 @@ package mtls
 
 import (
 	"crypto/ecdsa"
+	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
@@ -27,6 +28,69 @@ func policyPathFixture(t *testing.T, algorithm string, now, issuerNB, issuerNA, 
 		leaf = signPeerTestCertificate(t, buildMLDSALeafCert(t, issuer, issuerKey), issuer, issuerKey, func(c *tbsCertificate) { c.Validity = validity{leafNB, leafNA} })
 	}
 	return leaf, [][]byte{leaf.Raw, issuer.Raw}, string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: root.Raw}))
+}
+
+func TestExplicitTLSOwnLeafRequiresUnexpiredIssuerPath(t *testing.T) {
+	now := time.Now().Truncate(time.Second)
+	root, rootKey := expiryTestCertificate(t, "short issuer", now, now.Add(time.Minute), nil, nil, true)
+	leaf, leafKey := expiryTestCertificate(t, "own leaf", now, now.Add(time.Hour), root, rootKey, false)
+	key, err := x509.MarshalECPrivateKey(leafKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leafPEM := peerTrustPEM(leaf)
+	keyPEM := string(pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: key}))
+	for _, duplicate := range []bool{false, true} {
+		t.Run(map[bool]string{false: "ordinary-chain", true: "duplicate-leaf-in-chain"}[duplicate], func(t *testing.T) {
+			chainPEM := peerTrustPEM(root)
+			if duplicate {
+				chainPEM += leafPEM
+			}
+			base := now
+			policy := certs.CertificateTimePolicy{Now: func() time.Time { return now }, Floor: func() time.Time { return base }, Uncertain: func() bool { return true }}
+			cfg, err := NewTLSConfigWithTimePolicy(leafPEM, chainPEM, keyPEM, nil, policy)
+			if err != nil {
+				t.Fatal(err)
+			}
+			chain := cfg.Certificates[0].Certificate
+			resumed := tls.ConnectionState{DidResume: true}
+			for _, der := range chain {
+				parsed, err := x509.ParseCertificate(der)
+				if err != nil {
+					t.Fatal(err)
+				}
+				resumed.PeerCertificates = append(resumed.PeerCertificates, parsed)
+			}
+			if err := cfg.VerifyPeerCertificate(chain, nil); err != nil {
+				t.Fatal("valid own issuer path rejected", err)
+			}
+			if err := cfg.VerifyConnection(resumed); err != nil {
+				t.Fatal("valid resumed own issuer path rejected", err)
+			}
+			base = now.Add(2 * time.Minute)
+			if err := cfg.VerifyPeerCertificate(chain, nil); err == nil {
+				t.Fatal("own leaf bypassed selected issuer expiry")
+			}
+			if err := cfg.VerifyConnection(resumed); err == nil {
+				t.Fatal("resumed own leaf bypassed selected issuer expiry")
+			}
+		})
+	}
+	// General mTLS historically trusts its exact own leaf for loopback. Keep
+	// that default wrapper unchanged when its issuer is already expired.
+	root, rootKey = expiryTestCertificate(t, "legacy expired issuer", now, now.Add(-time.Minute), nil, nil, true)
+	leaf, leafKey = expiryTestCertificate(t, "legacy own leaf", now, now.Add(time.Hour), root, rootKey, false)
+	key, err = x509.MarshalECPrivateKey(leafKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy, err := NewTLSConfig(peerTrustPEM(leaf), peerTrustPEM(root), string(pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: key})), nil, time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := legacy.VerifyPeerCertificate(legacy.Certificates[0].Certificate, nil); err != nil {
+		t.Fatal("legacy own-leaf loopback changed", err)
+	}
 }
 
 func TestCertificatePolicyUsesBaseTimeAndSelectedWindow(t *testing.T) {
