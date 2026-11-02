@@ -177,7 +177,14 @@ func (c *Controller) Step(ctx context.Context, config Config) (Decision, error) 
 				health = &HealthTracker{}
 				c.uplinkHealth[res.iface] = health
 			}
-			uplinks = append(uplinks, Uplink{Interface: res.iface, DNS: res.dns, Healthy: health.Observe(res.ok), Independent: true})
+			wasHealthy := health.Healthy
+			healthy := health.Observe(res.ok)
+			if wasHealthy != healthy {
+				c.logger.Info("Wendy Net independent uplink health changed", zap.String("interface", res.iface),
+					zap.Bool("healthy", healthy), zap.Bool("probe_succeeded", res.ok),
+					zap.Int("consecutive_failures", health.failures), zap.Int("consecutive_successes", health.successes))
+			}
+			uplinks = append(uplinks, Uplink{Interface: res.iface, DNS: res.dns, Healthy: healthy, Independent: true})
 		}
 		for iface := range c.uplinkHealth {
 			if _, ok := candidates[iface]; !ok {

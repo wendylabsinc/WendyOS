@@ -185,3 +185,30 @@ func TestGatewayDiagnosticsDistinguishProbeWithdrawal(t *testing.T) {
 		t.Fatal("missing health recovery")
 	}
 }
+
+func TestGatewayDiagnosticsReportIndependentUplinkHealth(t *testing.T) {
+	var events []string
+	probe := &fakeProbe{candidates: map[string]string{"wlan0": "1.1.1.1"}, uplink: true}
+	controller, err := NewWithDeps(policySelf(t), &fakeNode{events: &events}, &fakePolicy{events: &events}, probe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	core, logs := observer.New(zap.InfoLevel)
+	controller.SetLogger(zap.New(core))
+	config := Config{Participate: true, ShareUplink: true}
+	for range 2 {
+		if _, err := controller.Step(context.Background(), config); err != nil {
+			t.Fatal(err)
+		}
+	}
+	probe.uplink = false
+	for range 3 {
+		if _, err := controller.Step(context.Background(), config); err != nil {
+			t.Fatal(err)
+		}
+	}
+	changes := logs.FilterMessage("Wendy Net independent uplink health changed").All()
+	if len(changes) != 2 || changes[0].ContextMap()["healthy"] != true || changes[1].ContextMap()["healthy"] != false || changes[1].ContextMap()["interface"] != "wlan0" || changes[1].ContextMap()["consecutive_failures"] != int64(3) {
+		t.Fatalf("uplink health changes: %+v", changes)
+	}
+}

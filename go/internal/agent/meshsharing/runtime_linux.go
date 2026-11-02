@@ -86,6 +86,21 @@ func (p *linuxTunnelPolicy) reportControlEnd(event controlEnd) {
 	logger.Info("Wendy Net gateway control ended", fields...)
 }
 
+// Caller holds p.mu, so old and desired sharing inputs describe one decision.
+func (p *linuxTunnelPolicy) reportSharingChange(reason, iface, upstream string, ipv6, routesChanged bool, err error) {
+	if logger := p.logger.Load(); logger != nil {
+		fields := []zap.Field{zap.String("reason", reason),
+			zap.String("interface", iface), zap.String("previous_interface", p.sharing),
+			zap.Bool("interface_changed", iface != p.sharing), zap.Bool("resolver_changed", upstream != p.upstream),
+			zap.Bool("ipv6", ipv6), zap.Bool("previous_ipv6", p.sharing6), zap.Bool("ipv6_changed", ipv6 != p.sharing6),
+			zap.Int("granted_leases", len(p.grants)), zap.Error(err)}
+		if reason == "reconfigure" || reason == "sharing-disabled" {
+			fields = append(fields, zap.Bool("routes_changed", routesChanged))
+		}
+		logger.Info("Wendy Net gateway sharing changed", fields...)
+	}
+}
+
 func newLinuxTunnelPolicy(ctx context.Context, credentials *localmesh.Credentials) (p *linuxTunnelPolicy, err error) {
 	if credentials == nil || !credentials.Device.IsValid() {
 		return nil, errors.New("Wendy Net Internet sharing requires credentials")
@@ -205,6 +220,7 @@ func (p *linuxTunnelPolicy) SetSharing(ctx context.Context, iface, upstream stri
 	if iface != "" {
 		routes, err = selectedDonorRoutes(iface, share6)
 		if err != nil {
+			p.reportSharingChange("native-route-read-failed", iface, upstream, share6, false, err)
 			return errors.Join(err, p.stopSharingLocked(ctx))
 		}
 	}
@@ -212,13 +228,20 @@ func (p *linuxTunnelPolicy) SetSharing(ctx context.Context, iface, upstream stri
 		select {
 		case exit := <-p.dnsDone:
 			p.dnsDone <- exit
+			p.reportSharingChange("resolver-exited", iface, upstream, share6, false, exit)
 			return errors.Join(fmt.Errorf("Wendy Net DNS proxy stopped: %v", exit), p.stopSharingLocked(ctx))
 		default:
 		}
 	}
-	if iface == p.sharing && upstream == p.upstream && share6 == p.sharing6 && sameDonorRoutes(routes, p.donorRouting.routes) && (iface != "" || (len(p.grants) == 0 && len(p.shareRules) == 0 && !p.forwarding6)) {
+	routesChanged := !sameDonorRoutes(routes, p.donorRouting.routes)
+	if iface == p.sharing && upstream == p.upstream && share6 == p.sharing6 && !routesChanged && (iface != "" || (len(p.grants) == 0 && len(p.shareRules) == 0 && !p.forwarding6)) {
 		return nil
 	}
+	reason := "reconfigure"
+	if iface == "" {
+		reason = "sharing-disabled"
+	}
+	p.reportSharingChange(reason, iface, upstream, share6, routesChanged, nil)
 	if err = p.stopSharingLocked(ctx); err != nil {
 		return err
 	}
