@@ -52,6 +52,7 @@ func newDeviceLocalMeshCmd() *cobra.Command {
 	configure.Flags().Bool("share-uplink", false, "Offer an independent uplink to the net")
 	configure.Flags().Bool("nan", false, "Enable Wi-Fi Aware NAN as a net carrier")
 	configure.Flags().Bool("ble", false, "Enable BLE L2CAP as a net carrier")
+	configure.Flags().String("ble-mode", "", "BLE radio profile: off, normal, coded-s2 or coded-s8 (Lite profile changes restart the device)")
 	configure.Flags().Bool("ethernet", false, "Discover local net peers over Ethernet")
 	configure.Flags().Bool("infrastructure-wifi", false, "Discover local net peers over infrastructure Wi-Fi")
 	configure.Flags().Uint32("max-links", 0, "Lite: limit simultaneous mesh carriers")
@@ -60,12 +61,23 @@ func newDeviceLocalMeshCmd() *cobra.Command {
 	configure.Flags().Uint32("nan-links", 0, "Lite: limit simultaneous NAN mesh carriers")
 	configure.RunE = func(cmd *cobra.Command, _ []string) error {
 		changed := false
-		for _, name := range append([]string{"participate", "roam", "share-uplink", "nan", "ble", "ethernet", "infrastructure-wifi"}, liteNetLimitFlags...) {
+		for _, name := range append([]string{"participate", "roam", "share-uplink", "nan", "ble", "ble-mode", "ethernet", "infrastructure-wifi"}, liteNetLimitFlags...) {
 			changed = changed || cmd.Flags().Changed(name)
 		}
 		interactive := !changed && !jsonOutput && isInteractiveTerminal()
 		if !changed && !interactive {
 			return errNoLocalMeshSettings
+		}
+		if cmd.Flags().Changed("ble-mode") {
+			if cmd.Flags().Changed("ble") {
+				return fmt.Errorf("choose --ble-mode or --ble, not both")
+			}
+			mode, _ := cmd.Flags().GetString("ble-mode")
+			switch mode {
+			case "off", "normal", "coded-s2", "coded-s8":
+			default:
+				return fmt.Errorf("--ble-mode must be off, normal, coded-s2 or coded-s8")
+			}
 		}
 		target, err := resolveLocalMeshTarget(cmd.Context(), SuppressUpdateCheck(), SuppressPickerEnroll())
 		if err != nil {
@@ -78,6 +90,23 @@ func newDeviceLocalMeshCmd() *cobra.Command {
 		for _, name := range liteNetLimitFlags {
 			if cmd.Flags().Changed(name) {
 				return fmt.Errorf("--%s applies to Wendy Lite peers", name)
+			}
+		}
+		if cmd.Flags().Changed("ble-mode") {
+			if cmd.Flags().Changed("ble") {
+				return fmt.Errorf("choose --ble-mode or --ble, not both")
+			}
+			mode, _ := cmd.Flags().GetString("ble-mode")
+			if mode != "off" {
+				if target.Agent == nil || target.Agent.Conn == nil {
+					return fmt.Errorf("BLE settings require an agent connection")
+				}
+				if _, err := pb.NewWendyBluetoothServiceClient(target.Agent.Conn).ConfigureBluetoothRadio(cmd.Context(), &pb.ConfigureBluetoothRadioRequest{MeshMode: mode}); err != nil {
+					return err
+				}
+			}
+			if err := cmd.Flags().Set("ble", fmt.Sprint(mode != "off")); err != nil {
+				return err
 			}
 		}
 		req, err := localMeshRequest(cmd)
