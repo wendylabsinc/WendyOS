@@ -59,8 +59,10 @@ The network entitlement controls how your application accesses the network.
 
 | Mode | Description |
 |------|-------------|
-| `host` | Application shares the host's network stack. The container uses the same network interfaces, IP addresses, and ports as the host device. Required for HTTP servers and any network services that need to accept incoming connections. |
+| `host` | Shares the device's interfaces, IP addresses, and listening ports. Use for services that need direct LAN access. Does not grant network administration. |
+| `host-admin` | Host networking plus `CAP_NET_ADMIN`, for apps that reconfigure the host network. |
 | `bridge` | Private network namespace with outbound connectivity, including DNS and downloads, through NAT. Ports are not published on the device's LAN address. |
+| `mesh` | Private Wendy Net service networking. Requires `serviceCIDR: "10.99.0.0/16"` and isolated networking. Declare incoming TCP or UDP ports explicitly. Does not grant an Internet default route. |
 | `none` | Application runs in an isolated network namespace with no network access. Use this for applications that should be completely offline, such as data processing tasks that don't need external connectivity. |
 
 Omitting the network entitlement gives an ordinary container only loopback.
@@ -71,12 +73,52 @@ With `shared-network` (or `shared-ipc`), secondary services inherit the primary
 service's network namespace, so set networking on the primary service or at app level.
 
 <Callout type="info">
-  **Web Servers**: If you're building a web server or any application that accepts incoming connections, you need `"mode": "host"` to make your service accessible from other devices on the network.
+  Use `host` for a server that must be reachable on the device's LAN address.
+  Use `mesh` with published ports for access from other Wendy Net apps. A mesh
+  port mapping does not expose a browser URL on the device's LAN address.
 </Callout>
 
 <Callout type="warning">
   **Port Conflicts**: With `host` mode, your application's ports are exposed directly on the device. Ensure your application doesn't use ports that conflict with system services or other running applications.
 </Callout>
+
+### Wendy Net and mDNS discovery
+
+An app can retain its existing mDNS library while Wendy Net carries service
+records between devices. For example:
+
+```json
+{
+  "appId": "com.example.net-api",
+  "platform": "linux",
+  "isolation": "isolated",
+  "entitlements": [
+    {
+      "type": "network",
+      "mode": "mesh",
+      "serviceCIDR": "10.99.0.0/16",
+      "ports": [{ "host": 18080, "container": 8080, "protocol": "tcp" }]
+    }
+  ]
+}
+```
+
+Listen on the container interface or `0.0.0.0:8080`, then advertise the
+container's IPv4 address and port 8080 with complete DNS-SD records. Clients
+resolve the projected service address and published port 18080. UDP services
+use `protocol: "udp"` and a service type ending in `._udp`.
+
+The app's own mDNS socket needs no `avahi` entitlement or UDP 5353 mapping.
+For apps using Avahi's D-Bus API or a compatible `dns_sd.h` library, add
+`{ "type": "avahi" }` and use the supplied `DBUS_SYSTEM_BUS_ADDRESS`. The
+agent runs a private Avahi service; do not mount the host bus. Private Avahi
+requires a private network and cannot share a container with host networking
+or the Bluetooth entitlement. It currently supports root D-Bus clients.
+
+Device participation, app port publication, discovery, and application readiness
+are separate checks. See [Wendy Net setup](/docs/guides/wendy-net),
+[service discovery](/docs/guides/wendy-net-services), and the
+[NVIDIA PAIR example](/docs/guides/nvidia-pair).
 
 ### GPU Entitlement
 
@@ -575,19 +617,28 @@ wendy json schema > wendy-schema.json
 
 3. **Test without entitlements first**: Start with an empty entitlements array and add permissions as needed when you encounter access errors.
 
-4. **Use host networking for servers**: Any application that accepts incoming connections (HTTP servers, WebSocket servers, etc.) needs the network entitlement with `mode: host`.
+4. Choose networking for the caller. Use `host` for direct LAN listeners,
+   `mesh` with published ports for Wendy Net peers, and `bridge` for outbound
+   Internet access. Declare the mode explicitly.
 
-5. **Combine entitlements thoughtfully**: Some use cases require multiple entitlements. For example, a video streaming server needs both `network` and `video` entitlements.
+5. A camera streaming server needs both the appropriate `network` mode and
+   the `camera` entitlement. Ordinary Wendy Net apps do not need direct radio
+   control entitlements.
 
 ## Troubleshooting
 
 ### Application can't access the network
 
-Ensure you have the network entitlement with host mode:
+For outbound Internet access, use bridge mode:
 
 ```json
-{ "type": "network", "mode": "host" }
+{ "type": "network", "mode": "bridge" }
 ```
+
+For Wendy Net, check device participation and topology, the app's mesh network
+and published ports, and the resolved mDNS endpoint. Mesh service access does
+not provide a default route for Internet downloads. See the
+[discovery troubleshooting steps](/docs/guides/wendy-net-services#troubleshoot-discovery).
 
 ### GPU not detected in container
 
