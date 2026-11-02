@@ -14,6 +14,7 @@ const cachedIssuerBytes = 512 << 10
 // Certificates retains CA material as untrusted path candidates. It does not
 // add roots or replace the TLS caller's principal, time or certificate policy.
 type Certificates struct {
+	recovery    *Recovery
 	certificate tls.Certificate
 	anchors     map[Fingerprint]bool
 	mu          sync.Mutex

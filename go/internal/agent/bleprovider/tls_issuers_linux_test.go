@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/localmesh"
+	"github.com/wendylabsinc/wendy/go/internal/shared/meshalpn"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
 )
 
@@ -152,6 +153,7 @@ func issuerCredentialsPaths(t *testing.T, shared, sharedParents bool, leafKey de
 		if len(credentials.Certificate.Certificate) != 4 {
 			t.Fatalf("%s presents %d certificates, want leaf and three issuers", name, len(credentials.Certificate.Certificate))
 		}
+		credentials.SetTLSRecovery(new(meshalpn.Recovery)) // Independent simulated process.
 		return credentials
 	}
 	lowID := selfFixture.UUID()

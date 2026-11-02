@@ -3,6 +3,7 @@ package meshalpn
 import (
 	"crypto/tls"
 	"crypto/x509"
+	"strings"
 	"time"
 )
 
@@ -10,6 +11,9 @@ import (
 // Aliases acknowledge the shared prefix without changing the application.
 func (c *Certificates) ClientProtocols(protocols ...string) []string {
 	if c == nil {
+		return append([]string(nil), protocols...)
+	}
+	if c.recoveryState().active() {
 		return append([]string(nil), protocols...)
 	}
 	return c.clientProtocols(c.snapshot(time.Now()), protocols...)
@@ -29,7 +33,7 @@ func (c *Certificates) clientProtocols(known []*x509.Certificate, protocols ...s
 // A connection keeps the exact immutable CA snapshot it advertised/acknowledged.
 // Cache FIFO turnover may drop its metadata but Go references retain the DER
 // until verification has consumed it. No lock is held during TLS or crypto.
-func (c *Certificates) bindIssuerSnapshot(config *tls.Config, available []*x509.Certificate) {
+func (c *Certificates) bindIssuerSnapshot(config *tls.Config, available []*x509.Certificate, hinted bool) {
 	if c == nil {
 		return
 	}
@@ -40,6 +44,7 @@ func (c *Certificates) bindIssuerSnapshot(config *tls.Config, available []*x509.
 		config.VerifyPeerCertificate = func(raw [][]byte, verified [][]*x509.Certificate) error {
 			err := chainVerify(c.candidatesFrom(raw, loan.available), verified)
 			if err != nil {
+				c.recoveryState().failed(err, hinted)
 				loan.available = nil
 			}
 			return err
@@ -64,6 +69,7 @@ func (c *Certificates) bindIssuerSnapshot(config *tls.Config, available []*x509.
 		}
 		if previous != nil {
 			if err := previous(augmented); err != nil {
+				c.recoveryState().failed(err, hinted)
 				return err
 			}
 		}
@@ -93,8 +99,22 @@ func omitKnownCertificates(certificate tls.Certificate, known map[Fingerprint]bo
 func (c *Certificates) ConfigureClient(config *tls.Config, protocols ...string) {
 	if c != nil {
 		available := c.snapshot(time.Now())
-		config.NextProtos = resumptionProtocols(config, c.clientProtocols(available, protocols...), available)
-		c.bindIssuerSnapshot(config, available)
+		hinted := !c.recoveryState().active()
+		if hinted {
+			config.NextProtos = resumptionProtocols(config, c.clientProtocols(available, protocols...), available)
+			hinted = false
+			for _, protocol := range config.NextProtos {
+				_, hashes := Decode(protocol)
+				if len(hashes) > 0 || strings.HasPrefix(protocol, inventory) {
+					hinted = true
+					break
+				}
+			}
+		} else {
+			config.NextProtos = append([]string(nil), protocols...)
+			fullExchange(config)
+		}
+		c.bindIssuerSnapshot(config, available, hinted)
 	} else {
 		config.NextProtos = append([]string(nil), protocols...)
 		return
@@ -134,6 +154,9 @@ func (c *Certificates) ConfigureClient(config *tls.Config, protocols ...string) 
 // ServerCertificate removes only the exact CA certificates advertised by the
 // client. Certificate verification and trust anchors are unchanged.
 func (c *Certificates) ServerCertificate(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
+	if c.recoveryState().active() {
+		return &c.certificate, nil
+	}
 	return omitKnownCertificates(c.certificate, Offered(hello.SupportedProtos, "")), nil
 }
 
@@ -167,14 +190,28 @@ func (c *Certificates) ConfigureServer(config *tls.Config) {
 				known[Hash(cert.Raw)] = true
 			}
 		}
-		protocol := Select(selected.NextProtos, hello.SupportedProtos, func(hash Fingerprint) bool { return known[hash] })
+		cooldown := c.recoveryState().active()
+		protocol := Select(selected.NextProtos, hello.SupportedProtos, func(hash Fingerprint) bool { return !cooldown && known[hash] })
 		if protocol == "" {
 			return selected, nil
 		} // TLS reports the ordinary ALPN failure.
 		result := selected.Clone()
 		result.GetConfigForClient = nil
 		result.NextProtos = []string{protocol}
-		c.bindIssuerSnapshot(result, available)
+		_, hashes := Decode(protocol)
+		if len(hashes) == 0 {
+			// Ordinary negotiated ALPN always requests full presentations in both
+			// directions, even if the hello also contained inventory names.
+			result.GetCertificate = func(*tls.ClientHelloInfo) (*tls.Certificate, error) { return &c.certificate, nil }
+		} else {
+			// Freeze the choice for this handshake, including across cooldown expiry.
+			certificate := omitKnownCertificates(c.certificate, Offered(hello.SupportedProtos, ""))
+			result.GetCertificate = func(*tls.ClientHelloInfo) (*tls.Certificate, error) { return certificate, nil }
+		}
+		if cooldown {
+			fullExchange(result)
+		}
+		c.bindIssuerSnapshot(result, available, len(hashes) > 0)
 		return result, nil
 	}
 }

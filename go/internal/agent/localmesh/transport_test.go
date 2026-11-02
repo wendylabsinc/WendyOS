@@ -127,7 +127,7 @@ func testCredentialsWithPEM(t testing.TB, capture func(meshid.Device, string, st
 		if capture != nil {
 			capture(testDevice(t, principal), certPEM, chainPEM, keyPEM)
 		}
-		credentials, err := NewCredentials(certPEM, chainPEM, keyPEM)
+		credentials, err := newTestCredentials(certPEM, chainPEM, keyPEM)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -142,7 +142,7 @@ func testCredentialsFor(t testing.TB, principal string) *Credentials {
 	t.Helper()
 	chainPEM := testPKI().chainPEM
 	certPEM, keyPEM := testIssue(t, principal)
-	credentials, err := NewCredentials(certPEM, chainPEM, keyPEM)
+	credentials, err := newTestCredentials(certPEM, chainPEM, keyPEM)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -181,7 +181,7 @@ func testForeignCredentials(t testing.TB, principal string) *Credentials {
 	if err != nil {
 		t.Fatal(err)
 	}
-	credentials, err := NewCredentials(string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: leaf})), chainPEM, string(pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})))
+	credentials, err := newTestCredentials(string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: leaf})), chainPEM, string(pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -287,7 +287,7 @@ func TestCredentialsRejectNonDeviceIdentity(t *testing.T) {
 		testPrincipal(testTenantUUID, "2B1C0000-0000-4000-8000-000000000445"),
 	} {
 		certPEM, keyPEM := testIssue(t, principal)
-		if _, err := NewCredentials(certPEM, chainPEM, keyPEM); err == nil {
+		if _, err := newTestCredentials(certPEM, chainPEM, keyPEM); err == nil {
 			t.Fatalf("principal %s accepted as a wendy net identity", principal)
 		}
 	}
@@ -640,7 +640,7 @@ func TestScopedPeerTLSResumesOnlyWithinCredentialALPNAndTransport(t *testing.T) 
 			cert, chain, key = c, ca, k
 		}
 	})
-	newClient, err := NewCredentials(cert, chain, key)
+	newClient, err := newTestCredentials(cert, chain, key)
 	if err != nil {
 		t.Fatal(err)
 	}
