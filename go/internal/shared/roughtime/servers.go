@@ -20,9 +20,6 @@ import (
 //
 // Keys must be fetched from each operator's published ecosystem JSON and
 // encoded as 32-byte ed25519.PublicKey. See design doc for retrieval steps.
-// The order is also the fixed authority numbering of mesh clock control v1.
-// Append new authorities; changing existing indices requires a new control
-// version so an older relay never queries a different authority implicitly.
 var Servers = []Server{
 	{
 		Name:      "cloudflare",

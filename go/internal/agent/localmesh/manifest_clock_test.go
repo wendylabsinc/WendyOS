@@ -2,33 +2,24 @@ package localmesh
 
 import (
 	"errors"
-	"strings"
 	"testing"
 	"time"
 )
 
-func TestFutureManifestReportsLocalClockSkewWithoutAdmitting(t *testing.T) {
+func TestFutureManifestUsesReceiverRelativeLease(t *testing.T) {
 	d, chain, key, device, now := directoryFixture(t)
 	w, err := SignManifest(routeManifest(device, now), chain, key, now)
 	if err != nil {
 		t.Fatal(err)
 	}
 	behind := now.Add(-598 * time.Second)
-	// This is a cold boot with a stale clock, not a rollback after the cache
-	// was populated. Preserve the cache's independent rollback protection.
 	resetClockFixtureCache(t, d, chain, behind)
-	changed, err := d.Accept(w, behind)
-	if changed || err == nil {
-		t.Fatalf("future lease admitted before time recovery: changed=%v err=%v", changed, err)
+	if changed, err := d.Accept(w, behind); err != nil || !changed {
+		t.Fatal(changed, err)
 	}
-	if !strings.Contains(err.Error(), "clock") {
-		t.Fatalf("clock skew was hidden as a malformed manifest: %v", err)
-	}
-	if len(d.Snapshot(behind)) != 0 || len(d.history) != 0 {
-		t.Fatal("future lease installed presence or replay state")
-	}
-	if changed, err = d.Accept(w, now); err != nil || !changed {
-		t.Fatalf("same signed lease failed after clock recovery: changed=%v err=%v", changed, err)
+	got := d.Snapshot(behind)
+	if len(got) != 1 || got[0].LeaseRemaining(behind) != time.Minute {
+		t.Fatal("future wall date changed signed duration", got)
 	}
 }
 
@@ -60,7 +51,7 @@ func resetClockFixtureCache(t *testing.T, d *Directory, chain [][]byte, now time
 	d.cache = cache
 }
 
-func TestManifestFutureClockToleranceUnchanged(t *testing.T) {
+func TestManifestStructuralValidationDoesNotUseReceiverWallTime(t *testing.T) {
 	_, _, _, device, now := directoryFixture(t)
 	for _, tc := range []struct {
 		name      string
@@ -68,8 +59,8 @@ func TestManifestFutureClockToleranceUnchanged(t *testing.T) {
 		wantError bool
 	}{
 		{"within tolerance", 5 * time.Second, false},
-		{"past tolerance", 5*time.Second + time.Millisecond, true},
-		{"reported outage", 598 * time.Second, true},
+		{"past tolerance", 5*time.Second + time.Millisecond, false},
+		{"reported outage", 598 * time.Second, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			m := routeManifest(device, now.Add(tc.ahead))

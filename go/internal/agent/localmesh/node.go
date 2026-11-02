@@ -21,7 +21,6 @@ import (
 	quic "github.com/quic-go/quic-go"
 	"github.com/wendylabsinc/WendyOS/go/babel"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
-	"github.com/wendylabsinc/wendy/go/internal/shared/roughtime"
 )
 
 type nodePeer struct {
@@ -29,23 +28,23 @@ type nodePeer struct {
 	closeDiagnostic sync.Once
 	ingress         *nodeEvent // One actor-owned input; its reader awaits acknowledgement.
 
-	assembler         IPAssembler
-	id                babel.LinkID
-	device            meshid.Device
-	cost              uint16
-	transport         string
-	link              nodeLink
-	tun               io.ReadWriteCloser
-	pendingBundles    sync.Map // fingerprints queued or being written on this link
-	control           chan ControlMessage
-	done              chan struct{}
-	sync              *Synchronizer
-	replies           []ControlMessage
-	replyBytes        int
-	timestamp         *timestampReply
-	clockRelay        bool
-	clockWaitingUntil time.Time
-	clockServing      map[uint64]bool
+	assembler      IPAssembler
+	id             babel.LinkID
+	device         meshid.Device
+	cost           uint16
+	transport      string
+	link           nodeLink
+	tun            io.ReadWriteCloser
+	pendingBundles sync.Map // fingerprints queued or being written on this link
+	control        chan ControlMessage
+	controlMu      sync.Mutex // Serializes dequeue against actor idle pruning.
+	controlOnce    sync.Once
+	controlReady   chan struct{}
+	done           chan struct{}
+	sync           *Synchronizer
+	replies        []ControlMessage
+	replyBytes     int
+	timestamp      *timestampReply
 }
 
 type nodeLink interface {
@@ -83,7 +82,6 @@ type nodeEvent struct {
 	controlResult chan error
 	result        chan error
 	timestamp     *timestampReply
-	clock         *clockEvent
 }
 
 // Node serializes all Babel/directory mutations. Radio providers only establish
@@ -120,17 +118,6 @@ type Node struct {
 	routeInput       routeInput
 	routeDiagnostics []routeTransition
 	timestampWorkers chan struct{}
-	wallNow          func() time.Time
-	clockSync        func(context.Context, roughtime.RelayQuery) error
-	clockRunning     bool
-	clockNext        time.Time
-	clockWindowEnd   time.Time
-	clockAttempts    int
-	clockSequence    atomic.Uint64
-	clockCalls       map[uint64]*clockCall
-	clockWorkers     chan struct{}
-	clockQuery       roughtime.RelayQuery
-	clockBootFloor   time.Time // Query hint only; never applied as time or admission authority.
 }
 
 func NewNode(parent context.Context, dir string, credentials *Credentials, name string, agentPort uint16, appEndpoints ...[]AppEndpoint) (*Node, error) {
@@ -147,10 +134,6 @@ func NewNodeWithNetwork(parent context.Context, dir string, credentials *Credent
 }
 
 func newNode(parent context.Context, dir string, credentials *Credentials, name string, agentPort uint16, createNetwork func(meshid.Device) (PacketNetwork, error), appEndpoints ...[]AppEndpoint) (*Node, error) {
-	return newNodeWithClock(parent, dir, credentials, name, agentPort, createNetwork, nil, appEndpoints...)
-}
-
-func newNodeWithClock(parent context.Context, dir string, credentials *Credentials, name string, agentPort uint16, createNetwork func(meshid.Device) (PacketNetwork, error), wallNow func() time.Time, appEndpoints ...[]AppEndpoint) (*Node, error) {
 	if credentials == nil || (agentPort == 0 && !credentials.Device.IsOperator()) {
 		return nil, errors.New("missing wendy net credentials or agent port")
 	}
@@ -163,11 +146,7 @@ func newNodeWithClock(parent context.Context, dir string, credentials *Credentia
 	if err := validateAppEndpoints(endpoints); err != nil {
 		return nil, err
 	}
-	started := time.Now()
-	now := started
-	if wallNow != nil {
-		now = wallNow()
-	}
+	now := time.Now()
 	derived, err := routerIDCandidate(credentials.Device)
 	if err != nil {
 		return nil, err
@@ -183,7 +162,7 @@ func newNodeWithClock(parent context.Context, dir string, credentials *Credentia
 	if _, err = cache.Put(credentials.Certificate.Certificate, now); err != nil {
 		return nil, err
 	}
-	directory, err := NewDirectory(credentials.Device.Tenant(), 1024, cache)
+	directory, err := NewDirectoryWithClock(credentials.Device.Tenant(), 1024, cache, time.Now)
 	if err != nil {
 		return nil, err
 	}
@@ -192,7 +171,7 @@ func newNodeWithClock(parent context.Context, dir string, credentials *Credentia
 		return nil, err
 	}
 	ctx, cancel := context.WithCancel(parent)
-	n := &Node{controlHub: NewControlHub(cache.Certificates()), Credentials: credentials, kernel: kernel, cache: cache, directory: directory, bundleHints: newBundleHintCache(), store: store, state: state, peers: map[babel.LinkID]*nodePeer{}, events: make(chan nodeEvent, 256), ctx: ctx, cancel: cancel, started: started, wallNow: wallNow,
+	n := &Node{controlHub: NewControlHub(cache.Certificates()), Credentials: credentials, kernel: kernel, cache: cache, directory: directory, bundleHints: newBundleHintCache(), store: store, state: state, peers: map[babel.LinkID]*nodePeer{}, events: make(chan nodeEvent, 256), ctx: ctx, cancel: cancel, started: now,
 		advertisement: Manifest{Version: ManifestVersionRoute, Device: credentials.Device.UUID(), Name: name, AgentPort: agentPort, AgentTransport: AgentMTLS, Platform: PlatformWendyOS, AppEndpoints: endpoints},
 		diagnostics:   carrierDiagnostics{enabled: os.Getenv("WENDY_NET_CARRIER_DIAGNOSTICS") == "1"}}
 	if credentials.Device.IsOperator() {
@@ -221,7 +200,11 @@ func newNodeWithClock(parent context.Context, dir string, credentials *Credentia
 	}, now); err != nil {
 		return nil, err
 	}
-	n.clockBootFloor = clockRollbackHint(state.Receipts, now)
+	// Old foreign receipts used wall-time expiry. They cannot be converted into
+	// a fresh monotonic ten-duration lease on restart. Keep the validated own
+	// revision/Babel state, and omit only these obsolete receipts on the next
+	// normal checkpoint; new foreign watermarks live solely in this mesh epoch.
+	n.state.Receipts = nil
 	// Neighbor authentication admits a link, not its routing claims. Every
 	// finite remote route needs the origin's current signed address/ID/sequence
 	// binding. step snapshots that policy before entering the Babel engine.
@@ -295,7 +278,7 @@ func (n *Node) HasCheaperLink(device meshid.Device, cost uint16) bool {
 }
 
 func (n *Node) refresh() {
-	now := n.wallTime()
+	now := time.Now()
 	if n.diagnostics.enabled {
 		n.diagnostics.emit(now, n.Credentials.Device, n.peers, logCarrierDiagnostic)
 	}
@@ -333,7 +316,7 @@ func (n *Node) Run() error {
 			_ = p.link.Close()
 		}
 		_ = n.kernel.Close()
-		_ = n.cache.Flush(n.wallTime())
+		_ = n.cache.Flush(time.Now())
 	}()
 	// NetworkManager can race dummy creation before its unmanaged-device policy
 	// takes effect. Verify the base state once before originating Babel routes,
@@ -356,7 +339,7 @@ func (n *Node) Run() error {
 			delay = max(time.Millisecond, deadline-time.Since(n.started))
 		}
 		if due := n.publicationDeadline(); !due.IsZero() {
-			delay = min(delay, max(time.Millisecond, due.Sub(n.wallTime())))
+			delay = min(delay, max(time.Millisecond, time.Until(due)))
 		}
 		if !timer.Stop() {
 			select {
@@ -369,7 +352,7 @@ func (n *Node) Run() error {
 		case <-n.ctx.Done():
 			return n.ctx.Err()
 		case <-timer.C:
-			if due := n.publicationDeadline(); !due.IsZero() && !n.wallTime().Before(due) {
+			if due := n.publicationDeadline(); !due.IsZero() && !time.Now().Before(due) {
 				if err := n.publish(); err != nil {
 					return err
 				}
@@ -378,6 +361,7 @@ func (n *Node) Run() error {
 				return err
 			}
 		case <-maintenance.C:
+			n.sweepAnnouncements(time.Now())
 			n.gate.Lock()
 			err := n.kernel.ReconcileBase()
 			n.gate.Unlock()
@@ -397,20 +381,14 @@ func (n *Node) Run() error {
 					return err
 				}
 				n.pumpTimestamp(p)
-				if err := n.maintainClockPeer(p); err != nil {
-					return err
-				}
 				if p.reconcileNeeded {
 					p.reconcileNeeded = false
-					n.reconcilePeer(p, n.wallTime())
+					n.reconcilePeer(p, time.Now())
 				}
 				if p.sync == nil {
 					continue
 				}
-				replies, changed, err := p.sync.ContinueCertificates(n.wallTime(), directoryResponseSlots(p))
-				if errors.Is(err, ErrManifestClockSkew) && n.clockBlocked(p) {
-					err = nil
-				}
+				replies, changed, err := p.sync.ContinueCertificates(time.Now(), directoryResponseSlots(p))
 				if err != nil {
 					n.closePeer(p, "directory-maintenance", err)
 					continue
@@ -420,17 +398,18 @@ func (n *Node) Run() error {
 					continue
 				}
 				for _, record := range changed {
+					n.logAdmission(record, "certificate-repair", time.Now())
 					for id, dest := range n.peers {
 						if id != p.id && dest.sync != nil {
-							n.queue(dest, dest.sync.Record(record, n.wallTime()))
+							n.queue(dest, dest.sync.Record(record, time.Now()))
 						}
 					}
 				}
-				n.continueReconcilePeer(p, n.wallTime())
+				n.continueReconcilePeer(p, time.Now())
 			}
 		case <-reconcile.C:
 			for _, p := range n.peers {
-				n.reconcilePeer(p, n.wallTime())
+				n.reconcilePeer(p, time.Now())
 			}
 		case event := <-n.events:
 			err := n.handle(event)
@@ -451,7 +430,7 @@ func (n *Node) step(event babel.Event) error {
 	previousInput := n.routeInput
 	n.routeInput = describeRouteInput(event)
 	defer func() { n.routeInput = previousInput }()
-	n.routeOrigins = n.directory.RouteAuthorizations(n.wallTime())
+	n.routeOrigins = n.directory.RouteAuthorizations(time.Now())
 	if err := n.routing.Step(time.Since(n.started), event); err != nil {
 		return errors.Join(babel.ErrStopped, err)
 	}
@@ -460,9 +439,6 @@ func (n *Node) step(event babel.Event) error {
 }
 
 func (n *Node) handle(e nodeEvent) error {
-	if e.clock != nil {
-		return n.handleClockEvent(e.clock)
-	}
 	if e.services != nil {
 		previous := n.advertisement.Services
 		n.advertisement.Services = cloneServices(*e.services)
@@ -499,10 +475,7 @@ func (n *Node) handle(e nodeEvent) error {
 		if err = n.step(babel.AddLink{Link: babelLinkForPeer(e.add, local, peer)}); err != nil {
 			return err
 		}
-		now := n.wallTime()
-		if n.clockSync != nil {
-			n.queueReplies(e.add, []ControlMessage{{Kind: "clock", Clock: &ClockControl{Version: clockControlVersion, Op: "hello"}}})
-		}
+		now := time.Now()
 		n.queue(e.add, e.add.sync.bootstrapOwn(n.Credentials.Device.Key(), now, cap(e.add.control)-len(e.add.control)))
 		n.reconcilePeer(e.add, now)
 		return nil
@@ -542,21 +515,12 @@ func (n *Node) handleControl(p *nodePeer, control *ControlMessage) error {
 	if !knownControlKind(control.Kind) {
 		return nil
 	}
-	if control.Kind == "clock" {
-		return n.clockControl(p, control.Clock)
-	}
 	if control.Kind == "time" {
 		n.timestampControl(p, control.Time)
 		return nil
 	}
 
-	replies, changed, err := p.sync.Receive(*control, n.wallTime(), directoryResponseSlots(p))
-	if errors.Is(err, ErrManifestClockSkew) && n.clockBlocked(p) {
-		if !n.queueReplies(p, replies) {
-			n.closePeer(p, "clock-recovery-queue", errors.New("directory reply reserve full"))
-		}
-		return nil
-	}
+	replies, changed, err := p.sync.Receive(*control, time.Now(), directoryResponseSlots(p))
 	if err != nil {
 		if errors.Is(err, ErrControlBackpressure) {
 			return err
@@ -569,9 +533,10 @@ func (n *Node) handleControl(p *nodePeer, control *ControlMessage) error {
 		return nil
 	}
 	for _, record := range changed {
+		n.logAdmission(record, "carrier", time.Now())
 		for id, dest := range n.peers {
 			if id != p.id && dest.sync != nil {
-				n.queue(dest, dest.sync.Record(record, n.wallTime()))
+				n.queue(dest, dest.sync.Record(record, time.Now()))
 			}
 		}
 	}
@@ -605,6 +570,9 @@ func (n *Node) continueReconcilePeer(p *nodePeer, now time.Time) {
 }
 
 func (n *Node) writePeerControl(p *nodePeer, m ControlMessage) error {
+	if !n.controlEligible(p, m, time.Now()) {
+		return nil
+	}
 	if m.Kind == "bundle" {
 		// Clear the original queued token even if normalization changes bytes
 		// or current trust makes this queued repair ineligible.
@@ -626,7 +594,7 @@ func (n *Node) writePeerControl(p *nodePeer, m ControlMessage) error {
 		if err != nil {
 			return nil
 		}
-		chain, _, ok := n.cache.Get(device.Principal(), n.wallTime())
+		chain, _, ok := n.cache.Get(device.Principal(), time.Now())
 		if !ok {
 			return nil
 		}
@@ -643,9 +611,9 @@ func (n *Node) writePeerControl(p *nodePeer, m ControlMessage) error {
 		var chain [][]byte
 		var ok bool
 		if identity, err := meshid.PeerFromPrincipal(principal); err == nil && identity.IsOperator() {
-			chain, _, ok = n.cache.verifiedDescription(*m.Certificate.Chain, n.wallTime())
+			chain, _, ok = n.cache.verifiedDescription(*m.Certificate.Chain, time.Now())
 		} else {
-			chain, _, ok = n.cache.Get(principal, n.wallTime())
+			chain, _, ok = n.cache.Get(principal, time.Now())
 		}
 		if !ok {
 			return nil
@@ -659,7 +627,7 @@ func (n *Node) writePeerControl(p *nodePeer, m ControlMessage) error {
 		if m.Manifest == nil || n.directory == nil {
 			return nil
 		}
-		if _, ok := n.directory.CurrentRecordChain(*m.Manifest, n.wallTime()); !ok {
+		if _, ok := n.directory.CurrentRecordChain(*m.Manifest, time.Now()); !ok {
 			return nil
 		}
 	}
@@ -667,7 +635,7 @@ func (n *Node) writePeerControl(p *nodePeer, m ControlMessage) error {
 		return err
 	}
 	if m.Kind == "bundle" {
-		n.bundleHints.Written(p.device, m.Bundle, n.wallTime())
+		n.bundleHints.Written(p.device, m.Bundle, time.Now())
 	}
 	return nil
 }
@@ -678,6 +646,9 @@ func (n *Node) queue(p *nodePeer, messages []ControlMessage) {
 		return // Periodic reconciliation repairs bulk gossip after replies drain.
 	}
 	for _, m := range messages {
+		if !n.controlEligible(p, m, time.Now()) {
+			continue
+		}
 		// A leaf can request an identity again while its large certificate
 		// bundle is still crossing BLE. Keep one queued/in-flight copy, so
 		// cache repair cannot accumulate duplicate bundles ahead of IP.
@@ -688,6 +659,7 @@ func (n *Node) queue(p *nodePeer, messages []ControlMessage) {
 		}
 		select {
 		case p.control <- m:
+			p.wakeControl()
 		default:
 			p.reconcileNeeded = true // Maintenance retries changes without waiting five minutes.
 			if m.Kind == "bundle" {
@@ -707,13 +679,13 @@ func (n *Node) publicationDeadline() time.Time {
 }
 
 func (n *Node) publish() error {
-	if n.wallTime().Before(n.nextPublication) {
+	if time.Now().Before(n.nextPublication) {
 		n.publicationDirty = true
 		return nil
 	}
 	principal := n.Credentials.Device.Principal()
-	if _, _, ok := n.cache.Get(principal, n.wallTime()); !ok {
-		if _, err := n.cache.Put(n.Credentials.Certificate.Certificate, n.wallTime()); err != nil {
+	if _, _, ok := n.cache.Get(principal, time.Now()); !ok {
+		if _, err := n.cache.Put(n.Credentials.Certificate.Certificate, time.Now()); err != nil {
 			return err
 		}
 	}
@@ -725,13 +697,25 @@ func (n *Node) publish() error {
 		return err
 	}
 	m := n.advertisement
-	now := n.wallTime()
+	now := time.Now()
 	if n.state.Babel == nil {
 		return errors.New("route announcement requires a persisted Babel checkpoint")
 	}
 	m.Route = &RouteOrigin{Prefix: netip.PrefixFrom(n.Credentials.Device.MeshAddress(), 128), RouterID: babel.RouterID(n.state.RouterID), Seqno: n.state.Babel.Seqno}
 	m.Revision = n.state.Revision
-	m.Issued = now.UnixMilli()
+	// Publication dates remain inside our signing leaf window, independently
+	// of receiver-relative liveness. The local boot anchor is virtual: it does
+	// not set UTC, and peer timestamps never choose this clock.
+	policy := n.Credentials.CertificateTimePolicy()
+	issued := policy.BaseTime(policy.WallTime())
+	leaf, err := x509.ParseCertificate(n.Credentials.Certificate.Certificate[0])
+	if err != nil {
+		return err
+	}
+	if leaf.NotBefore.After(issued) {
+		issued = leaf.NotBefore
+	}
+	m.Issued = issued.UnixMilli()
 	// Other operator installations share this principal but may use different
 	// certificates. Only our actual signing chain determines our origin lease.
 	identity, err := n.Credentials.Verify(n.Credentials.Certificate.Certificate, now)
@@ -739,7 +723,7 @@ func (n *Node) publish() error {
 		return err
 	}
 	n.cache.rememberCertificates(n.Credentials.Certificate.Certificate, identity.NotAfter, now)
-	m.Expires = min(now.Add(MaxLease).UnixMilli(), identity.NotAfter.UnixMilli())
+	m.Expires = min(issued.Add(MaxLease).UnixMilli(), identity.NotAfter.UnixMilli())
 	w, err := SignManifest(m, n.Credentials.Certificate.Certificate, n.Credentials.Signer, now)
 	if err != nil {
 		return err
@@ -747,9 +731,13 @@ func (n *Node) publish() error {
 	if _, err = n.directory.Accept(w, now); err != nil {
 		return err
 	}
+	if deadline, ok := n.directory.RecordDeadline(w, now); ok {
+		m.AdmittedUntil = deadline
+	}
 	n.advertisement = m
+	n.logAdmission(w, "local-publication", now)
 	n.publicationDirty = false
-	n.nextPublication = n.wallTime().Add(time.Second)
+	n.nextPublication = time.Now().Add(time.Second)
 	for _, p := range n.peers {
 		if p.sync != nil {
 			n.queue(p, p.sync.Record(w, now))
@@ -825,7 +813,7 @@ func (n *Node) verifyPeerCertificates(peer meshid.Device, certs []*x509.Certific
 	for i, cert := range certs {
 		chain[i] = cert.Raw
 	}
-	id, err := n.Credentials.VerifyTLS(chain, n.wallTime())
+	id, err := n.Credentials.VerifyTLS(chain, time.Now())
 	if err != nil {
 		return err
 	}
@@ -836,7 +824,7 @@ func (n *Node) verifyPeerCertificates(peer meshid.Device, certs []*x509.Certific
 		// The authenticated handshake already supplied these exact bytes.
 		// Retain them for descriptors rather than requesting the peer's leaf
 		// and issuers again on the control channel.
-		n.cache.rememberCertificates(chain, id.NotAfter, n.wallTime())
+		n.cache.rememberCertificates(chain, id.NotAfter, time.Now())
 	}
 	return nil
 }
@@ -845,15 +833,37 @@ func (n *Node) verifyPeerCertificates(peer meshid.Device, certs []*x509.Certific
 // boundary. Renewal or supersession while a previous write blocks must not
 // send an obsolete signature or tear down a healthy neighbour link.
 func (n *Node) writeControls(ctx context.Context, p *nodePeer) error {
+	p.initControlWake()
 	for {
+		p.controlMu.Lock()
 		select {
-		case <-ctx.Done():
-			return ctx.Err()
 		case message := <-p.control:
+			p.controlMu.Unlock()
 			if err := n.writePeerControl(p, message); err != nil {
 				return err
 			}
+			continue
+		default:
+			p.controlMu.Unlock()
 		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-p.done:
+			return io.ErrClosedPipe
+		case <-p.controlReady:
+		}
+	}
+}
+
+func (p *nodePeer) initControlWake() {
+	p.controlOnce.Do(func() { p.controlReady = make(chan struct{}, 1) })
+}
+func (p *nodePeer) wakeControl() {
+	p.initControlWake()
+	select {
+	case p.controlReady <- struct{}{}:
+	default:
 	}
 }
 
@@ -968,7 +978,7 @@ func (n *Node) readLink(ctx context.Context, p *nodePeer) error {
 				return ctx.Err()
 			}
 		case PacketIP:
-			packet, err := assembler.Receive(d, n.wallTime())
+			packet, err := assembler.Receive(d, time.Now())
 			if err != nil {
 				return err
 			}
@@ -983,7 +993,7 @@ func (n *Node) readLink(ctx context.Context, p *nodePeer) error {
 			if stream, ok := p.link.(*streamNodeLink); ok && stream.diagIP && packet[0]>>4 == 6 && len(packet) >= 256 {
 				id := binary.BigEndian.Uint32(d[1:5])
 				if id%16 == 0 {
-					log.Printf("wendy net BLE IP event=receive peer=%s packet_id=%d source=%s bytes=%d ts_unix_ns=%d", p.device.UUID(), id, net.IP(packet[8:24]), len(packet), n.wallTime().UnixNano())
+					log.Printf("wendy net BLE IP event=receive peer=%s packet_id=%d source=%s bytes=%d ts_unix_ns=%d", p.device.UUID(), id, net.IP(packet[8:24]), len(packet), time.Now().UnixNano())
 				}
 			}
 			n.gate.RLock()
@@ -1046,7 +1056,7 @@ func (n *Node) Apply(routes []babel.Route) error {
 	// Stage diagnostics under the forwarding barrier, but do not write logs
 	// until persistence and Resume have succeeded and packet forwarding is unpaused.
 	n.routeDiagnostics = nil
-	reportRouteTransitions(n.forwardRoutes, routes, n.routeOrigins, n.routeInput, snapshot, n.wallTime(), func(event routeTransition) {
+	reportRouteTransitions(n.forwardRoutes, routes, n.routeOrigins, n.routeInput, snapshot, time.Now(), func(event routeTransition) {
 		n.routeDiagnostics = append(n.routeDiagnostics, event)
 	})
 	n.forwardRoutes = routes
@@ -1059,7 +1069,7 @@ func (n *Node) Apply(routes []babel.Route) error {
 func (n *Node) advertiseLocalRoute(id babel.RouterID, prefix netip.Prefix, seqno uint16) bool {
 	proof := n.advertisement.Route
 	return proof != nil && proof.RouterID == id && proof.Prefix == prefix && proof.Seqno == seqno &&
-		!n.advertisement.Withdraw && n.advertisement.Expires > n.wallTime().UnixMilli()
+		!n.advertisement.Withdraw && n.advertisement.LeaseDeadline().After(time.Now())
 }
 
 func (n *Node) Persist(cp babel.Checkpoint) error {

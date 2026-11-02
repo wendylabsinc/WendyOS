@@ -13,7 +13,6 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
-	"fmt"
 	"github.com/wendylabsinc/wendy/go/internal/agent/netwire"
 	"sort"
 	"sync"
@@ -56,6 +55,22 @@ type Manifest struct {
 	Route        *RouteOrigin      `json:"route,omitempty" cbor:"r,omitempty"`
 	AppEndpoints []AppEndpoint     `json:"appEndpoints" cbor:"a"`
 	Services     []ManifestService `json:"services" cbor:"s"`
+	// AdmittedUntil is a receiver-local lease projection, never signed or sent.
+	// The immutable Issued/Expires pair supplies only the bounded duration.
+	AdmittedUntil time.Time `json:"-" cbor:"-"`
+}
+
+// LeaseDeadline is the receiver's admitted deadline. The UTC fallback supports
+// snapshots built by legacy callers; running Nodes always populate AdmittedUntil.
+func (m Manifest) LeaseDeadline() time.Time {
+	if !m.AdmittedUntil.IsZero() {
+		return m.AdmittedUntil
+	}
+	return time.UnixMilli(m.Expires)
+}
+
+func (m Manifest) LeaseRemaining(now time.Time) time.Duration {
+	return max(0, m.LeaseDeadline().Sub(now))
 }
 
 // SignedManifest is a manifest plus the full device principal of the identity
@@ -72,11 +87,6 @@ type SignedManifest struct {
 var ErrExpiredManifest = errors.New("expired wendy net manifest")
 var ErrStaleManifest = errors.New("stale wendy net manifest")
 
-// ErrManifestClockSkew identifies a signed lease that is too far ahead of the
-// local clock. It does not permit admission or make the advertised time trusted.
-// A receiver must obtain authenticated time before retrying ordinary admission.
-var ErrManifestClockSkew = errors.New("wendy net manifest is ahead of local clock")
-
 // ErrInvalidManifestSignature distinguishes a failed signature from malformed
 // or unauthorized manifests; certificate renewal may need an in-flight leaf.
 var ErrInvalidManifestSignature = errors.New("invalid manifest signature")
@@ -85,7 +95,7 @@ var ErrInvalidManifestSignature = errors.New("invalid manifest signature")
 // leaf, but normal admission still enforces the verified replacement lifetime.
 var ErrManifestOutlivesCertificate = errors.New("manifest outlives certificate")
 
-func (m Manifest) validate(now time.Time) error {
+func (m Manifest) validate(_ time.Time) error {
 	if m.Version != ManifestVersionRoute {
 		return &UnsupportedManifestError{Version: m.Version}
 	}
@@ -93,9 +103,6 @@ func (m Manifest) validate(now time.Time) error {
 		return err
 	}
 	issued, expires := time.UnixMilli(m.Issued), time.UnixMilli(m.Expires)
-	if !expires.After(now) {
-		return ErrExpiredManifest
-	}
 	if m.Revision == 0 ||
 		!expires.After(issued) || expires.Sub(issued) > MaxLease ||
 		len(m.Name) > 255 || (!m.Withdraw && m.AgentPort == 0 && m.Owner == nil) {
@@ -121,9 +128,6 @@ func (m Manifest) validate(now time.Time) error {
 	}
 	if err := validateAppEndpoints(m.AppEndpoints); err != nil {
 		return err
-	}
-	if issued.After(now.Add(5 * time.Second)) {
-		return fmt.Errorf("%w by %s; authenticated time synchronization required", ErrManifestClockSkew, issued.Sub(now))
 	}
 	return nil
 }
@@ -211,8 +215,8 @@ type directoryEntry struct {
 	wire      SignedManifest
 	hash      string
 	signature manifestSignatureBinding
-	// Tombstones and superseded versions live for a full maximum lease from
-	// admission, so removing a short-lived update cannot resurrect an older one.
+	// retainUntil mirrors the compact ten-duration watermark deadline; it
+	// does not retain this payload past activeUntil.
 	retainUntil time.Time
 	// activeUntil retains now's monotonic clock reading when Accept receives one.
 	// A wall-clock rollback must not extend a lease already accepted in-process.
@@ -228,12 +232,17 @@ type Directory struct {
 	entries map[string]directoryEntry
 	history map[string]DirectoryReceipt
 	persist func([]DirectoryReceipt) error
+	// Runtime Nodes provide a monotonic clock independently of certificate UTC.
+	// nil preserves the explicit time argument used by synthetic legacy callers.
+	monotonicNow func() time.Time
 	// Keep observed wall time after replay tombstones are pruned. Otherwise a
 	// later clock rollback could make a discarded signed lease appear current.
 	wallHighWater time.Time
 }
 
-// DirectoryReceipt is durable replay protection, not cached presence.
+// DirectoryReceipt is compact revision/hash metadata, never cached presence.
+// Runtime Until is a receiver-monotonic watermark deadline. The legacy persisted
+// shape remains readable, but is not imported as a receive lease or watermark.
 type DirectoryReceipt struct {
 	Device   string    `json:"device" cbor:"d"` // full device principal
 	Revision uint64    `json:"revision" cbor:"R"`
@@ -244,10 +253,12 @@ type DirectoryReceipt struct {
 func (d *Directory) SetPersistence(receipts []DirectoryReceipt, persist func([]DirectoryReceipt) error, now time.Time) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if len(receipts) > d.limit || persist == nil {
+	if persist == nil {
 		return errors.New("invalid directory persistence")
 	}
-	history := map[string]DirectoryReceipt{}
+	// Legacy persisted receipts are validated for format/scope only. The new
+	// receive-lease watermark is RAM-local and never restores foreign presence
+	// or an old monotonic deadline across a reboot.
 	for _, r := range receipts {
 		if len(r.Device) > maxPrincipalBytes+37 || r.Revision == 0 || len(r.Hash) != 64 {
 			return errors.New("invalid directory receipt")
@@ -256,11 +267,8 @@ func (d *Directory) SetPersistence(receipts []DirectoryReceipt, persist func([]D
 		if err != nil || device.Tenant() != d.tenant {
 			return errors.New("invalid directory receipt")
 		}
-		if r.Until.After(now) {
-			history[r.Device] = r
-		}
 	}
-	d.history = history
+	d.history = map[string]DirectoryReceipt{}
 	d.persist = persist
 	return nil
 }
@@ -268,17 +276,30 @@ func (d *Directory) SetPersistence(receipts []DirectoryReceipt, persist func([]D
 // NewDirectory scopes a directory to one tenant: the tenant half of every
 // principal it will accept.
 func NewDirectory(tenant meshid.Tenant, limit int, cache *IdentityCache) (*Directory, error) {
+	return NewDirectoryWithClock(tenant, limit, cache, nil)
+}
+
+// NewDirectoryWithClock gives runtime leases their own monotonic time source.
+// Tests may inject elapsed time without changing the host wall clock.
+func NewDirectoryWithClock(tenant meshid.Tenant, limit int, cache *IdentityCache, monotonicNow func() time.Time) (*Directory, error) {
 	if tenant == (meshid.Tenant{}) || limit < 1 || cache == nil {
 		return nil, errors.New("invalid directory configuration")
 	}
-	return &Directory{tenant: tenant, limit: limit, cache: cache, entries: map[string]directoryEntry{}}, nil
+	return &Directory{tenant: tenant, limit: limit, cache: cache, entries: map[string]directoryEntry{}, monotonicNow: monotonicNow}, nil
+}
+
+func (d *Directory) leaseNow(now time.Time) time.Time {
+	if d.monotonicNow != nil {
+		return d.monotonicNow()
+	}
+	return now
 }
 
 // Accept validates the advertising device's own verified identity, never the
 // relaying neighbour: a manifest is admitted because its signer is the device
 // named in it, and that device was admitted by the authenticated link. Return
 // true for a new version or a replacement of an invalid old signature by a
-// current key. Duplicate delivery and re-signing never renew the signed expiry.
+// current key. Duplicate delivery and re-signing never renew the receiver-local lease.
 func (d *Directory) Accept(w SignedManifest, now time.Time) (bool, error) {
 	if len(w.Body) > MaxManifestBytes || len(w.Signature) > MaxManifestSignatureBytes || w.Principal == "" || len(w.Principal) > maxPrincipalBytes {
 		return false, errors.New("oversized manifest envelope")
@@ -297,9 +318,8 @@ func (d *Directory) Accept(w SignedManifest, now time.Time) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	validityErr := m.validate(now)
-	if validityErr != nil && !errors.Is(validityErr, ErrManifestClockSkew) {
-		return false, validityErr
+	if err := m.validate(now); err != nil {
+		return false, err
 	}
 	device, err := m.Peer(identity.Tenant())
 	if err != nil || device.Principal() != w.Principal {
@@ -316,64 +336,43 @@ func (d *Directory) Accept(w SignedManifest, now time.Time) (bool, error) {
 	if err := m.validateRoute(device); err != nil {
 		return false, err
 	}
-	if time.UnixMilli(m.Expires).After(id.NotAfter) {
-		return false, ErrManifestOutlivesCertificate
-	}
 	leaf, err := x509.ParseCertificate(chain[0])
 	if err != nil {
 		return false, err
 	}
+	// The selected path is independently trusted at the local verification
+	// clock. Static signed dates belong to the signing leaf's window; a newer
+	// issuer's NotBefore does not date an already-signed announcement.
+	if time.UnixMilli(m.Issued).Before(leaf.NotBefore) {
+		return false, errors.New("manifest predates authenticating certificate")
+	}
+	if time.UnixMilli(m.Expires).After(leaf.NotAfter) || time.UnixMilli(m.Expires).After(id.NotAfter) {
+		return false, ErrManifestOutlivesCertificate
+	}
 	if !validManifestSignature(w, leaf) {
 		return false, ErrInvalidManifestSignature
-	}
-	// Only an otherwise authenticated lease may trigger clock recovery. Keep
-	// its normal time gate and avoid changing directory/replay state until a
-	// separately authenticated time source has corrected the local clock.
-	if validityErr != nil {
-		// A prior receipt still rules out a replay after a wall-clock rollback.
-		// Inspect it without advancing/pruning state or accepting this claim.
-		d.mu.Lock()
-		defer d.mu.Unlock()
-		if !time.UnixMilli(m.Expires).After(d.wallHighWater) {
-			return false, ErrExpiredManifest
-		}
-		hash := manifestHash(w.Body)
-		if receipt, ok := d.history[owner]; ok && receipt.Until.After(now) && m.Revision <= receipt.Revision {
-			if m.Revision == receipt.Revision && hash != receipt.Hash {
-				return false, errors.New("conflicting persisted manifest revision")
-			}
-			return false, ErrStaleManifest
-		}
-		if old, ok := d.entries[owner]; ok && m.Revision <= old.manifest.Revision {
-			if m.Revision == old.manifest.Revision && hash != old.hash {
-				return false, errors.New("conflicting manifest revision")
-			}
-			return false, ErrStaleManifest
-		}
-		return false, validityErr
 	}
 	binding := manifestSignatureBinding{leafHash: certificateHash(chain[0]), valid: true}
 	hash := manifestHash(w.Body)
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	d.expireLocked(now)
-	if !time.UnixMilli(m.Expires).After(d.wallHighWater) {
-		return false, ErrExpiredManifest
-	}
-	for principal, e := range d.entries {
-		if !e.retainUntil.After(now) {
-			delete(d.entries, principal)
-		}
-	}
 	if d.history == nil {
 		d.history = map[string]DirectoryReceipt{}
 	}
-	if receipt, ok := d.history[owner]; ok && receipt.Until.After(now) {
+	if receipt, ok := d.history[owner]; ok {
 		if m.Revision < receipt.Revision {
 			return false, ErrStaleManifest
 		}
-		if m.Revision == receipt.Revision && hash != receipt.Hash {
-			return false, errors.New("conflicting persisted manifest revision")
+		if m.Revision == receipt.Revision {
+			if hash != receipt.Hash {
+				return false, errors.New("conflicting manifest revision")
+			}
+			// Compact history survives payload expiry and reconnect. An
+			// already-expunged body cannot establish another local lease.
+			if _, active := d.entries[owner]; !active {
+				return false, ErrStaleManifest
+			}
 		}
 	}
 	if old, exists := d.entries[owner]; exists {
@@ -400,37 +399,19 @@ func (d *Directory) Accept(w SignedManifest, now time.Time) (bool, error) {
 		return false, errors.New("directory capacity reached")
 	}
 	w = cloneSignedManifest(w)
-	next := make(map[string]DirectoryReceipt, len(d.history)+1)
-	for principal, r := range d.history {
-		if r.Until.After(now) {
-			next[principal] = r
-		}
-	}
-	if _, ok := next[owner]; !ok && len(next) >= d.limit {
-		return false, errors.New("directory receipt capacity reached")
-	}
-	receipt := DirectoryReceipt{Device: owner, Revision: m.Revision, Hash: hash, Until: d.wallHighWater.Add(MaxLease + 5*time.Second)}
-	if old, ok := next[owner]; ok && old.Revision == m.Revision && old.Hash == hash {
-		// Replaying the same record after restart restores only its original
-		// absolute lease and receipt lifetime, never a fresh lease.
-		receipt = old
-	}
-	next[owner] = receipt
-	if d.persist != nil {
-		all := make([]DirectoryReceipt, 0, len(next))
-		for _, r := range next {
-			all = append(all, r)
-		}
-		sort.Slice(all, func(i, j int) bool { return all[i].Device < all[j].Device })
-		if err := d.persist(all); err != nil {
-			return false, err
-		}
-	}
-	d.history = next
+	// Compact watermarks grow independently of the active payload budget.
+	// They contain no wire body, signature or certificate. Their receive-local
+	// retention is exactly ten times this newly admitted signed duration.
+	duration := time.UnixMilli(m.Expires).Sub(time.UnixMilli(m.Issued))
+	admittedAt := d.leaseNow(now)
+	receipt := DirectoryReceipt{Device: owner, Revision: m.Revision, Hash: hash, Until: admittedAt.Add(10 * duration)}
+	d.history[owner] = receipt
+	// Do not force dynamic RAM watermarks into the legacy bounded persistent
+	// state schema. Origin publishers retain their own durable revisions.
 	d.entries[owner] = directoryEntry{
 		manifest: m, wire: w, hash: hash, signature: binding,
 		retainUntil: receipt.Until,
-		activeUntil: now.Add(time.UnixMilli(m.Expires).Sub(d.wallHighWater)),
+		activeUntil: admittedAt.Add(duration),
 	}
 	return true, nil
 }
@@ -474,7 +455,7 @@ func cloneSignedManifest(w SignedManifest) SignedManifest {
 }
 
 // CurrentRecordChain returns an owned current trusted chain only for the exact
-// latest admitted wire (including its signature), while its signed lease and
+// latest admitted wire (including its signature), while its local lease and
 // current certificate lifetime still permit export. It includes withdrawals.
 // The chain is the one used for signature validation, so callers must use this
 // result for a paired descriptor instead of looking the principal up again.
@@ -494,17 +475,19 @@ func (d *Directory) CurrentRecordChain(w SignedManifest, now time.Time) ([][]byt
 // currentEntryChain requires d.mu and updates only the entry's signature memo.
 // It never removes a replay floor, extends a lease, or renews retention.
 func (d *Directory) currentEntryChain(principal string, e directoryEntry, now time.Time) ([][]byte, bool) {
-	expires := time.UnixMilli(e.manifest.Expires)
-	if e.expired || !e.activeUntil.After(now) || !expires.After(now) || !expires.After(d.wallHighWater) {
+	if !e.activeUntil.After(d.leaseNow(now)) {
 		return nil, false
 	}
 	chain, id, ok := d.cache.manifestIdentity(e.wire.Principal, e.manifest, now)
-	if !ok || id.Device.Principal() != e.wire.Principal || expires.After(id.NotAfter) {
+	if !ok || id.Device.Principal() != e.wire.Principal || time.UnixMilli(e.manifest.Expires).After(id.NotAfter) {
+		return nil, false
+	}
+	leaf, err := x509.ParseCertificate(chain[0])
+	if err != nil || time.UnixMilli(e.manifest.Issued).Before(leaf.NotBefore) || time.UnixMilli(e.manifest.Expires).After(leaf.NotAfter) {
 		return nil, false
 	}
 	valid := e.signature.matches(certificateHash(chain[0]), func() bool {
-		leaf, err := x509.ParseCertificate(chain[0])
-		return err == nil && validManifestSignature(e.wire, leaf)
+		return validManifestSignature(e.wire, leaf)
 	})
 	d.entries[principal] = e
 	if !valid {
@@ -513,19 +496,71 @@ func (d *Directory) currentEntryChain(principal string, e directoryEntry, now ti
 	return chain, true
 }
 
-// expireLocked remembers observed wall time independently of tombstone retention
-// and monotonic lease deadlines. A rollback cannot revive a pruned signed lease.
-func (d *Directory) expireLocked(now time.Time) {
+// expireLocked physically drops expired wire bodies and signatures. Only the
+// compact revision/hash watermark survives for ten durations, independently
+// of wall time.
+func (d *Directory) expireLocked(now time.Time) bool {
 	wallNow := now.Round(0)
 	if wallNow.After(d.wallHighWater) {
 		d.wallHighWater = wallNow
 	}
+	changed := false
+	instant := d.leaseNow(now)
 	for principal, e := range d.entries {
-		if !e.expired && (!e.activeUntil.After(now) || !time.UnixMilli(e.manifest.Expires).After(d.wallHighWater)) {
-			e.expired = true
-			d.entries[principal] = e
+		if !e.activeUntil.After(instant) {
+			delete(d.entries, principal)
+			changed = true
 		}
 	}
+	for owner, watermark := range d.history {
+		if !watermark.Until.After(instant) {
+			delete(d.history, owner)
+			changed = true
+		}
+	}
+	return changed
+}
+
+// Sweep runs from the node's idle maintenance tick, not only on incoming data.
+// It releases full announcement allocations even when no neighbour sends more.
+func (d *Directory) Sweep(now time.Time) bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.expireLocked(now)
+}
+
+// RecordDeadline returns the receiver-local deadline for this exact current
+// signed wire. It never changes the immutable announcement's signed dates.
+// now is the receiver scheduling clock (normally time.Now with its monotonic
+// component), never a certificate BaseTime, boot anchor or signed Issued time.
+// The independent elapsed clock is projected into that scheduling domain.
+func (d *Directory) RecordDeadline(w SignedManifest, now time.Time) (time.Time, bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.expireLocked(now)
+	owner := w.ownerKey()
+	e, ok := d.entries[owner]
+	if !ok || !sameManifestWire(e.wire, w) {
+		return time.Time{}, false
+	}
+	if _, ok := d.currentEntryChain(owner, e, now); !ok {
+		return time.Time{}, false
+	}
+	return now.Add(e.activeUntil.Sub(d.leaseNow(now))), true
+}
+
+// hasCurrentOwner is an export eligibility check, not a lease renewal. Missing
+// repair material leaves the original body bounded by its original deadline.
+func (d *Directory) hasCurrentOwner(owner string, now time.Time) bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.expireLocked(now)
+	e, ok := d.entries[owner]
+	if !ok {
+		return false
+	}
+	_, ok = d.currentEntryChain(owner, e, now)
+	return ok
 }
 
 func manifestHash(body []byte) string {
@@ -534,7 +569,8 @@ func manifestHash(body []byte) string {
 }
 
 // Snapshot returns current origin records. Route reachability is a separate
-// filter at the consumer, never inferred from having a directory entry.
+// filter at the consumer, never inferred from having a directory entry. now is
+// the receiver scheduling clock, never certificate BaseTime or a signed date.
 func (d *Directory) Snapshot(now time.Time) []Manifest {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -542,13 +578,14 @@ func (d *Directory) Snapshot(now time.Time) []Manifest {
 	out := []Manifest{}
 	for principal, e := range d.entries {
 		m := e.manifest
-		if m.Withdraw || e.expired {
+		if m.Withdraw {
 			continue
 		}
 		if _, ok := d.currentEntryChain(principal, e, now); !ok {
 			continue
 		}
 		m = cloneManifest(m)
+		m.AdmittedUntil = now.Add(e.activeUntil.Sub(d.leaseNow(now)))
 		if m.AgentTransport != "" && m.AgentTransport != AgentMTLS {
 			// Preserve the opaque transport for reporting, but never expose its
 			// port to legacy consumers that understand only the old agent path.

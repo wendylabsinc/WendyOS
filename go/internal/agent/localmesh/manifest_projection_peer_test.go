@@ -78,7 +78,7 @@ func TestManifestOptionalProjectionRetainsKnownAndExactArtifact(t *testing.T) {
 			if changed, e := d.Accept(w, now); e != nil || !changed {
 				t.Fatalf("admission=%t,%v", changed, e)
 			}
-			if len(saved) != 1 || saved[0].Hash != manifestHash(w.Body) {
+			if len(saved) != 0 || d.history[w.ownerKey()].Hash != manifestHash(w.Body) {
 				t.Fatalf("receipt changed raw digest: %+v", saved)
 			}
 			records := d.Records(now)

@@ -133,6 +133,19 @@ func TestQuery_ValidResponse(t *testing.T) {
 	if diff > time.Second {
 		t.Errorf("Midpoint off by %v", diff)
 	}
+	localHost, localPort, err := net.SplitHostPort(result.LocalAddress)
+	if err != nil || localHost != "127.0.0.1" || localPort == "0" {
+		t.Fatalf("direct local socket path not recorded: %q %v", result.LocalAddress, err)
+	}
+	if result.RemoteAddress != addr {
+		t.Fatalf("direct remote socket path=%q want%q", result.RemoteAddress, addr)
+	}
+	// Re-verifying the signed bytes cannot reconstruct or authenticate a
+	// socket observation; transport metadata must not become proof data.
+	verified, err := roughtime.VerifyResponse(result.RawResponse, result.Nonce, srv)
+	if err != nil || verified.LocalAddress != "" || verified.RemoteAddress != "" {
+		t.Fatalf("transport path leaked into authority proof: %+v %v", verified, err)
+	}
 }
 
 func TestQuery_BadSignature(t *testing.T) {

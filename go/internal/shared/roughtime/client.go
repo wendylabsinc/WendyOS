@@ -35,12 +35,11 @@ type Result struct {
 	Server      string
 	Nonce       []byte
 	RawResponse []byte // raw server bytes; used for multicast relay
+	// Socket observations describe this direct query's network path. They are
+	// diagnostic metadata, not part of the authority signature or time proof.
+	LocalAddress  string
+	RemoteAddress string
 }
-
-// RelayQuery carries a receiver-generated challenge to one pinned authority.
-// The receiver still verifies the signed response; the relay supplies no time
-// or trust anchors of its own.
-type RelayQuery func(context.Context, uint8, []byte) ([]byte, error)
 
 // Query queries all servers concurrently and returns the first valid result.
 // The context deadline applies to each individual UDP exchange.
@@ -138,7 +137,12 @@ func QueryServerWithNonce(ctx context.Context, srv Server, nonce []byte) (Result
 	}
 	raw = raw[:n]
 
-	return VerifyResponse(raw, nonce[:], srv)
+	result, err := VerifyResponse(raw, nonce[:], srv)
+	if err == nil {
+		result.LocalAddress = conn.LocalAddr().String()
+		result.RemoteAddress = conn.RemoteAddr().String()
+	}
+	return result, err
 }
 
 // VerifyResponse verifies a raw Roughtime server response against the

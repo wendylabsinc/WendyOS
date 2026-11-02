@@ -93,6 +93,8 @@ type Link struct {
 	outControl chan control
 	expiryMu   sync.Mutex
 	expires    time.Time
+	certNow    func() time.Time
+	maxExpiry  time.Time // Fixed monotonic resource bound for an explicit policy.
 	closed     bool
 	conn       *tls.Conn
 	address    netip.Addr
@@ -129,15 +131,26 @@ func (l *Link) Close() error {
 func (l *Link) Wait() { l.workers.Wait() }
 
 func ready(ctx context.Context, c *tls.Conn, address netip.Addr, server bool, expires time.Time) (*Link, error) {
-	if err := c.SetDeadline(expires); err != nil {
+	return readyWithClock(ctx, c, address, server, expires, nil)
+}
+
+func readyWithClock(ctx context.Context, c *tls.Conn, address netip.Addr, server bool, expires time.Time, certNow func() time.Time) (*Link, error) {
+	l := &Link{conn: c, address: address, server: server, done: make(chan struct{}), expires: expires, certNow: certNow, outControl: make(chan control, 4), agentWake: make(chan struct{}, 1)}
+	if certNow != nil {
+		remaining := expires.Sub(certNow())
+		if remaining <= 0 {
+			return nil, errors.New("operator credential expired")
+		}
+		l.maxExpiry = time.Now().Add(remaining)
+	}
+	if err := c.SetDeadline(l.transportExpiryLocked()); err != nil {
 		return nil, err
 	}
-	l := &Link{conn: c, address: address, server: server, done: make(chan struct{}), expires: expires, outControl: make(chan control, 4), agentWake: make(chan struct{}, 1)}
 	// Install callbacks before returning; their functions cannot access partially
 	// assigned timer/stop fields because they wait for the publication barrier.
 	published := make(chan struct{})
 	l.stop = context.AfterFunc(ctx, func() { <-published; l.Close() })
-	l.timer = time.AfterFunc(max(time.Until(expires), 0), func() { <-published; l.expire() })
+	l.timer = time.AfterFunc(max(l.nextExpiryCheckLocked(), 0), func() { <-published; l.expire() })
 	close(published)
 	l.workers.Add(1)
 	go l.controlWriter()

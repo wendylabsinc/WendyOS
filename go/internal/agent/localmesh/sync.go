@@ -8,6 +8,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/agent/netwire"
 	"io"
 	"sort"
+	"sync/atomic"
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/netgossip"
@@ -63,12 +64,31 @@ type ControlMessage struct {
 	Certificate *CertificateMessage `json:"certificate,omitempty" cbor:"c,omitempty"`
 	Gossip      *netgossip.Message  `json:"gossip,omitempty" cbor:"g,omitempty"`
 	Time        *TimestampControl   `json:"time,omitempty" cbor:"t,omitempty"`
-	Clock       *ClockControl       `json:"clock,omitempty" cbor:"x,omitempty"`
+	deadline    time.Time           // Local queue ownership only; never serialized.
+	canceled    *atomic.Bool
+	origin      string // Immutable local export principal/instance; never serialized.
+}
+
+// Deadline is local scheduling metadata for this queued payload. Incoming wire
+// bytes carry no deadline; their receiver must establish its own admission.
+func (m ControlMessage) Deadline() time.Time {
+	deadline := m.deadline
+	if m.Gossip != nil {
+		if other := m.Gossip.Deadline(); !other.IsZero() && (deadline.IsZero() || other.Before(deadline)) {
+			deadline = other
+		}
+	}
+	return deadline
+}
+
+func (m ControlMessage) Expired(now time.Time) bool {
+	deadline := m.Deadline()
+	return m.canceled != nil && m.canceled.Load() || !deadline.IsZero() && !deadline.After(now)
 }
 
 func knownControlKind(kind string) bool {
 	switch kind {
-	case "clock", "time", "gossip", "certificate", "hello", "bundle", "manifest", "identity-request", "manifest-request", "identity-missing", "manifest-missing":
+	case "time", "gossip", "certificate", "hello", "bundle", "manifest", "identity-request", "manifest-request", "identity-missing", "manifest-missing":
 		return true
 	}
 	return false
@@ -124,35 +144,14 @@ func ReadControl(r io.Reader) (ControlMessage, error) {
 		return m, err
 	}
 	var head struct {
-		Kind  string             `json:"kind" cbor:"k"`
-		Time  netwire.RawMessage `json:"time" cbor:"t"`
-		Clock netwire.RawMessage `json:"clock" cbor:"x"`
+		Kind string             `json:"kind" cbor:"k"`
+		Time netwire.RawMessage `json:"time" cbor:"t"`
 	}
 	if err := netwire.Unmarshal(data, &head); err != nil {
 		return m, err
 	}
 	if head.Kind != "" && !knownControlKind(head.Kind) {
 		return ControlMessage{Kind: head.Kind}, nil
-	}
-	if head.Kind == "clock" && len(head.Clock) != 0 {
-		var version struct {
-			Version uint32 `json:"v" cbor:"v"`
-		}
-		if err := netwire.Unmarshal(head.Clock, &version); err != nil {
-			return m, err
-		}
-		if version.Version > clockControlVersion {
-			return ControlMessage{Kind: "clock", Clock: &ClockControl{Version: version.Version}}, nil
-		}
-		var op struct {
-			Op string `json:"op" cbor:"o"`
-		}
-		if err := netwire.Unmarshal(head.Clock, &op); err != nil {
-			return m, err
-		}
-		if op.Op != "" && !knownClockOp(op.Op) {
-			return ControlMessage{Kind: "clock", Clock: &ClockControl{Version: version.Version, Op: op.Op}}, nil
-		}
 	}
 	if head.Kind == "time" && len(head.Time) != 0 {
 		var timestampVersion struct {
@@ -184,9 +183,6 @@ func ReadControl(r io.Reader) (ControlMessage, error) {
 	if m.Kind != "time" && m.Time != nil {
 		return m, errors.New("unexpected timestamp payload")
 	}
-	if m.Kind != "clock" && m.Clock != nil {
-		return m, errors.New("unexpected clock payload")
-	}
 	if m.Kind != "certificate" && m.Certificate != nil {
 		return m, errors.New("unexpected certificate message")
 	}
@@ -194,13 +190,6 @@ func ReadControl(r io.Reader) (ControlMessage, error) {
 		return m, errors.New("unexpected gossip payload")
 	}
 	switch m.Kind {
-	case "clock":
-		if m.Hello != nil || m.Manifest != nil || m.Certificate != nil || m.Gossip != nil || m.Time != nil || len(m.Bundle) != 0 || m.Principal != "" {
-			return m, errors.New("invalid clock envelope")
-		}
-		if err := m.Clock.validate(); err != nil {
-			return m, err
-		}
 	case "time":
 		if m.Hello != nil || m.Manifest != nil || m.Certificate != nil || m.Gossip != nil || len(m.Bundle) != 0 || m.Principal != "" {
 			return m, errors.New("invalid timestamp envelope")
@@ -254,12 +243,20 @@ func ReadControl(r io.Reader) (ControlMessage, error) {
 	return m, nil
 }
 
-// The original fetch allowance must retain its monotonic clock component even
-// when the earlier signed expiry has only an absolute wall-clock timestamp.
+// Resource deadlines retain the original receiver monotonic clock component.
+// Announcement absolute dates supply duration only, never receiver UTC freshness.
 type pendingManifestRenewal struct {
 	chain      CertificateChain
 	expires    time.Time
 	fetchUntil time.Time
+}
+
+// A marker owns no artifact bytes. Queued controls share its cancellation bit
+// so supersession releases their payloads on the caller's next queue sweep.
+type manifestArtifact struct {
+	id       netgossip.ID
+	deadline time.Time
+	canceled *atomic.Bool
 }
 
 // Synchronizer is per-link, single-caller, and does not own networking. Changed
@@ -268,17 +265,16 @@ type pendingManifestRenewal struct {
 // certificate bytes are fetched individually only when missing. A bounded
 // number of manifests wait for independently verified identity completion.
 type Synchronizer struct {
-	gossip    *netgossip.Session
-	directory *Directory
-	cache     *IdentityCache
+	gossip     *netgossip.Session
+	gossipPool *netgossip.Pool
+	directory  *Directory
+	cache      *IdentityCache
 	// Legacy leaf-fingerprint keys mean known bundles. Gossip keys are full
 	// descriptor digests with freshness bounded by the certificate fetch lease.
-	sent    map[string]time.Time
-	pending map[string]SignedManifest
-	// Clock retries share the existing pending storage, with a smaller bound
-	// and an independent monotonic recovery deadline. They grant no presence.
-	pendingClock       map[string]time.Time
-	clockRecoveryUntil time.Time // Monotonic, actor-owned bounded local recovery hint.
+	sent             map[string]time.Time
+	pending          map[string]SignedManifest
+	pendingDeadlines map[string]time.Time
+	artifacts        map[string]manifestArtifact
 	// Warm-cache retries are bound to the exact advertised chain and deadline.
 	pendingRenewals map[string]pendingManifestRenewal
 	certificates    *CertificateExchange
@@ -290,8 +286,9 @@ type Synchronizer struct {
 }
 
 func NewSynchronizer(d *Directory, c *IdentityCache, pools ...*netgossip.Pool) *Synchronizer {
-	s := &Synchronizer{directory: d, cache: c, sent: map[string]time.Time{}, pending: map[string]SignedManifest{}, pendingRenewals: map[string]pendingManifestRenewal{}, certificates: NewCertificateExchange(c, d.tenant)}
+	s := &Synchronizer{directory: d, cache: c, sent: map[string]time.Time{}, pending: map[string]SignedManifest{}, pendingDeadlines: map[string]time.Time{}, artifacts: map[string]manifestArtifact{}, pendingRenewals: map[string]pendingManifestRenewal{}, certificates: NewCertificateExchange(c, d.tenant)}
 	if len(pools) > 0 && pools[0] != nil {
+		s.gossipPool = pools[0]
 		s.gossip = pools[0].NewSession(netgossip.Manifest)
 	}
 	return s
@@ -339,10 +336,16 @@ func (s *Synchronizer) recordBounded(w SignedManifest, now time.Time, slots int)
 		}
 		return s.offerManifest(w, now), true
 	}
+	deadline, ok := s.directory.RecordDeadline(w, now)
+	if !ok {
+		return nil, true
+	}
 	chain, ok := s.directory.CurrentRecordChain(w, now)
 	if !ok {
 		return nil, true
 	}
+	s.pruneSupersededPending(now)
+	artifact := s.trackArtifact(w, deadline)
 	fp := Fingerprint(chain)
 	_, known := s.sent[fp]
 	bundleNeeded := !known
@@ -359,11 +362,13 @@ func (s *Synchronizer) recordBounded(w SignedManifest, now time.Time, slots int)
 			s.sent = map[string]time.Time{}
 		}
 		s.sent[fp] = time.Time{}
-		out = append(out, s.identityMessage(w.Principal, chain))
+		identity := s.identityMessage(w.Principal, chain)
+		identity.deadline, identity.canceled = deadline, artifact.canceled
+		out = append(out, identity)
 	}
 	w.Body = append([]byte(nil), w.Body...)
 	w.Signature = append([]byte(nil), w.Signature...)
-	return append(out, ControlMessage{Kind: "manifest", Manifest: &w}), true
+	return append(out, ControlMessage{Kind: "manifest", Manifest: &w, deadline: deadline, canceled: artifact.canceled}), true
 }
 
 // identityMessage is called only with a current independently verified cache
@@ -438,7 +443,7 @@ func (s *Synchronizer) localDevicePrincipal(principal string) bool {
 // Invalid signatures or lifetimes are fatal except for a bounded retry while
 // an exact advertised renewed chain is in flight. Unverified data grants no trust.
 func (s *Synchronizer) receive(m ControlMessage, now time.Time, slots ...int) (replies []ControlMessage, changed []SignedManifest, err error) {
-	s.prunePendingRenewals(now)
+	s.Sweep(now)
 	switch m.Kind {
 	case "certificate":
 		if m.Certificate == nil {
@@ -501,8 +506,9 @@ func (s *Synchronizer) receive(m ControlMessage, now time.Time, slots ...int) (r
 		// to an unrelated whole-bundle response for the same principal.
 		if w, ok := s.pending[principal]; ok && s.pendingRenewals[principal].chain.Principal == "" {
 			delete(s.pending, principal)
+			delete(s.pendingDeadlines, principal)
 			out, changed, err := s.receive(ControlMessage{Kind: "manifest", Manifest: &w}, now)
-			if err != nil && !errors.Is(err, ErrManifestClockSkew) {
+			if err != nil {
 				s.discardManifest(w)
 			}
 			return out, changed, err
@@ -512,30 +518,11 @@ func (s *Synchronizer) receive(m ControlMessage, now time.Time, slots ...int) (r
 			return nil, nil, errors.New("missing manifest")
 		}
 		ok, e := s.directory.Accept(*m.Manifest, now)
-		if errors.Is(e, ErrManifestClockSkew) {
-			s.rememberClockPending(*m.Manifest)
-			return nil, nil, e
-		}
-		if e == nil {
-			delete(s.pendingClock, m.Manifest.ownerKey())
-			delete(s.pending, m.Manifest.ownerKey())
-		}
 		if errors.Is(e, ErrUnsupportedManifest) {
 			// Future artifacts are unsupported claims, not broken carriers.
 			// Discard their fetch slot without installing routes/replay state.
 			s.discardManifest(*m.Manifest)
 			return nil, nil, nil
-		}
-		if s.gossip != nil && errors.Is(e, ErrStaleManifest) && s.clockRecoveryUntil.After(time.Now()) {
-			// Accept authenticates the signature before returning ErrStale.
-			// During this local recovery window, a future-time replay remains
-			// stale and grants no authority or recovery trigger. Release only
-			// its transient fetch: a negative gossip receipt could otherwise
-			// suppress ordinary refetch after a small verified clock advance.
-			if manifest, err := DecodeManifest(m.Manifest.Body); err == nil && time.UnixMilli(manifest.Issued).After(now.Add(5*time.Second)) {
-				s.discardManifest(*m.Manifest)
-				return nil, nil, nil
-			}
 		}
 		if s.gossip != nil && (e == nil || errors.Is(e, ErrStaleManifest)) {
 			s.resolveManifest(*m.Manifest, now, e == nil)
@@ -561,7 +548,7 @@ func (s *Synchronizer) receive(m ControlMessage, now time.Time, slots ...int) (r
 				if old, exists := s.pending[m.Manifest.ownerKey()]; exists && !sameManifestWire(old, *m.Manifest) {
 					s.discardManifest(old)
 				}
-				s.pending[m.Manifest.ownerKey()] = cloneSignedManifest(*m.Manifest)
+				s.retainPending(*m.Manifest, now)
 			} else {
 				s.discardManifest(*m.Manifest)
 			}
@@ -583,6 +570,7 @@ func (s *Synchronizer) receive(m ControlMessage, now time.Time, slots ...int) (r
 		if e != nil {
 			return nil, nil, e
 		}
+		s.pruneSupersededPending(now)
 		if ok {
 			changed = append(changed, *m.Manifest)
 		}
@@ -619,17 +607,12 @@ func (s *Synchronizer) certificateResult(messages []*CertificateMessage, complet
 				}
 			}
 			delete(s.pending, key)
+			delete(s.pendingDeadlines, key)
 			retry = append(retry, w)
 		}
 	}
 	for i, w := range retry {
 		out, admitted, err := s.receive(ControlMessage{Kind: "manifest", Manifest: &w}, now)
-		if errors.Is(err, ErrManifestClockSkew) {
-			// The independently verified body is retained for bounded clock
-			// recovery; do not discard it with ordinary invalid candidates.
-			result = err
-			continue
-		}
 		if err != nil {
 			// These candidates are detached already; Close cannot find them
 			// through pending. Release every unprocessed pooled claim too.
@@ -641,20 +624,12 @@ func (s *Synchronizer) certificateResult(messages []*CertificateMessage, complet
 		replies = append(replies, out...)
 		changed = append(changed, admitted...)
 	}
-	return replies, changed, result
+	return replies, changed, nil
 }
 
 // ContinueCertificates also advances bounded HAVE/WANT replies and downloads.
 func (s *Synchronizer) ContinueCertificates(now time.Time, slots ...int) ([]ControlMessage, []SignedManifest, error) {
-	s.prunePendingRenewals(now)
-	if s.gossip != nil {
-		for principal, w := range s.pending {
-			m, decodeErr := DecodeManifest(w.Body)
-			if decodeErr != nil || !time.UnixMilli(m.Expires).After(now) {
-				s.dropPendingManifest(principal)
-			}
-		}
-	}
+	s.Sweep(now)
 	certificateBudget := slots
 	if len(slots) > 0 {
 		certificateBudget = []int{max(0, slots[0]-directoryResponseReserve)}
@@ -667,7 +642,7 @@ func (s *Synchronizer) ContinueCertificates(now time.Time, slots ...int) ([]Cont
 			budget = max(0, slots[0]-len(replies)-directoryResponseReserve)
 		}
 		for _, m := range s.gossip.Poll(now, budget) {
-			replies = append(replies, ControlMessage{Kind: "gossip", Gossip: m})
+			replies = append(replies, s.gossipControl(m))
 		}
 	}
 	return replies, changed, err
@@ -686,12 +661,16 @@ func (s *Synchronizer) deferPendingRenewal(w SignedManifest, now time.Time, life
 		return false
 	}
 	// Accept already parsed and validated this body before reporting the
-	// renewal mismatch. Bound retained state by that signed expiry too.
+	// renewal mismatch. Bound untrusted bytes by that signed duration too.
 	manifest, decodeErr := DecodeManifest(w.Body)
 	if decodeErr != nil {
 		return false
 	}
-	pending := pendingManifestRenewal{chain: description, expires: minTime(deadline, time.UnixMilli(manifest.Expires)), fetchUntil: deadline}
+	duration := time.UnixMilli(manifest.Expires).Sub(time.UnixMilli(manifest.Issued))
+	if duration <= 0 || duration > MaxLease {
+		return false
+	}
+	pending := pendingManifestRenewal{chain: description, expires: minTime(deadline, now.Add(duration)), fetchUntil: deadline}
 	chain, _, ok := s.cache.Get(w.Principal, now)
 	if !ok {
 		return false
@@ -711,7 +690,8 @@ func (s *Synchronizer) deferPendingRenewal(w SignedManifest, now time.Time, life
 	if old, exists := s.pending[w.Principal]; exists && !sameManifestWire(old, w) {
 		s.discardManifest(old)
 	}
-	s.pending[w.Principal] = cloneSignedManifest(w)
+	s.retainPending(w, now)
+	pending.expires = minTime(pending.expires, s.pendingDeadlines[w.ownerKey()])
 	s.pendingRenewals[w.Principal] = pending
 	return true
 }
@@ -725,7 +705,139 @@ func (s *Synchronizer) prunePendingRenewals(now time.Time) {
 	}
 }
 
+// retainPending owns untrusted bytes only for one fixed receive-local resource
+// allowance. Repeated bodies, changed signatures and hints cannot renew it.
+func (s *Synchronizer) retainPending(w SignedManifest, now time.Time) {
+	key := w.ownerKey()
+	if s.pendingDeadlines == nil {
+		s.pendingDeadlines = make(map[string]time.Time)
+	}
+	if _, exists := s.pendingDeadlines[key]; !exists {
+		duration := MaxLease
+		if m, err := DecodeManifest(w.Body); err == nil {
+			if candidate := time.UnixMilli(m.Expires).Sub(time.UnixMilli(m.Issued)); candidate > 0 && candidate <= MaxLease {
+				duration = candidate
+			}
+		}
+		deadline := now.Add(duration)
+		if s.gossip != nil {
+			data, _ := netwire.Marshal(w)
+			if claim, ok := s.gossip.ClaimDeadline(netgossip.Identify(netgossip.Manifest, data)); ok {
+				deadline = minTime(deadline, claim)
+			}
+		}
+		s.pendingDeadlines[key] = deadline
+	}
+	if old, exists := s.pending[key]; exists && sameManifestWire(old, w) {
+		return
+	}
+	s.pending[key] = cloneSignedManifest(w)
+}
+
+// Sweep physically releases buffered announcements and their unfinished repair
+// work while idle. It starts no transfers and performs no certificate admission.
+func (s *Synchronizer) Sweep(now time.Time) {
+	for owner, artifact := range s.artifacts {
+		if !artifact.deadline.After(now) {
+			artifact.canceled.Store(true)
+			if s.gossipPool != nil {
+				s.gossipPool.Forget(artifact.id)
+			}
+			delete(s.artifacts, owner)
+		}
+	}
+	if s.gossip != nil {
+		s.gossip.Sweep(now)
+	}
+	if s.certificates == nil {
+		return
+	}
+	s.pruneSupersededPending(now)
+	for key, until := range s.pendingDeadlines {
+		if !until.After(now) {
+			principal := s.pending[key].Principal
+			s.dropPendingManifest(key)
+			needed := false
+			for _, other := range s.pending {
+				needed = needed || other.Principal == principal
+			}
+			if !needed {
+				s.certificates.forgetPrincipal(principal, now)
+			}
+		}
+	}
+	s.prunePendingRenewals(now)
+	for key, pending := range s.certificates.pending {
+		if !pending.expires.After(now) {
+			s.certificates.forgetChain(key, now)
+		}
+	}
+	parts := s.cache.parts
+	parts.mu.Lock()
+	parts.prune(now)
+	parts.mu.Unlock()
+}
+
+// Supersession can arrive through another link using this shared directory.
+// The retained current record/watermark, never an unverified incoming revision,
+// decides whether an old buffered payload has any remaining admission work.
+func (s *Synchronizer) pruneSupersededPending(now time.Time) {
+	if s.directory == nil || len(s.pending) == 0 {
+		return
+	}
+	d := s.directory
+	d.mu.Lock()
+	d.expireLocked(now)
+	var obsolete []string
+	for key, w := range s.pending {
+		m, err := DecodeManifest(w.Body)
+		if err != nil {
+			continue
+		}
+		current, active := d.entries[key]
+		receipt, seen := d.history[key]
+		superseded := seen && (m.Revision < receipt.Revision || m.Revision == receipt.Revision && !active)
+		if !superseded && active && m.Revision <= current.manifest.Revision {
+			// A transient identity-cache miss still needs its existing repair
+			// path. Do not discard that retry merely because bytes are cached.
+			chain, verified := d.currentEntryChain(key, current, now)
+			superseded = verified
+			if verified && m.Revision == current.manifest.Revision && manifestHash(w.Body) == current.hash {
+				// A current old-key signature does not supersede an exact
+				// same-body re-sign awaiting its advertised replacement chain.
+				// Retain only that original bounded renewal continuation.
+				if renewal, waiting := s.pendingRenewals[key]; waiting && renewal.fetchUntil.After(now) && renewal.expires.After(now) && s.certificates != nil {
+					active, _, fetching := s.certificates.PendingChain(w.Principal, now)
+					if fetching && sameCertificateDescription(renewal.chain, active) && !matchesCertificateDescription(chain, renewal.chain) {
+						superseded = false
+					}
+				}
+			}
+		}
+		if superseded {
+			obsolete = append(obsolete, key)
+		}
+	}
+	d.mu.Unlock()
+	// Release shared transfer claims only after dropping the directory lock.
+	for _, key := range obsolete {
+		w := s.pending[key]
+		s.dropPendingManifest(key)
+		needed := false
+		for _, other := range s.pending {
+			needed = needed || other.Principal == w.Principal
+		}
+		if !needed && s.certificates != nil {
+			s.certificates.forgetPrincipal(w.Principal, now)
+		}
+	}
+}
+
 func (s *Synchronizer) Close() {
+	for owner, artifact := range s.artifacts {
+		artifact.canceled.Store(true)
+		delete(s.artifacts, owner)
+	}
 	for principal := range s.pending {
 		s.dropPendingManifest(principal)
 	}
@@ -744,8 +856,8 @@ func (s *Synchronizer) dropPendingManifest(principal string) {
 		s.discardManifest(w)
 	}
 	delete(s.pending, principal)
+	delete(s.pendingDeadlines, principal)
 	delete(s.pendingRenewals, principal)
-	delete(s.pendingClock, principal)
 }
 
 func (s *Synchronizer) dropPendingPrincipal(principal string) {

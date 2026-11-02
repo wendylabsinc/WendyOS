@@ -49,7 +49,12 @@ func Topology(self meshid.Device, snapshot localmesh.NodeSnapshot, now time.Time
 		if err != nil {
 			continue
 		}
-		announcement := &pb.LocalMeshAnnouncement{Principal: device.Principal(), DeviceId: device.UUID().String(), Name: manifest.Name, IssuedAtUnixMs: manifest.Issued, ExpiresAtUnixMs: manifest.Expires, Revision: manifest.Revision, TrustState: "verified-at-snapshot", AgentPort: uint32(manifest.AgentPort), AgentTransport: manifest.AgentTransport, Platform: manifest.Platform, Caps: append([]string(nil), manifest.Caps...)}
+		// Export the receiver's remaining lease on the observation wall clock.
+		// Sub uses the monotonic deadline when available, including across a
+		// wall-clock correction since capture. Signed dates remain immutable;
+		// this public hint and its matching route binding are local observations.
+		expires := now.Add(manifest.LeaseDeadline().Sub(now)).UnixMilli()
+		announcement := &pb.LocalMeshAnnouncement{Principal: device.Principal(), DeviceId: device.UUID().String(), Name: manifest.Name, IssuedAtUnixMs: manifest.Issued, ExpiresAtUnixMs: expires, Revision: manifest.Revision, TrustState: "verified-at-snapshot", AgentPort: uint32(manifest.AgentPort), AgentTransport: manifest.AgentTransport, Platform: manifest.Platform, Caps: append([]string(nil), manifest.Caps...)}
 		if origin := manifest.Route; origin != nil && manifest.Version == localmesh.ManifestVersionRoute {
 			if origin.Prefix != netip.PrefixFrom(device.MeshAddress(), 128) {
 				continue
@@ -109,7 +114,7 @@ func projectLocalMeshServices(out *pb.LocalMeshTopology, snapshot localmesh.Node
 	out.ServicesIncluded = true
 	manifests := make(map[string]localmesh.Manifest)
 	for _, manifest := range snapshot.Devices {
-		if !manifest.Withdraw && manifest.Expires > now.UnixMilli() {
+		if !manifest.Withdraw && manifest.LeaseDeadline().After(now) {
 			manifests[manifest.Device.String()] = manifest
 		}
 	}

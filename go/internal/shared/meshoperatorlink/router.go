@@ -12,6 +12,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/wendylabsinc/wendy/go/internal/agent/netwire"
+	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshalpn"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshoperator"
@@ -110,6 +111,16 @@ func RouterClient(ctx context.Context, c *tls.Conn, cfg ClientConfig) (_ *Router
 // An optional issuer completer supports known-CA TLS presentations while
 // retaining the original primary trust, role, tenant and validity checks.
 func AcceptRouter(ctx context.Context, c *tls.Conn, tenant meshid.Tenant, roots []*x509.Certificate, agent func(context.Context, net.Conn) error, candidates ...IssuerCandidates) (_ *RouterLink, err error) {
+	return acceptRouter(ctx, c, tenant, roots, nil, agent, candidates...)
+}
+
+// AcceptRouterWithTimePolicy applies the explicitly selected mesh clock policy
+// to the primary credential and its lifetime, without changing IO budgets.
+func AcceptRouterWithTimePolicy(ctx context.Context, c *tls.Conn, tenant meshid.Tenant, roots []*x509.Certificate, policy certs.CertificateTimePolicy, agent func(context.Context, net.Conn) error, candidates ...IssuerCandidates) (*RouterLink, error) {
+	return acceptRouter(ctx, c, tenant, roots, &policy, agent, candidates...)
+}
+
+func acceptRouter(ctx context.Context, c *tls.Conn, tenant meshid.Tenant, roots []*x509.Certificate, policy *certs.CertificateTimePolicy, agent func(context.Context, net.Conn) error, candidates ...IssuerCandidates) (_ *RouterLink, err error) {
 	stop, err := routerBegin(ctx, c)
 	if err != nil {
 		return nil, err
@@ -130,6 +141,9 @@ func AcceptRouter(ctx context.Context, c *tls.Conn, tenant meshid.Tenant, roots 
 		complete = candidates[0]
 	}
 	now := time.Now()
+	if policy != nil {
+		now = policy.WallTime()
+	}
 	certificates, err := completePeerCertificates(s.PeerCertificates, complete, now)
 	if err != nil {
 		return nil, err
@@ -138,7 +152,12 @@ func AcceptRouter(ctx context.Context, c *tls.Conn, tenant meshid.Tenant, roots 
 	for i, p := range certificates {
 		chain[i] = p.Raw
 	}
-	identity, err := meshoperator.VerifyPrimary(chain, roots, tenant, now)
+	var identity meshoperator.VerifiedOperator
+	if policy == nil {
+		identity, err = meshoperator.VerifyPrimary(chain, roots, tenant, now)
+	} else {
+		identity, err = meshoperator.VerifyPrimaryWithPolicy(chain, roots, tenant, now, *policy)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -160,7 +179,11 @@ func AcceptRouter(ctx context.Context, c *tls.Conn, tenant meshid.Tenant, roots 
 	if err = writeControl(c, control{Kind: "operator-router-ready"}); err != nil {
 		return nil, err
 	}
-	l, err := routerReady(ctx, c, peer, peer, true, identity.NotAfter(), agent)
+	var clock func() time.Time
+	if policy != nil {
+		clock = func() time.Time { return policy.BaseTime(policy.WallTime()) }
+	}
+	l, err := routerReadyWithClock(ctx, c, peer, peer, true, identity.NotAfter(), clock, agent)
 	if err != nil {
 		return nil, err
 	}
@@ -176,7 +199,11 @@ func minTime(a, b time.Time) time.Time {
 }
 
 func routerReady(ctx context.Context, c *tls.Conn, peer, self meshid.Device, server bool, expires time.Time, agent func(context.Context, net.Conn) error) (*RouterLink, error) {
-	base, err := ready(ctx, c, self.MeshAddress(), server, expires)
+	return routerReadyWithClock(ctx, c, peer, self, server, expires, nil, agent)
+}
+
+func routerReadyWithClock(ctx context.Context, c *tls.Conn, peer, self meshid.Device, server bool, expires time.Time, clock func() time.Time, agent func(context.Context, net.Conn) error) (*RouterLink, error) {
+	base, err := readyWithClock(ctx, c, self.MeshAddress(), server, expires, clock)
 	if err != nil {
 		return nil, err
 	}
