@@ -20,6 +20,7 @@ func (s *Synchronizer) offerManifest(w SignedManifest, now time.Time) []ControlM
 	if err != nil {
 		return nil
 	}
+	s.pruneSupersededPending(now)
 	s.trackArtifact(w, deadline)
 	directory, principal := s.directory, w.ownerKey()
 	m := s.gossip.Offer(data, deadline, now, func(at time.Time) []byte {
@@ -36,6 +37,7 @@ func (s *Synchronizer) resolveManifest(w SignedManifest, now time.Time, accepted
 		return
 	}
 	if accepted {
+		s.pruneSupersededPending(now)
 		s.trackArtifact(w, deadline)
 	}
 	data, _ := netwire.Marshal(w)

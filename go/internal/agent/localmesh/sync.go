@@ -344,6 +344,7 @@ func (s *Synchronizer) recordBounded(w SignedManifest, now time.Time, slots int)
 	if !ok {
 		return nil, true
 	}
+	s.pruneSupersededPending(now)
 	artifact := s.trackArtifact(w, deadline)
 	fp := Fingerprint(chain)
 	_, known := s.sent[fp]
@@ -569,6 +570,7 @@ func (s *Synchronizer) receive(m ControlMessage, now time.Time, slots ...int) (r
 		if e != nil {
 			return nil, nil, e
 		}
+		s.pruneSupersededPending(now)
 		if ok {
 			changed = append(changed, *m.Manifest)
 		}
@@ -750,6 +752,7 @@ func (s *Synchronizer) Sweep(now time.Time) {
 	if s.certificates == nil {
 		return
 	}
+	s.pruneSupersededPending(now)
 	for key, until := range s.pendingDeadlines {
 		if !until.After(now) {
 			principal := s.pending[key].Principal
@@ -773,6 +776,49 @@ func (s *Synchronizer) Sweep(now time.Time) {
 	parts.mu.Lock()
 	parts.prune(now)
 	parts.mu.Unlock()
+}
+
+// Supersession can arrive through another link using this shared directory.
+// The retained current record/watermark, never an unverified incoming revision,
+// decides whether an old buffered payload has any remaining admission work.
+func (s *Synchronizer) pruneSupersededPending(now time.Time) {
+	if s.directory == nil || len(s.pending) == 0 {
+		return
+	}
+	d := s.directory
+	d.mu.Lock()
+	d.expireLocked(now)
+	var obsolete []string
+	for key, w := range s.pending {
+		m, err := DecodeManifest(w.Body)
+		if err != nil {
+			continue
+		}
+		current, active := d.entries[key]
+		receipt, seen := d.history[key]
+		superseded := seen && (m.Revision < receipt.Revision || m.Revision == receipt.Revision && !active)
+		if !superseded && active && m.Revision <= current.manifest.Revision {
+			// A transient identity-cache miss still needs its existing repair
+			// path. Do not discard that retry merely because bytes are cached.
+			_, superseded = d.currentEntryChain(key, current, now)
+		}
+		if superseded {
+			obsolete = append(obsolete, key)
+		}
+	}
+	d.mu.Unlock()
+	// Release shared transfer claims only after dropping the directory lock.
+	for _, key := range obsolete {
+		w := s.pending[key]
+		s.dropPendingManifest(key)
+		needed := false
+		for _, other := range s.pending {
+			needed = needed || other.Principal == w.Principal
+		}
+		if !needed && s.certificates != nil {
+			s.certificates.forgetPrincipal(w.Principal, now)
+		}
+	}
 }
 
 func (s *Synchronizer) Close() {
