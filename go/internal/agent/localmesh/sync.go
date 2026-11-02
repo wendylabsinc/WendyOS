@@ -30,7 +30,7 @@ var ErrControlBackpressure = errors.New("directory response credit unavailable")
 func directoryResponseDemand(m ControlMessage) int {
 	switch m.Kind {
 	case "gossip":
-		if m.Gossip == nil || !m.Gossip.Known() {
+		if m.Gossip == nil || m.Gossip.FutureType() || !m.Gossip.Known() {
 			return 0
 		}
 		switch m.Gossip.Op {
@@ -147,7 +147,7 @@ func ReadControl(r io.Reader) (ControlMessage, error) {
 			return m, err
 		}
 	case "gossip":
-		if m.Gossip != nil && m.Gossip.Op != "" && !m.Gossip.Known() {
+		if m.Gossip != nil && (m.Gossip.FutureType() || m.Gossip.Op != "" && !m.Gossip.Known()) {
 			return m, nil
 		}
 		if m.Gossip == nil || m.Gossip.Type != netgossip.Manifest || m.Hello != nil || m.Manifest != nil || len(m.Bundle) != 0 || m.Principal != "" {
