@@ -136,7 +136,10 @@ func readPresenceLease(path string) (*pb.IssuePresenceLeaseResponse, error) {
 	return &lease, nil
 }
 
-func (a *Agent) restorePresenceLeases(ctx context.Context, current claims) error {
+func (a *Agent) restorePresenceLeases(parent context.Context, current claims) error {
+	if err := parent.Err(); err != nil {
+		return err
+	}
 	saved, err := a.savedPresenceLeases()
 	if err != nil {
 		return err
@@ -146,7 +149,7 @@ func (a *Agent) restorePresenceLeases(ctx context.Context, current claims) error
 		return err
 	}
 	// A signer refresh cannot make cache restoration wait once per saved file.
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	ctx, cancel := context.WithTimeout(parent, 5*time.Second)
 	defer cancel()
 	for _, s := range saved {
 		lease, err := readPresenceLease(s.path)
@@ -154,8 +157,14 @@ func (a *Agent) restorePresenceLeases(ctx context.Context, current claims) error
 		if err == nil {
 			c, err = a.validateLease(ctx, lease)
 		}
-		if ctx.Err() != nil {
-			return ctx.Err()
+		if err := parent.Err(); err != nil {
+			return err
+		}
+		if ctx.Err() == context.DeadlineExceeded {
+			// Only this optional restoration budget elapsed. Keep the
+			// unverified files without admitting them, and use the current
+			// lease that the caller has already verified.
+			break
 		}
 		var unavailable *grantKeyLookupError
 		if errors.As(err, &unavailable) {
@@ -174,6 +183,9 @@ func (a *Agent) restorePresenceLeases(ctx context.Context, current claims) error
 		if c.Aud == current.Aud && c.Route == current.Route && c.Signing == current.Signing && c.Encryption == current.Encryption {
 			a.remember(c)
 		}
+	}
+	if err := parent.Err(); err != nil {
+		return err
 	}
 	a.remember(current)
 	return nil
