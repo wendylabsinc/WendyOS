@@ -27,8 +27,15 @@ Options:
   --harness NAME     AI review harness: auto, claude, or codex.
   --review-prompt PATH
                      Custom single-pass review prompt path.
+  --source-policy-ref REF
+                     Trusted committed source-policy base, defaulting to
+                     WENDY_E2E_REVIEW_SOURCE_POLICY_REF or origin/main.
   --overwrite        Overwrite existing run review files.
   --help             Show this help message.
+
+Source-only preparation requires Python 3 and both canonical policy modules in
+the trusted base. Until that dependency lands, pass a trusted parent commit SHA
+with --source-policy-ref for local reviews of the stacked changes.
 
 EOF
 }

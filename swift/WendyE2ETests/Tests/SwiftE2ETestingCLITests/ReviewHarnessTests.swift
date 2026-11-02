@@ -94,19 +94,39 @@ struct ReviewHarnessTests {
         let output = try runStub(response: text, status: status, capture: false)
         #expect(output == text)
     }
+
+    @Test(arguments: [false, true])
+    func `provider and custom shell access remains an explicit source-scope limitation`(
+        capture: Bool
+    ) throws {
+        let response =
+            capture ? #"{"result":"GENERATED_TOOL_READ_SENTINEL"}"# : "GENERATED_TOOL_READ_SENTINEL"
+        let output = try runStub(
+            response: response,
+            capture: capture,
+            responsePath: "go/proto/gen/sentinel.pb.go"
+        )
+        #expect(output.contains("GENERATED_TOOL_READ_SENTINEL"))
+    }
 }
 
 private func runStub(
     response: String,
     status: Int = 0,
     auth: String = "Claude Code subscription",
-    capture: Bool = true
+    capture: Bool = true,
+    responsePath: String = "response.json"
 ) throws -> String {
     let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
     let run = root.appendingPathComponent("run")
     try FileManager.default.createDirectory(at: run, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: root) }
-    try Data(response.utf8).write(to: root.appendingPathComponent("response.json"))
+    let responseURL = root.appendingPathComponent(responsePath)
+    try FileManager.default.createDirectory(
+        at: responseURL.deletingLastPathComponent(),
+        withIntermediateDirectories: true
+    )
+    try Data(response.utf8).write(to: responseURL)
     let review = """
         ---
         {"schema":"wendy.e2e.review.v1","title":"Fixture finding","scope":"report","reviewer":"claude-opus-4-7","severity":"info"}
@@ -132,7 +152,7 @@ private func runStub(
             printf 'review file stays unchanged\\n' > "$WENDY_E2E_REVIEW_RUN_DIR/review.md"
             mkdir "$WENDY_E2E_REVIEW_RUN_DIR/review.claude-opus-4-7"
             cp "$WENDY_E2E_REVIEW_REPO_DIR/fixture-finding.md" "$WENDY_E2E_REVIEW_RUN_DIR/review.claude-opus-4-7/"
-            cat "$WENDY_E2E_REVIEW_REPO_DIR/response.json"
+            cat "$WENDY_E2E_REVIEW_REPO_DIR/\(responsePath)"
             exit \(status)
             """,
         commandSource: "test",
