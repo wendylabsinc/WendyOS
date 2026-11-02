@@ -328,7 +328,7 @@ func (c *WendyLiteClient) ConnectViaRelay(ctx context.Context, cc *grpc.ClientCo
 	// Close the raw pipe first so TLS shutdown cannot block behind a stalled
 	// broker write. No application message is sent until mTLS succeeds.
 	c.link = newDirectLink(&relayTLSConn{Conn: conn, raw: raw})
-	if err := c.handshake(); err != nil {
+	if err := c.handshakeWithin(60 * time.Second); err != nil {
 		c.link.close()
 		c.link = nil
 		return fmt.Errorf("handshake: %w", err)
