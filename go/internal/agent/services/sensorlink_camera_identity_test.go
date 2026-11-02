@@ -41,7 +41,7 @@ func TestNetworkCameraIdentityDoesNotFollowReusedNode(t *testing.T) {
 		t.Fatal(err)
 	}
 	svc := &VideoService{registry: registry}
-	listed := svc.listIPCameras()
+	listed := svc.listIPCameras(true)
 	if len(listed) != 1 || listed[0].StableId != "ip-mac:"+first.MAC {
 		t.Fatalf("identity missing: %v", listed)
 	}
