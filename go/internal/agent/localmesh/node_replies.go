@@ -1,6 +1,9 @@
 package localmesh
 
-import "github.com/wendylabsinc/wendy/go/internal/agent/netwire"
+import (
+	"github.com/wendylabsinc/wendy/go/internal/agent/netwire"
+	"time"
+)
 
 const maxDirectoryReplyFrames = 32
 const maxDirectoryReplyBytes = 64 << 10
@@ -19,6 +22,9 @@ func (n *Node) queueReplies(p *nodePeer, messages []ControlMessage) bool {
 	sizes := make([]int, 0, len(messages))
 	bundles := make(map[string]struct{})
 	for _, message := range messages {
+		if message.Expired(time.Now()) {
+			continue
+		}
 		if message.Kind == "bundle" {
 			fingerprint := Fingerprint(message.Bundle)
 			if _, pending := p.pendingBundles.Load(fingerprint); pending {
@@ -78,6 +84,7 @@ func (n *Node) queueReplies(p *nodePeer, messages []ControlMessage) bool {
 }
 
 func (n *Node) flushReplies(p *nodePeer) {
+	n.pruneReplies(p, time.Now())
 	for len(p.replies) != 0 {
 		select {
 		case p.control <- p.replies[0]:

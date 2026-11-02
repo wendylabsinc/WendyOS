@@ -341,8 +341,8 @@ func TestNodeSequenceFanoutPersistsAndQueuesGossipProofBeforeSend(t *testing.T) 
 		if manifest.Route == nil || manifest.Route.Seqno != 1 || manifest.Revision != persisted.Revision {
 			t.Fatalf("link %d queued the wrong proof: %+v", d.Link, manifest)
 		}
-		if len(persisted.Receipts) != 1 || persisted.Receipts[0].Revision != manifest.Revision || persisted.Receipts[0].Hash != manifestHash(proof.Body) {
-			t.Fatalf("link %d sent before its signed proof receipt was durable", d.Link)
+		if len(persisted.Receipts) != 0 {
+			t.Fatalf("link %d persisted RAM-only receive watermarks", d.Link)
 		}
 		verifier, err := NewDirectory(n.Credentials.Device.Tenant(), 10, n.cache)
 		if err != nil {

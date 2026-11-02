@@ -157,7 +157,7 @@ func newNode(parent context.Context, dir string, credentials *Credentials, name 
 	if _, err = cache.Put(credentials.Certificate.Certificate, now); err != nil {
 		return nil, err
 	}
-	directory, err := NewDirectory(credentials.Device.Tenant(), 1024, cache)
+	directory, err := NewDirectoryWithClock(credentials.Device.Tenant(), 1024, cache, time.Now)
 	if err != nil {
 		return nil, err
 	}
@@ -195,6 +195,11 @@ func newNode(parent context.Context, dir string, credentials *Credentials, name 
 	}, now); err != nil {
 		return nil, err
 	}
+	// Old foreign receipts used wall-time expiry. They cannot be converted into
+	// a fresh monotonic ten-duration lease on restart. Keep the validated own
+	// revision/Babel state, and omit only these obsolete receipts on the next
+	// normal checkpoint; new foreign watermarks live solely in this mesh epoch.
+	n.state.Receipts = nil
 	// Neighbor authentication admits a link, not its routing claims. Every
 	// finite remote route needs the origin's current signed address/ID/sequence
 	// binding. step snapshots that policy before entering the Babel engine.
@@ -351,6 +356,7 @@ func (n *Node) Run() error {
 				return err
 			}
 		case <-maintenance.C:
+			n.sweepAnnouncements(time.Now())
 			n.gate.Lock()
 			err := n.kernel.ReconcileBase()
 			n.gate.Unlock()
@@ -554,6 +560,9 @@ func (n *Node) continueReconcilePeer(p *nodePeer, now time.Time) {
 }
 
 func (n *Node) writePeerControl(p *nodePeer, m ControlMessage) error {
+	if m.Expired(time.Now()) {
+		return nil
+	}
 	if m.Kind == "bundle" {
 		// Clear the original queued token even if normalization changes bytes
 		// or current trust makes this queued repair ineligible.
@@ -627,6 +636,9 @@ func (n *Node) queue(p *nodePeer, messages []ControlMessage) {
 		return // Periodic reconciliation repairs bulk gossip after replies drain.
 	}
 	for _, m := range messages {
+		if m.Expired(time.Now()) {
+			continue
+		}
 		// A leaf can request an identity again while its large certificate
 		// bundle is still crossing BLE. Keep one queued/in-flight copy, so
 		// cache repair cannot accumulate duplicate bundles ahead of IP.
@@ -680,7 +692,19 @@ func (n *Node) publish() error {
 	}
 	m.Route = &RouteOrigin{Prefix: netip.PrefixFrom(n.Credentials.Device.MeshAddress(), 128), RouterID: babel.RouterID(n.state.RouterID), Seqno: n.state.Babel.Seqno}
 	m.Revision = n.state.Revision
-	m.Issued = now.UnixMilli()
+	// Publication dates remain inside our signing leaf window, independently
+	// of receiver-relative liveness. The local boot anchor is virtual: it does
+	// not set UTC, and peer timestamps never choose this clock.
+	policy := n.Credentials.CertificateTimePolicy()
+	issued := policy.BaseTime(policy.WallTime())
+	leaf, err := x509.ParseCertificate(n.Credentials.Certificate.Certificate[0])
+	if err != nil {
+		return err
+	}
+	if leaf.NotBefore.After(issued) {
+		issued = leaf.NotBefore
+	}
+	m.Issued = issued.UnixMilli()
 	// Other operator installations share this principal but may use different
 	// certificates. Only our actual signing chain determines our origin lease.
 	identity, err := n.Credentials.Verify(n.Credentials.Certificate.Certificate, now)
@@ -688,13 +712,16 @@ func (n *Node) publish() error {
 		return err
 	}
 	n.cache.rememberCertificates(n.Credentials.Certificate.Certificate, identity.NotAfter, now)
-	m.Expires = min(now.Add(MaxLease).UnixMilli(), identity.NotAfter.UnixMilli())
+	m.Expires = min(issued.Add(MaxLease).UnixMilli(), identity.NotAfter.UnixMilli())
 	w, err := SignManifest(m, n.Credentials.Certificate.Certificate, n.Credentials.Signer, now)
 	if err != nil {
 		return err
 	}
 	if _, err = n.directory.Accept(w, now); err != nil {
 		return err
+	}
+	if deadline, ok := n.directory.RecordDeadline(w, now); ok {
+		m.AdmittedUntil = deadline
 	}
 	n.advertisement = m
 	n.publicationDirty = false
@@ -998,7 +1025,7 @@ func (n *Node) Apply(routes []babel.Route) error {
 func (n *Node) advertiseLocalRoute(id babel.RouterID, prefix netip.Prefix, seqno uint16) bool {
 	proof := n.advertisement.Route
 	return proof != nil && proof.RouterID == id && proof.Prefix == prefix && proof.Seqno == seqno &&
-		!n.advertisement.Withdraw && n.advertisement.Expires > time.Now().UnixMilli()
+		!n.advertisement.Withdraw && n.advertisement.LeaseDeadline().After(time.Now())
 }
 
 func (n *Node) Persist(cp babel.Checkpoint) error {

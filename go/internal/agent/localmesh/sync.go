@@ -735,7 +735,7 @@ func (s *Synchronizer) retainPending(w SignedManifest, now time.Time) {
 // work while idle. It starts no transfers and performs no certificate admission.
 func (s *Synchronizer) Sweep(now time.Time) {
 	for owner, artifact := range s.artifacts {
-		if !artifact.deadline.After(now) {
+		if !artifact.deadline.After(now) || !s.directory.hasCurrentOwner(owner, now) {
 			artifact.canceled.Store(true)
 			if s.gossipPool != nil {
 				s.gossipPool.Forget(artifact.id)

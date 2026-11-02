@@ -531,6 +531,9 @@ func (d *Directory) Sweep(now time.Time) bool {
 
 // RecordDeadline returns the receiver-local deadline for this exact current
 // signed wire. It never changes the immutable announcement's signed dates.
+// now is the receiver scheduling clock (normally time.Now with its monotonic
+// component), never a certificate BaseTime, boot anchor or signed Issued time.
+// The independent elapsed clock is projected into that scheduling domain.
 func (d *Directory) RecordDeadline(w SignedManifest, now time.Time) (time.Time, bool) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -546,13 +549,28 @@ func (d *Directory) RecordDeadline(w SignedManifest, now time.Time) (time.Time, 
 	return now.Add(e.activeUntil.Sub(d.leaseNow(now))), true
 }
 
+// hasCurrentOwner is an export eligibility check, not a lease renewal. Missing
+// repair material leaves the original body bounded by its original deadline.
+func (d *Directory) hasCurrentOwner(owner string, now time.Time) bool {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.expireLocked(now)
+	e, ok := d.entries[owner]
+	if !ok {
+		return false
+	}
+	_, ok = d.currentEntryChain(owner, e, now)
+	return ok
+}
+
 func manifestHash(body []byte) string {
 	h := sha256.Sum256(body)
 	return hex.EncodeToString(h[:])
 }
 
 // Snapshot returns current origin records. Route reachability is a separate
-// filter at the consumer, never inferred from having a directory entry.
+// filter at the consumer, never inferred from having a directory entry. now is
+// the receiver scheduling clock, never certificate BaseTime or a signed date.
 func (d *Directory) Snapshot(now time.Time) []Manifest {
 	d.mu.Lock()
 	defer d.mu.Unlock()
