@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
+	"github.com/wendylabsinc/wendy/go/internal/cli/operatormesh"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -83,6 +84,9 @@ func (r *operatorTargets) directorySnapshot(ctx context.Context) OperatorDirecto
 			continue
 		}
 		info.OperatorPrincipal = operator.Principal()
+		if r.localSnapshot != nil {
+			info.InternetSharing = operatormesh.InternetGateway(r.localSnapshot(), target, now)
+		}
 		for _, route := range view.Routes {
 			if route.Prefix == hint.Prefix && route.OriginPrincipal == info.Principal && route.OriginAuthorized && !route.Unreachable && (!route.Local || target == adjacent) && route.OriginRouterId == hint.OriginRouterId && route.SequenceNumber == hint.SequenceNumber {
 				info.Metric = route.Metric
