@@ -2,6 +2,7 @@ package services
 
 import (
 	"context"
+	"encoding/json"
 	"net/netip"
 	"testing"
 	"time"
@@ -120,6 +121,60 @@ func TestLocalMeshTopologySeparatesLinksRoutesAndLeaseTrust(t *testing.T) {
 				if !route.Local && route.OriginAuthorized {
 					t.Fatal("invalid lease claimed authorized")
 				}
+			}
+		})
+	}
+}
+
+func TestLocalMeshTopologyUsesReceiverLeaseForSkewedSignedDates(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		signedOffset time.Duration
+		remaining    time.Duration
+	}{
+		{"behind 598 seconds", -598 * time.Second, time.Minute},
+		{"ahead 598 seconds", 598 * time.Second, time.Minute},
+		{"expired despite future signed dates", 598 * time.Second, -time.Second},
+		{"expired at receiver deadline", -598 * time.Second, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			self, snapshot, now := topologyFixture(t)
+			manifest := &snapshot.Devices[0]
+			manifest.Issued = now.Add(tc.signedOffset).UnixMilli()
+			manifest.Expires = now.Add(tc.signedOffset + 2*time.Minute).UnixMilli()
+			manifest.AdmittedUntil = now.Add(tc.remaining)
+			manifest.Services = []localmesh.ManifestService{{Mesh: "lab", AppID: "app", ServiceID: "sensor", Type: "_sensor._tcp", Instance: "Sensor", Port: 8080}}
+			before, err := json.Marshal(manifest)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := projectLocalMeshTopology(self, snapshot, now, true)
+			if len(got.Announcements) != 1 {
+				t.Fatalf("announcement lost: %v", got)
+			}
+			hint := got.Announcements[0]
+			wantExpiry := now.Add(tc.remaining).UnixMilli()
+			if hint.ExpiresAtUnixMs != wantExpiry || hint.IssuedAtUnixMs != manifest.Issued || got.CapturedAtUnixMs != snapshot.CapturedAt.UnixMilli() {
+				t.Fatalf("receiver lease or original observation metadata changed: %v", got)
+			}
+			var remote *pb.LocalMeshRoute
+			for _, route := range got.Routes {
+				if !route.Local {
+					remote = route
+				}
+			}
+			live := tc.remaining > 0
+			if remote == nil || remote.SignedRouteExpiresAtUnixMs != hint.ExpiresAtUnixMs || remote.OriginAuthorized != live {
+				t.Fatalf("route must bind the same receiver lease: %v", remote)
+			}
+			if (len(hint.Services) > 0) != live {
+				t.Fatalf("service visibility must inherit receiver lease: %v", hint)
+			}
+			// AdmittedUntil is deliberately excluded from signed serialization;
+			// projection must not rewrite the immutable dates or snapshot itself.
+			after, err := json.Marshal(manifest)
+			if err != nil || string(before) != string(after) || manifest.AdmittedUntil != now.Add(tc.remaining) {
+				t.Fatalf("projection mutated source snapshot: %s / %s (%v)", before, after, err)
 			}
 		})
 	}
