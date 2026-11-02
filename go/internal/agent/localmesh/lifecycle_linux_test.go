@@ -72,7 +72,7 @@ func TestMeshLifecyclePeerProcess(t *testing.T) {
 	if err = json.Unmarshal(data, &config); err != nil {
 		t.Fatal(err)
 	}
-	credentials, err := NewCredentials(config.Cert, config.Chain, config.Key)
+	credentials, err := newTestCredentials(config.Cert, config.Chain, config.Key)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -420,13 +420,15 @@ func TestKernelProcessLifecycle(t *testing.T) {
 			t.Fatal(err)
 		}
 		for _, rule := range rules {
-			if rule.Table == RouteTable {
+			if reservedKernelRule(rule) {
 				t.Fatalf("reset retained mesh rule: %#v", rule)
 			}
 		}
-		routes, err := netlink.RouteListFiltered(netlink.FAMILY_V6, &netlink.Route{Table: RouteTable}, netlink.RT_FILTER_TABLE)
-		if err != nil || len(routes) != 0 {
-			t.Fatalf("reset retained mesh routes: %v, %v", routes, err)
+		for _, table := range []int{RouteTable, operatorRouteTable} {
+			routes, err := netlink.RouteListFiltered(netlink.FAMILY_V6, &netlink.Route{Table: table}, netlink.RT_FILTER_TABLE)
+			if err != nil || len(routes) != 0 {
+				t.Fatalf("reset retained mesh routes in table %d: %v, %v", table, routes, err)
+			}
 		}
 		if meshForwardingCommand("-C") == nil {
 			t.Fatal("reset retained transit forwarding grant")
