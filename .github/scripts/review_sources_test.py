@@ -210,23 +210,25 @@ class ReviewInputTests(unittest.TestCase):
 
 
 class WorkflowTests(unittest.TestCase):
-    def integration(self, raw):
+    def integration(self, raw, response_text="NO_CHANGES_NEEDED"):
         fake = Mock()
         fake.Anthropic.return_value.messages.create.return_value = SimpleNamespace(
-            stop_reason='end_turn', content=[SimpleNamespace(text='NO_CHANGES_NEEDED')])
+            stop_reason='end_turn', content=[SimpleNamespace(text=response_text)])
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory)
             (path / '.github/scripts').mkdir(parents=True)
             (path / '.github/scripts/review_sources.py').touch()
             (path / 'pr.diff').write_text(raw)
             (path / 'pr_meta.json').write_text(json.dumps(metadata(raw)))
-            env = dict(GITHUB_ENV=str(path/'env'), EXPECTED_HEAD_SHA=HEAD, PR_TITLE='Test', PR_BODY='', PR_NUMBER='42')
+            env = dict(GITHUB_ENV=str(path/'env'), REVIEW_FILE=str(path/'review.md'),
+                       EXPECTED_HEAD_SHA=HEAD, PR_TITLE='Test', PR_BODY='', PR_NUMBER='42')
             with working_directory(path), patch.dict(os.environ, env), patch.dict(sys.modules, {'anthropic': fake}), \
                  patch('subprocess.check_output', return_value=b''):
                 try:
                     exec(inline('integration-test-review.yml', 0), {})
                 except SystemExit as error:
                     self.assertEqual(error.code, 0)
+            fake.review_body = (path/'review.md').read_text() if (path/'review.md').exists() else ''
             return fake
 
     def test_integration_mixed_filters_before_model(self):
@@ -239,14 +241,26 @@ class WorkflowTests(unittest.TestCase):
     def test_integration_generated_only_no_model(self):
         self.integration(diff()).Anthropic.assert_not_called()
 
-    def test_integration_oversized_source_fails_before_model(self):
-        with self.assertRaisesRegex(RuntimeError, 'no partial review'):
-            self.integration(diff('source.go', 'X' * 30000))
+    def test_integration_large_source_retains_excerpt_budget_and_discloses_omission(self):
+        fake = self.integration(diff('source.go', 'X' * 30000 + 'OMITTED_SOURCE_MARKER'))
+        request = str(fake.Anthropic.return_value.messages.create.call_args)
+        self.assertIn('Partial source review', request)
+        self.assertIn('Omitted source is unreviewed', request)
+        self.assertNotIn('OMITTED_SOURCE_MARKER', request)
+        fake.Anthropic.return_value.messages.create.assert_called_once()
+        payload = {'summary': '', 'findings': [{'severity': 'info', 'title': 'Source test',
+            'name': 'python-source', 'overview': 'Source-only suggestion', 'details': 'Complete details'}]}
+        fake = self.integration(diff('source.go', 'é' * 30000 + 'OMITTED_SOURCE_MARKER'), json.dumps(payload))
+        self.assertIn('Partial source review', fake.review_body)
+        self.assertIn('Omitted source is unreviewed', fake.review_body)
+        self.assertNotIn('OMITTED_SOURCE_MARKER', str(fake.Anthropic.return_value.messages.create.call_args))
 
     def test_skip_preserves_prior_docs_and_integration_comments_and_blockers(self):
         for workflow, marker in [('docs-review.yml', '<!-- ai-docs-review:v1 -->'),
                                   ('integration-test-review.yml', '<!-- ai-integration-test-review:v1 -->')]:
-            for blocking in (False, True):
+            for blocking, excerpted in ((False, False), (True, False), (False, True), (True, True)):
+                if excerpted and workflow != 'integration-test-review.yml':
+                    continue
                 body = marker + ('\n#### 🛑 Error Prior blocker' if blocking else '\nPrior suggestion')
                 previous = [{'id': 1, 'user': {'login': 'github-actions[bot]', 'type': 'Bot'}, 'body': body}]
                 response = Mock()
@@ -254,7 +268,9 @@ class WorkflowTests(unittest.TestCase):
                 response.__exit__ = Mock(return_value=False)
                 response.read.return_value = json.dumps(previous).encode()
                 with tempfile.TemporaryDirectory() as directory:
-                    env = dict(SOURCE_ONLY_REVIEW='true', COMMENT_FILE=directory+'/missing', GH_TOKEN='offline',
+                    env = dict(SOURCE_ONLY_REVIEW='false' if excerpted else 'true',
+                               INTEGRATION_SOURCE_EXCERPTED='true' if excerpted else 'false',
+                               COMMENT_FILE=directory+'/missing', GH_TOKEN='offline',
                                REPO=REPO, PR_NUMBER='42')
                     with patch.dict(os.environ, env), patch('urllib.request.urlopen', return_value=response) as request:
                         if blocking:
