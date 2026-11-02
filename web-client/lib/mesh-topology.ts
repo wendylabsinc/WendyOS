@@ -11,6 +11,14 @@ export type MeshDevice = {
   pkiDeviceName?: string;
   cloudName?: string;
   cloudNamePrincipal?: string;
+  cloudNameSource?: string;
+};
+// Successful Cloud rows can revoke earlier copied labels even when local
+// discovery fails. Missing/invalid rows do not revoke unobserved labels in a
+// partial roster. These hints never establish topology identity or membership.
+export type MeshCloudNames = {
+  complete: boolean;
+  entries: { source: string; principal?: string; name?: string }[];
 };
 export type MeshPeer = {
   linkId?: string;
@@ -142,11 +150,31 @@ export function meshNodeFor(group: MeshGroup, principal?: string, routingId?: st
   return candidates.length === 1 ? candidates[0] : undefined;
 }
 
-export function mergeMeshInventory(previous: MeshDevice[], current: MeshDevice[], retainPrevious = false) {
-  if (!retainPrevious) return current;
+export function mergeMeshInventory(
+  previous: MeshDevice[], current: MeshDevice[], retainPrevious = false, cloudNames?: MeshCloudNames,
+) {
   const incoming = new Set(current.map(device => device.id));
   const reporters = new Set(current.map(device => device.reporterKey).filter(Boolean));
-  return [...current, ...previous.filter(device => !incoming.has(device.id) && (!device.reporterKey || !reporters.has(device.reporterKey)))];
+  const inventory = retainPrevious ? [...current, ...previous.filter(device =>
+    !incoming.has(device.id) && (!device.reporterKey || !reporters.has(device.reporterKey)))] : current;
+  const old = new Map(previous.map(device => [device.reporterKey || device.id, device]));
+  const observed = new Set(cloudNames?.entries.map(entry => entry.source));
+  const labels = new Map(cloudNames?.entries
+    .filter(entry => entry.principal && entry.name?.trim())
+    .map(entry => [entry.principal, entry]));
+  return inventory.map(device => {
+    // A fresh physical row may omit its old cosmetic hint while Cloud is
+    // unavailable. Carry it only across the same reporter identity.
+    const hint = device.cloudNamePrincipal ? device : retainPrevious ? old.get(device.reporterKey || device.id) : undefined;
+    if (!hint?.cloudNamePrincipal) return device;
+    const label = labels.get(hint.cloudNamePrincipal);
+    if (label) return { ...device, cloudName: label.name, cloudNamePrincipal: label.principal, cloudNameSource: label.source };
+    if (cloudNames?.complete || (hint.cloudNameSource && observed.has(hint.cloudNameSource))) {
+      const { cloudName: _name, cloudNamePrincipal: _principal, cloudNameSource: _source, ...rest } = device;
+      return rest;
+    }
+    return { ...device, cloudName: hint.cloudName, cloudNamePrincipal: hint.cloudNamePrincipal, cloudNameSource: hint.cloudNameSource };
+  });
 }
 
 export function getMeshObservation(observations: Record<string, MeshObservation>, device: MeshDevice) {
