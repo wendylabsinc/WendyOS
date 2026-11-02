@@ -202,6 +202,68 @@ func TestExpiredDeviceCertificateReconnectRetriesWhileDeviceIsDown(t *testing.T)
 	}
 }
 
+// Before reconnecting a direct target, the watch renews the login that issued
+// the expired certificate, once per connection: the device may stay down for
+// many checks, and each renewal spends the session's refresh token. A cloud
+// selector's dial renews its own login.
+func TestExpiredDeviceCertificateRenewsTheLoginBeforeReconnecting(t *testing.T) {
+	now := time.Now()
+	refused := errors.New("dial tcp 192.168.1.20:50052: connect: connection refused")
+	for _, tc := range []struct {
+		name       string
+		target     commandTarget
+		renewErr   error
+		wantRenews int
+	}{
+		{"direct target", commandTarget{Device: "mesh-1.local:50051", Transport: "direct"}, nil, 1},
+		{"renewal fails", commandTarget{Device: "mesh-1.local:50051", Transport: "direct"}, errors.New("refresh token expired"), 1},
+		{"cloud selector", commandTarget{Device: "cloud://api.wendy.dev:443/tenant/t/asset/a", Transport: "cloud"}, nil, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			old := certificateTestConn(t, now.Add(-time.Hour))
+			renewed := certificateTestConn(t, now.Add(24*time.Hour))
+			var events []string
+			dials := 0
+			s := New(&config.Config{}, func(context.Context, string) (*grpcclient.AgentConnection, error) {
+				events = append(events, "dial")
+				dials++
+				if dials == 1 {
+					return nil, refused
+				}
+				return renewed, nil
+			})
+			s.SetTransientConnectError(func(err error) bool { return errors.Is(err, refused) })
+			s.SetLoginRenewer(func(_ context.Context, cert config.CertificateInfo) error {
+				if cert.PemCertificate != old.CertInfo.PemCertificate {
+					t.Fatal("renewed a login other than the one that issued the expired certificate")
+				}
+				events = append(events, "renew")
+				return tc.renewErr
+			})
+			s.setConnection(old, "direct", tc.target)
+
+			s.replaceExpiredDeviceConnection(context.Background(), now) // the device is still down
+			s.replaceExpiredDeviceConnection(context.Background(), now) // back
+
+			want := []string{"dial", "dial"}
+			if tc.wantRenews == 1 {
+				want = []string{"renew", "dial", "dial"}
+			}
+			if strings.Join(events, ",") != strings.Join(want, ",") {
+				t.Fatalf("events = %v, want %v", events, want)
+			}
+			if conn, _, _ := s.connectionSnapshot(); conn != renewed {
+				t.Fatalf("conn = %p, want the reconnected one", conn)
+			}
+			diags := s.proxyDiagnostics()
+			renewNoted := len(diags) > 0 && strings.Contains(diags[0].Error, "could not renew the stored login")
+			if renewNoted != (tc.renewErr != nil) {
+				t.Fatalf("diagnostics = %+v", diags)
+			}
+		})
+	}
+}
+
 // Connecting to vm:NAME boots the simulator, so the watch never reconnects one:
 // it must not start a simulator that was stopped outside this server.
 func TestExpiredSimulatorConnectionIsNotBooted(t *testing.T) {

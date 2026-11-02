@@ -193,6 +193,23 @@ func renewExpiredLogin(ctx context.Context, login *expiredLogin) error {
 	return err
 }
 
+// renewConnectionLogin renews the stored login that issued cert, for the MCP
+// certificate watch before it reconnects a long-running connection whose
+// certificate expired. Like renewExpiredLogin it renews that login only,
+// never the current context, and does nothing when the stored login is
+// already current.
+func renewConnectionLogin(ctx context.Context, cert config.CertificateInfo) error {
+	cfg, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("loading config: %w", err)
+	}
+	auth := authHoldingCertificate(cfg, cert)
+	if auth == nil {
+		return errors.New("no stored login holds this connection's certificate")
+	}
+	return renewExpiredLoginFn(ctx, &expiredLogin{tenant: auth.Certificates[0].TenantUUID(), context: auth.Name})
+}
+
 // renewExpiredLoginAndRetry renews the login a device refused as expired and
 // retries the same endpoint once. retried reports whether that retry ran;
 // without it the outcome is cause, whose message names the next step.

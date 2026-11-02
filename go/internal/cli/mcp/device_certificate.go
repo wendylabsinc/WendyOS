@@ -9,6 +9,7 @@ import (
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
+	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"google.golang.org/grpc/connectivity"
 )
 
@@ -31,6 +32,16 @@ func (s *mcpServer) SetTransientConnectError(fn func(error) bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.transientConnectErrFn = fn
+}
+
+// SetLoginRenewer gives the device certificate watch a way to renew the stored
+// login that issued an expired connection certificate before it reconnects to
+// a direct (LAN, USB) target. renew must do nothing when the stored login is
+// already current, and must renew only that login, never the current context.
+func (s *mcpServer) SetLoginRenewer(renew func(context.Context, config.CertificateInfo) error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.renewLoginFn = renew
 }
 
 // runDeviceCertificateWatch replaces a device connection whose operator
@@ -65,9 +76,11 @@ func (s *mcpServer) runDeviceCertificateWatch(ctx context.Context, interval time
 //
 // The reconnect dials the target's address or cloud:// selector through
 // connectFn, as device_connect does, so it reads the stored logins again; for
-// a cloud selector, connectFn also renews an expired OAuth login.
-// conn.Reconnect is the fallback for a target connectFn cannot dial: it reuses
-// the login the connection captured, which is the expired one.
+// a cloud selector, connectFn also renews an expired OAuth login. Before a
+// direct target's reconnect, the login that issued the expired certificate is
+// renewed once per connection (SetLoginRenewer). conn.Reconnect is the
+// fallback for a target connectFn cannot dial: it reuses the login the
+// connection captured, which is the expired one.
 //
 // A simulator is left alone: connecting to vm:NAME boots it, and the watch
 // must not start a simulator that was stopped outside this server.
@@ -87,6 +100,7 @@ func (s *mcpServer) replaceExpiredDeviceConnection(ctx context.Context, now time
 	if !expired || isSimulatorConnection(conn, target) {
 		return
 	}
+	s.renewConnectionLogin(ctx, conn, target)
 	next, err := s.reconnectExpiredDevice(ctx, conn, target)
 	if err == nil && next == nil {
 		err = errors.New("reconnect returned no connection")
@@ -133,6 +147,25 @@ func (s *mcpServer) replaceExpiredDeviceConnection(ctx context.Context, now time
 		}
 	default:
 		s.recordProxyDiag("", "device-certificate", fmt.Errorf("disconnected: the operator certificate for this connection expired at %s and reconnecting failed: %w", expiredAt, err))
+	}
+}
+
+// renewConnectionLogin renews the login that issued conn's expired certificate
+// before a reconnect to a direct target, once per connection: the watch checks
+// every interval while the device is down, and each renewal spends the
+// session's rotating refresh token. A cloud selector's dial renews its own
+// login, and conn.Reconnect reuses the captured one, so neither gets it.
+func (s *mcpServer) renewConnectionLogin(ctx context.Context, conn *grpcclient.AgentConnection, target commandTarget) {
+	s.mu.Lock()
+	renew := s.renewLoginFn
+	first := s.certWatchRenewed != conn
+	s.certWatchRenewed = conn
+	s.mu.Unlock()
+	if renew == nil || !first || s.connectFn == nil || target.Transport == "cloud" || watchReconnectAddress(target) == "" {
+		return
+	}
+	if err := renew(ctx, *conn.CertInfo); err != nil && ctx.Err() == nil {
+		s.recordProxyDiag("", "device-certificate", fmt.Errorf("could not renew the stored login for this connection's expired certificate: %w", err))
 	}
 }
 

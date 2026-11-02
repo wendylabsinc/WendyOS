@@ -362,6 +362,43 @@ func TestMCPWatchRetriesOnlyWhenNothingAnswered(t *testing.T) {
 	}
 }
 
+// The MCP watch renews the login that issued a connection's expired
+// certificate: that login only, never the current context, and not at all
+// when the stored login is current or no stored login holds the certificate.
+func TestRenewConnectionLoginRenewsTheCertificatesLogin(t *testing.T) {
+	cfg, _ := meshReportConfig(t, "gmail")
+	oldRefresh := refreshCertsForAuthFn
+	t.Cleanup(func() { refreshCertsForAuthFn = oldRefresh })
+	var refreshed []string
+	refreshCertsForAuthFn = func(_ context.Context, auth *config.AuthConfig) error {
+		refreshed = append(refreshed, auth.Name)
+		auth.Certificates = []config.CertificateInfo{tenantCert(t, auth.Certificates[0].TenantUUID(), time.Now().Add(24*time.Hour))}
+		return nil
+	}
+	if err := renewConnectionLogin(context.Background(), cfg.Auth[0].Certificates[0]); err != nil {
+		t.Fatal(err)
+	}
+	if err := renewConnectionLogin(context.Background(), cfg.Auth[2].Certificates[0]); err != nil {
+		t.Fatalf("a current login: %v", err)
+	}
+	if len(refreshed) != 1 || refreshed[0] != "default" {
+		t.Fatalf("refreshed %q, want only the expired connection's login", refreshed)
+	}
+	stored, err := config.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.CurrentContext != "gmail" {
+		t.Fatalf("current context changed to %q", stored.CurrentContext)
+	}
+	if err := renewConnectionLogin(context.Background(), tenantCert(t, "00000000-0000-4000-8000-000000000000", time.Now().Add(-time.Hour))); err == nil {
+		t.Fatal("renewed a certificate no stored login holds")
+	}
+	if len(refreshed) != 1 {
+		t.Fatalf("refreshed %q", refreshed)
+	}
+}
+
 // A login the CLI cannot renew silently is never sent to the refresh path.
 func TestRenewExpiredLoginRefusesASessionWithoutRefreshToken(t *testing.T) {
 	cfg, _ := meshReportConfig(t, "default")

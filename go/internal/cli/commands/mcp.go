@@ -93,6 +93,7 @@ func newMCPServer(deviceFlag string, toolGroups []string) (*wendymcp.Server, err
 	}
 	srv := wendymcp.New(cfg, connectMCPDevice)
 	srv.SetTransientConnectError(isTransientDeviceConnectError)
+	srv.SetLoginRenewer(renewConnectionLogin)
 	srv.SetCLIUpdateChecker(checkCLIUpdateIfDue)
 	if err := srv.SetToolGroups(toolGroups); err != nil {
 		return nil, err

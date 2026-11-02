@@ -124,6 +124,19 @@ The CLI offers to refresh certificates when it has evidence that the client
 credentials need renewal. A timeout or generic TLS rejection alone does not
 trigger that offer.
 
+`wendy mcp serve` keeps its device connection for as long as it runs and
+checks it every 30 seconds. When the connection's certificate has expired and
+the connection has dropped, for example after a device reboot, the server
+connects to the same device again with the stored login. Before it reconnects
+a LAN or USB device, it renews an expired login from `wendy auth login`, once
+per connection. A Cloud device's connection renews its own login. While the
+device does not answer, the server keeps the connection and tries again at
+each check. If the device refuses the login, or no current login can be
+offered (a service-account login, or a renewal that failed), the server closes
+the connection and its tools report that no device is connected: run
+`wendy auth login`, then connect again. The server never reconnects a
+simulator this way, because connecting to a simulator starts it.
+
 ## Local Targets
 
 The picker can also show local provider targets when the host supports them.

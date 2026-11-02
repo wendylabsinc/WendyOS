@@ -71,7 +71,9 @@ type mcpServer struct {
 	relayProfile         *relayManifestProfile
 	// The device certificate watch (device_certificate.go), guarded by mu.
 	transientConnectErrFn func(error) bool
+	renewLoginFn          func(context.Context, config.CertificateInfo) error
 	certWatchRetrying     *grpcclient.AgentConnection // the connection whose failed reconnect is already noted
+	certWatchRenewed      *grpcclient.AgentConnection // the connection whose login renewal has run
 }
 
 // Server is the wendy MCP server, named for callers that configure it before
