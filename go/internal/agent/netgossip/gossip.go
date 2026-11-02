@@ -52,7 +52,25 @@ func (m Message) Known() bool {
 	return false
 }
 
+// FutureType identifies optional artifact families within the current gossip
+// version. Their variant payload is not interpreted using a known family schema.
+func (m Message) FutureType() bool { return m.Version == Version && m.Type > Service }
+
 func (m *Message) UnmarshalCBOR(data []byte) error {
+	var discriminator struct {
+		Version netwire.RawMessage `cbor:"v"`
+		Type    netwire.RawMessage `cbor:"t"`
+	}
+	if err := netwire.Unmarshal(data, &discriminator); err != nil {
+		return err
+	}
+	var version int
+	var kind uint8
+	if netwire.Unmarshal(discriminator.Version, &version) == nil && version == Version &&
+		netwire.Unmarshal(discriminator.Type, &kind) == nil && kind > Service {
+		*m = Message{Version: version, Type: kind}
+		return nil
+	}
 	var head struct {
 		Op string `json:"op" cbor:"o"`
 	}
@@ -73,6 +91,9 @@ func (m *Message) UnmarshalCBOR(data []byte) error {
 }
 
 func (m Message) Validate() error {
+	if m.FutureType() {
+		return nil
+	}
 	if m.Op != "" && !m.Known() {
 		return nil
 	}
@@ -398,7 +419,7 @@ func (s *Session) receive(m Message, now time.Time, deferUpload bool) (*Message,
 	if err := m.Validate(); err != nil {
 		return nil, nil, err
 	}
-	if !m.Known() {
+	if m.FutureType() || !m.Known() {
 		return nil, nil, nil
 	}
 	if s.closed || m.Type != s.kind {
