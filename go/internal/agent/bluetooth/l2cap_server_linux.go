@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"sync"
 	"time"
 
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
@@ -26,6 +27,9 @@ const (
 type l2capStreamConn struct {
 	fd   int
 	rbuf []byte // bytes remaining from the last received SDU
+
+	readDeadline  l2capDeadline
+	writeDeadline l2capDeadline
 }
 
 func (c *l2capStreamConn) Read(b []byte) (int, error) {
@@ -35,7 +39,12 @@ func (c *l2capStreamConn) Read(b []byte) (int, error) {
 		return n, nil
 	}
 	msg := make([]byte, 65536)
-	n, err := retryL2CAPInterrupted(func() (int, error) { return unix.Read(c.fd, msg) })
+	n, err := retryL2CAPInterrupted(func() (int, error) {
+		if err := c.readDeadline.prepare(c.fd, unix.SO_RCVTIMEO); err != nil {
+			return 0, err
+		}
+		return unix.Read(c.fd, msg)
+	})
 	if err != nil {
 		if err == unix.EAGAIN || err == unix.EWOULDBLOCK {
 			return 0, &net.OpError{Op: "read", Net: "l2cap", Err: &l2capTimeoutError{}}
@@ -54,7 +63,12 @@ func (c *l2capStreamConn) Read(b []byte) (int, error) {
 }
 
 func (c *l2capStreamConn) Write(b []byte) (int, error) {
-	n, err := retryL2CAPInterrupted(func() (int, error) { return unix.Write(c.fd, b) })
+	n, err := retryL2CAPInterrupted(func() (int, error) {
+		if err := c.writeDeadline.prepare(c.fd, unix.SO_SNDTIMEO); err != nil {
+			return 0, err
+		}
+		return unix.Write(c.fd, b)
+	})
 	if err != nil {
 		return n, &net.OpError{Op: "write", Net: "l2cap", Err: err}
 	}
@@ -87,13 +101,42 @@ func (c *l2capStreamConn) SetDeadline(t time.Time) error {
 }
 
 func (c *l2capStreamConn) SetReadDeadline(t time.Time) error {
-	tv := l2capTimeval(t)
-	return unix.SetsockoptTimeval(c.fd, unix.SOL_SOCKET, unix.SO_RCVTIMEO, &tv)
+	return c.readDeadline.set(c.fd, unix.SO_RCVTIMEO, t)
 }
 
 func (c *l2capStreamConn) SetWriteDeadline(t time.Time) error {
+	return c.writeDeadline.set(c.fd, unix.SO_SNDTIMEO, t)
+}
+
+// Socket timeouts are relative to each syscall. Retain the absolute deadline
+// so an EINTR retry waits only for the remaining time, not the full timeout.
+type l2capDeadline struct {
+	mu sync.Mutex
+	at time.Time
+}
+
+func (d *l2capDeadline) set(fd, option int, t time.Time) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
 	tv := l2capTimeval(t)
-	return unix.SetsockoptTimeval(c.fd, unix.SOL_SOCKET, unix.SO_SNDTIMEO, &tv)
+	if err := unix.SetsockoptTimeval(fd, unix.SOL_SOCKET, option, &tv); err != nil {
+		return err
+	}
+	d.at = t
+	return nil
+}
+
+func (d *l2capDeadline) prepare(fd, option int) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.at.IsZero() {
+		return nil
+	}
+	if !time.Now().Before(d.at) {
+		return &l2capTimeoutError{}
+	}
+	tv := l2capTimeval(d.at)
+	return unix.SetsockoptTimeval(fd, unix.SOL_SOCKET, option, &tv)
 }
 
 type l2capAddr string
