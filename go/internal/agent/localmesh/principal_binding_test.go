@@ -35,7 +35,7 @@ func principalBoundCredentials(t *testing.T, principal string, key crypto.Signer
 	if err != nil {
 		t.Fatal(err)
 	}
-	credentials, err := NewCredentials(string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})), ca.chainPEM, string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})))
+	credentials, err := newTestCredentials(string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})), ca.chainPEM, string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})))
 	if err != nil {
 		t.Fatal(err)
 	}
