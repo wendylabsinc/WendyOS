@@ -62,20 +62,31 @@ func DecodeManifest(body []byte) (Manifest, error) {
 	if err := manifestFieldTypes(route, map[string]byte{"prefix": 3, "routerId": 0, "seqno": 0}, "prefix", "routerId", "seqno"); err != nil {
 		return m, err
 	}
-	if raw, ok := fields[netwire.Key("appEndpoints")]; ok {
-		var endpoints []map[string]netwire.RawMessage
-		if err := netwire.Unmarshal(raw, &endpoints); err != nil {
-			return m, err
-		}
-		for _, endpoint := range endpoints {
-			if err := manifestFieldTypes(endpoint, map[string]byte{"port": 0, "transport": 3}, "port", "transport"); err != nil {
-				return m, err
-			}
-		}
-	}
-	if err := netwire.UnmarshalExtensibleArtifact(body, &m, MaxManifestBytes); err != nil {
+	endpoints, err := projectAppEndpoints(fields[netwire.Key("appEndpoints")])
+	if err != nil {
 		return m, err
 	}
+	services, err := projectManifestServices(fields["s"])
+	if err != nil {
+		return m, err
+	}
+	// Decode only the supported optional entries into today's typed view.
+	// This local map is not the signed body: all verification and forwarding
+	// continue using the caller's exact immutable body and envelope bytes.
+	optionalDeviceEntries := manifestHasEntries(fields[netwire.Key("appEndpoints")]) || manifestHasEntries(fields["s"])
+	delete(fields, netwire.Key("appEndpoints"))
+	delete(fields, "s")
+	projection, err := netwire.Marshal(fields)
+	if err != nil {
+		return m, err
+	}
+	if err := netwire.UnmarshalExtensibleArtifact(projection, &m, MaxManifestBytes); err != nil {
+		return m, err
+	}
+	if m.Owner != nil && optionalDeviceEntries {
+		return m, errors.New("operator origin does not advertise device capabilities")
+	}
+	m.AppEndpoints, m.Services = endpoints, services
 	if err := validateNativeAgentMetadata(m.Platform, m.Caps); err != nil {
 		return m, err
 	}
@@ -85,8 +96,8 @@ func DecodeManifest(body []byte) (Manifest, error) {
 	if err := validateManifestRequirements(m.Requires); err != nil {
 		return m, err
 	}
-	if m.AgentTransport != "" && m.AgentTransport != AgentMTLS {
-		return m, &UnsupportedManifestError{Version: m.Version, Transport: m.AgentTransport}
+	if len(m.AgentTransport) > 64 {
+		return m, errors.New("agent transport exceeds bound")
 	}
 	if err := validateAppEndpoints(m.AppEndpoints); err != nil {
 		return m, err
