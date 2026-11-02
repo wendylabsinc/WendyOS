@@ -61,7 +61,10 @@ func TestTCPConfigRequiresReciprocalConcretePeers(t *testing.T) {
 		{`{"leafListen":"0.0.0.0:43024","peers":[{"device":"` + peer.UUID().String() + `","address":"127.0.0.1:7002"}]}`, false},
 		{`{"leafListen":"0.0.0.0:43024","tls_listen":"missing-port"}`, false},
 		{`{"leafListen":"0.0.0.0:43024"} {}`, false},
-		{`{"tls_listen":"[::]:43024","ethernet":true}`, true},
+		{`{"leafListen":"0.0.0.0:43024"}`, false},
+		{`{"tls_listen":"[::]:43024","ethernet":true}`, false},
+		{`{"tls_listen":"[::]:43026","ethernet":true}`, true},
+		{`{"tls_listen":"127.0.0.1:43024","ethernet":true}`, true},
 		{`{"tls_listen":"0.0.0.0:0"}`, false},
 		{`{"tls_listen":"missing-port"}`, false},
 		{`{"listen":"0.0.0.0:43024","tls_listen":"0.0.0.0:43024"}`, false},
@@ -157,6 +160,22 @@ func TestNormalNativeTLSListenerConfigAlongsideManualTCP(t *testing.T) {
 		encoded, err := json.Marshal(cfg)
 		if err != nil || !bytes.Contains(encoded, []byte(`"tls_listen":"0.0.0.0:43024"`)) {
 			t.Fatalf("native TLS configuration spelling: %s %v", encoded, err)
+		}
+	}
+}
+
+func TestTCPConfigRejectsWildcardNativeTLSLANCollision(t *testing.T) {
+	self := testDevice(t, testPrincipal(testTenantUUID, testDeviceAID))
+	path := filepath.Join(t.TempDir(), "local-mesh.json")
+	for _, address := range []string{":43024", "0.0.0.0:43024", "[::]:43024", ":043024"} {
+		for _, carrier := range []string{"ethernet", "infrastructureWifi"} {
+			body, _ := json.Marshal(map[string]any{"tls_listen": address, carrier: true})
+			if err := os.WriteFile(path, body, 0600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := LoadTCPConfig(path, self); err == nil {
+				t.Errorf("accepted %s plus %s: wildcard listener prevents automatic LAN TLS/QUIC startup", address, carrier)
+			}
 		}
 	}
 }

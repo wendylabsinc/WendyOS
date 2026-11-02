@@ -11,14 +11,14 @@ Application streams can also retain durable records outside episodes.
 
 ## Choose the available interface
 
-In native Wendy chat, use `device_campaign_sources` and `device_campaign_list`
-when offered. `create_person_detection_campaign` proposes a person-detection
-rule with local clips and automatically prompts for its Cloud notification grant
-when requested. For existing campaigns, `enable_campaign_notifications` requests
-approval across devices using that campaign in the organization. Read the result;
-do not redirect to Cloud Apps or repeat a denied prompt.
-Never retry a denied call through another interface. These are app-specific
-tools, not general MCP tools. Use the Campaigns editor or CLI for other models.
+In native Wendy chat, inspect sources and existing campaigns with
+`device_campaign_sources` and `device_campaign_list` when available.
+`create_person_detection_campaign` proposes local person-detection clips and,
+when requested, a separate Cloud notification approval. For an existing campaign,
+`enable_campaign_notifications` requests an organization-wide grant for that
+campaign. Read the result. A denial ends the attempt, including through other
+interfaces. These tools belong to native chat; use the Campaigns editor or CLI
+for other models or when the tools are unavailable.
 
 "Let me know when someone walks into frame" maps to managed detection and
 notifications, without a depth camera or custom app. Check source health,

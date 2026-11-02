@@ -89,7 +89,11 @@ func (s *Session) AgentConnectionForPeer(ctx context.Context, peer meshid.Device
 	if s.closed || !s.started {
 		return nil, io.ErrClosedPipe
 	}
-	if !s.hasDirectPeer(peer) {
+	// Keep carrier removal serialized with client publication, so a client
+	// cannot be inserted just after its last carrier has retired.
+	s.linkMu.RLock()
+	defer s.linkMu.RUnlock()
+	if !s.hasDirectPeerLocked(peer) {
 		return nil, io.ErrClosedPipe
 	}
 	s.agentMu.Lock()

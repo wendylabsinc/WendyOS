@@ -344,7 +344,8 @@ wendy --device <gateway> --json device sensors status
 checks organization access, and lets the gateway verify the source certificate.
 The returned pairing can have `connected: false`; saving a pairing is not proof
 of arriving sensor data. These commands do not enroll a blank board or update
-its firmware. Initial Wendy Lite enrollment remains USB-only.
+its firmware. CLI enrollment of a new Wendy Lite board requires USB; the native
+macOS and iOS apps also offer Bluetooth setup on supported firmware.
 
 For a USB-connected Wendy Lite board, use `wendy discover --json --type external
 --timeout 5s`; the `usb` discovery filter alone scans WendyOS USB connections.

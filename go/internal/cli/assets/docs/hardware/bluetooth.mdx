@@ -56,9 +56,9 @@ confirm a working link. Omitted options preserve existing settings. To turn
 Bluetooth networking off, use the same configure command with `--ble=false`.
 Changing saved settings can interrupt active Wendy Net connections.
 
-WendyOS can use BLE and Wi-Fi Aware together when the hardware supports them.
+WendyOS can use Bluetooth and Wi-Fi Aware together when the hardware supports them.
 Add `--nan=true` to enable Wi-Fi Aware. Lite profiles have different carrier
-limits: C5 with PSRAM can use BLE and Wi-Fi, while the constrained C6 profile
+limits: C5 with PSRAM can use Bluetooth and Wi-Fi, while the constrained C6 profile
 selects one carrier and does not support NAN. Follow the
 [Lite configuration and automatic discovery guide](/docs/advanced/development/local-mesh-radio#configure-a-lite-device).
 
@@ -80,15 +80,15 @@ need the appropriate entitlement.
 
 ### Operator connections
 
-An operator-capable WendyOS node with primary operator trust anchors can also
-accept an authenticated CLI operator router over bluetooth. It reserves one
-separate operator admission slot, so that connection does not consume a
-device-neighbor admission slot. Both roles still share the physical adapter's
-bandwidth and hardware connection limits. Operator sessions authenticate the
-operator certificate separately from enrolled device certificates.
+Operator-capable WendyOS agents can accept authenticated CLI router connections
+over Bluetooth. The CLI also needs operator routing and discovery support;
+agent-side admission alone does not start a router on your computer. The agent
+must trust your organization's primary operator certificates.
 
-The admission support alone does not start a CLI router or enable automatic
-CLI discovery; those require the matching CLI broker and carrier integration.
+WendyOS reserves one separate slot for an operator connection, in addition to
+its device-neighbour slots. All connections share the adapter's bandwidth and
+hardware connection limits. Your computer authenticates with its operator
+certificate; it does not need to be enrolled as a device.
 
 ## Scan for Devices
 
