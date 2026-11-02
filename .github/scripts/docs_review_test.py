@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Offline documentation-review coverage, budget and workflow regressions."""
+import io
 import json
 import os
 import pathlib
@@ -185,6 +186,107 @@ class ReviewTests(unittest.TestCase):
             with self.assertRaisesRegex(review.ReviewError, 'not a regular'):
                 review.load_documents(pathlib.Path('.'), SHA, ['README.md'])
         self.assertEqual(git.call_count, 1)
+
+    def test_truncated_output_splits_original_utf8_source_and_preserves_late_blocker(self):
+        raw = diff('nested/source.go', 'let café = true; ' * 600)
+        finding = dict(severity='blocker', title='Late child blocker', path=DOC,
+                       overview='The changed behavior is missing.', details='Document it.')
+        partial = response(json.dumps({'summary': 'Discard me', 'findings': [dict(finding, title='Partial result')]}), 'max_tokens')
+        partial.usage = SimpleNamespace(input_tokens=1200, output_tokens=8000)
+        client = Mock()
+        client.messages.create.side_effect = [partial, response(), response(json.dumps({'summary': '', 'findings': [finding]}))]
+        with tempfile.TemporaryDirectory() as temporary:
+            manifest = pathlib.Path(temporary) / 'manifest.json'
+            result, _ = self.run_review(raw, client=client, manifest=manifest)
+            plan = json.loads(manifest.read_text())
+        self.assertEqual(result['findings'], [finding])
+        self.assertTrue(plan['review_complete'])
+        self.assertEqual(plan['attempts'][0]['stop_reason'], 'max_tokens')
+        self.assertEqual(plan['attempts'][0]['output_tokens'], 8000)
+        ranges = plan['completed_source_ranges']
+        self.assertEqual(len(ranges), 2)
+        self.assertEqual([item['source_range'] for item in plan['retry_preflights']], ranges)
+        self.assertTrue(all(item['within_budget'] and item['input_tokens'] == 100
+                            for item in plan['retry_preflights']))
+        self.assertEqual(ranges[0][0], 0)
+        self.assertEqual(ranges[0][1], ranges[1][0])
+        self.assertEqual(ranges[1][1], len(raw.encode()))
+        reconstructed = b''
+        for call, (start, end) in zip(client.messages.create.call_args_list[1:], ranges):
+            content = call.kwargs['messages'][0]['content']
+            rendered = content.split('```diff\n', 1)[1].split('\n```', 1)[0]
+            context, text = rendered.split('\n', 1)
+            metadata = json.loads(context.split(': ', 1)[1])
+            self.assertEqual([metadata['source_start'], metadata['source_end']], [start, end])
+            self.assertEqual(text.encode(), raw.encode()[start:end])
+            reconstructed += text.encode()
+        self.assertEqual(reconstructed, raw.encode())
+        calls = [call[0] for call in client.mock_calls if call[0] in {'messages.create', 'messages.count_tokens'}]
+        self.assertEqual(calls, ['messages.count_tokens', 'messages.count_tokens', 'messages.create',
+                                 'messages.count_tokens', 'messages.count_tokens', 'messages.create', 'messages.create'])
+
+    def test_retry_context_at_new_file_boundary_uses_that_file_header(self):
+        first = diff('first.go', 'x' * 1200)
+        second = diff('other.go', 'y' * 1200)
+        raw = first + second
+        parent = review.split_diff(raw, review.MAX_DIFF_BYTES)[0]
+        children = review._retry_children(raw, parent)
+        self.assertEqual(children[1].text, second)
+        for child, name in zip(children, ('first.go', 'other.go')):
+            metadata = json.loads(child.context.split(': ', 1)[1])
+            self.assertEqual(metadata['file_header'], f'diff --git a/{name} b/{name}')
+        self.assertEqual(''.join(child.text for child in children), raw)
+
+    def test_incomplete_retry_child_never_completes_manifest_or_returns_partial_review(self):
+        client = Mock()
+        client.messages.create.side_effect = [response(reason='max_tokens'), response(), response(reason='refusal')]
+        with tempfile.TemporaryDirectory() as temporary:
+            manifest = pathlib.Path(temporary) / 'manifest.json'
+            with self.assertRaisesRegex(review.ReviewError, 'refusal'):
+                self.run_review(diff(line='x' * 8000), client=client, manifest=manifest)
+            plan = json.loads(manifest.read_text())
+        self.assertFalse(plan['review_complete'])
+        self.assertEqual(len(plan['completed_source_ranges']), 1)
+        self.assertEqual(client.messages.create.call_count, 3)
+
+    def test_only_token_truncation_can_retry_and_diagnostics_exclude_response_text(self):
+        for reason in ('refusal', 'stop_sequence', 'tool_use', 'private-provider-reason'):
+            client = Mock()
+            message = response('PRIVATE_RESPONSE_CONTENT', reason)
+            message.usage = SimpleNamespace(input_tokens='PRIVATE_COUNTER', output_tokens=-1)
+            client.messages.create.side_effect = [message]
+            output = io.StringIO()
+            with self.subTest(reason=reason), patch('sys.stdout', output), self.assertRaises(review.ReviewError) as raised:
+                self.run_review(diff(line='x' * 8000), client=client)
+            self.assertEqual(client.messages.create.call_count, 1)
+            diagnostic = str(raised.exception) + output.getvalue()
+            self.assertNotIn('PRIVATE_RESPONSE_CONTENT', diagnostic)
+            self.assertNotIn('PRIVATE_COUNTER', diagnostic)
+            self.assertNotIn('private-provider-reason', diagnostic)
+            self.assertIn('stop_reason', diagnostic)
+
+    def test_output_splitting_has_two_level_seven_call_bound(self):
+        client = Mock()
+        client.messages.create.side_effect = [response(reason='max_tokens'), response(reason='max_tokens'),
+            response(), response(), response(reason='max_tokens'), response(), response()]
+        result, _ = self.run_review(diff(line='x' * 16000), client=client)
+        self.assertEqual(client.messages.create.call_count, 7)
+        self.assertEqual(result['findings'], [])
+        for raw, expected in ((diff(), 1), (diff(line='x' * 16000), 3)):
+            client = Mock()
+            client.messages.create.side_effect = lambda **kw: response(reason='max_tokens')
+            with self.subTest(size=len(raw)), self.assertRaisesRegex(review.ReviewError, 'splitting exhausted'):
+                self.run_review(raw, client=client)
+            self.assertEqual(client.messages.create.call_count, expected)
+
+    def test_retry_children_are_preflighted_before_any_child_model_call(self):
+        client = Mock()
+        client.messages.create.side_effect = [response(reason='max_tokens')]
+        client.messages.count_tokens.side_effect = [SimpleNamespace(input_tokens=100),
+            SimpleNamespace(input_tokens=100), SimpleNamespace(input_tokens=review.MAX_INPUT_TOKENS + 1)]
+        with self.assertRaisesRegex(review.ReviewError, 'retry fragment exceeds token budget'):
+            self.run_review(diff(line='x' * 8000), client=client)
+        self.assertEqual(client.messages.create.call_count, 1)
 
     def test_real_workflow_still_enforces_late_blockers(self):
         workflow = pathlib.Path(__file__).parents[1] / 'workflows/docs-review.yml'
