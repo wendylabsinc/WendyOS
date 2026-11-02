@@ -41,6 +41,7 @@ type OperatorSpec struct {
 	Version       int    `json:"version"`
 	Automatic     bool   `json:"automatic,omitempty"`
 	Enabled       bool   `json:"enabled,omitempty"`
+	Disconnected  bool   `json:"disconnected,omitempty"`
 	Principal     string `json:"principal"`
 	RouterAddress string `json:"routerAddress"`
 	Transport     string `json:"transport,omitempty"`
@@ -229,23 +230,9 @@ func writeOperatorRecipe(ctx context.Context, spec Spec, path string, recipe Ope
 		return err
 	}
 	socket, _ := spec.paths(dir)
-	wait, cancel := context.WithTimeout(ctx, 30*time.Second)
-	defer cancel()
-	var startup *os.File
-	for startup == nil {
-		file, locked, err := acquireIdentityLock(socket + ".startup")
-		if err != nil {
-			return err
-		}
-		if locked {
-			startup = file
-			break
-		}
-		select {
-		case <-wait.Done():
-			return wait.Err()
-		case <-time.After(100 * time.Millisecond):
-		}
+	startup, err := lockOperatorStartup(ctx, socket)
+	if err != nil {
+		return err
 	}
 	defer func() { releaseLock(startup); startup.Close() }()
 	if existing, err := readOperatorRecipe(path); err == nil && sameOperatorRecipe(existing, recipe) {
@@ -273,6 +260,28 @@ func writeOperatorRecipe(ctx context.Context, spec Spec, path string, recipe Ope
 	}
 	return writePrivateFile(path, data)
 }
+
+func lockOperatorStartup(ctx context.Context, socket string) (*os.File, error) {
+	wait, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	for {
+		file, locked, err := acquireIdentityLock(socket + ".startup")
+		if err != nil {
+			return nil, err
+		}
+		if locked {
+			return file, nil
+		}
+		select {
+		case <-wait.Done():
+			return nil, wait.Err()
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+}
+
+var errOperatorDisconnected = errors.New("operator mesh is disconnected; run 'wendy device wendy-net connect' to rejoin")
+
 func operatorRecipeCurrent(spec Spec) error {
 	directory, err := configDir()
 	if err != nil {
@@ -281,6 +290,9 @@ func operatorRecipeCurrent(spec Spec) error {
 	current, err := readOperatorRecipe(operatorRecipePath(directory, spec.Operator.Principal))
 	if err != nil {
 		return err
+	}
+	if current.Disconnected {
+		return errOperatorDisconnected
 	}
 	if !sameOperatorRecipe(current, *spec.Operator) {
 		return errors.New("configured operator first hop changed; resolve the mesh selector again")
@@ -442,9 +454,9 @@ func connectOrStartOperator(ctx context.Context, spec Spec, certificate *config.
 var errOperatorCredentialsChanged = errors.New("selected operator credential changed")
 var errOperatorProtocolChanged = errors.New("operator broker IPC protocol changed")
 
-// DisconnectOperator withdraws only the current operator's retained context.
-// The exact-owned broker observes unpublication and cancels its attachment;
-// waiting for its lock joins shutdown before a replacement can be prepared.
+// DisconnectOperator withdraws the current operator's retained context and
+// records that only an explicit connect may start it again. The non-secret
+// recipe and installation identity remain available without implicit rejoin.
 func DisconnectOperator(ctx context.Context) error {
 	certificate, operator, err := configuredOperator()
 	if err != nil {
@@ -454,12 +466,42 @@ func DisconnectOperator(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	recipe, err := readOperatorRecipe(operatorRecipePath(directory, operator.Principal()))
+	if !configDirOwnershipSafe() {
+		return errors.New("operator profile is not owned by current user")
+	}
+	brokerDirectory, err := brokerDir()
 	if err != nil {
+		return err
+	}
+	if err := ensurePrivateDir(brokerDirectory); err != nil {
+		return err
+	}
+	socket, _ := paths(brokerDirectory, operatorKey(operator.Principal()), certs.WendyIdentity{})
+	startup, err := lockOperatorStartup(ctx, socket)
+	if err != nil {
+		return err
+	}
+	defer func() { releaseLock(startup); _ = startup.Close() }()
+	path := operatorRecipePath(directory, operator.Principal())
+	recipe, err := readOperatorRecipe(path)
+	if os.IsNotExist(err) {
+		recipe = OperatorSpec{Version: 1, Principal: operator.Principal(), Automatic: true}
+	} else if err != nil {
 		return err
 	}
 	spec, err := operatorSpec(recipe, certificate)
 	if err != nil {
+		return err
+	}
+	recipe.Disconnected = true
+	if err := ensurePrivateDir(filepath.Dir(path)); err != nil {
+		return err
+	}
+	data, err := json.Marshal(recipe)
+	if err != nil {
+		return err
+	}
+	if err := writePrivateFile(path, data); err != nil {
 		return err
 	}
 	return disconnectOperatorSpec(ctx, spec)
