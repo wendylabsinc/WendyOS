@@ -17,12 +17,18 @@ source "$LOCAL_PROTO_DIR/shared-grpc-api-contracts.sh"
 
 # Reject maintained copies before export or any change to committed outputs.
 PATH_ARGS=()
-for proto in "${SHARED_GRPC_API_CONTRACTS_AGENT_PROTOS[@]}"; do
+for proto in "${SHARED_GRPC_API_CONTRACTS_AGENT_PROTOS[@]}" "${SHARED_GRPC_API_CONTRACTS_CLOUD_V1_PROTOS[@]}"; do
   if [ -e "$LOCAL_PROTO_DIR/$proto" ] || [ -L "$LOCAL_PROTO_DIR/$proto" ]; then
     echo "error: remove Proto/$proto; it is generated from service-protos" >&2
     exit 1
   fi
   PATH_ARGS+=(--path "$proto")
+done
+for proto in "${SHARED_GRPC_API_CONTRACTS_CLOUD_V1_PROTOS[@]}"; do
+  if [ -e "$LOCAL_PROTO_DIR/cloud/$proto" ] || [ -L "$LOCAL_PROTO_DIR/cloud/$proto" ]; then
+    echo "error: remove Proto/cloud/$proto; it is generated from service-protos" >&2
+    exit 1
+  fi
 done
 if [ "$(buf --version)" != "1.75.0" ] || [ "$(protoc --version)" != "libprotoc 34.0" ]; then
   echo "error: install buf 1.75.0 and protoc 34.0 (same versions as Go generation)" >&2
@@ -34,11 +40,14 @@ buf export \
   "https://github.com/wendylabsinc/service-protos.git#ref=$SHARED_GRPC_API_CONTRACTS_REF" \
   "${PATH_ARGS[@]}" --output "$TEMP_DIR/shared"
 
-# Keep canonical proto names, local imports and module layout in temporary staging.
+# Keep existing proto names, local imports and module layout in temporary staging.
 PROTO_DIR="$TEMP_DIR/Proto"
 mkdir -p "$PROTO_DIR"
 cp -R "$LOCAL_PROTO_DIR/." "$PROTO_DIR/"
 cp -R "$TEMP_DIR/shared/." "$PROTO_DIR/"
+for proto in "${SHARED_GRPC_API_CONTRACTS_CLOUD_V1_PROTOS[@]}"; do
+  mv "$PROTO_DIR/$proto" "$PROTO_DIR/cloud/$proto"
+done
 OUT_DIR="$TEMP_DIR/generated"
 mkdir -p "$OUT_DIR/WendyAgentGRPC"
 SHARED_SWIFT_PROTOS=()
@@ -62,17 +71,28 @@ publicize_generated_imports() {
   '
 }
 
-# Embedded Swift uses only the two migrated v1 services. Do not adopt v2 APIs.
+# Check the migrated Agent v1 services and Cloud v1 APIs in their existing modules.
 if [ -n "${1:-}" ]; then
   generate_grpc --access-level public --output-path "$OUT_DIR/WendyAgentGRPC" \
     --import-path "$PROTO_DIR" -- "${SHARED_SWIFT_PROTOS[@]}"
-  publicize_generated_imports "$OUT_DIR/WendyAgentGRPC"
-  for input in "${SHARED_SWIFT_PROTOS[@]}"; do
+  CLOUD_V1_SHARED_INPUTS=()
+  for proto in "${SHARED_GRPC_API_CONTRACTS_CLOUD_V1_PROTOS[@]}"; do
+    CLOUD_V1_SHARED_INPUTS+=("$PROTO_DIR/cloud/$proto")
+  done
+  mkdir -p "$OUT_DIR/WendyCloudGRPC"
+  generate_grpc --access-level public --output-path "$OUT_DIR/WendyCloudGRPC" \
+    --import-path "$PROTO_DIR" -- "${CLOUD_V1_SHARED_INPUTS[@]}"
+  publicize_generated_imports "$OUT_DIR/WendyAgentGRPC" "$OUT_DIR/WendyCloudGRPC"
+  for input in "${SHARED_SWIFT_PROTOS[@]}" "${CLOUD_V1_SHARED_INPUTS[@]}"; do
     proto="${input#"$PROTO_DIR/"}"
+    case "$proto" in
+      cloud/*) module="WendyCloudGRPC" ;;
+      *) module="WendyAgentGRPC" ;;
+    esac
     for suffix in pb.swift grpc.swift; do
       file="${proto%.proto}.$suffix"
-      committed="Sources/WendyAgentGRPC/Proto/$file"
-      generated="$OUT_DIR/WendyAgentGRPC/$file"
+      committed="Sources/$module/Proto/$file"
+      generated="$OUT_DIR/$module/$file"
       if [ "$1" = --check-shared-grpc-api-contracts ]; then
         diff -u "$committed" "$generated"
       else
