@@ -35,7 +35,7 @@ func StartBLESetup(ctx context.Context, logger *zap.Logger, d *SetupDispatcher) 
 		logger.Warn("BLE setup listener unavailable", zap.Error(err))
 		return
 	}
-	if err = startServiceAdvertising(setupCtx, logger, SetupServiceUUID, dbus.ObjectPath("/org/wendy/setupAdvertisement")); err != nil {
+	if err = startServiceAdvertising(setupCtx, logger, "setup", SetupServiceUUID, dbus.ObjectPath("/org/wendy/setupAdvertisement")); err != nil {
 		unix.Close(fd)
 		cancel()
 		logger.Warn("BLE setup advertisement unavailable", zap.Error(err))
