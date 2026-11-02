@@ -91,7 +91,7 @@ func largeChainCredentials(t *testing.T, padding int) (*Credentials, *Credential
 		if err != nil {
 			t.Fatal(err)
 		}
-		credentials, err := NewCredentials(leaf.pem, chain, string(pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: der})))
+		credentials, err := newTestCredentials(leaf.pem, chain, string(pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: der})))
 		if err != nil {
 			t.Fatal(err)
 		}
