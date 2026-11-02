@@ -61,16 +61,16 @@ type Client struct {
 }
 
 type pooledSession struct {
-	peer    meshid.Device
-	expires time.Time
-	address netip.AddrPort
-	ready   chan struct{}
-	conn    *quic.Conn
-	err     error
-	born    time.Time
-	used    time.Time
-	active  int
-	retired bool
+	peer     meshid.Device
+	lifetime *sessionLifetime
+	address  netip.AddrPort
+	ready    chan struct{}
+	conn     *quic.Conn
+	err      error
+	born     time.Time
+	used     time.Time
+	active   int
+	retired  bool
 }
 
 func NewClient(credentials *localmesh.Credentials, managers ...*udpmessage.Manager) (*Client, error) {
@@ -385,8 +385,13 @@ func (c *Client) acquire(ctx context.Context, peer meshid.Device, address netip.
 				return nil, false, ctx.Err()
 			}
 		}
+		credentialLive := false
+		if entry != nil && entry.lifetime != nil {
+			_, err := entry.lifetime.current()
+			credentialLive = err == nil
+		}
 		if entry != nil && entry.address == address && entry.conn != nil && entry.conn.Context().Err() == nil &&
-			now.Before(entry.expires) && now.Sub(entry.born) < clientAgeLimit && now.Sub(entry.used) < clientIdleLimit {
+			credentialLive && now.Sub(entry.born) < clientAgeLimit && now.Sub(entry.used) < clientIdleLimit {
 			entry.active++
 			entry.used = now
 			c.mu.Unlock()
@@ -396,7 +401,7 @@ func (c *Client) acquire(ctx context.Context, peer meshid.Device, address netip.
 		if entry != nil {
 			delete(c.peers, peer)
 			entry.retired = true
-			if entry.active == 0 {
+			if entry.active == 0 || !credentialLive {
 				oldConn = entry.conn
 			}
 		}
@@ -413,7 +418,7 @@ func (c *Client) acquire(ctx context.Context, peer meshid.Device, address netip.
 			conn, err = c.dial(ctx, address, cfg, quicConfig())
 		}
 		if err == nil {
-			newEntry.expires, err = limitSessionLifetime(c.credentials, conn)
+			newEntry.lifetime, err = limitSessionLifetime(c.credentials, conn)
 		}
 		c.mu.Lock()
 		newEntry.conn, newEntry.err = conn, err

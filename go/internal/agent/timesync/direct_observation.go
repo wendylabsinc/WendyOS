@@ -1,11 +1,13 @@
 package timesync
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
 	"time"
 
+	"github.com/wendylabsinc/wendy/go/internal/shared/asyncdiag"
 	"go.uber.org/zap"
 )
 
@@ -89,7 +91,7 @@ func (m *Manager) applyDirect(c Consensus) DirectSyncObservation {
 			o.VerifiedEarliest, o.VerifiedLatest = lower, upper
 			o.VerifiedLowerBootNanos, o.VerifiedUpperBootNanos = o.BootBeforeApplyNanos, o.BootBeforeApplyNanos
 			if m.logger != nil {
-				m.logger.Info("timesync: direct Roughtime quorum ready", directObservationFields(o)...)
+				asyncdiag.Log(m.logger, zap.InfoLevel, "timesync: direct Roughtime quorum ready", directObservationFields(o)...)
 			}
 			o.ApplyAttempted = true
 			o.ApplyError = m.applyClock(o.Target)
@@ -139,9 +141,9 @@ func (m *Manager) applyDirect(c Consensus) DirectSyncObservation {
 		}
 		fields = append(fields, zap.String("outcome", outcome), zap.Bool("utc_within_verified_interval", o.UTCWithinVerifiedInterval), zap.NamedError("apply_error", o.ApplyError), zap.NamedError("observation_error", o.ObservationError))
 		if outcome == "failed" || outcome == "unconfirmed" {
-			m.logger.Warn("timesync: direct Roughtime apply complete", fields...)
+			asyncdiag.Log(m.logger, zap.WarnLevel, "timesync: direct Roughtime apply complete", fields...)
 		} else {
-			m.logger.Info("timesync: direct Roughtime apply complete", fields...)
+			asyncdiag.Log(m.logger, zap.InfoLevel, "timesync: direct Roughtime apply complete", fields...)
 		}
 	}
 	m.mu.RLock()
@@ -154,7 +156,8 @@ func (m *Manager) applyDirect(c Consensus) DirectSyncObservation {
 }
 
 func directObservationFields(o DirectSyncObservation) []zap.Field {
-	fields := []zap.Field{zap.String("source", o.Source), zap.Int("quorum", o.Quorum), zap.String("confidence", o.Confidence), zap.Any("paths", o.Paths), zap.Time("utc_before_apply", o.UTCBeforeApply), zap.Int64("boottime_before_apply_nanos", o.BootBeforeApplyNanos), zap.Time("target", o.Target), zap.Time("verified_earliest", o.VerifiedEarliest), zap.Time("verified_latest", o.VerifiedLatest), zap.Int64("verified_lower_boottime_nanos", o.VerifiedLowerBootNanos), zap.Int64("verified_upper_boottime_nanos", o.VerifiedUpperBootNanos), zap.Bool("apply_attempted", o.ApplyAttempted)}
+	paths, _ := json.Marshal(o.Paths)
+	fields := []zap.Field{zap.String("source", o.Source), zap.Int("quorum", o.Quorum), zap.String("confidence", o.Confidence), zap.Reflect("paths", json.RawMessage(paths)), zap.Time("utc_before_apply", o.UTCBeforeApply), zap.Int64("boottime_before_apply_nanos", o.BootBeforeApplyNanos), zap.Time("target", o.Target), zap.Time("verified_earliest", o.VerifiedEarliest), zap.Time("verified_latest", o.VerifiedLatest), zap.Int64("verified_lower_boottime_nanos", o.VerifiedLowerBootNanos), zap.Int64("verified_upper_boottime_nanos", o.VerifiedUpperBootNanos), zap.Bool("apply_attempted", o.ApplyAttempted)}
 	if !o.UTCAfterApply.IsZero() {
 		fields = append(fields, zap.Time("utc_after_apply", o.UTCAfterApply), zap.Int64("boottime_after_apply_start_nanos", o.BootAfterApplyStartNanos), zap.Int64("boottime_after_apply_nanos", o.BootAfterApplyNanos))
 	}
