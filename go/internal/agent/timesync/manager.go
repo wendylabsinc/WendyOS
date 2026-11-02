@@ -16,6 +16,7 @@ type Manager struct {
 	logger     *zap.Logger
 	configPath string
 	mu         sync.RWMutex
+	clockMu    sync.Mutex
 	latest     *Consensus
 
 	// Injection points for tests of time-sync loops. Nil means use the real
@@ -96,7 +97,15 @@ func (m *Manager) ApplyFloor() {
 // Apply advances the clock to t if t is after the current time.
 // Safe to call from any goroutine.
 func (m *Manager) Apply(t time.Time) {
-	if err := AdvanceTo(t, m.logger); err != nil && m.logger != nil {
+	if err := m.advance(t); err != nil && m.logger != nil {
 		m.logger.Warn("timesync: apply failed", zap.Error(err))
 	}
+}
+
+// Serialize the agent's independent verified clock sources so their
+// advance-only checks cannot race one another into a backward step.
+func (m *Manager) advance(t time.Time) error {
+	m.clockMu.Lock()
+	defer m.clockMu.Unlock()
+	return AdvanceTo(t, m.logger)
 }

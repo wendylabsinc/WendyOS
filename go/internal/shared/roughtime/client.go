@@ -37,6 +37,11 @@ type Result struct {
 	RawResponse []byte // raw server bytes; used for multicast relay
 }
 
+// RelayQuery carries a receiver-generated challenge to one pinned authority.
+// The receiver still verifies the signed response; the relay supplies no time
+// or trust anchors of its own.
+type RelayQuery func(context.Context, uint8, []byte) ([]byte, error)
+
 // Query queries all servers concurrently and returns the first valid result.
 // The context deadline applies to each individual UDP exchange.
 func Query(ctx context.Context, servers []Server) (Result, error) {
@@ -86,27 +91,50 @@ func QueryServerWithNonce(ctx context.Context, srv Server, nonce []byte) (Result
 		return Result{}, fmt.Errorf("Roughtime nonce must be 32 bytes")
 	}
 	req := encodeFramedRequest(nonce, srv.PublicKey)
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, 3*time.Second)
+		defer cancel()
+	}
 
-	conn, err := net.Dial("udp", srv.Address)
+	conn, err := (&net.Dialer{}).DialContext(ctx, "udp", srv.Address)
 	if err != nil {
+		if ctx.Err() != nil {
+			err = ctx.Err()
+		}
 		return Result{}, fmt.Errorf("dial %s: %w", srv.Address, err)
 	}
 	defer conn.Close()
+	// A peer can leave before its overall deadline. Close wakes blocked UDP
+	// reads/writes immediately and releases the relay's bounded worker slot.
+	stop := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	defer stop()
 
-	deadline, ok := ctx.Deadline()
-	if !ok {
-		deadline = time.Now().Add(3 * time.Second)
+	deadline, _ := ctx.Deadline()
+	if err := conn.SetDeadline(deadline); err != nil {
+		if ctx.Err() != nil {
+			err = ctx.Err()
+		}
+		return Result{}, fmt.Errorf("deadline: %w", err)
 	}
-	_ = conn.SetDeadline(deadline)
 
 	if _, err := conn.Write(req); err != nil {
+		if ctx.Err() != nil {
+			err = ctx.Err()
+		}
 		return Result{}, fmt.Errorf("send: %w", err)
 	}
 
 	raw := make([]byte, udpBufSize)
 	n, err := conn.Read(raw)
 	if err != nil {
+		if ctx.Err() != nil {
+			err = ctx.Err()
+		}
 		return Result{}, fmt.Errorf("recv from %s: %w", srv.Address, err)
+	}
+	if err := ctx.Err(); err != nil {
+		return Result{}, err
 	}
 	raw = raw[:n]
 

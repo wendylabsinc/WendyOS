@@ -13,6 +13,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"github.com/wendylabsinc/wendy/go/internal/agent/netwire"
 	"sort"
 	"sync"
@@ -71,6 +72,11 @@ type SignedManifest struct {
 var ErrExpiredManifest = errors.New("expired wendy net manifest")
 var ErrStaleManifest = errors.New("stale wendy net manifest")
 
+// ErrManifestClockSkew identifies a signed lease that is too far ahead of the
+// local clock. It does not permit admission or make the advertised time trusted.
+// A receiver must obtain authenticated time before retrying ordinary admission.
+var ErrManifestClockSkew = errors.New("wendy net manifest is ahead of local clock")
+
 // ErrInvalidManifestSignature distinguishes a failed signature from malformed
 // or unauthorized manifests; certificate renewal may need an in-flight leaf.
 var ErrInvalidManifestSignature = errors.New("invalid manifest signature")
@@ -91,7 +97,7 @@ func (m Manifest) validate(now time.Time) error {
 		return ErrExpiredManifest
 	}
 	if m.Revision == 0 ||
-		issued.After(now.Add(5*time.Second)) || !expires.After(issued) || expires.Sub(issued) > MaxLease ||
+		!expires.After(issued) || expires.Sub(issued) > MaxLease ||
 		len(m.Name) > 255 || (!m.Withdraw && m.AgentPort == 0 && m.Owner == nil) {
 		return errors.New("invalid or expired wendy net manifest")
 	}
@@ -113,7 +119,13 @@ func (m Manifest) validate(now time.Time) error {
 	if err := validateServices(m.Services); err != nil {
 		return err
 	}
-	return validateAppEndpoints(m.AppEndpoints)
+	if err := validateAppEndpoints(m.AppEndpoints); err != nil {
+		return err
+	}
+	if issued.After(now.Add(5 * time.Second)) {
+		return fmt.Errorf("%w by %s; authenticated time synchronization required", ErrManifestClockSkew, issued.Sub(now))
+	}
+	return nil
 }
 
 func signingInput(key crypto.PublicKey, principal string, body []byte) ([]byte, crypto.SignerOpts) {
@@ -285,8 +297,9 @@ func (d *Directory) Accept(w SignedManifest, now time.Time) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	if err = m.validate(now); err != nil {
-		return false, err
+	validityErr := m.validate(now)
+	if validityErr != nil && !errors.Is(validityErr, ErrManifestClockSkew) {
+		return false, validityErr
 	}
 	device, err := m.Peer(identity.Tenant())
 	if err != nil || device.Principal() != w.Principal {
@@ -312,6 +325,32 @@ func (d *Directory) Accept(w SignedManifest, now time.Time) (bool, error) {
 	}
 	if !validManifestSignature(w, leaf) {
 		return false, ErrInvalidManifestSignature
+	}
+	// Only an otherwise authenticated lease may trigger clock recovery. Keep
+	// its normal time gate and avoid changing directory/replay state until a
+	// separately authenticated time source has corrected the local clock.
+	if validityErr != nil {
+		// A prior receipt still rules out a replay after a wall-clock rollback.
+		// Inspect it without advancing/pruning state or accepting this claim.
+		d.mu.Lock()
+		defer d.mu.Unlock()
+		if !time.UnixMilli(m.Expires).After(d.wallHighWater) {
+			return false, ErrExpiredManifest
+		}
+		hash := manifestHash(w.Body)
+		if receipt, ok := d.history[owner]; ok && receipt.Until.After(now) && m.Revision <= receipt.Revision {
+			if m.Revision == receipt.Revision && hash != receipt.Hash {
+				return false, errors.New("conflicting persisted manifest revision")
+			}
+			return false, ErrStaleManifest
+		}
+		if old, ok := d.entries[owner]; ok && m.Revision <= old.manifest.Revision {
+			if m.Revision == old.manifest.Revision && hash != old.hash {
+				return false, errors.New("conflicting manifest revision")
+			}
+			return false, ErrStaleManifest
+		}
+		return false, validityErr
 	}
 	binding := manifestSignatureBinding{leafHash: certificateHash(chain[0]), valid: true}
 	hash := manifestHash(w.Body)
