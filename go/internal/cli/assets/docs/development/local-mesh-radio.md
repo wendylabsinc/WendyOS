@@ -20,6 +20,54 @@ one separate slot, in addition to the device-neighbour slots. The node must trus
 your organization's primary operator certificates. All connections still share
 the adapter's bandwidth and hardware connection limits.
 
+## Application streams
+
+WendyOS agent clients can use `WendyMeshService.MeshDial` on an existing,
+authenticated same-tenant agent connection. Canonical enrolled-device and primary
+operator identities are admitted. The current running-app ingress registry
+still authorizes the requested port; a discovery record alone does not grant
+access.
+
+The first client `MeshDialMessage` carries a `MeshDialOpen` port request in its
+`open` field. The client waits for an empty `MeshDialData` ready frame before
+sending application data. The server sends this frame only after the authorized
+destination connection opens. Later client messages use the `data` field;
+`MeshDialData` carries payload bytes and directional half-close. The application stream
+owns one RPC stream; closing it leaves the shared agent connection available.
+Application bytes remain inside that agent TLS connection, without another TLS
+handshake around it.
+
+Each server allows eight concurrent application streams. The client adapters
+emit payload frames of at most 16 KiB. The client helper and its lifetime,
+deadline and backpressure contract are in `go/internal/shared/meshappstream`.
+
+## Topology service snapshots
+
+For the agent's `GetLocalMeshTopology` RPC, set the request field
+`include_services: true` to request public service descriptions from the same
+verified manifests as the device announcements. Ordinary device polling can
+leave this field unset to keep responses small.
+
+Each announcement's optional `services` list contains `LocalMeshService` rows:
+`mesh`, `app_id`, `service_id`, `type`, `instance`, `port` and `txt`. Each row
+inherits its announcement's device identity, revision and expiry. Service rows
+require an unexpired, non-withdrawn manifest and a matching authorized,
+non-unreachable route. Gateway capabilities without an application socket are
+omitted.
+
+Check `runtime_available`, `services_included` and `truncated` when interpreting
+the result. `services_included: true` confirms that the reporter handled the
+opt-in request. If it is false after requesting services, reporting was not
+handled or its snapshot was unavailable; do not treat that as an empty service
+catalogue. The response bounds service rows to 1024 and their serialized-size
+budget to 256 KiB. `truncated` can also indicate a limit in another topology
+component, so missing rows in a truncated response are an incomplete observation.
+
+Announcements also carry the public `agent_port`, `agent_transport`, `platform`
+and `caps` hints. Authenticate the destination independently before using an
+endpoint. The topology is one local snapshot: its hints and service rows do not
+prove end-to-end reachability or replace current application-port admission.
+
 ## Join and discover
 
 Sign in and enable a persistent background router:
