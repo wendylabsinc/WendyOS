@@ -14,6 +14,10 @@ func TestIssuerCompletionRetainsWireAndBounds(t *testing.T) {
 			wire[0] = []byte("different certificate")
 			return wire
 		},
+		"edits presentation in place": func(wire [][]byte, _ time.Time) [][]byte {
+			wire[0][0] ^= 1
+			return wire
+		},
 		"oversized bundle": func(wire [][]byte, _ time.Time) [][]byte {
 			return append(wire, make([][]byte, 16)...)
 		},
@@ -24,6 +28,9 @@ func TestIssuerCompletionRetainsWireAndBounds(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			if _, err := completePeerCertificates([]*x509.Certificate{leaf}, candidates, time.Now()); err == nil {
 				t.Fatal("invalid completion accepted")
+			}
+			if string(leaf.Raw) != "original TLS certificate" {
+				t.Fatal("completion modified the original TLS certificate")
 			}
 		})
 	}

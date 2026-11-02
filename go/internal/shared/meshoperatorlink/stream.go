@@ -47,7 +47,7 @@ func completePeerCertificates(chain []*x509.Certificate, candidates IssuerCandid
 	}
 	wire := make([][]byte, len(chain))
 	for i, certificate := range chain {
-		wire[i] = certificate.Raw
+		wire[i] = bytes.Clone(certificate.Raw)
 	}
 	complete := candidates(wire, now)
 	if len(complete) < len(wire) || len(complete) > 16 {
