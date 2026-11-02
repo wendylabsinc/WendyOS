@@ -308,6 +308,13 @@ func (n *Node) refresh() {
 	})
 	authorizations := authorizedOrigins(devices, n.Credentials.Device.Tenant())
 	markForwardingReady(links, routing, n.forwardRoutes, authorizations)
+	for i := range links {
+		if p := n.peers[links[i].ID]; p != nil && p.babelRetiring {
+			// Retirement is terminal for this incarnation, even while its owned
+			// transport closer is waiting to finish.
+			links[i].ForwardingReady = false
+		}
+	}
 	n.view.Store(&NodeSnapshot{Self: n.Credentials.Device, CapturedAt: now, Peers: len(n.peers), Links: links, Devices: devices, Routes: routing.Routes, ForwardingRoutes: append([]babel.Route{}, n.forwardRoutes...), RouteAuthorizations: authorizations})
 }
 
@@ -502,6 +509,10 @@ func (n *Node) handle(e nodeEvent) error {
 		return nil
 	}
 	if e.packet != nil {
+		if p.babelRetiring {
+			// Packets queued before cancellation cannot revive a closing link.
+			return nil
+		}
 		return n.step(babel.Receive{ID: e.id, Packet: e.packet})
 	}
 	if e.timestamp != nil {

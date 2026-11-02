@@ -3,6 +3,7 @@ package localmesh
 import (
 	"context"
 	"errors"
+	"reflect"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -164,6 +165,62 @@ func TestBabelRetirementPreservesInitialGraceAndProofGap(t *testing.T) {
 			t.Fatal("explicit unreachable IHU was treated as elapsed liveness")
 		}
 	})
+}
+
+func TestBabelRetirementCannotReviveFromLateTraffic(t *testing.T) {
+	n, runtime, _ := carrierSelectionNetwork(t, true)
+	for _, p := range runtime.peers {
+		p.retire = make(chan struct{})
+	}
+	refreshCarrierSelection(n, runtime)
+	p := runtime.peers[1]
+	for n.elapsed < 8*time.Second {
+		n.elapsed += 100 * time.Millisecond
+		for i := range n.nodes {
+			n.step(i, babel.Tick{})
+		}
+		deliverCarrierSelectionExcept(n, 1)
+		refreshCarrierSelection(n, runtime)
+	}
+	if !p.babelRetiring || !retirementSignalled(p) {
+		t.Fatal("fixture did not retire the previously confirmed LAN")
+	}
+	// A genuine later Hello/IHU exchange can revive the independent engine
+	// while the owned transport closer is still blocked. That incarnation must
+	// nevertheless never become eligible to retire the surviving BLE carrier.
+	n.advance(12 * time.Second)
+	refreshCarrierSelection(n, runtime)
+	if runtime.HasCheaperLink(p.device, 4096) {
+		t.Fatal("terminally retiring LAN regained forwarding readiness")
+	}
+	// Generate actual Babel traffic and pass it through the Node actor's queued
+	// packet path. Retirement rejects it before it can change engine state.
+	runtime.started = time.Now().Add(-n.elapsed)
+	var queued []byte
+	for queued == nil && n.elapsed < 14*time.Second {
+		n.elapsed += 100 * time.Millisecond
+		n.step(0, babel.Tick{})
+		for _, d := range n.nodes[0].io.sent {
+			if d.Link == p.id {
+				queued = append([]byte(nil), d.Payload...)
+				break
+			}
+		}
+		n.nodes[0].io.sent = nil
+	}
+	if queued == nil {
+		t.Fatal("fixture generated no late Babel packet")
+	}
+	before := runtime.routing.Snapshot()
+	if err := runtime.handle(nodeEvent{id: p.id, packet: queued}); err != nil {
+		t.Fatal(err)
+	}
+	if after := runtime.routing.Snapshot(); !reflect.DeepEqual(before, after) {
+		t.Fatal("queued Babel traffic changed a terminally retiring incarnation")
+	}
+	if !retirementSignalled(p) || !p.babelRetiring {
+		t.Fatal("late traffic reversed terminal retirement")
+	}
 }
 
 func TestPeerLifetimeOwnerHandlesCancellationAndJoins(t *testing.T) {
