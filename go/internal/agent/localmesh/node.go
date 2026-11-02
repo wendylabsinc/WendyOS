@@ -269,9 +269,9 @@ func (n *Node) Snapshot() NodeSnapshot {
 	return out
 }
 
-// HasCheaperLink lets an expensive carrier avoid duplicating a verified
-// direct neighbor already present over TCP or NAN. It reads the immutable
-// event-loop snapshot and does not block route processing.
+// HasCheaperLink lets an expensive carrier yield only to a cheaper authenticated
+// neighbour that is actually forwarding its authorized route. It reads the
+// immutable event-loop snapshot and does not block route processing.
 func (n *Node) HasCheaperLink(device meshid.Device, cost uint16) bool {
 	v := n.view.Load()
 	return v != nil && v.HasCheaperLink(device, cost)
@@ -283,6 +283,7 @@ func (n *Node) refresh() {
 		n.diagnostics.emit(now, n.Credentials.Device, n.peers, logCarrierDiagnostic)
 	}
 	devices := n.directory.Snapshot(now)
+	routing := n.routing.Snapshot()
 	links := make([]PeerLink, 0, len(n.peers))
 	for _, p := range n.peers {
 		link := PeerLink{ID: p.id, Device: p.device, Cost: p.cost, Transport: p.transport, assembler: &p.assembler}
@@ -302,7 +303,8 @@ func (n *Node) refresh() {
 		return meshid.Compare(links[i].Device, links[j].Device) < 0
 	})
 	authorizations := authorizedOrigins(devices, n.Credentials.Device.Tenant())
-	n.view.Store(&NodeSnapshot{Self: n.Credentials.Device, CapturedAt: now, Peers: len(n.peers), Links: links, Devices: devices, Routes: n.routing.Snapshot().Routes, ForwardingRoutes: append([]babel.Route{}, n.forwardRoutes...), RouteAuthorizations: authorizations})
+	markForwardingReady(links, routing, n.forwardRoutes, authorizations)
+	n.view.Store(&NodeSnapshot{Self: n.Credentials.Device, CapturedAt: now, Peers: len(n.peers), Links: links, Devices: devices, Routes: routing.Routes, ForwardingRoutes: append([]babel.Route{}, n.forwardRoutes...), RouteAuthorizations: authorizations})
 }
 
 func (n *Node) Run() error {
