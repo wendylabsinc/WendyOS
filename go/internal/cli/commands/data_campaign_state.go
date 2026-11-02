@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 
@@ -96,13 +97,33 @@ func writeCampaignDisarmed(out io.Writer, response *agentpbv2.DataCampaignDisarm
 		fmt.Fprintf(out, "Campaign %s is already disarmed (revision %s).\n", campaign.GetName(), shortRevision(campaign.GetRevision()))
 	} else {
 		fmt.Fprintf(out, "Campaign %s: %s (revision %s)\n", campaign.GetName(), campaign.GetState(), shortRevision(campaign.GetRevision()))
-		fmt.Fprintln(out, "Its triggers and inference are stopped and its camera pre-roll is released. The plan and its episodes are kept.")
+		if campaignInferenceStopping(campaign) {
+			// The agent stopped waiting for the worker; its warning says so.
+			fmt.Fprintln(out, "Its triggers are stopped and its camera pre-roll is released; its inference is still stopping. The plan and its episodes are kept.")
+		} else {
+			fmt.Fprintln(out, "Its triggers and inference are stopped and its camera pre-roll is released. The plan and its episodes are kept.")
+		}
 	}
 	for _, warning := range response.GetWarnings() {
 		fmt.Fprintf(out, "Warning: %s\n", warning)
 	}
 	_, err := fmt.Fprintf(out, "Arm it again with: wendy data campaign arm %s\n", campaign.GetName())
 	return err
+}
+
+// campaignInferenceStopping reports whether the agent returned the campaign
+// with its inference worker still exiting, which a disarm reports when the
+// worker outlived the agent's wait for it.
+func campaignInferenceStopping(campaign *agentpbv2.DataCampaign) bool {
+	var plan struct {
+		InferenceStatus *struct {
+			State string `json:"state"`
+		} `json:"inference_status"`
+	}
+	if json.Unmarshal(campaign.GetPlanJson(), &plan) != nil || plan.InferenceStatus == nil {
+		return false
+	}
+	return plan.InferenceStatus.State == "stopping"
 }
 
 func writeCampaignRemoved(out io.Writer, response *agentpbv2.DataCampaignRemoveResponse) error {

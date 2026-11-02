@@ -149,6 +149,11 @@ wendy data campaign remove incident-review --device <selector>
   the removed plan's upload policy. It refuses while the campaign is recording
   and names the episode; `--force` stops and seals that recording first. Do not
   pass `--force` unless the user accepts ending that recording early.
+- `disarm` and `remove` wait for the campaign's inference to stop, after any
+  episode that is being sealed. If inference is still stopping after 10
+  seconds, they succeed with a warning saying so. After a disarm, run
+  `inspect` again until `inference_status.state` is `disarmed`, not
+  `stopping`, before reporting that the camera is free.
 - These act on the connected device only, even when the plan names a `fleet`.
   To keep a fleet campaign off on one device, disarm it: a removed campaign
   returns, armed, if the plan is deployed again.

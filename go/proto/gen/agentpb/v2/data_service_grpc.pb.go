@@ -86,16 +86,22 @@ type DataServiceClient interface {
 	// disarmed campaign keeps it disarmed. Both are idempotent. NOT_FOUND if
 	// the campaign is not deployed.
 	CampaignArm(ctx context.Context, in *DataCampaignArmRequest, opts ...grpc.CallOption) (*DataCampaignArmResponse, error)
-	// CampaignDisarm returns once the campaign's inference has stopped (at most
-	// 10 s, then DEADLINE_EXCEEDED, with the campaign already disarmed). A
-	// recording in progress is not cut short: it finishes its after_trigger
+	// CampaignDisarm stores the disarmed state, releases the camera pre-roll,
+	// and then waits for the campaign's inference to stop. Storing the state
+	// first waits for the campaign's key lock, which an episode that is ending
+	// holds until it is sealed, its capture.drain included. The inference wait
+	// after that is at most 10 s. A worker still stopping then is reported in
+	// warnings and the call succeeds, because the campaign is already disarmed.
+	// A recording in progress is not cut short: it finishes its after_trigger
 	// window and is sealed normally.
 	CampaignDisarm(ctx context.Context, in *DataCampaignDisarmRequest, opts ...grpc.CallOption) (*DataCampaignDisarmResponse, error)
 	// CampaignRemove deletes a campaign's stored plan, so it is no longer
 	// listed, triggered or restored at boot. Every episode it recorded is kept.
 	// FAILED_PRECONDITION while the campaign is recording, unless force is set,
-	// which stops and seals that recording first. Returns once the campaign's
-	// inference has stopped, like CampaignDisarm.
+	// which stops and seals that recording first, its capture.drain included.
+	// It waits for the key lock and then for the campaign's inference as
+	// CampaignDisarm does, and reports a worker still stopping after 10 s the
+	// same way: in warnings, with the plan already deleted.
 	CampaignRemove(ctx context.Context, in *DataCampaignRemoveRequest, opts ...grpc.CallOption) (*DataCampaignRemoveResponse, error)
 }
 
@@ -342,16 +348,22 @@ type DataServiceServer interface {
 	// disarmed campaign keeps it disarmed. Both are idempotent. NOT_FOUND if
 	// the campaign is not deployed.
 	CampaignArm(context.Context, *DataCampaignArmRequest) (*DataCampaignArmResponse, error)
-	// CampaignDisarm returns once the campaign's inference has stopped (at most
-	// 10 s, then DEADLINE_EXCEEDED, with the campaign already disarmed). A
-	// recording in progress is not cut short: it finishes its after_trigger
+	// CampaignDisarm stores the disarmed state, releases the camera pre-roll,
+	// and then waits for the campaign's inference to stop. Storing the state
+	// first waits for the campaign's key lock, which an episode that is ending
+	// holds until it is sealed, its capture.drain included. The inference wait
+	// after that is at most 10 s. A worker still stopping then is reported in
+	// warnings and the call succeeds, because the campaign is already disarmed.
+	// A recording in progress is not cut short: it finishes its after_trigger
 	// window and is sealed normally.
 	CampaignDisarm(context.Context, *DataCampaignDisarmRequest) (*DataCampaignDisarmResponse, error)
 	// CampaignRemove deletes a campaign's stored plan, so it is no longer
 	// listed, triggered or restored at boot. Every episode it recorded is kept.
 	// FAILED_PRECONDITION while the campaign is recording, unless force is set,
-	// which stops and seals that recording first. Returns once the campaign's
-	// inference has stopped, like CampaignDisarm.
+	// which stops and seals that recording first, its capture.drain included.
+	// It waits for the key lock and then for the campaign's inference as
+	// CampaignDisarm does, and reports a worker still stopping after 10 s the
+	// same way: in warnings, with the plan already deleted.
 	CampaignRemove(context.Context, *DataCampaignRemoveRequest) (*DataCampaignRemoveResponse, error)
 	mustEmbedUnimplementedDataServiceServer()
 }

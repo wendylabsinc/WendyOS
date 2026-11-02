@@ -1598,8 +1598,9 @@ type DataCampaignDisarmResponse struct {
 	// The campaign's recording in progress, if it had one. Disarming does not
 	// cut it short.
 	Recording *DataEpisode `protobuf:"bytes,3,opt,name=recording,proto3" json:"recording,omitempty"`
-	// Notes for the operator about this call, such as the recording above or a
-	// fleet that may deploy the plan again. Not stored with the plan.
+	// Notes for the operator about this call, such as the recording above, an
+	// inference still stopping when the call returned, or a fleet that may
+	// deploy the plan again. Not stored with the plan.
 	Warnings      []string `protobuf:"bytes,4,rep,name=warnings,proto3" json:"warnings,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1726,8 +1727,9 @@ type DataCampaignRemoveResponse struct {
 	Fleet string `protobuf:"bytes,3,opt,name=fleet,proto3" json:"fleet,omitempty"`
 	// The recording force stopped and sealed before the removal, if any.
 	Sealed *DataEpisode `protobuf:"bytes,4,opt,name=sealed,proto3" json:"sealed,omitempty"`
-	// Notes for the operator about this call, such as a fleet that may deploy
-	// the plan again.
+	// Notes for the operator about this call, such as an inference still
+	// stopping when the call returned, or a fleet that may deploy the plan
+	// again.
 	Warnings      []string `protobuf:"bytes,5,rep,name=warnings,proto3" json:"warnings,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

@@ -221,3 +221,38 @@ func TestDataCampaignStateCommandsJSON(t *testing.T) {
 		t.Fatalf("remove --json: %v %q", err, out)
 	}
 }
+
+// An agent that stopped waiting for the inference worker answers with the
+// campaign's inference still stopping and a warning. The disarm summary must
+// not then say the inference is stopped.
+func TestDataCampaignStateOutputForAnInferenceStillStopping(t *testing.T) {
+	stillStopping := "campaign c920-yolo-live is disarmed, but its inference had not stopped after 10s. It is still stopping and can hold the camera until it has; `wendy data campaign inspect c920-yolo-live` reports inference_status.state stopping until then"
+	var out bytes.Buffer
+	err := writeCampaignDisarmed(&out, &agentpbv2.DataCampaignDisarmResponse{
+		Campaign: &agentpbv2.DataCampaign{Name: "c920-yolo-live", State: "disarmed", Revision: "1a2b3c4d5e6f7a8b9c0d", PlanJson: []byte(`{"inference_status": {"state": "stopping"}, "state": "disarmed"}`)},
+		Changed:  true,
+		Warnings: []string{stillStopping},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "Campaign c920-yolo-live: disarmed (revision 1a2b3c4d5e6f)\n" +
+		"Its triggers are stopped and its camera pre-roll is released; its inference is still stopping. The plan and its episodes are kept.\n" +
+		"Warning: " + stillStopping + "\n" +
+		"Arm it again with: wendy data campaign arm c920-yolo-live\n"
+	if out.String() != want {
+		t.Fatalf("disarm output with the inference still stopping:\n%s\nwant:\n%s", out.String(), want)
+	}
+
+	out.Reset()
+	stillStopping = "campaign c920-yolo-live is removed, but its inference had not stopped after 10s. It is still stopping and can hold the camera until it has"
+	if err := writeCampaignRemoved(&out, &agentpbv2.DataCampaignRemoveResponse{Name: "c920-yolo-live", Revision: "1a2b3c4d5e6f7a8b9c0d", Warnings: []string{stillStopping}}); err != nil {
+		t.Fatal(err)
+	}
+	want = "Removed campaign c920-yolo-live (revision 1a2b3c4d5e6f).\n" +
+		"Its episodes are kept; list them with: wendy data episodes\n" +
+		"Warning: " + stillStopping + "\n"
+	if out.String() != want {
+		t.Fatalf("remove output with the inference still stopping:\n%s\nwant:\n%s", out.String(), want)
+	}
+}

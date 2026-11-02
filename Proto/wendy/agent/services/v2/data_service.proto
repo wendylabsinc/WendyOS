@@ -46,16 +46,22 @@ service DataService {
   // disarmed campaign keeps it disarmed. Both are idempotent. NOT_FOUND if
   // the campaign is not deployed.
   rpc CampaignArm(DataCampaignArmRequest) returns (DataCampaignArmResponse);
-  // CampaignDisarm returns once the campaign's inference has stopped (at most
-  // 10 s, then DEADLINE_EXCEEDED, with the campaign already disarmed). A
-  // recording in progress is not cut short: it finishes its after_trigger
+  // CampaignDisarm stores the disarmed state, releases the camera pre-roll,
+  // and then waits for the campaign's inference to stop. Storing the state
+  // first waits for the campaign's key lock, which an episode that is ending
+  // holds until it is sealed, its capture.drain included. The inference wait
+  // after that is at most 10 s. A worker still stopping then is reported in
+  // warnings and the call succeeds, because the campaign is already disarmed.
+  // A recording in progress is not cut short: it finishes its after_trigger
   // window and is sealed normally.
   rpc CampaignDisarm(DataCampaignDisarmRequest) returns (DataCampaignDisarmResponse);
   // CampaignRemove deletes a campaign's stored plan, so it is no longer
   // listed, triggered or restored at boot. Every episode it recorded is kept.
   // FAILED_PRECONDITION while the campaign is recording, unless force is set,
-  // which stops and seals that recording first. Returns once the campaign's
-  // inference has stopped, like CampaignDisarm.
+  // which stops and seals that recording first, its capture.drain included.
+  // It waits for the key lock and then for the campaign's inference as
+  // CampaignDisarm does, and reports a worker still stopping after 10 s the
+  // same way: in warnings, with the plan already deleted.
   rpc CampaignRemove(DataCampaignRemoveRequest) returns (DataCampaignRemoveResponse);
 }
 
@@ -231,8 +237,9 @@ message DataCampaignDisarmResponse {
   // The campaign's recording in progress, if it had one. Disarming does not
   // cut it short.
   DataEpisode recording = 3;
-  // Notes for the operator about this call, such as the recording above or a
-  // fleet that may deploy the plan again. Not stored with the plan.
+  // Notes for the operator about this call, such as the recording above, an
+  // inference still stopping when the call returned, or a fleet that may
+  // deploy the plan again. Not stored with the plan.
   repeated string warnings = 4;
 }
 message DataCampaignRemoveRequest {
@@ -249,8 +256,9 @@ message DataCampaignRemoveResponse {
   string fleet = 3;
   // The recording force stopped and sealed before the removal, if any.
   DataEpisode sealed = 4;
-  // Notes for the operator about this call, such as a fleet that may deploy
-  // the plan again.
+  // Notes for the operator about this call, such as an inference still
+  // stopping when the call returned, or a fleet that may deploy the plan
+  // again.
   repeated string warnings = 5;
 }
 

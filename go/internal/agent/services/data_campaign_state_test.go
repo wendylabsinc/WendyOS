@@ -614,7 +614,96 @@ func TestAwaitCampaignInferenceStoppedReportsACancelAsCanceled(t *testing.T) {
 	defer service.inference.reconcileMu.Unlock()
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if err := service.awaitCampaignInferenceStopped(ctx, "still stopping"); status.Code(err) != codes.Canceled {
-		t.Fatalf("cancelled wait: %v, want Canceled", err)
+	if stopped, err := service.awaitCampaignInferenceStopped(ctx, "still stopping"); stopped || status.Code(err) != codes.Canceled {
+		t.Fatalf("cancelled wait: stopped=%v err=%v, want Canceled", stopped, err)
 	}
+}
+
+// shortenCampaignStopWait makes the inference wait expire quickly, and
+// stalls the inference reconcile the way a worker slow to exit does, until
+// the returned function runs.
+func shortenCampaignStopWait(t *testing.T, service *DataService) (release func()) {
+	t.Helper()
+	previous := campaignStopWait
+	campaignStopWait = 50 * time.Millisecond
+	t.Cleanup(func() { campaignStopWait = previous })
+	service.inference.reconcileMu.Lock()
+	var once sync.Once
+	release = func() { once.Do(service.inference.reconcileMu.Unlock) }
+	t.Cleanup(release)
+	return release
+}
+
+// A disarm whose inference outlives the wait has still disarmed the
+// campaign. It succeeds and says the inference is still stopping, rather than
+// failing a call that took effect.
+func TestDisarmSucceedsWithAWarningWhenInferenceIsSlowToStop(t *testing.T) {
+	service, factory, _ := newCampaignStateService(t, t.TempDir())
+	ctx := context.Background()
+	mustDeploy(t, service, liveCampaignYAML)
+	session := receiveInference(t, factory.sessions)
+	release := shortenCampaignStopWait(t, service)
+
+	response, err := service.CampaignDisarm(ctx, &agentpbv2.DataCampaignDisarmRequest{Name: "c920-yolo-live"})
+	if err != nil {
+		t.Fatalf("disarm with a slow inference: %v, want success with a warning", err)
+	}
+	if len(response.GetWarnings()) == 0 || !strings.Contains(response.GetWarnings()[0], "still stopping") || !strings.Contains(response.GetWarnings()[0], "50ms") {
+		t.Fatalf("disarm warnings = %q, want the inference still stopping first", response.GetWarnings())
+	}
+	if response.GetCampaign().GetState() != data.CampaignStateDisarmed || !response.GetChanged() {
+		t.Fatalf("disarm response = %+v", response)
+	}
+	if got := inferenceState(t, response.GetCampaign()); got != "stopping" {
+		t.Fatalf("inference_status.state = %q, want stopping while the worker exits", got)
+	}
+	if stored, err := service.manager.Campaign("c920-yolo-live"); err != nil || stored.State != data.CampaignStateDisarmed {
+		t.Fatalf("stored campaign = %+v, %v, want disarmed", stored, err)
+	}
+
+	release()
+	waitForCampaignState(t, "the model process to stop", func() bool {
+		select {
+		case <-session.closed:
+			return true
+		default:
+			return false
+		}
+	})
+	again, err := service.CampaignDisarm(ctx, &agentpbv2.DataCampaignDisarmRequest{Name: "c920-yolo-live"})
+	if err != nil || len(again.GetWarnings()) != 0 || inferenceState(t, again.GetCampaign()) != data.CampaignStateDisarmed {
+		t.Fatalf("disarm once the worker stopped = %+v, %v, want no warning", again, err)
+	}
+}
+
+// A remove whose inference outlives the wait has already deleted the plan.
+// It used to answer DeadlineExceeded, and the retry that error invites got
+// NotFound.
+func TestRemoveSucceedsWithAWarningWhenInferenceIsSlowToStop(t *testing.T) {
+	service, factory, _ := newCampaignStateService(t, t.TempDir())
+	ctx := context.Background()
+	mustDeploy(t, service, liveCampaignYAML)
+	session := receiveInference(t, factory.sessions)
+	release := shortenCampaignStopWait(t, service)
+
+	response, err := service.CampaignRemove(ctx, &agentpbv2.DataCampaignRemoveRequest{Name: "c920-yolo-live"})
+	if err != nil {
+		t.Fatalf("remove with a slow inference: %v, want success with a warning", err)
+	}
+	if response.GetName() != "c920-yolo-live" || len(response.GetWarnings()) == 0 || !strings.Contains(response.GetWarnings()[0], "still stopping") {
+		t.Fatalf("remove response = %+v, want the inference still stopping as a warning", response)
+	}
+	if _, err := service.manager.Campaign("c920-yolo-live"); err == nil {
+		t.Fatal("the plan survived a remove that reported success")
+	}
+
+	release()
+	waitForCampaignState(t, "the model process to stop", func() bool {
+		select {
+		case <-session.closed:
+			return true
+		default:
+			return false
+		}
+	})
 }

@@ -261,9 +261,17 @@ device. Its triggers stop firing, its agent inference stops, and its camera
 pre-roll is released, so the camera is no longer held for it. The plan, its
 revision and every Episode it recorded are kept, and `campaign list` and
 `campaign inspect` show it as `disarmed`; a campaign with `inference` or event
-notifications reports `inference_status.state: disarmed`. The command returns
-once the inference has stopped (at most 10 seconds). A manual
+notifications reports `inference_status.state: disarmed`. A manual
 `campaign trigger` of a disarmed campaign is refused.
+
+The command returns once the inference has stopped. Two waits come before
+that. If an Episode of the campaign is ending when you run it, the command
+first waits for that Episode to be sealed, which includes its `capture.drain`.
+It then waits up to 10 seconds for the inference to stop. If the inference is
+still stopping after that, the command succeeds anyway, because the campaign is
+already disarmed, and prints a warning. `campaign inspect` reports
+`inference_status.state: stopping` until the inference has stopped and
+released the camera.
 
 The disarmed state is stored with the plan, so it survives agent restarts and
 reboots. Redeploying a disarmed campaign stores the new plan but keeps the
@@ -295,8 +303,11 @@ downloadable, and Episodes still waiting to upload follow the removed plan's
 `upload.when` and `upload.max_rate`, which the device keeps for that purpose.
 The Cloud app registration is also left in place for those uploads. A
 campaign that is recording is refused, naming the Episode; `--force` stops and
-seals that recording first, then removes the campaign. Deploying the same name
-again starts a new, armed campaign.
+seals that recording first, including its `capture.drain`, then removes the
+campaign. Remove waits for the inference as disarm does. If the inference is
+still stopping after 10 seconds, the removal has already happened, so the
+command succeeds and prints a warning. Deploying the same name again starts a
+new, armed campaign.
 
 ```console
 $ wendy data campaign remove c920-yolo-live

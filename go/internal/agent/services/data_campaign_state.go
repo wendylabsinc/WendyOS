@@ -15,7 +15,8 @@ import (
 
 // campaignStopWait bounds how long CampaignDisarm and CampaignRemove wait for
 // the campaign's inference worker to stop, the same bound DocumentRemove uses.
-const campaignStopWait = 10 * time.Second
+// It is a variable only so tests can shorten it.
+var campaignStopWait = 10 * time.Second
 
 // CampaignArm switches a disarmed campaign back on: its triggers fire again,
 // its inference restarts and its camera pre-roll is re-armed.
@@ -54,12 +55,18 @@ func (s *DataService) CampaignArm(_ context.Context, req *agentpbv2.DataCampaign
 // CampaignDisarm switches a campaign off without removing it. It returns once
 // the campaign's inference has stopped, so the camera is no longer held for it
 // when the operator reads the answer.
+//
+// The wait for the inference is bounded by campaignStopWait. A worker still
+// stopping after that does not fail the call: the campaign is disarmed by
+// then, and an error would tell a script that it was not. The response says
+// so in a warning instead.
 func (s *DataService) CampaignDisarm(ctx context.Context, req *agentpbv2.DataCampaignDisarmRequest) (*agentpbv2.DataCampaignDisarmResponse, error) {
 	campaign, changed, recording, err := s.disarmCampaign(req.GetName())
 	if err != nil {
 		return nil, campaignLookupError(req.GetName(), err)
 	}
-	if err := s.awaitCampaignInferenceStopped(ctx, "campaign "+campaign.Name+" is disarmed, but its inference is still stopping"); err != nil {
+	stopped, err := s.awaitCampaignInferenceStopped(ctx, "campaign "+campaign.Name+" is disarmed, but its inference is still stopping")
+	if err != nil {
 		return nil, err
 	}
 	message, err := s.campaignMessage(campaign)
@@ -67,6 +74,9 @@ func (s *DataService) CampaignDisarm(ctx context.Context, req *agentpbv2.DataCam
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 	response := &agentpbv2.DataCampaignDisarmResponse{Campaign: message, Changed: changed, Recording: recording}
+	if !stopped {
+		response.Warnings = append(response.Warnings, fmt.Sprintf("campaign %s is disarmed, but its inference had not stopped after %s. It is still stopping and can hold the camera until it has; `wendy data campaign inspect %s` reports inference_status.state stopping until then", campaign.Name, campaignStopWait, campaign.Name))
+	}
 	if recording != nil {
 		response.Warnings = append(response.Warnings, fmt.Sprintf("episode %s is still recording; disarming does not cut it short, so it finishes its after_trigger window (%s) and is sealed normally", recording.GetId(), campaign.Capture.AfterTrigger))
 	}
@@ -106,6 +116,9 @@ func (s *DataService) disarmCampaign(name string) (data.Campaign, bool, *agentpb
 }
 
 // CampaignRemove deletes a campaign's plan and keeps everything it recorded.
+// Like CampaignDisarm, it reports an inference still stopping after
+// campaignStopWait as a warning: the plan is deleted by then, and failing the
+// call sent a retry to NotFound for a remove that had worked.
 func (s *DataService) CampaignRemove(ctx context.Context, req *agentpbv2.DataCampaignRemoveRequest) (*agentpbv2.DataCampaignRemoveResponse, error) {
 	name := req.GetName()
 	if _, err := s.manager.Campaign(name); err != nil {
@@ -115,10 +128,14 @@ func (s *DataService) CampaignRemove(ctx context.Context, req *agentpbv2.DataCam
 	if err != nil {
 		return nil, err
 	}
-	if err := s.awaitCampaignInferenceStopped(ctx, "campaign "+name+" is removed, but its inference is still stopping"); err != nil {
+	stopped, err := s.awaitCampaignInferenceStopped(ctx, "campaign "+name+" is removed, but its inference is still stopping")
+	if err != nil {
 		return nil, err
 	}
 	response := &agentpbv2.DataCampaignRemoveResponse{Name: removed.Name, Revision: removed.Revision, Fleet: removed.Fleet, Sealed: sealed}
+	if !stopped {
+		response.Warnings = append(response.Warnings, fmt.Sprintf("campaign %s is removed, but its inference had not stopped after %s. It is still stopping and can hold the camera until it has", removed.Name, campaignStopWait))
+	}
 	if removed.Fleet != "" {
 		response.Warnings = append(response.Warnings, fmt.Sprintf("campaign %s names fleet %s. Removing it here does not change that fleet: deploying the plan again brings it back, armed. To keep a fleet campaign off on one device, disarm it there instead of removing it; a disarmed campaign stays disarmed when its plan is deployed again", removed.Name, removed.Fleet))
 	}
@@ -210,9 +227,14 @@ func campaignLookupError(name string, err error) error {
 // has stopped and released its cameras. Callers must not hold deploymentMu or
 // a campaign key's lock: a stopping worker can be inside triggerInference,
 // which takes both.
-func (s *DataService) awaitCampaignInferenceStopped(ctx context.Context, pending string) error {
+//
+// It reports false, with no error, when the pass has not finished within
+// campaignStopWait or the client's own deadline: the caller's change has taken
+// effect, and the worker is only slow to exit. A client that cancelled gets
+// Canceled, with pending as the message.
+func (s *DataService) awaitCampaignInferenceStopped(ctx context.Context, pending string) (bool, error) {
 	if s.inference == nil {
-		return nil
+		return true, nil
 	}
 	ctx, cancel := context.WithTimeout(ctx, campaignStopWait)
 	defer cancel()
@@ -220,12 +242,11 @@ func (s *DataService) awaitCampaignInferenceStopped(ctx context.Context, pending
 	go func() { defer close(done); s.inference.reconcileNow() }()
 	select {
 	case <-done:
-		return nil
+		return true, nil
 	case <-ctx.Done():
-		// A client that gave up is Canceled, not DeadlineExceeded.
 		if errors.Is(ctx.Err(), context.Canceled) {
-			return status.Error(codes.Canceled, pending)
+			return false, status.Error(codes.Canceled, pending)
 		}
-		return status.Error(codes.DeadlineExceeded, pending)
+		return false, nil
 	}
 }
