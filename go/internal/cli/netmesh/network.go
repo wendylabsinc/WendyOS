@@ -27,6 +27,7 @@ import (
 
 type Network struct {
 	self       netip.Addr
+	tenant     meshid.Tenant
 	stack      *stack.Stack
 	endpoint   *channel.Endpoint
 	ctx        context.Context
@@ -44,7 +45,7 @@ func NewNetwork(self meshid.Device) (*Network, error) {
 		return nil, errors.New("missing mesh identity")
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	n := &Network{self: self.MeshAddress(), ctx: ctx, cancel: cancel, done: make(chan struct{}), ports: map[babel.LinkID]*packetPort{}, routes: map[netip.Addr]babel.LinkID{}}
+	n := &Network{self: self.MeshAddress(), tenant: self.Tenant(), ctx: ctx, cancel: cancel, done: make(chan struct{}), ports: map[babel.LinkID]*packetPort{}, routes: map[netip.Addr]babel.LinkID{}}
 	n.stack = stack.New(stack.Options{NetworkProtocols: []stack.NetworkProtocolFactory{ipv6.NewProtocol}, TransportProtocols: []stack.TransportProtocolFactory{tcp.NewProtocol, udp.NewProtocol, icmp.NewProtocol6}})
 	n.endpoint = channel.New(128, 1280, "")
 	if err := n.stack.CreateNIC(1, n.endpoint); err != nil {
@@ -101,8 +102,11 @@ func (n *Network) AddPeer(id babel.LinkID, peer meshid.Device) (io.ReadWriteClos
 	if n.ctx.Err() != nil {
 		return nil, net.ErrClosed
 	}
-	if peer.Tenant().IsValid() == false {
-		return nil, errors.New("invalid peer")
+	// Carrier admission authenticates the peer before this backend is called.
+	// Retain the tenant invariant here too: the shared IPv6 pool alone cannot
+	// distinguish organizations.
+	if !peer.IsValid() || peer.Tenant() != n.tenant {
+		return nil, errors.New("mesh peer is outside the network tenant")
 	}
 	if _, ok := n.ports[id]; ok {
 		return nil, errors.New("duplicate mesh link")
@@ -160,6 +164,11 @@ func (n *Network) Close() error {
 	return nil
 }
 func (n *Network) forward(packet []byte, received bool) {
+	// SECURITY: localmesh authenticates carrier peers and supplies signed-origin
+	// gated routes before packets reach this backend. Inner IP addresses do not
+	// grant application authority; applications must authenticate end to end.
+	// A transit packet retains its original source, so requiring that source to
+	// equal the adjacent peer would break ordinary multi-hop routing.
 	if len(packet) < 40 || packet[0]>>4 != 6 || int(binary.BigEndian.Uint16(packet[4:6]))+40 != len(packet) || packet[7] == 0 {
 		return
 	}
