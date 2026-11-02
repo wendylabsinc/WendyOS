@@ -220,8 +220,11 @@ type directoryEntry struct {
 	retainUntil time.Time
 	// activeUntil retains now's monotonic clock reading when Accept receives one.
 	// A wall-clock rollback must not extend a lease already accepted in-process.
-	activeUntil time.Time
-	expired     bool
+	activeUntil         time.Time
+	certificateDeadline time.Time // Original selected certificate-path cap in the receiver lease clock.
+	certificateNotAfter time.Time // Original selected path, never replaced by a renewed path.
+	signingNotBefore    time.Time
+	expired             bool
 }
 
 type Directory struct {
@@ -235,7 +238,9 @@ type Directory struct {
 	persist  func([]DirectoryReceipt) error
 	// Runtime Nodes provide a monotonic clock independently of certificate UTC.
 	// nil preserves the explicit time argument used by synthetic legacy callers.
-	monotonicNow func() time.Time
+	monotonicNow        func() time.Time
+	certificateNow      func() time.Time // Local certificate BaseTime; nil preserves the verifier's supplied-now contract.
+	certificateLeafTime func(time.Time, time.Time) time.Time
 	// Keep observed wall time after replay tombstones are pruned. Otherwise a
 	// later clock rollback could make a discarded signed lease appear current.
 	wallHighWater time.Time
@@ -406,6 +411,7 @@ func (d *Directory) Accept(w SignedManifest, now time.Time) (bool, error) {
 	// retention is exactly ten times this newly admitted signed duration.
 	duration := time.UnixMilli(m.Expires).Sub(time.UnixMilli(m.Issued))
 	admittedAt := d.leaseNow(now)
+	certificateDeadline := admittedAt.Add(id.NotAfter.Sub(d.certificateTime(now)))
 	receipt := DirectoryReceipt{Device: owner, Revision: m.Revision, Hash: hash, Until: admittedAt.Add(10 * duration)}
 	d.replaceRouteHandoff(owner, m, leaf, now)
 	d.history[owner] = receipt
@@ -414,7 +420,7 @@ func (d *Directory) Accept(w SignedManifest, now time.Time) (bool, error) {
 	d.entries[owner] = directoryEntry{
 		manifest: m, wire: w, hash: hash, signature: binding,
 		retainUntil: receipt.Until,
-		activeUntil: admittedAt.Add(duration),
+		activeUntil: admittedAt.Add(duration), certificateDeadline: certificateDeadline, certificateNotAfter: id.NotAfter, signingNotBefore: leaf.NotBefore,
 	}
 	return true, nil
 }

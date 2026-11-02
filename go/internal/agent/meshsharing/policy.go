@@ -165,6 +165,16 @@ func signedGateways(self meshid.Device, view localmesh.NodeSnapshot, offers []me
 		var link babel.LinkID
 		for _, route := range view.Routes {
 			if route.Prefix == ula && !route.Local && !route.Unreachable && route.Link != 0 {
+				if view.RouteProofs != nil {
+					origin := localmesh.RouteOrigin{Prefix: route.Prefix, RouterID: route.RouterID, Seqno: route.Seqno}
+					proof, ok := view.RouteProofs[origin]
+					if !ok || proof.Principal != device.Principal() || !view.RouteAuthorizations[origin] || !proof.Deadline.After(now) {
+						continue
+					}
+					if proof.Deadline.Before(expires) {
+						expires = proof.Deadline
+					}
+				}
 				link = route.Link
 				break
 			}

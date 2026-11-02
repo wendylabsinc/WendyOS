@@ -22,12 +22,21 @@ type RouteProof struct {
 // established by its own signature; a replacement never lends it authority.
 // It is RAM-only and cannot renew a directory entry or replay watermark.
 type routeHandoff struct {
-	origin          RouteOrigin
-	principal       string
-	key             [32]byte
-	continuity      [32]byte
-	issued, expires int64
-	deadline        time.Time
+	origin              RouteOrigin
+	principal           string
+	key                 [32]byte
+	continuity          [32]byte
+	issued, expires     int64
+	deadline            time.Time
+	certificateNotAfter time.Time
+	signingNotBefore    time.Time
+}
+
+func (d *Directory) certificateTime(now time.Time) time.Time {
+	if d.certificateNow != nil {
+		return d.certificateNow()
+	}
+	return now
 }
 
 func routeContinuity(m Manifest) ([32]byte, bool) {
@@ -69,7 +78,7 @@ func (d *Directory) replaceRouteHandoff(owner string, next Manifest, newLeaf *x5
 		}
 		delete(d.handoffs, owner)
 	}
-	if !old.activeUntil.After(d.leaseNow(now)) || !laterRouteSequence(next.Route.Seqno, old.manifest.Route.Seqno) ||
+	if !old.activeUntil.After(d.leaseNow(now)) || !old.certificateDeadline.After(d.leaseNow(now)) || !laterRouteSequence(next.Route.Seqno, old.manifest.Route.Seqno) ||
 		!validManifestSignature(old.wire, newLeaf) {
 		return
 	}
@@ -77,23 +86,48 @@ func (d *Directory) replaceRouteHandoff(owner string, next Manifest, newLeaf *x5
 		d.handoffs = make(map[string]routeHandoff)
 	}
 	// The map is bounded by current directory owners, never by revisions.
+	deadline := old.activeUntil
+	if old.certificateDeadline.Before(deadline) {
+		deadline = old.certificateDeadline
+	}
 	d.handoffs[owner] = routeHandoff{origin: *old.manifest.Route, principal: old.wire.Principal, key: key, continuity: continuity,
-		issued: old.manifest.Issued, expires: old.manifest.Expires, deadline: old.activeUntil}
+		issued: old.manifest.Issued, expires: old.manifest.Expires, deadline: deadline, certificateNotAfter: old.certificateNotAfter, signingNotBefore: old.signingNotBefore}
 }
 
 // Caller already verified the current owner/path. Check that this compact old
 // authorization still has its own original lease and the same trusted key.
-func (d *Directory) validHandoff(owner string, held routeHandoff, current directoryEntry, chain [][]byte, id Identity, now time.Time) bool {
+func (d *Directory) validHandoff(held routeHandoff, current directoryEntry, chain [][]byte, id Identity, now time.Time) (routeHandoff, bool) {
 	continuity, ok := routeContinuity(current.manifest)
 	if !ok || continuity != held.continuity || held.principal != current.wire.Principal || !held.deadline.After(d.leaseNow(now)) ||
 		current.manifest.Route.Prefix != held.origin.Prefix || current.manifest.Route.RouterID != held.origin.RouterID ||
 		!laterRouteSequence(current.manifest.Route.Seqno, held.origin.Seqno) || len(chain) == 0 {
-		return false
+		return held, false
 	}
 	leaf, err := x509.ParseCertificate(chain[0])
-	return err == nil && sha256.Sum256(leaf.RawSubjectPublicKeyInfo) == held.key &&
-		!time.UnixMilli(held.issued).Before(leaf.NotBefore) && !time.UnixMilli(held.expires).After(leaf.NotAfter) &&
-		!time.UnixMilli(held.expires).After(id.NotAfter)
+	if err != nil || sha256.Sum256(leaf.RawSubjectPublicKeyInfo) != held.key ||
+		time.UnixMilli(held.issued).Before(leaf.NotBefore) || time.UnixMilli(held.expires).After(leaf.NotAfter) ||
+		time.UnixMilli(held.expires).After(id.NotAfter) {
+		return held, false
+	}
+	// Current policy can shorten a proof, but a changed path or backward clock
+	// can never lengthen its original selected-path/lease cap.
+	base := d.certificateTime(now)
+	leafTime := base
+	if d.certificateLeafTime != nil {
+		leafTime = d.certificateLeafTime(base, held.signingNotBefore)
+	}
+	if leafTime.Before(held.signingNotBefore) {
+		return held, false
+	}
+	selectedEnd := held.certificateNotAfter
+	if id.NotAfter.Before(selectedEnd) {
+		selectedEnd = id.NotAfter
+	}
+	currentCap := d.leaseNow(now).Add(selectedEnd.Sub(base))
+	if currentCap.Before(held.deadline) {
+		held.deadline = currentCap
+	}
+	return held, held.deadline.After(d.leaseNow(now))
 }
 
 // routeViewLocked performs one verification pass for both presence and route
@@ -138,10 +172,16 @@ func (d *Directory) routeViewLocked(now time.Time, detached bool) ([]Manifest, m
 	}
 	for owner, held := range d.handoffs {
 		current, ok := owners[owner]
-		if !ok || current.manifest.Route == nil || !authorized[*current.manifest.Route] || !d.validHandoff(owner, held, current, chains[owner], identities[owner], now) {
+		if !ok || current.manifest.Route == nil || !authorized[*current.manifest.Route] {
 			delete(d.handoffs, owner)
 			continue
 		}
+		held, valid := d.validHandoff(held, current, chains[owner], identities[owner], now)
+		if !valid {
+			delete(d.handoffs, owner)
+			continue
+		}
+		d.handoffs[owner] = held
 		until := held.deadline
 		if current.activeUntil.Before(until) {
 			until = current.activeUntil

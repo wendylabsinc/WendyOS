@@ -167,6 +167,9 @@ func newNode(parent context.Context, dir string, credentials *Credentials, name 
 	if err != nil {
 		return nil, err
 	}
+	policy := credentials.CertificateTimePolicy()
+	directory.certificateNow = func() time.Time { return policy.BaseTime(policy.WallTime()) }
+	directory.certificateLeafTime = policy.LeafTimeAtBase
 	kernel, err := createNetwork(credentials.Device)
 	if err != nil {
 		return nil, err
@@ -773,6 +776,9 @@ func (n *Node) publish() error {
 	if _, err = n.directory.Accept(w, now); err != nil {
 		return err
 	}
+	// Local publication already owns its durable origin; no received-route
+	// handoff authority is needed for this publisher itself.
+	n.directory.CompleteRouteHandoff(*m.Route, now)
 	if deadline, ok := n.directory.RecordDeadline(w, now); ok {
 		m.AdmittedUntil = deadline
 	}

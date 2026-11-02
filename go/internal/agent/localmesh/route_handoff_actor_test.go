@@ -73,10 +73,14 @@ type handoffActorFixture struct {
 	elapsed  time.Duration
 }
 
-func newHandoffActorFixture(t *testing.T) *handoffActorFixture {
+func newHandoffActorFixture(t *testing.T, initialSequence ...uint16) *handoffActorFixture {
 	t.Helper()
 	f := &handoffActorFixture{t: t, epoch: time.Now()}
 	a, b := testCredentials(t)
+	initial := uint16(0)
+	if len(initialSequence) > 0 {
+		initial = initialSequence[0]
+	}
 	for i, c := range []*Credentials{a, b} {
 		f.networks[i] = &handoffActorNetwork{}
 		n, err := NewNodeWithNetwork(context.Background(), t.TempDir(), c, "route-handoff-actor", 50052, f.networks[i])
@@ -86,6 +90,20 @@ func newHandoffActorFixture(t *testing.T) *handoffActorFixture {
 		f.nodes[i] = n
 		n.routingClock = func() time.Duration { return f.elapsed }
 		n.directory.monotonicNow = func() time.Time { return f.epoch.Add(f.elapsed) }
+		if i == 0 && initial != 0 {
+			// Start the real engine at a persisted-origin boundary near wrap.
+			// No received candidate or trusted RouteOrigin is fabricated.
+			config := babel.Config{RouterID: babel.RouterID(n.state.RouterID), InitialSeqno: initial, HelloInterval: time.Second, UpdateInterval: 16 * time.Second, AdvertiseLocalRoute: n.advertiseLocalRoute,
+				AcceptRoute: func(_ babel.RouterID, p netip.Prefix) bool { return admittedPrefix(p) },
+				AcceptRouteUpdate: func(id babel.RouterID, p netip.Prefix, seq uint16) bool {
+					return n.routeOrigins[RouteOrigin{Prefix: p, RouterID: id, Seqno: seq}]
+				}}
+			n.routing, err = NewRouting(config, nil, n)
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+
 		t.Cleanup(func() { n.cancel(); _ = n.Stop() })
 		f.step(i, babel.Originate{Prefix: netip.PrefixFrom(c.Device.MeshAddress(), 128)})
 	}
@@ -110,7 +128,7 @@ func newHandoffActorFixture(t *testing.T) *handoffActorFixture {
 	f.proof(1, f.ownProof(0))
 	f.pump()
 	f.advance(2 * time.Second)
-	f.assertForwarded(true, 0)
+	f.assertForwarded(true, initial)
 	f.networks[1].watch = netip.PrefixFrom(f.nodes[0].Credentials.Device.MeshAddress(), 128)
 	return f
 }
@@ -324,4 +342,115 @@ func handoffActorSequenceRequest(prefix netip.Prefix, id babel.RouterID, seq uin
 	addr := prefix.Addr().As16()
 	copy(packet[20:], addr[:])
 	return packet
+}
+
+func TestNodeRouteHandoffSerialWrapUsesRealFiniteCandidate(t *testing.T) {
+	f := newHandoffActorFixture(t, 65535)
+	origin := f.nodes[0]
+	before := f.nodes[1].routing.Snapshot().Counters.Rejected
+	origin.nextPublication = time.Time{}
+	f.step(0, babel.Receive{ID: 1, Packet: handoffActorSequenceRequest(netip.PrefixFrom(origin.Credentials.Device.MeshAddress(), 128), babel.RouterID(origin.state.RouterID), 0)})
+	f.pump()
+	f.advance(4 * time.Second)
+	f.assertForwarded(true, 65535)
+	if origin.routing.Snapshot().Seqno != 0 || f.nodes[1].routing.Snapshot().Counters.Rejected <= before {
+		t.Fatal("wrap fixture did not reject independently ordered new sequence0")
+	}
+	f.proof(1, f.ownProof(0))
+	f.assertForwarded(true, 65535)
+	f.pump()
+	f.advance(6 * time.Second)
+	f.assertForwarded(true, 0)
+	if len(f.networks[1].interrupted) != 0 {
+		t.Fatalf("wrap applied unreachable FIB:%+v", f.networks[1].interrupted)
+	}
+	if origin.routing.Snapshot().Seqno != 0 {
+		t.Fatal("wrap handoff churned origin sequence")
+	}
+}
+
+func TestNodeRouteHandoffRepeatedProofDoesNotInventIntermediateCandidate(t *testing.T) {
+	f := newHandoffActorFixture(t)
+	proof := f.lateProof()
+	f.proof(1, proof)
+	f.assertForwarded(true, 0)
+	directory := f.nodes[1].directory
+	if len(directory.handoffs) != 1 {
+		t.Fatalf("retained proofs:%d", len(directory.handoffs))
+	}
+	var original routeHandoff
+	for _, held := range directory.handoffs {
+		original = held
+	}
+	// Another newer signed tuple can arrive before any matching routing packet.
+	// It must not promote sequence1 merely because its proof was once current.
+	m, err := DecodeManifest(proof.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.Revision++
+	m.Route.Seqno = 2
+	c := f.nodes[0].Credentials
+	next, err := SignManifest(m, c.Certificate.Certificate, c.Signer, f.now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.elapsed = 5 * time.Second
+	f.step(1, babel.Tick{})
+	f.proof(1, next)
+	f.assertForwarded(true, 0)
+	if len(directory.handoffs) != 1 {
+		t.Fatalf("supersession grew retained proofs:%d", len(directory.handoffs))
+	}
+	for _, held := range directory.handoffs {
+		if held.origin != original.origin || !held.deadline.Equal(original.deadline) {
+			t.Fatal("new proof refreshed or replaced original retained tuple/deadline")
+		}
+	}
+	middle := original.origin
+	middle.Seqno = 1
+	if directory.RouteAuthorizations(f.now())[middle] {
+		t.Fatal("proof-only intermediate tuple became retained forwarding authority")
+	}
+	if len(f.networks[1].interrupted) != 0 {
+		t.Fatalf("proof-only supersession interrupted FIB:%+v", f.networks[1].interrupted)
+	}
+}
+
+func TestNodeRouteHandoffScopeChangesDoNotBorrowOldProof(t *testing.T) {
+	for _, change := range []string{"capabilities", "router", "signing-key"} {
+		t.Run(change, func(t *testing.T) {
+			f := newHandoffActorFixture(t)
+			wire := f.lateProof()
+			manifest, err := DecodeManifest(wire.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			credentials := f.nodes[0].Credentials
+			switch change {
+			case "capabilities":
+				manifest.Caps = []string{CapabilitySensors}
+			case "router":
+				manifest.Route.RouterID++
+			case "signing-key":
+				credentials = testCredentialsFor(t, credentials.Device.Principal())
+				if _, err := f.nodes[1].cache.Put(credentials.Certificate.Certificate, f.now()); err != nil {
+					t.Fatal(err)
+				}
+			}
+			replacement, err := SignManifest(manifest, credentials.Certificate.Certificate, credentials.Signer, f.now())
+			if err != nil {
+				t.Fatal(err)
+			}
+			f.proof(1, replacement)
+			// A valid new claim with changed scope/key cannot lend its authority
+			// to the old candidate while its own finite update remains absent.
+			f.assertForwarded(false, 0)
+			for _, proof := range f.nodes[1].Snapshot().RouteProofs {
+				if proof.Retained {
+					t.Fatalf("%s retained old authority", change)
+				}
+			}
+		})
+	}
 }
