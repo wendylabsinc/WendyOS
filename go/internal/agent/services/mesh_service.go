@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"time"
 
 	"go.uber.org/zap"
@@ -17,7 +18,9 @@ import (
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/meshingress"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
+	"github.com/wendylabsinc/wendy/go/internal/shared/meshappstream"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
+	"github.com/wendylabsinc/wendy/go/internal/shared/meshoperator"
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 )
 
@@ -26,14 +29,16 @@ import (
 // the cloud org flag's default; the cloud phase will sync the org flag into
 // this file.
 const meshDisabledFile = "mesh-disabled"
+const meshApplicationStreams = 8
 
-// MeshService is the serving side of the LAN-direct mesh path: a peer agent
-// opens MeshDial over this device's mTLS port and the stream carries one TCP
-// connection to a local port. The cloud-relay serving path needs no service —
+// MeshService serves application streams on an authenticated agent connection.
+// An enrolled device or primary operator opens MeshDial; the stream carries one
+// TCP connection admitted by the current running-app ingress registry. The cloud-relay serving path needs no service —
 // it reuses the existing tunnel broker DialRequest handling.
 type MeshService struct {
 	agentpbv2.UnimplementedWendyMeshServiceServer
 	logger           *zap.Logger
+	active           atomic.Int32
 	meshDisabledPath string
 	// expectedScope is the current device's tenant. Unknown or legacy scopes
 	// cannot authorize mesh access, even if the general mTLS interceptor is off.
@@ -66,13 +71,18 @@ func NewMeshService(logger *zap.Logger, configPath string, expectedScope certs.S
 }
 
 func (s *MeshService) MeshDial(stream agentpbv2.WendyMeshService_MeshDialServer) error {
-	ident, err := s.deviceIdentityFromContext(stream.Context())
+	principal, err := s.applicationPrincipalFromContext(stream.Context())
 	if err != nil {
 		return err
 	}
 	if s.meshDisabled() {
 		return status.Error(codes.PermissionDenied, "wendy net is disabled on this device")
 	}
+	if s.active.Add(1) > meshApplicationStreams {
+		s.active.Add(-1)
+		return status.Error(codes.ResourceExhausted, "mesh application stream capacity is busy")
+	}
+	defer s.active.Add(-1)
 	first, err := stream.Recv()
 	if err != nil {
 		return status.Errorf(codes.InvalidArgument, "reading open message: %v", err)
@@ -99,9 +109,41 @@ func (s *MeshService) MeshDial(stream agentpbv2.WendyMeshService_MeshDialServer)
 	}
 	defer conn.Close()
 	s.logger.Info("wendy net dial accepted",
-		zap.String("caller_principal", ident.Principal()),
+		zap.String("caller_principal", principal),
 		zap.Uint32("port", open.Port))
+	// Empty ready is emitted only after current running-app admission and the
+	// actual destination dial. Native clients need no second TLS handshake.
+	if err := stream.Send(&agentpbv2.MeshDialData{}); err != nil {
+		return err
+	}
 	return s.relay(stream, conn)
+}
+
+// applicationPrincipalFromContext admits ordinary same-tenant devices and
+// primary operator identities already verified by the serving mTLS transport.
+// This broadens neither ingress publication nor the chosen destination port.
+func (s *MeshService) applicationPrincipalFromContext(ctx context.Context) (string, error) {
+	if device, err := s.deviceIdentityFromContext(ctx); err == nil {
+		return device.Principal(), nil
+	}
+	tenant, err := meshid.ParseTenant(s.expectedScope.TenantUUID)
+	if err != nil {
+		return "", status.Error(codes.PermissionDenied, "wendy net dial requires an enrolled local tenant")
+	}
+	p, ok := peer.FromContext(ctx)
+	if !ok {
+		return "", status.Error(codes.PermissionDenied, "wendy net dial requires mTLS")
+	}
+	info, ok := p.AuthInfo.(credentials.TLSInfo)
+	if !ok || len(info.State.PeerCertificates) == 0 {
+		return "", status.Error(codes.PermissionDenied, "wendy net dial requires a client certificate")
+	}
+	principal, ok := certs.TenantPrincipalFromCert(info.State.PeerCertificates[0])
+	operator, err := meshoperator.ParsePrincipal(principal)
+	if !ok || err != nil || operator.Tenant() != tenant {
+		return "", status.Error(codes.PermissionDenied, "wendy net dial requires a canonical same-tenant device or operator")
+	}
+	return operator.Principal(), nil
 }
 
 // deviceIdentityFromContext independently enforces a canonical device
@@ -180,7 +222,7 @@ func (s *MeshService) relay(stream agentpbv2.WendyMeshService_MeshDialServer, co
 				continue
 			}
 			if len(d.Payload) > 0 {
-				if _, err := conn.Write(d.Payload); err != nil {
+				if err := writeMeshApplication(conn, d.Payload); err != nil {
 					_ = conn.Close()
 					done <- true
 					return
@@ -195,7 +237,7 @@ func (s *MeshService) relay(stream agentpbv2.WendyMeshService_MeshDialServer, co
 	}()
 
 	go func() { // local conn → stream
-		buf := make([]byte, 256*1024)
+		buf := make([]byte, meshappstream.ChunkSize)
 		for {
 			n, err := conn.Read(buf)
 			if n > 0 {
@@ -231,6 +273,22 @@ func (s *MeshService) relay(stream agentpbv2.WendyMeshService_MeshDialServer, co
 			_ = conn.Close()
 			return nil
 		}
+	}
+	return nil
+}
+
+// A bounded frame can still need several ordinary partial writes to its local
+// socket. Complete it before reading another frame so backpressure is retained.
+func writeMeshApplication(conn net.Conn, payload []byte) error {
+	for len(payload) > 0 {
+		n, err := conn.Write(payload)
+		if err != nil {
+			return err
+		}
+		if n <= 0 {
+			return io.ErrNoProgress
+		}
+		payload = payload[n:]
 	}
 	return nil
 }

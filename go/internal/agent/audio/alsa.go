@@ -143,14 +143,21 @@ func parseAlsaList(output string, isSink bool) []Node {
 				}
 			}
 		}
-		nodes = append(nodes, Node{
+		node := Node{
 			ID: EncodeAlsaID(card, device, isSink),
 			// plughw, not hw: the plug layer handles format conversion a
 			// card's native rate/format may not support directly.
 			Name:        fmt.Sprintf("plughw:%d,%d", card, device),
 			Description: strings.TrimSpace(rest),
 			IsSink:      isSink,
-		})
+		}
+		// The card id ("C920" in "card 0: C920 [HD Pro Webcam C920]") is the
+		// kernel's name for the card, and unlike the index before it, it does
+		// not depend on which card probed first.
+		if id, _, ok := strings.Cut(strings.TrimSpace(rest), " ["); ok && id != "" {
+			node.StableName = fmt.Sprintf("alsa:%s:%d", id, device)
+		}
+		nodes = append(nodes, node)
 	}
 	return nodes
 }

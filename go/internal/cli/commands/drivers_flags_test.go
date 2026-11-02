@@ -109,7 +109,7 @@ func TestDriversCatalogFetchFollowsCommandCancellation(t *testing.T) {
 	deviceType := "raspberry-pi-5"
 	resolveDriversTargetFn = func(context.Context, ...resolveOption) (*SelectedDevice, error) {
 		return &SelectedDevice{Agent: &grpcclient.AgentConnection{
-			AgentService: &fakeAgentVersionClient{resp: &agentpb.GetAgentVersionResponse{DeviceType: &deviceType}},
+			AgentService: &fakeAgentVersionClient{resp: &agentpb.GetAgentVersionResponse{DeviceType: &deviceType, NetworkInterfaces: []*agentpb.NetworkInterface{{IpAddresses: []string{"192.168.1.2"}}}}},
 			// An installed add-on is what sends the picker past a failed catalog.
 			DriverService: fakeDriverClient{list: &agentpbv2.ListDriversResponse{
 				BaseVersion: "0.17.0", KernelVersion: "kernel",
@@ -180,7 +180,7 @@ func TestDriversChannelFlagsReachCatalog(t *testing.T) {
 			deviceType := "raspberry-pi-5"
 			resolveDriversTargetFn = func(context.Context, ...resolveOption) (*SelectedDevice, error) {
 				return &SelectedDevice{Agent: &grpcclient.AgentConnection{
-					AgentService: &fakeAgentVersionClient{resp: &agentpb.GetAgentVersionResponse{DeviceType: &deviceType}},
+					AgentService: &fakeAgentVersionClient{resp: &agentpb.GetAgentVersionResponse{DeviceType: &deviceType, NetworkInterfaces: []*agentpb.NetworkInterface{{IpAddresses: []string{"192.168.1.2"}}}}},
 					DriverService: fakeDriverClient{
 						list:     &agentpbv2.ListDriversResponse{BaseVersion: "0.17.0", KernelVersion: "kernel"},
 						installs: &installs,

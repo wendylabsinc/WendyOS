@@ -58,7 +58,16 @@ type v2UnenrollOps struct {
 	authorize func(context.Context, string) (*v2AuthorizedReset, error)
 	proof     func(context.Context) ([]byte, error)
 	reset     func(context.Context, string, string, []byte, *v2AuthorizedReset) error
+	// wait pauses between reset attempts; nil uses sleepContext.
+	wait func(context.Context, time.Duration) error
 }
+
+// v2ResetRetryDelays spaces the extra device reset attempts made after Cloud
+// has deleted the asset. The device checks each fresh authorization against
+// its own Roughtime window (about ±1 s) and its own fetch of Cloud's keys, so
+// a refusal can be momentary: a deletion still inside that window, a slow
+// time quorum, or a failed key fetch. The pause lets the deletion age.
+var v2ResetRetryDelays = []time.Duration{2 * time.Second, 5 * time.Second}
 
 // A missing active row permits only an explicit exact-asset retry. It is never
 // deletion evidence: a fresh signed reset authorization is still mandatory.
@@ -163,24 +172,55 @@ func performV2Unenroll(ctx context.Context, j *v2UnenrollProgress, ops v2Unenrol
 		return fmt.Errorf("verifying installed-leaf PKI revocation; keys retained: %w", err)
 	}
 	j.Revoked = true
-	// OCSP acquisition may consume the short authorization lifetime. Recheck the
-	// current ACL and obtain a fresh signed authorization before local erasure.
-	fresh, err := ops.authorize(ctx, j.AssetID)
-	if err != nil {
-		return fmt.Errorf("refreshing Cloud reset authorization; keys retained: %w", err)
+	wait := ops.wait
+	if wait == nil {
+		wait = sleepContext
 	}
-	confirmed, err := v2AuthorizedDeletion(fresh, j)
-	if err != nil {
-		return err
-	}
-	if !proto.Equal(deleted, confirmed) {
-		return fmt.Errorf("Cloud deletion evidence changed; keys retained")
-	}
-	if err := ops.reset(ctx, j.Principal, j.Fingerprint, proof, fresh); err != nil {
-		return fmt.Errorf("certificate revoked and asset deleted; local reset unconfirmed: %w", err)
+	for attempt := 0; ; attempt++ {
+		// OCSP acquisition may consume the short authorization lifetime. Recheck the
+		// current ACL and obtain a fresh signed authorization before local erasure.
+		fresh, err := ops.authorize(ctx, j.AssetID)
+		if err != nil {
+			return fmt.Errorf("refreshing Cloud reset authorization; keys retained: %w", err)
+		}
+		confirmed, err := v2AuthorizedDeletion(fresh, j)
+		if err != nil {
+			return err
+		}
+		if !proto.Equal(deleted, confirmed) {
+			return fmt.Errorf("Cloud deletion evidence changed; keys retained")
+		}
+		err = ops.reset(ctx, j.Principal, j.Fingerprint, proof, fresh)
+		if err == nil {
+			break
+		}
+		// Cloud has deleted the asset, so one refusal must not strand the device
+		// with its keys. Retry only an explicit Agent refusal (FailedPrecondition,
+		// keys retained), each time with a new Cloud-signed authorization that the
+		// Agent verifies in full. A transport error may hide a completed reset.
+		if status.Code(err) != codes.FailedPrecondition || attempt >= len(v2ResetRetryDelays) {
+			return fmt.Errorf("certificate revoked and asset deleted; local reset unconfirmed after %d attempt(s): %w", attempt+1, err)
+		}
+		if waitErr := wait(ctx, v2ResetRetryDelays[attempt]); waitErr != nil {
+			return fmt.Errorf("certificate revoked and asset deleted; local reset unconfirmed: %w (retry interrupted: %v)", err, waitErr)
+		}
 	}
 	j.Reset = true
 	return nil
+}
+
+// v2UnenrollResumeHint names the commands that finish an unenrollment whose
+// Cloud deletion went through but whose device reset did not. Both run on the
+// same direct link: --asset-id fetches a fresh signed authorization for the
+// deleted asset; --force is the operator's explicit local-only reset.
+func v2UnenrollResumeHint(device, assetID string) string {
+	target := ""
+	if device != "" {
+		target = " --device " + shellQuoteArg(device)
+	}
+	return fmt.Sprintf("the device did not confirm its reset and may still hold its enrollment keys; retry the authenticated reset with: wendy device unenroll%s --asset-id %s --yes; "+
+		"if that keeps failing, Cloud no longer lists this device and 'wendy device unenroll%s --force --yes' clears only its local enrollment",
+		target, shellQuoteArg(assetID), target)
 }
 
 func directUnenrollPeerFingerprint(conn *grpcclient.AgentConnection, verifiedPeer *grpcpeer.Peer, principal certs.WendyIdentity) (string, error) {
@@ -392,6 +432,9 @@ func runV2DeviceUnenroll(ctx context.Context, conn *grpcclient.AgentConnection, 
 	if jsonOutput {
 		out, _ := json.MarshalIndent(j, "", "  ")
 		fmt.Println(string(out))
+	}
+	if err != nil && j.Deleted && !j.Reset {
+		return fmt.Errorf("%w; %s", err, v2UnenrollResumeHint(deviceFlag, j.AssetID))
 	}
 	if err != nil {
 		return err

@@ -11,9 +11,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
-	"text/tabwriter"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -258,191 +256,6 @@ func withDataClient(ctx context.Context, fn func(agentpbv2.DataServiceClient) er
 	return fn(conn.DataService)
 }
 
-func newDataSourcesCmd() *cobra.Command {
-	var kinds []string
-	c := &cobra.Command{Use: "sources", Short: "List recordable sources", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
-		return withDataClient(cmd.Context(), func(client agentpbv2.DataServiceClient) error {
-			r, e := client.Sources(cmd.Context(), &agentpbv2.DataSourcesRequest{})
-			if e != nil {
-				return e
-			}
-			wanted := normalizeSourceKinds(kinds)
-			if jsonOutput {
-				return encodeDataSourcesJSON(cmd.OutOrStdout(), r, wanted)
-			}
-			return writeDataSources(cmd.OutOrStdout(), r.GetSources(), wanted)
-		})
-	}}
-	c.Flags().StringSliceVar(&kinds, "kind", nil, "Only list sources of this kind, for example camera or audio (repeatable or comma-separated)")
-	return c
-}
-
-// maxSourceDetailWidth bounds the DETAIL column so an ALSA card description
-// cannot push the table past a normal terminal width.
-const maxSourceDetailWidth = 48
-
-// sourceKindFloodLimit is how many sources of one kind are listed before the
-// rest are summarised. A Jetson reports 21 audio sources, 20 of which are
-// internal audio-DMA routing channels, and they bury everything else.
-const sourceKindFloodLimit = 6
-
-// encodeDataSourcesJSON keeps --json a machine contract: without --kind it is
-// byte-for-byte the response the device sent, never filtered and never
-// summarised, because scripts already consume it. With --kind it carries the
-// filtered set, which is what the caller asked for.
-func encodeDataSourcesJSON(out io.Writer, response *agentpbv2.DataSourcesResponse, wanted []string) error {
-	if len(wanted) == 0 {
-		return encodeProtoJSON(out, response)
-	}
-	return encodeProtoJSON(out, &agentpbv2.DataSourcesResponse{Sources: filterSourcesByKind(response.GetSources(), wanted)})
-}
-
-func normalizeSourceKinds(kinds []string) []string {
-	var out []string
-	for _, kind := range kinds {
-		if k := strings.ToLower(strings.TrimSpace(kind)); k != "" {
-			out = append(out, k)
-		}
-	}
-	return out
-}
-
-func filterSourcesByKind(sources []*agentpbv2.DataSource, wanted []string) []*agentpbv2.DataSource {
-	if len(wanted) == 0 {
-		return sources
-	}
-	var out []*agentpbv2.DataSource
-	for _, s := range sources {
-		for _, kind := range wanted {
-			if strings.EqualFold(s.GetKind(), kind) {
-				out = append(out, s)
-				break
-			}
-		}
-	}
-	return out
-}
-
-func truncateSourceDetail(detail string) string {
-	runes := []rune(detail)
-	if len(runes) <= maxSourceDetailWidth {
-		return detail
-	}
-	return string(runes[:maxSourceDetailWidth-3]) + "..."
-}
-
-// writeDataSources renders the source table. wanted holds the lower-cased kinds
-// the user asked for; kinds named there are never summarised, because asking for
-// a kind is asking to see all of it.
-func writeDataSources(out io.Writer, sources []*agentpbv2.DataSource, wanted []string) error {
-	shown := filterSourcesByKind(sources, wanted)
-	if len(shown) == 0 {
-		if len(sources) == 0 {
-			_, err := fmt.Fprintln(out, "No recordable sources reported by the device.")
-			return err
-		}
-		_, err := fmt.Fprintf(out, "No sources of kind %s. Kinds present on this device: %s.\n",
-			strings.Join(quoteAll(wanted), ", "), strings.Join(presentSourceKinds(sources), ", "))
-		return err
-	}
-
-	requested := make(map[string]bool, len(wanted))
-	for _, kind := range wanted {
-		requested[kind] = true
-	}
-	total := map[string]int{}
-	for _, s := range shown {
-		total[strings.ToLower(s.GetKind())]++
-	}
-
-	var rows []*agentpbv2.DataSource
-	omitted := map[string]int{}
-	var floodedOrder []string
-	seen := map[string]int{}
-	for _, s := range shown {
-		kind := strings.ToLower(s.GetKind())
-		if !requested[kind] && total[kind] > sourceKindFloodLimit && seen[kind] >= sourceKindFloodLimit {
-			if omitted[kind] == 0 {
-				floodedOrder = append(floodedOrder, kind)
-			}
-			omitted[kind]++
-			continue
-		}
-		seen[kind]++
-		rows = append(rows, s)
-	}
-
-	detailColumn := false
-	for _, s := range rows {
-		if s.GetDetail() != "" {
-			detailColumn = true
-			break
-		}
-	}
-
-	w := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
-	header := "SOURCE\tKIND\tCLOCK\tSTATUS"
-	if detailColumn {
-		header += "\tDETAIL"
-	}
-	fmt.Fprintln(w, header)
-	for _, s := range rows {
-		health := "unhealthy"
-		if s.GetHealthy() {
-			health = "healthy"
-		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s", s.GetId(), s.GetKind(), s.GetClockDomain(), health)
-		if detailColumn {
-			fmt.Fprintf(w, "\t%s", truncateSourceDetail(s.GetDetail()))
-		}
-		fmt.Fprintln(w)
-	}
-	if err := w.Flush(); err != nil {
-		return err
-	}
-
-	// The notes sit outside the tabwriter block; a tab-free line inside it
-	// would split the table into two independently aligned halves.
-	for _, kind := range floodedOrder {
-		if _, err := fmt.Fprintf(out, "\n... %d more %s %s not listed (--kind %s to list all, --json for everything)\n",
-			omitted[kind], kind, pluralSource(omitted[kind]), kind); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func pluralSource(n int) string {
-	if n == 1 {
-		return "source"
-	}
-	return "sources"
-}
-
-func quoteAll(values []string) []string {
-	out := make([]string, 0, len(values))
-	for _, v := range values {
-		out = append(out, strconv.Quote(v))
-	}
-	return out
-}
-
-// presentSourceKinds lists the distinct kinds in first-seen order so the
-// message names what the device actually reported.
-func presentSourceKinds(sources []*agentpbv2.DataSource) []string {
-	seen := map[string]bool{}
-	var out []string
-	for _, s := range sources {
-		kind := s.GetKind()
-		if kind == "" || seen[kind] {
-			continue
-		}
-		seen[kind] = true
-		out = append(out, kind)
-	}
-	return out
-}
-
 func newDataRecordCmd() *cobra.Command {
 	var name string
 	var sources, exclude, calibration []string
@@ -461,6 +274,11 @@ func newDataRecordCmd() *cobra.Command {
 			cals = append(cals, &agentpbv2.DataCalibration{Source: source, Contents: b, Filename: filepath.Base(path)})
 		}
 		return withDataClient(cmd.Context(), func(client agentpbv2.DataServiceClient) error {
+			typed := append(append([]string(nil), sources...), exclude...)
+			for _, c := range cals {
+				typed = append(typed, c.GetSource())
+			}
+			warnLegacyMicrophoneIDs(cmd.Context(), cmd.ErrOrStderr(), client, typed)
 			e, e2 := client.Start(cmd.Context(), &agentpbv2.DataStartRequest{Name: name, Sources: sources, ExcludeSources: exclude, RequireUtcUncertaintyNanos: require.Nanoseconds(), Calibrations: cals})
 			if e2 != nil {
 				return e2

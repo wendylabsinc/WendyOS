@@ -11,6 +11,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/wendylabsinc/wendy/go/internal/cli/cloudrequest"
 	wendymcp "github.com/wendylabsinc/wendy/go/internal/cli/mcp"
+	"github.com/wendylabsinc/wendy/go/internal/cli/sessionbroker"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/internal/shared/discovery"
 	"github.com/wendylabsinc/wendy/go/internal/shared/models"
@@ -97,7 +98,7 @@ func newMCPServer(deviceFlag string, toolGroups []string) (*wendymcp.Server, err
 	}
 	srv.SetInstallationBackend(installationJobBackend())
 	srv.SetSimulatorBackend(simulatorBackend())
-	srv.SetProjectBackend(wendymcp.ProjectBackend{Validate: validateMCPProject})
+	srv.SetProjectBackend(wendymcp.ProjectBackend{Validate: validateMCPProject, WaitReadyUnsupported: waitReadyUnsupportedForMCP})
 	srv.SetLANDiscoverer(func(ctx context.Context, timeout time.Duration) ([]models.LANDevice, error) {
 		return discovery.CollectLAN(ctx, cliLANStreamOptions(ctx), timeout)
 	})
@@ -146,6 +147,9 @@ func enterLocalMCPChannel() error {
 }
 
 func mcpStartupAddress(address string) string {
+	if _, matched, _ := sessionbroker.ParseMeshSelector(address); matched {
+		return address
+	}
 	if _, matched, _ := parseCloudDeviceSelector(address); matched {
 		return address
 	}

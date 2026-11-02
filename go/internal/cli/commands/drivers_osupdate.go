@@ -50,8 +50,8 @@ func (p driverPreflight) blocking() bool {
 }
 
 // installedDriverAddons reads the device's add-ons. Every inability to inspect
-// the store is an error: an unenrolled connection exposes no driver service, but
-// an unenrolled device may still retain add-ons installed before it was reset.
+// the store is an error: older agents may hide the service before enrollment,
+// while the device retains add-ons installed before it was reset.
 // "Could not ask" and "has none" must never look alike to an OTA pre-flight.
 func installedDriverAddons(ctx context.Context, conn *grpcclient.AgentConnection) (*agentpbv2.ListDriversResponse, error) {
 	if conn == nil || conn.DriverService == nil {
@@ -61,7 +61,7 @@ func installedDriverAddons(ctx context.Context, conn *grpcclient.AgentConnection
 	defer cancel()
 	resp, err := conn.DriverService.ListDrivers(callCtx, &agentpbv2.ListDriversRequest{})
 	if status.Code(err) == codes.Unimplemented {
-		return nil, fmt.Errorf("the device's driver service is unavailable; enrol the device or update its agent")
+		return nil, driverServiceErr(err)
 	}
 	if err != nil {
 		return nil, err
@@ -259,10 +259,15 @@ func stageRebuild(ctx context.Context, conn *grpcclient.AgentConnection, name, t
 }
 
 // runDriverStage drives the install stream to completion for a staged add-on.
-// The agent fetches the image itself, so no chunks follow the spec.
+// Isolated devices receive the published image over the existing connection.
 func runDriverStage(ctx context.Context, conn *grpcclient.AgentConnection, spec *agentpbv2.DriverSpec) error {
 	callCtx, cancel := context.WithTimeout(ctx, driverStageTimeout)
 	defer cancel()
+	spec, path, cleanup, err := prepareDriverUpload(callCtx, conn, spec)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
 	stream, err := conn.DriverService.InstallDriver(callCtx)
 	if err != nil {
 		return err
@@ -271,6 +276,11 @@ func runDriverStage(ctx context.Context, conn *grpcclient.AgentConnection, spec 
 		RequestType: &agentpbv2.InstallDriverRequest_Spec{Spec: spec},
 	}); err != nil {
 		return err
+	}
+	if path != "" {
+		if err := streamDriverChunks(stream, path); err != nil {
+			return err
+		}
 	}
 	if err := stream.CloseSend(); err != nil {
 		return err

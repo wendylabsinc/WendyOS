@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"unicode/utf16"
 )
@@ -519,6 +520,59 @@ func TestRelocateGPTToLargerDrive(t *testing.T) {
 	disk := readTestDrive(t, path, driveSize)
 	verifyTestGPT(t, disk, 512, jetsonLikeParts)
 	requirePartitionData(t, disk, img, 512, jetsonLikeParts)
+}
+
+// syncFailingDrive is a drive file whose Sync fails with err, as os.File.Sync
+// reports it. A macOS raw device (/dev/rdiskN) fails it with ENOTTY: Sync is
+// fcntl(F_FULLFSYNC) there, which raw devices reject.
+type syncFailingDrive struct {
+	*os.File
+	err error
+}
+
+func (d syncFailingDrive) Sync() error {
+	return &os.PathError{Op: "sync", Path: "/dev/rdisk4", Err: d.err}
+}
+
+// TestRelocateGPTRawDeviceSync: go-diskfs flushes the drive after each GPT
+// write. A macOS raw device rejects that flush with ENOTTY although the write
+// landed, which must not fail the rewrite; any other flush error still does.
+func TestRelocateGPTRawDeviceSync(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		syncErr error
+		wantErr bool
+	}{
+		{"macOS raw device ENOTTY", syscall.ENOTTY, false},
+		{"I/O error", syscall.EIO, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			img := buildTestGPTImage(t, 512, jetsonLikeSectors, jetsonLikeParts)
+			const driveSize = 12 << 20
+			path := newTestDrive(t, driveSize)
+			f, err := os.OpenFile(path, os.O_RDWR, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer f.Close()
+			if _, err := f.WriteAt(img, 0); err != nil {
+				t.Fatal(err)
+			}
+			err = relocateGPT(syncFailingDrive{f, tc.syncErr}, driveSize)
+			if tc.wantErr {
+				if err == nil || !strings.Contains(err.Error(), tc.syncErr.Error()) {
+					t.Fatalf("relocate = %v, want the %v flush error", err, tc.syncErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("relocate: %v", err)
+			}
+			disk := readTestDrive(t, path, driveSize)
+			verifyTestGPT(t, disk, 512, jetsonLikeParts)
+			requirePartitionData(t, disk, img, 512, jetsonLikeParts)
+		})
+	}
 }
 
 // TestRelocateGPTRefusesTruncatedPartition: a drive that cuts into a

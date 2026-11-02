@@ -8,12 +8,17 @@ The two commands are the **same command** — they accept identical flags and ar
 
 The interactive picker has Linux, Mac, and Microcontrollers tabs. Press Tab or Shift+Tab to switch categories, use the arrow keys to choose a device, and press Enter to select it. Linux includes WendyOS devices and Linux Desktop; Mac offers Headless Mac; Microcontrollers lists ESP32 targets with published Wendy Lite firmware. Empty categories are hidden.
 
+When supported USB flashing devices are connected, a Detected USB tab appears first. It recognizes Jetson AGX Thor, AGX Orin and Orin Nano recovery mode, Qualcomm EDL mode for Dragonwing and Arduino UNO Q, and ESP32-S31 ROM download mode for boards such as Mosaico. Qualcomm and ESP32-S31 devices still require a board-model choice because their USB IDs are shared. The scan reads USB descriptors without resetting or opening devices. Ordinary ESP32 serial interfaces and USB-UART bridges cannot prove flashing mode, so use the Microcontrollers tab for those. The installer selects the physical target again before flashing.
+
 ```sh
 # Interactive (recommended)
 wendy install
 
 # Install nightly firmware
 wendy install --nightly
+
+# Download a matching driver and push it after the flashed device boots
+wendy install --device-type dragonwing-iq-9075 --device-name iq9-mesh --nightly --driver intel-be202
 
 # Linux: non-interactive with all flags
 wendy install --device-type raspberry-pi-5 --version 0.10.4 --drive /dev/disk4 --force

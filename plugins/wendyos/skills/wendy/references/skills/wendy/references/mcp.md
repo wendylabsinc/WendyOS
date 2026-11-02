@@ -22,7 +22,10 @@ and reuse the session's single device connection.
    WendyOS targets, `wait_ready=true` waits for configured TCP readiness or
    process stability; `readiness_timeout_seconds=30` bounds that wait within
    `timeout_seconds`. Set `wait_ready=false` to skip the wait and report
-   `readiness: "not_checked"`; local Docker/Podman require this opt-out.
+   `readiness: "not_checked"`. When `wait_ready` is omitted, `run` also skips
+   the wait for targets and projects it cannot wait for: local Docker/Podman,
+   `device_name` deploys, and Compose, multi-service, Xcode, native-command,
+   host-built Swift or build-host projects.
    Create-only requests skip readiness unless an incompatible explicit wait is requested.
    Success returns a compact receipt. Read `build_log_uri` for the bounded log
    tail (last eight runs in this server session), or set `include_output=true`.

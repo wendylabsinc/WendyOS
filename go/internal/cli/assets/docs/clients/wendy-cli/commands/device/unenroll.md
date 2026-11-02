@@ -45,9 +45,18 @@ A `cloud://` selector, including a saved Cloud default, chooses Cloud-only remov
 
 ## Retry after a failure
 
-For current WendyOS enrollments, rerun the same command over the direct LAN
-connection. For Lite, reconnect USB and rerun it. This also handles Cloud removal
-that succeeded before the local reset failed.
+For current WendyOS enrollments, Cloud deletes the device first. The device
+then checks Cloud's signed reset itself before it erases its keys. If the device
+refuses, the command fetches a new signed reset from Cloud and tries twice more.
+If the reset still fails, the error prints the command that finishes it. Run it
+over the same direct LAN connection:
+
+```sh
+wendy device unenroll --device <device-address> --asset-id <asset-id> --yes
+```
+
+If that keeps failing, Cloud no longer lists the device, so `--force` (below)
+clears its local enrollment. For Lite, reconnect USB and rerun the same command.
 
 Older numeric Cloud enrollments reset locally before Cloud cleanup. They require
 an owner or administrator account. If cleanup fails, run the exact Cloud removal
