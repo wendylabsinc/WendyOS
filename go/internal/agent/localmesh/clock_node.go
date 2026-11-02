@@ -59,6 +59,33 @@ func (n *Node) wallTime() time.Time {
 	return time.Now()
 }
 
+func (n *Node) refreshClockRollbackHint() {
+	if n.clockBootFloor.IsZero() || n.clockBootFloor.After(n.wallTime().Add(5*time.Second)) {
+		return
+	}
+	// Another existing time source may already have corrected UTC. Withdraw
+	// this obsolete query/hold hint; ordinary claim validation still decides
+	// every route. Request fresh ordinary advertisements on the same carrier.
+	n.clockBootFloor = time.Time{}
+	for _, peer := range n.peers {
+		if peer.sync == nil || len(peer.sync.pendingClock) == 0 {
+			clearClockHold(peer)
+		}
+		if peer.clockRelay {
+			if !n.queueReplies(peer, []ControlMessage{{Kind: "clock", Clock: &ClockControl{Version: clockControlVersion, Op: "hello"}}}) {
+				n.closePeer(peer, "clock-reconcile-queue", errors.New("directory reply reserve full"))
+			}
+		}
+	}
+}
+
+func clearClockHold(p *nodePeer) {
+	p.clockWaitingUntil = time.Time{}
+	if p.sync != nil {
+		p.sync.clockRecoveryUntil = time.Time{}
+	}
+}
+
 func (n *Node) clockBlocked(p *nodePeer) bool {
 	if n.clockSync == nil {
 		return false
@@ -164,6 +191,9 @@ func (n *Node) handleClockEvent(event *clockEvent) error {
 			return err
 		}
 		for _, p := range n.peers {
+			if p.sync == nil || len(p.sync.pendingClock) == 0 {
+				clearClockHold(p)
+			}
 			if err := n.maintainClockPeer(p); err != nil {
 				return err
 			}
@@ -242,6 +272,7 @@ func (n *Node) clockControl(p *nodePeer, m *ClockControl) error {
 	}
 	if m.Op == "hello" {
 		p.clockRelay = true
+		n.refreshClockRollbackHint()
 		n.reconcilePeer(p, n.wallTime())
 		if !n.clockBootFloor.IsZero() {
 			n.clockBlocked(p)
@@ -329,22 +360,24 @@ func (n *Node) maintainClockPeer(p *nodePeer) error {
 	if p.sync == nil {
 		return nil
 	}
-	if !p.clockWaitingUntil.IsZero() && !p.clockWaitingUntil.After(time.Now()) {
-		n.closePeer(p, "clock-recovery", errors.New("authenticated time synchronization required; no verified authority quorum within recovery window"))
-		return nil
-	}
-	replies, changed, err := p.sync.ContinueClockPending(n.wallTime(), directoryResponseSlots(p))
+	n.refreshClockRollbackHint()
+	// Retry now-time-valid retained proofs through ordinary admission before
+	// an obsolete hold deadline can close a carrier corrected by another source.
+	replies, changed, timeReady, err := p.sync.ContinueClockPending(n.wallTime(), directoryResponseSlots(p))
 	if err != nil {
 		n.closePeer(p, "clock-recovery-admission", err)
+		return nil
+	}
+	if timeReady && len(p.sync.pendingClock) == 0 && n.clockBootFloor.IsZero() {
+		clearClockHold(p)
+	}
+	if !p.clockWaitingUntil.IsZero() && !p.clockWaitingUntil.After(time.Now()) {
+		n.closePeer(p, "clock-recovery", errors.New("authenticated time synchronization required; no verified authority quorum within recovery window"))
 		return nil
 	}
 	if !n.queueReplies(p, replies) {
 		n.closePeer(p, "clock-recovery-queue", errors.New("directory reply reserve full"))
 		return nil
-	}
-	if len(p.sync.pendingClock) == 0 && n.clockBootFloor.IsZero() {
-		p.clockWaitingUntil = time.Time{}
-		p.sync.clockRecoveryUntil = time.Time{}
 	}
 	n.startClockRecovery()
 	for _, record := range changed {

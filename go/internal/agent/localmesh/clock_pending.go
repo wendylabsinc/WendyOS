@@ -36,41 +36,50 @@ func (s *Synchronizer) rememberClockPending(w SignedManifest) {
 // ContinueClockPending retries through exactly the ordinary admission path
 // after UTC catches up. The monotonic window is never extended by a duplicate
 // or a wall-clock adjustment. At most two bounded bodies exist per neighbour.
-func (s *Synchronizer) ContinueClockPending(now time.Time, slots int) (replies []ControlMessage, changed []SignedManifest, err error) {
+func (s *Synchronizer) ContinueClockPending(now time.Time, slots int) (replies []ControlMessage, changed []SignedManifest, timeReady bool, err error) {
 	for key, deadline := range s.pendingClock {
 		w, ok := s.pending[key]
 		if !ok {
 			delete(s.pendingClock, key)
 			continue
 		}
-		if !deadline.After(time.Now()) {
-			s.dropPendingManifest(key)
-			continue
-		}
 		manifest, decodeErr := DecodeManifest(w.Body)
 		if decodeErr != nil {
 			s.dropPendingManifest(key)
-			return nil, nil, decodeErr
+			return nil, nil, false, decodeErr
 		}
 		if time.UnixMilli(manifest.Issued).After(now.Add(5 * time.Second)) {
+			if !deadline.After(time.Now()) {
+				s.dropPendingManifest(key)
+			}
 			continue
 		}
 		if slots-len(replies) < 1 {
+			if !deadline.After(time.Now()) {
+				s.dropPendingManifest(key)
+			}
 			break
 		}
 		delete(s.pendingClock, key)
 		delete(s.pending, key)
 		out, admitted, receiveErr := s.receive(ControlMessage{Kind: "manifest", Manifest: &w}, now, slots-len(replies))
 		if errors.Is(receiveErr, ErrManifestClockSkew) {
-			s.pendingClock[key] = deadline
+			if deadline.After(time.Now()) {
+				s.pendingClock[key] = deadline
+			} else {
+				s.dropPendingManifest(key)
+			}
 			continue
 		}
 		if receiveErr != nil {
 			s.discardManifest(w)
-			return nil, nil, receiveErr
+			return nil, nil, false, receiveErr
 		}
+		// UTC's future gate has cleared. This does not assert admission:
+		// normal receive still rejects stale/expired/certificate-invalid claims.
+		timeReady = true
 		replies = append(replies, out...)
 		changed = append(changed, admitted...)
 	}
-	return replies, changed, nil
+	return replies, changed, timeReady, nil
 }

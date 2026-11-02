@@ -18,11 +18,16 @@ func TestClockRecoveryPreviouslyJoinedRestart(t *testing.T) {
 	for _, test := range []struct {
 		skew      time.Duration
 		transient bool
+		external  bool
 	}{
-		{6 * time.Second, false}, {598 * time.Second, false}, {20 * time.Minute, false}, {598 * time.Second, true},
+		{6 * time.Second, false, false}, {598 * time.Second, false, false}, {20 * time.Minute, false, false}, {598 * time.Second, true, false}, {598 * time.Second, false, true},
 	} {
-		t.Run(fmt.Sprintf("%s/transient=%t", test.skew, test.transient), func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		t.Run(fmt.Sprintf("%s/transient=%t/external=%t", test.skew, test.transient, test.external), func(t *testing.T) {
+			timeout := 20 * time.Second
+			if test.external {
+				timeout = 40 * time.Second
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), timeout)
 			defer cancel()
 			staleCredentials, healthyCredentials := testCredentials(t)
 			dir := t.TempDir()
@@ -45,7 +50,7 @@ func TestClockRecoveryPreviouslyJoinedRestart(t *testing.T) {
 			}
 			var authorityRequests atomic.Int32
 			healthy.clockQuery = func(ctx context.Context, index uint8, nonce []byte) ([]byte, error) {
-				if authorityRequests.Add(1) <= int32(len(authorities)) && test.transient {
+				if authorityRequests.Add(1) <= int32(len(authorities)) && test.transient || test.external {
 					return nil, errors.New("temporary authority outage")
 				}
 				return authorities[index].ReplyAt(nonce, time.Now()), nil
@@ -132,7 +137,7 @@ func TestClockRecoveryPreviouslyJoinedRestart(t *testing.T) {
 			})
 			clockWait(t, "restarted own lease", func() bool { return len(restarted.Snapshot().Devices) == 1 })
 			ended := clockAttachPair(t, ctx, restarted, healthy)
-			if test.transient {
+			if test.transient || test.external {
 				select {
 				case <-failed:
 				case <-ctx.Done():
@@ -147,25 +152,48 @@ func TestClockRecoveryPreviouslyJoinedRestart(t *testing.T) {
 				default:
 				}
 			}
-			select {
-			case <-ready:
-			case err := <-ended:
-				t.Fatalf("restarted carrier ended: %v", err)
-			case <-time.After(15 * time.Second):
-				t.Fatal("previously joined coldboot did not start authority recovery")
+			if test.external {
+				offset.Store(0) // Independent existing source corrects only fake UTC.
+			} else {
+				select {
+				case <-ready:
+				case err := <-ended:
+					t.Fatalf("restarted carrier ended: %v", err)
+				case <-time.After(15 * time.Second):
+					t.Fatal("previously joined coldboot did not start authority recovery")
+				}
+				if len(restarted.Snapshot().Devices) != 1 {
+					t.Fatal("future replay restored route before clock recovery")
+				}
+				wantAttempts := int32(1)
+				if test.transient {
+					wantAttempts = 2
+				}
+				if attempts.Load() != wantAttempts {
+					t.Fatalf("authority rounds=%d want=%d", attempts.Load(), wantAttempts)
+				}
+				close(release)
 			}
-			if len(restarted.Snapshot().Devices) != 1 {
-				t.Fatal("future replay restored route before clock recovery")
-			}
-			wantAttempts := int32(1)
-			if test.transient {
-				wantAttempts = 2
-			}
-			if attempts.Load() != wantAttempts {
-				t.Fatalf("authority rounds=%d want=%d", attempts.Load(), wantAttempts)
-			}
-			close(release)
 			clockWait(t, "restarted normal admission", func() bool { return len(restarted.Snapshot().Devices) == 2 && len(healthy.Snapshot().Devices) == 2 })
+			if test.external {
+				before := restarted.Snapshot().Links
+				if len(before) != 1 {
+					t.Fatal("expected original corrected carrier")
+				}
+				timer := time.NewTimer(clockRecoveryWindow + time.Second)
+				defer timer.Stop()
+				select {
+				case err := <-ended:
+					t.Fatalf("external correction closed healthy carrier: %v", err)
+				case <-timer.C:
+				case <-ctx.Done():
+					t.Fatal("external correction hold exceeded fixture deadline")
+				}
+				after := restarted.Snapshot()
+				if len(after.Devices) != 2 || len(after.Links) != 1 || after.Links[0].ID != before[0].ID || attempts.Load() != 1 {
+					t.Fatal("obsolete hint recreated carrier, retried quorum or lost admitted peer")
+				}
+			}
 			// Stop before reading actor-owned replay state. A restored identical
 			// lease must keep its original receipt and expiry, not renew either.
 			cancel()

@@ -25,10 +25,10 @@ func TestClockPendingReentersNormalAdmissionWithoutExtendingDeadline(t *testing.
 	if deadline.IsZero() || len(s.pending) != 1 || len(d.history) != 0 || len(d.Snapshot(behind)) != 0 {
 		t.Fatal("pending clock claim gained authority or leaked bodies")
 	}
-	if _, changed, err := s.ContinueClockPending(behind, 1); err != nil || len(changed) != 0 || s.pendingClock[w.ownerKey()] != deadline {
+	if _, changed, ready, err := s.ContinueClockPending(behind, 1); err != nil || ready || len(changed) != 0 || s.pendingClock[w.ownerKey()] != deadline {
 		t.Fatal("uncorrected retry changed deadline or admission", err)
 	}
-	if _, changed, err := s.ContinueClockPending(now, 1); err != nil || len(changed) != 1 || len(s.pendingClock) != 0 || len(s.pending) != 0 {
+	if _, changed, ready, err := s.ContinueClockPending(now, 1); err != nil || !ready || len(changed) != 1 || len(s.pendingClock) != 0 || len(s.pending) != 0 {
 		t.Fatal("corrected claim skipped normal admission", err)
 	}
 	if len(d.history) != 1 || len(d.Snapshot(now)) != 1 {
@@ -56,7 +56,7 @@ func TestClockPendingBoundsAndExpiredClaimsDoNotTrigger(t *testing.T) {
 	for k := range s.pendingClock {
 		s.pendingClock[k] = time.Now().Add(-time.Second)
 	}
-	if _, _, err = s.ContinueClockPending(behind, 2); err != nil || len(s.pendingClock) != 0 || len(s.pending) != 0 {
+	if _, _, _, err = s.ContinueClockPending(behind, 2); err != nil || len(s.pendingClock) != 0 || len(s.pending) != 0 {
 		t.Fatal("monotonic deadline did not release bodies", err)
 	}
 	m := routeManifest(device, now.Add(-2*MaxLease))
