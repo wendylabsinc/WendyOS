@@ -459,37 +459,8 @@ func (p *linuxTunnelPolicy) SetGateway(ctx context.Context, peer meshid.Device) 
 func (p *linuxTunnelPolicy) watchBorrowed(b *borrowedTunnel) {
 	defer p.borrowers.Done()
 	defer close(b.done)
-	writerDone := make(chan struct{})
-	go func() {
-		defer close(writerDone)
-		ticker := time.NewTicker(leaseHeartbeatInterval)
-		defer ticker.Stop()
-		for {
-			if err := b.control.SetWriteDeadline(time.Now().Add(leaseHeartbeatTimeout)); err != nil {
-				_ = b.control.Close()
-				return
-			}
-			if _, err := b.control.Write([]byte{leaseHeartbeat}); err != nil {
-				_ = b.control.Close()
-				return
-			}
-			select {
-			case <-b.stop:
-				return
-			case <-ticker.C:
-			}
-		}
-	}()
-	defer func() { b.stopOnce.Do(func() { close(b.stop) }); _ = b.control.Close(); <-writerDone }()
-	for {
-		if err := b.control.SetReadDeadline(time.Now().Add(leaseHeartbeatTimeout)); err != nil {
-			break
-		}
-		var ack [1]byte
-		if _, err := io.ReadFull(b.control, ack[:]); err != nil || ack[0] != leaseHeartbeat {
-			break
-		}
-	}
+	defer func() { b.stopOnce.Do(func() { close(b.stop) }); _ = b.control.Close() }()
+	_ = exchangeLeaseHeartbeats(b.control, b.stop, leaseHeartbeatInterval, leaseHeartbeatMinInterval, leaseHeartbeatTimeout)
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.borrowed == b {
