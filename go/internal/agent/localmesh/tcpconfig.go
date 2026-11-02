@@ -13,6 +13,9 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
 )
 
+// TLSLANPort is reserved by automatically discovered native LAN carriers.
+const TLSLANPort = 43024
+
 // TCPConfig retains explicit TCP simulation links and independently enables
 // discovered wendy net carriers. Each explicit edge is configured at both ends.
 type TCPConfig struct {
@@ -97,6 +100,13 @@ func LoadTCPConfig(path string, self meshid.Device) (*TCPConfig, error) {
 		}
 		if cfg.TLSListen == cfg.Listen {
 			return nil, errors.New("tls_listen must use a separate listener")
+		}
+		host, port, _ := net.SplitHostPort(cfg.TLSListen)
+		ip := net.ParseIP(host)
+		portNumber, _ := strconv.Atoi(port)
+		if (cfg.Ethernet || cfg.InfrastructureWiFi) && portNumber == TLSLANPort &&
+			(host == "" || (ip != nil && ip.IsUnspecified())) {
+			return nil, errors.New("tls_listen wildcard port 43024 conflicts with automatic LAN listeners; use another port or disable LAN discovery")
 		}
 	}
 	if len(cfg.Peers) > 64 {

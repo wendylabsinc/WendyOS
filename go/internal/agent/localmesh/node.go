@@ -405,8 +405,15 @@ func (n *Node) step(event babel.Event) error {
 
 func (n *Node) handle(e nodeEvent) error {
 	if e.services != nil {
+		previous := n.advertisement.Services
 		n.advertisement.Services = cloneServices(*e.services)
-		return n.publish()
+		if err := n.publish(); err != nil {
+			// The caller retains its previous intent when publication fails.
+			// Do not let a later renewal publish this rejected replacement.
+			n.advertisement.Services = previous
+			return err
+		}
+		return nil
 	}
 	if e.add != nil {
 		if len(n.peers) >= 64 {
