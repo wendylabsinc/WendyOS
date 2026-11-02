@@ -1,15 +1,14 @@
 # Connect Wendy Lite to Wendy Net over Bluetooth
 
 This page describes the older explicit leaf-peer firmware. For native C5/C6
-firmware with runtime radio management, use the
-[Bluetooth radio command reference](/docs/clients/wendy-cli/commands/device/bluetooth#wendy-device-bluetooth-mode)
-instead of the legacy peer-file configuration below. That reference covers
-normal and coded profiles, enabling BLE, profile restarts, power defaults and
-checking controller readbacks. Coded profiles require support on both peers.
-WendyOS supports Coded mesh transport on capable adapters; S2/S8 select a
-connected-data preference and advertising coding remains controller-selected.
-Power remains at the firmware/controller default unless an explicit policy is
-saved, and maximum power is an opt-in.
+firmware with runtime radio management, follow the
+[Bluetooth radio command reference](/docs/advanced/clients/wendy-cli/commands/device/bluetooth#wendy-device-bluetooth-mode)
+instead of the legacy peer-file configuration below.
+
+Start with normal mode and firmware/controller-default power. The reference
+covers support on both peers, WendyOS coding-selection limits, status fields and
+recovery. A Lite profile change can restart the device; keep a working management
+path. Maximum power requires an explicit request.
 
 Connect an enrolled Wendy Lite board to a nearby WendyOS device without joining
 a Wi-Fi access point. The WendyOS device carries the board's Wendy Net traffic

@@ -1,6 +1,6 @@
 # `wendy device bluetooth`
 
-Manages Bluetooth peripherals on WendyOS and radio settings on supported WendyOS and Wendy Lite devices. The `bt` alias is also accepted; examples use the full `bluetooth` command name.
+Manages Bluetooth peripherals on WendyOS and radio settings on supported WendyOS and Wendy Lite devices. Aliased as `wendy device bt`.
 
 On WendyOS, run without a subcommand to browse and manage peripherals in an interactive table. Use `mode` and `power` for radio settings on WendyOS or supported Lite firmware. These controls affect the selected device, not the computer running the CLI. Add `--device <device>` to select a device explicitly.
 
@@ -75,7 +75,6 @@ Removes the pairing for a peripheral by address.
 wendy device bluetooth forget <address>
 ```
 
-
 ### `wendy device bluetooth mode`
 
 Read the current profile and status before making a change:
@@ -84,7 +83,7 @@ Read the current profile and status before making a change:
 wendy device bluetooth mode --device <device>
 ```
 
-| Target | Profiles available in this implementation |
+| Target | Available profiles |
 | --- | --- |
 | Wendy Lite ESP32-C5/C6 with radio-profile firmware | `normal`, `coded-s2`, `coded-s8` |
 | WendyOS using Linux/BlueZ | `normal`; `coded-s2` and `coded-s8` when advertising and management PHY capability checks succeed. S2/S8 are connected-data coding preferences; advertising coding is selected by the controller. |
@@ -103,21 +102,18 @@ These are radio rates, not application throughput or a promised distance. Walls,
 interference and shared Wi-Fi airtime still affect results. A Lite profile covers
 mesh advertising, scanning and connected data. On WendyOS, a coded profile enables
 Coded mesh advertising, scanning and connection initiation, then requests the
-selected S2/S8 preference on Wendy-owned mesh links. BlueZ retains ownership of
-advertising and discovery. Management advertisements on WendyOS and guest BLE
-advertisements on Lite remain on 1M.
+selected S2/S8 preference on Wendy-owned mesh links. Management advertisements
+on WendyOS and guest Bluetooth advertisements on Lite remain on 1M.
 
 WendyOS scanning and connection-initiation PHY selection applies to the selected
 adapter, so it can also affect other applications using that adapter. Connected
 PHY requests are limited to Wendy-owned mesh links.
 
-WendyOS does not promise a specific advertising coding scheme or guarantee the
-peer/controller will choose the requested connected-data coding. The tested
-Intel controller supports Coded PHY but not the advertising-coding-selection HCI
-command. Read `meshModeDetail` for these limits. Status can confirm Coded PHY,
-but HCI PHY readback does not distinguish S2 from S8. Firmware with advertising
-coding selection, such as the supported Lite profiles, can select that scheme
-for advertisements as well.
+On WendyOS, the controller chooses the advertising coding scheme and may not
+honour the requested connected-data coding. Read `meshModeDetail` for the
+adapter's limits. PHY status confirms whether a link uses Coded, but cannot
+distinguish S2 from S8. Supported Lite firmware can also select the advertising
+coding scheme.
 
 To change the profile of an already configured device:
 
@@ -125,15 +121,14 @@ To change the profile of an already configured device:
 wendy device bluetooth mode coded-s2 --device <device>
 ```
 
-This preserves whether Wendy Net participates and which carriers are enabled.
-It does not enable a disabled BLE carrier. On WendyOS, an explicit profile is
-persisted and applied to scanning/initiation, the mesh advertisement and current
-Wendy-owned mesh links; failed application is reported. A changed Lite profile can restart the
-device; the CLI reports the restart. Reconnect after it boots and inspect the
-profile again. On Lite, repeating an unchanged setting does not request a new
-profile change.
+This saves the profile while preserving participation and enabled connection
+types; it does not turn on Bluetooth networking. WendyOS applies it to scanning,
+connection initiation, mesh advertising and current Wendy-owned mesh links, and
+reports application failures. A changed Lite profile can restart the device;
+the CLI reports the restart. Reconnect after it boots and inspect the profile
+again. Repeating an unchanged Lite setting does not request another change.
 
-To enable BLE and select its profile together, use the Wendy Net command:
+To enable Bluetooth networking and select its profile together, use the Wendy Net command:
 
 ```sh
 wendy device wendy-net configure --device <device> \
@@ -142,20 +137,20 @@ wendy device wendy-net status --device <device>
 ```
 
 `--ble-mode` accepts `off`, `normal`, `coded-s2`, or `coded-s8`. A value other than
-`off` enables the BLE carrier and selects the profile; `off` disables that carrier
+`off` enables Bluetooth networking and selects the profile; `off` disables that carrier
 while retaining the saved profile. It does not change participation unless you
 also supply `--participate`. Choose `--ble-mode` or `--ble`, never both.
 `bluetooth mode` itself does not accept `off`.
 
-A C6 permits one mesh carrier at a time. If switching it from mesh Wi-Fi to BLE,
+A C6 permits one mesh carrier at a time. If switching it from mesh Wi-Fi to Bluetooth,
 include `--infrastructure-wifi=false` in the configure command. To disable its
 only carrier, also stop participation or select another supported carrier.
 See [Lite peer setup](/docs/advanced/development/local-mesh-radio).
 
-Configure coded peers through USB or another working management path. A normal
-ESP scanner cannot discover coded advertisements. WendyOS needs a selected
-adapter that passes the Coded capability checks. S2 and S8 peers can discover each other,
-but use the same profile at both ends when comparing range. Allow the reported
+Configure coded peers through USB or another working management path. An ESP
+device scanning in normal mode cannot discover coded advertisements. WendyOS
+needs an adapter that reports Coded support. S2 and S8 peers can discover each
+other, but use the same profile at both ends when comparing range. Allow the reported
 restart to finish, reconnect, and check peer connectivity on each device. A saved
 profile alone does not prove a working connection.
 
@@ -201,7 +196,7 @@ power does not change the other peer's power or guarantee a usable two-way link.
 | Target | Advertising power | Connection power |
 | --- | --- | --- |
 | Supported Lite ESP32-C5/C6 firmware | `default`, `maximum`, or an integer from -15 to +20 dBm | Same choices; applies to existing and future links |
-| WendyOS Linux/BlueZ | `default`; `maximum` or integer dBm only when the selected adapter exposes setting support and a valid range | `default` only; an explicit connected-power setter is not implemented. Current/maximum power readbacks are available when supported by the controller |
+| WendyOS Linux/BlueZ | `default`; `maximum` or integer dBm only when the selected adapter exposes setting support and a valid range | `default` only; setting non-default connection power is unsupported. Current/maximum power readbacks are available when supported by the controller |
 
 For a WendyOS adapter that reports advertising-power support:
 
@@ -236,7 +231,7 @@ wendy device bluetooth power --device <device> \
 
 Omitted settings are preserved and explicit changes survive restart. Power
 changes do not require a device reboot. On Lite, changes apply after the command
-reply has drained; use USB or ordinary Wi-Fi management when reducing power could
+reply is sent; use USB or ordinary Wi-Fi management when reducing power could
 make your Bluetooth management link unreachable.
 
 `power` always prints JSON. Read the status again after a change:
@@ -249,7 +244,7 @@ wendy device bluetooth power --device <device>
 | --- | --- |
 | Lite `desired`, `applied`, `pending`, `error` | Saved intent is separate from application. If `pending` is true, query again; check `error` if application fails. |
 | Lite `advertisingKnown`, `connectionDefaultKnown`, and each connection's `currentKnown` | Treat corresponding dBm values as measured only when their known flag is true. `supportedLevelsDbm` lists supported levels. |
-| WendyOS `advertisingSetSupported`, `connectionsSetSupported` | Check these before requesting non-default power. This backend reports connection setting support as false. |
+| WendyOS `advertisingSetSupported`, `connectionsSetSupported` | Check these before requesting non-default power. Connection setting support is currently false. |
 | WendyOS `advertising`, `advertisements`, `error` | `advertising` is saved policy; per-advertisement `requestedDbm` and `registered` describe the request and registration. Missing `selectedDbm` means actual power was not measured. |
 
 On WendyOS a policy can be saved even if an active advertisement fails to apply

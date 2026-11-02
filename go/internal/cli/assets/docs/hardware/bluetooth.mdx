@@ -58,21 +58,20 @@ Wi-Fi Aware. For Lite boards, follow the
 
 ### Radio profile and transmit power
 
-Normal mode is the starting point for compatibility. Supported ESP32-C5/C6 Lite
-firmware and capable WendyOS adapters also offer Coded mesh connections. On
-WendyOS, S2/S8 select a connected-data coding preference; advertising uses
-controller-selected Coded coding. A normal ESP scanner cannot discover coded
-advertisements. Read the selected adapter's capabilities before switching peers.
+Start with normal mode for compatibility. Supported ESP32-C5/C6 Lite firmware
+and WendyOS adapters also offer coded profiles that trade throughput for range.
+Check support on both peers before switching: an ESP device scanning in normal
+mode cannot discover coded advertisements. On WendyOS, the controller chooses
+the advertising coding scheme; S2/S8 select a connected-data preference.
 
 Devices without a saved power policy retain the firmware/controller default;
 maximum power requires an explicit request. Advertising power and connected-link
 power are separate controls. WendyOS can set advertising power only when the
-adapter exposes support, and cannot set non-default connection power through
-this backend.
+adapter exposes support, and cannot set non-default connection power on WendyOS.
 
 Use `wendy device bluetooth mode --device <device>` and
 `wendy device bluetooth power --device <device>` to inspect settings. See the
-[radio command reference](/docs/clients/wendy-cli/commands/device/bluetooth#wendy-device-bluetooth-mode)
+[radio command reference](/docs/advanced/clients/wendy-cli/commands/device/bluetooth#wendy-device-bluetooth-mode)
 for platform support, profile selection, output fields and recovery. Keep a
 working management path while changing profiles; a Lite profile change can
 restart the device.
