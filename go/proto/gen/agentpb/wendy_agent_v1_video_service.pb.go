@@ -352,9 +352,14 @@ func (x *VideoDevice) GetPixelFormats() []string {
 }
 
 type ListVideoDevicesRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Network cameras are listed only once the agent holds a login for them
+	// (has_credentials): one found on a shared network belongs to someone else
+	// until it is paired. Set this to also list the unpaired ones, for a
+	// pairing flow that stores their login.
+	IncludeUnpaired bool `protobuf:"varint,1,opt,name=include_unpaired,json=includeUnpaired,proto3" json:"include_unpaired,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *ListVideoDevicesRequest) Reset() {
@@ -385,6 +390,13 @@ func (x *ListVideoDevicesRequest) ProtoReflect() protoreflect.Message {
 // Deprecated: Use ListVideoDevicesRequest.ProtoReflect.Descriptor instead.
 func (*ListVideoDevicesRequest) Descriptor() ([]byte, []int) {
 	return file_wendy_agent_services_v1_wendy_agent_v1_video_service_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *ListVideoDevicesRequest) GetIncludeUnpaired() bool {
+	if x != nil {
+		return x.IncludeUnpaired
+	}
+	return false
 }
 
 type ListVideoDevicesResponse struct {
@@ -726,6 +738,8 @@ func (*ForgetCameraResponse) Descriptor() ([]byte, []int) {
 	return file_wendy_agent_services_v1_wendy_agent_v1_video_service_proto_rawDescGZIP(), []int{7}
 }
 
+// RefreshCameras is the pairing scan, so its listing always includes network
+// cameras that have no login yet. Apps list cameras with ListVideoDevices.
 type RefreshCamerasRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
@@ -1853,8 +1867,9 @@ const file_wendy_agent_services_v1_wendy_agent_v1_video_service_proto_rawDesc = 
 	"\x06online\x18\v \x01(\bR\x06online\x12\x14\n" +
 	"\x05topic\x18\f \x01(\tR\x05topic\x12\x1b\n" +
 	"\tstable_id\x18\r \x01(\tR\bstableId\x12#\n" +
-	"\rpixel_formats\x18\x0e \x03(\tR\fpixelFormats\"\x19\n" +
-	"\x17ListVideoDevicesRequest\"Z\n" +
+	"\rpixel_formats\x18\x0e \x03(\tR\fpixelFormats\"D\n" +
+	"\x17ListVideoDevicesRequest\x12)\n" +
+	"\x10include_unpaired\x18\x01 \x01(\bR\x0fincludeUnpaired\"Z\n" +
 	"\x18ListVideoDevicesResponse\x12>\n" +
 	"\adevices\x18\x01 \x03(\v2$.wendy.agent.services.v1.VideoDeviceR\adevices\"\xd5\x01\n" +
 	"\x12StreamVideoRequest\x12\x1b\n" +
