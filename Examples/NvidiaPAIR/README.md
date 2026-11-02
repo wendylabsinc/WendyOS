@@ -16,8 +16,9 @@ It does not combine GPU memory or split a model across nodes.
   support, enrolled in the same organization.
 - NVIDIA GPU access for the supplied manifest. The tested hardware is Jetson
   Orin Nano with JetPack 7.2. Other GPU/driver combinations need validation.
-- A CLI with `wendy net` and agents with the app mDNS bridge. An older agent
-  accepting `mode: "mesh"` is not sufficient evidence of discovery support.
+- A CLI with `wendy device wendy-net` and agents with the app mDNS bridge. An
+  older agent accepting `mode: "mesh"` is not sufficient evidence of discovery
+  support.
 - Internet access on the build machine to fetch PAIR, the Ollama image, and the
   roughly 398 MB model. The running app needs no engine or model downloads.
 
@@ -27,10 +28,10 @@ From this directory, replace `DEVICE_A` and `DEVICE_B` with your device selector
 
 ```sh
 wendy json validate
-wendy net configure --device DEVICE_A --participate=true --ethernet=true
-wendy net configure --device DEVICE_B --participate=true --ethernet=true
-wendy net status --device DEVICE_A
-wendy net topology --device DEVICE_A
+wendy device wendy-net configure --device DEVICE_A --participate=true --ethernet=true
+wendy device wendy-net configure --device DEVICE_B --participate=true --ethernet=true
+wendy device wendy-net status --device DEVICE_A
+wendy device wendy-net topology --device DEVICE_A
 wendy run --device DEVICE_A --detach --yes
 wendy run --device DEVICE_B --detach --yes
 ```
@@ -79,9 +80,11 @@ wendy device attach --device DEVICE_A sh.wendy.examples.nvidia-pair -- pairctl r
 wendy device attach --device DEVICE_A sh.wendy.examples.nvidia-pair -- pairctl rpc nodes:get-initial
 ```
 
-Check for `state: "paired"`; an RPC response alone does not prove successful
-pairing. Wendy organization membership transports the service traffic. PAIR
-still performs its own pairing and cluster authentication.
+Check the `cluster:invite-status` response for `state: "paired"`. The
+`nodes:get-initial` response lists cluster members as `member`; it is not the
+source of the invitation's `paired` state. An RPC response alone does not prove
+successful pairing. Wendy organization membership transports the service traffic.
+PAIR still performs its own pairing and cluster authentication.
 
 ## Networking details
 
