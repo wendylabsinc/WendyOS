@@ -84,6 +84,53 @@ test("Cloud labels use the PKI binding instead of the asset row ID", async () =>
   assert.equal(unknown.cloudNamePrincipal, undefined, "an invalid explicit binding must not fall back to the asset ID");
 });
 
+test("physical asset-ID matches do not override explicit Cloud PKI bindings", async () => {
+  const physical = "wendy-lite:physical.local";
+  for (const pkiDeviceName of [undefined, "", "unknown-device-format", "00000000-0000-4000-8000-000000000099"]) {
+    const service = fixture();
+    service.run = async (_file, args) => JSON.stringify(args[0] === "cloud"
+      ? [{ id: cloudAsset, selector: cloudSelector, name: "Cloud asset", pkiDeviceName }]
+      : { externalDevices: [{
+        isWendyDevice: true, providerKey: "wendy-lite", id: physical, displayName: "Physical device",
+        connectionInfo: { type: "LAN", enrolledDeviceId: cloudAsset, tenantId: cloudTenant },
+      }] });
+    const { devices } = await service.meshDiscover();
+    const physicalKey = service.meshReporterKeys.get(physical);
+    const cloudKey = service.meshReporterKeys.get(cloudSelector);
+    const hasExplicitBinding = pkiDeviceName != null && pkiDeviceName !== "";
+    assert.ok(devices.some(device => device.id === physical));
+    assert.equal(cloudKey === physicalKey, !hasExplicitBinding, `binding ${pkiDeviceName}`);
+    assert.equal(devices.some(device => device.id === cloudSelector), hasExplicitBinding);
+    assert.equal(service.meshReporterTargets.get(physicalKey).includes(cloudSelector), !hasExplicitBinding);
+    if (pkiDeviceName === "unknown-device-format") assert.equal(cloudKey, undefined);
+  }
+});
+
+test("an invalid explicit Cloud binding withdraws a retained alias during partial discovery", async () => {
+  const service = fixture(), physical = "wendy-lite:physical.local";
+  let partial = false;
+  service.run = async (_file, args) => {
+    if (args[0] === "cloud") return JSON.stringify([{
+      id: cloudAsset, selector: cloudSelector, name: "Cloud asset",
+      ...(partial ? { pkiDeviceName: "unknown-device-format" } : {}),
+    }]);
+    if (partial) throw new Error("Local discovery unavailable");
+    return JSON.stringify({ externalDevices: [{
+      isWendyDevice: true, providerKey: "wendy-lite", id: physical,
+      connectionInfo: { type: "LAN", enrolledDeviceId: cloudAsset, tenantId: cloudTenant },
+    }] });
+  };
+  await service.meshDiscover();
+  const physicalKey = service.meshReporterKeys.get(physical);
+  assert.equal(service.meshReporterKeys.get(cloudSelector), physicalKey);
+  partial = true;
+  const result = await service.meshDiscover();
+  assert.equal(result.retainPrevious, true);
+  assert.equal(service.meshReporterKeys.get(cloudSelector), undefined);
+  assert.equal(service.meshReporterTargets.get(physicalKey).includes(cloudSelector), false);
+  assert.ok(result.devices.some(device => device.id === cloudSelector));
+});
+
 test("Cloud discovery preserves complete selectors across tenants, endpoints and legacy organizations", async () => {
   const service = fixture();
   const selectors = [
