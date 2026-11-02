@@ -21,9 +21,9 @@ import (
 // history is only meaningful for the router ID that produced it.
 type PersistentState struct {
 	Version  int
-	Device   string `json:"device"`
-	RouterID uint64 `json:"routerID"`
-	Revision uint64 `json:"revision"`
+	Device   string `json:"device" cbor:"d"`
+	RouterID uint64 `json:"routerID" cbor:"r"`
+	Revision uint64 `json:"revision" cbor:"R"`
 	Babel    *babel.Checkpoint
 	Receipts []DirectoryReceipt
 }

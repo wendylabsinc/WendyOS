@@ -9,10 +9,10 @@ import (
 
 const (
 	// Router QUIC negotiates the explicit whole-IP receive capability. Stream
-	// and leaf roles retain their own independent protocol versions/framing.
+	// carriers retain their own independent protocol versions/framing.
 	// All roles require signed route origins bound to the complete principal.
 	// Require exact ALPN/hello matches; never fall back to weaker protocols.
-	LinkALPN            = "wendy-net-router/2"
+	LinkALPN            = "wendy-net-router/3"
 	LinkProtocolVersion = 2
 	// Leave room for an IPv6 outer header around a minimum-size IPv6 packet.
 	// Carrier fragmentation remains at most two bounded datagrams per packet.

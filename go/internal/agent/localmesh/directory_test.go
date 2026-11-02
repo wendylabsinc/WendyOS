@@ -5,7 +5,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/x509"
-	"encoding/json"
+	"github.com/wendylabsinc/wendy/go/internal/agent/netwire"
 	"math/big"
 	"net/url"
 	"testing"
@@ -88,7 +88,7 @@ func TestDirectoryOriginSignatureLeaseAndReplay(t *testing.T) {
 	mismatched := m
 	mismatched.Device = other.UUID()
 	mismatched.Revision = 3
-	body, err := json.Marshal(mismatched)
+	body, err := netwire.Marshal(mismatched)
 	if err != nil {
 		t.Fatal(err)
 	}
