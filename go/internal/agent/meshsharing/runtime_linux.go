@@ -11,12 +11,14 @@ import (
 	"net/netip"
 	"os/exec"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/vishvananda/netlink"
 	"github.com/wendylabsinc/wendy/go/internal/agent/hostnetwork"
 	"github.com/wendylabsinc/wendy/go/internal/agent/localmesh"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
+	"go.uber.org/zap"
 )
 
 type grantedTunnel struct {
@@ -35,6 +37,7 @@ type borrowedTunnel struct {
 	done     chan struct{}
 	stop     chan struct{}
 	stopOnce sync.Once
+	started  time.Time
 }
 
 // linuxTunnelPolicy owns the separate Internet overlay. Babel sees only the
@@ -59,6 +62,43 @@ type linuxTunnelPolicy struct {
 	closed            bool
 	probeIPv6         func(context.Context, string, string) bool
 	borrowers         sync.WaitGroup
+	logger            atomic.Pointer[zap.Logger]
+}
+
+func (p *linuxTunnelPolicy) SetLogger(logger *zap.Logger) { p.logger.Store(logger) }
+
+func (p *linuxTunnelPolicy) reportControlEnd(event controlEnd) {
+	logger := p.logger.Load()
+	if logger == nil {
+		return
+	}
+	fields := []zap.Field{
+		zap.String("role", event.role), zap.String("phase", event.phase), zap.String("reason", event.reason),
+		zap.String("peer_principal", event.peer.Principal()), zap.Uint16("slot", event.lease.Slot),
+		zap.Time("ended_at", event.endedAt), zap.Duration("elapsed", event.elapsed),
+		zap.Error(event.err), zap.NamedError("cleanup_error", event.cleanupErr)}
+	if !event.expires.IsZero() {
+		fields = append(fields, zap.Time("credential_expires_at", event.expires))
+	}
+	if event.role == "gateway" {
+		fields = append(fields, zap.Uint64("heartbeats", event.heartbeats))
+	}
+	logger.Info("Wendy Net gateway control ended", fields...)
+}
+
+// Caller holds p.mu, so old and desired sharing inputs describe one decision.
+func (p *linuxTunnelPolicy) reportSharingChange(reason, iface, upstream string, ipv6, routesChanged bool, err error) {
+	if logger := p.logger.Load(); logger != nil {
+		fields := []zap.Field{zap.String("reason", reason),
+			zap.String("interface", iface), zap.String("previous_interface", p.sharing),
+			zap.Bool("interface_changed", iface != p.sharing), zap.Bool("resolver_changed", upstream != p.upstream),
+			zap.Bool("ipv6", ipv6), zap.Bool("previous_ipv6", p.sharing6), zap.Bool("ipv6_changed", ipv6 != p.sharing6),
+			zap.Int("granted_leases", len(p.grants)), zap.Error(err)}
+		if reason == "reconfigure" || reason == "sharing-disabled" {
+			fields = append(fields, zap.Bool("routes_changed", routesChanged))
+		}
+		logger.Info("Wendy Net gateway sharing changed", fields...)
+	}
 }
 
 func newLinuxTunnelPolicy(ctx context.Context, credentials *localmesh.Credentials) (p *linuxTunnelPolicy, err error) {
@@ -180,6 +220,7 @@ func (p *linuxTunnelPolicy) SetSharing(ctx context.Context, iface, upstream stri
 	if iface != "" {
 		routes, err = selectedDonorRoutes(iface, share6)
 		if err != nil {
+			p.reportSharingChange("native-route-read-failed", iface, upstream, share6, false, err)
 			return errors.Join(err, p.stopSharingLocked(ctx))
 		}
 	}
@@ -187,13 +228,20 @@ func (p *linuxTunnelPolicy) SetSharing(ctx context.Context, iface, upstream stri
 		select {
 		case exit := <-p.dnsDone:
 			p.dnsDone <- exit
+			p.reportSharingChange("resolver-exited", iface, upstream, share6, false, exit)
 			return errors.Join(fmt.Errorf("Wendy Net DNS proxy stopped: %v", exit), p.stopSharingLocked(ctx))
 		default:
 		}
 	}
-	if iface == p.sharing && upstream == p.upstream && share6 == p.sharing6 && sameDonorRoutes(routes, p.donorRouting.routes) && (iface != "" || (len(p.grants) == 0 && len(p.shareRules) == 0 && !p.forwarding6)) {
+	routesChanged := !sameDonorRoutes(routes, p.donorRouting.routes)
+	if iface == p.sharing && upstream == p.upstream && share6 == p.sharing6 && !routesChanged && (iface != "" || (len(p.grants) == 0 && len(p.shareRules) == 0 && !p.forwarding6)) {
 		return nil
 	}
+	reason := "reconfigure"
+	if iface == "" {
+		reason = "sharing-disabled"
+	}
+	p.reportSharingChange(reason, iface, upstream, share6, routesChanged, nil)
 	if err = p.stopSharingLocked(ctx); err != nil {
 		return err
 	}
@@ -404,7 +452,7 @@ func (p *linuxTunnelPolicy) SetGateway(ctx context.Context, peer meshid.Device) 
 	if err != nil {
 		return err
 	}
-	b := &borrowedTunnel{grantedTunnel: grantedTunnel{peer: peer, lease: lease}, control: control, done: make(chan struct{}), stop: make(chan struct{})}
+	b := &borrowedTunnel{grantedTunnel: grantedTunnel{peer: peer, lease: lease}, control: control, done: make(chan struct{}), stop: make(chan struct{}), started: time.Now()}
 	p.borrowed = b
 	defer func() {
 		if err != nil {
@@ -460,7 +508,25 @@ func (p *linuxTunnelPolicy) watchBorrowed(b *borrowedTunnel) {
 	defer p.borrowers.Done()
 	defer close(b.done)
 	defer func() { b.stopOnce.Do(func() { close(b.stop) }); _ = b.control.Close() }()
-	_ = exchangeLeaseHeartbeats(b.control, b.stop, leaseHeartbeatInterval, leaseHeartbeatMinInterval, leaseHeartbeatTimeout)
+	err := exchangeLeaseHeartbeats(b.control, b.stop, leaseHeartbeatInterval, leaseHeartbeatMinInterval, leaseHeartbeatTimeout)
+	ended := controlEnd{role: "borrower", phase: "heartbeat-exchange", peer: b.peer, lease: b.lease, err: err, endedAt: time.Now()}
+	var failure *heartbeatFailure
+	if errors.As(err, &failure) {
+		ended.phase = failure.phase
+	}
+	if !b.started.IsZero() {
+		ended.elapsed = time.Since(b.started)
+	}
+	if bounded, ok := b.control.(*expiryConn); ok {
+		ended.expires = bounded.expires
+	}
+	select {
+	case <-b.stop:
+		ended.reason = "local-stop"
+	default:
+		ended.reason = controlEndReason(nil, ended.expires, nil, err)
+	}
+	p.reportControlEnd(ended)
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.borrowed == b {
