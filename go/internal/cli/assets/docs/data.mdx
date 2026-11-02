@@ -56,6 +56,10 @@ wendy data sources --device workshop.local
 wendy data record --device workshop.local --name commissioning --source telemetry
 ```
 
+`sources` lists each camera, microphone and ROS 2 graph with the ID to pass to
+`--source` and a status that says what the agent checked. A `*` marks the
+sources `record` captures when you pass no `--source`.
+
 The recording runs on the device after the command returns.
 `wendy data status --device workshop.local` shows how long it has been running
 and how much it has written. Stop it when you have captured enough data, then
@@ -130,7 +134,7 @@ Replace `sources` with selectors from `wendy data sources`. For example:
 ```yaml
 sources:
   - camera: v4l2:/dev/video0
-  - audio: audio:16777217
+  - audio: audio:alsa_input.usb-046d_HD_Pro_Webcam_C920_C2DD0F9F-02.analog-stereo
   - ros2: /lidar/points
   - ros2: /vehicle/odometry
   - telemetry: true

@@ -7,12 +7,15 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -262,4 +265,185 @@ func TestValidCachedUV(t *testing.T) {
 		t.Fatal(err)
 	}
 	check(false)
+}
+
+// shWorker runs script as the model process. Scripts read the config line
+// first, so the agent's write of it cannot race their exit.
+func shWorker(t *testing.T, ctx context.Context, script string, crashed func(string)) (Session, error) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("needs /bin/sh")
+	}
+	return startWorker(ctx, []string{"/bin/sh", "-c", "read config; " + script}, t.TempDir(), []string{"PATH=" + os.Getenv("PATH")}, workerConfig{}, crashed)
+}
+
+// crashLog records what startWorker reports as crashes.
+type crashLog struct {
+	mu      sync.Mutex
+	reasons []string
+}
+
+func (c *crashLog) add(reason string) {
+	c.mu.Lock()
+	c.reasons = append(c.reasons, reason)
+	c.mu.Unlock()
+}
+func (c *crashLog) all() []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]string(nil), c.reasons...)
+}
+
+// drain reads results until the process ends.
+func drain(t *testing.T, session Session) []Result {
+	t.Helper()
+	var results []Result
+	timeout := time.After(20 * time.Second)
+	for {
+		select {
+		case result, ok := <-session.Results():
+			if !ok {
+				return results
+			}
+			results = append(results, result)
+		case <-timeout:
+			t.Fatal("the model process did not end")
+		}
+	}
+}
+
+func TestWorkerExitAfterReadyCarriesItsStderr(t *testing.T) {
+	crashes := &crashLog{}
+	session, err := shWorker(t, context.Background(), `echo '{"type":"ready"}'
+echo 'Traceback (most recent call last):' >&2
+echo '  File "accelerator.py", line 1' >&2
+echo 'RuntimeError: CUDA error 999' >&2
+exit 3`, crashes.add)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+	drain(t, session)
+	// Before, the agent said only "model process exited".
+	want := "model process exited: exit status 3; stderr: Traceback (most recent call last): | File \"accelerator.py\", line 1 | RuntimeError: CUDA error 999"
+	if session.Err() == nil || session.Err().Error() != want {
+		t.Fatalf("exit error %v, want %q", session.Err(), want)
+	}
+	if reasons := crashes.all(); len(reasons) != 1 || !strings.HasSuffix(want, reasons[0]) {
+		t.Fatalf("crashes %q", reasons)
+	}
+}
+
+// After a reboot TensorRT printed this on the worker's stdout, and the agent
+// killed the worker every 8 s. The worker no longer lets native code reach
+// the channel (worker.py); if anything does, the reason says what it was.
+func TestWorkerProtocolViolationNamesTheLine(t *testing.T) {
+	crashes := &crashLog{}
+	session, err := shWorker(t, context.Background(), `echo '{"type":"ready"}'
+echo '[TRT] [W] Using an engine plan file across different models of devices is not supported'
+echo 'loading engine' >&2
+sleep 30`, crashes.add)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Close()
+	drain(t, session)
+	message := fmt.Sprint(session.Err())
+	for _, want := range []string{
+		`model process exited: it wrote a line to stdout that is not protocol JSON: "[TRT] [W] Using an engine plan file across different models of devices is not supported"`,
+		"; stderr: loading engine",
+	} {
+		if !strings.Contains(message, want) {
+			t.Fatalf("exit error %q lacks %q", message, want)
+		}
+	}
+	if len(crashes.all()) != 1 {
+		t.Fatalf("crashes %q", crashes.all())
+	}
+}
+
+func TestWorkerViolationBeforeReadyIsTheLoadError(t *testing.T) {
+	_, err := shWorker(t, context.Background(), `echo 'native noise'; sleep 30`, nil)
+	if err == nil || !strings.Contains(err.Error(), `loading campaign model: it wrote a line to stdout that is not protocol JSON: "native noise"`) {
+		t.Fatalf("start error %v", err)
+	}
+}
+
+func TestWorkerStoppedOrExplainedIsNoCrash(t *testing.T) {
+	crashes := &crashLog{}
+	// Asked to stop.
+	session, err := shWorker(t, context.Background(), `echo '{"type":"ready"}'; sleep 30`, crashes.add)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Close reports the stdin pipe the exit already closed; nothing reads it.
+	_ = session.Close()
+	if session.Err() != nil {
+		t.Fatalf("a stopped worker has exit error %v", session.Err())
+	}
+	// Its campaign stopped.
+	ctx, cancel := context.WithCancel(context.Background())
+	session, err = shWorker(t, ctx, `echo '{"type":"ready"}'; sleep 30`, crashes.add)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	drain(t, session)
+	session.Close()
+	// It said why it ended: a strict campaign whose TensorRT failed.
+	session, err = shWorker(t, context.Background(), `echo '{"type":"ready"}'
+echo '{"type":"error","error":"the TensorRT engine build failed: out of memory"}'
+exit 1`, crashes.add)
+	if err != nil {
+		t.Fatal(err)
+	}
+	results := drain(t, session)
+	session.Close()
+	if len(results) != 1 || results[0].Error != "the TensorRT engine build failed: out of memory" {
+		t.Fatalf("results %+v", results)
+	}
+	// It said why it could not load.
+	if _, err := shWorker(t, context.Background(), `echo '{"type":"error","error":"model is not on this device"}'; exit 1`, crashes.add); err == nil || !strings.Contains(err.Error(), "model is not on this device") {
+		t.Fatalf("start error %v", err)
+	}
+	if reasons := crashes.all(); len(reasons) != 0 {
+		t.Fatalf("counted as crashes: %q", reasons)
+	}
+}
+
+func TestWorkerCrashBeforeReadyIsACrash(t *testing.T) {
+	crashes := &crashLog{}
+	_, err := shWorker(t, context.Background(), `echo 'Segmentation fault' >&2; exit 139`, crashes.add)
+	if err == nil || !strings.Contains(err.Error(), "Segmentation fault") {
+		t.Fatalf("start error %v", err)
+	}
+	if reasons := crashes.all(); len(reasons) != 1 || reasons[0] != "exit status 139; stderr: Segmentation fault" {
+		t.Fatalf("crashes %q", reasons)
+	}
+}
+
+func TestRuntimeTailIsTheLastLinesOnOneLine(t *testing.T) {
+	b := &tailBuffer{}
+	for i := range 20 {
+		fmt.Fprintf(b, "line %d\r\n\n", i)
+	}
+	if tail := b.Tail(3, 1024); tail != "line 17 | line 18 | line 19" {
+		t.Fatalf("tail %q", tail)
+	}
+	if tail := b.Tail(20, 10); tail != "... | line 19" {
+		t.Fatalf("bounded tail %q", tail)
+	}
+	if tail := (&tailBuffer{}).Tail(3, 1024); tail != "" {
+		t.Fatalf("empty tail %q", tail)
+	}
+}
+
+func TestRuntimeEnvironmentBoundsTheCUDACache(t *testing.T) {
+	root := t.TempDir()
+	env := strings.Join(runtimeEnvironment(root), "\n")
+	for _, want := range []string{"CUDA_CACHE_PATH=" + filepath.Join(root, "cuda-cache"), "CUDA_CACHE_MAXSIZE=536870912"} {
+		if !strings.Contains(env, want) {
+			t.Fatalf("environment lacks %s", want)
+		}
+	}
 }

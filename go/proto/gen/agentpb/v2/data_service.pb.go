@@ -170,14 +170,23 @@ func (x *DataEventsResponse) GetNotifications() bool {
 }
 
 type DataSource struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	Kind          string                 `protobuf:"bytes,2,opt,name=kind,proto3" json:"kind,omitempty"`
-	ClockDomain   string                 `protobuf:"bytes,3,opt,name=clock_domain,json=clockDomain,proto3" json:"clock_domain,omitempty"`
-	Healthy       bool                   `protobuf:"varint,4,opt,name=healthy,proto3" json:"healthy,omitempty"`
-	Detail        string                 `protobuf:"bytes,5,opt,name=detail,proto3" json:"detail,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	Id          string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	Kind        string                 `protobuf:"bytes,2,opt,name=kind,proto3" json:"kind,omitempty"`
+	ClockDomain string                 `protobuf:"bytes,3,opt,name=clock_domain,json=clockDomain,proto3" json:"clock_domain,omitempty"`
+	Healthy     bool                   `protobuf:"varint,4,opt,name=healthy,proto3" json:"healthy,omitempty"`
+	Detail      string                 `protobuf:"bytes,5,opt,name=detail,proto3" json:"detail,omitempty"`
+	// A short name for people, such as "HD Pro Webcam C920", without the driver
+	// strings detail carries (ALSA and PipeWire node names, transport enums). It
+	// is a label, not an identifier: select a source by id. Empty from agents
+	// that predate it, where detail is the only description.
+	Name string `protobuf:"bytes,6,opt,name=name,proto3" json:"name,omitempty"`
+	// Why the source is not healthy, in a few words a person can act on, such as
+	// "no login stored", "camera offline" or "silent audio-hub channel". Set only
+	// when healthy is false. Empty from agents that predate it.
+	UnusableReason string `protobuf:"bytes,7,opt,name=unusable_reason,json=unusableReason,proto3" json:"unusable_reason,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *DataSource) Reset() {
@@ -241,6 +250,20 @@ func (x *DataSource) GetHealthy() bool {
 func (x *DataSource) GetDetail() string {
 	if x != nil {
 		return x.Detail
+	}
+	return ""
+}
+
+func (x *DataSource) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *DataSource) GetUnusableReason() string {
+	if x != nil {
+		return x.UnusableReason
 	}
 	return ""
 }
@@ -1616,14 +1639,16 @@ const file_wendy_agent_services_v2_data_service_proto_rawDesc = "" +
 	"eventsJson\x12\x16\n" +
 	"\x06cursor\x18\x02 \x01(\tR\x06cursor\x12\x10\n" +
 	"\x03gap\x18\x03 \x01(\bR\x03gap\x12$\n" +
-	"\rnotifications\x18\x04 \x01(\bR\rnotifications\"\x85\x01\n" +
+	"\rnotifications\x18\x04 \x01(\bR\rnotifications\"\xc2\x01\n" +
 	"\n" +
 	"DataSource\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04kind\x18\x02 \x01(\tR\x04kind\x12!\n" +
 	"\fclock_domain\x18\x03 \x01(\tR\vclockDomain\x12\x18\n" +
 	"\ahealthy\x18\x04 \x01(\bR\ahealthy\x12\x16\n" +
-	"\x06detail\x18\x05 \x01(\tR\x06detail\"\x14\n" +
+	"\x06detail\x18\x05 \x01(\tR\x06detail\x12\x12\n" +
+	"\x04name\x18\x06 \x01(\tR\x04name\x12'\n" +
+	"\x0funusable_reason\x18\a \x01(\tR\x0eunusableReason\"\x14\n" +
 	"\x12DataSourcesRequest\"T\n" +
 	"\x13DataSourcesResponse\x12=\n" +
 	"\asources\x18\x01 \x03(\v2#.wendy.agent.services.v2.DataSourceR\asources\"a\n" +

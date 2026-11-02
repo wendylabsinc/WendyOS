@@ -26,6 +26,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -1551,8 +1552,7 @@ func ensureOCIExportBuilder(ctx context.Context, w io.Writer) (string, error) {
 	// `docker inspect` is far cheaper than `docker buildx inspect` (no buildx
 	// plugin load, no buildkit gRPC handshake). On any miss we fall through to the
 	// full robust path below.
-	containerName := "buildx_buildkit_" + builderName + "0"
-	if out, err := imageBuilderCommandContext(ctx, "docker", "inspect", "-f", "{{.State.Running}}", containerName).Output(); err == nil && strings.TrimSpace(string(out)) == "true" {
+	if ociBuilderRunningForUser(ctx, builderName) {
 		return builderName, nil
 	}
 
@@ -1581,6 +1581,41 @@ func ensureOCIExportBuilder(ctx context.Context, w io.Writer) (string, error) {
 		return "", err
 	}
 	return builderName, nil
+}
+
+// ociBuilderRunningForUser is ensureOCIExportBuilder's fast-path test: the
+// builder's buildkit container is running AND this user's buildx store has the
+// builder. The container lives on the Docker daemon, shared by every account
+// that uses it, but builder registrations are per user, so another account's
+// running container proves nothing here: building with `--builder` would fail
+// with `no builder "<name>" found`. A file check keeps the fast path cheap.
+func ociBuilderRunningForUser(ctx context.Context, builderName string) bool {
+	if !buildxBuilderRegistered(builderName) {
+		return false
+	}
+	containerName := "buildx_buildkit_" + builderName + "0"
+	out, err := imageBuilderCommandContext(ctx, "docker", "inspect", "-f", "{{.State.Running}}", containerName).Output()
+	return err == nil && strings.TrimSpace(string(out)) == "true"
+}
+
+// buildxBuilderRegistered reports whether builderName is in the buildx store
+// the CLI's own buildx commands use: $BUILDX_CONFIG, else $DOCKER_CONFIG/buildx,
+// else ~/.docker/buildx.
+func buildxBuilderRegistered(builderName string) bool {
+	store := os.Getenv("BUILDX_CONFIG")
+	if store == "" {
+		dockerConfig := os.Getenv("DOCKER_CONFIG")
+		if dockerConfig == "" {
+			home, err := os.UserHomeDir()
+			if err != nil {
+				return false
+			}
+			dockerConfig = filepath.Join(home, ".docker")
+		}
+		store = filepath.Join(dockerConfig, "buildx")
+	}
+	_, err := os.Stat(filepath.Join(store, "instances", builderName))
+	return err == nil
 }
 
 // ociBuilderBootstrapTimeout bounds `docker buildx inspect --bootstrap`: a cold
@@ -1946,6 +1981,10 @@ func buildxCacheSubdir(cacheKey string) string {
 // build paths point DOCKER_CONFIG at.
 const cleanDockerConfigContents = `{"auths":{}}`
 
+// cleanDockerConfigLinkSeq names ensureCleanDockerConfig's temporary links, so
+// concurrent builds in one process never pick the same name.
+var cleanDockerConfigLinkSeq atomic.Uint64
+
 // ensureCleanDockerConfig materializes a Docker config directory without a
 // credsStore credential helper and returns its path. It returns "" on Windows,
 // where the host's own config is used unchanged.
@@ -2010,10 +2049,36 @@ func ensureCleanDockerConfig() (string, error) {
 		origDockerConfig = filepath.Join(home, ".docker")
 	}
 	for _, subdir := range []string{"buildx", "cli-plugins", "contexts"} {
+		src := filepath.Join(origDockerConfig, subdir)
 		dst := filepath.Join(dir, subdir)
-		if _, err := os.Lstat(dst); err != nil {
-			// best-effort: ignore if source doesn't exist or symlink fails
-			_ = os.Symlink(filepath.Join(origDockerConfig, subdir), dst)
+		// Create the source as docker itself would on first use. A link to a
+		// missing directory is worse than no link: buildx's first write through
+		// it fails with "mkdir …/buildx: file exists" (an account with no
+		// ~/.docker yet, such as root on a device). Creating it also repairs a
+		// link an earlier run left dangling. Best-effort, like the links.
+		_ = os.MkdirAll(src, 0o700)
+		if _, err := os.Stat(dst); err == nil {
+			continue
+		}
+		if _, err := os.Stat(src); err != nil {
+			// src could not be created: drop a dangling link so docker can
+			// make a real directory. Only a link is removed, never what a
+			// concurrent build's buildx made here.
+			if info, err := os.Lstat(dst); err == nil && info.Mode()&os.ModeSymlink != 0 {
+				_ = os.Remove(dst)
+			}
+			continue
+		}
+		// dst is missing or a dangling link. Make the link at a temporary name
+		// and rename it over dst: the rename swaps a dangling link atomically
+		// and fails on a directory, so a good link that a concurrent build
+		// just made is never removed, and buildx can't create a real
+		// directory in a gap between a remove and a symlink.
+		tmp := fmt.Sprintf("%s.link-%d-%d", dst, os.Getpid(), cleanDockerConfigLinkSeq.Add(1))
+		if err := os.Symlink(src, tmp); err == nil {
+			if err := os.Rename(tmp, dst); err != nil {
+				_ = os.Remove(tmp)
+			}
 		}
 	}
 

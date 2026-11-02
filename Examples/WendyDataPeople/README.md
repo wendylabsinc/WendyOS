@@ -18,7 +18,9 @@ the pinned Hugging Face checkpoint on first use. This requires internet access,
 several GB of free space and enough RAM for the model. Subsequent starts reuse
 the cache in the agent's data partition. This initial backend supports CPU
 inference on 64-bit Linux (x86_64 and aarch64) and Apple Silicon macOS; its Linux
-wheels require glibc 2.28 or newer. GPU execution is not enabled by this example.
+wheels require glibc 2.28 or newer. GPU execution is not enabled by this example:
+`inference.accelerator` runs `yolo_onnx` models through TensorRT on a Jetson,
+and Transformers models always run on the CPU.
 
 `inference_status` in campaign inspect (or the plan JSON from list) reports `pending`, `loading`,
 `running`, `waiting_for_cameras`, `error` or `disabled`, with per-camera health and
