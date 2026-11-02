@@ -36,10 +36,11 @@ const dragonwingProgrammer = "prog_firehose_ddr.elf"
 // dragonwingBoard is one EDL-flashed Qualcomm board. msmID is the only way to
 // tell them apart: they share the generic 05c6:9008 EDL id.
 type dragonwingBoard struct {
-	deviceType string
-	msmID      uint32
-	storage    string          // the Firehose MemoryName of its flash
-	guide      func() edlGuide // how the flow words its storage and EDL entry
+	deviceType     string
+	msmID          uint32
+	storage        string          // the Firehose MemoryName of its flash
+	guide          func() edlGuide // how the flow words its storage and EDL entry
+	postFlashHints []string        // optional board-specific connection guidance
 	// extractedFactor estimates its extracted bundle from the compressed one.
 	extractedFactor float64
 }
@@ -52,6 +53,10 @@ const dragonwingDeviceTypePrefix = "dragonwing-"
 // Boards kept in their own file append themselves here from an init().
 var dragonwingBoards = []dragonwingBoard{
 	{deviceType: "dragonwing-iq-8275", msmID: 0x002e70e1, storage: qdl.StorageUFS, guide: dipSwitch3Guide,
+		postFlashHints: []string{
+			"  After WendyOS boots, connect the computer to USB2 (micro-USB) for normal USB networking.",
+			"  USB0 (USB-C) remains the EDL/recovery port.",
+		},
 		extractedFactor: dragonwingExtractedFactor},
 	{deviceType: "dragonwing-iq-9075", msmID: 0x002eb0e1, storage: qdl.StorageUFS, guide: dipSwitch3Guide,
 		extractedFactor: dragonwingExtractedFactor},
@@ -540,6 +545,9 @@ func finishDragonwingFlash(w io.Writer, board dragonwingBoard, warnings []string
 	fmt.Fprintln(w, tui.SuccessMessage(fmt.Sprintf("Flashed WendyOS %s.", version)))
 	fmt.Fprintln(w)
 	for _, line := range board.guide().done {
+		fmt.Fprintln(w, line)
+	}
+	for _, line := range board.postFlashHints {
 		fmt.Fprintln(w, line)
 	}
 	return nil
