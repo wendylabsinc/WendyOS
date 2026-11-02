@@ -2,7 +2,6 @@ package localmesh
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,7 +11,6 @@ import (
 	"strconv"
 
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
-	"github.com/wendylabsinc/wendy/go/internal/shared/roughtime"
 )
 
 // TLSLANPort is reserved by automatically discovered native LAN carriers.
@@ -48,9 +46,6 @@ type TCPIdentity struct {
 	AgentPort               uint16
 	AppEndpoints            []AppEndpoint // supplied only for ready local listeners
 	Certificate, Chain, Key string
-	// ClockSync is runtime-only. It accepts only fresh, independently verified
-	// authority proofs over the optional pre-manifest clock relay.
-	ClockSync func(context.Context, roughtime.RelayQuery) error `json:"-"`
 }
 
 // Devices returns the parsed peers of a config loaded for self.

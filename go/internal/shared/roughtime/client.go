@@ -37,11 +37,6 @@ type Result struct {
 	RawResponse []byte // raw server bytes; used for multicast relay
 }
 
-// RelayQuery carries a receiver-generated challenge to one pinned authority.
-// The receiver still verifies the signed response; the relay supplies no time
-// or trust anchors of its own.
-type RelayQuery func(context.Context, uint8, []byte) ([]byte, error)
-
 // Query queries all servers concurrently and returns the first valid result.
 // The context deadline applies to each individual UDP exchange.
 func Query(ctx context.Context, servers []Server) (Result, error) {

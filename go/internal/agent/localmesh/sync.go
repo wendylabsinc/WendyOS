@@ -63,12 +63,11 @@ type ControlMessage struct {
 	Certificate *CertificateMessage `json:"certificate,omitempty" cbor:"c,omitempty"`
 	Gossip      *netgossip.Message  `json:"gossip,omitempty" cbor:"g,omitempty"`
 	Time        *TimestampControl   `json:"time,omitempty" cbor:"t,omitempty"`
-	Clock       *ClockControl       `json:"clock,omitempty" cbor:"x,omitempty"`
 }
 
 func knownControlKind(kind string) bool {
 	switch kind {
-	case "clock", "time", "gossip", "certificate", "hello", "bundle", "manifest", "identity-request", "manifest-request", "identity-missing", "manifest-missing":
+	case "time", "gossip", "certificate", "hello", "bundle", "manifest", "identity-request", "manifest-request", "identity-missing", "manifest-missing":
 		return true
 	}
 	return false
@@ -124,35 +123,14 @@ func ReadControl(r io.Reader) (ControlMessage, error) {
 		return m, err
 	}
 	var head struct {
-		Kind  string             `json:"kind" cbor:"k"`
-		Time  netwire.RawMessage `json:"time" cbor:"t"`
-		Clock netwire.RawMessage `json:"clock" cbor:"x"`
+		Kind string             `json:"kind" cbor:"k"`
+		Time netwire.RawMessage `json:"time" cbor:"t"`
 	}
 	if err := netwire.Unmarshal(data, &head); err != nil {
 		return m, err
 	}
 	if head.Kind != "" && !knownControlKind(head.Kind) {
 		return ControlMessage{Kind: head.Kind}, nil
-	}
-	if head.Kind == "clock" && len(head.Clock) != 0 {
-		var version struct {
-			Version uint32 `json:"v" cbor:"v"`
-		}
-		if err := netwire.Unmarshal(head.Clock, &version); err != nil {
-			return m, err
-		}
-		if version.Version > clockControlVersion {
-			return ControlMessage{Kind: "clock", Clock: &ClockControl{Version: version.Version}}, nil
-		}
-		var op struct {
-			Op string `json:"op" cbor:"o"`
-		}
-		if err := netwire.Unmarshal(head.Clock, &op); err != nil {
-			return m, err
-		}
-		if op.Op != "" && !knownClockOp(op.Op) {
-			return ControlMessage{Kind: "clock", Clock: &ClockControl{Version: version.Version, Op: op.Op}}, nil
-		}
 	}
 	if head.Kind == "time" && len(head.Time) != 0 {
 		var timestampVersion struct {
@@ -184,9 +162,6 @@ func ReadControl(r io.Reader) (ControlMessage, error) {
 	if m.Kind != "time" && m.Time != nil {
 		return m, errors.New("unexpected timestamp payload")
 	}
-	if m.Kind != "clock" && m.Clock != nil {
-		return m, errors.New("unexpected clock payload")
-	}
 	if m.Kind != "certificate" && m.Certificate != nil {
 		return m, errors.New("unexpected certificate message")
 	}
@@ -194,13 +169,6 @@ func ReadControl(r io.Reader) (ControlMessage, error) {
 		return m, errors.New("unexpected gossip payload")
 	}
 	switch m.Kind {
-	case "clock":
-		if m.Hello != nil || m.Manifest != nil || m.Certificate != nil || m.Gossip != nil || m.Time != nil || len(m.Bundle) != 0 || m.Principal != "" {
-			return m, errors.New("invalid clock envelope")
-		}
-		if err := m.Clock.validate(); err != nil {
-			return m, err
-		}
 	case "time":
 		if m.Hello != nil || m.Manifest != nil || m.Certificate != nil || m.Gossip != nil || len(m.Bundle) != 0 || m.Principal != "" {
 			return m, errors.New("invalid timestamp envelope")
@@ -275,10 +243,6 @@ type Synchronizer struct {
 	// descriptor digests with freshness bounded by the certificate fetch lease.
 	sent    map[string]time.Time
 	pending map[string]SignedManifest
-	// Clock retries share the existing pending storage, with a smaller bound
-	// and an independent monotonic recovery deadline. They grant no presence.
-	pendingClock       map[string]time.Time
-	clockRecoveryUntil time.Time // Monotonic, actor-owned bounded local recovery hint.
 	// Warm-cache retries are bound to the exact advertised chain and deadline.
 	pendingRenewals map[string]pendingManifestRenewal
 	certificates    *CertificateExchange
@@ -502,7 +466,7 @@ func (s *Synchronizer) receive(m ControlMessage, now time.Time, slots ...int) (r
 		if w, ok := s.pending[principal]; ok && s.pendingRenewals[principal].chain.Principal == "" {
 			delete(s.pending, principal)
 			out, changed, err := s.receive(ControlMessage{Kind: "manifest", Manifest: &w}, now)
-			if err != nil && !errors.Is(err, ErrManifestClockSkew) {
+			if err != nil {
 				s.discardManifest(w)
 			}
 			return out, changed, err
@@ -512,30 +476,11 @@ func (s *Synchronizer) receive(m ControlMessage, now time.Time, slots ...int) (r
 			return nil, nil, errors.New("missing manifest")
 		}
 		ok, e := s.directory.Accept(*m.Manifest, now)
-		if errors.Is(e, ErrManifestClockSkew) {
-			s.rememberClockPending(*m.Manifest)
-			return nil, nil, e
-		}
-		if e == nil {
-			delete(s.pendingClock, m.Manifest.ownerKey())
-			delete(s.pending, m.Manifest.ownerKey())
-		}
 		if errors.Is(e, ErrUnsupportedManifest) {
 			// Future artifacts are unsupported claims, not broken carriers.
 			// Discard their fetch slot without installing routes/replay state.
 			s.discardManifest(*m.Manifest)
 			return nil, nil, nil
-		}
-		if s.gossip != nil && errors.Is(e, ErrStaleManifest) && s.clockRecoveryUntil.After(time.Now()) {
-			// Accept authenticates the signature before returning ErrStale.
-			// During this local recovery window, a future-time replay remains
-			// stale and grants no authority or recovery trigger. Release only
-			// its transient fetch: a negative gossip receipt could otherwise
-			// suppress ordinary refetch after a small verified clock advance.
-			if manifest, err := DecodeManifest(m.Manifest.Body); err == nil && time.UnixMilli(manifest.Issued).After(now.Add(5*time.Second)) {
-				s.discardManifest(*m.Manifest)
-				return nil, nil, nil
-			}
 		}
 		if s.gossip != nil && (e == nil || errors.Is(e, ErrStaleManifest)) {
 			s.resolveManifest(*m.Manifest, now, e == nil)
@@ -624,12 +569,6 @@ func (s *Synchronizer) certificateResult(messages []*CertificateMessage, complet
 	}
 	for i, w := range retry {
 		out, admitted, err := s.receive(ControlMessage{Kind: "manifest", Manifest: &w}, now)
-		if errors.Is(err, ErrManifestClockSkew) {
-			// The independently verified body is retained for bounded clock
-			// recovery; do not discard it with ordinary invalid candidates.
-			result = err
-			continue
-		}
 		if err != nil {
 			// These candidates are detached already; Close cannot find them
 			// through pending. Release every unprocessed pooled claim too.
@@ -641,7 +580,7 @@ func (s *Synchronizer) certificateResult(messages []*CertificateMessage, complet
 		replies = append(replies, out...)
 		changed = append(changed, admitted...)
 	}
-	return replies, changed, result
+	return replies, changed, nil
 }
 
 // ContinueCertificates also advances bounded HAVE/WANT replies and downloads.
@@ -745,7 +684,6 @@ func (s *Synchronizer) dropPendingManifest(principal string) {
 	}
 	delete(s.pending, principal)
 	delete(s.pendingRenewals, principal)
-	delete(s.pendingClock, principal)
 }
 
 func (s *Synchronizer) dropPendingPrincipal(principal string) {

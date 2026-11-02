@@ -330,26 +330,6 @@ func (d *Directory) Accept(w SignedManifest, now time.Time) (bool, error) {
 	// its normal time gate and avoid changing directory/replay state until a
 	// separately authenticated time source has corrected the local clock.
 	if validityErr != nil {
-		// A prior receipt still rules out a replay after a wall-clock rollback.
-		// Inspect it without advancing/pruning state or accepting this claim.
-		d.mu.Lock()
-		defer d.mu.Unlock()
-		if !time.UnixMilli(m.Expires).After(d.wallHighWater) {
-			return false, ErrExpiredManifest
-		}
-		hash := manifestHash(w.Body)
-		if receipt, ok := d.history[owner]; ok && receipt.Until.After(now) && m.Revision <= receipt.Revision {
-			if m.Revision == receipt.Revision && hash != receipt.Hash {
-				return false, errors.New("conflicting persisted manifest revision")
-			}
-			return false, ErrStaleManifest
-		}
-		if old, ok := d.entries[owner]; ok && m.Revision <= old.manifest.Revision {
-			if m.Revision == old.manifest.Revision && hash != old.hash {
-				return false, errors.New("conflicting manifest revision")
-			}
-			return false, ErrStaleManifest
-		}
 		return false, validityErr
 	}
 	binding := manifestSignatureBinding{leafHash: certificateHash(chain[0]), valid: true}
