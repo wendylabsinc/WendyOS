@@ -109,8 +109,15 @@ func TestAdvertisementStrictVersionsAndFields(t *testing.T) {
 	if _, err := ParseLocalName(name, "different mesh"); err == nil {
 		t.Fatal("accepted wrong mesh")
 	}
-	if _, err := ParseAdvertisement(append(raw, 0), "field"); err == nil {
-		t.Fatal("accepted trailing payload byte")
+	for _, extension := range [][]byte{{0}, {0x80, 1, 2, 3, 4}} {
+		got, err := ParseAdvertisement(append(bytes.Clone(raw), extension...), "field")
+		want, _ := ParseAdvertisement(raw, "field")
+		if err != nil || got != want {
+			t.Fatalf("optional service-data extension changed v1 prefix: %+v %v", got, err)
+		}
+	}
+	if _, err := encodeLocalName(append(bytes.Clone(raw), 0)); err == nil {
+		t.Fatal("local-name codec accepted an extended binary layout")
 	}
 	for _, psm := range []uint16{0, 1, 0x7f, 0x100, 0x1001, 0xffff} {
 		bad := bytes.Clone(raw)
@@ -151,8 +158,8 @@ func FuzzAdvertisementBinary(f *testing.F) {
 			return
 		}
 		got, err := a.MarshalBinary()
-		if err != nil || !bytes.Equal(got, raw) {
-			t.Fatal("accepted noncanonical binary")
+		if err != nil || !bytes.Equal(got, raw[:AdvertisementSize]) {
+			t.Fatal("accepted inconsistent v1 prefix")
 		}
 		name, err := a.MarshalLocalName()
 		if err != nil {
@@ -186,4 +193,52 @@ func FuzzAdvertisingData(f *testing.F) {
 	f.Add([]byte{2, 1, 6})
 	f.Add([]byte{3, 9, 'a', 'b'})
 	f.Fuzz(func(t *testing.T, data []byte) { _, _ = parseAdvertisingData(data, ServiceUUID(testTenant)) })
+}
+
+func TestAdvertisingDataSkipsUnsupportedVersionsAmongV1(t *testing.T) {
+	advert, _ := NewAdvertisement(lowDevice, "field", DefaultPSM)
+	raw, _ := advert.MarshalBinary()
+	id := testTenant.UUID()
+	wire := make([]byte, 16)
+	for i := range wire {
+		wire[i] = id[15-i]
+	}
+	field := func(payload []byte) []byte {
+		value := append(bytes.Clone(wire), payload...)
+		return append([]byte{byte(len(value) + 1), 0x21}, value...)
+	}
+	known := field(append(bytes.Clone(raw), 0x81, 2, 3))
+	for _, version := range []byte{0, 2, 255} {
+		future := field([]byte{version})
+		for _, report := range [][]byte{append(bytes.Clone(future), known...), append(bytes.Clone(known), future...)} {
+			fields, err := parseAdvertisingData(report, ServiceUUID(testTenant))
+			if err != nil || !fields.servicePresent {
+				t.Fatalf("unsupported version %d hid v1: %+v %v", version, fields, err)
+			}
+			got, err := ParseAdvertisement(fields.service, "field")
+			if err != nil || got != advert {
+				t.Fatalf("v1 prefix after unsupported version %d: %+v %v", version, got, err)
+			}
+		}
+		fields, err := parseAdvertisingData(future, ServiceUUID(testTenant))
+		if err != nil || fields.servicePresent {
+			t.Fatalf("unsupported-only report became v1: %+v %v", fields, err)
+		}
+		mapped := map[string][]byte{ServiceUUID(testTenant): []byte{version}, strings.ToUpper(ServiceUUID(testTenant)): raw}
+		if got, ok := matchingServiceData(mapped, ServiceUUID(testTenant), "field"); !ok || got != advert {
+			t.Fatalf("unsupported mapped version %d hid v1: %+v %v", version, got, ok)
+		}
+	}
+	for _, duplicate := range [][]byte{raw, {AdvertisementVersion}} {
+		mapped := map[string][]byte{ServiceUUID(testTenant): raw, strings.ToUpper(ServiceUUID(testTenant)): duplicate}
+		if _, ok := matchingServiceData(mapped, ServiceUUID(testTenant), "field"); ok {
+			t.Fatal("ambiguous or malformed mapped v1 service-data was accepted")
+		}
+	}
+	if _, err := parseAdvertisingData(append(bytes.Clone(known), known...), ServiceUUID(testTenant)); err == nil {
+		t.Fatal("two supported service-data entries were accepted")
+	}
+	if _, err := parseAdvertisingData(field(nil), ServiceUUID(testTenant)); err == nil {
+		t.Fatal("missing discovery version was accepted")
+	}
 }

@@ -925,7 +925,9 @@ func (n *Node) readLink(ctx context.Context, p *nodePeer) error {
 				return err
 			}
 		default:
-			return errors.New("unknown wendy net datagram kind")
+			// Datagram boundaries are retained by every carrier. Ignore optional
+			// future kinds without disturbing an in-progress IP assembly.
+			continue
 		}
 	}
 }
