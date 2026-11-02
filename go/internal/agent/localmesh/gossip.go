@@ -4,44 +4,51 @@ import (
 	"crypto/sha256"
 	"errors"
 	"github.com/wendylabsinc/wendy/go/internal/agent/netwire"
+	"sync/atomic"
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/netgossip"
 )
 
 func (s *Synchronizer) offerManifest(w SignedManifest, now time.Time) []ControlMessage {
-	if _, ok := s.directory.CurrentRecordChain(w, now); !ok {
-		return nil
-	}
-	manifest, err := DecodeManifest(w.Body)
-	if err != nil {
+	deadline, ok := s.directory.RecordDeadline(w, now)
+	if !ok {
+		s.forgetManifest(w)
 		return nil
 	}
 	data, err := netwire.Marshal(w)
 	if err != nil {
 		return nil
 	}
+	s.trackArtifact(w, deadline)
 	directory, principal := s.directory, w.ownerKey()
-	m := s.gossip.Offer(data, time.UnixMilli(manifest.Expires), now, func(at time.Time) []byte {
+	m := s.gossip.Offer(data, deadline, now, func(at time.Time) []byte {
 		return directory.manifestPayload(principal, at)
 	})
 	if m == nil {
 		return nil
 	}
-	return []ControlMessage{{Kind: "gossip", Gossip: m}}
+	return []ControlMessage{s.gossipControl(m)}
 }
 func (s *Synchronizer) resolveManifest(w SignedManifest, now time.Time, accepted bool) {
-	manifest, err := DecodeManifest(w.Body)
-	if err != nil {
+	deadline, current := s.directory.RecordDeadline(w, now)
+	if accepted && !current {
 		return
 	}
+	if accepted {
+		s.trackArtifact(w, deadline)
+	}
 	data, _ := netwire.Marshal(w)
-	s.gossip.Resolve(data, time.UnixMilli(manifest.Expires), now, accepted)
+	if !accepted {
+		s.gossipPool.Forget(netgossip.Identify(netgossip.Manifest, data))
+	}
+	s.gossip.Resolve(data, deadline, now, accepted)
 }
 
 // Router links require HAVE/WANT. Direct-message fixtures exercise the same
 // directory and certificate admission without opening a network carrier.
 func (s *Synchronizer) Receive(m ControlMessage, now time.Time, slots ...int) ([]ControlMessage, []SignedManifest, error) {
+	s.Sweep(now)
 	if len(slots) > 0 && slots[0] < directoryResponseDemand(m) {
 		return nil, nil, ErrControlBackpressure
 	}
@@ -85,6 +92,7 @@ func (s *Synchronizer) Receive(m ControlMessage, now time.Time, slots ...int) ([
 		}
 	}
 	var descriptor *CertificateMessage
+	var descriptorDeadline time.Time
 	var hintKey string
 	if m.Gossip.Op == "want" {
 		payload := s.gossip.Lookup(m.Gossip.ID(), now)
@@ -95,8 +103,11 @@ func (s *Synchronizer) Receive(m ControlMessage, now time.Time, slots ...int) ([
 			}
 			chain, ok := s.directory.CurrentRecordChain(w, now)
 			if !ok {
+				s.gossipPool.Forget(m.Gossip.ID())
 				return []ControlMessage{{Kind: "gossip", Gossip: netgossip.Unavailable(*m.Gossip)}}, nil, nil
 			}
+			descriptorDeadline, _ = s.directory.RecordDeadline(w, now)
+			s.trackArtifact(w, descriptorDeadline)
 			descriptor = DescribeCertificates(w.Principal, chain)
 			if descriptor == nil {
 				return nil, nil, errors.New("invalid current manifest chain")
@@ -127,14 +138,14 @@ func (s *Synchronizer) Receive(m ControlMessage, now time.Time, slots ...int) ([
 			s.sent = map[string]time.Time{}
 		}
 		s.sent[hintKey] = now.Add(MaxLease)
-		replies = append(replies, ControlMessage{Kind: "certificate", Certificate: descriptor})
+		replies = append(replies, ControlMessage{Kind: "certificate", Certificate: descriptor, deadline: descriptorDeadline, canceled: s.markerFor(m.Gossip.ID())})
 	}
 	if reply != nil {
-		replies = append(replies, ControlMessage{Kind: "gossip", Gossip: reply})
+		replies = append(replies, s.gossipControl(reply))
 	}
 	if err == nil && m.Gossip.Op == "want" && len(slots) > 0 {
 		for _, chunk := range s.gossip.Poll(now, max(0, slots[0]-len(replies)-directoryResponseReserve)) {
-			replies = append(replies, ControlMessage{Kind: "gossip", Gossip: chunk})
+			replies = append(replies, s.gossipControl(chunk))
 		}
 	}
 	if err != nil || len(data) == 0 {
@@ -179,4 +190,52 @@ func (s *Synchronizer) discardManifest(w SignedManifest) {
 	}
 	data, _ := netwire.Marshal(w)
 	s.gossip.Discard(data)
+}
+
+// forgetManifest removes pool bytes as soon as the authoritative directory
+// no longer exports this exact artifact, including already queued uploads.
+func (s *Synchronizer) forgetManifest(w SignedManifest) {
+	if s.gossipPool == nil {
+		return
+	}
+	data, _ := netwire.Marshal(w)
+	id := netgossip.Identify(netgossip.Manifest, data)
+	s.gossipPool.Forget(id)
+	if artifact, ok := s.artifacts[w.ownerKey()]; ok && artifact.id == id {
+		artifact.canceled.Store(true)
+		delete(s.artifacts, w.ownerKey())
+	}
+}
+
+// trackArtifact keeps only compact local queue ownership. Directory admission
+// supplies the deadline; repeating/re-signing a body never starts a new lease.
+func (s *Synchronizer) trackArtifact(w SignedManifest, deadline time.Time) manifestArtifact {
+	data, _ := netwire.Marshal(w)
+	id := netgossip.Identify(netgossip.Manifest, data)
+	key := w.ownerKey()
+	if old, ok := s.artifacts[key]; ok {
+		if old.id == id {
+			return old
+		}
+		old.canceled.Store(true)
+		if s.gossipPool != nil {
+			s.gossipPool.Forget(old.id)
+		}
+	}
+	artifact := manifestArtifact{id: id, deadline: deadline, canceled: &atomic.Bool{}}
+	s.artifacts[key] = artifact
+	return artifact
+}
+
+func (s *Synchronizer) markerFor(id netgossip.ID) *atomic.Bool {
+	for _, artifact := range s.artifacts {
+		if artifact.id == id {
+			return artifact.canceled
+		}
+	}
+	return nil
+}
+
+func (s *Synchronizer) gossipControl(m *netgossip.Message) ControlMessage {
+	return ControlMessage{Kind: "gossip", Gossip: m, canceled: s.markerFor(m.ID())}
 }

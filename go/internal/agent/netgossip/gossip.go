@@ -399,6 +399,18 @@ func (s *Session) Offer(data []byte, expires, now time.Time, loaders ...func(tim
 	return m
 }
 
+// ClaimDeadline preserves the original resource allowance when an adapter moves
+// downloaded bytes into its bounded certificate-verification continuation.
+func (s *Session) ClaimDeadline(id ID) (time.Time, bool) {
+	s.pool.mu.Lock()
+	defer s.pool.mu.Unlock()
+	f := s.pool.pending[id]
+	if f == nil || f.owner != s.owner {
+		return time.Time{}, false
+	}
+	return f.deadline, true
+}
+
 // Lookup recovers only an already verified receipt, never an unknown digest.
 // Store access runs outside the pool mutex and costs at most one keyed lookup
 // and one envelope hash. Missing or superseded authoritative bodies are ignored.
