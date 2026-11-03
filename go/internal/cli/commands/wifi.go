@@ -513,7 +513,7 @@ func newWifiDisconnectCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "disconnect",
 		Short: "Disconnect from the current WiFi network",
-		Long:  "Request WiFi disconnection and report whether completion was confirmed. When the command uses the WiFi path being disconnected, it may report an acknowledged request with completion unknown. Check WiFi status through Bluetooth or another connection to verify that outcome. Older agents use the legacy operation and report a lost reply as an unknown outcome.",
+		Long:  "Disconnect from the current WiFi network and report whether completion was confirmed. When the command uses the WiFi path being disconnected, it may report an acknowledged request with completion unknown. Check WiFi status through Bluetooth or another connection to verify that outcome. Older agents use the legacy operation and report a lost reply as an unknown outcome.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
 			target, err := resolveWifiTargetFn(ctx, ExcludeProviders("local", "docker"), IncludeBluetooth())
