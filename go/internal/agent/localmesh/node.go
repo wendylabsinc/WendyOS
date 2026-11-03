@@ -28,6 +28,7 @@ type nodePeer struct {
 	babelConfirmed  bool // Actor-owned: this incarnation once had two-way Babel liveness.
 	babelRetiring   bool // Actor-owned: expiry already signalled the existing lifetime owner.
 	retire          chan struct{}
+	retireOnce      sync.Once
 	closeDiagnostic sync.Once
 	ingress         *nodeEvent // One actor-owned input; its reader awaits acknowledgement.
 
@@ -298,7 +299,7 @@ func (n *Node) refresh() {
 	n.retireExpiredBabelPeers(routing)
 	links := make([]PeerLink, 0, len(n.peers))
 	for _, p := range n.peers {
-		link := PeerLink{ID: p.id, Device: p.device, Cost: p.cost, Transport: p.transport, assembler: &p.assembler}
+		link := PeerLink{ID: p.id, Device: p.device, Cost: p.cost, Transport: p.transport, Retiring: p.retiring(), assembler: &p.assembler}
 		if carrier, ok := p.link.(*quicNodeLink); ok {
 			link.carrier = carrier.sendIP
 		}
@@ -320,7 +321,7 @@ func (n *Node) refresh() {
 	}
 	markForwardingReady(links, routing, n.forwardRoutes, authorizations)
 	for i := range links {
-		if p := n.peers[links[i].ID]; p != nil && p.babelRetiring {
+		if p := n.peers[links[i].ID]; p != nil && p.retiring() {
 			// Retirement is terminal for this incarnation, even while its owned
 			// transport closer is waiting to finish.
 			links[i].ForwardingReady = false
@@ -538,7 +539,7 @@ func (n *Node) handle(e nodeEvent) error {
 		return nil
 	}
 	if e.packet != nil {
-		if p.babelRetiring {
+		if p.retiring() {
 			// Packets queued before cancellation cannot revive a closing link.
 			return nil
 		}
@@ -953,6 +954,7 @@ func (n *Node) attachLink(ctx context.Context, peer meshid.Device, cost uint16, 
 	if err := n.request(ctx, nodeEvent{add: p}); err != nil {
 		return err
 	}
+	BindConnectionLink(ctx, p.id, p.cost, p.signalRetire)
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	var wg sync.WaitGroup

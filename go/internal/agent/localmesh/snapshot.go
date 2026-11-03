@@ -35,6 +35,8 @@ type PeerLink struct {
 	// is selected and installed through this exact carrier. Only such a link may
 	// make a useful slower carrier redundant.
 	ForwardingReady bool
+	// Retiring marks a terminal local incarnation awaiting owned cleanup.
+	Retiring bool
 	// CarrierIP reports router QUIC enqueue/capability diagnostics.
 	CarrierIP *CarrierIPStats
 	carrier   *carrierIPSender
@@ -80,7 +82,7 @@ type ipQueueSnapshotter interface{ snapshot() IPQueueStats }
 
 func (s NodeSnapshot) HasCheaperLink(device meshid.Device, cost uint16) bool {
 	for _, link := range s.Links {
-		if link.Device == device && link.Cost < cost && link.ForwardingReady {
+		if link.Device == device && link.Cost < cost && link.ForwardingReady && !link.Retiring {
 			return true
 		}
 	}
