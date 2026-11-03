@@ -2,8 +2,10 @@ package backend
 
 import (
 	"context"
+	"errors"
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	pb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
+	"github.com/wendylabsinc/wendy/go/proto/gen/litepb"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
@@ -13,6 +15,7 @@ import (
 	"net"
 	"strings"
 	"testing"
+	"time"
 )
 
 type settingsAgent struct {
@@ -20,6 +23,93 @@ type settingsAgent struct {
 	pb.UnimplementedWendyLocalMeshAdminServiceServer
 	joins   chan *pb.ConnectToWiFiRequest
 	patches chan *pb.ConfigureLocalMeshRequest
+}
+
+type meshDesktopLite struct {
+	*fakeDesktopLite
+	status            *litepb.WendyComNetStatus
+	readErr, writeErr error
+	writes            int
+}
+
+func (f *meshDesktopLite) GetNetStatus(time.Duration) (*litepb.WendyComNetStatus, error) {
+	return f.status, f.readErr
+}
+func (f *meshDesktopLite) SetNetConfig(config *litepb.WendyComNetConfig, _ time.Duration) (*litepb.WendyComNetStatus, error) {
+	f.writes++
+	if f.writeErr != nil {
+		return nil, f.writeErr
+	}
+	f.status = &litepb.WendyComNetStatus{Desired: config, State: litepb.WendyComNetState_WENDY_COM_NET_RUNNING}
+	return f.status, nil
+}
+
+func TestLiteMeshParticipationPreservesCarriersAndLimits(t *testing.T) {
+	b := New()
+	defer b.Shutdown()
+	f := &meshDesktopLite{fakeDesktopLite: newFakeDesktopLite(), status: &litepb.WendyComNetStatus{
+		Desired: &litepb.WendyComNetConfig{Ble: true, InfrastructureWifi: true, MaxLinks: 8, BleLinks: 3, WifiLinks: 8, NanLinks: 1,
+			BleProfile: litepb.WendyComBleProfile_WENDY_COM_BLE_CODED_S2},
+	}}
+	// Preserve fields introduced by newer firmware, too.
+	f.status.Desired.ProtoReflect().SetUnknown([]byte{0xa0, 0x06, 0x07})
+	b.lite, b.session = f, 7
+	saved := proto.Clone(f.status.Desired).(*litepb.WendyComNetConfig)
+	initial, err := b.NetworkSettings(7)
+	if err != nil || initial.Mesh.GetConfigured().GetParticipate() || initial.Mesh.GetState() != "off" {
+		t.Fatalf("disabled settings = %v, %v", initial, err)
+	}
+	for _, enabled := range []uint32{1, 0} {
+		if err := b.ConfigureMesh(7, 1, enabled); err != nil {
+			t.Fatal(err)
+		}
+		want := proto.Clone(saved).(*litepb.WendyComNetConfig)
+		want.Enabled = enabled != 0
+		if !proto.Equal(f.status.Desired, want) {
+			t.Fatalf("changed unrelated settings: %v", f.status.Desired)
+		}
+	}
+	if saved.Enabled {
+		t.Fatal("mutated the read snapshot")
+	}
+	value, err := b.NetworkSettings(7)
+	if err != nil || value.Mesh.GetState() != "Waiting for peers" || value.Mesh.GetAuthenticatedPeers() != 0 {
+		t.Fatalf("zero links reported as connected: %v, %v", value, err)
+	}
+	for _, session := range []uint64{0, 6} {
+		if _, err := b.NetworkSettings(session); err == nil {
+			t.Fatal("accepted stale read")
+		}
+		if err := b.ConfigureMesh(session, 1, 1); err == nil {
+			t.Fatal("accepted stale write")
+		}
+	}
+	if err := b.ConfigureMesh(7, 16, 16); err == nil {
+		t.Fatal("accepted unrelated carrier change")
+	}
+	if f.writes != 2 {
+		t.Fatal("invalid request reached device")
+	}
+	f.readErr = errors.New("firmware does not support mesh settings")
+	if _, err := b.NetworkSettings(7); err == nil {
+		t.Fatal("failed read reported disabled")
+	}
+	if err := b.ConfigureMesh(7, 1, 1); err == nil {
+		t.Fatal("wrote without current settings")
+	}
+	f.readErr = nil
+	f.status.Desired = nil
+	if _, err := b.NetworkSettings(7); err == nil {
+		t.Fatal("missing settings reported disabled")
+	}
+	if err := b.ConfigureMesh(7, 1, 1); err == nil {
+		t.Fatal("replaced missing settings")
+	}
+	f.status.Desired = saved
+	f.writeErr = errors.New("device rejected settings")
+	if err := b.ConfigureMesh(7, 1, 1); err == nil {
+		t.Fatal("write failure reported success")
+	}
 }
 
 func (s *settingsAgent) GetWiFiStatus(context.Context, *pb.GetWiFiStatusRequest) (*pb.GetWiFiStatusResponse, error) {

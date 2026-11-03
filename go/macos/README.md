@@ -677,6 +677,13 @@ specific simulator and refuses a running VM. This pane is excluded from iOS.
 
 ### Wendy Lite devices
 
+On macOS and iOS, Wendy Lite's **Settings > Wendy Mesh** section shows saved
+participation, runtime status, and active links. Use **Enable mesh participation**
+or **Disable mesh participation** to change only the participation switch,
+preserving the device's carrier settings and link limits. Enabling participation
+does not confirm a peer connection; use **Refresh mesh status** to check active
+links. Disabling participation can disconnect a device reached through the mesh.
+
 Nearby discovery includes Wendy Lite boards over LAN and USB. Cloud Lite devices
 connect through the authenticated WendyCom relay. Selecting a Lite device opens
 Cameras, Sensors, Device, Wi-Fi, and Logs. The Sensors pane displays live
