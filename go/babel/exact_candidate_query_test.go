@@ -11,7 +11,7 @@ import (
 
 func TestExactLinkCandidateQueryIncludesWarmStandbyWithoutMutatingState(t *testing.T) {
 	prefix := netip.MustParsePrefix("fd00::2/128")
-	for _, mode := range []string{"warm", "wrong-link", "zero-link", "wrong-sequence", "policy-expired", "not-two-way", "infeasible", "expired", "removed"} {
+	for _, mode := range []string{"warm", "wrong-link", "zero-link", "wrong-sequence", "wrong-router", "local-prefix", "policy-expired", "not-two-way", "infeasible", "expired", "removed"} {
 		t.Run(mode, func(t *testing.T) {
 			allowed := true
 			e, err := New(Config{RouterID: 1, HelloInterval: time.Second, AcceptRouteUpdate: func(id RouterID, p netip.Prefix, seq uint16) bool {
@@ -34,6 +34,7 @@ func TestExactLinkCandidateQueryIncludesWarmStandbyWithoutMutatingState(t *testi
 				t.Fatal("fixture did not establish a nonselected warm candidate")
 			}
 			link, seq := LinkID(2), uint16(7)
+			id := RouterID(2)
 			switch mode {
 			case "wrong-link":
 				link = 99
@@ -41,6 +42,10 @@ func TestExactLinkCandidateQueryIncludesWarmStandbyWithoutMutatingState(t *testi
 				link = 0
 			case "wrong-sequence":
 				seq++
+			case "wrong-router":
+				id++
+			case "local-prefix":
+				step(t, e, 101*time.Millisecond, Originate{Prefix: prefix})
 			case "policy-expired":
 				allowed = false
 			case "not-two-way":
@@ -53,7 +58,7 @@ func TestExactLinkCandidateQueryIncludesWarmStandbyWithoutMutatingState(t *testi
 				step(t, e, 101*time.Millisecond, RemoveLink{ID: 2})
 			}
 			before, checkpoint := e.Snapshot(), e.Checkpoint()
-			if got := e.HasUsableOriginOnLink(2, prefix, seq, link); got != (mode == "warm") {
+			if got := e.HasUsableOriginOnLink(id, prefix, seq, link); got != (mode == "warm") {
 				t.Fatalf("exact candidate=%v for %s", got, mode)
 			}
 			if !reflect.DeepEqual(before, e.Snapshot()) || !reflect.DeepEqual(checkpoint, e.Checkpoint()) {

@@ -239,17 +239,6 @@ func (e *Engine) validate(event Event) error {
 // placeholder or inferred path. Like Snapshot, callers serialize it with Step;
 // the query never changes candidate, source, sequence or forwarding state.
 func (e *Engine) HasUsableOrigin(id RouterID, prefix netip.Prefix, seq uint16) bool {
-	return e.hasUsableOrigin(id, prefix, seq, 0)
-}
-
-// HasUsableOriginOnLink is the exact-incarnation form of HasUsableOrigin. It
-// observes a received candidate on this link, including a nonselected standby.
-// Link zero is never an admitted incarnation. Callers serialize it with Step.
-func (e *Engine) HasUsableOriginOnLink(id RouterID, prefix netip.Prefix, seq uint16, link LinkID) bool {
-	return link != 0 && e.hasUsableOrigin(id, prefix, seq, link)
-}
-
-func (e *Engine) hasUsableOrigin(id RouterID, prefix netip.Prefix, seq uint16, link LinkID) bool {
 	if e.stopped || e.pending != 0 {
 		return false
 	}
@@ -257,12 +246,27 @@ func (e *Engine) hasUsableOrigin(id RouterID, prefix netip.Prefix, seq uint16, l
 		return false
 	}
 	for _, r := range e.routes {
-		if (link == 0 || r.link == link) && r.prefix == prefix && r.id == id && r.seq == seq && r.expires > e.now &&
+		if r.prefix == prefix && r.id == id && r.seq == seq && r.expires > e.now &&
 			r.advertised != Infinity && e.metric(r) != Infinity && e.feasible(r) {
 			return true
 		}
 	}
 	return false
+}
+
+// HasUsableOriginOnLink observes a received candidate on this exact incarnation,
+// including a nonselected standby. A direct lookup keeps per-peer diagnostics
+// independent of the global candidate-table size. Serialize the query with Step.
+func (e *Engine) HasUsableOriginOnLink(id RouterID, prefix netip.Prefix, seq uint16, link LinkID) bool {
+	if link == 0 || e.stopped || e.pending != 0 {
+		return false
+	}
+	if _, local := e.local[prefix]; local {
+		return false
+	}
+	r := e.routes[routeKey{prefix: prefix, link: link}]
+	return r != nil && r.id == id && r.seq == seq && r.expires > e.now &&
+		r.advertised != Infinity && e.metric(r) != Infinity && e.feasible(r)
 }
 
 // The zero origin is reserved for short-lived Route Request coalescing. Real
