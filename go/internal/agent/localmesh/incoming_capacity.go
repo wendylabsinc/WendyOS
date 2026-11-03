@@ -23,12 +23,12 @@ func (p *ConnectionPolicy) costForGroup(group string) uint16 {
 	return p.carrierCost
 }
 
-func workingCarrierAtMost(view NodeSnapshot, peer meshid.Device, cost uint16) bool {
-	if peer == (meshid.Device{}) || cost == 0 {
+func workingCarrierPresent(view NodeSnapshot, peer meshid.Device) bool {
+	if peer == (meshid.Device{}) {
 		return false
 	}
 	for _, link := range view.Links {
-		if link.Device == peer && !link.Retiring && link.ForwardingReady && link.Cost <= cost {
+		if link.Device == peer && !link.Retiring && link.ForwardingReady {
 			return true
 		}
 	}
@@ -37,7 +37,7 @@ func workingCarrierAtMost(view NodeSnapshot, peer meshid.Device, cost uint16) bo
 
 func directPeerPresent(view NodeSnapshot, peer meshid.Device) bool {
 	for _, link := range view.Links {
-		if link.Device == peer && !link.Retiring {
+		if link.Device == peer {
 			return true
 		}
 	}
@@ -55,6 +55,7 @@ func (p *ConnectionPolicy) incomingDemandActive() bool {
 			return true
 		}
 	}
+	p.incomingDemandPeers = nil
 	return false
 }
 
@@ -62,6 +63,7 @@ func (p *ConnectionPolicy) notePendingIncomingDemand() {
 	for l := range p.connections {
 		if l.reclaimed || l.capacityClosing.Load() {
 			l.incomingDemand = true
+			p.rememberIncomingDemandPeer(l.peer)
 			return
 		}
 	}
@@ -69,9 +71,28 @@ func (p *ConnectionPolicy) notePendingIncomingDemand() {
 
 func (p *ConnectionPolicy) clearIncomingDemand() {
 	p.incomingDemandUntil = time.Time{}
+	p.incomingDemandPeers = nil
 	for l := range p.connections {
 		l.incomingDemand = false
+		l.demandAtSetup = false
 	}
+}
+
+func (p *ConnectionPolicy) rememberIncomingDemandPeer(peer meshid.Device) {
+	if !peer.IsValid() {
+		return
+	}
+	if p.incomingDemandPeers == nil {
+		p.incomingDemandPeers = make(map[meshid.Device]struct{})
+	}
+	if len(p.incomingDemandPeers) < maxCandidateHistory {
+		p.incomingDemandPeers[peer] = struct{}{}
+	}
+}
+
+func (p *ConnectionPolicy) incomingDemandKnows(peer meshid.Device) bool {
+	_, known := p.incomingDemandPeers[peer]
+	return known
 }
 
 // DeferRedundantCarrier is a bounded scheduling hint gate. It never supplies
@@ -86,10 +107,44 @@ func (p *ConnectionPolicy) DeferRedundantCarrier(peer meshid.Device, cost uint16
 	view := snapshot()
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return p.incomingDemandActive() && workingCarrierAtMost(view, peer, cost)
+	return p.incomingDemandActive() && p.limits.Total-p.counts().Total <= 1 && workingCarrierPresent(view, peer)
 }
 
 func connectionReadyForCarrier(ctx context.Context, peer meshid.Device, cost uint16, closeConnection func()) bool {
 	l, _ := ctx.Value(connectionLeaseKey{}).(*ConnectionLease)
+	captureIncomingWorker(ctx, l)
 	return l.readyWithCost(peer, cost, closeConnection)
+}
+
+// DeferIncomingCarrier also protects the accept loop's separate final worker
+// token. Native quota spare alone cannot admit a leaf when that gate is full.
+func (p *ConnectionPolicy) DeferIncomingCarrier(peer meshid.Device, cost uint16, freeWorkers int) bool {
+	p.mu.Lock()
+	snapshot := p.snapshot
+	p.mu.Unlock()
+	if snapshot == nil {
+		return false
+	}
+	view := snapshot()
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.incomingDemandActive() && (p.limits.Total-p.counts().Total <= 1 || freeWorkers <= 1) && workingCarrierPresent(view, peer)
+}
+
+type lastIncomingWorkerKey struct{}
+
+// WithLastIncomingWorker records local setup capacity, never peer identity.
+func WithLastIncomingWorker(ctx context.Context) context.Context {
+	return context.WithValue(ctx, lastIncomingWorkerKey{}, true)
+}
+
+func captureIncomingWorker(ctx context.Context, l *ConnectionLease) {
+	if l == nil {
+		return
+	}
+	if last, _ := ctx.Value(lastIncomingWorkerKey{}).(bool); last {
+		l.policy.mu.Lock()
+		l.lastIncomingWorker = true
+		l.policy.mu.Unlock()
+	}
 }

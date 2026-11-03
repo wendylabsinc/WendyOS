@@ -127,8 +127,9 @@ type Node struct {
 	routeDiagnostics []routeTransition
 	timestampWorkers chan struct{}
 
-	capacityHoldRelease babel.LinkID  // Actor-owned: exact closing slot selected for actual new-peer demand.
-	capacityHoldUntil   time.Duration // Actor-owned: new-peer opportunity after actual capacity removal.
+	capacityHoldRelease babel.LinkID               // Actor-owned: exact closing slot selected for actual new-peer demand.
+	capacityHoldUntil   time.Duration              // Actor-owned: new-peer opportunity after actual capacity removal.
+	capacityHoldPeers   map[meshid.Device]struct{} // Owned identities; recovery does not serve external demand.
 }
 
 func NewNode(parent context.Context, dir string, credentials *Credentials, name string, agentPort uint16, appEndpoints ...[]AppEndpoint) (*Node, error) {
@@ -505,6 +506,9 @@ func (n *Node) handle(e nodeEvent) error {
 			return errors.New("self link")
 		}
 		newPeer := true
+		if _, recovering := n.capacityHoldPeers[e.add.device]; recovering {
+			newPeer = false
+		}
 		for _, p := range n.peers {
 			if p.device == e.add.device {
 				newPeer = false
@@ -517,7 +521,7 @@ func (n *Node) handle(e nodeEvent) error {
 			if err := n.step(babel.Tick{}); err != nil {
 				return err
 			}
-			if view := n.view.Load(); view != nil && view.HasCheaperLink(e.add.device, e.add.cost) {
+			if view := n.view.Load(); len(n.peers) >= 63 && view != nil && view.HasOtherForwardingLink(e.add.device, 0) {
 				return ErrCarrierCapacityRetry
 			}
 		}
@@ -558,6 +562,7 @@ func (n *Node) handle(e nodeEvent) error {
 			// old standby's deferred retry must never consume this opportunity.
 			n.capacityHoldUntil = 0
 			n.capacityHoldRelease = 0
+			n.capacityHoldPeers = nil
 		}
 		return nil
 	}

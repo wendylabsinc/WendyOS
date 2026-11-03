@@ -461,18 +461,22 @@ func (r *runtime) acceptLoop(ctx context.Context, listener *l2Listener) error {
 			return fmt.Errorf("BLE L2CAP accept: %w", err)
 		}
 		known := r.knownIncomingPeer(conn)
-		if known != (meshid.Device{}) && r.connectionPolicy().DeferRedundantCarrier(known, LinkCost) {
+		if known != (meshid.Device{}) && r.connectionPolicy().DeferIncomingCarrier(known, LinkCost, cap(sem)-len(sem)) {
 			_ = conn.Close()
 			continue
 		}
 		select {
 		case sem <- struct{}{}:
+			setupCtx := ctx
+			if len(sem) == cap(sem) {
+				setupCtx = localmesh.WithLastIncomingWorker(ctx)
+			}
 			r.updateAdvertisementAdmission()
 			r.links.Add(1)
 			go func() {
 				defer r.links.Done()
 				defer func() { <-sem; r.updateAdvertisementAdmission() }()
-				r.acceptLink(ctx, conn)
+				r.acceptLink(setupCtx, conn)
 			}()
 		default:
 			// The established incoming workers retain their tokens until normal
