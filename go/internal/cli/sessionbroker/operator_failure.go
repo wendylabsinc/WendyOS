@@ -207,6 +207,10 @@ func (d *operatorDiagnostics) recordExit(cause *operatorExitCause) {
 	failure := operatorFailure{Version: 1, Fingerprint: d.spec.CertFingerprint, Generation: d.spec.DiagnosticGeneration, Kind: "broker_exit", At: now}
 	if d.last != nil {
 		failure = *d.last
+	} else if cause.err != nil && !errors.Is(cause.err, context.Canceled) {
+		// Initial explicit attachment errors precede any carrier callback.
+		// Keep their existing explanation and recovery classification.
+		failure.Kind = operatorFailureKind(cause.err)
 	}
 	failure.ExitAt = now
 	failure.ExitReason = cause.reason

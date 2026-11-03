@@ -11,6 +11,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 )
 
 func exitFixtureContext(parent context.Context) (context.Context, *operatorExit) {
@@ -170,5 +172,31 @@ func TestOperatorExitNominationDoesNotWaitForDiagnosticSink(t *testing.T) {
 	d.recordExit(exit.first.Load())
 	if d.last == nil || d.last.ExitReason != "disconnected" {
 		t.Fatal("joined owner could not persist cause")
+	}
+}
+
+func TestOperatorExitColdStartupRetainsSpecificRecovery(t *testing.T) {
+	for _, tc := range []struct {
+		name, kind, explanation, step string
+		err                           error
+		retry                         bool
+	}{
+		{"timeout", "timeout", "timed out", "reachable", context.DeadlineExceeded, true},
+		{"issuer", "issuer_chain", "issuer chain", "certificate chain", &certs.IssuerPathError{Err: errors.New("private issuer payload")}, false},
+		{"pin", "device_pin", "saved device identity", "saved pin", operatorFailurePinRejection{}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir, spec := operatorDiagnosticsFixture(t)
+			d := newOperatorDiagnostics(dir, spec)
+			d.recordExit(&operatorExitCause{reason: "startup_failed", err: tc.err})
+			got := operatorStartupError(spec, context.DeadlineExceeded)
+			retry, steps := OperatorRecovery(got)
+			if d.last.Kind != tc.kind || retry != tc.retry || !strings.Contains(got.Error(), tc.explanation) || !strings.Contains(strings.Join(steps, " "), tc.step) {
+				t.Fatalf("cold startup recovery changed: record=%+v retry=%v steps=%v error=%v", d.last, retry, steps, got)
+			}
+			if strings.Contains(got.Error(), "private") {
+				t.Fatal("raw startup payload leaked")
+			}
+		})
 	}
 }
