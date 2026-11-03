@@ -2,9 +2,11 @@
 """Exercise the actual trusted-source resolver with mocked GitHub responses."""
 
 import json
+import os
 import re
 from pathlib import Path
 import subprocess
+import tempfile
 import unittest
 
 WORKFLOW = Path(__file__).resolve().parents[1] / "workflows" / "api-review.yml"
@@ -24,6 +26,36 @@ def resolver_script(text):
             break
         body.append(line[indentation:] if line.strip() else "")
     return "\n".join(body)
+
+
+def review_step_script():
+    lines = WORKFLOW.read_text().splitlines()
+    start = next(i for i, line in enumerate(lines) if line.strip() == "id: review")
+    run = next(i for i in range(start, len(lines)) if lines[i].strip() == "run: |")
+    body = []
+    for line in lines[run + 1:]:
+        if line.strip() and len(line) - len(line.lstrip()) < 10:
+            break
+        body.append(line[10:] if line.strip() else "")
+    return "\n".join(body)
+
+
+# Parser shape from trusted main 90f16e93 and source-only parent d061f63e.
+# The fixture writes a result without SDK/network activity; --help exits before
+# that write, just as the actual trusted parser does.
+OLD_RUNNER = r'''import argparse, json
+from pathlib import Path
+root = argparse.ArgumentParser()
+commands = root.add_subparsers(dest="command", required=True)
+review = commands.add_parser("review")
+for name in ("metadata", "diff", "repo", "expected-head-sha", "expected-base-sha", "output", "model"):
+    review.add_argument(f"--{name}", required=True)
+review.add_argument("--previous")
+review.add_argument("--pr-number", type=int, required=True)
+# optional_context_argument
+args = root.parse_args()
+Path(args.output).write_text(json.dumps(vars(args)))
+'''
 
 
 HARNESS = r"""
@@ -90,6 +122,73 @@ class TrustedSourceTests(unittest.TestCase):
         self.assertIn('merge-base "$EXPECTED_BASE_SHA" "$EXPECTED_HEAD_SHA"', automatic_job)
         self.assertIn("github.event.pull_request.head.repo.full_name == github.repository", automatic_job)
         self.assertIn("persist-credentials: false", automatic_job)
+
+
+class TrustedRunnerInterfaceTests(unittest.TestCase):
+    def run_step(self, supported=False, broken_help=False):
+        with tempfile.TemporaryDirectory() as root:
+            directory = Path(root)
+            scripts = directory / "review-automation/.github/scripts"
+            scripts.mkdir(parents=True)
+            source = OLD_RUNNER
+            if supported:
+                source = source.replace("# optional_context_argument",
+                                        'review.add_argument("--source-repository")')
+            if broken_help:
+                source = "raise SystemExit(9)"
+            trusted = scripts / "api_review.py"
+            trusted.write_text(source)
+            # A fallback to PR-head code must never become a compatibility fix.
+            candidate = directory / ".github/scripts/api_review.py"
+            candidate.parent.mkdir(parents=True)
+            candidate.write_text('raise RuntimeError("candidate code was executed")')
+            summary = directory / "summary"
+            (directory / "previous-api-review.json").write_text("{}")
+            env = {"PATH": os.environ["PATH"], "RUNNER_TEMP": root,
+                   "GITHUB_STEP_SUMMARY": str(summary), "REPO": "wendylabsinc/WendyOS",
+                   "PR_NUMBER": "42", "EXPECTED_HEAD_SHA": PR_HEAD,
+                   "EXPECTED_BASE_SHA": OLD_BASE, "CLAUDE_MODEL": "offline-fixture"}
+            result = subprocess.run(["bash", "-c", review_step_script()], cwd=root,
+                                    env=env, capture_output=True, text=True, timeout=10)
+            output = directory / "api-review-result.json"
+            value = json.loads(output.read_text()) if output.exists() else None
+            notice = summary.read_text() if summary.exists() else ""
+            if not supported and not broken_help:
+                # Negative control reproduces the reported pre-fix parser
+                # failure, rather than merely asserting a workflow substring.
+                control_output = directory / "control-result.json"
+                control_args = ["python3", str(trusted), "review", "--source-repository", root]
+                for name in ("metadata", "diff", "repo", "expected-head-sha", "expected-base-sha", "model"):
+                    control_args.extend([f"--{name}", "fixture"])
+                control_args.extend(["--output", str(control_output), "--pr-number", "42"])
+                control = subprocess.run(control_args, env=env, capture_output=True, text=True, timeout=10)
+                self.assertEqual(control.returncode, 2)
+                self.assertIn("unrecognized arguments: --source-repository", control.stderr)
+                self.assertFalse(control_output.exists())
+            return result, value, notice
+
+    def test_new_workflow_runs_old_trusted_parser_with_explicit_coverage_notice(self):
+        result, value, notice = self.run_step()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertNotIn("source_repository", value)
+        self.assertIn("previous-api-review.json", value["previous"])
+        self.assertIn("::notice::", result.stdout)
+        self.assertIn("have not activated", notice)
+        self.assertIn("no unchanged-source context was reviewed", notice)
+
+    def test_new_trusted_parser_receives_source_repository(self):
+        result, value, notice = self.run_step(supported=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(value["source_repository"], "review-automation")
+        self.assertEqual(notice, "")
+        self.assertNotIn("::notice::", result.stdout)
+
+    def test_failed_capability_probe_fails_closed_without_candidate_fallback(self):
+        result, value, notice = self.run_step(broken_help=True)
+        self.assertEqual(result.returncode, 9)
+        self.assertIsNone(value)
+        self.assertEqual(notice, "")
+        self.assertNotIn("candidate code", result.stderr)
 
 
 class CompatibilityWorkflowTests(unittest.TestCase):
@@ -170,7 +269,7 @@ class CompatibilityWorkflowTests(unittest.TestCase):
         self.assertIn('artifact-ids: ${{ needs.detect-api-changes.outputs.artifact_id }}', publisher)
         model_step = review_job.split("- name: Review API decisions and testing risk", 1)[1].split("- name: Preserve", 1)[0]
         self.assertNotIn("GH_TOKEN", model_step)
-        self.assertIn("--source-repository review-automation", model_step)
+        self.assertIn("context_args=(--source-repository review-automation)", model_step)
         self.assertIn("persist-credentials: false", review_job)
         self.assertIn("persist-credentials: false", publisher)
         tests = tail.split("  validate-candidate:", 1)[0]

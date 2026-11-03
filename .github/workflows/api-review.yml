@@ -175,10 +175,20 @@ jobs:
           if [[ -f "$RUNNER_TEMP/previous-api-review.json" ]]; then
             previous_args=(--previous "$RUNNER_TEMP/previous-api-review.json")
           fi
-          python3 review-automation/.github/scripts/api_review.py review \
+          review_script="review-automation/.github/scripts/api_review.py"
+          context_args=()
+          review_help="$(python3 "$review_script" review --help)"
+          if [[ "$review_help" == *"--source-repository"* ]]; then
+            context_args=(--source-repository review-automation)
+          else
+            notice="Compatibility guidance and unchanged-source context have not activated in trusted main automation. This run uses the trusted runner's existing diff-only review; no unchanged-source context was reviewed."
+            echo "::notice::$notice"
+            printf '%s\n' "$notice" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          python3 "$review_script" review \
             --metadata "$RUNNER_TEMP/api-review-pr-meta.json" \
             --diff "$RUNNER_TEMP/api-review-pr.diff" \
-            --source-repository review-automation \
+            "${context_args[@]}" \
             "${previous_args[@]}" \
             --repo "$REPO" \
             --pr-number "$PR_NUMBER" \
