@@ -89,6 +89,18 @@ func (s NodeSnapshot) HasCheaperLink(device meshid.Device, cost uint16) bool {
 	return false
 }
 
+// HasInstalledRouteOnLink conservatively protects every currently installed
+// finite route on an incarnation, including transit prefixes whose replacement
+// carrier may not yet be primed. A cheaper direct peer /128 alone is insufficient.
+func (s NodeSnapshot) HasInstalledRouteOnLink(link babel.LinkID) bool {
+	for _, route := range s.ForwardingRoutes {
+		if route.Link == link && !route.Local && !route.Unreachable && route.Metric != babel.Infinity {
+			return true
+		}
+	}
+	return false
+}
+
 // markForwardingReady joins actor-owned routing and forwarding state. Attached
 // TLS presence alone survives a silent blackhole; a cached or uninstalled route
 // likewise cannot justify retiring the carrier that still forwards traffic.
