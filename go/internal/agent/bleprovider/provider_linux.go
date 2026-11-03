@@ -583,7 +583,7 @@ func (r *runtime) acceptLink(ctx context.Context, raw net.Conn) {
 		adapter := fmt.Sprintf("/org/bluez/hci%d", r.hciIndex)
 		untrack, err := btradio.TrackAndTuneMeshLink(ctx, adapter, handle)
 		if err != nil {
-			r.cfg.Logger.Warn("BLE PHY setup failed", zap.Error(err))
+			r.cfg.Logger.Warn("BLE PHY setup failed", zap.String("direction", "inbound"), zap.String("phase", "before-tls"), zap.Stringer("radio", raw.RemoteAddr()), zap.Uint16("handle", handle), zap.Error(err))
 			return
 		}
 		defer untrack()
@@ -1069,7 +1069,7 @@ func (r *runtime) dialLink(ctx context.Context, peer candidate) (skipped bool) {
 	if handleErr == nil {
 		untrack, err := btradio.TrackAndTuneMeshLink(ctx, fmt.Sprintf("/org/bluez/hci%d", r.hciIndex), aclHandle)
 		if err != nil {
-			r.cfg.Logger.Warn("BLE PHY setup failed", zap.Error(err))
+			r.cfg.Logger.Warn("BLE PHY setup failed", zap.String("direction", "outbound"), zap.String("phase", "before-tls"), zap.String("radio", peer.address), zap.Uint16("handle", aclHandle), zap.Error(err))
 			return
 		}
 		defer untrack()

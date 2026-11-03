@@ -295,6 +295,18 @@ func TuneMeshLink(ctx context.Context, adapter string, handle uint16) error {
 		if err != nil {
 			return err
 		}
+		if mode == "normal" {
+			// A normal-only remote can reject Set PHY even when this exact
+			// connection is already using the requested 1M PHYs. Observe the
+			// owned handle first; an unchanged normal link needs no procedure.
+			tx, rx, err := readMeshLinkPHY(ctx, io, handle)
+			if err != nil {
+				return err
+			}
+			if tx == 1 && rx == 1 {
+				return nil
+			}
+		}
 		phy := byte(1)
 		options := uint16(0)
 		if mode != "normal" {
@@ -315,14 +327,11 @@ func TuneMeshLink(ctx context.Context, adapter string, handle uint16) error {
 			want = 3
 		}
 		for {
-			result, err := hciCommand(ctx, io, 0x2030, []byte{byte(handle), byte(handle >> 8)})
+			tx, rx, err := readMeshLinkPHY(ctx, io, handle)
 			if err != nil {
 				return err
 			}
-			if len(result) != 4 || binary.LittleEndian.Uint16(result) != handle {
-				return fmt.Errorf("invalid PHY readback")
-			}
-			if result[2] == want && result[3] == want {
+			if tx == want && rx == want {
 				return nil
 			}
 			timer := time.NewTimer(100 * time.Millisecond)
@@ -334,6 +343,17 @@ func TuneMeshLink(ctx context.Context, adapter string, handle uint16) error {
 			}
 		}
 	})
+}
+
+func readMeshLinkPHY(ctx context.Context, io *controllerIO, handle uint16) (byte, byte, error) {
+	result, err := hciCommand(ctx, io, 0x2030, []byte{byte(handle), byte(handle >> 8)})
+	if err != nil {
+		return 0, 0, err
+	}
+	if len(result) != 4 || binary.LittleEndian.Uint16(result) != handle {
+		return 0, 0, fmt.Errorf("invalid PHY readback for handle %d", handle)
+	}
+	return result[2], result[3], nil
 }
 
 var linksMu sync.Mutex
