@@ -266,6 +266,24 @@ test("same principal reached by two targets keeps its newest successful snapshot
   assert.equal(group.nodes[0].inventory.id, "cloud");
 });
 
+test("Cloud labels do not replace the newest observation or establish identity", () => {
+  const cloud = { id: "cloud", name: "Cloud Thor", cloudName: "Cloud Thor", cloudNamePrincipal: principal(a) };
+  const lan = { id: "lan", name: "Wn Thor" };
+  const cloudObservation = observe(snapshot(a), 1000);
+  const lanObservation = observe(snapshot(a), 2000);
+  const group = buildMeshGroups([cloud, lan], { cloud: cloudObservation, lan: lanObservation }, 2500).groups[0];
+  assert.equal(group.nodes[0].name, "Cloud Thor");
+  assert.equal(group.nodes[0].observation, lanObservation);
+  assert.equal(group.nodes[0].inventory, lan);
+  const hintsOnly = buildMeshGroups([cloud], {}, 2500);
+  assert.equal(hintsOnly.groups.length, 0);
+  assert.deepEqual(hintsOnly.unknown, [cloud]);
+  const foreign = { ...cloud, cloudNamePrincipal: principal(a, otherTenant) };
+  const { groups } = buildMeshGroups([lan, foreign], { lan: lanObservation }, 2500);
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0].nodes[0].name, "Wn Thor");
+});
+
 test("route proof expiry and unreachable withdrawals override prior authorization", () => {
   assert.equal(
     routeState(
@@ -404,6 +422,20 @@ test("device inventory outage retains prior sources while the independent CLI re
 test("retaining a partial inventory does not duplicate another path to the same reporter", () => {
   const key = `device:${tenant}/${a}`;
   assert.deepEqual(mergeMeshInventory([{ id: "physical", reporterKey: key }], [{ id: "mesh", reporterKey: key }], true), [{ id: "mesh", reporterKey: key }]);
+});
+
+test("carrying an unobserved Cloud label requires the same reporter identity", () => {
+  const source = "cloud://cloud.example:443/tenant/" + tenant + "/asset/" + a;
+  const previous = [{ id: "physical", reporterKey: `device:${tenant}/${a}`,
+    cloudName: "Cloud A", cloudNamePrincipal: principal(a), cloudNameSource: source }];
+  const unchanged = mergeMeshInventory(previous, [{ id: "physical", reporterKey: `device:${tenant}/${a}` }], true);
+  assert.equal(unchanged[0].cloudName, "Cloud A");
+  const changed = mergeMeshInventory(previous, [{ id: "physical", reporterKey: `device:${tenant}/${b}` }], true);
+  assert.equal(changed[0].cloudName, undefined);
+  assert.equal(changed[0].cloudNamePrincipal, undefined);
+  const revoked = mergeMeshInventory(previous, unchanged, true, { complete: false, entries: [{ source }] });
+  assert.equal(revoked[0].cloudName, undefined, "an observed row without a usable label revokes its old hint");
+  assert.equal(previous[0].cloudName, "Cloud A");
 });
 
 const liteTopology = JSON.parse(readFileSync(new URL("./fixtures/lite-operator-topology.json", import.meta.url), "utf8"));

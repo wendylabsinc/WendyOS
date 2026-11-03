@@ -5,6 +5,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DesktopService } from "../electron/service.mjs";
+import { buildMeshGroups, mergeMeshInventory, mergeMeshObservation } from "../lib/mesh-topology.ts";
 
 const cloudAsset = "00000000-0000-4000-8000-000000000001";
 const cloudTenant = "00000000-0000-4000-8000-000000000002";
@@ -30,6 +31,174 @@ test("mesh discovery combines independent inventories without trusting advertise
   assert.deepEqual(result.warnings, []);
   assert.ok(calls[0].includes("5s"));
   assert.ok(calls[1].includes("--all"));
+});
+
+test("Cloud roster name labels an authenticated LAN node without requiring Cloud reachability", async () => {
+  const service = fixture();
+  service.run = async (_file, args) => JSON.stringify(args[0] === "cloud"
+    ? [{ id: cloudAsset, selector: cloudSelector, name: "ethan-wn-thor" }]
+    : { lanDevices: [{ isWendyDevice: true, hostname: "thor.local", port: 50051, displayName: "Wn Thor" }] });
+  const { devices } = await service.meshDiscover();
+  const principal = `spiffe://wendy.sh/tenant/${cloudTenant}/device/${cloudAsset}`;
+  const lan = mergeMeshObservation(undefined, { status: "ok", topology: {
+    selfPrincipal: principal, selfTenantId: cloudTenant, selfDeviceId: cloudAsset,
+    capturedAtUnixMs: "1000", runtimeAvailable: true, status: { state: "mesh-active" },
+  } }, 1000);
+  const { groups } = buildMeshGroups(devices, {
+    "thor.local:50051": lan,
+    [cloudSelector]: mergeMeshObservation(undefined, { status: "unavailable", error: "Cloud relay offline" }, 1100),
+  }, 1200);
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0].nodes.length, 1);
+  assert.equal(groups[0].nodes[0].name, "ethan-wn-thor");
+  assert.equal(groups[0].nodes[0].observation, lan);
+  assert.equal(groups[0].nodes[0].inventory.id, "thor.local:50051");
+});
+
+test("local advertisements cannot supply Cloud-name bindings", async () => {
+  const service = fixture();
+  service.run = async (_file, args) => JSON.stringify(args[0] === "cloud" ? [] : { lanDevices: [{
+    isWendyDevice: true, hostname: "thor.local", displayName: "Wn Thor",
+    cloudName: "Spoofed label", cloudNamePrincipal: `spiffe://wendy.sh/tenant/${cloudTenant}/device/${cloudAsset}`,
+  }] });
+  const { devices } = await service.meshDiscover();
+  assert.equal(devices[1].cloudName, undefined);
+  assert.equal(devices[1].cloudNamePrincipal, undefined);
+});
+
+test("Cloud labels use the PKI binding instead of the asset row ID", async () => {
+  const service = fixture();
+  const deviceID = "00000000-0000-4000-8000-000000000099";
+  service.run = async (_file, args) => JSON.stringify(args[0] === "cloud"
+    ? [{ id: cloudAsset, selector: cloudSelector, name: "Cloud Thor", pkiDeviceName: deviceID }]
+    : {});
+  const { devices } = await service.meshDiscover();
+  const cloud = devices.find(device => device.id === cloudSelector);
+  assert.equal(cloud.cloudNamePrincipal, `spiffe://wendy.sh/tenant/${cloudTenant}/device/${deviceID}`);
+  assert.equal(cloud.id, cloudSelector);
+
+  service.run = async (_file, args) => JSON.stringify(args[0] === "cloud"
+    ? [{ id: cloudAsset, selector: cloudSelector, name: "Cloud Thor", pkiDeviceName: "unknown-device-format" }]
+    : {});
+  const unknown = (await service.meshDiscover()).devices.find(device => device.id === cloudSelector);
+  assert.equal(unknown.cloudNamePrincipal, undefined, "an invalid explicit binding must not fall back to the asset ID");
+});
+
+test("physical asset-ID matches do not override explicit Cloud PKI bindings", async () => {
+  const physical = "wendy-lite:physical.local";
+  for (const pkiDeviceName of [undefined, "", "unknown-device-format", "00000000-0000-4000-8000-000000000099"]) {
+    const service = fixture();
+    service.run = async (_file, args) => JSON.stringify(args[0] === "cloud"
+      ? [{ id: cloudAsset, selector: cloudSelector, name: "Cloud asset", pkiDeviceName }]
+      : { externalDevices: [{
+        isWendyDevice: true, providerKey: "wendy-lite", id: physical, displayName: "Physical device",
+        connectionInfo: { type: "LAN", enrolledDeviceId: cloudAsset, tenantId: cloudTenant },
+      }] });
+    const { devices } = await service.meshDiscover();
+    const physicalKey = service.meshReporterKeys.get(physical);
+    const cloudKey = service.meshReporterKeys.get(cloudSelector);
+    const hasExplicitBinding = pkiDeviceName != null && pkiDeviceName !== "";
+    assert.ok(devices.some(device => device.id === physical));
+    assert.equal(cloudKey === physicalKey, !hasExplicitBinding, `binding ${pkiDeviceName}`);
+    assert.equal(devices.some(device => device.id === cloudSelector), hasExplicitBinding);
+    assert.equal(service.meshReporterTargets.get(physicalKey).includes(cloudSelector), !hasExplicitBinding);
+    if (pkiDeviceName === "unknown-device-format") assert.equal(cloudKey, undefined);
+  }
+});
+
+test("an invalid explicit Cloud binding withdraws a retained alias during partial discovery", async () => {
+  const service = fixture(), physical = "wendy-lite:physical.local";
+  let partial = false;
+  service.run = async (_file, args) => {
+    if (args[0] === "cloud") return JSON.stringify([{
+      id: cloudAsset, selector: cloudSelector, name: "Cloud asset",
+      ...(partial ? { pkiDeviceName: "unknown-device-format" } : {}),
+    }]);
+    if (partial) throw new Error("Local discovery unavailable");
+    return JSON.stringify({ externalDevices: [{
+      isWendyDevice: true, providerKey: "wendy-lite", id: physical,
+      connectionInfo: { type: "LAN", enrolledDeviceId: cloudAsset, tenantId: cloudTenant },
+    }] });
+  };
+  await service.meshDiscover();
+  const physicalKey = service.meshReporterKeys.get(physical);
+  assert.equal(service.meshReporterKeys.get(cloudSelector), physicalKey);
+  partial = true;
+  const result = await service.meshDiscover();
+  assert.equal(result.retainPrevious, true);
+  assert.equal(service.meshReporterKeys.get(cloudSelector), undefined);
+  assert.equal(service.meshReporterTargets.get(physicalKey).includes(cloudSelector), false);
+  assert.ok(result.devices.some(device => device.id === cloudSelector));
+});
+
+test("successful Cloud roster changes withdraw copied labels from retained physical reporters", async () => {
+  for (const change of ["rebind", "invalid", "removed"]) {
+    const service = fixture(), physical = "wendy-lite:physical.local";
+    let partial = false;
+    service.run = async (_file, args) => {
+      if (args[0] === "cloud") return JSON.stringify(partial && change === "removed" ? [] : [{
+        id: cloudAsset, selector: cloudSelector, name: "Cloud Thor",
+        ...(partial && change === "rebind" ? { pkiDeviceName: "00000000-0000-4000-8000-000000000099" } : {}),
+        ...(partial && change === "invalid" ? { pkiDeviceName: "unknown-device-format" } : {}),
+      }]);
+      if (partial) throw new Error("Local discovery unavailable");
+      return JSON.stringify({ externalDevices: [{
+        isWendyDevice: true, providerKey: "wendy-lite", id: physical, displayName: "Physical A",
+        connectionInfo: { type: "LAN", enrolledDeviceId: cloudAsset, tenantId: cloudTenant },
+      }] });
+    };
+    const first = await service.meshDiscover();
+    assert.equal(first.devices.find(device => device.id === physical).cloudName, "Cloud Thor");
+    partial = true;
+    const second = await service.meshDiscover();
+    const inventory = mergeMeshInventory(first.devices, second.devices, second.retainPrevious, second.cloudNames);
+    const observation = mergeMeshObservation(undefined, { status: "ok", topology: {
+      selfPrincipal: `spiffe://wendy.sh/tenant/${cloudTenant}/device/${cloudAsset}`,
+      selfTenantId: cloudTenant, selfDeviceId: cloudAsset,
+      capturedAtUnixMs: "1000", runtimeAvailable: true, status: { state: "mesh-active" },
+    } }, 1000);
+    const { groups } = buildMeshGroups(inventory, { [`device:${cloudTenant}/${cloudAsset}`]: observation }, 1200);
+    const node = groups.flatMap(group => group.nodes).find(node => node.deviceId === cloudAsset);
+    assert.equal(node.name, "Physical A", change);
+    assert.equal(node.observation, observation, "label withdrawal must not replace authenticated observations");
+    assert.equal(inventory.find(device => device.id === physical).cloudName, undefined, change);
+  }
+});
+
+test("partial inventories retain unobserved Cloud labels but withdraw observed changed bindings", async () => {
+  for (const mode of ["cloud-unavailable", "invalid-inventory", "unobserved-row", "unobserved-row-local-ready", "observed-rebind"]) {
+    const service = fixture(), physical = "wendy-lite:physical.local";
+    let partial = false;
+    const local = { externalDevices: [{
+      isWendyDevice: true, providerKey: "wendy-lite", id: physical, displayName: "Physical A",
+      connectionInfo: { type: "LAN", enrolledDeviceId: cloudAsset, tenantId: cloudTenant },
+    }] };
+    service.run = async (_file, args) => {
+      if (args[0] !== "cloud") {
+        if (partial && ["unobserved-row", "observed-rebind"].includes(mode)) throw new Error("Local discovery unavailable");
+        return JSON.stringify(local);
+      }
+      if (!partial) return JSON.stringify([{ id: cloudAsset, selector: cloudSelector, name: "Cloud Thor" }]);
+      if (mode === "cloud-unavailable") throw new Error("Cloud offline");
+      if (mode === "invalid-inventory") return "{}";
+      return JSON.stringify([{ id: "uninterpretable", name: "Unobserved row" }, ...(mode === "observed-rebind" ? [{
+        id: cloudAsset, selector: cloudSelector, name: "Cloud Thor", pkiDeviceName: "00000000-0000-4000-8000-000000000099",
+      }] : [])]);
+    };
+    const first = await service.meshDiscover();
+    partial = true;
+    const second = await service.meshDiscover();
+    const inventory = mergeMeshInventory(first.devices, second.devices, second.retainPrevious, second.cloudNames);
+    const observation = mergeMeshObservation(undefined, { status: "ok", topology: {
+      selfPrincipal: `spiffe://wendy.sh/tenant/${cloudTenant}/device/${cloudAsset}`,
+      selfTenantId: cloudTenant, selfDeviceId: cloudAsset,
+      capturedAtUnixMs: "1000", runtimeAvailable: true, status: { state: "mesh-active" },
+    } }, 1000);
+    const { groups } = buildMeshGroups(inventory, { [`device:${cloudTenant}/${cloudAsset}`]: observation }, 1200);
+    assert.equal(groups.flatMap(group => group.nodes).find(node => node.deviceId === cloudAsset).name,
+      mode === "observed-rebind" ? "Physical A" : "Cloud Thor", mode);
+    assert.equal(first.devices.find(device => device.id === physical).cloudName, "Cloud Thor", "merging must not mutate earlier inventory");
+  }
 });
 
 test("Cloud discovery preserves complete selectors across tenants, endpoints and legacy organizations", async () => {
@@ -294,6 +463,8 @@ test("real CLI4 model JSON exposes mesh-only C6 through its exact Lite selector"
   assert.deepEqual(inventory.devices.map(device => device.id), ["cli://local", cli4Inventory.externalDevices[0].id, c6.selector]);
   assert.equal(inventory.devices[2].platform, "wendy-lite");
   assert.equal(inventory.devices[2].reporterKey, `device:${c6.tenant}/${c6.device}`);
+  assert.equal(inventory.devices[1].cloudName, "C5 Cloud");
+  assert.equal(inventory.devices[1].cloudNamePrincipal, cli4Inventory.meshDevices[1].principal);
   assert.deepEqual(inventory.warnings, []);
   let partial = false;
   service.run = async (_file, args) => {
