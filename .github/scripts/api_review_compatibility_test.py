@@ -163,7 +163,7 @@ class ContextTests(unittest.TestCase):
             git("init", "-q")
             git("config", "user.email", "fixture@example.invalid")
             git("config", "user.name", "Offline fixture")
-            files = {"go/source.go": "package a\nconst Port = 1\n", "go/caller.go": "package a\n// caller context\n",
+            files = {"go/source.go": "package a\nconst Port = 1\n", "go/port_reader.go": "package a\nfunc ReadPort() int { return Port }\n",
                      "go/large.go": "x" * (context.MAX_FILE_BYTES + 1),
                      "go/proto/gen/agentpb/example.pb.go": "GENERATED-SENTINEL",
                      "go/proto/gen/agentpb/handwritten.go": "package agentpb\n",
@@ -172,7 +172,7 @@ class ContextTests(unittest.TestCase):
                 target = Path(root, path)
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_text(value)
-            Path(root, "go/link.go").symlink_to("caller.go")
+            Path(root, "go/link.go").symlink_to("port_reader.go")
             git("add", ".")
             git("commit", "-qm", "base")
             base = git("rev-parse", "HEAD")
@@ -180,20 +180,21 @@ class ContextTests(unittest.TestCase):
             Path(root, "go/proto/gen/agentpb/handwritten.go").write_text("package agentpb\nconst X = 1\n")
             git("commit", "-qam", "head")
             head = git("rev-parse", "HEAD")
-            parsed = review.parse_diff(git("diff", base, head))
+            patch_text = git("diff", base, head)
+            parsed = review.parse_diff(patch_text)
             generated_oid = git("rev-parse", f"{head}:go/proto/gen/agentpb/example.pb.go")
             with patch.object(context, "git", wraps=context.git) as reads:
-                result = context.source_context(root, parsed, base, head)
-            self.assertTrue(any(item["unchanged"] and item["path"] == "go/caller.go" for item in result["files"]))
-            self.assertEqual({item["sha"] for item in result["files"] if item["path"] == "go/source.go"}, {base, head})
+                result = context.source_context(root, parsed, base, head, patch_text)
+            self.assertTrue(any(item["unchanged"] and item["path"] == "go/port_reader.go" for item in result["files"]))
+            self.assertEqual({item["sha"] for item in result["files"] if item["path"] == "go/source.go"}, {head})
+            self.assertTrue(all(item["also_at_base"] == base for item in result["files"] if item["unchanged"]))
             self.assertTrue(any(item["path"] == "go/proto/gen/agentpb/handwritten.go" for item in result["files"]))
             self.assertNotIn("GENERATED-SENTINEL", json.dumps(result))
             self.assertFalse(any(generated_oid in call.args for call in reads.call_args_list))
             self.assertNotIn("go/link.go", {item["path"] for item in result["files"]})
-            self.assertGreater(result["omitted_files"], 0)
             self.assertLessEqual(result["bytes"], context.MAX_CONTEXT_BYTES)
             with patch.object(context, "MAX_CONTEXT_BYTES", 1):
-                limited = context.source_context(root, parsed, base, head)
+                limited = context.source_context(root, parsed, base, head, patch_text)
             self.assertEqual(limited["files"], [])
             self.assertGreater(limited["omitted_files"], 0)
 
@@ -206,10 +207,79 @@ class ContextTests(unittest.TestCase):
             return source
         with patch.object(context, "git", side_effect=git):
             result = context.source_context("fixture", {"locations": {(path, "head"): {1000}}}, "b" * 40, "c" * 40)
-        self.assertEqual(result["partial_files"], 2)
+        self.assertEqual(result["partial_files"], 1)
         self.assertTrue(all(item["partial"] for item in result["files"]))
-        self.assertEqual(result["files"][1]["start_line"], 970)
+        self.assertTrue(any(a <= 1000 <= b for a, b in result["files"][0]["ranges"]))
         self.assertLess(result["bytes"], len(source))
+
+    def context_fixture(self, root, changes):
+        import subprocess
+        def git(*args):
+            return subprocess.check_output(["git", "-C", root, *args]).decode().strip()
+        git("init", "-q")
+        git("config", "user.email", "fixture@example.invalid")
+        git("config", "user.name", "Input coverage fixture")
+        initial = {
+            "go/mode_policy.go": 'package demo\nfunc ValidateMode(mode string) bool { return mode != "" }\n',
+            "swift/ModePolicy.swift": 'struct ModePolicy {\nfunc admit(_ mode: String) -> Bool { return !mode.isEmpty }\n}\n',
+            "go/mode.go": 'package demo\nfunc ExportDocument() bool { return ValidateMode("legacy") }\n',
+            "swift/ModeCaller.swift": 'func exportDocument() -> Bool { return ModePolicy().admit("legacy") }\n',
+            "go/a_unrelated.go": 'package demo\n// UNRELATED_NEIGHBOR\n',
+            "go/vendor/mode.go": 'VENDOR_SENTINEL\n',
+            "Proto/Mode.proto": 'PROTO_SENTINEL\n',
+            "go/notes.go": '// old prose\n',
+        }
+        for i in range(15):
+            initial[f"go/a{i}_test.go"] = "package demo\n// old fixture\n"
+        for path, value in initial.items():
+            target = Path(root, path); target.parent.mkdir(parents=True, exist_ok=True); target.write_text(value)
+        git("add", "."); git("commit", "-qm", "base")
+        base = git("rev-parse", "HEAD")
+        for path, value in changes.items():
+            Path(root, path).write_text(value)
+        git("add", "."); git("commit", "-qm", "head")
+        head = git("rev-parse", "HEAD")
+        patch_text = git("diff", base, head)
+        with patch.object(context, "git", wraps=context.git) as reads:
+            result = context.source_context(root, review.parse_diff(patch_text), base, head, patch_text)
+        return result, patch_text, reads.call_args_list, git
+
+    def test_language_and_caller_shares_survive_an_alphabetic_test_flood(self):
+        changes = {
+            "go/mode_policy.go": 'package demo\nfunc ValidateMode(mode string) bool { if mode == "" { return true }; return mode == "legacy" }\n',
+            "swift/ModePolicy.swift": 'struct ModePolicy {\nfunc admit(_ mode: String) -> Bool { guard !mode.isEmpty else { return true }; return mode == "legacy" }\n}\n',
+            **{f"go/a{i}_test.go": "package demo\n// TEST_DIFF_SENTINEL\n" for i in range(15)},
+        }
+        with tempfile.TemporaryDirectory() as root:
+            result, raw, reads, git = self.context_fixture(root, changes)
+            paths = {item["path"] for item in result["files"]}
+            self.assertTrue({"go/mode_policy.go", "swift/ModePolicy.swift", "go/mode.go", "swift/ModeCaller.swift"} <= paths)
+            self.assertFalse(any(context.test_path(path) for path in paths))
+            self.assertIn("TEST_DIFF_SENTINEL", raw)  # still reviewed in the diff
+            self.assertNotIn("go/a_unrelated.go", paths)
+            for path in ("go/a_unrelated.go", "go/vendor/mode.go", "Proto/Mode.proto"):
+                oid = git("rev-parse", f"HEAD:{path}")
+                self.assertFalse(any(oid in call.args for call in reads))
+            self.assertLessEqual(len(result["files"]), context.MAX_FILES)
+            self.assertLessEqual(result["bytes"], context.MAX_CONTEXT_BYTES)
+
+    def test_comment_only_control_does_not_gather_neighbors(self):
+        with tempfile.TemporaryDirectory() as root:
+            result, raw, reads, _git = self.context_fixture(root, {"go/notes.go": "// harmless wording\n"})
+            self.assertIn("harmless wording", raw)
+            self.assertEqual(result["files"], [])
+            self.assertFalse(any("cat-file" in call.args for call in reads))
+
+    def test_late_branch_and_its_local_callsite_are_exposed_without_a_graph(self):
+        source = ('func ExportDocument() bool { return CheckMode("legacy") }\n'
+                  + "// padding\n" * 300
+                  + 'func CheckMode(mode string) bool {\nif mode == "legacy" { return true }\nreturn false\n}\n'
+                  + "// padding\n" * 300)
+        text, ranges = context.excerpt(source, {303}, {"checkmode", "mode", "legacy"}, 2500)
+        self.assertIn('if mode == "legacy"', text)
+        self.assertIn('ExportDocument', text)
+        self.assertTrue(any(a <= 303 <= b for a, b in ranges))
+        self.assertLessEqual(len(text.encode()), 2500)
 
     def test_context_failure_remains_incomplete_without_model_call(self):
         with tempfile.TemporaryDirectory() as root:

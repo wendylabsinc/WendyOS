@@ -388,7 +388,7 @@ def review_intro(result: dict, repo: str) -> list[str]:
           if result.get("source_coverage", {}).get("excluded_generated_files") else []),
         *([f"Compatibility coverage: {result['context_coverage']['files']} source excerpts, "
             f"{result['context_coverage']['bytes']:,} bytes, "
-            f"{result['context_coverage']['omitted_files']} nearby files omitted, "
+            f"{result['context_coverage']['omitted_files']} candidate source files omitted, "
             f"{result['context_coverage'].get('partial_files', 0)} files excerpted. "
             + result['context_coverage']['limitation'], ""] if "context_coverage" in result else []),
         ("Check a box to accept a pending or changed decision. Acceptance follows materially unchanged decisions across commits; "
