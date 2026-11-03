@@ -43,7 +43,7 @@ func (n *Node) reclaimGlobalRedundancy(candidate meshid.Device) bool {
 	var victim *nodePeer
 	for _, link := range view.Links {
 		p := n.peers[link.ID]
-		if p == nil || p.retire == nil || p.retiring() || p.id != link.ID || p.device != link.Device || p.cost != link.Cost {
+		if p == nil || p.retire == nil || p.retiring() || p.id != link.ID || p.device != link.Device || p.cost != link.Cost || view.HasInstalledRouteOnLink(link.ID) {
 			continue
 		}
 		for _, alternate := range view.Links {
