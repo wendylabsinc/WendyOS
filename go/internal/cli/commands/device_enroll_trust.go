@@ -30,6 +30,8 @@ func runWithEnrollmentTarget(ctx context.Context, connect func() (*SelectedDevic
 		}
 	}
 	defer target.Close()
+	var saveBindings []func() error
+	target.recordEnrollmentBinding = func(save func() error) { saveBindings = append(saveBindings, save) }
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -37,7 +39,14 @@ func runWithEnrollmentTarget(ctx context.Context, connect func() (*SelectedDevic
 		return err
 	}
 	if trust != nil {
-		return trust.clearPreviousIdentity()
+		if err := trust.clearPreviousIdentity(); err != nil {
+			return err
+		}
+	}
+	for _, save := range saveBindings {
+		if err := save(); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -46,6 +55,35 @@ type enrollmentTrust struct {
 	pinKey    string
 	pinnedKey string
 	pin       config.DevicePin
+}
+
+// connectUnboundEnrollmentTarget is used only by explicit enrollment, before
+// the ordinary management dial. It never overrides a saved identity, including
+// an older incomplete pin, and never treats an enrolled or unknown state as a
+// setup endpoint. The connection stays scoped to the enrollment callback.
+func connectUnboundEnrollmentTarget(ctx context.Context, pinKey, addr string) (*SelectedDevice, bool, error) {
+	cfg, err := config.Load()
+	if err != nil {
+		return nil, true, err
+	}
+	if _, _, pinned := lookupPin(cfg, pinKey); pinned {
+		return nil, false, nil
+	}
+	conn, err := connectEnrollmentPlaintext(ctx, resolveAddrCandidates(ctx, addr))
+	if err != nil {
+		return nil, true, err
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, agentPlaintextProbeTimeout)
+	defer cancel()
+	state, err := deviceProvisioning(probeCtx, conn)
+	if err != nil || state.GetNotProvisioned() == nil {
+		conn.Close()
+		if err == nil {
+			err = fmt.Errorf("explicit setup requires an unprovisioned device; enrolled-device management requires a trusted expected identity")
+		}
+		return nil, true, err
+	}
+	return &SelectedDevice{Agent: conn}, true, nil
 }
 
 func recoverEnrollmentTrust(ctx context.Context, cause error) (*SelectedDevice, *enrollmentTrust, error) {

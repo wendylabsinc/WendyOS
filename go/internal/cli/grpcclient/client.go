@@ -383,6 +383,9 @@ func ConnectUnix(ctx context.Context, socketPath string) (*AgentConnection, erro
 	return ac, nil
 }
 
+// ConnectWithTLS cannot authenticate a selected device without an expected
+// identity and returns certs.ErrExpectedDeviceIdentity.
+// Deprecated: use ConnectWithTLSExpecting with a trusted device binding.
 func ConnectWithTLS(ctx context.Context, address string, certInfo *config.CertificateInfo) (*AgentConnection, error) {
 	return ConnectWithTLSAndPins(ctx, address, certInfo, nil)
 }
@@ -508,12 +511,16 @@ func newAgentTLSConfig(
 	return tlsCfg, nil
 }
 
+// ConnectWithTLSAndPins cannot infer the intended device from certificate-key
+// pins, which are keyed by the identity presented by the peer.
+// Deprecated: use ConnectWithTLSExpecting with a trusted device binding.
 func ConnectWithTLSAndPins(ctx context.Context, address string, certInfo *config.CertificateInfo, pins certs.PinChecker) (*AgentConnection, error) {
 	return ConnectWithTLSExpecting(ctx, address, certInfo, pins, nil)
 }
 
 // ConnectWithTLSExpecting is ConnectWithTLSAndPins with a required peer
-// identity. A nil expected is exactly ConnectWithTLSAndPins.
+// identity. A nil expected fails closed; use a trusted enrollment or inventory
+// binding for first contact, including on legacy org/asset connections.
 //
 // extraOpts extends the standard dial options for callers whose channel has
 // different lifetime needs than a per-command connection — today the session

@@ -113,11 +113,76 @@ func DesktopEnrollDevice(ctx context.Context, conn *grpcclient.AgentConnection, 
 	if err != nil {
 		return nil, err
 	}
-	verified, err := desktopEnrollmentConnection(ctx, conn, auth, identity, organization)
+	return verifyAndSaveEnrollment(ctx, conn, auth, identity, name)
+}
+
+type enrollmentBindingRecorderKey struct{}
+
+// verifyAndSaveEnrollment shares the exact-identity reconnect and persistence
+// between CLI enrollment and desktop enrollment. Reset recovery defers the
+// save until its old binding has been cleared, but never defers verification.
+func verifyAndSaveEnrollment(ctx context.Context, prior *grpcclient.AgentConnection, auth *config.AuthConfig, identity *certs.WendyIdentity, name string) (*grpcclient.AgentConnection, error) {
+	if prior == nil || auth == nil || identity == nil || identity.EntityType != certs.EntityAsset || identity.EntityID == "" || !identity.Scope().Known() {
+		return nil, certs.ErrExpectedDeviceIdentity
+	}
+	organization := identity.TenantUUID
+	if organization == "" {
+		organization = strconv.FormatInt(int64(identity.OrgID), 10)
+	}
+	verified, err := desktopEnrollmentConnection(ctx, prior, auth, identity, organization)
 	if err != nil {
 		return nil, fmt.Errorf("enrollment was sent, but could not be verified; reconnect and check its status: %w", err)
 	}
+	save := func() error { return saveEnrollmentBinding(prior, auth, identity, name) }
+	if record, ok := ctx.Value(enrollmentBindingRecorderKey{}).(func(func() error)); ok {
+		record(save)
+	} else if err := save(); err != nil {
+		if verified != prior {
+			verified.Close()
+		}
+		return nil, fmt.Errorf("enrollment was verified, but its local device binding could not be saved: %w", err)
+	}
 	return verified, nil
+}
+
+// Persist the identity minted by enrollment only after its exact-identity
+// reconnect succeeds. This gives local PKI and BLE users a trusted expectation
+// for later connections without learning a binding from an arbitrary peer.
+func saveEnrollmentBinding(prior *grpcclient.AgentConnection, auth *config.AuthConfig, identity *certs.WendyIdentity, name string) error {
+	if prior == nil || auth == nil || identity == nil || identity.EntityType != certs.EntityAsset || identity.EntityID == "" || !identity.Scope().Known() {
+		return certs.ErrExpectedDeviceIdentity
+	}
+	keys := []string{name, prior.Host}
+	if prior.Addr != "" {
+		keys = append(keys, pinKeyForAddr(prior.Addr))
+	}
+	return config.Update(func(cfg *config.Config) (bool, error) {
+		for _, key := range keys {
+			if key == "" {
+				continue
+			}
+			if pin, ok := cfg.DevicePinFor(key); ok {
+				expected := expectedIdentityForPin(pin)
+				if expected != nil && !expected.SameEntity(*identity) {
+					return false, fmt.Errorf("saved binding for %q belongs to another device; clear that binding explicitly before replacing it", key)
+				}
+			}
+		}
+		changed := false
+		for _, key := range keys {
+			if key == "" {
+				continue
+			}
+			if pin, ok := cfg.DevicePinFor(key); ok {
+				if expected := expectedIdentityForPin(pin); expected != nil && expected.SameEntity(*identity) {
+					continue
+				}
+			}
+			cfg.SetDevicePin(key, int(identity.OrgID), auth.CloudGRPC, identity.EntityID, identity.Principal)
+			changed = true
+		}
+		return changed, nil
+	})
 }
 
 // TCP enrollment closes the plaintext listener. Use the selected account and
@@ -127,7 +192,7 @@ func desktopEnrollmentConnection(ctx context.Context, prior *grpcclient.AgentCon
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	next := prior
-	if !prior.IsMTLS && prior.Addr != "" {
+	if prior.Addr != "" {
 		host, portText, err := net.SplitHostPort(prior.Addr)
 		if err != nil {
 			return nil, err
@@ -136,7 +201,10 @@ func desktopEnrollmentConnection(ctx context.Context, prior *grpcclient.AgentCon
 		if err != nil || port < 1 || port >= 65535 {
 			return nil, errors.New("invalid enrollment endpoint port")
 		}
-		next, err = grpcclient.ConnectWithTLSExpecting(ctx, net.JoinHostPort(host, strconv.Itoa(port+1)), &auth.Certificates[0], openPinStore(), identity)
+		if !prior.IsMTLS {
+			port++
+		}
+		next, err = grpcclient.ConnectWithTLSExpecting(ctx, net.JoinHostPort(host, strconv.Itoa(port)), &auth.Certificates[0], openPinStore(), identity)
 		if err != nil {
 			return nil, err
 		}

@@ -396,9 +396,9 @@ func isLoopbackHost(host string) bool {
 }
 
 // expectedIdentityFor returns the asset identity pinned for pinKey, or nil when
-// the host is unpinned or its pin predates asset ids. Nil means "first contact
-// is permissive" — the posture that keeps legacy and unprovisioned devices
-// working; the pin is written on the first successful connect.
+// the host is unpinned or its pin predates asset ids. Enrolled-device mTLS
+// refuses that missing binding; obtain it through trusted enrollment or Cloud
+// inventory before connecting. Pre-provisioning plaintext is a separate path.
 //
 // The lookup goes through lookupPin, so a pin recorded under any of the
 // device's names — hostname, mesh name, or display name — is honoured here.
@@ -672,7 +672,7 @@ func (e *unprovisionedRefusal) CLIMessage() string { return e.diagnostic.message
 // facts apart. It is not licence to route a pinned device onto an
 // unauthenticated transport.
 func blocksUnauthenticatedFallback(err error) bool {
-	return errors.Is(err, errDeviceIdentityRefused) || errors.Is(err, errNoAuthenticatedEndpoint)
+	return errors.Is(err, errDeviceIdentityRefused) || errors.Is(err, errNoAuthenticatedEndpoint) || errors.Is(err, certs.ErrExpectedDeviceIdentity)
 }
 
 // pinnedHostNoAuthenticatedEndpointError renders the honest version of what

@@ -3,6 +3,7 @@ package commands
 import (
 	"context"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -904,6 +905,8 @@ type SelectedDevice struct {
 	PinKey string
 	// DefaultSelector preserves a cloud target after its tunnel is connected.
 	DefaultSelector string
+	// Explicit enrollment defers saving its verified replacement until old-pin cleanup.
+	recordEnrollmentBinding func(func() error)
 }
 
 // Close releases any resources held by this SelectedDevice.
@@ -2645,6 +2648,9 @@ func (w *mtlsWalk) dialAddr(ctx context.Context, cand string, isPrimary bool) (*
 			i := w.probeOrder[pos]
 			conn, tlsErr := grpcclient.ConnectWithTLSExpecting(ctx, mtlsAddr, &w.allCerts[i], w.pins, w.target.Expected)
 			if tlsErr != nil {
+				if errors.Is(tlsErr, certs.ErrExpectedDeviceIdentity) {
+					return nil, tlsErr
+				}
 				w.recordMTLSErr(mtlsAddr, tlsErr, isPrimary)
 				if w.tlsDebug {
 					fmt.Fprintf(os.Stderr, "[tls-debug] ConnectWithTLS(%s) error: %v\n", mtlsAddr, tlsErr)
@@ -2769,6 +2775,11 @@ func (w *mtlsWalk) dialAddr(ctx context.Context, cand string, isPrimary bool) (*
 // authenticate the requested device. A host with any pin is never offered the
 // plaintext rung.
 func dialAgentLadderWithCerts(ctx context.Context, target dialTarget, allCerts []config.CertificateInfo) (*grpcclient.AgentConnection, error, error) {
+	if len(allCerts) > 0 && target.Expected == nil {
+		// A local configuration failure must never turn into a plaintext
+		// attempt or a different carrier's trust-on-first-use connection.
+		return nil, certs.ErrExpectedDeviceIdentity, certs.ErrExpectedDeviceIdentity
+	}
 	candidates := target.dialCandidates()
 	walk := &mtlsWalk{target: target, tlsDebug: os.Getenv("WENDY_TLS_DEBUG") != ""}
 	if len(allCerts) > 0 && len(candidates) > 0 {
@@ -2834,7 +2845,7 @@ func dialAgentLadderWithCerts(ctx context.Context, target dialTarget, allCerts [
 	if err := ctx.Err(); err != nil {
 		return nil, walk.lastMTLSErr, err
 	}
-	if target.pinned() {
+	if target.pinned() || target.Expected != nil {
 		// A host we have already reached over mTLS must never be reached
 		// unauthenticated. Unlike provisionedAgentAdvertisedMTLS this rests on
 		// local state, not a TXT record the attacker also controls — and on the
@@ -3311,19 +3322,38 @@ func findCertByOrgID(authEntries []config.AuthConfig, orgID int) *config.Certifi
 // attemptBLEConnect builds a TLS config and connects to device using the
 // given certificate info and pin store.
 func attemptBLEConnect(device *models.BluetoothDevice, cert config.CertificateInfo, pins certs.PinChecker) (*ble.AgentClient, error) {
+	tlsCfg, err := bleAgentTLSConfig(device, cert, pins)
+	if err != nil {
+		return nil, err
+	}
+	return ble.ConnectAgent(device, tlsCfg)
+}
+
+func bleAgentTLSConfig(device *models.BluetoothDevice, cert config.CertificateInfo, pins certs.PinChecker) (*tls.Config, error) {
+	if device == nil {
+		return nil, certs.ErrExpectedDeviceIdentity
+	}
+	// The advertised name selects an existing local binding only. It cannot
+	// supply or create an identity: spoofing it still requires that binding's
+	// certificate and private key, and unknown names are rejected.
+	expected := expectedIdentityFor(device.HostKey())
+	if expected == nil {
+		return nil, fmt.Errorf("cannot authenticate Bluetooth device %q: %w; refresh its trusted Cloud inventory with 'wendy cloud discover' or use a saved binding from verified enrollment", device.DisplayName, certs.ErrExpectedDeviceIdentity)
+	}
 	keyPEM, err := cert.PrivateKeyPEM()
 	if err != nil {
 		return nil, fmt.Errorf("loading client key: %w", err)
 	}
 	tlsCfg, err := ble.NewClientTLSConfig(cert.PemCertificate, keyPEM, certs.ServerVerifyOpts{
-		ChainPEM:      cert.PemCertificateChain,
-		ExpectedOrgID: int32(cert.OrganizationID),
-		PinStore:      pins,
+		ChainPEM:         cert.PemCertificateChain,
+		ExpectedOrgID:    int32(cert.OrganizationID),
+		ExpectedIdentity: expected,
+		PinStore:         pins,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("building BLE TLS config: %w", err)
 	}
-	return ble.ConnectAgent(device, tlsCfg)
+	return tlsCfg, nil
 }
 
 // connectBLEAgent connects to device via BLE mTLS, automatically retrying
@@ -3645,6 +3675,11 @@ func resolveTargetInner(ctx context.Context, opts ...resolveOption) (*SelectedDe
 		// its retries and the pin check below all use it (see
 		// recheckDialPinKey).
 		pinKey := pinKeyForAddr(addr)
+		if cfg.enrollmentTrustRecovery {
+			if target, handled, err := connectUnboundEnrollmentTarget(ctx, pinKey, addr); handled {
+				return target, err
+			}
+		}
 		conn, brokerHit := (*grpcclient.AgentConnection)(nil), false
 		if !cfg.disableSessionBroker {
 			conn, brokerHit = connectPinnedSessionKeyed(ctx, addr, pinKey)

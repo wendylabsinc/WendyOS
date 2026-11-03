@@ -125,7 +125,7 @@ func TestRunEnrollDeviceUsesSessionOrganization(t *testing.T) {
 			conn := &grpcclient.AgentConnection{ProvisioningService: provisioning}
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			if err := runEnrollDevice(ctx, conn, auth, "simulator", tc.override); err != nil {
+			if _, err := runEnrollDeviceIdentity(ctx, conn, auth, "simulator", tc.override); err != nil {
 				t.Fatal(err)
 			}
 			if svc.request.GetOrganizationId() != tc.want || svc.request.GetName() != "simulator" {

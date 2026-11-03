@@ -668,7 +668,7 @@ func TestDialAddrScopesBucketsToThePrimary(t *testing.T) {
 	dead := deadLoopbackAddr(t, "127.0.0.1")
 	newWalk := func() *mtlsWalk {
 		return &mtlsWalk{
-			target:     newDialTarget("orin.local", dead),
+			target:     dialTarget{Addr: dead, Expected: &certs.WendyIdentity{OrgID: 7, EntityType: certs.EntityAsset, EntityID: "42"}},
 			allCerts:   []config.CertificateInfo{selfSignedCLICert(t, 7)},
 			probeOrder: []int{0},
 		}

@@ -739,7 +739,10 @@ func TestSPKIMismatchAbortsLadderAndNamesUnpin(t *testing.T) {
 
 	// Two certs × two ports = four rungs if the ladder kept going.
 	allCerts := []config.CertificateInfo{selfSignedCLICert(t, 7), selfSignedCLICert(t, 9)}
-	conn, mtlsErr, err := dialAgentLadderWithCerts(ctx, newDialTarget("orin.local", deadAgentAddr(t)), allCerts)
+	target := newDialTarget("orin.local", deadAgentAddr(t))
+	// An explicit inventory expectation exists even without a local config pin.
+	target.Expected = &certs.WendyIdentity{OrgID: 7, EntityType: certs.EntityAsset, EntityID: "42"}
+	conn, mtlsErr, err := dialAgentLadderWithCerts(ctx, target, allCerts)
 	if conn != nil {
 		conn.Close()
 	}
