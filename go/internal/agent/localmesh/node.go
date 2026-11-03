@@ -29,6 +29,7 @@ type nodePeer struct {
 	babelRetiring   bool // Actor-owned: expiry already signalled the existing lifetime owner.
 	retire          chan struct{}
 	retireOnce      sync.Once
+	capacityRetire  atomic.Bool // Local cause survives asynchronous owned cleanup.
 	closeDiagnostic sync.Once
 	ingress         *nodeEvent // One actor-owned input; its reader awaits acknowledgement.
 
@@ -969,7 +970,7 @@ func (n *Node) attachLink(ctx context.Context, peer meshid.Device, cost uint16, 
 		}
 		return err
 	}
-	BindConnectionLink(ctx, p.id, p.cost, p.signalRetire)
+	BindConnectionLink(ctx, p.id, p.cost, p.signalCapacityRetire)
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	var wg sync.WaitGroup
@@ -995,6 +996,10 @@ func (n *Node) attachLink(ctx context.Context, peer meshid.Device, cost uint16, 
 	// instead: the event loop may still be finishing a FIB operation. Closing
 	// the descriptor here would destroy its link before that operation ends.
 	wg.Wait()
+	if p.capacityRetire.Load() {
+		markConnectionRetry(ctx)
+		return errors.Join(ErrCarrierCapacityRetry, err, removeErr)
+	}
 	return errors.Join(err, removeErr)
 }
 

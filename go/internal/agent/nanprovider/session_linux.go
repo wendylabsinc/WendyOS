@@ -435,7 +435,7 @@ func (p Provider) runNDIEpoch(parent context.Context, id meshid.Device, logger *
 					case <-ctx.Done():
 					}
 				})
-				if err != nil && peerCtx.Err() == nil {
+				if err != nil && peerCtx.Err() == nil && !peer.Lease.Retired() && !errors.Is(err, localmesh.ErrCarrierCapacityRetry) {
 					logger.Warn("NAN peer session failed", zap.String("device", peer.Device.UUID().String()), zap.Error(err))
 				}
 

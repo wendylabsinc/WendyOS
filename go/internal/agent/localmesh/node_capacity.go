@@ -60,7 +60,7 @@ func (n *Node) reclaimGlobalRedundancy(candidate meshid.Device) bool {
 		return false
 	}
 	n.capacityRetiring = victim.id
-	victim.signalRetire()
+	victim.signalCapacityRetire()
 	n.refresh()
 	return true
 }
