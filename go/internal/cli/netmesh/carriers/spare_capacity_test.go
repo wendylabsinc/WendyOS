@@ -217,6 +217,43 @@ func TestRunNewPeerMayPreemptUnprimedUpgradeWhileOldPathWorks(t *testing.T) {
 	h.quiet()
 }
 
+func TestRunUnattemptedNewPeerWinsReleasedCapacityBeforeOtherStandbys(t *testing.T) {
+	h := newSpareRun(t, Limits{Connections: 2}, func(cfg *Config) {
+		cfg.SupportedTransports = []string{TCP, BLE, QUIC}
+	})
+	ble, lan, fresh := spareBLE(2), spareTCP(2, 128), spareTCP(3, 128)
+	upgrade := spareTCP(4, 128)
+	redundant := Candidate{Device: upgrade.Device, Transport: QUIC, Address: "192.0.2.40:43024", Cost: 8192}
+	h.mu.Lock()
+	h.links["unowned-working-peer"] = localmesh.PeerLink{ID: 100, Device: upgrade.Device, Transport: BLE, Cost: 4096, ForwardingReady: true}
+	h.installed = []babel.Route{{Prefix: netip.PrefixFrom(upgrade.Device.MeshAddress(), 128), Link: 100, Metric: 4096}}
+	h.mu.Unlock()
+	h.start(ble)
+	h.expectStart(ble)
+	h.ready(ble.Address, true)
+	h.start(ble, lan)
+	h.expectStart(lan)
+	h.ready(lan.Address, true)
+	h.mu.Lock()
+	release := make(chan struct{})
+	h.block[ble.Address] = release
+	h.mu.Unlock()
+	h.start(ble, lan, fresh, upgrade, redundant)
+	if got := wait(t, h.closing); got.Address != ble.Address {
+		t.Fatalf("retired wrong owned standby: %+v", got)
+	}
+	h.quiet() // No capacity is borrowed while the old owner is closing.
+	close(release)
+	h.expectStart(fresh) // The unattempted probe has no artificial retry delay.
+	h.quiet()            // Neither unrelated upgrade nor redundancy stole its slot.
+	h.mu.Lock()
+	peak := h.peak
+	h.mu.Unlock()
+	if peak != 2 {
+		t.Fatalf("capacity exceeded while preferring the new peer: %d", peak)
+	}
+}
+
 func TestRunTransitRouteMustLeaveStandbyBeforeReclaim(t *testing.T) {
 	h := newSpareRun(t, Limits{Connections: 2})
 	ble, lan, fresh := spareBLE(2), spareTCP(2, 128), spareTCP(3, 128)
