@@ -118,6 +118,8 @@ message GetBuildCapabilitiesResponse {
   // Advisory, not a gate: a build whose layers are all cached, or whose base
   // images come from a registry on the local network, can succeed without it,
   // so a client warns rather than refuses.
+  // True when numeric v1 targets and results are understood.
+  bool legacy_delivery = 17;
   bool internet_check_supported = 14;
   bool internet_reachable = 15;
   // Empty when reachable. Otherwise a short reason phrased for a developer,
@@ -153,11 +155,13 @@ message DockerfileBuild {
 // capability: it can only ever address a device in this tenant, whereas a
 // free-form host could address anything. See WDY-2356.
 message PushTarget {
-  // Field 1 was the numeric org-scoped asset id; Cloud v2 assets are UUIDs.
-  reserved 1;
-  reserved "asset_id";
+  // Original v1 numeric identity, retained at its original wire number.
+  // Mutually exclusive with asset_uuid; never derive a UUID from this ID.
+  int32 asset_id = 1;
   // The target device's Cloud asset UUID, canonical lowercase text.
   string asset_uuid = 5;
+  // Zero on old v1 callers: the server binds the ID to its saved v1 org.
+  int32 legacy_organization_id = 6;
   uint32 registry_port = 2;
   // "repository:tag" only — never a host component.
   string repository = 3;
@@ -269,12 +273,13 @@ message BuildImageResult {
 // device. A failure here is specific to that device — its agent, its mesh
 // reachability, its disk — and says nothing about the others.
 message DeliveryResult {
-  // Field 1 was the numeric org-scoped asset id; Cloud v2 assets are UUIDs.
-  reserved 1;
-  reserved "asset_id";
+  // Original v1 numeric identity, retained at its original wire number.
+  // Mutually exclusive with asset_uuid; never derive a UUID from this ID.
+  int32 asset_id = 1;
   // The delivered-to device's Cloud asset UUID, canonical lowercase text —
   // the same value the PushTarget carried.
   string asset_uuid = 4;
+  int32 legacy_organization_id = 5;
   bool delivered = 2;
   // Empty when delivered. Carries the reason otherwise, already phrased for a
   // developer: the CLI prints it next to the device name rather than

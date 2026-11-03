@@ -27,6 +27,10 @@ const (
 	DeploymentService_GetDeployment_FullMethodName           = "/wendycloud.v1.DeploymentService/GetDeployment"
 	DeploymentService_ListDeployments_FullMethodName         = "/wendycloud.v1.DeploymentService/ListDeployments"
 	DeploymentService_HandleReportedState_FullMethodName     = "/wendycloud.v1.DeploymentService/HandleReportedState"
+	DeploymentService_ListAssetApps_FullMethodName           = "/wendycloud.v1.DeploymentService/ListAssetApps"
+	DeploymentService_GetPullCredentials_FullMethodName      = "/wendycloud.v1.DeploymentService/GetPullCredentials"
+	DeploymentService_ListDeviceContainers_FullMethodName    = "/wendycloud.v1.DeploymentService/ListDeviceContainers"
+	DeploymentService_ControlContainer_FullMethodName        = "/wendycloud.v1.DeploymentService/ControlContainer"
 )
 
 // DeploymentServiceClient is the client API for DeploymentService service.
@@ -44,6 +48,11 @@ type DeploymentServiceClient interface {
 	ListDeployments(ctx context.Context, in *ListDeploymentsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ListDeploymentsResponse], error)
 	// ==================== Asset App Desired Instructions (wendy-agent) ====================
 	HandleReportedState(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[UpdateReportedStateRequest, DesiredStateResponse], error)
+	ListAssetApps(ctx context.Context, in *ListAssetAppsRequest, opts ...grpc.CallOption) (*ListAssetAppsResponse, error)
+	GetPullCredentials(ctx context.Context, in *GetPullCredentialsRequest, opts ...grpc.CallOption) (*GetPullCredentialsResponse, error)
+	// ==================== Device Container Control ====================
+	ListDeviceContainers(ctx context.Context, in *ListDeviceContainersRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[DeviceContainer], error)
+	ControlContainer(ctx context.Context, in *ControlContainerRequest, opts ...grpc.CallOption) (*ControlContainerResponse, error)
 }
 
 type deploymentServiceClient struct {
@@ -155,6 +164,55 @@ func (c *deploymentServiceClient) HandleReportedState(ctx context.Context, opts 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type DeploymentService_HandleReportedStateClient = grpc.BidiStreamingClient[UpdateReportedStateRequest, DesiredStateResponse]
 
+func (c *deploymentServiceClient) ListAssetApps(ctx context.Context, in *ListAssetAppsRequest, opts ...grpc.CallOption) (*ListAssetAppsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListAssetAppsResponse)
+	err := c.cc.Invoke(ctx, DeploymentService_ListAssetApps_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *deploymentServiceClient) GetPullCredentials(ctx context.Context, in *GetPullCredentialsRequest, opts ...grpc.CallOption) (*GetPullCredentialsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetPullCredentialsResponse)
+	err := c.cc.Invoke(ctx, DeploymentService_GetPullCredentials_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *deploymentServiceClient) ListDeviceContainers(ctx context.Context, in *ListDeviceContainersRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[DeviceContainer], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &DeploymentService_ServiceDesc.Streams[3], DeploymentService_ListDeviceContainers_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[ListDeviceContainersRequest, DeviceContainer]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type DeploymentService_ListDeviceContainersClient = grpc.ServerStreamingClient[DeviceContainer]
+
+func (c *deploymentServiceClient) ControlContainer(ctx context.Context, in *ControlContainerRequest, opts ...grpc.CallOption) (*ControlContainerResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ControlContainerResponse)
+	err := c.cc.Invoke(ctx, DeploymentService_ControlContainer_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // DeploymentServiceServer is the server API for DeploymentService service.
 // All implementations must embed UnimplementedDeploymentServiceServer
 // for forward compatibility.
@@ -170,6 +228,11 @@ type DeploymentServiceServer interface {
 	ListDeployments(*ListDeploymentsRequest, grpc.ServerStreamingServer[ListDeploymentsResponse]) error
 	// ==================== Asset App Desired Instructions (wendy-agent) ====================
 	HandleReportedState(grpc.BidiStreamingServer[UpdateReportedStateRequest, DesiredStateResponse]) error
+	ListAssetApps(context.Context, *ListAssetAppsRequest) (*ListAssetAppsResponse, error)
+	GetPullCredentials(context.Context, *GetPullCredentialsRequest) (*GetPullCredentialsResponse, error)
+	// ==================== Device Container Control ====================
+	ListDeviceContainers(*ListDeviceContainersRequest, grpc.ServerStreamingServer[DeviceContainer]) error
+	ControlContainer(context.Context, *ControlContainerRequest) (*ControlContainerResponse, error)
 	mustEmbedUnimplementedDeploymentServiceServer()
 }
 
@@ -203,6 +266,18 @@ func (UnimplementedDeploymentServiceServer) ListDeployments(*ListDeploymentsRequ
 }
 func (UnimplementedDeploymentServiceServer) HandleReportedState(grpc.BidiStreamingServer[UpdateReportedStateRequest, DesiredStateResponse]) error {
 	return status.Error(codes.Unimplemented, "method HandleReportedState not implemented")
+}
+func (UnimplementedDeploymentServiceServer) ListAssetApps(context.Context, *ListAssetAppsRequest) (*ListAssetAppsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListAssetApps not implemented")
+}
+func (UnimplementedDeploymentServiceServer) GetPullCredentials(context.Context, *GetPullCredentialsRequest) (*GetPullCredentialsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetPullCredentials not implemented")
+}
+func (UnimplementedDeploymentServiceServer) ListDeviceContainers(*ListDeviceContainersRequest, grpc.ServerStreamingServer[DeviceContainer]) error {
+	return status.Error(codes.Unimplemented, "method ListDeviceContainers not implemented")
+}
+func (UnimplementedDeploymentServiceServer) ControlContainer(context.Context, *ControlContainerRequest) (*ControlContainerResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ControlContainer not implemented")
 }
 func (UnimplementedDeploymentServiceServer) mustEmbedUnimplementedDeploymentServiceServer() {}
 func (UnimplementedDeploymentServiceServer) testEmbeddedByValue()                           {}
@@ -344,6 +419,71 @@ func _DeploymentService_HandleReportedState_Handler(srv interface{}, stream grpc
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type DeploymentService_HandleReportedStateServer = grpc.BidiStreamingServer[UpdateReportedStateRequest, DesiredStateResponse]
 
+func _DeploymentService_ListAssetApps_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListAssetAppsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DeploymentServiceServer).ListAssetApps(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DeploymentService_ListAssetApps_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DeploymentServiceServer).ListAssetApps(ctx, req.(*ListAssetAppsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _DeploymentService_GetPullCredentials_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetPullCredentialsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DeploymentServiceServer).GetPullCredentials(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DeploymentService_GetPullCredentials_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DeploymentServiceServer).GetPullCredentials(ctx, req.(*GetPullCredentialsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _DeploymentService_ListDeviceContainers_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(ListDeviceContainersRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(DeploymentServiceServer).ListDeviceContainers(m, &grpc.GenericServerStream[ListDeviceContainersRequest, DeviceContainer]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type DeploymentService_ListDeviceContainersServer = grpc.ServerStreamingServer[DeviceContainer]
+
+func _DeploymentService_ControlContainer_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ControlContainerRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DeploymentServiceServer).ControlContainer(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: DeploymentService_ControlContainer_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DeploymentServiceServer).ControlContainer(ctx, req.(*ControlContainerRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // DeploymentService_ServiceDesc is the grpc.ServiceDesc for DeploymentService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -371,6 +511,18 @@ var DeploymentService_ServiceDesc = grpc.ServiceDesc{
 			MethodName: "GetDeployment",
 			Handler:    _DeploymentService_GetDeployment_Handler,
 		},
+		{
+			MethodName: "ListAssetApps",
+			Handler:    _DeploymentService_ListAssetApps_Handler,
+		},
+		{
+			MethodName: "GetPullCredentials",
+			Handler:    _DeploymentService_GetPullCredentials_Handler,
+		},
+		{
+			MethodName: "ControlContainer",
+			Handler:    _DeploymentService_ControlContainer_Handler,
+		},
 	},
 	Streams: []grpc.StreamDesc{
 		{
@@ -388,6 +540,11 @@ var DeploymentService_ServiceDesc = grpc.ServiceDesc{
 			Handler:       _DeploymentService_HandleReportedState_Handler,
 			ServerStreams: true,
 			ClientStreams: true,
+		},
+		{
+			StreamName:    "ListDeviceContainers",
+			Handler:       _DeploymentService_ListDeviceContainers_Handler,
+			ServerStreams: true,
 		},
 	},
 	Metadata: "cloud/deployments.proto",

@@ -275,6 +275,8 @@ type GetBuildCapabilitiesResponse struct {
 	// Advisory, not a gate: a build whose layers are all cached, or whose base
 	// images come from a registry on the local network, can succeed without it,
 	// so a client warns rather than refuses.
+	// True when numeric v1 targets and results are understood.
+	LegacyDelivery         bool `protobuf:"varint,17,opt,name=legacy_delivery,json=legacyDelivery,proto3" json:"legacy_delivery,omitempty"`
 	InternetCheckSupported bool `protobuf:"varint,14,opt,name=internet_check_supported,json=internetCheckSupported,proto3" json:"internet_check_supported,omitempty"`
 	InternetReachable      bool `protobuf:"varint,15,opt,name=internet_reachable,json=internetReachable,proto3" json:"internet_reachable,omitempty"`
 	// Empty when reachable. Otherwise a short reason phrased for a developer,
@@ -401,6 +403,13 @@ func (x *GetBuildCapabilitiesResponse) GetBuildkitRootInspectionSupported() bool
 func (x *GetBuildCapabilitiesResponse) GetChunkDelivery() bool {
 	if x != nil {
 		return x.ChunkDelivery
+	}
+	return false
+}
+
+func (x *GetBuildCapabilitiesResponse) GetLegacyDelivery() bool {
+	if x != nil {
+		return x.LegacyDelivery
 	}
 	return false
 }
@@ -549,9 +558,14 @@ func (x *DockerfileBuild) GetBuildArgs() map[string]string {
 // free-form host could address anything. See WDY-2356.
 type PushTarget struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
+	// Original v1 numeric identity, retained at its original wire number.
+	// Mutually exclusive with asset_uuid; never derive a UUID from this ID.
+	AssetId int32 `protobuf:"varint,1,opt,name=asset_id,json=assetId,proto3" json:"asset_id,omitempty"`
 	// The target device's Cloud asset UUID, canonical lowercase text.
-	AssetUuid    string `protobuf:"bytes,5,opt,name=asset_uuid,json=assetUuid,proto3" json:"asset_uuid,omitempty"`
-	RegistryPort uint32 `protobuf:"varint,2,opt,name=registry_port,json=registryPort,proto3" json:"registry_port,omitempty"`
+	AssetUuid string `protobuf:"bytes,5,opt,name=asset_uuid,json=assetUuid,proto3" json:"asset_uuid,omitempty"`
+	// Zero on old v1 callers: the server binds the ID to its saved v1 org.
+	LegacyOrganizationId int32  `protobuf:"varint,6,opt,name=legacy_organization_id,json=legacyOrganizationId,proto3" json:"legacy_organization_id,omitempty"`
+	RegistryPort         uint32 `protobuf:"varint,2,opt,name=registry_port,json=registryPort,proto3" json:"registry_port,omitempty"`
 	// "repository:tag" only — never a host component.
 	Repository string `protobuf:"bytes,3,opt,name=repository,proto3" json:"repository,omitempty"`
 	// mTLS gRPC port of this target's agent. The CLI copies the port from the
@@ -592,11 +606,25 @@ func (*PushTarget) Descriptor() ([]byte, []int) {
 	return file_wendy_agent_services_v2_build_service_proto_rawDescGZIP(), []int{6}
 }
 
+func (x *PushTarget) GetAssetId() int32 {
+	if x != nil {
+		return x.AssetId
+	}
+	return 0
+}
+
 func (x *PushTarget) GetAssetUuid() string {
 	if x != nil {
 		return x.AssetUuid
 	}
 	return ""
+}
+
+func (x *PushTarget) GetLegacyOrganizationId() int32 {
+	if x != nil {
+		return x.LegacyOrganizationId
+	}
+	return 0
 }
 
 func (x *PushTarget) GetRegistryPort() uint32 {
@@ -957,10 +985,14 @@ func (x *BuildImageResult) GetDeliveries() []*DeliveryResult {
 // reachability, its disk — and says nothing about the others.
 type DeliveryResult struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
+	// Original v1 numeric identity, retained at its original wire number.
+	// Mutually exclusive with asset_uuid; never derive a UUID from this ID.
+	AssetId int32 `protobuf:"varint,1,opt,name=asset_id,json=assetId,proto3" json:"asset_id,omitempty"`
 	// The delivered-to device's Cloud asset UUID, canonical lowercase text —
 	// the same value the PushTarget carried.
-	AssetUuid string `protobuf:"bytes,4,opt,name=asset_uuid,json=assetUuid,proto3" json:"asset_uuid,omitempty"`
-	Delivered bool   `protobuf:"varint,2,opt,name=delivered,proto3" json:"delivered,omitempty"`
+	AssetUuid            string `protobuf:"bytes,4,opt,name=asset_uuid,json=assetUuid,proto3" json:"asset_uuid,omitempty"`
+	LegacyOrganizationId int32  `protobuf:"varint,5,opt,name=legacy_organization_id,json=legacyOrganizationId,proto3" json:"legacy_organization_id,omitempty"`
+	Delivered            bool   `protobuf:"varint,2,opt,name=delivered,proto3" json:"delivered,omitempty"`
 	// Empty when delivered. Carries the reason otherwise, already phrased for a
 	// developer: the CLI prints it next to the device name rather than
 	// interpreting it.
@@ -999,11 +1031,25 @@ func (*DeliveryResult) Descriptor() ([]byte, []int) {
 	return file_wendy_agent_services_v2_build_service_proto_rawDescGZIP(), []int{11}
 }
 
+func (x *DeliveryResult) GetAssetId() int32 {
+	if x != nil {
+		return x.AssetId
+	}
+	return 0
+}
+
 func (x *DeliveryResult) GetAssetUuid() string {
 	if x != nil {
 		return x.AssetUuid
 	}
 	return ""
+}
+
+func (x *DeliveryResult) GetLegacyOrganizationId() int32 {
+	if x != nil {
+		return x.LegacyOrganizationId
+	}
+	return 0
 }
 
 func (x *DeliveryResult) GetDelivered() bool {
@@ -1029,7 +1075,7 @@ const file_wendy_agent_services_v2_build_service_proto_rawDesc = "" +
 	"\aenabled\x18\x01 \x01(\bR\aenabled\"7\n" +
 	"\x1bSetBuildHostEnabledResponse\x12\x18\n" +
 	"\aenabled\x18\x01 \x01(\bR\aenabled\"\x1d\n" +
-	"\x1bGetBuildCapabilitiesRequest\"\x89\x06\n" +
+	"\x1bGetBuildCapabilitiesRequest\"\xb2\x06\n" +
 	"\x1cGetBuildCapabilitiesResponse\x12-\n" +
 	"\x12buildkit_available\x18\x01 \x01(\bR\x11buildkitAvailable\x12)\n" +
 	"\x10buildkit_version\x18\x02 \x01(\tR\x0fbuildkitVersion\x12\x0e\n" +
@@ -1044,7 +1090,8 @@ const file_wendy_agent_services_v2_build_service_proto_rawDesc = "" +
 	" \x01(\x04R\x15buildkitRootFreeBytes\x129\n" +
 	"\x19buildkit_root_total_bytes\x18\v \x01(\x04R\x16buildkitRootTotalBytes\x12K\n" +
 	"\"buildkit_root_inspection_supported\x18\f \x01(\bR\x1fbuildkitRootInspectionSupported\x12%\n" +
-	"\x0echunk_delivery\x18\r \x01(\bR\rchunkDelivery\x128\n" +
+	"\x0echunk_delivery\x18\r \x01(\bR\rchunkDelivery\x12'\n" +
+	"\x0flegacy_delivery\x18\x11 \x01(\bR\x0elegacyDelivery\x128\n" +
 	"\x18internet_check_supported\x18\x0e \x01(\bR\x16internetCheckSupported\x12-\n" +
 	"\x12internet_reachable\x18\x0f \x01(\bR\x11internetReachable\x12'\n" +
 	"\x0finternet_detail\x18\x10 \x01(\tR\x0einternetDetail\"Q\n" +
@@ -1060,17 +1107,19 @@ const file_wendy_agent_services_v2_build_service_proto_rawDesc = "" +
 	"build_args\x18\x02 \x03(\v27.wendy.agent.services.v2.DockerfileBuild.BuildArgsEntryR\tbuildArgs\x1a<\n" +
 	"\x0eBuildArgsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x9f\x01\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xe0\x01\n" +
 	"\n" +
-	"PushTarget\x12\x1d\n" +
+	"PushTarget\x12\x19\n" +
+	"\basset_id\x18\x01 \x01(\x05R\aassetId\x12\x1d\n" +
 	"\n" +
-	"asset_uuid\x18\x05 \x01(\tR\tassetUuid\x12#\n" +
+	"asset_uuid\x18\x05 \x01(\tR\tassetUuid\x124\n" +
+	"\x16legacy_organization_id\x18\x06 \x01(\x05R\x14legacyOrganizationId\x12#\n" +
 	"\rregistry_port\x18\x02 \x01(\rR\fregistryPort\x12\x1e\n" +
 	"\n" +
 	"repository\x18\x03 \x01(\tR\n" +
 	"repository\x12\x1d\n" +
 	"\n" +
-	"agent_port\x18\x04 \x01(\rR\tagentPortJ\x04\b\x01\x10\x02R\basset_id\"\xc2\x03\n" +
+	"agent_port\x18\x04 \x01(\rR\tagentPort\"\xc2\x03\n" +
 	"\tBuildSpec\x12\x15\n" +
 	"\x06app_id\x18\x01 \x01(\tR\x05appId\x12\x1a\n" +
 	"\bplatform\x18\x02 \x01(\tR\bplatform\x12@\n" +
@@ -1092,12 +1141,14 @@ const file_wendy_agent_services_v2_build_service_proto_rawDesc = "" +
 	"\fimage_digest\x18\x01 \x01(\tR\vimageDigest\x12G\n" +
 	"\n" +
 	"deliveries\x18\x02 \x03(\v2'.wendy.agent.services.v2.DeliveryResultR\n" +
-	"deliveries\"s\n" +
-	"\x0eDeliveryResult\x12\x1d\n" +
+	"deliveries\"\xb4\x01\n" +
+	"\x0eDeliveryResult\x12\x19\n" +
+	"\basset_id\x18\x01 \x01(\x05R\aassetId\x12\x1d\n" +
 	"\n" +
-	"asset_uuid\x18\x04 \x01(\tR\tassetUuid\x12\x1c\n" +
+	"asset_uuid\x18\x04 \x01(\tR\tassetUuid\x124\n" +
+	"\x16legacy_organization_id\x18\x05 \x01(\x05R\x14legacyOrganizationId\x12\x1c\n" +
 	"\tdelivered\x18\x02 \x01(\bR\tdelivered\x12\x14\n" +
-	"\x05error\x18\x03 \x01(\tR\x05errorJ\x04\b\x01\x10\x02R\basset_id*u\n" +
+	"\x05error\x18\x03 \x01(\tR\x05error*u\n" +
 	"\fChunkingMode\x12\x1d\n" +
 	"\x19CHUNKING_MODE_UNSPECIFIED\x10\x00\x12\x16\n" +
 	"\x12CHUNKING_MODE_AUTO\x10\x01\x12\x17\n" +
