@@ -129,17 +129,6 @@ func Run(parent context.Context, cfg Config) error {
 		}
 		return localmesh.NodeSnapshot{}
 	}
-	hasLink := func(view localmesh.NodeSnapshot, peer meshid.Device, cost uint16, strict bool) bool {
-		if peer == (meshid.Device{}) {
-			return false
-		}
-		for _, link := range view.Links {
-			if link.Device == peer && !link.Retiring && link.ForwardingReady && ((strict && link.Cost < cost) || (!strict && link.Cost <= cost)) {
-				return true
-			}
-		}
-		return false
-	}
 	hasSameCarrier := func(view localmesh.NodeSnapshot, peer meshid.Device, candidate Candidate) bool {
 		if peer == (meshid.Device{}) {
 			return false
@@ -195,7 +184,10 @@ func Run(parent context.Context, cfg Config) error {
 		}
 		for key, e := range table {
 			if !e.sources[-1] && (len(e.sources) == 0 || now.Sub(e.seen) >= cfg.Limits.CandidateTTL) {
-				if active[key] == nil {
+				if active[key] == nil && !now.Before(e.retry) {
+					// A BLE advertisement often vanishes during connection. Keep
+					// its ordinary retry deadline when a legacy peer closes it and
+					// starts advertising again, without retaining an active link.
 					delete(table, key)
 				}
 			}
@@ -248,7 +240,7 @@ func Run(parent context.Context, cfg Config) error {
 				if !reclaiming && !hasDirectPeer(ranking, peer) && queue.ReclaimEligible(key, now) {
 					var victim *attempt
 					for _, a := range active {
-						if !a.verified || a.canceled || (bleFull && a.candidate.Transport != BLE) || !hasLink(view, a.peer, a.candidate.Cost, true) || !idleOwnedLink(view, a) {
+						if !a.verified || a.canceled || (bleFull && a.candidate.Transport != BLE) || !view.HasOtherForwardingLink(a.peer, a.link) || !idleOwnedLink(view, a) {
 							continue
 						}
 						if victim == nil || a.candidate.Cost > victim.candidate.Cost || (a.candidate.Cost == victim.candidate.Cost && a.id > victim.id) {

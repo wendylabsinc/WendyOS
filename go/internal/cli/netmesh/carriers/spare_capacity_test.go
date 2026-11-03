@@ -104,6 +104,23 @@ func (h *spareRun) ready(address string, ready bool) {
 		h.t.Fatalf("no authenticated attachment %s", address)
 	}
 	l.ForwardingReady = ready
+	prefix := netip.PrefixFrom(l.Device.MeshAddress(), 128)
+	kept := h.installed[:0]
+	for _, route := range h.installed {
+		if route.Prefix != prefix || (!ready && route.Link != l.ID) {
+			kept = append(kept, route)
+		}
+	}
+	h.installed = kept
+	if ready {
+		h.installed = append(h.installed, babel.Route{Prefix: prefix, Link: l.ID, Metric: l.Cost})
+		for key, other := range h.links {
+			if key != address && other.Device == l.Device {
+				other.ForwardingReady = false
+				h.links[key] = other
+			}
+		}
+	}
 	h.links[address] = l
 }
 func (h *spareRun) quiet() {
@@ -143,9 +160,8 @@ func TestRunNewPeerReclaimsStandbyOnlyAfterInstalledUpgradeAndCompletion(t *test
 	h.ready(ble.Address, true)
 	h.start(ble, lan)
 	h.expectStart(lan)
-	// Authentication and a pending route proof are insufficient to make the
-	// existing BLE path disposable, even though another peer needs the slot.
-	h.start(ble, lan, newPeer)
+	// Authentication and a pending route proof never eagerly replace the
+	// existing working BLE path while the upgrade is still priming.
 	h.quiet()
 	h.mu.Lock()
 	release := make(chan struct{})
@@ -153,6 +169,7 @@ func TestRunNewPeerReclaimsStandbyOnlyAfterInstalledUpgradeAndCompletion(t *test
 	h.mu.Unlock()
 	h.ready(lan.Address, true)
 	h.ready(ble.Address, false)
+	h.start(ble, lan, newPeer)
 	if got := wait(t, h.closing); got.Address != ble.Address {
 		t.Fatalf("retired %s, want slower backup", got.Address)
 	}
@@ -175,6 +192,29 @@ func TestRunNewPeerReclaimsStandbyOnlyAfterInstalledUpgradeAndCompletion(t *test
 	if !lanRetained || !newRetained || peak != 2 {
 		t.Fatalf("lost working peer or exceeded cap: LAN=%v new=%v peak=%d", lanRetained, newRetained, peak)
 	}
+}
+
+func TestRunNewPeerMayPreemptUnprimedUpgradeWhileOldPathWorks(t *testing.T) {
+	h := newSpareRun(t, Limits{Connections: 2})
+	ble, lan, fresh := spareBLE(2), spareTCP(2, 128), spareTCP(3, 128)
+	h.start(ble)
+	h.expectStart(ble)
+	h.ready(ble.Address, true)
+	h.start(ble, lan)
+	h.expectStart(lan)
+	h.start(ble, lan, fresh)
+	if got := wait(t, h.closing); got.Address != lan.Address {
+		t.Fatalf("new peer displaced working original instead of unused upgrade: %+v", got)
+	}
+	h.expectStart(fresh)
+	h.mu.Lock()
+	old, ok := h.links[ble.Address]
+	installed := append([]babel.Route(nil), h.installed...)
+	h.mu.Unlock()
+	if !ok || !old.ForwardingReady || len(installed) != 1 || installed[0].Link != old.ID {
+		t.Fatal("unprimed-upgrade preemption lost the original working path")
+	}
+	h.quiet()
 }
 
 func TestRunTransitRouteMustLeaveStandbyBeforeReclaim(t *testing.T) {
@@ -228,6 +268,34 @@ func TestRunAttachedIncarnationMustMatchBeforeReclaim(t *testing.T) {
 	}
 	h.expectStart(fresh)
 	h.quiet()
+}
+
+func TestRunUnusedCarrierMayYieldToAnyWorkingAlternative(t *testing.T) {
+	for _, mode := range []string{"unused-cheap-LAN", "equal-cost-cross-medium"} {
+		t.Run(mode, func(t *testing.T) {
+			h := newSpareRun(t, Limits{Connections: 2}, func(cfg *Config) {
+				cfg.SupportedTransports = []string{TCP, BLE, QUIC}
+			})
+			old, survivor, fresh := spareTCP(2, 128), spareBLE(2), spareTCP(3, 128)
+			if mode == "equal-cost-cross-medium" {
+				survivor = Candidate{Device: old.Device, Transport: QUIC, Address: "192.0.2.20:43024", Cost: old.Cost}
+			}
+			h.start(old)
+			h.expectStart(old)
+			h.start(old, survivor)
+			h.expectStart(survivor)
+			h.ready(survivor.Address, true)
+			h.mu.Lock()
+			h.installed = []babel.Route{{Prefix: netip.PrefixFrom(old.Device.MeshAddress(), 128), Link: h.links[survivor.Address].ID, Metric: survivor.Cost}}
+			h.mu.Unlock()
+			h.start(old, survivor, fresh)
+			if got := wait(t, h.closing); got.Address != old.Address {
+				t.Fatalf("unused carrier was not reclaimed: %+v", got)
+			}
+			h.expectStart(fresh)
+			h.quiet()
+		})
+	}
 }
 
 func TestRunReclaimsOnlyBudgetThatNewPeerNeeds(t *testing.T) {

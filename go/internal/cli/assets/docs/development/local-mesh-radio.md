@@ -92,14 +92,24 @@ peer's working route; an attached connection without a usable route does not
 make another carrier redundant. The existing connection stays available while
 the new carrier authenticates and establishes its authorized route.
 
-When a new neighbour needs a slot, the router can release a slower standby only
+When a new neighbour needs a slot, the router can release an unused standby only
 while another authenticated carrier has that peer's current route installed.
+It waits until transit routes also move off the standby; carrier cost ranks
+which unused connection to release, rather than proving an alternative works.
 The router waits for the old connection to finish before reusing its slot.
 Recent connection failures keep their existing retry penalty so repeated
 advertisements cannot continually displace a standby. Connection and handshake
 limits still apply separately to each carrier; incoming capacity and an unused
 slot on another carrier do not expand an outgoing limit. Pinned first-hop and
 disabled-carrier settings still constrain discovery.
+
+After an incoming connection finds all slots busy, a freed slot gives new
+neighbours an opportunity through the normal retry window. If the neighbour
+does not return, standby connections can use that space again.
+
+Warm standby requires both ends to support retention. Older peers can still
+close redundant BLE connections while LAN works; their normal retry backoff
+applies, and mixed versions may need to establish a cold fallback after LAN loss.
 
 Commands share one background router for the selected operator profile. After
 `connect`, it stays running when commands exit and can forward traffic between
