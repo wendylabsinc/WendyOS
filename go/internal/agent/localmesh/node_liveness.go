@@ -39,6 +39,9 @@ func (p *nodePeer) signalRetire() {
 func (p *nodePeer) signalCapacityRetire() {
 	p.retireOnce.Do(func() {
 		p.capacityRetire.Store(true)
+		if p.capacityLease != nil {
+			p.capacityLease.capacityClosing.Store(true)
+		}
 		close(p.retire)
 	})
 }

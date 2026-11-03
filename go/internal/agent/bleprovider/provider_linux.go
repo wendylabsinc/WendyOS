@@ -469,6 +469,10 @@ func (r *runtime) acceptLoop(ctx context.Context, listener *l2Listener) error {
 				r.acceptLink(ctx, conn)
 			}()
 		default:
+			// The established incoming workers retain their tokens until normal
+			// completion. A safe owned incoming standby may yield, but this probe
+			// is still rejected and cannot allocate a fourth worker or neighbour.
+			r.connectionPolicy().ReclaimIncomingWorker()
 			_ = conn.Close()
 		}
 	}

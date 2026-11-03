@@ -141,6 +141,45 @@ func TestConnectionCapacityOutgoingPressureDoesNotRetireIncoming(t *testing.T) {
 	}
 }
 
+func TestIncomingWorkerPressureReclaimsOnlySafeIncomingOwnership(t *testing.T) {
+	for _, blocked := range []string{"none", "unready-incoming-alternate", "incoming-transit"} {
+		t.Run(blocked, func(t *testing.T) {
+			inPeer, outPeer := selectionDevice(10), selectionDevice(11)
+			view := NodeSnapshot{Links: []PeerLink{{ID: 1, Device: inPeer, Cost: 512}, {ID: 2, Device: inPeer, Cost: 128, ForwardingReady: true}, {ID: 3, Device: outPeer, Cost: 4096}, {ID: 4, Device: outPeer, Cost: 128, ForwardingReady: true}}}
+			p := NewConnectionPolicy(selectionDevice(1), true, ConnectionLimits{Outgoing: 1, Attempts: 1, Total: 3})
+			p.SetSnapshot(func() NodeSnapshot { return view })
+			in, out := p.Reserve("in", inPeer, false), p.Reserve("out", outPeer, true)
+			if in == nil || out == nil || !in.Ready(inPeer, func() {}) || !out.Ready(outPeer, func() {}) {
+				t.Fatal("missing owned fixture leases")
+			}
+			defer in.Release()
+			defer out.Release()
+			inSignals, outSignals := 0, 0
+			BindConnectionLink(WithConnectionLease(context.Background(), in), 1, 512, func() { inSignals++ })
+			BindConnectionLink(WithConnectionLease(context.Background(), out), 3, 4096, func() { outSignals++ })
+			if blocked == "unready-incoming-alternate" {
+				view.Links[1].ForwardingReady = false
+			}
+			if blocked == "incoming-transit" {
+				view.ForwardingRoutes = []babel.Route{{Link: 1, Metric: 900}}
+			}
+			want := blocked == "none"
+			if got := p.ReclaimIncomingWorker(); got != want || in.Retired() != want || out.Retired() || outSignals != 0 || (inSignals == 1) != want {
+				t.Fatal("incoming worker pressure reclaimed an unsafe or outgoing incarnation")
+			}
+			if want {
+				if p.ReclaimIncomingWorker() || p.Counts().Total != 2 {
+					t.Fatal("incoming reclamation borrowed capacity or repeated its close")
+				}
+				in.Release()
+				if p.ReclaimIncomingWorker() || out.Retired() {
+					t.Fatal("outgoing carrier cannot free an incoming worker token")
+				}
+			}
+		})
+	}
+}
+
 func TestConnectionCapacityConcurrentDemandHasOneRetirement(t *testing.T) {
 	peer := selectionDevice(10)
 	view := NodeSnapshot{Links: []PeerLink{{ID: 1, Device: peer, Cost: 4096}, {ID: 2, Device: peer, Cost: 128, ForwardingReady: true}}}
