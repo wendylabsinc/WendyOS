@@ -1,12 +1,10 @@
 package localmesh
 
 import (
-	"encoding/json"
 	"net/netip"
 	"time"
 
 	"github.com/wendylabsinc/WendyOS/go/babel"
-	"github.com/wendylabsinc/wendy/go/internal/shared/asyncdiag"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
 )
 
@@ -27,7 +25,7 @@ type warmCarrierDiagnostic struct {
 }
 
 func logWarmCarrierDiagnostic(row []byte) {
-	asyncdiag.Print("wendy net carrier readiness=" + string(row))
+	enqueueCarrierDiagnostic(warmCarrierPrefix, row)
 }
 
 // emitWarm runs on the Node actor and copies scalar observations before handing
@@ -71,12 +69,12 @@ func (d *carrierDiagnostics) emitWarm(now time.Time, self meshid.Device, links [
 				proof := proofs[origin]
 				if proof.Deadline.After(now) && usable(origin, link.ID) && (!row.CandidateUsable || (row.ProofRetained && !proof.Retained)) {
 					copy := origin
-					row.Origin, row.ProofDeadline, row.ProofRetained, row.CandidateUsable = &copy, proof.Deadline.UTC(), proof.Retained, true
+					row.Origin, row.ProofDeadline, row.ProofRetained, row.CandidateUsable = &copy, now.Add(proof.Deadline.Sub(now)).UTC(), proof.Retained, true
 				}
 			}
 		}
 		row.SelectedInstalled = row.SelectedInstalled && row.CandidateUsable
-		if encoded, err := json.Marshal(row); err == nil {
+		if encoded, ok := encodeCarrierDiagnostic(warmCarrierPrefix, row); ok {
 			emit(encoded)
 		}
 	}
