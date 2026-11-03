@@ -95,12 +95,16 @@ wendy device wendy-net disconnect
 ```
 
 Disconnecting ends the current mesh connections and forwarding while preserving
-the installation's routing identity.
+the installation's routing identity. Mesh commands and discovery then remain
+disconnected until an explicit `wendy device wendy-net connect`. With no address,
+that command selects automatic discovery rather than a saved pinned first hop;
+disconnect a live pinned attachment before changing its mode.
 
 A requested Nearby or mesh discovery can also start a temporary router using the
 selected profile's cached operator certificate. Unless explicitly enabled with
 `connect`, an automatic router can stop after five minutes without command
-activity or transit traffic. Later discovery can start it again. Reading local
+activity or transit traffic. Later discovery can start it again unless it was
+explicitly disconnected. Reading local
 router status or opening the Wendy Client Networks view only observes an
 existing router.
 
