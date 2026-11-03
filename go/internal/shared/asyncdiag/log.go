@@ -17,7 +17,11 @@ import (
 
 const capacity = 64
 const maxFields = 24
-const maxString = 4096
+
+// MaxMessageBytes is the existing diagnostic record limit. Callers encoding a
+// structured line can bound the complete line before enqueueing it.
+const MaxMessageBytes = 4096
+const maxString = MaxMessageBytes
 
 type record struct {
 	logger  *zap.Logger
