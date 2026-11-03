@@ -168,14 +168,14 @@ func operatorManagementTarget(view *pb.LocalMeshTopology, adjacent, target meshi
 		if hint.Principal != target.Principal() || hint.DeviceId != target.UUID().String() || hint.Prefix != prefix || hint.TrustState != "verified-at-snapshot" || hint.ExpiresAtUnixMs <= now.UnixMilli() {
 			continue
 		}
-		live := false
+		expires := int64(0)
 		for _, route := range view.Routes {
-			if route.Prefix == prefix && route.OriginPrincipal == target.Principal() && route.OriginRouterId == hint.OriginRouterId && route.SequenceNumber == hint.SequenceNumber && !route.Unreachable && (!route.Local || target == adjacent) && route.OriginAuthorized && route.SignedRouteExpiresAtUnixMs == hint.ExpiresAtUnixMs {
-				live = true
+			if deadline, live := meshview.AnnouncementRouteDeadline(route, hint, now); live && (!route.Local || target == adjacent) {
+				expires = deadline
 				break
 			}
 		}
-		if !live {
+		if expires == 0 {
 			continue
 		}
 		if (hint.Platform != "WendyOS" && hint.Platform != "Lite") || hint.AgentTransport != "mtls-v1" {
@@ -186,7 +186,7 @@ func operatorManagementTarget(view *pb.LocalMeshTopology, adjacent, target meshi
 		}
 		return OperatorTargetInfo{Selector: MeshSelector(target), Principal: target.Principal(),
 			Tenant: target.Tenant().String(), Device: target.UUID().String(), Name: hint.Name,
-			Expires: hint.ExpiresAtUnixMs, Revision: hint.Revision, Platform: hint.Platform, Transport: hint.AgentTransport, Caps: append([]string(nil), hint.Caps...),
+			Expires: expires, Revision: hint.Revision, Platform: hint.Platform, Transport: hint.AgentTransport, Caps: append([]string(nil), hint.Caps...),
 			Address: net.JoinHostPort(target.MeshAddress().String(), strconv.Itoa(int(hint.AgentPort)))}, nil
 	}
 	if view.Truncated {

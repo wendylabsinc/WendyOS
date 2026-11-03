@@ -126,7 +126,7 @@ func projectLocalMeshServices(out *pb.LocalMeshTopology, snapshot localmesh.Node
 	for _, announcement := range out.Announcements {
 		available := false
 		for _, route := range out.Routes {
-			if route.OriginPrincipal == announcement.Principal && route.Prefix == announcement.Prefix && route.OriginRouterId == announcement.OriginRouterId && route.SequenceNumber == announcement.SequenceNumber && route.SignedRouteExpiresAtUnixMs == announcement.ExpiresAtUnixMs && route.OriginAuthorized && !route.Unreachable {
+			if _, live := AnnouncementRouteDeadline(route, announcement, now); live {
 				available = true
 				break
 			}

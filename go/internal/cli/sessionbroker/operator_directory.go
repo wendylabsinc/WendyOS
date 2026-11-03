@@ -12,6 +12,7 @@ import (
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
+	"github.com/wendylabsinc/wendy/go/internal/shared/meshview"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -84,7 +85,7 @@ func (r *operatorTargets) directorySnapshot(ctx context.Context) OperatorDirecto
 		}
 		info.OperatorPrincipal = operator.Principal()
 		for _, route := range view.Routes {
-			if route.Prefix == hint.Prefix && route.OriginPrincipal == info.Principal && route.OriginAuthorized && !route.Unreachable && (!route.Local || target == adjacent) && route.OriginRouterId == hint.OriginRouterId && route.SequenceNumber == hint.SequenceNumber {
+			if deadline, live := meshview.AnnouncementRouteDeadline(route, hint, now); live && deadline == info.Expires && (!route.Local || target == adjacent) {
 				info.Metric = route.Metric
 				info.NextHop = route.NextHopPrincipal
 				break
