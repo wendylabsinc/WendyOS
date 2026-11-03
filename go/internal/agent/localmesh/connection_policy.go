@@ -64,6 +64,7 @@ type ConnectionLease struct {
 	cost                     uint16
 	retire                   func()
 	reclaimed                bool
+	capacityClosing          atomic.Bool // Signal-only publication from the Node actor.
 }
 
 // SetSnapshot supplies local authenticated routing evidence for capacity
@@ -79,7 +80,7 @@ type ConnectionCounts struct{ Outgoing, Attempts, Total, Ready int }
 func (p *ConnectionPolicy) counts() (c ConnectionCounts) {
 	for l := range p.connections {
 		c.Total++
-		if l.ready && !l.retired {
+		if l.ready && !l.retired && !l.capacityClosing.Load() {
 			c.Ready++
 		}
 		if l.outgoing {
@@ -125,7 +126,7 @@ func (p *ConnectionPolicy) discoveryAvailable(outgoing bool) bool {
 	if c.Total < p.limits.Total && (!outgoing || c.Outgoing < p.limits.Outgoing) {
 		return true
 	}
-	if snapshot == nil || p.reclaiming || (outgoing && c.Attempts >= p.limits.Attempts) {
+	if snapshot == nil || p.reclamationPending() || (outgoing && c.Attempts >= p.limits.Attempts) {
 		return false
 	}
 	return p.redundantLease(view, outgoing && c.Outgoing >= p.limits.Outgoing, false) != nil
@@ -145,7 +146,7 @@ func (p *ConnectionPolicy) ReclaimIncomingWorker() bool {
 	view := snapshot()
 	p.mu.Lock()
 	var retire func()
-	if !p.reclaiming {
+	if !p.reclamationPending() {
 		if victim := p.redundantLease(view, false, true); victim != nil {
 			victim.retired, victim.reclaimed, p.reclaiming = true, true, true
 			retire = victim.retire
@@ -200,7 +201,7 @@ func (p *ConnectionPolicy) reserveGroup(key string, peer meshid.Device, outgoing
 	}()
 	l := &ConnectionLease{policy: p, key: key, group: group, peer: peer, outgoing: outgoing, progress: p.now()}
 	for existing := range p.connections {
-		if existing.retired {
+		if existing.retired || existing.capacityClosing.Load() {
 			continue
 		}
 		if existing.outgoing == outgoing && existing.key == key {
@@ -221,13 +222,28 @@ func (p *ConnectionPolicy) reserveGroup(key string, peer meshid.Device, outgoing
 	}
 	c := p.counts()
 	if c.Total >= p.limits.Total || (outgoing && (c.Outgoing >= p.limits.Outgoing || c.Attempts >= p.limits.Attempts)) {
-		if reclaim && snapshot != nil && !p.reclaiming && (!outgoing || c.Attempts < p.limits.Attempts) {
+		if reclaim && snapshot != nil && !p.reclamationPending() && (!outgoing || c.Attempts < p.limits.Attempts) {
 			retire = p.reclaim(view, peer, outgoing && c.Outgoing >= p.limits.Outgoing)
 		}
 		return nil
 	}
 	p.connections[l] = struct{}{}
 	return l
+}
+
+// A global Node-capacity signal may precede its provider's Attach completion.
+// Observe that nonblocking publication even after the Node incarnation has
+// been removed but its owned physical Close/join still consumes this budget.
+func (p *ConnectionPolicy) reclamationPending() bool {
+	if p.reclaiming {
+		return true
+	}
+	for l := range p.connections {
+		if l.capacityClosing.Load() {
+			return true
+		}
+	}
+	return false
 }
 
 // reclaim runs under the provider lock and rechecks exact authenticated lease
@@ -253,7 +269,7 @@ func (p *ConnectionPolicy) reclaim(view NodeSnapshot, candidate meshid.Device, n
 func (p *ConnectionPolicy) redundantLease(view NodeSnapshot, needOutgoing, needIncoming bool) *ConnectionLease {
 	var victim *ConnectionLease
 	for l := range p.connections {
-		if !l.ready || l.retired || l.link == 0 || l.retire == nil || view.HasInstalledRouteOnLink(l.link) || (needOutgoing && !l.outgoing) || (needIncoming && l.outgoing) {
+		if !l.ready || l.retired || l.capacityClosing.Load() || l.link == 0 || l.retire == nil || view.HasInstalledRouteOnLink(l.link) || (needOutgoing && !l.outgoing) || (needIncoming && l.outgoing) {
 			continue
 		}
 		for _, link := range view.Links {
@@ -360,7 +376,7 @@ func (l *ConnectionLease) Retired() bool {
 	}
 	l.policy.mu.Lock()
 	defer l.policy.mu.Unlock()
-	return l.retired
+	return l.retired || l.capacityClosing.Load()
 }
 
 func (l *ConnectionLease) ObserveReady(f func()) {
@@ -381,7 +397,7 @@ func (l *ConnectionLease) Ready(peer meshid.Device, closeConnection func()) bool
 	}
 	p := l.policy
 	p.mu.Lock()
-	if _, exists := p.connections[l]; !exists || l.retired || peer == p.self || peer.Tenant() != p.self.Tenant() || (l.peer != (meshid.Device{}) && l.peer != peer) {
+	if _, exists := p.connections[l]; !exists || l.retired || l.capacityClosing.Load() || peer == p.self || peer.Tenant() != p.self.Tenant() || (l.peer != (meshid.Device{}) && l.peer != peer) {
 		p.mu.Unlock()
 		closeConnection()
 		return false
@@ -392,7 +408,7 @@ func (l *ConnectionLease) Ready(peer meshid.Device, closeConnection func()) bool
 	}
 	var closeOthers []func()
 	for other := range p.connections {
-		if other == l || !other.ready || other.retired || other.peer != peer || other.group != l.group {
+		if other == l || !other.ready || other.retired || other.capacityClosing.Load() || other.peer != peer || other.group != l.group {
 			continue
 		}
 		// Retain the incumbent for same-direction duplicates. For crossed

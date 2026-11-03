@@ -29,7 +29,8 @@ type nodePeer struct {
 	babelRetiring   bool // Actor-owned: expiry already signalled the existing lifetime owner.
 	retire          chan struct{}
 	retireOnce      sync.Once
-	capacityRetire  atomic.Bool // Local cause survives asynchronous owned cleanup.
+	capacityRetire  atomic.Bool      // Local cause survives asynchronous owned cleanup.
+	capacityLease   *ConnectionLease // Immutable: signal-only publication to the owning provider.
 	closeDiagnostic sync.Once
 	ingress         *nodeEvent // One actor-owned input; its reader awaits acknowledgement.
 
@@ -961,7 +962,8 @@ func (n *Node) attachLink(ctx context.Context, peer meshid.Device, cost uint16, 
 	if cost == 0 || cost == ^uint16(0) {
 		return errors.New("invalid wendy net link cost")
 	}
-	p := &nodePeer{device: peer, cost: cost, transport: carrierName(ctx, "unknown"), link: link, control: make(chan ControlMessage, 128), done: make(chan struct{}), retire: make(chan struct{})}
+	lease, _ := ctx.Value(connectionLeaseKey{}).(*ConnectionLease)
+	p := &nodePeer{device: peer, cost: cost, transport: carrierName(ctx, "unknown"), link: link, control: make(chan ControlMessage, 128), done: make(chan struct{}), retire: make(chan struct{}), capacityLease: lease}
 	if !ConnectionReady(ctx, peer, func() { _ = link.Close() }) {
 		return nil
 	}
