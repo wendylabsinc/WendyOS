@@ -215,3 +215,47 @@ func TestIncomingDemandAllowsFasterCarrierAndLastPathRecovery(t *testing.T) {
 		})
 	}
 }
+
+func TestFreshUnknownDemandGetsOnlyANewActualReleaseInterval(t *testing.T) {
+	f := newIncomingHoldFixture(t, 2)
+	other := selectionDevice(12)
+	f.view.Links = append(f.view.Links, PeerLink{ID: 3, Device: other, Cost: 512}, PeerLink{ID: 4, Device: other, Cost: 128, ForwardingReady: true})
+	second := f.p.ReserveGroup("second-incoming", other, false, "512")
+	if second == nil || !second.Ready(other, func() {}) {
+		t.Fatal("second standby fixture was not admitted")
+	}
+	defer second.Release()
+	secondSignals := 0
+	BindConnectionLink(WithConnectionLease(context.Background(), second), 3, 512, func() { secondSignals++ })
+	f.demand(t) // Worst-cost old standby is selected first.
+	f.releaseOld()
+	f.now = f.now.Add(FailedConnectPenalty / 2)
+	// Keep the other normal setup slot occupied, so this is fresh full-budget
+	// incoming demand rather than a poll or a repeated known-old retry.
+	setup := f.p.ReserveGroup("awaiting-new-peer-authentication", meshid.Device{}, false, "4096")
+	if setup == nil || f.p.Counts().Total != 2 {
+		t.Fatal("full incoming setup fixture missing")
+	}
+	defer setup.Release()
+	if f.p.ReclaimIncomingWorkerFor(f.peer, 4096) || second.Retired() {
+		t.Fatal("known old redundancy renewed demand or evicted another standby")
+	}
+	if !f.p.ReclaimIncomingWorker() || !second.Retired() || secondSignals != 1 {
+		t.Fatal("fresh unknown full-budget demand did not reach the remaining safe owner")
+	}
+	f.now = f.now.Add(FailedConnectPenalty/2 + time.Second)
+	if f.oldOutgoing() != nil || f.p.Counts().Total != 2 {
+		t.Fatal("second retirement signal spent its incoming opportunity before release")
+	}
+	second.Release()
+	f.now = f.now.Add(FailedConnectPenalty - time.Nanosecond)
+	if f.oldOutgoing() != nil {
+		t.Fatal("refreshed hold did not start at second actual owner release")
+	}
+	f.now = f.now.Add(time.Nanosecond)
+	backup := f.oldOutgoing()
+	if backup == nil {
+		t.Fatal("fresh demand left an unbounded reservation after its actual release interval")
+	}
+	backup.Release()
+}
