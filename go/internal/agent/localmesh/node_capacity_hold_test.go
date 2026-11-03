@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wendylabsinc/WendyOS/go/babel"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
 )
 
@@ -175,5 +176,32 @@ func TestNodeCapacityHoldClearsPendingAnchorAfterNewAdmission(t *testing.T) {
 	}
 	if n.capacityHoldUntil != 0 || n.capacityHoldRelease != 0 || len(n.peers) != 63 {
 		t.Fatal("late completion started a fairness hold after the new peer already won")
+	}
+}
+
+func TestNodeCapacityCanReclaimUnusedLowerRankedCarrier(t *testing.T) {
+	f := newCarrierStandbyFixture(t)
+	f.addCarrier(128, "infrastructure-wifi")
+	f.pump(0)
+	f.advance(6*time.Second, 0)
+	f.assertSelected(2)
+	n := f.nodes[0]
+	// The engine's current link cost can exceed the carrier's configured
+	// scheduling rank. Exercise that real routing transition deterministically:
+	// BLE now carries the actual FIB, while the configured-cheaper LAN is unused.
+	if err := n.step(babel.SetCost{ID: 2, Cost: 8192}); err != nil {
+		t.Fatal(err)
+	}
+	view := n.Snapshot()
+	if !view.HasInstalledRouteOnLink(1) || view.HasInstalledRouteOnLink(2) || n.peers[2].cost != 128 {
+		t.Fatal("fixture did not move the real installed FIB off configured-cheaper LAN")
+	}
+	fillCarrierNodeCapacity(n)
+	add := nodeCapacityHoldCandidate(selectionDevice(999), 128)
+	if err := n.handle(nodeEvent{add: add}); !errors.Is(err, ErrCarrierCapacityRetry) {
+		t.Fatalf("unused configured-cheaper carrier was not reclaimable: %v", err)
+	}
+	if !n.peers[2].retiring() || n.peers[1].retiring() || n.capacityRetiring != 2 || len(n.peers) != 64 {
+		t.Fatal("capacity confused configured rank with the actual working installed path")
 	}
 }

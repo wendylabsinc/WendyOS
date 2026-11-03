@@ -53,7 +53,7 @@ func (n *Node) reclaimGlobalRedundancy(candidate meshid.Device) bool {
 		}
 		for _, alternate := range view.Links {
 			other := n.peers[alternate.ID]
-			if alternate.ID != link.ID && alternate.Device == link.Device && alternate.Cost < link.Cost && alternate.ForwardingReady && !alternate.Retiring &&
+			if alternate.ID != link.ID && alternate.Device == link.Device && alternate.ForwardingReady && !alternate.Retiring &&
 				other != nil && !other.retiring() && other.id == alternate.ID && other.device == alternate.Device && other.cost == alternate.Cost {
 				if victim == nil || p.cost > victim.cost || (p.cost == victim.cost && p.id < victim.id) {
 					victim = p
