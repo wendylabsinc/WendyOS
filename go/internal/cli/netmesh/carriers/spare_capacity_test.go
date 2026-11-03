@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/localmesh"
+	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
 )
 
 // The real manager owns Connect lifetimes. This fixture exposes authenticated
@@ -191,6 +192,65 @@ func TestRunReclaimsOnlyBudgetThatNewPeerNeeds(t *testing.T) {
 	h.mu.Unlock()
 	if !retained || peak > 2 {
 		t.Fatalf("unrelated total capacity changed reclamation: LAN=%v peak=%d", retained, peak)
+	}
+}
+
+func TestRunUnknownBLECanProbeByReclaimingOnlyVerifiedRedundancy(t *testing.T) {
+	unknown := spareBLE(3)
+	unknown.Device = meshid.Device{} // An advertisement supplies no authenticated identity.
+	actualPeer := testDevice(3)
+	var probes atomic.Int32
+	h := newSpareRun(t, Limits{Connections: 2, BLEConnections: 1}, func(cfg *Config) {
+		connect := cfg.Connect
+		cfg.Connect = func(ctx context.Context, c Candidate) error {
+			if c.Address == unknown.Address {
+				if c.Device != (meshid.Device{}) {
+					return errors.New("unknown advertisement acquired an identity before authentication")
+				}
+				probes.Add(1)
+				// Model the verified TLS boundary. The callback retains its exact
+				// manager ownership token; only authentication supplies the peer.
+				c.Device = actualPeer
+			}
+			return connect(ctx, c)
+		}
+	})
+	ble, lan := spareBLE(2), spareTCP(2, 128)
+	h.start(ble)
+	h.expectStart(ble)
+	h.ready(ble.Address, true)
+	h.start(ble, lan)
+	h.expectStart(lan)
+	h.start(ble, lan, unknown)
+	h.quiet() // Unknown demand and an unready LAN cannot authorize any close.
+	h.mu.Lock()
+	release := make(chan struct{})
+	h.block[ble.Address] = release
+	h.mu.Unlock()
+	h.ready(lan.Address, true)
+	h.ready(ble.Address, false)
+	if got := wait(t, h.closing); got.Address != ble.Address {
+		t.Fatalf("unknown probe retired the wrong owned carrier: %+v", got)
+	}
+	h.quiet() // Still full until the exact old lifetime owner actually completes.
+	if n := probes.Load(); n != 0 {
+		t.Fatalf("probe started before the owned slot was released: %d", n)
+	}
+	close(release)
+	got := wait(t, h.entered)
+	if got.Address != unknown.Address || got.Device != actualPeer {
+		t.Fatalf("probe did not record the exact authenticated identity: %+v", got)
+	}
+	h.ready(unknown.Address, true)
+	h.start(ble, lan, unknown)
+	h.quiet() // No repeated close, duplicate probe, or hint-derived identity churn.
+	h.mu.Lock()
+	peer := h.links[unknown.Address].Device
+	_, retained := h.links[lan.Address]
+	peak := h.peak
+	h.mu.Unlock()
+	if probes.Load() != 1 || peer != actualPeer || !retained || peak != 2 {
+		t.Fatalf("invalid bounded probe outcome: probes=%d peer=%s LAN=%v peak=%d", probes.Load(), peer, retained, peak)
 	}
 }
 
