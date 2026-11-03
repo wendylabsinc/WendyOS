@@ -9,7 +9,7 @@ import WendyAgentGRPC
 import X509
 
 public actor WendyAgent {
-    private typealias PosixGRPCServer = GRPCServer<HTTP2ServerTransport.Posix>
+    typealias PosixGRPCServer = GRPCServer<HTTP2ServerTransport.Posix>
 
     /// The Wendy Agent version from the main bundle Info.plist.
     public nonisolated static let version: String = {
@@ -455,7 +455,14 @@ public actor WendyAgent {
         certs: ProvisioningService.ProvisioningCerts?,
         port: Int
     ) async throws -> (server: PosixGRPCServer, task: Task<Void, any Error>, port: Int) {
-        let server = try self.makeMainServer(services: services, certs: certs, port: port)
+        let server = try Self.makeMainServer(
+            services: services,
+            certs: certs,
+            host: self.configuration.host,
+            port: port,
+            environment: ProcessInfo.processInfo.environment,
+            logger: self.logger
+        )
         let task = Self.makeServeTask(server: server)
 
         do {
@@ -534,14 +541,21 @@ public actor WendyAgent {
 
     /// Builds the main gRPC server on the requested port. Passing zero lets the
     /// OS choose a free port after the preferred port collides.
-    private func makeMainServer(
+    nonisolated static func makeMainServer(
         services: [any RegistrableRPCService],
         certs: ProvisioningService.ProvisioningCerts?,
-        port: Int
+        host: String,
+        port: Int,
+        environment: [String: String],
+        logger: Logger
     ) throws -> PosixGRPCServer {
         let security: HTTP2ServerTransport.Posix.TransportSecurity
         if let certs {
-            security = try self.mTLSSecurity(certs: certs)
+            security = try Self.makeMTLSSecurity(
+                certs: certs,
+                environment: environment,
+                logger: logger
+            )
         } else {
             security = .plaintext
         }
@@ -549,19 +563,27 @@ public actor WendyAgent {
         return PosixGRPCServer(
             transport: HTTP2ServerTransport.Posix(
                 address: {
-                    switch self.configuration.host {
+                    switch host {
                     case "::", "::1":
-                        .ipv6(host: self.configuration.host, port: port)
+                        .ipv6(host: host, port: port)
                     case "localhost":
                         .ipv4(host: "127.0.0.1", port: port)
                     default:
-                        .ipv4(host: self.configuration.host, port: port)
+                        .ipv4(host: host, port: port)
                     }
                 }(),
                 transportSecurity: security,
                 config: Self.mainServerConfig
             ),
-            services: services
+            services: services,
+            interceptors: certs.map {
+                [
+                    RPCIdentityInterceptor(
+                        expectedScope: ClientCertAuthorizer.scope(fromLeafPEM: $0.certPEM),
+                        logger: logger
+                    )
+                ]
+            } ?? []
         )
     }
 
@@ -586,30 +608,12 @@ public actor WendyAgent {
         }
     }
 
-    /// Constructs the mTLS transport security for the main server.
-    ///
-    /// `clientCertificateVerification` is `.noHostnameVerification` (rather than
-    /// `.noVerification`) for two reasons: a client certificate is required, and
-    /// NIOSSL only invokes `customVerificationCallback` when verification is not
-    /// disabled. The custom callback fully REPLACES BoringSSL's chain validation,
-    /// so `ClientCertAuthorizer` performs the complete verification itself: it
-    /// builds a verified path to the device's own CA trust roots AND applies the
-    /// org-enforcement policy (`WENDY_MTLS_ORG_ENFORCEMENT`, default grace). It
-    /// fails closed. The device's org is derived once, here, from the device's
-    /// own leaf certificate — never by calling back into the provisioning actor
-    /// from the event loop.
-    private func mTLSSecurity(
-        certs: ProvisioningService.ProvisioningCerts
-    ) throws -> HTTP2ServerTransport.Posix.TransportSecurity {
-        try Self.makeMTLSSecurity(
-            certs: certs,
-            environment: ProcessInfo.processInfo.environment,
-            logger: self.logger
-        )
-    }
-
     /// The production mTLS transport security, factored out so tests can stand
     /// up a real gRPC listener with exactly the configuration the agent uses.
+    /// A client certificate is required. The custom verification callback fully
+    /// replaces BoringSSL chain verification, so ClientCertAuthorizer validates
+    /// the complete path against this device's trust roots and applies the
+    /// configured tenant policy before the RPC identity interceptor runs.
     nonisolated static func makeMTLSSecurity(
         certs: ProvisioningService.ProvisioningCerts,
         environment: [String: String],
