@@ -499,6 +499,9 @@ class PublicationTests(unittest.TestCase):
         closed = pull()
         closed["state"] = "closed"
         stale_pulls.append(closed)
+        draft = pull()
+        draft["draft"] = True
+        stale_pulls.append(draft)
         fork = pull()
         fork["head"]["repo"]["full_name"] = "outsider/WendyOS"
         stale_pulls.append(fork)

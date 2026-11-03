@@ -382,10 +382,15 @@ def review_intro(result: dict, repo: str) -> list[str]:
          f"{len(result['source_coverage']['excluded_generated_files'])} generated files excluded (not AI-reviewed); "
          if "source_coverage" in result else
          f"Input coverage: {result['changed_files']} changed files, {result['diff_bytes']:,} diff bytes ")
-        + f"across {result.get('review_batches', 1)} complete batch(es); no truncation.",
+        + f"across {result.get('review_batches', 1)} complete batch(es); no diff truncation.",
         "",
         *(["Generated protocol output was excluded. External pins and source references remain in scope; upstream source bodies are not fetched by this review. Exclusions and generation checks do not establish API or behavior coverage.", ""]
           if result.get("source_coverage", {}).get("excluded_generated_files") else []),
+        *([f"Compatibility coverage: {result['context_coverage']['files']} source excerpts, "
+            f"{result['context_coverage']['bytes']:,} bytes, "
+            f"{result['context_coverage']['omitted_files']} nearby files omitted, "
+            f"{result['context_coverage'].get('partial_files', 0)} files excerpted. "
+            + result['context_coverage']['limitation'], ""] if "context_coverage" in result else []),
         ("Check a box to accept a pending or changed decision. Acceptance follows materially unchanged decisions across commits; "
          + "these checkboxes do not block merging automatically."),
         "",
@@ -694,7 +699,7 @@ def publish(result: dict, repo: str, pr_number: int, head_sha: str, base_sha: st
         pull = github.request("GET", pull_path)
         if (pull["head"]["sha"] != head_sha or pull["base"]["sha"] != base_sha
                 or pull["head"]["repo"]["full_name"].lower() != repo.lower()
-                or pull["state"] != "open"):
+                or pull["state"] != "open" or (pull.get("draft", False) and not isinstance(github, DryRunGitHub))):
             raise ValueError("PR revision or state changed during API review; refusing stale publication")
         return pull
 

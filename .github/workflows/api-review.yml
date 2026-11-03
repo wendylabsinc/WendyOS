@@ -2,8 +2,7 @@ name: API Review
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened]
-    branches: [main]
+    types: [opened, ready_for_review, synchronize, reopened, edited]
   workflow_dispatch:
     inputs:
       pr_number:
@@ -26,14 +25,18 @@ jobs:
     # their PR code or give them a credentialed model-review fallback.
     if: >-
       github.event_name == 'pull_request' &&
+      github.event.pull_request.draft == false &&
+      (github.event.action != 'edited' || github.event.changes.base != null) &&
       github.event.pull_request.head.repo.full_name == github.repository &&
       github.actor != 'dependabot[bot]' &&
       github.event.pull_request.user.login != 'dependabot[bot]'
     runs-on: runs-on,runner=2cpu-linux-x64
     permissions:
       contents: read
-      issues: write
-      pull-requests: write
+      issues: read
+      pull-requests: read
+    outputs:
+      trusted_sha: ${{ steps.trusted-automation.outputs.sha }}
     env:
       REPO: ${{ github.repository }}
       PR_NUMBER: ${{ github.event.pull_request.number }}
@@ -71,37 +74,6 @@ jobs:
             .github/workflows/integration-test-review.yml
           persist-credentials: false
 
-      - name: Bootstrap batched review automation when absent from base
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          scripts_dir="$GITHUB_WORKSPACE/review-automation/.github/scripts"
-          if [[ -f "$scripts_dir/api_review.py" && -f "$scripts_dir/api_review_comment.py" && -f "$scripts_dir/review_diff.py" ]]; then
-            exit 0
-          fi
-          if [[ -f "$scripts_dir/api_review.py" && ! -f "$scripts_dir/api_review_comment.py" ]] || \
-             [[ ! -f "$scripts_dir/api_review.py" && -f "$scripts_dir/api_review_comment.py" ]]; then
-            echo "::error::Base revision contains incomplete API review automation."
-            exit 1
-          fi
-
-          # Bootstrap only: the introducing PR predates batched review on base.
-          # Only same-repository writers can reach this step. Download only the
-          # review automation files at the event's immutable head SHA;
-          # application code is never checked out, compiled, or executed.
-          echo "::notice::Bootstrapping API review automation from the same-repository PR"
-          bootstrap_dir="$(mktemp -d)"
-          for filename in api_review.py api_review_test.py api_review_comment.py api_review_comment_test.py review_diff.py review_diff_test.py review_sources.py; do
-            gh api --method GET \
-              "repos/$REPO/contents/.github/scripts/$filename" \
-              -f ref="$EXPECTED_HEAD_SHA" --jq '.content' \
-              | base64 --decode > "$bootstrap_dir/$filename"
-            test -s "$bootstrap_dir/$filename"
-          done
-          mkdir -p "$scripts_dir"
-          cp "$bootstrap_dir/"*.py "$scripts_dir/"
-
       - name: Set up Python
         uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
@@ -115,6 +87,9 @@ jobs:
           python3 review-automation/.github/scripts/review_diff_test.py
           if [[ -f review-automation/.github/scripts/review_sources_test.py ]]; then
             python3 review-automation/.github/scripts/review_sources_test.py
+          fi
+          if [[ -f review-automation/.github/scripts/api_review_compatibility_test.py ]]; then
+            python3 review-automation/.github/scripts/api_review_compatibility_test.py
           fi
           workflow_test="review-automation/.github/scripts/api_review_workflow_test.py"
           if [[ -f "$workflow_test" ]]; then
@@ -201,6 +176,7 @@ jobs:
           python3 review-automation/.github/scripts/api_review.py review \
             --metadata "$RUNNER_TEMP/api-review-pr-meta.json" \
             --diff "$RUNNER_TEMP/api-review-pr.diff" \
+            --source-repository review-automation \
             "${previous_args[@]}" \
             --repo "$REPO" \
             --pr-number "$PR_NUMBER" \
@@ -213,16 +189,57 @@ jobs:
         if: always() && (steps.review.outcome == 'success' || steps.review.outcome == 'failure')
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
-          name: api-review-${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
-          path: ${{ runner.temp }}/api-review-result.json
-          if-no-files-found: warn
+          name: api-review-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/api-review-result.json
+            ${{ runner.temp }}/api-review-pr.diff
+          if-no-files-found: error
           retention-days: 14
+
+  publish-api-review:
+    name: Publish API report
+    needs: detect-api-changes
+    if: >-
+      always() && github.event_name == 'pull_request' &&
+      github.event.pull_request.draft == false &&
+      (github.event.action != 'edited' || github.event.changes.base != null) &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.actor != 'dependabot[bot]' &&
+      github.event.pull_request.user.login != 'dependabot[bot]' &&
+      needs.detect-api-changes.outputs.trusted_sha != ''
+    runs-on: runs-on,runner=2cpu-linux-x64
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    env:
+      REPO: ${{ github.repository }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      EXPECTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      EXPECTED_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+    steps:
+      - name: Check out the same trusted publication code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.detect-api-changes.outputs.trusted_sha }}
+          sparse-checkout: .github/scripts
+          path: review-automation
+          persist-credentials: false
+      - name: Download this run's review data
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: api-review-${{ github.run_id }}
+          path: ${{ runner.temp }}
+      - name: Set up Python
+        uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
 
       # Publish incomplete reviews too, retaining the failed check and previous
       # accepted decisions. Checkboxes track the maintainer's API acceptance;
       # unchecked decisions are not an additional merge gate.
       - name: Publish API decision checklist and labels
-        if: always() && (steps.review.outcome == 'success' || steps.review.outcome == 'failure')
+        if: always()
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -241,17 +258,17 @@ jobs:
 
   validate-candidate-tests:
     name: Test candidate API review without credentials
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'pull_request'
     runs-on: runs-on,runner=2cpu-linux-x64
     permissions:
       contents: read
     steps:
-      # SECURITY: Only dispatch reviewed commits. Candidate tests execute in a
-      # separate job with no provider key, before credentialed validation.
-      - name: Check out dispatched candidate
+      # SECURITY: Candidate tests run without provider keys or write permissions.
+      # Automatic review/publication jobs execute only pinned main code.
+      - name: Check out candidate for offline tests
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 1
           persist-credentials: false
       - name: Set up Python
@@ -268,6 +285,7 @@ jobs:
           python3 .github/scripts/api_review_run_test.py
           python3 .github/scripts/review_sources_test.py
           python3 .github/scripts/api_review_workflow_test.py
+          python3 .github/scripts/api_review_compatibility_test.py
 
   validate-candidate:
     name: Validate candidate API review without publication
@@ -336,6 +354,7 @@ jobs:
           python3 .github/scripts/api_review.py review \
             --metadata "$RUNNER_TEMP/api-review-pr-meta.json" \
             --diff "$RUNNER_TEMP/api-review-pr.diff" \
+            --source-repository . \
             --previous "$RUNNER_TEMP/previous-api-review.json" \
             --repo "$REPO" --pr-number "$PR_NUMBER" \
             --expected-head-sha "$EXPECTED_HEAD_SHA" --expected-base-sha "$EXPECTED_BASE_SHA" \

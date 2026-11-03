@@ -91,5 +91,63 @@ class TrustedSourceTests(unittest.TestCase):
         self.assertIn("persist-credentials: false", automatic_job)
 
 
+class CompatibilityWorkflowTests(unittest.TestCase):
+    def test_ready_and_stacked_base_coverage(self):
+        text = WORKFLOW.read_text()
+        trigger = text.split("concurrency:", 1)[0]
+        self.assertIn("[opened, ready_for_review, synchronize, reopened, edited]", trigger)
+        self.assertNotIn("branches:", trigger)
+        review_job = text.split("  publish-api-review:", 1)[0]
+        self.assertIn("github.event.pull_request.draft == false", review_job)
+
+    def test_automatic_gate_covers_version_gap_events_and_rejects_untrusted_prs(self):
+        lines = WORKFLOW.read_text().split("  publish-api-review:", 1)[0].splitlines()
+        start = next(i for i, line in enumerate(lines) if line.strip() == "if: >-")
+        end = next(i for i in range(start + 1, len(lines)) if lines[i].strip().startswith("runs-on:"))
+        expression = " ".join(line.strip() for line in lines[start + 1:end])
+        script = "const x=JSON.parse(require('fs').readFileSync(0,'utf8')); console.log(new Function('github','return ('+x.expression+')')(x.github));"
+        for action, draft, repo, actor, author, changed_base, expected in [
+            ("opened", False, "repo", "writer", "writer", False, True),
+            ("ready_for_review", False, "repo", "writer", "writer", False, True),
+            ("synchronize", False, "repo", "writer", "writer", False, True),
+            ("reopened", False, "repo", "writer", "writer", False, True),
+            ("edited", False, "repo", "writer", "writer", True, True),
+            ("edited", False, "repo", "writer", "writer", False, False),
+            ("opened", True, "repo", "writer", "writer", False, False),
+            ("synchronize", False, "fork", "writer", "writer", False, False),
+            ("synchronize", False, "repo", "dependabot[bot]", "writer", False, False),
+            ("synchronize", False, "repo", "writer", "dependabot[bot]", False, False),
+        ]:
+            github = {"event_name": "pull_request", "repository": "repo", "actor": actor,
+                      "event": {"action": action, "changes": {"base": {} if changed_base else None},
+                                "pull_request": {"draft": draft, "head": {"repo": {"full_name": repo}},
+                                                 "base": {"ref": "kb.stacked-parent.1"}, "user": {"login": author}}}}
+            with self.subTest(action=action, draft=draft, repo=repo, actor=actor, author=author):
+                actual = subprocess.run(["node", "-e", script], check=True, text=True, capture_output=True,
+                                        input=json.dumps({"expression": expression, "github": github}), timeout=10)
+                self.assertEqual(json.loads(actual.stdout), expected)
+
+    def test_model_and_publisher_credentials_are_isolated(self):
+        text = WORKFLOW.read_text()
+        review_job, tail = text.split("  publish-api-review:", 1)
+        publisher, tail = tail.split("  validate-candidate-tests:", 1)
+        self.assertNotIn(": write", review_job)
+        self.assertNotIn("Bootstrap", review_job)
+        self.assertNotIn("ANTHROPIC_API_KEY", publisher)
+        self.assertIn("issues: write", publisher)
+        self.assertIn("needs.detect-api-changes.outputs.trusted_sha", publisher)
+        self.assertIn("actions/download-artifact@", publisher)
+        self.assertIn('name: api-review-${{ github.run_id }}', publisher)
+        model_step = review_job.split("- name: Review API decisions and testing risk", 1)[1].split("- name: Preserve", 1)[0]
+        self.assertNotIn("GH_TOKEN", model_step)
+        self.assertIn("--source-repository review-automation", model_step)
+        self.assertIn("persist-credentials: false", review_job)
+        self.assertIn("persist-credentials: false", publisher)
+        tests = tail.split("  validate-candidate:", 1)[0]
+        self.assertNotIn(": write", tests)
+        self.assertNotIn("ANTHROPIC_API_KEY", tests)
+        self.assertIn("api_review_compatibility_test.py", tests)
+
+
 if __name__ == "__main__":
     unittest.main()
