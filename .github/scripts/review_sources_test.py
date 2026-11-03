@@ -68,6 +68,40 @@ class PolicyTests(unittest.TestCase):
                      'go/proto/gen/../hidden.pb.go'):
             self.assertFalse(source.is_generated_path(path), path)
 
+    def test_thermal_notify_exact_outputs_excluded_and_source_kept(self):
+        root = 'Examples/ThermalNotify/Sources/ThermalNotify/Generated/'
+        outputs = [root + name + suffix for name in (
+            'wendy_system_v1_notifications',
+            'wendy_agent_services_v1_wendy_agent_v1_video_service',
+        ) for suffix in ('.pb.swift', '.grpc.swift')]
+        generated = ''.join(diff(path) for path in outputs)
+        handwritten = ''.join(diff(path, '// Code generated. SOURCE_MARKER') for path in (
+            root + 'Handwritten.swift', root + 'unknown.pb.swift', root + 'notes.proto',
+            root + 'nested/wendy_system_v1_notifications.pb.swift',
+            'Examples/Other/Sources/Other/Generated/wendy_system_v1_notifications.pb.swift',
+            'Examples/ThermalNotify/regenerate-grpc.sh',
+            'Examples/ThermalNotify/Package.swift', 'Examples/ThermalNotify/Package.resolved',
+            'Examples/ThermalNotify/build.stagefile.lock.yaml',
+            'Proto/wendy/system/v1/notifications.proto',
+            'Proto/wendy/agent/services/v1/wendy_agent_v1_video_service.proto',
+        ))
+        kept, coverage = source.source_diff(generated + handwritten)
+        self.assertEqual(kept, handwritten)
+        self.assertEqual([item['path'] for item in coverage['excluded_generated_files']], outputs)
+        kept, coverage = source.source_diff(generated)
+        self.assertEqual(kept, '')
+        self.assertEqual(coverage['source_files'], 0)
+        self.assertEqual(len(coverage['excluded_generated_files']), 4)
+
+    def test_thermal_notify_boundary_renames_and_modes_remain_reviewable(self):
+        output = 'Examples/ThermalNotify/Sources/ThermalNotify/Generated/wendy_system_v1_notifications.pb.swift'
+        handwritten = 'Examples/ThermalNotify/Sources/ThermalNotify/Notifications.swift'
+        for old, new in ((output, handwritten), (handwritten, output)):
+            raw = f'diff --git a/{old} b/{new}\nsimilarity index 100%\nrename from {old}\nrename to {new}\n'
+            self.assertEqual(source.source_diff(raw)[0], raw)
+        raw = f'diff --git a/{output} b/{output}\nold mode 100644\nnew mode 100755\n'
+        self.assertEqual(source.source_diff(raw)[0], raw)
+
     def test_mixed_exact_bytes_accounting_and_no_header_policy(self):
         pin = diff('go/scripts/generate-proto.sh', 'SCHEMA_REVISION=upstream-commit')
         unknown = diff('custom/generated.go', '// Code generated. DO NOT EDIT. SOURCE_MARKER')
