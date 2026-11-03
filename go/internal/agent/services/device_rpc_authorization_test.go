@@ -19,8 +19,10 @@ import (
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/agent/interceptor"
+	"github.com/wendylabsinc/wendy/go/internal/agent/meshingress"
 	"github.com/wendylabsinc/wendy/go/internal/agent/mtls"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
+	"github.com/wendylabsinc/wendy/go/internal/shared/meshappstream"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
 	"github.com/wendylabsinc/wendy/go/internal/shared/rpcauth"
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
@@ -186,6 +188,23 @@ func TestDeviceRPCPolicyOverProductionMTLS(t *testing.T) {
 		t.Fatal(err)
 	}
 	backend := &rpcPolicyBackend{calls: make(map[string]int)}
+	ingress := meshingress.NewRegistry()
+	mesh := NewMeshService(zap.NewNop(), t.TempDir(), certs.Scope{TenantUUID: tenant})
+	mesh.SetIngressAuthorizer(ingress)
+	agentpbv2.RegisterWendyMeshServiceServer(srv, mesh)
+	var meshDials atomic.Int32
+	mesh.dialLocal = func(address string, _ time.Duration) (net.Conn, error) {
+		meshDials.Add(1)
+		if address != "10.3.0.2:8080" {
+			t.Errorf("MeshDial reached unexpected container endpoint %q", address)
+		}
+		client, app := net.Pipe()
+		go func() {
+			defer app.Close()
+			_, _ = io.Copy(app, app)
+		}()
+		return client, nil
+	}
 	sensors := &rpcPolicySensors{}
 	shell := &rpcPolicyFakeShell{}
 	var future atomic.Int32
@@ -225,7 +244,39 @@ func TestDeviceRPCPolicyOverProductionMTLS(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
-	device := connect(3, "spiffe://wendy.sh/tenant/"+tenant+"/device/build-host")
+	device := connect(3, "spiffe://wendy.sh/tenant/"+tenant+"/device/33333333-3333-4333-8333-333333333333")
+	if err := ingress.Claim("running-app", 8080, "10.3.0.2", 8080); err != nil {
+		t.Fatal(err)
+	}
+	app, err := meshappstream.Dial(ctx, device, 8080)
+	if err != nil {
+		t.Fatalf("device could not reach a published app through MeshDial: %v", err)
+	}
+	if err := app.SetDeadline(time.Now().Add(3 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	const message = "device-app-stream"
+	if _, err := app.Write([]byte(message)); err != nil {
+		t.Fatal(err)
+	}
+	reply := make([]byte, len(message))
+	if _, err := io.ReadFull(app, reply); err != nil || string(reply) != message {
+		t.Fatalf("MeshDial app reply=%q err=%v", reply, err)
+	}
+	app.Close()
+	ingress.Release("running-app")
+	for _, port := range []uint16{8080, 50052} {
+		conn, err := meshappstream.Dial(ctx, device, port)
+		if conn != nil {
+			conn.Close()
+		}
+		if status.Code(err) != codes.PermissionDenied || rpcauth.IsIdentityDenied(err) {
+			t.Fatalf("unpublished port %d must be refused by app ingress, got %v", port, err)
+		}
+	}
+	if meshDials.Load() != 1 {
+		t.Fatalf("unpublished ports reached a destination: %d dials", meshDials.Load())
+	}
 	client := agentpb.NewWendyContainerServiceClient(device)
 	if _, err := client.QueryChunks(ctx, &agentpb.QueryChunksRequest{}); err != nil {
 		t.Fatal(err)

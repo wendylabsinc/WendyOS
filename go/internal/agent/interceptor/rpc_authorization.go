@@ -28,6 +28,10 @@ func deviceRPCAllowed(method string) bool {
 		agentpb.WendyContainerService_WriteChunks_FullMethodName,
 		agentpb.WendyContainerService_PrepareImage_FullMethodName:
 		return true
+	// Legacy peer agents carry application TCP streams through MeshDial.
+	// Its handler independently restricts the tenant and running-app ingress.
+	case agentpbv2.WendyMeshService_MeshDial_FullMethodName:
+		return true
 	// Agent-hosted SensorLink uses this dedicated catalogue/stream API, not
 	// the general camera, audio or sensor-pairing administration services.
 	case agentpbv2.WendySensorService_GetSensorManifest_FullMethodName,

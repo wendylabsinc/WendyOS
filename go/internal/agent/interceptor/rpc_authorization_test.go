@@ -12,6 +12,7 @@ import (
 
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/rpcauth"
+	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zaptest/observer"
 	"google.golang.org/grpc"
@@ -68,6 +69,7 @@ var rpcTestDeviceMethods = []string{
 	"/wendy.agent.services.v1.WendyContainerService/QueryLayers",
 	"/wendy.agent.services.v1.WendyContainerService/WriteChunks",
 	"/wendy.agent.services.v1.WendyContainerService/PrepareImage",
+	"/wendy.agent.services.v2.WendyMeshService/MeshDial",
 	"/wendy.agent.services.v2.WendySensorService/GetSensorManifest",
 	"/wendy.agent.services.v2.WendySensorService/StreamSensors",
 }
@@ -138,6 +140,7 @@ func assertRPCDecision(t *testing.T, ctx context.Context, method string, scope c
 func TestRPCDeviceExactMethods(t *testing.T) {
 	ctx := rpcIdentityContext(rpcIdentityLeaf(t, "", "spiffe://wendy.sh/tenant/"+rpcTestTenant+"/device/peer"))
 	scope := certs.Scope{TenantUUID: rpcTestTenant}
+	assertRPCDecision(t, ctx, agentpbv2.WendyMeshService_MeshDial_FullMethodName, scope, codes.OK)
 	for _, method := range rpcTestDeviceMethods {
 		t.Run(method, func(t *testing.T) { assertRPCDecision(t, ctx, method, scope, codes.OK) })
 	}
@@ -149,7 +152,8 @@ func TestRPCDeviceExactMethods(t *testing.T) {
 		"/wendy.agent.services.v1.WendyContainerService/ListContainers",
 		"/wendy.agent.services.v1.WendyContainerService/WriteLayer",
 		"/wendy.agent.services.v1.WendyAgentService/GetAgentVersion",
-		"/wendy.agent.services.v1.WendyAgentService/MeshDial",
+		// Version/service lookalikes must not inherit the actual MeshDial grant.
+		"/wendy.agent.services.v1.WendyMeshService/MeshDial",
 		"/wendy.agent.services.v1.WendyWiFiService/Connect",
 		"/wendy.agent.services.v1.WendyCameraService/StreamCamera",
 		"/wendy.agent.services.v1.WendyAudioService/StreamAudio",
