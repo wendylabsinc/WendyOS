@@ -4,8 +4,10 @@ import (
 	"context"
 
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
+	"github.com/wendylabsinc/wendy/go/internal/shared/rpcauth"
 	agentpb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
+	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
@@ -53,36 +55,57 @@ func CheckRPCIdentity(ctx context.Context, method string, expected certs.Scope) 
 	}
 	identity, found, err := certs.IdentityFromCert(tlsInfo.State.PeerCertificates[0])
 	if err != nil || !found {
-		return status.Error(codes.PermissionDenied, "client certificate has no recognized RPC caller identity")
+		return rpcauth.Denied("client certificate has no recognized RPC caller identity")
 	}
 	switch identity.EntityType {
 	case certs.EntityUser:
 		return nil
 	case certs.EntityAsset:
 		if !expected.Known() || !identity.Scope().Matches(expected) {
-			return status.Error(codes.PermissionDenied, "device RPC requires a matching tenant identity")
+			return rpcauth.Denied("device RPC requires a matching tenant identity")
 		}
 		if deviceRPCAllowed(method) {
 			return nil
 		}
-		return status.Error(codes.PermissionDenied, "RPC is not permitted for device credentials")
+		return rpcauth.Denied("RPC is not permitted for device credentials; sign in with operator credentials")
 	default:
-		return status.Error(codes.PermissionDenied, "client certificate role is not permitted for agent RPCs")
+		return rpcauth.Denied("client certificate role is not permitted for agent RPCs")
 	}
 }
 
-func UnaryRPCIdentityInterceptor(expected certs.Scope) grpc.UnaryServerInterceptor {
+func logRPCIdentityRefusal(ctx context.Context, logger *zap.Logger, method string, err error) {
+	if logger == nil {
+		return
+	}
+	fields := []zap.Field{
+		zap.String("method", method),
+		zap.String("remote", peerAddr(ctx)),
+		zap.Error(err),
+	}
+	if p, ok := peer.FromContext(ctx); ok {
+		if info, ok := p.AuthInfo.(credentials.TLSInfo); ok && len(info.State.PeerCertificates) > 0 {
+			if serial := info.State.PeerCertificates[0].SerialNumber; serial != nil {
+				fields = append(fields, zap.String("serial", serial.String()))
+			}
+		}
+	}
+	logger.Warn("rejected gRPC caller by RPC identity policy", fields...)
+}
+
+func UnaryRPCIdentityInterceptor(logger *zap.Logger, expected certs.Scope) grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
 		if err := CheckRPCIdentity(ctx, info.FullMethod, expected); err != nil {
+			logRPCIdentityRefusal(ctx, logger, info.FullMethod, err)
 			return nil, err
 		}
 		return handler(ctx, req)
 	}
 }
 
-func StreamRPCIdentityInterceptor(expected certs.Scope) grpc.StreamServerInterceptor {
+func StreamRPCIdentityInterceptor(logger *zap.Logger, expected certs.Scope) grpc.StreamServerInterceptor {
 	return func(srv interface{}, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
 		if err := CheckRPCIdentity(ss.Context(), info.FullMethod, expected); err != nil {
+			logRPCIdentityRefusal(ss.Context(), logger, info.FullMethod, err)
 			return err
 		}
 		return handler(srv, ss)

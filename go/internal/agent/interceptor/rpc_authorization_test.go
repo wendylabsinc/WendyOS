@@ -6,11 +6,14 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"math/big"
+	"net"
 	"net/url"
 	"testing"
 
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
+	"github.com/wendylabsinc/wendy/go/internal/shared/rpcauth"
 	"go.uber.org/zap"
+	"go.uber.org/zap/zaptest/observer"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
@@ -20,6 +23,43 @@ import (
 )
 
 const rpcTestTenant = "11111111-1111-4111-8111-111111111111"
+
+func TestRPCIdentityRefusalsAreLogged(t *testing.T) {
+	leaf := rpcIdentityLeaf(t, "private-subject", "spiffe://wendy.sh/tenant/"+rpcTestTenant+"/device/peer")
+	ctx := rpcIdentityContext(leaf)
+	p, _ := peer.FromContext(ctx)
+	p.Addr = &net.TCPAddr{IP: net.IPv4(192, 0, 2, 1), Port: 1234}
+	method := "/wendy.agent.services.v1.WendyShellService/HostShell"
+	scope := certs.Scope{TenantUUID: rpcTestTenant}
+	core, logs := observer.New(zap.WarnLevel)
+	logger := zap.New(core)
+	called := false
+	_, unaryErr := UnaryRPCIdentityInterceptor(logger, scope)(ctx, nil, &grpc.UnaryServerInfo{FullMethod: method}, func(context.Context, any) (any, error) {
+		called = true
+		return nil, nil
+	})
+	streamErr := StreamRPCIdentityInterceptor(logger, scope)(nil, rpcContextStream{ctx: ctx}, &grpc.StreamServerInfo{FullMethod: method}, func(any, grpc.ServerStream) error {
+		called = true
+		return nil
+	})
+	for _, err := range []error{unaryErr, streamErr} {
+		if !rpcauth.IsIdentityDenied(err) {
+			t.Fatalf("refusal lost its machine-readable identity reason: %v", err)
+		}
+	}
+	if called || logs.Len() != 2 {
+		t.Fatalf("handler called=%v, refusal logs=%d; want false, 2", called, logs.Len())
+	}
+	for _, entry := range logs.All() {
+		fields := entry.ContextMap()
+		if fields["method"] != method || fields["remote"] != "192.0.2.1:1234" || fields["serial"] != "1" || fields["error"] == nil {
+			t.Fatalf("incomplete refusal audit: %v", fields)
+		}
+		if _, logged := fields["subject"]; logged {
+			t.Fatal("refusal logged private certificate subject")
+		}
+	}
+}
 
 // These strings intentionally do not use generated constants: this test is the
 // independently reviewed list of device capabilities, including the API version.
@@ -72,7 +112,7 @@ func assertRPCDecision(t *testing.T, ctx context.Context, method string, scope c
 	t.Run("unary", func(t *testing.T) {
 		called := false
 		marker := new(int)
-		response, err := UnaryRPCIdentityInterceptor(scope)(ctx, nil, &grpc.UnaryServerInfo{FullMethod: method}, func(context.Context, any) (any, error) {
+		response, err := UnaryRPCIdentityInterceptor(nil, scope)(ctx, nil, &grpc.UnaryServerInfo{FullMethod: method}, func(context.Context, any) (any, error) {
 			called = true
 			return marker, nil
 		})
@@ -85,7 +125,7 @@ func assertRPCDecision(t *testing.T, ctx context.Context, method string, scope c
 	})
 	t.Run("stream", func(t *testing.T) {
 		called := false
-		err := StreamRPCIdentityInterceptor(scope)(nil, rpcContextStream{ctx: ctx}, &grpc.StreamServerInfo{FullMethod: method, IsClientStream: true, IsServerStream: true}, func(any, grpc.ServerStream) error {
+		err := StreamRPCIdentityInterceptor(nil, scope)(nil, rpcContextStream{ctx: ctx}, &grpc.StreamServerInfo{FullMethod: method, IsClientStream: true, IsServerStream: true}, func(any, grpc.ServerStream) error {
 			called = true
 			return nil
 		})
@@ -228,11 +268,11 @@ func TestRPCIdentityPreservesHandlerErrors(t *testing.T) {
 	ctx := rpcIdentityContext(rpcIdentityLeaf(t, "sh/wendy/7/12"))
 	scope := certs.Scope{OrgID: 7}
 	want := status.Error(codes.FailedPrecondition, "handler-specific authorization")
-	_, err := UnaryRPCIdentityInterceptor(scope)(ctx, nil, &grpc.UnaryServerInfo{FullMethod: rpcTestDeviceMethods[0]}, func(context.Context, any) (any, error) { return nil, want })
+	_, err := UnaryRPCIdentityInterceptor(nil, scope)(ctx, nil, &grpc.UnaryServerInfo{FullMethod: rpcTestDeviceMethods[0]}, func(context.Context, any) (any, error) { return nil, want })
 	if err != want {
 		t.Fatalf("unary handler error changed: %v", err)
 	}
-	err = StreamRPCIdentityInterceptor(scope)(nil, rpcContextStream{ctx: ctx}, &grpc.StreamServerInfo{FullMethod: rpcTestDeviceMethods[0]}, func(any, grpc.ServerStream) error { return want })
+	err = StreamRPCIdentityInterceptor(nil, scope)(nil, rpcContextStream{ctx: ctx}, &grpc.StreamServerInfo{FullMethod: rpcTestDeviceMethods[0]}, func(any, grpc.ServerStream) error { return want })
 	if err != want {
 		t.Fatalf("stream handler error changed: %v", err)
 	}

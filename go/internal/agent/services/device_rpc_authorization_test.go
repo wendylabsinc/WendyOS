@@ -22,6 +22,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/agent/mtls"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
+	"github.com/wendylabsinc/wendy/go/internal/shared/rpcauth"
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	"github.com/wendylabsinc/wendy/go/proto/gen/sensorlinkpb"
@@ -271,8 +272,8 @@ func TestDeviceRPCPolicyOverProductionMTLS(t *testing.T) {
 	unaryBefore, streamBefore := unaryExtras.Load(), streamExtras.Load()
 	denied := func(err error) {
 		t.Helper()
-		if status.Code(err) != codes.PermissionDenied {
-			t.Fatalf("want PermissionDenied, got %v", err)
+		if status.Code(err) != codes.PermissionDenied || !rpcauth.IsIdentityDenied(err) {
+			t.Fatalf("want PermissionDenied with RPC identity reason, got %v", err)
 		}
 	}
 	_, err = client.CreateContainer(ctx, &agentpb.CreateContainerRequest{})
