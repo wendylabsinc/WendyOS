@@ -310,6 +310,64 @@ func TestRunFailedCandidateCannotRepeatedlyReclaimWarmStandby(t *testing.T) {
 	}
 }
 
+func TestRunFailedNewPeerRecoversAfterExistingPenaltyUnderFullBudget(t *testing.T) {
+	fresh := spareTCP(3, 128)
+	failed := make(chan struct{}, 1)
+	var attempts atomic.Int32
+	var clock atomic.Int64
+	epoch := time.Now()
+	clock.Store(epoch.UnixNano())
+	h := newSpareRun(t, Limits{Connections: 2}, func(cfg *Config) {
+		cfg.now = func() time.Time { return time.Unix(0, clock.Load()) }
+		connect := cfg.Connect
+		cfg.Connect = func(ctx context.Context, c Candidate) error {
+			if c.Address == fresh.Address && attempts.Add(1) == 1 {
+				failed <- struct{}{}
+				return errors.New("first probe failed")
+			}
+			return connect(ctx, c)
+		}
+	})
+	h.start(fresh)
+	wait(t, failed)
+	ble, lan := spareBLE(2), spareTCP(2, 128)
+	h.start(ble) // Remove the failed hint's observed entry, preserving queue history.
+	h.expectStart(ble)
+	h.start(ble, lan)
+	h.expectStart(lan)
+	h.ready(lan.Address, true)
+	clock.Store(epoch.Add(localmesh.FailedConnectPenalty - time.Nanosecond).UnixNano())
+	h.start(ble, lan, fresh) // Re-adding the same endpoint must retain its penalty.
+	h.quiet()
+	if n := attempts.Load(); n != 1 {
+		t.Fatalf("penalized demand retried or reclaimed early: probes=%d", n)
+	}
+	h.mu.Lock()
+	release := make(chan struct{})
+	h.block[ble.Address] = release
+	h.mu.Unlock()
+	clock.Store(epoch.Add(localmesh.FailedConnectPenalty + time.Second).UnixNano())
+	h.start(ble, lan, fresh) // Refresh legitimate current demand after penalty expiry.
+	if got := wait(t, h.closing); got.Address != ble.Address {
+		t.Fatalf("expired penalty reclaimed the wrong owned carrier: %+v", got)
+	}
+	h.quiet() // Cancellation cannot bypass the still-occupied two-link budget.
+	close(release)
+	h.expectStart(fresh)
+	h.ready(fresh.Address, true)
+	h.quiet()
+	if n := attempts.Load(); n != 2 {
+		t.Fatalf("new peer did not recover exactly once after penalty: probes=%d", n)
+	}
+	h.mu.Lock()
+	_, retained := h.links[lan.Address]
+	peak := h.peak
+	h.mu.Unlock()
+	if !retained || peak != 2 {
+		t.Fatalf("recovery lost the working LAN or oversubscribed: LAN=%v peak=%d", retained, peak)
+	}
+}
+
 func TestRunFullAttemptBudgetDoesNotEvictWorkingStandby(t *testing.T) {
 	blocked := spareTCP(3, 128)
 	entered := make(chan struct{}, 1)
