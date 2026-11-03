@@ -764,7 +764,25 @@ func main() {
 				client.Run(ctx)
 				return
 			}
-			logger.Warn("Cloud relay requires a Cloud v2 device principal; re-enroll this device")
+			// A legacy (Cloud v1, numeric org/asset) enrollment carries no v2
+			// principal. It still reaches Cloud through the v1 tunnel broker:
+			// without this, updating a v1 device's agent takes it off Cloud with
+			// no remote way back (ccr1, org 90, 2026-11-03).
+			brokerURL := os.Getenv("WENDY_BROKER_URL")
+			if brokerURL == "" {
+				brokerURL = brokerURLForCloudHost(cloudHost)
+			}
+			certPEM, chainPEM, keyData := provisioningSvc.ProvisioningCerts()
+			keyPEM := string(keyData)
+			for i := range keyData {
+				keyData[i] = 0
+			}
+			if chainPEM == "" {
+				logger.Warn("CA chain PEM unavailable; cannot start tunnel broker (re-provision if this persists)")
+				return
+			}
+			client := services.NewTunnelBrokerClient(logger, brokerURL, certPEM, keyPEM, chainPEM, mtlsPortNum)
+			client.Run(ctx)
 		}()
 	}
 
@@ -1874,6 +1892,20 @@ func cloudGRPCURLForCloudHost(cloudHost string) string {
 		return v
 	}
 	return cloudHost
+}
+
+// brokerURLForCloudHost returns the v1 tunnel broker target for a legacy
+// enrollment's cloud host: a :443 Cloud Run endpoint serves the broker on the
+// same port, anything else serves it on 50052.
+func brokerURLForCloudHost(cloudHost string) string {
+	host, port, err := net.SplitHostPort(cloudHost)
+	if err == nil {
+		if port == "443" {
+			return cloudHost
+		}
+		return net.JoinHostPort(host, "50052")
+	}
+	return net.JoinHostPort(cloudHost, "50052")
 }
 
 func handleUtilityCommand(args []string) (bool, int) {
