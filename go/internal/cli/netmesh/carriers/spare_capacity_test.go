@@ -370,6 +370,43 @@ func TestRunFailedCandidateCannotRepeatedlyReclaimWarmStandby(t *testing.T) {
 	}
 }
 
+func TestRunNodeCapacityDeferralDoesNotPenalizeHealthyCandidate(t *testing.T) {
+	fresh := spareTCP(3, 128)
+	var elapsed atomic.Int64
+	epoch := time.Now()
+	deferred := make(chan struct{}, 1)
+	var probes atomic.Int32
+	h := newSpareRun(t, Limits{Connections: 2}, func(cfg *Config) {
+		cfg.now = func() time.Time { return epoch.Add(time.Duration(elapsed.Load())) }
+		connect := cfg.Connect
+		cfg.Connect = func(ctx context.Context, c Candidate) error {
+			if c.Address == fresh.Address && probes.Add(1) == 1 {
+				deferred <- struct{}{}
+				return localmesh.ErrCarrierCapacityRetry
+			}
+			return connect(ctx, c)
+		}
+	})
+	h.start(fresh)
+	wait(t, deferred)
+	ble, lan := spareBLE(2), spareTCP(2, 128)
+	h.start(fresh, ble)
+	h.expectStart(ble)
+	h.start(fresh, ble, lan)
+	h.expectStart(lan)
+	h.ready(lan.Address, true)
+	h.quiet()
+	// Only the ordinary retry delay elapses. Intentional Node capacity
+	// deferral must not create a thirty-second failed-candidate penalty.
+	elapsed.Store(int64(21 * time.Millisecond))
+	h.start(fresh, ble, lan)
+	if got := wait(t, h.closing); got.Address != ble.Address {
+		t.Fatalf("retired %s instead of owned standby", got.Address)
+	}
+	h.expectStart(fresh)
+	h.quiet()
+}
+
 func TestRunFailedNewPeerRecoversAfterExistingPenaltyUnderFullBudget(t *testing.T) {
 	fresh := spareTCP(3, 128)
 	failed := make(chan struct{}, 1)

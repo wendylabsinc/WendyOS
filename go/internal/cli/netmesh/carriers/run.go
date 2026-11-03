@@ -328,6 +328,12 @@ func Run(parent context.Context, cfg Config) error {
 						if a.canceled {
 							e.retry = now
 							queue.Succeeded(v.key)
+						} else if errors.Is(v.err, localmesh.ErrCarrierCapacityRetry) {
+							// The node is waiting for an intentionally retired owner
+							// to release capacity. Preserve the ordinary dial cadence
+							// without treating this healthy candidate as a failure.
+							e.retry = now.Add(cfg.Limits.RetryDelay)
+							queue.Succeeded(v.key)
 						} else {
 							e.retry = now.Add(cfg.Limits.RetryDelay)
 							if errors.Is(v.err, ErrUnsupportedPeer) {
