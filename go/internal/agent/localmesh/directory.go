@@ -401,7 +401,13 @@ func (d *Directory) Accept(w SignedManifest, now time.Time) (bool, error) {
 				d.entries[owner] = old
 				return true, nil
 			}
+			// Even a duplicate can reveal a shorter selected trusted path.
+			// Record only shrinkage; do not renew its lease or replay receipt.
+			old = d.restrictEntryCertificate(old, id, now)
 			d.entries[owner] = old
+			if held, ok := d.handoffs[owner]; ok {
+				d.handoffs[owner] = restrictHandoffCertificate(held, old)
+			}
 			return false, nil
 		}
 	} else if len(d.entries) >= d.limit {
@@ -423,6 +429,9 @@ func (d *Directory) Accept(w SignedManifest, now time.Time) (bool, error) {
 		manifest: m, wire: w, hash: hash, signature: binding,
 		retainUntil: receipt.Until,
 		activeUntil: admittedAt.Add(duration), certificateDeadline: certificateDeadline, certificateNotAfter: id.NotAfter, signingNotBefore: leaf.NotBefore,
+	}
+	if held, ok := d.handoffs[owner]; ok {
+		d.handoffs[owner] = restrictHandoffCertificate(held, d.entries[owner])
 	}
 	return true, nil
 }

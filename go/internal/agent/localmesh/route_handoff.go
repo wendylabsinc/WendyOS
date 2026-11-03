@@ -111,6 +111,19 @@ func (d *Directory) replaceRouteHandoff(owner string, next Manifest, newLeaf *x5
 		issued: old.manifest.Issued, expires: old.manifest.Expires, deadline: deadline, certificateNotAfter: old.certificateNotAfter, signingNotBefore: old.signingNotBefore}
 }
 
+// An observed replacement path bounds the old proof even when another revision
+// arrives before the next snapshot. Neither a cache renewal nor publication can
+// recover certificate lifetime that this receiver has already restricted.
+func restrictHandoffCertificate(held routeHandoff, current directoryEntry) routeHandoff {
+	if current.certificateDeadline.Before(held.deadline) {
+		held.deadline = current.certificateDeadline
+	}
+	if current.certificateNotAfter.Before(held.certificateNotAfter) {
+		held.certificateNotAfter = current.certificateNotAfter
+	}
+	return held
+}
+
 // Caller already verified the current owner/path. Check that this compact old
 // authorization still has its own original lease and the same trusted key.
 func (d *Directory) validHandoff(held routeHandoff, current directoryEntry, chain [][]byte, id Identity, now time.Time) (routeHandoff, bool) {
@@ -136,10 +149,15 @@ func (d *Directory) validHandoff(held routeHandoff, current directoryEntry, chai
 	if leafTime.Before(held.signingNotBefore) {
 		return held, false
 	}
-	selectedEnd := held.certificateNotAfter
-	if id.NotAfter.Before(selectedEnd) {
-		selectedEnd = id.NotAfter
+	// Replacement admission and prior verification may have observed a shorter
+	// trusted path than the identity cache currently selects. Preserve both its
+	// fixed resource deadline and certificate date across later revisions/path
+	// renewals, so a forward certificate-clock correction can still shrink it.
+	held = restrictHandoffCertificate(held, current)
+	if id.NotAfter.Before(held.certificateNotAfter) {
+		held.certificateNotAfter = id.NotAfter
 	}
+	selectedEnd := held.certificateNotAfter
 	currentCap := d.leaseNow(now).Add(selectedEnd.Sub(base))
 	if currentCap.Before(held.deadline) {
 		held.deadline = currentCap
@@ -164,6 +182,9 @@ func (d *Directory) routeViewLocked(now time.Time, detached bool) ([]Manifest, m
 			delete(d.handoffs, owner)
 			continue
 		}
+		// Verification can shrink stored certificate bounds. Use that refreshed
+		// entry for retained-proof policy in this same snapshot transaction.
+		e = d.entries[owner]
 		m := e.manifest
 		if detached {
 			m = cloneManifest(m)
