@@ -823,8 +823,9 @@ func resolveLANAgentVersion(ctx context.Context, dev models.LANDevice) (string, 
 		if err == nil {
 			return address, isMTLS, resp, nil
 		}
-		// A proved identity mismatch must not be bypassed by another address.
-		if isLANIdentityFailure(err) {
+		// Another address cannot fix a missing selected-name binding or a
+		// proved identity mismatch. Preserve that refusal before recovery.
+		if errors.Is(err, certs.ErrExpectedDeviceIdentity) || isLANIdentityFailure(err) {
 			return "", false, nil, err
 		}
 		probeErrors = append(probeErrors, err)
