@@ -153,9 +153,12 @@ func (*GetLocalMeshStatusRequest) Descriptor() ([]byte, []int) {
 }
 
 type GetLocalMeshTopologyRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Optional public service descriptions from the same verified manifests.
+	// Omitted for normal device discovery to keep recurring observations small.
+	IncludeServices bool `protobuf:"varint,1,opt,name=include_services,json=includeServices,proto3" json:"include_services,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *GetLocalMeshTopologyRequest) Reset() {
@@ -188,6 +191,13 @@ func (*GetLocalMeshTopologyRequest) Descriptor() ([]byte, []int) {
 	return file_wendy_agent_services_v2_local_mesh_admin_service_proto_rawDescGZIP(), []int{2}
 }
 
+func (x *GetLocalMeshTopologyRequest) GetIncludeServices() bool {
+	if x != nil {
+		return x.IncludeServices
+	}
+	return false
+}
+
 // A local observation, not a global graph or proof of end-to-end reachability.
 // Each repeated field is bounded to 1024 entries. No certificates, signatures,
 // endpoint credentials, or signed announcement bodies are returned.
@@ -205,6 +215,8 @@ type LocalMeshTopology struct {
 	Routes           []*LocalMeshRoute        `protobuf:"bytes,9,rep,name=routes,proto3" json:"routes,omitempty"`
 	Announcements    []*LocalMeshAnnouncement `protobuf:"bytes,10,rep,name=announcements,proto3" json:"announcements,omitempty"`
 	Truncated        bool                     `protobuf:"varint,11,opt,name=truncated,proto3" json:"truncated,omitempty"`
+	// True only when this reporter implements and handled include_services.
+	ServicesIncluded bool `protobuf:"varint,12,opt,name=services_included,json=servicesIncluded,proto3" json:"services_included,omitempty"`
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache
 }
@@ -312,6 +324,13 @@ func (x *LocalMeshTopology) GetAnnouncements() []*LocalMeshAnnouncement {
 func (x *LocalMeshTopology) GetTruncated() bool {
 	if x != nil {
 		return x.Truncated
+	}
+	return false
+}
+
+func (x *LocalMeshTopology) GetServicesIncluded() bool {
+	if x != nil {
+		return x.ServicesIncluded
 	}
 	return false
 }
@@ -551,7 +570,16 @@ type LocalMeshAnnouncement struct {
 	SequenceNumber  uint32                 `protobuf:"varint,9,opt,name=sequence_number,json=sequenceNumber,proto3" json:"sequence_number,omitempty"`
 	// verified-at-snapshot: signature and certificate trust were accepted when
 	// the node captured this entry. No current/global trust assertion is made.
-	TrustState    string `protobuf:"bytes,10,opt,name=trust_state,json=trustState,proto3" json:"trust_state,omitempty"`
+	TrustState string `protobuf:"bytes,10,opt,name=trust_state,json=trustState,proto3" json:"trust_state,omitempty"`
+	// Public agent hints from the same verified announcement. The caller must
+	// authenticate the destination independently; these do not grant identity.
+	AgentPort      uint32   `protobuf:"varint,11,opt,name=agent_port,json=agentPort,proto3" json:"agent_port,omitempty"`
+	AgentTransport string   `protobuf:"bytes,12,opt,name=agent_transport,json=agentTransport,proto3" json:"agent_transport,omitempty"`
+	Platform       string   `protobuf:"bytes,13,opt,name=platform,proto3" json:"platform,omitempty"`
+	Caps           []string `protobuf:"bytes,14,rep,name=caps,proto3" json:"caps,omitempty"`
+	// Inherits this announcement's device identity, revision and expiry.
+	// Populated only on request and bounded across the response.
+	Services      []*LocalMeshService `protobuf:"bytes,15,rep,name=services,proto3" json:"services,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -656,6 +684,133 @@ func (x *LocalMeshAnnouncement) GetTrustState() string {
 	return ""
 }
 
+func (x *LocalMeshAnnouncement) GetAgentPort() uint32 {
+	if x != nil {
+		return x.AgentPort
+	}
+	return 0
+}
+
+func (x *LocalMeshAnnouncement) GetAgentTransport() string {
+	if x != nil {
+		return x.AgentTransport
+	}
+	return ""
+}
+
+func (x *LocalMeshAnnouncement) GetPlatform() string {
+	if x != nil {
+		return x.Platform
+	}
+	return ""
+}
+
+func (x *LocalMeshAnnouncement) GetCaps() []string {
+	if x != nil {
+		return x.Caps
+	}
+	return nil
+}
+
+func (x *LocalMeshAnnouncement) GetServices() []*LocalMeshService {
+	if x != nil {
+		return x.Services
+	}
+	return nil
+}
+
+type LocalMeshService struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Mesh          string                 `protobuf:"bytes,1,opt,name=mesh,proto3" json:"mesh,omitempty"`
+	AppId         string                 `protobuf:"bytes,2,opt,name=app_id,json=appId,proto3" json:"app_id,omitempty"`
+	ServiceId     string                 `protobuf:"bytes,3,opt,name=service_id,json=serviceId,proto3" json:"service_id,omitempty"`
+	Type          string                 `protobuf:"bytes,4,opt,name=type,proto3" json:"type,omitempty"`
+	Instance      string                 `protobuf:"bytes,5,opt,name=instance,proto3" json:"instance,omitempty"`
+	Port          uint32                 `protobuf:"varint,6,opt,name=port,proto3" json:"port,omitempty"`
+	Txt           []string               `protobuf:"bytes,7,rep,name=txt,proto3" json:"txt,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *LocalMeshService) Reset() {
+	*x = LocalMeshService{}
+	mi := &file_wendy_agent_services_v2_local_mesh_admin_service_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *LocalMeshService) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*LocalMeshService) ProtoMessage() {}
+
+func (x *LocalMeshService) ProtoReflect() protoreflect.Message {
+	mi := &file_wendy_agent_services_v2_local_mesh_admin_service_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use LocalMeshService.ProtoReflect.Descriptor instead.
+func (*LocalMeshService) Descriptor() ([]byte, []int) {
+	return file_wendy_agent_services_v2_local_mesh_admin_service_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *LocalMeshService) GetMesh() string {
+	if x != nil {
+		return x.Mesh
+	}
+	return ""
+}
+
+func (x *LocalMeshService) GetAppId() string {
+	if x != nil {
+		return x.AppId
+	}
+	return ""
+}
+
+func (x *LocalMeshService) GetServiceId() string {
+	if x != nil {
+		return x.ServiceId
+	}
+	return ""
+}
+
+func (x *LocalMeshService) GetType() string {
+	if x != nil {
+		return x.Type
+	}
+	return ""
+}
+
+func (x *LocalMeshService) GetInstance() string {
+	if x != nil {
+		return x.Instance
+	}
+	return ""
+}
+
+func (x *LocalMeshService) GetPort() uint32 {
+	if x != nil {
+		return x.Port
+	}
+	return 0
+}
+
+func (x *LocalMeshService) GetTxt() []string {
+	if x != nil {
+		return x.Txt
+	}
+	return nil
+}
+
 type LocalMeshConfiguration struct {
 	state              protoimpl.MessageState `protogen:"open.v1"`
 	Participate        bool                   `protobuf:"varint,1,opt,name=participate,proto3" json:"participate,omitempty"`
@@ -673,7 +828,7 @@ type LocalMeshConfiguration struct {
 
 func (x *LocalMeshConfiguration) Reset() {
 	*x = LocalMeshConfiguration{}
-	mi := &file_wendy_agent_services_v2_local_mesh_admin_service_proto_msgTypes[7]
+	mi := &file_wendy_agent_services_v2_local_mesh_admin_service_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -685,7 +840,7 @@ func (x *LocalMeshConfiguration) String() string {
 func (*LocalMeshConfiguration) ProtoMessage() {}
 
 func (x *LocalMeshConfiguration) ProtoReflect() protoreflect.Message {
-	mi := &file_wendy_agent_services_v2_local_mesh_admin_service_proto_msgTypes[7]
+	mi := &file_wendy_agent_services_v2_local_mesh_admin_service_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -698,7 +853,7 @@ func (x *LocalMeshConfiguration) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LocalMeshConfiguration.ProtoReflect.Descriptor instead.
 func (*LocalMeshConfiguration) Descriptor() ([]byte, []int) {
-	return file_wendy_agent_services_v2_local_mesh_admin_service_proto_rawDescGZIP(), []int{7}
+	return file_wendy_agent_services_v2_local_mesh_admin_service_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *LocalMeshConfiguration) GetParticipate() bool {
@@ -779,7 +934,7 @@ type LocalMeshStatus struct {
 
 func (x *LocalMeshStatus) Reset() {
 	*x = LocalMeshStatus{}
-	mi := &file_wendy_agent_services_v2_local_mesh_admin_service_proto_msgTypes[8]
+	mi := &file_wendy_agent_services_v2_local_mesh_admin_service_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -791,7 +946,7 @@ func (x *LocalMeshStatus) String() string {
 func (*LocalMeshStatus) ProtoMessage() {}
 
 func (x *LocalMeshStatus) ProtoReflect() protoreflect.Message {
-	mi := &file_wendy_agent_services_v2_local_mesh_admin_service_proto_msgTypes[8]
+	mi := &file_wendy_agent_services_v2_local_mesh_admin_service_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -804,7 +959,7 @@ func (x *LocalMeshStatus) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use LocalMeshStatus.ProtoReflect.Descriptor instead.
 func (*LocalMeshStatus) Descriptor() ([]byte, []int) {
-	return file_wendy_agent_services_v2_local_mesh_admin_service_proto_rawDescGZIP(), []int{8}
+	return file_wendy_agent_services_v2_local_mesh_admin_service_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *LocalMeshStatus) GetConfigured() *LocalMeshConfiguration {
@@ -869,8 +1024,9 @@ const file_wendy_agent_services_v2_local_mesh_admin_service_proto_rawDesc = "" +
 	"\x04_bleB\v\n" +
 	"\t_ethernetB\x16\n" +
 	"\x14_infrastructure_wifi\"\x1b\n" +
-	"\x19GetLocalMeshStatusRequest\"\x1d\n" +
-	"\x1bGetLocalMeshTopologyRequest\"\xc7\x04\n" +
+	"\x19GetLocalMeshStatusRequest\"H\n" +
+	"\x1bGetLocalMeshTopologyRequest\x12)\n" +
+	"\x10include_services\x18\x01 \x01(\bR\x0fincludeServices\"\xf4\x04\n" +
 	"\x11LocalMeshTopology\x12%\n" +
 	"\x0eself_principal\x18\x01 \x01(\tR\rselfPrincipal\x12$\n" +
 	"\x0eself_tenant_id\x18\x02 \x01(\tR\fselfTenantId\x12$\n" +
@@ -883,7 +1039,8 @@ const file_wendy_agent_services_v2_local_mesh_admin_service_proto_rawDesc = "" +
 	"\x06routes\x18\t \x03(\v2'.wendy.agent.services.v2.LocalMeshRouteR\x06routes\x12T\n" +
 	"\rannouncements\x18\n" +
 	" \x03(\v2..wendy.agent.services.v2.LocalMeshAnnouncementR\rannouncements\x12\x1c\n" +
-	"\ttruncated\x18\v \x01(\bR\ttruncated\"\xbc\x01\n" +
+	"\ttruncated\x18\v \x01(\bR\ttruncated\x12+\n" +
+	"\x11services_included\x18\f \x01(\bR\x10servicesIncluded\"\xbc\x01\n" +
 	"\x11LocalMeshPeerLink\x12\x17\n" +
 	"\alink_id\x18\x01 \x01(\x04R\x06linkId\x12\x1c\n" +
 	"\tprincipal\x18\x02 \x01(\tR\tprincipal\x12\x1b\n" +
@@ -904,7 +1061,7 @@ const file_wendy_agent_services_v2_local_mesh_admin_service_proto_rawDesc = "" +
 	"\x10origin_principal\x18\n" +
 	" \x01(\tR\x0foriginPrincipal\x12C\n" +
 	"\x1fsigned_route_expires_at_unix_ms\x18\v \x01(\x03R\x1asignedRouteExpiresAtUnixMs\x12+\n" +
-	"\x11origin_authorized\x18\f \x01(\bR\x10originAuthorized\"\xe6\x02\n" +
+	"\x11origin_authorized\x18\f \x01(\bR\x10originAuthorized\"\xa5\x04\n" +
 	"\x15LocalMeshAnnouncement\x12\x1c\n" +
 	"\tprincipal\x18\x01 \x01(\tR\tprincipal\x12\x1b\n" +
 	"\tdevice_id\x18\x02 \x01(\tR\bdeviceId\x12\x12\n" +
@@ -917,7 +1074,22 @@ const file_wendy_agent_services_v2_local_mesh_admin_service_proto_rawDesc = "" +
 	"\x0fsequence_number\x18\t \x01(\rR\x0esequenceNumber\x12\x1f\n" +
 	"\vtrust_state\x18\n" +
 	" \x01(\tR\n" +
-	"trustState\"\xb3\x02\n" +
+	"trustState\x12\x1d\n" +
+	"\n" +
+	"agent_port\x18\v \x01(\rR\tagentPort\x12'\n" +
+	"\x0fagent_transport\x18\f \x01(\tR\x0eagentTransport\x12\x1a\n" +
+	"\bplatform\x18\r \x01(\tR\bplatform\x12\x12\n" +
+	"\x04caps\x18\x0e \x03(\tR\x04caps\x12E\n" +
+	"\bservices\x18\x0f \x03(\v2).wendy.agent.services.v2.LocalMeshServiceR\bservices\"\xb2\x01\n" +
+	"\x10LocalMeshService\x12\x12\n" +
+	"\x04mesh\x18\x01 \x01(\tR\x04mesh\x12\x15\n" +
+	"\x06app_id\x18\x02 \x01(\tR\x05appId\x12\x1d\n" +
+	"\n" +
+	"service_id\x18\x03 \x01(\tR\tserviceId\x12\x12\n" +
+	"\x04type\x18\x04 \x01(\tR\x04type\x12\x1a\n" +
+	"\binstance\x18\x05 \x01(\tR\binstance\x12\x12\n" +
+	"\x04port\x18\x06 \x01(\rR\x04port\x12\x10\n" +
+	"\x03txt\x18\a \x03(\tR\x03txt\"\xb3\x02\n" +
 	"\x16LocalMeshConfiguration\x12 \n" +
 	"\vparticipate\x18\x01 \x01(\bR\vparticipate\x12\x12\n" +
 	"\x04roam\x18\x02 \x01(\bR\x04roam\x12!\n" +
@@ -955,7 +1127,7 @@ func file_wendy_agent_services_v2_local_mesh_admin_service_proto_rawDescGZIP() [
 	return file_wendy_agent_services_v2_local_mesh_admin_service_proto_rawDescData
 }
 
-var file_wendy_agent_services_v2_local_mesh_admin_service_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
+var file_wendy_agent_services_v2_local_mesh_admin_service_proto_msgTypes = make([]protoimpl.MessageInfo, 10)
 var file_wendy_agent_services_v2_local_mesh_admin_service_proto_goTypes = []any{
 	(*ConfigureLocalMeshRequest)(nil),   // 0: wendy.agent.services.v2.ConfigureLocalMeshRequest
 	(*GetLocalMeshStatusRequest)(nil),   // 1: wendy.agent.services.v2.GetLocalMeshStatusRequest
@@ -964,26 +1136,28 @@ var file_wendy_agent_services_v2_local_mesh_admin_service_proto_goTypes = []any{
 	(*LocalMeshPeerLink)(nil),           // 4: wendy.agent.services.v2.LocalMeshPeerLink
 	(*LocalMeshRoute)(nil),              // 5: wendy.agent.services.v2.LocalMeshRoute
 	(*LocalMeshAnnouncement)(nil),       // 6: wendy.agent.services.v2.LocalMeshAnnouncement
-	(*LocalMeshConfiguration)(nil),      // 7: wendy.agent.services.v2.LocalMeshConfiguration
-	(*LocalMeshStatus)(nil),             // 8: wendy.agent.services.v2.LocalMeshStatus
+	(*LocalMeshService)(nil),            // 7: wendy.agent.services.v2.LocalMeshService
+	(*LocalMeshConfiguration)(nil),      // 8: wendy.agent.services.v2.LocalMeshConfiguration
+	(*LocalMeshStatus)(nil),             // 9: wendy.agent.services.v2.LocalMeshStatus
 }
 var file_wendy_agent_services_v2_local_mesh_admin_service_proto_depIdxs = []int32{
-	8, // 0: wendy.agent.services.v2.LocalMeshTopology.status:type_name -> wendy.agent.services.v2.LocalMeshStatus
+	9, // 0: wendy.agent.services.v2.LocalMeshTopology.status:type_name -> wendy.agent.services.v2.LocalMeshStatus
 	4, // 1: wendy.agent.services.v2.LocalMeshTopology.peers:type_name -> wendy.agent.services.v2.LocalMeshPeerLink
 	5, // 2: wendy.agent.services.v2.LocalMeshTopology.routes:type_name -> wendy.agent.services.v2.LocalMeshRoute
 	6, // 3: wendy.agent.services.v2.LocalMeshTopology.announcements:type_name -> wendy.agent.services.v2.LocalMeshAnnouncement
-	7, // 4: wendy.agent.services.v2.LocalMeshStatus.configured:type_name -> wendy.agent.services.v2.LocalMeshConfiguration
-	0, // 5: wendy.agent.services.v2.WendyLocalMeshAdminService.ConfigureLocalMesh:input_type -> wendy.agent.services.v2.ConfigureLocalMeshRequest
-	1, // 6: wendy.agent.services.v2.WendyLocalMeshAdminService.GetLocalMeshStatus:input_type -> wendy.agent.services.v2.GetLocalMeshStatusRequest
-	2, // 7: wendy.agent.services.v2.WendyLocalMeshAdminService.GetLocalMeshTopology:input_type -> wendy.agent.services.v2.GetLocalMeshTopologyRequest
-	8, // 8: wendy.agent.services.v2.WendyLocalMeshAdminService.ConfigureLocalMesh:output_type -> wendy.agent.services.v2.LocalMeshStatus
-	8, // 9: wendy.agent.services.v2.WendyLocalMeshAdminService.GetLocalMeshStatus:output_type -> wendy.agent.services.v2.LocalMeshStatus
-	3, // 10: wendy.agent.services.v2.WendyLocalMeshAdminService.GetLocalMeshTopology:output_type -> wendy.agent.services.v2.LocalMeshTopology
-	8, // [8:11] is the sub-list for method output_type
-	5, // [5:8] is the sub-list for method input_type
-	5, // [5:5] is the sub-list for extension type_name
-	5, // [5:5] is the sub-list for extension extendee
-	0, // [0:5] is the sub-list for field type_name
+	7, // 4: wendy.agent.services.v2.LocalMeshAnnouncement.services:type_name -> wendy.agent.services.v2.LocalMeshService
+	8, // 5: wendy.agent.services.v2.LocalMeshStatus.configured:type_name -> wendy.agent.services.v2.LocalMeshConfiguration
+	0, // 6: wendy.agent.services.v2.WendyLocalMeshAdminService.ConfigureLocalMesh:input_type -> wendy.agent.services.v2.ConfigureLocalMeshRequest
+	1, // 7: wendy.agent.services.v2.WendyLocalMeshAdminService.GetLocalMeshStatus:input_type -> wendy.agent.services.v2.GetLocalMeshStatusRequest
+	2, // 8: wendy.agent.services.v2.WendyLocalMeshAdminService.GetLocalMeshTopology:input_type -> wendy.agent.services.v2.GetLocalMeshTopologyRequest
+	9, // 9: wendy.agent.services.v2.WendyLocalMeshAdminService.ConfigureLocalMesh:output_type -> wendy.agent.services.v2.LocalMeshStatus
+	9, // 10: wendy.agent.services.v2.WendyLocalMeshAdminService.GetLocalMeshStatus:output_type -> wendy.agent.services.v2.LocalMeshStatus
+	3, // 11: wendy.agent.services.v2.WendyLocalMeshAdminService.GetLocalMeshTopology:output_type -> wendy.agent.services.v2.LocalMeshTopology
+	9, // [9:12] is the sub-list for method output_type
+	6, // [6:9] is the sub-list for method input_type
+	6, // [6:6] is the sub-list for extension type_name
+	6, // [6:6] is the sub-list for extension extendee
+	0, // [0:6] is the sub-list for field type_name
 }
 
 func init() { file_wendy_agent_services_v2_local_mesh_admin_service_proto_init() }
@@ -998,7 +1172,7 @@ func file_wendy_agent_services_v2_local_mesh_admin_service_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_wendy_agent_services_v2_local_mesh_admin_service_proto_rawDesc), len(file_wendy_agent_services_v2_local_mesh_admin_service_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   9,
+			NumMessages:   10,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

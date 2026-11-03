@@ -480,6 +480,12 @@ func (e *Engine) advertise(id LinkID, p netip.Prefix, explicit bool) {
 		e.queue(id, wireMessage{Type: wire.Update, Prefix: p, Metric: Infinity, Interval: centis(e.cfg.UpdateInterval)})
 		return
 	}
+	if r.Local && e.cfg.AdvertiseLocalRoute != nil && !e.cfg.AdvertiseLocalRoute(r.RouterID, p, r.Seqno) {
+		// Retry from current selected state instead of retaining encoded packets
+		// that could carry a superseded local sequence. Other output stays live.
+		e.scheduleTrigger(true)
+		return
+	}
 	if !explicit && r.Link == id {
 		return
 	} // split horizon, but never suppress explicit replies

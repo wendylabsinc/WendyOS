@@ -1,4 +1,4 @@
-//go:build darwin || linux
+//go:build (darwin || linux) && !ios
 
 // Package adb drives NVIDIA's T264 initrd-flash ADB gadget over the gousb bulk
 // endpoints on macOS/Linux. Device discovery, interface claiming, and the USB
