@@ -126,6 +126,9 @@ type Node struct {
 	routeInput       routeInput
 	routeDiagnostics []routeTransition
 	timestampWorkers chan struct{}
+
+	capacityHoldRelease babel.LinkID  // Actor-owned: exact closing slot selected for actual new-peer demand.
+	capacityHoldUntil   time.Duration // Actor-owned: new-peer opportunity after actual capacity removal.
 }
 
 func NewNode(parent context.Context, dir string, credentials *Credentials, name string, agentPort uint16, appEndpoints ...[]AppEndpoint) (*Node, error) {
@@ -501,6 +504,23 @@ func (n *Node) handle(e nodeEvent) error {
 		if e.add.device == n.Credentials.Device {
 			return errors.New("self link")
 		}
+		newPeer := true
+		for _, p := range n.peers {
+			if p.device == e.add.device {
+				newPeer = false
+				break
+			}
+		}
+		if n.capacityHoldActive() {
+			// A normal retry must observe current liveness/proof state before
+			// classifying an incoming carrier as dispensable redundancy.
+			if err := n.step(babel.Tick{}); err != nil {
+				return err
+			}
+			if view := n.view.Load(); view != nil && view.HasCheaperLink(e.add.device, e.add.cost) {
+				return ErrCarrierCapacityRetry
+			}
+		}
 		if len(n.peers) >= 64 {
 			// Refresh elapsed liveness and the verified proof projection before
 			// deciding whether any existing incarnation is safely redundant.
@@ -533,6 +553,12 @@ func (n *Node) handle(e nodeEvent) error {
 		now := time.Now()
 		n.queue(e.add, e.add.sync.bootstrapOwn(n.Credentials.Device.Key(), now, cap(e.add.control)-len(e.add.control)))
 		n.reconcilePeer(e.add, now)
+		if newPeer {
+			// The slot actually admitted a distinct peer. Failed setup or an
+			// old standby's deferred retry must never consume this opportunity.
+			n.capacityHoldUntil = 0
+			n.capacityHoldRelease = 0
+		}
 		return nil
 	}
 	p := n.peers[e.id]
@@ -540,9 +566,7 @@ func (n *Node) handle(e nodeEvent) error {
 		return nil
 	}
 	if e.remove {
-		if n.capacityRetiring == e.id {
-			n.capacityRetiring = 0
-		}
+		capacityRelease := n.capacityHoldRelease == e.id
 		p.sync.Close()
 		if err := n.step(babel.RemoveLink{ID: e.id}); err != nil {
 			return err
@@ -550,6 +574,13 @@ func (n *Node) handle(e nodeEvent) error {
 		close(p.done)
 		delete(n.peers, e.id)
 		_ = n.kernel.RemovePeer(e.id)
+		if n.capacityRetiring == e.id {
+			n.capacityRetiring = 0
+		}
+		if capacityRelease {
+			n.capacityHoldRelease = 0
+			n.capacityHoldUntil = n.routingElapsed() + FailedConnectPenalty
+		}
 		n.refresh()
 		return nil
 	}
