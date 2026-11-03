@@ -34,10 +34,14 @@ def is_generated_path(path: str) -> bool:
                   ("WendyAgentGRPC", "WendyCloudGRPC", "OpenTelemetryGRPC"))
     if path.startswith(roots) and path.endswith((".pb.swift", ".grpc.swift")):
         return True
-    # Examples/WendyNotify/regenerate-grpc.sh uses PathToUnderscores.
+    # The example regenerate-grpc.sh scripts use PathToUnderscores.
     return path in {
         "Examples/WendyNotify/Sources/WendyNotify/Generated/wendy_system_v1_notifications.pb.swift",
         "Examples/WendyNotify/Sources/WendyNotify/Generated/wendy_system_v1_notifications.grpc.swift",
+        "Examples/ThermalNotify/Sources/ThermalNotify/Generated/wendy_system_v1_notifications.pb.swift",
+        "Examples/ThermalNotify/Sources/ThermalNotify/Generated/wendy_system_v1_notifications.grpc.swift",
+        "Examples/ThermalNotify/Sources/ThermalNotify/Generated/wendy_agent_services_v1_wendy_agent_v1_video_service.pb.swift",
+        "Examples/ThermalNotify/Sources/ThermalNotify/Generated/wendy_agent_services_v1_wendy_agent_v1_video_service.grpc.swift",
     }
 
 
