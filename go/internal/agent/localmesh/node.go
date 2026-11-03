@@ -995,7 +995,7 @@ func (n *Node) attachLink(ctx context.Context, peer meshid.Device, cost uint16, 
 	}
 	lease, _ := ctx.Value(connectionLeaseKey{}).(*ConnectionLease)
 	p := &nodePeer{device: peer, cost: cost, transport: carrierName(ctx, "unknown"), link: link, control: make(chan ControlMessage, 128), done: make(chan struct{}), retire: make(chan struct{}), capacityLease: lease}
-	if !ConnectionReady(ctx, peer, func() { _ = link.Close() }) {
+	if !connectionReadyForCarrier(ctx, peer, cost, func() { _ = link.Close() }) {
 		return nil
 	}
 	if err := n.request(ctx, nodeEvent{add: p}); err != nil {

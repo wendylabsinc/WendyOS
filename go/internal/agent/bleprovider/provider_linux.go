@@ -265,6 +265,7 @@ func (r *runtime) connectionPolicy() *localmesh.ConnectionPolicy {
 		if node, ok := r.cfg.Node.(interface{ Snapshot() localmesh.NodeSnapshot }); ok {
 			r.policy.SetSnapshot(node.Snapshot)
 		}
+		r.policy.SetCarrierCost(LinkCost)
 	}
 	return r.policy
 }
@@ -459,6 +460,11 @@ func (r *runtime) acceptLoop(ctx context.Context, listener *l2Listener) error {
 			}
 			return fmt.Errorf("BLE L2CAP accept: %w", err)
 		}
+		known := r.knownIncomingPeer(conn)
+		if known != (meshid.Device{}) && r.connectionPolicy().DeferRedundantCarrier(known, LinkCost) {
+			_ = conn.Close()
+			continue
+		}
 		select {
 		case sem <- struct{}{}:
 			r.updateAdvertisementAdmission()
@@ -472,7 +478,7 @@ func (r *runtime) acceptLoop(ctx context.Context, listener *l2Listener) error {
 			// The established incoming workers retain their tokens until normal
 			// completion. A safe owned incoming standby may yield, but this probe
 			// is still rejected and cannot allocate a fourth worker or neighbour.
-			r.connectionPolicy().ReclaimIncomingWorker()
+			r.connectionPolicy().ReclaimIncomingWorkerFor(known, LinkCost)
 			_ = conn.Close()
 		}
 	}
@@ -737,6 +743,23 @@ func (r *runtime) rememberInboundRadio(raw net.Conn, peer meshid.Device) {
 	if _, exists := r.known[key]; exists || len(r.known) < maxPeerRetryHistory {
 		r.known[key] = peer
 	}
+}
+
+// An authenticated radio cache is only a bounded scheduling hint. Actual TLS
+// identity still decides admission, including after the demand hold expires.
+func (r *runtime) knownIncomingPeer(raw net.Conn) meshid.Device {
+	radio, ok := raw.RemoteAddr().(l2addr)
+	if !ok {
+		return meshid.Device{}
+	}
+	kind := map[uint8]string{btAddrLEPublic: "public", btAddrLERandom: "random"}[radio.Type]
+	if _, address, err := parseAddress(radio.Address, kind, radio.PSM); err != nil || address == ([6]byte{}) {
+		return meshid.Device{}
+	}
+	key := (candidate{address: radio.Address, addressType: kind}).key()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.known[key]
 }
 
 func (r *runtime) scanLoop(ctx context.Context, bus *dbus.Conn, adapter dbus.ObjectPath) error {

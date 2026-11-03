@@ -101,6 +101,7 @@ func runConfiguredWithNode(parent context.Context, configDir string, id TCPIdent
 	go func() { nodeDone <- node.Run(); cancel() }()
 	policy := NewConnectionPolicy(credentials.Device, true, ConnectionLimits{LANMaxOutgoing, LANMaxOutgoingAttempts, LANMaxConnections})
 	policy.SetSnapshot(node.Snapshot)
+	policy.SetCarrierCost(256)
 	var tlsDone chan error
 	if tlsListener != nil {
 		tlsDone = make(chan error, 1)

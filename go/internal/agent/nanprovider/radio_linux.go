@@ -332,6 +332,7 @@ func runRadio(ctx context.Context, ident meshid.Device, connected chan<- radioPe
 	attempts := map[string]time.Time{}
 	active := map[string]*radioLink{}
 	policy := localmesh.NewConnectionPolicy(ident, true, localmesh.ConnectionLimits{Outgoing: localmesh.NANMaxOutgoing, Attempts: localmesh.NANMaxOutgoingAttempts, Total: localmesh.NANMaxConnections})
+	policy.SetCarrierCost(NANLinkCost)
 	if selection != nil {
 		policy.SetSnapshot(selection.Snapshot)
 	}

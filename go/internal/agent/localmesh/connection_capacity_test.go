@@ -2,6 +2,7 @@ package localmesh
 
 import (
 	"context"
+	"fmt"
 	"reflect"
 	"sync"
 	"sync/atomic"
@@ -50,6 +51,30 @@ func TestConnectionCapacityReclaimsOnlyOwnedSlowerRedundancy(t *testing.T) {
 		t.Fatal("new direct peer could not use the normally released slot")
 	}
 	replacement.Release()
+}
+
+func TestUnusedCarrierCanYieldToWorkingEqualOrHigherConfiguredCost(t *testing.T) {
+	for _, cost := range []uint16{128, 4096} {
+		t.Run(fmt.Sprint(cost), func(t *testing.T) {
+			peer, next := selectionDevice(10), selectionDevice(11)
+			view := NodeSnapshot{Links: []PeerLink{{ID: 1, Device: peer, Cost: 128, Transport: "quic"}, {ID: 2, Device: peer, Cost: cost, Transport: "ble", ForwardingReady: true}}, ForwardingRoutes: []babel.Route{{Link: 2, Metric: cost}}}
+			if view.HasCheaperLink(peer, 128) || !view.HasOtherForwardingLink(peer, 1) {
+				t.Fatal("fixture does not distinguish configured cost from actual forwarding")
+			}
+			p := NewConnectionPolicy(selectionDevice(1), true, ConnectionLimits{Outgoing: 1, Attempts: 1, Total: 1})
+			p.SetSnapshot(func() NodeSnapshot { return view })
+			old := p.ReserveGroup("old", peer, true, "128")
+			if old == nil || !old.Ready(peer, func() {}) {
+				t.Fatal("unused LAN ownership missing")
+			}
+			defer old.Release()
+			signals := 0
+			BindConnectionLink(WithConnectionLease(context.Background(), old), 1, 128, func() { signals++ })
+			if p.ReservePreferred("new-lan-peer", next, true, "128", true) != nil || signals != 1 || !old.Retired() || p.Counts().Total != 1 {
+				t.Fatal("unused configured-cheap LAN still vetoed a unique LAN peer despite actual alternate forwarding")
+			}
+		})
+	}
 }
 
 func TestConnectionCapacityDiscoveryDoesNotHideReclaimableIncomingSlot(t *testing.T) {
