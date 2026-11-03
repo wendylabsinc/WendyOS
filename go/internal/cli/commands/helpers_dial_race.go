@@ -156,6 +156,7 @@ func (w *mtlsWalk) mergeCandidateResults(completed []*mtlsWalk) {
 			w.primaryMTLSPortCertFails = candidate.primaryMTLSPortCertFails
 			w.primaryMTLSPortNonCertFails = candidate.primaryMTLSPortNonCertFails
 			w.primaryObservedOrg = candidate.primaryObservedOrg
+			w.primaryObservedTenant = candidate.primaryObservedTenant
 			w.primaryLastErr = candidate.primaryLastErr
 			w.primaryCertificateErr = candidate.primaryCertificateErr
 		}

@@ -2,6 +2,7 @@ package ros2camera
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"sort"
@@ -54,6 +55,8 @@ type cameraWriter interface {
 
 type Camera struct {
 	ID        uint32
+	StableID  string
+	Graph     string
 	Name      string
 	Topic     string
 	Type      string
@@ -455,7 +458,7 @@ func (m *Manager) registerEndpoint(p *participantState, endpoint rtps.Endpoint) 
 		if endpoint.Type == TypeGo2FrontVideo || endpoint.Type == "unitree_go/msg/Go2FrontVideoData" {
 			name = "Unitree Go2 front camera"
 		}
-		cam = &cameraState{Camera: Camera{ID: id, Name: name, Topic: topic, Type: endpoint.Type, DomainID: p.domainID, Interface: p.iface}, ready: make(chan struct{})}
+		cam = &cameraState{Camera: Camera{ID: id, StableID: "ros2:" + base64.RawURLEncoding.EncodeToString([]byte(key)), Graph: p.graphKey, Name: name, Topic: topic, Type: endpoint.Type, DomainID: p.domainID, Interface: p.iface}, ready: make(chan struct{})}
 		m.byKey[key], m.cameras[id] = cam, cam
 	}
 	if cam.active && cam.participant != p.participant && cam.endpoint.GUID == endpoint.GUID {

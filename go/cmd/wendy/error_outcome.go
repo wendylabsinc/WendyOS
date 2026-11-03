@@ -33,6 +33,7 @@ var errorOutcomes = map[string]errorOutcome{
 	"auth_required":           {exit: exitAuth},
 	"auth_session_ambiguous":  {exit: exitAuth},
 	"auth_certificate_failed": {exit: exitAuth},
+	"auth_login_expired":      {exit: exitAuth},
 	"device_auth_required":    {exit: exitAuth},
 	"registry_auth":           {exit: exitAuth},
 	"grpc_unauthenticated":    {exit: exitAuth},

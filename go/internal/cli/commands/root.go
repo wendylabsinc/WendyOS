@@ -162,6 +162,8 @@ func NewRootCmd() *cobra.Command {
 	projectCmd.GroupID = "manage"
 	deviceCmd := newDeviceCmd()
 	deviceCmd.GroupID = "manage"
+	netCmd := newNetCmd()
+	netCmd.GroupID = "manage"
 	dataCmd := newDataCmd()
 	dataCmd.GroupID = "manage"
 
@@ -308,6 +310,7 @@ func NewRootCmd() *cobra.Command {
 		// Manage
 		projectCmd,
 		deviceCmd,
+		netCmd,
 		newVMCmd(),
 		dataCmd,
 		newJobCmd(),

@@ -7,7 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-	"syscall"
+
+	"github.com/wendylabsinc/wendy/go/internal/shared/flock"
 )
 
 // Forwarding is shared by mesh routing and physical-LAN projections. Closing
@@ -34,10 +35,10 @@ func withForwardingStateLock(fn func() error) error {
 		return err
 	}
 	defer f.Close()
-	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX); err != nil {
+	if err := flock.Lock(f); err != nil {
 		return err
 	}
-	defer syscall.Flock(int(f.Fd()), syscall.LOCK_UN)
+	defer flock.Unlock(f)
 	return fn()
 }
 

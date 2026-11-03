@@ -212,11 +212,11 @@ func TestCloudRegistrationV2BeforeRosterSyncUsesSignedOperatorRequest(t *testing
 	setTempConfig(t, &config.Config{Auth: []config.AuthConfig{{CloudGRPC: srv.device.CloudHost, Certificates: []config.CertificateInfo{cert}}}})
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	if err := registerCloudApps(ctx, conn, []string{"app", "campaign:people", "app", "existing"}, false); err != nil {
+	if err := registerCloudApps(ctx, conn, []string{"app", "sh.wendy.campaign.people", "app", "existing"}, false); err != nil {
 		t.Fatal(err)
 	}
 	srv.mu.Lock()
-	if srv.mutations != 2 || legacy.calls != 0 || srv.apps["campaign:people"].Name != "people" || srv.apps["existing"].Name != "operator metadata" || !srv.apps["existing"].CanSendNotifications {
+	if srv.mutations != 2 || legacy.calls != 0 || srv.apps["sh.wendy.campaign.people"].Name != "people" || srv.apps["existing"].Name != "operator metadata" || !srv.apps["existing"].CanSendNotifications {
 		t.Fatal("wrong mutation count, fallback, campaign name, or existing app metadata/grant changed")
 	}
 	srv.appErr = status.Error(codes.PermissionDenied, "viewer")

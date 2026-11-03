@@ -66,6 +66,7 @@ type CalibratedFrameService struct {
 	agentpbv2.UnimplementedWendyCalibratedFrameServiceServer
 	logger   *zap.Logger
 	registry *framesource.Registry
+	metadata *CameraMetadataStore
 
 	// ctx is cancelled by Shutdown and every hub's context derives from it, so
 	// a SIGTERM ends each capture instead of waiting on subscribers that
