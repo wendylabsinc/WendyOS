@@ -685,7 +685,10 @@ func runOperator(ctx context.Context, dir string, spec Spec, idleTTL time.Durati
 	}
 	attachment.replace(initial)
 	finished := make(chan struct{})
-	go func() { defer close(finished); defer cancel(); _ = attachment.run(owner) }()
+	go func() {
+		defer close(finished)
+		runOperatorAttachment(owner, cancel, func() error { return attachment.run(owner) })
+	}()
 	defer func() { cancel(); <-finished }()
 	remotes := newOperatorTargets(initial.session, initial.upstream.Conn, selected, directory, spec)
 	remotes.currentAdjacent = attachment.adjacent
@@ -726,6 +729,7 @@ func watchOperatorRecipe(ctx context.Context, spec Spec, cancel context.CancelFu
 				return
 			case <-ticker.C:
 				if err := operatorRecipeCurrent(spec); err != nil {
+					noteOperatorExit(ctx, "intent_changed", err)
 					cancel()
 					return
 				}
