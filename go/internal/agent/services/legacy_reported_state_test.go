@@ -144,3 +144,132 @@ func TestLegacyReportCannotOverwriteANewerDesiredRelease(t *testing.T) {
 		t.Fatal("restart count lost")
 	}
 }
+
+type legacyPullContract struct {
+	cloudpb.UnimplementedDeploymentServiceServer
+	denied bool
+}
+
+func (s legacyPullContract) GetPullCredentials(ctx context.Context, req *cloudpb.GetPullCredentialsRequest) (*cloudpb.GetPullCredentialsResponse, error) {
+	md, _ := metadata.FromIncomingContext(ctx)
+	if req.GetAppReleaseId() != 2 || len(md.Get("test-method")) != 1 || md.Get("test-method")[0] != "/wendycloud.v1.DeploymentService/GetPullCredentials" {
+		return nil, fmt.Errorf("wrong pull request or proof")
+	}
+	if s.denied {
+		return nil, fmt.Errorf("device credentials refused")
+	}
+	return &cloudpb.GetPullCredentialsResponse{RegistryUrl: "registry.test", FullArtifactPath: "registry.test/org-64/app", AccessToken: "test-secret"}, nil
+}
+
+type legacyInstallRecorder struct {
+	app     string
+	release int32
+	digest  string
+	calls   int
+}
+
+func (i *legacyInstallRecorder) InstallLegacyRelease(_ context.Context, app string, release int32, digest string, credentials *cloudpb.GetPullCredentialsResponse) error {
+	if credentials.GetAccessToken() != "test-secret" {
+		return fmt.Errorf("lost registry credentials")
+	}
+	i.calls++
+	i.app, i.release, i.digest = app, release, digest
+	return nil
+}
+func TestLegacyAssignedReleaseInstallsBeforeStartAndKeepsOldAppOnRefusal(t *testing.T) {
+	for _, denied := range []bool{false, true} {
+		t.Run(fmt.Sprint(denied), func(t *testing.T) {
+			listener, err := net.Listen("tcp4", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			server := grpc.NewServer()
+			cloudpb.RegisterDeploymentServiceServer(server, legacyPullContract{denied: denied})
+			go func() { _ = server.Serve(listener) }()
+			defer server.Stop()
+			conn, err := grpc.NewClient(listener.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer conn.Close()
+			installer := &legacyInstallRecorder{}
+			control := &legacyControlRecorder{}
+			reporter := &LegacyReportedState{apps: legacyReportApps{{AppID: "app", ReleaseID: "1", Running: true}}, control: control, install: installer}
+			response := &cloudpb.DesiredStateResponse{DesiredAppStates: []*cloudpb.DesiredAppState{{AppId: "app", AppReleaseId: proto.Int32(2), DesiredState: cloudpb.Running_RUNNING, ImageDigest: proto.String("sha256:test")}}}
+			proof := func(method string) (metadata.MD, error) { return metadata.Pairs("test-method", method), nil }
+			err = reporter.apply(context.Background(), conn, proof, response)
+			if denied {
+				if err == nil || installer.calls != 0 || len(control.actions) != 0 {
+					t.Fatalf("refused pull touched old app: %v %d %v", err, installer.calls, control.actions)
+				}
+				return
+			}
+			if err != nil || installer.calls != 1 || installer.app != "app" || installer.release != 2 || installer.digest != "sha256:test" || !reflect.DeepEqual(control.actions, []string{"start:app"}) {
+				t.Fatalf("install/start: %v %+v %v", err, installer, control.actions)
+			}
+		})
+	}
+}
+
+type cancelledLegacyInstall struct{ started chan struct{} }
+
+func (i cancelledLegacyInstall) InstallLegacyRelease(ctx context.Context, _ string, _ int32, _ string, _ *cloudpb.GetPullCredentialsResponse) error {
+	close(i.started)
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+type closingLegacyReport struct {
+	legacyPullContract
+	started <-chan struct{}
+}
+
+func (s closingLegacyReport) HandleReportedState(stream cloudpb.DeploymentService_HandleReportedStateServer) error {
+	if _, err := stream.Recv(); err != nil {
+		return err
+	}
+	if err := stream.Send(&cloudpb.DesiredStateResponse{DesiredAppStates: []*cloudpb.DesiredAppState{{AppId: "app", AppReleaseId: proto.Int32(2), DesiredState: cloudpb.Running_RUNNING, ImageDigest: proto.String("sha256:test")}}}); err != nil {
+		return err
+	}
+	select {
+	case <-s.started:
+		return fmt.Errorf("report connection lost during pull")
+	case <-stream.Context().Done():
+		return stream.Context().Err()
+	}
+}
+func TestLegacyStreamFailureCancelsAnInFlightReleaseDownload(t *testing.T) {
+	started := make(chan struct{})
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := grpc.NewServer()
+	cloudpb.RegisterDeploymentServiceServer(server, closingLegacyReport{started: started})
+	go func() { _ = server.Serve(listener) }()
+	defer server.Stop()
+	conn, err := grpc.NewClient(listener.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	provisioning := &ProvisioningService{enrolled: true, cloudHost: "legacy:443", orgID: 64, assetID: 674, certPEM: "leaf", keyPEM: []byte("key")}
+	r := NewLegacyReportedState(zap.NewNop(), provisioning, legacyReportApps{{AppID: "app", ReleaseID: "1", Running: true}}, nil, cancelledLegacyInstall{started: started})
+	r.dial = func(CloudEnrollment, string, string, string) (grpc.ClientConnInterface, io.Closer, brokerRequestMetadata, error) {
+		return conn, conn, func(method string) (metadata.MD, error) { return metadata.Pairs("test-method", method), nil }, nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- r.session(ctx) }()
+	select {
+	case <-started:
+	case <-ctx.Done():
+		t.Fatal("release download never started")
+	}
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("dead reporting stream retained an active release download")
+	}
+}

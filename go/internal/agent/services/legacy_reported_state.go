@@ -117,6 +117,7 @@ func (r *LegacyReportedState) session(parent context.Context) error {
 			response, err := stream.Recv()
 			if err != nil {
 				recvErr <- err
+				cancel() // cancel an in-flight image pull or lifecycle operation too
 				return
 			}
 			select {
@@ -193,6 +194,9 @@ func (r *LegacyReportedState) apply(ctx context.Context, conn grpc.ClientConnInt
 			return ctx.Err()
 		}
 		id := desired.GetAppId()
+		if desired.AppReleaseId != nil && desired.GetAppReleaseId() <= 0 {
+			return fmt.Errorf("invalid legacy desired release ID")
+		}
 		if err := appconfig.ValidateAppID(id); err != nil {
 			return err
 		}
