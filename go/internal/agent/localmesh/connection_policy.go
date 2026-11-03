@@ -36,14 +36,16 @@ type ConnectionLimits struct {
 // setup, so simultaneous discovery and inbound accepts cannot oversubscribe it.
 // UUID ordering is used only to converge authenticated duplicate connections.
 type ConnectionPolicy struct {
-	mu          sync.Mutex
-	self        meshid.Device
-	preferLower bool
-	limits      ConnectionLimits
-	connections map[*ConnectionLease]struct{}
-	now         func() time.Time
-	snapshot    func() NodeSnapshot
-	reclaiming  bool
+	mu                  sync.Mutex
+	self                meshid.Device
+	preferLower         bool
+	limits              ConnectionLimits
+	connections         map[*ConnectionLease]struct{}
+	now                 func() time.Time
+	snapshot            func() NodeSnapshot
+	reclaiming          bool
+	carrierCost         uint16
+	incomingDemandUntil time.Time
 }
 
 func NewConnectionPolicy(self meshid.Device, preferLower bool, limits ConnectionLimits) *ConnectionPolicy {
@@ -65,6 +67,9 @@ type ConnectionLease struct {
 	retire                   func()
 	reclaimed                bool
 	capacityClosing          atomic.Bool // Signal-only publication from the Node actor.
+	incomingDemand           bool        // This owner's actual release starts the bounded opportunity.
+	demandAtSetup            bool        // A hold expiring during TLS cannot make an old backup win.
+	newPeer                  bool        // Verified presence before this actual Node admission.
 }
 
 // SetSnapshot supplies local authenticated routing evidence for capacity
@@ -137,6 +142,12 @@ func (p *ConnectionPolicy) discoveryAvailable(outgoing bool) bool {
 // then the caller rejects its current probe; no worker or neighbour slot is
 // borrowed before the old lifetime owner completes and releases capacity.
 func (p *ConnectionPolicy) ReclaimIncomingWorker() bool {
+	return p.ReclaimIncomingWorkerFor(meshid.Device{}, 0)
+}
+
+// ReclaimIncomingWorkerFor may use an authenticated radio cache only to bound
+// scheduling. A known redundant retry cannot refresh its own incoming hold.
+func (p *ConnectionPolicy) ReclaimIncomingWorkerFor(peer meshid.Device, cost uint16) bool {
 	p.mu.Lock()
 	snapshot := p.snapshot
 	p.mu.Unlock()
@@ -146,9 +157,22 @@ func (p *ConnectionPolicy) ReclaimIncomingWorker() bool {
 	view := snapshot()
 	p.mu.Lock()
 	var retire func()
-	if !p.reclamationPending() {
+	if cost == 0 {
+		cost = p.carrierCost
+	}
+	knownRedundancy := workingCarrierAtMost(view, peer, cost)
+	if knownRedundancy && p.incomingDemandActive() {
+		p.mu.Unlock()
+		return false
+	}
+	if p.reclamationPending() {
+		if !knownRedundancy {
+			p.notePendingIncomingDemand()
+		}
+	} else {
 		if victim := p.redundantLease(view, false, true); victim != nil {
 			victim.retired, victim.reclaimed, p.reclaiming = true, true, true
+			victim.incomingDemand = !knownRedundancy
 			retire = victim.retire
 		}
 	}
@@ -175,7 +199,7 @@ func (p *ConnectionPolicy) ReserveGroup(key string, peer meshid.Device, outgoing
 	return p.reserveGroup(key, peer, outgoing, group, false)
 }
 
-// ReservePreferred may release one slower redundant owned carrier when a
+// ReservePreferred may release one unused redundant owned carrier when a
 // runnable new direct peer needs this provider's capacity. The caller excludes
 // candidates in setup retry/failure backoff before permitting reclamation.
 // Closing never lends an extra slot: the connection's owner must Release first.
@@ -188,7 +212,7 @@ func (p *ConnectionPolicy) reserveGroup(key string, peer meshid.Device, outgoing
 	snapshot := p.snapshot
 	p.mu.Unlock()
 	var view NodeSnapshot
-	if reclaim && snapshot != nil {
+	if snapshot != nil {
 		view = snapshot()
 	}
 	p.mu.Lock()
@@ -199,7 +223,11 @@ func (p *ConnectionPolicy) reserveGroup(key string, peer meshid.Device, outgoing
 			retire()
 		}
 	}()
-	l := &ConnectionLease{policy: p, key: key, group: group, peer: peer, outgoing: outgoing, progress: p.now()}
+	cost := p.costForGroup(group)
+	if outgoing && p.incomingDemandActive() && workingCarrierAtMost(view, peer, cost) {
+		return nil
+	}
+	l := &ConnectionLease{policy: p, key: key, group: group, peer: peer, outgoing: outgoing, progress: p.now(), cost: cost, demandAtSetup: p.incomingDemandActive()}
 	for existing := range p.connections {
 		if existing.retired || existing.capacityClosing.Load() {
 			continue
@@ -222,8 +250,15 @@ func (p *ConnectionPolicy) reserveGroup(key string, peer meshid.Device, outgoing
 	}
 	c := p.counts()
 	if c.Total >= p.limits.Total || (outgoing && (c.Outgoing >= p.limits.Outgoing || c.Attempts >= p.limits.Attempts)) {
+		incomingDemand := !outgoing && !workingCarrierAtMost(view, peer, cost)
+		if incomingDemand && p.reclamationPending() {
+			p.notePendingIncomingDemand()
+		}
 		if reclaim && snapshot != nil && !p.reclamationPending() && (!outgoing || c.Attempts < p.limits.Attempts) {
 			retire = p.reclaim(view, peer, outgoing && c.Outgoing >= p.limits.Outgoing)
+			if incomingDemand && retire != nil {
+				p.notePendingIncomingDemand()
+			}
 		}
 		return nil
 	}
@@ -273,7 +308,7 @@ func (p *ConnectionPolicy) redundantLease(view NodeSnapshot, needOutgoing, needI
 			continue
 		}
 		for _, link := range view.Links {
-			if link.ID == l.link && link.Device == l.peer && link.Cost == l.cost && !link.Retiring && view.HasCheaperLink(l.peer, l.cost) {
+			if link.ID == l.link && link.Device == l.peer && link.Cost == l.cost && !link.Retiring && view.HasOtherForwardingLink(l.peer, l.link) {
 				if victim == nil || l.cost > victim.cost || (l.cost == victim.cost && l.link < victim.link) {
 					victim = l
 				}
@@ -290,6 +325,10 @@ func (l *ConnectionLease) Release() {
 	l.policy.mu.Lock()
 	if l.stopTracking != nil {
 		l.stopTracking()
+	}
+	if _, exists := l.policy.connections[l]; exists && l.incomingDemand {
+		l.policy.incomingDemandUntil = l.policy.now().Add(FailedConnectPenalty)
+		l.incomingDemand = false
 	}
 	delete(l.policy.connections, l)
 	if l.reclaimed {
@@ -392,17 +431,41 @@ func (l *ConnectionLease) ObserveReady(f func()) {
 // hello. Only the losing connection is closed; the peer's other sockets and
 // Bluetooth ACL are never disconnected. Capacity is released by its owner.
 func (l *ConnectionLease) Ready(peer meshid.Device, closeConnection func()) bool {
+	return l.readyWithCost(peer, 0, closeConnection)
+}
+
+func (l *ConnectionLease) readyWithCost(peer meshid.Device, cost uint16, closeConnection func()) bool {
 	if l == nil {
 		return true
 	}
 	p := l.policy
+	p.mu.Lock()
+	snapshot := p.snapshot
+	if cost == 0 {
+		cost = l.cost
+	}
+	if cost == 0 {
+		cost = p.carrierCost
+	}
+	p.mu.Unlock()
+	var view NodeSnapshot
+	if snapshot != nil {
+		view = snapshot()
+	}
 	p.mu.Lock()
 	if _, exists := p.connections[l]; !exists || l.retired || l.capacityClosing.Load() || peer == p.self || peer.Tenant() != p.self.Tenant() || (l.peer != (meshid.Device{}) && l.peer != peer) {
 		p.mu.Unlock()
 		closeConnection()
 		return false
 	}
+	if (l.demandAtSetup || p.incomingDemandActive()) && workingCarrierAtMost(view, peer, cost) {
+		l.retired = true
+		p.mu.Unlock()
+		closeConnection()
+		return false
+	}
 	l.peer, l.ready, l.close = peer, true, closeConnection
+	l.cost, l.newPeer = cost, !directPeerPresent(view, peer)
 	if l.stopTracking != nil {
 		l.stopTracking()
 	}
@@ -449,8 +512,12 @@ func BindConnectionLink(ctx context.Context, id babel.LinkID, cost uint16, retir
 	}
 	l.policy.mu.Lock()
 	defer l.policy.mu.Unlock()
-	if _, exists := l.policy.connections[l]; exists && l.ready && !l.retired {
+	if _, exists := l.policy.connections[l]; exists && l.ready && !l.retired && !l.capacityClosing.Load() {
 		l.link, l.cost, l.retire = id, cost, retire
+		if l.newPeer {
+			l.policy.clearIncomingDemand()
+			l.newPeer = false
+		}
 	}
 }
 
