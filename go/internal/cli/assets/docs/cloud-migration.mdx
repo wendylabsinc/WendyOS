@@ -61,7 +61,9 @@ retarget that device. Select the new target explicitly when validating v2.
 
 The saved device enrollment selects the protocol. A numeric v1 organization and
 asset binding starts the v1 broker, reporting stream, certificate refresh, and
-OTLP uploads. A direct PKI enrollment starts the v2 relay and signed postbox.
+OTLP uploads. When `WENDY_TELEMETRY_URL` is unset, v1 telemetry goes to the
+enrolled Cloud host; PKI telemetry needs an explicit collector. A direct PKI
+enrollment starts the v2 relay and signed postbox.
 Changing the active CLI context does not change that choice. A transitional v1
 certificate carrying an additional SPIFFE SAN remains a v1 enrollment.
 
@@ -79,7 +81,8 @@ pull credentials; an authorization failure leaves the existing app intact.
 Do not use a deployment filter until your v1 server actually enforces it.
 
 Legacy certificate renewal rotates the device key and retains its numeric
-identity. A CLI holding an old certificate-key pin can refuse the new key.
+identity using ECDSA P-256; PKI renewal uses ML-DSA-65. A CLI holding an old
+certificate-key pin can refuse the new key.
 Verify the renewal before using `wendy device unpin <identity>` to record the
 replacement on the next connection.
 
