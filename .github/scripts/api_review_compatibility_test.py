@@ -15,7 +15,7 @@ from unittest.mock import patch
 import api_review as review
 import api_review_comment as comments
 import api_review_context as context
-from api_review_test import metadata, diff, model_decision, REPO, HEAD_SHA, BASE_SHA
+from api_review_test import metadata, diff, decision, model_decision, REPO, HEAD_SHA, BASE_SHA
 
 # Sanitized source reductions of real regressions, not deployment assertions.
 CASES = [
@@ -83,6 +83,76 @@ class CompatibilityTests(unittest.TestCase):
     def test_no_source_context_is_explicit(self):
         prompt = json.loads(review.user_prompt(metadata(), diff().decode(), REPO))
         self.assertIn("unverified", prompt["source_context"]["limitation"])
+
+
+    def test_pin_migration_filters_the_three_real_generated_paths_before_review(self):
+        # WendyOS #2664, head 0c600acaeb4e: API comment 6601845488 cited
+        # generated code while security comment 6601845538 excluded 3 files.
+        # Only paths/prose were read as fixtures; these bodies are sentinels.
+        pin = "Proto/shared-grpc-api-contracts.sh"
+        generated = ["go/proto/gen/cloudpb/v2/notifications.pb.go",
+                     "go/proto/gen/agentpb/v2/file_sync_service.pb.go",
+                     "go/proto/gen/cloudpb/v2/organizations.pb.go"]
+        raw = diff(pin, 'SHARED_GRPC_API_CONTRACTS_REF="066e8012"',
+                   'SHARED_GRPC_API_CONTRACTS_REF="507da555d9a4851347734e916d30ee68c6c4bfa6"')
+        raw += b"".join(diff(path, "GENERATED_OLD", "GENERATED_NEW") for path in generated)
+        expected = decision(category="config", title="Shared source pin", impact="behavioral",
+            change="Generation selects the immutable shared schema pin.",
+            compatibility="Canonical upstream source is absent, so role selector semantics and receiver rollout are unverified. No sender change is evidenced. Consider inspecting the pinned canonical source before asserting cross-repository semantics.",
+            locations=[{"path": pin, "side": "head", "line": 5, "end_line": 5}])
+        def reviewed(meta, batches, repo, model, parsed):
+            supplied = "".join(batch.text for batch in batches)
+            self.assertIn("SHARED_GRPC_API_CONTRACTS_REF", supplied)
+            self.assertNotIn("GENERATED_", supplied)
+            self.assertFalse(any(path in supplied for path in generated))
+            self.assertEqual({path for path, _side in parsed["locations"]}, {pin})
+            return {"risk": "mid", "decisions": [expected]}
+        with tempfile.TemporaryDirectory() as root:
+            Path(root, "meta").write_text(json.dumps(metadata(changed_files=4, additions=4, deletions=4)))
+            Path(root, "diff").write_bytes(raw)
+            args = argparse.Namespace(metadata=f"{root}/meta", diff=f"{root}/diff", previous=None,
+                source_repository=None, repo=REPO, pr_number=42, expected_head_sha=HEAD_SHA,
+                expected_base_sha=BASE_SHA, output=f"{root}/result", model="offline")
+            with patch.object(review, "review_batches", side_effect=reviewed) as model:
+                self.assertEqual(review.command_review(args), 0)
+            model.assert_called_once()
+            result = json.loads(Path(root, "result").read_text())
+            self.assertEqual(sorted(item["path"] for item in result["source_coverage"]["excluded_generated_files"]), sorted(generated))
+            self.assertEqual(result["decisions"][0]["compatibility"], expected["compatibility"])
+            self.assertIn("unverified", result["context_coverage"]["limitation"])
+
+    def test_supplied_canonical_source_preserves_union_without_claiming_rollout(self):
+        # Source excerpts verified at service-protos 507da555, not generated code.
+        source = """// If roles and role_ids are both set, recipients are their deduplicated union.
+repeated OrganizationRole roles = 3 [deprecated = true];
+// Deploy supporting Cloud behavior before clients send role_ids.
+repeated string role_ids = 4;
+"""
+        package_source = 'option go_package = "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2;agentpbv2";'
+        pin = "Proto/shared-grpc-api-contracts.sh"
+        raw = diff(pin, "OLD_PIN=066e8012", "SHARED_GRPC_API_CONTRACTS_REF=507da555").decode()
+        meta = metadata(_source_context={"limitation": "Pinned source supplied; receiver deployment unverified.",
+            "files": [{"repository": "wendylabsinc/service-protos", "sha": "507da555d9a4851347734e916d30ee68c6c4bfa6",
+                       "path": "wendycloud/v2/notifications.proto", "source": source},
+                      {"repository": "wendylabsinc/service-protos", "sha": "507da555d9a4851347734e916d30ee68c6c4bfa6",
+                       "path": "wendy/agent/services/v2/file_sync_service.proto", "source": package_source}]})
+        prompt = json.loads(review.user_prompt(meta, raw, REPO))
+        self.assertEqual(prompt["source_context"]["files"][0]["source"], source)
+        explanations = [
+            ("Add role_ids", "additive", "Older readers ignore `role_ids`; canonical source requires supporting receivers before sending it. Rollout is unverified. Consider checking receiver capability before a later sender migration."),
+            ("Retain deprecated roles", "behavioral", "Field `roles` stays at `3`; source intends a deduplicated union with `role_ids`, not precedence or removal. Consider retaining an old-enum wire regression fixture."),
+            ("go_package metadata", "behavioral", "The source option changes Go package metadata, with no demonstrated wire or runtime sender change. Consider verifying the pinned generator output separately."),
+            ("Source pin", "behavioral", "The source selection is immutable; current main proves no release or receiver rollout and this migration changes no handwritten sender. Consider comparing selected source contracts across pins."),
+        ]
+        payload = {"risk": "mid", "decisions": [model_decision(title=title, impact=impact, compatibility=text)
+                    for title, impact, text in explanations]}
+        parsed = review.parse_diff(raw)
+        actual = review.validate_payload(review.resolve_evidence(payload, review.evidence_catalog(parsed)), parsed)
+        self.assertEqual(len(actual["decisions"]), 4)
+        self.assertNotIn("breaking", {item["impact"] for item in actual["decisions"]})
+        self.assertTrue(all(item["compatibility"].count("Consider") == 1 for item in actual["decisions"]))
+        with self.assertRaises(review.ReviewError):
+            review.resolve_evidence({"decisions": [{"locations": [{"path": "go/proto/gen/cloudpb/v2/notifications.pb.go", "side": "head", "line": 211, "end_line": 211}]}]}, review.evidence_catalog(parsed))
 
 
 class ContextTests(unittest.TestCase):
