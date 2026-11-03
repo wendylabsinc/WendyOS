@@ -18,7 +18,7 @@ import urllib.parse
 import urllib.request
 import zlib
 
-from api_review import illustrative_excerpt, prior_state_digest, validate_prior_state
+from api_review import ReviewError, illustrative_excerpt, prior_state_digest, validate_prior_state, validate_findings
 from review_diff import diff_lines
 
 COMMENT_MARKER = "<!-- ai-api-review:v1 -->"
@@ -96,6 +96,11 @@ def validate_result(result: dict, head_sha: str, base_sha: str) -> None:
             raise ValueError(f"API review result has invalid {field}")
     if result.get("risk") not in RISK_LABELS or not isinstance(result.get("decisions"), list):
         raise ValueError("API review result has invalid decisions or testing risk")
+    if "compatibility_findings" in result:
+        try:
+            validate_findings(result["compatibility_findings"])
+        except ReviewError as error:
+            raise ValueError(str(error)) from error
     matched_prior_ids: dict[str, bool] = {}
     for decision in result["decisions"]:
         if not isinstance(decision, dict) or set(decision) != {
@@ -453,9 +458,33 @@ def withdrawn_lines(withdrawn: list[dict]) -> list[str]:
     return [*lines, "", "</details>", ""]
 
 
+def findings_summary(result: dict) -> list[str]:
+    if "compatibility_findings" not in result:
+        status = "Not assessed by this legacy result."
+    elif not result["compatibility_findings"]:
+        status = "No concrete failure identified in the supplied evidence. This is not a compatibility guarantee."
+    else:
+        status = f"{len(result['compatibility_findings'])} concrete failure scenario(s); advisory, without acceptance checkboxes."
+    return ["## Compatibility findings", "", status, ""]
+
+
+def finding_lines(finding: dict, result: dict, repo: str) -> list[str]:
+    direction = {"old_caller_new_peer": "Older caller → newer peer", "new_caller_old_peer": "Newer caller → older peer"}
+    return [
+        f"### {inline(finding['consumer'])}: {inline(finding['action'])}", "",
+        f"**Direction:** {direction[finding['direction']]}", "",
+        f"**Condition:** {inline(finding['condition'])}", "",
+        f"**Failure:** {inline(finding['failure'])}", "",
+        inline(finding['consider']), "",
+        "**Code:** " + ", ".join(code_link(repo, result, location) for location in finding["locations"]), "",
+    ]
+
+
 def render_comment(result: dict, repo: str, previous: list[dict] | None = None, diff: str = "") -> str:
     current, withdrawn = reconcile_records(result, previous or [])
-    lines = review_intro(result, repo)
+    lines = review_intro(result, repo) + findings_summary(result)
+    for finding in result.get("compatibility_findings", []):
+        lines += finding_lines(finding, result, repo)
     if not result["decisions"]:
         lines += ["No durable API decisions changed. Comments, formatting, and documentation wording alone do not require acceptance.", ""]
     for category, title in CATEGORIES.items():
@@ -488,10 +517,10 @@ def part_index(body: str) -> int:
 
 
 def render_continuations(result: dict, repo: str, previous: list[dict] | None = None, diff: str = "") -> list[str]:
-    """Pack whole decision blocks; never truncate prose, evidence, or checkboxes."""
+    """Pack whole findings and decisions; never truncate evidence or state."""
     current_records, withdrawn = reconcile_records(result, previous or [])
     limit = MAX_COMMENT_BYTES - WARNING_RESERVE_BYTES
-    maximum_parts = max(1, len(current_records) + len(withdrawn))
+    maximum_parts = max(1, len(current_records) + len(withdrawn) + len(result.get("compatibility_findings", [])))
 
     def render(lines: list[str], index: int, total: int) -> str:
         return "\n".join([
@@ -506,6 +535,18 @@ def render_continuations(result: dict, repo: str, previous: list[dict] | None = 
     pages: list[list[str]] = []
     page_lines: list[str] = []
     current_category = None
+    for finding in result.get("compatibility_findings", []):
+        block = finding_lines(finding, result, repo)
+        heading = ["## Compatibility findings", "", "Advisory; no acceptance checkboxes.", ""]
+        candidate = page_lines + ([] if page_lines else heading) + block
+        if len(render(candidate, maximum_parts, maximum_parts).encode()) > limit:
+            if page_lines:
+                pages.append(page_lines)
+            page_lines = heading + block
+            if len(render(page_lines, maximum_parts, maximum_parts).encode()) > limit:
+                raise ValueError("An individual compatibility finding exceeds GitHub's comment limit; no findings were truncated")
+        else:
+            page_lines = candidate
     for category, title in CATEGORIES.items():
         records = sorted((item for item in current_records if item["decision"]["category"] == category),
                          key=lambda item: (item["decision"]["title"], item["id"]))
@@ -546,7 +587,7 @@ def render_continuations(result: dict, repo: str, previous: list[dict] | None = 
 
 
 def render_primary(result: dict, repo: str, pr_number: int, comment_ids: list[int]) -> str:
-    lines = review_intro(result, repo) + [
+    lines = review_intro(result, repo) + findings_summary(result) + [
         f"**Complete checklist:** {len(result['decisions'])} decisions across {len(comment_ids)} comments.", "",
         *[f"- [Checklist part {index} of {len(comment_ids)}](https://github.com/{repo}/pull/{pr_number}#issuecomment-{identifier})"
           for index, identifier in enumerate(comment_ids, start=1)],
@@ -570,7 +611,7 @@ def render_incomplete(result: dict, repo: str, previous: str = "") -> str:
         WARNING_START,
         "> [!WARNING]",
         f"> API review is incomplete for [{head[:12]}](https://github.com/{repo}/commit/{head}): {inline(result['error'][:400])}",
-        "> Any checklist below belongs to the previous successful review. Prior decisions, acceptance, and risk labels are preserved; no clean result was recorded.",
+        "> Any report/checklist below belongs to the previous successful review. Prior decisions, acceptance, and risk labels are preserved; no clean result was recorded.",
         WARNING_END,
     ])
     lines = previous.splitlines()
@@ -722,6 +763,13 @@ def publish(result: dict, repo: str, pr_number: int, head_sha: str, base_sha: st
         prior_records = authoritative_records(existing)
         if complete and prior_state_digest(model_prior_state(prior_records)) != result["prior_state_sha256"]:
             raise ValueError("API review state changed during reconciliation; prior acceptance was preserved")
+        if complete and "compatibility_findings" in result:
+            from review_sources import source_diff, parse_diff
+            try:
+                source, _ = source_diff(diff)
+                validate_findings(result["compatibility_findings"], parse_diff(source))
+            except ReviewError as error:
+                raise ValueError(str(error)) from error
         if complete:
             try:
                 body = render_comment(result, repo, prior_records, diff)
@@ -809,7 +857,7 @@ def publish(result: dict, repo: str, pr_number: int, head_sha: str, base_sha: st
         if level != result["risk"]:
             remove_label(label["name"])
     labels = [risk["name"]]
-    if result["decisions"]:
+    if result["decisions"] or result.get("compatibility_findings"):
         ensure_label(API_LABEL)
         labels.append(API_LABEL["name"])
     else:

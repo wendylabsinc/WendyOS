@@ -353,9 +353,9 @@ class ModelTests(unittest.TestCase):
         return result, create
 
     def test_mocked_model_receives_entire_diff_and_returns_json(self):
-        message = types.SimpleNamespace(stop_reason="end_turn", content=[types.SimpleNamespace(type="text", text='{"risk":"low","decisions":[]}')])
+        message = types.SimpleNamespace(stop_reason="end_turn", content=[types.SimpleNamespace(type="text", text='{"compatibility_findings": [], "risk":"low","decisions":[]}')])
         result, create = self.call_model(message)
-        self.assertEqual(result, {"risk": "low", "decisions": []})
+        self.assertEqual(result, {"compatibility_findings": [], "risk": "low", "decisions": []})
         self.assertEqual(json.loads(create.call_args.kwargs["messages"][0]["content"])["diff"], diff().decode())
         output_format = create.call_args.kwargs["output_config"]["format"]
         self.assertEqual(output_format["type"], "json_schema")
@@ -368,7 +368,7 @@ class ModelTests(unittest.TestCase):
         self.assertNotIn("tools", create.call_args.kwargs)
 
     def test_model_request_enforces_complete_evidence_objects(self):
-        message = types.SimpleNamespace(stop_reason="end_turn", content=[types.SimpleNamespace(type="text", text='{"risk":"low","decisions":[]}')])
+        message = types.SimpleNamespace(stop_reason="end_turn", content=[types.SimpleNamespace(type="text", text='{"compatibility_findings": [], "risk":"low","decisions":[]}')])
         _, create = self.call_model(message)
         output_format = create.call_args.kwargs["output_config"]["format"]
         self.assertEqual(output_format["type"], "json_schema")
@@ -381,7 +381,7 @@ class ModelTests(unittest.TestCase):
         self.assertEqual(locations["minItems"], 1)
         location = locations["items"]
         for object_schema, fields in (
-            (schema, {"risk", "decisions"}),
+            (schema, {"risk", "decisions", "compatibility_findings"}),
             (item, {"category", "title", "change", "compatibility", "impact", "locations"}),
             (location, {"evidence_id"}),
         ):
@@ -404,13 +404,13 @@ class ModelTests(unittest.TestCase):
                 self.assertEqual(set(property_schema["enum"]), values)
 
     def test_model_truncation_and_invalid_json_are_incomplete(self):
-        for reason, response in (("max_tokens", '{"risk":'), ("end_turn", "NO_FINDINGS")):
+        for reason, response in (("max_tokens", '{"compatibility_findings": [], "risk":'), ("end_turn", "NO_FINDINGS")):
             message = types.SimpleNamespace(stop_reason=reason, content=[types.SimpleNamespace(type="text", text=response)])
             with self.subTest(reason=reason), self.assertRaises(api_review.ReviewError):
                 self.call_model(message)
 
     def test_refusal_is_rejected_even_with_schema_valid_json(self):
-        message = types.SimpleNamespace(stop_reason="refusal", content=[types.SimpleNamespace(type="text", text='{"risk":"low","decisions":[]}')])
+        message = types.SimpleNamespace(stop_reason="refusal", content=[types.SimpleNamespace(type="text", text='{"compatibility_findings": [], "risk":"low","decisions":[]}')])
         with self.assertRaisesRegex(api_review.ReviewError, "did not complete"):
             self.call_model(message)
 
@@ -421,10 +421,10 @@ class ModelTests(unittest.TestCase):
 
     def test_invalid_location_schema_is_repaired_against_the_entire_same_batch(self):
         malformed = model_decision(locations=[{}])
-        original = {"risk": "high", "decisions": [malformed]}
-        corrected = {"risk": "high", "decisions": [model_decision()]}
+        original = {"compatibility_findings": [], "risk": "high", "decisions": [malformed]}
+        corrected = {"compatibility_findings": [], "risk": "high", "decisions": [model_decision()]}
         result, create = self.call_model(error=[self.message(original), self.message(corrected)])
-        self.assertEqual(result, {"risk": "high", "decisions": [decision()]})
+        self.assertEqual(result, {"compatibility_findings": [], "risk": "high", "decisions": [decision()]})
         self.assertEqual(create.call_count, 2)
         first, repair = [json.loads(call.kwargs["messages"][0]["content"]) for call in create.call_args_list]
         self.assertEqual({key: value for key, value in repair.items() if key != "response_repair"}, first)
@@ -437,17 +437,17 @@ class ModelTests(unittest.TestCase):
 
     def test_invalid_evidence_can_be_corrected_but_not_accepted_unchanged(self):
         malformed = model_decision(locations=[{"evidence_id": 999}])
-        original = {"risk": "high", "decisions": [malformed]}
-        corrected = {"risk": "high", "decisions": [model_decision()]}
+        original = {"compatibility_findings": [], "risk": "high", "decisions": [malformed]}
+        corrected = {"compatibility_findings": [], "risk": "high", "decisions": [model_decision()]}
         result, create = self.call_model(error=[self.message(original), self.message(corrected)])
-        self.assertEqual(result, {"risk": "high", "decisions": [decision()]})
+        self.assertEqual(result, {"compatibility_findings": [], "risk": "high", "decisions": [decision()]})
         prompt = json.loads(create.call_args.kwargs["messages"][0]["content"])
         self.assertIn("evidence", prompt["response_repair"]["validation_error"])
         self.assertIn("decisions[0].locations[0]", prompt["response_repair"]["validation_error"])
 
     def test_invalid_json_gets_one_complete_response_repair(self):
-        result, create = self.call_model(error=[self.message('```json\n{"risk":"low","decisions":[]}\n```'), self.message({"risk": "low", "decisions": []})])
-        self.assertEqual(result, {"risk": "low", "decisions": []})
+        result, create = self.call_model(error=[self.message('```json\n{"compatibility_findings": [], "risk":"low","decisions":[]}\n```'), self.message({"compatibility_findings": [], "risk": "low", "decisions": []})])
+        self.assertEqual(result, {"compatibility_findings": [], "risk": "low", "decisions": []})
         self.assertEqual(create.call_count, 2)
 
     def test_repair_remains_strict_and_is_bounded_to_one_attempt(self):
@@ -458,7 +458,7 @@ class ModelTests(unittest.TestCase):
             model_decision(accepted=True),
         ):
             with self.subTest(malformed=malformed):
-                message = self.message({"risk": "high", "decisions": [malformed]})
+                message = self.message({"compatibility_findings": [], "risk": "high", "decisions": [malformed]})
                 create = unittest.mock.Mock(return_value=message)
                 client = types.SimpleNamespace(messages=types.SimpleNamespace(create=create))
                 with patch.dict(sys.modules, {"anthropic": types.SimpleNamespace(Anthropic=lambda: client)}):
@@ -468,20 +468,20 @@ class ModelTests(unittest.TestCase):
 
     def test_repair_cannot_drop_decisions_change_valid_decisions_or_lower_risk(self):
         malformed = model_decision(title="Second decision", locations=[{}])
-        original = {"risk": "high", "decisions": [model_decision(), malformed]}
+        original = {"compatibility_findings": [], "risk": "high", "decisions": [model_decision(), malformed]}
         corrected_second = model_decision(title="Second decision")
         for corrected, expected in (
-            ({"risk": "high", "decisions": []}, "dropped"),
-            ({"risk": "high", "decisions": [model_decision()]}, "dropped"),
-            ({"risk": "low", "decisions": [model_decision(), corrected_second]}, "lowered"),
-            ({"risk": "high", "decisions": [model_decision(title="Unrelated replacement"), corrected_second]}, "already-valid"),
-            ({"risk": "high", "decisions": [model_decision(locations=[{"evidence_id": 1}]), corrected_second]}, "already-valid"),
+            ({"compatibility_findings": [], "risk": "high", "decisions": []}, "dropped"),
+            ({"compatibility_findings": [], "risk": "high", "decisions": [model_decision()]}, "dropped"),
+            ({"compatibility_findings": [], "risk": "low", "decisions": [model_decision(), corrected_second]}, "lowered"),
+            ({"compatibility_findings": [], "risk": "high", "decisions": [model_decision(title="Unrelated replacement"), corrected_second]}, "already-valid"),
+            ({"compatibility_findings": [], "risk": "high", "decisions": [model_decision(locations=[{"evidence_id": 1}]), corrected_second]}, "already-valid"),
         ):
             with self.subTest(expected=expected), self.assertRaisesRegex(api_review.ReviewError, expected):
                 self.call_model(error=[self.message(original), self.message(corrected)])
-        corrected = {"risk": "high", "decisions": [model_decision(), corrected_second]}
+        corrected = {"compatibility_findings": [], "risk": "high", "decisions": [model_decision(), corrected_second]}
         result, _ = self.call_model(error=[self.message(original), self.message(corrected)])
-        self.assertEqual(result, {"risk": "high", "decisions": [decision(), decision(title="Second decision")]})
+        self.assertEqual(result, {"compatibility_findings": [], "risk": "high", "decisions": [decision(), decision(title="Second decision")]})
 
     def test_repair_provider_failure_is_closed_and_redacts_secrets(self):
         with self.assertRaises(api_review.ReviewError) as caught:
@@ -490,7 +490,7 @@ class ModelTests(unittest.TestCase):
         self.assertNotIn("secret-sk-test-key", str(caught.exception))
 
     def test_truncated_response_does_not_enter_schema_repair(self):
-        create = unittest.mock.Mock(return_value=self.message('{"risk":', reason="max_tokens"))
+        create = unittest.mock.Mock(return_value=self.message('{"compatibility_findings": [], "risk":', reason="max_tokens"))
         client = types.SimpleNamespace(messages=types.SimpleNamespace(create=create))
         with patch.dict(sys.modules, {"anthropic": types.SimpleNamespace(Anthropic=lambda: client)}):
             with self.assertRaisesRegex(api_review.ReviewError, "did not complete"):
@@ -904,6 +904,106 @@ class CommandTests(unittest.TestCase):
                 self.assertEqual(result["status"], "incomplete")
                 self.assertNotIn("secret-key", result["error"])
                 self.assertEqual(result["decisions"], [])
+
+
+def finding(**overrides):
+    value = {
+        "direction": "old_caller_new_peer", "consumer": "Legacy export reader",
+        "action": "Decode `export()` as UTF-8 JSON", "condition": "Omit the optional codec selector",
+        "failure": "Previously returned plain JSON; now returns gzip bytes and UTF-8 decoding fails.",
+        "consider": "Consider preserving the plain default.",
+        "locations": decision()["locations"],
+    }
+    value.update(overrides)
+    return value
+
+
+class FindingTests(unittest.TestCase):
+    def setUp(self):
+        self.parsed = api_review.parse_diff(diff().decode())
+        self.evidence = api_review.evidence_catalog(self.parsed)
+
+    def test_legacy_schema_and_absent_assessment_are_preserved(self):
+        self.assertEqual(set(api_review.REVIEW_SCHEMA["properties"]), {"risk", "decisions"})
+        legacy = {"risk": "low", "decisions": []}
+        self.assertNotIn("compatibility_findings", api_review.validate_review_response(legacy, self.parsed))
+        with self.assertRaisesRegex(api_review.ReviewError, "must include"):
+            api_review.validate_review_response(legacy, self.parsed, require_findings=True)
+        new = dict(legacy, compatibility_findings=[])
+        self.assertEqual(api_review.validate_review_response(new, self.parsed, require_findings=True), new)
+        with self.assertRaises(api_review.ReviewError):
+            api_review.validate_payload(new, self.parsed)
+
+    def test_finding_schema_and_resolver_use_same_changed_evidence(self):
+        schema = api_review.model_schema(self.evidence)
+        locations = [schema["properties"][key]["items"]["properties"]["locations"]
+                     for key in ("decisions", "compatibility_findings")]
+        self.assertEqual(locations[0], locations[1])
+        raw = {"risk": "high", "decisions": [], "compatibility_findings": [finding(locations=[{"evidence_id": 2}])]}
+        actual = api_review.resolve_evidence(raw, self.evidence)
+        api_review.validate_review_response(actual, self.parsed, require_findings=True)
+        self.assertEqual(actual["compatibility_findings"][0]["locations"], decision()["locations"])
+        self.assertEqual(raw["compatibility_findings"][0]["locations"], [{"evidence_id": 2}])
+        for locations in ([{"evidence_id": 999}], [{"evidence_id": True}], [{"evidence_id": 2, "path": "x"}]):
+            with self.subTest(locations=locations), self.assertRaisesRegex(api_review.ReviewError, "compatibility_findings"):
+                api_review.resolve_evidence(dict(raw, compatibility_findings=[finding(locations=locations)]), self.evidence)
+
+    def test_bounded_exact_fields_and_changed_line_validation(self):
+        for invalid in (finding(direction="unknown"), finding(action=""), finding(consumer="x" * 201),
+                        finding(consider="Fix it"), finding(consider="Consider A. Consider B."),
+                        finding(accepted=True), finding(failure="a\nb"), finding(locations=[]),
+                        finding(locations=[dict(decision()["locations"][0], line=6, end_line=6)])):
+            with self.subTest(invalid=invalid), self.assertRaises(api_review.ReviewError):
+                api_review.validate_findings([invalid], self.parsed)
+        with self.assertRaises(api_review.ReviewError):
+            api_review.validate_findings([finding()] * 21, self.parsed)
+
+    def test_repair_cannot_drop_or_rewrite_valid_findings(self):
+        previous = {"risk": "high", "decisions": [], "compatibility_findings": [finding(), finding(action="Other", locations=[{}])]}
+        for findings, error in (([], "dropped"), ([finding()], "dropped"),
+                                ([finding(action="Replacement"), finding(action="Other")], "already-valid")):
+            with self.subTest(error=error), self.assertRaisesRegex(api_review.ReviewError, error):
+                api_review.validate_repair(previous, dict(previous, compatibility_findings=findings), self.parsed)
+        api_review.validate_repair(previous, dict(previous, compatibility_findings=[finding(), finding(action="Other")]), self.parsed)
+
+    def test_same_model_call_requires_findings_and_repairs_legacy_reply_once(self):
+        caller = ModelTests()
+        first = ModelTests.message({"risk": "low", "decisions": []})
+        complete = ModelTests.message({"risk": "low", "decisions": [], "compatibility_findings": []})
+        actual, create = caller.call_model(error=[first, complete])
+        self.assertEqual(actual["compatibility_findings"], [])
+        self.assertEqual(create.call_count, 2)  # Existing bounded shape repair, not a semantic pass.
+        prompt = json.loads(create.call_args.kwargs["messages"][0]["content"])
+        self.assertIn("must include compatibility_findings", prompt["response_repair"]["validation_error"])
+
+    def test_model_repair_resolves_findings_without_replacing_valid_scenario(self):
+        valid = finding(locations=[{"evidence_id": 2}])
+        original = {"risk": "high", "decisions": [model_decision(locations=[{}])], "compatibility_findings": [valid]}
+        repaired = dict(original, decisions=[model_decision()])
+        actual, create = ModelTests().call_model(error=[ModelTests.message(original), ModelTests.message(repaired)])
+        self.assertEqual(actual["compatibility_findings"], [finding()])
+        self.assertEqual(create.call_count, 2)
+        repaired["compatibility_findings"] = [finding(action="Replacement", locations=[{"evidence_id": 2}])]
+        with self.assertRaisesRegex(api_review.ReviewError, "already-valid compatibility finding"):
+            ModelTests().call_model(error=[ModelTests.message(original), ModelTests.message(repaired)])
+
+    def test_batches_combine_findings_preserve_absence_and_fail_on_partial_assessment_or_overflow(self):
+        batches = api_review.split_diff(diff().decode(), api_review.MAX_DIFF_BYTES)
+        new = {"risk": "high", "decisions": [], "compatibility_findings": [finding()]}
+        for payloads, expected in (([new, new], [finding()]),
+                                   ([dict(new, compatibility_findings=[])] * 2, [])):
+            with patch.object(api_review, "review_model", side_effect=payloads):
+                actual = api_review.review_batches(metadata(), batches * 2, REPO, "offline", self.parsed)
+            self.assertEqual(actual["compatibility_findings"], expected)
+        legacy = {"risk": "low", "decisions": []}
+        with patch.object(api_review, "review_model", return_value=legacy):
+            self.assertNotIn("compatibility_findings", api_review.review_batches(metadata(), batches, REPO, "offline", self.parsed))
+        with patch.object(api_review, "review_model", side_effect=[new, legacy]), self.assertRaisesRegex(api_review.ReviewError, "every review batch"):
+            api_review.review_batches(metadata(), batches * 2, REPO, "offline", self.parsed)
+        left = dict(new, compatibility_findings=[finding(action=str(i)) for i in range(20)])
+        right = dict(new, compatibility_findings=[finding(action="overflow")])
+        with patch.object(api_review, "review_model", side_effect=[left, right]), self.assertRaisesRegex(api_review.ReviewError, "at most 20"):
+            api_review.review_batches(metadata(), batches * 2, REPO, "offline", self.parsed)
 
 
 if __name__ == "__main__":

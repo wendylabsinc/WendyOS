@@ -36,7 +36,7 @@ class FullRunTests(unittest.TestCase):
 
     def run_flow(self, *, relationship="unchanged", failure=None, late_checkbox=False,
                  stale=False, changed_state=False, legacy=False, impact_change=False, dry_run=False,
-                 withdraw_prior=False, competing_claims=False):
+                 withdraw_prior=False, competing_claims=False, with_findings=False):
         previous = self.previous(legacy=legacy)
         source = MultipartGitHub([bot_comment(previous)])
         github = comments.DryRunGitHub(source) if dry_run else source
@@ -54,14 +54,23 @@ class FullRunTests(unittest.TestCase):
             from anthropic.lib._parse._transform import transform_schema
             schema = payload["output_config"]["format"]["schema"]
             self.assertEqual(schema, transform_schema(copy.deepcopy(schema)))
-            if len(requests) == 1:
-                response = {"risk": "mid", "decisions": [
+            if len(requests) == 1 or failure == "findings":
+                response = {"compatibility_findings": [], "risk": "mid", "decisions": [
                     model_decision(title=f"Contract {index}", impact="additive" if impact_change else "breaking")
                     for index in range(11)]}
+                if failure == "findings":
+                    from api_review_test import finding
+                    response["compatibility_findings"] = [finding(direction="invalid", locations=[{"evidence_id": 2}])]
+                    if len(requests) == 2:
+                        self.assertIn("response_repair", json.loads(payload["messages"][0]["content"]))
+                if with_findings:
+                    from api_review_test import finding
+                    response["compatibility_findings"] = [finding(locations=[{"evidence_id": 2}])]
             else:
                 prompt = json.loads(payload["messages"][0]["content"])
                 self.assertTrue(all("state" not in item for item in prompt["prior_decisions"]))
                 self.assertNotIn("accepted", json.dumps(prompt).lower())
+                self.assertNotIn("compatibility_findings", prompt)
                 if failure == "http":
                     return httpx.Response(400, json={"type": "error", "error": {
                         "type": "invalid_request_error", "message": "private-provider-response"}})
@@ -124,6 +133,9 @@ class FullRunTests(unittest.TestCase):
                 return
             published = comments.publish(output, REPO, 1911, HEAD_SHA, BASE_SHA, diff(), github)
             body = github.bodies[-1] if dry_run else github.posted_body()
+            if with_findings:
+                self.assertIn("Legacy export reader", body)
+                self.assertEqual(len(output["compatibility_findings"]), 1)
             if dry_run:
                 self.assertEqual(source.mutations(), [])
                 expected_accepted = 9 if competing_claims else 10 if withdraw_prior else 11
@@ -218,7 +230,7 @@ class FullRunTests(unittest.TestCase):
                             "relationship": "changed", "reason": "Combined contract changed."}]}
         fixed = copy.deepcopy(bad)
         fixed["matches"][0].update(relationship="ambiguous", reason="Multiple plausible predecessors.")
-        responses = [{"risk": "high", "decisions": [model_decision(title="Combined contract")]}, bad, fixed]
+        responses = [{"compatibility_findings": [], "risk": "high", "decisions": [model_decision(title="Combined contract")]}, bad, fixed]
         requests = []
 
         def transport(request):
@@ -265,6 +277,12 @@ class FullRunTests(unittest.TestCase):
         self.assertTrue(all(len(item["body"].encode()) <= comments.MAX_COMMENT_BYTES - comments.WARNING_RESERVE_BYTES
                             for item in github.comments))
         self.assertEqual(len(requests), 3)
+
+    def test_invalid_findings_after_one_sdk_repair_preserve_old_acceptance_and_risk(self):
+        self.run_flow(failure="findings")
+
+    def test_findings_preserve_acceptance_through_sdk_and_existing_reconciliation(self):
+        self.run_flow(with_findings=True, dry_run=True)
 
     def test_complete_run_preserves_eleven_accepted_decisions(self):
         self.run_flow()

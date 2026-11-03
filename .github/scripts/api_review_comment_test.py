@@ -690,5 +690,109 @@ class MultipartTests(unittest.TestCase):
         self.assertNotIn("- [ ]", bodies[0])
 
 
+class FindingReportTests(unittest.TestCase):
+    def data(self, count=1):
+        from api_review_test import finding
+        data = result()
+        data["compatibility_findings"] = [finding(action=f"Decode export {i}", locations=data["decisions"][0]["locations"]) for i in range(count)]
+        return data
+
+    def test_legacy_empty_and_explicit_findings_have_distinct_rendered_coverage(self):
+        legacy = review.render_comment(result(), REPO)
+        self.assertIn("Not assessed by this legacy result", legacy)
+        empty = review.render_comment(self.data(0), REPO)
+        self.assertIn("No concrete failure identified in the supplied evidence", empty)
+        data = self.data()
+        review.validate_result(data, HEAD, BASE)
+        body = review.render_comment(data, REPO)
+        self.assertLess(body.index("Legacy export reader"), body.index("## Network contracts"))
+        self.assertEqual(body.count("<!-- api-decision:v2:"), 1)
+        self.assertEqual(body.count("- [ ] Accept"), 1)
+        self.assertIn(f"/blob/{HEAD}/go/internal/shared/appconfig/appconfig.go#L10-L12", body)
+
+    def test_sidecar_does_not_change_identity_state_digest_or_reconciliation(self):
+        data = result()
+        previous = review.parse_comment_state([review.render_comment(data, REPO).replace("- [ ] Accept", "- [x] Accept")])
+        prior_digest = review.prior_state_digest(review.model_prior_state(previous))
+        data["decisions"][0].update(prior_ids=[previous[0]["id"]], relationship="unchanged")
+        baseline, _ = review.reconcile_records(data, previous)
+        for count in (0, 2):
+            data["compatibility_findings"] = self.data(count)["compatibility_findings"]
+            actual, _ = review.reconcile_records(data, previous)
+            self.assertEqual(actual, baseline)
+            parsed = review.parse_comment_state([review.render_comment(data, REPO, previous)])
+            self.assertEqual(review.prior_state_digest(review.model_prior_state(parsed)), prior_digest)
+            self.assertEqual(parsed[0]["state"], "accepted")
+
+    def test_malformed_findings_rejected_and_model_markdown_cannot_add_acceptance(self):
+        data = self.data()
+        data["compatibility_findings"][0]["consumer"] = "@someone <!-- api-decision:bad --> [accept](https://x)"
+        body = review.render_comment(data, REPO)
+        self.assertNotIn("@someone", body)
+        self.assertNotIn("<!-- api-decision:bad -->", body)
+        self.assertEqual(len(review.parse_comment_state([body])), 1)
+        data["compatibility_findings"][0]["accepted"] = True
+        with self.assertRaises(ValueError):
+            review.validate_result(data, HEAD, BASE)
+
+    def test_findings_share_existing_multipart_path_without_loss_or_state_changes(self):
+        data = self.data(20)
+        previous = review.parse_comment_state([review.render_comment(result(), REPO).replace("- [ ] Accept", "- [x] Accept")])
+        data["decisions"][0].update(prior_ids=[previous[0]["id"]], relationship="unchanged")
+        for item in data["compatibility_findings"]:
+            item["failure"] = "Observable failure before versus after. " * 20
+        with patch.object(review, "MAX_COMMENT_BYTES", 9500):
+            with self.assertRaises(ValueError):
+                review.render_comment(data, REPO)
+            pages = review.render_continuations(data, REPO, previous)
+            index = review.render_primary(data, REPO, 1911, list(range(100, 100 + len(pages))))
+        self.assertGreater(len(pages), 1)
+        self.assertIn("20 concrete failure scenario", index)
+        self.assertEqual(sum(page.count("**Failure:**") for page in pages), 20)
+        self.assertTrue(all(len(page.encode()) <= 5500 for page in pages))
+        state = review.parse_comment_state(pages)
+        self.assertEqual(len(state), 1)
+        self.assertEqual(state[0]["state"], "accepted")
+        self.assertEqual(state[0]["id"], previous[0]["id"])
+        for i in range(20):
+            self.assertEqual(sum(page.count(f"### Legacy export reader: Decode export {i}\n") for page in pages), 1)
+
+    def test_oversized_finding_fails_visible_and_preserves_prior_acceptance_and_risk(self):
+        previous = review.render_comment(result(), REPO).replace("- [ ] Accept", "- [x] Accept")
+        data = self.data()
+        data["prior_state_sha256"] = review.prior_state_digest(review.model_prior_state(review.parse_comment_state([previous])))
+        data["compatibility_findings"][0]["failure"] = "x" * 1000
+        github = FakeGitHub(comments=[bot_comment(previous)])
+        with patch.object(review, "MAX_COMMENT_BYTES", 5100):
+            self.assertFalse(review.publish(data, REPO, 1911, HEAD, BASE, REVIEW_DIFF, github))
+        self.assertIn("no findings were truncated", github.posted_body())
+        self.assertIn("- [x] Accept", github.posted_body())
+        self.assertFalse(any("requested_reviewers" in path or ("/labels" in path and ("risk" in path or "risk" in json.dumps(payload))) for _, path, payload in github.mutations()))
+
+    def test_findings_only_keep_attention_label_without_new_reviewer_request(self):
+        data = self.data()
+        data["decisions"] = []
+        github = FakeGitHub()
+        self.assertTrue(review.publish(data, REPO, 1911, HEAD, BASE, REVIEW_DIFF, github))
+        self.assertTrue(any(payload and review.API_LABEL["name"] in payload.get("labels", [])
+                            for _, _, payload in github.mutations()))
+        self.assertFalse(any("requested_reviewers" in path for _, path, _ in github.mutations()))
+
+    def test_generated_or_unchanged_finding_citation_fails_before_clean_result(self):
+        from api_review_test import diff
+        for path, line in ((result()["decisions"][0]["locations"][0]["path"], 1),
+                           ("go/proto/gen/example.pb.go", 5)):
+            with self.subTest(path=path):
+                data = self.data()
+                raw = REVIEW_DIFF + diff("go/proto/gen/example.pb.go")
+                data.update(diff_sha256=hashlib.sha256(raw).hexdigest(), diff_bytes=len(raw), changed_files=2)
+                data["compatibility_findings"][0]["locations"] = [{"path": path, "side": "head", "line": line, "end_line": line}]
+                github = FakeGitHub()
+                self.assertFalse(review.publish(data, REPO, 1911, HEAD, BASE, raw, github))
+                self.assertIn("outside the changed lines", github.posted_body())
+                self.assertFalse(any("/labels" in path and ("risk" in path or "risk" in json.dumps(payload))
+                                     for _, path, payload in github.mutations()))
+
+
 if __name__ == "__main__":
     unittest.main()

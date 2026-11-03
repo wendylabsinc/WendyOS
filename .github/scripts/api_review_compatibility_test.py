@@ -296,5 +296,95 @@ class ContextTests(unittest.TestCase):
             self.assertIn("incomplete", comments.render_incomplete(result, REPO).lower())
 
 
+class ExportCodecControls(unittest.TestCase):
+    """Authored executable controls + synthetic report wiring, not model recall."""
+    BASE = """import json
+
+def export(value):
+    return json.dumps(value, sort_keys=True).encode("utf-8")
+"""
+    ADDITIVE = """import gzip
+import json
+
+def _encoder():
+    return lambda value: json.dumps(value, sort_keys=True).encode("utf-8")
+
+def export(value, codec=None):
+    raw = _encoder()(value)
+    return gzip.compress(raw, mtime=0) if codec == "gzip" else raw
+
+CAPABILITIES = {"gzip"}
+"""
+    CALLERS = """def old_reader(peer, value):
+    return json.loads(peer.export(value).decode("utf-8"))
+
+def new_reader(peer, value):
+    if "gzip" in getattr(peer, "CAPABILITIES", set()):
+        return json.loads(gzip.decompress(peer.export(value, codec="gzip")).decode("utf-8"))
+    return old_reader(peer, value)
+"""
+
+    def check_variant(self, breaking):
+        import difflib
+        import hashlib
+        import types
+        from api_review_test import finding
+        head = self.ADDITIVE.replace("codec=None", 'codec="gzip"') if breaking else self.ADDITIVE
+        base_peer, head_peer = types.SimpleNamespace(), types.SimpleNamespace()
+        # Only these static test-authored strings execute; no PR input executes.
+        for peer, source in ((base_peer, self.BASE), (head_peer, head)):
+            namespace = {}
+            exec(source, namespace)
+            peer.__dict__.update(namespace)
+        caller = {}
+        exec("import gzip\nimport json\n" + self.CALLERS, caller)
+        value = {"hello": "export"}
+        self.assertEqual(caller["old_reader"](base_peer, value), value)
+        self.assertEqual(caller["new_reader"](base_peer, value), value)
+        self.assertEqual(caller["new_reader"](head_peer, value), value)
+        if breaking:
+            with self.assertRaises(UnicodeDecodeError):
+                caller["old_reader"](head_peer, value)
+        else:
+            self.assertEqual(caller["old_reader"](head_peer, value), value)
+            self.assertEqual(base_peer.export(value), head_peer.export(value))
+        raw = "diff --git a/export.py b/export.py\n" + "".join(difflib.unified_diff(
+            self.BASE.splitlines(keepends=True), head.splitlines(keepends=True), "a/export.py", "b/export.py"))
+        parsed = review.parse_diff(raw)
+        evidence = review.evidence_catalog(parsed)
+        evidence_id = next(index for index, loc in evidence.items()
+                           if loc["side"] == "head" and head.splitlines()[loc["line"] - 1].startswith("def export"))
+        meta = metadata(_source_context={"limitation": context.LIMITATION, "files": [
+            {"path": "export.py", "side": "base", "source": self.BASE},
+            {"path": "export.py", "side": "head", "source": head},
+            {"path": "reader.py", "side": "base", "also_at_base": True, "source": self.CALLERS}]})
+        prompt = json.loads(review.user_prompt(meta, raw, REPO))
+        self.assertIn(self.CALLERS, [item["source"] for item in prompt["source_context"]["files"]])
+        self.assertIn(head, [item["source"] for item in prompt["source_context"]["files"]])
+        # Hand-authored payloads exercise the new same-report sidecar only.
+        payload = {"risk": "high" if breaking else "low", "compatibility_findings": [finding(
+            locations=[{"evidence_id": evidence_id}])] if breaking else [], "decisions": [model_decision(
+            category="other", title="Optional export codec", impact="breaking" if breaking else "additive",
+            locations=[{"evidence_id": evidence_id}]) ]}
+        actual = review.validate_review_response(review.resolve_evidence(payload, evidence), parsed, require_findings=True)
+        actual["decisions"] = review.reconcile_decisions(actual["decisions"], {"version": 2, "decisions": []}, "offline")
+        rendered = comments.render_comment(dict(actual, status="complete", head_sha=HEAD_SHA, base_sha=BASE_SHA,
+            diff_base_sha=BASE_SHA, diff_sha256=hashlib.sha256(raw.encode()).hexdigest(),
+            changed_files=1, diff_bytes=len(raw.encode())), REPO)
+        self.assertEqual(len(actual["compatibility_findings"]), int(breaking))
+        self.assertNotIn("encoder factory", rendered)
+        self.assertEqual(rendered.count("- [ ] Accept"), 1)
+        if breaking:
+            self.assertIn("UTF-8 decoding fails", rendered)
+        else:
+            self.assertIn("No concrete failure identified in the supplied evidence", rendered)
+
+    def test_compatible_selector_negotiation_and_private_factory_keep_plain_default(self):
+        self.check_variant(False)
+
+    def test_changed_default_breaks_legacy_reader_and_nonempty_report_wiring(self):
+        self.check_variant(True)
+
+
 if __name__ == "__main__":
     unittest.main()
