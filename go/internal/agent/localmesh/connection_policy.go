@@ -46,6 +46,7 @@ type ConnectionPolicy struct {
 	reclaiming          bool
 	carrierCost         uint16
 	incomingDemandUntil time.Time
+	incomingDemandPeers map[meshid.Device]struct{} // Owned victim identities for this bounded receipt.
 }
 
 func NewConnectionPolicy(self meshid.Device, preferLower bool, limits ConnectionLimits) *ConnectionPolicy {
@@ -69,6 +70,7 @@ type ConnectionLease struct {
 	capacityClosing          atomic.Bool // Signal-only publication from the Node actor.
 	incomingDemand           bool        // This owner's actual release starts the bounded opportunity.
 	demandAtSetup            bool        // A hold expiring during TLS cannot make an old backup win.
+	lastIncomingWorker       bool        // Captured local setup token, separate from native lease quota.
 	newPeer                  bool        // Verified presence before this actual Node admission.
 }
 
@@ -160,8 +162,9 @@ func (p *ConnectionPolicy) ReclaimIncomingWorkerFor(peer meshid.Device, cost uin
 	if cost == 0 {
 		cost = p.carrierCost
 	}
-	knownRedundancy := workingCarrierAtMost(view, peer, cost)
-	if knownRedundancy && p.incomingDemandActive() {
+	activeDemand := p.incomingDemandActive()
+	knownRedundancy := workingCarrierPresent(view, peer)
+	if knownRedundancy && activeDemand {
 		p.mu.Unlock()
 		return false
 	}
@@ -173,6 +176,9 @@ func (p *ConnectionPolicy) ReclaimIncomingWorkerFor(peer meshid.Device, cost uin
 		if victim := p.redundantLease(view, false, true); victim != nil {
 			victim.retired, victim.reclaimed, p.reclaiming = true, true, true
 			victim.incomingDemand = !knownRedundancy
+			if victim.incomingDemand {
+				p.rememberIncomingDemandPeer(victim.peer)
+			}
 			retire = victim.retire
 		}
 	}
@@ -224,7 +230,7 @@ func (p *ConnectionPolicy) reserveGroup(key string, peer meshid.Device, outgoing
 		}
 	}()
 	cost := p.costForGroup(group)
-	if outgoing && p.incomingDemandActive() && workingCarrierAtMost(view, peer, cost) {
+	if outgoing && p.incomingDemandActive() && p.limits.Total-p.counts().Total <= 1 && workingCarrierPresent(view, peer) {
 		return nil
 	}
 	l := &ConnectionLease{policy: p, key: key, group: group, peer: peer, outgoing: outgoing, progress: p.now(), cost: cost, demandAtSetup: p.incomingDemandActive()}
@@ -250,7 +256,7 @@ func (p *ConnectionPolicy) reserveGroup(key string, peer meshid.Device, outgoing
 	}
 	c := p.counts()
 	if c.Total >= p.limits.Total || (outgoing && (c.Outgoing >= p.limits.Outgoing || c.Attempts >= p.limits.Attempts)) {
-		incomingDemand := !outgoing && !workingCarrierAtMost(view, peer, cost)
+		incomingDemand := !outgoing && !workingCarrierPresent(view, peer)
 		if incomingDemand && p.reclamationPending() {
 			p.notePendingIncomingDemand()
 		}
@@ -458,14 +464,14 @@ func (l *ConnectionLease) readyWithCost(peer meshid.Device, cost uint16, closeCo
 		closeConnection()
 		return false
 	}
-	if (l.demandAtSetup || p.incomingDemandActive()) && workingCarrierAtMost(view, peer, cost) {
+	if !l.ready && (l.demandAtSetup || p.incomingDemandActive()) && (p.counts().Total >= p.limits.Total || (!l.outgoing && l.lastIncomingWorker)) && workingCarrierPresent(view, peer) {
 		l.retired = true
 		p.mu.Unlock()
 		closeConnection()
 		return false
 	}
 	l.peer, l.ready, l.close = peer, true, closeConnection
-	l.cost, l.newPeer = cost, !directPeerPresent(view, peer)
+	l.cost, l.newPeer = cost, !directPeerPresent(view, peer) && !p.incomingDemandKnows(peer)
 	if l.stopTracking != nil {
 		l.stopTracking()
 	}
@@ -538,6 +544,7 @@ func markConnectionRetry(ctx context.Context) {
 // ConnectionReady is also usable by transport test nodes without kernel TUNs.
 func ConnectionReady(ctx context.Context, peer meshid.Device, closeConnection func()) bool {
 	l, _ := ctx.Value(connectionLeaseKey{}).(*ConnectionLease)
+	captureIncomingWorker(ctx, l)
 	return l.Ready(peer, closeConnection)
 }
 

@@ -102,13 +102,9 @@ func TestNodeCapacityHoldExpiresWithoutBeingRenewedByOldBackup(t *testing.T) {
 	}
 }
 
-func TestNodeCapacityHoldAllowsFasterAndRecoveryCarriers(t *testing.T) {
-	for _, recovery := range []bool{false, true} {
-		name := "faster-upgrade"
-		if recovery {
-			name = "last-working-path-recovery"
-		}
-		t.Run(name, func(t *testing.T) {
+func TestNodeCapacityHoldDefersAdditionalCarrierButAllowsRecovery(t *testing.T) {
+	for _, mode := range []string{"faster", "equal", "recovery"} {
+		t.Run(mode, func(t *testing.T) {
 			f, n, old := newNodeCapacityHoldFixture(t)
 			if err := n.handle(nodeEvent{add: nodeCapacityHoldCandidate(selectionDevice(999), 128)}); !errors.Is(err, ErrCarrierCapacityRetry) {
 				t.Fatal(err)
@@ -118,22 +114,24 @@ func TestNodeCapacityHoldAllowsFasterAndRecoveryCarriers(t *testing.T) {
 			}
 			deadline := n.capacityHoldUntil
 			cost := uint16(64)
-			if recovery {
-				// The remaining LAN incarnation is now terminally closing.
-				// Its old installed route cannot veto restoring useful BLE.
+			if mode == "equal" {
+				cost = 128
+			}
+			if mode == "recovery" {
 				n.peers[2].signalRetire()
 				n.refresh()
 				cost = 4096
 			}
 			add := nodeCapacityHoldCandidate(old.device, cost)
-			if err := n.handle(nodeEvent{add: add}); err != nil {
-				t.Fatal(err)
+			err := n.handle(nodeEvent{add: add})
+			if mode != "recovery" {
+				if !errors.Is(err, ErrCarrierCapacityRetry) || len(n.peers) != 63 || n.capacityHoldUntil != deadline {
+					t.Fatal("known additional carrier stole or renewed the held last global slot")
+				}
+				return
 			}
-			if add.id != 65 || len(n.peers) != 64 || n.capacityHoldUntil != deadline || f.elapsed >= deadline {
-				t.Fatal("hold blocked an upgrade/recovery or confused it with a new peer")
-			}
-			if !recovery && n.peers[2].retiring() {
-				t.Fatal("faster unprimed upgrade dropped the last working LAN")
+			if err != nil || len(n.peers) != 64 || n.capacityHoldUntil != deadline || f.elapsed >= deadline {
+				t.Fatal("last working-path recovery was blocked or erased external demand")
 			}
 		})
 	}
@@ -203,5 +201,108 @@ func TestNodeCapacityCanReclaimUnusedLowerRankedCarrier(t *testing.T) {
 	}
 	if !n.peers[2].retiring() || n.peers[1].retiring() || n.capacityRetiring != 2 || len(n.peers) != 64 {
 		t.Fatal("capacity confused configured rank with the actual working installed path")
+	}
+}
+
+func TestNodeHeldLastSlotDefersConfiguredCheapReturnUntilOpportunityEnds(t *testing.T) {
+	for _, ending := range []string{"expiry", "new-peer-admission"} {
+		t.Run(ending, func(t *testing.T) {
+			f := newCarrierStandbyFixture(t)
+			f.addCarrier(128, "infrastructure-wifi")
+			f.pump(0)
+			f.advance(6*time.Second, 0)
+			n := f.nodes[0]
+			if err := n.step(babel.SetCost{ID: 2, Cost: 8192}); err != nil {
+				t.Fatal(err)
+			}
+			if !n.Snapshot().HasInstalledRouteOnLink(1) || n.Snapshot().HasInstalledRouteOnLink(2) {
+				t.Fatal("real Babel did not select BLE over the configured-cheap LAN")
+			}
+			old := n.peers[2]
+			fillCarrierNodeCapacity(n)
+			if err := n.handle(nodeEvent{add: nodeCapacityHoldCandidate(selectionDevice(999), 128)}); !errors.Is(err, ErrCarrierCapacityRetry) {
+				t.Fatal(err)
+			}
+			if n.capacityRetiring != old.id {
+				t.Fatal("unused configured-cheap LAN was not reclaimed")
+			}
+			if err := n.handle(nodeEvent{id: old.id, remove: true}); err != nil {
+				t.Fatal(err)
+			}
+			deadline := n.capacityHoldUntil
+			retry := nodeCapacityHoldCandidate(old.device, 128)
+			if err := n.handle(nodeEvent{add: retry}); !errors.Is(err, ErrCarrierCapacityRetry) || len(n.peers) != 63 || n.capacityHoldUntil != deadline {
+				t.Fatal("configured-cheap return stole the held last global opportunity")
+			}
+			if ending == "expiry" {
+				f.advance(deadline, 0)
+			} else {
+				newPeer := nodeCapacityHoldCandidate(selectionDevice(999), 128)
+				if err := n.handle(nodeEvent{add: newPeer}); err != nil {
+					t.Fatal(err)
+				}
+				if n.capacityHoldUntil != 0 {
+					t.Fatal("new actual Node admission did not clear opportunity")
+				}
+				if err := n.handle(nodeEvent{id: newPeer.id, remove: true}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := n.handle(nodeEvent{add: retry}); err != nil {
+				t.Fatal(err)
+			}
+			if len(n.peers) != 64 || n.peers[1].retiring() || !n.Snapshot().HasInstalledRouteOnLink(1) {
+				t.Fatal("outside hold the upgrade was denied or dropped the working BLE")
+			}
+		})
+	}
+}
+
+func TestNodeHeldOpportunityAllowsOnlyUnreservedExtraCapacity(t *testing.T) {
+	f := newCarrierStandbyFixture(t)
+	f.addCarrier(128, "infrastructure-wifi")
+	f.pump(0)
+	f.advance(6*time.Second, 0)
+	n := f.nodes[0]
+	n.capacityHoldUntil = f.elapsed + FailedConnectPenalty
+	for id := babel.LinkID(3); len(n.peers) < 62; id++ {
+		n.peers[id] = &nodePeer{id: id, device: selectionDevice(100 + int(id)), cost: 128, retire: make(chan struct{}), link: &handoffActorLink{}}
+		n.nextLink = id
+	}
+	n.refresh()
+	extra := nodeCapacityHoldCandidate(n.peers[2].device, 64)
+	if err := n.handle(nodeEvent{add: extra}); err != nil || len(n.peers) != 63 {
+		t.Fatal("unreserved extra global slot was hidden")
+	}
+	if err := n.handle(nodeEvent{add: nodeCapacityHoldCandidate(extra.device, 128)}); !errors.Is(err, ErrCarrierCapacityRetry) || len(n.peers) != 63 {
+		t.Fatal("second addition consumed the reserved global opportunity")
+	}
+	if err := n.handle(nodeEvent{add: nodeCapacityHoldCandidate(selectionDevice(999), 128)}); err != nil || len(n.peers) != 64 || n.capacityHoldUntil != 0 {
+		t.Fatal("new distinct peer did not receive the held last opportunity")
+	}
+}
+
+func TestNodeSamePeerRecoveryDoesNotConsumeExternalDemandReceipt(t *testing.T) {
+	_, n, old := newNodeCapacityHoldFixture(t)
+	if err := n.handle(nodeEvent{add: nodeCapacityHoldCandidate(selectionDevice(999), 128)}); !errors.Is(err, ErrCarrierCapacityRetry) {
+		t.Fatal(err)
+	}
+	if err := n.handle(nodeEvent{id: old.id, remove: true}); err != nil {
+		t.Fatal(err)
+	}
+	deadline := n.capacityHoldUntil
+	if err := n.handle(nodeEvent{id: 2, remove: true}); err != nil {
+		t.Fatal(err)
+	}
+	// Both old Node incarnations are gone. A physical owner's blocked Close
+	// may still consume its independent provider lease (covered by the owned
+	// lifecycle fixture); absence from this map must not turn recovery into a
+	// new external peer and erase the global receipt.
+	recovery := nodeCapacityHoldCandidate(old.device, 4096)
+	if err := n.handle(nodeEvent{add: recovery}); err != nil {
+		t.Fatal(err)
+	}
+	if n.capacityHoldUntil != deadline {
+		t.Fatal("same-peer recovery erased the unserved external demand receipt")
 	}
 }

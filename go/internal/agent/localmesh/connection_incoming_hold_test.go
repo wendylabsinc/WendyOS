@@ -169,9 +169,16 @@ func TestIncomingDemandRequiresNewActualBindToClear(t *testing.T) {
 				// Its normal intentional completion must not consume the hold.
 				markConnectionRetry(WithConnectionLease(context.Background(), setup))
 				setup.Release()
-				if f.oldOutgoing() != nil {
-					t.Fatal("deferred verified setup cleared demand without admission")
+				// Two slots are now free. One is genuinely spare, while the
+				// other must remain protected by the unserved receipt.
+				extra := f.oldOutgoing()
+				if extra == nil {
+					t.Fatal("unreserved extra slot was hidden after setup deferral")
 				}
+				if !f.p.DeferRedundantCarrier(f.peer, 4096) {
+					t.Fatal("deferred verified setup cleared the last held opportunity without admission")
+				}
+				extra.Release()
 			}
 		})
 	}
@@ -196,24 +203,20 @@ func TestNewBindClearsPendingDemandBeforeOldCloserReleases(t *testing.T) {
 	backup.Release()
 }
 
-func TestIncomingDemandAllowsFasterCarrierAndLastPathRecovery(t *testing.T) {
-	for _, mode := range []string{"faster", "alternate-lost"} {
-		t.Run(mode, func(t *testing.T) {
-			f := newIncomingHoldFixture(t, 1)
-			f.demand(t)
-			f.releaseOld()
-			group := "64"
-			if mode == "alternate-lost" {
-				group = "4096"
-				f.view.Links[0].ForwardingReady = false
-			}
-			candidate := f.p.ReserveGroup("usable-path", f.peer, true, group)
-			if candidate == nil || !candidate.Ready(f.peer, func() {}) {
-				t.Fatal("fairness hold blocked a faster carrier or recovery of the last working path")
-			}
-			candidate.Release()
-		})
+func TestIncomingDemandDefersAdditionalCarrierButAllowsLastPathRecovery(t *testing.T) {
+	f := newIncomingHoldFixture(t, 1)
+	f.demand(t)
+	f.releaseOld()
+	if fast := f.p.ReserveGroup("faster-additional-path", f.peer, true, "64"); fast != nil {
+		fast.Release()
+		t.Fatal("a faster extra carrier stole the held last opportunity")
 	}
+	f.view.Links[0].ForwardingReady = false
+	recovery := f.p.ReserveGroup("last-path-recovery", f.peer, true, "4096")
+	if recovery == nil || !recovery.Ready(f.peer, func() {}) {
+		t.Fatal("fairness blocked recovery when no working direct carrier remained")
+	}
+	recovery.Release()
 }
 
 func TestFreshUnknownDemandGetsOnlyANewActualReleaseInterval(t *testing.T) {
