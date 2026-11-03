@@ -1,7 +1,6 @@
 package localmesh
 
 import (
-	"context"
 	"net/netip"
 	"testing"
 	"time"
@@ -27,10 +26,7 @@ func newCarrierStandbyFixture(t *testing.T) *carrierStandbyFixture {
 	a, b := testCredentials(t)
 	for i, credentials := range []*Credentials{a, b} {
 		f.networks[i] = &handoffActorNetwork{}
-		n, err := NewNodeWithNetwork(context.Background(), t.TempDir(), credentials, "carrier-standby-actor", 50052, f.networks[i])
-		if err != nil {
-			t.Fatal(err)
-		}
+		n := newActorTestNode(t, credentials, f.networks[i])
 		f.nodes[i] = n
 		f.links[i] = make(map[babel.LinkID]*handoffActorLink)
 		n.routingClock = func() time.Duration { return f.elapsed }
