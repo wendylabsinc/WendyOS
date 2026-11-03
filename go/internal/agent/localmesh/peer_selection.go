@@ -1,7 +1,6 @@
 package localmesh
 
 import (
-	"fmt"
 	"sync"
 	"time"
 
@@ -136,11 +135,6 @@ func (p *PeerSelection) AllowLAN(asset meshid.Device, cost uint16) bool {
 	if asset == (meshid.Device{}) || cost == 0 || cost > MaxLANCost {
 		return false
 	}
-	for _, link := range p.snapshot().Links {
-		if link.Device == asset && link.Cost < cost && link.ForwardingReady {
-			return false
-		}
-	}
 	return true
 }
 
@@ -163,44 +157,17 @@ func (p *PeerSelection) AllowRadioReason(asset meshid.Device, medium RadioMedium
 	if asset == (meshid.Device{}) || (medium != RadioNAN && medium != RadioBLE) {
 		return false, "invalid-asset-or-medium"
 	}
-	s := p.snapshot()
-	connected := make(map[meshid.Device]bool, len(s.Links))
-	otherRadio := false
-	for _, link := range s.Links {
-		connected[link.Device] = true
-		if !link.ForwardingReady {
-			continue
-		}
-		if link.Device == asset && link.Cost <= MaxLANCost {
-			return false, fmt.Sprintf("lan-supersedes(cost=%d)", link.Cost)
-		}
-		if link.Device == asset && ((medium == RadioNAN && link.Cost > 512) || (medium == RadioBLE && link.Cost == 512)) {
-			otherRadio = true
-		}
+	// Providers preserve useful cross-medium standbys while they have spare
+	// capacity. Their owned connection policy reclaims only a slower redundant
+	// incarnation when a runnable new direct peer needs that same budget.
+	return true, "standby-capacity-managed"
+}
+
+// Snapshot returns the immutable authenticated state used by provider-local
+// schedulers. Discovery hints remain separate from this routing evidence.
+func (p *PeerSelection) Snapshot() NodeSnapshot {
+	if p == nil || p.snapshot == nil {
+		return NodeSnapshot{}
 	}
-	if !otherRadio {
-		return true, "first-radio"
-	}
-	// Prefer NAN over BLE for the same principal. Both providers recheck this
-	// policy periodically: vetoing both duplicates would tear down every path
-	// to a retained neighbor. BLE is shed only after NAN is authenticated.
-	if medium == RadioNAN {
-		return true, "preferred-radio"
-	}
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	now := p.now()
-	for key, hint := range p.seen {
-		if now.Sub(hint.seen) > 60*time.Second && !now.Before(hint.failedUntil) {
-			delete(p.seen, key)
-			continue
-		}
-		// Only a candidate for this transport can use the slot we free.
-		// In particular, unverified NAN presence must not displace a BLE
-		// fallback: the transports have independent connection budgets.
-		if key.medium == medium && key.asset != asset && !connected[key.asset] && !now.Before(hint.failedUntil) {
-			return false, fmt.Sprintf("second-radio-fresh-candidate(principal=%s)", key.asset.Principal())
-		}
-	}
-	return true, "second-radio-failover-kept"
+	return p.snapshot()
 }

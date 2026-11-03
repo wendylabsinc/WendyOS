@@ -26,9 +26,25 @@ func (n *Node) retireExpiredBabelPeers(snapshot babel.Snapshot) {
 			continue
 		}
 		p.babelRetiring = true
-		close(p.retire)
+		p.signalRetire()
 		asyncdiag.Print(fmt.Sprintf("wendy net local carrier retirement peer=%q link=%d transport=%q reason=%q",
 			p.device.Principal(), p.id, diagnosticText(p.transport, 32), "babel-liveness-expired"))
+	}
+}
+
+func (p *nodePeer) signalRetire() {
+	p.retireOnce.Do(func() { close(p.retire) })
+}
+
+func (p *nodePeer) retiring() bool {
+	if p.babelRetiring {
+		return true
+	}
+	select {
+	case <-p.retire:
+		return true
+	default:
+		return false
 	}
 }
 
