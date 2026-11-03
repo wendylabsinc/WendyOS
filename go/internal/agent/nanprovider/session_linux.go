@@ -61,6 +61,11 @@ func (p Provider) Run(parent context.Context) error {
 	if p.Credentials == nil || p.Node == nil {
 		return errors.New("NAN provider needs credentials and a wendy net node")
 	}
+	if p.Selection == nil {
+		if node, ok := p.Node.(interface{ Snapshot() localmesh.NodeSnapshot }); ok {
+			p.Selection = localmesh.NewPeerSelection(node.Snapshot)
+		}
+	}
 	id := p.Credentials.Device
 	logger := p.Logger
 	if logger == nil {

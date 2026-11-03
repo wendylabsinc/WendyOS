@@ -7,9 +7,9 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
 )
 
-// Only automatically discovered Ethernet and infrastructure Wi-Fi links
-// suppress radio discovery. Configured TCP peers have cost 256, and may need
-// NAN or BLE as a second path when that TCP link fails.
+// Automatically discovered Ethernet and infrastructure Wi-Fi use this cost
+// range. Configured TCP peers have cost 256. Different media may coexist as
+// warm standbys within their independent provider budgets.
 const MaxLANCost uint16 = 128
 
 type RadioMedium uint8
@@ -29,10 +29,9 @@ type radioCandidateKey struct {
 	medium RadioMedium
 }
 
-// PeerSelection shares one diversity decision across the NAN and BLE
-// providers. Discovery is only a hint; the snapshot contains only peers that
-// passed device mTLS. Candidate hints expire quickly so stale advertisements
-// cannot suppress a useful fallback indefinitely.
+// PeerSelection shares authenticated presence and carrier eligibility across
+// providers. Their owned connection policies independently enforce capacity and
+// reclaim safe redundancy. Discovery remains a bounded scheduling hint.
 type PeerSelection struct {
 	snapshot func() NodeSnapshot
 	mu       sync.Mutex
@@ -97,10 +96,9 @@ func (p *PeerSelection) Seen(asset meshid.Device, medium RadioMedium) {
 	p.rememberCandidate(asset, medium, func(hint *radioCandidate, now time.Time) { hint.seen = now })
 }
 
-// Failed marks a discovery hint temporarily unavailable after a failed radio
-// setup. Repeated advertisements do not reset this cooldown. The carrier may
-// still retry it; the cooldown only stops a dead candidate from suppressing a
-// useful second radio path to an already authenticated peer.
+// Failed retains bounded retry metadata for a discovery hint. Repeated
+// advertisements do not reset its cooldown. Providers independently apply their
+// existing queue and retry bounds before requesting owned capacity reclamation.
 func (p *PeerSelection) Failed(asset meshid.Device, medium RadioMedium) {
 	p.rememberCandidate(asset, medium, func(hint *radioCandidate, now time.Time) { hint.failedUntil = now.Add(30 * time.Second) })
 }
@@ -124,10 +122,9 @@ func (p *PeerSelection) HasLAN(asset meshid.Device) bool {
 	return false
 }
 
-// AllowLAN admits eligible LAN candidates, preferring a cheaper carrier
-// only for the same principal. Ranking unrelated peers at both ends can form
-// a closed clique that permanently excludes another reachable device.
-// The LAN carrier separately bounds concurrent connections and handshakes.
+// AllowLAN admits eligible discovered LAN candidates. The provider queue ranks
+// new direct peers before upgrades and redundancy, and its owned policy bounds
+// concurrent connections and handshakes.
 func (p *PeerSelection) AllowLAN(asset meshid.Device, cost uint16) bool {
 	if p == nil || p.snapshot == nil {
 		return true
@@ -138,9 +135,9 @@ func (p *PeerSelection) AllowLAN(asset meshid.Device, cost uint16) bool {
 	return true
 }
 
-// AllowRadio preserves preferences between carriers reaching the same peer.
+// AllowRadio admits valid media without eagerly pruning a useful standby.
 // Each provider independently limits outgoing attempts, outgoing connections
-// and total connections. Other carriers do not consume that provider's budget.
+// and total connections, reclaiming only its own safe redundant incarnations.
 func (p *PeerSelection) AllowRadio(asset meshid.Device, medium RadioMedium) bool {
 	allow, _ := p.AllowRadioReason(asset, medium)
 	return allow
@@ -148,8 +145,8 @@ func (p *PeerSelection) AllowRadio(asset meshid.Device, medium RadioMedium) bool
 
 // AllowRadioReason reports the same decision as AllowRadio plus a stable
 // machine-readable reason naming the branch that allowed or vetoed the link.
-// Veto reasons exist so a torn-down established link can be attributed to the
-// exact clause that fired instead of hypothesizing after the fact.
+// Capacity reclamation belongs to the exact owned lease, not to this eligibility
+// predicate or to unauthenticated discovery state.
 func (p *PeerSelection) AllowRadioReason(asset meshid.Device, medium RadioMedium) (bool, string) {
 	if p == nil || p.snapshot == nil {
 		return true, "no-policy"

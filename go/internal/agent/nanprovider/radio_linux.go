@@ -332,6 +332,9 @@ func runRadio(ctx context.Context, ident meshid.Device, connected chan<- radioPe
 	attempts := map[string]time.Time{}
 	active := map[string]*radioLink{}
 	policy := localmesh.NewConnectionPolicy(ident, true, localmesh.ConnectionLimits{Outgoing: localmesh.NANMaxOutgoing, Attempts: localmesh.NANMaxOutgoingAttempts, Total: localmesh.NANMaxConnections})
+	if selection != nil {
+		policy.SetSnapshot(selection.Snapshot)
+	}
 	defer func() {
 		for _, l := range active {
 			l.peer.Lease.Release()
@@ -353,12 +356,16 @@ func runRadio(ctx context.Context, ident meshid.Device, connected chan<- radioPe
 			}
 			keys = append(keys, nmi)
 		}
-		for _, nmi := range queue.Order(keys, time.Now()) {
+		var view localmesh.NodeSnapshot
+		if selection != nil {
+			view = selection.Snapshot()
+		}
+		for _, nmi := range queue.OrderPreferred(keys, time.Now(), view, func(key string) (meshid.Device, uint16) { return candidates[key].device, NANLinkCost }) {
 			c := candidates[nmi]
 			if !shouldInitiate(ident, c.device, nmi, active, attempts, time.Now()) || (selection != nil && !selection.AllowRadio(c.device, localmesh.RadioNAN)) {
 				continue
 			}
-			lease := policy.Reserve(nmi, c.device, true)
+			lease := policy.ReservePreferred(nmi, c.device, true, "", queue.ReclaimEligible(nmi, time.Now()))
 			if lease == nil {
 				continue
 			}
@@ -575,7 +582,7 @@ func runRadio(ctx context.Context, ident meshid.Device, connected chan<- radioPe
 			if active[key] != nil {
 				continue
 			}
-			lease := policy.Reserve(key, peer, false)
+			lease := policy.ReservePreferred(key, peer, false, "", true)
 			if lease == nil {
 				_, _ = control.command(fmt.Sprintf("NAN_NDP_RESPONSE reject peer_nmi=%s ndp_id=%s init_ndi=%s", nmi, v["ndp_id"], v["init_ndi"]))
 				continue
