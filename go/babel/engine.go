@@ -239,6 +239,17 @@ func (e *Engine) validate(event Event) error {
 // placeholder or inferred path. Like Snapshot, callers serialize it with Step;
 // the query never changes candidate, source, sequence or forwarding state.
 func (e *Engine) HasUsableOrigin(id RouterID, prefix netip.Prefix, seq uint16) bool {
+	return e.hasUsableOrigin(id, prefix, seq, 0)
+}
+
+// HasUsableOriginOnLink is the exact-incarnation form of HasUsableOrigin. It
+// observes a received candidate on this link, including a nonselected standby.
+// Link zero is never an admitted incarnation. Callers serialize it with Step.
+func (e *Engine) HasUsableOriginOnLink(id RouterID, prefix netip.Prefix, seq uint16, link LinkID) bool {
+	return link != 0 && e.hasUsableOrigin(id, prefix, seq, link)
+}
+
+func (e *Engine) hasUsableOrigin(id RouterID, prefix netip.Prefix, seq uint16, link LinkID) bool {
 	if e.stopped || e.pending != 0 {
 		return false
 	}
@@ -246,7 +257,7 @@ func (e *Engine) HasUsableOrigin(id RouterID, prefix netip.Prefix, seq uint16) b
 		return false
 	}
 	for _, r := range e.routes {
-		if r.prefix == prefix && r.id == id && r.seq == seq && r.expires > e.now &&
+		if (link == 0 || r.link == link) && r.prefix == prefix && r.id == id && r.seq == seq && r.expires > e.now &&
 			r.advertised != Infinity && e.metric(r) != Infinity && e.feasible(r) {
 			return true
 		}

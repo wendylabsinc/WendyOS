@@ -328,6 +328,7 @@ func (n *Node) refresh() {
 			links[i].ForwardingReady = false
 		}
 	}
+	n.diagnostics.emitWarm(now, n.Credentials.Device, links, routing, proofs, n.routing.HasUsableOriginOnLink, logWarmCarrierDiagnostic)
 	n.view.Store(&NodeSnapshot{Self: n.Credentials.Device, CapturedAt: now, Peers: len(n.peers), Links: links, Devices: devices, Routes: routing.Routes, ForwardingRoutes: append([]babel.Route{}, n.forwardRoutes...), RouteAuthorizations: authorizations, RouteProofs: proofs})
 }
 
