@@ -141,6 +141,22 @@ class CompatibilityWorkflowTests(unittest.TestCase):
                                         input=json.dumps({"expression": expression, "github": github}), timeout=10)
                 self.assertEqual(json.loads(result.stdout), expected)
 
+    def test_artifact_name_spoofing_cannot_supply_publisher_data(self):
+        text = WORKFLOW.read_text()
+        review_job, tail = text.split("  publish-api-review:", 1)
+        publisher = tail.split("  validate-candidate-tests:", 1)[0]
+        self.assertIn("artifact_id: ${{ steps.review-result.outputs.artifact-id }}", review_job)
+        upload = review_job.split("- name: Preserve complete API review result", 1)[1]
+        self.assertIn("id: review-result", upload)
+        self.assertIn("actions/upload-artifact@", upload)
+        self.assertIn("needs.detect-api-changes.outputs.artifact_id != ''", publisher)
+        download = publisher.split("uses: actions/download-artifact@", 1)[1].split("- name: Set up Python", 1)[0]
+        self.assertIn("artifact-ids: ${{ needs.detect-api-changes.outputs.artifact_id }}", download)
+        # Another job may squat the display name, but cannot set the trusted
+        # job's upload ID. A failed trusted upload must not select a fallback.
+        self.assertNotIn("name:", download)
+        self.assertNotIn("pattern:", download)
+
     def test_model_and_publisher_credentials_are_isolated(self):
         text = WORKFLOW.read_text()
         review_job, tail = text.split("  publish-api-review:", 1)
@@ -151,7 +167,7 @@ class CompatibilityWorkflowTests(unittest.TestCase):
         self.assertIn("issues: write", publisher)
         self.assertIn("needs.detect-api-changes.outputs.trusted_sha", publisher)
         self.assertIn("actions/download-artifact@", publisher)
-        self.assertIn('name: api-review-${{ github.run_id }}', publisher)
+        self.assertIn('artifact-ids: ${{ needs.detect-api-changes.outputs.artifact_id }}', publisher)
         model_step = review_job.split("- name: Review API decisions and testing risk", 1)[1].split("- name: Preserve", 1)[0]
         self.assertNotIn("GH_TOKEN", model_step)
         self.assertIn("--source-repository review-automation", model_step)
