@@ -27,6 +27,11 @@ func (n *Node) reclaimGlobalRedundancy(candidate meshid.Device) bool {
 	// Provider pressure and liveness expiry must not provoke another eviction.
 	for _, p := range n.peers {
 		if p.retiring() {
+			if n.capacityHoldRelease == 0 || n.peers[n.capacityHoldRelease] == nil {
+				// Actual new-peer pressure can use an already-closing slot.
+				// Anchor its hold to ordinary Remove, never to this observation.
+				n.capacityHoldRelease = p.id
+			}
 			return true
 		}
 	}
@@ -48,7 +53,7 @@ func (n *Node) reclaimGlobalRedundancy(candidate meshid.Device) bool {
 		}
 		for _, alternate := range view.Links {
 			other := n.peers[alternate.ID]
-			if alternate.ID != link.ID && alternate.Device == link.Device && alternate.Cost < link.Cost && alternate.ForwardingReady && !alternate.Retiring &&
+			if alternate.ID != link.ID && alternate.Device == link.Device && alternate.ForwardingReady && !alternate.Retiring &&
 				other != nil && !other.retiring() && other.id == alternate.ID && other.device == alternate.Device && other.cost == alternate.Cost {
 				if victim == nil || p.cost > victim.cost || (p.cost == victim.cost && p.id < victim.id) {
 					victim = p
@@ -60,7 +65,22 @@ func (n *Node) reclaimGlobalRedundancy(candidate meshid.Device) bool {
 		return false
 	}
 	n.capacityRetiring = victim.id
+	n.capacityHoldRelease = victim.id
 	victim.signalCapacityRetire()
 	n.refresh()
+	return true
+}
+
+// capacityHoldActive reserves a released global slot for a new peer's ordinary
+// retry cadence. It reuses the existing failure-penalty duration and monotonic
+// routing clock, without a new timer or an indefinitely sticky demand bit.
+func (n *Node) capacityHoldActive() bool {
+	if n.capacityHoldUntil == 0 {
+		return false
+	}
+	if n.routingElapsed() >= n.capacityHoldUntil {
+		n.capacityHoldUntil = 0
+		return false
+	}
 	return true
 }
