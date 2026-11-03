@@ -103,6 +103,11 @@ func (s *Session) connectCandidate(ctx context.Context, candidate carriers.Candi
 			fmt.Fprintf(os.Stderr, "wendy: mesh %s candidate %s hint=%x capabilities=%02x finished: %v\n", candidate.Transport, candidate.Address, candidate.Hint, candidate.Capabilities, result)
 		}()
 	}
+	defer func() {
+		if result != nil && ctx.Err() == nil && !errors.Is(result, carriers.ErrUnsupportedPeer) && s.options.ReportCarrierFailure != nil {
+			s.options.ReportCarrierFailure(candidate.Transport, result)
+		}
+	}()
 	var link *meshoperatorlink.RouterLink
 	seed := s.seedCandidate()
 	if candidate.Address == seed.Address && candidate.Transport == seed.Transport && candidate.PSM == seed.PSM {

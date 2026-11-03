@@ -584,8 +584,12 @@ func TestStreamIPQueueKeepsBabelAheadOfWaitingRoutedPacket(t *testing.T) {
 	}
 	close(gate.release)
 	for i := 0; i < 5; i++ {
-		_, d := readStreamTestFrame(t, b)
-		if i == 2 {
+		kind, d := readStreamTestFrame(t, b)
+		if kind != streamPacket {
+			t.Fatalf("frame %d kind = %d", i, kind)
+		}
+		// Babel can pass at the first complete fragment boundary.
+		if i == 1 {
 			if !bytes.Equal(d, []byte{PacketBabel, 7}) {
 				t.Fatalf("Babel was blocked by queued IP: frame %d = %x", i, d)
 			}
@@ -594,6 +598,9 @@ func TestStreamIPQueueKeepsBabelAheadOfWaitingRoutedPacket(t *testing.T) {
 		wantID := uint32(1)
 		if i > 2 {
 			wantID = 2
+		}
+		if len(d) < fragmentHeader || d[0] != PacketIP {
+			t.Fatalf("frame %d is not an IP fragment: %x", i, d)
 		}
 		if got := binary.BigEndian.Uint32(d[1:5]); got != wantID {
 			t.Fatalf("fragment %d belonged to packet %d, want %d", i, got, wantID)

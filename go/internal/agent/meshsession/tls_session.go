@@ -37,11 +37,12 @@ type tlsAppDial struct {
 
 type tlsAppConn struct {
 	*tlsRecordConn
-	peer    meshid.Device
-	mu      sync.Mutex
-	closed  bool
-	expiry  *time.Timer
-	onClose func()
+	peer     meshid.Device
+	mu       sync.Mutex
+	closed   bool
+	expiry   *time.Timer
+	lifetime *sessionLifetime
+	onClose  func()
 }
 
 func (c *tlsAppConn) Close() error {
@@ -63,6 +64,9 @@ func (c *tlsAppConn) Close() error {
 	return err
 }
 func (c *tlsAppConn) register(callback func()) bool {
+	if c.checkLifetime() != nil {
+		return false
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if c.closed {
@@ -70,6 +74,43 @@ func (c *tlsAppConn) register(callback func()) bool {
 	}
 	c.onClose = callback
 	return true
+}
+
+func (c *tlsAppConn) checkLifetime() error {
+	_, err := c.lifetime.current()
+	if err != nil {
+		_ = c.Close()
+	}
+	return err
+}
+
+func (c *tlsAppConn) Read(p []byte) (int, error) {
+	if err := c.checkLifetime(); err != nil {
+		return 0, err
+	}
+	return c.tlsRecordConn.Read(p)
+}
+func (c *tlsAppConn) Write(p []byte) (int, error) {
+	if err := c.checkLifetime(); err != nil {
+		return 0, err
+	}
+	return c.tlsRecordConn.Write(p)
+}
+
+func (c *tlsAppConn) checkExpiry() {
+	deadline, err := c.lifetime.current()
+	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		return
+	}
+	if err == nil {
+		c.expiry.Reset(max(c.lifetime.delay(deadline), 0))
+		c.mu.Unlock()
+		return
+	}
+	c.mu.Unlock()
+	_ = c.Close()
 }
 
 func dialTLS(ctx context.Context, credentials *localmesh.Credentials, peer meshid.Device, address netip.AddrPort, port uint16) (*tlsAppConn, error) {
@@ -132,13 +173,13 @@ func dialTLSWithDialer(ctx context.Context, credentials *localmesh.Credentials, 
 	if state.Version != tls.VersionTLS13 || state.DidResume || localmesh.ApplicationProtocol(state.NegotiatedProtocol) != TLSALPN {
 		return nil, errors.New("invalid TLS app protocol")
 	}
-	expires, err := verifiedSessionExpiry(credentials, state)
+	lifetime, err := newSessionLifetime(credentials, state)
 	if err != nil {
 		return nil, err
 	}
-	conn := &tlsAppConn{tlsRecordConn: &tlsRecordConn{Conn: secure}, peer: peer}
+	conn := &tlsAppConn{tlsRecordConn: &tlsRecordConn{Conn: secure}, peer: peer, lifetime: lifetime}
 	conn.mu.Lock()
-	conn.expiry = time.AfterFunc(time.Until(expires), func() { _ = conn.Close() })
+	conn.expiry = time.AfterFunc(max(lifetime.delay(lifetime.deadline), 0), conn.checkExpiry)
 	conn.mu.Unlock()
 	var hello [8]byte
 	copy(hello[:4], "WAS1")
@@ -378,19 +419,21 @@ func (s *Server) ServeTLS(ctx context.Context, listener net.Listener, ready ...f
 			if state.Version != tls.VersionTLS13 || state.DidResume || localmesh.ApplicationProtocol(state.NegotiatedProtocol) != TLSALPN {
 				return
 			}
-			expires, err := verifiedSessionExpiry(s.credentials, state)
+			lifetime, err := newSessionLifetime(s.credentials, state)
 			if err != nil {
 				return
 			}
-			s.serveTLS(run, secure, expires)
+			s.serveTLS(run, secure, lifetime)
 		}()
 	}
 }
 
-func (s *Server) serveTLS(parent context.Context, secure *tls.Conn, expires time.Time) {
+func (s *Server) serveTLS(parent context.Context, secure *tls.Conn, lifetime *sessionLifetime) {
 	records := &tlsRecordConn{Conn: secure}
-	session, cancel := context.WithDeadline(parent, expires)
+	session, cancel := context.WithDeadline(parent, lifetime.deadline)
 	defer cancel()
+	watchDone := lifetime.watch(session.Done(), cancel)
+	defer func() { cancel(); <-watchDone }()
 	stopSession := context.AfterFunc(session, func() { secure.Close() })
 	defer stopSession()
 	var hello [6]byte

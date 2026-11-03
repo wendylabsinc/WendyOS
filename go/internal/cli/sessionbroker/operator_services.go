@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
+	"github.com/wendylabsinc/wendy/go/internal/shared/meshview"
 	pb "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -57,17 +58,21 @@ func (query OperatorServiceQuery) validate() error {
 	return nil
 }
 
-func serviceOriginLive(view *pb.LocalMeshTopology, adjacent, device meshid.Device, hint *pb.LocalMeshAnnouncement, now time.Time) bool {
+func serviceOriginDeadline(view *pb.LocalMeshTopology, adjacent, device meshid.Device, hint *pb.LocalMeshAnnouncement, now time.Time) int64 {
 	prefix := netip.PrefixFrom(device.MeshAddress(), 128).String()
 	if hint.Principal != device.Principal() || hint.DeviceId != device.UUID().String() || hint.Prefix != prefix || hint.TrustState != "verified-at-snapshot" || hint.ExpiresAtUnixMs <= now.UnixMilli() {
-		return false
+		return 0
 	}
 	for _, route := range view.Routes {
-		if route.Prefix == prefix && route.OriginPrincipal == device.Principal() && route.OriginRouterId == hint.OriginRouterId && route.SequenceNumber == hint.SequenceNumber && route.OriginAuthorized && !route.Unreachable && (!route.Local || device == adjacent) && route.SignedRouteExpiresAtUnixMs == hint.ExpiresAtUnixMs {
-			return true
+		if deadline, live := meshview.AnnouncementRouteDeadline(route, hint, now); live && (!route.Local || device == adjacent) {
+			return deadline
 		}
 	}
-	return false
+	return 0
+}
+
+func serviceOriginLive(view *pb.LocalMeshTopology, adjacent, device meshid.Device, hint *pb.LocalMeshAnnouncement, now time.Time) bool {
+	return serviceOriginDeadline(view, adjacent, device, hint, now) != 0
 }
 
 // serviceSnapshot reads public descriptions from the same current verified
@@ -113,7 +118,11 @@ func (r *operatorTargets) serviceSnapshot(ctx context.Context, query OperatorSer
 outer:
 	for _, hint := range view.Announcements {
 		device, err := meshid.DeviceFromPrincipal(hint.Principal)
-		if err != nil || device.Tenant() != operator.Tenant() || !serviceOriginLive(view, adjacent, device, hint, now) {
+		if err != nil || device.Tenant() != operator.Tenant() {
+			continue
+		}
+		expires := serviceOriginDeadline(view, adjacent, device, hint, now)
+		if expires == 0 {
 			continue
 		}
 		for _, service := range hint.Services {
@@ -124,7 +133,7 @@ outer:
 			if seen[key] {
 				continue
 			}
-			entry := OperatorServiceInfo{Selector: MeshSelector(device), Principal: device.Principal(), Name: hint.Name, Platform: hint.Platform, Mesh: service.Mesh, App: service.AppId, Service: service.ServiceId, Type: service.Type, Instance: service.Instance, Port: service.Port, TXT: append([]string(nil), service.Txt...), Expires: hint.ExpiresAtUnixMs, Revision: hint.Revision}
+			entry := OperatorServiceInfo{Selector: MeshSelector(device), Principal: device.Principal(), Name: hint.Name, Platform: hint.Platform, Mesh: service.Mesh, App: service.AppId, Service: service.ServiceId, Type: service.Type, Instance: service.Instance, Port: service.Port, TXT: append([]string(nil), service.Txt...), Expires: expires, Revision: hint.Revision}
 			encoded, err := json.Marshal(entry)
 			if err != nil {
 				continue

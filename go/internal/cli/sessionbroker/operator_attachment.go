@@ -11,8 +11,6 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 type operatorAttachmentState struct {
@@ -63,6 +61,7 @@ func (a *operatorAttachment) open(ctx context.Context, recipe OperatorSpec) (*op
 	// A discovered fallback is a concrete first-hop hint, not a change to the
 	// retained context's discovery policy. It still dials this seed initially.
 	options := operatormesh.Options{Automatic: a.spec.Operator.Automatic, StateDirectory: a.directory, Certificate: certificate, RouterAddress: recipe.RouterAddress, RouterUUID: recipe.RouterUUID, Transport: recipe.Transport, BLEPSM: recipe.BLEPSM}
+	options.ReportCarrierFailure = operatorCarrierReporter(ctx)
 	if a.spec.Operator.Automatic {
 		options.Discover = func(ctx context.Context) ([]operatormesh.Options, error) {
 			operator, _ := operatorPrincipal(certificate)
@@ -106,7 +105,7 @@ func (a *operatorAttachment) snapshot() (*operatorAttachmentState, error) {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	if a.current == nil {
-		return nil, status.Error(codes.Unavailable, "operator mesh attachment is reconnecting")
+		return nil, operatorUnavailable(operatorReconnecting, "operator mesh attachment is reconnecting")
 	}
 	return a.current, nil
 }
@@ -126,7 +125,7 @@ func (a *operatorAttachment) adjacent() (*grpc.ClientConn, meshid.Device, error)
 	}
 	peer, live := current.session.AdjacentPeer()
 	if !live {
-		return nil, meshid.Device{}, status.Error(codes.Unavailable, "adjacent carrier is reconnecting")
+		return nil, meshid.Device{}, operatorUnavailable(operatorNoPeers, "the local operator router has no authenticated peers; its adjacent carrier is reconnecting")
 	}
 	for _, manifest := range current.session.Snapshot().Devices {
 		owner, parseErr := manifest.Peer(peer.Tenant())

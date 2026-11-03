@@ -118,7 +118,7 @@ func (p *PeerSelection) HasLAN(asset meshid.Device) bool {
 		return false
 	}
 	for _, link := range p.snapshot().Links {
-		if link.Device == asset && link.Cost <= MaxLANCost {
+		if link.Device == asset && link.Cost <= MaxLANCost && link.ForwardingReady {
 			return true
 		}
 	}
@@ -137,7 +137,7 @@ func (p *PeerSelection) AllowLAN(asset meshid.Device, cost uint16) bool {
 		return false
 	}
 	for _, link := range p.snapshot().Links {
-		if link.Device == asset && link.Cost < cost {
+		if link.Device == asset && link.Cost < cost && link.ForwardingReady {
 			return false
 		}
 	}
@@ -168,6 +168,9 @@ func (p *PeerSelection) AllowRadioReason(asset meshid.Device, medium RadioMedium
 	otherRadio := false
 	for _, link := range s.Links {
 		connected[link.Device] = true
+		if !link.ForwardingReady {
+			continue
+		}
 		if link.Device == asset && link.Cost <= MaxLANCost {
 			return false, fmt.Sprintf("lan-supersedes(cost=%d)", link.Cost)
 		}

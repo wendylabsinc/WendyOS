@@ -69,6 +69,9 @@ type Spec struct {
 	CertFingerprint string              `json:"certFingerprint"`
 	Expected        certs.WendyIdentity `json:"expected"`
 	ParentPID       int                 `json:"parentPid,omitempty"`
+	// DiagnosticGeneration binds an optional failure record to this launch,
+	// independently of the durable operator identity and recipe.
+	DiagnosticGeneration string `json:"diagnosticGeneration,omitempty"`
 }
 
 type stateFile struct {
@@ -335,7 +338,13 @@ func Run(ctx context.Context, encoded string, idleTTL time.Duration, parentLease
 		_ = lock.Close()
 	}()
 	if spec.Operator != nil {
-		return runOperator(ctx, dir, spec, idleTTL)
+		diagnostics := newOperatorDiagnostics(dir, spec)
+		if diagnostics == nil {
+			return runOperator(ctx, dir, spec, idleTTL)
+		}
+		err := runOperator(context.WithValue(ctx, operatorDiagnosticsKey{}, diagnostics), dir, spec, idleTTL)
+		diagnostics.record("", err, true)
+		return err
 	}
 	certInfo, err := findCertificate(spec.CertFingerprint, spec.Expected.OrgID)
 	if err != nil {

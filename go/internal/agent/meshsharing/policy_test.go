@@ -206,3 +206,32 @@ func TestHealthDebounceAndImmediateOfferExpiry(t *testing.T) {
 		t.Fatal("expired signed offer retained through health hysteresis")
 	}
 }
+
+func TestSignedGatewayUsesBothReceiverAdmittedDeadlines(t *testing.T) {
+	now := time.Unix(1800000000, 0)
+	self, donor := policySelf(t), policyDonorDevice(t)
+	for _, skew := range []time.Duration{-24 * time.Hour, 24 * time.Hour} {
+		t.Run(skew.String(), func(t *testing.T) {
+			issued := now.Add(skew)
+			offer := gatewayOffer(donor, issued)
+			offer.AdmittedUntil = now.Add(40 * time.Second)
+			view := gatewayView(donor, issued)
+			view.Devices[0].AdmittedUntil = now.Add(20 * time.Second)
+			got := SignedGateway(self, view, []meshcatalog.Record{offer}, now)
+			if !got.Verified || !got.Expires.Equal(now.Add(20*time.Second)) {
+				t.Fatalf("gateway lost admitted lease cap: %+v", got)
+			}
+			if g := SignedGateway(self, view, []meshcatalog.Record{offer}, now.Add(20*time.Second)); g.Verified {
+				t.Fatal("expired manifest still gateway eligible")
+			}
+			view.Devices[0].AdmittedUntil = now.Add(time.Minute)
+			if g := SignedGateway(self, view, []meshcatalog.Record{offer}, now.Add(40*time.Second)); g.Verified {
+				t.Fatal("expired offer still gateway eligible")
+			}
+			view.Routes = nil
+			if g := SignedGateway(self, view, []meshcatalog.Record{offer}, now); g.Verified {
+				t.Fatal("admitted lease replaced live Babel route")
+			}
+		})
+	}
+}
