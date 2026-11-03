@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"slices"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -71,7 +72,14 @@ func dialUplink(ctx context.Context, name, network, address string) (net.Conn, e
 		return nil, err
 	}
 	if net.ParseIP(strings.Split(host, "%")[0]) == nil {
-		d.Resolver = uplinkResolver(name, uplinkDNS(ctx, name))
+		dnsInterface := name
+		if strings.HasPrefix(name, "wlmi") {
+			// Borrowed Internet DNS is served by the gateway's outer mesh
+			// address. It must follow that mesh route, not enter the inner
+			// Internet tunnel, whose gateway deliberately rejects local services.
+			dnsInterface = ""
+		}
+		d.Resolver = uplinkResolver(dnsInterface, uplinkDNS(ctx, name))
 	}
 	return d.DialContext(ctx, network, address)
 }
@@ -83,20 +91,31 @@ func uplinkResolver(name string, servers []string) *net.Resolver {
 			return nil, fmt.Errorf("no DNS servers for uplink %s", name)
 		}
 		server := servers[(next.Add(1)-1)%uint64(len(servers))]
-		d := net.Dialer{Control: bindUplink(name)}
+		d := net.Dialer{}
+		if name != "" {
+			d.Control = bindUplink(name)
+		}
 		return d.DialContext(ctx, network, net.JoinHostPort(server, "53"))
 	}}
 }
 
-// The system stub may forward DNS through the broken primary. Ask NetworkManager
-// for this interface's DNS and bind DNS sockets to it as well as the TCP socket.
+// The system stub may forward DNS through the broken primary. Query this
+// interface's DNS and bind DNS sockets to it as well as the TCP socket.
 func uplinkDNS(ctx context.Context, name string) []string {
-	query, cancel := context.WithTimeout(ctx, time.Second)
-	defer cancel()
-	out, err := exec.CommandContext(query, "nmcli", "--escape", "no", "-g", "IP4.DNS,IP6.DNS", "device", "show", name).Output()
-	if err == nil {
-		if servers := parseUplinkDNS(string(out), name); len(servers) > 0 {
-			return servers
+	// Mesh tunnels publish DNS directly to systemd-resolved and are not
+	// NetworkManager devices. Prefer either interface's own settings before
+	// considering global upstreams, which may belong to a different link.
+	for _, command := range [][]string{
+		{"nmcli", "--escape", "no", "-g", "IP4.DNS,IP6.DNS", "device", "show", name},
+		{"resolvectl", "dns", name},
+	} {
+		query, cancel := context.WithTimeout(ctx, time.Second)
+		out, err := exec.CommandContext(query, command[0], command[1:]...).Output()
+		cancel()
+		if err == nil {
+			if servers := parseUplinkDNS(string(out), name); len(servers) > 0 {
+				return servers
+			}
 		}
 	}
 	// Wendy Lite hosts may not use NetworkManager. Use configured upstreams,
@@ -128,6 +147,12 @@ func parseUplinkDNS(value, name string) []string {
 			continue
 		}
 		if ip.To4() == nil && ip.IsLinkLocalUnicast() {
+			if _, zone, scoped := strings.Cut(server, "%"); scoped && zone != name {
+				iface, err := net.InterfaceByName(name)
+				if err != nil || zone != strconv.Itoa(iface.Index) {
+					continue
+				}
+			}
 			server = ip.String() + "%" + name
 		}
 		if !slices.Contains(servers, server) {
