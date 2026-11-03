@@ -15,7 +15,8 @@ on:
         type: string
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || inputs.pr_number }}
+  # Title/body edits have no model work and must not cancel an active review.
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ (github.event.action != 'edited' || github.event.changes.base != null) && (github.event.pull_request.number || inputs.pr_number) || github.run_id }}
   cancel-in-progress: true
 
 jobs:

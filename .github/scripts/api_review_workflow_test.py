@@ -2,6 +2,7 @@
 """Exercise the actual trusted-source resolver with mocked GitHub responses."""
 
 import json
+import re
 from pathlib import Path
 import subprocess
 import unittest
@@ -126,6 +127,19 @@ class CompatibilityWorkflowTests(unittest.TestCase):
                 actual = subprocess.run(["node", "-e", script], check=True, text=True, capture_output=True,
                                         input=json.dumps({"expression": expression, "github": github}), timeout=10)
                 self.assertEqual(json.loads(actual.stdout), expected)
+
+    def test_description_edits_cannot_cancel_reviewing_source_changes(self):
+        line = next(line for line in WORKFLOW.read_text().splitlines() if line.strip().startswith("group:"))
+        expression = re.findall(r"\$\{\{(.*?)\}\}", line)[-1]
+        script = "const x=JSON.parse(require('fs').readFileSync(0,'utf8')); console.log(new Function('github','inputs','return ('+x.expression+')')(x.github,{}));"
+        for action, base_change, expected in [("synchronize", False, 42), ("ready_for_review", False, 42),
+                                               ("edited", True, 42), ("edited", False, 9900)]:
+            github = {"run_id": 9900, "event": {"action": action,
+                      "changes": {"base": {} if base_change else None}, "pull_request": {"number": 42}}}
+            with self.subTest(action=action, base_change=base_change):
+                result = subprocess.run(["node", "-e", script], check=True, capture_output=True, text=True,
+                                        input=json.dumps({"expression": expression, "github": github}), timeout=10)
+                self.assertEqual(json.loads(result.stdout), expected)
 
     def test_model_and_publisher_credentials_are_isolated(self):
         text = WORKFLOW.read_text()
