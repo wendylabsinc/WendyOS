@@ -84,10 +84,7 @@ func newHandoffActorFixture(t *testing.T, initialSequence ...uint16) *handoffAct
 	}
 	for i, c := range []*Credentials{a, b} {
 		f.networks[i] = &handoffActorNetwork{}
-		n, err := NewNodeWithNetwork(context.Background(), t.TempDir(), c, "route-handoff-actor", 50052, f.networks[i])
-		if err != nil {
-			t.Fatal(err)
-		}
+		n := newActorTestNode(t, c, f.networks[i])
 		f.nodes[i] = n
 		n.routingClock = func() time.Duration { return f.elapsed }
 		n.directory.monotonicNow = func() time.Time { return f.epoch.Add(f.elapsed) }
@@ -99,6 +96,7 @@ func newHandoffActorFixture(t *testing.T, initialSequence ...uint16) *handoffAct
 				AcceptRouteUpdate: func(id babel.RouterID, p netip.Prefix, seq uint16) bool {
 					return n.routeOrigins[RouteOrigin{Prefix: p, RouterID: id, Seqno: seq}]
 				}}
+			var err error
 			n.routing, err = NewRouting(config, nil, n)
 			if err != nil {
 				t.Fatal(err)
@@ -516,7 +514,9 @@ func TestNodeRouteHandoffOverAsyncTLSAndGossip(t *testing.T) {
 	// must not be mistaken for an interruption during the measured handoff.
 	defer backend.disarm()
 	receiverCtx, receiverCancel := context.WithCancel(context.Background())
-	receiver, err := NewNodeWithNetwork(receiverCtx, t.TempDir(), b, "handoff-async-TLS", 50052, backend)
+	receiverDir := t.TempDir()
+	seedActorTestIdentity(t, receiverDir, b)
+	receiver, err := NewNodeWithNetwork(receiverCtx, receiverDir, b, "handoff-async-TLS", 50052, backend)
 	if err != nil {
 		receiverCancel()
 		t.Fatal(err)

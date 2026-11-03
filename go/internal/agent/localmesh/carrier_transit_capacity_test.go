@@ -31,10 +31,7 @@ func newCarrierTransitFixture(t *testing.T) *carrierTransitFixture {
 	f.advance(6*time.Second, 0)
 	f.assertSelected(2)
 	credentials := testCredentialsFor(t, testPrincipal(testTenantUUID, testDeviceCID))
-	third, err := NewNodeWithNetwork(context.Background(), t.TempDir(), credentials, "carrier-transit-actor", 50052, &handoffActorNetwork{})
-	if err != nil {
-		t.Fatal(err)
-	}
+	third := newActorTestNode(t, credentials, &handoffActorNetwork{})
 	f.third = third
 	third.routingClock = func() time.Duration { return f.elapsed }
 	third.directory.monotonicNow = func() time.Time { return f.epoch.Add(f.elapsed) }

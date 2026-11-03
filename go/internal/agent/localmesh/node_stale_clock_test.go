@@ -73,6 +73,7 @@ type staleClockNodeRun struct {
 
 func runStaleClockNode(t *testing.T, dir string, credentials *Credentials) *staleClockNodeRun {
 	t.Helper()
+	seedActorTestIdentity(t, dir, credentials)
 	ctx, cancel := context.WithCancel(context.Background())
 	n, err := NewNodeWithNetwork(ctx, dir, credentials, "clock-regression", 50052, &staleClockPacketBackend{}, []AppEndpoint{{Transport: AppTLS, Port: AppSessionTLSPort}})
 	if err != nil {
