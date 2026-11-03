@@ -41,9 +41,15 @@ func (s *Session) seedCandidate() carriers.Candidate {
 	return carriers.Candidate{Device: s.routerConfig.Router, Address: s.options.RouterAddress, Transport: transport, PSM: psm, Cost: cost}
 }
 
-func (s *Session) runCarriers(ctx context.Context) error {
+func (s *Session) carrierConfig() carriers.Config {
 	sources := s.options.CarrierSources
-	if sources != nil && s.options.Discover != nil {
+	if sources == nil && !s.options.Automatic {
+		// Explicit first-hop intent includes the physical carrier. A pinned
+		// TCP/BLE session must not silently start other LAN or radio attachments.
+		// The persistent seed still reconnects without any discovery source.
+		sources = []carriers.Source{}
+	}
+	if s.options.CarrierSources != nil && s.options.Discover != nil {
 		// Host fixtures can substitute this existing discovery callback without
 		// starting any radio. Production nil Sources uses the native providers.
 		sources = append(append([]carriers.Source{}, sources...), func(ctx context.Context, emit func([]carriers.Candidate)) error {
@@ -84,7 +90,11 @@ func (s *Session) runCarriers(ctx context.Context) error {
 	if s.options.RouterAddress != "" {
 		seeds = []carriers.Candidate{s.seedCandidate()}
 	}
-	return carriers.Run(ctx, carriers.Config{Credentials: s.Node.Credentials, Snapshot: s.Snapshot, Connect: s.connectCandidate, Seeds: seeds, Sources: sources, Limits: carriers.Limits{AuthenticatedTTL: 15 * time.Minute}})
+	return carriers.Config{Credentials: s.Node.Credentials, Snapshot: s.Snapshot, Connect: s.connectCandidate, Seeds: seeds, Sources: sources, Limits: carriers.Limits{AuthenticatedTTL: 15 * time.Minute}}
+}
+
+func (s *Session) runCarriers(ctx context.Context) error {
+	return carriers.Run(ctx, s.carrierConfig())
 }
 
 func (s *Session) connectCandidate(ctx context.Context, candidate carriers.Candidate) (result error) {
@@ -160,6 +170,7 @@ func (s *Session) connectCandidate(ctx context.Context, candidate carriers.Candi
 		}
 		cfg := s.routerConfig
 		cfg.Router = peer
+		cfg.IssuerCandidates = s.Node.Credentials.TLSIssuerCandidates
 		link, err = meshoperatorlink.RouterClient(ctx, secure, cfg)
 		if err != nil {
 			return err
