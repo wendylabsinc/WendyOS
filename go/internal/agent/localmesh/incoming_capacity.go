@@ -35,6 +35,16 @@ func workingCarrierPresent(view NodeSnapshot, peer meshid.Device) bool {
 	return false
 }
 
+// HasWorkingCarrier is a scheduling check against the current authenticated
+// routing snapshot. A radio-cache identity may use it to decline reclamation;
+// it never supplies the identity or authority for a new attachment.
+func (p *ConnectionPolicy) HasWorkingCarrier(peer meshid.Device) bool {
+	p.mu.Lock()
+	snapshot := p.snapshot
+	p.mu.Unlock()
+	return snapshot != nil && workingCarrierPresent(snapshot(), peer)
+}
+
 func directPeerPresent(view NodeSnapshot, peer meshid.Device) bool {
 	for _, link := range view.Links {
 		if link.Device == peer {
