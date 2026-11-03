@@ -657,7 +657,11 @@ func (r *runtime) acceptLink(ctx context.Context, raw net.Conn) {
 			return operatorConfig, nil
 		}
 		if selected == ALPN && lease == nil {
-			lease = r.connectionPolicy().ReservePreferred(key, meshid.Device{}, false, "", true)
+			policy := r.connectionPolicy()
+			// A verified radio cache only bounds scheduling. Keep the actual
+			// reservation anonymous until TLS verifies the incoming identity.
+			reclaim := !policy.HasWorkingCarrier(r.knownIncomingPeer(raw))
+			lease = policy.ReservePreferred(key, meshid.Device{}, false, "", reclaim)
 			if lease == nil {
 				return nil, errors.New("BLE neighbour capacity reached")
 			}

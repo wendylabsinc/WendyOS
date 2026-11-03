@@ -148,7 +148,8 @@ func (p *ConnectionPolicy) ReclaimIncomingWorker() bool {
 }
 
 // ReclaimIncomingWorkerFor may use an authenticated radio cache only to bound
-// scheduling. A known redundant retry cannot refresh its own incoming hold.
+// scheduling. A known working peer only adds another carrier in spare capacity;
+// it cannot reclaim another peer's standby or refresh an incoming hold.
 func (p *ConnectionPolicy) ReclaimIncomingWorkerFor(peer meshid.Device, cost uint16) bool {
 	p.mu.Lock()
 	snapshot := p.snapshot
@@ -162,9 +163,9 @@ func (p *ConnectionPolicy) ReclaimIncomingWorkerFor(peer meshid.Device, cost uin
 	if cost == 0 {
 		cost = p.carrierCost
 	}
-	activeDemand := p.incomingDemandActive()
+	p.incomingDemandActive()
 	knownRedundancy := workingCarrierPresent(view, peer)
-	if knownRedundancy && activeDemand {
+	if knownRedundancy {
 		p.mu.Unlock()
 		return false
 	}
