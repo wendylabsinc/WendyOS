@@ -227,6 +227,16 @@ type directoryEntry struct {
 	expired             bool
 }
 
+// deadline bounds every use/export of a current entry without changing its
+// original receive lease or compact replay watermark. Certificate restrictions
+// are shrink-only even when the identity cache later selects a longer path.
+func (e directoryEntry) deadline() time.Time {
+	if e.certificateDeadline.Before(e.activeUntil) {
+		return e.certificateDeadline
+	}
+	return e.activeUntil
+}
+
 type Directory struct {
 	mu       sync.Mutex
 	tenant   meshid.Tenant
@@ -500,7 +510,7 @@ func (d *Directory) currentEntryChain(principal string, e directoryEntry, now ti
 }
 
 func (d *Directory) currentEntryIdentity(principal string, e directoryEntry, now time.Time) ([][]byte, Identity, bool) {
-	if !e.activeUntil.After(d.leaseNow(now)) {
+	if !e.deadline().After(d.leaseNow(now)) {
 		return nil, Identity{}, false
 	}
 	chain, id, ok := d.cache.manifestIdentity(e.wire.Principal, e.manifest, now)
@@ -518,7 +528,7 @@ func (d *Directory) currentEntryIdentity(principal string, e directoryEntry, now
 		e = d.restrictEntryCertificate(e, id, now)
 	}
 	d.entries[principal] = e
-	if !valid {
+	if !valid || !e.deadline().After(d.leaseNow(now)) {
 		return nil, Identity{}, false
 	}
 	return chain, id, true
@@ -581,7 +591,9 @@ func (d *Directory) RecordDeadline(w SignedManifest, now time.Time) (time.Time, 
 	if _, ok := d.currentEntryChain(owner, e, now); !ok {
 		return time.Time{}, false
 	}
-	return now.Add(e.activeUntil.Sub(d.leaseNow(now))), true
+	// currentEntryChain may have shortened the stored certificate bound.
+	e = d.entries[owner]
+	return now.Add(e.deadline().Sub(d.leaseNow(now))), true
 }
 
 // hasCurrentOwner is an export eligibility check, not a lease renewal. Missing
