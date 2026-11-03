@@ -187,6 +187,9 @@ wendy device wendy-net connect --transport ble \
   --address NATIVE_BLE_ADDRESS --psm LISTED_PSM --router ENROLLED_DEVICE_UUID
 ```
 
+The discovery timeout defaults to 5 seconds. `--timeout` must be greater than
+zero and cannot exceed 30 seconds.
+
 Use the listed CoreBluetooth peripheral UUID on macOS, or LE address on Linux.
 macOS does not expose the hardware Bluetooth MAC address. The radio identifier is
 different from the enrolled device UUID required by `--router`.
