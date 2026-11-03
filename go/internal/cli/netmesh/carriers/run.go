@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -150,14 +151,30 @@ func Run(parent context.Context, cfg Config) error {
 		}
 		return false
 	}
-	plan := func(now time.Time) {
-		view := snapshot()
-		for _, a := range active {
-			if a.verified && !a.canceled && hasLink(view, a.peer, a.candidate.Cost, true) {
-				a.canceled = true
-				a.cancel()
+	priority := func(view localmesh.NodeSnapshot, peer meshid.Device, cost uint16) int {
+		best := uint16(0)
+		if peer != (meshid.Device{}) {
+			for _, link := range view.Links {
+				if link.Device == peer && (best == 0 || link.Cost < best) {
+					best = link.Cost
+				}
+			}
+			for _, a := range active {
+				if a.verified && !a.canceled && a.peer == peer && (best == 0 || a.candidate.Cost < best) {
+					best = a.candidate.Cost
+				}
 			}
 		}
+		if best == 0 {
+			return 0 // New direct peer; indirect mesh reachability is not a carrier.
+		}
+		if cost < best {
+			return 1 // Upgrade without disturbing the existing working carrier.
+		}
+		return 2 // An additional medium is useful while its budget has room.
+	}
+	plan := func(now time.Time) {
+		view := snapshot()
 		for key, e := range table {
 			if !e.sources[-1] && (len(e.sources) == 0 || now.Sub(e.seen) >= cfg.Limits.CandidateTTL) {
 				if active[key] == nil {
@@ -171,10 +188,17 @@ func Run(parent context.Context, cfg Config) error {
 				keys = append(keys, key)
 			}
 		}
-		for _, key := range queue.Order(keys, now) {
-			if len(active) >= cfg.Limits.Connections {
-				break
+		keys = queue.Order(keys, now)
+		sort.SliceStable(keys, func(i, j int) bool {
+			a, b := table[keys[i]], table[keys[j]]
+			pa := priority(view, cache.peer(a.candidate, now, cfg.Limits.AuthenticatedTTL), a.candidate.Cost)
+			pb := priority(view, cache.peer(b.candidate, now, cfg.Limits.AuthenticatedTTL), b.candidate.Cost)
+			if pa != pb {
+				return pa < pb
 			}
+			return false // Preserve the existing healthy/failed candidate ordering.
+		})
+		for _, key := range keys {
 			e := table[key]
 			c := e.candidate
 			if active[key] != nil || now.Before(e.retry) || !supported[c.Transport] {
@@ -186,11 +210,13 @@ func Run(parent context.Context, cfg Config) error {
 				continue
 			}
 			peer := cache.peer(c, now, cfg.Limits.AuthenticatedTTL)
-			if hasSameCarrier(view, peer, c) || hasLink(view, peer, c.Cost, false) {
+			if hasSameCarrier(view, peer, c) {
 				continue
 			}
 			pending, bleCount := 0, 0
+			reclaiming := false
 			for _, a := range active {
+				reclaiming = reclaiming || a.canceled
 				if !a.verified {
 					pending++
 				}
@@ -198,7 +224,30 @@ func Run(parent context.Context, cfg Config) error {
 					bleCount++
 				}
 			}
-			if pending >= cfg.Limits.Attempts || (c.Transport == BLE && bleCount >= cfg.Limits.BLEConnections) {
+			if pending >= cfg.Limits.Attempts {
+				continue
+			}
+			full := len(active) >= cfg.Limits.Connections
+			bleFull := c.Transport == BLE && bleCount >= cfg.Limits.BLEConnections
+			if full || bleFull {
+				// New peers may reclaim a slower owned backup, never the peer's
+				// last installed working path. Completion releases the real slot;
+				// cancellation itself does not grant admission or extra capacity.
+				if !reclaiming && priority(view, peer, c.Cost) == 0 {
+					var victim *attempt
+					for _, a := range active {
+						if !a.verified || a.canceled || (bleFull && a.candidate.Transport != BLE) || !hasLink(view, a.peer, a.candidate.Cost, true) {
+							continue
+						}
+						if victim == nil || a.candidate.Cost > victim.candidate.Cost || (a.candidate.Cost == victim.candidate.Cost && a.id > victim.id) {
+							victim = a
+						}
+					}
+					if victim != nil {
+						victim.canceled = true
+						victim.cancel()
+					}
+				}
 				continue
 			}
 			serial++
