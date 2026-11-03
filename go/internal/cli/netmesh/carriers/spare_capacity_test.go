@@ -3,11 +3,13 @@ package carriers
 import (
 	"context"
 	"errors"
+	"net/netip"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/wendylabsinc/WendyOS/go/babel"
 	"github.com/wendylabsinc/wendy/go/internal/agent/localmesh"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
 )
@@ -26,6 +28,8 @@ type spareRun struct {
 	links            map[string]localmesh.PeerLink
 	block            map[string]chan struct{}
 	running, peak    int
+	nextLink         babel.LinkID
+	installed        []babel.Route
 }
 
 func newSpareRun(t *testing.T, limits Limits, configure ...func(*Config)) *spareRun {
@@ -39,8 +43,11 @@ func newSpareRun(t *testing.T, limits Limits, configure ...func(*Config)) *spare
 		if h.running > h.peak {
 			h.peak = h.running
 		}
-		h.links[c.Address] = localmesh.PeerLink{Device: c.Device, Transport: c.Transport, Cost: c.Cost}
+		h.nextLink++
+		id := h.nextLink
+		h.links[c.Address] = localmesh.PeerLink{ID: id, Device: c.Device, Transport: c.Transport, Cost: c.Cost}
 		h.mu.Unlock()
+		c.AttachedLink(id)
 		h.entered <- c
 		<-ctx.Done()
 		h.closing <- c
@@ -74,7 +81,7 @@ func newSpareRun(t *testing.T, limits Limits, configure ...func(*Config)) *spare
 	cfg.Snapshot = func() localmesh.NodeSnapshot {
 		h.mu.Lock()
 		defer h.mu.Unlock()
-		v := localmesh.NodeSnapshot{}
+		v := localmesh.NodeSnapshot{ForwardingRoutes: append([]babel.Route(nil), h.installed...)}
 		for _, l := range h.links {
 			v.Links = append(v.Links, l)
 		}
@@ -168,6 +175,59 @@ func TestRunNewPeerReclaimsStandbyOnlyAfterInstalledUpgradeAndCompletion(t *test
 	if !lanRetained || !newRetained || peak != 2 {
 		t.Fatalf("lost working peer or exceeded cap: LAN=%v new=%v peak=%d", lanRetained, newRetained, peak)
 	}
+}
+
+func TestRunTransitRouteMustLeaveStandbyBeforeReclaim(t *testing.T) {
+	h := newSpareRun(t, Limits{Connections: 2})
+	ble, lan, fresh := spareBLE(2), spareTCP(2, 128), spareTCP(3, 128)
+	h.start(ble)
+	h.expectStart(ble)
+	h.start(ble, lan)
+	h.expectStart(lan)
+	h.ready(lan.Address, true)
+	h.mu.Lock()
+	old, survivor := h.links[ble.Address], h.links[lan.Address]
+	h.installed = []babel.Route{
+		{Prefix: netip.PrefixFrom(lan.Device.MeshAddress(), 128), Link: survivor.ID, Metric: 128},
+		{Prefix: netip.MustParsePrefix("fd00::face/128"), Link: old.ID, Metric: 4096},
+	}
+	h.mu.Unlock()
+	h.start(ble, lan, fresh)
+	h.quiet() // The peer's own route is primed; a transit route still uses BLE.
+	h.mu.Lock()
+	h.installed[1].Link, h.installed[1].Metric = survivor.ID, 128
+	h.mu.Unlock()
+	if got := wait(t, h.closing); got.Address != ble.Address {
+		t.Fatalf("retired %s instead of the now unused standby", got.Address)
+	}
+	h.expectStart(fresh)
+	h.quiet()
+}
+
+func TestRunAttachedIncarnationMustMatchBeforeReclaim(t *testing.T) {
+	h := newSpareRun(t, Limits{Connections: 2})
+	ble, lan, fresh := spareBLE(2), spareTCP(2, 128), spareTCP(3, 128)
+	h.start(ble)
+	h.expectStart(ble)
+	h.start(ble, lan)
+	h.expectStart(lan)
+	h.ready(lan.Address, true)
+	h.mu.Lock()
+	old := h.links[ble.Address]
+	wrong := old
+	wrong.ID += 100
+	h.links[ble.Address] = wrong
+	h.mu.Unlock()
+	h.start(ble, lan, fresh)
+	h.quiet() // Same peer/cost/medium cannot substitute for the exact owned ID.
+	h.mu.Lock()
+	h.links[ble.Address] = old
+	h.mu.Unlock()
+	if got := wait(t, h.closing); got.Address != ble.Address {
+		t.Fatalf("retired wrong incarnation %+v", got)
+	}
+	h.expectStart(fresh)
+	h.quiet()
 }
 
 func TestRunReclaimsOnlyBudgetThatNewPeerNeeds(t *testing.T) {

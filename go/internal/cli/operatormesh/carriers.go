@@ -196,6 +196,7 @@ func (s *Session) connectCandidate(ctx context.Context, candidate carriers.Candi
 			_ = retired.Close()
 		}
 	}()
+	ctx = localmesh.WithLinkAttachmentReceiver(ctx, candidate.AttachedLink)
 	return s.Node.AttachOperatorRouterLink(localmesh.WithCarrier(ctx, candidate.Transport), link, candidate.Cost)
 }
 

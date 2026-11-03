@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/wendylabsinc/WendyOS/go/babel"
 	"github.com/wendylabsinc/wendy/go/internal/agent/localmesh"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
 )
@@ -25,6 +26,7 @@ type attempt struct {
 	peer      meshid.Device
 	verified  bool
 	canceled  bool
+	link      babel.LinkID
 }
 type sourceUpdate struct {
 	source int
@@ -40,6 +42,11 @@ type completed struct {
 	key string
 	id  uint64
 	err error
+}
+type attached struct {
+	key  string
+	id   uint64
+	link babel.LinkID
 }
 
 // Run owns candidate state and connection lifetimes until ctx ends. Source
@@ -164,6 +171,17 @@ func Run(parent context.Context, cfg Config) error {
 		}
 		return false
 	}
+	idleOwnedLink := func(view localmesh.NodeSnapshot, a *attempt) bool {
+		if a.link == 0 {
+			return false // Authentication alone does not bind an incarnation.
+		}
+		for _, link := range view.Links {
+			if link.ID == a.link && link.Device == a.peer && link.Transport == a.candidate.Transport && link.Cost == a.candidate.Cost && !link.Retiring {
+				return !view.HasInstalledRouteOnLink(a.link)
+			}
+		}
+		return false
+	}
 	plan := func(now time.Time) {
 		view := snapshot()
 		ranking := view
@@ -230,7 +248,7 @@ func Run(parent context.Context, cfg Config) error {
 				if !reclaiming && !hasDirectPeer(ranking, peer) && queue.ReclaimEligible(key, now) {
 					var victim *attempt
 					for _, a := range active {
-						if !a.verified || a.canceled || (bleFull && a.candidate.Transport != BLE) || !hasLink(view, a.peer, a.candidate.Cost, true) {
+						if !a.verified || a.canceled || (bleFull && a.candidate.Transport != BLE) || !hasLink(view, a.peer, a.candidate.Cost, true) || !idleOwnedLink(view, a) {
 							continue
 						}
 						if victim == nil || a.candidate.Cost > victim.candidate.Cost || (a.candidate.Cost == victim.candidate.Cost && a.id > victim.id) {
@@ -253,6 +271,15 @@ func Run(parent context.Context, cfg Config) error {
 				once.Do(func() {
 					select {
 					case events <- authenticated{key, a.id, peer}:
+					case <-child.Done():
+					}
+				})
+			}
+			var attachedOnce sync.Once
+			c.attached = func(link babel.LinkID) {
+				attachedOnce.Do(func() {
+					select {
+					case events <- attached{key, a.id, link}:
 					case <-child.Done():
 					}
 				})
@@ -282,6 +309,7 @@ func Run(parent context.Context, cfg Config) error {
 				}
 				for _, candidate := range v.items {
 					candidate.authenticated = nil
+					candidate.attached = nil
 					if !candidate.valid() || !supported[candidate.Transport] {
 						continue
 					}
@@ -350,6 +378,10 @@ func Run(parent context.Context, cfg Config) error {
 							}
 						}
 					}
+				}
+			case attached:
+				if a := active[v.key]; a != nil && a.id == v.id && a.verified && v.link != 0 {
+					a.link = v.link
 				}
 			case sourceError:
 				if cfg.Status != nil {

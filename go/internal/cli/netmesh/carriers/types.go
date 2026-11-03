@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/wendylabsinc/WendyOS/go/babel"
+
 	"github.com/wendylabsinc/wendy/go/internal/agent/localmesh"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
 )
@@ -37,6 +39,7 @@ type Candidate struct {
 	Capabilities  byte
 	InterfaceName string
 	authenticated func(meshid.Device)
+	attached      func(babel.LinkID)
 }
 
 // Authenticated records the exact peer ONLY after the caller has verified the
@@ -46,6 +49,14 @@ type Candidate struct {
 func (c Candidate) Authenticated(peer meshid.Device) {
 	if c.authenticated != nil {
 		c.authenticated(peer)
+	}
+}
+
+// AttachedLink records only the actual local Node incarnation after admission.
+// Authentication and the Node's installed route snapshot remain independent.
+func (c Candidate) AttachedLink(id babel.LinkID) {
+	if c.attached != nil {
+		c.attached(id)
 	}
 }
 
