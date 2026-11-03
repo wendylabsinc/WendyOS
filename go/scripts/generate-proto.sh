@@ -250,12 +250,16 @@ for p in "${CLOUD_PROTOS[@]}"; do
 done
 
 # ---- Cloud v2 protos ----
-# Cloud v2 uses the Shared gRPC API contracts selected above.
+# Except for the Shared gRPC API contracts above, wendycloud.v2 is vendored beside v1.
 # Shared wendy/options.proto (the signed_request method option) generates into
 # cloudpbv2 too, so the option and SignedRequest live in one Go package.
 CLOUD_V2_PKG="$MODULE/go/proto/gen/cloudpb/v2"
+# APNS registration is vendored from service-protos 35c965536eeb5c49acfefb9792fa6fba48533c64.
 CLOUD_V2_PROTOS=(
+    "wendycloud/v2/apns.proto"
     "${SHARED_GRPC_API_CONTRACTS_CLOUD_PROTOS[@]}"
+    "wendycloud/v2/roles.proto"
+    "wendycloud/v2/device_access.proto"
 )
 
 # The import path ends in "/v2", which would name the Go package "v2"; the
@@ -450,3 +454,15 @@ protoc --proto_path="$PROTO_DIR" \
 # App recording envelopes (no generated SDK is needed for lightweight streams).
 protoc --proto_path="$PROTO_DIR" --go_out="$GO_DIR" --go_opt=module="$MODULE/go" \
     wendy/agent/apps/v1/recording.proto
+
+# Cloud-owned invite contract from cloud d840731bfb4a59bd6585efb359d67745d295a28d.
+# UUID identifiers despite its v1 package. roles/device_access above are from
+# service-protos 35c965536eeb5c49acfefb9792fa6fba48533c64.
+mkdir -p "$GEN_DIR/cloudinvitepb"
+protoc --proto_path="$PROTO_DIR" \
+    --proto_path="$SHARED_GRPC_API_CONTRACTS_DIR" \
+    --go_out="$GEN_DIR/cloudinvitepb" --go_opt=module="$MODULE/go/proto/gen/cloudinvitepb" \
+    --go-grpc_out="$GEN_DIR/cloudinvitepb" --go-grpc_opt=module="$MODULE/go/proto/gen/cloudinvitepb" \
+    $ALL_M_OPTS \
+    --go_opt=Morg_invites.proto="$MODULE/go/proto/gen/cloudinvitepb" \
+    --go-grpc_opt=Morg_invites.proto="$MODULE/go/proto/gen/cloudinvitepb" org_invites.proto

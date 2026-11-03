@@ -4,12 +4,54 @@ import (
 	"context"
 	"io"
 	"net"
+	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshoperatorlink"
 	"google.golang.org/grpc"
 )
+
+// WaitForPeer waits for the local routing actor, rather than assuming that
+// every first hop exposes the WendyOS gRPC agent. Lite uses native WendyCom.
+// Readiness requires the authenticated link and a usable signed first-hop
+// route, so an immediately following management call does not race gossip.
+func (s *Session) WaitForPeer(ctx context.Context) error {
+	s.runMu.Lock()
+	started, done := s.started, s.runDone
+	s.runMu.Unlock()
+	if !started {
+		return io.ErrClosedPipe
+	}
+	tick := time.NewTicker(250 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if peer, ok := s.AdjacentPeer(); ok {
+			snapshot := s.Snapshot()
+			for _, manifest := range snapshot.Devices {
+				owner, err := manifest.Peer(peer.Tenant())
+				if err != nil || owner != peer || manifest.Withdraw || manifest.Expires <= time.Now().UnixMilli() || manifest.Route == nil || !snapshot.RouteAuthorizations[*manifest.Route] {
+					continue
+				}
+				for _, route := range snapshot.ForwardingRoutes {
+					if !route.Unreachable && !route.Local && route.Prefix == manifest.Route.Prefix && route.RouterID == manifest.Route.RouterID && route.Seqno == manifest.Route.Seqno {
+						return nil
+					}
+				}
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-done:
+			return io.ErrClosedPipe
+		case <-tick.C:
+		}
+	}
+}
 
 // AgentConnection reuses the actual adjacent router's pinned operator TLS
 // attachment. Run must already be draining its packets and controls. The

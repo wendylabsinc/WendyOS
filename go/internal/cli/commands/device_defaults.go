@@ -292,6 +292,10 @@ func connectNamedDeviceSelector(ctx context.Context, device string, suppressUpda
 		}
 		return &SelectedDevice{External: &external, Provider: providers.ProviderForKey("wendy-lite"), DefaultSelector: device, PinKey: device}, true, nil
 	}
+	if strings.HasPrefix(device, "mesh:") && !strings.HasPrefix(device, "mesh://") {
+		picked, err := connectMeshSelector(ctx, device)
+		return picked, true, err
+	}
 	if _, matched, err := sessionbroker.ParseMeshSelector(device); matched {
 		if err != nil {
 			return nil, true, err

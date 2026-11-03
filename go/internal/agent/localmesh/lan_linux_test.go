@@ -571,7 +571,7 @@ func TestLANWorkerFailureClosesPendingConnections(t *testing.T) {
 	}
 }
 
-func TestLANIncomingAdmissionBoundAndSubnet(t *testing.T) {
+func TestLANIncomingAdmissionBoundAndAddress(t *testing.T) {
 	selected := lanInterface{net: &net.IPNet{IP: net.IPv4(192, 0, 2, 0), Mask: net.CIDRMask(24, 32)}}
 	claims := lanTestClaims(&Credentials{Device: lanDevice(t, 460)})
 	gate := lanIncomingContext(selected, claims)
@@ -592,8 +592,8 @@ func TestLANIncomingAdmissionBoundAndSubnet(t *testing.T) {
 	if _, err := gate(context.Background(), info); err == nil {
 		t.Fatal("unbounded unauthenticated state")
 	}
-	if _, err := gate(context.Background(), &quic.ClientInfo{RemoteAddr: &net.UDPAddr{IP: net.IPv4(198, 51, 100, 2)}}); err == nil {
-		t.Fatal("off-subnet source admitted")
+	if _, err := gate(context.Background(), &quic.ClientInfo{RemoteAddr: &net.UDPAddr{IP: net.IPv4(169, 254, 1, 2)}}); err == nil {
+		t.Fatal("off-subnet link-local source admitted")
 	}
 	cancels[0]()
 	deadline := time.Now().Add(time.Second)

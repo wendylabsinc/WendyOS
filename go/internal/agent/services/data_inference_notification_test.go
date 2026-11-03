@@ -52,7 +52,7 @@ func TestCampaignCloudNotificationUsesCampaignIdentity(t *testing.T) {
 		t.Fatalf("sent %d Cloud requests", len(cloud.requests))
 	}
 	request := cloud.requests[0]
-	if request.GetAppId() != "campaign:"+notification.Campaign || request.GetNotificationId() != notification.ID || request.OrganizationId != nil {
+	if request.GetAppId() != "sh.wendy.campaign."+notification.Campaign || request.GetNotificationId() != notification.ID || request.OrganizationId != nil {
 		t.Fatalf("incorrect source attribution: %v", request)
 	}
 	if request.GetDeepLink() != "wendy://live" || request.GetSeverity() != cloudpb.NotificationSeverity_NOTIFICATION_SEVERITY_INFO {
