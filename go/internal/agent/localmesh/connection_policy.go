@@ -47,6 +47,7 @@ type ConnectionPolicy struct {
 	carrierCost         uint16
 	incomingDemandUntil time.Time
 	incomingDemandPeers map[meshid.Device]struct{} // Owned victim identities for this bounded receipt.
+	incomingDemandOwner *ConnectionLease           // Exact retirement receipt, retained across its Release.
 }
 
 func NewConnectionPolicy(self meshid.Device, preferLower bool, limits ConnectionLimits) *ConnectionPolicy {
@@ -67,11 +68,12 @@ type ConnectionLease struct {
 	cost                     uint16
 	retire                   func()
 	reclaimed                bool
-	capacityClosing          atomic.Bool // Signal-only publication from the Node actor.
-	incomingDemand           bool        // This owner's actual release starts the bounded opportunity.
-	demandAtSetup            bool        // A hold expiring during TLS cannot make an old backup win.
-	lastIncomingWorker       bool        // Captured local setup token, separate from native lease quota.
-	newPeer                  bool        // Verified presence before this actual Node admission.
+	capacityClosing          atomic.Bool      // Signal-only publication from the Node actor.
+	incomingDemand           bool             // This owner's actual release starts the bounded opportunity.
+	demandAtSetup            bool             // A hold expiring during TLS cannot make an old backup win.
+	lastIncomingWorker       bool             // Captured local setup token, separate from native lease quota.
+	newPeer                  bool             // Verified presence before this actual Node admission.
+	demandAtReady            *ConnectionLease // Only this authenticated opportunity may be served by Bind.
 }
 
 // SetSnapshot supplies local authenticated routing evidence for capacity
@@ -178,6 +180,7 @@ func (p *ConnectionPolicy) ReclaimIncomingWorkerFor(peer meshid.Device, cost uin
 			victim.retired, victim.reclaimed, p.reclaiming = true, true, true
 			victim.incomingDemand = !knownRedundancy
 			if victim.incomingDemand {
+				p.incomingDemandOwner = victim
 				p.rememberIncomingDemandPeer(victim.peer)
 			}
 			retire = victim.retire
@@ -333,8 +336,11 @@ func (l *ConnectionLease) Release() {
 	if l.stopTracking != nil {
 		l.stopTracking()
 	}
+	l.newPeer, l.demandAtReady = false, nil
 	if _, exists := l.policy.connections[l]; exists && l.incomingDemand {
-		l.policy.incomingDemandUntil = l.policy.now().Add(FailedConnectPenalty)
+		if l.policy.incomingDemandOwner == l {
+			l.policy.incomingDemandUntil = l.policy.now().Add(FailedConnectPenalty)
+		}
 		l.incomingDemand = false
 	}
 	delete(l.policy.connections, l)
@@ -465,14 +471,22 @@ func (l *ConnectionLease) readyWithCost(peer meshid.Device, cost uint16, closeCo
 		closeConnection()
 		return false
 	}
-	if !l.ready && (l.demandAtSetup || p.incomingDemandActive()) && (p.counts().Total >= p.limits.Total || (!l.outgoing && l.lastIncomingWorker)) && workingCarrierPresent(view, peer) {
+	activeDemand := p.incomingDemandActive()
+	if !l.ready && (l.demandAtSetup || activeDemand) && (p.counts().Total >= p.limits.Total || (!l.outgoing && l.lastIncomingWorker)) && workingCarrierPresent(view, peer) {
 		l.retired = true
 		p.mu.Unlock()
 		closeConnection()
 		return false
 	}
-	l.peer, l.ready, l.close = peer, true, closeConnection
-	l.cost, l.newPeer = cost, !directPeerPresent(view, peer) && !p.incomingDemandKnows(peer)
+	if !l.ready {
+		l.newPeer = !directPeerPresent(view, peer) && !p.incomingDemandKnows(peer)
+		if activeDemand {
+			// A delayed admission cannot satisfy a receipt created after its
+			// authentication, even when it was originally a new peer.
+			l.demandAtReady = p.incomingDemandOwner
+		}
+	}
+	l.peer, l.ready, l.close, l.cost = peer, true, closeConnection, cost
 	if l.stopTracking != nil {
 		l.stopTracking()
 	}
@@ -518,14 +532,32 @@ func BindConnectionLink(ctx context.Context, id babel.LinkID, cost uint16, retir
 		return
 	}
 	l.policy.mu.Lock()
+	snapshot := l.policy.snapshot
+	l.policy.mu.Unlock()
+	var view NodeSnapshot
+	if snapshot != nil {
+		view = snapshot()
+	}
+	l.policy.mu.Lock()
 	defer l.policy.mu.Unlock()
 	if _, exists := l.policy.connections[l]; exists && l.ready && !l.retired && !l.capacityClosing.Load() {
 		l.link, l.cost, l.retire = id, cost, retire
-		if l.newPeer {
+		newDirect := l.newPeer && snapshot != nil && !l.policy.incomingDemandKnows(l.peer)
+		for _, link := range view.Links {
+			if link.Device == l.peer && link.ID != id {
+				newDirect = false
+			}
+		}
+		for other := range l.policy.connections {
+			if other != l && other.ready && other.peer == l.peer && other.link != 0 {
+				newDirect = false
+			}
+		}
+		if newDirect && l.demandAtReady != nil && l.policy.incomingDemandActive() && l.demandAtReady == l.policy.incomingDemandOwner {
 			l.policy.clearIncomingDemand()
-			l.newPeer = false
 		}
 	}
+	l.newPeer, l.demandAtReady = false, nil
 }
 
 // markConnectionRetry prevents normal provider completion from penalizing a

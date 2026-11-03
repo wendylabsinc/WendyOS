@@ -60,12 +60,12 @@ func (p *ConnectionPolicy) incomingDemandActive() bool {
 	if p.now().Before(p.incomingDemandUntil) {
 		return true
 	}
-	for l := range p.connections {
-		if l.incomingDemand {
-			return true
-		}
+	owner := p.incomingDemandOwner
+	if _, exists := p.connections[owner]; exists && owner.incomingDemand {
+		return true
 	}
 	p.incomingDemandPeers = nil
+	p.incomingDemandOwner = nil
 	return false
 }
 
@@ -73,6 +73,7 @@ func (p *ConnectionPolicy) notePendingIncomingDemand() {
 	for l := range p.connections {
 		if l.reclaimed || l.capacityClosing.Load() {
 			l.incomingDemand = true
+			p.incomingDemandOwner = l
 			p.rememberIncomingDemandPeer(l.peer)
 			return
 		}
@@ -82,6 +83,7 @@ func (p *ConnectionPolicy) notePendingIncomingDemand() {
 func (p *ConnectionPolicy) clearIncomingDemand() {
 	p.incomingDemandUntil = time.Time{}
 	p.incomingDemandPeers = nil
+	p.incomingDemandOwner = nil
 	for l := range p.connections {
 		l.incomingDemand = false
 		l.demandAtSetup = false
