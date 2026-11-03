@@ -54,27 +54,38 @@ func directPeerPresent(view NodeSnapshot, peer meshid.Device) bool {
 	return false
 }
 
+// A closing owner can receive fresh demand after its previous opportunity was
+// served. Each arm therefore has its own identity, even for the same owner.
+type incomingDemandReceipt struct{ owner *ConnectionLease }
+
+func (p *ConnectionPolicy) markIncomingDemand(owner *ConnectionLease) {
+	if !owner.incomingDemand || p.incomingReceipt == nil || p.incomingReceipt.owner != owner {
+		p.incomingReceipt = &incomingDemandReceipt{owner: owner}
+	}
+	owner.incomingDemand = true
+	p.rememberIncomingDemandPeer(owner.peer)
+}
+
 // incomingDemandActive runs under the policy lock. A pending owner still
 // consumes capacity; only its actual release starts the finite interval.
 func (p *ConnectionPolicy) incomingDemandActive() bool {
 	if p.now().Before(p.incomingDemandUntil) {
 		return true
 	}
-	owner := p.incomingDemandOwner
-	if _, exists := p.connections[owner]; exists && owner.incomingDemand {
-		return true
+	if receipt := p.incomingReceipt; receipt != nil {
+		if _, exists := p.connections[receipt.owner]; exists && receipt.owner.incomingDemand {
+			return true
+		}
 	}
 	p.incomingDemandPeers = nil
-	p.incomingDemandOwner = nil
+	p.incomingReceipt = nil
 	return false
 }
 
 func (p *ConnectionPolicy) notePendingIncomingDemand() {
 	for l := range p.connections {
 		if l.reclaimed || l.capacityClosing.Load() {
-			l.incomingDemand = true
-			p.incomingDemandOwner = l
-			p.rememberIncomingDemandPeer(l.peer)
+			p.markIncomingDemand(l)
 			return
 		}
 	}
@@ -83,7 +94,7 @@ func (p *ConnectionPolicy) notePendingIncomingDemand() {
 func (p *ConnectionPolicy) clearIncomingDemand() {
 	p.incomingDemandUntil = time.Time{}
 	p.incomingDemandPeers = nil
-	p.incomingDemandOwner = nil
+	p.incomingReceipt = nil
 	for l := range p.connections {
 		l.incomingDemand = false
 		l.demandAtSetup = false

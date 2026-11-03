@@ -47,7 +47,7 @@ type ConnectionPolicy struct {
 	carrierCost         uint16
 	incomingDemandUntil time.Time
 	incomingDemandPeers map[meshid.Device]struct{} // Owned victim identities for this bounded receipt.
-	incomingDemandOwner *ConnectionLease           // Exact retirement receipt, retained across its Release.
+	incomingReceipt     *incomingDemandReceipt     // Exact opportunity, retained across its owner's Release.
 }
 
 func NewConnectionPolicy(self meshid.Device, preferLower bool, limits ConnectionLimits) *ConnectionPolicy {
@@ -68,12 +68,12 @@ type ConnectionLease struct {
 	cost                     uint16
 	retire                   func()
 	reclaimed                bool
-	capacityClosing          atomic.Bool      // Signal-only publication from the Node actor.
-	incomingDemand           bool             // This owner's actual release starts the bounded opportunity.
-	demandAtSetup            bool             // A hold expiring during TLS cannot make an old backup win.
-	lastIncomingWorker       bool             // Captured local setup token, separate from native lease quota.
-	newPeer                  bool             // Verified presence before this actual Node admission.
-	demandAtReady            *ConnectionLease // Only this authenticated opportunity may be served by Bind.
+	capacityClosing          atomic.Bool            // Signal-only publication from the Node actor.
+	incomingDemand           bool                   // This owner's actual release starts the bounded opportunity.
+	demandAtSetup            bool                   // A hold expiring during TLS cannot make an old backup win.
+	lastIncomingWorker       bool                   // Captured local setup token, separate from native lease quota.
+	newPeer                  bool                   // Verified presence before this actual Node admission.
+	demandAtReady            *incomingDemandReceipt // Only this authenticated opportunity may be served by Bind.
 }
 
 // SetSnapshot supplies local authenticated routing evidence for capacity
@@ -178,11 +178,7 @@ func (p *ConnectionPolicy) ReclaimIncomingWorkerFor(peer meshid.Device, cost uin
 	} else {
 		if victim := p.redundantLease(view, false, true); victim != nil {
 			victim.retired, victim.reclaimed, p.reclaiming = true, true, true
-			victim.incomingDemand = !knownRedundancy
-			if victim.incomingDemand {
-				p.incomingDemandOwner = victim
-				p.rememberIncomingDemandPeer(victim.peer)
-			}
+			p.markIncomingDemand(victim)
 			retire = victim.retire
 		}
 	}
@@ -338,7 +334,7 @@ func (l *ConnectionLease) Release() {
 	}
 	l.newPeer, l.demandAtReady = false, nil
 	if _, exists := l.policy.connections[l]; exists && l.incomingDemand {
-		if l.policy.incomingDemandOwner == l {
+		if receipt := l.policy.incomingReceipt; receipt != nil && receipt.owner == l {
 			l.policy.incomingDemandUntil = l.policy.now().Add(FailedConnectPenalty)
 		}
 		l.incomingDemand = false
@@ -483,7 +479,7 @@ func (l *ConnectionLease) readyWithCost(peer meshid.Device, cost uint16, closeCo
 		if activeDemand {
 			// A delayed admission cannot satisfy a receipt created after its
 			// authentication, even when it was originally a new peer.
-			l.demandAtReady = p.incomingDemandOwner
+			l.demandAtReady = p.incomingReceipt
 		}
 	}
 	l.peer, l.ready, l.close, l.cost = peer, true, closeConnection, cost
@@ -553,7 +549,7 @@ func BindConnectionLink(ctx context.Context, id babel.LinkID, cost uint16, retir
 				newDirect = false
 			}
 		}
-		if newDirect && l.demandAtReady != nil && l.policy.incomingDemandActive() && l.demandAtReady == l.policy.incomingDemandOwner {
+		if newDirect && l.demandAtReady != nil && l.policy.incomingDemandActive() && l.demandAtReady == l.policy.incomingReceipt {
 			l.policy.clearIncomingDemand()
 		}
 	}
