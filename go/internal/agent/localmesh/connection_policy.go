@@ -128,7 +128,35 @@ func (p *ConnectionPolicy) discoveryAvailable(outgoing bool) bool {
 	if snapshot == nil || p.reclaiming || (outgoing && c.Attempts >= p.limits.Attempts) {
 		return false
 	}
-	return p.redundantLease(view, outgoing && c.Outgoing >= p.limits.Outgoing) != nil
+	return p.redundantLease(view, outgoing && c.Outgoing >= p.limits.Outgoing, false) != nil
+}
+
+// ReclaimIncomingWorker is called only when the provider's bounded incoming
+// lifetime-worker gate is full. It signals one safe owned incoming standby,
+// then the caller rejects its current probe; no worker or neighbour slot is
+// borrowed before the old lifetime owner completes and releases capacity.
+func (p *ConnectionPolicy) ReclaimIncomingWorker() bool {
+	p.mu.Lock()
+	snapshot := p.snapshot
+	p.mu.Unlock()
+	if snapshot == nil {
+		return false
+	}
+	view := snapshot()
+	p.mu.Lock()
+	var retire func()
+	if !p.reclaiming {
+		if victim := p.redundantLease(view, false, true); victim != nil {
+			victim.retired, victim.reclaimed, p.reclaiming = true, true, true
+			retire = victim.retire
+		}
+	}
+	p.mu.Unlock()
+	if retire == nil {
+		return false
+	}
+	retire()
+	return true
 }
 
 func (p *ConnectionPolicy) preferred(l *ConnectionLease) bool {
@@ -214,7 +242,7 @@ func (p *ConnectionPolicy) reclaim(view NodeSnapshot, candidate meshid.Device, n
 			return nil // Upgrades and extra redundancy only use spare capacity.
 		}
 	}
-	victim := p.redundantLease(view, needOutgoing)
+	victim := p.redundantLease(view, needOutgoing, false)
 	if victim == nil {
 		return nil
 	}
@@ -222,10 +250,10 @@ func (p *ConnectionPolicy) reclaim(view NodeSnapshot, candidate meshid.Device, n
 	return victim.retire
 }
 
-func (p *ConnectionPolicy) redundantLease(view NodeSnapshot, needOutgoing bool) *ConnectionLease {
+func (p *ConnectionPolicy) redundantLease(view NodeSnapshot, needOutgoing, needIncoming bool) *ConnectionLease {
 	var victim *ConnectionLease
 	for l := range p.connections {
-		if !l.ready || l.retired || l.link == 0 || l.retire == nil || (needOutgoing && !l.outgoing) {
+		if !l.ready || l.retired || l.link == 0 || l.retire == nil || view.HasInstalledRouteOnLink(l.link) || (needOutgoing && !l.outgoing) || (needIncoming && l.outgoing) {
 			continue
 		}
 		for _, link := range view.Links {
@@ -398,6 +426,7 @@ func WithConnectionLease(ctx context.Context, l *ConnectionLease) context.Contex
 // BindConnectionLink connects a verified provider lease to its exact admitted
 // Node incarnation. retire must only signal its existing lifetime owner.
 func BindConnectionLink(ctx context.Context, id babel.LinkID, cost uint16, retire func()) {
+	reportLinkAttachment(ctx, id)
 	l, _ := ctx.Value(connectionLeaseKey{}).(*ConnectionLease)
 	if l == nil {
 		return

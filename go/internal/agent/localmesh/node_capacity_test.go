@@ -31,7 +31,7 @@ func TestNodeCapacityReclaimsOneOwnedStandbyBeforeRetry(t *testing.T) {
 	if err := n.handle(nodeEvent{add: add}); !errors.Is(err, ErrCarrierCapacityRetry) {
 		t.Fatalf("new peer did not receive intentional local deferral: %v", err)
 	}
-	if len(n.peers) != 64 || n.nextLink != 64 || !old.retiring() || working.retiring() || n.capacityRetiring != old.id {
+	if len(n.peers) != 64 || n.nextLink != 64 || !old.retiring() || !old.capacityRetire.Load() || working.retiring() || n.capacityRetiring != old.id {
 		t.Fatal("capacity pressure dropped the last working path or allocated a 65th attachment")
 	}
 	for i := 0; i < 3; i++ {

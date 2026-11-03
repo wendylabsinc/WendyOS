@@ -36,6 +36,13 @@ func (p *nodePeer) signalRetire() {
 	p.retireOnce.Do(func() { close(p.retire) })
 }
 
+func (p *nodePeer) signalCapacityRetire() {
+	p.retireOnce.Do(func() {
+		p.capacityRetire.Store(true)
+		close(p.retire)
+	})
+}
+
 func (p *nodePeer) retiring() bool {
 	if p.babelRetiring {
 		return true

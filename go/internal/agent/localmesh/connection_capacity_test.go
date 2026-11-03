@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/wendylabsinc/WendyOS/go/babel"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
 )
 
@@ -71,7 +72,7 @@ func TestConnectionCapacityDiscoveryDoesNotHideReclaimableIncomingSlot(t *testin
 
 func TestConnectionCapacityRequiresCurrentAlternateAndRunnableNewPeer(t *testing.T) {
 	peer, next := selectionDevice(10), selectionDevice(11)
-	for _, mode := range []string{"no-alternate", "uninstalled", "other-peer", "retiring-alternate", "stale-incarnation", "wrong-cost", "connected-upgrade", "failure-backoff", "attempt-full", "duplicate-setup"} {
+	for _, mode := range []string{"no-alternate", "uninstalled", "other-peer", "retiring-alternate", "stale-incarnation", "wrong-cost", "connected-upgrade", "failure-backoff", "attempt-full", "duplicate-setup", "installed-transit"} {
 		t.Run(mode, func(t *testing.T) {
 			view := NodeSnapshot{Links: []PeerLink{{ID: 1, Device: peer, Cost: 4096}, {ID: 2, Device: peer, Cost: 128, ForwardingReady: true}}}
 			p := NewConnectionPolicy(selectionDevice(1), true, ConnectionLimits{Outgoing: 1, Attempts: 1, Total: 3})
@@ -102,6 +103,8 @@ func TestConnectionCapacityRequiresCurrentAlternateAndRunnableNewPeer(t *testing
 				view.Links[0].ID = 3
 			case "wrong-cost":
 				view.Links[0].Cost = 512
+			case "installed-transit":
+				view.ForwardingRoutes = []babel.Route{{Link: 1, Metric: 512}}
 			case "connected-upgrade":
 				candidate = peer
 			case "failure-backoff":
