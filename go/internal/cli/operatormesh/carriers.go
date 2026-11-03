@@ -98,16 +98,16 @@ func (s *Session) runCarriers(ctx context.Context) error {
 }
 
 func (s *Session) connectCandidate(ctx context.Context, candidate carriers.Candidate) (result error) {
-	if os.Getenv("WENDY_MESH_DEBUG") == "1" {
-		defer func() {
-			fmt.Fprintf(os.Stderr, "wendy: mesh %s candidate %s hint=%x capabilities=%02x finished: %v\n", candidate.Transport, candidate.Address, candidate.Hint, candidate.Capabilities, result)
-		}()
-	}
 	defer func() {
 		if result != nil && ctx.Err() == nil && !errors.Is(result, carriers.ErrUnsupportedPeer) && s.options.ReportCarrierFailure != nil {
 			s.options.ReportCarrierFailure(candidate.Transport, result)
 		}
 	}()
+	if os.Getenv("WENDY_MESH_DEBUG") == "1" {
+		defer func() {
+			fmt.Fprintf(os.Stderr, "wendy: mesh %s candidate %s hint=%x capabilities=%02x finished: %v\n", candidate.Transport, candidate.Address, candidate.Hint, candidate.Capabilities, result)
+		}()
+	}
 	var link *meshoperatorlink.RouterLink
 	seed := s.seedCandidate()
 	if candidate.Address == seed.Address && candidate.Transport == seed.Transport && candidate.PSM == seed.PSM {
@@ -187,9 +187,6 @@ func (s *Session) connectCandidate(ctx context.Context, candidate carriers.Candi
 		fmt.Fprintf(os.Stderr, "wendy: mesh %s authenticated %s\n", candidate.Transport, peer.Principal())
 	}
 	candidate.Authenticated(peer)
-	if s.Snapshot().HasCheaperLink(peer, candidate.Cost) {
-		return nil
-	}
 	s.linkMu.Lock()
 	s.links[link] = managedCarrier{peer: peer, cost: candidate.Cost}
 	s.choosePreferredLocked()
@@ -213,6 +210,7 @@ func (s *Session) connectCandidate(ctx context.Context, candidate carriers.Candi
 			_ = retired.Close()
 		}
 	}()
+	ctx = localmesh.WithLinkAttachmentReceiver(ctx, candidate.AttachedLink)
 	return s.Node.AttachOperatorRouterLink(localmesh.WithCarrier(ctx, candidate.Transport), link, candidate.Cost)
 }
 

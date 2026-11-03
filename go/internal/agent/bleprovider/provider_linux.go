@@ -65,8 +65,9 @@ func (r *runtime) hasCheaperLink(device meshid.Device) bool {
 	if r.cfg.Selection != nil {
 		return !r.cfg.Selection.AllowRadio(device, localmesh.RadioBLE)
 	}
-	checker, ok := r.cfg.Node.(cheaperLinkChecker)
-	return ok && checker.HasCheaperLink(device, LinkCost)
+	// Cheaper routing alone does not retire a useful standby. Only the owned
+	// connection policy may reclaim it when this adapter needs capacity.
+	return false
 }
 
 // noteDialTimeout warns after three consecutive dial-context timeouts.
@@ -125,6 +126,15 @@ func (r *runtime) admitDial(now time.Time) bool {
 	}
 	r.nextDial = now.Add(globalDialPace)
 	return true
+}
+
+func (r *runtime) dialReady(now time.Time) bool {
+	if r.cfg.Pacer != nil {
+		return r.cfg.Pacer.Ready(now)
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return !now.Before(r.nextDial)
 }
 
 // cheaperLinkReverify is the delay between a veto sample and its
@@ -198,7 +208,8 @@ func (r *runtime) reserveCandidate(peer candidate) *localmesh.ConnectionLease {
 	if cooling || (known != (meshid.Device{}) && r.hasCheaperLink(known)) {
 		return nil
 	}
-	return r.connectionPolicy().Reserve(peer.key(), known, true)
+	now := time.Now()
+	return r.connectionPolicy().ReservePreferred(peer.key(), known, true, "", r.dialReady(now) && r.candidateQueue().ReclaimEligible(peer.key(), now))
 }
 
 func (r *runtime) failedCandidate(peer candidate) {
@@ -244,13 +255,17 @@ func (r *runtime) connectionPolicy() *localmesh.ConnectionPolicy {
 	if r.policy == nil {
 		if r.cfg.Policy != nil {
 			r.policy = r.cfg.Policy
-			return r.policy
+		} else {
+			self := meshid.Device{}
+			if r.cfg.Credentials != nil {
+				self = r.cfg.Credentials.Device
+			}
+			r.policy = localmesh.NewConnectionPolicy(self, false, localmesh.ConnectionLimits{Outgoing: localmesh.BLEMaxOutgoing, Attempts: localmesh.BLEMaxOutgoingAttempts, Total: localmesh.BLEMaxConnections})
 		}
-		self := meshid.Device{}
-		if r.cfg.Credentials != nil {
-			self = r.cfg.Credentials.Device
+		if node, ok := r.cfg.Node.(interface{ Snapshot() localmesh.NodeSnapshot }); ok {
+			r.policy.SetSnapshot(node.Snapshot)
 		}
-		r.policy = localmesh.NewConnectionPolicy(self, false, localmesh.ConnectionLimits{Outgoing: localmesh.BLEMaxOutgoing, Attempts: localmesh.BLEMaxOutgoingAttempts, Total: localmesh.BLEMaxConnections})
+		r.policy.SetCarrierCost(LinkCost)
 	}
 	return r.policy
 }
@@ -445,16 +460,29 @@ func (r *runtime) acceptLoop(ctx context.Context, listener *l2Listener) error {
 			}
 			return fmt.Errorf("BLE L2CAP accept: %w", err)
 		}
+		known := r.knownIncomingPeer(conn)
+		if known != (meshid.Device{}) && r.connectionPolicy().DeferIncomingCarrier(known, LinkCost, cap(sem)-len(sem)) {
+			_ = conn.Close()
+			continue
+		}
 		select {
 		case sem <- struct{}{}:
+			setupCtx := ctx
+			if len(sem) == cap(sem) {
+				setupCtx = localmesh.WithLastIncomingWorker(ctx)
+			}
 			r.updateAdvertisementAdmission()
 			r.links.Add(1)
 			go func() {
 				defer r.links.Done()
 				defer func() { <-sem; r.updateAdvertisementAdmission() }()
-				r.acceptLink(ctx, conn)
+				r.acceptLink(setupCtx, conn)
 			}()
 		default:
+			// The established incoming workers retain their tokens until normal
+			// completion. A safe owned incoming standby may yield, but this probe
+			// is still rejected and cannot allocate a fourth worker or neighbour.
+			r.connectionPolicy().ReclaimIncomingWorkerFor(known, LinkCost)
 			_ = conn.Close()
 		}
 	}
@@ -629,7 +657,11 @@ func (r *runtime) acceptLink(ctx context.Context, raw net.Conn) {
 			return operatorConfig, nil
 		}
 		if selected == ALPN && lease == nil {
-			lease = r.connectionPolicy().Reserve(key, meshid.Device{}, false)
+			policy := r.connectionPolicy()
+			// A verified radio cache only bounds scheduling. Keep the actual
+			// reservation anonymous until TLS verifies the incoming identity.
+			reclaim := !policy.HasWorkingCarrier(r.knownIncomingPeer(raw))
+			lease = policy.ReservePreferred(key, meshid.Device{}, false, "", reclaim)
 			if lease == nil {
 				return nil, errors.New("BLE neighbour capacity reached")
 			}
@@ -721,6 +753,23 @@ func (r *runtime) rememberInboundRadio(raw net.Conn, peer meshid.Device) {
 	}
 }
 
+// An authenticated radio cache is only a bounded scheduling hint. Actual TLS
+// identity still decides admission, including after the demand hold expires.
+func (r *runtime) knownIncomingPeer(raw net.Conn) meshid.Device {
+	radio, ok := raw.RemoteAddr().(l2addr)
+	if !ok {
+		return meshid.Device{}
+	}
+	kind := map[uint8]string{btAddrLEPublic: "public", btAddrLERandom: "random"}[radio.Type]
+	if _, address, err := parseAddress(radio.Address, kind, radio.PSM); err != nil || address == ([6]byte{}) {
+		return meshid.Device{}
+	}
+	key := (candidate{address: radio.Address, addressType: kind}).key()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.known[key]
+}
+
 func (r *runtime) scanLoop(ctx context.Context, bus *dbus.Conn, adapter dbus.ObjectPath) error {
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
@@ -779,16 +828,15 @@ func (r *runtime) updateAdvertisementAdmission() {
 // dwell, link flaps would churn it every few seconds.
 const scanToggleDwell = 10 * time.Second
 
-// governDiscovery pauses discovery when the outgoing target or total capacity
-// is occupied, and resumes it when a slot opens. Paused devices keep
+// governDiscovery pauses discovery when useful outgoing capacity is occupied,
+// and resumes it when a slot or safely reclaimable standby exists. Paused devices keep
 // advertising (inbound joins still work) but stop spending ~half the radio
 // on active scanning. Returns whether scanning is currently enabled.
 func (r *runtime) governDiscovery(ctx context.Context, bus *dbus.Conn, adapter dbus.ObjectPath) bool {
 	target := localmesh.BLEMaxOutgoing
 	paused := r.scanPaused
 	if now := time.Now(); now.Sub(r.lastScanToggle) >= scanToggleDwell {
-		if counts := r.connectionPolicy().Counts(); (counts.Outgoing >= target || counts.Total >= localmesh.BLEMaxConnections) != paused {
-			wantPaused := counts.Outgoing >= target || counts.Total >= localmesh.BLEMaxConnections
+		if wantPaused := !r.connectionPolicy().OutgoingDiscoveryAvailable(); wantPaused != paused {
 			if wantPaused {
 				if err := stopBlueZDiscovery(ctx, bus, adapter); err != nil {
 					r.reportDiscoveryHealth(ctx, fmt.Errorf("pausing BLE discovery: %w", err))
@@ -869,7 +917,14 @@ func (r *runtime) startCandidates(ctx context.Context, peers []candidate, now ti
 		byKey[peer.key()] = peer
 		keys = append(keys, peer.key())
 	}
-	for _, key := range r.candidateQueue().Order(keys, now) {
+	var view localmesh.NodeSnapshot
+	if node, ok := r.cfg.Node.(interface{ Snapshot() localmesh.NodeSnapshot }); ok {
+		view = node.Snapshot()
+	}
+	for _, key := range r.candidateQueue().OrderPreferred(keys, now, view, func(key string) (meshid.Device, uint16) {
+		peer, _ := r.knownCandidate(byKey[key])
+		return peer, LinkCost
+	}) {
 		peer := byKey[key]
 		if r.freshness != nil && !r.freshness.nativeReady(peer, now) {
 			continue
@@ -920,8 +975,7 @@ func (r *runtime) discoveredCandidates(objects managedObjects, at time.Time) []c
 }
 
 func (r *runtime) missingPeerSlots() bool {
-	counts := r.connectionPolicy().Counts()
-	return counts.Outgoing < localmesh.BLEMaxOutgoing && counts.Total < localmesh.BLEMaxConnections
+	return r.connectionPolicy().OutgoingDiscoveryAvailable()
 }
 
 func (r *runtime) maybeRestartDiscovery(ctx context.Context, bus *dbus.Conn, adapter dbus.ObjectPath, now time.Time) {

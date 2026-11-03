@@ -54,17 +54,11 @@ func TestRunStaleAttachedLANCannotVetoOrRetireBLE(t *testing.T) {
 	mu.Lock()
 	lanReady = true
 	mu.Unlock()
-	wait(t, ended) // A restored, installed cheaper path still prunes BLE.
-	select {
-	case <-entered:
-		t.Fatal("BLE redialed while cheaper forwarding stayed ready")
-	case <-time.After(30 * time.Millisecond):
-	}
+	stillAttached() // A restored cheaper path retains a standby while capacity is spare.
 	mu.Lock()
 	lanReady = false
 	mu.Unlock()
-	wait(t, entered) // No socket-close event or advertisement refresh is needed.
-	stillAttached()
+	stillAttached() // Silent LAN loss needs no cold BLE setup or advertisement refresh.
 	cancel()
 	wait(t, done)
 }

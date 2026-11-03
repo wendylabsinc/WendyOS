@@ -11,43 +11,20 @@ import (
 )
 
 func TestPeerSelectionLANAndRadioDiversity(t *testing.T) {
-	now := time.Now()
 	snapshot := NodeSnapshot{}
 	p := NewPeerSelection(func() NodeSnapshot { return snapshot })
-	p.now = func() time.Time { return now }
-	p.Seen(selectionDevice(10), RadioNAN)
-	if !p.AllowRadio(selectionDevice(10), RadioNAN) || !p.AllowRadio(selectionDevice(10), RadioBLE) {
-		t.Fatal("an available radio peer was rejected")
+	peer, other := selectionDevice(10), selectionDevice(11)
+	for _, cost := range []uint16{4096, 512, 128, 64} {
+		snapshot.Links = []PeerLink{{Device: peer, Cost: cost, ForwardingReady: true}}
+		for tick := 0; tick < 5; tick++ {
+			p.Seen(other, RadioBLE)
+			p.Seen(other, RadioNAN)
+			if !p.AllowRadio(peer, RadioBLE) || !p.AllowRadio(peer, RadioNAN) {
+				t.Fatalf("periodic admission pruned a standby without owned capacity pressure at cost%d", cost)
+			}
+		}
 	}
-	snapshot.Links = []PeerLink{{Device: selectionDevice(10), ForwardingReady: true, Cost: 512}}
-	if !p.AllowRadio(selectionDevice(10), RadioBLE) {
-		t.Fatal("a second radio should provide failover when there is no other candidate")
-	}
-	p.Seen(selectionDevice(11), RadioBLE)
-	if p.AllowRadio(selectionDevice(10), RadioBLE) || !p.AllowRadio(selectionDevice(11), RadioBLE) {
-		t.Fatal("a different peer should fill the open slot before duplicating asset 10")
-	}
-	p.Failed(selectionDevice(11), RadioBLE)
-	p.Seen(selectionDevice(11), RadioBLE)
-	if !p.AllowRadio(selectionDevice(10), RadioBLE) {
-		t.Fatal("continuing advertisements from a failed candidate suppressed fallback")
-	}
-	now = now.Add(31 * time.Second)
-	if p.AllowRadio(selectionDevice(10), RadioBLE) {
-		t.Fatal("candidate was not reconsidered after failure cooldown")
-	}
-	p.Connected(selectionDevice(11), RadioBLE)
-	if p.AllowRadio(selectionDevice(10), RadioBLE) {
-		t.Fatal("healthy candidate did not reclaim the diverse slot")
-	}
-	now = now.Add(61 * time.Second)
-	if !p.AllowRadio(selectionDevice(10), RadioBLE) {
-		t.Fatal("expired candidate hints should not suppress fallback")
-	}
-	snapshot.Links = append(snapshot.Links, PeerLink{Device: selectionDevice(10), ForwardingReady: true, Cost: 128})
-	if p.AllowRadio(selectionDevice(10), RadioNAN) || p.AllowRadio(selectionDevice(10), RadioBLE) || !p.HasLAN(selectionDevice(10)) {
-		t.Fatal("authenticated LAN must displace both radios")
-	}
+
 }
 
 func TestPeerSelectionConfiguredTCPAndDirectLAN(t *testing.T) {
@@ -61,8 +38,8 @@ func TestPeerSelectionConfiguredTCPAndDirectLAN(t *testing.T) {
 	}
 	for _, cost := range []uint16{64, 128} {
 		snapshot.Links = append(snapshot.Links, PeerLink{Device: selectionDevice(10), Cost: cost, ForwardingReady: true})
-		if !p.HasLAN(selectionDevice(10)) || p.AllowRadio(selectionDevice(10), RadioNAN) || p.AllowRadio(selectionDevice(10), RadioBLE) {
-			t.Fatalf("direct LAN cost %d must suppress radios", cost)
+		if !p.HasLAN(selectionDevice(10)) || !p.AllowRadio(selectionDevice(10), RadioNAN) || !p.AllowRadio(selectionDevice(10), RadioBLE) {
+			t.Fatalf("direct LAN cost %d must preserve spare radio standby", cost)
 		}
 		snapshot.Links = snapshot.Links[:1]
 	}
@@ -98,8 +75,8 @@ func TestPeerSelectionLANReplacesRadioAndSlowerLAN(t *testing.T) {
 		t.Fatal("wired links must not evict a different Wi-Fi-only neighbor")
 	}
 	snapshot.Links = append(snapshot.Links, PeerLink{Device: selectionDevice(10), ForwardingReady: true, Cost: 64})
-	if p.AllowLAN(selectionDevice(10), 128) || !p.AllowLAN(selectionDevice(10), 64) {
-		t.Fatal("wired links must replace a slower link to the same principal")
+	if !p.AllowLAN(selectionDevice(10), 128) || !p.AllowLAN(selectionDevice(10), 64) {
+		t.Fatal("wired links and a slower standby must coexist while capacity is spare")
 	}
 	if p.AllowLAN(selectionDevice(10), 256) {
 		t.Fatal("higher-cost LAN duplicate should be rejected")
@@ -213,87 +190,46 @@ func TestDuplicateRadiosNeverPruneBothPaths(t *testing.T) {
 				t.Fatal("retain the sole authenticated BLE path while admitting a preferred NAN replacement")
 			}
 			snapshot.Links = append(snapshot.Links, PeerLink{Device: peer, ForwardingReady: true, Cost: 512})
-			if !p.AllowRadio(peer, RadioNAN) || p.AllowRadio(peer, RadioBLE) {
-				t.Fatal("both providers must agree to retain NAN when shedding the duplicate BLE link")
+			if !p.AllowRadio(peer, RadioNAN) || !p.AllowRadio(peer, RadioBLE) {
+				t.Fatal("both providers must retain useful cross-medium standbys absent owned capacity pressure")
 			}
 		})
 	}
 }
 
 func TestAllowRadioReasonNamesVetoBranch(t *testing.T) {
-	now := time.Now()
-	snapshot := NodeSnapshot{}
-	p := NewPeerSelection(func() NodeSnapshot { return snapshot })
-	p.now = func() time.Time { return now }
-
-	if allow, reason := p.AllowRadioReason(selectionDevice(10), RadioBLE); !allow || reason != "first-radio" {
-		t.Fatalf("empty snapshot: allow=%v reason=%q", allow, reason)
-	}
-	if allow, _ := p.AllowRadioReason(meshid.Device{}, RadioBLE); allow {
-		t.Fatal("invalid asset must be vetoed")
-	}
-
-	// LAN supersedes: same asset over cheap link.
-	snapshot.Links = []PeerLink{{Device: selectionDevice(10), ForwardingReady: true, Cost: 64}}
-	if allow, reason := p.AllowRadioReason(selectionDevice(10), RadioBLE); allow || reason != "lan-supersedes(cost=64)" {
-		t.Fatalf("LAN veto: allow=%v reason=%q", allow, reason)
-	}
-
-	snapshot.Links = []PeerLink{{Device: selectionDevice(10), ForwardingReady: true, Cost: 512}}
-	if allow, reason := p.AllowRadioReason(selectionDevice(10), RadioBLE); !allow || reason != "second-radio-failover-kept" {
-		t.Fatalf("NAN failover: %v %s", allow, reason)
-	}
-	snapshot.Links = []PeerLink{{Device: selectionDevice(1), ForwardingReady: true, Cost: 512}, {Device: selectionDevice(2), ForwardingReady: true, Cost: 512}, {Device: selectionDevice(3), ForwardingReady: true, Cost: 512}}
-	if allow, _ := p.AllowRadioReason(selectionDevice(10), RadioBLE); !allow {
-		t.Fatal("unrelated radio neighbours vetoed admission")
-	}
-
-	// AllowRadio stays consistent with the reasoned decision everywhere above.
-	for _, tc := range [][2]int32{{10, 1}, {10, 2}, {1, 2}, {4, 2}} {
-		allow, _ := p.AllowRadioReason(selectionDevice(int(tc[0])), RadioMedium(tc[1]))
-		if allow != p.AllowRadio(selectionDevice(int(tc[0])), RadioMedium(tc[1])) {
-			t.Fatalf("AllowRadio disagrees with AllowRadioReason for asset=%d medium=%d", tc[0], tc[1])
+	p := NewPeerSelection(func() NodeSnapshot {
+		return NodeSnapshot{Links: []PeerLink{{Device: selectionDevice(10), Cost: 64, ForwardingReady: true}}}
+	})
+	for _, medium := range []RadioMedium{RadioBLE, RadioNAN} {
+		if allow, reason := p.AllowRadioReason(selectionDevice(10), medium); !allow || reason != "standby-capacity-managed" {
+			t.Fatalf("valid standby admission: allow=%v reason=%q", allow, reason)
 		}
 	}
+	for _, tc := range []struct {
+		peer   meshid.Device
+		medium RadioMedium
+	}{{meshid.Device{}, RadioBLE}, {selectionDevice(10), 0}} {
+		if allow, reason := p.AllowRadioReason(tc.peer, tc.medium); allow || reason != "invalid-asset-or-medium" {
+			t.Fatalf("invalid hint admitted: allow=%v reason=%q", allow, reason)
+		}
+	}
+
 }
 
 func TestRadioDiversityUsesOnlyCandidatesForItsOwnTransport(t *testing.T) {
-	now := time.Unix(1000, 0)
 	peer, candidate := selectionDevice(1), selectionDevice(2)
-	snapshot := NodeSnapshot{Links: []PeerLink{{Device: peer, ForwardingReady: true, Cost: 512}, {Device: peer, ForwardingReady: true, Cost: 4096}}}
-	p := NewPeerSelection(func() NodeSnapshot { return snapshot })
-	p.now = func() time.Time { return now }
-	p.Seen(candidate, RadioNAN)
-	if !p.AllowRadio(peer, RadioBLE) {
-		t.Fatal("NAN-only discovery displaced an authenticated BLE fallback")
+	view := NodeSnapshot{Links: []PeerLink{{Device: peer, Cost: 512, ForwardingReady: true}, {Device: peer, Cost: 4096}}}
+	p := NewPeerSelection(func() NodeSnapshot { return view })
+	for _, medium := range []RadioMedium{RadioNAN, RadioBLE} {
+		p.Seen(candidate, medium)
+		p.Failed(candidate, medium)
+		p.Seen(candidate, medium)
+		if !p.AllowRadio(peer, RadioBLE) || !p.AllowRadio(peer, RadioNAN) {
+			t.Fatal("unowned discovery hints alone must not prune a useful standby")
+		}
 	}
-	p.Seen(candidate, RadioBLE)
-	if p.AllowRadio(peer, RadioBLE) || !p.AllowRadio(peer, RadioNAN) {
-		t.Fatal("BLE candidate must free only the redundant BLE slot")
-	}
-	p.Failed(candidate, RadioBLE)
-	p.Seen(candidate, RadioBLE)
-	if !p.AllowRadio(peer, RadioBLE) {
-		t.Fatal("repeated discovery overrode a failed BLE candidate's cooldown")
-	}
-	now = now.Add(FailedConnectPenalty + time.Second)
-	if p.AllowRadio(peer, RadioBLE) {
-		t.Fatal("live BLE candidate did not become eligible after cooldown")
-	}
-	now = now.Add(time.Minute)
-	if !p.AllowRadio(peer, RadioBLE) {
-		t.Fatal("expired BLE discovery displaced an authenticated fallback")
-	}
-	p.Seen(candidate, RadioBLE)
-	snapshot.Links = snapshot.Links[1:]
-	if !p.AllowRadio(peer, RadioBLE) {
-		t.Fatal("discovery displaced the peer's sole authenticated path")
-	}
-	// A candidate already reached on another carrier needs no new radio slot.
-	snapshot.Links = append(snapshot.Links, PeerLink{Device: peer, ForwardingReady: true, Cost: 512}, PeerLink{Device: candidate, ForwardingReady: true, Cost: 64})
-	if !p.AllowRadio(peer, RadioBLE) {
-		t.Fatal("an already connected candidate displaced a useful fallback")
-	}
+
 }
 
 func selectionDevice(number int) meshid.Device {

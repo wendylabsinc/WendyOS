@@ -203,9 +203,10 @@ func TestAutomaticRouterWithCachedForeignIssuers(t *testing.T) {
 			}
 			select {
 			case count := <-presented:
+				// Automatic operator attachments retain the full issuing path
+				// even with a warm cache: older routers advertise known-issuer
+				// TLS but cannot complete their subsequent role-binding check.
 				expected := 2
-				// Retain full chains for older routers whose TLS cache supports
-				// omission but whose subsequent role binding cannot complete it.
 				if count != expected {
 					t.Fatalf("expected %d presented operator certificates, got %d", expected, count)
 				}
