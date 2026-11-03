@@ -513,9 +513,10 @@ func newWifiDisconnectCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "disconnect",
 		Short: "Disconnect from the current WiFi network",
+		Long:  "Request WiFi disconnection and report whether completion was confirmed. When the command uses the WiFi path being disconnected, it may report an acknowledged request with completion unknown. Check WiFi status through Bluetooth or another connection to verify that outcome. Older agents use the legacy operation and report a lost reply as an unknown outcome.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
-			target, err := resolveTarget(ctx, ExcludeProviders("local", "docker"), IncludeBluetooth())
+			target, err := resolveWifiTargetFn(ctx, ExcludeProviders("local", "docker"), IncludeBluetooth())
 			if err != nil {
 				return err
 			}
@@ -536,15 +537,24 @@ func newWifiDisconnectCmd() *cobra.Command {
 				return fmt.Errorf("selected device does not support WiFi disconnect")
 			}
 
-			resp, err := target.Agent.AgentService.DisconnectWiFi(ctx, &agentpb.DisconnectWiFiRequest{})
-			if err != nil {
-				return fmt.Errorf("disconnecting WiFi: %w", err)
+			result, err := target.Agent.DisconnectWiFi(ctx)
+			if jsonOutput {
+				if outputErr := writeJSON(cmd.OutOrStdout(), result); outputErr != nil {
+					return outputErr
+				}
+			} else {
+				if result.Warning != "" {
+					cliNotice("%s", result.Warning)
+				}
+				if err == nil {
+					if result.CompletionConfirmed {
+						cliSuccess("%s", result.Message)
+					} else {
+						cliNotice("%s", result.Message)
+					}
+				}
 			}
-			if !resp.GetSuccess() {
-				return fmt.Errorf("failed to disconnect: %s", resp.GetErrorMessage())
-			}
-			cliSuccess("Disconnected from WiFi.")
-			return nil
+			return err
 		},
 	}
 }
