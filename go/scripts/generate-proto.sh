@@ -84,6 +84,7 @@ SHARED_GRPC_API_CONTRACTS_CLOUD_PROTOS=(
     "wendycloud/v2/organizations.proto"
     "wendycloud/v2/notifications.proto"
     "wendycloud/v2/device_enrollment.proto"
+    "wendycloud/v2/pki_admin.proto"
     "wendy/options.proto"
 )
 # PKIAdminService returns the PKI ledger's own response messages.
@@ -250,14 +251,12 @@ done
 
 # ---- Cloud v2 protos ----
 # Except for the Shared gRPC API contracts above, wendycloud.v2 is vendored beside v1.
-# The remaining local pki_admin.proto is from service-protos cfa7f45d.
 # Shared wendy/options.proto (the signed_request method option) generates into
 # cloudpbv2 too, so the option and SignedRequest live in one Go package.
 CLOUD_V2_PKG="$MODULE/go/proto/gen/cloudpb/v2"
 # APNS registration is vendored from service-protos 35c965536eeb5c49acfefb9792fa6fba48533c64.
 CLOUD_V2_PROTOS=(
     "wendycloud/v2/apns.proto"
-    "wendycloud/v2/pki_admin.proto"
     "${SHARED_GRPC_API_CONTRACTS_CLOUD_PROTOS[@]}"
     "wendycloud/v2/roles.proto"
     "wendycloud/v2/device_access.proto"
