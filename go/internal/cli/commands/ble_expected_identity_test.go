@@ -65,7 +65,7 @@ func TestBLEAgentTLSUnknownAdvertisementCannotCreateBinding(t *testing.T) {
 	}
 }
 
-func TestBLEAgentTLSUsesCloudSeededAliasBinding(t *testing.T) {
+func TestBLEAgentTLSUsesCloudInventoryName(t *testing.T) {
 	auth, peer := localLiteTestPKI(t)
 	auth.CloudGRPC = "cloud.test:443"
 	setTempConfig(t, &config.Config{Auth: []config.AuthConfig{*auth}})
@@ -74,7 +74,7 @@ func TestBLEAgentTLSUsesCloudSeededAliasBinding(t *testing.T) {
 	if err := seedPinsFromCloudAssetsV2(auth, []*cloudpbv2.Asset{{Id: "cloud-row-id", Name: "robot", OrganizationId: liteTestTenant, PkiDeviceName: &deviceID}}); err != nil {
 		t.Fatal(err)
 	}
-	client, err := bleAgentTLSConfig(&models.BluetoothDevice{DisplayName: "wendyos-robot"}, auth.Certificates[0], nil)
+	client, err := bleAgentTLSConfig(&models.BluetoothDevice{DisplayName: "robot"}, auth.Certificates[0], nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,16 +83,16 @@ func TestBLEAgentTLSUsesCloudSeededAliasBinding(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := client.VerifyConnection(tls.ConnectionState{PeerCertificates: []*x509.Certificate{leaf}}); err != nil {
-		t.Fatalf("Cloud inventory binding was not usable over BLE alias: %v", err)
+		t.Fatalf("Cloud inventory name was not usable over BLE: %v", err)
 	}
 	// A changed expected device in the same trusted tenant must reject this
 	// still-valid leaf rather than silently learn its presented identity.
 	changed := &config.Config{}
-	changed.SetDevicePin("wendyos-robot", 0, auth.CloudGRPC, "another-device", certs.DeviceSPIFFEURI(liteTestTenant, "another-device"))
+	changed.SetDevicePin("robot", 0, auth.CloudGRPC, "another-device", certs.DeviceSPIFFEURI(liteTestTenant, "another-device"))
 	if err := config.Save(changed); err != nil {
 		t.Fatal(err)
 	}
-	client, err = bleAgentTLSConfig(&models.BluetoothDevice{DisplayName: "wendyos-robot"}, auth.Certificates[0], nil)
+	client, err = bleAgentTLSConfig(&models.BluetoothDevice{DisplayName: "robot"}, auth.Certificates[0], nil)
 	if err != nil {
 		t.Fatal(err)
 	}

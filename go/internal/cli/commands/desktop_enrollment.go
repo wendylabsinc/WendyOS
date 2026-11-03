@@ -152,10 +152,14 @@ func saveEnrollmentBinding(prior *grpcclient.AgentConnection, auth *config.AuthC
 	if prior == nil || auth == nil || identity == nil || identity.EntityType != certs.EntityAsset || identity.EntityID == "" || !identity.Scope().Known() {
 		return certs.ErrExpectedDeviceIdentity
 	}
-	keys := []string{name, prior.Host}
-	if prior.Addr != "" {
-		keys = append(keys, pinKeyForAddr(prior.Addr))
+	selectedKey := prior.DevicePinKey
+	if selectedKey == "" {
+		selectedKey = prior.Host
+		if selectedKey == "" && prior.Addr != "" {
+			selectedKey = pinKeyForAddr(prior.Addr)
+		}
 	}
+	keys := []string{name, selectedKey}
 	return config.Update(func(cfg *config.Config) (bool, error) {
 		for _, key := range keys {
 			if key == "" {
@@ -209,6 +213,7 @@ func desktopEnrollmentConnection(ctx context.Context, prior *grpcclient.AgentCon
 			return nil, err
 		}
 		next.SimulatorName = prior.SimulatorName
+		next.DevicePinKey = prior.DevicePinKey
 	}
 	// Unix sockets and existing authenticated transports keep their connection.
 	closeFailed := func() {

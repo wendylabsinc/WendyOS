@@ -141,7 +141,7 @@ Wendy Net verifies the exact enrolled device identity when connecting to a peer.
 
 ## Device identity pinning (default device)
 
-An enrolled device needs a trusted expected identity before its first mTLS connection. Cloud connections use the selected inventory row's PKI identity (or its legacy organization/asset identity). `wendy cloud discover` seeds named device bindings in `~/.wendy/config.json` under `devicePins`; a cached LAN alias can find that existing binding. Trusted enrollment or an existing saved device pin can also supply it. The verifier never learns the expected identity from whichever server answers the dial.
+An enrolled device needs a trusted expected identity before its first mTLS connection. Cloud connections use the selected inventory row's PKI identity (or its legacy organization/asset identity). `wendy cloud discover` seeds named device bindings in `~/.wendy/config.json` under `devicePins`. A different LAN or BLE hostname needs its own saved binding from verified enrollment; discovery aliases do not establish that relationship. Trusted enrollment or an existing saved device pin can also supply it. The verifier never learns the expected identity from whichever server answers the dial.
 
 BLE uses the selected hostname to look up an existing binding. An advertisement can select an existing constraint but cannot create one. If no binding exists, the CLI refuses the enrolled-device connection: refresh the trusted Cloud inventory or complete explicit enrollment through a trusted setup connection. Successful CLI and desktop enrollment reconnect with the freshly minted expected identity before saving its binding under the selected hostname and enrollment name. A BLE-only device whose advertised name has no matching saved binding cannot use authenticated management until that binding is available. Explicit enrollment can connect to an unpinned plaintext setup endpoint only after it reports that it is unprovisioned. Existing saved identities cannot use that path. Local setup sockets remain separate trust boundaries; none bypasses the enrolled-device verifier for ordinary management.
 
@@ -202,15 +202,11 @@ A `cloud` write is authoritative and overwrites whatever was pinned for that nam
 
 An enrolled agent whose certificate carries no device identity is rejected during TLS verification, regardless of the pin source.
 
-## Multi-key pin lookup
+## Device names and routing addresses
 
-One device can answer to more than one name, and different surfaces record its pin under different ones: an ordinary connection records under the mDNS hostname actually dialed, cloud seeding records under the asset's roster name, and a wendy net dial names the device by its wendy net name. Resolving "does this dial have a pin" therefore checks, in order:
+The expected identity comes from the saved binding for the selected name. A hostname, Cloud inventory name, and mesh name may refer to the same device, but an unauthenticated discovery record cannot establish that relationship or replace an existing binding. Cloud inventory authenticates its own names. Verified enrollment saves the selected hostname and the chosen enrollment name after the certificate is checked.
 
-1. The name the caller dialed (`--device` value, saved default, or the device picker's name).
-2. The wendy net name from the discovery-cache entry whose hostname matches (1), if the cache has one.
-3. That entry's display name.
-
-Consulting an alias can only ever *find* a pin, never discard one: an attacker-chosen alias can at most impose a stricter constraint that the real device still satisfies, never a way to bypass one. The trust decision itself always rests on the certificate, never on which name resolved the lookup.
+Picker selections, discovery probes, fleet operations and reconnects retain the selected name independently of the IP used to reach it. IP addresses found through discovery are routing hints; they do not become authentication keys merely because a connection used them. Explicit enrollment may connect to a device confirmed to be unprovisioned, including through the picker. Ordinary management still requires a saved expected identity.
 
 ## Cloud pin seeding
 

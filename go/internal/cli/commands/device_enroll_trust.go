@@ -57,11 +57,25 @@ type enrollmentTrust struct {
 	pin       config.DevicePin
 }
 
+type enrollmentSelectionKey struct{}
+
+// This scope is created only by explicit enrollment. It follows a picker
+// selection and its read-only discovery probes, and is never returned to an
+// ordinary management caller as permission to use an unbound connection.
+func withEnrollmentSelection(ctx context.Context) context.Context {
+	return context.WithValue(ctx, enrollmentSelectionKey{}, true)
+}
+
+func isEnrollmentSelection(ctx context.Context) bool {
+	allowed, _ := ctx.Value(enrollmentSelectionKey{}).(bool)
+	return allowed
+}
+
 // connectUnboundEnrollmentTarget is used only by explicit enrollment, before
 // the ordinary management dial. It never overrides a saved identity, including
 // an older incomplete pin, and never treats an enrolled or unknown state as a
 // setup endpoint. The connection stays scoped to the enrollment callback.
-func connectUnboundEnrollmentTarget(ctx context.Context, pinKey, addr string) (*SelectedDevice, bool, error) {
+func connectUnboundEnrollmentTarget(ctx context.Context, pinKey, addr string, extraCandidates ...string) (*SelectedDevice, bool, error) {
 	cfg, err := config.Load()
 	if err != nil {
 		return nil, true, err
@@ -69,7 +83,7 @@ func connectUnboundEnrollmentTarget(ctx context.Context, pinKey, addr string) (*
 	if _, _, pinned := lookupPin(cfg, pinKey); pinned {
 		return nil, false, nil
 	}
-	conn, err := connectEnrollmentPlaintext(ctx, resolveAddrCandidates(ctx, addr))
+	conn, err := connectEnrollmentPlaintext(ctx, append(resolveAddrCandidates(ctx, addr), extraCandidates...))
 	if err != nil {
 		return nil, true, err
 	}
@@ -83,6 +97,7 @@ func connectUnboundEnrollmentTarget(ctx context.Context, pinKey, addr string) (*
 		}
 		return nil, true, err
 	}
+	conn.DevicePinKey = pinKey
 	return &SelectedDevice{Agent: conn}, true, nil
 }
 
@@ -128,6 +143,7 @@ func recoverEnrollmentTrust(ctx context.Context, cause error) (*SelectedDevice, 
 	}
 	// This connection is authorized only for the enrollment callback. Giving
 	// it a PinKey would reapply the old identity before enrollment can replace it.
+	conn.DevicePinKey = failure.pinKey
 	return &SelectedDevice{Agent: conn}, trust, nil
 }
 

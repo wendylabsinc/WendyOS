@@ -77,6 +77,9 @@ type AgentConnection struct {
 	// actually answered, mTLS port included. Empty for unix-socket and
 	// pre-built (NewFromConn) connections.
 	Addr string
+	// DevicePinKey retains the selected local device name independently of the
+	// resolved IP. Enrollment and reconnects use this same saved binding.
+	DevicePinKey string
 	// SimulatorName retains the VM pin identity independently of its loopback endpoint.
 	SimulatorName  string
 	IsMTLS         bool                    // true when connected via mutual TLS

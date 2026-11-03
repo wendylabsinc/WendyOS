@@ -568,8 +568,24 @@ func (e provisionedAgentUnauthorizedError) Unwrap() error {
 	return e.cause
 }
 
+type agentProbePinKey struct{}
+
 var getAgentVersionAtAddress = func(ctx context.Context, address string) (bool, *agentpb.GetAgentVersionResponse, error) {
-	conn, mtlsErr, err := connectWithAutoTLSDiagnostics(ctx, address)
+	pinKey, _ := ctx.Value(agentProbePinKey{}).(string)
+	if pinKey == "" {
+		pinKey = pinKeyForAddr(address)
+	}
+	if isEnrollmentSelection(ctx) {
+		if target, handled, err := connectUnboundEnrollmentTarget(ctx, pinKey, address); handled {
+			if err != nil {
+				return false, nil, err
+			}
+			defer target.Close()
+			version, _ := target.Agent.CachedAgentVersion()
+			return false, version, nil
+		}
+	}
+	conn, mtlsErr, err := connectWithAutoTLSDiagnosticsKeyed(ctx, address, pinKey)
 	if err != nil {
 		return false, nil, errors.Join(err, mtlsErr)
 	}
@@ -801,6 +817,7 @@ func resolveLANAgentVersion(ctx context.Context, dev models.LANDevice) (string, 
 	var probeErrors []error
 	for _, address := range lanAgentAddresses(dev) {
 		attemptCtx, cancel := context.WithTimeout(ctx, budget)
+		attemptCtx = context.WithValue(attemptCtx, agentProbePinKey{}, pinKeyForLANDevice(&dev))
 		isMTLS, resp, err := getAgentVersionAtAddress(attemptCtx, address)
 		cancel()
 		if err == nil {
@@ -1593,13 +1610,22 @@ func connectPickedLANDevice(ctx context.Context, d *models.DiscoveredDevice, add
 		return connectSimulatorChoiceFn(ctx, &simulatorChoice{Name: name}, suppressUpdateCheck)
 	}
 	mtls := d.LAN.IsMTLS
+	pinKey := pinKeyForLANDevice(d.LAN)
+	if pinKey == "" {
+		pinKey = pinKeyForAddr(addr)
+	}
+	if isEnrollmentSelection(ctx) {
+		if target, handled, err := connectUnboundEnrollmentTarget(ctx, pinKey, addr, lanDialCandidates(ctx, *d.LAN)...); handled {
+			return target, err
+		}
+	}
 	// Feed every interface the device was seen at to the ladder, not just addr:
 	// a device the CLI can reach only over its USB link (WiFi on another net)
 	// advertises both, and dialing addr alone (its unreachable WiFi IP) is what
 	// made `device info/shell/pair` report a reachable device as unreachable.
 	candidates := lanDialCandidates(ctx, *d.LAN)
 	dial := func() (*grpcclient.AgentConnection, error) {
-		return connectAgentAtAddressWithProvisionedHint(ctx, addr, func() bool { return mtls }, candidates...)
+		return connectAgentAtAddressKeyed(ctx, addr, pinKey, func() bool { return mtls }, candidates...)
 	}
 	conn, err := dial()
 	if err != nil {
@@ -1616,14 +1642,9 @@ func connectPickedLANDevice(ctx context.Context, d *models.DiscoveredDevice, add
 		conn, err = recoverRejectedHandshake(ctx, err, dial)
 	}
 	if err != nil {
-		// Neither refusal is "the LAN attempt failed", and the BLE half of this
-		// row is named by the same unauthenticated advertisement that named the
-		// LAN half. Falling back would reach a peer over a transport where
-		// nothing enforces the pin at all (attemptBLEConnect sets no
-		// ExpectedIdentity, and enforceSelectedDevicePin is a no-op for a
-		// Bluetooth selection) and report success. Typed, not text-matched: the
-		// wording of these refusals is not a contract, and a message rewrite
-		// must not silently reopen this.
+		// An authentication refusal must not retry a discovery-selected peer
+		// over a different transport. BLE independently requires its saved
+		// selected-name binding too.
 		if blocksUnauthenticatedFallback(err) {
 			return nil, err
 		}
@@ -2239,6 +2260,18 @@ func connectWithAutoTLSDiagnostics(ctx context.Context, plaintextAddr string, ex
 // from one pin and the post-connect check from another. "" derives both here,
 // as connectWithAutoTLSDiagnostics always has.
 func connectWithAutoTLSDiagnosticsKeyed(ctx context.Context, plaintextAddr, pinKey string, extraCandidates ...string) (*grpcclient.AgentConnection, error, error) {
+	if pinKey == "" {
+		plaintextAddr = vmForwardDialAddr(plaintextAddr)
+		pinKey = pinKeyForAddr(plaintextAddr)
+	}
+	conn, mtlsErr, err := connectWithAutoTLSDiagnosticsTarget(ctx, plaintextAddr, pinKey, extraCandidates...)
+	if conn != nil {
+		conn.DevicePinKey = pinKey
+	}
+	return conn, mtlsErr, err
+}
+
+func connectWithAutoTLSDiagnosticsTarget(ctx context.Context, plaintextAddr, pinKey string, extraCandidates ...string) (*grpcclient.AgentConnection, error, error) {
 	// An admin-entitled on-device container reaches the agent over its local
 	// unix socket (bind-mounted by the `admin` entitlement) with no mTLS. When
 	// WENDY_AGENT_SOCKET is set, route every command through it and skip all
@@ -2249,18 +2282,6 @@ func connectWithAutoTLSDiagnosticsKeyed(ctx context.Context, plaintextAddr, pinK
 	}
 
 	tlsDebug := os.Getenv("WENDY_TLS_DEBUG") != ""
-	if pinKey == "" {
-		// A direct dial of a running VM's mTLS forward — a reconnect's
-		// conn.Addr, or any other caller's — goes to the VM's agent forward
-		// under vm:<name>, never under the bare 127.0.0.1 key, and never with
-		// a ladder that would also try a port QEMU does not forward. Front
-		// doors do this themselves, once, and pass the key in.
-		plaintextAddr = vmForwardDialAddr(plaintextAddr)
-		// The pin key is the host the caller was ASKED to reach, captured
-		// before any resolution, cache lookup, or retry can substitute an
-		// address for it.
-		pinKey = pinKeyForAddr(plaintextAddr)
-	}
 	originalAddr := plaintextAddr
 	// Every rung below dials with this same key, so which device is
 	// acceptable never depends on what discovery answered.
@@ -3187,6 +3208,10 @@ func performAgentUpdate(ctx context.Context, conn *grpcclient.AgentConnection, o
 // timeout used by `device update`'s own restart wait), so no OS-specific
 // branching is needed here.
 func waitForAgentRestart(ctx context.Context, addr string) (*grpcclient.AgentConnection, error) {
+	return waitForAgentRestartKeyed(ctx, addr, "")
+}
+
+func waitForAgentRestartKeyed(ctx context.Context, addr, pinKey string) (*grpcclient.AgentConnection, error) {
 	deadline := time.Now().Add(60 * time.Second)
 	time.Sleep(time.Second) // give the agent a moment to begin shutdown
 	for time.Now().Before(deadline) {
@@ -3195,12 +3220,12 @@ func waitForAgentRestart(ctx context.Context, addr string) (*grpcclient.AgentCon
 			return nil, ctx.Err()
 		default:
 		}
-		conn, err := connectWithAutoTLS(ctx, addr)
+		conn, _, err := connectWithAutoTLSDiagnosticsKeyed(ctx, addr, pinKey)
 		if err != nil {
 			// A different device answered. Asking it again until the deadline
 			// would only bury the refusal — and the unpin it names — under
 			// "timed out waiting for agent to restart".
-			if errors.Is(err, errDeviceIdentityRefused) {
+			if errors.Is(err, errDeviceIdentityRefused) || errors.Is(err, certs.ErrExpectedDeviceIdentity) {
 				return nil, err
 			}
 			time.Sleep(time.Second)
@@ -3578,10 +3603,15 @@ func dialAgentSocketIfSet(ctx context.Context) (conn *grpcclient.AgentConnection
 // provider device or falls back to the gRPC agent connection. If no device
 // is specified and no default is configured, an interactive device picker
 // is presented.
+var pickTargetDeviceFn = pickDevice
+
 func resolveTargetInner(ctx context.Context, opts ...resolveOption) (*SelectedDevice, error) {
 	cfg := resolveConfig{excludeProviderKeys: make(map[string]bool)}
 	for _, o := range opts {
 		o(&cfg)
+	}
+	if cfg.enrollmentTrustRecovery {
+		ctx = withEnrollmentSelection(ctx)
 	}
 	ctx = robotRuntimePromptContext(ctx, cfg.nonInteractive)
 
@@ -3769,7 +3799,7 @@ func resolveTargetInner(ctx context.Context, opts ...resolveOption) (*SelectedDe
 		return nil, commandErrorf(errNoDevice, "%s", noDeviceMessage)
 	}
 
-	picked, pickErr := pickDevice(ctx, cfg.excludeProviderKeys, cfg.includeBluetooth, cfg.suppressUpdateCheck, cfg.disablePickerEnroll)
+	picked, pickErr := pickTargetDeviceFn(ctx, cfg.excludeProviderKeys, cfg.includeBluetooth, cfg.suppressUpdateCheck, cfg.disablePickerEnroll)
 	if pickErr != nil {
 		return nil, pickErr
 	}
@@ -4609,6 +4639,9 @@ func connectLocalPickerChoice(ctx context.Context, sel *tui.PickerItem, suppress
 			return picked, err
 		}
 		if d.LAN != nil {
+			if isEnrollmentSelection(ctx) {
+				return connectPickedLANDevice(ctx, d, preferredLANAddress(*d.LAN), suppressUpdateCheck)
+			}
 			addr, _, _, err := resolveLANAgentVersion(ctx, *d.LAN)
 			if err != nil {
 				// LAN metadata lookups can fail on provisioned devices without CLI certs.

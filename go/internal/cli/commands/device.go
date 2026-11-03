@@ -2339,7 +2339,7 @@ func reconnectAgentAfterRestart(ctx context.Context, conn *grpcclient.AgentConne
 	if addr == "" {
 		addr = hostPort(conn.Host, defaultAgentPort)
 	}
-	return waitForAgentRestart(ctx, addr)
+	return waitForAgentRestartKeyed(ctx, addr, conn.DevicePinKey)
 }
 
 // osUpdateOutcome reports what `device update`'s OS-update step did, so the
