@@ -302,6 +302,23 @@ func TestDeviceRPCPolicyOverProductionMTLS(t *testing.T) {
 			t.Errorf("%s backend calls=%d", method, backend.count(method))
 		}
 	}
+	sensorClient := agentpbv2.NewWendySensorServiceClient(device)
+	if _, err := sensorClient.GetSensorManifest(ctx, &agentpbv2.GetSensorManifestRequest{}); err != nil {
+		t.Fatal(err)
+	}
+	sensorStream, err := sensorClient.StreamSensors(ctx, &agentpbv2.StreamSensorsRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sensorStream.Recv(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sensorStream.Recv(); err != io.EOF {
+		t.Fatalf("sensor stream end: %v", err)
+	}
+	if sensors.manifest.Load() != 1 || sensors.stream.Load() != 1 {
+		t.Fatal("sensor backends not reached")
+	}
 
 	unaryBefore, streamBefore := unaryExtras.Load(), streamExtras.Load()
 	denied := func(err error) {
@@ -309,19 +326,6 @@ func TestDeviceRPCPolicyOverProductionMTLS(t *testing.T) {
 		if status.Code(err) != codes.PermissionDenied || !rpcauth.IsIdentityDenied(err) {
 			t.Fatalf("want PermissionDenied with RPC identity reason, got %v", err)
 		}
-	}
-	// This service is not registered by the production Go agent. Even if it
-	// is added later, registration alone must not grant device access.
-	sensorClient := agentpbv2.NewWendySensorServiceClient(device)
-	_, err = sensorClient.GetSensorManifest(ctx, &agentpbv2.GetSensorManifestRequest{})
-	denied(err)
-	sensorStream, err := sensorClient.StreamSensors(ctx, &agentpbv2.StreamSensorsRequest{})
-	if err == nil {
-		_, err = sensorStream.Recv()
-	}
-	denied(err)
-	if sensors.manifest.Load() != 0 || sensors.stream.Load() != 0 {
-		t.Fatal("device reached an unapproved sensor RPC")
 	}
 	_, err = client.CreateContainer(ctx, &agentpb.CreateContainerRequest{})
 	denied(err)

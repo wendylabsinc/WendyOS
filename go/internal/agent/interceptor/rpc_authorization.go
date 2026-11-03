@@ -32,6 +32,12 @@ func deviceRPCAllowed(method string) bool {
 	// Its handler independently restricts the tenant and running-app ingress.
 	case agentpbv2.WendyMeshService_MeshDial_FullMethodName:
 		return true
+	// Agent-hosted SensorLink uses this dedicated catalogue/stream API, not
+	// the general camera, audio or sensor-pairing administration services.
+	// Swift serves it today; keep the grant for a future Go implementation.
+	case agentpbv2.WendySensorService_GetSensorManifest_FullMethodName,
+		agentpbv2.WendySensorService_StreamSensors_FullMethodName:
+		return true
 	default:
 		return false
 	}

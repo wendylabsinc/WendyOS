@@ -70,6 +70,8 @@ var rpcTestDeviceMethods = []string{
 	"/wendy.agent.services.v1.WendyContainerService/WriteChunks",
 	"/wendy.agent.services.v1.WendyContainerService/PrepareImage",
 	"/wendy.agent.services.v2.WendyMeshService/MeshDial",
+	"/wendy.agent.services.v2.WendySensorService/GetSensorManifest",
+	"/wendy.agent.services.v2.WendySensorService/StreamSensors",
 }
 
 func rpcIdentityLeaf(t *testing.T, cn string, uris ...string) *x509.Certificate {
@@ -143,8 +145,6 @@ func TestRPCDeviceExactMethods(t *testing.T) {
 		t.Run(method, func(t *testing.T) { assertRPCDecision(t, ctx, method, scope, codes.OK) })
 	}
 	denied := []string{
-		agentpbv2.WendySensorService_GetSensorManifest_FullMethodName,
-		agentpbv2.WendySensorService_StreamSensors_FullMethodName,
 		"/wendy.agent.services.v1.WendyShellService/HostShell",
 		"/wendy.agent.services.v1.WendyContainerService/RunContainer",
 		"/wendy.agent.services.v1.WendyContainerService/CreateContainer",
