@@ -219,11 +219,11 @@ From a computer on the same LAN, send a signed time proof and retry the connecti
 wendy device sync-time
 ```
 
-The CLI also attempts this broadcast automatically after a possible clock-related
-TLS failure. It reports whether sending failed and whether the connection retry
-succeeded. A successful broadcast does not confirm that the device received the
-proof or changed its clock. Giving the device internet access also allows its
-own time synchronization to recover.
+The CLI also sends this proof automatically after a possible clock-related TLS
+failure, and retries the connection three times over about 10 seconds, sending
+the proof again before each retry. Only a connection the device accepts confirms
+that the proof arrived. Giving the device internet access also allows its own
+time synchronization to recover.
 
 The agent logs a warning at startup if it detects clock skew. For TLS handshake details, run the CLI with:
 

@@ -71,6 +71,11 @@ type mcpServer struct {
 	binding              *BindingPolicy // set by wendy cloud mcp; nil for the local stdio server
 	relay                bool           // serving a hosted chat through the relay: the published manifest only
 	relayProfile         *relayManifestProfile
+	// The device certificate watch (device_certificate.go), guarded by mu.
+	transientConnectErrFn func(error) bool
+	renewLoginFn          func(context.Context, config.CertificateInfo) error
+	certWatchRetrying     *grpcclient.AgentConnection // the connection whose failed reconnect is already noted
+	certWatchRenewed      *grpcclient.AgentConnection // the connection whose login renewal has run
 }
 
 // Server is the wendy MCP server, named for callers that configure it before
@@ -368,6 +373,7 @@ func (s *mcpServer) run(ctx context.Context, serve func(*server.MCPServer) error
 	defer stopContainerMCP()
 	go s.runStartupConnect(startupCtx)
 	go s.runCLIUpdateChecks(startupCtx, time.Hour)
+	go s.runDeviceCertificateWatch(startupCtx, deviceCertificateCheckInterval)
 
 	return serve(srv)
 }

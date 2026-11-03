@@ -134,6 +134,12 @@ func (f *SensorFrameFeed) publish(path string, frame ros2camera.Frame) {
 // than from their nodes. Call once at startup, before serving.
 func (s *VideoService) SetSensorFrameFeed(feed *SensorFrameFeed) { s.sensorFrames = feed }
 
+// SetSensorCameraIdentities is wired before serving. The callback returns a
+// fresh snapshot, so a stale camera number never becomes a persisted identity.
+func (s *VideoService) SetSensorCameraIdentities(read func() map[uint32]string) {
+	s.sensorCameraIdentities = read
+}
+
 // isSensorLinkCameraPath reports whether path is a node in the MCU band, where
 // mcusource mounts SensorLink cameras.
 func isSensorLinkCameraPath(path string) bool {

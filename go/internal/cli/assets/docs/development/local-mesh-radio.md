@@ -79,11 +79,12 @@ wendy discover --type mesh
 wendy device wendy-net services
 ```
 
-The CLI finds available WendyOS neighbours on LAN and BLE and retries suitable
-candidates when a connection fails. LAN connections use TCP with TLS; supported
-macOS and Linux hosts can also make outgoing BLE connections. The CLI's first
-neighbour must currently be WendyOS. Lite devices can be reached through that
-router, but cannot be the CLI's direct first hop.
+The CLI finds WendyOS and supported PSRAM Lite routers over LAN and Bluetooth,
+and retries suitable candidates after a connection failure. LAN connections use
+TCP with TLS; macOS and Linux also support outgoing Bluetooth connections.
+Direct Lite connections require firmware with native operator-router support.
+A C5 with PSRAM can route to other devices; C6 remains a leaf and cannot be the
+first router. The CLI waits for a usable signed route before reporting readiness.
 
 Commands share one background router for the selected operator profile. After
 `connect`, it stays running when commands exit and can forward traffic between
@@ -181,7 +182,7 @@ Bluetooth configuration on WendyOS, see
 Upgrade participating firmware together. Lite uses the same complete signed
 binary manifests and routing protocol as WendyOS; the old special leaf protocol
 is removed. The former `leafBLEPeers`, `leafListen` and `leafTimeURL` settings
-are rejected by the configuration loader and must be removed. Neighbours are
+are ignored when loading existing files and removed when settings are saved. They do not enable a carrier; configure `tls_listen` explicitly for native TLS. Neighbours are
 discovered automatically rather than entered in a separate leaf list.
 
 ## Version compatibility

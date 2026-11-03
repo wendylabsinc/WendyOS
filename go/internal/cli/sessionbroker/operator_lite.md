@@ -44,9 +44,11 @@ selection metadata, including unknown optional values; `caps=sensors` describes
 the native WendyCom subfeature, not a second mesh service or a permission grant.
 Actual sensor definitions still come from the authenticated SensorLink manifest.
 Agent-only registry/deploy/MCP commands continue to report that they require a
-WendyOS agent. USB installation/enrollment remains physical. The CLI currently
-requires a WendyOS first hop; direct first-hop attachment to Lite is not supported. Mesh Nearby uses the retained
-broker directory and route-filtered signed capabilities.
+WendyOS agent. USB installation/enrollment remains physical. The first hop may be
+WendyOS or a PSRAM Lite router with native operator-router support (wendy-lite
+PR #121). Bootstrap waits for its signed route and does not probe a gRPC agent.
+C6 remains a leaf. Mesh Nearby uses the retained broker directory and route-filtered
+signed capabilities.
 
 The local broker supports Unix sockets on macOS/Linux and per-user named pipes
 on Windows. Host BLE support is available on macOS and Linux; Windows TCP code
