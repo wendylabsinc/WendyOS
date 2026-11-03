@@ -32,7 +32,8 @@ type AppReport struct {
 	ManifestDigest string
 	Running        bool
 	// ExitSignal is the signal that ended the app's last run, 0 for none.
-	ExitSignal uint32
+	ExitSignal   uint32
+	RestartCount int32
 }
 
 // AppReporter lists every app on the device for the reported-state stream.

@@ -115,7 +115,11 @@ func validatePushTarget(t *agentpbv2.PushTarget) error {
 	if t == nil {
 		return status.Error(codes.InvalidArgument, "build spec carries no push target")
 	}
-	if _, err := meshid.ParseDeviceUUID(t.GetAssetUuid()); err != nil {
+	if t.GetAssetId() != 0 || t.GetLegacyOrganizationId() != 0 {
+		if t.GetAssetId() <= 0 || t.GetLegacyOrganizationId() < 0 || t.GetAssetUuid() != "" {
+			return status.Error(codes.InvalidArgument, "invalid or mixed legacy delivery identity")
+		}
+	} else if _, err := meshid.ParseDeviceUUID(t.GetAssetUuid()); err != nil {
 		return status.Errorf(codes.InvalidArgument, "push target asset is not a canonical Cloud asset UUID: %v", err)
 	}
 	if p := t.GetRegistryPort(); p == 0 || p > 65535 {

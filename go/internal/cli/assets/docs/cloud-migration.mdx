@@ -57,6 +57,32 @@ one. Verify the selected context before each operation. A saved default device
 also retains its Cloud and organization binding; switching context does not
 retarget that device. Select the new target explicitly when validating v2.
 
+## How the Agent selects its Cloud protocol
+
+The saved device enrollment selects the protocol. A numeric v1 organization and
+asset binding starts the v1 broker, reporting stream, certificate refresh, and
+OTLP uploads. A direct PKI enrollment starts the v2 relay and signed postbox.
+Changing the active CLI context does not change that choice. A transitional v1
+certificate carrying an additional SPIFFE SAN remains a v1 enrollment.
+
+Legacy release IDs remain positive integers; v2 release IDs remain UUIDs. Remote
+build delivery supports both forms and checks the destination against the
+certificate of the device the CLI reached. Updated clients require the build
+host's legacy-delivery capability before submitting a numeric destination.
+The routed Wendy Net UUID address space requires a direct PKI enrollment.
+
+Legacy server versions must also support the requested operation. In particular,
+UDP and ping require the broker to preserve the datagram protocol field. Cloud
+container controls require a delegated certificate identifying the acting user
+in the device's organization. Desired-release downloads require device-authorized
+pull credentials; an authorization failure leaves the existing app intact.
+Do not use a deployment filter until your v1 server actually enforces it.
+
+Legacy certificate renewal rotates the device key and retains its numeric
+identity. A CLI holding an old certificate-key pin can refuse the new key.
+Verify the renewal before using `wendy device unpin <identity>` to record the
+replacement on the next connection.
+
 ## Inventory what the deployment depends on
 
 Record the current device names and IDs, app manifests and image versions,
@@ -109,7 +135,7 @@ does not restore a device's old enrollment.
 | The fleet is empty after sign-in | Check the active context, organization, and `discover --all`. V1 devices do not appear automatically in v2. |
 | A numeric device ID no longer resolves | Select the v2 device by its name or UUID from discovery. |
 | The service catalog has no entry for a port | The Cloud service, CLI, or Agent predates arbitrary v2 ports. Older v2 versions forward only TCP ports 22 and 50052. |
-| UDP forwarding is refused | Older v2 versions do not forward UDP. Update the Cloud service, CLI, and Agent, or use a legacy session. |
+| UDP forwarding is refused | Check protocol support in the Cloud service, broker, CLI, and Agent for the selected enrollment. A legacy session also needs a compatible broker. |
 | API login works but remote device access fails | Check the account's permissions and principal type. Service accounts do not receive operator certificates. |
 | The app runs but a notification does not arrive | Check registration, assignment, entitlement, Cloud grant, recipient organization, and Companion push registration in the [notification guide](/docs/guides/device-notifications). |
 

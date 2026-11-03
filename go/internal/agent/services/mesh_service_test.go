@@ -384,3 +384,30 @@ func collectUntilHalfClose(out chan *agentpbv2.MeshDialData) <-chan []byte {
 	}()
 	return ch
 }
+
+func TestLegacyMeshAdmissionRequiresExplicitEnrollmentAndPublishedPort(t *testing.T) {
+	service := NewMeshService(zap.NewNop(), t.TempDir(), certs.Scope{OrgID: 64})
+	ctx := ctxWithPeerCert(certWithURN(t, "urn:wendy:org:64:asset:674"))
+	if _, err := service.applicationPrincipalFromContext(ctx); err == nil {
+		t.Fatal("numeric scope implicitly enabled v1")
+	}
+	service.EnableLegacyEnrollment(64)
+	if got, err := service.applicationPrincipalFromContext(ctx); err != nil || got != "urn:wendy:org:64:asset:674" {
+		t.Fatalf("legacy admission=%s %v", got, err)
+	}
+	for _, uri := range []string{"urn:wendy:org:65:asset:674", "urn:wendy:org:64:signer:test", meshTestDevice} {
+		if _, err := service.applicationPrincipalFromContext(ctxWithPeerCert(certWithURN(t, uri))); err == nil {
+			t.Fatalf("admitted %s", uri)
+		}
+	}
+	in := make(chan *agentpbv2.MeshDialMessage, 1)
+	in <- &agentpbv2.MeshDialMessage{Content: &agentpbv2.MeshDialMessage_Open{Open: &agentpbv2.MeshDialOpen{Port: 28091}}}
+	if code := status.Code(service.MeshDial(&fakeMeshDialStream{ctx: ctx, in: in})); code != codes.PermissionDenied {
+		t.Fatalf("unpublished legacy port: %v", code)
+	}
+	pki := NewMeshService(zap.NewNop(), t.TempDir(), testScope)
+	pki.EnableLegacyEnrollment(64)
+	if _, err := pki.applicationPrincipalFromContext(ctx); err == nil {
+		t.Fatal("legacy switch relaxed PKI admission")
+	}
+}

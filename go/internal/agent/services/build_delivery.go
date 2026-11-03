@@ -21,6 +21,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 
+	"github.com/wendylabsinc/wendy/go/internal/shared/buildtarget"
 	"github.com/wendylabsinc/wendy/go/internal/shared/chunk"
 	"github.com/wendylabsinc/wendy/go/internal/shared/chunkupload"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
@@ -108,6 +109,15 @@ type targetDialer func(ctx context.Context, target *agentpbv2.PushTarget) (*grpc
 // not optional — see BuildServiceOptions.PushTLS — and it holds for this hop
 // exactly as for the registry one, since the image content is the same.
 func meshTargetDialer(peers PeerDialer, resolve func(string) (DeliveryTarget, error), pushTLS func(meshid.Device) (*tls.Config, error), defaultPort uint16) targetDialer {
+	return deliveryTargetDialer(peers, func(target *agentpbv2.PushTarget) (DeliveryTarget, error) { return resolve(target.GetAssetUuid()) }, func(target DeliveryTarget) (*tls.Config, error) {
+		if pushTLS == nil {
+			return nil, errors.New("missing delivery TLS credentials")
+		}
+		return pushTLS(target.Device)
+	}, defaultPort)
+}
+
+func deliveryTargetDialer(peers PeerDialer, resolve func(*agentpbv2.PushTarget) (DeliveryTarget, error), pushTLS func(DeliveryTarget) (*tls.Config, error), defaultPort uint16) targetDialer {
 	return func(ctx context.Context, target *agentpbv2.PushTarget) (*grpc.ClientConn, error) {
 		if peers == nil || pushTLS == nil {
 			return nil, errors.New("this build host has no wendy net dialer or client certificate")
@@ -116,11 +126,11 @@ func meshTargetDialer(peers PeerDialer, resolve func(string) (DeliveryTarget, er
 		if err != nil {
 			return nil, err
 		}
-		resolved, err := resolve(target.GetAssetUuid())
+		resolved, err := resolve(target)
 		if err != nil {
-			return nil, fmt.Errorf("resolving delivery target device %s: %w", target.GetAssetUuid(), err)
+			return nil, fmt.Errorf("resolving delivery target device %s: %w", buildtarget.Key(target), err)
 		}
-		tlsCfg, err := pushTLS(resolved.Device)
+		tlsCfg, err := pushTLS(resolved)
 		if err != nil {
 			return nil, fmt.Errorf("loading delivery credentials: %w", err)
 		}
@@ -164,7 +174,7 @@ func deliveryTargetAgentPort(target *agentpbv2.PushTarget, fallback uint16) (uin
 		return fallback, nil
 	}
 	if port > 65535 {
-		return 0, fmt.Errorf("target device %s has invalid agent port %d", target.GetAssetUuid(), port)
+		return 0, fmt.Errorf("target device %s has invalid agent port %d", buildtarget.Key(target), port)
 	}
 	return uint16(port), nil
 }
@@ -395,7 +405,7 @@ func decompressAndChunkLayer(img *exportedImage, l ociLayer, dir string) (*deliv
 // decompression. Deliveries share it sequentially; it is not safe for
 // concurrent callers.
 func (s *BuildService) deliverByChunks(ctx context.Context, prog *buildProgress, index int, img *exportedImage, target *agentpbv2.PushTarget, resolved map[string]*deliveryLayer) error {
-	rep := newDeliveryReporter(prog, index, target.GetAssetUuid())
+	rep := newDeliveryReporter(prog, index, buildtarget.Key(target))
 
 	for attempt := 1; ; attempt++ {
 		err := s.deliverByChunksOnce(ctx, rep, img, target, resolved)
@@ -425,7 +435,7 @@ var deliveryBackoff = func(attempt int) time.Duration {
 // send the rest, and have it assemble the image. resolved caches decompressed
 // layers by diff ID across attempts and is owned by the caller.
 func (s *BuildService) deliverByChunksOnce(ctx context.Context, rep *deliveryReporter, img *exportedImage, target *agentpbv2.PushTarget, resolved map[string]*deliveryLayer) error {
-	assetUUID := target.GetAssetUuid()
+	assetUUID := buildtarget.Key(target)
 	cc, err := s.dialTarget(ctx, target)
 	if err != nil {
 		return &transientDeliveryError{fmt.Errorf("reaching device %s over the wendy net: %w", assetUUID, err)}

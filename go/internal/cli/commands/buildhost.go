@@ -21,6 +21,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
+	"github.com/wendylabsinc/wendy/go/internal/shared/buildtarget"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
@@ -436,7 +437,7 @@ func runRemoteBuild(
 	// tested.
 	pushTargets := []*agentpbv2.PushTarget{pushTarget}
 	// Names for the report. The primary is whatever --device resolved to.
-	nameOf := map[string]string{pushTarget.GetAssetUuid(): deviceFlag}
+	nameOf := map[string]string{buildtarget.Key(pushTarget): deviceFlag}
 
 	// Resolve every extra device BEFORE building. A fleet member that cannot be
 	// reached is worth an error now, not after the build host has spent minutes
@@ -468,9 +469,12 @@ func runRemoteBuild(
 			return fmt.Errorf("resolving %s as a delivery target: %w", name, err)
 		}
 		pushTargets = append(pushTargets, t)
-		nameOf[t.GetAssetUuid()] = name
+		nameOf[buildtarget.Key(t)] = name
 	}
 
+	if err := checkLegacyDeliverySupported(host, caps, pushTargets); err != nil {
+		return err
+	}
 	if err := checkFleetDeliverySupported(host, caps, len(pushTargets)); err != nil {
 		return err
 	}
@@ -524,7 +528,7 @@ func runRemoteBuild(
 		Env:           deployEnv,
 	}
 	if len(fleetConns) == 0 {
-		if err := reportedDeliveryError(buildResult, pushTargets[0].GetAssetUuid()); err != nil {
+		if err := reportedDeliveryError(buildResult, buildtarget.Key(pushTargets[0])); err != nil {
 			return fmt.Errorf("image built on %s but could not be delivered to %s: %w", host, deviceFlag, err)
 		}
 		return startAndStreamContainer(ctx, target, appCfg, createReq, opts)
@@ -534,10 +538,10 @@ func runRemoteBuild(
 	// created, and one device failing that must not strand the others -- the
 	// image is already on them.
 	report := make([]*agentpbv2.DeliveryResult, 0, len(pushTargets))
-	primaryErr := startAfterReportedDelivery(buildResult, pushTargets[0].GetAssetUuid(), func() error {
+	primaryErr := startAfterReportedDelivery(buildResult, buildtarget.Key(pushTargets[0]), func() error {
 		return startAndStreamContainer(ctx, target, appCfg, createReq, opts)
 	})
-	report = append(report, deliveryOutcome(pushTargets[0].GetAssetUuid(), primaryErr))
+	report = append(report, deliveryOutcome(buildtarget.Key(pushTargets[0]), primaryErr))
 
 	for i, conn := range fleetConns {
 		req := &agentpb.CreateContainerRequest{
@@ -549,7 +553,7 @@ func runRemoteBuild(
 			UserArgs:      opts.userArgs,
 			Env:           deployEnv,
 		}
-		assetID := pushTargets[i+1].GetAssetUuid()
+		assetID := buildtarget.Key(pushTargets[i+1])
 		targetErr := startAfterReportedDelivery(buildResult, assetID, func() error {
 			return startAndStreamContainer(ctx, conn, appCfg, req, opts)
 		})
@@ -587,7 +591,7 @@ func reportedDeliveryError(result *agentpbv2.BuildImageResult, assetID string) e
 		return nil
 	}
 	for _, delivery := range result.GetDeliveries() {
-		if delivery.GetAssetUuid() != assetID {
+		if buildtarget.Key(delivery) != assetID {
 			continue
 		}
 		if delivery.GetDelivered() {
@@ -607,9 +611,9 @@ func reportedDeliveryError(result *agentpbv2.BuildImageResult, assetID string) e
 // partial fleet deploy must not read as success.
 func deliveryOutcome(assetID string, err error) *agentpbv2.DeliveryResult {
 	if err != nil {
-		return &agentpbv2.DeliveryResult{AssetUuid: assetID, Error: err.Error()}
+		return buildtarget.Result(assetID, false, err.Error())
 	}
-	return &agentpbv2.DeliveryResult{AssetUuid: assetID, Delivered: true}
+	return buildtarget.Result(assetID, true, "")
 }
 
 // fleetDeliveryReport turns the agent's per-device outcomes into what the
@@ -623,9 +627,9 @@ func deliveryOutcome(assetID string, err error) *agentpbv2.DeliveryResult {
 // output.
 func fleetDeliveryReport(deliveries []*agentpbv2.DeliveryResult, nameOf map[string]string) (lines []string, failed int) {
 	for _, d := range deliveries {
-		name := nameOf[d.GetAssetUuid()]
+		name := nameOf[buildtarget.Key(d)]
 		if name == "" {
-			name = fmt.Sprintf("asset %s", d.GetAssetUuid())
+			name = fmt.Sprintf("asset %s", buildtarget.Key(d))
 		}
 		if d.GetDelivered() {
 			lines = append(lines, fmt.Sprintf("  %-24s delivered", name))
@@ -710,6 +714,20 @@ func targetPushTargetBase(ctx context.Context, target *grpcclient.AgentConnectio
 	prov, ok := resp.GetResponseType().(*agentpbv2.IsProvisionedResponse_Provisioned)
 	if !ok {
 		return nil, fmt.Errorf("the target device is not enrolled, so a build host cannot reach its registry; run 'wendy device enroll' for the target or omit --build-host")
+	}
+	if prov.Provisioned.GetPrincipalUri() == "" {
+		if err := verifiedLegacyBuildDelivery(target, &remote, prov.Provisioned); err != nil {
+			return nil, err
+		}
+		agentOS, err := targetAgentOS(ctx, target)
+		if err != nil {
+			return nil, err
+		}
+		port, err := connectedTargetAgentPort(target)
+		if err != nil {
+			return nil, err
+		}
+		return &agentpbv2.PushTarget{AssetId: prov.Provisioned.GetAssetId(), LegacyOrganizationId: prov.Provisioned.GetOrganizationId(), RegistryPort: uint32(registryPort(agentOS)), AgentPort: port}, nil
 	}
 	if _, err := meshid.ParseDeviceUUID(prov.Provisioned.GetAssetUuid()); err != nil {
 		return nil, fmt.Errorf("the target agent does not report a certificate device UUID; update and enroll it before remote delivery: %w", err)
@@ -974,4 +992,36 @@ func humanBytes(n uint64) string {
 	default:
 		return fmt.Sprintf("%d B", n)
 	}
+}
+
+// Numeric destinations still have to match the endpoint the CLI authenticated.
+func verifiedLegacyBuildDelivery(conn *grpcclient.AgentConnection, remote *peer.Peer, reported *agentpbv2.ProvisionedResponse) error {
+	if reported.GetPrincipalUri() != "" || reported.GetAssetUuid() != "" || reported.GetOrganizationId() <= 0 || reported.GetAssetId() <= 0 {
+		return errors.New("invalid legacy delivery enrollment")
+	}
+	identity, verified := conn.ObservedServerIdentity()
+	if !verified && remote != nil {
+		if info, ok := remote.AuthInfo.(credentials.TLSInfo); ok && info.State.HandshakeComplete && len(info.State.PeerCertificates) != 0 {
+			var err error
+			identity, verified, err = certs.IdentityFromCert(info.State.PeerCertificates[0])
+			if err != nil {
+				return err
+			}
+		}
+	}
+	if !verified || identity.LegacyURN() != certs.AssetURN(reported.GetOrganizationId(), reported.GetAssetId()) {
+		return errors.New("legacy delivery target disagrees with its authenticated device")
+	}
+	if conn.CertInfo != nil && (conn.CertInfo.TenantUUID() != "" || conn.CertInfo.OrganizationID != int(reported.GetOrganizationId())) {
+		return errors.New("legacy delivery target is outside the operator's organization")
+	}
+	return nil
+}
+func checkLegacyDeliverySupported(host string, caps *agentpbv2.GetBuildCapabilitiesResponse, targets []*agentpbv2.PushTarget) error {
+	for _, target := range targets {
+		if target.GetAssetId() != 0 && !caps.GetLegacyDelivery() {
+			return fmt.Errorf("build host %s does not support legacy Cloud delivery; update its agent", host)
+		}
+	}
+	return nil
 }

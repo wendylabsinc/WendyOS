@@ -40,9 +40,10 @@ type MeshService struct {
 	logger           *zap.Logger
 	active           atomic.Int32
 	meshDisabledPath string
-	// expectedScope is the current device's tenant. Unknown or legacy scopes
-	// cannot authorize mesh access, even if the general mTLS interceptor is off.
+	// expectedScope is the saved enrollment scope. Unknown scopes cannot
+	// authorize access; numeric v1 scopes also require explicit opt-in.
 	expectedScope certs.Scope
+	legacyOrgID   int32
 	dialLocal     func(addr string, timeout time.Duration) (net.Conn, error) // swapped in tests
 	ingress       interface {
 		DialAuthorized(uint16, func(string) (net.Conn, error)) (net.Conn, error)
@@ -58,7 +59,7 @@ func (s *MeshService) SetIngressAuthorizer(authorizer interface {
 }
 
 // NewMeshService builds the serving side of the LAN-direct mesh path.
-// An unknown or legacy expectedScope denies mesh calls.
+// Unknown scopes deny mesh calls. Legacy enrollment must be explicitly enabled.
 func NewMeshService(logger *zap.Logger, configPath string, expectedScope certs.Scope) *MeshService {
 	return &MeshService{
 		logger:           logger,
@@ -119,10 +120,33 @@ func (s *MeshService) MeshDial(stream agentpbv2.WendyMeshService_MeshDialServer)
 	return s.relay(stream, conn)
 }
 
-// applicationPrincipalFromContext admits ordinary same-tenant devices and
-// primary operator identities already verified by the serving mTLS transport.
-// This broadens neither ingress publication nor the chosen destination port.
+// EnableLegacyEnrollment is called only from the saved v1 enrollment branch.
+// A numeric scope by itself never relaxes v2 admission.
+func (s *MeshService) EnableLegacyEnrollment(orgID int32) {
+	if orgID > 0 && s.expectedScope.TenantUUID == "" && s.expectedScope.OrgID == orgID {
+		s.legacyOrgID = orgID
+	}
+}
+
+// applicationPrincipalFromContext enforces the saved enrollment scope on a
+// transport-authenticated caller, independently of the general interceptor.
 func (s *MeshService) applicationPrincipalFromContext(ctx context.Context) (string, error) {
+	if s.legacyOrgID > 0 {
+		p, ok := peer.FromContext(ctx)
+		if !ok {
+			return "", status.Error(codes.PermissionDenied, "legacy app dial requires mTLS")
+		}
+		info, ok := p.AuthInfo.(credentials.TLSInfo)
+		if !ok || len(info.State.PeerCertificates) == 0 {
+			return "", status.Error(codes.PermissionDenied, "legacy app dial requires a certificate")
+		}
+		identity, found, err := certs.IdentityFromCert(info.State.PeerCertificates[0])
+		if err != nil || !found || identity.OrgID != s.legacyOrgID || identity.LegacyURN() == "" || (identity.EntityType != certs.EntityAsset && identity.EntityType != certs.EntityUser) {
+			return "", status.Error(codes.PermissionDenied, "legacy app dial requires a same-organization device or user")
+		}
+		return identity.LegacyURN(), nil
+	}
+
 	if device, err := s.deviceIdentityFromContext(ctx); err == nil {
 		return device.Principal(), nil
 	}

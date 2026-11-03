@@ -14,7 +14,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
+	cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb"
 )
 
 type testAgentTunnelStream struct {

@@ -11,6 +11,7 @@ import (
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 
@@ -32,12 +33,13 @@ func normalizeCloudHost(host string) string {
 const (
 	cloudFlusherMaxBackoff = 60 * time.Second
 	// cloudFlusherFramesPerPass bounds how many buffered OTLP frames a single
-	// flush pass reads (and exports, one Export RPC each) before looping.
-	cloudFlusherFramesPerPass = 500
+	// flush pass merges into one bounded Export RPC before looping.
+	cloudFlusherFramesPerPass = 50
+	cloudFlusherMaxBatchBytes = 2 << 20
 )
 
 // CloudFlusher reads buffered OTLP frames from TelemetryBuffer via ReadFromCursor
-// and re-exports them to an explicitly configured OTLP collector's routes
+// and re-exports them to v1 Cloud or a configured OTLP collector's routes
 // (Logs/Metrics/Trace Service Export) over mTLS gRPC. PII/size guards are
 // applied per frame before export. Identity is derived server-side from the
 // client certificate.
@@ -68,7 +70,8 @@ func NewCloudFlusherWithProvisioning(logger *zap.Logger, buffer *TelemetryBuffer
 	}
 }
 
-// Run requires WENDY_TELEMETRY_URL, then waits until the agent is provisioned
+// Run uses the enrolled v1 OTLP endpoint, or WENDY_TELEMETRY_URL for PKI,
+// then waits until the agent is provisioned
 // and continuously flushes buffered telemetry with exponential backoff
 // (1s → 2s → 4s … capped at 60s). Without a collector, telemetry stays local.
 // The backoff resets on each successful flush pass. Blocks until ctx is done.
@@ -76,10 +79,6 @@ func (f *CloudFlusher) Run(ctx context.Context) {
 	endpoint, err := telemetryCloudEndpoint(os.Getenv("WENDY_TELEMETRY_URL"))
 	if err != nil {
 		f.logger.Warn("cloud flusher: invalid WENDY_TELEMETRY_URL", zap.Error(err))
-		return
-	}
-	if endpoint == "" {
-		f.logger.Info("cloud flusher: WENDY_TELEMETRY_URL is not set; telemetry uploads are disabled and telemetry remains available locally")
 		return
 	}
 	if f.provisioningSvc == nil {
@@ -96,6 +95,23 @@ func (f *CloudFlusher) Run(ctx context.Context) {
 		select {
 		case <-time.After(5 * time.Second):
 		case <-ctx.Done():
+			return
+		}
+	}
+
+	if endpoint == "" {
+		enrollment, err := f.provisioningSvc.CloudEnrollment()
+		if err != nil {
+			f.logger.Error("cloud flusher: invalid enrollment", zap.Error(err))
+			return
+		}
+		if enrollment.Mode != CloudLegacy {
+			f.logger.Info("cloud flusher: WENDY_TELEMETRY_URL is not set; telemetry uploads are disabled and telemetry remains available locally")
+			return
+		}
+		endpoint, err = telemetryCloudEndpoint(enrollment.Host)
+		if err != nil {
+			f.logger.Error("cloud flusher: invalid legacy endpoint", zap.Error(err))
 			return
 		}
 	}
@@ -161,13 +177,34 @@ func (f *CloudFlusher) sleep(ctx context.Context, attempt int) {
 // best-effort protection; crypto/tls may retain additional internal copies.
 func (f *CloudFlusher) dial(ctx context.Context, host, certPEM, chainPEM string, keyData []byte) (*grpc.ClientConn, error) {
 	defer clear(keyData)
+	if f.provisioningSvc != nil {
+		enrollment, err := f.provisioningSvc.CloudEnrollment()
+		if err != nil {
+			return nil, err
+		}
+		if enrollment.Mode == CloudLegacy {
+			opts, proof, err := NewTunnelBrokerClient(f.logger, host, certPEM, string(keyData), chainPEM, 0).buildDialOpts()
+			if err != nil {
+				return nil, err
+			}
+			opts = append(opts, grpc.WithUnaryInterceptor(func(ctx context.Context, method string, req, reply any, cc *grpc.ClientConn, invoke grpc.UnaryInvoker, callOpts ...grpc.CallOption) error {
+				md, err := proof(method)
+				if err != nil {
+					return err
+				}
+				existing, _ := metadata.FromOutgoingContext(ctx)
+				return invoke(metadata.NewOutgoingContext(ctx, metadata.Join(existing, md)), method, req, reply, cc, callOpts...)
+			}))
+			return grpc.NewClient(normalizeCloudHost(host), opts...)
+		}
+	}
 	return cloudrelay.DialCloud(normalizeCloudHost(host), certPEM, chainPEM, keyData)
 }
 
 // runOnce performs a single flush pass over all three OTLP signals. For each
 // signal it reads a batch of buffered frames, sanitizes each, and exports it
 // via the matching OTLP collector route. A signal's cursor advances only after
-// every frame in its batch is exported successfully (at-least-once delivery;
+// its bounded batch is exported successfully (at-least-once delivery;
 // the cloud tolerates duplicates). Org/asset identity is derived server-side
 // from the mTLS client certificate, so no identifiers are sent in the request.
 func (f *CloudFlusher) runOnce(ctx context.Context, logs collogspb.LogsServiceClient, metrics colmetricspb.MetricsServiceClient, traces coltracepb.TraceServiceClient) error {
@@ -213,17 +250,36 @@ func (f *CloudFlusher) flushSignal(sig SignalType, export func(proto.Message) er
 		return nil
 	}
 	cursor := f.buffer.LoadCursor(sig)
-	msgs, next, err := f.buffer.ReadFromCursor(sig, cursor, cloudFlusherFramesPerPass)
-	if err != nil {
-		return fmt.Errorf("cloud flusher: read %s from cursor: %w", sig, err)
-	}
-	if len(msgs) == 0 {
-		return nil
-	}
-	for _, msg := range msgs {
-		if err := export(msg); err != nil {
-			return fmt.Errorf("cloud flusher: export %s: %w", sig, err)
+	// Merge OTLP frames into one bounded export. Replaying a backlog one RPC
+	// per frame exhausts the v1 per-device rate limit before a batch can finish,
+	// so its cursor never advances and the same prefix is replayed forever.
+	count := cloudFlusherFramesPerPass
+	var msgs []proto.Message
+	var next flushCursor
+	for {
+		var err error
+		msgs, next, err = f.buffer.ReadFromCursor(sig, cursor, count)
+		if err != nil {
+			return fmt.Errorf("cloud flusher: read %s from cursor: %w", sig, err)
 		}
+		if len(msgs) == 0 {
+			return nil
+		}
+		size := 0
+		for _, msg := range msgs {
+			size += proto.Size(msg)
+		}
+		if size <= cloudFlusherMaxBatchBytes || count == 1 {
+			break
+		}
+		count = max(1, count/2)
+	}
+	batch := proto.Clone(msgs[0])
+	for _, msg := range msgs[1:] {
+		proto.Merge(batch, msg)
+	}
+	if err := export(batch); err != nil {
+		return fmt.Errorf("cloud flusher: export %s: %w", sig, err)
 	}
 	if err := f.buffer.SaveCursor(sig, next); err != nil {
 		return fmt.Errorf("cloud flusher: save %s cursor: %w", sig, err)
@@ -232,8 +288,9 @@ func (f *CloudFlusher) flushSignal(sig SignalType, export func(proto.Message) er
 }
 
 func telemetryCloudEndpoint(endpoint string) (string, error) {
-	// Cloud retired OTLP ingest. Enrollment and relay addresses do not imply a
-	// telemetry destination; only an explicit collector enables uploads.
+	// An explicit collector is independently configured for PKI enrollment.
+	// Run selects the enrolled v1 endpoint only for legacy Cloud, which still
+	// serves OTLP; this parser must not remap it to a v2 devices listener.
 	if endpoint == "" {
 		return "", nil
 	}

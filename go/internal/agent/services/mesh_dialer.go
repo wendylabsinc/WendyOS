@@ -43,8 +43,9 @@ const (
 // DeliveryTarget binds a Cloud asset record to its authenticated device principal.
 // Build callers perform endpoint mTLS pinned to Device after opening the transport.
 type DeliveryTarget struct {
-	Device    meshid.Device
-	AssetUUID string
+	Device                     meshid.Device
+	AssetUUID                  string
+	LegacyOrgID, LegacyAssetID int32
 }
 
 // meshDialContextDialer returns a gRPC dialer that connects to hostport
@@ -79,6 +80,7 @@ type meshIdentity struct {
 // the routed local mesh, direct mTLS dials to LAN peers, and — for callers
 // that name a Cloud asset — the Cloud relay's symbolic services.
 type MeshDialer struct {
+	legacy  *LegacyPeerDialer
 	logger  *zap.Logger
 	metrics *MeshMetrics
 
@@ -266,6 +268,15 @@ func (d *MeshDialer) DialDevice(ctx context.Context, device meshid.Device, port 
 // currently authorizes operator-originated relays only; a device credential
 // cannot authorize a device-to-device relay fallback.
 func (d *MeshDialer) DialTarget(ctx context.Context, target DeliveryTarget, port uint16) (net.Conn, string, error) {
+	if target.LegacyOrgID != 0 || target.LegacyAssetID != 0 {
+		d.mu.Lock()
+		legacy := d.legacy
+		d.mu.Unlock()
+		if legacy == nil {
+			return nil, "", errors.New("legacy peer dialer unavailable")
+		}
+		return legacy.DialTarget(ctx, target, port)
+	}
 	device := target.Device
 	if !device.IsValid() || port == 0 {
 		return nil, "", errors.New("invalid wendy net service target")
@@ -303,6 +314,15 @@ func (d *MeshDialer) DialTarget(ctx context.Context, target DeliveryTarget, port
 // Delivery uses it after a LAN socket connects but fails principal-pinned TLS;
 // the returned stream still requires exactly the same endpoint authentication.
 func (d *MeshDialer) DialRoutedTarget(ctx context.Context, target DeliveryTarget, port uint16) (net.Conn, string, error) {
+	if target.LegacyOrgID != 0 || target.LegacyAssetID != 0 {
+		d.mu.Lock()
+		legacy := d.legacy
+		d.mu.Unlock()
+		if legacy == nil {
+			return nil, "", errors.New("legacy peer dialer unavailable")
+		}
+		return legacy.DialRoutedTarget(ctx, target, port)
+	}
 	device := target.Device
 	if !device.IsValid() || port == 0 {
 		return nil, "", errors.New("invalid wendy net service target")
@@ -536,4 +556,10 @@ func streamNetConn(s tunnelStream, teardown func()) net.Conn {
 func (d *MeshDialer) IsSelf(device meshid.Device) bool {
 	self := d.identity().device
 	return self != (meshid.Device{}) && self == device
+}
+
+func (d *MeshDialer) SetLegacyPeerDialer(legacy *LegacyPeerDialer) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.legacy = legacy
 }

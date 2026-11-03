@@ -130,6 +130,7 @@ type ProvisioningService struct {
 	configPath     string
 	mu             sync.Mutex
 	unenrollmentMu sync.Mutex
+	renewalMu      sync.Mutex
 	// lifecycleMu orders publication of dependent enrollment resources with
 	// reset. Callbacks may reenter read APIs, so it must precede mu and must
 	// never be acquired while mu is held.

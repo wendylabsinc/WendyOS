@@ -9,7 +9,7 @@ import (
 
 	"go.uber.org/zap"
 
-	cloudpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
+	cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb"
 )
 
 const (
@@ -47,8 +47,8 @@ var (
 // loopback UDP sockets keyed by client-assigned flow_id, plus inline ICMP echo
 // replies (the agent IS the pinged host; no ICMP socket is involved).
 type datagramTunnelStream interface {
-	Send(*cloudpbv2.TunnelData) error
-	Recv() (*cloudpbv2.TunnelData, error)
+	Send(*cloudpb.TunnelData) error
+	Recv() (*cloudpb.TunnelData, error)
 }
 
 type datagramRelayOption func(*datagramRelay)
@@ -106,7 +106,7 @@ func (r *datagramRelay) activeFlows() int {
 	return len(r.flows)
 }
 
-func (r *datagramRelay) send(msg *cloudpbv2.TunnelData) error {
+func (r *datagramRelay) send(msg *cloudpb.TunnelData) error {
 	r.sendMu.Lock()
 	defer r.sendMu.Unlock()
 	return r.stream.Send(msg)
@@ -118,7 +118,7 @@ func (r *datagramRelay) run(ctx context.Context) {
 	defer sweep.Stop()
 	defer r.closeAll()
 
-	frames := make(chan *cloudpbv2.TunnelData)
+	frames := make(chan *cloudpb.TunnelData)
 	recvErr := make(chan error, 1)
 	go func() {
 		for {
@@ -154,7 +154,7 @@ func (r *datagramRelay) run(ctx context.Context) {
 	}
 }
 
-func (r *datagramRelay) handleEcho(req *cloudpbv2.IcmpEchoRequest) {
+func (r *datagramRelay) handleEcho(req *cloudpb.IcmpEchoRequest) {
 	now := time.Now()
 	r.mu.Lock()
 	if len(req.GetPayload()) > maxUDPPayload {
@@ -181,7 +181,7 @@ func (r *datagramRelay) handleEcho(req *cloudpbv2.IcmpEchoRequest) {
 	r.echoWindowCount++
 	r.mu.Unlock()
 
-	err := r.send(&cloudpbv2.TunnelData{IcmpReply: &cloudpbv2.IcmpEchoReply{
+	err := r.send(&cloudpb.TunnelData{IcmpReply: &cloudpb.IcmpEchoReply{
 		Identifier:      req.GetIdentifier(),
 		Sequence:        req.GetSequence(),
 		Payload:         req.GetPayload(),
@@ -193,7 +193,7 @@ func (r *datagramRelay) handleEcho(req *cloudpbv2.IcmpEchoRequest) {
 	}
 }
 
-func (r *datagramRelay) handleDatagram(ctx context.Context, d *cloudpbv2.TunnelDatagram) {
+func (r *datagramRelay) handleDatagram(ctx context.Context, d *cloudpb.TunnelDatagram) {
 	if len(d.GetPayload()) > maxUDPPayload {
 		r.mu.Lock()
 		if time.Since(r.lastOversizeLog) > rateLimitLogInterval {
@@ -318,7 +318,7 @@ func (r *datagramRelay) readFlow(ctx context.Context, flowID uint32, f *datagram
 		r.mu.Lock()
 		f.lastActive = time.Now()
 		r.mu.Unlock()
-		if err := r.send(&cloudpbv2.TunnelData{Datagram: &cloudpbv2.TunnelDatagram{
+		if err := r.send(&cloudpb.TunnelData{Datagram: &cloudpb.TunnelDatagram{
 			FlowId: flowID, Port: f.port, Payload: payload,
 		}}); err != nil {
 			r.closeFlow(flowID)

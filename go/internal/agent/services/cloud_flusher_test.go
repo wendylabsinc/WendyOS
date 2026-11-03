@@ -102,11 +102,11 @@ func TestCloudFlusher_ExportsAllSignals(t *testing.T) {
 	if err := flusher.runOnce(context.Background(), logs, metrics, traces); err != nil {
 		t.Fatalf("runOnce: %v", err)
 	}
-	if logs.count() != 3 {
-		t.Errorf("want 3 log exports, got %d", logs.count())
+	if logs.count() != 1 || len(logs.calls[0].ResourceLogs) != 3 {
+		t.Errorf("want one export containing all 3 log frames, got %d", logs.count())
 	}
-	if metrics.count() != 2 {
-		t.Errorf("want 2 metric exports, got %d", metrics.count())
+	if metrics.count() != 1 || len(metrics.calls[0].ResourceMetrics) != 2 {
+		t.Errorf("want one export containing all 2 metric frames, got %d", metrics.count())
 	}
 	if traces.count() != 1 {
 		t.Errorf("want 1 trace export, got %d", traces.count())
@@ -209,18 +209,25 @@ func TestCloudFlusher_WithoutEndpointKeepsTelemetryLocal(t *testing.T) {
 			provisioning := &ProvisioningService{
 				enrolled:     enrolled,
 				cloudHost:    "api.wendy.dev:443",
-				principalURI: "spiffe://wendy.sh/tenant/t/device/d",
+				principalURI: "spiffe://wendy.sh/tenant/11111111-1111-4111-8111-111111111111/device/d",
 			}
 			flusher := NewCloudFlusherWithProvisioning(zap.New(core), buf, provisioning)
 
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 			defer cancel()
 			flusher.Run(ctx)
-			if ctx.Err() != nil {
-				t.Fatal("Run waited for enrollment or attempted to dial without a collector")
+			if enrolled && ctx.Err() != nil {
+				t.Fatal("PKI enrollment attempted an implicit collector")
+			}
+			if !enrolled && ctx.Err() == nil {
+				t.Fatal("setup did not wait for a future enrollment")
 			}
 			entries := observed.All()
-			if len(entries) != 1 || entries[0].Level != zap.InfoLevel || entries[0].Message != "cloud flusher: WENDY_TELEMETRY_URL is not set; telemetry uploads are disabled and telemetry remains available locally" {
+			if !enrolled {
+				if len(entries) != 0 {
+					t.Fatalf("setup attempted an export: %+v", entries)
+				}
+			} else if len(entries) != 1 || entries[0].Level != zap.InfoLevel || entries[0].Message != "cloud flusher: WENDY_TELEMETRY_URL is not set; telemetry uploads are disabled and telemetry remains available locally" {
 				t.Fatalf("want one disabled-upload info message, got %+v", entries)
 			}
 

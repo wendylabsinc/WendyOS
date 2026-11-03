@@ -27,6 +27,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/wendylabsinc/wendy/go/internal/shared/buildargs"
+	"github.com/wendylabsinc/wendy/go/internal/shared/buildtarget"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
@@ -129,7 +130,9 @@ type BuildServiceOptions struct {
 	// tenant's Cloud roster and returns its full device principal. Cloud's
 	// asset UUID is that same device UUID; the lookup remains the build host's
 	// membership gate. A target absent from the roster must be refused.
-	ResolveTarget func(assetUUID string) (DeliveryTarget, error)
+	ResolveTarget       func(assetUUID string) (DeliveryTarget, error)
+	ResolveLegacyTarget func(orgID, assetID int32) (DeliveryTarget, error)
+	LegacyPushTLS       func(orgID, assetID int32) (*tls.Config, error)
 	// PushTLS supplies the TLS config for the delivery hop, PINNED to the
 	// resolved device it is meant to reach.
 	//
@@ -164,6 +167,8 @@ type BuildService struct {
 	chunks               ChunkSource
 	peers                PeerDialer
 	resolveTarget        func(assetUUID string) (DeliveryTarget, error)
+	resolveLegacyTarget  func(int32, int32) (DeliveryTarget, error)
+	legacyPushTLS        func(int32, int32) (*tls.Config, error)
 	pushTLS              func(device meshid.Device) (*tls.Config, error)
 	maxContextBytes      int64
 	// dialTarget opens the gRPC hop to a target device's agent for chunked
@@ -201,7 +206,7 @@ func NewBuildService(logger *zap.Logger, opts BuildServiceOptions) *BuildService
 			return DeliveryTarget{}, errors.New("this build host has no roster to resolve delivery targets against")
 		}
 	}
-	return &BuildService{
+	service := &BuildService{
 		logger:               logger,
 		contextLocks:         opts.ContextLocks,
 		buildHostEnabledPath: filepath.Join(opts.ConfigPath, buildHostEnabledFile),
@@ -210,14 +215,17 @@ func NewBuildService(logger *zap.Logger, opts BuildServiceOptions) *BuildService
 		chunks:               opts.Chunks,
 		peers:                opts.Peers,
 		resolveTarget:        opts.ResolveTarget,
+		resolveLegacyTarget:  opts.ResolveLegacyTarget,
+		legacyPushTLS:        opts.LegacyPushTLS,
 		pushTLS:              opts.PushTLS,
 		maxContextBytes:      opts.MaxContextBytes,
-		dialTarget:           meshTargetDialer(opts.Peers, opts.ResolveTarget, opts.PushTLS, opts.TargetAgentPort),
 		buildkitProcDir:      "/proc",
 		buildkitConfigPath:   defaultBuildkitConfigPath,
 		checkInternet:        opts.CheckInternet,
 		internetCheckTimeout: defaultInternetCheckTimeout,
 	}
+	service.dialTarget = deliveryTargetDialer(opts.Peers, service.resolvePushTarget, service.deliveryTLS, opts.TargetAgentPort)
+	return service
 }
 
 // lockContextDir serialises builds that reassemble into the same directory,
@@ -355,7 +363,8 @@ func (s *BuildService) GetBuildCapabilities(ctx context.Context, _ *agentpbv2.Ge
 		BuildkitRootInspectionSupported: true,
 		// Lets a CLI sending CHUNKING_MODE_FORCE tell this agent from one that
 		// would discard the field and push through the registry regardless.
-		ChunkDelivery: true,
+		ChunkDelivery:  true,
+		LegacyDelivery: s.resolveLegacyTarget != nil && s.legacyPushTLS != nil,
 	}
 	if available {
 		// Only the host's own platform is claimed native. Emulated platforms stay
@@ -501,10 +510,10 @@ func (s *BuildService) BuildImage(stream agentpbv2.WendyBuildService_BuildImageS
 	// it as two deliveries — a fleet listed as larger than it is.
 	seen := make(map[string]struct{}, len(targets))
 	for _, t := range targets {
-		if _, dup := seen[t.GetAssetUuid()]; dup {
-			return status.Errorf(codes.InvalidArgument, "device %s is listed as a delivery target more than once", t.GetAssetUuid())
+		if _, dup := seen[buildtarget.Key(t)]; dup {
+			return status.Errorf(codes.InvalidArgument, "device %s is listed as a delivery target more than once", buildtarget.Key(t))
 		}
-		seen[t.GetAssetUuid()] = struct{}{}
+		seen[buildtarget.Key(t)] = struct{}{}
 	}
 	if s.peers == nil {
 		return status.Error(codes.FailedPrecondition, "this build host has no wendy net dialer and cannot deliver an image to another device")
@@ -544,7 +553,7 @@ func (s *BuildService) BuildImage(stream agentpbv2.WendyBuildService_BuildImageS
 		return err
 	}
 
-	if s.pushTLS == nil {
+	if s.pushTLS == nil && s.legacyPushTLS == nil {
 		return status.Error(codes.FailedPrecondition, "this build host has no client certificate for delivering an image to another device")
 	}
 	// Every target is resolved against this tenant's roster — and its pinned
@@ -552,12 +561,12 @@ func (s *BuildService) BuildImage(stream agentpbv2.WendyBuildService_BuildImageS
 	// validated up front: a build that cannot be delivered is wasted minutes on
 	// a machine other people share.
 	for _, t := range targets {
-		resolved, err := s.resolveTarget(t.GetAssetUuid())
+		resolved, err := s.resolvePushTarget(t)
 		if err != nil {
-			return status.Errorf(codes.FailedPrecondition, "resolving delivery target device %s: %v", t.GetAssetUuid(), err)
+			return status.Errorf(codes.FailedPrecondition, "resolving delivery target device %s: %v", buildtarget.Key(t), err)
 		}
-		if _, err := s.pushTLS(resolved.Device); err != nil {
-			return status.Errorf(codes.FailedPrecondition, "loading delivery credentials for device %s: %v", t.GetAssetUuid(), err)
+		if _, err := s.deliveryTLS(resolved); err != nil {
+			return status.Errorf(codes.FailedPrecondition, "loading delivery credentials for device %s: %v", buildtarget.Key(t), err)
 		}
 	}
 
@@ -608,7 +617,7 @@ func (s *BuildService) BuildImage(stream agentpbv2.WendyBuildService_BuildImageS
 		// With several devices, one device's problem is one device's problem.
 		// Recording it and moving on is the whole point: a fleet deploy must not
 		// be abandoned halfway because the third camera is offline.
-		res := &agentpbv2.DeliveryResult{AssetUuid: t.GetAssetUuid(), Delivered: deliveryErr == nil}
+		res := buildtarget.Result(buildtarget.Key(t), deliveryErr == nil, "")
 		if deliveryErr != nil {
 			res.Error = deliveryErr.Error()
 		}
@@ -663,14 +672,14 @@ func (s *BuildService) deliver(
 			return fmt.Errorf("%v, and --chunking=force forbids the registry push that would deliver it; use --chunking=auto or off", err)
 		}
 		return fmt.Errorf("device %s predates chunked delivery, and --chunking=force forbids the registry push it would otherwise get; update its agent, or use --chunking=auto",
-			target.GetAssetUuid())
+			buildtarget.Key(target))
 	}
 	if errors.Is(err, errChunkInventoryTooLarge) {
 		prog.logf("#%d 0.000 %v; pushing through device %s's registry instead",
-			deliveryVertexBase+index, err, target.GetAssetUuid())
+			deliveryVertexBase+index, err, buildtarget.Key(target))
 	} else {
 		prog.logf("#%d 0.000 device %s predates chunked delivery; pushing through its registry instead",
-			deliveryVertexBase+index, target.GetAssetUuid())
+			deliveryVertexBase+index, buildtarget.Key(target))
 	}
 	buildErr, deliveryErr := s.buildAndDeliver(ctx, stream, spec, df, dir, target)
 	if deliveryErr != nil {
@@ -701,7 +710,7 @@ func (s *BuildService) deliverAllByRegistry(
 	multi := len(targets) > 1
 	for i, t := range targets {
 		prog.logf("#%d 0.000 device %s: pushing through its registry, as --chunking=off asks",
-			deliveryVertexBase+i, t.GetAssetUuid())
+			deliveryVertexBase+i, buildtarget.Key(t))
 		buildErr, deliveryErr := s.buildAndDeliver(ctx, stream, spec, df, dir, t)
 
 		// A build failure on the FIRST pass is a build failure, full stop: no
@@ -719,12 +728,12 @@ func (s *BuildService) deliverAllByRegistry(
 			if buildErr != nil {
 				return buildErr
 			}
-			deliveries = append(deliveries, &agentpbv2.DeliveryResult{AssetUuid: t.GetAssetUuid(), Delivered: true})
+			deliveries = append(deliveries, buildtarget.Result(buildtarget.Key(t), true, ""))
 			break
 		}
 
 		// Past the first pass, one device's problem is one device's problem.
-		res := &agentpbv2.DeliveryResult{AssetUuid: t.GetAssetUuid(), Delivered: true}
+		res := buildtarget.Result(buildtarget.Key(t), true, "")
 		switch {
 		case deliveryErr != nil:
 			res.Delivered, res.Error = false, deliveryErr.Error()
@@ -781,11 +790,11 @@ func (s *BuildService) buildAndDeliver(
 ) (buildErr, deliveryErr error) {
 	// Resolved against this tenant's roster, then pinned to that device's
 	// principal, so only that device can terminate the registry hop.
-	resolved, err := s.resolveTarget(target.GetAssetUuid())
+	resolved, err := s.resolvePushTarget(target)
 	if err != nil {
-		return nil, fmt.Errorf("resolving delivery target device %s: %w", target.GetAssetUuid(), err)
+		return nil, fmt.Errorf("resolving delivery target device %s: %w", buildtarget.Key(target), err)
 	}
-	tlsCfg, err := s.pushTLS(resolved.Device)
+	tlsCfg, err := s.deliveryTLS(resolved)
 	if err != nil {
 		return nil, fmt.Errorf("loading push credentials: %v", err)
 	}
@@ -801,7 +810,7 @@ func (s *BuildService) buildAndDeliver(
 	// dockerConfigWithPushAuth.
 	//
 	// Per target, because the proxy address and credential are minted per pass.
-	authDir := fmt.Sprintf("%s%s.%s", dir, dockerConfigDirSuffix, target.GetAssetUuid())
+	authDir := fmt.Sprintf("%s%s.%s", dir, dockerConfigDirSuffix, buildtarget.Key(target))
 	if err := dockerConfigWithPushAuth(authDir, proxy.addr, proxy.credential); err != nil {
 		return status.Errorf(codes.Internal, "%v", err), nil
 	}

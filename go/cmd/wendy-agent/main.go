@@ -339,6 +339,9 @@ func main() {
 	audioSvc := services.NewAudioService(logger)
 
 	provisioningSvc := services.NewProvisioningService(logger, configPath, timesyncMgr)
+	if ctrdClient != nil {
+		ctrdClient.SetCloudEnrollment(provisioningSvc.CloudEnrollment)
+	}
 	telemetrySvc := services.NewTelemetryService(logger, broadcaster, telemetryBuf)
 
 	deviceInfoSvc := services.NewDeviceInfoService(logger, hwDiscoverer)
@@ -743,11 +746,16 @@ func main() {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			cloudHost, _, _, enrolled := provisioningSvc.ProvisioningInfo()
-			if !enrolled {
+			enrollment, err := provisioningSvc.CloudEnrollment()
+			if err != nil {
+				logger.Error("invalid Cloud enrollment; relay disabled", zap.Error(err))
 				return
 			}
-			if principal := provisioningSvc.ProvisioningPrincipal(); principal != "" {
+			if enrollment.Mode == services.CloudUnenrolled {
+				return
+			}
+			cloudHost := enrollment.Host
+			if enrollment.Mode == services.CloudPKI {
 				endpoint, err := cloudrelay.DeviceEndpoint(cloudHost, os.Getenv("WENDY_DEVICE_CLOUD_URL"))
 				if err != nil {
 					logger.Error("invalid device Cloud endpoint", zap.Error(err))
@@ -795,6 +803,7 @@ func main() {
 	// registerAllServices runs after the assignment; if that ever stops being
 	// true, BuildImage reports "no mesh dialer" rather than panicking.
 	var meshDialer *services.MeshDialer
+	legacyPeers := services.NewLegacyPeerDialer(logger, provisioningSvc)
 	var meshRoster *services.MeshRoster
 	var localMeshMu sync.RWMutex
 	var localMeshSnapshot func() localmesh.NodeSnapshot
@@ -826,11 +835,25 @@ func main() {
 		// The app RPC independently requires a same-tenant device principal and
 		// refuses admission when this agent has no enrolled tenant.
 		meshSvc := services.NewMeshService(logger, configPath, deviceScope(provisioningSvc))
+		if enrollment, err := provisioningSvc.CloudEnrollment(); err == nil && enrollment.Mode == services.CloudLegacy {
+			meshSvc.EnableLegacyEnrollment(enrollment.OrganizationID)
+		}
 		meshSvc.SetIngressAuthorizer(meshIngress)
 		buildSvc := services.NewBuildService(logger, services.BuildServiceOptions{
-			ConfigPath:   configPath,
-			Chunks:       buildChunkSource,
-			Peers:        meshDialer,
+			ConfigPath:          configPath,
+			Chunks:              buildChunkSource,
+			Peers:               meshDialer,
+			ResolveLegacyTarget: legacyPeers.Resolve,
+			LegacyPushTLS: func(org, asset int32) (*tls.Config, error) {
+				if _, err := legacyPeers.Resolve(org, asset); err != nil {
+					return nil, err
+				}
+				_, cert, chain, key, err := provisioningSvc.LegacyCloudCredentials()
+				if err != nil {
+					return nil, err
+				}
+				return mtls.NewClientTLSConfigExpectingIdentity(cert, chain, key, logger, certs.WendyIdentity{OrgID: org, EntityType: certs.EntityAsset, EntityID: strconv.Itoa(int(asset))})
+			},
 			ContextLocks: buildContextLocks,
 			// Legacy fallback for a CLI that does not put each target's actual
 			// mTLS agent port in PushTarget.
@@ -1061,6 +1084,9 @@ func main() {
 	}
 	sessionIngress := meshsession.WithAgentService(meshIngress, uint16(mtlsPortNum))
 	startConfiguredLocalMesh := func(certPEM, chainPEM, keyPEM string) {
+		if enrollment, err := provisioningSvc.CloudEnrollment(); err != nil || enrollment.Mode != services.CloudPKI {
+			return
+		}
 		if runtime.GOOS != "linux" {
 			return
 		}
@@ -1161,7 +1187,7 @@ func main() {
 	// info are both in scope — rather than gated on alreadyProvisioned: on an
 	// unenrolled device the cert fields are empty, so DialDevice simply
 	// fails closed at runtime with a clear error instead of never starting.
-	cloudHost, orgID, assetID, _ := provisioningSvc.ProvisioningInfo()
+	_, orgID, assetID, _ := provisioningSvc.ProvisioningInfo()
 	var activeProvisioningIdentity provisioningIdentityTracker
 	if alreadyProvisioned {
 		activeProvisioningIdentity.Changed(certPEM, chainPEM, keyPEM, orgID, assetID)
@@ -1174,6 +1200,7 @@ func main() {
 		meshMetrics.Collect(ctx)
 	}()
 	meshDialer = services.NewMeshDialer(logger, certPEM, keyPEM, chainPEM, meshMetrics)
+	meshDialer.SetLegacyPeerDialer(legacyPeers)
 	meshDialer.SetSelfDialer(func(dialCtx context.Context, port uint16) (net.Conn, error) {
 		bounded, cancel := context.WithTimeout(dialCtx, 5*time.Second)
 		defer cancel()
@@ -1287,7 +1314,8 @@ func main() {
 	// MeshRoster has no device principal to authenticate with and Sync simply
 	// fails closed (logged, retried) until the device is provisioned, rather
 	// than never starting at all.
-	meshRoster = services.NewMeshRoster(logger, cloudGRPCURLForCloudHost(cloudHost), certPEM, keyPEM, chainPEM)
+	pkiHost, pkiCert, pkiChain, pkiKey := provisioningSvc.PKICloudCredentials()
+	meshRoster = services.NewMeshRoster(logger, cloudGRPCURLForCloudHost(pkiHost), pkiCert, pkiKey, pkiChain)
 	meshBrowse := func(ctx context.Context) ([]models.LANDevice, error) {
 		col, err := discovery.Discover(ctx, discovery.DiscoveryOptions{
 			Types:   []models.InterfaceType{models.InterfaceLAN},
@@ -1321,12 +1349,16 @@ func main() {
 	// roster it starts unconditionally and stays silent until enrolled.
 	var reportedState *services.ReportedState
 	var postbox *services.Postbox
+	var legacyReportedState *services.LegacyReportedState
 	if ctrdErr == nil {
-		reportedState = services.NewReportedState(logger, ctrdClient, telemetryBuf, cloudGRPCURLForCloudHost(cloudHost), certPEM, keyPEM, chainPEM)
+		legacyReportedState = services.NewLegacyReportedState(logger, provisioningSvc, ctrdClient, containerSvc, ctrdClient)
+		wg.Add(1)
+		go func() { defer wg.Done(); legacyReportedState.Run(ctx) }()
+		reportedState = services.NewReportedState(logger, ctrdClient, telemetryBuf, cloudGRPCURLForCloudHost(pkiHost), pkiCert, pkiKey, pkiChain)
 		// The operator-signed postbox (AAA contract section 5.3): woken by the
 		// reported-state nudge, it applies only what it verifies itself.
 		postbox = services.NewPostbox(logger, telemetryBuf, configPath, services.NewPostboxControl(containerSvc))
-		postbox.UpdateIdentity(cloudGRPCURLForCloudHost(cloudHost), certPEM, keyPEM, chainPEM)
+		postbox.UpdateIdentity(cloudGRPCURLForCloudHost(pkiHost), pkiCert, pkiKey, pkiChain)
 		reportedState.AttachPostbox(postbox)
 		wg.Add(2)
 		go func() {
@@ -1465,7 +1497,7 @@ func main() {
 			}
 		}()
 		keyPEM := string(keyData)
-		cloudHost, orgID, assetID, _ := provisioningSvc.ProvisioningInfo()
+		_, orgID, assetID, _ := provisioningSvc.ProvisioningInfo()
 		if activeProvisioningIdentity.Changed(certPEM, chainPEM, keyPEM, orgID, assetID) {
 			// The persisted identity is already durable. Let the provisioning RPC
 			// finish, then restart so the app server, pool, and every carrier
@@ -1488,10 +1520,14 @@ func main() {
 		// roster cannot authenticate a sync and the resolver rejects every LAN
 		// peer, until the agent is restarted — so swap in the freshly issued
 		// identity here.
-		meshRoster.UpdateIdentity(cloudGRPCURLForCloudHost(cloudHost), certPEM, keyPEM, chainPEM)
+		pkiHost, pkiCert, pkiChain, pkiKey := provisioningSvc.PKICloudCredentials()
+		meshRoster.UpdateIdentity(cloudGRPCURLForCloudHost(pkiHost), pkiCert, pkiKey, pkiChain)
+		if legacyReportedState != nil {
+			legacyReportedState.UpdateIdentity()
+		}
 		if reportedState != nil {
-			reportedState.UpdateIdentity(cloudGRPCURLForCloudHost(cloudHost), certPEM, keyPEM, chainPEM)
-			postbox.UpdateIdentity(cloudGRPCURLForCloudHost(cloudHost), certPEM, keyPEM, chainPEM)
+			reportedState.UpdateIdentity(cloudGRPCURLForCloudHost(pkiHost), pkiCert, pkiKey, pkiChain)
+			postbox.UpdateIdentity(cloudGRPCURLForCloudHost(pkiHost), pkiCert, pkiKey, pkiChain)
 		}
 		// The freshly issued identity may name a different tenant than the
 		// boot snapshot. Retire every VIP slot outside the new tenant (they
@@ -1532,6 +1568,9 @@ func main() {
 	// Revoke Unitree sessions and keys before Unprovision reports success.
 	// A failed clear is retried when the agent restarts unenrolled.
 	provisioningSvc.BeforeUnprovisioned = func() error {
+		if legacyReportedState != nil {
+			legacyReportedState.UpdateIdentity()
+		}
 		stopCtx, stopCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		stopErr := localMeshLife.Stop(stopCtx)
 		stopCancel()
@@ -1788,6 +1827,9 @@ func certNotBeforeFloor(certPEM string) time.Time {
 // a BLE provisioning event or a pki-core renewal replaces it without
 // restarting the agent, and a scope captured at boot would outlive it.
 func deviceScope(provisioningSvc *services.ProvisioningService) certs.Scope {
+	if enrollment, err := provisioningSvc.CloudEnrollment(); err == nil && enrollment.Mode == services.CloudLegacy {
+		return certs.Scope{OrgID: enrollment.OrganizationID}
+	}
 	certPEM, _, _ := provisioningSvc.ProvisioningCerts()
 	if scope, ok := certs.ScopeFromCertPEM(certPEM); ok {
 		return scope
@@ -1814,6 +1856,9 @@ func unitreePairingOwner(scope certs.Scope, enrolled bool) unitree.PairingOwner 
 // unprovisioned device) yields the zero pair, which the admin service reads
 // as "not enrolled".
 func deviceIdentity(provisioningSvc *services.ProvisioningService) (meshid.Tenant, meshid.Device) {
+	if enrollment, err := provisioningSvc.CloudEnrollment(); err != nil || enrollment.Mode != services.CloudPKI {
+		return meshid.Tenant{}, meshid.Device{}
+	}
 	certPEM, _, _ := provisioningSvc.ProvisioningCerts()
 	if certPEM == "" {
 		return meshid.Tenant{}, meshid.Device{}
@@ -1839,6 +1884,15 @@ func deviceIdentity(provisioningSvc *services.ProvisioningService) (meshid.Tenan
 // fake claim at the center of the mesh, so the advertisement is left alone
 // and the failure is logged.
 func advertiseProvisionedMeshIdentity(logger *zap.Logger, mtlsPort int, provisioningSvc *services.ProvisioningService) {
+	enrollment, err := provisioningSvc.CloudEnrollment()
+	if err != nil {
+		logger.Error("cannot advertise invalid Cloud enrollment", zap.Error(err))
+		return
+	}
+	if enrollment.Mode == services.CloudLegacy {
+		configpartition.UpdateAvahiForLegacyProvisioning(logger, mtlsPort, enrollment.AssetID, enrollment.OrganizationID)
+		return
+	}
 	_, device := deviceIdentity(provisioningSvc)
 	if device == (meshid.Device{}) {
 		logger.Warn("Provisioned certificate carries no tenant SPIFFE principal; wendy net advertisement not updated")

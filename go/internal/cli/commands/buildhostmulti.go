@@ -9,6 +9,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/cli/tui"
 	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
+	"github.com/wendylabsinc/wendy/go/internal/shared/buildtarget"
 	"github.com/wendylabsinc/wendy/go/internal/stagefile"
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 )
@@ -85,6 +86,9 @@ func buildServicesRemote(
 	if err != nil {
 		return nil, err
 	}
+	if err := checkLegacyDeliverySupported(host, caps, []*agentpbv2.PushTarget{base}); err != nil {
+		return nil, err
+	}
 
 	// The GPU architecture comes from the TARGET, not the build host: a cuda:
 	// stage is compiled for the hardware that will RUN the image.
@@ -119,7 +123,7 @@ func buildServicesRemote(
 		// status, so a service whose image never reached the device must not
 		// read as built — the deploy below would otherwise create a container
 		// from whatever older image still holds this :latest name.
-		if err := reportedDeliveryError(result, spec.GetPushTarget().GetAssetUuid()); err != nil {
+		if err := reportedDeliveryError(result, buildtarget.Key(spec.GetPushTarget())); err != nil {
 			fmt.Fprintf(logOut, "delivery to the device failed: %v\n", err)
 			return fmt.Errorf("image built on %s but could not be delivered to the device: %w", host, err)
 		}
@@ -158,10 +162,12 @@ func serviceBuildSpec(
 		Context:  manifest,
 		Chunking: buildChunkingMode(chunking),
 		PushTarget: &agentpbv2.PushTarget{
-			AssetUuid:    base.GetAssetUuid(),
-			RegistryPort: base.GetRegistryPort(),
-			Repository:   repo + ":latest",
-			AgentPort:    base.GetAgentPort(),
+			AssetUuid:            base.GetAssetUuid(),
+			AssetId:              base.GetAssetId(),
+			LegacyOrganizationId: base.GetLegacyOrganizationId(),
+			RegistryPort:         base.GetRegistryPort(),
+			Repository:           repo + ":latest",
+			AgentPort:            base.GetAgentPort(),
 		},
 		Definition: &agentpbv2.BuildSpec_DockerfileBuild{
 			DockerfileBuild: &agentpbv2.DockerfileBuild{

@@ -23,7 +23,7 @@ import (
 
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/legacycertproof"
-	cloudpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
+	cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb"
 )
 
 const (
@@ -57,11 +57,8 @@ type TunnelBrokerClient struct {
 	sessions atomic.Int32
 }
 
-// NewTunnelBrokerClient serves the Cloud relay's presence leg for this device.
-// The identity the broker authenticates is read off the provisioned leaf
-// certificate at each connection — the SPIFFE device principal pki-core
-// stamps on it — so enrollment while the agent runs is picked up on the next
-// reconnect without rebuilding the client.
+// NewTunnelBrokerClient serves legacy Cloud v1 enrollments. Direct PKI
+// enrollments use cloudrelay.Agent, including their independent v2 datagrams.
 func NewTunnelBrokerClient(logger *zap.Logger, url, certPEM, keyPEM, chainPEM string, mtlsPort int) *TunnelBrokerClient {
 	return &TunnelBrokerClient{
 		logger:   logger,
@@ -73,11 +70,9 @@ func NewTunnelBrokerClient(logger *zap.Logger, url, certPEM, keyPEM, chainPEM st
 	}
 }
 
-// brokerIdentityFromCert reads the principal URI the broker must authenticate
-// this agent as: the SPIFFE device principal on a v2 leaf, or the legacy URN
-// on an old-chain certificate. Empty means no provisioned identity — presence
-// cannot authenticate, so runOnce refuses to dial rather than connecting
-// anonymously.
+// brokerIdentityFromCert uses the legacy URN even when a transitional leaf
+// also contains a SPIFFE SAN. The v1 broker authenticates numeric org/assets;
+// selecting the generic preferred identity would silently switch protocols.
 func brokerIdentityFromCert(logger *zap.Logger, certPEM string) string {
 	if certPEM == "" {
 		return ""
@@ -91,7 +86,7 @@ func brokerIdentityFromCert(logger *zap.Logger, certPEM string) string {
 	if err != nil || !found {
 		return ""
 	}
-	return identity.IdentityKey()
+	return identity.LegacyURN()
 }
 
 func (c *TunnelBrokerClient) Run(ctx context.Context) {
@@ -132,7 +127,7 @@ func (c *TunnelBrokerClient) runOnce(ctx context.Context) (retErr error) {
 	defer func() {
 		if status.Code(retErr) == codes.Unimplemented {
 			retErr = fmt.Errorf("cloud endpoint %s does not implement %s; agent and cloud presence protocols are incompatible: %w",
-				c.url, cloudpbv2.TunnelBrokerService_RegisterPresence_FullMethodName, retErr)
+				c.url, cloudpb.TunnelBrokerService_RegisterPresence_FullMethodName, retErr)
 		}
 	}()
 	dialOpts, requestMetadata, err := c.buildDialOpts()
@@ -145,9 +140,9 @@ func (c *TunnelBrokerClient) runOnce(ctx context.Context) (retErr error) {
 	}
 	defer conn.Close()
 
-	client := cloudpbv2.NewTunnelBrokerServiceClient(conn)
+	client := cloudpb.NewTunnelBrokerServiceClient(conn)
 
-	devMD, err := requestMetadata(cloudpbv2.TunnelBrokerService_RegisterPresence_FullMethodName)
+	devMD, err := requestMetadata(cloudpb.TunnelBrokerService_RegisterPresence_FullMethodName)
 	if err != nil {
 		return err
 	}
@@ -169,7 +164,7 @@ func (c *TunnelBrokerClient) runOnce(ctx context.Context) (retErr error) {
 	var pathWatch brokerPathWatch
 	var lastHeartbeat time.Time
 
-	recvCh := make(chan *cloudpbv2.DialRequest, 8)
+	recvCh := make(chan *cloudpb.DialRequest, 8)
 	recvErr := make(chan error, 1)
 	go func() {
 		for {
@@ -203,7 +198,7 @@ func (c *TunnelBrokerClient) runOnce(ctx context.Context) (retErr error) {
 			}
 			return err
 		case <-hbTicker.C:
-			if err := stream.Send(&cloudpbv2.AgentHeartbeat{}); err != nil {
+			if err := stream.Send(&cloudpb.AgentHeartbeat{}); err != nil {
 				return err
 			}
 			lastHeartbeat = time.Now()
@@ -347,8 +342,8 @@ func brokerIdentityDialOpts(logger *zap.Logger, identityURI, certPEM, keyPEM, ch
 	}, requestMetadata, nil
 }
 
-func (c *TunnelBrokerClient) handleDialRequest(ctx context.Context, client cloudpbv2.TunnelBrokerServiceClient,
-	req *cloudpbv2.DialRequest, requestMetadata brokerRequestMetadata) {
+func (c *TunnelBrokerClient) handleDialRequest(ctx context.Context, client cloudpb.TunnelBrokerServiceClient,
+	req *cloudpb.DialRequest, requestMetadata brokerRequestMetadata) {
 	// Only allow loopback connections to prevent broker-directed SSRF.
 	ip := net.ParseIP(req.Host)
 	if req.Host != "localhost" && (ip == nil || !ip.IsLoopback()) {
@@ -357,7 +352,7 @@ func (c *TunnelBrokerClient) handleDialRequest(ctx context.Context, client cloud
 		return
 	}
 
-	if req.GetProtocol() == cloudpbv2.TunnelProtocol_TUNNEL_PROTOCOL_DATAGRAM {
+	if req.GetProtocol() == cloudpb.TunnelProtocol_TUNNEL_PROTOCOL_DATAGRAM {
 		c.handleDatagramDial(ctx, client, req, requestMetadata)
 		return
 	}
@@ -380,7 +375,7 @@ func (c *TunnelBrokerClient) handleDialRequest(ctx context.Context, client cloud
 	callCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	devMD, err := requestMetadata(cloudpbv2.TunnelBrokerService_AgentTunnel_FullMethodName)
+	devMD, err := requestMetadata(cloudpb.TunnelBrokerService_AgentTunnel_FullMethodName)
 	if err != nil {
 		c.logger.Error("failed to authenticate AgentTunnel stream", zap.Error(err))
 		return
@@ -392,7 +387,7 @@ func (c *TunnelBrokerClient) handleDialRequest(ctx context.Context, client cloud
 		return
 	}
 
-	if err := agentStream.Send(&cloudpbv2.TunnelData{SessionId: req.SessionId}); err != nil {
+	if err := agentStream.Send(&cloudpb.TunnelData{SessionId: req.SessionId}); err != nil {
 		c.logger.Error("failed to send join message", zap.Error(err))
 		return
 	}
@@ -403,11 +398,11 @@ func (c *TunnelBrokerClient) handleDialRequest(ctx context.Context, client cloud
 // handleDatagramDial claims the session and serves a multiplexed datagram
 // relay (UDP flows + ICMP echo). Nothing is dialed upfront; UDP sockets are
 // created per flow on first sight, restricted to loopback like TCP dials.
-func (c *TunnelBrokerClient) handleDatagramDial(ctx context.Context, client cloudpbv2.TunnelBrokerServiceClient,
-	req *cloudpbv2.DialRequest, requestMetadata brokerRequestMetadata) {
+func (c *TunnelBrokerClient) handleDatagramDial(ctx context.Context, client cloudpb.TunnelBrokerServiceClient,
+	req *cloudpb.DialRequest, requestMetadata brokerRequestMetadata) {
 	callCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	devMD, err := requestMetadata(cloudpbv2.TunnelBrokerService_AgentTunnel_FullMethodName)
+	devMD, err := requestMetadata(cloudpb.TunnelBrokerService_AgentTunnel_FullMethodName)
 	if err != nil {
 		c.logger.Error("failed to authenticate datagram AgentTunnel stream", zap.Error(err))
 		return
@@ -418,7 +413,7 @@ func (c *TunnelBrokerClient) handleDatagramDial(ctx context.Context, client clou
 		c.logger.Error("failed to open AgentTunnel stream", zap.Error(err))
 		return
 	}
-	if err := agentStream.Send(&cloudpbv2.TunnelData{SessionId: req.SessionId}); err != nil {
+	if err := agentStream.Send(&cloudpb.TunnelData{SessionId: req.SessionId}); err != nil {
 		c.logger.Error("failed to send join message", zap.Error(err))
 		return
 	}
@@ -427,8 +422,8 @@ func (c *TunnelBrokerClient) handleDatagramDial(ctx context.Context, client clou
 }
 
 type agentTunnelStream interface {
-	Send(*cloudpbv2.TunnelData) error
-	Recv() (*cloudpbv2.TunnelData, error)
+	Send(*cloudpb.TunnelData) error
+	Recv() (*cloudpb.TunnelData, error)
 	CloseSend() error
 }
 
@@ -488,14 +483,14 @@ func (c *TunnelBrokerClient) relay(ctx context.Context, cancel context.CancelFun
 			if n > 0 {
 				payload := make([]byte, n)
 				copy(payload, buf[:n])
-				if sendErr := stream.Send(&cloudpbv2.TunnelData{Payload: payload}); sendErr != nil {
+				if sendErr := stream.Send(&cloudpb.TunnelData{Payload: payload}); sendErr != nil {
 					abort()
 					break
 				}
 			}
 			if readErr != nil {
 				if errors.Is(readErr, io.EOF) {
-					if sendErr := stream.Send(&cloudpbv2.TunnelData{HalfClose: true}); sendErr != nil {
+					if sendErr := stream.Send(&cloudpb.TunnelData{HalfClose: true}); sendErr != nil {
 						abort()
 					}
 				} else {

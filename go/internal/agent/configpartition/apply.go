@@ -417,6 +417,15 @@ func UpdateAvahiForProvisioning(logger *zap.Logger, mtlsPort int, principal stri
 	})
 }
 
+// UpdateAvahiForLegacyProvisioning advertises the numeric Cloud v1 binding.
+// A legacy enrollment is valid without a mesh principal; stale principal and
+// numeric records are replaced together when enrollment changes.
+func UpdateAvahiForLegacyProvisioning(logger *zap.Logger, mtlsPort int, assetID, orgID int32) {
+	updateAvahiService(logger, defaultAvahiServiceDir, mtlsPort, true, "", func() bool {
+		return restartAvahiDaemon(logger, nil)
+	}, assetID, orgID)
+}
+
 // UpdateAvahiForUnprovisioning reverts the _wendyos._udp service block to
 // advertise the plaintext agent port, a tls=false TXT record, and removes the
 // principal TXT record, then restarts avahi-daemon. It is the inverse of
@@ -460,7 +469,7 @@ const defaultAvahiServiceDir = "/etc/avahi/services"
 // temporary directory, so every guard passes and the restart is reached for
 // real. Left un-injected it prompts for polkit authorization on a developer
 // machine and blocks the package's tests for the length of that timeout.
-func updateAvahiService(logger *zap.Logger, serviceDir string, port int, tls bool, principal string, restartAvahi func() bool) {
+func updateAvahiService(logger *zap.Logger, serviceDir string, port int, tls bool, principal string, restartAvahi func() bool, legacy ...int32) {
 	unlock := services.LockAvahiServiceFile()
 	defer unlock()
 
@@ -483,7 +492,7 @@ func updateAvahiService(logger *zap.Logger, serviceDir string, port int, tls boo
 			continue
 		}
 
-		content := updateWendyOSServicePort(string(data), port, tls, principal)
+		content := updateWendyOSServicePort(string(data), port, tls, principal, legacy...)
 		if err := os.WriteFile(serviceFile, []byte(content), 0o644); err != nil {
 			logger.Warn("Could not write avahi service file",
 				zap.String("path", serviceFile), zap.Error(err))
@@ -504,7 +513,7 @@ func updateAvahiService(logger *zap.Logger, serviceDir string, port int, tls boo
 // its port, tls TXT record, and principal TXT record. Other service blocks
 // (SSH, HTTP, etc.) are left untouched. When principal is empty, the TXT
 // record is removed (used on unprovisioning).
-func updateWendyOSServicePort(content string, port int, tls bool, principal string) string {
+func updateWendyOSServicePort(content string, port int, tls bool, principal string, legacy ...int32) string {
 	const typeTag = "<type>_wendyos._udp</type>"
 	portRe := regexp.MustCompile(`<port>\d+</port>`)
 
@@ -544,6 +553,9 @@ func updateWendyOSServicePort(content string, port int, tls bool, principal stri
 	}
 
 	block = updatePrincipalTXTRecord(block, principal)
+	if principal == "" && tls && len(legacy) == 2 && legacy[0] > 0 && legacy[1] > 0 {
+		block = strings.Replace(block, "</service>", fmt.Sprintf("    <txt-record>assetid=%d</txt-record>\n    <txt-record>orgid=%d</txt-record>\n  </service>", legacy[0], legacy[1]), 1)
+	}
 
 	return content[:serviceStart] + block + content[serviceEnd:]
 }

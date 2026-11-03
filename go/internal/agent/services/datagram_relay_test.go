@@ -10,7 +10,7 @@ import (
 
 	"go.uber.org/zap"
 
-	cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb/v2"
+	cloudpb "github.com/wendylabsinc/wendy/go/proto/gen/cloudpb"
 )
 
 type fakeAgentStream struct {

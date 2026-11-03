@@ -1227,6 +1227,11 @@ type containerControl struct{ svc *ContainerService }
 // NewPostboxControl adapts the agent's container service for the postbox.
 func NewPostboxControl(svc *ContainerService) postboxControl { return containerControl{svc: svc} }
 
+func (c containerControl) RemoveApp(ctx context.Context, name string) error {
+	_, err := c.svc.DeleteContainer(ctx, &agentpb.DeleteContainerRequest{AppName: name})
+	return err
+}
+
 func (c containerControl) StopApp(ctx context.Context, name string) error {
 	_, err := c.svc.StopContainer(ctx, &agentpb.StopContainerRequest{AppName: name})
 	return err
