@@ -165,3 +165,55 @@ func TestIncomingOpportunityProtectsFinalWorkerIndependentlyOfNativeQuota(t *tes
 		})
 	}
 }
+
+func TestIncomingOpportunitySamePeerRecoveryDoesNotServeUnknownDemand(t *testing.T) {
+	for _, outgoing := range []bool{false, true} {
+		name := "incoming-recovery"
+		if outgoing {
+			name = "outgoing-recovery"
+		}
+		t.Run(name, func(t *testing.T) {
+			f := newIncomingHoldFixture(t, 2)
+			f.demand(t)
+			// Node removal and loss of the alternate eliminate every visible
+			// link for this identity. The old physical owner's lease still
+			// consumes its slot while its existing Close/join remains pending.
+			f.view.Links = nil
+			hint := meshid.Device{}
+			if outgoing {
+				hint = f.peer
+			}
+			recovery := f.p.ReserveGroup("same-peer-recovery", hint, outgoing, "4096")
+			if recovery == nil || !recovery.Ready(f.peer, func() {}) {
+				t.Fatal("last-path recovery was blocked while the original owner was closing")
+			}
+			defer recovery.Release()
+			BindConnectionLink(WithConnectionLease(context.Background(), recovery), 10, 4096, func() {})
+			if f.p.Counts().Total != 2 {
+				t.Fatal("recovery borrowed the original owner's physical quota")
+			}
+			f.view.Links = []PeerLink{{ID: 10, Device: f.peer, Cost: 4096, Transport: "ble", ForwardingReady: true}}
+			f.now = f.now.Add(2 * FailedConnectPenalty)
+			if !f.p.DeferRedundantCarrier(f.peer, 128) {
+				t.Fatal("same-peer recovery Bind falsely satisfied the unknown distinct-peer demand")
+			}
+			// Only the original owner's actual release starts the full bounded
+			// opportunity, even though its Node incarnation disappeared earlier.
+			f.releaseOld()
+			if old := f.p.ReserveGroup("old-extra-after-close", f.peer, true, "128"); old != nil {
+				old.Release()
+				t.Fatal("same-peer recovery erased demand before original physical release")
+			}
+			f.now = f.now.Add(FailedConnectPenalty - time.Nanosecond)
+			if !f.p.DeferRedundantCarrier(f.peer, 128) {
+				t.Fatal("original release did not preserve a full opportunity interval")
+			}
+			f.now = f.now.Add(time.Nanosecond)
+			returned := f.p.ReserveGroup("normal-return-after-expiry", f.peer, true, "128")
+			if returned == nil || !returned.Ready(f.peer, func() {}) {
+				t.Fatal("same-peer recovery receipt became an indefinite hold")
+			}
+			returned.Release()
+		})
+	}
+}
