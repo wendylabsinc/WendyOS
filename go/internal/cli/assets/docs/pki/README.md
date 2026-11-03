@@ -133,6 +133,8 @@ The CLI verifies device server certificates on all mTLS connections (BLE, LAN gR
 
 When one device dials another by its device UUID, the agent runs `VerifyPeerDevice` after the chain check. The peer leaf must carry exactly one tenant SPIFFE device principal (`spiffe://wendy.sh/tenant/<tenant-uuid>/device/<device-uuid>`), its tenant must equal the calling device's own tenant, and its device UUID must equal the roster entry for the dialed name. There is no grace mode: a calling device with no tenant identity of its own refuses every device peer. The dialed address is a routing hint only and is not part of the check. `NewClientTLSConfigExpectingPeer` selects this strict rule whenever the peer identifier is a UUID.
 
+Mesh peer certificates must be non-CA leaves with explicit `clientAuth` usage. Missing EKU and `anyExtendedKeyUsage` alone are refused. LAN QUIC and native mesh TLS apply this peer profile in both TLS roles and recheck restored peer certificates on session resumption. The mesh peer profile does not additionally require `serverAuth`; issuer certificates may still omit EKU.
+
 A legacy asset-ID string selects the older asset pin: the certificate must identify the expected asset, and its scope must match the calling device's own scope when that scope is known. Only this legacy path permits an unknown calling scope; it still requires the exact asset identity and a valid certificate chain.
 
 Wendy Net verifies the exact enrolled device identity when connecting to a peer. Devices must belong to the same organization. Operators in that organization can also verify a target device when delivering builds.
