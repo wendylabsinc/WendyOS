@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sort"
 	"sync"
 	"time"
 
@@ -51,6 +50,10 @@ func Run(parent context.Context, cfg Config) error {
 		return err
 	}
 	ctx, cancel := context.WithCancel(parent)
+	clockNow := cfg.now
+	if clockNow == nil {
+		clockNow = time.Now
+	}
 	var wg sync.WaitGroup
 	defer func() { cancel(); wg.Wait() }()
 	sources := cfg.Sources
@@ -124,7 +127,7 @@ func Run(parent context.Context, cfg Config) error {
 			return false
 		}
 		for _, link := range view.Links {
-			if link.Device == peer && link.ForwardingReady && ((strict && link.Cost < cost) || (!strict && link.Cost <= cost)) {
+			if link.Device == peer && !link.Retiring && link.ForwardingReady && ((strict && link.Cost < cost) || (!strict && link.Cost <= cost)) {
 				return true
 			}
 		}
@@ -151,30 +154,27 @@ func Run(parent context.Context, cfg Config) error {
 		}
 		return false
 	}
-	priority := func(view localmesh.NodeSnapshot, peer meshid.Device, cost uint16) int {
-		best := uint16(0)
+	hasDirectPeer := func(view localmesh.NodeSnapshot, peer meshid.Device) bool {
 		if peer != (meshid.Device{}) {
 			for _, link := range view.Links {
-				if link.Device == peer && (best == 0 || link.Cost < best) {
-					best = link.Cost
-				}
-			}
-			for _, a := range active {
-				if a.verified && !a.canceled && a.peer == peer && (best == 0 || a.candidate.Cost < best) {
-					best = a.candidate.Cost
+				if link.Device == peer && !link.Retiring {
+					return true
 				}
 			}
 		}
-		if best == 0 {
-			return 0 // New direct peer; indirect mesh reachability is not a carrier.
-		}
-		if cost < best {
-			return 1 // Upgrade without disturbing the existing working carrier.
-		}
-		return 2 // An additional medium is useful while its budget has room.
+		return false
 	}
 	plan := func(now time.Time) {
 		view := snapshot()
+		ranking := view
+		ranking.Links = append([]localmesh.PeerLink(nil), view.Links...)
+		for _, a := range active {
+			if a.verified && !a.canceled && !hasDirectPeer(view, a.peer) {
+				// Authentication can precede Node publication. This contributes
+				// presence for ranking only, never route or eviction authority.
+				ranking.Links = append(ranking.Links, localmesh.PeerLink{Device: a.peer, Cost: a.candidate.Cost, Transport: a.candidate.Transport})
+			}
+		}
 		for key, e := range table {
 			if !e.sources[-1] && (len(e.sources) == 0 || now.Sub(e.seen) >= cfg.Limits.CandidateTTL) {
 				if active[key] == nil {
@@ -188,15 +188,9 @@ func Run(parent context.Context, cfg Config) error {
 				keys = append(keys, key)
 			}
 		}
-		keys = queue.Order(keys, now)
-		sort.SliceStable(keys, func(i, j int) bool {
-			a, b := table[keys[i]], table[keys[j]]
-			pa := priority(view, cache.peer(a.candidate, now, cfg.Limits.AuthenticatedTTL), a.candidate.Cost)
-			pb := priority(view, cache.peer(b.candidate, now, cfg.Limits.AuthenticatedTTL), b.candidate.Cost)
-			if pa != pb {
-				return pa < pb
-			}
-			return false // Preserve the existing healthy/failed candidate ordering.
+		keys = queue.OrderPreferred(keys, now, ranking, func(key string) (meshid.Device, uint16) {
+			c := table[key].candidate
+			return cache.peer(c, now, cfg.Limits.AuthenticatedTTL), c.Cost
 		})
 		for _, key := range keys {
 			e := table[key]
@@ -233,7 +227,7 @@ func Run(parent context.Context, cfg Config) error {
 				// New peers may reclaim a slower owned backup, never the peer's
 				// last installed working path. Completion releases the real slot;
 				// cancellation itself does not grant admission or extra capacity.
-				if !reclaiming && priority(view, peer, c.Cost) == 0 {
+				if !reclaiming && !hasDirectPeer(ranking, peer) && queue.ReclaimEligible(key, now) {
 					var victim *attempt
 					for _, a := range active {
 						if !a.verified || a.canceled || (bleFull && a.candidate.Transport != BLE) || !hasLink(view, a.peer, a.candidate.Cost, true) {
@@ -280,7 +274,7 @@ func Run(parent context.Context, cfg Config) error {
 		case <-ctx.Done():
 			return parent.Err()
 		case event := <-events:
-			now := time.Now()
+			now := clockNow()
 			switch v := event.(type) {
 			case sourceUpdate:
 				for _, e := range table {
@@ -357,8 +351,8 @@ func Run(parent context.Context, cfg Config) error {
 				}
 			}
 			plan(now)
-		case now := <-ticker.C:
-			plan(now)
+		case <-ticker.C:
+			plan(clockNow())
 		}
 	}
 }

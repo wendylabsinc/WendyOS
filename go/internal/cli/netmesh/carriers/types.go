@@ -101,6 +101,8 @@ type Config struct {
 	SupportedTransports []string
 	Limits              Limits
 	Status              func(error)
+	// now permits deterministic local scheduling tests; production uses time.Now.
+	now func() time.Time
 }
 
 func (c *Config) defaults() error {
