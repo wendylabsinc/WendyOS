@@ -153,7 +153,6 @@ func (d cloudDiscoveryDevice) info(ver *agentpb.GetAgentVersionResponse) any {
 	}
 	info := cloudDiscoverV2Info{ID: d.key, Name: d.GetName(), Type: deviceType, Address: d.GetIpAddress()}
 	if d.isLite() {
-		info.Type = liteDeviceType(info.Type)
 		info.Version = d.v2.GetOsVersion()
 		return info
 	}

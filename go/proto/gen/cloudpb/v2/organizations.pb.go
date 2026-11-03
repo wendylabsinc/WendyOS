@@ -101,8 +101,12 @@ type Organization struct {
 	// gets no role of their own (role_source "none"); the mapping decides. Filled by
 	// GetOrganization.
 	SkipDefaultWhenGroupMapped bool `protobuf:"varint,10,opt,name=skip_default_when_group_mapped,json=skipDefaultWhenGroupMapped,proto3" json:"skip_default_when_group_mapped,omitempty"`
-	unknownFields              protoimpl.UnknownFields
-	sizeCache                  protoimpl.SizeCache
+	// The device role every new member receives at organization scope next to default_role_id
+	// (WDY-4052). Empty means none: the member reaches no device until someone binds a device
+	// role. New organizations start at Device manager. Filled by GetOrganization.
+	DefaultDeviceRoleId string `protobuf:"bytes,11,opt,name=default_device_role_id,json=defaultDeviceRoleId,proto3" json:"default_device_role_id,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *Organization) Reset() {
@@ -205,6 +209,13 @@ func (x *Organization) GetSkipDefaultWhenGroupMapped() bool {
 	return false
 }
 
+func (x *Organization) GetDefaultDeviceRoleId() string {
+	if x != nil {
+		return x.DefaultDeviceRoleId
+	}
+	return ""
+}
+
 type OrganizationMember struct {
 	state          protoimpl.MessageState `protogen:"open.v1"`
 	Id             string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
@@ -225,9 +236,15 @@ type OrganizationMember struct {
 	// Where the member's own role came from (WDY-3877): "explicit" (named by an admin, an invite,
 	// or ownership), "default" (the organization default at join; group-mapped roles add to it),
 	// or "none" (no role of its own; group mappings alone decide).
-	RoleSource    string `protobuf:"bytes,9,opt,name=role_source,json=roleSource,proto3" json:"role_source,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	RoleSource string `protobuf:"bytes,9,opt,name=role_source,json=roleSource,proto3" json:"role_source,omitempty"`
+	// ListMembers only (WDY-3895): distinct compute devices covered by this member's device-access
+	// rules, including group grants and deny precedence. Roles still govern allowed actions.
+	// Present zero means no devices; absent means unavailable, including older servers,
+	// unresolved realm membership, or a viewer without device-access:list or full fleet access.
+	// Uses the caller's token groups for self; current auth directory groups for other members.
+	DeviceAccessCount *int32 `protobuf:"varint,10,opt,name=device_access_count,json=deviceAccessCount,proto3,oneof" json:"device_access_count,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *OrganizationMember) Reset() {
@@ -322,6 +339,13 @@ func (x *OrganizationMember) GetRoleSource() string {
 		return x.RoleSource
 	}
 	return ""
+}
+
+func (x *OrganizationMember) GetDeviceAccessCount() int32 {
+	if x != nil && x.DeviceAccessCount != nil {
+		return *x.DeviceAccessCount
+	}
+	return 0
 }
 
 type CreateOrganizationRequest struct {
@@ -1363,8 +1387,14 @@ type SetMemberDefaultsRequest struct {
 	// Sets the default to "No role".
 	ClearDefault               bool `protobuf:"varint,3,opt,name=clear_default,json=clearDefault,proto3" json:"clear_default,omitempty"`
 	SkipDefaultWhenGroupMapped bool `protobuf:"varint,4,opt,name=skip_default_when_group_mapped,json=skipDefaultWhenGroupMapped,proto3" json:"skip_default_when_group_mapped,omitempty"`
-	unknownFields              protoimpl.UnknownFields
-	sizeCache                  protoimpl.SizeCache
+	// The new default device role: a device-kind role, built-in or one of this organization's own,
+	// held in full by the caller. Absent with clear_device_default false leaves the device default
+	// unchanged (older consoles send neither). Ignored when clear_device_default is true.
+	DefaultDeviceRoleId *string `protobuf:"bytes,5,opt,name=default_device_role_id,json=defaultDeviceRoleId,proto3,oneof" json:"default_device_role_id,omitempty"`
+	// Sets the default device role to none.
+	ClearDeviceDefault bool `protobuf:"varint,6,opt,name=clear_device_default,json=clearDeviceDefault,proto3" json:"clear_device_default,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *SetMemberDefaultsRequest) Reset() {
@@ -1421,6 +1451,20 @@ func (x *SetMemberDefaultsRequest) GetClearDefault() bool {
 func (x *SetMemberDefaultsRequest) GetSkipDefaultWhenGroupMapped() bool {
 	if x != nil {
 		return x.SkipDefaultWhenGroupMapped
+	}
+	return false
+}
+
+func (x *SetMemberDefaultsRequest) GetDefaultDeviceRoleId() string {
+	if x != nil && x.DefaultDeviceRoleId != nil {
+		return *x.DefaultDeviceRoleId
+	}
+	return ""
+}
+
+func (x *SetMemberDefaultsRequest) GetClearDeviceDefault() bool {
+	if x != nil {
+		return x.ClearDeviceDefault
 	}
 	return false
 }
@@ -1533,7 +1577,7 @@ var File_wendycloud_v2_organizations_proto protoreflect.FileDescriptor
 
 const file_wendycloud_v2_organizations_proto_rawDesc = "" +
 	"\n" +
-	"!wendycloud/v2/organizations.proto\x12\rwendycloud.v2\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x13wendy/options.proto\x1a\"wendycloud/v2/signed_request.proto\"\xa2\x03\n" +
+	"!wendycloud/v2/organizations.proto\x12\rwendycloud.v2\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x13wendy/options.proto\x1a\"wendycloud/v2/signed_request.proto\"\xd7\x03\n" +
 	"\fOrganization\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\x12\x18\n" +
@@ -1547,11 +1591,12 @@ const file_wendycloud_v2_organizations_proto_rawDesc = "" +
 	"\x04slug\x18\b \x01(\tH\x02R\x04slug\x88\x01\x01\x12&\n" +
 	"\x0fdefault_role_id\x18\t \x01(\tR\rdefaultRoleId\x12B\n" +
 	"\x1eskip_default_when_group_mapped\x18\n" +
-	" \x01(\bR\x1askipDefaultWhenGroupMappedB\t\n" +
+	" \x01(\bR\x1askipDefaultWhenGroupMapped\x123\n" +
+	"\x16default_device_role_id\x18\v \x01(\tR\x13defaultDeviceRoleIdB\t\n" +
 	"\a_domainB\n" +
 	"\n" +
 	"\b_user_idB\a\n" +
-	"\x05_slug\"\xe9\x02\n" +
+	"\x05_slug\"\xb6\x03\n" +
 	"\x12OrganizationMember\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12'\n" +
 	"\x0forganization_id\x18\x02 \x01(\tR\x0eorganizationId\x12\x17\n" +
@@ -1564,7 +1609,10 @@ const file_wendycloud_v2_organizations_proto_rawDesc = "" +
 	"\arole_id\x18\a \x01(\tR\x06roleId\x12\x18\n" +
 	"\asubject\x18\b \x01(\tR\asubject\x12\x1f\n" +
 	"\vrole_source\x18\t \x01(\tR\n" +
-	"roleSource\"q\n" +
+	"roleSource\x123\n" +
+	"\x13device_access_count\x18\n" +
+	" \x01(\x05H\x00R\x11deviceAccessCount\x88\x01\x01B\x16\n" +
+	"\x14_device_access_count\"q\n" +
 	"\x19CreateOrganizationRequest\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x18\n" +
 	"\adetails\x18\x02 \x01(\tR\adetails\x12\x1b\n" +
@@ -1639,13 +1687,16 @@ const file_wendycloud_v2_organizations_proto_rawDesc = "" +
 	"\x05error\x18\x03 \x01(\tR\x05error\x129\n" +
 	"\x06member\x18\x04 \x01(\v2!.wendycloud.v2.OrganizationMemberR\x06member\"V\n" +
 	"\x1aAddMembersByEmailsResponse\x128\n" +
-	"\aresults\x18\x01 \x03(\v2\x1e.wendycloud.v2.AddMemberResultR\aresults\"\xed\x01\n" +
+	"\aresults\x18\x01 \x03(\v2\x1e.wendycloud.v2.AddMemberResultR\aresults\"\xf4\x02\n" +
 	"\x18SetMemberDefaultsRequest\x12'\n" +
 	"\x0forganization_id\x18\x01 \x01(\tR\x0eorganizationId\x12+\n" +
 	"\x0fdefault_role_id\x18\x02 \x01(\tH\x00R\rdefaultRoleId\x88\x01\x01\x12#\n" +
 	"\rclear_default\x18\x03 \x01(\bR\fclearDefault\x12B\n" +
-	"\x1eskip_default_when_group_mapped\x18\x04 \x01(\bR\x1askipDefaultWhenGroupMappedB\x12\n" +
-	"\x10_default_role_id\"n\n" +
+	"\x1eskip_default_when_group_mapped\x18\x04 \x01(\bR\x1askipDefaultWhenGroupMapped\x128\n" +
+	"\x16default_device_role_id\x18\x05 \x01(\tH\x01R\x13defaultDeviceRoleId\x88\x01\x01\x120\n" +
+	"\x14clear_device_default\x18\x06 \x01(\bR\x12clearDeviceDefaultB\x12\n" +
+	"\x10_default_role_idB\x19\n" +
+	"\x17_default_device_role_id\"n\n" +
 	"\x18TransferOwnershipRequest\x12'\n" +
 	"\x0forganization_id\x18\x01 \x01(\tR\x0eorganizationId\x12)\n" +
 	"\x11new_owner_user_id\x18\x02 \x01(\tR\x0enewOwnerUserId\"\xa5\x01\n" +
@@ -1774,6 +1825,7 @@ func file_wendycloud_v2_organizations_proto_init() {
 	file_wendy_options_proto_init()
 	file_wendycloud_v2_signed_request_proto_init()
 	file_wendycloud_v2_organizations_proto_msgTypes[0].OneofWrappers = []any{}
+	file_wendycloud_v2_organizations_proto_msgTypes[1].OneofWrappers = []any{}
 	file_wendycloud_v2_organizations_proto_msgTypes[2].OneofWrappers = []any{}
 	file_wendycloud_v2_organizations_proto_msgTypes[4].OneofWrappers = []any{}
 	file_wendycloud_v2_organizations_proto_msgTypes[7].OneofWrappers = []any{}

@@ -70,8 +70,13 @@ WendyBLEReadResult wendy_ble_wait_notification(WendyBLEConn conn, const char *se
 WendyBLEError wendy_ble_open_l2cap(WendyBLEConn conn, uint16_t psm, int timeout_seconds);
 
 // Send data over the L2CAP channel. Blocks until every byte is accepted, the
-// channel fails, or a fixed timeout passes. Callers must serialize sends.
+// channel fails, 10 seconds pass without positive progress, or 60 seconds
+// pass in total. Callers must serialize sends.
 WendyBLEError wendy_ble_l2cap_send(WendyBLEConn conn, const uint8_t *data, int length);
+
+// Update the optional caller deadline, including during a send. A zero enabled
+// value clears it; remaining_seconds may be negative for an expired deadline.
+void wendy_ble_l2cap_set_write_deadline(WendyBLEConn conn, double remaining_seconds, int enabled);
 
 // Receive data from the L2CAP channel (blocks until data or timeout).
 WendyBLEL2CAPRecvResult wendy_ble_l2cap_recv(WendyBLEConn conn, int timeout_seconds);

@@ -1,9 +1,9 @@
 package localmesh
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/wendylabsinc/wendy/go/internal/agent/netwire"
 	"testing"
 	"time"
 )
@@ -184,7 +184,7 @@ func assertWarmRouteAuthorities(t *testing.T, d *Directory, now time.Time, wires
 	}
 	for _, wire := range wires {
 		var m Manifest
-		if err := json.Unmarshal(wire.Body, &m); err != nil {
+		if err := netwire.Unmarshal(wire.Body, &m); err != nil {
 			t.Fatal(err)
 		}
 		if m.Version != ManifestVersionRoute || m.Route == nil || !authorized[*m.Route] {

@@ -76,27 +76,32 @@ func runConfiguredWithNode(parent context.Context, configDir string, id TCPIdent
 		}
 		defer listener.Close()
 	}
-	var leafListener net.Listener
-	if cfg.LeafListen != "" {
-		leafListener, err = listen("tcp", cfg.LeafListen)
+	var tlsListener net.Listener
+	if cfg.TLSListen != "" {
+		tlsListener, err = listen("tcp", cfg.TLSListen)
 		if err != nil {
-			return fmt.Errorf("listen for net leaves: %w", err)
+			return fmt.Errorf("listen for native TLS peers: %w", err)
 		}
-		defer leafListener.Close()
+		defer tlsListener.Close()
 	}
-	node, err := NewNode(ctx, stateDir, credentials, id.Name, id.AgentPort)
+	node, err := NewNode(ctx, stateDir, credentials, id.Name, id.AgentPort, id.AppEndpoints)
 	if err != nil {
 		return err
+	}
+	if id.Agent != nil {
+		metadata := *id.Agent
+		node.advertisement.Agent = &metadata
 	}
 	if listener != nil {
 		go func() { <-ctx.Done(); listener.Close() }()
 	}
 	nodeDone := make(chan error, 1)
 	go func() { nodeDone <- node.Run(); cancel() }()
-	var leafDone chan error
-	if leafListener != nil {
-		leafDone = make(chan error, 1)
-		go func() { leafDone <- runLeafListener(ctx, node, leafListener) }()
+	policy := NewConnectionPolicy(credentials.Device, true, ConnectionLimits{LANMaxOutgoing, LANMaxOutgoingAttempts, LANMaxConnections})
+	var tlsDone chan error
+	if tlsListener != nil {
+		tlsDone = make(chan error, 1)
+		go func() { tlsDone <- runNetTLSListener(ctx, node, tlsListener, WiFiLinkCost, policy, "") }()
 	}
 	if observe != nil {
 		observe(node, cfg)
@@ -105,7 +110,6 @@ func runConfiguredWithNode(parent context.Context, configDir string, id TCPIdent
 	for _, peer := range cfg.devices {
 		allowed[peer.Principal()] = peer
 	}
-	policy := NewConnectionPolicy(credentials.Device, true, ConnectionLimits{LANMaxOutgoing, LANMaxOutgoingAttempts, LANMaxConnections})
 	queue := &CandidateQueue{}
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -203,7 +207,7 @@ func runConfiguredWithNode(parent context.Context, configDir string, id TCPIdent
 			}
 		}()
 	}
-	nodeStopped, leafStopped := false, false
+	nodeStopped, tlsStopped := false, false
 	select {
 	case <-parent.Done():
 	case err = <-nodeDone:
@@ -211,8 +215,8 @@ func runConfiguredWithNode(parent context.Context, configDir string, id TCPIdent
 		if errors.Is(err, context.Canceled) {
 			err = nil
 		}
-	case err = <-leafDone:
-		leafStopped = true
+	case err = <-tlsDone:
+		tlsStopped = true
 	}
 	if observe != nil {
 		observe(nil, nil)
@@ -223,8 +227,8 @@ func runConfiguredWithNode(parent context.Context, configDir string, id TCPIdent
 	}
 	<-acceptDone
 	wg.Wait()
-	if leafDone != nil && !leafStopped {
-		err = errors.Join(err, <-leafDone)
+	if tlsDone != nil && !tlsStopped {
+		err = errors.Join(err, <-tlsDone)
 	}
 	if !nodeStopped {
 		// Normal node cancellation must not hide an earlier listener failure

@@ -113,6 +113,9 @@ type deviceVersion struct {
 	// (name, kernel). Written by the publisher's --extension-file; the CLI resolves
 	// install-by-name against these. Mirrors the publisher's ExtensionMetadata.
 	Extensions []extensionEntry `json:"extensions,omitempty"`
+	Devkit     *struct {
+		KernelVersion string `json:"kernel_version"`
+	} `json:"devkit,omitempty"`
 }
 
 // extensionEntry is one driver add-on in a version's extensions[]. The fields

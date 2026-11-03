@@ -166,6 +166,10 @@ func TestMeshTrimmedRootFullHandshakeCompatibility(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		// This fixture compares legacy root presentation, independently of
+		// the newer per-issuer availability negotiation exercised elsewhere.
+		cfg.NextProtos = []string{LinkALPN}
+		cfg.GetClientCertificate = nil
 		if len(cfg.Certificates[0].Certificate) != 1 {
 			t.Fatal("root not omitted")
 		}
@@ -317,11 +321,11 @@ func TestMeshTrimmedRootRetainsRequiredIntermediateOnWire(t *testing.T) {
 	intermediate, ik, ip, _ := makeCert("intermediate", "", root, rk)
 	_, _, ap, ak := makeCert("a", deviceA, root, rk)
 	_, _, bp, bk := makeCert("b", deviceB, intermediate, ik)
-	a, err := NewCredentials(ap, rp, ak)
+	a, err := newTestCredentials(ap, rp, ak)
 	if err != nil {
 		t.Fatal(err)
 	}
-	b, err := NewCredentials(bp, ip+rp, bk)
+	b, err := newTestCredentials(bp, ip+rp, bk)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -369,6 +373,7 @@ func TestMeshTrimmedRootRetainsRequiredIntermediateOnWire(t *testing.T) {
 			})
 		}
 		t.Run(name+"/missing-intermediate-rejected", func(t *testing.T) {
+			a.issuerMaterial.Clear()
 			ac, _ := a.PeerTLS(b.Device)
 			bc, _ := b.PeerTLS(a.Device)
 			cert := bc.Certificates[0]

@@ -1,0 +1,903 @@
+{
+  "name": "base",
+  "position": [
+    0.0,
+    0.0,
+    0.445
+  ],
+  "rotation": [
+    1,
+    0,
+    0,
+    0
+  ],
+  "joint": "",
+  "meshes": [
+    {
+      "file": "base_0.obj",
+      "color": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "position": [
+        0,
+        0,
+        0
+      ],
+      "rotation": [
+        1,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "file": "base_1.obj",
+      "color": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "position": [
+        0,
+        0,
+        0
+      ],
+      "rotation": [
+        1,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "file": "base_2.obj",
+      "color": [
+        0.0,
+        0.0,
+        0.0,
+        1.0
+      ],
+      "position": [
+        0,
+        0,
+        0
+      ],
+      "rotation": [
+        1,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "file": "base_3.obj",
+      "color": [
+        1.0,
+        1.0,
+        1.0,
+        1.0
+      ],
+      "position": [
+        0,
+        0,
+        0
+      ],
+      "rotation": [
+        1,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "file": "base_4.obj",
+      "color": [
+        0.671705,
+        0.692426,
+        0.77427,
+        1.0
+      ],
+      "position": [
+        0,
+        0,
+        0
+      ],
+      "rotation": [
+        1,
+        0,
+        0,
+        0
+      ]
+    }
+  ],
+  "children": [
+    {
+      "name": "FL_hip",
+      "position": [
+        0.1934,
+        0.0465,
+        0.0
+      ],
+      "rotation": [
+        1,
+        0,
+        0,
+        0
+      ],
+      "joint": "FL_hip_joint",
+      "meshes": [
+        {
+          "file": "hip_0.obj",
+          "color": [
+            0.9,
+            0.95,
+            0.95,
+            1.0
+          ],
+          "position": [
+            0,
+            0,
+            0
+          ],
+          "rotation": [
+            1,
+            0,
+            0,
+            0
+          ]
+        },
+        {
+          "file": "hip_1.obj",
+          "color": [
+            0.671705,
+            0.692426,
+            0.77427,
+            1.0
+          ],
+          "position": [
+            0,
+            0,
+            0
+          ],
+          "rotation": [
+            1,
+            0,
+            0,
+            0
+          ]
+        }
+      ],
+      "children": [
+        {
+          "name": "FL_thigh",
+          "position": [
+            0.0,
+            0.0955,
+            0.0
+          ],
+          "rotation": [
+            1,
+            0,
+            0,
+            0
+          ],
+          "joint": "FL_thigh_joint",
+          "meshes": [
+            {
+              "file": "thigh_0.obj",
+              "color": [
+                0.9,
+                0.95,
+                0.95,
+                1.0
+              ],
+              "position": [
+                0,
+                0,
+                0
+              ],
+              "rotation": [
+                1,
+                0,
+                0,
+                0
+              ]
+            },
+            {
+              "file": "thigh_1.obj",
+              "color": [
+                0.671705,
+                0.692426,
+                0.77427,
+                1.0
+              ],
+              "position": [
+                0,
+                0,
+                0
+              ],
+              "rotation": [
+                1,
+                0,
+                0,
+                0
+              ]
+            }
+          ],
+          "children": [
+            {
+              "name": "FL_calf",
+              "position": [
+                0.0,
+                0.0,
+                -0.213
+              ],
+              "rotation": [
+                1,
+                0,
+                0,
+                0
+              ],
+              "joint": "FL_calf_joint",
+              "meshes": [
+                {
+                  "file": "calf_0.obj",
+                  "color": [
+                    0.671705,
+                    0.692426,
+                    0.77427,
+                    1.0
+                  ],
+                  "position": [
+                    0,
+                    0,
+                    0
+                  ],
+                  "rotation": [
+                    1,
+                    0,
+                    0,
+                    0
+                  ]
+                },
+                {
+                  "file": "calf_1.obj",
+                  "color": [
+                    0.0,
+                    0.0,
+                    0.0,
+                    1.0
+                  ],
+                  "position": [
+                    0,
+                    0,
+                    0
+                  ],
+                  "rotation": [
+                    1,
+                    0,
+                    0,
+                    0
+                  ]
+                },
+                {
+                  "file": "foot.obj",
+                  "color": [
+                    0.0,
+                    0.0,
+                    0.0,
+                    1.0
+                  ],
+                  "position": [
+                    0.0,
+                    0.0,
+                    -0.213
+                  ],
+                  "rotation": [
+                    1,
+                    0,
+                    0,
+                    0
+                  ]
+                }
+              ],
+              "children": []
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "FR_hip",
+      "position": [
+        0.1934,
+        -0.0465,
+        0.0
+      ],
+      "rotation": [
+        1,
+        0,
+        0,
+        0
+      ],
+      "joint": "FR_hip_joint",
+      "meshes": [
+        {
+          "file": "hip_0.obj",
+          "color": [
+            0.9,
+            0.95,
+            0.95,
+            1.0
+          ],
+          "position": [
+            0,
+            0,
+            0
+          ],
+          "rotation": [
+            4.63268e-05,
+            1.0,
+            0.0,
+            0.0
+          ]
+        },
+        {
+          "file": "hip_1.obj",
+          "color": [
+            0.671705,
+            0.692426,
+            0.77427,
+            1.0
+          ],
+          "position": [
+            0,
+            0,
+            0
+          ],
+          "rotation": [
+            4.63268e-05,
+            1.0,
+            0.0,
+            0.0
+          ]
+        }
+      ],
+      "children": [
+        {
+          "name": "FR_thigh",
+          "position": [
+            0.0,
+            -0.0955,
+            0.0
+          ],
+          "rotation": [
+            1,
+            0,
+            0,
+            0
+          ],
+          "joint": "FR_thigh_joint",
+          "meshes": [
+            {
+              "file": "thigh_mirror_0.obj",
+              "color": [
+                0.9,
+                0.95,
+                0.95,
+                1.0
+              ],
+              "position": [
+                0,
+                0,
+                0
+              ],
+              "rotation": [
+                1,
+                0,
+                0,
+                0
+              ]
+            },
+            {
+              "file": "thigh_mirror_1.obj",
+              "color": [
+                0.671705,
+                0.692426,
+                0.77427,
+                1.0
+              ],
+              "position": [
+                0,
+                0,
+                0
+              ],
+              "rotation": [
+                1,
+                0,
+                0,
+                0
+              ]
+            }
+          ],
+          "children": [
+            {
+              "name": "FR_calf",
+              "position": [
+                0.0,
+                0.0,
+                -0.213
+              ],
+              "rotation": [
+                1,
+                0,
+                0,
+                0
+              ],
+              "joint": "FR_calf_joint",
+              "meshes": [
+                {
+                  "file": "calf_mirror_0.obj",
+                  "color": [
+                    0.671705,
+                    0.692426,
+                    0.77427,
+                    1.0
+                  ],
+                  "position": [
+                    0,
+                    0,
+                    0
+                  ],
+                  "rotation": [
+                    1,
+                    0,
+                    0,
+                    0
+                  ]
+                },
+                {
+                  "file": "calf_mirror_1.obj",
+                  "color": [
+                    0.0,
+                    0.0,
+                    0.0,
+                    1.0
+                  ],
+                  "position": [
+                    0,
+                    0,
+                    0
+                  ],
+                  "rotation": [
+                    1,
+                    0,
+                    0,
+                    0
+                  ]
+                },
+                {
+                  "file": "foot.obj",
+                  "color": [
+                    0.0,
+                    0.0,
+                    0.0,
+                    1.0
+                  ],
+                  "position": [
+                    0.0,
+                    0.0,
+                    -0.213
+                  ],
+                  "rotation": [
+                    1,
+                    0,
+                    0,
+                    0
+                  ]
+                }
+              ],
+              "children": []
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "RL_hip",
+      "position": [
+        -0.1934,
+        0.0465,
+        0.0
+      ],
+      "rotation": [
+        1,
+        0,
+        0,
+        0
+      ],
+      "joint": "RL_hip_joint",
+      "meshes": [
+        {
+          "file": "hip_0.obj",
+          "color": [
+            0.9,
+            0.95,
+            0.95,
+            1.0
+          ],
+          "position": [
+            0,
+            0,
+            0
+          ],
+          "rotation": [
+            4.63268e-05,
+            0.0,
+            1.0,
+            0.0
+          ]
+        },
+        {
+          "file": "hip_1.obj",
+          "color": [
+            0.671705,
+            0.692426,
+            0.77427,
+            1.0
+          ],
+          "position": [
+            0,
+            0,
+            0
+          ],
+          "rotation": [
+            4.63268e-05,
+            0.0,
+            1.0,
+            0.0
+          ]
+        }
+      ],
+      "children": [
+        {
+          "name": "RL_thigh",
+          "position": [
+            0.0,
+            0.0955,
+            0.0
+          ],
+          "rotation": [
+            1,
+            0,
+            0,
+            0
+          ],
+          "joint": "RL_thigh_joint",
+          "meshes": [
+            {
+              "file": "thigh_0.obj",
+              "color": [
+                0.9,
+                0.95,
+                0.95,
+                1.0
+              ],
+              "position": [
+                0,
+                0,
+                0
+              ],
+              "rotation": [
+                1,
+                0,
+                0,
+                0
+              ]
+            },
+            {
+              "file": "thigh_1.obj",
+              "color": [
+                0.671705,
+                0.692426,
+                0.77427,
+                1.0
+              ],
+              "position": [
+                0,
+                0,
+                0
+              ],
+              "rotation": [
+                1,
+                0,
+                0,
+                0
+              ]
+            }
+          ],
+          "children": [
+            {
+              "name": "RL_calf",
+              "position": [
+                0.0,
+                0.0,
+                -0.213
+              ],
+              "rotation": [
+                1,
+                0,
+                0,
+                0
+              ],
+              "joint": "RL_calf_joint",
+              "meshes": [
+                {
+                  "file": "calf_0.obj",
+                  "color": [
+                    0.671705,
+                    0.692426,
+                    0.77427,
+                    1.0
+                  ],
+                  "position": [
+                    0,
+                    0,
+                    0
+                  ],
+                  "rotation": [
+                    1,
+                    0,
+                    0,
+                    0
+                  ]
+                },
+                {
+                  "file": "calf_1.obj",
+                  "color": [
+                    0.0,
+                    0.0,
+                    0.0,
+                    1.0
+                  ],
+                  "position": [
+                    0,
+                    0,
+                    0
+                  ],
+                  "rotation": [
+                    1,
+                    0,
+                    0,
+                    0
+                  ]
+                },
+                {
+                  "file": "foot.obj",
+                  "color": [
+                    0.0,
+                    0.0,
+                    0.0,
+                    1.0
+                  ],
+                  "position": [
+                    0.0,
+                    0.0,
+                    -0.213
+                  ],
+                  "rotation": [
+                    1,
+                    0,
+                    0,
+                    0
+                  ]
+                }
+              ],
+              "children": []
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "RR_hip",
+      "position": [
+        -0.1934,
+        -0.0465,
+        0.0
+      ],
+      "rotation": [
+        1,
+        0,
+        0,
+        0
+      ],
+      "joint": "RR_hip_joint",
+      "meshes": [
+        {
+          "file": "hip_0.obj",
+          "color": [
+            0.9,
+            0.95,
+            0.95,
+            1.0
+          ],
+          "position": [
+            0,
+            0,
+            0
+          ],
+          "rotation": [
+            2.14617e-09,
+            4.63268e-05,
+            4.63268e-05,
+            -1.0
+          ]
+        },
+        {
+          "file": "hip_1.obj",
+          "color": [
+            0.671705,
+            0.692426,
+            0.77427,
+            1.0
+          ],
+          "position": [
+            0,
+            0,
+            0
+          ],
+          "rotation": [
+            2.14617e-09,
+            4.63268e-05,
+            4.63268e-05,
+            -1.0
+          ]
+        }
+      ],
+      "children": [
+        {
+          "name": "RR_thigh",
+          "position": [
+            0.0,
+            -0.0955,
+            0.0
+          ],
+          "rotation": [
+            1,
+            0,
+            0,
+            0
+          ],
+          "joint": "RR_thigh_joint",
+          "meshes": [
+            {
+              "file": "thigh_mirror_0.obj",
+              "color": [
+                0.9,
+                0.95,
+                0.95,
+                1.0
+              ],
+              "position": [
+                0,
+                0,
+                0
+              ],
+              "rotation": [
+                1,
+                0,
+                0,
+                0
+              ]
+            },
+            {
+              "file": "thigh_mirror_1.obj",
+              "color": [
+                0.671705,
+                0.692426,
+                0.77427,
+                1.0
+              ],
+              "position": [
+                0,
+                0,
+                0
+              ],
+              "rotation": [
+                1,
+                0,
+                0,
+                0
+              ]
+            }
+          ],
+          "children": [
+            {
+              "name": "RR_calf",
+              "position": [
+                0.0,
+                0.0,
+                -0.213
+              ],
+              "rotation": [
+                1,
+                0,
+                0,
+                0
+              ],
+              "joint": "RR_calf_joint",
+              "meshes": [
+                {
+                  "file": "calf_mirror_0.obj",
+                  "color": [
+                    0.671705,
+                    0.692426,
+                    0.77427,
+                    1.0
+                  ],
+                  "position": [
+                    0,
+                    0,
+                    0
+                  ],
+                  "rotation": [
+                    1,
+                    0,
+                    0,
+                    0
+                  ]
+                },
+                {
+                  "file": "calf_mirror_1.obj",
+                  "color": [
+                    0.0,
+                    0.0,
+                    0.0,
+                    1.0
+                  ],
+                  "position": [
+                    0,
+                    0,
+                    0
+                  ],
+                  "rotation": [
+                    1,
+                    0,
+                    0,
+                    0
+                  ]
+                },
+                {
+                  "file": "foot.obj",
+                  "color": [
+                    0.0,
+                    0.0,
+                    0.0,
+                    1.0
+                  ],
+                  "position": [
+                    0.0,
+                    0.0,
+                    -0.213
+                  ],
+                  "rotation": [
+                    1,
+                    0,
+                    0,
+                    0
+                  ]
+                }
+              ],
+              "children": []
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
