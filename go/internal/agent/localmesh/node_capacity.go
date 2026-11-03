@@ -23,6 +23,13 @@ func (n *Node) reclaimGlobalRedundancy(candidate meshid.Device) bool {
 			return false // An upgrade uses spare capacity, never a last-path swap.
 		}
 	}
+	// Any already-closing incarnation will release this same global ceiling.
+	// Provider pressure and liveness expiry must not provoke another eviction.
+	for _, p := range n.peers {
+		if p.retiring() {
+			return true
+		}
+	}
 	if n.capacityRetiring != 0 {
 		if n.peers[n.capacityRetiring] != nil {
 			return true

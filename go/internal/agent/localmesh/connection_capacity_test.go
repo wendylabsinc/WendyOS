@@ -22,11 +22,17 @@ func TestConnectionCapacityReclaimsOnlyOwnedSlowerRedundancy(t *testing.T) {
 	}
 	var signals atomic.Int32
 	BindConnectionLink(WithConnectionLease(context.Background(), old), 1, 4096, func() { signals.Add(1) })
+	if !p.OutgoingDiscoveryAvailable() {
+		t.Fatal("full redundant outgoing budget hid useful discovery capacity")
+	}
 	if got := p.ReservePreferred("new", next, true, "", true); got != nil {
 		t.Fatal("reclamation allocated an extra slot before owner completion")
 	}
 	if !old.Retired() || signals.Load() != 1 || p.Counts().Outgoing != 1 {
 		t.Fatal("exact owned redundancy was not signalled and retained until Release")
+	}
+	if p.OutgoingDiscoveryAvailable() {
+		t.Fatal("closing redundancy was counted as available before normal completion")
 	}
 	for i := 0; i < 5; i++ {
 		if p.ReservePreferred("new", next, true, "", true) != nil {
@@ -43,6 +49,24 @@ func TestConnectionCapacityReclaimsOnlyOwnedSlowerRedundancy(t *testing.T) {
 		t.Fatal("new direct peer could not use the normally released slot")
 	}
 	replacement.Release()
+}
+
+func TestConnectionCapacityDiscoveryDoesNotHideReclaimableIncomingSlot(t *testing.T) {
+	peer := selectionDevice(10)
+	view := NodeSnapshot{Links: []PeerLink{{ID: 1, Device: peer, Cost: 4096}, {ID: 2, Device: peer, Cost: 128, ForwardingReady: true}}}
+	p := NewConnectionPolicy(selectionDevice(1), true, ConnectionLimits{Outgoing: 1, Attempts: 1, Total: 1})
+	p.SetSnapshot(func() NodeSnapshot { return view })
+	old := p.Reserve("in", peer, false)
+	old.Ready(peer, func() {})
+	defer old.Release()
+	BindConnectionLink(WithConnectionLease(context.Background(), old), 1, 4096, func() { t.Fatal("advisory capacity changed owned connection state") })
+	if !p.IncomingAvailable() {
+		t.Fatal("full safe standby suppressed incoming peer discovery")
+	}
+	view.Links[1].ForwardingReady = false
+	if p.IncomingAvailable() {
+		t.Fatal("full unique or unready route advertised reclaimable incoming capacity")
+	}
 }
 
 func TestConnectionCapacityRequiresCurrentAlternateAndRunnableNewPeer(t *testing.T) {

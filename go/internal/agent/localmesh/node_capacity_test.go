@@ -90,7 +90,8 @@ func TestNodeCapacityNeverReclaimsUniqueOrUnusablePaths(t *testing.T) {
 				}
 				n.view.Store(&view)
 			}
-			if n.reclaimGlobalRedundancy(candidate) || n.peers[1].retiring() || n.capacityRetiring != 0 || len(n.peers) != 64 {
+			deferred := n.reclaimGlobalRedundancy(candidate)
+			if deferred != (mode == "retiring-alternate") || n.peers[1].retiring() || n.capacityRetiring != 0 || len(n.peers) != 64 {
 				t.Fatal("global capacity used stale or unusable evidence to retire a path")
 			}
 		})
@@ -98,13 +99,38 @@ func TestNodeCapacityNeverReclaimsUniqueOrUnusablePaths(t *testing.T) {
 }
 
 func TestNodeCapacityDeferralDoesNotPenalizeVerifiedProviderCandidate(t *testing.T) {
+	f := newCarrierStandbyFixture(t)
+	f.addCarrier(128, "infrastructure-wifi")
+	f.pump(0)
+	f.advance(6*time.Second, 0)
+	n := f.nodes[0]
+	fillCarrierNodeCapacity(n)
 	next := selectionDevice(999)
 	p := NewConnectionPolicy(selectionDevice(1), true, ConnectionLimits{Outgoing: 1, Attempts: 1, Total: 1})
 	lease := p.Reserve("next", next, true)
 	ctx := WithConnectionLease(context.Background(), lease)
-	markConnectionRetry(ctx)
+	link := &handoffActorLink{}
+	done := make(chan error, 1)
+	go func() { done <- n.attachLink(ctx, next, 128, link) }()
+	select {
+	case add := <-n.events:
+		add.result <- n.handle(add)
+	case <-time.After(time.Second):
+		t.Fatal("verified attachment did not request actor admission")
+	}
+	select {
+	case err := <-done:
+		if !errors.Is(err, ErrCarrierCapacityRetry) {
+			t.Fatalf("intentional deferral lost: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("deferred attachment did not finish through its owner")
+	}
 	if !lease.Retired() || p.Counts().Total != 1 {
 		t.Fatal("intentional deferral changed capacity or looked like a failed peer")
+	}
+	if !link.closed {
+		t.Fatal("rejected setup did not close its own exact transport")
 	}
 	lease.Release()
 	if p.Counts().Total != 0 {

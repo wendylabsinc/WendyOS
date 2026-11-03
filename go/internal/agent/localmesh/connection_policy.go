@@ -98,12 +98,37 @@ func (p *ConnectionPolicy) Counts() ConnectionCounts {
 	return p.counts()
 }
 
-// IncomingAvailable reports advisory discovery capacity, including pending leases.
-// It never reserves a slot or changes established connection ownership.
+// IncomingAvailable reports advisory capacity, including safe reclaimable
+// redundancy. It never reserves a slot or changes connection ownership.
 func (p *ConnectionPolicy) IncomingAvailable() bool {
+	return p.discoveryAvailable(false)
+}
+
+// OutgoingDiscoveryAvailable keeps discovery useful while a new direct peer
+// could replace a safely redundant owned carrier. Full unique peers may still
+// pause scanning; pending/closing leases retain all their actual capacity.
+func (p *ConnectionPolicy) OutgoingDiscoveryAvailable() bool {
+	return p.discoveryAvailable(true)
+}
+
+func (p *ConnectionPolicy) discoveryAvailable(outgoing bool) bool {
+	p.mu.Lock()
+	snapshot := p.snapshot
+	p.mu.Unlock()
+	var view NodeSnapshot
+	if snapshot != nil {
+		view = snapshot()
+	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	return p.counts().Total < p.limits.Total
+	c := p.counts()
+	if c.Total < p.limits.Total && (!outgoing || c.Outgoing < p.limits.Outgoing) {
+		return true
+	}
+	if snapshot == nil || p.reclaiming || (outgoing && c.Attempts >= p.limits.Attempts) {
+		return false
+	}
+	return p.redundantLease(view, outgoing && c.Outgoing >= p.limits.Outgoing) != nil
 }
 
 func (p *ConnectionPolicy) preferred(l *ConnectionLease) bool {
@@ -189,6 +214,15 @@ func (p *ConnectionPolicy) reclaim(view NodeSnapshot, candidate meshid.Device, n
 			return nil // Upgrades and extra redundancy only use spare capacity.
 		}
 	}
+	victim := p.redundantLease(view, needOutgoing)
+	if victim == nil {
+		return nil
+	}
+	victim.retired, victim.reclaimed, p.reclaiming = true, true, true
+	return victim.retire
+}
+
+func (p *ConnectionPolicy) redundantLease(view NodeSnapshot, needOutgoing bool) *ConnectionLease {
 	var victim *ConnectionLease
 	for l := range p.connections {
 		if !l.ready || l.retired || l.link == 0 || l.retire == nil || (needOutgoing && !l.outgoing) {
@@ -202,11 +236,7 @@ func (p *ConnectionPolicy) reclaim(view NodeSnapshot, candidate meshid.Device, n
 			}
 		}
 	}
-	if victim == nil {
-		return nil
-	}
-	victim.retired, victim.reclaimed, p.reclaiming = true, true, true
-	return victim.retire
+	return victim
 }
 
 func (l *ConnectionLease) Release() {
