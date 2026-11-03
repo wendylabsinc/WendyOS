@@ -101,6 +101,18 @@ func (s NodeSnapshot) HasInstalledRouteOnLink(link babel.LinkID) bool {
 	return false
 }
 
+// HasOtherForwardingLink proves another exact authenticated direct carrier is
+// already forwarding this peer. Configured cost is not path health: a stale
+// low-cost carrier may be unused while a higher-cost carrier actually forwards.
+func (s NodeSnapshot) HasOtherForwardingLink(peer meshid.Device, excluded babel.LinkID) bool {
+	for _, link := range s.Links {
+		if link.ID != excluded && link.Device == peer && link.ForwardingReady && !link.Retiring {
+			return true
+		}
+	}
+	return false
+}
+
 // markForwardingReady joins actor-owned routing and forwarding state. Attached
 // TLS presence alone survives a silent blackhole; a cached or uninstalled route
 // likewise cannot justify retiring the carrier that still forwards traffic.
