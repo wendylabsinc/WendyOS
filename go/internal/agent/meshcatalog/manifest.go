@@ -51,12 +51,19 @@ func (c *Catalog) manifestRecords(now time.Time) []Record {
 			continue
 		}
 		device := meshid.NewDevice(view.Self.Tenant(), m.Device)
+		until := m.LeaseDeadline()
+		if view.RouteProofs != nil && device != c.device {
+			until = manifestRouteDeadline(view, m, device, now)
+			if until.IsZero() {
+				continue
+			}
+		}
 		for _, service := range m.Services {
 			if service.Mesh != c.mesh {
 				continue
 			}
 			out = append(out, Record{Version: 1, Key: Key{service.Mesh, device.Principal(), service.AppID, service.ServiceID},
-				Generation: m.Revision, Issued: m.Issued, Expires: m.Expires, AdmittedUntil: m.LeaseDeadline(),
+				Generation: m.Revision, Issued: m.Issued, Expires: m.Expires, AdmittedUntil: until,
 				Type: service.Type, Instance: service.Instance, HostPort: service.Port, TXT: slices.Clone(service.TXT)})
 		}
 	}

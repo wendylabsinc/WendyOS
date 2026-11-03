@@ -112,8 +112,8 @@ func Topology(self meshid.Device, snapshot localmesh.NodeSnapshot, now time.Time
 }
 
 // Service descriptions are opt-in so regular Nearby polling carries only the
-// compact device directory. Each service inherits the complete manifest lease;
-// no second service gossip/cache or independently refreshed expiry is created.
+// compact device directory. Services require both the current manifest and its
+// independently authorized route; no separate service gossip/cache is created.
 func projectLocalMeshServices(out *pb.LocalMeshTopology, snapshot localmesh.NodeSnapshot, now time.Time) {
 	out.ServicesIncluded = true
 	manifests := make(map[string]localmesh.Manifest)
