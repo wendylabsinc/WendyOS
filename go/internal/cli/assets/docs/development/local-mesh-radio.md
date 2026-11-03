@@ -85,6 +85,22 @@ macOS and Linux hosts can also make outgoing BLE connections. The CLI's first
 neighbour must currently be WendyOS. Lite devices can be reached through that
 router, but cannot be the CLI's direct first hop.
 
+WendyOS and CLI routers prefer a new direct neighbour over a second carrier to
+an existing neighbour. With spare capacity, they can add a faster carrier and
+retain a slower carrier as a warm standby. An upgrade is compared with the
+peer's working route; an attached connection without a usable route does not
+make another carrier redundant. The existing connection stays available while
+the new carrier authenticates and establishes its authorized route.
+
+When a new neighbour needs a slot, the router can release a slower standby only
+while another authenticated carrier has that peer's current route installed.
+The router waits for the old connection to finish before reusing its slot.
+Recent connection failures keep their existing retry penalty so repeated
+advertisements cannot continually displace a standby. Connection and handshake
+limits still apply separately to each carrier; incoming capacity and an unused
+slot on another carrier do not expand an outgoing limit. Pinned first-hop and
+disabled-carrier settings still constrain discovery.
+
 Commands share one background router for the selected operator profile. After
 `connect`, it stays running when commands exit and can forward traffic between
 peers. Stop it when finished:

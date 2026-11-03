@@ -50,6 +50,10 @@ func Run(parent context.Context, cfg Config) error {
 		return err
 	}
 	ctx, cancel := context.WithCancel(parent)
+	clockNow := cfg.now
+	if clockNow == nil {
+		clockNow = time.Now
+	}
 	var wg sync.WaitGroup
 	defer func() { cancel(); wg.Wait() }()
 	sources := cfg.Sources
@@ -123,7 +127,7 @@ func Run(parent context.Context, cfg Config) error {
 			return false
 		}
 		for _, link := range view.Links {
-			if link.Device == peer && link.ForwardingReady && ((strict && link.Cost < cost) || (!strict && link.Cost <= cost)) {
+			if link.Device == peer && !link.Retiring && link.ForwardingReady && ((strict && link.Cost < cost) || (!strict && link.Cost <= cost)) {
 				return true
 			}
 		}
@@ -150,12 +154,25 @@ func Run(parent context.Context, cfg Config) error {
 		}
 		return false
 	}
+	hasDirectPeer := func(view localmesh.NodeSnapshot, peer meshid.Device) bool {
+		if peer != (meshid.Device{}) {
+			for _, link := range view.Links {
+				if link.Device == peer && !link.Retiring {
+					return true
+				}
+			}
+		}
+		return false
+	}
 	plan := func(now time.Time) {
 		view := snapshot()
+		ranking := view
+		ranking.Links = append([]localmesh.PeerLink(nil), view.Links...)
 		for _, a := range active {
-			if a.verified && !a.canceled && hasLink(view, a.peer, a.candidate.Cost, true) {
-				a.canceled = true
-				a.cancel()
+			if a.verified && !a.canceled && !hasDirectPeer(view, a.peer) {
+				// Authentication can precede Node publication. This contributes
+				// presence for ranking only, never route or eviction authority.
+				ranking.Links = append(ranking.Links, localmesh.PeerLink{Device: a.peer, Cost: a.candidate.Cost, Transport: a.candidate.Transport})
 			}
 		}
 		for key, e := range table {
@@ -171,10 +188,11 @@ func Run(parent context.Context, cfg Config) error {
 				keys = append(keys, key)
 			}
 		}
-		for _, key := range queue.Order(keys, now) {
-			if len(active) >= cfg.Limits.Connections {
-				break
-			}
+		keys = queue.OrderPreferred(keys, now, ranking, func(key string) (meshid.Device, uint16) {
+			c := table[key].candidate
+			return cache.peer(c, now, cfg.Limits.AuthenticatedTTL), c.Cost
+		})
+		for _, key := range keys {
 			e := table[key]
 			c := e.candidate
 			if active[key] != nil || now.Before(e.retry) || !supported[c.Transport] {
@@ -186,11 +204,13 @@ func Run(parent context.Context, cfg Config) error {
 				continue
 			}
 			peer := cache.peer(c, now, cfg.Limits.AuthenticatedTTL)
-			if hasSameCarrier(view, peer, c) || hasLink(view, peer, c.Cost, false) {
+			if hasSameCarrier(view, peer, c) {
 				continue
 			}
 			pending, bleCount := 0, 0
+			reclaiming := false
 			for _, a := range active {
+				reclaiming = reclaiming || a.canceled
 				if !a.verified {
 					pending++
 				}
@@ -198,7 +218,30 @@ func Run(parent context.Context, cfg Config) error {
 					bleCount++
 				}
 			}
-			if pending >= cfg.Limits.Attempts || (c.Transport == BLE && bleCount >= cfg.Limits.BLEConnections) {
+			if pending >= cfg.Limits.Attempts {
+				continue
+			}
+			full := len(active) >= cfg.Limits.Connections
+			bleFull := c.Transport == BLE && bleCount >= cfg.Limits.BLEConnections
+			if full || bleFull {
+				// New peers may reclaim a slower owned backup, never the peer's
+				// last installed working path. Completion releases the real slot;
+				// cancellation itself does not grant admission or extra capacity.
+				if !reclaiming && !hasDirectPeer(ranking, peer) && queue.ReclaimEligible(key, now) {
+					var victim *attempt
+					for _, a := range active {
+						if !a.verified || a.canceled || (bleFull && a.candidate.Transport != BLE) || !hasLink(view, a.peer, a.candidate.Cost, true) {
+							continue
+						}
+						if victim == nil || a.candidate.Cost > victim.candidate.Cost || (a.candidate.Cost == victim.candidate.Cost && a.id > victim.id) {
+							victim = a
+						}
+					}
+					if victim != nil {
+						victim.canceled = true
+						victim.cancel()
+					}
+				}
 				continue
 			}
 			serial++
@@ -231,7 +274,7 @@ func Run(parent context.Context, cfg Config) error {
 		case <-ctx.Done():
 			return parent.Err()
 		case event := <-events:
-			now := time.Now()
+			now := clockNow()
 			switch v := event.(type) {
 			case sourceUpdate:
 				for _, e := range table {
@@ -285,6 +328,12 @@ func Run(parent context.Context, cfg Config) error {
 						if a.canceled {
 							e.retry = now
 							queue.Succeeded(v.key)
+						} else if errors.Is(v.err, localmesh.ErrCarrierCapacityRetry) {
+							// The node is waiting for an intentionally retired owner
+							// to release capacity. Preserve the ordinary dial cadence
+							// without treating this healthy candidate as a failure.
+							e.retry = now.Add(cfg.Limits.RetryDelay)
+							queue.Succeeded(v.key)
 						} else {
 							e.retry = now.Add(cfg.Limits.RetryDelay)
 							if errors.Is(v.err, ErrUnsupportedPeer) {
@@ -308,8 +357,8 @@ func Run(parent context.Context, cfg Config) error {
 				}
 			}
 			plan(now)
-		case now := <-ticker.C:
-			plan(now)
+		case <-ticker.C:
+			plan(clockNow())
 		}
 	}
 }

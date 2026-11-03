@@ -92,3 +92,7 @@ func (r *Routing) Checkpoint() babel.Checkpoint        { return r.engine.Checkpo
 func (r *Routing) HasUsableOrigin(origin RouteOrigin) bool {
 	return !r.stopped && r.engine.HasUsableOrigin(origin.RouterID, origin.Prefix, origin.Seqno)
 }
+
+func (r *Routing) HasUsableOriginOnLink(origin RouteOrigin, link babel.LinkID) bool {
+	return !r.stopped && r.engine.HasUsableOriginOnLink(origin.RouterID, origin.Prefix, origin.Seqno, link)
+}

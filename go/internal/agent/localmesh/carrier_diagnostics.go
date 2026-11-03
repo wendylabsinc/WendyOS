@@ -15,8 +15,9 @@ const carrierDiagnosticInterval = 5 * time.Second
 // process startup and rate limited independently of routed-packet throughput.
 // They expose no packet contents and do not add a goroutine or wire traffic.
 type carrierDiagnostics struct {
-	enabled bool
-	next    time.Time
+	enabled  bool
+	next     time.Time
+	warmNext time.Time
 }
 
 type carrierDiagnostic struct {

@@ -173,9 +173,6 @@ func (s *Session) connectCandidate(ctx context.Context, candidate carriers.Candi
 	defer func() { _ = link.Close(); link.Wait() }()
 	peer := link.Peer()
 	candidate.Authenticated(peer)
-	if s.Snapshot().HasCheaperLink(peer, candidate.Cost) {
-		return nil
-	}
 	s.linkMu.Lock()
 	s.links[link] = managedCarrier{peer: peer, cost: candidate.Cost}
 	s.choosePreferredLocked()
