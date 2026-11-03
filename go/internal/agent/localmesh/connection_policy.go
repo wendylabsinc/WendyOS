@@ -181,6 +181,9 @@ func (p *ConnectionPolicy) reserveGroup(key string, peer meshid.Device, outgoing
 // ownership against one immutable routing snapshot. An indirect mesh route or
 // discovery identity can never authorize dropping the last direct path.
 func (p *ConnectionPolicy) reclaim(view NodeSnapshot, candidate meshid.Device, needOutgoing bool) func() {
+	if candidate != (meshid.Device{}) && (!candidate.IsValid() || candidate == p.self || candidate.Tenant() != p.self.Tenant()) {
+		return nil
+	}
 	for _, link := range view.Links {
 		if candidate != (meshid.Device{}) && link.Device == candidate && !link.Retiring {
 			return nil // Upgrades and extra redundancy only use spare capacity.
@@ -217,6 +220,7 @@ func (l *ConnectionLease) Release() {
 	delete(l.policy.connections, l)
 	if l.reclaimed {
 		l.policy.reclaiming = false
+		l.reclaimed = false
 	}
 	l.policy.mu.Unlock()
 }
@@ -375,6 +379,20 @@ func BindConnectionLink(ctx context.Context, id babel.LinkID, cost uint16, retir
 	}
 }
 
+// markConnectionRetry prevents normal provider completion from penalizing a
+// verified new peer deferred by intentional Node-capacity reclamation.
+func markConnectionRetry(ctx context.Context) {
+	l, _ := ctx.Value(connectionLeaseKey{}).(*ConnectionLease)
+	if l == nil {
+		return
+	}
+	l.policy.mu.Lock()
+	defer l.policy.mu.Unlock()
+	if _, exists := l.policy.connections[l]; exists {
+		l.retired = true
+	}
+}
+
 // ConnectionReady is also usable by transport test nodes without kernel TUNs.
 func ConnectionReady(ctx context.Context, peer meshid.Device, closeConnection func()) bool {
 	l, _ := ctx.Value(connectionLeaseKey{}).(*ConnectionLease)
@@ -451,7 +469,11 @@ func (q *CandidateQueue) OrderPreferred(keys []string, now time.Time, view NodeS
 		}
 		return 2
 	}
-	sort.SliceStable(out, func(i, j int) bool { return rank(out[i]) < rank(out[j]) })
+	ranks := make(map[string]int, len(out))
+	for _, key := range out {
+		ranks[key] = rank(key)
+	}
+	sort.SliceStable(out, func(i, j int) bool { return ranks[out[i]] < ranks[out[j]] })
 	return out
 }
 

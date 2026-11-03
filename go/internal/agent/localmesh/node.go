@@ -111,6 +111,7 @@ type Node struct {
 	started          time.Time
 	routingClock     func() time.Duration // Internal clock injection; nil uses elapsed monotonic process time.
 	nextLink         babel.LinkID
+	capacityRetiring babel.LinkID // Actor-owned: one global-capacity retirement pending removal.
 	advertisement    Manifest
 	publicationDirty bool
 	nextPublication  time.Time
@@ -494,11 +495,19 @@ func (n *Node) handle(e nodeEvent) error {
 		return nil
 	}
 	if e.add != nil {
-		if len(n.peers) >= 64 {
-			return errors.New("wendy net link capacity reached")
-		}
 		if e.add.device == n.Credentials.Device {
 			return errors.New("self link")
+		}
+		if len(n.peers) >= 64 {
+			// Refresh elapsed liveness and the verified proof projection before
+			// deciding whether any existing incarnation is safely redundant.
+			if err := n.step(babel.Tick{}); err != nil {
+				return err
+			}
+			if n.reclaimGlobalRedundancy(e.add.device) {
+				return ErrCarrierCapacityRetry
+			}
+			return errors.New("wendy net link capacity reached")
 		}
 		n.nextLink++
 		e.add.id = n.nextLink
@@ -528,6 +537,9 @@ func (n *Node) handle(e nodeEvent) error {
 		return nil
 	}
 	if e.remove {
+		if n.capacityRetiring == e.id {
+			n.capacityRetiring = 0
+		}
 		p.sync.Close()
 		if err := n.step(babel.RemoveLink{ID: e.id}); err != nil {
 			return err
@@ -952,6 +964,9 @@ func (n *Node) attachLink(ctx context.Context, peer meshid.Device, cost uint16, 
 		return nil
 	}
 	if err := n.request(ctx, nodeEvent{add: p}); err != nil {
+		if errors.Is(err, ErrCarrierCapacityRetry) {
+			markConnectionRetry(ctx)
+		}
 		return err
 	}
 	BindConnectionLink(ctx, p.id, p.cost, p.signalRetire)
