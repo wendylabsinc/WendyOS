@@ -664,3 +664,32 @@ func TestRawFormatPrefersDeeperSamplesOverListOrder(t *testing.T) {
 		t.Fatalf("no formats advertised: want nil, got %v", got)
 	}
 }
+
+func TestThermalProfilesChooseCaptureAndCropOnlyPreview(t *testing.T) {
+	for _, tc := range []struct {
+		adapter string
+		height  uint32
+		crop    string
+	}{
+		{"topdon-tc001-v1", 384, "videocrop top=0 bottom=192"},
+		{"topdon-tc001-hik-v1", 392, "videocrop top=196 bottom=4"},
+	} {
+		t.Run(tc.adapter, func(t *testing.T) {
+			withYUYVModes(t, [][2]uint32{{256, 192}, {256, tc.height}, {512, 384}, {512, 484}})
+			previousProfile, previousDefault := thermalCaptureProfile, bestDefaultFrameSizeForDevice
+			thermalCaptureProfile = func(string) *agentpb.ThermalCamera {
+				return &agentpb.ThermalCamera{Adapter: tc.adapter, CaptureWidth: 256, CaptureHeight: tc.height}
+			}
+			bestDefaultFrameSizeForDevice = func(string) (uint32, uint32) { return 512, 384 }
+			t.Cleanup(func() { thermalCaptureProfile = previousProfile; bestDefaultFrameSizeForDevice = previousDefault })
+			plan := mustPlan(t, &agentpb.StreamVideoRequest{}, map[string]bool{"x264enc": true, "videocrop": true})
+			args := strings.Join(plan.args, " ")
+			if plan.raw.GetWidth() != 256 || plan.raw.GetHeight() != tc.height || !strings.Contains(args, tc.crop) {
+				t.Fatalf("wrong thermal plan: %s; raw=%v", args, plan.raw)
+			}
+			if strings.Index(args, "tee name=rawtap") > strings.Index(args, tc.crop) {
+				t.Fatal("raw measurements were cropped")
+			}
+		})
+	}
+}

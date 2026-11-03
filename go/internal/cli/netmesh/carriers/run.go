@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -150,10 +151,9 @@ func Run(parent context.Context, cfg Config) error {
 				keys = append(keys, key)
 			}
 		}
-		for _, key := range queue.Order(keys, now) {
-			if len(active) >= cfg.Limits.Connections {
-				break
-			}
+		ordered := queue.Order(keys, now)
+		sort.SliceStable(ordered, func(i, j int) bool { return table[ordered[i]].candidate.Cost < table[ordered[j]].candidate.Cost })
+		for _, key := range ordered {
 			e := table[key]
 			c := e.candidate
 			if active[key] != nil || now.Before(e.retry) || !supported[c.Transport] {
@@ -178,6 +178,14 @@ func Run(parent context.Context, cfg Config) error {
 				}
 			}
 			if pending >= cfg.Limits.Attempts || (c.Transport == BLE && bleCount >= cfg.Limits.BLEConnections) {
+				continue
+			}
+			if len(active) >= cfg.Limits.Connections {
+				// Discovery cost and identity are unverified hints. A failed or
+				// unsupported candidate must not retire an established carrier just
+				// to make room for its probe. Even a newly discovered cable waits
+				// for a natural slot; authenticated cheaper same-peer replacement
+				// above remains independent of candidate admission.
 				continue
 			}
 			serial++

@@ -38,6 +38,8 @@ go/local-pki-test
 *.test
 *.out
 vendor/
+# Three.js modules bundled with the macOS app's offline 3D install guide.
+!go/macos/Resources/Install3D/vendor/
 
 # Local settings
 *.local.*

@@ -69,6 +69,8 @@ func ErrorClass(err error) string {
 		return "device_identity_mismatch"
 	case errors.As(err, &orgMismatch):
 		return "device_org_mismatch"
+	case expiredLoginFrom(err) != nil:
+		return "auth_login_expired"
 	case errors.Is(err, errTLSHandshakeRejected):
 		return "device_tls_rejected"
 	case errors.Is(err, errProvisionedAgentUnauthorized):

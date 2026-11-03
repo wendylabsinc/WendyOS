@@ -440,14 +440,14 @@ func TestCloudTabShowsLiteFirmwareWithoutAnAgentTunnel(t *testing.T) {
 	device := cloudDiscoveryDevice{cloudAssetMetadata: asset, v2: asset, key: asset.GetId()}
 
 	rows := cloudDiscoveryTableRows([]cloudDiscoveryDevice{device}, nil)
-	if got := rows[0][2]; got != "esp32c6 (Lite)" {
-		t.Errorf("type column = %q, want esp32c6 (Lite)", got)
+	if got := rows[0][2]; got != "esp32c6" {
+		t.Errorf("type column = %q, want esp32c6", got)
 	}
 	if got := rows[0][3]; got != "0.9.1" {
 		t.Errorf("version column = %q, want the firmware version", got)
 	}
 	info, ok := device.info(nil).(cloudDiscoverV2Info)
-	if !ok || info.Type != "esp32c6 (Lite)" || info.Version != "0.9.1" {
+	if !ok || info.Type != "esp32c6" || info.Version != "0.9.1" {
 		t.Errorf("info = %+v, want the Lite type and firmware version", info)
 	}
 	if _, err := device.connect(context.Background(), liteTestAuth("cloud.example:443"), ""); err == nil || !strings.Contains(err.Error(), "Wendy Lite") {

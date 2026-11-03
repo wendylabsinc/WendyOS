@@ -526,13 +526,15 @@ func (w *DataTransferWorker) runPass(ctx context.Context) error {
 func (w *DataTransferWorker) resolveShouldUpload(mf data.Manifest) (bool, string) {
 	when := "always"
 	if name := mf.Trigger.CampaignName; name != "" {
-		if c, err := w.manager.Campaign(name); err == nil {
+		if c, err := w.manager.CampaignForUpload(name); err == nil {
 			if c.Upload.When != "" {
 				when = c.Upload.When
 			}
 		} else {
-			// Campaign plan gone (deleted after capture). The episode was queued
-			// for upload, so default to uploading it rather than stranding data.
+			// No plan and no record of one. `wendy data campaign remove` keeps a
+			// removed plan's upload policy, so this is a plan deleted by hand.
+			// The episode was queued for upload, so default to uploading it
+			// rather than stranding data.
 			w.logger.Warn("data transfer worker: campaign plan not found, defaulting to always",
 				zap.String("episode", mf.ID), zap.String("campaign", name), zap.Error(err))
 		}
@@ -562,7 +564,7 @@ func (w *DataTransferWorker) resolveShouldUpload(mf data.Manifest) (bool, string
 // episode, or 0 (unlimited) when there is no campaign or no configured cap.
 func (w *DataTransferWorker) uploadRate(mf data.Manifest) int64 {
 	if name := mf.Trigger.CampaignName; name != "" {
-		if c, err := w.manager.Campaign(name); err == nil {
+		if c, err := w.manager.CampaignForUpload(name); err == nil {
 			return c.UploadMaxRateBytes()
 		}
 	}

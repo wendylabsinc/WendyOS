@@ -1,0 +1,24 @@
+version: 1
+stages:
+  - name: build
+    from: swift:6.3.2-noble
+    workdir: /build
+    copy:
+      - from: local
+        paths: [Package.swift]
+      - from: local
+        paths: [Package.resolved]
+      - from: local
+        paths: [Sources]
+      - from: local
+        paths: [Tests]
+    build:
+      lang: swift
+      product: ThermalNotify
+  - name: app
+    from: swift:6.3.2-noble-slim
+    copy:
+      - from: build
+        paths: [/build/.build/release/ThermalNotify]
+        dest: /ThermalNotify
+    cmd: [/ThermalNotify]

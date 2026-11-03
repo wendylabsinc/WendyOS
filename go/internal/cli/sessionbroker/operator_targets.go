@@ -54,6 +54,8 @@ type operatorTargets struct {
 	packetDial      func(context.Context, string, string) (net.Conn, error)
 	appDial         func(context.Context, meshid.Device, uint16) (net.Conn, error)
 	liteStreams     int
+	internetOpen    func(context.Context, meshid.Device) (net.Conn, error)
+	internetActive  bool
 	directory       directoryPublisher
 }
 
@@ -83,6 +85,7 @@ func newOperatorTargets(session *operatormesh.Session, adjacent *grpc.ClientConn
 	r.targetTopology = func(ctx context.Context, _ meshid.Device) (*pb.LocalMeshTopology, error) { return r.topology(ctx) }
 	r.serviceTopology = r.topology
 	if session != nil && session.Node != nil {
+		r.internetOpen = session.OpenInternet
 		r.appDial = session.DialAppTLS
 		r.localSnapshot = session.Snapshot
 		r.topology = func(context.Context) (*pb.LocalMeshTopology, error) {
@@ -212,7 +215,7 @@ func (r *operatorTargets) Resolve(ctx context.Context) (*grpc.ClientConn, func()
 	if err != nil && r.localSnapshot == nil {
 		return nil, nil, err
 	}
-	if err == nil && target == adjacent {
+	if err == nil && target == adjacent && adjacentConn != nil {
 		return adjacentConn, func() {}, nil
 	}
 	address, err := r.endpoint(ctx, target)

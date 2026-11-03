@@ -1363,6 +1363,7 @@ func (s *ContainerService) GetResourceStats(ctx context.Context, _ *agentpb.GetR
 	host.Gpus = gpuStatsToProto(hoststats.SampleGPU(ctx))
 	host.ThermalZones = thermalZonesToProto(hoststats.ResolveThermal())
 	host.Battery = batteryToProto(hoststats.ResolveBattery())
+	host.Network = networkStats(ctx)
 
 	return &agentpb.GetResourceStatsResponse{
 		Host:       host,
