@@ -189,7 +189,7 @@ func (d *Directory) routeViewLocked(now time.Time, detached bool) ([]Manifest, m
 		if detached {
 			m = cloneManifest(m)
 		}
-		m.AdmittedUntil = now.Add(e.activeUntil.Sub(instant))
+		m.AdmittedUntil = now.Add(e.deadline().Sub(instant))
 		if detached && m.AgentTransport != "" && m.AgentTransport != AgentMTLS {
 			m.AgentPort = 0
 		}
@@ -221,8 +221,8 @@ func (d *Directory) routeViewLocked(now time.Time, detached bool) ([]Manifest, m
 		}
 		d.handoffs[owner] = held
 		until := held.deadline
-		if current.activeUntil.Before(until) {
-			until = current.activeUntil
+		if current.deadline().Before(until) {
+			until = current.deadline()
 		}
 		proofs[held.origin] = RouteProof{Principal: held.principal, Deadline: now.Add(until.Sub(instant)), Retained: true}
 	}
