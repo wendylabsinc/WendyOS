@@ -31,8 +31,9 @@ default; `--detach` also changes the restart policy to unless-stopped. The app
 has two services managed as **one app group**: `control` and `worker`. Stop the
 bare app ID to stop both. A restart resumes durable evidence and progress.
 A test-owned scratch container uses a random installation-specific ID, no
-restart policy, and a supervisor liveness lease. Graceful shutdown deletes it;
-a forced kill makes it exit, and the next start recovers the recorded leftover.
+restart policy, and a supervisor liveness lease. Shutdown revokes its liveness lease and attempts deletion. An older Agent
+can complete group stop before that deletion RPC finishes, leaving stopped
+metadata; the next start recovers only the recorded test-owned resource.
 No existing application is selected for a test.
 
 The first start downloads an 18.6 GB GGUF **on the device**. `control/pins.json`
@@ -54,7 +55,8 @@ name alone. Scout pins latest stable, previous stable and latest nightly per
 session. Release/context refresh happens between sessions on a bounded interval;
 transient fetch failures back off. Cached artifacts are reverified. Unchanged
 release/context snapshots receive at most three sessions before Scout waits for
-new context, preserving that budget across restarts instead of repeating forever. A newer
+new context or a changed harness revision, preserving that budget across
+restarts instead of repeating forever. A newer
 stable release is tested before publication so an already-fixed older-nightly
 failure does not become a new pre-stable regression issue.
 
@@ -220,3 +222,44 @@ without a model session. For a bounded exploratory deployment use
 stop the Wendy app to stop testing. `--env SCOUT_TEST_INJECTION=1` adds a
 clearly marked hostile issue-text fixture to validation sessions; its network
 destination uses `.invalid`, and kernel/tool restrictions remain enforced. The normal runtime does not change Agent/OS.
+
+## Observed ARM64 validation
+
+Validated with Agent `2026.10.29-210857`, WendyOS `0.17.0`, CUDA `13.2` and
+`sm_110`, preserving the installed Agent/OS and unrelated applications. The
+compared releases were [WendyOS stable 2026.11.04-081952](https://github.com/wendylabsinc/WendyOS/releases/tag/2026.11.04-081952),
+[WendyOS previous stable 2026.10.29-210857](https://github.com/wendylabsinc/WendyOS/releases/tag/2026.10.29-210857)
+and [WendyOS nightly 2026.11.04-072939](https://github.com/wendylabsinc/WendyOS/releases/tag/2026.11.04-072939).
+
+- GPU health proved 49/49 layer offload. Cached-weight SHA verification took
+  16.45–16.50 seconds; model health took 39–40 seconds cold and 3.03 seconds
+  after a warm restart. Weights were reused; this does not measure a fresh
+  model download's throughput.
+- The final two Pi sessions took 78.18 and 47.63 seconds. Model-authored Python
+  invoked all three actual CLI binaries offline, read results, compared help,
+  recovered from a denied write, and repeated the fresh nonce/arithmetic proof.
+  A hostile issue-text fixture was present. No verified regression was found.
+- Info, camera/audio enumeration and the owned scratch lifecycle passed with
+  all three releases through the supported local admin connection. No capture
+  or physical action occurred. Host-side kernel reads confirmed a 2 GiB worker
+  memory limit and 128-process limit.
+- Kernel checks denied IPv4/IPv6/Unix sockets, encoded shell-child networking,
+  secret/other-job/proc access, ptrace/namespaces and process-group escape.
+  Output/file growth and descendants surviving an exited leader were checked.
+  Live tool requests for Prod, arbitrary shell/HTTP, another app ID, arbitrary
+  publication and remote image content were rejected.
+- Supported group stop killed both services and an active sandbox child. A
+  forced controller termination left no old controller/GPU processes; restart
+  cleaned the owned scratch record and recovered GPU health. Volumes persisted.
+
+The model incorrectly called an additive help-text change a regression and
+repeated an earlier hypothesis. These are unverified model claims. The trusted
+replay/publisher accepted no finding. Earlier setup runs also exposed a Pi
+request-compatibility mismatch, verbose partial-event growth and a 16K context
+overflow; the final runtime uses explicit compatibility settings, completed-event
+capture and smaller context snapshots. Raw evidence stays local.
+
+The issues-only publisher passed fake-server tests, including closed duplicates,
+pagination and issue-rate limits. No standalone live publication was exercised:
+a newly scoped credential was awaiting organization approval. No canary issue
+was posted. Credential absence is a setup limitation, not a CLI regression.
