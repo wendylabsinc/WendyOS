@@ -40,6 +40,40 @@ def metadata(raw):
                 diff_base_sha=BASE, **{k: parsed[k] for k in ('changed_files', 'additions', 'deletions')})
 
 
+def git(repo, *args):
+    """Real git without host configuration, matching the plain diff the workflows run."""
+    env = {key: value for key, value in os.environ.items() if not key.startswith('GIT_')}
+    env.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM='1')
+    return subprocess.run(['git', '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid', *args],
+                          cwd=repo, env=env, check=True, capture_output=True).stdout
+
+
+def write_tree(repo, files):
+    for name, content in files.items():
+        target = Path(repo) / name
+        if content is None:
+            target.unlink()
+        else:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(content)
+    git(repo, 'add', '-A')
+    git(repo, 'commit', '-qm', 'snapshot')
+    return git(repo, 'rev-parse', 'HEAD').decode().strip()
+
+
+def commit_pair(repo, base_files, head_files):
+    """Commit base then head; return their SHAs and the workflows' own diff of them."""
+    git(repo, 'init', '-q')
+    base = write_tree(repo, {'.placeholder': b'', **base_files})
+    head = write_tree(repo, head_files)
+    return base, head, git(repo, 'diff', '--no-ext-diff', '--no-textconv', '--find-renames', base, head, '--')
+
+
+def real_diff(base_files, head_files):
+    with tempfile.TemporaryDirectory() as directory:
+        return commit_pair(directory, base_files, head_files)[2].decode()
+
+
 @contextmanager
 def working_directory(path):
     previous = Path.cwd()
@@ -154,6 +188,70 @@ class PolicyTests(unittest.TestCase):
             self.assertIn('Do not review generated code', prompt)
             self.assertIn('upstream source is not supplied', prompt)
             self.assertIn('do not establish API or behavior coverage', prompt)
+
+
+class RealGitPatchTests(unittest.TestCase):
+    TEXT = b''.join(b'line %d\n' % number for number in range(20))
+    SPACED = 'Documentation/Building ds2.md'
+
+    def test_git_tab_after_spaced_patch_path_for_each_change_kind(self):
+        renamed = 'Documentation/Building ds3 final.md'
+        for kind, before, after, sides in (
+            ('add', {}, {self.SPACED: self.TEXT}, (None, self.SPACED)),
+            ('modify', {self.SPACED: self.TEXT}, {self.SPACED: self.TEXT + b'more\n'}, (self.SPACED, self.SPACED)),
+            ('delete', {self.SPACED: self.TEXT}, {self.SPACED: None}, (self.SPACED, None)),
+            ('rename with edit', {self.SPACED: self.TEXT}, {self.SPACED: None, renamed: self.TEXT + b'more\n'},
+             (self.SPACED, renamed)),
+        ):
+            with self.subTest(kind):
+                raw = real_diff(before, after)
+                self.assertRegex(raw, r'(?m)^(---|\+\+\+) [ab]/.* .*\t$')
+                file = source.parse_diff(raw)['files'][0]
+                self.assertEqual((file['base'], file['head']), sides)
+                kept, coverage = source.source_diff(raw)
+                self.assertEqual(kept, raw)
+                self.assertEqual(coverage['source_files'], 1)
+                manifest = security_review.build_input_manifest(metadata(raw), raw.encode(), 42, HEAD)
+                self.assertEqual(manifest['reviewed_files'], 1)
+
+    def test_quoted_spaced_path_tab_is_outside_the_quotes(self):
+        name = 'docs/café guide.md'
+        raw = real_diff({name: self.TEXT}, {name: self.TEXT + b'more\n'})
+        self.assertIn('+++ "b/docs/caf\\303\\251 guide.md"\t\n', raw)
+        file = source.parse_diff(raw)['files'][0]
+        self.assertEqual((file['base'], file['head']), (name, name))
+
+    def test_spaced_generated_output_is_still_excluded(self):
+        name = 'go/proto/gen/agent pb/x y.pb.go'
+        raw = real_diff({name: self.TEXT}, {name: self.TEXT + b'more\n'})
+        kept, coverage = source.source_diff(raw)
+        self.assertEqual(kept, '')
+        self.assertEqual([item['path'] for item in coverage['excluded_generated_files']], [name])
+
+    def test_spaced_path_stays_strict_after_the_tab_is_removed(self):
+        raw = real_diff({self.SPACED: self.TEXT}, {self.SPACED: self.TEXT + b'more\n'})
+        header = f'+++ b/{self.SPACED}\t\n'
+        self.assertIn(header, raw)
+        for changed in ('+++ b/Documentation/Other ds2.md\t\n', f'+++ b/{self.SPACED}\t\t\n'):
+            with self.assertRaisesRegex(source.ReviewError, 'disagrees with its file header'):
+                source.parse_diff(raw.replace(header, changed))
+
+    def test_real_tab_in_a_spaced_name_is_still_rejected(self):
+        name = 'docs/a\tb c.md'
+        raw = real_diff({name: self.TEXT}, {name: self.TEXT + b'more\n'})
+        self.assertIn('+++ "b/docs/a\\tb c.md"\t\n', raw)
+        with self.assertRaisesRegex(source.ReviewError, 'invalid repository path'):
+            source.parse_diff(raw)
+
+    def test_docs_review_accepts_a_spaced_path_diff(self):
+        raw = real_diff({self.SPACED: self.TEXT}, {self.SPACED: self.TEXT + b'more\n'})
+        client = Mock()
+        client.messages.count_tokens.return_value = SimpleNamespace(input_tokens=100)
+        client.messages.create.return_value = SimpleNamespace(stop_reason='end_turn', content=[
+            SimpleNamespace(text='{"summary":"","findings":[]}')])
+        with patch.object(docs_review, 'load_documents', return_value={}), redirect_stdout(io.StringIO()):
+            docs_review.review(client, ROOT, HEAD, raw, [self.SPACED], '', '', '42')
+        client.messages.create.assert_called_once()
 
 
 class ReviewInputTests(unittest.TestCase):
