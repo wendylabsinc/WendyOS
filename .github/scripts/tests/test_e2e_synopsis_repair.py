@@ -384,6 +384,17 @@ class RepairTests(unittest.TestCase):
         with self.assertRaisesRegex(r.Skip, "Existing repair branch"):
             r.prepare(api, 3)
 
+    def test_repair_branch_stays_out_of_the_ai_feedback_loop(self):
+        name = "e2e-synopsis-repair/" + BREAKING
+        self.assertEqual(r.branch(BREAKING), name)
+        # ai-pr-feedback.yml acts on PR heads matching this pattern.
+        self.assertNotRegex(name, r"^ai/[a-z0-9]")
+        api = API()
+        self.publish(api)
+        self.assertEqual(dict(api.writes)["git/refs"]["ref"], "refs/heads/" + name)
+        self.assertEqual(dict(api.writes)["pulls"]["head"], name)
+        self.assertIn("git/matching-refs/heads/" + name, api.calls)
+
     def test_stale_main_skips(self):
         api = API()
         api.main = GREEN
@@ -393,7 +404,8 @@ class RepairTests(unittest.TestCase):
 
     def test_bot_fork_deleted_head_and_ambiguous_prs_skip(self):
         for mutate in (lambda p: p["user"].update(type="Bot"),
-                       lambda p: p["head"].update(ref="ai/e2e-synopsis/old"),
+                       lambda p: p["head"].update(ref="e2e-synopsis-repair/old"),
+                       lambda p: p["head"].update(ref="ai/issue-12-old"),
                        lambda p: p["head"].update(ref="dependabot/go_modules/example"),
                        lambda p: p["head"].update(ref="renovate/example"),
                        lambda p: p["head"].update(repo={"full_name": "fork/WendyOS"}),

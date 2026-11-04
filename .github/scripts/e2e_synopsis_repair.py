@@ -226,7 +226,8 @@ def marker(sha):
 
 def branch(sha):
     marker(sha)
-    return "ai/e2e-synopsis/" + sha
+    # Not under ai/: ai-pr-feedback.yml acts on every PR head there.
+    return "e2e-synopsis-repair/" + sha
 
 
 def existing(api, sha):
@@ -282,7 +283,7 @@ def prepare(api, run_id):
     require(pr["user"]["type"] == "User" and
             re.fullmatch(r"[A-Za-z0-9-]{1,39}", pr["user"]["login"]) and
             (pr["head"].get("repo") or {}).get("full_name") == api.repo and
-            not pr["head"]["ref"].startswith(("ai/", "dependabot/", "renovate/")), "Bot/fork repair attribution excluded")
+            not pr["head"]["ref"].startswith(("ai/", "e2e-synopsis-repair/", "dependabot/", "renovate/")), "Bot/fork repair attribution excluded")
     duplicate = existing(api, breaking)
     require(duplicate is None, duplicate)
     return {"source_run": run_id, "sha": run["head_sha"], "breaking": breaking,

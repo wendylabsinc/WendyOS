@@ -54,8 +54,10 @@ they cannot overwrite the publisher checkout's script.
   only to WendyOS, with **Contents: read/write** and **Pull requests: read/write**.
   These permissions cover creating the branch/draft and commenting on a PR.
   No workflows, administration, merge bypass or release permissions are needed.
-  Restrict the bot's push access to `ai/e2e-synopsis/*` using existing repository
-  policy when provisioning. Do not reuse the release app or template-sync token.
+  Restrict the bot's push access to `e2e-synopsis-repair/*` with a ruleset when
+  provisioning; no such rule exists today. Keep this prefix outside `ai/`, because
+  `ai-pr-feedback.yml` acts on every PR head under `ai/` and repair drafts stay
+  model-free. Do not reuse the release app or template-sync token.
   GITHUB_TOKEN remains read-only and performs evidence/API reads; the writer
   secret exists only in the publish step. The dedicated token is necessary
   because organization policy blocks GITHUB_TOKEN PR creation and its pushes
@@ -76,7 +78,7 @@ wording and failure/fix links. Nothing marks ready, requests review or merges.
 
 ## Duplicates and partial publication
 
-One serialized publisher creates `ai/e2e-synopsis/<first-breaking-commit>` and
+One serialized publisher creates `e2e-synopsis-repair/<first-breaking-commit>` and
 puts `<!-- e2e-synopsis-repair:<commit> -->` in the draft and source-PR comment.
 It queries **all** PR states for that deterministic branch before writing. An
 open, closed or merged fix is reported and never reopened, updated or notified
