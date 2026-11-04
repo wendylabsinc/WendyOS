@@ -24,15 +24,15 @@ wendy --json --device <dev-thor> device apps start sh.wendy.scout --detach
 
 `sh.wendy.scout` contains trusted control and isolated worker services. Stop the
 bare app ID to stop both and their test children. Weights and evidence persist
-across restart/redeploy. The first start downloads the official 56.7 GB Qwen3-Coder-Next Q5_K_M GGUF
-(four shards) on-device;
+across restart/redeploy. The first start downloads an 18.6 GB Qwen3-Coder-30B-A3B Q4_K_M GGUF on-device;
 `control/pins.json` pins its revision/digest, official ARM64 CUDA base image and
 Pi 0.73.1. GPU offload is required. There is one local model provider and no
 cloud-model fallback. The model server uses host loopback port 18081.
 
-The earlier 18.6 GB model cache is retained. To roll back, restore both
-`control/pins.json` and `worker/pins.json` from commit `0a917472b`, then redeploy;
-the single-file loader still works and reuses that cached GGUF.
+The official 56.7 GB Qwen3-Coder-Next Q5_K_M trial cache is retained. Its pins are
+recoverable in both service directories at commit `94adb2770`; the loader supports
+its four official shards. The active model was restored to 30B after the loop
+failure described below.
 
 Normal operation starts a fresh bounded session, retains its evidence, waits
 60 seconds, and repeats until the app stops. Public context/releases are cached
@@ -132,9 +132,12 @@ model buffer. Cold GPU health took 92.16 seconds, with about 68 GB RAM available
 at the startup snapshot. One fresh session completed in 140.04 seconds with
 actual tool/result proof. It ultimately called additive help text benign, but
 also tried unsupported report fields that the guard rejected. No regression was
-accepted. This single slower session demonstrates compatibility, not a reliable
-quality or benchmark improvement. The normal loop uses Next; rollback remains
-available above.
+accepted. A second normal session passed proof in 114.24 seconds. The following session
+ended in 21.30 seconds with narration claiming commands and an invented nonce,
+but no tool events, scripts or results. The unchanged proof gate held the loop.
+Next therefore demonstrated compatibility but unreliable tool use in this
+setup; the normal loop was restored to cached 30B. Trial weights and pins remain
+recoverable. No quality or benchmark improvement is established.
 
 The original 30B model mistook additive help text for a regression; trusted
 checks accepted no finding. Replay covers a small set of exit/JSON/info-field/help predicates;
