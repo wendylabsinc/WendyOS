@@ -95,6 +95,9 @@ func TestOperatorBrokerNormalLongOpaquePrincipal(t *testing.T) {
 func TestOperatorBrokerLegacyPinnedRecipeUsesDiscovery(t *testing.T) {
 	operatorBrokerNormal(t, "P256-legacy", false)
 }
+func TestOperatorBrokerLegacyPinnedPassiveDiscoveryKeepsEnabled(t *testing.T) {
+	operatorBrokerNormal(t, "P256-legacy-passive", false)
+}
 func TestOperatorBrokerEnableAutomaticKeepsExistingOwner(t *testing.T) {
 	operatorBrokerNormal(t, "P256-enable", false)
 }
@@ -466,7 +469,7 @@ func operatorBrokerNormal(t *testing.T, algorithm string, disconnect bool) {
 		return ctx.Err()
 	}
 
-	if algorithm == "P256-legacy" {
+	if strings.HasPrefix(algorithm, "P256-legacy") {
 		path := operatorRecipePath(directory, principal)
 		if err := ensurePrivateDir(filepath.Dir(path)); err != nil {
 			t.Fatal(err)
@@ -491,7 +494,11 @@ func operatorBrokerNormal(t *testing.T, algorithm string, disconnect bool) {
 			} else if algorithm == "P256-enable" || algorithm == "P256-auto" || algorithm == "P256-roam" {
 				client, err = ConnectOperator(ctx, MeshSelector(router))
 			} else {
-				ready, enableErr := EnableOperatorAutomatic(ctx, certificate)
+				prepare := EnableOperatorAutomatic
+				if algorithm == "P256-legacy-passive" {
+					prepare = PrepareOperatorAutomatic
+				}
+				ready, enableErr := prepare(ctx, certificate)
 				if enableErr != nil {
 					err = enableErr
 				} else {

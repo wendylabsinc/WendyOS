@@ -237,8 +237,16 @@ func readOperatorRecipe(path string) (OperatorSpec, error) {
 	}
 	err = json.Unmarshal(data, &recipe)
 	if err == nil && recipe.Version == 1 {
-		// Version 1 also stored an optional first-hop address and router. They
-		// are deliberately discarded: all new sessions discover neighbours.
+		// Pinned version-1 contexts stayed enabled independently of the
+		// Enabled bit. Preserve that participation intent while discarding
+		// their first-hop selection. Automatic contexts retain their idle policy.
+		var legacy struct {
+			Automatic bool `json:"automatic"`
+		}
+		if err := json.Unmarshal(data, &legacy); err != nil {
+			return recipe, err
+		}
+		recipe.Enabled = recipe.Enabled || !legacy.Automatic
 		recipe.Version = 2
 	}
 	return recipe, err
