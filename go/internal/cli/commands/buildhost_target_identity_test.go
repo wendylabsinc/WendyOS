@@ -42,7 +42,7 @@ func TestBuildDeliveryTargetMatchesAuthenticatedDevice(t *testing.T) {
 			if tc.operator != "" {
 				conn.CertInfo = &config.CertificateInfo{PrincipalURI: "spiffe://wendy.sh/tenant/" + tc.operator + "/operator/test"}
 			}
-			target, err := targetPushTargetBase(context.Background(), conn)
+			target, err := targetPushTargetBase(context.Background(), conn, nil)
 			if (err != nil) != tc.wantError {
 				t.Fatalf("target identity binding: target=%v, error=%v, wantError=%v", target, err, tc.wantError)
 			}

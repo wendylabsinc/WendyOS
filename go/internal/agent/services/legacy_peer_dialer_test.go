@@ -128,7 +128,22 @@ func TestLegacyPeersRefuseCrossProtocolAndCrossOrganization(t *testing.T) {
 		t.Fatal("legacy ID reached UUID resolver")
 		return DeliveryTarget{}, nil
 	}, PushTLS: func(meshid.Device) (*tls.Config, error) { t.Fatal("legacy ID reached UUID pin"); return nil, nil }})
-	if _, err := service.resolvePushTarget(&pb.PushTarget{AssetId: 675, LegacyOrganizationId: 64, AssetUuid: testAssetUUID}); err == nil {
+	if _, err := service.resolvePushTarget(&pb.PushTarget{AssetId: 675, AssetUuid: testAssetUUID}); err == nil {
 		t.Fatal("accepted mixed build target")
+	}
+}
+
+func TestLegacyBuildTargetOrganizationComesFromEnrollment(t *testing.T) {
+	provisioning := &ProvisioningService{enrolled: true, cloudHost: "legacy:443", orgID: 64, assetID: 674}
+	peers := NewLegacyPeerDialer(zap.NewNop(), provisioning)
+	service := NewBuildService(zap.NewNop(), BuildServiceOptions{ResolveLegacyTarget: peers.Resolve})
+	target := &pb.PushTarget{AssetId: 675}
+	resolved, err := service.resolvePushTarget(target)
+	if err != nil || resolved.LegacyOrgID != 64 || resolved.LegacyAssetID != 675 {
+		t.Fatalf("numeric target lost enrollment binding: %+v %v", resolved, err)
+	}
+	provisioning.principalURI = testMeshDevice.Principal()
+	if _, err := service.resolvePushTarget(target); err == nil {
+		t.Fatal("PKI build host accepted a numeric target")
 	}
 }

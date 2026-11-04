@@ -72,8 +72,9 @@ broker endpoint for both presence and outgoing tunnels. The API and telemetry
 continue to use their configured endpoints.
 
 Remote build delivery supports numeric v1 assets and v2 device principals, and
-checks the destination against its device certificate. Updated clients require
-the build host's legacy-delivery capability before submitting a numeric target.
+checks the destination against its device certificate. Numeric targets use the
+original asset ID field; the build host and destination must authenticate in the
+same v1 organization.
 
 V1 app networking retains numeric names such as
 `device-674.mesh.wendy.internal` and the `cloud.wendy.dev` alias, deterministic

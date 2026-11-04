@@ -82,11 +82,8 @@ func buildServicesRemote(
 
 	// One target, resolved once. Its mesh identity, registry port and agent port
 	// are the same for every service; only the repository differs.
-	base, err := targetPushTargetBase(ctx, conn)
+	base, err := targetPushTargetBase(ctx, conn, builder)
 	if err != nil {
-		return nil, err
-	}
-	if err := checkLegacyDeliverySupported(host, caps, []*agentpbv2.PushTarget{base}); err != nil {
 		return nil, err
 	}
 
@@ -162,12 +159,11 @@ func serviceBuildSpec(
 		Context:  manifest,
 		Chunking: buildChunkingMode(chunking),
 		PushTarget: &agentpbv2.PushTarget{
-			AssetUuid:            base.GetAssetUuid(),
-			AssetId:              base.GetAssetId(),
-			LegacyOrganizationId: base.GetLegacyOrganizationId(),
-			RegistryPort:         base.GetRegistryPort(),
-			Repository:           repo + ":latest",
-			AgentPort:            base.GetAgentPort(),
+			AssetUuid:    base.GetAssetUuid(),
+			AssetId:      base.GetAssetId(),
+			RegistryPort: base.GetRegistryPort(),
+			Repository:   repo + ":latest",
+			AgentPort:    base.GetAgentPort(),
 		},
 		Definition: &agentpbv2.BuildSpec_DockerfileBuild{
 			DockerfileBuild: &agentpbv2.DockerfileBuild{

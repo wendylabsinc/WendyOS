@@ -29,7 +29,7 @@ message AppRelease {
   string name = 4;
   string details = 5;
   optional string image_digest = 6;
-  google.protobuf.Timestamp created_at = 7;
+  google.protobuf.Timestamp created_at = 7; 
   google.protobuf.Timestamp updated_at = 8;
 }
 
@@ -94,7 +94,7 @@ message CreateDeploymentRequest {
   int32 app_release_id = 3;
   string details = 4;
   Running running = 5;
-}
+} 
 
 message GetDeploymentRequest {
   int32 id = 1;
@@ -145,3 +145,4 @@ enum Running {
   RUNNING = 1;
   STOPPED = 2;
 }
+

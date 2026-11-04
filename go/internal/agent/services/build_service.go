@@ -363,8 +363,7 @@ func (s *BuildService) GetBuildCapabilities(ctx context.Context, _ *agentpbv2.Ge
 		BuildkitRootInspectionSupported: true,
 		// Lets a CLI sending CHUNKING_MODE_FORCE tell this agent from one that
 		// would discard the field and push through the registry regardless.
-		ChunkDelivery:  true,
-		LegacyDelivery: s.resolveLegacyTarget != nil && s.legacyPushTLS != nil,
+		ChunkDelivery: true,
 	}
 	if available {
 		// Only the host's own platform is claimed native. Emulated platforms stay

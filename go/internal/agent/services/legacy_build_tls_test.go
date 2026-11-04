@@ -88,7 +88,7 @@ func TestLegacyBuildDeliveryPinsNumericIdentityAcrossLANFallback(t *testing.T) {
 	}, 50052)
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	conn, err := dial(ctx, &pb.PushTarget{AssetId: 675, LegacyOrganizationId: 64})
+	conn, err := dial(ctx, &pb.PushTarget{AssetId: 675})
 	if err != nil {
 		t.Fatal(err)
 	}

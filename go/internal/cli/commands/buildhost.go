@@ -427,7 +427,7 @@ func runRemoteBuild(
 		return err
 	}
 
-	pushTarget, err := targetPushTarget(ctx, target, appRepository(appCfg))
+	pushTarget, err := targetPushTarget(ctx, target, builder, appRepository(appCfg))
 	if err != nil {
 		return err
 	}
@@ -464,7 +464,7 @@ func runRemoteBuild(
 		if err := assertSamePlatform(ctx, name, conn, platform); err != nil {
 			return err
 		}
-		t, err := targetPushTarget(ctx, conn, appRepository(appCfg))
+		t, err := targetPushTarget(ctx, conn, builder, appRepository(appCfg))
 		if err != nil {
 			return fmt.Errorf("resolving %s as a delivery target: %w", name, err)
 		}
@@ -472,9 +472,6 @@ func runRemoteBuild(
 		nameOf[buildtarget.Key(t)] = name
 	}
 
-	if err := checkLegacyDeliverySupported(host, caps, pushTargets); err != nil {
-		return err
-	}
 	if err := checkFleetDeliverySupported(host, caps, len(pushTargets)); err != nil {
 		return err
 	}
@@ -692,8 +689,8 @@ func connectBuildHost(ctx context.Context, host string) (*grpcclient.AgentConnec
 // unreachable. The build host's peer dialer needs only the id (WDY-2356).
 // repository is "name:tag" — appRepository for a single-service app, the
 // per-service repo for one service of a group.
-func targetPushTarget(ctx context.Context, target *grpcclient.AgentConnection, repository string) (*agentpbv2.PushTarget, error) {
-	t, err := targetPushTargetBase(ctx, target)
+func targetPushTarget(ctx context.Context, target, builder *grpcclient.AgentConnection, repository string) (*agentpbv2.PushTarget, error) {
+	t, err := targetPushTargetBase(ctx, target, builder)
 	if err != nil {
 		return nil, err
 	}
@@ -705,7 +702,7 @@ func targetPushTarget(ctx context.Context, target *grpcclient.AgentConnection, r
 // that says WHERE a finished image goes, for a caller delivering several images
 // to the one device (a service group) that should resolve that once rather than
 // re-querying the device's mesh identity, OS and port per image.
-func targetPushTargetBase(ctx context.Context, target *grpcclient.AgentConnection) (*agentpbv2.PushTarget, error) {
+func targetPushTargetBase(ctx context.Context, target, builder *grpcclient.AgentConnection) (*agentpbv2.PushTarget, error) {
 	var remote peer.Peer
 	resp, err := agentpbv2.NewWendyProvisioningServiceClient(target.Conn).IsProvisioned(ctx, &agentpbv2.IsProvisionedRequest{}, grpc.Peer(&remote))
 	if err != nil {
@@ -719,6 +716,9 @@ func targetPushTargetBase(ctx context.Context, target *grpcclient.AgentConnectio
 		if err := verifiedLegacyBuildDelivery(target, &remote, prov.Provisioned); err != nil {
 			return nil, err
 		}
+		if err := verifiedLegacyBuildHostOrganization(builder, prov.Provisioned.GetOrganizationId()); err != nil {
+			return nil, err
+		}
 		agentOS, err := targetAgentOS(ctx, target)
 		if err != nil {
 			return nil, err
@@ -727,7 +727,7 @@ func targetPushTargetBase(ctx context.Context, target *grpcclient.AgentConnectio
 		if err != nil {
 			return nil, err
 		}
-		return &agentpbv2.PushTarget{AssetId: prov.Provisioned.GetAssetId(), LegacyOrganizationId: prov.Provisioned.GetOrganizationId(), RegistryPort: uint32(registryPort(agentOS)), AgentPort: port}, nil
+		return &agentpbv2.PushTarget{AssetId: prov.Provisioned.GetAssetId(), RegistryPort: uint32(registryPort(agentOS)), AgentPort: port}, nil
 	}
 	if _, err := meshid.ParseDeviceUUID(prov.Provisioned.GetAssetUuid()); err != nil {
 		return nil, fmt.Errorf("the target agent does not report a certificate device UUID; update and enroll it before remote delivery: %w", err)
@@ -1017,11 +1017,16 @@ func verifiedLegacyBuildDelivery(conn *grpcclient.AgentConnection, remote *peer.
 	}
 	return nil
 }
-func checkLegacyDeliverySupported(host string, caps *agentpbv2.GetBuildCapabilitiesResponse, targets []*agentpbv2.PushTarget) error {
-	for _, target := range targets {
-		if target.GetAssetId() != 0 && !caps.GetLegacyDelivery() {
-			return fmt.Errorf("build host %s does not support legacy Cloud delivery; update its agent", host)
+
+// Numeric delivery uses the build host's saved organization. Check its
+// authenticated identity against the destination before sending an asset ID;
+// no caller-supplied organization field is needed on the wire.
+func verifiedLegacyBuildHostOrganization(builder *grpcclient.AgentConnection, org int32) error {
+	if builder != nil {
+		identity, verified := builder.ObservedServerIdentity()
+		if verified && org > 0 && identity.OrgID == org && identity.EntityType == certs.EntityAsset && identity.LegacyURN() != "" {
+			return nil
 		}
 	}
-	return nil
+	return errors.New("numeric build target and build host must authenticate as devices in the same organization")
 }

@@ -61,10 +61,10 @@ device, so a build for one target cannot deliver to another.
 A device whose agent predates chunked delivery receives a registry push instead,
 as does a build run with `--chunking=off`. The build log says which route it took.
 
-Numeric Cloud v1 targets also require a build host that supports legacy
-delivery. The CLI checks this before submitting the build and asks you to update
-the host's agent if the capability is absent or false. This applies to both chunk
-and registry delivery; v2 targets continue to use device UUIDs.
+Numeric Cloud v1 targets use their original asset IDs. The CLI verifies that
+the build host and target authenticate in the same organization, and the build
+host resolves the asset ID within its saved enrollment. This applies to both
+chunk and registry delivery; v2 targets continue to use device UUIDs.
 
 ## Delivery credentials
 
@@ -114,15 +114,6 @@ Builds:       linux/arm64 natively
 
 `status` needs neither the builder role nor BuildKit to answer — that is the
 point of it. A device that is missing both still reports so.
-
-For the complete capability response, use:
-
-```sh
-wendy --json device build-host status --device spark-office
-```
-
-The `legacy_delivery` field reports numeric Cloud v1 delivery support. It does
-not enable the builder role or indicate that BuildKit is installed.
 
 ## Cache space safety
 

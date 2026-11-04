@@ -8,14 +8,14 @@ import (
 )
 
 func (s *BuildService) resolvePushTarget(target *pb.PushTarget) (DeliveryTarget, error) {
-	if target.GetAssetId() != 0 || target.GetLegacyOrganizationId() != 0 {
-		if target.GetAssetUuid() != "" || target.GetAssetId() <= 0 || target.GetLegacyOrganizationId() < 0 {
+	if target.GetAssetId() != 0 {
+		if target.GetAssetUuid() != "" || target.GetAssetId() <= 0 {
 			return DeliveryTarget{}, fmt.Errorf("invalid or mixed legacy build target")
 		}
 		if s.resolveLegacyTarget == nil {
 			return DeliveryTarget{}, fmt.Errorf("build host does not support legacy delivery")
 		}
-		return s.resolveLegacyTarget(target.GetLegacyOrganizationId(), target.GetAssetId())
+		return s.resolveLegacyTarget(0, target.GetAssetId())
 	}
 	return s.resolveTarget(target.GetAssetUuid())
 }
