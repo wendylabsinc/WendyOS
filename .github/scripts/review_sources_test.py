@@ -369,6 +369,64 @@ class WorkflowTests(unittest.TestCase):
             fake.stdout = output.getvalue()
             return fake
 
+    def integration_real_git(self, base_files, head_files):
+        """Run the review step against a real repository checked out at its base."""
+        fake = Mock()
+        fake.Anthropic.return_value.messages.create.return_value = SimpleNamespace(
+            stop_reason='end_turn', content=[SimpleNamespace(text='NO_CHANGES_NEEDED')])
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)
+            base, head, raw = commit_pair(path, {
+                'go/scripts/test-ci.sh': b'ALL_TESTS=()\n',
+                '.github/workflows/integration-tests.yml': b'name: integration\n',
+                '.github/ci-tests/python-a/main.py': b'print("PASS")\n',
+                **base_files}, head_files)
+            git(path, 'checkout', '-q', base)
+            (path / '.github/scripts').mkdir(parents=True)
+            (path / '.github/scripts/review_sources.py').touch()
+            (path / 'pr.diff').write_bytes(raw)
+            parsed = source.parse_diff(raw.decode(), allow_binary=True)
+            (path / 'pr_meta.json').write_text(json.dumps({k: parsed[k] for k in ('changed_files', 'additions', 'deletions')}))
+            env = dict(GITHUB_ENV=str(path/'env'), REVIEW_FILE=str(path/'review.md'),
+                       EXPECTED_HEAD_SHA=head, PR_TITLE='Test', PR_BODY='', PR_NUMBER='42')
+            with working_directory(path), patch.dict(os.environ, env), patch.dict(sys.modules, {'anthropic': fake}), \
+                 redirect_stdout(io.StringIO()):
+                with self.assertRaises(SystemExit) as finished:
+                    exec(inline('integration-test-review.yml', 0), {})
+            self.assertEqual(finished.exception.code, 0)
+            fake.raw = raw
+            fake.manifest = json.loads((path/'integration-input-manifest.json').read_text())
+            return fake
+
+    def test_integration_skips_non_utf8_test_files_from_real_git(self):
+        binary = b'RIFF\xff\xfe\x00\x01 not text'
+        for label, base_files, head_files in (
+            ('added by the PR', {}, {'.github/ci-tests/python-a/sample.wav': binary}),
+            ('already on base', {'.github/ci-tests/python-a/sample.wav': binary}, {'src/a.go': b'package a\n'}),
+        ):
+            with self.subTest(label):
+                fake = self.integration_real_git(base_files, head_files)
+                request = str(fake.Anthropic.return_value.messages.create.call_args)
+                self.assertIn('### .github/ci-tests/python-a/main.py', request)
+                self.assertNotIn('### .github/ci-tests/python-a/sample.wav', request)
+
+    def test_integration_real_git_context_reads_the_head_revision(self):
+        fake = self.integration_real_git({}, {'.github/ci-tests/python-new/main.py': b'print("NEW_TEST_BODY")\n',
+                                              'go/proto/gen/agentpb/x.pb.go': b'GENERATED_PAYLOAD_DO_NOT_SEND\n'})
+        request = str(fake.Anthropic.return_value.messages.create.call_args)
+        self.assertIn('NEW_TEST_BODY', request)
+        self.assertIn('python-a, python-new', request)
+        self.assertNotIn('GENERATED_PAYLOAD_DO_NOT_SEND', request)
+
+    def test_integration_keeps_carriage_returns_in_diff_bytes(self):
+        for label, content in (('lone', b'// foo\rbar\n'), ('crlf', b'// foo\r\nbar\r\n')):
+            with self.subTest(label):
+                fake = self.integration_real_git({}, {'src/a.go': content})
+                self.assertIn(b'\r', fake.raw)
+                self.assertEqual(fake.manifest['diff_bytes'], len(fake.raw))
+                self.assertEqual(fake.manifest['diff_sha256'], hashlib.sha256(fake.raw).hexdigest())
+                self.assertIn('foo', str(fake.Anthropic.return_value.messages.create.call_args))
+
     def test_integration_mixed_filters_before_model(self):
         fake = self.integration(diff() + diff('source.go', 'SOURCE_CODE'))
         request = str(fake.Anthropic.return_value.messages.create.call_args)

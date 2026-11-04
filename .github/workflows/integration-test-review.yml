@@ -81,8 +81,7 @@ jobs:
                   return False
               SOURCE_ONLY_RULE = ''
 
-          with open('pr.diff', encoding='utf-8') as f:
-              diff = f.read()
+          diff = pathlib.Path('pr.diff').read_bytes().decode('utf-8')
 
           if not diff.strip():
               print('Empty diff — skipping')
@@ -122,7 +121,10 @@ jobs:
           tests_context = ''
           total_bytes = 0
           for path in sorted(test_paths):
-              content = subprocess.check_output(['git', 'show', f'{revision}:{path}']).decode('utf-8')
+              try:
+                  content = subprocess.check_output(['git', 'show', f'{revision}:{path}']).decode('utf-8')
+              except UnicodeDecodeError:
+                  continue
               if total_bytes + len(content.encode()) <= 20000:
                   tests_context += f'\n### {path}\n```\n{content}\n```\n'
                   total_bytes += len(content.encode())
