@@ -19,7 +19,7 @@ func TestOperatorStalePassiveRecipeCannotClearDisconnectedIntent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	stale := OperatorSpec{Version: 1, Principal: operator.Principal(), Automatic: true}
+	stale := OperatorSpec{Version: 2, Principal: operator.Principal()}
 	spec, err := operatorSpec(stale, certificate)
 	if err != nil {
 		t.Fatal(err)
@@ -88,7 +88,7 @@ func TestOperatorExplicitResumeWaitsForDisconnectedOwnerDrain(t *testing.T) {
 	workers.Add(1)
 	go func() {
 		defer workers.Done()
-		_, e := PrepareOperator(ctx, certificate, "192.0.2.10:43024", "22222222-2222-4222-8222-222222222222")
+		_, e := EnableOperatorAutomatic(ctx, certificate)
 		resumeDone <- e
 	}()
 	select {

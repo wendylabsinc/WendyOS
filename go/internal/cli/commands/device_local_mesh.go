@@ -152,7 +152,7 @@ func newDeviceLocalMeshCmd() *cobra.Command {
 		}
 		return printLocalMeshStatus(cmd, response)
 	}}
-	root.AddCommand(configure, inspect, newDeviceLocalMeshTopologyCmd(), newDeviceOperatorMeshConnectCmd(), newDeviceOperatorMeshDisconnectCmd(), newDeviceOperatorMeshDiscoverCmd(), newDeviceMeshForwardCmd(), newDeviceMeshServicesCmd())
+	root.AddCommand(configure, inspect, newDeviceLocalMeshTopologyCmd(), newDeviceOperatorMeshConnectCmd(), newDeviceOperatorMeshDisconnectCmd(), newDeviceMeshForwardCmd(), newDeviceMeshServicesCmd())
 	return root
 }
 
