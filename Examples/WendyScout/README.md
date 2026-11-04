@@ -24,15 +24,23 @@ wendy --json --device <dev-thor> device apps start sh.wendy.scout --detach
 
 `sh.wendy.scout` contains trusted control and isolated worker services. Stop the
 bare app ID to stop both and their test children. Weights and evidence persist
-across restart/redeploy. The first start downloads an 18.6 GB Qwen3-Coder-30B-A3B Q4_K_M GGUF on-device;
+across restart/redeploy. Current pins select a Qwen3.8-Flash-Next trial: the llama.cpp-maintainer IQ4_NL
+conversion, 102.05 GB in two shards downloaded on-device;
 `control/pins.json` pins its revision/digest, official ARM64 CUDA base image and
 Pi 0.73.1. GPU offload is required. There is one local model provider and no
 cloud-model fallback. The model server uses host loopback port 18081.
 
-The official 56.7 GB Qwen3-Coder-Next Q5_K_M trial cache is retained. Its pins are
-recoverable in both service directories at commit `94adb2770`; the loader supports
-its four official shards. The active model was restored to 30B after the loop
-failure described below.
+The earlier 18.6 GB 30B and 56.7 GB Coder-Next caches remain for rollback. Restore
+both service `pins.json` files from `29ede24d5` for 30B, then redeploy; the cached
+weights are reused. Coder-Next trial pins remain at `94adb2770`.
+
+Flash uses the existing pinned ARM64 CUDA 13 image (upstream llama.cpp
+`39febd2adb947b70da35e95f9351b3bf58ad170a`, including `qwen4exp` support). The
+trial uses 16K context, no vision/MTP, CPU-resident n-gram embeddings, explicit
+non-thinking sampling and a bounded 4096-token output budget. A 600-second
+model-load window is separate from session deadlines. Startup requires available
+RAM for all weight bytes plus 12 GiB. Pinning and runtime support do not establish
+quality or successful tool use; live trial results are pending.
 
 Normal operation starts a fresh bounded session, retains its evidence, waits
 60 seconds, and repeats until the app stops. Public context/releases are cached
@@ -138,7 +146,7 @@ accepted. A second normal session passed proof in 114.24 seconds. The following 
 ended in 21.30 seconds with narration claiming commands and an invented nonce,
 but no tool events, scripts or results. The unchanged proof gate held the loop.
 Next therefore demonstrated compatibility but unreliable tool use in this
-setup; the normal loop was restored to cached 30B. Trial weights and pins remain
+setup; the loop was restored to cached 30B before the later Flash trial. Trial weights and pins remain
 recoverable. No quality or benchmark improvement is established.
 
 The original 30B model mistook additive help text for a regression; trusted
