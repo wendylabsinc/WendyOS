@@ -42,10 +42,14 @@ class Local:
     def reset_fixture(self):
         self.cleanup_scratch()
         owner = self.fixture / "owner.json"
+        if owner.is_symlink() or owner.exists() and owner.stat().st_size > 4096:
+            raise ValueError("Invalid fixture ownership record")
         if owner.exists():
             if json.loads(owner.read_text()).get("app") != self.scratch:
                 raise ValueError("Fixture volume ownership mismatch")
         else:
+            if any(self.fixture.iterdir()):
+                raise ValueError("Refusing to claim nonempty unowned fixture volume")
             with owner.open("x") as f:
                 json.dump({"app": self.scratch}, f)
         for name in ["request.json", "state.json"]:
