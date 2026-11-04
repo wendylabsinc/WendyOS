@@ -160,6 +160,26 @@ class ProjectionTests(unittest.TestCase):
             self.assertEqual(common.context()["issues"][0]["body"], "")
 
 
+class OwnedArgumentTests(unittest.TestCase):
+    def test_future_multi_target_parser_can_only_receive_owned_app(self):
+        p = probes.Probes.__new__(probes.Probes)
+        p.local = types.SimpleNamespace(verify_development=lambda: None)
+        p.scratch = "sh.wendy.scout.scratch.0000000000"
+        p.versions = {"nightly": {"tag": "2026.11.04-165715", "binary": "fixture"}}
+        p.socket = "/run/wendy/agent/agent.sock"
+        p.deadline = None
+        targets = []
+
+        def multi_stop(binary, argv, **kwargs):
+            targets.extend(argv[4:])
+            return {"exit": 0, "output": "{}"}
+
+        with patch.object(probes, "command", side_effect=multi_stop):
+            p.run("scratch_stop_extra", "nightly", None)
+        self.assertEqual(len(targets), 2)
+        self.assertEqual(set(targets), {p.scratch})
+
+
 class FreshMarkerTests(unittest.TestCase):
     def test_stored_or_attached_output_must_belong_to_current_fixture(self):
         p = probes.Probes.__new__(probes.Probes)

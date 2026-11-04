@@ -16,7 +16,8 @@ RECIPES = {
     "help_device": ["device", "--help"],
     "scratch_start": ["device", "apps", "start", SCRATCH],
     "scratch_stop": ["device", "apps", "stop", SCRATCH],
-    "scratch_stop_extra": ["device", "apps", "stop", SCRATCH, "scout-invalid-extra"],
+    # Even a future multi-target parser can only act on our owned app.
+    "scratch_stop_extra": ["device", "apps", "stop", SCRATCH, SCRATCH],
     "scratch_logs": ["device", "logs", SCRATCH, "--tail", "20", "--no-follow"],
     "scratch_remove": ["device", "apps", "remove", SCRATCH, "--force"],
 }
