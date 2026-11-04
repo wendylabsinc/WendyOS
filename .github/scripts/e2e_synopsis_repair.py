@@ -175,6 +175,11 @@ def candidate(files, source):
     return result
 
 
+def synopsis_words(literal):
+    # Brackets separate words too, so dropping one cannot join its neighbours.
+    return [word for word in re.split(r"[\[\]\s]+", literal) if word]
+
+
 def replace_literal(text, change):
     # No arbitrary patch input: one exact quoted literal in one approved file.
     for literal in (change["old"], change["new"]):
@@ -182,8 +187,7 @@ def replace_literal(text, change):
                 literal.startswith(change["command"] + " ") and literal.endswith(" [flags]"), "Disallowed literal")
     require(re.fullmatch(r"wendy(?: [a-z][a-z0-9-]*)+", change["command"]) and
             change["old"] != change["new"] and
-            re.sub(r"[\[\]]", "", change["old"]).split() ==
-            re.sub(r"[\[\]]", "", change["new"]).split(), "Disallowed edit")
+            synopsis_words(change["old"]) == synopsis_words(change["new"]), "Disallowed edit")
     require(text.count('"' + change["old"] + '"') == 1, "Stale/ambiguous source literal")
     return text.replace('"' + change["old"] + '"', '"' + change["new"] + '"', 1)
 

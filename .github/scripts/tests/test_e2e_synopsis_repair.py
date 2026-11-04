@@ -300,6 +300,16 @@ class RepairTests(unittest.TestCase):
         self.assertEqual(r.replace_literal(SOURCE, {**change, "new": NEW.replace(" [flags]", "  [flags]")}),
                          SOURCE.replace(OLD, NEW.replace(" [flags]", "  [flags]")))
 
+    def test_brackets_cannot_join_or_split_words(self):
+        command = "wendy foo"
+        for old, new in (("[a][b]", "ab"), ("ab", "a[b]"), ("[--force][--dry-run]", "--force--dry-run"),
+                         ("[a]-[b]", "[a]-b"), ("<a>[<b>]", "<a><b>"), ("a b", "ab"), ("a", "b")):
+            old, new = f"{command} {old} [flags]", f"{command} {new} [flags]"
+            with self.subTest(old=old, new=new), self.assertRaisesRegex(r.Skip, "Disallowed edit"):
+                r.replace_literal(f'"{old}"', {"command": command, "old": old, "new": new})
+        old, new = f"{command} [a] b [flags]", f"{command} a [b] [flags]"
+        self.assertEqual(r.replace_literal(f'"{old}"', {"command": command, "old": old, "new": new}), f'"{new}"')
+
     def test_real_result_guard_rejects_zero_extra_skipped_and_failed(self):
         change = r.candidate(evidence(), lambda p: SOURCE)
         r.verify_results(change, evidence(False)["test-results.xml"])
