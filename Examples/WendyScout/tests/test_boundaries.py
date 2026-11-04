@@ -5,6 +5,15 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "control"))
 import common, inference, probes, publisher
 
 
+class PinTests(unittest.TestCase):
+    def test_service_model_and_tool_pins_match(self):
+        root = pathlib.Path(__file__).resolve().parents[1]
+        self.assertEqual(
+            json.loads((root / "control/pins.json").read_text()),
+            json.loads((root / "worker/pins.json").read_text()),
+        )
+
+
 class InferenceTests(unittest.TestCase):
     def test_text_and_tool_results(self):
         b = {

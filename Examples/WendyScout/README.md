@@ -24,10 +24,15 @@ wendy --json --device <dev-thor> device apps start sh.wendy.scout --detach
 
 `sh.wendy.scout` contains trusted control and isolated worker services. Stop the
 bare app ID to stop both and their test children. Weights and evidence persist
-across restart/redeploy. The first start downloads an 18.6 GB GGUF on-device;
+across restart/redeploy. The first start downloads the official 56.7 GB Qwen3-Coder-Next Q5_K_M GGUF
+(four shards) on-device;
 `control/pins.json` pins its revision/digest, official ARM64 CUDA base image and
 Pi 0.73.1. GPU offload is required. There is one local model provider and no
 cloud-model fallback. The model server uses host loopback port 18081.
+
+The earlier 18.6 GB model cache is retained. To roll back, restore both
+`control/pins.json` and `worker/pins.json` from commit `0a917472b`, then redeploy;
+the single-file loader still works and reuses that cached GGUF.
 
 Normal operation starts a fresh bounded session, retains its evidence, waits
 60 seconds, and repeats until the app stops. Public context/releases are cached
@@ -117,10 +122,22 @@ Tested on an older Agent `2026.10.29-210857`, WendyOS `0.17.0`, CUDA `13.2`,
 follow-up; info/camera/audio enumeration and scratch lifecycle with past/current
 stable and nightly; kernel/FD/egress/resource/descendant checks; stop and forced
 controller recovery. Cached weight hashing took 16.45–16.50 seconds and cold GPU
-health 39–40 seconds. Two exploratory sessions took 78.18/47.63 seconds.
+health 39–40 seconds. A fresh 30B PoC session took 74.19 seconds.
 
-The model mistook additive help text for a regression; trusted checks accepted
-no finding. Replay covers a small set of exit/JSON/info-field/help predicates;
+The official Qwen3-Coder-Next Q5_K_M trial used the same prompt/tools, 16K context
+and CUDA image. All four shards passed their pinned hashes; download, verification
+and one rolling deployment took 9m55s (about 95 MB/s end to end). The existing
+server recognized `qwen3next`, offloaded 49/49 layers and used a 53,873.5 MiB GPU
+model buffer. Cold GPU health took 92.16 seconds, with about 68 GB RAM available
+at the startup snapshot. One fresh session completed in 140.04 seconds with
+actual tool/result proof. It ultimately called additive help text benign, but
+also tried unsupported report fields that the guard rejected. No regression was
+accepted. This single slower session demonstrates compatibility, not a reliable
+quality or benchmark improvement. The normal loop uses Next; rollback remains
+available above.
+
+The original 30B model mistook additive help text for a regression; trusted
+checks accepted no finding. Replay covers a small set of exit/JSON/info-field/help predicates;
 arbitrary script assertions remain exploratory. Earlier setup exposed Pi API
 compatibility, verbose partial events and context overflow; the current runtime
 uses pinned compatibility, completed-event capture and bounded context. An older
