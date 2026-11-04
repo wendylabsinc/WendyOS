@@ -89,6 +89,7 @@ struct ReviewHarnessTests {
         "Welcome from ~/.bash_profile\n\(claudeResultLine)\n",
         "\(claudeResultLine)\nGoodbye from ~/.bash_logout\n",
         "Welcome from ~/.bash_profile\n\(claudeVerboseSuccess)\n",
+        "\(claudeResultLine)\n{\"level\":\"info\",\"msg\":\"Goodbye\"}\n",
     ])
     func `shell output around the JSON line does not lose the result`(response: String) throws {
         let output = try runStub(response: response)
@@ -103,6 +104,8 @@ struct ReviewHarnessTests {
         "PRIVATE_NON_JSON\nPRIVATE_SECOND_LINE\n",
         #"[{"type":"system","subtype":"PRIVATE_INIT"},{"type":"assistant"}]"#,
         #"["PRIVATE_NOT_AN_OBJECT"]"#,
+        #"{"type":"system","subtype":"PRIVATE_INIT"}"#,
+        "{\"level\":\"PRIVATE_LOG\"}\n{\"type\":\"system\",\"subtype\":\"PRIVATE_INIT\"}\n",
     ])
     func `a successful exit with unusable output says its text was discarded`(
         response: String
@@ -111,6 +114,16 @@ struct ReviewHarnessTests {
         #expect(output.contains("any result text was discarded"))
         #expect(output.contains("total_cost_usd: unavailable"))
         #expect(!output.contains("PRIVATE_"))
+    }
+
+    @Test
+    func `a result with no text says so and keeps its usage`() throws {
+        let output = try runStub(
+            response: #"{"type":"result","subtype":"error_max_turns","usage":{"input_tokens":5}}"#,
+            status: 1
+        )
+        #expect(output.contains("any result text was discarded"))
+        #expect(output.contains("input_tokens: 5"))
     }
 
     @Test

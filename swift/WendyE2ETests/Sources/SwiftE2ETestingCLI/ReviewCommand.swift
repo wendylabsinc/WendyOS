@@ -295,10 +295,10 @@ struct ShellReviewHarness: Sendable {
             if let text = result?.result {
                 output.write(Data((text + "\n").utf8))
             }
-            if result == nil {
+            if result?.result == nil {
                 output.write(
                     Data(
-                        "==> Claude review output was not a JSON result; any result text was discarded.\n"
+                        "==> Claude review output had no usable JSON result; any result text was discarded.\n"
                             .utf8
                     )
                 )
@@ -360,9 +360,11 @@ private func decodeClaudeReviewResult(_ data: Data) -> ClaudeReviewResult? {
     if let result = decode(data) {
         return result
     }
-    // A login-shell profile can print around Claude's single JSON line.
+    // A login-shell profile can print around Claude's single JSON line. Its own
+    // JSON logging must not win, and any object decodes since every field is optional.
     return data.split(separator: UInt8(ascii: "\n")).reversed().lazy
-        .compactMap { decode(Data($0)) }.first
+        .compactMap { decode(Data($0)) }
+        .first { $0.type == "result" || $0.result != nil }
 }
 
 private func claudeReviewUsageSummary(
