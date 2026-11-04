@@ -17,6 +17,7 @@ from common import (
 from probes import Probes
 from local import Local
 from publisher import Publisher
+import status_page
 from inference import validate as validate_inference
 
 STOP = threading.Event()
@@ -572,17 +573,30 @@ def main():
     server = Server(str(path), Handler)
     os.chmod(path, 0o600)
     threading.Thread(target=server.serve_forever, daemon=True).start()
+    page = status_page.start(
+        "/work",
+        lambda: {
+            "ready": scout.ready,
+            "stopping": STOP.is_set(),
+            "worker_age": time.monotonic() - scout.worker_seen,
+            "error": getattr(scout, "error", None),
+        },
+    )
+    threading.Thread(target=page.serve_forever, daemon=True).start()
     try:
         scout.initialize()
         while not STOP.wait(1):
             if any(p.poll() is not None for p in CHILDREN):
                 raise RuntimeError("GPU model exited")
     except Exception as e:
+        scout.error = str(e)
         event("held", reason=str(e))
         while not STOP.wait(1):
             pass
     finally:
         shutdown()
+        page.shutdown()
+        page.server_close()
         server.shutdown()
         server.server_close()
         if hasattr(scout, "local"):

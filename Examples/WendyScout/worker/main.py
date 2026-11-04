@@ -1,6 +1,6 @@
 """Network-isolated worker. Its trusted bridge is the only link to control."""
 
-import ctypes, hashlib, http.client, http.server, json, os, pathlib, re, secrets, signal, socket, subprocess, sys, threading, time
+import datetime, ctypes, hashlib, http.client, http.server, json, os, pathlib, re, secrets, signal, socket, subprocess, sys, threading, time
 import sandbox
 
 ROOT = pathlib.Path("/opt/scout")
@@ -472,6 +472,20 @@ def model_session(begin, index):
     sel = selectors.DefaultSelector()
     sel.register(p.stdout, selectors.EVENT_READ)
     data = bytearray()
+    transcript = (run / "events.jsonl").open("ab", buffering=0)
+    transcript.write(
+        (
+            json.dumps(
+                {
+                    "type": "session_started",
+                    "timestamp_utc": datetime.datetime.now(
+                        datetime.timezone.utc
+                    ).isoformat(),
+                }
+            )
+            + "\n"
+        ).encode()
+    )
     pending = bytearray()
     started = time.monotonic()
     last_health = 0
@@ -519,9 +533,29 @@ def model_session(begin, index):
                         and entry.get("message", {}).get("role") == "user"
                     ):
                         continue
-                    data.extend(json.dumps(entry).encode() + b"\n")
+                    if entry.get("type") == "message_end":
+                        message = entry.get("message", {})
+                        entry = {
+                            "type": "message_end",
+                            "message": {
+                                "role": message.get("role"),
+                                "stopReason": message.get("stopReason"),
+                                "errorMessage": message.get("errorMessage"),
+                                "content": [
+                                    c
+                                    for c in message.get("content", [])
+                                    if c.get("type") in {"text", "toolCall"}
+                                ],
+                            },
+                        }
+                    entry["timestamp_utc"] = datetime.datetime.now(
+                        datetime.timezone.utc
+                    ).isoformat()
+                    encoded = json.dumps(entry).encode() + b"\n"
+                    data.extend(encoded)
                     if len(data) > 1024 * 1024:
                         raise ValueError("Pi retained output limit")
+                    transcript.write(encoded)
     except Exception as e:
         failure = type(e).__name__ + ": " + str(e)[:500]
     finally:
@@ -538,7 +572,8 @@ def model_session(begin, index):
         p.stdout.close()
         CHILDREN.remove(p)
         SESSION["finished"] = True
-        (run / "events.jsonl").write_bytes(data)
+        transcript.close()
+        sel.close()
     final = []
     for line in data.decode(errors="replace").splitlines():
         try:
@@ -568,6 +603,23 @@ def model_session(begin, index):
         "seconds": time.monotonic() - started,
     }
     (run / "result.json").write_text(json.dumps(result, indent=2))
+    with (run / "events.jsonl").open("ab", buffering=0) as f:
+        f.write(
+            (
+                json.dumps(
+                    {
+                        "type": "session_finished",
+                        "timestamp_utc": datetime.datetime.now(
+                            datetime.timezone.utc
+                        ).isoformat(),
+                        "exit": result["exit"],
+                        "proof": proof,
+                        "seconds": result["seconds"],
+                    }
+                )
+                + "\n"
+            ).encode()
+        )
     control("/finish", {"session": begin["session"], **result})
     event({"kind": "session_done", "index": index, **result})
     import shutil

@@ -36,6 +36,23 @@ For operator validation, `--env SCOUT_MAX_SESSIONS=1` stops further sessions aft
 one result while keeping the worker alive. `--env SCOUT_BOOTSTRAP=1` performs
 kernel/offline-CLI checks without loading the model.
 
+## Live transcript
+
+The app declares one read-only HTTP page on port **8087**. Open
+`http://<thor-lan-ip>:8087/` on a reachable LAN, or in Companion enable the
+existing Wendy Mesh VPN, select the Development device, then Apps → Scout → Open.
+The HTTP entitlement supplies that existing Open route; no mesh transport is
+implemented here. Companion Mesh browser access must be tested on the actual
+client; it is not implied by a successful local HTTP check.
+
+The page refreshes every five seconds and shows the latest bounded transcript,
+session/time/state, visible unverified model narration, submitted scripts and
+redacted worker results. `events.jsonl` is appended and flushed during the run,
+including before `result.json` exists; interruption preserves completed events.
+Hidden reasoning and raw private control probes are excluded from the page.
+Only GET `/` is served, with no control buttons or file/download routes. Stopping
+the app makes its page unreachable. An absent heartbeat is marked stale.
+
 ## Credentials
 
 The control service uses the documented `admin` entitlement and local Agent Unix
