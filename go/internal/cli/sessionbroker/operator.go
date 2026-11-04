@@ -11,7 +11,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
@@ -37,15 +36,10 @@ const operatorStateBytes = 4*operatorJSONPrincipalBytes + 4096
 // persistent profile. One context belongs to an exact operator principal and
 // that profile's persisted endpoint instance, independently of its first hop.
 type OperatorSpec struct {
-	Version       int    `json:"version"`
-	Automatic     bool   `json:"automatic,omitempty"`
-	Enabled       bool   `json:"enabled,omitempty"`
-	Disconnected  bool   `json:"disconnected,omitempty"`
-	Principal     string `json:"principal"`
-	RouterAddress string `json:"routerAddress"`
-	Transport     string `json:"transport,omitempty"`
-	BLEPSM        uint16 `json:"blePsm,omitempty"`
-	RouterUUID    string `json:"routerUuid"`
+	Version      int    `json:"version"`
+	Disconnected bool   `json:"disconnected,omitempty"`
+	Enabled      bool   `json:"enabled,omitempty"`
+	Principal    string `json:"principal"`
 }
 
 // MeshSelector is the canonical full tenant/device selector. Parsing conveys
@@ -94,48 +88,15 @@ func (s Spec) paths(dir string) (string, string) {
 }
 func (s Spec) validateOperator() error {
 	recipe := s.Operator
-	if recipe.Version != 1 {
+	if recipe.Version != 2 {
 		return errors.New("unsupported operator broker recipe version")
 	}
 	operator, err := meshoperator.ParsePrincipal(recipe.Principal)
 	if err != nil {
 		return err
 	}
-	if recipe.Automatic && recipe.RouterUUID == "" && recipe.RouterAddress == "" {
-		if recipe.Transport != "" || recipe.BLEPSM != 0 || s.Key != operatorKey(recipe.Principal) || s.Expected != (certs.WendyIdentity{}) || s.Host != operator.Principal() || s.Addr != s.Host || s.CertFingerprint == "" {
-			return errors.New("automatic operator context identity differs")
-		}
-		return nil
-	}
-	device, err := meshid.ParseDevice(operator.Tenant(), recipe.RouterUUID)
-	if err != nil {
-		return err
-	}
-	switch recipe.Transport {
-	case "", "tcp":
-		host, port, err := net.SplitHostPort(recipe.RouterAddress)
-		p, portErr := strconv.Atoi(port)
-		if err != nil || host == "" || portErr != nil || p <= 0 || p > 65535 || len(recipe.RouterAddress) > 512 || recipe.BLEPSM != 0 {
-			return errors.New("operator first hop requires a TLS host:port")
-		}
-	case "ble":
-		// A macOS peripheral UUID or Linux LE address is merely a connection hint;
-		// TLS still proves the separate exact enrolled router UUID.
-		addressOK := false
-		if parsed, err := uuid.Parse(recipe.RouterAddress); err == nil && strings.EqualFold(parsed.String(), recipe.RouterAddress) {
-			addressOK = true
-		}
-		if parsed, err := net.ParseMAC(recipe.RouterAddress); err == nil && len(parsed) == 6 {
-			addressOK = true
-		}
-		if !addressOK || (recipe.BLEPSM != 0 && (recipe.BLEPSM < 0x80 || recipe.BLEPSM > 0xff)) {
-			return errors.New("BLE operator first hop requires a peripheral UUID or LE address and dynamic PSM")
-		}
-	default:
-		return errors.New("operator transport must be tcp or ble")
-	}
-	if s.Key != operatorKey(recipe.Principal) || s.Expected != operatorExpected(device) || s.Host != MeshSelector(device) || s.Addr != s.Host || s.CertFingerprint == "" {
-		return errors.New("operator broker context and selected router differ")
+	if s.Key != operatorKey(recipe.Principal) || s.Expected != (certs.WendyIdentity{}) || s.Host != operator.Principal() || s.Addr != s.Host || s.CertFingerprint == "" {
+		return errors.New("operator context identity differs")
 	}
 	return nil
 }
@@ -144,17 +105,10 @@ func operatorSpec(recipe OperatorSpec, cert config.CertificateInfo) (Spec, error
 	if err != nil || operator.Principal() != recipe.Principal {
 		return Spec{}, errors.New("operator recipe differs from the selected primary credential")
 	}
-	if recipe.Automatic && recipe.RouterUUID == "" && recipe.RouterAddress == "" {
-		s := Spec{Operator: &recipe, Key: operatorKey(recipe.Principal), Host: operator.Principal(), Addr: operator.Principal(), CertFingerprint: certificateFingerprint(cert)}
-		return s, s.validate()
-	}
-	device, err := meshid.ParseDevice(operator.Tenant(), recipe.RouterUUID)
-	if err != nil {
-		return Spec{}, err
-	}
-	s := Spec{Operator: &recipe, Key: operatorKey(recipe.Principal), Host: MeshSelector(device), Addr: MeshSelector(device), Expected: operatorExpected(device), CertFingerprint: certificateFingerprint(cert), ParentPID: 0}
+	s := Spec{Operator: &recipe, Key: operatorKey(recipe.Principal), Host: operator.Principal(), Addr: operator.Principal(), CertFingerprint: certificateFingerprint(cert)}
 	return s, s.validate()
 }
+
 func operatorRecipePath(directory, principal string) string {
 	sum := sha256.Sum256([]byte(principal))
 	return filepath.Join(directory, "operator-contexts", hex.EncodeToString(sum[:])+".json")
@@ -174,26 +128,6 @@ func configuredOperator() (config.CertificateInfo, meshoperator.Operator, error)
 	certificate := auth.Certificates[0]
 	operator, err := operatorPrincipal(certificate)
 	return certificate, operator, err
-}
-
-// PrepareOperator stores the selected first hop and joins through the existing
-// detached session broker. Commands retain only their local IPC connection.
-func PrepareOperator(ctx context.Context, certificate config.CertificateInfo, address, router string) (*grpcclient.AgentConnection, error) {
-	return PrepareOperatorTransport(ctx, certificate, address, router, "", 0)
-}
-
-// PrepareOperatorTransport retains an explicit operator attachment over one
-// selected carrier. The broker's endpoint identity remains carrier-independent.
-func PrepareOperatorTransport(ctx context.Context, certificate config.CertificateInfo, address, router, transport string, psm uint16) (*grpcclient.AgentConnection, error) {
-	operator, err := operatorPrincipal(certificate)
-	if err != nil {
-		return nil, err
-	}
-	if transport == "tcp" {
-		transport = ""
-	}
-	recipe := OperatorSpec{Version: 1, Principal: operator.Principal(), RouterAddress: address, RouterUUID: router, Transport: transport, BLEPSM: psm}
-	return prepareOperatorRecipe(ctx, certificate, recipe, true)
 }
 
 func prepareOperatorRecipe(ctx context.Context, certificate config.CertificateInfo, recipe OperatorSpec, explicit bool) (*grpcclient.AgentConnection, error) {
@@ -218,9 +152,6 @@ func prepareOperatorRecipe(ctx context.Context, certificate config.CertificateIn
 	return connectOrStartOperator(ctx, spec, &certificate)
 }
 func writeOperatorRecipe(ctx context.Context, spec Spec, path string, recipe OperatorSpec, explicit bool) error {
-	if existing, err := readOperatorRecipe(path); err == nil && existing == recipe {
-		return nil
-	}
 	dir, err := brokerDir()
 	if err != nil {
 		return err
@@ -259,7 +190,7 @@ func writeOperatorRecipe(ctx context.Context, spec Spec, path string, recipe Ope
 		return err
 	}
 	if !locked {
-		return errors.New("run 'wendy device wendy-net disconnect' before changing a live operator first hop")
+		return errors.New("operator context is still shutting down")
 	}
 	defer func() { releaseLock(owner); owner.Close() }()
 	data, err := json.Marshal(recipe)
@@ -310,7 +241,7 @@ func operatorRecipeCurrent(spec Spec) error {
 		return errOperatorDisconnected
 	}
 	if !sameOperatorRecipe(current, *spec.Operator) {
-		return errors.New("configured operator first hop changed; resolve the mesh selector again")
+		return errors.New("configured operator context changed; resolve the mesh selector again")
 	}
 	return nil
 }
@@ -333,6 +264,11 @@ func readOperatorRecipe(path string) (OperatorSpec, error) {
 		return recipe, errors.New("oversized operator recipe")
 	}
 	err = json.Unmarshal(data, &recipe)
+	if err == nil && recipe.Version == 1 {
+		// Version 1 also stored an optional first-hop address and router. They
+		// are deliberately discarded: all new sessions discover neighbours.
+		recipe.Version = 2
+	}
 	return recipe, err
 }
 
@@ -368,7 +304,7 @@ func ConnectOperator(ctx context.Context, selector string) (*grpcclient.AgentCon
 			return nil, prepareErr
 		}
 		_ = adjacent.Close()
-		// Reload the saved exact peer after automatic preparation. The target
+		// Reload the operator context after automatic preparation. The target
 		// remains the caller's full tenant/device selector.
 		return ConnectOperator(ctx, selector)
 	}
@@ -377,7 +313,7 @@ func ConnectOperator(ctx context.Context, selector string) (*grpcclient.AgentCon
 		return nil, err
 	}
 	adjacent, err := connectOrStartOperator(ctx, spec, &certificate)
-	if err != nil || spec.Expected == operatorExpected(device) {
+	if err != nil {
 		return adjacent, err
 	}
 	_ = adjacent.Close()
@@ -525,7 +461,7 @@ func DisconnectOperator(ctx context.Context) error {
 	path := operatorRecipePath(directory, operator.Principal())
 	recipe, err := readOperatorRecipe(path)
 	if os.IsNotExist(err) {
-		recipe = OperatorSpec{Version: 1, Principal: operator.Principal(), Automatic: true}
+		recipe = OperatorSpec{Version: 2, Principal: operator.Principal()}
 	} else if err != nil {
 		return err
 	}
@@ -614,11 +550,15 @@ func connectOperatorProxy(ctx context.Context, spec Spec, certificate *config.Ce
 		return nil, errors.New("oversized operator broker state")
 	}
 	var state stateFile
+	if json.Unmarshal(data, &state) == nil && state.Spec.Operator != nil && state.Spec.Key == spec.Key && state.Spec.Operator.Principal == spec.Operator.Principal && state.IPCVersion != operatorIPCVersion {
+		// Drain an older broker before replacing its saved first-hop policy.
+		return nil, errOperatorProtocolChanged
+	}
 	if json.Unmarshal(data, &state) == nil && state.Spec.Operator != nil && sameOperatorRecipe(*state.Spec.Operator, *spec.Operator) && state.Spec.Key == spec.Key && state.Spec.CertFingerprint != spec.CertFingerprint {
 		return nil, errOperatorCredentialsChanged
 	}
 	if json.Unmarshal(data, &state) != nil || state.Spec.Operator == nil || !sameOperatorRecipe(*state.Spec.Operator, *spec.Operator) || state.Spec.Expected != spec.Expected || state.Spec.CertFingerprint != spec.CertFingerprint || state.Spec.Key != spec.Key {
-		return nil, errors.New("operator broker is owned by different selected credentials or first hop")
+		return nil, errors.New("operator broker is owned by different selected credentials")
 	}
 	if state.IPCVersion != operatorIPCVersion {
 		return nil, errOperatorProtocolChanged
@@ -676,7 +616,7 @@ func runOperator(ctx context.Context, dir string, spec Spec, idleTTL time.Durati
 	intentDone := watchOperatorRecipe(joining, spec, cancel)
 	defer func() { stopWatching(); <-intentDone }()
 	attachment := &operatorAttachment{directory: directory, spec: spec, certificate: selected}
-	initial, err := attachment.open(owner, *spec.Operator)
+	initial, err := attachment.open(owner)
 	stopWatching()
 	<-intentDone
 	if err != nil {
@@ -706,9 +646,6 @@ func runOperator(ctx context.Context, dir string, spec Spec, idleTTL time.Durati
 	return serveResolvedLocal(owner, dir, spec, nil, idleTTL, func() bool {
 		if host := embeddedHost.Load(); host != nil && host.active.Load() {
 			return true // The foreground app owns the routing lease.
-		}
-		if !spec.Operator.Automatic {
-			return true
 		}
 		if latest, err := readOperatorRecipe(operatorRecipePath(directory, spec.Operator.Principal)); err == nil && sameOperatorRecipe(latest, *spec.Operator) && latest.Enabled {
 			return true

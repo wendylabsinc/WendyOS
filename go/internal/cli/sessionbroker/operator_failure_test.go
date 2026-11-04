@@ -140,7 +140,7 @@ func TestOperatorFailureChildStartupCauseSurvivesDetachedBoundary(t *testing.T) 
 	loadConfig = func() (*config.Config, error) {
 		return &config.Config{Auth: []config.AuthConfig{{Certificates: []config.CertificateInfo{credential}}}}, nil
 	}
-	recipe := OperatorSpec{Version: 1, Automatic: true, Principal: principal}
+	recipe := OperatorSpec{Version: 2, Principal: principal}
 	spec, err := operatorSpec(recipe, credential)
 	if err != nil {
 		t.Fatal(err)

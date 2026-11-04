@@ -85,11 +85,7 @@ First-hop routers need operator-capable agents or supported PSRAM Lite firmware;
 older agents reject operator joins. If mesh discovery is unavailable, check the
 selected organization, certificate and router version. Ordinary discovery
 continues. See [Connect from your computer](/docs/advanced/development/local-mesh-radio)
-for Lite limits, service forwarding and explicit first-hop selection.
-
-For BLE first-hop addresses, run `wendy device wendy-net discover --transport ble`.
-It lists unverified radio candidates, including the CoreBluetooth peripheral UUID
-needed on macOS.
+for Lite limits, service forwarding and automatic mesh joining.
 
 ## Platform support
 
