@@ -355,7 +355,7 @@ and are ignored when `notify.on` is `episode_committed`. The immediate modes
 | `fleet` | no | Fleet selector retained with the plan. A direct device deployment applies to the connected device, and so do `campaign disarm` and `campaign remove`. |
 | `sources` | yes | One or more source entries. |
 | `capture` | yes | Buffer, post-trigger duration, and triggers. |
-| `upload` | yes | Upload condition, optional logical destination, and optional rate cap. |
+| `upload` | yes | Upload condition, optional destination (empty uploads nothing; `wendy` is Wendy Cloud), and optional rate cap. |
 | `retention` | no | Optional on-device storage bounds. |
 | `export` | yes | Annotation integration lifecycle intent. |
 | `models` | no | Map of model name to deployed version, copied into Episodes. |
@@ -491,7 +491,7 @@ The `upload` and `retention` blocks:
 | Field | Required | Description |
 |---|---|---|
 | `upload.when` | yes | One of `always`, `wifi`, or `manual`. |
-| `upload.destination` | no | Logical dataset name the fleet backend maps to storage. Not a URL; devices never receive bucket layouts or credentials through campaign plans. |
+| `upload.destination` | no | Where this campaign's episodes upload. **Empty (the default) means they do NOT upload** — they stay on the device, so a campaign never sends data to the cloud without asking. `wendy` (or `default`) uploads to the production Wendy Data Platform; any other value is a host or `host:port` of a staging or self-hosted platform (any URL scheme and path are stripped). Never a credential or a bucket layout: the device's tenant and bucket are resolved from its certificate identity, so a plan carries no storage secret even when it names where episodes go. |
 | `upload.max_rate` | no | Upload bandwidth cap in bytes per second; plain integers and rates such as `5MB/s` are accepted. |
 | `retention.local_quota` | no | Declared on-device episode storage bound in bytes; plain integers and sizes such as `10GiB` are accepted. Stored with the plan; this release enforces only the device-wide quota and deployment prints a warning. |
 
@@ -692,7 +692,8 @@ capture:
 
 upload:
   when: wifi
-  destination: forklift-episodes
+  destination: wendy   # upload to Wendy Cloud; omit to keep episodes on the
+                       # device, or name a host for a staging/self-hosted ingest.
   max_rate: 5MB/s
 
 retention:
@@ -866,9 +867,14 @@ Wendy Data can't record: the disk holding /var/lib/wendy-agent/data/episodes has
 - Upload policy: `upload.when` and `upload.max_rate` are applied by the agent's
   episode transfer worker, which uploads sealed episodes to the cloud ingest
   service. `wifi` is currently treated as `always` because no device
-  network-type signal is plumbed to the worker yet. `upload.destination` is a
-  logical dataset name stored with the plan; the device never receives bucket
-  layouts or credentials.
+  network-type signal is plumbed to the worker yet. `upload.destination` names
+  where this campaign's episodes upload; when it is empty they do NOT upload and
+  stay on the device, so a campaign never sends data to the cloud without asking.
+  `wendy` (or `default`) uploads to the production Wendy Data Platform; any other
+  value is a host of a staging or self-hosted platform. It is only a host, never
+  a credential or a bucket layout: the device's tenant and bucket come from its
+  certificate identity, so a plan carries no storage secret even when it names
+  where episodes go.
 - Per-source capture modes other than `continuous` are validated and stored,
   with camera `snapshot` and audio `threshold` implemented. Other combinations
   record continuously and deployment warns per source. Camera snapshot and
