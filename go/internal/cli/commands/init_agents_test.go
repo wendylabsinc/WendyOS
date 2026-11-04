@@ -52,23 +52,43 @@ func TestRenderInitAgentsMD_TailorsTargetAndLanguage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"written in Node (TypeScript)", "wendy run --detach --wait-ready", "wendy project add gpu", "guides/tutorials/typescript/hello-world/", "wendy device logs --app demo"} {
+	for _, want := range []string{"written in Node (TypeScript)", "`wendy run --detach` returns", "add `--wait-ready`", "rejects the flag for this project, drop it", "wendy project add gpu", "guides/tutorials/typescript/hello-world/", "wendy device logs --app demo", "`device_connect`", "`container_list`", "`telemetry_logs`"} {
 		if !strings.Contains(string(linux), want) {
 			t.Errorf("WendyOS AGENTS.md is missing %q", want)
 		}
+	}
+	// --wait-ready refuses scaffolded Swift packages and multi-service projects,
+	// and fails an app that exits, so it must not read as the default deploy.
+	if strings.Contains(string(linux), "wendy run --detach --wait-ready") {
+		t.Error("WendyOS AGENTS.md recommends --wait-ready for every project")
 	}
 
 	lite, err := renderInitAgentsMD("demo", targetWendyLite, langSwift)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, unwanted := range []string{"--wait-ready", "wendy project add", "wendy device apps", "hello-world"} {
+	// device_connect refuses Wendy Lite (selectedAgent), and the container and
+	// log tools need that connection.
+	for _, unwanted := range []string{"--wait-ready", "wendy project add", "wendy device apps", "hello-world", "device_connect", "container_list", "telemetry_logs"} {
 		if strings.Contains(string(lite), unwanted) {
 			t.Errorf("Wendy Lite AGENTS.md mentions WendyOS-only %q", unwanted)
 		}
 	}
 	if !strings.Contains(string(lite), "installation/wendy-lite-esp32/") {
 		t.Error("Wendy Lite AGENTS.md does not link the ESP32 setup page")
+	}
+	if !strings.Contains(string(lite), "Use `wendy run` and `wendy device logs` from the CLI") {
+		t.Error("Wendy Lite AGENTS.md does not point at the CLI in place of the MCP device tools")
+	}
+
+	mac, err := renderInitAgentsMD("demo", targetDarwin, langSwift)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"`wendy run --detach` returns after deploying", "`device_connect`", "`container_list`", "`telemetry_logs`"} {
+		if !strings.Contains(string(mac), want) {
+			t.Errorf("Mac AGENTS.md is missing %q", want)
+		}
 	}
 }
 
