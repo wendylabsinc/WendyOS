@@ -31,7 +31,6 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/ble/central"
 	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
-	"github.com/wendylabsinc/wendy/go/internal/shared/devicepin"
 	"github.com/wendylabsinc/wendy/go/internal/shared/flock"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshid"
 	"github.com/wendylabsinc/wendy/go/internal/shared/meshoperator"
@@ -42,15 +41,9 @@ import (
 const JoinSetupTimeout = 60 * time.Second
 
 type Options struct {
-	Automatic      bool
 	CarrierSources []carriers.Source
-	Discover       func(context.Context) ([]Options, error)
 	StateDirectory string
 	Certificate    config.CertificateInfo
-	RouterAddress  string
-	Transport      string
-	BLEPSM         uint16
-	RouterUUID     string
 	// ReportCarrierFailure is an optional local diagnostics sink. It receives
 	// no certificate or request payload and must not change attachment policy.
 	ReportCarrierFailure func(transport string, err error)
@@ -74,11 +67,9 @@ type Session struct {
 	Node            *localmesh.Node
 	options         Options
 	routerConfig    meshoperatorlink.ClientConfig
-	initialRouter   *meshoperatorlink.RouterLink
 	nodeCancel      context.CancelFunc
 	linkMu          sync.RWMutex
 	links           map[*meshoperatorlink.RouterLink]managedCarrier
-	initialOnce     sync.Once
 	linkChanged     chan struct{}
 	adjacentPeer    meshid.Device
 	link            *meshoperatorlink.Link
@@ -328,14 +319,6 @@ func Open(ctx context.Context, options Options) (_ *Session, err error) {
 	if err != nil {
 		return nil, err
 	}
-	var router meshid.Device
-	automatic := options.Automatic && options.RouterUUID == "" && options.RouterAddress == ""
-	if !automatic {
-		router, err = meshid.ParseDevice(tenant, options.RouterUUID)
-		if err != nil {
-			return nil, err
-		}
-	}
 	state, release, err := reserveEndpoint(options.StateDirectory, identity.Operator())
 	if err != nil {
 		return nil, err
@@ -348,56 +331,18 @@ func Open(ctx context.Context, options Options) (_ *Session, err error) {
 	}()
 	var revision atomic.Uint64
 	revision.Store(state.Revision)
-	cfg := meshoperatorlink.ClientConfig{Identity: identity, Signer: signer, Instance: state.Instance, Router: router, Roots: roots}
-	var tlsConfig *tls.Config
-	var secure *tls.Conn
-	if !automatic {
-		tlsConfig, err = meshoperatorlink.ClientTLSConfig(cfg, certificate)
-		if err != nil {
-			return nil, err
-		}
-		tlsConfig.NextProtos = []string{meshoperatorlink.RouterALPN}
-		pins, e := devicepin.Open(options.StateDirectory)
-		if e != nil {
-			return nil, e
-		}
-		verify := tlsConfig.VerifyConnection
-		tlsConfig.VerifyConnection = func(state tls.ConnectionState) error {
-			if err := verify(state); err != nil {
-				return err
-			}
-			if err := pins.CheckAndUpdate(state.PeerCertificates[0], router.Principal()); err != nil {
-				var blocking certs.BlockingPinError
-				if errors.As(err, &blocking) {
-					return err
-				}
-			}
-			return nil
-		}
-		secure, err = dialOperatorTLS(ctx, options, tlsConfig)
-		if err != nil {
-			return nil, err
-		}
-	}
-	closeInitial := func() {
-		if secure != nil {
-			_ = secure.NetConn().Close()
-		}
-	}
+	cfg := meshoperatorlink.ClientConfig{Identity: identity, Signer: signer, Instance: state.Instance, Roots: roots}
 	credentials, err := localmesh.NewOperatorCredentials(info.PemCertificate, info.PemCertificateChain, key, uuid.UUID(state.Instance))
 	if err != nil {
-		closeInitial()
 		return nil, err
 	}
 	endpoint, err := netmesh.NewNetwork(credentials.Device)
 	if err != nil {
-		closeInitial()
 		return nil, err
 	}
 	directory := filepath.Join(options.StateDirectory, fmt.Sprintf("operator-router-%x", sha256.Sum256([]byte(identity.Operator().Principal()))))
 	if err = os.MkdirAll(directory, 0700); err != nil {
 		_ = endpoint.Close()
-		closeInitial()
 		return nil, err
 	}
 	parent, err := os.Open(options.StateDirectory)
@@ -407,7 +352,6 @@ func Open(ctx context.Context, options Options) (_ *Session, err error) {
 	}
 	if err != nil {
 		_ = endpoint.Close()
-		closeInitial()
 		return nil, err
 	}
 	nodeCtx, nodeCancel := context.WithCancel(ctx)
@@ -415,24 +359,10 @@ func Open(ctx context.Context, options Options) (_ *Session, err error) {
 	if err != nil {
 		nodeCancel()
 		_ = endpoint.Close()
-		closeInitial()
 		return nil, err
 	}
-	var link *meshoperatorlink.RouterLink
-	if secure != nil {
-		link, err = meshoperatorlink.RouterClient(nodeCtx, secure, cfg)
-		if err != nil {
-			nodeCancel()
-			_ = endpoint.Close()
-			return nil, err
-		}
-	}
-	session := &Session{certificate: options.Certificate, revision: &revision, Endpoint: endpoint, Node: node, nodeCancel: nodeCancel, initialRouter: link, adjacentPeer: router, linkChanged: make(chan struct{}, 1), options: options, routerConfig: cfg, release: release, info: Info{endpoint.Address().String(), router.Principal(), state.Revision}}
+	session := &Session{certificate: options.Certificate, revision: &revision, Endpoint: endpoint, Node: node, nodeCancel: nodeCancel, linkChanged: make(chan struct{}, 1), options: options, routerConfig: cfg, release: release, info: Info{Address: endpoint.Address().String(), Revision: state.Revision}}
 	session.links = make(map[*meshoperatorlink.RouterLink]managedCarrier)
-	if link != nil {
-		session.link = link.Link
-		session.links[link] = managedCarrier{peer: router, cost: session.seedCandidate().Cost}
-	}
 	session.agentClients = make(map[meshid.Device]*grpcclient.AgentConnection)
 	success = true
 	return session, nil
@@ -440,25 +370,25 @@ func Open(ctx context.Context, options Options) (_ *Session, err error) {
 
 // The operator role and proof exchange are identical over LAN and BLE. Only
 // socket setup and the finite TLS flight budget depend on the carrier.
-func dialOperatorTLS(ctx context.Context, options Options, config *tls.Config) (*tls.Conn, error) {
-	switch options.Transport {
+func dialOperatorTLS(ctx context.Context, candidate carriers.Candidate, config *tls.Config) (*tls.Conn, error) {
+	switch candidate.Transport {
 	case "", "tcp":
-		if options.BLEPSM != 0 {
+		if candidate.PSM != 0 {
 			return nil, errors.New("BLE PSM requires the ble transport")
 		}
 		setup, cancel := context.WithTimeout(ctx, 15*time.Second)
 		defer cancel()
-		raw, err := (&tls.Dialer{Config: config}).DialContext(setup, "tcp", options.RouterAddress)
+		raw, err := (&tls.Dialer{Config: config}).DialContext(setup, "tcp", candidate.Address)
 		if err != nil {
 			return nil, err
 		}
 		return raw.(*tls.Conn), nil
 	case "ble":
-		psm := options.BLEPSM
+		psm := candidate.PSM
 		if psm == 0 {
 			psm = 0x81
 		}
-		stream, err := dialOperatorBLE(ctx, options.RouterAddress, psm)
+		stream, err := dialOperatorBLE(ctx, candidate.Address, psm)
 		if err != nil {
 			return nil, err
 		}
