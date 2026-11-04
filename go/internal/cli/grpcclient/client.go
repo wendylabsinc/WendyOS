@@ -26,6 +26,7 @@ import (
 	"github.com/wendylabsinc/wendy/go/proto/gen/agentpb"
 	agentpbv2 "github.com/wendylabsinc/wendy/go/proto/gen/agentpb/v2"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/keepalive"
 )
@@ -793,6 +794,15 @@ func (c *AgentConnection) Client() grpc.ClientConnInterface {
 		return guardedConn{conn: c.Conn}
 	}
 	return c.client
+}
+
+// ChannelState is the gRPC channel's state, false when the connection has no
+// channel. It sends nothing to the agent, so it needs no read-only guard.
+func (c *AgentConnection) ChannelState() (connectivity.State, bool) {
+	if c.Conn == nil {
+		return connectivity.Shutdown, false
+	}
+	return c.Conn.GetState(), true
 }
 
 func NewFromConn(conn *grpc.ClientConn) *AgentConnection {
