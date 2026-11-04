@@ -395,7 +395,11 @@ def review_intro(result: dict, repo: str) -> list[str]:
             f"{result['context_coverage']['bytes']:,} bytes, "
             f"{result['context_coverage']['omitted_files']} candidate source files omitted, "
             f"{result['context_coverage'].get('partial_files', 0)} files excerpted. "
-            + result['context_coverage']['limitation'], ""] if "context_coverage" in result else []),
+            + result['context_coverage']['limitation']
+            + (f" Sibling scan: {result['context_coverage']['scanned_files']} files, "
+               f"{result['context_coverage']['scanned_bytes']:,} bytes; "
+               f"{result['context_coverage']['scan_omitted_files']} candidates outside that scan."
+               if "scanned_files" in result['context_coverage'] else ""), ""] if "context_coverage" in result else []),
         ("Check a box to accept a pending or changed decision. Acceptance follows materially unchanged decisions across commits; "
          + "these checkboxes do not block merging automatically."),
         "",

@@ -186,9 +186,10 @@ class ContextTests(unittest.TestCase):
             with patch.object(context, "git", wraps=context.git) as reads:
                 result = context.source_context(root, parsed, base, head, patch_text)
             self.assertTrue(any(item["unchanged"] and item["path"] == "go/port_reader.go" for item in result["files"]))
-            self.assertEqual({item["sha"] for item in result["files"] if item["path"] == "go/source.go"}, {head})
+            self.assertNotIn("go/source.go", {item["path"] for item in result["files"]})
+            self.assertGreaterEqual(result["already_supplied_files"], 1)
             self.assertTrue(all(item["also_at_base"] == base for item in result["files"] if item["unchanged"]))
-            self.assertTrue(any(item["path"] == "go/proto/gen/agentpb/handwritten.go" for item in result["files"]))
+            self.assertIn("go/proto/gen/agentpb/handwritten.go", patch_text)
             self.assertNotIn("GENERATED-SENTINEL", json.dumps(result))
             self.assertFalse(any(generated_oid in call.args for call in reads.call_args_list))
             self.assertNotIn("go/link.go", {item["path"] for item in result["files"]})
@@ -253,11 +254,13 @@ class ContextTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             result, raw, reads, git = self.context_fixture(root, changes)
             paths = {item["path"] for item in result["files"]}
-            self.assertTrue({"go/mode_policy.go", "swift/ModePolicy.swift", "go/mode.go", "swift/ModeCaller.swift"} <= paths)
+            self.assertTrue({"go/mode.go", "swift/ModeCaller.swift"} <= paths)
+            self.assertIn("go/mode_policy.go", raw)
+            self.assertIn("swift/ModePolicy.swift", raw)
             self.assertFalse(any(context.test_path(path) for path in paths))
             self.assertIn("TEST_DIFF_SENTINEL", raw)  # still reviewed in the diff
             self.assertNotIn("go/a_unrelated.go", paths)
-            for path in ("go/a_unrelated.go", "go/vendor/mode.go", "Proto/Mode.proto"):
+            for path in ("go/vendor/mode.go", "Proto/Mode.proto"):
                 oid = git("rev-parse", f"HEAD:{path}")
                 self.assertFalse(any(oid in call.args for call in reads))
             self.assertLessEqual(len(result["files"]), context.MAX_FILES)
@@ -294,6 +297,60 @@ class ContextTests(unittest.TestCase):
             result = json.loads(Path(root, "result").read_text())
             self.assertEqual(result["status"], "incomplete")
             self.assertIn("incomplete", comments.render_incomplete(result, REPO).lower())
+
+
+class FocusedInputTests(unittest.TestCase):
+    """Source inclusion and caps only; no mocked semantic-detection claims."""
+    def fixture(self, root, extra=None):
+        def git(*args):
+            return context.git(root, *args).decode().strip()
+        git('init','-q');git('config','user.email','fixture@example.invalid');git('config','user.name','Source control')
+        files = {'io/engine.go':'package io\nfunc Export() string { return EncodeRecord(LoadRecord()) }\n',
+                 'io/utility.go':'package io\nfunc LoadRecord() string { return "stored" }\nfunc EncodeRecord(s string) string { return s }\nfunc NormalizeRecord(s string) string { return s }\n',
+                 'io/transport.go':'package io\nfunc Send() string { return Export() }\n',
+                 'io/a_notes.go':'package io\nconst Documentation = `LoadRecord() EncodeRecord() Export()`\n',
+                 **(extra or {})}
+        for path, value in files.items():
+            target=Path(root,path);target.parent.mkdir(parents=True,exist_ok=True);target.write_text(value)
+        git('add','.');git('commit','-qm','base');base=git('rev-parse','HEAD')
+        Path(root,'io/engine.go').write_text('package io\nfunc Export() string { return NormalizeRecord(EncodeRecord(LoadRecord())) }\n')
+        git('commit','-qam','head');head=git('rev-parse','HEAD');raw=git('diff',base,head)
+        return context.source_context(root,review.parse_diff(raw),base,head,raw), raw
+
+    def test_generic_loader_and_transport_selected_from_source_not_filename_or_prose(self):
+        with tempfile.TemporaryDirectory() as root:
+            result, raw = self.fixture(root)
+            paths={f['path'] for f in result['files']}
+            self.assertTrue({'io/utility.go','io/transport.go'} <= paths)
+            self.assertNotIn('io/a_notes.go',paths)
+            self.assertNotIn('io/engine.go',paths)  # complete changed source is already in the patch
+            self.assertIn('NormalizeRecord(EncodeRecord(LoadRecord()))',raw)
+            self.assertTrue(all(f['unchanged'] for f in result['files']))
+            self.assertLessEqual(result['scanned_files'],context.MAX_SCAN_FILES)
+            self.assertLessEqual(result['scanned_bytes'],context.MAX_SCAN_BYTES)
+
+    def test_large_module_and_scan_limits_are_visible_without_unbounded_lookup(self):
+        with tempfile.TemporaryDirectory() as root, patch.object(context,'MAX_MODULE_FILES',2):
+            result,_=self.fixture(root)
+            self.assertEqual(result['scanned_files'],0)
+            self.assertGreater(result['scan_omitted_files'],0)
+            self.assertNotIn('io/utility.go',{f['path'] for f in result['files']})
+        with tempfile.TemporaryDirectory() as root, patch.object(context,'MAX_SCAN_FILES',1):
+            result,_=self.fixture(root)
+            self.assertEqual(result['scanned_files'],1)
+            self.assertGreater(result['scan_omitted_files'],0)
+
+    def test_patch_context_is_revision_bound_and_short_adjacent_bridge_is_retained(self):
+        raw=diff('io/engine.go','return Before()','return After()').decode()
+        supplied=context.supplied_lines(review.parse_diff(raw),raw)
+        self.assertEqual(supplied[('io/engine.go','base')],{4,5,6})
+        self.assertEqual(supplied[('io/engine.go','head')],{4,5,6})
+        source='// padding\n'*90+'func Decode() {\n return Raw()\n}\nfunc Read() {\n return Decode()\n}\n'+'// tail\n'*90
+        text,ranges=context.excerpt(source,{92},{'decode','raw'},700)
+        self.assertIn('return Raw()',text)
+        self.assertIn('return Decode()',text)
+        self.assertLessEqual(len(ranges),3)
+
 
 
 class ExportCodecControls(unittest.TestCase):

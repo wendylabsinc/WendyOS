@@ -794,5 +794,16 @@ class FindingReportTests(unittest.TestCase):
                                      for _, path, payload in github.mutations()))
 
 
+class FocusedCoverageTests(unittest.TestCase):
+    def test_scan_coverage_is_visible_without_changing_legacy_state(self):
+        data=result()
+        baseline=review.parse_comment_state([review.render_comment(data,REPO)])
+        data['context_coverage']={'files':12,'bytes':47000,'omitted_files':20,'partial_files':5,
+            'limitation':'Partial coverage; no graph.','scanned_files':34,'scanned_bytes':262660,'scan_omitted_files':699}
+        body=review.render_comment(data,REPO)
+        self.assertIn('Sibling scan: 34 files, 262,660 bytes; 699 candidates outside that scan.',body)
+        self.assertEqual(review.parse_comment_state([body]),baseline)
+
+
 if __name__ == "__main__":
     unittest.main()

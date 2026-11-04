@@ -39,7 +39,8 @@ class TrialTests(unittest.TestCase):
         manifest = trial.verify(first, digest)
         self.assertEqual(len(manifest['cases']), 2)
         context = json.loads((first / 'case-2.context.json').read_text())
-        self.assertEqual({f['path'] for f in context['files']}, {'codec.py', 'export_reader.py'})
+        self.assertEqual({f['path'] for f in context['files']}, {'export_reader.py'})
+        self.assertIn('codec.py', (first / 'case-2.diff').read_text())
         self.assertLess(context['bytes'], 48_000)
         request = json.loads((first / 'case-2.request.json').read_text())
         schema = request['output_config']['format']['schema']
