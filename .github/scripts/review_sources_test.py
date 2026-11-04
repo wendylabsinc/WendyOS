@@ -321,6 +321,54 @@ class ReviewInputTests(unittest.TestCase):
             self.assertIn('No AI review was performed', (path/'review').read_text())
             self.assertIn('No AI review was performed', summary.read_text())
 
+    def security_generated_only_cycle(self, path, raw, manifest, previous):
+        for name, data in [('meta', json.dumps(metadata(raw))), ('manifest', json.dumps(manifest)),
+                           ('diff', raw), ('previous', previous)]:
+            (path / name).write_text(data)
+        args = argparse.Namespace(metadata=path/'meta', manifest=path/'manifest', diff=path/'diff',
+            previous=path/'previous', model='offline', review_output=path/'review', result_output=path/'result')
+        fake = Mock()
+        with patch.dict(sys.modules, {'anthropic': fake}), patch.dict(os.environ, GITHUB_STEP_SUMMARY=str(path/'summary')):
+            security_review.command_review(args)
+        fake.Anthropic.assert_not_called()
+        security_review.command_prepare_comment(argparse.Namespace(review=path/'review', output=path/'comment'))
+        return (path/'comment').read_text()
+
+    def test_security_generated_only_blocker_states_clear_path_and_does_not_nest(self):
+        raw = diff()
+        manifest = security_review.build_input_manifest(metadata(raw), raw.encode(), 42, HEAD)
+        previous = security_review.prepare_comment(
+            '# AI Security Review\n\n#### 🛑 Error — Open HIGH: handwritten bug\n\nPRIOR_DETAILS\n\n' + security_review.BLOCKING_MARKER)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)
+            comments = []
+            for _ in range(3):
+                previous = self.security_generated_only_cycle(path, raw, manifest, previous)
+                comments.append(previous)
+                self.assertTrue(json.loads((path/'result').read_text())['has_blocking'])
+                with self.assertRaisesRegex(security_review.ReviewError, 'non-generated change.*delete the bot comment'):
+                    security_review.command_enforce(argparse.Namespace(result=path/'result', manifest=path/'manifest'))
+            self.assertEqual(comments[0], comments[2])
+            self.assertEqual(comments[2].count('# AI Security Review'), 2)
+            self.assertEqual(comments[2].count('Only generated protocol output changed'), 1)
+            self.assertNotIn('&lt;!--', comments[2])
+            self.assertIn('PRIOR_DETAILS', comments[2])
+            self.assertIn('delete the bot comment', comments[2])
+            self.assertIn(security_review.BLOCKING_MARKER, comments[2])
+            self.assertTrue(comments[2].endswith(security_review.COMMENT_MARKER + '\n'))
+
+    def test_security_generated_only_without_blocker_passes_without_growth(self):
+        raw = diff()
+        manifest = security_review.build_input_manifest(metadata(raw), raw.encode(), 42, HEAD)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)
+            first = self.security_generated_only_cycle(path, raw, manifest, '')
+            second = self.security_generated_only_cycle(path, raw, manifest, first)
+            self.assertEqual(first, second)
+            self.assertNotIn('delete the bot comment', second)
+            with redirect_stdout(io.StringIO()):
+                security_review.command_enforce(argparse.Namespace(result=path/'result', manifest=path/'manifest'))
+
     def test_docs_generated_only_no_model_or_context_calls(self):
         client = Mock()
         with patch.object(docs_review, 'load_documents') as load:
@@ -472,7 +520,8 @@ class WorkflowTests(unittest.TestCase):
                     with patch.dict(os.environ, env), patch('urllib.request.urlopen', return_value=response) as request, \
                          redirect_stdout(io.StringIO()):
                         if blocking:
-                            with self.assertRaisesRegex(RuntimeError, 'blockers remain open'):
+                            clear_path = 'delete the bot comment' if excerpted else 'non-generated change.*delete the bot comment'
+                            with self.assertRaisesRegex(RuntimeError, 'blockers remain open.*' + clear_path):
                                 exec(inline(workflow, 2), {})
                         else:
                             with self.assertRaises(SystemExit):

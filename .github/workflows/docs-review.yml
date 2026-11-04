@@ -461,7 +461,11 @@ jobs:
 
           if os.environ.get('SOURCE_ONLY_REVIEW') == 'true':
               if any('#### 🛑 Error' in (comment.get('body') or '') for comment in existing):
-                  raise RuntimeError('Generated-only review skipped; prior documentation blockers remain open')
+                  raise RuntimeError(
+                      'Generated-only review skipped; prior documentation blockers remain open. A later push '
+                      'with a non-generated change gets a normal review, or a maintainer can delete the bot '
+                      'comment after triage.'
+                  )
               print('Generated-only review skipped; prior comments preserved')
               raise SystemExit(0)
 
