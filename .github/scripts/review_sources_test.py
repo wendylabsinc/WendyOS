@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """Offline regressions for source-only inputs and generated-only state retention."""
 import argparse
-from contextlib import contextmanager
+from contextlib import contextmanager, redirect_stdout
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
 import re
+import subprocess
 import sys
 import tempfile
 from types import SimpleNamespace
@@ -212,12 +214,14 @@ class ReviewInputTests(unittest.TestCase):
                 (path / name).write_text(data)
             args = argparse.Namespace(metadata=path/'meta', manifest=path/'manifest', diff=path/'diff',
                 previous=path/'previous', model='offline', review_output=path/'review', result_output=path/'result')
-            with patch.dict(sys.modules, {'anthropic': fake}):
+            summary = path / 'summary'
+            with patch.dict(sys.modules, {'anthropic': fake}), patch.dict(os.environ, GITHUB_STEP_SUMMARY=str(summary)):
                 security_review.command_review(args)
             fake.Anthropic.assert_not_called()
             self.assertIn('PRIOR_BLOCKER', (path/'review').read_text())
             self.assertTrue(json.loads((path/'result').read_text())['has_blocking'])
             self.assertIn('No AI review was performed', (path/'review').read_text())
+            self.assertIn('No AI review was performed', summary.read_text())
 
     def test_docs_generated_only_no_model_or_context_calls(self):
         client = Mock()
@@ -256,13 +260,15 @@ class WorkflowTests(unittest.TestCase):
             (path / 'pr_meta.json').write_text(json.dumps(metadata(raw)))
             env = dict(GITHUB_ENV=str(path/'env'), REVIEW_FILE=str(path/'review.md'),
                        EXPECTED_HEAD_SHA=HEAD, PR_TITLE='Test', PR_BODY='', PR_NUMBER='42')
+            output = io.StringIO()
             with working_directory(path), patch.dict(os.environ, env), patch.dict(sys.modules, {'anthropic': fake}), \
-                 patch('subprocess.check_output', return_value=b''):
+                 patch('subprocess.check_output', return_value=b''), redirect_stdout(output):
                 try:
                     exec(inline('integration-test-review.yml', 0), {})
                 except SystemExit as error:
                     self.assertEqual(error.code, 0)
             fake.review_body = (path/'review.md').read_text() if (path/'review.md').exists() else ''
+            fake.stdout = output.getvalue()
             return fake
 
     def test_integration_mixed_filters_before_model(self):
@@ -281,6 +287,7 @@ class WorkflowTests(unittest.TestCase):
         self.assertIn('Partial source review', request)
         self.assertIn('Omitted source is unreviewed', request)
         self.assertNotIn('OMITTED_SOURCE_MARKER', request)
+        self.assertIn('::notice::Partial source review', fake.stdout)
         fake.Anthropic.return_value.messages.create.assert_called_once()
         payload = {'summary': '', 'findings': [{'severity': 'info', 'title': 'Source test',
             'name': 'python-source', 'overview': 'Source-only suggestion', 'details': 'Complete details'}]}
@@ -306,7 +313,8 @@ class WorkflowTests(unittest.TestCase):
                                INTEGRATION_SOURCE_EXCERPTED='true' if excerpted else 'false',
                                COMMENT_FILE=directory+'/missing', GH_TOKEN='offline',
                                REPO=REPO, PR_NUMBER='42')
-                    with patch.dict(os.environ, env), patch('urllib.request.urlopen', return_value=response) as request:
+                    with patch.dict(os.environ, env), patch('urllib.request.urlopen', return_value=response) as request, \
+                         redirect_stdout(io.StringIO()):
                         if blocking:
                             with self.assertRaisesRegex(RuntimeError, 'blockers remain open'):
                                 exec(inline(workflow, 2), {})
@@ -314,6 +322,23 @@ class WorkflowTests(unittest.TestCase):
                             with self.assertRaises(SystemExit):
                                 exec(inline(workflow, 2), {})
                     self.assertEqual([call.args[0].method for call in request.call_args_list], ['GET'])
+
+
+class OutputIsolationTests(unittest.TestCase):
+    def test_suite_publishes_nothing_to_the_job_running_it(self):
+        if os.environ.get('REVIEW_SOURCES_TEST_NESTED'):
+            self.skipTest('Already inside the isolated run')
+        with tempfile.TemporaryDirectory() as directory:
+            published = {name: Path(directory) / name for name in ('GITHUB_STEP_SUMMARY', 'GITHUB_ENV')}
+            for path in published.values():
+                path.touch()
+            env = {**os.environ, **{name: str(path) for name, path in published.items()},
+                   'REVIEW_SOURCES_TEST_NESTED': '1'}
+            run = subprocess.run([sys.executable, __file__], capture_output=True, text=True, env=env, timeout=300)
+            self.assertEqual(run.returncode, 0, run.stderr[-2000:])
+            self.assertEqual(re.findall(r'^::.*$', run.stdout + run.stderr, re.M), [])
+            for path in published.values():
+                self.assertEqual(path.read_text(), '')
 
 
 if __name__ == '__main__':
