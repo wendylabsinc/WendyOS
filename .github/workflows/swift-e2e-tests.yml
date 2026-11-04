@@ -46,7 +46,7 @@ on:
         required: false
 
 concurrency:
-  # Keep every main run, including pending runs. Hosted jobs serialize below.
+  # Keep every main run, including pending runs. Main's Ubuntu job queues below.
   group: swift-e2e-tests-${{ github.ref == 'refs/heads/main' && github.run_id || github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
