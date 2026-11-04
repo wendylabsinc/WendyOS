@@ -12,8 +12,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/wendylabsinc/wendy/go/internal/cli/operatormesh"
-	"github.com/wendylabsinc/wendy/go/internal/shared/certs"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 )
 
@@ -36,7 +34,7 @@ func operatorIntentFixture(t *testing.T, pinned bool) (config.CertificateInfo, s
 	stopped := errors.New("fixture stops before detached broker launch")
 	launchOperatorBroker = func(spec Spec) error { *launches++; *selected = spec; return stopped }
 	if pinned {
-		recipe := OperatorSpec{Version: 1, Principal: principal, RouterAddress: "192.0.2.10:43024", RouterUUID: "22222222-2222-4222-8222-222222222222"}
+		recipe := map[string]any{"version": 1, "principal": principal, "routerAddress": "192.0.2.10:43024", "routerUuid": "22222222-2222-4222-8222-222222222222"}
 		path := operatorRecipePath(directory, principal)
 		if err := ensurePrivateDir(filepath.Dir(path)); err != nil {
 			t.Fatal(err)
@@ -57,45 +55,12 @@ func TestOperatorExplicitAutomaticDoesNotReuseSavedPinnedFirstHop(t *testing.T) 
 	if _, err := EnableOperatorAutomatic(context.Background(), certificate); !errors.Is(err, stopped) {
 		t.Fatal(err)
 	}
-	if *launches != 1 || selected.Operator == nil || !selected.Operator.Automatic || selected.Operator.RouterAddress != "" || selected.Operator.RouterUUID != "" || !selected.Operator.Enabled {
+	if *launches != 1 || selected.Operator == nil || selected.Operator.Version != 2 || !selected.Operator.Enabled {
 		t.Fatalf("explicit automatic connect reused pinned selection: launches=%d spec=%+v", *launches, selected.Operator)
 	}
 	recipe, err := readOperatorRecipe(operatorRecipePath(directory, selected.Operator.Principal))
-	if err != nil || !recipe.Automatic || recipe.RouterAddress != "" {
+	if err != nil || recipe.Version != 2 || !recipe.Enabled {
 		t.Fatalf("saved automatic intent: %+v %v", recipe, err)
-	}
-}
-
-func TestOperatorExplicitAutomaticDoesNotReplaceLivePinnedOwner(t *testing.T) {
-	certificate, directory, launches, _, _ := operatorIntentFixture(t, true)
-	operator, err := operatorPrincipal(certificate)
-	if err != nil {
-		t.Fatal(err)
-	}
-	path := operatorRecipePath(directory, operator.Principal())
-	before, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	dir, err := brokerDir()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := ensurePrivateDir(dir); err != nil {
-		t.Fatal(err)
-	}
-	socket, _ := paths(dir, operatorKey(operator.Principal()), certs.WendyIdentity{})
-	owner, locked, err := acquireIdentityLock(socket)
-	if err != nil || !locked {
-		t.Fatal("fixture could not retain pinned owner", err)
-	}
-	defer func() { releaseLock(owner); _ = owner.Close() }()
-	if _, err := EnableOperatorAutomatic(context.Background(), certificate); err == nil || !strings.Contains(err.Error(), "disconnect") {
-		t.Fatal("live mode change did not require disconnect", err)
-	}
-	after, err := os.ReadFile(path)
-	if err != nil || string(before) != string(after) || *launches != 0 {
-		t.Fatalf("live pinned context was changed: launches=%d err=%v", *launches, err)
 	}
 }
 
@@ -143,23 +108,18 @@ func TestOperatorDisconnectBeforeFirstConnectDisablesImplicitStart(t *testing.T)
 }
 
 func TestOperatorExplicitConnectResumesAfterDisconnect(t *testing.T) {
-	for _, automatic := range []bool{false, true} {
-		t.Run(map[bool]string{false: "pinned", true: "automatic"}[automatic], func(t *testing.T) {
-			certificate, directory, launches, selected, stopped := operatorIntentFixture(t, true)
+	for _, legacy := range []bool{false, true} {
+		t.Run(map[bool]string{false: "fresh", true: "legacy"}[legacy], func(t *testing.T) {
+			certificate, directory, launches, selected, stopped := operatorIntentFixture(t, legacy)
 			if err := DisconnectOperator(context.Background()); err != nil {
 				t.Fatal(err)
 			}
-			var err error
-			if automatic {
-				_, err = EnableOperatorAutomatic(context.Background(), certificate)
-			} else {
-				_, err = PrepareOperator(context.Background(), certificate, "192.0.2.20:43024", "33333333-3333-4333-8333-333333333333")
-			}
+			_, err := EnableOperatorAutomatic(context.Background(), certificate)
 			if !errors.Is(err, stopped) || *launches != 1 {
 				t.Fatalf("explicit connect did not launch: %d %v", *launches, err)
 			}
-			if selected.Operator.Automatic != automatic {
-				t.Fatal("explicit mode differs")
+			if selected.Operator.Version != 2 || selected.Operator.Disconnected || !selected.Operator.Enabled {
+				t.Fatalf("resume intent: %+v", selected.Operator)
 			}
 			if _, err := os.Stat(operatorRecipePath(directory, selected.Operator.Principal)); err != nil {
 				t.Fatal("selected intent not persisted", err)
@@ -168,43 +128,30 @@ func TestOperatorExplicitConnectResumesAfterDisconnect(t *testing.T) {
 	}
 }
 
-func TestOperatorAutomaticFallbackPreservesDiscoveryIntent(t *testing.T) {
-	certificate, directory, _, _, _ := operatorIntentFixture(t, false)
+func TestLegacyDisconnectedRecipeDoesNotRejoin(t *testing.T) {
+	certificate, directory, launches, _, _ := operatorIntentFixture(t, true)
 	operator, err := operatorPrincipal(certificate)
 	if err != nil {
 		t.Fatal(err)
 	}
-	recipe := OperatorSpec{Version: 1, Principal: operator.Principal(), Automatic: true, Enabled: true}
-	spec, err := operatorSpec(recipe, certificate)
+	path := operatorRecipePath(directory, operator.Principal())
+	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := ensurePrivateDir(filepath.Dir(operatorRecipePath(directory, operator.Principal()))); err != nil {
+	var legacy map[string]any
+	if err := json.Unmarshal(data, &legacy); err != nil {
 		t.Fatal(err)
 	}
-	data, err := json.Marshal(recipe)
-	if err != nil {
+	legacy["disconnected"] = true
+	data, _ = json.Marshal(legacy)
+	if err := writePrivateFile(path, data); err != nil {
 		t.Fatal(err)
 	}
-	if err := writePrivateFile(operatorRecipePath(directory, operator.Principal()), data); err != nil {
-		t.Fatal(err)
+	if _, err := PrepareOperatorAutomatic(context.Background(), certificate); !errors.Is(err, errOperatorDisconnected) {
+		t.Fatal("legacy stop intent lost", err)
 	}
-	previous := openOperatorSession
-	t.Cleanup(func() { openOperatorSession = previous })
-	var selected operatormesh.Options
-	stopped := errors.New("fixture stops before opening a fallback carrier")
-	openOperatorSession = func(_ context.Context, options operatormesh.Options) (*operatormesh.Session, error) {
-		selected = options
-		return nil, stopped
-	}
-	// Discovery produces a concrete first-hop hint, not the retained context's
-	// automatic/pinned policy. Its next generation must keep automatic sources.
-	candidate := OperatorSpec{Version: 1, Principal: operator.Principal(), RouterAddress: "192.0.2.20:43024", RouterUUID: "33333333-3333-4333-8333-333333333333"}
-	attachment := &operatorAttachment{directory: directory, spec: spec, certificate: certificate}
-	if _, err := attachment.open(context.Background(), candidate); !errors.Is(err, stopped) {
-		t.Fatal(err)
-	}
-	if !selected.Automatic || selected.Discover == nil || selected.RouterAddress != candidate.RouterAddress || selected.RouterUUID != candidate.RouterUUID {
-		t.Fatal("fallback changed automatic policy or selected first hop")
+	if *launches != 0 {
+		t.Fatal("legacy disconnected recipe launched a broker")
 	}
 }

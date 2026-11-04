@@ -3,6 +3,7 @@ package sessionbroker
 import (
 	"context"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"net"
 	"net/netip"
@@ -118,12 +119,7 @@ func (r *operatorTargets) adjacentPeer() (*grpc.ClientConn, meshid.Device, error
 	if r.currentAdjacent != nil {
 		return r.currentAdjacent()
 	}
-	operator, err := operatorPrincipal(r.certificate)
-	if err != nil {
-		return nil, meshid.Device{}, err
-	}
-	peer, err := meshid.ParseDevice(operator.Tenant(), r.spec.Operator.RouterUUID)
-	return r.adjacent, peer, err
+	return nil, meshid.Device{}, errors.New("operator mesh has no authenticated adjacent peer")
 }
 
 func (r *operatorTargets) lookupTopology(ctx context.Context, target meshid.Device) (*pb.LocalMeshTopology, error) {

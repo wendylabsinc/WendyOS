@@ -171,7 +171,7 @@ func TestAutomaticRouterWithCachedForeignIssuers(t *testing.T) {
 			if transport == carriers.TCP {
 				candidate.PSM = 0
 			}
-			options := Options{Automatic: true, StateDirectory: t.TempDir(), Certificate: config.CertificateInfo{PrincipalURI: operator.cert.URIs[0].String(), PemCertificate: operator.pem, PemCertificateChain: operatorIssuer.pem + root.pem, PemPrivateKey: keyPEM(operator)}, CarrierSources: []carriers.Source{func(ctx context.Context, emit func([]carriers.Candidate)) error {
+			options := Options{StateDirectory: t.TempDir(), Certificate: config.CertificateInfo{PrincipalURI: operator.cert.URIs[0].String(), PemCertificate: operator.pem, PemCertificateChain: operatorIssuer.pem + root.pem, PemPrivateKey: keyPEM(operator)}, CarrierSources: []carriers.Source{func(ctx context.Context, emit func([]carriers.Candidate)) error {
 				emit([]carriers.Candidate{candidate})
 				<-ctx.Done()
 				return ctx.Err()
