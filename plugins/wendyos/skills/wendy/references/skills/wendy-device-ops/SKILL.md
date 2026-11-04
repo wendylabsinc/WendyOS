@@ -25,8 +25,10 @@ Bound discovery so agents do not hang:
 wendy discover --json --type all --timeout 5s
 ```
 
-The CLI reaches a device's agent over gRPC on TCP port 50051, through USB or
-LAN. On Linux, a USB-tethered device needs a one-time host setup: ask the user
+Ordinary LAN discovery and direct device management work even when Wendy Net is
+disabled on the device. Use the returned selector and advertised port; enrolled
+WendyOS agents commonly use TLS on port 50052, while unprovisioned agents use
+port 50051. On Linux, a USB-tethered device needs a one-time host setup: ask the user
 to run `wendy discover` in a terminal and accept its USB setup prompt (it
 needs sudo). An empty scan can also mean a board without WendyOS; use
 `wendy-device-install` for that.
@@ -40,6 +42,44 @@ wendy device unset-default
 ```
 
 Passing the hostname to `set-default` avoids the interactive picker. Change the default only when that is part of the user's task. For diagnostic commands, use `--device <target>` to select the device without changing the default.
+
+## Reach devices through Wendy Net
+
+For a device that is reachable only through the mesh, use a terminal on the
+user's intended computer to sign in and join:
+
+```bash
+wendy auth login
+wendy device wendy-net connect
+wendy discover --json --type mesh --timeout 5s
+wendy --device mesh://TENANT_UUID/DEVICE_UUID device info
+```
+
+Use the exact `mesh://...` destination returned by discovery. The CLI discovers
+nearby routers over LAN and Bluetooth automatically; do not ask the user for a
+router address, router UUID, Bluetooth identifier or PSM. Supported WendyOS and
+PSRAM Lite routers can connect the computer; a C6 is a destination leaf, not an
+entry router. A Lite destination supports its own management commands, not
+WendyOS-only container operations.
+
+With local MCP, `device_list` can list mesh destinations while the local
+background router is connected. Use `device_connect(device=...)` for a returned
+WendyOS mesh selector. `scan=true` adds ordinary LAN discovery; it does not
+enable mesh participation. Use the CLI for Lite operations not exposed by the
+connected MCP server. If no terminal is available on the intended computer,
+explain the missing access rather than inventing a mesh-join tool.
+
+To inspect the existing router on this computer, use
+`wendy --json device wendy-net topology --local-cli`. Without `--local-cli`,
+`topology` inspects the selected device instead. Device mesh status can be active
+through Bluetooth while LAN is still waiting; verify the destination with a real
+device command rather than inferring reachability from a status label.
+
+`device_disconnect` ends the current MCP device connection. To stop the local
+mesh router itself, use `wendy device wendy-net disconnect` when requested.
+After that, discovery and device commands must leave it disabled until the user
+explicitly reconnects with `wendy device wendy-net connect`. Ordinary LAN device
+management remains available.
 
 ## Inspect device state
 
@@ -78,6 +118,16 @@ wendy device wifi forget --ssid "<ssid>" --device <hostname>
 wendy device wifi rank --ssid "<ssid>" --priority 10 --device <hostname>
 wendy device wifi rank --order "Home,Office,Cafe" --device <hostname>
 ```
+
+Disconnecting WiFi can remove the connection carrying the command. For CLI JSON
+and MCP `wifi_disconnect`, report the device as disconnected only when
+`completion_confirmed` and `success` are both true. `state: "requested"` with
+`acknowledged: true` confirms receipt, not completion. A successful tool call or
+CLI exit alone is not proof that WiFi disconnected. If completion is unknown,
+reconnect over another working path and check `wifi_status` or
+`wendy device wifi status`. Do not infer success or repeatedly disconnect a
+device whose current state is unknown. Older agents may lose contact without
+confirming receipt; explain that uncertainty too.
 
 Do not echo or store WiFi passwords in issues, PRs, reusable docs, or final summaries. If a password was passed on the command line, avoid copying the full command into shared output.
 
