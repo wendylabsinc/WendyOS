@@ -1,0 +1,28 @@
+name: Wendy Scout tests
+on:
+  pull_request:
+    paths:
+      - 'Examples/WendyScout/**'
+      - '.github/workflows/scout-tests.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'Examples/WendyScout/**'
+      - '.github/workflows/scout-tests.yml'
+permissions:
+  contents: read
+jobs:
+  boundaries:
+    name: Scout boundary tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - run: python3 -m unittest discover -s Examples/WendyScout/tests -v

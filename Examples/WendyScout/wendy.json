@@ -1,0 +1,58 @@
+{
+  "appId": "sh.wendy.scout",
+  "version": "0.1.0",
+  "platform": "linux",
+  "services": {
+    "control": {
+      "context": "control",
+      "entitlements": [
+        {
+          "type": "network",
+          "mode": "host"
+        },
+        {
+          "type": "gpu"
+        },
+        {
+          "type": "admin"
+        },
+        {
+          "type": "persist",
+          "name": "wendy-scout",
+          "path": "/state"
+        },
+        {
+          "type": "persist",
+          "name": "wendy-scout-ipc",
+          "path": "/ipc"
+        }
+      ]
+    },
+    "worker": {
+      "context": "worker",
+      "dependsOn": [
+        "control"
+      ],
+      "entitlements": [
+        {
+          "type": "network",
+          "mode": "none"
+        },
+        {
+          "type": "persist",
+          "name": "wendy-scout-ipc",
+          "path": "/ipc"
+        },
+        {
+          "type": "persist",
+          "name": "wendy-scout-work",
+          "path": "/work"
+        }
+      ],
+      "resources": {
+        "memory": "2Gi",
+        "pids": 128
+      }
+    }
+  }
+}

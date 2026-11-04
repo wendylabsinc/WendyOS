@@ -1,0 +1,8 @@
+{
+  "revision": "f507ef0480018811fd07af8c9708134a0b0f33ac",
+  "files": {
+    "Proto/wendy/agent/services/v1/wendy_agent_v1_provisioning_service.proto": "f90566120717d0ae5bd34083a79d14117f4d2b87aad0a34de914446f376e61e4",
+    "Proto/wendy/agent/services/v1/wendy_agent_v1_container_service.proto": "07e27c0750534ae39f3bdd846737ae95eb221d7302b9c8805616bef9258f1ef7",
+    "Proto/wendy/agent/services/v1/shared.proto": "7870628543c72e5cf0b3ba1c87dc7fffab1c159dbf8c1153b4da1f3555fc001b"
+  }
+}
