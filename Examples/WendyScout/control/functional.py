@@ -90,6 +90,7 @@ def model_observation(result):
     if result.get("evidence_kind") == "functional_workflow":
         public = public_result(result)
         return {
+            "reason": result.get("reason", ""),
             **{
                 k: result[k]
                 for k in [
@@ -217,10 +218,15 @@ def experiment(probes, kind, version, run):
                 if all(x["passed"] for x in checks):
                     start(2)
             elif kind == "reject_extra_args":
+                rejected = command("scratch_stop_extra")["exit"] != 0
+                if not rejected:
+                    # A successful multi-target extension may be intentional.
+                    # Do not publish it as a regression of the old contract.
+                    reason = "ArgumentContractChanged"
                 check(
                     "extra_args_rejected",
                     True,
-                    command("scratch_stop_extra")["exit"] != 0,
+                    rejected,
                 )
                 state("invalid_args_no_mutation", "RUNNING")
                 check("invalid_args_preserve_data", 1, local.fixture_starts())

@@ -62,6 +62,8 @@ class Runner:
         elif name == "scratch_stop_extra":
             code = 2
             if self.broken == "args":
+                f.state = "STOPPED"
+            elif self.broken == "multi-target":
                 f.state, code = "STOPPED", 0
         elif name == "scratch_logs":
             output = {"ready_marker": self.broken != "logs"}
@@ -113,6 +115,13 @@ class FunctionalTests(unittest.TestCase):
         p.local.cleanup_bad = True
         with self.assertRaises(CleanupError):
             experiment(p, "restart_persistence", "stable", None)
+
+    def test_successful_argument_contract_extension_is_not_automatically_a_bug(self):
+        r = experiment(Runner("multi-target"), "reject_extra_args", "nightly", None)
+        self.assertEqual(r["outcome"], "blocked")
+        self.assertTrue(r["cleanup_verified"])
+        with self.assertRaises(ValueError):
+            require_failed_experiment([r], "reject_extra_args", "nightly")
 
     def test_unknown_workflow_and_prod_rejected_before_actions(self):
         p = Runner()

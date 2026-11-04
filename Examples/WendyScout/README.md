@@ -48,6 +48,9 @@ Shared failures, blocked setup, flaky results, already-fixed behavior and old-Ag
 limitations remain local evidence. A real regression is deduplicated across open
 and closed GitHub issues before an `ai-found` issue with projected evidence/repro.
 No comments, recurrence accounting, coordinator or automatic failed-session retry.
+Successful acceptance of extra arguments is an inconclusive contract change;
+the argument probe can report mutation after rejection, not assume every new
+accepted syntax is a bug. Both supplied target arguments name only the owned app.
 
 For deterministic operator replay without racing model sessions, redeploy with
 `--env SCOUT_BOOTSTRAP=1`, then use the supported operator shell:
