@@ -79,3 +79,19 @@ func TestOperatorRecoveryDoesNotReclassifyOtherFailures(t *testing.T) {
 		t.Fatal("a joined policy rejection became retryable")
 	}
 }
+
+func TestOperatorRecoveryOnlySuggestsAutomaticJoining(t *testing.T) {
+	errorsToCheck := []error{operatorUnavailable(operatorNoPeers, "waiting"), operatorUnavailable(operatorReconnecting, "reconnecting")}
+	for _, kind := range []string{"timeout", "connection_closed", "device_pin", "other"} {
+		errorsToCheck = append(errorsToCheck, &operatorStartupFailure{cause: errors.New("fixture"), failure: operatorFailure{Kind: kind}})
+	}
+	for _, err := range errorsToCheck {
+		_, steps := OperatorRecovery(err)
+		text := strings.Join(steps, " ")
+		for _, removed := range []string{"--address", "--router", "--transport", "--psm", "selected first-hop", "choose a new first hop"} {
+			if strings.Contains(text, removed) {
+				t.Fatalf("recovery recommends unsupported targeting: %s", text)
+			}
+		}
+	}
+}
