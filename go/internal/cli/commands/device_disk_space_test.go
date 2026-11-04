@@ -1,13 +1,23 @@
 package commands
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"io"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/google/go-containerregistry/pkg/registry"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
@@ -283,4 +293,75 @@ func TestChunkFailureRepeatsOnRegistryPush(t *testing.T) {
 
 func buildxMissingTestError() error {
 	return commandErrorf(errBuilderUnavailable, "%w; wendy builds images with it", errBuildxMissing)
+}
+
+// fakeDockerBuildingLayout puts a docker on PATH whose OCI export writes a
+// real layout with one layer, so a prepare runs its true push and fallback.
+func fakeDockerBuildingLayout(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("stub docker is a POSIX shell script")
+	}
+	layout := t.TempDir()
+	layer := bytes.Repeat([]byte("full-device-layer-"), 4096)
+	writeOCILayoutDir(t, layout, minimalOCILayoutEntries(t, layer, "application/vnd.oci.image.layer.v1.tar", layer))
+	script := `#!/bin/sh
+for a in "$@"; do
+	case "$a" in
+	*dest=*) d=${a#*dest=}; d=${d%%,*}; mkdir -p "$d" && cp -R "$FAKE_OCI_LAYOUT"/. "$d"/ ;;
+	esac
+done
+`
+	bin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bin, "docker"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("FAKE_OCI_LAYOUT", layout)
+	t.Setenv("DOCKER_CONFIG", t.TempDir())
+}
+
+// Compose and multi-service builds prepare their images through their own
+// chunk path, whose registry fallback must stop at a disk refusal too: the
+// push would write at least as much to the same disk.
+func TestComposePrepareRefusalSkipsTheRegistryFallback(t *testing.T) {
+	isolateFingerprintCache(t)
+	manifestCacheTestDir = t.TempDir()
+	t.Cleanup(func() { manifestCacheTestDir = "" })
+	fakeDockerBuildingLayout(t)
+
+	var uploads atomic.Int64
+	reg := registry.New()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet && r.Method != http.MethodHead {
+			uploads.Add(1)
+		}
+		reg.ServeHTTP(w, r)
+	}))
+	defer srv.Close()
+	host, portText, err := net.SplitHostPort(srv.Listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	port, err := strconv.Atoi(portText)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "Dockerfile"), []byte("FROM scratch\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	conn := &grpcclient.AgentConnection{ContainerService: allChunksMissing(), Host: host}
+	conn.CacheAgentVersion(&agentpb.GetAgentVersionResponse{Os: "linux", CpuArchitecture: "arm64"})
+	ctx, cancel := context.WithTimeout(withDeviceStorage(context.Background(), deviceWithFree(1)), 30*time.Second)
+	defer cancel()
+
+	err = buildAndPrepareComposeImageForAgent(ctx, conn, port, "linux", "docker", dir, "proj-web", "linux/arm64", "Dockerfile", nil, "proj-web", io.Discard, io.Discard)
+	if ErrorClass(err) != "disk_full" || !strings.Contains(err.Error(), "/data") {
+		t.Errorf("err = %v (class %q), want a disk_full refusal naming /data", err, ErrorClass(err))
+	}
+	if n := uploads.Load(); n != 0 {
+		t.Errorf("sent %d write request(s) to the registry of a device with no room", n)
+	}
 }

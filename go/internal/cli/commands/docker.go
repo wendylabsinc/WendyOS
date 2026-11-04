@@ -2596,7 +2596,7 @@ func buildAndPrepareComposeImage(ctx context.Context, conn *grpcclient.AgentConn
 		return nil
 	} else if ctx.Err() != nil {
 		return chunkErr
-	} else if blocksChunkPrepareFallback(chunkErr) {
+	} else if blocksChunkPrepareFallback(chunkErr) || chunkFailureRepeatsOnRegistryPush(chunkErr, builder) {
 		return chunkErr
 	} else if !allowRegistryFallback {
 		noteComposeChunkStall(logOutput, chunkErr, uploadCfg)
