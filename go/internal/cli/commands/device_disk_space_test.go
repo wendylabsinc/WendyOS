@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/google/go-containerregistry/pkg/registry"
+	"google.golang.org/grpc"
 
 	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/shared/appconfig"
@@ -363,5 +364,160 @@ func TestComposePrepareRefusalSkipsTheRegistryFallback(t *testing.T) {
 	}
 	if n := uploads.Load(); n != 0 {
 		t.Errorf("sent %d write request(s) to the registry of a device with no room", n)
+	}
+}
+
+// composeLayersOnDevice reports every layer as present, so an unchanged
+// Compose service qualifies to skip its build.
+type composeLayersOnDevice struct {
+	agentpb.WendyContainerServiceClient
+}
+
+func (c composeLayersOnDevice) QueryLayers(_ context.Context, req *agentpb.QueryLayersRequest, _ ...grpc.CallOption) (*agentpb.QueryLayersResponse, error) {
+	resp := &agentpb.QueryLayersResponse{}
+	for _, id := range req.GetDiffIds() {
+		resp.Present = append(resp.Present, &agentpb.PresentLayer{DiffId: id, Size: 1})
+	}
+	return resp, nil
+}
+
+func cacheLinuxDeviceWithFree(conn *grpcclient.AgentConnection, free int64) {
+	version := deviceWithFree(free)
+	version.Os, version.CpuArchitecture = "linux", "arm64"
+	conn.CacheAgentVersion(version)
+}
+
+// startComposeBuildProject writes a one-service Compose project that builds,
+// with a stub build that records its calls and the device storage it was given.
+func startComposeBuildProject(t *testing.T) (conn *grpcclient.AgentConnection, dir string, builds *[]deviceStorage) {
+	t.Helper()
+	isolateFingerprintCache(t)
+	dir = t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "compose.yaml"), []byte("services:\n  web:\n    build: .\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "Dockerfile"), []byte("FROM scratch\nCOPY compose.yaml /\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	builds = &[]deviceStorage{}
+	orig := buildComposeServiceImage
+	t.Cleanup(func() { buildComposeServiceImage = orig })
+	buildComposeServiceImage = func(ctx context.Context, _ *grpcclient.AgentConnection, _ int, _, _, _, _, _, _ string, _ map[string]string, _ string, streamOutput, _ io.Writer) error {
+		storage, _ := deviceStorageFor(ctx)
+		*builds = append(*builds, storage)
+		if reporter, ok := streamOutput.(interface{ ReportImageContent([]string) }); ok {
+			reporter.ReportImageContent([]string{"sha256:" + strings.Repeat("a", 64)})
+		}
+		return nil
+	}
+	conn, cleanup := startFakeMacRunServer(t, &fakeMacRunState{})
+	t.Cleanup(cleanup)
+	conn.ContainerService = composeLayersOnDevice{conn.ContainerService}
+	return conn, dir, builds
+}
+
+// An unchanged Compose project builds and sends nothing, so neither a full
+// device disk nor a full local disk may stop it.
+func TestComposeWithNothingToBuildIgnoresFullDisks(t *testing.T) {
+	for _, tc := range []struct {
+		name                    string
+		localFree, freeOnDevice int64
+	}{
+		{"full device", 100 << 30, 100 << 20},
+		{"full local disk", 1 << 20, 100 << 30},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fakeAllBuildDisks(t, 100<<30)
+			conn, dir, builds := startComposeBuildProject(t)
+			cacheLinuxDeviceWithFree(conn, 100<<30)
+			if err := runComposeWithAgent(context.Background(), conn, dir, runOptions{deploy: true}); err != nil {
+				t.Fatalf("first run: %v", err)
+			}
+			if len(*builds) != 1 {
+				t.Fatalf("first run built %d time(s), want 1", len(*builds))
+			}
+
+			fakeAllBuildDisks(t, tc.localFree)
+			cacheLinuxDeviceWithFree(conn, tc.freeOnDevice)
+			if err := runComposeWithAgent(context.Background(), conn, dir, runOptions{deploy: true}); err != nil {
+				t.Fatalf("refused a run with nothing to build: %v", err)
+			}
+			if len(*builds) != 1 {
+				t.Fatalf("second run built again (%d builds), so it did not exercise the skip", len(*builds))
+			}
+		})
+	}
+}
+
+// An image-only project has no build at all, so this computer's disk is
+// irrelevant, and the CLI cannot tell whether the device must pull anything.
+func TestComposeImageOnlyIgnoresFullDisks(t *testing.T) {
+	for _, tc := range []struct {
+		name                    string
+		localFree, freeOnDevice int64
+	}{
+		{"full device", 100 << 30, 100 << 20},
+		{"full local disk", 1 << 20, 100 << 30},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			isolateFingerprintCache(t)
+			fakeAllBuildDisks(t, tc.localFree)
+			dir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(dir, "compose.yaml"), []byte("services:\n  web:\n    image: docker.io/library/nginx:latest\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			state := &fakeMacRunState{}
+			conn, cleanup := startFakeMacRunServer(t, state)
+			defer cleanup()
+			cacheLinuxDeviceWithFree(conn, tc.freeOnDevice)
+
+			if err := runComposeWithAgent(context.Background(), conn, dir, runOptions{deploy: true}); err != nil {
+				t.Fatalf("refused a project with no build: %v", err)
+			}
+			if len(state.createReqs) != 1 {
+				t.Fatalf("CreateContainer calls = %d, want 1", len(state.createReqs))
+			}
+		})
+	}
+}
+
+// A Compose service that does need a build is still refused before it starts.
+func TestComposeWithABuildRefusesFullDisks(t *testing.T) {
+	for _, tc := range []struct {
+		name                    string
+		localFree, freeOnDevice int64
+		wantMessage             string
+	}{
+		{"full device", 100 << 30, 100 << 20, "on the device"},
+		{"full local disk", 1 << 20, 100 << 30, "to build"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fakeAllBuildDisks(t, tc.localFree)
+			conn, dir, builds := startComposeBuildProject(t)
+			cacheLinuxDeviceWithFree(conn, tc.freeOnDevice)
+
+			err := runComposeWithAgent(context.Background(), conn, dir, runOptions{deploy: true})
+			if ErrorClass(err) != "disk_full" || !strings.Contains(err.Error(), tc.wantMessage) {
+				t.Fatalf("err = %v (class %q), want a disk_full refusal saying %q", err, ErrorClass(err), tc.wantMessage)
+			}
+			if len(*builds) != 0 {
+				t.Fatalf("built %d time(s) before refusing", len(*builds))
+			}
+		})
+	}
+}
+
+// The push compares the layers the device lacks with its free space, so a
+// build that goes ahead must carry that free space.
+func TestComposeBuildCarriesTheDeviceStorage(t *testing.T) {
+	fakeAllBuildDisks(t, 100<<30)
+	conn, dir, builds := startComposeBuildProject(t)
+	cacheLinuxDeviceWithFree(conn, 2<<30)
+
+	if err := runComposeWithAgent(context.Background(), conn, dir, runOptions{deploy: true}); err != nil {
+		t.Fatalf("runComposeWithAgent: %v", err)
+	}
+	if len(*builds) != 1 || (*builds)[0].free != 2<<30 || (*builds)[0].mount != "/data" {
+		t.Fatalf("builds saw device storage %+v, want one build with 2 GiB free on /data", *builds)
 	}
 }
