@@ -250,7 +250,8 @@ def prepare(api, run_id):
     merge = api.get(f"commits/{breaking}")
     require(len(merge["parents"]) == 2, "First failing commit is not a merge")
     prs = api.get(f"commits/{breaking}/pulls?per_page=100")
-    linked = [p for p in prs if p.get("merged_at") and p.get("merge_commit_sha") == breaking and p["base"]["ref"] == "main"]
+    # The pinned API version omits merge_commit_sha; a merged PR's head is the merge's second parent.
+    linked = [p for p in prs if p.get("merged_at") and p["head"]["sha"] == merge["parents"][1]["sha"] and p["base"]["ref"] == "main"]
     require(len(prs) < 100 and len(linked) == 1, "Cannot establish one breaking PR")
     pr = linked[0]
     require(pr["user"]["type"] == "User" and

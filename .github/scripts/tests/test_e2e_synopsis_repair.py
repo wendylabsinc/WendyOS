@@ -109,9 +109,10 @@ class API:
         if path == f"commits/{BREAKING}":
             return {"parents": [{"sha": GREEN}, {"sha": "e" * 40}]}
         if path == f"commits/{BREAKING}/pulls?per_page=100":
+            # API version 2026-03-10 omits merge_commit_sha from pull objects.
             return [{"number": 12, "title": "Allow optional port mapping", "merged_at": "2026-10-31T01:00:00Z",
-                     "merge_commit_sha": BREAKING, "base": {"ref": "main"},
-                     "head": {"ref": "feature/tunnel-help", "repo": {"full_name": REPO}},
+                     "base": {"ref": "main"},
+                     "head": {"ref": "feature/tunnel-help", "sha": "e" * 40, "repo": {"full_name": REPO}},
                      "user": {"login": "author", "type": "User"}}]
         if path.startswith("pulls?"):
             assert "state=all" in path and "head=" in path
@@ -280,7 +281,8 @@ class RepairTests(unittest.TestCase):
                        lambda p: p["head"].update(ref="renovate/example"),
                        lambda p: p["head"].update(repo={"full_name": "fork/WendyOS"}),
                        lambda p: p["head"].update(repo=None),
-                       lambda p: p.update(merge_commit_sha=GREEN)):
+                       lambda p: p["head"].update(sha=GREEN),
+                       lambda p: p.update(merged_at=None)):
             api = API()
             original = api.get
 
@@ -299,6 +301,14 @@ class RepairTests(unittest.TestCase):
         api.get = lambda path: original(path) * 2 if path == f"commits/{BREAKING}/pulls?per_page=100" else original(path)
         with self.assertRaises(r.Skip):
             r.prepare(api, 3)
+
+    def test_squash_or_rebase_merge_skips(self):
+        api = API()
+        original = api.get
+        api.get = lambda path: {"parents": [{"sha": GREEN}]} if path == f"commits/{BREAKING}" else original(path)
+        with self.assertRaisesRegex(r.Skip, "First failing commit is not a merge"):
+            r.prepare(api, 3)
+        self.assertFalse(api.writes)
 
     def publish(self, api, proposal=None, mapping=None, slack=True):
         proposal = proposal or r.prepare(api, 3)
