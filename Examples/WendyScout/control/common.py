@@ -277,9 +277,9 @@ def context():
                 "files": [
                     {
                         "path": f["filename"][:200],
-                        "patch": (f.get("patch") or "")[:2500],
+                        "patch": (f.get("patch") or "")[:1200],
                     }
-                    for f in detail.get("files", [])[:4]
+                    for f in detail.get("files", [])[:2]
                 ],
             }
         )

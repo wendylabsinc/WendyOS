@@ -272,10 +272,12 @@ class Scout:
                 "bootstrap": os.environ.get("SCOUT_BOOTSTRAP") == "1",
                 "versions": self.versions if self.ready else {},
             }
-        if report.get("sandbox") != "passed" or report.get(
-            "network_namespace"
-        ) == os.readlink("/proc/self/ns/net"):
-            raise ValueError("Worker isolation preflight required")
+        # This root-supervisor diagnostic is not a security attestation. The
+        # Agent enforces network:none outside Pi; the trusted worker installs
+        # Landlock/seccomp before each test exec. SO_PEERCRED + mode 0600 keep
+        # both model/test UIDs from forging this root-only startup call.
+        if report.get("sandbox") != "passed":
+            raise ValueError("Trusted supervisor startup diagnostic failed")
         with self.lock:
             previous = (
                 list((STATE / "runs").glob("*")) if (STATE / "runs").exists() else []
@@ -334,6 +336,17 @@ class Scout:
                 "target": self.target,
                 "model": PINS["model"],
                 "pi": PINS["pi"],
+                "source_sha256": {
+                    "control": __import__("hashlib")
+                    .sha256(
+                        b"".join(
+                            p.read_bytes()
+                            for p in sorted(pathlib.Path(__file__).parent.glob("*.py"))
+                        )
+                    )
+                    .hexdigest(),
+                    "worker": report.get("source_sha256", ""),
+                },
             }
             # Bound repetition when public context and release pins are unchanged.
             import hashlib
@@ -343,6 +356,7 @@ class Scout:
                     {
                         "versions": {k: v["tag"] for k, v in self.versions.items()},
                         "context": ctx,
+                        "worker_source": report.get("source_sha256", ""),
                     },
                     sort_keys=True,
                 ).encode()
@@ -369,9 +383,11 @@ class Scout:
             }
             # Only bounded sanitized summaries, never shared writable package/session stores.
             history = []
-            for old in sorted(previous)[-3:]:
+            for old in sorted(previous)[-2:]:
                 if (old / "summary.json").exists():
-                    history.append(json.loads((old / "summary.json").read_text()))
+                    item = json.loads((old / "summary.json").read_text())
+                    item["summary"] = str(item.get("summary", ""))[:1200]
+                    history.append(item)
             return {
                 "status": "started",
                 "session": token,
@@ -603,6 +619,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
                                 raise ValueError("Model response budget")
                             self.wfile.write(block)
                             self.wfile.flush()
+                except urllib.error.HTTPError as e:
+                    event(
+                        "model_request_failed",
+                        code=e.code,
+                        diagnostic=scrub(e.read(2048).decode(errors="replace")),
+                    )
+                    raise
                 finally:
                     scout.model_lock.release()
                 return

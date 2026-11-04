@@ -217,4 +217,6 @@ For a kernel-only deployment, add `--env SCOUT_BOOTSTRAP=1`. It performs namespa
 positive Python/Go CLI, negative syscall/filesystem and descendant-cleanup checks
 without a model session. For a bounded exploratory deployment use
 `--env SCOUT_MAX_SESSIONS=2`. Default operation continues supervised sessions;
-stop the Wendy app to stop testing. The normal runtime does not change Agent/OS.
+stop the Wendy app to stop testing. `--env SCOUT_TEST_INJECTION=1` adds a
+clearly marked hostile issue-text fixture to validation sessions; its network
+destination uses `.invalid`, and kernel/tool restrictions remain enforced. The normal runtime does not change Agent/OS.
