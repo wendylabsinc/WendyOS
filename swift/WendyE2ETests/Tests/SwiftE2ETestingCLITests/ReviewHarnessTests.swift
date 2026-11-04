@@ -63,7 +63,67 @@ struct ReviewHarnessTests {
         let output = try runStub(response: response, status: 143)
         #expect(output.contains("input_tokens: unavailable"))
         #expect(output.contains("total_cost_usd: unavailable"))
+        #expect(output.contains("any result text was discarded"))
         #expect(!output.contains("PRIVATE_"))
+    }
+
+    @Test
+    func `verbose output uses the result element of its message array`() throws {
+        let output = try runStub(response: claudeVerboseSuccess)
+        #expect(output.contains("MOCK_REVIEW_TEXT\n"))
+        #expect(output.contains("input_tokens: 11"))
+        #expect(output.contains("output_tokens: 3"))
+        #expect(output.contains("Reported models: claude-sonnet-5-5"))
+        #expect(!output.contains("total_cost_usd: unavailable"))
+        #expect(!output.contains("discarded"))
+    }
+
+    @Test
+    func `verbose output keeps the reason for a failed review`() throws {
+        let output = try runStub(response: claudeVerboseOverloaded, status: 1)
+        #expect(output.contains("API Error: 529 MOCK_OVERLOADED"))
+        #expect(!output.contains("discarded"))
+    }
+
+    @Test(arguments: [
+        "Welcome from ~/.bash_profile\n\(claudeResultLine)\n",
+        "\(claudeResultLine)\nGoodbye from ~/.bash_logout\n",
+        "Welcome from ~/.bash_profile\n\(claudeVerboseSuccess)\n",
+        "\(claudeResultLine)\n{\"level\":\"info\",\"msg\":\"Goodbye\"}\n",
+    ])
+    func `shell output around the JSON line does not lose the result`(response: String) throws {
+        let output = try runStub(response: response)
+        #expect(output.contains("MOCK_REVIEW_TEXT\n"))
+        #expect(output.contains("input_tokens: 11"))
+        #expect(!output.contains("Welcome"))
+        #expect(!output.contains("Goodbye"))
+        #expect(!output.contains("discarded"))
+    }
+
+    @Test(arguments: [
+        "PRIVATE_NON_JSON\nPRIVATE_SECOND_LINE\n",
+        #"[{"type":"system","subtype":"PRIVATE_INIT"},{"type":"assistant"}]"#,
+        #"["PRIVATE_NOT_AN_OBJECT"]"#,
+        #"{"type":"system","subtype":"PRIVATE_INIT"}"#,
+        "{\"level\":\"PRIVATE_LOG\"}\n{\"type\":\"system\",\"subtype\":\"PRIVATE_INIT\"}\n",
+    ])
+    func `a successful exit with unusable output says its text was discarded`(
+        response: String
+    ) throws {
+        let output = try runStub(response: response)
+        #expect(output.contains("any result text was discarded"))
+        #expect(output.contains("total_cost_usd: unavailable"))
+        #expect(!output.contains("PRIVATE_"))
+    }
+
+    @Test
+    func `a result with no text says so and keeps its usage`() throws {
+        let output = try runStub(
+            response: #"{"type":"result","subtype":"error_max_turns","usage":{"input_tokens":5}}"#,
+            status: 1
+        )
+        #expect(output.contains("any result text was discarded"))
+        #expect(output.contains("input_tokens: 5"))
     }
 
     @Test
@@ -109,6 +169,12 @@ struct ReviewHarnessTests {
         #expect(output.contains("GENERATED_TOOL_READ_SENTINEL"))
     }
 }
+
+// Claude Code 2.1.316 output against a local mock API, with `verbose` configured
+// or a ~/.bash_profile that echoes. Only the init record's long lists are trimmed.
+private let claudeVerboseSuccess = #"[{"type":"system","subtype":"init","cwd":"/home/runner","session_id":"66309e0b-aa81-42d5-af17-cd313dc04c8c","tools":[],"mcp_servers":[],"model":"claude-sonnet-5-5","permissionMode":"bypassPermissions","slash_commands":[],"terminal_slash_commands":[],"apiKeySource":"ANTHROPIC_API_KEY","claude_code_version":"2.1.316","output_style":"default","agents":[],"skills":[],"plugins":[],"capabilities":[],"analytics_disabled":true,"product_feedback_disabled":true,"uuid":"783723c4-5b17-4f81-a0f6-4fde2de09ee0","original_cwd":"/home/runner","additional_directories":[],"fast_mode_state":"off","fast_mode_disabled_reason":"sdk_opt_in_required","per_turn_effort_active":true,"ultrathink_available":false,"view_mode":"default"},{"type":"assistant","message":{"id":"msg_mock","type":"message","role":"assistant","model":"claude-sonnet-5-5","content":[{"type":"text","text":"MOCK_REVIEW_TEXT"}],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":11,"output_tokens":1,"cache_creation_input_tokens":0,"cache_read_input_tokens":0},"context_management":null},"parent_tool_use_id":null,"session_id":"66309e0b-aa81-42d5-af17-cd313dc04c8c","uuid":"1c234900-700c-41ab-acdc-b9901f36640a","timestamp":"2026-11-04T18:13:41.754Z"},{"duration_api_ms":6,"stop_reason":"end_turn","session_id":"66309e0b-aa81-42d5-af17-cd313dc04c8c","total_cost_usd":0.000052000000000000004,"usage":{"input_tokens":11,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":3,"output_tokens_details":{"thinking_tokens":0},"server_tool_use":{"web_search_requests":0,"web_fetch_requests":0},"service_tier":"standard","cache_creation":{"ephemeral_1h_input_tokens":0,"ephemeral_5m_input_tokens":0},"inference_geo":"","iterations":[],"speed":"standard","fallback_credit":null},"modelUsage":{"claude-sonnet-5-5":{"inputTokens":11,"outputTokens":3,"cacheReadInputTokens":0,"cacheCreationInputTokens":0,"webSearchRequests":0,"costUSD":0.000052000000000000004,"contextWindow":1000000,"maxOutputTokens":128000,"thinkingTokens":0,"cacheCreationEphemeral5mInputTokens":0,"cacheCreationEphemeral1hInputTokens":0,"canonicalModel":"claude-sonnet-5-5","provider":"firstParty","costBasis":"list"}},"permission_denials":[],"terminal_reason":"completed","fast_mode_state":"off","fast_mode_disabled_reason":"sdk_opt_in_required","subagent_stats":{"spawned":0,"requested":{"background":0,"foreground":0,"unset":0},"started_in_background":0,"max_depth":0,"spawned_by_subagents":0,"completed":0,"failed":0,"killed":{"parent":0,"user":0,"system":0},"refused":{"depth_limit":0,"concurrency_limit":0,"budget":0},"by_type":{}},"safety_stops":0,"is_error":false,"num_turns":1,"subtype":"success","api_error_status":null,"result":"MOCK_REVIEW_TEXT","ttft_ms":21,"type":"result","duration_ms":24,"uuid":"1e4c386a-af31-4257-817f-40ccdd18c435","ttft_stream_ms":21,"time_to_request_ms":19,"first_content_frame_ms":21,"queued_turn_count":0,"result_index":0}]"#
+private let claudeVerboseOverloaded = #"[{"type":"system","subtype":"init","cwd":"/home/runner","session_id":"ecd37e96-1a35-41c5-b875-09584471945b","tools":[],"mcp_servers":[],"model":"claude-sonnet-5-5","permissionMode":"bypassPermissions","slash_commands":[],"terminal_slash_commands":[],"apiKeySource":"ANTHROPIC_API_KEY","claude_code_version":"2.1.316","output_style":"default","agents":[],"skills":[],"plugins":[],"capabilities":[],"analytics_disabled":true,"product_feedback_disabled":true,"uuid":"e77b3aa1-631d-4128-9233-422a440a3ab2","original_cwd":"/home/runner","additional_directories":[],"fast_mode_state":"off","fast_mode_disabled_reason":"sdk_opt_in_required","per_turn_effort_active":true,"ultrathink_available":false,"view_mode":"default"},{"type":"assistant","message":{"diagnostics":null,"id":"41341564-c244-488d-9fbe-f764148898df","container":null,"model":"<synthetic>","role":"assistant","stop_details":null,"stop_reason":"stop_sequence","stop_sequence":"","type":"message","usage":{"output_tokens_details":null,"input_tokens":0,"output_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"server_tool_use":{"web_search_requests":0,"web_fetch_requests":0},"service_tier":null,"cache_creation":{"ephemeral_1h_input_tokens":0,"ephemeral_5m_input_tokens":0},"inference_geo":null,"iterations":null,"speed":null,"fallback_credit":null},"content":[{"type":"text","text":"API Error: 529 MOCK_OVERLOADED. This is a server-side issue, usually temporary — try again in a moment. If it persists, check your inference gateway (127.0.0.1:23700)."}],"context_management":null},"parent_tool_use_id":null,"session_id":"ecd37e96-1a35-41c5-b875-09584471945b","uuid":"00843734-e445-490f-84a8-189d10864b53","timestamp":"2026-11-04T18:13:42.394Z","error":"server_error","is_api_error_message":true,"api_error_status":529},{"duration_api_ms":0,"stop_reason":"stop_sequence","session_id":"ecd37e96-1a35-41c5-b875-09584471945b","total_cost_usd":0,"usage":{"output_tokens_details":{"thinking_tokens":0},"input_tokens":0,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":0,"server_tool_use":{"web_search_requests":0,"web_fetch_requests":0},"service_tier":"standard","cache_creation":{"ephemeral_1h_input_tokens":0,"ephemeral_5m_input_tokens":0},"inference_geo":"","iterations":[],"speed":"standard","fallback_credit":null},"modelUsage":{},"permission_denials":[],"terminal_reason":"api_error","fast_mode_state":"off","fast_mode_disabled_reason":"sdk_opt_in_required","subagent_stats":{"spawned":0,"requested":{"background":0,"foreground":0,"unset":0},"started_in_background":0,"max_depth":0,"spawned_by_subagents":0,"completed":0,"failed":0,"killed":{"parent":0,"user":0,"system":0},"refused":{"depth_limit":0,"concurrency_limit":0,"budget":0},"by_type":{}},"safety_stops":0,"is_error":true,"num_turns":1,"subtype":"success","api_error_status":529,"result":"API Error: 529 MOCK_OVERLOADED. This is a server-side issue, usually temporary — try again in a moment. If it persists, check your inference gateway (127.0.0.1:23700).","type":"result","duration_ms":23,"uuid":"7dabb79d-142d-4d19-b4db-8e7221c8ca72","queued_turn_count":0,"result_index":0}]"#
+private let claudeResultLine = #"{"duration_api_ms":5,"stop_reason":"end_turn","session_id":"bbca82a5-b9d6-44a9-af82-d3ca2fa5b01b","total_cost_usd":0.000052000000000000004,"usage":{"input_tokens":11,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":3,"output_tokens_details":{"thinking_tokens":0},"server_tool_use":{"web_search_requests":0,"web_fetch_requests":0},"service_tier":"standard","cache_creation":{"ephemeral_1h_input_tokens":0,"ephemeral_5m_input_tokens":0},"inference_geo":"","iterations":[],"speed":"standard","fallback_credit":null},"modelUsage":{"claude-sonnet-5-5":{"inputTokens":11,"outputTokens":3,"cacheReadInputTokens":0,"cacheCreationInputTokens":0,"webSearchRequests":0,"costUSD":0.000052000000000000004,"contextWindow":1000000,"maxOutputTokens":128000,"thinkingTokens":0,"cacheCreationEphemeral5mInputTokens":0,"cacheCreationEphemeral1hInputTokens":0,"canonicalModel":"claude-sonnet-5-5","provider":"firstParty","costBasis":"list"}},"permission_denials":[],"terminal_reason":"completed","fast_mode_state":"off","fast_mode_disabled_reason":"sdk_opt_in_required","subagent_stats":{"spawned":0,"requested":{"background":0,"foreground":0,"unset":0},"started_in_background":0,"max_depth":0,"spawned_by_subagents":0,"completed":0,"failed":0,"killed":{"parent":0,"user":0,"system":0},"refused":{"depth_limit":0,"concurrency_limit":0,"budget":0},"by_type":{}},"safety_stops":0,"is_error":false,"num_turns":1,"subtype":"success","api_error_status":null,"result":"MOCK_REVIEW_TEXT","ttft_ms":21,"type":"result","duration_ms":24,"uuid":"b9afaec7-b9d8-44ed-995b-13aa345c7316","ttft_stream_ms":21,"time_to_request_ms":19,"first_content_frame_ms":21,"queued_turn_count":0,"result_index":0}"#
 
 private func runStub(
     response: String,

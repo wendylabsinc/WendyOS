@@ -18,11 +18,16 @@ import urllib.request
 from typing import Any
 
 from review_diff import diff_lines, split_diff
-from review_sources import source_diff, SOURCE_ONLY_RULE, ReviewError as SourceError
+from review_sources import git_path, source_diff, SOURCE_ONLY_RULE, ReviewError as SourceError
 
 COMMENT_MARKER = "<!-- ai-security-review:v1 -->"
 BLOCKING_MARKER = "<!-- ai-security-review:has-blocking=true -->"
 CREDIT_WARNING_MARKER = "<!-- ai-security-review:credit-unavailable -->"
+GENERATED_ONLY_MARKER = "<!-- ai-security-review:generated-only -->"
+GENERATED_ONLY_CLEAR_PATH = (
+    "A later push with a non-generated change gets a normal review, "
+    "or a maintainer can delete the bot comment after triage."
+)
 MAX_DIFF_BYTES = 512_000
 MAX_COMMENT_BYTES = 65_000
 TRUST_BOUNDARY_TAGS = (
@@ -505,8 +510,14 @@ def collect_security_comments(diff_text: str) -> list[dict[str, Any]]:
     path = ""
     new_line: int | None = None
     for line in diff_lines(diff_text):
-        if line.startswith("+++ b/"):
-            path = line.removeprefix("+++ b/")
+        # Hunk lines always carry a prefix, so only this ends a hunk. Inside one,
+        # "+++ " is source text, such as an added "++ b/other.go".
+        if line.startswith("diff --git "):
+            new_line = None
+            continue
+        if new_line is None and line.startswith("+++ "):
+            target = git_path(line[4:].removesuffix("\t"))
+            path = target[2:] if target.startswith("b/") else ""
             continue
         if line.startswith("@@"):
             match = re.search(r"\+(\d+)", line)
@@ -961,13 +972,19 @@ def command_review(args: argparse.Namespace) -> None:
     if actual != manifest:
         raise ReviewError("Review input no longer matches the prepared input manifest")
     if not manifest["reviewed_files"]:
+        has_blocking = previous_review_has_blocking(previous_review)
         note = "Only generated protocol output changed. No AI review was performed; prior findings are preserved."
+        if has_blocking:
+            note += " Earlier blockers stay open. " + GENERATED_ONLY_CLEAR_PATH
         review = "# AI Security Review\n\n" + note + "\n\n" + coverage_text(manifest, reviewed=False)
-        if previous_review.strip():
-            review += "\n\n" + previous_review
+        review += "\n\n" + GENERATED_ONLY_MARKER
+        # A repeat run replaces its own wrapper rather than nesting inside it.
+        preserved = previous_review.replace(COMMENT_MARKER, "").split(GENERATED_ONLY_MARKER, 1)[-1].strip()
+        if preserved:
+            review += "\n\n" + preserved
         pathlib.Path(args.review_output).write_text(review + "\n", encoding="utf-8")
         _write_json(args.result_output, {
-            "credit_unavailable": False, "has_blocking": previous_review_has_blocking(previous_review),
+            "credit_unavailable": False, "has_blocking": has_blocking,
             "head_sha": manifest["head_sha"], "sha256": manifest["sha256"],
         })
         _append_summary(note)
@@ -1127,10 +1144,13 @@ def command_enforce(args: argparse.Namespace) -> None:
             "Security-review result does not match the validated PR input manifest"
         )
     if result["has_blocking"]:
-        raise ReviewError(
+        message = (
             "Security review found open HIGH or CRITICAL severity issues. "
             "Address or explicitly silence them before merging."
         )
+        if manifest.get("reviewed_files") == 0:
+            message += " Only generated output changed, so no review ran. " + GENERATED_ONLY_CLEAR_PATH
+        raise ReviewError(message)
     print("No open HIGH or CRITICAL security findings")
 
 

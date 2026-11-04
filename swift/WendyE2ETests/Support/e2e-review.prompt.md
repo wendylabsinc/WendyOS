@@ -16,8 +16,9 @@ custom-harness file/shell tools remain unrestricted; this prompt is scope
 guidance, not an enforced filesystem boundary. Do not retrieve or make findings
 about excluded generated implementation through tools. Review source definitions,
 generators, schema/source pins, configuration and generation checks instead.
-State when upstream schema bodies are unavailable. Preserve actual failure,
-test/runtime and prior-finding evidence even for a generated-only diff.
+State when upstream schema bodies are unavailable. Preserve actual failure and
+test/runtime evidence even for a generated-only diff. Findings from earlier CI
+runs are not part of this input.
 
 Guidelines:
 

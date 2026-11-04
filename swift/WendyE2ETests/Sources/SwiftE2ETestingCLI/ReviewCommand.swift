@@ -291,9 +291,17 @@ struct ShellReviewHarness: Sendable {
         if capturesClaudeJSON {
             try? capture?.close()
             let data = (try? Data(contentsOf: captureURL)) ?? Data()
-            let result = try? JSONDecoder().decode(ClaudeReviewResult.self, from: data)
+            let result = decodeClaudeReviewResult(data)
             if let text = result?.result {
                 output.write(Data((text + "\n").utf8))
+            }
+            if result?.result == nil {
+                output.write(
+                    Data(
+                        "==> Claude review output had no usable JSON result; any result text was discarded.\n"
+                            .utf8
+                    )
+                )
             }
             output.write(Data(claudeReviewUsageSummary(result, authSummary: authSummary).utf8))
         }
@@ -316,25 +324,47 @@ private struct ClaudeReviewResult: Decodable {
 
     // Decode only the allowlisted fields. Bad or absent accounting must not
     // discard the ordinary result text or turn unknown usage into zero.
+    var type: String?
     var result: String?
     var usage: Usage?
     var totalCostUSD: Double?
     var models: [String]?
 
     private enum CodingKeys: String, CodingKey {
-        case result, usage, total_cost_usd, modelUsage
+        case type, result, usage, total_cost_usd, modelUsage
     }
 
     private struct ModelMetadata: Decodable {}
 
     init(from decoder: any Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
+        type = try? values.decode(String.self, forKey: .type)
         result = try? values.decode(String.self, forKey: .result)
         usage = try? values.decode(Usage.self, forKey: .usage)
         totalCostUSD = try? values.decode(Double.self, forKey: .total_cost_usd)
         models = (try? values.decode([String: ModelMetadata].self, forKey: .modelUsage))?
             .keys.sorted()
     }
+}
+
+private func decodeClaudeReviewResult(_ data: Data) -> ClaudeReviewResult? {
+    func decode(_ data: Data) -> ClaudeReviewResult? {
+        let decoder = JSONDecoder()
+        if let result = try? decoder.decode(ClaudeReviewResult.self, from: data) {
+            return result
+        }
+        // A configured `verbose` setting prints the whole message array.
+        return (try? decoder.decode([ClaudeReviewResult].self, from: data))?
+            .last { $0.type == "result" }
+    }
+    if let result = decode(data) {
+        return result
+    }
+    // A login-shell profile can print around Claude's single JSON line. Its own
+    // JSON logging must not win, and any object decodes since every field is optional.
+    return data.split(separator: UInt8(ascii: "\n")).reversed().lazy
+        .compactMap { decode(Data($0)) }
+        .first { $0.type == "result" || $0.result != nil }
 }
 
 private func claudeReviewUsageSummary(
@@ -1065,7 +1095,7 @@ private func appendReviewContext(_ context: ReviewContext, repoURL: URL, to line
         "Use the prepared source index for additional source inspection. Do not read or report excluded generated implementation through file, search, shell, Git, MCP or custom-harness tools. Those tool responses are not automatically filtered. Uncommitted/untracked source and absent upstream schema bodies are not prepared or proven reviewed."
     )
     lines.append(
-        "Keep diagnosing actual failures, flakes, infrastructure problems and qualitative test-source AI requests using run/test evidence. A generated-only diff does not erase prior actionable findings or make a failed run pass. Exclusion counts and generation/build checks do not prove API or behavior coverage."
+        "Keep diagnosing actual failures, flakes, infrastructure problems and qualitative test-source AI requests using run/test evidence. A generated-only diff does not make a failed run pass. Findings from earlier CI runs are not supplied here, so do not claim to retain or resolve them. Exclusion counts and generation/build checks do not prove API or behavior coverage."
     )
 
     guard case .diff(let range) = context.mode else {

@@ -12,6 +12,11 @@ struct ReviewSourceInputs {
     var status: String
 }
 
+/// Not a command-line mistake, so ArgumentParser must not follow it with usage text.
+struct ReviewSourcePreparationError: Error, CustomStringConvertible {
+    var description: String
+}
+
 func prepareReviewSourceInputs(
     repoURL: URL,
     runURL: URL,
@@ -35,7 +40,10 @@ func prepareReviewSourceInputs(
     let errorData = errors.fileHandleForReading.readDataToEndOfFile()
     process.waitUntilExit()
     guard process.terminationStatus == 0 else {
-        throw ValidationError(String(decoding: errorData, as: UTF8.self))
+        throw ReviewSourcePreparationError(
+            description: String(decoding: errorData, as: UTF8.self)
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        )
     }
     struct Metadata: Decodable {
         var policy_rule: String

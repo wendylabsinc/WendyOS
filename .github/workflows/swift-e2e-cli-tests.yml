@@ -1,0 +1,77 @@
+name: Swift E2E CLI Tests
+
+# The E2E analysis CLI and its Python input adapter otherwise run for the first
+# time when a real E2E failure reaches the Analyze job.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/swift-e2e-cli-tests.yml'
+      - '.github/workflows/swift-e2e-tests.yml'
+      - '.github/scripts/e2e_review_sources.py'
+      - '.github/scripts/review_diff.py'
+      - '.github/scripts/review_sources.py'
+      - '.github/scripts/swift_e2e_gate_test.py'
+      - 'swift/Scripts/E2EAnalyze.ps1'
+      - 'swift/Scripts/E2EAnalyze.sh'
+      - 'swift/Scripts/E2EAnalyze_test.sh'
+      - 'swift/WendyE2ETests/Package.resolved'
+      - 'swift/WendyE2ETests/Package.swift'
+      - 'swift/WendyE2ETests/Sources/**'
+      - 'swift/WendyE2ETests/Support/**'
+      - 'swift/WendyE2ETests/Tests/SwiftE2ETestingCLITests/**'
+  pull_request:
+    paths:
+      - '.github/workflows/swift-e2e-cli-tests.yml'
+      - '.github/workflows/swift-e2e-tests.yml'
+      - '.github/scripts/e2e_review_sources.py'
+      - '.github/scripts/review_diff.py'
+      - '.github/scripts/review_sources.py'
+      - '.github/scripts/swift_e2e_gate_test.py'
+      - 'swift/Scripts/E2EAnalyze.ps1'
+      - 'swift/Scripts/E2EAnalyze.sh'
+      - 'swift/Scripts/E2EAnalyze_test.sh'
+      - 'swift/WendyE2ETests/Package.resolved'
+      - 'swift/WendyE2ETests/Package.swift'
+      - 'swift/WendyE2ETests/Sources/**'
+      - 'swift/WendyE2ETests/Support/**'
+      - 'swift/WendyE2ETests/Tests/SwiftE2ETestingCLITests/**'
+
+concurrency:
+  group: swift-e2e-cli-tests-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  cli-tests:
+    name: CLI Tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Evaluate E2E job conditions
+        run: python3 .github/scripts/swift_e2e_gate_test.py
+
+      - name: Check the local analyze scripts
+        run: bash swift/Scripts/E2EAnalyze_test.sh
+
+      - name: Set up Swift
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash swift/Scripts/E2ESetup.sh
+          for dir in "$HOME/.swiftly/bin" "$HOME/.local/share/swiftly/bin" /usr/share/swift/usr/bin; do
+            if [[ -d "$dir" ]]; then
+              echo "$dir" >> "$GITHUB_PATH"
+            fi
+          done
+
+      - name: Run CLI tests
+        working-directory: swift/WendyE2ETests
+        run: swift test --filter SwiftE2ETestingCLITests
