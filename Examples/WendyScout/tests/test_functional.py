@@ -151,4 +151,11 @@ class FunctionalTests(unittest.TestCase):
         self.assertTrue(compact["completed"] and compact["cleanup_verified"])
         self.assertEqual(compact["id"], r["id"])
         self.assertNotIn("raw_private_stdout", json.dumps(compact))
-        self.assertTrue(compact["output"]["checks"])
+        self.assertEqual(
+            compact["output"]["check_columns"], ["check", "expected", "actual"]
+        )
+        self.assertEqual(
+            compact["output"]["checks"],
+            [[c["check"], c["expected"], c["actual"]] for c in r["output"]["checks"]],
+        )
+        self.assertLess(len(json.dumps(compact)), 3000)

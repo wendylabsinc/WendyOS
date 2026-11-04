@@ -88,12 +88,36 @@ def public_result(record):
 def model_observation(result):
     """Keep full traces durable, without repeating them into the model context."""
     if result.get("evidence_kind") == "functional_workflow":
+        public = public_result(result)
         return {
-            **public_result(result),
             **{
                 k: result[k]
-                for k in ["evidence_kind", "completed", "cleanup_verified", "seconds"]
+                for k in [
+                    "id",
+                    "evidence_kind",
+                    "kind",
+                    "version",
+                    "agent",
+                    "outcome",
+                    "completed",
+                    "cleanup_verified",
+                    "seconds",
+                ]
             },
+            "output": {
+                "outcome": result["outcome"],
+                "check_columns": ["check", "expected", "actual"],
+                "checks": [
+                    [c["check"], c["expected"], c["actual"]]
+                    for c in public["output"]["checks"]
+                ],
+            },
+            "steps": [
+                {"command": list(command)}
+                for command in dict.fromkeys(
+                    tuple(s["command"]) for s in public["steps"]
+                )
+            ],
         }
     return {
         **{

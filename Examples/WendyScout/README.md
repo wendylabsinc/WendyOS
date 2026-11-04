@@ -4,7 +4,8 @@
 
 One Wendy app runs a pinned local GPU model and a fresh Pi session per iteration.
 Pi uses recent public commits/patches/releases/issues and recent experiment history
-to choose a functional hypothesis. Trusted tools reset, exercise and remove only
+to choose one functional hypothesis and stable/nightly workflow pair per session.
+Trusted tools reset, exercise and remove only
 Scout's disposable app. They return exact commands, expected/actual checks and
 fresh evidence IDs. Optional offline scripts help diagnose results. Help/version
 output and arbitrary changed JSON values cannot produce an issue.
@@ -90,6 +91,9 @@ filled 16K context (16,331 prompt tokens left only 53 output tokens). That was a
 context limit, not proof of model weakness. Invalid report arguments and one stale
 chronology claim remained model mistakes; no regression was accepted. The functional
 path replaces that help-heavy prompt and results with compact trusted workflows.
+Check rows preserve expected/actual values without repeated labels/commands;
+full ordered traces remain durable. A six-workflow functional turn also exceeded
+16K, so the prompt finishes after one comparison rather than exhausting the menu.
 The cached 30B rollback pins remain in both service directories at `29ede24d5`.
 
 Direct Thor replay passed all three functional workflows twice on stable and
