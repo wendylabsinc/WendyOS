@@ -159,6 +159,22 @@ class Publisher:
         # Structured, scrubbed output only. No user/model-written title/body,
         # comments, mentions, links from source text, or script stdout.
         observations = finding["results"] + finding.get("current_stable", [])
+        if finding["probe"].startswith("help_"):
+            # Preserve every replay without publishing large CLI help buffers.
+            # The flag predicate is the observation; complete text stays local.
+            observations = [
+                {
+                    **r,
+                    "output": {
+                        "flag": finding.get("field", ""),
+                        "present": finding.get("field", "") in str(r["output"]),
+                        "text_sha256": hashlib.sha256(
+                            str(r["output"]).encode()
+                        ).hexdigest(),
+                    },
+                }
+                for r in observations
+            ]
         # Output has already passed the typed public projection; do not regex
         # away version fields or replace a real semantic predicate with a mask.
         body = (
@@ -192,13 +208,17 @@ class Publisher:
             r"github_pat_|gh[opusr]_|BEGIN .*PRIVATE|https?://(?!github.com/)", body
         ):
             raise ValueError("Potential private/unapproved content; publication held")
+        if len(body) > 50000:
+            raise ValueError(
+                "Replay evidence exceeds issue body limit; publication held"
+            )
         recent.append({"day": today, "time": now.timestamp(), "fingerprint": fp})
         record["attempts"] = recent[-20:]
         save(self.ledger, record)
         issue = self.transport.request(
             "POST",
             "issues",
-            {"title": title, "body": body[:50000], "labels": ["ai-found"]},
+            {"title": title, "body": body, "labels": ["ai-found"]},
         )
         record["published"][fp] = issue["html_url"]
         save(self.ledger, record)

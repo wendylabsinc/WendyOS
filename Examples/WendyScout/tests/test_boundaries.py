@@ -372,6 +372,25 @@ class PublisherTests(unittest.TestCase):
         ]
         self.assertEqual(self.pub.publish(other)["status"], "published")
 
+    def test_large_help_preserves_every_replay_without_raw_prose(self):
+        f = self.finding("--json")
+        f["probe"] = "help_root"
+        f["kind"] = "help_flag_missing-regression"
+        for i, r in enumerate(f["results"]):
+            r["output"] = "x" * 30000 + (" --json " if i % 2 == 0 else "")
+        self.assertEqual(self.pub.publish(f)["status"], "published")
+        body = next(
+            c[2]["body"]
+            for c in FakeGitHub.calls
+            if c[0] == "POST" and c[1].endswith("/issues")
+        )
+        self.assertLess(len(body), 50000)
+        self.assertNotIn("x" * 100, body)
+        observed = json.loads(body.split("```json\n")[1].split("\n```")[0])
+        self.assertEqual(
+            [r["output"]["present"] for r in observed], [True, False, True, False]
+        )
+
     def test_unverified_fixed_and_unapproved_routes(self):
         for d in [{}, {**self.finding(), "already_fixed_in_newer_stable": True}]:
             with self.assertRaises(ValueError):
