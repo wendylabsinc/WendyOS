@@ -37,12 +37,16 @@ func writeDragonwingZeros(dir string) (string, error) {
 	return path, nil
 }
 
-// resolveSeedAgent fetches the agent to seed: best-effort, and the latest stable
-// one whatever image is being flashed, as every other board does. It is the only
-// network step in a flash, so an offline re-flash must still seed wifi and
-// enrollment. The warning it returns is for the caller to surface — a step's own
-// output only reaches the screen when that step fails.
-func resolveSeedAgent(out io.Writer, detail func(string)) ([]byte, string) {
+// resolveSeedAgent uses the validated local binary when provided. Otherwise it
+// downloads the latest stable agent, allowing an offline flash to fall back to
+// the image's bundled agent. The returned warning lets callers surface download
+// failures after the flash UI finishes.
+func resolveSeedAgent(out io.Writer, detail func(string), local *localInstallAgent) ([]byte, string) {
+	if local != nil {
+		detail("local agent " + local.path)
+		fmt.Fprintf(out, "Using local wendy-agent %s (%s)\n", local.path, local.arch)
+		return local.data, ""
+	}
 	detail("downloading agent")
 	agent, version, _, err := resolveAgentArtifact("linux", "arm64", false)
 	if err != nil {

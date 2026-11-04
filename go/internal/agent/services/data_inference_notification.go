@@ -26,7 +26,8 @@ type CampaignNotificationSender interface {
 	Send(context.Context, string, DetectionNotification) error
 }
 
-// CampaignCloudSender labels notifications with campaign:<name>. Cloud derives
+// CampaignCloudSender labels notifications with sh.wendy.campaign.<name>, or
+// sh.wendy.watch.<name> for a watch's. Cloud derives
 // the destination organization from the enrolled device credential.
 // An explicit webhook continues to select direct HTTP delivery.
 type CampaignCloudSender struct {
@@ -48,11 +49,11 @@ func (s *CampaignCloudSender) Send(ctx context.Context, endpoint string, notific
 		"count":          notification.Count,
 		"occurred_at":    notification.OccurredAt,
 	}
-	appID := "campaign:" + notification.Campaign
+	appID := data.CampaignAppID(notification.Campaign)
 	title, body := "Campaign event", fmt.Sprintf("Campaign %s emitted %s.", notification.Campaign, notification.Event)
 	if notification.Watch != "" {
 		fields["watch"], fields["inference"] = notification.Watch, notification.Inference
-		appID = "watch:" + notification.Watch
+		appID = data.WatchAppID(notification.Watch)
 		title, body = "Watch event", fmt.Sprintf("Watch %s saw %s.", notification.Watch, notification.Event)
 	} else {
 		fields["campaign"] = notification.Campaign

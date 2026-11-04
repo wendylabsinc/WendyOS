@@ -91,7 +91,7 @@ func largeChainCredentials(t *testing.T, padding int) (*Credentials, *Credential
 		if err != nil {
 			t.Fatal(err)
 		}
-		credentials, err := NewCredentials(leaf.pem, chain, string(pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: der})))
+		credentials, err := newTestCredentials(leaf.pem, chain, string(pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: der})))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -147,6 +147,7 @@ func TestCloudV2LargeChainQUIC(t *testing.T) {
 		}
 	})
 	t.Run("missing-required-intermediate", func(t *testing.T) {
+		a.issuerMaterial.Clear()
 		server := config(b, a.Device)
 		cert := server.Certificates[0]
 		cert.Certificate = cert.Certificate[:1]

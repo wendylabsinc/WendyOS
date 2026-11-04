@@ -1498,8 +1498,9 @@ func (c *Client) createContainer(ctx context.Context, req *agentpb.CreateContain
 	entCfg := *appCfg
 	entCfg.AppID = appID
 	entCfg.ServiceName = serviceName
-	// Plan the mount without replacing the running task's private bus.
-	// Prepare must create this exact directory before NewContainer consumes it.
+	// Plan the new container's bounded mount before stopping the old stack,
+	// even when that stack recovered a pre-hash persisted mount. Prepare must
+	// create this directory after the swap, before NewContainer consumes it.
 	if hasAvahi(&entCfg) {
 		opts.AvahiProxySocketDir = c.avahiManager.ProxySocketDir(containerName)
 	}

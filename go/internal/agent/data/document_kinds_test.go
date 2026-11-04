@@ -78,6 +78,16 @@ func TestInferenceDocumentRevisionFollowsTheAuthor(t *testing.T) {
 	if first.Revision == changed.Revision || first.Revision == owned.Revision {
 		t.Fatal("an author change kept the revision")
 	}
+	// Both choose what the job runs, so a change must replace a running job.
+	for _, field := range []string{"accelerator: cpu\n", "task: object-detection\n"} {
+		edited, err := ParseDocument([]byte(testInferenceDocument + field))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if edited.Revision == first.Revision {
+			t.Fatalf("adding %q kept the revision", field)
+		}
+	}
 }
 
 func TestInferenceDocumentErrors(t *testing.T) {

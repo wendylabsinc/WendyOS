@@ -97,7 +97,7 @@ func (s *DataService) applyDocument(document datadoc.Document) (data.StoredDocum
 func (s *DataService) DocumentRemove(ctx context.Context, req *agentpbv2.DataDocumentRemoveRequest) (*agentpbv2.DataDocumentRemoveResponse, error) {
 	switch req.GetKind() {
 	case datadoc.DefaultKind:
-		return nil, status.Error(codes.FailedPrecondition, "collections cannot be removed yet")
+		return nil, status.Error(codes.FailedPrecondition, "remove a collection with `wendy data campaign remove`")
 	case data.KindInference, data.KindWatch:
 	default:
 		return nil, status.Errorf(codes.InvalidArgument, "unknown document kind %q", req.GetKind())

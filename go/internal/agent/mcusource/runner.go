@@ -5,6 +5,7 @@ import (
 	"net"
 	"strconv"
 	"sync"
+	"time"
 
 	"github.com/wendylabsinc/wendy/go/internal/shared/models"
 
@@ -121,6 +122,68 @@ func resolvePairingLANAddrs(ctx context.Context, p SensorPairing) ([]string, boo
 	return nil, false
 }
 
+// meshSourceLANWindow bounds discovery, not authenticated source setup. A
+// routed-only source must not spend the full browse budget waiting for LAN.
+const meshSourceLANWindow = time.Second
+
+// NewSourceResolver resolves LAN first and retains a live signed mesh endpoint
+// as a sequential alternative. No TLS connection or manifest probe is opened
+// by discovery. Each attempt still authenticates the saved source principal.
+func NewSourceResolver(meshSources func() []models.LANDevice) SourceResolver {
+	return newSourceResolver(meshSources, resolvePairingLANAddrs)
+}
+
+func newSourceResolver(meshSources func() []models.LANDevice, resolveLAN SourceResolver) SourceResolver {
+	return func(ctx context.Context, p SensorPairing) ([]string, bool) {
+		if p.SourcePrincipalURI == "" || p.Transport != "wendycom" || meshSources == nil {
+			return resolveLAN(ctx, p)
+		}
+		routed := func() []string {
+			var addresses []string
+			seen := make(map[string]bool)
+			for _, d := range meshSources() {
+				if d.PrincipalURI != p.SourcePrincipalURI || !d.WendyLite || !d.IsMTLS || !d.Sensorlink || d.Port <= 0 || d.Port > 65535 {
+					continue
+				}
+				for _, host := range append([]string{d.IPAddress}, d.Addresses...) {
+					if host == "" {
+						continue
+					}
+					address := net.JoinHostPort(host, strconv.Itoa(d.Port))
+					if !seen[address] {
+						addresses = append(addresses, address)
+						seen[address] = true
+					}
+				}
+			}
+			return addresses
+		}
+		lanCtx := ctx
+		cancel := func() {}
+		if len(routed()) != 0 {
+			lanCtx, cancel = context.WithTimeout(ctx, meshSourceLANWindow)
+		}
+		addresses, _ := resolveLAN(lanCtx, p)
+		cancel()
+		if ctx.Err() != nil {
+			return nil, false
+		}
+		seen := make(map[string]bool)
+		var candidates []string
+		// Read the mesh projection again after browsing, so a withdrawn route
+		// or changed signed port cannot leave a stale fallback in this attempt.
+		for _, list := range [][]string{addresses, routed()} {
+			for _, address := range list {
+				if address != "" && !seen[address] {
+					candidates = append(candidates, address)
+					seen[address] = true
+				}
+			}
+		}
+		return candidates, len(candidates) != 0
+	}
+}
+
 // Runner owns one cancelable goroutine per active pairing, all driven through
 // the single shared Supervisor (its node-id allocator must stay shared across
 // every pairing on the agent).
@@ -144,6 +207,17 @@ func NewRunner(logger *zap.Logger, sup *Supervisor) *Runner {
 // reconnect so a source that changes IP is still found. A non-empty addr is a
 // pinned target RunPairing reuses unchanged.
 func (r *Runner) Start(p SensorPairing, addr string) {
+	r.start(p, addr, false)
+}
+
+// StartDiscovered treats a principal-based source's picker address as an
+// initial hint, then re-resolves its identity on every reconnect. Explicit
+// Start callers retain their pinned-address behavior, as do legacy pairings.
+func (r *Runner) StartDiscovered(p SensorPairing, addr string) {
+	r.start(p, addr, p.SourcePrincipalURI != "")
+}
+
+func (r *Runner) start(p SensorPairing, addr string, dynamic bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	// A restart retains allocations but must not overlap the previous writers.
@@ -153,7 +227,7 @@ func (r *Runner) Start(p SensorPairing, addr string) {
 	r.runs[p.Key()] = pairingRun{cancel: cancel, done: done}
 	go func() {
 		defer close(done)
-		if err := r.sup.RunPairing(ctx, p, addr); err != nil && ctx.Err() == nil {
+		if err := r.sup.runPairing(ctx, p, addr, addr != "" && !dynamic); err != nil && ctx.Err() == nil {
 			r.logger.Warn("sensor pairing supervisor exited", zap.String("source", p.Key()), zap.Error(err))
 		}
 	}()

@@ -14,6 +14,16 @@ import (
 	"github.com/wendylabsinc/wendy/go/internal/shared/atomicfile"
 )
 
+// CampaignAppPrefix is shared by runtime recordings, Cloud registration and notifications.
+const CampaignAppPrefix = "sh.wendy.campaign."
+
+func CampaignAppID(name string) string { return CampaignAppPrefix + name }
+
+// WatchAppPrefix is CampaignAppPrefix for a watch's notifications.
+const WatchAppPrefix = "sh.wendy.watch."
+
+func WatchAppID(name string) string { return WatchAppPrefix + name }
+
 // NotificationDetection summarizes one detection for a notification: its label
 // and score, never a box or an image.
 type NotificationDetection struct {
@@ -172,7 +182,7 @@ func notificationMatches(n CampaignNotification, appID, event string, watches []
 	if event != "" && event != n.Event {
 		return false
 	}
-	if appID != "" && !(n.Campaign != "" && appID == "sh.wendy.campaign."+n.Campaign) && !(n.Watch != "" && appID == "sh.wendy.watch."+n.Watch) {
+	if appID != "" && !(n.Campaign != "" && appID == CampaignAppID(n.Campaign)) && !(n.Watch != "" && appID == WatchAppID(n.Watch)) {
 		return false
 	}
 	if len(watches) > 0 {

@@ -12,8 +12,9 @@ type udpSession struct {
 	peer    meshid.Device
 	address netip.AddrPort
 	cancel  context.CancelFunc
-	flow    *DatagramFlow
+	flow    interface{ Close() error }
 	retired bool
+	tls     bool
 }
 
 // DialUDP opens a dedicated authenticated session for one datagram flow. Like

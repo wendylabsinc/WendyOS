@@ -69,8 +69,8 @@ func TestParseDocumentFilterAndRef(t *testing.T) {
 
 func TestDocumentCloudApps(t *testing.T) {
 	cases := map[string][]string{
-		"version: 1\nname: clips\nsources: [{telemetry: true}]\ncapture: {buffer: 0s, after_trigger: 1s, triggers: [{event: x}]}\nupload: {when: manual}\nexport: {annotation: cvat}\n": {"campaign:clips"},
-		"kind: watch\nversion: 1\nname: porch\non: {inference: door}\nnotify: [cloud]\n":                                                                                                {"watch:porch"},
+		"version: 1\nname: clips\nsources: [{telemetry: true}]\ncapture: {buffer: 0s, after_trigger: 1s, triggers: [{event: x}]}\nupload: {when: manual}\nexport: {annotation: cvat}\n": {data.CampaignAppID("clips")},
+		"kind: watch\nversion: 1\nname: porch\non: {inference: door}\nnotify: [cloud]\n":                                                                                                {data.WatchAppID("porch")},
 		"kind: watch\nversion: 1\nname: chat-1\nlease: 60s\non: {inference: chat-1}\n":                                                                                                  nil,
 	}
 	for contents, want := range cases {

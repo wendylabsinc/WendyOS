@@ -67,7 +67,7 @@ func meshDiscoveryFilter() map[string]dbus.Variant {
 // existing agent bus connection, so StopDiscovery releases only our session;
 // other clients and existing ACLs are not disconnected.
 func restartDiscoverySession(ctx context.Context, call func(context.Context, string, ...any) error) error {
-	stopErr := call(ctx, adapterInterface+".StopDiscovery")
+	stopErr := stoppedDiscoveryResult(call(ctx, adapterInterface+".StopDiscovery"))
 	filterErr := call(ctx, adapterInterface+".SetDiscoveryFilter", meshDiscoveryFilter())
 	// Attempt to restore our session even if BlueZ reported an inconsistent
 	// StopDiscovery or rejected the filter update.
@@ -89,12 +89,35 @@ func restartBlueZDiscovery(ctx context.Context, bus *dbus.Conn, adapter dbus.Obj
 	})
 }
 
+// BlueZ's discovery list is per D-Bus sender. Its exact response for an
+// absent caller session means our desired stopped state is already reached,
+// even if Adapter1.Discovering is true for another client. Preserve all other
+// errors, including an operation still in progress.
+func stoppedDiscoveryResult(err error) error {
+	matches := func(e dbus.Error) bool {
+		if e.Name != "org.bluez.Error.Failed" || len(e.Body) != 1 {
+			return false
+		}
+		message, ok := e.Body[0].(string)
+		return ok && message == "No discovery started"
+	}
+	var pointer *dbus.Error
+	if errors.As(err, &pointer) && pointer != nil && matches(*pointer) {
+		return nil
+	}
+	var value dbus.Error
+	if errors.As(err, &value) && matches(value) {
+		return nil
+	}
+	return err
+}
+
 // stopBlueZDiscovery releases our discovery session; advertising, ACLs, and
 // other clients are unaffected.
 func stopBlueZDiscovery(ctx context.Context, bus *dbus.Conn, adapter dbus.ObjectPath) error {
 	callCtx, cancel := context.WithTimeout(ctx, 6*time.Second)
 	defer cancel()
-	return bus.Object(bluezName, adapter).CallWithContext(callCtx, adapterInterface+".StopDiscovery", 0).Err
+	return stoppedDiscoveryResult(bus.Object(bluezName, adapter).CallWithContext(callCtx, adapterInterface+".StopDiscovery", 0).Err)
 }
 
 // startBlueZDiscovery (re)acquires our filtered discovery session.

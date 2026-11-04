@@ -163,7 +163,7 @@ device is not yet listed. Explain the remaining connection or enrollment step.
 
 Installation tools require a local stdio session. The hosted relay cannot flash
 the user's laptop media. If the tools are absent, follow the installation
-skill's terminal path on the appropriate host. On Linux, a USB-C discovery warning means the user must run `wendy discover`
+skill's terminal path on the appropriate host. On Linux, a USB discovery warning means the user must run `wendy discover`
 in a terminal and accept the host USB setup prompt before tethered access works.
 
 ## Start without hardware

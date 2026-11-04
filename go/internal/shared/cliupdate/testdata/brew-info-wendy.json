@@ -1,0 +1,134 @@
+{
+  "formulae": [
+    {
+      "name": "wendy",
+      "full_name": "wendylabsinc/tap/wendy",
+      "tap": "wendylabsinc/tap",
+      "oldnames": [],
+      "aliases": [],
+      "versioned_formulae": [],
+      "desc": "CLI for building and running WendyOS applications",
+      "license": null,
+      "homepage": "https://github.com/wendylabsinc/wendy-agent",
+      "versions": {
+        "stable": "2026.10.29-210857",
+        "head": null,
+        "bottle": true
+      },
+      "urls": {
+        "stable": {
+          "url": "https://github.com/wendylabsinc/wendy-agent/releases/download/2026.10.29-210857/wendy-cli-darwin-arm64-2026.10.29-210857.tar.gz",
+          "tag": null,
+          "revision": null,
+          "using": null,
+          "checksum": "5fe2a36dd97147ef58980c2193895f449de799c579bf0e6fc7753a4b21e562c8"
+        }
+      },
+      "patches": [],
+      "local_patch_checksums": {},
+      "revision": 0,
+      "version_scheme": 0,
+      "compatibility_version": null,
+      "autobump": true,
+      "no_autobump_message": null,
+      "skip_livecheck": false,
+      "bottle": {
+        "stable": {
+          "rebuild": 0,
+          "root_url": "https://github.com/wendylabsinc/homebrew-tap/releases/download/wendy-2026.10.29-210857",
+          "files": {
+            "arm64_tahoe": {
+              "cellar": ":any_skip_relocation",
+              "url": "https://github.com/wendylabsinc/homebrew-tap/releases/download/wendy-2026.10.29-210857/wendy-2026.10.29-210857.arm64_tahoe.bottle.tar.gz",
+              "sha256": "a54070d4cb11bd0ea110c467f8aad03b2019a3d3b48458a23d2090dd98c1816f"
+            }
+          }
+        }
+      },
+      "pour_bottle_only_if": null,
+      "keg_only": false,
+      "keg_only_reason": null,
+      "options": [
+        {
+          "option": "--without-container",
+          "description": "Build without container support"
+        }
+      ],
+      "build_dependencies": [],
+      "dependencies": [
+        "libusb"
+      ],
+      "test_dependencies": [],
+      "recommended_dependencies": [
+        "container"
+      ],
+      "optional_dependencies": [],
+      "no_linkage_dependencies": [],
+      "uses_from_macos": [],
+      "uses_from_macos_bounds": [],
+      "requirements": [],
+      "conflicts_with": [
+        "wendy-nightly"
+      ],
+      "conflicts_with_reasons": [
+        "both install a `wendy` binary"
+      ],
+      "link_overwrite": [],
+      "caveats": "Get started\nTo set up MCP integration with your AI tools:\n  wendy mcp setup\nTo start the interactive walkthrough:\n  wendy tour\n\nAnonymous analytics\nAnalytics are enabled by default to help improve commands and fix errors.\nTo opt out, run:\n  wendy analytics disable\nOr set the environment variable WENDY_ANALYTICS=false.\n\nLocal Linux containers\nOn macOS Tahoe (26) and newer, local Linux containers are powered by\nApple `container`, installed by default with this formula there. Before\nfirst use, start its services once:\n  container system start\n  container builder start\nTo skip installing it, reinstall with:\n  brew reinstall --without-container wendylabsinc/tap/wendy\n(`container` has no bottle on older macOS, so it is not installed there.)\n",
+      "installed": [
+        {
+          "sbom": "/opt/homebrew/Cellar/wendy/2026.10.29-210857/sbom.spdx.json",
+          "version": "2026.10.29-210857",
+          "used_options": [],
+          "built_as_bottle": true,
+          "poured_from_bottle": true,
+          "time": 1793347228,
+          "runtime_dependencies": [
+            {
+              "full_name": "libusb",
+              "version": "1.0.30",
+              "revision": 0,
+              "bottle_rebuild": 0,
+              "pkg_version": "1.0.30",
+              "declared_directly": true,
+              "compatibility_version": 1
+            },
+            {
+              "full_name": "container",
+              "version": "1.6.1",
+              "revision": 0,
+              "bottle_rebuild": 0,
+              "pkg_version": "1.6.1",
+              "declared_directly": true
+            }
+          ],
+          "installed_on_request": true
+        }
+      ],
+      "linked_keg": "2026.10.29-210857",
+      "pinned": false,
+      "outdated": false,
+      "deprecated": false,
+      "deprecation_date": null,
+      "deprecation_reason": null,
+      "deprecation_replacement_formula": null,
+      "deprecation_replacement_cask": null,
+      "deprecate_args": null,
+      "disabled": false,
+      "disable_date": null,
+      "disable_reason": null,
+      "disable_replacement_formula": null,
+      "disable_replacement_cask": null,
+      "disable_args": null,
+      "post_install_steps": [],
+      "post_install_defined": false,
+      "service": null,
+      "tap_git_head": "04ffd79737e7c4756be28adcdc5a4d85c6a9d454",
+      "ruby_source_path": "Formula/wendy.rb",
+      "ruby_source_checksum": {
+        "sha256": "fe127fa4cfc6dd20e1bcce8ed57d50b75e14eaf12b0ee0ed2f5ab0eed15a2192"
+      }
+    }
+  ],
+  "casks": []
+}

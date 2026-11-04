@@ -3,8 +3,10 @@ package commands
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/wendylabsinc/wendy/go/internal/cli/sessionbroker"
@@ -160,6 +162,8 @@ func NewRootCmd() *cobra.Command {
 	projectCmd.GroupID = "manage"
 	deviceCmd := newDeviceCmd()
 	deviceCmd.GroupID = "manage"
+	netCmd := newNetCmd()
+	netCmd.GroupID = "manage"
 	dataCmd := newDataCmd()
 	dataCmd.GroupID = "manage"
 
@@ -246,7 +250,18 @@ func NewRootCmd() *cobra.Command {
 			if sessionParentLease {
 				parentLease = os.NewFile(3, "parent-lease")
 			}
-			return sessionbroker.Run(cmd.Context(), sessionSpec, sessionbroker.DefaultIdleTTL, parentLease)
+			idle := sessionbroker.DefaultIdleTTL
+			cfg, err := config.Load()
+			if err != nil {
+				return err
+			}
+			if cfg.SessionBrokerIdleTimeout != "" {
+				idle, err = time.ParseDuration(cfg.SessionBrokerIdleTimeout)
+				if err != nil || idle <= 0 {
+					return fmt.Errorf("sessionBrokerIdleTimeout must be a positive duration")
+				}
+			}
+			return sessionbroker.Run(cmd.Context(), sessionSpec, idle, parentLease)
 		},
 	}
 	sessionBrokerCmd.Flags().StringVar(&sessionSpec, "spec", "", "Encoded session connection recipe")
@@ -295,6 +310,7 @@ func NewRootCmd() *cobra.Command {
 		// Manage
 		projectCmd,
 		deviceCmd,
+		netCmd,
 		newVMCmd(),
 		dataCmd,
 		newJobCmd(),

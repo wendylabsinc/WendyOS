@@ -1,8 +1,9 @@
 # Paired Go2 data and commands (experimental)
 
 Pairing by itself sends only validation and heartbeat messages, never movement. The
-`Connection` methods send sport requests on `rt/api/sport/request`. Each request
-waits for a reply with a matching request ID, API ID and status code:
+`Connection` methods send sport requests on `rt/api/sport/request`. Velocity
+updates use `policy.noreply`, matching Unitree's SportClient.Move. Other requests
+wait for a reply with a matching request ID, API ID and status code:
 
 | Method | Sport API |
 | --- | --- |
