@@ -209,12 +209,14 @@ class Scout:
         self.publication_checked = time.monotonic()
         for path in sorted((STATE / "findings").glob("*.json")):
             finding = json.loads(path.read_text())
-            if finding.get("publication", {}).get("status") in {
-                "published",
-                "duplicate",
-                "duplicate-local",
-                "already-fixed",
-            }:
+            publication = finding.get("publication", {})
+            repo = os.environ.get("SCOUT_ISSUE_REPOSITORY", "wendylabsinc/WendyOS")
+            repository_key = __import__("hashlib").sha256(repo.encode()).hexdigest()
+            if publication.get("status") == "already-fixed" or (
+                publication.get("status")
+                in {"published", "duplicate", "duplicate-local"}
+                and publication.get("repository_key") == repository_key
+            ):
                 continue
             baseline = next(
                 (

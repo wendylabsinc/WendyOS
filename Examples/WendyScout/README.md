@@ -76,7 +76,10 @@ The publisher needs a **new fine-grained PAT** restricted to the one configured
 repository: **Issues read/write and Metadata read-only**, or an equivalently
 scoped installation token. Default repository: `wendylabsinc/WendyOS`; an operator
 may set `SCOUT_ISSUE_REPOSITORY` to one explicitly allowed repository. Public
-context/artifact reads still use the fixed official WendyOS sources.
+context/artifact reads still use the fixed official WendyOS sources. Private
+repository duplicate reads authenticate with that repository's scoped publisher
+token. Local duplicate/rate ledgers are isolated per configured repository; a
+changed destination requires fresh replay before a retained finding can publish.
 
 Provision the token through your trusted device-management path as:
 
@@ -149,7 +152,7 @@ wendy-scout/model.log[.1]           bounded model-server logs
 wendy-scout/release-pins.json       exact verified CLI releases/digests
 wendy-scout/runs/<UTC>/            context, versions, projected and private raw probes
 wendy-scout/findings/               verified findings retained independently of run pruning
-wendy-scout/publisher.json          deduplication and issue-rate ledger
+wendy-scout/publisher.<repo-hash>.json   repository-scoped deduplication/rate ledger
 wendy-scout/progress.json           durable bounded session budget per context
 wendy-scout-work/events.jsonl[.1]    worker startup/backoff/session diagnostics
 wendy-scout-work/preflight.json     live kernel/namespace/cleanup checks

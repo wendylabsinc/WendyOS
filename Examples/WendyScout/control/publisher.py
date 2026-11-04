@@ -55,6 +55,24 @@ class GitHub:
         return json.loads(payload)
 
 
+def find_issue(transport, matches):
+    """Complete all-state scan using the credentialed publisher transport only."""
+    deadline = time.monotonic() + 45
+    for page in range(1, 101):
+        if CANCEL.is_set() or time.monotonic() > deadline:
+            raise ValueError("Duplicate scan deadline; publication held")
+        issues = transport.request(
+            "GET",
+            f"issues?state=all&per_page=100&sort=created&direction=desc&page={page}",
+        )
+        for issue in issues:
+            if "pull_request" not in issue and matches(issue):
+                return issue
+        if len(issues) < 100:
+            return None
+    raise ValueError("Duplicate scan exceeded page limit; publication held")
+
+
 class Publisher:
     def __init__(self, root, repo="wendylabsinc/WendyOS", transport=None):
         self.root = pathlib.Path(root)
@@ -62,7 +80,8 @@ class Publisher:
             repo, self.root / "secrets/github-issues-token"
         )
         self.repo = repo
-        self.ledger = self.root / "publisher.json"
+        self.repository_key = hashlib.sha256(repo.encode()).hexdigest()
+        self.ledger = self.root / ("publisher." + self.repository_key + ".json")
 
     @staticmethod
     def fingerprint(finding):
@@ -88,7 +107,11 @@ class Publisher:
             else {"attempts": [], "published": {}}
         )
         if fp in record["published"]:
-            return {"status": "duplicate-local", "fingerprint": fp}
+            return {
+                "status": "duplicate-local",
+                "fingerprint": fp,
+                "repository_key": self.repository_key,
+            }
         versions = [r["version"] for r in finding["results"][:2]]
         failure_ids = [r.get("failure_identity") for r in finding["results"][1::2]]
         marker = "<!-- wendy-scout:" + fp + " -->"
@@ -99,48 +122,45 @@ class Publisher:
         if sum(x["day"] == today for x in recent) >= 2 or any(
             now.timestamp() - x["time"] < 3600 for x in recent
         ):
-            return {"status": "rate-limited", "fingerprint": fp}
-        # Complete all-state duplicate scan; fail closed if coverage is incomplete.
-        deadline = time.monotonic() + 45
-        for page in range(1, 101):
-            if CANCEL.is_set() or time.monotonic() > deadline:
-                raise ValueError("Duplicate scan deadline; publication held")
-            issues = self.transport.request(
-                "GET",
-                f"issues?state=all&per_page=100&sort=created&direction=desc&page={page}",
+            return {
+                "status": "rate-limited",
+                "fingerprint": fp,
+                "repository_key": self.repository_key,
+            }
+
+        def matches(issue):
+            body = issue.get("body") or ""
+            return (
+                marker in body
+                or issue["title"].lower() == title.lower()
+                or (
+                    failure_ids[0]
+                    and str(failure_ids[0]) in body
+                    and f'"probe": "{finding["probe"]}"' in body
+                    and f'"predicate": "{finding["kind"]}"' in body
+                    and f'"field": "{finding.get("field", "")}"' in body
+                )
             )
-            for issue in issues:
-                if "pull_request" in issue:
-                    continue
-                body = issue.get("body") or ""
-                old = issue["title"].lower()
-                if (
-                    marker in body
-                    or old == title.lower()
-                    or (
-                        failure_ids[0]
-                        and str(failure_ids[0]) in body
-                        and f'"probe": "{finding["probe"]}"' in body
-                        and f'"predicate": "{finding["kind"]}"' in body
-                        and f'"field": "{finding.get("field", "")}"' in body
-                    )
-                ):
-                    return {
-                        "status": "duplicate",
-                        "issue": issue["html_url"],
-                        "fingerprint": fp,
-                    }
-            if len(issues) < 100:
-                break
-        else:
-            raise ValueError("Duplicate scan exceeded page limit; publication held")
+
+        duplicate = find_issue(self.transport, matches)
+        if duplicate:
+            return {
+                "status": "duplicate",
+                "issue": duplicate["html_url"],
+                "fingerprint": fp,
+                "repository_key": self.repository_key,
+            }
         now = datetime.datetime.now(datetime.timezone.utc)
         today = now.date().isoformat()
         recent = record["attempts"]
         if sum(x["day"] == today for x in recent) >= 2 or any(
             now.timestamp() - x["time"] < 3600 for x in recent
         ):
-            return {"status": "rate-limited", "fingerprint": fp}
+            return {
+                "status": "rate-limited",
+                "fingerprint": fp,
+                "repository_key": self.repository_key,
+            }
         try:
             self.transport.request("GET", "labels/ai-found")
         except urllib.error.HTTPError as e:
@@ -222,4 +242,9 @@ class Publisher:
         )
         record["published"][fp] = issue["html_url"]
         save(self.ledger, record)
-        return {"status": "published", "issue": issue["html_url"], "fingerprint": fp}
+        return {
+            "status": "published",
+            "issue": issue["html_url"],
+            "fingerprint": fp,
+            "repository_key": self.repository_key,
+        }

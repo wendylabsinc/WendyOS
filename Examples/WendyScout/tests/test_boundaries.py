@@ -1,4 +1,4 @@
-import copy, http.server, json, pathlib, sys, tempfile, threading, unittest, urllib.request
+import copy, http.server, json, pathlib, sys, tempfile, threading, unittest, urllib.request, types, stat, os, io
 from unittest.mock import patch
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "control"))
@@ -390,6 +390,60 @@ class PublisherTests(unittest.TestCase):
         self.assertEqual(
             [r["output"]["present"] for r in observed], [True, False, True, False]
         )
+
+    def test_repository_override_has_separate_ledger_and_rate_state(self):
+        self.pub.publish(self.finding())
+        FakeGitHub.issues = []
+        other = publisher.Publisher(
+            self.temp.name, repo="example/other", transport=self.pub.transport
+        )
+        self.assertNotEqual(self.pub.ledger, other.ledger)
+        self.assertEqual(other.publish(self.finding())["status"], "published")
+
+    def test_scoped_transport_authenticates_private_duplicate_reads(self):
+        token = pathlib.Path(self.temp.name) / "scoped-token"
+        token.write_text("github_pat_fixture")
+        token.chmod(0o600)
+
+        class Response(io.BytesIO):
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                self.close()
+
+        requests = []
+
+        class Opener:
+            def open(self, request, timeout):
+                requests.append(request)
+                return Response(b"[]")
+
+        with (
+            patch.object(
+                publisher.os,
+                "fstat",
+                return_value=types.SimpleNamespace(
+                    st_mode=stat.S_IFREG | 0o600, st_uid=0
+                ),
+            ),
+            patch.object(
+                publisher.urllib.request, "build_opener", return_value=Opener()
+            ),
+        ):
+            gh = publisher.GitHub("example/private", token)
+            self.assertIsNone(publisher.find_issue(gh, lambda issue: True))
+        self.assertEqual(len(requests), 1)
+        self.assertEqual(
+            requests[0].get_header("Authorization"), "Bearer github_pat_fixture"
+        )
+        self.assertTrue(
+            requests[0].full_url.startswith(
+                "https://api.github.com/repos/example/private/issues?state=all&"
+            )
+        )
+        with patch.dict(os.environ, {"SCOUT_ISSUE_REPOSITORY": "example/private"}):
+            self.assertEqual(common.REPO, "wendylabsinc/WendyOS")
 
     def test_unverified_fixed_and_unapproved_routes(self):
         for d in [{}, {**self.finding(), "already_fixed_in_newer_stable": True}]:
