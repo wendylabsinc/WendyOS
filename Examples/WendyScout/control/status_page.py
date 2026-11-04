@@ -3,7 +3,6 @@
 import base64, hashlib, datetime, html, http.server, json, pathlib, re, time
 from common import scrub
 
-
 STYLE = "body{max-width:64rem;margin:1rem auto;padding:0 1rem;font-family:system-ui,sans-serif}pre{white-space:pre-wrap;overflow-wrap:anywhere}"
 STYLE_HASH = base64.b64encode(hashlib.sha256(STYLE.encode()).digest()).decode()
 
@@ -68,10 +67,16 @@ def text_event(e):
                 + "\nWorker file output:\n"
                 + str(value.get("file_output", ""))[:800]
             )
-        elif value.get("evidence_kind") == "fresh_command":
+        elif value.get("evidence_kind") in {"fresh_command", "functional_workflow"}:
             output = (
                 "\nProjected probe output:\n"
-                + json.dumps(value.get("output", {}))[:1600]
+                + json.dumps(
+                    {
+                        "evidence_id": value.get("id"),
+                        "output": value.get("output", {}),
+                        "commands": [s.get("command") for s in value.get("steps", [])],
+                    }
+                )[:3500]
             )
         return (
             "Tool result: "

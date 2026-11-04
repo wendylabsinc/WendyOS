@@ -172,83 +172,77 @@ class ReplayTests(unittest.TestCase):
         p.run = lambda *args: copy.deepcopy(results.pop(0))
         return p
 
-    def r(self, exit=0, output=None):
+    def r(self, status="passed", identity="state-mismatch"):
         return {
-            "exit": exit,
-            "output": {} if output is None else output,
-            "version": "2026.10.29-210857",
-            "kind": "info",
-            "failure_identity": "test",
+            "outcome": status,
+            "completed": status != "blocked",
+            "cleanup_verified": True,
+            "version": "test",
+            "failure_identity": identity,
         }
 
-    def test_removed_command_after_working_baseline_is_regression(self):
-        values = [
+    def test_repeated_functional_regression_and_current_stable(self):
+        rows = [
             self.r(),
-            self.r(2, {"error_class": "unknown-command"}),
+            self.r("failed"),
             self.r(),
-            self.r(2, {"error_class": "unknown-command"}),
+            self.r("failed"),
             self.r(),
             self.r(),
         ]
         self.assertTrue(
-            self.instance(values).replay("info", "past", "nightly", None)["verified"]
-        )
-
-    def test_already_fixed_current_stable_not_published(self):
-        values = [self.r(), self.r(1), self.r(), self.r(1), self.r(), self.r()]
-        d = self.instance(values, True).replay("info", "past", "nightly", None)
-        self.assertFalse(d["verified"])
-        self.assertTrue(d["already_fixed_in_newer_stable"])
-
-    def test_missing_baseline_field_is_unverified(self):
-        d = self.instance([self.r() for _ in range(4)]).replay(
-            "info", "past", "nightly", None, "field_changed", "osVersion"
-        )
-        self.assertFalse(d["verified"])
-
-    def test_failed_or_flaky_newer_stable_contrast_is_unverified(self):
-        for contrast in [
-            [self.r(1), self.r(1)],
-            [self.r(output={"osVersion": "old"}), self.r(output={"osVersion": "new"})],
-        ]:
-            values = [
-                self.r(output={"osVersion": "old"}),
-                self.r(output={"osVersion": "new"}),
-                self.r(output={"osVersion": "old"}),
-                self.r(output={"osVersion": "new"}),
-                *contrast,
-            ]
-            d = self.instance(values, True).replay(
-                "info", "past", "nightly", None, "field_changed", "osVersion"
-            )
-            self.assertFalse(d["verified"])
-            self.assertTrue(d["current_stable_unverified"])
-
-    def test_stable_newer_than_nightly_is_not_chronological_regression(self):
-        values = [self.r(), self.r(1), self.r(), self.r(1)]
-        self.assertFalse(
-            self.instance(values, True).replay("info", "stable", "nightly", None)[
+            self.instance(rows).replay("restart_persistence", "past", "nightly", None)[
                 "verified"
             ]
         )
 
-    def test_shared_failures_are_not_regression(self):
+    def test_fixed_existing_blocked_and_flaky_are_unverified(self):
+        for newer, contrast in [
+            (True, ["passed", "passed"]),
+            (False, ["failed", "failed"]),
+            (False, ["blocked", "passed"]),
+            (True, ["failed", "passed"]),
+        ]:
+            rows = [
+                self.r(),
+                self.r("failed"),
+                self.r(),
+                self.r("failed"),
+                *[self.r(x) for x in contrast],
+            ]
+            self.assertFalse(
+                self.instance(rows, newer).replay(
+                    "restart_persistence", "past", "nightly", None
+                )["verified"]
+            )
+        rows = [self.r(), self.r("failed", "a"), self.r(), self.r("failed", "b")]
         self.assertFalse(
-            self.instance([self.r(1) for _ in range(4)]).replay(
-                "info", "past", "nightly", None
-            )["verified"]
+            self.instance(rows).replay("restart_persistence", "past", "nightly", None)[
+                "verified"
+            ]
         )
 
-    def test_targets_commands_and_fields_are_not_freeform(self):
-        p = self.instance([])
-        for recipe, version, predicate, field in [
-            ("shell", "past", "exit", ""),
-            ("info", "prod", "exit", ""),
-            ("info", "past", "field_changed", "/state/secrets"),
-            ("help_root", "past", "help_flag_missing", "--device prod"),
-        ]:
+    def test_shared_failure_missing_evidence_and_help_only_rejected(self):
+        rows = [self.r("failed") for _ in range(4)]
+        self.assertFalse(
+            self.instance(rows).replay("logs_output", "past", "nightly", None)[
+                "verified"
+            ]
+        )
+        for kind in ["help_root", "info", "shell"]:
             with self.assertRaises(ValueError):
-                p.replay(recipe, version, "nightly", None, predicate, field)
+                self.instance([]).replay(kind, "past", "nightly", None)
+        with self.assertRaises(ValueError):
+            self.instance([]).replay("restart_persistence", "prod", "nightly", None)
+        with self.assertRaises(ValueError):
+            self.instance([]).replay(
+                "restart_persistence",
+                "past",
+                "nightly",
+                None,
+                "field_changed",
+                "osVersion",
+            )
 
 
 class FakeGitHub(http.server.BaseHTTPRequestHandler):
@@ -329,22 +323,56 @@ class PublisherTests(unittest.TestCase):
         self.server.server_close()
         self.temp.cleanup()
 
-    def finding(self, field="osVersion"):
-        r = {
-            "kind": "info",
-            "version": "2026.10.29-210857",
-            "command": ["wendy", "--json", "device", "info"],
-            "exit": 0,
-            "output": {"osVersion": "WendyOS-0.17.0"},
-            "failure_identity": field,
-        }
+    def finding(self, field="state-mismatch"):
+        rows = []
+        for i in range(4):
+            passed = i % 2 == 0
+            rows.append(
+                {
+                    "id": "experiment-fixture" + str(i),
+                    "evidence_kind": "functional_workflow",
+                    "kind": "restart_persistence",
+                    "version": "2026.10.29-210857" if passed else "2026.11.04-165715",
+                    "agent": "2026.10.29-210857",
+                    "completed": True,
+                    "cleanup_verified": True,
+                    "outcome": "passed" if passed else "failed",
+                    "exit": 0 if passed else 1,
+                    "output": {
+                        "checks": [
+                            {
+                                "check": "restart_state",
+                                "expected": "RUNNING",
+                                "actual": "RUNNING" if passed else "STOPPED",
+                                "passed": passed,
+                            }
+                        ]
+                    },
+                    "steps": [
+                        {
+                            "kind": "scratch_start",
+                            "version": "2026.10.29-210857",
+                            "command": [
+                                "wendy",
+                                "--json",
+                                "device",
+                                "apps",
+                                "start",
+                                "<Scout-owned scratch ID>",
+                            ],
+                            "exit": 0,
+                        }
+                    ],
+                    "failure_identity": field,
+                }
+            )
         return {
             "verified": True,
-            "kind": "field_changed-regression",
-            "field": field,
-            "probe": "info",
+            "kind": "functional-regression",
+            "field": "",
+            "probe": "restart_persistence",
             "agent": "2026.10.29-210857",
-            "results": [copy.deepcopy(r) for _ in range(4)],
+            "results": rows,
         }
 
     def test_local_fake_publication_label_and_duplicate(self):
@@ -354,7 +382,32 @@ class PublisherTests(unittest.TestCase):
         posts = [x for x in FakeGitHub.calls if x[0] == "POST"]
         self.assertEqual([x[1].split("/")[-1] for x in posts], ["labels", "issues"])
         self.assertEqual(posts[-1][2]["labels"], ["ai-found"])
-        self.assertIn("WendyOS-0.17.0", posts[-1][2]["body"])
+        self.assertIn("2026.10.29-210857", posts[-1][2]["body"])
+
+    def test_functional_state_regression_replays_then_publishes_only_to_fake(self):
+        from test_functional import Runner
+        from functional import experiment
+
+        p = probes.Probes.__new__(probes.Probes)
+        p.agent = "fixture-agent"
+        p.versions = {
+            "past": {"published_at": "2026-10-01"},
+            "stable": {"published_at": "2026-10-20"},
+            "nightly": {"published_at": "2026-11-01"},
+        }
+        p.run = lambda kind, v, run: experiment(
+            Runner("args" if v == "nightly" else ""), kind, v, None
+        )
+        finding = p.replay("reject_extra_args", "stable", "nightly", None)
+        self.assertTrue(finding["verified"])
+        self.assertEqual(self.pub.publish(finding)["status"], "published")
+        body = next(
+            c[2]["body"]
+            for c in FakeGitHub.calls
+            if c[0] == "POST" and c[1].endswith("/issues")
+        )
+        self.assertIn("invalid_args_no_mutation_agent", body)
+        self.assertIn("STOPPED", body)
 
     def test_closed_duplicate(self):
         self.pub.publish(self.finding())
@@ -395,6 +448,7 @@ class PublisherTests(unittest.TestCase):
         self.assertFalse(any(c[0] == "POST" for c in FakeGitHub.calls))
         other = copy.deepcopy(f)
         other["results"][1]["failure_identity"] = "different-failure"
+        other["results"][3]["failure_identity"] = "different-failure"
         self.assertNotEqual(fp, self.pub.fingerprint(other))
         FakeGitHub.pages = {}
         FakeGitHub.issues = [
@@ -406,24 +460,30 @@ class PublisherTests(unittest.TestCase):
         ]
         self.assertEqual(self.pub.publish(other)["status"], "published")
 
-    def test_large_help_preserves_every_replay_without_raw_prose(self):
-        f = self.finding("--json")
+    def test_help_only_and_missing_live_evidence_never_published(self):
+        f = self.finding()
         f["probe"] = "help_root"
-        f["kind"] = "help_flag_missing-regression"
-        for i, r in enumerate(f["results"]):
-            r["output"] = "x" * 30000 + (" --json " if i % 2 == 0 else "")
-        self.assertEqual(self.pub.publish(f)["status"], "published")
+        with self.assertRaises(ValueError):
+            self.pub.publish(f)
+        f = self.finding()
+        f["results"][0]["completed"] = False
+        with self.assertRaises(ValueError):
+            self.pub.publish(f)
+        self.assertFalse(FakeGitHub.calls)
+
+    def test_arbitrary_stdout_is_not_issue_content(self):
+        f = self.finding()
+        for r in f["results"]:
+            r["raw_stdout"] = "github_pat_private https://example.invalid/ [mention]"
+        self.pub.publish(f)
         body = next(
             c[2]["body"]
             for c in FakeGitHub.calls
             if c[0] == "POST" and c[1].endswith("/issues")
         )
-        self.assertLess(len(body), 50000)
-        self.assertNotIn("x" * 100, body)
-        observed = json.loads(body.split("```json\n")[1].split("\n```")[0])
-        self.assertEqual(
-            [r["output"]["present"] for r in observed], [True, False, True, False]
-        )
+        self.assertNotIn("github_pat_private", body)
+        self.assertIn("expected", body)
+        self.assertIn("actual", body)
 
     def test_scoped_transport_authenticates_private_duplicate_reads(self):
         token = pathlib.Path(self.temp.name) / "scoped-token"

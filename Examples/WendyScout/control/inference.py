@@ -2,7 +2,7 @@
 
 import json
 
-TOOLS = {"scout_probe", "script_write", "script_run", "scout_report"}
+TOOLS = {"scout_experiment", "script_write", "script_run", "scout_report"}
 
 
 def validate(body, model):

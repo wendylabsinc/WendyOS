@@ -2,17 +2,16 @@
 
 **Autonomous bug hunting on your Wendy device.**
 
-One Wendy app runs a pinned local GPU model and Pi. One loop gives each fresh Pi
-session the same prompt, recent public WendyOS commits/releases/issues, and
-previous evidence. Pi writes bounded offline CLI experiments and uses fixed
-local-device probes. A suspected regression is replayed on stable/nightly CLI
-versions on the same Agent. Scout checks existing open/closed issues and creates
-an `ai-found` issue with exact versions, commands and projected evidence when the
-finding is verified. A no-bug or blocked result is useful.
+One Wendy app runs a pinned local GPU model and a fresh Pi session per iteration.
+Pi uses recent public commits/patches/releases/issues and recent experiment history
+to choose a functional hypothesis. Trusted tools reset, exercise and remove only
+Scout's disposable app. They return exact commands, expected/actual checks and
+fresh evidence IDs. Optional offline scripts help diagnose results. Help/version
+output and arbitrary changed JSON values cannot produce an issue.
 
 ## Run
 
-Use a Development-enrolled ARM64 Thor with its Wendy builder enabled:
+From this directory, use a Development-enrolled ARM64 Thor with its builder enabled:
 
 ```sh
 wendy --json --device <dev-thor> run --build-host <dev-thor> --detach --yes
@@ -22,154 +21,119 @@ wendy --json --device <dev-thor> device apps stop sh.wendy.scout
 wendy --json --device <dev-thor> device apps start sh.wendy.scout --detach
 ```
 
-`sh.wendy.scout` contains trusted control and isolated worker services. Stop the
-bare app ID to stop both and their test children. Weights and evidence persist
-across restart/redeploy. Current pins select a Qwen3.8-Flash-Next trial: the llama.cpp-maintainer IQ4_NL
-conversion, 102.05 GB in two shards downloaded on-device;
-`control/pins.json` pins its revision/digest, official ARM64 CUDA base image and
-Pi 0.73.1. GPU offload is required. There is one local model provider and no
-cloud-model fallback. The model server uses host loopback port 18081.
+Stop the bare app ID to stop control, worker and test children. The fixed scratch
+workload exits when its supervisor lease disappears; restart removes only recorded
+owned leftovers. Weights, tools and evidence persist. A new session starts after a
+60-second pause. Context/releases are cached for 30 minutes and each session pins
+verified CLI artifacts. `--env SCOUT_MAX_SESSIONS=3` is a worker validation cap;
+normal operation has no cap. Missing fresh functional work or failed cleanup holds
+testing. Model narration alone never establishes execution.
 
-The earlier 18.6 GB 30B and 56.7 GB Coder-Next caches remain for rollback. Restore
-both service `pins.json` files from `29ede24d5` for 30B, then redeploy; the cached
-weights are reused. Coder-Next trial pins remain at `94adb2770`.
+## Functional experiments
 
-Flash uses the existing pinned ARM64 CUDA 13 image (upstream llama.cpp
-`39febd2adb947b70da35e95f9351b3bf58ad170a`, including `qwen4exp` support). The
-trial uses 16K context, no vision/MTP, CPU-resident n-gram embeddings, explicit
-non-thinking sampling and a bounded 4096-token output budget. A 600-second
-model-load window is separate from session deadlines. Startup requires available
-RAM for all weight bytes plus 12 GiB. Pinning and runtime support do not establish
-quality or successful tool use; live trial results are pending.
+| Workflow | Fixed expected behavior |
+| --- | --- |
+| `restart_persistence` | Start and observe readiness/RUNNING, stop/STOPPED, restart with the retained counter incremented, then stop/remove/ABSENT. |
+| `reject_extra_args` | Reject an extra stop argument without changing a running app or its persistent data; normal stop/remove still succeeds. |
+| `logs_output` | Observe attached readiness output and bounded stored logs for the same owned fixture; stop/remove cleanly. |
 
-Normal operation starts a fresh bounded session, retains its evidence, waits
-60 seconds, and repeats until the app stops. Public context/releases are cached
-for 30 minutes; each session pins its CLI artifacts and verifies their digests.
-For operator validation, the worker handles `--env SCOUT_MAX_SESSIONS=1`: it stops
-further sessions after one result while keeping the worker alive. `--env SCOUT_BOOTSTRAP=1` performs
-kernel/offline-CLI checks without loading the model.
+CLI list state is checked against the canonical local Agent API. The fixture uses
+only the dedicated `wendy-scout-fixture` volume, mounted in trusted control and the
+fixed scratch workload, never the model/test worker. Each experiment resets only
+its owned files and app. Baseline/nightly replay uses identical fixture state and
+image. A suspected failure must occur twice in nightly with matching failed checks,
+pass twice on the baseline, and have a conclusive current-stable contrast.
+Shared failures, blocked setup, flaky results, already-fixed behavior and old-Agent
+limitations remain local evidence. A real regression is deduplicated across open
+and closed GitHub issues before an `ai-found` issue with projected evidence/repro.
+No comments, recurrence accounting, coordinator or automatic failed-session retry.
+
+For deterministic operator replay without racing model sessions, redeploy with
+`--env SCOUT_BOOTSTRAP=1`, then use the supported operator shell:
+
+```sh
+wendy --json --device <dev-thor> device shell -- nerdctl --namespace default exec sh.wendy.scout_control python3 /opt/scout/reproduce.py restart_persistence stable
+```
+
+The helper accepts only the three fixed workflows and `past`/`stable` baselines;
+it refuses normal model-running mode and never publishes. Redeploy normally to
+resume autonomous testing. Bootstrap also performs kernel/offline-CLI preflight.
 
 ## Live transcript
 
-The app declares one read-only HTTP page on port **8087**. Open
-`http://<thor-lan-ip>:8087/` on a reachable LAN, or in Companion enable the
-existing Wendy Mesh VPN, select the Development device, then Apps → Scout → Open.
-The HTTP entitlement supplies that existing Open route; no mesh transport is
-implemented here. Companion Mesh browser access must be tested on the actual
-client; it is not implied by a successful local HTTP check.
+Open `http://<thor-lan-ip>:8087/`, or Companion Mesh VPN → Development device →
+Apps → Scout → Open. The existing Wendy HTTP entitlement provides that route;
+physical Mesh/iPhone browsing remains untested. Only read-only GET `/` is served.
+The escaped/redacted native HTML page refreshes every five seconds and reads the
+same bounded `events.jsonl` appended/flushed during execution. It shows unverified
+model hypotheses, actual workflow calls/results and expected/actual checks. Hidden
+reasoning, credentials and raw private control probes are excluded. No controls,
+history browser, arbitrary files or download API. Stopping the app stops the page.
 
-The page refreshes every five seconds and shows the latest bounded transcript,
-session/time/state, visible unverified model narration, submitted scripts and
-redacted worker results. `events.jsonl` is appended and flushed during the run,
-including before `result.json` exists; interruption preserves completed events.
-Hidden reasoning and raw private control probes are excluded from the page.
-Only GET `/` is served, with no control buttons or file/download routes. Stopping
-the app makes its page unreachable. An absent heartbeat is marked stale.
+## Model and limits
 
-## Credentials
+Pins select llama.cpp-maintainer Qwen3.8-Flash-Next IQ4_NL, **102.05 GB in two shards**,
+verified by immutable revision/size/SHA-256. The existing official ARM64 CUDA 13
+image contains upstream llama.cpp `39febd2adb947b70da35e95f9351b3bf58ad170a`.
+There is no remote model fallback, vision/MTP loading or host tool installation.
+The text model endpoint binds host loopback 18081. Startup requires available RAM
+for weight bytes plus 12 GiB, with a separate bounded 600-second load window.
 
-The control service uses the documented `admin` entitlement and local Agent Unix
-socket. This is **full device control for trusted supervisor code**. Its tools
-permit only this Development device, enumeration/info/help and one test-owned
-scratch app. It needs no browser sign-in, copied operator profile or service
-account. It preserves Agent/OS and power mode; physical capture/motion and
-Agent/OS updates are unavailable to the model.
+Actual unchanged-prompt trial: 49/49 GPU layers, 69,200.9 MiB GPU plus 28,110.1 MiB
+host weights, 170.34s GPU health, about 21 decoded tokens/s. Three turns performed
+real tools with proof (184.76s/188.84s/198.54s). Two finished normally; the third
+filled 16K context (16,331 prompt tokens left only 53 output tokens). That was a
+context limit, not proof of model weakness. Invalid report arguments and one stale
+chronology claim remained model mistakes; no regression was accepted. The functional
+path replaces that help-heavy prompt and results with compact trusted workflows.
+The cached 30B rollback pins remain in both service directories at `29ede24d5`.
 
-Issue publication needs a **new fine-grained PAT**, limited to the configured
-repository's **Issues read/write and Metadata read-only**. Default repository:
-`wendylabsinc/WendyOS`. An explicitly scoped alternative can be selected at run
-time with `--env SCOUT_ISSUE_REPOSITORY=<owner/repo>`; public context remains
-WendyOS. Private duplicate reads use the publisher's scoped token.
+The worker has a 270-second Pi-loop deadline; control has a 300-second supervisor
+window and each probe batch is additionally bounded to 90 seconds and the remaining
+window. Flash has fixed non-thinking sampling and at most 4096 output tokens; model
+requests cannot override backend/template settings. Worker memory/tasks, script
+CPU/wall/PID/file/output limits and bounded evidence retention remain enforced.
 
-After any required organization approval, transfer a new local mode-0600 file:
+## Credentials and containment
+
+Control's documented `admin` entitlement mounts `/run/wendy/agent/agent.sock`:
+**full device control for trusted supervisor code**. Model tools expose only fixed
+Development/self operations on the owned fixture. Agent/OS/power changes, other
+apps/devices, physical capture/motion and arbitrary host shell/RPC are unavailable.
+No browser login, copied Mac profile/private key or service-account key is needed.
+
+The worker has network:none, separate PID/network namespaces, no admin/secret/fixture
+mounts and separate model/script UIDs. Offline scripts additionally use Landlock
+ABI 3+, seccomp, closed FDs and no-new-privileges; sockets, proc/secret access,
+ptrace, namespace/group escape and arbitrary file creation are denied. Children are
+killed/reaped and a failed live preflight holds testing. Built-ins, ambient org
+extensions/context, MCP discovery and cloud providers are disabled. Trusted root
+supervisors, Pi/model native libraries, Agent and kernel remain trusted; this is
+not protection from compromised trusted code or all covert authorized issue text.
+
+Publication needs a new fine-grained PAT restricted to the configured repository's
+Issues read/write and Metadata read-only. Default: `wendylabsinc/WendyOS`;
+`--env SCOUT_ISSUE_REPOSITORY=<owner/repo>` selects an explicitly scoped alternative.
+Public context remains WendyOS; private duplicate reads use that scoped token.
+After any organization approval, transfer a new local mode-0600 file:
 
 ```sh
 python3 provision_token.py --device <explicit-dev-cloud-selector> --file <new-scoped-token-file>
 ```
 
-The operator helper checks Development identity and disables receiver PTY echo
-before reading/sending the file. It stores the token only in control's persist
-volume at `/state/secrets/github-issues-token`, root-owned mode 0600. Keep it out
-of source, image contexts, argv/environment and logs. Never copy an existing Mac
-OAuth/profile. Without usable publication auth, evidence remains local.
+The reviewed operator helper disables PTY echo before reading/sending the token.
+Only control persist stores it at `/state/secrets/github-issues-token`, root0600.
+Keep it out of source/images/argv/environment/logs. Without usable auth, findings
+stay local. Earlier private synthetic transport testing proved issue HTTP201 and
+an authenticated duplicate retry without another POST; it was not a discovered bug.
+New functional publisher fixtures use local fake transport, never fabricated live bugs.
 
-## Tools and isolation
-
-Pi has only the packaged probe, script and report tools. Offline Python can run
-verified CLI binaries and analyze `inputs.json`; only precreated `output.txt`
-can be written using `r+`. Authenticated Wendy operations stay behind fixed
-supervisor commands; Pi gets no host shell or arbitrary Agent RPC/HTTP tool.
-
-The worker has network:none, separate PID/network namespaces, no admin/secret
-mounts, separate users and a 2 GiB/128-task limit. Script children additionally
-use Landlock ABI 3+, seccomp, no-new-privileges, closed FDs and CPU/wall/PID/file/
-output limits. Socket creation, proc/secret access, ptrace, namespace changes,
-file creation and process-group escape are denied. Descendants are killed and
-reaped. A failed live preflight holds testing. Pi's built-ins, ambient extensions,
-context files, MCP discovery and cloud providers are disabled.
-
-The worker enforces a 270-second Pi-loop deadline. The controller allows a
-300-second supervisor session window; each probe batch is additionally bounded
-to 90 seconds and that remaining window. Fixed model/tool-call budgets and
-size/count caps bound logs, sessions and retained findings. Trusted root supervisors,
-Pi/model native libraries, Agent and kernel remain trusted. These controls do
-not claim protection from compromised trusted code or eliminate covert channels
-through authorized issue choices/content/timing. Untrusted issue/source text
-cannot authorize new tools or network access.
-
-## Evidence and known limits
-
-Persistent volumes are `wendy-scout` (model/tools/private raw probes/findings),
-`wendy-scout-work` (Pi runs/scripts/preflight) and `wendy-scout-ipc` (root-only
-control socket). Inspect `events.jsonl`, `model.log`, `release-pins.json`,
-`runs/` and `findings/` through trusted operator access. Normal host volume root:
-`/var/lib/wendy/volumes/`. Agent log replay can omit stdout; durable files are
-authoritative. Raw `*.private.json` stays local; published observations exclude
-identifiers, addresses, camera serials and arbitrary script/model prose.
-
-Tested on an older Agent `2026.10.29-210857`, WendyOS `0.17.0`, CUDA `13.2`,
-`sm_110`: 49/49 GPU layers; actual model-authored offline CLI execution and
-follow-up; info/camera/audio enumeration and scratch lifecycle with past/current
-stable and nightly; kernel/FD/egress/resource/descendant checks; stop and forced
-controller recovery. Cached weight hashing took 16.45–16.50 seconds and cold GPU
-health 39–40 seconds. A fresh 30B PoC session took 74.19 seconds.
-
-The official Qwen3-Coder-Next Q5_K_M trial used the same prompt/tools, 16K context
-and CUDA image. All four shards passed their pinned hashes; download, verification
-and one rolling deployment took 9m55s (about 95 MB/s end to end). The existing
-server recognized `qwen3next`, offloaded 49/49 layers and used a 53,873.5 MiB GPU
-model buffer. Cold GPU health took 92.16 seconds, with about 68 GB RAM available
-at the startup snapshot. One fresh session completed in 140.04 seconds with
-actual tool/result proof. It ultimately called additive help text benign, but
-also tried unsupported report fields that the guard rejected. No regression was
-accepted. A second normal session passed proof in 114.24 seconds. The following session
-ended in 21.30 seconds with narration claiming commands and an invented nonce,
-but no tool events, scripts or results. The unchanged proof gate held the loop.
-Next therefore demonstrated compatibility but unreliable tool use in this
-setup; the loop was restored to cached 30B before the later Flash trial. Trial weights and pins remain
-recoverable. No quality or benchmark improvement is established.
-
-The original 30B model mistook additive help text for a regression; trusted
-checks accepted no finding. Replay covers a small set of exit/JSON/info-field/help predicates;
-arbitrary script assertions remain exploratory. Earlier setup exposed Pi API
-compatibility, verbose partial events and context overflow; the current runtime
-uses pinned compatibility, completed-event capture and bounded context. An older
-Agent can leave stopped scratch metadata during group stop; restart cleans only
-the recorded owned resource.
-
-A separately authorized synthetic test in a temporary private repository proved
-Thor issue creation (HTTP 201) and an authenticated duplicate retry with no second
-POST. The fixture was explicitly **not a bug**, separate from model tools, and
-production verification was retained. Credential checks confirmed root-only
-storage, no worker mount and denied untrusted-UID socket/proc access. This proves
-the exercised operations, not every token permission. No real regression issue
-has been demonstrated. The product default remains WendyOS.
+Evidence lives in `wendy-scout`, `wendy-scout-work` and `wendy-scout-ipc` volumes
+under the normal host root `/var/lib/wendy/volumes/`. Raw `*.private.json` stays local.
+Only typed workflow checks, fixed commands, versions and safe digests reach issues.
+Canonical protobuf clients are generated from pinned repository schemas, not a
+parallel wire contract.
 
 ```sh
 python3 -m unittest discover -s tests -v
 ```
-
-Tests cover the inference/credential boundary, projected privacy, replay
-truthfulness, existing-issue lookup, oversized evidence and secure transfer.
-Canonical protobufs are generated from the pinned repository schemas in
-`control/canonical.json`, without a parallel wire contract.

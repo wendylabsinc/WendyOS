@@ -102,14 +102,6 @@ class Bridge(http.server.BaseHTTPRequestHandler):
                         result = sandbox.run(
                             src.read_text(), job, inputs=SESSION["inputs"]
                         )
-                        challenge = SESSION["inputs"]["challenge"]
-                        text = result["output"] + "\n" + result["file_output"]
-                        if (
-                            result["exit"] == 0
-                            and challenge["nonce"] in text
-                            and str(challenge["a"] + challenge["b"]) in text
-                        ):
-                            SESSION["script_proof"] = True
                         (job / "result.json").write_text(json.dumps(result))
                         result = {
                             **result,
@@ -126,6 +118,13 @@ class Bridge(http.server.BaseHTTPRequestHandler):
             if self.path == "/tool":
                 data["session"] = SESSION["session"]
                 value = control("/tool", data)
+                if (
+                    value.get("evidence_kind") == "functional_workflow"
+                    and value.get("completed")
+                    and value.get("cleanup_verified")
+                    and isinstance(value.get("id"), str)
+                ):
+                    SESSION["functional_ids"].append(value["id"])
                 SESSION["inputs"]["observations"] = (
                     SESSION["inputs"]["observations"] + [value]
                 )[-6:]
@@ -331,19 +330,14 @@ def model_session(begin, index):
     run = WORK / "runs" / f"{int(time.time())}-{index}"
     run.mkdir(parents=True)
     os.chmod(run, 0o755)
-    challenge = {
-        "nonce": secrets.token_hex(16),
-        "a": secrets.randbelow(1000),
-        "b": secrets.randbelow(1000),
-    }
     SESSION.clear()
     SESSION.update(
         {
             "run": run,
             "session": begin["session"],
             "script_calls": 0,
+            "functional_ids": [],
             "inputs": {
-                "challenge": challenge,
                 "observations": [],
                 "cli_binaries": {
                     label: "/opt/scout-offline/" + v["tag"] + "/wendy"
@@ -429,7 +423,7 @@ def model_session(begin, index):
         "off",
         "--no-builtin-tools",
         "--tools",
-        "scout_probe,script_write,script_run,scout_report",
+        "scout_experiment,script_write,script_run,scout_report",
         "--no-extensions",
         "--extension",
         str(ROOT / "tools.ts"),
@@ -594,16 +588,13 @@ def model_session(begin, index):
                 if x.get("type") == "text"
             )
     summary = "\n".join(final)[-4000:]
-    proof = (
-        SESSION.get("script_proof", False)
-        and challenge["nonce"] in summary
-        and str(challenge["a"] + challenge["b"]) in summary
-    )
+    proof = any(evidence_id in summary for evidence_id in SESSION["functional_ids"])
     result = {
         "exit": p.returncode,
         "failure": failure,
         "summary": summary,
         "proof": proof,
+        "evidence_ids": list(SESSION["functional_ids"]),
         "seconds": time.monotonic() - started,
     }
     (run / "result.json").write_text(json.dumps(result, indent=2))
@@ -646,7 +637,23 @@ def model_session(begin, index):
 def main():
     if "--scratch" in sys.argv:
         # Fixed disposable workload, no testing, networking or persistent state.
-        print("SCOUT_SCRATCH_READY", flush=True)
+        fixture = pathlib.Path("/fixture")
+        request = json.loads((fixture / "request.json").read_text())
+        path = fixture / "state.json"
+        if path.is_symlink():
+            raise RuntimeError("Fixture symlink refused")
+        previous = json.loads(path.read_text()) if path.exists() else {}
+        count = (
+            previous.get("starts", 0)
+            if previous.get("generation") == request["generation"]
+            else 0
+        )
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(fd, "w") as f:
+            json.dump({"generation": request["generation"], "starts": count + 1}, f)
+            f.flush()
+            os.fsync(f.fileno())
+        print("SCOUT_SCRATCH_READY starts=" + str(count + 1), flush=True)
         while not STOP.is_set():
             try:
                 if not control("/scratch-lease", timeout=1).get("alive"):
@@ -734,7 +741,7 @@ def main():
             index += 1
             if not result["proof"]:
                 raise RuntimeError(
-                    "Model failed fresh script result proof; holding further sessions"
+                    "Model supplied no fresh completed functional evidence ID; holding further sessions"
                 )
             cap = int(os.environ.get("SCOUT_MAX_SESSIONS", "0"))
             if cap and index >= cap:

@@ -22,6 +22,53 @@ class Local:
         self.scratch = self.ownership["id"]
         if not re.fullmatch(re.escape(APP) + r"\.scratch\.[a-f0-9]{10}", self.scratch):
             raise ValueError("Invalid scratch ownership record")
+        self.fixture = pathlib.Path("/fixture")
+
+    def scratch_state(self):
+        listing = self.channel.unary_stream(
+            "/wendy.agent.services.v1.WendyContainerService/ListContainers",
+            request_serializer=lambda r: r.SerializeToString(),
+            response_deserializer=containers.ListContainersResponse.FromString,
+        )
+        return next(
+            (
+                shared.AppRunningState.Name(x.container.running_state)
+                for x in listing(containers.ListContainersRequest(), timeout=15)
+                if x.container.app_name == self.scratch
+            ),
+            "ABSENT",
+        )
+
+    def reset_fixture(self):
+        self.cleanup_scratch()
+        owner = self.fixture / "owner.json"
+        if owner.exists():
+            if json.loads(owner.read_text()).get("app") != self.scratch:
+                raise ValueError("Fixture volume ownership mismatch")
+        else:
+            with owner.open("x") as f:
+                json.dump({"app": self.scratch}, f)
+        for name in ["request.json", "state.json"]:
+            p = self.fixture / name
+            if p.is_symlink():
+                raise ValueError("Fixture symlink refused")
+            p.unlink(missing_ok=True)
+        self.generation = secrets.token_hex(16)
+        save(self.fixture / "request.json", {"generation": self.generation})
+
+    def fixture_starts(self):
+        p = self.fixture / "state.json"
+        if not p.exists():
+            return 0
+        if p.is_symlink() or p.stat().st_size > 4096:
+            raise ValueError("Invalid fixture state")
+        value = json.loads(p.read_text())
+        if value.get("generation") != self.generation:
+            return 0
+        count = value.get("starts")
+        if type(count) is not int or not 1 <= count <= 1000000:
+            raise ValueError("Invalid fixture counter")
+        return count
 
     def call(self, service, method, request, response):
         return self.channel.unary_unary(
@@ -76,6 +123,7 @@ class Local:
             "entitlements": [
                 {"type": "network", "mode": "none"},
                 {"type": "persist", "name": "wendy-scout-ipc", "path": "/ipc"},
+                {"type": "persist", "name": "wendy-scout-fixture", "path": "/fixture"},
             ],
             "resources": {"memory": "64Mi", "pids": 8},
         }

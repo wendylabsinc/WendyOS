@@ -2,6 +2,7 @@
 
 import hashlib, json, os, pathlib, re, stat, ssl, time, urllib.error, urllib.request
 from common import NoRedirect, CANCEL
+from functional import WORKFLOWS, public_result
 
 
 class GitHub:
@@ -92,12 +93,29 @@ class Publisher:
 
     def publish(self, finding):
         if (
-            finding.get("already_fixed_in_newer_stable")
+            finding.get("probe") not in WORKFLOWS
+            or finding.get("kind") != "functional-regression"
+            or any(
+                r.get("evidence_kind") != "functional_workflow"
+                or not r.get("completed")
+                or not r.get("cleanup_verified")
+                for r in finding.get("results", [])
+            )
+            or finding.get("already_fixed_in_newer_stable")
+            or finding.get("existing_stable_failure")
             or finding.get("current_stable_unverified")
             or finding.get("verified") is not True
             or len(finding.get("results", [])) != 4
         ):
             raise ValueError("Only trusted twice-replayed findings are publishable")
+        rows = finding["results"]
+        if [r.get("outcome") for r in rows] != [
+            "passed",
+            "failed",
+            "passed",
+            "failed",
+        ] or rows[1].get("failure_identity") != rows[3].get("failure_identity"):
+            raise ValueError("Inconsistent functional replay")
         fp = self.fingerprint(finding)
         failure_ids = [r.get("failure_identity") for r in finding["results"][1::2]]
         marker = "<!-- wendy-scout:" + fp + " -->"
@@ -141,23 +159,10 @@ class Publisher:
             )
         # Structured, scrubbed output only. No user/model-written title/body,
         # comments, mentions, links from source text, or script stdout.
-        observations = finding["results"] + finding.get("current_stable", [])
-        if finding["probe"].startswith("help_"):
-            # Preserve every replay without publishing large CLI help buffers.
-            # The flag predicate is the observation; complete text stays local.
-            observations = [
-                {
-                    **r,
-                    "output": {
-                        "flag": finding.get("field", ""),
-                        "present": finding.get("field", "") in str(r["output"]),
-                        "text_sha256": hashlib.sha256(
-                            str(r["output"]).encode()
-                        ).hexdigest(),
-                    },
-                }
-                for r in observations
-            ]
+        observations = [
+            public_result(r)
+            for r in finding["results"] + finding.get("current_stable", [])
+        ]
         # Output has already passed the typed public projection; do not regex
         # away version fields or replace a real semantic predicate with a mask.
         body = (
@@ -181,6 +186,11 @@ class Publisher:
             + "`; field: `"
             + str(finding.get("field", ""))
             + "`.\n\n"
+            + "Reproduce: deploy Examples/WendyScout with SCOUT_BOOTSTRAP=1, then from trusted operator device shell run nerdctl --namespace default exec sh.wendy.scout_control python3 /opt/scout/reproduce.py "
+            + finding["probe"]
+            + " "
+            + finding.get("baseline", "past")
+            + ". The fixed fixture, reset, CLI commands and expected/actual checks are recorded below.\n\n"
             + "Commands, exact CLI versions, exits and scrubbed observations:\n\n```json\n"
             + json.dumps(observations, indent=2)
             + "\n```\n\n"

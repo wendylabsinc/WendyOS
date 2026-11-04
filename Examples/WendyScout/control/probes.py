@@ -3,6 +3,7 @@
 import json, os, pathlib, re, time
 import hashlib
 from common import APP, STATE, command, save, scrub, public_observation, CANCEL
+from functional import experiment, WORKFLOWS
 
 SCRATCH = APP + ".scratch"
 RECIPES = {
@@ -15,6 +16,8 @@ RECIPES = {
     "help_device": ["device", "--help"],
     "scratch_start": ["device", "apps", "start", SCRATCH],
     "scratch_stop": ["device", "apps", "stop", SCRATCH],
+    "scratch_stop_extra": ["device", "apps", "stop", SCRATCH, "scout-invalid-extra"],
+    "scratch_logs": ["device", "logs", SCRATCH, "--tail", "20", "--no-follow"],
     "scratch_remove": ["device", "apps", "remove", SCRATCH, "--force"],
 }
 
@@ -42,8 +45,8 @@ class Probes:
             raise TimeoutError("Probe batch deadline or shutdown")
         if self.local:
             self.local.verify_development()
-        if kind == "scratch_lifecycle":
-            return self.lifecycle(version, run)
+        if kind in WORKFLOWS:
+            return experiment(self, kind, version, run)
         if kind not in RECIPES or version not in self.versions:
             raise ValueError("Unapproved probe or version")
         argv = ["--json", *[self.scratch if x == SCRATCH else x for x in RECIPES[kind]]]
@@ -55,15 +58,22 @@ class Probes:
             "WENDY_NO_UPDATE_CHECK": "1",
         }
         started = time.monotonic()
-        raw = command(
-            self.versions[version]["binary"],
-            argv,
-            env=env,
-            timeout=min(25, max(0.1, self.deadline - time.monotonic()))
-            if self.deadline
-            else 25,
-            detach_marker=b"SCOUT_SCRATCH_READY" if kind == "scratch_start" else None,
-        )
+        try:
+            raw = command(
+                self.versions[version]["binary"],
+                argv,
+                env=env,
+                timeout=(
+                    min(25, max(0.1, self.deadline - time.monotonic()))
+                    if self.deadline
+                    else 25
+                ),
+                detach_marker=(
+                    b"SCOUT_SCRATCH_READY" if kind == "scratch_start" else None
+                ),
+            )
+        except TimeoutError:
+            raw = {"exit": 124, "output": '{"error":{"code":"scout_timeout"}}'}
         try:
             parsed = json.loads(raw["output"])
             json_valid = True
@@ -119,192 +129,72 @@ class Probes:
             save(run / (result["id"] + ".json"), result)
         return result
 
-    def lifecycle(self, version, run):
-        if version not in self.versions or not self.local:
-            raise ValueError("Unapproved lifecycle")
-        self.local.cleanup_scratch()
-        self.local.create_scratch()
-        rows = []
-        try:
-            for action, expected in [
-                ("scratch_start", "RUNNING"),
-                ("scratch_stop", "STOPPED"),
-                ("scratch_remove", "ABSENT"),
-            ]:
-                rows.append(self.run(action, version, run))
-                state = self.run("apps", version, run)
-                rows.append(state)
-                if (
-                    rows[-2]["exit"]
-                    not in ({0, 130} if action == "scratch_start" else {0})
-                ) or state["output"].get("scratch_state") != expected:
-                    return {
-                        "evidence_kind": "trusted_lifecycle",
-                        "kind": "scratch_lifecycle",
-                        "version": self.versions[version]["tag"],
-                        "exit": 1,
-                        "steps": rows,
-                        "output": {
-                            "stage": action,
-                            "observed": state["output"].get("scratch_state"),
-                            "expected": expected,
-                        },
-                        "failure_identity": action
-                        + str(state["output"].get("scratch_state")),
-                    }
-            return {
-                "evidence_kind": "trusted_lifecycle",
-                "kind": "scratch_lifecycle",
-                "version": self.versions[version]["tag"],
-                "exit": 0,
-                "steps": rows,
-                "output": {"start": "RUNNING", "stop": "STOPPED", "remove": "ABSENT"},
-                "failure_identity": "passed",
-            }
-        finally:
-            self.local.cleanup_scratch()
-
-    def replay(self, probe, baseline, nightly, run, predicate="exit", field=""):
-        if probe not in {
-            "info",
-            "cameras",
-            "audio",
-            "help_root",
-            "help_run",
-            "help_device",
-            "scratch_lifecycle",
-        }:
-            raise ValueError("Unapproved replay recipe")
+    def replay(self, probe, baseline, nightly, run, predicate="functional", field=""):
+        if probe not in WORKFLOWS or predicate != "functional" or field:
+            raise ValueError("Only implemented functional workflows may be replayed")
         if baseline not in {"past", "stable"} or nightly != "nightly":
             raise ValueError("Expected a stable/nightly comparison")
-        if predicate not in {
-            "exit",
-            "invalid_json",
-            "field_missing",
-            "field_changed",
-            "help_flag_missing",
-        }:
-            raise ValueError("Unapproved predicate")
-        if predicate.startswith("field_") and (
-            probe != "info"
-            or field
-            not in {
-                "version",
-                "osVersion",
-                "cpuArchitecture",
-                "hasGpu",
-                "gpuArch",
-                "cudaVersion",
-                "jetpackVersion",
-                "os",
-            }
-        ):
-            raise ValueError("Unapproved stable device-info field")
-        if predicate == "help_flag_missing" and (
-            not probe.startswith("help_")
-            or not re.fullmatch(r"--[a-z][a-z0-9-]{1,40}", field)
-        ):
-            raise ValueError("Invalid flag")
         results = [
             self.run(probe, v, run) for v in [baseline, nightly, baseline, nightly]
         ]
-        b = [results[0], results[2]]
-        n = [results[1], results[3]]
-        if (
+        b, n = results[::2], results[1::2]
+        good = all(
+            r.get("completed")
+            and r.get("cleanup_verified")
+            and r["outcome"] == "passed"
+            for r in b
+        )
+        bad = all(
+            r.get("completed")
+            and r.get("cleanup_verified")
+            and r["outcome"] == "failed"
+            for r in n
+        )
+        bad = bad and n[0].get("failure_identity") == n[1].get("failure_identity")
+        chronological = (
             self.versions[baseline]["published_at"]
-            > self.versions[nightly]["published_at"]
-        ):
-            return {
-                "verified": False,
-                "reason": "Stable release is newer than nightly; chronology does not establish a regression",
-                "results": results,
-            }
-        good = all(r["exit"] == 0 for r in b)
-        bad = all(r["exit"] != 0 for r in n)
-        if predicate == "invalid_json":
-            good = good and all(
-                r.get("json_valid", isinstance(r["output"], (dict, list))) for r in b
-            )
-            bad = all(
-                r["exit"] == 0
-                and not r.get("json_valid", not isinstance(r["output"], str))
-                for r in n
-            )
-        elif predicate == "field_missing":
-            good = good and all(
-                isinstance(r["output"], dict) and field in r["output"] for r in b
-            )
-            bad = all(
-                r["exit"] == 0
-                and isinstance(r["output"], dict)
-                and field not in r["output"]
-                for r in n
-            )
-        elif predicate == "field_changed":
-            good = good and all(
-                isinstance(r["output"], dict) and field in r["output"] for r in b
-            )
-            expected = b[0]["output"].get(field) if good else None
-            good = good and b[1]["output"].get(field) == expected
-            bad = (
-                good
-                and all(
-                    r["exit"] == 0
-                    and isinstance(r["output"], dict)
-                    and field in r["output"]
-                    and r["output"][field] != expected
-                    for r in n
-                )
-                and n[0]["output"].get(field) == n[1]["output"].get(field)
-            )
-        elif predicate == "help_flag_missing":
-            good = good and all(field in str(r["output"]) for r in b)
-            bad = all(r["exit"] == 0 and field not in str(r["output"]) for r in n)
+            <= self.versions[nightly]["published_at"]
+        )
         current = (
             [self.run(probe, "stable", run), self.run(probe, "stable", run)]
-            if good and bad
+            if good and bad and chronological
             else []
         )
+        states = [
+            (
+                r["outcome"]
+                if r.get("completed") and r.get("cleanup_verified")
+                else "blocked"
+            )
+            for r in current
+        ]
         newer = (
             self.versions["stable"]["published_at"]
-            > self.versions["nightly"]["published_at"]
+            > self.versions[nightly]["published_at"]
         )
-
-        def still_fails(r):
-            if predicate == "exit":
-                return r["exit"] != 0
-            if r["exit"] != 0:
-                return None
-            if predicate == "invalid_json":
-                return not r.get("json_valid", not isinstance(r["output"], str))
-            if predicate.startswith("field_") and not isinstance(r["output"], dict):
-                return None
-            if predicate == "field_missing":
-                return field not in r["output"]
-            if predicate == "field_changed":
-                return (
-                    r["output"].get(field) != expected if field in r["output"] else None
-                )
-            return field not in str(r["output"])
-
-        contrast = [still_fails(r) for r in current]
-        fixed = bool(newer and contrast == [False, False])
+        fixed = bool(newer and states == ["passed", "passed"])
+        existing = bool(not newer and states == ["failed", "failed"])
         uncertain = bool(
-            newer and current and contrast not in ([False, False], [True, True])
+            current and states not in (["passed", "passed"], ["failed", "failed"])
         )
-        # A baseline-working command removed or made unsupported in nightly is a
-        # compatibility regression, not automatically an environment failure.
         return {
-            "verified": bool(good and bad and not fixed and not uncertain),
+            "verified": bool(
+                good
+                and bad
+                and chronological
+                and not fixed
+                and not existing
+                and not uncertain
+            ),
+            "kind": "functional-regression",
+            "probe": probe,
+            "baseline": baseline,
+            "field": "",
+            "agent": self.agent,
+            "already_fixed_in_newer_stable": fixed,
+            "existing_stable_failure": existing,
             "current_stable_unverified": uncertain,
             "current_stable": current,
-            "already_fixed_in_newer_stable": fixed,
-            "kind": predicate + "-regression",
-            "probe": probe,
-            "field": field,
-            "agent": self.agent,
-            "reason": "Twice replayed baseline/nightly predicate"
-            if good and bad
-            else "No twice-reproduced regression",
             "results": results,
+            "reason": "State-equivalent functional replay; passing stable and failing nightly required",
         }

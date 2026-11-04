@@ -305,6 +305,12 @@ def context():
 
 
 def public_observation(kind, value, exit_code, scratch=None):
+    if kind in {"scratch_start", "scratch_logs"}:
+        text = json.dumps(value) if isinstance(value, (dict, list)) else str(value)
+        return {
+            "ready_marker": "SCOUT_SCRATCH_READY" in text,
+            "retained_bytes": len(text.encode()),
+        }
     """Explicit publication/model projection. Raw device evidence stays root-only."""
     if exit_code:
         text = json.dumps(value).lower()

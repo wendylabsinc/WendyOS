@@ -34,6 +34,11 @@
           "type": "persist",
           "name": "wendy-scout-work",
           "path": "/work"
+        },
+        {
+          "type": "persist",
+          "name": "wendy-scout-fixture",
+          "path": "/fixture"
         }
       ]
     },

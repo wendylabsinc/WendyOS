@@ -15,6 +15,12 @@ from common import (
     cancel_commands,
 )
 from probes import Probes
+from functional import (
+    WORKFLOWS,
+    CleanupError,
+    confirmed_work,
+    require_failed_experiment,
+)
 from local import Local
 from publisher import Publisher
 import status_page
@@ -254,6 +260,8 @@ class Scout:
         )
 
     def begin(self, report):
+        if getattr(self, "error", None):
+            raise RuntimeError(self.error)
         if not self.ready or not self.model:
             return {
                 "status": "waiting",
@@ -343,13 +351,18 @@ class Scout:
                 "started": time.monotonic(),
                 "finished": False,
                 "model_calls": 0,
+                "experiments": [],
             }
             # Only bounded sanitized summaries, never shared writable package/session stores.
             history = []
             for old in sorted(previous)[-2:]:
                 if (old / "summary.json").exists():
                     item = json.loads((old / "summary.json").read_text())
-                    item["summary"] = str(item.get("summary", ""))[:1200]
+                    item["summary"] = (
+                        str(item.get("summary", ""))[:600]
+                        if item.get("proof") is True
+                        else "Historical narration omitted: fresh work proof was absent or unknown"
+                    )
                     history.append(item)
             return {
                 "status": "started",
@@ -373,17 +386,11 @@ class Scout:
                     for k, v in self.versions.items()
                 },
                 "agent": self.probes.agent,
+                "workflows": list(WORKFLOWS),
             }
 
     def tool(self, data):
-        if set(data) - {
-            "session",
-            "operation",
-            "version",
-            "kind",
-            "predicate",
-            "field",
-        }:
+        if set(data) - {"session", "operation", "version", "kind"}:
             raise ValueError("Unknown tool argument")
         with self.lock:
             s = self.sessions[data["session"]]
@@ -398,22 +405,26 @@ class Scout:
             operation = data.get("operation")
             v = data.get("version", "past")
             kind = data.get("kind", "info")
-            if operation == "probe":
-                result = self.probes.run(kind, v, s["run"])
-                if kind == "scratch_remove" and result["exit"] == 0:
-                    self.local.ownership["created"] = False
-                    save(self.local.owner, self.local.ownership)
-            elif operation == "scratch_create":
-                result = self.local.create_scratch()
+            if getattr(self, "error", None):
+                raise RuntimeError(self.error)
+            if operation == "experiment":
+                if kind not in WORKFLOWS:
+                    raise ValueError("Unapproved functional workflow")
+                try:
+                    result = self.probes.run(kind, v, s["run"])
+                except CleanupError as e:
+                    self.error = str(e)
+                    raise
+                s["experiments"].append(result)
             elif operation == "reproduce":
-                result = self.probes.replay(
-                    kind,
-                    v,
-                    "nightly",
-                    s["run"],
-                    data.get("predicate", "exit"),
-                    data.get("field", ""),
+                require_failed_experiment(
+                    s["experiments"], kind, self.versions["nightly"]["tag"]
                 )
+                try:
+                    result = self.probes.replay(kind, v, "nightly", s["run"])
+                except CleanupError as e:
+                    self.error = str(e)
+                    raise
                 save(s["run"] / f"candidate-{s['calls']}.json", result)
                 if result.get("verified"):
                     findings = STATE / "findings"
@@ -455,6 +466,12 @@ class Scout:
         s["finished"] = True
         summary = {
             "exit": data.get("exit"),
+            "proof": data.get("proof") is True
+            and confirmed_work(s["experiments"], str(data.get("summary", ""))),
+            "experiments": [
+                {k: r[k] for k in ["id", "kind", "version", "outcome"]}
+                for r in s["experiments"]
+            ],
             "summary": scrub(str(data.get("summary", ""))[:4000]),
             "evidence_kind": "historical_model_summary",
             "seconds": time.monotonic() - s["started"],
