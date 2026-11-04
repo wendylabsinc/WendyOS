@@ -14,11 +14,28 @@ jobs:
       contents: read
       pull-requests: write
     steps:
-      - name: Check out repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
+      - name: Resolve current trusted main automation
+        id: trusted-automation
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         with:
-          ref: ${{ github.event.pull_request.base.sha }}
+          script: |
+            // SECURITY: PR base.sha can retain an old target snapshot that lacks
+            // this job's scripts. Select only this repository's current main,
+            // never PR-controlled source.
+            const {data} = await github.rest.git.getRef({
+              owner: context.repo.owner, repo: context.repo.repo, ref: "heads/main"
+            });
+            const sha = data.object?.sha;
+            if (data.object?.type !== "commit" || typeof sha !== "string" || !/^[0-9a-f]{40}$/.test(sha)) {
+              throw new Error("Could not resolve an immutable trusted main commit");
+            }
+            core.info(`Trusted docs automation commit: ${sha}`);
+            core.setOutput("sha", sha);
+
+      - name: Check out pinned trusted main review automation
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ steps.trusted-automation.outputs.sha }}
           fetch-depth: 0
           persist-credentials: false
 

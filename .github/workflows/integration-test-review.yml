@@ -70,8 +70,8 @@ jobs:
           import subprocess
 
           sys.path.insert(0, str(pathlib.Path('.github/scripts').resolve()))
-          # Automation stays on the immutable trusted base. The introducing PR
-          # continues the base policy until the source filter lands there.
+          # Automation stays on the immutable trusted base. A PR whose base predates
+          # the source filter continues the base policy until it merges main.
           source_filter = pathlib.Path('.github/scripts/review_sources.py').is_file()
           if source_filter:
               from review_sources import source_diff, parse_diff, is_generated_path, SOURCE_ONLY_RULE
