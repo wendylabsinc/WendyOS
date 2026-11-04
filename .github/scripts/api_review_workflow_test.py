@@ -3,7 +3,10 @@
 
 import json
 from pathlib import Path
+import shutil
 import subprocess
+import sys
+import tempfile
 import unittest
 
 WORKFLOW = Path(__file__).resolve().parents[1] / "workflows" / "api-review.yml"
@@ -11,6 +14,9 @@ DOCS_WORKFLOW = WORKFLOW.with_name("docs-review.yml")
 OLD_BASE = "b" * 40
 PR_HEAD = "c" * 40
 CURRENT_MAIN = "a" * 40
+# A run keeps the sparse list of its own YAML while reading current main's
+# scripts, so YAML that predates this workflow's test does not check it out.
+needs_docs_workflow = unittest.skipUnless(DOCS_WORKFLOW.is_file(), "docs-review.yml is outside this sparse checkout")
 
 
 def resolver_script(text):
@@ -90,7 +96,25 @@ class TrustedSourceTests(unittest.TestCase):
         self.assertIn('merge-base "$EXPECTED_BASE_SHA" "$EXPECTED_HEAD_SHA"', automatic_job)
         self.assertIn("github.event.pull_request.head.repo.full_name == github.repository", automatic_job)
         self.assertIn("persist-credentials: false", automatic_job)
+        # Otherwise the docs workflow test below would skip on every run.
+        self.assertIn(".github/workflows/docs-review.yml", automatic_job)
 
+    @needs_docs_workflow
+    def test_sparse_checkout_without_docs_workflow_still_passes(self):
+        # The copy also skips this test, so it cannot recurse.
+        with tempfile.TemporaryDirectory() as directory:
+            script = Path(directory) / ".github" / "scripts" / Path(__file__).name
+            workflow = Path(directory) / ".github" / "workflows" / WORKFLOW.name
+            script.parent.mkdir(parents=True)
+            workflow.parent.mkdir(parents=True)
+            shutil.copy(__file__, script)
+            shutil.copy(WORKFLOW, workflow)
+            execution = subprocess.run(
+                [sys.executable, str(script)], capture_output=True, text=True, timeout=60)
+        self.assertEqual(execution.returncode, 0, execution.stderr)
+        self.assertIn("skipped=", execution.stderr)
+
+    @needs_docs_workflow
     def test_docs_review_runs_current_main_when_pr_base_predates_its_scripts(self):
         result = self.run_resolver({"object": {"type": "commit", "sha": CURRENT_MAIN}}, workflow=DOCS_WORKFLOW)
         self.assertFalse(result["failed"])
