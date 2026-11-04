@@ -3505,16 +3505,26 @@ func findGStreamerEncoderFromSet(available map[string]bool) (gstEncoderResult, e
 		}
 	}
 
-	// VP8 preferred over raw H.264 when h264parse is absent: vp8enc+webmmux (both
-	// in gst-plugins-good) produce a self-describing WebM container that requires no
-	// stream-format negotiation and is always decodable by the client.
+	// Without h264parse, x264enc can still emit what the client needs:
+	// encoderSegment pins its output caps to Annex B byte-stream, and in that mode
+	// it repeats SPS/PPS before every IDR, so a viewer that joins late starts at
+	// the next key frame (verified on GStreamer 1.24). H.264 matters here because
+	// the Wendy Mac and iPhone apps cannot play VP8. Other H.264 encoders are not
+	// used this way: their byte-stream output or per-key-frame SPS/PPS is not
+	// established, so they keep the VP8 fallback below.
+	if hasElem("x264enc") {
+		return gstEncoderResult{element: "x264enc", codec: agentpb.VideoCodec_VIDEO_CODEC_H264}, nil
+	}
+
+	// VP8 preferred over raw H.264 when neither h264parse nor x264enc is present:
+	// vp8enc+webmmux (both in gst-plugins-good) produce a self-describing WebM
+	// container that requires no stream-format negotiation.
 	if hasElem("vp8enc") && hasElem("webmmux") {
 		return gstEncoderResult{element: "vp8enc", codec: agentpb.VideoCodec_VIDEO_CODEC_VP8}, nil
 	}
 
 	// Last resort: attempt H.264 without normalization. Hardware encoders such as
-	// nvv4l2h264enc and v4l2h264enc typically emit byte-stream natively; x264enc may
-	// produce AVC which the client's h264parse may or may not be able to decode.
+	// nvv4l2h264enc and v4l2h264enc typically emit byte-stream natively.
 	for _, enc := range h264Encoders {
 		if hasElem(enc) {
 			return gstEncoderResult{element: enc, codec: agentpb.VideoCodec_VIDEO_CODEC_H264, hasH264Parse: false}, nil
@@ -3528,7 +3538,7 @@ func findGStreamerEncoderFromSet(available map[string]bool) (gstEncoderResult, e
 	}
 
 	return gstEncoderResult{}, fmt.Errorf(
-		"no supported GStreamer encoder found (checked %d elements); install gst-plugins-good (vp8enc+webmmux) or gst-plugins-bad (h264parse)+gst-plugins-ugly (x264enc)",
+		"no supported GStreamer encoder found (checked %d elements); install gst-plugins-ugly (x264enc) or gst-plugins-good (vp8enc+webmmux)",
 		len(available),
 	)
 }
@@ -4061,7 +4071,13 @@ func encoderSegment(encoder string, hasH264Parse bool, gop int) string {
 		// (verified on a Pi 4, WDY-1603).
 		enc = "videoconvert ! video/x-raw,format={I420,NV12} ! v4l2h264enc" + kf + " ! video/x-h264,profile=baseline,level=(string)4"
 	case "x264enc":
-		enc = "videoconvert ! video/x-raw,format=I420 ! x264enc tune=zerolatency" + kf + " ! video/x-h264,profile=high"
+		caps := "video/x-h264,profile=high"
+		if !hasH264Parse {
+			// No h264parse to convert it (see h264ByteStream), so x264enc must
+			// emit Annex B itself; it then repeats SPS/PPS before every IDR.
+			caps += ",stream-format=byte-stream,alignment=au"
+		}
+		enc = "videoconvert ! video/x-raw,format=I420 ! x264enc tune=zerolatency" + kf + " ! " + caps
 	case "openh264enc":
 		enc = "videoconvert ! video/x-raw,format=I420 ! openh264enc" + kf
 	case "avenc_h264":
