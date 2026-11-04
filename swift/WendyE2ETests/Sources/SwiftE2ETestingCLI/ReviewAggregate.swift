@@ -1,8 +1,8 @@
 import Foundation
 
-func writeE2EReviewAggregate(in runURL: URL) throws {
+func writeE2EReviewAggregate(in runURL: URL, reviewOutcome: String? = nil) throws {
     let issues = try loadE2EReviewAggregateIssues(in: runURL)
-    let markdown = renderE2EReviewAggregate(issues: issues)
+    let markdown = renderE2EReviewAggregate(issues: issues, reviewOutcome: reviewOutcome)
     let outputURL = runURL.appendingPathComponent("review.md")
     try markdown.write(to: outputURL, atomically: true, encoding: .utf8)
     print("==> Wrote Swift E2E review aggregate")
@@ -94,15 +94,30 @@ private func loadE2EReviewAggregateIssues(in runURL: URL) throws -> [E2EReviewAg
     }
 }
 
-private func renderE2EReviewAggregate(issues: [E2EReviewAggregateIssue]) -> String {
+private func renderE2EReviewAggregate(
+    issues: [E2EReviewAggregateIssue],
+    reviewOutcome: String?
+) -> String {
     var lines: [String] = [
         "# Swift E2E Review",
         "",
     ]
 
-    guard !issues.isEmpty else {
-        lines.append("No Swift E2E review issues were generated for this run.")
+    // CI passes its review step's outcome. A local report has none, so the
+    // absence of issues keeps its usual meaning there.
+    let incomplete = reviewOutcome != nil && reviewOutcome != "success"
+    if incomplete {
+        lines.append(
+            "⚠️ AI review did not complete, so this is not a clean result. Any issues listed are partial; check the workflow log for the reason."
+        )
         lines.append("")
+    }
+
+    guard !issues.isEmpty else {
+        if !incomplete {
+            lines.append("No Swift E2E review issues were generated for this run.")
+            lines.append("")
+        }
         return lines.joined(separator: "\n")
     }
 

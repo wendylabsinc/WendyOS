@@ -85,6 +85,10 @@ class GateTests(unittest.TestCase):
                  for job in (ANALYZE, PASSED)}
         self.assertEqual(needs[ANALYZE], needs[PASSED])
 
+    def test_report_reads_the_review_outcome_before_continue_on_error(self):
+        # A step's conclusion is always success under continue-on-error.
+        self.assertTrue("WENDY_E2E_REVIEW_OUTCOME: ${{ steps.ai-review.outcome }}" in self.text)
+
 
 if __name__ == "__main__":
     unittest.main()

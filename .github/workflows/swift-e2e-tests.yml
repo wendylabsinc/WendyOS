@@ -788,6 +788,7 @@ jobs:
           fi
 
       - name: Perform Swift E2E AI Review
+        id: ai-review
         timeout-minutes: 15
         continue-on-error: true
         working-directory: swift
@@ -847,6 +848,9 @@ jobs:
         if: always()
         working-directory: swift
         shell: bash
+        env:
+          # Unlike conclusion, outcome is not masked by continue-on-error.
+          WENDY_E2E_REVIEW_OUTCOME: ${{ steps.ai-review.outcome }}
         run: |
           set -euo pipefail
           bash ./Scripts/E2EReport.sh \
