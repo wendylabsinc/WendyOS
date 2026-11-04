@@ -263,6 +263,19 @@ overflow; the final runtime uses explicit compatibility settings, completed-even
 capture and smaller context snapshots. Raw evidence stays local.
 
 The issues-only publisher passed fake-server tests, including closed duplicates,
-pagination and issue-rate limits. No standalone live publication was exercised:
-a newly scoped credential was awaiting organization approval. No canary issue
-was posted. Credential absence is a setup limitation, not a CLI regression.
+pagination, repository-isolated ledgers and issue-rate limits. A newly scoped
+token was then securely transferred to the control volume for an explicitly
+authorized **synthetic transport test in a temporary private repository**. Thor
+performed an authenticated duplicate read (HTTP 200), created the clearly marked
+synthetic issue (HTTP 201), and found the same issue on retry with no second POST.
+The production replay gate still refused unverified fixture evidence. The
+synthetic operator script was separate from the model and product build.
+
+Live isolation checks found the secret only in the root-owned mode-0600 control
+file, with no credential prefix in service environment/arguments. Neither the
+Pi UID nor script UID could reach the root control socket, root process FDs or
+root environment; the worker had no publisher-secret mount. These observations
+prove the exercised transport operations and boundaries, not every permission
+of the token. No real regression publication has been exercised: there was no
+verified finding. The WendyOS default remains unchanged; alternate destinations
+are runtime configuration requiring their own explicitly scoped credential.
