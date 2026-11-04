@@ -164,7 +164,7 @@ def render(work, state, now=None):
         or "<p>No visible transcript events yet.</p>"
     )
     return (
-        '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta http-equiv="refresh" content="5"><title>Wendy Scout PoC</title><style>"+STYLE+"</style></head><body>'
+        f'<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta http-equiv="refresh" content="5"><title>Wendy Scout PoC</title><style>{STYLE}</style></head><body>'
         "<h1>Wendy Scout PoC</h1><p>State: <strong>"
         + esc(label)
         + "</strong> — elapsed "

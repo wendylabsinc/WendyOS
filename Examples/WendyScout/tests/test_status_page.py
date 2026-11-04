@@ -51,6 +51,8 @@ class PageTests(unittest.TestCase):
         )
         page = status_page.render(self.work, self.state, self.now).decode()
         self.assertIn("running", page)
+        self.assertIn('name="viewport"', page)
+        self.assertIn("<style>" + status_page.STYLE + "</style>", page)
         self.assertIn("10s", page)
         self.assertIn("&lt;script&gt;", page)
         self.assertNotIn("<script>", page)
