@@ -20,6 +20,7 @@ from functional import (
     CleanupError,
     confirmed_work,
     require_failed_experiment,
+    model_observation,
 )
 from local import Local
 from publisher import Publisher
@@ -459,7 +460,7 @@ class Scout:
                     save(path, result)
             else:
                 raise ValueError("Unapproved operation")
-            return scrub(result)
+            return scrub(model_observation(result))
 
     def finish(self, data):
         s = self.sessions[data["session"]]

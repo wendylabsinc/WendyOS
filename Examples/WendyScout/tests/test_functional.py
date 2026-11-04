@@ -2,6 +2,7 @@ import copy, json, pathlib, sys, tempfile, unittest
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "control"))
 from functional import (
+    model_observation,
     experiment,
     confirmed_work,
     CleanupError,
@@ -141,3 +142,13 @@ class FunctionalTests(unittest.TestCase):
         require_failed_experiment([failed], "reject_extra_args", "nightly")
         with self.assertRaises(ValueError):
             require_failed_experiment([failed], "restart_persistence", "nightly")
+
+    def test_model_gets_checked_evidence_without_repeating_private_trace(self):
+        r = experiment(Runner(), "restart_persistence", "stable", None)
+        for step in r["steps"]:
+            step["raw_private_stdout"] = "private" * 1000
+        compact = model_observation(r)
+        self.assertTrue(compact["completed"] and compact["cleanup_verified"])
+        self.assertEqual(compact["id"], r["id"])
+        self.assertNotIn("raw_private_stdout", json.dumps(compact))
+        self.assertTrue(compact["output"]["checks"])

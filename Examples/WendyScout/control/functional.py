@@ -85,6 +85,43 @@ def public_result(record):
     }
 
 
+def model_observation(result):
+    """Keep full traces durable, without repeating them into the model context."""
+    if result.get("evidence_kind") == "functional_workflow":
+        return {
+            **public_result(result),
+            **{
+                k: result[k]
+                for k in ["evidence_kind", "completed", "cleanup_verified", "seconds"]
+            },
+        }
+    return {
+        **{
+            k: result[k]
+            for k in [
+                "verified",
+                "kind",
+                "probe",
+                "agent",
+                "reason",
+                "already_fixed_in_newer_stable",
+                "existing_stable_failure",
+                "current_stable_unverified",
+                "publication",
+            ]
+            if k in result
+        },
+        "replays": [
+            {
+                "version": r["version"],
+                "outcome": r["outcome"],
+                "failed_checks": [c for c in r["output"]["checks"] if not c["passed"]],
+            }
+            for r in result.get("results", []) + result.get("current_stable", [])
+        ],
+    }
+
+
 def experiment(probes, kind, version, run):
     if kind not in WORKFLOWS or version not in probes.versions or not probes.local:
         raise ValueError("Unapproved functional experiment")
