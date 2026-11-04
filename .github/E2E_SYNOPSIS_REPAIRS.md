@@ -5,10 +5,13 @@ Swift E2E runs. It keeps the existing Sonnet analysis unchanged. It never asks a
 model to generate a patch. PR/fork/manual runs cannot enter the repair jobs;
 the PR trigger runs mocked fixture tests and one credential-free CLI help test.
 
-The supported edit is one positive `stdout.contains("complete synopsis")`
-assertion in `swift/WendyE2ETests/Tests/WendyE2ETests/Wendy*Tests.swift`, inside
+The supported edit is one positive `stdout.contains("complete synopsis")` or
+`result.stdout.contains("complete synopsis")` assertion in
+`swift/WendyE2ETests/Tests/WendyE2ETests/Wendy*Tests.swift`, inside
 `prints command help`, correlated with that test's metadata and its single
-successful, unauthenticated `wendy … --help` recording. Only brackets and spacing
+successful, unauthenticated `wendy … --help` recording. No other receiver qualifies,
+and the failure message must name the same receiver as the source. The test must use
+`scenario.run(authenticated: false)`, so help tests without it stay out of scope. Only brackets and spacing
 may differ, without joining or splitting words. Every word, argument name and flag stays identical. Other failures,
 multiple failing assertions, changed test source across the green/red boundary,
 or ambiguous evidence produce a reason in the workflow summary and no writes.

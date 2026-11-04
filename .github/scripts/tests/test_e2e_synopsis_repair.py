@@ -258,6 +258,24 @@ class RepairTests(unittest.TestCase):
         self.assertEqual(change["new"], NEW)
         self.assertEqual(r.replace_literal(SOURCE, change), SOURCE.replace(OLD, NEW))
 
+    def test_result_stdout_receiver_qualifies_when_message_and_source_agree(self):
+        source = SOURCE.replace("                let stdout = result.stdout\n", "").replace(
+            "#expect(stdout.contains", "#expect(result.stdout.contains")
+        bare = evidence()
+        # Swift Testing keeps the receiver, as in artifact swift-e2e-tests.gh40488296264.local-ubuntu-24.0001.
+        kept = {**bare, "test-results.xml": bare["test-results.xml"].replace(
+            "failed: stdout.contains", "failed: result.stdout.contains")}
+        self.assertNotEqual(kept, bare)
+        change = r.candidate(kept, lambda p: source)
+        self.assertEqual((change["old"], change["new"]), (OLD, NEW))
+        self.assertEqual(r.replace_literal(source, change), source.replace(OLD, NEW))
+        for files, text in ((bare, source), (kept, SOURCE),
+                            (kept, source.replace("#expect(result.stdout", "#expect(other.stdout")),
+                            ({**bare, "test-results.xml": bare["test-results.xml"].replace(
+                                "failed: stdout.contains", "failed: other.stdout.contains")}, source)):
+            with self.subTest(text=text), self.assertRaises(r.Skip):
+                r.candidate(files, lambda p, text=text: text)
+
     def test_malformed_or_disallowed_evidence(self):
         for transform in (
             lambda f: f.update({"test-results.xml": "<!DOCTYPE x><testsuite/>"}),

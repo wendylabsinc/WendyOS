@@ -131,10 +131,10 @@ def candidate(files, source):
     require(len(failed) == 1, "Expected exactly one failing assertion")
     case, failure = failed[0]
     require(case.get("name") == "`prints command help`()", "Not a help test")
-    match = re.fullmatch(r'Expectation failed: stdout\.contains\("([^"\n]+)"\) \(error\)',
+    match = re.fullmatch(r'Expectation failed: ((?:result\.)?stdout)\.contains\("([^"\n]+)"\) \(error\)',
                          failure.get("message") or failure.text or "")
     require(match is not None, "Not a literal stdout.contains failure")
-    old = match[1]
+    receiver, old = match[1], match[2]
     matches = []
     for path, text in files.items():
         if not path.endswith("/test.json"):
@@ -165,7 +165,7 @@ def candidate(files, source):
     start, end = meta["sourceStartLine"], meta["sourceEndLine"]
     require(type(start) is int and type(end) is int and 1 <= start <= end <= len(text.splitlines()), "Invalid source range")
     scope = "\n".join(text.splitlines()[start - 1:end])
-    expression = r'#expect\(\s*stdout\.contains\(\s*"' + re.escape(old) + r'"\s*\)\s*\)'
+    expression = r'#expect\(\s*' + re.escape(receiver) + r'\.contains\(\s*"' + re.escape(old) + r'"\s*\)\s*\)'
     require('func `prints command help`()' in scope and
             f'cli.sh("{command} --help")' in scope and
             'scenario.run(authenticated: false)' in scope and
