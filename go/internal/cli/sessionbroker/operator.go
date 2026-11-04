@@ -152,6 +152,11 @@ func prepareOperatorRecipe(ctx context.Context, certificate config.CertificateIn
 	return connectOrStartOperator(ctx, spec, &certificate)
 }
 func writeOperatorRecipe(ctx context.Context, spec Spec, path string, recipe OperatorSpec, explicit bool) error {
+	if existing, migrated, err := readOperatorRecipeRecord(path); err == nil && !migrated && existing == recipe {
+		// Reusing unchanged intent must not wait behind another command's
+		// potentially slow join. The connection path rechecks stop intent.
+		return nil
+	}
 	dir, err := brokerDir()
 	if err != nil {
 		return err
@@ -247,24 +252,31 @@ func operatorRecipeCurrent(spec Spec) error {
 }
 
 func readOperatorRecipe(path string) (OperatorSpec, error) {
+	recipe, _, err := readOperatorRecipeRecord(path)
+	return recipe, err
+}
+
+// readOperatorRecipeRecord also reports whether the on-disk format needs rewriting.
+func readOperatorRecipeRecord(path string) (OperatorSpec, bool, error) {
 	var recipe OperatorSpec
 	if err := validatePrivateFile(path, false); err != nil {
-		return recipe, err
+		return recipe, false, err
 	}
 	file, err := os.Open(path)
 	if err != nil {
-		return recipe, err
+		return recipe, false, err
 	}
 	defer file.Close()
 	data, err := io.ReadAll(io.LimitReader(file, operatorRecipeBytes+1))
 	if err != nil {
-		return recipe, err
+		return recipe, false, err
 	}
 	if len(data) > operatorRecipeBytes {
-		return recipe, errors.New("oversized operator recipe")
+		return recipe, false, errors.New("oversized operator recipe")
 	}
 	err = json.Unmarshal(data, &recipe)
-	if err == nil && recipe.Version == 1 {
+	migrated := err == nil && recipe.Version == 1
+	if migrated {
 		// Pinned version-1 contexts stayed enabled independently of the
 		// Enabled bit. Preserve that participation intent while discarding
 		// their first-hop selection. Automatic contexts retain their idle policy.
@@ -272,12 +284,12 @@ func readOperatorRecipe(path string) (OperatorSpec, error) {
 			Automatic bool `json:"automatic"`
 		}
 		if err := json.Unmarshal(data, &legacy); err != nil {
-			return recipe, err
+			return recipe, false, err
 		}
 		recipe.Enabled = recipe.Enabled || !legacy.Automatic
 		recipe.Version = 2
 	}
-	return recipe, err
+	return recipe, migrated, err
 }
 
 // ConnectOperator resolves an explicit target through the selected operator
