@@ -133,7 +133,14 @@ def run(script, job, timeout=20, inputs=None):
     }
     t = time.monotonic()
     p = subprocess.Popen(
-        ["/usr/bin/python3", "-I", "-B", "-c", script],
+        [
+            "/usr/bin/python3",
+            "-I",
+            "-B",
+            str(pathlib.Path(__file__).resolve()),
+            "--execute",
+            str(job),
+        ],
         cwd=job,
         env=env,
         stdin=subprocess.DEVNULL,
@@ -141,7 +148,6 @@ def run(script, job, timeout=20, inputs=None):
         stderr=subprocess.STDOUT,
         start_new_session=True,
         close_fds=True,
-        preexec_fn=lambda: confine(job),
     )
     ACTIVE.add(p)
     data = bytearray()
@@ -191,3 +197,25 @@ def run(script, job, timeout=20, inputs=None):
         "output": data[:MAX_OUTPUT].decode(errors="replace"),
         "file_output": out.read_text(errors="replace")[:MAX_OUTPUT],
     }
+
+
+if __name__ == "__main__":
+    # Install restrictions in a fresh single-threaded trusted process. Python
+    # preexec_fn in the multithreaded bridge is unsafe and hides setup errors.
+    import sys
+
+    if len(sys.argv) != 3 or sys.argv[1] != "--execute":
+        raise SystemExit("Internal sandbox launcher only")
+    job = pathlib.Path(sys.argv[2]).resolve()
+    script = (job / "test.py").read_text()
+    os.chdir(job)
+    try:
+        confine(job)
+    except BaseException:
+        import traceback
+
+        traceback.print_exc()
+        raise SystemExit(125)
+    os.execve(
+        "/usr/bin/python3", ["python3", "-I", "-B", "-c", script], dict(os.environ)
+    )
