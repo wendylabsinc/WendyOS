@@ -18,7 +18,7 @@ import urllib.request
 from typing import Any
 
 from review_diff import diff_lines, split_diff
-from review_sources import source_diff, SOURCE_ONLY_RULE, ReviewError as SourceError
+from review_sources import git_path, source_diff, SOURCE_ONLY_RULE, ReviewError as SourceError
 
 COMMENT_MARKER = "<!-- ai-security-review:v1 -->"
 BLOCKING_MARKER = "<!-- ai-security-review:has-blocking=true -->"
@@ -510,8 +510,14 @@ def collect_security_comments(diff_text: str) -> list[dict[str, Any]]:
     path = ""
     new_line: int | None = None
     for line in diff_lines(diff_text):
-        if line.startswith("+++ b/"):
-            path = line.removeprefix("+++ b/")
+        # Hunk lines always carry a prefix, so only this ends a hunk. Inside one,
+        # "+++ " is source text, such as an added "++ b/other.go".
+        if line.startswith("diff --git "):
+            new_line = None
+            continue
+        if new_line is None and line.startswith("+++ "):
+            target = git_path(line[4:].removesuffix("\t"))
+            path = target[2:] if target.startswith("b/") else ""
             continue
         if line.startswith("@@"):
             match = re.search(r"\+(\d+)", line)

@@ -6,12 +6,14 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
+import os
 import pathlib
+import subprocess
 import tempfile
 from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock, patch
-from review_sources import is_generated_path, source_diff
+from review_sources import is_generated_path, parse_diff, source_diff
 
 MODULE_PATH = pathlib.Path(__file__).with_name("security_review.py")
 SPEC = importlib.util.spec_from_file_location("security_review", MODULE_PATH)
@@ -44,6 +46,30 @@ def diff(path: str = "go/example.go", line: str = "value := 1") -> bytes:
         "@@ -0,0 +1 @@\n"
         f"+{line}\n"
     ).encode()
+
+
+def real_diff(base_files: dict[str, str], head_files: dict[str, str]) -> bytes:
+    """Real git output, for parsing that depends on how git writes patch headers."""
+    def git(*args: str) -> bytes:
+        env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+        env.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
+        return subprocess.run(["git", "-c", "user.name=Test", "-c", "user.email=test@example.invalid", *args],
+                              cwd=directory, env=env, check=True, capture_output=True).stdout
+
+    def commit(files: dict[str, str]) -> str:
+        for name, content in files.items():
+            target = pathlib.Path(directory, name)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content, encoding="utf-8")
+        git("add", "-A")
+        git("commit", "-qm", "snapshot")
+        return git("rev-parse", "HEAD").decode().strip()
+
+    with tempfile.TemporaryDirectory() as directory:
+        git("init", "-q")
+        base = commit({".placeholder": "", **base_files})
+        head = commit(head_files)
+        return git("diff", "--no-ext-diff", "--no-textconv", "--find-renames", base, head, "--")
 
 
 def finding(
@@ -305,6 +331,49 @@ class SilencingAndRenderingTests(unittest.TestCase):
                 self.assertEqual(security_review.collect_security_comments(with_comment), [
                     {"path": "go/example.go", "line": 2, "reason": "real comment"},
                 ])
+
+    def real_manifest(self, raw: bytes) -> dict:
+        parsed = parse_diff(raw.decode(), allow_binary=True)
+        counts = {key: parsed[key] for key in ("additions", "deletions")}
+        return security_review.build_input_manifest(
+            {**metadata(parsed["changed_files"]), **counts}, raw, 42, HEAD_SHA)
+
+    def test_security_comment_keeps_its_own_spaced_or_quoted_path(self) -> None:
+        raw = real_diff({}, {
+            "go/a b.go": "package a\n// SECURITY: spaced name\n",
+            "go/b.go": "package a\nfunc B() {}\n",
+            "go/\u00e9.go": "package a\n// SECURITY: quoted name\n",
+        })
+        self.assertIn(b"+++ b/go/a b.go\t\n", raw)
+        self.assertIn(b'+++ "b/go/\\303\\251.go"\n', raw)
+        self.assertEqual(security_review.collect_security_comments(raw.decode()), [
+            {"path": "go/a b.go", "line": 2, "reason": "spaced name"},
+            {"path": "go/\u00e9.go", "line": 2, "reason": "quoted name"},
+        ])
+        for path, blocks in [("go/a b.go", False), ("go/\u00e9.go", False), ("go/b.go", True)]:
+            with self.subTest(path=path):
+                _, blocking = security_review.render_review(
+                    payload(finding(severity="high", status="silenced", path=path, lines="2")),
+                    raw.decode(), self.real_manifest(raw))
+                self.assertEqual(blocking, blocks)
+
+    def test_source_lines_shaped_like_patch_headers_cannot_move_a_security_comment(self) -> None:
+        for name, removed, added in [
+            ("claims another file", "", "++ b/other.go\n"),
+            ("pairs with a removed line", "-- a/other.go\n", "++ b/other.go\n"),
+            ("is an invalid quoted path", "", '++ "oops\n'),
+        ]:
+            with self.subTest(name=name):
+                raw = real_diff({"a.go": "x\n" + removed, "other.go": "y\n"},
+                                {"a.go": "x\n" + added + "// SECURITY: belongs to a.go\n"})
+                self.assertIn(("+" + added).encode(), raw)
+                self.assertEqual(security_review.collect_security_comments(raw.decode()), [
+                    {"path": "a.go", "line": 3, "reason": "belongs to a.go"},
+                ])
+                _, blocking = security_review.render_review(
+                    payload(finding(severity="high", status="silenced", path="other.go", lines="2")),
+                    raw.decode(), self.real_manifest(raw))
+                self.assertTrue(blocking)
 
     def test_model_cannot_claim_silenced_without_verified_comment(self) -> None:
         raw = diff()
