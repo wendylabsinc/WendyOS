@@ -291,9 +291,17 @@ struct ShellReviewHarness: Sendable {
         if capturesClaudeJSON {
             try? capture?.close()
             let data = (try? Data(contentsOf: captureURL)) ?? Data()
-            let result = try? JSONDecoder().decode(ClaudeReviewResult.self, from: data)
+            let result = decodeClaudeReviewResult(data)
             if let text = result?.result {
                 output.write(Data((text + "\n").utf8))
+            }
+            if result == nil {
+                output.write(
+                    Data(
+                        "==> Claude review output was not a JSON result; any result text was discarded.\n"
+                            .utf8
+                    )
+                )
             }
             output.write(Data(claudeReviewUsageSummary(result, authSummary: authSummary).utf8))
         }
@@ -316,25 +324,45 @@ private struct ClaudeReviewResult: Decodable {
 
     // Decode only the allowlisted fields. Bad or absent accounting must not
     // discard the ordinary result text or turn unknown usage into zero.
+    var type: String?
     var result: String?
     var usage: Usage?
     var totalCostUSD: Double?
     var models: [String]?
 
     private enum CodingKeys: String, CodingKey {
-        case result, usage, total_cost_usd, modelUsage
+        case type, result, usage, total_cost_usd, modelUsage
     }
 
     private struct ModelMetadata: Decodable {}
 
     init(from decoder: any Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
+        type = try? values.decode(String.self, forKey: .type)
         result = try? values.decode(String.self, forKey: .result)
         usage = try? values.decode(Usage.self, forKey: .usage)
         totalCostUSD = try? values.decode(Double.self, forKey: .total_cost_usd)
         models = (try? values.decode([String: ModelMetadata].self, forKey: .modelUsage))?
             .keys.sorted()
     }
+}
+
+private func decodeClaudeReviewResult(_ data: Data) -> ClaudeReviewResult? {
+    func decode(_ data: Data) -> ClaudeReviewResult? {
+        let decoder = JSONDecoder()
+        if let result = try? decoder.decode(ClaudeReviewResult.self, from: data) {
+            return result
+        }
+        // A configured `verbose` setting prints the whole message array.
+        return (try? decoder.decode([ClaudeReviewResult].self, from: data))?
+            .last { $0.type == "result" }
+    }
+    if let result = decode(data) {
+        return result
+    }
+    // A login-shell profile can print around Claude's single JSON line.
+    return data.split(separator: UInt8(ascii: "\n")).reversed().lazy
+        .compactMap { decode(Data($0)) }.first
 }
 
 private func claudeReviewUsageSummary(
