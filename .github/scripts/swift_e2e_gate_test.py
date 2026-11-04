@@ -7,6 +7,10 @@ import re
 import unittest
 
 WORKFLOW = Path(__file__).resolve().parents[1] / "workflows" / "swift-e2e-tests.yml"
+REPORT_COMMAND = (
+    Path(__file__).resolve().parents[2]
+    / "swift/WendyE2ETests/Sources/SwiftE2ETestingCLI/ReportCommand.swift"
+)
 ANALYZE = "swift-e2e-analyze"
 PASSED = "swift-e2e-passed"
 
@@ -88,6 +92,9 @@ class GateTests(unittest.TestCase):
     def test_report_reads_the_review_outcome_before_continue_on_error(self):
         # A step's conclusion is always success under continue-on-error.
         self.assertTrue("WENDY_E2E_REVIEW_OUTCOME: ${{ steps.ai-review.outcome }}" in self.text)
+
+    def test_report_command_reads_the_variable_the_workflow_sets(self):
+        self.assertIn('environment["WENDY_E2E_REVIEW_OUTCOME"]', REPORT_COMMAND.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":
