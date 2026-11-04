@@ -44,21 +44,21 @@ func newLegacyDeviceLocalMeshCmd() *cobra.Command {
 
 // Register this constructor under the device command's manage group.
 func newDeviceLocalMeshCmd() *cobra.Command {
-	root := &cobra.Command{Use: "wendy-net", Aliases: []string{"local-mesh", "nan-mesh"}, Short: "Configure Wendy Net carriers and Internet sharing",
-		Long: "Configure Wendy Net carriers. For physical Wendy Lite BLE without USB discovery, use --device wendy-lite:ble:<address> (CoreBluetooth UUID on macOS, BLE MAC on Linux). Omitted settings are preserved; status never enables mesh participation."}
+	root := &cobra.Command{Use: "wendy-net", Aliases: []string{"local-mesh", "nan-mesh"}, Short: "Manage Wendy Net connections and Internet sharing",
+		Long: "Use connect and disconnect to join or leave Wendy Net from this computer. Use configure and status with --device to manage a device discovered by wendy discover. Omitted device settings are preserved; reading status does not enable mesh participation."}
 	configure := &cobra.Command{Use: "configure", Short: "Update selected Wendy Net settings", Args: cobra.NoArgs}
-	configure.Flags().Bool("participate", false, "Join and relay Wendy Net (false stops all carriers; saved carrier choices are retained)")
+	configure.Flags().Bool("participate", false, "Join and relay Wendy Net (false disconnects the device; saved connection settings are retained)")
 	configure.Flags().Bool("roam", false, "Use Wendy Net Internet when an independent uplink is unavailable")
-	configure.Flags().Bool("share-uplink", false, "Offer an independent uplink to the net")
-	configure.Flags().Bool("nan", false, "Enable Wi-Fi Aware NAN as a net carrier")
-	configure.Flags().Bool("ble", false, "Enable BLE L2CAP as a net carrier")
+	configure.Flags().Bool("share-uplink", false, "Share this device's own Internet connection with Wendy Net")
+	configure.Flags().Bool("nan", false, "Connect over Wi-Fi Aware (NAN)")
+	configure.Flags().Bool("ble", false, "Connect over Bluetooth Low Energy")
 	configure.Flags().String("ble-mode", "", "BLE radio profile: off, normal, coded-s2 or coded-s8 (Lite profile changes restart the device)")
 	configure.Flags().Bool("ethernet", false, "Discover local net peers over Ethernet")
 	configure.Flags().Bool("infrastructure-wifi", false, "Discover local net peers over infrastructure Wi-Fi")
-	configure.Flags().Uint32("max-links", 0, "Lite: limit simultaneous mesh carriers")
-	configure.Flags().Uint32("ble-links", 0, "Lite: limit simultaneous BLE mesh carriers")
-	configure.Flags().Uint32("wifi-links", 0, "Lite: limit simultaneous infrastructure Wi-Fi mesh carriers")
-	configure.Flags().Uint32("nan-links", 0, "Lite: limit simultaneous NAN mesh carriers")
+	configure.Flags().Uint32("max-links", 0, "Lite: limit simultaneous mesh connections")
+	configure.Flags().Uint32("ble-links", 0, "Lite: limit simultaneous Bluetooth mesh connections")
+	configure.Flags().Uint32("wifi-links", 0, "Lite: limit simultaneous infrastructure Wi-Fi mesh connections")
+	configure.Flags().Uint32("nan-links", 0, "Lite: limit simultaneous Wi-Fi Aware mesh connections")
 	configure.RunE = func(cmd *cobra.Command, _ []string) error {
 		changed := false
 		for _, name := range append([]string{"participate", "roam", "share-uplink", "nan", "ble", "ble-mode", "ethernet", "infrastructure-wifi"}, liteNetLimitFlags...) {
@@ -160,8 +160,8 @@ func newDeviceLocalMeshTopologyCmd() *cobra.Command {
 	var observation, localCLI bool
 	cmd := &cobra.Command{
 		Use:   "topology",
-		Short: "Show a router's observed local net peers, routes and route proofs",
-		Long:  "Reads a live topology observation from the selected WendyOS or Wendy Lite device, or the existing local CLI router with --local-cli. Observations are local to that reporter; they do not prove fleet-wide reachability. Use --json for the complete snapshot.",
+		Short: "Show nearby mesh connections and known routes",
+		Long:  "Show the selected WendyOS or Wendy Lite device's view of the mesh, or this computer's running Wendy Net router with --local-cli. Each router has its own view; a listed route does not guarantee the destination is currently reachable. Use --json for complete details.",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if observation && !jsonOutput {
@@ -172,7 +172,7 @@ func newDeviceLocalMeshTopologyCmd() *cobra.Command {
 			var err error
 			if localCLI {
 				if cmd.Flags().Changed("device") || cmd.InheritedFlags().Changed("device") {
-					return fmt.Errorf("--local-cli and --device select different reporters; choose one")
+					return fmt.Errorf("choose --local-cli for this computer or --device for a device, not both")
 				}
 				topology, err = readCLIReporter(cmd.Context())
 				platform = "wendy-cli"
@@ -188,8 +188,8 @@ func newDeviceLocalMeshTopologyCmd() *cobra.Command {
 			return printLocalMeshTopology(cmd, topology)
 		},
 	}
-	cmd.Flags().BoolVar(&localCLI, "local-cli", false, "Read the existing local CLI full router through private IPC; never start or enable mesh")
-	cmd.Flags().BoolVar(&observation, "observation", false, "With --json, emit a typed observation result including unsupported, unavailable and unauthorized states")
+	cmd.Flags().BoolVar(&localCLI, "local-cli", false, "Read this computer's running Wendy Net router without starting or enabling it")
+	cmd.Flags().BoolVar(&observation, "observation", false, "With --json, include whether topology is supported, available and authorized")
 	return cmd
 }
 
@@ -209,7 +209,7 @@ func readCLIReporter(parent context.Context) (*pb.LocalMeshTopology, error) {
 		return nil, status.Error(codes.Unavailable, "the existing CLI router returned no topology")
 	}
 	if snapshot.Status == nil {
-		snapshot.Status = &pb.LocalMeshStatus{RuntimeAvailable: snapshot.RuntimeAvailable, Configured: &pb.LocalMeshConfiguration{Participate: snapshot.RuntimeAvailable}, AuthenticatedPeers: uint32(len(snapshot.Peers)), State: "waiting-for-peers", Detail: "Local CLI full router; operator identity and installation routing instance."}
+		snapshot.Status = &pb.LocalMeshStatus{RuntimeAvailable: snapshot.RuntimeAvailable, Configured: &pb.LocalMeshConfiguration{Participate: snapshot.RuntimeAvailable}, AuthenticatedPeers: uint32(len(snapshot.Peers)), State: "waiting-for-peers", Detail: "Wendy Net router on this computer, using the selected sign-in profile."}
 		if snapshot.RuntimeAvailable && len(snapshot.Peers) > 0 {
 			snapshot.Status.State = "mesh-active"
 		}
@@ -225,7 +225,7 @@ func readLocalMeshReporter(parent context.Context) (*pb.LocalMeshTopology, strin
 		return nil, "", err
 	}
 	if target == nil {
-		return nil, "", fmt.Errorf("no topology reporter selected")
+		return nil, "", fmt.Errorf("no device selected for mesh topology; discover a device and select it with --device")
 	}
 	defer target.Close()
 	if target.External != nil {
@@ -233,7 +233,7 @@ func readLocalMeshReporter(parent context.Context) (*pb.LocalMeshTopology, strin
 			NetTopology(context.Context, models.ExternalDevice) (*pb.LocalMeshTopology, error)
 		})
 		if !ok {
-			return nil, "", status.Error(codes.Unimplemented, "selected provider does not support topology")
+			return nil, "", status.Error(codes.Unimplemented, "mesh topology is not supported for the selected device or connection")
 		}
 		liteCtx, stopLite := context.WithTimeout(parent, litetopology.SetupBudget+litetopology.AggregateBudget)
 		defer stopLite()
@@ -242,19 +242,19 @@ func readLocalMeshReporter(parent context.Context) (*pb.LocalMeshTopology, strin
 	}
 	conn := target.Agent
 	if conn == nil {
-		return nil, "", fmt.Errorf("local topology requires a WendyOS agent")
+		return nil, "", fmt.Errorf("mesh topology requires a WendyOS agent or a supported Wendy Lite device")
 	}
 	if conn.Conn == nil {
-		return nil, "", fmt.Errorf("local topology requires a WendyOS agent")
+		return nil, "", fmt.Errorf("mesh topology requires a WendyOS agent or a supported Wendy Lite device")
 	}
 	client := pb.NewWendyLocalMeshAdminServiceClient(conn.Conn)
 	topology, err := client.GetLocalMeshTopology(ctx, &pb.GetLocalMeshTopologyRequest{})
 	if err != nil {
-		return nil, "", fmt.Errorf("reading local topology: %w", err)
+		return nil, "", fmt.Errorf("reading the device's mesh topology: %w", err)
 	}
 	peer, verified := observedLocalMeshTopologyIdentity(conn)
 	if !verified {
-		return nil, "", status.Error(codes.Unauthenticated, "topology reporter identity was not verified")
+		return nil, "", status.Error(codes.Unauthenticated, "the identity of the device returning mesh topology could not be verified")
 	}
 	if err := browserauth.ValidateTopologyReporter(topology, peer); err != nil {
 		return nil, "", err

@@ -130,17 +130,17 @@ func operatorFailureKind(err error) string {
 func (f operatorFailure) message() string {
 	switch f.Kind {
 	case "issuer_chain":
-		return "the peer certificate issuer chain could not be verified"
+		return "the router certificate issuer chain could not be verified"
 	case "device_pin":
 		return "the peer does not match the saved device identity"
 	case "certificate":
-		return "the peer certificate is not valid for this connection"
+		return "the router certificate is not valid for this connection"
 	case "timeout":
-		return "the first-hop connection timed out"
+		return "the connection to a nearby router timed out"
 	case "connection_closed":
-		return "the first-hop connection closed"
+		return "the connection to a nearby router closed"
 	case "attachment_failed":
-		return "the first-hop attachment failed"
+		return "the connection to a nearby router failed"
 	}
 	return ""
 }
@@ -151,38 +151,38 @@ type operatorStartupFailure struct {
 }
 
 func (e *operatorStartupFailure) Error() string {
-	phase := "attachment"
+	phase := "connection"
 	if e.failure.Transport != "" {
 		phase = e.failure.Transport
 	}
-	return fmt.Sprintf("operator broker did not become ready; last %s attempt: %s: %v", phase, e.failure.message(), e.cause)
+	return fmt.Sprintf("could not join Wendy Net from this computer; last %s connection attempt: %s: %v", phase, e.failure.message(), e.cause)
 }
 func (e *operatorStartupFailure) Unwrap() error { return e.cause }
 
 func operatorStartupError(spec Spec, cause error) error {
 	dir, err := brokerDir()
 	if err != nil || validatePrivateDir(dir) != nil || spec.DiagnosticGeneration == "" {
-		return fmt.Errorf("operator broker did not become ready: %w", cause)
+		return fmt.Errorf("could not join Wendy Net from this computer: %w", cause)
 	}
 	path := operatorFailurePath(dir, spec)
 	if validatePrivateFile(path, false) != nil {
-		return fmt.Errorf("operator broker did not become ready: %w", cause)
+		return fmt.Errorf("could not join Wendy Net from this computer: %w", cause)
 	}
 	file, err := os.Open(path)
 	if err != nil {
-		return fmt.Errorf("operator broker did not become ready: %w", cause)
+		return fmt.Errorf("could not join Wendy Net from this computer: %w", cause)
 	}
 	defer file.Close()
 	data, err := io.ReadAll(io.LimitReader(file, operatorFailureBytes+1))
 	var failure operatorFailure
 	now := time.Now()
 	if err != nil || len(data) > operatorFailureBytes || json.Unmarshal(data, &failure) != nil || failure.Version != 1 || failure.Fingerprint != spec.CertFingerprint || failure.Generation != spec.DiagnosticGeneration || failure.message() == "" || failure.At > now.Add(time.Second).UnixMilli() || now.Sub(time.UnixMilli(failure.At)) > 2*operatormesh.JoinSetupTimeout {
-		return fmt.Errorf("operator broker did not become ready: %w", cause)
+		return fmt.Errorf("could not join Wendy Net from this computer: %w", cause)
 	}
 	switch failure.Transport {
 	case "", carriers.TCP, carriers.BLE, carriers.QUIC:
 	default:
-		return fmt.Errorf("operator broker did not become ready: %w", cause)
+		return fmt.Errorf("could not join Wendy Net from this computer: %w", cause)
 	}
 	return &operatorStartupFailure{cause: cause, failure: failure}
 }

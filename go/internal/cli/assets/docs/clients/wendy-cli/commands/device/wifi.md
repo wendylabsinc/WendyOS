@@ -35,23 +35,34 @@ Shows the device's current WiFi connection.
 
 ### `wendy device wifi disconnect`
 
-Requests disconnection from the current network. With a current WendyOS agent,
-the request is acknowledged before the connection can be removed. The command
-reports confirmed completion when a result arrives, or an acknowledged request
-with completion unknown when its WiFi path disappears. Acknowledgement alone
-is not proof that WiFi disconnected.
+Disconnects the device from its current WiFi network. If that WiFi connection
+also carries your command, the device may disconnect before its final reply can
+reach you. The CLI distinguishes a confirmed disconnection from a request whose
+result is still unknown.
 
-JSON output distinguishes these outcomes. For example, a lost completion reply
-can produce:
+If the result is unknown, reach the device over another working connection and
+run `wendy device wifi status`. A message saying the device received the request
+does not prove that WiFi disconnected. Older agents may lose contact without
+confirming receipt at all; an interrupted reply remains an unknown outcome.
+Wendy Lite and explicit Bluetooth operations keep their existing behavior.
+
+#### Automation and MCP
+
+Use `--json` to inspect the result. If the device received the request but its
+completion reply was lost, the command can exit successfully with:
 
 ```json
 {"state":"requested","acknowledged":true,"completion_confirmed":false,"success":null}
 ```
 
-Check `wendy device wifi status` through Bluetooth or another connection to
-confirm an unknown outcome. Older agents use the legacy operation: a lost reply
-is reported as unknown and is never inferred successful. Wendy Lite and explicit
-Bluetooth operations keep their existing behavior.
+Report a successful disconnection only when `completion_confirmed` and `success`
+are both `true`. A confirmed result with `success: false` means the operation
+failed. An exit status of zero or a successful MCP tool call alone does not
+confirm disconnection.
+
+The MCP `wifi_disconnect` tool returns these same fields. After an unknown
+outcome, reconnect through another working path and use `wifi_status` before
+reporting completion or trying again.
 
 ### `wendy device wifi rank`
 

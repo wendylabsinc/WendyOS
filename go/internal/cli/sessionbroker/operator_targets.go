@@ -81,7 +81,7 @@ func newOperatorTargets(session *operatormesh.Session, adjacent *grpc.ClientConn
 	// The broker owns the shared Node. Fixtures may inject a coherent local
 	// view; production never mirrors a neighbour through a second directory.
 	r.topology = func(context.Context) (*pb.LocalMeshTopology, error) {
-		return nil, status.Error(codes.Unavailable, "local mesh participant is unavailable")
+		return nil, status.Error(codes.Unavailable, "the local Wendy Net router is not available; connect this computer to Wendy Net and retry")
 	}
 	r.targetTopology = func(ctx context.Context, _ meshid.Device) (*pb.LocalMeshTopology, error) { return r.topology(ctx) }
 	r.serviceTopology = r.topology
@@ -107,7 +107,7 @@ func newOperatorTargets(session *operatormesh.Session, adjacent *grpc.ClientConn
 				return nil, err
 			}
 			if current != address {
-				return nil, fmt.Errorf("mesh agent endpoint changed; resolve the selector again")
+				return nil, fmt.Errorf("the device advertised a different management address; retry the command")
 			}
 			return r.packetDial(ctx, "tcp", address)
 		}))
@@ -119,7 +119,7 @@ func (r *operatorTargets) adjacentPeer() (*grpc.ClientConn, meshid.Device, error
 	if r.currentAdjacent != nil {
 		return r.currentAdjacent()
 	}
-	return nil, meshid.Device{}, errors.New("operator mesh has no authenticated adjacent peer")
+	return nil, meshid.Device{}, errors.New("this computer has no authenticated connection to a nearby Wendy Net router; wait for automatic discovery and retry")
 }
 
 func (r *operatorTargets) lookupTopology(ctx context.Context, target meshid.Device) (*pb.LocalMeshTopology, error) {
@@ -149,18 +149,18 @@ func operatorAgentEndpoint(view *pb.LocalMeshTopology, adjacent, target meshid.D
 		return "", err
 	}
 	if info.Platform != "WendyOS" {
-		return "", status.Errorf(codes.Unimplemented, "mesh target speaks %s management; select its Lite provider", info.Platform)
+		return "", status.Errorf(codes.Unimplemented, "this device uses %s management; use a Wendy Lite-compatible CLI command", info.Platform)
 	}
 	return info.Address, nil
 }
 
 func operatorManagementTarget(view *pb.LocalMeshTopology, adjacent, target meshid.Device, now time.Time) (OperatorTargetInfo, error) {
 	if view == nil || !view.RuntimeAvailable || view.SelfPrincipal != adjacent.Principal() || view.SelfTenantId != target.Tenant().String() || view.SelfDeviceId != adjacent.UUID().String() || view.SelfMeshAddress != adjacent.MeshAddress().String() {
-		return OperatorTargetInfo{}, status.Error(codes.Unavailable, "attached router has no current mesh observation")
+		return OperatorTargetInfo{}, status.Error(codes.Unavailable, "the router has not returned a current device list; retry discovery shortly")
 	}
 	captured := time.UnixMilli(view.CapturedAtUnixMs)
 	if captured.After(now.Add(time.Second)) || now.Sub(captured) > 10*time.Second {
-		return OperatorTargetInfo{}, status.Error(codes.Unavailable, "attached router mesh observation is stale")
+		return OperatorTargetInfo{}, status.Error(codes.Unavailable, "the router returned an out-of-date device list; retry discovery")
 	}
 	prefix := netip.PrefixFrom(target.MeshAddress(), 128).String()
 	for _, hint := range view.Announcements {
@@ -181,7 +181,7 @@ func operatorManagementTarget(view *pb.LocalMeshTopology, adjacent, target meshi
 			return OperatorTargetInfo{}, status.Errorf(codes.Unimplemented, "mesh management adapter for platform %q transport %q is not implemented", hint.Platform, hint.AgentTransport)
 		}
 		if hint.AgentPort == 0 || hint.AgentPort > 65535 {
-			return OperatorTargetInfo{}, status.Error(codes.Unavailable, "mesh agent has no usable advertised port")
+			return OperatorTargetInfo{}, status.Error(codes.Unavailable, "the device has not advertised a usable management port; check its agent or firmware version")
 		}
 		return OperatorTargetInfo{Selector: MeshSelector(target), Principal: target.Principal(),
 			Tenant: target.Tenant().String(), Device: target.UUID().String(), Name: hint.Name,
@@ -189,12 +189,12 @@ func operatorManagementTarget(view *pb.LocalMeshTopology, adjacent, target meshi
 			Address: net.JoinHostPort(target.MeshAddress().String(), strconv.Itoa(int(hint.AgentPort)))}, nil
 	}
 	if view.Truncated {
-		return OperatorTargetInfo{}, operatorUnavailable(operatorViewPartial, "the mesh observation is incomplete; target route availability is unknown")
+		return OperatorTargetInfo{}, operatorUnavailable(operatorViewPartial, "the device list is incomplete; the target's availability is unknown. Retry discovery or use a direct LAN connection")
 	}
 	if len(view.Peers) == 0 {
-		return OperatorTargetInfo{}, operatorUnavailable(operatorNoPeers, "the attached router has no authenticated peers; waiting for its first hop to reconnect")
+		return OperatorTargetInfo{}, operatorUnavailable(operatorNoPeers, "the local router has no authenticated connections to nearby routers; waiting for automatic reconnection")
 	}
-	return OperatorTargetInfo{}, operatorUnavailable(operatorTargetPending, "mesh target has no live authorized route and agent announcement yet")
+	return OperatorTargetInfo{}, operatorUnavailable(operatorTargetPending, "a verified route and management address for the selected device are not available yet; retry discovery shortly")
 }
 func (r *operatorTargets) Resolve(ctx context.Context) (*grpc.ClientConn, func(), error) {
 	md, _ := metadata.FromIncomingContext(ctx)
@@ -211,7 +211,7 @@ func (r *operatorTargets) Resolve(ctx context.Context) (*grpc.ClientConn, func()
 	}
 	operator, err := operatorPrincipal(r.certificate)
 	if err != nil || target.Tenant() != operator.Tenant() {
-		return nil, nil, status.Error(codes.InvalidArgument, "mesh target differs from the selected operator tenant")
+		return nil, nil, status.Error(codes.InvalidArgument, "the selected mesh device belongs to a different organization; switch to its sign-in profile")
 	}
 	adjacentConn, adjacent, err := r.adjacentPeer()
 	if err != nil && r.localSnapshot == nil {
@@ -228,7 +228,7 @@ func (r *operatorTargets) Resolve(ctx context.Context) (*grpc.ClientConn, func()
 	r.mu.Lock()
 	if r.closed {
 		r.mu.Unlock()
-		return nil, nil, status.Error(codes.Unavailable, "operator attachment is closing")
+		return nil, nil, status.Error(codes.Unavailable, "the local Wendy Net connection is closing; retry after reconnecting")
 	}
 	entry := r.entries[key]
 	if entry == nil {
@@ -242,7 +242,7 @@ func (r *operatorTargets) Resolve(ctx context.Context) (*grpc.ClientConn, func()
 			}
 			if oldest == "" {
 				r.mu.Unlock()
-				return nil, nil, status.Error(codes.ResourceExhausted, "all retained mesh agent clients are busy")
+				return nil, nil, status.Error(codes.ResourceExhausted, "all local mesh management connections are busy; close unused device connections and retry")
 			}
 			old := r.entries[oldest]
 			delete(r.entries, oldest)
@@ -315,7 +315,7 @@ func (r *operatorTargets) reporter() (meshid.Device, error) {
 	if r.localSnapshot != nil {
 		snapshot := r.localSnapshot()
 		if !snapshot.Self.IsValid() {
-			return meshid.Device{}, operatorUnavailable(operatorReconnecting, "the local operator router is starting or reconnecting")
+			return meshid.Device{}, operatorUnavailable(operatorReconnecting, "the local Wendy Net router is starting or reconnecting; retry shortly")
 		}
 		return snapshot.Self, nil
 	}

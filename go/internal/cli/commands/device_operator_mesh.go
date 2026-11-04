@@ -11,7 +11,7 @@ import (
 
 // Joining the local mesh is independent of selecting a destination device.
 func newDeviceOperatorMeshConnectCmd() *cobra.Command {
-	cmd := &cobra.Command{Use: "connect", Short: "Keep an operator mesh attachment ready for ordinary commands", Long: "Enable the current profile's background operator router. It automatically discovers and authenticates mesh neighbours over LAN and Bluetooth and maintains connections across commands. Use wendy discover to find reachable devices, then select a destination with mesh://TENANT/DEVICE. The router remains enabled until disconnect.", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+	cmd := &cobra.Command{Use: "connect", Short: "Join Wendy Net automatically and stay connected", Long: "Join Wendy Net from this computer using your selected sign-in profile. The CLI automatically finds and authenticates nearby routers over LAN and Bluetooth, can keep multiple connections, and stays connected between commands. Use wendy discover to choose a destination device. No router address or Bluetooth identifier is needed. Run wendy device wendy-net disconnect to leave the mesh.", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
 		cfg, err := config.Load()
 		if err != nil {
 			return err
@@ -21,7 +21,7 @@ func newDeviceOperatorMeshConnectCmd() *cobra.Command {
 			return err
 		}
 		if len(auth.Certificates) == 0 {
-			return fmt.Errorf("current context has no primary operator certificate")
+			return fmt.Errorf("the selected sign-in profile has no certificate for joining Wendy Net; run 'wendy auth login' for your organization")
 		}
 		client, err := sessionbroker.EnableOperatorAutomatic(cmd.Context(), auth.Certificates[0])
 		if err != nil {
@@ -41,5 +41,5 @@ func newDeviceOperatorMeshConnectCmd() *cobra.Command {
 }
 
 func newDeviceOperatorMeshDisconnectCmd() *cobra.Command {
-	return &cobra.Command{Use: "disconnect", Short: "Close this operator's retained mesh context", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error { return sessionbroker.DisconnectOperator(cmd.Context()) }}
+	return &cobra.Command{Use: "disconnect", Short: "Disconnect this computer from Wendy Net", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error { return sessionbroker.DisconnectOperator(cmd.Context()) }}
 }
