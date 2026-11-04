@@ -100,43 +100,65 @@ class Scout:
         m = PINS["model"]
         models = STATE / "models"
         models.mkdir(exist_ok=True)
-        path = models / m["file"]
-        started = time.monotonic()
+        # llama-server loads the remaining official shards beside the first.
+        files = m.get("files", [m])
+        missing = sum(
+            f["bytes"]
+            for f in files
+            if not (models / f["file"]).exists()
+            or (models / f["file"]).stat().st_size != f["bytes"]
+        )
         if (
-            not path.exists()
-            or path.stat().st_size != m["bytes"]
-            or path.with_suffix(".gguf.aria2").exists()
+            os.statvfs(STATE).f_bavail * os.statvfs(STATE).f_frsize
+            < missing + 10 * 1024**3
         ):
+            raise RuntimeError("Insufficient persistent storage")
+        for f in files:
+            path = models / f["file"]
+            path.parent.mkdir(parents=True, exist_ok=True)
+            started = time.monotonic()
             if (
-                os.statvfs(STATE).f_bavail * os.statvfs(STATE).f_frsize
-                < m["bytes"] + 10 * 1024**3
+                not path.exists()
+                or path.stat().st_size != f["bytes"]
+                or path.with_suffix(".gguf.aria2").exists()
             ):
-                raise RuntimeError("Insufficient persistent storage")
-            url = f"https://huggingface.co/{m['repo']}/resolve/{m['revision']}/{m['file']}"
-            event("model_download_start", bytes=m["bytes"])
-            subprocess.run(
-                [
-                    "aria2c",
-                    "-x8",
-                    "-s8",
-                    "-c",
-                    "--file-allocation=none",
-                    "--max-tries=5",
-                    "--timeout=30",
-                    "--connect-timeout=15",
-                    "--summary-interval=30",
-                    "-d",
-                    str(models),
-                    "-o",
-                    path.name,
-                    url,
-                ],
-                check=True,
-                timeout=1800,
+                url = f"https://huggingface.co/{m['repo']}/resolve/{m['revision']}/{f['file']}"
+                event("model_download_start", file=f["file"], bytes=f["bytes"])
+                subprocess.run(
+                    [
+                        "aria2c",
+                        "-x8",
+                        "-s8",
+                        "-c",
+                        "--file-allocation=none",
+                        "--max-tries=5",
+                        "--timeout=30",
+                        "--connect-timeout=15",
+                        "--summary-interval=30",
+                        "-d",
+                        str(path.parent),
+                        "-o",
+                        path.name,
+                        url,
+                    ],
+                    check=True,
+                    timeout=1800,
+                )
+                event(
+                    "model_download_complete",
+                    file=f["file"],
+                    bytes=path.stat().st_size,
+                    seconds=time.monotonic() - started,
+                )
+            if path.stat().st_size != f["bytes"] or sha(path) != f["sha256"]:
+                raise RuntimeError("Model size/SHA-256 mismatch: " + f["file"])
+            event(
+                "model_verified",
+                file=f["file"],
+                seconds=time.monotonic() - started,
+                sha256=f["sha256"],
             )
-        if sha(path) != m["sha256"]:
-            raise RuntimeError("Model SHA-256 mismatch")
-        event("model_verified", seconds=time.monotonic() - started, sha256=m["sha256"])
+        path = models / m["file"]
         logpath = STATE / "model.log"
         logpath.write_text("")
         argv = [
