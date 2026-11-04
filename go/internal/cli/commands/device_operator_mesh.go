@@ -1,37 +1,17 @@
 package commands
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 
 	"github.com/spf13/cobra"
-	"github.com/wendylabsinc/wendy/go/internal/cli/grpcclient"
 	"github.com/wendylabsinc/wendy/go/internal/cli/sessionbroker"
-	"github.com/wendylabsinc/wendy/go/internal/shared/ble/central"
 	"github.com/wendylabsinc/wendy/go/internal/shared/config"
 )
 
-// This explicit preparation is separate from device selection: the first hop
-// is configuration for the retained operator context, not a remote identity.
+// Joining the local mesh is independent of selecting a destination device.
 func newDeviceOperatorMeshConnectCmd() *cobra.Command {
-	var address, router, transport string
-	var psm uint16
-	cmd := &cobra.Command{Use: "connect", Short: "Keep an operator mesh attachment ready for ordinary commands", Long: "Prepare the current profile's background operator context through a discovered WendyOS or PSRAM Lite TLS router, or select one with --address and --router. Subsequent commands may select reachable WendyOS or Lite devices with mesh://TENANT/DEVICE. One background router owns Babel, authenticated carriers and the signed directory across commands. Automatic discovery uses LAN TLS and BLE; Nearby shows signed endpoints with usable routes. An explicit pinned connection remains enabled until disconnect.", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
-		if transport != "tcp" && transport != "ble" {
-			return fmt.Errorf("--transport must be tcp or ble")
-		}
-		if address == "" && (transport == "ble" || psm != 0) {
-			return fmt.Errorf("BLE first-hop selection requires --address and --router")
-		}
-		if (address == "") != (router == "") {
-			return fmt.Errorf("--address and --router must be supplied together")
-		}
-		if transport == "ble" {
-			if err := central.ValidateL2CAPAddress(address); err != nil {
-				return err
-			}
-		}
+	cmd := &cobra.Command{Use: "connect", Short: "Keep an operator mesh attachment ready for ordinary commands", Long: "Enable the current profile's background operator router. It automatically discovers and authenticates mesh neighbours over LAN and Bluetooth and maintains connections across commands. Use wendy discover to find reachable devices, then select a destination with mesh://TENANT/DEVICE. The router remains enabled until disconnect.", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
 		cfg, err := config.Load()
 		if err != nil {
 			return err
@@ -43,13 +23,7 @@ func newDeviceOperatorMeshConnectCmd() *cobra.Command {
 		if len(auth.Certificates) == 0 {
 			return fmt.Errorf("current context has no primary operator certificate")
 		}
-		prepare := sessionbroker.EnableOperatorAutomatic
-		if address != "" {
-			prepare = func(ctx context.Context, certificate config.CertificateInfo) (*grpcclient.AgentConnection, error) {
-				return sessionbroker.PrepareOperatorTransport(ctx, certificate, address, router, transport, psm)
-			}
-		}
-		client, err := prepare(cmd.Context(), auth.Certificates[0])
+		client, err := sessionbroker.EnableOperatorAutomatic(cmd.Context(), auth.Certificates[0])
 		if err != nil {
 			return err
 		}
@@ -63,10 +37,6 @@ func newDeviceOperatorMeshConnectCmd() *cobra.Command {
 		_, err = fmt.Fprintf(cmd.OutOrStdout(), "Wendy Net is connected. Use wendy discover to select a reachable device.\n")
 		return err
 	}}
-	cmd.Flags().StringVar(&address, "address", "", "Adjacent router TLS host:port; BLE uses a CoreBluetooth peripheral UUID on macOS or LE address on Linux (see wendy-net discover --transport ble)")
-	cmd.Flags().StringVar(&transport, "transport", "tcp", "Explicit first-hop carrier: tcp or ble; discovery uses both when no address is supplied")
-	cmd.Flags().Uint16Var(&psm, "psm", 0, "Explicit BLE dynamic PSM (default 129)")
-	cmd.Flags().StringVar(&router, "router", "", "Exact enrolled device UUID of the adjacent router")
 	return cmd
 }
 
