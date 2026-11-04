@@ -465,10 +465,16 @@ jobs:
 
   swift-e2e-analyze:
     name: Analyze E2E Results
+    # Failed or cancelled jobs need a diagnosis, a rerun's flake outcome needs
+    # every attempt's artifacts, and a manual run's input promises a review. A
+    # green first attempt goes to swift-e2e-passed instead. .github/scripts/
+    # swift_e2e_gate_test.py evaluates both conditions.
     if: >-
       ${{ always() && !cancelled() &&
-          (needs.swift-e2e-local-macos.result == 'failure' ||
-           needs.swift-e2e-local-ubuntu.result == 'failure') }}
+          (contains(needs.*.result, 'failure') ||
+           contains(needs.*.result, 'cancelled') ||
+           github.run_attempt != '1' ||
+           github.event_name == 'workflow_dispatch') }}
     needs:
       - swift-e2e-local-macos
       - swift-e2e-local-ubuntu
@@ -1104,3 +1110,145 @@ jobs:
           token: ${{ secrets.CI_SLACK_BOT_TOKEN }}
           errors: true
           payload-file-path: ${{ steps.slack-review.outputs.payload }}
+
+  swift-e2e-passed:
+    name: Record E2E Pass
+    # The exact complement of swift-e2e-analyze for a normal green run. Without
+    # it, a fixed failure's review comment and main's last Failed post would
+    # outlive the failure.
+    if: >-
+      ${{ always() && !cancelled() &&
+          contains(needs.*.result, 'success') &&
+          !contains(needs.*.result, 'failure') &&
+          !contains(needs.*.result, 'cancelled') &&
+          github.run_attempt == '1' &&
+          github.event_name != 'workflow_dispatch' }}
+    needs:
+      - swift-e2e-local-macos
+      - swift-e2e-local-ubuntu
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      SLACK_READY: ${{ secrets.CI_SLACK_BOT_TOKEN != '' && vars.FEED_E2E_SLACK_CHANNEL != '' }}
+    steps:
+      - name: Remove Earlier Swift E2E PR Reviews
+        # Fork tokens are read-only.
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
+        with:
+          github-token: ${{ github.token }}
+          script: |
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              per_page: 100,
+            });
+            for (const comment of comments) {
+              if (comment.body?.startsWith('# Swift E2E Review')) {
+                await github.rest.issues.deleteComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  comment_id: comment.id,
+                });
+              }
+            }
+
+      - name: Build Swift E2E Slack Pass
+        id: slack-pass
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        shell: bash
+        env:
+          SLACK_CHANNEL: ${{ vars.FEED_E2E_SLACK_CHANNEL || '' }}
+          DIFF_BASE_REF: ${{ inputs.diff_base_ref || '' }}
+          TESTS: ${{ inputs.tests || '' }}
+        run: |
+          set -euo pipefail
+          if [[ "${SLACK_READY}" != "true" ]]; then
+            echo "::warning::CI_SLACK_BOT_TOKEN or FEED_E2E_SLACK_CHANNEL is not configured; skipping Slack notification."
+            exit 0
+          fi
+
+          review_mode="full"
+          if [[ -n "${DIFF_BASE_REF}" ]]; then
+            review_mode="diff"
+          fi
+
+          # SECURITY: this job runs on GitHub-hosted ubuntu-24.04 (a fresh VM per job), and the payload holds only the channel and public run metadata.
+          slack_payload="${RUNNER_TEMP}/slack-pass.json"
+          jq -n \
+            --arg channel "${SLACK_CHANNEL}" \
+            --arg mode "${review_mode}" \
+            --arg ref "${GITHUB_REF_NAME:-${GITHUB_SHA}}" \
+            --arg sha "${GITHUB_SHA:0:12}" \
+            --arg trigger "${GITHUB_EVENT_NAME}" \
+            --arg actor "${GITHUB_ACTOR}" \
+            --arg tests "${TESTS:-WendyE2ETests}" \
+            --arg diff_base "${DIFF_BASE_REF}" \
+            --arg run_url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            '{
+              channel: $channel,
+              attachments: [
+                {
+                  color: "#22c55e",
+                  blocks: (
+                    [
+                      {
+                        type: "header",
+                        text: {
+                          type: "plain_text",
+                          text: "✅ Wendy E2E · Passed",
+                          emoji: true
+                        }
+                      },
+                      {
+                        type: "section",
+                        fields: [
+                          { type: "mrkdwn", text: "*Mode:*\n\($mode)" },
+                          { type: "mrkdwn", text: "*Tests:*\n\($tests)" },
+                          { type: "mrkdwn", text: "*Ref:*\n\($ref)" },
+                          { type: "mrkdwn", text: "*Commit:*\n`\($sha)`" },
+                          { type: "mrkdwn", text: "*Trigger:*\n\($trigger)" },
+                          { type: "mrkdwn", text: "*Actor:*\n\($actor)" }
+                        ]
+                      }
+                    ]
+                    + (
+                      if $diff_base != "" then
+                        [
+                          {
+                            type: "context",
+                            elements: [
+                              { type: "mrkdwn", text: "*Diff base:* `\($diff_base)`" }
+                            ]
+                          }
+                        ]
+                      else [] end
+                    )
+                    + [
+                      {
+                        type: "actions",
+                        elements: [
+                          {
+                            type: "button",
+                            text: { type: "plain_text", text: "Open GitHub Actions" },
+                            url: $run_url
+                          }
+                        ]
+                      }
+                    ]
+                  )
+                }
+              ]
+            }' \
+            > "${slack_payload}"
+          echo "payload=${slack_payload}" >> "$GITHUB_OUTPUT"
+
+      - name: Post Swift E2E Slack Pass
+        if: steps.slack-pass.outputs.payload != ''
+        uses: slackapi/slack-github-action@dcb1066f776dd043e64d0e8ba94ca15cc7e1875d # v4.0.0
+        with:
+          method: chat.postMessage
+          token: ${{ secrets.CI_SLACK_BOT_TOKEN }}
+          errors: true
+          payload-file-path: ${{ steps.slack-pass.outputs.payload }}
