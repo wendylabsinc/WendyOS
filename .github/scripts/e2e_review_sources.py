@@ -58,8 +58,9 @@ def prepare(repo, run, policy_ref, diff=None):
         raise GitError(f"Could not resolve source policy ref {policy_ref}. "
                        f"Pass a fetched commit with --source-policy-ref. {error}") from error
     head = commit(repo, "HEAD")
-    # Neither the event-head module nor PYTHONPATH supplies review policy.
-    # Both siblings come from this one immutable trusted automation/base commit.
+    # Both policy modules come from this one commit, not the working tree or
+    # PYTHONPATH. PR events pin it to the base, but this adapter runs from the
+    # event head, and on push and dispatch the policy ref is the event head too.
     with tempfile.TemporaryDirectory(prefix="wendy-e2e-review-policy-") as directory:
         for name in ("review_sources.py", "review_diff.py"):
             try:
@@ -123,7 +124,7 @@ def prepare(repo, run, policy_ref, diff=None):
                         "policy_rule": policy.SOURCE_ONLY_RULE,
                         "tool_read_limitation": TOOL_READ_LIMITATION,
                         "source_snapshot": "Committed files only; uncommitted/untracked source is not prepared.",
-                        "evidence_scope": "Prepared input counts do not prove model review. Binary placeholders do not supply binary contents. Files in coverage.non_utf8_files show U+FFFD where their bytes were not valid UTF-8. Retain failed-run, test, qualitative AI-request and prior-finding evidence even when the diff is generated-only."}
+                        "evidence_scope": "Prepared input counts do not prove model review. Binary placeholders do not supply binary contents. Files in coverage.non_utf8_files show U+FFFD where their bytes were not valid UTF-8. Retain failed-run, test and qualitative AI-request evidence even when the diff is generated-only. Findings from earlier CI runs are not supplied here."}
             names = sorted({f[side] for f in index for side in ("base", "head") if f[side]})
             stats = [f"{f['base'] or f['head']}" +
                      (f" => {f['head']}" if f['base'] and f['head'] and f['base'] != f['head'] else "") +

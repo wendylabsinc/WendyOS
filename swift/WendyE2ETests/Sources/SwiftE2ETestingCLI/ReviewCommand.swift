@@ -1093,7 +1093,7 @@ private func appendReviewContext(_ context: ReviewContext, repoURL: URL, to line
         "Use the prepared source index for additional source inspection. Do not read or report excluded generated implementation through file, search, shell, Git, MCP or custom-harness tools. Those tool responses are not automatically filtered. Uncommitted/untracked source and absent upstream schema bodies are not prepared or proven reviewed."
     )
     lines.append(
-        "Keep diagnosing actual failures, flakes, infrastructure problems and qualitative test-source AI requests using run/test evidence. A generated-only diff does not erase prior actionable findings or make a failed run pass. Exclusion counts and generation/build checks do not prove API or behavior coverage."
+        "Keep diagnosing actual failures, flakes, infrastructure problems and qualitative test-source AI requests using run/test evidence. A generated-only diff does not make a failed run pass. Findings from earlier CI runs are not supplied here, so do not claim to retain or resolve them. Exclusion counts and generation/build checks do not prove API or behavior coverage."
     )
 
     guard case .diff(let range) = context.mode else {

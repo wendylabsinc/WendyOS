@@ -65,11 +65,9 @@ struct ReviewSourceInputsTests {
     }
 
     @Test(arguments: [false, true])
-    func
-        `generated-only changes retain passing or failed run evidence AI requests and prior findings`(
-            failed: Bool
-        ) throws
-    {
+    func `generated-only changes retain passing or failed run evidence and AI requests`(
+        failed: Bool
+    ) throws {
         let fixture = try SourceReviewFixture()
         try fixture.write("GENERATED_BODY_SENTINEL\n", to: "go/proto/gen/service.pb.go")
         try fixture.commit()
@@ -80,6 +78,7 @@ struct ReviewSourceInputsTests {
             atomically: true,
             encoding: .utf8
         )
+        // Only a reused local run directory can already hold a review; CI starts empty.
         let prior = fixture.runURL.appendingPathComponent("review.fixture")
         try FileManager.default.createDirectory(at: prior, withIntermediateDirectories: true)
         let priorURL = prior.appendingPathComponent("prior.md")
@@ -91,7 +90,11 @@ struct ReviewSourceInputsTests {
         let prompt = try fixture.prompt(context)
         #expect(prompt.contains("exitStatus=`\(failed ? 1 : 0)`"))
         #expect(prompt.contains("Keep qualitative failure diagnosis"))
-        #expect(prompt.contains("does not erase prior actionable findings"))
+        #expect(prompt.contains("does not make a failed run pass"))
+        #expect(prompt.contains("Findings from earlier CI runs are not supplied"))
+        #expect(!prompt.contains("prior actionable findings"))
+        let evidenceScope = try #require(try fixture.manifest()["evidence_scope"] as? String)
+        #expect(!evidenceScope.contains("prior-finding"))
         #expect(try String(contentsOf: priorURL, encoding: .utf8) == "PRIOR_ACTIONABLE_FINDING")
     }
 
